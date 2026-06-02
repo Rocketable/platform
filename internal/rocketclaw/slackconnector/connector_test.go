@@ -1544,7 +1544,8 @@ func TestSendCronjobChannelThreadPostsRootThenThreadReply(t *testing.T) {
 	}))
 	defer server.Close()
 
-	connector := newTestConnector(server.URL)
+	router := newThreadRouterStub()
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
 	require.NoError(t, connector.SendCronjobChannelThread(context.Background(), "#triage", "cron/daily.md", "planner", "2000-01-02T03:04:05Z", "final payload", []events.OutboundAttachment{{Name: "report.txt", Data: []byte("report body")}}))
 
 	require.Len(t, posted, 2)
@@ -1558,6 +1559,10 @@ func TestSendCronjobChannelThreadPostsRootThenThreadReply(t *testing.T) {
 	assert.Equal(t, "report body", uploadedContent)
 	assert.Equal(t, "#triage", completed.Get("channel_id"))
 	assert.Equal(t, "111.222", completed.Get("thread_ts"))
+
+	registrations := router.cronRegistrationsSnapshot()
+	require.Len(t, registrations, 1)
+	assert.Equal(t, cronThreadRegistration{channelID: "#triage", threadTS: "111.222", agent: "planner", seedText: "Cronjob cron/daily.md ran at 2000-01-02T03:04:05Z with agent planner.\n\nHuman-visible cron output:\nfinal payload\n\nAttached files: report.txt."}, registrations[0])
 }
 
 func TestSendCronjobChannelThreadReportsSlackFailures(t *testing.T) {
@@ -4219,6 +4224,7 @@ type threadRouterStub struct {
 	replies                []threadReplyCall
 	summaries              []threadSummaryCall
 	checkpoints            []threadCheckpointCall
+	cronRegistrations      []cronThreadRegistration
 	submitHandled          bool
 	summarizeHandled       bool
 	summarizeErr           error
@@ -4261,6 +4267,10 @@ type threadCheckpointCall struct {
 	checkpoint events.ResponseCheckpoint
 }
 
+type cronThreadRegistration struct {
+	channelID, threadTS, agent, seedText string
+}
+
 func (s *threadRouterStub) StartThread(_ context.Context, agent string, preSeed bool, inbound *events.InboundMessage) error {
 	if s.onStart != nil {
 		s.onStart()
@@ -4268,6 +4278,15 @@ func (s *threadRouterStub) StartThread(_ context.Context, agent string, preSeed 
 
 	s.mu.Lock()
 	s.started = append(s.started, threadStartCall{agent: agent, preSeed: preSeed, inbound: inbound})
+	errStart := s.errStart
+	s.mu.Unlock()
+
+	return errStart
+}
+
+func (s *threadRouterStub) RegisterCronThread(_ context.Context, channelID, threadTS, agent, seedText string) error {
+	s.mu.Lock()
+	s.cronRegistrations = append(s.cronRegistrations, cronThreadRegistration{channelID: channelID, threadTS: threadTS, agent: agent, seedText: seedText})
 	errStart := s.errStart
 	s.mu.Unlock()
 
@@ -4366,6 +4385,13 @@ func (s *threadRouterStub) checkpointsSnapshot() []threadCheckpointCall {
 	defer s.mu.Unlock()
 
 	return append([]threadCheckpointCall(nil), s.checkpoints...)
+}
+
+func (s *threadRouterStub) cronRegistrationsSnapshot() []cronThreadRegistration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]cronThreadRegistration(nil), s.cronRegistrations...)
 }
 
 type oneOffCronjobLoaderStub struct {

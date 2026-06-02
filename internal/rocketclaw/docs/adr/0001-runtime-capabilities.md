@@ -27,7 +27,7 @@ RocketClaw grew by adding Slack, Discord voice, external MCP, browser voice, cro
 | Discord voice      | RocketClaw joins one configured voice channel, listens only to the configured human speaker, transcribes speech, routes it into the shared conversation, and can speak synthesized responses. Discord voice is separate from Discord text and can coexist with either primary text connector. |
 | Browser voice      | `web_ui` serves HTTPS `/voice-mode`, receives browser WebM/Opus microphone audio over WebSocket, routes transcriptions like voice input, and serves synthesized playback. Current browser capture is Chrome-oriented.                        |
 | External MCP       | `mcp_external` serves HTTP `/mcp` with exactly one tool, `session_prompt`, accepting input, optional external conversation ID, optional agent, optional Slack channel, optional metadata, and optional attachments.                          |
-| Cron               | `cron/*.md` files are loaded at startup. They can run scheduled or one-off prompts through raw RocketCode runs and can produce internal main-session notes or Slack-channel thread output. `*.example.md` files are ignored.                  |
+| Cron               | `cron/*.md` files are loaded at startup. They can run scheduled or one-off prompts through raw RocketCode runs and can produce internal main-session notes or managed Slack-channel thread output. Replies and summaries for cron-created Slack-channel threads follow existing Slack social-mode gates. `*.example.md` files are ignored.                  |
 | One-off cron       | Timestamp cron files run once and are deleted after the run attempt. Slack on-demand cron requests can load top-level cron files by stem.                                                                                                    |
 | Scheduled messages | The RocketCode tool can schedule one-shot delayed prompts, durable recurring prompts, and reset scheduled messages. One-shot messages are durable until handled. Recurring schedules are durable until reset, continue from current time after missed or failed occurrences, do not replay missed intervals, and report through the relevant bridge context. |
 | Attachments        | Supported image attachments can be passed into RocketCode. Slack text attachments are converted into prompt text within size limits. External MCP supports base64 attachments.                                                                |
@@ -61,4 +61,5 @@ RocketClaw grew by adding Slack, Discord voice, external MCP, browser voice, cro
 
 - 2026-05-25: Initial accepted snapshot.
 - 2026-05-25: Added durable recurring scheduled messages until reset, without catch-up replay.
+- 2026-06-02: Made cron `slack-channel` output a managed Slack thread whose replies and summaries follow Slack social-mode gates.
 - 2026-06-02: Added Discord text as a Slack-alternative primary text connector using a configured guild text channel and managed guild threads.

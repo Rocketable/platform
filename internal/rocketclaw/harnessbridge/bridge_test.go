@@ -1671,6 +1671,26 @@ func TestSeedThreadFromMainReturnsWhenMainSessionEmpty(t *testing.T) {
 	assert.Empty(t, entries)
 }
 
+func TestSeedThreadFromCronPersistsAssistantSeedOnce(t *testing.T) {
+	service := newTestSessionService(t)
+	conversationID := SlackThreadConversationID("C123", "111.222")
+
+	bridge := new(Bridge)
+	bridge.config = Config{ConversationID: conversationID, Agent: "planner", OutputTargets: events.MainOutputTargets(), SessionService: service}
+
+	require.NoError(t, bridge.SeedThreadFromCron(context.Background(), "cron output"))
+	require.NoError(t, bridge.SeedThreadFromCron(context.Background(), "new output ignored"))
+
+	entries, err := service.ObserveEntries(context.Background(), conversationID, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "cron_thread_seed", entries[0].Entry.Type)
+
+	messages, err := replayInputMessages(entries[0].Entry.ReplayInput)
+	require.NoError(t, err)
+	assert.Equal(t, []replayInputMessage{{role: "assistant", text: "cron output"}}, messages)
+}
+
 func TestSeedThreadFromMainReportsThreadSessionLoadFailure(t *testing.T) {
 	service, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)

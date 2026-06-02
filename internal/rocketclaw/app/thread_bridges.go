@@ -17,6 +17,7 @@ type directBridge interface {
 	Stop(context.Context) error
 	Submit(context.Context, *events.InboundMessage) error
 	SeedThreadFromMain(context.Context) error
+	SeedThreadFromCron(context.Context, string) error
 	SeedResponseThread(context.Context, events.ResponseCheckpoint, string) error
 	Summarize(context.Context, string) (string, error)
 	WaitIdle(context.Context) error
@@ -386,6 +387,42 @@ func (m *threadBridgeManager) StartThread(ctx context.Context, agent string, pre
 	inbound.ConversationID = conversationID
 	if err := managed.bridge.Submit(ctx, inbound); err != nil {
 		return fmt.Errorf("submit Slack thread start: %w", err)
+	}
+
+	return nil
+}
+
+func (m *threadBridgeManager) RegisterCronThread(ctx context.Context, channelID, threadTS, agent, seedText string) error {
+	conversationID := harnessbridge.SlackThreadConversationID(channelID, threadTS)
+	if conversationID == "" {
+		return errors.New("slack thread target is required")
+	}
+
+	managed, created, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: strings.TrimSpace(agent)}, []events.OutputTarget{events.OutputTargetSlackMain})
+	if err != nil {
+		return err
+	}
+
+	if created {
+		if err := managed.bridge.SeedThreadFromCron(ctx, seedText); err != nil {
+			m.mu.Lock()
+			delete(m.bridges, conversationID)
+			m.mu.Unlock()
+
+			_ = managed.bridge.Stop(ctx)
+
+			return fmt.Errorf("seed Slack cron thread: %w", err)
+		}
+
+		if err := m.store.UpsertThread(conversationID, agent); err != nil {
+			m.mu.Lock()
+			delete(m.bridges, conversationID)
+			m.mu.Unlock()
+
+			_ = managed.bridge.Stop(ctx)
+
+			return fmt.Errorf("persist Slack cron thread bridge: %w", err)
+		}
 	}
 
 	return nil

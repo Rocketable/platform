@@ -223,6 +223,30 @@ func TestThreadBridgeManagerCanSkipStartedThreadSeed(t *testing.T) {
 	assert.Equal(t, []string{"submit:first"}, bridge.ops)
 }
 
+func TestThreadBridgeManagerRegistersCronThreadWithoutSubmitting(t *testing.T) {
+	workspace := t.TempDir()
+	store := newTestSessionService(t, workspace)
+	bridge := new(fakeDirectBridge)
+
+	var created bridgeConfig
+
+	manager := newThreadBridgeManager(events.New(), store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
+		created = cfg
+		return bridge
+	})
+
+	require.NoError(t, manager.RegisterCronThread(t.Context(), "C123", "111.222", "planner", "cron result"))
+
+	conversationID := harnessbridge.SlackThreadConversationID("C123", "111.222")
+	assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetSlackMain}}, created)
+	assert.Equal(t, []string{"seed_cron:cron result"}, bridge.ops)
+	assert.Empty(t, bridge.submits)
+
+	state, err := store.Load()
+	require.NoError(t, err)
+	assert.Equal(t, harnessbridge.ThreadState{Agent: "planner"}, state.Threads[conversationID])
+}
+
 func TestThreadBridgeManagerRejectsMissingSlackThreadTarget(t *testing.T) {
 	manager := newThreadBridgeManager(events.New(), newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
 
@@ -652,6 +676,7 @@ func TestThreadBridgeManagerStopAcceptingRejectsNewSubmissions(t *testing.T) {
 type fakeDirectBridge struct {
 	submits          []*events.InboundMessage
 	seeds            []events.ResponseCheckpoint
+	cronSeeds        []string
 	mainSeeds        int
 	stops            int
 	ops              []string
@@ -688,6 +713,13 @@ func (f *fakeDirectBridge) SeedThreadFromMain(context.Context) error {
 	f.ops = append(f.ops, "seed_main")
 
 	return f.errSeedMain
+}
+
+func (f *fakeDirectBridge) SeedThreadFromCron(_ context.Context, seedText string) error {
+	f.cronSeeds = append(f.cronSeeds, seedText)
+	f.ops = append(f.ops, "seed_cron:"+seedText)
+
+	return nil
 }
 
 func (f *fakeDirectBridge) SeedResponseThread(_ context.Context, checkpoint events.ResponseCheckpoint, _ string) error {

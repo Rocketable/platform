@@ -153,6 +153,7 @@ type threadAgent struct {
 // ThreadRouter routes Slack thread messages directly to app-owned thread bridges.
 type ThreadRouter interface {
 	StartThread(context.Context, string, bool, *events.InboundMessage) error
+	RegisterCronThread(context.Context, string, string, string, string) error
 	PrepareThreadReply(context.Context, string, string) (bool, error)
 	PrepareResponseThreadReply(context.Context, string, string) (bool, error)
 	SubmitThreadReply(context.Context, string, string, *events.InboundMessage) (bool, error)
@@ -170,6 +171,9 @@ type inertThreadRouter struct{}
 
 func (inertThreadRouter) StartThread(context.Context, string, bool, *events.InboundMessage) error {
 	return errors.New("slack thread routing is not configured")
+}
+func (inertThreadRouter) RegisterCronThread(context.Context, string, string, string, string) error {
+	return nil
 }
 func (inertThreadRouter) PrepareThreadReply(context.Context, string, string) (bool, error) {
 	return false, nil
@@ -569,6 +573,19 @@ func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, rel
 		if err := c.uploadResponseAttachments(ctx, postedChannelID, threadTS, attachments); err != nil {
 			return fmt.Errorf("send Slack cronjob thread attachments: %w", err)
 		}
+	}
+
+	seedText := "Cronjob " + relativePath + " ran at " + ranAt + " with agent " + strings.TrimSpace(agent) + "."
+	if strings.TrimSpace(text) != "" {
+		seedText += "\n\nHuman-visible cron output:\n" + strings.TrimSpace(text)
+	}
+
+	if names := events.AttachmentNamesSpeech(attachments); names != "" {
+		seedText += "\n\n" + names
+	}
+
+	if err := c.threadRouter.RegisterCronThread(ctx, postedChannelID, threadTS, agent, seedText); err != nil {
+		return fmt.Errorf("register Slack cronjob thread: %w", err)
 	}
 
 	return nil

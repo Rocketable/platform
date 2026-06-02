@@ -54,6 +54,17 @@ schedule:
 
 The `schedule:` frontmatter value is the cronjob frequency or cadence.
 
+Cronjobs may also set `slack-channel:` to route non-empty `rocketclaw_i_want_human_partner_to_see_this` output into a managed Slack channel thread instead of the default main outputs:
+
+```
+---
+schedule: "0 9 * * 1-5"
+slack-channel: "#triage"
+---
+```
+
+Replies and `:floppy_disk:` summaries for those cron-created channel threads follow the existing Slack social-mode gate.
+
 Timestamp schedules are one-off crons. A one-off cron is a durable `cron/*.md` file that survives rocketclaw restarts until due, runs through normal cronjob execution and output routing, and self-deletes after one completed run attempt. Do not combine a timestamp schedule with any other schedule.
 
 Do not confuse one-off crons with `rocketclaw_schedule_message`. `rocketclaw_schedule_message` creates a short-lived delayed prompt inside the current conversation/session, including the current Slack thread when applicable, and its eventual output appears in that same session/thread. One-off crons are file-backed cron definitions and their output is handled exactly like any other cronjob output.

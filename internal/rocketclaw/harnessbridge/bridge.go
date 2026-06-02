@@ -452,6 +452,37 @@ func (b *Bridge) SeedThreadFromMain(ctx context.Context) error {
 	return nil
 }
 
+// SeedThreadFromCron initializes an empty Slack thread session from cron output.
+func (b *Bridge) SeedThreadFromCron(ctx context.Context, seedText string) error {
+	seedText = strings.TrimSpace(seedText)
+	if seedText == "" {
+		return errors.New("cron thread seed text is required")
+	}
+
+	threadStore := newSessionStore(b.config.ConversationID, b.config.SessionService)
+
+	threadEntries, err := b.observeSessionEntries(ctx, b.config.ConversationID)
+	if err != nil {
+		return fmt.Errorf("load Slack cron thread session: %w", err)
+	}
+
+	if len(threadEntries) > 0 {
+		return nil
+	}
+
+	seedReplay, err := replayInputForMessage("assistant", seedText)
+	if err != nil {
+		return fmt.Errorf("encode cron thread seed: %w", err)
+	}
+
+	_, err = threadStore.outID(rocketcode.SessionEntry{Version: 1, Type: "cron_thread_seed", Timestamp: time.Now().UTC(), ReplayInput: seedReplay})
+	if err != nil {
+		return fmt.Errorf("persist cron thread seed: %w", err)
+	}
+
+	return nil
+}
+
 func (b *Bridge) enqueue(ctx context.Context, request bridgeRequest, operation string) error {
 	b.mu.Lock()
 	stopCh, stopped := b.stopCh, b.stopped
