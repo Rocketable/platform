@@ -1,0 +1,91 @@
+# 0002. Behavior Contracts
+
+Status: Accepted
+Human approval required for meaning changes: Yes
+
+## Decision
+
+RocketClaw preserves a small set of behavior contracts that are more important than internal code shape. Refactors must preserve these contracts unless the human partner explicitly approves a spec change.
+
+## Scope
+
+This ADR governs regression-sensitive runtime behavior: message flow, prompt framing, command interpolation, routing, delivery, restart, and safety boundaries.
+
+## Context
+
+RocketClaw has lost features when refactors treated behavior as removable plumbing. These contracts make the product behavior explicit so code size pressure and cleanup work do not erase capabilities.
+
+## Normative Contracts
+
+### Prompt Shell Interpolation
+
+| Source                                                         | ``!`cmd` `` expands? | Rationale                                                                |
+|----------------------------------------------------------------|----------------------|--------------------------------------------------------------------------|
+| Primary agent prompts                                          | Yes                  | Trusted workspace prompt source.                                         |
+| Subagent prompts                                               | Yes                  | Trusted workspace prompt source.                                         |
+| Skill contents loaded by the skill tool                        | Yes                  | Trusted workspace prompt source.                                         |
+| Raw/cron prompt input                                          | Yes                  | Cron bodies are trusted workspace files sent through raw runs.           |
+| Slack/Discord/browser/MCP human input in the persistent bridge | No                   | External/human input must remain literal.                                |
+| Scheduled-message prompt text in the persistent bridge         | No                   | It follows persistent bridge input rules unless explicitly reclassified. |
+| `AGENTS.md` workspace instructions                             | No                   | Root instructions are loaded literally.                                  |
+
+Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd, stdout insertion only, and command failures do not fail prompt preparation.
+
+### Message Flow
+
+- Shared inbound messages are queued through the event bus and consumed by the main bridge.
+- Automated inbound messages honor `minimum_wait_after_human_interaction` before processing.
+- Slack stacked messages must preserve prompt order and avoid duplicated deliveries.
+- Every normal Slack-visible assistant turn with a Slack target reserves its Slack reply location up front by posting a thinking placeholder (`_Thinking..._`) followed by an answer placeholder (`\u200B`). The answer placeholder is later updated for a short final answer or deleted before chunked final replies. Intentionally standalone progress/post-text messages are not assistant-turn final answers and do not consume the reserved answer placeholder.
+- Discord and browser voice transcriptions enter the same shared flow as other main-session input.
+- External MCP conversations are isolated by external conversation ID; omitted ID starts a new isolated conversation.
+
+### Routing And Delivery
+
+- Main conversation output targets are controlled by app wiring, not by individual input sources.
+- Slack response-rooted threads remain isolated from main until summarized.
+- Slack thread replies use persisted checkpoints when available; older responses without checkpoints receive an explanatory thread reply instead of silently losing context.
+- Cron final verbatim output with `slack-channel` starts a Slack channel thread; otherwise cron output is internalized into the main session as configured by the cron path.
+- Raw cron runs must call `rocketclaw_i_want_human_partner_to_see_this`; normal assistant replies do not complete the background run.
+
+### Restart And Draining
+
+- `rocketclaw_restart` is for explicit runtime configuration changes such as `rocketclaw.json`, `agents/`, `skills/`, or `cron/` changes.
+- Restart must stop intake, wait for inbound handoff, wait for main and thread bridge idleness, wait for outbound drain, and preserve pending restart notifications.
+- Restart must not be triggered for ordinary memory, ledger, audit, report, source-code, generated artifact, log, transcript, or data-file edits.
+
+### Permissions And Tools
+
+- Task permission defaults must not become permissive by accident.
+- Cron agents may selectively deny tools.
+- RocketClaw tools are part of runtime behavior and must remain visible to RocketCode according to the bridge mode that owns the turn.
+
+## Non-Goals
+
+- This ADR does not specify exact implementation structure.
+- This ADR does not require tests for deleted internals; tests should cover current observable contracts.
+- This ADR does not make external human input executable.
+
+## Evidence
+
+- `internal/rocketcodebridge/bridge.go`
+- `internal/rocketcodebridge/raw_run.go`
+- `vendor/github.com/Rocketable/rocketcode/prompts.go`
+- `vendor/github.com/Rocketable/rocketcode/looper.go`
+- `internal/cronjob/manager.go`
+- `internal/slackconnector/connector.go`
+- `internal/app/thread_bridges.go`
+- `internal/events/bus.go`
+- `internal/rocketcodebridge/bridge_test.go`
+- `internal/rocketcodebridge/raw_run_test.go`
+
+## Consequences
+
+- Behavior-preserving refactors must verify queue order, prompt framing, delivery/silence, and routing separately.
+- Code deletion is acceptable only when the surviving code still satisfies these contracts.
+- If a bug reveals a behavior worth preserving, the human partner can promote it into this ADR before or during the fix.
+
+## Changelog
+
+- 2026-05-25: Initial accepted snapshot.
+- 2026-05-25: Added Slack reply placeholder-pair reservation contract for normal Slack-visible assistant turns.

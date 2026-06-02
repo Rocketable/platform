@@ -1,0 +1,84 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - asciicheck
+    - bodyclose
+    - canonicalheader
+    - depguard
+    - dogsled
+    - dupl
+    - dupword
+    - embeddedstructfieldcheck
+    - errcheck
+    - errname
+    - exhaustive
+    - exptostd
+    - funcorder
+    - gochecknoglobals
+    - gochecknoinits
+    - gochecksumtype
+    - gocritic
+    - gocyclo
+    - godoclint
+    - godot
+    - godox
+    - govet
+    - ineffassign
+    - intrange
+    - iotamixing
+    - ireturn
+    - misspell
+    - modernize
+    - nolintlint
+    - nosprintfhostport
+    - perfsprint
+    - prealloc
+    - revive
+    - sloglint
+    - staticcheck
+    - testifylint
+    - thelper
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+    - wastedassign
+    - whitespace
+    - wrapcheck
+    - wsl_v5
+  exclusions:
+    paths:
+      - third_party/.*
+    rules:
+      - path: _test\.go
+        linters:
+          - gocyclo
+  settings:
+    depguard:
+      rules:
+        main:
+          deny:
+            - pkg: "reflect$"
+              desc: avoid reflection in project code
+            - pkg: "unsafe$"
+              desc: avoid unsafe in project code
+    gocritic:
+      enable-all: true
+    godox:
+      keywords:
+        - TODO
+        - BUG
+        - FIXME
+        - NOTE
+        - OPTIMIZE
+        - GPT
+
+run:
+  timeout: 5m
+  tests: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

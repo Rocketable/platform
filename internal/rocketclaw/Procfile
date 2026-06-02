@@ -1,0 +1,2 @@
+build-rocketclaw: make build
+rocketclaw:       ./bin/rocketclaw

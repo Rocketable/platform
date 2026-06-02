@@ -1,0 +1,73 @@
+{
+  "workspace": "/Users/you/Projects/rocketclaw",
+  "environment": [
+    "EXAMPLE_API_TOKEN=set-me"
+  ],
+  "emergency_safe_words": [
+    "stop"
+  ],
+  "thread_agents": {
+    ":thread:": {
+      "agent": "main",
+      "pre_seed": false
+    },
+    ":factory:": {
+      "agent": "factory",
+      "pre_seed": false
+    }
+  },
+  "minimum_wait_after_human_interaction": "5m",
+  "logging": {
+    "level": "debug"
+  },
+  "discord_voice": {
+    "enabled": true,
+    "token": "discord-bot-token",
+    "voice_channel_id": "123456789012345678",
+    "human_user_id": "234567890123456789"
+  },
+  "mcp_external": {
+    "enabled": true,
+    "listen_addr": "127.0.0.1:8765",
+    "allowed_agents": [
+      "main"
+    ]
+  },
+  "web_ui": {
+    "enabled": true,
+    "listen_addr": "0.0.0.0:8766",
+    "cert_file": "",
+    "key_file": ""
+  },
+  "slack": {
+    "enabled": true,
+    "bot_token": "xoxb-...",
+    "app_token": "xapp-...",
+    "room": "D0123456789",
+    "human_user_id": "U0123456789",
+    "social_mode": {
+      "enabled": false,
+      "channel_agents": {
+        "#channel-name": "main"
+      },
+      "allowed_user_ids": [
+        "U0123456789"
+      ],
+      "context_messages": 10
+    }
+  },
+  "openai": {
+    "api_key": "sk-...",
+    "api_base_url": "https://api.openai.com/v1",
+    "rocketcode_auth": "api_key",
+    "stt_model": "gpt-4o-mini-transcribe",
+    "stt_prompt": "Prefer product names exactly as spoken.",
+    "stt_key": "",
+    "stt_base_url": "",
+    "tts_model": "gpt-4o-mini-tts",
+    "tts_voice": "alloy",
+    "tts_instructions": "Speak in a calm, concise tone.",
+    "tts_key": "",
+    "tts_base_url": ""
+  }
+}

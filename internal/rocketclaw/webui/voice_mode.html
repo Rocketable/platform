@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>rocketclaw voice mode</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #080b14;
+      --surface: rgba(15, 23, 42, 0.9);
+      --surface-border: rgba(148, 163, 184, 0.2);
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-strong: #0ea5e9;
+      --danger: #fb7185;
+      --danger-strong: #f43f5e;
+      --warn: #fbbf24;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at top, rgba(14, 165, 233, 0.16), transparent 36%),
+        radial-gradient(circle at bottom, rgba(244, 63, 94, 0.14), transparent 32%),
+        var(--bg);
+      color: var(--text);
+    }
+
+    main {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 2rem 1.5rem;
+    }
+
+    .voice-shell {
+      width: min(100%, 28rem);
+      display: grid;
+      justify-items: center;
+      gap: 1.25rem;
+      text-align: center;
+    }
+
+    .title {
+      margin: 0;
+      font-size: clamp(1.4rem, 3vw, 1.8rem);
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .subtitle {
+      margin: 0;
+      max-width: 30ch;
+      color: var(--muted);
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+
+    .mute-button {
+      width: min(72vw, 18rem);
+      aspect-ratio: 1;
+      border: 0;
+      border-radius: 999px;
+      padding: 1rem;
+      background: linear-gradient(180deg, var(--accent), var(--accent-strong));
+      color: #04121c;
+      font-size: clamp(2rem, 5vw, 3rem);
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      box-shadow:
+        0 1.75rem 3rem rgba(14, 165, 233, 0.24),
+        inset 0 0.15rem 0.25rem rgba(255, 255, 255, 0.32);
+      transition: transform 120ms ease, box-shadow 120ms ease, opacity 120ms ease, background 120ms ease;
+      cursor: pointer;
+    }
+
+    .mute-button:hover:not(:disabled),
+    .mute-button:focus-visible:not(:disabled) {
+      transform: translateY(-2px) scale(1.01);
+      box-shadow:
+        0 2rem 3.2rem rgba(14, 165, 233, 0.3),
+        inset 0 0.15rem 0.25rem rgba(255, 255, 255, 0.36);
+      outline: none;
+    }
+
+    .mute-button[data-muted="true"] {
+      background: linear-gradient(180deg, var(--danger), var(--danger-strong));
+      color: white;
+      box-shadow:
+        0 1.75rem 3rem rgba(244, 63, 94, 0.24),
+        inset 0 0.15rem 0.25rem rgba(255, 255, 255, 0.25);
+    }
+
+    .mute-button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: 0 1rem 2rem rgba(15, 23, 42, 0.45);
+    }
+
+    .status {
+      min-height: 1.5rem;
+      margin: 0;
+      padding: 0.45rem 0.75rem;
+      border-radius: 999px;
+      border: 1px solid var(--surface-border);
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .status[data-tone="active"] { color: #67e8f9; }
+    .status[data-tone="warn"] { color: var(--warn); }
+    .status[data-tone="error"] { color: #fecdd3; }
+
+    .response-text {
+      margin: 0; width: 100%; padding: 0.9rem 1rem; border-radius: 18px; border: 1px solid var(--surface-border);
+      background: rgba(2, 8, 23, 0.42); color: var(--text); font-size: 0.95rem; line-height: 1.55; text-align: left; white-space: pre-wrap;
+    }
+
+    .response-text[hidden] { display: none; }
+
+  </style>
+</head>
+<body>
+  <main>
+    <section class="voice-shell" aria-label="Voice mode controls">
+      <div>
+        <h1 class="title">Voice mode</h1>
+      </div>
+      <button id="muteButton" class="mute-button" type="button" disabled data-muted="false">Mute</button>
+      <p id="status" class="status" data-tone="idle" aria-live="polite">Disconnected.</p>
+      <p id="responseText" class="response-text" aria-live="polite" hidden></p>
+    </section>
+  </main>
+  <script>
+    (() => {
+      const KEEPALIVE_PATH = "__KEEPALIVE_PATH__";
+      const VOICE_SOCKET_PATH = "__VOICE_SOCKET_PATH__";
+      const REQUIRED_CAPTURE_MIME = "audio/webm;codecs=opus";
+      const CHUNK_MS = 250;
+      const SPEECH_RMS_THRESHOLD = 0.035;
+      const SPEECH_HANGOVER_MS = 450;
+      const RELOAD_PROBE_MS = 1000;
+
+      const muteButton = document.getElementById("muteButton");
+      const status = document.getElementById("status");
+      const responseText = document.getElementById("responseText");
+
+      const state = {
+        desiredConnected: false,
+        connecting: false,
+        connected: false,
+        muted: false,
+        keepaliveTimer: null,
+        wakeLock: null,
+        lifecycleBound: false,
+        stream: null,
+        audioContext: null,
+        analyserNode: null,
+        analyserBuffer: null,
+        mediaRecorder: null,
+        speechTimer: null,
+        lastSpeechAt: 0,
+        socket: null,
+        sequence: 0,
+        playbackAudio: null,
+        currentPlaybackURL: null,
+        playbackToken: 0,
+        playbackQueue: [],
+        playbackBusy: false,
+        waitingForReload: false,
+      };
+
+      function setStatus(message, tone = "idle") {
+        status.textContent = message;
+        status.dataset.tone = tone;
+      }
+
+      function updateUI() {
+        muteButton.disabled = !state.connected;
+        muteButton.dataset.muted = String(state.muted);
+        muteButton.textContent = state.muted ? "Unmute" : "Mute";
+      }
+
+      function setResponseText(text) {
+        const next = (text || "").trim(); responseText.textContent = next;
+        responseText.hidden = next === "";
+      }
+
+      function describeError(error) {
+        if (!error) return "Unable to start voice mode.";
+
+        switch (error.name) {
+          case "NotAllowedError":
+          case "SecurityError":
+            return "Microphone permission was denied.";
+          case "NotFoundError":
+          case "DevicesNotFoundError":
+            return "No microphone was found.";
+          case "NotReadableError":
+          case "TrackStartError":
+            return "The microphone is busy in another application.";
+          default:
+            return error.message || "Unable to start voice mode.";
+        }
+      }
+
+      function normalizeSocketURL() {
+        const url = new URL(VOICE_SOCKET_PATH, window.location.href);
+        url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        return url.toString();
+      }
+
+      function requireChromeWebMOpusMimeType() {
+        if (!("MediaRecorder" in window)) {
+          throw new Error("MediaRecorder is unavailable in this browser.");
+        }
+
+        if (!window.MediaRecorder.isTypeSupported(REQUIRED_CAPTURE_MIME)) {
+          throw new Error("This browser voice mode currently requires Chrome MediaRecorder support for audio/webm;codecs=opus.");
+        }
+
+        return REQUIRED_CAPTURE_MIME;
+      }
+
+      function stopCurrentPlayback() {
+        if (state.playbackAudio) {
+          state.playbackAudio.pause();
+          state.playbackAudio.src = "";
+        }
+
+        if (state.currentPlaybackURL) {
+          URL.revokeObjectURL(state.currentPlaybackURL);
+          state.currentPlaybackURL = null;
+        }
+      }
+
+      function stopPlayback() {
+        state.playbackQueue = []; state.playbackBusy = false; state.playbackToken += 1;
+        stopCurrentPlayback();
+      }
+
+      async function pingKeepalive(reason) {
+        try {
+          const response = await fetch(KEEPALIVE_PATH, {
+            cache: "no-store",
+            headers: { "X-RocketClaw-Reason": reason },
+          });
+          if (!response.ok) throw new Error("keepalive returned " + response.status);
+          return true;
+        } catch (error) {
+          console.debug("rocketclaw keepalive failed", error);
+          return false;
+        }
+      }
+
+      async function requestWakeLock() {
+        if (!("wakeLock" in navigator) || document.visibilityState !== "visible") return;
+
+        try {
+          state.wakeLock = await navigator.wakeLock.request("screen");
+          state.wakeLock.addEventListener("release", () => {
+            state.wakeLock = null;
+            if (state.desiredConnected && document.visibilityState === "visible") {
+              requestWakeLock();
+            }
+          }, { once: true });
+        } catch (error) {
+          console.debug("wake lock unavailable", error);
+        }
+      }
+
+      async function releaseWakeLock() {
+        if (!state.wakeLock) return;
+        try {
+          await state.wakeLock.release();
+        } catch (error) {
+          console.debug("wake lock release failed", error);
+        } finally {
+          state.wakeLock = null;
+        }
+      }
+
+      function applyMuteState() {
+        if (!state.stream) return;
+
+        state.stream.getAudioTracks().forEach((track) => {
+          track.enabled = !state.muted;
+        });
+      }
+
+      async function resumeAudioContext() {
+        if (!state.audioContext) return;
+        if (state.audioContext.state !== "running") {
+          try {
+            await state.audioContext.resume();
+          } catch (error) {
+            console.debug("audio context resume failed", error);
+          }
+        }
+      }
+
+      function stopKeepalive() {
+        if (state.keepaliveTimer !== null) {
+          window.clearInterval(state.keepaliveTimer);
+          state.keepaliveTimer = null;
+        }
+      }
+
+      function startKeepalive() {
+        stopKeepalive();
+        state.keepaliveTimer = window.setInterval(async () => {
+          if (!state.desiredConnected) return;
+          await resumeAudioContext();
+          await requestWakeLock();
+          await pingKeepalive("keepalive");
+        }, 15000);
+      }
+
+      function stopSpeechMeter() {
+        if (state.speechTimer !== null) {
+          window.clearInterval(state.speechTimer);
+          state.speechTimer = null;
+        }
+      }
+
+      function startSpeechMeter() {
+        stopSpeechMeter();
+        if (!state.analyserNode || !state.analyserBuffer) return;
+
+        state.speechTimer = window.setInterval(() => {
+          state.analyserNode.getByteTimeDomainData(state.analyserBuffer);
+          let sum = 0;
+          for (const sample of state.analyserBuffer) {
+            const normalized = (sample - 128) / 128;
+            sum += normalized * normalized;
+          }
+
+          const rms = Math.sqrt(sum / state.analyserBuffer.length);
+          if (rms >= SPEECH_RMS_THRESHOLD) {
+            state.lastSpeechAt = performance.now();
+          }
+        }, 60);
+      }
+
+      function isSpeakingNow() {
+        return !state.muted && performance.now() - state.lastSpeechAt < SPEECH_HANGOVER_MS;
+      }
+
+      function stopSocket() {
+        if (!state.socket) return;
+        try {
+          state.socket.onclose = null;
+          state.socket.onerror = null;
+          state.socket.onmessage = null;
+          state.socket.close();
+        } catch (error) {
+          console.debug("socket close failed", error);
+        }
+        state.socket = null;
+      }
+
+      function stopRecorder() {
+        if (!state.mediaRecorder) return;
+        const recorder = state.mediaRecorder;
+        state.mediaRecorder = null;
+        try {
+          if (recorder.state !== "inactive") recorder.stop();
+        } catch (error) {
+          console.debug("media recorder stop failed", error);
+        }
+      }
+
+      function cleanupLocalMedia() {
+        stopRecorder();
+        stopSocket();
+        stopSpeechMeter();
+        stopPlayback();
+
+        if (state.stream) state.stream.getTracks().forEach((track) => track.stop());
+        if (state.audioContext) state.audioContext.close().catch(() => {});
+
+        state.stream = null;
+        state.audioContext = null;
+        state.analyserNode = null;
+        state.analyserBuffer = null;
+        state.sequence = 0;
+      }
+
+      async function reloadWhenAPIBack() {
+        if (state.waitingForReload) return;
+        state.waitingForReload = true;
+
+        while (true) {
+          if (await pingKeepalive("reload-probe")) {
+            window.location.reload();
+            return;
+          }
+
+          await new Promise((resolve) => window.setTimeout(resolve, RELOAD_PROBE_MS));
+        }
+      }
+
+      function handleUnexpectedDisconnect(reason) {
+        if (!state.desiredConnected) return;
+        cleanupLocalMedia();
+        state.connected = false;
+        state.connecting = false;
+        stopKeepalive();
+        setStatus(reason || "Voice mode disconnected.", "warn");
+        updateUI();
+        reloadWhenAPIBack();
+      }
+
+      function blobToBase64(blob) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const result = String(reader.result || "");
+            const comma = result.indexOf(",");
+            resolve(comma >= 0 ? result.slice(comma + 1) : result);
+          };
+          reader.onerror = () => reject(reader.error || new Error("Failed to read recorded audio chunk."));
+          reader.readAsDataURL(blob);
+        });
+      }
+
+      function sendSocketMessage(payload) {
+        if (!state.socket || state.socket.readyState !== WebSocket.OPEN) return;
+        state.socket.send(JSON.stringify(payload));
+      }
+
+      function queueServerAudio(relativeURL, mimeType, text) {
+        state.playbackQueue.push({ relativeURL, mimeType, text }); setResponseText(text);
+        if (!state.playbackBusy) playNextServerAudio();
+      }
+
+      async function playNextServerAudio() {
+        const item = state.playbackQueue.shift();
+        if (!item) { state.playbackBusy = false; return; }
+
+        state.playbackBusy = true;
+        const playbackToken = ++state.playbackToken;
+        stopCurrentPlayback(); setResponseText(item.text);
+        try {
+          const probe = document.createElement("audio");
+          if (item.mimeType && typeof probe.canPlayType === "function" && probe.canPlayType(item.mimeType) === "") throw new Error("This browser cannot play the assistant audio format " + item.mimeType + ".");
+
+          const response = await fetch(item.relativeURL, { cache: "no-store" });
+          if (!response.ok) throw new Error("playback returned " + response.status);
+          const blob = await response.blob();
+          const objectURL = URL.createObjectURL(new Blob([blob], { type: item.mimeType || blob.type || "audio/ogg" }));
+          const audio = state.playbackAudio || new Audio();
+          let playbackStarted = false;
+          state.currentPlaybackURL = objectURL;
+          state.playbackAudio = audio;
+          audio.src = objectURL;
+          setStatus("Playing assistant response.", "active");
+          audio.onplaying = () => {
+            playbackStarted = true;
+            if (playbackToken !== state.playbackToken) return;
+            setStatus("Playing assistant response.", "active");
+          };
+          audio.onended = () => {
+            if (playbackToken !== state.playbackToken) return;
+            stopCurrentPlayback(); setStatus(state.muted ? "Muted." : "Listening.", "active"); updateUI();
+            state.playbackBusy = false; playNextServerAudio();
+          };
+          audio.onerror = () => {
+            if (playbackToken !== state.playbackToken) return;
+            stopCurrentPlayback(); state.playbackBusy = false;
+            if (playbackStarted) {
+              setStatus(state.muted ? "Muted." : "Listening.", "active"); updateUI(); playNextServerAudio();
+              return;
+            }
+
+            setStatus("Assistant audio could not be decoded by this browser.", "error"); playNextServerAudio();
+          };
+          await audio.play();
+        } catch (error) {
+          if (playbackToken !== state.playbackToken) return;
+          console.error("browser voice playback failed", error);
+          stopCurrentPlayback(); state.playbackBusy = false;
+          if (error && error.name === "NotAllowedError") {
+            setStatus("Assistant audio playback was blocked by browser autoplay policy.", "error");
+            return;
+          }
+          setStatus(error.message || "Playback failed.", "error"); playNextServerAudio();
+        }
+      }
+
+      function bindSocket(socket, mimeType) {
+        socket.onmessage = (event) => {
+          let payload;
+          try {
+            payload = JSON.parse(event.data);
+          } catch (error) {
+            console.debug("ignore invalid socket payload", error);
+            return;
+          }
+
+          switch (payload.type) {
+            case "ready":
+              sendSocketMessage({ type: "hello", transport: "ws_opus_v1", mime_type: mimeType });
+              break;
+            case "state":
+              if (payload.status === "thinking") {
+                setStatus(payload.message || "Assistant is thinking.", "active");
+              } else if (payload.status === "muted") {
+                setStatus(payload.message || "Muted.", "warn");
+              } else if (payload.status === "error") {
+                setStatus(payload.message || "Voice mode error.", "error");
+              } else if (payload.status === "playing") {
+                setStatus(payload.message || "Playing assistant response.", "active");
+              } else {
+                setStatus(payload.message || (state.muted ? "Muted." : "Listening."), "active");
+              }
+              break;
+            case "playback":
+              queueServerAudio(payload.playback_url, payload.mime_type, payload.text);
+              break;
+          }
+        };
+
+        socket.onerror = () => {
+          if (state.desiredConnected) handleUnexpectedDisconnect("Voice socket error.");
+        };
+
+        socket.onclose = () => {
+          state.socket = null;
+          if (state.desiredConnected) handleUnexpectedDisconnect("Browser voice connection closed.");
+        };
+      }
+
+      async function startLocalMedia() {
+        const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextCtor) throw new Error("Web Audio is unavailable in this browser.");
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+          video: false,
+        });
+
+        const audioContext = new AudioContextCtor();
+        const sourceNode = audioContext.createMediaStreamSource(stream);
+        const analyserNode = audioContext.createAnalyser();
+        analyserNode.fftSize = 2048;
+        sourceNode.connect(analyserNode);
+        await audioContext.resume();
+
+        stream.getAudioTracks().forEach((track) => {
+          track.addEventListener("ended", () => {
+            handleUnexpectedDisconnect("Microphone input ended.");
+          });
+        });
+
+        state.stream = stream;
+        state.audioContext = audioContext;
+        state.analyserNode = analyserNode;
+        state.analyserBuffer = new Uint8Array(analyserNode.fftSize);
+        state.lastSpeechAt = 0;
+        applyMuteState();
+        startSpeechMeter();
+      }
+
+      async function connectSession() {
+        if (state.connecting || state.connected) return;
+
+        state.desiredConnected = true;
+        state.connecting = true;
+        setStatus("Requesting microphone…", "active");
+        updateUI();
+
+        try {
+          const mimeType = requireChromeWebMOpusMimeType();
+          await requestWakeLock();
+          await startLocalMedia();
+
+          const socket = new WebSocket(normalizeSocketURL());
+          state.socket = socket;
+          bindSocket(socket, mimeType);
+
+          await new Promise((resolve, reject) => {
+            const timer = window.setTimeout(() => reject(new Error("Timed out connecting browser voice socket.")), 10000);
+            socket.addEventListener("open", () => {
+              window.clearTimeout(timer);
+              resolve();
+            }, { once: true });
+            socket.addEventListener("error", () => {
+              window.clearTimeout(timer);
+              reject(new Error("Failed to open browser voice socket."));
+            }, { once: true });
+          });
+
+          const recorder = new MediaRecorder(state.stream, { mimeType, audioBitsPerSecond: 64000 });
+          recorder.ondataavailable = async (event) => {
+            if (!state.desiredConnected || state.muted || !state.socket || state.socket.readyState !== WebSocket.OPEN) return;
+            if (!event.data || event.data.size === 0) return;
+            if (state.socket.bufferedAmount > 1024 * 1024) return;
+
+            try {
+              const payload = await blobToBase64(event.data);
+              sendSocketMessage({
+                type: "audio",
+                sequence: ++state.sequence,
+                speaking: isSpeakingNow(),
+                data: payload,
+              });
+            } catch (error) {
+              console.error("send browser voice chunk", error);
+            }
+          };
+          recorder.start(CHUNK_MS);
+          state.mediaRecorder = recorder;
+
+          if (!state.desiredConnected) {
+            cleanupLocalMedia();
+            await releaseWakeLock();
+            setStatus("Disconnected.", "idle");
+            updateUI();
+            return;
+          }
+
+          await pingKeepalive("connect");
+          startKeepalive();
+          state.connecting = false;
+          state.connected = true;
+          setStatus(state.muted ? "Muted." : "Listening.", "active");
+          updateUI();
+        } catch (error) {
+          console.error("voice mode connection failed", error);
+          cleanupLocalMedia();
+          await releaseWakeLock();
+          state.connected = false;
+          state.connecting = false;
+          setStatus(describeError(error), "error");
+          if (error && (error.name === "NotAllowedError" || error.name === "SecurityError")) {
+            state.desiredConnected = false;
+            updateUI();
+            return;
+          }
+          updateUI();
+          reloadWhenAPIBack();
+        }
+      }
+
+      function bindLifecycle() {
+        if (state.lifecycleBound) return;
+        state.lifecycleBound = true;
+
+        document.addEventListener("visibilitychange", async () => {
+          if (document.visibilityState === "visible" && state.desiredConnected) {
+            await requestWakeLock();
+            await resumeAudioContext();
+          }
+        });
+
+        window.addEventListener("focus", async () => {
+          if (!state.desiredConnected) return;
+          await requestWakeLock();
+          await resumeAudioContext();
+        });
+
+        if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === "function") {
+          navigator.mediaDevices.addEventListener("devicechange", () => {
+            if (state.desiredConnected && !state.connecting) {
+              handleUnexpectedDisconnect("Audio device changed.");
+            }
+          });
+        }
+      }
+
+      muteButton.addEventListener("click", () => {
+        if (!state.connected) return;
+        state.muted = !state.muted;
+        applyMuteState();
+        sendSocketMessage({ type: "mute", muted: state.muted });
+        setStatus(state.muted ? "Muted." : "Listening.", state.muted ? "warn" : "active");
+        updateUI();
+      });
+
+      bindLifecycle();
+      updateUI();
+      connectSession();
+    })();
+  </script>
+</body>
+</html>

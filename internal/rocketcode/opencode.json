@@ -1,0 +1,40 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "external_directory": {
+      "/Users/ucirello/go/src/github.com/Rocketable/opencode": "allow",
+      "/Users/ucirello/go/src/github.com/Rocketable/opencode/*": "allow",
+      "~/go/src/github.com/Rocketable/opencode": "allow",
+      "~/go/src/github.com/Rocketable/opencode/*": "allow",
+      "/Users/ucirello/go/src/github.com/Rocketable/mastra": "allow",
+      "/Users/ucirello/go/src/github.com/Rocketable/mastra/*": "allow",
+      "~/go/src/github.com/Rocketable/mastra": "allow",
+      "~/go/src/github.com/Rocketable/mastra/*": "allow",
+      "/Users/ucirello/go/pkg/mod":"allow",
+      "/Users/ucirello/go/pkg/mod/*":"allow",
+      "~/go/pkg/mod":"allow",
+      "~/go/pkg/mod/*":"allow"
+    },
+    "read": {
+      "/Users/ucirello/go/src/github.com/Rocketable/opencode": "allow",
+      "/Users/ucirello/go/src/github.com/Rocketable/opencode/*": "allow",
+      "~/go/src/github.com/Rocketable/opencode": "allow",
+      "~/go/src/github.com/Rocketable/opencode/*": "allow",
+      "/Users/ucirello/go/src/github.com/Rocketable/mastra": "allow",
+      "/Users/ucirello/go/src/github.com/Rocketable/mastra/*": "allow",
+      "~/go/src/github.com/Rocketable/mastra": "allow",
+      "~/go/src/github.com/Rocketable/mastra/*": "allow",
+      "/Users/ucirello/go/pkg/mod":"allow",
+      "/Users/ucirello/go/pkg/mod/*":"allow",
+      "~/go/pkg/mod":"allow",
+      "~/go/pkg/mod/*":"allow"
+    }
+  },
+  "provider": {
+    "openai": {
+      "options": {
+        "parallelToolCalls": false
+      }
+    }
+  }
+}
