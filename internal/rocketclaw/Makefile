@@ -1,7 +1,7 @@
 COVERPROFILE ?= .coverage.out
 COVERPKG ?= github.com/Rocketable/platform/cmd/rocketclaw,./...
 COVERAGE_STABLE_AT ?= 90.0
-GO_SOURCE_CLOC_BUDGET ?= 15000
+GO_SOURCE_CLOC_BUDGET ?= 16000
 GO_SOURCE_CLOC_HAZARD_ZONE ?= 250
 
 run:
@@ -36,7 +36,7 @@ cloc:
 	printf "%-18s %s\n" "total cloc:" "$$go_total_cloc"
 
 test: generate lint
-	go test -race -count 1 -covermode=atomic -coverpkg=$(COVERPKG) -coverprofile=$(COVERPROFILE) ./...
+	go test -race -count 1 -covermode=atomic -coverpkg=$(COVERPKG) -coverprofile=$(COVERPROFILE) github.com/Rocketable/platform/cmd/rocketclaw/... ./...
 	$(MAKE) check-code-metrics
 
 tests: test

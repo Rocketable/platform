@@ -556,6 +556,14 @@ func TestSessionServiceMarksThreadSeeded(t *testing.T) {
 	assert.Equal(t, ThreadState{Agent: "planner", SeededFromResponse: "other-response"}, state.Threads["thread"])
 }
 
+func TestDiscordStateKeys(t *testing.T) {
+	assert.Equal(t, "discord-thread:123", DiscordThreadConversationID(" 123 "))
+	assert.Empty(t, DiscordThreadConversationID(" "))
+	assert.Equal(t, "discord-response:C123:456", DiscordResponseCheckpointKey(" C123 ", " 456 "))
+	assert.Empty(t, DiscordResponseCheckpointKey("", "456"))
+	assert.Empty(t, DiscordResponseCheckpointKey("C123", ""))
+}
+
 func TestSessionServiceRejectsBlankKeys(t *testing.T) {
 	store := newTestSessionService(t)
 

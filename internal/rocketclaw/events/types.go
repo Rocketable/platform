@@ -25,6 +25,7 @@ type Source string
 // Known inbound and outbound message source labels.
 const (
 	SourceSlack        Source = "slack"
+	SourceDiscordText  Source = "discord_text"
 	SourceDiscordVoice Source = "discord_voice"
 	SourceExternalMCP  Source = "external_mcp"
 	SourceWebVoice     Source = "web_voice"
@@ -43,6 +44,8 @@ type OutputTarget string
 const (
 	// OutputTargetSlackMain delivers a response to the main Slack DM.
 	OutputTargetSlackMain OutputTarget = "slack_main"
+	// OutputTargetDiscordText delivers a response to Discord text.
+	OutputTargetDiscordText OutputTarget = "discord_text"
 	// OutputTargetDiscord delivers a response to Discord voice.
 	OutputTargetDiscord OutputTarget = "discord"
 	// OutputTargetWebUI delivers a response to the browser voice-mode client.
@@ -71,6 +74,7 @@ type InboundMessage struct {
 	VerbatimAttachments          []OutboundAttachment
 	Attachments                  []InboundAttachment
 	SlackReply                   *SlackReplyTarget
+	DiscordReply                 *DiscordReplyTarget
 	HadAttachments               bool
 	HadNonImageAttachments       bool
 	AttachmentWarnings           []string
@@ -86,6 +90,11 @@ type InboundMessage struct {
 // SlackReplyTarget identifies the Slack message that owns a streamed reply.
 type SlackReplyTarget struct {
 	ChannelID, MessageTS, ThreadTS string
+}
+
+// DiscordReplyTarget identifies the Discord message or thread that owns a streamed reply.
+type DiscordReplyTarget struct {
+	ChannelID, MessageID, ThreadID string
 }
 
 // ResponseCheckpoint identifies a persisted main-session turn that can seed a Slack thread.
@@ -107,6 +116,7 @@ type OutboundMessage struct {
 	Sequence                             int
 	Complete                             bool
 	SlackReply                           *SlackReplyTarget
+	DiscordReply                         *DiscordReplyTarget
 	Checkpoint                           *ResponseCheckpoint
 	Attachments                          []OutboundAttachment
 

@@ -270,6 +270,38 @@ func TestValidateRejectsMissingRequiredConfig(t *testing.T) {
 			wantErr: "discord_voice.token is required when discord_voice is enabled",
 		},
 		{
+			name: "discord text token",
+			update: func(c *Config) {
+				c.DiscordVoice.Enabled = false
+				c.DiscordText = DiscordTextConfig{Enabled: true, ChannelID: "channel-123", HumanUserID: "user-123"}
+			},
+			wantErr: "discord_text.token is required when discord_text is enabled",
+		},
+		{
+			name: "discord text channel",
+			update: func(c *Config) {
+				c.DiscordVoice.Enabled = false
+				c.DiscordText = DiscordTextConfig{Enabled: true, Token: "discord-token", HumanUserID: "user-123"}
+			},
+			wantErr: "discord_text.channel_id is required when discord_text is enabled",
+		},
+		{
+			name: "discord text human user",
+			update: func(c *Config) {
+				c.DiscordVoice.Enabled = false
+				c.DiscordText = DiscordTextConfig{Enabled: true, Token: "discord-token", ChannelID: "channel-123"}
+			},
+			wantErr: "discord_text.human_user_id is required when discord_text is enabled",
+		},
+		{
+			name: "slack and discord text",
+			update: func(c *Config) {
+				c.DiscordText = DiscordTextConfig{Enabled: true, Token: "discord-token", ChannelID: "channel-123", HumanUserID: "user-123"}
+				c.Slack.Enabled = true
+			},
+			wantErr: "slack and discord_text are mutually exclusive primary text connectors",
+		},
+		{
 			name:    "mcp external listen addr",
 			update:  func(c *Config) { c.MCPExternal.Enabled = true },
 			wantErr: "mcp_external.listen_addr is required when mcp_external is enabled",

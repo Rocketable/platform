@@ -170,9 +170,9 @@ func interviewSetup(cfg *config.Config) (setupNames, error) {
 			return names, fmt.Errorf("prompt Discord enablement: %w", err)
 		}
 
-		slackEnabled, err := promptYesNo(reader, "Enable Slack DM connector? [y/N]: ")
+		primaryText, err := promptPrimaryTextConnector(reader)
 		if err != nil {
-			return names, fmt.Errorf("prompt Slack enablement: %w", err)
+			return names, err
 		}
 
 		externalMCPEnabled, err := promptYesNo(reader, "Enable external MCP HTTP server? [y/N]: ")
@@ -185,7 +185,7 @@ func interviewSetup(cfg *config.Config) (setupNames, error) {
 			return names, fmt.Errorf("prompt browser voice mode enablement: %w", err)
 		}
 
-		if !discordEnabled && !slackEnabled && !externalMCPEnabled && !webUIEnabled {
+		if !discordEnabled && primaryText == "" && !externalMCPEnabled && !webUIEnabled {
 			if _, err := fmt.Fprintln(os.Stdout, "At least one connector, browser voice mode, or external MCP server must be enabled."); err != nil {
 				return names, fmt.Errorf("report missing connector selection: %w", err)
 			}
@@ -194,7 +194,8 @@ func interviewSetup(cfg *config.Config) (setupNames, error) {
 		}
 
 		cfg.DiscordVoice.Enabled = discordEnabled
-		cfg.Slack.Enabled = slackEnabled
+		cfg.Slack.Enabled = primaryText == "slack"
+		cfg.DiscordText.Enabled = primaryText == "discord_text"
 		cfg.MCPExternal.Enabled = externalMCPEnabled
 		cfg.WebUI.Enabled = webUIEnabled
 
@@ -236,6 +237,16 @@ func interviewSetup(cfg *config.Config) (setupNames, error) {
 		}
 	}
 
+	if cfg.DiscordText.Enabled {
+		if err := promptFields(reader,
+			promptField{prompt: "Discord text bot token: ", required: true, value: &cfg.DiscordText.Token},
+			promptField{prompt: "Discord guild text channel ID: ", required: true, value: &cfg.DiscordText.ChannelID},
+			promptField{prompt: "Discord human partner user ID: ", required: true, value: &cfg.DiscordText.HumanUserID},
+		); err != nil {
+			return names, err
+		}
+	}
+
 	if cfg.MCPExternal.Enabled {
 		cfg.MCPExternal.ListenAddr = "127.0.0.1:8765"
 		if err := promptFields(reader, promptField{prompt: "External MCP listen address (serves /mcp) [127.0.0.1:8765]: ", value: &cfg.MCPExternal.ListenAddr}); err != nil {
@@ -262,6 +273,28 @@ func interviewSetup(cfg *config.Config) (setupNames, error) {
 	}
 
 	return names, nil
+}
+
+func promptPrimaryTextConnector(reader *bufio.Reader) (string, error) {
+	for {
+		text, err := promptInput(reader, "Primary text connector: slack, discord, or none [none]: ")
+		if err != nil {
+			return "", fmt.Errorf("prompt primary text connector: %w", err)
+		}
+
+		switch strings.ToLower(text) {
+		case "", "none", "no", "n":
+			return "", nil
+		case "slack", "s":
+			return "slack", nil
+		case "discord", "discord_text", "d":
+			return "discord_text", nil
+		default:
+			if _, err := fmt.Fprintln(os.Stdout, "Please choose slack, discord, or none."); err != nil {
+				return "", fmt.Errorf("print primary text connector guidance: %w", err)
+			}
+		}
+	}
 }
 
 type promptField struct {

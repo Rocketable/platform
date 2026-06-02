@@ -20,10 +20,11 @@ RocketClaw grew by adding Slack, Discord voice, external MCP, browser voice, cro
 | Area               | Current capability                                                                                                                                                                                                                           |
 |--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Main session       | A persistent `main` RocketCode conversation consumes shared inbound human/automation messages and emits configured outbound messages.                                                                                                         |
-| Slack DM           | Slack Socket Mode accepts configured-human DM messages, buffers stacked messages, routes the main Slack conversation, and publishes responses.                                                                                               |
+| Slack DM           | Slack Socket Mode accepts configured-human DM messages, buffers stacked messages, routes the main Slack conversation, and publishes responses. Slack DM is a primary text connector and is mutually exclusive with Discord text.              |
 | Slack social mode  | Configured app mentions in allowed Slack channels can start channel-scoped conversations for configured agents. Unconfigured channels are ignored.                                                                                           |
 | Slack threads      | Emoji-prefixed prompts can start managed agent threads. Replies to newer AI responses can start response-rooted threads with inherited context. `:floppy_disk:` summarizes managed threads back to main.                                     |
-| Discord voice      | RocketClaw joins one configured voice channel, listens only to the configured human speaker, transcribes speech, routes it into the shared conversation, and can speak synthesized responses. Discord text chat is not a supported connector. |
+| Discord text       | Discord text connects one configured guild text channel, accepts configured-human messages, routes the main conversation, publishes responses, and can host managed guild-thread conversations. Discord text is a primary text connector and is mutually exclusive with Slack DM. |
+| Discord voice      | RocketClaw joins one configured voice channel, listens only to the configured human speaker, transcribes speech, routes it into the shared conversation, and can speak synthesized responses. Discord voice is separate from Discord text and can coexist with either primary text connector. |
 | Browser voice      | `web_ui` serves HTTPS `/voice-mode`, receives browser WebM/Opus microphone audio over WebSocket, routes transcriptions like voice input, and serves synthesized playback. Current browser capture is Chrome-oriented.                        |
 | External MCP       | `mcp_external` serves HTTP `/mcp` with exactly one tool, `session_prompt`, accepting input, optional external conversation ID, optional agent, optional Slack channel, optional metadata, and optional attachments.                          |
 | Cron               | `cron/*.md` files are loaded at startup. They can run scheduled or one-off prompts through raw RocketCode runs and can produce internal main-session notes or Slack-channel thread output. `*.example.md` files are ignored.                  |
@@ -34,7 +35,7 @@ RocketClaw grew by adding Slack, Discord voice, external MCP, browser voice, cro
 
 ## Non-Goals
 
-- RocketClaw is not a general Discord text bot.
+- RocketClaw is not a general-purpose Discord bot; Discord text support is scoped to the configured guild channel and managed threads.
 - RocketClaw is not a multi-workspace SaaS; behavior is scoped to one configured workspace.
 - Runtime capabilities here do not document every setup step or every Slack/Discord permission.
 
@@ -60,3 +61,4 @@ RocketClaw grew by adding Slack, Discord voice, external MCP, browser voice, cro
 
 - 2026-05-25: Initial accepted snapshot.
 - 2026-05-25: Added durable recurring scheduled messages until reset, without catch-up replay.
+- 2026-06-02: Added Discord text as a Slack-alternative primary text connector using a configured guild text channel and managed guild threads.

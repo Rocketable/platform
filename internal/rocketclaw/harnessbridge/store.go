@@ -34,13 +34,13 @@ type State struct {
 	PendingRestartNotifications map[string]bool                    `json:"pending_restart_notifications,omitempty"`
 }
 
-// ThreadState is the persisted state for one Slack thread bridge.
+// ThreadState is the persisted state for one text-thread bridge.
 type ThreadState struct {
 	Agent              string `json:"agent,omitempty"`
 	SeededFromResponse string `json:"seeded_from_response,omitempty"`
 }
 
-// ResponseCheckpointState records enough metadata to seed a Slack response-rooted thread.
+// ResponseCheckpointState records enough metadata to seed a response-rooted thread.
 type ResponseCheckpointState struct {
 	ConversationID string `json:"conversation_id,omitempty"`
 	SessionEntryID int64  `json:"session_entry_id,omitempty"`
@@ -135,7 +135,7 @@ func (s *SessionService) Load() (State, error) {
 	return loadRocketClawState(context.Background(), s.db)
 }
 
-// UpsertThread records or updates a Slack thread bridge entry.
+// UpsertThread records or updates a text-thread bridge entry.
 func (s *SessionService) UpsertThread(conversationID, agent string) error {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
@@ -153,7 +153,7 @@ func (s *SessionService) UpsertThread(conversationID, agent string) error {
 	})
 }
 
-// MarkThreadSeeded records the response checkpoint used to seed a Slack thread.
+// MarkThreadSeeded records the response checkpoint used to seed a text thread.
 func (s *SessionService) MarkThreadSeeded(conversationID, seedKey string) error {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
@@ -177,7 +177,7 @@ func (s *SessionService) MarkThreadSeeded(conversationID, seedKey string) error 
 	})
 }
 
-// UpsertResponseCheckpoint records a Slack response checkpoint.
+// UpsertResponseCheckpoint records a response checkpoint.
 func (s *SessionService) UpsertResponseCheckpoint(key string, checkpoint ResponseCheckpointState) error {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -294,7 +294,7 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 	deleteConversations := map[string]struct{}{}
 
 	for conversationID := range state.Threads {
-		prune, err := shouldPruneSlackConversation(ctx, tx, conversationID, cutoff)
+		prune, err := shouldPruneThreadConversation(ctx, tx, conversationID, cutoff)
 		if err != nil {
 			return PruneStateStats{}, err
 		}
@@ -307,7 +307,7 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 	}
 
 	for key := range state.ResponseCheckpoints {
-		if ts, ok := slackStateKeyTime(key, "slack-response:"); ok && ts.Before(cutoff) {
+		if ts, ok := responseCheckpointTime(key); ok && ts.Before(cutoff) {
 			delete(state.ResponseCheckpoints, key)
 			stats.ResponseCheckpoints++
 		}
@@ -808,6 +808,26 @@ func SlackResponseCheckpointKey(channelID, messageTS string) string {
 	return slackPairKey("slack-response:", channelID, messageTS)
 }
 
+// DiscordThreadConversationID returns the stable conversation ID for a Discord thread.
+func DiscordThreadConversationID(threadID string) string {
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return ""
+	}
+
+	return "discord-thread:" + threadID
+}
+
+// DiscordResponseCheckpointKey returns the stable key for one posted Discord AI response message.
+func DiscordResponseCheckpointKey(channelID, messageID string) string {
+	channelID, messageID = strings.TrimSpace(channelID), strings.TrimSpace(messageID)
+	if channelID == "" || messageID == "" {
+		return ""
+	}
+
+	return "discord-response:" + channelID + ":" + messageID
+}
+
 func slackPairKey(prefix, channelID, ts string) string {
 	channelID, ts = strings.TrimSpace(channelID), strings.TrimSpace(ts)
 	if channelID == "" || ts == "" {
@@ -905,13 +925,44 @@ func slackStateKeyTime(key, prefix string) (time.Time, bool) {
 	return time.Unix(seconds, nanos).UTC(), true
 }
 
-func shouldPruneSlackConversation(ctx context.Context, db stateStoreDB, conversationID string, cutoff time.Time) (bool, error) {
+func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, conversationID string, cutoff time.Time) (bool, error) {
 	created, ok := slackStateKeyTime(conversationID, "slack-thread:")
+	if !ok {
+		created, ok = discordStateKeyTime(conversationID, "discord-thread:")
+	}
+
 	if !ok {
 		return false, nil
 	}
 
 	return sessionLatestBefore(ctx, db, conversationID, created, cutoff)
+}
+
+func responseCheckpointTime(key string) (time.Time, bool) {
+	if ts, ok := slackStateKeyTime(key, "slack-response:"); ok {
+		return ts, true
+	}
+
+	return discordStateKeyTime(key, "discord-response:")
+}
+
+func discordStateKeyTime(key, prefix string) (time.Time, bool) {
+	key = strings.TrimSpace(key)
+	if !strings.HasPrefix(key, prefix) {
+		return time.Time{}, false
+	}
+
+	id := key[len(prefix):]
+	if i := strings.LastIndexByte(id, ':'); i >= 0 {
+		id = id[i+1:]
+	}
+
+	snowflake, err := strconv.ParseUint(id, 10, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	return time.UnixMilli(int64((snowflake >> 22) + 1420070400000)).UTC(), true
 }
 
 func sessionLatestBefore(ctx context.Context, db stateStoreDB, conversationID string, fallback, cutoff time.Time) (bool, error) {
@@ -926,7 +977,7 @@ func sessionLatestBefore(ctx context.Context, db stateStoreDB, conversationID st
 }
 
 func stalePrivateConversationIDs(ctx context.Context, db *sql.Tx, cutoff time.Time, state State) ([]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT conversation_id FROM session_entries WHERE conversation_id LIKE 'slack-thread:%' OR conversation_id LIKE 'external_mcp:%' OR conversation_id LIKE 'cron:%' OR conversation_id LIKE 'one-off-cron:%' GROUP BY conversation_id HAVING MAX(julianday(entry_timestamp)) < julianday(?)`, cutoff.Format(time.RFC3339Nano))
+	rows, err := db.QueryContext(ctx, `SELECT conversation_id FROM session_entries WHERE conversation_id LIKE 'slack-thread:%' OR conversation_id LIKE 'discord-thread:%' OR conversation_id LIKE 'external_mcp:%' OR conversation_id LIKE 'cron:%' OR conversation_id LIKE 'one-off-cron:%' GROUP BY conversation_id HAVING MAX(julianday(entry_timestamp)) < julianday(?)`, cutoff.Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, fmt.Errorf("query stale private session conversations: %w", err)
 	}

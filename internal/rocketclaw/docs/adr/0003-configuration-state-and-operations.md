@@ -19,14 +19,14 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 
 | File or directory | Contract |
 | --- | --- |
-| `rocketclaw.json` | Main runtime config. Relative `workspace` resolves relative to the config file. At least one of Discord voice, Slack, external MCP, or web UI must be enabled. |
+| `rocketclaw.json` | Main runtime config. Relative `workspace` resolves relative to the config file. At least one of Discord voice, Discord text, Slack, external MCP, or web UI must be enabled. Slack and Discord text are mutually exclusive primary text connectors. |
 | `femtoclaw.json` | Legacy runtime config. If present, startup and operational commands load it instead of `rocketclaw.json` and use `.femtoclaw/` as the generated runtime directory. |
 | `rocketclaw.users.json` | Optional external MCP Basic Auth users next to `rocketclaw.json`. If present, it must be a JSON object and file mode `0600`. Missing means MCP runs without auth. |
 | `AGENTS.md` | Workspace instruction file generated when missing. Loaded literally; no shell interpolation. |
 | `agents/`, `skills/` | User-overridable workspace overlays for agent and skill assets. Changes require restart to affect running RocketCode definitions. |
 | `.rocketclaw/` | Generated runtime directory. Setup and startup may create or maintain it. |
 | `.femtoclaw/` | Legacy generated runtime directory used only when `femtoclaw.json` is selected. |
-| `<runtime-dir>/state.sqlite3` | Persists RocketCode sessions, Slack thread routing, response checkpoints, external MCP sessions, scheduled messages with recurrence metadata, restart notifications, and seed markers. |
+| `<runtime-dir>/state.sqlite3` | Persists RocketCode sessions, Slack/Discord text thread routing, response checkpoints, external MCP sessions, scheduled messages with recurrence metadata, restart notifications, and seed markers. |
 | `<runtime-dir>/.rocketcode/` | RocketCode shell output and transient runtime artifacts. |
 | `cron/` | Runtime cron definitions. `cron/*.md` loads only at startup. `*.example.md` is ignored. Changes require restart. |
 | `main-update-cortex.sh` | Setup-generated helper for updating the Cortex index in `AGENTS.md`. |
@@ -40,10 +40,13 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - Empty logging level defaults to `debug`.
 - Empty `minimum_wait_after_human_interaction` means `0s`; setup writes `5m` explicitly.
 - Empty or omitted `thread_agents` uses the baseline `:thread:` and `:twisted_rightward_arrows:` routes; a non-empty custom map replaces the baseline.
+- `discord_text.enabled` requires `discord_text.token`, `discord_text.channel_id`, and `discord_text.human_user_id`.
+- `slack.enabled` and `discord_text.enabled` must not both be true.
 
 ### Setup And Operation
 
 - `rocketclaw setup` creates or updates setup-controlled files, asks for human partner and agent names, and replaces placeholders in files it creates.
+- `rocketclaw setup` asks for one primary text connector: Slack, Discord text, or none. Discord text setup targets a guild text channel so managed thread semantics are available.
 - `rocketclaw doctor` validates the loaded config and RocketCode availability.
 - Config selection prefers legacy `femtoclaw.json` when present, selecting `.femtoclaw/`; otherwise `rocketclaw.json` selects `.rocketclaw/`.
 - `rocketclaw setup files list` and `setup files get <path>` expose embedded setup payloads.
@@ -79,3 +82,4 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-05-25: Initial accepted snapshot.
 - 2026-05-25: Recorded recurrence metadata as part of scheduled-message persistence.
 - 2026-06-02: Added legacy `femtoclaw.json` and `.femtoclaw/` runtime-directory compatibility for upgraded installations.
+- 2026-06-02: Added Discord text configuration as the mutually exclusive Slack alternative primary text connector.

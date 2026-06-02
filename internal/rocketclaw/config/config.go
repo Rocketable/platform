@@ -26,6 +26,7 @@ type Config struct {
 	MinimumWaitAfterHumanInteractionDuration time.Duration      `json:"-"`
 	Logging                                  LoggingConfig      `json:"logging"`
 	DiscordVoice                             DiscordVoiceConfig `json:"discord_voice"`
+	DiscordText                              DiscordTextConfig  `json:"discord_text"`
 	MCPExternal                              MCPExternalConfig  `json:"mcp_external"`
 	WebUI                                    WebUIConfig        `json:"web_ui"`
 	Slack                                    SlackConfig        `json:"slack"`
@@ -67,6 +68,14 @@ type DiscordVoiceConfig struct {
 	Token          string `json:"token"`
 	VoiceChannelID string `json:"voice_channel_id"`
 	HumanUserID    string `json:"human_user_id"`
+}
+
+// DiscordTextConfig configures the Discord text connector.
+type DiscordTextConfig struct {
+	Enabled     bool   `json:"enabled"`
+	Token       string `json:"token"`
+	ChannelID   string `json:"channel_id"`
+	HumanUserID string `json:"human_user_id"`
 }
 
 // MCPExternalConfig configures the persistent external MCP HTTP server.
@@ -269,8 +278,12 @@ func LoadExternalMCPUsers(configPath string) (map[string]string, error) {
 
 // Validate verifies the configuration is usable for the enabled connectors.
 func (c *Config) Validate() error {
-	if !c.DiscordVoice.Enabled && !c.Slack.Enabled && !c.MCPExternal.Enabled && !c.WebUI.Enabled {
+	if !c.DiscordVoice.Enabled && !c.DiscordText.Enabled && !c.Slack.Enabled && !c.MCPExternal.Enabled && !c.WebUI.Enabled {
 		return errors.New("enable at least one connector, web_ui, or mcp_external")
+	}
+
+	if c.Slack.Enabled && c.DiscordText.Enabled {
+		return errors.New("slack and discord_text are mutually exclusive primary text connectors")
 	}
 
 	if c.Workspace == "" {
@@ -320,6 +333,14 @@ func (c *Config) Validate() error {
 
 	if c.DiscordVoice.Enabled {
 		for _, field := range [...]struct{ value, message string }{{c.DiscordVoice.Token, "discord_voice.token is required when discord_voice is enabled"}, {c.DiscordVoice.VoiceChannelID, "discord_voice.voice_channel_id is required when discord_voice is enabled"}, {c.DiscordVoice.HumanUserID, "discord_voice.human_user_id is required when discord_voice is enabled"}} {
+			if strings.TrimSpace(field.value) == "" {
+				return errors.New(field.message)
+			}
+		}
+	}
+
+	if c.DiscordText.Enabled {
+		for _, field := range [...]struct{ value, message string }{{c.DiscordText.Token, "discord_text.token is required when discord_text is enabled"}, {c.DiscordText.ChannelID, "discord_text.channel_id is required when discord_text is enabled"}, {c.DiscordText.HumanUserID, "discord_text.human_user_id is required when discord_text is enabled"}} {
 			if strings.TrimSpace(field.value) == "" {
 				return errors.New(field.message)
 			}

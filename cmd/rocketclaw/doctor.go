@@ -43,7 +43,8 @@ func runDoctor(args []string) error {
 		fmt.Sprintf("Configuration: OK (%s)", selected.Path),
 		"Workspace: " + cfg.Workspace,
 		"Work directory: " + cfg.WorkDirName(),
-		fmt.Sprintf("Discord: %t", cfg.DiscordVoice.Enabled),
+		fmt.Sprintf("Discord Text: %t", cfg.DiscordText.Enabled),
+		fmt.Sprintf("Discord Voice: %t", cfg.DiscordVoice.Enabled),
 		fmt.Sprintf("Slack: %t", cfg.Slack.Enabled),
 		"RocketCode: OK (library)",
 	}

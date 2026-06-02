@@ -25,7 +25,7 @@ RocketClaw has lost features when refactors treated behavior as removable plumbi
 | Subagent prompts                                               | Yes                  | Trusted workspace prompt source.                                         |
 | Skill contents loaded by the skill tool                        | Yes                  | Trusted workspace prompt source.                                         |
 | Raw/cron prompt input                                          | Yes                  | Cron bodies are trusted workspace files sent through raw runs.           |
-| Slack/Discord/browser/MCP human input in the persistent bridge | No                   | External/human input must remain literal.                                |
+| Slack/Discord text/Discord voice/browser/MCP human input in the persistent bridge | No                   | External/human input must remain literal.                                |
 | Scheduled-message prompt text in the persistent bridge         | No                   | It follows persistent bridge input rules unless explicitly reclassified. |
 | `AGENTS.md` workspace instructions                             | No                   | Root instructions are loaded literally.                                  |
 
@@ -43,8 +43,12 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 ### Routing And Delivery
 
 - Main conversation output targets are controlled by app wiring, not by individual input sources.
+- The primary text output target is configured as either Slack DM or Discord text, never both.
 - Slack response-rooted threads remain isolated from main until summarized.
+- Discord text managed threads remain isolated from main until summarized, matching Slack managed-thread semantics where Discord guild threads can express them.
 - Slack thread replies use persisted checkpoints when available; older responses without checkpoints receive an explanatory thread reply instead of silently losing context.
+- Discord text replies to checkpointed assistant messages can start response-rooted guild threads with inherited context. Discord DMs do not provide thread semantics.
+- Discord text responses are delivered to the originating Discord channel or thread when a Discord reply target exists; otherwise they are delivered to the configured Discord text channel.
 - Cron final verbatim output with `slack-channel` starts a Slack channel thread; otherwise cron output is internalized into the main session as configured by the cron path.
 - Raw cron runs must call `rocketclaw_i_want_human_partner_to_see_this`; normal assistant replies do not complete the background run.
 
@@ -89,3 +93,4 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 
 - 2026-05-25: Initial accepted snapshot.
 - 2026-05-25: Added Slack reply placeholder-pair reservation contract for normal Slack-visible assistant turns.
+- 2026-06-02: Added Discord text routing and managed-thread behavior as the mutually exclusive primary text alternative to Slack.

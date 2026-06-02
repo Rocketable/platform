@@ -126,7 +126,7 @@ func TestKeepaliveEndpointReturnsJSON(t *testing.T) {
 
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, httpBaseURL(server.URL())+KeepalivePath, http.NoBody)
 	require.NoError(t, err)
-	req.Header.Set("X-RocketClaw-Reason", "keepalive")
+	req.Header.Set("X-Rocketclaw-Reason", "keepalive")
 
 	resp, err := httpsClient(t, server).Do(req)
 	require.NoError(t, err)

@@ -51,6 +51,7 @@ func TestRunSetupAllowsMCPOnlyMode(t *testing.T) {
 	workspace, cfg := runSetupWithInput(t, mcpOnlySetupInput("", ""), nil)
 
 	require.False(t, cfg.DiscordVoice.Enabled)
+	require.False(t, cfg.DiscordText.Enabled)
 	require.False(t, cfg.Slack.Enabled)
 	require.True(t, cfg.MCPExternal.Enabled)
 	require.False(t, cfg.WebUI.Enabled)
@@ -65,6 +66,7 @@ func TestRunSetupAllowsWebUIOnlyMode(t *testing.T) {
 	_, cfg := runSetupWithInput(t, webUIOnlySetupInput(""), nil)
 
 	require.False(t, cfg.DiscordVoice.Enabled)
+	require.False(t, cfg.DiscordText.Enabled)
 	require.False(t, cfg.Slack.Enabled)
 	require.False(t, cfg.MCPExternal.Enabled)
 	require.True(t, cfg.WebUI.Enabled)
@@ -74,11 +76,11 @@ func TestRunSetupAllowsWebUIOnlyMode(t *testing.T) {
 func TestRunSetupRepromptsWhenNoConnectorSelected(t *testing.T) {
 	_, cfg, output := runSetupWithInputOutput(t, strings.Join([]string{
 		"n",
+		"none",
 		"n",
 		"n",
 		"n",
-		"n",
-		"n",
+		"none",
 		"n",
 		"y",
 		"sk-test",
@@ -101,7 +103,7 @@ func TestRunSetupRepromptsWhenNoConnectorSelected(t *testing.T) {
 func TestRunSetupWritesDiscordConfig(t *testing.T) {
 	_, cfg := runSetupWithInput(t, strings.Join([]string{
 		"y",
-		"n",
+		"none",
 		"n",
 		"n",
 		"sk-test",
@@ -121,6 +123,31 @@ func TestRunSetupWritesDiscordConfig(t *testing.T) {
 	require.Equal(t, config.DiscordVoiceConfig{Enabled: true, Token: "discord-token", VoiceChannelID: "voice-123", HumanUserID: "user-123"}, cfg.DiscordVoice)
 	require.False(t, cfg.WebUI.Enabled)
 	require.Empty(t, cfg.WebUI.ListenAddr)
+}
+
+func TestRunSetupWritesDiscordTextConfig(t *testing.T) {
+	_, cfg := runSetupWithInput(t, strings.Join([]string{
+		"n",
+		"discord",
+		"n",
+		"n",
+		"sk-test",
+		"",
+		"",
+		"",
+		"",
+		"",
+		"Ulderico",
+		"Maschine",
+		"",
+		"discord-token",
+		"channel-123",
+		"user-123",
+	}, "\n")+"\n", nil)
+
+	require.Equal(t, config.DiscordTextConfig{Enabled: true, Token: "discord-token", ChannelID: "channel-123", HumanUserID: "user-123"}, cfg.DiscordText)
+	require.False(t, cfg.Slack.Enabled)
+	require.False(t, cfg.WebUI.Enabled)
 }
 
 func TestRunSetupAcceptsConfiguredWebUIListenAddr(t *testing.T) {
@@ -208,15 +235,16 @@ func TestInterviewSetupReportsPromptReadErrors(t *testing.T) {
 		wantErr string
 	}{
 		{name: "discord enablement", wantErr: "prompt Discord enablement"},
-		{name: "slack enablement", input: "n\n", wantErr: "prompt Slack enablement"},
-		{name: "external MCP enablement", input: "n\nn\n", wantErr: "prompt external MCP enablement"},
-		{name: "browser voice mode enablement", input: "n\n" + "n\n" + "n\n", wantErr: "prompt browser voice mode enablement"},
-		{name: "common fields", input: "n\n" + "n\n" + "n\n\n", wantErr: "read prompt input"},
-		{name: "discord fields", input: "y\n" + "n\n" + "n\n\n" + common, wantErr: "read prompt input"},
-		{name: "slack fields", input: "n\n" + "y\n" + "n\n\n" + common, wantErr: "read prompt input"},
-		{name: "external MCP listen address", input: "n\n" + "n\n" + "y\n\n" + common, wantErr: "read prompt input"},
-		{name: "external MCP users file", input: "n\n" + "n\n" + "y\n\n" + common + "\n", wantErr: "prompt external MCP users file creation"},
-		{name: "browser voice mode listen address", input: "n\n" + "n\n" + "n\n\n" + common, wantErr: "read prompt input"},
+		{name: "primary text connector", input: "n\n", wantErr: "prompt primary text connector"},
+		{name: "external MCP enablement", input: "n\nnone\n", wantErr: "prompt external MCP enablement"},
+		{name: "browser voice mode enablement", input: "n\n" + "none\n" + "n\n", wantErr: "prompt browser voice mode enablement"},
+		{name: "common fields", input: "n\n" + "none\n" + "n\n\n", wantErr: "read prompt input"},
+		{name: "discord fields", input: "y\n" + "none\n" + "n\n\n" + common, wantErr: "read prompt input"},
+		{name: "slack fields", input: "n\n" + "slack\n" + "n\n\n" + common, wantErr: "read prompt input"},
+		{name: "discord text fields", input: "n\n" + "discord\n" + "n\n\n" + common, wantErr: "read prompt input"},
+		{name: "external MCP listen address", input: "n\n" + "none\n" + "y\n\n" + common, wantErr: "read prompt input"},
+		{name: "external MCP users file", input: "n\n" + "none\n" + "y\n\n" + common + "\n", wantErr: "prompt external MCP users file creation"},
+		{name: "browser voice mode listen address", input: "n\n" + "none\n" + "n\n\n" + common, wantErr: "read prompt input"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			stdinFile, err := os.CreateTemp(t.TempDir(), "setup-input-*.txt")
@@ -506,7 +534,7 @@ func slackSetupInput(apiBase string) string {
 func slackSetupInputWithServiceOverrides(apiBase, sttKey, sttBase, ttsKey, ttsBase string) string {
 	return strings.Join([]string{
 		"n",
-		"y",
+		"slack",
 		"n",
 		"",
 		"sk-test",
@@ -529,7 +557,7 @@ func slackSetupInputWithServiceOverrides(apiBase, sttKey, sttBase, ttsKey, ttsBa
 func mcpOnlySetupInput(listenAddr, createExternalMCPUsers string) string {
 	return strings.Join([]string{
 		"n",
-		"n",
+		"none",
 		"y",
 		"n",
 		"sk-test",
@@ -549,7 +577,7 @@ func mcpOnlySetupInput(listenAddr, createExternalMCPUsers string) string {
 func webUIOnlySetupInput(listenAddr string) string {
 	return strings.Join([]string{
 		"n",
-		"n",
+		"none",
 		"n",
 		"y",
 		"sk-test",

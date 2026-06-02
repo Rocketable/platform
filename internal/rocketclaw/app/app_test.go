@@ -104,6 +104,25 @@ func TestOutboundLoopDeliversChannelsInParallelAndPreservesPerChannelOrder(t *te
 	require.NoError(t, <-done)
 }
 
+func TestConfiguredMainOutputTargetsSelectsPrimaryTextConnector(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  config.Config
+		want []events.OutputTarget
+	}{
+		{name: "slack", cfg: config.Config{Slack: config.SlackConfig{Enabled: true}}, want: []events.OutputTarget{events.OutputTargetSlackMain}},
+		{name: "discord text", cfg: config.Config{DiscordText: config.DiscordTextConfig{Enabled: true}}, want: []events.OutputTarget{events.OutputTargetDiscordText}},
+		{name: "discord text and voice", cfg: config.Config{DiscordText: config.DiscordTextConfig{Enabled: true}, DiscordVoice: config.DiscordVoiceConfig{Enabled: true}}, want: []events.OutputTarget{events.OutputTargetDiscordText, events.OutputTargetDiscord}},
+		{name: "voice only", cfg: config.Config{DiscordVoice: config.DiscordVoiceConfig{Enabled: true}}, want: []events.OutputTarget{events.OutputTargetDiscord}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, configuredMainOutputTargets(&tt.cfg))
+		})
+	}
+}
+
 func TestOutboundLoopPropagatesDeliveryErrorsToWaitDelivered(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

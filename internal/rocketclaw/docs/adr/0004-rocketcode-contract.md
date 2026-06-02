@@ -21,7 +21,7 @@ Several rocketclaw capabilities exist only because of precise RocketCode configu
 
 | Path              | File                                  | Purpose                                                                                | Prompt input expansion |
 |-------------------|---------------------------------------|----------------------------------------------------------------------------------------|------------------------|
-| Persistent bridge | `internal/rocketcodebridge/bridge.go`  | Main, thread, Slack, browser, Discord, scheduled, and external MCP conversation turns. | `InputPrompts: false`  |
+| Persistent bridge | `internal/rocketcodebridge/bridge.go`  | Main, thread, Slack, Discord text, browser, Discord voice, scheduled, and external MCP conversation turns. | `InputPrompts: false`  |
 | Raw run           | `internal/rocketcodebridge/raw_run.go` | Cron and one-off cron background turns.                                                | `InputPrompts: true`   |
 
 Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell expansion. Persistent bridge input text remains literal. Raw input text expands because cron bodies are trusted workspace files.
@@ -88,3 +88,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-05-25: Initial accepted snapshot.
 - 2026-05-25: Added optional recurring scheduled-message contract for persistent and raw RocketCode paths.
 - 2026-06-02: Set RocketCode maximum parallel tool calls to 16 for persistent and raw RocketClaw paths.
+- 2026-06-02: Added Discord text as a persistent-bridge source whose human input remains literal.

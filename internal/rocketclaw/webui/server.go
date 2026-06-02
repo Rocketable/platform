@@ -103,7 +103,7 @@ func StartIn(
 			OK        bool   `json:"ok"`
 			Reason    string `json:"reason,omitempty"`
 			Timestamp string `json:"timestamp"`
-		}{OK: true, Reason: r.Header.Get("X-RocketClaw-Reason"), Timestamp: time.Now().UTC().Format(time.RFC3339)})
+		}{OK: true, Reason: r.Header.Get("X-Rocketclaw-Reason"), Timestamp: time.Now().UTC().Format(time.RFC3339)})
 	})
 
 	mux.HandleFunc(voiceSocketPath, func(w http.ResponseWriter, r *http.Request) {

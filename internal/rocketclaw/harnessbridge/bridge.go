@@ -603,9 +603,14 @@ func (b *Bridge) handleInbound(ctx context.Context, msg *events.InboundMessage) 
 		slackChannel, slackMessageTS, slackThreadTS = reply.ChannelID, reply.MessageTS, reply.ThreadTS
 	}
 
+	discordChannel, discordMessageID, discordThreadID := "", "", ""
+	if reply := msg.DiscordReply; reply != nil {
+		discordChannel, discordMessageID, discordThreadID = reply.ChannelID, reply.MessageID, reply.ThreadID
+	}
+
 	normalizeInboundAttachments(msg)
 
-	b.log.Info("starting rocketcode turn", "conversation_id", b.config.ConversationID, "turn_id", turnID, "source", msg.Source, "kind", msg.Kind, "label", msg.Label, "text_len", len([]rune(msg.Text)), "attachment_count", len(msg.Attachments), "slack_channel", slackChannel, "slack_message_ts", slackMessageTS, "slack_thread_ts", slackThreadTS)
+	b.log.Info("starting rocketcode turn", "conversation_id", b.config.ConversationID, "turn_id", turnID, "source", msg.Source, "kind", msg.Kind, "label", msg.Label, "text_len", len([]rune(msg.Text)), "attachment_count", len(msg.Attachments), "slack_channel", slackChannel, "slack_message_ts", slackMessageTS, "slack_thread_ts", slackThreadTS, "discord_channel", discordChannel, "discord_message_id", discordMessageID, "discord_thread_id", discordThreadID)
 
 	defer func() {
 		b.log.Info("finished rocketcode turn", "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(started).Milliseconds(), "text_len", len([]rune(result.text)), "thinking_len", len([]rune(result.thinking)), "session_entry_id", result.sessionEntryID, "error", errLog)
@@ -1448,19 +1453,27 @@ func (b *Bridge) armScheduledMessage(id string, message *ScheduledMessageState) 
 			if channelID, threadTS, ok := strings.Cut(rest, ":"); ok {
 				inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
 			}
+		} else if threadID, ok := strings.CutPrefix(armed.ConversationID, "discord-thread:"); ok {
+			inbound.DiscordReply = &events.DiscordReplyTarget{ChannelID: threadID, ThreadID: threadID}
 		} else if strings.HasPrefix(armed.ConversationID, externalMCPConversationPrefix) {
 			for conversationID, thread := range threads {
 				if strings.TrimSpace(thread.SeededFromResponse) != armed.ConversationID {
 					continue
 				}
 
-				rest, ok := strings.CutPrefix(conversationID, "slack-thread:")
-				if !ok {
-					continue
+				if rest, ok := strings.CutPrefix(conversationID, "slack-thread:"); ok {
+					channelID, threadTS, ok := strings.Cut(rest, ":")
+					if !ok {
+						continue
+					}
+
+					inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
+
+					break
 				}
 
-				if channelID, threadTS, ok := strings.Cut(rest, ":"); ok {
-					inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
+				if threadID, ok := strings.CutPrefix(conversationID, "discord-thread:"); ok {
+					inbound.DiscordReply = &events.DiscordReplyTarget{ChannelID: threadID, ThreadID: threadID}
 					break
 				}
 			}
@@ -1497,6 +1510,10 @@ func (b *Bridge) newOutboundMessage(msg *events.InboundMessage, turnID string, s
 		outbound.WebSessionID = msg.WebSessionID
 		if msg.SlackReply != nil {
 			outbound.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS}
+		}
+
+		if msg.DiscordReply != nil {
+			outbound.DiscordReply = &events.DiscordReplyTarget{ChannelID: msg.DiscordReply.ChannelID, MessageID: msg.DiscordReply.MessageID, ThreadID: msg.DiscordReply.ThreadID}
 		}
 	}
 
