@@ -8,16 +8,22 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/cronjob"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
+	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 )
 
 const (
 	discordTextLimit          = 1900
 	discordPreferredChunkSize = 1700
 	discordSummaryEmoji       = "💾"
+	discordRepeatOneEmoji     = "🔂"
+	discordRepeatOneName      = "repeat_one"
+	discordCronPrefix         = ":repeat_one:"
 )
 
 // ThreadRouter routes Discord thread messages directly to app-owned thread bridges.
@@ -33,12 +39,28 @@ type ThreadRouter interface {
 
 type discordClient interface {
 	channel(string) (*textChannel, error)
+	message(string, string) (*textMessage, error)
 	typing(string) error
 	sendMessage(string, messageSend) (*postedMessage, error)
 	createThread(string, string, threadStart) (*textChannel, error)
 	sendAttachments(string, []events.OutboundAttachment) error
 	userID() string
 	Close() error
+}
+
+type oneOffCronjobRunner interface {
+	LoadOneOffCronjob(string) (cronjob.OneOffCronjob, error)
+	RunOneOffCronjob(context.Context, cronjob.OneOffCronjob, *harnessbridge.RawRunProgress, func(context.Context, cronjob.RunResult, error))
+}
+
+type inertOneOffCronjobs struct{}
+
+func (inertOneOffCronjobs) LoadOneOffCronjob(string) (cronjob.OneOffCronjob, error) {
+	return cronjob.OneOffCronjob{}, errors.New("on-demand cronjobs are not configured")
+}
+
+func (inertOneOffCronjobs) RunOneOffCronjob(ctx context.Context, _ cronjob.OneOffCronjob, _ *harnessbridge.RawRunProgress, finish func(context.Context, cronjob.RunResult, error)) {
+	finish(ctx, cronjob.RunResult{}, errors.New("on-demand cronjobs are not configured"))
 }
 
 type threadAgent struct {
@@ -48,18 +70,19 @@ type threadAgent struct {
 
 // Connector bridges Discord text events into the shared rocketclaw bus.
 type Connector struct {
-	log          *slog.Logger
-	config       config.DiscordTextConfig
-	bus          *events.Bus
-	threadRouter ThreadRouter
-	threadAgents []threadAgent
-	client       discordClient
-	botUserID    string
+	log            *slog.Logger
+	config         config.DiscordTextConfig
+	bus            *events.Bus
+	threadRouter   ThreadRouter
+	oneOffCronjobs oneOffCronjobRunner
+	threadAgents   []threadAgent
+	client         discordClient
+	botUserID      string
 }
 
 // New constructs a Discord text connector.
-func New(cfg config.DiscordTextConfig, bus *events.Bus, threadAgents config.ThreadAgents, threadRouter ThreadRouter, logger *slog.Logger) *Connector {
-	return &Connector{log: logger.With("component", "discord_text"), config: cfg, bus: bus, threadAgents: normalizeThreadAgents(threadAgents), threadRouter: threadRouter}
+func New(cfg config.DiscordTextConfig, bus *events.Bus, threadAgents config.ThreadAgents, threadRouter ThreadRouter, oneOffCronjobs oneOffCronjobRunner, logger *slog.Logger) *Connector {
+	return &Connector{log: logger.With("component", "discord_text"), config: cfg, bus: bus, threadAgents: normalizeThreadAgents(threadAgents), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs}
 }
 
 // Start connects to Discord and begins consuming text events.
@@ -320,10 +343,19 @@ func (c *Connector) handleResponseThreadReply(ctx context.Context, ev *messageCr
 }
 
 func (c *Connector) handleReaction(ctx context.Context, ev *reactionAdd) {
-	if ev == nil || ev.UserID != c.config.HumanUserID || ev.Emoji.Name != discordSummaryEmoji {
+	if ev == nil || ev.UserID != c.config.HumanUserID {
 		return
 	}
 
+	switch ev.Emoji.Name {
+	case discordSummaryEmoji:
+		c.handleSummaryReaction(ctx, ev)
+	case discordRepeatOneEmoji, discordRepeatOneName:
+		c.handleOnDemandCronReaction(ctx, ev)
+	}
+}
+
+func (c *Connector) handleSummaryReaction(ctx context.Context, ev *reactionAdd) {
 	handled, err := c.threadRouter.SummarizeDiscordThread(ctx, ev.ChannelID)
 	if err != nil {
 		c.log.Error("summarize Discord thread", "thread", ev.ChannelID, "error", err)
@@ -332,6 +364,179 @@ func (c *Connector) handleReaction(ctx context.Context, ev *reactionAdd) {
 	if handled {
 		c.log.Info("accepted Discord thread summary request", "thread", ev.ChannelID, "message", ev.MessageID)
 	}
+}
+
+func (c *Connector) handleOnDemandCronReaction(ctx context.Context, ev *reactionAdd) {
+	message, err := c.client.message(ev.ChannelID, ev.MessageID)
+	if err != nil {
+		c.log.Warn("fetch Discord cron reaction message", "channel", ev.ChannelID, "message", ev.MessageID, "error", err)
+		return
+	}
+
+	reply := &events.DiscordReplyTarget{ChannelID: ev.ChannelID, MessageID: ev.MessageID}
+
+	target, ok := discordReactionCronTarget(message.Content)
+	if !ok {
+		c.publishOnDemandCronReply(ctx, reply, "React with `🔂` to a message containing exactly one cron target, such as `🔂 daily`, `daily`, `daily.md`, or a scheduled cron thread root containing `cron/daily.md`.", true)
+		return
+	}
+
+	loaded, err := c.oneOffCronjobs.LoadOneOffCronjob(target)
+	if err != nil {
+		c.publishOnDemandCronReply(ctx, reply, "I couldn't find that cronjob. Use a top-level cron filename like `daily` or `daily.md`.", true)
+		return
+	}
+
+	if strings.TrimSpace(loaded.SlackChannel) != ev.ChannelID {
+		c.publishOnDemandCronReply(ctx, reply, "That cronjob is not configured to run in this Discord channel.", true)
+		return
+	}
+
+	preview := "One-off cronjob starting.\n\nFile: `" + loaded.RelativePath + "`\nAgent: `" + strings.TrimSpace(loaded.Agent) + "`"
+	c.publishOnDemandCronReply(ctx, reply, preview, false)
+
+	turnID := fmt.Sprintf("discord-one-off-cron-%d", time.Now().UnixNano())
+	go c.runOnDemandCron(ctx, loaded, reply, turnID)
+}
+
+func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCronjob, reply *events.DiscordReplyTarget, turnID string) {
+	thinking := ""
+	publish := func(ctx context.Context, text, thinkingText string, complete, postText bool, attachments []events.OutboundAttachment) error {
+		outbound := events.NewMainOutboundMessage(events.SourceSystem, text, events.OutputTargetDiscordText)
+		outbound.SlackThinking = thinkingText
+		outbound.SlackPostText = postText
+		outbound.TurnID = turnID
+		outbound.Complete = complete
+		outbound.DiscordReply = &events.DiscordReplyTarget{ChannelID: reply.ChannelID, MessageID: reply.MessageID, ThreadID: reply.ThreadID}
+		outbound.Attachments = events.CloneOutboundAttachments(attachments)
+
+		if err := c.bus.PublishOutbound(ctx, outbound); err != nil {
+			return fmt.Errorf("publish Discord on-demand cron output: %w", err)
+		}
+
+		return nil
+	}
+
+	progress := &harnessbridge.RawRunProgress{
+		Thinking: func(ctx context.Context, text string) error {
+			text = strings.TrimSpace(text)
+			if text == "" {
+				return nil
+			}
+
+			if thinking == "" {
+				thinking = text
+			} else {
+				thinking += "\n" + text
+			}
+
+			return publish(ctx, "", thinking, false, false, nil)
+		},
+		Message: func(ctx context.Context, text string) error {
+			text = strings.TrimSpace(text)
+			if text == "" {
+				return nil
+			}
+
+			return publish(ctx, text, "", false, true, nil)
+		},
+	}
+
+	c.oneOffCronjobs.RunOneOffCronjob(ctx, loaded, progress, func(ctx context.Context, result cronjob.RunResult, err error) {
+		if err != nil {
+			if errPublish := publish(ctx, "I couldn't run that on-demand cron right now.", "", true, false, nil); errPublish != nil {
+				c.log.Warn("publish Discord on-demand cron failure", "error", errPublish)
+			}
+
+			return
+		}
+
+		payload := strings.TrimSpace(result.VerbatimMessage)
+		if payload == "" && len(result.Attachments) == 0 {
+			payload = "Cronjob completed and decided to emit no human-visible output."
+		}
+
+		if err := publish(ctx, payload, "", true, false, result.Attachments); err != nil {
+			c.log.Warn("publish Discord on-demand cron result", "error", err)
+		}
+	})
+}
+
+func (c *Connector) publishOnDemandCronReply(ctx context.Context, reply *events.DiscordReplyTarget, text string, complete bool) {
+	outbound := events.NewMainOutboundMessage(events.SourceSystem, strings.TrimSpace(text), events.OutputTargetDiscordText)
+	outbound.Complete = complete
+	outbound.SlackPostText = !complete
+	outbound.DiscordReply = &events.DiscordReplyTarget{ChannelID: reply.ChannelID, MessageID: reply.MessageID, ThreadID: reply.ThreadID}
+
+	if err := c.bus.PublishOutbound(ctx, outbound); err != nil {
+		c.log.Warn("publish Discord on-demand cron reply", "error", err)
+	}
+}
+
+func discordReactionCronTarget(text string) (string, bool) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", false
+	}
+
+	var candidates []string
+	if target, ok := singleDiscordCronTarget(text); ok {
+		candidates = append(candidates, target)
+	}
+
+	for _, prefix := range []string{discordCronPrefix, discordRepeatOneEmoji} {
+		if after, ok := strings.CutPrefix(text, prefix); ok {
+			if target, ok := singleDiscordCronTarget(after); ok {
+				candidates = append(candidates, target)
+			}
+		}
+	}
+
+	for field := range strings.FieldsSeq(text) {
+		field = strings.Trim(field, "`.,;:()[]<>")
+		if target, ok := discordCronPathTarget(field); ok {
+			candidates = append(candidates, target)
+		}
+	}
+
+	if len(candidates) == 0 {
+		return "", false
+	}
+
+	target := candidates[0]
+	for _, candidate := range candidates[1:] {
+		if candidate != target {
+			return "", false
+		}
+	}
+
+	return target, true
+}
+
+func singleDiscordCronTarget(text string) (string, bool) {
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) != 1 || fields[0] == discordCronPrefix || fields[0] == discordRepeatOneEmoji {
+		return "", false
+	}
+
+	if target, ok := discordCronPathTarget(fields[0]); ok {
+		return target, true
+	}
+
+	return fields[0], true
+}
+
+func discordCronPathTarget(text string) (string, bool) {
+	if !strings.HasPrefix(text, "cron/") || !strings.HasSuffix(text, ".md") {
+		return "", false
+	}
+
+	target := strings.TrimSuffix(strings.TrimPrefix(text, "cron/"), ".md")
+	if target == "" || strings.ContainsAny(target, `/\`) {
+		return "", false
+	}
+
+	return target, true
 }
 
 func (c *Connector) createThread(client discordClient, channelID, messageID, text string) (*textChannel, error) {

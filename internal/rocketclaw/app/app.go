@@ -251,7 +251,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	if cfg.DiscordText.Enabled {
 		logger.Info("starting Discord text connector", "channel_id", cfg.DiscordText.ChannelID)
 
-		discordTextSink = discordtext.New(cfg.DiscordText, bus, cfg.ThreadAgents, threadBridges, logger)
+		discordTextSink = discordtext.New(cfg.DiscordText, bus, cfg.ThreadAgents, threadBridges, cronjobs, logger)
 		if err := discordTextSink.Start(runCtx); err != nil {
 			return fmt.Errorf("start Discord text connector: %w", err)
 		}

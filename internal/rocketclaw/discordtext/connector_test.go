@@ -10,7 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/cronjob"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
+	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 )
 
 func TestSendResponseTypesAndRecordsCheckpoints(t *testing.T) {
@@ -102,6 +104,70 @@ func TestHandleReactionSummarizesThread(t *testing.T) {
 	assert.Equal(t, "T123", router.summarizedThreadID)
 }
 
+func TestHandleReactionRunsOnDemandCron(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.reactionMessageContent = "🔂 daily"
+	runner := &fakeOneOffCronjobs{loaded: cronjob.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", SlackChannel: "C123"}, result: cronjob.RunResult{VerbatimMessage: "done"}}
+	connector := newTestConnector(fake, newFakeThreadRouter())
+	connector.oneOffCronjobs = runner
+
+	connector.handleReaction(t.Context(), &reactionAdd{UserID: "human", ChannelID: "C123", MessageID: "M1", Emoji: textEmoji{Name: discordRepeatOneEmoji}})
+
+	assert.Equal(t, []string{"daily"}, runner.targets)
+	preview := readOneOutbound(t, connector.bus)
+	assert.Contains(t, preview.Text, "File: `cron/daily.md`")
+	require.NotNil(t, preview.DiscordReply)
+	assert.Equal(t, "C123", preview.DiscordReply.ChannelID)
+	assert.Equal(t, "M1", preview.DiscordReply.MessageID)
+	final := readOneOutbound(t, connector.bus)
+	assert.Equal(t, "done", final.Text)
+	assert.True(t, final.Complete)
+	assert.Equal(t, []cronjob.OneOffCronjob{runner.loaded}, runner.runs)
+}
+
+func TestHandleReactionRejectsCronForDifferentDiscordChannel(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.reactionMessageContent = "daily"
+	runner := &fakeOneOffCronjobs{loaded: cronjob.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", SlackChannel: "C999"}}
+	connector := newTestConnector(fake, newFakeThreadRouter())
+	connector.oneOffCronjobs = runner
+
+	connector.handleReaction(t.Context(), &reactionAdd{UserID: "human", ChannelID: "C123", MessageID: "M1", Emoji: textEmoji{Name: discordRepeatOneEmoji}})
+
+	assert.Equal(t, []string{"daily"}, runner.targets)
+	assert.Empty(t, runner.runs)
+	rejection := readOneOutbound(t, connector.bus)
+	assert.Equal(t, "That cronjob is not configured to run in this Discord channel.", rejection.Text)
+	require.NotNil(t, rejection.DiscordReply)
+	assert.Equal(t, "C123", rejection.DiscordReply.ChannelID)
+	assert.Equal(t, "M1", rejection.DiscordReply.MessageID)
+}
+
+func TestHandleReactionRejectsInvalidCronTarget(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.reactionMessageContent = "daily weekly"
+	runner := &fakeOneOffCronjobs{}
+	connector := newTestConnector(fake, newFakeThreadRouter())
+	connector.oneOffCronjobs = runner
+
+	connector.handleReaction(t.Context(), &reactionAdd{UserID: "human", ChannelID: "C123", MessageID: "M1", Emoji: textEmoji{Name: discordRepeatOneEmoji}})
+
+	assert.Empty(t, runner.targets)
+	rejection := readOneOutbound(t, connector.bus)
+	assert.Contains(t, rejection.Text, "exactly one cron target")
+}
+
+func TestHandleReactionIgnoresUnauthorizedCronReaction(t *testing.T) {
+	fake := newFakeDiscordClient()
+	runner := &fakeOneOffCronjobs{}
+	connector := newTestConnector(fake, newFakeThreadRouter())
+	connector.oneOffCronjobs = runner
+
+	connector.handleReaction(t.Context(), &reactionAdd{UserID: "other", ChannelID: "C123", MessageID: "M1", Emoji: textEmoji{Name: discordRepeatOneEmoji}})
+
+	assert.Empty(t, runner.targets)
+}
+
 func TestSendRelayPostsToConfiguredChannel(t *testing.T) {
 	fake := newFakeDiscordClient()
 	connector := newTestConnector(fake, newFakeThreadRouter())
@@ -150,22 +216,24 @@ func TestHandleResponseThreadReplyCreatesThread(t *testing.T) {
 
 func newTestConnector(client *fakeDiscordClient, router *fakeThreadRouter) *Connector {
 	return &Connector{
-		log:          slog.New(slog.DiscardHandler),
-		config:       config.DiscordTextConfig{Enabled: true, Token: "token", ChannelID: "C123", HumanUserID: "human"},
-		bus:          events.New(),
-		threadRouter: router,
-		client:       client,
-		botUserID:    "BOT",
+		log:            slog.New(slog.DiscardHandler),
+		config:         config.DiscordTextConfig{Enabled: true, Token: "token", ChannelID: "C123", HumanUserID: "human"},
+		bus:            events.New(),
+		threadRouter:   router,
+		oneOffCronjobs: inertOneOffCronjobs{},
+		client:         client,
+		botUserID:      "BOT",
 	}
 }
 
 type fakeDiscordClient struct {
-	channels    map[string]*textChannel
-	threadID    string
-	typed       []string
-	messages    []fakeMessageSend
-	threads     []fakeThreadStart
-	attachments []string
+	channels               map[string]*textChannel
+	threadID               string
+	reactionMessageContent string
+	typed                  []string
+	messages               []fakeMessageSend
+	threads                []fakeThreadStart
+	attachments            []string
 }
 
 type fakeMessageSend struct {
@@ -186,6 +254,10 @@ func (f *fakeDiscordClient) Close() error { return nil }
 
 func (f *fakeDiscordClient) channel(channelID string) (*textChannel, error) {
 	return f.channels[channelID], nil
+}
+
+func (f *fakeDiscordClient) message(channelID, messageID string) (*textMessage, error) {
+	return &textMessage{ID: messageID, ChannelID: channelID, Content: f.reactionMessageContent}, nil
 }
 
 func (f *fakeDiscordClient) typing(channelID string) error {
@@ -257,5 +329,39 @@ func (f *fakeThreadRouter) SummarizeDiscordThread(_ context.Context, threadID st
 
 func (f *fakeThreadRouter) RecordDiscordResponseCheckpoint(_ context.Context, channelID, messageID string, _ events.ResponseCheckpoint) error {
 	f.recordedCheckpoints = append(f.recordedCheckpoints, channelID+":"+messageID)
+	return nil
+}
+
+type fakeOneOffCronjobs struct {
+	targets []string
+	loaded  cronjob.OneOffCronjob
+	runs    []cronjob.OneOffCronjob
+	result  cronjob.RunResult
+	errLoad error
+	errRun  error
+}
+
+func (f *fakeOneOffCronjobs) LoadOneOffCronjob(target string) (cronjob.OneOffCronjob, error) {
+	f.targets = append(f.targets, target)
+	return f.loaded, f.errLoad
+}
+
+func (f *fakeOneOffCronjobs) RunOneOffCronjob(ctx context.Context, loaded cronjob.OneOffCronjob, _ *harnessbridge.RawRunProgress, finish func(context.Context, cronjob.RunResult, error)) {
+	f.runs = append(f.runs, loaded)
+	finish(ctx, f.result, f.errRun)
+}
+
+func readOneOutbound(t *testing.T, bus *events.Bus) *events.OutboundMessage {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	for msg := range bus.Outbound(ctx) {
+		return msg
+	}
+
+	require.Fail(t, "timed out waiting for outbound message")
+
 	return nil
 }

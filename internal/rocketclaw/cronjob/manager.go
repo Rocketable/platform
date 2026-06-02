@@ -28,7 +28,7 @@ type RunResult struct {
 
 // OneOffCronjob captures a live one-off cronjob prompt loaded from disk.
 type OneOffCronjob struct {
-	Agent, Prompt, RelativePath string
+	Agent, Prompt, RelativePath, SlackChannel string
 }
 
 // RunFunc executes one cronjob prompt and returns the cronjob result.
@@ -237,7 +237,7 @@ func (m *Manager) LoadOneOffCronjob(target string) (OneOffCronjob, error) {
 		return OneOffCronjob{}, err
 	}
 
-	return OneOffCronjob{Agent: definition.agent, Prompt: m.preparePrompt(definition.body), RelativePath: relativePath}, nil
+	return OneOffCronjob{Agent: definition.agent, Prompt: m.preparePrompt(definition.body), RelativePath: relativePath, SlackChannel: definition.slackChannel}, nil
 }
 
 // RunOneOffCronjob executes a loaded cronjob once with optional progress delivery.

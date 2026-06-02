@@ -37,6 +37,8 @@ If code, tests, docs, history, or current behavior conflict with an ADR, stop an
 
 ## Additional Coding Practice Critical Requirements
 
+Slack and Discord Text are product-peer text connectors. Any cron reaction rerun behavior, authorization rule, channel-target restriction, rejection semantics, or scheduled cron thread behavior added to one must be checked against `internal/rocketclaw/docs/adr/0001-runtime-capabilities.md` and `internal/rocketclaw/docs/adr/0002-behavior-contracts.md`, and kept in parity with the other unless an ADR explicitly says otherwise.
+
 Run `make test` for every source code or test code change.
 
 Use `jj` instead of `git` for repo inspection and history unless a Git-only operation is required. When using `jj`, consult `https://docs.jj-vcs.dev/latest/git-command-table/` for Git-to-`jj` command mapping.

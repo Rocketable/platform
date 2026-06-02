@@ -629,7 +629,7 @@ func TestLoadOneOffCronjobValidatesTargetsAndPreparesPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1h\nagent: helper\n---\nBody"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1h\nagent: helper\nchannel: '#triage'\n---\nBody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -645,8 +645,8 @@ func TestLoadOneOffCronjobValidatesTargetsAndPreparesPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if job.Agent != "helper" || job.RelativePath != "cron/daily.md" {
-		t.Fatalf("job = %#v; want helper cron/daily.md", job)
+	if job.Agent != "helper" || job.RelativePath != "cron/daily.md" || job.SlackChannel != "#triage" {
+		t.Fatalf("job = %#v; want helper cron/daily.md #triage", job)
 	}
 
 	if !strings.Contains(job.Prompt, "Body") || !strings.Contains(job.Prompt, harnessbridge.RawRunExposedToolName) {

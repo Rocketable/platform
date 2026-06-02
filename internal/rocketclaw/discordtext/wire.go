@@ -223,6 +223,15 @@ func (w *wire) channel(channelID string) (*textChannel, error) {
 	return &channel, nil
 }
 
+func (w *wire) message(channelID, messageID string) (*textMessage, error) {
+	var message textMessage
+	if err := w.restJSON(http.MethodGet, "/channels/"+channelID+"/messages/"+messageID, nil, &message); err != nil {
+		return nil, err
+	}
+
+	return &message, nil
+}
+
 func (w *wire) typing(channelID string) error {
 	return w.restJSON(http.MethodPost, "/channels/"+channelID+"/typing", nil, nil)
 }

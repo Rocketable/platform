@@ -36,6 +36,7 @@ const (
 	slackBlockTextLimit           = 3000
 	slackPreferredChunkSize       = 3200
 	slackOnDemandCronPrefix       = ":repeat_one:"
+	slackOnDemandCronReaction     = "repeat_one"
 	slackRobotReaction            = "robot_face"
 	slackDiscordRelayReaction     = "calling"
 	slackWebVoiceRelayReaction    = "studio_microphone"
@@ -1386,7 +1387,10 @@ func (c *Connector) handleReactionAddedEvent(ctx context.Context, ev *slackevent
 		return
 	}
 
-	if strings.TrimSpace(ev.Reaction) != slackSummaryReaction {
+	reaction := strings.TrimSpace(ev.Reaction)
+	switch reaction {
+	case slackSummaryReaction, slackOnDemandCronReaction:
+	default:
 		return
 	}
 
@@ -1406,6 +1410,11 @@ func (c *Connector) handleReactionAddedEvent(ctx context.Context, ev *slackevent
 			return
 		}
 	} else if !c.config.SocialMode.Enabled || !c.socialModeAllowsUser(ev.User) {
+		return
+	}
+
+	if reaction == slackOnDemandCronReaction {
+		c.handleOnDemandCronReaction(ctx, ev, channelID, messageTS)
 		return
 	}
 
@@ -1444,6 +1453,116 @@ func (c *Connector) handleReactionAddedEvent(ctx context.Context, ev *slackevent
 	c.addReaction(ctx, statusTarget, slackSummaryCompleteReaction, "add Slack thread summary complete reaction")
 
 	c.log.Info("accepted Slack thread summary request", "user", ev.User, "channel", channelID, "thread_ts", threadTS, "message_ts", messageTS)
+}
+
+func (c *Connector) handleOnDemandCronReaction(ctx context.Context, ev *slackevents.ReactionAddedEvent, channelID, messageTS string) {
+	history, err := c.api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
+		ChannelID:          channelID,
+		Cursor:             "",
+		Latest:             messageTS,
+		Oldest:             messageTS,
+		Inclusive:          true,
+		Limit:              1,
+		IncludeAllMetadata: false,
+	})
+	if err != nil {
+		c.log.Warn("load Slack on-demand cron reaction message", "error", err, "channel", channelID, "message_ts", messageTS)
+		return
+	}
+
+	if history == nil || len(history.Messages) == 0 {
+		return
+	}
+
+	message := history.Messages[0]
+
+	threadTS := strings.TrimSpace(message.ThreadTimestamp)
+	if threadTS == "" {
+		threadTS = messageTS
+	}
+
+	replyTarget := &events.SlackReplyTarget{ChannelID: channelID, MessageTS: messageTS, ThreadTS: threadTS}
+
+	target, ok := slackReactionCronTarget(message.Text)
+	if !ok {
+		if errPost := c.publishOnDemandCronReply(ctx, replyTarget, "React with `:repeat_one:` to a message containing exactly one cron target, such as `:repeat_one: daily`, `🔂 daily`, `daily`, `daily.md`, or a scheduled cron thread root containing `cron/daily.md`.", true); errPost != nil {
+			c.log.Warn("publish Slack on-demand cron reaction usage", "error", errPost, "channel", channelID, "message_ts", messageTS, "thread_ts", threadTS)
+		}
+
+		return
+	}
+
+	c.handleOnDemandCronRequest(ctx, &slackevents.MessageEvent{User: ev.User, Channel: channelID, TimeStamp: messageTS, ThreadTimeStamp: message.ThreadTimestamp, Text: message.Text}, target, replyTarget)
+}
+
+func slackReactionCronTarget(text string) (string, bool) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", false
+	}
+
+	var candidates []string
+	if target, ok := singleSlackCronTarget(text); ok {
+		candidates = append(candidates, target)
+	}
+
+	for _, prefix := range []string{slackOnDemandCronPrefix, "🔂"} {
+		if after, ok := strings.CutPrefix(text, prefix); ok {
+			if target, ok := singleSlackCronTarget(after); ok {
+				candidates = append(candidates, target)
+			}
+		}
+	}
+
+	for field := range strings.FieldsSeq(text) {
+		field = strings.Trim(field, "`.,;:()[]<>")
+		if target, ok := slackCronPathTarget(field); ok {
+			candidates = append(candidates, target)
+		}
+	}
+
+	if len(candidates) == 0 {
+		return "", false
+	}
+
+	target := candidates[0]
+	for _, candidate := range candidates[1:] {
+		if candidate != target {
+			return "", false
+		}
+	}
+
+	return target, true
+}
+
+func singleSlackCronTarget(text string) (string, bool) {
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) != 1 {
+		return "", false
+	}
+
+	if fields[0] == slackOnDemandCronPrefix || fields[0] == "🔂" {
+		return "", false
+	}
+
+	if target, ok := slackCronPathTarget(fields[0]); ok {
+		return target, true
+	}
+
+	return fields[0], true
+}
+
+func slackCronPathTarget(text string) (string, bool) {
+	if !strings.HasPrefix(text, "cron/") || !strings.HasSuffix(text, ".md") {
+		return "", false
+	}
+
+	target := strings.TrimSuffix(strings.TrimPrefix(text, "cron/"), ".md")
+	if target == "" || strings.ContainsAny(target, `/\`) {
+		return "", false
+	}
+
+	return target, true
 }
 
 func (c *Connector) addRobotReaction(ctx context.Context, replyTarget *events.SlackReplyTarget) {
@@ -1809,6 +1928,16 @@ func (c *Connector) handleOnDemandCronRequest(ctx context.Context, ev *slackeven
 		return
 	}
 
+	if !strings.HasPrefix(ev.Channel, "D") && !c.cronTargetsSlackChannel(ctx, loaded, ev.Channel) {
+		if errPost := c.publishOnDemandCronReply(ctx, replyTarget, "That cronjob is not configured to run in this Slack channel.", true); errPost != nil {
+			c.log.Warn("publish Slack on-demand cron channel rejection", "error", errPost, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", replyTarget.ThreadTS)
+		}
+
+		c.log.Info("rejected Slack on-demand cron channel", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "requested_cron", strings.TrimSpace(target), "cron", loaded.RelativePath, "slack_channel", loaded.SlackChannel)
+
+		return
+	}
+
 	preview := "One-off cronjob starting.\n\nFile: `" + loaded.RelativePath + "`\nAgent: `" + strings.TrimSpace(loaded.Agent) + "`"
 	if err := c.publishOnDemandCronReply(ctx, replyTarget, preview, false); err != nil {
 		c.log.Warn("publish Slack on-demand cron preview", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", replyTarget.ThreadTS, "cron", loaded.RelativePath)
@@ -1837,6 +1966,26 @@ func (c *Connector) handleOnDemandCronRequest(ctx context.Context, ev *slackeven
 	}
 
 	go c.runOnDemandCron(ctx, requestLog, loaded, replyTarget, turnID)
+}
+
+func (c *Connector) cronTargetsSlackChannel(ctx context.Context, loaded cronjob.OneOffCronjob, channelID string) bool {
+	slackChannel := strings.TrimSpace(loaded.SlackChannel)
+
+	channelID = strings.TrimSpace(channelID)
+	if slackChannel == "" || channelID == "" {
+		return false
+	}
+
+	if slackChannel == channelID {
+		return true
+	}
+
+	channel, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: channelID})
+	if err != nil || channel == nil {
+		return false
+	}
+
+	return slackChannel == "#"+strings.TrimSpace(channel.Name)
 }
 
 func (c *Connector) runOnDemandCron(ctx context.Context, log *slog.Logger, loaded cronjob.OneOffCronjob, replyTarget *events.SlackReplyTarget, turnID string) {
