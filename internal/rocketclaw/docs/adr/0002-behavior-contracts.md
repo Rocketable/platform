@@ -49,7 +49,7 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - Slack thread replies use persisted checkpoints when available; older responses without checkpoints receive an explanatory thread reply instead of silently losing context.
 - Discord text replies to checkpointed assistant messages can start response-rooted guild threads with inherited context. Discord DMs do not provide thread semantics.
 - Discord text responses are delivered to the originating Discord channel or thread when a Discord reply target exists; otherwise they are delivered to the configured Discord text channel.
-- Cron final verbatim output with `slack-channel` starts a managed Slack channel thread; otherwise cron output is internalized into the main session as configured by the cron path. Replies and `:floppy_disk:` summaries for cron-created Slack channel threads follow existing Slack social-mode gates.
+- Cron final verbatim output with `channel` starts a managed Slack channel thread; otherwise cron output is internalized into the main session as configured by the cron path. `slack-channel` remains a backward-compatible alias. Replies and `:floppy_disk:` summaries for cron-created Slack channel threads follow existing Slack social-mode gates.
 - Raw cron runs must call `rocketclaw_i_want_human_partner_to_see_this`; normal assistant replies do not complete the background run.
 
 ### Restart And Draining
@@ -95,3 +95,4 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - 2026-05-25: Added Slack reply placeholder-pair reservation contract for normal Slack-visible assistant turns.
 - 2026-06-02: Specified managed continuation and summary behavior for cron `slack-channel` threads.
 - 2026-06-02: Added Discord text routing and managed-thread behavior as the mutually exclusive primary text alternative to Slack.
+- 2026-06-02: Renamed cron managed Slack thread routing to canonical `channel`, with `slack-channel` retained as a backward-compatible alias.

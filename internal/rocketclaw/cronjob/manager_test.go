@@ -37,7 +37,7 @@ func TestLoadDefinitionsLoadsMarkdownAndSkipsTemplates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule:\n  - 15m\n  - '0 8 * * *'\nagent: worker\nslack-channel: '#triage'\n---\nRun daily\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule:\n  - 15m\n  - '0 8 * * *'\nagent: worker\nchannel: '#triage'\n---\nRun daily\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -527,14 +527,36 @@ func TestLoadDefinitionRejectsInvalidFrontmatter(t *testing.T) {
 	}
 }
 
-func TestLoadDefinitionDefaultsBlankAgentAndTrimsSlackChannel(t *testing.T) {
-	def, err := loadDefinition([]byte("---\nschedule: 1h\nagent: '  \t  '\nslack-channel: '  #ops  '\n---\nBody"), "cron/test.md")
+func TestLoadDefinitionDefaultsBlankAgentAndTrimsChannel(t *testing.T) {
+	def, err := loadDefinition([]byte("---\nschedule: 1h\nagent: '  \t  '\nchannel: '  #ops  '\n---\nBody"), "cron/test.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if def.agent != "main" || def.slackChannel != "#ops" {
 		t.Fatalf("definition agent/slackChannel = %q/%q; want main/#ops", def.agent, def.slackChannel)
+	}
+}
+
+func TestLoadDefinitionSupportsLegacySlackChannel(t *testing.T) {
+	def, err := loadDefinition([]byte("---\nschedule: 1h\nslack-channel: '  #legacy  '\n---\nBody"), "cron/test.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if def.slackChannel != "#legacy" {
+		t.Fatalf("definition slackChannel = %q; want #legacy", def.slackChannel)
+	}
+}
+
+func TestLoadDefinitionChannelOverridesLegacySlackChannel(t *testing.T) {
+	def, err := loadDefinition([]byte("---\nschedule: 1h\nchannel: '#canonical'\nslack-channel: '#legacy'\n---\nBody"), "cron/test.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if def.slackChannel != "#canonical" {
+		t.Fatalf("definition slackChannel = %q; want #canonical", def.slackChannel)
 	}
 }
 

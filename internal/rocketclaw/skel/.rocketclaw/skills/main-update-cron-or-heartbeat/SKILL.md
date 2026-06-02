@@ -54,16 +54,16 @@ schedule:
 
 The `schedule:` frontmatter value is the cronjob frequency or cadence.
 
-Cronjobs may also set `slack-channel:` to route non-empty `rocketclaw_i_want_human_partner_to_see_this` output into a managed Slack channel thread instead of the default main outputs. Highlight this option back to the human when they ask where cron output should go, when the cron is meant for a team/channel audience, or when they mention Slack/channel delivery.
+Cronjobs may also set `channel:` to route non-empty `rocketclaw_i_want_human_partner_to_see_this` output into a managed Slack channel thread instead of the default main outputs. Highlight this option back to the human when they ask where cron output should go, when the cron is meant for a team/channel audience, or when they mention Slack/channel delivery.
 
-The source code reads `slack-channel` as a trimmed YAML string and passes it directly to the Slack sender. It does not add `#`, resolve names, or validate the value before sending.
+The source code reads `channel` as a trimmed YAML string and passes it directly to the Slack sender. It does not add `#`, resolve names, or validate the value before sending. `slack-channel` is supported only as a backward-compatible alias for existing cron files.
 
 For Slack channel names, include the leading `#` and quote the value because unquoted `#...` is a YAML comment:
 
 ```
 ---
 schedule: "0 9 * * 1-5"
-slack-channel: "#triage"
+channel: "#triage"
 ---
 ```
 
@@ -72,11 +72,11 @@ For Slack channel IDs, use the raw ID as a string:
 ```
 ---
 schedule: "0 9 * * 1-5"
-slack-channel: "C0123456789"
+channel: "C0123456789"
 ---
 ```
 
-Do not write `slack-channel: #triage`; YAML parses that as an empty value/comment, so the cron will not route to Slack. If the human gives a channel name without `#`, ask whether to use the Slack display form with `#` or a channel ID rather than silently rewriting it.
+Do not write `channel: #triage`; YAML parses that as an empty value/comment, so the cron will not route to Slack. If the human gives a channel name without `#`, ask whether to use the Slack display form with `#` or a channel ID rather than silently rewriting it.
 
 Replies and `:floppy_disk:` summaries for those cron-created channel threads follow the existing Slack social-mode gate.
 

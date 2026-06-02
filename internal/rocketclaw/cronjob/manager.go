@@ -552,7 +552,9 @@ func parseFrontmatter(data []byte) (scheduleValues []string, agent, slackChannel
 		return nil, "", "", err
 	}
 
-	if text, ok := raw["slack-channel"].(string); ok {
+	if text, ok := raw["channel"].(string); ok {
+		slackChannel = strings.TrimSpace(text)
+	} else if text, ok := raw["slack-channel"].(string); ok {
 		slackChannel = strings.TrimSpace(text)
 	}
 

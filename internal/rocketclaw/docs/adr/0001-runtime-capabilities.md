@@ -63,3 +63,4 @@ RocketClaw grew by adding Slack, Discord voice, external MCP, browser voice, cro
 - 2026-05-25: Added durable recurring scheduled messages until reset, without catch-up replay.
 - 2026-06-02: Made cron `slack-channel` output a managed Slack thread whose replies and summaries follow Slack social-mode gates.
 - 2026-06-02: Added Discord text as a Slack-alternative primary text connector using a configured guild text channel and managed guild threads.
+- 2026-06-02: Renamed cron managed Slack thread routing to canonical `channel`, with `slack-channel` retained as a backward-compatible alias.
