@@ -333,6 +333,7 @@ func TestRocketCodeConfigEnablesDiagnosticsForThinkingUpdates(t *testing.T) {
 
 	assert.True(t, cfg.Diagnostics)
 	assert.True(t, cfg.ExperimentalStrongerSkills)
+	assert.Equal(t, 16, cfg.ParallelToolCalls)
 	assert.Equal(t, rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, cfg.ExpandPromptShellCommands)
 	assert.Contains(t, toolNames, scheduleMessageToolName)
 	assert.Contains(t, toolNames, resetScheduledMessagesToolName)

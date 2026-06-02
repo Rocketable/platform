@@ -168,6 +168,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, parentOutp
 		Verbosity:          agent.Verbosity,
 		CompactThreshold:   f.compactThreshold,
 		CompactionSteering: f.compactionSteering,
+		ParallelToolCalls:  f.parallelToolCalls,
 		Permissions:        agent.Permission,
 		Tools:              f.toolsFor(&agent),
 		Diagnostics:        f.diagnostics,

@@ -25,6 +25,7 @@ type toolFactory struct {
 	reasoningEffort            shared.ReasoningEffort
 	compactThreshold           int64
 	compactionSteering         string
+	parallelToolCalls          int
 	diagnostics                bool
 	experimentalStrongerSkills bool
 	expandPromptShellCommands  PromptShellCommandExpansion

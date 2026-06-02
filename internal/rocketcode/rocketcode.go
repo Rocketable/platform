@@ -26,6 +26,7 @@ type Config struct {
 	ExpandPromptShellCommands  PromptShellCommandExpansion
 	CompactThreshold           int64
 	CompactionSteering         string
+	ParallelToolCalls          int
 	ShellOutputDir             string
 	SandboxedBash              bool
 	CustomTools                []Tool
@@ -228,6 +229,7 @@ func New(
 		reasoningEffort:            reasoningEffort,
 		compactThreshold:           config.CompactThreshold,
 		compactionSteering:         config.CompactionSteering,
+		parallelToolCalls:          config.ParallelToolCalls,
 		diagnostics:                config.Diagnostics,
 		experimentalStrongerSkills: config.ExperimentalStrongerSkills,
 		expandPromptShellCommands:  config.ExpandPromptShellCommands,
@@ -249,6 +251,7 @@ func New(
 		Verbosity:          activeAgent.Verbosity,
 		CompactThreshold:   config.CompactThreshold,
 		CompactionSteering: config.CompactionSteering,
+		ParallelToolCalls:  config.ParallelToolCalls,
 		Permissions:        activeAgent.Permission,
 		Tools:              factory.toolsFor(agentForTools),
 		Diagnostics:        config.Diagnostics,

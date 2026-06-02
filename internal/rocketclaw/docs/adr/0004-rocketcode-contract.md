@@ -58,6 +58,7 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 
 - RocketClaw enables `ExperimentalStrongerSkills` in both persistent and raw paths.
 - Diagnostics are enabled for the persistent bridge and for raw runs when progress reporting is configured.
+- RocketClaw sets RocketCode's maximum parallel tool calls to 16 in both persistent and raw paths.
 
 ## Non-Goals
 
@@ -86,3 +87,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 
 - 2026-05-25: Initial accepted snapshot.
 - 2026-05-25: Added optional recurring scheduled-message contract for persistent and raw RocketCode paths.
+- 2026-06-02: Set RocketCode maximum parallel tool calls to 16 for persistent and raw RocketClaw paths.

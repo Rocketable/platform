@@ -52,6 +52,7 @@ type looper struct {
 	Verbosity          string
 	CompactThreshold   int64
 	CompactionSteering string
+	ParallelToolCalls  int
 	Permissions        PermissionSet
 	Tools              map[string]looperTool
 	RewriteHistory     func([]responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam
@@ -772,7 +773,9 @@ func (l *looper) dispatchToolCalls(
 	}
 
 	group, groupCtx := errgroup.WithContext(ctx)
-	group.SetLimit(8)
+	if l.ParallelToolCalls > 0 {
+		group.SetLimit(l.ParallelToolCalls)
+	}
 
 	for _, call := range calls {
 		group.Go(func() error {

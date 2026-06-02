@@ -252,5 +252,5 @@ func TestNewRequiresParsedAgentsAndSkills(t *testing.T) {
 }
 
 func testConfig(shellOutputDir string) Config {
-	return Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ShellOutputDir: shellOutputDir, SandboxedBash: false, CustomTools: nil, ShellEnv: nil}
+	return Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 0, ShellOutputDir: shellOutputDir, SandboxedBash: false, CustomTools: nil, ShellEnv: nil}
 }

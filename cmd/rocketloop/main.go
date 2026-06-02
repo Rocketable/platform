@@ -705,6 +705,7 @@ func defaultConfig() rocketcode.Config {
 		ExpandPromptShellCommands:  rocketcode.PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false},
 		CompactThreshold:           200000,
 		CompactionSteering:         "",
+		ParallelToolCalls:          0,
 		ShellOutputDir:             filepath.Join(".tmp", "shell-outputs"),
 		SandboxedBash:              false,
 		ShellEnv:                   nil,
