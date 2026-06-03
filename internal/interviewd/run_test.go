@@ -1,4 +1,4 @@
-package main
+package interviewd
 
 import (
 	"context"
@@ -6,52 +6,64 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
 
 func TestQuestionLifecycle(t *testing.T) {
-	store := newStore(filepath.Join(t.TempDir(), ".interviewd"))
-	iv := &Interview{ID: "interview-test"}
+	store := store{root: filepath.Join(t.TempDir(), ".interviewd")}
+
+	iv := &interview{ID: "interview-test"}
 	if err := store.saveInterview(iv); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := addQuestion(store, iv.ID, []string{"first", "radio", "a", "b", "--with-textarea"}); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := addQuestion(store, iv.ID, []string{"second", "checkbox", "x", "y"}); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := addQuestion(store, iv.ID, []string{"third", "text"}); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := reorderQuestions(store, iv.ID, []string{"3", "1", "2"}); err != nil {
 		t.Fatal(err)
 	}
+
 	loaded, err := store.loadInterview(iv.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if got := loaded.Questions[0].Body; got != "third" {
 		t.Fatalf("first reordered question = %q, want third", got)
 	}
+
 	if err := deleteQuestion(store, iv.ID, []string{"2"}); err != nil {
 		t.Fatal(err)
 	}
+
 	loaded, err = store.loadInterview(iv.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if len(loaded.Questions) != 2 || loaded.Questions[1].Body != "second" {
 		t.Fatalf("unexpected questions after delete: %#v", loaded.Questions)
 	}
 }
 
 func TestRunWithoutArgsShowsHelpSuccessfully(t *testing.T) {
-	if err := run(context.Background(), nil); err != nil {
+	if err := Run(context.Background(), "interviewd", nil); err != nil {
 		t.Fatal(err)
 	}
-	help := helpText()
+
+	help := helpText("interviewd")
 	for _, want := range []string{"Successful flow:", "interviewd new", "add-question", "prepare-to-serve", "wait-for-user"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help missing %q:\n%s", want, help)
@@ -59,8 +71,27 @@ func TestRunWithoutArgsShowsHelpSuccessfully(t *testing.T) {
 	}
 }
 
+func TestInvocationCommand(t *testing.T) {
+	goRunPath := filepath.Join(os.TempDir(), "go-build123", "b001", "exe", "interviewd")
+
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info.Path == "" {
+		t.Fatal("build info path is unavailable")
+	}
+
+	want := "go run " + info.Path
+	if got := invocationCommand(goRunPath); got != want {
+		t.Fatalf("go run invocation = %q, want %q", got, want)
+	}
+
+	if got := invocationCommand("./interviewd"); got != "./interviewd" {
+		t.Fatalf("binary invocation = %q, want ./interviewd", got)
+	}
+}
+
 func TestPreviewUsesSourceMarkdown(t *testing.T) {
-	iv := &Interview{Questions: []Question{{Body: "**pick one**", Kind: "radio", Options: []string{"a", "b"}, WithTextarea: true}}}
+	iv := &interview{Questions: []question{{Body: "**pick one**", Kind: "radio", Options: []string{"a", "b"}, WithTextarea: true}}}
+
 	preview := renderPreview(iv)
 	for _, want := range []string{"## Question 1", "**pick one**", "( ) a", "[ with-textarea ]", "{{ SUBMIT }}"} {
 		if !strings.Contains(preview, want) {
@@ -74,27 +105,31 @@ func TestMarkdownClientRender(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("method = %s, want POST", r.Method)
 		}
-		if got := r.Header.Get("X-GitHub-Api-Version"); got != "2026-03-10" {
+
+		if got := r.Header.Get("X-Github-Api-Version"); got != "2026-03-10" {
 			t.Fatalf("api version = %q", got)
 		}
+
 		_, _ = w.Write([]byte("<p>Hello</p>"))
 	}))
 	defer server.Close()
-	t.Setenv("INTERVIEWD_GITHUB_MARKDOWN_ENDPOINT", server.URL)
-	html, err := newMarkdownClient().render(context.Background(), "Hello")
+
+	html, err := (markdownClient{endpoint: server.URL, client: server.Client()}).render(context.Background(), "Hello")
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if html != "<p>Hello</p>" {
 		t.Fatalf("html = %q", html)
 	}
 }
 
 func TestRenderAnswers(t *testing.T) {
-	answers := []Answer{
-		{Question: Question{Body: "Pick", Kind: "checkbox"}, Values: []string{"a", "b"}, Comment: "note"},
-		{Question: Question{Body: "Explain", Kind: "text"}, Text: "details"},
+	answers := []answer{
+		{Question: question{Body: "Pick", Kind: "checkbox"}, Values: []string{"a", "b"}, Comment: "note"},
+		{Question: question{Body: "Explain", Kind: "text"}, Text: "details"},
 	}
+
 	got := renderAnswers(answers)
 	for _, want := range []string{"## Question 1", "Pick", "- a", "- b", "### Comment", "note", "## Question 2", "details"} {
 		if !strings.Contains(got, want) {
@@ -105,21 +140,31 @@ func TestRenderAnswers(t *testing.T) {
 
 func TestRunCreatesProjectLocalState(t *testing.T) {
 	dir := t.TempDir()
+
 	old, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chdir(old)
+
+	defer func() {
+		if err := os.Chdir(old); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
 	if err := os.Chdir(dir); err != nil {
 		t.Fatal(err)
 	}
-	if err := run(context.Background(), []string{"new"}); err != nil {
+
+	if err := Run(context.Background(), "interviewd", []string{"new"}); err != nil {
 		t.Fatal(err)
 	}
+
 	entries, err := os.ReadDir(filepath.Join(dir, ".interviewd"))
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if len(entries) != 1 || !strings.HasPrefix(entries[0].Name(), "interview-") {
 		t.Fatalf("unexpected state entries: %#v", entries)
 	}
