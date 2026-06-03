@@ -78,7 +78,6 @@ func waitForUser(ctx context.Context, store store, id string, out, errOut io.Wri
 		default:
 		}
 	})
-	fmt.Fprintf(errOut, "serving interview %s on 0.0.0.0:%d\n", id, prepared.Port)
 	serveErr := make(chan error, 1)
 	go func() {
 		serveErr <- server.Serve(ln)
