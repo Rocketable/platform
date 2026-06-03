@@ -23,7 +23,7 @@ func prepareToServe(ctx context.Context, store store, id, cmd string, out io.Wri
 		return fmt.Errorf("write render status: %w", err)
 	}
 
-	client := markdownClient{endpoint: "https://api.github.com/markdown", client: &http.Client{Timeout: 30 * time.Second}}
+	client := markdownClient{client: &http.Client{Timeout: 30 * time.Second}}
 
 	rendered := make([]string, len(iv.Questions))
 	for i, q := range iv.Questions {

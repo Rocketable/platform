@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"github.com/google/uuid"
 )
 
 type interview struct {
@@ -29,15 +27,6 @@ type prepared struct {
 
 type store struct {
 	root string
-}
-
-func newInterviewID() (string, error) {
-	id, err := uuid.NewV7()
-	if err != nil {
-		return "", fmt.Errorf("create interview id: %w", err)
-	}
-
-	return "interview-" + id.String(), nil
 }
 
 func (s store) dir(id string) string {
@@ -107,16 +96,20 @@ func (s store) deleteInterview(id string) error {
 }
 
 func writeJSON(path string, v any) error {
-	data, err := json.MarshalIndent(v, "", "  ")
+	tmp := path + ".tmp"
+
+	file, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
-		return fmt.Errorf("marshal JSON state: %w", err)
+		return fmt.Errorf("create temporary JSON state: %w", err)
 	}
 
-	data = append(data, '\n')
+	if err := json.NewEncoder(file).Encode(v); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("encode JSON state: %w", err)
+	}
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("write temporary JSON state: %w", err)
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close temporary JSON state: %w", err)
 	}
 
 	if err := os.Rename(tmp, path); err != nil {
@@ -126,13 +119,19 @@ func writeJSON(path string, v any) error {
 	return nil
 }
 
-func readJSON(path string, v any) error {
-	data, err := os.ReadFile(path)
+func readJSON(path string, v any) (err error) {
+	file, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("read JSON state: %w", err)
+		return fmt.Errorf("open JSON state: %w", err)
 	}
 
-	if err := json.Unmarshal(data, v); err != nil {
+	defer func() {
+		if errClose := file.Close(); err == nil && errClose != nil {
+			err = fmt.Errorf("close JSON state: %w", errClose)
+		}
+	}()
+
+	if err := json.NewDecoder(file).Decode(v); err != nil {
 		return fmt.Errorf("decode JSON state: %w", err)
 	}
 

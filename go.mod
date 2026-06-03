@@ -3,7 +3,6 @@ module github.com/Rocketable/platform
 go 1.26.4
 
 require (
-	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/openai/openai-go/v3 v3.37.0
@@ -18,6 +17,8 @@ require (
 	modernc.org/sqlite v1.50.1
 	sigs.k8s.io/yaml v1.6.0
 )
+
+require github.com/google/uuid v1.6.0 // indirect
 
 require (
 	github.com/JohannesKaufmann/dom v0.2.0 // indirect

@@ -10,8 +10,7 @@ import (
 )
 
 type markdownClient struct {
-	endpoint string
-	client   *http.Client
+	client *http.Client
 }
 
 type markdownRequest struct {
@@ -25,7 +24,7 @@ func (c markdownClient) render(ctx context.Context, text string) (string, error)
 		return "", fmt.Errorf("marshal markdown request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.github.com/markdown", bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("create markdown request: %w", err)
 	}

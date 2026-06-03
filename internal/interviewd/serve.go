@@ -3,7 +3,6 @@ package interviewd
 import (
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"html"
@@ -17,14 +16,14 @@ import (
 )
 
 type submission struct {
-	Answers []answer
+	answers []answer
 }
 
 type answer struct {
-	Question question
-	Values   []string
-	Text     string
-	Comment  string
+	question question
+	values   []string
+	text     string
+	comment  string
 }
 
 func waitForUser(ctx context.Context, store store, id string, out io.Writer) error {
@@ -64,7 +63,7 @@ func waitForUser(ctx context.Context, store store, id string, out io.Writer) err
 			return
 		}
 
-		setSessionCookie(w, session)
+		http.SetCookie(w, &http.Cookie{Name: "interviewd_session", Value: session, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
 		renderForm(w, id, iv, prepared, nonce)
 	})
 	mux.HandleFunc(path+"/submit", func(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +81,7 @@ func waitForUser(ctx context.Context, store store, id string, out io.Writer) err
 		renderSuccess(w)
 
 		select {
-		case result <- submission{Answers: answers}:
+		case result <- submission{answers: answers}:
 			go func() {
 				_ = server.Shutdown(context.Background())
 			}()
@@ -103,7 +102,7 @@ func waitForUser(ctx context.Context, store store, id string, out io.Writer) err
 				return err
 			}
 
-			if _, err := fmt.Fprint(out, renderAnswers(sub.Answers)); err != nil {
+			if _, err := fmt.Fprint(out, renderAnswers(sub.answers)); err != nil {
 				return fmt.Errorf("write answers: %w", err)
 			}
 
@@ -130,8 +129,8 @@ func (s *sessionState) claim(r *http.Request) (session, nonce string, ok bool) {
 	defer s.mu.Unlock()
 
 	if s.session == "" {
-		s.session = randomHex(16)
-		s.nonce = randomHex(16)
+		s.session = rand.Text()
+		s.nonce = rand.Text()
 
 		return s.session, s.nonce, true
 	}
@@ -154,19 +153,6 @@ func (s *sessionState) validate(r *http.Request) bool {
 	}
 
 	return r.FormValue("nonce") == s.nonce
-}
-
-func setSessionCookie(w http.ResponseWriter, session string) {
-	http.SetCookie(w, &http.Cookie{Name: "interviewd_session", Value: session, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
-}
-
-func randomHex(n int) string {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
-	}
-
-	return hex.EncodeToString(b)
 }
 
 func renderForm(w http.ResponseWriter, id string, iv *interview, prepared *prepared, nonce string) {
@@ -215,15 +201,15 @@ func parseSubmission(r *http.Request, iv *interview, state *sessionState) ([]ans
 	for i, q := range iv.Questions {
 		name := fmt.Sprintf("q%d", i)
 
-		answer := answer{Question: q, Comment: strings.TrimSpace(r.FormValue(name + "_comment"))}
+		answer := answer{question: q, comment: strings.TrimSpace(r.FormValue(name + "_comment"))}
 		switch q.Kind {
 		case "radio":
 			value := r.FormValue(name)
-			if value == "" || !contains(q.Options, value) {
+			if value == "" || !slices.Contains(q.Options, value) {
 				return nil, fmt.Errorf("question %d requires one valid option", i+1)
 			}
 
-			answer.Values = []string{value}
+			answer.values = []string{value}
 		case "checkbox":
 			values := r.Form[name]
 			if len(values) == 0 {
@@ -231,19 +217,19 @@ func parseSubmission(r *http.Request, iv *interview, state *sessionState) ([]ans
 			}
 
 			for _, value := range values {
-				if !contains(q.Options, value) {
+				if !slices.Contains(q.Options, value) {
 					return nil, fmt.Errorf("question %d contains an invalid option", i+1)
 				}
 			}
 
-			answer.Values = values
+			answer.values = values
 		case "text":
 			text := strings.TrimSpace(r.FormValue(name))
 			if text == "" {
 				return nil, fmt.Errorf("question %d requires text", i+1)
 			}
 
-			answer.Text = text
+			answer.text = text
 		}
 
 		answers[i] = answer
@@ -266,29 +252,25 @@ func renderAnswers(answers []answer) string {
 		}
 
 		fmt.Fprintf(&b, "## Question %d\n", i+1)
-		b.WriteString(answer.Question.Body)
+		b.WriteString(answer.question.Body)
 		b.WriteString("\n\n")
 		b.WriteString("### Answer\n")
 
-		if answer.Question.Kind == "text" {
-			b.WriteString(answer.Text)
+		if answer.question.Kind == "text" {
+			b.WriteString(answer.text)
 			b.WriteByte('\n')
 		} else {
-			for _, value := range answer.Values {
+			for _, value := range answer.values {
 				fmt.Fprintf(&b, "- %s\n", value)
 			}
 
-			if answer.Comment != "" {
+			if answer.comment != "" {
 				b.WriteString("\n### Comment\n")
-				b.WriteString(answer.Comment)
+				b.WriteString(answer.comment)
 				b.WriteByte('\n')
 			}
 		}
 	}
 
 	return b.String()
-}
-
-func contains(values []string, want string) bool {
-	return slices.Contains(values, want)
 }

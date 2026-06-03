@@ -2,14 +2,20 @@ package interviewd
 
 import (
 	"context"
+	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"testing"
 )
+
+type markdownRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f markdownRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func TestQuestionLifecycle(t *testing.T) {
 	store := store{root: filepath.Join(t.TempDir(), ".interviewd")}
@@ -101,20 +107,32 @@ func TestPreviewUsesSourceMarkdown(t *testing.T) {
 }
 
 func TestMarkdownClientRender(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Fatalf("method = %s, want POST", r.Method)
+	transport := markdownRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", req.Method)
 		}
 
-		if got := r.Header.Get("X-Github-Api-Version"); got != "2026-03-10" {
+		if got := req.URL.String(); got != "https://api.github.com/markdown" {
+			t.Fatalf("url = %q, want GitHub Markdown API", got)
+		}
+
+		if got := req.Header.Get("X-Github-Api-Version"); got != "2026-03-10" {
 			t.Fatalf("api version = %q", got)
 		}
 
-		_, _ = w.Write([]byte("<p>Hello</p>"))
-	}))
-	defer server.Close()
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
 
-	html, err := (markdownClient{endpoint: server.URL, client: server.Client()}).render(context.Background(), "Hello")
+		if string(body) != `{"text":"Hello","mode":"gfm"}` {
+			t.Fatalf("body = %s", body)
+		}
+
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader("<p>Hello</p>"))}, nil
+	})
+
+	html, err := (markdownClient{client: &http.Client{Transport: transport}}).render(context.Background(), "Hello")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,8 +144,8 @@ func TestMarkdownClientRender(t *testing.T) {
 
 func TestRenderAnswers(t *testing.T) {
 	answers := []answer{
-		{Question: question{Body: "Pick", Kind: "checkbox"}, Values: []string{"a", "b"}, Comment: "note"},
-		{Question: question{Body: "Explain", Kind: "text"}, Text: "details"},
+		{question: question{Body: "Pick", Kind: "checkbox"}, values: []string{"a", "b"}, comment: "note"},
+		{question: question{Body: "Explain", Kind: "text"}, text: "details"},
 	}
 
 	got := renderAnswers(answers)

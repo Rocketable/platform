@@ -3,6 +3,7 @@ package interviewd
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"os"
@@ -29,11 +30,7 @@ func Run(ctx context.Context, argv0 string, args []string) error {
 	}
 
 	if args[0] == "new" {
-		id, err := newInterviewID()
-		if err != nil {
-			return err
-		}
-
+		id := "interview-" + rand.Text()
 		if err := store.saveInterview(&interview{ID: id}); err != nil {
 			return err
 		}
@@ -105,8 +102,8 @@ func invocationCommand(argv0 string) string {
 	}
 
 	path := filepath.Clean(argv0)
-	if filepath.Base(path) == "interviewd" && filepath.Base(filepath.Dir(path)) == "exe" {
-		for dir := filepath.Dir(filepath.Dir(path)); ; dir = filepath.Dir(dir) {
+	if filepath.Base(path) == "interviewd" {
+		for dir := filepath.Dir(path); ; dir = filepath.Dir(dir) {
 			if strings.HasPrefix(filepath.Base(dir), "go-build") {
 				if info, ok := debug.ReadBuildInfo(); ok && info.Path != "" {
 					return "go run " + info.Path
