@@ -108,42 +108,48 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 			logger.Warn("restart requested; draining rocketclaw before supervisor restart", "reason", reason)
 
 			go func() {
-				restartCtx, stop := context.WithTimeout(context.Background(), gracefulRestartTimeout)
-				defer stop()
-
+				stopCtx, stop := context.WithTimeout(context.Background(), gracefulRestartTimeout)
 				if slackSink != nil {
-					_ = slackSink.Stop(restartCtx)
+					_ = slackSink.Stop(stopCtx)
 				}
 
 				if discordTextSink != nil {
-					_ = discordTextSink.Stop(restartCtx)
+					_ = discordTextSink.Stop(stopCtx)
 				}
 
 				if externalMCP != nil {
-					_ = externalMCP.Stop(restartCtx)
+					_ = externalMCP.Stop(stopCtx)
 				}
+
+				stop()
 
 				threadBridges.StopAccepting()
 
-				if err := cronjobs.Stop(restartCtx); err != nil {
+				cronCtx, stop := context.WithTimeout(context.Background(), gracefulRestartTimeout)
+				if err := cronjobs.Stop(cronCtx); err != nil {
 					logger.Warn("graceful restart stopped waiting for cronjobs idle", "error", err)
 				}
 
+				stop()
+
 				bus.StopInbound()
 
-				if err := bus.WaitInboundDequeued(restartCtx); err != nil {
+				drainCtx, stop := context.WithTimeout(context.Background(), gracefulRestartTimeout)
+				defer stop()
+
+				if err := bus.WaitInboundDequeued(drainCtx); err != nil {
 					logger.Warn("graceful restart stopped waiting for inbound queue handoff", "error", err)
 				}
 
-				if err := mainBridge.WaitIdle(restartCtx); err != nil {
+				if err := mainBridge.WaitIdle(drainCtx); err != nil {
 					logger.Warn("graceful restart stopped waiting for bridge idle", "error", err)
 				}
 
-				if err := threadBridges.WaitIdle(restartCtx); err != nil {
+				if err := threadBridges.WaitIdle(drainCtx); err != nil {
 					logger.Warn("graceful restart stopped waiting for thread bridges idle", "error", err)
 				}
 
-				if err := bus.WaitOutboundIdle(restartCtx); err != nil {
+				if err := bus.WaitOutboundIdle(drainCtx); err != nil {
 					logger.Warn("graceful restart stopped waiting for outbound drain", "error", err)
 				}
 
