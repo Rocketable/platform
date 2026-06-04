@@ -280,6 +280,8 @@ func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "skills", "remote", "SKILL.md"), []byte("remote skill"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "cron", "daily.md"), []byte("remote cron"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "scripts", "tool.sh"), []byte("remote script"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "scripts", "nested"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "scripts", "nested", "remote.sh"), []byte("nested remote script"), 0o644))
 	repoGit(t, repo, "add", ".")
 	repoGit(t, repo, "commit", "-m", "overlay")
 
@@ -306,6 +308,88 @@ func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
 	data, err = os.ReadFile(filepath.Join(workspace, targetRoot, "scripts", "tool.sh"))
 	require.NoError(t, err)
 	assert.Equal(t, "local script", string(data))
+
+	data, err = os.ReadFile(filepath.Join(workspace, "scripts", "tool.sh"))
+	require.NoError(t, err)
+	assert.Equal(t, "local script", string(data))
+
+	link := filepath.Join(workspace, "scripts", "nested", "remote.sh")
+	target, err := os.Readlink(link)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join("..", "..", targetRoot, "scripts", "nested", "remote.sh"), target)
+
+	data, err = os.ReadFile(link)
+	require.NoError(t, err)
+	assert.Equal(t, "nested remote script", string(data))
+}
+
+func TestSyncWorkspaceScriptSymlinksReplacesRuntimeSymlinks(t *testing.T) {
+	for _, runtimeRoot := range []string{".rocketclaw", ".femtoclaw"} {
+		t.Run(runtimeRoot, func(t *testing.T) {
+			workspace := t.TempDir()
+			runtimeScripts := filepath.Join(workspace, targetRoot, "scripts")
+			workspaceScripts := filepath.Join(workspace, "scripts")
+
+			require.NoError(t, os.MkdirAll(runtimeScripts, 0o755))
+			require.NoError(t, os.MkdirAll(workspaceScripts, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(runtimeScripts, "tool.sh"), []byte("runtime script"), 0o644))
+
+			staleTarget := filepath.Join("..", runtimeRoot, "scripts", "tool.sh")
+			require.NoError(t, os.Symlink(staleTarget, filepath.Join(workspaceScripts, "tool.sh")))
+
+			require.NoError(t, syncWorkspaceScriptSymlinks(workspace, targetRoot, testLogger()))
+
+			target, err := os.Readlink(filepath.Join(workspaceScripts, "tool.sh"))
+			require.NoError(t, err)
+			assert.Equal(t, filepath.Join("..", targetRoot, "scripts", "tool.sh"), target)
+
+			data, err := os.ReadFile(filepath.Join(workspaceScripts, "tool.sh"))
+			require.NoError(t, err)
+			assert.Equal(t, "runtime script", string(data))
+		})
+	}
+}
+
+func TestSyncWorkspaceScriptSymlinksPreservesRegularFilesAndUnrelatedSymlinks(t *testing.T) {
+	workspace := t.TempDir()
+	runtimeScripts := filepath.Join(workspace, targetRoot, "scripts")
+	workspaceScripts := filepath.Join(workspace, "scripts")
+
+	require.NoError(t, os.MkdirAll(runtimeScripts, 0o755))
+	require.NoError(t, os.MkdirAll(workspaceScripts, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(runtimeScripts, "regular.sh"), []byte("runtime regular"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(runtimeScripts, "linked.sh"), []byte("runtime linked"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspaceScripts, "regular.sh"), []byte("workspace regular"), 0o644))
+	require.NoError(t, os.Symlink("../external.sh", filepath.Join(workspaceScripts, "linked.sh")))
+
+	require.NoError(t, syncWorkspaceScriptSymlinks(workspace, targetRoot, testLogger()))
+
+	data, err := os.ReadFile(filepath.Join(workspaceScripts, "regular.sh"))
+	require.NoError(t, err)
+	assert.Equal(t, "workspace regular", string(data))
+
+	target, err := os.Readlink(filepath.Join(workspaceScripts, "linked.sh"))
+	require.NoError(t, err)
+	assert.Equal(t, "../external.sh", target)
+}
+
+func TestSyncWorkspaceScriptSymlinksRejectsDirectoryConflict(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, targetRoot, "scripts"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "scripts", "tool.sh"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, targetRoot, "scripts", "tool.sh"), []byte("runtime script"), 0o644))
+
+	err := syncWorkspaceScriptSymlinks(workspace, targetRoot, testLogger())
+	require.ErrorContains(t, err, "workspace script path is a directory")
+}
+
+func TestSyncWorkspaceScriptSymlinksWithoutRuntimeScriptsDoesNotCreateWorkspaceScripts(t *testing.T) {
+	workspace := t.TempDir()
+
+	require.NoError(t, syncWorkspaceScriptSymlinks(workspace, targetRoot, testLogger()))
+
+	_, err := os.Stat(filepath.Join(workspace, "scripts"))
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestParseGitOverlaySpec(t *testing.T) {

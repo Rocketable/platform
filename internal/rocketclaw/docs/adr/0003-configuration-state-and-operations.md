@@ -23,7 +23,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 | `femtoclaw.json` | Legacy runtime config. If present, startup and operational commands load it instead of `rocketclaw.json` and use `.femtoclaw/` as the generated runtime directory. It supports the same optional `overlays` entries as `rocketclaw.json`. |
 | `rocketclaw.users.json` | Optional external MCP Basic Auth users next to `rocketclaw.json`. If present, it must be a JSON object and file mode `0600`. Missing means MCP runs without auth. |
 | `AGENTS.md` | Workspace instruction file generated when missing. Loaded literally; no shell interpolation. |
-| `agents/`, `skills/`, `scripts/` | User-overridable workspace overlays for agent, skill, and script assets. Changes require restart to affect running RocketCode definitions. Local workspace overlays are applied after embedded assets and configured git overlays. |
+| `agents/`, `skills/`, `scripts/` | User-overridable workspace overlays for agent, skill, and script assets. Changes require restart to affect running RocketCode definitions. Local workspace overlays are applied after embedded assets and configured git overlays. Startup exposes effective runtime script files from `<runtime-dir>/scripts/` as symlinks under workspace `scripts/`, preserving existing regular workspace script files. |
 | `.rocketclaw/` | Generated runtime directory. Setup and startup may create or maintain it. |
 | `.femtoclaw/` | Legacy generated runtime directory used only when `femtoclaw.json` is selected. |
 | `<runtime-dir>/state.sqlite3` | Persists RocketCode sessions, Slack/Discord text thread routing, response checkpoints, external MCP sessions, scheduled messages with recurrence metadata, restart notifications, and seed markers. |
@@ -50,6 +50,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - Omitted refs use the remote default branch HEAD. Explicit refs select that branch, tag, or commit.
 - Startup fetches overlays with the `git` command-line client, materializes only `agents/`, `skills/`, `cron/`, and `scripts/`, and fails startup when a configured overlay cannot be fetched or applied.
 - Effective runtime assets are built in this order: embedded RocketClaw assets, configured git overlays in config order, then local workspace `agents/`, `skills/`, `cron/`, and `scripts/`.
+- After effective runtime assets are built, startup removes workspace `scripts/` symlinks that resolve into `.rocketclaw/` or `.femtoclaw/`, then recreates symlinks for files from the selected `<runtime-dir>/scripts/`. Regular workspace script files and symlinks to other locations are preserved.
 - Git overlay changes require restart; RocketClaw does not hot-reload overlay repositories.
 
 ### Setup And Operation
@@ -93,3 +94,4 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-02: Added legacy `femtoclaw.json` and `.femtoclaw/` runtime-directory compatibility for upgraded installations.
 - 2026-06-02: Added Discord text configuration as the mutually exclusive Slack alternative primary text connector.
 - 2026-06-04: Added config-driven git overlays for intermediate `agents/`, `skills/`, `cron/`, and `scripts/` runtime assets.
+- 2026-06-04: Exposed effective runtime scripts as workspace `scripts/` symlinks while preserving regular workspace script files.

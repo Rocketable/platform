@@ -101,6 +101,134 @@ func SyncInWithOverlays(workspace, workDir string, overlays []string, logger *sl
 		return fmt.Errorf("apply rocketclaw overlay: %w", err)
 	}
 
+	if err := syncWorkspaceScriptSymlinks(workspace, workDir, logger); err != nil {
+		return fmt.Errorf("sync workspace script symlinks: %w", err)
+	}
+
+	return nil
+}
+
+func syncWorkspaceScriptSymlinks(workspace, workDir string, logger *slog.Logger) error {
+	workspaceScripts := filepath.Join(workspace, scriptsRoot)
+	runtimeScripts := filepath.Join(workspace, workDir, scriptsRoot)
+
+	if _, err := os.Stat(workspaceScripts); err == nil {
+		if err := removeRuntimeScriptSymlinks(workspace, workspaceScripts, logger); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat workspace scripts directory %s: %w", workspaceScripts, err)
+	}
+
+	info, err := os.Stat(runtimeScripts)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("stat runtime scripts directory %s: %w", runtimeScripts, err)
+	}
+
+	if !info.IsDir() {
+		return fmt.Errorf("runtime scripts path is not a directory: %s", runtimeScripts)
+	}
+
+	if err := filepath.WalkDir(runtimeScripts, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return fmt.Errorf("walk runtime scripts %s: %w", path, err)
+		}
+
+		if d.IsDir() {
+			return nil
+		}
+
+		if d.Type()&os.ModeType != 0 {
+			return nil
+		}
+
+		rel, err := filepath.Rel(runtimeScripts, path)
+		if err != nil {
+			return fmt.Errorf("compute runtime script relative path %s: %w", path, err)
+		}
+
+		dst := filepath.Join(workspaceScripts, rel)
+		if info, err := os.Lstat(dst); err == nil {
+			if info.IsDir() {
+				return fmt.Errorf("workspace script path is a directory: %s", dst)
+			}
+
+			logger.Debug("preserved existing workspace script", "path", dst)
+
+			return nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("stat workspace script %s: %w", dst, err)
+		}
+
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return fmt.Errorf("create workspace script directory %s: %w", filepath.Dir(dst), err)
+		}
+
+		target, err := filepath.Rel(filepath.Dir(dst), path)
+		if err != nil {
+			return fmt.Errorf("compute workspace script symlink target %s: %w", path, err)
+		}
+
+		if err := os.Symlink(target, dst); err != nil {
+			return fmt.Errorf("create workspace script symlink %s: %w", dst, err)
+		}
+
+		logger.Debug("created workspace script symlink", "path", dst, "target", target)
+
+		return nil
+	}); err != nil {
+		return fmt.Errorf("walk runtime scripts: %w", err)
+	}
+
+	return nil
+}
+
+func removeRuntimeScriptSymlinks(workspace, workspaceScripts string, logger *slog.Logger) error {
+	runtimeRoots := []string{
+		filepath.Clean(filepath.Join(workspace, ".rocketclaw")),
+		filepath.Clean(filepath.Join(workspace, ".femtoclaw")),
+	}
+
+	if err := filepath.WalkDir(workspaceScripts, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return fmt.Errorf("walk workspace scripts %s: %w", path, err)
+		}
+
+		if d.Type()&os.ModeSymlink == 0 {
+			return nil
+		}
+
+		target, err := os.Readlink(path)
+		if err != nil {
+			return fmt.Errorf("read workspace script symlink %s: %w", path, err)
+		}
+
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(path), target)
+		}
+
+		target = filepath.Clean(target)
+		for _, root := range runtimeRoots {
+			if target == root || strings.HasPrefix(target, root+string(filepath.Separator)) {
+				if err := os.Remove(path); err != nil {
+					return fmt.Errorf("remove runtime workspace script symlink %s: %w", path, err)
+				}
+
+				logger.Debug("removed runtime workspace script symlink", "path", path, "target", target)
+
+				return nil
+			}
+		}
+
+		return nil
+	}); err != nil {
+		return fmt.Errorf("walk workspace scripts: %w", err)
+	}
+
 	return nil
 }
 
