@@ -8,10 +8,9 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
 )
 
 const (
@@ -20,22 +19,14 @@ const (
 	agentsRoot    = "agents"
 	skillsRoot    = "skills"
 	workspaceCron = "cron"
+	scriptsRoot   = "scripts"
 )
 
 //go:embed AGENTS.md main-update-cortex.sh main-split-markdown-files.sh all:.rocketclaw all:agents all:cron
 var payload embed.FS
 
-// Sync materializes the embedded setup files and refreshes workspace/.rocketclaw.
-func Sync(workspace string, logger *slog.Logger) error {
-	return SyncIn(workspace, config.DefaultWorkDir, logger)
-}
-
-// SyncIn materializes the embedded setup files and refreshes workDir.
-func SyncIn(workspace, workDir string, logger *slog.Logger) error {
-	if strings.TrimSpace(workDir) == "" {
-		workDir = config.DefaultWorkDir
-	}
-
+// SyncInWithOverlays materializes embedded setup files, configured git overlays, and local overlays into workDir.
+func SyncInWithOverlays(workspace, workDir string, overlays []string, logger *slog.Logger) error {
 	entries, err := fs.ReadDir(payload, ".")
 	if err != nil {
 		return fmt.Errorf("read embedded root setup files: %w", err)
@@ -94,6 +85,18 @@ func SyncIn(workspace, workDir string, logger *slog.Logger) error {
 		return fmt.Errorf("sync embedded rocketclaw skeleton: %w", err)
 	}
 
+	for _, root := range [...]string{agentsRoot, workspaceCron} {
+		if err := syncFSFiltered(payload, root, filepath.Join(target, root), "syncing embedded rocketclaw runtime assets", logger, true, nil); err != nil {
+			return fmt.Errorf("sync embedded rocketclaw runtime assets %s: %w", root, err)
+		}
+	}
+
+	for _, overlay := range overlays {
+		if err := applyGitOverlay(target, overlay, logger); err != nil {
+			return fmt.Errorf("apply configured rocketclaw overlay %q: %w", overlay, err)
+		}
+	}
+
 	if err := overlayIn(workspace, workDir, logger); err != nil {
 		return fmt.Errorf("apply rocketclaw overlay: %w", err)
 	}
@@ -101,12 +104,8 @@ func SyncIn(workspace, workDir string, logger *slog.Logger) error {
 	return nil
 }
 
-func overlay(workspace string, logger *slog.Logger) error {
-	return overlayIn(workspace, config.DefaultWorkDir, logger)
-}
-
 func overlayIn(workspace, workDir string, logger *slog.Logger) error {
-	for _, root := range [...]string{agentsRoot, skillsRoot} {
+	for _, root := range [...]string{agentsRoot, skillsRoot, workspaceCron, scriptsRoot} {
 		dir := filepath.Join(workspace, root)
 
 		info, err := os.Stat(dir)
@@ -138,6 +137,100 @@ func overlayIn(workspace, workDir string, logger *slog.Logger) error {
 		); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+func applyGitOverlay(target, spec string, logger *slog.Logger) error {
+	url, ref := parseGitOverlaySpec(spec)
+	if url == "" {
+		return errors.New("overlay repository is required")
+	}
+
+	dir, err := os.MkdirTemp("", "rocketclaw-overlay-*")
+	if err != nil {
+		return fmt.Errorf("create overlay temp dir: %w", err)
+	}
+
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	for _, args := range [][]string{
+		{"init"},
+		{"remote", "add", "origin", url},
+		{"sparse-checkout", "init", "--cone"},
+		{"sparse-checkout", "set", agentsRoot, skillsRoot, workspaceCron, scriptsRoot},
+	} {
+		if err := runGit(dir, args...); err != nil {
+			return err
+		}
+	}
+
+	fetchRef := ref
+	if fetchRef == "" {
+		fetchRef = "HEAD"
+	}
+
+	if err := runGit(dir, "fetch", "--depth=1", "--filter=blob:none", "origin", fetchRef); err != nil {
+		return err
+	}
+
+	if err := runGit(dir, "checkout", "--detach", "FETCH_HEAD"); err != nil {
+		return err
+	}
+
+	for _, root := range [...]string{agentsRoot, skillsRoot, workspaceCron, scriptsRoot} {
+		if _, err := os.Stat(filepath.Join(dir, root)); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+
+			return fmt.Errorf("stat overlay directory %s: %w", root, err)
+		}
+
+		if err := syncFSFiltered(os.DirFS(dir), root, filepath.Join(target, root), "applying configured rocketclaw overlay", logger, true, nil); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func parseGitOverlaySpec(spec string) (url, ref string) {
+	spec = strings.TrimSpace(spec)
+	if i := strings.LastIndex(spec, "@"); i > 0 && !strings.Contains(spec[i+1:], "/") && strings.Contains(spec[:i], "/") {
+		return normalizeGitOverlayURL(spec[:i]), strings.TrimSpace(spec[i+1:])
+	}
+
+	return normalizeGitOverlayURL(spec), ""
+}
+
+func normalizeGitOverlayURL(url string) string {
+	url = strings.TrimSpace(url)
+	if strings.Contains(url, "://") || strings.HasPrefix(url, "git@") {
+		return url
+	}
+
+	if filepath.IsAbs(url) || strings.HasPrefix(url, "./") || strings.HasPrefix(url, "../") {
+		return url
+	}
+
+	if strings.Contains(url, "/") {
+		return "https://" + url
+	}
+
+	return url
+}
+
+func runGit(dir string, args ...string) error {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
 	}
 
 	return nil

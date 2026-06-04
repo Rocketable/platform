@@ -425,20 +425,12 @@ func (s *SessionService) updateStateContext(ctx context.Context, mutate func(*St
 	return nil
 }
 
-func workDirName(workDir string) string {
-	if strings.TrimSpace(workDir) != "" {
-		return workDir
-	}
-
-	return config.DefaultWorkDir
-}
-
 func sessionDBPath(workspace string) string {
 	return sessionDBPathIn(workspace, config.DefaultWorkDir)
 }
 
 func sessionDBPathIn(workspace, workDir string) string {
-	return filepath.Join(workspace, workDirName(workDir), "state.sqlite3")
+	return filepath.Join(workspace, workDir, "state.sqlite3")
 }
 
 func prepareSessionDBPath(workspace string) error {
@@ -453,11 +445,11 @@ func prepareSessionDBPathIn(workspace, workDir string) error {
 
 	defer func() { _ = root.Close() }()
 
-	if err := root.MkdirAll(workDirName(workDir), 0o755); err != nil {
+	if err := root.MkdirAll(workDir, 0o755); err != nil {
 		return fmt.Errorf("create rocketcode session db dir: %w", err)
 	}
 
-	_, err = rootPathExistsNoSymlink(root, filepath.ToSlash(filepath.Join(workDirName(workDir), "state.sqlite3")), "rocketcode session db")
+	_, err = rootPathExistsNoSymlink(root, filepath.ToSlash(filepath.Join(workDir, "state.sqlite3")), "rocketcode session db")
 
 	return err
 }
@@ -693,7 +685,7 @@ func openExistingSessionDB(ctx context.Context, workspace, workDir string) (*sql
 
 	defer func() { _ = root.Close() }()
 
-	ok, err := rootPathExistsNoSymlink(root, filepath.ToSlash(filepath.Join(workDirName(workDir), "state.sqlite3")), "rocketcode session db")
+	ok, err := rootPathExistsNoSymlink(root, filepath.ToSlash(filepath.Join(workDir, "state.sqlite3")), "rocketcode session db")
 	if err != nil || !ok {
 		return nil, false, err
 	}

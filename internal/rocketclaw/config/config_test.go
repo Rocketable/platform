@@ -99,6 +99,22 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	assert.Zero(t, cfg.MinimumWaitAfterHumanInteractionDuration)
 }
 
+func TestLoadNormalizesOverlays(t *testing.T) {
+	cfg := loadTestConfig(t, `{
+	  "workspace": ".",
+	  "overlays": [" github.com/rocketable/overlay1@main ", "", "github.com/rocketable/overlay2"],
+	  "openai": {
+	    "api_key": "test-key"
+	  },
+	  "web_ui": {
+	    "enabled": true,
+	    "listen_addr": "127.0.0.1:8766"
+	  }
+	}`)
+
+	assert.Equal(t, []string{"github.com/rocketable/overlay1@main", "github.com/rocketable/overlay2"}, cfg.Overlays)
+}
+
 func TestLoadDefaultsWorkspaceToConfigDirectory(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rocketclaw.json")

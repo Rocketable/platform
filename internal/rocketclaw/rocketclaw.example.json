@@ -3,6 +3,11 @@
   "environment": [
     "EXAMPLE_API_TOKEN=set-me"
   ],
+  "overlays": [
+    "github.com/rocketable/overlay1@main",
+    "github.com/rocketable/overlay2@commit-hash",
+    "github.com/rocketable/overlay3"
+  ],
   "emergency_safe_words": [
     "stop"
   ],

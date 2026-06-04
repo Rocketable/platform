@@ -18,7 +18,7 @@ func TestNewInstallsSlackChannelNoop(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		t.Fatal("cronjob manager ran during construction")
 
 		return RunResult{}, nil
@@ -53,7 +53,7 @@ func TestLoadDefinitionsLoadsMarkdownAndSkipsTemplates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	defs, err := loadDefinitions(workspace)
+	defs, err := loadDefinitionsIn(workspace, ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,11 +72,64 @@ func TestLoadDefinitionsLoadsMarkdownAndSkipsTemplates(t *testing.T) {
 	}
 }
 
+func TestLoadDefinitionsInUsesEffectiveRuntimeCron(t *testing.T) {
+	workspace := t.TempDir()
+
+	cronDir := filepath.Join(workspace, ".rocketclaw", "cron")
+	if err := os.MkdirAll(cronDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1h\nagent: worker\n---\nRuntime cron\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	defs, err := loadDefinitionsIn(workspace, ".rocketclaw")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(defs) != 1 || defs[0].relativePath != "cron/daily.md" || defs[0].body != "Runtime cron\n" {
+		t.Fatalf("loadDefinitionsIn = %#v; want effective runtime cron", defs)
+	}
+}
+
+func TestLoadOneOffCronjobUsesEffectiveRuntimeCron(t *testing.T) {
+	workspace := t.TempDir()
+
+	cronDir := filepath.Join(workspace, ".rocketclaw", "cron")
+	if err := os.MkdirAll(cronDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1h\nagent: helper\n---\nRuntime cron"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bus := events.New()
+	defer bus.Close()
+
+	m := New(workspace, ".rocketclaw", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+		t.Fatal("cronjob manager ran during load test")
+
+		return RunResult{}, nil
+	}, slog.New(slog.DiscardHandler))
+
+	job, err := m.LoadOneOffCronjob("daily")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if job.Agent != "helper" || job.RelativePath != "cron/daily.md" || !strings.Contains(job.Prompt, "Runtime cron") {
+		t.Fatalf("LoadOneOffCronjob = %#v; want effective runtime cron", job)
+	}
+}
+
 func TestRunOneOffCronjobSetsTraceConversationID(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), bus, func(_ context.Context, _, _ string, _ *slog.Logger, progress *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, func(_ context.Context, _, _ string, _ *slog.Logger, progress *harnessbridge.RawRunProgress) (RunResult, error) {
 		if !strings.HasPrefix(progress.ConversationID, "one-off-cron:cron/daily.md:20000102T030405.000000006Z:") {
 			t.Fatalf("ConversationID = %q; want one-off trace ID", progress.ConversationID)
 		}
@@ -92,7 +145,7 @@ func TestRunOneOffCronjobRejectsStoppedManager(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		t.Fatal("stopped cronjob manager ran one-off cronjob")
 
 		return RunResult{}, nil
@@ -123,7 +176,7 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), bus, func(_ context.Context, _, _ string, _ *slog.Logger, progress *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, func(_ context.Context, _, _ string, _ *slog.Logger, progress *harnessbridge.RawRunProgress) (RunResult, error) {
 		if !strings.HasPrefix(progress.ConversationID, "cron:cron/daily.md:20000102T030405.000000006Z:") {
 			t.Fatalf("ConversationID = %q; want scheduled trace ID", progress.ConversationID)
 		}
@@ -139,7 +192,7 @@ func TestExecuteJobPublishesVisibleAndInternalMessages(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{
 			Text:            "internal summary",
 			VerbatimMessage: "visible answer",
@@ -185,7 +238,7 @@ func TestExecuteJobPublishesVisibleAndInternalMessages(t *testing.T) {
 }
 
 func TestLoadDefinitionsWithoutCronDirectory(t *testing.T) {
-	defs, err := loadDefinitions(t.TempDir())
+	defs, err := loadDefinitionsIn(t.TempDir(), ".")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,8 +254,8 @@ func TestLoadDefinitionsReportsDirectoryErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := loadDefinitions(workspaceFile); err == nil || !strings.Contains(err.Error(), "open workspace root") {
-		t.Fatalf("loadDefinitions(workspace file) error = %v; want workspace open error", err)
+	if _, err := loadDefinitionsIn(workspaceFile, "."); err == nil || !strings.Contains(err.Error(), "open workspace root") {
+		t.Fatalf("loadDefinitionsIn(workspace file, .) error = %v; want workspace open error", err)
 	}
 
 	workspace := t.TempDir()
@@ -210,8 +263,8 @@ func TestLoadDefinitionsReportsDirectoryErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := loadDefinitions(workspace); err == nil || !strings.Contains(err.Error(), "read cronjob directory") {
-		t.Fatalf("loadDefinitions(cron file) error = %v; want cron directory error", err)
+	if _, err := loadDefinitionsIn(workspace, "."); err == nil || !strings.Contains(err.Error(), "read cronjob directory") {
+		t.Fatalf("loadDefinitionsIn(cron file, .) error = %v; want cron directory error", err)
 	}
 }
 
@@ -230,7 +283,7 @@ func TestStartStopLoadsCronjobsWithoutRunningFutureDuration(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(workspace, bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		t.Fatal("future duration cronjob ran during start/stop test")
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
@@ -262,7 +315,7 @@ func TestStartRejectsAlreadyStartedManager(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(workspace, bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		t.Fatal("future duration cronjob ran during duplicate start test")
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
@@ -313,7 +366,7 @@ func TestOneOffCronjobRunsImmediatelyAndDeletesFile(t *testing.T) {
 	defer bus.Close()
 
 	runDone := make(chan struct{})
-	m := New(workspace, bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		close(runDone)
 
 		return RunResult{}, nil
@@ -359,7 +412,7 @@ func TestOneOffCronjobRunsAfterFutureDueTime(t *testing.T) {
 	defer bus.Close()
 
 	runDone := make(chan struct{})
-	m := New(workspace, bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		close(runDone)
 
 		return RunResult{}, nil
@@ -403,7 +456,7 @@ func TestOneOffCronjobDeletesFileAfterRunError(t *testing.T) {
 	defer bus.Close()
 
 	runDone := make(chan struct{})
-	m := New(workspace, bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		close(runDone)
 
 		return RunResult{}, errors.New("boom")
@@ -445,7 +498,7 @@ func TestPreparePromptInstructionCases(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
 
@@ -564,7 +617,7 @@ func TestExecuteJobWithSlackChannelSendsThreadOnlyFinalPayload(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{Text: "internal note", VerbatimMessage: " final payload ", Attachments: []events.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}}, nil
 	}, slog.New(slog.DiscardHandler))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC) }
@@ -598,7 +651,7 @@ func TestExecuteJobWithSlackChannelSkipsEmptyFinalPayload(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{Text: "internal note", VerbatimMessage: " \t\n "}, nil
 	}, slog.New(slog.DiscardHandler))
 	m.SendSlackChannel = func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
@@ -636,7 +689,7 @@ func TestLoadOneOffCronjobValidatesTargetsAndPreparesPrompt(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(workspace, bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
 
@@ -675,7 +728,7 @@ func TestLoadOneOffCronjobReportsReadAndDefinitionErrors(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(workspace, bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
 
@@ -697,7 +750,7 @@ func TestLoadOneOffCronjobReportsWorkspaceOpenError(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(workspace, bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
 

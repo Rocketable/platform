@@ -86,7 +86,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		return fmt.Errorf("apply pending restart notifications: %w", err)
 	}
 
-	if err := skel.SyncIn(cfg.Workspace, cfg.WorkDirName(), logger); err != nil {
+	if err := skel.SyncInWithOverlays(cfg.Workspace, cfg.WorkDirName(), cfg.Overlays, logger); err != nil {
 		return fmt.Errorf("sync rocketclaw skeleton: %w", err)
 	}
 
@@ -164,7 +164,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		return "graceful restart scheduled", nil
 	}
 
-	cronjobs = cronjob.New(cfg.Workspace, bus, func(jobCtx context.Context, agent, prompt string, log *slog.Logger, progress *harnessbridge.RawRunProgress) (cronjob.RunResult, error) {
+	cronjobs = cronjob.New(cfg.Workspace, cfg.WorkDirName(), bus, func(jobCtx context.Context, agent, prompt string, log *slog.Logger, progress *harnessbridge.RawRunProgress) (cronjob.RunResult, error) {
 		progress.SessionService = rocketcodeSessions
 		progress.ScheduleMessage = mainBridge.ScheduleMessage
 		progress.ResetScheduledMessages = mainBridge.ResetScheduledMessages

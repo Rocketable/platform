@@ -72,7 +72,7 @@ func runSetup(args []string) error {
 		*field = ""
 	}
 
-	if err := skel.SyncIn(workspace, config.DefaultWorkDir, newLogger("info")); err != nil {
+	if err := skel.SyncInWithOverlays(workspace, config.DefaultWorkDir, nil, newLogger("info")); err != nil {
 		return fmt.Errorf("sync embedded setup files: %w", err)
 	}
 

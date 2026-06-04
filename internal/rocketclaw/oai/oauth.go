@@ -86,10 +86,6 @@ func AuthFilePathIn(workspace, workDir string) (string, error) {
 		return "", fmt.Errorf("resolve workspace path: %w", err)
 	}
 
-	if strings.TrimSpace(workDir) == "" {
-		workDir = config.DefaultWorkDir
-	}
-
 	return filepath.Join(workspace, workDir, "auth.json"), nil
 }
 

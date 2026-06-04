@@ -3,8 +3,10 @@ package skel
 import (
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -65,7 +67,7 @@ func TestSyncResetsTargetPreservingState(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "agents"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "agents", "main.md"), []byte("overlay"), 0o644))
 
-	require.NoError(t, Sync(tmp, testLogger()))
+	require.NoError(t, SyncInWithOverlays(tmp, targetRoot, nil, testLogger()))
 
 	_, err := os.Stat(filepath.Join(root, "trash.txt"))
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -97,7 +99,7 @@ func TestSyncRejectsRootSetupDirectory(t *testing.T) {
 	tmp := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(tmp, "AGENTS.md"), 0o755))
 
-	err := Sync(tmp, testLogger())
+	err := SyncInWithOverlays(tmp, targetRoot, nil, testLogger())
 	require.ErrorContains(t, err, "root setup path is a directory")
 }
 
@@ -119,7 +121,7 @@ func TestSyncReportsWorkspaceDirectoryConflicts(t *testing.T) {
 			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 			require.NoError(t, os.WriteFile(path, []byte("file"), 0o644))
 
-			err := Sync(tmp, testLogger())
+			err := SyncInWithOverlays(tmp, targetRoot, nil, testLogger())
 			require.ErrorContains(t, err, tt.want)
 		})
 	}
@@ -145,7 +147,7 @@ func TestSyncPreservesExistingWorkspaceSetupFiles(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "agents", "main.md"), []byte("keep overlay"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "skills", "example", "SKILL.md"), []byte("keep skill"), 0o644))
 
-	require.NoError(t, Sync(tmp, testLogger()))
+	require.NoError(t, SyncInWithOverlays(tmp, targetRoot, nil, testLogger()))
 
 	data, err := os.ReadFile(filepath.Join(tmp, "AGENTS.md"))
 	require.NoError(t, err)
@@ -216,7 +218,7 @@ func TestSyncFSFilteredReportsTargetFileForDirectory(t *testing.T) {
 
 func TestOverlayMissingIsNoop(t *testing.T) {
 	tmp := t.TempDir()
-	require.NoError(t, overlay(tmp, testLogger()))
+	require.NoError(t, overlayIn(tmp, targetRoot, testLogger()))
 
 	_, err := os.Stat(filepath.Join(tmp, targetRoot))
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -226,7 +228,7 @@ func TestOverlayRejectsFile(t *testing.T) {
 	tmp := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "agents"), []byte("file"), 0o644))
 
-	err := overlay(tmp, testLogger())
+	err := overlayIn(tmp, targetRoot, testLogger())
 	require.ErrorContains(t, err, "rocketclaw overlay path is not a directory")
 }
 
@@ -240,7 +242,7 @@ func TestOverlaySkipsFilteredFiles(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "agents", "nested", "guide.md"), []byte("real"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "cron", "job.md"), []byte("cron"), 0o644))
 
-	require.NoError(t, overlay(tmp, testLogger()))
+	require.NoError(t, overlayIn(tmp, targetRoot, testLogger()))
 
 	for _, path := range []string{
 		"guide.example.md",
@@ -255,13 +257,91 @@ func TestOverlaySkipsFilteredFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "real", string(data))
 
-	_, err = os.Stat(filepath.Join(tmp, targetRoot, "cron", "job.md"))
-	require.ErrorIs(t, err, os.ErrNotExist)
+	data, err = os.ReadFile(filepath.Join(tmp, targetRoot, "cron", "job.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "cron", string(data))
+}
+
+func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for overlay test")
+	}
+
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	repoGit(t, repo, "init")
+	repoGit(t, repo, "config", "user.email", "test@example.com")
+	repoGit(t, repo, "config", "user.name", "Test User")
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "agents"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "skills", "remote"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "cron"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "scripts"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "agents", "main.md"), []byte("remote agent"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "skills", "remote", "SKILL.md"), []byte("remote skill"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "cron", "daily.md"), []byte("remote cron"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "scripts", "tool.sh"), []byte("remote script"), 0o644))
+	repoGit(t, repo, "add", ".")
+	repoGit(t, repo, "commit", "-m", "overlay")
+
+	workspace := filepath.Join(tmp, "workspace")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "scripts"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("local agent"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "scripts", "tool.sh"), []byte("local script"), 0o644))
+
+	require.NoError(t, SyncInWithOverlays(workspace, targetRoot, []string{repo}, testLogger()))
+
+	data, err := os.ReadFile(filepath.Join(workspace, targetRoot, "agents", "main.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "local agent", string(data))
+
+	data, err = os.ReadFile(filepath.Join(workspace, targetRoot, "skills", "remote", "SKILL.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "remote skill", string(data))
+
+	data, err = os.ReadFile(filepath.Join(workspace, targetRoot, "cron", "daily.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "remote cron", string(data))
+
+	data, err = os.ReadFile(filepath.Join(workspace, targetRoot, "scripts", "tool.sh"))
+	require.NoError(t, err)
+	assert.Equal(t, "local script", string(data))
+}
+
+func TestParseGitOverlaySpec(t *testing.T) {
+	for _, tt := range []struct {
+		spec, wantURL, wantRef string
+	}{
+		{spec: "github.com/rocketable/overlay", wantURL: "https://github.com/rocketable/overlay"},
+		{spec: "github.com/rocketable/overlay@main", wantURL: "https://github.com/rocketable/overlay", wantRef: "main"},
+		{spec: "git@github.com:rocketable/overlay.git", wantURL: "git@github.com:rocketable/overlay.git"},
+		{spec: "ssh://git@github.com/rocketable/overlay.git", wantURL: "ssh://git@github.com/rocketable/overlay.git"},
+	} {
+		t.Run(tt.spec, func(t *testing.T) {
+			gotURL, gotRef := parseGitOverlaySpec(tt.spec)
+			assert.Equal(t, tt.wantURL, gotURL)
+			assert.Equal(t, tt.wantRef, gotRef)
+		})
+	}
+}
+
+func repoGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command("git", args...)
+
+	cmd.Dir = dir
+	if len(args) > 0 && args[0] == "init" {
+		cmd = exec.Command("git", append(args, dir)...)
+	}
+
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(output)))
 }
 
 func TestSyncWritesEmbeddedSetupFiles(t *testing.T) {
 	tmp := t.TempDir()
-	require.NoError(t, Sync(tmp, testLogger()))
+	require.NoError(t, SyncInWithOverlays(tmp, targetRoot, nil, testLogger()))
 
 	info, err := os.Stat(filepath.Join(tmp, "skills"))
 	require.NoError(t, err)

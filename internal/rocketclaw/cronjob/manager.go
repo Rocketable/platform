@@ -37,6 +37,7 @@ type RunFunc func(context.Context, string, string, *slog.Logger, *harnessbridge.
 // Manager loads cron definitions once at startup and schedules them.
 type Manager struct {
 	workspace        string
+	workDir          string
 	bus              *events.Bus
 	run              RunFunc
 	log              *slog.Logger
@@ -76,16 +77,16 @@ type job struct {
 	pending int
 }
 
-// New constructs a cronjob manager.
-func New(workspace string, bus *events.Bus, run RunFunc, logger *slog.Logger) *Manager {
+// New constructs a cronjob manager using workDir for effective runtime cron definitions.
+func New(workspace, workDir string, bus *events.Bus, run RunFunc, logger *slog.Logger) *Manager {
 	return &Manager{workspace: workspace, bus: bus, run: run, log: logger.With("component", "cronjob"), now: time.Now, SendSlackChannel: func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
 		return nil
-	}}
+	}, workDir: workDir}
 }
 
 // Start loads cron definitions and starts scheduling them.
 func (m *Manager) Start(ctx context.Context) error {
-	definitions, err := loadDefinitions(m.workspace)
+	definitions, err := loadDefinitionsIn(m.workspace, m.workDir)
 	if err != nil {
 		return err
 	}
@@ -227,7 +228,7 @@ func (m *Manager) LoadOneOffCronjob(target string) (OneOffCronjob, error) {
 
 	defer func() { _ = root.Close() }()
 
-	data, err := root.ReadFile(relativePath)
+	data, err := root.ReadFile(m.cronRelativePath(name + ".md"))
 	if err != nil {
 		return OneOffCronjob{}, fmt.Errorf("read cronjob %s: %w", relativePath, err)
 	}
@@ -318,8 +319,14 @@ func (m *Manager) runJobLoop(ctx context.Context, job *job) {
 			m.executeJob(context.WithoutCancel(ctx), &job.definition)
 
 			if len(job.definition.schedules) == 1 && !job.definition.schedules[0].dueAt.IsZero() {
-				if err := os.Remove(filepath.Join(m.workspace, job.definition.relativePath)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				if err := os.Remove(filepath.Join(m.workspace, m.cronRelativePath(filepath.Base(job.definition.relativePath)))); err != nil && !errors.Is(err, os.ErrNotExist) {
 					m.log.Warn("delete one-off cronjob", "file", job.definition.relativePath, "error", err)
+				}
+
+				if m.workDir != "." {
+					if err := os.Remove(filepath.Join(m.workspace, job.definition.relativePath)); err != nil && !errors.Is(err, os.ErrNotExist) {
+						m.log.Warn("delete local one-off cronjob", "file", job.definition.relativePath, "error", err)
+					}
 				}
 
 				return
@@ -446,7 +453,7 @@ func (m *Manager) logLoadedDefinitions(definitions []definition) {
 	}
 }
 
-func loadDefinitions(workspace string) ([]definition, error) {
+func loadDefinitionsIn(workspace, workDir string) ([]definition, error) {
 	root, err := os.OpenRoot(workspace)
 	if err != nil {
 		return nil, fmt.Errorf("open workspace root: %w", err)
@@ -454,7 +461,9 @@ func loadDefinitions(workspace string) ([]definition, error) {
 
 	defer func() { _ = root.Close() }()
 
-	cronRoot, err := root.OpenRoot("cron")
+	cronPath := filepath.ToSlash(filepath.Join(workDir, "cron"))
+
+	cronRoot, err := root.OpenRoot(cronPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
@@ -497,6 +506,10 @@ func loadDefinitions(workspace string) ([]definition, error) {
 	}
 
 	return definitions, nil
+}
+
+func (m *Manager) cronRelativePath(name string) string {
+	return filepath.ToSlash(filepath.Join(m.workDir, "cron", name))
 }
 
 func loadDefinition(data []byte, relativePath string) (definition, error) {

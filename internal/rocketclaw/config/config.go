@@ -19,6 +19,7 @@ import (
 type Config struct {
 	Workspace                                string             `json:"workspace"`
 	WorkDir                                  string             `json:"-"`
+	Overlays                                 []string           `json:"overlays,omitempty"`
 	Environment                              []string           `json:"environment,omitempty"`
 	EmergencySafeWords                       []string           `json:"emergency_safe_words,omitempty"`
 	ThreadAgents                             ThreadAgents       `json:"thread_agents,omitempty"`
@@ -294,6 +295,8 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	c.Overlays = normalizeStrings(c.Overlays)
+
 	threadAgents, err := normalizeThreadAgents(c.ThreadAgents)
 	if err != nil {
 		return err
@@ -478,6 +481,17 @@ func validateEnvironment(environment []string) error {
 	}
 
 	return nil
+}
+
+func normalizeStrings(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			normalized = append(normalized, value)
+		}
+	}
+
+	return normalized
 }
 
 func normalizeEmergencySafeWords(words []string) []string {

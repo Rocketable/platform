@@ -721,7 +721,7 @@ func TestTransportAddsOAuthHeadersAndStripsBodyIDs(t *testing.T) {
 	testAuthPath(t, workspace)
 	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"}))
 
-	transport := &transport{workspace: workspace, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "Bearer access", req.Header.Get("Authorization"))
 		require.Equal(t, "acc-123", req.Header.Get("Chatgpt-Account-Id"))
 
@@ -760,7 +760,7 @@ func TestTransportUsesDefaultTransportWhenBaseNil(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultTransport = base })
 
-	transport := &transport{workspace: workspace}
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir}
 	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/models", `{}`))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
@@ -772,7 +772,7 @@ func TestTransportUsesDefaultTransportWhenBaseNil(t *testing.T) {
 
 func TestTransportReportsTokenAndBaseErrors(t *testing.T) {
 	t.Run("token error", func(t *testing.T) {
-		transport := &transport{workspace: t.TempDir(), base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		transport := &transport{workspace: t.TempDir(), workDir: config.DefaultWorkDir, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			t.Fatal("base transport should not be called without a token")
 
 			return nil, nil
@@ -793,7 +793,7 @@ func TestTransportReportsTokenAndBaseErrors(t *testing.T) {
 		require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()}))
 
 		errSend := errors.New("offline")
-		transport := &transport{workspace: workspace, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return nil, errSend
 		})}
 
@@ -1065,7 +1065,7 @@ func TestTransportRefreshesExpiredOAuthToken(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	transport := &transport{workspace: workspace, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "Bearer "+access, req.Header.Get("Authorization"))
 		require.Equal(t, "acc-new", req.Header.Get("Chatgpt-Account-Id"))
 
@@ -1096,7 +1096,7 @@ func TestTransportRefreshPreservesStoredAccountID(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	transport := &transport{workspace: workspace, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "Bearer next-access", req.Header.Get("Authorization"))
 		require.Equal(t, "acc-old", req.Header.Get("Chatgpt-Account-Id"))
 
@@ -1128,7 +1128,7 @@ func TestTransportReportsRefreshError(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	transport := &transport{workspace: workspace, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		t.Fatal("base transport should not be called when refresh fails")
 
 		return nil, nil
@@ -1149,7 +1149,7 @@ func TestTransportTreatsTrailingSlashResponsesPathAsStreaming(t *testing.T) {
 	testAuthPath(t, workspace)
 	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()}))
 
-	transport := &transport{workspace: workspace, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		data, err := io.ReadAll(req.Body)
 		require.NoError(t, err)
 		require.Contains(t, string(data), `"stream":true`)
@@ -1172,7 +1172,7 @@ func TestTransportLeavesCompactRequestsAsJSON(t *testing.T) {
 	testAuthPath(t, workspace)
 	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"}))
 
-	transport := &transport{workspace: workspace, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "/backend-api/codex/responses/compact", req.URL.Path)
 		require.Equal(t, "Bearer access", req.Header.Get("Authorization"))
 		require.Equal(t, "acc-123", req.Header.Get("Chatgpt-Account-Id"))
@@ -1203,7 +1203,7 @@ func TestTransportLeavesNonResponseRequestsAsJSON(t *testing.T) {
 	testAuthPath(t, workspace)
 	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()}))
 
-	transport := &transport{workspace: workspace, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "/backend-api/codex/models", req.URL.Path)
 		require.Equal(t, "Bearer access", req.Header.Get("Authorization"))
 
@@ -1274,7 +1274,7 @@ func runAutoCompactTransportTest(t *testing.T, requestBody, streamBody, compactB
 	testAuthPath(t, workspace)
 	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"}))
 
-	transport := &transport{workspace: workspace, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "Bearer access", req.Header.Get("Authorization"))
 		require.Equal(t, "acc-123", req.Header.Get("Chatgpt-Account-Id"))
 

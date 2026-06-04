@@ -52,10 +52,6 @@ func prepareTLSAssetsIn(workspace, workDir, listenAddr, certFile, keyFile string
 		return assets, nil
 	}
 
-	if strings.TrimSpace(workDir) == "" {
-		workDir = config.DefaultWorkDir
-	}
-
 	dir := filepath.Join(workspace, workDir)
 
 	assets.certFile, assets.keyFile = filepath.Join(dir, fallbackCertFilename), filepath.Join(dir, fallbackKeyFilename)
