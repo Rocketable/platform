@@ -25,7 +25,7 @@ func TestSyncFSOverwritesEmbeddedFiles(t *testing.T) {
 		".rocketclaw/nested/tool.txt": {Data: []byte("nested")},
 	}
 
-	require.NoError(t, syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, nil))
+	require.NoError(t, syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, false, nil))
 
 	data, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
 	require.NoError(t, err)
@@ -46,7 +46,7 @@ func TestSyncFSPreservesExtraFiles(t *testing.T) {
 		".rocketclaw/AGENTS.md": {Data: []byte("seed")},
 	}
 
-	require.NoError(t, syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, nil))
+	require.NoError(t, syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, false, nil))
 
 	data, err := os.ReadFile(filepath.Join(root, "keep.txt"))
 	require.NoError(t, err)
@@ -176,15 +176,37 @@ func TestSyncFSFilteredPreservesExistingWhenOverwriteFalse(t *testing.T) {
 		".rocketclaw/AGENTS.md": {Data: []byte("new")},
 	}
 
-	require.NoError(t, syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), false, nil))
+	require.NoError(t, syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), false, false, nil))
 
 	data, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
 	require.NoError(t, err)
 	assert.Equal(t, "old", string(data))
 }
 
+func TestSyncFSFilteredPreservesSourceExecutableBit(t *testing.T) {
+	tmp := t.TempDir()
+	root := filepath.Join(tmp, targetRoot)
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "run"), []byte("old"), 0o644))
+
+	src := fstest.MapFS{
+		"scripts/run":      {Data: []byte("run"), Mode: 0o755},
+		"scripts/plain.sh": {Data: []byte("plain"), Mode: 0o644},
+	}
+
+	require.NoError(t, syncFSFiltered(src, scriptsRoot, root, "test sync", testLogger(), true, true, nil))
+
+	info, err := os.Stat(filepath.Join(root, "run"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+
+	info, err = os.Stat(filepath.Join(root, "plain.sh"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
+}
+
 func TestSyncFSFilteredReportsMissingSourceRoot(t *testing.T) {
-	err := syncFSFiltered(fstest.MapFS{}, payloadRoot, filepath.Join(t.TempDir(), targetRoot), "test sync", testLogger(), true, nil)
+	err := syncFSFiltered(fstest.MapFS{}, payloadRoot, filepath.Join(t.TempDir(), targetRoot), "test sync", testLogger(), true, false, nil)
 	require.ErrorContains(t, err, "copy skeleton source")
 	require.ErrorContains(t, err, "walk skeleton source")
 }
@@ -198,7 +220,7 @@ func TestSyncFSFilteredReportsTargetDirectoryForFile(t *testing.T) {
 		".rocketclaw/AGENTS.md": {Data: []byte("seed")},
 	}
 
-	err := syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, nil)
+	err := syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, false, nil)
 	require.ErrorContains(t, err, "write skeleton file")
 }
 
@@ -212,7 +234,7 @@ func TestSyncFSFilteredReportsTargetFileForDirectory(t *testing.T) {
 		".rocketclaw/nested/file.txt": {Data: []byte("seed")},
 	}
 
-	err := syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, nil)
+	err := syncFSFiltered(src, payloadRoot, root, "test sync", testLogger(), true, false, nil)
 	require.ErrorContains(t, err, "create skeleton directory")
 }
 
@@ -282,6 +304,9 @@ func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "scripts", "tool.sh"), []byte("remote script"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, "scripts", "nested"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "scripts", "nested", "remote.sh"), []byte("nested remote script"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "scripts", "run"), []byte("remote executable"), 0o755))
+	require.NoError(t, os.Chmod(filepath.Join(repo, "scripts", "run"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "scripts", "plain.sh"), []byte("remote non-executable"), 0o644))
 	repoGit(t, repo, "add", ".")
 	repoGit(t, repo, "commit", "-m", "overlay")
 
@@ -321,6 +346,14 @@ func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
 	data, err = os.ReadFile(link)
 	require.NoError(t, err)
 	assert.Equal(t, "nested remote script", string(data))
+
+	info, err := os.Stat(filepath.Join(workspace, targetRoot, "scripts", "run"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
+
+	info, err = os.Stat(filepath.Join(workspace, targetRoot, "scripts", "plain.sh"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
 }
 
 func TestSyncWorkspaceScriptSymlinksReplacesRuntimeSymlinks(t *testing.T) {
@@ -399,7 +432,10 @@ func TestParseGitOverlaySpec(t *testing.T) {
 		{spec: "github.com/rocketable/overlay", wantURL: "https://github.com/rocketable/overlay"},
 		{spec: "github.com/rocketable/overlay@main", wantURL: "https://github.com/rocketable/overlay", wantRef: "main"},
 		{spec: "git@github.com:rocketable/overlay.git", wantURL: "git@github.com:rocketable/overlay.git"},
+		{spec: "git@github.com:Rocketable/alitu-cs.git@main", wantURL: "git@github.com:Rocketable/alitu-cs.git", wantRef: "main"},
+		{spec: "https://github.com/Rocketable/alitu-cs.git@main", wantURL: "https://github.com/Rocketable/alitu-cs.git", wantRef: "main"},
 		{spec: "ssh://git@github.com/rocketable/overlay.git", wantURL: "ssh://git@github.com/rocketable/overlay.git"},
+		{spec: "ssh://git@github.com/Rocketable/alitu-cs.git@main", wantURL: "ssh://git@github.com/Rocketable/alitu-cs.git", wantRef: "main"},
 	} {
 		t.Run(tt.spec, func(t *testing.T) {
 			gotURL, gotRef := parseGitOverlaySpec(tt.spec)

@@ -58,7 +58,7 @@ func SyncInWithOverlays(workspace, workDir string, overlays []string, logger *sl
 			return fmt.Errorf("read embedded root setup file %s: %w", name, err)
 		}
 
-		if err := os.WriteFile(dst, data, syncFileMode(name)); err != nil {
+		if err := os.WriteFile(dst, data, embeddedFileMode(name)); err != nil {
 			return fmt.Errorf("write root setup file %s: %w", dst, err)
 		}
 
@@ -67,7 +67,7 @@ func SyncInWithOverlays(workspace, workDir string, overlays []string, logger *sl
 
 	for _, root := range [...]string{agentsRoot, workspaceCron} {
 		overlayTarget := filepath.Join(workspace, root)
-		if err := syncFSFiltered(payload, root, overlayTarget, "unpacking embedded rocketclaw setup files", logger, false, nil); err != nil {
+		if err := syncFSFiltered(payload, root, overlayTarget, "unpacking embedded rocketclaw setup files", logger, false, false, nil); err != nil {
 			return fmt.Errorf("unpack embedded rocketclaw overlay %s: %w", root, err)
 		}
 	}
@@ -81,12 +81,12 @@ func SyncInWithOverlays(workspace, workDir string, overlays []string, logger *sl
 		return fmt.Errorf("reset rocketclaw target: %w", err)
 	}
 
-	if err := syncFSFiltered(payload, payloadRoot, target, "syncing embedded rocketclaw skeleton", logger, true, nil); err != nil {
+	if err := syncFSFiltered(payload, payloadRoot, target, "syncing embedded rocketclaw skeleton", logger, true, false, nil); err != nil {
 		return fmt.Errorf("sync embedded rocketclaw skeleton: %w", err)
 	}
 
 	for _, root := range [...]string{agentsRoot, workspaceCron} {
-		if err := syncFSFiltered(payload, root, filepath.Join(target, root), "syncing embedded rocketclaw runtime assets", logger, true, nil); err != nil {
+		if err := syncFSFiltered(payload, root, filepath.Join(target, root), "syncing embedded rocketclaw runtime assets", logger, true, false, nil); err != nil {
 			return fmt.Errorf("sync embedded rocketclaw runtime assets %s: %w", root, err)
 		}
 	}
@@ -259,6 +259,7 @@ func overlayIn(workspace, workDir string, logger *slog.Logger) error {
 			"applying rocketclaw overlay directory",
 			logger,
 			true,
+			true,
 			func(name string, d fs.DirEntry) bool {
 				return !d.IsDir() && strings.HasSuffix(strings.ToLower(filepath.Base(name)), "example.md")
 			},
@@ -316,7 +317,7 @@ func applyGitOverlay(target, spec string, logger *slog.Logger) error {
 			return fmt.Errorf("stat overlay directory %s: %w", root, err)
 		}
 
-		if err := syncFSFiltered(os.DirFS(dir), root, filepath.Join(target, root), "applying configured rocketclaw overlay", logger, true, nil); err != nil {
+		if err := syncFSFiltered(os.DirFS(dir), root, filepath.Join(target, root), "applying configured rocketclaw overlay", logger, true, true, nil); err != nil {
 			return err
 		}
 	}
@@ -408,7 +409,7 @@ func resetTarget(target string, logger *slog.Logger) error {
 	return nil
 }
 
-func syncFSFiltered(src fs.FS, root, target, message string, logger *slog.Logger, overwrite bool, skip func(string, fs.DirEntry) bool) error {
+func syncFSFiltered(src fs.FS, root, target, message string, logger *slog.Logger, overwrite, preserveExecutable bool, skip func(string, fs.DirEntry) bool) error {
 	logger.Info(message, "path", target)
 
 	if err := fs.WalkDir(src, root, func(name string, d fs.DirEntry, err error) error {
@@ -454,8 +455,26 @@ func syncFSFiltered(src fs.FS, root, target, message string, logger *slog.Logger
 			}
 		}
 
-		if err := os.WriteFile(dst, data, syncFileMode(dst)); err != nil {
+		mode := embeddedFileMode(dst)
+
+		if preserveExecutable {
+			info, err := d.Info()
+			if err != nil {
+				return fmt.Errorf("stat skeleton source file %s: %w", name, err)
+			}
+
+			mode = 0o644
+			if info.Mode().Perm()&0o111 != 0 {
+				mode = 0o755
+			}
+		}
+
+		if err := os.WriteFile(dst, data, mode); err != nil {
 			return fmt.Errorf("write skeleton file %s: %w", dst, err)
+		}
+
+		if err := os.Chmod(dst, mode); err != nil {
+			return fmt.Errorf("chmod skeleton file %s: %w", dst, err)
 		}
 
 		logger.Debug("wrote embedded rocketclaw file", "path", dst, "bytes", len(data))
@@ -480,7 +499,7 @@ func relativePath(root, name string) string {
 	return strings.TrimPrefix(name, root+"/")
 }
 
-func syncFileMode(name string) os.FileMode {
+func embeddedFileMode(name string) os.FileMode {
 	if strings.HasSuffix(name, ".sh") {
 		return 0o755
 	}

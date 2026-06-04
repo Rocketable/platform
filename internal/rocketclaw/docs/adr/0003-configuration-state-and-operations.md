@@ -46,10 +46,13 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 
 ### Git Overlays
 
-- Overlay entries may use shorthand `github.com/org/repo`, shorthand with a ref suffix like `github.com/org/repo@main` or `github.com/org/repo@<commit>`, or explicit git URLs such as HTTPS, SSH, or SCP-like `git@github.com:org/repo.git`.
+- Overlay entries may use shorthand `github.com/org/repo`, shorthand with a ref suffix like `github.com/org/repo@main` or `github.com/org/repo@<commit>`, or explicit git clone URLs copied from GitHub such as HTTPS, SSH, or SCP-like `git@github.com:org/repo.git`.
+- Private GitHub overlays should use an explicit authenticated clone URL, usually the copied SSH form with an optional ref suffix such as `git@github.com:Rocketable/alitu-cs.git@main`.
 - Omitted refs use the remote default branch HEAD. Explicit refs select that branch, tag, or commit.
 - Startup fetches overlays with the `git` command-line client, materializes only `agents/`, `skills/`, `cron/`, and `scripts/`, and fails startup when a configured overlay cannot be fetched or applied.
 - Effective runtime assets are built in this order: embedded RocketClaw assets, configured git overlays in config order, then local workspace `agents/`, `skills/`, `cron/`, and `scripts/`.
+- Runtime asset files copied from configured git overlays and local workspace overlays preserve the source executable bit: executable source files materialize as `0755` and non-executable source files materialize as `0644`. File extensions do not make overlay files executable.
+- Embedded setup files are seeded separately from overlays; embedded `.sh` setup files materialize as executable setup helpers.
 - After effective runtime assets are built, startup removes workspace `scripts/` symlinks that resolve into `.rocketclaw/` or `.femtoclaw/`, then recreates symlinks for files from the selected `<runtime-dir>/scripts/`. Regular workspace script files and symlinks to other locations are preserved.
 - Git overlay changes require restart; RocketClaw does not hot-reload overlay repositories.
 
@@ -95,3 +98,6 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-02: Added Discord text configuration as the mutually exclusive Slack alternative primary text connector.
 - 2026-06-04: Added config-driven git overlays for intermediate `agents/`, `skills/`, `cron/`, and `scripts/` runtime assets.
 - 2026-06-04: Exposed effective runtime scripts as workspace `scripts/` symlinks while preserving regular workspace script files.
+- 2026-06-04: Clarified that private GitHub overlays should use explicit clone URLs when authentication matters.
+- 2026-06-04: Specified executable-bit preservation for configured git overlays and local workspace overlays.
+- 2026-06-04: Recorded that embedded `.sh` setup files are seeded as executable setup helpers outside the overlay executable-bit contract.

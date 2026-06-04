@@ -4,9 +4,9 @@
     "EXAMPLE_API_TOKEN=set-me"
   ],
   "overlays": [
-    "github.com/rocketable/overlay1@main",
-    "github.com/rocketable/overlay2@commit-hash",
-    "github.com/rocketable/overlay3"
+    "git@github.com:Rocketable/overlay1.git@main",
+    "https://github.com/Rocketable/overlay2.git@commit-hash",
+    "git@github.com:Rocketable/overlay3.git"
   ],
   "emergency_safe_words": [
     "stop"
