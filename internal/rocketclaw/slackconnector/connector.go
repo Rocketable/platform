@@ -1140,7 +1140,9 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 
 	socialThreadReply := c.config.SocialMode.Enabled && threadTS != "" && !strings.HasPrefix(ev.Channel, "D") && c.socialModeAllowsUser(ev.User)
 
-	text := strings.TrimSpace(slackMessageEventText(ev))
+	rawText := strings.TrimSpace(slackMessageEventText(ev))
+
+	text := rawText
 	if socialThreadReply {
 		text = c.stripSlackBotMention(text)
 	}
@@ -1205,6 +1207,19 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 	}, text)
 	if slices.Contains(c.emergencySafeWords, normalizedText) {
 		os.Exit(254)
+	}
+
+	if socialThreadReply && c.slackSocialThreadReplyPingsAway(rawText) {
+		c.log.Debug(
+			"ignored Slack social thread reply",
+			"reason", "pinged_other_without_bot_mention",
+			"user", ev.User,
+			"channel", ev.Channel,
+			"message_ts", ev.TimeStamp,
+			"thread_ts", threadTS,
+		)
+
+		return
 	}
 
 	replyTarget := &events.SlackReplyTarget{ChannelID: ev.Channel, MessageTS: ev.TimeStamp, ThreadTS: threadTS}
@@ -1681,6 +1696,34 @@ func (c *Connector) stripSlackBotMention(text string) string {
 	}
 
 	return text
+}
+
+func (c *Connector) slackSocialThreadReplyPingsAway(text string) bool {
+	botUserID := strings.TrimSpace(c.botUserID)
+	pingedOther := false
+
+	for {
+		start := strings.IndexByte(text, '<')
+		if start < 0 {
+			return pingedOther
+		}
+
+		text = text[start+1:]
+
+		end := strings.IndexByte(text, '>')
+		if end < 0 {
+			return pingedOther
+		}
+
+		token := text[:end]
+		text = text[end+1:]
+
+		if botUserID != "" && strings.HasPrefix(token, "@"+botUserID) && (len(token) == len(botUserID)+1 || token[len(botUserID)+1] == '|') {
+			return false
+		}
+
+		pingedOther = pingedOther || strings.HasPrefix(token, "@") || strings.HasPrefix(token, "#") || token == "!channel" || token == "!here" || token == "!everyone" || strings.HasPrefix(token, "!subteam^")
+	}
 }
 
 func (c *Connector) socialPromptWithContext(ctx context.Context, channelID, mentionTS, text string) string {

@@ -3180,6 +3180,60 @@ func TestHandleMessageEventRoutesManagedSocialThreadReply(t *testing.T) {
 	assert.Equal(t, "171234.5678", posted[0].Get("thread_ts"))
 }
 
+func TestHandleMessageEventSilentlySkipsSocialThreadReplyPingingAway(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+	}))
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.prepareHandled = true
+	router.submitHandled = true
+
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+	connector.botUserID = "U999"
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
+
+	ev := newSlackMessageEvent("171234.9999", "171234.5678", "<@U111> please check this")
+	ev.Channel = "C123"
+	ev.Message = &slack.Msg{Files: []slack.File{{URLPrivateDownload: server.URL + "/file.png", Mimetype: "image/png"}}}
+	connector.handleMessageEvent(context.Background(), ev)
+
+	assert.Empty(t, router.repliesSnapshot())
+	assertNeverInbound(t, bus)
+}
+
+func TestHandleMessageEventRoutesSocialThreadReplyPingingBotToo(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	var posted []url.Values
+
+	server := newSlackStackTestServer(t, &posted, new([]string))
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.prepareHandled = true
+	router.submitHandled = true
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+	connector.botUserID = "U999"
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
+
+	ev := newSlackMessageEvent("171234.9999", "171234.5678", "<@U111> <@U999> please check this")
+	ev.Channel = "C123"
+	connector.handleMessageEvent(context.Background(), ev)
+
+	replies := router.repliesSnapshot()
+	require.Len(t, replies, 1)
+	assert.Equal(t, "<@U111> <@U999> please check this", replies[0].inbound.Text)
+	require.Len(t, posted, 2)
+	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
+	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
+}
+
 func TestThreadedSocialMentionHandledOnceAndStripped(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
@@ -3255,6 +3309,33 @@ func TestStripSlackBotMention(t *testing.T) {
 
 	connector.botUserID = ""
 	assert.Equal(t, "<@U999> hello", connector.stripSlackBotMention("<@U999> hello"))
+}
+
+func TestSlackSocialThreadReplyPingsAway(t *testing.T) {
+	connector := newTestConnector("http://127.0.0.1")
+	connector.botUserID = "U999"
+
+	for _, tt := range []struct {
+		name string
+		text string
+		want bool
+	}{
+		{name: "user", text: "<@U111> please check", want: true},
+		{name: "aliased user", text: "<@U111|Ada> please check", want: true},
+		{name: "other bot counts as user", text: "<@B111> please check", want: true},
+		{name: "channel", text: "<#C111|triage> please check", want: true},
+		{name: "broadcast", text: "<!here> please check", want: true},
+		{name: "user group", text: "<!subteam^S111|ops> please check", want: true},
+		{name: "bot mention overrides user", text: "<@U111> <@U999> please check", want: false},
+		{name: "aliased bot mention overrides channel", text: "<#C111|triage> <@U999|RocketClaw> please check", want: false},
+		{name: "raw at word", text: "@human please check", want: false},
+		{name: "date markup", text: "<!date^1712345678^{date_short}|today> please check", want: false},
+		{name: "link markup", text: "<https://example.com|site> please check", want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, connector.slackSocialThreadReplyPingsAway(tt.text))
+		})
+	}
 }
 
 func TestSocialPromptWithContextIncludesRecentMessages(t *testing.T) {

@@ -36,6 +36,7 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - Shared inbound messages are queued through the event bus and consumed by the main bridge.
 - Automated inbound messages honor `minimum_wait_after_human_interaction` before processing.
 - Slack stacked messages must preserve prompt order and avoid duplicated deliveries.
+- Slack social-mode-gated channel thread replies that contain Slack-resolved pings to another user, bot, channel, broadcast target, or user group must be skipped silently unless the same message also contains the RocketClaw bot mention. Skipped replies must not create placeholders, reactions, connector replies, attachment processing, or thread-router submissions. Raw unresolved `@word` text and non-pinging Slack markup such as dates do not trigger this skip. Emergency safe words are checked before this skip.
 - Every normal Slack-visible assistant turn with a Slack target reserves its Slack reply location up front by posting a thinking placeholder (`_Thinking..._`) followed by an answer placeholder (`\u200B`). The answer placeholder is later updated for a short final answer or deleted before chunked final replies. Intentionally standalone progress/post-text messages are not assistant-turn final answers and do not consume the reserved answer placeholder.
 - Discord and browser voice transcriptions enter the same shared flow as other main-session input.
 - External MCP conversations are isolated by external conversation ID; omitted ID starts a new isolated conversation.
@@ -99,3 +100,4 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - 2026-06-02: Added Discord text routing and managed-thread behavior as the mutually exclusive primary text alternative to Slack.
 - 2026-06-02: Renamed cron managed Slack thread routing to canonical `channel`, with `slack-channel` retained as a backward-compatible alias.
 - 2026-06-02: Added Slack and Discord Text parity and channel-target authorization for repeat-reaction one-off cron reruns.
+- 2026-06-04: Added silent Slack social-mode channel-thread reply suppression for messages pinging others unless the RocketClaw bot is also mentioned.
