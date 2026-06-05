@@ -456,8 +456,39 @@ func TestOpenSessionDBWaitsForTransientWriteLock(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	require.NoError(t, tx.Commit())
+	require.NoError(t, tx.Rollback())
 	require.NoError(t, <-errCh)
+}
+
+func TestOpenSessionDBConfiguresSQLitePolicy(t *testing.T) {
+	workspace := t.TempDir()
+	dbPath := sessionDBPath(workspace)
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+
+	db, err := openSessionDB(context.Background(), dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	stats := db.Stats()
+	assert.Equal(t, 1, stats.MaxOpenConnections)
+
+	for _, tt := range []struct {
+		name string
+		want string
+	}{
+		{name: "journal_mode", want: "wal"},
+		{name: "synchronous", want: "1"},
+		{name: "busy_timeout", want: "30000"},
+		{name: "cache_size", want: "-64000"},
+		{name: "mmap_size", want: "268435456"},
+		{name: "temp_store", want: "2"},
+		{name: "auto_vacuum", want: "2"},
+		{name: "page_size", want: "4096"},
+	} {
+		var got string
+		require.NoError(t, db.QueryRowContext(context.Background(), "PRAGMA "+tt.name).Scan(&got), tt.name)
+		assert.Equal(t, tt.want, got, tt.name)
+	}
 }
 
 func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {

@@ -1054,10 +1054,41 @@ func openSessionDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 	}
 
 	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
-	if _, err := db.ExecContext(ctx, `PRAGMA busy_timeout = 5000; CREATE TABLE IF NOT EXISTS session_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL, entry_json TEXT NOT NULL, entry_timestamp TEXT NOT NULL); CREATE TABLE IF NOT EXISTS session_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE INDEX IF NOT EXISTS session_entries_conversation_id_id ON session_entries (conversation_id, id);`); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("initialize rocketcode session db: %w", err)
+	for _, statement := range []string{
+		`PRAGMA busy_timeout = 30000`,
+		`PRAGMA page_size = 4096`,
+		`PRAGMA auto_vacuum = INCREMENTAL`,
+		`PRAGMA journal_mode = WAL`,
+		`PRAGMA synchronous = NORMAL`,
+		`PRAGMA cache_size = -64000`,
+		`PRAGMA mmap_size = 268435456`,
+		`PRAGMA temp_store = MEMORY`,
+		`CREATE TABLE IF NOT EXISTS session_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL, entry_json TEXT NOT NULL, entry_timestamp TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS session_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS session_entries_conversation_id_id ON session_entries (conversation_id, id)`,
+	} {
+		deadline := time.Now().Add(30 * time.Second)
+
+		for {
+			_, err := db.ExecContext(ctx, statement)
+			if err == nil {
+				break
+			}
+
+			if !strings.Contains(err.Error(), "database is locked") || time.Now().After(deadline) {
+				_ = db.Close()
+				return nil, fmt.Errorf("initialize rocketcode session db: %w", err)
+			}
+
+			select {
+			case <-ctx.Done():
+				_ = db.Close()
+				return nil, fmt.Errorf("initialize rocketcode session db: %w", ctx.Err())
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
 	}
 
 	return db, nil

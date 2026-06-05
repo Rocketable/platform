@@ -1,0 +1,72 @@
+# 0005. SQLite State Store
+
+Status: Accepted
+Human approval required for meaning changes: Yes
+
+## Decision
+
+RocketClaw treats `<runtime-dir>/state.sqlite3` as a single-process-owned SQLite state store with one centralized opener, one SQLite configuration site, and one schema initialization path.
+
+## Scope
+
+This ADR governs RocketClaw access to `<runtime-dir>/state.sqlite3`, including daemon runtime access and operational commands such as `rocketclaw fc`. It does not govern unrelated standalone SQLite files outside RocketClaw state/session storage.
+
+## Context
+
+RocketClaw stores persistent RocketCode sessions, managed thread routing, response checkpoints, external MCP mappings, scheduled messages, and restart notifications in one workspace-local SQLite file. The daemon and operational commands may access that file concurrently from separate processes. Divergent open paths, SQLite PRAGMAs, or connection limits would make lock behavior and durability depend on which interface touched the file.
+
+## Normative Contracts
+
+### Centralized Opening
+
+- RocketClaw state/session SQLite access must go through one opener in `internal/rocketclaw/harnessbridge`.
+- That opener is the only RocketClaw code path allowed to call `sql.Open("sqlite", ...)` for `<runtime-dir>/state.sqlite3`.
+- That opener is the only place SQLite PRAGMAs for `<runtime-dir>/state.sqlite3` are configured.
+- That opener is the only place schema initialization and schema migrations for `<runtime-dir>/state.sqlite3` are applied.
+- All RocketClaw interfaces that inspect or mutate the state store, including the daemon runtime and `rocketclaw fc`, must use this opener or wrappers that delegate to it.
+
+### Connection Concurrency
+
+- Each RocketClaw SQLite handle for `<runtime-dir>/state.sqlite3` must set `SetMaxOpenConns(1)`.
+- Each RocketClaw SQLite handle for `<runtime-dir>/state.sqlite3` must set `SetMaxIdleConns(1)`.
+- These process-local limits do not replace SQLite cross-process locking; they ensure each RocketClaw process has one database/sql connection competing for the file.
+
+### Required PRAGMAs
+
+The centralized opener must configure these PRAGMAs for `<runtime-dir>/state.sqlite3`:
+
+- `PRAGMA journal_mode = WAL`
+- `PRAGMA synchronous = NORMAL`
+- `PRAGMA busy_timeout = 30000`
+- `PRAGMA cache_size = -64000`
+- `PRAGMA mmap_size = 268435456`
+- `PRAGMA temp_store = MEMORY`
+- `PRAGMA auto_vacuum = INCREMENTAL`
+- `PRAGMA page_size = 4096`
+
+### Existing Databases
+
+- Existing databases may require a manual `VACUUM` after `auto_vacuum = INCREMENTAL` is introduced before incremental auto-vacuum is fully active for that database file.
+- RocketClaw must not automatically run a full `VACUUM` during normal startup as part of this policy.
+
+## Non-Goals
+
+- This ADR does not require changing unrelated SQLite users outside RocketClaw state/session storage.
+- This ADR does not require automatic compaction, automatic full `VACUUM`, or operational scheduling of database maintenance.
+- This ADR does not define Slack placeholder cleanup or restart replay semantics.
+
+## Evidence
+
+- `internal/rocketclaw/harnessbridge/store.go`
+- `cmd/rocketclaw/fc.go`
+- `internal/rocketclaw/app/app.go`
+
+## Consequences
+
+- Future RocketClaw state-store changes must preserve the single opener and centralized SQLite configuration unless this ADR is updated first.
+- Tests may use separate SQLite connections only when the test intentionally models an external competing process or a corrupted database setup.
+- Adding a second production RocketClaw `sql.Open("sqlite", ...)` path for `<runtime-dir>/state.sqlite3` violates this ADR.
+
+## Changelog
+
+- 2026-06-05: Initial accepted snapshot.

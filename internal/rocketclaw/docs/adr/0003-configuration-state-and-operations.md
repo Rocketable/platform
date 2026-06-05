@@ -26,7 +26,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 | `agents/`, `skills/`, `scripts/` | User-overridable workspace overlays for agent, skill, and script assets. Changes require restart to affect running RocketCode definitions. Local workspace overlays are applied after embedded assets and configured git overlays. Startup exposes effective runtime script files from `<runtime-dir>/scripts/` as symlinks under workspace `scripts/`, preserving existing regular workspace script files. |
 | `.rocketclaw/` | Generated runtime directory. Setup and startup may create or maintain it. |
 | `.femtoclaw/` | Legacy generated runtime directory used only when `femtoclaw.json` is selected. |
-| `<runtime-dir>/state.sqlite3` | Persists RocketCode sessions, Slack/Discord text thread routing, response checkpoints, external MCP sessions, scheduled messages with recurrence metadata, restart notifications, and seed markers. |
+| `<runtime-dir>/state.sqlite3` | Persists RocketCode sessions, Slack/Discord text thread routing, response checkpoints, external MCP sessions, scheduled messages with recurrence metadata, restart notifications, and seed markers. Opened and initialized through the centralized SQLite state-store opener defined by ADR 0005. |
 | `<runtime-dir>/.rocketcode/` | RocketCode shell output and transient runtime artifacts. |
 | `cron/` | User-overridable workspace cron definitions. Effective `cron/*.md` definitions load only at startup from the merged runtime view. `*.example.md` is ignored. Changes require restart. Local one-off cron files can be deleted after a run attempt; one-off cron definitions supplied only by a git overlay may reappear on restart until removed from the source repository. |
 | `main-update-cortex.sh` | Setup-generated helper for updating the Cortex index in `AGENTS.md`. |
@@ -101,3 +101,4 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-04: Clarified that private GitHub overlays should use explicit clone URLs when authentication matters.
 - 2026-06-04: Specified executable-bit preservation for configured git overlays and local workspace overlays.
 - 2026-06-04: Recorded that embedded `.sh` setup files are seeded as executable setup helpers outside the overlay executable-bit contract.
+- 2026-06-05: Linked `<runtime-dir>/state.sqlite3` operations to the centralized SQLite state-store opener in ADR 0005.

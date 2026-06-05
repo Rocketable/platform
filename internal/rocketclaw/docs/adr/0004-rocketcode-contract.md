@@ -49,7 +49,7 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 
 ### Session And Replay
 
-- Persistent conversations use SQLite-backed session storage under `.rocketclaw/state.sqlite3`.
+- Persistent conversations use SQLite-backed session storage under `.rocketclaw/state.sqlite3`, opened through the centralized RocketClaw SQLite state-store opener defined by ADR 0005.
 - Raw runs can persist into a configured conversation when supplied with `RawRunProgress.SessionService` and `ConversationID`.
 - External MCP metadata is injected as a developer message for the turn that supplied it and must not become ambient global state.
 - Attachments are converted into RocketCode prompt attachments only when supported by the bridge path.
@@ -89,3 +89,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-05-25: Added optional recurring scheduled-message contract for persistent and raw RocketCode paths.
 - 2026-06-02: Set RocketCode maximum parallel tool calls to 16 for persistent and raw RocketClaw paths.
 - 2026-06-02: Added Discord text as a persistent-bridge source whose human input remains literal.
+- 2026-06-05: Linked persistent conversation SQLite storage to the centralized RocketClaw state-store opener in ADR 0005.
