@@ -95,6 +95,11 @@ type VacuumStats struct {
 	AfterPageCount, AfterFreePages   int64
 }
 
+// WALCheckpointStats reports the outcome of a SQLite WAL checkpoint.
+type WALCheckpointStats struct {
+	Busy, LogFrames, CheckpointedFrames int64
+}
+
 // PruneStateStats reports how much stale persisted state was removed.
 type PruneStateStats struct {
 	Threads, ResponseCheckpoints, ExternalMCPSessions int
@@ -395,6 +400,16 @@ func (s *SessionService) Stop(context.Context) error {
 	return nil
 }
 
+// Vacuum runs explicit SQLite maintenance through the runtime service handle.
+func (s *SessionService) Vacuum(ctx context.Context) (VacuumStats, error) {
+	return vacuumSessionDB(ctx, s.db)
+}
+
+// CheckpointWAL checkpoints and truncates the SQLite WAL through the runtime service handle.
+func (s *SessionService) CheckpointWAL(ctx context.Context) (WALCheckpointStats, error) {
+	return checkpointWALDB(ctx, s.db)
+}
+
 func (s *SessionService) updateState(mutate func(*State)) error {
 	return s.updateStateContext(context.Background(), mutate)
 }
@@ -642,6 +657,10 @@ func VacuumSessionsIn(ctx context.Context, workspace, workDir string) (VacuumSta
 
 	defer func() { _ = db.Close() }()
 
+	return vacuumSessionDB(ctx, db)
+}
+
+func vacuumSessionDB(ctx context.Context, db *sql.DB) (VacuumStats, error) {
 	beforePages, err := queryPragmaInt(ctx, db, "page_count")
 	if err != nil {
 		return VacuumStats{}, err
@@ -671,6 +690,15 @@ func VacuumSessionsIn(ctx context.Context, workspace, workDir string) (VacuumSta
 	}
 
 	return VacuumStats{DBExists: true, BeforePageCount: beforePages, BeforeFreePages: beforeFree, AfterPageCount: afterPages, AfterFreePages: afterFree}, nil
+}
+
+func checkpointWALDB(ctx context.Context, db *sql.DB) (WALCheckpointStats, error) {
+	var stats WALCheckpointStats
+	if err := db.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&stats.Busy, &stats.LogFrames, &stats.CheckpointedFrames); err != nil {
+		return WALCheckpointStats{}, fmt.Errorf("checkpoint rocketcode session db WAL: %w", err)
+	}
+
+	return stats, nil
 }
 
 func openExistingSessionDB(ctx context.Context, workspace, workDir string) (*sql.DB, bool, error) {

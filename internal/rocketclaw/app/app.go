@@ -82,6 +82,20 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		logger.Info("pruned stale rocketclaw state", "threads", stats.Threads, "response_checkpoints", stats.ResponseCheckpoints, "external_mcp_sessions", stats.ExternalMCPSessions, "session_rows", stats.SessionRows)
 	}
 
+	if stats, err := rocketcodeSessions.Vacuum(runCtx); err != nil {
+		logger.Warn("vacuum rocketclaw state", "error", err)
+	} else {
+		logger.Info("vacuumed rocketclaw state", "before_pages", stats.BeforePageCount, "before_free_pages", stats.BeforeFreePages, "after_pages", stats.AfterPageCount, "after_free_pages", stats.AfterFreePages)
+	}
+
+	if stats, err := rocketcodeSessions.CheckpointWAL(runCtx); err != nil {
+		logger.Warn("checkpoint rocketclaw state WAL", "error", err)
+	} else if stats.Busy > 0 {
+		logger.Warn("checkpoint rocketclaw state WAL busy", "busy", stats.Busy, "log_frames", stats.LogFrames, "checkpointed_frames", stats.CheckpointedFrames)
+	} else {
+		logger.Info("checkpointed rocketclaw state WAL", "busy", stats.Busy, "log_frames", stats.LogFrames, "checkpointed_frames", stats.CheckpointedFrames)
+	}
+
 	if err := rocketcodeSessions.ApplyPendingRestartNotifications(runCtx); err != nil {
 		return fmt.Errorf("apply pending restart notifications: %w", err)
 	}

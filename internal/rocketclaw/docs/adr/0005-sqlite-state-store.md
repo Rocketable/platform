@@ -47,12 +47,19 @@ The centralized opener must configure these PRAGMAs for `<runtime-dir>/state.sql
 ### Existing Databases
 
 - Existing databases may require a manual `VACUUM` after `auto_vacuum = INCREMENTAL` is introduced before incremental auto-vacuum is fully active for that database file.
-- RocketClaw must not automatically run a full `VACUUM` during normal startup as part of this policy.
+
+### Startup Maintenance
+
+- Daemon startup must run SQLite cleanup after startup retention pruning and before normal connector, cron, and bridge startup continues.
+- Daemon startup cleanup must run through the already-open centralized SQLite handle, not by opening a second SQLite handle.
+- Daemon startup cleanup must run `PRAGMA optimize`, full `VACUUM`, and `PRAGMA wal_checkpoint(TRUNCATE)`.
+- Full `VACUUM` must be daemon-startup-only maintenance and must not run implicitly from `openSessionDB` or inspection commands such as `rocketclaw fc list`.
+- A startup cleanup error or busy checkpoint result must be logged but must not fail startup.
 
 ## Non-Goals
 
 - This ADR does not require changing unrelated SQLite users outside RocketClaw state/session storage.
-- This ADR does not require automatic compaction, automatic full `VACUUM`, or operational scheduling of database maintenance.
+- This ADR does not require automatic compaction or operational scheduling of database maintenance beyond daemon-startup SQLite cleanup.
 - This ADR does not define Slack placeholder cleanup or restart replay semantics.
 
 ## Evidence
@@ -70,3 +77,5 @@ The centralized opener must configure these PRAGMAs for `<runtime-dir>/state.sql
 ## Changelog
 
 - 2026-06-05: Initial accepted snapshot.
+- 2026-06-05: Added startup WAL checkpoint/truncation after retention pruning while keeping full `VACUUM` manual only.
+- 2026-06-05: Replaced manual-only full `VACUUM` policy with daemon-startup cleanup after retention pruning; inspection opens still must not vacuum implicitly.

@@ -553,6 +553,24 @@ func TestVacuumSessionsPreservesRows(t *testing.T) {
 	assert.Len(t, entries, 1)
 }
 
+func TestSessionServiceVacuumsAndCheckpointsWAL(t *testing.T) {
+	store := newTestSessionService(t)
+	_, err := store.AppendEntryID(context.Background(), "main", testSessionEntry("main", "assistant"))
+	require.NoError(t, err)
+
+	vacuumStats, err := store.Vacuum(context.Background())
+	require.NoError(t, err)
+	assert.True(t, vacuumStats.DBExists)
+
+	checkpointStats, err := store.CheckpointWAL(context.Background())
+	require.NoError(t, err)
+	assert.Zero(t, checkpointStats.Busy)
+
+	entries, err := store.ObserveEntries(context.Background(), "main", 0)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1)
+}
+
 func TestSessionServicePersistsExternalMCPSessionMapping(t *testing.T) {
 	workspace := t.TempDir()
 	store := newTestSessionServiceAt(t, workspace)
