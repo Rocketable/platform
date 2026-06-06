@@ -54,6 +54,17 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - External MCP metadata is injected as a developer message for the turn that supplied it and must not become ambient global state.
 - Attachments are converted into RocketCode prompt attachments only when supported by the bridge path.
 
+### ChatGPT Codex Backend Requests
+
+- When RocketClaw backs RocketCode with ChatGPT OAuth, Codex backend requests use Codex-compatible request identity rather than a RocketClaw-specific persona.
+- Codex backend requests send `originator: codex_cli_rs`.
+- Codex backend requests send `User-Agent: codex_cli_rs/0.0.0 (RocketClaw)`.
+- Codex backend requests send `Authorization: Bearer <access token>`.
+- Codex backend requests send `ChatGPT-Account-ID` when the saved OAuth token has an account ID.
+- Codex backend requests send a stable per-transport `session_id` and `x-client-request-id`; both headers use the same generated value for the lifetime of that transport.
+- OAuth token requests send `Accept: application/json`.
+- RocketClaw does not add conversation-level Codex request identity, `thread-id`, `x-codex-*`, WebSocket, turn-state headers, or `prompt_cache_key` under this contract.
+
 ### Diagnostics And Skills
 
 - RocketClaw enables `ExperimentalStrongerSkills` in both persistent and raw paths.
@@ -90,3 +101,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-02: Set RocketCode maximum parallel tool calls to 16 for persistent and raw RocketClaw paths.
 - 2026-06-02: Added Discord text as a persistent-bridge source whose human input remains literal.
 - 2026-06-05: Linked persistent conversation SQLite storage to the centralized RocketClaw state-store opener in ADR 0005.
+- 2026-06-06: Added ChatGPT Codex backend request identity and header contract for RocketClaw-backed RocketCode requests.

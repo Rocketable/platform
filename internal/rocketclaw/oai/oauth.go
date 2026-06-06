@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/google/uuid"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 )
@@ -32,7 +33,9 @@ const (
 	codexBaseURL     = "https://chatgpt.com/backend-api/codex"
 	dummyAPIKey      = "rocketclaw-oauth-dummy-key"
 	defaultLoginPort = 1455
-	originator       = "rocketable"
+	originator       = "codex_cli_rs"
+	codexUserAgent   = "codex_cli_rs/0.0.0 (RocketClaw)"
+	refreshSkew      = 120 * time.Second
 )
 
 // Token is the persisted ChatGPT OAuth credential used for Codex requests.
@@ -331,11 +334,14 @@ func NewChatGPTClientIn(workspace, workDir string, opts ...option.RequestOption)
 		return nil, err
 	}
 
+	sessionID := uuid.NewString()
+
 	client := openai.NewClient(append([]option.RequestOption{
 		option.WithAPIKey(dummyAPIKey),
 		option.WithBaseURL(codexBaseURL),
-		option.WithHTTPClient(&http.Client{Transport: &transport{base: http.DefaultTransport, workspace: workspace, workDir: workDir}}),
+		option.WithHTTPClient(&http.Client{Transport: &transport{base: http.DefaultTransport, workspace: workspace, workDir: workDir, sessionID: sessionID}}),
 		option.WithHeader("originator", originator),
+		option.WithHeader("User-Agent", codexUserAgent),
 	}, opts...)...)
 
 	return &client, nil
@@ -345,6 +351,7 @@ type transport struct {
 	base      http.RoundTripper
 	workspace string
 	workDir   string
+	sessionID string
 	mu        sync.Mutex
 }
 
@@ -364,7 +371,13 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	cloned := req.Clone(req.Context())
-	setAuthHeaders(cloned, token)
+
+	sessionID, err := t.codexSessionID()
+	if err != nil {
+		return nil, err
+	}
+
+	setCodexHeaders(cloned, token, sessionID)
 
 	codexPath := strings.TrimRight(cloned.URL.Path, "/")
 
@@ -418,7 +431,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 		retry := cloned.Clone(req.Context())
 		retry.Body = retryBody
-		setAuthHeaders(retry, token)
+		setCodexHeaders(retry, token, sessionID)
 
 		resp, err = t.base.RoundTrip(retry)
 		if err != nil {
@@ -452,13 +465,30 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-func setAuthHeaders(req *http.Request, token Token) {
+func setCodexHeaders(req *http.Request, token Token, sessionID string) {
 	req.Header.Del("Authorization")
 	req.Header.Set("Authorization", "Bearer "+token.Access)
+	req.Header.Set("Originator", originator)
+	req.Header.Set("User-Agent", codexUserAgent)
+	req.Header.Set("Session_id", sessionID)
+	req.Header.Set("X-Client-Request-Id", sessionID)
 
 	if token.AccountID != "" {
 		req.Header.Set("Chatgpt-Account-Id", token.AccountID)
 	}
+}
+
+func (t *transport) codexSessionID() (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.sessionID != "" {
+		return t.sessionID, nil
+	}
+
+	t.sessionID = uuid.NewString()
+
+	return t.sessionID, nil
 }
 
 func (t *transport) token(ctx context.Context) (Token, error) {
@@ -470,7 +500,7 @@ func (t *transport) token(ctx context.Context) (Token, error) {
 		return Token{}, err
 	}
 
-	if token.Access != "" && token.Expires > time.Now().Add(30*time.Second).UnixMilli() {
+	if token.Access != "" && token.Expires > time.Now().Add(refreshSkew).UnixMilli() {
 		return token, nil
 	}
 
@@ -918,6 +948,7 @@ func postToken(ctx context.Context, form url.Values) (tokenResponse, error) {
 	}
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -928,7 +959,21 @@ func postToken(ctx context.Context, form url.Values) (tokenResponse, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		data, _ := io.ReadAll(resp.Body)
-		return tokenResponse{}, fmt.Errorf("token request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		body := strings.TrimSpace(string(data))
+
+		var endpointError struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(data, &endpointError); err == nil {
+			switch endpointError.Error.Code {
+			case "app_session_terminated", "invalid_grant", "invalid_token", "invalid_request", "refresh_token_reused", "refresh_token_expired", "refresh_token_invalidated":
+				return tokenResponse{}, fmt.Errorf("token request failed (%d): %s; ChatGPT OAuth session ended; run `rocketclaw oai login`", resp.StatusCode, body)
+			}
+		}
+
+		return tokenResponse{}, fmt.Errorf("token request failed (%d): %s", resp.StatusCode, body)
 	}
 
 	var response tokenResponse

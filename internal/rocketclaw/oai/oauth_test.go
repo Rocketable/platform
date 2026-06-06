@@ -143,6 +143,7 @@ func TestExchangeCodePostsAuthorizationCodeForm(t *testing.T) {
 		require.Equal(t, http.MethodPost, req.Method)
 		require.Equal(t, issuer+"/oauth/token", req.URL.String())
 		require.Equal(t, "application/x-www-form-urlencoded", req.Header.Get("Content-Type"))
+		require.Equal(t, "application/json", req.Header.Get("Accept"))
 		require.NoError(t, req.ParseForm())
 		require.Equal(t, "authorization_code", req.Form.Get("grant_type"))
 		require.Equal(t, "code-123", req.Form.Get("code"))
@@ -317,6 +318,7 @@ func TestPostTokenReportsHTTPAndDecodeErrors(t *testing.T) {
 			http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				require.Equal(t, http.MethodPost, req.Method)
 				require.Equal(t, issuer+"/oauth/token", req.URL.String())
+				require.Equal(t, "application/json", req.Header.Get("Accept"))
 
 				if tt.err != nil {
 					return nil, tt.err
@@ -329,6 +331,53 @@ func TestPostTokenReportsHTTPAndDecodeErrors(t *testing.T) {
 			require.ErrorContains(t, err, tt.want)
 		})
 	}
+}
+
+func TestPostTokenReportsTerminalRefreshErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		code string
+	}{
+		{name: "session terminated", code: "app_session_terminated"},
+		{name: "refresh token reused", code: "refresh_token_reused"},
+	}
+
+	base := http.DefaultClient.Transport
+
+	t.Cleanup(func() { http.DefaultClient.Transport = base })
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				require.Equal(t, issuer+"/oauth/token", req.URL.String())
+
+				body := fmt.Sprintf(`{"error":{"message":"Your session has ended. Please log in again.","type":"invalid_request_error","code":%q}}`, tt.code)
+
+				return &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+			})
+
+			_, err := postToken(context.Background(), url.Values{"grant_type": {"refresh_token"}})
+			require.ErrorContains(t, err, "token request failed (400):")
+			require.ErrorContains(t, err, tt.code)
+			require.ErrorContains(t, err, "ChatGPT OAuth session ended")
+			require.ErrorContains(t, err, "rocketclaw oai login")
+		})
+	}
+}
+
+func TestPostTokenReportsUnknownErrorsWithoutTerminalGuidance(t *testing.T) {
+	base := http.DefaultClient.Transport
+	http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		require.Equal(t, issuer+"/oauth/token", req.URL.String())
+
+		return &http.Response{StatusCode: http.StatusTooManyRequests, Body: io.NopCloser(strings.NewReader(`{"error":{"code":"rate_limit_exceeded"}}`)), Header: make(http.Header)}, nil
+	})
+
+	t.Cleanup(func() { http.DefaultClient.Transport = base })
+
+	_, err := postToken(context.Background(), url.Values{"grant_type": {"refresh_token"}})
+	require.ErrorContains(t, err, `token request failed (429): {"error":{"code":"rate_limit_exceeded"}}`)
+	require.NotContains(t, err.Error(), "ChatGPT OAuth session ended")
 }
 
 func TestPollDevicePendingAndCompletes(t *testing.T) {
@@ -724,6 +773,10 @@ func TestTransportAddsOAuthHeadersAndStripsBodyIDs(t *testing.T) {
 	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "Bearer access", req.Header.Get("Authorization"))
 		require.Equal(t, "acc-123", req.Header.Get("Chatgpt-Account-Id"))
+		require.Equal(t, originator, req.Header.Get("Originator"))
+		require.Equal(t, codexUserAgent, req.Header.Get("User-Agent"))
+		require.NotEmpty(t, req.Header.Get("Session_id"))
+		require.Equal(t, req.Header.Get("Session_id"), req.Header.Get("X-Client-Request-Id"))
 
 		data, err := io.ReadAll(req.Body)
 		require.NoError(t, err)
@@ -1080,6 +1133,35 @@ func TestTransportRefreshesExpiredOAuthToken(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "next-refresh", token.Refresh)
 	require.Equal(t, "acc-new", token.AccountID)
+}
+
+func TestTransportRefreshesOAuthTokenInsideSkew(t *testing.T) {
+	workspace := t.TempDir()
+	testAuthPath(t, workspace)
+	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(refreshSkew / 2).UnixMilli(), AccountID: "acc-old"}))
+
+	base := http.DefaultClient.Transport
+	http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		require.Equal(t, issuer+"/oauth/token", req.URL.String())
+
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"next-access","refresh_token":"next-refresh","expires_in":3600}`)), Header: make(http.Header)}, nil
+	})
+
+	t.Cleanup(func() { http.DefaultClient.Transport = base })
+
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		require.Equal(t, "Bearer next-access", req.Header.Get("Authorization"))
+
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[]}`)), Header: make(http.Header)}, nil
+	})}
+
+	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/models", `{}`))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
+
+	token, err := LoadToken(workspace)
+	require.NoError(t, err)
+	require.Equal(t, "next-refresh", token.Refresh)
 }
 
 func TestTransportRefreshPreservesStoredAccountID(t *testing.T) {
