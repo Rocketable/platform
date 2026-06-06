@@ -364,12 +364,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	cloned := req.Clone(req.Context())
-	cloned.Header.Del("Authorization")
-	cloned.Header.Set("Authorization", "Bearer "+token.Access)
-
-	if token.AccountID != "" {
-		cloned.Header.Set("Chatgpt-Account-Id", token.AccountID)
-	}
+	setAuthHeaders(cloned, token)
 
 	codexPath := strings.TrimRight(cloned.URL.Path, "/")
 
@@ -388,9 +383,56 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 
+	activeReq := cloned
+
 	resp, err := t.base.RoundTrip(cloned)
 	if err != nil {
 		return nil, fmt.Errorf("send OpenAI request: %w", err)
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		var retryBody io.ReadCloser
+
+		if cloned.Body != nil {
+			if cloned.GetBody == nil {
+				return resp, nil
+			}
+
+			retryBody, err = cloned.GetBody()
+			if err != nil {
+				return resp, nil
+			}
+		}
+
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+
+		token, err = t.recoveryToken(req.Context(), token)
+		if err != nil {
+			if retryBody != nil {
+				_ = retryBody.Close()
+			}
+
+			return nil, err
+		}
+
+		retry := cloned.Clone(req.Context())
+		retry.Body = retryBody
+		setAuthHeaders(retry, token)
+
+		resp, err = t.base.RoundTrip(retry)
+		if err != nil {
+			return nil, fmt.Errorf("send OpenAI request: %w", err)
+		}
+
+		activeReq = retry
+
+		if resp.StatusCode == http.StatusUnauthorized {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+
+			return nil, errors.New("ChatGPT OAuth authorization failed after Codex 401 recovery; run `rocketclaw oai login`")
+		}
 	}
 
 	if codexResponse && resp.StatusCode == http.StatusOK {
@@ -399,7 +441,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			return nil, fmt.Errorf("adapt Codex stream response: %w", err)
 		}
 
-		resp, err = t.codexCompaction(req.Context(), cloned, resp, &metadata)
+		resp, err = t.codexCompaction(req.Context(), activeReq, resp, &metadata)
 		if err != nil {
 			return nil, fmt.Errorf("compact Codex response: %w", err)
 		}
@@ -408,6 +450,15 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	return resp, nil
+}
+
+func setAuthHeaders(req *http.Request, token Token) {
+	req.Header.Del("Authorization")
+	req.Header.Set("Authorization", "Bearer "+token.Access)
+
+	if token.AccountID != "" {
+		req.Header.Set("Chatgpt-Account-Id", token.AccountID)
+	}
 }
 
 func (t *transport) token(ctx context.Context) (Token, error) {
@@ -428,11 +479,34 @@ func (t *transport) token(ctx context.Context) (Token, error) {
 		return Token{}, err
 	}
 
-	next := tokenFromResponse(response)
-	if next.AccountID == "" {
-		next.AccountID = token.AccountID
+	next := tokenFromRefreshResponse(response, token)
+
+	if err := SaveTokenIn(t.workspace, t.workDir, next); err != nil {
+		return Token{}, err
 	}
 
+	return next, nil
+}
+
+func (t *transport) recoveryToken(ctx context.Context, failed Token) (Token, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	token, err := LoadTokenIn(t.workspace, t.workDir)
+	if err != nil {
+		return Token{}, err
+	}
+
+	if token.Access != "" && token.Access != failed.Access && token.AccountID == failed.AccountID {
+		return token, nil
+	}
+
+	response, err := refreshToken(ctx, token.Refresh)
+	if err != nil {
+		return Token{}, fmt.Errorf("refresh ChatGPT OAuth token after Codex 401; run `rocketclaw oai login`: %w", err)
+	}
+
+	next := tokenFromRefreshResponse(response, token)
 	if err := SaveTokenIn(t.workspace, t.workDir, next); err != nil {
 		return Token{}, err
 	}
@@ -941,6 +1015,19 @@ func tokenFromResponse(response tokenResponse) Token {
 	}
 
 	return Token{Refresh: response.RefreshToken, Access: response.AccessToken, Expires: time.Now().Add(time.Duration(expiresIn) * time.Second).UnixMilli(), AccountID: extractAccountID(response)}
+}
+
+func tokenFromRefreshResponse(response tokenResponse, previous Token) Token {
+	next := tokenFromResponse(response)
+	if next.Refresh == "" {
+		next.Refresh = previous.Refresh
+	}
+
+	if next.AccountID == "" {
+		next.AccountID = previous.AccountID
+	}
+
+	return next
 }
 
 func extractAccountID(response tokenResponse) string {

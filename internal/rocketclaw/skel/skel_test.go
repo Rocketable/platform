@@ -471,12 +471,17 @@ func TestSyncWritesEmbeddedSetupFiles(t *testing.T) {
 		"AGENTS.md",
 		filepath.Join("agents", "main.md"),
 		filepath.Join("cron", "HEARTBEAT.example.md"),
+		filepath.Join(targetRoot, ".gitignore"),
 		filepath.Join(targetRoot, "skills", "main-create-or-update-agent", "SKILL.md"),
 	} {
 		data, err := os.ReadFile(filepath.Join(tmp, name))
 		require.NoError(t, err)
 		assert.NotEmpty(t, data)
 	}
+
+	data, err := os.ReadFile(filepath.Join(tmp, targetRoot, ".gitignore"))
+	require.NoError(t, err)
+	assert.Equal(t, "auth.json\n", string(data))
 }
 
 func TestListSetupFiles(t *testing.T) {
@@ -487,6 +492,7 @@ func TestListSetupFiles(t *testing.T) {
 
 	for _, name := range []string{
 		"AGENTS.md",
+		".rocketclaw/.gitignore",
 		"agents/main.md",
 		"cron/HEARTBEAT.example.md",
 	} {

@@ -5,7 +5,7 @@ Human approval required for meaning changes: Yes
 
 ## Decision
 
-RocketClaw keeps runtime configuration and first-party workspace assets in explicit workspace files, persists runtime continuity in `.rocketclaw/state.sqlite3`, and requires restart for configuration/asset changes that affect RocketCode or cron discovery.
+RocketClaw keeps runtime configuration and first-party workspace assets in explicit workspace files, persists runtime continuity and ChatGPT OAuth state in the selected runtime directory, and requires restart for configuration/asset changes that affect RocketCode or cron discovery.
 
 ## Scope
 
@@ -27,6 +27,8 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 | `.rocketclaw/` | Generated runtime directory. Setup and startup may create or maintain it. |
 | `.femtoclaw/` | Legacy generated runtime directory used only when `femtoclaw.json` is selected. |
 | `<runtime-dir>/state.sqlite3` | Persists RocketCode sessions, Slack/Discord text thread routing, response checkpoints, external MCP sessions, scheduled messages with recurrence metadata, restart notifications, and seed markers. Opened and initialized through the centralized SQLite state-store opener defined by ADR 0005. |
+| `<runtime-dir>/auth.json` | Workspace-local ChatGPT OAuth credential for RocketCode Codex requests. Written by `rocketclaw oai login` with `0600` permissions. It is runtime state, not setup payload, and STT/TTS do not read it. |
+| `<runtime-dir>/.gitignore` | Setup-generated runtime-directory ignore file that ignores `auth.json` so workspace-local ChatGPT OAuth material is not accidentally added to source control. |
 | `<runtime-dir>/.rocketcode/` | RocketCode shell output and transient runtime artifacts. |
 | `cron/` | User-overridable workspace cron definitions. Effective `cron/*.md` definitions load only at startup from the merged runtime view. `*.example.md` is ignored. Changes require restart. Local one-off cron files can be deleted after a run attempt; one-off cron definitions supplied only by a git overlay may reappear on restart until removed from the source repository. |
 | `main-update-cortex.sh` | Setup-generated helper for updating the Cortex index in `AGENTS.md`. |
@@ -64,6 +66,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - Config selection prefers legacy `femtoclaw.json` when present, selecting `.femtoclaw/`; otherwise `rocketclaw.json` selects `.rocketclaw/`.
 - `rocketclaw setup files list` and `setup files get <path>` expose embedded setup payloads.
 - ChatGPT auth for RocketCode requires `rocketclaw oai login`; STT/TTS always use API-key auth through audio keys or `api_key` fallback.
+- ChatGPT-backed RocketCode requests refresh locally expired credentials before sending. When Codex returns `401 Unauthorized` for a replayable request, RocketClaw reloads stored auth and retries once with a newer same-account stored token when present; otherwise it force-refreshes with the refresh token, persists the result, and retries once. Non-replayable requests return the original `401`; repeated `401` or failed refresh is surfaced with re-login guidance.
 - Startup migrates legacy state into `.rocketclaw/state.sqlite3` when applicable; rollback after destructive migration requires backup restore.
 
 ## Non-Goals
@@ -79,6 +82,8 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - `SLACK_SETUP.md`
 - `DISCORD_SETUP.md`
 - `internal/config/config.go`
+- `internal/rocketclaw/oai/oauth.go`
+- `internal/rocketclaw/skel/skel.go`
 - `internal/skel/skel.go`
 - `internal/rocketcodebridge/store.go`
 - `internal/cronjob/manager.go`
@@ -102,3 +107,4 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-04: Specified executable-bit preservation for configured git overlays and local workspace overlays.
 - 2026-06-04: Recorded that embedded `.sh` setup files are seeded as executable setup helpers outside the overlay executable-bit contract.
 - 2026-06-05: Linked `<runtime-dir>/state.sqlite3` operations to the centralized SQLite state-store opener in ADR 0005.
+- 2026-06-06: Documented workspace-local ChatGPT OAuth state, runtime ignore protection for `auth.json`, and Codex-style `401` auth recovery.

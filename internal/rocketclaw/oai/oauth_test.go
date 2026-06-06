@@ -1144,6 +1144,244 @@ func TestTransportReportsRefreshError(t *testing.T) {
 	require.ErrorContains(t, err, "send token request")
 }
 
+func TestTransportRetriesCodexUnauthorizedWithReloadedStoredToken(t *testing.T) {
+	workspace := t.TempDir()
+	testAuthPath(t, workspace)
+	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"}))
+
+	base := http.DefaultClient.Transport
+	http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("unexpected refresh request to %s", req.URL)
+	})
+
+	t.Cleanup(func() { http.DefaultClient.Transport = base })
+
+	calls := 0
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls++
+
+		switch calls {
+		case 1:
+			require.Equal(t, "Bearer old", req.Header.Get("Authorization"))
+			require.Equal(t, "acc-123", req.Header.Get("Chatgpt-Account-Id"))
+			require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "new", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"}))
+
+			return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader("unauthorized")), Header: make(http.Header)}, nil
+		case 2:
+			require.Equal(t, "Bearer new", req.Header.Get("Authorization"))
+			require.Equal(t, "acc-123", req.Header.Get("Chatgpt-Account-Id"))
+
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[]}`)), Header: make(http.Header)}, nil
+		default:
+			t.Fatalf("unexpected retry call %d", calls)
+		}
+
+		return nil, nil
+	})}
+
+	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/models", `{}`))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, 2, calls)
+}
+
+func TestTransportForceRefreshesAndRetriesCodexUnauthorized(t *testing.T) {
+	workspace := t.TempDir()
+	testAuthPath(t, workspace)
+	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-old"}))
+
+	base := http.DefaultClient.Transport
+	http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		require.Equal(t, issuer+"/oauth/token", req.URL.String())
+		require.NoError(t, req.ParseForm())
+		require.Equal(t, "refresh_token", req.Form.Get("grant_type"))
+		require.Equal(t, "refresh", req.Form.Get("refresh_token"))
+
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"next-access","expires_in":3600}`)), Header: make(http.Header)}, nil
+	})
+
+	t.Cleanup(func() { http.DefaultClient.Transport = base })
+
+	calls := 0
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls++
+
+		switch calls {
+		case 1:
+			require.Equal(t, "Bearer old", req.Header.Get("Authorization"))
+
+			return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader("unauthorized")), Header: make(http.Header)}, nil
+		case 2:
+			require.Equal(t, "Bearer next-access", req.Header.Get("Authorization"))
+			require.Equal(t, "acc-old", req.Header.Get("Chatgpt-Account-Id"))
+
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[]}`)), Header: make(http.Header)}, nil
+		default:
+			t.Fatalf("unexpected retry call %d", calls)
+		}
+
+		return nil, nil
+	})}
+
+	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/models", `{}`))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, 2, calls)
+
+	token, err := LoadToken(workspace)
+	require.NoError(t, err)
+	require.Equal(t, "refresh", token.Refresh)
+	require.Equal(t, "next-access", token.Access)
+	require.Equal(t, "acc-old", token.AccountID)
+}
+
+func TestTransportUsesRecoveredTokenForCompaction(t *testing.T) {
+	workspace := t.TempDir()
+	testAuthPath(t, workspace)
+	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-old"}))
+
+	base := http.DefaultClient.Transport
+	http.DefaultClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"next-access","expires_in":3600}`)), Header: make(http.Header)}, nil
+	})
+
+	t.Cleanup(func() { http.DefaultClient.Transport = base })
+
+	responseCalls := 0
+	compactCalls := 0
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
+			compactCalls++
+
+			require.Equal(t, "Bearer next-access", req.Header.Get("Authorization"))
+			require.Equal(t, "acc-old", req.Header.Get("Chatgpt-Account-Id"))
+
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"output":[{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}]}`)), Header: make(http.Header)}, nil
+		}
+
+		responseCalls++
+		switch responseCalls {
+		case 1:
+			require.Equal(t, "Bearer old", req.Header.Get("Authorization"))
+
+			return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader("unauthorized")), Header: make(http.Header)}, nil
+		case 2:
+			require.Equal(t, "Bearer next-access", req.Header.Get("Authorization"))
+			require.Equal(t, "acc-old", req.Header.Get("Chatgpt-Account-Id"))
+
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexStream(`{"id":"resp","usage":{"total_tokens":100},"output":[]}`))), Header: make(http.Header)}, nil
+		default:
+			t.Fatalf("unexpected response call %d", responseCalls)
+		}
+
+		return nil, nil
+	})}
+
+	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-5.5","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
+	require.Equal(t, 2, responseCalls)
+	require.Equal(t, 1, compactCalls)
+
+	data, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"id":"cmp_1"`)
+}
+
+func TestTransportDoesNotRetryCodexUnauthorizedTwice(t *testing.T) {
+	workspace := t.TempDir()
+	testAuthPath(t, workspace)
+	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"}))
+
+	base := http.DefaultClient.Transport
+	http.DefaultClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"next","refresh_token":"refresh","expires_in":3600}`)), Header: make(http.Header)}, nil
+	})
+
+	t.Cleanup(func() { http.DefaultClient.Transport = base })
+
+	calls := 0
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+
+		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(fmt.Sprintf("unauthorized %d", calls))), Header: make(http.Header)}, nil
+	})}
+
+	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/models", `{}`))
+	if resp != nil {
+		t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
+	}
+
+	require.Nil(t, resp)
+	require.Equal(t, 2, calls)
+	require.ErrorContains(t, err, "rocketclaw oai login")
+}
+
+func TestTransportReturnsOriginalUnauthorizedForNonReplayableRequest(t *testing.T) {
+	workspace := t.TempDir()
+	testAuthPath(t, workspace)
+	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli()}))
+
+	base := http.DefaultClient.Transport
+	http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("unexpected refresh request to %s", req.URL)
+	})
+
+	t.Cleanup(func() { http.DefaultClient.Transport = base })
+
+	calls := 0
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+
+		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader("original unauthorized")), Header: make(http.Header)}, nil
+	})}
+
+	req := requestWithPathAndBody("/backend-api/codex/models", `{}`)
+	req.GetBody = nil
+
+	resp, err := transport.RoundTrip(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	require.Equal(t, 1, calls)
+
+	data, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, "original unauthorized", string(data))
+}
+
+func TestTransportReportsCodexUnauthorizedRefreshErrorWithReloginGuidance(t *testing.T) {
+	workspace := t.TempDir()
+	testAuthPath(t, workspace)
+	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli()}))
+
+	base := http.DefaultClient.Transport
+	http.DefaultClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader("refresh denied")), Header: make(http.Header)}, nil
+	})
+
+	t.Cleanup(func() { http.DefaultClient.Transport = base })
+
+	calls := 0
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+
+		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader("unauthorized")), Header: make(http.Header)}, nil
+	})}
+
+	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/models", `{}`))
+	if resp != nil {
+		t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
+	}
+
+	require.Nil(t, resp)
+	require.Equal(t, 1, calls)
+	require.ErrorContains(t, err, "rocketclaw oai login")
+	require.ErrorContains(t, err, "token request failed (400): refresh denied")
+}
+
 func TestTransportTreatsTrailingSlashResponsesPathAsStreaming(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
