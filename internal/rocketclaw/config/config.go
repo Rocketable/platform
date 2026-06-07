@@ -25,6 +25,8 @@ type Config struct {
 	ThreadAgents                             ThreadAgents       `json:"thread_agents,omitempty"`
 	MinimumWaitAfterHumanInteraction         string             `json:"minimum_wait_after_human_interaction"`
 	MinimumWaitAfterHumanInteractionDuration time.Duration      `json:"-"`
+	GracefulShutdownTimeout                  string             `json:"graceful_shutdown_timeout,omitempty"`
+	GracefulShutdownTimeoutDuration          time.Duration      `json:"-"`
 	Logging                                  LoggingConfig      `json:"logging"`
 	DiscordVoice                             DiscordVoiceConfig `json:"discord_voice"`
 	DiscordText                              DiscordTextConfig  `json:"discord_text"`
@@ -57,6 +59,9 @@ type ThreadAgents map[string]ThreadAgent
 
 // DefaultWebUIListenAddr is the baseline browser voice-mode listener.
 const DefaultWebUIListenAddr = "0.0.0.0:8766"
+
+// DefaultGracefulShutdownTimeout is the baseline restart and signal shutdown drain budget.
+const DefaultGracefulShutdownTimeout = 5 * time.Minute
 
 // LoggingConfig controls rocketclaw logging.
 type LoggingConfig struct {
@@ -334,6 +339,10 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if err := c.validateGracefulShutdownTimeout(); err != nil {
+		return err
+	}
+
 	if c.DiscordVoice.Enabled {
 		for _, field := range [...]struct{ value, message string }{{c.DiscordVoice.Token, "discord_voice.token is required when discord_voice is enabled"}, {c.DiscordVoice.VoiceChannelID, "discord_voice.voice_channel_id is required when discord_voice is enabled"}, {c.DiscordVoice.HumanUserID, "discord_voice.human_user_id is required when discord_voice is enabled"}} {
 			if strings.TrimSpace(field.value) == "" {
@@ -433,6 +442,28 @@ func (c *Config) validateMinimumWaitAfterHumanInteraction() error {
 
 	return nil
 }
+
+func (c *Config) validateGracefulShutdownTimeout() error {
+	shutdownTimeoutRaw := strings.TrimSpace(c.GracefulShutdownTimeout)
+	if shutdownTimeoutRaw == "" {
+		c.GracefulShutdownTimeoutDuration = DefaultGracefulShutdownTimeout
+		return nil
+	}
+
+	shutdownTimeout, err := time.ParseDuration(shutdownTimeoutRaw)
+	if err != nil {
+		return fmt.Errorf("parse graceful_shutdown_timeout: %w", err)
+	}
+
+	if shutdownTimeout < 0 {
+		return errors.New("graceful_shutdown_timeout must be zero or greater")
+	}
+
+	c.GracefulShutdownTimeoutDuration = shutdownTimeout
+
+	return nil
+}
+
 func (c *Config) validateSlack() error {
 	if !c.Slack.Enabled {
 		return nil

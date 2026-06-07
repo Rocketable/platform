@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -362,6 +363,114 @@ func TestRunStartsRuntimeAndStopsOnCanceledContext(t *testing.T) {
 	}
 }
 
+func TestRunContextCancellationWaitsForActiveMainBridge(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\n---\nPrompt\n"), 0o644))
+
+	requestStarted := make(chan struct{})
+	releaseProvider := make(chan struct{})
+	providerCanceled := make(chan error, 1)
+
+	var requestOnce sync.Once
+
+	openai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		requestOnce.Do(func() { close(requestStarted) })
+
+		select {
+		case <-releaseProvider:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":%q,"annotations":[]}]}]}`, "after shutdown requested")
+		case <-r.Context().Done():
+			providerCanceled <- r.Context().Err()
+		}
+	}))
+	t.Cleanup(openai.Close)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	listenAddr := listener.Addr().String()
+	require.NoError(t, listener.Close())
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: openai.URL}, GracefulShutdownTimeoutDuration: 2 * time.Second}
+	cfg.MCPExternal.Enabled = true
+	cfg.MCPExternal.ListenAddr = listenAddr
+
+	done := make(chan error, 1)
+
+	go func() {
+		done <- Run(ctx, cfg, filepath.Join(workspace, "rocketclaw.json"), testLogger())
+	}()
+
+	require.Eventually(t, func() bool {
+		conn, err := net.DialTimeout("tcp", listenAddr, 10*time.Millisecond)
+		if err != nil {
+			return false
+		}
+
+		_ = conn.Close()
+
+		return true
+	}, 5*time.Second, 10*time.Millisecond)
+
+	mcpDone := make(chan error, 1)
+
+	go func() {
+		reply, err := callSessionPromptForAgent(t.Context(), "http://"+listenAddr+externalmcp.ExternalMCPPath, "main", "hello", nil)
+		if err == nil {
+			assert.Equal(t, "after shutdown requested", reply.answer)
+		}
+
+		mcpDone <- err
+	}()
+
+	select {
+	case <-requestStarted:
+	case err := <-done:
+		require.Failf(t, "runtime stopped before provider request started", "err=%v", err)
+	case err := <-mcpDone:
+		require.Failf(t, "MCP request failed before provider request started", "err=%v", err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "provider request did not start")
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		require.Failf(t, "shutdown returned before active bridge completed", "err=%v", err)
+	case err := <-providerCanceled:
+		require.Failf(t, "active provider request was canceled", "err=%v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseProvider)
+
+	select {
+	case err := <-mcpDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "MCP request did not finish")
+	}
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "runtime did not stop")
+	}
+}
+
 func TestRunReturnsErrRestartRequestedAfterCronRestartTool(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
@@ -472,7 +581,7 @@ func TestStartExternalMCPServerRoutesSelectedAgentDirectly(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	reply, err := callSessionPromptForAgent(ctx, server.URL(), "", "", "", "hello", map[string]string{"ticket": "123", "owner": "alice"})
+	reply, err := callSessionPromptForAgent(ctx, server.URL(), "", "hello", map[string]string{"ticket": "123", "owner": "alice"})
 	require.NoError(t, err)
 	assert.Equal(t, "planner answer", reply.answer)
 	assert.NotEmpty(t, reply.externalConversationID)
@@ -528,7 +637,7 @@ func TestStartExternalMCPServerRoutesAttachments(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	reply, err := callMCPTool(ctx, server.URL(), "", "", map[string]any{
+	reply, err := callMCPTool(ctx, server.URL(), map[string]any{
 		"agent": "planner",
 		"input": "look at this",
 		"attachments": []map[string]any{{
@@ -565,7 +674,7 @@ func TestStartExternalMCPServerRejectsMalformedAttachmentBase64(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	_, err = callMCPTool(ctx, server.URL(), "", "", map[string]any{
+	_, err = callMCPTool(ctx, server.URL(), map[string]any{
 		"agent": "planner",
 		"input": "look at this",
 		"attachments": []map[string]any{{
@@ -616,7 +725,7 @@ func TestStartExternalMCPServerRoutesExistingExternalConversationIDToSeededSlack
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	reply, err := callMCPTool(ctx, server.URL(), "", "", map[string]any{"external_conversation_id": externalConversationID, "input": "follow up", "metadata": map[string]string{"ticket": "123"}})
+	reply, err := callMCPTool(ctx, server.URL(), map[string]any{"external_conversation_id": externalConversationID, "input": "follow up", "metadata": map[string]string{"ticket": "123"}})
 	require.NoError(t, err)
 	assert.Equal(t, "follow-up answer", reply.answer)
 	assert.Equal(t, externalConversationID, reply.externalConversationID)
@@ -656,7 +765,7 @@ func TestStartExternalMCPServerCreatesConversationForUnknownExternalConversation
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	reply, err := callMCPTool(ctx, server.URL(), "", "", map[string]any{"external_conversation_id": externalConversationID, "input": "start"})
+	reply, err := callMCPTool(ctx, server.URL(), map[string]any{"external_conversation_id": externalConversationID, "input": "start"})
 	require.NoError(t, err)
 	assert.Equal(t, "created answer", reply.answer)
 	assert.Equal(t, externalConversationID, reply.externalConversationID)
@@ -716,7 +825,7 @@ func TestExternalMCPExistingExternalConversationIDRunsAgentAndRepliesInSeededSla
 		return harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: bridgeConfig.ConversationID, Agent: bridgeConfig.Agent, ConsumeSharedInbound: false, OutputTargets: bridgeConfig.OutputTargets, SessionService: rocketcodeSessions}, testLogger())
 	})
 
-	defer func() { require.NoError(t, threadBridges.Stop(context.Background())) }()
+	defer func() { require.NoError(t, threadBridges.Stop()) }()
 
 	server, err := startExternalMCPServer(ctx, cfg, func(relayCtx context.Context, text string, attachments []events.OutboundAttachment, replyTarget *events.SlackReplyTarget, channel string) (*events.SlackReplyTarget, error) {
 		_ = relayCtx
@@ -734,7 +843,7 @@ func TestExternalMCPExistingExternalConversationIDRunsAgentAndRepliesInSeededSla
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	first, err := callSessionPromptForAgent(ctx, server.URL(), "", "", "", "first", map[string]string{"ticket": "123"})
+	first, err := callSessionPromptForAgent(ctx, server.URL(), "", "first", map[string]string{"ticket": "123"})
 	require.NoError(t, err)
 	assert.Equal(t, "first answer", first.answer)
 
@@ -742,7 +851,7 @@ func TestExternalMCPExistingExternalConversationIDRunsAgentAndRepliesInSeededSla
 	require.NotNil(t, firstSlack.SlackReply)
 	assert.Equal(t, events.SlackReplyTarget{ChannelID: "D123", MessageTS: "123.456", ThreadTS: "123.456"}, *firstSlack.SlackReply)
 
-	second, err := callMCPTool(ctx, server.URL(), "", "", map[string]any{"external_conversation_id": first.externalConversationID, "input": "second", "metadata": map[string]string{"ticket": "456"}})
+	second, err := callMCPTool(ctx, server.URL(), map[string]any{"external_conversation_id": first.externalConversationID, "input": "second", "metadata": map[string]string{"ticket": "456"}})
 	require.NoError(t, err)
 	assert.Equal(t, "second answer", second.answer)
 	assert.Equal(t, first.externalConversationID, second.externalConversationID)
@@ -802,7 +911,7 @@ func TestStartExternalMCPServerRoutesDefaultAgentToIsolatedSession(t *testing.T)
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	reply, err := callSessionPromptForAgent(ctx, server.URL(), "", "", "", "hello", map[string]string{})
+	reply, err := callSessionPromptForAgent(ctx, server.URL(), "", "hello", map[string]string{})
 	require.NoError(t, err)
 	assert.Equal(t, "main answer", reply.answer)
 	assert.NotEmpty(t, reply.externalConversationID)
@@ -860,7 +969,7 @@ func TestStartExternalMCPServerRelaysPromptToRequestedSlackChannel(t *testing.T)
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	reply, err := callMCPTool(ctx, server.URL(), "", "", map[string]any{"input": "hello", "slack_channel": "#triage", "attachments": []map[string]string{{"name": "red.png", "mime_type": "image/png", "data_base64": base64.StdEncoding.EncodeToString([]byte("png"))}}})
+	reply, err := callMCPTool(ctx, server.URL(), map[string]any{"input": "hello", "slack_channel": "#triage", "attachments": []map[string]string{{"name": "red.png", "mime_type": "image/png", "data_base64": base64.StdEncoding.EncodeToString([]byte("png"))}}})
 	require.NoError(t, err)
 	assert.Equal(t, "main answer", reply.answer)
 	assert.Equal(t, "#triage", relayChannel)
@@ -901,7 +1010,7 @@ func TestStartExternalMCPServerCleansExternalMCPRelayWhenThreadAliasFails(t *tes
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	_, err = callMCPTool(ctx, server.URL(), "", "", map[string]any{"input": "hello"})
+	_, err = callMCPTool(ctx, server.URL(), map[string]any{"input": "hello"})
 	require.ErrorContains(t, err, "persist external MCP Slack thread alias")
 	require.Len(t, cleaned, 1)
 	assert.Equal(t, &events.SlackReplyTarget{MessageTS: "123.456", ThreadTS: "123.456"}, cleaned[0])
@@ -933,7 +1042,7 @@ func TestStartExternalMCPServerCleansExternalMCPRelayWhenSubmitFails(t *testing.
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	_, err = callMCPTool(ctx, server.URL(), "", "", map[string]any{"input": "hello"})
+	_, err = callMCPTool(ctx, server.URL(), map[string]any{"input": "hello"})
 	require.ErrorContains(t, err, "submit external MCP input to agent")
 	require.Len(t, cleaned, 1)
 	assert.Equal(t, &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "123.456", ThreadTS: "123.456"}, cleaned[0])
@@ -983,7 +1092,7 @@ func TestStartExternalMCPServerCleansExistingExternalMCPRelayWhenSubmitFails(t *
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	_, err = callMCPTool(ctx, server.URL(), "", "", map[string]any{"external_conversation_id": externalConversationID, "input": "hello"})
+	_, err = callMCPTool(ctx, server.URL(), map[string]any{"external_conversation_id": externalConversationID, "input": "hello"})
 	require.ErrorContains(t, err, "submit external MCP input to agent")
 	require.Len(t, cleaned, 1)
 	assert.Equal(t, &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "111.222"}, cleaned[0])
@@ -1039,7 +1148,7 @@ func TestStartExternalMCPServerRejectsInvalidExternalMCPConversationState(t *tes
 
 			defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-			_, err = callMCPTool(ctx, server.URL(), "", "", map[string]any{"external_conversation_id": externalConversationID, "agent": tt.requestedAgent, "input": "hello"})
+			_, err = callMCPTool(ctx, server.URL(), map[string]any{"external_conversation_id": externalConversationID, "agent": tt.requestedAgent, "input": "hello"})
 			require.ErrorContains(t, err, tt.wantErr)
 		})
 	}
@@ -1061,7 +1170,7 @@ func TestStartExternalMCPServerRejectsUnexposedRequestedAgent(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	_, err = callMCPTool(ctx, server.URL(), "", "", map[string]any{"agent": "planner", "input": "hello"})
+	_, err = callMCPTool(ctx, server.URL(), map[string]any{"agent": "planner", "input": "hello"})
 	require.ErrorContains(t, err, `external MCP agent "planner" is not exposed`)
 }
 
@@ -1265,7 +1374,7 @@ type mcpToolReply struct {
 	externalConversationID string
 }
 
-func callSessionPromptForAgent(ctx context.Context, endpoint, username, password, agent, input string, metadata map[string]string) (mcpToolReply, error) {
+func callSessionPromptForAgent(ctx context.Context, endpoint, agent, input string, metadata map[string]string) (mcpToolReply, error) {
 	args := map[string]any{"input": input}
 	if agent != "" {
 		args["agent"] = agent
@@ -1275,9 +1384,10 @@ func callSessionPromptForAgent(ctx context.Context, endpoint, username, password
 		args["metadata"] = metadata
 	}
 
-	return callMCPTool(ctx, endpoint, username, password, args)
+	return callMCPTool(ctx, endpoint, args)
 }
-func callMCPTool(ctx context.Context, endpoint, username, password string, args map[string]any) (mcpToolReply, error) {
+
+func callMCPTool(ctx context.Context, endpoint string, args map[string]any) (mcpToolReply, error) {
 	implementation := new(mcp.Implementation)
 	implementation.Name = "test-client"
 	implementation.Version = "1.0.0"
@@ -1287,7 +1397,6 @@ func callMCPTool(ctx context.Context, endpoint, username, password string, args 
 	transport.Endpoint = endpoint
 	transport.DisableStandaloneSSE = true
 	transport.HTTPClient = new(http.Client)
-	transport.HTTPClient.Transport = basicAuthRoundTripper{base: http.DefaultTransport, username: username, password: password}
 
 	session, err := client.Connect(ctx, transport, nil)
 	if err != nil {
@@ -1333,29 +1442,4 @@ func callMCPTool(ctx context.Context, endpoint, username, password string, args 
 	}
 
 	return mcpToolReply{answer: structured.Answer, externalConversationID: structured.ExternalConversationID}, nil
-}
-
-type basicAuthRoundTripper struct {
-	base     http.RoundTripper
-	username string
-	password string
-}
-
-func (r basicAuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	clone := req.Clone(req.Context())
-	if r.username != "" || r.password != "" {
-		clone.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(r.username+":"+r.password)))
-	}
-
-	base := r.base
-	if base == nil {
-		base = http.DefaultTransport
-	}
-
-	resp, err := base.RoundTrip(clone)
-	if err != nil {
-		return nil, fmt.Errorf("round trip MCP request: %w", err)
-	}
-
-	return resp, nil
 }

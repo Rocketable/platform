@@ -58,6 +58,7 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 ### Restart And Draining
 
 - `rocketclaw_restart` is for explicit runtime configuration changes such as `rocketclaw.json`, `agents/`, `skills/`, or `cron/` changes.
+- Restart and signal-triggered shutdown must enter the same graceful drain sequence and use the configured graceful shutdown timeout as the maximum drain budget.
 - Restart must stop intake, wait for inbound handoff, wait for main and thread bridge idleness, wait for outbound drain, and preserve pending restart notifications.
 - Restart must not be triggered for ordinary memory, ledger, audit, report, source-code, generated artifact, log, transcript, or data-file edits.
 
@@ -101,3 +102,4 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - 2026-06-02: Renamed cron managed Slack thread routing to canonical `channel`, with `slack-channel` retained as a backward-compatible alias.
 - 2026-06-02: Added Slack and Discord Text parity and channel-target authorization for repeat-reaction one-off cron reruns.
 - 2026-06-04: Added silent Slack social-mode channel-thread reply suppression for messages pinging others unless the RocketClaw bot is also mentioned.
+- 2026-06-07: Specified that restart and signal-triggered shutdown share the same graceful drain sequence and configured timeout.

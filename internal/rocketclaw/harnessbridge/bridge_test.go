@@ -359,7 +359,7 @@ func TestBridgeSubmitReturnsErrorAfterStop(t *testing.T) {
 
 	bridge := NewConversation(&config.Config{Workspace: t.TempDir()}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
 	require.NoError(t, bridge.Start(context.Background()))
-	require.NoError(t, bridge.Stop(context.Background()))
+	require.NoError(t, bridge.Stop())
 
 	err := bridge.Submit(context.Background(), events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true))
 	require.ErrorIs(t, err, errBridgeStopped)
@@ -510,7 +510,7 @@ func TestBridgeSummarizeRunsQueuedSummary(t *testing.T) {
 
 	bridge := NewConversation(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), SessionService: service}, slog.New(slog.DiscardHandler))
 	require.NoError(t, bridge.Start(t.Context()))
-	t.Cleanup(func() { require.NoError(t, bridge.Stop(context.Background())) })
+	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
@@ -539,7 +539,7 @@ func TestBridgeStopAfterStartContextCanceledIsIdempotent(t *testing.T) {
 		t.Fatal("bridge did not stop after context cancellation")
 	}
 
-	require.NoError(t, bridge.Stop(context.Background()))
+	require.NoError(t, bridge.Stop())
 }
 
 func TestBridgeWaitIdle(t *testing.T) {
@@ -1346,7 +1346,7 @@ func TestBridgeStopDisarmsScheduledMessage(t *testing.T) {
 
 		bridge := &Bridge{log: slog.New(slog.NewJSONHandler(&logs, nil)), config: Config{ConversationID: events.MainConversationID(), SessionService: newTestSessionService(t)}, inputStop: func() {}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 		require.NoError(t, bridge.ScheduleMessage(5*time.Second, "later", false))
-		require.NoError(t, bridge.Stop(context.Background()))
+		require.NoError(t, bridge.Stop())
 
 		time.Sleep(5 * time.Second)
 		synctest.Wait()
@@ -1528,7 +1528,7 @@ func TestBridgeRestoresScheduledMessageAfterRestart(t *testing.T) {
 		first := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: events.MainConversationID(), Agent: "main", SessionService: store}, slog.New(slog.DiscardHandler))
 		require.NoError(t, first.Start(t.Context()))
 		require.NoError(t, first.ScheduleMessage(5*time.Second, "later", false))
-		require.NoError(t, first.Stop(context.Background()))
+		require.NoError(t, first.Stop())
 
 		var logs bytes.Buffer
 
@@ -1585,7 +1585,7 @@ func TestBridgeStartLogsRestoredScheduledMessage(t *testing.T) {
 	t.Cleanup(bus.Close)
 	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", SessionService: store}, slog.New(slog.NewJSONHandler(&logs, nil)))
 	require.NoError(t, bridge.Start(t.Context()))
-	t.Cleanup(func() { require.NoError(t, bridge.Stop(context.Background())) })
+	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 
 	assert.Contains(t, logs.String(), "scheduled message restored")
 }

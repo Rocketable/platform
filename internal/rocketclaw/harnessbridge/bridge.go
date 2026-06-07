@@ -228,7 +228,7 @@ func (b *Bridge) ResetScheduledMessages() error {
 }
 
 // Stop cancels bridge activity.
-func (b *Bridge) Stop(context.Context) error {
+func (b *Bridge) Stop() error {
 	b.inputStop()
 
 	b.mu.Lock()
@@ -576,7 +576,7 @@ func (b *Bridge) loop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			_ = b.Stop(context.Background())
+			_ = b.Stop()
 			return
 		case <-b.stopCh:
 			return

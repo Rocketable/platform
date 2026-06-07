@@ -159,7 +159,7 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 		bridge := harnessbridge.NewConversation(&config.Config{Workspace: workspace}, nil, &cfg, slog.New(slog.DiscardHandler))
 		require.NoError(t, bridge.Start(t.Context()))
 		require.NoError(t, bridge.ScheduleMessage(time.Hour, "later", false))
-		require.NoError(t, bridge.Stop(context.Background()))
+		require.NoError(t, bridge.Stop())
 	}
 
 	created := make([]bridgeConfig, 0, 2)
@@ -634,7 +634,7 @@ func TestThreadBridgeManagerStopStopsActiveBridges(t *testing.T) {
 
 	require.NoError(t, manager.StartThread(context.Background(), "main", false, newThreadInboundMessage("first", "111.222", "111.222")))
 	require.NoError(t, manager.StartThread(context.Background(), "main", false, newThreadInboundMessage("second", "333.444", "333.444")))
-	require.NoError(t, manager.Stop(context.Background()))
+	require.NoError(t, manager.Stop())
 
 	require.Len(t, bridges, 2)
 	assert.Equal(t, 1, bridges[0].stops)
@@ -695,7 +695,7 @@ type summarizeOutcome struct {
 
 func (f *fakeDirectBridge) Start(ctx context.Context) error { f.startedCtx = ctx; return nil }
 
-func (f *fakeDirectBridge) Stop(context.Context) error { f.stops++; return nil }
+func (f *fakeDirectBridge) Stop() error { f.stops++; return nil }
 
 func (f *fakeDirectBridge) Submit(_ context.Context, msg *events.InboundMessage) error {
 	if f.startedCtx != nil && f.startedCtx.Err() != nil {

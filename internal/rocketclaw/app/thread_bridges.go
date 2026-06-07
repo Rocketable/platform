@@ -14,7 +14,7 @@ import (
 
 type directBridge interface {
 	Start(context.Context) error
-	Stop(context.Context) error
+	Stop() error
 	Submit(context.Context, *events.InboundMessage) error
 	SeedThreadFromMain(context.Context) error
 	SeedThreadFromCron(context.Context, string) error
@@ -55,12 +55,12 @@ func newThreadBridgeManager(bus *events.Bus, store *harnessbridge.SessionService
 	return &threadBridgeManager{log: logger.With("component", "thread_bridges"), store: store, bus: bus, factory: factory, targets: events.MainOutputTargets(), mu: sync.Mutex{}, bridges: map[string]*managedThreadBridge{}}
 }
 
-func (m *threadBridgeManager) Stop(ctx context.Context) error {
+func (m *threadBridgeManager) Stop() error {
 	var errStop error
 
 	bridges := m.bridgesSnapshot()
 	for i := range bridges {
-		errStop = errors.Join(errStop, bridges[i].Stop(ctx))
+		errStop = errors.Join(errStop, bridges[i].Stop())
 	}
 
 	return errStop
@@ -133,7 +133,7 @@ func (m *threadBridgeManager) StartDiscordThread(ctx context.Context, agent stri
 			delete(m.bridges, conversationID)
 			m.mu.Unlock()
 
-			_ = managed.bridge.Stop(ctx)
+			_ = managed.bridge.Stop()
 
 			return fmt.Errorf("seed Discord thread from main session: %w", err)
 		}
@@ -145,7 +145,7 @@ func (m *threadBridgeManager) StartDiscordThread(ctx context.Context, agent stri
 			delete(m.bridges, conversationID)
 			m.mu.Unlock()
 
-			_ = managed.bridge.Stop(ctx)
+			_ = managed.bridge.Stop()
 
 			return fmt.Errorf("persist Discord thread bridge: %w", err)
 		}
@@ -366,7 +366,7 @@ func (m *threadBridgeManager) StartThread(ctx context.Context, agent string, pre
 			delete(m.bridges, conversationID)
 			m.mu.Unlock()
 
-			_ = managed.bridge.Stop(ctx)
+			_ = managed.bridge.Stop()
 
 			return fmt.Errorf("seed Slack thread from main session: %w", err)
 		}
@@ -378,7 +378,7 @@ func (m *threadBridgeManager) StartThread(ctx context.Context, agent string, pre
 			delete(m.bridges, conversationID)
 			m.mu.Unlock()
 
-			_ = managed.bridge.Stop(ctx)
+			_ = managed.bridge.Stop()
 
 			return fmt.Errorf("persist Slack thread bridge: %w", err)
 		}
@@ -409,7 +409,7 @@ func (m *threadBridgeManager) RegisterCronThread(ctx context.Context, channelID,
 			delete(m.bridges, conversationID)
 			m.mu.Unlock()
 
-			_ = managed.bridge.Stop(ctx)
+			_ = managed.bridge.Stop()
 
 			return fmt.Errorf("seed Slack cron thread: %w", err)
 		}
@@ -419,7 +419,7 @@ func (m *threadBridgeManager) RegisterCronThread(ctx context.Context, channelID,
 			delete(m.bridges, conversationID)
 			m.mu.Unlock()
 
-			_ = managed.bridge.Stop(ctx)
+			_ = managed.bridge.Stop()
 
 			return fmt.Errorf("persist Slack cron thread bridge: %w", err)
 		}

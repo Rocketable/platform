@@ -36,30 +36,37 @@ type namedStopper struct {
 }
 
 const (
-	slackRetryInitial, slackRetryMax                = time.Second, 30 * time.Second
-	defaultSlackDeliveryMax, gracefulRestartTimeout = 30 * time.Second, 300 * time.Second
-	stateRetention                                  = 30 * 24 * time.Hour
+	slackRetryInitial, slackRetryMax = time.Second, 30 * time.Second
+	defaultSlackDeliveryMax          = 30 * time.Second
+	stateRetention                   = 30 * 24 * time.Hour
 )
 
 // Run starts rocketclaw and blocks until the context is canceled or a fatal error occurs.
 //
 //nolint:gocyclo // Runtime wiring is kept in one place so startup order remains explicit.
 func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger) error {
-	runCtx, cancel := context.WithCancel(ctx)
+	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	gracefulShutdownTimeout := cfg.GracefulShutdownTimeoutDuration
+	if gracefulShutdownTimeout == 0 && strings.TrimSpace(cfg.GracefulShutdownTimeout) == "" {
+		gracefulShutdownTimeout = config.DefaultGracefulShutdownTimeout
+	}
 
 	bus := events.New(events.Config{MinimumWaitAfterHumanInteraction: cfg.MinimumWaitAfterHumanInteractionDuration})
 	defer bus.Close()
 
 	var (
-		restartOnce      sync.Once
+		shutdownOnce     sync.Once
+		shutdownDone     = make(chan struct{})
 		restartRequested = make(chan struct{})
 		mainBridge       *harnessbridge.Bridge
 		threadBridges    *threadBridgeManager
 		cronjobs         *cronjob.Manager
 		slackSink        *slackconnector.Connector
 		discordTextSink  *discordtext.Connector
-		externalMCP      *externalmcp.Server
+		discordSink      *discordvoice.Connector
+		stops            []namedStopper
 	)
 
 	stateStoreLock, err := harnessbridge.AcquireStateStoreLock(cfg.Workspace, cfg.WorkDirName())
@@ -133,64 +140,66 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		}
 	}
 
-	requestRestart := func(_ context.Context, reason string) (string, error) { //nolint:unparam // Signature is shared with restart hooks that may fail.
+	startShutdown := func(reason string, restart bool) bool {
 		started := false
 
-		restartOnce.Do(func() {
+		shutdownOnce.Do(func() {
 			started = true
 
-			close(restartRequested)
-			logger.Warn("restart requested; draining rocketclaw before supervisor restart", "reason", reason)
+			if restart {
+				close(restartRequested)
+			}
+
+			logger.Warn("shutdown requested; draining rocketclaw runtime", "reason", reason, "restart", restart)
 
 			go func() {
-				stopCtx, stop := context.WithTimeout(context.Background(), gracefulRestartTimeout)
-				if slackSink != nil {
-					_ = slackSink.Stop(stopCtx)
-				}
+				defer close(shutdownDone)
 
-				if discordTextSink != nil {
-					_ = discordTextSink.Stop(stopCtx)
-				}
+				shutdownCtx, stop := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
+				defer stop()
 
-				if externalMCP != nil {
-					_ = externalMCP.Stop(stopCtx)
+				for _, sink := range stops {
+					if err := sink.stop(shutdownCtx); err != nil {
+						logger.Warn("stop connector", "connector", sink.name, "error", err)
+					}
 				}
-
-				stop()
 
 				threadBridges.StopAccepting()
 
-				cronCtx, stop := context.WithTimeout(context.Background(), gracefulRestartTimeout)
-				if err := cronjobs.Stop(cronCtx); err != nil {
-					logger.Warn("graceful restart stopped waiting for cronjobs idle", "error", err)
+				if err := cronjobs.Stop(shutdownCtx); err != nil {
+					logger.Warn("graceful shutdown stopped waiting for cronjobs idle", "error", err)
 				}
-
-				stop()
 
 				bus.StopInbound()
 
-				drainCtx, stop := context.WithTimeout(context.Background(), gracefulRestartTimeout)
-				defer stop()
-
-				if err := bus.WaitInboundDequeued(drainCtx); err != nil {
-					logger.Warn("graceful restart stopped waiting for inbound queue handoff", "error", err)
+				if err := bus.WaitInboundDequeued(shutdownCtx); err != nil {
+					logger.Warn("graceful shutdown stopped waiting for inbound queue handoff", "error", err)
 				}
 
-				if err := mainBridge.WaitIdle(drainCtx); err != nil {
-					logger.Warn("graceful restart stopped waiting for bridge idle", "error", err)
+				if err := mainBridge.WaitIdle(shutdownCtx); err != nil {
+					logger.Warn("graceful shutdown stopped waiting for bridge idle", "error", err)
 				}
 
-				if err := threadBridges.WaitIdle(drainCtx); err != nil {
-					logger.Warn("graceful restart stopped waiting for thread bridges idle", "error", err)
+				if err := threadBridges.WaitIdle(shutdownCtx); err != nil {
+					logger.Warn("graceful shutdown stopped waiting for thread bridges idle", "error", err)
 				}
 
-				if err := bus.WaitOutboundIdle(drainCtx); err != nil {
-					logger.Warn("graceful restart stopped waiting for outbound drain", "error", err)
+				if err := bus.WaitOutboundIdle(shutdownCtx); err != nil {
+					logger.Warn("graceful shutdown stopped waiting for outbound drain", "error", err)
 				}
 
 				cancel()
+
+				_ = threadBridges.Stop()
+				_ = mainBridge.Stop()
 			}()
 		})
+
+		return started
+	}
+
+	requestRestart := func(_ context.Context, reason string) (string, error) { //nolint:unparam // Signature is shared with restart hooks that may fail.
+		started := startShutdown(reason, true)
 
 		if !started {
 			logger.Warn("restart requested while shutdown already in progress", "reason", reason)
@@ -221,8 +230,6 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		"mcp_external_enabled", cfg.MCPExternal.Enabled,
 		"slack_enabled", cfg.Slack.Enabled,
 	)
-
-	var discordSink *discordvoice.Connector
 
 	whisper := openaiaudio.NewWhisperClient(
 		cfg.OpenAI.STTAPIKey,
@@ -257,23 +264,10 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		return err
 	}
 
-	var stops []namedStopper
-
 	defer func() {
 		logger.Info("shutting down rocketclaw runtime")
-
-		stopCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-
-		for _, sink := range stops {
-			if err := sink.stop(stopCtx); err != nil {
-				logger.Warn("stop connector", "connector", sink.name, "error", err)
-			}
-		}
-
-		_ = cronjobs.Stop(stopCtx)
-		_ = threadBridges.Stop(stopCtx)
-		_ = mainBridge.Stop(stopCtx)
+		startShutdown("runtime cleanup", false)
+		<-shutdownDone
 	}()
 
 	if cfg.Slack.Enabled {
@@ -375,7 +369,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 			cleanupSlackRelay = slackSink.CleanupPendingReplyPlaceholder
 		}
 
-		externalMCP, err = startExternalMCPServer(runCtx, cfg, slackRelay, cleanupSlackRelay, externalMCPUsers, externalMCPAgents, externalMCPDefaultAgent, rocketcodeSessions, threadBridges.SubmitExternalMCP, logger)
+		externalMCP, err := startExternalMCPServer(runCtx, cfg, slackRelay, cleanupSlackRelay, externalMCPUsers, externalMCPAgents, externalMCPDefaultAgent, rocketcodeSessions, threadBridges.SubmitExternalMCP, logger)
 		if err != nil {
 			return err
 		}
@@ -438,6 +432,14 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		"discord_text_enabled", discordTextSink != nil,
 		"discord_voice_enabled", discordSink != nil,
 	)
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			startShutdown("runtime context canceled", false)
+		case <-runCtx.Done():
+		}
+	}()
 
 	err = outboundLoopWithDiscordText(runCtx, bus, slackSend, discordTextSend, discordSend, webSend, logger)
 
