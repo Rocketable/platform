@@ -58,6 +58,11 @@ The centralized opener must configure these PRAGMAs for `<runtime-dir>/state.sql
 
 ### Startup Maintenance
 
+- Daemon startup must quick-check an existing state store before pruning, vacuuming, checkpointing, applying restart notifications, or starting connectors.
+- If the quick-check proves corruption, daemon startup must attempt copy-first recovery while holding the daemon ownership lock.
+- Startup corruption recovery must invoke the external `sqlite3` command-line shell `.recover` command only for a corruption-proven existing database.
+- Startup corruption recovery must snapshot `state.sqlite3`, `state.sqlite3-wal`, and `state.sqlite3-shm` when present into `<runtime-dir>/tmp/`, recover from that snapshot into a fresh database, validate the recovered database, move the corrupt live database files aside, and install only the validated recovered main database.
+- If recovery fails, daemon startup must fail and must not continue to pruning, full `VACUUM`, checkpoint, restart notification application, connector startup, or another state-store mutation.
 - Daemon startup must run SQLite cleanup after startup retention pruning and before normal connector, cron, and bridge startup continues.
 - Daemon startup cleanup must run through the already-open centralized SQLite handle, not by opening a second SQLite handle.
 - Daemon startup cleanup must run `PRAGMA optimize`, full `VACUUM`, and `PRAGMA wal_checkpoint(TRUNCATE)`.
@@ -89,3 +94,4 @@ The centralized opener must configure these PRAGMAs for `<runtime-dir>/state.sql
 - 2026-06-05: Replaced manual-only full `VACUUM` policy with daemon-startup cleanup after retention pruning; inspection opens still must not vacuum implicitly.
 - 2026-06-07: Added daemon ownership locking and required `rocketclaw fc delete` / `rocketclaw fc vacuum` to refuse while the daemon holds the state-store lock.
 - 2026-06-07: Required read-only state-store opener mode with SQLite URI `mode=ro` for `rocketclaw fc list` and `rocketclaw fc observe`.
+- 2026-06-07: Added daemon startup copy-first corruption recovery using the external `sqlite3` shell `.recover` command only after quick-check proves corruption.

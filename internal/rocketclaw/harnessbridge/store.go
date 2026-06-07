@@ -1,14 +1,17 @@
 package harnessbridge
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"iter"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -25,6 +28,8 @@ import (
 const mainConversationID = "main"
 
 const restartNotificationDeveloperMessage = "The rocketclaw server has been restarted."
+
+var errStateStoreCorrupt = errors.New("rocketclaw state store is corrupt")
 
 // State is the persisted rocketclaw session state.
 type State struct {
@@ -722,6 +727,302 @@ func openExistingSessionDB(ctx context.Context, workspace, workDir string) (*sql
 	db, err := openSessionDB(ctx, sessionDBPathIn(workspace, workDir))
 
 	return db, err == nil, err
+}
+
+// RecoverSessionDBIfCorrupt recovers a corrupt existing state DB before daemon startup proceeds.
+func RecoverSessionDBIfCorrupt(ctx context.Context, workspace, workDir string) (bool, error) {
+	db, ok, err := openExistingSessionDBReadOnly(ctx, workspace, workDir)
+	switch {
+	case err != nil:
+		if !isSQLiteCorruptionError(err) {
+			return false, err
+		}
+	case !ok:
+		return false, nil
+	default:
+		err = quickCheckSessionDB(ctx, db)
+		_ = db.Close()
+
+		if err == nil {
+			return false, nil
+		}
+
+		if !errors.Is(err, errStateStoreCorrupt) {
+			return false, err
+		}
+	}
+
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		return false, fmt.Errorf("recover corrupt rocketcode session db: sqlite3 command not found: %w", err)
+	}
+
+	recoveryRel, err := snapshotSessionDBForRecovery(workspace, workDir)
+	if err != nil {
+		return false, err
+	}
+
+	if err := recoverSessionDBSnapshot(ctx, workspace, recoveryRel); err != nil {
+		return false, err
+	}
+
+	if err := swapRecoveredSessionDB(workspace, workDir, recoveryRel); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+func quickCheckSessionDB(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA quick_check`)
+	if err != nil {
+		if isSQLiteCorruptionError(err) {
+			return fmt.Errorf("%w: %w", errStateStoreCorrupt, err)
+		}
+
+		return fmt.Errorf("quick-check rocketcode session db: %w", err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	messages := []string{}
+
+	for rows.Next() {
+		var message string
+		if err := rows.Scan(&message); err != nil {
+			if isSQLiteCorruptionError(err) {
+				return fmt.Errorf("%w: %w", errStateStoreCorrupt, err)
+			}
+
+			return fmt.Errorf("scan rocketcode session db quick-check: %w", err)
+		}
+
+		if strings.TrimSpace(message) != "ok" {
+			messages = append(messages, message)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		if isSQLiteCorruptionError(err) {
+			return fmt.Errorf("%w: %w", errStateStoreCorrupt, err)
+		}
+
+		return fmt.Errorf("read rocketcode session db quick-check: %w", err)
+	}
+
+	if len(messages) > 0 {
+		return fmt.Errorf("%w: quick_check failed: %s", errStateStoreCorrupt, strings.Join(messages, "; "))
+	}
+
+	return nil
+}
+
+func isSQLiteCorruptionError(err error) bool {
+	text := strings.ToLower(err.Error())
+
+	return strings.Contains(text, "database disk image is malformed") || strings.Contains(text, "sqlite_corrupt") || strings.Contains(text, "file is not a database") || strings.Contains(text, "malformed")
+}
+
+func snapshotSessionDBForRecovery(workspace, workDir string) (string, error) {
+	root, err := os.OpenRoot(workspace)
+	if err != nil {
+		return "", fmt.Errorf("open workspace root: %w", err)
+	}
+
+	defer func() { _ = root.Close() }()
+
+	recoveryRel := filepath.ToSlash(filepath.Join(workDir, "tmp", "sqlite-recovery-"+strconv.FormatInt(time.Now().UTC().UnixNano(), 10)))
+	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(workDir, "tmp")), 0o755); err != nil {
+		return "", fmt.Errorf("create rocketcode session db recovery parent: %w", err)
+	}
+
+	if err := root.Mkdir(recoveryRel, 0o700); err != nil {
+		return "", fmt.Errorf("create rocketcode session db recovery dir: %w", err)
+	}
+
+	for _, name := range []string{"state.sqlite3", "state.sqlite3-wal", "state.sqlite3-shm"} {
+		required := name == "state.sqlite3"
+		if err := copyRecoveryFile(root, filepath.ToSlash(filepath.Join(workDir, name)), filepath.ToSlash(filepath.Join(recoveryRel, name)), required); err != nil {
+			return "", err
+		}
+	}
+
+	return recoveryRel, nil
+}
+
+func copyRecoveryFile(root *os.Root, src, dst string, required bool) error {
+	ok, err := rootPathExistsNoSymlink(root, src, "rocketcode session db recovery source")
+	if err != nil || !ok {
+		if !required && !ok {
+			return nil
+		}
+
+		return err
+	}
+
+	in, err := root.Open(src)
+	if err != nil {
+		return fmt.Errorf("open rocketcode session db recovery source: %w", err)
+	}
+
+	defer func() { _ = in.Close() }()
+
+	out, err := root.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("create rocketcode session db recovery copy: %w", err)
+	}
+
+	_, errCopy := io.Copy(out, in)
+	errClose := out.Close()
+
+	if errCopy != nil {
+		return fmt.Errorf("copy rocketcode session db recovery source: %w", errCopy)
+	}
+
+	if errClose != nil {
+		return fmt.Errorf("close rocketcode session db recovery copy: %w", errClose)
+	}
+
+	return nil
+}
+
+func recoverSessionDBSnapshot(ctx context.Context, workspace, recoveryRel string) error {
+	snapshotPath := filepath.Join(workspace, filepath.FromSlash(recoveryRel), "state.sqlite3")
+	recoveredPath := filepath.Join(workspace, filepath.FromSlash(recoveryRel), "state.recovered.sqlite3")
+	sqlPath := filepath.Join(workspace, filepath.FromSlash(recoveryRel), "recover.sql")
+
+	sqlFile, err := os.OpenFile(sqlPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("create rocketcode session db recovery sql: %w", err)
+	}
+
+	var stderr bytes.Buffer
+
+	cmd := exec.CommandContext(ctx, "sqlite3", snapshotPath, ".recover")
+	cmd.Stdout = sqlFile
+	cmd.Stderr = &stderr
+	errRun := cmd.Run()
+	errClose := sqlFile.Close()
+
+	if errRun != nil {
+		return fmt.Errorf("recover corrupt rocketcode session db with sqlite3: %w: %s", errRun, strings.TrimSpace(stderr.String()))
+	}
+
+	if errClose != nil {
+		return fmt.Errorf("close rocketcode session db recovery sql: %w", errClose)
+	}
+
+	sqlInput, err := os.Open(sqlPath)
+	if err != nil {
+		return fmt.Errorf("open rocketcode session db recovery sql: %w", err)
+	}
+
+	stderr.Reset()
+
+	cmd = exec.CommandContext(ctx, "sqlite3", recoveredPath)
+	cmd.Stdin = sqlInput
+	cmd.Stderr = &stderr
+	errRun = cmd.Run()
+	errClose = sqlInput.Close()
+
+	if errRun != nil {
+		return fmt.Errorf("build recovered rocketcode session db with sqlite3: %w: %s", errRun, strings.TrimSpace(stderr.String()))
+	}
+
+	if errClose != nil {
+		return fmt.Errorf("close rocketcode session db recovery sql input: %w", errClose)
+	}
+
+	if err := validateRecoveredSessionDB(ctx, recoveredPath); err != nil {
+		return err
+	}
+
+	db, err := openSessionDB(ctx, recoveredPath)
+	if err != nil {
+		return err
+	}
+
+	if err := quickCheckSessionDB(ctx, db); err != nil {
+		_ = db.Close()
+		return err
+	}
+
+	if _, err := db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		_ = db.Close()
+		return fmt.Errorf("checkpoint recovered rocketcode session db: %w", err)
+	}
+
+	if err := db.Close(); err != nil {
+		return fmt.Errorf("close recovered rocketcode session db: %w", err)
+	}
+
+	return nil
+}
+
+func validateRecoveredSessionDB(ctx context.Context, recoveredPath string) error {
+	db, err := openSessionDBReadOnly(ctx, recoveredPath)
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = db.Close() }()
+
+	if err := quickCheckSessionDB(ctx, db); err != nil {
+		return err
+	}
+
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'session_entries'`).Scan(&count); err != nil {
+		return fmt.Errorf("check recovered rocketcode session entries table: %w", err)
+	}
+
+	if count == 0 {
+		return errors.New("recovered rocketcode session db is missing session_entries")
+	}
+
+	rows, err := db.QueryContext(ctx, `SELECT id, conversation_id, entry_json, entry_timestamp FROM session_entries LIMIT 1`)
+	if err != nil {
+		return fmt.Errorf("validate recovered rocketcode session entries schema: %w", err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read recovered rocketcode session entries schema check: %w", err)
+	}
+
+	return nil
+}
+
+func swapRecoveredSessionDB(workspace, workDir, recoveryRel string) error {
+	root, err := os.OpenRoot(workspace)
+	if err != nil {
+		return fmt.Errorf("open workspace root: %w", err)
+	}
+
+	defer func() { _ = root.Close() }()
+
+	for _, name := range []string{"state.sqlite3", "state.sqlite3-wal", "state.sqlite3-shm"} {
+		src := filepath.ToSlash(filepath.Join(workDir, name))
+
+		ok, err := rootPathExistsNoSymlink(root, src, "rocketcode session db")
+		if err != nil {
+			return err
+		}
+
+		if !ok {
+			continue
+		}
+
+		if err := root.Rename(src, filepath.ToSlash(filepath.Join(recoveryRel, "corrupt-"+name))); err != nil {
+			return fmt.Errorf("move corrupt rocketcode session db aside: %w", err)
+		}
+	}
+
+	if err := root.Rename(filepath.ToSlash(filepath.Join(recoveryRel, "state.recovered.sqlite3")), filepath.ToSlash(filepath.Join(workDir, "state.sqlite3"))); err != nil {
+		return fmt.Errorf("install recovered rocketcode session db: %w", err)
+	}
+
+	return nil
 }
 
 func openExistingSessionDBReadOnly(ctx context.Context, workspace, workDir string) (*sql.DB, bool, error) {

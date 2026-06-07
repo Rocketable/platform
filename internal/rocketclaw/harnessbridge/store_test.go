@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"iter"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -339,6 +340,44 @@ func TestOpenSessionDBReadOnlyRejectsWrites(t *testing.T) {
 
 	_, err = db.ExecContext(context.Background(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES (?, ?, ?)`, "main", `{"version":1}`, time.Unix(1, 0).UTC().Format(time.RFC3339Nano))
 	require.Error(t, err)
+}
+
+func TestRecoverSessionDBIfCorruptRecoversIndexPageCorruption(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 command is required for startup recovery")
+	}
+
+	workspace := t.TempDir()
+	dbPath := sessionDBPath(workspace)
+	_, err := AppendSessionEntryID(context.Background(), dbPath, "main", testSessionEntry("user", "assistant"))
+	require.NoError(t, err)
+
+	db, err := openSessionDB(context.Background(), dbPath)
+	require.NoError(t, err)
+
+	var rootPage, pageSize int64
+	require.NoError(t, db.QueryRowContext(context.Background(), `SELECT rootpage FROM sqlite_schema WHERE name = 'session_entries_conversation_id_id'`).Scan(&rootPage))
+	require.NoError(t, db.QueryRowContext(context.Background(), `PRAGMA page_size`).Scan(&pageSize))
+	require.NoError(t, db.Close())
+
+	file, err := os.OpenFile(dbPath, os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = file.WriteAt(make([]byte, 128), (rootPage-1)*pageSize)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+
+	recovered, err := RecoverSessionDBIfCorrupt(context.Background(), workspace, ".rocketclaw")
+	require.NoError(t, err)
+	assert.True(t, recovered)
+
+	entries, err := ObserveSessionEntries(context.Background(), dbPath, "main", 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	db, err = openSessionDBReadOnly(context.Background(), dbPath)
+	require.NoError(t, err)
+	require.NoError(t, quickCheckSessionDB(context.Background(), db))
+	require.NoError(t, db.Close())
 }
 
 func TestListSessionsReportsCorruptEntry(t *testing.T) {
