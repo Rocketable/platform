@@ -28,7 +28,7 @@ func TestRunServeReportsAppStartupError(t *testing.T) {
 
 	err = runServe(nil)
 	require.ErrorContains(t, err, "run rocketclaw")
-	require.ErrorContains(t, err, "start rocketcode session service")
+	require.ErrorContains(t, err, "lock rocketcode session db")
 }
 
 func TestRunServeRejectsBadFlagBeforeConfigLoad(t *testing.T) {

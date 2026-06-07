@@ -275,6 +275,19 @@ func TestSQLiteSessionStoreRejectsEscapingDBSymlink(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestSessionInspectionMissingDBDoesNotCreateRuntimeDir(t *testing.T) {
+	workspace := t.TempDir()
+
+	summaries, err := ListSessions(context.Background(), workspace)
+	require.NoError(t, err)
+	assert.Empty(t, summaries)
+
+	entries, err := ObserveSessionEntries(context.Background(), sessionDBPath(workspace), "main", 0)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+	assert.NoDirExists(t, filepath.Join(workspace, ".rocketclaw"))
+}
+
 func TestSessionMaintenanceRejectsEscapingDBSymlink(t *testing.T) {
 	workspace := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "sessions.sqlite3")
@@ -312,6 +325,20 @@ func TestListSessionsMissingDBIsEmpty(t *testing.T) {
 	summaries, err := ListSessions(context.Background(), t.TempDir())
 	require.NoError(t, err)
 	assert.Empty(t, summaries)
+}
+
+func TestOpenSessionDBReadOnlyRejectsWrites(t *testing.T) {
+	workspace := t.TempDir()
+	dbPath := sessionDBPath(workspace)
+	_, err := AppendSessionEntryID(context.Background(), dbPath, "main", testSessionEntry("user", "assistant"))
+	require.NoError(t, err)
+
+	db, err := openSessionDBReadOnly(context.Background(), dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	_, err = db.ExecContext(context.Background(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES (?, ?, ?)`, "main", `{"version":1}`, time.Unix(1, 0).UTC().Format(time.RFC3339Nano))
+	require.Error(t, err)
 }
 
 func TestListSessionsReportsCorruptEntry(t *testing.T) {

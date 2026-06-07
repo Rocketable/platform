@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -505,15 +506,15 @@ func ObserveSessionEntries(ctx context.Context, dbPath, conversationID string, l
 	}
 
 	workspace := filepath.Dir(filepath.Dir(dbPath))
-
 	workDir := filepath.Base(filepath.Dir(dbPath))
-	if err := prepareSessionDBPathIn(workspace, workDir); err != nil {
+
+	db, ok, err := openExistingSessionDBReadOnly(ctx, workspace, workDir)
+	if err != nil {
 		return nil, err
 	}
 
-	db, err := openSessionDB(ctx, dbPath)
-	if err != nil {
-		return nil, err
+	if !ok {
+		return nil, nil
 	}
 
 	defer func() { _ = db.Close() }()
@@ -723,6 +724,24 @@ func openExistingSessionDB(ctx context.Context, workspace, workDir string) (*sql
 	return db, err == nil, err
 }
 
+func openExistingSessionDBReadOnly(ctx context.Context, workspace, workDir string) (*sql.DB, bool, error) {
+	root, err := os.OpenRoot(workspace)
+	if err != nil {
+		return nil, false, fmt.Errorf("open workspace root: %w", err)
+	}
+
+	defer func() { _ = root.Close() }()
+
+	ok, err := rootPathExistsNoSymlink(root, filepath.ToSlash(filepath.Join(workDir, "state.sqlite3")), "rocketcode session db")
+	if err != nil || !ok {
+		return nil, false, err
+	}
+
+	db, err := openSessionDBReadOnly(ctx, sessionDBPathIn(workspace, workDir))
+
+	return db, err == nil, err
+}
+
 func queryPragmaInt(ctx context.Context, db *sql.DB, name string) (int64, error) {
 	var value int64
 	if err := db.QueryRowContext(ctx, "PRAGMA "+name).Scan(&value); err != nil {
@@ -739,15 +758,13 @@ func ListSessions(ctx context.Context, workspace string) ([]SessionSummary, erro
 
 // ListSessionsIn returns summaries for all stored rocketcode sessions in workDir.
 func ListSessionsIn(ctx context.Context, workspace, workDir string) ([]SessionSummary, error) {
-	if err := prepareSessionDBPathIn(workspace, workDir); err != nil {
+	db, ok, err := openExistingSessionDBReadOnly(ctx, workspace, workDir)
+	if err != nil {
 		return nil, err
 	}
 
-	dbPath := sessionDBPathIn(workspace, workDir)
-
-	db, err := openSessionDB(ctx, dbPath)
-	if err != nil {
-		return nil, err
+	if !ok {
+		return nil, nil
 	}
 
 	defer func() { _ = db.Close() }()
@@ -1117,6 +1134,23 @@ func openSessionDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 			case <-time.After(50 * time.Millisecond):
 			}
 		}
+	}
+
+	return db, nil
+}
+
+func openSessionDBReadOnly(ctx context.Context, dbPath string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: dbPath, RawQuery: "mode=ro"}).String())
+	if err != nil {
+		return nil, fmt.Errorf("open rocketcode session db read-only: %w", err)
+	}
+
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	if _, err := db.ExecContext(ctx, `PRAGMA busy_timeout = 30000`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("initialize rocketcode session db read-only: %w", err)
 	}
 
 	return db, nil

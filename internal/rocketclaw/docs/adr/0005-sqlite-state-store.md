@@ -20,8 +20,9 @@ RocketClaw stores persistent RocketCode sessions, managed thread routing, respon
 ### Centralized Opening
 
 - RocketClaw state/session SQLite access must go through one opener in `internal/rocketclaw/harnessbridge`.
-- That opener is the only RocketClaw code path allowed to call `sql.Open("sqlite", ...)` for `<runtime-dir>/state.sqlite3`.
-- That opener is the only place SQLite PRAGMAs for `<runtime-dir>/state.sqlite3` are configured.
+- That opener may expose read-write and read-only modes, but it remains the only RocketClaw code path allowed to call `sql.Open("sqlite", ...)` for `<runtime-dir>/state.sqlite3`.
+- The read-only opener mode must use SQLite URI `mode=ro` and must not create the runtime directory, create the database file, set persistent PRAGMAs, initialize schema, run migrations, vacuum, checkpoint, or otherwise mutate the state store.
+- That opener is the only place SQLite PRAGMAs for `<runtime-dir>/state.sqlite3` are configured. Read-only mode may configure only connection-local read behavior such as `busy_timeout`.
 - That opener is the only place schema initialization and schema migrations for `<runtime-dir>/state.sqlite3` are applied.
 - All RocketClaw interfaces that inspect or mutate the state store, including the daemon runtime and `rocketclaw fc`, must use this opener or wrappers that delegate to it.
 
@@ -30,6 +31,13 @@ RocketClaw stores persistent RocketCode sessions, managed thread routing, respon
 - Each RocketClaw SQLite handle for `<runtime-dir>/state.sqlite3` must set `SetMaxOpenConns(1)`.
 - Each RocketClaw SQLite handle for `<runtime-dir>/state.sqlite3` must set `SetMaxIdleConns(1)`.
 - These process-local limits do not replace SQLite cross-process locking; they ensure each RocketClaw process has one database/sql connection competing for the file.
+
+### Daemon Ownership Lock
+
+- Daemon startup must acquire and hold a runtime-owned advisory lock for `<runtime-dir>/state.sqlite3` ownership before opening the state store.
+- A second daemon must fail startup while that lock is held.
+- `rocketclaw fc delete` and `rocketclaw fc vacuum` must refuse to run while that lock is held because they mutate or maintain the state store outside the daemon.
+- `rocketclaw fc list` and `rocketclaw fc observe` remain allowed while the daemon is running because they are inspection commands, and must use the read-only opener mode.
 
 ### Required PRAGMAs
 
@@ -79,3 +87,5 @@ The centralized opener must configure these PRAGMAs for `<runtime-dir>/state.sql
 - 2026-06-05: Initial accepted snapshot.
 - 2026-06-05: Added startup WAL checkpoint/truncation after retention pruning while keeping full `VACUUM` manual only.
 - 2026-06-05: Replaced manual-only full `VACUUM` policy with daemon-startup cleanup after retention pruning; inspection opens still must not vacuum implicitly.
+- 2026-06-07: Added daemon ownership locking and required `rocketclaw fc delete` / `rocketclaw fc vacuum` to refuse while the daemon holds the state-store lock.
+- 2026-06-07: Required read-only state-store opener mode with SQLite URI `mode=ro` for `rocketclaw fc list` and `rocketclaw fc observe`.

@@ -77,6 +77,13 @@ func runFCDeleteIn(workspace, workDir string, args []string, out io.Writer) erro
 
 	conversationID := strings.TrimSpace(remaining[0])
 
+	lock, err := acquireFCMutationLock(workspace, workDir, "delete")
+	if err != nil {
+		return fmt.Errorf("delete rocketcode session: %w", err)
+	}
+
+	defer func() { _ = lock.Close() }()
+
 	deleted, err := harnessbridge.DeleteSessionIn(context.Background(), workspace, workDir, conversationID)
 	if err != nil {
 		return fmt.Errorf("delete rocketcode session: %w", err)
@@ -120,12 +127,32 @@ func runFCVacuumIn(workspace, workDir string, args []string, out io.Writer) erro
 		return errors.New("vacuum does not accept arguments")
 	}
 
+	lock, err := acquireFCMutationLock(workspace, workDir, "vacuum")
+	if err != nil {
+		return fmt.Errorf("vacuum rocketcode sessions: %w", err)
+	}
+
+	defer func() { _ = lock.Close() }()
+
 	stats, err := harnessbridge.VacuumSessionsIn(context.Background(), workspace, workDir)
 	if err != nil {
 		return fmt.Errorf("vacuum rocketcode sessions: %w", err)
 	}
 
 	return writeVacuumStats(out, stats)
+}
+
+func acquireFCMutationLock(workspace, workDir, command string) (*harnessbridge.StateStoreLock, error) {
+	lock, err := harnessbridge.AcquireStateStoreLock(workspace, workDir)
+	if errors.Is(err, harnessbridge.ErrStateStoreLocked) {
+		return nil, fmt.Errorf("rocketclaw daemon is running; stop it before running fc %s: %w", command, err)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("lock rocketcode session db for fc %s: %w", command, err)
+	}
+
+	return lock, nil
 }
 
 func writeVacuumStats(out io.Writer, stats harnessbridge.VacuumStats) error {

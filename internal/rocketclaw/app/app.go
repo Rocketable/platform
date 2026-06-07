@@ -62,6 +62,21 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		externalMCP      *externalmcp.Server
 	)
 
+	stateStoreLock, err := harnessbridge.AcquireStateStoreLock(cfg.Workspace, cfg.WorkDirName())
+	if err != nil {
+		if errors.Is(err, harnessbridge.ErrStateStoreLocked) {
+			return fmt.Errorf("rocketclaw daemon already owns state store: %w", err)
+		}
+
+		return fmt.Errorf("lock rocketcode session db: %w", err)
+	}
+
+	defer func() {
+		if err := stateStoreLock.Close(); err != nil {
+			logger.Warn("release rocketcode session db lock", "error", err)
+		}
+	}()
+
 	rocketcodeSessions, err := harnessbridge.NewSessionServiceIn(cfg.Workspace, cfg.WorkDirName())
 	if err != nil {
 		return fmt.Errorf("start rocketcode session service: %w", err)

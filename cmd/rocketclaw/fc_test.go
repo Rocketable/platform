@@ -250,6 +250,17 @@ func TestRunFCDeleteMissingDBReportsZero(t *testing.T) {
 	assert.Contains(t, out.String(), "nothing to vacuum")
 }
 
+func TestRunFCDeleteRefusesWhileStateStoreLocked(t *testing.T) {
+	workspace := t.TempDir()
+	lock, err := harnessbridge.AcquireStateStoreLock(workspace, ".rocketclaw")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, lock.Close()) })
+
+	err = runFCDelete(workspace, []string{"main"}, io.Discard)
+	require.ErrorContains(t, err, "rocketclaw daemon is running; stop it before running fc delete")
+	require.ErrorIs(t, err, harnessbridge.ErrStateStoreLocked)
+}
+
 func TestRunFCDeleteNoVacuumMissingDBSkipsVacuumHint(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, runFCDelete(t.TempDir(), []string{"--no-vacuum", "main"}, &out))
@@ -261,6 +272,17 @@ func TestRunFCVacuumMissingDBIsNoop(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, runFCVacuum(t.TempDir(), nil, &out))
 	assert.Contains(t, out.String(), "nothing to vacuum")
+}
+
+func TestRunFCVacuumRefusesWhileStateStoreLocked(t *testing.T) {
+	workspace := t.TempDir()
+	lock, err := harnessbridge.AcquireStateStoreLock(workspace, ".rocketclaw")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, lock.Close()) })
+
+	err = runFCVacuum(workspace, nil, io.Discard)
+	require.ErrorContains(t, err, "rocketclaw daemon is running; stop it before running fc vacuum")
+	require.ErrorIs(t, err, harnessbridge.ErrStateStoreLocked)
 }
 
 func TestRunFCVacuumRejectsArguments(t *testing.T) {
