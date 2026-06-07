@@ -1204,6 +1204,10 @@ func loadRocketClawState(ctx context.Context, db stateStoreDB) (State, error) {
 		return State{}, fmt.Errorf("read persisted state: %w", err)
 	}
 
+	if strings.TrimSpace(raw) == "" {
+		return State{}, nil
+	}
+
 	var state State
 	if err := json.Unmarshal([]byte(raw), &state); err != nil {
 		return State{}, fmt.Errorf("parse persisted state: %w", err)

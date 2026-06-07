@@ -123,6 +123,23 @@ func TestSessionServiceAppliesPendingRestartNotificationsOnce(t *testing.T) {
 	require.Len(t, entries, 1)
 }
 
+func TestSessionServiceTreatsEmptyPersistedStateAsMissing(t *testing.T) {
+	store := newTestSessionService(t)
+
+	_, err := store.db.ExecContext(context.Background(), `INSERT INTO session_meta (key, value) VALUES (?, ?)`, "rocketclaw_state", "")
+	require.NoError(t, err)
+
+	state, err := store.Load()
+	require.NoError(t, err)
+	assert.Empty(t, state.Threads)
+
+	require.NoError(t, store.ApplyPendingRestartNotifications(context.Background()))
+
+	var raw string
+	require.NoError(t, store.db.QueryRowContext(context.Background(), `SELECT value FROM session_meta WHERE key = ?`, "rocketclaw_state").Scan(&raw))
+	assert.Equal(t, `{}`, raw)
+}
+
 func TestSQLiteSessionStoreLoadsLargeImageTurn(t *testing.T) {
 	service := newTestSessionService(t)
 	store := newSessionStore("main", service)
