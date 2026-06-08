@@ -19,7 +19,7 @@ func TestTaskTool(t *testing.T) {
 			"review": {Name: "review", Verbosity: "low", Prompt: "review carefully"},
 		}})
 
-		got, err := factory.runTask(context.Background(), taskParams{Description: "Review", Prompt: "check this", SubagentType: "review"})
+		got, err := factory.runTask(context.Background(), taskParams{Description: "Review", Prompt: "check this", SubagentType: "review"}, toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -35,7 +35,7 @@ func TestTaskTool(t *testing.T) {
 			"empty": {Name: "empty"},
 		}})
 
-		got, err := factory.runTask(context.Background(), taskParams{Description: "Empty", Prompt: "do it", SubagentType: "empty"})
+		got, err := factory.runTask(context.Background(), taskParams{Description: "Empty", Prompt: "do it", SubagentType: "empty"}, toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\n\n</task_result>", got)
@@ -44,7 +44,7 @@ func TestTaskTool(t *testing.T) {
 	t.Run("rejects unknown subagent", func(t *testing.T) {
 		factory := testTaskFactory(&mockResponsesAPI{}, Agents{Items: map[string]Agent{}})
 
-		_, err := factory.runTask(context.Background(), taskParams{SubagentType: "missing"})
+		_, err := factory.runTask(context.Background(), taskParams{SubagentType: "missing"}, toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
 
 		require.EqualError(t, err, "unknown agent type: missing is not a valid agent type")
 	})
@@ -55,7 +55,7 @@ func TestTaskTool(t *testing.T) {
 			"helper": {Name: "helper", Prompt: "help carefully"},
 		}})
 
-		got, err := factory.runTask(context.Background(), taskParams{Description: "Help", Prompt: "assist", SubagentType: "helper"})
+		got, err := factory.runTask(context.Background(), taskParams{Description: "Help", Prompt: "assist", SubagentType: "helper"}, toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -68,7 +68,7 @@ func TestTaskTool(t *testing.T) {
 		}})
 		factory.systemPrompt = "base prompt"
 
-		got, err := factory.runTask(context.Background(), taskParams{Description: "Review", Prompt: "check this", SubagentType: "review"})
+		got, err := factory.runTask(context.Background(), taskParams{Description: "Review", Prompt: "check this", SubagentType: "review"}, toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -95,7 +95,7 @@ func TestTaskTool(t *testing.T) {
 		factory.expandPromptShellCommands = PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: true, SkillPrompts: false}
 		factory.promptExpansion = env
 
-		got, err := factory.runTask(context.Background(), taskParams{Description: "Review", Prompt: "check this", SubagentType: "review"})
+		got, err := factory.runTask(context.Background(), taskParams{Description: "Review", Prompt: "check this", SubagentType: "review"}, toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -111,7 +111,7 @@ func TestTaskTool(t *testing.T) {
 		factory.systemPrompt = "base prompt"
 		factory.expandPromptShellCommands = PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: false, SkillPrompts: false}
 
-		got, err := factory.runTask(context.Background(), taskParams{Description: "Review", Prompt: "check this", SubagentType: "review"})
+		got, err := factory.runTask(context.Background(), taskParams{Description: "Review", Prompt: "check this", SubagentType: "review"}, toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -134,7 +134,7 @@ func TestTaskTool(t *testing.T) {
 		var group errgroup.Group
 
 		group.Go(func() error {
-			_, err := factory.runTask(ctx, taskParams{Description: "Slow", Prompt: "wait", SubagentType: "slow"})
+			_, err := factory.runTask(ctx, taskParams{Description: "Slow", Prompt: "wait", SubagentType: "slow"}, toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
 			return err
 		})
 
@@ -151,7 +151,7 @@ func TestTaskTool(t *testing.T) {
 		factory.diagnostics = true
 
 		output := make(chan ChatResponse, 10)
-		got, err := factory.runTask(context.Background(), taskParams{Description: "Review", Prompt: "check this", SubagentType: "review"}, output)
+		got, err := factory.runTask(context.Background(), taskParams{Description: "Review", Prompt: "check this", SubagentType: "review"}, toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, output)
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -172,12 +172,12 @@ func TestTaskTool(t *testing.T) {
 		}
 
 		require.Equal(t, []ChatResponse{
-			{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "delegation", Text: "started: Review"}},
-			{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "reasoning summary", Text: "thinking"}},
-			{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "assistant commentary", Text: "commentary"}},
-			{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "assistant message", Text: "first"}},
-			{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "assistant message", Text: "second"}},
-			{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "delegation", Text: "finished"}},
+			{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "delegation", Index: 1, Total: 1, Text: "started: Review"}},
+			{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "reasoning summary", Index: 1, Total: 1, Text: "thinking"}},
+			{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "assistant commentary", Index: 1, Total: 1, Text: "commentary"}},
+			{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "assistant message", Index: 1, Total: 1, Text: "first"}},
+			{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "assistant message", Index: 1, Total: 1, Text: "second"}},
+			{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "delegation", Index: 1, Total: 1, Text: "finished"}},
 		}, diagnostics)
 	})
 }
@@ -399,6 +399,47 @@ func TestLooperRunsTaskToolCall(t *testing.T) {
 	encoded := marshalJSON(t, mock.calls[2].Input.OfInputItemList)
 	require.Contains(t, encoded, "child answer")
 	require.Contains(t, encoded, `\u003ctask_result\u003e`)
+}
+
+func TestLooperNumbersSiblingTaskDiagnostics(t *testing.T) {
+	mock := &mockResponsesAPI{responses: []*responses.Response{
+		responseWithFunctionCalls("parent-tool", []responses.ResponseFunctionToolCall{
+			{ID: "tool-1", CallID: "call-1", Name: "task", Arguments: `{"description":"Review first","prompt":"look","subagent_type":"review"}`},
+			{ID: "tool-2", CallID: "call-2", Name: "task", Arguments: `{"description":"Review second","prompt":"look","subagent_type":"review"}`},
+		}),
+		responseWithMessage("child-first", "child one"),
+		responseWithMessage("child-second", "child two"),
+		responseWithMessage("parent-final", "parent done"),
+	}}
+	factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		"review": {Name: "review"},
+	}})
+	factory.diagnostics = true
+	looper := &looper{
+		Client:            mock,
+		Permissions:       PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "review", Action: permissionAllow}}}}},
+		Tools:             map[string]looperTool{"task": factory.taskTool()},
+		ParallelToolCalls: 1,
+	}
+	output := make(chan ChatResponse, 20)
+
+	input := make(chan PromptInput, 1)
+	input <- PromptInput{Role: PromptInputRoleUser, Text: "start", Responses: output}
+
+	close(input)
+
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	require.Equal(t, []ChatResponse{
+		{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "delegation", Index: 1, Total: 2, Text: "started: Review first"}},
+		{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "assistant message", Index: 1, Total: 2, Text: "child one"}},
+		{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "delegation", Index: 1, Total: 2, Text: "finished"}},
+		{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "delegation", Index: 2, Total: 2, Text: "started: Review second"}},
+		{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "assistant message", Index: 2, Total: 2, Text: "child two"}},
+		{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{Name: "review", Label: "delegation", Index: 2, Total: 2, Text: "finished"}},
+		{Kind: ChatResponseAssistantMessage, Text: "parent done"},
+	}, collectResponses(output))
 }
 
 func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {

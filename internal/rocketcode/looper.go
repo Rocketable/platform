@@ -35,11 +35,16 @@ type responsesAPI interface {
 type looperTool struct {
 	Definition         responses.FunctionToolParam
 	Hosted             responses.ToolUnionParam
-	Call               func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error)
-	CallReplay         func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, []responses.ResponseInputItemUnionParam, error)
+	Call               func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error)
+	CallReplay         func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, []responses.ResponseInputItemUnionParam, error)
 	Permission         string
 	Subjects           func(json.RawMessage) ([]string, error)
 	VisibilitySubjects []string
+}
+
+type toolCallMetadata struct {
+	subagentIndex int
+	subagentTotal int
 }
 
 // looper runs conversational turns against the configured model and tools.
@@ -118,6 +123,8 @@ type ToolDiagnostic struct {
 type SubagentDiagnostic struct {
 	Name     string              `json:"name"`
 	Label    string              `json:"label"`
+	Index    int                 `json:"index,omitempty"`
+	Total    int                 `json:"total,omitempty"`
 	Text     string              `json:"text,omitempty"`
 	Tool     *ToolDiagnostic     `json:"tool,omitempty"`
 	Subagent *SubagentDiagnostic `json:"subagent,omitempty"`
@@ -712,11 +719,13 @@ func (l *looper) dispatchToolCalls(
 	output chan<- ChatResponse,
 ) ([]dispatchedToolOutput, bool, error) {
 	type pendingToolCall struct {
-		name        string
-		callID      string
-		args        json.RawMessage
-		tool        looperTool
-		outputIndex int
+		name          string
+		callID        string
+		args          json.RawMessage
+		tool          looperTool
+		outputIndex   int
+		subagentIndex int
+		subagentTotal int
 	}
 
 	outputs := []dispatchedToolOutput{}
@@ -772,6 +781,26 @@ func (l *looper) dispatchToolCalls(
 		return nil, false, nil
 	}
 
+	taskTotal := 0
+
+	for i := range calls {
+		if calls[i].name == "task" {
+			taskTotal++
+		}
+	}
+
+	taskIndex := 0
+
+	for i := range calls {
+		if calls[i].name != "task" {
+			continue
+		}
+
+		taskIndex++
+		calls[i].subagentIndex = taskIndex
+		calls[i].subagentTotal = taskTotal
+	}
+
 	group, groupCtx := errgroup.WithContext(ctx)
 	if l.ParallelToolCalls > 0 {
 		group.SetLimit(l.ParallelToolCalls)
@@ -784,10 +813,13 @@ func (l *looper) dispatchToolCalls(
 				replayInput []responses.ResponseInputItemUnionParam
 				err         error
 			)
+
+			metadata := toolCallMetadata{subagentIndex: call.subagentIndex, subagentTotal: call.subagentTotal}
+
 			if call.tool.CallReplay != nil {
-				result, replayInput, err = call.tool.CallReplay(groupCtx, call.args, output)
+				result, replayInput, err = call.tool.CallReplay(groupCtx, call.args, output, metadata)
 			} else {
-				result, err = call.tool.Call(groupCtx, call.args, output)
+				result, err = call.tool.Call(groupCtx, call.args, output, metadata)
 			}
 
 			if err != nil {

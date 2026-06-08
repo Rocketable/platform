@@ -1077,6 +1077,10 @@ func formatToolCallDetails(diagnostic *rocketcode.ToolDiagnostic) string {
 
 func formatSubagentDiagnostic(diagnostic *rocketcode.SubagentDiagnostic) string {
 	parts := []string{"subagent"}
+	if diagnostic.Total > 0 {
+		parts = append(parts, fmt.Sprintf("(%d/%d)", diagnostic.Index, diagnostic.Total))
+	}
+
 	if name := strings.TrimSpace(diagnostic.Name); name != "" {
 		parts = append(parts, name)
 	}

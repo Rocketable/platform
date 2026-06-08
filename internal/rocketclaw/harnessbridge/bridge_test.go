@@ -2110,7 +2110,7 @@ func TestRocketCodeThinkingTextHandlesSubagentToolDiagnostics(t *testing.T) {
 	call := rocketcode.ToolDiagnostic{Phase: "call", Name: "bash", Arguments: []byte(`{"command":"cat /tmp/file","description":"Read the file"}`)}
 	result := rocketcode.ToolDiagnostic{Phase: "result", Name: "bash", Result: "file contents"}
 
-	assert.Equal(t, "subagent hally-google-workspace assistant tool: bash: Read the file", rocketcodeThinkingText(subagentToolResponse(&call)))
+	assert.Equal(t, "subagent (1/20) hally-google-workspace assistant tool: bash: Read the file", rocketcodeThinkingText(subagentToolResponse(&call)))
 	assert.Empty(t, rocketcodeThinkingText(subagentToolResponse(&result)))
 }
 
@@ -2153,12 +2153,14 @@ func TestRocketCodeThinkingTextKeepsExplicitSubagentProviderText(t *testing.T) {
 		Subagent: &rocketcode.SubagentDiagnostic{
 			Name:     "alitu-scenario-manager",
 			Label:    "assistant tool",
+			Index:    1,
+			Total:    1,
 			Text:     "provider retrying",
 			Provider: &rocketcode.ProviderDiagnostic{Phase: "retry", Attempt: 2},
 		},
 	}
 
-	assert.Equal(t, "subagent alitu-scenario-manager assistant tool: provider retrying", rocketcodeThinkingText(response))
+	assert.Equal(t, "subagent (1/1) alitu-scenario-manager assistant tool: provider retrying", rocketcodeThinkingText(response))
 }
 
 func toolResponse(tool *rocketcode.ToolDiagnostic) rocketcode.ChatResponse {
@@ -2174,7 +2176,7 @@ func subagentToolResponse(tool *rocketcode.ToolDiagnostic) rocketcode.ChatRespon
 	var response rocketcode.ChatResponse
 
 	response.Kind = rocketcode.ChatResponseAssistantTool
-	response.Subagent = &rocketcode.SubagentDiagnostic{Name: "hally-google-workspace", Label: "assistant tool", Tool: tool}
+	response.Subagent = &rocketcode.SubagentDiagnostic{Name: "hally-google-workspace", Label: "assistant tool", Index: 1, Total: 20, Tool: tool}
 
 	return response
 }

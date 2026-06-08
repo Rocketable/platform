@@ -149,7 +149,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 
 				return []string{sfs.readPermissionSubject(readToolPath(params))}, nil
 			},
-			Call: func(_ context.Context, raw json.RawMessage, _ chan<- ChatResponse) (ToolResult, error) {
+			Call: func(_ context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 				params, err := decodeToolParams[readToolParams](raw)
 				if err != nil {
 					return ToolResult{}, err
@@ -181,7 +181,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 
 				return subjects, nil
 			},
-			Call: func(_ context.Context, raw json.RawMessage, _ chan<- ChatResponse) (ToolResult, error) {
+			Call: func(_ context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 				params, err := decodeToolParams[applyPatchToolParams](raw)
 				if err != nil {
 					return ToolResult{}, err
@@ -204,7 +204,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 
 				return []string{params.Pattern}, nil
 			},
-			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse) (ToolResult, error) {
+			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 				params, err := decodeToolParams[globToolParams](raw)
 				if err != nil {
 					return ToolResult{}, err
@@ -228,7 +228,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 
 				return []string{params.Pattern}, nil
 			},
-			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse) (ToolResult, error) {
+			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 				params, err := decodeToolParams[grepToolParams](raw)
 				if err != nil {
 					return ToolResult{}, err
@@ -252,7 +252,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 
 				return []string{params.URL}, nil
 			},
-			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse) (ToolResult, error) {
+			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 				params, err := decodeToolParams[webFetchToolParams](raw)
 				if err != nil {
 					return ToolResult{}, err
@@ -277,7 +277,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 
 				return bashPermissionSubjects(params.Command), nil
 			},
-			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse) (ToolResult, error) {
+			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 				params, err := decodeToolParams[bashParams](raw)
 				if err != nil {
 					return ToolResult{}, err
@@ -316,7 +316,7 @@ func (f *toolFactory) findSkillsTool() looperTool {
 		Subjects: func(json.RawMessage) ([]string, error) {
 			return f.availableSkillSubjects(), nil
 		},
-		Call: func(_ context.Context, raw json.RawMessage, _ chan<- ChatResponse) (ToolResult, error) {
+		Call: func(_ context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 			input, err := decodeToolParams[params](raw)
 			if err != nil {
 				return ToolResult{}, err
@@ -358,7 +358,7 @@ func (f *toolFactory) skillTool() looperTool {
 
 			return []string{input.Name}, nil
 		},
-		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse) (ToolResult, error) {
+		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 			_, output, err := f.renderSkillToolOutput(ctx, raw, false)
 			if err != nil {
 				return ToolResult{}, err
@@ -366,7 +366,7 @@ func (f *toolFactory) skillTool() looperTool {
 
 			return textToolResult(output), nil
 		},
-		CallReplay: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse) (ToolResult, []responses.ResponseInputItemUnionParam, error) {
+		CallReplay: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, []responses.ResponseInputItemUnionParam, error) {
 			input, output, err := f.renderSkillToolOutput(ctx, raw, f.experimentalStrongerSkills)
 			if err != nil {
 				return ToolResult{}, nil, err

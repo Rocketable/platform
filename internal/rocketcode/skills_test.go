@@ -248,7 +248,7 @@ func TestFindSkillsTool(t *testing.T) {
 		factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, promptExpansion: testPromptExpansionEnvironment(t), agent: agentWithSkillPermission(permissionAllow), agents: Agents{Items: nil}, skills: skills, baseTools: nil}
 		tool := factory.findSkillsTool()
 
-		got, err := tool.Call(context.Background(), json.RawMessage(`{"query":"git"}`), nil)
+		got, err := tool.Call(context.Background(), json.RawMessage(`{"query":"git"}`), nil, toolCallMetadata{})
 
 		require.NoError(t, err)
 		require.Contains(t, got.Output, "- **git-review**: Review git changes")
@@ -261,7 +261,7 @@ func TestFindSkillsTool(t *testing.T) {
 		)}
 		tool := factory.findSkillsTool()
 
-		got, err := tool.Call(context.Background(), json.RawMessage(`{"query":"git"}`), nil)
+		got, err := tool.Call(context.Background(), json.RawMessage(`{"query":"git"}`), nil, toolCallMetadata{})
 
 		require.NoError(t, err)
 		require.Equal(t, "No matching skills found.", got.Output)
@@ -385,7 +385,7 @@ metadata:
 
 	t.Run("renders skill content with sampled file list", func(t *testing.T) {
 		factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, promptExpansion: testPromptExpansionEnvironment(t), agent: nil, agents: Agents{Items: nil}, skills: loaded, baseTools: nil}
-		result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"git-release"}`), nil)
+		result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"git-release"}`), nil, toolCallMetadata{})
 		require.NoError(t, err)
 
 		got := result.Output
@@ -407,7 +407,7 @@ metadata:
 
 	t.Run("experimental stronger skills returns a short tool result and developer replay input", func(t *testing.T) {
 		factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, experimentalStrongerSkills: true, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, promptExpansion: testPromptExpansionEnvironment(t), agent: nil, agents: Agents{Items: nil}, skills: loaded, baseTools: nil}
-		result, replayInput, err := factory.skillTool().CallReplay(context.Background(), json.RawMessage(`{"name":"git-release"}`), nil)
+		result, replayInput, err := factory.skillTool().CallReplay(context.Background(), json.RawMessage(`{"name":"git-release"}`), nil, toolCallMetadata{})
 		require.NoError(t, err)
 
 		require.Equal(t, "skill git-release loaded", result.Output)
@@ -423,7 +423,7 @@ metadata:
 
 	t.Run("returns an error for unknown skills", func(t *testing.T) {
 		factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, promptExpansion: testPromptExpansionEnvironment(t), agent: nil, agents: Agents{Items: nil}, skills: loaded, baseTools: nil}
-		_, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"missing-skill"}`), nil)
+		_, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"missing-skill"}`), nil, toolCallMetadata{})
 		require.EqualError(t, err, `skill "missing-skill" not found. Available skills: git-release`)
 	})
 }
@@ -442,7 +442,7 @@ Use for docs.
 	}, "/virtual/skills").Skills
 
 	factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, promptExpansion: testPromptExpansionEnvironment(t), agent: nil, agents: Agents{Items: nil}, skills: loaded, baseTools: nil}
-	result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"docs-helper"}`), nil)
+	result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"docs-helper"}`), nil, toolCallMetadata{})
 	require.NoError(t, err)
 
 	got := result.Output
@@ -454,7 +454,7 @@ func TestSkillsRenderRequiresLoadedFS(t *testing.T) {
 	skills := Skills{Root: "/virtual/skills", Items: map[string]Skill{"docs-helper": {Name: "docs-helper", Description: "Write docs", Location: "docs-helper/SKILL.md", Content: "Use for docs.", Metadata: nil}}, Dirs: []string{"docs-helper"}, fsys: nil}
 	factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, promptExpansion: testPromptExpansionEnvironment(t), agent: nil, agents: Agents{Items: nil}, skills: skills, baseTools: nil}
 
-	_, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"docs-helper"}`), nil)
+	_, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"docs-helper"}`), nil, toolCallMetadata{})
 
 	require.EqualError(t, err, "skills filesystem is not available")
 }
@@ -480,7 +480,7 @@ Generated: !`+"`"+`cat MEMORY.md`+"`"+`
 
 	t.Run("leaves shell commands literal by default", func(t *testing.T) {
 		factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, promptExpansion: testPromptExpansionEnvironment(t), agent: nil, agents: Agents{Items: nil}, skills: loaded, baseTools: nil}
-		result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill"}`), nil)
+		result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill"}`), nil, toolCallMetadata{})
 
 		require.NoError(t, err)
 
@@ -495,7 +495,7 @@ Generated: !`+"`"+`cat MEMORY.md`+"`"+`
 		factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: true}, promptExpansion: env, agent: nil, agents: Agents{Items: nil}, skills: loaded, baseTools: nil}
 		tool := factory.skillTool()
 
-		got, err := tool.Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill"}`), nil)
+		got, err := tool.Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill"}`), nil, toolCallMetadata{})
 
 		require.NoError(t, err)
 		require.Contains(t, got.Output, "Generated: dynamic-output")

@@ -468,7 +468,7 @@ func TestLooperDispatchesToolCalls(t *testing.T) {
 		Tools: map[string]looperTool{
 			"first": {
 				Definition: responses.FunctionToolParam{Name: "first", Parameters: map[string]any{"type": "object"}, Strict: openai.Bool(true)},
-				CallReplay: func(_ context.Context, args json.RawMessage, _ chan<- ChatResponse) (ToolResult, []responses.ResponseInputItemUnionParam, error) {
+				CallReplay: func(_ context.Context, args json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, []responses.ResponseInputItemUnionParam, error) {
 					callsMu.Lock()
 					defer callsMu.Unlock()
 
@@ -480,7 +480,7 @@ func TestLooperDispatchesToolCalls(t *testing.T) {
 			},
 			"second": {
 				Definition: responses.FunctionToolParam{Name: "second", Parameters: map[string]any{"type": "object"}, Strict: openai.Bool(true)},
-				Call: func(_ context.Context, args json.RawMessage, _ chan<- ChatResponse) (ToolResult, error) {
+				Call: func(_ context.Context, args json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 					callsMu.Lock()
 					defer callsMu.Unlock()
 
@@ -570,7 +570,7 @@ func TestLooperReportsToolErrorsInBand(t *testing.T) {
 	t.Run("tool call error", func(t *testing.T) {
 		run(t, map[string]looperTool{"fail": {
 			Definition: responses.FunctionToolParam{Name: "fail", Parameters: map[string]any{"type": "object"}, Strict: openai.Bool(true)},
-			Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+			Call: func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
 				return ToolResult{}, errors.New("boom")
 			},
 		}}, responses.ResponseFunctionToolCall{ID: "tool-1", CallID: "call-1", Name: "fail", Arguments: `{}`}, "tool call failed: fail: boom")
@@ -582,7 +582,7 @@ func TestLooperReportsToolErrorsInBand(t *testing.T) {
 			Subjects: func(json.RawMessage) ([]string, error) {
 				return nil, errors.New("bad subject")
 			},
-			Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+			Call: func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
 				t.Fatal("tool with subject error should not execute")
 				return ToolResult{}, nil
 			},
@@ -607,7 +607,7 @@ func TestLooperReportsToolErrorsInBand(t *testing.T) {
 
 				return []string{params.URL}, nil
 			},
-			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse) (ToolResult, error) {
+			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 				params, err := decodeToolParams[webFetchToolParams](raw)
 				if err != nil {
 					return ToolResult{}, err
@@ -627,7 +627,7 @@ func TestLooperKeepsContextCancellationFatalForToolCalls(t *testing.T) {
 		Permissions: PermissionSet{Buckets: []PermissionBucket{{Name: "slow", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}},
 		Tools: map[string]looperTool{"slow": {
 			Definition: responses.FunctionToolParam{Name: "slow", Parameters: map[string]any{"type": "object"}, Strict: openai.Bool(true)},
-			Call: func(ctx context.Context, _ json.RawMessage, _ chan<- ChatResponse) (ToolResult, error) {
+			Call: func(ctx context.Context, _ json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 				<-ctx.Done()
 
 				return ToolResult{}, ctx.Err()
@@ -723,7 +723,7 @@ func TestLooperSendsToolOutputAttachments(t *testing.T) {
 		Permissions: PermissionSet{Buckets: []PermissionBucket{{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}},
 		Tools: map[string]looperTool{"read": {
 			Definition: responses.FunctionToolParam{Name: "read", Parameters: map[string]any{"type": "object"}, Strict: openai.Bool(true)},
-			Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+			Call: func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
 				return ToolResult{Output: "Image read successfully", Attachments: []Attachment{{MIME: "image/png", Filename: "image.png", URL: "data:image/png;base64,aW1hZ2U="}}}, nil
 			},
 		}},
@@ -765,7 +765,7 @@ func TestLooperDeniesToolCallsInBand(t *testing.T) {
 
 					return bashPermissionSubjects(params.Command), nil
 				},
-				Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+				Call: func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
 					t.Fatal("denied tool should not execute")
 					return ToolResult{}, nil
 				},
@@ -808,7 +808,7 @@ func TestLooperAppliesWebFetchURLPermissions(t *testing.T) {
 
 					return []string{params.URL}, nil
 				},
-				Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+				Call: func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
 					t.Fatal("denied webfetch should not execute")
 					return ToolResult{}, nil
 				},
@@ -850,7 +850,7 @@ func TestLooperAppliesWebFetchURLPermissions(t *testing.T) {
 
 					return []string{params.URL}, nil
 				},
-				Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+				Call: func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
 					called = true
 					return textToolResult("fetched"), nil
 				},
@@ -899,7 +899,7 @@ func TestLooperGatesSkillByName(t *testing.T) {
 
 					return []string{params.Name}, nil
 				},
-				Call: func(_ context.Context, raw json.RawMessage, _ chan<- ChatResponse) (ToolResult, error) {
+				Call: func(_ context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 					var params struct {
 						Name string `json:"name"`
 					}
@@ -940,7 +940,7 @@ func TestLooperEmitsToolDiagnosticsWhenEnabled(t *testing.T) {
 		Tools: map[string]looperTool{
 			"skill": {
 				Definition: responses.FunctionToolParam{Name: "skill", Parameters: map[string]any{"type": "object"}, Strict: openai.Bool(true)},
-				Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+				Call: func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
 					return textToolResult("loaded current-time"), nil
 				},
 			},
@@ -1021,7 +1021,7 @@ func TestLooperTrapsDoomLoopInBand(t *testing.T) {
 		Tools: map[string]looperTool{
 			"repeat": {
 				Definition: responses.FunctionToolParam{Name: "repeat", Parameters: map[string]any{"type": "object"}, Strict: openai.Bool(true)},
-				Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+				Call: func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
 					callsMu.Lock()
 					defer callsMu.Unlock()
 

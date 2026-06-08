@@ -38,6 +38,7 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - Slack stacked messages must preserve prompt order and avoid duplicated deliveries.
 - Slack social-mode-gated channel thread replies that contain Slack-resolved pings to another user, bot, channel, broadcast target, or user group must be skipped silently unless the same message also contains the RocketClaw bot mention. Skipped replies must not create placeholders, reactions, connector replies, attachment processing, or thread-router submissions. Raw unresolved `@word` text and non-pinging Slack markup such as dates do not trigger this skip. Emergency safe words are checked before this skip.
 - Every normal Slack-visible assistant turn with a Slack target reserves its Slack reply location up front by posting a thinking placeholder (`_Thinking..._`) followed by an answer placeholder (`\u200B`). The answer placeholder is later updated for a short final answer or deleted before chunked final replies. Intentionally standalone progress/post-text messages are not assistant-turn final answers and do not consume the reserved answer placeholder.
+- Slack-visible RocketCode subagent progress diagnostics include a stable per-dispatch ordinal immediately after `subagent`, formatted as `(n/total)`, including `(1/1)` when a model response dispatches exactly one subagent task.
 - Discord and browser voice transcriptions enter the same shared flow as other main-session input.
 - External MCP conversations are isolated by external conversation ID; omitted ID starts a new isolated conversation.
 
@@ -105,3 +106,4 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - 2026-06-04: Added silent Slack social-mode channel-thread reply suppression for messages pinging others unless the RocketClaw bot is also mentioned.
 - 2026-06-07: Specified that restart and signal-triggered shutdown share the same graceful drain sequence and configured timeout.
 - 2026-06-08: Specified that inherited main-session thread seeding reuses the latest available compaction point before compacting selected history, while preserving full-history fallback when no compaction exists.
+- 2026-06-08: Specified Slack-visible subagent progress diagnostic ordinals for identifying concurrent duplicate subagent task calls.

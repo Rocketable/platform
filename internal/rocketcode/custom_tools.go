@@ -102,7 +102,7 @@ func customLooperTool(tool *Tool) (looperTool, error) {
 			Parameters:  parameters,
 			Strict:      openai.Bool(true),
 		},
-		Call: func(ctx context.Context, raw json.RawMessage, output chan<- ChatResponse) (ToolResult, error) {
+		Call: func(ctx context.Context, raw json.RawMessage, output chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 			return tool.Call(ctx, raw, output)
 		},
 		Permission:         permission,

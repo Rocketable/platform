@@ -39,13 +39,13 @@ func (f *toolFactory) taskTool() looperTool {
 
 			return []string{params.SubagentType}, nil
 		},
-		Call: func(ctx context.Context, raw json.RawMessage, output chan<- ChatResponse) (ToolResult, error) {
+		Call: func(ctx context.Context, raw json.RawMessage, output chan<- ChatResponse, metadata toolCallMetadata) (ToolResult, error) {
 			var params taskParams
 			if err := json.Unmarshal(raw, &params); err != nil {
 				return ToolResult{}, fmt.Errorf("parse task params: %w", err)
 			}
 
-			result, err := f.runTask(ctx, params, output)
+			result, err := f.runTask(ctx, params, metadata, output)
 			if err != nil {
 				return ToolResult{}, err
 			}
@@ -150,7 +150,7 @@ func (f *toolFactory) availableSubagentsDescription() string {
 	return strings.Join(lines, "\n")
 }
 
-func (f *toolFactory) runTask(ctx context.Context, params taskParams, parentOutput ...chan<- ChatResponse) (string, error) {
+func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata toolCallMetadata, parentOutput ...chan<- ChatResponse) (string, error) {
 	agent, ok := f.agents.Items[params.SubagentType]
 	if !ok {
 		return "", fmt.Errorf("unknown agent type: %s is not a valid agent type", params.SubagentType)
@@ -192,16 +192,18 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, parentOutp
 	}
 
 	if f.diagnostics {
-		emitSubagentDiagnostic(outputSink, SubagentDiagnostic{Name: agent.Name, Label: "delegation", Text: "started: " + params.Description})
+		emitSubagentDiagnostic(outputSink, &SubagentDiagnostic{Name: agent.Name, Label: "delegation", Index: metadata.subagentIndex, Total: metadata.subagentTotal, Text: "started: " + params.Description})
 	}
 
 	group.Go(func() error {
 		for item := range output {
 			items = append(items, item)
 			if f.diagnostics {
-				emitSubagentDiagnostic(outputSink, SubagentDiagnostic{
+				emitSubagentDiagnostic(outputSink, &SubagentDiagnostic{
 					Name:     agent.Name,
 					Label:    subagentResponseLabel(item.Kind),
+					Index:    metadata.subagentIndex,
+					Total:    metadata.subagentTotal,
 					Text:     item.Text,
 					Tool:     item.Tool,
 					Subagent: item.Subagent,
@@ -225,7 +227,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, parentOutp
 	}
 
 	if f.diagnostics {
-		emitSubagentDiagnostic(outputSink, SubagentDiagnostic{Name: agent.Name, Label: "delegation", Text: "finished"})
+		emitSubagentDiagnostic(outputSink, &SubagentDiagnostic{Name: agent.Name, Label: "delegation", Index: metadata.subagentIndex, Total: metadata.subagentTotal, Text: "finished"})
 	}
 
 	last := ""
@@ -239,8 +241,8 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, parentOutp
 	return strings.Join([]string{"<task_result>", last, "</task_result>"}, "\n"), nil
 }
 
-func emitSubagentDiagnostic(output chan<- ChatResponse, diagnostic SubagentDiagnostic) {
-	emitDiagnosticChatResponse(output, ChatResponse{Kind: ChatResponseAssistantTool, Subagent: &diagnostic})
+func emitSubagentDiagnostic(output chan<- ChatResponse, diagnostic *SubagentDiagnostic) {
+	emitDiagnosticChatResponse(output, ChatResponse{Kind: ChatResponseAssistantTool, Subagent: diagnostic})
 }
 
 func subagentResponseLabel(kind string) string {

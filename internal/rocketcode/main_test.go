@@ -174,7 +174,7 @@ func TestNewCopiesShellEnv(t *testing.T) {
 	runtimeLoop, ok := loop.(*looper)
 	require.True(t, ok)
 
-	result, err := runtimeLoop.Tools["bash"].Call(context.Background(), json.RawMessage(`{"command":"printf %s \"$ROCKETCLAW_CONVERSATION_ID\"","timeout":0,"workdir":"","description":"env mutation"}`), nil)
+	result, err := runtimeLoop.Tools["bash"].Call(context.Background(), json.RawMessage(`{"command":"printf %s \"$ROCKETCLAW_CONVERSATION_ID\"","timeout":0,"workdir":"","description":"env mutation"}`), nil, toolCallMetadata{subagentIndex: 0, subagentTotal: 0})
 
 	require.NoError(t, err)
 	require.Equal(t, "first", result.Output)
@@ -222,7 +222,7 @@ func TestNewSandboxedBashConfigAppliesToBashTool(t *testing.T) {
 	runtimeLoop, ok := loop.(*looper)
 	require.True(t, ok)
 
-	result, err := runtimeLoop.Tools["bash"].Call(context.Background(), json.RawMessage(`{"command":"true","timeout":0,"workdir":"","description":"sandbox"}`), nil)
+	result, err := runtimeLoop.Tools["bash"].Call(context.Background(), json.RawMessage(`{"command":"true","timeout":0,"workdir":"","description":"sandbox"}`), nil, toolCallMetadata{subagentIndex: 0, subagentTotal: 0})
 
 	require.NoError(t, err)
 	require.Contains(t, result.Output, "sandboxed bash:")
