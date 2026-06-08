@@ -617,6 +617,32 @@ func TestCodexStreamingResponseRequiresCompletionEvent(t *testing.T) {
 	require.ErrorContains(t, err, "missing completion event")
 }
 
+func TestCodexStreamingResponseReportsFailedEvent(t *testing.T) {
+	body := `data: {"type":"response.failed","response":{"error":{"code":"rate_limit_exceeded","message":"Rate limit reached. Please try again in 11.054s."}}}`
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
+
+	got, err := codexStreamingResponse(resp)
+	if got != nil {
+		defer func() { _ = got.Body.Close() }()
+	}
+
+	require.Nil(t, got)
+	require.ErrorContains(t, err, "codex stream response failed: rate_limit_exceeded: Rate limit reached. Please try again in 11.054s.")
+}
+
+func TestCodexStreamingResponseReportsIncompleteEvent(t *testing.T) {
+	body := `data: {"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"}}}`
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
+
+	got, err := codexStreamingResponse(resp)
+	if got != nil {
+		defer func() { _ = got.Body.Close() }()
+	}
+
+	require.Nil(t, got)
+	require.ErrorContains(t, err, "codex stream response incomplete: max_output_tokens")
+}
+
 func TestCodexStreamingResponseReportsMalformedEvents(t *testing.T) {
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader("data: {not-json}\n")), Header: make(http.Header)}
 

@@ -830,6 +830,8 @@ func codexStreamingResponse(resp *http.Response) (*http.Response, error) {
 	_ = resp.Body.Close()
 	outputs := make([]json.RawMessage, 0)
 
+	var errResponse error
+
 	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "data: ") {
@@ -849,6 +851,58 @@ func codexStreamingResponse(resp *http.Response) (*http.Response, error) {
 
 		if event.Type == "response.output_item.done" && len(event.Item) > 0 {
 			outputs = append(outputs, event.Item)
+			continue
+		}
+
+		if event.Type == "response.failed" {
+			message := "response.failed event received"
+
+			if len(event.Response) > 0 {
+				var response struct {
+					Error struct {
+						Code    string `json:"code"`
+						Message string `json:"message"`
+					} `json:"error"`
+				}
+
+				if err := json.Unmarshal(event.Response, &response); err != nil {
+					return nil, fmt.Errorf("parse Codex failed response: %w", err)
+				}
+
+				if text := strings.TrimSpace(response.Error.Message); text != "" {
+					message = text
+					if code := strings.TrimSpace(response.Error.Code); code != "" {
+						message = code + ": " + message
+					}
+				}
+			}
+
+			errResponse = fmt.Errorf("codex stream response failed: %s", message)
+
+			continue
+		}
+
+		if event.Type == "response.incomplete" {
+			reason := "unknown"
+
+			if len(event.Response) > 0 {
+				var response struct {
+					IncompleteDetails struct {
+						Reason string `json:"reason"`
+					} `json:"incomplete_details"`
+				}
+
+				if err := json.Unmarshal(event.Response, &response); err != nil {
+					return nil, fmt.Errorf("parse Codex incomplete response: %w", err)
+				}
+
+				if text := strings.TrimSpace(response.IncompleteDetails.Reason); text != "" {
+					reason = text
+				}
+			}
+
+			errResponse = fmt.Errorf("codex stream response incomplete: %s", reason)
+
 			continue
 		}
 
@@ -880,6 +934,10 @@ func codexStreamingResponse(resp *http.Response) (*http.Response, error) {
 		resp.Header.Set("Content-Type", "application/json")
 
 		return resp, nil
+	}
+
+	if errResponse != nil {
+		return nil, errResponse
 	}
 
 	return nil, errors.New("codex stream response missing completion event")
