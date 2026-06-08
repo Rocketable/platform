@@ -46,6 +46,7 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - Main conversation output targets are controlled by app wiring, not by individual input sources.
 - The primary text output target is configured as either Slack DM or Discord text, never both.
 - Slack response-rooted threads remain isolated from main until summarized.
+- Slack response-rooted threads and explicitly pre-seeded managed threads seed inherited main-session context from the latest available compaction point when one exists; if no compaction point exists, they may compact the full selected main-session history.
 - Discord text managed threads remain isolated from main until summarized, matching Slack managed-thread semantics where Discord guild threads can express them.
 - Slack thread replies use persisted checkpoints when available; older responses without checkpoints receive an explanatory thread reply instead of silently losing context.
 - Discord text replies to checkpointed assistant messages can start response-rooted guild threads with inherited context. Discord DMs do not provide thread semantics.
@@ -103,3 +104,4 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - 2026-06-02: Added Slack and Discord Text parity and channel-target authorization for repeat-reaction one-off cron reruns.
 - 2026-06-04: Added silent Slack social-mode channel-thread reply suppression for messages pinging others unless the RocketClaw bot is also mentioned.
 - 2026-06-07: Specified that restart and signal-triggered shutdown share the same graceful drain sequence and configured timeout.
+- 2026-06-08: Specified that inherited main-session thread seeding reuses the latest available compaction point before compacting selected history, while preserving full-history fallback when no compaction exists.

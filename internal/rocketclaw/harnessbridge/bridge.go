@@ -518,6 +518,14 @@ func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.Ses
 		input = append(input, items...)
 	}
 
+	for i := len(input) - 1; i >= 0; i-- {
+		if input[i].OfCompaction != nil {
+			input = input[i:]
+
+			break
+		}
+	}
+
 	client, err := b.openAIClient()
 	if err != nil {
 		return nil, fmt.Errorf("prepare OpenAI client: %w", err)

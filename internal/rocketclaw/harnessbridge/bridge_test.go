@@ -1671,6 +1671,61 @@ func TestSeedThreadFromMainCompactsMainSessionOnce(t *testing.T) {
 	assert.Equal(t, "sealed", params[0].OfCompaction.EncryptedContent)
 }
 
+func TestSeedThreadFromMainReusesLatestCompaction(t *testing.T) {
+	workspace := t.TempDir()
+	service, err := NewSessionService(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
+
+	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Model: "gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "old question"}, replayInputMessage{role: "assistant", text: "old answer"})})
+	require.NoError(t, err)
+	compactionReplay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfCompaction: &responses.ResponseCompactionItemParam{ID: openai.String("cmp_main"), EncryptedContent: "sealed-main", Type: "compaction"}}})
+	require.NoError(t, err)
+	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(2, 0).UTC(), Model: "gpt-5.5", ReplayInput: compactionReplay})
+	require.NoError(t, err)
+	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(3, 0).UTC(), Model: "gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "new question"}, replayInputMessage{role: "assistant", text: "new answer"})})
+	require.NoError(t, err)
+
+	var requestBody struct {
+		Input []struct {
+			Type             string `json:"type"`
+			Role             string `json:"role"`
+			Content          string `json:"content"`
+			EncryptedContent string `json:"encrypted_content"`
+		} `json:"input"`
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses/compact" {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	bridge := new(Bridge)
+	bridge.runtime = &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
+	bridge.config = Config{ConversationID: SlackThreadConversationID("D123", "111.222"), Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}
+	bridge.log = slog.New(slog.DiscardHandler)
+
+	require.NoError(t, bridge.SeedThreadFromMain(context.Background()))
+	require.Len(t, requestBody.Input, 3)
+	assert.Equal(t, "compaction", requestBody.Input[0].Type)
+	assert.Equal(t, "sealed-main", requestBody.Input[0].EncryptedContent)
+	assert.Equal(t, "new question", requestBody.Input[1].Content)
+	assert.Equal(t, "new answer", requestBody.Input[2].Content)
+}
+
 func TestSeedThreadFromMainReturnsWhenMainSessionEmpty(t *testing.T) {
 	service := newTestSessionService(t)
 	conversationID := SlackThreadConversationID("D123", "111.222")
@@ -1774,6 +1829,69 @@ func TestSeedResponseThreadCompactsMainCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "response_thread_seed", entries[0].Entry.Type)
+	params, err := rocketcode.ReplayInputToParams(entries[0].Entry.ReplayInput)
+	require.NoError(t, err)
+	require.Len(t, params, 2)
+	assert.Equal(t, "sealed", params[0].OfCompaction.EncryptedContent)
+	assert.Equal(t, "thread root answer", params[1].OfMessage.Content.OfString.Value)
+}
+
+func TestSeedResponseThreadReusesLatestCompaction(t *testing.T) {
+	workspace := t.TempDir()
+	service, err := NewSessionService(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
+
+	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Model: "gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "old question"}, replayInputMessage{role: "assistant", text: "old answer"})})
+	require.NoError(t, err)
+	compactionReplay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfCompaction: &responses.ResponseCompactionItemParam{ID: openai.String("cmp_response"), EncryptedContent: "sealed-response", Type: "compaction"}}})
+	require.NoError(t, err)
+	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(2, 0).UTC(), Model: "gpt-5.5", ReplayInput: compactionReplay})
+	require.NoError(t, err)
+	id, err := service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(3, 0).UTC(), ResponseID: "resp-1", Model: "gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "checkpoint question"}, replayInputMessage{role: "assistant", text: "checkpoint answer"})})
+	require.NoError(t, err)
+
+	var requestBody struct {
+		Input []struct {
+			Type             string `json:"type"`
+			Role             string `json:"role"`
+			Content          string `json:"content"`
+			EncryptedContent string `json:"encrypted_content"`
+		} `json:"input"`
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses/compact" {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	bridge := new(Bridge)
+	bridge.runtime = &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
+	bridge.config = Config{ConversationID: SlackThreadConversationID("D123", "111.222"), Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}
+	bridge.log = slog.New(slog.DiscardHandler)
+
+	require.NoError(t, bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{ConversationID: events.MainConversationID(), SessionEntryID: id, ResponseID: "resp-1", Model: "gpt-5.5", AssistantText: "thread root answer"}, "seed-key"))
+	require.Len(t, requestBody.Input, 2)
+	assert.Equal(t, "compaction", requestBody.Input[0].Type)
+	assert.Equal(t, "sealed-response", requestBody.Input[0].EncryptedContent)
+	assert.Equal(t, "checkpoint question", requestBody.Input[1].Content)
+
+	entries, err := service.ObserveEntries(context.Background(), bridge.config.ConversationID, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
 	params, err := rocketcode.ReplayInputToParams(entries[0].Entry.ReplayInput)
 	require.NoError(t, err)
 	require.Len(t, params, 2)
