@@ -29,7 +29,7 @@ type OverlayInfo struct {
 	Spec, URL, Ref, ClonePath string
 }
 
-//go:embed AGENTS.md main-update-cortex.sh main-split-markdown-files.sh all:.rocketclaw all:agents all:cron
+//go:embed AGENTS.md main-update-cortex.sh all:.rocketclaw all:agents all:cron
 var payload embed.FS
 
 // SyncInWithOverlays materializes embedded setup files, configured git overlays, and local overlays into workDir.
