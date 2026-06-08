@@ -31,6 +31,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/oai"
+	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -757,6 +758,8 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		return runResult{}, fmt.Errorf("open workspace agent and skills: %w", err)
 	}
 
+	appendOverlayPromptToAgent(agents, b.config.Agent, b.runtime)
+
 	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(b.runtime.WorkDirName(), ".rocketcode", "shell-outputs")), 0o755); err != nil {
 		return runResult{}, fmt.Errorf("create rocketcode shell output dir: %w", err)
 	}
@@ -1160,6 +1163,62 @@ func (b *Bridge) rocketcodeConfig(shellOutputDir string, shellEnv map[string]str
 	tools = append(tools, customTools...)
 
 	return rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, CustomTools: tools, ShellEnv: shellEnv}
+}
+
+func appendOverlayPromptToAgent(agents rocketcode.Agents, agentName string, cfg *config.Config) {
+	section := overlayPromptSection(cfg, skel.OverlayInfos(cfg.Workspace, cfg.WorkDirName(), cfg.Overlays))
+	if section == "" {
+		return
+	}
+
+	agent, ok := agents.Items[agentName]
+	if !ok {
+		return
+	}
+
+	agent.Prompt = strings.TrimSpace(agent.Prompt + "\n\n" + section)
+	agents.Items[agentName] = agent
+}
+
+func overlayPromptSection(cfg *config.Config, overlays []skel.OverlayInfo) string {
+	if len(overlays) == 0 {
+		return ""
+	}
+
+	lines := []string{
+		"## Runtime Overlays",
+		"",
+		"Overlays are configured git repositories whose agents/, skills/, cron/, and scripts/ trees are merged into this RocketClaw runtime at startup. They let shared runtime assets be maintained outside this workspace. Effective runtime assets are built from embedded assets first, then configured overlays in selected runtime config order, then local workspace overlays last.",
+		"",
+		"Configured overlays, in application order:",
+	}
+
+	for _, info := range overlays {
+		ref := info.Ref
+		if ref == "" {
+			ref = "HEAD"
+		}
+
+		lines = append(lines,
+			"- "+info.Spec,
+			"  Git URL: "+info.URL,
+			"  Ref: "+ref,
+			"  Clone path: "+info.ClonePath,
+		)
+	}
+
+	lines = append(lines,
+		"",
+		"To update an overlay:",
+		"- Edit the listed clone path when the requested change belongs to that overlay.",
+		"- Commit and push overlay repository changes before restart.",
+		"- Uncommitted, untracked, or unconfigured files under "+filepath.Join(cfg.WorkDirName(), "overlays")+" may be discarded on startup/restart.",
+		"- Do not treat generated effective files under "+filepath.Join(cfg.WorkDirName(), "agents")+", "+filepath.Join(cfg.WorkDirName(), "skills")+", "+filepath.Join(cfg.WorkDirName(), "cron")+", or "+filepath.Join(cfg.WorkDirName(), "scripts")+" as source of truth.",
+		"- Restart RocketClaw after overlay source/config changes so overlays are fetched and merged again.",
+		"- Local workspace agents/, skills/, cron/, and scripts/ override configured overlays.",
+	)
+
+	return strings.Join(lines, "\n")
 }
 
 func loadRocketCodeDefinitions(root *os.Root, workspace string, mode toolMode) (rocketcode.Agents, rocketcode.Skills, error) {

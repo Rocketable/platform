@@ -323,7 +323,7 @@ func TestHandleInboundInternalizeCompletesResponseWithRocketCodeError(t *testing
 }
 
 func TestRocketCodeConfigEnablesDiagnosticsForThinkingUpdates(t *testing.T) {
-	bridge := new(Bridge)
+	bridge := &Bridge{runtime: new(config.Config)}
 	cfg := bridge.rocketcodeConfig(t.TempDir(), nil, rocketcode.Tool{Name: attachFilesToolName})
 
 	toolNames := make([]string, 0, len(cfg.CustomTools))
@@ -339,6 +339,22 @@ func TestRocketCodeConfigEnablesDiagnosticsForThinkingUpdates(t *testing.T) {
 	assert.Contains(t, toolNames, resetScheduledMessagesToolName)
 	assert.Contains(t, toolNames, attachFilesToolName)
 	assert.Equal(t, map[string]string{"A": "B"}, bridge.rocketcodeConfig(t.TempDir(), map[string]string{"A": "B"}).ShellEnv)
+}
+
+func TestAppendOverlayPromptToAgentIncludesConfiguredOverlayPrompt(t *testing.T) {
+	workspace := t.TempDir()
+	agents := rocketcode.Agents{Items: map[string]rocketcode.Agent{"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "base prompt", Location: "", Permission: rocketcode.PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}}}
+
+	appendOverlayPromptToAgent(agents, "main", &config.Config{Workspace: workspace, Overlays: []string{"github.com/rocketable/overlay@main"}})
+
+	prompt := agents.Items["main"].Prompt
+	assert.Contains(t, prompt, "base prompt\n\n## Runtime Overlays")
+	assert.Contains(t, prompt, "Configured overlays, in application order:")
+	assert.Contains(t, prompt, "- github.com/rocketable/overlay@main")
+	assert.Contains(t, prompt, "Git URL: https://github.com/rocketable/overlay")
+	assert.Contains(t, prompt, "Ref: main")
+	assert.Contains(t, prompt, filepath.Join(workspace, ".rocketclaw", "overlays", "github.com-rocketable-overlay-main"))
+	assert.Contains(t, prompt, "Uncommitted, untracked, or unconfigured files")
 }
 
 func TestNewConversationKeepsInjectedSessionService(t *testing.T) {

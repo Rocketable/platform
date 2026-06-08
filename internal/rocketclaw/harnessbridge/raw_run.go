@@ -116,6 +116,8 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 		return "", fmt.Errorf("open workspace agent and skills: %w", err)
 	}
 
+	appendOverlayPromptToAgent(agents, agent, cfg)
+
 	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(cfg.WorkDirName(), ".rocketcode")), 0o755); err != nil {
 		return "", fmt.Errorf("create rocketcode cron shell output parent dir: %w", err)
 	}

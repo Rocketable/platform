@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -20,7 +21,13 @@ const (
 	skillsRoot    = "skills"
 	workspaceCron = "cron"
 	scriptsRoot   = "scripts"
+	overlaysRoot  = "overlays"
 )
+
+// OverlayInfo describes one configured git overlay materialized by SyncInWithOverlays.
+type OverlayInfo struct {
+	Spec, URL, Ref, ClonePath string
+}
 
 //go:embed AGENTS.md main-update-cortex.sh main-split-markdown-files.sh all:.rocketclaw all:agents all:cron
 var payload embed.FS
@@ -91,9 +98,14 @@ func SyncInWithOverlays(workspace, workDir string, overlays []string, logger *sl
 		}
 	}
 
-	for _, overlay := range overlays {
+	overlayInfos := OverlayInfos(workspace, workDir, overlays)
+	if err := reconcileGitOverlays(target, overlayInfos, logger); err != nil {
+		return fmt.Errorf("reconcile configured rocketclaw overlays: %w", err)
+	}
+
+	for _, overlay := range overlayInfos {
 		if err := applyGitOverlay(target, overlay, logger); err != nil {
-			return fmt.Errorf("apply configured rocketclaw overlay %q: %w", overlay, err)
+			return fmt.Errorf("apply configured rocketclaw overlay %q: %w", overlay.Spec, err)
 		}
 	}
 
@@ -271,45 +283,110 @@ func overlayIn(workspace, workDir string, logger *slog.Logger) error {
 	return nil
 }
 
-func applyGitOverlay(target, spec string, logger *slog.Logger) error {
-	url, ref := parseGitOverlaySpec(spec)
-	if url == "" {
+// OverlayInfos returns normalized configured overlay clone metadata in config order.
+func OverlayInfos(workspace, workDir string, overlays []string) []OverlayInfo {
+	infos := make([]OverlayInfo, 0, len(overlays))
+	for _, spec := range overlays {
+		spec = strings.TrimSpace(spec)
+
+		url, ref := parseGitOverlaySpec(spec)
+		if url == "" {
+			continue
+		}
+
+		infos = append(infos, OverlayInfo{Spec: spec, URL: url, Ref: ref, ClonePath: filepath.Join(workspace, workDir, overlaysRoot, gitOverlaySlug(url, ref))})
+	}
+
+	return infos
+}
+
+func reconcileGitOverlays(target string, overlays []OverlayInfo, logger *slog.Logger) error {
+	overlayRoot := filepath.Join(target, overlaysRoot)
+
+	info, err := os.Stat(overlayRoot)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if len(overlays) == 0 {
+				return nil
+			}
+
+			if err := os.MkdirAll(overlayRoot, 0o755); err != nil {
+				return fmt.Errorf("create configured overlay clone directory %s: %w", overlayRoot, err)
+			}
+		} else {
+			return fmt.Errorf("stat configured overlay clone directory %s: %w", overlayRoot, err)
+		}
+	}
+
+	if info != nil && !info.IsDir() {
+		return fmt.Errorf("configured overlay clone path is not a directory: %s", overlayRoot)
+	}
+
+	active := map[string]struct{}{}
+	for _, overlay := range overlays {
+		active[filepath.Base(overlay.ClonePath)] = struct{}{}
+	}
+
+	entries, err := os.ReadDir(overlayRoot)
+	if err != nil {
+		return fmt.Errorf("read configured overlay clone directory %s: %w", overlayRoot, err)
+	}
+
+	for _, entry := range entries {
+		if _, ok := active[entry.Name()]; ok {
+			continue
+		}
+
+		path := filepath.Join(overlayRoot, entry.Name())
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("remove stale configured overlay clone %s: %w", path, err)
+		}
+
+		logger.Debug("removed stale configured overlay clone", "path", path)
+	}
+
+	return nil
+}
+
+func applyGitOverlay(target string, overlay OverlayInfo, logger *slog.Logger) error {
+	if overlay.URL == "" {
 		return errors.New("overlay repository is required")
 	}
 
-	dir, err := os.MkdirTemp("", "rocketclaw-overlay-*")
-	if err != nil {
-		return fmt.Errorf("create overlay temp dir: %w", err)
+	if err := os.RemoveAll(overlay.ClonePath); err != nil {
+		return fmt.Errorf("clean configured overlay clone %s: %w", overlay.ClonePath, err)
 	}
 
-	defer func() { _ = os.RemoveAll(dir) }()
+	if err := os.MkdirAll(overlay.ClonePath, 0o755); err != nil {
+		return fmt.Errorf("create configured overlay clone %s: %w", overlay.ClonePath, err)
+	}
 
 	for _, args := range [][]string{
 		{"init"},
-		{"remote", "add", "origin", url},
+		{"remote", "add", "origin", overlay.URL},
 		{"sparse-checkout", "init", "--cone"},
 		{"sparse-checkout", "set", agentsRoot, skillsRoot, workspaceCron, scriptsRoot},
 	} {
-		if err := runGit(dir, args...); err != nil {
+		if err := runGit(overlay.ClonePath, args...); err != nil {
 			return err
 		}
 	}
 
-	fetchRef := ref
+	fetchRef := overlay.Ref
 	if fetchRef == "" {
 		fetchRef = "HEAD"
 	}
 
-	if err := runGit(dir, "fetch", "--depth=1", "--filter=blob:none", "origin", fetchRef); err != nil {
+	if err := runGit(overlay.ClonePath, "fetch", "--depth=1", "--filter=blob:none", "origin", fetchRef); err != nil {
 		return err
 	}
 
-	if err := runGit(dir, "checkout", "--detach", "FETCH_HEAD"); err != nil {
+	if err := runGit(overlay.ClonePath, "checkout", "--detach", "FETCH_HEAD"); err != nil {
 		return err
 	}
 
 	for _, root := range [...]string{agentsRoot, skillsRoot, workspaceCron, scriptsRoot} {
-		if _, err := os.Stat(filepath.Join(dir, root)); err != nil {
+		if _, err := os.Stat(filepath.Join(overlay.ClonePath, root)); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
@@ -317,7 +394,7 @@ func applyGitOverlay(target, spec string, logger *slog.Logger) error {
 			return fmt.Errorf("stat overlay directory %s: %w", root, err)
 		}
 
-		if err := syncFSFiltered(os.DirFS(dir), root, filepath.Join(target, root), "applying configured rocketclaw overlay", logger, true, true, nil); err != nil {
+		if err := syncFSFiltered(os.DirFS(overlay.ClonePath), root, filepath.Join(target, root), "applying configured rocketclaw overlay", logger, true, true, nil); err != nil {
 			return err
 		}
 	}
@@ -351,6 +428,40 @@ func normalizeGitOverlayURL(url string) string {
 	return url
 }
 
+func gitOverlaySlug(url, ref string) string {
+	value := strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(url, "https://"), "ssh://"), ".git")
+	if ref != "" {
+		value += "-" + ref
+	}
+
+	var slug strings.Builder
+
+	lastHyphen := false
+
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '.' || r == '_' {
+			slug.WriteRune(r)
+
+			lastHyphen = false
+
+			continue
+		}
+
+		if !lastHyphen {
+			slug.WriteByte('-')
+
+			lastHyphen = true
+		}
+	}
+
+	result := strings.Trim(slug.String(), "-")
+	if result == "" {
+		return "overlay"
+	}
+
+	return result
+}
+
 func runGit(dir string, args ...string) error {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -369,6 +480,7 @@ func resetTarget(target string, logger *slog.Logger) error {
 	preservedTargetEntries := map[string]struct{}{
 		".rocketcode":   {},
 		"auth.json":     {},
+		"overlays":      {},
 		"state.sqlite3": {},
 		"web-ui.crt":    {},
 		"web-ui.key":    {},

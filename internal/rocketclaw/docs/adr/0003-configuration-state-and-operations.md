@@ -26,6 +26,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 | `agents/`, `skills/`, `scripts/` | User-overridable workspace overlays for agent, skill, and script assets. Changes require restart to affect running RocketCode definitions. Local workspace overlays are applied after embedded assets and configured git overlays. Startup exposes effective runtime script files from `<runtime-dir>/scripts/` as symlinks under workspace `scripts/`, preserving existing regular workspace script files. |
 | `.rocketclaw/` | Generated runtime directory. Setup and startup may create or maintain it. |
 | `.femtoclaw/` | Legacy generated runtime directory used only when `femtoclaw.json` is selected. |
+| `<runtime-dir>/overlays/` | Managed parent directory for configured git overlay clones. Startup preserves the parent directory, reconciles its children against the current `overlays` config entries, removes unconfigured clone directories, and discards uncommitted or untracked changes inside active configured clone directories before fetching and applying them. |
 | `<runtime-dir>/state.sqlite3` | Persists RocketCode sessions, Slack/Discord text thread routing, response checkpoints, external MCP sessions, scheduled messages with recurrence metadata, restart notifications, and seed markers. Opened and initialized through the centralized SQLite state-store opener defined by ADR 0005. |
 | `<runtime-dir>/auth.json` | Workspace-local ChatGPT OAuth credential for RocketCode Codex requests. Written by `rocketclaw oai login` with `0600` permissions. It is runtime state, not setup payload, and STT/TTS do not read it. RocketClaw owns this credential file and must not read, import, or write Codex CLI credentials such as `~/.codex/auth.json`. |
 | `<runtime-dir>/.gitignore` | Setup-generated runtime-directory ignore file that ignores `auth.json` so workspace-local ChatGPT OAuth material is not accidentally added to source control. |
@@ -53,11 +54,14 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - Private GitHub overlays should use an explicit authenticated clone URL, usually the copied SSH form with an optional ref suffix such as `git@github.com:Rocketable/alitu-cs.git@main`.
 - Omitted refs use the remote default branch HEAD. Explicit refs select that branch, tag, or commit.
 - Startup fetches overlays with the `git` command-line client, materializes only `agents/`, `skills/`, `cron/`, and `scripts/`, and fails startup when a configured overlay cannot be fetched or applied.
+- Startup stores configured overlay clones under `<runtime-dir>/overlays/<human-readable-slug>/`. Slugs are human-readable and may collide; the `overlays` config order is the only application order, and filesystem listing order or clone directory names never determine merge order.
+- Startup reconciles `<runtime-dir>/overlays/` against the current config before applying overlays: unconfigured child directories are removed, active configured clone directories are force-cleaned, uncommitted and untracked changes are discarded, and the configured ref is fetched and checked out/reset.
 - Effective runtime assets are built in this order: embedded RocketClaw assets, configured git overlays in config order, then local workspace `agents/`, `skills/`, `cron/`, and `scripts/`.
 - Runtime asset files copied from configured git overlays and local workspace overlays preserve the source executable bit: executable source files materialize as `0755` and non-executable source files materialize as `0644`. File extensions do not make overlay files executable.
 - Embedded setup files are seeded separately from overlays; embedded `.sh` setup files materialize as executable setup helpers.
 - After effective runtime assets are built, startup removes workspace `scripts/` symlinks that resolve into `.rocketclaw/` or `.femtoclaw/`, then recreates symlinks for files from the selected `<runtime-dir>/scripts/`. Regular workspace script files and symlinks to other locations are preserved.
 - Git overlay changes require restart; RocketClaw does not hot-reload overlay repositories.
+- RocketCode runtime prompts include an overlay section when configured overlays are active. The section explains overlays, enumerates configured overlays in application order with original spec, normalized git URL, ref, and clone path, and instructs agents to update overlay clone paths, commit and push overlay changes before restart, and treat generated effective runtime files as non-source-of-truth outputs.
 
 ### Setup And Operation
 
@@ -111,3 +115,4 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-06: Documented workspace-local ChatGPT OAuth state, runtime ignore protection for `auth.json`, and Codex-style `401` auth recovery.
 - 2026-06-06: Specified RocketClaw-owned ChatGPT OAuth credentials, no Codex CLI auth-file sharing, rotating refresh-token ownership, terminal refresh re-login guidance, and 120s access-token refresh skew.
 - 2026-06-07: Added `graceful_shutdown_timeout` to runtime config, shared by the restart and signal-triggered shutdown sequence, defaulting to the existing `5m` drain budget.
+- 2026-06-08: Specified managed persistent configured overlay clones under `<runtime-dir>/overlays/`, startup reconciliation and force-clean behavior for active and removed overlay clones, config-order-only overlay application, and RocketCode prompt disclosure of active overlay sources and update instructions.
