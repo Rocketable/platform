@@ -3165,7 +3165,7 @@ func TestHandleMessageEventRoutesManagedSocialThreadReply(t *testing.T) {
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
 	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
 
-	ev := newSlackMessageEvent("171234.9999", "171234.5678", "follow up")
+	ev := newSlackMessageEvent("171234.9999", "171234.5678", "refer to <#C111|triage>")
 	ev.Channel = "C123"
 	connector.handleMessageEvent(context.Background(), ev)
 
@@ -3173,7 +3173,7 @@ func TestHandleMessageEventRoutesManagedSocialThreadReply(t *testing.T) {
 	require.Len(t, replies, 1)
 	assert.Equal(t, "C123", replies[0].channelID)
 	assert.Equal(t, "171234.5678", replies[0].threadTS)
-	assert.Equal(t, "follow up", replies[0].inbound.Text)
+	assert.Equal(t, "refer to <#C111|triage>", replies[0].inbound.Text)
 	require.Len(t, posted, 2)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
@@ -3323,7 +3323,7 @@ func TestSlackSocialThreadReplyPingsAway(t *testing.T) {
 		{name: "user", text: "<@U111> please check", want: true},
 		{name: "aliased user", text: "<@U111|Ada> please check", want: true},
 		{name: "other bot counts as user", text: "<@B111> please check", want: true},
-		{name: "channel", text: "<#C111|triage> please check", want: true},
+		{name: "channel reference", text: "<#C111|triage> please check", want: false},
 		{name: "broadcast", text: "<!here> please check", want: true},
 		{name: "user group", text: "<!subteam^S111|ops> please check", want: true},
 		{name: "bot mention overrides user", text: "<@U111> <@U999> please check", want: false},

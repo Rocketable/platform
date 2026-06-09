@@ -1722,7 +1722,7 @@ func (c *Connector) slackSocialThreadReplyPingsAway(text string) bool {
 			return false
 		}
 
-		pingedOther = pingedOther || strings.HasPrefix(token, "@") || strings.HasPrefix(token, "#") || token == "!channel" || token == "!here" || token == "!everyone" || strings.HasPrefix(token, "!subteam^")
+		pingedOther = pingedOther || strings.HasPrefix(token, "@") || token == "!channel" || token == "!here" || token == "!everyone" || strings.HasPrefix(token, "!subteam^")
 	}
 }
 
