@@ -29,7 +29,15 @@ Normative product behavior lives in `docs/adr/`. These ADR-shaped specs are curr
 
 Before changing code or tests that can affect product behavior, read the relevant ADRs. If you have not read the relevant ADRs, you are not allowed to edit behavior-affecting code or tests. This includes feature work, bug fixes, refactors, simplification, deletion, dependency updates, config/default changes, message flow, prompt framing, persistence, routing, tools, permissions, scheduled/cron behavior, connector behavior, and RocketCode embedding. If unsure whether the work can affect product behavior, assume it can and read the ADRs.
 
-Intentional feature behavior changes MUST start with an ADR update, including an append-only changelog entry, then explicit human approval for the spec change, then implementation. Only the human partner can approve spec meaning changes. Approval must be explicit after the proposed ADR meaning change is visible; do not infer approval from silence, task phrasing, tests, current code, or prior discussion.
+Intentional feature behavior changes MUST start with an ADR update, including exact replacement text and append-only changelog entries, so the human partner can inspect the concrete file diff. After applying ADR edits, stop before implementation and ask this exact question: "Do you explicitly approve these ADR meaning changes?" Only a human answer that clearly approves the ADR meaning change itself counts, such as "I approve these ADR changes" or "approved ADR wording." Generic implementation approval such as "proceed", "go ahead", "sounds good", or approval of a plan does not count unless it explicitly mentions ADR/spec approval. Implementation code and behavior-affecting tests may begin only after the edited ADR diff is visible and the human partner explicitly approves the ADR meaning changes. If the human partner requests ADR edits for review, apply only the ADR edits and then stop for approval; do not proceed to implementation.
+
+ADR gate checklist for intentional behavior changes:
+1. Read relevant source.
+2. Read relevant ADRs.
+3. Apply exact ADR edits only, including changelog entries, so the diff is visible.
+4. Ask: "Do you explicitly approve these ADR meaning changes?"
+5. Wait for ADR-specific approval; generic "proceed" is insufficient.
+6. Then implement code/tests.
 
 Bug fixes must read the relevant ADR first and change implementation to match the ADR. If the bug reveals behavior worth preserving that is absent from the ADRs, ask whether to promote it into an ADR before treating it as normative.
 
