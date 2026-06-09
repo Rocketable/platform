@@ -104,7 +104,7 @@ func TestSplitSlackResponseTextBoundaries(t *testing.T) {
 
 func TestSlackThinkingMessageQuotesAndBoundsText(t *testing.T) {
 	assert.Empty(t, slackThinkingMessage(" \n\t "))
-	assert.Equal(t, slackImmediatePlaceholder+"\n\n> alpha\n> beta", slackThinkingMessage(" alpha\nbeta "))
+	assert.Equal(t, slackImmediatePlaceholder+"\n\n> beta\n> alpha", slackThinkingMessage(" alpha\nbeta "))
 
 	got := slackThinkingMessage(strings.Repeat("x", slackBlockTextLimit+20))
 	assert.True(t, strings.HasPrefix(got, slackImmediatePlaceholder+"\n\n> "))
@@ -1840,7 +1840,7 @@ func TestSendResponseStreamsThinkingInPlaceThenReplacesItWithFinalAnswer(t *test
 	require.Len(t, updated, 2)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
-	assert.Equal(t, "_Thinking..._\n\n> first thought\n> second thought", updated[0].Get("text"))
+	assert.Equal(t, "_Thinking..._\n\n> second thought\n> first thought", updated[0].Get("text"))
 	assert.Equal(t, updated[0].Get("text"), thinkingBlockText(t, updated[0]))
 	assert.Equal(t, "Final answer", updated[1].Get("text"))
 	assert.Equal(t, "111.222", removed.Get("timestamp"))

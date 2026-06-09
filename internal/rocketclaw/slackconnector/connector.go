@@ -2,7 +2,6 @@
 package slackconnector
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -386,12 +385,13 @@ func slackThinkingMessage(thinking string) string {
 
 	var quoted strings.Builder
 
+	lines := strings.Split(body, "\n")
+
 	quoted.WriteString(prefix)
 
-	scanner := bufio.NewScanner(strings.NewReader(body))
-	for scanner.Scan() {
+	for i := len(lines) - 1; i >= 0; i-- {
 		quoted.WriteString("> ")
-		quoted.WriteString(scanner.Text())
+		quoted.WriteString(lines[i])
 		quoted.WriteByte('\n')
 	}
 
