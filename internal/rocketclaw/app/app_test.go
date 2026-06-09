@@ -402,7 +402,7 @@ func TestRunContextCancellationWaitsForActiveMainBridge(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: openai.URL}, GracefulShutdownTimeoutDuration: 2 * time.Second}
+	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: openai.URL}}
 	cfg.MCPExternal.Enabled = true
 	cfg.MCPExternal.ListenAddr = listenAddr
 

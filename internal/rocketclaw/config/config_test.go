@@ -97,7 +97,6 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	assert.Equal(t, "api_key", cfg.OpenAI.RocketCodeAuth)
 	assert.True(t, filepath.IsAbs(cfg.Workspace))
 	assert.Zero(t, cfg.MinimumWaitAfterHumanInteractionDuration)
-	assert.Equal(t, DefaultGracefulShutdownTimeout, cfg.GracefulShutdownTimeoutDuration)
 }
 
 func TestLoadNormalizesOverlays(t *testing.T) {
@@ -468,35 +467,6 @@ func TestValidateMinimumWaitAfterHumanInteraction(t *testing.T) {
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, cfg.MinimumWaitAfterHumanInteractionDuration)
-		})
-	}
-}
-
-func TestValidateGracefulShutdownTimeout(t *testing.T) {
-	for _, tt := range []struct {
-		name    string
-		raw     string
-		want    time.Duration
-		wantErr string
-	}{
-		{name: "blank", raw: " \t\n ", want: DefaultGracefulShutdownTimeout},
-		{name: "valid duration", raw: " 30m ", want: 30 * time.Minute},
-		{name: "zero duration", raw: "0s", want: 0},
-		{name: "invalid duration", raw: "soon", wantErr: "parse graceful_shutdown_timeout"},
-		{name: "negative duration", raw: "-1s", wantErr: "graceful_shutdown_timeout must be zero or greater"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := validConfig()
-			cfg.GracefulShutdownTimeout = tt.raw
-
-			err := cfg.Validate()
-			if tt.wantErr != "" {
-				require.ErrorContains(t, err, tt.wantErr)
-				return
-			}
-
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, cfg.GracefulShutdownTimeoutDuration)
 		})
 	}
 }

@@ -48,11 +48,6 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	gracefulShutdownTimeout := cfg.GracefulShutdownTimeoutDuration
-	if gracefulShutdownTimeout == 0 && strings.TrimSpace(cfg.GracefulShutdownTimeout) == "" {
-		gracefulShutdownTimeout = config.DefaultGracefulShutdownTimeout
-	}
-
 	bus := events.New(events.Config{MinimumWaitAfterHumanInteraction: cfg.MinimumWaitAfterHumanInteractionDuration})
 	defer bus.Close()
 
@@ -155,22 +150,11 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 			go func() {
 				defer close(shutdownDone)
 
-				shutdownCtx, stop := context.WithTimeout(context.Background(), gracefulShutdownTimeout)
-				defer stop()
-
-				for _, sink := range stops {
-					if err := sink.stop(shutdownCtx); err != nil {
-						logger.Warn("stop connector", "connector", sink.name, "error", err)
-					}
-				}
-
-				threadBridges.StopAccepting()
+				shutdownCtx := context.Background()
 
 				if err := cronjobs.Stop(shutdownCtx); err != nil {
 					logger.Warn("graceful shutdown stopped waiting for cronjobs idle", "error", err)
 				}
-
-				bus.StopInbound()
 
 				if err := bus.WaitInboundDequeued(shutdownCtx); err != nil {
 					logger.Warn("graceful shutdown stopped waiting for inbound queue handoff", "error", err)
@@ -184,14 +168,35 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 					logger.Warn("graceful shutdown stopped waiting for thread bridges idle", "error", err)
 				}
 
+				bus.StopInbound()
+				threadBridges.StopAccepting()
+
+				if err := bus.WaitInboundDequeued(shutdownCtx); err != nil {
+					logger.Warn("graceful shutdown stopped waiting for inbound queue handoff", "error", err)
+				}
+
+				if err := mainBridge.WaitIdle(shutdownCtx); err != nil {
+					logger.Warn("graceful shutdown stopped waiting for bridge idle", "error", err)
+				}
+
+				if err := threadBridges.WaitIdle(shutdownCtx); err != nil {
+					logger.Warn("graceful shutdown stopped waiting for thread bridges idle", "error", err)
+				}
+
+				_ = threadBridges.Stop()
+				_ = mainBridge.Stop()
+
 				if err := bus.WaitOutboundIdle(shutdownCtx); err != nil {
 					logger.Warn("graceful shutdown stopped waiting for outbound drain", "error", err)
 				}
 
-				cancel()
+				for _, sink := range stops {
+					if err := sink.stop(shutdownCtx); err != nil {
+						logger.Warn("stop connector", "connector", sink.name, "error", err)
+					}
+				}
 
-				_ = threadBridges.Stop()
-				_ = mainBridge.Stop()
+				cancel()
 			}()
 		})
 
