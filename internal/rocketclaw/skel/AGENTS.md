@@ -18,7 +18,7 @@ For everything you do, after you have defined in precise words what you are goin
 - `goals/**/*.md` - these are goal files; files that consolidates what the human wants you to do (first manually, and eventually autonomously)
 
 ## Managing File Sizes
-- Ensure you have a cronjob capable of managing `memories/`, `context/`, and `goals/` files sizes to be about 450~500 lines each; use `main-split-markdown-files.sh` to assist you with keeping the file sizes manageable.
+- Ensure you have a cronjob capable of managing `memories/`, `context/`, and `goals/` file sizes to be about 450~500 lines each.
 
 # Valuably Executing Work
 

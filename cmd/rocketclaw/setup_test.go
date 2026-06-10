@@ -21,7 +21,7 @@ func TestRunSetupWritesSlackConfigWithoutBufferTimeout(t *testing.T) {
 	require.Equal(t, config.DefaultWebUIListenAddr, cfg.WebUI.ListenAddr)
 	require.Equal(t, config.ThreadAgents{":thread:": {Agent: "main", PreSeed: false}, ":twisted_rightward_arrows:": {Agent: "main", PreSeed: true}}, cfg.ThreadAgents)
 
-	for _, name := range []string{"AGENTS.md", "main-update-cortex.sh", "main-split-markdown-files.sh"} {
+	for _, name := range []string{"AGENTS.md", "main-update-cortex.sh"} {
 		data, err := os.ReadFile(filepath.Join(workspace, name))
 		require.NoError(t, err)
 		require.NotEmpty(t, data)
@@ -418,12 +418,12 @@ func TestRunSetupCreatesExternalMCPUsersFileWhenRequested(t *testing.T) {
 
 func TestRunSetupPreservesExistingRootSetupFiles(t *testing.T) {
 	workspace, _ := runSetupWithInput(t, slackSetupInput(""), func(workspace string) {
-		for _, name := range []string{"AGENTS.md", "main-update-cortex.sh", "main-split-markdown-files.sh"} {
+		for _, name := range []string{"AGENTS.md", "main-update-cortex.sh"} {
 			require.NoError(t, os.WriteFile(filepath.Join(workspace, name), []byte(name+" preserved\n"), 0o755))
 		}
 	})
 
-	for _, name := range []string{"AGENTS.md", "main-update-cortex.sh", "main-split-markdown-files.sh"} {
+	for _, name := range []string{"AGENTS.md", "main-update-cortex.sh"} {
 		data, err := os.ReadFile(filepath.Join(workspace, name))
 		require.NoError(t, err)
 		require.Equal(t, name+" preserved\n", string(data))
@@ -437,7 +437,7 @@ func TestRunSetupFilesListShowsKnownFiles(t *testing.T) {
 
 	require.Contains(t, output, "AGENTS.md\n")
 	require.Contains(t, output, "main-update-cortex.sh\n")
-	require.Contains(t, output, "main-split-markdown-files.sh\n")
+	require.NotContains(t, output, "main-split-markdown-files.sh\n")
 	require.Contains(t, output, "agents/main.md\n")
 	require.Contains(t, output, ".rocketclaw/skills/main-create-or-update-agent/SKILL.md\n")
 }

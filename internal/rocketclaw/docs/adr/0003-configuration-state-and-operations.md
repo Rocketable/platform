@@ -33,7 +33,6 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 | `<runtime-dir>/.rocketcode/` | RocketCode shell output and transient runtime artifacts. |
 | `cron/` | User-overridable workspace cron definitions. Effective `cron/*.md` definitions load only at startup from the merged runtime view. `*.example.md` is ignored. Changes require restart. Local one-off cron files can be deleted after a run attempt; one-off cron definitions supplied only by a git overlay may reappear on restart until removed from the source repository. |
 | `main-update-cortex.sh` | Setup-generated helper for updating the Cortex index in `AGENTS.md`. |
-| `main-split-markdown-files.sh` | Setup-generated helper for splitting oversized memory/context markdown files. |
 
 ### Config Defaults And Normalization
 
@@ -116,3 +115,4 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-07: Added `graceful_shutdown_timeout` to runtime config, shared by the restart and signal-triggered shutdown sequence, defaulting to the existing `5m` drain budget.
 - 2026-06-08: Specified managed persistent configured overlay clones under `<runtime-dir>/overlays/`, startup reconciliation and force-clean behavior for active and removed overlay clones, config-order-only overlay application, and RocketCode prompt disclosure of active overlay sources and update instructions.
 - 2026-06-09: Removed `graceful_shutdown_timeout` from runtime config.
+- 2026-06-10: Removed `main-split-markdown-files.sh` from the setup-generated helper contract.
