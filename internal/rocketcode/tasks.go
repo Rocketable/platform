@@ -2,6 +2,7 @@
 package rocketcode
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -10,7 +11,10 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"text/template"
 
+	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 	"golang.org/x/sync/errgroup"
 )
@@ -20,6 +24,16 @@ type taskParams struct {
 	Prompt       string `json:"prompt"`
 	SubagentType string `json:"subagent_type"`
 	Command      string `json:"command"`
+}
+
+type interAgentFilter struct {
+	agent  Agent
+	prompt *template.Template
+}
+
+type interAgentFilterDecision struct {
+	Approved bool   `json:"approved"`
+	Reason   string `json:"reason"`
 }
 
 func (f *toolFactory) taskTool() looperTool {
@@ -161,6 +175,18 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		return "", fmt.Errorf("unknown agent type: %s is not a valid agent type", params.SubagentType)
 	}
 
+	if f.interAgentFilter != nil {
+		decision := f.runInterAgentFilter(ctx, params.Prompt)
+		if !decision.Approved {
+			reason := strings.TrimSpace(decision.Reason)
+			if reason == "" {
+				reason = "rejected by inter-agent guardrail"
+			}
+
+			return strings.Join([]string{"<task_result>", "delegation blocked: " + reason, "</task_result>"}, "\n"), nil
+		}
+	}
+
 	agent.Permission = f.shellOutput.effectivePermissions(agent.Permission)
 	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, f.promptExpansion)
 	systemPrompt := composeSystemPromptWithSkills(strings.TrimSpace(f.systemPrompt+"\n\n"+agent.Prompt), f.skills, &agent)
@@ -194,8 +220,9 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	close(input)
 
 	var (
-		group errgroup.Group
-		items []ChatResponse
+		group            errgroup.Group
+		items            []ChatResponse
+		childDiagnostics []ChatResponse
 	)
 
 	var outputSink chan<- ChatResponse
@@ -211,7 +238,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		for item := range output {
 			items = append(items, item)
 			if f.diagnostics {
-				emitSubagentDiagnostic(outputSink, &SubagentDiagnostic{
+				childDiagnostics = append(childDiagnostics, ChatResponse{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{
 					Name:     agent.Name,
 					Label:    subagentResponseLabel(item.Kind),
 					Index:    metadata.subagentIndex,
@@ -220,7 +247,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 					Tool:     item.Tool,
 					Subagent: item.Subagent,
 					Provider: item.Provider,
-				})
+				}})
 			}
 		}
 
@@ -238,10 +265,6 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		return "", err
 	}
 
-	if f.diagnostics {
-		emitSubagentDiagnostic(outputSink, &SubagentDiagnostic{Name: agent.Name, Label: "delegation", Index: metadata.subagentIndex, Total: metadata.subagentTotal, Text: "finished"})
-	}
-
 	last := ""
 
 	for _, item := range items {
@@ -250,7 +273,101 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		}
 	}
 
+	if f.interAgentFilter != nil {
+		decision := f.runInterAgentFilter(ctx, last)
+		if !decision.Approved {
+			reason := strings.TrimSpace(decision.Reason)
+			if reason == "" {
+				reason = "rejected by inter-agent guardrail"
+			}
+
+			return strings.Join([]string{"<task_result>", "delegation response blocked: " + reason, "</task_result>"}, "\n"), nil
+		}
+	}
+
+	if f.diagnostics {
+		for _, diagnostic := range childDiagnostics {
+			emitDiagnosticChatResponse(outputSink, diagnostic)
+		}
+
+		emitSubagentDiagnostic(outputSink, &SubagentDiagnostic{Name: agent.Name, Label: "delegation", Index: metadata.subagentIndex, Total: metadata.subagentTotal, Text: "finished"})
+	}
+
 	return strings.Join([]string{"<task_result>", last, "</task_result>"}, "\n"), nil
+}
+
+func (f *toolFactory) runInterAgentFilter(ctx context.Context, parentAgentPrompt string) interAgentFilterDecision {
+	var prompt bytes.Buffer
+	if err := f.interAgentFilter.prompt.Execute(&prompt, map[string]string{"ParentAgentPrompt": parentAgentPrompt}); err != nil {
+		return interAgentFilterDecision{Approved: false, Reason: "inter-agent guardrail prompt failed: " + err.Error()}
+	}
+
+	agent := f.interAgentFilter.agent
+	agent.Permission = f.shellOutput.effectivePermissions(agent.Permission)
+	child := &looper{ //nolint:exhaustruct // Filter tasks intentionally use a constrained one-turn runtime.
+		agent:              agent,
+		Client:             f.client,
+		SystemPrompt:       composeSystemPromptWithSkills(prompt.String(), f.skills, &agent),
+		Model:              parseAgentModel(agent.Model, f.model),
+		ReasoningEffort:    shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
+		Verbosity:          agent.Verbosity,
+		CompactThreshold:   f.compactThreshold,
+		CompactionSteering: f.compactionSteering,
+		ParallelToolCalls:  f.parallelToolCalls,
+		ResponseFormat: responses.ResponseFormatTextConfigUnionParam{OfJSONSchema: &responses.ResponseFormatTextJSONSchemaConfigParam{
+			Name:   "inter_agent_filter_decision",
+			Strict: openai.Bool(true),
+			Schema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"approved": map[string]any{"type": "boolean"},
+					"reason":   map[string]any{"type": "string"},
+				},
+				"required":             []string{"approved", "reason"},
+				"additionalProperties": false,
+			},
+		}},
+		Permissions: agent.Permission,
+		Tools:       f.toolsFor(&agent),
+	}
+
+	output := make(chan ChatResponse)
+
+	input := make(chan PromptInput, 1)
+	input <- PromptInput{Role: PromptInputRoleUser, Text: "Return the inter-agent filter decision as JSON.", Responses: output}
+
+	close(input)
+
+	var (
+		group errgroup.Group
+		last  string
+	)
+
+	group.Go(func() error {
+		for item := range output {
+			if item.Kind == ChatResponseAssistantMessage {
+				last = item.Text
+			}
+		}
+
+		return nil
+	})
+
+	if err := child.Loop(ctx, input, func(func(SessionEntry, error) bool) {}, func(SessionEntry) error { return nil }, make(chan os.Signal, 1)); err != nil {
+		_ = group.Wait()
+		return interAgentFilterDecision{Approved: false, Reason: "inter-agent guardrail failed: " + err.Error()}
+	}
+
+	if err := group.Wait(); err != nil {
+		return interAgentFilterDecision{Approved: false, Reason: "inter-agent guardrail failed: " + err.Error()}
+	}
+
+	var decision interAgentFilterDecision
+	if err := json.Unmarshal([]byte(last), &decision); err != nil {
+		return interAgentFilterDecision{Approved: false, Reason: "inter-agent guardrail returned invalid JSON"}
+	}
+
+	return decision
 }
 
 func emitSubagentDiagnostic(output chan<- ChatResponse, diagnostic *SubagentDiagnostic) {

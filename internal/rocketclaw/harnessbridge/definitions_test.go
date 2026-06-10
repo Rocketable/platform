@@ -73,6 +73,30 @@ Prompt
 	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, attachFilesToolName, rocketcode.PermissionAllow)
 }
 
+func TestLoadRocketCodeDefinitionsActivatesLocalGuardrail(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\n---\nPrompt\n")
+	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: openai/gpt-5.5\nreasoningEffort: low\nverbosity: low\npermission:\n  read:\n    \"docs/*\": allow\n---\nCheck {{.ParentAgentPrompt}}\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, root.Close()) }()
+
+	agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+	require.NoError(t, err)
+
+	cfg := interAgentFilterConfig(agents)
+	require.Equal(t, "Check {{.ParentAgentPrompt}}", cfg.Prompt)
+	require.Equal(t, "gpt-5.5", cfg.Model)
+	require.Equal(t, "low", cfg.ReasoningEffort)
+	require.Equal(t, "low", cfg.Verbosity)
+	action, matched := cfg.Permission.Evaluate("read", "docs/a.md")
+	require.True(t, matched)
+	require.Equal(t, rocketcode.PermissionAllow, action)
+}
+
 func TestLoadRocketCodeDefinitionsReportsInvalidMaxRecursion(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmaxRecursion: nope\n---\nPrompt\n")

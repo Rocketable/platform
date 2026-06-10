@@ -406,6 +406,40 @@ func TestSyncInWithOverlaysAppliesConfiguredOverlaysInConfigOrder(t *testing.T) 
 	assert.Equal(t, "second", string(data))
 }
 
+func TestSyncInWithOverlaysSkipsGitGuardrailAndAllowsLocalGuardrail(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for overlay test")
+	}
+
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	repoGit(t, repo, "init")
+	repoGit(t, repo, "config", "user.email", "test@example.com")
+	repoGit(t, repo, "config", "user.name", "Test User")
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "agents"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "agents", "guardrail.md"), []byte("remote guardrail"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "agents", "helper.md"), []byte("remote helper"), 0o644))
+	repoGit(t, repo, "add", ".")
+	repoGit(t, repo, "commit", "-m", "overlay")
+
+	remoteOnly := filepath.Join(tmp, "remote-only")
+	require.NoError(t, os.MkdirAll(remoteOnly, 0o755))
+	require.NoError(t, SyncInWithOverlays(remoteOnly, targetRoot, []string{repo}, testLogger()))
+	_, err := os.Stat(filepath.Join(remoteOnly, targetRoot, "agents", "guardrail.md"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	data, err := os.ReadFile(filepath.Join(remoteOnly, targetRoot, "agents", "helper.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "remote helper", string(data))
+
+	withLocal := filepath.Join(tmp, "with-local")
+	require.NoError(t, os.MkdirAll(filepath.Join(withLocal, "agents"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(withLocal, "agents", "guardrail.md"), []byte("local guardrail"), 0o644))
+	require.NoError(t, SyncInWithOverlays(withLocal, targetRoot, []string{repo}, testLogger()))
+	data, err = os.ReadFile(filepath.Join(withLocal, targetRoot, "agents", "guardrail.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "local guardrail", string(data))
+}
+
 func TestSyncWorkspaceScriptSymlinksReplacesRuntimeSymlinks(t *testing.T) {
 	for _, runtimeRoot := range []string{".rocketclaw", ".femtoclaw"} {
 		t.Run(runtimeRoot, func(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -341,6 +342,23 @@ func TestRocketCodeConfigEnablesDiagnosticsForThinkingUpdates(t *testing.T) {
 	assert.Equal(t, map[string]string{"A": "B"}, bridge.rocketcodeConfig(t.TempDir(), map[string]string{"A": "B"}).ShellEnv)
 }
 
+func TestInterAgentFilterConfigUsesGuardrailAgent(t *testing.T) {
+	agents := rocketcode.Agents{Items: map[string]rocketcode.Agent{
+		"guardrail": {Name: "guardrail", Model: "openai/gpt-5.5", ReasoningEffort: "low", Verbosity: "low", Prompt: "check {{.ParentAgentPrompt}}", Permission: rocketcode.PermissionSet{Buckets: []rocketcode.PermissionBucket{{Name: "read", Rules: []rocketcode.PermissionRule{{Pattern: "docs/*", Action: rocketcode.PermissionAllow}}}}}},
+	}}
+
+	cfg := interAgentFilterConfig(agents)
+
+	assert.Equal(t, "check {{.ParentAgentPrompt}}", cfg.Prompt)
+	assert.Equal(t, "openai/gpt-5.5", cfg.Model)
+	assert.Equal(t, "low", cfg.ReasoningEffort)
+	assert.Equal(t, "low", cfg.Verbosity)
+	action, matched := cfg.Permission.Evaluate("read", "docs/a.md")
+	assert.True(t, matched)
+	assert.Equal(t, rocketcode.PermissionAllow, action)
+	assert.Empty(t, interAgentFilterConfig(rocketcode.Agents{Items: map[string]rocketcode.Agent{}}).Prompt)
+}
+
 func TestAppendOverlayPromptToAgentIncludesConfiguredOverlayPrompt(t *testing.T) {
 	workspace := t.TempDir()
 	agents := rocketcode.Agents{Items: map[string]rocketcode.Agent{"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "base prompt", Location: "", Permission: rocketcode.PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}}}
@@ -537,6 +555,91 @@ func TestBridgeSummarizeRunsQueuedSummary(t *testing.T) {
 	require.Len(t, requestBody.Input, 1)
 	assert.Equal(t, "user", requestBody.Input[0].Role)
 	assert.Contains(t, requestBody.Input[0].Content, "summarize this")
+}
+
+func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\npermission:\n  task:\n    helper: allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: openai/gpt-5.5\n---\nHelper prompt\n")
+	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: openai/gpt-5.5\n---\nGuard {{.ParentAgentPrompt}}\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		requests++
+
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		switch requests {
+		case 1:
+			writeRawRunFunctionCall(t, w, "resp_1", "call_1", "task", map[string]string{"description": "delegate", "prompt": "delegated prompt", "subagent_type": "helper"})
+		case 2:
+			assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard delegated prompt")
+			assert.Contains(t, fmt.Sprint(body["text"]), "json_schema")
+			writeRawRunMessage(t, w, "resp_2", "msg_2", `{"approved":true,"reason":""}`)
+		case 3:
+			assert.Contains(t, fmt.Sprint(body["instructions"]), "Helper prompt")
+			assert.Contains(t, fmt.Sprint(body), "delegated prompt")
+			writeRawRunMessage(t, w, "resp_3", "msg_3", "child response")
+		case 4:
+			assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard child response")
+			assert.Contains(t, fmt.Sprint(body["text"]), "json_schema")
+			writeRawRunMessage(t, w, "resp_4", "msg_4", `{"approved":true,"reason":""}`)
+		case 5:
+			assert.Contains(t, fmt.Sprint(body), "<task_result>\nchild response\n</task_result>")
+			writeRawRunMessage(t, w, "resp_5", "msg_5", "persistent done")
+		default:
+			t.Fatalf("unexpected response request %d", requests)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	service, err := NewSessionService(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
+
+	bus := events.New()
+	defer bus.Close()
+
+	bridge := NewConversation(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), SessionService: service}, slog.New(slog.DiscardHandler))
+	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
+
+	var group errgroup.Group
+	group.Go(func() error { return bridge.handleInbound(context.Background(), inbound) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	var outbound *events.OutboundMessage
+
+	for msg := range bus.Outbound(ctx) {
+		msg.MarkDelivered(nil)
+
+		if msg.Complete {
+			outbound = msg
+
+			break
+		}
+	}
+
+	require.NotNil(t, outbound)
+	require.Equal(t, "persistent done", outbound.Text)
+	require.NoError(t, group.Wait())
+	require.Equal(t, 5, requests)
 }
 
 func TestBridgeStopAfterStartContextCanceledIsIdempotent(t *testing.T) {

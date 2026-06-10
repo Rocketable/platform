@@ -312,6 +312,65 @@ func TestRunRawLoadsSkillContentAsDeveloperMessage(t *testing.T) {
 	assert.Equal(t, 3, requests)
 }
 
+func TestRunRawPassesLocalGuardrailToRocketCode(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\npermission:\n  task:\n    helper: allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: openai/gpt-5.5\n---\nHelper prompt\n")
+	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: openai/gpt-5.5\n---\nGuard {{.ParentAgentPrompt}}\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		requests++
+
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		switch requests {
+		case 1:
+			writeRawRunFunctionCall(t, w, "resp_1", "call_1", "task", map[string]string{"description": "delegate", "prompt": "delegated prompt", "subagent_type": "helper"})
+		case 2:
+			assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard delegated prompt")
+			assert.Contains(t, fmt.Sprint(body["text"]), "json_schema")
+			writeRawRunMessage(t, w, "resp_2", "msg_2", `{"approved":true,"reason":""}`)
+		case 3:
+			assert.Contains(t, fmt.Sprint(body["instructions"]), "Helper prompt")
+			assert.Contains(t, fmt.Sprint(body), "delegated prompt")
+			writeRawRunMessage(t, w, "resp_3", "msg_3", "child response")
+		case 4:
+			assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard child response")
+			assert.Contains(t, fmt.Sprint(body["text"]), "json_schema")
+			writeRawRunMessage(t, w, "resp_4", "msg_4", `{"approved":true,"reason":""}`)
+		case 5:
+			assert.Contains(t, fmt.Sprint(body), "<task_result>\nchild response\n</task_result>")
+			writeRawRunFunctionCall(t, w, "resp_5", "call_5", rawRunToolName, map[string]string{"payload": "done"})
+		case 6:
+			writeRawRunMessage(t, w, "resp_6", "msg_6", "assistant text")
+		default:
+			t.Fatalf("unexpected response request %d", requests)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	result, err := RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, "main", "prompt", slog.New(slog.DiscardHandler), nil)
+	require.NoError(t, err)
+	require.Equal(t, RawRunResult{Text: "assistant text", VerbatimMessage: "done"}, result)
+	require.Equal(t, 6, requests)
+}
+
 func TestRunRawReturnsQueuedAttachmentsWithNonEmptyDecision(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\n---\nPrompt\n")
@@ -442,6 +501,13 @@ func writeRawRunFunctionCall(t *testing.T, w http.ResponseWriter, responseID, ca
 	data, err := json.Marshal(args)
 	require.NoError(t, err)
 	_, err = fmt.Fprintf(w, `{"id":%q,"object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":%q,"type":"function_call","status":"completed","call_id":%q,"name":%q,"arguments":%q}]}`, responseID, "fc_"+callID, callID, name, string(data))
+	require.NoError(t, err)
+}
+
+func writeRawRunMessage(t *testing.T, w http.ResponseWriter, responseID, messageID, text string) {
+	t.Helper()
+
+	_, err := fmt.Fprintf(w, `{"id":%q,"object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":%q,"type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":%q,"annotations":[]}]}]}`, responseID, messageID, text)
 	require.NoError(t, err)
 }
 

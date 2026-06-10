@@ -856,7 +856,10 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 
 	b.log.Info("prepared rocketcode session history", "conversation_id", b.config.ConversationID, "turn_id", turnID, "entry_count", len(observed), "replay_item_count", replayItemCount, "history_bytes", historyBytes, "compaction_count", compactionCount, "latest_entry_id", latestEntryID, "latest_entry_type", latestEntryType)
 
-	looper, err := rocketcode.New(client, b.rocketcodeConfig(shellOutputDir, shellEnv, attachments.Tool(root)), root, agents, skills, b.config.Agent, io.Discard)
+	rocketcodeConfig := b.rocketcodeConfig(shellOutputDir, shellEnv, attachments.Tool(root))
+	rocketcodeConfig.InterAgentFilter = interAgentFilterConfig(agents)
+
+	looper, err := rocketcode.New(client, rocketcodeConfig, root, agents, skills, b.config.Agent, io.Discard)
 	if err != nil {
 		return runResult{}, fmt.Errorf("prepare rocketcode turn: %w", err)
 	}
@@ -1174,7 +1177,16 @@ func (b *Bridge) rocketcodeConfig(shellOutputDir string, shellEnv map[string]str
 	}), scheduleMessageTool(b.ScheduleMessage, b.log), resetScheduledMessagesTool(b.ResetScheduledMessages))
 	tools = append(tools, customTools...)
 
-	return rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, CustomTools: tools, ShellEnv: shellEnv}
+	return rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, InterAgentFilter: rocketcode.InterAgentFilterConfig{Prompt: "", Model: "", ReasoningEffort: "", Verbosity: "", Permission: rocketcode.PermissionSet{Buckets: nil}}, CustomTools: tools, ShellEnv: shellEnv}
+}
+
+func interAgentFilterConfig(agents rocketcode.Agents) rocketcode.InterAgentFilterConfig {
+	guardrail, ok := agents.Items["guardrail"]
+	if !ok {
+		return rocketcode.InterAgentFilterConfig{}
+	}
+
+	return rocketcode.InterAgentFilterConfig{Prompt: guardrail.Prompt, Model: guardrail.Model, ReasoningEffort: guardrail.ReasoningEffort, Verbosity: guardrail.Verbosity, Permission: guardrail.Permission}
 }
 
 func appendOverlayPromptToAgent(agents rocketcode.Agents, agentName string, cfg *config.Config) {

@@ -58,6 +58,7 @@ type looper struct {
 	CompactThreshold   int64
 	CompactionSteering string
 	ParallelToolCalls  int
+	ResponseFormat     responses.ResponseFormatTextConfigUnionParam
 	Permissions        PermissionSet
 	Tools              map[string]looperTool
 	RewriteHistory     func([]responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam
@@ -661,10 +662,8 @@ func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) re
 		}
 	}
 
-	if l.Verbosity != "" {
-		params.Text = responses.ResponseTextConfigParam{
-			Verbosity: responses.ResponseTextConfigVerbosity(l.Verbosity),
-		}
+	if l.Verbosity != "" || l.ResponseFormat.GetType() != nil {
+		params.Text = responses.ResponseTextConfigParam{Verbosity: responses.ResponseTextConfigVerbosity(l.Verbosity), Format: l.ResponseFormat}
 	}
 
 	if len(l.Tools) > 0 {

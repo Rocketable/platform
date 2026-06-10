@@ -24,6 +24,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 | `rocketclaw.users.json` | Optional external MCP Basic Auth users next to `rocketclaw.json`. If present, it must be a JSON object and file mode `0600`. Missing means MCP runs without auth. |
 | `AGENTS.md` | Workspace instruction file generated when missing. Loaded literally; no shell interpolation. |
 | `agents/`, `skills/`, `scripts/` | User-overridable workspace overlays for agent, skill, and script assets. Changes require restart to affect running RocketCode definitions. Local workspace overlays are applied after embedded assets and configured git overlays. Startup exposes effective runtime script files from `<runtime-dir>/scripts/` as symlinks under workspace `scripts/`, preserving existing regular workspace script files. |
+| `agents/guardrail.md` | Optional local-only inter-agent guardrail agent. When present in the local workspace overlay, it activates RocketClaw's RocketCode inter-agent filter. Configured git overlays and embedded setup payloads must not provide or override this file. Changes require restart to affect running RocketCode definitions. |
 | `.rocketclaw/` | Generated runtime directory. Setup and startup may create or maintain it. |
 | `.femtoclaw/` | Legacy generated runtime directory used only when `femtoclaw.json` is selected. |
 | `<runtime-dir>/overlays/` | Managed parent directory for configured git overlay clones. Startup preserves the parent directory, reconciles its children against the current `overlays` config entries, removes unconfigured clone directories, and discards uncommitted or untracked changes inside active configured clone directories before fetching and applying them. |
@@ -55,6 +56,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - Startup stores configured overlay clones under `<runtime-dir>/overlays/<human-readable-slug>/`. Slugs are human-readable and may collide; the `overlays` config order is the only application order, and filesystem listing order or clone directory names never determine merge order.
 - Startup reconciles `<runtime-dir>/overlays/` against the current config before applying overlays: unconfigured child directories are removed, active configured clone directories are force-cleaned, uncommitted and untracked changes are discarded, and the configured ref is fetched and checked out/reset.
 - Effective runtime assets are built in this order: embedded RocketClaw assets, configured git overlays in config order, then local workspace `agents/`, `skills/`, `cron/`, and `scripts/`.
+- Configured git overlays may not materialize `agents/guardrail.md`; that path is reserved for the local workspace overlay only. A configured git overlay containing `agents/guardrail.md` is applied as if that single file were absent.
 - Runtime asset files copied from configured git overlays and local workspace overlays preserve the source executable bit: executable source files materialize as `0755` and non-executable source files materialize as `0644`. File extensions do not make overlay files executable.
 - Embedded setup files are seeded separately from overlays; embedded `.sh` setup files materialize as executable setup helpers.
 - After effective runtime assets are built, startup removes workspace `scripts/` symlinks that resolve into `.rocketclaw/` or `.femtoclaw/`, then recreates symlinks for files from the selected `<runtime-dir>/scripts/`. Regular workspace script files and symlinks to other locations are preserved.
@@ -88,7 +90,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - `internal/rocketclaw/oai/oauth.go`
 - `internal/rocketclaw/skel/skel.go`
 - `internal/skel/skel.go`
-- `internal/rocketcodebridge/store.go`
+- `internal/rocketclaw/harnessbridge/store.go`
 - `internal/cronjob/manager.go`
 - `internal/app/app.go`
 
@@ -116,3 +118,4 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-08: Specified managed persistent configured overlay clones under `<runtime-dir>/overlays/`, startup reconciliation and force-clean behavior for active and removed overlay clones, config-order-only overlay application, and RocketCode prompt disclosure of active overlay sources and update instructions.
 - 2026-06-09: Removed `graceful_shutdown_timeout` from runtime config.
 - 2026-06-10: Removed `main-split-markdown-files.sh` from the setup-generated helper contract.
+- 2026-06-10: Added local-only `agents/guardrail.md` as the optional inter-agent guardrail source and prohibited configured git overlays from materializing that path.

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"text/template"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/shared"
@@ -29,8 +30,18 @@ type Config struct {
 	ParallelToolCalls          int
 	ShellOutputDir             string
 	SandboxedBash              bool
+	InterAgentFilter           InterAgentFilterConfig
 	CustomTools                []Tool
 	ShellEnv                   map[string]string
+}
+
+// InterAgentFilterConfig configures an agent that approves task prompts and responses.
+type InterAgentFilterConfig struct {
+	Prompt          string
+	Model           string
+	ReasoningEffort string
+	Verbosity       string
+	Permission      PermissionSet
 }
 
 // PromptShellCommandExpansion controls which prompt sources expand !`command` snippets.
@@ -221,6 +232,32 @@ func New(
 		return nil, err
 	}
 
+	var filter *interAgentFilter
+
+	if strings.TrimSpace(config.InterAgentFilter.Prompt) != "" {
+		prompt, err := template.New("inter_agent_filter").Parse(config.InterAgentFilter.Prompt)
+		if err != nil {
+			return nil, fmt.Errorf("parse inter-agent filter prompt: %w", err)
+		}
+
+		filter = &interAgentFilter{
+			agent: Agent{
+				Name:            "inter_agent_filter",
+				Description:     "",
+				Model:           config.InterAgentFilter.Model,
+				ReasoningEffort: config.InterAgentFilter.ReasoningEffort,
+				Verbosity:       config.InterAgentFilter.Verbosity,
+				MaxRecursion:    nil,
+				Prompt:          config.InterAgentFilter.Prompt,
+				Location:        "",
+				Permission:      config.InterAgentFilter.Permission,
+				Frontmatter:     nil,
+				FileMode:        0,
+			},
+			prompt: prompt,
+		}
+	}
+
 	maps.Copy(baseTools, customTools)
 	factory := &toolFactory{
 		client:                     &client.Responses,
@@ -240,6 +277,7 @@ func New(
 		skills:                     skills,
 		baseTools:                  baseTools,
 		shellOutput:                shellOutput,
+		interAgentFilter:           filter,
 	}
 	runtimeSystemPrompt := composeSystemPromptWithSkills(systemPrompt, skills, agentForTools)
 

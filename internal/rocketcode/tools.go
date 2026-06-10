@@ -36,6 +36,7 @@ type toolFactory struct {
 	skills                     Skills
 	baseTools                  map[string]looperTool
 	shellOutput                shellOutputConfig
+	interAgentFilter           *interAgentFilter
 }
 
 type readToolParams struct {

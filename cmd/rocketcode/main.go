@@ -195,6 +195,7 @@ func defaultConfig() rocketcode.Config {
 		ParallelToolCalls:          0,
 		ShellOutputDir:             filepath.Join(".tmp", "shell-outputs"),
 		SandboxedBash:              false,
+		InterAgentFilter:           rocketcode.InterAgentFilterConfig{Prompt: "", Model: "", ReasoningEffort: "", Verbosity: "", Permission: rocketcode.PermissionSet{Buckets: nil}},
 		ShellEnv:                   nil,
 		CustomTools: []rocketcode.Tool{{
 			Name:               "current_time",

@@ -13,7 +13,7 @@ This ADR governs rocketclaw's contract with the embedded `github.com/Rocketable/
 
 ## Context
 
-Several rocketclaw capabilities exist only because of precise RocketCode configuration: prompt shell expansion, stronger skills, custom tools, session replay, attachments, and raw cron completion. These settings are product behavior, not incidental config.
+Several rocketclaw capabilities exist only because of precise RocketCode configuration: prompt shell expansion, stronger skills, custom tools, inter-agent guardrails, session replay, attachments, and raw cron completion. These settings are product behavior, not incidental config.
 
 ## Normative Contracts
 
@@ -21,8 +21,8 @@ Several rocketclaw capabilities exist only because of precise RocketCode configu
 
 | Path              | File                                  | Purpose                                                                                | Prompt input expansion |
 |-------------------|---------------------------------------|----------------------------------------------------------------------------------------|------------------------|
-| Persistent bridge | `internal/rocketcodebridge/bridge.go`  | Main, thread, Slack, Discord text, browser, Discord voice, scheduled, and external MCP conversation turns. | `InputPrompts: false`  |
-| Raw run           | `internal/rocketcodebridge/raw_run.go` | Cron and one-off cron background turns.                                                | `InputPrompts: true`   |
+| Persistent bridge | `internal/rocketclaw/harnessbridge/bridge.go`  | Main, thread, Slack, Discord text, browser, Discord voice, scheduled, and external MCP conversation turns. | `InputPrompts: false`  |
+| Raw run           | `internal/rocketclaw/harnessbridge/raw_run.go` | Cron and one-off cron background turns.                                                | `InputPrompts: true`   |
 
 Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell expansion. Persistent bridge input text remains literal. Raw input text expands because cron bodies are trusted workspace files.
 
@@ -45,6 +45,18 @@ Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell 
 - The recursion budget is per inference delegation path, not a shared total across sibling task calls.
 - The agent that starts the inference owns the recursion budget for that delegation tree. Child agents' own `maxRecursion` values are ignored inside an inherited delegation tree and apply only when that child agent starts a separate RocketCode inference.
 - Values below `-1` and non-integer YAML values make the agent definition invalid.
+
+### Inter-Agent Guardrail
+
+- RocketClaw configures RocketCode's inter-agent filter only when the effective runtime agents include a local-only agent named `guardrail` from `agents/guardrail.md`, as constrained by ADR 0003.
+- There is no `rocketclaw.json` setting for this behavior.
+- Both persistent bridge and raw-run RocketCode construction paths pass the guardrail prompt, model, reasoning effort, verbosity, and permissions into RocketCode when the local-only `guardrail` agent is present.
+- The guardrail prompt is a Go `text/template` and receives the delegated prompt or child response text as `{{.ParentAgentPrompt}}`.
+- RocketCode runs the guardrail before each `task` delegation. When the guardrail returns `approved:false`, the child agent is not called and the guardrail reason is returned to the caller agent.
+- RocketCode runs the guardrail after each child agent final response. When the guardrail returns `approved:false`, the guardrail reason is returned to the caller agent instead of the child response.
+- The guardrail response contract is strict JSON with `approved` boolean and `reason` string fields. Invalid or missing guardrail JSON fails closed.
+- The guardrail receives tools only through its own `permission` frontmatter under existing RocketCode permission semantics.
+- Guardrail execution is not surfaced as parent progress or subagent diagnostics; only rejection reasons are bubbled through the task result.
 
 ### Tools Injected By RocketClaw
 
@@ -90,19 +102,19 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 
 ## Evidence
 
-- `internal/rocketcodebridge/bridge.go`
-- `internal/rocketcodebridge/raw_run.go`
-- `internal/rocketcodebridge/store.go`
-- `vendor/github.com/Rocketable/rocketcode/rocketcode.go`
-- `vendor/github.com/Rocketable/rocketcode/looper.go`
-- `vendor/github.com/Rocketable/rocketcode/prompts.go`
-- `vendor/github.com/Rocketable/rocketcode/tools.go`
-- `vendor/github.com/Rocketable/rocketcode/tasks.go`
+- `internal/rocketclaw/harnessbridge/bridge.go`
+- `internal/rocketclaw/harnessbridge/raw_run.go`
+- `internal/rocketclaw/harnessbridge/store.go`
+- `internal/rocketcode/rocketcode.go`
+- `internal/rocketcode/looper.go`
+- `internal/rocketcode/prompts.go`
+- `internal/rocketcode/tools.go`
+- `internal/rocketcode/tasks.go`
 
 ## Consequences
 
 - Changing RocketCode config flags is a behavior change and requires ADR approval when it changes meaning.
-- Dependency upgrades must be checked against this embedding contract, especially prompt expansion, tools, session replay, attachments, and raw-run completion.
+- Dependency upgrades must be checked against this embedding contract, especially prompt expansion, tools, inter-agent guardrails, session replay, attachments, and raw-run completion.
 - Tests should verify observable RocketCode input/output behavior, not only that config structs are constructed.
 
 ## Changelog
@@ -114,3 +126,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-05: Linked persistent conversation SQLite storage to the centralized RocketClaw state-store opener in ADR 0005.
 - 2026-06-06: Added ChatGPT Codex backend request identity and header contract for RocketClaw-backed RocketCode requests.
 - 2026-06-10: Added `maxRecursion` agent frontmatter contract for limiting RocketCode task subdelegation depth.
+- 2026-06-10: Added the local-only `guardrail` agent contract for RocketCode inter-agent delegation and response filtering.

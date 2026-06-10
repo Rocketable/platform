@@ -394,7 +394,14 @@ func applyGitOverlay(target string, overlay OverlayInfo, logger *slog.Logger) er
 			return fmt.Errorf("stat overlay directory %s: %w", root, err)
 		}
 
-		if err := syncFSFiltered(os.DirFS(overlay.ClonePath), root, filepath.Join(target, root), "applying configured rocketclaw overlay", logger, true, true, nil); err != nil {
+		var skip func(string, fs.DirEntry) bool
+		if root == agentsRoot {
+			skip = func(name string, d fs.DirEntry) bool {
+				return !d.IsDir() && relativePath(root, name) == "guardrail.md"
+			}
+		}
+
+		if err := syncFSFiltered(os.DirFS(overlay.ClonePath), root, filepath.Join(target, root), "applying configured rocketclaw overlay", logger, true, true, skip); err != nil {
 			return err
 		}
 	}
