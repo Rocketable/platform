@@ -360,6 +360,24 @@ type codexRequestMetadata struct {
 	hasCompact       bool
 }
 
+type codexStreamError struct {
+	Code    string
+	Message string
+}
+
+func (e *codexStreamError) Error() string {
+	message := "response.failed event received"
+	if text := strings.TrimSpace(e.Message); text != "" {
+		message = text
+	}
+
+	if code := strings.TrimSpace(e.Code); code != "" && message != "response.failed event received" {
+		message = code + ": " + message
+	}
+
+	return "codex stream response failed: " + message
+}
+
 func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.base == nil {
 		t.base = http.DefaultTransport
@@ -451,7 +469,21 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if codexResponse && resp.StatusCode == http.StatusOK {
 		resp, err = codexStreamingResponse(resp)
 		if err != nil {
-			return nil, fmt.Errorf("adapt Codex stream response: %w", err)
+			errStream := err
+			if streamErr, ok := errors.AsType[*codexStreamError](errStream); ok && strings.TrimSpace(streamErr.Code) == "context_length_exceeded" {
+				var retried bool
+
+				resp, retried, err = t.retryCodexAfterCompaction(req.Context(), activeReq, &metadata)
+				if retried {
+					if err != nil {
+						return nil, fmt.Errorf("adapt Codex stream response after compaction retry: %w", err)
+					}
+
+					return resp, nil
+				}
+			}
+
+			return nil, fmt.Errorf("adapt Codex stream response: %w", errStream)
 		}
 
 		resp, err = t.codexCompaction(req.Context(), activeReq, resp, &metadata)
@@ -669,37 +701,6 @@ func (t *transport) codexCompaction(ctx context.Context, req *http.Request, resp
 		return resp, nil
 	}
 
-	requestBody, err := req.GetBody()
-	if err != nil {
-		return nil, fmt.Errorf("read Codex compact source request: %w", err)
-	}
-
-	data, err = io.ReadAll(requestBody)
-	_ = requestBody.Close()
-
-	if err != nil {
-		return nil, fmt.Errorf("read Codex compact source request: %w", err)
-	}
-
-	compactRequest := map[string]json.RawMessage{}
-	if err := json.Unmarshal(data, &compactRequest); err != nil {
-		return nil, fmt.Errorf("parse Codex compact source request: %w", err)
-	}
-
-	if codexInputHasUnansweredFunctionCall(compactRequest["input"]) {
-		return resp, nil
-	}
-
-	compactSource := compactRequest
-
-	compactRequest = map[string]json.RawMessage{
-		"input": compactSource["input"],
-		"model": compactSource["model"],
-	}
-	if instructions := compactSource["instructions"]; len(instructions) > 0 {
-		compactRequest["instructions"] = instructions
-	}
-
 	var output []json.RawMessage
 	if err := json.Unmarshal(body["output"], &output); err != nil {
 		return nil, fmt.Errorf("parse Codex output: %w", err)
@@ -718,9 +719,125 @@ func (t *transport) codexCompaction(ctx context.Context, req *http.Request, resp
 		}
 	}
 
+	data, ok, err := t.codexCompactItem(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	if !ok {
+		return resp, nil
+	}
+
+	body["output"], err = json.Marshal(append([]json.RawMessage{data}, output...))
+	if err != nil {
+		return nil, fmt.Errorf("marshal Codex output: %w", err)
+	}
+
+	data, err = json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal Codex response: %w", err)
+	}
+
+	resp.Body = io.NopCloser(bytes.NewReader(data))
+	resp.ContentLength = int64(len(data))
+
+	return resp, nil
+}
+
+func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Request, metadata *codexRequestMetadata) (*http.Response, bool, error) {
+	if !metadata.hasCompact {
+		return nil, false, nil
+	}
+
+	compactItem, ok, err := t.codexCompactItem(ctx, req)
+	if err != nil || !ok {
+		return nil, false, nil
+	}
+
+	requestBody, err := req.GetBody()
+	if err != nil {
+		return nil, false, nil
+	}
+
+	data, err := io.ReadAll(requestBody)
+	_ = requestBody.Close()
+
+	if err != nil {
+		return nil, false, nil
+	}
+
+	var retryBody map[string]json.RawMessage
+	if err := json.Unmarshal(data, &retryBody); err != nil {
+		return nil, false, nil
+	}
+
+	input, err := json.Marshal([]json.RawMessage{compactItem})
+	if err != nil {
+		return nil, false, fmt.Errorf("marshal Codex compaction retry input: %w", err)
+	}
+
+	retryBody["input"] = input
+
+	data, err = json.Marshal(retryBody)
+	if err != nil {
+		return nil, false, fmt.Errorf("marshal Codex compaction retry request: %w", err)
+	}
+
+	retry := req.Clone(ctx)
+	retry.Body = io.NopCloser(bytes.NewReader(data))
+	retry.ContentLength = int64(len(data))
+	retry.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }
+
+	resp, err := t.base.RoundTrip(retry)
+	if err != nil {
+		return nil, true, fmt.Errorf("send OpenAI request: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return resp, true, nil
+	}
+
+	resp, err = codexStreamingResponse(resp)
+	if err != nil {
+		return nil, true, err
+	}
+
+	return resp, true, nil
+}
+
+func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (json.RawMessage, bool, error) {
+	requestBody, err := req.GetBody()
+	if err != nil {
+		return nil, false, fmt.Errorf("read Codex compact source request: %w", err)
+	}
+
+	data, err := io.ReadAll(requestBody)
+	_ = requestBody.Close()
+
+	if err != nil {
+		return nil, false, fmt.Errorf("read Codex compact source request: %w", err)
+	}
+
+	compactSource := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &compactSource); err != nil {
+		return nil, false, fmt.Errorf("parse Codex compact source request: %w", err)
+	}
+
+	if codexInputHasUnansweredFunctionCall(compactSource["input"]) {
+		return nil, false, nil
+	}
+
+	compactRequest := map[string]json.RawMessage{
+		"input": compactSource["input"],
+		"model": compactSource["model"],
+	}
+	if instructions := compactSource["instructions"]; len(instructions) > 0 {
+		compactRequest["instructions"] = instructions
+	}
+
 	data, err = json.Marshal(compactRequest)
 	if err != nil {
-		return nil, fmt.Errorf("marshal Codex compact request: %w", err)
+		return nil, false, fmt.Errorf("marshal Codex compact request: %w", err)
 	}
 
 	compactReq := req.Clone(ctx)
@@ -733,25 +850,25 @@ func (t *transport) codexCompaction(ctx context.Context, req *http.Request, resp
 
 	compactResp, err := t.base.RoundTrip(compactReq)
 	if err != nil {
-		return nil, fmt.Errorf("send Codex compact request: %w", err)
+		return nil, false, fmt.Errorf("send Codex compact request: %w", err)
 	}
 
 	defer func() { _ = compactResp.Body.Close() }()
 
 	data, err = io.ReadAll(compactResp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read Codex compact response: %w", err)
+		return nil, false, fmt.Errorf("read Codex compact response: %w", err)
 	}
 
 	if compactResp.StatusCode != http.StatusOK {
-		return resp, nil
+		return nil, false, nil
 	}
 
 	var compactBody struct {
 		Output []map[string]json.RawMessage `json:"output"`
 	}
 	if err := json.Unmarshal(data, &compactBody); err != nil {
-		return nil, fmt.Errorf("parse Codex compact response: %w", err)
+		return nil, false, fmt.Errorf("parse Codex compact response: %w", err)
 	}
 
 	for _, item := range compactBody.Output {
@@ -768,26 +885,13 @@ func (t *transport) codexCompaction(ctx context.Context, req *http.Request, resp
 
 		data, err = json.Marshal(item)
 		if err != nil {
-			return nil, fmt.Errorf("marshal Codex compact item: %w", err)
+			return nil, false, fmt.Errorf("marshal Codex compact item: %w", err)
 		}
 
-		body["output"], err = json.Marshal(append([]json.RawMessage{data}, output...))
-		if err != nil {
-			return nil, fmt.Errorf("marshal Codex output: %w", err)
-		}
-
-		data, err = json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("marshal Codex response: %w", err)
-		}
-
-		resp.Body = io.NopCloser(bytes.NewReader(data))
-		resp.ContentLength = int64(len(data))
-
-		return resp, nil
+		return data, true, nil
 	}
 
-	return resp, nil
+	return nil, false, nil
 }
 
 func codexInputHasUnansweredFunctionCall(data json.RawMessage) bool {
@@ -855,7 +959,7 @@ func codexStreamingResponse(resp *http.Response) (*http.Response, error) {
 		}
 
 		if event.Type == "response.failed" {
-			message := "response.failed event received"
+			errResponse = &codexStreamError{}
 
 			if len(event.Response) > 0 {
 				var response struct {
@@ -869,15 +973,8 @@ func codexStreamingResponse(resp *http.Response) (*http.Response, error) {
 					return nil, fmt.Errorf("parse Codex failed response: %w", err)
 				}
 
-				if text := strings.TrimSpace(response.Error.Message); text != "" {
-					message = text
-					if code := strings.TrimSpace(response.Error.Code); code != "" {
-						message = code + ": " + message
-					}
-				}
+				errResponse = &codexStreamError{Code: response.Error.Code, Message: response.Error.Message}
 			}
-
-			errResponse = fmt.Errorf("codex stream response failed: %s", message)
 
 			continue
 		}

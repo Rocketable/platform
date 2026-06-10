@@ -628,6 +628,10 @@ func TestCodexStreamingResponseReportsFailedEvent(t *testing.T) {
 
 	require.Nil(t, got)
 	require.ErrorContains(t, err, "codex stream response failed: rate_limit_exceeded: Rate limit reached. Please try again in 11.054s.")
+	errStream, ok := errors.AsType[*codexStreamError](err)
+	require.True(t, ok)
+	require.Equal(t, "rate_limit_exceeded", errStream.Code)
+	require.Equal(t, "Rate limit reached. Please try again in 11.054s.", errStream.Message)
 }
 
 func TestCodexStreamingResponseReportsIncompleteEvent(t *testing.T) {
@@ -896,6 +900,123 @@ func TestTransportPrefixesCompactionWhenUsageExceedsThreshold(t *testing.T) {
 
 	require.Equal(t, 1, compactCalls)
 	require.JSONEq(t, `{"id":"resp","usage":{"total_tokens":100},"output":[{"encrypted_content":"sealed","id":"cmp_1","type":"compaction"},{"id":"msg","type":"message"}]}`, body)
+}
+
+func TestTransportRetriesContextOverflowAfterCompaction(t *testing.T) {
+	workspace := t.TempDir()
+	testAuthPath(t, workspace)
+	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"}))
+
+	responseCalls := 0
+	compactCalls := 0
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
+			compactCalls++
+			data, errRead := io.ReadAll(req.Body)
+			require.NoError(t, errRead)
+			require.NotContains(t, string(data), `context_management`)
+			require.NotContains(t, string(data), `"id"`)
+			require.Contains(t, string(data), `"input"`)
+
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"output":[{"id":"cmp_1","type":"compaction_summary","encrypted_content":"sealed"}]}`)), Header: make(http.Header)}, nil
+		}
+
+		responseCalls++
+		data, errRead := io.ReadAll(req.Body)
+		require.NoError(t, errRead)
+		require.NotContains(t, string(data), `context_management`)
+		require.Contains(t, string(data), `"stream":true`)
+
+		switch responseCalls {
+		case 1:
+			require.NotContains(t, string(data), `"id"`)
+
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexFailedStream("context_length_exceeded", "Your input exceeds the context window of this model. Please adjust your input and try again."))), Header: make(http.Header)}, nil
+		case 2:
+			require.JSONEq(t, `{"instructions":"","input":[{"encrypted_content":"sealed","id":"cmp_1","type":"compaction"}],"model":"gpt-5.5","store":false,"stream":true}`, string(data))
+
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexStream(`{"id":"resp","output":[]}`, `{"id":"msg","type":"message"}`))), Header: make(http.Header)}, nil
+		default:
+			t.Fatalf("unexpected response call %d", responseCalls)
+		}
+
+		return nil, nil
+	})}
+
+	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-5.5","store":false,"context_management":[{"type":"compaction","compact_threshold":10}],"input":[{"id":"item-1","type":"message"}]}`))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
+	require.Equal(t, 2, responseCalls)
+	require.Equal(t, 1, compactCalls)
+
+	data, errRead := io.ReadAll(resp.Body)
+	require.NoError(t, errRead)
+	require.JSONEq(t, `{"id":"resp","output":[{"id":"msg","type":"message"}]}`, string(data))
+}
+
+func TestTransportDoesNotRetryNonContextStreamFailure(t *testing.T) {
+	workspace := t.TempDir()
+	testAuthPath(t, workspace)
+	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()}))
+
+	responseCalls := 0
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
+			t.Fatal("compact transport should not be called")
+		}
+
+		responseCalls++
+
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexFailedStream("rate_limit_exceeded", "wait"))), Header: make(http.Header)}, nil
+	})}
+
+	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-5.5","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`))
+	if resp != nil {
+		t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
+	}
+
+	require.Nil(t, resp)
+	require.Equal(t, 1, responseCalls)
+	require.ErrorContains(t, err, "rate_limit_exceeded: wait")
+	errStream, ok := errors.AsType[*codexStreamError](err)
+	require.True(t, ok)
+	require.Equal(t, "rate_limit_exceeded", errStream.Code)
+}
+
+func TestTransportKeepsOriginalContextErrorWhenCompactReturnsNoItem(t *testing.T) {
+	workspace := t.TempDir()
+	testAuthPath(t, workspace)
+	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()}))
+
+	responseCalls := 0
+	compactCalls := 0
+	transport := &transport{workspace: workspace, workDir: config.DefaultWorkDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
+			compactCalls++
+
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"output":[]}`)), Header: make(http.Header)}, nil
+		}
+
+		responseCalls++
+		if responseCalls > 1 {
+			t.Fatalf("unexpected response retry %d", responseCalls)
+		}
+
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(codexFailedStream("context_length_exceeded", "too large"))), Header: make(http.Header)}, nil
+	})}
+
+	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/responses", `{"model":"gpt-5.5","context_management":[{"compact_threshold":10}],"input":[{"type":"message"}]}`))
+	if resp != nil {
+		t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
+	}
+
+	require.Nil(t, resp)
+	require.Equal(t, 1, responseCalls)
+	require.Equal(t, 1, compactCalls)
+	require.ErrorContains(t, err, "context_length_exceeded: too large")
+	errStream, ok := errors.AsType[*codexStreamError](err)
+	require.True(t, ok)
+	require.Equal(t, "context_length_exceeded", errStream.Code)
 }
 
 func TestTransportSkipsCompactionWithUnansweredFunctionCall(t *testing.T) {
@@ -1667,6 +1788,20 @@ func codexStream(completed string, items ...string) string {
 	b.WriteString("}\n")
 
 	return b.String()
+}
+
+func codexFailedStream(code, message string) string {
+	data, err := json.Marshal(map[string]any{
+		"type": "response.failed",
+		"response": map[string]any{
+			"error": map[string]string{"code": code, "message": message},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	return "data: " + string(data) + "\n"
 }
 
 func requestWithBody(body string) *http.Request {
