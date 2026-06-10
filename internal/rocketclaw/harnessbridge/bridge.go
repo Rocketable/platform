@@ -1251,6 +1251,12 @@ func loadRocketCodeDefinitionsIn(root *os.Root, workspace, workDir string, mode 
 	}
 
 	agentResult := rocketcode.LoadAgents(agentsFS)
+	for _, err := range agentResult.Errors {
+		if _, ok := errors.AsType[*rocketcode.AgentMaxRecursionError](err); ok {
+			return rocketcode.Agents{}, rocketcode.Skills{}, err
+		}
+	}
+
 	skillsRoot := filepath.Join(workspace, workDir, "skills")
 	skillResult := rocketcode.LoadSkills(skillsFS, skillsRoot)
 

@@ -63,7 +63,7 @@ func TestExpandPromptShellCommands(t *testing.T) {
 
 func TestExpandAgentPrompt(t *testing.T) {
 	t.Run("leaves prompt unchanged when disabled", func(t *testing.T) {
-		original := Agent{Name: "review", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "review !`git status`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}
+		original := Agent{Name: "review", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "review !`git status`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}
 		got := original
 
 		expandAgentPrompt(context.Background(), &got, false, testPromptExpansionEnvironment(t))
@@ -82,7 +82,7 @@ func TestExpandAgentPrompt(t *testing.T) {
 		env, err := newPromptExpansionEnvironment(root, shellOutput, nil)
 		require.NoError(t, err)
 
-		original := Agent{Name: "review", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "review !`cat MEMORY.md`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}
+		original := Agent{Name: "review", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "review !`cat MEMORY.md`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}
 		got := original
 
 		expandAgentPrompt(context.Background(), &got, true, env)

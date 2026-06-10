@@ -21,6 +21,7 @@ type Agent struct {
 	Model           string
 	ReasoningEffort string
 	Verbosity       string
+	MaxRecursion    *int
 	Prompt          string
 	Location        string
 	Permission      PermissionSet
@@ -37,6 +38,20 @@ type Agents struct {
 type AgentLoadResult struct {
 	Agents Agents
 	Errors []error
+}
+
+// AgentMaxRecursionError reports invalid maxRecursion frontmatter.
+type AgentMaxRecursionError struct {
+	Location string
+	Err      error
+}
+
+func (e *AgentMaxRecursionError) Error() string {
+	return fmt.Sprintf("%s: parse maxRecursion: %v", e.Location, e.Err)
+}
+
+func (e *AgentMaxRecursionError) Unwrap() error {
+	return e.Err
 }
 
 // LoadAgents scans the top level of fsys for markdown agent files.
@@ -105,6 +120,27 @@ func loadAgent(fsys fs.FS, filePath string) (Agent, error) {
 		return Agent{}, fmt.Errorf("%s: parse permission: %w", filePath, err)
 	}
 
+	var maxRecursion *int
+
+	if field := frontmatterField(frontmatterNode, "maxRecursion"); field != nil {
+		if field.Kind != yaml.ScalarNode || field.ShortTag() != "!!int" {
+			return Agent{}, &AgentMaxRecursionError{Location: filePath, Err: errors.New("must be an integer greater than or equal to -1")}
+		}
+
+		var value int
+		if err := field.Decode(&value); err != nil {
+			return Agent{}, &AgentMaxRecursionError{Location: filePath, Err: err}
+		}
+
+		if value < -1 {
+			return Agent{}, &AgentMaxRecursionError{Location: filePath, Err: errors.New("must be an integer greater than or equal to -1")}
+		}
+
+		if value >= 0 {
+			maxRecursion = &value
+		}
+	}
+
 	name := strings.TrimSuffix(filePath, filepath.Ext(filePath))
 	if name == "" {
 		return Agent{}, fmt.Errorf("%s: empty agent name", filePath)
@@ -116,6 +152,7 @@ func loadAgent(fsys fs.FS, filePath string) (Agent, error) {
 		Model:           frontmatterString(frontmatter, "model"),
 		ReasoningEffort: frontmatterString(frontmatter, "reasoningEffort"),
 		Verbosity:       frontmatterString(frontmatter, "verbosity"),
+		MaxRecursion:    maxRecursion,
 		Prompt:          strings.TrimSpace(prompt),
 		Location:        filePath,
 		Permission:      permission,

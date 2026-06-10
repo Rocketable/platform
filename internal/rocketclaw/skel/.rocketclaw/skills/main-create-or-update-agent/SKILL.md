@@ -153,6 +153,12 @@ Create or update the agent as a markdown agent file with YAML frontmatter.
 The resulting frontmatter must include at least:
 - `description`
 
+The optional `maxRecursion` frontmatter field controls task subdelegation depth for inferences started with that agent:
+- omitted or `-1` means unlimited subdelegation
+- `0` disables subdelegation
+- a positive integer caps delegation to that many task levels
+- invalid values fail agent loading
+
 Preserve any other valid frontmatter keys unless the human asked to change them.
 
 The body of the file should contain the agent's purpose and operating instructions based on what the human asked for.

@@ -58,6 +58,16 @@ func TestRunRawReturnsPreLooperErrorsAndLogs(t *testing.T) {
 	assert.DirExists(t, filepath.Join(workspace, ".rocketclaw", ".rocketcode"))
 }
 
+func TestRunRawReportsInvalidMaxRecursion(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmaxRecursion: nope\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	_, err := RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace}, "main", "prompt", slog.New(slog.DiscardHandler), nil)
+
+	require.ErrorContains(t, err, "main.md: parse maxRecursion:")
+}
+
 func TestInertRawRunProgressCallbacksAreNoops(t *testing.T) {
 	progress := newInertRawRunProgress()
 

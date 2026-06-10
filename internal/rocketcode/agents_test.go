@@ -25,6 +25,7 @@ description: Reviews code for correctness
 model: anthropic/claude-sonnet-4-20250514
 reasoningEffort: high
 verbosity: low
+maxRecursion: 2
 permission:
   edit: deny
 temperature: 0.1
@@ -58,6 +59,8 @@ ignored
 		require.Equal(t, "anthropic/claude-sonnet-4-20250514", review.Model)
 		require.Equal(t, "high", review.ReasoningEffort)
 		require.Equal(t, "low", review.Verbosity)
+		require.NotNil(t, review.MaxRecursion)
+		require.Equal(t, 2, *review.MaxRecursion)
 		require.Equal(t, "You are in review mode.", review.Prompt)
 		require.Equal(t, "review.md", review.Location)
 		require.Equal(t, fs.FileMode(0o640), review.FileMode.Perm())
@@ -66,8 +69,51 @@ ignored
 		require.Equal(t, true, review.Frontmatter["hidden"])
 
 		plan := result.Agents.Items["plan"]
+		require.Nil(t, plan.MaxRecursion)
 		require.Equal(t, "Plan, do not edit.", plan.Prompt)
 		require.NotContains(t, result.Agents.Items, "child")
+	})
+
+	t.Run("loads max recursion values", func(t *testing.T) {
+		result := LoadAgents(fstest.MapFS{
+			"unlimited.md": testMapFile("---\ndescription: Unlimited\nmaxRecursion: -1\n---\nPrompt\n"),
+			"zero.md":      testMapFile("---\ndescription: Zero\nmaxRecursion: 0\n---\nPrompt\n"),
+			"positive.md":  testMapFile("---\ndescription: Positive\nmaxRecursion: 3\n---\nPrompt\n"),
+		})
+
+		require.Empty(t, result.Errors)
+		require.Nil(t, result.Agents.Items["unlimited"].MaxRecursion)
+		require.NotNil(t, result.Agents.Items["zero"].MaxRecursion)
+		require.Equal(t, 0, *result.Agents.Items["zero"].MaxRecursion)
+		require.NotNil(t, result.Agents.Items["positive"].MaxRecursion)
+		require.Equal(t, 3, *result.Agents.Items["positive"].MaxRecursion)
+	})
+
+	t.Run("rejects invalid max recursion values", func(t *testing.T) {
+		tests := []struct {
+			name  string
+			value string
+		}{
+			{name: "below unlimited", value: "-2"},
+			{name: "float", value: "1.0"},
+			{name: "string", value: "\"1\""},
+			{name: "bool", value: "true"},
+			{name: "null", value: "null"},
+			{name: "sequence", value: "[]"},
+			{name: "map", value: "{}"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				result := LoadAgents(fstest.MapFS{
+					"main.md": testMapFile("---\ndescription: Main\nmaxRecursion: " + tt.value + "\n---\nPrompt\n"),
+				})
+
+				require.Empty(t, result.Agents.Items)
+				require.Len(t, result.Errors, 1)
+				require.Contains(t, result.Errors[0].Error(), "main.md: parse maxRecursion:")
+			})
+		}
 	})
 
 	t.Run("supports fallback yaml sanitization", func(t *testing.T) {

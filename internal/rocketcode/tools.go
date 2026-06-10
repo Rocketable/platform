@@ -31,6 +31,7 @@ type toolFactory struct {
 	expandPromptShellCommands  PromptShellCommandExpansion
 	promptExpansion            promptExpansionEnvironment
 	agent                      *Agent
+	recursionRemaining         *int
 	agents                     Agents
 	skills                     Skills
 	baseTools                  map[string]looperTool
@@ -86,7 +87,11 @@ func (f *toolFactory) toolsFor(agent *Agent) map[string]looperTool {
 	scoped.agent = agent
 	tools["find_skills"] = scoped.findSkillsTool()
 	tools["skill"] = scoped.skillTool()
+
 	tools["task"] = scoped.taskTool()
+	if scoped.recursionRemaining != nil && *scoped.recursionRemaining == 0 {
+		delete(tools, "task")
+	}
 
 	for name, tool := range tools {
 		if !toolVisible(agent, name, tool) {

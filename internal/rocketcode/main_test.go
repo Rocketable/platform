@@ -18,7 +18,7 @@ func TestPrintRuntimeDiagnosticsIncludesSystemPrompt(t *testing.T) {
 		tool looperTool
 	)
 
-	err := printRuntimeDiagnostics(&out, &Agent{Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}, map[string]looperTool{"find_skills": tool, "skill": tool}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "system prompt text")
+	err := printRuntimeDiagnostics(&out, &Agent{Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}, map[string]looperTool{"find_skills": tool, "skill": tool}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "system prompt text")
 
 	require.NoError(t, err)
 	require.Contains(t, out.String(), "agent: main\n")
@@ -84,7 +84,7 @@ func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 	config.Diagnostics = true
 	config.ExpandPromptShellCommands.PrimaryPrompts = true
 	looper, err := New(&client, config, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "remember !`cat MEMORY.md`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
+		"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "remember !`cat MEMORY.md`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", &diagnostics)
 
 	require.NoError(t, err)
@@ -166,7 +166,7 @@ func TestNewCopiesShellEnv(t *testing.T) {
 	config := testConfig(dir)
 	config.ShellEnv = env
 	loop, err := New(&client, config, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "prompt", Location: "", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}, Frontmatter: nil, FileMode: 0},
+		"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "prompt", Location: "", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}, Frontmatter: nil, FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", nil)
 	require.NoError(t, err)
 
@@ -195,7 +195,7 @@ func TestNewShellEnvAppliesToPromptExpansion(t *testing.T) {
 	config.ExpandPromptShellCommands.PrimaryPrompts = true
 	config.ShellEnv = map[string]string{"ROCKETCLAW_CONVERSATION_ID": "prompt", "TMPDIR": "/ignored"}
 	_, err = New(&client, config, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "env !`printf %s \"$ROCKETCLAW_CONVERSATION_ID\"` tmp !`printf %s \"$TMPDIR\"`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
+		"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "env !`printf %s \"$ROCKETCLAW_CONVERSATION_ID\"` tmp !`printf %s \"$TMPDIR\"`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", &diagnostics)
 
 	require.NoError(t, err)
@@ -213,7 +213,7 @@ func TestNewSandboxedBashConfigAppliesToBashTool(t *testing.T) {
 	config.SandboxedBash = true
 
 	loop, err := New(&client, config, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "prompt", Location: "", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}, Frontmatter: nil, FileMode: 0},
+		"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "prompt", Location: "", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}, Frontmatter: nil, FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", nil)
 	require.NoError(t, err)
 

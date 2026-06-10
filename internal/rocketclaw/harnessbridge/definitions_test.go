@@ -73,6 +73,20 @@ Prompt
 	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, attachFilesToolName, rocketcode.PermissionAllow)
 }
 
+func TestLoadRocketCodeDefinitionsReportsInvalidMaxRecursion(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmaxRecursion: nope\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, root.Close()) }()
+
+	_, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+	require.ErrorContains(t, err, "main.md: parse maxRecursion:")
+}
+
 func TestLoadRocketCodeDefinitionsPreservesRocketClawRuntimeToolDenies(t *testing.T) {
 	tests := []struct {
 		name           string

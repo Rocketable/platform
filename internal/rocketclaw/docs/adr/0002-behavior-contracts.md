@@ -67,6 +67,7 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 ### Permissions And Tools
 
 - Task permission defaults must not become permissive by accident.
+- Agent `maxRecursion` budgets are stricter than `task` permission grants; a permitted task target remains unavailable once the active inference's recursion budget is exhausted.
 - Cron agents may selectively deny tools.
 - RocketClaw tools are part of runtime behavior and must remain visible to RocketCode according to the bridge mode that owns the turn.
 
@@ -110,3 +111,4 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - 2026-06-09: Excluded Slack channel references from silent Slack social-mode channel-thread reply suppression.
 - 2026-06-09: Specified newest-first rendering for Slack thinking quote-block progress updates.
 - 2026-06-09: Removed the graceful shutdown timeout and specified the no-timeout shutdown order.
+- 2026-06-10: Specified that `maxRecursion` subdelegation budgets override otherwise-permitted `task` grants when exhausted.

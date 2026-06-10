@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -151,6 +152,10 @@ func (f *toolFactory) availableSubagentsDescription() string {
 }
 
 func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata toolCallMetadata, parentOutput ...chan<- ChatResponse) (string, error) {
+	if f.recursionRemaining != nil && *f.recursionRemaining == 0 {
+		return "", errors.New("maxRecursion limit reached: task delegation is unavailable")
+	}
+
 	agent, ok := f.agents.Items[params.SubagentType]
 	if !ok {
 		return "", fmt.Errorf("unknown agent type: %s is not a valid agent type", params.SubagentType)
@@ -159,6 +164,13 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	agent.Permission = f.shellOutput.effectivePermissions(agent.Permission)
 	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, f.promptExpansion)
 	systemPrompt := composeSystemPromptWithSkills(strings.TrimSpace(f.systemPrompt+"\n\n"+agent.Prompt), f.skills, &agent)
+
+	childFactory := *f
+	if f.recursionRemaining != nil {
+		remaining := *f.recursionRemaining - 1
+		childFactory.recursionRemaining = &remaining
+	}
+
 	child := &looper{ //nolint:exhaustruct // Child tasks intentionally inherit only runtime execution fields.
 		agent:              agent,
 		Client:             f.client,
@@ -170,7 +182,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		CompactionSteering: f.compactionSteering,
 		ParallelToolCalls:  f.parallelToolCalls,
 		Permissions:        agent.Permission,
-		Tools:              f.toolsFor(&agent),
+		Tools:              childFactory.toolsFor(&agent),
 		Diagnostics:        f.diagnostics,
 	}
 

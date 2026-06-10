@@ -35,6 +35,17 @@ Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell 
 - Skill content expansion happens when the `skill` tool loads skill content.
 - `AGENTS.md` root workspace instructions remain literal.
 
+### Subdelegation Recursion Limit
+
+- Agents may declare optional YAML frontmatter field `maxRecursion`.
+- Omitted `maxRecursion` means unlimited subdelegation.
+- `maxRecursion: -1` means unlimited subdelegation.
+- `maxRecursion: 0` means the agent that starts the RocketCode inference cannot delegate through the `task` tool.
+- Positive `maxRecursion` values allow that many `task` delegation levels from the agent that started the RocketCode inference.
+- The recursion budget is per inference delegation path, not a shared total across sibling task calls.
+- The agent that starts the inference owns the recursion budget for that delegation tree. Child agents' own `maxRecursion` values are ignored inside an inherited delegation tree and apply only when that child agent starts a separate RocketCode inference.
+- Values below `-1` and non-integer YAML values make the agent definition invalid.
+
 ### Tools Injected By RocketClaw
 
 | Tool                                         | Contract                                                                                                                      |
@@ -102,3 +113,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-02: Added Discord text as a persistent-bridge source whose human input remains literal.
 - 2026-06-05: Linked persistent conversation SQLite storage to the centralized RocketClaw state-store opener in ADR 0005.
 - 2026-06-06: Added ChatGPT Codex backend request identity and header contract for RocketClaw-backed RocketCode requests.
+- 2026-06-10: Added `maxRecursion` agent frontmatter contract for limiting RocketCode task subdelegation depth.

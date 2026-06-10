@@ -49,6 +49,18 @@ func TestTaskTool(t *testing.T) {
 		require.EqualError(t, err, "unknown agent type: missing is not a valid agent type")
 	})
 
+	t.Run("rejects delegation when recursion budget is exhausted", func(t *testing.T) {
+		remaining := 0
+		factory := testTaskFactory(&mockResponsesAPI{}, Agents{Items: map[string]Agent{
+			"review": {Name: "review"},
+		}})
+		factory.recursionRemaining = &remaining
+
+		_, err := factory.runTask(context.Background(), taskParams{Description: "Review", Prompt: "check this", SubagentType: "review"}, toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
+
+		require.EqualError(t, err, "maxRecursion limit reached: task delegation is unavailable")
+	})
+
 	t.Run("allows any agent", func(t *testing.T) {
 		mock := &mockResponsesAPI{responses: []*responses.Response{responseWithTaskMessages()}}
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
@@ -207,6 +219,17 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 		require.Contains(t, tools, "read")
 		require.Contains(t, tools, "task")
 		require.NotContains(t, tools, "bash")
+	})
+
+	t.Run("recursion budget hides task", func(t *testing.T) {
+		remaining := 0
+		factory := testTaskFactory(&mockResponsesAPI{}, Agents{Items: map[string]Agent{}})
+		factory.recursionRemaining = &remaining
+		agent := &Agent{Name: "main", Permission: permissionSetForActions(map[string]PermissionAction{"task": permissionAllow})}
+
+		tools := factory.toolsFor(agent)
+
+		require.NotContains(t, tools, "task")
 	})
 
 	t.Run("startup agent can deny individual tools", func(t *testing.T) {
@@ -399,6 +422,109 @@ func TestLooperRunsTaskToolCall(t *testing.T) {
 	encoded := marshalJSON(t, mock.calls[2].Input.OfInputItemList)
 	require.Contains(t, encoded, "child answer")
 	require.Contains(t, encoded, `\u003ctask_result\u003e`)
+}
+
+func TestLooperTaskMaxRecursion(t *testing.T) {
+	t.Run("unlimited preserves nested delegation", func(t *testing.T) {
+		mock := &mockResponsesAPI{responses: []*responses.Response{
+			responseWithFunctionCalls("parent-tool", []responses.ResponseFunctionToolCall{{ID: "tool-1", CallID: "call-1", Name: "task", Arguments: `{"description":"Review","prompt":"look","subagent_type":"review"}`}}),
+			responseWithFunctionCalls("child-tool", []responses.ResponseFunctionToolCall{{ID: "tool-2", CallID: "call-2", Name: "task", Arguments: `{"description":"Work","prompt":"go","subagent_type":"worker"}`}}),
+			responseWithMessage("grandchild-final", "grandchild done"),
+			responseWithMessage("child-final", "child done"),
+			responseWithMessage("parent-final", "parent done"),
+		}}
+		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+			"review": {Name: "review", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "worker", Action: permissionAllow}}}}}},
+			"worker": {Name: "worker"},
+		}})
+		looper := &looper{
+			Client:      mock,
+			Permissions: PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "review", Action: permissionAllow}}}}},
+			Tools:       map[string]looperTool{"task": factory.taskTool()},
+		}
+		output := make(chan ChatResponse, 10)
+
+		input := make(chan PromptInput, 1)
+		input <- PromptInput{Role: PromptInputRoleUser, Text: "start", Responses: output}
+
+		close(input)
+
+		err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+
+		require.NoError(t, err)
+		require.Equal(t, []ChatResponse{{Kind: ChatResponseAssistantMessage, Text: "parent done"}}, collectResponses(output))
+		require.Len(t, mock.calls, 5)
+		require.Contains(t, marshalJSON(t, mock.calls[3].Input.OfInputItemList), "grandchild done")
+	})
+
+	t.Run("one level blocks grandchild delegation", func(t *testing.T) {
+		childLimit := 5
+		remaining := 1
+		mock := &mockResponsesAPI{responses: []*responses.Response{
+			responseWithFunctionCalls("parent-tool", []responses.ResponseFunctionToolCall{{ID: "tool-1", CallID: "call-1", Name: "task", Arguments: `{"description":"Review","prompt":"look","subagent_type":"review"}`}}),
+			responseWithFunctionCalls("child-tool", []responses.ResponseFunctionToolCall{{ID: "tool-2", CallID: "call-2", Name: "task", Arguments: `{"description":"Work","prompt":"go","subagent_type":"worker"}`}}),
+			responseWithMessage("child-final", "child done"),
+			responseWithMessage("parent-final", "parent done"),
+		}}
+		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+			"review": {Name: "review", MaxRecursion: &childLimit, Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "worker", Action: permissionAllow}}}}}},
+			"worker": {Name: "worker"},
+		}})
+		factory.recursionRemaining = &remaining
+		looper := &looper{
+			Client:      mock,
+			Permissions: PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "review", Action: permissionAllow}}}}},
+			Tools:       map[string]looperTool{"task": factory.taskTool()},
+		}
+		output := make(chan ChatResponse, 10)
+
+		input := make(chan PromptInput, 1)
+		input <- PromptInput{Role: PromptInputRoleUser, Text: "start", Responses: output}
+
+		close(input)
+
+		err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+
+		require.NoError(t, err)
+		require.Equal(t, []ChatResponse{{Kind: ChatResponseAssistantMessage, Text: "parent done"}}, collectResponses(output))
+		require.Len(t, mock.calls, 4)
+		require.Contains(t, marshalJSON(t, mock.calls[2].Input.OfInputItemList), "tool not found")
+	})
+
+	t.Run("siblings each receive remaining depth", func(t *testing.T) {
+		remaining := 1
+		mock := &mockResponsesAPI{responses: []*responses.Response{
+			responseWithFunctionCalls("parent-tool", []responses.ResponseFunctionToolCall{
+				{ID: "tool-1", CallID: "call-1", Name: "task", Arguments: `{"description":"Review first","prompt":"look","subagent_type":"review"}`},
+				{ID: "tool-2", CallID: "call-2", Name: "task", Arguments: `{"description":"Review second","prompt":"look","subagent_type":"review"}`},
+			}),
+			responseWithMessage("child-first", "child one"),
+			responseWithMessage("child-second", "child two"),
+			responseWithMessage("parent-final", "parent done"),
+		}}
+		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+			"review": {Name: "review"},
+		}})
+		factory.recursionRemaining = &remaining
+		looper := &looper{
+			Client:            mock,
+			Permissions:       PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "review", Action: permissionAllow}}}}},
+			Tools:             map[string]looperTool{"task": factory.taskTool()},
+			ParallelToolCalls: 1,
+		}
+		output := make(chan ChatResponse, 10)
+
+		input := make(chan PromptInput, 1)
+		input <- PromptInput{Role: PromptInputRoleUser, Text: "start", Responses: output}
+
+		close(input)
+
+		err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+
+		require.NoError(t, err)
+		require.Equal(t, []ChatResponse{{Kind: ChatResponseAssistantMessage, Text: "parent done"}}, collectResponses(output))
+		require.Len(t, mock.calls, 4)
+	})
 }
 
 func TestLooperNumbersSiblingTaskDiagnostics(t *testing.T) {

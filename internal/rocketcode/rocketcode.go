@@ -235,6 +235,7 @@ func New(
 		expandPromptShellCommands:  config.ExpandPromptShellCommands,
 		promptExpansion:            promptExpansion,
 		agent:                      agentForTools,
+		recursionRemaining:         activeAgent.MaxRecursion,
 		agents:                     agents,
 		skills:                     skills,
 		baseTools:                  baseTools,
