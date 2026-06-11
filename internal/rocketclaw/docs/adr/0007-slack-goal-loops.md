@@ -35,7 +35,7 @@ RocketClaw already has managed Slack threads, persisted thread routing, durable 
 - A Slack DM goal loop opens a managed Slack thread rooted at the triggering DM message.
 - Slack DM goal loops use agent `main`.
 - A Slack social-mode goal loop opens a managed Slack channel thread rooted at the app-mention message.
-- Slack social-mode goal loops use the agent configured for the mentioned channel in `slack.social_mode.channel_agents`.
+- Slack social-mode goal loops use the agent configured for the mentioned channel in canonical `slack.social_mode.channels[]`; runtime connector behavior never consults legacy `slack.social_mode.channel_agents`.
 - Slack social-mode authorization, allowed-user checks, unconfigured-channel ignoring, and existing mention-stripping behavior remain in force.
 - The persisted goal objective is the user's parsed objective text. Social-mode kickoff prompts may include recent channel context, but that contextual wrapper is not the persisted objective.
 
@@ -60,6 +60,7 @@ RocketClaw already has managed Slack threads, persisted thread routing, durable 
 - A goal marked `complete`, `blocked`, `paused`, `stopped`, or `budget_exhausted` must not receive automatic continuations.
 - A configured-human Slack DM message, or an allowed Slack social-mode user message, consisting only of `🛑` or `⏹️` in an active goal thread must mark that goal `stopped` and stop the loop.
 - A `🛑` or `⏹️` Slack reaction by the configured human in DM mode, or by an allowed Slack social-mode user in social mode, on the active goal thread root or any message in the active goal thread must mark that goal `stopped` and stop the loop.
+- Slack social-mode goal-loop starts and stops use the channel-aware authorization rule from ADR 0002.
 - Human replies already queued for the managed thread must run before any subsequent automatic goal continuation.
 
 ### Completion Reactions
@@ -107,3 +108,5 @@ RocketClaw already has managed Slack threads, persisted thread routing, durable 
 - 2026-06-11: Initial accepted snapshot.
 - 2026-06-11: Added visible Slack-thread delivery for every goal turn, stop emoji messages and reactions, and completion checkmark reactions.
 - 2026-06-11: Added `🏁` as an additional Slack goal-loop trigger alongside `🔁`.
+- 2026-06-11: Switched social-mode goal-loop agent selection to canonical `channels[]` with legacy `channel_agents` fallback and channel-aware authorization.
+- 2026-06-11: Removed live goal-loop agent fallback to legacy `channel_agents`; startup config migration must produce canonical `channels[]` entries.

@@ -47,6 +47,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - Empty or omitted `overlays` means no intermediate git overlays. Non-empty entries are applied in array order after embedded assets and before local workspace overlays.
 - `discord_text.enabled` requires `discord_text.token`, `discord_text.channel_id`, and `discord_text.human_user_id`.
 - `slack.enabled` and `discord_text.enabled` must not both be true.
+- When Slack social mode is enabled, top-level `slack.social_mode.allowed_user_ids` is required and is the fallback allowlist. Canonical `slack.social_mode.channels[]` is the only runtime channel mapping: each entry maps one Slack channel to one agent and may define `allowed_user_ids`. Missing, empty, or normalized-empty per-channel `allowed_user_ids` falls back to the top-level allowlist; non-empty per-channel `allowed_user_ids` overrides the top-level allowlist for that channel. Legacy `slack.social_mode.channel_agents` is migration input only and is not consulted by runtime connector behavior.
 
 ### Git Overlays
 
@@ -75,6 +76,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - ChatGPT auth for RocketCode requires `rocketclaw oai login`; STT/TTS always use API-key auth through audio keys or `api_key` fallback. ChatGPT refresh tokens are rotating, single-owner credentials and must remain under RocketClaw's selected `<runtime-dir>/auth.json` ownership.
 - ChatGPT-backed RocketCode requests refresh credentials before sending when the access token is locally expired or within 120s of expiry. When Codex returns `401 Unauthorized` for a replayable request, RocketClaw reloads stored auth and retries once with a newer same-account stored token when present; otherwise it force-refreshes with the refresh token, persists the result, and retries once. Non-replayable requests return the original `401`; repeated `401`, terminal refresh failure, or failed refresh is surfaced with re-login guidance.
 - Anthropic-backed RocketCode requests use `anthropic.api_key` and optional `anthropic.api_base_url`. ChatGPT OAuth credentials are never used for Anthropic requests.
+- Startup migrates legacy `slack.social_mode.channel_agents` config into canonical `slack.social_mode.channels[]` before runtime config decoding. Each legacy `"#channel": "agent"` pair becomes `{ "channel": "#channel", "agent": "agent" }`, and the migrator removes `channel_agents` after conversion. If both forms are present, existing `channels[]` entries win for duplicate channels and non-duplicate legacy entries are appended. Migrated entries omit per-channel `allowed_user_ids`, preserving fallback to top-level `slack.social_mode.allowed_user_ids`. This migrator is temporary compatibility code that can be removed after configs are migrated.
 - Startup migrates legacy state into `.rocketclaw/state.sqlite3` when applicable; rollback after destructive migration requires backup restore.
 - Startup rehydrates active persisted Slack goal loops according to ADR 0007. This is runtime state recovery and does not require configuration hot reload.
 
@@ -126,3 +128,5 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-11: Added `rocketclaw lint [next|current]` as an operational command governed by ADR 0006.
 - 2026-06-11: Added optional Anthropic RocketCode provider configuration and clarified that ChatGPT OAuth remains OpenAI-only.
 - 2026-06-11: Added Slack goal-loop state to `<runtime-dir>/state.sqlite3` and specified startup rehydration per ADR 0007.
+- 2026-06-11: Added canonical Slack social-mode `channels[]` config with per-channel allowed users and legacy `channel_agents` compatibility.
+- 2026-06-11: Replaced live Slack social-mode `channel_agents` compatibility with startup migration into canonical `channels[]` only.

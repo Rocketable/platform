@@ -49,14 +49,7 @@ func runDoctor(args []string) error {
 		"RocketCode: OK (library)",
 	}
 
-	var output bytes.Buffer
-	for _, line := range lines {
-		if _, err := fmt.Fprintln(&output, line); err != nil {
-			return fmt.Errorf("assemble doctor output: %w", err)
-		}
-	}
-
-	if _, err := output.WriteTo(os.Stdout); err != nil {
+	if _, err := fmt.Fprint(os.Stdout, strings.Join(lines, "\n")+"\n"); err != nil {
 		return fmt.Errorf("write doctor output: %w", err)
 	}
 

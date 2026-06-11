@@ -401,15 +401,75 @@ func TestValidateSlackSocialMode(t *testing.T) {
 	cfg.Slack.Room = "D123"
 	cfg.Slack.HumanUserID = "U123"
 	cfg.Slack.SocialMode.Enabled = true
-	cfg.Slack.SocialMode.ChannelAgents = map[string]string{"#triage": "planner"}
+	cfg.Slack.SocialMode.Channels = []SlackSocialChannelConfig{
+		{Channel: " triage ", Agent: " planner ", AllowedUserIDs: []string{" U999 ", "", "U999"}},
+		{Channel: " #fallback ", Agent: " fallback ", AllowedUserIDs: []string{" ", ""}},
+		{Channel: " ", Agent: "ignored"},
+		{Channel: "#ignored", Agent: " "},
+	}
 	cfg.Slack.SocialMode.AllowedUserIDs = []string{" U123 ", "", "U123", "U456"}
 
 	require.NoError(t, cfg.Validate())
-	assert.Equal(t, SlackSocialConfig{Enabled: true, ChannelAgents: map[string]string{"#triage": "planner"}, AllowedUserIDs: []string{"U123", "U456"}, ContextMessages: 10}, cfg.Slack.SocialMode)
+	assert.Equal(t, SlackSocialConfig{
+		Enabled: true,
+		Channels: []SlackSocialChannelConfig{
+			{Channel: "#triage", Agent: "planner", AllowedUserIDs: []string{"U999"}},
+			{Channel: "#fallback", Agent: "fallback", AllowedUserIDs: []string{}},
+		},
+		AllowedUserIDs:  []string{"U123", "U456"},
+		ContextMessages: 10,
+	}, cfg.Slack.SocialMode)
+}
+
+func TestLoadMigratesSlackSocialChannelAgents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rocketclaw.json")
+	data := `{
+	  "workspace": ".",
+	  "minimum_wait_after_human_interaction": "",
+	  "slack": {
+	    "enabled": true,
+	    "bot_token": "xoxb",
+	    "app_token": "xapp",
+	    "room": "D123",
+	    "human_user_id": "U123",
+	    "social_mode": {
+	      "enabled": true,
+	      "channels": [
+	        {
+	          "channel": " triage ",
+	          "agent": "new",
+	          "allowed_user_ids": ["U999"]
+	        }
+	      ],
+	      "channel_agents": {
+	        "#triage": "legacy",
+	        "legacy": " old "
+	      },
+	      "allowed_user_ids": ["U123"]
+	    }
+	  },
+	  "openai": {
+	    "api_key": "sk"
+	  }
+	}`
+	require.NoError(t, os.WriteFile(path, []byte(data), 0o600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, []SlackSocialChannelConfig{
+		{Channel: "#triage", Agent: "new", AllowedUserIDs: []string{"U999"}},
+		{Channel: "#legacy", Agent: "old", AllowedUserIDs: []string{}},
+	}, cfg.Slack.SocialMode.Channels)
+
+	updated, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.NotContains(t, string(updated), "channel_agents")
+	assert.Contains(t, string(updated), `"channel": "#legacy"`)
 }
 
 func TestLoadIgnoresStaleSlackSocialModeAgent(t *testing.T) {
-	cfg := loadTestConfig(t, `{
+	path := filepath.Join(t.TempDir(), "rocketclaw.json")
+	data := `{
 	  "workspace": ".",
 	  "discord_voice": {
 	    "enabled": true,
@@ -433,9 +493,15 @@ func TestLoadIgnoresStaleSlackSocialModeAgent(t *testing.T) {
 	      "allowed_user_ids": ["U123"]
 	    }
 	  }
-	}`)
+	}`
+	require.NoError(t, os.WriteFile(path, []byte(data), 0o644), "write config")
 
-	assert.Empty(t, cfg.Slack.SocialMode.ChannelAgents)
+	_, err := Load(path)
+	require.NoError(t, err)
+
+	updated, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.NotContains(t, string(updated), "channel_agents")
 }
 
 func TestValidateSlackSocialModeRejectsInvalidConfig(t *testing.T) {

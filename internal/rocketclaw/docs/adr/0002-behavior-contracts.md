@@ -53,6 +53,7 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - Slack response-rooted threads remain isolated from main until summarized.
 - Slack response-rooted threads and explicitly pre-seeded managed threads seed inherited main-session context from the latest available compaction point when one exists; if no compaction point exists, they may compact the full selected main-session history.
 - Slack DM `🔁`/`🏁` goal-loop prompts and Slack social-mode `@BotName 🔁`/`@BotName 🏁` goal-loop mentions open managed Slack threads, persist goal state by managed-thread conversation ID, and use ADR 0007 trigger grammar, agent selection, turn-budget, and terminal-status semantics.
+- Slack social-mode app mentions, managed thread replies, goal-loop starts/stops, summary reactions, and channel cron rerun reactions must authorize users with the configured channel's non-empty per-channel allowed-user list when present, otherwise with top-level social-mode allowed users.
 - Slack goal loops must stop when an authorized human sends `🛑` or `⏹️` as a message in the active goal thread, or adds either emoji as a reaction to the goal thread root or any message in the active goal thread.
 - Slack goal loops that reach `complete` must add a `✅` reaction to the goal thread root and to the last Slack message in the goal thread when that message can be identified.
 - Discord text managed threads remain isolated from main until summarized, matching Slack managed-thread semantics where Discord guild threads can express them.
@@ -128,3 +129,4 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - 2026-06-11: Added Slack goal-loop routing, continuation ordering, restart recovery, and goal-update tool contracts governed by ADR 0007.
 - 2026-06-11: Added visible Slack-thread delivery, stop emoji controls, and completion checkmark reactions for Slack goal loops.
 - 2026-06-11: Added `🏁` as an additional Slack goal-loop trigger alongside `🔁`.
+- 2026-06-11: Added channel-aware Slack social-mode authorization for social actions and cron rerun reactions.

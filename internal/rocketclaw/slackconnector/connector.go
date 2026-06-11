@@ -456,23 +456,16 @@ func slackReplyDestination(defaultChannelID string, replyTarget *events.SlackRep
 
 // SendDiscordRelay mirrors a Discord utterance into Slack before the main session handles it.
 func (c *Connector) SendDiscordRelay(ctx context.Context, text string) (*events.SlackReplyTarget, error) {
-	return c.sendVoiceRelay(ctx, text, slackDiscordRelayReaction, "send Slack Discord relay", quoteDiscordRelay, false)
+	return c.sendVoiceRelay(ctx, text, slackDiscordRelayReaction, "send Slack Discord relay")
 }
 
 // SendWebVoiceRelay mirrors a browser web voice utterance into Slack before the main session handles it.
 func (c *Connector) SendWebVoiceRelay(ctx context.Context, text string) (*events.SlackReplyTarget, error) {
-	return c.sendVoiceRelay(ctx, text, slackWebVoiceRelayReaction, "send Slack web voice relay", quoteDiscordRelay, false)
+	return c.sendVoiceRelay(ctx, text, slackWebVoiceRelayReaction, "send Slack web voice relay")
 }
 
 //nolint:funcorder // Shared helper is kept next to the voice relay entrypoints.
-func (c *Connector) sendVoiceRelay(
-	ctx context.Context,
-	text string,
-	reaction string,
-	errLabel string,
-	quote func(string) string,
-	preserveQuotedText bool,
-) (*events.SlackReplyTarget, error) {
+func (c *Connector) sendVoiceRelay(ctx context.Context, text, reaction, errLabel string) (*events.SlackReplyTarget, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil, nil
@@ -490,16 +483,12 @@ func (c *Connector) sendVoiceRelay(
 	}
 
 	if profile != nil {
-		if preserveQuotedText {
-			options = []slack.MsgOption{slack.MsgOptionText(quote(text), false)}
-		}
-
 		options = append(options, slack.MsgOptionUsername(profile.DisplayName))
 		if profile.IconURL != "" {
 			options = append(options, slack.MsgOptionIconURL(profile.IconURL))
 		}
 	} else {
-		options = []slack.MsgOption{slack.MsgOptionText(quote(text), false)}
+		options = []slack.MsgOption{slack.MsgOptionText(quoteDiscordRelay(text), false)}
 	}
 
 	channelID, messageTS, err := c.api.PostMessageContext(ctx, c.config.Room, options...)
@@ -968,14 +957,7 @@ func (c *Connector) eventLoop(ctx context.Context) {
 			event := socketEvent.event
 
 			if event.Request != nil {
-				c.log.Debug(
-					"received Slack socket event",
-					"event_type", event.Type,
-					"request_type", event.Request.Type,
-					"envelope_id", event.Request.EnvelopeID,
-					"retry_attempt", event.Request.RetryAttempt,
-					"retry_reason", event.Request.RetryReason,
-				)
+				c.log.Debug("received Slack socket event", "event_type", event.Type, "request_type", event.Request.Type, "envelope_id", event.Request.EnvelopeID, "retry_attempt", event.Request.RetryAttempt, "retry_reason", event.Request.RetryReason)
 			} else {
 				c.log.Debug("received Slack socket event", "event_type", event.Type)
 			}
@@ -1076,52 +1058,26 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 	}
 
 	if ev.User == "" {
-		c.log.Debug(
-			"ignored Slack message event",
-			"reason", "empty_user",
-			"channel", ev.Channel,
-			"channel_type", ev.ChannelType,
-			"bot_id_present", ev.BotID != "",
-		)
+		c.log.Debug("ignored Slack message event", "reason", "empty_user", "channel", ev.Channel, "channel_type", ev.ChannelType, "bot_id_present", ev.BotID != "")
 
 		return
 	}
 
 	if ev.User == c.botUserID {
-		c.log.Debug(
-			"ignored Slack message event",
-			"reason", "bot_user",
-			"user", ev.User,
-			"channel", ev.Channel,
-			"channel_type", ev.ChannelType,
-		)
+		c.log.Debug("ignored Slack message event", "reason", "bot_user", "user", ev.User, "channel", ev.Channel, "channel_type", ev.ChannelType)
 
 		return
 	}
 
 	if ev.BotID != "" {
-		c.log.Debug(
-			"ignored Slack message event",
-			"reason", "bot_message",
-			"user", ev.User,
-			"channel", ev.Channel,
-			"channel_type", ev.ChannelType,
-			"bot_id_present", true,
-		)
+		c.log.Debug("ignored Slack message event", "reason", "bot_message", "user", ev.User, "channel", ev.Channel, "channel_type", ev.ChannelType, "bot_id_present", true)
 
 		return
 	}
 
 	subtype := strings.TrimSpace(ev.SubType)
 	if subtype != "" && subtype != slack.MsgSubTypeFileShare {
-		c.log.Debug(
-			"ignored Slack message event",
-			"reason", "unsupported_subtype",
-			"user", ev.User,
-			"channel", ev.Channel,
-			"channel_type", ev.ChannelType,
-			"subtype", subtype,
-		)
+		c.log.Debug("ignored Slack message event", "reason", "unsupported_subtype", "user", ev.User, "channel", ev.Channel, "channel_type", ev.ChannelType, "subtype", subtype)
 
 		return
 	}
@@ -1129,7 +1085,12 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 	threadTS := strings.TrimSpace(ev.ThreadTimeStamp)
 	dmMessage := ev.Channel == c.config.Room && ev.User == c.config.HumanUserID && strings.HasPrefix(ev.Channel, "D")
 
-	socialThreadReply := c.config.SocialMode.Enabled && threadTS != "" && !strings.HasPrefix(ev.Channel, "D") && c.socialModeAllowsUser(ev.User)
+	socialThreadReply := false
+
+	if c.config.SocialMode.Enabled && threadTS != "" && !strings.HasPrefix(ev.Channel, "D") && c.socialModeCouldAllowUser(ev.User) {
+		channel, _, ok := c.socialModeChannel(ctx, ev.Channel)
+		socialThreadReply = ok && c.socialModeAllowsUser(channel, ev.User)
+	}
 
 	rawText := strings.TrimSpace(slackMessageEventText(ev))
 
@@ -1139,49 +1100,16 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 	}
 
 	fileCount := len(slackMessageEventFiles(ev))
-	c.log.Debug(
-		"received Slack message event",
-		"user", ev.User,
-		"channel", ev.Channel,
-		"message_ts", ev.TimeStamp,
-		"channel_type", ev.ChannelType,
-		"subtype", subtype,
-		"thread_ts_present", threadTS != "",
-		"text_len", len(text),
-		"file_count", fileCount,
-		"room_match", ev.Channel == c.config.Room,
-		"human_match", ev.User == c.config.HumanUserID,
-		"dm_channel", strings.HasPrefix(ev.Channel, "D"),
-		"dm_message", dmMessage,
-		"social_thread_reply", socialThreadReply,
-	)
+	c.log.Debug("received Slack message event", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "channel_type", ev.ChannelType, "subtype", subtype, "thread_ts_present", threadTS != "", "text_len", len(text), "file_count", fileCount, "room_match", ev.Channel == c.config.Room, "human_match", ev.User == c.config.HumanUserID, "dm_channel", strings.HasPrefix(ev.Channel, "D"), "dm_message", dmMessage, "social_thread_reply", socialThreadReply)
 
 	if !dmMessage && !socialThreadReply {
-		c.log.Debug(
-			"ignored Slack message event",
-			"reason", "not_dm_or_allowed_social_thread",
-			"user", ev.User,
-			"channel", ev.Channel,
-			"channel_type", ev.ChannelType,
-			"thread_ts_present", threadTS != "",
-			"room_match", ev.Channel == c.config.Room,
-			"human_match", ev.User == c.config.HumanUserID,
-			"dm_channel", strings.HasPrefix(ev.Channel, "D"),
-			"social_thread_reply", socialThreadReply,
-		)
+		c.log.Debug("ignored Slack message event", "reason", "not_dm_or_allowed_social_thread", "user", ev.User, "channel", ev.Channel, "channel_type", ev.ChannelType, "thread_ts_present", threadTS != "", "room_match", ev.Channel == c.config.Room, "human_match", ev.User == c.config.HumanUserID, "dm_channel", strings.HasPrefix(ev.Channel, "D"), "social_thread_reply", socialThreadReply)
 
 		return
 	}
 
 	if text == "" && fileCount == 0 {
-		c.log.Debug(
-			"ignored Slack message event",
-			"reason", "empty_text_and_no_files",
-			"user", ev.User,
-			"channel", ev.Channel,
-			"channel_type", ev.ChannelType,
-			"thread_ts_present", threadTS != "",
-		)
+		c.log.Debug("ignored Slack message event", "reason", "empty_text_and_no_files", "user", ev.User, "channel", ev.Channel, "channel_type", ev.ChannelType, "thread_ts_present", threadTS != "")
 
 		return
 	}
@@ -1201,14 +1129,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 	}
 
 	if socialThreadReply && c.slackSocialThreadReplyPingsAway(rawText) {
-		c.log.Debug(
-			"ignored Slack social thread reply",
-			"reason", "pinged_other_without_bot_mention",
-			"user", ev.User,
-			"channel", ev.Channel,
-			"message_ts", ev.TimeStamp,
-			"thread_ts", threadTS,
-		)
+		c.log.Debug("ignored Slack social thread reply", "reason", "pinged_other_without_bot_mention", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
 
 		return
 	}
@@ -1245,7 +1166,8 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 			}
 		}
 
-		if isGoalStopText(text) {
+		switch strings.TrimSpace(text) {
+		case "🛑", "⏹️", "⏹":
 			stopped, err := c.threadRouter.StopGoalThread(ctx, ev.Channel, threadTS)
 			if err != nil {
 				c.log.Error("stop Slack goal thread", "error", err, "channel", ev.Channel, "thread_ts", threadTS)
@@ -1298,14 +1220,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		}
 
 		c.addRobotReaction(ctx, replyTarget)
-		c.log.Info(
-			"accepted Slack thread reply",
-			"user", ev.User,
-			"channel", ev.Channel,
-			"thread_ts", threadTS,
-			"text_len", len(text),
-			"attachment_count", len(content.Attachments),
-		)
+		c.log.Info("accepted Slack thread reply", "user", ev.User, "channel", ev.Channel, "thread_ts", threadTS, "text_len", len(text), "attachment_count", len(content.Attachments))
 
 		return
 	}
@@ -1373,15 +1288,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		}
 
 		c.addRobotReaction(ctx, replyTarget)
-		c.log.Info(
-			"accepted Slack thread start",
-			"user", ev.User,
-			"channel", ev.Channel,
-			"message_ts", ev.TimeStamp,
-			"agent", agent,
-			"text_len", len(promptText),
-			"attachment_count", len(content.Attachments),
-		)
+		c.log.Info("accepted Slack thread start", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent, "text_len", len(promptText), "attachment_count", len(content.Attachments))
 
 		return
 	}
@@ -1394,14 +1301,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		return
 	}
 
-	c.log.Info(
-		"accepted Slack inbound message",
-		"user", ev.User,
-		"channel", ev.Channel,
-		"subtype", subtype,
-		"text_len", len(text),
-		"attachment_count", len(content.Attachments),
-	)
+	c.log.Info("accepted Slack inbound message", "user", ev.User, "channel", ev.Channel, "subtype", subtype, "text_len", len(text), "attachment_count", len(content.Attachments))
 }
 
 func (c *Connector) isBotAuthoredSlackMessage(ctx context.Context, channelID, messageTS string) bool {
@@ -1412,15 +1312,7 @@ func (c *Connector) isBotAuthoredSlackMessage(ctx context.Context, channelID, me
 		return false
 	}
 
-	history, err := c.api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
-		ChannelID:          channelID,
-		Cursor:             "",
-		Latest:             messageTS,
-		Oldest:             messageTS,
-		Inclusive:          true,
-		Limit:              1,
-		IncludeAllMetadata: false,
-	})
+	history, err := c.api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{ChannelID: channelID, Cursor: "", Latest: messageTS, Oldest: messageTS, Inclusive: true, Limit: 1, IncludeAllMetadata: false})
 	if err != nil {
 		c.log.Warn("load Slack thread root history", "error", err, "channel", channelID, "message_ts", messageTS)
 		return false
@@ -1461,8 +1353,15 @@ func (c *Connector) handleReactionAddedEvent(ctx context.Context, ev *slackevent
 		if ev.User != c.config.HumanUserID || channelID != c.config.Room {
 			return
 		}
-	} else if !c.config.SocialMode.Enabled || !c.socialModeAllowsUser(ev.User) {
-		return
+	} else {
+		if !c.config.SocialMode.Enabled || !c.socialModeCouldAllowUser(ev.User) {
+			return
+		}
+
+		channel, _, ok := c.socialModeChannel(ctx, channelID)
+		if !ok || !c.socialModeAllowsUser(channel, ev.User) {
+			return
+		}
 	}
 
 	if reaction == slackOnDemandCronReaction {
@@ -1480,7 +1379,8 @@ func (c *Connector) handleReactionAddedEvent(ctx context.Context, ev *slackevent
 		return
 	}
 
-	if isGoalStopReaction(reaction) {
+	switch reaction {
+	case slackGoalStopSignReaction, slackGoalStopButtonReaction:
 		stopped, err := c.threadRouter.StopGoalThread(ctx, channelID, threadTS)
 		if err != nil {
 			c.log.Error("stop Slack goal thread by reaction", "error", err, "channel", channelID, "thread_ts", threadTS, "message_ts", messageTS)
@@ -1522,15 +1422,7 @@ func (c *Connector) handleReactionAddedEvent(ctx context.Context, ev *slackevent
 }
 
 func (c *Connector) handleOnDemandCronReaction(ctx context.Context, ev *slackevents.ReactionAddedEvent, channelID, messageTS string) {
-	history, err := c.api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
-		ChannelID:          channelID,
-		Cursor:             "",
-		Latest:             messageTS,
-		Oldest:             messageTS,
-		Inclusive:          true,
-		Limit:              1,
-		IncludeAllMetadata: false,
-	})
+	history, err := c.api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{ChannelID: channelID, Cursor: "", Latest: messageTS, Oldest: messageTS, Inclusive: true, Limit: 1, IncludeAllMetadata: false})
 	if err != nil {
 		c.log.Warn("load Slack on-demand cron reaction message", "error", err, "channel", channelID, "message_ts", messageTS)
 		return
@@ -1580,7 +1472,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 		return
 	}
 
-	if ev.User == "" || ev.User == c.botUserID || ev.BotID != "" || strings.HasPrefix(ev.Channel, "D") || !c.socialModeAllowsUser(ev.User) {
+	if ev.User == "" || ev.User == c.botUserID || ev.BotID != "" || strings.HasPrefix(ev.Channel, "D") || !c.socialModeCouldAllowUser(ev.User) {
 		return
 	}
 
@@ -1598,43 +1490,54 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 		threadTS = ev.TimeStamp
 	}
 
-	if len(c.config.SocialMode.ChannelAgents) == 0 {
-		return
-	}
-
-	channel, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: ev.Channel})
-	if err != nil {
-		return
-	}
-
-	agent, ok := c.config.SocialMode.ChannelAgents["#"+channel.Name]
-	if !ok {
+	channel, agent, ok := c.socialModeChannel(ctx, ev.Channel)
+	if !ok || !c.socialModeAllowsUser(channel, ev.User) {
 		return
 	}
 
 	replyTarget := &events.SlackReplyTarget{ChannelID: ev.Channel, MessageTS: ev.TimeStamp, ThreadTS: threadTS}
 
-	if goal, rejection, ok := goalRequestForText(text); ok {
-		if rejection != "" {
-			if err := c.postSlackThreadReply(ctx, ev.Channel, threadTS, rejection); err != nil {
-				c.log.Warn("post Slack social goal rejection", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
+	goal, rejection, isGoal := goalRequestForText(text)
+	if isGoal && rejection != "" {
+		if err := c.postSlackThreadReply(ctx, ev.Channel, threadTS, rejection); err != nil {
+			c.log.Warn("post Slack social goal rejection", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
+		}
+
+		return
+	}
+
+	key := slackThreadStackKey(replyTarget)
+	c.beginSlackStack(key)
+
+	if !isGoal {
+		for i := range c.threadAgents {
+			if c.threadAgents[i].agent == agent {
+				prefix := c.threadAgents[i].prefix
+				if len(prefix) > 2 && strings.HasPrefix(prefix, ":") && strings.HasSuffix(prefix, ":") {
+					c.addReaction(ctx, replyTarget, strings.Trim(prefix, ":"), "add Slack social agent reaction")
+				}
+
+				break
 			}
-
-			return
 		}
+	}
 
-		key := slackThreadStackKey(replyTarget)
-		c.beginSlackStack(key)
-		c.createReplyPlaceholdersOrWarn(ctx, replyTarget, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)
+	c.createReplyPlaceholdersOrWarn(ctx, replyTarget, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)
 
-		content := slackInboundContent{Text: ev.Text}
-		if len(ev.Files) > 0 {
-			content.Attachments, content.TextAttachments, content.HadAttachments, content.HadNonImageAttachments, content.AttachmentWarnings = c.downloadSlackAttachments(ctx, ev.Files)
-		}
+	content := slackInboundContent{Text: ev.Text}
+	if len(ev.Files) > 0 {
+		content.Attachments, content.TextAttachments, content.HadAttachments, content.HadNonImageAttachments, content.AttachmentWarnings = c.downloadSlackAttachments(ctx, ev.Files)
+	}
 
-		promptText := c.socialPromptWithContext(ctx, ev.Channel, ev.TimeStamp, goal.objective)
-		content.Text = promptText
+	promptSource := text
+	if isGoal {
+		promptSource = goal.objective
+	}
 
+	promptText := c.socialPromptWithContext(ctx, ev.Channel, ev.TimeStamp, promptSource)
+	content.Text = promptText
+
+	if isGoal {
 		c.log.Info("handing Slack social goal thread to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent, "max_turns", goal.maxTurns, "pending_placeholder", c.hasPendingState(replyTarget))
 
 		if err := c.threadRouter.StartGoalThread(ctx, agent, goal.objective, goal.maxTurns, newSlackInboundMessage(promptText, &content, replyTarget)); err != nil {
@@ -1650,30 +1553,6 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 		return
 	}
 
-	key := slackThreadStackKey(replyTarget)
-	c.beginSlackStack(key)
-
-	for i := range c.threadAgents {
-		if c.threadAgents[i].agent == agent {
-			prefix := c.threadAgents[i].prefix
-			if len(prefix) > 2 && strings.HasPrefix(prefix, ":") && strings.HasSuffix(prefix, ":") {
-				c.addReaction(ctx, replyTarget, strings.Trim(prefix, ":"), "add Slack social agent reaction")
-			}
-
-			break
-		}
-	}
-
-	c.createReplyPlaceholdersOrWarn(ctx, replyTarget, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)
-
-	content := slackInboundContent{Text: ev.Text}
-	if len(ev.Files) > 0 {
-		content.Attachments, content.TextAttachments, content.HadAttachments, content.HadNonImageAttachments, content.AttachmentWarnings = c.downloadSlackAttachments(ctx, ev.Files)
-	}
-
-	promptText := c.socialPromptWithContext(ctx, ev.Channel, ev.TimeStamp, text)
-	content.Text = promptText
-
 	c.log.Info("handing Slack social thread to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent, "pending_placeholder", c.hasPendingState(replyTarget))
 
 	if err := c.threadRouter.StartThread(ctx, agent, false, newSlackInboundMessage(promptText, &content, replyTarget)); err != nil {
@@ -1687,8 +1566,55 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 	c.log.Info("accepted Slack social mention", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent, "text_len", len(text), "attachment_count", len(content.Attachments))
 }
 
-func (c *Connector) socialModeAllowsUser(userID string) bool {
-	return slices.Contains(c.config.SocialMode.AllowedUserIDs, strings.TrimSpace(userID))
+func (c *Connector) socialModeChannel(ctx context.Context, channelID string) (channelName, agent string, ok bool) {
+	if len(c.config.SocialMode.Channels) == 0 {
+		return "", "", false
+	}
+
+	channel, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: channelID})
+	if err != nil || channel == nil {
+		return "", "", false
+	}
+
+	name := "#" + strings.TrimSpace(channel.Name)
+	if name == "#" {
+		return "", "", false
+	}
+
+	for _, configured := range c.config.SocialMode.Channels {
+		if configured.Channel == name {
+			return name, configured.Agent, true
+		}
+	}
+
+	return name, "", false
+}
+
+func (c *Connector) socialModeCouldAllowUser(userID string) bool {
+	userID = strings.TrimSpace(userID)
+	if slices.Contains(c.config.SocialMode.AllowedUserIDs, userID) {
+		return true
+	}
+
+	for _, channel := range c.config.SocialMode.Channels {
+		if slices.Contains(channel.AllowedUserIDs, userID) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (c *Connector) socialModeAllowsUser(channel, userID string) bool {
+	userID = strings.TrimSpace(userID)
+
+	for _, configured := range c.config.SocialMode.Channels {
+		if configured.Channel == channel && len(configured.AllowedUserIDs) > 0 {
+			return slices.Contains(configured.AllowedUserIDs, userID)
+		}
+	}
+
+	return slices.Contains(c.config.SocialMode.AllowedUserIDs, userID)
 }
 
 func (c *Connector) stripSlackBotMention(text string) string {
@@ -2019,24 +1945,6 @@ func goalRequestForText(text string) (goalRequest, string, bool) {
 	return goalRequest{objective: objective, maxTurns: maxTurns}, "", true
 }
 
-func isGoalStopText(text string) bool {
-	switch strings.TrimSpace(text) {
-	case "🛑", "⏹️", "⏹":
-		return true
-	default:
-		return false
-	}
-}
-
-func isGoalStopReaction(reaction string) bool {
-	switch strings.TrimSpace(reaction) {
-	case slackGoalStopSignReaction, slackGoalStopButtonReaction:
-		return true
-	default:
-		return false
-	}
-}
-
 func (c *Connector) handleOnDemandCronRequest(ctx context.Context, ev *slackevents.MessageEvent, target string, replyTarget *events.SlackReplyTarget) {
 	if ev == nil || replyTarget == nil {
 		return
@@ -2302,15 +2210,7 @@ func (c *Connector) resolveManagedThreadTS(ctx context.Context, channelID, messa
 		return messageTS, true, nil
 	}
 
-	history, err := c.api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
-		ChannelID:          channelID,
-		Cursor:             "",
-		Latest:             messageTS,
-		Oldest:             messageTS,
-		Inclusive:          true,
-		Limit:              1,
-		IncludeAllMetadata: false,
-	})
+	history, err := c.api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{ChannelID: channelID, Cursor: "", Latest: messageTS, Oldest: messageTS, Inclusive: true, Limit: 1, IncludeAllMetadata: false})
 	if err != nil {
 		return "", false, fmt.Errorf("load Slack message history: %w", err)
 	}
@@ -2538,15 +2438,6 @@ func normalizedSlackMIMEType(mimeType string) string {
 	}
 
 	return strings.ToLower(strings.TrimSpace(mimeType))
-}
-
-func slackMIMETypeLabel(mimeType string) string {
-	mimeType = normalizedSlackMIMEType(mimeType)
-	if mimeType == "" {
-		return "an unknown MIME type"
-	}
-
-	return mimeType
 }
 
 func slackFileDownloadURL(file *slack.File) string {

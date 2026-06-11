@@ -33,8 +33,6 @@ import (
 )
 
 func TestSlackImageHelpers(t *testing.T) {
-	assert.Equal(t, "an unknown MIME type", slackMIMETypeLabel(" "))
-	assert.Equal(t, "image/gif", slackMIMETypeLabel(" image/gif "))
 	assert.Equal(t, "photo (image/png)", slackFileDescriptor(&slack.File{Name: " photo ", Mimetype: " image/png "}))
 	assert.Equal(t, "https://example.com/download", slackFileDownloadURL(&slack.File{URLPrivate: "https://example.com/private", URLPrivateDownload: " https://example.com/download "}))
 	assert.Equal(t, "https://example.com/private", slackFileDownloadURL(&slack.File{URLPrivate: " https://example.com/private "}))
@@ -2680,6 +2678,8 @@ func TestHandleMessageEventFinishesStackWhenThreadReplySubmitFails(t *testing.T)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/conversations.info":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
 		case "/chat.postMessage":
 			if !assert.NoError(t, r.ParseForm()) {
 				return
@@ -2701,7 +2701,7 @@ func TestHandleMessageEventFinishesStackWhenThreadReplySubmitFails(t *testing.T)
 	router.submitHandled = true
 	router.errSubmit = errors.New("submit failed")
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
-	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#social", Agent: "social"}}, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
 
 	first := newSlackMessageEvent("171234.9999", "171234.5678", "status?")
 	first.Channel = "C123"
@@ -2737,7 +2737,7 @@ func TestHandleMessageEventFinishesStackWhenThreadReplyUnhandled(t *testing.T) {
 	router := newThreadRouterStub()
 	router.prepareHandled = true
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
-	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#social", Agent: "social"}}, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
 
 	first := newSlackMessageEvent("171234.9999", "171234.5678", "status?")
 	first.Channel = "C123"
@@ -3004,7 +3004,7 @@ func TestHandleEventsAPIStartsSocialThreadWithChannelContext(t *testing.T) {
 
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
 	connector.botUserID = "U999"
-	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, ChannelAgents: map[string]string{"#social": "social"}, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#social", Agent: "social"}}, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
 	connector.handleEventsAPI(context.Background(), newSlackEventsAPIEvent(
 		newSlackAppMentionEvent(),
 	))
@@ -3069,7 +3069,7 @@ func TestHandleAppMentionEventUsesChannelAgentAndPrefixReaction(t *testing.T) {
 
 	connector := newTestConnectorWithOptions(server.URL, bus, config.ThreadAgents{":triage:": {Agent: "triage", PreSeed: true}}, router, nil)
 	connector.botUserID = "U999"
-	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, ChannelAgents: map[string]string{"#triage": "triage"}, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#triage", Agent: "triage"}}, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
 	connector.handleAppMentionEvent(context.Background(), newSlackAppMentionEvent())
 
 	started := router.startedSnapshot()
@@ -3126,7 +3126,7 @@ func TestHandleAppMentionEventClearsSlackStackWhenThreadStartFails(t *testing.T)
 
 	connector := newTestConnectorWithOptions(server.URL, bus, config.ThreadAgents{":triage:": {Agent: "triage", PreSeed: true}}, router, nil)
 	connector.botUserID = "U999"
-	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, ChannelAgents: map[string]string{"#triage": "triage"}, AllowedUserIDs: []string{"U123"}}
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#triage", Agent: "triage"}}, AllowedUserIDs: []string{"U123"}}
 	connector.handleAppMentionEvent(context.Background(), newSlackAppMentionEvent())
 
 	started := router.startedSnapshot()
@@ -3163,7 +3163,7 @@ func TestHandleAppMentionEventIgnoresUnmappedChannel(t *testing.T) {
 
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
 	connector.botUserID = "U999"
-	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, ChannelAgents: map[string]string{"#triage": "triage"}, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#triage", Agent: "triage"}}, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
 	connector.handleAppMentionEvent(context.Background(), newSlackAppMentionEvent())
 
 	assert.Empty(t, router.startedSnapshot())
@@ -3177,9 +3177,9 @@ func TestHandleAppMentionEventRequiresSocialModeAndAllowlist(t *testing.T) {
 		user    string
 		channel string
 	}{
-		{name: "disabled", config: config.SlackSocialConfig{Enabled: false, ChannelAgents: map[string]string{"#social": "social"}, AllowedUserIDs: []string{"U123"}, ContextMessages: 1}, user: "U123", channel: "C123"},
-		{name: "not allowlisted", config: config.SlackSocialConfig{Enabled: true, ChannelAgents: map[string]string{"#social": "social"}, AllowedUserIDs: []string{"U456"}, ContextMessages: 1}, user: "U123", channel: "C123"},
-		{name: "dm ignored", config: config.SlackSocialConfig{Enabled: true, ChannelAgents: map[string]string{"#social": "social"}, AllowedUserIDs: []string{"U123"}, ContextMessages: 1}, user: "U123", channel: "D123"},
+		{name: "disabled", config: config.SlackSocialConfig{Enabled: false, Channels: []config.SlackSocialChannelConfig{{Channel: "#social", Agent: "social"}}, AllowedUserIDs: []string{"U123"}, ContextMessages: 1}, user: "U123", channel: "C123"},
+		{name: "not allowlisted", config: config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#social", Agent: "social"}}, AllowedUserIDs: []string{"U456"}, ContextMessages: 1}, user: "U123", channel: "C123"},
+		{name: "dm ignored", config: config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#social", Agent: "social"}}, AllowedUserIDs: []string{"U123"}, ContextMessages: 1}, user: "U123", channel: "D123"},
 		{name: "empty channel agents", config: config.SlackSocialConfig{Enabled: true, AllowedUserIDs: []string{"U123"}, ContextMessages: 1}, user: "U123", channel: "C123"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -3198,6 +3198,47 @@ func TestHandleAppMentionEventRequiresSocialModeAndAllowlist(t *testing.T) {
 	}
 }
 
+func TestHandleAppMentionEventUsesPerChannelAllowlist(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	router := newThreadRouterStub()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/conversations.info":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "triage"}})
+		case "/conversations.history":
+			writeJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{}})
+		case "/chat.postMessage":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
+		case "/reactions.add":
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+	connector.botUserID = "U777"
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#triage", Agent: "triage", AllowedUserIDs: []string{"U999"}}}, AllowedUserIDs: []string{"U123"}, ContextMessages: 1}
+
+	allowed := newSlackAppMentionEvent()
+	allowed.User = "U999"
+	connector.handleAppMentionEvent(context.Background(), allowed)
+
+	denied := newSlackAppMentionEvent()
+	denied.User = "U123"
+	denied.TimeStamp = "171234.9999"
+	connector.handleAppMentionEvent(context.Background(), denied)
+
+	started := router.startedSnapshot()
+	require.Len(t, started, 1)
+	assert.Equal(t, "triage", started[0].agent)
+	assertNeverInbound(t, bus)
+}
+
 func TestHandleMessageEventRoutesManagedSocialThreadReply(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
@@ -3211,7 +3252,7 @@ func TestHandleMessageEventRoutesManagedSocialThreadReply(t *testing.T) {
 	router.prepareHandled = true
 	router.submitHandled = true
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
-	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#social", Agent: "social"}}, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
 
 	ev := newSlackMessageEvent("171234.9999", "171234.5678", "refer to <#C111|triage>")
 	ev.Channel = "C123"
@@ -3228,12 +3269,48 @@ func TestHandleMessageEventRoutesManagedSocialThreadReply(t *testing.T) {
 	assert.Equal(t, "171234.5678", posted[0].Get("thread_ts"))
 }
 
+func TestHandleMessageEventUsesPerChannelAllowlist(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	var posted []url.Values
+
+	server := newSlackStackTestServer(t, &posted, new([]string))
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.prepareHandled = true
+	router.submitHandled = true
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#social", Agent: "social", AllowedUserIDs: []string{"U999"}}}, AllowedUserIDs: []string{"U123"}, ContextMessages: 1}
+
+	allowed := newSlackMessageEvent("171234.9999", "171234.5678", "allowed follow up")
+	allowed.User = "U999"
+	allowed.Channel = "C123"
+	connector.handleMessageEvent(context.Background(), allowed)
+
+	denied := newSlackMessageEvent("171234.9998", "171234.5678", "denied follow up")
+	denied.User = "U123"
+	denied.Channel = "C123"
+	connector.handleMessageEvent(context.Background(), denied)
+
+	replies := router.repliesSnapshot()
+	require.Len(t, replies, 1)
+	assert.Equal(t, "allowed follow up", replies[0].inbound.Text)
+	require.Len(t, posted, 2)
+}
+
 func TestHandleMessageEventSilentlySkipsSocialThreadReplyPingingAway(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/conversations.info":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
 	}))
 	defer server.Close()
 
@@ -3243,7 +3320,7 @@ func TestHandleMessageEventSilentlySkipsSocialThreadReplyPingingAway(t *testing.
 
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
 	connector.botUserID = "U999"
-	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#social", Agent: "social"}}, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
 
 	ev := newSlackMessageEvent("171234.9999", "171234.5678", "<@U111> please check this")
 	ev.Channel = "C123"
@@ -3268,7 +3345,7 @@ func TestHandleMessageEventRoutesSocialThreadReplyPingingBotToo(t *testing.T) {
 	router.submitHandled = true
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
 	connector.botUserID = "U999"
-	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#social", Agent: "social"}}, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
 
 	ev := newSlackMessageEvent("171234.9999", "171234.5678", "<@U111> <@U999> please check this")
 	ev.Channel = "C123"
@@ -3313,7 +3390,7 @@ func TestThreadedSocialMentionHandledOnceAndStripped(t *testing.T) {
 	router.submitHandled = true
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
 	connector.botUserID = "U999"
-	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, ChannelAgents: map[string]string{"#social": "social"}, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#social", Agent: "social"}}, AllowedUserIDs: []string{"U123"}, ContextMessages: 2}
 
 	mention := newSlackAppMentionEvent()
 	mention.TimeStamp = "171234.9999"
@@ -3357,6 +3434,21 @@ func TestStripSlackBotMention(t *testing.T) {
 
 	connector.botUserID = ""
 	assert.Equal(t, "<@U999> hello", connector.stripSlackBotMention("<@U999> hello"))
+}
+
+func TestSocialModeAllowsUserUsesPerChannelOverrideAndFallback(t *testing.T) {
+	connector := newTestConnector("http://127.0.0.1")
+	connector.config.SocialMode = config.SlackSocialConfig{
+		AllowedUserIDs: []string{"U123"},
+		Channels: []config.SlackSocialChannelConfig{
+			{Channel: "#override", Agent: "override", AllowedUserIDs: []string{"U999"}},
+			{Channel: "#fallback", Agent: "fallback"},
+		},
+	}
+
+	assert.True(t, connector.socialModeAllowsUser("#override", "U999"))
+	assert.False(t, connector.socialModeAllowsUser("#override", "U123"))
+	assert.True(t, connector.socialModeAllowsUser("#fallback", "U123"))
 }
 
 func TestSlackSocialThreadReplyPingsAway(t *testing.T) {
@@ -4016,6 +4108,8 @@ func TestHandleReactionAddedEventSummarizesSocialThreadForAllowedUser(t *testing
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/conversations.info":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
 		case "/reactions.add", "/reactions.remove":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
@@ -4025,7 +4119,7 @@ func TestHandleReactionAddedEventSummarizesSocialThreadForAllowedUser(t *testing
 	defer server.Close()
 
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
-	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, AllowedUserIDs: []string{"U456"}, ContextMessages: 1}
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#social", Agent: "social"}}, AllowedUserIDs: []string{"U456"}, ContextMessages: 1}
 
 	ev := newTestReactionAddedEvent("U456", slackSummaryReaction, "171234.5678")
 	ev.Item.Channel = "C123"
@@ -4034,6 +4128,42 @@ func TestHandleReactionAddedEventSummarizesSocialThreadForAllowedUser(t *testing
 	summaries := router.summariesSnapshot()
 	require.Len(t, summaries, 1)
 	assert.Equal(t, "C123", summaries[0].channelID)
+	assert.Equal(t, "171234.5678", summaries[0].threadTS)
+}
+
+func TestHandleReactionAddedEventUsesPerChannelAllowlist(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	router := newThreadRouterStub()
+	router.prepareHandled = true
+	router.summarizeHandled = true
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/conversations.info":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
+		case "/reactions.add", "/reactions.remove":
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#social", Agent: "social", AllowedUserIDs: []string{"U999"}}}, AllowedUserIDs: []string{"U123"}, ContextMessages: 1}
+
+	allowed := newTestReactionAddedEvent("U999", slackSummaryReaction, "171234.5678")
+	allowed.Item.Channel = "C123"
+	connector.handleReactionAddedEvent(context.Background(), allowed)
+
+	denied := newTestReactionAddedEvent("U123", slackSummaryReaction, "171234.9999")
+	denied.Item.Channel = "C123"
+	connector.handleReactionAddedEvent(context.Background(), denied)
+
+	summaries := router.summariesSnapshot()
+	require.Len(t, summaries, 1)
 	assert.Equal(t, "171234.5678", summaries[0].threadTS)
 }
 
@@ -4224,7 +4354,7 @@ func TestHandleReactionAddedEventRejectsCronForDifferentChannel(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, nil, runner)
-	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, AllowedUserIDs: []string{"U456"}, ContextMessages: 1}
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#triage", Agent: "triage"}}, AllowedUserIDs: []string{"U456"}, ContextMessages: 1}
 	ev := newTestReactionAddedEvent("U456", slackOnDemandCronReaction, "171234.5678")
 	ev.Item.Channel = "C123"
 	connector.handleReactionAddedEvent(context.Background(), ev)
@@ -4265,7 +4395,7 @@ func TestHandleReactionAddedEventRerunsScheduledCronThreadRoot(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, nil, runner)
-	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, AllowedUserIDs: []string{"U456"}, ContextMessages: 1}
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "#triage", Agent: "triage"}}, AllowedUserIDs: []string{"U456"}, ContextMessages: 1}
 	ev := newTestReactionAddedEvent("U456", slackOnDemandCronReaction, "171234.5678")
 	ev.Item.Channel = "C123"
 	connector.handleReactionAddedEvent(context.Background(), ev)
@@ -4461,6 +4591,8 @@ func newSlackStackTestServer(t *testing.T, posted *[]url.Values, reactions *[]st
 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/conversations.info":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
 		case "/chat.postMessage":
 			if !assert.NoError(t, r.ParseForm()) {
 				return

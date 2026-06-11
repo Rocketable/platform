@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/netip"
 	"os"
@@ -107,10 +108,17 @@ type SlackConfig struct {
 
 // SlackSocialConfig configures mention-triggered Slack channel threads.
 type SlackSocialConfig struct {
-	Enabled         bool              `json:"enabled"`
-	ChannelAgents   map[string]string `json:"channel_agents,omitempty"`
-	AllowedUserIDs  []string          `json:"allowed_user_ids,omitempty"`
-	ContextMessages int               `json:"context_messages"`
+	Enabled         bool                       `json:"enabled"`
+	Channels        []SlackSocialChannelConfig `json:"channels,omitempty"`
+	AllowedUserIDs  []string                   `json:"allowed_user_ids,omitempty"`
+	ContextMessages int                        `json:"context_messages"`
+}
+
+// SlackSocialChannelConfig configures one Slack social-mode channel.
+type SlackSocialChannelConfig struct {
+	Channel        string   `json:"channel"`
+	Agent          string   `json:"agent"`
+	AllowedUserIDs []string `json:"allowed_user_ids,omitempty"`
 }
 
 // OpenAIConfig configures the OpenAI audio clients.
@@ -150,6 +158,10 @@ func Load(configPath string) (*Config, error) {
 	}
 
 	if data, err = migrateThreadAgentsConfig(absPath, data); err != nil {
+		return nil, err
+	}
+
+	if data, err = migrateSlackSocialChannelAgentsConfig(absPath, data); err != nil {
 		return nil, err
 	}
 
@@ -226,13 +238,96 @@ func migrateThreadAgentsConfig(path string, data []byte) ([]byte, error) {
 
 	root["thread_agents"] = threadAgents
 
+	return writeMigratedConfig(path, root)
+}
+
+func migrateSlackSocialChannelAgentsConfig(path string, data []byte) ([]byte, error) {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		return data, nil
+	}
+
+	var slack map[string]json.RawMessage
+	if err := json.Unmarshal(root["slack"], &slack); err != nil {
+		return data, nil
+	}
+
+	var socialMode map[string]json.RawMessage
+	if err := json.Unmarshal(slack["social_mode"], &socialMode); err != nil {
+		return data, nil
+	}
+
+	raw, ok := socialMode["channel_agents"]
+	if !ok {
+		return data, nil
+	}
+
+	var old map[string]string
+	if err := json.Unmarshal(raw, &old); err != nil {
+		return data, nil
+	}
+
+	var channels []SlackSocialChannelConfig
+	if raw, ok := socialMode["channels"]; ok {
+		if err := json.Unmarshal(raw, &channels); err != nil {
+			return data, nil
+		}
+	}
+
+	seen := make(map[string]bool, len(channels))
+	for _, channel := range channels {
+		if name := normalizeSlackSocialChannel(channel.Channel); name != "" {
+			seen[name] = true
+		}
+	}
+
+	for _, channel := range slices.Sorted(maps.Keys(old)) {
+		name := normalizeSlackSocialChannel(channel)
+
+		agent := strings.TrimSpace(old[channel])
+		if name == "" || agent == "" || seen[name] {
+			continue
+		}
+
+		channels = append(channels, SlackSocialChannelConfig{Channel: name, Agent: agent})
+		seen[name] = true
+	}
+
+	if len(channels) > 0 {
+		migratedChannels, err := json.Marshal(channels)
+		if err != nil {
+			return nil, fmt.Errorf("marshal migrated slack social channels: %w", err)
+		}
+
+		socialMode["channels"] = migratedChannels
+	}
+
+	delete(socialMode, "channel_agents")
+
+	migratedSocialMode, err := json.Marshal(socialMode)
+	if err != nil {
+		return nil, fmt.Errorf("marshal migrated slack social mode: %w", err)
+	}
+
+	slack["social_mode"] = migratedSocialMode
+
+	migratedSlack, err := json.Marshal(slack)
+	if err != nil {
+		return nil, fmt.Errorf("marshal migrated slack config: %w", err)
+	}
+
+	root["slack"] = migratedSlack
+
+	return writeMigratedConfig(path, root)
+}
+
+func writeMigratedConfig(path string, root map[string]json.RawMessage) ([]byte, error) {
 	updated, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal migrated config JSON: %w", err)
 	}
 
 	updated = append(updated, '\n')
-
 	if err := os.WriteFile(path, updated, 0o600); err != nil {
 		return nil, fmt.Errorf("write migrated config: %w", err)
 	}
@@ -453,6 +548,7 @@ func (c *Config) validateSlack() error {
 	}
 
 	c.Slack.SocialMode.AllowedUserIDs = normalizeStringList(c.Slack.SocialMode.AllowedUserIDs)
+	c.Slack.SocialMode.Channels = normalizeSlackSocialChannels(c.Slack.SocialMode.Channels)
 
 	if !c.Slack.SocialMode.Enabled {
 		return nil
@@ -471,6 +567,36 @@ func (c *Config) validateSlack() error {
 	}
 
 	return nil
+}
+
+func normalizeSlackSocialChannels(channels []SlackSocialChannelConfig) []SlackSocialChannelConfig {
+	normalized := make([]SlackSocialChannelConfig, 0, len(channels))
+	for _, channel := range channels {
+		channel.Channel = normalizeSlackSocialChannel(channel.Channel)
+		channel.Agent = strings.TrimSpace(channel.Agent)
+
+		channel.AllowedUserIDs = normalizeStringList(channel.AllowedUserIDs)
+		if channel.Channel == "" || channel.Agent == "" {
+			continue
+		}
+
+		normalized = append(normalized, channel)
+	}
+
+	return normalized
+}
+
+func normalizeSlackSocialChannel(channel string) string {
+	channel = strings.TrimSpace(channel)
+	if channel == "" {
+		return ""
+	}
+
+	if !strings.HasPrefix(channel, "#") {
+		channel = "#" + channel
+	}
+
+	return channel
 }
 
 func validateEnvironment(environment []string) error {
