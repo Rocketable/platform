@@ -4,9 +4,11 @@ package agentlint
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketcode"
@@ -56,13 +58,6 @@ type suppression struct {
 
 // Lint checks the effective agent system rooted at runtimeRoot.
 func Lint(runtimeRoot string) (Result, error) {
-	agentsRoot := filepath.Join(runtimeRoot, "agents")
-
-	agentLoad := rocketcode.LoadAgents(os.DirFS(agentsRoot))
-	if len(agentLoad.Errors) > 0 {
-		return Result{}, fmt.Errorf("load agents: %w", agentLoad.Errors[0])
-	}
-
 	skillsRoot := filepath.Join(runtimeRoot, "skills")
 	if _, err := os.Stat(skillsRoot); err == nil {
 		skillLoad := rocketcode.LoadSkills(os.DirFS(skillsRoot), skillsRoot)
@@ -73,7 +68,7 @@ func Lint(runtimeRoot string) (Result, error) {
 		return Result{}, fmt.Errorf("stat skills: %w", err)
 	}
 
-	infos, findings, err := loadAgentInfos(agentsRoot, agentLoad.Agents)
+	infos, findings, err := loadRuntimeAgentInfos(runtimeRoot)
 	if err != nil {
 		return Result{}, err
 	}
@@ -95,6 +90,51 @@ func Lint(runtimeRoot string) (Result, error) {
 	})
 
 	return Result{Findings: findings}, nil
+}
+
+// AgentGraphDOT returns a deterministic Graphviz/DOT task delegation graph for the effective agents under runtimeRoot.
+func AgentGraphDOT(runtimeRoot string) (string, error) {
+	infos, _, err := loadRuntimeAgentInfos(runtimeRoot)
+	if err != nil {
+		return "", err
+	}
+
+	edges := taskEdges(infos)
+	names := slices.Sorted(maps.Keys(infos))
+
+	var b strings.Builder
+	b.WriteString("digraph agent_graph {\n")
+
+	for _, name := range names {
+		label := name + "\nmaxRecursion=" + maxRecursionLabel(infos[name].agent.MaxRecursion)
+		fmt.Fprintf(&b, "  %s [label=%s];\n", strconv.Quote(name), strconv.Quote(label))
+	}
+
+	for _, from := range names {
+		for _, to := range slices.Sorted(slices.Values(edges[from])) {
+			if reaches(edges, to, from, map[string]bool{}) {
+				fmt.Fprintf(&b, "  %s -> %s [color=%s, label=%s];\n", strconv.Quote(from), strconv.Quote(to), strconv.Quote("red"), strconv.Quote("cycle"))
+				continue
+			}
+
+			fmt.Fprintf(&b, "  %s -> %s;\n", strconv.Quote(from), strconv.Quote(to))
+		}
+	}
+
+	b.WriteString("}\n")
+
+	return b.String(), nil
+}
+
+func loadRuntimeAgentInfos(runtimeRoot string) (map[string]*agentInfo, []Finding, error) {
+	agentsRoot := filepath.Join(runtimeRoot, "agents")
+
+	agentLoad := rocketcode.LoadAgents(os.DirFS(agentsRoot))
+	if len(agentLoad.Errors) > 0 {
+		return nil, nil, fmt.Errorf("load agents: %w", agentLoad.Errors[0])
+	}
+
+	return loadAgentInfos(agentsRoot, agentLoad.Agents)
 }
 
 func loadAgentInfos(agentsRoot string, agents rocketcode.Agents) (map[string]*agentInfo, []Finding, error) {
@@ -367,6 +407,14 @@ func reaches(edges map[string][]string, from, to string, seen map[string]bool) b
 	}
 
 	return false
+}
+
+func maxRecursionLabel(maxRecursion *int) string {
+	if maxRecursion == nil {
+		return "unbounded"
+	}
+
+	return strconv.Itoa(*maxRecursion)
 }
 
 func pathsOverlap(a, b string) bool {

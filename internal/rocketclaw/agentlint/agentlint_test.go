@@ -150,6 +150,46 @@ bad
 	assertFindingCodes(t, result.Findings, rc000)
 }
 
+func TestAgentGraphDOTExpandsWildcardAndMarksCycles(t *testing.T) {
+	runtimeRoot := t.TempDir()
+	writeAgent(t, runtimeRoot, "alpha.md", `---
+description: alpha
+maxRecursion: 0
+permission:
+  task:
+    "hub": allow
+---
+alpha
+`)
+	writeAgent(t, runtimeRoot, "beta.md", `---
+description: beta
+maxRecursion: 2
+---
+beta
+`)
+	writeAgent(t, runtimeRoot, "hub.md", `---
+description: hub
+permission:
+  task:
+    "*": allow
+    "beta": deny
+---
+hub
+`)
+
+	dot, err := AgentGraphDOT(runtimeRoot)
+	require.NoError(t, err)
+	assert.Equal(t, `digraph agent_graph {
+  "alpha" [label="alpha\nmaxRecursion=0"];
+  "beta" [label="beta\nmaxRecursion=2"];
+  "hub" [label="hub\nmaxRecursion=unbounded"];
+  "alpha" -> "hub" [color="red", label="cycle"];
+  "hub" -> "alpha" [color="red", label="cycle"];
+  "hub" -> "hub" [color="red", label="cycle"];
+}
+`, dot)
+}
+
 func writeAgent(t *testing.T, runtimeRoot, name, content string) {
 	t.Helper()
 

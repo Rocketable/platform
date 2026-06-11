@@ -75,7 +75,7 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 
 - Task permission defaults must not become permissive by accident.
 - Agent `maxRecursion` budgets are stricter than `task` permission grants; a permitted task target remains unavailable once the active inference's recursion budget is exhausted.
-- Agent-system safety linting for permissions, delegation graphs, suppressions, and write-to-execute risk is governed by ADR 0006.
+- Agent-system safety linting and graph inspection for permissions, delegation graphs, suppressions, and write-to-execute risk are governed by ADR 0006.
 - Cron agents may selectively deny tools.
 - The inter-agent guardrail agent may use tools only when its own `permission` frontmatter allows those tools.
 - RocketClaw tools are part of runtime behavior and must remain visible to RocketCode according to the bridge mode that owns the turn.
@@ -124,6 +124,7 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - 2026-06-10: Specified that `maxRecursion` subdelegation budgets override otherwise-permitted `task` grants when exhausted.
 - 2026-06-10: Added local-only guardrail filtering for RocketCode task delegation prompts and child final responses.
 - 2026-06-11: Linked agent-system safety linting to ADR 0006.
+- 2026-06-11: Linked agent-system graph inspection to ADR 0006.
 - 2026-06-11: Added Slack goal-loop routing, continuation ordering, restart recovery, and goal-update tool contracts governed by ADR 0007.
 - 2026-06-11: Added visible Slack-thread delivery, stop emoji controls, and completion checkmark reactions for Slack goal loops.
 - 2026-06-11: Added `🏁` as an additional Slack goal-loop trigger alongside `🔁`.

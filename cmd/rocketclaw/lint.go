@@ -21,25 +21,11 @@ func runLint(args []string) error {
 		return fmt.Errorf("usage: rocketclaw lint [next|current]")
 	}
 
-	_, cfg, err := loadRuntimeConfig()
+	runtimeRoot, cleanup, err := runtimeRootForInspectionTarget(target, "rocketclaw-lint-*", "lint")
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return err
 	}
-
-	runtimeRoot := filepath.Join(cfg.Workspace, cfg.WorkDirName())
-	if target == "next" {
-		tmp, err := os.MkdirTemp("", "rocketclaw-lint-*")
-		if err != nil {
-			return fmt.Errorf("create lint temp dir: %w", err)
-		}
-		defer os.RemoveAll(tmp)
-
-		runtimeRoot = filepath.Join(tmp, cfg.WorkDirName())
-		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-		if err := skel.SyncEffectiveRuntimeAssets(cfg.Workspace, runtimeRoot, cfg.Overlays, logger); err != nil {
-			return fmt.Errorf("build lint target: %w", err)
-		}
-	}
+	defer cleanup()
 
 	result, err := agentlint.Lint(runtimeRoot)
 	if err != nil {
@@ -59,4 +45,34 @@ func runLint(args []string) error {
 	}
 
 	return exitCodeError(1)
+}
+
+func runtimeRootForInspectionTarget(target, tempPattern, buildName string) (string, func(), error) {
+	cleanup := func() {
+	}
+
+	_, cfg, err := loadRuntimeConfig()
+	if err != nil {
+		return "", cleanup, fmt.Errorf("load config: %w", err)
+	}
+
+	runtimeRoot := filepath.Join(cfg.Workspace, cfg.WorkDirName())
+	if target == "next" {
+		tmp, err := os.MkdirTemp("", tempPattern)
+		if err != nil {
+			return "", cleanup, fmt.Errorf("create %s temp dir: %w", buildName, err)
+		}
+		cleanup = func() {
+			os.RemoveAll(tmp)
+		}
+
+		runtimeRoot = filepath.Join(tmp, cfg.WorkDirName())
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		if err := skel.SyncEffectiveRuntimeAssets(cfg.Workspace, runtimeRoot, cfg.Overlays, logger); err != nil {
+			cleanup()
+			return "", cleanup, fmt.Errorf("build %s target: %w", buildName, err)
+		}
+	}
+
+	return runtimeRoot, cleanup, nil
 }

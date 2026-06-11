@@ -1,15 +1,15 @@
-# 0006. Agent Linter
+# 0006. Agent System Inspection
 
 Status: Accepted
 Human approval required for meaning changes: Yes
 
 ## Decision
 
-RocketClaw provides `rocketclaw lint [next|current]` as a whole-system safety linter for effective RocketCode agents, skills, scripts, and task delegation. `rocketclaw lint` defaults to `rocketclaw lint next`.
+RocketClaw provides `rocketclaw lint [next|current]` as a whole-system safety linter for effective RocketCode agents, skills, scripts, and task delegation. RocketClaw also provides `rocketclaw agent-graph [next|current]` as a whole-system Graphviz/DOT inspection command for effective RocketCode task delegation. Both commands default to `next`.
 
 ## Scope
 
-This ADR governs the user-visible linter command, lint target semantics, finding codes, suppressions, and setup-skill guidance for agent-system safety. It does not require startup to run lint automatically.
+This ADR governs the user-visible linter command, agent graph command, target semantics, finding codes, suppressions, and setup-skill guidance for agent-system safety. It does not require startup to run lint automatically.
 
 ## Context
 
@@ -29,6 +29,12 @@ RocketClaw already relies on embedded create/update skills to guide agents towar
 - Lint findings exit `1` and print deterministic line-oriented findings.
 - Config, load, and internal errors return normal command errors.
 - Help text lists `rocketclaw lint [next|current]`.
+- `rocketclaw agent-graph` is equivalent to `rocketclaw agent-graph next`.
+- `rocketclaw agent-graph next` writes a DOT graph for the effective runtime assets that would be materialized after a RocketClaw restart using the selected config.
+- `rocketclaw agent-graph current` writes a DOT graph for the currently materialized selected runtime directory.
+- Unknown agent-graph targets must return a usage-style error.
+- A successful agent graph exits `0` and writes deterministic Graphviz/DOT to stdout.
+- Help text lists `rocketclaw agent-graph [next|current]`.
 
 ### Target Semantics
 
@@ -39,7 +45,7 @@ RocketClaw already relies on embedded create/update skills to guide agents towar
 - `next` must not mutate the real `.rocketclaw/` or `.femtoclaw/` directory.
 - `next` must not recreate or remove workspace `scripts/` symlinks.
 - `next` must not modify real configured overlay clone directories under the selected runtime directory.
-- Temporary assets created for `next` are deleted after lint completes.
+- Temporary assets created for `next` are deleted after the command completes.
 
 ### Finding Codes
 
@@ -62,6 +68,8 @@ RocketClaw already relies on embedded create/update skills to guide agents towar
 - `./scripts/x.sh` and `scripts/x.sh` are overlapping references to the same workspace path.
 - Glob-like or wildcard permission patterns are checked conservatively; possible overlap is enough to report a safety finding.
 - Task graph edges are built by evaluating each agent's effective `task` permission against every potential target agent name, preserving RocketCode last-match-wins behavior.
+- Wildcard task grants such as `task: {"*": allow}` resolve to concrete graph edges for each loaded target agent allowed by effective permission evaluation; wildcard grants must not be emitted as a literal `*` target.
+- Agent graph output uses the same task graph edge construction as lint.
 
 ### Suppressions
 
@@ -79,6 +87,9 @@ RocketClaw already relies on embedded create/update skills to guide agents towar
 - Each finding line includes code, severity, relevant agent path or paths, and the relevant path or rule when practical.
 - Findings sort deterministically by code, path, and message.
 - Initial linter findings are blocking `error` findings; this ADR does not introduce warning-only lint behavior.
+- Agent graph output is deterministic DOT. It includes every loaded agent as a node labeled with the agent name and `maxRecursion` state, and every effective `task` delegation grant as an edge.
+- Agent graph output represents omitted `maxRecursion` and `maxRecursion: -1` as unbounded, and represents `maxRecursion: 0` and positive values as their numeric value.
+- Agent graph output renders self-loops as normal DOT self-edges and marks cycle-participating edges deterministically.
 
 ### Setup Skills
 
@@ -109,9 +120,12 @@ RocketClaw already relies on embedded create/update skills to guide agents towar
 
 - `lint next` must share effective asset semantics with startup without inheriting startup's runtime-directory reset or workspace script-symlink side effects.
 - Agent-system safety checks must consider the whole effective system, including transitive task reachability.
+- Agent graph inspection must use the same effective target semantics and task graph construction as lint.
 - Human suppressions are explicit, local, and justified instead of silent or global.
 - Tests for lint behavior must cover both target semantics and each finding code.
+- Tests for agent graph behavior must cover target semantics and deterministic DOT output.
 
 ## Changelog
 
 - 2026-06-11: Initial accepted snapshot.
+- 2026-06-11: Added `rocketclaw agent-graph [next|current]` as a DOT inspection command sharing lint target and task graph semantics, including wildcard task grant expansion to concrete agent edges.
