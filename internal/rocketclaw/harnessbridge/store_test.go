@@ -16,10 +16,35 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	harness "github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func NewSessionService(workspace string) (*SessionService, error) {
+	return NewSessionServiceIn(workspace, config.DefaultWorkDir)
+}
+
+func sessionDBPath(workspace string) string {
+	return sessionDBPathIn(workspace, config.DefaultWorkDir)
+}
+
+func prepareSessionDBPath(workspace string) error {
+	return prepareSessionDBPathIn(workspace, config.DefaultWorkDir)
+}
+
+func DeleteSession(ctx context.Context, workspace, conversationID string) (int64, error) {
+	return DeleteSessionIn(ctx, workspace, config.DefaultWorkDir, conversationID)
+}
+
+func VacuumSessions(ctx context.Context, workspace string) (VacuumStats, error) {
+	return VacuumSessionsIn(ctx, workspace, config.DefaultWorkDir)
+}
+
+func ListSessions(ctx context.Context, workspace string) ([]SessionSummary, error) {
+	return ListSessionsIn(ctx, workspace, config.DefaultWorkDir)
+}
 
 func TestSQLiteSessionStoreAppendAndLoad(t *testing.T) {
 	service := newTestSessionService(t)

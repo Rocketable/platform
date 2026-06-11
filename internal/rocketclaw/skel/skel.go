@@ -88,29 +88,8 @@ func SyncInWithOverlays(workspace, workDir string, overlays []string, logger *sl
 		return fmt.Errorf("reset rocketclaw target: %w", err)
 	}
 
-	if err := syncFSFiltered(payload, payloadRoot, target, "syncing embedded rocketclaw skeleton", logger, true, false, nil); err != nil {
-		return fmt.Errorf("sync embedded rocketclaw skeleton: %w", err)
-	}
-
-	for _, root := range [...]string{agentsRoot, workspaceCron} {
-		if err := syncFSFiltered(payload, root, filepath.Join(target, root), "syncing embedded rocketclaw runtime assets", logger, true, false, nil); err != nil {
-			return fmt.Errorf("sync embedded rocketclaw runtime assets %s: %w", root, err)
-		}
-	}
-
-	overlayInfos := overlayInfosIn(filepath.Join(workspace, workDir), overlays)
-	if err := reconcileGitOverlays(target, overlayInfos, logger); err != nil {
-		return fmt.Errorf("reconcile configured rocketclaw overlays: %w", err)
-	}
-
-	for _, overlay := range overlayInfos {
-		if err := applyGitOverlay(target, overlay, logger); err != nil {
-			return fmt.Errorf("apply configured rocketclaw overlay %q: %w", overlay.Spec, err)
-		}
-	}
-
-	if err := overlayWorkspaceIn(workspace, target, logger); err != nil {
-		return fmt.Errorf("apply rocketclaw overlay: %w", err)
+	if err := SyncEffectiveRuntimeAssets(workspace, target, overlays, logger); err != nil {
+		return err
 	}
 
 	if err := syncWorkspaceScriptSymlinks(workspace, workDir, logger); err != nil {

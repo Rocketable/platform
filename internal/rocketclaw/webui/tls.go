@@ -16,8 +16,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
 )
 
 const certValidity = 365 * 24 * time.Hour
@@ -26,10 +24,6 @@ type tlsAssets struct {
 	certFile string
 	keyFile  string
 	ips      []net.IP
-}
-
-func prepareTLSAssets(workspace, listenAddr, certFile, keyFile string, collectIPv4Addrs func() ([]net.IP, error)) (tlsAssets, error) {
-	return prepareTLSAssetsIn(workspace, config.DefaultWorkDir, listenAddr, certFile, keyFile, collectIPv4Addrs)
 }
 
 func prepareTLSAssetsIn(workspace, workDir, listenAddr, certFile, keyFile string, collectIPv4Addrs func() ([]net.IP, error)) (tlsAssets, error) {

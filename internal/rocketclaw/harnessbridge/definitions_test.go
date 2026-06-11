@@ -5,9 +5,18 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
 )
+
+func loadRocketCodeDefinitions(root *os.Root, workspace string, mode toolMode) (rocketcode.Agents, rocketcode.Skills, error) {
+	return loadRocketCodeDefinitionsIn(root, workspace, config.DefaultWorkDir, mode)
+}
+
+func ExternalMCPAgents(workspace string) ([]string, error) {
+	return ExternalMCPAgentsIn(workspace, config.DefaultWorkDir)
+}
 
 func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	workspace := t.TempDir()

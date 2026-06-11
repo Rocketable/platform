@@ -1,6 +1,4 @@
 // Package oai provides ChatGPT OAuth-backed OpenAI clients for rocketclaw.
-//
-//nolint:exhaustruct // HTTP and decoded JSON structs intentionally use sparse literals.
 package oai
 
 import (
@@ -21,7 +19,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/google/uuid"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -68,11 +65,6 @@ type claims struct {
 	} `json:"https://api.openai.com/auth"`
 }
 
-// AuthFilePath returns the workspace-local token file path.
-func AuthFilePath(workspace string) (string, error) {
-	return AuthFilePathIn(workspace, config.DefaultWorkDir)
-}
-
 // AuthFilePathIn returns the workspace-local token file path in workDir.
 func AuthFilePathIn(workspace, workDir string) (string, error) {
 	if strings.TrimSpace(workspace) == "" {
@@ -90,11 +82,6 @@ func AuthFilePathIn(workspace, workDir string) (string, error) {
 	}
 
 	return filepath.Join(workspace, workDir, "auth.json"), nil
-}
-
-// LoadToken reads the persisted ChatGPT OAuth token.
-func LoadToken(workspace string) (Token, error) {
-	return LoadTokenIn(workspace, config.DefaultWorkDir)
 }
 
 // LoadTokenIn reads the persisted ChatGPT OAuth token from workDir.
@@ -121,11 +108,6 @@ func LoadTokenIn(workspace, workDir string) (Token, error) {
 	return token, nil
 }
 
-// SaveToken writes the ChatGPT OAuth token with owner-only permissions.
-func SaveToken(workspace string, token Token) error {
-	return SaveTokenIn(workspace, config.DefaultWorkDir, token)
-}
-
 // SaveTokenIn writes the ChatGPT OAuth token to workDir with owner-only permissions.
 func SaveTokenIn(workspace, workDir string, token Token) error {
 	path, err := AuthFilePathIn(workspace, workDir)
@@ -148,11 +130,6 @@ func SaveTokenIn(workspace, workDir string, token Token) error {
 	}
 
 	return nil
-}
-
-// LoginBrowser completes the local browser OAuth flow and saves the resulting token.
-func LoginBrowser(ctx context.Context, workspace string, out io.Writer) (string, error) {
-	return LoginBrowserIn(ctx, workspace, config.DefaultWorkDir, out)
 }
 
 // LoginBrowserIn completes the local browser OAuth flow and saves the resulting token in workDir.
@@ -251,11 +228,6 @@ func LoginBrowserIn(ctx context.Context, workspace, workDir string, out io.Write
 	return saveTokenResponseIn(workspace, workDir, response)
 }
 
-// LoginDevice completes the headless device OAuth flow and saves the resulting token.
-func LoginDevice(ctx context.Context, workspace string, out io.Writer) (string, error) {
-	return LoginDeviceIn(ctx, workspace, config.DefaultWorkDir, out)
-}
-
 // LoginDeviceIn completes the headless device OAuth flow and saves the resulting token in workDir.
 func LoginDeviceIn(ctx context.Context, workspace, workDir string, out io.Writer) (string, error) {
 	if ctx == nil {
@@ -321,11 +293,6 @@ func LoginDeviceIn(ctx context.Context, workspace, workDir string, out io.Writer
 			return path, nil
 		}
 	}
-}
-
-// NewChatGPTClient creates an OpenAI client that sends Responses API requests to ChatGPT Codex.
-func NewChatGPTClient(workspace string, opts ...option.RequestOption) (*openai.Client, error) {
-	return NewChatGPTClientIn(workspace, config.DefaultWorkDir, opts...)
 }
 
 // NewChatGPTClientIn creates an OpenAI client that sends Responses API requests to ChatGPT Codex using workDir auth.
@@ -1188,10 +1155,6 @@ func pollDeviceIn(ctx context.Context, workspace, workDir, deviceAuthID, userCod
 	}
 
 	return path, true, nil
-}
-
-func saveTokenResponse(workspace string, response tokenResponse) (string, error) {
-	return saveTokenResponseIn(workspace, config.DefaultWorkDir, response)
 }
 
 func saveTokenResponseIn(workspace, workDir string, response tokenResponse) (string, error) {

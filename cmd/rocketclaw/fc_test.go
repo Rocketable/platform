@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	openai "github.com/openai/openai-go/v3"
@@ -19,6 +20,26 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func runFCDelete(workspace string, args []string, out io.Writer) error {
+	return runFCDeleteIn(workspace, config.DefaultWorkDir, args, out)
+}
+
+func runFCVacuum(workspace string, args []string, out io.Writer) error {
+	return runFCVacuumIn(workspace, config.DefaultWorkDir, args, out)
+}
+
+func writeFCList(ctx context.Context, workspace string, out io.Writer) error {
+	return writeFCListIn(ctx, workspace, config.DefaultWorkDir, out)
+}
+
+func runFCObserve(workspace string, args []string, out io.Writer) error {
+	return runFCObserveIn(workspace, config.DefaultWorkDir, args, out)
+}
+
+func writeFCObserve(ctx context.Context, workspace, conversationID string, follow bool, pollInterval time.Duration, out io.Writer) error {
+	return writeFCObserveIn(ctx, workspace, config.DefaultWorkDir, conversationID, follow, pollInterval, out)
+}
 
 func TestWriteFCListIncludesLastMessages(t *testing.T) {
 	workspace := t.TempDir()

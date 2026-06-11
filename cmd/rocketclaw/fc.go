@@ -12,7 +12,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 )
@@ -56,10 +55,6 @@ func runFC(args []string) error {
 	default:
 		return fmt.Errorf("unknown rocketcode command %q", args[0])
 	}
-}
-
-func runFCDelete(workspace string, args []string, out io.Writer) error {
-	return runFCDeleteIn(workspace, config.DefaultWorkDir, args, out)
 }
 
 func runFCDeleteIn(workspace, workDir string, args []string, out io.Writer) error {
@@ -118,10 +113,6 @@ func runFCDeleteIn(workspace, workDir string, args []string, out io.Writer) erro
 	return writeVacuumStats(out, stats)
 }
 
-func runFCVacuum(workspace string, args []string, out io.Writer) error {
-	return runFCVacuumIn(workspace, config.DefaultWorkDir, args, out)
-}
-
 func runFCVacuumIn(workspace, workDir string, args []string, out io.Writer) error {
 	if len(args) != 0 {
 		return errors.New("vacuum does not accept arguments")
@@ -171,10 +162,6 @@ func writeVacuumStats(out io.Writer, stats harnessbridge.VacuumStats) error {
 	return nil
 }
 
-func writeFCList(ctx context.Context, workspace string, out io.Writer) error {
-	return writeFCListIn(ctx, workspace, config.DefaultWorkDir, out)
-}
-
 func writeFCListIn(ctx context.Context, workspace, workDir string, out io.Writer) error {
 	summaries, err := harnessbridge.ListSessionsIn(ctx, workspace, workDir)
 	if err != nil {
@@ -209,10 +196,6 @@ func writeFCListIn(ctx context.Context, workspace, workDir string, out io.Writer
 	return nil
 }
 
-func runFCObserve(workspace string, args []string, out io.Writer) error {
-	return runFCObserveIn(workspace, config.DefaultWorkDir, args, out)
-}
-
 func runFCObserveIn(workspace, workDir string, args []string, out io.Writer) error {
 	flagSet := flag.NewFlagSet("rocketclaw fc observe", flag.ContinueOnError)
 	follow := flagSet.Bool("follow", false, "follow session entries")
@@ -233,10 +216,6 @@ func runFCObserveIn(workspace, workDir string, args []string, out io.Writer) err
 	}
 
 	return writeFCObserveIn(context.Background(), workspace, workDir, conversationID, *follow, time.Second, out)
-}
-
-func writeFCObserve(ctx context.Context, workspace, conversationID string, follow bool, pollInterval time.Duration, out io.Writer) error {
-	return writeFCObserveIn(ctx, workspace, config.DefaultWorkDir, conversationID, follow, pollInterval, out)
 }
 
 func writeFCObserveIn(ctx context.Context, workspace, workDir, conversationID string, follow bool, pollInterval time.Duration, out io.Writer) error {

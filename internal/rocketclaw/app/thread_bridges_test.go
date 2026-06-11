@@ -22,7 +22,7 @@ import (
 
 func TestRunReportsPendingRestartNotificationStartupErrors(t *testing.T) {
 	workspace := t.TempDir()
-	service, err := harnessbridge.NewSessionService(workspace)
+	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultWorkDir)
 	require.NoError(t, err)
 	require.NoError(t, service.Stop(context.Background()))
 
@@ -199,7 +199,7 @@ func TestThreadBridgeManagerStopsStartedThreadWhenSeedFails(t *testing.T) {
 }
 
 func TestThreadBridgeManagerStopsStartedThreadWhenPersistFails(t *testing.T) {
-	store, err := harnessbridge.NewSessionService(t.TempDir())
+	store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), config.DefaultWorkDir)
 	require.NoError(t, err)
 	require.NoError(t, store.Stop(context.Background()))
 
@@ -785,7 +785,7 @@ func readOneInbound(t *testing.T, bus *events.Bus) *events.InboundMessage {
 func newTestSessionService(t *testing.T, workspace string) *harnessbridge.SessionService {
 	t.Helper()
 
-	service, err := harnessbridge.NewSessionService(workspace)
+	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultWorkDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
 

@@ -722,17 +722,6 @@ func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Contex
 	}
 }
 
-func outboundLoop(
-	ctx context.Context,
-	bus *events.Bus,
-	slackSend func(context.Context, *events.OutboundMessage) error,
-	discordSend func(context.Context, *events.OutboundMessage) error,
-	webSend func(context.Context, *events.OutboundMessage) error,
-	logger *slog.Logger,
-) error {
-	return outboundLoopWithDiscordText(ctx, bus, slackSend, discardOutboundSend, discordSend, webSend, logger)
-}
-
 func outboundLoopWithDiscordText(
 	ctx context.Context,
 	bus *events.Bus,

@@ -2006,7 +2006,7 @@ func TestSeedResponseThreadCompactsPriorMainEntriesWithChatGPTInstructions(t *te
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\n---\nAgent instructions\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-	require.NoError(t, oai.SaveToken(workspace, oai.Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acct"}))
+	require.NoError(t, oai.SaveTokenIn(workspace, config.DefaultWorkDir, oai.Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acct"}))
 
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)

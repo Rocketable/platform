@@ -1,4 +1,3 @@
-//nolint:exhaustruct // Tests use sparse HTTP/OpenAI DTO literals for focused assertions.
 package oai
 
 import (
@@ -19,6 +18,8 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,6 +40,34 @@ func (w loginOutput) Write(p []byte) (int, error) {
 type loginBrowserResult struct {
 	path string
 	err  error
+}
+
+func AuthFilePath(workspace string) (string, error) {
+	return AuthFilePathIn(workspace, config.DefaultWorkDir)
+}
+
+func LoadToken(workspace string) (Token, error) {
+	return LoadTokenIn(workspace, config.DefaultWorkDir)
+}
+
+func SaveToken(workspace string, token Token) error {
+	return SaveTokenIn(workspace, config.DefaultWorkDir, token)
+}
+
+func LoginBrowser(ctx context.Context, workspace string, out io.Writer) (string, error) {
+	return LoginBrowserIn(ctx, workspace, config.DefaultWorkDir, out)
+}
+
+func LoginDevice(ctx context.Context, workspace string, out io.Writer) (string, error) {
+	return LoginDeviceIn(ctx, workspace, config.DefaultWorkDir, out)
+}
+
+func NewChatGPTClient(workspace string, opts ...option.RequestOption) (*openai.Client, error) {
+	return NewChatGPTClientIn(workspace, config.DefaultWorkDir, opts...)
+}
+
+func saveTokenResponse(workspace string, response tokenResponse) (string, error) {
+	return saveTokenResponseIn(workspace, config.DefaultWorkDir, response)
 }
 
 func TestTokenRoundTripUsesWorkspaceAuthFile(t *testing.T) {

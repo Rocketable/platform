@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/voice"
 )
@@ -35,18 +34,6 @@ type Server struct {
 	closed   bool
 	closeFn  func(context.Context) error
 	hub      *voiceHub
-}
-
-// Start launches the browser-facing web UI listener.
-func Start(
-	ctx context.Context,
-	logger *slog.Logger,
-	workspace, listenAddr, certFile, keyFile string,
-	transcriber transcriber,
-	tts synthesizer,
-	publisher *voice.TranscriptionPublisher,
-) (*Server, error) {
-	return StartIn(ctx, logger, workspace, config.DefaultWorkDir, listenAddr, certFile, keyFile, transcriber, tts, publisher)
 }
 
 // StartIn launches the browser-facing web UI listener using workDir for fallback TLS assets.

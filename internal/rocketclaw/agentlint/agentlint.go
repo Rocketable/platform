@@ -176,12 +176,6 @@ func collectSuppressions(filePath, key string, node *yaml.Node, suppressions map
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		childKey := node.Content[i].Value
 		addSuppressionsFromNode(filePath, childKey, node.Content[i], suppressions, findings)
-
-		if key == "permission" {
-			collectSuppressions(filePath, childKey, node.Content[i+1], suppressions, findings)
-			continue
-		}
-
 		collectSuppressions(filePath, childKey, node.Content[i+1], suppressions, findings)
 	}
 }
@@ -211,12 +205,7 @@ func addSuppressionsFromNode(filePath, key string, node *yaml.Node, suppressions
 }
 
 func validCode(code string) bool {
-	switch code {
-	case rc001, rc002, rc003, rc004, rc005, rc006:
-		return true
-	default:
-		return false
-	}
+	return slices.Contains([]string{rc001, rc002, rc003, rc004, rc005, rc006}, code)
 }
 
 func parseNoLint(comment string) (string, bool) {

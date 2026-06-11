@@ -32,9 +32,26 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/voice"
 )
+
+// Start launches the test browser-facing web UI listener in the default work dir.
+func Start(
+	ctx context.Context,
+	logger *slog.Logger,
+	workspace, listenAddr, certFile, keyFile string,
+	transcriber transcriber,
+	tts synthesizer,
+	publisher *voice.TranscriptionPublisher,
+) (*Server, error) {
+	return StartIn(ctx, logger, workspace, config.DefaultWorkDir, listenAddr, certFile, keyFile, transcriber, tts, publisher)
+}
+
+func prepareTLSAssets(workspace, listenAddr, certFile, keyFile string, collectIPv4Addrs func() ([]net.IP, error)) (tlsAssets, error) {
+	return prepareTLSAssetsIn(workspace, config.DefaultWorkDir, listenAddr, certFile, keyFile, collectIPv4Addrs)
+}
 
 func TestStartServesVoiceModePage(t *testing.T) {
 	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), t.TempDir(), "127.0.0.1:0", "", "", nil, nil, nil)

@@ -302,8 +302,6 @@ func (b *Bridge) Summarize(ctx context.Context, prompt string) (string, error) {
 }
 
 // SeedResponseThread initializes an empty thread session from a main-session response checkpoint.
-//
-//nolint:exhaustruct // OpenAI SDK request structs have many irrelevant union fields.
 func (b *Bridge) SeedResponseThread(ctx context.Context, checkpoint events.ResponseCheckpoint, _ string) error {
 	if checkpoint.SessionEntryID <= 0 {
 		return errors.New("response checkpoint session entry ID is required")
@@ -503,7 +501,6 @@ func (b *Bridge) enqueue(ctx context.Context, request bridgeRequest, operation s
 	}
 }
 
-//nolint:exhaustruct // OpenAI SDK request structs have many irrelevant union fields.
 func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.SessionEntry, model responses.ResponseCompactParamsModel) ([]json.RawMessage, error) {
 	b.log.Info("starting seed replay compaction", "conversation_id", b.config.ConversationID, "entries", len(entries), "model", model)
 
@@ -1245,10 +1242,6 @@ func overlayPromptSection(cfg *config.Config, overlays []skel.OverlayInfo) strin
 	return strings.Join(lines, "\n")
 }
 
-func loadRocketCodeDefinitions(root *os.Root, workspace string, mode toolMode) (rocketcode.Agents, rocketcode.Skills, error) {
-	return loadRocketCodeDefinitionsIn(root, workspace, config.DefaultWorkDir, mode)
-}
-
 func loadRocketCodeDefinitionsIn(root *os.Root, workspace, workDir string, mode toolMode) (rocketcode.Agents, rocketcode.Skills, error) {
 	rootFS := root.FS()
 
@@ -1297,11 +1290,6 @@ func loadRocketCodeDefinitionsIn(root *os.Root, workspace, workDir string, mode 
 	}
 
 	return agentResult.Agents, skillResult.Skills, nil
-}
-
-// ExternalMCPAgents returns agents externally selectable through MCP.
-func ExternalMCPAgents(workspace string) ([]string, error) {
-	return ExternalMCPAgentsIn(workspace, config.DefaultWorkDir)
 }
 
 // ExternalMCPAgentsIn returns agents externally selectable through MCP in workDir.
@@ -1660,7 +1648,6 @@ type replayInputMessage struct {
 	text string
 }
 
-//nolint:exhaustruct // OpenAI SDK unions require sparse literals.
 func replayInputForMessage(role, text string) ([]json.RawMessage, error) {
 	message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(role), Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(text)}, Type: "message"}
 
@@ -1721,7 +1708,6 @@ func replayInputRawKind(raw json.RawMessage) string {
 	return object.Type
 }
 
-//nolint:exhaustruct // OpenAI SDK unions require sparse literals.
 func compactedOutputToReplayInput(items []responses.ResponseOutputItemUnion) ([]json.RawMessage, error) {
 	input := make([]responses.ResponseInputItemUnionParam, 0, len(items))
 	for i := range items {

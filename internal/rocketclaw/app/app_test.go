@@ -28,6 +28,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func outboundLoop(
+	ctx context.Context,
+	bus *events.Bus,
+	slackSend func(context.Context, *events.OutboundMessage) error,
+	discordSend func(context.Context, *events.OutboundMessage) error,
+	webSend func(context.Context, *events.OutboundMessage) error,
+	logger *slog.Logger,
+) error {
+	return outboundLoopWithDiscordText(ctx, bus, slackSend, discardOutboundSend, discordSend, webSend, logger)
+}
+
 func TestOutboundLoopDeliversChannelsInParallelAndPreservesPerChannelOrder(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -1335,7 +1346,7 @@ func writeAppTestAgent(t *testing.T, workspace, name, content string) {
 func newAppTestSessionService(t *testing.T, workspace string) *harnessbridge.SessionService {
 	t.Helper()
 
-	service, err := harnessbridge.NewSessionService(workspace)
+	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultWorkDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
 

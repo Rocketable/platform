@@ -126,11 +126,6 @@ func newSessionStore(conversationID string, service *SessionService) sqliteSessi
 	return sqliteSessionStore{conversationID: conversationID, service: service}
 }
 
-// NewSessionService starts a runtime-owned SQLite session service.
-func NewSessionService(workspace string) (*SessionService, error) {
-	return NewSessionServiceIn(workspace, config.DefaultWorkDir)
-}
-
 // NewSessionServiceIn starts a runtime-owned SQLite session service in workDir.
 func NewSessionServiceIn(workspace, workDir string) (*SessionService, error) {
 	db, err := openWorkspaceSessionDB(context.Background(), workspace, workDir)
@@ -446,16 +441,8 @@ func (s *SessionService) updateStateContext(ctx context.Context, mutate func(*St
 	return nil
 }
 
-func sessionDBPath(workspace string) string {
-	return sessionDBPathIn(workspace, config.DefaultWorkDir)
-}
-
 func sessionDBPathIn(workspace, workDir string) string {
 	return filepath.Join(workspace, workDir, "state.sqlite3")
-}
-
-func prepareSessionDBPath(workspace string) error {
-	return prepareSessionDBPathIn(workspace, config.DefaultWorkDir)
 }
 
 func prepareSessionDBPathIn(workspace, workDir string) error {
@@ -609,11 +596,6 @@ func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID s
 	return id, nil
 }
 
-// DeleteSession removes all entries for one conversation ID and returns deleted rows.
-func DeleteSession(ctx context.Context, workspace, conversationID string) (int64, error) {
-	return DeleteSessionIn(ctx, workspace, config.DefaultWorkDir, conversationID)
-}
-
 // DeleteSessionIn removes all entries for one conversation ID in workDir and returns deleted rows.
 func DeleteSessionIn(ctx context.Context, workspace, workDir, conversationID string) (int64, error) {
 	conversationID = strings.TrimSpace(conversationID)
@@ -643,11 +625,6 @@ func DeleteSessionIn(ctx context.Context, workspace, workDir, conversationID str
 	}
 
 	return rows, nil
-}
-
-// VacuumSessions runs explicit SQLite maintenance for the rocketcode session DB.
-func VacuumSessions(ctx context.Context, workspace string) (VacuumStats, error) {
-	return VacuumSessionsIn(ctx, workspace, config.DefaultWorkDir)
 }
 
 // VacuumSessionsIn runs explicit SQLite maintenance for the rocketcode session DB in workDir.
@@ -1052,11 +1029,6 @@ func queryPragmaInt(ctx context.Context, db *sql.DB, name string) (int64, error)
 	return value, nil
 }
 
-// ListSessions returns summaries for all stored rocketcode sessions.
-func ListSessions(ctx context.Context, workspace string) ([]SessionSummary, error) {
-	return ListSessionsIn(ctx, workspace, config.DefaultWorkDir)
-}
-
 // ListSessionsIn returns summaries for all stored rocketcode sessions in workDir.
 func ListSessionsIn(ctx context.Context, workspace, workDir string) ([]SessionSummary, error) {
 	db, ok, err := openExistingSessionDBReadOnly(ctx, workspace, workDir)
@@ -1131,7 +1103,7 @@ func ListSessionsIn(ctx context.Context, workspace, workDir string) ([]SessionSu
 }
 
 // SessionDBPath returns the SQLite database path for rocketcode session inspection.
-func SessionDBPath(workspace string) string { return sessionDBPath(workspace) }
+func SessionDBPath(workspace string) string { return SessionDBPathIn(workspace, config.DefaultWorkDir) }
 
 // SessionDBPathIn returns the SQLite database path for rocketcode session inspection in workDir.
 func SessionDBPathIn(workspace, workDir string) string { return sessionDBPathIn(workspace, workDir) }
