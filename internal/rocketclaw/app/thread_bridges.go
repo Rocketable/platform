@@ -112,6 +112,41 @@ func (m *threadBridgeManager) StartPendingScheduledMessages() error {
 	return nil
 }
 
+func (m *threadBridgeManager) StartActiveGoals() error {
+	state, err := m.store.Load()
+	if err != nil {
+		return fmt.Errorf("load active goal bridges: %w", err)
+	}
+
+	for conversationID, goal := range state.Goals {
+		if strings.TrimSpace(goal.Status) != harnessbridge.GoalStatusActive {
+			continue
+		}
+
+		channelID, threadTS, ok := harnessbridge.SlackThreadTarget(conversationID)
+		if !ok {
+			continue
+		}
+
+		thread := state.Threads[conversationID]
+
+		managed, _, err := m.ensureThreadBridge(conversationID, thread, []events.OutputTarget{events.OutputTargetSlackMain})
+		if err != nil {
+			return fmt.Errorf("start active goal bridge: %w", err)
+		}
+
+		inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindPrompt, "goal_continuation", "Continue the active goal loop.", false)
+		inbound.ConversationID = conversationID
+
+		inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
+		if err := managed.bridge.Submit(context.Background(), inbound); err != nil {
+			return fmt.Errorf("submit active goal continuation: %w", err)
+		}
+	}
+
+	return nil
+}
+
 func (m *threadBridgeManager) StartDiscordThread(ctx context.Context, agent string, preSeed bool, inbound *events.InboundMessage) error {
 	if inbound == nil || inbound.DiscordReply == nil {
 		return errors.New("discord reply target is required")
@@ -390,6 +425,61 @@ func (m *threadBridgeManager) StartThread(ctx context.Context, agent string, pre
 	}
 
 	return nil
+}
+
+func (m *threadBridgeManager) StartGoalThread(ctx context.Context, agent, objective string, maxTurns int, inbound *events.InboundMessage) error {
+	if inbound == nil || inbound.SlackReply == nil {
+		return errors.New("slack reply target is required")
+	}
+
+	conversationID := harnessbridge.SlackThreadConversationID(strings.TrimSpace(inbound.SlackReply.ChannelID), strings.TrimSpace(inbound.SlackReply.ThreadTS))
+	if conversationID == "" {
+		return errors.New("slack thread target is required")
+	}
+
+	managed, created, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: strings.TrimSpace(agent), SeededFromResponse: ""}, []events.OutputTarget{events.OutputTargetSlackMain})
+	if err != nil {
+		return err
+	}
+
+	if created {
+		if err := m.store.UpsertThread(conversationID, agent); err != nil {
+			m.mu.Lock()
+			delete(m.bridges, conversationID)
+			m.mu.Unlock()
+
+			_ = managed.bridge.Stop()
+
+			return fmt.Errorf("persist Slack goal thread bridge: %w", err)
+		}
+	}
+
+	if err := m.store.BeginGoal(conversationID, objective, maxTurns); err != nil {
+		return fmt.Errorf("persist Slack goal: %w", err)
+	}
+
+	inbound.Label = "goal"
+
+	inbound.ConversationID = conversationID
+	if err := managed.bridge.Submit(ctx, inbound); err != nil {
+		return fmt.Errorf("submit Slack goal thread start: %w", err)
+	}
+
+	return nil
+}
+
+func (m *threadBridgeManager) StopGoalThread(_ context.Context, channelID, threadTS string) (bool, error) {
+	conversationID := harnessbridge.SlackThreadConversationID(channelID, threadTS)
+	if conversationID == "" {
+		return false, nil
+	}
+
+	goal, stopped, err := m.store.StopGoal(conversationID)
+	if err != nil {
+		return false, fmt.Errorf("stop Slack goal thread: %w", err)
+	}
+
+	return stopped && strings.TrimSpace(goal.Status) == harnessbridge.GoalStatusStopped, nil
 }
 
 func (m *threadBridgeManager) RegisterCronThread(ctx context.Context, channelID, threadTS, agent, seedText string) error {

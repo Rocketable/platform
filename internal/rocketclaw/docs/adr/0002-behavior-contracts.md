@@ -40,6 +40,7 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - Every normal Slack-visible assistant turn with a Slack target reserves its Slack reply location up front by posting a thinking placeholder (`_Thinking..._`) followed by an answer placeholder (`\u200B`). The answer placeholder is later updated for a short final answer or deleted before chunked final replies. Intentionally standalone progress/post-text messages are not assistant-turn final answers and do not consume the reserved answer placeholder.
 - Slack thinking placeholder updates render accumulated RocketCode progress as a quote block with the newest progress line first, while preserving chronological accumulation internally.
 - Slack-visible RocketCode subagent progress diagnostics include a stable per-dispatch ordinal immediately after `subagent`, formatted as `(n/total)`, including `(1/1)` when a model response dispatches exactly one subagent task.
+- Slack goal-loop automatic continuations are queued through the owning managed-thread persistent bridge and must be delivered as visible Slack assistant turns in the owning Slack thread. Human replies already queued for that managed thread must run before any subsequent automatic goal continuation.
 - Discord and browser voice transcriptions enter the same shared flow as other main-session input.
 - External MCP conversations are isolated by external conversation ID; omitted ID starts a new isolated conversation.
 - When a local-only `agents/guardrail.md` is present, every RocketCode `task` delegation prompt is filtered before the child agent runs, and every child agent final response is filtered before the task result is returned to the caller agent.
@@ -51,6 +52,9 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - The primary text output target is configured as either Slack DM or Discord text, never both.
 - Slack response-rooted threads remain isolated from main until summarized.
 - Slack response-rooted threads and explicitly pre-seeded managed threads seed inherited main-session context from the latest available compaction point when one exists; if no compaction point exists, they may compact the full selected main-session history.
+- Slack DM `🔁`/`🏁` goal-loop prompts and Slack social-mode `@BotName 🔁`/`@BotName 🏁` goal-loop mentions open managed Slack threads, persist goal state by managed-thread conversation ID, and use ADR 0007 trigger grammar, agent selection, turn-budget, and terminal-status semantics.
+- Slack goal loops must stop when an authorized human sends `🛑` or `⏹️` as a message in the active goal thread, or adds either emoji as a reaction to the goal thread root or any message in the active goal thread.
+- Slack goal loops that reach `complete` must add a `✅` reaction to the goal thread root and to the last Slack message in the goal thread when that message can be identified.
 - Discord text managed threads remain isolated from main until summarized, matching Slack managed-thread semantics where Discord guild threads can express them.
 - Slack thread replies use persisted checkpoints when available; older responses without checkpoints receive an explanatory thread reply instead of silently losing context.
 - Discord text replies to checkpointed assistant messages can start response-rooted guild threads with inherited context. Discord DMs do not provide thread semantics.
@@ -64,6 +68,7 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 
 - `rocketclaw_restart` is for explicit runtime configuration changes such as `rocketclaw.json`, `agents/`, `skills/`, or `cron/` changes.
 - Restart and signal-triggered shutdown must stop cron from starting new jobs, wait for already-started cron jobs to finish, wait for inbound handoff and main/thread bridge idleness, stop inbound and bridges, wait for outbound drain, stop connectors, and preserve pending restart notifications. This sequence has no timeout.
+- Restart recovery must rehydrate active persisted Slack goal loops by starting their managed thread bridges and queuing one continuation per active goal, without replaying missed turns.
 - Restart must not be triggered for ordinary memory, ledger, audit, report, source-code, generated artifact, log, transcript, or data-file edits.
 
 ### Permissions And Tools
@@ -74,6 +79,7 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - Cron agents may selectively deny tools.
 - The inter-agent guardrail agent may use tools only when its own `permission` frontmatter allows those tools.
 - RocketClaw tools are part of runtime behavior and must remain visible to RocketCode according to the bridge mode that owns the turn.
+- The Slack goal-loop update tool is a persistent-bridge tool visible only for conversations with an active goal, and it may only set the active goal to `complete`, `blocked`, or `paused` with an optional note. Human stop emoji behavior may set the goal to `stopped` without using the tool.
 
 ## Non-Goals
 
@@ -118,3 +124,6 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - 2026-06-10: Specified that `maxRecursion` subdelegation budgets override otherwise-permitted `task` grants when exhausted.
 - 2026-06-10: Added local-only guardrail filtering for RocketCode task delegation prompts and child final responses.
 - 2026-06-11: Linked agent-system safety linting to ADR 0006.
+- 2026-06-11: Added Slack goal-loop routing, continuation ordering, restart recovery, and goal-update tool contracts governed by ADR 0007.
+- 2026-06-11: Added visible Slack-thread delivery, stop emoji controls, and completion checkmark reactions for Slack goal loops.
+- 2026-06-11: Added `🏁` as an additional Slack goal-loop trigger alongside `🔁`.

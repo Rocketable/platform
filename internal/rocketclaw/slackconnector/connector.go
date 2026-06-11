@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,11 @@ const (
 	slackExternalMCPRelayReaction = "satellite_antenna"
 	slackBufferedReaction         = "hourglass_flowing_sand"
 	slackSummaryReaction          = "floppy_disk"
+	slackGoalRepeatPrefix         = "🔁"
+	slackGoalFinishPrefix         = "🏁"
+	slackGoalStopSignReaction     = "octagonal_sign"
+	slackGoalStopButtonReaction   = "stop_button"
+	slackGoalCompleteReaction     = "white_check_mark"
 	slackMainStackKey             = "main"
 	slackImmediatePlaceholder     = "_Thinking..._"
 	slackAnswerPlaceholder        = "\u200B"
@@ -150,9 +156,16 @@ type threadAgent struct {
 	preSeed       bool
 }
 
+type goalRequest struct {
+	objective string
+	maxTurns  int
+}
+
 // ThreadRouter routes Slack thread messages directly to app-owned thread bridges.
 type ThreadRouter interface {
 	StartThread(context.Context, string, bool, *events.InboundMessage) error
+	StartGoalThread(context.Context, string, string, int, *events.InboundMessage) error
+	StopGoalThread(context.Context, string, string) (bool, error)
 	RegisterCronThread(context.Context, string, string, string, string) error
 	PrepareThreadReply(context.Context, string, string) (bool, error)
 	PrepareResponseThreadReply(context.Context, string, string) (bool, error)
@@ -280,13 +293,17 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 			return err
 		}
 
-		_, threadTS := slackReplyDestination(c.config.Room, msg.SlackReply)
+		channelID, threadTS := slackReplyDestination(c.config.Room, msg.SlackReply)
 		if msg.Complete && msg.Checkpoint != nil && threadTS == "" && c.threadRouter != nil {
 			for i := range posted {
 				if err := c.threadRouter.RecordResponseCheckpoint(ctx, posted[i].ChannelID, posted[i].MessageTS, *msg.Checkpoint); err != nil {
 					return fmt.Errorf("record Slack response checkpoint: %w", err)
 				}
 			}
+		}
+
+		if msg.Complete && msg.GoalComplete {
+			c.addGoalCompleteReactions(ctx, channelID, threadTS, posted)
 		}
 
 	case thinkingText != "":
@@ -712,6 +729,17 @@ func (c *Connector) bufferSlackThinking(turnID string, state slackReplyState, te
 	}
 
 	c.thinking[turnID] = pending
+}
+
+func (c *Connector) addGoalCompleteReactions(ctx context.Context, channelID, threadTS string, posted []slackReplyState) {
+	if threadTS != "" {
+		c.addReaction(ctx, &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}, slackGoalCompleteReaction, "add Slack goal complete root reaction")
+	}
+
+	if len(posted) > 0 {
+		last := posted[len(posted)-1]
+		c.addReaction(ctx, &events.SlackReplyTarget{ChannelID: last.ChannelID, MessageTS: last.MessageTS, ThreadTS: threadTS}, slackGoalCompleteReaction, "add Slack goal complete last reaction")
+	}
 }
 
 func (c *Connector) flushSlackThinking(ctx context.Context, turnID string) error {
@@ -1217,6 +1245,21 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 			}
 		}
 
+		if isGoalStopText(text) {
+			stopped, err := c.threadRouter.StopGoalThread(ctx, ev.Channel, threadTS)
+			if err != nil {
+				c.log.Error("stop Slack goal thread", "error", err, "channel", ev.Channel, "thread_ts", threadTS)
+				return
+			}
+
+			if stopped {
+				c.addReaction(ctx, replyTarget, slackGoalStopSignReaction, "add Slack goal stop reaction")
+				c.log.Info("stopped Slack goal thread", "user", ev.User, "channel", ev.Channel, "thread_ts", threadTS)
+
+				return
+			}
+		}
+
 		content := c.inboundContentForMessageEvent(ctx, ev)
 		content.Text = text
 
@@ -1263,6 +1306,37 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 			"text_len", len(text),
 			"attachment_count", len(content.Attachments),
 		)
+
+		return
+	}
+
+	if goal, rejection, ok := goalRequestForText(text); ok {
+		replyTarget.ThreadTS = ev.TimeStamp
+		if rejection != "" {
+			if err := c.postSlackThreadReply(ctx, ev.Channel, ev.TimeStamp, rejection); err != nil {
+				c.log.Warn("post Slack goal rejection", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp)
+			}
+
+			return
+		}
+
+		key := slackThreadStackKey(replyTarget)
+		c.beginSlackStack(key)
+		c.createReplyPlaceholdersOrWarn(ctx, replyTarget, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", "main")
+
+		content := c.inboundContentForMessageEvent(ctx, ev)
+		content.Text = text
+		inbound := newSlackInboundMessage(goal.objective, &content, replyTarget)
+		c.log.Info("handing Slack goal thread start to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", "main", "max_turns", goal.maxTurns, "pending_placeholder", c.hasPendingState(replyTarget))
+
+		if err := c.threadRouter.StartGoalThread(ctx, "main", goal.objective, goal.maxTurns, inbound); err != nil {
+			c.log.Error("start Slack goal thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", "main", "pending_placeholder", c.hasPendingState(replyTarget))
+			c.finishSlackStack(key)
+
+			return
+		}
+
+		c.addRobotReaction(ctx, replyTarget)
 
 		return
 	}
@@ -1367,7 +1441,7 @@ func (c *Connector) handleReactionAddedEvent(ctx context.Context, ev *slackevent
 
 	reaction := strings.TrimSpace(ev.Reaction)
 	switch reaction {
-	case slackSummaryReaction, slackOnDemandCronReaction:
+	case slackSummaryReaction, slackOnDemandCronReaction, slackGoalStopSignReaction, slackGoalStopButtonReaction:
 	default:
 		return
 	}
@@ -1403,6 +1477,20 @@ func (c *Connector) handleReactionAddedEvent(ctx context.Context, ev *slackevent
 	}
 
 	if !handled {
+		return
+	}
+
+	if isGoalStopReaction(reaction) {
+		stopped, err := c.threadRouter.StopGoalThread(ctx, channelID, threadTS)
+		if err != nil {
+			c.log.Error("stop Slack goal thread by reaction", "error", err, "channel", channelID, "thread_ts", threadTS, "message_ts", messageTS)
+			return
+		}
+
+		if stopped {
+			c.log.Info("stopped Slack goal thread by reaction", "user", ev.User, "channel", channelID, "thread_ts", threadTS, "message_ts", messageTS)
+		}
+
 		return
 	}
 
@@ -1525,6 +1613,43 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 	}
 
 	replyTarget := &events.SlackReplyTarget{ChannelID: ev.Channel, MessageTS: ev.TimeStamp, ThreadTS: threadTS}
+
+	if goal, rejection, ok := goalRequestForText(text); ok {
+		if rejection != "" {
+			if err := c.postSlackThreadReply(ctx, ev.Channel, threadTS, rejection); err != nil {
+				c.log.Warn("post Slack social goal rejection", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
+			}
+
+			return
+		}
+
+		key := slackThreadStackKey(replyTarget)
+		c.beginSlackStack(key)
+		c.createReplyPlaceholdersOrWarn(ctx, replyTarget, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)
+
+		content := slackInboundContent{Text: ev.Text}
+		if len(ev.Files) > 0 {
+			content.Attachments, content.TextAttachments, content.HadAttachments, content.HadNonImageAttachments, content.AttachmentWarnings = c.downloadSlackAttachments(ctx, ev.Files)
+		}
+
+		promptText := c.socialPromptWithContext(ctx, ev.Channel, ev.TimeStamp, goal.objective)
+		content.Text = promptText
+
+		c.log.Info("handing Slack social goal thread to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent, "max_turns", goal.maxTurns, "pending_placeholder", c.hasPendingState(replyTarget))
+
+		if err := c.threadRouter.StartGoalThread(ctx, agent, goal.objective, goal.maxTurns, newSlackInboundMessage(promptText, &content, replyTarget)); err != nil {
+			c.log.Error("start Slack social goal thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent, "pending_placeholder", c.hasPendingState(replyTarget))
+			c.finishSlackStack(key)
+
+			return
+		}
+
+		c.addRobotReaction(ctx, replyTarget)
+		c.log.Info("accepted Slack social goal mention", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent, "text_len", len(goal.objective), "attachment_count", len(content.Attachments))
+
+		return
+	}
+
 	key := slackThreadStackKey(replyTarget)
 	c.beginSlackStack(key)
 
@@ -1846,6 +1971,70 @@ func (c *Connector) threadAgentForText(text string) (agent string, preSeed bool,
 	}
 
 	return "", false, "", false
+}
+
+func goalRequestForText(text string) (goalRequest, string, bool) {
+	text = strings.TrimSpace(text)
+	if after, ok := strings.CutPrefix(text, slackGoalRepeatPrefix); ok {
+		text = after
+	} else if after, ok := strings.CutPrefix(text, slackGoalFinishPrefix); ok {
+		text = after
+	} else {
+		return goalRequest{}, "", false
+	}
+
+	fields := strings.Fields(strings.TrimSpace(text))
+	maxTurns := 20
+
+	if len(fields) == 0 {
+		return goalRequest{}, "Tell me the goal after `🔁`, for example `🔁 maxTurns: 20 update the docs`.", true
+	}
+
+	if fields[0] == "maxTurns:" {
+		if len(fields) == 1 {
+			return goalRequest{}, "`maxTurns:` needs a value like `20`, `0`, `-1`, or `infinite`.", true
+		}
+
+		value := strings.ToLower(fields[1])
+		switch value {
+		case "infinite":
+			maxTurns = 0
+		default:
+			parsed, err := strconv.Atoi(value)
+			if err != nil || parsed < -1 {
+				return goalRequest{}, "`maxTurns:` must be a positive integer, `0`, `-1`, or `infinite`.", true
+			}
+
+			maxTurns = max(parsed, 0)
+		}
+
+		fields = fields[2:]
+	}
+
+	objective := strings.TrimSpace(strings.Join(fields, " "))
+	if objective == "" {
+		return goalRequest{}, "Tell me the goal after the parameters, for example `🔁 maxTurns: 20 update the docs`.", true
+	}
+
+	return goalRequest{objective: objective, maxTurns: maxTurns}, "", true
+}
+
+func isGoalStopText(text string) bool {
+	switch strings.TrimSpace(text) {
+	case "🛑", "⏹️", "⏹":
+		return true
+	default:
+		return false
+	}
+}
+
+func isGoalStopReaction(reaction string) bool {
+	switch strings.TrimSpace(reaction) {
+	case slackGoalStopSignReaction, slackGoalStopButtonReaction:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Connector) handleOnDemandCronRequest(ctx context.Context, ev *slackevents.MessageEvent, target string, replyTarget *events.SlackReplyTarget) {

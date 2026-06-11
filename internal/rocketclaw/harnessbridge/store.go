@@ -37,8 +37,19 @@ type State struct {
 	ResponseCheckpoints         map[string]ResponseCheckpointState `json:"response_checkpoints,omitempty"`
 	ExternalMCPSessions         map[string]ExternalMCPSessionState `json:"external_mcp_sessions,omitempty"`
 	ScheduledMessages           map[string]ScheduledMessageState   `json:"scheduled_messages,omitempty"`
+	Goals                       map[string]GoalState               `json:"goals,omitempty"`
 	PendingRestartNotifications map[string]bool                    `json:"pending_restart_notifications,omitempty"`
 }
+
+// GoalStatusActive and related constants are persisted goal-loop statuses.
+const (
+	GoalStatusActive          = "active"
+	GoalStatusComplete        = "complete"
+	GoalStatusBlocked         = "blocked"
+	GoalStatusPaused          = "paused"
+	GoalStatusStopped         = "stopped"
+	GoalStatusBudgetExhausted = "budget_exhausted"
+)
 
 // ThreadState is the persisted state for one text-thread bridge.
 type ThreadState struct {
@@ -69,6 +80,17 @@ type ScheduledMessageState struct {
 	DueAt          time.Time     `json:"due_at,omitzero"`
 	Recurring      bool          `json:"recurring,omitempty"`
 	Interval       time.Duration `json:"interval,omitempty"`
+}
+
+// GoalState records one active or terminal managed-thread goal loop.
+type GoalState struct {
+	Objective string    `json:"objective,omitempty"`
+	MaxTurns  int       `json:"max_turns,omitempty"`
+	TurnsUsed int       `json:"turns_used,omitempty"`
+	Status    string    `json:"status,omitempty"`
+	Note      string    `json:"note,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitzero"`
+	UpdatedAt time.Time `json:"updated_at,omitzero"`
 }
 
 type sqliteSessionStore struct {
@@ -157,6 +179,135 @@ func (s *SessionService) UpsertThread(conversationID, agent string) error {
 		thread.Agent = strings.TrimSpace(agent)
 		state.Threads[conversationID] = thread
 	})
+}
+
+// BeginGoal records a new active goal for a managed conversation.
+func (s *SessionService) BeginGoal(conversationID, objective string, maxTurns int) error {
+	conversationID = strings.TrimSpace(conversationID)
+	objective = strings.TrimSpace(objective)
+
+	if conversationID == "" {
+		return errors.New("goal conversation ID is required")
+	}
+
+	if objective == "" {
+		return errors.New("goal objective is required")
+	}
+
+	if maxTurns < 0 {
+		maxTurns = 0
+	}
+
+	now := time.Now().UTC()
+
+	return s.updateState(func(state *State) {
+		if state.Goals == nil {
+			state.Goals = map[string]GoalState{}
+		}
+
+		state.Goals[conversationID] = GoalState{Objective: objective, MaxTurns: maxTurns, Status: GoalStatusActive, CreatedAt: now, UpdatedAt: now}
+	})
+}
+
+// Goal returns the persisted goal state for a conversation.
+func (s *SessionService) Goal(conversationID string) (GoalState, bool, error) {
+	state, err := s.Load()
+	if err != nil {
+		return GoalState{}, false, err
+	}
+
+	goal, ok := state.Goals[strings.TrimSpace(conversationID)]
+
+	goal.Status = strings.TrimSpace(goal.Status)
+	if goal.Status == "" {
+		goal.Status = GoalStatusActive
+	}
+
+	return goal, ok, nil
+}
+
+// ActiveGoals returns persisted active goals keyed by conversation ID.
+func (s *SessionService) ActiveGoals() (map[string]GoalState, error) {
+	state, err := s.Load()
+	if err != nil {
+		return nil, err
+	}
+
+	active := map[string]GoalState{}
+
+	for conversationID, goal := range state.Goals {
+		if strings.TrimSpace(goal.Status) == GoalStatusActive {
+			active[conversationID] = goal
+		}
+	}
+
+	if len(active) == 0 {
+		return nil, nil
+	}
+
+	return active, nil
+}
+
+// AccountGoalTurn increments one active goal turn and applies budget exhaustion.
+func (s *SessionService) AccountGoalTurn(conversationID string) (GoalState, bool, error) {
+	conversationID = strings.TrimSpace(conversationID)
+
+	var (
+		goal GoalState
+		ok   bool
+	)
+
+	err := s.updateState(func(state *State) {
+		goal, ok = state.Goals[conversationID]
+		if !ok {
+			return
+		}
+
+		status := strings.TrimSpace(goal.Status)
+		if status == "" {
+			status = GoalStatusActive
+		}
+
+		if status == GoalStatusStopped || status == GoalStatusBudgetExhausted {
+			return
+		}
+
+		goal.TurnsUsed++
+
+		goal.UpdatedAt = time.Now().UTC()
+		if status == GoalStatusActive && goal.MaxTurns > 0 && goal.TurnsUsed >= goal.MaxTurns {
+			goal.Status = GoalStatusBudgetExhausted
+		}
+
+		state.Goals[conversationID] = goal
+	})
+	if err != nil {
+		return GoalState{}, false, err
+	}
+
+	return goal, ok, nil
+}
+
+// UpdateGoalStatus sets a model-controlled terminal goal status.
+func (s *SessionService) UpdateGoalStatus(conversationID, status, note string) (GoalState, error) {
+	status = strings.TrimSpace(status)
+	switch status {
+	case GoalStatusComplete, GoalStatusBlocked, GoalStatusPaused:
+	default:
+		return GoalState{}, fmt.Errorf("unsupported goal status %q", status)
+	}
+
+	return s.setGoalStatus(conversationID, status, note)
+}
+
+// StopGoal marks an active goal stopped.
+func (s *SessionService) StopGoal(conversationID string) (GoalState, bool, error) {
+	goal, err := s.setGoalStatus(conversationID, GoalStatusStopped, "stopped by human")
+	if err != nil {
+		return GoalState{}, false, err
+	}
+
+	return goal, strings.TrimSpace(goal.Status) == GoalStatusStopped, nil
 }
 
 // MarkThreadSeeded records the response checkpoint used to seed a text thread.
@@ -307,8 +458,24 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 
 		if prune {
 			delete(state.Threads, conversationID)
+			delete(state.Goals, conversationID)
 			deleteConversations[conversationID] = struct{}{}
 			stats.Threads++
+		}
+	}
+
+	for conversationID := range state.Goals {
+		if _, ok := state.Threads[conversationID]; ok {
+			continue
+		}
+
+		prune, err := shouldPruneThreadConversation(ctx, tx, conversationID, cutoff)
+		if err != nil {
+			return PruneStateStats{}, err
+		}
+
+		if prune {
+			delete(state.Goals, conversationID)
 		}
 	}
 
@@ -357,6 +524,7 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 
 	for conversationID := range deleteConversations {
 		delete(state.PendingRestartNotifications, conversationID)
+		delete(state.Goals, conversationID)
 	}
 
 	stats.SessionRows = rows
@@ -409,6 +577,31 @@ func (s *SessionService) Vacuum(ctx context.Context) (VacuumStats, error) {
 // CheckpointWAL checkpoints and truncates the SQLite WAL through the runtime service handle.
 func (s *SessionService) CheckpointWAL(ctx context.Context) (WALCheckpointStats, error) {
 	return checkpointWALDB(ctx, s.db)
+}
+
+func (s *SessionService) setGoalStatus(conversationID, status, note string) (GoalState, error) {
+	conversationID = strings.TrimSpace(conversationID)
+
+	var goal GoalState
+
+	err := s.updateState(func(state *State) {
+		current, ok := state.Goals[conversationID]
+		if !ok || strings.TrimSpace(current.Status) != GoalStatusActive {
+			goal = current
+			return
+		}
+
+		current.Status = status
+		current.Note = strings.TrimSpace(note)
+		current.UpdatedAt = time.Now().UTC()
+		state.Goals[conversationID] = current
+		goal = current
+	})
+	if err != nil {
+		return GoalState{}, err
+	}
+
+	return goal, nil
 }
 
 func (s *SessionService) updateState(mutate func(*State)) error {
@@ -1113,6 +1306,19 @@ func SlackThreadConversationID(channelID, threadTS string) string {
 	return slackPairKey("slack-thread:", channelID, threadTS)
 }
 
+// SlackThreadTarget returns the Slack channel and thread timestamp for a Slack thread conversation ID.
+func SlackThreadTarget(conversationID string) (channelID, threadTS string, ok bool) {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(conversationID), "slack-thread:")
+	if !ok {
+		return "", "", false
+	}
+
+	channelID, threadTS, ok = strings.Cut(rest, ":")
+	channelID, threadTS = strings.TrimSpace(channelID), strings.TrimSpace(threadTS)
+
+	return channelID, threadTS, ok && channelID != "" && threadTS != ""
+}
+
 // SlackResponseCheckpointKey returns the stable key for one posted Slack AI response message.
 func SlackResponseCheckpointKey(channelID, messageTS string) string {
 	return slackPairKey("slack-response:", channelID, messageTS)
@@ -1362,6 +1568,10 @@ func normalizeState(state *State) {
 
 	if len(state.ScheduledMessages) == 0 {
 		state.ScheduledMessages = nil
+	}
+
+	if len(state.Goals) == 0 {
+		state.Goals = nil
 	}
 
 	if len(state.PendingRestartNotifications) == 0 {

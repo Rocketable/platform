@@ -120,7 +120,7 @@ func TestProcessResponseAndFinalShareTurnID(t *testing.T) {
 	bridge := new(Bridge)
 	bridge.bus = bus
 	bridge.log = slog.New(slog.DiscardHandler)
-	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: nil}
+	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}
 	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
 	result := runResult{turnID: "turn-1", text: "", thinking: "", sequence: 0, sessionEntryID: 0, responseID: "", model: ""}
 
@@ -151,7 +151,7 @@ func TestPublishFinalAttachesMainResponseCheckpoint(t *testing.T) {
 	bridge := new(Bridge)
 	bridge.bus = bus
 	bridge.log = slog.New(slog.DiscardHandler)
-	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: nil}
+	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}
 	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
 	result := runResult{turnID: "turn-1", text: "answer", thinking: "", sequence: 0, sessionEntryID: 7, responseID: "resp-1", model: "gpt-5.4"}
 
@@ -172,7 +172,7 @@ func TestPublishFinalCarriesMainResponseAttachments(t *testing.T) {
 	bridge := new(Bridge)
 	bridge.bus = bus
 	bridge.log = slog.New(slog.DiscardHandler)
-	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: nil}
+	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}
 	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
 	result := runResult{turnID: "turn-1", text: "", thinking: "", sequence: 0, sessionEntryID: 0, responseID: "", model: "", attachments: []events.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}}
 
@@ -193,7 +193,7 @@ func TestPublishFinalAttachesCheckpointToInternalizedVerbatimMessage(t *testing.
 
 	bridge := new(Bridge)
 	bridge.bus = bus
-	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: nil}
+	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}
 	inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindInternalize, "cron", "internal note", false)
 	inbound.VerbatimMessage = "cron output"
 	inbound.VerbatimAttachments = []events.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}
@@ -219,7 +219,7 @@ func TestPublishFinalReportsVerbatimOutboundErrors(t *testing.T) {
 
 		bridge := new(Bridge)
 		bridge.bus = bus
-		bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: nil}
+		bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}
 		inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindInternalize, "cron", "internal note", false)
 		inbound.VerbatimMessage = "cron output"
 		response := inbound.EnableResponseWait()
@@ -238,7 +238,7 @@ func TestPublishFinalReportsVerbatimOutboundErrors(t *testing.T) {
 
 		bridge := new(Bridge)
 		bridge.bus = bus
-		bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: nil}
+		bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}
 		inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindInternalize, "cron", "internal note", false)
 		inbound.VerbatimMessage = "cron output"
 		response := inbound.EnableResponseWait()
@@ -324,7 +324,7 @@ func TestHandleInboundInternalizeCompletesResponseWithRocketCodeError(t *testing
 }
 
 func TestRocketCodeConfigEnablesDiagnosticsForThinkingUpdates(t *testing.T) {
-	bridge := &Bridge{runtime: new(config.Config)}
+	bridge := &Bridge{runtime: new(config.Config), config: Config{ConversationID: events.MainConversationID(), Agent: "main", RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}}
 	cfg := bridge.rocketcodeConfig(t.TempDir(), nil, rocketcode.Tool{Name: attachFilesToolName})
 
 	toolNames := make([]string, 0, len(cfg.CustomTools))
@@ -2291,7 +2291,7 @@ func TestProcessResponsePublishesStructuredToolDiagnosticsAsThinking(t *testing.
 	bridge := new(Bridge)
 	bridge.bus = bus
 	bridge.log = slog.New(slog.DiscardHandler)
-	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: nil}
+	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}
 	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
 	result := runResult{turnID: "turn-1", text: "", thinking: "", sequence: 0, sessionEntryID: 0, responseID: "", model: ""}
 
@@ -2314,7 +2314,7 @@ func TestProcessResponseSuppressesProviderOnlySubagentDiagnostics(t *testing.T) 
 
 	bridge := new(Bridge)
 	bridge.bus = bus
-	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: nil}
+	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}
 	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
 	result := runResult{turnID: "turn-1", text: "", thinking: "", sequence: 0, sessionEntryID: 0, responseID: "", model: ""}
 	item := rocketcode.ChatResponse{
@@ -2514,7 +2514,7 @@ func TestExternalMCPStoredMetadataEnvSkipsInvalidEntriesAndUsesLatestMatch(t *te
 
 func TestNewOutboundMessageRoutesBrowserVoiceToWebUIWithoutDiscord(t *testing.T) {
 	bridge := new(Bridge)
-	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: nil}
+	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}
 
 	inbound := events.NewMainInboundMessage(events.SourceWebVoice, events.InboundKindPrompt, "", "hello", true)
 	inbound.WebSessionID = "browser-session-1"
@@ -2534,7 +2534,7 @@ func TestProcessResponseKeepsWebUITargetForBrowserThinking(t *testing.T) {
 	bridge := new(Bridge)
 	bridge.bus = bus
 	bridge.log = slog.New(slog.DiscardHandler)
-	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: nil}
+	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}
 	inbound := events.NewMainInboundMessage(events.SourceWebVoice, events.InboundKindPrompt, "", "hello", true)
 	inbound.WebSessionID = "browser-session-1"
 	result := runResult{turnID: "turn-1", text: "", thinking: "", sequence: 0}

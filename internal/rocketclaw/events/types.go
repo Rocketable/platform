@@ -119,6 +119,7 @@ type OutboundMessage struct {
 	DiscordReply                         *DiscordReplyTarget
 	Checkpoint                           *ResponseCheckpoint
 	Attachments                          []OutboundAttachment
+	GoalComplete                         bool
 
 	deliveryInit, deliveredOnce sync.Once
 	delivered                   chan struct{}

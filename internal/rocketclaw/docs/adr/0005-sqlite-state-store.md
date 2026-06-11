@@ -13,7 +13,7 @@ This ADR governs RocketClaw access to `<runtime-dir>/state.sqlite3`, including d
 
 ## Context
 
-RocketClaw stores persistent RocketCode sessions, managed thread routing, response checkpoints, external MCP mappings, scheduled messages, and restart notifications in one workspace-local SQLite file. The daemon and operational commands may access that file concurrently from separate processes. Divergent open paths, SQLite PRAGMAs, or connection limits would make lock behavior and durability depend on which interface touched the file.
+RocketClaw stores persistent RocketCode sessions, managed thread routing, response checkpoints, external MCP mappings, scheduled messages, Slack goal-loop state, and restart notifications in one workspace-local SQLite file. The daemon and operational commands may access that file concurrently from separate processes. Divergent open paths, SQLite PRAGMAs, or connection limits would make lock behavior and durability depend on which interface touched the file.
 
 ## Normative Contracts
 
@@ -95,3 +95,4 @@ The centralized opener must configure these PRAGMAs for `<runtime-dir>/state.sql
 - 2026-06-07: Added daemon ownership locking and required `rocketclaw fc delete` / `rocketclaw fc vacuum` to refuse while the daemon holds the state-store lock.
 - 2026-06-07: Required read-only state-store opener mode with SQLite URI `mode=ro` for `rocketclaw fc list` and `rocketclaw fc observe`.
 - 2026-06-07: Added daemon startup copy-first corruption recovery using the external `sqlite3` shell `.recover` command only after quick-check proves corruption.
+- 2026-06-11: Added Slack goal-loop state to the contents stored in the centralized RocketClaw SQLite state store.

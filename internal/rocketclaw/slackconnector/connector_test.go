@@ -141,6 +141,54 @@ func TestNormalizeThreadAgentsRoutesLongestPrefix(t *testing.T) {
 	assert.Nil(t, normalizeThreadAgents(config.ThreadAgents{" ": {Agent: " "}}))
 }
 
+func TestGoalRequestForTextParsesSupportedTriggers(t *testing.T) {
+	tests := []struct {
+		text      string
+		objective string
+		maxTurns  int
+	}{
+		{text: "🔁 write docs", objective: "write docs", maxTurns: 20},
+		{text: "🏁 write docs", objective: "write docs", maxTurns: 20},
+		{text: "🔁 maxTurns: 0 write docs", objective: "write docs", maxTurns: 0},
+		{text: "🏁 maxTurns: infinite write docs", objective: "write docs", maxTurns: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.text, func(t *testing.T) {
+			goal, rejection, ok := goalRequestForText(tt.text)
+			require.True(t, ok)
+			require.Empty(t, rejection)
+			assert.Equal(t, tt.objective, goal.objective)
+			assert.Equal(t, tt.maxTurns, goal.maxTurns)
+		})
+	}
+}
+
+func TestGoalRequestForTextRejectsMalformedRequests(t *testing.T) {
+	tests := []string{
+		"🔁",
+		"🏁",
+		"🔁 maxTurns:",
+		"🏁 maxTurns: nope goal",
+		"plain text",
+	}
+
+	for _, text := range tests {
+		t.Run(text, func(t *testing.T) {
+			_, rejection, ok := goalRequestForText(text)
+			if text == "plain text" {
+				assert.False(t, ok)
+				assert.Empty(t, rejection)
+
+				return
+			}
+
+			require.True(t, ok)
+			assert.NotEmpty(t, rejection)
+		})
+	}
+}
+
 func TestRemoveReactionSkipsInvalidTargetsAndIgnoresNoReaction(t *testing.T) {
 	var calls []url.Values
 
@@ -4497,6 +4545,8 @@ type threadRouterStub struct {
 	summaries              []threadSummaryCall
 	checkpoints            []threadCheckpointCall
 	cronRegistrations      []cronThreadRegistration
+	goalStarts             []goalThreadStartCall
+	goalStops              []goalThreadStopCall
 	submitHandled          bool
 	summarizeHandled       bool
 	summarizeErr           error
@@ -4543,6 +4593,18 @@ type cronThreadRegistration struct {
 	channelID, threadTS, agent, seedText string
 }
 
+type goalThreadStartCall struct {
+	agent     string
+	objective string
+	maxTurns  int
+	inbound   *events.InboundMessage
+}
+
+type goalThreadStopCall struct {
+	channelID string
+	threadTS  string
+}
+
 func (s *threadRouterStub) StartThread(_ context.Context, agent string, preSeed bool, inbound *events.InboundMessage) error {
 	if s.onStart != nil {
 		s.onStart()
@@ -4554,6 +4616,23 @@ func (s *threadRouterStub) StartThread(_ context.Context, agent string, preSeed 
 	s.mu.Unlock()
 
 	return errStart
+}
+
+func (s *threadRouterStub) StartGoalThread(_ context.Context, agent, objective string, maxTurns int, inbound *events.InboundMessage) error {
+	s.mu.Lock()
+	s.goalStarts = append(s.goalStarts, goalThreadStartCall{agent: agent, objective: objective, maxTurns: maxTurns, inbound: inbound})
+	errStart := s.errStart
+	s.mu.Unlock()
+
+	return errStart
+}
+
+func (s *threadRouterStub) StopGoalThread(_ context.Context, channelID, threadTS string) (bool, error) {
+	s.mu.Lock()
+	s.goalStops = append(s.goalStops, goalThreadStopCall{channelID: channelID, threadTS: threadTS})
+	s.mu.Unlock()
+
+	return true, nil
 }
 
 func (s *threadRouterStub) RegisterCronThread(_ context.Context, channelID, threadTS, agent, seedText string) error {

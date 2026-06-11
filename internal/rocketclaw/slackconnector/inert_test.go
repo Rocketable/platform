@@ -14,6 +14,12 @@ type inertThreadRouter struct{}
 func (inertThreadRouter) StartThread(context.Context, string, bool, *events.InboundMessage) error {
 	return errors.New("slack thread routing is not configured")
 }
+func (inertThreadRouter) StartGoalThread(context.Context, string, string, int, *events.InboundMessage) error {
+	return errors.New("slack thread routing is not configured")
+}
+func (inertThreadRouter) StopGoalThread(context.Context, string, string) (bool, error) {
+	return false, nil
+}
 func (inertThreadRouter) RegisterCronThread(context.Context, string, string, string, string) error {
 	return nil
 }

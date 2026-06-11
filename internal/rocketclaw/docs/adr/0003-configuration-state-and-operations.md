@@ -28,7 +28,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 | `.rocketclaw/` | Generated runtime directory. Setup and startup may create or maintain it. |
 | `.femtoclaw/` | Legacy generated runtime directory used only when `femtoclaw.json` is selected. |
 | `<runtime-dir>/overlays/` | Managed parent directory for configured git overlay clones. Startup preserves the parent directory, reconciles its children against the current `overlays` config entries, removes unconfigured clone directories, and discards uncommitted or untracked changes inside active configured clone directories before fetching and applying them. |
-| `<runtime-dir>/state.sqlite3` | Persists RocketCode sessions, Slack/Discord text thread routing, response checkpoints, external MCP sessions, scheduled messages with recurrence metadata, restart notifications, and seed markers. Opened and initialized through the centralized SQLite state-store opener defined by ADR 0005. |
+| `<runtime-dir>/state.sqlite3` | Persists RocketCode sessions, Slack/Discord text thread routing, response checkpoints, external MCP sessions, scheduled messages with recurrence metadata, Slack goal-loop state, restart notifications, and seed markers. Opened and initialized through the centralized SQLite state-store opener defined by ADR 0005. |
 | `<runtime-dir>/auth.json` | Workspace-local ChatGPT OAuth credential for RocketCode Codex requests. Written by `rocketclaw oai login` with `0600` permissions. It is runtime state, not setup payload, and STT/TTS do not read it. RocketClaw owns this credential file and must not read, import, or write Codex CLI credentials such as `~/.codex/auth.json`. |
 | `<runtime-dir>/.gitignore` | Setup-generated runtime-directory ignore file that ignores `auth.json` so workspace-local ChatGPT OAuth material is not accidentally added to source control. |
 | `<runtime-dir>/.rocketcode/` | RocketCode shell output and transient runtime artifacts. |
@@ -76,6 +76,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - ChatGPT-backed RocketCode requests refresh credentials before sending when the access token is locally expired or within 120s of expiry. When Codex returns `401 Unauthorized` for a replayable request, RocketClaw reloads stored auth and retries once with a newer same-account stored token when present; otherwise it force-refreshes with the refresh token, persists the result, and retries once. Non-replayable requests return the original `401`; repeated `401`, terminal refresh failure, or failed refresh is surfaced with re-login guidance.
 - Anthropic-backed RocketCode requests use `anthropic.api_key` and optional `anthropic.api_base_url`. ChatGPT OAuth credentials are never used for Anthropic requests.
 - Startup migrates legacy state into `.rocketclaw/state.sqlite3` when applicable; rollback after destructive migration requires backup restore.
+- Startup rehydrates active persisted Slack goal loops according to ADR 0007. This is runtime state recovery and does not require configuration hot reload.
 
 ## Non-Goals
 
@@ -124,3 +125,4 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-10: Added local-only `agents/guardrail.md` as the optional inter-agent guardrail source and prohibited configured git overlays from materializing that path.
 - 2026-06-11: Added `rocketclaw lint [next|current]` as an operational command governed by ADR 0006.
 - 2026-06-11: Added optional Anthropic RocketCode provider configuration and clarified that ChatGPT OAuth remains OpenAI-only.
+- 2026-06-11: Added Slack goal-loop state to `<runtime-dir>/state.sqlite3` and specified startup rehydration per ADR 0007.

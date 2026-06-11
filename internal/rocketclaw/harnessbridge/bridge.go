@@ -47,6 +47,7 @@ const (
 	restartToolName                    = "rocketclaw_restart"
 	rawRunToolName                     = "rocketclaw_i_want_human_partner_to_see_this"
 	attachFilesToolName                = "rocketclaw_attach_files_to_response"
+	updateGoalToolName                 = "rocketclaw_update_goal"
 	scheduleMessageToolName            = "rocketclaw_schedule_message"
 	resetScheduledMessagesToolName     = "rocketclaw_reset_scheduled_messages"
 	internalErrorResponse              = "I hit an internal error while waiting for rocketcode."
@@ -55,6 +56,8 @@ const (
 	defaultQueueSize                   = 128
 	externalMCPMetadataEntryType       = "mcp_external_metadata"
 	externalMCPConversationPrefix      = "external_mcp:"
+	goalContinuationLabel              = "goal_continuation"
+	goalKickoffLabel                   = "goal"
 	rocketclawConversationIDEnv        = "ROCKETCLAW_CONVERSATION_ID"
 	rocketclawMetadataEnvPrefix        = "ROCKETCLAW_METADATA_"
 	maxInboundAttachmentBytes          = 4 << 20
@@ -660,6 +663,18 @@ func (b *Bridge) handleSummary(_ context.Context, request *summaryRequest) {
 }
 
 func (b *Bridge) handleInbound(ctx context.Context, msg *events.InboundMessage) error {
+	if msg.Label == goalContinuationLabel {
+		goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID)
+		if err != nil {
+			return fmt.Errorf("load goal continuation state: %w", err)
+		}
+
+		if !ok || strings.TrimSpace(goal.Status) != GoalStatusActive {
+			msg.CompleteResponse("", nil)
+			return nil
+		}
+	}
+
 	turnID := fmt.Sprintf("turn-%d", time.Now().UnixNano())
 	started := time.Now()
 	result := runResult{turnID: turnID, text: "", thinking: "", sequence: 0, sessionEntryID: 0, responseID: "", model: ""}
@@ -716,9 +731,18 @@ func (b *Bridge) handleInbound(ctx context.Context, msg *events.InboundMessage) 
 
 	result.turnID = turnID
 	errPublish := b.publishFinal(ctx, msg, result, publish)
-	errLog = errPublish
 
-	return errPublish
+	errLog = errPublish
+	if errPublish != nil || !publish {
+		return errPublish
+	}
+
+	if errGoal := b.finishGoalTurn(ctx, msg); errGoal != nil {
+		errLog = errGoal
+		return errGoal
+	}
+
+	return nil
 }
 
 //nolint:gocritic // runResult is kept by value to avoid nil handling in the hot publish path.
@@ -755,7 +779,11 @@ func (b *Bridge) publishFinal(ctx context.Context, msg *events.InboundMessage, r
 	}
 
 	outbound := b.newOutboundMessage(msg, result.turnID, result.sequence+1, result.text, "", true)
+
 	outbound.Attachments = events.CloneOutboundAttachments(result.attachments)
+	if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err == nil && ok && strings.TrimSpace(goal.Status) == GoalStatusComplete {
+		outbound.GoalComplete = true
+	}
 
 	if b.config.ConversationID == events.MainConversationID() && msg.Kind == events.InboundKindPrompt && strings.TrimSpace(result.text) != "" && result.sessionEntryID > 0 {
 		outbound.Checkpoint = &events.ResponseCheckpoint{
@@ -779,6 +807,45 @@ func (b *Bridge) publishFinal(ctx context.Context, msg *events.InboundMessage, r
 	}
 
 	return nil
+}
+
+func (b *Bridge) finishGoalTurn(ctx context.Context, msg *events.InboundMessage) error {
+	goalBefore, ok, err := b.config.SessionService.Goal(b.config.ConversationID)
+	if err != nil {
+		return fmt.Errorf("load goal after turn: %w", err)
+	}
+
+	if !ok {
+		return nil
+	}
+
+	if strings.TrimSpace(goalBefore.Status) != GoalStatusActive {
+		return nil
+	}
+
+	goal, ok, err := b.config.SessionService.AccountGoalTurn(b.config.ConversationID)
+	if err != nil {
+		return fmt.Errorf("account goal turn: %w", err)
+	}
+
+	if !ok || strings.TrimSpace(goal.Status) != GoalStatusActive {
+		return nil
+	}
+
+	return b.enqueueGoalContinuation(ctx, &goal, msg)
+}
+
+func (b *Bridge) enqueueGoalContinuation(ctx context.Context, goal *GoalState, msg *events.InboundMessage) error {
+	inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindPrompt, goalContinuationLabel, goalContinuationPrompt(goal), false)
+
+	inbound.ConversationID = b.config.ConversationID
+	if msg != nil && msg.SlackReply != nil {
+		inbound.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.ThreadTS, ThreadTS: msg.SlackReply.ThreadTS}
+	} else if channelID, threadTS, ok := SlackThreadTarget(b.config.ConversationID); ok {
+		inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
+	}
+
+	return b.enqueue(ctx, bridgeRequest{inbound: inbound}, "submit goal continuation")
 }
 
 func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID string, publish bool) (runResult, error) {
@@ -896,7 +963,12 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 	output := make(chan rocketcode.ChatResponse, 128)
 	interrupts := make(chan os.Signal, 1)
 
-	input <- rocketcode.PromptInput{Role: "", Text: buildPrompt(msg), Attachments: attachmentsFromInbound(msg.Attachments), Responses: output}
+	prompt, err := b.buildPrompt(msg)
+	if err != nil {
+		return runResult{}, err
+	}
+
+	input <- rocketcode.PromptInput{Role: "", Text: prompt, Attachments: attachmentsFromInbound(msg.Attachments), Responses: output}
 
 	close(input)
 
@@ -1224,9 +1296,14 @@ func (b *Bridge) rocketcodeProviders() (rocketcode.Providers, error) {
 
 func (b *Bridge) rocketcodeConfig(shellOutputDir string, shellEnv map[string]string, customTools ...rocketcode.Tool) rocketcode.Config {
 	tools := make([]rocketcode.Tool, 0, 3+len(customTools))
+
 	tools = append(tools, restartTool(b.config.RequestRestart, func(ctx context.Context) error {
 		return b.config.SessionService.MarkRestartRequester(ctx, b.config.ConversationID)
 	}), scheduleMessageTool(b.ScheduleMessage, b.log), resetScheduledMessagesTool(b.ResetScheduledMessages))
+	if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err == nil && ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
+		tools = append(tools, updateGoalTool(b.config.SessionService, b.config.ConversationID))
+	}
+
 	tools = append(tools, customTools...)
 
 	return rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, InterAgentFilter: rocketcode.InterAgentFilterConfig{Prompt: "", Model: "", ReasoningEffort: "", Verbosity: "", Permission: rocketcode.PermissionSet{Buckets: nil}}, CustomTools: tools, ShellEnv: shellEnv}
@@ -1576,6 +1653,25 @@ func resetScheduledMessagesTool(reset func() error) rocketcode.Tool {
 	}}
 }
 
+func updateGoalTool(store *SessionService, conversationID string) rocketcode.Tool {
+	return rocketcode.Tool{Name: updateGoalToolName, Description: "Update the active RocketClaw goal loop status for this conversation. Use complete when the goal is achieved, blocked when progress cannot continue, or paused when continuation should stop for now.", Permission: "rocketclaw", VisibilitySubjects: []string{updateGoalToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{updateGoalToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"status": map[string]any{"type": "string", "enum": []string{GoalStatusComplete, GoalStatusBlocked, GoalStatusPaused}}, "note": map[string]any{"type": "string"}}, "required": []string{"status"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+		var input struct {
+			Status string `json:"status"`
+			Note   string `json:"note"`
+		}
+		if err := json.Unmarshal(raw, &input); err != nil {
+			return rocketcode.ToolResult{}, fmt.Errorf("parse goal update: %w", err)
+		}
+
+		goal, err := store.UpdateGoalStatus(conversationID, input.Status, input.Note)
+		if err != nil {
+			return rocketcode.ToolResult{}, err
+		}
+
+		return rocketcode.TextToolResult("goal marked " + strings.TrimSpace(goal.Status)), nil
+	}}
+}
+
 func (b *Bridge) armScheduledMessage(id string, message *ScheduledMessageState) {
 	armed := *message
 	time.AfterFunc(max(time.Until(armed.DueAt), 0), func() {
@@ -1813,6 +1909,21 @@ func compactedOutputToReplayInput(items []responses.ResponseOutputItemUnion) ([]
 	return raw, nil
 }
 
+func (b *Bridge) buildPrompt(msg *events.InboundMessage) (string, error) {
+	prompt := buildPrompt(msg)
+
+	goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID)
+	if err != nil {
+		return "", fmt.Errorf("load active goal: %w", err)
+	}
+
+	if !ok || strings.TrimSpace(goal.Status) != GoalStatusActive {
+		return prompt, nil
+	}
+
+	return prompt + "\n\n" + goalSteeringPrompt(&goal), nil
+}
+
 func buildPrompt(msg *events.InboundMessage) string {
 	label := "User message"
 	instruction := "Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary."
@@ -1840,6 +1951,19 @@ func buildPrompt(msg *events.InboundMessage) string {
 	}
 
 	return instruction + "\n\n" + label + ":\n" + body
+}
+
+func goalSteeringPrompt(goal *GoalState) string {
+	turnBudget := "unlimited"
+	if goal.MaxTurns > 0 {
+		turnBudget = fmt.Sprintf("%d of %d turns used", goal.TurnsUsed, goal.MaxTurns)
+	}
+
+	return "Active goal loop:\nObjective:\n" + strings.TrimSpace(goal.Objective) + "\n\nTurn budget: " + turnBudget + "\n\nContinue making concrete progress toward the objective. When the objective is achieved, call rocketclaw_update_goal with status complete. If progress cannot continue, call rocketclaw_update_goal with status blocked. If the loop should stop for now, call rocketclaw_update_goal with status paused."
+}
+
+func goalContinuationPrompt(goal *GoalState) string {
+	return "Continue the active goal loop.\n\n" + goalSteeringPrompt(goal)
 }
 
 func externalMCPMetadataEnv(conversationID string, metadata map[string]string) map[string]string {

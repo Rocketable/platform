@@ -73,10 +73,18 @@ Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell 
 | `rocketclaw_restart`                          | Schedules graceful restart for approved runtime config/asset changes.                                                         |
 | `rocketclaw_schedule_message`                 | Schedules one-shot delayed prompts or recurring delayed prompts through the owning bridge context. Recurring prompts use optional `recurring: true`, require `send_this_in` from 1m through 1h, persist until reset, and do not replay missed intervals. |
 | `rocketclaw_reset_scheduled_messages`         | Clears scheduled messages for the owning bridge context.                                                                      |
+| `rocketclaw_update_goal`                       | Persistent bridge tool visible only when the owning conversation has an active Slack goal loop; sets the goal status to `complete`, `blocked`, or `paused` with an optional note. |
 | `rocketclaw_attach_files_to_response`         | Persistent bridge tool that allows RocketCode to attach collected files to the outbound response.                              |
 | `rocketclaw_i_want_human_partner_to_see_this` | Required completion tool for raw background runs; its argument is the exact human-visible final message or empty for silence. |
 
-Persistent bridge tools are restart, schedule message, reset scheduled messages, attach files, and path-specific custom tools. Raw-run tools are decision, outbound attachment collection, restart, schedule message, and reset scheduled messages. Raw and persistent schedule-message tools expose the same one-shot and recurring contract.
+Persistent bridge tools are restart, schedule message, reset scheduled messages, active-goal update when applicable, attach files, and path-specific custom tools. Raw-run tools are decision, outbound attachment collection, restart, schedule message, and reset scheduled messages. Raw and persistent schedule-message tools expose the same one-shot and recurring contract.
+
+### Goal-Loop Prompting
+
+- When a persistent bridge conversation has an active Slack goal loop, RocketClaw may add goal steering to the turn prompt.
+- Goal steering includes the persisted objective and current turn-budget state.
+- Goal steering instructs the agent to keep making progress until it can mark the goal `complete`, `blocked`, or `paused` through `rocketclaw_update_goal`.
+- Goal-loop human objectives and continuation text remain persistent-bridge input and do not enable shell interpolation.
 
 ### Session And Replay
 
@@ -137,3 +145,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-10: Added `maxRecursion` agent frontmatter contract for limiting RocketCode task subdelegation depth.
 - 2026-06-10: Added the local-only `guardrail` agent contract for RocketCode inter-agent delegation and response filtering.
 - 2026-06-11: Added provider-qualified OpenAI and Anthropic RocketCode embedding contracts, with ChatGPT OAuth and checkpoint compaction remaining OpenAI-only.
+- 2026-06-11: Added persistent-bridge Slack goal-loop steering and `rocketclaw_update_goal` tool contract governed by ADR 0007.

@@ -269,6 +269,10 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		return err
 	}
 
+	if err := threadBridges.StartActiveGoals(); err != nil {
+		return err
+	}
+
 	defer func() {
 		logger.Info("shutting down rocketclaw runtime")
 		startShutdown("runtime cleanup", false)
