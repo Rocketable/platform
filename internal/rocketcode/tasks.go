@@ -202,12 +202,6 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 
 	childFactory.modelRef = modelRef
 
-	var (
-		responseFormat  responses.ResponseFormatTextConfigUnionParam
-		promptExpansion promptExpansionEnvironment
-		rewriteHistory  func([]responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam
-	)
-
 	child := &looper{
 		agent:              agent,
 		Client:             f.client,
@@ -220,13 +214,9 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		CompactThreshold:   f.compactThreshold,
 		CompactionSteering: f.compactionSteering,
 		ParallelToolCalls:  f.parallelToolCalls,
-		ResponseFormat:     responseFormat,
 		Permissions:        agent.Permission,
 		Tools:              childFactory.toolsFor(&agent),
-		RewriteHistory:     rewriteHistory,
 		Diagnostics:        f.diagnostics,
-		expandInputPrompts: false,
-		promptExpansion:    promptExpansion,
 	}
 
 	output := make(chan ChatResponse)
@@ -340,11 +330,6 @@ func (f *toolFactory) runInterAgentFilter(ctx context.Context, parentAgentPrompt
 		return interAgentFilterDecision{Approved: false, Reason: "inter-agent guardrail model failed: " + err.Error()}
 	}
 
-	var (
-		promptExpansion promptExpansionEnvironment
-		rewriteHistory  func([]responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam
-	)
-
 	child := &looper{
 		agent:              agent,
 		Client:             f.client,
@@ -360,10 +345,6 @@ func (f *toolFactory) runInterAgentFilter(ctx context.Context, parentAgentPrompt
 		ResponseFormat:     responseFormat,
 		Permissions:        agent.Permission,
 		Tools:              f.toolsFor(&agent),
-		RewriteHistory:     rewriteHistory,
-		Diagnostics:        false,
-		expandInputPrompts: false,
-		promptExpansion:    promptExpansion,
 	}
 
 	output := make(chan ChatResponse)

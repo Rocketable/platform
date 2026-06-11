@@ -54,59 +54,31 @@ type updateFileChunk struct {
 }
 
 type fileChange struct {
-	typ        string
-	path       string
-	movePath   string
-	oldContent string
-	newContent string
-	bom        bool
-	diff       string
-	additions  int
-	deletions  int
+	typ, path, movePath string
+	newContent          string
+	bom                 bool
 }
 
-type openCodePatchErrorKind string
-
-const (
-	openCodePatchInvalidFormat openCodePatchErrorKind = "invalid_format"
-	openCodePatchReadFile      openCodePatchErrorKind = "read_file"
-	openCodePatchFindContext   openCodePatchErrorKind = "find_context"
-	openCodePatchFindLines     openCodePatchErrorKind = "find_lines"
-)
+type applyPatchPreview struct {
+	changes []fileChange
+	output  string
+}
 
 type openCodePatchError struct {
-	kind    openCodePatchErrorKind
 	message string
 	cause   error
 }
 
 func (e openCodePatchError) Error() string {
-	if e.cause == nil {
-		return e.message
+	if e.cause != nil {
+		return e.message + ": " + e.cause.Error()
 	}
 
-	return e.message + ": " + e.cause.Error()
+	return e.message
 }
 
 func (e openCodePatchError) Unwrap() error {
 	return e.cause
-}
-
-type applyPatchFileMeta struct {
-	FilePath     string
-	RelativePath string
-	Type         string
-	Patch        string
-	Additions    int
-	Deletions    int
-	MovePath     string
-}
-
-type applyPatchPreview struct {
-	changes []fileChange
-	files   []applyPatchFileMeta
-	diff    string
-	output  string
 }
 
 func (sfs *sandboxedFileSystem) ReadResult(filename string, offset int) ToolResult {
@@ -283,10 +255,6 @@ func (sfs *sandboxedFileSystem) ApplyPatch(patchText string) string {
 	return preview.output
 }
 
-func emptyApplyPatchPreview() applyPatchPreview {
-	return applyPatchPreview{changes: nil, files: nil, diff: "", output: ""}
-}
-
 func previewApplyPatch(sfs *sandboxedFileSystem, patchText string) (preview applyPatchPreview, errText string) {
 	sfs.mu.Lock()
 	defer sfs.mu.Unlock()
@@ -296,61 +264,57 @@ func previewApplyPatch(sfs *sandboxedFileSystem, patchText string) (preview appl
 
 func previewApplyPatchLocked(sfs *sandboxedFileSystem, patchText string) (preview applyPatchPreview, errText string) {
 	if patchText == "" {
-		return emptyApplyPatchPreview(), "patchText is required"
+		return applyPatchPreview{}, "patchText is required"
 	}
 
 	hunks, err := parsePatch(patchText)
 	if err != nil {
-		return emptyApplyPatchPreview(), "apply_patch verification failed: Error: " + err.Error()
+		return applyPatchPreview{}, "apply_patch verification failed: Error: " + err.Error()
 	}
 
 	if len(hunks) == 0 {
 		normalized := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(patchText, "\r\n", "\n"), "\r", "\n"))
 		if normalized == "*** Begin Patch\n*** End Patch" {
-			return emptyApplyPatchPreview(), "patch rejected: empty patch"
+			return applyPatchPreview{}, "patch rejected: empty patch"
 		}
 
-		return emptyApplyPatchPreview(), "apply_patch verification failed: no hunks found"
+		return applyPatchPreview{}, "apply_patch verification failed: no hunks found"
 	}
 
 	changes := make([]fileChange, 0, len(hunks))
 	for _, hunk := range hunks {
 		cleanPath, err := cleanPatchPath(sfs.root, hunk.path)
 		if err != nil {
-			return emptyApplyPatchPreview(), "apply_patch verification failed: " + err.Error()
+			return applyPatchPreview{}, "apply_patch verification failed: " + err.Error()
 		}
 
 		if isDeniedEnvPath(cleanPath) {
-			return emptyApplyPatchPreview(), "apply_patch verification failed: " + deniedEnvAccessMessage(cleanPath)
+			return applyPatchPreview{}, "apply_patch verification failed: " + deniedEnvAccessMessage(cleanPath)
 		}
 
 		switch hunk.typ {
 		case "add":
-			oldContent := ""
-
 			nextContent := hunk.contents
 			if nextContent == "" || !strings.HasSuffix(nextContent, "\n") {
 				nextContent += "\n"
 			}
 
 			text, bom := splitBOM(nextContent)
-			diff := generateUnifiedDiff(oldContent, text)
-			additions, deletions := countDiffLines(oldContent, text)
-			changes = append(changes, fileChange{typ: "add", path: cleanPath, movePath: "", oldContent: oldContent, newContent: text, bom: bom, diff: diff, additions: additions, deletions: deletions})
+			changes = append(changes, fileChange{typ: "add", path: cleanPath, newContent: text, bom: bom})
 		case "update":
 			info, err := sfs.root.Stat(cleanPath)
 			if err != nil || info.IsDir() {
-				return emptyApplyPatchPreview(), "apply_patch verification failed: Failed to read file to update: " + filepath.Join(sfs.root.Name(), cleanPath)
+				return applyPatchPreview{}, "apply_patch verification failed: Failed to read file to update: " + filepath.Join(sfs.root.Name(), cleanPath)
 			}
 
-			oldContent, sourceBOM, err := readTextFile(sfs, cleanPath)
+			_, sourceBOM, err := readTextFile(sfs, cleanPath)
 			if err != nil {
-				return emptyApplyPatchPreview(), "apply_patch verification failed: " + err.Error()
+				return applyPatchPreview{}, "apply_patch verification failed: " + err.Error()
 			}
 
 			text, bom, err := deriveNewContentsFromChunks(sfs, cleanPath, hunk.chunks)
 			if err != nil {
-				return emptyApplyPatchPreview(), "apply_patch verification failed: Error: " + err.Error()
+				return applyPatchPreview{}, "apply_patch verification failed: Error: " + err.Error()
 			}
 
 			if sourceBOM {
@@ -361,11 +325,11 @@ func previewApplyPatchLocked(sfs *sandboxedFileSystem, patchText string) (previe
 			if hunk.movePath != "" {
 				movePath, err = cleanPatchPath(sfs.root, hunk.movePath)
 				if err != nil {
-					return emptyApplyPatchPreview(), "apply_patch verification failed: " + err.Error()
+					return applyPatchPreview{}, "apply_patch verification failed: " + err.Error()
 				}
 
 				if isDeniedEnvPath(movePath) {
-					return emptyApplyPatchPreview(), "apply_patch verification failed: " + deniedEnvAccessMessage(movePath)
+					return applyPatchPreview{}, "apply_patch verification failed: " + deniedEnvAccessMessage(movePath)
 				}
 			}
 
@@ -374,28 +338,20 @@ func previewApplyPatchLocked(sfs *sandboxedFileSystem, patchText string) (previe
 				changeType = "move"
 			}
 
-			diff := generateUnifiedDiff(oldContent, text)
-			additions, deletions := countDiffLines(oldContent, text)
-			changes = append(changes, fileChange{typ: changeType, path: cleanPath, movePath: movePath, oldContent: oldContent, newContent: text, bom: bom, diff: diff, additions: additions, deletions: deletions})
+			changes = append(changes, fileChange{typ: changeType, path: cleanPath, movePath: movePath, newContent: text, bom: bom})
 		case "delete":
 			if err := verifyDeleteTarget(sfs, cleanPath); err != nil {
-				return emptyApplyPatchPreview(), "apply_patch verification failed: " + err.Error()
+				return applyPatchPreview{}, "apply_patch verification failed: " + err.Error()
 			}
 
-			oldContent, bom, err := readTextFile(sfs, cleanPath)
+			_, _, err := readTextFile(sfs, cleanPath)
 			if err != nil {
-				return emptyApplyPatchPreview(), "apply_patch verification failed: " + err.Error()
+				return applyPatchPreview{}, "apply_patch verification failed: " + err.Error()
 			}
 
-			diff := generateUnifiedDiff(oldContent, "")
-			_, deletions := countDiffLines(oldContent, "")
-			changes = append(changes, fileChange{typ: "delete", path: cleanPath, movePath: "", oldContent: oldContent, newContent: "", bom: bom, diff: diff, additions: 0, deletions: deletions})
+			changes = append(changes, fileChange{typ: "delete", path: cleanPath})
 		}
 	}
-
-	files := make([]applyPatchFileMeta, 0, len(changes))
-
-	var totalDiff strings.Builder
 
 	lines := []string{"Success. Updated the following files:"}
 
@@ -416,20 +372,9 @@ func previewApplyPatchLocked(sfs *sandboxedFileSystem, patchText string) (previe
 		}
 
 		lines = append(lines, prefix+filepath.ToSlash(target))
-		files = append(files, applyPatchFileMeta{
-			FilePath:     filepath.Join(sfs.root.Name(), change.path),
-			RelativePath: filepath.ToSlash(target),
-			Type:         change.typ,
-			Patch:        change.diff,
-			Additions:    change.additions,
-			Deletions:    change.deletions,
-			MovePath:     patchMovePath(sfs.root.Name(), change.movePath),
-		})
-		totalDiff.WriteString(change.diff)
-		totalDiff.WriteByte('\n')
 	}
 
-	return applyPatchPreview{changes: changes, files: files, diff: totalDiff.String(), output: strings.Join(lines, "\n")}, ""
+	return applyPatchPreview{changes: changes, output: strings.Join(lines, "\n")}, ""
 }
 
 func verifyDeleteTarget(sfs *sandboxedFileSystem, name string) error {
@@ -484,7 +429,7 @@ func parsePatch(patchText string) ([]patchHunk, error) {
 	}
 
 	if begin == -1 || end == -1 || begin >= end {
-		return nil, openCodePatchError{kind: openCodePatchInvalidFormat, message: "Invalid patch format: missing Begin/End markers", cause: nil}
+		return nil, openCodePatchError{message: "Invalid patch format: missing Begin/End markers"}
 	}
 
 	var hunks []patchHunk
@@ -683,7 +628,7 @@ func rejectSymlink(sfs *sandboxedFileSystem, name string) error {
 func deriveNewContentsFromChunks(sfs *sandboxedFileSystem, name string, chunks []updateFileChunk) (text string, bom bool, err error) {
 	originalText, originalBOM, err := readTextFile(sfs, name)
 	if err != nil {
-		return "", false, openCodePatchError{kind: openCodePatchReadFile, message: "Failed to read file " + filepath.Join(sfs.root.Name(), name), cause: err}
+		return "", false, openCodePatchError{message: "Failed to read file " + filepath.Join(sfs.root.Name(), name), cause: err}
 	}
 
 	originalLines := strings.Split(originalText, "\n")
@@ -720,7 +665,7 @@ func computeReplacements(originalLines []string, filePath string, chunks []updat
 		if chunk.changeContext != "" {
 			contextIdx := seekSequence(originalLines, []string{chunk.changeContext}, lineIndex, false)
 			if contextIdx == -1 {
-				return nil, openCodePatchError{kind: openCodePatchFindContext, message: fmt.Sprintf("Failed to find context '%s' in %s", chunk.changeContext, filePath), cause: nil}
+				return nil, openCodePatchError{message: fmt.Sprintf("Failed to find context '%s' in %s", chunk.changeContext, filePath)}
 			}
 
 			lineIndex = contextIdx + 1
@@ -751,7 +696,7 @@ func computeReplacements(originalLines []string, filePath string, chunks []updat
 		}
 
 		if found == -1 {
-			return nil, openCodePatchError{kind: openCodePatchFindLines, message: fmt.Sprintf("Failed to find expected lines in %s:\n%s", filePath, strings.Join(chunk.oldLines, "\n")), cause: nil}
+			return nil, openCodePatchError{message: fmt.Sprintf("Failed to find expected lines in %s:\n%s", filePath, strings.Join(chunk.oldLines, "\n"))}
 		}
 
 		replacements = append(replacements, replacement{start: found, oldLen: len(pattern), newLines: newSlice})
@@ -833,96 +778,6 @@ func normalizeUnicode(text string) string {
 	)
 
 	return replacer.Replace(text)
-}
-
-func generateUnifiedDiff(oldContent, newContent string) string {
-	oldLines := strings.Split(oldContent, "\n")
-	newLines := strings.Split(newContent, "\n")
-	diff := "@@ -1 +1 @@\n"
-	maxLen := max(len(oldLines), len(newLines))
-	hasChanges := false
-
-	var diffSb743 strings.Builder
-
-	for i := range maxLen {
-		oldLine := ""
-		newLine := ""
-
-		if i < len(oldLines) {
-			oldLine = oldLines[i]
-		}
-
-		if i < len(newLines) {
-			newLine = newLines[i]
-		}
-
-		if oldLine != newLine {
-			if oldLine != "" {
-				diffSb743.WriteString("-" + oldLine + "\n")
-			}
-
-			if newLine != "" {
-				diffSb743.WriteString("+" + newLine + "\n")
-			}
-
-			hasChanges = true
-
-			continue
-		}
-
-		if oldLine != "" {
-			diffSb743.WriteString(" " + oldLine + "\n")
-		}
-	}
-
-	diff += diffSb743.String()
-
-	if !hasChanges {
-		return ""
-	}
-
-	return diff
-}
-
-func countDiffLines(oldContent, newContent string) (additions, deletions int) {
-	oldLines := strings.Split(oldContent, "\n")
-	newLines := strings.Split(newContent, "\n")
-
-	maxLen := max(len(oldLines), len(newLines))
-	for i := range maxLen {
-		oldLine := ""
-		newLine := ""
-
-		if i < len(oldLines) {
-			oldLine = oldLines[i]
-		}
-
-		if i < len(newLines) {
-			newLine = newLines[i]
-		}
-
-		if oldLine == newLine {
-			continue
-		}
-
-		if oldLine != "" {
-			deletions++
-		}
-
-		if newLine != "" {
-			additions++
-		}
-	}
-
-	return additions, deletions
-}
-
-func patchMovePath(rootName, movePath string) string {
-	if movePath == "" {
-		return ""
-	}
-
-	return filepath.Join(rootName, movePath)
 }
 
 func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) string {

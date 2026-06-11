@@ -134,14 +134,6 @@ func toolVisible(agent *Agent, name string, tool *looperTool) bool {
 }
 
 func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map[string]looperTool {
-	if sfs == nil || sss == nil {
-		return map[string]looperTool{
-			"read":      {Definition: *functionTool("read", "Read a file from the workspace", map[string]any{"filePath": map[string]any{"type": "string"}}), Permission: "read"},
-			"bash":      {Definition: *functionTool("bash", "Run a shell command in the workspace", map[string]any{"command": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}), Permission: "bash"},
-			"websearch": webSearchTool(),
-		}
-	}
-
 	return map[string]looperTool{
 		"websearch": webSearchTool(),
 		"read": {
@@ -183,9 +175,14 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 					return nil, errors.New(errText)
 				}
 
-				subjects := make([]string, 0, len(preview.files))
-				for _, file := range preview.files {
-					subjects = append(subjects, rootedPathSubject(file.RelativePath))
+				subjects := make([]string, 0, len(preview.changes))
+				for _, change := range preview.changes {
+					target := change.path
+					if change.movePath != "" {
+						target = change.movePath
+					}
+
+					subjects = append(subjects, rootedPathSubject(target))
 				}
 
 				return subjects, nil
@@ -299,9 +296,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 }
 
 func webSearchTool() looperTool {
-	return looperTool{Hosted: responses.ToolUnionParam{OfWebSearch: &responses.WebSearchToolParam{Type: responses.WebSearchToolTypeWebSearch}}, Permission: "websearch", Subjects: func(json.RawMessage) ([]string, error) {
-		return []string{"*"}, nil
-	}}
+	return looperTool{Hosted: responses.ToolUnionParam{OfWebSearch: &responses.WebSearchToolParam{Type: responses.WebSearchToolTypeWebSearch}}, Permission: "websearch"}
 }
 
 func (f *toolFactory) findSkillsTool() looperTool {
@@ -477,7 +472,7 @@ func (f *toolFactory) skillDescription() string {
 		"The following skills provide specialized sets of instructions for particular tasks.",
 		"Invoke this tool to load a skill when a task matches one of the available skills listed below:",
 		"",
-		formatAvailableSkills(list, f.skills.Root, false),
+		formatAvailableSkills(list),
 	}, "\n")
 }
 

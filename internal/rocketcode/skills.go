@@ -200,32 +200,15 @@ func (s Skills) FindAvailable(query string, agent *Agent) string {
 	return (Skills{Root: s.Root, Items: items, Dirs: s.Dirs, fsys: s.fsys}).Find(query)
 }
 
-func formatAvailableSkills(skills []Skill, root string, verbose bool) string {
+func formatAvailableSkills(skills []Skill) string {
 	if len(skills) == 0 {
 		return "No skills are currently available."
 	}
 
-	if !verbose {
-		lines := []string{"## Available skills"}
-		for _, skill := range skills {
-			lines = append(lines, fmt.Sprintf("- **%s**: %s", skill.Name, skill.Description))
-		}
-
-		return strings.Join(lines, "\n")
-	}
-
-	lines := []string{"<available_skills>"}
+	lines := []string{"## Available skills"}
 	for _, skill := range skills {
-		lines = append(lines,
-			"  <skill>",
-			"    <name>"+skill.Name+"</name>",
-			"    <description>"+skill.Description+"</description>",
-			"    <location>"+fileURL(filepath.Join(root, filepath.FromSlash(skill.Location)))+"</location>",
-			"  </skill>",
-		)
+		lines = append(lines, fmt.Sprintf("- **%s**: %s", skill.Name, skill.Description))
 	}
-
-	lines = append(lines, "</available_skills>")
 
 	return strings.Join(lines, "\n")
 }

@@ -167,43 +167,6 @@ type oneOffCronjobRunner interface {
 	RunOneOffCronjob(context.Context, cronjob.OneOffCronjob, *harnessbridge.RawRunProgress, func(context.Context, cronjob.RunResult, error))
 }
 
-type inertThreadRouter struct{}
-
-func (inertThreadRouter) StartThread(context.Context, string, bool, *events.InboundMessage) error {
-	return errors.New("slack thread routing is not configured")
-}
-func (inertThreadRouter) RegisterCronThread(context.Context, string, string, string, string) error {
-	return nil
-}
-func (inertThreadRouter) PrepareThreadReply(context.Context, string, string) (bool, error) {
-	return false, nil
-}
-func (inertThreadRouter) PrepareResponseThreadReply(context.Context, string, string) (bool, error) {
-	return false, nil
-}
-func (inertThreadRouter) SubmitThreadReply(context.Context, string, string, *events.InboundMessage) (bool, error) {
-	return false, nil
-}
-func (inertThreadRouter) SubmitResponseThreadReply(context.Context, string, string, *events.InboundMessage) (bool, error) {
-	return false, nil
-}
-func (inertThreadRouter) SummarizeThread(context.Context, string, string) (bool, error) {
-	return false, nil
-}
-func (inertThreadRouter) RecordResponseCheckpoint(context.Context, string, string, events.ResponseCheckpoint) error {
-	return nil
-}
-
-type inertOneOffCronjobs struct{}
-
-func (inertOneOffCronjobs) LoadOneOffCronjob(string) (cronjob.OneOffCronjob, error) {
-	return cronjob.OneOffCronjob{}, errors.New("on-demand cronjobs are not configured")
-}
-
-func (inertOneOffCronjobs) RunOneOffCronjob(ctx context.Context, _ cronjob.OneOffCronjob, _ *harnessbridge.RawRunProgress, finish func(context.Context, cronjob.RunResult, error)) {
-	finish(ctx, cronjob.RunResult{}, errors.New("on-demand cronjobs are not configured"))
-}
-
 // New constructs a Slack connector.
 func New(cfg *config.SlackConfig, bus *events.Bus, emergencySafeWords []string, threadAgents config.ThreadAgents, threadRouter ThreadRouter, oneOffCronjobs oneOffCronjobRunner, logger *slog.Logger) *Connector {
 	api := slack.New(cfg.BotToken, slack.OptionAppLevelToken(cfg.AppToken), slack.OptionRetry(3))
@@ -1498,7 +1461,7 @@ func (c *Connector) handleOnDemandCronReaction(ctx context.Context, ev *slackeve
 
 	replyTarget := &events.SlackReplyTarget{ChannelID: channelID, MessageTS: messageTS, ThreadTS: threadTS}
 
-	target, ok := slackReactionCronTarget(message.Text)
+	target, ok := cronjob.OnDemandCronTarget(message.Text, slackOnDemandCronPrefix, "🔂")
 	if !ok {
 		if errPost := c.publishOnDemandCronReply(ctx, replyTarget, "React with `:repeat_one:` to a message containing exactly one cron target, such as `:repeat_one: daily`, `🔂 daily`, `daily`, `daily.md`, or a scheduled cron thread root containing `cron/daily.md`.", true); errPost != nil {
 			c.log.Warn("publish Slack on-demand cron reaction usage", "error", errPost, "channel", channelID, "message_ts", messageTS, "thread_ts", threadTS)
@@ -1508,76 +1471,6 @@ func (c *Connector) handleOnDemandCronReaction(ctx context.Context, ev *slackeve
 	}
 
 	c.handleOnDemandCronRequest(ctx, &slackevents.MessageEvent{User: ev.User, Channel: channelID, TimeStamp: messageTS, ThreadTimeStamp: message.ThreadTimestamp, Text: message.Text}, target, replyTarget)
-}
-
-func slackReactionCronTarget(text string) (string, bool) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return "", false
-	}
-
-	var candidates []string
-	if target, ok := singleSlackCronTarget(text); ok {
-		candidates = append(candidates, target)
-	}
-
-	for _, prefix := range []string{slackOnDemandCronPrefix, "🔂"} {
-		if after, ok := strings.CutPrefix(text, prefix); ok {
-			if target, ok := singleSlackCronTarget(after); ok {
-				candidates = append(candidates, target)
-			}
-		}
-	}
-
-	for field := range strings.FieldsSeq(text) {
-		field = strings.Trim(field, "`.,;:()[]<>")
-		if target, ok := slackCronPathTarget(field); ok {
-			candidates = append(candidates, target)
-		}
-	}
-
-	if len(candidates) == 0 {
-		return "", false
-	}
-
-	target := candidates[0]
-	for _, candidate := range candidates[1:] {
-		if candidate != target {
-			return "", false
-		}
-	}
-
-	return target, true
-}
-
-func singleSlackCronTarget(text string) (string, bool) {
-	fields := strings.Fields(strings.TrimSpace(text))
-	if len(fields) != 1 {
-		return "", false
-	}
-
-	if fields[0] == slackOnDemandCronPrefix || fields[0] == "🔂" {
-		return "", false
-	}
-
-	if target, ok := slackCronPathTarget(fields[0]); ok {
-		return target, true
-	}
-
-	return fields[0], true
-}
-
-func slackCronPathTarget(text string) (string, bool) {
-	if !strings.HasPrefix(text, "cron/") || !strings.HasSuffix(text, ".md") {
-		return "", false
-	}
-
-	target := strings.TrimSuffix(strings.TrimPrefix(text, "cron/"), ".md")
-	if target == "" || strings.ContainsAny(target, `/\`) {
-		return "", false
-	}
-
-	return target, true
 }
 
 func (c *Connector) addRobotReaction(ctx context.Context, replyTarget *events.SlackReplyTarget) {

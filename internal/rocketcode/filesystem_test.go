@@ -55,12 +55,10 @@ type oracleTreeEntry struct {
 }
 
 type oracleResult struct {
-	OK     bool                 `json:"ok"`
-	Output string               `json:"output,omitempty"`
-	Error  string               `json:"error,omitempty"`
-	Diff   string               `json:"diff,omitempty"`
-	Files  []applyPatchFileMeta `json:"files,omitempty"`
-	Tree   []oracleTreeEntry    `json:"tree"`
+	OK     bool              `json:"ok"`
+	Output string            `json:"output,omitempty"`
+	Error  string            `json:"error,omitempty"`
+	Tree   []oracleTreeEntry `json:"tree"`
 }
 
 func seedRoot(t *testing.T, root *os.Root, seed map[string][]byte, setup func(*testing.T, *os.Root)) {
@@ -145,17 +143,12 @@ func runGoApplyPatch(t *testing.T, dir, patchText string) oracleResult {
 	defer func() { require.NoError(t, root.Close()) }()
 
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
-	preview, previewMessage := previewApplyPatch(sfs, patchText)
 	output := sfs.ApplyPatch(patchText)
 
-	result := oracleResult{OK: false, Output: "", Error: "", Diff: "", Files: nil, Tree: snapshotTree(t, dir)}
+	result := oracleResult{OK: false, Output: "", Error: "", Tree: snapshotTree(t, dir)}
 	if strings.HasPrefix(output, "Success. Updated the following files:") {
-		require.Empty(t, previewMessage)
-
 		result.OK = true
 		result.Output = output
-		result.Diff = preview.diff
-		result.Files = preview.files
 
 		return result
 	}
@@ -167,10 +160,10 @@ func runGoApplyPatch(t *testing.T, dir, patchText string) oracleResult {
 
 func requireParity(t *testing.T, patchText string, seed map[string][]byte) {
 	t.Helper()
-	_ = runParity(t, patchText, seed, nil)
+	runParity(t, patchText, seed, nil)
 }
 
-func runParity(t *testing.T, patchText string, seed map[string][]byte, setup func(*testing.T, *os.Root)) oracleResult {
+func runParity(t *testing.T, patchText string, seed map[string][]byte, setup func(*testing.T, *os.Root)) {
 	t.Helper()
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
@@ -186,13 +179,11 @@ func runParity(t *testing.T, patchText string, seed map[string][]byte, setup fun
 	require.NoError(t, root.Close())
 	local := runGoApplyPatch(t, dir, patchText)
 	require.Equal(t, oracle, local)
-
-	return local
 }
 
 func requireParityWithSetup(t *testing.T, patchText string, seed map[string][]byte, setup func(*testing.T, *os.Root)) {
 	t.Helper()
-	_ = runParity(t, patchText, seed, setup)
+	runParity(t, patchText, seed, setup)
 }
 
 func TestTSandboxedFileSystem(t *testing.T) {
@@ -716,15 +707,7 @@ func TestApplyPatchParity(t *testing.T) {
 			"delete.txt": []byte("obsolete\n"),
 		}
 		patch := "*** Begin Patch\n*** Add File: nested/new.txt\n+created\n*** Delete File: delete.txt\n*** Update File: modify.txt\n@@\n-line2\n+changed\n*** End Patch"
-		local := runParity(t, patch, seed, nil)
-		require.Len(t, local.Files, 3)
-		require.Equal(t, "add", local.Files[0].Type)
-		require.Equal(t, "nested/new.txt", local.Files[0].RelativePath)
-		require.Contains(t, local.Files[0].Patch, "+created")
-		require.Equal(t, "delete", local.Files[1].Type)
-		require.Equal(t, "update", local.Files[2].Type)
-		require.Contains(t, local.Files[2].Patch, "-line2")
-		require.Contains(t, local.Files[2].Patch, "+changed")
+		requireParity(t, patch, seed)
 	})
 
 	t.Run("multiple hunks", func(t *testing.T) {
@@ -748,13 +731,7 @@ func TestApplyPatchParity(t *testing.T) {
 	t.Run("moves file", func(t *testing.T) {
 		seed := map[string][]byte{"old/name.txt": []byte("old content\n")}
 		patch := "*** Begin Patch\n*** Update File: old/name.txt\n*** Move to: renamed/dir/name.txt\n@@\n-old content\n+new content\n*** End Patch"
-		local := runParity(t, patch, seed, nil)
-		require.Len(t, local.Files, 1)
-		require.Equal(t, "move", local.Files[0].Type)
-		require.Equal(t, "renamed/dir/name.txt", local.Files[0].RelativePath)
-		require.Contains(t, local.Files[0].MovePath, filepath.ToSlash("renamed/dir/name.txt"))
-		require.Contains(t, local.Files[0].Patch, "-old content")
-		require.Contains(t, local.Files[0].Patch, "+new content")
+		requireParity(t, patch, seed)
 	})
 
 	t.Run("moves file overwriting existing destination", func(t *testing.T) {
@@ -861,10 +838,6 @@ func TestApplyPatchParity(t *testing.T) {
 	t.Run("BOM file update parity", func(t *testing.T) {
 		seed := map[string][]byte{"example.cs": []byte("\ufeffusing System;\n\nclass Test {}\n")}
 		patch := "*** Begin Patch\n*** Update File: example.cs\n@@\n class Test {}\n+class Next {}\n*** End Patch"
-		local := runParity(t, patch, seed, nil)
-		require.Len(t, local.Files, 1)
-		require.NotContains(t, local.Files[0].Patch, "\ufeff")
-		require.NotContains(t, local.Files[0].Patch, "-using System;")
-		require.NotContains(t, local.Files[0].Patch, "+using System;")
+		requireParity(t, patch, seed)
 	})
 }

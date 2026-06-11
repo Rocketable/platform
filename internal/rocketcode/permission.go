@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -310,39 +309,12 @@ func canonicalToolArguments(raw json.RawMessage) string {
 		return string(raw)
 	}
 
-	buf, err := json.Marshal(canonicalJSONValue(value))
+	buf, err := json.Marshal(value)
 	if err != nil {
 		return string(raw)
 	}
 
 	return string(buf)
-}
-
-func canonicalJSONValue(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		keys := make([]string, 0, len(typed))
-		for key := range typed {
-			keys = append(keys, key)
-		}
-
-		sort.Strings(keys)
-
-		ordered := make(map[string]any, len(typed))
-		for _, key := range keys {
-			ordered[key] = canonicalJSONValue(typed[key])
-		}
-
-		return ordered
-	case []any:
-		for i := range typed {
-			typed[i] = canonicalJSONValue(typed[i])
-		}
-
-		return typed
-	default:
-		return value
-	}
 }
 
 func bashPermissionSubjects(command string) []string {

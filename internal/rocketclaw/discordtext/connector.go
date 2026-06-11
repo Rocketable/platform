@@ -53,16 +53,6 @@ type oneOffCronjobRunner interface {
 	RunOneOffCronjob(context.Context, cronjob.OneOffCronjob, *harnessbridge.RawRunProgress, func(context.Context, cronjob.RunResult, error))
 }
 
-type inertOneOffCronjobs struct{}
-
-func (inertOneOffCronjobs) LoadOneOffCronjob(string) (cronjob.OneOffCronjob, error) {
-	return cronjob.OneOffCronjob{}, errors.New("on-demand cronjobs are not configured")
-}
-
-func (inertOneOffCronjobs) RunOneOffCronjob(ctx context.Context, _ cronjob.OneOffCronjob, _ *harnessbridge.RawRunProgress, finish func(context.Context, cronjob.RunResult, error)) {
-	finish(ctx, cronjob.RunResult{}, errors.New("on-demand cronjobs are not configured"))
-}
-
 type threadAgent struct {
 	prefix, agent string
 	preSeed       bool
@@ -375,7 +365,7 @@ func (c *Connector) handleOnDemandCronReaction(ctx context.Context, ev *reaction
 
 	reply := &events.DiscordReplyTarget{ChannelID: ev.ChannelID, MessageID: ev.MessageID}
 
-	target, ok := discordReactionCronTarget(message.Content)
+	target, ok := cronjob.OnDemandCronTarget(message.Content, discordCronPrefix, discordRepeatOneEmoji)
 	if !ok {
 		c.publishOnDemandCronReply(ctx, reply, "React with `🔂` to a message containing exactly one cron target, such as `🔂 daily`, `daily`, `daily.md`, or a scheduled cron thread root containing `cron/daily.md`.", true)
 		return
@@ -471,72 +461,6 @@ func (c *Connector) publishOnDemandCronReply(ctx context.Context, reply *events.
 	if err := c.bus.PublishOutbound(ctx, outbound); err != nil {
 		c.log.Warn("publish Discord on-demand cron reply", "error", err)
 	}
-}
-
-func discordReactionCronTarget(text string) (string, bool) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return "", false
-	}
-
-	var candidates []string
-	if target, ok := singleDiscordCronTarget(text); ok {
-		candidates = append(candidates, target)
-	}
-
-	for _, prefix := range []string{discordCronPrefix, discordRepeatOneEmoji} {
-		if after, ok := strings.CutPrefix(text, prefix); ok {
-			if target, ok := singleDiscordCronTarget(after); ok {
-				candidates = append(candidates, target)
-			}
-		}
-	}
-
-	for field := range strings.FieldsSeq(text) {
-		field = strings.Trim(field, "`.,;:()[]<>")
-		if target, ok := discordCronPathTarget(field); ok {
-			candidates = append(candidates, target)
-		}
-	}
-
-	if len(candidates) == 0 {
-		return "", false
-	}
-
-	target := candidates[0]
-	for _, candidate := range candidates[1:] {
-		if candidate != target {
-			return "", false
-		}
-	}
-
-	return target, true
-}
-
-func singleDiscordCronTarget(text string) (string, bool) {
-	fields := strings.Fields(strings.TrimSpace(text))
-	if len(fields) != 1 || fields[0] == discordCronPrefix || fields[0] == discordRepeatOneEmoji {
-		return "", false
-	}
-
-	if target, ok := discordCronPathTarget(fields[0]); ok {
-		return target, true
-	}
-
-	return fields[0], true
-}
-
-func discordCronPathTarget(text string) (string, bool) {
-	if !strings.HasPrefix(text, "cron/") || !strings.HasSuffix(text, ".md") {
-		return "", false
-	}
-
-	target := strings.TrimSuffix(strings.TrimPrefix(text, "cron/"), ".md")
-	if target == "" || strings.ContainsAny(target, `/\`) {
-		return "", false
-	}
-
-	return target, true
 }
 
 func (c *Connector) createThread(client discordClient, channelID, messageID, text string) (*textChannel, error) {

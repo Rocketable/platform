@@ -426,7 +426,7 @@ func (l *looper) runTurn(
 		}
 
 		for i := range toolOutputs {
-			toolInput := functionCallOutputInputItem(&toolOutputs[i].Param)
+			toolInput := responses.ResponseInputItemUnionParam{OfFunctionCallOutput: &toolOutputs[i].Param}
 
 			if err := appendReplayInput(&record, &toolInput); err != nil {
 				return emptyRecord, nil, false, err
@@ -533,12 +533,10 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 func providerDiagnosticFromFailedResponse(resp *responses.Response, phase string, attempt int, retryAfter time.Duration) ProviderDiagnostic {
 	diagnostic := ProviderDiagnostic{
 		Phase:          phase,
-		HTTPStatus:     0,
 		ResponseStatus: string(resp.Status),
 		Code:           string(resp.Error.Code),
 		Message:        resp.Error.Message,
 		Attempt:        attempt,
-		RetryAfter:     "",
 		ResponseID:     resp.ID,
 	}
 
@@ -556,10 +554,8 @@ func emitChatResponse(output chan<- ChatResponse, item ChatResponse) {
 
 	select {
 	case output <- item:
-		return
 	default:
 		output <- item
-		return
 	}
 }
 
@@ -727,18 +723,18 @@ func (l *looper) dispatchToolCalls(
 		tool, ok := l.Tools[item.Name]
 		if !ok {
 			result := toolCallFailureResult(item.Name, errors.New("tool not found"))
-			l.emitToolDiagnostic(output, toolResultDiagnostic(item.Name, result.Output))
+			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result.Output})
 			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, result), Result: result, ReplayInput: nil})
 
 			continue
 		}
 
 		args := json.RawMessage(item.Arguments.OfString)
-		l.emitToolDiagnostic(output, toolCallDiagnostic(item.Name, args))
+		l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseCall, Name: item.Name, Arguments: args})
 
 		if doomLoop != nil && doomLoop.trapped(item.Name, args) {
 			result := fmt.Sprintf("tool call rejected: repeated identical %q call detected. Review the previous tool output and choose a different action instead of retrying the same input.", item.Name)
-			l.emitToolDiagnostic(output, toolResultDiagnostic(item.Name, result))
+			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
 			toolResult := TextToolResult(result)
 			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
 
@@ -747,13 +743,13 @@ func (l *looper) dispatchToolCalls(
 
 		if decision, denied, err := l.permissionDecision(item.Name, &tool, args); err != nil {
 			result := toolCallFailureResult(item.Name, fmt.Errorf("check permission: %w", err))
-			l.emitToolDiagnostic(output, toolResultDiagnostic(item.Name, result.Output))
+			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result.Output})
 			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, result), Result: result, ReplayInput: nil})
 
 			continue
 		} else if denied {
 			result := formatPermissionDenied(&decision)
-			l.emitToolDiagnostic(output, toolResultDiagnostic(item.Name, result))
+			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
 			toolResult := TextToolResult(result)
 			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
 
@@ -823,7 +819,7 @@ func (l *looper) dispatchToolCalls(
 				replayInput = nil
 			}
 
-			l.emitToolDiagnostic(output, toolResultDiagnostic(call.name, attachmentOutputMessage(result)))
+			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: call.name, Result: attachmentOutputMessage(result)})
 			outputs[call.outputIndex] = dispatchedToolOutput{Param: toolCallOutput(call.callID, result), Result: result, ReplayInput: replayInput}
 
 			return nil
@@ -868,26 +864,8 @@ func (l *looper) emitHostedToolDiagnostics(output chan<- ChatResponse, items []r
 			continue
 		}
 
-		l.emitToolDiagnostic(output, toolHostedDiagnostic("websearch", item.Status, json.RawMessage(webSearchOutputActionJSON(&item.Action))))
+		l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseCall, Name: "websearch", Status: item.Status, Action: json.RawMessage(webSearchOutputActionJSON(&item.Action))})
 	}
-}
-
-func toolCallDiagnostic(name string, args json.RawMessage) *ToolDiagnostic {
-	diagnostic := &ToolDiagnostic{Phase: toolDiagnosticPhaseCall, Name: name, Arguments: args, Result: "", Status: "", Action: nil}
-
-	return diagnostic
-}
-
-func toolResultDiagnostic(name, result string) *ToolDiagnostic {
-	diagnostic := &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: name, Arguments: nil, Result: result, Status: "", Action: nil}
-
-	return diagnostic
-}
-
-func toolHostedDiagnostic(name, status string, action json.RawMessage) *ToolDiagnostic {
-	diagnostic := &ToolDiagnostic{Phase: toolDiagnosticPhaseCall, Name: name, Arguments: nil, Result: "", Status: status, Action: action}
-
-	return diagnostic
 }
 
 func toolCallOutput(callID string, result ToolResult) responses.ResponseInputItemFunctionCallOutputParam {
@@ -1037,21 +1015,13 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (respo
 	case "web_search_call":
 		action, ok := webSearchOutputActionParam(&item.Action)
 		if !ok {
-			return emptyResponseInputItem(), false
+			return responses.ResponseInputItemUnionParam{}, false
 		}
 
 		return webSearchReplayInput(item.ID, item.Status, action), true
 	default:
-		return emptyResponseInputItem(), false
+		return responses.ResponseInputItemUnionParam{}, false
 	}
-}
-
-func emptyResponseInputItem() responses.ResponseInputItemUnionParam {
-	return responses.ResponseInputItemUnionParam{}
-}
-
-func functionCallOutputInputItem(output *responses.ResponseInputItemFunctionCallOutputParam) responses.ResponseInputItemUnionParam {
-	return responses.ResponseInputItemUnionParam{OfFunctionCallOutput: output}
 }
 
 func reasoningReplayInput(id, summary, encryptedContent string) responses.ResponseInputItemUnionParam {

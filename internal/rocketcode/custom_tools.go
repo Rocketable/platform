@@ -110,12 +110,7 @@ func customLooperTool(tool *Tool) (looperTool, error) {
 
 func customToolParameters(parameters map[string]any) (map[string]any, error) {
 	if parameters == nil {
-		return map[string]any{
-			"type":                 "object",
-			"properties":           map[string]any{},
-			"required":             []string{},
-			"additionalProperties": false,
-		}, nil
+		parameters = map[string]any{}
 	}
 
 	result := maps.Clone(parameters)

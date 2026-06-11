@@ -265,7 +265,7 @@ func runAutonomousLoop(ctx context.Context, opt options, deps *runtimeDeps, even
 
 	for loop := 1; ; loop++ {
 		if opt.maxLoops > 0 && loop > opt.maxLoops {
-			_ = events.write(loopResultEvent(loop-1, false, "max loops exhausted"))
+			_ = events.write(&jsonlEvent{Type: "loop_result", Loop: loop - 1, Succeeded: false, Error: "max loops exhausted"})
 			return errors.New("max loops exhausted")
 		}
 
@@ -273,7 +273,7 @@ func runAutonomousLoop(ctx context.Context, opt options, deps *runtimeDeps, even
 		deps.verdicts.clear()
 
 		if err := runTurn(ctx, deps.mainLooper, mainSession, prompt, deps.interrupts, events, loop, "main"); err != nil {
-			_ = events.write(loopResultEvent(loop, false, err.Error()))
+			_ = events.write(&jsonlEvent{Type: "loop_result", Loop: loop, Succeeded: false, Error: err.Error()})
 			return err
 		}
 
@@ -289,7 +289,7 @@ func runAutonomousLoop(ctx context.Context, opt options, deps *runtimeDeps, even
 
 		verdict, criticText, err := runCritic(ctx, deps, opt.goal, *claim, events, loop)
 		if err != nil {
-			_ = events.write(loopResultEvent(loop, false, err.Error()))
+			_ = events.write(&jsonlEvent{Type: "loop_result", Loop: loop, Succeeded: false, Error: err.Error()})
 			return err
 		}
 
@@ -307,12 +307,12 @@ func runAutonomousLoop(ctx context.Context, opt options, deps *runtimeDeps, even
 		}
 
 		if opt.script == "" {
-			return events.write(loopResultEvent(loop, true, ""))
+			return events.write(&jsonlEvent{Type: "loop_result", Loop: loop, Succeeded: true})
 		}
 
 		result, err := deps.runScript(ctx, deps.cwd, opt.script, opt.scriptOutputLimit)
 		if err != nil {
-			_ = events.write(loopResultEvent(loop, false, err.Error()))
+			_ = events.write(&jsonlEvent{Type: "loop_result", Loop: loop, Succeeded: false, Error: err.Error()})
 			return err
 		}
 
@@ -321,7 +321,7 @@ func runAutonomousLoop(ctx context.Context, opt options, deps *runtimeDeps, even
 		}
 
 		if result.ExitCode == 0 {
-			return events.write(loopResultEvent(loop, true, ""))
+			return events.write(&jsonlEvent{Type: "loop_result", Loop: loop, Succeeded: true})
 		}
 
 		prompt = rocketcode.PromptInput{Role: rocketcode.PromptInputRoleDeveloper, Text: scriptFailureFeedback(result)}
@@ -343,7 +343,7 @@ func runTurn(ctx context.Context, looper rocketcode.Looper, session *memorySessi
 	})
 	group.Go(func() error {
 		for item := range output {
-			if err := events.write(chatResponseEvent(item, loop, role)); err != nil {
+			if err := events.write(&jsonlEvent{Type: "chat_response", Loop: loop, Role: role, Kind: item.Kind, Text: item.Text, Tool: item.Tool, Subagent: item.Subagent, Provider: item.Provider}); err != nil {
 				return err
 			}
 		}
@@ -393,14 +393,6 @@ type writerFunc func([]byte) (int, error)
 
 func (f writerFunc) Write(data []byte) (int, error) {
 	return f(data)
-}
-
-func loopResultEvent(loop int, succeeded bool, errorText string) *jsonlEvent {
-	return &jsonlEvent{Type: "loop_result", Loop: loop, Succeeded: succeeded, Error: errorText}
-}
-
-func chatResponseEvent(item rocketcode.ChatResponse, loop int, role string) *jsonlEvent {
-	return &jsonlEvent{Type: "chat_response", Loop: loop, Role: role, Kind: item.Kind, Text: item.Text, Tool: item.Tool, Subagent: item.Subagent, Provider: item.Provider}
 }
 
 func (w *eventWriter) write(event *jsonlEvent) error {

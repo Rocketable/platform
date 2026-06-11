@@ -16,7 +16,6 @@ import (
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	openai "github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 )
 
@@ -323,11 +322,6 @@ func NewWithProviders(
 	}
 	runtimeSystemPrompt := composeSystemPromptWithSkills(systemPrompt, skills, agentForTools)
 
-	var (
-		responseFormat responses.ResponseFormatTextConfigUnionParam
-		rewriteHistory func([]responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam
-	)
-
 	looper := &looper{
 		agent:              activeAgent,
 		Client:             openAIClient,
@@ -340,10 +334,8 @@ func NewWithProviders(
 		CompactThreshold:   config.CompactThreshold,
 		CompactionSteering: config.CompactionSteering,
 		ParallelToolCalls:  config.ParallelToolCalls,
-		ResponseFormat:     responseFormat,
 		Permissions:        activeAgent.Permission,
 		Tools:              factory.toolsFor(agentForTools),
-		RewriteHistory:     rewriteHistory,
 		Diagnostics:        config.Diagnostics,
 		expandInputPrompts: config.ExpandPromptShellCommands.InputPrompts,
 		promptExpansion:    promptExpansion,

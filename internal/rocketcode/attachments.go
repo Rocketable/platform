@@ -129,7 +129,7 @@ func promptInputMessage(input PromptInput) responses.ResponseInputItemUnionParam
 
 	content := responses.ResponseInputMessageContentListParam{}
 	if input.Text != "" {
-		content = append(content, responseInputTextContent(input.Text))
+		content = append(content, responses.ResponseInputContentUnionParam{OfInputText: &responses.ResponseInputTextParam{Text: input.Text}})
 	}
 
 	content = appendAttachmentContent(content, input.Attachments...)
@@ -153,10 +153,6 @@ func easyInputListContent(items responses.ResponseInputMessageContentListParam) 
 	return responses.EasyInputMessageContentUnionParam{OfInputItemContentList: items}
 }
 
-func responseInputTextContent(text string) responses.ResponseInputContentUnionParam {
-	return responses.ResponseInputContentUnionParam{OfInputText: &responses.ResponseInputTextParam{Text: text}}
-}
-
 func promptInputMessageRole(role PromptInputRole) responses.EasyInputMessageRole {
 	if role == PromptInputRoleDeveloper {
 		return responses.EasyInputMessageRoleDeveloper
@@ -170,49 +166,29 @@ func appendAttachmentContent(content responses.ResponseInputMessageContentListPa
 		mimeType := normalizeMIME(attachment.MIME)
 		switch {
 		case isImageAttachmentMIME(mimeType):
-			content = append(content, responseInputImageContent(attachment.URL))
+			content = append(content, responses.ResponseInputContentUnionParam{OfInputImage: &responses.ResponseInputImageParam{Detail: responses.ResponseInputImageDetailAuto, ImageURL: openai.String(attachment.URL)}})
 		case mimeType == "application/pdf":
-			content = append(content, responseInputFileContent(attachment.Filename, attachment.URL))
+			content = append(content, responses.ResponseInputContentUnionParam{OfInputFile: &responses.ResponseInputFileParam{Filename: openai.String(attachment.Filename), FileData: openai.String(attachment.URL)}})
 		}
 	}
 
 	return content
 }
 
-func responseInputImageContent(imageURL string) responses.ResponseInputContentUnionParam {
-	return responses.ResponseInputContentUnionParam{OfInputImage: &responses.ResponseInputImageParam{Detail: responses.ResponseInputImageDetailAuto, ImageURL: openai.String(imageURL)}}
-}
-
-func responseInputFileContent(filename, fileData string) responses.ResponseInputContentUnionParam {
-	return responses.ResponseInputContentUnionParam{OfInputFile: &responses.ResponseInputFileParam{Filename: openai.String(filename), FileData: openai.String(fileData)}}
-}
-
 func functionCallOutputContent(result ToolResult) responses.ResponseFunctionCallOutputItemListParam {
-	content := responses.ResponseFunctionCallOutputItemListParam{functionCallOutputTextContent(result.Output)}
+	content := responses.ResponseFunctionCallOutputItemListParam{{OfInputText: &responses.ResponseInputTextContentParam{Text: result.Output}}}
 
 	for _, attachment := range result.Attachments {
 		mimeType := normalizeMIME(attachment.MIME)
 		switch {
 		case isImageAttachmentMIME(mimeType):
-			content = append(content, functionCallOutputImageContent(attachment.URL))
+			content = append(content, responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: &responses.ResponseInputImageContentParam{Detail: responses.ResponseInputImageContentDetailAuto, ImageURL: openai.String(attachment.URL)}})
 		case mimeType == "application/pdf":
-			content = append(content, functionCallOutputFileContent(attachment.Filename, attachment.URL))
+			content = append(content, responses.ResponseFunctionCallOutputItemUnionParam{OfInputFile: &responses.ResponseInputFileContentParam{Filename: openai.String(attachment.Filename), FileData: openai.String(attachment.URL)}})
 		}
 	}
 
 	return content
-}
-
-func functionCallOutputTextContent(text string) responses.ResponseFunctionCallOutputItemUnionParam {
-	return responses.ResponseFunctionCallOutputItemUnionParam{OfInputText: &responses.ResponseInputTextContentParam{Text: text}}
-}
-
-func functionCallOutputImageContent(imageURL string) responses.ResponseFunctionCallOutputItemUnionParam {
-	return responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: &responses.ResponseInputImageContentParam{Detail: responses.ResponseInputImageContentDetailAuto, ImageURL: openai.String(imageURL)}}
-}
-
-func functionCallOutputFileContent(filename, fileData string) responses.ResponseFunctionCallOutputItemUnionParam {
-	return responses.ResponseFunctionCallOutputItemUnionParam{OfInputFile: &responses.ResponseInputFileContentParam{Filename: openai.String(filename), FileData: openai.String(fileData)}}
 }
 
 func attachmentOutputMessage(result ToolResult) string {
