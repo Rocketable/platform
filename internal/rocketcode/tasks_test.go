@@ -661,6 +661,7 @@ func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
 	var factory toolFactory
 
 	factory.client = client
+	factory.modelRef = defaultModelRef()
 	factory.agents = agents
 	factory.skills = Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}
 	factory.baseTools = map[string]looperTool{

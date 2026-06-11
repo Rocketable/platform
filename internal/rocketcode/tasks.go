@@ -195,6 +195,13 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		childFactory.recursionRemaining = &remaining
 	}
 
+	modelRef, err := parseAgentModelRef(agent.Model, f.modelRef)
+	if err != nil {
+		return "", err
+	}
+
+	childFactory.modelRef = modelRef
+
 	var (
 		responseFormat  responses.ResponseFormatTextConfigUnionParam
 		promptExpansion promptExpansionEnvironment
@@ -204,8 +211,10 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	child := &looper{
 		agent:              agent,
 		Client:             f.client,
+		AnthropicClient:    f.anthropicClient,
 		SystemPrompt:       systemPrompt,
-		Model:              parseAgentModel(agent.Model, f.model),
+		Model:              modelRef.apiModel,
+		DisplayModel:       modelRef.display(),
 		ReasoningEffort:    shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
 		Verbosity:          agent.Verbosity,
 		CompactThreshold:   f.compactThreshold,
@@ -269,7 +278,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	})
 
 	interrupts := make(chan os.Signal, 1)
-	err := child.Loop(ctx, input, func(func(SessionEntry, error) bool) {}, func(SessionEntry) error { return nil }, interrupts)
+	err = child.Loop(ctx, input, func(func(SessionEntry, error) bool) {}, func(SessionEntry) error { return nil }, interrupts)
 
 	if errWait := group.Wait(); errWait != nil {
 		return "", fmt.Errorf("collect task output: %w", errWait)
@@ -326,6 +335,11 @@ func (f *toolFactory) runInterAgentFilter(ctx context.Context, parentAgentPrompt
 	agent.Permission = f.shellOutput.effectivePermissions(agent.Permission)
 	responseFormat := interAgentFilterResponseFormat()
 
+	modelRef, err := parseAgentModelRef(agent.Model, f.modelRef)
+	if err != nil {
+		return interAgentFilterDecision{Approved: false, Reason: "inter-agent guardrail model failed: " + err.Error()}
+	}
+
 	var (
 		promptExpansion promptExpansionEnvironment
 		rewriteHistory  func([]responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam
@@ -334,8 +348,10 @@ func (f *toolFactory) runInterAgentFilter(ctx context.Context, parentAgentPrompt
 	child := &looper{
 		agent:              agent,
 		Client:             f.client,
+		AnthropicClient:    f.anthropicClient,
 		SystemPrompt:       composeSystemPromptWithSkills(prompt.String(), f.skills, &agent),
-		Model:              parseAgentModel(agent.Model, f.model),
+		Model:              modelRef.apiModel,
+		DisplayModel:       modelRef.display(),
 		ReasoningEffort:    shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
 		Verbosity:          agent.Verbosity,
 		CompactThreshold:   f.compactThreshold,

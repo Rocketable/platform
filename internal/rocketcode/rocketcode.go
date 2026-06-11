@@ -14,6 +14,7 @@ import (
 	"strings"
 	"text/template"
 
+	anthropic "github.com/anthropics/anthropic-sdk-go"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
@@ -34,6 +35,12 @@ type Config struct {
 	InterAgentFilter           InterAgentFilterConfig
 	CustomTools                []Tool
 	ShellEnv                   map[string]string
+}
+
+// Providers contains model provider clients supplied by embedding applications.
+type Providers struct {
+	OpenAI    *openai.Client
+	Anthropic *anthropic.Client
 }
 
 // InterAgentFilterConfig configures an agent that approves task prompts and responses.
@@ -140,15 +147,28 @@ func New(
 	defaultAgent string,
 	diagnosticsWriter io.Writer,
 ) (*Runtime, error) {
+	if client == nil {
+		return nil, errors.New("client is required")
+	}
+
+	return NewWithProviders(Providers{OpenAI: client, Anthropic: nil}, configInput, root, agents, skills, defaultAgent, diagnosticsWriter)
+}
+
+// NewWithProviders loads the supplied runtime dependencies and returns a configured looper.
+func NewWithProviders(
+	providers Providers,
+	configInput *Config,
+	root *os.Root,
+	agents Agents,
+	skills Skills,
+	defaultAgent string,
+	diagnosticsWriter io.Writer,
+) (*Runtime, error) {
 	if configInput == nil {
 		return nil, errors.New("config is required")
 	}
 
 	config := normalizeConfig(configInput)
-
-	if client == nil {
-		return nil, errors.New("client is required")
-	}
 
 	if root == nil {
 		return nil, errors.New("root is required")
@@ -224,7 +244,25 @@ func New(
 	rootInstructions = strings.TrimSpace(rootInstructions) + "\n\n" + fmt.Sprintf("<current-workspace>\nWorkspace root: %s\n</current-workspace>", promptExpansion.hostDir)
 	systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + strings.TrimSpace(rootInstructions))
 
-	model := parseAgentModel(activeAgent.Model, config.Model)
+	configModel, err := parseModelRef(config.Model)
+	if err != nil {
+		return nil, err
+	}
+
+	modelRef, err := parseAgentModelRef(activeAgent.Model, configModel)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := requireProvider(providers, modelRef); err != nil {
+		return nil, err
+	}
+
+	openAIClient := responsesAPI(nil)
+	if providers.OpenAI != nil {
+		openAIClient = responseServiceClient{service: &providers.OpenAI.Responses}
+	}
+
 	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, string(config.ReasoningEffort)))
 	agentForTools := &activeAgent
 	activeAgent.Permission = shellOutput.effectivePermissions(activeAgent.Permission)
@@ -263,9 +301,10 @@ func New(
 
 	maps.Copy(baseTools, customTools)
 	factory := &toolFactory{
-		client:                     responseServiceClient{service: &client.Responses},
+		client:                     openAIClient,
+		anthropicClient:            providers.Anthropic,
 		systemPrompt:               systemPrompt,
-		model:                      model,
+		modelRef:                   modelRef,
 		reasoningEffort:            reasoningEffort,
 		compactThreshold:           config.CompactThreshold,
 		compactionSteering:         config.CompactionSteering,
@@ -291,9 +330,11 @@ func New(
 
 	looper := &looper{
 		agent:              activeAgent,
-		Client:             responseServiceClient{service: &client.Responses},
+		Client:             openAIClient,
+		AnthropicClient:    providers.Anthropic,
 		SystemPrompt:       runtimeSystemPrompt,
-		Model:              model,
+		Model:              modelRef.apiModel,
+		DisplayModel:       modelRef.display(),
 		ReasoningEffort:    reasoningEffort,
 		Verbosity:          activeAgent.Verbosity,
 		CompactThreshold:   config.CompactThreshold,
@@ -359,6 +400,18 @@ func normalizeConfig(configInput *Config) Config {
 	return config
 }
 
+func requireProvider(providers Providers, model modelRef) error {
+	if model.provider == modelProviderOpenAI && providers.OpenAI == nil {
+		return errors.New("openai provider is required")
+	}
+
+	if model.provider == modelProviderAnthropic && providers.Anthropic == nil {
+		return errors.New("anthropic provider is required")
+	}
+
+	return nil
+}
+
 func printRuntimeDiagnostics(w io.Writer, activeAgent *Agent, tools map[string]looperTool, skills Skills, systemPrompt string) error {
 	agentName := "(none)"
 	if activeAgent != nil {
@@ -368,32 +421,8 @@ func printRuntimeDiagnostics(w io.Writer, activeAgent *Agent, tools map[string]l
 	toolNames := slices.Sorted(maps.Keys(tools))
 	skillNames := slices.Sorted(maps.Keys(skills.Items))
 
-	if _, err := fmt.Fprintf(w, "agent: %s\n", agentName); err != nil {
-		return fmt.Errorf("write agent diagnostic: %w", err)
-	}
-
-	if _, err := fmt.Fprintf(w, "tools: %s\n", strings.Join(toolNames, ", ")); err != nil {
-		return fmt.Errorf("write tools diagnostic: %w", err)
-	}
-
-	if _, err := fmt.Fprintf(w, "skills: %s\n", strings.Join(skillNames, ", ")); err != nil {
-		return fmt.Errorf("write skills diagnostic: %w", err)
-	}
-
-	if _, err := fmt.Fprintln(w, "system_prompt:"); err != nil {
-		return fmt.Errorf("write system prompt diagnostic header: %w", err)
-	}
-
-	if _, err := fmt.Fprintln(w, "---"); err != nil {
-		return fmt.Errorf("write system prompt diagnostic fence: %w", err)
-	}
-
-	if _, err := fmt.Fprintln(w, systemPrompt); err != nil {
-		return fmt.Errorf("write system prompt diagnostic: %w", err)
-	}
-
-	if _, err := fmt.Fprintln(w, "---"); err != nil {
-		return fmt.Errorf("write system prompt diagnostic closing fence: %w", err)
+	if _, err := fmt.Fprintf(w, "agent: %s\ntools: %s\nskills: %s\nsystem_prompt:\n---\n%s\n---\n", agentName, strings.Join(toolNames, ", "), strings.Join(skillNames, ", "), systemPrompt); err != nil {
+		return fmt.Errorf("write runtime diagnostics: %w", err)
 	}
 
 	return nil

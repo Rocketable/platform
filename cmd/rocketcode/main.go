@@ -17,7 +17,6 @@ import (
 	"unicode"
 
 	"github.com/Rocketable/platform/internal/rocketcode"
-	openai "github.com/openai/openai-go/v3"
 	"golang.org/x/sync/errgroup"
 	_ "modernc.org/sqlite"
 )
@@ -78,9 +77,7 @@ func run() error {
 	var group errgroup.Group
 	group.Go(func() error { return scanInput(os.Stdin, os.Stdout, input, root, cwd) })
 
-	client := openai.NewClient()
-
-	looper, err := rocketcode.New(&client, &config, root, agents, skills, defaultAgent, os.Stdout)
+	looper, err := rocketcode.NewWithProviders(rocketcode.StandaloneProvidersFromEnv(), &config, root, agents, skills, defaultAgent, os.Stdout)
 	if err != nil {
 		return fmt.Errorf("initialize rocketcode: %w", err)
 	}

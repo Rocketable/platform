@@ -32,6 +32,7 @@ type Config struct {
 	WebUI                                    WebUIConfig        `json:"web_ui"`
 	Slack                                    SlackConfig        `json:"slack"`
 	OpenAI                                   OpenAIConfig       `json:"openai"`
+	Anthropic                                AnthropicConfig    `json:"anthropic"`
 }
 
 // DefaultWorkDir is the generated runtime directory for rocketclaw configs.
@@ -128,6 +129,12 @@ type OpenAIConfig struct {
 	TTSInstructions string `json:"tts_instructions"`
 	TTSAPIKey       string `json:"tts_key"`
 	TTSAPIBaseURL   string `json:"tts_base_url"`
+}
+
+// AnthropicConfig configures Anthropic RocketCode clients.
+type AnthropicConfig struct {
+	APIKey     string `json:"api_key"`
+	APIBaseURL string `json:"api_base_url"`
 }
 
 // Load reads, normalizes, and validates the rocketclaw configuration file.

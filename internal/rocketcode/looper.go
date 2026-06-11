@@ -8,10 +8,10 @@ import (
 	"iter"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
+	anthropic "github.com/anthropics/anthropic-sdk-go"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
@@ -63,8 +63,10 @@ type toolCallMetadata struct {
 type looper struct {
 	agent              Agent
 	Client             responsesAPI
+	AnthropicClient    *anthropic.Client
 	SystemPrompt       string
 	Model              shared.ResponsesModel
+	DisplayModel       string
 	ReasoningEffort    shared.ReasoningEffort
 	Verbosity          string
 	CompactThreshold   int64
@@ -322,7 +324,7 @@ func (l *looper) runTurn(
 		Version:     1,
 		Type:        "turn",
 		Timestamp:   time.Now().UTC(),
-		Model:       l.Model,
+		Model:       l.DisplayModel,
 		ReplayInput: replayInput,
 	}
 
@@ -364,7 +366,7 @@ func (l *looper) runTurn(
 
 		params := l.buildParams(history)
 
-		resp, err := l.newResponseWithProviderRetry(turnCtx, &params, output)
+		resp, err := l.newProviderResponse(turnCtx, &params, output)
 		if err != nil {
 			if errors.Is(context.Cause(turnCtx), errTurnInterrupted) {
 				return emptyRecord, nil, true, nil
@@ -457,6 +459,18 @@ func appendReplayInput(record *SessionEntry, item *responses.ResponseInputItemUn
 	return nil
 }
 
+func (l *looper) newProviderResponse(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse) (*responses.Response, error) {
+	if strings.HasPrefix(l.DisplayModel, modelProviderAnthropic+"/") {
+		return l.newAnthropicResponse(ctx, params, output)
+	}
+
+	if l.Client == nil {
+		return nil, errors.New("openai provider is required")
+	}
+
+	return l.newResponseWithProviderRetry(ctx, params, output)
+}
+
 func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse) (*responses.Response, error) {
 	attempt := 0
 
@@ -505,58 +519,13 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 		}
 
 		attempt++
-		wait := providerRateLimitRetryMinDelay
-
-		if raw != nil {
-			headers := raw.Header
-			if value := headers.Get("Retry-After-Ms"); value != "" {
-				parsed, errParse := strconv.ParseFloat(value, 64)
-				if errParse == nil && parsed >= 0 && parsed == parsed {
-					if parsed > float64(1<<63-1)/float64(time.Millisecond) {
-						wait = time.Duration(1<<63 - 1)
-					} else if delay := time.Duration(parsed * float64(time.Millisecond)); delay > wait {
-						wait = delay
-					}
-				}
-			}
-
-			for _, header := range []string{"X-RateLimit-Reset-Requests", "X-RateLimit-Reset-Tokens"} {
-				if delay, err := time.ParseDuration(headers.Get(header)); err == nil && delay > wait {
-					wait = delay
-				}
-			}
-
-			retryAfter := headers.Get("Retry-After")
-
-			parsed, errParse := strconv.ParseFloat(retryAfter, 64)
-			if errParse == nil && parsed >= 0 && parsed == parsed {
-				if parsed > float64(1<<63-1)/float64(time.Second) {
-					wait = time.Duration(1<<63 - 1)
-				} else if delay := time.Duration(parsed * float64(time.Second)); delay > wait {
-					wait = delay
-				}
-			} else if when, err := time.Parse(time.RFC1123, retryAfter); err == nil {
-				if delay := time.Until(when); delay > wait {
-					wait = delay
-				}
-			}
-		}
+		wait := providerRetryDelay(raw)
 
 		diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticRetry, attempt, wait)
 		l.emitProviderDiagnostic(output, &diagnostic)
 
-		timer := time.NewTimer(wait)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-
-			return nil, fmt.Errorf("wait for provider retry: %w", ctx.Err())
-		case <-timer.C:
+		if err := waitProviderRetry(ctx, wait); err != nil {
+			return nil, fmt.Errorf("wait for provider retry: %w", err)
 		}
 	}
 }
@@ -682,6 +651,10 @@ func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) re
 		for name := range l.Tools {
 			tool := l.Tools[name]
 			if tool.Hosted.GetType() != nil {
+				if strings.HasPrefix(l.DisplayModel, modelProviderAnthropic+"/") {
+					continue
+				}
+
 				params.Tools = append(params.Tools, tool.Hosted)
 
 				continue

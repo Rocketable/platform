@@ -99,6 +99,26 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	assert.Zero(t, cfg.MinimumWaitAfterHumanInteractionDuration)
 }
 
+func TestLoadPreservesAnthropicConfig(t *testing.T) {
+	cfg := loadTestConfig(t, `{
+	  "workspace": ".",
+	  "openai": {
+	    "api_key": "test-key"
+	  },
+	  "anthropic": {
+	    "api_key": "anthropic-key",
+	    "api_base_url": "https://anthropic.example/v1"
+	  },
+	  "web_ui": {
+	    "enabled": true,
+	    "listen_addr": "127.0.0.1:8766"
+	  }
+	}`)
+
+	assert.Equal(t, "anthropic-key", cfg.Anthropic.APIKey)
+	assert.Equal(t, "https://anthropic.example/v1", cfg.Anthropic.APIBaseURL)
+}
+
 func TestLoadNormalizesOverlays(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",

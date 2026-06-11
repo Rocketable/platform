@@ -21,7 +21,7 @@ Most useful RocketCode behavior comes from tools and workspace definitions rathe
 
 | Tool | Permission bucket | Subject contract | Capability |
 | --- | --- | --- | --- |
-| `websearch` | `websearch` | `*` | Hosted OpenAI web-search tool. |
+| `websearch` | `websearch` | `*` | Hosted OpenAI web-search tool, exposed only for OpenAI model requests. |
 | `read` | `read` | Requested file path | Reads workspace text, supported images, and PDFs. Legacy `filename` is used when `filePath` is empty. |
 | `apply_patch` | `edit` | Every affected rooted path | Applies begin/end patch envelopes with add, update, delete, and move operations. |
 | `glob` | `glob` | Glob pattern | Finds workspace files by pattern using ripgrep file discovery. |
@@ -32,7 +32,7 @@ Most useful RocketCode behavior comes from tools and workspace definitions rathe
 | `skill` | `skill` | Requested skill name | Loads full visible skill instructions. |
 | `task` | `task` | Requested subagent type | Launches another agent for autonomous work when recursion and permission allow it. |
 
-All function schemas are strict and mark declared properties as required even when runtime code treats empty or zero values as defaults.
+All function schemas are strict and mark declared properties as required even when runtime code treats empty or zero values as defaults. Anthropic model requests receive local function tools through provider adapter conversion and do not receive hosted OpenAI tools such as `websearch`.
 
 ### Filesystem Tools
 
@@ -104,7 +104,7 @@ All function schemas are strict and mark declared properties as required even wh
 - Maximum attachment size is 5 MiB.
 - Supported prompt/tool attachment types are PDFs and images except SVG and `image/vnd.fastbidsheet`.
 - MIME sniffing recognizes PNG, JPEG, GIF, BMP, PDF, and WebP, with filename/header MIME fallback.
-- Prompt and tool attachments become Responses API image or file content items. PDF content uses filename and file data.
+- Prompt and tool attachments become Responses API image or file content items in RocketCode's internal replay shape. Provider adapters may translate supported attachments to provider-native request blocks and must fail clearly rather than silently dropping unsupported attachment content.
 
 ## Non-Goals
 
@@ -137,3 +137,4 @@ All function schemas are strict and mark declared properties as required even wh
 ## Changelog
 
 - 2026-06-11: Initial accepted snapshot.
+- 2026-06-11: Limited hosted `websearch` to OpenAI requests and specified Anthropic local-tool adapter behavior.

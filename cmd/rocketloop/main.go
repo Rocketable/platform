@@ -217,7 +217,7 @@ func newRuntimeDeps(diagnostics io.Writer) (runtimeDeps, func(), error) {
 
 	oldCleanup := cleanup
 	cleanup = func() { cleanupDefinitions(); oldCleanup() }
-	client := openai.NewClient()
+	providers := rocketcode.StandaloneProvidersFromEnv()
 
 	claims := &claimRecorder{}
 	verdicts := &verdictRecorder{}
@@ -226,7 +226,7 @@ func newRuntimeDeps(diagnostics io.Writer) (runtimeDeps, func(), error) {
 	mainConfig.CustomTools = append(mainConfig.CustomTools, newGoalTool(claims))
 	mainAgents := allowInternalTool(agents, "goal_achieved")
 
-	mainLooper, err := rocketcode.New(&client, &mainConfig, root, mainAgents, skills, defaultAgent, diagnostics)
+	mainLooper, err := rocketcode.NewWithProviders(providers, &mainConfig, root, mainAgents, skills, defaultAgent, diagnostics)
 	if err != nil {
 		cleanup()
 		return runtimeDeps{}, nil, fmt.Errorf("initialize main rocketcode: %w", err)
@@ -236,7 +236,7 @@ func newRuntimeDeps(diagnostics io.Writer) (runtimeDeps, func(), error) {
 	criticConfig.CustomTools = append(criticConfig.CustomTools, newCriticTool(verdicts))
 	criticAgents := allowInternalTool(agents, "critic_verdict")
 
-	criticLooper, err := rocketcode.New(&client, &criticConfig, root, criticAgents, skills, defaultAgent, diagnostics)
+	criticLooper, err := rocketcode.NewWithProviders(providers, &criticConfig, root, criticAgents, skills, defaultAgent, diagnostics)
 	if err != nil {
 		cleanup()
 		return runtimeDeps{}, nil, fmt.Errorf("initialize critic rocketcode: %w", err)

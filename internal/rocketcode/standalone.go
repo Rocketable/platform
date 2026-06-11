@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	anthropic "github.com/anthropics/anthropic-sdk-go"
+	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/shared"
 )
@@ -100,6 +102,24 @@ func StandaloneConfigFromEnv() (Config, error) {
 	config.CompactionSteering = os.Getenv("ROCKETCODE_COMPACTION_STEERING")
 
 	return config, nil
+}
+
+// StandaloneProvidersFromEnv returns model provider clients for RocketCode commands.
+func StandaloneProvidersFromEnv() Providers {
+	openAIClient := openai.NewClient()
+	providers := Providers{OpenAI: &openAIClient}
+
+	if apiKey := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")); apiKey != "" {
+		options := []anthropicoption.RequestOption{anthropicoption.WithAPIKey(apiKey)}
+		if baseURL := strings.TrimSpace(os.Getenv("ANTHROPIC_BASE_URL")); baseURL != "" {
+			options = append(options, anthropicoption.WithBaseURL(baseURL))
+		}
+
+		anthropicClient := anthropic.NewClient(options...)
+		providers.Anthropic = &anthropicClient
+	}
+
+	return providers
 }
 
 func standaloneDefaultConfig() Config {

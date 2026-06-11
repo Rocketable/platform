@@ -5,7 +5,7 @@ Human approval required for meaning changes: Yes
 
 ## Decision
 
-RocketCode is a workspace-local Go reasoning runtime with an interactive CLI, a non-interactive autonomous loop CLI, and an embeddable library API. It uses the OpenAI Responses API, workspace-local agent and skill definitions, sandbox-aware tools, and replayable session history.
+RocketCode is a workspace-local Go reasoning runtime with an interactive CLI, a non-interactive autonomous loop CLI, and an embeddable library API. It uses provider-routed model requests, an OpenAI Responses-shaped internal replay model, workspace-local agent and skill definitions, sandbox-aware tools, and replayable session history.
 
 ## Scope
 
@@ -19,13 +19,14 @@ RocketCode is under tight source-line budget pressure. Future simplification and
 
 | Area | Current capability |
 | --- | --- |
-| Library runtime | `rocketcode.New` constructs a `Looper` from an OpenAI client, config, rooted workspace filesystem, parsed agents, parsed skills, default agent name, and optional diagnostics writer. |
+| Library runtime | `rocketcode.New` constructs a `Looper` from an OpenAI client, config, rooted workspace filesystem, parsed agents, parsed skills, default agent name, and optional diagnostics writer. Provider-aware construction may also supply OpenAI and Anthropic clients explicitly. |
 | Default agent | The standalone commands require a loaded `main` agent. Missing default agent is a startup error. |
 | Workspace root | Standalone `rocketcode` and `rocketloop` use the process current working directory as the workspace root and open it through `*os.Root`. |
 | Root instructions | `AGENTS.md`, when present in the workspace root, is loaded literally into the system prompt and followed by a current-workspace block containing the host workspace root. |
-| Model defaults | Empty model defaults to `openai.ChatModelGPT5_4`. Empty reasoning effort defaults to `high`. Empty compact threshold defaults to `200000`. |
-| Model request | Runtime turns use the OpenAI Responses API with stored responses disabled, encrypted reasoning content included, reasoning summary enabled when reasoning effort is set, context compaction enabled, and OpenAI parallel tool calls enabled. |
-| Rate limits | Failed Responses with `rate_limit_exceeded` retry after at least one minute, considering provider retry/reset headers. Other failed responses and API errors surface as runtime errors, with provider diagnostics emitted when diagnostics are enabled. |
+| Model defaults | Empty model defaults to OpenAI `gpt-5.4`. Empty reasoning effort defaults to `high`. Empty compact threshold defaults to `200000`. |
+| Model selection | Models may be provider-qualified as `openai/<model>` or `anthropic/<model>`. Unprefixed model strings continue to mean OpenAI for backward compatibility. Agent frontmatter `model` values may select a different provider from the runtime default. |
+| Model request | OpenAI runtime turns use the OpenAI Responses API with stored responses disabled, encrypted reasoning content included, reasoning summary enabled when reasoning effort is set, context compaction enabled, and OpenAI parallel tool calls enabled. Anthropic runtime turns use the Anthropic Messages API through an adapter that preserves RocketCode's turn-loop, replay, and local tool semantics. |
+| Rate limits | Provider rate limits retry after at least one minute when the provider exposes retryable rate-limit status, considering provider retry/reset headers where available. Other failed responses and API errors surface as runtime errors, with provider diagnostics emitted when diagnostics are enabled. |
 | Interactive CLI | `cmd/rocketcode` starts an interactive prompt named `rocketcode> `, reads terminal input, runs turns through the default agent, and prints line-oriented response output. |
 | Interactive exit | `/exit`, `/quit`, and stdin EOF exit normally. Runtime errors print to stderr and exit status `1`. |
 | Interactive role prefix | In `cmd/rocketcode`, an input line whose trimmed text starts with case-sensitive `developer:` is sent as a developer-role prompt with the prefix removed. Other input is user-role prompt text. |
@@ -45,7 +46,7 @@ RocketCode is under tight source-line budget pressure. Future simplification and
 
 | Environment variable | Contract |
 | --- | --- |
-| `ROCKETCODE_MODEL` | Overrides the default model string for standalone commands. |
+| `ROCKETCODE_MODEL` | Overrides the default model string for standalone commands. It may use `openai/<model>` or `anthropic/<model>`; unprefixed values mean OpenAI. |
 | `ROCKETCODE_REASONING_EFFORT` | Overrides the default reasoning effort for standalone commands. |
 | `ROCKETCODE_DIAG` | Any non-empty value enables diagnostics. |
 | `ROCKETCODE_EXPERIMENTAL_STRONGER_SKILLS` | Any non-empty value enables stronger skill replay behavior. |
@@ -77,3 +78,4 @@ RocketCode is under tight source-line budget pressure. Future simplification and
 ## Changelog
 
 - 2026-06-11: Initial accepted snapshot.
+- 2026-06-11: Added provider-qualified OpenAI and Anthropic model selection while preserving OpenAI defaults and unprefixed model compatibility.

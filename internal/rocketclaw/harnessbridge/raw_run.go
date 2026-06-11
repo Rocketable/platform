@@ -142,9 +142,9 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 
 	b := &Bridge{log: logger, config: Config{ConversationID: "", Agent: agent, ConsumeSharedInbound: false, OutputTargets: nil, RequestRestart: requestRestart, SessionService: nil}, runtime: cfg, bus: nil, inputStop: nil, requestCh: nil, stopCh: nil, mu: sync.Mutex{}, handling: false}
 
-	client, err := b.openAIClient()
+	providers, err := b.rocketcodeProviders()
 	if err != nil {
-		return "", fmt.Errorf("prepare OpenAI client: %w", err)
+		return "", fmt.Errorf("prepare RocketCode providers: %w", err)
 	}
 
 	customTools := make([]rocketcode.Tool, 5)
@@ -156,7 +156,7 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 
 	rocketcodeConfig := rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: diagnostics, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: true}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, InterAgentFilter: interAgentFilterConfig(agents), CustomTools: customTools}
 
-	looper, err := rocketcode.New(client, &rocketcodeConfig, root, agents, skills, agent, io.Discard)
+	looper, err := rocketcode.NewWithProviders(providers, &rocketcodeConfig, root, agents, skills, agent, io.Discard)
 	if err != nil {
 		return "", fmt.Errorf("prepare raw rocketcode run: %w", err)
 	}

@@ -24,7 +24,15 @@ Several rocketclaw capabilities exist only because of precise RocketCode configu
 | Persistent bridge | `internal/rocketclaw/harnessbridge/bridge.go`  | Main, thread, Slack, Discord text, browser, Discord voice, scheduled, and external MCP conversation turns. | `InputPrompts: false`  |
 | Raw run           | `internal/rocketclaw/harnessbridge/raw_run.go` | Cron and one-off cron background turns.                                                | `InputPrompts: true`   |
 
-Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell expansion. Persistent bridge input text remains literal. Raw input text expands because cron bodies are trusted workspace files.
+Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell expansion. Persistent bridge input text remains literal. Raw input text expands because cron bodies are trusted workspace files. Both paths construct RocketCode with a provider registry that can route provider-qualified OpenAI and Anthropic model requests.
+
+### Provider Selection
+
+- RocketClaw passes OpenAI and Anthropic provider clients into RocketCode when configured.
+- Model strings may use `openai/<model>` or `anthropic/<model>` in agent frontmatter and runtime defaults. Unprefixed model strings mean OpenAI.
+- ChatGPT OAuth applies only to OpenAI provider requests. Anthropic provider requests use only the configured Anthropic API key and optional Anthropic base URL.
+- Missing Anthropic credentials are an error only when a selected model requires Anthropic.
+- Hosted OpenAI tools, including hosted `websearch`, are not exposed to Anthropic model requests.
 
 ### Prompt And Definition Loading
 
@@ -76,10 +84,11 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - Raw runs can persist into a configured conversation when supplied with `RawRunProgress.SessionService` and `ConversationID`.
 - External MCP metadata is injected as a developer message for the turn that supplied it and must not become ambient global state.
 - Attachments are converted into RocketCode prompt attachments only when supported by the bridge path.
+- Response checkpoint seeding through replay compaction is OpenAI-only. Checkpoints created by non-OpenAI provider turns fail seeding with a clear unsupported-provider error until provider-specific compaction is approved.
 
 ### ChatGPT Codex Backend Requests
 
-- When RocketClaw backs RocketCode with ChatGPT OAuth, Codex backend requests use Codex-compatible request identity rather than a RocketClaw-specific persona.
+- When RocketClaw backs OpenAI RocketCode requests with ChatGPT OAuth, Codex backend requests use Codex-compatible request identity rather than a RocketClaw-specific persona.
 - Codex backend requests send `originator: codex_cli_rs`.
 - Codex backend requests send `User-Agent: codex_cli_rs/0.0.0 (RocketClaw)`.
 - Codex backend requests send `Authorization: Bearer <access token>`.
@@ -127,3 +136,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-06: Added ChatGPT Codex backend request identity and header contract for RocketClaw-backed RocketCode requests.
 - 2026-06-10: Added `maxRecursion` agent frontmatter contract for limiting RocketCode task subdelegation depth.
 - 2026-06-10: Added the local-only `guardrail` agent contract for RocketCode inter-agent delegation and response filtering.
+- 2026-06-11: Added provider-qualified OpenAI and Anthropic RocketCode embedding contracts, with ChatGPT OAuth and checkpoint compaction remaining OpenAI-only.

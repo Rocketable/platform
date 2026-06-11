@@ -33,6 +33,8 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/oai"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/Rocketable/platform/internal/rocketcode"
+	anthropic "github.com/anthropics/anthropic-sdk-go"
+	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
@@ -371,7 +373,10 @@ func (b *Bridge) SeedResponseThread(ctx context.Context, checkpoint events.Respo
 		return fmt.Errorf("main session checkpoint entry %d was not found", checkpoint.SessionEntryID)
 	}
 
-	model := responses.ResponseCompactParamsModel(strings.TrimSpace(checkpoint.Model))
+	model, err := compactModel(strings.TrimSpace(checkpoint.Model))
+	if err != nil {
+		return err
+	}
 
 	seedReplay, err := b.compactSeedReplay(ctx, seedEntries, model)
 	if err != nil {
@@ -432,11 +437,12 @@ func (b *Bridge) SeedThreadFromMain(ctx context.Context) error {
 		}
 	}
 
-	if model == "" {
-		model = responses.ResponseCompactParamsModelGPT5_4
+	compactionModel, err := compactModel(string(model))
+	if err != nil {
+		return err
 	}
 
-	seedReplay, err := b.compactSeedReplay(ctx, seedEntries, model)
+	seedReplay, err := b.compactSeedReplay(ctx, seedEntries, compactionModel)
 	if err != nil {
 		return fmt.Errorf("compact main session: %w", err)
 	}
@@ -480,6 +486,31 @@ func (b *Bridge) SeedThreadFromCron(ctx context.Context, seedText string) error 
 	}
 
 	return nil
+}
+
+func compactModel(model string) (responses.ResponseCompactParamsModel, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return responses.ResponseCompactParamsModelGPT5_4, nil
+	}
+
+	provider, apiModel, ok := strings.Cut(model, "/")
+	if !ok {
+		return responses.ResponseCompactParamsModel(model), nil
+	}
+
+	switch provider {
+	case "openai":
+		if strings.TrimSpace(apiModel) == "" {
+			return "", fmt.Errorf("invalid OpenAI checkpoint model %q", model)
+		}
+
+		return responses.ResponseCompactParamsModel(apiModel), nil
+	case "anthropic":
+		return "", fmt.Errorf("response checkpoint compaction does not support Anthropic model %q", model)
+	default:
+		return "", fmt.Errorf("response checkpoint compaction does not support provider %q", provider)
+	}
 }
 
 func (b *Bridge) enqueue(ctx context.Context, request bridgeRequest, operation string) error {
@@ -825,9 +856,9 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		}
 	}
 
-	client, err := b.openAIClient()
+	providers, err := b.rocketcodeProviders()
 	if err != nil {
-		return runResult{}, fmt.Errorf("prepare OpenAI client: %w", err)
+		return runResult{}, fmt.Errorf("prepare RocketCode providers: %w", err)
 	}
 
 	attachments := new(outboundAttachmentCollector)
@@ -856,7 +887,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 	rocketcodeConfig := b.rocketcodeConfig(shellOutputDir, shellEnv, attachments.Tool(root))
 	rocketcodeConfig.InterAgentFilter = interAgentFilterConfig(agents)
 
-	looper, err := rocketcode.New(client, &rocketcodeConfig, root, agents, skills, b.config.Agent, io.Discard)
+	looper, err := rocketcode.NewWithProviders(providers, &rocketcodeConfig, root, agents, skills, b.config.Agent, io.Discard)
 	if err != nil {
 		return runResult{}, fmt.Errorf("prepare rocketcode turn: %w", err)
 	}
@@ -1165,6 +1196,30 @@ func (b *Bridge) openAIClient() (*openai.Client, error) {
 	client := openai.NewClient(options...)
 
 	return &client, nil
+}
+
+func (b *Bridge) anthropicClient() *anthropic.Client {
+	if strings.TrimSpace(b.runtime.Anthropic.APIKey) == "" {
+		return nil
+	}
+
+	options := []anthropicoption.RequestOption{anthropicoption.WithAPIKey(b.runtime.Anthropic.APIKey)}
+	if strings.TrimSpace(b.runtime.Anthropic.APIBaseURL) != "" {
+		options = append(options, anthropicoption.WithBaseURL(b.runtime.Anthropic.APIBaseURL))
+	}
+
+	client := anthropic.NewClient(options...)
+
+	return &client
+}
+
+func (b *Bridge) rocketcodeProviders() (rocketcode.Providers, error) {
+	openAIClient, err := b.openAIClient()
+	if err != nil {
+		return rocketcode.Providers{}, err
+	}
+
+	return rocketcode.Providers{OpenAI: openAIClient, Anthropic: b.anthropicClient()}, nil
 }
 
 func (b *Bridge) rocketcodeConfig(shellOutputDir string, shellEnv map[string]string, customTools ...rocketcode.Tool) rocketcode.Config {

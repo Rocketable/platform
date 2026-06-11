@@ -19,7 +19,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 
 | File or directory | Contract |
 | --- | --- |
-| `rocketclaw.json` | Main runtime config. Relative `workspace` resolves relative to the config file. At least one of Discord voice, Discord text, Slack, external MCP, or web UI must be enabled. Slack and Discord text are mutually exclusive primary text connectors. Optional `overlays` entries name git repositories whose `agents/`, `skills/`, `cron/`, and `scripts/` trees are applied during startup. |
+| `rocketclaw.json` | Main runtime config. Relative `workspace` resolves relative to the config file. At least one of Discord voice, Discord text, Slack, external MCP, or web UI must be enabled. Slack and Discord text are mutually exclusive primary text connectors. Optional `overlays` entries name git repositories whose `agents/`, `skills/`, `cron/`, and `scripts/` trees are applied during startup. Optional `anthropic` entries configure Anthropic-backed RocketCode requests. |
 | `femtoclaw.json` | Legacy runtime config. If present, startup and operational commands load it instead of `rocketclaw.json` and use `.femtoclaw/` as the generated runtime directory. It supports the same optional `overlays` entries as `rocketclaw.json`. |
 | `rocketclaw.users.json` | Optional external MCP Basic Auth users next to `rocketclaw.json`. If present, it must be a JSON object and file mode `0600`. Missing means MCP runs without auth. |
 | `AGENTS.md` | Workspace instruction file generated when missing. Loaded literally; no shell interpolation. |
@@ -40,6 +40,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - Empty `openai.stt_model` defaults to `whisper-1`.
 - Empty `openai.tts_model` defaults to `tts-1`.
 - Empty `openai.tts_voice` defaults to `alloy`.
+- Empty or omitted `anthropic.api_key` and `anthropic.api_base_url` have no default. Missing Anthropic credentials are an error only when an Anthropic model is selected for a RocketCode request.
 - Empty logging level defaults to `debug`.
 - Empty `minimum_wait_after_human_interaction` means `0s`; setup writes `5m` explicitly.
 - Empty or omitted `thread_agents` uses the baseline `:thread:` and `:twisted_rightward_arrows:` routes; a non-empty custom map replaces the baseline.
@@ -73,6 +74,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - `rocketclaw setup files list` and `setup files get <path>` expose embedded setup payloads.
 - ChatGPT auth for RocketCode requires `rocketclaw oai login`; STT/TTS always use API-key auth through audio keys or `api_key` fallback. ChatGPT refresh tokens are rotating, single-owner credentials and must remain under RocketClaw's selected `<runtime-dir>/auth.json` ownership.
 - ChatGPT-backed RocketCode requests refresh credentials before sending when the access token is locally expired or within 120s of expiry. When Codex returns `401 Unauthorized` for a replayable request, RocketClaw reloads stored auth and retries once with a newer same-account stored token when present; otherwise it force-refreshes with the refresh token, persists the result, and retries once. Non-replayable requests return the original `401`; repeated `401`, terminal refresh failure, or failed refresh is surfaced with re-login guidance.
+- Anthropic-backed RocketCode requests use `anthropic.api_key` and optional `anthropic.api_base_url`. ChatGPT OAuth credentials are never used for Anthropic requests.
 - Startup migrates legacy state into `.rocketclaw/state.sqlite3` when applicable; rollback after destructive migration requires backup restore.
 
 ## Non-Goals
@@ -121,3 +123,4 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-10: Removed `main-split-markdown-files.sh` from the setup-generated helper contract.
 - 2026-06-10: Added local-only `agents/guardrail.md` as the optional inter-agent guardrail source and prohibited configured git overlays from materializing that path.
 - 2026-06-11: Added `rocketclaw lint [next|current]` as an operational command governed by ADR 0006.
+- 2026-06-11: Added optional Anthropic RocketCode provider configuration and clarified that ChatGPT OAuth remains OpenAI-only.

@@ -35,15 +35,17 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 - Completed non-interrupted turns append `SessionEntry` rows with version `1`, type `turn`, UTC timestamp, model, replay input, replay output, and output trace.
 - Session history is loaded lazily on the first non-empty prompt and ordered by stored row id.
 - Empty prompt input with no attachments closes that response channel and does not call the model.
-- Replay preserves user and developer messages, assistant messages, reasoning encrypted content, compaction items, function calls, function-call outputs, and supported web-search calls.
+- Replay preserves user and developer messages, assistant messages, reasoning encrypted content, compaction items, function calls, function-call outputs, and supported web-search calls using RocketCode's existing OpenAI Responses-shaped replay encoding, regardless of the provider used for a turn.
+- Newly persisted provider-routed turns store provider-qualified model names. Existing unqualified stored model names remain readable as OpenAI models.
 - Response output items that cannot be converted back into replay input are recorded in output trace rather than silently becoming prompt input.
 - Replay decode errors identify the entry, item, and kind involved.
 
 ### Model Turn Loop
 
 - Each model cycle builds history from session entries, runtime system prompt, latest input, previous outputs, and tool outputs.
+- Each model cycle routes to the provider selected by the active model string. Provider adapters must preserve prompt framing, local tool call dispatch, tool-output continuation, diagnostics, and replay semantics.
 - History before the latest compaction point is pruned so replay starts from the compaction boundary when one exists.
-- Compaction steering, when configured, is appended as developer text for compaction behavior.
+- Compaction steering, when configured, is appended as developer text for compaction behavior. OpenAI Responses context compaction remains provider-specific; Anthropic compaction is unsupported until an explicit provider-specific contract is approved.
 - Tool outputs are appended to model input and the turn continues until the model returns no function calls.
 - Three repeated identical tool calls are converted into a tool-output failure for the model.
 - Tool call permission denial, unknown tool names, and malformed tool permissions are returned as model-visible tool failures rather than process-fatal errors.
@@ -109,3 +111,4 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 
 - 2026-06-11: Initial accepted snapshot.
 - 2026-06-11: Added linter-disable guardrail for behavior-preserving refactors.
+- 2026-06-11: Added provider-routing replay and turn-loop contracts for OpenAI and Anthropic model requests.

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	anthropic "github.com/anthropics/anthropic-sdk-go"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
@@ -20,8 +21,9 @@ import (
 
 type toolFactory struct {
 	client                     responsesAPI
+	anthropicClient            *anthropic.Client
 	systemPrompt               string
-	model                      shared.ResponsesModel
+	modelRef                   modelRef
 	reasoningEffort            shared.ReasoningEffort
 	compactThreshold           int64
 	compactionSteering         string
@@ -524,12 +526,4 @@ func applyPatchText(params applyPatchToolParams) string {
 	}
 
 	return params.Patch
-}
-
-func parseAgentModel(model string, fallback shared.ResponsesModel) shared.ResponsesModel {
-	if model != "" {
-		return model
-	}
-
-	return fallback
 }
