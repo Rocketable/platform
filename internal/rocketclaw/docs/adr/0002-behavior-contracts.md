@@ -70,6 +70,7 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 
 - Task permission defaults must not become permissive by accident.
 - Agent `maxRecursion` budgets are stricter than `task` permission grants; a permitted task target remains unavailable once the active inference's recursion budget is exhausted.
+- Agent-system safety linting for permissions, delegation graphs, suppressions, and write-to-execute risk is governed by ADR 0006.
 - Cron agents may selectively deny tools.
 - The inter-agent guardrail agent may use tools only when its own `permission` frontmatter allows those tools.
 - RocketClaw tools are part of runtime behavior and must remain visible to RocketCode according to the bridge mode that owns the turn.
@@ -116,3 +117,4 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - 2026-06-09: Removed the graceful shutdown timeout and specified the no-timeout shutdown order.
 - 2026-06-10: Specified that `maxRecursion` subdelegation budgets override otherwise-permitted `task` grants when exhausted.
 - 2026-06-10: Added local-only guardrail filtering for RocketCode task delegation prompts and child final responses.
+- 2026-06-11: Linked agent-system safety linting to ADR 0006.

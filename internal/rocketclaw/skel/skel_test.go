@@ -245,7 +245,7 @@ func TestSyncFSFilteredReportsTargetFileForDirectory(t *testing.T) {
 
 func TestOverlayMissingIsNoop(t *testing.T) {
 	tmp := t.TempDir()
-	require.NoError(t, overlayIn(tmp, targetRoot, testLogger()))
+	require.NoError(t, overlayWorkspaceIn(tmp, filepath.Join(tmp, targetRoot), testLogger()))
 
 	_, err := os.Stat(filepath.Join(tmp, targetRoot))
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -255,7 +255,7 @@ func TestOverlayRejectsFile(t *testing.T) {
 	tmp := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "agents"), []byte("file"), 0o644))
 
-	err := overlayIn(tmp, targetRoot, testLogger())
+	err := overlayWorkspaceIn(tmp, filepath.Join(tmp, targetRoot), testLogger())
 	require.ErrorContains(t, err, "rocketclaw overlay path is not a directory")
 }
 
@@ -269,7 +269,7 @@ func TestOverlaySkipsFilteredFiles(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "agents", "nested", "guide.md"), []byte("real"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "cron", "job.md"), []byte("cron"), 0o644))
 
-	require.NoError(t, overlayIn(tmp, targetRoot, testLogger()))
+	require.NoError(t, overlayWorkspaceIn(tmp, filepath.Join(tmp, targetRoot), testLogger()))
 
 	for _, path := range []string{
 		"guide.example.md",
@@ -608,6 +608,44 @@ func TestReadSetupFile(t *testing.T) {
 func TestReadSetupFileRejectsUnknown(t *testing.T) {
 	_, err := ReadSetupFile("../AGENTS.md")
 	require.ErrorIs(t, err, errUnknownSetupFile)
+}
+
+func TestEmbeddedCreateOrUpdateSkillsMentionLint(t *testing.T) {
+	agentSkill, err := payload.ReadFile(".rocketclaw/skills/main-create-or-update-agent/SKILL.md")
+	require.NoError(t, err)
+	assert.Contains(t, string(agentSkill), "rocketclaw lint")
+	assert.Contains(t, string(agentSkill), "Write XOR execute")
+
+	skillSkill, err := payload.ReadFile(".rocketclaw/skills/main-create-or-update-skill/SKILL.md")
+	require.NoError(t, err)
+	assert.Contains(t, string(skillSkill), "rocketclaw lint")
+	assert.Contains(t, string(skillSkill), "behavior, permission guidance, task delegation, or scripts")
+}
+
+func TestSyncEffectiveRuntimeAssetsDoesNotMutateRuntimeOrScriptSymlinks(t *testing.T) {
+	workspace := t.TempDir()
+	realRuntime := filepath.Join(workspace, targetRoot)
+	realScripts := filepath.Join(workspace, scriptsRoot)
+	target := filepath.Join(t.TempDir(), targetRoot)
+	require.NoError(t, os.MkdirAll(filepath.Join(realRuntime, agentsRoot), 0o755))
+	require.NoError(t, os.MkdirAll(realScripts, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, agentsRoot), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(realRuntime, agentsRoot, "main.md"), []byte("real runtime"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "main.md"), []byte("overlay"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, scriptsRoot, "helper.sh"), []byte("script"), 0o644))
+
+	require.NoError(t, SyncEffectiveRuntimeAssets(workspace, target, nil, testLogger()))
+
+	data, err := os.ReadFile(filepath.Join(realRuntime, agentsRoot, "main.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "real runtime", string(data))
+	data, err = os.ReadFile(filepath.Join(target, agentsRoot, "main.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "overlay", string(data))
+
+	info, err := os.Lstat(filepath.Join(realScripts, "helper.sh"))
+	require.NoError(t, err)
+	assert.Zero(t, info.Mode()&os.ModeSymlink)
 }
 
 func TestRelativePath(t *testing.T) {

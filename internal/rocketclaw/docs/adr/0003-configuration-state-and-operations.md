@@ -68,6 +68,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - `rocketclaw setup` creates or updates setup-controlled files, asks for human partner and agent names, and replaces placeholders in files it creates.
 - `rocketclaw setup` asks for one primary text connector: Slack, Discord text, or none. Discord text setup targets a guild text channel so managed thread semantics are available.
 - `rocketclaw doctor` validates the loaded config and RocketCode availability.
+- `rocketclaw lint [next|current]` checks agent-system safety for the selected config and runtime directory as specified by ADR 0006.
 - Config selection prefers legacy `femtoclaw.json` when present, selecting `.femtoclaw/`; otherwise `rocketclaw.json` selects `.rocketclaw/`.
 - `rocketclaw setup files list` and `setup files get <path>` expose embedded setup payloads.
 - ChatGPT auth for RocketCode requires `rocketclaw oai login`; STT/TTS always use API-key auth through audio keys or `api_key` fallback. ChatGPT refresh tokens are rotating, single-owner credentials and must remain under RocketClaw's selected `<runtime-dir>/auth.json` ownership.
@@ -119,3 +120,4 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-09: Removed `graceful_shutdown_timeout` from runtime config.
 - 2026-06-10: Removed `main-split-markdown-files.sh` from the setup-generated helper contract.
 - 2026-06-10: Added local-only `agents/guardrail.md` as the optional inter-agent guardrail source and prohibited configured git overlays from materializing that path.
+- 2026-06-11: Added `rocketclaw lint [next|current]` as an operational command governed by ADR 0006.
