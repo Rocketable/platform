@@ -859,7 +859,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 	rocketcodeConfig := b.rocketcodeConfig(shellOutputDir, shellEnv, attachments.Tool(root))
 	rocketcodeConfig.InterAgentFilter = interAgentFilterConfig(agents)
 
-	looper, err := rocketcode.New(client, rocketcodeConfig, root, agents, skills, b.config.Agent, io.Discard)
+	looper, err := rocketcode.New(client, &rocketcodeConfig, root, agents, skills, b.config.Agent, io.Discard)
 	if err != nil {
 		return runResult{}, fmt.Errorf("prepare rocketcode turn: %w", err)
 	}

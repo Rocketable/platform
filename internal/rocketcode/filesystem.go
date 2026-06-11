@@ -65,6 +65,33 @@ type fileChange struct {
 	deletions  int
 }
 
+type openCodePatchErrorKind string
+
+const (
+	openCodePatchInvalidFormat openCodePatchErrorKind = "invalid_format"
+	openCodePatchReadFile      openCodePatchErrorKind = "read_file"
+	openCodePatchFindContext   openCodePatchErrorKind = "find_context"
+	openCodePatchFindLines     openCodePatchErrorKind = "find_lines"
+)
+
+type openCodePatchError struct {
+	kind    openCodePatchErrorKind
+	message string
+	cause   error
+}
+
+func (e openCodePatchError) Error() string {
+	if e.cause == nil {
+		return e.message
+	}
+
+	return e.message + ": " + e.cause.Error()
+}
+
+func (e openCodePatchError) Unwrap() error {
+	return e.cause
+}
+
 type applyPatchFileMeta struct {
 	FilePath     string
 	RelativePath string
@@ -82,52 +109,48 @@ type applyPatchPreview struct {
 	output  string
 }
 
-func (sfs *sandboxedFileSystem) Read(filename string, offset int) string {
-	return sfs.ReadResult(filename, offset).Output
-}
-
 func (sfs *sandboxedFileSystem) ReadResult(filename string, offset int) ToolResult {
 	sfs.mu.Lock()
 	defer sfs.mu.Unlock()
 
 	if offset < 1 {
-		return textToolResult("offset must be greater than or equal to 1")
+		return TextToolResult("offset must be greater than or equal to 1")
 	}
 
 	if isDeniedEnvPath(filename) {
-		return textToolResult(deniedEnvAccessMessage(filename))
+		return TextToolResult(deniedEnvAccessMessage(filename))
 	}
 
 	name, err := normalizeRootName(sfs.root, filename)
 	if err != nil {
-		return textToolResult(err.Error())
+		return TextToolResult(err.Error())
 	}
 
-	if err := sfs.rejectSymlink(name); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return textToolResult(err.Error())
+	if err := rejectSymlink(sfs, name); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return TextToolResult(err.Error())
 	}
 
 	file, err := sfs.root.Open(name)
 	if err != nil {
-		return textToolResult("File not found: " + filename)
+		return TextToolResult("File not found: " + filename)
 	}
 
 	content, err := io.ReadAll(file)
 	errClose := file.Close()
 
 	if err != nil {
-		return textToolResult("failed to read file: " + filename)
+		return TextToolResult("failed to read file: " + filename)
 	}
 
 	if errClose != nil {
-		return textToolResult("failed to read file: " + filename)
+		return TextToolResult("failed to read file: " + filename)
 	}
 
 	mimeType := sniffAttachmentMIME(content, mimeFromFilename(filename))
 	if isSupportedAttachmentMIME(mimeType) {
 		attachment, err := attachmentFromBytes(filepath.Base(filename), mimeType, content)
 		if err != nil {
-			return textToolResult(err.Error())
+			return TextToolResult(err.Error())
 		}
 
 		message := "Image read successfully"
@@ -140,11 +163,11 @@ func (sfs *sandboxedFileSystem) ReadResult(filename string, offset int) ToolResu
 
 	result, errScan := readLines(content, offset, defaultReadLimit)
 	if errScan != nil {
-		return textToolResult("failed to read file: " + filename)
+		return TextToolResult("failed to read file: " + filename)
 	}
 
 	if result.count < offset && (result.count != 0 || offset != 1) {
-		return textToolResult(fmt.Sprintf("Offset %d is out of range for this file (%d lines)", offset, result.count))
+		return TextToolResult(fmt.Sprintf("Offset %d is out of range for this file (%d lines)", offset, result.count))
 	}
 
 	var output strings.Builder
@@ -174,7 +197,7 @@ func (sfs *sandboxedFileSystem) ReadResult(filename string, offset int) ToolResu
 
 	output.WriteString("\n</content>")
 
-	return textToolResult(output.String())
+	return TextToolResult(output.String())
 }
 
 func readLines(content []byte, offset, limit int) (readResult, error) {
@@ -231,7 +254,7 @@ func (sfs *sandboxedFileSystem) ApplyPatch(patchText string) string {
 	sfs.mu.Lock()
 	defer sfs.mu.Unlock()
 
-	preview, errText := sfs.previewApplyPatchLocked(patchText)
+	preview, errText := previewApplyPatchLocked(sfs, patchText)
 	if errText != "" {
 		return errText
 	}
@@ -239,11 +262,11 @@ func (sfs *sandboxedFileSystem) ApplyPatch(patchText string) string {
 	for _, change := range preview.changes {
 		switch change.typ {
 		case "add", "update":
-			if err := sfs.writeTextFile(change.path, change.newContent, change.bom); err != nil {
+			if err := writeTextFile(sfs, change.path, change.newContent, change.bom); err != nil {
 				return "apply_patch verification failed: " + err.Error()
 			}
 		case "move":
-			if err := sfs.writeTextFile(change.movePath, change.newContent, change.bom); err != nil {
+			if err := writeTextFile(sfs, change.movePath, change.newContent, change.bom); err != nil {
 				return "apply_patch verification failed: " + err.Error()
 			}
 
@@ -264,16 +287,14 @@ func emptyApplyPatchPreview() applyPatchPreview {
 	return applyPatchPreview{changes: nil, files: nil, diff: "", output: ""}
 }
 
-//nolint:funcorder // Patch helpers are grouped with the ApplyPatch implementation they support.
-func (sfs *sandboxedFileSystem) previewApplyPatch(patchText string) (preview applyPatchPreview, errText string) {
+func previewApplyPatch(sfs *sandboxedFileSystem, patchText string) (preview applyPatchPreview, errText string) {
 	sfs.mu.Lock()
 	defer sfs.mu.Unlock()
 
-	return sfs.previewApplyPatchLocked(patchText)
+	return previewApplyPatchLocked(sfs, patchText)
 }
 
-//nolint:funcorder // Locked implementation stays next to the public preview wrapper to avoid split patch logic.
-func (sfs *sandboxedFileSystem) previewApplyPatchLocked(patchText string) (preview applyPatchPreview, errText string) {
+func previewApplyPatchLocked(sfs *sandboxedFileSystem, patchText string) (preview applyPatchPreview, errText string) {
 	if patchText == "" {
 		return emptyApplyPatchPreview(), "patchText is required"
 	}
@@ -322,12 +343,12 @@ func (sfs *sandboxedFileSystem) previewApplyPatchLocked(patchText string) (previ
 				return emptyApplyPatchPreview(), "apply_patch verification failed: Failed to read file to update: " + filepath.Join(sfs.root.Name(), cleanPath)
 			}
 
-			oldContent, sourceBOM, err := sfs.readTextFile(cleanPath)
+			oldContent, sourceBOM, err := readTextFile(sfs, cleanPath)
 			if err != nil {
 				return emptyApplyPatchPreview(), "apply_patch verification failed: " + err.Error()
 			}
 
-			text, bom, err := sfs.deriveNewContentsFromChunks(cleanPath, hunk.chunks)
+			text, bom, err := deriveNewContentsFromChunks(sfs, cleanPath, hunk.chunks)
 			if err != nil {
 				return emptyApplyPatchPreview(), "apply_patch verification failed: Error: " + err.Error()
 			}
@@ -357,11 +378,11 @@ func (sfs *sandboxedFileSystem) previewApplyPatchLocked(patchText string) (previ
 			additions, deletions := countDiffLines(oldContent, text)
 			changes = append(changes, fileChange{typ: changeType, path: cleanPath, movePath: movePath, oldContent: oldContent, newContent: text, bom: bom, diff: diff, additions: additions, deletions: deletions})
 		case "delete":
-			if err := sfs.verifyDeleteTarget(cleanPath); err != nil {
+			if err := verifyDeleteTarget(sfs, cleanPath); err != nil {
 				return emptyApplyPatchPreview(), "apply_patch verification failed: " + err.Error()
 			}
 
-			oldContent, bom, err := sfs.readTextFile(cleanPath)
+			oldContent, bom, err := readTextFile(sfs, cleanPath)
 			if err != nil {
 				return emptyApplyPatchPreview(), "apply_patch verification failed: " + err.Error()
 			}
@@ -411,8 +432,7 @@ func (sfs *sandboxedFileSystem) previewApplyPatchLocked(patchText string) (previ
 	return applyPatchPreview{changes: changes, files: files, diff: totalDiff.String(), output: strings.Join(lines, "\n")}, ""
 }
 
-//nolint:funcorder // Patch helpers are grouped with the ApplyPatch implementation they support.
-func (sfs *sandboxedFileSystem) verifyDeleteTarget(name string) error {
+func verifyDeleteTarget(sfs *sandboxedFileSystem, name string) error {
 	info, err := sfs.root.Lstat(name)
 	if err != nil {
 		return fmt.Errorf("ENOENT: no such file or directory, open '%s'", filepath.Join(sfs.root.Name(), name))
@@ -464,7 +484,7 @@ func parsePatch(patchText string) ([]patchHunk, error) {
 	}
 
 	if begin == -1 || end == -1 || begin >= end {
-		return nil, errors.New("Invalid patch format: missing Begin/End markers") //nolint:staticcheck // Exact OpenCode parse error text is capitalized.
+		return nil, openCodePatchError{kind: openCodePatchInvalidFormat, message: "Invalid patch format: missing Begin/End markers", cause: nil}
 	}
 
 	var hunks []patchHunk
@@ -608,14 +628,13 @@ func joinBOM(text string, bom bool) string {
 	return "\ufeff" + text
 }
 
-//nolint:funcorder // Patch helpers are grouped with the ApplyPatch implementation they support.
-func (sfs *sandboxedFileSystem) readTextFile(name string) (text string, bom bool, err error) {
+func readTextFile(sfs *sandboxedFileSystem, name string) (text string, bom bool, err error) {
 	name, err = normalizeRootName(sfs.root, name)
 	if err != nil {
 		return "", false, err
 	}
 
-	if err := sfs.rejectSymlink(name); err != nil {
+	if err := rejectSymlink(sfs, name); err != nil {
 		return "", false, err
 	}
 
@@ -629,9 +648,8 @@ func (sfs *sandboxedFileSystem) readTextFile(name string) (text string, bom bool
 	return text, bom, nil
 }
 
-//nolint:funcorder // Patch helpers are grouped with the ApplyPatch implementation they support.
-func (sfs *sandboxedFileSystem) writeTextFile(name, text string, bom bool) error {
-	if err := sfs.rejectSymlink(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+func writeTextFile(sfs *sandboxedFileSystem, name, text string, bom bool) error {
+	if err := rejectSymlink(sfs, name); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 
@@ -649,8 +667,7 @@ func (sfs *sandboxedFileSystem) writeTextFile(name, text string, bom bool) error
 	return nil
 }
 
-//nolint:funcorder // Patch helpers are grouped with the ApplyPatch implementation they support.
-func (sfs *sandboxedFileSystem) rejectSymlink(name string) error {
+func rejectSymlink(sfs *sandboxedFileSystem, name string) error {
 	info, err := sfs.root.Lstat(name)
 	if err != nil {
 		return fmt.Errorf("lstat %q: %w", name, err)
@@ -663,11 +680,10 @@ func (sfs *sandboxedFileSystem) rejectSymlink(name string) error {
 	return nil
 }
 
-//nolint:funcorder // Patch helpers are grouped with the ApplyPatch implementation they support.
-func (sfs *sandboxedFileSystem) deriveNewContentsFromChunks(name string, chunks []updateFileChunk) (text string, bom bool, err error) {
-	originalText, originalBOM, err := sfs.readTextFile(name)
+func deriveNewContentsFromChunks(sfs *sandboxedFileSystem, name string, chunks []updateFileChunk) (text string, bom bool, err error) {
+	originalText, originalBOM, err := readTextFile(sfs, name)
 	if err != nil {
-		return "", false, fmt.Errorf("Failed to read file %s: %w", filepath.Join(sfs.root.Name(), name), err) //nolint:staticcheck // Exact OpenCode compute error text is capitalized.
+		return "", false, openCodePatchError{kind: openCodePatchReadFile, message: "Failed to read file " + filepath.Join(sfs.root.Name(), name), cause: err}
 	}
 
 	originalLines := strings.Split(originalText, "\n")
@@ -704,7 +720,7 @@ func computeReplacements(originalLines []string, filePath string, chunks []updat
 		if chunk.changeContext != "" {
 			contextIdx := seekSequence(originalLines, []string{chunk.changeContext}, lineIndex, false)
 			if contextIdx == -1 {
-				return nil, fmt.Errorf("Failed to find context '%s' in %s", chunk.changeContext, filePath) //nolint:staticcheck // Exact OpenCode match error text is capitalized.
+				return nil, openCodePatchError{kind: openCodePatchFindContext, message: fmt.Sprintf("Failed to find context '%s' in %s", chunk.changeContext, filePath), cause: nil}
 			}
 
 			lineIndex = contextIdx + 1
@@ -735,7 +751,7 @@ func computeReplacements(originalLines []string, filePath string, chunks []updat
 		}
 
 		if found == -1 {
-			return nil, fmt.Errorf("Failed to find expected lines in %s:\n%s", filePath, strings.Join(chunk.oldLines, "\n")) //nolint:staticcheck // Exact OpenCode match error text is capitalized.
+			return nil, openCodePatchError{kind: openCodePatchFindLines, message: fmt.Sprintf("Failed to find expected lines in %s:\n%s", filePath, strings.Join(chunk.oldLines, "\n")), cause: nil}
 		}
 
 		replacements = append(replacements, replacement{start: found, oldLen: len(pattern), newLines: newSlice})
@@ -933,7 +949,7 @@ func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) 
 			return err.Error()
 		}
 
-		if err := sfs.rejectSymlink(searchPath); err != nil {
+		if err := rejectSymlink(sfs, searchPath); err != nil {
 			return err.Error()
 		}
 
@@ -1153,7 +1169,7 @@ func (sfs *sandboxedFileSystem) resolveGrepTarget(searchPath string) (grepTarget
 		return grepTarget{}, errors.New(deniedEnvAccessMessage(searchPath))
 	}
 
-	if err := sfs.rejectSymlink(searchPath); err != nil {
+	if err := rejectSymlink(sfs, searchPath); err != nil {
 		return grepTarget{}, err
 	}
 

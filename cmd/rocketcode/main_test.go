@@ -1,4 +1,3 @@
-//nolint:exhaustruct // Tests intentionally use sparse fixtures for persisted session records.
 package main
 
 import (
@@ -28,7 +27,7 @@ func TestConfigFromEnvDefaults(t *testing.T) {
 	t.Setenv("ROCKETCODE_COMPACT_THRESHOLD", "")
 	t.Setenv("ROCKETCODE_COMPACTION_STEERING", "")
 
-	config, err := configFromEnv()
+	config, err := rocketcode.StandaloneConfigFromEnv()
 
 	require.NoError(t, err)
 	require.Equal(t, openai.ChatModelGPT5_4, config.Model)
@@ -57,7 +56,7 @@ func TestConfigFromEnvReadsOverrides(t *testing.T) {
 	t.Setenv("ROCKETCODE_COMPACT_THRESHOLD", "12345")
 	t.Setenv("ROCKETCODE_COMPACTION_STEERING", "fresh compaction instructions")
 
-	config, err := configFromEnv()
+	config, err := rocketcode.StandaloneConfigFromEnv()
 
 	require.NoError(t, err)
 	require.Equal(t, "custom-model", config.Model)
@@ -75,7 +74,7 @@ func TestConfigFromEnvParsesPromptShellCommandExpansion(t *testing.T) {
 		t.Setenv("ROCKETCODE_EXPAND_PROMPT_SHELL_COMMANDS", "all")
 		t.Setenv("ROCKETCODE_COMPACT_THRESHOLD", "")
 
-		config, err := configFromEnv()
+		config, err := rocketcode.StandaloneConfigFromEnv()
 
 		require.NoError(t, err)
 		require.Equal(t, rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, config.ExpandPromptShellCommands)
@@ -85,7 +84,7 @@ func TestConfigFromEnvParsesPromptShellCommandExpansion(t *testing.T) {
 		t.Setenv("ROCKETCODE_EXPAND_PROMPT_SHELL_COMMANDS", "1")
 		t.Setenv("ROCKETCODE_COMPACT_THRESHOLD", "")
 
-		config, err := configFromEnv()
+		config, err := rocketcode.StandaloneConfigFromEnv()
 
 		require.NoError(t, err)
 		require.Equal(t, rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, config.ExpandPromptShellCommands)
@@ -95,7 +94,7 @@ func TestConfigFromEnvParsesPromptShellCommandExpansion(t *testing.T) {
 		t.Setenv("ROCKETCODE_EXPAND_PROMPT_SHELL_COMMANDS", "primary, subagent, input")
 		t.Setenv("ROCKETCODE_COMPACT_THRESHOLD", "")
 
-		config, err := configFromEnv()
+		config, err := rocketcode.StandaloneConfigFromEnv()
 
 		require.NoError(t, err)
 		require.Equal(t, rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: false, InputPrompts: true}, config.ExpandPromptShellCommands)
@@ -105,7 +104,7 @@ func TestConfigFromEnvParsesPromptShellCommandExpansion(t *testing.T) {
 		t.Setenv("ROCKETCODE_EXPAND_PROMPT_SHELL_COMMANDS", "false")
 		t.Setenv("ROCKETCODE_COMPACT_THRESHOLD", "")
 
-		config, err := configFromEnv()
+		config, err := rocketcode.StandaloneConfigFromEnv()
 
 		require.NoError(t, err)
 		require.Equal(t, rocketcode.PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, config.ExpandPromptShellCommands)
@@ -115,7 +114,7 @@ func TestConfigFromEnvParsesPromptShellCommandExpansion(t *testing.T) {
 		t.Setenv("ROCKETCODE_EXPAND_PROMPT_SHELL_COMMANDS", "primary,unknown")
 		t.Setenv("ROCKETCODE_COMPACT_THRESHOLD", "")
 
-		_, err := configFromEnv()
+		_, err := rocketcode.StandaloneConfigFromEnv()
 
 		require.EqualError(t, err, `ROCKETCODE_EXPAND_PROMPT_SHELL_COMMANDS contains unknown value "unknown": expected primary, subagent, skill, input, or all`)
 	})
@@ -126,7 +125,7 @@ func TestConfigFromEnvRejectsInvalidCompactThreshold(t *testing.T) {
 		t.Run(value, func(t *testing.T) {
 			t.Setenv("ROCKETCODE_COMPACT_THRESHOLD", value)
 
-			_, err := configFromEnv()
+			_, err := rocketcode.StandaloneConfigFromEnv()
 
 			require.EqualError(t, err, "ROCKETCODE_COMPACT_THRESHOLD must be a positive integer")
 		})
@@ -153,7 +152,9 @@ Use for docs.
 `)},
 	}
 
-	agents, skills := loadParsedAgentsAndSkills(agentsFS, skillsFS, "/virtual/skills")
+	agentResult := rocketcode.LoadAgents(agentsFS)
+	skillResult := rocketcode.LoadSkills(skillsFS, "/virtual/skills")
+	agents, skills := agentResult.Agents, skillResult.Skills
 
 	require.Equal(t, "Prompt", agents.Items["main"].Prompt)
 	require.Equal(t, "docs-helper", skills.Items["docs-helper"].Name)
@@ -246,7 +247,7 @@ func TestPromptAttachmentsReadsImageAndPDF(t *testing.T) {
 	require.NoError(t, root.WriteFile("image.png", []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, 0o644))
 	require.NoError(t, root.WriteFile("doc.pdf", []byte("%PDF-1.7\n"), 0o644))
 
-	attachments, err := promptAttachments(root, dir, []string{filepath.Join(dir, "image.png"), filepath.Join(dir, "doc.pdf")})
+	attachments, err := rocketcode.PromptAttachments(root, dir, []string{filepath.Join(dir, "image.png"), filepath.Join(dir, "doc.pdf")})
 
 	require.NoError(t, err)
 	require.Len(t, attachments, 2)
@@ -295,10 +296,25 @@ func TestOpenSessionStoresEntriesInSQLite(t *testing.T) {
 
 	defer func() { _ = session.close() }()
 
-	replayInput, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
-		{OfMessage: &responses.EasyInputMessageParam{Role: "user", Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String("hello")}, Type: "message"}},
-		{OfMessage: &responses.EasyInputMessageParam{Role: "assistant", Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String("hi")}, Phase: "final_answer", Type: "message"}},
-	})
+	var userContent responses.EasyInputMessageContentUnionParam
+
+	userContent.OfString = openai.String("hello")
+	userMessage := responses.EasyInputMessageParam{Role: "user", Content: userContent, Type: "message", Phase: ""}
+
+	var userItem responses.ResponseInputItemUnionParam
+
+	userItem.OfMessage = &userMessage
+
+	var assistantContent responses.EasyInputMessageContentUnionParam
+
+	assistantContent.OfString = openai.String("hi")
+	assistantMessage := responses.EasyInputMessageParam{Role: "assistant", Content: assistantContent, Type: "message", Phase: "final_answer"}
+
+	var assistantItem responses.ResponseInputItemUnionParam
+
+	assistantItem.OfMessage = &assistantMessage
+
+	replayInput, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{userItem, assistantItem})
 	require.NoError(t, err)
 
 	entry := rocketcode.SessionEntry{
@@ -308,6 +324,7 @@ func TestOpenSessionStoresEntriesInSQLite(t *testing.T) {
 		ResponseID:  "resp-1",
 		Model:       "model-1",
 		ReplayInput: replayInput,
+		OutputTrace: nil,
 	}
 
 	require.NoError(t, session.out(entry))

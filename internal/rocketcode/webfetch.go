@@ -35,7 +35,7 @@ func webFetchDescription() string {
 	}, "\n")
 }
 
-func webFetch(ctx context.Context, params webFetchToolParams) (ToolResult, error) { //nolint:gocyclo // Fetching, conversion, and attachment handling are one user-visible contract.
+func webFetch(ctx context.Context, params webFetchToolParams) (ToolResult, error) {
 	if !strings.HasPrefix(params.URL, "http://") && !strings.HasPrefix(params.URL, "https://") {
 		return ToolResult{}, errors.New("URL must start with http:// or https://")
 	}
@@ -95,8 +95,10 @@ func webFetch(ctx context.Context, params webFetchToolParams) (ToolResult, error
 		return ToolResult{}, err
 	}
 
-	contentType := resp.Header.Get("Content-Type")
+	return webFetchToolResult(params.URL, format, resp.Header.Get("Content-Type"), body)
+}
 
+func webFetchToolResult(rawURL, format, contentType string, body []byte) (ToolResult, error) {
 	mimeType := sniffAttachmentMIME(body, contentType)
 	if isSupportedAttachmentMIME(mimeType) {
 		filename := "webfetch"
@@ -123,7 +125,7 @@ func webFetch(ctx context.Context, params webFetchToolParams) (ToolResult, error
 		switch format {
 		case "markdown":
 			opts := []converter.ConvertOptionFunc{}
-			if origin := originForURL(params.URL); origin != "" {
+			if origin := originForURL(rawURL); origin != "" {
 				opts = append(opts, converter.WithDomain(origin))
 			}
 
@@ -132,25 +134,25 @@ func webFetch(ctx context.Context, params webFetchToolParams) (ToolResult, error
 				return ToolResult{}, fmt.Errorf("convert HTML to markdown: %w", err)
 			}
 
-			return textToolResult(markdown), nil
+			return TextToolResult(markdown), nil
 		case "text":
 			text, err := textFromHTMLString(content)
 			if err != nil {
 				return ToolResult{}, err
 			}
 
-			return textToolResult(text), nil
+			return TextToolResult(text), nil
 		}
 	}
 
 	if format == "markdown" && bytes.Contains(body, []byte("<html")) {
 		markdown, err := htmltomarkdown.ConvertString(content)
 		if err == nil {
-			return textToolResult(markdown), nil
+			return TextToolResult(markdown), nil
 		}
 	}
 
-	return textToolResult(content), nil
+	return TextToolResult(content), nil
 }
 
 func doWebFetchRequest(ctx context.Context, rawURL, format string, honestUA bool) (*http.Response, error) {

@@ -171,10 +171,8 @@ func TestNewCopiesShellEnv(t *testing.T) {
 	require.NoError(t, err)
 
 	env["ROCKETCLAW_CONVERSATION_ID"] = "second"
-	runtimeLoop, ok := loop.(*looper)
-	require.True(t, ok)
 
-	result, err := runtimeLoop.Tools["bash"].Call(context.Background(), json.RawMessage(`{"command":"printf %s \"$ROCKETCLAW_CONVERSATION_ID\"","timeout":0,"workdir":"","description":"env mutation"}`), nil, toolCallMetadata{subagentIndex: 0, subagentTotal: 0})
+	result, err := loop.Tools["bash"].Call(context.Background(), json.RawMessage(`{"command":"printf %s \"$ROCKETCLAW_CONVERSATION_ID\"","timeout":0,"workdir":"","description":"env mutation"}`), nil, toolCallMetadata{subagentIndex: 0, subagentTotal: 0})
 
 	require.NoError(t, err)
 	require.Equal(t, "first", result.Output)
@@ -219,10 +217,7 @@ func TestNewSandboxedBashConfigAppliesToBashTool(t *testing.T) {
 
 	t.Setenv("PATH", "")
 
-	runtimeLoop, ok := loop.(*looper)
-	require.True(t, ok)
-
-	result, err := runtimeLoop.Tools["bash"].Call(context.Background(), json.RawMessage(`{"command":"true","timeout":0,"workdir":"","description":"sandbox"}`), nil, toolCallMetadata{subagentIndex: 0, subagentTotal: 0})
+	result, err := loop.Tools["bash"].Call(context.Background(), json.RawMessage(`{"command":"true","timeout":0,"workdir":"","description":"sandbox"}`), nil, toolCallMetadata{subagentIndex: 0, subagentTotal: 0})
 
 	require.NoError(t, err)
 	require.Contains(t, result.Output, "sandboxed bash:")
@@ -251,6 +246,6 @@ func TestNewRequiresParsedAgentsAndSkills(t *testing.T) {
 	require.EqualError(t, err, `missing required default agent "main"`)
 }
 
-func testConfig(shellOutputDir string) Config {
-	return Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 0, ShellOutputDir: shellOutputDir, SandboxedBash: false, InterAgentFilter: InterAgentFilterConfig{Prompt: "", Model: "", ReasoningEffort: "", Verbosity: "", Permission: PermissionSet{Buckets: nil}}, CustomTools: nil, ShellEnv: nil}
+func testConfig(shellOutputDir string) *Config {
+	return &Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 0, ShellOutputDir: shellOutputDir, SandboxedBash: false, InterAgentFilter: InterAgentFilterConfig{Prompt: "", Model: "", ReasoningEffort: "", Verbosity: "", Permission: PermissionSet{Buckets: nil}}, CustomTools: nil, ShellEnv: nil}
 }

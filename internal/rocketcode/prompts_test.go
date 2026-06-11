@@ -66,7 +66,8 @@ func TestExpandAgentPrompt(t *testing.T) {
 		original := Agent{Name: "review", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "review !`git status`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}
 		got := original
 
-		expandAgentPrompt(context.Background(), &got, false, testPromptExpansionEnvironment(t))
+		env := testPromptExpansionEnvironment(t)
+		expandAgentPrompt(context.Background(), &got, false, &env)
 
 		require.Equal(t, original, got)
 	})
@@ -85,7 +86,7 @@ func TestExpandAgentPrompt(t *testing.T) {
 		original := Agent{Name: "review", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "review !`cat MEMORY.md`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}
 		got := original
 
-		expandAgentPrompt(context.Background(), &got, true, env)
+		expandAgentPrompt(context.Background(), &got, true, &env)
 
 		require.Equal(t, "review workspace memory", got.Prompt)
 		require.Equal(t, "review !`cat MEMORY.md`", original.Prompt)

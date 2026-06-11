@@ -1,4 +1,3 @@
-//nolint:exhaustruct // OpenAI SDK structs are intentionally sparse at call sites.
 package rocketcode
 
 import (
@@ -95,20 +94,18 @@ func customLooperTool(tool *Tool) (looperTool, error) {
 		}
 	}
 
-	return looperTool{
-		Definition: responses.FunctionToolParam{
-			Name:        tool.Name,
-			Description: openai.String(tool.Description),
-			Parameters:  parameters,
-			Strict:      openai.Bool(true),
-		},
-		Call: func(ctx context.Context, raw json.RawMessage, output chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
-			return tool.Call(ctx, raw, output)
-		},
-		Permission:         permission,
-		Subjects:           subjects,
-		VisibilitySubjects: visibilitySubjects,
-	}, nil
+	call := func(ctx context.Context, raw json.RawMessage, output chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+		return tool.Call(ctx, raw, output)
+	}
+
+	var definition responses.FunctionToolParam
+
+	definition.Name = tool.Name
+	definition.Description = openai.String(tool.Description)
+	definition.Parameters = parameters
+	definition.Strict = openai.Bool(true)
+
+	return looperTool{Definition: definition, Call: call, Permission: permission, Subjects: subjects, VisibilitySubjects: visibilitySubjects}, nil
 }
 
 func customToolParameters(parameters map[string]any) (map[string]any, error) {

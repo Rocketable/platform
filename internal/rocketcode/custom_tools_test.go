@@ -1,4 +1,3 @@
-//nolint:exhaustruct // Tests intentionally focus only on fields relevant to each case.
 package rocketcode
 
 import (
@@ -12,18 +11,17 @@ import (
 )
 
 func TestCustomToolDefaultsAndParameters(t *testing.T) {
-	tools, err := customLooperTools([]Tool{{
-		Name: "github_create_issue",
-		Parameters: map[string]any{
-			"properties": map[string]any{
-				"body":  map[string]any{"type": "string"},
-				"title": map[string]any{"type": "string"},
-			},
+	customTool := testCustomTool("github_create_issue", func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+		return TextToolResult("created"), nil
+	})
+	customTool.Parameters = map[string]any{
+		"properties": map[string]any{
+			"body":  map[string]any{"type": "string"},
+			"title": map[string]any{"type": "string"},
 		},
-		Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
-			return TextToolResult("created"), nil
-		},
-	}}, nil)
+	}
+
+	tools, err := customLooperTools([]Tool{customTool}, nil)
 	if err != nil {
 		t.Fatalf("customLooperTools returned error: %v", err)
 	}
@@ -130,12 +128,12 @@ func TestCustomToolParametersRequiredDefaultsToSortedPropertyNames(t *testing.T)
 
 func TestCustomToolPermissionVisibilitySupportsWildcards(t *testing.T) {
 	tools := customPermissionTestTools(t)
-	factory := &toolFactory{baseTools: tools}
-	agent := &Agent{Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "tools", Rules: []PermissionRule{
+	factory := testToolFactoryWithBaseTools(tools)
+	agent := testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "tools", Rules: []PermissionRule{
 		{Pattern: "*", Action: permissionDeny},
 		{Pattern: "github_*", Action: permissionAllow},
 		{Pattern: "github_delete_repo", Action: permissionDeny},
-	}}}}}
+	}}}})
 
 	visible := factory.toolsFor(agent)
 
@@ -154,19 +152,19 @@ func TestCustomToolPermissionVisibilitySupportsWildcards(t *testing.T) {
 
 func TestCustomToolPermissionVisibilityScalarAllowDeny(t *testing.T) {
 	tools := customPermissionTestTools(t)
-	factory := &toolFactory{baseTools: tools}
+	factory := testToolFactoryWithBaseTools(tools)
 
-	defaultAgent := &Agent{}
+	defaultAgent := testAgentWithPermission(PermissionSet{Buckets: nil})
 	if _, ok := factory.toolsFor(defaultAgent)["github_create_issue"]; ok {
 		t.Fatalf("github_create_issue is visible without an allow rule; want hidden")
 	}
 
-	deniedAgent := &Agent{Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "tools", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}}}}}}
+	deniedAgent := testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "tools", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}}}}})
 	if _, ok := factory.toolsFor(deniedAgent)["github_create_issue"]; ok {
 		t.Fatalf("github_create_issue is visible with tools deny; want hidden")
 	}
 
-	allowedAgent := &Agent{Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "tools", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}}
+	allowedAgent := testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "tools", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}})
 	if _, ok := factory.toolsFor(allowedAgent)["github_create_issue"]; !ok {
 		t.Fatalf("github_create_issue is hidden with tools allow; want visible")
 	}
@@ -175,28 +173,18 @@ func TestCustomToolPermissionVisibilityScalarAllowDeny(t *testing.T) {
 func TestCustomToolPermissionDeniedAtCallTime(t *testing.T) {
 	called := false
 
-	tools, err := customLooperTools([]Tool{{
-		Name: "github_create_issue",
-		Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
-			called = true
-			return TextToolResult("called"), nil
-		},
-	}}, nil)
+	tools, err := customLooperTools([]Tool{testCustomTool("github_create_issue", func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+		called = true
+		return TextToolResult("called"), nil
+	})}, nil)
 	if err != nil {
 		t.Fatalf("customLooperTools returned error: %v", err)
 	}
 
-	looper := &looper{
-		Permissions: PermissionSet{Buckets: []PermissionBucket{{Name: "tools", Rules: []PermissionRule{{Pattern: "github_*", Action: permissionDeny}}}}},
-		Tools:       tools,
-	}
+	looper := testLooperWithTools(tools)
+	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "tools", Rules: []PermissionRule{{Pattern: "github_*", Action: permissionDeny}}}}}
 
-	outputs, hadToolCalls, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{{
-		ID:        "item_1",
-		CallID:    "call_1",
-		Name:      "github_create_issue",
-		Arguments: `{}`,
-	}}), nil, nil)
+	outputs, hadToolCalls, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item_1", "call_1", "github_create_issue", `{}`)}), nil, nil)
 	if err != nil {
 		t.Fatalf("dispatchToolCalls returned error: %v", err)
 	}
@@ -217,25 +205,17 @@ func TestCustomToolPermissionDeniedAtCallTime(t *testing.T) {
 func TestCustomToolPermissionDefaultsDenyAtCallTime(t *testing.T) {
 	called := false
 
-	tools, err := customLooperTools([]Tool{{
-		Name: "github_create_issue",
-		Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
-			called = true
-			return TextToolResult("called"), nil
-		},
-	}}, nil)
+	tools, err := customLooperTools([]Tool{testCustomTool("github_create_issue", func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+		called = true
+		return TextToolResult("called"), nil
+	})}, nil)
 	if err != nil {
 		t.Fatalf("customLooperTools returned error: %v", err)
 	}
 
-	looper := &looper{Tools: tools}
+	looper := testLooperWithTools(tools)
 
-	outputs, hadToolCalls, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{{
-		ID:        "item_1",
-		CallID:    "call_1",
-		Name:      "github_create_issue",
-		Arguments: `{}`,
-	}}), nil, nil)
+	outputs, hadToolCalls, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item_1", "call_1", "github_create_issue", `{}`)}), nil, nil)
 	if err != nil {
 		t.Fatalf("dispatchToolCalls returned error: %v", err)
 	}
@@ -254,33 +234,25 @@ func TestCustomToolPermissionDefaultsDenyAtCallTime(t *testing.T) {
 }
 
 func TestCustomToolUsesCustomSubjects(t *testing.T) {
-	tools, err := customLooperTools([]Tool{{
-		Name: "github_create_issue",
-		Subjects: func(json.RawMessage) ([]string, error) {
-			return []string{"github_private_repo"}, nil
-		},
-		Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
-			return TextToolResult("called"), nil
-		},
-	}}, nil)
+	tool := testCustomTool("github_create_issue", func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+		return TextToolResult("called"), nil
+	})
+	tool.Subjects = func(json.RawMessage) ([]string, error) {
+		return []string{"github_private_repo"}, nil
+	}
+
+	tools, err := customLooperTools([]Tool{tool}, nil)
 	if err != nil {
 		t.Fatalf("customLooperTools returned error: %v", err)
 	}
 
-	looper := &looper{
-		Permissions: PermissionSet{Buckets: []PermissionBucket{{Name: "tools", Rules: []PermissionRule{
-			{Pattern: "github_create_issue", Action: permissionAllow},
-			{Pattern: "github_private_repo", Action: permissionDeny},
-		}}}},
-		Tools: tools,
-	}
+	looper := testLooperWithTools(tools)
+	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "tools", Rules: []PermissionRule{
+		{Pattern: "github_create_issue", Action: permissionAllow},
+		{Pattern: "github_private_repo", Action: permissionDeny},
+	}}}}
 
-	outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{{
-		ID:        "item_1",
-		CallID:    "call_1",
-		Name:      "github_create_issue",
-		Arguments: `{}`,
-	}}), nil, nil)
+	outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("item_1", "call_1", "github_create_issue", `{}`)}), nil, nil)
 	if err != nil {
 		t.Fatalf("dispatchToolCalls returned error: %v", err)
 	}
@@ -300,13 +272,13 @@ func TestCustomToolValidation(t *testing.T) {
 		reserved map[string]looperTool
 		want     string
 	}{
-		{name: "empty name", tools: []Tool{{Name: "", Call: validCall}}, want: "name is required"},
-		{name: "invalid name", tools: []Tool{{Name: "bad name", Call: validCall}}, want: "name must contain only"},
-		{name: "nil call", tools: []Tool{{Name: "github_create_issue"}}, want: "call is required"},
-		{name: "duplicate", tools: []Tool{{Name: "github_create_issue", Call: validCall}, {Name: "github_create_issue", Call: validCall}}, want: "duplicated"},
-		{name: "built-in collision", tools: []Tool{{Name: "read", Call: validCall}}, reserved: map[string]looperTool{"read": {}}, want: "collides"},
-		{name: "dynamic collision", tools: []Tool{{Name: "task", Call: validCall}}, want: "collides"},
-		{name: "invalid properties", tools: []Tool{{Name: "github_create_issue", Parameters: map[string]any{"properties": "bad"}, Call: validCall}}, want: "parameters.properties"},
+		{name: "empty name", tools: []Tool{testCustomTool("", validCall)}, reserved: nil, want: "name is required"},
+		{name: "invalid name", tools: []Tool{testCustomTool("bad name", validCall)}, reserved: nil, want: "name must contain only"},
+		{name: "nil call", tools: []Tool{testCustomTool("github_create_issue", nil)}, reserved: nil, want: "call is required"},
+		{name: "duplicate", tools: []Tool{testCustomTool("github_create_issue", validCall), testCustomTool("github_create_issue", validCall)}, reserved: nil, want: "duplicated"},
+		{name: "built-in collision", tools: []Tool{testCustomTool("read", validCall)}, reserved: map[string]looperTool{"read": testLooperTool("read")}, want: "collides"},
+		{name: "dynamic collision", tools: []Tool{testCustomTool("task", validCall)}, reserved: nil, want: "collides"},
+		{name: "invalid properties", tools: []Tool{testCustomToolWithParameters("github_create_issue", map[string]any{"properties": "bad"}, validCall)}, reserved: nil, want: "parameters.properties"},
 	}
 
 	for _, tt := range tests {
@@ -327,19 +299,59 @@ func customPermissionTestTools(t *testing.T) map[string]looperTool {
 	t.Helper()
 
 	tools, err := customLooperTools([]Tool{
-		{Name: "github_create_issue", Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+		testCustomTool("github_create_issue", func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
 			return TextToolResult("ok"), nil
-		}},
-		{Name: "github_delete_repo", Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+		}),
+		testCustomTool("github_delete_repo", func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
 			return TextToolResult("ok"), nil
-		}},
-		{Name: "linear_create_issue", Call: func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
+		}),
+		testCustomTool("linear_create_issue", func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error) {
 			return TextToolResult("ok"), nil
-		}},
+		}),
 	}, nil)
 	if err != nil {
 		t.Fatalf("customLooperTools returned error: %v", err)
 	}
 
 	return tools
+}
+
+func testCustomTool(name string, call func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error)) Tool {
+	var tool Tool
+
+	tool.Name = name
+	tool.Call = call
+
+	return tool
+}
+
+func testCustomToolWithParameters(name string, parameters map[string]any, call func(context.Context, json.RawMessage, chan<- ChatResponse) (ToolResult, error)) Tool {
+	tool := testCustomTool(name, call)
+	tool.Parameters = parameters
+
+	return tool
+}
+
+func testToolFactoryWithBaseTools(tools map[string]looperTool) *toolFactory {
+	var factory toolFactory
+
+	factory.baseTools = tools
+
+	return &factory
+}
+
+func testAgentWithPermission(permission PermissionSet) *Agent {
+	var agent Agent
+
+	agent.Permission = permission
+
+	return &agent
+}
+
+func testLooperWithTools(tools map[string]looperTool) *looper {
+	var l looper
+
+	l.Tools = tools
+
+	return &l
 }

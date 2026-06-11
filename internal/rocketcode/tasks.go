@@ -1,4 +1,3 @@
-//nolint:exhaustruct // Tool definitions use sparse SDK and runtime structs.
 package rocketcode
 
 import (
@@ -38,14 +37,13 @@ type interAgentFilterDecision struct {
 
 func (f *toolFactory) taskTool() looperTool {
 	return looperTool{
-		Definition: functionTool("task", f.taskDescription(), map[string]any{
+		Definition: *functionTool("task", f.taskDescription(), map[string]any{
 			"description":   map[string]any{"type": "string"},
 			"prompt":        map[string]any{"type": "string"},
 			"subagent_type": map[string]any{"type": "string"},
 			"command":       map[string]any{"type": "string"},
 		}),
-		Permission:         "task",
-		VisibilitySubjects: nil,
+		Permission: "task",
 		Subjects: func(raw json.RawMessage) ([]string, error) {
 			var params taskParams
 			if err := json.Unmarshal(raw, &params); err != nil {
@@ -65,7 +63,7 @@ func (f *toolFactory) taskTool() looperTool {
 				return ToolResult{}, err
 			}
 
-			return textToolResult(result), nil
+			return TextToolResult(result), nil
 		},
 	}
 }
@@ -188,7 +186,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	}
 
 	agent.Permission = f.shellOutput.effectivePermissions(agent.Permission)
-	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, f.promptExpansion)
+	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
 	systemPrompt := composeSystemPromptWithSkills(strings.TrimSpace(f.systemPrompt+"\n\n"+agent.Prompt), f.skills, &agent)
 
 	childFactory := *f
@@ -197,7 +195,13 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		childFactory.recursionRemaining = &remaining
 	}
 
-	child := &looper{ //nolint:exhaustruct // Child tasks intentionally inherit only runtime execution fields.
+	var (
+		responseFormat  responses.ResponseFormatTextConfigUnionParam
+		promptExpansion promptExpansionEnvironment
+		rewriteHistory  func([]responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam
+	)
+
+	child := &looper{
 		agent:              agent,
 		Client:             f.client,
 		SystemPrompt:       systemPrompt,
@@ -207,9 +211,13 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		CompactThreshold:   f.compactThreshold,
 		CompactionSteering: f.compactionSteering,
 		ParallelToolCalls:  f.parallelToolCalls,
+		ResponseFormat:     responseFormat,
 		Permissions:        agent.Permission,
 		Tools:              childFactory.toolsFor(&agent),
+		RewriteHistory:     rewriteHistory,
 		Diagnostics:        f.diagnostics,
+		expandInputPrompts: false,
+		promptExpansion:    promptExpansion,
 	}
 
 	output := make(chan ChatResponse)
@@ -231,7 +239,13 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	}
 
 	if f.diagnostics {
-		emitSubagentDiagnostic(outputSink, &SubagentDiagnostic{Name: agent.Name, Label: "delegation", Index: metadata.subagentIndex, Total: metadata.subagentTotal, Text: "started: " + params.Description})
+		emitSubagentDiagnostic(outputSink, &SubagentDiagnostic{
+			Name:  agent.Name,
+			Label: "delegation",
+			Index: metadata.subagentIndex,
+			Total: metadata.subagentTotal,
+			Text:  "started: " + params.Description,
+		})
 	}
 
 	group.Go(func() error {
@@ -290,7 +304,13 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 			emitDiagnosticChatResponse(outputSink, diagnostic)
 		}
 
-		emitSubagentDiagnostic(outputSink, &SubagentDiagnostic{Name: agent.Name, Label: "delegation", Index: metadata.subagentIndex, Total: metadata.subagentTotal, Text: "finished"})
+		emitSubagentDiagnostic(outputSink, &SubagentDiagnostic{
+			Name:  agent.Name,
+			Label: "delegation",
+			Index: metadata.subagentIndex,
+			Total: metadata.subagentTotal,
+			Text:  "finished",
+		})
 	}
 
 	return strings.Join([]string{"<task_result>", last, "</task_result>"}, "\n"), nil
@@ -304,7 +324,14 @@ func (f *toolFactory) runInterAgentFilter(ctx context.Context, parentAgentPrompt
 
 	agent := f.interAgentFilter.agent
 	agent.Permission = f.shellOutput.effectivePermissions(agent.Permission)
-	child := &looper{ //nolint:exhaustruct // Filter tasks intentionally use a constrained one-turn runtime.
+	responseFormat := interAgentFilterResponseFormat()
+
+	var (
+		promptExpansion promptExpansionEnvironment
+		rewriteHistory  func([]responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam
+	)
+
+	child := &looper{
 		agent:              agent,
 		Client:             f.client,
 		SystemPrompt:       composeSystemPromptWithSkills(prompt.String(), f.skills, &agent),
@@ -314,21 +341,13 @@ func (f *toolFactory) runInterAgentFilter(ctx context.Context, parentAgentPrompt
 		CompactThreshold:   f.compactThreshold,
 		CompactionSteering: f.compactionSteering,
 		ParallelToolCalls:  f.parallelToolCalls,
-		ResponseFormat: responses.ResponseFormatTextConfigUnionParam{OfJSONSchema: &responses.ResponseFormatTextJSONSchemaConfigParam{
-			Name:   "inter_agent_filter_decision",
-			Strict: openai.Bool(true),
-			Schema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"approved": map[string]any{"type": "boolean"},
-					"reason":   map[string]any{"type": "string"},
-				},
-				"required":             []string{"approved", "reason"},
-				"additionalProperties": false,
-			},
-		}},
-		Permissions: agent.Permission,
-		Tools:       f.toolsFor(&agent),
+		ResponseFormat:     responseFormat,
+		Permissions:        agent.Permission,
+		Tools:              f.toolsFor(&agent),
+		RewriteHistory:     rewriteHistory,
+		Diagnostics:        false,
+		expandInputPrompts: false,
+		promptExpansion:    promptExpansion,
 	}
 
 	output := make(chan ChatResponse)
@@ -372,6 +391,28 @@ func (f *toolFactory) runInterAgentFilter(ctx context.Context, parentAgentPrompt
 
 func emitSubagentDiagnostic(output chan<- ChatResponse, diagnostic *SubagentDiagnostic) {
 	emitDiagnosticChatResponse(output, ChatResponse{Kind: ChatResponseAssistantTool, Subagent: diagnostic})
+}
+
+func interAgentFilterResponseFormat() responses.ResponseFormatTextConfigUnionParam {
+	var jsonSchema responses.ResponseFormatTextJSONSchemaConfigParam
+
+	jsonSchema.Name = "inter_agent_filter_decision"
+	jsonSchema.Strict = openai.Bool(true)
+	jsonSchema.Schema = map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"approved": map[string]any{"type": "boolean"},
+			"reason":   map[string]any{"type": "string"},
+		},
+		"required":             []string{"approved", "reason"},
+		"additionalProperties": false,
+	}
+
+	var responseFormat responses.ResponseFormatTextConfigUnionParam
+
+	responseFormat.OfJSONSchema = &jsonSchema
+
+	return responseFormat
 }
 
 func subagentResponseLabel(kind string) string {

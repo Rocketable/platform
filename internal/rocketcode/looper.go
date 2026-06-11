@@ -1,4 +1,3 @@
-//nolint:exhaustruct,gocritic,unconvert,unused // OpenAI SDK unions require sparse literals; loops favor clarity here.
 package rocketcode
 
 import (
@@ -28,7 +27,20 @@ const providerRateLimitRetryMinDelay = time.Minute
 var errTurnInterrupted = errors.New("turn interrupted")
 
 type responsesAPI interface {
-	New(context.Context, responses.ResponseNewParams, ...option.RequestOption) (*responses.Response, error)
+	New(context.Context, *responses.ResponseNewParams, ...option.RequestOption) (*responses.Response, error)
+}
+
+type responseServiceClient struct {
+	service *responses.ResponseService
+}
+
+func (c responseServiceClient) New(ctx context.Context, params *responses.ResponseNewParams, opts ...option.RequestOption) (*responses.Response, error) {
+	resp, err := c.service.New(ctx, *params, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("create response: %w", err)
+	}
+
+	return resp, nil
 }
 
 // looperTool describes one callable tool available to the runtime.
@@ -67,23 +79,12 @@ type looper struct {
 	promptExpansion    promptExpansionEnvironment
 }
 
+// Runtime is the concrete RocketCode loop runtime returned by New.
+type Runtime = looper
+
 // Looper processes prompt input streams with a configured runtime.
 type Looper interface {
 	Loop(ctx context.Context, input <-chan PromptInput, sessionIn iter.Seq2[SessionEntry, error], sessionOut func(SessionEntry) error, interrupts <-chan os.Signal) error
-}
-
-func newLooperForAgent(client responsesAPI, agent Agent, tools map[string]looperTool) *looper {
-	return &looper{ //nolint:exhaustruct // Remaining fields are optional runtime hooks.
-		agent:            agent,
-		Client:           client,
-		SystemPrompt:     agent.Prompt,
-		Model:            shared.ResponsesModel(agent.Model),
-		ReasoningEffort:  shared.ReasoningEffort(agent.ReasoningEffort),
-		Verbosity:        agent.Verbosity,
-		CompactThreshold: defaultCompactThreshold,
-		Permissions:      agent.Permission,
-		Tools:            tools,
-	}
 }
 
 type toolCallSignature struct {
@@ -303,6 +304,8 @@ func (l *looper) runTurn(
 	baseHistory []responses.ResponseInputItemUnionParam,
 	input PromptInput,
 ) (SessionEntry, []ChatResponse, bool, error) {
+	var emptyRecord SessionEntry
+
 	if l.expandInputPrompts {
 		input.Text = l.promptExpansion.expandShellCommands(ctx, input.Text)
 	}
@@ -312,7 +315,7 @@ func (l *looper) runTurn(
 
 	replayInput, err := ReplayInputFromParams(turnItems)
 	if err != nil {
-		return SessionEntry{}, nil, false, err
+		return emptyRecord, nil, false, err
 	}
 
 	record := SessionEntry{
@@ -359,13 +362,15 @@ func (l *looper) runTurn(
 		history = l.rewriteHistory(history)
 		history = pruneHistoryBeforeLatestCompaction(history)
 
-		resp, err := l.newResponseWithProviderRetry(turnCtx, l.buildParams(history), output)
+		params := l.buildParams(history)
+
+		resp, err := l.newResponseWithProviderRetry(turnCtx, &params, output)
 		if err != nil {
 			if errors.Is(context.Cause(turnCtx), errTurnInterrupted) {
-				return SessionEntry{}, nil, true, nil
+				return emptyRecord, nil, true, nil
 			}
 
-			return SessionEntry{}, nil, false, fmt.Errorf("request response: %w", err)
+			return emptyRecord, nil, false, fmt.Errorf("request response: %w", err)
 		}
 
 		record.ResponseID = resp.ID
@@ -379,7 +384,7 @@ func (l *looper) runTurn(
 				hadCompaction = true
 			}
 
-			asInput, ok := responseOutputToReplayInput(resp.Output[i])
+			asInput, ok := responseOutputToReplayInput(&resp.Output[i])
 			if !ok {
 				if trace, err := json.Marshal(resp.Output[i]); err == nil {
 					record.OutputTrace = append(record.OutputTrace, trace)
@@ -388,22 +393,18 @@ func (l *looper) runTurn(
 				continue
 			}
 
-			if err := appendReplayInput(&record, asInput); err != nil {
-				return SessionEntry{}, nil, false, err
+			if err := appendReplayInput(&record, &asInput); err != nil {
+				return emptyRecord, nil, false, err
 			}
 
 			turnItems = append(turnItems, asInput)
 		}
 
 		if hadCompaction && l.CompactionSteering != "" {
-			steeringInput := responses.ResponseInputItemUnionParam{OfMessage: &responses.EasyInputMessageParam{
-				Role:    responses.EasyInputMessageRole("developer"),
-				Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(l.CompactionSteering)},
-				Type:    "message",
-			}}
+			steeringInput := inputMessageParam(responses.EasyInputMessageRole("developer"), easyInputStringContent(l.CompactionSteering))
 
-			if err := appendReplayInput(&record, steeringInput); err != nil {
-				return SessionEntry{}, nil, false, err
+			if err := appendReplayInput(&record, &steeringInput); err != nil {
+				return emptyRecord, nil, false, err
 			}
 
 			turnItems = append(turnItems, steeringInput)
@@ -412,40 +413,41 @@ func (l *looper) runTurn(
 		toolOutputs, hadToolCalls, err := l.dispatchToolCalls(turnCtx, resp, &doomLoop, output)
 		if err != nil {
 			if errors.Is(context.Cause(turnCtx), errTurnInterrupted) {
-				return SessionEntry{}, nil, true, nil
+				return emptyRecord, nil, true, nil
 			}
 
-			return SessionEntry{}, nil, false, fmt.Errorf("dispatch tool calls: %w", err)
+			return emptyRecord, nil, false, fmt.Errorf("dispatch tool calls: %w", err)
 		}
 
 		if !hadToolCalls {
 			return record, rendered, false, nil
 		}
 
-		for _, toolOutput := range toolOutputs {
-			toolInput := responses.ResponseInputItemUnionParam{OfFunctionCallOutput: &toolOutput.Param}
+		for i := range toolOutputs {
+			toolInput := functionCallOutputInputItem(&toolOutputs[i].Param)
 
-			if err := appendReplayInput(&record, toolInput); err != nil {
-				return SessionEntry{}, nil, false, err
+			if err := appendReplayInput(&record, &toolInput); err != nil {
+				return emptyRecord, nil, false, err
 			}
 
 			turnItems = append(turnItems, toolInput)
 		}
 
-		for _, toolOutput := range toolOutputs {
-			for _, replayInput := range toolOutput.ReplayInput {
+		for i := range toolOutputs {
+			for j := range toolOutputs[i].ReplayInput {
+				replayInput := &toolOutputs[i].ReplayInput[j]
 				if err := appendReplayInput(&record, replayInput); err != nil {
-					return SessionEntry{}, nil, false, err
+					return emptyRecord, nil, false, err
 				}
 
-				turnItems = append(turnItems, replayInput)
+				turnItems = append(turnItems, *replayInput)
 			}
 		}
 	}
 }
 
-func appendReplayInput(record *SessionEntry, item responses.ResponseInputItemUnionParam) error {
-	raw, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{item})
+func appendReplayInput(record *SessionEntry, item *responses.ResponseInputItemUnionParam) error {
+	raw, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{*item})
 	if err != nil {
 		return err
 	}
@@ -455,7 +457,7 @@ func appendReplayInput(record *SessionEntry, item responses.ResponseInputItemUni
 	return nil
 }
 
-func (l *looper) newResponseWithProviderRetry(ctx context.Context, params responses.ResponseNewParams, output chan<- ChatResponse) (*responses.Response, error) {
+func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse) (*responses.Response, error) {
 	attempt := 0
 
 	for {
@@ -464,14 +466,14 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params respon
 		resp, err := l.Client.New(ctx, params, option.WithResponseInto(&raw))
 		if err != nil {
 			if ctx.Err() == nil {
-				diagnostic := ProviderDiagnostic{Phase: providerDiagnosticError, Message: err.Error()}
+				diagnostic := ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""}
 				if errAPI, ok := errors.AsType[*openai.Error](err); ok {
 					diagnostic.Code = errAPI.Code
 					diagnostic.Message = errAPI.Message
 					diagnostic.HTTPStatus = errAPI.StatusCode
 				}
 
-				l.emitProviderDiagnostic(output, diagnostic)
+				l.emitProviderDiagnostic(output, &diagnostic)
 			}
 
 			return nil, fmt.Errorf("new response: %w", err)
@@ -479,7 +481,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params respon
 
 		if resp == nil {
 			err := errors.New("missing response")
-			l.emitProviderDiagnostic(output, ProviderDiagnostic{Phase: providerDiagnosticError, Message: err.Error()})
+			l.emitProviderDiagnostic(output, &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""})
 
 			return nil, err
 		}
@@ -496,7 +498,8 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params respon
 		}
 
 		if resp.Error.Code != responses.ResponseErrorCodeRateLimitExceeded {
-			l.emitProviderDiagnostic(output, providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0))
+			diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0)
+			l.emitProviderDiagnostic(output, &diagnostic)
 
 			return nil, err
 		}
@@ -539,7 +542,8 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params respon
 			}
 		}
 
-		l.emitProviderDiagnostic(output, providerDiagnosticFromFailedResponse(resp, providerDiagnosticRetry, attempt, wait))
+		diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticRetry, attempt, wait)
+		l.emitProviderDiagnostic(output, &diagnostic)
 
 		timer := time.NewTimer(wait)
 		select {
@@ -560,10 +564,12 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params respon
 func providerDiagnosticFromFailedResponse(resp *responses.Response, phase string, attempt int, retryAfter time.Duration) ProviderDiagnostic {
 	diagnostic := ProviderDiagnostic{
 		Phase:          phase,
+		HTTPStatus:     0,
 		ResponseStatus: string(resp.Status),
 		Code:           string(resp.Error.Code),
 		Message:        resp.Error.Message,
 		Attempt:        attempt,
+		RetryAfter:     "",
 		ResponseID:     resp.ID,
 	}
 
@@ -598,7 +604,8 @@ func emitDiagnosticChatResponse(output chan<- ChatResponse, item ChatResponse) {
 func responseChatResponses(items []responses.ResponseOutputItemUnion) []ChatResponse {
 	result := []ChatResponse{}
 
-	for _, item := range items {
+	for i := range items {
+		item := &items[i]
 		switch item.Type {
 		case "reasoning":
 			for j := range item.Summary {
@@ -638,28 +645,32 @@ func (l *looper) rewriteHistory(items []responses.ResponseInputItemUnionParam) [
 }
 
 func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) responses.ResponseNewParams {
-	params := responses.ResponseNewParams{
-		Input: responses.ResponseNewParamsInputUnion{OfInputItemList: history},
-		Model: l.Model,
-		Store: openai.Bool(false),
-		ContextManagement: []responses.ResponseNewParamsContextManagement{{
-			Type:             "compaction",
-			CompactThreshold: openai.Int(l.compactThreshold()),
-		}},
-		Include: []responses.ResponseIncludable{
-			reasoningEncryptedContent,
-		},
-		ParallelToolCalls: openai.Bool(true),
-	}
+	var input responses.ResponseNewParamsInputUnion
+
+	input.OfInputItemList = history
+
+	var params responses.ResponseNewParams
+
+	params.Input = input
+	params.Model = l.Model
+	params.Store = openai.Bool(false)
+	params.ContextManagement = []responses.ResponseNewParamsContextManagement{{
+		Type:             "compaction",
+		CompactThreshold: openai.Int(l.compactThreshold()),
+	}}
+	params.Include = []responses.ResponseIncludable{reasoningEncryptedContent}
+
+	params.ParallelToolCalls = openai.Bool(true)
 	if l.SystemPrompt != "" {
 		params.Instructions = openai.String(l.SystemPrompt)
 	}
 
 	if l.ReasoningEffort != "" {
-		params.Reasoning = shared.ReasoningParam{
-			Effort:  l.ReasoningEffort,
-			Summary: shared.ReasoningSummaryAuto,
-		}
+		var reasoning shared.ReasoningParam
+
+		reasoning.Effort = l.ReasoningEffort
+		reasoning.Summary = shared.ReasoningSummaryAuto
+		params.Reasoning = reasoning
 	}
 
 	if l.Verbosity != "" || l.ResponseFormat.GetType() != nil {
@@ -668,7 +679,8 @@ func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) re
 
 	if len(l.Tools) > 0 {
 		params.Tools = make([]responses.ToolUnionParam, 0, len(l.Tools))
-		for _, tool := range l.Tools {
+		for name := range l.Tools {
+			tool := l.Tools[name]
 			if tool.Hosted.GetType() != nil {
 				params.Tools = append(params.Tools, tool.Hosted)
 
@@ -680,7 +692,10 @@ func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) re
 				definition.Strict = openai.Bool(true)
 			}
 
-			params.Tools = append(params.Tools, responses.ToolUnionParam{OfFunction: &definition})
+			var toolParam responses.ToolUnionParam
+
+			toolParam.OfFunction = &definition
+			params.Tools = append(params.Tools, toolParam)
 		}
 	}
 
@@ -739,41 +754,44 @@ func (l *looper) dispatchToolCalls(
 		tool, ok := l.Tools[item.Name]
 		if !ok {
 			result := toolCallFailureResult(item.Name, errors.New("tool not found"))
-			l.emitToolDiagnostic(output, ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result.Output})
-			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, result), Result: result})
+			l.emitToolDiagnostic(output, toolResultDiagnostic(item.Name, result.Output))
+			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, result), Result: result, ReplayInput: nil})
 
 			continue
 		}
 
 		args := json.RawMessage(item.Arguments.OfString)
-		l.emitToolDiagnostic(output, ToolDiagnostic{Phase: toolDiagnosticPhaseCall, Name: item.Name, Arguments: args})
+		l.emitToolDiagnostic(output, toolCallDiagnostic(item.Name, args))
 
 		if doomLoop != nil && doomLoop.trapped(item.Name, args) {
 			result := fmt.Sprintf("tool call rejected: repeated identical %q call detected. Review the previous tool output and choose a different action instead of retrying the same input.", item.Name)
-			l.emitToolDiagnostic(output, ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
-			toolResult := textToolResult(result)
-			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), Result: toolResult})
+			l.emitToolDiagnostic(output, toolResultDiagnostic(item.Name, result))
+			toolResult := TextToolResult(result)
+			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
 
 			continue
 		}
 
-		if decision, denied, err := l.permissionDecision(item.Name, tool, args); err != nil {
+		if decision, denied, err := l.permissionDecision(item.Name, &tool, args); err != nil {
 			result := toolCallFailureResult(item.Name, fmt.Errorf("check permission: %w", err))
-			l.emitToolDiagnostic(output, ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result.Output})
-			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, result), Result: result})
+			l.emitToolDiagnostic(output, toolResultDiagnostic(item.Name, result.Output))
+			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, result), Result: result, ReplayInput: nil})
 
 			continue
 		} else if denied {
-			result := formatPermissionDenied(decision)
-			l.emitToolDiagnostic(output, ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
-			toolResult := textToolResult(result)
-			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), Result: toolResult})
+			result := formatPermissionDenied(&decision)
+			l.emitToolDiagnostic(output, toolResultDiagnostic(item.Name, result))
+			toolResult := TextToolResult(result)
+			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
 
 			continue
 		}
 
-		calls = append(calls, pendingToolCall{name: item.Name, callID: item.CallID, args: args, tool: tool, outputIndex: len(outputs)})
-		outputs = append(outputs, dispatchedToolOutput{})
+		calls = append(calls, pendingToolCall{name: item.Name, callID: item.CallID, args: args, tool: tool, outputIndex: len(outputs), subagentIndex: 0, subagentTotal: 0})
+
+		var outputItem dispatchedToolOutput
+
+		outputs = append(outputs, outputItem)
 	}
 
 	if len(outputs) == 0 {
@@ -805,7 +823,9 @@ func (l *looper) dispatchToolCalls(
 		group.SetLimit(l.ParallelToolCalls)
 	}
 
-	for _, call := range calls {
+	for i := range calls {
+		call := &calls[i]
+
 		group.Go(func() error {
 			var (
 				result      ToolResult
@@ -830,7 +850,7 @@ func (l *looper) dispatchToolCalls(
 				replayInput = nil
 			}
 
-			l.emitToolDiagnostic(output, ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: call.name, Result: attachmentOutputMessage(result)})
+			l.emitToolDiagnostic(output, toolResultDiagnostic(call.name, attachmentOutputMessage(result)))
 			outputs[call.outputIndex] = dispatchedToolOutput{Param: toolCallOutput(call.callID, result), Result: result, ReplayInput: replayInput}
 
 			return nil
@@ -845,23 +865,23 @@ func (l *looper) dispatchToolCalls(
 }
 
 func toolCallFailureResult(name string, err error) ToolResult {
-	return textToolResult(fmt.Sprintf("tool call failed: %s: %v. Choose a different action.", name, err))
+	return TextToolResult(fmt.Sprintf("tool call failed: %s: %v. Choose a different action.", name, err))
 }
 
-func (l *looper) emitToolDiagnostic(output chan<- ChatResponse, diagnostic ToolDiagnostic) {
+func (l *looper) emitToolDiagnostic(output chan<- ChatResponse, diagnostic *ToolDiagnostic) {
 	if !l.Diagnostics {
 		return
 	}
 
-	emitDiagnosticChatResponse(output, ChatResponse{Kind: ChatResponseAssistantTool, Tool: &diagnostic})
+	emitDiagnosticChatResponse(output, ChatResponse{Kind: ChatResponseAssistantTool, Tool: diagnostic})
 }
 
-func (l *looper) emitProviderDiagnostic(output chan<- ChatResponse, diagnostic ProviderDiagnostic) {
+func (l *looper) emitProviderDiagnostic(output chan<- ChatResponse, diagnostic *ProviderDiagnostic) {
 	if !l.Diagnostics {
 		return
 	}
 
-	emitDiagnosticChatResponse(output, ChatResponse{Kind: ChatResponseAssistantTool, Provider: &diagnostic})
+	emitDiagnosticChatResponse(output, ChatResponse{Kind: ChatResponseAssistantTool, Provider: diagnostic})
 }
 
 func (l *looper) emitHostedToolDiagnostics(output chan<- ChatResponse, items []responses.ResponseOutputItemUnion) {
@@ -875,24 +895,43 @@ func (l *looper) emitHostedToolDiagnostics(output chan<- ChatResponse, items []r
 			continue
 		}
 
-		l.emitToolDiagnostic(output, ToolDiagnostic{
-			Phase:  toolDiagnosticPhaseCall,
-			Name:   "websearch",
-			Status: item.Status,
-			Action: json.RawMessage(webSearchOutputActionJSON(item.Action)),
-		})
+		l.emitToolDiagnostic(output, toolHostedDiagnostic("websearch", item.Status, json.RawMessage(webSearchOutputActionJSON(&item.Action))))
 	}
 }
 
+func toolCallDiagnostic(name string, args json.RawMessage) *ToolDiagnostic {
+	diagnostic := &ToolDiagnostic{Phase: toolDiagnosticPhaseCall, Name: name, Arguments: args, Result: "", Status: "", Action: nil}
+
+	return diagnostic
+}
+
+func toolResultDiagnostic(name, result string) *ToolDiagnostic {
+	diagnostic := &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: name, Arguments: nil, Result: result, Status: "", Action: nil}
+
+	return diagnostic
+}
+
+func toolHostedDiagnostic(name, status string, action json.RawMessage) *ToolDiagnostic {
+	diagnostic := &ToolDiagnostic{Phase: toolDiagnosticPhaseCall, Name: name, Arguments: nil, Result: "", Status: status, Action: action}
+
+	return diagnostic
+}
+
 func toolCallOutput(callID string, result ToolResult) responses.ResponseInputItemFunctionCallOutputParam {
-	output := responses.ResponseInputItemFunctionCallOutputOutputUnionParam{}
+	var output responses.ResponseInputItemFunctionCallOutputOutputUnionParam
 	if len(result.Attachments) > 0 {
 		output.OfResponseFunctionCallOutputItemArray = functionCallOutputContent(result)
 	} else {
 		output.OfString = openai.String(result.Output)
 	}
 
-	return responses.ResponseInputItemFunctionCallOutputParam{CallID: callID, Output: output, Type: "function_call_output"}
+	var outputParam responses.ResponseInputItemFunctionCallOutputParam
+
+	outputParam.CallID = callID
+	outputParam.Output = output
+	outputParam.Type = "function_call_output"
+
+	return outputParam
 }
 
 func (d *doomLoopTrap) trapped(name string, args json.RawMessage) bool {
@@ -916,7 +955,7 @@ func (d *doomLoopTrap) trapped(name string, args json.RawMessage) bool {
 	return true
 }
 
-func (l *looper) permissionDecision(toolName string, tool looperTool, args json.RawMessage) (permissionDecision, bool, error) {
+func (l *looper) permissionDecision(toolName string, tool *looperTool, args json.RawMessage) (permissionDecision, bool, error) {
 	permission := tool.Permission
 	if permission == "" {
 		permission = toolName
@@ -934,7 +973,7 @@ func (l *looper) permissionDecision(toolName string, tool looperTool, args json.
 	}
 
 	if len(subjects) == 0 {
-		decision := permissionDecision{Action: permissionDeny, Permission: permission, Subject: ""}
+		decision := permissionDecision{Action: permissionDeny, Bucket: "", Rule: PermissionRule{Pattern: "", Action: ""}, Matched: false, Permission: permission, Subject: ""}
 		return decision, true, nil
 	}
 
@@ -945,10 +984,12 @@ func (l *looper) permissionDecision(toolName string, tool looperTool, args json.
 		}
 	}
 
-	return permissionDecision{}, false, nil
+	var decision permissionDecision
+
+	return decision, false, nil
 }
 
-func formatPermissionDenied(decision permissionDecision) string {
+func formatPermissionDenied(decision *permissionDecision) string {
 	if decision.Matched {
 		return fmt.Sprintf("tool call denied: permission %q rejected subject %q by rule %q => %s. Choose a different action.", decision.Permission, decision.Subject, decision.Rule.Pattern, decision.Rule.Action)
 	}
@@ -970,8 +1011,7 @@ func loadSession(entries iter.Seq2[SessionEntry, error]) ([]responses.ResponseIn
 
 		items, err := ReplayInputToParams(turn.ReplayInput)
 		if err != nil {
-			var replayErr *ReplayDecodeError
-			if errors.As(err, &replayErr) {
+			if replayErr, ok := errors.AsType[*ReplayDecodeError](err); ok {
 				replayErr.EntryIndex = entryNumber
 			}
 
@@ -985,7 +1025,7 @@ func loadSession(entries iter.Seq2[SessionEntry, error]) ([]responses.ResponseIn
 	return history, turns, nil
 }
 
-func responseOutputToReplayInput(item responses.ResponseOutputItemUnion) (responses.ResponseInputItemUnionParam, bool) {
+func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (responses.ResponseInputItemUnionParam, bool) {
 	switch item.Type {
 	case "message":
 		msg := item.AsMessage()
@@ -999,8 +1039,8 @@ func responseOutputToReplayInput(item responses.ResponseOutputItemUnion) (respon
 		}
 
 		assistant := responses.EasyInputMessageParam{
+			Content: easyInputStringContent(strings.Join(parts, "")),
 			Role:    responses.EasyInputMessageRole("assistant"),
-			Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(strings.Join(parts, ""))},
 			Type:    "message",
 		}
 		if msg.Phase != "" {
@@ -1016,45 +1056,53 @@ func responseOutputToReplayInput(item responses.ResponseOutputItemUnion) (respon
 			summary = reasoning.Summary[0].Text
 		}
 
-		return responses.ResponseInputItemUnionParam{OfReasoning: &responses.ResponseReasoningItemParam{
-			ID:               reasoning.ID,
-			Summary:          []responses.ResponseReasoningItemSummaryParam{{Text: summary}},
-			EncryptedContent: openai.String(reasoning.EncryptedContent),
-			Type:             "reasoning",
-		}}, true
+		return reasoningReplayInput(reasoning.ID, summary, reasoning.EncryptedContent), true
 	case "compaction":
-		return responses.ResponseInputItemUnionParam{OfCompaction: &responses.ResponseCompactionItemParam{
-			ID:               openai.String(item.ID),
-			EncryptedContent: item.EncryptedContent,
-			Type:             "compaction",
-		}}, true
+		return compactionReplayInput(item.ID, item.EncryptedContent), true
 	case "function_call":
-		return responses.ResponseInputItemUnionParam{OfFunctionCall: &responses.ResponseFunctionToolCallParam{
-			Arguments: item.Arguments.OfString,
-			CallID:    item.CallID,
-			Name:      item.Name,
-			ID:        openai.String(item.ID),
-			Type:      "function_call",
-		}}, true
+		return functionCallReplayInput(item.ID, item.CallID, item.Name, item.Arguments.OfString), true
 	case "web_search_call":
-		action, ok := webSearchOutputActionParam(item.Action)
+		action, ok := webSearchOutputActionParam(&item.Action)
 		if !ok {
-			return responses.ResponseInputItemUnionParam{}, false
+			return emptyResponseInputItem(), false
 		}
 
-		wrappedParam := responses.ResponseFunctionWebSearchParam{
-			ID:     item.ID,
-			Action: action,
-			Status: responses.ResponseFunctionWebSearchStatus(item.Status),
-		}
-
-		return responses.ResponseInputItemUnionParam{OfWebSearchCall: &wrappedParam}, true
+		return webSearchReplayInput(item.ID, item.Status, action), true
 	default:
-		return responses.ResponseInputItemUnionParam{}, false
+		return emptyResponseInputItem(), false
 	}
 }
 
-func webSearchOutputActionParam(action responses.ResponseOutputItemUnionAction) (responses.ResponseFunctionWebSearchActionUnionParam, bool) {
+func emptyResponseInputItem() responses.ResponseInputItemUnionParam {
+	return responses.ResponseInputItemUnionParam{}
+}
+
+func functionCallOutputInputItem(output *responses.ResponseInputItemFunctionCallOutputParam) responses.ResponseInputItemUnionParam {
+	return responses.ResponseInputItemUnionParam{OfFunctionCallOutput: output}
+}
+
+func reasoningReplayInput(id, summary, encryptedContent string) responses.ResponseInputItemUnionParam {
+	return responses.ResponseInputItemUnionParam{OfReasoning: &responses.ResponseReasoningItemParam{
+		ID:               id,
+		Summary:          []responses.ResponseReasoningItemSummaryParam{{Text: summary}},
+		EncryptedContent: openai.String(encryptedContent),
+		Type:             "reasoning",
+	}}
+}
+
+func compactionReplayInput(id, encryptedContent string) responses.ResponseInputItemUnionParam {
+	return responses.ResponseInputItemUnionParam{OfCompaction: &responses.ResponseCompactionItemParam{ID: openai.String(id), EncryptedContent: encryptedContent, Type: "compaction"}}
+}
+
+func functionCallReplayInput(id, callID, name, arguments string) responses.ResponseInputItemUnionParam {
+	return responses.ResponseInputItemUnionParam{OfFunctionCall: &responses.ResponseFunctionToolCallParam{Arguments: arguments, CallID: callID, Name: name, ID: openai.String(id), Type: "function_call"}}
+}
+
+func webSearchReplayInput(id, status string, action responses.ResponseFunctionWebSearchActionUnionParam) responses.ResponseInputItemUnionParam {
+	return responses.ResponseInputItemUnionParam{OfWebSearchCall: &responses.ResponseFunctionWebSearchParam{ID: id, Action: action, Status: responses.ResponseFunctionWebSearchStatus(status)}}
+}
+
+func webSearchOutputActionParam(action *responses.ResponseOutputItemUnionAction) (responses.ResponseFunctionWebSearchActionUnionParam, bool) {
 	switch action.Type {
 	case "search":
 		return responses.ResponseFunctionWebSearchActionUnionParam{OfSearch: &responses.ResponseFunctionWebSearchActionSearchParam{Query: action.Query, Queries: action.Queries}}, true
@@ -1067,7 +1115,7 @@ func webSearchOutputActionParam(action responses.ResponseOutputItemUnionAction) 
 	}
 }
 
-func webSearchOutputActionJSON(action responses.ResponseOutputItemUnionAction) string {
+func webSearchOutputActionJSON(action *responses.ResponseOutputItemUnionAction) string {
 	value := map[string]any{"type": action.Type}
 	switch action.Type {
 	case "search":

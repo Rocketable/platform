@@ -1,4 +1,3 @@
-//nolint:exhaustive,exhaustruct,wrapcheck // Permission parsing is intentionally small while the permission system is in progress.
 package rocketcode
 
 import (
@@ -59,7 +58,7 @@ var wildcardMeta = regexp.MustCompile(`[.+^${}()|[\]\\]`)
 
 func parsePermissionNode(node *yaml.Node) (PermissionSet, error) {
 	if node == nil || node.Kind == 0 {
-		return PermissionSet{}, nil
+		return PermissionSet{Buckets: nil}, nil
 	}
 
 	switch node.Kind {
@@ -68,7 +67,7 @@ func parsePermissionNode(node *yaml.Node) (PermissionSet, error) {
 			return PermissionSet{}, err
 		}
 
-		return PermissionSet{}, nil
+		return PermissionSet{Buckets: nil}, nil
 	case yaml.MappingNode:
 		buckets := []PermissionBucket{}
 
@@ -93,6 +92,8 @@ func parsePermissionNode(node *yaml.Node) (PermissionSet, error) {
 		}
 
 		return PermissionSet{Buckets: buckets}, nil
+	case yaml.DocumentNode, yaml.SequenceNode, yaml.AliasNode:
+		return PermissionSet{}, errors.New("permission must be a scalar or mapping")
 	default:
 		return PermissionSet{}, errors.New("permission must be a scalar or mapping")
 	}
@@ -120,6 +121,8 @@ func parsePermissionRules(node *yaml.Node) ([]PermissionRule, error) {
 		}
 
 		return rules, nil
+	case yaml.DocumentNode, yaml.SequenceNode, yaml.AliasNode:
+		return nil, errors.New("permission rule must be a scalar or mapping")
 	default:
 		return nil, errors.New("permission rule must be a scalar or mapping")
 	}
@@ -178,7 +181,12 @@ func expandPermissionPattern(pattern string) string {
 }
 
 func osUserHomeDir() (string, error) {
-	return os.UserHomeDir()
+	dir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("get user home dir: %w", err)
+	}
+
+	return dir, nil
 }
 
 // Allow appends an allow rule for permission and pattern.
@@ -238,7 +246,7 @@ func (ps PermissionSet) evaluate(permission, subject string) permissionDecision 
 }
 
 func (ps PermissionSet) evaluateRules(permission, subject string) permissionDecision {
-	decision := permissionDecision{Action: permissionDeny, Permission: permission, Subject: subject}
+	decision := permissionDecision{Action: permissionDeny, Bucket: "", Rule: PermissionRule{Pattern: "", Action: ""}, Matched: false, Permission: permission, Subject: subject}
 
 	for _, bucket := range ps.Buckets {
 		if bucket.Name != permission {

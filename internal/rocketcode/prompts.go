@@ -46,7 +46,7 @@ func newPromptExpansionEnvironment(root *os.Root, shellOutput shellOutputConfig,
 	return promptExpansionEnvironment{root: root, hostDir: hostDir, shellOutput: shellOutput, env: slices.Clone(env)}, nil
 }
 
-func (e promptExpansionEnvironment) expandShellCommands(ctx context.Context, prompt string) string { //nolint:gocritic // Value receiver matches other immutable runtime environment usage.
+func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, prompt string) string {
 	return expandPromptShellCommands(prompt, func(command string) string {
 		if err := e.shellOutput.ensureTempDir(e.root); err != nil {
 			return ""
@@ -94,7 +94,7 @@ func expandPromptShellCommands(prompt string, run func(string) string) string {
 	return output.String()
 }
 
-func expandAgentPrompt(ctx context.Context, agent *Agent, enabled bool, env promptExpansionEnvironment) { //nolint:gocritic // The environment is immutable and shared by value with tool factories.
+func expandAgentPrompt(ctx context.Context, agent *Agent, enabled bool, env *promptExpansionEnvironment) {
 	if agent == nil {
 		return
 	}

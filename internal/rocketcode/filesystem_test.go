@@ -145,7 +145,7 @@ func runGoApplyPatch(t *testing.T, dir, patchText string) oracleResult {
 	defer func() { require.NoError(t, root.Close()) }()
 
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
-	preview, previewMessage := sfs.previewApplyPatch(patchText)
+	preview, previewMessage := previewApplyPatch(sfs, patchText)
 	output := sfs.ApplyPatch(patchText)
 
 	result := oracleResult{OK: false, Output: "", Error: "", Diff: "", Files: nil, Tree: snapshotTree(t, dir)}
@@ -226,7 +226,7 @@ func TestTSandboxedFileSystem(t *testing.T) {
 	}
 
 	{
-		file := sfs.Read("small.txt", 1)
+		file := sfs.ReadResult("small.txt", 1).Output
 		require.Contains(t, file, "<path>small.txt</path>")
 		require.Contains(t, file, "<type>file</type>")
 		require.Contains(t, file, "1: hello world")
@@ -235,7 +235,7 @@ func TestTSandboxedFileSystem(t *testing.T) {
 
 	{
 		path := filepath.Join(root.Name(), "small.txt")
-		file := sfs.Read(path, 1)
+		file := sfs.ReadResult(path, 1).Output
 		require.Contains(t, file, "<path>"+path+"</path>")
 		require.Contains(t, file, "1: hello world")
 		require.Equal(t, "small.txt", sfs.readPermissionSubject(path))
@@ -243,19 +243,19 @@ func TestTSandboxedFileSystem(t *testing.T) {
 
 	{
 		path := filepath.Join(t.TempDir(), "outside.txt")
-		file := sfs.Read(path, 1)
+		file := sfs.ReadResult(path, 1).Output
 		require.Equal(t, "path escapes root: "+path, file)
 	}
 
 	{
-		file := sfs.Read("offset.txt", 2)
+		file := sfs.ReadResult("offset.txt", 2).Output
 		require.Contains(t, file, "2: line2")
 		require.Contains(t, file, "3: line3")
 		require.Contains(t, file, "(End of file - total 3 lines)")
 	}
 
 	{
-		file := sfs.Read("many-lines.txt", 1)
+		file := sfs.ReadResult("many-lines.txt", 1).Output
 		require.Contains(t, file, "1: line1")
 		require.Contains(t, file, "2000: line2000")
 		require.Contains(t, file, "(Showing lines 1-2000 of 2100. Use offset=2001 to continue.)")
@@ -263,27 +263,27 @@ func TestTSandboxedFileSystem(t *testing.T) {
 	}
 
 	{
-		file := sfs.Read("offset.txt", 4)
+		file := sfs.ReadResult("offset.txt", 4).Output
 		require.Equal(t, "Offset 4 is out of range for this file (3 lines)", file)
 	}
 
 	{
-		file := sfs.Read("file_b.txt", 30)
+		file := sfs.ReadResult("file_b.txt", 30).Output
 		require.Equal(t, "File not found: file_b.txt", file)
 	}
 
 	{
-		file := sfs.Read(".env", 1)
+		file := sfs.ReadResult(".env", 1).Output
 		require.Equal(t, deniedEnvAccessMessage(".env"), file)
 	}
 
 	{
-		file := sfs.Read(".env.example", 1)
+		file := sfs.ReadResult(".env.example", 1).Output
 		require.Contains(t, file, "1: SECRET=example")
 	}
 
 	{
-		file := sfs.Read("safe-env-link.txt", 1)
+		file := sfs.ReadResult("safe-env-link.txt", 1).Output
 		require.Equal(t, "symlink access denied: safe-env-link.txt", file)
 	}
 

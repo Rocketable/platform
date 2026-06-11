@@ -1,4 +1,3 @@
-//nolint:exhaustruct // Test fixtures intentionally use sparse app literals.
 package rocketcode
 
 import (
@@ -164,7 +163,7 @@ func TestSkillDescriptions(t *testing.T) {
 	}, Dirs: nil, fsys: nil}
 
 	t.Run("tool description lists explicitly allowed skills", func(t *testing.T) {
-		factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, promptExpansion: testPromptExpansionEnvironment(t), agent: agentWithSkillPermission(permissionAllow), agents: Agents{Items: nil}, skills: skills, baseTools: nil}
+		factory := testSkillFactory(t, skills, agentWithSkillPermission(permissionAllow))
 
 		description := factory.skillDescription()
 
@@ -175,10 +174,10 @@ func TestSkillDescriptions(t *testing.T) {
 	})
 
 	t.Run("tool description filters denied skills", func(t *testing.T) {
-		factory := &toolFactory{promptExpansion: testPromptExpansionEnvironment(t), skills: skills, agent: agentWithSkillRules(
+		factory := testSkillFactory(t, skills, agentWithSkillRules(
 			PermissionRule{Pattern: "*", Action: permissionDeny},
 			PermissionRule{Pattern: "docs-helper", Action: permissionAllow},
-		)}
+		))
 
 		description := factory.skillDescription()
 
@@ -200,7 +199,7 @@ func TestSkillDescriptions(t *testing.T) {
 
 func TestPermissionPrompt(t *testing.T) {
 	t.Run("renders full bash allow", func(t *testing.T) {
-		prompt := composeSystemPromptWithSkills("base prompt", Skills{}, &Agent{Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}})
+		prompt := composeSystemPromptWithSkills("base prompt", emptySkills(), testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}))
 
 		require.Contains(t, prompt, "## Allowed Bash Permissions\n\n- Everything is allowed.")
 		require.Contains(t, prompt, "## Permission Wildcard Rules")
@@ -208,30 +207,30 @@ func TestPermissionPrompt(t *testing.T) {
 	})
 
 	t.Run("renders explicit allow list for each bucket", func(t *testing.T) {
-		prompt := composeSystemPromptWithSkills("base prompt", Skills{}, &Agent{Permission: PermissionSet{Buckets: []PermissionBucket{
+		prompt := composeSystemPromptWithSkills("base prompt", emptySkills(), testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{
 			{Name: "read", Rules: []PermissionRule{{Pattern: "README.md", Action: permissionAllow}}},
 			{Name: "bash", Rules: []PermissionRule{{Pattern: "git status", Action: permissionAllow}, {Pattern: "git diff *", Action: permissionAllow}}},
-		}}})
+		}}))
 
 		require.Contains(t, prompt, "## Allowed Read Permissions\n\n- `README.md`")
 		require.Contains(t, prompt, "## Allowed Bash Permissions\n\n- `git status`\n- `git diff *`")
 	})
 
 	t.Run("renders full bash allow with deny exceptions", func(t *testing.T) {
-		prompt := composeSystemPromptWithSkills("base prompt", Skills{}, &Agent{Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}, {Pattern: "rm *", Action: permissionDeny}, {Pattern: "sudo *", Action: permissionDeny}}}}}})
+		prompt := composeSystemPromptWithSkills("base prompt", emptySkills(), testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}, {Pattern: "rm *", Action: permissionDeny}, {Pattern: "sudo *", Action: permissionDeny}}}}}))
 
 		require.Contains(t, prompt, "- All commands are allowed except:\n- `rm *`\n- `sudo *`")
 	})
 
 	t.Run("omits block without effective bash allow", func(t *testing.T) {
-		prompt := composeSystemPromptWithSkills("base prompt", Skills{}, &Agent{Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "*", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}})
+		prompt := composeSystemPromptWithSkills("base prompt", emptySkills(), testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "*", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}))
 
 		require.NotContains(t, prompt, "## Allowed Bash Permissions")
 		require.NotContains(t, prompt, "## Permission Wildcard Rules")
 	})
 
 	t.Run("renders non bash full allow with exceptions", func(t *testing.T) {
-		prompt := composeSystemPromptWithSkills("base prompt", Skills{}, &Agent{Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "webfetch", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}, {Pattern: "https://private.example/*", Action: permissionDeny}}}}}})
+		prompt := composeSystemPromptWithSkills("base prompt", emptySkills(), testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "webfetch", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}, {Pattern: "https://private.example/*", Action: permissionDeny}}}}}))
 
 		require.Contains(t, prompt, "## Allowed Webfetch Permissions")
 		require.Contains(t, prompt, "- Everything is allowed except:\n- `https://private.example/*`")
@@ -245,23 +244,23 @@ func TestFindSkillsTool(t *testing.T) {
 	}, Dirs: nil, fsys: nil}
 
 	t.Run("finds explicitly allowed skills not presented in system prompt", func(t *testing.T) {
-		factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, promptExpansion: testPromptExpansionEnvironment(t), agent: agentWithSkillPermission(permissionAllow), agents: Agents{Items: nil}, skills: skills, baseTools: nil}
+		factory := testSkillFactory(t, skills, agentWithSkillPermission(permissionAllow))
 		tool := factory.findSkillsTool()
 
-		got, err := tool.Call(context.Background(), json.RawMessage(`{"query":"git"}`), nil, toolCallMetadata{})
+		got, err := tool.Call(context.Background(), json.RawMessage(`{"query":"git"}`), nil, emptyToolCallMetadata())
 
 		require.NoError(t, err)
 		require.Contains(t, got.Output, "- **git-review**: Review git changes")
 	})
 
 	t.Run("excludes permission denied skills", func(t *testing.T) {
-		factory := &toolFactory{promptExpansion: testPromptExpansionEnvironment(t), skills: skills, agent: agentWithSkillRules(
+		factory := testSkillFactory(t, skills, agentWithSkillRules(
 			PermissionRule{Pattern: "*", Action: permissionDeny},
 			PermissionRule{Pattern: "docs-helper", Action: permissionAllow},
-		)}
+		))
 		tool := factory.findSkillsTool()
 
-		got, err := tool.Call(context.Background(), json.RawMessage(`{"query":"git"}`), nil, toolCallMetadata{})
+		got, err := tool.Call(context.Background(), json.RawMessage(`{"query":"git"}`), nil, emptyToolCallMetadata())
 
 		require.NoError(t, err)
 		require.Equal(t, "No matching skills found.", got.Output)
@@ -274,7 +273,7 @@ func TestFindSkillsToolVisibilityFollowsSkillPermission(t *testing.T) {
 	}, Dirs: nil, fsys: nil}
 
 	t.Run("hidden when all skills are denied", func(t *testing.T) {
-		factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, promptExpansion: testPromptExpansionEnvironment(t), agent: nil, agents: Agents{Items: nil}, skills: skills, baseTools: nil}
+		factory := testSkillFactory(t, skills, nil)
 		agent := agentWithSkillRules(PermissionRule{Pattern: "*", Action: permissionDeny})
 
 		tools := factory.toolsFor(agent)
@@ -283,7 +282,7 @@ func TestFindSkillsToolVisibilityFollowsSkillPermission(t *testing.T) {
 	})
 
 	t.Run("visible when any skill is allowed", func(t *testing.T) {
-		factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, promptExpansion: testPromptExpansionEnvironment(t), agent: nil, agents: Agents{Items: nil}, skills: skills, baseTools: nil}
+		factory := testSkillFactory(t, skills, nil)
 		agent := agentWithSkillRules(
 			PermissionRule{Pattern: "*", Action: permissionDeny},
 			PermissionRule{Pattern: "docs-helper", Action: permissionAllow},
@@ -384,8 +383,8 @@ metadata:
 	loaded := LoadSkills(os.DirFS(root), root).Skills
 
 	t.Run("renders skill content with sampled file list", func(t *testing.T) {
-		factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, promptExpansion: testPromptExpansionEnvironment(t), agent: nil, agents: Agents{Items: nil}, skills: loaded, baseTools: nil}
-		result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"git-release"}`), nil, toolCallMetadata{})
+		factory := testSkillFactory(t, loaded, nil)
+		result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"git-release"}`), nil, emptyToolCallMetadata())
 		require.NoError(t, err)
 
 		got := result.Output
@@ -406,8 +405,9 @@ metadata:
 	})
 
 	t.Run("experimental stronger skills returns a short tool result and developer replay input", func(t *testing.T) {
-		factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, experimentalStrongerSkills: true, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, promptExpansion: testPromptExpansionEnvironment(t), agent: nil, agents: Agents{Items: nil}, skills: loaded, baseTools: nil}
-		result, replayInput, err := factory.skillTool().CallReplay(context.Background(), json.RawMessage(`{"name":"git-release"}`), nil, toolCallMetadata{})
+		factory := testSkillFactory(t, loaded, nil)
+		factory.experimentalStrongerSkills = true
+		result, replayInput, err := factory.skillTool().CallReplay(context.Background(), json.RawMessage(`{"name":"git-release"}`), nil, emptyToolCallMetadata())
 		require.NoError(t, err)
 
 		require.Equal(t, "skill git-release loaded", result.Output)
@@ -422,8 +422,8 @@ metadata:
 	})
 
 	t.Run("returns an error for unknown skills", func(t *testing.T) {
-		factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, promptExpansion: testPromptExpansionEnvironment(t), agent: nil, agents: Agents{Items: nil}, skills: loaded, baseTools: nil}
-		_, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"missing-skill"}`), nil, toolCallMetadata{})
+		factory := testSkillFactory(t, loaded, nil)
+		_, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"missing-skill"}`), nil, emptyToolCallMetadata())
 		require.EqualError(t, err, `skill "missing-skill" not found. Available skills: git-release`)
 	})
 }
@@ -441,8 +441,8 @@ Use for docs.
 		"docs-helper/reference/link.md":  {Data: []byte("guide.md"), Mode: fs.ModeSymlink, ModTime: time.Time{}, Sys: nil},
 	}, "/virtual/skills").Skills
 
-	factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, promptExpansion: testPromptExpansionEnvironment(t), agent: nil, agents: Agents{Items: nil}, skills: loaded, baseTools: nil}
-	result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"docs-helper"}`), nil, toolCallMetadata{})
+	factory := testSkillFactory(t, loaded, nil)
+	result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"docs-helper"}`), nil, emptyToolCallMetadata())
 	require.NoError(t, err)
 
 	got := result.Output
@@ -451,10 +451,10 @@ Use for docs.
 }
 
 func TestSkillsRenderRequiresLoadedFS(t *testing.T) {
-	skills := Skills{Root: "/virtual/skills", Items: map[string]Skill{"docs-helper": {Name: "docs-helper", Description: "Write docs", Location: "docs-helper/SKILL.md", Content: "Use for docs.", Metadata: nil}}, Dirs: []string{"docs-helper"}, fsys: nil}
-	factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, promptExpansion: testPromptExpansionEnvironment(t), agent: nil, agents: Agents{Items: nil}, skills: skills, baseTools: nil}
+	skills := Skills{Root: "/virtual/skills", Items: map[string]Skill{"docs-helper": {Name: "docs-helper", Description: "Write docs", License: "", Compatibility: "", Metadata: nil, Location: "docs-helper/SKILL.md", Content: "Use for docs."}}, Dirs: []string{"docs-helper"}, fsys: nil}
+	factory := testSkillFactory(t, skills, nil)
 
-	_, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"docs-helper"}`), nil, toolCallMetadata{})
+	_, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"docs-helper"}`), nil, emptyToolCallMetadata())
 
 	require.EqualError(t, err, "skills filesystem is not available")
 }
@@ -479,8 +479,8 @@ Generated: !`+"`"+`cat MEMORY.md`+"`"+`
 	require.Contains(t, loaded.Items["dynamic-skill"].Content, "!`cat MEMORY.md`")
 
 	t.Run("leaves shell commands literal by default", func(t *testing.T) {
-		factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false}, promptExpansion: testPromptExpansionEnvironment(t), agent: nil, agents: Agents{Items: nil}, skills: loaded, baseTools: nil}
-		result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill"}`), nil, toolCallMetadata{})
+		factory := testSkillFactory(t, loaded, nil)
+		result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill"}`), nil, emptyToolCallMetadata())
 
 		require.NoError(t, err)
 
@@ -492,10 +492,12 @@ Generated: !`+"`"+`cat MEMORY.md`+"`"+`
 		env, err := newPromptExpansionEnvironment(root, testPromptShellOutputConfig(t, root, dir), nil)
 		require.NoError(t, err)
 
-		factory := &toolFactory{client: nil, systemPrompt: "", model: "", reasoningEffort: "", compactThreshold: 0, compactionSteering: "", diagnostics: false, expandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: true}, promptExpansion: env, agent: nil, agents: Agents{Items: nil}, skills: loaded, baseTools: nil}
+		factory := testSkillFactory(t, loaded, nil)
+		factory.expandPromptShellCommands = PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: true, InputPrompts: false}
+		factory.promptExpansion = env
 		tool := factory.skillTool()
 
-		got, err := tool.Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill"}`), nil, toolCallMetadata{})
+		got, err := tool.Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill"}`), nil, emptyToolCallMetadata())
 
 		require.NoError(t, err)
 		require.Contains(t, got.Output, "Generated: dynamic-output")
@@ -508,7 +510,24 @@ func agentWithSkillPermission(action PermissionAction) *Agent {
 }
 
 func agentWithSkillRules(rules ...PermissionRule) *Agent {
-	return &Agent{Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "skill", Rules: rules}}}}
+	return testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "skill", Rules: rules}}})
+}
+
+func emptySkills() Skills {
+	return Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}
+}
+
+func testSkillFactory(t *testing.T, skills Skills, agent *Agent) *toolFactory {
+	t.Helper()
+
+	var factory toolFactory
+
+	factory.promptExpansion = testPromptExpansionEnvironment(t)
+	factory.agent = agent
+	factory.agents = Agents{Items: nil}
+	factory.skills = skills
+
+	return &factory
 }
 
 type failingFS struct{}

@@ -4,32 +4,25 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"iter"
-	"mime"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/Rocketable/platform/internal/rocketcode"
 	openai "github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/shared"
 	"golang.org/x/sync/errgroup"
 	_ "modernc.org/sqlite"
 )
 
 const defaultAgent = "main"
-const maxAttachmentBytes = 5 * 1024 * 1024
 
 func main() {
 	if err := run(); err != nil {
@@ -39,9 +32,9 @@ func main() {
 }
 
 func run() error {
-	config, err := configFromEnv()
+	config, err := rocketcode.StandaloneConfigFromEnv()
 	if err != nil {
-		return err
+		return rocketcode.OperationError{Operation: rocketcode.OperationLoadConfig, Err: err}
 	}
 
 	cwd, err := os.Getwd()
@@ -62,25 +55,11 @@ func run() error {
 
 	config.ShellOutputDir = filepath.Join(cwd, config.ShellOutputDir)
 
-	agentsRoot, agentsFS, err := fsFromRoot(root, "agents")
+	agents, skills, cleanupDefinitions, err := rocketcode.LoadWorkspaceDefinitions(root)
 	if err != nil {
-		return err
+		return rocketcode.OperationError{Operation: rocketcode.OperationLoadWorkspaceDefinitions, Err: err}
 	}
-
-	if agentsRoot != nil {
-		defer func() { _ = agentsRoot.Close() }()
-	}
-
-	skillsRoot, skillsFS, err := fsFromRoot(root, "skills")
-	if err != nil {
-		return err
-	}
-
-	if skillsRoot != nil {
-		defer func() { _ = skillsRoot.Close() }()
-	}
-
-	agents, skills := loadParsedAgentsAndSkills(agentsFS, skillsFS, skillsRootName(skillsRoot))
+	defer cleanupDefinitions()
 
 	session, err := openSession(root, cwd)
 	if err != nil {
@@ -101,7 +80,7 @@ func run() error {
 
 	client := openai.NewClient()
 
-	looper, err := rocketcode.New(&client, config, root, agents, skills, defaultAgent, os.Stdout)
+	looper, err := rocketcode.New(&client, &config, root, agents, skills, defaultAgent, os.Stdout)
 	if err != nil {
 		return fmt.Errorf("initialize rocketcode: %w", err)
 	}
@@ -115,162 +94,6 @@ func run() error {
 	}
 
 	return nil
-}
-
-func loadParsedAgentsAndSkills(agentsFS, skillsFS fs.FS, skillsRoot string) (rocketcode.Agents, rocketcode.Skills) {
-	agentResult := rocketcode.LoadAgents(agentsFS)
-	skillResult := rocketcode.LoadSkills(skillsFS, skillsRoot)
-
-	return agentResult.Agents, skillResult.Skills
-}
-
-func configFromEnv() (rocketcode.Config, error) {
-	config := defaultConfig()
-
-	if value := os.Getenv("ROCKETCODE_MODEL"); value != "" {
-		config.Model = value
-	}
-
-	if value := os.Getenv("ROCKETCODE_REASONING_EFFORT"); value != "" {
-		config.ReasoningEffort = shared.ReasoningEffort(value)
-	}
-
-	config.Diagnostics = os.Getenv("ROCKETCODE_DIAG") != ""
-	config.ExperimentalStrongerSkills = os.Getenv("ROCKETCODE_EXPERIMENTAL_STRONGER_SKILLS") != ""
-
-	expansion := strings.TrimSpace(os.Getenv("ROCKETCODE_EXPAND_PROMPT_SHELL_COMMANDS"))
-	switch {
-	case expansion == "" || expansion == "0" || strings.EqualFold(expansion, "false"):
-		config.ExpandPromptShellCommands = rocketcode.PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}
-	case expansion == "1" || strings.EqualFold(expansion, "true"):
-		config.ExpandPromptShellCommands = rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}
-	default:
-		config.ExpandPromptShellCommands = rocketcode.PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}
-
-		for part := range strings.SplitSeq(expansion, ",") {
-			token := strings.ToLower(strings.TrimSpace(part))
-			switch token {
-			case "":
-				continue
-			case "all":
-				config.ExpandPromptShellCommands.PrimaryPrompts = true
-				config.ExpandPromptShellCommands.SubagentPrompts = true
-				config.ExpandPromptShellCommands.SkillPrompts = true
-			case "primary":
-				config.ExpandPromptShellCommands.PrimaryPrompts = true
-			case "subagent":
-				config.ExpandPromptShellCommands.SubagentPrompts = true
-			case "skill":
-				config.ExpandPromptShellCommands.SkillPrompts = true
-			case "input":
-				config.ExpandPromptShellCommands.InputPrompts = true
-			default:
-				return rocketcode.Config{}, fmt.Errorf("ROCKETCODE_EXPAND_PROMPT_SHELL_COMMANDS contains unknown value %q: expected primary, subagent, skill, input, or all", token)
-			}
-		}
-	}
-
-	if value := os.Getenv("ROCKETCODE_COMPACT_THRESHOLD"); value != "" {
-		threshold, err := strconv.ParseInt(value, 10, 64)
-		if err != nil || threshold <= 0 {
-			return rocketcode.Config{}, errors.New("ROCKETCODE_COMPACT_THRESHOLD must be a positive integer")
-		}
-
-		config.CompactThreshold = threshold
-	}
-
-	config.CompactionSteering = os.Getenv("ROCKETCODE_COMPACTION_STEERING")
-
-	return config, nil
-}
-func defaultConfig() rocketcode.Config {
-	return rocketcode.Config{
-		Model:                      openai.ChatModelGPT5_4,
-		ReasoningEffort:            shared.ReasoningEffort("high"),
-		Diagnostics:                false,
-		ExperimentalStrongerSkills: false,
-		ExpandPromptShellCommands:  rocketcode.PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false},
-		CompactThreshold:           200000,
-		CompactionSteering:         "",
-		ParallelToolCalls:          0,
-		ShellOutputDir:             filepath.Join(".tmp", "shell-outputs"),
-		SandboxedBash:              false,
-		InterAgentFilter:           rocketcode.InterAgentFilterConfig{Prompt: "", Model: "", ReasoningEffort: "", Verbosity: "", Permission: rocketcode.PermissionSet{Buckets: nil}},
-		ShellEnv:                   nil,
-		CustomTools: []rocketcode.Tool{{
-			Name:               "current_time",
-			Permission:         "",
-			VisibilitySubjects: nil,
-			Subjects:           nil,
-			Description:        "Tell the current time anywhere in the world.",
-			Parameters: map[string]any{
-				"type":                 "object",
-				"properties":           map[string]any{},
-				"required":             []string{},
-				"additionalProperties": false,
-			},
-			Call: func(context.Context, json.RawMessage, chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
-				return rocketcode.TextToolResult(time.Now().String()), nil
-			},
-		}},
-	}
-}
-
-func fsFromRoot(root *os.Root, name string) (*os.Root, fs.FS, error) {
-	child, err := root.OpenRoot(name)
-	if err == nil {
-		fsys := child.FS()
-
-		return child, fsys, nil
-	}
-
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, emptyFS{}, nil
-	}
-
-	return nil, nil, fmt.Errorf("open %s root: %w", name, err)
-}
-
-type emptyFS struct{}
-
-func (emptyFS) Open(name string) (fs.File, error) {
-	if name == "." {
-		return emptyDir{}, nil
-	}
-
-	return nil, fs.ErrNotExist
-}
-
-type emptyDir struct{}
-
-func (emptyDir) Close() error { return nil }
-
-func (emptyDir) Read([]byte) (int, error) { return 0, io.EOF }
-
-func (emptyDir) Stat() (fs.FileInfo, error) { return emptyDirInfo{}, nil }
-
-func (emptyDir) ReadDir(int) ([]fs.DirEntry, error) { return nil, nil }
-
-type emptyDirInfo struct{}
-
-func (emptyDirInfo) Name() string { return "." }
-
-func (emptyDirInfo) Size() int64 { return 0 }
-
-func (emptyDirInfo) Mode() fs.FileMode { return fs.ModeDir | 0o755 }
-
-func (emptyDirInfo) ModTime() time.Time { return time.Time{} }
-
-func (emptyDirInfo) IsDir() bool { return true }
-
-func (emptyDirInfo) Sys() any { return nil }
-
-func skillsRootName(root *os.Root) string {
-	if root == nil {
-		return ""
-	}
-
-	return root.Name()
 }
 
 type sessionStore struct {
@@ -418,92 +241,6 @@ func sqliteSessionOut(db *sql.DB) func(rocketcode.SessionEntry) error {
 	}
 }
 
-func promptAttachments(root *os.Root, cwd string, files []string) ([]rocketcode.Attachment, error) {
-	attachments := make([]rocketcode.Attachment, 0, len(files))
-	for _, file := range files {
-		name := file
-		if !filepath.IsAbs(name) {
-			name = filepath.Join(cwd, name)
-		}
-
-		abs, err := filepath.Abs(name)
-		if err != nil {
-			return nil, fmt.Errorf("resolve attachment %q: %w", file, err)
-		}
-
-		rel, err := filepath.Rel(cwd, abs)
-		if err != nil || !filepath.IsLocal(rel) {
-			return nil, fmt.Errorf("attachment %q is outside the workspace", file)
-		}
-
-		data, err := root.ReadFile(rel)
-		if err != nil {
-			return nil, fmt.Errorf("read attachment %q: %w", file, err)
-		}
-
-		mimeType := sniffAttachmentMIME(data, rel)
-
-		attachment, err := attachmentFromBytes(filepath.Base(rel), mimeType, data)
-		if err != nil {
-			return nil, fmt.Errorf("attach %q: %w", file, err)
-		}
-
-		attachments = append(attachments, attachment)
-	}
-
-	return attachments, nil
-}
-
-func attachmentFromBytes(filename, mimeType string, data []byte) (rocketcode.Attachment, error) {
-	if len(data) > maxAttachmentBytes {
-		return rocketcode.Attachment{}, errors.New("attachment too large (exceeds 5MB limit)")
-	}
-
-	mimeType = normalizeMIME(mimeType)
-	if !isSupportedAttachmentMIME(mimeType) {
-		return rocketcode.Attachment{}, fmt.Errorf("unsupported attachment MIME type: %s", mimeType)
-	}
-
-	return rocketcode.Attachment{
-		MIME:     mimeType,
-		Filename: filename,
-		URL:      "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data),
-	}, nil
-}
-
-func sniffAttachmentMIME(data []byte, filename string) string {
-	mimeType := normalizeMIME(http.DetectContentType(data))
-	if isSupportedAttachmentMIME(mimeType) {
-		return mimeType
-	}
-
-	return mimeFromFilename(filename)
-}
-
-func normalizeMIME(mimeType string) string {
-	mediaType, _, err := mime.ParseMediaType(mimeType)
-	if err == nil {
-		mimeType = mediaType
-	}
-
-	return strings.ToLower(strings.TrimSpace(mimeType))
-}
-
-func isSupportedAttachmentMIME(mimeType string) bool {
-	mimeType = normalizeMIME(mimeType)
-	return mimeType == "application/pdf" || strings.HasPrefix(mimeType, "image/") && mimeType != "image/svg+xml" && mimeType != "image/vnd.fastbidsheet"
-}
-
-func mimeFromFilename(filename string) string {
-	if ext := filepath.Ext(filename); ext != "" {
-		if mimeType := mime.TypeByExtension(ext); mimeType != "" {
-			return normalizeMIME(mimeType)
-		}
-	}
-
-	return "application/octet-stream"
-}
-
 func scanInput(r io.Reader, w io.Writer, input chan<- rocketcode.PromptInput, root *os.Root, cwd string) error {
 	defer close(input)
 
@@ -587,35 +324,21 @@ func promptInput(text string, root *os.Root, cwd string) (rocketcode.PromptInput
 		text = strings.TrimLeftFunc(rest, unicode.IsSpace)
 	}
 
-	parts := strings.Fields(text)
-	files := []string{}
-
-	kept := make([]string, 0, len(parts))
-	for _, part := range parts {
-		path, ok := strings.CutPrefix(part, "@attach:")
-		if ok {
-			if path == "" {
-				return rocketcode.PromptInput{}, errors.New("@attach requires a file path")
-			}
-
-			files = append(files, path)
-
-			continue
-		}
-
-		kept = append(kept, part)
+	text, files, err := rocketcode.SplitPromptAttachmentTokens(text)
+	if err != nil {
+		return rocketcode.PromptInput{}, rocketcode.OperationError{Operation: rocketcode.OperationParsePromptAttachments, Err: err}
 	}
 
-	attachments, err := promptAttachments(root, cwd, files)
+	attachments, err := rocketcode.PromptAttachments(root, cwd, files)
 	if err != nil {
-		return rocketcode.PromptInput{}, err
+		return rocketcode.PromptInput{}, rocketcode.OperationError{Operation: rocketcode.OperationLoadPromptAttachments, Err: err}
 	}
 
 	if len(attachments) == 0 {
 		attachments = nil
 	}
 
-	return rocketcode.PromptInput{Role: role, Text: strings.Join(kept, " "), Attachments: attachments, Responses: nil}, nil
+	return rocketcode.PromptInput{Role: role, Text: text, Attachments: attachments}, nil
 }
 
 func printOutput(w io.Writer, output <-chan rocketcode.ChatResponse) error {

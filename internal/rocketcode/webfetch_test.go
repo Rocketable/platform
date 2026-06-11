@@ -1,4 +1,3 @@
-//nolint:exhaustruct // Tests only set webfetch parameters relevant to each case.
 package rocketcode
 
 import (
@@ -17,12 +16,12 @@ func TestWebFetchFormatsHTML(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	markdown, err := webFetch(context.Background(), webFetchToolParams{URL: server.URL, Format: "markdown"})
+	markdown, err := webFetch(context.Background(), testWebFetchParams(server.URL, "markdown"))
 	require.NoError(t, err)
 	require.Contains(t, markdown.Output, "# Title")
 	require.Contains(t, markdown.Output, "**world**")
 
-	text, err := webFetch(context.Background(), webFetchToolParams{URL: server.URL, Format: "text"})
+	text, err := webFetch(context.Background(), testWebFetchParams(server.URL, "text"))
 	require.NoError(t, err)
 	require.Contains(t, text.Output, "Title")
 	require.Contains(t, text.Output, "Hello")
@@ -49,7 +48,7 @@ func TestWebFetchReturnsImageAndPDFAttachments(t *testing.T) {
 			}))
 			t.Cleanup(server.Close)
 
-			got, err := webFetch(context.Background(), webFetchToolParams{URL: server.URL, Format: "markdown"})
+			got, err := webFetch(context.Background(), testWebFetchParams(server.URL, "markdown"))
 
 			require.NoError(t, err)
 			require.Equal(t, tt.wantOutput, got.Output)
@@ -61,7 +60,11 @@ func TestWebFetchReturnsImageAndPDFAttachments(t *testing.T) {
 }
 
 func TestWebFetchRejectsInvalidURL(t *testing.T) {
-	_, err := webFetch(context.Background(), webFetchToolParams{URL: "file:///tmp/image.png"})
+	_, err := webFetch(context.Background(), testWebFetchParams("file:///tmp/image.png", ""))
 
 	require.EqualError(t, err, "URL must start with http:// or https://")
+}
+
+func testWebFetchParams(url, format string) webFetchToolParams {
+	return webFetchToolParams{URL: url, Format: format, Timeout: 0}
 }

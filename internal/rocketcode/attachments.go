@@ -1,4 +1,3 @@
-//nolint:exhaustruct // OpenAI SDK union params intentionally use sparse variant structs.
 package rocketcode
 
 import (
@@ -51,14 +50,6 @@ type Attachment struct {
 type ToolResult struct {
 	Output      string
 	Attachments []Attachment
-}
-
-func textPromptInput(text string) PromptInput {
-	return PromptInput{Role: PromptInputRoleUser, Text: text}
-}
-
-func textToolResult(output string) ToolResult {
-	return TextToolResult(output)
 }
 
 // TextToolResult returns a text-only tool result.
@@ -133,27 +124,37 @@ func mimeFromFilename(filename string) string {
 func promptInputMessage(input PromptInput) responses.ResponseInputItemUnionParam {
 	role := promptInputMessageRole(input.Role)
 	if len(input.Attachments) == 0 {
-		return responses.ResponseInputItemUnionParam{OfMessage: &responses.EasyInputMessageParam{
-			Role:    role,
-			Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(input.Text)},
-			Type:    "message",
-		}}
+		return inputMessageParam(role, easyInputStringContent(input.Text))
 	}
 
 	content := responses.ResponseInputMessageContentListParam{}
 	if input.Text != "" {
-		content = append(content, responses.ResponseInputContentUnionParam{
-			OfInputText: &responses.ResponseInputTextParam{Text: input.Text},
-		})
+		content = append(content, responseInputTextContent(input.Text))
 	}
 
 	content = appendAttachmentContent(content, input.Attachments...)
 
+	return inputMessageParam(role, easyInputListContent(content))
+}
+
+func inputMessageParam(role responses.EasyInputMessageRole, content responses.EasyInputMessageContentUnionParam) responses.ResponseInputItemUnionParam {
 	return responses.ResponseInputItemUnionParam{OfMessage: &responses.EasyInputMessageParam{
+		Content: content,
 		Role:    role,
-		Content: responses.EasyInputMessageContentUnionParam{OfInputItemContentList: content},
 		Type:    "message",
 	}}
+}
+
+func easyInputStringContent(text string) responses.EasyInputMessageContentUnionParam {
+	return responses.EasyInputMessageContentUnionParam{OfString: openai.String(text)}
+}
+
+func easyInputListContent(items responses.ResponseInputMessageContentListParam) responses.EasyInputMessageContentUnionParam {
+	return responses.EasyInputMessageContentUnionParam{OfInputItemContentList: items}
+}
+
+func responseInputTextContent(text string) responses.ResponseInputContentUnionParam {
+	return responses.ResponseInputContentUnionParam{OfInputText: &responses.ResponseInputTextParam{Text: text}}
 }
 
 func promptInputMessageRole(role PromptInputRole) responses.EasyInputMessageRole {
@@ -169,45 +170,49 @@ func appendAttachmentContent(content responses.ResponseInputMessageContentListPa
 		mimeType := normalizeMIME(attachment.MIME)
 		switch {
 		case isImageAttachmentMIME(mimeType):
-			content = append(content, responses.ResponseInputContentUnionParam{
-				OfInputImage: &responses.ResponseInputImageParam{
-					Detail:   responses.ResponseInputImageDetailAuto,
-					ImageURL: openai.String(attachment.URL),
-				},
-			})
+			content = append(content, responseInputImageContent(attachment.URL))
 		case mimeType == "application/pdf":
-			content = append(content, responses.ResponseInputContentUnionParam{
-				OfInputFile: &responses.ResponseInputFileParam{
-					Filename: openai.String(attachment.Filename),
-					FileData: openai.String(attachment.URL),
-				},
-			})
+			content = append(content, responseInputFileContent(attachment.Filename, attachment.URL))
 		}
 	}
 
 	return content
 }
 
+func responseInputImageContent(imageURL string) responses.ResponseInputContentUnionParam {
+	return responses.ResponseInputContentUnionParam{OfInputImage: &responses.ResponseInputImageParam{Detail: responses.ResponseInputImageDetailAuto, ImageURL: openai.String(imageURL)}}
+}
+
+func responseInputFileContent(filename, fileData string) responses.ResponseInputContentUnionParam {
+	return responses.ResponseInputContentUnionParam{OfInputFile: &responses.ResponseInputFileParam{Filename: openai.String(filename), FileData: openai.String(fileData)}}
+}
+
 func functionCallOutputContent(result ToolResult) responses.ResponseFunctionCallOutputItemListParam {
-	content := responses.ResponseFunctionCallOutputItemListParam{{
-		OfInputText: &responses.ResponseInputTextContentParam{Text: result.Output},
-	}}
+	content := responses.ResponseFunctionCallOutputItemListParam{functionCallOutputTextContent(result.Output)}
 
 	for _, attachment := range result.Attachments {
 		mimeType := normalizeMIME(attachment.MIME)
 		switch {
 		case isImageAttachmentMIME(mimeType):
-			content = append(content, responses.ResponseFunctionCallOutputItemUnionParam{
-				OfInputImage: &responses.ResponseInputImageContentParam{Detail: responses.ResponseInputImageContentDetailAuto, ImageURL: openai.String(attachment.URL)},
-			})
+			content = append(content, functionCallOutputImageContent(attachment.URL))
 		case mimeType == "application/pdf":
-			content = append(content, responses.ResponseFunctionCallOutputItemUnionParam{
-				OfInputFile: &responses.ResponseInputFileContentParam{Filename: openai.String(attachment.Filename), FileData: openai.String(attachment.URL)},
-			})
+			content = append(content, functionCallOutputFileContent(attachment.Filename, attachment.URL))
 		}
 	}
 
 	return content
+}
+
+func functionCallOutputTextContent(text string) responses.ResponseFunctionCallOutputItemUnionParam {
+	return responses.ResponseFunctionCallOutputItemUnionParam{OfInputText: &responses.ResponseInputTextContentParam{Text: text}}
+}
+
+func functionCallOutputImageContent(imageURL string) responses.ResponseFunctionCallOutputItemUnionParam {
+	return responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: &responses.ResponseInputImageContentParam{Detail: responses.ResponseInputImageContentDetailAuto, ImageURL: openai.String(imageURL)}}
+}
+
+func functionCallOutputFileContent(filename, fileData string) responses.ResponseFunctionCallOutputItemUnionParam {
+	return responses.ResponseFunctionCallOutputItemUnionParam{OfInputFile: &responses.ResponseInputFileContentParam{Filename: openai.String(filename), FileData: openai.String(fileData)}}
 }
 
 func attachmentOutputMessage(result ToolResult) string {

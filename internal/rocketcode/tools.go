@@ -1,4 +1,3 @@
-//nolint:exhaustruct,gocritic,ireturn // Tool definitions use sparse SDK structs and generic JSON decoding helpers.
 package rocketcode
 
 import (
@@ -12,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
@@ -68,7 +68,7 @@ type webFetchToolParams struct {
 }
 
 func newSandboxedTools(root *os.Root, shellOutput shellOutputConfig, shellEnv []string, useSandbox bool) map[string]looperTool {
-	sfs := &sandboxedFileSystem{root: root}
+	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
 	sss := newSandboxedShellSystem(root, &shellOutput, shellEnv, useSandbox)
 
 	return makeSandboxedTools(sfs, sss)
@@ -94,8 +94,9 @@ func (f *toolFactory) toolsFor(agent *Agent) map[string]looperTool {
 		delete(tools, "task")
 	}
 
-	for name, tool := range tools {
-		if !toolVisible(agent, name, tool) {
+	for name := range tools {
+		tool := tools[name]
+		if !toolVisible(agent, name, &tool) {
 			delete(tools, name)
 		}
 	}
@@ -107,7 +108,7 @@ func (f *toolFactory) toolsFor(agent *Agent) map[string]looperTool {
 	return tools
 }
 
-func toolVisible(agent *Agent, name string, tool looperTool) bool {
+func toolVisible(agent *Agent, name string, tool *looperTool) bool {
 	permission := tool.Permission
 	if permission == "" {
 		permission = name
@@ -133,8 +134,8 @@ func toolVisible(agent *Agent, name string, tool looperTool) bool {
 func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map[string]looperTool {
 	if sfs == nil || sss == nil {
 		return map[string]looperTool{
-			"read":      {Definition: functionTool("read", "Read a file from the workspace", map[string]any{"filePath": map[string]any{"type": "string"}}), Permission: "read"},
-			"bash":      {Definition: functionTool("bash", "Run a shell command in the workspace", map[string]any{"command": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}), Permission: "bash"},
+			"read":      {Definition: *functionTool("read", "Read a file from the workspace", map[string]any{"filePath": map[string]any{"type": "string"}}), Permission: "read"},
+			"bash":      {Definition: *functionTool("bash", "Run a shell command in the workspace", map[string]any{"command": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}), Permission: "bash"},
 			"websearch": webSearchTool(),
 		}
 	}
@@ -142,22 +143,22 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 	return map[string]looperTool{
 		"websearch": webSearchTool(),
 		"read": {
-			Definition: functionTool("read", "Read a file from the workspace", map[string]any{
+			Definition: *functionTool("read", "Read a file from the workspace", map[string]any{
 				"filePath": map[string]any{"type": "string"},
 				"offset":   map[string]any{"type": "integer"},
 			}),
 			Permission: "read",
 			Subjects: func(raw json.RawMessage) ([]string, error) {
-				params, err := decodeToolParams[readToolParams](raw)
-				if err != nil {
+				var params readToolParams
+				if err := decodeToolParams(raw, &params); err != nil {
 					return nil, err
 				}
 
 				return []string{sfs.readPermissionSubject(readToolPath(params))}, nil
 			},
 			Call: func(_ context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
-				params, err := decodeToolParams[readToolParams](raw)
-				if err != nil {
+				var params readToolParams
+				if err := decodeToolParams(raw, &params); err != nil {
 					return ToolResult{}, err
 				}
 
@@ -165,17 +166,17 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 			},
 		},
 		"apply_patch": {
-			Definition: functionTool("apply_patch", "Apply a patch to files in the workspace", map[string]any{
+			Definition: *functionTool("apply_patch", "Apply a patch to files in the workspace", map[string]any{
 				"patchText": map[string]any{"type": "string"},
 			}),
 			Permission: "edit",
 			Subjects: func(raw json.RawMessage) ([]string, error) {
-				params, err := decodeToolParams[applyPatchToolParams](raw)
-				if err != nil {
+				var params applyPatchToolParams
+				if err := decodeToolParams(raw, &params); err != nil {
 					return nil, err
 				}
 
-				preview, errText := sfs.previewApplyPatch(applyPatchText(params))
+				preview, errText := previewApplyPatch(sfs, applyPatchText(params))
 				if errText != "" {
 					return nil, errors.New(errText)
 				}
@@ -188,79 +189,79 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 				return subjects, nil
 			},
 			Call: func(_ context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
-				params, err := decodeToolParams[applyPatchToolParams](raw)
-				if err != nil {
+				var params applyPatchToolParams
+				if err := decodeToolParams(raw, &params); err != nil {
 					return ToolResult{}, err
 				}
 
-				return textToolResult(sfs.ApplyPatch(applyPatchText(params))), nil
+				return TextToolResult(sfs.ApplyPatch(applyPatchText(params))), nil
 			},
 		},
 		"glob": {
-			Definition: functionTool("glob", "Find files in the workspace by glob pattern", map[string]any{
+			Definition: *functionTool("glob", "Find files in the workspace by glob pattern", map[string]any{
 				"pattern": map[string]any{"type": "string"},
 				"path":    map[string]any{"type": "string"},
 			}),
 			Permission: "glob",
 			Subjects: func(raw json.RawMessage) ([]string, error) {
-				params, err := decodeToolParams[globToolParams](raw)
-				if err != nil {
+				var params globToolParams
+				if err := decodeToolParams(raw, &params); err != nil {
 					return nil, err
 				}
 
 				return []string{params.Pattern}, nil
 			},
 			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
-				params, err := decodeToolParams[globToolParams](raw)
-				if err != nil {
+				var params globToolParams
+				if err := decodeToolParams(raw, &params); err != nil {
 					return ToolResult{}, err
 				}
 
-				return textToolResult(sfs.Glob(ctx, params.Pattern, params.Path)), nil
+				return TextToolResult(sfs.Glob(ctx, params.Pattern, params.Path)), nil
 			},
 		},
 		"grep": {
-			Definition: functionTool("grep", "Search file contents in the workspace", map[string]any{
+			Definition: *functionTool("grep", "Search file contents in the workspace", map[string]any{
 				"pattern": map[string]any{"type": "string"},
 				"path":    map[string]any{"type": "string"},
 				"include": map[string]any{"type": "string"},
 			}),
 			Permission: "grep",
 			Subjects: func(raw json.RawMessage) ([]string, error) {
-				params, err := decodeToolParams[grepToolParams](raw)
-				if err != nil {
+				var params grepToolParams
+				if err := decodeToolParams(raw, &params); err != nil {
 					return nil, err
 				}
 
 				return []string{params.Pattern}, nil
 			},
 			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
-				params, err := decodeToolParams[grepToolParams](raw)
-				if err != nil {
+				var params grepToolParams
+				if err := decodeToolParams(raw, &params); err != nil {
 					return ToolResult{}, err
 				}
 
-				return textToolResult(sfs.Grep(ctx, params.Pattern, params.Path, params.Include)), nil
+				return TextToolResult(sfs.Grep(ctx, params.Pattern, params.Path, params.Include)), nil
 			},
 		},
 		"webfetch": {
-			Definition: functionTool("webfetch", webFetchDescription(), map[string]any{
+			Definition: *functionTool("webfetch", webFetchDescription(), map[string]any{
 				"url":     map[string]any{"type": "string"},
 				"format":  map[string]any{"type": "string", "enum": []string{"text", "markdown", "html"}},
 				"timeout": map[string]any{"type": "integer"},
 			}),
 			Permission: "webfetch",
 			Subjects: func(raw json.RawMessage) ([]string, error) {
-				params, err := decodeToolParams[webFetchToolParams](raw)
-				if err != nil {
+				var params webFetchToolParams
+				if err := decodeToolParams(raw, &params); err != nil {
 					return nil, err
 				}
 
 				return []string{params.URL}, nil
 			},
 			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
-				params, err := decodeToolParams[webFetchToolParams](raw)
-				if err != nil {
+				var params webFetchToolParams
+				if err := decodeToolParams(raw, &params); err != nil {
 					return ToolResult{}, err
 				}
 
@@ -268,7 +269,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 			},
 		},
 		"bash": {
-			Definition: functionTool("bash", "Run a shell command in the workspace", map[string]any{
+			Definition: *functionTool("bash", "Run a shell command in the workspace", map[string]any{
 				"command":     map[string]any{"type": "string"},
 				"timeout":     map[string]any{"type": "integer"},
 				"workdir":     map[string]any{"type": "string"},
@@ -276,33 +277,29 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 			}),
 			Permission: "bash",
 			Subjects: func(raw json.RawMessage) ([]string, error) {
-				params, err := decodeToolParams[bashParams](raw)
-				if err != nil {
+				var params bashParams
+				if err := decodeToolParams(raw, &params); err != nil {
 					return nil, err
 				}
 
 				return bashPermissionSubjects(params.Command), nil
 			},
 			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
-				params, err := decodeToolParams[bashParams](raw)
-				if err != nil {
+				var params bashParams
+				if err := decodeToolParams(raw, &params); err != nil {
 					return ToolResult{}, err
 				}
 
-				return textToolResult(sss.Bash(ctx, params)), nil
+				return TextToolResult(sss.Bash(ctx, params)), nil
 			},
 		},
 	}
 }
 
 func webSearchTool() looperTool {
-	return looperTool{
-		Hosted:     responses.ToolUnionParam{OfWebSearch: &responses.WebSearchToolParam{Type: responses.WebSearchToolTypeWebSearch}},
-		Permission: "websearch",
-		Subjects: func(json.RawMessage) ([]string, error) {
-			return []string{"*"}, nil
-		},
-	}
+	return looperTool{Hosted: responses.ToolUnionParam{OfWebSearch: &responses.WebSearchToolParam{Type: responses.WebSearchToolTypeWebSearch}}, Permission: "websearch", Subjects: func(json.RawMessage) ([]string, error) {
+		return []string{"*"}, nil
+	}}
 }
 
 func (f *toolFactory) findSkillsTool() looperTool {
@@ -311,7 +308,7 @@ func (f *toolFactory) findSkillsTool() looperTool {
 	}
 
 	return looperTool{
-		Definition: functionTool("find_skills", strings.Join([]string{
+		Definition: *functionTool("find_skills", strings.Join([]string{
 			"Search available skills by name, description, and content.",
 			"Use this tool before the skill tool whenever a task may benefit from specialized instructions and the right skill is not already obvious from the system prompt.",
 			"The results include skill names and descriptions. Call the skill tool with one of the returned names to load its full instructions.",
@@ -323,12 +320,12 @@ func (f *toolFactory) findSkillsTool() looperTool {
 			return f.availableSkillSubjects(), nil
 		},
 		Call: func(_ context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
-			input, err := decodeToolParams[params](raw)
-			if err != nil {
+			var input params
+			if err := decodeToolParams(raw, &input); err != nil {
 				return ToolResult{}, err
 			}
 
-			return textToolResult(f.skills.FindAvailable(input.Query, f.agent)), nil
+			return TextToolResult(f.skills.FindAvailable(input.Query, f.agent)), nil
 		},
 	}
 }
@@ -352,13 +349,13 @@ type skillToolParams struct {
 
 func (f *toolFactory) skillTool() looperTool {
 	return looperTool{
-		Definition: functionTool("skill", f.skillDescription(), map[string]any{
+		Definition: *functionTool("skill", f.skillDescription(), map[string]any{
 			"name": map[string]any{"type": "string"},
 		}),
 		Permission: "skill",
 		Subjects: func(raw json.RawMessage) ([]string, error) {
-			input, err := decodeToolParams[skillToolParams](raw)
-			if err != nil {
+			var input skillToolParams
+			if err := decodeToolParams(raw, &input); err != nil {
 				return nil, err
 			}
 
@@ -370,7 +367,7 @@ func (f *toolFactory) skillTool() looperTool {
 				return ToolResult{}, err
 			}
 
-			return textToolResult(output), nil
+			return TextToolResult(output), nil
 		},
 		CallReplay: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, []responses.ResponseInputItemUnionParam, error) {
 			input, output, err := f.renderSkillToolOutput(ctx, raw, f.experimentalStrongerSkills)
@@ -379,23 +376,19 @@ func (f *toolFactory) skillTool() looperTool {
 			}
 
 			if !f.experimentalStrongerSkills {
-				return textToolResult(output), nil, nil
+				return TextToolResult(output), nil, nil
 			}
 
-			message := responses.ResponseInputItemUnionParam{OfMessage: &responses.EasyInputMessageParam{
-				Role:    responses.EasyInputMessageRoleDeveloper,
-				Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(output)},
-				Type:    "message",
-			}}
+			message := inputMessageParam(responses.EasyInputMessageRoleDeveloper, easyInputStringContent(output))
 
-			return textToolResult("skill " + input.Name + " loaded"), []responses.ResponseInputItemUnionParam{message}, nil
+			return TextToolResult("skill " + input.Name + " loaded"), []responses.ResponseInputItemUnionParam{message}, nil
 		},
 	}
 }
 
 func (f *toolFactory) renderSkillToolOutput(ctx context.Context, raw json.RawMessage, includeMetadata bool) (skillToolParams, string, error) {
-	input, err := decodeToolParams[skillToolParams](raw)
-	if err != nil {
+	var input skillToolParams
+	if err := decodeToolParams(raw, &input); err != nil {
 		return skillToolParams{}, "", err
 	}
 
@@ -486,7 +479,7 @@ func (f *toolFactory) skillDescription() string {
 	}, "\n")
 }
 
-func functionTool(name, description string, properties map[string]any) responses.FunctionToolParam {
+func functionTool(name, description string, properties map[string]any) *responses.FunctionToolParam {
 	// OpenAI strict function schemas require every property key to appear in
 	// required. Tools still apply defaults after JSON decoding when callers pass
 	// zero values.
@@ -499,16 +492,22 @@ func functionTool(name, description string, properties map[string]any) responses
 		"required":             required,
 	}
 
-	return responses.FunctionToolParam{Name: name, Description: openai.String(description), Parameters: parameters, Strict: openai.Bool(true)}
+	var tool responses.FunctionToolParam
+
+	tool.Name = name
+	tool.Description = openai.String(description)
+	tool.Parameters = parameters
+	tool.Strict = openai.Bool(true)
+
+	return &tool
 }
 
-func decodeToolParams[T any](raw json.RawMessage) (T, error) {
-	var params T
-	if err := json.Unmarshal(raw, &params); err != nil {
-		return params, fmt.Errorf("decode tool params: %w", err)
+func decodeToolParams[T any](raw json.RawMessage, params *T) error {
+	if err := json.Unmarshal(raw, params); err != nil {
+		return fmt.Errorf("decode tool params: %w", err)
 	}
 
-	return params, nil
+	return nil
 }
 
 func readToolPath(params readToolParams) string {

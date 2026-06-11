@@ -75,6 +75,11 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 - Absolute paths must resolve under the workspace root. Paths that escape the root are rejected.
 - Reads, patches, glob targets, grep targets, glob results, and grep results must not follow symlinks.
 
+### Engineering Guardrails
+
+- Linters are part of the behavior-preservation safety system. Do not disable linters through `//nolint`, configuration changes, command flags, or equivalent suppressions unless the human partner explicitly approves the exact suppression and rationale.
+- When a linter finding appears inconvenient during CLOC-reduction or refactoring work, fix the code or stop and ask; do not hide the finding.
+
 ## Non-Goals
 
 - This ADR does not require exact internal helper names or file boundaries.
@@ -96,9 +101,11 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 ## Consequences
 
 - Behavior-preserving simplification must verify prompt framing, replay, output text, permission gates, and safety boundaries independently.
+- Behavior-preserving simplification must keep linter checks active unless an exact linter suppression has explicit human approval.
 - Any change that intentionally alters these contracts must update this ADR first and receive explicit human approval.
 - Tests should assert observable contracts rather than only implementation structure.
 
 ## Changelog
 
 - 2026-06-11: Initial accepted snapshot.
+- 2026-06-11: Added linter-disable guardrail for behavior-preserving refactors.

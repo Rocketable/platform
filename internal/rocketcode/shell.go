@@ -58,7 +58,7 @@ func newSandboxedShellSystem(root *os.Root, shellOutput *shellOutputConfig, env 
 	}
 }
 
-func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) string { //nolint:gocyclo // Inlining former single-use helpers keeps the full shell flow in one place.
+func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) string {
 	sss.mu.Lock()
 	defer sss.mu.Unlock()
 
@@ -165,62 +165,16 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) st
 
 		return nil
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} //nolint:exhaustruct // Only process-group isolation is customized.
+
+	var sysProcAttr syscall.SysProcAttr
+
+	sysProcAttr.Setpgid = true
+	cmd.SysProcAttr = &sysProcAttr
 
 	stdoutBuf, _ := cmd.Stdout.(*bytes.Buffer)
 	err := cmd.Run()
 	output := stdoutBuf.String()
-	visible := output
-	truncated := false
-	tempPath := ""
-
-	lines := strings.Split(output, "\n")
-	if len(lines) > shellMaxLines || len([]byte(output)) > maxBytes {
-		out := make([]string, 0, min(len(lines), shellMaxLines))
-		bytesUsed := 0
-
-		for i := len(lines) - 1; i >= 0 && len(out) < shellMaxLines; i-- {
-			line := lines[i]
-
-			size := len([]byte(line))
-			if len(out) > 0 {
-				size++
-			}
-
-			if bytesUsed+size > maxBytes {
-				if len(out) == 0 {
-					buf := []byte(line)
-
-					start := max(len(buf)-maxBytes, 0)
-					for start < len(buf) && (buf[start]&0xc0) == 0x80 {
-						start++
-					}
-
-					out = append([]string{string(buf[start:])}, out...)
-				}
-
-				break
-			}
-
-			out = append([]string{line}, out...)
-			bytesUsed += size
-		}
-
-		visible = strings.Join(out, "\n")
-		truncated = true
-
-		tempPath = filepath.ToSlash(filepath.Join(sss.shellOutput.outputRelDir, fmt.Sprintf("rocketcode-bash-%d", time.Now().UnixNano())))
-		if err := sss.root.WriteFile(tempPath, []byte(output), 0o600); err != nil {
-			truncated = false
-			tempPath = ""
-		} else {
-			sss.tempFiles[temporaryFile(tempPath)] = creationTime(time.Now())
-		}
-
-		if !truncated && visible == "" {
-			visible = output
-		}
-	}
+	visible, truncated, tempPath := sss.visibleShellOutput(output)
 
 	metadata := []string{}
 
@@ -246,6 +200,58 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) st
 	}
 
 	return visible
+}
+
+func (sss *sandboxedShellSystem) visibleShellOutput(output string) (visible string, truncated bool, tempPath string) {
+	lines := strings.Split(output, "\n")
+	if len(lines) <= shellMaxLines && len([]byte(output)) <= maxBytes {
+		return output, false, ""
+	}
+
+	out := make([]string, 0, min(len(lines), shellMaxLines))
+	bytesUsed := 0
+
+	for i := len(lines) - 1; i >= 0 && len(out) < shellMaxLines; i-- {
+		line := lines[i]
+
+		size := len([]byte(line))
+		if len(out) > 0 {
+			size++
+		}
+
+		if bytesUsed+size > maxBytes {
+			if len(out) == 0 {
+				buf := []byte(line)
+
+				start := max(len(buf)-maxBytes, 0)
+				for start < len(buf) && (buf[start]&0xc0) == 0x80 {
+					start++
+				}
+
+				out = append([]string{string(buf[start:])}, out...)
+			}
+
+			break
+		}
+
+		out = append([]string{line}, out...)
+		bytesUsed += size
+	}
+
+	visible = strings.Join(out, "\n")
+
+	tempPath = filepath.ToSlash(filepath.Join(sss.shellOutput.outputRelDir, fmt.Sprintf("rocketcode-bash-%d", time.Now().UnixNano())))
+	if err := sss.root.WriteFile(tempPath, []byte(output), 0o600); err != nil {
+		if visible == "" {
+			visible = output
+		}
+
+		return visible, false, ""
+	}
+
+	sss.tempFiles[temporaryFile(tempPath)] = creationTime(time.Now())
+
+	return visible, true, tempPath
 }
 
 func (sss *sandboxedShellSystem) deniedBashPath(command, hostDir string) string {

@@ -14,7 +14,6 @@ linters:
     - errcheck
     - errname
     - exhaustive
-    - exhaustruct
     - exptostd
     - funcorder
     - gochecknoglobals

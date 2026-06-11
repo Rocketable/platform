@@ -1,4 +1,3 @@
-//nolint:exhaustruct,gocritic,wsl_v5 // Tests intentionally use sparse fixtures.
 package main
 
 import (
@@ -28,6 +27,7 @@ func (f fakeLooper) Loop(_ context.Context, input <-chan rocketcode.PromptInput,
 		}
 
 		prompt.Responses <- rocketcode.ChatResponse{Kind: rocketcode.ChatResponseAssistantMessage, Text: "turn complete"}
+
 		close(prompt.Responses)
 	}
 
@@ -107,7 +107,8 @@ func TestRunAutonomousLoopSucceedsAfterCriticApproval(t *testing.T) {
 	}}
 
 	var out strings.Builder
-	err := runAutonomousLoop(context.Background(), options{goal: "finish task"}, deps, &eventWriter{w: &out})
+
+	err := runAutonomousLoop(context.Background(), options{goal: "finish task", script: "", maxLoops: 0, scriptOutputLimit: 0}, &deps, &eventWriter{w: &out})
 
 	require.NoError(t, err)
 	events := decodeEvents(t, out.String())
@@ -122,9 +123,12 @@ func TestRunAutonomousLoopFeedsScriptFailureBackAsDeveloperPrompt(t *testing.T) 
 	defer cleanup()
 
 	var prompts []rocketcode.PromptInput
+
 	deps.mainLooper = fakeLooper{run: func(prompt rocketcode.PromptInput) error {
 		prompts = append(prompts, prompt)
+
 		deps.claims.set(&goalClaim{Summary: "done", Evidence: "checked"})
+
 		return nil
 	}}
 	deps.criticLooper = fakeLooper{run: func(rocketcode.PromptInput) error {
@@ -139,11 +143,12 @@ func TestRunAutonomousLoopFeedsScriptFailureBackAsDeveloperPrompt(t *testing.T) 
 			return scriptResult{Command: "verify", ExitCode: 2, Stdout: "out", Stderr: "err"}, nil
 		}
 
-		return scriptResult{Command: "verify", ExitCode: 0}, nil
+		return scriptResult{Command: "verify", ExitCode: 0, Stdout: "", Stderr: ""}, nil
 	}
 
 	var out strings.Builder
-	err := runAutonomousLoop(context.Background(), options{goal: "finish task", script: "verify", maxLoops: 2}, deps, &eventWriter{w: &out})
+
+	err := runAutonomousLoop(context.Background(), options{goal: "finish task", script: "verify", maxLoops: 2, scriptOutputLimit: 0}, &deps, &eventWriter{w: &out})
 
 	require.NoError(t, err)
 	require.Len(t, prompts, 2)
@@ -157,11 +162,12 @@ func TestRunAutonomousLoopReturnsErrorAfterMaxLoops(t *testing.T) {
 	deps, cleanup := testDeps(t)
 	defer cleanup()
 
-	deps.mainLooper = fakeLooper{}
-	deps.criticLooper = fakeLooper{}
+	deps.mainLooper = fakeLooper{run: nil}
+	deps.criticLooper = fakeLooper{run: nil}
 
 	var out strings.Builder
-	err := runAutonomousLoop(context.Background(), options{goal: "finish task", maxLoops: 1}, deps, &eventWriter{w: &out})
+
+	err := runAutonomousLoop(context.Background(), options{goal: "finish task", script: "", maxLoops: 1, scriptOutputLimit: 0}, &deps, &eventWriter{w: &out})
 
 	require.EqualError(t, err, "max loops exhausted")
 	events := decodeEvents(t, out.String())
@@ -175,7 +181,7 @@ func TestLimitOutputKeepsTailWhenConfigured(t *testing.T) {
 	require.Equal(t, "[truncated to last 4 bytes]\n6789", got)
 }
 
-func testDeps(t *testing.T) (runtimeDeps, func()) {
+func testDeps(t *testing.T) (deps runtimeDeps, cleanup func()) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -183,11 +189,13 @@ func testDeps(t *testing.T) (runtimeDeps, func()) {
 	require.NoError(t, err)
 
 	return runtimeDeps{
-		root:       root,
-		cwd:        dir,
-		interrupts: make(chan os.Signal),
+		mainLooper:   fakeLooper{run: nil},
+		criticLooper: fakeLooper{run: nil},
+		root:         root,
+		cwd:          dir,
+		interrupts:   make(chan os.Signal),
 		runScript: func(context.Context, string, string, int64) (scriptResult, error) {
-			return scriptResult{ExitCode: 0}, nil
+			return scriptResult{Command: "", ExitCode: 0, Stdout: "", Stderr: ""}, nil
 		},
 		claims:   &claimRecorder{},
 		verdicts: &verdictRecorder{},
@@ -199,6 +207,7 @@ func decodeEvents(t *testing.T, text string) []jsonlEvent {
 
 	scanner := bufio.NewScanner(strings.NewReader(text))
 	events := []jsonlEvent{}
+
 	for scanner.Scan() {
 		var event jsonlEvent
 		require.NoError(t, json.Unmarshal(scanner.Bytes(), &event))
@@ -206,5 +215,6 @@ func decodeEvents(t *testing.T, text string) []jsonlEvent {
 	}
 
 	require.NoError(t, scanner.Err())
+
 	return events
 }

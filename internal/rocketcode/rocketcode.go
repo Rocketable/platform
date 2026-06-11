@@ -15,6 +15,7 @@ import (
 	"text/template"
 
 	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 )
 
@@ -130,18 +131,20 @@ func (c shellOutputConfig) ensureTempDir(root *os.Root) error {
 }
 
 // New loads the supplied runtime dependencies and returns a configured looper.
-//
-//nolint:gocritic,ireturn // Config is copied intentionally; New returns the public Looper interface.
 func New(
 	client *openai.Client,
-	config Config,
+	configInput *Config,
 	root *os.Root,
 	agents Agents,
 	skills Skills,
 	defaultAgent string,
 	diagnosticsWriter io.Writer,
-) (Looper, error) {
-	config = normalizeConfig(config)
+) (*Runtime, error) {
+	if configInput == nil {
+		return nil, errors.New("config is required")
+	}
+
+	config := normalizeConfig(configInput)
 
 	if client == nil {
 		return nil, errors.New("client is required")
@@ -210,7 +213,7 @@ func New(
 		return nil, fmt.Errorf("missing required default agent %q", defaultAgent)
 	}
 
-	expandAgentPrompt(context.Background(), &activeAgent, config.ExpandPromptShellCommands.PrimaryPrompts, promptExpansion)
+	expandAgentPrompt(context.Background(), &activeAgent, config.ExpandPromptShellCommands.PrimaryPrompts, &promptExpansion)
 	systemPrompt := activeAgent.Prompt
 
 	rootInstructions, err := loadRootInstructions(root)
@@ -260,7 +263,7 @@ func New(
 
 	maps.Copy(baseTools, customTools)
 	factory := &toolFactory{
-		client:                     &client.Responses,
+		client:                     responseServiceClient{service: &client.Responses},
 		systemPrompt:               systemPrompt,
 		model:                      model,
 		reasoningEffort:            reasoningEffort,
@@ -281,9 +284,14 @@ func New(
 	}
 	runtimeSystemPrompt := composeSystemPromptWithSkills(systemPrompt, skills, agentForTools)
 
-	looper := &looper{ //nolint:exhaustruct // Only runtime-configured fields are needed here.
+	var (
+		responseFormat responses.ResponseFormatTextConfigUnionParam
+		rewriteHistory func([]responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam
+	)
+
+	looper := &looper{
 		agent:              activeAgent,
-		Client:             &client.Responses,
+		Client:             responseServiceClient{service: &client.Responses},
 		SystemPrompt:       runtimeSystemPrompt,
 		Model:              model,
 		ReasoningEffort:    reasoningEffort,
@@ -291,8 +299,10 @@ func New(
 		CompactThreshold:   config.CompactThreshold,
 		CompactionSteering: config.CompactionSteering,
 		ParallelToolCalls:  config.ParallelToolCalls,
+		ResponseFormat:     responseFormat,
 		Permissions:        activeAgent.Permission,
 		Tools:              factory.toolsFor(agentForTools),
+		RewriteHistory:     rewriteHistory,
 		Diagnostics:        config.Diagnostics,
 		expandInputPrompts: config.ExpandPromptShellCommands.InputPrompts,
 		promptExpansion:    promptExpansion,
@@ -331,8 +341,9 @@ func loadRootInstructions(root *os.Root) (string, error) {
 	return "Instructions from: AGENTS.md\n" + string(data), nil
 }
 
-//nolint:gocritic // Config normalization intentionally returns a copied value.
-func normalizeConfig(config Config) Config {
+func normalizeConfig(configInput *Config) Config {
+	config := *configInput
+
 	if config.Model == "" {
 		config.Model = openai.ChatModelGPT5_4
 	}
