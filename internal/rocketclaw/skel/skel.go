@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -22,6 +23,9 @@ const (
 	workspaceCron = "cron"
 	scriptsRoot   = "scripts"
 	overlaysRoot  = "overlays"
+
+	scriptSymlinkExcludeBegin = "# BEGIN rocketclaw generated script symlinks"
+	scriptSymlinkExcludeEnd   = "# END rocketclaw generated script symlinks"
 )
 
 // OverlayInfo describes one configured git overlay materialized by SyncInWithOverlays.
@@ -143,7 +147,7 @@ func syncWorkspaceScriptSymlinks(workspace, workDir string, logger *slog.Logger)
 
 	info, err := os.Stat(runtimeScripts)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return syncScriptSymlinkGitExclude(workspace, nil, logger)
 	}
 
 	if err != nil {
@@ -153,6 +157,8 @@ func syncWorkspaceScriptSymlinks(workspace, workDir string, logger *slog.Logger)
 	if !info.IsDir() {
 		return fmt.Errorf("runtime scripts path is not a directory: %s", runtimeScripts)
 	}
+
+	var generated []string
 
 	if err := filepath.WalkDir(runtimeScripts, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -198,12 +204,102 @@ func syncWorkspaceScriptSymlinks(workspace, workDir string, logger *slog.Logger)
 			return fmt.Errorf("create workspace script symlink %s: %w", dst, err)
 		}
 
+		workspaceRel, err := filepath.Rel(workspace, dst)
+		if err != nil {
+			return fmt.Errorf("compute workspace script path %s: %w", dst, err)
+		}
+
+		generated = append(generated, filepath.ToSlash(workspaceRel))
+
 		logger.Debug("created workspace script symlink", "path", dst, "target", target)
 
 		return nil
 	}); err != nil {
 		return fmt.Errorf("walk runtime scripts: %w", err)
 	}
+
+	return syncScriptSymlinkGitExclude(workspace, generated, logger)
+}
+
+func syncScriptSymlinkGitExclude(workspace string, generated []string, logger *slog.Logger) error {
+	gitDir := filepath.Join(workspace, ".git")
+
+	info, err := os.Stat(gitDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			logger.Debug("skipped script symlink git exclude sync outside git repository", "path", gitDir)
+
+			return nil
+		}
+
+		return fmt.Errorf("stat git directory %s: %w", gitDir, err)
+	}
+
+	if !info.IsDir() {
+		logger.Debug("skipped script symlink git exclude sync for non-directory git path", "path", gitDir)
+
+		return nil
+	}
+
+	excludePath := filepath.Join(gitDir, "info", "exclude")
+
+	data, err := os.ReadFile(excludePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read git exclude file %s: %w", excludePath, err)
+	}
+
+	removedBlock := false
+	inBlock := false
+	lines := strings.Split(string(data), "\n")
+
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		switch {
+		case line == scriptSymlinkExcludeBegin:
+			removedBlock = true
+			inBlock = true
+		case line == scriptSymlinkExcludeEnd && inBlock:
+			inBlock = false
+		case !inBlock:
+			kept = append(kept, line)
+		}
+	}
+
+	if len(generated) == 0 && !removedBlock {
+		return nil
+	}
+
+	slices.Sort(generated)
+	generated = slices.Compact(generated)
+
+	content := strings.Join(kept, "\n")
+	if len(generated) > 0 {
+		if strings.TrimSpace(content) != "" && !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+
+		var block strings.Builder
+		block.WriteString(scriptSymlinkExcludeBegin + "\n")
+
+		for _, path := range generated {
+			block.WriteByte('/')
+			block.WriteString(path)
+			block.WriteByte('\n')
+		}
+
+		block.WriteString(scriptSymlinkExcludeEnd + "\n")
+		content += block.String()
+	}
+
+	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
+		return fmt.Errorf("create git info directory %s: %w", filepath.Dir(excludePath), err)
+	}
+
+	if err := os.WriteFile(excludePath, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write git exclude file %s: %w", excludePath, err)
+	}
+
+	logger.Debug("synced script symlink git exclude entries", "path", excludePath, "count", len(generated))
 
 	return nil
 }

@@ -509,6 +509,76 @@ func TestSyncWorkspaceScriptSymlinksWithoutRuntimeScriptsDoesNotCreateWorkspaceS
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
+func TestSyncWorkspaceScriptSymlinksUpdatesGitExclude(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".git", "info"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, targetRoot, "scripts", "nested"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, targetRoot, "scripts", "tool.sh"), []byte("tool"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, targetRoot, "scripts", "nested", "remote.sh"), []byte("remote"), 0o644))
+
+	require.NoError(t, syncWorkspaceScriptSymlinks(workspace, targetRoot, testLogger()))
+
+	data, err := os.ReadFile(filepath.Join(workspace, ".git", "info", "exclude"))
+	require.NoError(t, err)
+	assert.Equal(t, "# BEGIN rocketclaw generated script symlinks\n/scripts/nested/remote.sh\n/scripts/tool.sh\n# END rocketclaw generated script symlinks\n", string(data))
+}
+
+func TestSyncWorkspaceScriptSymlinksReplacesGitExcludeBlock(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".git", "info"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, targetRoot, "scripts"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, targetRoot, "scripts", "tool.sh"), []byte("tool"), 0o644))
+	excludePath := filepath.Join(workspace, ".git", "info", "exclude")
+	require.NoError(t, os.WriteFile(excludePath, []byte("keep\n# BEGIN rocketclaw generated script symlinks\n/scripts/old.sh\n# END rocketclaw generated script symlinks\nafter\n"), 0o644))
+
+	require.NoError(t, syncWorkspaceScriptSymlinks(workspace, targetRoot, testLogger()))
+
+	data, err := os.ReadFile(excludePath)
+	require.NoError(t, err)
+	assert.Equal(t, "keep\nafter\n# BEGIN rocketclaw generated script symlinks\n/scripts/tool.sh\n# END rocketclaw generated script symlinks\n", string(data))
+}
+
+func TestSyncWorkspaceScriptSymlinksRemovesStaleGitExcludeBlock(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".git", "info"), 0o755))
+	excludePath := filepath.Join(workspace, ".git", "info", "exclude")
+	require.NoError(t, os.WriteFile(excludePath, []byte("keep\n# BEGIN rocketclaw generated script symlinks\n/scripts/old.sh\n# END rocketclaw generated script symlinks\nafter\n"), 0o644))
+
+	require.NoError(t, syncWorkspaceScriptSymlinks(workspace, targetRoot, testLogger()))
+
+	data, err := os.ReadFile(excludePath)
+	require.NoError(t, err)
+	assert.Equal(t, "keep\nafter\n", string(data))
+}
+
+func TestSyncWorkspaceScriptSymlinksSkipsGitExcludeOutsideGitRepo(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, targetRoot, "scripts"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, targetRoot, "scripts", "tool.sh"), []byte("tool"), 0o644))
+
+	require.NoError(t, syncWorkspaceScriptSymlinks(workspace, targetRoot, testLogger()))
+
+	_, err := os.Stat(filepath.Join(workspace, ".git"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestSyncWorkspaceScriptSymlinksDoesNotExcludeRegularWorkspaceScripts(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".git", "info"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, targetRoot, "scripts"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "scripts"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, targetRoot, "scripts", "tool.sh"), []byte("runtime"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "scripts", "tool.sh"), []byte("workspace"), 0o644))
+	excludePath := filepath.Join(workspace, ".git", "info", "exclude")
+	require.NoError(t, os.WriteFile(excludePath, []byte("keep\n"), 0o644))
+
+	require.NoError(t, syncWorkspaceScriptSymlinks(workspace, targetRoot, testLogger()))
+
+	data, err := os.ReadFile(excludePath)
+	require.NoError(t, err)
+	assert.Equal(t, "keep\n", string(data))
+}
+
 func TestParseGitOverlaySpec(t *testing.T) {
 	for _, tt := range []struct {
 		spec, wantURL, wantRef string
