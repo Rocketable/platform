@@ -1592,10 +1592,6 @@ func (c *Connector) socialModeChannel(ctx context.Context, channelID string) (ch
 
 func (c *Connector) socialModeCouldAllowUser(userID string) bool {
 	userID = strings.TrimSpace(userID)
-	if slices.Contains(c.config.SocialMode.AllowedUserIDs, userID) {
-		return true
-	}
-
 	for _, channel := range c.config.SocialMode.Channels {
 		if slices.Contains(channel.AllowedUserIDs, userID) {
 			return true
@@ -1609,12 +1605,12 @@ func (c *Connector) socialModeAllowsUser(channel, userID string) bool {
 	userID = strings.TrimSpace(userID)
 
 	for _, configured := range c.config.SocialMode.Channels {
-		if configured.Channel == channel && len(configured.AllowedUserIDs) > 0 {
+		if configured.Channel == channel {
 			return slices.Contains(configured.AllowedUserIDs, userID)
 		}
 	}
 
-	return slices.Contains(c.config.SocialMode.AllowedUserIDs, userID)
+	return false
 }
 
 func (c *Connector) stripSlackBotMention(text string) string {

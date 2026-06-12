@@ -110,7 +110,6 @@ type SlackConfig struct {
 type SlackSocialConfig struct {
 	Enabled         bool                       `json:"enabled"`
 	Channels        []SlackSocialChannelConfig `json:"channels,omitempty"`
-	AllowedUserIDs  []string                   `json:"allowed_user_ids,omitempty"`
 	ContextMessages int                        `json:"context_messages"`
 }
 
@@ -257,14 +256,27 @@ func migrateSlackSocialChannelAgentsConfig(path string, data []byte) ([]byte, er
 		return data, nil
 	}
 
-	raw, ok := socialMode["channel_agents"]
-	if !ok {
+	rawAllowedUserIDs, hasAllowedUserIDs := socialMode["allowed_user_ids"]
+
+	allowedUserIDs := []string(nil)
+	if hasAllowedUserIDs {
+		if err := json.Unmarshal(rawAllowedUserIDs, &allowedUserIDs); err != nil {
+			return data, nil
+		}
+
+		allowedUserIDs = normalizeStringList(allowedUserIDs)
+	}
+
+	raw, hasChannelAgents := socialMode["channel_agents"]
+	if !hasChannelAgents && !hasAllowedUserIDs {
 		return data, nil
 	}
 
 	var old map[string]string
-	if err := json.Unmarshal(raw, &old); err != nil {
-		return data, nil
+	if hasChannelAgents {
+		if err := json.Unmarshal(raw, &old); err != nil {
+			return data, nil
+		}
 	}
 
 	var channels []SlackSocialChannelConfig
@@ -275,7 +287,12 @@ func migrateSlackSocialChannelAgentsConfig(path string, data []byte) ([]byte, er
 	}
 
 	seen := make(map[string]bool, len(channels))
-	for _, channel := range channels {
+	for i, channel := range channels {
+		channels[i].AllowedUserIDs = normalizeStringList(channel.AllowedUserIDs)
+		if len(channels[i].AllowedUserIDs) == 0 && len(allowedUserIDs) > 0 {
+			channels[i].AllowedUserIDs = slices.Clone(allowedUserIDs)
+		}
+
 		if name := normalizeSlackSocialChannel(channel.Channel); name != "" {
 			seen[name] = true
 		}
@@ -289,7 +306,7 @@ func migrateSlackSocialChannelAgentsConfig(path string, data []byte) ([]byte, er
 			continue
 		}
 
-		channels = append(channels, SlackSocialChannelConfig{Channel: name, Agent: agent})
+		channels = append(channels, SlackSocialChannelConfig{Channel: name, Agent: agent, AllowedUserIDs: slices.Clone(allowedUserIDs)})
 		seen[name] = true
 	}
 
@@ -303,6 +320,7 @@ func migrateSlackSocialChannelAgentsConfig(path string, data []byte) ([]byte, er
 	}
 
 	delete(socialMode, "channel_agents")
+	delete(socialMode, "allowed_user_ids")
 
 	migratedSocialMode, err := json.Marshal(socialMode)
 	if err != nil {
@@ -547,15 +565,16 @@ func (c *Config) validateSlack() error {
 		}
 	}
 
-	c.Slack.SocialMode.AllowedUserIDs = normalizeStringList(c.Slack.SocialMode.AllowedUserIDs)
 	c.Slack.SocialMode.Channels = normalizeSlackSocialChannels(c.Slack.SocialMode.Channels)
 
 	if !c.Slack.SocialMode.Enabled {
 		return nil
 	}
 
-	if len(c.Slack.SocialMode.AllowedUserIDs) == 0 {
-		return errors.New("slack.social_mode.allowed_user_ids is required when slack social mode is enabled")
+	for _, channel := range c.Slack.SocialMode.Channels {
+		if len(channel.AllowedUserIDs) == 0 {
+			return errors.New("slack.social_mode.channels[].allowed_user_ids is required when slack social mode is enabled")
+		}
 	}
 
 	if c.Slack.SocialMode.ContextMessages < 0 {

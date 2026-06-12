@@ -61,9 +61,6 @@
           ]
         }
       ],
-      "allowed_user_ids": [
-        "U0123456789"
-      ],
       "context_messages": 10
     }
   },
