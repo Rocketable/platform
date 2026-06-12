@@ -1,0 +1,32 @@
+name: example behavior
+description: Validates one specific model behavior.
+tags: [example]
+runs: 1
+timeout: 2m
+
+tools:
+  - name: choose_route
+    description: Pick the route to use.
+    parameters:
+      type: object
+      required: [route]
+      properties:
+        route:
+          type: string
+          enum: [fast, cheap, safe]
+    static:
+      response: '{"ok": true}'
+
+inference:
+  - system: You must call choose_route exactly once. Choose the safest route.
+  - user: Pick the safest route and briefly explain the choice.
+
+expected:
+  text:
+    - regexp: '(?i)safe'
+  tools:
+    ordered: false
+    calls:
+      - name: choose_route
+        arguments:
+          route: safe
