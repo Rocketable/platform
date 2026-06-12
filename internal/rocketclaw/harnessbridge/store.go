@@ -579,9 +579,33 @@ func (s *SessionService) Stop(context.Context) error {
 	return nil
 }
 
-// Vacuum runs explicit SQLite maintenance through the runtime service handle.
+// Vacuum runs incremental SQLite vacuum through the runtime service handle.
 func (s *SessionService) Vacuum(ctx context.Context) (VacuumStats, error) {
-	return vacuumSessionDB(ctx, s.db)
+	beforePages, err := queryPragmaInt(ctx, s.db, "page_count")
+	if err != nil {
+		return VacuumStats{}, err
+	}
+
+	beforeFree, err := queryPragmaInt(ctx, s.db, "freelist_count")
+	if err != nil {
+		return VacuumStats{}, err
+	}
+
+	if _, err := s.db.ExecContext(ctx, `PRAGMA incremental_vacuum`); err != nil {
+		return VacuumStats{}, fmt.Errorf("incremental vacuum rocketcode session db: %w", err)
+	}
+
+	afterPages, err := queryPragmaInt(ctx, s.db, "page_count")
+	if err != nil {
+		return VacuumStats{}, err
+	}
+
+	afterFree, err := queryPragmaInt(ctx, s.db, "freelist_count")
+	if err != nil {
+		return VacuumStats{}, err
+	}
+
+	return VacuumStats{DBExists: true, BeforePageCount: beforePages, BeforeFreePages: beforeFree, AfterPageCount: afterPages, AfterFreePages: afterFree}, nil
 }
 
 // CheckpointWAL checkpoints and truncates the SQLite WAL through the runtime service handle.
@@ -828,54 +852,6 @@ func DeleteSessionIn(ctx context.Context, workspace, workDir, conversationID str
 	}
 
 	return rows, nil
-}
-
-// VacuumSessionsIn runs explicit SQLite maintenance for the rocketcode session DB in workDir.
-func VacuumSessionsIn(ctx context.Context, workspace, workDir string) (VacuumStats, error) {
-	db, ok, err := openExistingSessionDB(ctx, workspace, workDir)
-	if err != nil {
-		return VacuumStats{}, err
-	}
-
-	if !ok {
-		return VacuumStats{}, nil
-	}
-
-	defer func() { _ = db.Close() }()
-
-	return vacuumSessionDB(ctx, db)
-}
-
-func vacuumSessionDB(ctx context.Context, db *sql.DB) (VacuumStats, error) {
-	beforePages, err := queryPragmaInt(ctx, db, "page_count")
-	if err != nil {
-		return VacuumStats{}, err
-	}
-
-	beforeFree, err := queryPragmaInt(ctx, db, "freelist_count")
-	if err != nil {
-		return VacuumStats{}, err
-	}
-
-	if _, err := db.ExecContext(ctx, `PRAGMA optimize`); err != nil {
-		return VacuumStats{}, fmt.Errorf("optimize rocketcode session db: %w", err)
-	}
-
-	if _, err := db.ExecContext(ctx, `VACUUM`); err != nil {
-		return VacuumStats{}, fmt.Errorf("vacuum rocketcode session db: %w", err)
-	}
-
-	afterPages, err := queryPragmaInt(ctx, db, "page_count")
-	if err != nil {
-		return VacuumStats{}, err
-	}
-
-	afterFree, err := queryPragmaInt(ctx, db, "freelist_count")
-	if err != nil {
-		return VacuumStats{}, err
-	}
-
-	return VacuumStats{DBExists: true, BeforePageCount: beforePages, BeforeFreePages: beforeFree, AfterPageCount: afterPages, AfterFreePages: afterFree}, nil
 }
 
 func checkpointWALDB(ctx context.Context, db *sql.DB) (WALCheckpointStats, error) {
@@ -1629,6 +1605,7 @@ func openSessionDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
+	// page_size and auto_vacuum must precede schema creation for new databases.
 	for _, statement := range []string{
 		`PRAGMA busy_timeout = 30000`,
 		`PRAGMA page_size = 4096`,

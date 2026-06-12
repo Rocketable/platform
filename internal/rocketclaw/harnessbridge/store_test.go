@@ -38,10 +38,6 @@ func DeleteSession(ctx context.Context, workspace, conversationID string) (int64
 	return DeleteSessionIn(ctx, workspace, config.DefaultWorkDir, conversationID)
 }
 
-func VacuumSessions(ctx context.Context, workspace string) (VacuumStats, error) {
-	return VacuumSessionsIn(ctx, workspace, config.DefaultWorkDir)
-}
-
 func TestSQLiteSessionStoreAppendAndLoad(t *testing.T) {
 	service := newTestSessionService(t)
 	store := newSessionStore(" ", service)
@@ -345,7 +341,7 @@ func TestSessionInspectionMissingDBDoesNotCreateRuntimeDir(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(workspace, ".rocketclaw"))
 }
 
-func TestSessionMaintenanceRejectsEscapingDBSymlink(t *testing.T) {
+func TestSessionDeleteRejectsEscapingDBSymlink(t *testing.T) {
 	workspace := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "sessions.sqlite3")
 	require.NoError(t, os.WriteFile(outside, []byte("outside"), 0o644))
@@ -353,9 +349,6 @@ func TestSessionMaintenanceRejectsEscapingDBSymlink(t *testing.T) {
 	require.NoError(t, os.Symlink(outside, sessionDBPath(workspace)))
 
 	_, err := DeleteSession(context.Background(), workspace, "main")
-	require.ErrorContains(t, err, "rocketcode session db must not be a symlink")
-
-	_, err = VacuumSessions(context.Background(), workspace)
 	require.ErrorContains(t, err, "rocketcode session db must not be a symlink")
 }
 
@@ -700,37 +693,7 @@ func TestDeleteSessionRejectsBlankConversationID(t *testing.T) {
 	require.ErrorContains(t, err, "conversation ID is required")
 }
 
-func TestVacuumSessionsMissingDBIsNoop(t *testing.T) {
-	stats, err := VacuumSessions(context.Background(), t.TempDir())
-	require.NoError(t, err)
-	assert.False(t, stats.DBExists)
-}
-
-func TestVacuumSessionsReportsCorruptDB(t *testing.T) {
-	workspace := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Dir(sessionDBPath(workspace)), 0o755))
-	require.NoError(t, os.WriteFile(sessionDBPath(workspace), []byte("not-sqlite"), 0o600))
-
-	_, err := VacuumSessions(context.Background(), workspace)
-	require.ErrorContains(t, err, "initialize rocketcode session db")
-}
-
-func TestVacuumSessionsPreservesRows(t *testing.T) {
-	workspace := t.TempDir()
-	dbPath := sessionDBPath(workspace)
-	_, err := AppendSessionEntryID(context.Background(), dbPath, "main", testSessionEntry("main", "assistant"))
-	require.NoError(t, err)
-
-	stats, err := VacuumSessions(context.Background(), workspace)
-	require.NoError(t, err)
-	assert.True(t, stats.DBExists)
-
-	entries, err := ObserveSessionEntries(context.Background(), dbPath, "main", 0)
-	require.NoError(t, err)
-	assert.Len(t, entries, 1)
-}
-
-func TestSessionServiceVacuumsAndCheckpointsWAL(t *testing.T) {
+func TestSessionServiceIncrementalVacuumsAndCheckpointsWAL(t *testing.T) {
 	store := newTestSessionService(t)
 	_, err := store.AppendEntryID(context.Background(), "main", testSessionEntry("main", "assistant"))
 	require.NoError(t, err)

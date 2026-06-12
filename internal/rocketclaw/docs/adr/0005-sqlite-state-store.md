@@ -36,7 +36,7 @@ RocketClaw stores persistent RocketCode sessions, managed thread routing, respon
 
 - Daemon startup must acquire and hold a runtime-owned advisory lock for `<runtime-dir>/state.sqlite3` ownership before opening the state store.
 - A second daemon must fail startup while that lock is held.
-- `rocketclaw fc delete` and `rocketclaw fc vacuum` must refuse to run while that lock is held because they mutate or maintain the state store outside the daemon.
+- `rocketclaw fc delete` must refuse to run while that lock is held because it mutates the state store outside the daemon.
 - `rocketclaw fc list` and `rocketclaw fc observe` remain allowed while the daemon is running because they are inspection commands, and must use the read-only opener mode.
 
 ### Inspection Queries
@@ -60,27 +60,32 @@ The centralized opener must configure these PRAGMAs for `<runtime-dir>/state.sql
 - `PRAGMA auto_vacuum = INCREMENTAL`
 - `PRAGMA page_size = 4096`
 
+For newly created state stores, `PRAGMA page_size = 4096` and `PRAGMA auto_vacuum = INCREMENTAL` must be applied before any tables or indexes are created so the database is created ready for incremental vacuum.
+
 ### Existing Databases
 
-- Existing databases may require a manual `VACUUM` after `auto_vacuum = INCREMENTAL` is introduced before incremental auto-vacuum is fully active for that database file.
+- Existing databases created before `auto_vacuum = INCREMENTAL` was active may require an external manual rebuild before incremental auto-vacuum is fully active for that database file.
 
-### Startup Maintenance
+### Daemon Maintenance
 
-- Daemon startup must quick-check an existing state store before pruning, vacuuming, checkpointing, applying restart notifications, or starting connectors.
+- Daemon startup must quick-check an existing state store before pruning, checkpointing, applying restart notifications, or starting connectors.
 - If the quick-check proves corruption, daemon startup must attempt copy-first recovery while holding the daemon ownership lock.
 - Startup corruption recovery must invoke the external `sqlite3` command-line shell `.recover` command only for a corruption-proven existing database.
 - Startup corruption recovery must snapshot `state.sqlite3`, `state.sqlite3-wal`, and `state.sqlite3-shm` when present into `<runtime-dir>/tmp/`, recover from that snapshot into a fresh database, validate the recovered database, move the corrupt live database files aside, and install only the validated recovered main database.
-- If recovery fails, daemon startup must fail and must not continue to pruning, full `VACUUM`, checkpoint, restart notification application, connector startup, or another state-store mutation.
-- Daemon startup must run SQLite cleanup after startup retention pruning and before normal connector, cron, and bridge startup continues.
-- Daemon startup cleanup must run through the already-open centralized SQLite handle, not by opening a second SQLite handle.
-- Daemon startup cleanup must run `PRAGMA optimize`, full `VACUUM`, and `PRAGMA wal_checkpoint(TRUNCATE)`.
-- Full `VACUUM` must be daemon-startup-only maintenance and must not run implicitly from `openSessionDB` or inspection commands such as `rocketclaw fc list`.
-- A startup cleanup error or busy checkpoint result must be logged but must not fail startup.
+- If recovery fails, daemon startup must fail and must not continue to pruning, checkpoint, restart notification application, connector startup, or another state-store mutation.
+- Daemon startup must run WAL checkpoint cleanup after startup retention pruning and before normal connector, cron, and bridge startup continues.
+- Daemon startup checkpoint cleanup must run through the already-open centralized SQLite handle, not by opening a second SQLite handle.
+- Daemon startup checkpoint cleanup must run `PRAGMA wal_checkpoint(TRUNCATE)`.
+- After the state service is opened, the daemon must start one background incremental-vacuum loop using the already-open centralized SQLite handle, not a second SQLite handle.
+- The background incremental-vacuum loop must run `PRAGMA incremental_vacuum` once immediately without blocking the startup sequence, then once per hour until shutdown.
+- Shutdown must cancel the background incremental-vacuum loop and wait for it before closing the state store.
+- Full `VACUUM` must not run from daemon startup, `openSessionDB`, inspection commands such as `rocketclaw fc list`, or operational commands such as `rocketclaw fc delete`.
+- A startup checkpoint cleanup error, busy checkpoint result, or background incremental-vacuum error must be logged but must not fail startup or stop the daemon.
 
 ## Non-Goals
 
 - This ADR does not require changing unrelated SQLite users outside RocketClaw state/session storage.
-- This ADR does not require automatic compaction or operational scheduling of database maintenance beyond daemon-startup SQLite cleanup.
+- This ADR does not require automatic compaction beyond the daemon-owned background incremental-vacuum loop.
 - This ADR does not define Slack placeholder cleanup or restart replay semantics.
 
 ## Evidence
@@ -105,3 +110,4 @@ The centralized opener must configure these PRAGMAs for `<runtime-dir>/state.sql
 - 2026-06-07: Added daemon startup copy-first corruption recovery using the external `sqlite3` shell `.recover` command only after quick-check proves corruption.
 - 2026-06-11: Added Slack goal-loop state to the contents stored in the centralized RocketClaw SQLite state store.
 - 2026-06-12: Specified query-level bounded `rocketclaw fc list` inspection semantics for `--since`, `--until`, `--limit`, and `--no-message-preview`.
+- 2026-06-12: Removed operational `rocketclaw fc vacuum`, replaced startup full `VACUUM` with daemon-owned background incremental vacuum, and required new state stores to be created ready for incremental vacuum.

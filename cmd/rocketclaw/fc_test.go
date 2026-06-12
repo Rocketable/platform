@@ -200,11 +200,8 @@ func TestRunFCDispatchesConfigBackedCommands(t *testing.T) {
 	output := captureStdout(t, func() error { return runFC([]string{"observe", "main"}) })
 	assert.Contains(t, output, "dispatch user")
 
-	output = captureStdout(t, func() error { return runFC([]string{"delete", "--no-vacuum", "main"}) })
-	assert.Contains(t, output, "deleted 1 turns; skipped vacuum")
-
-	output = captureStdout(t, func() error { return runFC([]string{"vacuum"}) })
-	assert.Contains(t, output, "vacuumed sessions")
+	output = captureStdout(t, func() error { return runFC([]string{"delete", "main"}) })
+	assert.Contains(t, output, "deleted 1 turns")
 }
 
 func TestRunFCNoArgsPrintsHelpWithoutConfig(t *testing.T) {
@@ -263,19 +260,8 @@ func TestRunFCDeleteReportsDeleteAndWriteErrors(t *testing.T) {
 	err := runFCDeleteIn(workspaceFile, config.DefaultWorkDir, []string{"main"}, io.Discard)
 	require.ErrorContains(t, err, "delete rocketcode session")
 
-	err = runFCDeleteIn(t.TempDir(), config.DefaultWorkDir, []string{"--no-vacuum", "main"}, failingWriter{})
+	err = runFCDeleteIn(t.TempDir(), config.DefaultWorkDir, []string{"main"}, failingWriter{})
 	require.ErrorContains(t, err, "write rocketcode delete result")
-	require.ErrorIs(t, err, errFailingWrite)
-}
-
-func TestRunFCDeleteReportsHintWriteError(t *testing.T) {
-	workspace := t.TempDir()
-	_, err := harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "main", fcTestEntry("hello", "hi"))
-	require.NoError(t, err)
-
-	writer := new(failOnSecondWrite)
-	err = runFCDeleteIn(workspace, config.DefaultWorkDir, []string{"--no-vacuum", "main"}, writer)
-	require.ErrorContains(t, err, "write rocketcode delete hint")
 	require.ErrorIs(t, err, errFailingWrite)
 }
 
@@ -286,7 +272,7 @@ func TestRunFCDeleteRejectsBadFlag(t *testing.T) {
 	require.ErrorContains(t, err, "parse rocketcode delete flags")
 }
 
-func TestRunFCDeleteNoVacuumDeletesOnlyTarget(t *testing.T) {
+func TestRunFCDeleteDeletesOnlyTarget(t *testing.T) {
 	workspace := t.TempDir()
 	_, err := harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "main", fcTestEntry("main user", "main assistant"))
 	require.NoError(t, err)
@@ -294,8 +280,8 @@ func TestRunFCDeleteNoVacuumDeletesOnlyTarget(t *testing.T) {
 	require.NoError(t, err)
 
 	var out bytes.Buffer
-	require.NoError(t, runFCDeleteIn(workspace, config.DefaultWorkDir, []string{"--no-vacuum", "main"}, &out))
-	assert.Contains(t, out.String(), "deleted 1 turns; skipped vacuum")
+	require.NoError(t, runFCDeleteIn(workspace, config.DefaultWorkDir, []string{"main"}, &out))
+	assert.Contains(t, out.String(), "deleted 1 turns")
 
 	mainEntries, err := harnessbridge.ObserveSessionEntries(t.Context(), harnessbridge.SessionDBPath(workspace), "main", 0)
 	require.NoError(t, err)
@@ -306,28 +292,10 @@ func TestRunFCDeleteNoVacuumDeletesOnlyTarget(t *testing.T) {
 	assert.Len(t, threadEntries, 1)
 }
 
-func TestRunFCDeleteDefaultVacuumPreservesOtherSessions(t *testing.T) {
-	workspace := t.TempDir()
-	_, err := harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "main", fcTestEntry("main user", "main assistant"))
-	require.NoError(t, err)
-	_, err = harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "thread", fcTestEntry("thread user", "thread assistant"))
-	require.NoError(t, err)
-
-	var out bytes.Buffer
-	require.NoError(t, runFCDeleteIn(workspace, config.DefaultWorkDir, []string{"main"}, &out))
-	assert.Contains(t, out.String(), "deleted 1 turns")
-	assert.Contains(t, out.String(), "vacuumed sessions")
-
-	threadEntries, err := harnessbridge.ObserveSessionEntries(t.Context(), harnessbridge.SessionDBPath(workspace), "thread", 0)
-	require.NoError(t, err)
-	assert.Len(t, threadEntries, 1)
-}
-
 func TestRunFCDeleteMissingDBReportsZero(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, runFCDeleteIn(t.TempDir(), config.DefaultWorkDir, []string{"main"}, &out))
 	assert.Contains(t, out.String(), "deleted 0 turns")
-	assert.Contains(t, out.String(), "nothing to vacuum")
 }
 
 func TestRunFCDeleteRefusesWhileStateStoreLocked(t *testing.T) {
@@ -339,69 +307,6 @@ func TestRunFCDeleteRefusesWhileStateStoreLocked(t *testing.T) {
 	err = runFCDeleteIn(workspace, config.DefaultWorkDir, []string{"main"}, io.Discard)
 	require.ErrorContains(t, err, "rocketclaw daemon is running; stop it before running fc delete")
 	require.ErrorIs(t, err, harnessbridge.ErrStateStoreLocked)
-}
-
-func TestRunFCDeleteNoVacuumMissingDBSkipsVacuumHint(t *testing.T) {
-	var out bytes.Buffer
-	require.NoError(t, runFCDeleteIn(t.TempDir(), config.DefaultWorkDir, []string{"--no-vacuum", "main"}, &out))
-	assert.Contains(t, out.String(), "deleted 0 turns; skipped vacuum")
-	assert.NotContains(t, out.String(), "run rocketclaw fc vacuum")
-}
-
-func TestRunFCVacuumMissingDBIsNoop(t *testing.T) {
-	var out bytes.Buffer
-	require.NoError(t, runFCVacuumIn(t.TempDir(), config.DefaultWorkDir, nil, &out))
-	assert.Contains(t, out.String(), "nothing to vacuum")
-}
-
-func TestRunFCVacuumRefusesWhileStateStoreLocked(t *testing.T) {
-	workspace := t.TempDir()
-	lock, err := harnessbridge.AcquireStateStoreLock(workspace, ".rocketclaw")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, lock.Close()) })
-
-	err = runFCVacuumIn(workspace, config.DefaultWorkDir, nil, io.Discard)
-	require.ErrorContains(t, err, "rocketclaw daemon is running; stop it before running fc vacuum")
-	require.ErrorIs(t, err, harnessbridge.ErrStateStoreLocked)
-}
-
-func TestRunFCVacuumRejectsArguments(t *testing.T) {
-	var out bytes.Buffer
-
-	err := runFCVacuumIn(t.TempDir(), config.DefaultWorkDir, []string{"extra"}, &out)
-	require.ErrorContains(t, err, "vacuum does not accept arguments")
-}
-
-func TestRunFCVacuumReportsWorkspaceErrors(t *testing.T) {
-	workspaceFile := filepath.Join(t.TempDir(), "workspace")
-	require.NoError(t, os.WriteFile(workspaceFile, []byte("not a directory"), 0o600))
-
-	err := runFCVacuumIn(workspaceFile, config.DefaultWorkDir, nil, io.Discard)
-	require.ErrorContains(t, err, "vacuum rocketcode sessions")
-}
-
-func TestRunFCVacuumPreservesRows(t *testing.T) {
-	workspace := t.TempDir()
-	_, err := harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "main", fcTestEntry("main user", "main assistant"))
-	require.NoError(t, err)
-
-	var out bytes.Buffer
-	require.NoError(t, runFCVacuumIn(workspace, config.DefaultWorkDir, nil, &out))
-	assert.Contains(t, out.String(), "vacuumed sessions")
-
-	entries, err := harnessbridge.ObserveSessionEntries(t.Context(), harnessbridge.SessionDBPath(workspace), "main", 0)
-	require.NoError(t, err)
-	assert.Len(t, entries, 1)
-}
-
-func TestWriteVacuumStatsReportsWriterErrors(t *testing.T) {
-	err := writeVacuumStats(failingWriter{}, harnessbridge.VacuumStats{})
-	require.ErrorContains(t, err, "write rocketcode vacuum result")
-	require.ErrorIs(t, err, errFailingWrite)
-
-	err = writeVacuumStats(failingWriter{}, harnessbridge.VacuumStats{DBExists: true})
-	require.ErrorContains(t, err, "write rocketcode vacuum result")
-	require.ErrorIs(t, err, errFailingWrite)
 }
 
 func TestWriteFCListReportsFlushError(t *testing.T) {
@@ -434,17 +339,6 @@ type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) {
 	return 0, errFailingWrite
-}
-
-type failOnSecondWrite struct{ writes int }
-
-func (w *failOnSecondWrite) Write(p []byte) (int, error) {
-	w.writes++
-	if w.writes == 2 {
-		return 0, errFailingWrite
-	}
-
-	return len(p), nil
 }
 
 type cancelingWriter struct {

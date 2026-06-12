@@ -21,14 +21,12 @@ const fcHelpText = `rocketclaw fc
 Usage:
   rocketclaw fc list [--since 24h|RFC3339] [--until RFC3339] [--limit N] [--no-message-preview]
   rocketclaw fc observe [--follow|-f] [conversation-id]
-  rocketclaw fc delete [--no-vacuum] <conversation-id>
-  rocketclaw fc vacuum
+  rocketclaw fc delete <conversation-id>
 
 Commands:
   list     List stored rocketcode sessions.
   observe  Print stored rocketcode session entries as JSONL. Defaults to main.
-  delete   Delete one rocketcode session and vacuum by default.
-  vacuum   Vacuum the rocketcode session DB. May block if rocketclaw is running.
+  delete   Delete one rocketcode session.
 `
 
 func runFC(args []string) error {
@@ -48,8 +46,6 @@ func runFC(args []string) error {
 		return runFCObserveIn(cfg.Workspace, cfg.WorkDirName(), args[1:], os.Stdout)
 	case "delete":
 		return runFCDeleteIn(cfg.Workspace, cfg.WorkDirName(), args[1:], os.Stdout)
-	case "vacuum":
-		return runFCVacuumIn(cfg.Workspace, cfg.WorkDirName(), args[1:], os.Stdout)
 	case "help", "-h", "--help":
 		return printStdout(fcHelpText, "rocketcode help")
 	default:
@@ -59,7 +55,6 @@ func runFC(args []string) error {
 
 func runFCDeleteIn(workspace, workDir string, args []string, out io.Writer) error {
 	flagSet := flag.NewFlagSet("rocketclaw fc delete", flag.ContinueOnError)
-	noVacuum := flagSet.Bool("no-vacuum", false, "skip vacuum after delete")
 
 	if err := flagSet.Parse(args); err != nil {
 		return fmt.Errorf("parse rocketcode delete flags: %w", err)
@@ -84,53 +79,11 @@ func runFCDeleteIn(workspace, workDir string, args []string, out io.Writer) erro
 		return fmt.Errorf("delete rocketcode session: %w", err)
 	}
 
-	if *noVacuum {
-		_, err := fmt.Fprintf(out, "deleted %d turns; skipped vacuum\n", deleted)
-		if err != nil {
-			return fmt.Errorf("write rocketcode delete result: %w", err)
-		}
-
-		if deleted > 0 {
-			_, err = fmt.Fprintln(out, "run rocketclaw fc vacuum to reclaim disk space")
-			if err != nil {
-				return fmt.Errorf("write rocketcode delete hint: %w", err)
-			}
-		}
-
-		return nil
-	}
-
-	stats, vacuumErr := harnessbridge.VacuumSessionsIn(context.Background(), workspace, workDir)
-
 	if _, err := fmt.Fprintf(out, "deleted %d turns\n", deleted); err != nil {
 		return fmt.Errorf("write rocketcode delete result: %w", err)
 	}
 
-	if vacuumErr != nil {
-		return fmt.Errorf("deleted %d turns; vacuum failed: %w", deleted, vacuumErr)
-	}
-
-	return writeVacuumStats(out, stats)
-}
-
-func runFCVacuumIn(workspace, workDir string, args []string, out io.Writer) error {
-	if len(args) != 0 {
-		return errors.New("vacuum does not accept arguments")
-	}
-
-	lock, err := acquireFCMutationLock(workspace, workDir, "vacuum")
-	if err != nil {
-		return fmt.Errorf("vacuum rocketcode sessions: %w", err)
-	}
-
-	defer func() { _ = lock.Close() }()
-
-	stats, err := harnessbridge.VacuumSessionsIn(context.Background(), workspace, workDir)
-	if err != nil {
-		return fmt.Errorf("vacuum rocketcode sessions: %w", err)
-	}
-
-	return writeVacuumStats(out, stats)
+	return nil
 }
 
 func acquireFCMutationLock(workspace, workDir, command string) (*harnessbridge.StateStoreLock, error) {
@@ -144,22 +97,6 @@ func acquireFCMutationLock(workspace, workDir, command string) (*harnessbridge.S
 	}
 
 	return lock, nil
-}
-
-func writeVacuumStats(out io.Writer, stats harnessbridge.VacuumStats) error {
-	if !stats.DBExists {
-		if _, err := fmt.Fprintln(out, "nothing to vacuum"); err != nil {
-			return fmt.Errorf("write rocketcode vacuum result: %w", err)
-		}
-
-		return nil
-	}
-
-	if _, err := fmt.Fprintf(out, "vacuumed sessions: pages %d -> %d, free pages %d -> %d\n", stats.BeforePageCount, stats.AfterPageCount, stats.BeforeFreePages, stats.AfterFreePages); err != nil {
-		return fmt.Errorf("write rocketcode vacuum result: %w", err)
-	}
-
-	return nil
 }
 
 func runFCListIn(workspace, workDir string, args []string, out io.Writer) error {
