@@ -1,7 +1,6 @@
 package rocketcode
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -10,7 +9,6 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"text/template"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
@@ -25,12 +23,7 @@ type taskParams struct {
 	Command      string `json:"command"`
 }
 
-type interAgentFilter struct {
-	agent  Agent
-	prompt *template.Template
-}
-
-type interAgentFilterDecision struct {
+type guardrailDecision struct {
 	Approved bool   `json:"approved"`
 	Reason   string `json:"reason"`
 }
@@ -173,8 +166,20 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		return "", fmt.Errorf("unknown agent type: %s is not a valid agent type", params.SubagentType)
 	}
 
-	if f.interAgentFilter != nil {
-		decision := f.runInterAgentFilter(ctx, params.Prompt)
+	originatingAgent := ""
+	if f.agent != nil {
+		originatingAgent = f.agent.Name
+	}
+
+	if agent.Guardrail != "" && !f.inGuardrailRun {
+		guardrailAgent := f.agents.Items[agent.Guardrail]
+		message := strings.Join([]string{
+			"Current Action: delegation",
+			fmt.Sprintf("The agent %s wants to delegate to %s:", originatingAgent, agent.Name),
+			params.Prompt,
+		}, "\n")
+
+		decision := f.runGuardrail(ctx, &guardrailAgent, message)
 		if !decision.Approved {
 			reason := strings.TrimSpace(decision.Reason)
 			if reason == "" {
@@ -286,8 +291,18 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		}
 	}
 
-	if f.interAgentFilter != nil {
-		decision := f.runInterAgentFilter(ctx, last)
+	if agent.Guardrail != "" && !f.inGuardrailRun {
+		guardrailAgent := f.agents.Items[agent.Guardrail]
+		message := strings.Join([]string{
+			"Current Action: response",
+			fmt.Sprintf("The agent %s wants to delegate to %s:", originatingAgent, agent.Name),
+			params.Prompt,
+			"",
+			fmt.Sprintf("And the response from %s to %s:", agent.Name, originatingAgent),
+			last,
+		}, "\n")
+
+		decision := f.runGuardrail(ctx, &guardrailAgent, message)
 		if !decision.Approved {
 			reason := strings.TrimSpace(decision.Reason)
 			if reason == "" {
@@ -315,26 +330,26 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	return strings.Join([]string{"<task_result>", last, "</task_result>"}, "\n"), nil
 }
 
-func (f *toolFactory) runInterAgentFilter(ctx context.Context, parentAgentPrompt string) interAgentFilterDecision {
-	var prompt bytes.Buffer
-	if err := f.interAgentFilter.prompt.Execute(&prompt, map[string]string{"ParentAgentPrompt": parentAgentPrompt}); err != nil {
-		return interAgentFilterDecision{Approved: false, Reason: "inter-agent guardrail prompt failed: " + err.Error()}
-	}
-
-	agent := f.interAgentFilter.agent
+func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, message string) guardrailDecision {
+	agent := *guardrail
 	agent.Permission = f.shellOutput.effectivePermissions(agent.Permission)
-	responseFormat := interAgentFilterResponseFormat()
+	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
+
+	responseFormat := guardrailResponseFormat()
 
 	modelRef, err := parseAgentModelRef(agent.Model, f.modelRef)
 	if err != nil {
-		return interAgentFilterDecision{Approved: false, Reason: "inter-agent guardrail model failed: " + err.Error()}
+		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail model failed: " + err.Error()}
 	}
+
+	childFactory := *f
+	childFactory.inGuardrailRun = true
 
 	child := &looper{
 		agent:              agent,
 		Client:             f.client,
 		AnthropicClient:    f.anthropicClient,
-		SystemPrompt:       composeSystemPromptWithSkills(prompt.String(), f.skills, &agent),
+		SystemPrompt:       composeSystemPromptWithSkills(agent.Prompt, f.skills, &agent),
 		Model:              modelRef.apiModel,
 		DisplayModel:       modelRef.display(),
 		ReasoningEffort:    shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
@@ -344,13 +359,13 @@ func (f *toolFactory) runInterAgentFilter(ctx context.Context, parentAgentPrompt
 		ParallelToolCalls:  f.parallelToolCalls,
 		ResponseFormat:     responseFormat,
 		Permissions:        agent.Permission,
-		Tools:              f.toolsFor(&agent),
+		Tools:              childFactory.toolsFor(&agent),
 	}
 
 	output := make(chan ChatResponse)
 
 	input := make(chan PromptInput, 1)
-	input <- PromptInput{Role: PromptInputRoleUser, Text: "Return the inter-agent filter decision as JSON.", Responses: output}
+	input <- PromptInput{Role: PromptInputRoleUser, Text: message, Responses: output}
 
 	close(input)
 
@@ -371,16 +386,16 @@ func (f *toolFactory) runInterAgentFilter(ctx context.Context, parentAgentPrompt
 
 	if err := child.Loop(ctx, input, func(func(SessionEntry, error) bool) {}, func(SessionEntry) error { return nil }, make(chan os.Signal, 1)); err != nil {
 		_ = group.Wait()
-		return interAgentFilterDecision{Approved: false, Reason: "inter-agent guardrail failed: " + err.Error()}
+		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail failed: " + err.Error()}
 	}
 
 	if err := group.Wait(); err != nil {
-		return interAgentFilterDecision{Approved: false, Reason: "inter-agent guardrail failed: " + err.Error()}
+		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail failed: " + err.Error()}
 	}
 
-	var decision interAgentFilterDecision
+	var decision guardrailDecision
 	if err := json.Unmarshal([]byte(last), &decision); err != nil {
-		return interAgentFilterDecision{Approved: false, Reason: "inter-agent guardrail returned invalid JSON"}
+		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail returned invalid JSON"}
 	}
 
 	return decision
@@ -390,10 +405,10 @@ func emitSubagentDiagnostic(output chan<- ChatResponse, diagnostic *SubagentDiag
 	emitDiagnosticChatResponse(output, ChatResponse{Kind: ChatResponseAssistantTool, Subagent: diagnostic})
 }
 
-func interAgentFilterResponseFormat() responses.ResponseFormatTextConfigUnionParam {
+func guardrailResponseFormat() responses.ResponseFormatTextConfigUnionParam {
 	var jsonSchema responses.ResponseFormatTextJSONSchemaConfigParam
 
-	jsonSchema.Name = "inter_agent_filter_decision"
+	jsonSchema.Name = "guardrail_decision"
 	jsonSchema.Strict = openai.Bool(true)
 	jsonSchema.Schema = map[string]any{
 		"type": "object",

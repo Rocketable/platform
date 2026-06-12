@@ -23,6 +23,7 @@ const (
 	rc004 = "RC004"
 	rc005 = "RC005"
 	rc006 = "RC006"
+	rc007 = "RC007"
 )
 
 // Finding is one lint result line.
@@ -76,6 +77,7 @@ func Lint(runtimeRoot string) (Result, error) {
 	findings = append(findings, lintCapabilities(infos)...)
 	findings = append(findings, lintTaskCycles(infos)...)
 	findings = append(findings, lintDelegationEscalation(infos)...)
+	findings = append(findings, lintGuardrailReferences(infos)...)
 	findings = filterSuppressed(findings, infos)
 	slices.SortFunc(findings, func(a, b Finding) int {
 		if n := strings.Compare(a.Code, b.Code); n != 0 {
@@ -118,6 +120,17 @@ func AgentGraphDOT(runtimeRoot string) (string, error) {
 			}
 
 			fmt.Fprintf(&b, "  %s -> %s;\n", strconv.Quote(from), strconv.Quote(to))
+		}
+	}
+
+	for _, from := range names {
+		guardrail := infos[from].agent.Guardrail
+		if guardrail == "" {
+			continue
+		}
+
+		if _, ok := infos[guardrail]; ok {
+			fmt.Fprintf(&b, "  %s -> %s [label=%s];\n", strconv.Quote(from), strconv.Quote(guardrail), strconv.Quote("guardrail"))
 		}
 	}
 
@@ -245,7 +258,7 @@ func addSuppressionsFromNode(filePath, key string, node *yaml.Node, suppressions
 }
 
 func validCode(code string) bool {
-	return slices.Contains([]string{rc001, rc002, rc003, rc004, rc005, rc006}, code)
+	return slices.Contains([]string{rc001, rc002, rc003, rc004, rc005, rc006, rc007}, code)
 }
 
 func parseNoLint(comment string) (string, bool) {
@@ -338,6 +351,23 @@ func lintDelegationEscalation(infos map[string]*agentInfo) []Finding {
 			}
 
 			findings = append(findings, Finding{Code: rc004, Severity: "error", Path: write.file + " -> " + execute.file, Message: fmt.Sprintf("%s can edit %s and delegate to %s, which can execute %s", write.agent, cleanSubject(write.pattern), execute.agent, cleanSubject(execute.pattern)), keys: []string{write.bucket, write.pattern, "task", execute.bucket, execute.pattern}})
+		}
+	}
+
+	return findings
+}
+
+func lintGuardrailReferences(infos map[string]*agentInfo) []Finding {
+	findings := []Finding{}
+
+	for name, info := range infos {
+		guardrail := info.agent.Guardrail
+		if guardrail == "" {
+			continue
+		}
+
+		if _, ok := infos[guardrail]; !ok {
+			findings = append(findings, Finding{Code: rc007, Severity: "error", Path: info.filePath, Message: fmt.Sprintf("%s references missing guardrail agent %s", name, guardrail), keys: []string{"guardrail"}})
 		}
 	}
 

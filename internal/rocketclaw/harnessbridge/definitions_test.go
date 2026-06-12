@@ -82,10 +82,10 @@ Prompt
 	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, attachFilesToolName, rocketcode.PermissionAllow)
 }
 
-func TestLoadRocketCodeDefinitionsActivatesLocalGuardrail(t *testing.T) {
+func TestLoadRocketCodeDefinitionsPreservesGuardrailReference(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\n---\nPrompt\n")
-	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: openai/gpt-5.5\nreasoningEffort: low\nverbosity: low\npermission:\n  read:\n    \"docs/*\": allow\n---\nCheck {{.ParentAgentPrompt}}\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nguardrail: guardrail\n---\nPrompt\n")
+	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: openai/gpt-5.5\nreasoningEffort: low\nverbosity: low\npermission:\n  read:\n    \"docs/*\": allow\n---\nCheck delegated work\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	root, err := os.OpenRoot(workspace)
@@ -96,12 +96,15 @@ func TestLoadRocketCodeDefinitionsActivatesLocalGuardrail(t *testing.T) {
 	agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
 	require.NoError(t, err)
 
-	cfg := interAgentFilterConfig(agents)
-	require.Equal(t, "Check {{.ParentAgentPrompt}}", cfg.Prompt)
-	require.Equal(t, "gpt-5.5", cfg.Model)
-	require.Equal(t, "low", cfg.ReasoningEffort)
-	require.Equal(t, "low", cfg.Verbosity)
-	action, matched := cfg.Permission.Evaluate("read", "docs/a.md")
+	main := agents.Items["main"]
+	guardrail := agents.Items["guardrail"]
+
+	require.Equal(t, "guardrail", main.Guardrail)
+	require.Equal(t, "Check delegated work", guardrail.Prompt)
+	require.Equal(t, "gpt-5.5", guardrail.Model)
+	require.Equal(t, "low", guardrail.ReasoningEffort)
+	require.Equal(t, "low", guardrail.Verbosity)
+	action, matched := guardrail.Permission.Evaluate("read", "docs/a.md")
 	require.True(t, matched)
 	require.Equal(t, rocketcode.PermissionAllow, action)
 }

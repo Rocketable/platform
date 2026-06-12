@@ -154,7 +154,7 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 	customTools[3] = scheduleMessageTool(progress.ScheduleMessage, logger)
 	customTools[4] = resetScheduledMessagesTool(progress.ResetScheduledMessages)
 
-	rocketcodeConfig := rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: diagnostics, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: true}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, InterAgentFilter: interAgentFilterConfig(agents), CustomTools: customTools}
+	rocketcodeConfig := rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: diagnostics, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: true}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, CustomTools: customTools}
 
 	looper, err := rocketcode.NewWithProviders(providers, &rocketcodeConfig, root, agents, skills, agent, io.Discard)
 	if err != nil {

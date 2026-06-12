@@ -246,6 +246,22 @@ func TestNewRequiresParsedAgentsAndSkills(t *testing.T) {
 	require.EqualError(t, err, `missing required default agent "main"`)
 }
 
+func TestNewRejectsMissingGuardrailAgent(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	client := openai.NewClient()
+	config := testConfig(dir)
+	agents := Agents{Items: map[string]Agent{"main": {Name: "main", Guardrail: "safety"}}}
+	skills := Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}
+
+	_, err = New(&client, config, root, agents, skills, "main", nil)
+
+	require.EqualError(t, err, `agent "main" references missing guardrail agent "safety"`)
+}
+
 func testConfig(shellOutputDir string) *Config {
-	return &Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 0, ShellOutputDir: shellOutputDir, SandboxedBash: false, InterAgentFilter: InterAgentFilterConfig{Prompt: "", Model: "", ReasoningEffort: "", Verbosity: "", Permission: PermissionSet{Buckets: nil}}, CustomTools: nil, ShellEnv: nil}
+	return &Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 0, ShellOutputDir: shellOutputDir, SandboxedBash: false, CustomTools: nil, ShellEnv: nil}
 }

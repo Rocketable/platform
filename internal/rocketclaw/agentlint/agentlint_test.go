@@ -75,10 +75,16 @@ permission:
 ---
 same
 `)
+	writeAgent(t, runtimeRoot, "guarded.md", `---
+description: guarded
+guardrail: missing-safety
+---
+guarded
+`)
 
 	result, err := Lint(runtimeRoot)
 	require.NoError(t, err)
-	assertFindingCodes(t, result.Findings, rc001, rc002, rc003, rc004, rc005, rc006)
+	assertFindingCodes(t, result.Findings, rc001, rc002, rc003, rc004, rc005, rc006, rc007)
 }
 
 func TestLintSuppressions(t *testing.T) {
@@ -93,12 +99,19 @@ permission:
 ---
 same
 `)
+	writeAgent(t, runtimeRoot, "guarded.md", `---
+description: guarded
+guardrail: missing-safety #nolint RC007: defined by pending overlay
+---
+guarded
+`)
 
 	result, err := Lint(runtimeRoot)
 	require.NoError(t, err)
 
 	for _, finding := range result.Findings {
 		assert.NotEqual(t, rc001, finding.Code)
+		assert.NotEqual(t, rc007, finding.Code)
 	}
 }
 
@@ -164,6 +177,7 @@ alpha
 	writeAgent(t, runtimeRoot, "beta.md", `---
 description: beta
 maxRecursion: 2
+guardrail: hub
 ---
 beta
 `)
@@ -186,6 +200,7 @@ hub
   "alpha" -> "hub" [color="red", label="cycle"];
   "hub" -> "alpha" [color="red", label="cycle"];
   "hub" -> "hub" [color="red", label="cycle"];
+  "beta" -> "hub" [label="guardrail"];
 }
 `, dot)
 }

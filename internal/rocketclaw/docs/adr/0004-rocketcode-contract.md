@@ -13,7 +13,7 @@ This ADR governs rocketclaw's contract with the embedded `github.com/Rocketable/
 
 ## Context
 
-Several rocketclaw capabilities exist only because of precise RocketCode configuration: prompt shell expansion, stronger skills, custom tools, inter-agent guardrails, session replay, attachments, and raw cron completion. These settings are product behavior, not incidental config.
+Several rocketclaw capabilities exist only because of precise RocketCode configuration: prompt shell expansion, stronger skills, custom tools, per-agent guardrails, session replay, attachments, and raw cron completion. These settings are product behavior, not incidental config.
 
 ## Normative Contracts
 
@@ -54,17 +54,38 @@ Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell 
 - The agent that starts the inference owns the recursion budget for that delegation tree. Child agents' own `maxRecursion` values are ignored inside an inherited delegation tree and apply only when that child agent starts a separate RocketCode inference.
 - Values below `-1` and non-integer YAML values make the agent definition invalid.
 
-### Inter-Agent Guardrail
+### Per-Agent Guardrail
 
-- RocketClaw configures RocketCode's inter-agent filter only when the effective runtime agents include a local-only agent named `guardrail` from `agents/guardrail.md`, as constrained by ADR 0003.
-- There is no `rocketclaw.json` setting for this behavior.
-- Both persistent bridge and raw-run RocketCode construction paths pass the guardrail prompt, model, reasoning effort, verbosity, and permissions into RocketCode when the local-only `guardrail` agent is present.
-- The guardrail prompt is a Go `text/template` and receives the delegated prompt or child response text as `{{.ParentAgentPrompt}}`.
-- RocketCode runs the guardrail before each `task` delegation. When the guardrail returns `approved:false`, the child agent is not called and the guardrail reason is returned to the caller agent.
-- RocketCode runs the guardrail after each child agent final response. When the guardrail returns `approved:false`, the guardrail reason is returned to the caller agent instead of the child response.
+- RocketClaw does not configure a global RocketCode inter-agent filter and has no `rocketclaw.json` setting for this behavior.
+- RocketCode loads `guardrail: <agent-name>` from agent frontmatter. The declaring target agent is guarded by the named loaded agent.
+- Missing guardrail target agents fail RocketCode construction in both persistent bridge and raw-run paths.
+- `agents/guardrail.md` is not special; it is a normal agent named `guardrail` when present.
+- The guardrail agent uses its normal prompt. RocketCode provides the reviewed material as the guardrail run's user message; there is no required or special `{{.Payload}}` or `{{.Message}}` template placeholder.
+- For the outbound delegation check, the guardrail message is:
+
+```text
+Current Action: delegation
+The agent <originatingAgent> wants to delegate to <delegatedAgentName>:
+<delegated prompt>
+```
+
+- For the inbound response check, the guardrail message is:
+
+```text
+Current Action: response
+The agent <originatingAgent> wants to delegate to <delegatedAgentName>:
+<delegated prompt>
+
+And the response from <delegatedAgentName> to <originatingAgent>:
+<child response>
+```
+
+- `originatingAgent` is the agent that called the `task` tool, and `delegatedAgentName` is the guarded target agent.
+- RocketCode runs the guardrail before each outbound `task` delegation to a guarded target. When the guardrail returns `approved:false`, the child agent is not called and the guardrail reason is returned to the caller agent.
+- RocketCode runs the guardrail after each inbound guarded child agent final response. When the guardrail returns `approved:false`, the guardrail reason is returned to the caller agent instead of the child response.
 - The guardrail response contract is strict JSON with `approved` boolean and `reason` string fields. Invalid or missing guardrail JSON fails closed.
-- The guardrail receives tools only through its own `permission` frontmatter under existing RocketCode permission semantics.
-- Guardrail execution is not surfaced as parent progress or subagent diagnostics; only rejection reasons are bubbled through the task result.
+- The guardrail receives tools only through its own `permission` frontmatter under existing RocketCode permission semantics and uses its own prompt, model, reasoning effort, verbosity, tools, and skills.
+- Guardrail execution is not recursively guarded and is not surfaced as parent progress or subagent diagnostics; only rejection reasons are bubbled through the task result.
 
 ### Tools Injected By RocketClaw
 
@@ -149,3 +170,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-11: Added persistent-bridge Slack goal-loop steering and `rocketclaw_update_goal` tool contract governed by ADR 0007.
 - 2026-06-12: Specified shared inbound attachment normalization for Slack and external MCP before persistent RocketCode prompt construction.
 - 2026-06-12: Specified shared outbound response attachment values for connector delivery and external MCP result rendering.
+- 2026-06-12: Replaced RocketClaw-configured global guardrail with RocketCode per-target-agent `guardrail` frontmatter and explicit guardrail request messages.

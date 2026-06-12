@@ -315,8 +315,8 @@ func TestRunRawLoadsSkillContentAsDeveloperMessage(t *testing.T) {
 func TestRunRawPassesLocalGuardrailToRocketCode(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\npermission:\n  task:\n    helper: allow\n---\nPrompt\n")
-	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: openai/gpt-5.5\n---\nHelper prompt\n")
-	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: openai/gpt-5.5\n---\nGuard {{.ParentAgentPrompt}}\n")
+	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: openai/gpt-5.5\nguardrail: guardrail\n---\nHelper prompt\n")
+	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: openai/gpt-5.5\n---\nGuard delegated work\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	requests := 0
@@ -343,7 +343,10 @@ func TestRunRawPassesLocalGuardrailToRocketCode(t *testing.T) {
 		case 1:
 			writeRawRunFunctionCall(t, w, "resp_1", "call_1", "task", map[string]string{"description": "delegate", "prompt": "delegated prompt", "subagent_type": "helper"})
 		case 2:
-			assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard delegated prompt")
+			assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard delegated work")
+			assert.Contains(t, fmt.Sprint(body), "Current Action: delegation")
+			assert.Contains(t, fmt.Sprint(body), "The agent main wants to delegate to helper")
+			assert.Contains(t, fmt.Sprint(body), "delegated prompt")
 			assert.Contains(t, fmt.Sprint(body["text"]), "json_schema")
 			writeRawRunMessage(t, w, "resp_2", "msg_2", `{"approved":true,"reason":""}`)
 		case 3:
@@ -351,7 +354,10 @@ func TestRunRawPassesLocalGuardrailToRocketCode(t *testing.T) {
 			assert.Contains(t, fmt.Sprint(body), "delegated prompt")
 			writeRawRunMessage(t, w, "resp_3", "msg_3", "child response")
 		case 4:
-			assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard child response")
+			assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard delegated work")
+			assert.Contains(t, fmt.Sprint(body), "Current Action: response")
+			assert.Contains(t, fmt.Sprint(body), "And the response from helper to main")
+			assert.Contains(t, fmt.Sprint(body), "child response")
 			assert.Contains(t, fmt.Sprint(body["text"]), "json_schema")
 			writeRawRunMessage(t, w, "resp_4", "msg_4", `{"approved":true,"reason":""}`)
 		case 5:

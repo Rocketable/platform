@@ -5,11 +5,11 @@ Human approval required for meaning changes: Yes
 
 ## Decision
 
-RocketCode exposes a permission-gated tool surface, workspace-local agents, workspace-local skills, optional inter-agent filtering, and embedding-provided custom tools. These extension points are product behavior and must remain stable across refactors unless the human partner approves a spec change.
+RocketCode exposes a permission-gated tool surface, workspace-local agents, workspace-local skills, per-agent guardrail filtering, and embedding-provided custom tools. These extension points are product behavior and must remain stable across refactors unless the human partner approves a spec change.
 
 ## Scope
 
-This ADR governs built-in tools, custom tools, agent loading, skill loading, task delegation, inter-agent filtering, attachments, and sandboxed command behavior.
+This ADR governs built-in tools, custom tools, agent loading, skill loading, task delegation, per-agent guardrail filtering, attachments, and sandboxed command behavior.
 
 ## Context
 
@@ -60,7 +60,7 @@ All function schemas are strict and mark declared properties as required even wh
 ### Agents And Tasks
 
 - Agents load from top-level `.md` files in the supplied agents filesystem. Nested agent markdown is ignored.
-- Agent YAML frontmatter is required and must be a mapping. Known fields are `description`, `model`, `reasoningEffort`, `verbosity`, `maxRecursion`, and `permission`. Unknown fields remain in `Frontmatter`.
+- Agent YAML frontmatter is required and must be a mapping. Known fields are `description`, `model`, `reasoningEffort`, `verbosity`, `maxRecursion`, `guardrail`, and `permission`. Unknown fields remain in `Frontmatter`.
 - Agent name is the filename without `.md`; prompt content is the post-frontmatter body trimmed.
 - Frontmatter has a fallback sanitizer for unquoted scalar values containing `:`.
 - Omitted `maxRecursion` and `maxRecursion: -1` mean unlimited subdelegation. `maxRecursion: 0` permits no task delegation from that inference. Positive values allow that many delegation levels. Values below `-1` and non-integer values invalidate the agent.
@@ -70,14 +70,37 @@ All function schemas are strict and mark declared properties as required even wh
 - Unknown subagent type returns `unknown agent type: ...`. Exhausted recursion is rejected before subagent lookup.
 - Child task output returns the last child assistant final-message text inside `<task_result>`; no final text produces an empty wrapper body.
 
-### Inter-Agent Filter
+### Per-Agent Guardrail Filter
 
-- When configured, the inter-agent filter runs before task delegation and after child final response.
-- The filter prompt is parsed as a Go template and receives the delegated prompt or child response as `ParentAgentPrompt`.
-- The filter response must be strict JSON containing `approved` and `reason` fields. Invalid JSON fails closed.
+- An agent may declare `guardrail: <agent-name>` in YAML frontmatter. The value names another loaded RocketCode agent that filters calls to the declaring target agent.
+- Missing referenced guardrail agents are RocketCode construction errors.
+- The guardrail agent runs in both directions for a guarded target agent: once for the outbound delegated prompt before the child agent runs, and once for the inbound child final response before that response is returned to the caller agent.
+- Guardrail execution itself is not recursively guarded, even if the guardrail agent also declares `guardrail`.
+- The guardrail agent uses its normal prompt. RocketCode provides the reviewed material as the guardrail run's user message; there is no required or special `{{.Payload}}` or `{{.Message}}` template placeholder.
+- For the outbound delegation check, the guardrail message is:
+
+```text
+Current Action: delegation
+The agent <originatingAgent> wants to delegate to <delegatedAgentName>:
+<delegated prompt>
+```
+
+- For the inbound response check, the guardrail message is:
+
+```text
+Current Action: response
+The agent <originatingAgent> wants to delegate to <delegatedAgentName>:
+<delegated prompt>
+
+And the response from <delegatedAgentName> to <originatingAgent>:
+<child response>
+```
+
+- `originatingAgent` is the agent that called the `task` tool, and `delegatedAgentName` is the guarded target agent.
+- The guardrail response must be strict JSON containing `approved` and `reason` fields. Invalid JSON fails closed.
 - A pre-delegation rejection does not run the child agent. A post-response rejection does not expose the child response to the parent agent.
 - Rejections return task-result text such as `delegation blocked: ...` or `delegation response blocked: ...` so the caller agent can continue.
-- The filter receives tools only through its own configured permission set.
+- The guardrail receives tools only through its own permission set and uses its own prompt, model, reasoning effort, verbosity, tools, and skills.
 
 ### Skills
 
@@ -138,3 +161,4 @@ All function schemas are strict and mark declared properties as required even wh
 
 - 2026-06-11: Initial accepted snapshot.
 - 2026-06-11: Limited hosted `websearch` to OpenAI requests and specified Anthropic local-tool adapter behavior.
+- 2026-06-12: Replaced embedding-configured inter-agent filtering with per-target-agent `guardrail` frontmatter and explicit guardrail request messages.

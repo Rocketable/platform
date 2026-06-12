@@ -5,7 +5,7 @@ Human approval required for meaning changes: Yes
 
 ## Decision
 
-RocketClaw provides `rocketclaw lint [next|current]` as a whole-system safety linter for effective RocketCode agents, skills, scripts, and task delegation. RocketClaw also provides `rocketclaw agent-graph [next|current]` as a whole-system Graphviz/DOT inspection command for effective RocketCode task delegation. Both commands default to `next`.
+RocketClaw provides `rocketclaw lint [next|current]` as a whole-system safety linter for effective RocketCode agents, skills, scripts, task delegation, and guardrail references. RocketClaw also provides `rocketclaw agent-graph [next|current]` as a whole-system Graphviz/DOT inspection command for effective RocketCode task delegation and guardrail references. Both commands default to `next`.
 
 ## Scope
 
@@ -55,6 +55,7 @@ RocketClaw already relies on embedded create/update skills to guide agents towar
 - `RC004` reports delegation-chain write-to-execute escalation when an agent can edit a script/path and can directly or transitively delegate within the same inference tree to another agent that can execute that path.
 - `RC005` reports external-content contamination when an agent with `websearch` or `webfetch` permission can edit a path another agent can read. Task reachability is not required.
 - `RC006` reports plural `permissions` frontmatter because RocketCode runtime parsing uses singular `permission`; plural `permissions` is ignored.
+- `RC007` reports a missing guardrail agent referenced by `guardrail` frontmatter.
 
 ### Matching And Evaluation
 
@@ -70,6 +71,7 @@ RocketClaw already relies on embedded create/update skills to guide agents towar
 - Task graph edges are built by evaluating each agent's effective `task` permission against every potential target agent name, preserving RocketCode last-match-wins behavior.
 - Wildcard task grants such as `task: {"*": allow}` resolve to concrete graph edges for each loaded target agent allowed by effective permission evaluation; wildcard grants must not be emitted as a literal `*` target.
 - Agent graph output uses the same task graph edge construction as lint.
+- Guardrail references are checked against loaded agent names.
 
 ### Suppressions
 
@@ -87,7 +89,7 @@ RocketClaw already relies on embedded create/update skills to guide agents towar
 - Each finding line includes code, severity, relevant agent path or paths, and the relevant path or rule when practical.
 - Findings sort deterministically by code, path, and message.
 - Initial linter findings are blocking `error` findings; this ADR does not introduce warning-only lint behavior.
-- Agent graph output is deterministic DOT. It includes every loaded agent as a node labeled with the agent name and `maxRecursion` state, and every effective `task` delegation grant as an edge.
+- Agent graph output is deterministic DOT. It includes every loaded agent as a node labeled with the agent name and `maxRecursion` state, every effective `task` delegation grant as an edge, and every valid guardrail reference as a distinct edge labeled `guardrail`.
 - Agent graph output represents omitted `maxRecursion` and `maxRecursion: -1` as unbounded, and represents `maxRecursion: 0` and positive values as their numeric value.
 - Agent graph output renders self-loops as normal DOT self-edges and marks cycle-participating edges deterministically.
 
@@ -129,3 +131,4 @@ RocketClaw already relies on embedded create/update skills to guide agents towar
 
 - 2026-06-11: Initial accepted snapshot.
 - 2026-06-11: Added `rocketclaw agent-graph [next|current]` as a DOT inspection command sharing lint target and task graph semantics, including wildcard task grant expansion to concrete agent edges.
+- 2026-06-12: Added `RC007` for missing guardrail references and guardrail edges in agent graph output.

@@ -45,7 +45,7 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - Discord and browser voice transcriptions enter the same shared flow as other main-session input.
 - External MCP conversations are isolated by external conversation ID; omitted ID starts a new isolated conversation.
 - External MCP blocking replies return the same outbound response attachments that the persistent bridge publishes through connector delivery. RocketCode-produced response attachments use one shared internal carrier before each edge adapts them to connector upload or MCP result content.
-- When a local-only `agents/guardrail.md` is present, every RocketCode `task` delegation prompt is filtered before the child agent runs, and every child agent final response is filtered before the task result is returned to the caller agent.
+- When a target agent declares `guardrail: <agent-name>`, RocketCode filters both directions through the named guardrail agent: the outbound `task` delegation prompt before the child agent runs, and the inbound child final response before the task result is returned to the caller agent.
 - Guardrail rejections do not run the rejected child prompt or expose the rejected child response; the guardrail reason is returned through the task result so the caller agent can continue from the rejection.
 
 ### Routing And Delivery
@@ -81,7 +81,7 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - Agent `maxRecursion` budgets are stricter than `task` permission grants; a permitted task target remains unavailable once the active inference's recursion budget is exhausted.
 - Agent-system safety linting and graph inspection for permissions, delegation graphs, suppressions, and write-to-execute risk are governed by ADR 0006.
 - Cron agents may selectively deny tools.
-- The inter-agent guardrail agent may use tools only when its own `permission` frontmatter allows those tools.
+- A per-agent guardrail agent may use tools only when its own `permission` frontmatter allows those tools.
 - RocketClaw tools are part of runtime behavior and must remain visible to RocketCode according to the bridge mode that owns the turn.
 - The Slack goal-loop update tool is a persistent-bridge tool visible only for conversations with an active goal, and it may only set the active goal to `complete`, `blocked`, or `paused` with an optional note. Human stop emoji behavior may set the goal to `stopped` without using the tool.
 
@@ -137,3 +137,4 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - 2026-06-12: Specified universal post-reservation Slack placeholder consumption through the normal final-response path.
 - 2026-06-12: Specified shared Slack and external MCP inbound attachment semantics, including literal text attachment prompt conversion.
 - 2026-06-12: Specified shared outbound response attachment semantics for connector delivery and external MCP blocking replies.
+- 2026-06-12: Replaced local-only global guardrail filtering with per-target-agent `guardrail` frontmatter.

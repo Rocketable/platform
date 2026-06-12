@@ -38,7 +38,10 @@ type toolFactory struct {
 	skills                     Skills
 	baseTools                  map[string]looperTool
 	shellOutput                shellOutputConfig
-	interAgentFilter           *interAgentFilter
+
+	// inGuardrailRun reports whether this factory is executing a guardrail agent.
+	// When false, task calls apply target-agent guardrails. When true, nested task calls skip guardrail checks.
+	inGuardrailRun bool
 }
 
 type readToolParams struct {

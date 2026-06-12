@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"text/template"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	openai "github.com/openai/openai-go/v3"
@@ -31,7 +30,6 @@ type Config struct {
 	ParallelToolCalls          int
 	ShellOutputDir             string
 	SandboxedBash              bool
-	InterAgentFilter           InterAgentFilterConfig
 	CustomTools                []Tool
 	ShellEnv                   map[string]string
 }
@@ -40,15 +38,6 @@ type Config struct {
 type Providers struct {
 	OpenAI    *openai.Client
 	Anthropic *anthropic.Client
-}
-
-// InterAgentFilterConfig configures an agent that approves task prompts and responses.
-type InterAgentFilterConfig struct {
-	Prompt          string
-	Model           string
-	ReasoningEffort string
-	Verbosity       string
-	Permission      PermissionSet
 }
 
 // PromptShellCommandExpansion controls which prompt sources expand !`command` snippets.
@@ -213,6 +202,17 @@ func NewWithProviders(
 		return nil, fmt.Errorf("missing required default agent %q", defaultAgent)
 	}
 
+	for name := range agents.Items {
+		agent := agents.Items[name]
+		if agent.Guardrail == "" {
+			continue
+		}
+
+		if _, ok := agents.Items[agent.Guardrail]; !ok {
+			return nil, fmt.Errorf("agent %q references missing guardrail agent %q", name, agent.Guardrail)
+		}
+	}
+
 	expandAgentPrompt(context.Background(), &activeAgent, config.ExpandPromptShellCommands.PrimaryPrompts, &promptExpansion)
 	systemPrompt := activeAgent.Prompt
 
@@ -253,32 +253,6 @@ func NewWithProviders(
 		return nil, err
 	}
 
-	var filter *interAgentFilter
-
-	if strings.TrimSpace(config.InterAgentFilter.Prompt) != "" {
-		prompt, err := template.New("inter_agent_filter").Parse(config.InterAgentFilter.Prompt)
-		if err != nil {
-			return nil, fmt.Errorf("parse inter-agent filter prompt: %w", err)
-		}
-
-		filter = &interAgentFilter{
-			agent: Agent{
-				Name:            "inter_agent_filter",
-				Description:     "",
-				Model:           config.InterAgentFilter.Model,
-				ReasoningEffort: config.InterAgentFilter.ReasoningEffort,
-				Verbosity:       config.InterAgentFilter.Verbosity,
-				MaxRecursion:    nil,
-				Prompt:          config.InterAgentFilter.Prompt,
-				Location:        "",
-				Permission:      config.InterAgentFilter.Permission,
-				Frontmatter:     nil,
-				FileMode:        0,
-			},
-			prompt: prompt,
-		}
-	}
-
 	maps.Copy(baseTools, customTools)
 	factory := &toolFactory{
 		client:                     openAIClient,
@@ -299,7 +273,6 @@ func NewWithProviders(
 		skills:                     skills,
 		baseTools:                  baseTools,
 		shellOutput:                shellOutput,
-		interAgentFilter:           filter,
 	}
 	runtimeSystemPrompt := composeSystemPromptWithSkills(systemPrompt, skills, agentForTools)
 

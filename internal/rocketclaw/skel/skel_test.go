@@ -406,7 +406,7 @@ func TestSyncInWithOverlaysAppliesConfiguredOverlaysInConfigOrder(t *testing.T) 
 	assert.Equal(t, "second", string(data))
 }
 
-func TestSyncInWithOverlaysSkipsGitGuardrailAndAllowsLocalGuardrail(t *testing.T) {
+func TestSyncInWithOverlaysTreatsGuardrailAsNormalAgent(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is required for overlay test")
 	}
@@ -425,9 +425,10 @@ func TestSyncInWithOverlaysSkipsGitGuardrailAndAllowsLocalGuardrail(t *testing.T
 	remoteOnly := filepath.Join(tmp, "remote-only")
 	require.NoError(t, os.MkdirAll(remoteOnly, 0o755))
 	require.NoError(t, SyncInWithOverlays(remoteOnly, targetRoot, []string{repo}, testLogger()))
-	_, err := os.Stat(filepath.Join(remoteOnly, targetRoot, "agents", "guardrail.md"))
-	require.ErrorIs(t, err, os.ErrNotExist)
-	data, err := os.ReadFile(filepath.Join(remoteOnly, targetRoot, "agents", "helper.md"))
+	data, err := os.ReadFile(filepath.Join(remoteOnly, targetRoot, "agents", "guardrail.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "remote guardrail", string(data))
+	data, err = os.ReadFile(filepath.Join(remoteOnly, targetRoot, "agents", "helper.md"))
 	require.NoError(t, err)
 	assert.Equal(t, "remote helper", string(data))
 

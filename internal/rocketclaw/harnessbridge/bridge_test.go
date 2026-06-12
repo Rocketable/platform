@@ -449,23 +449,6 @@ func TestRocketCodeConfigEnablesDiagnosticsForThinkingUpdates(t *testing.T) {
 	assert.Equal(t, map[string]string{"A": "B"}, bridge.rocketcodeConfig(t.TempDir(), map[string]string{"A": "B"}).ShellEnv)
 }
 
-func TestInterAgentFilterConfigUsesGuardrailAgent(t *testing.T) {
-	agents := rocketcode.Agents{Items: map[string]rocketcode.Agent{
-		"guardrail": {Name: "guardrail", Model: "openai/gpt-5.5", ReasoningEffort: "low", Verbosity: "low", Prompt: "check {{.ParentAgentPrompt}}", Permission: rocketcode.PermissionSet{Buckets: []rocketcode.PermissionBucket{{Name: "read", Rules: []rocketcode.PermissionRule{{Pattern: "docs/*", Action: rocketcode.PermissionAllow}}}}}},
-	}}
-
-	cfg := interAgentFilterConfig(agents)
-
-	assert.Equal(t, "check {{.ParentAgentPrompt}}", cfg.Prompt)
-	assert.Equal(t, "openai/gpt-5.5", cfg.Model)
-	assert.Equal(t, "low", cfg.ReasoningEffort)
-	assert.Equal(t, "low", cfg.Verbosity)
-	action, matched := cfg.Permission.Evaluate("read", "docs/a.md")
-	assert.True(t, matched)
-	assert.Equal(t, rocketcode.PermissionAllow, action)
-	assert.Empty(t, interAgentFilterConfig(rocketcode.Agents{Items: map[string]rocketcode.Agent{}}).Prompt)
-}
-
 func TestAppendOverlayPromptToAgentIncludesConfiguredOverlayPrompt(t *testing.T) {
 	workspace := t.TempDir()
 	agents := rocketcode.Agents{Items: map[string]rocketcode.Agent{"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", Prompt: "base prompt", Location: "", Permission: rocketcode.PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}}}
@@ -667,8 +650,8 @@ func TestBridgeSummarizeRunsQueuedSummary(t *testing.T) {
 func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\npermission:\n  task:\n    helper: allow\n---\nPrompt\n")
-	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: openai/gpt-5.5\n---\nHelper prompt\n")
-	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: openai/gpt-5.5\n---\nGuard {{.ParentAgentPrompt}}\n")
+	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: openai/gpt-5.5\nguardrail: guardrail\n---\nHelper prompt\n")
+	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: openai/gpt-5.5\n---\nGuard delegated work\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	requests := 0
@@ -695,7 +678,10 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 		case 1:
 			writeRawRunFunctionCall(t, w, "resp_1", "call_1", "task", map[string]string{"description": "delegate", "prompt": "delegated prompt", "subagent_type": "helper"})
 		case 2:
-			assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard delegated prompt")
+			assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard delegated work")
+			assert.Contains(t, fmt.Sprint(body), "Current Action: delegation")
+			assert.Contains(t, fmt.Sprint(body), "The agent main wants to delegate to helper")
+			assert.Contains(t, fmt.Sprint(body), "delegated prompt")
 			assert.Contains(t, fmt.Sprint(body["text"]), "json_schema")
 			writeRawRunMessage(t, w, "resp_2", "msg_2", `{"approved":true,"reason":""}`)
 		case 3:
@@ -703,7 +689,10 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 			assert.Contains(t, fmt.Sprint(body), "delegated prompt")
 			writeRawRunMessage(t, w, "resp_3", "msg_3", "child response")
 		case 4:
-			assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard child response")
+			assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard delegated work")
+			assert.Contains(t, fmt.Sprint(body), "Current Action: response")
+			assert.Contains(t, fmt.Sprint(body), "And the response from helper to main")
+			assert.Contains(t, fmt.Sprint(body), "child response")
 			assert.Contains(t, fmt.Sprint(body["text"]), "json_schema")
 			writeRawRunMessage(t, w, "resp_4", "msg_4", `{"approved":true,"reason":""}`)
 		case 5:

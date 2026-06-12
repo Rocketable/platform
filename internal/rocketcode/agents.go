@@ -22,6 +22,7 @@ type Agent struct {
 	ReasoningEffort string
 	Verbosity       string
 	MaxRecursion    *int
+	Guardrail       string
 	Prompt          string
 	Location        string
 	Permission      PermissionSet
@@ -153,6 +154,7 @@ func loadAgent(fsys fs.FS, filePath string) (Agent, error) {
 		ReasoningEffort: frontmatterString(frontmatter, "reasoningEffort"),
 		Verbosity:       frontmatterString(frontmatter, "verbosity"),
 		MaxRecursion:    maxRecursion,
+		Guardrail:       frontmatterString(frontmatter, "guardrail"),
 		Prompt:          strings.TrimSpace(prompt),
 		Location:        filePath,
 		Permission:      permission,

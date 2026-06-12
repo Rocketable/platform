@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
-	"text/template"
 
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
@@ -180,33 +179,43 @@ func TestTaskTool(t *testing.T) {
 		}, diagnostics)
 	})
 
-	t.Run("inter-agent filter approval allows child and response", func(t *testing.T) {
+	t.Run("guardrail approval allows child and response", func(t *testing.T) {
 		mock := mockResponses(
 			responseWithMessage("prompt-filter", `{"approved":true,"reason":""}`),
 			responseWithTaskMessages(),
 			responseWithMessage("response-filter", `{"approved":true,"reason":""}`),
 		)
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": testAgentWithPrompt("review", "review carefully"),
+			"main":      testAgent("main"),
+			"review":    {Name: "review", Guardrail: "safety", Prompt: "review carefully"},
+			"safety":    {Name: "safety", Guardrail: "recursive", Prompt: "guard carefully"},
+			"recursive": testAgentWithPrompt("recursive", "recursive guard"),
 		}})
-		factory.interAgentFilter = testInterAgentFilter(t, "filter {{.ParentAgentPrompt}}", PermissionSet{Buckets: nil})
+		mainAgent := factory.agents.Items["main"]
+		factory.agent = &mainAgent
 
 		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
 		require.Len(t, mock.calls, 3)
-		require.Equal(t, "filter check this", mock.calls[0].Instructions.Value)
+		require.Equal(t, "guard carefully", mock.calls[0].Instructions.Value)
 		require.NotNil(t, mock.calls[0].Text.Format.OfJSONSchema)
-		require.Equal(t, "filter second", mock.calls[2].Instructions.Value)
+		require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), "Current Action: delegation")
+		require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), "The agent main wants to delegate to review:")
+		require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), "check this")
+		require.Equal(t, "guard carefully", mock.calls[2].Instructions.Value)
+		require.Contains(t, marshalJSON(t, mock.calls[2].Input.OfInputItemList), "Current Action: response")
+		require.Contains(t, marshalJSON(t, mock.calls[2].Input.OfInputItemList), "And the response from review to main:")
+		require.Contains(t, marshalJSON(t, mock.calls[2].Input.OfInputItemList), "second")
 	})
 
-	t.Run("inter-agent filter rejection skips child", func(t *testing.T) {
+	t.Run("guardrail rejection skips child", func(t *testing.T) {
 		mock := mockResponses(responseWithMessage("prompt-filter", `{"approved":false,"reason":"too risky"}`))
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": testAgentWithPrompt("review", "review carefully"),
+			"review": {Name: "review", Guardrail: "safety", Prompt: "review carefully"},
+			"safety": testAgentWithPrompt("safety", "guard carefully"),
 		}})
-		factory.interAgentFilter = testInterAgentFilter(t, "filter {{.ParentAgentPrompt}}", PermissionSet{Buckets: nil})
 
 		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
 
@@ -215,17 +224,17 @@ func TestTaskTool(t *testing.T) {
 		require.Len(t, mock.calls, 1)
 	})
 
-	t.Run("inter-agent filter response rejection bubbles reason", func(t *testing.T) {
+	t.Run("guardrail response rejection bubbles reason", func(t *testing.T) {
 		mock := mockResponses(
 			responseWithMessage("prompt-filter", `{"approved":true,"reason":""}`),
 			responseWithTaskMessages(),
 			responseWithMessage("response-filter", `{"approved":false,"reason":"do not share"}`),
 		)
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": testAgentWithPrompt("review", "review carefully"),
+			"review": {Name: "review", Guardrail: "safety", Prompt: "review carefully"},
+			"safety": testAgentWithPrompt("safety", "guard carefully"),
 		}})
 		factory.diagnostics = true
-		factory.interAgentFilter = testInterAgentFilter(t, "filter {{.ParentAgentPrompt}}", PermissionSet{Buckets: nil})
 		output := make(chan ChatResponse, 10)
 
 		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, output)
@@ -235,12 +244,12 @@ func TestTaskTool(t *testing.T) {
 		require.Equal(t, []ChatResponse{subagentDiagnosticResponse(testReviewSubagentDiagnostic("delegation", 1, 1, "started: Review"))}, drainBufferedResponses(output))
 	})
 
-	t.Run("inter-agent filter invalid JSON fails closed", func(t *testing.T) {
+	t.Run("guardrail invalid JSON fails closed", func(t *testing.T) {
 		mock := mockResponses(responseWithMessage("prompt-filter", `not json`))
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": testAgentWithPrompt("review", "review carefully"),
+			"review": {Name: "review", Guardrail: "safety", Prompt: "review carefully"},
+			"safety": testAgentWithPrompt("safety", "guard carefully"),
 		}})
-		factory.interAgentFilter = testInterAgentFilter(t, "filter {{.ParentAgentPrompt}}", PermissionSet{Buckets: nil})
 
 		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
 
@@ -249,18 +258,18 @@ func TestTaskTool(t *testing.T) {
 		require.Len(t, mock.calls, 1)
 	})
 
-	t.Run("inter-agent filter tools follow its permissions", func(t *testing.T) {
+	t.Run("guardrail tools follow its permissions", func(t *testing.T) {
 		mock := mockResponses(
 			responseWithMessage("prompt-filter", `{"approved":false,"reason":"stop"}`),
 		)
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": testAgentWithPrompt("review", "review carefully"),
+			"review": {Name: "review", Guardrail: "safety", Prompt: "review carefully"},
+			"safety": testAgentWithPermissionName("safety", PermissionSet{Buckets: []PermissionBucket{{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}),
 		}})
 		readTool := testLooperTool("read")
 		readTool.Definition = *functionTool("read", "Read", map[string]any{})
 		readTool.Permission = "read"
 		factory.baseTools["read"] = readTool
-		factory.interAgentFilter = testInterAgentFilter(t, "filter", PermissionSet{Buckets: []PermissionBucket{{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}})
 
 		_, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
 
@@ -670,20 +679,6 @@ func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
 	}
 
 	return &factory
-}
-
-func testInterAgentFilter(t *testing.T, prompt string, permission PermissionSet) *interAgentFilter {
-	t.Helper()
-
-	parsed, err := template.New("test_filter").Parse(prompt)
-	require.NoError(t, err)
-
-	var filter interAgentFilter
-
-	filter.agent = testAgentWithPermissionName("guardrail", permission)
-	filter.prompt = parsed
-
-	return &filter
 }
 
 func testAgent(name string) Agent {
