@@ -19,7 +19,7 @@ import (
 const fcHelpText = `rocketclaw fc
 
 Usage:
-  rocketclaw fc list
+  rocketclaw fc list [--since 24h|RFC3339] [--until RFC3339] [--limit N] [--no-message-preview]
   rocketclaw fc observe [--follow|-f] [conversation-id]
   rocketclaw fc delete [--no-vacuum] <conversation-id>
   rocketclaw fc vacuum
@@ -43,7 +43,7 @@ func runFC(args []string) error {
 
 	switch args[0] {
 	case "list":
-		return writeFCListIn(context.Background(), cfg.Workspace, cfg.WorkDirName(), os.Stdout)
+		return runFCListIn(cfg.Workspace, cfg.WorkDirName(), args[1:], os.Stdout)
 	case "observe":
 		return runFCObserveIn(cfg.Workspace, cfg.WorkDirName(), args[1:], os.Stdout)
 	case "delete":
@@ -162,14 +162,67 @@ func writeVacuumStats(out io.Writer, stats harnessbridge.VacuumStats) error {
 	return nil
 }
 
-func writeFCListIn(ctx context.Context, workspace, workDir string, out io.Writer) error {
-	summaries, err := harnessbridge.ListSessionsIn(ctx, workspace, workDir)
+func runFCListIn(workspace, workDir string, args []string, out io.Writer) error {
+	flagSet := flag.NewFlagSet("rocketclaw fc list", flag.ContinueOnError)
+	sinceText := flagSet.String("since", "", "show sessions updated since duration or RFC3339 time")
+	untilText := flagSet.String("until", "", "show sessions updated before RFC3339 time")
+	limit := flagSet.Int("limit", 0, "maximum sessions to list")
+	noMessagePreview := flagSet.Bool("no-message-preview", false, "omit last-message preview columns")
+
+	if err := flagSet.Parse(args); err != nil {
+		return fmt.Errorf("parse rocketcode list flags: %w", err)
+	}
+
+	if len(flagSet.Args()) != 0 {
+		return errors.New("list does not accept arguments")
+	}
+
+	if *limit < 0 {
+		return errors.New("list limit must be non-negative")
+	}
+
+	var options harnessbridge.SessionListOptions
+	options.Limit = *limit
+
+	if strings.TrimSpace(*sinceText) != "" {
+		sinceValue := strings.TrimSpace(*sinceText)
+		duration, err := time.ParseDuration(sinceValue)
+		if err == nil {
+			options.Since = time.Now().UTC().Add(-duration)
+		} else {
+			since, err := time.Parse(time.RFC3339Nano, sinceValue)
+			if err != nil {
+				return fmt.Errorf("parse rocketcode list since: %w", err)
+			}
+
+			options.Since = since
+		}
+	}
+
+	if strings.TrimSpace(*untilText) != "" {
+		until, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*untilText))
+		if err != nil {
+			return fmt.Errorf("parse rocketcode list until: %w", err)
+		}
+
+		options.Until = until
+	}
+
+	return writeFCListInOptions(context.Background(), workspace, workDir, options, !*noMessagePreview, out)
+}
+
+func writeFCListInOptions(ctx context.Context, workspace, workDir string, options harnessbridge.SessionListOptions, includeMessagePreview bool, out io.Writer) error {
+	summaries, err := harnessbridge.ListSessionsInOptions(ctx, workspace, workDir, options)
 	if err != nil {
 		return fmt.Errorf("list rocketcode sessions: %w", err)
 	}
 
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "CONVERSATION_ID\tTURNS\tLAST_UPDATED\tLAST_USER_MESSAGE\tLAST_ASSISTANT_MESSAGE"); err != nil {
+	if !includeMessagePreview {
+		if _, err := fmt.Fprintln(tw, "CONVERSATION_ID\tTURNS\tLAST_UPDATED"); err != nil {
+			return fmt.Errorf("write rocketcode session list: %w", err)
+		}
+	} else if _, err := fmt.Fprintln(tw, "CONVERSATION_ID\tTURNS\tLAST_UPDATED\tLAST_USER_MESSAGE\tLAST_ASSISTANT_MESSAGE"); err != nil {
 		return fmt.Errorf("write rocketcode session list: %w", err)
 	}
 
@@ -181,8 +234,15 @@ func writeFCListIn(ctx context.Context, workspace, workDir string, out io.Writer
 			updated = summary.LastUpdated.Format(time.RFC3339)
 		}
 
-		lastUserMessage := strings.Join(strings.Fields(summary.LastUserMessage), " ")
+		if !includeMessagePreview {
+			if _, err := fmt.Fprintf(tw, "%s\t%d\t%s\n", summary.ConversationID, summary.Turns, updated); err != nil {
+				return fmt.Errorf("write rocketcode session list: %w", err)
+			}
 
+			continue
+		}
+
+		lastUserMessage := strings.Join(strings.Fields(summary.LastUserMessage), " ")
 		lastAssistantMessage := strings.Join(strings.Fields(summary.LastAssistantMessage), " ")
 		if _, err := fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%s\n", summary.ConversationID, summary.Turns, updated, lastUserMessage, lastAssistantMessage); err != nil {
 			return fmt.Errorf("write rocketcode session list: %w", err)

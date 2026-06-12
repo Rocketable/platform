@@ -110,6 +110,13 @@ type SessionSummary struct {
 	LastUpdated                                           time.Time
 }
 
+// SessionListOptions bounds read-only session summary inspection.
+type SessionListOptions struct {
+	Since time.Time
+	Until time.Time
+	Limit int
+}
+
 // ObservedSessionEntry is one stored rocketcode entry with its SQLite row ID.
 type ObservedSessionEntry struct {
 	ID    int64
@@ -1222,8 +1229,8 @@ func queryPragmaInt(ctx context.Context, db *sql.DB, name string) (int64, error)
 	return value, nil
 }
 
-// ListSessionsIn returns summaries for all stored rocketcode sessions in workDir.
-func ListSessionsIn(ctx context.Context, workspace, workDir string) ([]SessionSummary, error) {
+// ListSessionsInOptions returns summaries for stored rocketcode sessions in workDir.
+func ListSessionsInOptions(ctx context.Context, workspace, workDir string, options SessionListOptions) ([]SessionSummary, error) {
 	db, ok, err := openExistingSessionDBReadOnly(ctx, workspace, workDir)
 	if err != nil {
 		return nil, err
@@ -1235,7 +1242,38 @@ func ListSessionsIn(ctx context.Context, workspace, workDir string) ([]SessionSu
 
 	defer func() { _ = db.Close() }()
 
-	rows, err := db.QueryContext(ctx, `SELECT conversation_id, entry_json, entry_timestamp FROM session_entries ORDER BY conversation_id, id`)
+	query := `SELECT conversation_id, entry_json, entry_timestamp FROM session_entries ORDER BY conversation_id, id`
+
+	var args []any
+
+	if !options.Since.IsZero() || !options.Until.IsZero() || options.Limit > 0 {
+		since := ""
+		if !options.Since.IsZero() {
+			since = options.Since.UTC().Format(time.RFC3339Nano)
+		}
+
+		until := ""
+		if !options.Until.IsZero() {
+			until = options.Until.UTC().Format(time.RFC3339Nano)
+		}
+
+		query = `WITH candidates AS (
+	SELECT conversation_id, MAX(julianday(entry_timestamp)) AS last_updated
+	FROM session_entries
+	GROUP BY conversation_id
+	HAVING (? = '' OR MAX(julianday(entry_timestamp)) >= julianday(?))
+		AND (? = '' OR MAX(julianday(entry_timestamp)) < julianday(?))
+	ORDER BY last_updated DESC, conversation_id
+	LIMIT CASE WHEN ? > 0 THEN ? ELSE -1 END
+)
+SELECT se.conversation_id, se.entry_json, se.entry_timestamp
+FROM session_entries se
+JOIN candidates c ON c.conversation_id = se.conversation_id
+ORDER BY c.last_updated DESC, c.conversation_id, se.id`
+		args = []any{since, since, until, until, options.Limit, options.Limit}
+	}
+
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query rocketcode session summaries: %w", err)
 	}

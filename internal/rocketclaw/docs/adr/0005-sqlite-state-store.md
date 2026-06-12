@@ -39,6 +39,14 @@ RocketClaw stores persistent RocketCode sessions, managed thread routing, respon
 - `rocketclaw fc delete` and `rocketclaw fc vacuum` must refuse to run while that lock is held because they mutate or maintain the state store outside the daemon.
 - `rocketclaw fc list` and `rocketclaw fc observe` remain allowed while the daemon is running because they are inspection commands, and must use the read-only opener mode.
 
+### Inspection Queries
+
+- Read-only inspection commands must not create, migrate, vacuum, checkpoint, or otherwise mutate `<runtime-dir>/state.sqlite3`.
+- `rocketclaw fc list` bounded inspection options `--since`, `--until`, and `--limit` must apply inside the session-store query path before table output is produced.
+- Bounded `rocketclaw fc list` selection is based on each conversation's latest stored entry timestamp. Time comparisons must use SQLite date/time comparison, such as `julianday(entry_timestamp)`, rather than RFC3339Nano text ordering.
+- When bounded by `--limit N`, `rocketclaw fc list` selects the `N` most recently updated sessions, ordered by latest update descending and then conversation ID for stable ties. `--limit 0` means no limit.
+- `--no-message-preview` changes only the displayed columns for `rocketclaw fc list`; it must not change which sessions are selected.
+
 ### Required PRAGMAs
 
 The centralized opener must configure these PRAGMAs for `<runtime-dir>/state.sqlite3`:
@@ -96,3 +104,4 @@ The centralized opener must configure these PRAGMAs for `<runtime-dir>/state.sql
 - 2026-06-07: Required read-only state-store opener mode with SQLite URI `mode=ro` for `rocketclaw fc list` and `rocketclaw fc observe`.
 - 2026-06-07: Added daemon startup copy-first corruption recovery using the external `sqlite3` shell `.recover` command only after quick-check proves corruption.
 - 2026-06-11: Added Slack goal-loop state to the contents stored in the centralized RocketClaw SQLite state store.
+- 2026-06-12: Specified query-level bounded `rocketclaw fc list` inspection semantics for `--since`, `--until`, `--limit`, and `--no-message-preview`.
