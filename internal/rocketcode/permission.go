@@ -317,7 +317,8 @@ func canonicalToolArguments(raw json.RawMessage) string {
 	return string(buf)
 }
 
-func bashPermissionSubjects(command string) []string {
+// BashPermissionSubjects returns the subjects checked by the bash tool for command.
+func BashPermissionSubjects(command string) []string {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return nil

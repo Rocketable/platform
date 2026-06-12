@@ -1301,7 +1301,7 @@ func (b *Bridge) rocketcodeConfig(shellOutputDir string, shellEnv map[string]str
 		return b.config.SessionService.MarkRestartRequester(ctx, b.config.ConversationID)
 	}), scheduleMessageTool(b.ScheduleMessage, b.log), resetScheduledMessagesTool(b.ResetScheduledMessages))
 	if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err == nil && ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
-		tools = append(tools, updateGoalTool(b.config.SessionService, b.config.ConversationID))
+		tools = append(tools, updateGoalTool(b))
 	}
 
 	tools = append(tools, customTools...)
@@ -1653,14 +1653,31 @@ func resetScheduledMessagesTool(reset func() error) rocketcode.Tool {
 	}}
 }
 
-func updateGoalTool(store *SessionService, conversationID string) rocketcode.Tool {
-	return rocketcode.Tool{Name: updateGoalToolName, Description: "Update the active RocketClaw goal loop status for this conversation. Use complete when the goal is achieved, blocked when progress cannot continue, or paused when continuation should stop for now.", Permission: "rocketclaw", VisibilitySubjects: []string{updateGoalToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{updateGoalToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"status": map[string]any{"type": "string", "enum": []string{GoalStatusComplete, GoalStatusBlocked, GoalStatusPaused}}, "note": map[string]any{"type": "string"}}, "required": []string{"status"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+func updateGoalTool(b *Bridge) rocketcode.Tool {
+	store := b.config.SessionService
+	conversationID := b.config.ConversationID
+
+	return rocketcode.Tool{Name: updateGoalToolName, Description: "Update the active RocketClaw goal loop status for this conversation. Use complete when the goal is achieved, blocked when progress cannot continue, or paused when continuation should stop for now.", Permission: "rocketclaw", VisibilitySubjects: []string{updateGoalToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{updateGoalToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"status": map[string]any{"type": "string", "enum": []string{GoalStatusComplete, GoalStatusBlocked, GoalStatusPaused}}, "note": map[string]any{"type": "string"}}, "required": []string{"status"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		var input struct {
 			Status string `json:"status"`
 			Note   string `json:"note"`
 		}
 		if err := json.Unmarshal(raw, &input); err != nil {
 			return rocketcode.ToolResult{}, fmt.Errorf("parse goal update: %w", err)
+		}
+
+		if input.Status == GoalStatusComplete {
+			current, ok, err := store.Goal(conversationID)
+			if err != nil {
+				return rocketcode.ToolResult{}, err
+			}
+
+			if ok && strings.TrimSpace(current.CheckScript) != "" {
+				output, passed := b.runGoalCheck(ctx, current.CheckScript)
+				if !passed {
+					return rocketcode.TextToolResult(output), nil
+				}
+			}
 		}
 
 		goal, err := store.UpdateGoalStatus(conversationID, input.Status, input.Note)
@@ -1670,6 +1687,45 @@ func updateGoalTool(store *SessionService, conversationID string) rocketcode.Too
 
 		return rocketcode.TextToolResult("goal marked " + strings.TrimSpace(goal.Status)), nil
 	}}
+}
+
+func (b *Bridge) runGoalCheck(ctx context.Context, script string) (string, bool) {
+	root, err := os.OpenRoot(b.runtime.Workspace)
+	if err != nil {
+		return "goal check failed before execution: " + err.Error(), false
+	}
+
+	defer func() { _ = root.Close() }()
+
+	agents, _, err := loadRocketCodeDefinitionsIn(root, b.runtime.Workspace, b.runtime.WorkDirName(), toolModePersistent)
+	if err != nil {
+		return "goal check failed before execution: " + err.Error(), false
+	}
+
+	agent, ok := agents.Items[b.config.Agent]
+	if !ok {
+		return "goal check failed before execution: active agent " + b.config.Agent + " is not configured", false
+	}
+
+	check, err := validateGoalCheckScript(root, b.runtime.Workspace, script, agent.Permission)
+	if err != nil {
+		return "goal check failed before execution: " + err.Error(), false
+	}
+
+	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(b.runtime.WorkDirName(), ".rocketcode", "shell-outputs")), 0o755); err != nil {
+		return "goal check failed before execution: " + err.Error(), false
+	}
+
+	result, err := rocketcode.RunBash(ctx, root, filepath.Join(b.runtime.Workspace, b.runtime.WorkDirName(), ".rocketcode", "shell-outputs"), nil, false, rocketcode.BashCommand{Command: check.command, Timeout: goalCheckTimeout, Workdir: "", Description: "Run goal completion check"})
+	if err != nil {
+		return "goal check failed before execution: " + err.Error(), false
+	}
+
+	if result.Success {
+		return result.Output, true
+	}
+
+	return "goal check did not pass. Continue working from this output:\n\n" + result.Output, false
 }
 
 func (b *Bridge) armScheduledMessage(id string, message *ScheduledMessageState) {
@@ -1959,7 +2015,12 @@ func goalSteeringPrompt(goal *GoalState) string {
 		turnBudget = fmt.Sprintf("%d of %d turns used", goal.TurnsUsed, goal.MaxTurns)
 	}
 
-	return "Active goal loop:\nObjective:\n" + strings.TrimSpace(goal.Objective) + "\n\nTurn budget: " + turnBudget + "\n\nContinue making concrete progress toward the objective. When the objective is achieved, call rocketclaw_update_goal with status complete. If progress cannot continue, call rocketclaw_update_goal with status blocked. If the loop should stop for now, call rocketclaw_update_goal with status paused."
+	prompt := "Active goal loop:\nObjective:\n" + strings.TrimSpace(goal.Objective) + "\n\nTurn budget: " + turnBudget
+	if checkScript := strings.TrimSpace(goal.CheckScript); checkScript != "" {
+		prompt += "\n\nCompletion check command:\n" + checkScript + "\n\nCalling rocketclaw_update_goal with status complete runs the check command. If the check fails, use the returned failure output to continue working instead of declaring done."
+	}
+
+	return prompt + "\n\nContinue making concrete progress toward the objective. When the objective is achieved, call rocketclaw_update_goal with status complete. If progress cannot continue, call rocketclaw_update_goal with status blocked. If the loop should stop for now, call rocketclaw_update_goal with status paused."
 }
 
 func goalContinuationPrompt(goal *GoalState) string {

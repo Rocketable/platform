@@ -133,8 +133,8 @@ edit: {"public.md": allow}`, subject: "public.md", action: permissionAllow, matc
 }
 
 func TestBashPermissionSubjects(t *testing.T) {
-	require.Equal(t, []string{"git status", "git diff --stat"}, bashPermissionSubjects("git status && git diff --stat"))
-	require.Equal(t, []string{"echo $(date)", "date"}, bashPermissionSubjects("echo $(date)"))
+	require.Equal(t, []string{"git status", "git diff --stat"}, BashPermissionSubjects("git status && git diff --stat"))
+	require.Equal(t, []string{"echo $(date)", "date"}, BashPermissionSubjects("echo $(date)"))
 }
 
 func parsePermissionYAML(t *testing.T, text string) PermissionSet {

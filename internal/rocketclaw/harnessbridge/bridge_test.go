@@ -71,6 +71,109 @@ func TestRestartToolCallsConfiguredRestart(t *testing.T) {
 	assert.Equal(t, "custom restart output", result.Output)
 }
 
+func TestUpdateGoalToolRunsSuccessfulCheckBeforeComplete(t *testing.T) {
+	bridge := newGoalCheckTestBridge(t, `---
+description: Main
+permission:
+  bash:
+    "./scripts/check.sh": allow
+---
+Prompt
+`, "#!/bin/sh\nprintf passed\n")
+	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh", 3))
+
+	result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "goal marked complete", result.Output)
+
+	goal, ok, err := bridge.config.SessionService.Goal("thread-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, GoalStatusComplete, goal.Status)
+}
+
+func TestUpdateGoalToolKeepsGoalActiveWhenCheckFails(t *testing.T) {
+	bridge := newGoalCheckTestBridge(t, `---
+description: Main
+permission:
+  bash:
+    "./scripts/check.sh": allow
+---
+Prompt
+`, "#!/bin/sh\nprintf failed\nexit 7\n")
+	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh", 3))
+
+	result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
+	require.NoError(t, err)
+	assert.Contains(t, result.Output, "goal check did not pass")
+	assert.Contains(t, result.Output, "failed")
+
+	goal, ok, err := bridge.config.SessionService.Goal("thread-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, GoalStatusActive, goal.Status)
+}
+
+func TestUpdateGoalToolKeepsGoalActiveWhenCheckPermissionDenied(t *testing.T) {
+	bridge := newGoalCheckTestBridge(t, `---
+description: Main
+permission:
+  bash:
+    "./scripts/check.sh --safe": allow
+---
+Prompt
+`, "#!/bin/sh\nexit 0\n")
+	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh --dangerous", 3))
+
+	result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
+	require.NoError(t, err)
+	assert.Contains(t, result.Output, "not allowed by agent bash permission")
+
+	goal, ok, err := bridge.config.SessionService.Goal("thread-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, GoalStatusActive, goal.Status)
+}
+
+func TestUpdateGoalToolDoesNotRunCheckForBlocked(t *testing.T) {
+	bridge := newGoalCheckTestBridge(t, `---
+description: Main
+permission:
+  bash:
+    "./scripts/check.sh": allow
+---
+Prompt
+`, "#!/bin/sh\nexit 7\n")
+	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "fix lint", "./scripts/check.sh", 3))
+
+	result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"blocked"}`), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "goal marked blocked", result.Output)
+}
+
+func newGoalCheckTestBridge(t *testing.T, agent, script string) *Bridge {
+	t.Helper()
+
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", agent)
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	require.NoError(t, root.MkdirAll("scripts", 0o755))
+	require.NoError(t, root.WriteFile("scripts/check.sh", []byte(script), 0o755))
+	require.NoError(t, root.Chmod("scripts/check.sh", 0o755))
+	require.NoError(t, root.Close())
+
+	store := newTestSessionServiceAt(t, workspace)
+
+	return &Bridge{
+		log:     slog.New(slog.DiscardHandler),
+		runtime: &config.Config{Workspace: workspace},
+		config:  Config{ConversationID: "thread-1", Agent: "main", SessionService: store},
+	}
+}
+
 func TestRestartToolAcceptsEmptyOutputAndPropagatesErrors(t *testing.T) {
 	tool := restartTool(testNoopRestart, testNoopRestartRecorder)
 	result, err := tool.Call(t.Context(), []byte(`{"reason":"cron changed"}`), nil)

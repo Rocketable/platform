@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +31,20 @@ type bashParams struct {
 	Timeout     int
 	Workdir     string
 	Description string
+}
+
+// BashCommand is the public shape of the workspace bash tool input.
+type BashCommand struct {
+	Command     string
+	Timeout     int
+	Workdir     string
+	Description string
+}
+
+// BashResult is the result of running a workspace bash command.
+type BashResult struct {
+	Output  string
+	Success bool
 }
 
 type temporaryFile string
@@ -58,16 +73,71 @@ func newSandboxedShellSystem(root *os.Root, shellOutput *shellOutputConfig, env 
 	}
 }
 
+// RunBash runs command through the same implementation used by RocketCode's bash tool.
+func RunBash(ctx context.Context, root *os.Root, shellOutputDir string, shellEnv map[string]string, useSandbox bool, command BashCommand) (BashResult, error) {
+	if root == nil {
+		return BashResult{}, errors.New("root is required")
+	}
+
+	shellOutput, err := newShellOutputConfig(root, shellOutputDir)
+	if err != nil {
+		return BashResult{}, err
+	}
+
+	env, err := shellEnvList(shellEnv)
+	if err != nil {
+		return BashResult{}, err
+	}
+
+	sss := newSandboxedShellSystem(root, &shellOutput, env, useSandbox)
+	output, success := sss.runBash(ctx, bashParams(command))
+
+	return BashResult{Output: output, Success: success}, nil
+}
+
+func shellEnvList(shellEnv map[string]string) ([]string, error) {
+	shellEnvKeys := slices.Sorted(maps.Keys(shellEnv))
+
+	env := make([]string, 0, len(shellEnvKeys))
+	for _, key := range shellEnvKeys {
+		if key == "TMPDIR" {
+			continue
+		}
+
+		value := shellEnv[key]
+		if key == "" {
+			return nil, errors.New("shell env key is required")
+		}
+
+		if strings.Contains(key, "=") {
+			return nil, fmt.Errorf("shell env key %q must not contain =", key)
+		}
+
+		if strings.Contains(key, "\x00") || strings.Contains(value, "\x00") {
+			return nil, fmt.Errorf("shell env %q must not contain NUL", key)
+		}
+
+		env = append(env, key+"="+value)
+	}
+
+	return env, nil
+}
+
 func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) string {
+	output, _ := sss.runBash(ctx, params)
+	return output
+}
+
+func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams) (string, bool) {
 	sss.mu.Lock()
 	defer sss.mu.Unlock()
 
 	if strings.TrimSpace(params.Command) == "" {
-		return "command is required"
+		return "command is required", false
 	}
 
 	if params.Timeout < 0 {
-		return fmt.Sprintf("Invalid timeout value: %d. Timeout must be a positive number.", params.Timeout)
+		return fmt.Sprintf("Invalid timeout value: %d. Timeout must be a positive number.", params.Timeout), false
 	}
 
 	for file, created := range sss.tempFiles {
@@ -94,21 +164,21 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) st
 
 		params.Workdir, err = normalizeRootName(sss.root, workdir)
 		if err != nil {
-			return fmt.Errorf("resolve workdir %q: %w", workdir, err).Error()
+			return fmt.Errorf("resolve workdir %q: %w", workdir, err).Error(), false
 		}
 
 		info, err := sss.root.Stat(params.Workdir)
 		if err != nil {
-			return fmt.Errorf("resolve workdir %q: %w", params.Workdir, err).Error()
+			return fmt.Errorf("resolve workdir %q: %w", params.Workdir, err).Error(), false
 		}
 
 		if !info.IsDir() {
-			return fmt.Errorf("resolve workdir %q: not a directory", params.Workdir).Error()
+			return fmt.Errorf("resolve workdir %q: not a directory", params.Workdir).Error(), false
 		}
 
 		root, err := sss.root.OpenRoot(params.Workdir)
 		if err != nil {
-			return fmt.Errorf("resolve workdir %q: %w", params.Workdir, err).Error()
+			return fmt.Errorf("resolve workdir %q: %w", params.Workdir, err).Error(), false
 		}
 
 		hostDir = root.Name()
@@ -118,11 +188,11 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) st
 	defer cleanup()
 
 	if denied := sss.deniedBashPath(params.Command, hostDir); denied != "" {
-		return denied
+		return denied, false
 	}
 
 	if err := sss.shellOutput.ensureTempDir(sss.root); err != nil {
-		return err.Error()
+		return err.Error(), false
 	}
 
 	commandCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(timeout)*time.Millisecond+shellTimeoutGrace)
@@ -138,7 +208,7 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) st
 
 		cmd, err = sss.bash.command(commandCtx, sandboxedBashCommand{shell: shell, args: args, workdir: params.Workdir})
 		if err != nil {
-			return err.Error()
+			return err.Error(), false
 		}
 	} else {
 		cmd = exec.CommandContext(commandCtx, shell, args...)
@@ -199,7 +269,7 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) st
 		visible += "\n\n<bash_metadata>\n" + strings.Join(metadata, "\n") + "\n</bash_metadata>"
 	}
 
-	return visible
+	return visible, err == nil && !timedOut
 }
 
 func (sss *sandboxedShellSystem) visibleShellOutput(output string) (visible string, truncated bool, tempPath string) {

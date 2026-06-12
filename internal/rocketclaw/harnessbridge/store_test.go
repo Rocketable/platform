@@ -113,6 +113,24 @@ func TestSessionServiceScheduledMessageDefaults(t *testing.T) {
 	assert.Equal(t, ScheduledMessageState{ConversationID: mainConversationID, Agent: mainConversationID, Message: "later", DueAt: dueAt}, state.ScheduledMessages["schedule-1"])
 }
 
+func TestSessionServiceBeginGoalPersistsCheckScript(t *testing.T) {
+	store := newTestSessionService(t)
+
+	require.NoError(t, store.BeginGoal("thread-1", " fix lint ", " ./scripts/check.sh --linter-mode ", 3))
+	goal, ok, err := store.Goal("thread-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "fix lint", goal.Objective)
+	assert.Equal(t, "./scripts/check.sh --linter-mode", goal.CheckScript)
+	assert.Equal(t, 3, goal.MaxTurns)
+
+	require.NoError(t, store.BeginGoal("thread-2", "write docs", " ", 1))
+	goal, ok, err = store.Goal("thread-2")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Empty(t, goal.CheckScript)
+}
+
 func TestSessionServiceAppliesPendingRestartNotificationsOnce(t *testing.T) {
 	store := newTestSessionService(t)
 

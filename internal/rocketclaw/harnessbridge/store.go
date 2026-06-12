@@ -84,13 +84,14 @@ type ScheduledMessageState struct {
 
 // GoalState records one active or terminal managed-thread goal loop.
 type GoalState struct {
-	Objective string    `json:"objective,omitempty"`
-	MaxTurns  int       `json:"max_turns,omitempty"`
-	TurnsUsed int       `json:"turns_used,omitempty"`
-	Status    string    `json:"status,omitempty"`
-	Note      string    `json:"note,omitempty"`
-	CreatedAt time.Time `json:"created_at,omitzero"`
-	UpdatedAt time.Time `json:"updated_at,omitzero"`
+	Objective   string    `json:"objective,omitempty"`
+	CheckScript string    `json:"check_script,omitempty"`
+	MaxTurns    int       `json:"max_turns,omitempty"`
+	TurnsUsed   int       `json:"turns_used,omitempty"`
+	Status      string    `json:"status,omitempty"`
+	Note        string    `json:"note,omitempty"`
+	CreatedAt   time.Time `json:"created_at,omitzero"`
+	UpdatedAt   time.Time `json:"updated_at,omitzero"`
 }
 
 type sqliteSessionStore struct {
@@ -189,9 +190,10 @@ func (s *SessionService) UpsertThread(conversationID, agent string) error {
 }
 
 // BeginGoal records a new active goal for a managed conversation.
-func (s *SessionService) BeginGoal(conversationID, objective string, maxTurns int) error {
+func (s *SessionService) BeginGoal(conversationID, objective, checkScript string, maxTurns int) error {
 	conversationID = strings.TrimSpace(conversationID)
 	objective = strings.TrimSpace(objective)
+	checkScript = strings.TrimSpace(checkScript)
 
 	if conversationID == "" {
 		return errors.New("goal conversation ID is required")
@@ -212,7 +214,7 @@ func (s *SessionService) BeginGoal(conversationID, objective string, maxTurns in
 			state.Goals = map[string]GoalState{}
 		}
 
-		state.Goals[conversationID] = GoalState{Objective: objective, MaxTurns: maxTurns, Status: GoalStatusActive, CreatedAt: now, UpdatedAt: now}
+		state.Goals[conversationID] = GoalState{Objective: objective, CheckScript: checkScript, MaxTurns: maxTurns, Status: GoalStatusActive, CreatedAt: now, UpdatedAt: now}
 	})
 }
 
@@ -242,7 +244,8 @@ func (s *SessionService) ActiveGoals() (map[string]GoalState, error) {
 
 	active := map[string]GoalState{}
 
-	for conversationID, goal := range state.Goals {
+	for conversationID := range state.Goals {
+		goal := state.Goals[conversationID]
 		if strings.TrimSpace(goal.Status) == GoalStatusActive {
 			active[conversationID] = goal
 		}

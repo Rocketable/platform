@@ -252,7 +252,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	mainOutputTargets := configuredMainOutputTargets(cfg)
 	mainBridge = harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: true, OutputTargets: mainOutputTargets, RequestRestart: requestRestart, SessionService: rocketcodeSessions}, logger)
-	threadBridges = newThreadBridgeManager(bus, rocketcodeSessions, logger, func(bridgeConfig bridgeConfig) directBridge {
+	threadBridges = newThreadBridgeManager(bus, cfg, rocketcodeSessions, logger, func(bridgeConfig bridgeConfig) directBridge {
 		return harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: bridgeConfig.ConversationID, Agent: bridgeConfig.Agent, ConsumeSharedInbound: false, OutputTargets: bridgeConfig.OutputTargets, RequestRestart: requestRestart, SessionService: rocketcodeSessions}, logger)
 	})
 	threadBridges.targets = mainOutputTargets

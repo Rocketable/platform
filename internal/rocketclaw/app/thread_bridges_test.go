@@ -132,7 +132,7 @@ func TestThreadBridgeManagerCreatesSeparateBridgesPerThreadAndPersistsThem(t *te
 	workspace := t.TempDir()
 	store := newTestSessionService(t, workspace)
 	created := make([]bridgeConfig, 0, 2)
-	manager := newThreadBridgeManager(events.New(), store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
 		created = append(created, cfg)
 		return new(fakeDirectBridge)
 	})
@@ -163,7 +163,7 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 	}
 
 	created := make([]bridgeConfig, 0, 2)
-	manager := newThreadBridgeManager(events.New(), store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
 		created = append(created, cfg)
 		return new(fakeDirectBridge)
 	})
@@ -178,7 +178,7 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 
 func TestThreadBridgeManagerSeedsStartedThreadBeforeSubmit(t *testing.T) {
 	bridge := new(fakeDirectBridge)
-	manager := newThreadBridgeManager(events.New(), newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
+	manager := newThreadBridgeManager(events.New(), nil, newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 
 	require.NoError(t, manager.StartThread(t.Context(), "main", true, newThreadInboundMessage("first", "111.222", "111.222")))
 
@@ -187,7 +187,7 @@ func TestThreadBridgeManagerSeedsStartedThreadBeforeSubmit(t *testing.T) {
 
 func TestThreadBridgeManagerStopsStartedThreadWhenSeedFails(t *testing.T) {
 	bridge := &fakeDirectBridge{errSeedMain: assert.AnError}
-	manager := newThreadBridgeManager(events.New(), newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge {
+	manager := newThreadBridgeManager(events.New(), nil, newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge {
 		return bridge
 	})
 
@@ -204,7 +204,7 @@ func TestThreadBridgeManagerStopsStartedThreadWhenPersistFails(t *testing.T) {
 	require.NoError(t, store.Stop(context.Background()))
 
 	bridge := new(fakeDirectBridge)
-	manager := newThreadBridgeManager(events.New(), store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge {
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge {
 		return bridge
 	})
 
@@ -216,7 +216,7 @@ func TestThreadBridgeManagerStopsStartedThreadWhenPersistFails(t *testing.T) {
 
 func TestThreadBridgeManagerCanSkipStartedThreadSeed(t *testing.T) {
 	bridge := new(fakeDirectBridge)
-	manager := newThreadBridgeManager(events.New(), newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
+	manager := newThreadBridgeManager(events.New(), nil, newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 
 	require.NoError(t, manager.StartThread(t.Context(), "main", false, newThreadInboundMessage("first", "111.222", "111.222")))
 
@@ -230,7 +230,7 @@ func TestThreadBridgeManagerRegistersCronThreadWithoutSubmitting(t *testing.T) {
 
 	var created bridgeConfig
 
-	manager := newThreadBridgeManager(events.New(), store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
 		created = cfg
 		return bridge
 	})
@@ -248,7 +248,7 @@ func TestThreadBridgeManagerRegistersCronThreadWithoutSubmitting(t *testing.T) {
 }
 
 func TestThreadBridgeManagerRejectsMissingSlackThreadTarget(t *testing.T) {
-	manager := newThreadBridgeManager(events.New(), newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
+	manager := newThreadBridgeManager(events.New(), nil, newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
 
 	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
 	err := manager.StartThread(t.Context(), "main", false, inbound)
@@ -265,7 +265,7 @@ func TestThreadBridgeManagerSubmitsPersistedThreadReply(t *testing.T) {
 	require.NoError(t, store.UpsertThread(conversationID, "factory"))
 
 	bridge := new(fakeDirectBridge)
-	manager := newThreadBridgeManager(events.New(), store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 
 	handled, err := manager.PrepareThreadReply(context.Background(), "D123", "111.222")
 	require.NoError(t, err)
@@ -287,7 +287,7 @@ func TestThreadBridgeManagerIgnoresUnmanagedThreadTargets(t *testing.T) {
 
 	store := newTestSessionService(t, t.TempDir())
 	created := 0
-	manager := newThreadBridgeManager(bus, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge {
+	manager := newThreadBridgeManager(bus, nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge {
 		created++
 
 		return new(fakeDirectBridge)
@@ -385,7 +385,7 @@ func TestThreadBridgeManagerSummarizeDrainsQueuedReplies(t *testing.T) {
 			bridge := new(fakeDirectBridge)
 			bridge.summarizeStarted = make(chan struct{}, 1)
 			bridge.releaseSummarize = make(chan summarizeOutcome, 1)
-			manager := newThreadBridgeManager(bus, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
+			manager := newThreadBridgeManager(bus, nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 			summaryDone := make(chan error, 1)
 
 			go func() { _, err := manager.SummarizeThread(context.Background(), "D123", "111.222"); summaryDone <- err }()
@@ -430,7 +430,7 @@ func TestThreadBridgeManagerSummarizeDrainsQueuedRepliesAfterContextCancellation
 	bridge := new(fakeDirectBridge)
 	bridge.summarizeStarted = make(chan struct{}, 1)
 	bridge.releaseSummarize = make(chan summarizeOutcome, 1)
-	manager := newThreadBridgeManager(bus, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
+	manager := newThreadBridgeManager(bus, nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 
 	summaryCtx, cancel := context.WithCancel(context.Background())
 	summaryDone := make(chan error, 1)
@@ -464,7 +464,7 @@ func TestThreadBridgeManagerCanSummarizeRestoredThread(t *testing.T) {
 	defer bus.Close()
 
 	bridge := &fakeDirectBridge{submits: nil, seeds: nil, summarizeStarted: nil, releaseSummarize: make(chan summarizeOutcome, 1), waitStarted: nil, releaseWait: nil}
-	manager := newThreadBridgeManager(bus, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
+	manager := newThreadBridgeManager(bus, nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 
 	bridge.releaseSummarize <- summarizeOutcome{text: "summary text", err: nil}
 
@@ -482,7 +482,7 @@ func TestThreadBridgeManagerSeedsResponseRootedThreadOnce(t *testing.T) {
 	require.NoError(t, store.UpsertResponseCheckpoint(checkpointKey, checkpoint))
 
 	bridge := new(fakeDirectBridge)
-	manager := newThreadBridgeManager(events.New(), store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 
 	handled, err := manager.PrepareResponseThreadReply(context.Background(), "D123", "111.222")
 	require.NoError(t, err)
@@ -508,7 +508,7 @@ func TestThreadBridgeManagerSeedsResponseRootedThreadOnce(t *testing.T) {
 }
 
 func TestThreadBridgeManagerIgnoresMissingResponseCheckpoint(t *testing.T) {
-	manager := newThreadBridgeManager(events.New(), newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
+	manager := newThreadBridgeManager(events.New(), nil, newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
 
 	handled, err := manager.PrepareResponseThreadReply(context.Background(), "D123", "111.222")
 	require.NoError(t, err)
@@ -525,7 +525,7 @@ func TestThreadBridgeManagerRejectsResponseThreadSeededFromDifferentCheckpoint(t
 	require.NoError(t, store.MarkThreadSeeded(conversationID, harnessbridge.SlackResponseCheckpointKey("D123", "000.111")))
 
 	bridge := new(fakeDirectBridge)
-	manager := newThreadBridgeManager(events.New(), store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 
 	handled, err := manager.SubmitResponseThreadReply(context.Background(), "D123", "111.222", newThreadInboundMessage("follow up", "222.333", "111.222"))
 	require.ErrorContains(t, err, "slack thread already seeded")
@@ -544,7 +544,7 @@ func TestThreadBridgeManagerRoutesExternalMCPThreadAlias(t *testing.T) {
 	require.NoError(t, store.MarkThreadSeeded(threadKey, conversationID))
 
 	bridge := new(fakeDirectBridge)
-	manager := newThreadBridgeManager(events.New(), store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
 		assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "planner", OutputTargets: events.MainOutputTargets()}, cfg)
 
 		return bridge
@@ -572,7 +572,7 @@ func TestThreadBridgeManagerKeepsExternalMCPBridgeAfterRequestContextEnds(t *tes
 	require.NoError(t, store.MarkThreadSeeded(threadKey, conversationID))
 
 	bridge := new(fakeDirectBridge)
-	manager := newThreadBridgeManager(events.New(), store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 
 	requestCtx, cancel := context.WithCancel(context.Background())
 	require.NoError(t, manager.SubmitExternalMCP(requestCtx, "planner", conversationID, newThreadInboundMessage("initial", "123.456", "111.222")))
@@ -587,7 +587,7 @@ func TestThreadBridgeManagerKeepsExternalMCPBridgeAfterRequestContextEnds(t *tes
 
 func TestThreadBridgeManagerRecordsResponseCheckpoint(t *testing.T) {
 	store := newTestSessionService(t, t.TempDir())
-	manager := newThreadBridgeManager(events.New(), store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
 
 	err := manager.RecordResponseCheckpoint(context.Background(), "D123", "111.222", events.ResponseCheckpoint{ConversationID: "main", SessionEntryID: 7, ResponseID: "resp", Model: "gpt-5.5", AssistantText: "answer"})
 	require.NoError(t, err)
@@ -602,7 +602,7 @@ func TestThreadBridgeManagerWaitIdleWaitsForActiveBridges(t *testing.T) {
 	workspace := t.TempDir()
 	store := newTestSessionService(t, workspace)
 	bridge := &fakeDirectBridge{submits: nil, seeds: nil, summarizeStarted: nil, releaseSummarize: nil, waitStarted: make(chan struct{}, 1), releaseWait: make(chan error, 1)}
-	manager := newThreadBridgeManager(events.New(), store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 	require.NoError(t, manager.StartThread(context.Background(), "main", true, newThreadInboundMessage("start", "111.222", "111.222")))
 
 	waitDone := make(chan error, 1)
@@ -625,7 +625,7 @@ func TestThreadBridgeManagerWaitIdleWaitsForActiveBridges(t *testing.T) {
 func TestThreadBridgeManagerStopStopsActiveBridges(t *testing.T) {
 	store := newTestSessionService(t, t.TempDir())
 	bridges := make([]*fakeDirectBridge, 0, 2)
-	manager := newThreadBridgeManager(events.New(), store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge {
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge {
 		bridge := new(fakeDirectBridge)
 		bridges = append(bridges, bridge)
 
@@ -651,7 +651,7 @@ func TestThreadBridgeManagerStopAcceptingRejectsNewSubmissions(t *testing.T) {
 	require.NoError(t, store.UpsertResponseCheckpoint(checkpointKey, harnessbridge.ResponseCheckpointState{ConversationID: "main", SessionEntryID: 9, ResponseID: "resp", Model: "gpt-5.5", AssistantText: "answer"}))
 
 	bridge := new(fakeDirectBridge)
-	manager := newThreadBridgeManager(events.New(), store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 	require.NoError(t, manager.StartThread(context.Background(), "main", false, newThreadInboundMessage("start", "111.222", "111.222")))
 	manager.StopAccepting()
 

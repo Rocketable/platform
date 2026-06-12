@@ -281,7 +281,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 					return nil, err
 				}
 
-				return bashPermissionSubjects(params.Command), nil
+				return BashPermissionSubjects(params.Command), nil
 			},
 			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 				var params bashParams

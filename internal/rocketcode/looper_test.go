@@ -972,7 +972,7 @@ func TestLooperDeniesToolCallsInBand(t *testing.T) {
 		var params bashParams
 		require.NoError(t, json.Unmarshal(raw, &params))
 
-		return bashPermissionSubjects(params.Command), nil
+		return BashPermissionSubjects(params.Command), nil
 	}
 	bashTool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
 		t.Error("denied tool should not execute")

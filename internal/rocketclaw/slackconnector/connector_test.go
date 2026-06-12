@@ -141,14 +141,19 @@ func TestNormalizeThreadAgentsRoutesLongestPrefix(t *testing.T) {
 
 func TestGoalRequestForTextParsesSupportedTriggers(t *testing.T) {
 	tests := []struct {
-		text      string
-		objective string
-		maxTurns  int
+		text        string
+		objective   string
+		checkScript string
+		maxTurns    int
 	}{
 		{text: "🔁 write docs", objective: "write docs", maxTurns: 20},
 		{text: "🏁 write docs", objective: "write docs", maxTurns: 20},
 		{text: "🔁 maxTurns: 0 write docs", objective: "write docs", maxTurns: 0},
 		{text: "🏁 maxTurns: infinite write docs", objective: "write docs", maxTurns: 0},
+		{text: "🏁 checkScript: ./scripts/check.sh fix lint", objective: "fix lint", checkScript: "./scripts/check.sh", maxTurns: 20},
+		{text: "🏁 maxTurns: 7 checkScript: \"./scripts/check.sh --linter-mode\" fix lint", objective: "fix lint", checkScript: "./scripts/check.sh --linter-mode", maxTurns: 7},
+		{text: `🏁 checkScript: "./scripts/check.sh \literal" fix lint`, objective: "fix lint", checkScript: `./scripts/check.sh \literal`, maxTurns: 20},
+		{text: "🏁 fix literal checkScript: ./scripts/check.sh text", objective: "fix literal checkScript: ./scripts/check.sh text", maxTurns: 20},
 	}
 
 	for _, tt := range tests {
@@ -157,6 +162,7 @@ func TestGoalRequestForTextParsesSupportedTriggers(t *testing.T) {
 			require.True(t, ok)
 			require.Empty(t, rejection)
 			assert.Equal(t, tt.objective, goal.objective)
+			assert.Equal(t, tt.checkScript, goal.checkScript)
 			assert.Equal(t, tt.maxTurns, goal.maxTurns)
 		})
 	}
@@ -168,6 +174,10 @@ func TestGoalRequestForTextRejectsMalformedRequests(t *testing.T) {
 		"🏁",
 		"🔁 maxTurns:",
 		"🏁 maxTurns: nope goal",
+		"🏁 checkScript:",
+		"🏁 checkScript: \"\" fix lint",
+		"🏁 checkScript: \"./scripts/check.sh fix lint",
+		`🏁 checkScript: "$(./scripts/check.sh)" fix lint`,
 		"plain text",
 	}
 
@@ -2687,6 +2697,15 @@ func TestHandleMessageEventFinishesStackWhenThreadReplySubmitFails(t *testing.T)
 
 			posted = append(posted, cloneValues(r.PostForm))
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": fmt.Sprintf("555.%d", len(posted)), "text": posted[len(posted)-1].Get("text")})
+		case "/chat.update":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			posted = append(posted, cloneValues(r.PostForm))
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": r.PostForm.Get("ts"), "text": r.PostForm.Get("text")})
+		case "/chat.delete", "/reactions.remove":
+			writeJSON(t, w, map[string]any{"ok": true})
 		case "/reactions.add":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
@@ -2715,11 +2734,13 @@ func TestHandleMessageEventFinishesStackWhenThreadReplySubmitFails(t *testing.T)
 	require.Len(t, replies, 2)
 	assert.Equal(t, "status?", replies[0].inbound.Text)
 	assert.Equal(t, "again?", replies[1].inbound.Text)
-	require.Len(t, posted, 4)
+	require.Len(t, posted, 6)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
-	assert.Equal(t, slackImmediatePlaceholder, posted[2].Get("text"))
-	assert.Equal(t, slackAnswerPlaceholder, posted[3].Get("text"))
+	assert.Contains(t, posted[2].Get("text"), "couldn't submit that Slack thread reply")
+	assert.Equal(t, slackImmediatePlaceholder, posted[3].Get("text"))
+	assert.Equal(t, slackAnswerPlaceholder, posted[4].Get("text"))
+	assert.Contains(t, posted[5].Get("text"), "couldn't submit that Slack thread reply")
 }
 
 func TestHandleMessageEventFinishesStackWhenThreadReplyUnhandled(t *testing.T) {
@@ -2751,12 +2772,15 @@ func TestHandleMessageEventFinishesStackWhenThreadReplyUnhandled(t *testing.T) {
 	require.Len(t, replies, 2)
 	assert.Equal(t, "status?", replies[0].inbound.Text)
 	assert.Equal(t, "again?", replies[1].inbound.Text)
-	require.Len(t, posted, 4)
+	require.Len(t, posted, 6)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
-	assert.Equal(t, slackImmediatePlaceholder, posted[2].Get("text"))
-	assert.Equal(t, slackAnswerPlaceholder, posted[3].Get("text"))
-	assert.Empty(t, reactions)
+	assert.Contains(t, posted[2].Get("text"), "couldn't find an active managed thread")
+	assert.Equal(t, slackImmediatePlaceholder, posted[3].Get("text"))
+	assert.Equal(t, slackAnswerPlaceholder, posted[4].Get("text"))
+	assert.Contains(t, posted[5].Get("text"), "couldn't find an active managed thread")
+	assert.Contains(t, reactions, "/reactions.remove "+slackRobotReaction+" 171234.9999")
+	assert.Contains(t, reactions, "/reactions.remove "+slackRobotReaction+" 171235.9999")
 }
 
 func TestHandleMessageEventBuffersSlackMessagesWhileActive(t *testing.T) {
@@ -2860,10 +2884,12 @@ func TestHandleMessageEventClearsSlackMainStackWhenPublishFails(t *testing.T) {
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, newThreadRouterStub(), nil)
 	connector.handleMessageEvent(context.Background(), newSlackMessageEvent("171234.5678", "", "hello main"))
 
-	assert.Empty(t, reactions)
-	require.Len(t, posted, 2)
+	assert.Contains(t, reactions, "/reactions.remove "+slackRobotReaction+" 171234.5678")
+	require.Len(t, posted, 3)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
+	assert.Contains(t, posted[2].Get("text"), "couldn't start processing")
+	assert.Equal(t, "555.2", posted[2].Get("ts"))
 
 	connector.mu.Lock()
 	_, active := connector.stacks[slackMainStackKey]
@@ -2950,15 +2976,46 @@ func TestHandleMessageEventClearsSlackStackWhenConfiguredThreadStartFails(t *tes
 	require.Len(t, started, 1)
 	assert.Equal(t, "hello from thread", started[0].inbound.Text)
 	assertNeverInbound(t, bus)
-	assert.Empty(t, reactions)
-	require.Len(t, posted, 2)
+	assert.Contains(t, reactions, "/reactions.remove "+slackRobotReaction+" 171234.5678")
+	require.Len(t, posted, 3)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
+	assert.Contains(t, posted[2].Get("text"), "couldn't start that managed thread")
+	assert.Equal(t, "555.2", posted[2].Get("ts"))
 
 	connector.mu.Lock()
 	_, active := connector.stacks[slackThreadStackKey(&events.SlackReplyTarget{ChannelID: "D123", ThreadTS: "171234.5678"})]
 	connector.mu.Unlock()
 	assert.False(t, active)
+}
+
+func TestHandleMessageEventConsumesGoalStartRejectionPlaceholder(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	var (
+		posted    []url.Values
+		reactions []string
+	)
+
+	server := newSlackStackTestServer(t, &posted, &reactions)
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.errStart = errors.New("check script denied")
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+
+	connector.handleMessageEvent(context.Background(), newSlackMessageEvent("171234.5678", "", "🏁 checkScript: ./scripts/check.sh fix lint"))
+
+	require.Len(t, router.goalStarts, 1)
+	assert.Equal(t, "fix lint", router.goalStarts[0].objective)
+	assert.Equal(t, "./scripts/check.sh", router.goalStarts[0].checkScript)
+	assert.Contains(t, reactions, "/reactions.remove "+slackRobotReaction+" 171234.5678")
+	require.Len(t, posted, 3)
+	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
+	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
+	assert.Contains(t, posted[2].Get("text"), "couldn't start that goal")
+	assert.False(t, connector.hasPendingState(&events.SlackReplyTarget{ChannelID: "D123", MessageTS: "171234.5678", ThreadTS: "171234.5678"}))
 }
 
 func TestHandleEventsAPIStartsSocialThreadWithChannelContext(t *testing.T) {
@@ -3053,7 +3110,24 @@ func TestHandleAppMentionEventUsesChannelAgentAndPrefixReaction(t *testing.T) {
 
 			posted = append(posted, cloneValues(r.PostForm))
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666", "text": posted[len(posted)-1].Get("text")})
+		case "/chat.update":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			posted = append(posted, cloneValues(r.PostForm))
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": r.PostForm.Get("ts"), "text": r.PostForm.Get("text")})
+		case "/chat.delete":
+			writeJSON(t, w, map[string]any{"ok": true})
 		case "/reactions.add":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			reactionNames = append(reactionNames, r.PostForm.Get("name"))
+
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/reactions.remove":
 			if !assert.NoError(t, r.ParseForm()) {
 				return
 			}
@@ -3110,7 +3184,24 @@ func TestHandleAppMentionEventClearsSlackStackWhenThreadStartFails(t *testing.T)
 
 			posted = append(posted, cloneValues(r.PostForm))
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666", "text": posted[len(posted)-1].Get("text")})
+		case "/chat.update":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			posted = append(posted, cloneValues(r.PostForm))
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": r.PostForm.Get("ts"), "text": r.PostForm.Get("text")})
+		case "/chat.delete":
+			writeJSON(t, w, map[string]any{"ok": true})
 		case "/reactions.add":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			reactionNames = append(reactionNames, r.PostForm.Get("name"))
+
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/reactions.remove":
 			if !assert.NoError(t, r.ParseForm()) {
 				return
 			}
@@ -3133,10 +3224,11 @@ func TestHandleAppMentionEventClearsSlackStackWhenThreadStartFails(t *testing.T)
 	require.Len(t, started, 1)
 	assert.Equal(t, "triage", started[0].agent)
 	assert.Equal(t, "please check this", started[0].inbound.Text)
-	require.Len(t, posted, 2)
+	require.Len(t, posted, 3)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
-	assert.Equal(t, []string{"triage"}, reactionNames)
+	assert.Contains(t, posted[2].Get("text"), "couldn't start that managed thread")
+	assert.Equal(t, []string{"triage", slackRobotReaction}, reactionNames)
 	assertNeverInbound(t, bus)
 
 	connector.mu.Lock()
@@ -4726,10 +4818,11 @@ type cronThreadRegistration struct {
 }
 
 type goalThreadStartCall struct {
-	agent     string
-	objective string
-	maxTurns  int
-	inbound   *events.InboundMessage
+	agent       string
+	objective   string
+	checkScript string
+	maxTurns    int
+	inbound     *events.InboundMessage
 }
 
 type goalThreadStopCall struct {
@@ -4750,9 +4843,9 @@ func (s *threadRouterStub) StartThread(_ context.Context, agent string, preSeed 
 	return errStart
 }
 
-func (s *threadRouterStub) StartGoalThread(_ context.Context, agent, objective string, maxTurns int, inbound *events.InboundMessage) error {
+func (s *threadRouterStub) StartGoalThread(_ context.Context, agent, objective, checkScript string, maxTurns int, inbound *events.InboundMessage) error {
 	s.mu.Lock()
-	s.goalStarts = append(s.goalStarts, goalThreadStartCall{agent: agent, objective: objective, maxTurns: maxTurns, inbound: inbound})
+	s.goalStarts = append(s.goalStarts, goalThreadStartCall{agent: agent, objective: objective, checkScript: checkScript, maxTurns: maxTurns, inbound: inbound})
 	errStart := s.errStart
 	s.mu.Unlock()
 

@@ -21,6 +21,7 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
+	"mvdan.cc/sh/v3/syntax"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/cronjob"
@@ -157,14 +158,15 @@ type threadAgent struct {
 }
 
 type goalRequest struct {
-	objective string
-	maxTurns  int
+	objective   string
+	checkScript string
+	maxTurns    int
 }
 
 // ThreadRouter routes Slack thread messages directly to app-owned thread bridges.
 type ThreadRouter interface {
 	StartThread(context.Context, string, bool, *events.InboundMessage) error
-	StartGoalThread(context.Context, string, string, int, *events.InboundMessage) error
+	StartGoalThread(context.Context, string, string, string, int, *events.InboundMessage) error
 	StopGoalThread(context.Context, string, string) (bool, error)
 	RegisterCronThread(context.Context, string, string, string, string) error
 	PrepareThreadReply(context.Context, string, string) (bool, error)
@@ -814,6 +816,8 @@ func (c *Connector) acceptMainSlackMessage(ctx context.Context, text string, con
 		c.log.Error("publish Slack inbound message", "error", err)
 		c.finishSlackStack(key)
 
+		c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't start processing that Slack message: "+err.Error(), "consume Slack inbound publish failure placeholder")
+
 		return false
 	}
 
@@ -892,6 +896,8 @@ func (c *Connector) promoteSlackStack(ctx context.Context, key string, submit fu
 	if err := submit(ctx, newSlackInboundMessage(text, &content, latest)); err != nil {
 		c.log.Error("publish buffered Slack inbound message", "error", err)
 		c.finishSlackStack(key)
+
+		c.warnConsumeReservedPlaceholder(ctx, latest, "I couldn't process the queued Slack follow-up: "+err.Error(), "consume buffered Slack publish failure placeholder")
 	}
 }
 
@@ -1209,12 +1215,16 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 			c.log.Error("submit Slack thread reply", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "pending_placeholder", c.hasPendingState(replyTarget))
 			c.finishSlackStack(key)
 
+			c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't submit that Slack thread reply: "+err.Error(), "consume Slack thread reply error placeholder")
+
 			return
 		}
 
 		if !handled {
 			c.log.Warn("Slack thread reply was not handled after placeholder", "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "response_rooted", responseRooted, "pending_placeholder", c.hasPendingState(replyTarget))
 			c.finishSlackStack(key)
+
+			c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't find an active managed thread for that reply.", "consume unhandled Slack thread reply placeholder")
 
 			return
 		}
@@ -1244,9 +1254,11 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		inbound := newSlackInboundMessage(goal.objective, &content, replyTarget)
 		c.log.Info("handing Slack goal thread start to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", "main", "max_turns", goal.maxTurns, "pending_placeholder", c.hasPendingState(replyTarget))
 
-		if err := c.threadRouter.StartGoalThread(ctx, "main", goal.objective, goal.maxTurns, inbound); err != nil {
+		if err := c.threadRouter.StartGoalThread(ctx, "main", goal.objective, goal.checkScript, goal.maxTurns, inbound); err != nil {
 			c.log.Error("start Slack goal thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", "main", "pending_placeholder", c.hasPendingState(replyTarget))
 			c.finishSlackStack(key)
+
+			c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't start that goal: "+err.Error(), "consume Slack goal rejection placeholder")
 
 			return
 		}
@@ -1283,6 +1295,8 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		if err := c.threadRouter.StartThread(ctx, agent, preSeed, inbound); err != nil {
 			c.log.Error("start Slack thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent, "pending_placeholder", c.hasPendingState(replyTarget))
 			c.finishSlackStack(key)
+
+			c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't start that managed thread: "+err.Error(), "consume Slack thread start rejection placeholder")
 
 			return
 		}
@@ -1540,9 +1554,11 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 	if isGoal {
 		c.log.Info("handing Slack social goal thread to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent, "max_turns", goal.maxTurns, "pending_placeholder", c.hasPendingState(replyTarget))
 
-		if err := c.threadRouter.StartGoalThread(ctx, agent, goal.objective, goal.maxTurns, newSlackInboundMessage(promptText, &content, replyTarget)); err != nil {
+		if err := c.threadRouter.StartGoalThread(ctx, agent, goal.objective, goal.checkScript, goal.maxTurns, newSlackInboundMessage(promptText, &content, replyTarget)); err != nil {
 			c.log.Error("start Slack social goal thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent, "pending_placeholder", c.hasPendingState(replyTarget))
 			c.finishSlackStack(key)
+
+			c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't start that goal: "+err.Error(), "consume Slack social goal rejection placeholder")
 
 			return
 		}
@@ -1558,6 +1574,8 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 	if err := c.threadRouter.StartThread(ctx, agent, false, newSlackInboundMessage(promptText, &content, replyTarget)); err != nil {
 		c.log.Error("start Slack social thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent, "pending_placeholder", c.hasPendingState(replyTarget))
 		c.finishSlackStack(key)
+
+		c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't start that managed thread: "+err.Error(), "consume Slack social thread start rejection placeholder")
 
 		return
 	}
@@ -1905,40 +1923,117 @@ func goalRequestForText(text string) (goalRequest, string, bool) {
 		return goalRequest{}, "", false
 	}
 
-	fields := strings.Fields(strings.TrimSpace(text))
+	text = strings.TrimSpace(text)
 	maxTurns := 20
+	checkScript := ""
 
-	if len(fields) == 0 {
+	if text == "" {
 		return goalRequest{}, "Tell me the goal after `🔁`, for example `🔁 maxTurns: 20 update the docs`.", true
 	}
 
-	if fields[0] == "maxTurns:" {
-		if len(fields) == 1 {
-			return goalRequest{}, "`maxTurns:` needs a value like `20`, `0`, `-1`, or `infinite`.", true
+	for {
+		fields := strings.Fields(text)
+		if len(fields) == 0 {
+			return goalRequest{}, "Tell me the goal after the parameters, for example `🔁 maxTurns: 20 update the docs`.", true
 		}
 
-		value := strings.ToLower(fields[1])
-		switch value {
-		case "infinite":
-			maxTurns = 0
-		default:
-			parsed, err := strconv.Atoi(value)
-			if err != nil || parsed < -1 {
-				return goalRequest{}, "`maxTurns:` must be a positive integer, `0`, `-1`, or `infinite`.", true
+		switch fields[0] {
+		case "maxTurns:":
+			if len(fields) == 1 {
+				return goalRequest{}, "`maxTurns:` needs a value like `20`, `0`, `-1`, or `infinite`.", true
 			}
 
-			maxTurns = max(parsed, 0)
+			value := strings.ToLower(fields[1])
+			switch value {
+			case "infinite":
+				maxTurns = 0
+			default:
+				parsed, err := strconv.Atoi(value)
+				if err != nil || parsed < -1 {
+					return goalRequest{}, "`maxTurns:` must be a positive integer, `0`, `-1`, or `infinite`.", true
+				}
+
+				maxTurns = max(parsed, 0)
+			}
+
+			text = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(strings.TrimPrefix(text, fields[0])), fields[1]))
+		case "checkScript:":
+			value, rest, err := consumeGoalCheckScriptValue(strings.TrimSpace(strings.TrimPrefix(text, fields[0])))
+			if err != nil {
+				return goalRequest{}, err.Error(), true
+			}
+
+			checkScript = value
+			text = rest
+		default:
+			objective := strings.TrimSpace(text)
+			if objective == "" {
+				return goalRequest{}, "Tell me the goal after the parameters, for example `🔁 maxTurns: 20 update the docs`.", true
+			}
+
+			return goalRequest{objective: objective, checkScript: checkScript, maxTurns: maxTurns}, "", true
+		}
+	}
+}
+
+func consumeGoalCheckScriptValue(text string) (value, rest string, err error) {
+	if text == "" {
+		return "", "", errors.New("`checkScript:` needs a value like `./scripts/check.sh` or `\"./scripts/check.sh --linter-mode\"`")
+	}
+
+	parser := syntax.NewParser()
+	for word, err := range parser.WordsSeq(strings.NewReader(text)) {
+		if err != nil {
+			return "", "", errors.New("`checkScript:` has malformed shell quoting")
 		}
 
-		fields = fields[2:]
+		value, err := staticGoalCheckScriptWord(word)
+		if err != nil {
+			return "", "", err
+		}
+
+		if strings.TrimSpace(value) == "" {
+			return "", "", errors.New("`checkScript:` needs a non-empty value")
+		}
+
+		return value, strings.TrimSpace(text[word.End().Offset():]), nil
 	}
 
-	objective := strings.TrimSpace(strings.Join(fields, " "))
-	if objective == "" {
-		return goalRequest{}, "Tell me the goal after the parameters, for example `🔁 maxTurns: 20 update the docs`.", true
+	return "", "", errors.New("`checkScript:` needs a non-empty value")
+}
+
+func staticGoalCheckScriptWord(word *syntax.Word) (string, error) {
+	var value strings.Builder
+
+	for _, part := range word.Parts {
+		switch part := part.(type) {
+		case *syntax.Lit:
+			value.WriteString(part.Value)
+		case *syntax.SglQuoted:
+			if part.Dollar {
+				return "", errors.New("`checkScript:` value must be static shell text")
+			}
+
+			value.WriteString(part.Value)
+		case *syntax.DblQuoted:
+			if part.Dollar {
+				return "", errors.New("`checkScript:` value must be static shell text")
+			}
+
+			for _, quoted := range part.Parts {
+				lit, ok := quoted.(*syntax.Lit)
+				if !ok {
+					return "", errors.New("`checkScript:` value must be static shell text")
+				}
+
+				value.WriteString(lit.Value)
+			}
+		default:
+			return "", errors.New("`checkScript:` value must be static shell text")
+		}
 	}
 
-	return goalRequest{objective: objective, maxTurns: maxTurns}, "", true
+	return value.String(), nil
 }
 
 func (c *Connector) handleOnDemandCronRequest(ctx context.Context, ev *slackevents.MessageEvent, target string, replyTarget *events.SlackReplyTarget) {
@@ -2100,6 +2195,21 @@ func (c *Connector) publishOnDemandCronReply(ctx context.Context, replyTarget *e
 	}
 
 	return nil
+}
+
+func (c *Connector) consumeReservedPlaceholder(ctx context.Context, replyTarget *events.SlackReplyTarget, text string) error {
+	msg := events.NewMainOutboundMessage(events.SourceSystem, strings.TrimSpace(text), events.OutputTargetSlackMain)
+	msg.TurnID = fmt.Sprintf("slack-abort-%d", time.Now().UnixNano())
+	msg.Complete = true
+	msg.SlackReply = cloneSlackReplyTarget(replyTarget)
+
+	return c.SendResponse(ctx, msg)
+}
+
+func (c *Connector) warnConsumeReservedPlaceholder(ctx context.Context, replyTarget *events.SlackReplyTarget, text, logMessage string) {
+	if err := c.consumeReservedPlaceholder(ctx, replyTarget, text); err != nil {
+		c.log.Warn(logMessage, "error", err, "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS, "thread_ts", replyTarget.ThreadTS)
+	}
 }
 
 func cloneSlackReplyTarget(replyTarget *events.SlackReplyTarget) *events.SlackReplyTarget {

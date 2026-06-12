@@ -177,28 +177,9 @@ func NewWithProviders(
 		return nil, errors.New("shell output dir is required")
 	}
 
-	shellEnvKeys := slices.Sorted(maps.Keys(config.ShellEnv))
-
-	shellEnv := make([]string, 0, len(shellEnvKeys))
-	for _, key := range shellEnvKeys {
-		if key == "TMPDIR" {
-			continue
-		}
-
-		value := config.ShellEnv[key]
-		if key == "" {
-			return nil, errors.New("shell env key is required")
-		}
-
-		if strings.Contains(key, "=") {
-			return nil, fmt.Errorf("shell env key %q must not contain =", key)
-		}
-
-		if strings.Contains(key, "\x00") || strings.Contains(value, "\x00") {
-			return nil, fmt.Errorf("shell env %q must not contain NUL", key)
-		}
-
-		shellEnv = append(shellEnv, key+"="+value)
+	shellEnv, err := shellEnvList(config.ShellEnv)
+	if err != nil {
+		return nil, err
 	}
 
 	shellOutput, err := newShellOutputConfig(root, config.ShellOutputDir)

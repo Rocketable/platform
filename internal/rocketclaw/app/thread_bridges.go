@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 )
@@ -41,6 +42,7 @@ const slackThreadSummaryPrompt = "Summarize the current state of this managed Sl
 
 type threadBridgeManager struct {
 	log     *slog.Logger
+	runtime *config.Config
 	store   *harnessbridge.SessionService
 	bus     *events.Bus
 	factory bridgeFactory
@@ -51,8 +53,8 @@ type threadBridgeManager struct {
 	bridges  map[string]*managedThreadBridge
 }
 
-func newThreadBridgeManager(bus *events.Bus, store *harnessbridge.SessionService, logger *slog.Logger, factory bridgeFactory) *threadBridgeManager {
-	return &threadBridgeManager{log: logger.With("component", "thread_bridges"), store: store, bus: bus, factory: factory, targets: events.MainOutputTargets(), mu: sync.Mutex{}, bridges: map[string]*managedThreadBridge{}}
+func newThreadBridgeManager(bus *events.Bus, runtime *config.Config, store *harnessbridge.SessionService, logger *slog.Logger, factory bridgeFactory) *threadBridgeManager {
+	return &threadBridgeManager{log: logger.With("component", "thread_bridges"), runtime: runtime, store: store, bus: bus, factory: factory, targets: events.MainOutputTargets(), mu: sync.Mutex{}, bridges: map[string]*managedThreadBridge{}}
 }
 
 func (m *threadBridgeManager) Stop() error {
@@ -118,7 +120,8 @@ func (m *threadBridgeManager) StartActiveGoals() error {
 		return fmt.Errorf("load active goal bridges: %w", err)
 	}
 
-	for conversationID, goal := range state.Goals {
+	for conversationID := range state.Goals {
+		goal := state.Goals[conversationID]
 		if strings.TrimSpace(goal.Status) != harnessbridge.GoalStatusActive {
 			continue
 		}
@@ -427,7 +430,7 @@ func (m *threadBridgeManager) StartThread(ctx context.Context, agent string, pre
 	return nil
 }
 
-func (m *threadBridgeManager) StartGoalThread(ctx context.Context, agent, objective string, maxTurns int, inbound *events.InboundMessage) error {
+func (m *threadBridgeManager) StartGoalThread(ctx context.Context, agent, objective, checkScript string, maxTurns int, inbound *events.InboundMessage) error {
 	if inbound == nil || inbound.SlackReply == nil {
 		return errors.New("slack reply target is required")
 	}
@@ -435,6 +438,12 @@ func (m *threadBridgeManager) StartGoalThread(ctx context.Context, agent, object
 	conversationID := harnessbridge.SlackThreadConversationID(strings.TrimSpace(inbound.SlackReply.ChannelID), strings.TrimSpace(inbound.SlackReply.ThreadTS))
 	if conversationID == "" {
 		return errors.New("slack thread target is required")
+	}
+
+	if strings.TrimSpace(checkScript) != "" {
+		if err := harnessbridge.ValidateGoalCheckScriptStart(m.runtime, agent, checkScript); err != nil {
+			return fmt.Errorf("validate Slack goal check script: %w", err)
+		}
 	}
 
 	managed, created, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: strings.TrimSpace(agent), SeededFromResponse: ""}, []events.OutputTarget{events.OutputTargetSlackMain})
@@ -454,7 +463,7 @@ func (m *threadBridgeManager) StartGoalThread(ctx context.Context, agent, object
 		}
 	}
 
-	if err := m.store.BeginGoal(conversationID, objective, maxTurns); err != nil {
+	if err := m.store.BeginGoal(conversationID, objective, checkScript, maxTurns); err != nil {
 		return fmt.Errorf("persist Slack goal: %w", err)
 	}
 

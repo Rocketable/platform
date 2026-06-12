@@ -89,6 +89,8 @@ Keep feature-local logic private. Do not export new functions or types unless an
 
 For config-driven checks, default to: parse config, normalize data, store it, and check it at the named call sites. Do not create a package or cross-package abstraction for one feature.
 
+When parsing user text that embeds an existing language syntax, such as shell words, JSON, YAML, or Markdown, use the existing parser/AST already used by the project instead of hand-rolling quote, escape, or token scanning. Only hand-parse the surrounding product grammar that is not part of that embedded language.
+
 Do not turn benign config cleanup into validation errors unless the user explicitly asks for strict validation. Prefer normalize-and-ignore over reject-and-fail for optional config fields.
 
 Keep local fixes local in code structure. If a change that should be small starts touching 3 or more packages, introducing new concepts, or turning into a rewrite, stop and restate the smallest literal implementation before continuing.

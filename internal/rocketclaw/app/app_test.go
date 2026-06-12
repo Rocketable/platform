@@ -832,7 +832,7 @@ func TestExternalMCPExistingExternalConversationIDRunsAgentAndRepliesInSeededSla
 	cfg.ThreadAgents = config.ThreadAgents{":factory:": {Agent: "planner", PreSeed: true}}
 	cfg.MCPExternal.ListenAddr = "127.0.0.1:0"
 	rocketcodeSessions := newAppTestSessionService(t, workspace)
-	threadBridges := newThreadBridgeManager(bus, rocketcodeSessions, testLogger(), func(bridgeConfig bridgeConfig) directBridge {
+	threadBridges := newThreadBridgeManager(bus, nil, rocketcodeSessions, testLogger(), func(bridgeConfig bridgeConfig) directBridge {
 		return harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: bridgeConfig.ConversationID, Agent: bridgeConfig.Agent, ConsumeSharedInbound: false, OutputTargets: bridgeConfig.OutputTargets, SessionService: rocketcodeSessions}, testLogger())
 	})
 
