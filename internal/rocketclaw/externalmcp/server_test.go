@@ -104,6 +104,37 @@ func TestStartSessionPromptServerPassesAttachments(t *testing.T) {
 	assert.Equal(t, "plain text reply", content.Text)
 }
 
+func TestStartSessionPromptServerReturnsAttachments(t *testing.T) {
+	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, "main", func(context.Context, string, string, string, string, map[string]string, []SessionPromptAttachment, string) (SessionResult, error) {
+		return SessionResult{Answer: "plain text reply", Attachments: []SessionAttachment{
+			{Name: "chart.png", MIMEType: "image/png; charset=binary", DataBase64: base64.StdEncoding.EncodeToString([]byte("png"))},
+			{Name: "report.txt", MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte("report"))},
+		}}, nil
+	})
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, server.Close(context.Background())) }()
+
+	result := callSessionPrompt(t, server.URL(), "", "", "", "return attachments", nil)
+	require.Len(t, result.Content, 3)
+	content, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.Equal(t, "plain text reply", content.Text)
+
+	image, ok := result.Content[1].(*mcp.ImageContent)
+	require.True(t, ok)
+	assert.Equal(t, "image/png", image.MIMEType)
+	assert.Equal(t, []byte("png"), image.Data)
+
+	resource, ok := result.Content[2].(*mcp.EmbeddedResource)
+	require.True(t, ok)
+	require.NotNil(t, resource.Resource)
+	assert.Equal(t, "attachment://2/report.txt", resource.Resource.URI)
+	assert.Equal(t, "text/plain", resource.Resource.MIMEType)
+	assert.Equal(t, []byte("report"), resource.Resource.Blob)
+	assert.Equal(t, map[string]any{"answer": "plain text reply", "attachments": []any{map[string]any{"name": "chart.png", "mime_type": "image/png; charset=binary", "data_base64": base64.StdEncoding.EncodeToString([]byte("png"))}, map[string]any{"name": "report.txt", "mime_type": "text/plain", "data_base64": base64.StdEncoding.EncodeToString([]byte("report"))}}}, structuredContentMap(t, result))
+}
+
 func TestStartSessionPromptServerContinuesSession(t *testing.T) {
 	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, "main", func(_ context.Context, username, externalConversationID, agent, input string, metadata map[string]string, _ []SessionPromptAttachment, slackChannel string) (SessionResult, error) {
 		assert.Empty(t, username)
@@ -307,7 +338,7 @@ func callTool(t *testing.T, endpoint, username, password string, args map[string
 	params.Arguments = args
 	result, err := session.CallTool(t.Context(), params)
 	require.NoError(t, err)
-	require.Len(t, result.Content, 1)
+	require.NotEmpty(t, result.Content)
 
 	return result
 }

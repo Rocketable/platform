@@ -3,9 +3,14 @@ package events
 import (
 	"context"
 	"fmt"
+	"mime"
+	"path/filepath"
 	"strings"
 	"sync"
 )
+
+// MaxInboundTextAttachmentBytes is the per-file size limit for attachments converted to prompt text.
+const MaxInboundTextAttachmentBytes = 256 << 10
 
 const mainConversationID = "main"
 
@@ -34,8 +39,9 @@ const (
 
 // InboundResponse is the final plain-text result for a queued inbound turn.
 type InboundResponse struct {
-	Text string
-	Err  error
+	Text        string
+	Attachments []OutboundAttachment
+	Err         error
 }
 
 // OutputTarget identifies which connector should receive an outbound message.
@@ -57,6 +63,16 @@ type InboundAttachment struct {
 	Name     string
 	MIMEType string
 	Data     []byte
+}
+
+// InboundContent carries source-acquired inbound text and attachments before message routing details are applied.
+type InboundContent struct {
+	Text                   string
+	TextAttachments        []string
+	Attachments            []InboundAttachment
+	HadAttachments         bool
+	HadNonImageAttachments bool
+	AttachmentWarnings     []string
 }
 
 // OutboundAttachment carries a human-visible file attachment to output sinks.
@@ -143,6 +159,62 @@ func NewMainInboundMessage(source Source, kind InboundKind, label, text string, 
 	}
 }
 
+// NewMainInboundMessageFromContent constructs a main inbound message from normalized source content.
+func NewMainInboundMessageFromContent(source Source, kind InboundKind, label string, content *InboundContent, human bool) *InboundMessage {
+	text := content.Text
+	if len(content.TextAttachments) > 0 {
+		attachmentText := strings.Join(content.TextAttachments, "\n\n")
+		if strings.TrimSpace(text) == "" {
+			text = attachmentText
+		} else {
+			text += "\n\n" + attachmentText
+		}
+	}
+
+	inbound := NewMainInboundMessage(source, kind, label, text, human)
+	if len(content.Attachments) > 0 {
+		inbound.Attachments = make([]InboundAttachment, 0, len(content.Attachments))
+		for i := range content.Attachments {
+			inbound.Attachments = append(inbound.Attachments, InboundAttachment{
+				Name:     content.Attachments[i].Name,
+				MIMEType: content.Attachments[i].MIMEType,
+				Data:     append([]byte(nil), content.Attachments[i].Data...),
+			})
+		}
+	}
+
+	inbound.HadAttachments = content.HadAttachments || len(content.Attachments) > 0
+	inbound.HadNonImageAttachments = content.HadNonImageAttachments && len(content.TextAttachments) == 0
+	inbound.AttachmentWarnings = append([]string(nil), content.AttachmentWarnings...)
+
+	return inbound
+}
+
+// IsTextAttachment reports whether an attachment should be included as literal prompt text.
+func IsTextAttachment(name, mimeType string) bool {
+	mediaType := mimeType
+	if parsed, _, err := mime.ParseMediaType(mediaType); err == nil {
+		mediaType = parsed
+	}
+
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	if strings.HasPrefix(mediaType, "text/") {
+		return true
+	}
+
+	switch mediaType {
+	case "application/json", "application/jsonl", "application/ld+json", "application/xml", "application/yaml", "application/x-yaml", "application/toml", "application/x-toml", "application/csv", "application/x-ndjson":
+		return true
+	}
+
+	switch strings.ToLower(filepath.Ext(strings.TrimSpace(name))) {
+	case ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".yaml", ".yml", ".toml", ".xml", ".ini", ".log":
+		return true
+	}
+
+	return false
+}
+
 // EnableResponseWait returns a channel that receives the final result for this inbound turn.
 func (m *InboundMessage) EnableResponseWait() <-chan InboundResponse {
 	return m.responseChannel()
@@ -153,6 +225,16 @@ func (m *InboundMessage) CompleteResponse(text string, err error) {
 	ch := m.responseChannel()
 	m.responseOnce.Do(func() {
 		ch <- InboundResponse{Text: text, Err: err}
+
+		close(ch)
+	})
+}
+
+// CompleteResponseWithAttachments marks this inbound turn result ready with response attachments.
+func (m *InboundMessage) CompleteResponseWithAttachments(text string, attachments []OutboundAttachment, err error) {
+	ch := m.responseChannel()
+	m.responseOnce.Do(func() {
+		ch <- InboundResponse{Text: text, Attachments: CloneOutboundAttachments(attachments), Err: err}
 
 		close(ch)
 	})

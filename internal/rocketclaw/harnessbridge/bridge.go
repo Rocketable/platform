@@ -800,7 +800,7 @@ func (b *Bridge) publishFinal(ctx context.Context, msg *events.InboundMessage, r
 		return fmt.Errorf("publish final outbound message: %w", err)
 	}
 
-	msg.CompleteResponse(result.text, nil)
+	msg.CompleteResponseWithAttachments(result.text, result.attachments, nil)
 
 	if err := outbound.WaitDelivered(ctx); err != nil {
 		return fmt.Errorf("wait for final outbound delivery: %w", err)

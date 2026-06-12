@@ -74,7 +74,7 @@ Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell 
 | `rocketclaw_schedule_message`                 | Schedules one-shot delayed prompts or recurring delayed prompts through the owning bridge context. Recurring prompts use optional `recurring: true`, require `send_this_in` from 1m through 1h, persist until reset, and do not replay missed intervals. |
 | `rocketclaw_reset_scheduled_messages`         | Clears scheduled messages for the owning bridge context.                                                                      |
 | `rocketclaw_update_goal`                       | Persistent bridge tool visible only when the owning conversation has an active Slack goal loop; sets the goal status to `complete`, `blocked`, or `paused` with an optional note. |
-| `rocketclaw_attach_files_to_response`         | Persistent bridge tool that allows RocketCode to attach collected files to the outbound response.                              |
+| `rocketclaw_attach_files_to_response`         | Persistent bridge tool that allows RocketCode to attach collected files to the outbound response through the shared outbound attachment carrier.                              |
 | `rocketclaw_i_want_human_partner_to_see_this` | Required completion tool for raw background runs; its argument is the exact human-visible final message or empty for silence. |
 
 Persistent bridge tools are restart, schedule message, reset scheduled messages, active-goal update when applicable, attach files, and path-specific custom tools. Raw-run tools are decision, outbound attachment collection, restart, schedule message, and reset scheduled messages. Raw and persistent schedule-message tools expose the same one-shot and recurring contract.
@@ -91,7 +91,8 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - Persistent conversations use SQLite-backed session storage under `.rocketclaw/state.sqlite3`, opened through the centralized RocketClaw SQLite state-store opener defined by ADR 0005.
 - Raw runs can persist into a configured conversation when supplied with `RawRunProgress.SessionService` and `ConversationID`.
 - External MCP metadata is injected as a developer message for the turn that supplied it and must not become ambient global state.
-- Attachments are converted into RocketCode prompt attachments only when supported by the bridge path.
+- Attachments are normalized before RocketCode prompt construction through the shared inbound attachment path. Supported image attachments become RocketCode prompt attachments. Text attachments from Slack and external MCP become literal prompt text before the persistent bridge builds the RocketCode input. Unsupported or over-budget attachments are omitted from RocketCode attachment input and represented through attachment warnings or fallback text.
+- RocketCode response attachments collected through `rocketclaw_attach_files_to_response` become shared outbound attachment values owned by the persistent bridge result. Connector delivery, including Slack uploads, and blocking caller delivery, including external MCP `session_prompt` results, adapt those same outbound attachment values at the edge instead of maintaining separate attachment pipelines.
 - Response checkpoint seeding through replay compaction is OpenAI-only. Checkpoints created by non-OpenAI provider turns fail seeding with a clear unsupported-provider error until provider-specific compaction is approved.
 
 ### ChatGPT Codex Backend Requests
@@ -146,3 +147,5 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-10: Added the local-only `guardrail` agent contract for RocketCode inter-agent delegation and response filtering.
 - 2026-06-11: Added provider-qualified OpenAI and Anthropic RocketCode embedding contracts, with ChatGPT OAuth and checkpoint compaction remaining OpenAI-only.
 - 2026-06-11: Added persistent-bridge Slack goal-loop steering and `rocketclaw_update_goal` tool contract governed by ADR 0007.
+- 2026-06-12: Specified shared inbound attachment normalization for Slack and external MCP before persistent RocketCode prompt construction.
+- 2026-06-12: Specified shared outbound response attachment values for connector delivery and external MCP result rendering.

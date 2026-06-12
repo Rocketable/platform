@@ -3,10 +3,13 @@ package externalmcp
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -28,17 +31,21 @@ type sessionPromptInput struct {
 	Attachments            []SessionPromptAttachment `json:"attachments,omitempty" jsonschema:"optional attachments to send with this turn"`
 }
 
-// SessionPromptAttachment carries an externally supplied attachment into the session_prompt tool.
-type SessionPromptAttachment struct {
+// SessionAttachment carries an attachment across the public session_prompt boundary.
+type SessionAttachment struct {
 	Name       string `json:"name,omitempty" jsonschema:"display filename for the attachment"`
 	MIMEType   string `json:"mime_type,omitempty" jsonschema:"attachment MIME type, for example image/png"`
 	DataBase64 string `json:"data_base64" jsonschema:"base64-encoded attachment bytes"`
 }
 
+// SessionPromptAttachment carries an externally supplied attachment into the session_prompt tool.
+type SessionPromptAttachment = SessionAttachment
+
 // SessionResult is the app-level result for an external MCP session tool call.
 type SessionResult struct {
-	ExternalConversationID string `json:"external_conversation_id,omitempty" jsonschema:"external conversation ID for this MCP conversation"`
-	Answer                 string `json:"answer" jsonschema:"plain-text answer from rocketclaw"`
+	ExternalConversationID string              `json:"external_conversation_id,omitempty" jsonschema:"external conversation ID for this MCP conversation"`
+	Answer                 string              `json:"answer" jsonschema:"plain-text answer from rocketclaw"`
+	Attachments            []SessionAttachment `json:"attachments,omitempty" jsonschema:"attachments returned by rocketclaw"`
 }
 
 type usernameContextKey struct{}
@@ -72,7 +79,36 @@ func StartSessionPromptServer(ctx context.Context, logger *slog.Logger, listenAd
 			return nil, SessionResult{}, err
 		}
 
-		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: reply.Answer}}}, reply, nil
+		content := []mcp.Content{&mcp.TextContent{Text: reply.Answer}}
+		for i := range reply.Attachments {
+			attachment := reply.Attachments[i]
+
+			data, err := base64.StdEncoding.DecodeString(attachment.DataBase64)
+			if err != nil {
+				return nil, SessionResult{}, fmt.Errorf("decode session result attachment %d: %w", i+1, err)
+			}
+
+			mimeType := strings.TrimSpace(attachment.MIMEType)
+			if parsed, _, err := mime.ParseMediaType(mimeType); err == nil {
+				mimeType = parsed
+			}
+
+			mimeType = strings.ToLower(mimeType)
+
+			if strings.HasPrefix(mimeType, "image/") {
+				content = append(content, &mcp.ImageContent{Data: data, MIMEType: mimeType})
+				continue
+			}
+
+			name := strings.TrimSpace(attachment.Name)
+			if name == "" {
+				name = fmt.Sprintf("attachment-%d", i+1)
+			}
+
+			content = append(content, &mcp.EmbeddedResource{Resource: &mcp.ResourceContents{URI: fmt.Sprintf("attachment://%d/%s", i+1, url.PathEscape(name)), MIMEType: mimeType, Blob: data}})
+		}
+
+		return &mcp.CallToolResult{Content: content}, reply, nil
 	})
 
 	httpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpServer }, nil)

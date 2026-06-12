@@ -46,9 +46,9 @@ func TestSlackImageHelpers(t *testing.T) {
 	assert.True(t, isSlackImageFile(&slack.File{Mimetype: " image/png "}))
 	assert.False(t, isSlackImageFile(&slack.File{Mimetype: " application/pdf "}))
 	assert.False(t, isSlackImageFile(nil))
-	assert.True(t, isSlackTextFile(&slack.File{Name: "payload.json", Mimetype: "application/octet-stream"}))
-	assert.True(t, isSlackTextFile(&slack.File{Name: "report", Mimetype: "text/csv; charset=utf-8"}))
-	assert.False(t, isSlackTextFile(&slack.File{Name: "archive.zip", Mimetype: "application/zip"}))
+	assert.True(t, events.IsTextAttachment("payload.json", "application/octet-stream"))
+	assert.True(t, events.IsTextAttachment("report", "text/csv; charset=utf-8"))
+	assert.False(t, events.IsTextAttachment("archive.zip", "application/zip"))
 	data := mustPNG(t, 2, 2)
 	assert.Equal(t, "image/png", normalizedSlackMIMEType(http.DetectContentType(data)))
 	assert.Equal(t, "text/plain", normalizedSlackMIMEType(http.DetectContentType(nil)))
@@ -303,13 +303,13 @@ func TestInboundContentDownloadsSlackTextFilesIntoPromptText(t *testing.T) {
 	assert.Contains(t, inbound.Text, "please read this\n\nSlack text file attachment payload.json (application/json):\n")
 	assert.Contains(t, inbound.Text, `{"ok":true,"rows":[1,2]}`)
 
-	inbound = newSlackInboundMessage("body", &slackInboundContent{TextAttachments: []string{"Slack text file attachment data.csv:\na,b"}, HadNonImageAttachments: true}, nil)
+	inbound = newSlackInboundMessage("body", &events.InboundContent{TextAttachments: []string{"Slack text file attachment data.csv:\na,b"}, HadNonImageAttachments: true}, nil)
 	assert.False(t, inbound.HadNonImageAttachments)
 	assert.Contains(t, inbound.Text, "data.csv")
 }
 
 func TestNewSlackInboundMessageCopiesAttachments(t *testing.T) {
-	content := &slackInboundContent{
+	content := &events.InboundContent{
 		TextAttachments: []string{"Slack text file attachment notes.txt:\nhello"},
 		Attachments:     []events.InboundAttachment{{Name: "photo.png", MIMEType: "image/png", Data: []byte("image")}},
 	}
@@ -370,7 +370,7 @@ func TestDownloadSlackAttachmentsReportsSkippedAttachments(t *testing.T) {
 	files := []slack.File{
 		{Name: "doc.pdf", Mimetype: "application/pdf"},
 		{Name: "payload", Mimetype: "application/json", Size: 12},
-		{Name: "large.txt", Mimetype: "text/plain", Size: maxSlackTextBytesPerFile + 1},
+		{Name: "large.txt", Mimetype: "text/plain", Size: events.MaxInboundTextAttachmentBytes + 1},
 		{Name: "missing.txt", Mimetype: "text/plain", Size: 12},
 		{Name: "anim.gif", Mimetype: "image/gif"},
 		{Name: "huge.png", Mimetype: "image/png", Size: maxSlackImageDownloadBytes + 1},
@@ -404,7 +404,7 @@ func TestDownloadSlackAttachmentsReportsDownloadAndContentFailures(t *testing.T)
 			_, err := w.Write([]byte(" \n\t "))
 			assert.NoError(t, err)
 		case "/huge.txt":
-			_, err := w.Write(bytes.Repeat([]byte("x"), maxSlackTextBytesPerFile+1))
+			_, err := w.Write(bytes.Repeat([]byte("x"), events.MaxInboundTextAttachmentBytes+1))
 			assert.NoError(t, err)
 		case "/empty.png":
 		case "/failed.txt", "/failed.png":

@@ -1189,7 +1189,7 @@ func TestSubmitExternalMCPInputReportsErrors(t *testing.T) {
 	errSubmit := errors.New("thread bridge unavailable")
 	_, err := submitExternalMCPInput(t.Context(), func(context.Context, string, string, *events.InboundMessage) error {
 		return errSubmit
-	}, "planner", "external_mcp:planner:123", "hello", nil, nil, nil, "ticket-123")
+	}, "planner", "external_mcp:planner:123", &events.InboundContent{Text: "hello"}, nil, nil, "ticket-123")
 	require.ErrorIs(t, err, errSubmit)
 	require.ErrorContains(t, err, `submit external MCP input to agent "planner"`)
 
@@ -1208,7 +1208,7 @@ func TestSubmitExternalMCPInputReportsErrors(t *testing.T) {
 		inbound.CompleteResponse("", errResponse)
 
 		return nil
-	}, "planner", "external_mcp:planner:123", "hello", metadata, attachments, replyTarget, "ticket-123")
+	}, "planner", "external_mcp:planner:123", &events.InboundContent{Text: "hello", Attachments: attachments}, metadata, replyTarget, "ticket-123")
 	require.ErrorIs(t, err, errResponse)
 	require.ErrorContains(t, err, "wait for external MCP reply")
 
@@ -1217,9 +1217,36 @@ func TestSubmitExternalMCPInputReportsErrors(t *testing.T) {
 		cancel()
 
 		return nil
-	}, "planner", "external_mcp:planner:123", "hello", nil, nil, nil, "ticket-123")
+	}, "planner", "external_mcp:planner:123", &events.InboundContent{Text: "hello"}, nil, nil, "ticket-123")
 	require.ErrorIs(t, err, context.Canceled)
 	require.ErrorContains(t, err, "wait for external MCP reply")
+}
+
+func TestSubmitExternalMCPInputReturnsAttachments(t *testing.T) {
+	outboundAttachments := []events.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}, {MIMEType: "application/octet-stream", Data: []byte("data")}}
+	reply, err := submitExternalMCPInput(t.Context(), func(_ context.Context, _, _ string, inbound *events.InboundMessage) error {
+		inbound.CompleteResponseWithAttachments("answer", outboundAttachments, nil)
+
+		return nil
+	}, "planner", "external_mcp:planner:123", &events.InboundContent{Text: "hello"}, nil, nil, "ticket-123")
+	require.NoError(t, err)
+	assert.Equal(t, "answer", reply.Answer)
+	assert.Equal(t, []externalmcp.SessionAttachment{
+		{Name: "report.txt", MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte("report"))},
+		{Name: "attachment-2", MIMEType: "application/octet-stream", DataBase64: base64.StdEncoding.EncodeToString([]byte("data"))},
+	}, reply.Attachments)
+}
+
+func TestExternalMCPInboundContentConvertsTextAttachments(t *testing.T) {
+	content, outbound, err := externalMCPInboundContent([]externalmcp.SessionPromptAttachment{
+		{Name: "notes.md", MIMEType: "text/markdown; charset=utf-8", DataBase64: base64.StdEncoding.EncodeToString([]byte("# Notes\nhello"))},
+		{Name: "photo.png", MIMEType: "image/png", DataBase64: base64.StdEncoding.EncodeToString([]byte("png"))},
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"External MCP text file attachment notes.md (text/markdown):\n# Notes\nhello"}, content.TextAttachments)
+	assert.Equal(t, []events.InboundAttachment{{Name: "photo.png", MIMEType: "image/png", Data: []byte("png")}}, content.Attachments)
+	assert.Equal(t, []events.OutboundAttachment{{Name: "notes.md", MIMEType: "text/markdown; charset=utf-8", Data: []byte("# Notes\nhello")}, {Name: "photo.png", MIMEType: "image/png", Data: []byte("png")}}, outbound)
 }
 
 func TestRetrySlackDeliveryReturnsCanceledError(t *testing.T) {

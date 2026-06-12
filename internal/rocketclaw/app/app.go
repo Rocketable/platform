@@ -2,16 +2,19 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
+	"mime"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/cronjob"
@@ -537,15 +540,12 @@ func startExternalMCPServer(
 
 		agent = strings.TrimSpace(agent)
 
-		inboundAttachments, err := externalMCPInboundAttachments(attachments)
+		inboundContent, outboundAttachments, err := externalMCPInboundContent(attachments)
 		if err != nil {
 			return externalmcp.SessionResult{}, err
 		}
 
-		outboundAttachments := make([]events.OutboundAttachment, 0, len(inboundAttachments))
-		for i := range inboundAttachments {
-			outboundAttachments = append(outboundAttachments, events.OutboundAttachment{Name: inboundAttachments[i].Name, MIMEType: inboundAttachments[i].MIMEType, Data: append([]byte(nil), inboundAttachments[i].Data...)})
-		}
+		inboundContent.Text = input
 
 		state, err := store.Load()
 		if err != nil {
@@ -608,7 +608,7 @@ func startExternalMCPServer(
 					}
 				}
 
-				return submitExternalMCPInput(callCtx, submitAgent, session.Agent, session.ConversationID, input, metadata, inboundAttachments, slackReply, externalConversationID)
+				return submitExternalMCPInput(callCtx, submitAgent, session.Agent, session.ConversationID, &inboundContent, metadata, slackReply, externalConversationID)
 			}
 		}
 
@@ -671,7 +671,7 @@ func startExternalMCPServer(
 			}
 		}
 
-		return submitExternalMCPInput(callCtx, submitAgent, agent, conversationID, input, metadata, inboundAttachments, slackReply, publicConversationID)
+		return submitExternalMCPInput(callCtx, submitAgent, agent, conversationID, &inboundContent, metadata, slackReply, publicConversationID)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start external MCP HTTP server: %w", err)
@@ -680,29 +680,62 @@ func startExternalMCPServer(
 	return server, nil
 }
 
-func externalMCPInboundAttachments(attachments []externalmcp.SessionPromptAttachment) ([]events.InboundAttachment, error) {
+func externalMCPInboundContent(attachments []externalmcp.SessionPromptAttachment) (events.InboundContent, []events.OutboundAttachment, error) {
 	if len(attachments) == 0 {
-		return nil, nil
+		return events.InboundContent{}, nil, nil
 	}
 
-	inbound := make([]events.InboundAttachment, 0, len(attachments))
+	var content events.InboundContent
+
+	outbound := make([]events.OutboundAttachment, 0, len(attachments))
 	for i := range attachments {
 		data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(attachments[i].DataBase64))
 		if err != nil {
-			return nil, fmt.Errorf("decode external MCP attachment %d: %w", i+1, err)
+			return events.InboundContent{}, nil, fmt.Errorf("decode external MCP attachment %d: %w", i+1, err)
 		}
 
-		inbound = append(inbound, events.InboundAttachment{Name: strings.TrimSpace(attachments[i].Name), MIMEType: strings.TrimSpace(attachments[i].MIMEType), Data: data})
+		name := strings.TrimSpace(attachments[i].Name)
+		mimeType := strings.TrimSpace(attachments[i].MIMEType)
+		outbound = append(outbound, events.OutboundAttachment{Name: name, MIMEType: mimeType, Data: append([]byte(nil), data...)})
+
+		if events.IsTextAttachment(name, mimeType) {
+			descriptor := name
+			if descriptor == "" {
+				descriptor = "attachment"
+			}
+
+			descriptorMIMEType := mimeType
+			if mediaType, _, err := mime.ParseMediaType(descriptorMIMEType); err == nil {
+				descriptorMIMEType = mediaType
+			}
+
+			if descriptorMIMEType = strings.ToLower(strings.TrimSpace(descriptorMIMEType)); descriptorMIMEType != "" {
+				descriptor += " (" + descriptorMIMEType + ")"
+			}
+
+			switch {
+			case len(data) > events.MaxInboundTextAttachmentBytes:
+				content.AttachmentWarnings = append(content.AttachmentWarnings, "Skipped external MCP text attachment "+descriptor+" because it exceeded the text file size limit.")
+			case !utf8.Valid(data) || bytes.Contains(data, []byte{0}):
+				content.AttachmentWarnings = append(content.AttachmentWarnings, "Skipped external MCP text attachment "+descriptor+" because it contained non-UTF-8 text data.")
+			case strings.TrimSpace(string(data)) == "":
+				content.AttachmentWarnings = append(content.AttachmentWarnings, "Skipped external MCP text attachment "+descriptor+" because it contained empty text data.")
+			default:
+				content.TextAttachments = append(content.TextAttachments, "External MCP text file attachment "+descriptor+":\n"+string(data))
+			}
+
+			continue
+		}
+
+		content.Attachments = append(content.Attachments, events.InboundAttachment{Name: name, MIMEType: mimeType, Data: data})
 	}
 
-	return inbound, nil
+	return content, outbound, nil
 }
 
-func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Context, string, string, *events.InboundMessage) error, agent, conversationID, input string, metadata map[string]string, attachments []events.InboundAttachment, slackReply *events.SlackReplyTarget, externalConversationID string) (externalmcp.SessionResult, error) {
-	inbound := events.NewMainInboundMessage(events.SourceExternalMCP, events.InboundKindPrompt, "", input, true)
+func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Context, string, string, *events.InboundMessage) error, agent, conversationID string, content *events.InboundContent, metadata map[string]string, slackReply *events.SlackReplyTarget, externalConversationID string) (externalmcp.SessionResult, error) {
+	inbound := events.NewMainInboundMessageFromContent(events.SourceExternalMCP, events.InboundKindPrompt, "", content, true)
 	inbound.Metadata = metadata
-	inbound.Attachments = attachments
-	inbound.HadAttachments = len(attachments) > 0
 	inbound.SlackReply = slackReply
 	resultCh := inbound.EnableResponseWait()
 
@@ -722,7 +755,17 @@ func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Contex
 			return externalmcp.SessionResult{}, fmt.Errorf("wait for external MCP reply: %w", result.Err)
 		}
 
-		return externalmcp.SessionResult{ExternalConversationID: externalConversationID, Answer: result.Text}, nil
+		attachments := make([]externalmcp.SessionAttachment, 0, len(result.Attachments))
+		for i := range result.Attachments {
+			name := strings.TrimSpace(result.Attachments[i].Name)
+			if name == "" {
+				name = fmt.Sprintf("attachment-%d", i+1)
+			}
+
+			attachments = append(attachments, externalmcp.SessionAttachment{Name: name, MIMEType: result.Attachments[i].MIMEType, DataBase64: base64.StdEncoding.EncodeToString(result.Attachments[i].Data)})
+		}
+
+		return externalmcp.SessionResult{ExternalConversationID: externalConversationID, Answer: result.Text, Attachments: attachments}, nil
 	}
 }
 

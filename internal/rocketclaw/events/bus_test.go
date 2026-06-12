@@ -63,6 +63,19 @@ func TestWaitOutboundIdleWaitsForDelivery(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
+func TestCompleteResponseWithAttachmentsClonesAttachments(t *testing.T) {
+	msg := NewMainInboundMessage(SourceExternalMCP, InboundKindPrompt, "", "hello", true)
+	resultCh := msg.EnableResponseWait()
+	attachments := []OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}
+
+	msg.CompleteResponseWithAttachments("answer", attachments, nil)
+	attachments[0].Data[0] = 'R'
+
+	result := <-resultCh
+	require.Equal(t, "answer", result.Text)
+	require.Equal(t, []OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}, result.Attachments)
+}
+
 func TestAudioQueue(t *testing.T) {
 	bus := New()
 	defer bus.Close()

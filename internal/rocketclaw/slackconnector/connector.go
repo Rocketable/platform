@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"mime"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,7 +31,6 @@ import (
 const (
 	slackFileDownloadTimeout      = 30 * time.Second
 	maxSlackImageDownloadBytes    = 16 << 20
-	maxSlackTextBytesPerFile      = 256 << 10
 	slackTextLimit                = 3800
 	slackBlockTextLimit           = 3000
 	slackPreferredChunkSize       = 3200
@@ -64,15 +62,6 @@ var errSlackDownloadLimitExceeded = errors.New("slack file download exceeded siz
 
 type humanProfileSnapshot struct {
 	DisplayName, IconURL string
-}
-
-type slackInboundContent struct {
-	Text                   string
-	TextAttachments        []string
-	Attachments            []events.InboundAttachment
-	HadAttachments         bool
-	HadNonImageAttachments bool
-	AttachmentWarnings     []string
 }
 
 type limitedBuffer struct {
@@ -148,7 +137,7 @@ type slackThinkingState struct {
 
 type slackBufferedMessage struct {
 	Text    string
-	Content slackInboundContent
+	Content events.InboundContent
 	Reply   *events.SlackReplyTarget
 }
 
@@ -802,7 +791,7 @@ func (c *Connector) clearSlackThinking(turnID string) {
 	delete(c.thinking, turnID)
 }
 
-func (c *Connector) acceptMainSlackMessage(ctx context.Context, text string, content *slackInboundContent, replyTarget *events.SlackReplyTarget) bool {
+func (c *Connector) acceptMainSlackMessage(ctx context.Context, text string, content *events.InboundContent, replyTarget *events.SlackReplyTarget) bool {
 	key := slackMainStackKey
 	if c.bufferSlackStack(ctx, key, text, content, replyTarget) {
 		return false
@@ -847,7 +836,7 @@ func (c *Connector) beginSlackStack(key string) {
 	c.mu.Unlock()
 }
 
-func (c *Connector) bufferSlackStack(ctx context.Context, key, text string, content *slackInboundContent, replyTarget *events.SlackReplyTarget) bool {
+func (c *Connector) bufferSlackStack(ctx context.Context, key, text string, content *events.InboundContent, replyTarget *events.SlackReplyTarget) bool {
 	c.mu.Lock()
 
 	_, active := c.stacks[key]
@@ -907,10 +896,10 @@ func (c *Connector) finishSlackStack(key string) {
 	c.mu.Unlock()
 }
 
-func combineSlackBufferedMessages(buffered []slackBufferedMessage) (string, slackInboundContent) {
+func combineSlackBufferedMessages(buffered []slackBufferedMessage) (string, events.InboundContent) {
 	parts := make([]string, 0, len(buffered))
 
-	var content slackInboundContent
+	var content events.InboundContent
 
 	for _, msg := range buffered {
 		if text := strings.TrimSpace(msg.Text); text != "" {
@@ -1538,7 +1527,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 	c.createReplyPlaceholdersOrWarn(ctx, replyTarget, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)
 
-	content := slackInboundContent{Text: ev.Text}
+	content := events.InboundContent{Text: ev.Text}
 	if len(ev.Files) > 0 {
 		content.Attachments, content.TextAttachments, content.HadAttachments, content.HadNonImageAttachments, content.AttachmentWarnings = c.downloadSlackAttachments(ctx, ev.Files)
 	}
@@ -1809,30 +1798,13 @@ func (c *Connector) clearReplyState(turnID string) {
 	delete(c.replies, turnID)
 }
 
-func newSlackInboundMessage(text string, content *slackInboundContent, replyTarget *events.SlackReplyTarget) *events.InboundMessage {
-	if len(content.TextAttachments) > 0 {
-		attachmentText := strings.Join(content.TextAttachments, "\n\n")
-		if strings.TrimSpace(text) == "" {
-			text = attachmentText
-		} else {
-			text += "\n\n" + attachmentText
-		}
-	}
+func newSlackInboundMessage(text string, content *events.InboundContent, replyTarget *events.SlackReplyTarget) *events.InboundMessage {
+	contentCopy := *content
+	contentCopy.Text = text
 
-	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", text, true)
+	inbound := events.NewMainInboundMessageFromContent(events.SourceSlack, events.InboundKindPrompt, "", &contentCopy, true)
 	if replyTarget != nil && strings.TrimSpace(replyTarget.ThreadTS) != "" {
 		inbound.ConversationID = ""
-	}
-
-	if len(content.Attachments) > 0 {
-		inbound.Attachments = make([]events.InboundAttachment, 0, len(content.Attachments))
-		for i := range content.Attachments {
-			inbound.Attachments = append(inbound.Attachments, events.InboundAttachment{
-				Name:     content.Attachments[i].Name,
-				MIMEType: content.Attachments[i].MIMEType,
-				Data:     append([]byte(nil), content.Attachments[i].Data...),
-			})
-		}
 	}
 
 	if replyTarget != nil {
@@ -1842,10 +1814,6 @@ func newSlackInboundMessage(text string, content *slackInboundContent, replyTarg
 			ThreadTS:  replyTarget.ThreadTS,
 		}
 	}
-
-	inbound.HadAttachments = content.HadAttachments
-	inbound.HadNonImageAttachments = content.HadNonImageAttachments && len(content.TextAttachments) == 0
-	inbound.AttachmentWarnings = append([]string(nil), content.AttachmentWarnings...)
 
 	return inbound
 }
@@ -2354,8 +2322,8 @@ func (c *Connector) postSlackThreadReply(ctx context.Context, channelID, threadT
 	return nil
 }
 
-func (c *Connector) inboundContentForMessageEvent(ctx context.Context, ev *slackevents.MessageEvent) slackInboundContent {
-	var content slackInboundContent
+func (c *Connector) inboundContentForMessageEvent(ctx context.Context, ev *slackevents.MessageEvent) events.InboundContent {
+	var content events.InboundContent
 
 	content.Text = slackMessageEventText(ev)
 
@@ -2377,8 +2345,8 @@ func (c *Connector) downloadSlackAttachments(ctx context.Context, files []slack.
 		}
 
 		if !isSlackImageFile(file) {
-			if isSlackTextFile(file) {
-				if file.Size > maxSlackTextBytesPerFile {
+			if events.IsTextAttachment(slackFileDisplayName(file), file.Mimetype) {
+				if file.Size > events.MaxInboundTextAttachmentBytes {
 					warnings = append(warnings, "Skipped Slack text attachment "+slackFileDescriptor(file)+" because it exceeded the text file size limit.")
 
 					continue
@@ -2393,7 +2361,7 @@ func (c *Connector) downloadSlackAttachments(ctx context.Context, files []slack.
 
 				var buffer limitedBuffer
 
-				buffer.limit = maxSlackTextBytesPerFile
+				buffer.limit = events.MaxInboundTextAttachmentBytes
 
 				downloadCtx, cancel := context.WithTimeout(ctx, slackFileDownloadTimeout)
 				err := c.api.GetFileContext(downloadCtx, downloadURL, &buffer)
@@ -2483,29 +2451,6 @@ func (c *Connector) downloadSlackAttachments(ctx context.Context, files []slack.
 	}
 
 	return attachments, textAttachments, hadAttachments, hadNonImageAttachments, warnings
-}
-
-func isSlackTextFile(file *slack.File) bool {
-	if file == nil {
-		return false
-	}
-
-	mimeType := normalizedSlackMIMEType(file.Mimetype)
-	if strings.HasPrefix(mimeType, "text/") {
-		return true
-	}
-
-	switch mimeType {
-	case "application/json", "application/jsonl", "application/ld+json", "application/xml", "application/yaml", "application/x-yaml", "application/toml", "application/x-toml", "application/csv", "application/x-ndjson":
-		return true
-	}
-
-	switch strings.ToLower(filepath.Ext(slackFileDisplayName(file))) {
-	case ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".yaml", ".yml", ".toml", ".xml", ".ini", ".log":
-		return true
-	}
-
-	return false
 }
 
 func slackMessageEventText(ev *slackevents.MessageEvent) string {

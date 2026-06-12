@@ -277,6 +277,7 @@ func TestPublishFinalCarriesMainResponseAttachments(t *testing.T) {
 	bridge.log = slog.New(slog.DiscardHandler)
 	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}
 	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
+	resultCh := inbound.EnableResponseWait()
 	result := runResult{turnID: "turn-1", text: "", thinking: "", sequence: 0, sessionEntryID: 0, responseID: "", model: "", attachments: []events.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}}
 
 	var group errgroup.Group
@@ -286,6 +287,9 @@ func TestPublishFinalCarriesMainResponseAttachments(t *testing.T) {
 	assert.True(t, outbound.Complete)
 	assert.Empty(t, outbound.Text)
 	assert.Equal(t, []events.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}, outbound.Attachments)
+
+	response := <-resultCh
+	assert.Equal(t, []events.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}, response.Attachments)
 	outbound.MarkDelivered(nil)
 	require.NoError(t, group.Wait())
 }
