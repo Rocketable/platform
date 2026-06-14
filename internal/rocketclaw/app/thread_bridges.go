@@ -22,7 +22,7 @@ type directBridge interface {
 	SeedResponseThread(ctx context.Context, checkpoint events.ResponseCheckpoint, checkpointKey string) error
 	Summarize(ctx context.Context, prompt string) (string, error)
 	WaitIdle(ctx context.Context) error
-	InterruptActiveTurn() *events.SlackReplyTarget
+	InterruptActiveTurn() *events.InboundMessage
 }
 
 type bridgeConfig struct {
@@ -41,6 +41,12 @@ type managedThreadBridge struct {
 
 const slackThreadSummaryPrompt = "Summarize the current state of this managed Slack thread for handoff to the main session. Keep it concise. Include the user's goal, the important facts, decisions already made, open questions, and the next useful follow-up. Return only the summary text."
 
+type primaryTextBinding struct {
+	label         string
+	outputTargets []events.OutputTarget
+	discord       bool
+}
+
 type threadBridgeManager struct {
 	log     *slog.Logger
 	runtime *config.Config
@@ -48,6 +54,7 @@ type threadBridgeManager struct {
 	bus     *events.Bus
 	factory bridgeFactory
 	targets []events.OutputTarget
+	text    primaryTextBinding
 
 	mu       sync.Mutex
 	draining bool
@@ -55,7 +62,91 @@ type threadBridgeManager struct {
 }
 
 func newThreadBridgeManager(bus *events.Bus, runtime *config.Config, store *harnessbridge.SessionService, logger *slog.Logger, factory bridgeFactory) *threadBridgeManager {
-	return &threadBridgeManager{log: logger.With("component", "thread_bridges"), runtime: runtime, store: store, bus: bus, factory: factory, targets: events.MainOutputTargets(), mu: sync.Mutex{}, bridges: map[string]*managedThreadBridge{}}
+	return &threadBridgeManager{log: logger.With("component", "thread_bridges"), runtime: runtime, store: store, bus: bus, factory: factory, targets: events.MainOutputTargets(), text: primaryTextBindingFor(runtime), mu: sync.Mutex{}, bridges: map[string]*managedThreadBridge{}}
+}
+
+func primaryTextBindingFor(runtime *config.Config) primaryTextBinding {
+	if runtime != nil && runtime.DiscordText.Enabled && !runtime.Slack.Enabled {
+		return primaryTextBinding{label: "Discord", outputTargets: []events.OutputTarget{events.OutputTargetDiscordText}, discord: true}
+	}
+
+	return primaryTextBinding{label: "Slack", outputTargets: []events.OutputTarget{events.OutputTargetSlackMain}}
+}
+
+func (b primaryTextBinding) conversationID(target events.TextConversationTarget) string {
+	if b.discord {
+		return harnessbridge.DiscordThreadConversationID(strings.TrimSpace(target.ThreadID))
+	}
+
+	return harnessbridge.SlackThreadConversationID(strings.TrimSpace(target.ChannelID), strings.TrimSpace(target.ThreadID))
+}
+
+func (b primaryTextBinding) checkpointKey(target events.TextConversationTarget) string {
+	if b.discord {
+		return harnessbridge.DiscordResponseCheckpointKey(target.ChannelID, target.MessageID)
+	}
+
+	return harnessbridge.SlackResponseCheckpointKey(target.ChannelID, target.MessageID)
+}
+
+func (b primaryTextBinding) targetForConversationID(conversationID string) (events.TextConversationTarget, bool) {
+	if b.discord {
+		threadID, ok := harnessbridge.DiscordThreadTarget(conversationID)
+		return events.TextConversationTarget{ChannelID: threadID, ThreadID: threadID}, ok
+	}
+
+	channelID, threadTS, ok := harnessbridge.SlackThreadTarget(conversationID)
+
+	return events.TextConversationTarget{ChannelID: channelID, MessageID: threadTS, ThreadID: threadTS}, ok
+}
+
+func (b primaryTextBinding) setReplyThread(inbound *events.InboundMessage, target events.TextConversationTarget) {
+	if b.discord && inbound.DiscordReply != nil {
+		inbound.DiscordReply.ThreadID = strings.TrimSpace(target.ThreadID)
+	} else if !b.discord && inbound.SlackReply != nil {
+		inbound.SlackReply.ThreadTS = strings.TrimSpace(target.ThreadID)
+	}
+}
+
+func (b primaryTextBinding) setContinuationReply(inbound *events.InboundMessage, target events.TextConversationTarget) {
+	if b.discord {
+		inbound.DiscordReply = &events.DiscordReplyTarget{ChannelID: target.ThreadID, ThreadID: target.ThreadID}
+	} else {
+		inbound.SlackReply = &events.SlackReplyTarget{ChannelID: target.ChannelID, MessageTS: target.MessageID, ThreadTS: target.ThreadID}
+	}
+}
+
+func (b primaryTextBinding) markerReply(marker *events.InboundMessage) *events.InboundMessage {
+	if marker == nil || b.discord && marker.DiscordReply == nil || !b.discord && marker.SlackReply == nil {
+		return nil
+	}
+
+	return marker
+}
+
+func (b primaryTextBinding) publishSummary(ctx context.Context, bus *events.Bus, log *slog.Logger, target events.TextConversationTarget, summary string) error {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return errors.New("thread summary is empty")
+	}
+
+	label := strings.ToLower(b.label)
+	metadata := label + "_thread_summary thread=" + strings.TrimSpace(target.ThreadID)
+
+	body := b.label + " thread summary from thread " + strings.TrimSpace(target.ThreadID) + ":\n\n" + summary
+	if !b.discord {
+		metadata = "slack_thread_summary channel=" + strings.TrimSpace(target.ChannelID) + " thread=" + strings.TrimSpace(target.ThreadID)
+		body = "Slack thread summary from channel " + strings.TrimSpace(target.ChannelID) + " thread " + strings.TrimSpace(target.ThreadID) + ":\n\n" + summary
+	}
+
+	inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindInternalize, metadata, body, false)
+	if err := bus.PublishInbound(ctx, inbound); err != nil {
+		return fmt.Errorf("publish %s thread summary: %w", b.label, err)
+	}
+
+	log.Info("enqueued text thread summary in main inbound queue", "connector", b.label, "channel", strings.TrimSpace(target.ChannelID), "thread_id", strings.TrimSpace(target.ThreadID), "text_len", len(summary))
+
+	return nil
 }
 
 func (m *threadBridgeManager) Stop() error {
@@ -127,22 +218,22 @@ func (m *threadBridgeManager) StartActiveGoals() error {
 			continue
 		}
 
-		channelID, threadTS, ok := harnessbridge.SlackThreadTarget(conversationID)
+		thread := state.Threads[conversationID]
+
+		target, ok := m.text.targetForConversationID(conversationID)
 		if !ok {
 			continue
 		}
 
-		thread := state.Threads[conversationID]
-
-		managed, _, err := m.ensureThreadBridge(conversationID, thread, []events.OutputTarget{events.OutputTargetSlackMain})
+		managed, _, err := m.ensureThreadBridge(conversationID, thread, m.text.outputTargets)
 		if err != nil {
 			return fmt.Errorf("start active goal bridge: %w", err)
 		}
 
 		inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindPrompt, "goal_continuation", "Continue the active goal loop.", false)
 		inbound.ConversationID = conversationID
+		m.text.setContinuationReply(inbound, target)
 
-		inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
 		if err := managed.bridge.Submit(context.Background(), inbound); err != nil {
 			return fmt.Errorf("submit active goal continuation: %w", err)
 		}
@@ -151,76 +242,15 @@ func (m *threadBridgeManager) StartActiveGoals() error {
 	return nil
 }
 
-func (m *threadBridgeManager) StartDiscordThread(ctx context.Context, agent string, preSeed bool, inbound *events.InboundMessage) error {
-	if inbound == nil || inbound.DiscordReply == nil {
-		return errors.New("discord reply target is required")
-	}
-
-	conversationID := harnessbridge.DiscordThreadConversationID(inbound.DiscordReply.ThreadID)
-	if conversationID == "" {
-		return errors.New("discord thread target is required")
-	}
-
-	managed, created, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: strings.TrimSpace(agent)}, []events.OutputTarget{events.OutputTargetDiscordText})
-	if err != nil {
-		return err
-	}
-
-	if created && preSeed {
-		if err := managed.bridge.SeedThreadFromMain(ctx); err != nil {
-			m.mu.Lock()
-			delete(m.bridges, conversationID)
-			m.mu.Unlock()
-
-			_ = managed.bridge.Stop()
-
-			return fmt.Errorf("seed Discord thread from main session: %w", err)
-		}
-	}
-
-	if created {
-		if err := m.store.UpsertThread(conversationID, agent); err != nil {
-			m.mu.Lock()
-			delete(m.bridges, conversationID)
-			m.mu.Unlock()
-
-			_ = managed.bridge.Stop()
-
-			return fmt.Errorf("persist Discord thread bridge: %w", err)
-		}
-	}
-
-	inbound.ConversationID = conversationID
-	if err := managed.bridge.Submit(ctx, inbound); err != nil {
-		return fmt.Errorf("submit Discord thread start: %w", err)
-	}
-
-	return nil
-}
-
-func (m *threadBridgeManager) PrepareDiscordThreadReply(_ context.Context, threadID string) (bool, error) {
-	conversationID := harnessbridge.DiscordThreadConversationID(threadID)
+func (m *threadBridgeManager) SubmitThreadReply(ctx context.Context, target events.TextConversationTarget, inbound *events.InboundMessage) (bool, error) {
+	conversationID := m.text.conversationID(target)
 	if conversationID == "" {
 		return false, nil
 	}
 
 	state, err := m.store.Load()
 	if err != nil {
-		return false, fmt.Errorf("load persisted Discord thread state: %w", err)
-	}
-
-	return strings.TrimSpace(state.Threads[conversationID].Agent) != "", nil
-}
-
-func (m *threadBridgeManager) SubmitDiscordThreadReply(ctx context.Context, threadID string, inbound *events.InboundMessage) (bool, error) {
-	conversationID := harnessbridge.DiscordThreadConversationID(threadID)
-	if conversationID == "" {
-		return false, nil
-	}
-
-	state, err := m.store.Load()
-	if err != nil {
-		return false, fmt.Errorf("load persisted Discord thread state: %w", err)
+		return false, fmt.Errorf("load persisted %s thread state: %w", m.text.label, err)
 	}
 
 	thread, ok := state.Threads[conversationID]
@@ -228,56 +258,51 @@ func (m *threadBridgeManager) SubmitDiscordThreadReply(ctx context.Context, thre
 		return false, nil
 	}
 
-	managed, _, err := m.ensureThreadBridge(conversationID, thread, []events.OutputTarget{events.OutputTargetDiscordText})
-	if err != nil {
-		return false, err
-	}
+	if strings.HasPrefix(thread.SeededFromResponse, "external_mcp:") {
+		m.text.setReplyThread(inbound, target)
 
-	inbound.ConversationID = conversationID
-	if inbound.DiscordReply != nil {
-		inbound.DiscordReply.ThreadID = strings.TrimSpace(threadID)
-	}
-
-	m.mu.Lock()
-	if managed.summarizing {
-		managed.queuedReplies = append(managed.queuedReplies, inbound)
-		m.mu.Unlock()
+		if err := m.SubmitExternalMCP(ctx, thread.Agent, thread.SeededFromResponse, inbound); err != nil {
+			return true, fmt.Errorf("submit external MCP %s thread reply: %w", m.text.label, err)
+		}
 
 		return true, nil
 	}
 
-	bridge := managed.bridge
-	m.mu.Unlock()
+	m.text.setReplyThread(inbound, target)
 
-	if err := bridge.Submit(ctx, inbound); err != nil {
-		return true, fmt.Errorf("submit Discord thread reply: %w", err)
-	}
-
-	return true, nil
+	return m.submitManagedThreadReply(ctx, conversationID, thread, inbound, m.text.outputTargets, m.text.label)
 }
 
-func (m *threadBridgeManager) RecordDiscordResponseCheckpoint(_ context.Context, channelID, messageID string, checkpoint events.ResponseCheckpoint) error {
-	key := harnessbridge.DiscordResponseCheckpointKey(channelID, messageID)
+func (m *threadBridgeManager) RecordResponseCheckpoint(target events.TextConversationTarget, checkpoint events.ResponseCheckpoint) error {
+	return m.recordResponseCheckpoint(m.text.checkpointKey(target), checkpoint, m.text.label)
+}
+
+func (m *threadBridgeManager) PrepareResponseThreadReply(target events.TextConversationTarget) (bool, error) {
+	return m.prepareResponseThreadReply(m.text.checkpointKey(target), m.text.label)
+}
+
+//nolint:funcorder // Kept near the public checkpoint methods it supports.
+func (m *threadBridgeManager) recordResponseCheckpoint(key string, checkpoint events.ResponseCheckpoint, label string) error {
 	if key == "" {
 		return nil
 	}
 
 	if err := m.store.UpsertResponseCheckpoint(key, harnessbridge.ResponseCheckpointState{ConversationID: checkpoint.ConversationID, SessionEntryID: checkpoint.SessionEntryID, ResponseID: checkpoint.ResponseID, Model: checkpoint.Model, AssistantText: checkpoint.AssistantText}); err != nil {
-		return fmt.Errorf("persist Discord response checkpoint: %w", err)
+		return fmt.Errorf("persist %s response checkpoint: %w", label, err)
 	}
 
 	return nil
 }
 
-func (m *threadBridgeManager) PrepareDiscordResponseThreadReply(_ context.Context, channelID, messageID string) (bool, error) {
-	key := harnessbridge.DiscordResponseCheckpointKey(channelID, messageID)
+//nolint:funcorder // Kept near the public checkpoint methods it supports.
+func (m *threadBridgeManager) prepareResponseThreadReply(key, label string) (bool, error) {
 	if key == "" {
 		return false, nil
 	}
 
 	state, err := m.store.Load()
 	if err != nil {
-		return false, fmt.Errorf("load persisted Discord response checkpoint: %w", err)
+		return false, fmt.Errorf("load persisted %s response checkpoint: %w", label, err)
 	}
 
 	_, ok := state.ResponseCheckpoints[key]
@@ -285,62 +310,26 @@ func (m *threadBridgeManager) PrepareDiscordResponseThreadReply(_ context.Contex
 	return ok, nil
 }
 
-func (m *threadBridgeManager) SubmitDiscordResponseThreadReply(ctx context.Context, channelID, messageID, threadID string, inbound *events.InboundMessage) (bool, error) {
-	conversationID := harnessbridge.DiscordThreadConversationID(threadID)
+func (m *threadBridgeManager) SubmitResponseThreadReply(ctx context.Context, target events.TextConversationTarget, inbound *events.InboundMessage) (bool, error) {
+	conversationID := m.text.conversationID(target)
+	m.text.setReplyThread(inbound, target)
 
-	checkpointKey := harnessbridge.DiscordResponseCheckpointKey(channelID, messageID)
-	if conversationID == "" || checkpointKey == "" {
-		return false, nil
-	}
-
-	state, err := m.store.Load()
-	if err != nil {
-		return false, fmt.Errorf("load persisted Discord response checkpoint: %w", err)
-	}
-
-	checkpoint, ok := state.ResponseCheckpoints[checkpointKey]
-	if !ok {
-		return false, nil
-	}
-
-	managed, _, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: "main", SeededFromResponse: strings.TrimSpace(state.Threads[conversationID].SeededFromResponse)}, []events.OutputTarget{events.OutputTargetDiscordText})
-	if err != nil {
-		return true, err
-	}
-
-	seededFrom := strings.TrimSpace(state.Threads[conversationID].SeededFromResponse)
-	if seededFrom != checkpointKey {
-		if seededFrom != "" {
-			return true, fmt.Errorf("discord thread already seeded from %s", seededFrom)
-		}
-
-		if err := managed.bridge.SeedResponseThread(ctx, events.ResponseCheckpoint{ConversationID: checkpoint.ConversationID, SessionEntryID: checkpoint.SessionEntryID, ResponseID: checkpoint.ResponseID, Model: checkpoint.Model, AssistantText: checkpoint.AssistantText}, checkpointKey); err != nil {
-			return true, fmt.Errorf("seed Discord response-rooted thread: %w", err)
-		}
-
-		if err := m.store.MarkThreadSeeded(conversationID, checkpointKey); err != nil {
-			return true, fmt.Errorf("persist Discord response-rooted thread seed: %w", err)
-		}
-	}
-
-	inbound.ConversationID = conversationID
-	if inbound.DiscordReply != nil {
-		inbound.DiscordReply.ThreadID = strings.TrimSpace(threadID)
-	}
-
-	if err := managed.bridge.Submit(ctx, inbound); err != nil {
-		return true, fmt.Errorf("submit Discord response-rooted thread reply: %w", err)
-	}
-
-	return true, nil
+	return m.submitResponseThreadReply(ctx, conversationID, m.text.checkpointKey(target), inbound, m.text.outputTargets, m.text.label)
 }
 
-func (m *threadBridgeManager) SummarizeDiscordThread(ctx context.Context, threadID string) (bool, error) {
-	conversationID := harnessbridge.DiscordThreadConversationID(threadID)
+func (m *threadBridgeManager) SummarizeThread(ctx context.Context, target events.TextConversationTarget) (bool, error) {
+	conversationID := m.text.conversationID(target)
 	if conversationID == "" {
 		return false, nil
 	}
 
+	return m.summarizeThread(ctx, conversationID, m.text.outputTargets, m.text.label, func(summary string) error {
+		return m.text.publishSummary(ctx, m.bus, m.log, target, summary)
+	})
+}
+
+//nolint:funcorder // Kept near the public summary method it supports.
+func (m *threadBridgeManager) summarizeThread(ctx context.Context, conversationID string, outputTargets []events.OutputTarget, label string, publish func(string) error) (bool, error) {
 	m.mu.Lock()
 	managed := m.bridges[conversationID]
 	m.mu.Unlock()
@@ -348,7 +337,7 @@ func (m *threadBridgeManager) SummarizeDiscordThread(ctx context.Context, thread
 	if managed == nil {
 		state, err := m.store.Load()
 		if err != nil {
-			return false, fmt.Errorf("load persisted Discord thread state: %w", err)
+			return false, fmt.Errorf("load persisted %s thread state: %w", label, err)
 		}
 
 		thread, ok := state.Threads[conversationID]
@@ -356,7 +345,7 @@ func (m *threadBridgeManager) SummarizeDiscordThread(ctx context.Context, thread
 			return false, nil
 		}
 
-		managed, _, err = m.ensureThreadBridge(conversationID, thread, []events.OutputTarget{events.OutputTargetDiscordText})
+		managed, _, err = m.ensureThreadBridge(conversationID, thread, outputTargets)
 		if err != nil {
 			return true, err
 		}
@@ -376,7 +365,7 @@ func (m *threadBridgeManager) SummarizeDiscordThread(ctx context.Context, thread
 
 	var errPublish error
 	if errSummarize == nil {
-		errPublish = m.publishDiscordThreadSummary(ctx, threadID, summary)
+		errPublish = publish(summary)
 	}
 
 	errDrain := m.finishSummarizeThread(conversationID, managed)
@@ -384,66 +373,67 @@ func (m *threadBridgeManager) SummarizeDiscordThread(ctx context.Context, thread
 	return true, errors.Join(errSummarize, errPublish, errDrain)
 }
 
-func (m *threadBridgeManager) StartThread(ctx context.Context, agent string, preSeed bool, inbound *events.InboundMessage) error {
-	if inbound == nil || inbound.SlackReply == nil {
-		return errors.New("slack reply target is required")
-	}
-
-	conversationID := harnessbridge.SlackThreadConversationID(strings.TrimSpace(inbound.SlackReply.ChannelID), strings.TrimSpace(inbound.SlackReply.ThreadTS))
+func (m *threadBridgeManager) StartThread(ctx context.Context, agent string, preSeed bool, target events.TextConversationTarget, inbound *events.InboundMessage) error {
+	conversationID := m.text.conversationID(target)
 	if conversationID == "" {
-		return errors.New("slack thread target is required")
+		return fmt.Errorf("%s thread target is required", strings.ToLower(m.text.label))
 	}
 
-	managed, created, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: strings.TrimSpace(agent), SeededFromResponse: ""}, []events.OutputTarget{events.OutputTargetSlackMain})
+	return m.startManagedThread(ctx, conversationID, agent, preSeed, inbound, m.text.outputTargets, m.text.label)
+}
+
+//nolint:funcorder // Kept near the public thread-start method it supports.
+func (m *threadBridgeManager) startManagedThread(ctx context.Context, conversationID, agent string, preSeed bool, inbound *events.InboundMessage, outputTargets []events.OutputTarget, label string) error {
+	managed, created, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: strings.TrimSpace(agent)}, outputTargets)
 	if err != nil {
 		return err
 	}
 
 	if created && preSeed {
 		if err := managed.bridge.SeedThreadFromMain(ctx); err != nil {
-			m.mu.Lock()
-			delete(m.bridges, conversationID)
-			m.mu.Unlock()
-
-			_ = managed.bridge.Stop()
-
-			return fmt.Errorf("seed Slack thread from main session: %w", err)
+			m.dropCreatedBridge(conversationID, managed)
+			return fmt.Errorf("seed %s thread from main session: %w", label, err)
 		}
 	}
 
 	if created {
 		if err := m.store.UpsertThread(conversationID, agent); err != nil {
-			m.mu.Lock()
-			delete(m.bridges, conversationID)
-			m.mu.Unlock()
-
-			_ = managed.bridge.Stop()
-
-			return fmt.Errorf("persist Slack thread bridge: %w", err)
+			m.dropCreatedBridge(conversationID, managed)
+			return fmt.Errorf("persist %s thread bridge: %w", label, err)
 		}
 	}
 
 	inbound.ConversationID = conversationID
 	if err := managed.bridge.Submit(ctx, inbound); err != nil {
-		return fmt.Errorf("submit Slack thread start: %w", err)
+		return fmt.Errorf("submit %s thread start: %w", label, err)
 	}
 
 	return nil
 }
 
-func (m *threadBridgeManager) StartSlackGoalInThread(ctx context.Context, agent, objective, checkScript string, maxTurns int, inbound *events.InboundMessage) error {
-	if inbound == nil || inbound.SlackReply == nil {
-		return errors.New("slack reply target is required")
-	}
+//nolint:funcorder // Kept near start helpers that need rollback.
+func (m *threadBridgeManager) dropCreatedBridge(conversationID string, managed *managedThreadBridge) {
+	m.mu.Lock()
+	delete(m.bridges, conversationID)
+	m.mu.Unlock()
 
-	conversationID := harnessbridge.SlackThreadConversationID(strings.TrimSpace(inbound.SlackReply.ChannelID), strings.TrimSpace(inbound.SlackReply.ThreadTS))
+	_ = managed.bridge.Stop()
+}
+
+func (m *threadBridgeManager) StartGoalInThread(ctx context.Context, agent, objective, checkScript string, maxTurns int, target events.TextConversationTarget, inbound *events.InboundMessage) error {
+	conversationID := m.text.conversationID(target)
 	if conversationID == "" {
-		return errors.New("slack thread target is required")
+		return fmt.Errorf("%s thread target is required", strings.ToLower(m.text.label))
 	}
 
+	return m.startGoalInConversation(ctx, conversationID, agent, objective, checkScript, maxTurns, inbound, m.text.outputTargets)
+}
+
+//nolint:funcorder // Kept near the public goal-start method it supports.
+func (m *threadBridgeManager) startGoalInConversation(ctx context.Context, conversationID, agent, objective, checkScript string, maxTurns int, inbound *events.InboundMessage, outputTargets []events.OutputTarget) error {
 	state, err := m.store.Load()
 	if err != nil {
-		return fmt.Errorf("load Slack goal thread state: %w", err)
+		return fmt.Errorf("load goal thread state: %w", err)
 	}
 
 	if storedAgent := strings.TrimSpace(state.Threads[conversationID].Agent); storedAgent != "" {
@@ -452,49 +442,55 @@ func (m *threadBridgeManager) StartSlackGoalInThread(ctx context.Context, agent,
 
 	if strings.TrimSpace(checkScript) != "" {
 		if err := harnessbridge.ValidateGoalCheckScriptStart(m.runtime, agent, checkScript); err != nil {
-			return fmt.Errorf("validate Slack goal check script: %w", err)
+			return fmt.Errorf("validate goal check script: %w", err)
 		}
 	}
 
-	managed, created, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: strings.TrimSpace(agent), SeededFromResponse: ""}, []events.OutputTarget{events.OutputTargetSlackMain})
+	managed, created, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: strings.TrimSpace(agent), SeededFromResponse: ""}, outputTargets)
 	if err != nil {
 		return err
 	}
 
 	if created {
 		if err := m.store.UpsertThread(conversationID, agent); err != nil {
-			m.mu.Lock()
-			delete(m.bridges, conversationID)
-			m.mu.Unlock()
-
-			_ = managed.bridge.Stop()
-
-			return fmt.Errorf("persist Slack goal thread bridge: %w", err)
+			m.dropCreatedBridge(conversationID, managed)
+			return fmt.Errorf("persist goal thread bridge: %w", err)
 		}
 	}
 
 	if err := m.store.BeginGoal(conversationID, objective, checkScript, maxTurns); err != nil {
-		return fmt.Errorf("persist Slack goal: %w", err)
+		return fmt.Errorf("persist goal: %w", err)
 	}
 
 	inbound.Label = "goal"
 
 	inbound.ConversationID = conversationID
 	if err := managed.bridge.Submit(ctx, inbound); err != nil {
-		return fmt.Errorf("submit Slack goal thread start: %w", err)
+		return fmt.Errorf("submit goal thread start: %w", err)
 	}
 
 	return nil
 }
 
-func (m *threadBridgeManager) InterruptSlackThread(_ context.Context, channelID, threadTS string) (*events.SlackReplyTarget, error) {
-	conversationID := harnessbridge.SlackThreadConversationID(channelID, threadTS)
+func (m *threadBridgeManager) InterruptThread(target events.TextConversationTarget) (*events.InboundMessage, error) {
+	conversationID := m.text.conversationID(target)
+
+	marker, err := m.interruptConversation(conversationID)
+	if err != nil {
+		return nil, err
+	}
+
+	return m.text.markerReply(marker), nil
+}
+
+//nolint:funcorder // Kept near the public interrupt method it supports.
+func (m *threadBridgeManager) interruptConversation(conversationID string) (*events.InboundMessage, error) {
 	if conversationID == "" {
 		return nil, nil
 	}
 
 	if err := m.store.StopGoal(conversationID); err != nil {
-		return nil, fmt.Errorf("stop Slack goal thread: %w", err)
+		return nil, fmt.Errorf("stop goal thread: %w", err)
 	}
 
 	m.mu.Lock()
@@ -525,22 +521,12 @@ func (m *threadBridgeManager) RegisterCronThread(ctx context.Context, channelID,
 
 	if created {
 		if err := managed.bridge.SeedThreadFromCron(ctx, seedText); err != nil {
-			m.mu.Lock()
-			delete(m.bridges, conversationID)
-			m.mu.Unlock()
-
-			_ = managed.bridge.Stop()
-
+			m.dropCreatedBridge(conversationID, managed)
 			return fmt.Errorf("seed Slack cron thread: %w", err)
 		}
 
 		if err := m.store.UpsertThread(conversationID, agent); err != nil {
-			m.mu.Lock()
-			delete(m.bridges, conversationID)
-			m.mu.Unlock()
-
-			_ = managed.bridge.Stop()
-
+			m.dropCreatedBridge(conversationID, managed)
 			return fmt.Errorf("persist Slack cron thread bridge: %w", err)
 		}
 	}
@@ -548,43 +534,14 @@ func (m *threadBridgeManager) RegisterCronThread(ctx context.Context, channelID,
 	return nil
 }
 
-func (m *threadBridgeManager) SubmitThreadReply(ctx context.Context, channelID, threadTS string, inbound *events.InboundMessage) (bool, error) {
-	conversationID := harnessbridge.SlackThreadConversationID(channelID, threadTS)
-	if conversationID == "" {
-		return false, nil
-	}
-
-	state, err := m.store.Load()
-	if err != nil {
-		return false, fmt.Errorf("load persisted Slack thread state: %w", err)
-	}
-
-	thread, ok := state.Threads[conversationID]
-	if !ok {
-		return false, nil
-	}
-
-	if strings.HasPrefix(thread.SeededFromResponse, "external_mcp:") {
-		if inbound.SlackReply != nil {
-			inbound.SlackReply.ThreadTS = strings.TrimSpace(threadTS)
-		}
-
-		if err := m.SubmitExternalMCP(ctx, thread.Agent, thread.SeededFromResponse, inbound); err != nil {
-			return true, fmt.Errorf("submit external MCP Slack thread reply: %w", err)
-		}
-
-		return true, nil
-	}
-
-	managed, _, err := m.ensureThreadBridge(conversationID, thread, []events.OutputTarget{events.OutputTargetSlackMain})
+//nolint:funcorder // Kept near the public reply method it supports.
+func (m *threadBridgeManager) submitManagedThreadReply(ctx context.Context, conversationID string, thread harnessbridge.ThreadState, inbound *events.InboundMessage, outputTargets []events.OutputTarget, label string) (bool, error) {
+	managed, _, err := m.ensureThreadBridge(conversationID, thread, outputTargets)
 	if err != nil {
 		return false, err
 	}
 
 	inbound.ConversationID = conversationID
-	if inbound.SlackReply != nil {
-		inbound.SlackReply.ThreadTS = strings.TrimSpace(threadTS)
-	}
 
 	m.mu.Lock()
 	if managed.summarizing {
@@ -598,46 +555,21 @@ func (m *threadBridgeManager) SubmitThreadReply(ctx context.Context, channelID, 
 	m.mu.Unlock()
 
 	if err := bridge.Submit(ctx, inbound); err != nil {
-		return true, fmt.Errorf("submit Slack thread reply: %w", err)
+		return true, fmt.Errorf("submit %s thread reply: %w", label, err)
 	}
-
-	messageTS := ""
-	if inbound.SlackReply != nil {
-		messageTS = inbound.SlackReply.MessageTS
-	}
-
-	m.log.Info("submitted Slack thread reply to bridge", "conversation_id", conversationID, "channel", strings.TrimSpace(channelID), "thread_ts", strings.TrimSpace(threadTS), "message_ts", strings.TrimSpace(messageTS), "text_len", len([]rune(inbound.Text)), "seeded_from_response", strings.TrimSpace(thread.SeededFromResponse), "agent", strings.TrimSpace(thread.Agent))
 
 	return true, nil
 }
 
-func (m *threadBridgeManager) PrepareResponseThreadReply(_ context.Context, channelID, threadTS string) (bool, error) {
-	key := harnessbridge.SlackResponseCheckpointKey(channelID, threadTS)
-	if key == "" {
-		return false, nil
-	}
-
-	state, err := m.store.Load()
-	if err != nil {
-		return false, fmt.Errorf("load persisted Slack response checkpoint: %w", err)
-	}
-
-	_, ok := state.ResponseCheckpoints[key]
-
-	return ok, nil
-}
-
-func (m *threadBridgeManager) SubmitResponseThreadReply(ctx context.Context, channelID, threadTS string, inbound *events.InboundMessage) (bool, error) {
-	conversationID := harnessbridge.SlackThreadConversationID(channelID, threadTS)
-
-	checkpointKey := harnessbridge.SlackResponseCheckpointKey(channelID, threadTS)
+//nolint:funcorder // Kept near the public response-thread reply method it supports.
+func (m *threadBridgeManager) submitResponseThreadReply(ctx context.Context, conversationID, checkpointKey string, inbound *events.InboundMessage, outputTargets []events.OutputTarget, label string) (bool, error) {
 	if conversationID == "" || checkpointKey == "" {
 		return false, nil
 	}
 
 	state, err := m.store.Load()
 	if err != nil {
-		return false, fmt.Errorf("load persisted Slack response checkpoint: %w", err)
+		return false, fmt.Errorf("load persisted %s response checkpoint: %w", label, err)
 	}
 
 	checkpoint, ok := state.ResponseCheckpoints[checkpointKey]
@@ -645,7 +577,7 @@ func (m *threadBridgeManager) SubmitResponseThreadReply(ctx context.Context, cha
 		return false, nil
 	}
 
-	managed, _, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: "main", SeededFromResponse: strings.TrimSpace(state.Threads[conversationID].SeededFromResponse)}, []events.OutputTarget{events.OutputTargetSlackMain})
+	managed, _, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: "main", SeededFromResponse: strings.TrimSpace(state.Threads[conversationID].SeededFromResponse)}, outputTargets)
 	if err != nil {
 		return true, err
 	}
@@ -653,120 +585,36 @@ func (m *threadBridgeManager) SubmitResponseThreadReply(ctx context.Context, cha
 	seededFrom := strings.TrimSpace(state.Threads[conversationID].SeededFromResponse)
 	if seededFrom != checkpointKey {
 		if seededFrom != "" {
-			return true, fmt.Errorf("slack thread already seeded from %s", seededFrom)
+			return true, fmt.Errorf("%s thread already seeded from %s", strings.ToLower(label), seededFrom)
 		}
 
-		if err := managed.bridge.SeedResponseThread(ctx, events.ResponseCheckpoint{
-			ConversationID: checkpoint.ConversationID,
-			SessionEntryID: checkpoint.SessionEntryID,
-			ResponseID:     checkpoint.ResponseID,
-			Model:          checkpoint.Model,
-			AssistantText:  checkpoint.AssistantText,
-		}, checkpointKey); err != nil {
-			return true, fmt.Errorf("seed Slack response-rooted thread: %w", err)
+		if err := managed.bridge.SeedResponseThread(ctx, events.ResponseCheckpoint{ConversationID: checkpoint.ConversationID, SessionEntryID: checkpoint.SessionEntryID, ResponseID: checkpoint.ResponseID, Model: checkpoint.Model, AssistantText: checkpoint.AssistantText}, checkpointKey); err != nil {
+			return true, fmt.Errorf("seed %s response-rooted thread: %w", label, err)
 		}
 
 		if err := m.store.MarkThreadSeeded(conversationID, checkpointKey); err != nil {
-			return true, fmt.Errorf("persist Slack response-rooted thread seed: %w", err)
+			return true, fmt.Errorf("persist %s response-rooted thread seed: %w", label, err)
 		}
 	}
 
 	inbound.ConversationID = conversationID
-	if inbound.SlackReply != nil {
-		inbound.SlackReply.ThreadTS = strings.TrimSpace(threadTS)
-	}
 
 	if err := managed.bridge.Submit(ctx, inbound); err != nil {
-		return true, fmt.Errorf("submit Slack response-rooted thread reply: %w", err)
+		return true, fmt.Errorf("submit %s response-rooted thread reply: %w", label, err)
 	}
-
-	messageTS := ""
-	if inbound.SlackReply != nil {
-		messageTS = inbound.SlackReply.MessageTS
-	}
-
-	m.log.Info("submitted Slack response-rooted thread reply to bridge", "conversation_id", conversationID, "channel", strings.TrimSpace(channelID), "thread_ts", strings.TrimSpace(threadTS), "message_ts", strings.TrimSpace(messageTS), "text_len", len([]rune(inbound.Text)), "seeded_from_response", checkpointKey, "agent", strings.TrimSpace(state.Threads[conversationID].Agent))
 
 	return true, nil
 }
 
-func (m *threadBridgeManager) SummarizeThread(ctx context.Context, channelID, threadTS string) (bool, error) {
-	conversationID := harnessbridge.SlackThreadConversationID(channelID, threadTS)
-	if conversationID == "" {
-		return false, nil
-	}
-
-	m.mu.Lock()
-	managed := m.bridges[conversationID]
-	m.mu.Unlock()
-
-	if managed == nil {
-		state, err := m.store.Load()
-		if err != nil {
-			return false, fmt.Errorf("load persisted Slack thread state: %w", err)
-		}
-
-		thread, ok := state.Threads[conversationID]
-		if !ok {
-			return false, nil
-		}
-
-		managed, _, err = m.ensureThreadBridge(conversationID, thread, []events.OutputTarget{events.OutputTargetSlackMain})
-		if err != nil {
-			return true, err
-		}
-	}
-
-	m.mu.Lock()
-	if managed.summarizing {
-		m.mu.Unlock()
-		return true, nil
-	}
-
-	managed.summarizing = true
-	bridge := managed.bridge
-	m.mu.Unlock()
-
-	summary, errSummarize := bridge.Summarize(ctx, slackThreadSummaryPrompt)
-
-	var errPublish error
-	if errSummarize == nil {
-		errPublish = m.publishThreadSummary(ctx, channelID, threadTS, summary)
-	}
-
-	errDrain := m.finishSummarizeThread(conversationID, managed)
-
-	return true, errors.Join(errSummarize, errPublish, errDrain)
-}
-
-func (m *threadBridgeManager) RecordResponseCheckpoint(_ context.Context, channelID, messageTS string, checkpoint events.ResponseCheckpoint) error {
-	key := harnessbridge.SlackResponseCheckpointKey(channelID, messageTS)
-	if key == "" {
-		return nil
-	}
-
-	if err := m.store.UpsertResponseCheckpoint(key, harnessbridge.ResponseCheckpointState{
-		ConversationID: checkpoint.ConversationID,
-		SessionEntryID: checkpoint.SessionEntryID,
-		ResponseID:     checkpoint.ResponseID,
-		Model:          checkpoint.Model,
-		AssistantText:  checkpoint.AssistantText,
-	}); err != nil {
-		return fmt.Errorf("persist Slack response checkpoint: %w", err)
-	}
-
-	return nil
-}
-
-func (m *threadBridgeManager) PrepareThreadReply(_ context.Context, channelID, threadTS string) (bool, error) {
-	conversationID := harnessbridge.SlackThreadConversationID(channelID, threadTS)
+func (m *threadBridgeManager) PrepareThreadReply(target events.TextConversationTarget) (bool, error) {
+	conversationID := m.text.conversationID(target)
 	if conversationID == "" {
 		return false, nil
 	}
 
 	state, err := m.store.Load()
 	if err != nil {
-		return false, fmt.Errorf("load persisted Slack thread state: %w", err)
+		return false, fmt.Errorf("load persisted %s thread state: %w", m.text.label, err)
 	}
 
 	return strings.TrimSpace(state.Threads[conversationID].Agent) != "", nil
@@ -856,48 +704,4 @@ func (m *threadBridgeManager) finishSummarizeThread(conversationID string, manag
 			errDrain = errors.Join(errDrain, managed.bridge.Submit(context.Background(), queuedReplies[i]))
 		}
 	}
-}
-
-func (m *threadBridgeManager) publishThreadSummary(ctx context.Context, channelID, threadTS, summary string) error {
-	summary = strings.TrimSpace(summary)
-	if summary == "" {
-		return errors.New("thread summary is empty")
-	}
-
-	inbound := events.NewMainInboundMessage(
-		events.SourceSystem,
-		events.InboundKindInternalize,
-		"slack_thread_summary channel="+strings.TrimSpace(channelID)+" thread="+strings.TrimSpace(threadTS),
-		"Slack thread summary from channel "+strings.TrimSpace(channelID)+" thread "+strings.TrimSpace(threadTS)+":\n\n"+summary,
-		false,
-	)
-	if err := m.bus.PublishInbound(ctx, inbound); err != nil {
-		return fmt.Errorf("publish Slack thread summary: %w", err)
-	}
-
-	m.log.Info("enqueued Slack thread summary in main inbound queue", "channel", strings.TrimSpace(channelID), "thread_ts", strings.TrimSpace(threadTS), "text_len", len(summary))
-
-	return nil
-}
-
-func (m *threadBridgeManager) publishDiscordThreadSummary(ctx context.Context, threadID, summary string) error {
-	summary = strings.TrimSpace(summary)
-	if summary == "" {
-		return errors.New("thread summary is empty")
-	}
-
-	inbound := events.NewMainInboundMessage(
-		events.SourceSystem,
-		events.InboundKindInternalize,
-		"discord_thread_summary thread="+strings.TrimSpace(threadID),
-		"Discord thread summary from thread "+strings.TrimSpace(threadID)+":\n\n"+summary,
-		false,
-	)
-	if err := m.bus.PublishInbound(ctx, inbound); err != nil {
-		return fmt.Errorf("publish Discord thread summary: %w", err)
-	}
-
-	m.log.Info("enqueued Discord thread summary in main inbound queue", "thread_id", strings.TrimSpace(threadID), "text_len", len(summary))
-
-	return nil
 }

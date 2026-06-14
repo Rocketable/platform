@@ -158,12 +158,12 @@ func TestGoalRequestForTextParsesSupportedTriggers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.text, func(t *testing.T) {
-			goal, rejection, ok := goalRequestForText(tt.text)
+			goal, rejection, ok := harnessbridge.ParseGoalRequest(tt.text)
 			require.True(t, ok)
 			require.Empty(t, rejection)
-			assert.Equal(t, tt.objective, goal.objective)
-			assert.Equal(t, tt.checkScript, goal.checkScript)
-			assert.Equal(t, tt.maxTurns, goal.maxTurns)
+			assert.Equal(t, tt.objective, goal.Objective)
+			assert.Equal(t, tt.checkScript, goal.CheckScript)
+			assert.Equal(t, tt.maxTurns, goal.MaxTurns)
 		})
 	}
 }
@@ -183,7 +183,7 @@ func TestGoalRequestForTextRejectsMalformedRequests(t *testing.T) {
 
 	for _, text := range tests {
 		t.Run(text, func(t *testing.T) {
-			_, rejection, ok := goalRequestForText(text)
+			_, rejection, ok := harnessbridge.ParseGoalRequest(text)
 			if text == "plain text" {
 				assert.False(t, ok)
 				assert.Empty(t, rejection)
@@ -243,23 +243,24 @@ func TestNewConnectorInstallsInertRuntimeDependencies(t *testing.T) {
 
 	c := New(&config.SlackConfig{BotToken: "xoxb-test", AppToken: "xapp-test"}, bus, nil, nil, inertThreadRouter{}, inertOneOffCronjobs{}, testLogger())
 
-	handled, err := c.threadRouter.PrepareThreadReply(t.Context(), "D123", "111.222")
+	target := events.TextConversationTarget{ChannelID: "D123", MessageID: "111.222", ThreadID: "111.222"}
+	handled, err := c.threadRouter.PrepareThreadReply(target)
 	require.NoError(t, err)
 	assert.False(t, handled)
-	handled, err = c.threadRouter.PrepareResponseThreadReply(t.Context(), "D123", "111.222")
+	handled, err = c.threadRouter.PrepareResponseThreadReply(target)
 	require.NoError(t, err)
 	assert.False(t, handled)
-	handled, err = c.threadRouter.SubmitThreadReply(t.Context(), "D123", "111.222", events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true))
+	handled, err = c.threadRouter.SubmitThreadReply(t.Context(), target, events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true))
 	require.NoError(t, err)
 	assert.False(t, handled)
-	handled, err = c.threadRouter.SubmitResponseThreadReply(t.Context(), "D123", "111.222", events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true))
+	handled, err = c.threadRouter.SubmitResponseThreadReply(t.Context(), target, events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true))
 	require.NoError(t, err)
 	assert.False(t, handled)
-	handled, err = c.threadRouter.SummarizeThread(t.Context(), "D123", "111.222")
+	handled, err = c.threadRouter.SummarizeThread(t.Context(), target)
 	require.NoError(t, err)
 	assert.False(t, handled)
-	require.NoError(t, c.threadRouter.RecordResponseCheckpoint(t.Context(), "D123", "111.222", events.ResponseCheckpoint{}))
-	require.Error(t, c.threadRouter.StartThread(t.Context(), "main", false, events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)))
+	require.NoError(t, c.threadRouter.RecordResponseCheckpoint(target, events.ResponseCheckpoint{}))
+	require.Error(t, c.threadRouter.StartThread(t.Context(), "main", false, target, events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)))
 
 	_, err = c.oneOffCronjobs.LoadOneOffCronjob("daily")
 	require.Error(t, err)
@@ -4874,9 +4875,11 @@ func newThreadRouterStub() *threadRouterStub {
 }
 
 type threadStartCall struct {
-	agent   string
-	preSeed bool
-	inbound *events.InboundMessage
+	channelID string
+	threadTS  string
+	agent     string
+	preSeed   bool
+	inbound   *events.InboundMessage
 }
 
 type threadReplyCall struct {
@@ -4913,39 +4916,41 @@ type goalThreadStopCall struct {
 	threadTS  string
 }
 
-func (s *threadRouterStub) StartThread(_ context.Context, agent string, preSeed bool, inbound *events.InboundMessage) error {
+func (s *threadRouterStub) StartThread(_ context.Context, agent string, preSeed bool, target events.TextConversationTarget, inbound *events.InboundMessage) error {
 	if s.onStart != nil {
 		s.onStart()
 	}
 
 	s.mu.Lock()
-	s.started = append(s.started, threadStartCall{agent: agent, preSeed: preSeed, inbound: inbound})
+	s.started = append(s.started, threadStartCall{channelID: target.ChannelID, threadTS: target.ThreadID, agent: agent, preSeed: preSeed, inbound: inbound})
 	errStart := s.errStart
 	s.mu.Unlock()
 
 	return errStart
 }
 
-func (s *threadRouterStub) StartSlackGoalInThread(_ context.Context, agent, objective, checkScript string, maxTurns int, inbound *events.InboundMessage) error {
+func (s *threadRouterStub) StartGoalInThread(_ context.Context, agent, objective, checkScript string, maxTurns int, target events.TextConversationTarget, inbound *events.InboundMessage) error {
 	s.mu.Lock()
 	s.goalStarts = append(s.goalStarts, goalThreadStartCall{agent: agent, objective: objective, checkScript: checkScript, maxTurns: maxTurns, inbound: inbound})
 	errStart := s.errStart
 	s.mu.Unlock()
 
+	_ = target
+
 	return errStart
 }
 
-func (s *threadRouterStub) InterruptSlackThread(_ context.Context, channelID, threadTS string) (*events.SlackReplyTarget, error) {
+func (s *threadRouterStub) InterruptThread(target events.TextConversationTarget) (*events.InboundMessage, error) {
 	s.mu.Lock()
-	s.goalStops = append(s.goalStops, goalThreadStopCall{channelID: channelID, threadTS: threadTS})
+	s.goalStops = append(s.goalStops, goalThreadStopCall{channelID: target.ChannelID, threadTS: target.ThreadID})
 	result := s.stopResult
 	s.mu.Unlock()
 
 	if result == nil {
-		result = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
+		result = &events.SlackReplyTarget{ChannelID: target.ChannelID, MessageTS: target.ThreadID, ThreadTS: target.ThreadID}
 	}
 
-	return result, nil
+	return &events.InboundMessage{SlackReply: result}, nil
 }
 
 func (s *threadRouterStub) RegisterCronThread(_ context.Context, channelID, threadTS, agent, seedText string) error {
@@ -4957,9 +4962,11 @@ func (s *threadRouterStub) RegisterCronThread(_ context.Context, channelID, thre
 	return errStart
 }
 
-func (s *threadRouterStub) PrepareThreadReply(context.Context, string, string) (bool, error) {
+func (s *threadRouterStub) PrepareThreadReply(target events.TextConversationTarget) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	_ = target
 
 	if s.errPrepare != nil {
 		return false, s.errPrepare
@@ -4979,9 +4986,11 @@ func (s *threadRouterStub) PrepareThreadReply(context.Context, string, string) (
 	return s.submitHandled, nil
 }
 
-func (s *threadRouterStub) PrepareResponseThreadReply(context.Context, string, string) (bool, error) {
+func (s *threadRouterStub) PrepareResponseThreadReply(target events.TextConversationTarget) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	_ = target
 
 	if s.errPrepareResponse != nil {
 		return false, s.errPrepareResponse
@@ -4990,33 +4999,33 @@ func (s *threadRouterStub) PrepareResponseThreadReply(context.Context, string, s
 	return s.prepareResponseHandled, nil
 }
 
-func (s *threadRouterStub) SubmitThreadReply(_ context.Context, channelID, threadTS string, inbound *events.InboundMessage) (bool, error) {
+func (s *threadRouterStub) SubmitThreadReply(_ context.Context, target events.TextConversationTarget, inbound *events.InboundMessage) (bool, error) {
 	if s.onReply != nil {
 		s.onReply()
 	}
 
 	s.mu.Lock()
-	s.replies = append(s.replies, threadReplyCall{channelID: channelID, threadTS: threadTS, inbound: inbound})
+	s.replies = append(s.replies, threadReplyCall{channelID: target.ChannelID, threadTS: target.ThreadID, inbound: inbound})
 	s.mu.Unlock()
 
 	return s.submitHandled, s.errSubmit
 }
 
-func (s *threadRouterStub) SubmitResponseThreadReply(ctx context.Context, channelID, threadTS string, inbound *events.InboundMessage) (bool, error) {
-	return s.SubmitThreadReply(ctx, channelID, threadTS, inbound)
+func (s *threadRouterStub) SubmitResponseThreadReply(ctx context.Context, target events.TextConversationTarget, inbound *events.InboundMessage) (bool, error) {
+	return s.SubmitThreadReply(ctx, target, inbound)
 }
 
-func (s *threadRouterStub) SummarizeThread(_ context.Context, channelID, threadTS string) (bool, error) {
+func (s *threadRouterStub) SummarizeThread(_ context.Context, target events.TextConversationTarget) (bool, error) {
 	s.mu.Lock()
-	s.summaries = append(s.summaries, threadSummaryCall{channelID: channelID, threadTS: threadTS})
+	s.summaries = append(s.summaries, threadSummaryCall{channelID: target.ChannelID, threadTS: target.ThreadID})
 	s.mu.Unlock()
 
 	return s.summarizeHandled, s.summarizeErr
 }
 
-func (s *threadRouterStub) RecordResponseCheckpoint(_ context.Context, channelID, messageTS string, checkpoint events.ResponseCheckpoint) error {
+func (s *threadRouterStub) RecordResponseCheckpoint(target events.TextConversationTarget, checkpoint events.ResponseCheckpoint) error {
 	s.mu.Lock()
-	s.checkpoints = append(s.checkpoints, threadCheckpointCall{channelID: channelID, messageTS: messageTS, checkpoint: checkpoint})
+	s.checkpoints = append(s.checkpoints, threadCheckpointCall{channelID: target.ChannelID, messageTS: target.MessageID, checkpoint: checkpoint})
 	err := s.errCheckpoint
 	s.mu.Unlock()
 

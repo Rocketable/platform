@@ -105,7 +105,7 @@ type Bridge struct {
 
 	mu                    sync.Mutex
 	handling, stopped     bool
-	activeSlackReply      *events.SlackReplyTarget
+	activeReply           *events.InboundMessage
 	activeTurnInterrupts  chan os.Signal
 	activeTurnInterrupted bool
 }
@@ -286,9 +286,9 @@ func (b *Bridge) Submit(ctx context.Context, msg *events.InboundMessage) error {
 }
 
 // InterruptActiveTurn interrupts current work and clears queued work for this bridge.
-func (b *Bridge) InterruptActiveTurn() *events.SlackReplyTarget {
+func (b *Bridge) InterruptActiveTurn() *events.InboundMessage {
 	b.mu.Lock()
-	reply := b.activeSlackReply
+	reply := b.activeReply
 	interrupts := b.activeTurnInterrupts
 	b.activeTurnInterrupted = b.activeTurnInterrupted || interrupts != nil
 	b.mu.Unlock()
@@ -872,13 +872,18 @@ func (b *Bridge) enqueueGoalContinuation(ctx context.Context, goal *GoalState, m
 	inbound.ConversationID = b.config.ConversationID
 	if msg != nil && msg.SlackReply != nil {
 		inbound.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.ThreadTS, ThreadTS: msg.SlackReply.ThreadTS}
+	} else if msg != nil && msg.DiscordReply != nil {
+		inbound.DiscordReply = &events.DiscordReplyTarget{ChannelID: msg.DiscordReply.ChannelID, MessageID: msg.DiscordReply.MessageID, ThreadID: msg.DiscordReply.ThreadID}
 	} else if channelID, threadTS, ok := SlackThreadTarget(b.config.ConversationID); ok {
 		inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
+	} else if threadID, ok := DiscordThreadTarget(b.config.ConversationID); ok {
+		inbound.DiscordReply = &events.DiscordReplyTarget{ChannelID: threadID, ThreadID: threadID}
 	}
 
 	return b.enqueue(ctx, bridgeRequest{inbound: inbound}, "submit goal continuation")
 }
 
+//nolint:gocyclo // Turn execution coordinates model, tools, progress, and goal accounting.
 func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID string, publish bool) (runResult, error) {
 	root, err := os.OpenRoot(b.runtime.Workspace)
 	if err != nil {
@@ -993,15 +998,24 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 	output := make(chan rocketcode.ChatResponse, 128)
 	interrupts := make(chan os.Signal, 1)
 
+	activeReply := new(events.InboundMessage)
+	if msg.SlackReply != nil {
+		activeReply.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS}
+	}
+
+	if msg.DiscordReply != nil {
+		activeReply.DiscordReply = &events.DiscordReplyTarget{ChannelID: msg.DiscordReply.ChannelID, MessageID: msg.DiscordReply.MessageID, ThreadID: msg.DiscordReply.ThreadID}
+	}
+
 	b.mu.Lock()
-	b.activeSlackReply = msg.SlackReply
+	b.activeReply = activeReply
 	b.activeTurnInterrupts = interrupts
 	b.activeTurnInterrupted = false
 	b.mu.Unlock()
 
 	defer func() {
 		b.mu.Lock()
-		b.activeSlackReply = nil
+		b.activeReply = nil
 		b.activeTurnInterrupts = nil
 		b.activeTurnInterrupted = false
 		b.mu.Unlock()
@@ -1115,11 +1129,6 @@ func (b *Bridge) processResponse(ctx context.Context, msg *events.InboundMessage
 		result.thinking = appendText(result.thinking, thinking)
 		result.sequence++
 		outbound := b.newOutboundMessage(msg, result.turnID, result.sequence, "", result.thinking, false)
-
-		outbound.Targets = []events.OutputTarget{events.OutputTargetSlackMain}
-		if msg != nil && msg.Source == events.SourceWebVoice {
-			outbound.Targets = append(outbound.Targets, events.OutputTargetWebUI)
-		}
 
 		if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
 			return fmt.Errorf("publish rocketcode progress: %w", err)

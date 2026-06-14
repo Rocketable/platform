@@ -1330,6 +1330,14 @@ func DiscordThreadConversationID(threadID string) string {
 	return "discord-thread:" + threadID
 }
 
+// DiscordThreadTarget returns the Discord thread ID for a Discord thread conversation ID.
+func DiscordThreadTarget(conversationID string) (threadID string, ok bool) {
+	threadID, ok = strings.CutPrefix(strings.TrimSpace(conversationID), "discord-thread:")
+	threadID = strings.TrimSpace(threadID)
+
+	return threadID, ok && threadID != ""
+}
+
 // DiscordResponseCheckpointKey returns the stable key for one posted Discord AI response message.
 func DiscordResponseCheckpointKey(channelID, messageID string) string {
 	channelID, messageID = strings.TrimSpace(channelID), strings.TrimSpace(messageID)

@@ -27,7 +27,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 | `.rocketclaw/` | Generated runtime directory. Setup and startup may create or maintain it. |
 | `.femtoclaw/` | Legacy generated runtime directory used only when `femtoclaw.json` is selected. |
 | `<runtime-dir>/overlays/` | Managed parent directory for configured git overlay clones. Startup preserves the parent directory, reconciles its children against the current `overlays` config entries, removes unconfigured clone directories, and discards uncommitted or untracked changes inside active configured clone directories before fetching and applying them. |
-| `<runtime-dir>/state.sqlite3` | Persists RocketCode sessions, Slack/Discord text thread routing, response checkpoints, external MCP sessions, scheduled messages with recurrence metadata, Slack goal-loop state, restart notifications, and seed markers. Opened and initialized through the centralized SQLite state-store opener defined by ADR 0005. |
+| `<runtime-dir>/state.sqlite3` | Persists RocketCode sessions, text connector thread routing, response checkpoints, external MCP sessions, scheduled messages with recurrence metadata, text connector goal-loop state, restart notifications, and seed markers. Opened and initialized through the centralized SQLite state-store opener defined by ADR 0005. |
 | `<runtime-dir>/auth.json` | Workspace-local ChatGPT OAuth credential for RocketCode Codex requests. Written by `rocketclaw oai login` with `0600` permissions. It is runtime state, not setup payload, and STT/TTS do not read it. RocketClaw owns this credential file and must not read, import, or write Codex CLI credentials such as `~/.codex/auth.json`. |
 | `<runtime-dir>/.gitignore` | Setup-generated runtime-directory ignore file that ignores `auth.json` so workspace-local ChatGPT OAuth material is not accidentally added to source control. |
 | `<runtime-dir>/.rocketcode/` | RocketCode shell output and transient runtime artifacts. |
@@ -46,7 +46,9 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - Empty or omitted `overlays` means no intermediate git overlays. Non-empty entries are applied in array order after embedded assets and before local workspace overlays.
 - `discord_text.enabled` requires `discord_text.token`, `discord_text.channel_id`, and `discord_text.human_user_id`.
 - `slack.enabled` and `discord_text.enabled` must not both be true.
-- When Slack social mode is enabled, canonical `slack.social_mode.channels[]` is the only runtime channel mapping: each entry maps one Slack channel to one agent and must define non-empty `allowed_user_ids`. Legacy `slack.social_mode.channel_agents` and top-level `slack.social_mode.allowed_user_ids` are migration input only and are not consulted by runtime connector behavior.
+- The enabled primary text connector may define social-mode channel mappings. The canonical mapping shape is one connector channel, one agent, and non-empty `allowed_user_ids`.
+- Slack binding: canonical `slack.social_mode.channels[]` is the only runtime Slack social-mode channel mapping. Legacy `slack.social_mode.channel_agents` and top-level `slack.social_mode.allowed_user_ids` are migration input only and are not consulted by runtime connector behavior.
+- Discord Text binding: `discord_text.social_mode.channels[]` uses the same canonical social-mode mapping shape with Discord channel IDs.
 
 ### Git Overlays
 
@@ -79,7 +81,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - Anthropic-backed RocketCode requests use `anthropic.api_key` and optional `anthropic.api_base_url`. ChatGPT OAuth credentials are never used for Anthropic requests.
 - Startup migrates legacy `slack.social_mode.channel_agents` config into canonical `slack.social_mode.channels[]` before runtime config decoding. Each legacy `"#channel": "agent"` pair becomes `{ "channel": "#channel", "agent": "agent" }`, and the migrator removes `channel_agents` after conversion. If both forms are present, existing `channels[]` entries win for duplicate channels and non-duplicate legacy entries are appended. When legacy top-level `slack.social_mode.allowed_user_ids` exists, the migrator copies those users into each canonical channel that lacks a non-empty per-channel `allowed_user_ids` list, then removes the top-level list. This migrator is temporary compatibility code that can be removed after configs are migrated.
 - Startup migrates legacy state into `.rocketclaw/state.sqlite3` when applicable; rollback after destructive migration requires backup restore.
-- Startup rehydrates active persisted Slack goal loops according to ADR 0007. This is runtime state recovery and does not require configuration hot reload.
+- Startup rehydrates active persisted text connector goal loops according to ADR 0007. This is runtime state recovery and does not require configuration hot reload.
 
 ## Non-Goals
 
@@ -135,3 +137,4 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-12: Added bounded read-only `rocketclaw fc list` inspection flags `--since`, `--until`, `--limit`, and `--no-message-preview`.
 - 2026-06-12: Specified `.git/info/exclude` maintenance for generated RocketClaw workspace script symlinks when the workspace has a directory `.git` repository.
 - 2026-06-12: Replaced path-special `agents/guardrail.md` with normal agent files referenced by per-agent `guardrail` frontmatter.
+- 2026-06-14: Defined social-mode channel mappings as a generic primary text connector config shape with Slack and Discord Text bindings.

@@ -11,34 +11,39 @@ import (
 
 type inertThreadRouter struct{}
 
-func (inertThreadRouter) StartThread(context.Context, string, bool, *events.InboundMessage) error {
+func (inertThreadRouter) StartThread(_ context.Context, _ string, _ bool, _ events.TextConversationTarget, _ *events.InboundMessage) error {
 	return errors.New("slack thread routing is not configured")
 }
-func (inertThreadRouter) StartSlackGoalInThread(context.Context, string, string, string, int, *events.InboundMessage) error {
+func (inertThreadRouter) StartGoalInThread(_ context.Context, _, _, _ string, _ int, _ events.TextConversationTarget, _ *events.InboundMessage) error {
 	return errors.New("slack thread routing is not configured")
 }
-func (inertThreadRouter) InterruptSlackThread(context.Context, string, string) (*events.SlackReplyTarget, error) {
+func (inertThreadRouter) InterruptThread(target events.TextConversationTarget) (*events.InboundMessage, error) {
+	_ = target
 	return nil, nil
 }
-func (inertThreadRouter) RegisterCronThread(context.Context, string, string, string, string) error {
+func (inertThreadRouter) RegisterCronThread(_ context.Context, _, _, _, _ string) error {
 	return nil
 }
-func (inertThreadRouter) PrepareThreadReply(context.Context, string, string) (bool, error) {
+func (inertThreadRouter) PrepareThreadReply(target events.TextConversationTarget) (bool, error) {
+	_ = target
 	return false, nil
 }
-func (inertThreadRouter) PrepareResponseThreadReply(context.Context, string, string) (bool, error) {
+func (inertThreadRouter) PrepareResponseThreadReply(target events.TextConversationTarget) (bool, error) {
+	_ = target
 	return false, nil
 }
-func (inertThreadRouter) SubmitThreadReply(context.Context, string, string, *events.InboundMessage) (bool, error) {
+func (inertThreadRouter) SubmitThreadReply(_ context.Context, _ events.TextConversationTarget, _ *events.InboundMessage) (bool, error) {
 	return false, nil
 }
-func (inertThreadRouter) SubmitResponseThreadReply(context.Context, string, string, *events.InboundMessage) (bool, error) {
+func (inertThreadRouter) SubmitResponseThreadReply(_ context.Context, _ events.TextConversationTarget, _ *events.InboundMessage) (bool, error) {
 	return false, nil
 }
-func (inertThreadRouter) SummarizeThread(context.Context, string, string) (bool, error) {
+func (inertThreadRouter) SummarizeThread(ctx context.Context, target events.TextConversationTarget) (bool, error) {
+	_, _ = ctx, target
 	return false, nil
 }
-func (inertThreadRouter) RecordResponseCheckpoint(context.Context, string, string, events.ResponseCheckpoint) error {
+func (inertThreadRouter) RecordResponseCheckpoint(target events.TextConversationTarget, checkpoint events.ResponseCheckpoint) error {
+	_, _ = target, checkpoint
 	return nil
 }
 

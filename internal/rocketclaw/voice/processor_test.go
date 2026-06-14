@@ -22,9 +22,9 @@ func TestPublishTranscriptionRelaysBeforePublishingInbound(t *testing.T) {
 	defer bus.Close()
 
 	steps := make([]string, 0, 2)
-	processor := NewProcessor(bus, nil, testLogger(), nil, func(context.Context, string) (*events.SlackReplyTarget, error) {
+	processor := NewProcessor(bus, nil, testLogger(), nil, func(context.Context, string) (*events.InboundMessage, error) {
 		steps = append(steps, "relay")
-		return &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: ""}, nil
+		return &events.InboundMessage{SlackReply: &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: ""}}, nil
 	})
 
 	published, err := processor.publisher.PublishTranscription(context.Background(), "hello from Discord", "")
@@ -54,7 +54,7 @@ func TestPublishTranscriptionStopsWhenRelayFails(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	processor := NewProcessor(bus, nil, testLogger(), nil, func(context.Context, string) (*events.SlackReplyTarget, error) {
+	processor := NewProcessor(bus, nil, testLogger(), nil, func(context.Context, string) (*events.InboundMessage, error) {
 		return nil, errors.New("relay failed")
 	})
 
@@ -145,9 +145,9 @@ func TestProcessUtterancePublishesTranscription(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	processor := NewProcessor(bus, openaiaudio.NewWhisperClient("secret", server.URL, "whisper-1", ""), testLogger(), nil, func(_ context.Context, text string) (*events.SlackReplyTarget, error) {
+	processor := NewProcessor(bus, openaiaudio.NewWhisperClient("secret", server.URL, "whisper-1", ""), testLogger(), nil, func(_ context.Context, text string) (*events.InboundMessage, error) {
 		assert.Equal(t, "hello voice", text)
-		return &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222"}, nil
+		return &events.InboundMessage{SlackReply: &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222"}}, nil
 	})
 	chunk := testAudioChunk(1, 100, bytes.Repeat([]byte{0x01}, minimumUtteranceBytes))
 	acc := &accumulator{packets: []events.AudioChunk{chunk}}
@@ -175,7 +175,7 @@ func TestProcessUtteranceStopsWithoutPublishingOnTranscriptionEdges(t *testing.T
 		name    string
 		status  int
 		body    string
-		before  func(context.Context, string) (*events.SlackReplyTarget, error)
+		before  func(context.Context, string) (*events.InboundMessage, error)
 		wantLog string
 	}{
 		{
@@ -196,7 +196,7 @@ func TestProcessUtteranceStopsWithoutPublishingOnTranscriptionEdges(t *testing.T
 			name:   "relay error",
 			status: http.StatusOK,
 			body:   `{"text":"voice"}`,
-			before: func(context.Context, string) (*events.SlackReplyTarget, error) {
+			before: func(context.Context, string) (*events.InboundMessage, error) {
 				return nil, errRelay
 			},
 			wantLog: "publish transcribed utterance",
@@ -358,7 +358,7 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-func testBeforeMainSession(context.Context, string) (*events.SlackReplyTarget, error) {
+func testBeforeMainSession(context.Context, string) (*events.InboundMessage, error) {
 	return nil, nil
 }
 

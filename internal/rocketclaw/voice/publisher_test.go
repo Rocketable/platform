@@ -16,9 +16,9 @@ func TestPublishTranscriptionRelaysBeforePublishingInboundForWebVoice(t *testing
 	defer bus.Close()
 
 	steps := make([]string, 0, 2)
-	publisher := NewTranscriptionPublisher(bus, testLogger(), events.SourceWebVoice, nil, func(context.Context, string) (*events.SlackReplyTarget, error) {
+	publisher := NewTranscriptionPublisher(bus, testLogger(), events.SourceWebVoice, nil, func(context.Context, string) (*events.InboundMessage, error) {
 		steps = append(steps, "relay")
-		return &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: ""}, nil
+		return &events.InboundMessage{SlackReply: &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: ""}}, nil
 	})
 
 	published, err := publisher.PublishTranscription(context.Background(), "hello from browser voice", "browser-session-1")
@@ -50,7 +50,7 @@ func TestPublishTranscriptionStopsWhenWebRelayFails(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	publisher := NewTranscriptionPublisher(bus, testLogger(), events.SourceWebVoice, nil, func(context.Context, string) (*events.SlackReplyTarget, error) {
+	publisher := NewTranscriptionPublisher(bus, testLogger(), events.SourceWebVoice, nil, func(context.Context, string) (*events.InboundMessage, error) {
 		return nil, errors.New("relay failed")
 	})
 
@@ -66,7 +66,7 @@ func TestPublishTranscriptionReportsInboundPublishError(t *testing.T) {
 	bus.StopInbound()
 	defer bus.Close()
 
-	publisher := NewTranscriptionPublisher(bus, testLogger(), events.SourceWebVoice, nil, func(context.Context, string) (*events.SlackReplyTarget, error) {
+	publisher := NewTranscriptionPublisher(bus, testLogger(), events.SourceWebVoice, nil, func(context.Context, string) (*events.InboundMessage, error) {
 		return nil, nil
 	})
 
@@ -81,7 +81,7 @@ func TestPublishTranscriptionIgnoresBlankText(t *testing.T) {
 	defer bus.Close()
 
 	relayed := false
-	publisher := NewTranscriptionPublisher(bus, testLogger(), events.SourceWebVoice, nil, func(context.Context, string) (*events.SlackReplyTarget, error) {
+	publisher := NewTranscriptionPublisher(bus, testLogger(), events.SourceWebVoice, nil, func(context.Context, string) (*events.InboundMessage, error) {
 		relayed = true
 		return nil, nil
 	})

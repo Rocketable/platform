@@ -570,7 +570,7 @@ func TestStartExternalMCPServerRoutesSelectedAgentDirectly(t *testing.T) {
 
 		return nil
 	}
-	slackRelay := func(relayCtx context.Context, text string, attachments []events.OutboundAttachment, replyTarget *events.SlackReplyTarget, channel string) (*events.SlackReplyTarget, error) {
+	slackRelay := func(relayCtx context.Context, text string, attachments []events.OutboundAttachment, replyTarget *events.InboundMessage, channel string) (*events.InboundMessage, error) {
 		_ = relayCtx
 		_ = attachments
 		_ = replyTarget
@@ -578,7 +578,7 @@ func TestStartExternalMCPServerRoutesSelectedAgentDirectly(t *testing.T) {
 
 		relayText = text
 
-		return &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "123.456", ThreadTS: ""}, nil
+		return appTestSlackReply(&events.SlackReplyTarget{ChannelID: "D123", MessageTS: "123.456", ThreadTS: ""}), nil
 	}
 
 	cfg := new(config.Config)
@@ -838,17 +838,17 @@ func TestExternalMCPExistingExternalConversationIDRunsAgentAndRepliesInSeededSla
 
 	defer func() { require.NoError(t, threadBridges.Stop()) }()
 
-	server, err := startExternalMCPServer(ctx, cfg, func(relayCtx context.Context, text string, attachments []events.OutboundAttachment, replyTarget *events.SlackReplyTarget, channel string) (*events.SlackReplyTarget, error) {
+	server, err := startExternalMCPServer(ctx, cfg, func(relayCtx context.Context, text string, attachments []events.OutboundAttachment, replyTarget *events.InboundMessage, channel string) (*events.InboundMessage, error) {
 		_ = relayCtx
 		_ = text
 		_ = attachments
 		_ = channel
 
 		if replyTarget != nil {
-			return &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "123.456"}, nil
+			return appTestSlackReply(&events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "123.456"}), nil
 		}
 
-		return &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "123.456", ThreadTS: ""}, nil
+		return appTestSlackReply(&events.SlackReplyTarget{ChannelID: "D123", MessageTS: "123.456", ThreadTS: ""}), nil
 	}, inertExternalMCPCleanup, nil, []string{"planner"}, "planner", rocketcodeSessions, threadBridges.SubmitExternalMCP, testLogger())
 	require.NoError(t, err)
 
@@ -908,7 +908,7 @@ func TestStartExternalMCPServerRoutesDefaultAgentToIsolatedSession(t *testing.T)
 	cfg.MCPExternal.ListenAddr = "127.0.0.1:0"
 	store := newAppTestSessionService(t, t.TempDir())
 
-	server, err := startExternalMCPServer(ctx, cfg, func(relayCtx context.Context, text string, attachments []events.OutboundAttachment, replyTarget *events.SlackReplyTarget, channel string) (*events.SlackReplyTarget, error) {
+	server, err := startExternalMCPServer(ctx, cfg, func(relayCtx context.Context, text string, attachments []events.OutboundAttachment, replyTarget *events.InboundMessage, channel string) (*events.InboundMessage, error) {
 		_ = relayCtx
 		_ = attachments
 		_ = replyTarget
@@ -916,7 +916,7 @@ func TestStartExternalMCPServerRoutesDefaultAgentToIsolatedSession(t *testing.T)
 
 		relayText = text
 
-		return &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "123.456", ThreadTS: ""}, nil
+		return appTestSlackReply(&events.SlackReplyTarget{ChannelID: "D123", MessageTS: "123.456", ThreadTS: ""}), nil
 	}, inertExternalMCPCleanup, nil, []string{"main"}, "main", store, submitAgent, testLogger())
 	require.NoError(t, err)
 
@@ -966,7 +966,7 @@ func TestStartExternalMCPServerRelaysPromptToRequestedSlackChannel(t *testing.T)
 	cfg.MCPExternal.ListenAddr = "127.0.0.1:0"
 	store := newAppTestSessionService(t, t.TempDir())
 
-	server, err := startExternalMCPServer(ctx, cfg, func(relayCtx context.Context, text string, attachments []events.OutboundAttachment, replyTarget *events.SlackReplyTarget, channel string) (*events.SlackReplyTarget, error) {
+	server, err := startExternalMCPServer(ctx, cfg, func(relayCtx context.Context, text string, attachments []events.OutboundAttachment, replyTarget *events.InboundMessage, channel string) (*events.InboundMessage, error) {
 		_ = relayCtx
 		_ = text
 		_ = replyTarget
@@ -974,7 +974,7 @@ func TestStartExternalMCPServerRelaysPromptToRequestedSlackChannel(t *testing.T)
 		relayChannel = channel
 		relayAttachments = events.CloneOutboundAttachments(attachments)
 
-		return &events.SlackReplyTarget{ChannelID: channel, MessageTS: "123.456", ThreadTS: ""}, nil
+		return appTestSlackReply(&events.SlackReplyTarget{ChannelID: channel, MessageTS: "123.456", ThreadTS: ""}), nil
 	}, inertExternalMCPCleanup, nil, []string{"main"}, "main", store, submitAgent, testLogger())
 	require.NoError(t, err)
 
@@ -999,10 +999,10 @@ func TestStartExternalMCPServerCleansExternalMCPRelayWhenThreadAliasFails(t *tes
 
 	var cleaned []*events.SlackReplyTarget
 
-	cleanup := func(cleanupCtx context.Context, replyTarget *events.SlackReplyTarget) {
+	cleanup := func(cleanupCtx context.Context, replyTarget *events.InboundMessage) {
 		_ = cleanupCtx
 
-		cleaned = append(cleaned, cloneAppTestSlackReplyTarget(replyTarget))
+		cleaned = append(cleaned, cloneAppTestSlackReplyTarget(replyTarget.SlackReply))
 	}
 
 	submitAgent := func(context.Context, string, string, *events.InboundMessage) error {
@@ -1014,15 +1014,15 @@ func TestStartExternalMCPServerCleansExternalMCPRelayWhenThreadAliasFails(t *tes
 	cfg := new(config.Config)
 	cfg.MCPExternal.ListenAddr = "127.0.0.1:0"
 	store := newAppTestSessionService(t, t.TempDir())
-	server, err := startExternalMCPServer(ctx, cfg, func(context.Context, string, []events.OutboundAttachment, *events.SlackReplyTarget, string) (*events.SlackReplyTarget, error) {
-		return &events.SlackReplyTarget{MessageTS: "123.456"}, nil
+	server, err := startExternalMCPServer(ctx, cfg, func(context.Context, string, []events.OutboundAttachment, *events.InboundMessage, string) (*events.InboundMessage, error) {
+		return appTestSlackReply(&events.SlackReplyTarget{MessageTS: "123.456"}), nil
 	}, cleanup, nil, []string{"main"}, "main", store, submitAgent, testLogger())
 	require.NoError(t, err)
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
 	_, err = callMCPTool(ctx, server.URL(), map[string]any{"input": "hello"})
-	require.ErrorContains(t, err, "persist external MCP Slack thread alias")
+	require.ErrorContains(t, err, "persist external MCP text thread alias")
 	require.Len(t, cleaned, 1)
 	assert.Equal(t, &events.SlackReplyTarget{MessageTS: "123.456", ThreadTS: "123.456"}, cleaned[0])
 }
@@ -1033,10 +1033,10 @@ func TestStartExternalMCPServerCleansExternalMCPRelayWhenSubmitFails(t *testing.
 
 	var cleaned []*events.SlackReplyTarget
 
-	cleanup := func(cleanupCtx context.Context, replyTarget *events.SlackReplyTarget) {
+	cleanup := func(cleanupCtx context.Context, replyTarget *events.InboundMessage) {
 		_ = cleanupCtx
 
-		cleaned = append(cleaned, cloneAppTestSlackReplyTarget(replyTarget))
+		cleaned = append(cleaned, cloneAppTestSlackReplyTarget(replyTarget.SlackReply))
 	}
 
 	submitAgent := func(context.Context, string, string, *events.InboundMessage) error {
@@ -1046,8 +1046,8 @@ func TestStartExternalMCPServerCleansExternalMCPRelayWhenSubmitFails(t *testing.
 	cfg := new(config.Config)
 	cfg.MCPExternal.ListenAddr = "127.0.0.1:0"
 	store := newAppTestSessionService(t, t.TempDir())
-	server, err := startExternalMCPServer(ctx, cfg, func(context.Context, string, []events.OutboundAttachment, *events.SlackReplyTarget, string) (*events.SlackReplyTarget, error) {
-		return &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "123.456"}, nil
+	server, err := startExternalMCPServer(ctx, cfg, func(context.Context, string, []events.OutboundAttachment, *events.InboundMessage, string) (*events.InboundMessage, error) {
+		return appTestSlackReply(&events.SlackReplyTarget{ChannelID: "D123", MessageTS: "123.456"}), nil
 	}, cleanup, nil, []string{"main"}, "main", store, submitAgent, testLogger())
 	require.NoError(t, err)
 
@@ -1070,10 +1070,10 @@ func TestStartExternalMCPServerCleansExistingExternalMCPRelayWhenSubmitFails(t *
 
 	var cleaned []*events.SlackReplyTarget
 
-	cleanup := func(cleanupCtx context.Context, replyTarget *events.SlackReplyTarget) {
+	cleanup := func(cleanupCtx context.Context, replyTarget *events.InboundMessage) {
 		_ = cleanupCtx
 
-		cleaned = append(cleaned, cloneAppTestSlackReplyTarget(replyTarget))
+		cleaned = append(cleaned, cloneAppTestSlackReplyTarget(replyTarget.SlackReply))
 	}
 
 	submitAgent := func(context.Context, string, string, *events.InboundMessage) error {
@@ -1089,7 +1089,7 @@ func TestStartExternalMCPServerCleansExistingExternalMCPRelayWhenSubmitFails(t *
 
 	cfg := new(config.Config)
 	cfg.MCPExternal.ListenAddr = "127.0.0.1:0"
-	server, err := startExternalMCPServer(ctx, cfg, func(relayCtx context.Context, text string, attachments []events.OutboundAttachment, replyTarget *events.SlackReplyTarget, channel string) (*events.SlackReplyTarget, error) {
+	server, err := startExternalMCPServer(ctx, cfg, func(relayCtx context.Context, text string, attachments []events.OutboundAttachment, replyTarget *events.InboundMessage, channel string) (*events.InboundMessage, error) {
 		_ = relayCtx
 		_ = text
 		_ = attachments
@@ -1097,7 +1097,7 @@ func TestStartExternalMCPServerCleansExistingExternalMCPRelayWhenSubmitFails(t *
 
 		require.NotNil(t, replyTarget)
 
-		return &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "111.222"}, nil
+		return appTestSlackReply(&events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "111.222"}), nil
 	}, cleanup, nil, []string{"planner"}, "planner", store, submitAgent, testLogger())
 	require.NoError(t, err)
 
@@ -1208,7 +1208,7 @@ func TestSubmitExternalMCPInputReportsErrors(t *testing.T) {
 		inbound.CompleteResponse("", errResponse)
 
 		return nil
-	}, "planner", "external_mcp:planner:123", &events.InboundContent{Text: "hello", Attachments: attachments}, metadata, replyTarget, "ticket-123")
+	}, "planner", "external_mcp:planner:123", &events.InboundContent{Text: "hello", Attachments: attachments}, metadata, appTestSlackReply(replyTarget), "ticket-123")
 	require.ErrorIs(t, err, errResponse)
 	require.ErrorContains(t, err, "wait for external MCP reply")
 
@@ -1348,11 +1348,15 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-func inertExternalMCPRelay(context.Context, string, []events.OutboundAttachment, *events.SlackReplyTarget, string) (*events.SlackReplyTarget, error) {
+func inertExternalMCPRelay(context.Context, string, []events.OutboundAttachment, *events.InboundMessage, string) (*events.InboundMessage, error) {
 	return nil, nil
 }
 
-func inertExternalMCPCleanup(context.Context, *events.SlackReplyTarget) {}
+func inertExternalMCPCleanup(context.Context, *events.InboundMessage) {}
+
+func appTestSlackReply(replyTarget *events.SlackReplyTarget) *events.InboundMessage {
+	return &events.InboundMessage{SlackReply: replyTarget}
+}
 
 func cloneAppTestSlackReplyTarget(replyTarget *events.SlackReplyTarget) *events.SlackReplyTarget {
 	if replyTarget == nil {

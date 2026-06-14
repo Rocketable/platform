@@ -2,6 +2,7 @@ package discordtext
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"log/slog"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -27,6 +29,7 @@ const (
 	// Guild Text is the configured primary Discord text channel type.
 	// https://docs.discord.com/developers/resources/channel#channel-object-channel-types
 	channelTypeGuildText = 0
+	channelTypeDM        = 1
 	// Guild News Thread, Public Thread, and Private Thread are the Discord thread channel types we route managed replies through.
 	// https://docs.discord.com/developers/resources/channel#channel-object-channel-types
 	channelTypeGuildNewsThread    = 10
@@ -87,6 +90,16 @@ type textMessage struct {
 	Content          string            `json:"content"`
 	Author           *textUser         `json:"author"`
 	MessageReference *messageReference `json:"message_reference"`
+	Attachments      []textAttachment  `json:"attachments"`
+	Thread           *textChannel      `json:"thread"`
+}
+
+type textAttachment struct {
+	ID          string `json:"id"`
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type"`
+	URL         string `json:"url"`
+	Size        int    `json:"size"`
 }
 
 // messageCreate carries the MESSAGE_CREATE dispatch payload.
@@ -232,6 +245,35 @@ func (w *wire) message(channelID, messageID string) (*textMessage, error) {
 	return &message, nil
 }
 
+func (w *wire) downloadAttachment(ctx context.Context, rawURL string, limit int64) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("create Discord attachment download request: %w", err)
+	}
+
+	resp, err := w.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download Discord attachment: %w", err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("download Discord attachment: %s", resp.Status)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read Discord attachment: %w", err)
+	}
+
+	if int64(len(data)) > limit {
+		return nil, errors.New("discord attachment download exceeded size limit")
+	}
+
+	return data, nil
+}
+
 func (w *wire) typing(channelID string) error {
 	return w.restJSON(http.MethodPost, "/channels/"+channelID+"/typing", nil, nil)
 }
@@ -243,6 +285,19 @@ func (w *wire) sendMessage(channelID string, message messageSend) (*postedMessag
 	}
 
 	return &posted, nil
+}
+
+func (w *wire) editMessage(channelID, messageID string, message messageSend) error {
+	return w.restJSON(http.MethodPatch, "/channels/"+channelID+"/messages/"+messageID, message, nil)
+}
+
+func (w *wire) deleteMessage(channelID, messageID string) error {
+	return w.restJSON(http.MethodDelete, "/channels/"+channelID+"/messages/"+messageID, nil, nil)
+}
+
+func (w *wire) addReaction(channelID, messageID, emoji string) error {
+	path := "/channels/" + channelID + "/messages/" + messageID + "/reactions/" + url.PathEscape(emoji) + "/@me"
+	return w.restJSON(http.MethodPut, path, nil, nil)
 }
 
 func (w *wire) createThread(channelID, messageID string, start threadStart) (*textChannel, error) {
@@ -428,11 +483,13 @@ func (w *wire) sendIdentify() {
 		intentGuildMessages = 1 << 9
 		// Guild Message Reactions delivers MESSAGE_REACTION_ADD for summary emoji handling.
 		intentGuildMessageReactions = 1 << 10
+		// Direct Messages delivers MESSAGE_CREATE in DMs with the configured human.
+		intentDirectMessages = 1 << 12
 		// Message Content exposes message text for human prompts.
 		intentMessageContent = 1 << 15
 	)
 
-	data := identifyData{Token: strings.TrimPrefix(w.token, "Bot "), Intents: intentGuilds | intentGuildMessages | intentGuildMessageReactions | intentMessageContent, Properties: map[string]string{"os": "darwin", "browser": "rocketclaw", "device": "rocketclaw"}}
+	data := identifyData{Token: strings.TrimPrefix(w.token, "Bot "), Intents: intentGuilds | intentGuildMessages | intentGuildMessageReactions | intentDirectMessages | intentMessageContent, Properties: map[string]string{"os": "darwin", "browser": "rocketclaw", "device": "rocketclaw"}}
 	if err := w.writeGatewayJSON(identifyPayload{Op: gatewayOpIdentify, D: data}); err != nil {
 		w.log.Error("identify Discord text gateway", "error", err)
 	}

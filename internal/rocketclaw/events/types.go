@@ -113,6 +113,11 @@ type DiscordReplyTarget struct {
 	ChannelID, MessageID, ThreadID string
 }
 
+// TextConversationTarget identifies a conversation/message in the configured primary text connector.
+type TextConversationTarget struct {
+	ChannelID, MessageID, ThreadID string
+}
+
 // ResponseCheckpoint identifies a persisted main-session turn that can seed a Slack thread.
 type ResponseCheckpoint struct {
 	ConversationID string

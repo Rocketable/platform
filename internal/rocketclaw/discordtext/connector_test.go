@@ -20,18 +20,31 @@ func TestSendResponseTypesAndRecordsCheckpoints(t *testing.T) {
 	router := newFakeThreadRouter()
 	connector := newTestConnector(fake, router)
 
-	require.NoError(t, connector.SendResponse(t.Context(), &events.OutboundMessage{SlackThinking: "working", DiscordReply: &events.DiscordReplyTarget{ChannelID: "C123"}}))
-	assert.Equal(t, []string{"C123"}, fake.typed)
+	require.NoError(t, connector.SendResponse(t.Context(), &events.OutboundMessage{TurnID: "turn-1", SlackThinking: "working", DiscordReply: &events.DiscordReplyTarget{ChannelID: "C123"}}))
+	require.NoError(t, connector.SendResponse(t.Context(), &events.OutboundMessage{TurnID: "turn-1", SlackThinking: "still working", DiscordReply: &events.DiscordReplyTarget{ChannelID: "C123"}}))
+	assert.Equal(t, "working", fake.messages[0].send.Content)
+	assert.Equal(t, []string{"C123:M1:still working"}, fake.edited)
 
 	checkpoint := events.ResponseCheckpoint{ConversationID: events.MainConversationID(), SessionEntryID: 7, ResponseID: "resp", Model: "gpt-5.5", AssistantText: "answer"}
-	err := connector.SendResponse(t.Context(), &events.OutboundMessage{Text: "answer", Complete: true, DiscordReply: &events.DiscordReplyTarget{ChannelID: "C123", MessageID: "U1"}, Checkpoint: &checkpoint})
+	err := connector.SendResponse(t.Context(), &events.OutboundMessage{TurnID: "turn-1", Text: "answer", Complete: true, DiscordReply: &events.DiscordReplyTarget{ChannelID: "C123", MessageID: "U1"}, Checkpoint: &checkpoint})
 	require.NoError(t, err)
-	require.Len(t, fake.messages, 1)
-	assert.Equal(t, "C123", fake.messages[0].channelID)
-	assert.Equal(t, "answer", fake.messages[0].send.Content)
-	require.NotNil(t, fake.messages[0].send.Reference)
-	assert.Equal(t, "U1", fake.messages[0].send.Reference.MessageID)
-	assert.Equal(t, []string{"C123:M1"}, router.recordedCheckpoints)
+	require.Len(t, fake.messages, 2)
+	assert.Equal(t, "C123", fake.messages[1].channelID)
+	assert.Equal(t, "answer", fake.messages[1].send.Content)
+	require.NotNil(t, fake.messages[1].send.Reference)
+	assert.Equal(t, "U1", fake.messages[1].send.Reference.MessageID)
+	assert.Equal(t, []string{"C123:M2"}, router.recordedCheckpoints)
+	assert.Equal(t, []string{"C123:M1"}, fake.deleted)
+}
+
+func TestSendResponseAddsGoalCompleteReactions(t *testing.T) {
+	fake := newFakeDiscordClient()
+	connector := newTestConnector(fake, newFakeThreadRouter())
+
+	msg := &events.OutboundMessage{Text: "done", Complete: true, GoalComplete: true, DiscordReply: &events.DiscordReplyTarget{ChannelID: "T123", MessageID: "U1", ThreadID: "T123"}}
+	require.NoError(t, connector.SendResponse(t.Context(), msg))
+
+	assert.Equal(t, []string{"T123:U1:✅", "T123:M1:✅"}, fake.reactions)
 }
 
 func TestHandleMessagePublishesConfiguredChannelInput(t *testing.T) {
@@ -46,20 +59,28 @@ func TestHandleMessagePublishesConfiguredChannelInput(t *testing.T) {
 
 	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "C123", Content: "<@BOT> hello", Author: &textUser{ID: "human"}}})
 
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-
-	var inbound *events.InboundMessage
-	for msg := range bus.Inbound(ctx) {
-		inbound = msg
-		break
-	}
-
-	require.NotNil(t, inbound)
+	inbound := readOneInbound(t, bus)
 	assert.Equal(t, events.SourceDiscordText, inbound.Source)
 	assert.Equal(t, "hello", inbound.Text)
 	require.NotNil(t, inbound.DiscordReply)
 	assert.Equal(t, "U1", inbound.DiscordReply.MessageID)
+}
+
+func TestHandleMessagePublishesInboundAttachments(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.attachmentData = map[string][]byte{"https://cdn/image.png": []byte("png"), "https://cdn/note.txt": []byte("hello")}
+	connector := newTestConnector(fake, newFakeThreadRouter())
+
+	bus := events.New()
+	defer bus.Close()
+
+	connector.bus = bus
+
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "C123", Content: "see files", Author: &textUser{ID: "human"}, Attachments: []textAttachment{{Filename: "image.png", ContentType: "image/png", URL: "https://cdn/image.png", Size: 3}, {Filename: "note.txt", ContentType: "text/plain", URL: "https://cdn/note.txt", Size: 5}}}})
+
+	inbound := readOneInbound(t, bus)
+	assert.Contains(t, inbound.Text, "see files\n\nDiscord text file attachment note.txt:\nhello")
+	assert.Equal(t, []events.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("png")}}, inbound.Attachments)
 }
 
 func TestHandleMessageStartsManagedThread(t *testing.T) {
@@ -94,6 +115,115 @@ func TestHandleThreadMessageSubmitsThreadReply(t *testing.T) {
 	assert.Equal(t, "T123", router.submitted.DiscordReply.ThreadID)
 }
 
+func TestHandleThreadMessageStartsGoal(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.channels["T123"] = &textChannel{ID: "T123", ParentID: "C123", Type: channelTypeGuildPublicThread}
+	router := newFakeThreadRouter()
+	connector := newTestConnector(fake, router)
+
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U2", ChannelID: "T123", Content: "🔁 maxTurns: 3 ship it", Author: &textUser{ID: "human"}}})
+
+	require.NotNil(t, router.startedGoal)
+	assert.Equal(t, "T123", router.startedGoal.DiscordReply.ThreadID)
+	assert.Empty(t, router.submittedThreadID)
+}
+
+func TestHandleMessageStartsTopLevelGoalThread(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.threadID = "T123"
+	router := newFakeThreadRouter()
+	connector := newTestConnector(fake, router)
+
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "C123", Content: "🏁 finish docs", Author: &textUser{ID: "human"}}})
+
+	require.Len(t, fake.threads, 1)
+	assert.Equal(t, "finish docs", fake.threads[0].start.Name)
+	require.NotNil(t, router.startedGoal)
+	assert.Equal(t, "T123", router.startedGoal.DiscordReply.ThreadID)
+}
+
+func TestHandleDMGoalStartsWithoutGuildThread(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.channels["D123"] = &textChannel{ID: "D123", Type: channelTypeDM}
+	router := newFakeThreadRouter()
+	connector := newTestConnector(fake, router)
+
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "D123", Content: "🏁 finish docs", Author: &textUser{ID: "human"}}})
+
+	assert.Empty(t, fake.threads)
+	require.NotNil(t, router.startedGoal)
+	assert.Equal(t, "D123", router.startedGoal.DiscordReply.ThreadID)
+}
+
+func TestHandleDMMessageSubmitsManagedReply(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.channels["D123"] = &textChannel{ID: "D123", Type: channelTypeDM}
+	router := newFakeThreadRouter()
+	router.submitThreadHandled = true
+	connector := newTestConnector(fake, router)
+
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U2", ChannelID: "D123", Content: "follow up", Author: &textUser{ID: "human"}}})
+
+	assert.Equal(t, "D123", router.submittedThreadID)
+	require.NotNil(t, router.submitted.DiscordReply)
+	assert.Equal(t, "D123", router.submitted.DiscordReply.ThreadID)
+}
+
+func TestHandleDMRunsOnDemandCronWithoutChannelMatch(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.channels["D123"] = &textChannel{ID: "D123", Type: channelTypeDM}
+	runner := &fakeOneOffCronjobs{loaded: cronjob.OneOffCronjob{Agent: "cron", RelativePath: "cron/daily.md", SlackChannel: "C999"}, result: cronjob.RunResult{VerbatimMessage: "done"}}
+	connector := newTestConnector(fake, newFakeThreadRouter())
+	connector.oneOffCronjobs = runner
+
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "D123", Content: "🔂 daily", Author: &textUser{ID: "human"}}})
+
+	assert.Equal(t, []string{"daily"}, runner.targets)
+	preview := readOneOutbound(t, connector.bus)
+	assert.Contains(t, preview.Text, "File: `cron/daily.md`")
+	final := readOneOutbound(t, connector.bus)
+	assert.Equal(t, "done", final.Text)
+	assert.Equal(t, []cronjob.OneOffCronjob{runner.loaded}, runner.runs)
+}
+
+func TestHandleSocialMentionStartsConfiguredAgentThread(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.channels["S123"] = &textChannel{ID: "S123", Type: channelTypeGuildText}
+	fake.threadID = "T123"
+	router := newFakeThreadRouter()
+	connector := newTestConnector(fake, router)
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "S123", Agent: "triage", AllowedUserIDs: []string{"social-human"}}}}
+
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "S123", Content: "<@BOT> investigate", Author: &textUser{ID: "social-human"}}})
+
+	require.Len(t, fake.threads, 1)
+	assert.Equal(t, "triage", router.startedAgent)
+	assert.Equal(t, "investigate", router.started.Text)
+}
+
+func TestHandleSocialMessageRequiresAllowedMention(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.channels["S123"] = &textChannel{ID: "S123", Type: channelTypeGuildText}
+	connector := newTestConnector(fake, newFakeThreadRouter())
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "S123", Agent: "triage", AllowedUserIDs: []string{"social-human"}}}}
+
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "S123", Content: "<@BOT> denied", Author: &textUser{ID: "intruder"}}})
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U2", ChannelID: "S123", Content: "no mention", Author: &textUser{ID: "social-human"}}})
+
+	assert.Empty(t, fake.threads)
+}
+
+func TestHandleStopReactionInterruptsThread(t *testing.T) {
+	fake := newFakeDiscordClient()
+	connector := newTestConnector(fake, newFakeThreadRouter())
+
+	connector.handleReaction(t.Context(), &reactionAdd{UserID: "human", ChannelID: "T123", MessageID: "M2", Emoji: textEmoji{Name: discordStopSignEmoji}})
+
+	router := connector.threadRouter.(*fakeThreadRouter)
+	assert.Equal(t, "T123", router.interruptedThreadID)
+	assert.Equal(t, []string{"T123:M1:❗"}, fake.reactions)
+}
+
 func TestHandleReactionSummarizesThread(t *testing.T) {
 	connector := newTestConnector(newFakeDiscordClient(), newFakeThreadRouter())
 	router := connector.threadRouter.(*fakeThreadRouter)
@@ -122,6 +252,23 @@ func TestHandleReactionRunsOnDemandCron(t *testing.T) {
 	final := readOneOutbound(t, connector.bus)
 	assert.Equal(t, "done", final.Text)
 	assert.True(t, final.Complete)
+	assert.Equal(t, []cronjob.OneOffCronjob{runner.loaded}, runner.runs)
+}
+
+func TestHandleReactionAllowsSocialCronUser(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.channels["S123"] = &textChannel{ID: "S123", Type: channelTypeGuildText}
+	fake.reactionMessageContent = "🔂 daily"
+	runner := &fakeOneOffCronjobs{loaded: cronjob.OneOffCronjob{Agent: "cron", RelativePath: "cron/daily.md", SlackChannel: "S123"}, result: cronjob.RunResult{VerbatimMessage: "done"}}
+	connector := newTestConnector(fake, newFakeThreadRouter())
+	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "S123", Agent: "triage", AllowedUserIDs: []string{"social-human"}}}}
+	connector.oneOffCronjobs = runner
+
+	connector.handleReaction(t.Context(), &reactionAdd{UserID: "social-human", ChannelID: "S123", MessageID: "M1", Emoji: textEmoji{Name: discordRepeatOneEmoji}})
+
+	assert.Equal(t, []string{"daily"}, runner.targets)
+	_ = readOneOutbound(t, connector.bus)
+	_ = readOneOutbound(t, connector.bus)
 	assert.Equal(t, []cronjob.OneOffCronjob{runner.loaded}, runner.runs)
 }
 
@@ -214,12 +361,15 @@ func newTestConnector(client *fakeDiscordClient, router *fakeThreadRouter) *Conn
 
 type fakeDiscordClient struct {
 	channels               map[string]*textChannel
+	attachmentData         map[string][]byte
 	threadID               string
 	reactionMessageContent string
-	typed                  []string
+	edited                 []string
+	deleted                []string
 	messages               []fakeMessageSend
 	threads                []fakeThreadStart
 	attachments            []string
+	reactions              []string
 }
 
 type fakeMessageSend struct {
@@ -246,19 +396,33 @@ func (f *fakeDiscordClient) message(channelID, messageID string) (*textMessage, 
 	return &textMessage{ID: messageID, ChannelID: channelID, Content: f.reactionMessageContent}, nil
 }
 
-func (f *fakeDiscordClient) typing(channelID string) error {
-	f.typed = append(f.typed, channelID)
-	return nil
-}
-
 func (f *fakeDiscordClient) sendMessage(channelID string, send messageSend) (*postedMessage, error) {
 	f.messages = append(f.messages, fakeMessageSend{channelID: channelID, send: send})
 	return &postedMessage{ID: "M" + string(rune(len(f.messages)+'0')), ChannelID: channelID, Content: send.Content}, nil
 }
 
+func (f *fakeDiscordClient) editMessage(channelID, messageID string, send messageSend) error {
+	f.edited = append(f.edited, channelID+":"+messageID+":"+send.Content)
+	return nil
+}
+
+func (f *fakeDiscordClient) deleteMessage(channelID, messageID string) error {
+	f.deleted = append(f.deleted, channelID+":"+messageID)
+	return nil
+}
+
 func (f *fakeDiscordClient) createThread(channelID, messageID string, start threadStart) (*textChannel, error) {
 	f.threads = append(f.threads, fakeThreadStart{channelID: channelID, messageID: messageID, start: start})
 	return &textChannel{ID: f.threadID, ParentID: channelID, Type: channelTypeGuildPublicThread}, nil
+}
+
+func (f *fakeDiscordClient) addReaction(channelID, messageID, emoji string) error {
+	f.reactions = append(f.reactions, channelID+":"+messageID+":"+emoji)
+	return nil
+}
+
+func (f *fakeDiscordClient) downloadAttachment(_ context.Context, rawURL string, _ int64) ([]byte, error) {
+	return append([]byte(nil), f.attachmentData[rawURL]...), nil
 }
 
 func (f *fakeDiscordClient) sendAttachments(channelID string, _ []events.OutboundAttachment) error {
@@ -274,12 +438,15 @@ type fakeThreadRouter struct {
 	startedPreSeed, submitThreadHandled, summaryHandled bool
 	prepareResponseHandled, submitResponseHandled       bool
 	started, submitted                                  *events.InboundMessage
+	startedGoal                                         *events.InboundMessage
+	interruptedThreadID                                 string
 	recordedCheckpoints                                 []string
 }
 
 func newFakeThreadRouter() *fakeThreadRouter { return &fakeThreadRouter{} }
 
-func (f *fakeThreadRouter) StartDiscordThread(_ context.Context, agent string, preSeed bool, inbound *events.InboundMessage) error {
+func (f *fakeThreadRouter) StartThread(_ context.Context, agent string, preSeed bool, target events.TextConversationTarget, inbound *events.InboundMessage) error {
+	_ = target
 	f.startedAgent = agent
 	f.startedPreSeed = preSeed
 	f.started = inbound
@@ -287,34 +454,41 @@ func (f *fakeThreadRouter) StartDiscordThread(_ context.Context, agent string, p
 	return nil
 }
 
-func (f *fakeThreadRouter) PrepareDiscordThreadReply(context.Context, string) (bool, error) {
-	return false, nil
-}
-
-func (f *fakeThreadRouter) PrepareDiscordResponseThreadReply(_ context.Context, channelID, messageID string) (bool, error) {
-	f.preparedResponse = channelID + ":" + messageID
+func (f *fakeThreadRouter) PrepareResponseThreadReply(target events.TextConversationTarget) (bool, error) {
+	f.preparedResponse = target.ChannelID + ":" + target.MessageID
 	return f.prepareResponseHandled, nil
 }
 
-func (f *fakeThreadRouter) SubmitDiscordThreadReply(_ context.Context, threadID string, inbound *events.InboundMessage) (bool, error) {
-	f.submittedThreadID = threadID
+func (f *fakeThreadRouter) SubmitThreadReply(_ context.Context, target events.TextConversationTarget, inbound *events.InboundMessage) (bool, error) {
+	f.submittedThreadID = target.ThreadID
 	f.submitted = inbound
 
 	return f.submitThreadHandled, nil
 }
 
-func (f *fakeThreadRouter) SubmitDiscordResponseThreadReply(_ context.Context, channelID, messageID, threadID string, _ *events.InboundMessage) (bool, error) {
-	f.submittedResponse = channelID + ":" + messageID + ":" + threadID
+func (f *fakeThreadRouter) StartGoalInThread(_ context.Context, _, _, _ string, _ int, _ events.TextConversationTarget, inbound *events.InboundMessage) error {
+	f.startedGoal = inbound
+
+	return nil
+}
+
+func (f *fakeThreadRouter) InterruptThread(target events.TextConversationTarget) (*events.InboundMessage, error) {
+	f.interruptedThreadID = target.ThreadID
+	return &events.InboundMessage{DiscordReply: &events.DiscordReplyTarget{ChannelID: target.ThreadID, MessageID: "M1", ThreadID: target.ThreadID}}, nil
+}
+
+func (f *fakeThreadRouter) SubmitResponseThreadReply(_ context.Context, target events.TextConversationTarget, _ *events.InboundMessage) (bool, error) {
+	f.submittedResponse = target.ChannelID + ":" + target.MessageID + ":" + target.ThreadID
 	return f.submitResponseHandled, nil
 }
 
-func (f *fakeThreadRouter) SummarizeDiscordThread(_ context.Context, threadID string) (bool, error) {
-	f.summarizedThreadID = threadID
+func (f *fakeThreadRouter) SummarizeThread(_ context.Context, target events.TextConversationTarget) (bool, error) {
+	f.summarizedThreadID = target.ThreadID
 	return f.summaryHandled, nil
 }
 
-func (f *fakeThreadRouter) RecordDiscordResponseCheckpoint(_ context.Context, channelID, messageID string, _ events.ResponseCheckpoint) error {
-	f.recordedCheckpoints = append(f.recordedCheckpoints, channelID+":"+messageID)
+func (f *fakeThreadRouter) RecordResponseCheckpoint(target events.TextConversationTarget, _ events.ResponseCheckpoint) error {
+	f.recordedCheckpoints = append(f.recordedCheckpoints, target.ChannelID+":"+target.MessageID)
 	return nil
 }
 
@@ -348,6 +522,21 @@ func readOneOutbound(t *testing.T, bus *events.Bus) *events.OutboundMessage {
 	}
 
 	require.Fail(t, "timed out waiting for outbound message")
+
+	return nil
+}
+
+func readOneInbound(t *testing.T, bus *events.Bus) *events.InboundMessage {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	for msg := range bus.Inbound(ctx) {
+		return msg
+	}
+
+	require.Fail(t, "timed out waiting for inbound message")
 
 	return nil
 }

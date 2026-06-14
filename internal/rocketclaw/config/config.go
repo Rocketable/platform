@@ -75,10 +75,11 @@ type DiscordVoiceConfig struct {
 
 // DiscordTextConfig configures the Discord text connector.
 type DiscordTextConfig struct {
-	Enabled     bool   `json:"enabled"`
-	Token       string `json:"token"`
-	ChannelID   string `json:"channel_id"`
-	HumanUserID string `json:"human_user_id"`
+	Enabled     bool              `json:"enabled"`
+	Token       string            `json:"token"`
+	ChannelID   string            `json:"channel_id"`
+	HumanUserID string            `json:"human_user_id"`
+	SocialMode  SlackSocialConfig `json:"social_mode"`
 }
 
 // MCPExternalConfig configures the persistent external MCP HTTP server.
@@ -462,12 +463,8 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if c.DiscordText.Enabled {
-		for _, field := range [...]struct{ value, message string }{{c.DiscordText.Token, "discord_text.token is required when discord_text is enabled"}, {c.DiscordText.ChannelID, "discord_text.channel_id is required when discord_text is enabled"}, {c.DiscordText.HumanUserID, "discord_text.human_user_id is required when discord_text is enabled"}} {
-			if strings.TrimSpace(field.value) == "" {
-				return errors.New(field.message)
-			}
-		}
+	if err := c.validateDiscordText(); err != nil {
+		return err
 	}
 
 	if c.MCPExternal.Enabled && strings.TrimSpace(c.MCPExternal.ListenAddr) == "" {
@@ -515,6 +512,50 @@ func (c *Config) validateWebUI() error {
 	}
 
 	c.WebUI.ListenAddr = listenAddr
+
+	return nil
+}
+
+func (c *Config) validateDiscordText() error {
+	if !c.DiscordText.Enabled {
+		return nil
+	}
+
+	for _, field := range [...]struct{ value, message string }{{c.DiscordText.Token, "discord_text.token is required when discord_text is enabled"}, {c.DiscordText.ChannelID, "discord_text.channel_id is required when discord_text is enabled"}, {c.DiscordText.HumanUserID, "discord_text.human_user_id is required when discord_text is enabled"}} {
+		if strings.TrimSpace(field.value) == "" {
+			return errors.New(field.message)
+		}
+	}
+
+	normalized := make([]SlackSocialChannelConfig, 0, len(c.DiscordText.SocialMode.Channels))
+	for _, channel := range c.DiscordText.SocialMode.Channels {
+		channel.Channel, channel.Agent = strings.TrimSpace(channel.Channel), strings.TrimSpace(channel.Agent)
+
+		channel.AllowedUserIDs = normalizeStringList(channel.AllowedUserIDs)
+		if channel.Channel != "" && channel.Agent != "" {
+			normalized = append(normalized, channel)
+		}
+	}
+
+	c.DiscordText.SocialMode.Channels = normalized
+
+	if !c.DiscordText.SocialMode.Enabled {
+		return nil
+	}
+
+	for _, channel := range c.DiscordText.SocialMode.Channels {
+		if len(channel.AllowedUserIDs) == 0 {
+			return errors.New("discord_text.social_mode.channels[].allowed_user_ids is required when discord_text social mode is enabled")
+		}
+	}
+
+	if c.DiscordText.SocialMode.ContextMessages < 0 {
+		return errors.New("discord_text.social_mode.context_messages must be zero or greater")
+	}
+
+	if c.DiscordText.SocialMode.ContextMessages == 0 {
+		c.DiscordText.SocialMode.ContextMessages = 10
+	}
 
 	return nil
 }

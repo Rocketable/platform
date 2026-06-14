@@ -8,8 +8,10 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/cronjob"
@@ -24,26 +26,35 @@ const (
 	discordRepeatOneEmoji     = "🔂"
 	discordRepeatOneName      = "repeat_one"
 	discordCronPrefix         = ":repeat_one:"
+	discordStopSignEmoji      = "🛑"
+	discordStopButtonEmoji    = "⏹️"
+	discordInterruptedEmoji   = "❗"
+	discordGoalCompleteEmoji  = "✅"
+	maxDiscordAttachmentBytes = 16 << 20
 )
 
 // ThreadRouter routes Discord thread messages directly to app-owned thread bridges.
 type ThreadRouter interface {
-	StartDiscordThread(context.Context, string, bool, *events.InboundMessage) error
-	PrepareDiscordThreadReply(context.Context, string) (bool, error)
-	PrepareDiscordResponseThreadReply(context.Context, string, string) (bool, error)
-	SubmitDiscordThreadReply(context.Context, string, *events.InboundMessage) (bool, error)
-	SubmitDiscordResponseThreadReply(context.Context, string, string, string, *events.InboundMessage) (bool, error)
-	SummarizeDiscordThread(context.Context, string) (bool, error)
-	RecordDiscordResponseCheckpoint(context.Context, string, string, events.ResponseCheckpoint) error
+	StartThread(ctx context.Context, agent string, preSeed bool, target events.TextConversationTarget, inbound *events.InboundMessage) error
+	PrepareResponseThreadReply(target events.TextConversationTarget) (bool, error)
+	SubmitThreadReply(ctx context.Context, target events.TextConversationTarget, inbound *events.InboundMessage) (bool, error)
+	StartGoalInThread(ctx context.Context, agent, objective, checkScript string, maxTurns int, target events.TextConversationTarget, inbound *events.InboundMessage) error
+	InterruptThread(target events.TextConversationTarget) (*events.InboundMessage, error)
+	SubmitResponseThreadReply(ctx context.Context, target events.TextConversationTarget, inbound *events.InboundMessage) (bool, error)
+	SummarizeThread(ctx context.Context, target events.TextConversationTarget) (bool, error)
+	RecordResponseCheckpoint(target events.TextConversationTarget, checkpoint events.ResponseCheckpoint) error
 }
 
 type discordClient interface {
-	channel(string) (*textChannel, error)
-	message(string, string) (*textMessage, error)
-	typing(string) error
-	sendMessage(string, messageSend) (*postedMessage, error)
-	createThread(string, string, threadStart) (*textChannel, error)
-	sendAttachments(string, []events.OutboundAttachment) error
+	channel(channelID string) (*textChannel, error)
+	message(channelID, messageID string) (*textMessage, error)
+	sendMessage(channelID string, send messageSend) (*postedMessage, error)
+	editMessage(channelID, messageID string, send messageSend) error
+	deleteMessage(channelID, messageID string) error
+	addReaction(channelID, messageID, emoji string) error
+	downloadAttachment(ctx context.Context, rawURL string, limit int64) ([]byte, error)
+	createThread(channelID, messageID string, start threadStart) (*textChannel, error)
+	sendAttachments(channelID string, attachments []events.OutboundAttachment) error
 	userID() string
 	Close() error
 }
@@ -68,11 +79,14 @@ type Connector struct {
 	threadAgents   []threadAgent
 	client         discordClient
 	botUserID      string
+	mu             sync.Mutex
+	progress       map[string]*postedMessage
+	roots          map[string]string
 }
 
 // New constructs a Discord text connector.
-func New(cfg config.DiscordTextConfig, bus *events.Bus, threadAgents config.ThreadAgents, threadRouter ThreadRouter, oneOffCronjobs oneOffCronjobRunner, logger *slog.Logger) *Connector {
-	return &Connector{log: logger.With("component", "discord_text"), config: cfg, bus: bus, threadAgents: normalizeThreadAgents(threadAgents), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs}
+func New(cfg *config.DiscordTextConfig, bus *events.Bus, threadAgents config.ThreadAgents, threadRouter ThreadRouter, oneOffCronjobs oneOffCronjobRunner, logger *slog.Logger) *Connector {
+	return &Connector{log: logger.With("component", "discord_text"), config: *cfg, bus: bus, threadAgents: normalizeThreadAgents(threadAgents), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs}
 }
 
 // Start connects to Discord and begins consuming text events.
@@ -103,8 +117,71 @@ func (c *Connector) Stop(context.Context) error {
 	return nil
 }
 
+// SendVoiceRelay mirrors a voice utterance into Discord text before the main session handles it.
+func (c *Connector) SendVoiceRelay(_ context.Context, text string) (*events.DiscordReplyTarget, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil, nil
+	}
+
+	posted, err := c.client.sendMessage(c.config.ChannelID, messageSend{Content: text})
+	if err != nil {
+		return nil, fmt.Errorf("send Discord voice relay: %w", err)
+	}
+
+	return &events.DiscordReplyTarget{ChannelID: posted.ChannelID, MessageID: posted.ID}, nil
+}
+
+// SendExternalMCPRelay mirrors an external MCP prompt into Discord before the session handles it.
+func (c *Connector) SendExternalMCPRelay(_ context.Context, channelID, text string, attachments []events.OutboundAttachment) (*events.DiscordReplyTarget, error) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil, nil
+	}
+
+	if channelID = strings.TrimSpace(channelID); channelID == "" {
+		channelID = c.config.ChannelID
+	}
+
+	root, err := c.client.sendMessage(channelID, messageSend{Content: text})
+	if err != nil {
+		return nil, fmt.Errorf("send Discord external MCP relay root: %w", err)
+	}
+
+	thread, err := c.createThread(root.ChannelID, root.ID, text)
+	if err != nil {
+		return nil, fmt.Errorf("create Discord external MCP thread: %w", err)
+	}
+
+	if len(attachments) > 0 {
+		if err := c.uploadResponseAttachments(thread.ID, attachments); err != nil {
+			return nil, fmt.Errorf("send Discord external MCP relay attachments: %w", err)
+		}
+	}
+
+	c.recordThreadRoot(root.ChannelID, root.ID, thread.ID)
+
+	return &events.DiscordReplyTarget{ChannelID: root.ChannelID, MessageID: root.ID, ThreadID: thread.ID}, nil
+}
+
+// SendExternalMCPThreadRelay mirrors an external MCP follow-up into an existing Discord thread.
+func (c *Connector) SendExternalMCPThreadRelay(_ context.Context, threadID, text string, attachments []events.OutboundAttachment) (*events.DiscordReplyTarget, error) {
+	posted, err := c.client.sendMessage(threadID, messageSend{Content: strings.TrimSpace(text)})
+	if err != nil {
+		return nil, fmt.Errorf("send Discord external MCP thread relay: %w", err)
+	}
+
+	if len(attachments) > 0 {
+		if err := c.uploadResponseAttachments(threadID, attachments); err != nil {
+			return nil, fmt.Errorf("send Discord external MCP thread relay attachments: %w", err)
+		}
+	}
+
+	return &events.DiscordReplyTarget{ChannelID: threadID, MessageID: posted.ID, ThreadID: threadID}, nil
+}
+
 // SendResponse posts a streamed response message in Discord.
-func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessage) error {
+func (c *Connector) SendResponse(_ context.Context, msg *events.OutboundMessage) error {
 	if msg == nil || c.client == nil {
 		return nil
 	}
@@ -115,22 +192,22 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 	}
 
 	if strings.TrimSpace(msg.SlackThinking) != "" && strings.TrimSpace(msg.Text) == "" {
-		if err := c.client.typing(channelID); err != nil {
-			c.log.Warn("send Discord typing indicator", "channel", channelID, "error", err)
-		}
-
-		return nil
+		return c.sendProgress(channelID, msg)
 	}
 
+	var posted []*postedMessage
+
 	if msg.Text != "" && (msg.Complete || msg.SlackPostText) {
-		posted, err := c.postResponseChunks(channelID, msg.DiscordReply, splitDiscordResponseText(msg.Text))
+		var err error
+
+		posted, err = c.postResponseChunks(channelID, msg.DiscordReply, splitDiscordResponseText(msg.Text))
 		if err != nil {
 			return err
 		}
 
 		if msg.Complete && msg.Checkpoint != nil && msg.DiscordReply != nil && strings.TrimSpace(msg.DiscordReply.ThreadID) == "" {
 			for i := range posted {
-				if err := c.threadRouter.RecordDiscordResponseCheckpoint(ctx, posted[i].ChannelID, posted[i].ID, *msg.Checkpoint); err != nil {
+				if err := c.threadRouter.RecordResponseCheckpoint(events.TextConversationTarget{ChannelID: posted[i].ChannelID, MessageID: posted[i].ID}, *msg.Checkpoint); err != nil {
 					return fmt.Errorf("record Discord response checkpoint: %w", err)
 				}
 			}
@@ -141,6 +218,21 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 		if err := c.uploadResponseAttachments(channelID, msg.Attachments); err != nil {
 			c.log.Warn("upload Discord response attachments", "error", err)
 		}
+	}
+
+	if msg.Complete && msg.GoalComplete {
+		if msg.DiscordReply != nil && strings.TrimSpace(msg.DiscordReply.ChannelID) != "" && strings.TrimSpace(msg.DiscordReply.MessageID) != "" {
+			c.addReaction(msg.DiscordReply.ChannelID, msg.DiscordReply.MessageID, discordGoalCompleteEmoji)
+		}
+
+		if len(posted) > 0 {
+			last := posted[len(posted)-1]
+			c.addReaction(last.ChannelID, last.ID, discordGoalCompleteEmoji)
+		}
+	}
+
+	if msg.Complete {
+		c.deleteProgress(msg.TurnID)
 	}
 
 	return nil
@@ -162,7 +254,7 @@ func (c *Connector) SendCronjobChannelThread(_ context.Context, channelID, relat
 		return fmt.Errorf("send Discord cronjob thread root: %w", err)
 	}
 
-	thread, err := c.createThread(c.client, root.ChannelID, root.ID, relativePath)
+	thread, err := c.createThread(root.ChannelID, root.ID, relativePath)
 	if err != nil {
 		return fmt.Errorf("create Discord cronjob thread: %w", err)
 	}
@@ -180,6 +272,50 @@ func (c *Connector) SendCronjobChannelThread(_ context.Context, channelID, relat
 	}
 
 	return nil
+}
+
+func (c *Connector) sendProgress(channelID string, msg *events.OutboundMessage) error {
+	text := strings.TrimSpace(msg.SlackThinking)
+
+	c.mu.Lock()
+	progress := c.progress[strings.TrimSpace(msg.TurnID)]
+	c.mu.Unlock()
+
+	if progress != nil {
+		return c.client.editMessage(progress.ChannelID, progress.ID, messageSend{Content: text})
+	}
+
+	posted, err := c.client.sendMessage(channelID, messageSend{Content: text})
+	if err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(msg.TurnID) != "" {
+		c.mu.Lock()
+		if c.progress == nil {
+			c.progress = map[string]*postedMessage{}
+		}
+
+		c.progress[strings.TrimSpace(msg.TurnID)] = posted
+		c.mu.Unlock()
+	}
+
+	return nil
+}
+
+func (c *Connector) deleteProgress(turnID string) {
+	turnID = strings.TrimSpace(turnID)
+
+	c.mu.Lock()
+	progress := c.progress[turnID]
+	delete(c.progress, turnID)
+	c.mu.Unlock()
+
+	if progress != nil {
+		if err := c.client.deleteMessage(progress.ChannelID, progress.ID); err != nil {
+			c.log.Warn("delete Discord progress message", "channel", progress.ChannelID, "message", progress.ID, "error", err)
+		}
+	}
 }
 
 func (c *Connector) eventLoop(ctx context.Context, textEvents <-chan textEvent) {
@@ -203,8 +339,9 @@ func (c *Connector) eventLoop(ctx context.Context, textEvents <-chan textEvent) 
 	}
 }
 
+//nolint:gocyclo // Message routing branches mirror Discord event semantics.
 func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
-	if ev == nil || ev.Message == nil || ev.Message.Author == nil || ev.Message.Author.Bot || ev.Message.Author.ID != c.config.HumanUserID {
+	if ev == nil || ev.Message == nil || ev.Message.Author == nil || ev.Message.Author.Bot {
 		return
 	}
 
@@ -220,20 +357,97 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 		return
 	}
 
+	isDM := channel.Type == channelTypeDM
 	isThread := channel.Type == channelTypeGuildPublicThread || channel.Type == channelTypeGuildPrivateThread || channel.Type == channelTypeGuildNewsThread
 
 	parentID := strings.TrimSpace(channel.ParentID)
-	if !isThread && msg.ChannelID != c.config.ChannelID || isThread && parentID != c.config.ChannelID {
+
+	baseChannelID := msg.ChannelID
+	if isThread {
+		baseChannelID = parentID
+	}
+
+	socialChannel := config.SlackSocialChannelConfig{}
+	social := false
+
+	if c.config.SocialMode.Enabled {
+		for _, channel := range c.config.SocialMode.Channels {
+			if channel.Channel == strings.TrimSpace(baseChannelID) {
+				socialChannel, social = channel, true
+				break
+			}
+		}
+	}
+
+	if !isDM && baseChannelID != c.config.ChannelID && !social {
 		return
 	}
 
+	if isDM || !social && baseChannelID == c.config.ChannelID {
+		if msg.Author.ID != c.config.HumanUserID {
+			return
+		}
+	} else if social {
+		if !slices.Contains(socialChannel.AllowedUserIDs, msg.Author.ID) {
+			return
+		}
+	}
+
+	mentioned := c.botUserID != "" && (strings.Contains(msg.Content, "<@"+c.botUserID+">") || strings.Contains(msg.Content, "<@!"+c.botUserID+">"))
 	text := stripBotMention(strings.TrimSpace(msg.Content), c.botUserID)
 
 	reply := &events.DiscordReplyTarget{ChannelID: msg.ChannelID, MessageID: msg.ID}
+	if isDM {
+		reply.ThreadID = msg.ChannelID
+
+		switch strings.TrimSpace(text) {
+		case discordStopSignEmoji, discordStopButtonEmoji:
+			c.stopDiscordThread(msg.ChannelID)
+			return
+		}
+
+		goal, rejection, isGoal := harnessbridge.ParseGoalRequest(text)
+		if isGoal {
+			if rejection != "" {
+				c.publishOnDemandCronReply(ctx, reply, rejection, true)
+			} else {
+				c.startGoal(ctx, "main", reply, goal, c.inboundMessage(ctx, msg, text, reply))
+			}
+
+			return
+		}
+
+		handled, err := c.threadRouter.SubmitThreadReply(ctx, events.TextConversationTarget{ThreadID: msg.ChannelID}, c.inboundMessage(ctx, msg, text, reply))
+		if err != nil {
+			c.log.Error("submit Discord DM managed reply", "channel", msg.ChannelID, "error", err)
+		}
+
+		if handled {
+			return
+		}
+	}
+
 	if isThread {
 		reply.ThreadID = msg.ChannelID
 
-		handled, err := c.threadRouter.SubmitDiscordThreadReply(ctx, msg.ChannelID, newDiscordInboundMessage(text, reply))
+		switch strings.TrimSpace(text) {
+		case discordStopSignEmoji, discordStopButtonEmoji:
+			c.stopDiscordThread(msg.ChannelID)
+			return
+		}
+
+		goal, rejection, isGoal := harnessbridge.ParseGoalRequest(text)
+		if isGoal {
+			if rejection != "" {
+				c.publishOnDemandCronReply(ctx, reply, rejection, true)
+			} else {
+				c.startGoal(ctx, "", reply, goal, c.inboundMessage(ctx, msg, text, reply))
+			}
+
+			return
+		}
+
+		handled, err := c.threadRouter.SubmitThreadReply(ctx, events.TextConversationTarget{ThreadID: msg.ChannelID}, c.inboundMessage(ctx, msg, text, reply))
 		if err != nil {
 			c.log.Error("submit Discord thread reply", "thread", msg.ChannelID, "error", err)
 		}
@@ -254,24 +468,85 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 		}
 	}
 
-	if matched, agent, preSeed, promptText := c.threadAgentPrompt(text); matched {
-		thread, err := c.createThread(c.client, msg.ChannelID, msg.ID, promptText)
+	if strings.HasPrefix(text, discordCronPrefix) || strings.HasPrefix(text, discordRepeatOneEmoji) {
+		target := strings.TrimSpace(strings.TrimPrefix(text, discordCronPrefix))
+		if after, ok := strings.CutPrefix(text, discordRepeatOneEmoji); ok {
+			target = strings.TrimSpace(after)
+		}
+
+		c.handleOnDemandCronRequest(ctx, reply, target, baseChannelID, isDM)
+
+		return
+	}
+
+	if social && !mentioned {
+		return
+	}
+
+	if goal, rejection, ok := harnessbridge.ParseGoalRequest(text); ok {
+		if rejection != "" {
+			c.publishOnDemandCronReply(ctx, reply, rejection, true)
+			return
+		}
+
+		if !isDM {
+			thread, err := c.createThread(msg.ChannelID, msg.ID, goal.Objective)
+			if err != nil {
+				c.log.Error("create Discord goal thread", "channel", msg.ChannelID, "message", msg.ID, "error", err)
+				return
+			}
+
+			reply.ThreadID = thread.ID
+			c.recordThreadRoot(msg.ChannelID, msg.ID, thread.ID)
+		}
+
+		agent := "main"
+		if social {
+			agent = socialChannel.Agent
+		}
+
+		c.startGoal(ctx, agent, reply, goal, c.inboundMessage(ctx, msg, text, reply))
+
+		return
+	}
+
+	if social {
+		thread, err := c.createThread(msg.ChannelID, msg.ID, text)
 		if err != nil {
-			c.log.Error("create Discord managed thread", "channel", msg.ChannelID, "message", msg.ID, "error", err)
+			c.log.Error("create Discord social thread", "channel", msg.ChannelID, "message", msg.ID, "error", err)
 			return
 		}
 
 		reply.ThreadID = thread.ID
+		c.recordThreadRoot(msg.ChannelID, msg.ID, thread.ID)
 
-		reply.ChannelID = thread.ID
-		if err := c.threadRouter.StartDiscordThread(ctx, agent, preSeed, newDiscordInboundMessage(promptText, reply)); err != nil {
-			c.log.Error("start Discord thread bridge", "thread", thread.ID, "error", err)
+		if err := c.threadRouter.StartThread(ctx, socialChannel.Agent, false, events.TextConversationTarget{ThreadID: thread.ID}, c.inboundMessage(ctx, msg, text, reply)); err != nil {
+			c.log.Error("start Discord social thread bridge", "thread", thread.ID, "error", err)
 		}
 
 		return
 	}
 
-	if err := c.bus.PublishInbound(ctx, newDiscordInboundMessage(text, reply)); err != nil {
+	if matched, agent, preSeed, promptText := c.threadAgentPrompt(text); matched {
+		if !isDM {
+			thread, err := c.createThread(msg.ChannelID, msg.ID, promptText)
+			if err != nil {
+				c.log.Error("create Discord managed thread", "channel", msg.ChannelID, "message", msg.ID, "error", err)
+				return
+			}
+
+			reply.ThreadID = thread.ID
+			c.recordThreadRoot(msg.ChannelID, msg.ID, thread.ID)
+		}
+
+		if err := c.threadRouter.StartThread(ctx, agent, preSeed, events.TextConversationTarget{ThreadID: reply.ThreadID}, c.inboundMessage(ctx, msg, promptText, reply)); err != nil {
+			c.log.Error("start Discord thread bridge", "thread", reply.ThreadID, "error", err)
+		}
+
+		return
+	}
+
+	if err := c.bus.PublishInbound(ctx, c.inboundMessage(ctx, msg, text, reply)); err != nil {
 		c.log.Error("publish Discord text inbound", "error", err)
 	}
 }
@@ -284,7 +559,7 @@ func (c *Connector) handleResponseThreadReply(ctx context.Context, ev *messageCr
 		return false, nil
 	}
 
-	if handled, err := c.threadRouter.PrepareDiscordResponseThreadReply(ctx, msg.ChannelID, reference.MessageID); err != nil || !handled {
+	if handled, err := c.threadRouter.PrepareResponseThreadReply(events.TextConversationTarget{ChannelID: msg.ChannelID, MessageID: reference.MessageID}); err != nil || !handled {
 		if err != nil {
 			return handled, fmt.Errorf("prepare Discord response-rooted thread reply: %w", err)
 		}
@@ -292,14 +567,14 @@ func (c *Connector) handleResponseThreadReply(ctx context.Context, ev *messageCr
 		return handled, nil
 	}
 
-	thread, err := c.createThread(c.client, msg.ChannelID, reference.MessageID, text)
+	thread, err := c.createThread(msg.ChannelID, reference.MessageID, text)
 	if err != nil {
 		return true, err
 	}
 
 	reply := &events.DiscordReplyTarget{ChannelID: thread.ID, MessageID: msg.ID, ThreadID: thread.ID}
 
-	handled, err := c.threadRouter.SubmitDiscordResponseThreadReply(ctx, msg.ChannelID, reference.MessageID, thread.ID, newDiscordInboundMessage(text, reply))
+	handled, err := c.threadRouter.SubmitResponseThreadReply(ctx, events.TextConversationTarget{ChannelID: msg.ChannelID, MessageID: reference.MessageID, ThreadID: thread.ID}, c.inboundMessage(ctx, msg, text, reply))
 	if err != nil {
 		return handled, fmt.Errorf("submit Discord response-rooted thread reply: %w", err)
 	}
@@ -308,8 +583,30 @@ func (c *Connector) handleResponseThreadReply(ctx context.Context, ev *messageCr
 }
 
 func (c *Connector) handleReaction(ctx context.Context, ev *reactionAdd) {
-	if ev == nil || ev.UserID != c.config.HumanUserID {
+	if ev == nil {
 		return
+	}
+
+	if ev.UserID != c.config.HumanUserID {
+		allowed := false
+
+		channelID := strings.TrimSpace(ev.ChannelID)
+		if channel, err := c.client.channel(channelID); err == nil && strings.TrimSpace(channel.ParentID) != "" {
+			channelID = strings.TrimSpace(channel.ParentID)
+		}
+
+		if c.config.SocialMode.Enabled {
+			for _, channel := range c.config.SocialMode.Channels {
+				if channel.Channel == channelID && slices.Contains(channel.AllowedUserIDs, ev.UserID) {
+					allowed = true
+					break
+				}
+			}
+		}
+
+		if !allowed {
+			return
+		}
 	}
 
 	switch ev.Emoji.Name {
@@ -317,11 +614,77 @@ func (c *Connector) handleReaction(ctx context.Context, ev *reactionAdd) {
 		c.handleSummaryReaction(ctx, ev)
 	case discordRepeatOneEmoji, discordRepeatOneName:
 		c.handleOnDemandCronReaction(ctx, ev)
+	case discordStopSignEmoji, discordStopButtonEmoji:
+		c.stopDiscordThread(c.threadForReaction(ev.ChannelID, ev.MessageID))
+	}
+}
+
+func (c *Connector) recordThreadRoot(channelID, messageID, threadID string) {
+	c.mu.Lock()
+	if c.roots == nil {
+		c.roots = map[string]string{}
+	}
+
+	c.roots[channelID+":"+messageID] = threadID
+	c.mu.Unlock()
+}
+
+func (c *Connector) threadForReaction(channelID, messageID string) string {
+	c.mu.Lock()
+	threadID := c.roots[channelID+":"+messageID]
+	c.mu.Unlock()
+
+	if threadID != "" {
+		return threadID
+	}
+
+	message, err := c.client.message(channelID, messageID)
+	if err == nil && message.Thread != nil && strings.TrimSpace(message.Thread.ID) != "" {
+		return strings.TrimSpace(message.Thread.ID)
+	}
+
+	return channelID
+}
+
+func (c *Connector) stopDiscordThread(threadID string) {
+	marker, err := c.threadRouter.InterruptThread(events.TextConversationTarget{ThreadID: threadID})
+	if err != nil {
+		c.log.Error("stop Discord thread", "thread", threadID, "error", err)
+		return
+	}
+
+	if marker != nil {
+		c.addInterruptionReaction(marker.DiscordReply)
+	}
+}
+
+func (c *Connector) addInterruptionReaction(marker *events.DiscordReplyTarget) {
+	if marker == nil || strings.TrimSpace(marker.ChannelID) == "" || strings.TrimSpace(marker.MessageID) == "" {
+		return
+	}
+
+	c.addReaction(marker.ChannelID, marker.MessageID, discordInterruptedEmoji)
+}
+
+func (c *Connector) addReaction(channelID, messageID, emoji string) {
+	if err := c.client.addReaction(channelID, messageID, emoji); err != nil {
+		c.log.Warn("add Discord reaction", "channel", channelID, "message", messageID, "emoji", emoji, "error", err)
+	}
+}
+
+func (c *Connector) startGoal(ctx context.Context, agent string, reply *events.DiscordReplyTarget, goal harnessbridge.GoalRequest, inbound *events.InboundMessage) {
+	if err := c.threadRouter.StartGoalInThread(ctx, agent, goal.Objective, goal.CheckScript, goal.MaxTurns, events.TextConversationTarget{ThreadID: reply.ThreadID}, inbound); err != nil {
+		if errors.Is(err, harnessbridge.ErrGoalAlreadyActive) {
+			c.addInterruptionReaction(reply)
+			c.publishOnDemandCronReply(ctx, reply, "A goal is already in progress in this thread. Finish or stop it before starting another.", true)
+		} else {
+			c.publishOnDemandCronReply(ctx, reply, "I couldn't start that goal: "+err.Error(), true)
+		}
 	}
 }
 
 func (c *Connector) handleSummaryReaction(ctx context.Context, ev *reactionAdd) {
-	handled, err := c.threadRouter.SummarizeDiscordThread(ctx, ev.ChannelID)
+	handled, err := c.threadRouter.SummarizeThread(ctx, events.TextConversationTarget{ThreadID: ev.ChannelID})
 	if err != nil {
 		c.log.Error("summarize Discord thread", "thread", ev.ChannelID, "error", err)
 	}
@@ -346,13 +709,17 @@ func (c *Connector) handleOnDemandCronReaction(ctx context.Context, ev *reaction
 		return
 	}
 
+	c.handleOnDemandCronRequest(ctx, reply, target, ev.ChannelID, false)
+}
+
+func (c *Connector) handleOnDemandCronRequest(ctx context.Context, reply *events.DiscordReplyTarget, target, channelID string, dm bool) {
 	loaded, err := c.oneOffCronjobs.LoadOneOffCronjob(target)
 	if err != nil {
 		c.publishOnDemandCronReply(ctx, reply, "I couldn't find that cronjob. Use a top-level cron filename like `daily` or `daily.md`.", true)
 		return
 	}
 
-	if strings.TrimSpace(loaded.SlackChannel) != ev.ChannelID {
+	if !dm && strings.TrimSpace(loaded.SlackChannel) != strings.TrimSpace(channelID) {
 		c.publishOnDemandCronReply(ctx, reply, "That cronjob is not configured to run in this Discord channel.", true)
 		return
 	}
@@ -438,10 +805,10 @@ func (c *Connector) publishOnDemandCronReply(ctx context.Context, reply *events.
 	}
 }
 
-func (c *Connector) createThread(client discordClient, channelID, messageID, text string) (*textChannel, error) {
+func (c *Connector) createThread(channelID, messageID, text string) (*textChannel, error) {
 	name := threadName(text)
 
-	thread, err := client.createThread(channelID, messageID, threadStart{Name: name, AutoArchiveDuration: 1440})
+	thread, err := c.client.createThread(channelID, messageID, threadStart{Name: name, AutoArchiveDuration: 1440})
 	if err != nil {
 		return nil, fmt.Errorf("create Discord thread: %w", err)
 	}
@@ -503,8 +870,51 @@ func (c *Connector) threadAgentPrompt(text string) (matched bool, agent string, 
 	return false, "", false, ""
 }
 
-func newDiscordInboundMessage(text string, reply *events.DiscordReplyTarget) *events.InboundMessage {
-	inbound := events.NewMainInboundMessage(events.SourceDiscordText, events.InboundKindPrompt, "", text, true)
+func (c *Connector) inboundMessage(ctx context.Context, msg *textMessage, text string, reply *events.DiscordReplyTarget) *events.InboundMessage {
+	content := events.InboundContent{Text: text}
+
+	for _, attachment := range msg.Attachments {
+		name, mimeType := strings.TrimSpace(attachment.Filename), strings.TrimSpace(attachment.ContentType)
+		if strings.HasPrefix(mimeType, "image/") {
+			content.HadAttachments = true
+			if attachment.Size > maxDiscordAttachmentBytes {
+				content.AttachmentWarnings = append(content.AttachmentWarnings, "Skipped Discord attachment "+name+" because it exceeded the Discord attachment download limit.")
+				continue
+			}
+
+			data, err := c.client.downloadAttachment(ctx, strings.TrimSpace(attachment.URL), maxDiscordAttachmentBytes)
+			if err != nil || len(data) == 0 {
+				content.AttachmentWarnings = append(content.AttachmentWarnings, "Skipped Discord attachment "+name+" because downloading it from Discord failed.")
+				continue
+			}
+
+			content.Attachments = append(content.Attachments, events.InboundAttachment{Name: name, MIMEType: mimeType, Data: data})
+
+			continue
+		}
+
+		if !events.IsTextAttachment(name, mimeType) {
+			content.HadNonImageAttachments = true
+			content.AttachmentWarnings = append(content.AttachmentWarnings, "Skipped Discord attachment "+name+" because it is not an image.")
+
+			continue
+		}
+
+		if attachment.Size > events.MaxInboundTextAttachmentBytes {
+			content.AttachmentWarnings = append(content.AttachmentWarnings, "Skipped Discord text attachment "+name+" because it exceeded the text file size limit.")
+			continue
+		}
+
+		data, err := c.client.downloadAttachment(ctx, strings.TrimSpace(attachment.URL), events.MaxInboundTextAttachmentBytes)
+		if err != nil || len(data) == 0 || !utf8.Valid(data) || strings.Contains(string(data), "\x00") {
+			content.AttachmentWarnings = append(content.AttachmentWarnings, "Skipped Discord text attachment "+name+" because downloading it from Discord failed.")
+			continue
+		}
+
+		content.TextAttachments = append(content.TextAttachments, "Discord text file attachment "+name+":\n"+string(data))
+	}
+
+	inbound := events.NewMainInboundMessageFromContent(events.SourceDiscordText, events.InboundKindPrompt, "", &content, true)
 	inbound.DiscordReply = reply
 
 	return inbound

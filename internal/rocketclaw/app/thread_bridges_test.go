@@ -137,8 +137,8 @@ func TestThreadBridgeManagerCreatesSeparateBridgesPerThreadAndPersistsThem(t *te
 		return new(fakeDirectBridge)
 	})
 
-	require.NoError(t, manager.StartThread(t.Context(), "main", true, newThreadInboundMessage("first", "111.222", "111.222")))
-	require.NoError(t, manager.StartThread(t.Context(), "factory", true, newThreadInboundMessage("second", "333.444", "333.444")))
+	require.NoError(t, manager.StartThread(t.Context(), "main", true, slackTarget("D123", "111.222"), newThreadInboundMessage("first", "111.222", "111.222")))
+	require.NoError(t, manager.StartThread(t.Context(), "factory", true, slackTarget("D123", "333.444"), newThreadInboundMessage("second", "333.444", "333.444")))
 
 	require.Len(t, created, 2)
 
@@ -180,7 +180,7 @@ func TestThreadBridgeManagerSeedsStartedThreadBeforeSubmit(t *testing.T) {
 	bridge := new(fakeDirectBridge)
 	manager := newThreadBridgeManager(events.New(), nil, newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 
-	require.NoError(t, manager.StartThread(t.Context(), "main", true, newThreadInboundMessage("first", "111.222", "111.222")))
+	require.NoError(t, manager.StartThread(t.Context(), "main", true, slackTarget("D123", "111.222"), newThreadInboundMessage("first", "111.222", "111.222")))
 
 	assert.Equal(t, []string{"seed_main", "submit:first"}, bridge.ops)
 }
@@ -191,7 +191,7 @@ func TestThreadBridgeManagerStopsStartedThreadWhenSeedFails(t *testing.T) {
 		return bridge
 	})
 
-	err := manager.StartThread(t.Context(), "main", true, newThreadInboundMessage("first", "111.222", "111.222"))
+	err := manager.StartThread(t.Context(), "main", true, slackTarget("D123", "111.222"), newThreadInboundMessage("first", "111.222", "111.222"))
 	require.ErrorContains(t, err, "seed Slack thread from main session")
 	require.ErrorIs(t, err, assert.AnError)
 	assert.Equal(t, 1, bridge.stops)
@@ -208,7 +208,7 @@ func TestThreadBridgeManagerStopsStartedThreadWhenPersistFails(t *testing.T) {
 		return bridge
 	})
 
-	err = manager.StartThread(t.Context(), "main", false, newThreadInboundMessage("first", "111.222", "111.222"))
+	err = manager.StartThread(t.Context(), "main", false, slackTarget("D123", "111.222"), newThreadInboundMessage("first", "111.222", "111.222"))
 	require.ErrorContains(t, err, "persist Slack thread bridge")
 	assert.Equal(t, 1, bridge.stops)
 	assert.Empty(t, bridge.submits)
@@ -218,7 +218,7 @@ func TestThreadBridgeManagerCanSkipStartedThreadSeed(t *testing.T) {
 	bridge := new(fakeDirectBridge)
 	manager := newThreadBridgeManager(events.New(), nil, newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 
-	require.NoError(t, manager.StartThread(t.Context(), "main", false, newThreadInboundMessage("first", "111.222", "111.222")))
+	require.NoError(t, manager.StartThread(t.Context(), "main", false, slackTarget("D123", "111.222"), newThreadInboundMessage("first", "111.222", "111.222")))
 
 	assert.Equal(t, []string{"submit:first"}, bridge.ops)
 }
@@ -235,7 +235,7 @@ func TestThreadBridgeManagerStartsGoalInExistingThreadWithPersistedAgent(t *test
 		return bridge
 	})
 
-	require.NoError(t, manager.StartSlackGoalInThread(t.Context(), "", "ship it", "", 5, newThreadInboundMessage("ship it", "222.333", "111.222")))
+	require.NoError(t, manager.StartGoalInThread(t.Context(), "", "ship it", "", 5, slackTarget("D123", "111.222"), newThreadInboundMessage("ship it", "222.333", "111.222")))
 	require.Len(t, bridge.submits, 1)
 	assert.Equal(t, "goal", bridge.submits[0].Label)
 
@@ -253,7 +253,7 @@ func TestThreadBridgeManagerRejectsDuplicateActiveGoal(t *testing.T) {
 	bridge := new(fakeDirectBridge)
 	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 
-	err := manager.StartSlackGoalInThread(t.Context(), "main", "second", "", 5, newThreadInboundMessage("second", "222.333", "111.222"))
+	err := manager.StartGoalInThread(t.Context(), "main", "second", "", 5, slackTarget("D123", "111.222"), newThreadInboundMessage("second", "222.333", "111.222"))
 	require.ErrorIs(t, err, harnessbridge.ErrGoalAlreadyActive)
 	assert.Empty(t, bridge.submits)
 }
@@ -267,7 +267,7 @@ func TestThreadBridgeManagerAllowsGoalAfterTerminalGoal(t *testing.T) {
 
 	bridge := new(fakeDirectBridge)
 	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
-	require.NoError(t, manager.StartSlackGoalInThread(t.Context(), "main", "second", "", 5, newThreadInboundMessage("second", "222.333", "111.222")))
+	require.NoError(t, manager.StartGoalInThread(t.Context(), "main", "second", "", 5, slackTarget("D123", "111.222"), newThreadInboundMessage("second", "222.333", "111.222")))
 
 	goal, ok, err := store.Goal(conversationID)
 	require.NoError(t, err)
@@ -282,13 +282,13 @@ func TestThreadBridgeManagerInterruptSlackThreadInterruptsActiveTurn(t *testing.
 	require.NoError(t, store.BeginGoal(conversationID, "first", "", 5))
 
 	marker := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "111.222"}
-	bridge := &fakeDirectBridge{interruptResult: marker}
+	bridge := &fakeDirectBridge{interruptResult: &events.InboundMessage{SlackReply: marker}}
 	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
-	require.NoError(t, manager.StartThread(t.Context(), "main", false, newThreadInboundMessage("start", "111.222", "111.222")))
+	require.NoError(t, manager.StartThread(t.Context(), "main", false, slackTarget("D123", "111.222"), newThreadInboundMessage("start", "111.222", "111.222")))
 
-	result, err := manager.InterruptSlackThread(t.Context(), "D123", "111.222")
+	result, err := manager.InterruptThread(slackTarget("D123", "111.222"))
 	require.NoError(t, err)
-	assert.Equal(t, marker, result)
+	assert.Equal(t, marker, result.SlackReply)
 	assert.Equal(t, 1, bridge.interrupts)
 
 	goal, ok, err := store.Goal(conversationID)
@@ -325,11 +325,11 @@ func TestThreadBridgeManagerRejectsMissingSlackThreadTarget(t *testing.T) {
 	manager := newThreadBridgeManager(events.New(), nil, newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
 
 	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
-	err := manager.StartThread(t.Context(), "main", false, inbound)
-	require.ErrorContains(t, err, "slack reply target is required")
+	err := manager.StartThread(t.Context(), "main", false, slackTarget("", ""), inbound)
+	require.ErrorContains(t, err, "slack thread target is required")
 
 	inbound.SlackReply = &events.SlackReplyTarget{ChannelID: " ", ThreadTS: " "}
-	err = manager.StartThread(t.Context(), "main", false, inbound)
+	err = manager.StartThread(t.Context(), "main", false, slackTarget(" ", " "), inbound)
 	require.ErrorContains(t, err, "slack thread target is required")
 }
 
@@ -341,12 +341,12 @@ func TestThreadBridgeManagerSubmitsPersistedThreadReply(t *testing.T) {
 	bridge := new(fakeDirectBridge)
 	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 
-	handled, err := manager.PrepareThreadReply(context.Background(), "D123", "111.222")
+	handled, err := manager.PrepareThreadReply(slackTarget("D123", "111.222"))
 	require.NoError(t, err)
 	assert.True(t, handled)
 
 	inbound := newThreadInboundMessage("follow up", "222.333", "")
-	handled, err = manager.SubmitThreadReply(context.Background(), "D123", "111.222", inbound)
+	handled, err = manager.SubmitThreadReply(context.Background(), slackTarget("D123", "111.222"), inbound)
 	require.NoError(t, err)
 	assert.True(t, handled)
 
@@ -374,55 +374,55 @@ func TestThreadBridgeManagerIgnoresUnmanagedThreadTargets(t *testing.T) {
 		{
 			name: "blank thread reply",
 			call: func() (bool, error) {
-				return manager.SubmitThreadReply(context.Background(), " ", " ", newThreadInboundMessage("reply", "222.333", " "))
+				return manager.SubmitThreadReply(context.Background(), slackTarget(" ", " "), newThreadInboundMessage("reply", "222.333", " "))
 			},
 		},
 		{
 			name: "unknown thread reply",
 			call: func() (bool, error) {
-				return manager.SubmitThreadReply(context.Background(), "D123", "111.222", newThreadInboundMessage("reply", "222.333", "111.222"))
+				return manager.SubmitThreadReply(context.Background(), slackTarget("D123", "111.222"), newThreadInboundMessage("reply", "222.333", "111.222"))
 			},
 		},
 		{
 			name: "blank response prepare",
 			call: func() (bool, error) {
-				return manager.PrepareResponseThreadReply(context.Background(), " ", "111.222")
+				return manager.PrepareResponseThreadReply(events.TextConversationTarget{ChannelID: " ", MessageID: "111.222"})
 			},
 		},
 		{
 			name: "blank response submit",
 			call: func() (bool, error) {
-				return manager.SubmitResponseThreadReply(context.Background(), " ", "111.222", newThreadInboundMessage("reply", "222.333", "111.222"))
+				return manager.SubmitResponseThreadReply(context.Background(), events.TextConversationTarget{ChannelID: " ", MessageID: "111.222", ThreadID: "111.222"}, newThreadInboundMessage("reply", "222.333", "111.222"))
 			},
 		},
 		{
 			name: "missing response checkpoint",
 			call: func() (bool, error) {
-				return manager.SubmitResponseThreadReply(context.Background(), "D123", "111.222", newThreadInboundMessage("reply", "222.333", "111.222"))
+				return manager.SubmitResponseThreadReply(context.Background(), events.TextConversationTarget{ChannelID: "D123", MessageID: "111.222", ThreadID: "111.222"}, newThreadInboundMessage("reply", "222.333", "111.222"))
 			},
 		},
 		{
 			name: "blank summarize",
 			call: func() (bool, error) {
-				return manager.SummarizeThread(context.Background(), " ", " ")
+				return manager.SummarizeThread(context.Background(), slackTarget(" ", " "))
 			},
 		},
 		{
 			name: "missing summarize",
 			call: func() (bool, error) {
-				return manager.SummarizeThread(context.Background(), "D123", "111.222")
+				return manager.SummarizeThread(context.Background(), slackTarget("D123", "111.222"))
 			},
 		},
 		{
 			name: "blank prepare",
 			call: func() (bool, error) {
-				return manager.PrepareThreadReply(context.Background(), " ", " ")
+				return manager.PrepareThreadReply(slackTarget(" ", " "))
 			},
 		},
 		{
 			name: "missing prepare",
 			call: func() (bool, error) {
-				return manager.PrepareThreadReply(context.Background(), "D123", "111.222")
+				return manager.PrepareThreadReply(slackTarget("D123", "111.222"))
 			},
 		},
 	} {
@@ -462,12 +462,15 @@ func TestThreadBridgeManagerSummarizeDrainsQueuedReplies(t *testing.T) {
 			manager := newThreadBridgeManager(bus, nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 			summaryDone := make(chan error, 1)
 
-			go func() { _, err := manager.SummarizeThread(context.Background(), "D123", "111.222"); summaryDone <- err }()
+			go func() {
+				_, err := manager.SummarizeThread(context.Background(), slackTarget("D123", "111.222"))
+				summaryDone <- err
+			}()
 
 			<-bridge.summarizeStarted
 
 			for i, text := range tc.queued {
-				_, err := manager.SubmitThreadReply(context.Background(), "D123", "111.222", newThreadInboundMessage(text, []string{"222.333", "333.444"}[i], "111.222"))
+				_, err := manager.SubmitThreadReply(context.Background(), slackTarget("D123", "111.222"), newThreadInboundMessage(text, []string{"222.333", "333.444"}[i], "111.222"))
 				require.NoError(t, err)
 			}
 
@@ -510,13 +513,13 @@ func TestThreadBridgeManagerSummarizeDrainsQueuedRepliesAfterContextCancellation
 	summaryDone := make(chan error, 1)
 
 	go func() {
-		_, err := manager.SummarizeThread(summaryCtx, "D123", "111.222")
+		_, err := manager.SummarizeThread(summaryCtx, slackTarget("D123", "111.222"))
 		summaryDone <- err
 	}()
 
 	<-bridge.summarizeStarted
 
-	_, err := manager.SubmitThreadReply(context.Background(), "D123", "111.222", newThreadInboundMessage("queued reply", "222.333", "111.222"))
+	_, err := manager.SubmitThreadReply(context.Background(), slackTarget("D123", "111.222"), newThreadInboundMessage("queued reply", "222.333", "111.222"))
 	require.NoError(t, err)
 
 	cancel()
@@ -542,7 +545,7 @@ func TestThreadBridgeManagerCanSummarizeRestoredThread(t *testing.T) {
 
 	bridge.releaseSummarize <- summarizeOutcome{text: "summary text", err: nil}
 
-	handled, err := manager.SummarizeThread(context.Background(), "D123", "111.222")
+	handled, err := manager.SummarizeThread(context.Background(), slackTarget("D123", "111.222"))
 	require.NoError(t, err)
 	assert.True(t, handled)
 	assert.Contains(t, readOneInbound(t, bus).Text, "summary text")
@@ -558,17 +561,17 @@ func TestThreadBridgeManagerSeedsResponseRootedThreadOnce(t *testing.T) {
 	bridge := new(fakeDirectBridge)
 	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 
-	handled, err := manager.PrepareResponseThreadReply(context.Background(), "D123", "111.222")
+	handled, err := manager.PrepareResponseThreadReply(events.TextConversationTarget{ChannelID: "D123", MessageID: "111.222"})
 	require.NoError(t, err)
 	assert.True(t, handled)
 
-	handled, err = manager.SubmitResponseThreadReply(context.Background(), "D123", "111.222", newThreadInboundMessage("first", "222.333", "111.222"))
+	handled, err = manager.SubmitResponseThreadReply(context.Background(), events.TextConversationTarget{ChannelID: "D123", MessageID: "111.222", ThreadID: "111.222"}, newThreadInboundMessage("first", "222.333", "111.222"))
 	require.NoError(t, err)
 	assert.True(t, handled)
 	require.Len(t, bridge.seeds, 1)
 	assert.Equal(t, events.ResponseCheckpoint{ConversationID: "main", SessionEntryID: 3, ResponseID: "resp-3", Model: "gpt-5.4", AssistantText: "root answer"}, bridge.seeds[0])
 
-	handled, err = manager.SubmitResponseThreadReply(context.Background(), "D123", "111.222", newThreadInboundMessage("second", "333.444", "111.222"))
+	handled, err = manager.SubmitResponseThreadReply(context.Background(), events.TextConversationTarget{ChannelID: "D123", MessageID: "111.222", ThreadID: "111.222"}, newThreadInboundMessage("second", "333.444", "111.222"))
 	require.NoError(t, err)
 	assert.True(t, handled)
 	require.Len(t, bridge.seeds, 1)
@@ -584,7 +587,7 @@ func TestThreadBridgeManagerSeedsResponseRootedThreadOnce(t *testing.T) {
 func TestThreadBridgeManagerIgnoresMissingResponseCheckpoint(t *testing.T) {
 	manager := newThreadBridgeManager(events.New(), nil, newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
 
-	handled, err := manager.PrepareResponseThreadReply(context.Background(), "D123", "111.222")
+	handled, err := manager.PrepareResponseThreadReply(events.TextConversationTarget{ChannelID: "D123", MessageID: "111.222"})
 	require.NoError(t, err)
 	assert.False(t, handled)
 }
@@ -601,7 +604,7 @@ func TestThreadBridgeManagerRejectsResponseThreadSeededFromDifferentCheckpoint(t
 	bridge := new(fakeDirectBridge)
 	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 
-	handled, err := manager.SubmitResponseThreadReply(context.Background(), "D123", "111.222", newThreadInboundMessage("follow up", "222.333", "111.222"))
+	handled, err := manager.SubmitResponseThreadReply(context.Background(), events.TextConversationTarget{ChannelID: "D123", MessageID: "111.222", ThreadID: "111.222"}, newThreadInboundMessage("follow up", "222.333", "111.222"))
 	require.ErrorContains(t, err, "slack thread already seeded")
 	assert.True(t, handled)
 	assert.Empty(t, bridge.seeds)
@@ -624,12 +627,12 @@ func TestThreadBridgeManagerRoutesExternalMCPThreadAlias(t *testing.T) {
 		return bridge
 	})
 
-	handled, err := manager.PrepareThreadReply(context.Background(), "D123", "111.222")
+	handled, err := manager.PrepareThreadReply(slackTarget("D123", "111.222"))
 	require.NoError(t, err)
 	assert.True(t, handled)
 
 	inbound := newThreadInboundMessage("follow up", "222.333", "111.222")
-	handled, err = manager.SubmitThreadReply(context.Background(), "D123", "111.222", inbound)
+	handled, err = manager.SubmitThreadReply(context.Background(), slackTarget("D123", "111.222"), inbound)
 	require.NoError(t, err)
 	assert.True(t, handled)
 	require.Len(t, bridge.submits, 1)
@@ -652,7 +655,7 @@ func TestThreadBridgeManagerKeepsExternalMCPBridgeAfterRequestContextEnds(t *tes
 	require.NoError(t, manager.SubmitExternalMCP(requestCtx, "planner", conversationID, newThreadInboundMessage("initial", "123.456", "111.222")))
 	cancel()
 
-	handled, err := manager.SubmitThreadReply(context.Background(), "D123", "111.222", newThreadInboundMessage("follow up", "222.333", "111.222"))
+	handled, err := manager.SubmitThreadReply(context.Background(), slackTarget("D123", "111.222"), newThreadInboundMessage("follow up", "222.333", "111.222"))
 	require.NoError(t, err)
 	assert.True(t, handled)
 	require.Len(t, bridge.submits, 2)
@@ -663,9 +666,9 @@ func TestThreadBridgeManagerRecordsResponseCheckpoint(t *testing.T) {
 	store := newTestSessionService(t, t.TempDir())
 	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
 
-	err := manager.RecordResponseCheckpoint(context.Background(), "D123", "111.222", events.ResponseCheckpoint{ConversationID: "main", SessionEntryID: 7, ResponseID: "resp", Model: "gpt-5.5", AssistantText: "answer"})
+	err := manager.RecordResponseCheckpoint(events.TextConversationTarget{ChannelID: "D123", MessageID: "111.222"}, events.ResponseCheckpoint{ConversationID: "main", SessionEntryID: 7, ResponseID: "resp", Model: "gpt-5.5", AssistantText: "answer"})
 	require.NoError(t, err)
-	require.NoError(t, manager.RecordResponseCheckpoint(context.Background(), "", "111.222", events.ResponseCheckpoint{}))
+	require.NoError(t, manager.RecordResponseCheckpoint(events.TextConversationTarget{ChannelID: "", MessageID: "111.222"}, events.ResponseCheckpoint{}))
 
 	state, err := store.Load()
 	require.NoError(t, err)
@@ -677,7 +680,7 @@ func TestThreadBridgeManagerWaitIdleWaitsForActiveBridges(t *testing.T) {
 	store := newTestSessionService(t, workspace)
 	bridge := &fakeDirectBridge{submits: nil, seeds: nil, summarizeStarted: nil, releaseSummarize: nil, waitStarted: make(chan struct{}, 1), releaseWait: make(chan error, 1)}
 	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
-	require.NoError(t, manager.StartThread(context.Background(), "main", true, newThreadInboundMessage("start", "111.222", "111.222")))
+	require.NoError(t, manager.StartThread(context.Background(), "main", true, slackTarget("D123", "111.222"), newThreadInboundMessage("start", "111.222", "111.222")))
 
 	waitDone := make(chan error, 1)
 
@@ -706,8 +709,8 @@ func TestThreadBridgeManagerStopStopsActiveBridges(t *testing.T) {
 		return bridge
 	})
 
-	require.NoError(t, manager.StartThread(context.Background(), "main", false, newThreadInboundMessage("first", "111.222", "111.222")))
-	require.NoError(t, manager.StartThread(context.Background(), "main", false, newThreadInboundMessage("second", "333.444", "333.444")))
+	require.NoError(t, manager.StartThread(context.Background(), "main", false, slackTarget("D123", "111.222"), newThreadInboundMessage("first", "111.222", "111.222")))
+	require.NoError(t, manager.StartThread(context.Background(), "main", false, slackTarget("D123", "333.444"), newThreadInboundMessage("second", "333.444", "333.444")))
 	require.NoError(t, manager.Stop())
 
 	require.Len(t, bridges, 2)
@@ -726,20 +729,20 @@ func TestThreadBridgeManagerStopAcceptingRejectsNewSubmissions(t *testing.T) {
 
 	bridge := new(fakeDirectBridge)
 	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
-	require.NoError(t, manager.StartThread(context.Background(), "main", false, newThreadInboundMessage("start", "111.222", "111.222")))
+	require.NoError(t, manager.StartThread(context.Background(), "main", false, slackTarget("D123", "111.222"), newThreadInboundMessage("start", "111.222", "111.222")))
 	manager.StopAccepting()
 
-	err := manager.StartThread(context.Background(), "main", false, newThreadInboundMessage("late start", "222.333", "222.333"))
+	err := manager.StartThread(context.Background(), "main", false, slackTarget("D123", "222.333"), newThreadInboundMessage("late start", "222.333", "222.333"))
 	require.ErrorContains(t, err, "thread bridges are draining")
 
-	handled, err := manager.SubmitThreadReply(context.Background(), "D123", "111.222", newThreadInboundMessage("late reply", "333.444", "111.222"))
+	handled, err := manager.SubmitThreadReply(context.Background(), slackTarget("D123", "111.222"), newThreadInboundMessage("late reply", "333.444", "111.222"))
 	require.ErrorContains(t, err, "thread bridges are draining")
 	assert.False(t, handled)
 
 	err = manager.SubmitExternalMCP(context.Background(), "main", "external_mcp:main:late", newThreadInboundMessage("late external", "444.555", "111.222"))
 	require.ErrorContains(t, err, "thread bridges are draining")
 
-	handled, err = manager.SubmitResponseThreadReply(context.Background(), "D123", "111.222", newThreadInboundMessage("late response", "555.666", "111.222"))
+	handled, err = manager.SubmitResponseThreadReply(context.Background(), events.TextConversationTarget{ChannelID: "D123", MessageID: "111.222", ThreadID: "111.222"}, newThreadInboundMessage("late response", "555.666", "111.222"))
 	require.ErrorContains(t, err, "thread bridges are draining")
 	assert.True(t, handled)
 
@@ -761,7 +764,7 @@ type fakeDirectBridge struct {
 	releaseWait      chan error
 	startedCtx       context.Context
 	interrupts       int
-	interruptResult  *events.SlackReplyTarget
+	interruptResult  *events.InboundMessage
 }
 
 type summarizeOutcome struct {
@@ -836,7 +839,7 @@ func (f *fakeDirectBridge) WaitIdle(ctx context.Context) error {
 	}
 }
 
-func (f *fakeDirectBridge) InterruptActiveTurn() *events.SlackReplyTarget {
+func (f *fakeDirectBridge) InterruptActiveTurn() *events.InboundMessage {
 	f.interrupts++
 
 	return f.interruptResult
@@ -847,6 +850,10 @@ func newThreadInboundMessage(text, messageTS, threadTS string) *events.InboundMe
 	inbound.SlackReply = &events.SlackReplyTarget{ChannelID: "D123", MessageTS: messageTS, ThreadTS: threadTS}
 
 	return inbound
+}
+
+func slackTarget(channelID, threadTS string) events.TextConversationTarget {
+	return events.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS}
 }
 
 func readOneInbound(t *testing.T, bus *events.Bus) *events.InboundMessage {

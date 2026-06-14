@@ -22,7 +22,7 @@ type TranscriptionPublisher struct {
 	bus                *events.Bus
 	source             events.Source
 	emergencySafeWords []string
-	beforeMainSession  func(context.Context, string) (*events.SlackReplyTarget, error)
+	beforeMainSession  func(context.Context, string) (*events.InboundMessage, error)
 }
 
 // NewTranscriptionPublisher constructs a reusable voice transcription publisher.
@@ -31,7 +31,7 @@ func NewTranscriptionPublisher(
 	logger *slog.Logger,
 	source events.Source,
 	emergencySafeWords []string,
-	beforeMainSession func(context.Context, string) (*events.SlackReplyTarget, error),
+	beforeMainSession func(context.Context, string) (*events.InboundMessage, error),
 ) *TranscriptionPublisher {
 	return &TranscriptionPublisher{log: logger.With("component", "voice"), bus: bus, source: source, emergencySafeWords: slices.Clone(emergencySafeWords), beforeMainSession: beforeMainSession}
 }
@@ -57,13 +57,16 @@ func (p *TranscriptionPublisher) PublishTranscription(ctx context.Context, text,
 		os.Exit(254)
 	}
 
-	slackReply, err := p.beforeMainSession(ctx, text)
+	reply, err := p.beforeMainSession(ctx, text)
 	if err != nil {
 		return false, fmt.Errorf("relay voice utterance before main-session publish: %w", err)
 	}
 
 	inbound := events.NewMainInboundMessage(p.source, events.InboundKindPrompt, "", text, true)
-	inbound.SlackReply = slackReply
+	if reply != nil {
+		inbound.SlackReply = reply.SlackReply
+		inbound.DiscordReply = reply.DiscordReply
+	}
 
 	inbound.WebSessionID = strings.TrimSpace(webSessionID)
 	if err := p.bus.PublishInbound(ctx, inbound); err != nil {

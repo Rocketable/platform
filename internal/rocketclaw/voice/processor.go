@@ -48,7 +48,7 @@ func NewProcessor(
 	transcriber *openaiaudio.WhisperClient,
 	logger *slog.Logger,
 	emergencySafeWords []string,
-	beforeMainSession func(context.Context, string) (*events.SlackReplyTarget, error),
+	beforeMainSession func(context.Context, string) (*events.InboundMessage, error),
 ) *Processor {
 	processor := new(Processor)
 	processor.log = logger.With("component", "voice")

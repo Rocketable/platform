@@ -1962,7 +1962,7 @@ func httpBaseURL(voiceModeURL string) string {
 	return strings.TrimSuffix(voiceModeURL, VoiceModePath)
 }
 
-func inertBeforeMainSession(context.Context, string) (*events.SlackReplyTarget, error) {
+func inertBeforeMainSession(context.Context, string) (*events.InboundMessage, error) {
 	return nil, nil
 }
 

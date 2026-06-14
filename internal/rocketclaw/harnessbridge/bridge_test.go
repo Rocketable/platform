@@ -192,12 +192,12 @@ func TestInterruptActiveTurnSignalsAndClearsQueue(t *testing.T) {
 	interrupts := make(chan os.Signal, 1)
 	marker := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "111.222"}
 
-	bridge := &Bridge{requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{}), activeSlackReply: marker, activeTurnInterrupts: interrupts}
+	bridge := &Bridge{requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{}), activeReply: &events.InboundMessage{SlackReply: marker}, activeTurnInterrupts: interrupts}
 	bridge.requestCh <- bridgeRequest{inbound: events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "queued", false)}
 
 	result := bridge.InterruptActiveTurn()
 
-	assert.Equal(t, marker, result)
+	assert.Equal(t, marker, result.SlackReply)
 	assert.Empty(t, bridge.requestCh)
 	assert.True(t, bridge.activeTurnInterrupted)
 	assert.Equal(t, os.Interrupt, <-interrupts)

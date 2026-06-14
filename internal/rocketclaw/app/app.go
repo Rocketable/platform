@@ -327,7 +327,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	if cfg.DiscordText.Enabled {
 		logger.Info("starting Discord text connector", "channel_id", cfg.DiscordText.ChannelID)
 
-		discordTextSink = discordtext.New(cfg.DiscordText, bus, cfg.ThreadAgents, threadBridges, cronjobs, logger)
+		discordTextSink = discordtext.New(&cfg.DiscordText, bus, cfg.ThreadAgents, threadBridges, cronjobs, logger)
 		if err := discordTextSink.Start(runCtx); err != nil {
 			return fmt.Errorf("start Discord text connector: %w", err)
 		}
@@ -343,10 +343,14 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	var webUI *webui.Server
 
 	if cfg.WebUI.Enabled {
-		webRelay := func(context.Context, string) (*events.SlackReplyTarget, error) { return nil, nil }
+		webRelay := func(context.Context, string) (*events.InboundMessage, error) { return nil, nil }
 		if slackSink != nil {
-			webRelay = func(relayCtx context.Context, text string) (*events.SlackReplyTarget, error) {
+			webRelay = func(relayCtx context.Context, text string) (*events.InboundMessage, error) {
 				return relayVoiceUtteranceToSlack(relayCtx, slackSink, text, logger, "browser voice utterance")
+			}
+		} else if discordTextSink != nil {
+			webRelay = func(relayCtx context.Context, text string) (*events.InboundMessage, error) {
+				return relayVoiceUtteranceToDiscord(relayCtx, discordTextSink, text, logger, "browser voice utterance")
 			}
 		}
 
@@ -389,15 +393,25 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 			externalMCPDefaultAgent = externalMCPAgents[0]
 		}
 
-		slackRelay := func(context.Context, string, []events.OutboundAttachment, *events.SlackReplyTarget, string) (*events.SlackReplyTarget, error) {
+		textRelay := func(context.Context, string, []events.OutboundAttachment, *events.InboundMessage, string) (*events.InboundMessage, error) {
 			return nil, nil
 		}
-		cleanupSlackRelay := func(context.Context, *events.SlackReplyTarget) {}
+		cleanupTextRelay := func(context.Context, *events.InboundMessage) {}
 
 		if slackSink != nil {
-			slackRelay = func(relayCtx context.Context, text string, attachments []events.OutboundAttachment, replyTarget *events.SlackReplyTarget, channelName string) (*events.SlackReplyTarget, error) {
-				if replyTarget != nil {
-					return slackSink.SendExternalMCPThreadRelay(relayCtx, replyTarget.ChannelID, replyTarget.ThreadTS, text, attachments)
+			textRelay = func(relayCtx context.Context, text string, attachments []events.OutboundAttachment, reply *events.InboundMessage, channelName string) (*events.InboundMessage, error) {
+				var (
+					target *events.SlackReplyTarget
+					err    error
+				)
+
+				if reply != nil && reply.SlackReply != nil {
+					target, err = slackSink.SendExternalMCPThreadRelay(relayCtx, reply.SlackReply.ChannelID, reply.SlackReply.ThreadTS, text, attachments)
+					if err != nil {
+						return nil, fmt.Errorf("send Slack external MCP thread relay: %w", err)
+					}
+
+					return &events.InboundMessage{SlackReply: target}, nil
 				}
 
 				channelID := cfg.Slack.Room
@@ -405,12 +419,40 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 					channelID = channelName
 				}
 
-				return slackSink.SendExternalMCPRelay(relayCtx, channelID, text, attachments)
+				target, err = slackSink.SendExternalMCPRelay(relayCtx, channelID, text, attachments)
+				if err != nil {
+					return nil, fmt.Errorf("send Slack external MCP relay: %w", err)
+				}
+
+				return &events.InboundMessage{SlackReply: target}, nil
 			}
-			cleanupSlackRelay = slackSink.CleanupPendingReplyPlaceholder
+			cleanupTextRelay = func(cleanupCtx context.Context, reply *events.InboundMessage) {
+				if reply != nil {
+					slackSink.CleanupPendingReplyPlaceholder(cleanupCtx, reply.SlackReply)
+				}
+			}
+		} else if discordTextSink != nil {
+			textRelay = func(relayCtx context.Context, text string, attachments []events.OutboundAttachment, reply *events.InboundMessage, channelID string) (*events.InboundMessage, error) {
+				var (
+					target *events.DiscordReplyTarget
+					err    error
+				)
+
+				if reply != nil && reply.DiscordReply != nil {
+					target, err = discordTextSink.SendExternalMCPThreadRelay(relayCtx, reply.DiscordReply.ThreadID, text, attachments)
+				} else {
+					target, err = discordTextSink.SendExternalMCPRelay(relayCtx, channelID, text, attachments)
+				}
+
+				if err != nil {
+					return nil, fmt.Errorf("send Discord external MCP relay: %w", err)
+				}
+
+				return &events.InboundMessage{DiscordReply: target}, nil
+			}
 		}
 
-		externalMCP, err := startExternalMCPServer(runCtx, cfg, slackRelay, cleanupSlackRelay, externalMCPUsers, externalMCPAgents, externalMCPDefaultAgent, rocketcodeSessions, threadBridges.SubmitExternalMCP, logger)
+		externalMCP, err := startExternalMCPServer(runCtx, cfg, textRelay, cleanupTextRelay, externalMCPUsers, externalMCPAgents, externalMCPDefaultAgent, rocketcodeSessions, threadBridges.SubmitExternalMCP, logger)
 		if err != nil {
 			return err
 		}
@@ -429,10 +471,14 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 				return fmt.Errorf("start Discord connector: %w", err)
 			}
 
-			discordRelay := func(context.Context, string) (*events.SlackReplyTarget, error) { return nil, nil }
+			discordRelay := func(context.Context, string) (*events.InboundMessage, error) { return nil, nil }
 			if slackSink != nil {
-				discordRelay = func(relayCtx context.Context, text string) (*events.SlackReplyTarget, error) {
+				discordRelay = func(relayCtx context.Context, text string) (*events.InboundMessage, error) {
 					return relayVoiceUtteranceToSlack(relayCtx, slackSink, text, logger, "discord voice utterance")
+				}
+			} else if discordTextSink != nil {
+				discordRelay = func(relayCtx context.Context, text string) (*events.InboundMessage, error) {
+					return relayVoiceUtteranceToDiscord(relayCtx, discordTextSink, text, logger, "discord voice utterance")
 				}
 			}
 
@@ -518,7 +564,7 @@ func relayVoiceUtteranceToSlack(
 	text string,
 	logger *slog.Logger,
 	purpose string,
-) (*events.SlackReplyTarget, error) {
+) (*events.InboundMessage, error) {
 	logger.Info("relaying voice utterance to Slack before main session", "purpose", purpose, "text_len", len(text), "text", text)
 
 	var replyTarget *events.SlackReplyTarget
@@ -538,15 +584,34 @@ func relayVoiceUtteranceToSlack(
 		return nil
 	})
 
-	return replyTarget, err
+	if err != nil || replyTarget == nil {
+		return nil, err
+	}
+
+	return &events.InboundMessage{SlackReply: replyTarget}, nil
+}
+
+func relayVoiceUtteranceToDiscord(ctx context.Context, discordSink *discordtext.Connector, text string, logger *slog.Logger, purpose string) (*events.InboundMessage, error) {
+	logger.Info("relaying voice utterance to Discord text before main session", "purpose", purpose, "text_len", len(text), "text", text)
+
+	replyTarget, err := discordSink.SendVoiceRelay(ctx, text)
+	if err != nil {
+		return nil, fmt.Errorf("send Discord voice relay: %w", err)
+	}
+
+	if replyTarget == nil {
+		return nil, nil
+	}
+
+	return &events.InboundMessage{DiscordReply: replyTarget}, nil
 }
 
 //nolint:gocyclo // External MCP routing branches are explicit to preserve main vs fork semantics.
 func startExternalMCPServer(
 	ctx context.Context,
 	cfg *config.Config,
-	slackRelay func(context.Context, string, []events.OutboundAttachment, *events.SlackReplyTarget, string) (*events.SlackReplyTarget, error),
-	cleanupSlackRelay func(context.Context, *events.SlackReplyTarget),
+	textRelay func(context.Context, string, []events.OutboundAttachment, *events.InboundMessage, string) (*events.InboundMessage, error),
+	cleanupTextRelay func(context.Context, *events.InboundMessage),
 	users map[string]string,
 	agents []string,
 	defaultAgent string,
@@ -557,11 +622,11 @@ func startExternalMCPServer(
 	server, err := externalmcp.StartSessionPromptServer(ctx, logger, cfg.MCPExternal.ListenAddr, users, defaultAgent, func(callCtx context.Context, username, externalConversationID, agent, input string, metadata map[string]string, attachments []externalmcp.SessionPromptAttachment, slackChannel string) (result externalmcp.SessionResult, err error) {
 		_ = username
 
-		var slackReply *events.SlackReplyTarget
+		var reply *events.InboundMessage
 
 		defer func() {
 			if err != nil {
-				cleanupSlackRelay(callCtx, slackReply)
+				cleanupTextRelay(callCtx, reply)
 			}
 		}()
 
@@ -603,32 +668,31 @@ func startExternalMCPServer(
 						continue
 					}
 
-					rest, ok := strings.CutPrefix(conversationID, "slack-thread:")
-					if !ok {
-						continue
+					if channelID, threadTS, ok := harnessbridge.SlackThreadTarget(conversationID); ok {
+						reply = &events.InboundMessage{SlackReply: &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}}
+						break
 					}
 
-					channelID, threadTS, ok := strings.Cut(rest, ":")
-					if ok && strings.TrimSpace(channelID) != "" && strings.TrimSpace(threadTS) != "" {
-						slackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
+					if threadID, ok := harnessbridge.DiscordThreadTarget(conversationID); ok {
+						reply = &events.InboundMessage{DiscordReply: &events.DiscordReplyTarget{ChannelID: threadID, ThreadID: threadID}}
 						break
 					}
 				}
 
-				if slackReply != nil {
+				if reply != nil {
 					if err := retrySlackDelivery(callCtx, logger, "external MCP thread relay", func(sendCtx context.Context) error {
 						var (
 							err     error
-							relayed *events.SlackReplyTarget
+							relayed *events.InboundMessage
 						)
 
-						relayed, err = slackRelay(sendCtx, input, outboundAttachments, slackReply, "")
+						relayed, err = textRelay(sendCtx, input, outboundAttachments, reply, "")
 						if err != nil {
-							return fmt.Errorf("send Slack external MCP thread relay: %w", err)
+							return fmt.Errorf("send text connector external MCP thread relay: %w", err)
 						}
 
 						if relayed != nil {
-							slackReply = relayed
+							reply = relayed
 						}
 
 						return nil
@@ -637,7 +701,7 @@ func startExternalMCPServer(
 					}
 				}
 
-				return submitExternalMCPInput(callCtx, submitAgent, session.Agent, session.ConversationID, &inboundContent, metadata, slackReply, externalConversationID)
+				return submitExternalMCPInput(callCtx, submitAgent, session.Agent, session.ConversationID, &inboundContent, metadata, reply, externalConversationID)
 			}
 		}
 
@@ -672,14 +736,14 @@ func startExternalMCPServer(
 			relayText = threadPrefix + " " + input
 		}
 
-		logger.Info("relaying external MCP input to Slack thread root", "text_len", len(relayText))
+		logger.Info("relaying external MCP input to text connector thread root", "text_len", len(relayText))
 
 		if err := retrySlackDelivery(callCtx, logger, "external MCP relay", func(sendCtx context.Context) error {
 			var err error
 
-			slackReply, err = slackRelay(sendCtx, relayText, outboundAttachments, nil, slackChannel)
+			reply, err = textRelay(sendCtx, relayText, outboundAttachments, nil, slackChannel)
 			if err != nil {
-				return fmt.Errorf("send Slack external MCP relay: %w", err)
+				return fmt.Errorf("send text connector external MCP relay: %w", err)
 			}
 
 			return nil
@@ -687,20 +751,26 @@ func startExternalMCPServer(
 			return externalmcp.SessionResult{}, err
 		}
 
-		if slackReply != nil {
-			slackReply.ThreadTS = slackReply.MessageTS
+		if reply != nil {
+			threadKey := ""
 
-			threadKey := harnessbridge.SlackThreadConversationID(slackReply.ChannelID, slackReply.ThreadTS)
+			if reply.SlackReply != nil {
+				reply.SlackReply.ThreadTS = reply.SlackReply.MessageTS
+				threadKey = harnessbridge.SlackThreadConversationID(reply.SlackReply.ChannelID, reply.SlackReply.ThreadTS)
+			} else if reply.DiscordReply != nil {
+				threadKey = harnessbridge.DiscordThreadConversationID(reply.DiscordReply.ThreadID)
+			}
+
 			if err := store.UpsertThread(threadKey, agent); err != nil {
-				return externalmcp.SessionResult{}, fmt.Errorf("persist external MCP Slack thread alias: %w", err)
+				return externalmcp.SessionResult{}, fmt.Errorf("persist external MCP text thread alias: %w", err)
 			}
 
 			if err := store.MarkThreadSeeded(threadKey, conversationID); err != nil {
-				return externalmcp.SessionResult{}, fmt.Errorf("persist external MCP Slack thread alias: %w", err)
+				return externalmcp.SessionResult{}, fmt.Errorf("persist external MCP text thread alias: %w", err)
 			}
 		}
 
-		return submitExternalMCPInput(callCtx, submitAgent, agent, conversationID, &inboundContent, metadata, slackReply, publicConversationID)
+		return submitExternalMCPInput(callCtx, submitAgent, agent, conversationID, &inboundContent, metadata, reply, publicConversationID)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start external MCP HTTP server: %w", err)
@@ -762,10 +832,15 @@ func externalMCPInboundContent(attachments []externalmcp.SessionPromptAttachment
 	return content, outbound, nil
 }
 
-func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Context, string, string, *events.InboundMessage) error, agent, conversationID string, content *events.InboundContent, metadata map[string]string, slackReply *events.SlackReplyTarget, externalConversationID string) (externalmcp.SessionResult, error) {
+func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Context, string, string, *events.InboundMessage) error, agent, conversationID string, content *events.InboundContent, metadata map[string]string, reply *events.InboundMessage, externalConversationID string) (externalmcp.SessionResult, error) {
 	inbound := events.NewMainInboundMessageFromContent(events.SourceExternalMCP, events.InboundKindPrompt, "", content, true)
+
 	inbound.Metadata = metadata
-	inbound.SlackReply = slackReply
+	if reply != nil {
+		inbound.SlackReply = reply.SlackReply
+		inbound.DiscordReply = reply.DiscordReply
+	}
+
 	resultCh := inbound.EnableResponseWait()
 
 	if err := submitAgent(ctx, agent, conversationID, inbound); err != nil {
