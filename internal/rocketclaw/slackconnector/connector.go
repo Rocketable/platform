@@ -1162,7 +1162,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		}
 
 		switch strings.TrimSpace(text) {
-		case "🛑", "⏹️", "⏹":
+		case "🛑", "⏹️":
 			stopped, err := c.threadRouter.StopGoalThread(ctx, ev.Channel, threadTS)
 			if err != nil {
 				c.log.Error("stop Slack goal thread", "error", err, "channel", ev.Channel, "thread_ts", threadTS)
