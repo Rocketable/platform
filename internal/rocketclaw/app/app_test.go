@@ -214,11 +214,11 @@ func TestOutboundLoopRoutesDiscordVoiceThinkingToDiscord(t *testing.T) {
 	}()
 
 	msg := events.NewMainOutboundMessage(events.SourceDiscordVoice, "", events.OutputTargetSlackMain)
-	msg.SlackThinking = "first thought"
+	msg.ProgressText = "first thought"
 	msg.TurnID = "turn-1"
 	require.NoError(t, bus.PublishOutbound(context.Background(), msg))
-	assert.Equal(t, "first thought", (<-slackSeen).SlackThinking)
-	assert.Equal(t, "first thought", (<-discordSeen).SlackThinking)
+	assert.Equal(t, "first thought", (<-slackSeen).ProgressText)
+	assert.Equal(t, "first thought", (<-discordSeen).ProgressText)
 	cancel()
 	require.NoError(t, <-done)
 }

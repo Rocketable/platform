@@ -2460,7 +2460,7 @@ func TestProcessResponsePublishesStructuredToolDiagnosticsAsThinking(t *testing.
 	require.NoError(t, bridge.processResponse(context.Background(), inbound, &result, toolResponse(&diagnostic)))
 
 	outbound := readRocketCodeOutbound(t, bus)
-	assert.Equal(t, "Read the file", outbound.SlackThinking)
+	assert.Equal(t, "Read the file", outbound.ProgressText)
 	assert.Equal(t, "turn-1", outbound.TurnID)
 }
 

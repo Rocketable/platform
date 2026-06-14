@@ -39,7 +39,7 @@ type managedThreadBridge struct {
 	queuedReplies []*events.InboundMessage
 }
 
-const slackThreadSummaryPrompt = "Summarize the current state of this managed Slack thread for handoff to the main session. Keep it concise. Include the user's goal, the important facts, decisions already made, open questions, and the next useful follow-up. Return only the summary text."
+const textThreadSummaryPrompt = "Summarize the current state of this managed text thread for handoff to the main session. Keep it concise. Include the user's goal, the important facts, decisions already made, open questions, and the next useful follow-up. Return only the summary text."
 
 type primaryTextBinding struct {
 	label         string
@@ -361,7 +361,7 @@ func (m *threadBridgeManager) summarizeThread(ctx context.Context, conversationI
 	bridge := managed.bridge
 	m.mu.Unlock()
 
-	summary, errSummarize := bridge.Summarize(ctx, slackThreadSummaryPrompt)
+	summary, errSummarize := bridge.Summarize(ctx, textThreadSummaryPrompt)
 
 	var errPublish error
 	if errSummarize == nil {
@@ -508,13 +508,13 @@ func (m *threadBridgeManager) interruptConversation(conversationID string) (*eve
 	return managed.bridge.InterruptActiveTurn(), nil
 }
 
-func (m *threadBridgeManager) RegisterCronThread(ctx context.Context, channelID, threadTS, agent, seedText string) error {
-	conversationID := harnessbridge.SlackThreadConversationID(channelID, threadTS)
+func (m *threadBridgeManager) RegisterCronThread(ctx context.Context, target events.TextConversationTarget, agent, seedText string) error {
+	conversationID := m.text.conversationID(target)
 	if conversationID == "" {
-		return errors.New("slack thread target is required")
+		return errors.New("text thread target is required")
 	}
 
-	managed, created, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: strings.TrimSpace(agent)}, []events.OutputTarget{events.OutputTargetSlackMain})
+	managed, created, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: strings.TrimSpace(agent)}, m.text.outputTargets)
 	if err != nil {
 		return err
 	}
@@ -522,12 +522,12 @@ func (m *threadBridgeManager) RegisterCronThread(ctx context.Context, channelID,
 	if created {
 		if err := managed.bridge.SeedThreadFromCron(ctx, seedText); err != nil {
 			m.dropCreatedBridge(conversationID, managed)
-			return fmt.Errorf("seed Slack cron thread: %w", err)
+			return fmt.Errorf("seed text cron thread: %w", err)
 		}
 
 		if err := m.store.UpsertThread(conversationID, agent); err != nil {
 			m.dropCreatedBridge(conversationID, managed)
-			return fmt.Errorf("persist Slack cron thread bridge: %w", err)
+			return fmt.Errorf("persist text cron thread bridge: %w", err)
 		}
 	}
 
@@ -648,7 +648,7 @@ func (m *threadBridgeManager) bridgesSnapshot() []directBridge {
 func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread harnessbridge.ThreadState, outputTargets []events.OutputTarget) (*managedThreadBridge, bool, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
-		return nil, false, errors.New("slack thread conversation ID is required")
+		return nil, false, errors.New("text thread conversation ID is required")
 	}
 
 	m.mu.Lock()
@@ -675,7 +675,7 @@ func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread h
 		}),
 	}
 	if err := managed.bridge.Start(context.Background()); err != nil {
-		return nil, false, fmt.Errorf("start Slack thread bridge: %w", err)
+		return nil, false, fmt.Errorf("start text thread bridge: %w", err)
 	}
 
 	m.bridges[conversationID] = managed

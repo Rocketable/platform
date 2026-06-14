@@ -114,7 +114,7 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 		return nil
 	}
 
-	thinking := msg.Source == events.SourceDiscordVoice && msg.Text == "" && msg.SlackThinking != ""
+	thinking := msg.Source == events.SourceDiscordVoice && msg.Text == "" && msg.ProgressText != ""
 
 	playback := c.nextPlaybackText(msg)
 	if thinking {

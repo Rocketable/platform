@@ -33,18 +33,6 @@ const (
 	maxDiscordAttachmentBytes = 16 << 20
 )
 
-// ThreadRouter routes Discord thread messages directly to app-owned thread bridges.
-type ThreadRouter interface {
-	StartThread(ctx context.Context, agent string, preSeed bool, target events.TextConversationTarget, inbound *events.InboundMessage) error
-	PrepareResponseThreadReply(target events.TextConversationTarget) (bool, error)
-	SubmitThreadReply(ctx context.Context, target events.TextConversationTarget, inbound *events.InboundMessage) (bool, error)
-	StartGoalInThread(ctx context.Context, agent, objective, checkScript string, maxTurns int, target events.TextConversationTarget, inbound *events.InboundMessage) error
-	InterruptThread(target events.TextConversationTarget) (*events.InboundMessage, error)
-	SubmitResponseThreadReply(ctx context.Context, target events.TextConversationTarget, inbound *events.InboundMessage) (bool, error)
-	SummarizeThread(ctx context.Context, target events.TextConversationTarget) (bool, error)
-	RecordResponseCheckpoint(target events.TextConversationTarget, checkpoint events.ResponseCheckpoint) error
-}
-
 type discordClient interface {
 	channel(channelID string) (*textChannel, error)
 	message(channelID, messageID string) (*textMessage, error)
@@ -74,7 +62,7 @@ type Connector struct {
 	log            *slog.Logger
 	config         config.DiscordTextConfig
 	bus            *events.Bus
-	threadRouter   ThreadRouter
+	threadRouter   harnessbridge.PrimaryTextRouter
 	oneOffCronjobs oneOffCronjobRunner
 	threadAgents   []threadAgent
 	client         discordClient
@@ -85,7 +73,7 @@ type Connector struct {
 }
 
 // New constructs a Discord text connector.
-func New(cfg *config.DiscordTextConfig, bus *events.Bus, threadAgents config.ThreadAgents, threadRouter ThreadRouter, oneOffCronjobs oneOffCronjobRunner, logger *slog.Logger) *Connector {
+func New(cfg *config.DiscordTextConfig, bus *events.Bus, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs oneOffCronjobRunner, logger *slog.Logger) *Connector {
 	return &Connector{log: logger.With("component", "discord_text"), config: *cfg, bus: bus, threadAgents: normalizeThreadAgents(threadAgents), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs}
 }
 
@@ -191,13 +179,13 @@ func (c *Connector) SendResponse(_ context.Context, msg *events.OutboundMessage)
 		return nil
 	}
 
-	if strings.TrimSpace(msg.SlackThinking) != "" && strings.TrimSpace(msg.Text) == "" {
+	if strings.TrimSpace(msg.ProgressText) != "" && strings.TrimSpace(msg.Text) == "" {
 		return c.sendProgress(channelID, msg)
 	}
 
 	var posted []*postedMessage
 
-	if msg.Text != "" && (msg.Complete || msg.SlackPostText) {
+	if msg.Text != "" && (msg.Complete || msg.PostProgressText) {
 		var err error
 
 		posted, err = c.postResponseChunks(channelID, msg.DiscordReply, splitDiscordResponseText(msg.Text))
@@ -239,7 +227,7 @@ func (c *Connector) SendResponse(_ context.Context, msg *events.OutboundMessage)
 }
 
 // SendCronjobChannelThread posts one scheduled cronjob result in a new Discord thread.
-func (c *Connector) SendCronjobChannelThread(_ context.Context, channelID, relativePath, agent, ranAt, text string, attachments []events.OutboundAttachment) error {
+func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, relativePath, agent, ranAt, text string, attachments []events.OutboundAttachment) error {
 	if c.client == nil {
 		return errors.New("discord text connector is not started")
 	}
@@ -271,11 +259,24 @@ func (c *Connector) SendCronjobChannelThread(_ context.Context, channelID, relat
 		}
 	}
 
+	seedText := "Cronjob " + relativePath + " ran at " + ranAt + " with agent " + strings.TrimSpace(agent) + "."
+	if strings.TrimSpace(text) != "" {
+		seedText += "\n\nHuman-visible cron output:\n" + strings.TrimSpace(text)
+	}
+
+	if names := events.AttachmentNamesSpeech(attachments); names != "" {
+		seedText += "\n\n" + names
+	}
+
+	if err := c.threadRouter.RegisterCronThread(ctx, events.TextConversationTarget{ThreadID: thread.ID}, agent, seedText); err != nil {
+		return fmt.Errorf("register Discord cronjob thread: %w", err)
+	}
+
 	return nil
 }
 
 func (c *Connector) sendProgress(channelID string, msg *events.OutboundMessage) error {
-	text := strings.TrimSpace(msg.SlackThinking)
+	text := strings.TrimSpace(msg.ProgressText)
 
 	c.mu.Lock()
 	progress := c.progress[strings.TrimSpace(msg.TurnID)]
@@ -367,7 +368,7 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 		baseChannelID = parentID
 	}
 
-	socialChannel := config.SlackSocialChannelConfig{}
+	socialChannel := config.TextSocialChannelConfig{}
 	social := false
 
 	if c.config.SocialMode.Enabled {
@@ -735,8 +736,8 @@ func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCr
 	thinking := ""
 	publish := func(ctx context.Context, text, thinkingText string, complete, postText bool, attachments []events.OutboundAttachment) error {
 		outbound := events.NewMainOutboundMessage(events.SourceSystem, text, events.OutputTargetDiscordText)
-		outbound.SlackThinking = thinkingText
-		outbound.SlackPostText = postText
+		outbound.ProgressText = thinkingText
+		outbound.PostProgressText = postText
 		outbound.TurnID = turnID
 		outbound.Complete = complete
 		outbound.DiscordReply = &events.DiscordReplyTarget{ChannelID: reply.ChannelID, MessageID: reply.MessageID, ThreadID: reply.ThreadID}
@@ -797,7 +798,7 @@ func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCr
 func (c *Connector) publishOnDemandCronReply(ctx context.Context, reply *events.DiscordReplyTarget, text string, complete bool) {
 	outbound := events.NewMainOutboundMessage(events.SourceSystem, strings.TrimSpace(text), events.OutputTargetDiscordText)
 	outbound.Complete = complete
-	outbound.SlackPostText = !complete
+	outbound.PostProgressText = !complete
 	outbound.DiscordReply = &events.DiscordReplyTarget{ChannelID: reply.ChannelID, MessageID: reply.MessageID, ThreadID: reply.ThreadID}
 
 	if err := c.bus.PublishOutbound(ctx, outbound); err != nil {

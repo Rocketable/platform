@@ -129,8 +129,8 @@ type ResponseCheckpoint struct {
 
 // OutboundMessage is a text message headed to enabled connectors.
 type OutboundMessage struct {
-	Text, SlackThinking                  string
-	SlackPostText                        bool
+	Text, ProgressText                   string
+	PostProgressText                     bool
 	Source                               Source
 	Targets                              []OutputTarget
 	ConversationID, TurnID, WebSessionID string

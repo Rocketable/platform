@@ -187,7 +187,7 @@ func TestSendResponseSkipsThrottledThinking(t *testing.T) {
 	connector.progressTurn = "turn-1"
 	connector.progressAt = time.Now().Add(progressUtteranceInterval)
 
-	msg := &events.OutboundMessage{Source: events.SourceDiscordVoice, SlackThinking: "thinking", TurnID: "turn-1"}
+	msg := &events.OutboundMessage{Source: events.SourceDiscordVoice, ProgressText: "thinking", TurnID: "turn-1"}
 
 	require.NoError(t, connector.SendResponse(t.Context(), msg))
 }
@@ -223,7 +223,7 @@ func TestSendResponseSpeaksUnthrottledThinking(t *testing.T) {
 	wire := &fakeDiscordWire{}
 	connector.wire = wire
 
-	msg := &events.OutboundMessage{Source: events.SourceDiscordVoice, SlackThinking: "thinking", TurnID: "turn-1"}
+	msg := &events.OutboundMessage{Source: events.SourceDiscordVoice, ProgressText: "thinking", TurnID: "turn-1"}
 
 	require.NoError(t, connector.SendResponse(t.Context(), msg))
 

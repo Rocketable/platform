@@ -402,7 +402,7 @@ func TestValidateSlackSocialMode(t *testing.T) {
 	cfg.Slack.Room = "D123"
 	cfg.Slack.HumanUserID = "U123"
 	cfg.Slack.SocialMode.Enabled = true
-	cfg.Slack.SocialMode.Channels = []SlackSocialChannelConfig{
+	cfg.Slack.SocialMode.Channels = []TextSocialChannelConfig{
 		{Channel: " triage ", Agent: " planner ", AllowedUserIDs: []string{" U999 ", "", "U999"}},
 		{Channel: " #team ", Agent: " team ", AllowedUserIDs: []string{" U123 ", "", "U123", "U456"}},
 		{Channel: " ", Agent: "ignored"},
@@ -410,9 +410,9 @@ func TestValidateSlackSocialMode(t *testing.T) {
 	}
 
 	require.NoError(t, cfg.Validate())
-	assert.Equal(t, SlackSocialConfig{
+	assert.Equal(t, TextSocialConfig{
 		Enabled: true,
-		Channels: []SlackSocialChannelConfig{
+		Channels: []TextSocialChannelConfig{
 			{Channel: "#triage", Agent: "planner", AllowedUserIDs: []string{"U999"}},
 			{Channel: "#team", Agent: "team", AllowedUserIDs: []string{"U123", "U456"}},
 		},
@@ -455,7 +455,7 @@ func TestLoadMigratesSlackSocialChannelAgents(t *testing.T) {
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
-	assert.Equal(t, []SlackSocialChannelConfig{
+	assert.Equal(t, []TextSocialChannelConfig{
 		{Channel: "#triage", Agent: "new", AllowedUserIDs: []string{"U999"}},
 		{Channel: "#legacy", Agent: "old", AllowedUserIDs: []string{"U123"}},
 	}, cfg.Slack.SocialMode.Channels)
@@ -517,13 +517,13 @@ func TestLoadIgnoresStaleSlackSocialModeAgent(t *testing.T) {
 func TestValidateSlackSocialModeRejectsInvalidConfig(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
-		update  func(*SlackSocialConfig)
+		update  func(*TextSocialConfig)
 		wantErr string
 	}{
-		{name: "missing channel allowlist", update: func(s *SlackSocialConfig) {
-			s.Channels = []SlackSocialChannelConfig{{Channel: "#triage", Agent: "triage"}}
+		{name: "missing channel allowlist", update: func(s *TextSocialConfig) {
+			s.Channels = []TextSocialChannelConfig{{Channel: "#triage", Agent: "triage"}}
 		}, wantErr: "slack.social_mode.channels[].allowed_user_ids is required when slack social mode is enabled"},
-		{name: "negative context", update: func(s *SlackSocialConfig) { s.ContextMessages = -1 }, wantErr: "slack.social_mode.context_messages must be zero or greater"},
+		{name: "negative context", update: func(s *TextSocialConfig) { s.ContextMessages = -1 }, wantErr: "slack.social_mode.context_messages must be zero or greater"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()
@@ -532,7 +532,7 @@ func TestValidateSlackSocialModeRejectsInvalidConfig(t *testing.T) {
 			cfg.Slack.AppToken = "xapp-test"
 			cfg.Slack.Room = "D123"
 			cfg.Slack.HumanUserID = "U123"
-			cfg.Slack.SocialMode = SlackSocialConfig{Enabled: true, Channels: []SlackSocialChannelConfig{{Channel: "#triage", Agent: "triage", AllowedUserIDs: []string{"U123"}}}, ContextMessages: 10}
+			cfg.Slack.SocialMode = TextSocialConfig{Enabled: true, Channels: []TextSocialChannelConfig{{Channel: "#triage", Agent: "triage", AllowedUserIDs: []string{"U123"}}}, ContextMessages: 10}
 			tt.update(&cfg.Slack.SocialMode)
 
 			err := cfg.Validate()

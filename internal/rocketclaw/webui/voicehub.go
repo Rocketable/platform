@@ -209,7 +209,7 @@ func (h *voiceHub) SendResponse(ctx context.Context, msg *events.OutboundMessage
 		return nil
 	}
 
-	if msg.SlackThinking != "" && strings.TrimSpace(msg.Text) == "" {
+	if msg.ProgressText != "" && strings.TrimSpace(msg.Text) == "" {
 		session.enqueue(stateServerMessage("thinking", "Assistant is thinking."))
 		return nil
 	}

@@ -75,11 +75,11 @@ type DiscordVoiceConfig struct {
 
 // DiscordTextConfig configures the Discord text connector.
 type DiscordTextConfig struct {
-	Enabled     bool              `json:"enabled"`
-	Token       string            `json:"token"`
-	ChannelID   string            `json:"channel_id"`
-	HumanUserID string            `json:"human_user_id"`
-	SocialMode  SlackSocialConfig `json:"social_mode"`
+	Enabled     bool             `json:"enabled"`
+	Token       string           `json:"token"`
+	ChannelID   string           `json:"channel_id"`
+	HumanUserID string           `json:"human_user_id"`
+	SocialMode  TextSocialConfig `json:"social_mode"`
 }
 
 // MCPExternalConfig configures the persistent external MCP HTTP server.
@@ -99,23 +99,23 @@ type WebUIConfig struct {
 
 // SlackConfig configures the Slack DM connector.
 type SlackConfig struct {
-	Enabled     bool              `json:"enabled"`
-	BotToken    string            `json:"bot_token"`
-	AppToken    string            `json:"app_token"`
-	Room        string            `json:"room"`
-	HumanUserID string            `json:"human_user_id"`
-	SocialMode  SlackSocialConfig `json:"social_mode"`
+	Enabled     bool             `json:"enabled"`
+	BotToken    string           `json:"bot_token"`
+	AppToken    string           `json:"app_token"`
+	Room        string           `json:"room"`
+	HumanUserID string           `json:"human_user_id"`
+	SocialMode  TextSocialConfig `json:"social_mode"`
 }
 
-// SlackSocialConfig configures mention-triggered Slack channel threads.
-type SlackSocialConfig struct {
-	Enabled         bool                       `json:"enabled"`
-	Channels        []SlackSocialChannelConfig `json:"channels,omitempty"`
-	ContextMessages int                        `json:"context_messages"`
+// TextSocialConfig configures mention-triggered primary text channel conversations.
+type TextSocialConfig struct {
+	Enabled         bool                      `json:"enabled"`
+	Channels        []TextSocialChannelConfig `json:"channels,omitempty"`
+	ContextMessages int                       `json:"context_messages"`
 }
 
-// SlackSocialChannelConfig configures one Slack social-mode channel.
-type SlackSocialChannelConfig struct {
+// TextSocialChannelConfig configures one primary text social-mode channel.
+type TextSocialChannelConfig struct {
 	Channel        string   `json:"channel"`
 	Agent          string   `json:"agent"`
 	AllowedUserIDs []string `json:"allowed_user_ids,omitempty"`
@@ -280,7 +280,7 @@ func migrateSlackSocialChannelAgentsConfig(path string, data []byte) ([]byte, er
 		}
 	}
 
-	var channels []SlackSocialChannelConfig
+	var channels []TextSocialChannelConfig
 	if raw, ok := socialMode["channels"]; ok {
 		if err := json.Unmarshal(raw, &channels); err != nil {
 			return data, nil
@@ -307,7 +307,7 @@ func migrateSlackSocialChannelAgentsConfig(path string, data []byte) ([]byte, er
 			continue
 		}
 
-		channels = append(channels, SlackSocialChannelConfig{Channel: name, Agent: agent, AllowedUserIDs: slices.Clone(allowedUserIDs)})
+		channels = append(channels, TextSocialChannelConfig{Channel: name, Agent: agent, AllowedUserIDs: slices.Clone(allowedUserIDs)})
 		seen[name] = true
 	}
 
@@ -527,7 +527,7 @@ func (c *Config) validateDiscordText() error {
 		}
 	}
 
-	normalized := make([]SlackSocialChannelConfig, 0, len(c.DiscordText.SocialMode.Channels))
+	normalized := make([]TextSocialChannelConfig, 0, len(c.DiscordText.SocialMode.Channels))
 	for _, channel := range c.DiscordText.SocialMode.Channels {
 		channel.Channel, channel.Agent = strings.TrimSpace(channel.Channel), strings.TrimSpace(channel.Agent)
 
@@ -606,7 +606,7 @@ func (c *Config) validateSlack() error {
 		}
 	}
 
-	c.Slack.SocialMode.Channels = normalizeSlackSocialChannels(c.Slack.SocialMode.Channels)
+	c.Slack.SocialMode.Channels = normalizeTextSocialChannels(c.Slack.SocialMode.Channels)
 
 	if !c.Slack.SocialMode.Enabled {
 		return nil
@@ -629,8 +629,8 @@ func (c *Config) validateSlack() error {
 	return nil
 }
 
-func normalizeSlackSocialChannels(channels []SlackSocialChannelConfig) []SlackSocialChannelConfig {
-	normalized := make([]SlackSocialChannelConfig, 0, len(channels))
+func normalizeTextSocialChannels(channels []TextSocialChannelConfig) []TextSocialChannelConfig {
+	normalized := make([]TextSocialChannelConfig, 0, len(channels))
 	for _, channel := range channels {
 		channel.Channel = normalizeSlackSocialChannel(channel.Channel)
 		channel.Agent = strings.TrimSpace(channel.Agent)

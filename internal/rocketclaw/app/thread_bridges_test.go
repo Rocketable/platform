@@ -309,7 +309,7 @@ func TestThreadBridgeManagerRegistersCronThreadWithoutSubmitting(t *testing.T) {
 		return bridge
 	})
 
-	require.NoError(t, manager.RegisterCronThread(t.Context(), "C123", "111.222", "planner", "cron result"))
+	require.NoError(t, manager.RegisterCronThread(t.Context(), slackTarget("C123", "111.222"), "planner", "cron result"))
 
 	conversationID := harnessbridge.SlackThreadConversationID("C123", "111.222")
 	assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetSlackMain}}, created)
@@ -319,6 +319,24 @@ func TestThreadBridgeManagerRegistersCronThreadWithoutSubmitting(t *testing.T) {
 	state, err := store.Load()
 	require.NoError(t, err)
 	assert.Equal(t, harnessbridge.ThreadState{Agent: "planner"}, state.Threads[conversationID])
+}
+
+func TestThreadBridgeManagerRegistersDiscordCronThread(t *testing.T) {
+	store := newTestSessionService(t, t.TempDir())
+	bridge := new(fakeDirectBridge)
+
+	var created bridgeConfig
+
+	manager := newThreadBridgeManager(events.New(), &config.Config{DiscordText: config.DiscordTextConfig{Enabled: true}}, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
+		created = cfg
+		return bridge
+	})
+
+	require.NoError(t, manager.RegisterCronThread(t.Context(), events.TextConversationTarget{ThreadID: "T123"}, "planner", "cron result"))
+
+	conversationID := harnessbridge.DiscordThreadConversationID("T123")
+	assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetDiscordText}}, created)
+	assert.Equal(t, []string{"seed_cron:cron result"}, bridge.ops)
 }
 
 func TestThreadBridgeManagerRejectsMissingSlackThreadTarget(t *testing.T) {
@@ -434,7 +452,7 @@ func TestThreadBridgeManagerIgnoresUnmanagedThreadTargets(t *testing.T) {
 	}
 
 	err := manager.SubmitExternalMCP(context.Background(), "main", " ", newThreadInboundMessage("reply", "222.333", "111.222"))
-	require.ErrorContains(t, err, "slack thread conversation ID is required")
+	require.ErrorContains(t, err, "text thread conversation ID is required")
 	assert.Zero(t, created)
 }
 

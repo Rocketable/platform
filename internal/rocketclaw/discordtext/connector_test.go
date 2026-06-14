@@ -20,8 +20,8 @@ func TestSendResponseTypesAndRecordsCheckpoints(t *testing.T) {
 	router := newFakeThreadRouter()
 	connector := newTestConnector(fake, router)
 
-	require.NoError(t, connector.SendResponse(t.Context(), &events.OutboundMessage{TurnID: "turn-1", SlackThinking: "working", DiscordReply: &events.DiscordReplyTarget{ChannelID: "C123"}}))
-	require.NoError(t, connector.SendResponse(t.Context(), &events.OutboundMessage{TurnID: "turn-1", SlackThinking: "still working", DiscordReply: &events.DiscordReplyTarget{ChannelID: "C123"}}))
+	require.NoError(t, connector.SendResponse(t.Context(), &events.OutboundMessage{TurnID: "turn-1", ProgressText: "working", DiscordReply: &events.DiscordReplyTarget{ChannelID: "C123"}}))
+	require.NoError(t, connector.SendResponse(t.Context(), &events.OutboundMessage{TurnID: "turn-1", ProgressText: "still working", DiscordReply: &events.DiscordReplyTarget{ChannelID: "C123"}}))
 	assert.Equal(t, "working", fake.messages[0].send.Content)
 	assert.Equal(t, []string{"C123:M1:still working"}, fake.edited)
 
@@ -192,7 +192,7 @@ func TestHandleSocialMentionStartsConfiguredAgentThread(t *testing.T) {
 	fake.threadID = "T123"
 	router := newFakeThreadRouter()
 	connector := newTestConnector(fake, router)
-	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "S123", Agent: "triage", AllowedUserIDs: []string{"social-human"}}}}
+	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "S123", Agent: "triage", AllowedUserIDs: []string{"social-human"}}}}
 
 	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "S123", Content: "<@BOT> investigate", Author: &textUser{ID: "social-human"}}})
 
@@ -205,7 +205,7 @@ func TestHandleSocialMessageRequiresAllowedMention(t *testing.T) {
 	fake := newFakeDiscordClient()
 	fake.channels["S123"] = &textChannel{ID: "S123", Type: channelTypeGuildText}
 	connector := newTestConnector(fake, newFakeThreadRouter())
-	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "S123", Agent: "triage", AllowedUserIDs: []string{"social-human"}}}}
+	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "S123", Agent: "triage", AllowedUserIDs: []string{"social-human"}}}}
 
 	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "S123", Content: "<@BOT> denied", Author: &textUser{ID: "intruder"}}})
 	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U2", ChannelID: "S123", Content: "no mention", Author: &textUser{ID: "social-human"}}})
@@ -261,7 +261,7 @@ func TestHandleReactionAllowsSocialCronUser(t *testing.T) {
 	fake.reactionMessageContent = "🔂 daily"
 	runner := &fakeOneOffCronjobs{loaded: cronjob.OneOffCronjob{Agent: "cron", RelativePath: "cron/daily.md", SlackChannel: "S123"}, result: cronjob.RunResult{VerbatimMessage: "done"}}
 	connector := newTestConnector(fake, newFakeThreadRouter())
-	connector.config.SocialMode = config.SlackSocialConfig{Enabled: true, Channels: []config.SlackSocialChannelConfig{{Channel: "S123", Agent: "triage", AllowedUserIDs: []string{"social-human"}}}}
+	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "S123", Agent: "triage", AllowedUserIDs: []string{"social-human"}}}}
 	connector.oneOffCronjobs = runner
 
 	connector.handleReaction(t.Context(), &reactionAdd{UserID: "social-human", ChannelID: "S123", MessageID: "M1", Emoji: textEmoji{Name: discordRepeatOneEmoji}})
@@ -318,7 +318,8 @@ func TestHandleReactionIgnoresUnauthorizedCronReaction(t *testing.T) {
 func TestSendCronjobChannelThreadCreatesThreadAndPosts(t *testing.T) {
 	fake := newFakeDiscordClient()
 	fake.threadID = "T123"
-	connector := newTestConnector(fake, newFakeThreadRouter())
+	router := newFakeThreadRouter()
+	connector := newTestConnector(fake, router)
 
 	require.NoError(t, connector.SendCronjobChannelThread(t.Context(), "C123", "cron", "agent", "2026-06-02", "answer", []events.OutboundAttachment{{Name: "a.txt", Data: []byte("a")}}))
 
@@ -329,6 +330,7 @@ func TestSendCronjobChannelThreadCreatesThreadAndPosts(t *testing.T) {
 	assert.Equal(t, "T123", fake.messages[1].channelID)
 	assert.Equal(t, "answer", fake.messages[1].send.Content)
 	assert.Equal(t, []string{"T123"}, fake.attachments)
+	assert.Equal(t, "T123:agent:Cronjob cron ran at 2026-06-02 with agent agent.\n\nHuman-visible cron output:\nanswer\n\nAttached files: a.txt.", router.registeredCron)
 }
 
 func TestHandleResponseThreadReplyCreatesThread(t *testing.T) {
@@ -434,6 +436,7 @@ func (f *fakeDiscordClient) userID() string { return "BOT" }
 
 type fakeThreadRouter struct {
 	startedAgent, submittedThreadID, summarizedThreadID string
+	registeredCron                                      string
 	preparedResponse, submittedResponse                 string
 	startedPreSeed, submitThreadHandled, summaryHandled bool
 	prepareResponseHandled, submitResponseHandled       bool
@@ -457,6 +460,11 @@ func (f *fakeThreadRouter) StartThread(_ context.Context, agent string, preSeed 
 func (f *fakeThreadRouter) PrepareResponseThreadReply(target events.TextConversationTarget) (bool, error) {
 	f.preparedResponse = target.ChannelID + ":" + target.MessageID
 	return f.prepareResponseHandled, nil
+}
+
+func (f *fakeThreadRouter) PrepareThreadReply(target events.TextConversationTarget) (bool, error) {
+	_ = target
+	return false, nil
 }
 
 func (f *fakeThreadRouter) SubmitThreadReply(_ context.Context, target events.TextConversationTarget, inbound *events.InboundMessage) (bool, error) {
@@ -489,6 +497,11 @@ func (f *fakeThreadRouter) SummarizeThread(_ context.Context, target events.Text
 
 func (f *fakeThreadRouter) RecordResponseCheckpoint(target events.TextConversationTarget, _ events.ResponseCheckpoint) error {
 	f.recordedCheckpoints = append(f.recordedCheckpoints, target.ChannelID+":"+target.MessageID)
+	return nil
+}
+
+func (f *fakeThreadRouter) RegisterCronThread(_ context.Context, target events.TextConversationTarget, agent, seedText string) error {
+	f.registeredCron = target.ThreadID + ":" + agent + ":" + seedText
 	return nil
 }
 

@@ -92,7 +92,7 @@ type Connector struct {
 
 	emergencySafeWords []string
 	threadAgents       []threadAgent
-	threadRouter       ThreadRouter
+	threadRouter       harnessbridge.PrimaryTextRouter
 	oneOffCronjobs     oneOffCronjobRunner
 
 	api          *slack.Client
@@ -143,27 +143,13 @@ type threadAgent struct {
 	preSeed       bool
 }
 
-// ThreadRouter routes Slack thread messages directly to app-owned thread bridges.
-type ThreadRouter interface {
-	StartThread(ctx context.Context, agent string, preSeed bool, target events.TextConversationTarget, inbound *events.InboundMessage) error
-	StartGoalInThread(ctx context.Context, agent, objective, checkScript string, maxTurns int, target events.TextConversationTarget, inbound *events.InboundMessage) error
-	InterruptThread(target events.TextConversationTarget) (*events.InboundMessage, error)
-	RegisterCronThread(ctx context.Context, channelID, threadTS, agent, seedText string) error
-	PrepareThreadReply(target events.TextConversationTarget) (bool, error)
-	PrepareResponseThreadReply(target events.TextConversationTarget) (bool, error)
-	SubmitThreadReply(ctx context.Context, target events.TextConversationTarget, inbound *events.InboundMessage) (bool, error)
-	SubmitResponseThreadReply(ctx context.Context, target events.TextConversationTarget, inbound *events.InboundMessage) (bool, error)
-	SummarizeThread(ctx context.Context, target events.TextConversationTarget) (bool, error)
-	RecordResponseCheckpoint(target events.TextConversationTarget, checkpoint events.ResponseCheckpoint) error
-}
-
 type oneOffCronjobRunner interface {
 	LoadOneOffCronjob(string) (cronjob.OneOffCronjob, error)
 	RunOneOffCronjob(context.Context, cronjob.OneOffCronjob, *harnessbridge.RawRunProgress, func(context.Context, cronjob.RunResult, error))
 }
 
 // New constructs a Slack connector.
-func New(cfg *config.SlackConfig, bus *events.Bus, emergencySafeWords []string, threadAgents config.ThreadAgents, threadRouter ThreadRouter, oneOffCronjobs oneOffCronjobRunner, logger *slog.Logger) *Connector {
+func New(cfg *config.SlackConfig, bus *events.Bus, emergencySafeWords []string, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs oneOffCronjobRunner, logger *slog.Logger) *Connector {
 	api := slack.New(cfg.BotToken, slack.OptionAppLevelToken(cfg.AppToken), slack.OptionRetry(3))
 
 	return &Connector{
@@ -240,10 +226,10 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 		}
 	}
 
-	thinkingText := strings.TrimSpace(msg.SlackThinking)
+	thinkingText := strings.TrimSpace(msg.ProgressText)
 
 	switch {
-	case msg.Text != "" && (msg.Complete || msg.SlackPostText):
+	case msg.Text != "" && (msg.Complete || msg.PostProgressText):
 		chunks := splitSlackResponseText(msg.Text)
 
 		var (
@@ -273,7 +259,7 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 		}
 
 		channelID, threadTS := slackReplyDestination(c.config.Room, msg.SlackReply)
-		if msg.Complete && msg.Checkpoint != nil && threadTS == "" && c.threadRouter != nil {
+		if msg.Complete && msg.Checkpoint != nil && threadTS == "" {
 			for i := range posted {
 				if err := c.threadRouter.RecordResponseCheckpoint(events.TextConversationTarget{ChannelID: posted[i].ChannelID, MessageID: posted[i].MessageTS}, *msg.Checkpoint); err != nil {
 					return fmt.Errorf("record Slack response checkpoint: %w", err)
@@ -287,7 +273,7 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 
 	case thinkingText != "":
 		if ok {
-			c.bufferSlackThinking(msg.TurnID, slackReplyState{ChannelID: slots.ChannelID, MessageTS: slots.ThinkingTS}, thinkingText)
+			c.bufferProgressText(msg.TurnID, slackReplyState{ChannelID: slots.ChannelID, MessageTS: slots.ThinkingTS}, thinkingText)
 		} else {
 			channelID, threadTS := slackReplyDestination(c.config.Room, msg.SlackReply)
 
@@ -298,7 +284,7 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 
 			slots = slackReplySlots{ChannelID: postedChannelID, ThinkingTS: postedThinkingTS, AnswerTS: postedAnswerTS}
 			c.setReplyState(msg.TurnID, slots)
-			c.bufferSlackThinking(msg.TurnID, slackReplyState{ChannelID: slots.ChannelID, MessageTS: slots.ThinkingTS}, thinkingText)
+			c.bufferProgressText(msg.TurnID, slackReplyState{ChannelID: slots.ChannelID, MessageTS: slots.ThinkingTS}, thinkingText)
 		}
 	}
 
@@ -533,7 +519,7 @@ func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, rel
 		seedText += "\n\n" + names
 	}
 
-	if err := c.threadRouter.RegisterCronThread(ctx, postedChannelID, threadTS, agent, seedText); err != nil {
+	if err := c.threadRouter.RegisterCronThread(ctx, events.TextConversationTarget{ChannelID: postedChannelID, ThreadID: threadTS}, agent, seedText); err != nil {
 		return fmt.Errorf("register Slack cronjob thread: %w", err)
 	}
 
@@ -566,7 +552,7 @@ func (c *Connector) finishCompleteResponse(ctx context.Context, msg *events.Outb
 		c.deleteSlackMessage(ctx, slackReplyState{ChannelID: slots.ChannelID, MessageTS: slots.ThinkingTS}, "delete Slack thinking message")
 	}
 
-	c.clearSlackThinking(msg.TurnID)
+	c.clearProgressText(msg.TurnID)
 	c.clearReplyState(msg.TurnID)
 
 	if msg.SlackReply != nil && strings.TrimSpace(msg.SlackReply.ChannelID) != "" && strings.TrimSpace(msg.SlackReply.MessageTS) != "" {
@@ -669,7 +655,7 @@ func (c *Connector) sendExternalMCPRelay(ctx context.Context, channelID, threadT
 	return replyTarget, nil
 }
 
-func (c *Connector) bufferSlackThinking(turnID string, state slackReplyState, text string) {
+func (c *Connector) bufferProgressText(turnID string, state slackReplyState, text string) {
 	turnID = strings.TrimSpace(turnID)
 	if turnID == "" || strings.TrimSpace(text) == "" {
 		return
@@ -690,7 +676,7 @@ func (c *Connector) bufferSlackThinking(turnID string, state slackReplyState, te
 		pending.Timer.Reset(slackThinkingFlushInterval)
 	} else {
 		pending.Timer = time.AfterFunc(slackThinkingFlushInterval, func() {
-			if err := c.flushSlackThinking(context.Background(), turnID); err != nil && c.log != nil {
+			if err := c.flushProgressText(context.Background(), turnID); err != nil && c.log != nil {
 				c.log.Warn("flush Slack thinking update", "turn_id", turnID, "error", err)
 			}
 		})
@@ -710,7 +696,7 @@ func (c *Connector) addGoalCompleteReactions(ctx context.Context, channelID, thr
 	}
 }
 
-func (c *Connector) flushSlackThinking(ctx context.Context, turnID string) error {
+func (c *Connector) flushProgressText(ctx context.Context, turnID string) error {
 	turnID = strings.TrimSpace(turnID)
 	if turnID == "" {
 		return nil
@@ -758,7 +744,7 @@ func (c *Connector) flushSlackThinking(ctx context.Context, turnID string) error
 	return nil
 }
 
-func (c *Connector) clearSlackThinking(turnID string) {
+func (c *Connector) clearProgressText(turnID string) {
 	turnID = strings.TrimSpace(turnID)
 	if turnID == "" {
 		return
@@ -1943,8 +1929,8 @@ func (c *Connector) runOnDemandCron(ctx context.Context, log *slog.Logger, loade
 	thinking := ""
 	publish := func(ctx context.Context, text, thinkingText string, complete, postText bool, attachments []events.OutboundAttachment) error {
 		outbound := events.NewMainOutboundMessage(events.SourceSystem, text, events.OutputTargetSlackMain)
-		outbound.SlackThinking = thinkingText
-		outbound.SlackPostText = postText
+		outbound.ProgressText = thinkingText
+		outbound.PostProgressText = postText
 		outbound.TurnID = turnID
 		outbound.Complete = complete
 		outbound.SlackReply = cloneSlackReplyTarget(replyTarget)
@@ -2014,7 +2000,7 @@ func (c *Connector) publishOnDemandCronReply(ctx context.Context, replyTarget *e
 
 	outbound := events.NewMainOutboundMessage(events.SourceSystem, text, events.OutputTargetSlackMain)
 	outbound.Complete = complete
-	outbound.SlackPostText = !complete
+	outbound.PostProgressText = !complete
 	outbound.SlackReply = cloneSlackReplyTarget(replyTarget)
 
 	if err := c.bus.PublishOutbound(ctx, outbound); err != nil {

@@ -1869,7 +1869,7 @@ func (b *Bridge) newOutboundMessage(msg *events.InboundMessage, turnID string, s
 	}
 
 	outbound := events.NewMainOutboundMessage(source, text, b.config.OutputTargets...)
-	outbound.SlackThinking = thinking
+	outbound.ProgressText = thinking
 	outbound.ConversationID = b.config.ConversationID
 	outbound.TurnID = turnID
 	outbound.Sequence = sequence

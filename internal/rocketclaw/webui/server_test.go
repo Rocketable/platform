@@ -721,7 +721,7 @@ func TestVoiceHubSendResponseStatusMessages(t *testing.T) {
 
 	thinking := events.NewMainOutboundMessage(events.SourceWebVoice, "", events.OutputTargetWebUI)
 	thinking.WebSessionID = session.id
-	thinking.SlackThinking = "working"
+	thinking.ProgressText = "working"
 	require.NoError(t, hub.SendResponse(t.Context(), thinking))
 	assert.Equal(t, stateServerMessage("thinking", "Assistant is thinking."), readQueuedServerMessage(t, session.send))
 
