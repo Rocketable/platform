@@ -32,7 +32,7 @@ func TestStartSessionPromptServerCallsHandler(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	result := callSessionPrompt(t, server.URL(), "", "", "", "what now?", nil)
+	result := callSessionPrompt(t, server.url, "", "", "", "what now?", nil)
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Equal(t, "plain text reply", content.Text)
@@ -53,7 +53,7 @@ func TestStartSessionPromptServerReturnsExternalConversationID(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	result := callSessionPrompt(t, server.URL(), "", "", "planner", "what now?", map[string]string{"ticket-id": "123"})
+	result := callSessionPrompt(t, server.url, "", "", "planner", "what now?", map[string]string{"ticket-id": "123"})
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Equal(t, "planner reply", content.Text)
@@ -71,7 +71,7 @@ func TestStartSessionPromptServerPassesSlackChannel(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	result := callTool(t, server.URL(), "", "", map[string]any{"input": "what now?", "slack_channel": " #triage "})
+	result := callTool(t, server.url, "", "", map[string]any{"input": "what now?", "slack_channel": " #triage "})
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Equal(t, "plain text reply", content.Text)
@@ -91,7 +91,7 @@ func TestStartSessionPromptServerPassesAttachments(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	result := callTool(t, server.URL(), "", "", map[string]any{
+	result := callTool(t, server.url, "", "", map[string]any{
 		"input": "look",
 		"attachments": []map[string]any{{
 			"name":        "scorecard.png",
@@ -115,7 +115,7 @@ func TestStartSessionPromptServerReturnsAttachments(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	result := callSessionPrompt(t, server.URL(), "", "", "", "return attachments", nil)
+	result := callSessionPrompt(t, server.url, "", "", "", "return attachments", nil)
 	require.Len(t, result.Content, 3)
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
@@ -150,7 +150,7 @@ func TestStartSessionPromptServerContinuesSession(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	result := callSessionPromptWithExternalConversationID(t, server.URL(), "external_mcp:planner:abc", "follow up", nil)
+	result := callSessionPromptWithExternalConversationID(t, server.url, "external_mcp:planner:abc", "follow up", nil)
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Equal(t, "continued reply", content.Text)
@@ -170,7 +170,7 @@ func TestStartSessionPromptServerExposesMetadataSchema(t *testing.T) {
 	implementation.Version = "1.0.0"
 	client := mcp.NewClient(implementation, nil)
 	transport := new(mcp.StreamableClientTransport)
-	transport.Endpoint = server.URL()
+	transport.Endpoint = server.url
 	transport.DisableStandaloneSSE = true
 	session, err := client.Connect(t.Context(), transport, nil)
 	require.NoError(t, err)
@@ -241,7 +241,7 @@ func TestStartSessionPromptServerRequiresBasicAuth(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL(), bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.url, bytes.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
@@ -253,7 +253,7 @@ func TestStartSessionPromptServerRequiresBasicAuth(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	assert.Equal(t, `Basic realm="rocketclaw external mcp"`, resp.Header.Get("WWW-Authenticate"))
 
-	result := callSessionPrompt(t, server.URL(), "alice", "secret", "", "what now?", nil)
+	result := callSessionPrompt(t, server.url, "alice", "secret", "", "what now?", nil)
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Equal(t, "plain text reply", content.Text)
@@ -265,8 +265,7 @@ func TestServerAccessorsAndClose(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, "external_mcp", server.Name())
-	assert.NotEmpty(t, server.URL())
+	assert.NotEmpty(t, server.url)
 	require.NoError(t, server.Stop(context.Background()))
 	require.NoError(t, server.Close(context.Background()))
 }

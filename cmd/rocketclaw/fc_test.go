@@ -21,9 +21,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func fcSessionDBPath(workspace string) string {
+	return filepath.Join(workspace, config.DefaultWorkDir, "state.sqlite3")
+}
+
+func fcAppendSessionEntryID(ctx context.Context, workspace, conversationID string, entry *rocketcode.SessionEntry) (int64, error) {
+	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultWorkDir)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = service.Stop(ctx) }()
+	return service.AppendEntryID(ctx, conversationID, entry)
+}
+
 func TestWriteFCListIncludesLastMessages(t *testing.T) {
 	workspace := t.TempDir()
-	_, err := harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "main", fcTestEntry("hello", "hi there"))
+	_, err := fcAppendSessionEntryID(t.Context(), workspace, "main", fcTestEntry("hello", "hi there"))
 	require.NoError(t, err)
 
 	var out bytes.Buffer
@@ -38,9 +51,9 @@ func TestWriteFCListIncludesLastMessages(t *testing.T) {
 
 func TestWriteFCObserveDefaultsToMain(t *testing.T) {
 	workspace := t.TempDir()
-	_, err := harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "main", fcTestEntry("main user", "main assistant"))
+	_, err := fcAppendSessionEntryID(t.Context(), workspace, "main", fcTestEntry("main user", "main assistant"))
 	require.NoError(t, err)
-	_, err = harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "thread", fcTestEntry("thread user", "thread assistant"))
+	_, err = fcAppendSessionEntryID(t.Context(), workspace, "thread", fcTestEntry("thread user", "thread assistant"))
 	require.NoError(t, err)
 
 	var out bytes.Buffer
@@ -52,7 +65,7 @@ func TestWriteFCObserveDefaultsToMain(t *testing.T) {
 
 func TestWriteFCObserveFollowEmitsLaterRows(t *testing.T) {
 	workspace := t.TempDir()
-	_, err := harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "main", fcTestEntry("later user", "later assistant"))
+	_, err := fcAppendSessionEntryID(t.Context(), workspace, "main", fcTestEntry("later user", "later assistant"))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -65,9 +78,9 @@ func TestWriteFCObserveFollowEmitsLaterRows(t *testing.T) {
 
 func TestRunFCObserveSelectsConversation(t *testing.T) {
 	workspace := t.TempDir()
-	_, err := harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "main", fcTestEntry("main user", "main assistant"))
+	_, err := fcAppendSessionEntryID(t.Context(), workspace, "main", fcTestEntry("main user", "main assistant"))
 	require.NoError(t, err)
-	_, err = harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "thread", fcTestEntry("thread user", "thread assistant"))
+	_, err = fcAppendSessionEntryID(t.Context(), workspace, "thread", fcTestEntry("thread user", "thread assistant"))
 	require.NoError(t, err)
 
 	var out bytes.Buffer
@@ -99,7 +112,7 @@ func TestRunFCListLoadsConfig(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, os.Chdir(cwd)) })
 
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, defaultConfigPath), []byte(fcTestConfigJSON()), 0o600))
-	_, err = harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "main", fcTestEntry("hello", "hi"))
+	_, err = fcAppendSessionEntryID(t.Context(), workspace, "main", fcTestEntry("hello", "hi"))
 	require.NoError(t, err)
 
 	output := captureStdout(t, func() error { return runFC([]string{"list"}) })
@@ -109,9 +122,9 @@ func TestRunFCListLoadsConfig(t *testing.T) {
 func TestRunFCListFiltersSinceDuration(t *testing.T) {
 	workspace := t.TempDir()
 	now := time.Now().UTC()
-	_, err := harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "old", fcTestEntryAt(now.Add(-48*time.Hour), "old user", "assistant"))
+	_, err := fcAppendSessionEntryID(t.Context(), workspace, "old", fcTestEntryAt(now.Add(-48*time.Hour), "old user", "assistant"))
 	require.NoError(t, err)
-	_, err = harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "recent", fcTestEntryAt(now.Add(-time.Hour), "recent user", "assistant"))
+	_, err = fcAppendSessionEntryID(t.Context(), workspace, "recent", fcTestEntryAt(now.Add(-time.Hour), "recent user", "assistant"))
 	require.NoError(t, err)
 
 	var out bytes.Buffer
@@ -124,11 +137,11 @@ func TestRunFCListFiltersRFC3339Range(t *testing.T) {
 	workspace := t.TempDir()
 	since := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
 	until := since.Add(24 * time.Hour)
-	_, err := harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "before", fcTestEntryAt(since.Add(-time.Second), "before user", "assistant"))
+	_, err := fcAppendSessionEntryID(t.Context(), workspace, "before", fcTestEntryAt(since.Add(-time.Second), "before user", "assistant"))
 	require.NoError(t, err)
-	_, err = harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "inside", fcTestEntryAt(since.Add(time.Hour), "inside user", "assistant"))
+	_, err = fcAppendSessionEntryID(t.Context(), workspace, "inside", fcTestEntryAt(since.Add(time.Hour), "inside user", "assistant"))
 	require.NoError(t, err)
-	_, err = harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "until", fcTestEntryAt(until, "until user", "assistant"))
+	_, err = fcAppendSessionEntryID(t.Context(), workspace, "until", fcTestEntryAt(until, "until user", "assistant"))
 	require.NoError(t, err)
 
 	var out bytes.Buffer
@@ -142,7 +155,7 @@ func TestRunFCListLimitUsesMostRecent(t *testing.T) {
 	workspace := t.TempDir()
 	base := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
 	for i, conversationID := range []string{"old", "middle", "new"} {
-		_, err := harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), conversationID, fcTestEntryAt(base.Add(time.Duration(i)*time.Hour), conversationID+" user", "assistant"))
+		_, err := fcAppendSessionEntryID(t.Context(), workspace, conversationID, fcTestEntryAt(base.Add(time.Duration(i)*time.Hour), conversationID+" user", "assistant"))
 		require.NoError(t, err)
 	}
 
@@ -155,7 +168,7 @@ func TestRunFCListLimitUsesMostRecent(t *testing.T) {
 
 func TestRunFCListNoMessagePreviewOmitsPreviewColumns(t *testing.T) {
 	workspace := t.TempDir()
-	_, err := harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "main", fcTestEntry("hidden user", "hidden assistant"))
+	_, err := fcAppendSessionEntryID(t.Context(), workspace, "main", fcTestEntry("hidden user", "hidden assistant"))
 	require.NoError(t, err)
 
 	var out bytes.Buffer
@@ -189,12 +202,7 @@ func TestRunFCDispatchesConfigBackedCommands(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(fcTestConfigJSON()), 0o600))
-	_, err := harnessbridge.AppendSessionEntryID(
-		t.Context(),
-		harnessbridge.SessionDBPath(workspace),
-		"main",
-		fcTestEntry("dispatch user", "dispatch assistant"),
-	)
+	_, err := fcAppendSessionEntryID(t.Context(), workspace, "main", fcTestEntry("dispatch user", "dispatch assistant"))
 	require.NoError(t, err)
 
 	output := captureStdout(t, func() error { return runFC([]string{"observe", "main"}) })
@@ -274,20 +282,20 @@ func TestRunFCDeleteRejectsBadFlag(t *testing.T) {
 
 func TestRunFCDeleteDeletesOnlyTarget(t *testing.T) {
 	workspace := t.TempDir()
-	_, err := harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "main", fcTestEntry("main user", "main assistant"))
+	_, err := fcAppendSessionEntryID(t.Context(), workspace, "main", fcTestEntry("main user", "main assistant"))
 	require.NoError(t, err)
-	_, err = harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "thread", fcTestEntry("thread user", "thread assistant"))
+	_, err = fcAppendSessionEntryID(t.Context(), workspace, "thread", fcTestEntry("thread user", "thread assistant"))
 	require.NoError(t, err)
 
 	var out bytes.Buffer
 	require.NoError(t, runFCDeleteIn(workspace, config.DefaultWorkDir, []string{"main"}, &out))
 	assert.Contains(t, out.String(), "deleted 1 turns")
 
-	mainEntries, err := harnessbridge.ObserveSessionEntries(t.Context(), harnessbridge.SessionDBPath(workspace), "main", 0)
+	mainEntries, err := harnessbridge.ObserveSessionEntries(t.Context(), fcSessionDBPath(workspace), "main", 0)
 	require.NoError(t, err)
 	assert.Empty(t, mainEntries)
 
-	threadEntries, err := harnessbridge.ObserveSessionEntries(t.Context(), harnessbridge.SessionDBPath(workspace), "thread", 0)
+	threadEntries, err := harnessbridge.ObserveSessionEntries(t.Context(), fcSessionDBPath(workspace), "thread", 0)
 	require.NoError(t, err)
 	assert.Len(t, threadEntries, 1)
 }
@@ -325,7 +333,7 @@ func TestWriteFCListReportsWorkspaceErrors(t *testing.T) {
 
 func TestWriteFCObserveReportsWriterErrors(t *testing.T) {
 	workspace := t.TempDir()
-	_, err := harnessbridge.AppendSessionEntryID(t.Context(), harnessbridge.SessionDBPath(workspace), "main", fcTestEntry("hello", "hi"))
+	_, err := fcAppendSessionEntryID(t.Context(), workspace, "main", fcTestEntry("hello", "hi"))
 	require.NoError(t, err)
 
 	err = writeFCObserveIn(t.Context(), workspace, config.DefaultWorkDir, "main", false, time.Millisecond, failingWriter{})

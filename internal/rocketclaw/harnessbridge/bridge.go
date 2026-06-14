@@ -68,6 +68,8 @@ const (
 
 var errBridgeStopped = errors.New("bridge stopped")
 
+var errTurnInterrupted = errors.New("rocketcode turn interrupted")
+
 var errInboundAttachmentReductionFailed = errors.New("inbound attachment image reduction failed")
 
 var errInboundAttachmentReductionNotEnough = errors.New("inbound attachment image still exceeds size limit after reduction")
@@ -93,15 +95,19 @@ type Config struct {
 
 // Bridge forwards rocketclaw messages into one turn-lived rocketcode run per turn.
 type Bridge struct {
-	log               *slog.Logger
-	config            Config
-	runtime           *config.Config
-	bus               *events.Bus
-	inputStop         context.CancelFunc
-	requestCh         chan bridgeRequest
-	stopCh            chan struct{}
-	mu                sync.Mutex
-	handling, stopped bool
+	log       *slog.Logger
+	config    Config
+	runtime   *config.Config
+	bus       *events.Bus
+	inputStop context.CancelFunc
+	requestCh chan bridgeRequest
+	stopCh    chan struct{}
+
+	mu                    sync.Mutex
+	handling, stopped     bool
+	activeSlackReply      *events.SlackReplyTarget
+	activeTurnInterrupts  chan os.Signal
+	activeTurnInterrupted bool
 }
 
 type bridgeRequest struct {
@@ -277,6 +283,28 @@ func (b *Bridge) Submit(ctx context.Context, msg *events.InboundMessage) error {
 	msg.ConversationID = b.config.ConversationID
 
 	return b.enqueue(ctx, bridgeRequest{inbound: msg}, "submit inbound message")
+}
+
+// InterruptActiveTurn interrupts current work and clears queued work for this bridge.
+func (b *Bridge) InterruptActiveTurn() *events.SlackReplyTarget {
+	b.mu.Lock()
+	reply := b.activeSlackReply
+	interrupts := b.activeTurnInterrupts
+	b.activeTurnInterrupted = b.activeTurnInterrupted || interrupts != nil
+	b.mu.Unlock()
+
+	select {
+	case interrupts <- os.Interrupt:
+	default:
+	}
+
+	for {
+		select {
+		case <-b.requestCh:
+		default:
+			return reply
+		}
+	}
 }
 
 // Summarize asks the conversation to produce a short summary.
@@ -646,11 +674,7 @@ func (b *Bridge) loop(ctx context.Context) {
 	}
 }
 
-func (b *Bridge) setHandling(handling bool) {
-	b.mu.Lock()
-	b.handling = handling
-	b.mu.Unlock()
-}
+func (b *Bridge) setHandling(handling bool) { b.mu.Lock(); b.handling = handling; b.mu.Unlock() }
 
 func (b *Bridge) handleSummary(_ context.Context, request *summaryRequest) {
 	result, err := b.runTurn(request.ctx, events.NewMainInboundMessage(events.SourceSystem, events.InboundKindPrompt, "", request.prompt, false), fmt.Sprintf("turn-%d", time.Now().UnixNano()), false)
@@ -712,6 +736,14 @@ func (b *Bridge) handleInbound(ctx context.Context, msg *events.InboundMessage) 
 
 	result, errTurn = b.runTurn(ctx, msg, turnID, publish)
 	if errTurn != nil {
+		if errors.Is(errTurn, errTurnInterrupted) {
+			result = runResult{turnID: turnID}
+			errPublish := b.publishFinal(ctx, msg, result, publish)
+			errLog = errors.Join(errTurn, errPublish)
+
+			return errPublish
+		}
+
 		b.log.Error("run rocketcode turn", "error", errTurn)
 
 		if !publish {
@@ -819,13 +851,12 @@ func (b *Bridge) finishGoalTurn(ctx context.Context, msg *events.InboundMessage)
 		return nil
 	}
 
-	if strings.TrimSpace(goalBefore.Status) != GoalStatusActive {
-		return nil
-	}
-
-	goal, ok, err := b.config.SessionService.AccountGoalTurn(b.config.ConversationID)
-	if err != nil {
-		return fmt.Errorf("account goal turn: %w", err)
+	goal := goalBefore
+	if msg.Label == goalKickoffLabel || msg.Label == goalContinuationLabel {
+		goal, ok, err = b.config.SessionService.AccountGoalTurn(b.config.ConversationID)
+		if err != nil {
+			return fmt.Errorf("account goal turn: %w", err)
+		}
 	}
 
 	if !ok || strings.TrimSpace(goal.Status) != GoalStatusActive {
@@ -836,7 +867,7 @@ func (b *Bridge) finishGoalTurn(ctx context.Context, msg *events.InboundMessage)
 }
 
 func (b *Bridge) enqueueGoalContinuation(ctx context.Context, goal *GoalState, msg *events.InboundMessage) error {
-	inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindPrompt, goalContinuationLabel, goalContinuationPrompt(goal), false)
+	inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindPrompt, goalContinuationLabel, "Continue the active goal loop.\n\n"+goalSteeringPrompt(goal), false)
 
 	inbound.ConversationID = b.config.ConversationID
 	if msg != nil && msg.SlackReply != nil {
@@ -962,6 +993,20 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 	output := make(chan rocketcode.ChatResponse, 128)
 	interrupts := make(chan os.Signal, 1)
 
+	b.mu.Lock()
+	b.activeSlackReply = msg.SlackReply
+	b.activeTurnInterrupts = interrupts
+	b.activeTurnInterrupted = false
+	b.mu.Unlock()
+
+	defer func() {
+		b.mu.Lock()
+		b.activeSlackReply = nil
+		b.activeTurnInterrupts = nil
+		b.activeTurnInterrupted = false
+		b.mu.Unlock()
+	}()
+
 	prompt, err := b.buildPrompt(msg)
 	if err != nil {
 		return runResult{}, err
@@ -1030,7 +1075,17 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		}
 	}
 
-	if err := group.Wait(); err != nil {
+	err = group.Wait()
+
+	b.mu.Lock()
+	interrupted := b.activeTurnInterrupted
+	b.mu.Unlock()
+
+	if interrupted {
+		return result, errTurnInterrupted
+	}
+
+	if err != nil {
 		b.log.Info("rocketcode looper returned", "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(looperStarted).Milliseconds(), "error", err)
 		return result, fmt.Errorf("run rocketcode turn: %w", err)
 	}
@@ -1647,7 +1702,7 @@ func updateGoalTool(b *Bridge) rocketcode.Tool {
 	store := b.config.SessionService
 	conversationID := b.config.ConversationID
 
-	return rocketcode.Tool{Name: updateGoalToolName, Description: "Update the active RocketClaw goal loop status for this conversation. Use complete when the goal is achieved, blocked when progress cannot continue, or paused when continuation should stop for now.", Permission: "rocketclaw", VisibilitySubjects: []string{updateGoalToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{updateGoalToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"status": map[string]any{"type": "string", "enum": []string{GoalStatusComplete, GoalStatusBlocked, GoalStatusPaused}}, "note": map[string]any{"type": "string"}}, "required": []string{"status"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+	return rocketcode.Tool{Name: updateGoalToolName, Description: "Update the active RocketClaw goal loop status for this conversation. Use complete when the goal is achieved or blocked when progress cannot continue.", Permission: "rocketclaw", VisibilitySubjects: []string{updateGoalToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{updateGoalToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"status": map[string]any{"type": "string", "enum": []string{GoalStatusComplete, GoalStatusBlocked}}, "note": map[string]any{"type": "string"}}, "required": []string{"status"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		var input struct {
 			Status string `json:"status"`
 			Note   string `json:"note"`
@@ -2010,11 +2065,7 @@ func goalSteeringPrompt(goal *GoalState) string {
 		prompt += "\n\nCompletion check command:\n" + checkScript + "\n\nCalling rocketclaw_update_goal with status complete runs the check command. If the check fails, use the returned failure output to continue working instead of declaring done."
 	}
 
-	return prompt + "\n\nContinue making concrete progress toward the objective. When the objective is achieved, call rocketclaw_update_goal with status complete. If progress cannot continue, call rocketclaw_update_goal with status blocked. If the loop should stop for now, call rocketclaw_update_goal with status paused."
-}
-
-func goalContinuationPrompt(goal *GoalState) string {
-	return "Continue the active goal loop.\n\n" + goalSteeringPrompt(goal)
+	return prompt + "\n\nContinue making concrete progress toward the objective. When the objective is achieved, call rocketclaw_update_goal with status complete. If progress cannot continue, call rocketclaw_update_goal with status blocked."
 }
 
 func externalMCPMetadataEnv(conversationID string, metadata map[string]string) map[string]string {

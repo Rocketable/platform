@@ -34,6 +34,30 @@ func prepareSessionDBPath(workspace string) error {
 	return prepareSessionDBPathIn(workspace, config.DefaultWorkDir)
 }
 
+func AppendSessionEntryID(ctx context.Context, dbPath, conversationID string, entry *harness.SessionEntry) (int64, error) {
+	if entry == nil {
+		return 0, errors.New("rocketcode session entry is required")
+	}
+
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		conversationID = mainConversationID
+	}
+
+	if err := prepareSessionDBPathIn(filepath.Dir(filepath.Dir(dbPath)), filepath.Base(filepath.Dir(dbPath))); err != nil {
+		return 0, err
+	}
+
+	db, err := openSessionDB(ctx, dbPath)
+	if err != nil {
+		return 0, err
+	}
+
+	defer func() { _ = db.Close() }()
+
+	return appendSessionEntryDB(ctx, db, conversationID, entry)
+}
+
 func DeleteSession(ctx context.Context, workspace, conversationID string) (int64, error) {
 	return DeleteSessionIn(ctx, workspace, config.DefaultWorkDir, conversationID)
 }
@@ -125,6 +149,35 @@ func TestSessionServiceBeginGoalPersistsCheckScript(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Empty(t, goal.CheckScript)
+}
+
+func TestSessionServiceBeginGoalRejectsActiveGoal(t *testing.T) {
+	store := newTestSessionService(t)
+
+	require.NoError(t, store.BeginGoal("thread-1", "first", "", 3))
+	err := store.BeginGoal("thread-1", "second", "", 3)
+	require.ErrorIs(t, err, ErrGoalAlreadyActive)
+
+	goal, ok, err := store.Goal("thread-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "first", goal.Objective)
+}
+
+func TestSessionServiceBeginGoalAllowsGoalAfterTerminal(t *testing.T) {
+	store := newTestSessionService(t)
+
+	require.NoError(t, store.BeginGoal("thread-1", "first", "", 3))
+	_, err := store.UpdateGoalStatus("thread-1", GoalStatusComplete, "done")
+	require.NoError(t, err)
+	require.NoError(t, store.BeginGoal("thread-1", "second", "./check.sh", 1))
+
+	goal, ok, err := store.Goal("thread-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "second", goal.Objective)
+	assert.Equal(t, GoalStatusActive, goal.Status)
+	assert.Equal(t, 0, goal.TurnsUsed)
 }
 
 func TestSessionServiceAppliesPendingRestartNotificationsOnce(t *testing.T) {
@@ -303,7 +356,7 @@ func TestAppendSessionEntryIDDefaultsBlankConversationID(t *testing.T) {
 func TestSessionDBPathReturnsWorkspaceSessionDB(t *testing.T) {
 	workspace := t.TempDir()
 
-	assert.Equal(t, filepath.Join(workspace, ".rocketclaw", "state.sqlite3"), SessionDBPath(workspace))
+	assert.Equal(t, filepath.Join(workspace, ".rocketclaw", "state.sqlite3"), sessionDBPath(workspace))
 }
 
 func TestSessionDBPathInUsesWorkDir(t *testing.T) {
@@ -312,7 +365,7 @@ func TestSessionDBPathInUsesWorkDir(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop(t.Context())) })
 
-	assert.Equal(t, filepath.Join(workspace, ".femtoclaw", "state.sqlite3"), SessionDBPathIn(workspace, ".femtoclaw"))
+	assert.Equal(t, filepath.Join(workspace, ".femtoclaw", "state.sqlite3"), sessionDBPathIn(workspace, ".femtoclaw"))
 	assert.FileExists(t, filepath.Join(workspace, ".femtoclaw", "state.sqlite3"))
 	assert.NoDirExists(t, filepath.Join(workspace, ".rocketclaw"))
 }

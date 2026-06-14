@@ -94,7 +94,7 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 | `rocketclaw_restart`                          | Schedules graceful restart for approved runtime config/asset changes.                                                         |
 | `rocketclaw_schedule_message`                 | Schedules one-shot delayed prompts or recurring delayed prompts through the owning bridge context. Recurring prompts use optional `recurring: true`, require `send_this_in` from 1m through 1h, persist until reset, and do not replay missed intervals. |
 | `rocketclaw_reset_scheduled_messages`         | Clears scheduled messages for the owning bridge context.                                                                      |
-| `rocketclaw_update_goal`                       | Persistent bridge tool visible only when the owning conversation has an active Slack goal loop; sets the goal status to `complete`, `blocked`, or `paused` with an optional note. |
+| `rocketclaw_update_goal`                       | Persistent bridge tool visible only when the owning conversation has an active Slack goal loop; sets the goal status to `complete` or `blocked` with an optional note. |
 | `rocketclaw_attach_files_to_response`         | Persistent bridge tool that allows RocketCode to attach collected files to the outbound response through the shared outbound attachment carrier.                              |
 | `rocketclaw_i_want_human_partner_to_see_this` | Required completion tool for raw background runs; its argument is the exact human-visible final message or empty for silence. |
 
@@ -104,7 +104,7 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 
 - When a persistent bridge conversation has an active Slack goal loop, RocketClaw may add goal steering to the turn prompt.
 - Goal steering includes the persisted objective and current turn-budget state.
-- Goal steering instructs the agent to keep making progress until it can mark the goal `complete`, `blocked`, or `paused` through `rocketclaw_update_goal`.
+- Goal steering instructs the agent to keep making progress until it can mark the goal `complete` or `blocked` through `rocketclaw_update_goal`.
 - Goal-loop human objectives and continuation text remain persistent-bridge input and do not enable shell interpolation.
 
 ### Session And Replay
@@ -171,3 +171,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-12: Specified shared inbound attachment normalization for Slack and external MCP before persistent RocketCode prompt construction.
 - 2026-06-12: Specified shared outbound response attachment values for connector delivery and external MCP result rendering.
 - 2026-06-12: Replaced RocketClaw-configured global guardrail with RocketCode per-target-agent `guardrail` frontmatter and explicit guardrail request messages.
+- 2026-06-14: Removed `paused` from the active goal-update tool and goal-steering contract.

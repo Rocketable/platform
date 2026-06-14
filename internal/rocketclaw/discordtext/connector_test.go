@@ -168,20 +168,6 @@ func TestHandleReactionIgnoresUnauthorizedCronReaction(t *testing.T) {
 	assert.Empty(t, runner.targets)
 }
 
-func TestSendRelayPostsToConfiguredChannel(t *testing.T) {
-	fake := newFakeDiscordClient()
-	connector := newTestConnector(fake, newFakeThreadRouter())
-
-	reply, err := connector.SendRelay(t.Context(), "relay", []events.OutboundAttachment{{Name: "a.txt", Data: []byte("a")}})
-	require.NoError(t, err)
-	require.NotNil(t, reply)
-
-	require.Len(t, fake.messages, 1)
-	assert.Equal(t, "C123", fake.messages[0].channelID)
-	assert.Equal(t, "relay", fake.messages[0].send.Content)
-	assert.Equal(t, []string{"C123"}, fake.attachments)
-}
-
 func TestSendCronjobChannelThreadCreatesThreadAndPosts(t *testing.T) {
 	fake := newFakeDiscordClient()
 	fake.threadID = "T123"

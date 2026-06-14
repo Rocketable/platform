@@ -243,8 +243,6 @@ func TestNewConnectorInstallsInertRuntimeDependencies(t *testing.T) {
 
 	c := New(&config.SlackConfig{BotToken: "xoxb-test", AppToken: "xapp-test"}, bus, nil, nil, inertThreadRouter{}, inertOneOffCronjobs{}, testLogger())
 
-	assert.Equal(t, "slack", c.Name())
-
 	handled, err := c.threadRouter.PrepareThreadReply(t.Context(), "D123", "111.222")
 	require.NoError(t, err)
 	assert.False(t, handled)
@@ -3018,6 +3016,90 @@ func TestHandleMessageEventConsumesGoalStartRejectionPlaceholder(t *testing.T) {
 	assert.False(t, connector.hasPendingState(&events.SlackReplyTarget{ChannelID: "D123", MessageTS: "171234.5678", ThreadTS: "171234.5678"}))
 }
 
+func TestHandleMessageEventStartsGoalInExistingManagedThread(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	var (
+		posted    []url.Values
+		reactions []string
+	)
+
+	server := newSlackStackTestServer(t, &posted, &reactions)
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.prepareHandled = true
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+
+	connector.handleMessageEvent(context.Background(), newSlackMessageEvent("222.333", "111.222", "🏁 maxTurns: 2 fix lint"))
+
+	require.Len(t, router.goalStarts, 1)
+	assert.Empty(t, router.goalStarts[0].agent)
+	assert.Equal(t, "fix lint", router.goalStarts[0].objective)
+	assert.Equal(t, 2, router.goalStarts[0].maxTurns)
+	assert.Equal(t, "fix lint", router.goalStarts[0].inbound.Text)
+	assert.Contains(t, reactions, "/reactions.add "+slackRobotReaction+" 222.333")
+	require.Len(t, posted, 2)
+	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
+	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
+	assertNeverInbound(t, bus)
+}
+
+func TestHandleMessageEventRejectsDuplicateActiveGoal(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	var (
+		posted    []url.Values
+		reactions []string
+	)
+
+	server := newSlackStackTestServer(t, &posted, &reactions)
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.prepareHandled = true
+	router.errStart = harnessbridge.ErrGoalAlreadyActive
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+
+	connector.handleMessageEvent(context.Background(), newSlackMessageEvent("222.333", "111.222", "🏁 another goal"))
+
+	require.Len(t, router.goalStarts, 1)
+	assert.Contains(t, reactions, "/reactions.add "+slackInterruptionReaction+" 222.333")
+	require.Len(t, posted, 3)
+	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
+	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
+	assert.Contains(t, posted[2].Get("text"), "already in progress")
+	assertNeverInbound(t, bus)
+}
+
+func TestHandleMessageEventStopMarksOriginalTurnStart(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	var (
+		posted    []url.Values
+		reactions []string
+	)
+
+	server := newSlackStackTestServer(t, &posted, &reactions)
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.prepareHandled = true
+	router.stopResult = &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "111.222"}
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+
+	connector.handleMessageEvent(context.Background(), newSlackMessageEvent("333.444", "111.222", "🛑"))
+
+	require.Len(t, router.goalStops, 1)
+	assert.Equal(t, goalThreadStopCall{channelID: "D123", threadTS: "111.222"}, router.goalStops[0])
+	assert.Contains(t, reactions, "/reactions.add "+slackInterruptionReaction+" 222.333")
+	assert.Empty(t, posted)
+	assertNeverInbound(t, bus)
+}
+
 func TestHandleEventsAPIStartsSocialThreadWithChannelContext(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
@@ -4782,6 +4864,7 @@ type threadRouterStub struct {
 	errPrepare             error
 	errPrepareResponse     error
 	errCheckpoint          error
+	stopResult             *events.SlackReplyTarget
 	onStart                func()
 	onReply                func()
 }
@@ -4843,7 +4926,7 @@ func (s *threadRouterStub) StartThread(_ context.Context, agent string, preSeed 
 	return errStart
 }
 
-func (s *threadRouterStub) StartGoalThread(_ context.Context, agent, objective, checkScript string, maxTurns int, inbound *events.InboundMessage) error {
+func (s *threadRouterStub) StartSlackGoalInThread(_ context.Context, agent, objective, checkScript string, maxTurns int, inbound *events.InboundMessage) error {
 	s.mu.Lock()
 	s.goalStarts = append(s.goalStarts, goalThreadStartCall{agent: agent, objective: objective, checkScript: checkScript, maxTurns: maxTurns, inbound: inbound})
 	errStart := s.errStart
@@ -4852,12 +4935,17 @@ func (s *threadRouterStub) StartGoalThread(_ context.Context, agent, objective, 
 	return errStart
 }
 
-func (s *threadRouterStub) StopGoalThread(_ context.Context, channelID, threadTS string) (bool, error) {
+func (s *threadRouterStub) InterruptSlackThread(_ context.Context, channelID, threadTS string) (*events.SlackReplyTarget, error) {
 	s.mu.Lock()
 	s.goalStops = append(s.goalStops, goalThreadStopCall{channelID: channelID, threadTS: threadTS})
+	result := s.stopResult
 	s.mu.Unlock()
 
-	return true, nil
+	if result == nil {
+		result = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
+	}
+
+	return result, nil
 }
 
 func (s *threadRouterStub) RegisterCronThread(_ context.Context, channelID, threadTS, agent, seedText string) error {

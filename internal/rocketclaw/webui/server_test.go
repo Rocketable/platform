@@ -59,7 +59,7 @@ func TestStartServesVoiceModePage(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	resp, err := httpsClient(t, server).Get(server.URL())
+	resp, err := httpsClient(t, server).Get(server.urls[0])
 	require.NoError(t, err)
 
 	defer func() { require.NoError(t, resp.Body.Close()) }()
@@ -106,7 +106,7 @@ func TestRootRedirectsToVoiceModePage(t *testing.T) {
 	client := httpsClient(t, server)
 	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
 
-	resp, err := client.Get(httpBaseURL(server.URL()) + "/")
+	resp, err := client.Get(httpBaseURL(server.urls[0]) + "/")
 	require.NoError(t, err)
 
 	defer func() { require.NoError(t, resp.Body.Close()) }()
@@ -121,7 +121,7 @@ func TestRootRejectsUnknownPath(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	resp, err := httpsClient(t, server).Get(httpBaseURL(server.URL()) + "/missing")
+	resp, err := httpsClient(t, server).Get(httpBaseURL(server.urls[0]) + "/missing")
 	require.NoError(t, err)
 
 	defer func() { require.NoError(t, resp.Body.Close()) }()
@@ -141,7 +141,7 @@ func TestKeepaliveEndpointReturnsJSON(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, httpBaseURL(server.URL())+KeepalivePath, http.NoBody)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, httpBaseURL(server.urls[0])+KeepalivePath, http.NoBody)
 	require.NoError(t, err)
 	req.Header.Set("X-Rocketclaw-Reason", "keepalive")
 
@@ -180,7 +180,7 @@ func TestWebUIEndpointsRejectUnsupportedMethods(t *testing.T) {
 		{path: playbackPathPrefix + "missing", allow: http.MethodGet},
 	} {
 		t.Run(tt.path, func(t *testing.T) {
-			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpBaseURL(server.URL())+tt.path, http.NoBody)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, httpBaseURL(server.urls[0])+tt.path, http.NoBody)
 			require.NoError(t, err)
 
 			resp, err := client.Do(req)
@@ -470,8 +470,7 @@ func TestServerAccessors(t *testing.T) {
 	require.NotEmpty(t, urls)
 	urls[0] = "mutated"
 
-	assert.Equal(t, "web_ui", server.Name())
-	assert.NotEqual(t, "mutated", server.URL())
+	assert.NotEqual(t, "mutated", server.urls[0])
 	assert.NoError(t, server.Stop(context.Background()))
 }
 
@@ -1029,7 +1028,7 @@ func TestSendResponseQueuesPlaybackForBrowserSession(t *testing.T) {
 	assert.NotEmpty(t, playback.PlaybackURL)
 	assert.Equal(t, "audio/mpeg", playback.MIMEType)
 
-	resp, err := httpsClient(t, server).Get(httpBaseURL(server.URL()) + playback.PlaybackURL)
+	resp, err := httpsClient(t, server).Get(httpBaseURL(server.urls[0]) + playback.PlaybackURL)
 	require.NoError(t, err)
 
 	defer func() { require.NoError(t, resp.Body.Close()) }()
@@ -1113,7 +1112,7 @@ func TestSendResponseQueuesSequentialBrowserPlaybackWithoutDroppingLaterAudio(t 
 	assert.Equal(t, "audio/mpeg", secondPlayback.MIMEType)
 	assert.Equal(t, []string{"mp3", "mp3"}, tts.formats)
 
-	resp1, err := httpsClient(t, server).Get(httpBaseURL(server.URL()) + firstPlayback.PlaybackURL)
+	resp1, err := httpsClient(t, server).Get(httpBaseURL(server.urls[0]) + firstPlayback.PlaybackURL)
 	require.NoError(t, err)
 
 	defer func() { require.NoError(t, resp1.Body.Close()) }()
@@ -1122,7 +1121,7 @@ func TestSendResponseQueuesSequentialBrowserPlaybackWithoutDroppingLaterAudio(t 
 	require.NoError(t, err)
 	assert.Equal(t, []byte("first-mp3"), body1)
 
-	resp2, err := httpsClient(t, server).Get(httpBaseURL(server.URL()) + secondPlayback.PlaybackURL)
+	resp2, err := httpsClient(t, server).Get(httpBaseURL(server.urls[0]) + secondPlayback.PlaybackURL)
 	require.NoError(t, err)
 
 	defer func() { require.NoError(t, resp2.Body.Close()) }()
@@ -1260,7 +1259,7 @@ func TestWebsocketRejectsUnexpectedOrigin(t *testing.T) {
 	headers := make(http.Header)
 	headers.Set("Origin", "https://evil.example")
 
-	conn, resp, err := websocketDialer(t, server).Dial(websocketURL(server.URL())+voiceSocketPath, headers)
+	conn, resp, err := websocketDialer(t, server).Dial(websocketURL(server.urls[0])+voiceSocketPath, headers)
 	if resp != nil && resp.Body != nil {
 		defer func() { require.NoError(t, resp.Body.Close()) }()
 	}
@@ -1280,7 +1279,7 @@ func TestWebsocketRejectsMissingOrigin(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	conn, resp, err := websocketDialer(t, server).Dial(websocketURL(server.URL())+voiceSocketPath, nil)
+	conn, resp, err := websocketDialer(t, server).Dial(websocketURL(server.urls[0])+voiceSocketPath, nil)
 	if resp != nil && resp.Body != nil {
 		defer func() { require.NoError(t, resp.Body.Close()) }()
 	}
@@ -1800,9 +1799,9 @@ func dialVoiceSocket(t *testing.T, server *Server) *websocket.Conn {
 	t.Helper()
 
 	headers := make(http.Header)
-	headers.Set("Origin", httpBaseURL(server.URL()))
+	headers.Set("Origin", httpBaseURL(server.urls[0]))
 
-	conn, resp, err := websocketDialer(t, server).Dial(websocketURL(server.URL())+voiceSocketPath, headers)
+	conn, resp, err := websocketDialer(t, server).Dial(websocketURL(server.urls[0])+voiceSocketPath, headers)
 	if resp != nil && resp.Body != nil {
 		require.NoError(t, resp.Body.Close())
 	}

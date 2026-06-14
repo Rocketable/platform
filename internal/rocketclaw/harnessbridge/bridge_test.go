@@ -151,6 +151,66 @@ Prompt
 	assert.Equal(t, "goal marked blocked", result.Output)
 }
 
+func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
+	bridge := newGoalAccountingTestBridge(t)
+	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "ship it", "", 3))
+
+	msg := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, goalKickoffLabel, "ship it", false)
+	require.NoError(t, bridge.finishGoalTurn(t.Context(), msg))
+
+	goal, ok, err := bridge.config.SessionService.Goal("thread-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, 1, goal.TurnsUsed)
+	require.Len(t, bridge.requestCh, 1)
+	assert.Equal(t, goalContinuationLabel, (<-bridge.requestCh).inbound.Label)
+
+	msg = events.NewMainInboundMessage(events.SourceSystem, events.InboundKindPrompt, goalContinuationLabel, "continue", false)
+	require.NoError(t, bridge.finishGoalTurn(t.Context(), msg))
+	goal, ok, err = bridge.config.SessionService.Goal("thread-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, 2, goal.TurnsUsed)
+}
+
+func TestFinishGoalTurnHumanResteeringDoesNotConsumeBudget(t *testing.T) {
+	bridge := newGoalAccountingTestBridge(t)
+	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "ship it", "", 3))
+
+	msg := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "try this angle", false)
+	require.NoError(t, bridge.finishGoalTurn(t.Context(), msg))
+
+	goal, ok, err := bridge.config.SessionService.Goal("thread-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, 0, goal.TurnsUsed)
+	require.Len(t, bridge.requestCh, 1)
+	assert.Equal(t, goalContinuationLabel, (<-bridge.requestCh).inbound.Label)
+}
+
+func TestInterruptActiveTurnSignalsAndClearsQueue(t *testing.T) {
+	interrupts := make(chan os.Signal, 1)
+	marker := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "111.222"}
+
+	bridge := &Bridge{requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{}), activeSlackReply: marker, activeTurnInterrupts: interrupts}
+	bridge.requestCh <- bridgeRequest{inbound: events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "queued", false)}
+
+	result := bridge.InterruptActiveTurn()
+
+	assert.Equal(t, marker, result)
+	assert.Empty(t, bridge.requestCh)
+	assert.True(t, bridge.activeTurnInterrupted)
+	assert.Equal(t, os.Interrupt, <-interrupts)
+}
+
+func newGoalAccountingTestBridge(t *testing.T) *Bridge {
+	t.Helper()
+
+	store := newTestSessionService(t)
+
+	return &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: "thread-1", SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{})}
+}
+
 func newGoalCheckTestBridge(t *testing.T, agent, script string) *Bridge {
 	t.Helper()
 

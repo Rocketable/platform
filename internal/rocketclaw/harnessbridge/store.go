@@ -18,7 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	harness "github.com/Rocketable/platform/internal/rocketcode"
 
 	// Register the pure-Go SQLite database/sql driver used by this package.
@@ -30,6 +29,9 @@ const mainConversationID = "main"
 const restartNotificationDeveloperMessage = "The rocketclaw server has been restarted."
 
 var errStateStoreCorrupt = errors.New("rocketclaw state store is corrupt")
+
+// ErrGoalAlreadyActive reports that a conversation already has an active goal.
+var ErrGoalAlreadyActive = errors.New("goal already active")
 
 // State is the persisted rocketclaw session state.
 type State struct {
@@ -46,7 +48,6 @@ const (
 	GoalStatusActive          = "active"
 	GoalStatusComplete        = "complete"
 	GoalStatusBlocked         = "blocked"
-	GoalStatusPaused          = "paused"
 	GoalStatusStopped         = "stopped"
 	GoalStatusBudgetExhausted = "budget_exhausted"
 )
@@ -209,13 +210,26 @@ func (s *SessionService) BeginGoal(conversationID, objective, checkScript string
 
 	now := time.Now().UTC()
 
-	return s.updateState(func(state *State) {
+	var errBegin error
+
+	err := s.updateState(func(state *State) {
 		if state.Goals == nil {
 			state.Goals = map[string]GoalState{}
 		}
 
+		current := state.Goals[conversationID]
+		if strings.TrimSpace(current.Status) == GoalStatusActive {
+			errBegin = ErrGoalAlreadyActive
+			return
+		}
+
 		state.Goals[conversationID] = GoalState{Objective: objective, CheckScript: checkScript, MaxTurns: maxTurns, Status: GoalStatusActive, CreatedAt: now, UpdatedAt: now}
 	})
+	if err != nil {
+		return err
+	}
+
+	return errBegin
 }
 
 // Goal returns the persisted goal state for a conversation.
@@ -278,14 +292,14 @@ func (s *SessionService) AccountGoalTurn(conversationID string) (GoalState, bool
 			status = GoalStatusActive
 		}
 
-		if status == GoalStatusStopped || status == GoalStatusBudgetExhausted {
+		if status != GoalStatusActive {
 			return
 		}
 
 		goal.TurnsUsed++
 
 		goal.UpdatedAt = time.Now().UTC()
-		if status == GoalStatusActive && goal.MaxTurns > 0 && goal.TurnsUsed >= goal.MaxTurns {
+		if goal.MaxTurns > 0 && goal.TurnsUsed >= goal.MaxTurns {
 			goal.Status = GoalStatusBudgetExhausted
 		}
 
@@ -302,7 +316,7 @@ func (s *SessionService) AccountGoalTurn(conversationID string) (GoalState, bool
 func (s *SessionService) UpdateGoalStatus(conversationID, status, note string) (GoalState, error) {
 	status = strings.TrimSpace(status)
 	switch status {
-	case GoalStatusComplete, GoalStatusBlocked, GoalStatusPaused:
+	case GoalStatusComplete, GoalStatusBlocked:
 	default:
 		return GoalState{}, fmt.Errorf("unsupported goal status %q", status)
 	}
@@ -311,13 +325,9 @@ func (s *SessionService) UpdateGoalStatus(conversationID, status, note string) (
 }
 
 // StopGoal marks an active goal stopped.
-func (s *SessionService) StopGoal(conversationID string) (GoalState, bool, error) {
-	goal, err := s.setGoalStatus(conversationID, GoalStatusStopped, "stopped by human")
-	if err != nil {
-		return GoalState{}, false, err
-	}
-
-	return goal, strings.TrimSpace(goal.Status) == GoalStatusStopped, nil
+func (s *SessionService) StopGoal(conversationID string) error {
+	_, err := s.setGoalStatus(conversationID, GoalStatusStopped, "stopped by human")
+	return err
 }
 
 // MarkThreadSeeded records the response checkpoint used to seed a text thread.
@@ -774,34 +784,6 @@ func observeSessionEntriesDB(ctx context.Context, db *sql.DB, conversationID str
 	}
 
 	return entries, nil
-}
-
-// AppendSessionEntryID appends one replayable turn and returns its SQLite row ID.
-func AppendSessionEntryID(ctx context.Context, dbPath, conversationID string, entry *harness.SessionEntry) (int64, error) {
-	if entry == nil {
-		return 0, errors.New("rocketcode session entry is required")
-	}
-
-	conversationID = strings.TrimSpace(conversationID)
-	if conversationID == "" {
-		conversationID = mainConversationID
-	}
-
-	workspace := filepath.Dir(filepath.Dir(dbPath))
-
-	workDir := filepath.Base(filepath.Dir(dbPath))
-	if err := prepareSessionDBPathIn(workspace, workDir); err != nil {
-		return 0, err
-	}
-
-	db, err := openSessionDB(ctx, dbPath)
-	if err != nil {
-		return 0, err
-	}
-
-	defer func() { _ = db.Close() }()
-
-	return appendSessionEntryDB(ctx, db, conversationID, entry)
 }
 
 func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID string, entry *harness.SessionEntry) (int64, error) {
@@ -1312,16 +1294,13 @@ ORDER BY c.last_updated DESC, c.conversation_id, se.id`
 	return summaries, nil
 }
 
-// SessionDBPath returns the SQLite database path for rocketcode session inspection.
-func SessionDBPath(workspace string) string { return SessionDBPathIn(workspace, config.DefaultWorkDir) }
-
-// SessionDBPathIn returns the SQLite database path for rocketcode session inspection in workDir.
-func SessionDBPathIn(workspace, workDir string) string { return sessionDBPathIn(workspace, workDir) }
-
 // SlackThreadConversationID returns the stable conversation ID for a Slack thread.
 func SlackThreadConversationID(channelID, threadTS string) string {
 	return slackPairKey("slack-thread:", channelID, threadTS)
 }
+
+// SessionDBPathIn returns the SQLite database path for rocketcode session inspection in workDir.
+func SessionDBPathIn(workspace, workDir string) string { return sessionDBPathIn(workspace, workDir) }
 
 // SlackThreadTarget returns the Slack channel and thread timestamp for a Slack thread conversation ID.
 func SlackThreadTarget(conversationID string) (channelID, threadTS string, ok bool) {

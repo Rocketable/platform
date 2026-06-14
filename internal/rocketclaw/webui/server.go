@@ -153,14 +153,8 @@ func (s *Server) SendResponse(ctx context.Context, msg *events.OutboundMessage) 
 	return s.hub.SendResponse(ctx, msg)
 }
 
-// URL returns the voice-mode page URL.
-func (s *Server) URL() string { return s.urls[0] }
-
 // URLs returns numeric IPv4 voice-mode page URLs served by this listener.
 func (s *Server) URLs() []string { return append([]string(nil), s.urls...) }
-
-// Name returns the server identifier used in logs.
-func (s *Server) Name() string { return "web_ui" }
 
 // Stop stops the HTTP server and waits for it to exit.
 func (s *Server) Stop(ctx context.Context) error { return s.Close(ctx) }

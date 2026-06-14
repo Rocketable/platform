@@ -139,9 +139,6 @@ func StartSessionPromptServer(ctx context.Context, logger *slog.Logger, listenAd
 // URL returns the server base URL.
 func (s *Server) URL() string { return s.url }
 
-// Name returns the server identifier used in logs.
-func (s *Server) Name() string { return "external_mcp" }
-
 // Stop stops the HTTP server and waits for it to exit.
 func (s *Server) Stop(ctx context.Context) error { return s.Close(ctx) }
 

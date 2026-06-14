@@ -14,14 +14,15 @@ import (
 )
 
 type directBridge interface {
-	Start(context.Context) error
+	Start(ctx context.Context) error
 	Stop() error
-	Submit(context.Context, *events.InboundMessage) error
-	SeedThreadFromMain(context.Context) error
-	SeedThreadFromCron(context.Context, string) error
-	SeedResponseThread(context.Context, events.ResponseCheckpoint, string) error
-	Summarize(context.Context, string) (string, error)
-	WaitIdle(context.Context) error
+	Submit(ctx context.Context, msg *events.InboundMessage) error
+	SeedThreadFromMain(ctx context.Context) error
+	SeedThreadFromCron(ctx context.Context, seedText string) error
+	SeedResponseThread(ctx context.Context, checkpoint events.ResponseCheckpoint, checkpointKey string) error
+	Summarize(ctx context.Context, prompt string) (string, error)
+	WaitIdle(ctx context.Context) error
+	InterruptActiveTurn() *events.SlackReplyTarget
 }
 
 type bridgeConfig struct {
@@ -430,7 +431,7 @@ func (m *threadBridgeManager) StartThread(ctx context.Context, agent string, pre
 	return nil
 }
 
-func (m *threadBridgeManager) StartGoalThread(ctx context.Context, agent, objective, checkScript string, maxTurns int, inbound *events.InboundMessage) error {
+func (m *threadBridgeManager) StartSlackGoalInThread(ctx context.Context, agent, objective, checkScript string, maxTurns int, inbound *events.InboundMessage) error {
 	if inbound == nil || inbound.SlackReply == nil {
 		return errors.New("slack reply target is required")
 	}
@@ -438,6 +439,15 @@ func (m *threadBridgeManager) StartGoalThread(ctx context.Context, agent, object
 	conversationID := harnessbridge.SlackThreadConversationID(strings.TrimSpace(inbound.SlackReply.ChannelID), strings.TrimSpace(inbound.SlackReply.ThreadTS))
 	if conversationID == "" {
 		return errors.New("slack thread target is required")
+	}
+
+	state, err := m.store.Load()
+	if err != nil {
+		return fmt.Errorf("load Slack goal thread state: %w", err)
+	}
+
+	if storedAgent := strings.TrimSpace(state.Threads[conversationID].Agent); storedAgent != "" {
+		agent = storedAgent
 	}
 
 	if strings.TrimSpace(checkScript) != "" {
@@ -477,18 +487,29 @@ func (m *threadBridgeManager) StartGoalThread(ctx context.Context, agent, object
 	return nil
 }
 
-func (m *threadBridgeManager) StopGoalThread(_ context.Context, channelID, threadTS string) (bool, error) {
+func (m *threadBridgeManager) InterruptSlackThread(_ context.Context, channelID, threadTS string) (*events.SlackReplyTarget, error) {
 	conversationID := harnessbridge.SlackThreadConversationID(channelID, threadTS)
 	if conversationID == "" {
-		return false, nil
+		return nil, nil
 	}
 
-	goal, stopped, err := m.store.StopGoal(conversationID)
-	if err != nil {
-		return false, fmt.Errorf("stop Slack goal thread: %w", err)
+	if err := m.store.StopGoal(conversationID); err != nil {
+		return nil, fmt.Errorf("stop Slack goal thread: %w", err)
 	}
 
-	return stopped && strings.TrimSpace(goal.Status) == harnessbridge.GoalStatusStopped, nil
+	m.mu.Lock()
+
+	managed := m.bridges[conversationID]
+	if managed != nil {
+		managed.queuedReplies = nil
+	}
+	m.mu.Unlock()
+
+	if managed == nil {
+		return nil, nil
+	}
+
+	return managed.bridge.InterruptActiveTurn(), nil
 }
 
 func (m *threadBridgeManager) RegisterCronThread(ctx context.Context, channelID, threadTS, agent, seedText string) error {

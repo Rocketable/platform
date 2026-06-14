@@ -146,31 +146,6 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 	return nil
 }
 
-// SendRelay mirrors a non-Discord input into the configured Discord text channel.
-func (c *Connector) SendRelay(_ context.Context, text string, attachments []events.OutboundAttachment) (*events.DiscordReplyTarget, error) {
-	if c.client == nil {
-		return nil, errors.New("discord text connector is not started")
-	}
-
-	text = strings.TrimSpace(text)
-	if text == "" && len(attachments) == 0 {
-		return nil, nil
-	}
-
-	msg, err := c.client.sendMessage(c.config.ChannelID, messageSend{Content: text})
-	if err != nil {
-		return nil, fmt.Errorf("send Discord text relay: %w", err)
-	}
-
-	if len(attachments) > 0 {
-		if err := c.client.sendAttachments(c.config.ChannelID, attachments); err != nil {
-			return nil, err
-		}
-	}
-
-	return &events.DiscordReplyTarget{ChannelID: msg.ChannelID, MessageID: msg.ID}, nil
-}
-
 // SendCronjobChannelThread posts one scheduled cronjob result in a new Discord thread.
 func (c *Connector) SendCronjobChannelThread(_ context.Context, channelID, relativePath, agent, ranAt, text string, attachments []events.OutboundAttachment) error {
 	if c.client == nil {
