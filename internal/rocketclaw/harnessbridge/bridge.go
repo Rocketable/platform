@@ -909,6 +909,30 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 
 	sessionIn := store.in()
 
+	if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err != nil {
+		return runResult{}, fmt.Errorf("load active goal note: %w", err)
+	} else if ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
+		msg.GoalTurn = true
+
+		if note := strings.TrimSpace(goal.Note); note != "" {
+			replayInput, err := replayInputForMessage("developer", "RocketClaw goal state:\nStatus: progress\nLast reported note:\n"+note)
+			if err != nil {
+				return runResult{}, fmt.Errorf("encode active goal note: %w", err)
+			}
+
+			previousSessionIn := sessionIn
+			sessionIn = func(yield func(rocketcode.SessionEntry, error) bool) {
+				for entry, err := range previousSessionIn {
+					if !yield(entry, err) {
+						return
+					}
+				}
+
+				yield(rocketcode.SessionEntry{Version: 1, Type: "goal_state", Timestamp: time.Now().UTC(), ReplayInput: replayInput}, nil)
+			}
+		}
+	}
+
 	if strings.HasPrefix(b.config.ConversationID, externalMCPConversationPrefix) {
 		entries, err := b.observeSessionEntries(ctx, b.config.ConversationID)
 		if err != nil {
@@ -1711,7 +1735,7 @@ func updateGoalTool(b *Bridge) rocketcode.Tool {
 	store := b.config.SessionService
 	conversationID := b.config.ConversationID
 
-	return rocketcode.Tool{Name: updateGoalToolName, Description: "Update the active RocketClaw goal loop status for this conversation. Use complete when the goal is achieved or blocked when progress cannot continue.", Permission: "rocketclaw", VisibilitySubjects: []string{updateGoalToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{updateGoalToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"status": map[string]any{"type": "string", "enum": []string{GoalStatusComplete, GoalStatusBlocked}}, "note": map[string]any{"type": "string"}}, "required": []string{"status"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+	return rocketcode.Tool{Name: updateGoalToolName, Description: "Update the active RocketClaw goal loop status for this conversation. Use progress when reporting continuing progress, complete when the goal is achieved, or blocked when progress cannot continue.", Permission: "rocketclaw", VisibilitySubjects: []string{updateGoalToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{updateGoalToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"status": map[string]any{"type": "string", "enum": []string{GoalStatusProgress, GoalStatusComplete, GoalStatusBlocked}}, "note": map[string]any{"type": "string", "description": "Status note for the goal update. Use this to explain what is going on, what changed, what you are thinking, where the goal is heading next, what was completed, or what is blocking progress. It should mirror the substance of the visible Progress summary."}}, "required": []string{"status"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		var input struct {
 			Status string `json:"status"`
 			Note   string `json:"note"`
@@ -1737,6 +1761,10 @@ func updateGoalTool(b *Bridge) rocketcode.Tool {
 		goal, err := store.UpdateGoalStatus(conversationID, input.Status, input.Note)
 		if err != nil {
 			return rocketcode.ToolResult{}, err
+		}
+
+		if strings.TrimSpace(input.Status) == GoalStatusProgress {
+			return rocketcode.TextToolResult("goal progress recorded"), nil
 		}
 
 		return rocketcode.TextToolResult("goal marked " + strings.TrimSpace(goal.Status)), nil
@@ -1877,10 +1905,16 @@ func (b *Bridge) newOutboundMessage(msg *events.InboundMessage, turnID string, s
 	outbound.Complete = complete
 
 	if msg != nil {
-		if msg.Label == goalKickoffLabel || msg.Label == goalContinuationLabel {
+		goal, goalOK, err := b.config.SessionService.Goal(b.config.ConversationID)
+		if msg.Label == goalKickoffLabel || msg.Label == goalContinuationLabel || msg.GoalTurn {
 			outbound.GoalTurn = true
-		} else if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err == nil && ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
+		} else if err == nil && goalOK && strings.TrimSpace(goal.Status) == GoalStatusActive {
 			outbound.GoalTurn = true
+		}
+
+		if outbound.GoalTurn && err == nil && goalOK && goal.MaxTurns > 0 {
+			outbound.GoalTurnNumber = goal.TurnsUsed + 1
+			outbound.GoalMaxTurns = goal.MaxTurns
 		}
 
 		outbound.WebSessionID = msg.WebSessionID
@@ -2081,7 +2115,7 @@ func goalSteeringPrompt(goal *GoalState) string {
 		prompt += "\n\nCompletion check command:\n" + checkScript + "\n\nCalling rocketclaw_update_goal with status complete runs the check command. If the check fails, use the returned failure output to continue working instead of declaring done."
 	}
 
-	return prompt + "\n\nContinue making concrete progress toward the objective. When the objective is achieved, call rocketclaw_update_goal with status complete. If progress cannot continue, call rocketclaw_update_goal with status blocked."
+	return prompt + "\n\nContinue making concrete progress toward the objective. At the end of every visible goal response, include a Progress summary: section. For status progress, summarize what changed this turn, the current state, and the next concrete step. For status complete, summarize what was achieved and any validation or check result. For status blocked, summarize what happened, the concrete blocker, and what human input, access, or decision is needed. Call rocketclaw_update_goal with status progress, complete, or blocked, and put the same substance from the visible Progress summary in note."
 }
 
 func externalMCPMetadataEnv(conversationID string, metadata map[string]string) map[string]string {

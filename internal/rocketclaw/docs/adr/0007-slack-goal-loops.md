@@ -27,7 +27,7 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 - The shared trigger syntax is `(🔁|🏁) [maxTurns: VALUE] [checkScript: VALUE] OBJECTIVE` after connector-local emoji-prefix normalization. Slack text-prefix normalization accepts `:repeat:` and `:checkered_flag:` in place of the emoji token.
 - `maxTurns:` is an optional leading Smalltalk-style keyword parameter. It consumes the next whitespace-delimited value.
 - `checkScript:` is an optional leading Smalltalk-style keyword parameter. It consumes either the next whitespace-delimited value or one quoted command-line string, for example `checkScript: ./scripts/check.sh` or `checkScript: "./scripts/check.sh --linter-mode"`.
-- Omitted `maxTurns:` defaults to `20`.
+- Omitted `maxTurns:` defaults to `5`.
 - Omitted `checkScript:` means completion is agent-declared with no script gate.
 - Accepted infinite values are `0`, `-1`, and case-insensitive `infinite`; all are normalized to persisted `MaxTurns: 0`.
 - Positive integer `maxTurns:` values are persisted as written.
@@ -58,9 +58,9 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 ### Connector Bindings
 
 - Slack DM goal starts create normal managed Slack DM threads rooted at the triggering DM message. Slack social-mode goal starts create or use normal managed Slack channel threads rooted at app-mention messages. Slack social-mode goal starts use canonical `slack.social_mode.channels[]`; runtime connector behavior never consults legacy `slack.social_mode.channel_agents`.
-- Slack goal-loop turns use `_Pursuing goal..._` as their Slack progress placeholder, including kickoff turns and automatic continuations. Non-goal Slack-visible assistant turns continue to use `_Thinking..._`.
+- Slack goal-loop turns use `_Pursuing Goal..._` as their infinite-goal Slack progress placeholder and `_Pursuing Goal (n/m)..._` as their finite-goal Slack progress placeholder, including kickoff turns, human re-steering turns, and automatic continuations. Non-goal Slack-visible assistant turns continue to use `_Thinking..._`.
 - Discord DM goal starts create or reuse normal managed Discord DM conversations without guild-thread mechanics. Discord social-mode goal starts create or use normal managed Discord guild-thread conversations rooted at bot-mention messages. Discord social-mode goal starts use canonical `discord_text.social_mode.channels[]`.
-- Discord Text goal-loop progress messages use `_Pursuing goal..._` to visibly distinguish goal work while preserving the accumulated RocketCode progress text.
+- Discord Text goal-loop progress messages use `_Pursuing Goal..._` for infinite goals and `_Pursuing Goal (n/m)..._` for finite goals to visibly distinguish goal work while preserving the accumulated RocketCode progress text.
 
 ### Implementation Shape
 
@@ -76,6 +76,10 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 - A managed conversation may run many goals over its lifetime, but only one goal may be active at a time.
 - A new goal may start in a managed conversation that has no goal state or whose existing goal is terminal.
 - The initial kickoff turn counts as turn `1`.
+- Finite goal progress markers display the current visible budget slot as `n/m`, where `m` is `MaxTurns` and `n` is the turn that is about to consume or reuse the next budget-counting slot.
+- A finite kickoff turn displays `1/m`.
+- A finite automatic continuation displays `TurnsUsed+1/m` before that continuation is accounted.
+- A human re-steering turn during an active finite goal displays `TurnsUsed+1/m` but does not increment `TurnsUsed`.
 - Automatic continuation turns count against the goal turn budget.
 - Human re-steering messages sent during an active goal are processed with goal steering but do not increment `TurnsUsed`.
 - After each successful budget-counting goal turn, RocketClaw increments `TurnsUsed` for the active goal before deciding whether to continue.
@@ -87,13 +91,18 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 - Goal continuations are owned by the persistent bridge for the managed connector conversation.
 - Goal continuations are not implemented as recurring scheduled messages.
 - Every goal-loop kickoff, human re-steering turn, and automatic continuation turn must be delivered as a visible assistant turn in the owning text conversation. Goal continuation turns must not run as silent internalization-only turns.
-- An active goal continuation prompt must include the objective and current turn-budget state, and must instruct the agent to keep making progress until it can mark the goal complete or blocked. When a check script exists, the prompt must include the check command and explain that declaring `complete` runs it, and that check failure means the agent must use the failure output to continue working instead of declaring done.
+- An active goal continuation prompt must include the objective and current turn-budget state, and must instruct the agent to keep making progress until it can report progress, mark the goal complete, or mark the goal blocked. When a check script exists, the prompt must include the check command and explain that declaring `complete` runs it, and that check failure means the agent must use the failure output to continue working instead of declaring done.
 - RocketClaw injects a persistent-bridge goal-update tool while an active goal exists for the current conversation.
-- The goal-update tool lets the agent set status to `complete` or `blocked`, with an optional note.
+- The goal-update tool lets the agent report status `progress`, `complete`, or `blocked`, with an optional `note`.
+- The goal-update tool's `note` field is the structured explanatory field for status notes, what is going on, what changed, what the agent is thinking, where the goal is heading next, what was completed, and what is blocking progress. The `note` should mirror the substance of the visible `Progress summary:` section.
+- `progress` is non-terminal: it records the latest note on the active goal, keeps persisted status `active`, does not run check scripts, does not consume an extra turn by itself, and does not enqueue extra work by itself.
+- `complete` and `blocked` are terminal tool statuses and record their final note on the goal.
 - When an active goal has a check script, `complete` first validates the stored check script again, checks the active goal agent's `bash` permission for the whole command subject, and runs the command using RocketCode bash execution behavior.
 - A check-script exit code of `0` allows the goal to be marked `complete`.
 - A non-zero exit, timeout, execution error, validation failure, or permission denial keeps the goal active and returns the reason and available output to the agent as a normal tool result so the agent can continue working.
 - `blocked` does not run check scripts.
+- Every visible goal-loop assistant response must end with a `Progress summary:` section. For `progress`, the summary explains what changed this turn, the current state, and the next concrete step. For `complete`, the summary explains what was achieved and any validation or check result. For `blocked`, the summary explains what happened, the concrete blocker, and what human input, access, or decision is needed.
+- On later active goal turns, when the active goal has a latest persisted note, RocketClaw injects the latest goal state and note as runtime-authored `developer` context so the agent can tell that the context was injected by RocketClaw. This injected recap must not be represented as a duplicate assistant transcript message.
 - A goal marked `complete`, `blocked`, `stopped`, or `budget_exhausted` must not receive automatic continuations.
 - A configured-human DM message, or an allowed social-mode user message, consisting only of `🛑` or `⏹️` in an active managed conversation must interrupt the current turn. If the interrupted conversation has an active goal, RocketClaw must mark that goal `stopped`.
 - A `🛑` or `⏹️` reaction by the configured human in DM mode, or by an allowed social-mode user in social mode, on the managed conversation root, any message in the managed conversation, or the active progress surface must interrupt the current turn. If the interrupted conversation has an active goal, RocketClaw must mark that goal `stopped`.
@@ -160,3 +169,4 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 - 2026-06-14: Required goal-loop bridge ownership to use one injected connector-neutral primary text API rather than parallel Slack and Discord bridge implementations.
 - 2026-06-14: Specified `_Pursuing goal..._` as the primary text connector goal-loop progress marker for Slack placeholders and Discord progress messages.
 - 2026-06-14: Specified that each text connector applies connector-local emoji-prefix normalization to goal starts before the shared goal parser, including Slack's `:repeat:` and `:checkered_flag:` transport text, while preserving Slack/Discord Text symmetry.
+- 2026-06-15: Changed omitted `maxTurns:` default to `5`, added finite `_Pursuing Goal (n/m)..._` progress markers, required visible `Progress summary:` sections, extended the goal-update tool with non-terminal `progress` and explanatory `note`, and specified developer-context injection of latest active goal notes.

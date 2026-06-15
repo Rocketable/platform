@@ -180,6 +180,22 @@ func TestSessionServiceBeginGoalAllowsGoalAfterTerminal(t *testing.T) {
 	assert.Equal(t, 0, goal.TurnsUsed)
 }
 
+func TestSessionServiceProgressGoalKeepsGoalActiveAndRecordsNote(t *testing.T) {
+	store := newTestSessionService(t)
+
+	require.NoError(t, store.BeginGoal("thread-1", "first", "", 3))
+	goal, err := store.UpdateGoalStatus("thread-1", GoalStatusProgress, "next step")
+	require.NoError(t, err)
+	assert.Equal(t, GoalStatusActive, goal.Status)
+	assert.Equal(t, "next step", goal.Note)
+
+	goal, ok, err := store.Goal("thread-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, GoalStatusActive, goal.Status)
+	assert.Equal(t, "next step", goal.Note)
+}
+
 func TestSessionServiceAppliesPendingRestartNotificationsOnce(t *testing.T) {
 	store := newTestSessionService(t)
 

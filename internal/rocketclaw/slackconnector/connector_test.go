@@ -104,7 +104,8 @@ func TestSplitSlackResponseTextBoundaries(t *testing.T) {
 func TestProgressTextMessageQuotesAndBoundsText(t *testing.T) {
 	assert.Empty(t, slackThinkingMessage(slackImmediatePlaceholder, " \n\t "))
 	assert.Equal(t, slackImmediatePlaceholder+"\n\n> beta\n> alpha", slackThinkingMessage(slackImmediatePlaceholder, " alpha\nbeta "))
-	assert.Equal(t, slackGoalPlaceholder+"\n\n> beta\n> alpha", slackThinkingMessage(slackGoalPlaceholder, " alpha\nbeta "))
+	assert.Equal(t, slackGoalPlaceholder(0, 0)+"\n\n> beta\n> alpha", slackThinkingMessage(slackGoalPlaceholder(0, 0), " alpha\nbeta "))
+	assert.Equal(t, "_Pursuing Goal (2/5)..._", slackGoalPlaceholder(2, 5))
 
 	got := slackThinkingMessage(slackImmediatePlaceholder, strings.Repeat("x", slackBlockTextLimit+20))
 	assert.True(t, strings.HasPrefix(got, slackImmediatePlaceholder+"\n\n> "))
@@ -167,14 +168,14 @@ func TestGoalRequestForTextParsesSupportedTriggers(t *testing.T) {
 		checkScript string
 		maxTurns    int
 	}{
-		{text: "🔁 write docs", objective: "write docs", maxTurns: 20},
-		{text: "🏁 write docs", objective: "write docs", maxTurns: 20},
+		{text: "🔁 write docs", objective: "write docs", maxTurns: 5},
+		{text: "🏁 write docs", objective: "write docs", maxTurns: 5},
 		{text: "🔁 maxTurns: 0 write docs", objective: "write docs", maxTurns: 0},
 		{text: "🏁 maxTurns: infinite write docs", objective: "write docs", maxTurns: 0},
-		{text: "🏁 checkScript: ./scripts/check.sh fix lint", objective: "fix lint", checkScript: "./scripts/check.sh", maxTurns: 20},
+		{text: "🏁 checkScript: ./scripts/check.sh fix lint", objective: "fix lint", checkScript: "./scripts/check.sh", maxTurns: 5},
 		{text: "🏁 maxTurns: 7 checkScript: \"./scripts/check.sh --linter-mode\" fix lint", objective: "fix lint", checkScript: "./scripts/check.sh --linter-mode", maxTurns: 7},
-		{text: `🏁 checkScript: "./scripts/check.sh \literal" fix lint`, objective: "fix lint", checkScript: `./scripts/check.sh \literal`, maxTurns: 20},
-		{text: "🏁 fix literal checkScript: ./scripts/check.sh text", objective: "fix literal checkScript: ./scripts/check.sh text", maxTurns: 20},
+		{text: `🏁 checkScript: "./scripts/check.sh \literal" fix lint`, objective: "fix lint", checkScript: `./scripts/check.sh \literal`, maxTurns: 5},
+		{text: "🏁 fix literal checkScript: ./scripts/check.sh text", objective: "fix literal checkScript: ./scripts/check.sh text", maxTurns: 5},
 	}
 
 	for _, tt := range tests {
@@ -2023,6 +2024,8 @@ func TestSendResponseUsesGoalPlaceholderForGoalProgress(t *testing.T) {
 	first.TurnID = "turn-1"
 	first.ProgressText = "first thought"
 	first.GoalTurn = true
+	first.GoalTurnNumber = 2
+	first.GoalMaxTurns = 5
 	first.SlackReply = &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: ""}
 	require.NoError(t, connector.SendResponse(context.Background(), first))
 
@@ -2030,15 +2033,17 @@ func TestSendResponseUsesGoalPlaceholderForGoalProgress(t *testing.T) {
 	second.TurnID = "turn-1"
 	second.ProgressText = "first thought\nsecond thought"
 	second.GoalTurn = true
+	second.GoalTurnNumber = 2
+	second.GoalMaxTurns = 5
 	second.SlackReply = &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: ""}
 	require.NoError(t, connector.SendResponse(context.Background(), second))
 	require.NoError(t, connector.flushProgressText(context.Background(), "turn-1"))
 
 	require.Len(t, posted, 2)
 	require.Len(t, updated, 1)
-	assert.Equal(t, slackGoalPlaceholder, posted[0].Get("text"))
+	assert.Equal(t, "_Pursuing Goal (2/5)..._", posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
-	assert.Equal(t, slackGoalPlaceholder+"\n\n> second thought\n> first thought", updated[0].Get("text"))
+	assert.Equal(t, "_Pursuing Goal (2/5)..._\n\n> second thought\n> first thought", updated[0].Get("text"))
 	assert.Equal(t, updated[0].Get("text"), thinkingBlockText(t, updated[0]))
 }
 
@@ -3102,7 +3107,7 @@ func TestHandleMessageEventConsumesGoalStartRejectionPlaceholder(t *testing.T) {
 	assert.Equal(t, "./scripts/check.sh", router.goalStarts[0].checkScript)
 	assert.Contains(t, reactions, "/reactions.remove "+slackRobotReaction+" 171234.5678")
 	require.Len(t, posted, 3)
-	assert.Equal(t, slackGoalPlaceholder, posted[0].Get("text"))
+	assert.Equal(t, "_Pursuing Goal (1/5)..._", posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Contains(t, posted[2].Get("text"), "couldn't start that goal")
 	assert.False(t, connector.hasPendingState(&events.SlackReplyTarget{ChannelID: "D123", MessageTS: "171234.5678", ThreadTS: "171234.5678"}))
@@ -3133,7 +3138,7 @@ func TestHandleMessageEventStartsGoalInExistingManagedThread(t *testing.T) {
 	assert.Equal(t, "fix lint", router.goalStarts[0].inbound.Text)
 	assert.Contains(t, reactions, "/reactions.add "+slackRobotReaction+" 222.333")
 	require.Len(t, posted, 2)
-	assert.Equal(t, slackGoalPlaceholder, posted[0].Get("text"))
+	assert.Equal(t, "_Pursuing Goal (1/2)..._", posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assertNeverInbound(t, bus)
 }
@@ -3160,7 +3165,7 @@ func TestHandleMessageEventRejectsDuplicateActiveGoal(t *testing.T) {
 	require.Len(t, router.goalStarts, 1)
 	assert.Contains(t, reactions, "/reactions.add "+slackInterruptionReaction+" 222.333")
 	require.Len(t, posted, 3)
-	assert.Equal(t, slackGoalPlaceholder, posted[0].Get("text"))
+	assert.Equal(t, "_Pursuing Goal (1/5)..._", posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Contains(t, posted[2].Get("text"), "already in progress")
 	assertNeverInbound(t, bus)

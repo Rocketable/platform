@@ -95,6 +95,7 @@ type InboundMessage struct {
 	HadNonImageAttachments       bool
 	AttachmentWarnings           []string
 	Human                        bool
+	GoalTurn                     bool
 	Kind                         InboundKind
 	ConversationID, WebSessionID string
 	Metadata                     map[string]string
@@ -142,6 +143,8 @@ type OutboundMessage struct {
 	Attachments                          []OutboundAttachment
 	GoalTurn                             bool
 	GoalComplete                         bool
+	GoalTurnNumber                       int
+	GoalMaxTurns                         int
 
 	deliveryInit, deliveredOnce sync.Once
 	delivered                   chan struct{}

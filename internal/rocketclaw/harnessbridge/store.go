@@ -46,6 +46,7 @@ type State struct {
 // GoalStatusActive and related constants are persisted goal-loop statuses.
 const (
 	GoalStatusActive          = "active"
+	GoalStatusProgress        = "progress"
 	GoalStatusComplete        = "complete"
 	GoalStatusBlocked         = "blocked"
 	GoalStatusStopped         = "stopped"
@@ -312,10 +313,12 @@ func (s *SessionService) AccountGoalTurn(conversationID string) (GoalState, bool
 	return goal, ok, nil
 }
 
-// UpdateGoalStatus sets a model-controlled terminal goal status.
+// UpdateGoalStatus records a model-controlled goal status update.
 func (s *SessionService) UpdateGoalStatus(conversationID, status, note string) (GoalState, error) {
 	status = strings.TrimSpace(status)
 	switch status {
+	case GoalStatusProgress:
+		return s.setGoalStatus(conversationID, GoalStatusActive, note)
 	case GoalStatusComplete, GoalStatusBlocked:
 	default:
 		return GoalState{}, fmt.Errorf("unsupported goal status %q", status)

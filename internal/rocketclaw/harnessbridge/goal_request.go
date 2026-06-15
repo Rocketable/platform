@@ -26,17 +26,17 @@ func ParseGoalRequest(text string) (GoalRequest, string, bool) {
 	}
 
 	text = strings.TrimSpace(text)
-	maxTurns := 20
+	maxTurns := 5
 	checkScript := ""
 
 	if text == "" {
-		return GoalRequest{}, "Tell me the goal after `🔁`, for example `🔁 maxTurns: 20 update the docs`.", true
+		return GoalRequest{}, "Tell me the goal after `🔁`, for example `🔁 maxTurns: 5 update the docs`.", true
 	}
 
 	for {
 		fields := strings.Fields(text)
 		if len(fields) == 0 {
-			return GoalRequest{}, "Tell me the goal after the parameters, for example `🔁 maxTurns: 20 update the docs`.", true
+			return GoalRequest{}, "Tell me the goal after the parameters, for example `🔁 maxTurns: 5 update the docs`.", true
 		}
 
 		switch fields[0] {
@@ -70,7 +70,7 @@ func ParseGoalRequest(text string) (GoalRequest, string, bool) {
 		default:
 			objective := strings.TrimSpace(text)
 			if objective == "" {
-				return GoalRequest{}, "Tell me the goal after the parameters, for example `🔁 maxTurns: 20 update the docs`.", true
+				return GoalRequest{}, "Tell me the goal after the parameters, for example `🔁 maxTurns: 5 update the docs`.", true
 			}
 
 			return GoalRequest{Objective: objective, CheckScript: checkScript, MaxTurns: maxTurns}, "", true

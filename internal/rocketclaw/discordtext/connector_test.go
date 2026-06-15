@@ -2,6 +2,7 @@ package discordtext
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -44,10 +45,12 @@ func TestSendResponsePrefixesGoalProgress(t *testing.T) {
 	reply := &events.DiscordReplyTarget{ChannelID: "C123"}
 	require.NoError(t, connector.SendResponse(t.Context(), &events.OutboundMessage{TurnID: "turn-1", ProgressText: "working", DiscordReply: reply}))
 	require.NoError(t, connector.SendResponse(t.Context(), &events.OutboundMessage{TurnID: "turn-2", ProgressText: "working", GoalTurn: true, DiscordReply: reply}))
+	require.NoError(t, connector.SendResponse(t.Context(), &events.OutboundMessage{TurnID: "turn-3", ProgressText: "working", GoalTurn: true, GoalTurnNumber: 2, GoalMaxTurns: 5, DiscordReply: reply}))
 
-	require.Len(t, fake.messages, 2)
+	require.Len(t, fake.messages, 3)
 	assert.Equal(t, "working", fake.messages[0].send.Content)
-	assert.Equal(t, discordGoalProgressPrefix+"\n\nworking", fake.messages[1].send.Content)
+	assert.Equal(t, fmt.Sprintf(discordGoalProgressPrefix, "")+"\n\nworking", fake.messages[1].send.Content)
+	assert.Equal(t, "_Pursuing Goal (2/5)..._\n\nworking", fake.messages[2].send.Content)
 }
 
 func TestSendResponseAddsGoalCompleteReactions(t *testing.T) {

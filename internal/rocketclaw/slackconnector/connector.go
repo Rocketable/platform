@@ -47,10 +47,19 @@ const (
 	slackInterruptionReaction     = "exclamation"
 	slackMainStackKey             = "main"
 	slackImmediatePlaceholder     = "_Thinking..._"
-	slackGoalPlaceholder          = "_Pursuing goal..._"
+	slackGoalPlaceholderFormat    = "_Pursuing Goal%s..._"
 	slackAnswerPlaceholder        = "\u200B"
 	slackThinkingFlushInterval    = 2 * time.Second
 )
+
+func slackGoalPlaceholder(turnNumber, maxTurns int) string {
+	suffix := ""
+	if maxTurns > 0 && turnNumber > 0 {
+		suffix = fmt.Sprintf(" (%d/%d)", turnNumber, maxTurns)
+	}
+
+	return fmt.Sprintf(slackGoalPlaceholderFormat, suffix)
+}
 
 const (
 	slackSummaryInProgressReaction = "hourglass_flowing_sand"
@@ -234,7 +243,7 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 
 	placeholder := slackImmediatePlaceholder
 	if msg.GoalTurn {
-		placeholder = slackGoalPlaceholder
+		placeholder = slackGoalPlaceholder(msg.GoalTurnNumber, msg.GoalMaxTurns)
 	}
 
 	switch {
@@ -1167,7 +1176,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 				}
 
 				c.beginSlackStack(key)
-				c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackGoalPlaceholder, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
+				c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackGoalPlaceholder(1, goal.MaxTurns), "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
 
 				inbound := newSlackInboundMessage(goal.Objective, &content, replyTarget)
 				if !c.startSlackGoal(ctx, key, replyTarget, "", goal, inbound) {
@@ -1242,7 +1251,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 
 		key := slackThreadStackKey(replyTarget)
 		c.beginSlackStack(key)
-		c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackGoalPlaceholder, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", "main")
+		c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackGoalPlaceholder(1, goal.MaxTurns), "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", "main")
 
 		content := c.inboundContentForMessageEvent(ctx, ev)
 		content.Text = text
@@ -1524,7 +1533,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 	placeholder := slackImmediatePlaceholder
 	if isGoal {
-		placeholder = slackGoalPlaceholder
+		placeholder = slackGoalPlaceholder(1, goal.MaxTurns)
 	}
 
 	c.createReplyPlaceholdersOrWarn(ctx, replyTarget, placeholder, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)

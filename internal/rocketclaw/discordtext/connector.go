@@ -31,7 +31,7 @@ const (
 	discordStopButtonEmoji    = "⏹️"
 	discordInterruptedEmoji   = "❗"
 	discordGoalCompleteEmoji  = "✅"
-	discordGoalProgressPrefix = "_Pursuing goal..._"
+	discordGoalProgressPrefix = "_Pursuing Goal%s..._"
 	maxDiscordAttachmentBytes = 16 << 20
 )
 
@@ -281,7 +281,12 @@ func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, rel
 func (c *Connector) sendProgress(channelID string, msg *events.OutboundMessage) error {
 	text := strings.TrimSpace(msg.ProgressText)
 	if msg.GoalTurn {
-		text = discordGoalProgressPrefix + "\n\n" + text
+		suffix := ""
+		if msg.GoalMaxTurns > 0 && msg.GoalTurnNumber > 0 {
+			suffix = fmt.Sprintf(" (%d/%d)", msg.GoalTurnNumber, msg.GoalMaxTurns)
+		}
+
+		text = fmt.Sprintf(discordGoalProgressPrefix, suffix) + "\n\n" + text
 	}
 
 	c.mu.Lock()
