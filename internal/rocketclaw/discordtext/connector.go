@@ -560,10 +560,6 @@ func (c *Connector) handleResponseThreadReply(ctx context.Context, ev *messageCr
 	msg := ev.Message
 
 	reference := msg.MessageReference
-	if reference == nil || strings.TrimSpace(reference.MessageID) == "" {
-		return false, nil
-	}
-
 	if handled, err := c.threadRouter.PrepareResponseThreadReply(events.TextConversationTarget{ChannelID: msg.ChannelID, MessageID: reference.MessageID}); err != nil || !handled {
 		if err != nil {
 			return handled, fmt.Errorf("prepare Discord response-rooted thread reply: %w", err)
@@ -773,11 +769,11 @@ func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCr
 				return nil
 			}
 
-			if thinking == "" {
-				thinking = text
-			} else {
-				thinking += "\n" + text
+			if thinking != "" {
+				thinking += "\n"
 			}
+
+			thinking += text
 
 			return publish(ctx, "", thinking, false, false, nil)
 		},

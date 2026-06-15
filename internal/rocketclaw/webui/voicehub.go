@@ -588,10 +588,6 @@ func (s *voiceSession) handleBufferedChunkLocked(mimeType string, chunk buffered
 
 func (s *voiceSession) finalizeCurrentLocked() {
 	current := s.current
-	if current == nil {
-		return
-	}
-
 	s.current = nil
 	s.hub.startUtteranceWork(s.id, current)
 }
@@ -668,12 +664,7 @@ func (s *voiceSession) enqueue(message *serverMessage) bool {
 	case s.send <- message:
 		return true
 	default:
-		typeName := ""
-		if message != nil {
-			typeName = message.Type
-		}
-
-		s.hub.log.Warn("dropping browser voice websocket message", "session_id", s.id, "type", typeName)
+		s.hub.log.Warn("dropping browser voice websocket message", "session_id", s.id, "type", message.Type)
 
 		return false
 	}
@@ -798,10 +789,6 @@ func normalizeBrowserOpusMIMEType(mimeType string) string {
 }
 
 func splitWebMHeader(data []byte) (headerData, bodyData []byte) {
-	if len(data) == 0 {
-		return nil, nil
-	}
-
 	clusterOffset := bytes.Index(data, []byte(webMClusterElementID))
 	switch {
 	case clusterOffset > 0:
@@ -817,10 +804,6 @@ func assembleWebMUtterance(headerData []byte, chunks []bufferedChunk) []byte {
 	bodyData := flattenUtteranceChunks(chunks)
 	if len(headerData) == 0 {
 		return bodyData
-	}
-
-	if len(bodyData) == 0 {
-		return append([]byte(nil), headerData...)
 	}
 
 	assembled := make([]byte, 0, len(headerData)+len(bodyData))

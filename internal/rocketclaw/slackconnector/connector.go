@@ -1860,10 +1860,6 @@ func (c *Connector) threadAgentForText(text string) (agent string, preSeed bool,
 }
 
 func (c *Connector) handleOnDemandCronRequest(ctx context.Context, ev *slackevents.MessageEvent, target string, replyTarget *events.SlackReplyTarget) {
-	if ev == nil || replyTarget == nil {
-		return
-	}
-
 	loaded, err := c.oneOffCronjobs.LoadOneOffCronjob(target)
 	if err != nil {
 		if errPost := c.publishOnDemandCronReply(ctx, replyTarget, "I couldn't find that cronjob. Use a top-level cron filename like `daily` or `daily.md`.", true); errPost != nil {
@@ -1959,11 +1955,11 @@ func (c *Connector) runOnDemandCron(ctx context.Context, log *slog.Logger, loade
 				return nil
 			}
 
-			if thinking == "" {
-				thinking = text
-			} else {
-				thinking += "\n" + text
+			if thinking != "" {
+				thinking += "\n"
 			}
+
+			thinking += text
 
 			return publish(ctx, "", thinking, false, false, nil)
 		},

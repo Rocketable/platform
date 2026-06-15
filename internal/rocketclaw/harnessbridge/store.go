@@ -1124,10 +1124,6 @@ func validateRecoveredSessionDB(ctx context.Context, recoveredPath string) error
 
 	defer func() { _ = rows.Close() }()
 
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read recovered rocketcode session entries schema check: %w", err)
-	}
-
 	return nil
 }
 

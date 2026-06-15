@@ -225,21 +225,14 @@ func (c *Connector) interruptPlayback() bool {
 	}
 
 	c.playback = nil
-	cancel := state.cancel
 	c.mu.Unlock()
 
-	if cancel != nil {
-		cancel(ErrPlaybackInterrupted)
-	}
+	state.cancel(ErrPlaybackInterrupted)
 
 	return true
 }
 
 func (c *Connector) nextPlaybackText(msg *events.OutboundMessage) playbackText {
-	if msg == nil {
-		return playbackText{}
-	}
-
 	text := strings.TrimSpace(msg.Text)
 	if msg.Complete {
 		text = strings.TrimSpace(text + "\n\n" + events.AttachmentNamesSpeech(msg.Attachments))

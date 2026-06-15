@@ -135,10 +135,7 @@ func (b *Bus) PublishOutbound(ctx context.Context, msg *OutboundMessage) error {
 		b.outboundPending++
 		msg.deliveryNotify = func(error) {
 			b.mu.Lock()
-			if b.outboundPending > 0 {
-				b.outboundPending--
-			}
-
+			b.outboundPending--
 			b.cond.Broadcast()
 			b.mu.Unlock()
 		}
@@ -350,23 +347,11 @@ func (b *Bus) dequeueAudio(ctx context.Context) (*AudioChunk, bool) {
 }
 
 func (b *Bus) notifyOnContext(ctx context.Context) func() {
-	if ctx.Done() == nil {
-		return func() {}
-	}
+	stop := context.AfterFunc(ctx, func() {
+		b.mu.Lock()
+		b.cond.Broadcast()
+		b.mu.Unlock()
+	})
 
-	done := make(chan struct{})
-
-	go func() {
-		select {
-		case <-ctx.Done():
-			b.mu.Lock()
-			b.cond.Broadcast()
-			b.mu.Unlock()
-		case <-done:
-		}
-	}()
-
-	return func() {
-		close(done)
-	}
+	return func() { stop() }
 }

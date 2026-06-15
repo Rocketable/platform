@@ -39,6 +39,11 @@ const (
 
 type gatewayOpcode int
 
+type gatewayHeartbeatPayload struct {
+	Op gatewayOpcode `json:"op"`
+	D  any           `json:"d"`
+}
+
 // Gateway opcodes are named by Discord at:
 // https://docs.discord.com/developers/topics/opcodes-and-status-codes#gateway-gateway-opcodes
 const (
@@ -456,8 +461,11 @@ func (w *wire) handleGatewayEvent(conn *websocket.Conn, op gatewayOpcode, eventT
 		w.sendIdentify()
 	case gatewayOpDispatch:
 		w.handleDispatch(eventType, data)
-	case gatewayOpHeartbeat, gatewayOpIdentify:
-		return
+	case gatewayOpHeartbeat:
+		if err := w.writeGatewayJSON(gatewayHeartbeatPayload{Op: gatewayOpHeartbeat, D: nil}); err != nil {
+			w.log.Error("heartbeat Discord text gateway", "error", err)
+		}
+	case gatewayOpIdentify:
 	}
 }
 
@@ -496,13 +504,6 @@ func (w *wire) sendIdentify() {
 }
 
 func (w *wire) gatewayHeartbeat(conn *websocket.Conn, interval time.Duration) {
-	// heartbeatPayload is the Discord Gateway Heartbeat payload.
-	// https://docs.discord.com/developers/topics/gateway-events#heartbeat
-	type heartbeatPayload struct {
-		Op gatewayOpcode `json:"op"`
-		D  any           `json:"d"`
-	}
-
 	if interval <= 0 {
 		return
 	}
@@ -519,7 +520,7 @@ func (w *wire) gatewayHeartbeat(conn *websocket.Conn, interval time.Duration) {
 			return
 		}
 
-		if err := w.writeGatewayJSON(heartbeatPayload{Op: gatewayOpHeartbeat, D: nil}); err != nil {
+		if err := w.writeGatewayJSON(gatewayHeartbeatPayload{Op: gatewayOpHeartbeat, D: nil}); err != nil {
 			w.log.Error("heartbeat Discord text gateway", "error", err)
 		}
 	}
