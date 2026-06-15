@@ -32,6 +32,7 @@ func TestRunWithoutDefaultConfigShowsHelp(t *testing.T) {
 	assert.Contains(t, output, "rocketclaw setup files get <path>\n")
 	assert.Contains(t, output, "rocketclaw oai login [--headless]")
 	assert.NotContains(t, output, "rocketclaw setup [flags]")
+	assert.NotContains(t, output, "migrate-config")
 }
 
 func TestMainWithoutDefaultConfigShowsHelp(t *testing.T) {
@@ -145,6 +146,7 @@ func TestRunDispatchesSubcommandErrorsBeforeDefaultConfig(t *testing.T) {
 func TestRunDispatchesHelp(t *testing.T) {
 	output := captureStdout(t, func() error { return run([]string{"help"}) })
 	assert.Contains(t, output, "Usage:")
+	assert.NotContains(t, output, "migrate-config")
 }
 
 func TestPrintStdoutReportsWriteError(t *testing.T) {

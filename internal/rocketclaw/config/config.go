@@ -206,24 +206,48 @@ func Load(configPath string) (*Config, error) {
 	return &cfg, nil
 }
 
+// Migrate applies legacy rocketclaw configuration migrations in memory.
+func Migrate(data []byte) ([]byte, error) {
+	var err error
+
+	if data, _, err = migrateThreadAgentsConfigData(data); err != nil {
+		return nil, err
+	}
+
+	if data, _, err = migrateSlackSocialChannelAgentsConfigData(data); err != nil {
+		return nil, err
+	}
+
+	return data, nil
+}
+
 func migrateThreadAgentsConfig(path string, data []byte) ([]byte, error) {
+	updated, changed, err := migrateThreadAgentsConfigData(data)
+	if err != nil || !changed {
+		return updated, err
+	}
+
+	return writeMigratedConfig(path, updated)
+}
+
+func migrateThreadAgentsConfigData(data []byte) (updated []byte, changed bool, err error) {
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(data, &root); err != nil {
-		return data, nil
+		return data, false, nil
 	}
 
 	raw, ok := root["thread_agents"]
 	if !ok {
-		return data, nil
+		return data, false, nil
 	}
 
 	var old map[string]string
 	if err := json.Unmarshal(raw, &old); err != nil {
-		return data, nil
+		return data, false, nil
 	}
 
 	if len(old) == 0 {
-		return data, nil
+		return data, false, nil
 	}
 
 	migrated := make(map[string]ThreadAgent, len(old))
@@ -233,28 +257,39 @@ func migrateThreadAgentsConfig(path string, data []byte) ([]byte, error) {
 
 	threadAgents, err := json.Marshal(migrated)
 	if err != nil {
-		return nil, fmt.Errorf("marshal migrated thread_agents: %w", err)
+		return nil, false, fmt.Errorf("marshal migrated thread_agents: %w", err)
 	}
 
 	root["thread_agents"] = threadAgents
 
-	return writeMigratedConfig(path, root)
+	updated, err = marshalMigratedConfig(root)
+
+	return updated, err == nil, err
 }
 
 func migrateSlackSocialChannelAgentsConfig(path string, data []byte) ([]byte, error) {
+	updated, changed, err := migrateSlackSocialChannelAgentsConfigData(data)
+	if err != nil || !changed {
+		return updated, err
+	}
+
+	return writeMigratedConfig(path, updated)
+}
+
+func migrateSlackSocialChannelAgentsConfigData(data []byte) (updated []byte, changed bool, err error) {
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(data, &root); err != nil {
-		return data, nil
+		return data, false, nil
 	}
 
 	var slack map[string]json.RawMessage
 	if err := json.Unmarshal(root["slack"], &slack); err != nil {
-		return data, nil
+		return data, false, nil
 	}
 
 	var socialMode map[string]json.RawMessage
 	if err := json.Unmarshal(slack["social_mode"], &socialMode); err != nil {
-		return data, nil
+		return data, false, nil
 	}
 
 	rawAllowedUserIDs, hasAllowedUserIDs := socialMode["allowed_user_ids"]
@@ -262,7 +297,7 @@ func migrateSlackSocialChannelAgentsConfig(path string, data []byte) ([]byte, er
 	allowedUserIDs := []string(nil)
 	if hasAllowedUserIDs {
 		if err := json.Unmarshal(rawAllowedUserIDs, &allowedUserIDs); err != nil {
-			return data, nil
+			return data, false, nil
 		}
 
 		allowedUserIDs = normalizeStringList(allowedUserIDs)
@@ -270,20 +305,20 @@ func migrateSlackSocialChannelAgentsConfig(path string, data []byte) ([]byte, er
 
 	raw, hasChannelAgents := socialMode["channel_agents"]
 	if !hasChannelAgents && !hasAllowedUserIDs {
-		return data, nil
+		return data, false, nil
 	}
 
 	var old map[string]string
 	if hasChannelAgents {
 		if err := json.Unmarshal(raw, &old); err != nil {
-			return data, nil
+			return data, false, nil
 		}
 	}
 
 	var channels []TextSocialChannelConfig
 	if raw, ok := socialMode["channels"]; ok {
 		if err := json.Unmarshal(raw, &channels); err != nil {
-			return data, nil
+			return data, false, nil
 		}
 	}
 
@@ -314,7 +349,7 @@ func migrateSlackSocialChannelAgentsConfig(path string, data []byte) ([]byte, er
 	if len(channels) > 0 {
 		migratedChannels, err := json.Marshal(channels)
 		if err != nil {
-			return nil, fmt.Errorf("marshal migrated slack social channels: %w", err)
+			return nil, false, fmt.Errorf("marshal migrated slack social channels: %w", err)
 		}
 
 		socialMode["channels"] = migratedChannels
@@ -325,28 +360,35 @@ func migrateSlackSocialChannelAgentsConfig(path string, data []byte) ([]byte, er
 
 	migratedSocialMode, err := json.Marshal(socialMode)
 	if err != nil {
-		return nil, fmt.Errorf("marshal migrated slack social mode: %w", err)
+		return nil, false, fmt.Errorf("marshal migrated slack social mode: %w", err)
 	}
 
 	slack["social_mode"] = migratedSocialMode
 
 	migratedSlack, err := json.Marshal(slack)
 	if err != nil {
-		return nil, fmt.Errorf("marshal migrated slack config: %w", err)
+		return nil, false, fmt.Errorf("marshal migrated slack config: %w", err)
 	}
 
 	root["slack"] = migratedSlack
 
-	return writeMigratedConfig(path, root)
+	updated, err = marshalMigratedConfig(root)
+
+	return updated, err == nil, err
 }
 
-func writeMigratedConfig(path string, root map[string]json.RawMessage) ([]byte, error) {
+func marshalMigratedConfig(root map[string]json.RawMessage) ([]byte, error) {
 	updated, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal migrated config JSON: %w", err)
 	}
 
 	updated = append(updated, '\n')
+
+	return updated, nil
+}
+
+func writeMigratedConfig(path string, updated []byte) ([]byte, error) {
 	if err := os.WriteFile(path, updated, 0o600); err != nil {
 		return nil, fmt.Errorf("write migrated config: %w", err)
 	}
