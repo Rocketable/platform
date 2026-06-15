@@ -1451,7 +1451,7 @@ func loadRocketCodeDefinitionsIn(root *os.Root, workspace, workDir string, mode 
 	skillsRoot := filepath.Join(workspace, workDir, "skills")
 	skillResult := rocketcode.LoadSkills(skillsFS, skillsRoot)
 
-	tools := []string{restartToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName}
+	tools := []string{restartToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName}
 	if mode == toolModeCron {
 		tools = append(tools, rawRunToolName)
 	}
