@@ -22,6 +22,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/cronjob"
+	"github.com/Rocketable/platform/internal/rocketclaw/emoji"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 )
@@ -1147,7 +1148,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		}
 
 		if handled {
-			goal, rejection, isGoal := harnessbridge.ParseGoalRequest(text)
+			goal, rejection, isGoal := harnessbridge.ParseGoalRequest(emoji.CanonicalizeLeadingAlias(text))
 			if isGoal {
 				if rejection != "" {
 					if err := c.postSlackThreadReply(ctx, ev.Channel, threadTS, rejection); err != nil {
@@ -1229,7 +1230,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		return
 	}
 
-	if goal, rejection, ok := harnessbridge.ParseGoalRequest(text); ok {
+	if goal, rejection, ok := harnessbridge.ParseGoalRequest(emoji.CanonicalizeLeadingAlias(text)); ok {
 		replyTarget.ThreadTS = ev.TimeStamp
 		if rejection != "" {
 			if err := c.postSlackThreadReply(ctx, ev.Channel, ev.TimeStamp, rejection); err != nil {
@@ -1496,7 +1497,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 	replyTarget := &events.SlackReplyTarget{ChannelID: ev.Channel, MessageTS: ev.TimeStamp, ThreadTS: threadTS}
 
-	goal, rejection, isGoal := harnessbridge.ParseGoalRequest(text)
+	goal, rejection, isGoal := harnessbridge.ParseGoalRequest(emoji.CanonicalizeLeadingAlias(text))
 	if isGoal && rejection != "" {
 		if err := c.postSlackThreadReply(ctx, ev.Channel, threadTS, rejection); err != nil {
 			c.log.Warn("post Slack social goal rejection", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
@@ -1858,18 +1859,29 @@ func normalizeThreadAgents(threadAgents config.ThreadAgents) []threadAgent {
 }
 
 func (c *Connector) threadAgentForText(text string) (agent string, preSeed bool, promptText string, ok bool) {
-	text = strings.TrimSpace(text)
+	text = emoji.CanonicalizeLeadingAlias(text)
 
 	for i := range c.threadAgents {
 		candidate := c.threadAgents[i]
-		if !strings.HasPrefix(text, candidate.prefix) {
+
+		promptText, ok := textAfterPrefix(text, emoji.CanonicalizeLeadingAlias(candidate.prefix))
+		if !ok {
 			continue
 		}
 
-		return candidate.agent, candidate.preSeed, strings.TrimSpace(strings.TrimPrefix(text, candidate.prefix)), true
+		return candidate.agent, candidate.preSeed, promptText, true
 	}
 
 	return "", false, "", false
+}
+
+func textAfterPrefix(text, prefix string) (string, bool) {
+	after, ok := strings.CutPrefix(strings.TrimSpace(text), prefix)
+	if !ok {
+		return "", false
+	}
+
+	return strings.TrimSpace(after), true
 }
 
 func (c *Connector) handleOnDemandCronRequest(ctx context.Context, ev *slackevents.MessageEvent, target string, replyTarget *events.SlackReplyTarget) {

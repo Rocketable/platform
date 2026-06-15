@@ -1,0 +1,577 @@
+// Command gen generates Unicode emoji alias tables.
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"flag"
+	"fmt"
+	"go/format"
+	"io"
+	"net/http"
+	"os"
+	"sort"
+	"strings"
+	"time"
+	"unicode"
+)
+
+const unicodeVersion = "17.0.0"
+const unicodeBaseURL = "https://unicode.org/Public/" + unicodeVersion
+
+const (
+	emojiTestURL   = unicodeBaseURL + "/emoji/emoji-test.txt"
+	unicodeDataURL = unicodeBaseURL + "/ucd/UnicodeData.txt"
+	nameAliasesURL = unicodeBaseURL + "/ucd/NameAliases.txt"
+)
+
+type emojiEntry struct {
+	unified     string
+	emoji       string
+	cldrName    string
+	unicodeName string
+	aliases     map[string]struct{}
+	primary     string
+	order       int
+}
+
+func main() {
+	pkg := flag.String("pkg", "emoji", "package name for generated Go file")
+	out := flag.String("out", "emojis_gen.go", "output Go file")
+
+	flag.Parse()
+
+	emojis := parseEmojiTest(mustFetch(emojiTestURL))
+	unicodeNames := parseUnicodeData(mustFetch(unicodeDataURL))
+	unicodeNameAliases := parseNameAliases(mustFetch(nameAliasesURL))
+
+	for unified, e := range emojis {
+		nameCodepoint := baseCodepointForUnicodeName(unified)
+		if nameCodepoint != "" {
+			if unicodeName, ok := unicodeNames[nameCodepoint]; ok {
+				e.unicodeName = unicodeName
+				e.addAlias(nameToAlias(unicodeName))
+			}
+
+			for _, aliasName := range unicodeNameAliases[nameCodepoint] {
+				e.addAlias(nameToAlias(aliasName))
+			}
+		}
+
+		for i, alias := range extraAliases(unified) {
+			e.addAlias(alias)
+
+			if i == 0 {
+				e.primary = normalizeAlias(alias)
+			}
+		}
+	}
+
+	formatted, err := format.Source(generateGo(*pkg, emojis))
+	if err != nil {
+		_, _ = os.Stderr.Write(generateGo(*pkg, emojis))
+
+		panic(err)
+	}
+
+	if err := os.WriteFile(*out, formatted, 0o644); err != nil {
+		panic(err)
+	}
+}
+
+func parseEmojiTest(r io.ReadCloser) map[string]*emojiEntry {
+	defer closeReader(r)
+
+	emojis := map[string]*emojiEntry{}
+	scanner := newScanner(r)
+	order := 0
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		left, comment := splitComment(line)
+
+		fields := splitSemi(left)
+		if len(fields) < 2 {
+			continue
+		}
+
+		status := strings.TrimSpace(fields[1])
+		if status != "fully-qualified" && status != "component" {
+			continue
+		}
+
+		emojiChar, cldrName := parseEmojiTestComment(comment)
+		if emojiChar == "" || cldrName == "" {
+			continue
+		}
+
+		unified := strings.ToUpper(strings.Join(strings.Fields(fields[0]), "-"))
+		order++
+		e := &emojiEntry{unified: unified, emoji: emojiChar, cldrName: cldrName, aliases: map[string]struct{}{}, primary: nameToAlias(cldrName), order: order}
+		e.addAlias(e.primary)
+		emojis[unified] = e
+	}
+
+	if err := scanner.Err(); err != nil {
+		panic(err)
+	}
+
+	return emojis
+}
+
+func parseUnicodeData(r io.ReadCloser) map[string]string {
+	defer closeReader(r)
+
+	names := map[string]string{}
+
+	scanner := newScanner(r)
+	for scanner.Scan() {
+		fields := strings.Split(scanner.Text(), ";")
+		if len(fields) < 2 {
+			continue
+		}
+
+		code := strings.ToUpper(strings.TrimSpace(fields[0]))
+
+		name := strings.TrimSpace(fields[1])
+		if code == "" || name == "" || strings.HasPrefix(name, "<") && strings.HasSuffix(name, ">") {
+			continue
+		}
+
+		names[code] = name
+	}
+
+	if err := scanner.Err(); err != nil {
+		panic(err)
+	}
+
+	return names
+}
+
+func parseNameAliases(r io.ReadCloser) map[string][]string {
+	defer closeReader(r)
+
+	aliases := map[string][]string{}
+
+	scanner := newScanner(r)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		left, _ := splitComment(line)
+
+		fields := splitSemi(left)
+		if len(fields) < 2 {
+			continue
+		}
+
+		code := strings.ToUpper(strings.TrimSpace(fields[0]))
+
+		aliasName := strings.TrimSpace(fields[1])
+		if code != "" && aliasName != "" {
+			aliases[code] = append(aliases[code], aliasName)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		panic(err)
+	}
+
+	return aliases
+}
+
+func generateGo(pkg string, emojis map[string]*emojiEntry) []byte {
+	aliasToEmoji := map[string]string{}
+	emojiToAliases := map[string][]string{}
+	emojiToPrimary := map[string]string{}
+
+	ordered := make([]*emojiEntry, 0, len(emojis))
+	for _, e := range emojis {
+		ordered = append(ordered, e)
+	}
+
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].order < ordered[j].order })
+
+	for _, e := range ordered {
+		aliases := mapKeys(e.aliases)
+		sort.Strings(aliases)
+
+		for _, alias := range aliases {
+			if existing, exists := aliasToEmoji[alias]; alias != "" && (!exists || existing == e.emoji) {
+				aliasToEmoji[alias] = e.emoji
+			}
+		}
+
+		emojiToAliases[e.emoji] = uniqueSorted(append(emojiToAliases[e.emoji], aliases...))
+		if emojiToPrimary[e.emoji] == "" {
+			emojiToPrimary[e.emoji] = e.primary
+		}
+	}
+
+	aliases := mapKeys(aliasToEmoji)
+	sort.Strings(aliases)
+
+	emojiKeys := mapKeys(emojiToAliases)
+	sort.Strings(emojiKeys)
+
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "// Code generated by internal/gen; DO NOT EDIT.\n")
+	fmt.Fprintf(&b, "// Source: Unicode %s, %s\n\n", unicodeVersion, unicodeBaseURL)
+	fmt.Fprintf(&b, "package %s\n\n", pkg)
+	fmt.Fprintf(&b, "import \"strings\"\n\n")
+	fmt.Fprintf(&b, "const UnicodeEmojiVersion = %q\n\n", unicodeVersion)
+	fmt.Fprintf(&b, "var aliasToEmoji = map[string]string{\n")
+
+	for _, alias := range aliases {
+		fmt.Fprintf(&b, "\t%q: %q,\n", alias, aliasToEmoji[alias])
+	}
+
+	fmt.Fprintf(&b, "}\n\nvar emojiToAliases = map[string][]string{\n")
+
+	for _, emojiChar := range emojiKeys {
+		fmt.Fprintf(&b, "\t%q: {", emojiChar)
+
+		for i, alias := range emojiToAliases[emojiChar] {
+			if i > 0 {
+				fmt.Fprintf(&b, ", ")
+			}
+
+			fmt.Fprintf(&b, "%q", alias)
+		}
+
+		fmt.Fprintf(&b, "},\n")
+	}
+
+	fmt.Fprintf(&b, "}\n\nvar emojiToPrimaryAlias = map[string]string{\n")
+
+	for _, emojiChar := range emojiKeys {
+		if primary := emojiToPrimary[emojiChar]; primary != "" {
+			fmt.Fprintf(&b, "\t%q: %q,\n", emojiChar, primary)
+		}
+	}
+
+	fmt.Fprintf(&b, "}\n\n")
+	fmt.Fprint(&b, generatedHelpers())
+
+	return b.Bytes()
+}
+
+func generatedHelpers() string {
+	return `func FromAlias(alias string) (string, bool) {
+	alias = NormalizeAlias(alias)
+	if alias == "" {
+		return "", false
+	}
+
+	v, ok := aliasToEmoji[alias]
+	return v, ok
+}
+
+func ToAliases(emoji string) ([]string, bool) {
+	aliases, ok := emojiToAliases[emoji]
+	if !ok {
+		return nil, false
+	}
+
+	out := make([]string, len(aliases))
+	copy(out, aliases)
+	return out, true
+}
+
+func ToPrimaryAlias(emoji string) (string, bool) {
+	alias, ok := emojiToPrimaryAlias[emoji]
+	return alias, ok
+}
+
+func CanonicalizeLeadingAlias(text string) string {
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, ":") {
+		return text
+	}
+
+	end := strings.Index(text[1:], ":")
+	if end < 0 {
+		return text
+	}
+
+	alias := text[:end+2]
+	if emoji, ok := FromAlias(alias); ok {
+		rest := strings.TrimSpace(text[end+2:])
+		if rest == "" {
+			return emoji
+		}
+
+		return emoji + " " + rest
+	}
+
+	return text
+}
+
+func NormalizeAlias(alias string) string {
+	alias = strings.ToLower(strings.TrimSpace(alias))
+	if alias == "" {
+		return ""
+	}
+
+	if !strings.HasPrefix(alias, ":") {
+		alias = ":" + alias
+	}
+
+	if !strings.HasSuffix(alias, ":") {
+		alias += ":"
+	}
+
+	return alias
+}
+`
+}
+
+func sourceHash(url string) string {
+	switch url {
+	case emojiTestURL:
+		return "1d8a944f88d7952f7ef7c5167fef3c67995bcae24543949710231b03a201acda"
+	case unicodeDataURL:
+		return "2e1efc1dcb59c575eedf5ccae60f95229f706ee6d031835247d843c11d96470c"
+	case nameAliasesURL:
+		return "793f6f1e4d15fd90f05ae66460191dc4d75d1fea90136a25f30dd6a4cb950eac"
+	default:
+		return ""
+	}
+}
+
+func extraAliases(unified string) []string {
+	switch unified {
+	case "1F44D":
+		return []string{":+1:", ":thumbsup:"}
+	case "1F44E":
+		return []string{":-1:", ":thumbsdown:"}
+	case "2764-FE0F":
+		return []string{":heart:"}
+	case "1F602":
+		return []string{":joy:"}
+	case "1F604":
+		return []string{":smile:"}
+	case "1F603":
+		return []string{":smiley:"}
+	case "1F609":
+		return []string{":wink:"}
+	case "1F60D":
+		return []string{":heart_eyes:"}
+	case "1F618":
+		return []string{":kissing_heart:"}
+	case "1F622":
+		return []string{":cry:"}
+	case "1F62D":
+		return []string{":sob:"}
+	case "1F621":
+		return []string{":rage:"}
+	case "1F389":
+		return []string{":tada:"}
+	case "1F525":
+		return []string{":fire:"}
+	case "2705":
+		return []string{":white_check_mark:"}
+	case "274C":
+		return []string{":x:"}
+	case "2757":
+		return []string{":exclamation:"}
+	case "2753":
+		return []string{":question:"}
+	case "1F3C1":
+		return []string{":checkered_flag:"}
+	case "1F501":
+		return []string{":repeat:"}
+	case "1F502":
+		return []string{":repeat_one:"}
+	case "26A0-FE0F":
+		return []string{":warning:"}
+	case "2139-FE0F":
+		return []string{":information_source:"}
+	default:
+		return nil
+	}
+}
+
+func parseEmojiTestComment(comment string) (emojiChar, name string) {
+	parts := strings.Fields(comment)
+	if len(parts) < 3 {
+		return "", ""
+	}
+
+	versionIndex := -1
+
+	for i, part := range parts {
+		if len(part) >= 2 && part[0] == 'E' && part[1] >= '0' && part[1] <= '9' {
+			versionIndex = i
+			break
+		}
+	}
+
+	if versionIndex < 1 || versionIndex+1 >= len(parts) {
+		return "", ""
+	}
+
+	return parts[0], strings.Join(parts[versionIndex+1:], " ")
+}
+
+func nameToAlias(name string) string {
+	name = strings.ToLower(name)
+	name = strings.NewReplacer("&", " and ", "+", " plus ", "#", " hash ", "*", " asterisk ", "©", " copyright ", "®", " registered ", "-", " ").Replace(name)
+
+	var b strings.Builder
+
+	lastUnderscore := false
+
+	for _, r := range name {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			b.WriteRune(r)
+
+			lastUnderscore = false
+
+			continue
+		}
+
+		if unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) {
+			if !lastUnderscore {
+				b.WriteByte('_')
+
+				lastUnderscore = true
+			}
+		}
+	}
+
+	alias := strings.Trim(b.String(), "_")
+	if alias == "" {
+		return ""
+	}
+
+	return ":" + alias + ":"
+}
+
+func baseCodepointForUnicodeName(unified string) string {
+	parts := strings.Split(unified, "-")
+	if len(parts) == 1 || len(parts) == 2 && (parts[1] == "FE0E" || parts[1] == "FE0F") {
+		return parts[0]
+	}
+
+	return ""
+}
+
+func splitComment(line string) (left, comment string) {
+	parts := strings.SplitN(line, "#", 2)
+
+	left = strings.TrimSpace(parts[0])
+	if len(parts) == 2 {
+		comment = strings.TrimSpace(parts[1])
+	}
+
+	return left, comment
+}
+
+func splitSemi(s string) []string {
+	raw := strings.Split(s, ";")
+
+	out := make([]string, 0, len(raw))
+	for _, part := range raw {
+		out = append(out, strings.TrimSpace(part))
+	}
+
+	return out
+}
+
+func (e *emojiEntry) addAlias(alias string) {
+	alias = normalizeAlias(alias)
+	if alias == "" {
+		return
+	}
+
+	e.aliases[alias] = struct{}{}
+}
+
+func normalizeAlias(alias string) string {
+	alias = strings.ToLower(strings.TrimSpace(alias))
+	if alias == "" {
+		return ""
+	}
+
+	if !strings.HasPrefix(alias, ":") {
+		alias = ":" + alias
+	}
+
+	if !strings.HasSuffix(alias, ":") {
+		alias += ":"
+	}
+
+	return alias
+}
+
+func mapKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+
+	return keys
+}
+
+func uniqueSorted(items []string) []string {
+	sort.Strings(items)
+
+	out := items[:0]
+	for _, item := range items {
+		if item != "" && (len(out) == 0 || out[len(out)-1] != item) {
+			out = append(out, item)
+		}
+	}
+
+	return out
+}
+
+func newScanner(r io.Reader) *bufio.Scanner {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 1024), 1024*1024)
+
+	return scanner
+}
+
+func mustFetch(url string) io.ReadCloser {
+	client := &http.Client{Timeout: 30 * time.Second}
+
+	resp, err := client.Get(url)
+	if err != nil {
+		panic(err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_ = resp.Body.Close()
+		panic(fmt.Sprintf("fetch %s: HTTP %d", url, resp.StatusCode))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+
+	if err != nil {
+		panic(err)
+	}
+
+	sum := sha256.Sum256(body)
+	if got, want := hex.EncodeToString(sum[:]), sourceHash(url); got != want {
+		panic(fmt.Sprintf("fetch %s: sha256 %s, want %s", url, got, want))
+	}
+
+	return io.NopCloser(bytes.NewReader(body))
+}
+
+func closeReader(r io.Closer) {
+	if err := r.Close(); err != nil {
+		panic(err)
+	}
+}

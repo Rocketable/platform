@@ -22,8 +22,9 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 - In a text connector DM, a configured-human message starts a goal loop when its trimmed text begins with `🔁` or `🏁`.
 - In text connector social mode, an allowed app/bot mention starts a goal loop when the text remaining after RocketClaw bot mention stripping begins with `🔁` or `🏁`.
 - In an existing managed text conversation, an authorized human message starts a goal loop for that existing conversation when its trimmed text begins with `🔁` or `🏁`.
+- Each text connector applies the same connector-local emoji-prefix normalization to goal starts that it applies to other emoji-prefixed starts before entering the shared goal parser. For Slack, this includes accepting Slack's `:repeat:` and `:checkered_flag:` transport text for `🔁` and `🏁` in every goal-start location.
 - If the target managed conversation already has an active goal, a new goal start must be rejected with a `❗` reaction and a visible message explaining that a goal is already in progress.
-- The trigger syntax is `(🔁|🏁) [maxTurns: VALUE] [checkScript: VALUE] OBJECTIVE`.
+- The shared trigger syntax is `(🔁|🏁) [maxTurns: VALUE] [checkScript: VALUE] OBJECTIVE` after connector-local emoji-prefix normalization. Slack text-prefix normalization accepts `:repeat:` and `:checkered_flag:` in place of the emoji token.
 - `maxTurns:` is an optional leading Smalltalk-style keyword parameter. It consumes the next whitespace-delimited value.
 - `checkScript:` is an optional leading Smalltalk-style keyword parameter. It consumes either the next whitespace-delimited value or one quoted command-line string, for example `checkScript: ./scripts/check.sh` or `checkScript: "./scripts/check.sh --linter-mode"`.
 - Omitted `maxTurns:` defaults to `20`.
@@ -158,3 +159,4 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 - 2026-06-14: Recast goal-loop contracts as a generic primary text connector contract with Slack and Discord Text bindings for DM, social-mode, threading, progress, interruption, completion reactions, and restart recovery.
 - 2026-06-14: Required goal-loop bridge ownership to use one injected connector-neutral primary text API rather than parallel Slack and Discord bridge implementations.
 - 2026-06-14: Specified `_Pursuing goal..._` as the primary text connector goal-loop progress marker for Slack placeholders and Discord progress messages.
+- 2026-06-14: Specified that each text connector applies connector-local emoji-prefix normalization to goal starts before the shared goal parser, including Slack's `:repeat:` and `:checkered_flag:` transport text, while preserving Slack/Discord Text symmetry.

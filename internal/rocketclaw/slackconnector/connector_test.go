@@ -28,6 +28,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/cronjob"
+	"github.com/Rocketable/platform/internal/rocketclaw/emoji"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 )
@@ -140,6 +141,25 @@ func TestNormalizeThreadAgentsRoutesLongestPrefix(t *testing.T) {
 	assert.Nil(t, normalizeThreadAgents(config.ThreadAgents{" ": {Agent: " "}}))
 }
 
+func TestThreadAgentForTextMatchesUnicodeAndAliasPrefixes(t *testing.T) {
+	connector := &Connector{threadAgents: normalizeThreadAgents(config.ThreadAgents{
+		"🧵":         {Agent: "unicode-agent", PreSeed: true},
+		":factory:": {Agent: "alias-agent"},
+	})}
+
+	agent, preSeed, promptText, ok := connector.threadAgentForText(":thread: fix production")
+	assert.True(t, ok)
+	assert.True(t, preSeed)
+	assert.Equal(t, "unicode-agent", agent)
+	assert.Equal(t, "fix production", promptText)
+
+	agent, preSeed, promptText, ok = connector.threadAgentForText("🏭 plan buildout")
+	assert.True(t, ok)
+	assert.False(t, preSeed)
+	assert.Equal(t, "alias-agent", agent)
+	assert.Equal(t, "plan buildout", promptText)
+}
+
 func TestGoalRequestForTextParsesSupportedTriggers(t *testing.T) {
 	tests := []struct {
 		text        string
@@ -165,6 +185,27 @@ func TestGoalRequestForTextParsesSupportedTriggers(t *testing.T) {
 			assert.Equal(t, tt.objective, goal.Objective)
 			assert.Equal(t, tt.checkScript, goal.CheckScript)
 			assert.Equal(t, tt.maxTurns, goal.MaxTurns)
+		})
+	}
+}
+
+func TestSlackGoalParserTextNormalizesTransportEmojiPrefixes(t *testing.T) {
+	tests := []struct {
+		text      string
+		objective string
+	}{
+		{text: "🔁 write docs", objective: "write docs"},
+		{text: ":repeat: write docs", objective: "write docs"},
+		{text: "🏁 do the same in more details", objective: "do the same in more details"},
+		{text: ":checkered_flag: do the same in more details", objective: "do the same in more details"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.text, func(t *testing.T) {
+			goal, rejection, ok := harnessbridge.ParseGoalRequest(emoji.CanonicalizeLeadingAlias(tt.text))
+			require.True(t, ok)
+			require.Empty(t, rejection)
+			assert.Equal(t, tt.objective, goal.Objective)
 		})
 	}
 }
@@ -3083,7 +3124,7 @@ func TestHandleMessageEventStartsGoalInExistingManagedThread(t *testing.T) {
 	router.prepareHandled = true
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
 
-	connector.handleMessageEvent(context.Background(), newSlackMessageEvent("222.333", "111.222", "🏁 maxTurns: 2 fix lint"))
+	connector.handleMessageEvent(context.Background(), newSlackMessageEvent("222.333", "111.222", ":checkered_flag: maxTurns: 2 fix lint"))
 
 	require.Len(t, router.goalStarts, 1)
 	assert.Empty(t, router.goalStarts[0].agent)

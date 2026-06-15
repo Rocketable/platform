@@ -114,6 +114,34 @@ func TestHandleMessageStartsManagedThread(t *testing.T) {
 	assert.Equal(t, "plan this", router.started.Text)
 }
 
+func TestHandleMessageStartsManagedThreadWithUnicodeAndAliasPrefixes(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.threadID = "T123"
+	router := newFakeThreadRouter()
+	connector := newTestConnector(fake, router)
+	connector.threadAgents = normalizeThreadAgents(config.ThreadAgents{
+		"🧵":         {Agent: "unicode-agent", PreSeed: true},
+		":factory:": {Agent: "alias-agent"},
+	})
+
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "C123", Content: ":thread: plan this", Author: &textUser{ID: "human"}}})
+
+	assert.Equal(t, "unicode-agent", router.startedAgent)
+	assert.True(t, router.startedPreSeed)
+	require.NotNil(t, router.started)
+	assert.Equal(t, "plan this", router.started.Text)
+
+	fake.threadID = "T124"
+	router.started = nil
+
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U2", ChannelID: "C123", Content: "🏭 build it", Author: &textUser{ID: "human"}}})
+
+	assert.Equal(t, "alias-agent", router.startedAgent)
+	assert.False(t, router.startedPreSeed)
+	require.NotNil(t, router.started)
+	assert.Equal(t, "build it", router.started.Text)
+}
+
 func TestHandleThreadMessageSubmitsThreadReply(t *testing.T) {
 	fake := newFakeDiscordClient()
 	fake.channels["T123"] = &textChannel{ID: "T123", ParentID: "C123", Type: channelTypeGuildPublicThread}
@@ -134,7 +162,7 @@ func TestHandleThreadMessageStartsGoal(t *testing.T) {
 	router := newFakeThreadRouter()
 	connector := newTestConnector(fake, router)
 
-	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U2", ChannelID: "T123", Content: "🔁 maxTurns: 3 ship it", Author: &textUser{ID: "human"}}})
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U2", ChannelID: "T123", Content: ":repeat: maxTurns: 3 ship it", Author: &textUser{ID: "human"}}})
 
 	require.NotNil(t, router.startedGoal)
 	assert.Equal(t, "T123", router.startedGoal.DiscordReply.ThreadID)
@@ -147,7 +175,7 @@ func TestHandleMessageStartsTopLevelGoalThread(t *testing.T) {
 	router := newFakeThreadRouter()
 	connector := newTestConnector(fake, router)
 
-	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "C123", Content: "🏁 finish docs", Author: &textUser{ID: "human"}}})
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "C123", Content: ":checkered_flag: finish docs", Author: &textUser{ID: "human"}}})
 
 	require.Len(t, fake.threads, 1)
 	assert.Equal(t, "finish docs", fake.threads[0].start.Name)
@@ -161,7 +189,7 @@ func TestHandleDMGoalStartsWithoutGuildThread(t *testing.T) {
 	router := newFakeThreadRouter()
 	connector := newTestConnector(fake, router)
 
-	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "D123", Content: "🏁 finish docs", Author: &textUser{ID: "human"}}})
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "D123", Content: ":checkered_flag: finish docs", Author: &textUser{ID: "human"}}})
 
 	assert.Empty(t, fake.threads)
 	require.NotNil(t, router.startedGoal)

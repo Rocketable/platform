@@ -15,6 +15,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/cronjob"
+	"github.com/Rocketable/platform/internal/rocketclaw/emoji"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 )
@@ -415,7 +416,7 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 			return
 		}
 
-		goal, rejection, isGoal := harnessbridge.ParseGoalRequest(text)
+		goal, rejection, isGoal := harnessbridge.ParseGoalRequest(emoji.CanonicalizeLeadingAlias(text))
 		if isGoal {
 			if rejection != "" {
 				c.publishOnDemandCronReply(ctx, reply, rejection, true)
@@ -445,7 +446,7 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 			return
 		}
 
-		goal, rejection, isGoal := harnessbridge.ParseGoalRequest(text)
+		goal, rejection, isGoal := harnessbridge.ParseGoalRequest(emoji.CanonicalizeLeadingAlias(text))
 		if isGoal {
 			if rejection != "" {
 				c.publishOnDemandCronReply(ctx, reply, rejection, true)
@@ -492,7 +493,7 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 		return
 	}
 
-	if goal, rejection, ok := harnessbridge.ParseGoalRequest(text); ok {
+	if goal, rejection, ok := harnessbridge.ParseGoalRequest(emoji.CanonicalizeLeadingAlias(text)); ok {
 		if rejection != "" {
 			c.publishOnDemandCronReply(ctx, reply, rejection, true)
 			return
@@ -683,9 +684,9 @@ func (c *Connector) stopMainDiscord() {
 	}
 }
 
-func (c *Connector) addReaction(channelID, messageID, emoji string) {
-	if err := c.client.addReaction(channelID, messageID, emoji); err != nil {
-		c.log.Warn("add Discord reaction", "channel", channelID, "message", messageID, "emoji", emoji, "error", err)
+func (c *Connector) addReaction(channelID, messageID, reaction string) {
+	if err := c.client.addReaction(channelID, messageID, reaction); err != nil {
+		c.log.Warn("add Discord reaction", "channel", channelID, "message", messageID, "emoji", reaction, "error", err)
 	}
 }
 
@@ -878,8 +879,9 @@ func (c *Connector) replyChannel(reply *events.DiscordReplyTarget) string {
 }
 
 func (c *Connector) threadAgentPrompt(text string) (matched bool, agent string, preSeed bool, prompt string) {
+	text = emoji.CanonicalizeLeadingAlias(text)
 	for _, entry := range c.threadAgents {
-		if after, ok := strings.CutPrefix(text, entry.prefix); ok {
+		if after, ok := strings.CutPrefix(text, emoji.CanonicalizeLeadingAlias(entry.prefix)); ok {
 			return true, entry.agent, entry.preSeed, strings.TrimSpace(after)
 		}
 	}
