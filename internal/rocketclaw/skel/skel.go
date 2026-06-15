@@ -587,12 +587,15 @@ func runGit(dir string, args ...string) error {
 
 func resetTarget(target string, logger *slog.Logger) error {
 	preservedTargetEntries := map[string]struct{}{
-		".rocketcode":   {},
-		"auth.json":     {},
-		"overlays":      {},
-		"state.sqlite3": {},
-		"web-ui.crt":    {},
-		"web-ui.key":    {},
+		".rocketcode":        {},
+		"auth.json":          {},
+		"overlays":           {},
+		"state.sqlite3":      {},
+		"state.sqlite3-shm":  {},
+		"state.sqlite3-wal":  {},
+		"state.sqlite3.lock": {},
+		"web-ui.crt":         {},
+		"web-ui.key":         {},
 	}
 
 	info, err := os.Stat(target)
