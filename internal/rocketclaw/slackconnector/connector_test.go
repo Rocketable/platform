@@ -241,7 +241,7 @@ func TestNewConnectorInstallsInertRuntimeDependencies(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	c := New(&config.SlackConfig{BotToken: "xoxb-test", AppToken: "xapp-test"}, bus, nil, nil, inertThreadRouter{}, inertOneOffCronjobs{}, testLogger())
+	c := New(&config.SlackConfig{BotToken: "xoxb-test", AppToken: "xapp-test"}, bus, nil, nil, inertThreadRouter{}, inertOneOffCronjobs{}, func() *events.InboundMessage { return nil }, testLogger())
 
 	target := events.TextConversationTarget{ChannelID: "D123", MessageID: "111.222", ThreadID: "111.222"}
 	handled, err := c.threadRouter.PrepareThreadReply(target)
@@ -3101,6 +3101,26 @@ func TestHandleMessageEventStopMarksOriginalTurnStart(t *testing.T) {
 	assertNeverInbound(t, bus)
 }
 
+func TestHandleMessageEventStopMainMarksOriginalTurnStart(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	var reactions []string
+
+	server := newSlackStackTestServer(t, nil, &reactions)
+	defer server.Close()
+
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, newThreadRouterStub(), nil)
+	connector.interruptMainTurn = func() *events.InboundMessage {
+		return &events.InboundMessage{SlackReply: &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333"}}
+	}
+
+	connector.handleMessageEvent(context.Background(), newSlackMessageEvent("333.444", "", "🛑"))
+
+	assert.Contains(t, reactions, "/reactions.add "+slackInterruptionReaction+" 222.333")
+	assertNeverInbound(t, bus)
+}
+
 func TestHandleEventsAPIStartsSocialThreadWithChannelContext(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
@@ -4077,17 +4097,18 @@ func TestHandleMessageEventStartsResponseRootedThreadReply(t *testing.T) {
 	assert.Equal(t, "171234.5678", posted[0].Get("thread_ts"))
 }
 
-func TestResolveManagedThreadTSFallsBackToSlackHistory(t *testing.T) {
+func TestResolveManagedThreadTSFallsBackToSlackReactions(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/conversations.history":
+		case "/reactions.get":
 			if !assert.NoError(t, r.ParseForm()) {
 				return
 			}
 
 			assert.Equal(t, "D123", r.PostForm.Get("channel"))
-			assert.Equal(t, "171234.9999", r.PostForm.Get("latest"))
-			writeJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{{"ts": "171234.9999", "thread_ts": "171234.5678", "text": "follow up"}}})
+			assert.Equal(t, "171234.9999", r.PostForm.Get("timestamp"))
+			assert.Equal(t, "true", r.PostForm.Get("full"))
+			writeJSON(t, w, map[string]any{"ok": true, "type": "message", "channel": "D123", "message": map[string]any{"ts": "171234.9999", "thread_ts": "171234.5678", "text": "follow up"}})
 		default:
 			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
 		}
@@ -4123,24 +4144,20 @@ func TestResolveManagedThreadTSEdgeCases(t *testing.T) {
 		wantErr  string
 	}{
 		{
-			name:     "history error",
+			name:     "reactions error",
 			response: map[string]any{"ok": false, "error": "ratelimited"},
-			wantErr:  "load Slack message history",
-		},
-		{
-			name:     "empty history",
-			response: map[string]any{"ok": true, "messages": []map[string]any{}},
+			wantErr:  "load Slack message reactions",
 		},
 		{
 			name:     "blank thread timestamp",
-			response: map[string]any{"ok": true, "messages": []map[string]any{{"ts": "171234.9999", "text": "reply"}}},
+			response: map[string]any{"ok": true, "type": "message", "channel": "D123", "message": map[string]any{"ts": "171234.9999", "text": "reply"}},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				assert.Equal(t, "/conversations.history", r.URL.Path)
+				assert.Equal(t, "/reactions.get", r.URL.Path)
 				writeJSON(t, w, tt.response)
 			}))
 			defer server.Close()
@@ -4349,20 +4366,22 @@ func TestHandleReactionAddedEventResolvesReplyThreadAndPostsFailure(t *testing.T
 	router.summarizeErr = assert.AnError
 
 	posted := url.Values{}
-	historyCalls := 0
+	reactionCalls := 0
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/conversations.history":
-			historyCalls++
+		case "/reactions.get":
+			reactionCalls++
 
 			if !assert.NoError(t, r.ParseForm()) {
 				return
 			}
 
 			writeJSON(t, w, map[string]any{
-				"ok":       true,
-				"messages": []map[string]any{{"ts": "171234.9999", "thread_ts": "171234.5678"}},
+				"ok":      true,
+				"type":    "message",
+				"channel": "D123",
+				"message": map[string]any{"ts": "171234.9999", "thread_ts": "171234.5678"},
 			})
 		case "/chat.postMessage":
 			if !assert.NoError(t, r.ParseForm()) {
@@ -4383,7 +4402,7 @@ func TestHandleReactionAddedEventResolvesReplyThreadAndPostsFailure(t *testing.T
 	connector := newTestConnectorWithOptions(server.URL, events.New(), config.ThreadAgents{":thread:": {Agent: "main", PreSeed: true}}, router, nil)
 	connector.handleReactionAddedEvent(context.Background(), newTestReactionAddedEvent("U123", slackSummaryReaction, "171234.9999"))
 
-	assert.Equal(t, 1, historyCalls)
+	assert.Equal(t, 1, reactionCalls)
 
 	summaries := router.summariesSnapshot()
 	require.Len(t, summaries, 1)
@@ -4391,6 +4410,82 @@ func TestHandleReactionAddedEventResolvesReplyThreadAndPostsFailure(t *testing.T
 	assert.Equal(t, "D123", posted.Get("channel"))
 	assert.Equal(t, "171234.5678", posted.Get("thread_ts"))
 	assert.Equal(t, "I couldn't summarize this Slack thread right now.", posted.Get("text"))
+}
+
+func TestHandleReactionAddedEventStopsReplyThread(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	var reactions []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/reactions.get":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			assert.Equal(t, "171234.9999", r.PostForm.Get("timestamp"))
+			writeJSON(t, w, map[string]any{"ok": true, "type": "message", "channel": "D123", "message": map[string]any{"ts": "171234.9999", "thread_ts": "171234.5678", "text": "follow up"}})
+		case "/reactions.add":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			reactions = append(reactions, r.URL.Path+" "+r.PostForm.Get("name")+" "+r.PostForm.Get("timestamp"))
+
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.prepareResults = []bool{false, true}
+	router.stopResult = &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "171234.5678"}
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+
+	connector.handleReactionAddedEvent(context.Background(), newTestReactionAddedEvent("U123", slackGoalStopSignReaction, "171234.9999"))
+
+	assert.Equal(t, []goalThreadStopCall{{channelID: "D123", threadTS: "171234.5678"}}, router.goalStops)
+	assert.Contains(t, reactions, "/reactions.add "+slackInterruptionReaction+" 222.333")
+}
+
+func TestHandleReactionAddedEventStopsMainWhenNoThreadResolved(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	var reactions []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/reactions.get":
+			writeJSON(t, w, map[string]any{"ok": true, "type": "message", "channel": "D123", "message": map[string]any{"ts": "171234.9999", "text": "main reply"}})
+		case "/reactions.add":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			reactions = append(reactions, r.URL.Path+" "+r.PostForm.Get("name")+" "+r.PostForm.Get("timestamp"))
+
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+	connector.interruptMainTurn = func() *events.InboundMessage {
+		return &events.InboundMessage{SlackReply: &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333"}}
+	}
+
+	connector.handleReactionAddedEvent(context.Background(), newTestReactionAddedEvent("U123", slackGoalStopSignReaction, "171234.9999"))
+
+	assert.Empty(t, router.goalStops)
+	assert.Contains(t, reactions, "/reactions.add "+slackInterruptionReaction+" 222.333")
 }
 
 func TestHandleReactionAddedEventRunsOnDemandCron(t *testing.T) {
@@ -4589,7 +4684,7 @@ func TestHandleReactionAddedEventStopsWhenThreadResolutionFails(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/conversations.history":
+		case "/reactions.get":
 			writeJSON(t, w, map[string]any{"ok": false, "error": "ratelimited"})
 		default:
 			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
@@ -4699,6 +4794,7 @@ func newTestConnectorWithOptions(apiURL string, bus *events.Bus, threadAgents co
 	connector.threadAgents = normalizeThreadAgents(threadAgents)
 	connector.threadRouter = router
 	connector.oneOffCronjobs = runner
+	connector.interruptMainTurn = func() *events.InboundMessage { return nil }
 	connector.api = slack.New("xoxb-test", slack.OptionAPIURL(apiURL+"/"))
 	connector.socketEvents = make(chan slackSocketEvent, 50)
 	connector.newSocketClient = func(api *slack.Client) *socketmode.Client {

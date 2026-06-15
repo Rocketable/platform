@@ -59,22 +59,23 @@ type threadAgent struct {
 
 // Connector bridges Discord text events into the shared rocketclaw bus.
 type Connector struct {
-	log            *slog.Logger
-	config         config.DiscordTextConfig
-	bus            *events.Bus
-	threadRouter   harnessbridge.PrimaryTextRouter
-	oneOffCronjobs oneOffCronjobRunner
-	threadAgents   []threadAgent
-	client         discordClient
-	botUserID      string
-	mu             sync.Mutex
-	progress       map[string]*postedMessage
-	roots          map[string]string
+	log               *slog.Logger
+	config            config.DiscordTextConfig
+	bus               *events.Bus
+	threadRouter      harnessbridge.PrimaryTextRouter
+	oneOffCronjobs    oneOffCronjobRunner
+	interruptMainTurn func() *events.InboundMessage
+	threadAgents      []threadAgent
+	client            discordClient
+	botUserID         string
+	mu                sync.Mutex
+	progress          map[string]*postedMessage
+	roots             map[string]string
 }
 
 // New constructs a Discord text connector.
-func New(cfg *config.DiscordTextConfig, bus *events.Bus, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs oneOffCronjobRunner, logger *slog.Logger) *Connector {
-	return &Connector{log: logger.With("component", "discord_text"), config: *cfg, bus: bus, threadAgents: normalizeThreadAgents(threadAgents), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs}
+func New(cfg *config.DiscordTextConfig, bus *events.Bus, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs oneOffCronjobRunner, interruptMainTurn func() *events.InboundMessage, logger *slog.Logger) *Connector {
+	return &Connector{log: logger.With("component", "discord_text"), config: *cfg, bus: bus, threadAgents: normalizeThreadAgents(threadAgents), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs, interruptMainTurn: interruptMainTurn}
 }
 
 // Start connects to Discord and begins consuming text events.
@@ -403,7 +404,10 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 
 		switch strings.TrimSpace(text) {
 		case discordStopSignEmoji, discordStopButtonEmoji:
-			c.stopDiscordThread(msg.ChannelID)
+			if !c.stopDiscordThread(msg.ChannelID) {
+				c.stopMainDiscord()
+			}
+
 			return
 		}
 
@@ -616,7 +620,18 @@ func (c *Connector) handleReaction(ctx context.Context, ev *reactionAdd) {
 	case discordRepeatOneEmoji, discordRepeatOneName:
 		c.handleOnDemandCronReaction(ctx, ev)
 	case discordStopSignEmoji, discordStopButtonEmoji:
-		c.stopDiscordThread(c.threadForReaction(ev.ChannelID, ev.MessageID))
+		if c.stopDiscordThread(c.threadForReaction(ev.ChannelID, ev.MessageID)) {
+			return
+		}
+
+		if ev.UserID == c.config.HumanUserID {
+			channelID := strings.TrimSpace(ev.ChannelID)
+
+			channel, err := c.client.channel(channelID)
+			if err == nil && (channel.Type == channelTypeDM || channelID == c.config.ChannelID) {
+				c.stopMainDiscord()
+			}
+		}
 	}
 }
 
@@ -647,24 +662,25 @@ func (c *Connector) threadForReaction(channelID, messageID string) string {
 	return channelID
 }
 
-func (c *Connector) stopDiscordThread(threadID string) {
+func (c *Connector) stopDiscordThread(threadID string) bool {
 	marker, err := c.threadRouter.InterruptThread(events.TextConversationTarget{ThreadID: threadID})
 	if err != nil {
 		c.log.Error("stop Discord thread", "thread", threadID, "error", err)
-		return
+		return false
 	}
 
 	if marker != nil {
-		c.addInterruptionReaction(marker.DiscordReply)
+		c.addReaction(marker.DiscordReply.ChannelID, marker.DiscordReply.MessageID, discordInterruptedEmoji)
 	}
+
+	return marker != nil
 }
 
-func (c *Connector) addInterruptionReaction(marker *events.DiscordReplyTarget) {
-	if marker == nil || strings.TrimSpace(marker.ChannelID) == "" || strings.TrimSpace(marker.MessageID) == "" {
-		return
+func (c *Connector) stopMainDiscord() {
+	marker := c.interruptMainTurn()
+	if marker != nil && marker.DiscordReply != nil {
+		c.addReaction(marker.DiscordReply.ChannelID, marker.DiscordReply.MessageID, discordInterruptedEmoji)
 	}
-
-	c.addReaction(marker.ChannelID, marker.MessageID, discordInterruptedEmoji)
 }
 
 func (c *Connector) addReaction(channelID, messageID, emoji string) {
@@ -676,7 +692,7 @@ func (c *Connector) addReaction(channelID, messageID, emoji string) {
 func (c *Connector) startGoal(ctx context.Context, agent string, reply *events.DiscordReplyTarget, goal harnessbridge.GoalRequest, inbound *events.InboundMessage) {
 	if err := c.threadRouter.StartGoalInThread(ctx, agent, goal.Objective, goal.CheckScript, goal.MaxTurns, events.TextConversationTarget{ThreadID: reply.ThreadID}, inbound); err != nil {
 		if errors.Is(err, harnessbridge.ErrGoalAlreadyActive) {
-			c.addInterruptionReaction(reply)
+			c.addReaction(reply.ChannelID, reply.MessageID, discordInterruptedEmoji)
 			c.publishOnDemandCronReply(ctx, reply, "A goal is already in progress in this thread. Finish or stop it before starting another.", true)
 		} else {
 			c.publishOnDemandCronReply(ctx, reply, "I couldn't start that goal: "+err.Error(), true)

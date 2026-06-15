@@ -314,7 +314,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	if cfg.Slack.Enabled {
 		logger.Info("starting Slack connector", "room", cfg.Slack.Room)
 
-		slackSink = slackconnector.New(&cfg.Slack, bus, cfg.EmergencySafeWords, cfg.ThreadAgents, threadBridges, cronjobs, logger)
+		slackSink = slackconnector.New(&cfg.Slack, bus, cfg.EmergencySafeWords, cfg.ThreadAgents, threadBridges, cronjobs, mainBridge.InterruptActiveTurn, logger)
 
 		cronjobs.SendSlackChannel = slackSink.SendCronjobChannelThread
 		if err := slackSink.Start(runCtx); err != nil {
@@ -327,7 +327,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	if cfg.DiscordText.Enabled {
 		logger.Info("starting Discord text connector", "channel_id", cfg.DiscordText.ChannelID)
 
-		discordTextSink = discordtext.New(&cfg.DiscordText, bus, cfg.ThreadAgents, threadBridges, cronjobs, logger)
+		discordTextSink = discordtext.New(&cfg.DiscordText, bus, cfg.ThreadAgents, threadBridges, cronjobs, mainBridge.InterruptActiveTurn, logger)
 		if err := discordTextSink.Start(runCtx); err != nil {
 			return fmt.Errorf("start Discord text connector: %w", err)
 		}

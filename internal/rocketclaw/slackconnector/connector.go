@@ -94,6 +94,7 @@ type Connector struct {
 	threadAgents       []threadAgent
 	threadRouter       harnessbridge.PrimaryTextRouter
 	oneOffCronjobs     oneOffCronjobRunner
+	interruptMainTurn  func() *events.InboundMessage
 
 	api          *slack.Client
 	botUserID    string
@@ -149,12 +150,12 @@ type oneOffCronjobRunner interface {
 }
 
 // New constructs a Slack connector.
-func New(cfg *config.SlackConfig, bus *events.Bus, emergencySafeWords []string, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs oneOffCronjobRunner, logger *slog.Logger) *Connector {
+func New(cfg *config.SlackConfig, bus *events.Bus, emergencySafeWords []string, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs oneOffCronjobRunner, interruptMainTurn func() *events.InboundMessage, logger *slog.Logger) *Connector {
 	api := slack.New(cfg.BotToken, slack.OptionAppLevelToken(cfg.AppToken), slack.OptionRetry(3))
 
 	return &Connector{
 		log: logger.With("component", "slack"), config: *cfg, bus: bus,
-		emergencySafeWords: slices.Clone(emergencySafeWords), threadAgents: normalizeThreadAgents(threadAgents), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs,
+		emergencySafeWords: slices.Clone(emergencySafeWords), threadAgents: normalizeThreadAgents(threadAgents), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs, interruptMainTurn: interruptMainTurn,
 		api: api, socketEvents: make(chan slackSocketEvent, 50),
 		newSocketClient: func(api *slack.Client) *socketmode.Client {
 			return socketmode.New(api)
@@ -1215,6 +1216,11 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		return
 	}
 
+	if text := strings.TrimSpace(text); text == "🛑" || text == "⏹️" {
+		c.stopMainSlack(ctx)
+		return
+	}
+
 	if goal, rejection, ok := harnessbridge.ParseGoalRequest(text); ok {
 		replyTarget.ThreadTS = ev.TimeStamp
 		if rejection != "" {
@@ -1362,6 +1368,10 @@ func (c *Connector) handleReactionAddedEvent(ctx context.Context, ev *slackevent
 	}
 
 	if !handled {
+		if (reaction == slackGoalStopSignReaction || reaction == slackGoalStopButtonReaction) && strings.HasPrefix(channelID, "D") {
+			c.stopMainSlack(ctx)
+		}
+
 		return
 	}
 
@@ -2129,19 +2139,12 @@ func (c *Connector) resolveManagedThreadTS(ctx context.Context, channelID, messa
 		return messageTS, true, nil
 	}
 
-	history, err := c.api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{ChannelID: channelID, Cursor: "", Latest: messageTS, Oldest: messageTS, Inclusive: true, Limit: 1, IncludeAllMetadata: false})
+	item, err := c.api.GetReactionsContext(ctx, slack.NewRefToMessage(channelID, messageTS), slack.GetReactionsParameters{Full: true})
 	if err != nil {
-		return "", false, fmt.Errorf("load Slack message history: %w", err)
+		return "", false, fmt.Errorf("load Slack message reactions: %w", err)
 	}
 
-	if history == nil || len(history.Messages) == 0 {
-		return "", false, nil
-	}
-
-	threadTS = strings.TrimSpace(history.Messages[0].ThreadTimestamp)
-	if threadTS == "" {
-		return "", false, nil
-	}
+	threadTS = strings.TrimSpace(item.Message.ThreadTimestamp)
 
 	handled, err = c.threadRouter.PrepareThreadReply(events.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS})
 	if err != nil {
@@ -2184,6 +2187,15 @@ func (c *Connector) startSlackGoal(ctx context.Context, key string, replyTarget 
 	c.addRobotReaction(ctx, replyTarget)
 
 	return true
+}
+
+func (c *Connector) stopMainSlack(ctx context.Context) {
+	marker := c.interruptMainTurn()
+	c.finishSlackStack(slackMainStackKey)
+
+	if marker != nil && marker.SlackReply != nil {
+		c.addReaction(ctx, marker.SlackReply, slackInterruptionReaction, "add Slack main interruption reaction")
+	}
 }
 
 func (c *Connector) stopSlackThread(ctx context.Context, channelID, threadTS string) error {

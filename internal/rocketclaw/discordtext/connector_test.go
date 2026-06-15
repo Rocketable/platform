@@ -169,6 +169,29 @@ func TestHandleDMMessageSubmitsManagedReply(t *testing.T) {
 	assert.Equal(t, "D123", router.submitted.DiscordReply.ThreadID)
 }
 
+func TestHandleDMStopMessageStopsMainWhenNoManagedTurn(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.channels["D123"] = &textChannel{ID: "D123", Type: channelTypeDM}
+	router := newFakeThreadRouter()
+	router.interruptHandled = false
+	connector := newTestConnector(fake, router)
+	connector.interruptMainTurn = func() *events.InboundMessage {
+		return &events.InboundMessage{DiscordReply: &events.DiscordReplyTarget{ChannelID: "D123", MessageID: "MAIN"}}
+	}
+
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U2", ChannelID: "D123", Content: discordStopSignEmoji, Author: &textUser{ID: "human"}}})
+
+	assert.Equal(t, "D123", router.interruptedThreadID)
+	assert.Equal(t, []string{"D123:MAIN:❗"}, fake.reactions)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+
+	for msg := range connector.bus.Inbound(ctx) {
+		require.Failf(t, "unexpected inbound message", "%#v", msg)
+	}
+}
+
 func TestHandleDMRunsOnDemandCronWithoutChannelMatch(t *testing.T) {
 	fake := newFakeDiscordClient()
 	fake.channels["D123"] = &textChannel{ID: "D123", Type: channelTypeDM}
@@ -222,6 +245,38 @@ func TestHandleStopReactionInterruptsThread(t *testing.T) {
 	router := connector.threadRouter.(*fakeThreadRouter)
 	assert.Equal(t, "T123", router.interruptedThreadID)
 	assert.Equal(t, []string{"T123:M1:❗"}, fake.reactions)
+}
+
+func TestHandleStopReactionStopsMainWhenNoManagedTurn(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.channels["D123"] = &textChannel{ID: "D123", Type: channelTypeDM}
+	router := newFakeThreadRouter()
+	router.interruptHandled = false
+	connector := newTestConnector(fake, router)
+	connector.interruptMainTurn = func() *events.InboundMessage {
+		return &events.InboundMessage{DiscordReply: &events.DiscordReplyTarget{ChannelID: "D123", MessageID: "MAIN"}}
+	}
+
+	connector.handleReaction(t.Context(), &reactionAdd{UserID: "human", ChannelID: "D123", MessageID: "M2", Emoji: textEmoji{Name: discordStopSignEmoji}})
+
+	assert.Equal(t, "D123", router.interruptedThreadID)
+	assert.Equal(t, []string{"D123:MAIN:❗"}, fake.reactions)
+}
+
+func TestHandleConfiguredChannelStopReactionStopsMainWhenNoManagedTurn(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.channels["C123"] = &textChannel{ID: "C123", Type: channelTypeGuildText}
+	router := newFakeThreadRouter()
+	router.interruptHandled = false
+	connector := newTestConnector(fake, router)
+	connector.interruptMainTurn = func() *events.InboundMessage {
+		return &events.InboundMessage{DiscordReply: &events.DiscordReplyTarget{ChannelID: "C123", MessageID: "MAIN"}}
+	}
+
+	connector.handleReaction(t.Context(), &reactionAdd{UserID: "human", ChannelID: "C123", MessageID: "M2", Emoji: textEmoji{Name: discordStopButtonEmoji}})
+
+	assert.Equal(t, "C123", router.interruptedThreadID)
+	assert.Equal(t, []string{"C123:MAIN:❗"}, fake.reactions)
 }
 
 func TestHandleReactionSummarizesThread(t *testing.T) {
@@ -351,13 +406,14 @@ func TestHandleResponseThreadReplyCreatesThread(t *testing.T) {
 
 func newTestConnector(client *fakeDiscordClient, router *fakeThreadRouter) *Connector {
 	return &Connector{
-		log:            slog.New(slog.DiscardHandler),
-		config:         config.DiscordTextConfig{Enabled: true, Token: "token", ChannelID: "C123", HumanUserID: "human"},
-		bus:            events.New(),
-		threadRouter:   router,
-		oneOffCronjobs: inertOneOffCronjobs{},
-		client:         client,
-		botUserID:      "BOT",
+		log:               slog.New(slog.DiscardHandler),
+		config:            config.DiscordTextConfig{Enabled: true, Token: "token", ChannelID: "C123", HumanUserID: "human"},
+		bus:               events.New(),
+		threadRouter:      router,
+		oneOffCronjobs:    inertOneOffCronjobs{},
+		interruptMainTurn: func() *events.InboundMessage { return nil },
+		client:            client,
+		botUserID:         "BOT",
 	}
 }
 
@@ -440,13 +496,14 @@ type fakeThreadRouter struct {
 	preparedResponse, submittedResponse                 string
 	startedPreSeed, submitThreadHandled, summaryHandled bool
 	prepareResponseHandled, submitResponseHandled       bool
+	interruptHandled                                    bool
 	started, submitted                                  *events.InboundMessage
 	startedGoal                                         *events.InboundMessage
 	interruptedThreadID                                 string
 	recordedCheckpoints                                 []string
 }
 
-func newFakeThreadRouter() *fakeThreadRouter { return &fakeThreadRouter{} }
+func newFakeThreadRouter() *fakeThreadRouter { return &fakeThreadRouter{interruptHandled: true} }
 
 func (f *fakeThreadRouter) StartThread(_ context.Context, agent string, preSeed bool, target events.TextConversationTarget, inbound *events.InboundMessage) error {
 	_ = target
@@ -482,6 +539,10 @@ func (f *fakeThreadRouter) StartGoalInThread(_ context.Context, _, _, _ string, 
 
 func (f *fakeThreadRouter) InterruptThread(target events.TextConversationTarget) (*events.InboundMessage, error) {
 	f.interruptedThreadID = target.ThreadID
+	if !f.interruptHandled {
+		return nil, nil
+	}
+
 	return &events.InboundMessage{DiscordReply: &events.DiscordReplyTarget{ChannelID: target.ThreadID, MessageID: "M1", ThreadID: target.ThreadID}}, nil
 }
 
