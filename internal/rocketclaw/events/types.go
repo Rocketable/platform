@@ -140,6 +140,7 @@ type OutboundMessage struct {
 	DiscordReply                         *DiscordReplyTarget
 	Checkpoint                           *ResponseCheckpoint
 	Attachments                          []OutboundAttachment
+	GoalTurn                             bool
 	GoalComplete                         bool
 
 	deliveryInit, deliveredOnce sync.Once

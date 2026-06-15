@@ -2683,6 +2683,21 @@ func TestNewOutboundMessageRoutesBrowserVoiceToWebUIWithoutDiscord(t *testing.T)
 	assert.NotContains(t, outbound.Targets, events.OutputTargetDiscord)
 }
 
+func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
+	store := newTestSessionService(t)
+	bridge := new(Bridge)
+	bridge.config = Config{ConversationID: "thread-1", Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: store}
+
+	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
+	assert.False(t, bridge.newOutboundMessage(inbound, "turn-1", 1, "reply", "", false).GoalTurn)
+
+	require.NoError(t, store.BeginGoal("thread-1", "ship it", "", 3))
+	assert.True(t, bridge.newOutboundMessage(inbound, "turn-2", 1, "reply", "", false).GoalTurn)
+
+	inbound.Label = goalContinuationLabel
+	assert.True(t, bridge.newOutboundMessage(inbound, "turn-3", 1, "reply", "", false).GoalTurn)
+}
+
 func TestProcessResponseKeepsWebUITargetForBrowserThinking(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()

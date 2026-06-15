@@ -1875,7 +1875,14 @@ func (b *Bridge) newOutboundMessage(msg *events.InboundMessage, turnID string, s
 	outbound.Sequence = sequence
 
 	outbound.Complete = complete
+
 	if msg != nil {
+		if msg.Label == goalKickoffLabel || msg.Label == goalContinuationLabel {
+			outbound.GoalTurn = true
+		} else if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err == nil && ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
+			outbound.GoalTurn = true
+		}
+
 		outbound.WebSessionID = msg.WebSessionID
 		if msg.SlackReply != nil {
 			outbound.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS}

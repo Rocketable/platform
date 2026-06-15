@@ -37,6 +37,19 @@ func TestSendResponseTypesAndRecordsCheckpoints(t *testing.T) {
 	assert.Equal(t, []string{"C123:M1"}, fake.deleted)
 }
 
+func TestSendResponsePrefixesGoalProgress(t *testing.T) {
+	fake := newFakeDiscordClient()
+	connector := newTestConnector(fake, newFakeThreadRouter())
+
+	reply := &events.DiscordReplyTarget{ChannelID: "C123"}
+	require.NoError(t, connector.SendResponse(t.Context(), &events.OutboundMessage{TurnID: "turn-1", ProgressText: "working", DiscordReply: reply}))
+	require.NoError(t, connector.SendResponse(t.Context(), &events.OutboundMessage{TurnID: "turn-2", ProgressText: "working", GoalTurn: true, DiscordReply: reply}))
+
+	require.Len(t, fake.messages, 2)
+	assert.Equal(t, "working", fake.messages[0].send.Content)
+	assert.Equal(t, discordGoalProgressPrefix+"\n\nworking", fake.messages[1].send.Content)
+}
+
 func TestSendResponseAddsGoalCompleteReactions(t *testing.T) {
 	fake := newFakeDiscordClient()
 	connector := newTestConnector(fake, newFakeThreadRouter())

@@ -46,6 +46,7 @@ const (
 	slackInterruptionReaction     = "exclamation"
 	slackMainStackKey             = "main"
 	slackImmediatePlaceholder     = "_Thinking..._"
+	slackGoalPlaceholder          = "_Pursuing goal..._"
 	slackAnswerPlaceholder        = "\u200B"
 	slackThinkingFlushInterval    = 2 * time.Second
 )
@@ -128,9 +129,10 @@ type slackSocketEvent struct {
 }
 
 type slackThinkingState struct {
-	Text  string
-	State slackReplyState
-	Timer *time.Timer
+	Text        string
+	Placeholder string
+	State       slackReplyState
+	Timer       *time.Timer
 }
 
 type slackBufferedMessage struct {
@@ -229,6 +231,11 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 
 	thinkingText := strings.TrimSpace(msg.ProgressText)
 
+	placeholder := slackImmediatePlaceholder
+	if msg.GoalTurn {
+		placeholder = slackGoalPlaceholder
+	}
+
 	switch {
 	case msg.Text != "" && (msg.Complete || msg.PostProgressText):
 		chunks := splitSlackResponseText(msg.Text)
@@ -274,18 +281,18 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 
 	case thinkingText != "":
 		if ok {
-			c.bufferProgressText(msg.TurnID, slackReplyState{ChannelID: slots.ChannelID, MessageTS: slots.ThinkingTS}, thinkingText)
+			c.bufferProgressText(msg.TurnID, slackReplyState{ChannelID: slots.ChannelID, MessageTS: slots.ThinkingTS}, placeholder, thinkingText)
 		} else {
 			channelID, threadTS := slackReplyDestination(c.config.Room, msg.SlackReply)
 
-			postedChannelID, postedThinkingTS, postedAnswerTS, err := c.postReplyPlaceholderPair(ctx, channelID, threadTS)
+			postedChannelID, postedThinkingTS, postedAnswerTS, err := c.postReplyPlaceholderPair(ctx, channelID, threadTS, placeholder)
 			if err != nil {
 				return fmt.Errorf("send Slack reply placeholders len=%d: %w", len([]rune(thinkingText)), err)
 			}
 
 			slots = slackReplySlots{ChannelID: postedChannelID, ThinkingTS: postedThinkingTS, AnswerTS: postedAnswerTS}
 			c.setReplyState(msg.TurnID, slots)
-			c.bufferProgressText(msg.TurnID, slackReplyState{ChannelID: slots.ChannelID, MessageTS: slots.ThinkingTS}, thinkingText)
+			c.bufferProgressText(msg.TurnID, slackReplyState{ChannelID: slots.ChannelID, MessageTS: slots.ThinkingTS}, placeholder, thinkingText)
 		}
 	}
 
@@ -298,13 +305,13 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 	return nil
 }
 
-func slackThinkingMessage(thinking string) string {
+func slackThinkingMessage(placeholder, thinking string) string {
 	thinking = strings.TrimSpace(thinking)
 	if thinking == "" {
 		return ""
 	}
 
-	prefix := slackImmediatePlaceholder + "\n\n"
+	prefix := placeholder + "\n\n"
 	prefixLen := len([]rune(prefix)) + len([]rune("> "))
 	thinkingRunes := []rune(thinking)
 	start := len(thinkingRunes)
@@ -326,7 +333,7 @@ func slackThinkingMessage(thinking string) string {
 
 	body := strings.TrimLeftFunc(string(thinkingRunes[start:]), unicode.IsSpace)
 	if body == "" {
-		return slackImmediatePlaceholder
+		return placeholder
 	}
 
 	var quoted strings.Builder
@@ -463,7 +470,7 @@ func (c *Connector) sendVoiceRelay(ctx context.Context, text, reaction, errLabel
 	}
 
 	replyTarget := &events.SlackReplyTarget{ChannelID: channelID, MessageTS: messageTS, ThreadTS: ""}
-	if _, err := c.createReplyPlaceholders(ctx, replyTarget); err != nil {
+	if _, err := c.createReplyPlaceholders(ctx, replyTarget, slackImmediatePlaceholder); err != nil {
 		return nil, err
 	}
 
@@ -636,7 +643,7 @@ func (c *Connector) sendExternalMCPRelay(ctx context.Context, channelID, threadT
 			}
 		}
 
-		placeholderChannelID, thinkingTS, answerTS, err := c.postReplyPlaceholderPair(ctx, postedChannelID, replyTarget.ThreadTS)
+		placeholderChannelID, thinkingTS, answerTS, err := c.postReplyPlaceholderPair(ctx, postedChannelID, replyTarget.ThreadTS, slackImmediatePlaceholder)
 		if err != nil {
 			return err
 		}
@@ -656,7 +663,7 @@ func (c *Connector) sendExternalMCPRelay(ctx context.Context, channelID, threadT
 	return replyTarget, nil
 }
 
-func (c *Connector) bufferProgressText(turnID string, state slackReplyState, text string) {
+func (c *Connector) bufferProgressText(turnID string, state slackReplyState, placeholder, text string) {
 	turnID = strings.TrimSpace(turnID)
 	if turnID == "" || strings.TrimSpace(text) == "" {
 		return
@@ -671,6 +678,7 @@ func (c *Connector) bufferProgressText(turnID string, state slackReplyState, tex
 
 	pending := c.thinking[turnID]
 	pending.Text = text
+	pending.Placeholder = placeholder
 	pending.State = state
 
 	if pending.Timer != nil {
@@ -715,7 +723,7 @@ func (c *Connector) flushProgressText(ctx context.Context, turnID string) error 
 	c.thinking[turnID] = pending
 	c.mu.Unlock()
 
-	thinkingText := slackThinkingMessage(pending.Text)
+	thinkingText := slackThinkingMessage(pending.Placeholder, pending.Text)
 
 	var err error
 
@@ -774,7 +782,7 @@ func (c *Connector) acceptMainSlackMessage(ctx context.Context, text string, con
 
 	c.beginSlackStack(key)
 
-	c.createReplyPlaceholdersOrWarn(ctx, replyTarget, "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS)
+	c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackImmediatePlaceholder, "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS)
 
 	if err := c.bus.PublishInbound(ctx, newSlackInboundMessage(text, content, replyTarget)); err != nil {
 		c.log.Error("publish Slack inbound message", "error", err)
@@ -850,7 +858,7 @@ func (c *Connector) promoteSlackStack(ctx context.Context, key string, submit fu
 	latest := buffered[len(buffered)-1].Reply
 	c.addRobotReaction(ctx, latest)
 
-	c.createReplyPlaceholdersOrWarn(ctx, latest, "channel", latest.ChannelID, "message_ts", latest.MessageTS)
+	c.createReplyPlaceholdersOrWarn(ctx, latest, slackImmediatePlaceholder, "channel", latest.ChannelID, "message_ts", latest.MessageTS)
 
 	text, content := combineSlackBufferedMessages(buffered)
 	if err := submit(ctx, newSlackInboundMessage(text, &content, latest)); err != nil {
@@ -1158,7 +1166,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 				}
 
 				c.beginSlackStack(key)
-				c.createReplyPlaceholdersOrWarn(ctx, replyTarget, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
+				c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackGoalPlaceholder, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
 
 				inbound := newSlackInboundMessage(goal.Objective, &content, replyTarget)
 				if !c.startSlackGoal(ctx, key, replyTarget, "", goal, inbound) {
@@ -1179,7 +1187,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 
 		c.beginSlackStack(key)
 
-		c.createReplyPlaceholdersOrWarn(ctx, replyTarget, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
+		c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackImmediatePlaceholder, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
 
 		inbound := newSlackInboundMessage(content.Text, &content, replyTarget)
 
@@ -1233,7 +1241,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 
 		key := slackThreadStackKey(replyTarget)
 		c.beginSlackStack(key)
-		c.createReplyPlaceholdersOrWarn(ctx, replyTarget, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", "main")
+		c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackGoalPlaceholder, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", "main")
 
 		content := c.inboundContentForMessageEvent(ctx, ev)
 		content.Text = text
@@ -1263,7 +1271,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		key := slackThreadStackKey(replyTarget)
 		c.beginSlackStack(key)
 
-		c.createReplyPlaceholdersOrWarn(ctx, replyTarget, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)
+		c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackImmediatePlaceholder, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)
 
 		content := c.inboundContentForMessageEvent(ctx, ev)
 		content.Text = text
@@ -1513,7 +1521,12 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 		}
 	}
 
-	c.createReplyPlaceholdersOrWarn(ctx, replyTarget, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)
+	placeholder := slackImmediatePlaceholder
+	if isGoal {
+		placeholder = slackGoalPlaceholder
+	}
+
+	c.createReplyPlaceholdersOrWarn(ctx, replyTarget, placeholder, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)
 
 	content := events.InboundContent{Text: ev.Text}
 	if len(ev.Files) > 0 {
@@ -1902,7 +1915,7 @@ func (c *Connector) handleOnDemandCronRequest(ctx context.Context, ev *slackeven
 
 	turnID := fmt.Sprintf("one-off-cron-%d", time.Now().UnixNano())
 
-	if slots, err := c.createReplyPlaceholders(ctx, replyTarget); err != nil {
+	if slots, err := c.createReplyPlaceholders(ctx, replyTarget, slackImmediatePlaceholder); err != nil {
 		c.log.Warn("create Slack on-demand cron reply placeholders", "error", err)
 	} else if slots.Key != "" {
 		c.setReplyState(turnID, slots)
@@ -2039,7 +2052,7 @@ func cloneSlackReplyTarget(replyTarget *events.SlackReplyTarget) *events.SlackRe
 	return &events.SlackReplyTarget{ChannelID: replyTarget.ChannelID, MessageTS: replyTarget.MessageTS, ThreadTS: replyTarget.ThreadTS}
 }
 
-func (c *Connector) createReplyPlaceholders(ctx context.Context, replyTarget *events.SlackReplyTarget) (slackReplySlots, error) {
+func (c *Connector) createReplyPlaceholders(ctx context.Context, replyTarget *events.SlackReplyTarget, placeholder string) (slackReplySlots, error) {
 	if replyTarget == nil {
 		return slackReplySlots{}, nil
 	}
@@ -2049,7 +2062,7 @@ func (c *Connector) createReplyPlaceholders(ctx context.Context, replyTarget *ev
 		return slackReplySlots{}, nil
 	}
 
-	placeholderChannelID, thinkingTS, answerTS, err := c.postReplyPlaceholderPair(ctx, channelID, replyTarget.ThreadTS)
+	placeholderChannelID, thinkingTS, answerTS, err := c.postReplyPlaceholderPair(ctx, channelID, replyTarget.ThreadTS, placeholder)
 	if err != nil {
 		return slackReplySlots{}, err
 	}
@@ -2074,8 +2087,8 @@ func (c *Connector) createReplyPlaceholderStateLocked(replyTarget *events.SlackR
 	return slots
 }
 
-func (c *Connector) postReplyPlaceholderPair(ctx context.Context, channelID, threadTS string) (placeholderChannelID, thinkingTS, answerTS string, err error) {
-	options := []slack.MsgOption{slack.MsgOptionText(slackImmediatePlaceholder, false)}
+func (c *Connector) postReplyPlaceholderPair(ctx context.Context, channelID, threadTS, placeholder string) (placeholderChannelID, thinkingTS, answerTS string, err error) {
+	options := []slack.MsgOption{slack.MsgOptionText(placeholder, false)}
 	if threadTS = strings.TrimSpace(threadTS); threadTS != "" {
 		options = append(options, slack.MsgOptionTS(threadTS))
 	}
@@ -2099,8 +2112,8 @@ func (c *Connector) postReplyPlaceholderPair(ctx context.Context, channelID, thr
 	return placeholderChannelID, thinkingTS, answerTS, nil
 }
 
-func (c *Connector) createReplyPlaceholdersOrWarn(ctx context.Context, replyTarget *events.SlackReplyTarget, attrs ...any) {
-	if _, err := c.createReplyPlaceholders(ctx, replyTarget); err != nil {
+func (c *Connector) createReplyPlaceholdersOrWarn(ctx context.Context, replyTarget *events.SlackReplyTarget, placeholder string, attrs ...any) {
+	if _, err := c.createReplyPlaceholders(ctx, replyTarget, placeholder); err != nil {
 		c.log.Warn("create Slack reply placeholder", append([]any{"error", err}, attrs...)...)
 	}
 }

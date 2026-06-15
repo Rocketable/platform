@@ -57,7 +57,9 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 ### Connector Bindings
 
 - Slack DM goal starts create normal managed Slack DM threads rooted at the triggering DM message. Slack social-mode goal starts create or use normal managed Slack channel threads rooted at app-mention messages. Slack social-mode goal starts use canonical `slack.social_mode.channels[]`; runtime connector behavior never consults legacy `slack.social_mode.channel_agents`.
+- Slack goal-loop turns use `_Pursuing goal..._` as their Slack progress placeholder, including kickoff turns and automatic continuations. Non-goal Slack-visible assistant turns continue to use `_Thinking..._`.
 - Discord DM goal starts create or reuse normal managed Discord DM conversations without guild-thread mechanics. Discord social-mode goal starts create or use normal managed Discord guild-thread conversations rooted at bot-mention messages. Discord social-mode goal starts use canonical `discord_text.social_mode.channels[]`.
+- Discord Text goal-loop progress messages use `_Pursuing goal..._` to visibly distinguish goal work while preserving the accumulated RocketCode progress text.
 
 ### Implementation Shape
 
@@ -155,3 +157,4 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 - 2026-06-14: Specified one active goal per managed conversation, duplicate active-goal rejection, and sequential goal reuse after terminal states.
 - 2026-06-14: Recast goal-loop contracts as a generic primary text connector contract with Slack and Discord Text bindings for DM, social-mode, threading, progress, interruption, completion reactions, and restart recovery.
 - 2026-06-14: Required goal-loop bridge ownership to use one injected connector-neutral primary text API rather than parallel Slack and Discord bridge implementations.
+- 2026-06-14: Specified `_Pursuing goal..._` as the primary text connector goal-loop progress marker for Slack placeholders and Discord progress messages.
