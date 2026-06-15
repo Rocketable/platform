@@ -471,7 +471,7 @@ func TestServerAccessors(t *testing.T) {
 	urls[0] = "mutated"
 
 	assert.NotEqual(t, "mutated", server.urls[0])
-	assert.NoError(t, server.Stop(context.Background()))
+	assert.NoError(t, server.Close(context.Background()))
 }
 
 func TestWebUIIPv4Addrs(t *testing.T) {

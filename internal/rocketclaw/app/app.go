@@ -336,7 +336,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		stops = append(stops, namedStopper{name: "discord_text", stop: discordTextSink.Stop})
 	}
 
-	primaryTextSend := discardOutboundSend
+	primaryTextSend := func(context.Context, *events.OutboundMessage) error { return nil }
 	relayPrimaryTextVoice := func(context.Context, string, string) (*events.InboundMessage, error) { return nil, nil }
 	textRelay := func(context.Context, string, []events.OutboundAttachment, *events.InboundMessage, string) (*events.InboundMessage, error) {
 		return nil, nil
@@ -429,7 +429,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 			logger.Info("web UI voice mode available", "url", url)
 		}
 
-		stops = append(stops, namedStopper{name: "web_ui", stop: webUI.Stop})
+		stops = append(stops, namedStopper{name: "web_ui", stop: webUI.Close})
 	}
 
 	if cfg.MCPExternal.Enabled {
@@ -460,7 +460,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 			return err
 		}
 
-		stops = append(stops, namedStopper{name: "external_mcp", stop: externalMCP.Stop})
+		stops = append(stops, namedStopper{name: "external_mcp", stop: externalMCP.Close})
 	}
 
 	if cfg.DiscordVoice.Enabled {
@@ -489,22 +489,22 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		}})
 	}
 
-	slackSend := discardOutboundSend
+	slackSend := func(context.Context, *events.OutboundMessage) error { return nil }
 	if slackSink != nil {
 		slackSend = primaryTextSend
 	}
 
-	discordSend := discardOutboundSend
+	discordSend := func(context.Context, *events.OutboundMessage) error { return nil }
 	if discordSink != nil {
 		discordSend = discordSink.SendResponse
 	}
 
-	discordTextSend := discardOutboundSend
+	discordTextSend := func(context.Context, *events.OutboundMessage) error { return nil }
 	if discordTextSink != nil {
 		discordTextSend = primaryTextSend
 	}
 
-	webSend := discardOutboundSend
+	webSend := func(context.Context, *events.OutboundMessage) error { return nil }
 	if webUI != nil {
 		webSend = webUI.SendResponse
 	}
@@ -534,8 +534,6 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	return err
 }
-
-func discardOutboundSend(context.Context, *events.OutboundMessage) error { return nil }
 
 func configuredMainOutputTargets(cfg *config.Config) []events.OutputTarget {
 	targets := []events.OutputTarget{}

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -18,6 +17,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/emoji"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
+	"github.com/Rocketable/platform/internal/rocketclaw/primarytext"
 )
 
 const (
@@ -31,7 +31,6 @@ const (
 	discordStopButtonEmoji    = "⏹️"
 	discordInterruptedEmoji   = "❗"
 	discordGoalCompleteEmoji  = "✅"
-	discordGoalProgressPrefix = "_Pursuing Goal%s..._"
 	maxDiscordAttachmentBytes = 16 << 20
 )
 
@@ -49,25 +48,15 @@ type discordClient interface {
 	Close() error
 }
 
-type oneOffCronjobRunner interface {
-	LoadOneOffCronjob(string) (cronjob.OneOffCronjob, error)
-	RunOneOffCronjob(context.Context, cronjob.OneOffCronjob, *harnessbridge.RawRunProgress, func(context.Context, cronjob.RunResult, error))
-}
-
-type threadAgent struct {
-	prefix, agent string
-	preSeed       bool
-}
-
 // Connector bridges Discord text events into the shared rocketclaw bus.
 type Connector struct {
 	log               *slog.Logger
 	config            config.DiscordTextConfig
 	bus               *events.Bus
 	threadRouter      harnessbridge.PrimaryTextRouter
-	oneOffCronjobs    oneOffCronjobRunner
+	oneOffCronjobs    primarytext.OneOffCronjobRunner
 	interruptMainTurn func() *events.InboundMessage
-	threadAgents      []threadAgent
+	threadAgents      []primarytext.ThreadAgent
 	client            discordClient
 	botUserID         string
 	mu                sync.Mutex
@@ -76,8 +65,8 @@ type Connector struct {
 }
 
 // New constructs a Discord text connector.
-func New(cfg *config.DiscordTextConfig, bus *events.Bus, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs oneOffCronjobRunner, interruptMainTurn func() *events.InboundMessage, logger *slog.Logger) *Connector {
-	return &Connector{log: logger.With("component", "discord_text"), config: *cfg, bus: bus, threadAgents: normalizeThreadAgents(threadAgents), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs, interruptMainTurn: interruptMainTurn}
+func New(cfg *config.DiscordTextConfig, bus *events.Bus, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs primarytext.OneOffCronjobRunner, interruptMainTurn func() *events.InboundMessage, logger *slog.Logger) *Connector {
+	return &Connector{log: logger.With("component", "discord_text"), config: *cfg, bus: bus, threadAgents: primarytext.NormalizeThreadAgents(threadAgents, false), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs, interruptMainTurn: interruptMainTurn}
 }
 
 // Start connects to Discord and begins consuming text events.
@@ -97,10 +86,6 @@ func (c *Connector) Start(ctx context.Context) error {
 
 // Stop disconnects the connector from Discord.
 func (c *Connector) Stop(context.Context) error {
-	if c.client == nil {
-		return nil
-	}
-
 	if err := c.client.Close(); err != nil {
 		return fmt.Errorf("close Discord text session: %w", err)
 	}
@@ -191,7 +176,7 @@ func (c *Connector) SendResponse(_ context.Context, msg *events.OutboundMessage)
 	if msg.Text != "" && (msg.Complete || msg.PostProgressText) {
 		var err error
 
-		posted, err = c.postResponseChunks(channelID, msg.DiscordReply, splitDiscordResponseText(msg.Text))
+		posted, err = c.postResponseChunks(channelID, msg.DiscordReply, primarytext.SplitDiscordText(msg.Text, discordPreferredChunkSize, discordTextLimit))
 		if err != nil {
 			return err
 		}
@@ -251,7 +236,7 @@ func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, rel
 	}
 
 	if strings.TrimSpace(text) != "" {
-		if _, err := c.postResponseChunks(thread.ID, &events.DiscordReplyTarget{ChannelID: thread.ID, ThreadID: thread.ID}, splitDiscordResponseText(text)); err != nil {
+		if _, err := c.postResponseChunks(thread.ID, &events.DiscordReplyTarget{ChannelID: thread.ID, ThreadID: thread.ID}, primarytext.SplitDiscordText(text, discordPreferredChunkSize, discordTextLimit)); err != nil {
 			return fmt.Errorf("send Discord cronjob thread reply: %w", err)
 		}
 	}
@@ -281,12 +266,7 @@ func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, rel
 func (c *Connector) sendProgress(channelID string, msg *events.OutboundMessage) error {
 	text := strings.TrimSpace(msg.ProgressText)
 	if msg.GoalTurn {
-		suffix := ""
-		if msg.GoalMaxTurns > 0 && msg.GoalTurnNumber > 0 {
-			suffix = fmt.Sprintf(" (%d/%d)", msg.GoalTurnNumber, msg.GoalMaxTurns)
-		}
-
-		text = fmt.Sprintf(discordGoalProgressPrefix, suffix) + "\n\n" + text
+		text = primarytext.GoalProgressText(msg.GoalTurnNumber, msg.GoalMaxTurns) + "\n\n" + text
 	}
 
 	c.mu.Lock()
@@ -542,7 +522,7 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 		return
 	}
 
-	if matched, agent, preSeed, promptText := c.threadAgentPrompt(text); matched {
+	if candidate, promptText, ok := primarytext.MatchThreadAgent(text, c.threadAgents, false); ok {
 		if !isDM {
 			thread, err := c.createThread(msg.ChannelID, msg.ID, promptText)
 			if err != nil {
@@ -554,7 +534,7 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 			c.recordThreadRoot(msg.ChannelID, msg.ID, thread.ID)
 		}
 
-		if err := c.threadRouter.StartThread(ctx, agent, preSeed, events.TextConversationTarget{ThreadID: reply.ThreadID}, c.inboundMessage(ctx, msg, promptText, reply)); err != nil {
+		if err := c.threadRouter.StartThread(ctx, candidate.Agent, candidate.PreSeed, events.TextConversationTarget{ThreadID: reply.ThreadID}, c.inboundMessage(ctx, msg, promptText, reply)); err != nil {
 			c.log.Error("start Discord thread bridge", "thread", reply.ThreadID, "error", err)
 		}
 
@@ -755,7 +735,6 @@ func (c *Connector) handleOnDemandCronRequest(ctx context.Context, reply *events
 }
 
 func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCronjob, reply *events.DiscordReplyTarget, turnID string) {
-	thinking := ""
 	publish := func(ctx context.Context, text, thinkingText string, complete, postText bool, attachments []events.OutboundAttachment) error {
 		outbound := events.NewMainOutboundMessage(events.SourceSystem, text, events.OutputTargetDiscordText)
 		outbound.ProgressText = thinkingText
@@ -772,48 +751,8 @@ func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCr
 		return nil
 	}
 
-	progress := &harnessbridge.RawRunProgress{
-		Thinking: func(ctx context.Context, text string) error {
-			text = strings.TrimSpace(text)
-			if text == "" {
-				return nil
-			}
-
-			if thinking != "" {
-				thinking += "\n"
-			}
-
-			thinking += text
-
-			return publish(ctx, "", thinking, false, false, nil)
-		},
-		Message: func(ctx context.Context, text string) error {
-			text = strings.TrimSpace(text)
-			if text == "" {
-				return nil
-			}
-
-			return publish(ctx, text, "", false, true, nil)
-		},
-	}
-
-	c.oneOffCronjobs.RunOneOffCronjob(ctx, loaded, progress, func(ctx context.Context, result cronjob.RunResult, err error) {
-		if err != nil {
-			if errPublish := publish(ctx, "I couldn't run that on-demand cron right now.", "", true, false, nil); errPublish != nil {
-				c.log.Warn("publish Discord on-demand cron failure", "error", errPublish)
-			}
-
-			return
-		}
-
-		payload := strings.TrimSpace(result.VerbatimMessage)
-		if payload == "" && len(result.Attachments) == 0 {
-			payload = "Cronjob completed and decided to emit no human-visible output."
-		}
-
-		if err := publish(ctx, payload, "", true, false, result.Attachments); err != nil {
-			c.log.Warn("publish Discord on-demand cron result", "error", err)
-		}
+	primarytext.RunOneOffCronjob(ctx, c.oneOffCronjobs, loaded, publish, func(err error) {
+		c.log.Warn("publish Discord on-demand cron result", "error", err)
 	})
 }
 
@@ -881,17 +820,6 @@ func (c *Connector) replyChannel(reply *events.DiscordReplyTarget) string {
 	}
 
 	return strings.TrimSpace(c.config.ChannelID)
-}
-
-func (c *Connector) threadAgentPrompt(text string) (matched bool, agent string, preSeed bool, prompt string) {
-	text = emoji.CanonicalizeLeadingAlias(text)
-	for _, entry := range c.threadAgents {
-		if after, ok := strings.CutPrefix(text, emoji.CanonicalizeLeadingAlias(entry.prefix)); ok {
-			return true, entry.agent, entry.preSeed, strings.TrimSpace(after)
-		}
-	}
-
-	return false, "", false, ""
 }
 
 func (c *Connector) inboundMessage(ctx context.Context, msg *textMessage, text string, reply *events.DiscordReplyTarget) *events.InboundMessage {
@@ -968,62 +896,4 @@ func threadName(text string) string {
 	}
 
 	return text
-}
-
-func splitDiscordResponseText(text string) []string {
-	runes := []rune(text)
-	if len(runes) == 0 {
-		return nil
-	}
-
-	chunks := make([]string, 0, len(runes)/discordPreferredChunkSize+1)
-	for len(runes) > 0 {
-		if len(runes) < discordTextLimit {
-			chunks = append(chunks, string(runes))
-			break
-		}
-
-		end := discordChunkEnd(runes)
-		chunks = append(chunks, string(runes[:end]))
-		runes = runes[end:]
-	}
-
-	return chunks
-}
-
-func discordChunkEnd(runes []rune) int {
-	preferredLimit := min(len(runes), discordPreferredChunkSize)
-	if end := lastDiscordChunkBoundary(runes[:preferredLimit]); end > 0 {
-		return end
-	}
-
-	return min(len(runes), discordTextLimit)
-}
-
-func lastDiscordChunkBoundary(runes []rune) int {
-	for i := range slices.Backward(runes) {
-		if i > 0 && unicode.IsSpace(runes[i]) {
-			return i + 1
-		}
-	}
-
-	return 0
-}
-
-func normalizeThreadAgents(threadAgents config.ThreadAgents) []threadAgent {
-	normalized := make([]threadAgent, 0, len(threadAgents))
-	for prefix, entry := range threadAgents {
-		prefix = strings.TrimSpace(prefix)
-
-		entry.Agent = strings.TrimSpace(entry.Agent)
-		if prefix == "" || entry.Agent == "" {
-			continue
-		}
-
-		normalized = append(normalized, threadAgent{prefix: prefix, agent: entry.Agent, preSeed: entry.PreSeed})
-	}
-
-	slices.SortFunc(normalized, func(a, b threadAgent) int { return strings.Compare(b.prefix, a.prefix) })
-
-	return normalized
 }

@@ -39,6 +39,10 @@ func outboundLoop(
 	return outboundLoopWithDiscordText(ctx, bus, slackSend, discardOutboundSend, discordSend, webSend, logger)
 }
 
+func discardOutboundSend(context.Context, *events.OutboundMessage) error {
+	return nil
+}
+
 func TestOutboundLoopDeliversChannelsInParallelAndPreservesPerChannelOrder(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

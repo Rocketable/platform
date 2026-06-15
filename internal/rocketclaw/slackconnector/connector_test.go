@@ -31,6 +31,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/emoji"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
+	"github.com/Rocketable/platform/internal/rocketclaw/primarytext"
 )
 
 func TestSlackImageHelpers(t *testing.T) {
@@ -78,34 +79,32 @@ func TestSlackMessageEventHelpers(t *testing.T) {
 }
 
 func TestSplitSlackResponseTextBoundaries(t *testing.T) {
-	assert.Nil(t, splitSlackResponseText(""))
-	assert.Equal(t, []string{"short"}, splitSlackResponseText("short"))
+	assert.Nil(t, primarytext.SplitSlackText("", slackPreferredChunkSize, slackTextLimit))
+	assert.Equal(t, []string{"short"}, primarytext.SplitSlackText("short", slackPreferredChunkSize, slackTextLimit))
 
 	withoutBoundary := strings.Repeat("x", slackTextLimit+3)
-	chunks := splitSlackResponseText(withoutBoundary)
+	chunks := primarytext.SplitSlackText(withoutBoundary, slackPreferredChunkSize, slackTextLimit)
 	require.Len(t, chunks, 2)
 	assert.Len(t, []rune(chunks[0]), slackTextLimit)
 	assert.Equal(t, "xxx", chunks[1])
 
 	paragraphBoundary := strings.Repeat("a", slackPreferredChunkSize-3) + "\n\n" + strings.Repeat("b", slackTextLimit)
-	chunks = splitSlackResponseText(paragraphBoundary)
+	chunks = primarytext.SplitSlackText(paragraphBoundary, slackPreferredChunkSize, slackTextLimit)
 	require.Len(t, chunks, 2)
 	assert.True(t, strings.HasSuffix(chunks[0], "\n\n"))
 	assert.Equal(t, strings.Repeat("b", slackTextLimit), chunks[1])
 
-	assert.Equal(t, len("hello\n"), slackChunkBoundary([]rune("hello\nworld")))
-	assert.Equal(t, len("hello "), slackChunkBoundary([]rune("hello world")))
-	assert.Zero(t, slackChunkBoundary([]rune("helloworld")))
-
 	lateBoundary := strings.Repeat("a", slackPreferredChunkSize) + " " + strings.Repeat("b", slackTextLimit)
-	assert.Equal(t, slackPreferredChunkSize+1, slackChunkEnd([]rune(lateBoundary)))
+	chunks = primarytext.SplitSlackText(lateBoundary, slackPreferredChunkSize, slackTextLimit)
+	require.Len(t, chunks, 2)
+	assert.Len(t, []rune(chunks[0]), slackPreferredChunkSize+1)
 }
 
 func TestProgressTextMessageQuotesAndBoundsText(t *testing.T) {
 	assert.Empty(t, slackThinkingMessage(slackImmediatePlaceholder, " \n\t "))
 	assert.Equal(t, slackImmediatePlaceholder+"\n\n> beta\n> alpha", slackThinkingMessage(slackImmediatePlaceholder, " alpha\nbeta "))
-	assert.Equal(t, slackGoalPlaceholder(0, 0)+"\n\n> beta\n> alpha", slackThinkingMessage(slackGoalPlaceholder(0, 0), " alpha\nbeta "))
-	assert.Equal(t, "_Pursuing Goal (2/5)..._", slackGoalPlaceholder(2, 5))
+	assert.Equal(t, primarytext.GoalProgressText(0, 0)+"\n\n> beta\n> alpha", slackThinkingMessage(primarytext.GoalProgressText(0, 0), " alpha\nbeta "))
+	assert.Equal(t, "_Pursuing Goal (2/5)..._", primarytext.GoalProgressText(2, 5))
 
 	got := slackThinkingMessage(slackImmediatePlaceholder, strings.Repeat("x", slackBlockTextLimit+20))
 	assert.True(t, strings.HasPrefix(got, slackImmediatePlaceholder+"\n\n> "))
@@ -113,51 +112,50 @@ func TestProgressTextMessageQuotesAndBoundsText(t *testing.T) {
 }
 
 func TestNormalizeThreadAgentsRoutesLongestPrefix(t *testing.T) {
-	agents := normalizeThreadAgents(config.ThreadAgents{
+	agents := primarytext.NormalizeThreadAgents(config.ThreadAgents{
 		" :bot: urgent ": {Agent: " urgent-agent ", PreSeed: true},
 		":cat:":          {Agent: "cat-agent"},
 		":bot:":          {Agent: "main-agent"},
 		" ":              {Agent: "ignored"},
 		":skip:":         {Agent: " \t "},
-	})
+	}, true)
 
-	assert.Equal(t, []threadAgent{
-		{prefix: ":bot: urgent", agent: "urgent-agent", preSeed: true},
-		{prefix: ":bot:", agent: "main-agent"},
-		{prefix: ":cat:", agent: "cat-agent"},
+	assert.Equal(t, []primarytext.ThreadAgent{
+		{Prefix: ":bot: urgent", Agent: "urgent-agent", PreSeed: true},
+		{Prefix: ":bot:", Agent: "main-agent"},
+		{Prefix: ":cat:", Agent: "cat-agent"},
 	}, agents)
 
-	connector := &Connector{threadAgents: agents}
-	agent, preSeed, promptText, ok := connector.threadAgentForText(" :bot: urgent fix production ")
+	agent, promptText, ok := primarytext.MatchThreadAgent(" :bot: urgent fix production ", agents, true)
 	assert.True(t, ok)
-	assert.True(t, preSeed)
-	assert.Equal(t, "urgent-agent", agent)
+	assert.True(t, agent.PreSeed)
+	assert.Equal(t, "urgent-agent", agent.Agent)
 	assert.Equal(t, "fix production", promptText)
 
-	agent, preSeed, promptText, ok = connector.threadAgentForText("plain message")
+	agent, promptText, ok = primarytext.MatchThreadAgent("plain message", agents, true)
 	assert.False(t, ok)
-	assert.Empty(t, agent)
-	assert.False(t, preSeed)
+	assert.Empty(t, agent.Agent)
+	assert.False(t, agent.PreSeed)
 	assert.Empty(t, promptText)
-	assert.Nil(t, normalizeThreadAgents(config.ThreadAgents{" ": {Agent: " "}}))
+	assert.Empty(t, primarytext.NormalizeThreadAgents(config.ThreadAgents{" ": {Agent: " "}}, true))
 }
 
 func TestThreadAgentForTextMatchesUnicodeAndAliasPrefixes(t *testing.T) {
-	connector := &Connector{threadAgents: normalizeThreadAgents(config.ThreadAgents{
+	agents := primarytext.NormalizeThreadAgents(config.ThreadAgents{
 		"🧵":         {Agent: "unicode-agent", PreSeed: true},
 		":factory:": {Agent: "alias-agent"},
-	})}
+	}, true)
 
-	agent, preSeed, promptText, ok := connector.threadAgentForText(":thread: fix production")
+	agent, promptText, ok := primarytext.MatchThreadAgent(":thread: fix production", agents, true)
 	assert.True(t, ok)
-	assert.True(t, preSeed)
-	assert.Equal(t, "unicode-agent", agent)
+	assert.True(t, agent.PreSeed)
+	assert.Equal(t, "unicode-agent", agent.Agent)
 	assert.Equal(t, "fix production", promptText)
 
-	agent, preSeed, promptText, ok = connector.threadAgentForText("🏭 plan buildout")
+	agent, promptText, ok = primarytext.MatchThreadAgent("🏭 plan buildout", agents, true)
 	assert.True(t, ok)
-	assert.False(t, preSeed)
-	assert.Equal(t, "alias-agent", agent)
+	assert.False(t, agent.PreSeed)
+	assert.Equal(t, "alias-agent", agent.Agent)
 	assert.Equal(t, "plan buildout", promptText)
 }
 
@@ -882,17 +880,17 @@ func TestLimitedBufferStopsAtLimit(t *testing.T) {
 	n, err := b.Write([]byte("abc"))
 	require.NoError(t, err)
 	assert.Equal(t, 3, n)
-	assert.Equal(t, []byte("abc"), b.Bytes())
+	assert.Equal(t, []byte("abc"), b.data.Bytes())
 
 	n, err = b.Write([]byte("def"))
 	require.ErrorIs(t, err, errSlackDownloadLimitExceeded)
 	assert.Equal(t, 2, n)
-	assert.Equal(t, []byte("abcde"), b.Bytes())
+	assert.Equal(t, []byte("abcde"), b.data.Bytes())
 
 	n, err = b.Write([]byte("g"))
 	require.ErrorIs(t, err, errSlackDownloadLimitExceeded)
 	assert.Zero(t, n)
-	assert.Equal(t, []byte("abcde"), b.Bytes())
+	assert.Equal(t, []byte("abcde"), b.data.Bytes())
 }
 
 func mustPNG(t *testing.T, width, height int) []byte {
@@ -4115,7 +4113,7 @@ func TestRunOnDemandCronIgnoresBlankProgressAndPublishesEmptyResultFallback(t *t
 	loaded := cronjob.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md"}
 	replyTarget := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "171234.5678", ThreadTS: "171234.5678"}
 
-	connector.runOnDemandCron(context.Background(), testLogger(), loaded, replyTarget, "turn-1")
+	connector.runOnDemandCron(context.Background(), loaded, replyTarget, "turn-1")
 
 	outbound := readOneOutbound(t, bus)
 	assert.Equal(t, "Cronjob completed and decided to emit no human-visible output.", outbound.Text)
@@ -4377,11 +4375,11 @@ func TestHandleEventsAPISummarizesThreadRootReaction(t *testing.T) {
 	assert.Equal(t, "171234.5678", summaries[1].threadTS)
 
 	want := []string{
-		"/reactions.remove " + slackSummaryInProgressReaction,
-		"/reactions.remove " + slackSummaryCompleteReaction,
-		"/reactions.add " + slackSummaryInProgressReaction,
-		"/reactions.remove " + slackSummaryInProgressReaction,
-		"/reactions.add " + slackSummaryCompleteReaction,
+		"/reactions.remove " + slackBufferedReaction,
+		"/reactions.remove " + slackGoalCompleteReaction,
+		"/reactions.add " + slackBufferedReaction,
+		"/reactions.remove " + slackBufferedReaction,
+		"/reactions.add " + slackGoalCompleteReaction,
 	}
 	assert.Equal(t, append(want, want...), reactionCalls)
 }
@@ -4856,7 +4854,7 @@ func newTestConnector(apiURL string) *Connector {
 	return newTestConnectorWithOptions(apiURL, nil, nil, nil, nil)
 }
 
-func newTestConnectorWithOptions(apiURL string, bus *events.Bus, threadAgents config.ThreadAgents, router harnessbridge.PrimaryTextRouter, runner oneOffCronjobRunner) *Connector {
+func newTestConnectorWithOptions(apiURL string, bus *events.Bus, threadAgents config.ThreadAgents, router harnessbridge.PrimaryTextRouter, runner primarytext.OneOffCronjobRunner) *Connector {
 	logger := testLogger()
 	testConfig := new(config.Config)
 	testConfig.Workspace = "/tmp/workspace"
@@ -4887,7 +4885,7 @@ func newTestConnectorWithOptions(apiURL string, bus *events.Bus, threadAgents co
 	connector.log = logger
 	connector.config = testConfig.Slack
 	connector.bus = bus
-	connector.threadAgents = normalizeThreadAgents(threadAgents)
+	connector.threadAgents = primarytext.NormalizeThreadAgents(threadAgents, true)
 	connector.threadRouter = router
 	connector.oneOffCronjobs = runner
 	connector.interruptMainTurn = func() *events.InboundMessage { return nil }

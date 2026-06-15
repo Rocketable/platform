@@ -2,7 +2,6 @@ package discordtext
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/cronjob"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
+	"github.com/Rocketable/platform/internal/rocketclaw/primarytext"
 )
 
 func TestSendResponseTypesAndRecordsCheckpoints(t *testing.T) {
@@ -49,7 +49,7 @@ func TestSendResponsePrefixesGoalProgress(t *testing.T) {
 
 	require.Len(t, fake.messages, 3)
 	assert.Equal(t, "working", fake.messages[0].send.Content)
-	assert.Equal(t, fmt.Sprintf(discordGoalProgressPrefix, "")+"\n\nworking", fake.messages[1].send.Content)
+	assert.Equal(t, primarytext.GoalProgressText(0, 0)+"\n\nworking", fake.messages[1].send.Content)
 	assert.Equal(t, "_Pursuing Goal (2/5)..._\n\nworking", fake.messages[2].send.Content)
 }
 
@@ -104,7 +104,7 @@ func TestHandleMessageStartsManagedThread(t *testing.T) {
 	fake.threadID = "T123"
 	router := newFakeThreadRouter()
 	connector := newTestConnector(fake, router)
-	connector.threadAgents = normalizeThreadAgents(config.ThreadAgents{":thread:": {Agent: "planner", PreSeed: true}})
+	connector.threadAgents = primarytext.NormalizeThreadAgents(config.ThreadAgents{":thread:": {Agent: "planner", PreSeed: true}}, false)
 
 	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "C123", Content: ":thread: plan this", Author: &textUser{ID: "human"}}})
 
@@ -122,10 +122,10 @@ func TestHandleMessageStartsManagedThreadWithUnicodeAndAliasPrefixes(t *testing.
 	fake.threadID = "T123"
 	router := newFakeThreadRouter()
 	connector := newTestConnector(fake, router)
-	connector.threadAgents = normalizeThreadAgents(config.ThreadAgents{
+	connector.threadAgents = primarytext.NormalizeThreadAgents(config.ThreadAgents{
 		"🧵":         {Agent: "unicode-agent", PreSeed: true},
 		":factory:": {Agent: "alias-agent"},
-	})
+	}, false)
 
 	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "C123", Content: ":thread: plan this", Author: &textUser{ID: "human"}}})
 

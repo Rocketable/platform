@@ -156,9 +156,6 @@ func (s *Server) SendResponse(ctx context.Context, msg *events.OutboundMessage) 
 // URLs returns numeric IPv4 voice-mode page URLs served by this listener.
 func (s *Server) URLs() []string { return append([]string(nil), s.urls...) }
 
-// Stop stops the HTTP server and waits for it to exit.
-func (s *Server) Stop(ctx context.Context) error { return s.Close(ctx) }
-
 // Close stops the HTTP server and waits for it to exit.
 func (s *Server) Close(ctx context.Context) error {
 	s.mu.Lock()

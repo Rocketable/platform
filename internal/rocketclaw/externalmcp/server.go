@@ -139,9 +139,6 @@ func StartSessionPromptServer(ctx context.Context, logger *slog.Logger, listenAd
 // URL returns the server base URL.
 func (s *Server) URL() string { return s.url }
 
-// Stop stops the HTTP server and waits for it to exit.
-func (s *Server) Stop(ctx context.Context) error { return s.Close(ctx) }
-
 // Close stops the HTTP server and waits for it to exit.
 func (s *Server) Close(ctx context.Context) error {
 	var err error

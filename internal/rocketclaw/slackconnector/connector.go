@@ -25,6 +25,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/emoji"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
+	"github.com/Rocketable/platform/internal/rocketclaw/primarytext"
 )
 
 const (
@@ -47,23 +48,8 @@ const (
 	slackInterruptionReaction     = "exclamation"
 	slackMainStackKey             = "main"
 	slackImmediatePlaceholder     = "_Thinking..._"
-	slackGoalPlaceholderFormat    = "_Pursuing Goal%s..._"
 	slackAnswerPlaceholder        = "\u200B"
 	slackThinkingFlushInterval    = 2 * time.Second
-)
-
-func slackGoalPlaceholder(turnNumber, maxTurns int) string {
-	suffix := ""
-	if maxTurns > 0 && turnNumber > 0 {
-		suffix = fmt.Sprintf(" (%d/%d)", turnNumber, maxTurns)
-	}
-
-	return fmt.Sprintf(slackGoalPlaceholderFormat, suffix)
-}
-
-const (
-	slackSummaryInProgressReaction = "hourglass_flowing_sand"
-	slackSummaryCompleteReaction   = "white_check_mark"
 )
 
 var errSlackDownloadLimitExceeded = errors.New("slack file download exceeded size limit")
@@ -93,8 +79,6 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	return n, nil
 }
 
-func (b *limitedBuffer) Bytes() []byte { return b.data.Bytes() }
-
 // Connector bridges Slack DM events into the shared rocketclaw bus.
 type Connector struct {
 	log    *slog.Logger
@@ -102,9 +86,9 @@ type Connector struct {
 	bus    *events.Bus
 
 	emergencySafeWords []string
-	threadAgents       []threadAgent
+	threadAgents       []primarytext.ThreadAgent
 	threadRouter       harnessbridge.PrimaryTextRouter
-	oneOffCronjobs     oneOffCronjobRunner
+	oneOffCronjobs     primarytext.OneOffCronjobRunner
 	interruptMainTurn  func() *events.InboundMessage
 
 	api          *slack.Client
@@ -151,23 +135,13 @@ type slackBufferedMessage struct {
 	Reply   *events.SlackReplyTarget
 }
 
-type threadAgent struct {
-	prefix, agent string
-	preSeed       bool
-}
-
-type oneOffCronjobRunner interface {
-	LoadOneOffCronjob(string) (cronjob.OneOffCronjob, error)
-	RunOneOffCronjob(context.Context, cronjob.OneOffCronjob, *harnessbridge.RawRunProgress, func(context.Context, cronjob.RunResult, error))
-}
-
 // New constructs a Slack connector.
-func New(cfg *config.SlackConfig, bus *events.Bus, emergencySafeWords []string, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs oneOffCronjobRunner, interruptMainTurn func() *events.InboundMessage, logger *slog.Logger) *Connector {
+func New(cfg *config.SlackConfig, bus *events.Bus, emergencySafeWords []string, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs primarytext.OneOffCronjobRunner, interruptMainTurn func() *events.InboundMessage, logger *slog.Logger) *Connector {
 	api := slack.New(cfg.BotToken, slack.OptionAppLevelToken(cfg.AppToken), slack.OptionRetry(3))
 
 	return &Connector{
 		log: logger.With("component", "slack"), config: *cfg, bus: bus,
-		emergencySafeWords: slices.Clone(emergencySafeWords), threadAgents: normalizeThreadAgents(threadAgents), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs, interruptMainTurn: interruptMainTurn,
+		emergencySafeWords: slices.Clone(emergencySafeWords), threadAgents: primarytext.NormalizeThreadAgents(threadAgents, true), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs, interruptMainTurn: interruptMainTurn,
 		api: api, socketEvents: make(chan slackSocketEvent, 50),
 		newSocketClient: func(api *slack.Client) *socketmode.Client {
 			return socketmode.New(api)
@@ -243,12 +217,12 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 
 	placeholder := slackImmediatePlaceholder
 	if msg.GoalTurn {
-		placeholder = slackGoalPlaceholder(msg.GoalTurnNumber, msg.GoalMaxTurns)
+		placeholder = primarytext.GoalProgressText(msg.GoalTurnNumber, msg.GoalMaxTurns)
 	}
 
 	switch {
 	case msg.Text != "" && (msg.Complete || msg.PostProgressText):
-		chunks := splitSlackResponseText(msg.Text)
+		chunks := primarytext.SplitSlackText(msg.Text, slackPreferredChunkSize, slackTextLimit)
 
 		var (
 			posted []slackReplyState
@@ -361,69 +335,6 @@ func slackThinkingMessage(placeholder, thinking string) string {
 	return strings.TrimRight(quoted.String(), "\n")
 }
 
-func splitSlackResponseText(text string) []string {
-	runes := []rune(text)
-	if len(runes) == 0 {
-		return nil
-	}
-
-	chunks := make([]string, 0, len(runes)/slackPreferredChunkSize+1)
-	for len(runes) > 0 {
-		if len(runes) < slackTextLimit {
-			chunks = append(chunks, string(runes))
-			break
-		}
-
-		end := slackChunkEnd(runes)
-		chunks = append(chunks, string(runes[:end]))
-		runes = runes[end:]
-	}
-
-	return chunks
-}
-
-func slackChunkEnd(runes []rune) int {
-	preferredLimit := min(len(runes), slackPreferredChunkSize)
-	if end := slackChunkBoundary(runes[:preferredLimit]); end > 0 {
-		return end
-	}
-
-	maxLimit := min(len(runes), slackTextLimit)
-	if end := slackChunkBoundary(runes[:maxLimit]); end > 0 {
-		return end
-	}
-
-	return maxLimit
-}
-
-func slackChunkBoundary(runes []rune) int {
-	if end := lastSlackChunkBoundary(runes, func(i int) bool {
-		return i > 0 && runes[i-1] == '\n' && runes[i] == '\n'
-	}); end > 0 {
-		return end
-	}
-
-	if end := lastSlackChunkBoundary(runes, func(i int) bool {
-		return runes[i] == '\n'
-	}); end > 0 {
-		return end
-	}
-
-	return lastSlackChunkBoundary(runes, func(i int) bool {
-		return unicode.IsSpace(runes[i]) && runes[i] != '\n'
-	})
-}
-
-func lastSlackChunkBoundary(runes []rune, match func(int) bool) int {
-	for i := range slices.Backward(runes) {
-		if match(i) {
-			return i + 1
-		}
-	}
-
-	return 0
-}
-
 func slackReplyDestination(defaultChannelID string, replyTarget *events.SlackReplyTarget) (channelID, threadTS string) {
 	channelID = defaultChannelID
 	if replyTarget == nil {
@@ -517,7 +428,7 @@ func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, rel
 	}
 
 	if strings.TrimSpace(text) != "" {
-		if _, err := c.postResponseChunks(ctx, postedChannelID, threadTS, splitSlackResponseText(text)); err != nil {
+		if _, err := c.postResponseChunks(ctx, postedChannelID, threadTS, primarytext.SplitSlackText(text, slackPreferredChunkSize, slackTextLimit)); err != nil {
 			return fmt.Errorf("send Slack cronjob thread reply: %w", err)
 		}
 	}
@@ -1176,7 +1087,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 				}
 
 				c.beginSlackStack(key)
-				c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackGoalPlaceholder(1, goal.MaxTurns), "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
+				c.createReplyPlaceholdersOrWarn(ctx, replyTarget, primarytext.GoalProgressText(1, goal.MaxTurns), "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
 
 				inbound := newSlackInboundMessage(goal.Objective, &content, replyTarget)
 				if !c.startSlackGoal(ctx, key, replyTarget, "", goal, inbound) {
@@ -1251,7 +1162,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 
 		key := slackThreadStackKey(replyTarget)
 		c.beginSlackStack(key)
-		c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackGoalPlaceholder(1, goal.MaxTurns), "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", "main")
+		c.createReplyPlaceholdersOrWarn(ctx, replyTarget, primarytext.GoalProgressText(1, goal.MaxTurns), "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", "main")
 
 		content := c.inboundContentForMessageEvent(ctx, ev)
 		content.Text = text
@@ -1276,20 +1187,20 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		return
 	}
 
-	if agent, preSeed, promptText, ok := c.threadAgentForText(text); ok {
+	if candidate, promptText, ok := primarytext.MatchThreadAgent(text, c.threadAgents, true); ok {
 		replyTarget.ThreadTS = ev.TimeStamp
 		key := slackThreadStackKey(replyTarget)
 		c.beginSlackStack(key)
 
-		c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackImmediatePlaceholder, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)
+		c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackImmediatePlaceholder, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", candidate.Agent)
 
 		content := c.inboundContentForMessageEvent(ctx, ev)
 		content.Text = text
 		inbound := newSlackInboundMessage(promptText, &content, replyTarget)
-		c.log.Info("handing Slack thread start to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent, "pending_placeholder", c.hasPendingState(replyTarget))
+		c.log.Info("handing Slack thread start to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", candidate.Agent, "pending_placeholder", c.hasPendingState(replyTarget))
 
-		if err := c.threadRouter.StartThread(ctx, agent, preSeed, events.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, inbound); err != nil {
-			c.log.Error("start Slack thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent, "pending_placeholder", c.hasPendingState(replyTarget))
+		if err := c.threadRouter.StartThread(ctx, candidate.Agent, candidate.PreSeed, events.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, inbound); err != nil {
+			c.log.Error("start Slack thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", candidate.Agent, "pending_placeholder", c.hasPendingState(replyTarget))
 			c.finishSlackStack(key)
 
 			c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't start that managed thread: "+err.Error(), "consume Slack thread start rejection placeholder")
@@ -1298,7 +1209,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		}
 
 		c.addRobotReaction(ctx, replyTarget)
-		c.log.Info("accepted Slack thread start", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent, "text_len", len(promptText), "attachment_count", len(content.Attachments))
+		c.log.Info("accepted Slack thread start", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", candidate.Agent, "text_len", len(promptText), "attachment_count", len(content.Attachments))
 
 		return
 	}
@@ -1404,12 +1315,12 @@ func (c *Connector) handleReactionAddedEvent(ctx context.Context, ev *slackevent
 	}
 
 	statusTarget := &events.SlackReplyTarget{ChannelID: channelID, MessageTS: messageTS, ThreadTS: threadTS}
-	c.removeReaction(ctx, statusTarget, slackSummaryInProgressReaction, "remove Slack thread summary in-progress reaction")
-	c.removeReaction(ctx, statusTarget, slackSummaryCompleteReaction, "remove Slack thread summary complete reaction")
-	c.addReaction(ctx, statusTarget, slackSummaryInProgressReaction, "add Slack thread summary in-progress reaction")
+	c.removeReaction(ctx, statusTarget, slackBufferedReaction, "remove Slack thread summary in-progress reaction")
+	c.removeReaction(ctx, statusTarget, slackGoalCompleteReaction, "remove Slack thread summary complete reaction")
+	c.addReaction(ctx, statusTarget, slackBufferedReaction, "add Slack thread summary in-progress reaction")
 
 	handled, err = c.threadRouter.SummarizeThread(ctx, events.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS})
-	c.removeReaction(ctx, statusTarget, slackSummaryInProgressReaction, "remove Slack thread summary in-progress reaction")
+	c.removeReaction(ctx, statusTarget, slackBufferedReaction, "remove Slack thread summary in-progress reaction")
 
 	if err != nil {
 		c.log.Error("summarize Slack thread", "error", err, "channel", channelID, "thread_ts", threadTS)
@@ -1425,7 +1336,7 @@ func (c *Connector) handleReactionAddedEvent(ctx context.Context, ev *slackevent
 		return
 	}
 
-	c.addReaction(ctx, statusTarget, slackSummaryCompleteReaction, "add Slack thread summary complete reaction")
+	c.addReaction(ctx, statusTarget, slackGoalCompleteReaction, "add Slack thread summary complete reaction")
 
 	c.log.Info("accepted Slack thread summary request", "user", ev.User, "channel", channelID, "thread_ts", threadTS, "message_ts", messageTS)
 }
@@ -1520,8 +1431,8 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 	if !isGoal {
 		for i := range c.threadAgents {
-			if c.threadAgents[i].agent == agent {
-				prefix := c.threadAgents[i].prefix
+			if c.threadAgents[i].Agent == agent {
+				prefix := c.threadAgents[i].Prefix
 				if len(prefix) > 2 && strings.HasPrefix(prefix, ":") && strings.HasSuffix(prefix, ":") {
 					c.addReaction(ctx, replyTarget, strings.Trim(prefix, ":"), "add Slack social agent reaction")
 				}
@@ -1533,7 +1444,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 	placeholder := slackImmediatePlaceholder
 	if isGoal {
-		placeholder = slackGoalPlaceholder(1, goal.MaxTurns)
+		placeholder = primarytext.GoalProgressText(1, goal.MaxTurns)
 	}
 
 	c.createReplyPlaceholdersOrWarn(ctx, replyTarget, placeholder, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)
@@ -1835,72 +1746,12 @@ func slackPendingKey(replyTarget *events.SlackReplyTarget) string {
 	return channelID + "\x00" + messageTS + "\x00" + threadTS
 }
 
-func normalizeThreadAgents(threadAgents config.ThreadAgents) []threadAgent {
-	if len(threadAgents) == 0 {
-		return nil
-	}
-
-	normalized := make([]threadAgent, 0, len(threadAgents))
-	for prefix, entry := range threadAgents {
-		prefix = strings.TrimSpace(prefix)
-
-		agent := strings.TrimSpace(entry.Agent)
-		if prefix == "" || agent == "" {
-			continue
-		}
-
-		normalized = append(normalized, threadAgent{prefix: prefix, agent: agent, preSeed: entry.PreSeed})
-	}
-
-	slices.SortFunc(normalized, func(a, b threadAgent) int {
-		if len(a.prefix) != len(b.prefix) {
-			return len(b.prefix) - len(a.prefix)
-		}
-
-		return strings.Compare(a.prefix, b.prefix)
-	})
-
-	if len(normalized) == 0 {
-		return nil
-	}
-
-	return normalized
-}
-
-func (c *Connector) threadAgentForText(text string) (agent string, preSeed bool, promptText string, ok bool) {
-	text = emoji.CanonicalizeLeadingAlias(text)
-
-	for i := range c.threadAgents {
-		candidate := c.threadAgents[i]
-
-		promptText, ok := textAfterPrefix(text, emoji.CanonicalizeLeadingAlias(candidate.prefix))
-		if !ok {
-			continue
-		}
-
-		return candidate.agent, candidate.preSeed, promptText, true
-	}
-
-	return "", false, "", false
-}
-
-func textAfterPrefix(text, prefix string) (string, bool) {
-	after, ok := strings.CutPrefix(strings.TrimSpace(text), prefix)
-	if !ok {
-		return "", false
-	}
-
-	return strings.TrimSpace(after), true
-}
-
 func (c *Connector) handleOnDemandCronRequest(ctx context.Context, ev *slackevents.MessageEvent, target string, replyTarget *events.SlackReplyTarget) {
 	loaded, err := c.oneOffCronjobs.LoadOneOffCronjob(target)
 	if err != nil {
 		if errPost := c.publishOnDemandCronReply(ctx, replyTarget, "I couldn't find that cronjob. Use a top-level cron filename like `daily` or `daily.md`.", true); errPost != nil {
 			c.log.Warn("publish Slack on-demand cron rejection", "error", errPost, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", replyTarget.ThreadTS)
 		}
-
-		c.log.Info("rejected Slack on-demand cron request", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "requested_cron", strings.TrimSpace(target), "error", err)
 
 		return
 	}
@@ -1910,8 +1761,6 @@ func (c *Connector) handleOnDemandCronRequest(ctx context.Context, ev *slackeven
 			c.log.Warn("publish Slack on-demand cron channel rejection", "error", errPost, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", replyTarget.ThreadTS)
 		}
 
-		c.log.Info("rejected Slack on-demand cron channel", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "requested_cron", strings.TrimSpace(target), "cron", loaded.RelativePath, "slack_channel", loaded.SlackChannel)
-
 		return
 	}
 
@@ -1920,19 +1769,7 @@ func (c *Connector) handleOnDemandCronRequest(ctx context.Context, ev *slackeven
 		c.log.Warn("publish Slack on-demand cron preview", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", replyTarget.ThreadTS, "cron", loaded.RelativePath)
 	}
 
-	startedAt := time.Now()
-	requestLog := c.log.With(
-		"requester", ev.User,
-		"target_cron", loaded.RelativePath,
-		"start_time", startedAt.Format(time.RFC3339),
-		"channel", ev.Channel,
-		"message_ts", ev.TimeStamp,
-		"thread_ts", replyTarget.ThreadTS,
-	)
-	requestLog.Info("starting Slack one-off cronjob thread")
-
 	c.addRobotReaction(ctx, replyTarget)
-	c.log.Info("accepted Slack on-demand cron request", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", replyTarget.ThreadTS, "cron", loaded.RelativePath, "agent", loaded.Agent)
 
 	turnID := fmt.Sprintf("one-off-cron-%d", time.Now().UnixNano())
 
@@ -1942,7 +1779,7 @@ func (c *Connector) handleOnDemandCronRequest(ctx context.Context, ev *slackeven
 		c.setReplyState(turnID, slots)
 	}
 
-	go c.runOnDemandCron(ctx, requestLog, loaded, replyTarget, turnID)
+	go c.runOnDemandCron(ctx, loaded, replyTarget, turnID)
 }
 
 func (c *Connector) cronTargetsSlackChannel(ctx context.Context, loaded cronjob.OneOffCronjob, channelID string) bool {
@@ -1965,8 +1802,7 @@ func (c *Connector) cronTargetsSlackChannel(ctx context.Context, loaded cronjob.
 	return slackChannel == "#"+strings.TrimSpace(channel.Name)
 }
 
-func (c *Connector) runOnDemandCron(ctx context.Context, log *slog.Logger, loaded cronjob.OneOffCronjob, replyTarget *events.SlackReplyTarget, turnID string) {
-	thinking := ""
+func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCronjob, replyTarget *events.SlackReplyTarget, turnID string) {
 	publish := func(ctx context.Context, text, thinkingText string, complete, postText bool, attachments []events.OutboundAttachment) error {
 		outbound := events.NewMainOutboundMessage(events.SourceSystem, text, events.OutputTargetSlackMain)
 		outbound.ProgressText = thinkingText
@@ -1982,53 +1818,9 @@ func (c *Connector) runOnDemandCron(ctx context.Context, log *slog.Logger, loade
 
 		return nil
 	}
-	progress := &harnessbridge.RawRunProgress{
-		Thinking: func(ctx context.Context, text string) error {
-			text = strings.TrimSpace(text)
-			if text == "" {
-				return nil
-			}
 
-			if thinking != "" {
-				thinking += "\n"
-			}
-
-			thinking += text
-
-			return publish(ctx, "", thinking, false, false, nil)
-		},
-		Message: func(ctx context.Context, text string) error {
-			text = strings.TrimSpace(text)
-			if text == "" {
-				return nil
-			}
-
-			return publish(ctx, text, "", false, true, nil)
-		},
-	}
-
-	c.oneOffCronjobs.RunOneOffCronjob(ctx, loaded, progress, func(ctx context.Context, result cronjob.RunResult, err error) {
-		if err != nil {
-			log.Error("completed Slack one-off cronjob thread", "finish_time", time.Now().Format(time.RFC3339), "outcome", "failed", "error", err)
-
-			if errPublish := publish(ctx, "I couldn't run that on-demand cron right now.", "", true, false, nil); errPublish != nil {
-				c.log.Warn("publish Slack on-demand cron failure", "error", errPublish)
-			}
-
-			return
-		}
-
-		payload := strings.TrimSpace(result.VerbatimMessage)
-		if payload == "" && len(result.Attachments) == 0 {
-			payload = "Cronjob completed and decided to emit no human-visible output."
-		}
-
-		if err := publish(ctx, payload, "", true, false, result.Attachments); err != nil {
-			log.Error("completed Slack one-off cronjob thread", "finish_time", time.Now().Format(time.RFC3339), "outcome", "failed", "error", err)
-			return
-		}
-
-		log.Info("completed Slack one-off cronjob thread", "finish_time", time.Now().Format(time.RFC3339), "outcome", "succeeded")
+	primarytext.RunOneOffCronjob(ctx, c.oneOffCronjobs, loaded, publish, func(err error) {
+		c.log.Warn("publish Slack on-demand cron result", "error", err)
 	})
 }
 
@@ -2300,20 +2092,21 @@ func (c *Connector) downloadSlackAttachments(ctx context.Context, files []slack.
 					continue
 				}
 
-				if !utf8.Valid(buffer.Bytes()) || bytes.Contains(buffer.Bytes(), []byte{0}) {
+				data := buffer.data.Bytes()
+				if !utf8.Valid(data) || bytes.Contains(data, []byte{0}) {
 					warnings = append(warnings, "Skipped Slack text attachment "+slackFileDescriptor(file)+" because Slack returned non-UTF-8 text data.")
 
 					continue
 				}
 
-				data := string(buffer.Bytes())
-				if strings.TrimSpace(data) == "" {
+				text := string(data)
+				if strings.TrimSpace(text) == "" {
 					warnings = append(warnings, "Skipped Slack text attachment "+slackFileDescriptor(file)+" because Slack returned empty text data.")
 
 					continue
 				}
 
-				textAttachments = append(textAttachments, "Slack text file attachment "+slackFileDescriptor(file)+":\n"+data)
+				textAttachments = append(textAttachments, "Slack text file attachment "+slackFileDescriptor(file)+":\n"+text)
 
 				continue
 			}
@@ -2358,7 +2151,7 @@ func (c *Connector) downloadSlackAttachments(ctx context.Context, files []slack.
 			continue
 		}
 
-		data := append([]byte(nil), buffer.Bytes()...)
+		data := append([]byte(nil), buffer.data.Bytes()...)
 		if len(data) == 0 {
 			warnSkip("Slack returned empty attachment data")
 			continue

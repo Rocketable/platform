@@ -266,7 +266,7 @@ func TestServerAccessorsAndClose(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotEmpty(t, server.url)
-	require.NoError(t, server.Stop(context.Background()))
+	require.NoError(t, server.Close(context.Background()))
 	require.NoError(t, server.Close(context.Background()))
 }
 
