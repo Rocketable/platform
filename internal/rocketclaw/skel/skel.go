@@ -92,6 +92,10 @@ func SyncInWithOverlays(workspace, workDir string, overlays []string, logger *sl
 		return fmt.Errorf("reset rocketclaw target: %w", err)
 	}
 
+	if err := removeWorkspaceRuntimeScriptSymlinksIfPresent(workspace, logger); err != nil {
+		return fmt.Errorf("remove stale workspace script symlinks: %w", err)
+	}
+
 	if err := SyncEffectiveRuntimeAssets(workspace, target, overlays, logger); err != nil {
 		return err
 	}
@@ -137,12 +141,8 @@ func syncWorkspaceScriptSymlinks(workspace, workDir string, logger *slog.Logger)
 	workspaceScripts := filepath.Join(workspace, scriptsRoot)
 	runtimeScripts := filepath.Join(workspace, workDir, scriptsRoot)
 
-	if _, err := os.Stat(workspaceScripts); err == nil {
-		if err := removeRuntimeScriptSymlinks(workspace, workspaceScripts, logger); err != nil {
-			return err
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("stat workspace scripts directory %s: %w", workspaceScripts, err)
+	if err := removeWorkspaceRuntimeScriptSymlinksIfPresent(workspace, logger); err != nil {
+		return err
 	}
 
 	info, err := os.Stat(runtimeScripts)
@@ -219,6 +219,20 @@ func syncWorkspaceScriptSymlinks(workspace, workDir string, logger *slog.Logger)
 	}
 
 	return syncScriptSymlinkGitExclude(workspace, generated, logger)
+}
+
+func removeWorkspaceRuntimeScriptSymlinksIfPresent(workspace string, logger *slog.Logger) error {
+	workspaceScripts := filepath.Join(workspace, scriptsRoot)
+
+	if _, err := os.Stat(workspaceScripts); err == nil {
+		if err := removeRuntimeScriptSymlinks(workspace, workspaceScripts, logger); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat workspace scripts directory %s: %w", workspaceScripts, err)
+	}
+
+	return nil
 }
 
 func syncScriptSymlinkGitExclude(workspace string, generated []string, logger *slog.Logger) error {

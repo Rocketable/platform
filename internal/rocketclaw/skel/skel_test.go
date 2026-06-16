@@ -366,6 +366,8 @@ func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
 	data, err = os.ReadFile(link)
 	require.NoError(t, err)
 	assert.Equal(t, "nested remote script", string(data))
+	repoGit(t, repo, "rm", "scripts/nested/remote.sh")
+	repoGit(t, repo, "commit", "-m", "remove remote script")
 
 	info, err := os.Stat(filepath.Join(workspace, targetRoot, "scripts", "run"))
 	require.NoError(t, err)
@@ -384,6 +386,8 @@ func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
 	_, err = os.Stat(filepath.Join(overlayInfo.ClonePath, "untracked.txt"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 	_, err = os.Stat(filepath.Join(workspace, targetRoot, "overlays", "stale-overlay"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Lstat(link)
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
