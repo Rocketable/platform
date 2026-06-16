@@ -111,8 +111,15 @@ func (c *Connector) SendVoiceRelay(_ context.Context, text string) (*events.Disc
 // SendExternalMCPRelay mirrors an external MCP prompt into Discord before the session handles it.
 func (c *Connector) SendExternalMCPRelay(_ context.Context, channelID, text string, attachments []events.OutboundAttachment) (*events.DiscordReplyTarget, error) {
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if text == "" && len(attachments) == 0 {
 		return nil, nil
+	}
+
+	if text == "" {
+		text = events.AttachmentNamesSpeech(attachments)
+		if text == "" {
+			text = "Attached files."
+		}
 	}
 
 	if channelID = strings.TrimSpace(channelID); channelID == "" {
@@ -142,7 +149,19 @@ func (c *Connector) SendExternalMCPRelay(_ context.Context, channelID, text stri
 
 // SendExternalMCPThreadRelay mirrors an external MCP follow-up into an existing Discord thread.
 func (c *Connector) SendExternalMCPThreadRelay(_ context.Context, threadID, text string, attachments []events.OutboundAttachment) (*events.DiscordReplyTarget, error) {
-	posted, err := c.client.sendMessage(threadID, messageSend{Content: strings.TrimSpace(text)})
+	text = strings.TrimSpace(text)
+	if text == "" && len(attachments) == 0 {
+		return nil, nil
+	}
+
+	if text == "" {
+		text = events.AttachmentNamesSpeech(attachments)
+		if text == "" {
+			text = "Attached files."
+		}
+	}
+
+	posted, err := c.client.sendMessage(threadID, messageSend{Content: text})
 	if err != nil {
 		return nil, fmt.Errorf("send Discord external MCP thread relay: %w", err)
 	}

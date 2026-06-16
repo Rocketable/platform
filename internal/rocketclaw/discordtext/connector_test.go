@@ -432,6 +432,39 @@ func TestSendCronjobChannelThreadCreatesThreadAndPosts(t *testing.T) {
 	assert.Equal(t, "T123:agent:Cronjob cron ran at 2026-06-02 with agent agent.\n\nHuman-visible cron output:\nanswer\n\nAttached files: a.txt.", router.registeredCron)
 }
 
+func TestSendExternalMCPRelayPostsAttachmentOnlyPrompt(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.threadID = "T123"
+	connector := newTestConnector(fake, newFakeThreadRouter())
+
+	reply, err := connector.SendExternalMCPRelay(t.Context(), "C999", " ", []events.OutboundAttachment{{Name: "report.txt", Data: []byte("report")}})
+	require.NoError(t, err)
+	require.NotNil(t, reply)
+
+	require.Len(t, fake.messages, 1)
+	assert.Equal(t, "C999", fake.messages[0].channelID)
+	assert.Equal(t, "Attached files: report.txt.", fake.messages[0].send.Content)
+	require.Len(t, fake.threads, 1)
+	assert.Equal(t, "Attached files: report.txt.", fake.threads[0].start.Name)
+	assert.Equal(t, []string{"T123"}, fake.attachments)
+	assert.Equal(t, &events.DiscordReplyTarget{ChannelID: "C999", MessageID: "M1", ThreadID: "T123"}, reply)
+}
+
+func TestSendExternalMCPThreadRelayPostsAttachmentOnlyPrompt(t *testing.T) {
+	fake := newFakeDiscordClient()
+	connector := newTestConnector(fake, newFakeThreadRouter())
+
+	reply, err := connector.SendExternalMCPThreadRelay(t.Context(), "T123", " ", []events.OutboundAttachment{{Data: []byte("report")}})
+	require.NoError(t, err)
+	require.NotNil(t, reply)
+
+	require.Len(t, fake.messages, 1)
+	assert.Equal(t, "T123", fake.messages[0].channelID)
+	assert.Equal(t, "Attached files.", fake.messages[0].send.Content)
+	assert.Equal(t, []string{"T123"}, fake.attachments)
+	assert.Equal(t, &events.DiscordReplyTarget{ChannelID: "T123", MessageID: "M1", ThreadID: "T123"}, reply)
+}
+
 func TestHandleResponseThreadReplyCreatesThread(t *testing.T) {
 	fake := newFakeDiscordClient()
 	fake.threadID = "T123"
