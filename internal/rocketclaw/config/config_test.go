@@ -403,18 +403,17 @@ func TestValidateSlackSocialMode(t *testing.T) {
 	cfg.Slack.HumanUserID = "U123"
 	cfg.Slack.SocialMode.Enabled = true
 	cfg.Slack.SocialMode.Channels = []TextSocialChannelConfig{
-		{Channel: " triage ", Agent: " planner ", AllowedUserIDs: []string{" U999 ", "", "U999"}},
-		{Channel: " #team ", Agent: " team ", AllowedUserIDs: []string{" U123 ", "", "U123", "U456"}},
-		{Channel: " ", Agent: "ignored"},
-		{Channel: "#ignored", Agent: " "},
+		{Channel: " triage ", Agents: []string{" planner ", "", "planner", "helper"}, AllowedUserIDs: []string{" U999 ", "", "U999"}},
+		{Channel: " #team ", Agents: []string{" team "}, AllowedUserIDs: []string{" U123 ", "", "U123", "U456"}},
+		{Channel: " ", Agents: []string{"ignored"}},
 	}
 
 	require.NoError(t, cfg.Validate())
 	assert.Equal(t, TextSocialConfig{
 		Enabled: true,
 		Channels: []TextSocialChannelConfig{
-			{Channel: "#triage", Agent: "planner", AllowedUserIDs: []string{"U999"}},
-			{Channel: "#team", Agent: "team", AllowedUserIDs: []string{"U123", "U456"}},
+			{Channel: "#triage", Agents: []string{"planner", "helper"}, AllowedUserIDs: []string{"U999"}},
+			{Channel: "#team", Agents: []string{"team"}, AllowedUserIDs: []string{"U123", "U456"}},
 		},
 		ContextMessages: 10,
 	}, cfg.Slack.SocialMode)
@@ -456,13 +455,15 @@ func TestLoadMigratesSlackSocialChannelAgents(t *testing.T) {
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, []TextSocialChannelConfig{
-		{Channel: "#triage", Agent: "new", AllowedUserIDs: []string{"U999"}},
-		{Channel: "#legacy", Agent: "old", AllowedUserIDs: []string{"U123"}},
+		{Channel: "#triage", Agents: []string{"new"}, AllowedUserIDs: []string{"U999"}},
+		{Channel: "#legacy", Agents: []string{"old"}, AllowedUserIDs: []string{"U123"}},
 	}, cfg.Slack.SocialMode.Channels)
 
 	updated, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.NotContains(t, string(updated), "channel_agents")
+	assert.NotContains(t, string(updated), `"agent":`)
+	assert.Contains(t, string(updated), `"agents": [`)
 	assert.Contains(t, string(updated), `"channel": "#legacy"`)
 
 	var root map[string]json.RawMessage
@@ -475,6 +476,64 @@ func TestLoadMigratesSlackSocialChannelAgents(t *testing.T) {
 	require.NoError(t, json.Unmarshal(slack["social_mode"], &socialMode))
 	_, ok := socialMode["allowed_user_ids"]
 	assert.False(t, ok)
+}
+
+func TestLoadMigratesLegacySocialAgentToAgents(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rocketclaw.json")
+	data := `{
+	  "workspace": ".",
+	  "minimum_wait_after_human_interaction": "",
+	  "slack": {
+	    "enabled": true,
+	    "bot_token": "xoxb",
+	    "app_token": "xapp",
+	    "room": "D123",
+	    "human_user_id": "U123",
+	    "social_mode": {
+	      "enabled": true,
+	      "channels": [
+	        {"channel": "triage", "agent": "legacy", "agents": ["new", "helper"], "allowed_user_ids": ["U123"]},
+	        {"channel": "ops", "agent": "ops", "allowed_user_ids": ["U456"]}
+	      ]
+	    }
+	  },
+	  "openai": {"api_key": "sk"}
+	}`
+	require.NoError(t, os.WriteFile(path, []byte(data), 0o600))
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, []TextSocialChannelConfig{
+		{Channel: "#triage", Agents: []string{"new", "helper"}, AllowedUserIDs: []string{"U123"}},
+		{Channel: "#ops", Agents: []string{"ops"}, AllowedUserIDs: []string{"U456"}},
+	}, cfg.Slack.SocialMode.Channels)
+
+	updated, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.NotContains(t, string(updated), `"agent":`)
+	assert.Contains(t, string(updated), `"agents": [`)
+}
+
+func TestLoadMigratesDiscordTextLegacySocialAgentToAgents(t *testing.T) {
+	cfg := loadTestConfig(t, `{
+	  "workspace": ".",
+	  "minimum_wait_after_human_interaction": "",
+	  "discord_text": {
+	    "enabled": true,
+	    "token": "discord-token",
+	    "channel_id": "C123",
+	    "human_user_id": "U123",
+	    "social_mode": {
+	      "enabled": true,
+	      "channels": [
+	        {"channel": "S123", "agent": "triage", "allowed_user_ids": ["U123"]}
+	      ]
+	    }
+	  },
+	  "openai": {"api_key": "sk"}
+	}`)
+
+	assert.Equal(t, []TextSocialChannelConfig{{Channel: "S123", Agents: []string{"triage"}, AllowedUserIDs: []string{"U123"}}}, cfg.DiscordText.SocialMode.Channels)
 }
 
 func TestLoadIgnoresStaleSlackSocialModeAgent(t *testing.T) {
@@ -512,6 +571,7 @@ func TestLoadIgnoresStaleSlackSocialModeAgent(t *testing.T) {
 	updated, err := os.ReadFile(path)
 	require.NoError(t, err)
 	assert.NotContains(t, string(updated), "channel_agents")
+	assert.NotContains(t, string(updated), `"agent":`)
 }
 
 func TestValidateSlackSocialModeRejectsInvalidConfig(t *testing.T) {
@@ -520,8 +580,11 @@ func TestValidateSlackSocialModeRejectsInvalidConfig(t *testing.T) {
 		update  func(*TextSocialConfig)
 		wantErr string
 	}{
+		{name: "missing agents", update: func(s *TextSocialConfig) {
+			s.Channels = []TextSocialChannelConfig{{Channel: "#triage", AllowedUserIDs: []string{"U123"}}}
+		}, wantErr: "slack.social_mode.channels[].agents is required when slack social mode is enabled"},
 		{name: "missing channel allowlist", update: func(s *TextSocialConfig) {
-			s.Channels = []TextSocialChannelConfig{{Channel: "#triage", Agent: "triage"}}
+			s.Channels = []TextSocialChannelConfig{{Channel: "#triage", Agents: []string{"triage"}}}
 		}, wantErr: "slack.social_mode.channels[].allowed_user_ids is required when slack social mode is enabled"},
 		{name: "negative context", update: func(s *TextSocialConfig) { s.ContextMessages = -1 }, wantErr: "slack.social_mode.context_messages must be zero or greater"},
 	} {
@@ -532,7 +595,7 @@ func TestValidateSlackSocialModeRejectsInvalidConfig(t *testing.T) {
 			cfg.Slack.AppToken = "xapp-test"
 			cfg.Slack.Room = "D123"
 			cfg.Slack.HumanUserID = "U123"
-			cfg.Slack.SocialMode = TextSocialConfig{Enabled: true, Channels: []TextSocialChannelConfig{{Channel: "#triage", Agent: "triage", AllowedUserIDs: []string{"U123"}}}, ContextMessages: 10}
+			cfg.Slack.SocialMode = TextSocialConfig{Enabled: true, Channels: []TextSocialChannelConfig{{Channel: "#triage", Agents: []string{"triage"}, AllowedUserIDs: []string{"U123"}}}, ContextMessages: 10}
 			tt.update(&cfg.Slack.SocialMode)
 
 			err := cfg.Validate()

@@ -23,6 +23,7 @@ type directBridge interface {
 	Summarize(ctx context.Context, prompt string) (string, error)
 	WaitIdle(ctx context.Context) error
 	InterruptActiveTurn() *events.InboundMessage
+	SwitchAgent(agent string)
 }
 
 type bridgeConfig struct {
@@ -271,6 +272,36 @@ func (m *threadBridgeManager) SubmitThreadReply(ctx context.Context, target even
 	m.text.setReplyThread(inbound, target)
 
 	return m.submitManagedThreadReply(ctx, conversationID, thread, inbound, m.text.outputTargets, m.text.label)
+}
+
+func (m *threadBridgeManager) SwitchThreadAgent(target events.TextConversationTarget, agent string) (bool, error) {
+	conversationID := m.text.conversationID(target)
+	if conversationID == "" {
+		return false, nil
+	}
+
+	state, err := m.store.Load()
+	if err != nil {
+		return false, fmt.Errorf("load persisted %s thread state: %w", m.text.label, err)
+	}
+
+	if _, ok := state.Threads[conversationID]; !ok {
+		return false, nil
+	}
+
+	if err := m.store.UpsertThread(conversationID, agent); err != nil {
+		return true, fmt.Errorf("persist %s thread agent switch: %w", m.text.label, err)
+	}
+
+	m.mu.Lock()
+	managed := m.bridges[conversationID]
+	m.mu.Unlock()
+
+	if managed != nil {
+		managed.bridge.SwitchAgent(agent)
+	}
+
+	return true, nil
 }
 
 func (m *threadBridgeManager) RecordResponseCheckpoint(target events.TextConversationTarget, checkpoint events.ResponseCheckpoint) error {

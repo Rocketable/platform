@@ -7,12 +7,18 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/cronjob"
 	"github.com/Rocketable/platform/internal/rocketclaw/emoji"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
+)
+
+const (
+	socialAgentSwitchPrefix        = "🎛"
+	socialAgentSwitchPrefixVariant = "🎛️"
 )
 
 // ThreadAgent is one configured text prefix to managed-agent mapping.
@@ -76,6 +82,31 @@ func MatchThreadAgent(text string, agents []ThreadAgent, trimText bool) (ThreadA
 	}
 
 	return ThreadAgent{}, "", false
+}
+
+// ParseSocialAgentSwitch returns the social-mode agent switch target, if text is a switch control message.
+func ParseSocialAgentSwitch(text string) (string, bool) {
+	text = emoji.CanonicalizeLeadingAlias(text)
+	text = strings.TrimSpace(text)
+
+	after, ok := strings.CutPrefix(text, socialAgentSwitchPrefixVariant)
+	if !ok {
+		after, ok = strings.CutPrefix(text, socialAgentSwitchPrefix)
+		if !ok {
+			return "", false
+		}
+	}
+
+	if after != "" {
+		r, size := utf8.DecodeRuneInString(after)
+		if !unicode.IsSpace(r) {
+			return "", false
+		}
+
+		after = after[size:]
+	}
+
+	return strings.TrimSpace(after), true
 }
 
 // GoalProgressText returns the shared visible goal progress prefix.

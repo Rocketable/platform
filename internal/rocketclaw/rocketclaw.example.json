@@ -55,7 +55,9 @@
       "channels": [
         {
           "channel": "#channel-name",
-          "agent": "main",
+          "agents": [
+            "main"
+          ],
           "allowed_user_ids": [
             "U0987654321"
           ]

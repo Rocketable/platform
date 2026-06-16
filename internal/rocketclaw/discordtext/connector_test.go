@@ -259,7 +259,7 @@ func TestHandleSocialMentionStartsConfiguredAgentThread(t *testing.T) {
 	fake.threadID = "T123"
 	router := newFakeThreadRouter()
 	connector := newTestConnector(fake, router)
-	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "S123", Agent: "triage", AllowedUserIDs: []string{"social-human"}}}}
+	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "S123", Agents: []string{"triage"}, AllowedUserIDs: []string{"social-human"}}}}
 
 	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "S123", Content: "<@BOT> investigate", Author: &textUser{ID: "social-human"}}})
 
@@ -268,11 +268,31 @@ func TestHandleSocialMentionStartsConfiguredAgentThread(t *testing.T) {
 	assert.Equal(t, "investigate", router.started.Text)
 }
 
+func TestHandleSocialThreadMessageSwitchesAgent(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.channels["T123"] = &textChannel{ID: "T123", ParentID: "S123", Type: channelTypeGuildPublicThread}
+	router := newFakeThreadRouter()
+	router.switchHandled = true
+	connector := newTestConnector(fake, router)
+	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "S123", Agents: []string{"triage", "planner"}, AllowedUserIDs: []string{"social-human"}}}}
+
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "T123", Content: "🎛 other", Author: &textUser{ID: "social-human"}}})
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U2", ChannelID: "T123", Content: ":control_knobs: planner", Author: &textUser{ID: "social-human"}}})
+
+	assert.Equal(t, "T123", router.switchedThreadID)
+	assert.Equal(t, "planner", router.switchedAgent)
+	assert.Empty(t, router.submittedThreadID)
+	require.Len(t, fake.messages, 2)
+	assert.Equal(t, "T123", fake.messages[0].channelID)
+	assert.Contains(t, fake.messages[0].send.Content, "not configured")
+	assert.Contains(t, fake.messages[1].send.Content, "Switched")
+}
+
 func TestHandleSocialMessageRequiresAllowedMention(t *testing.T) {
 	fake := newFakeDiscordClient()
 	fake.channels["S123"] = &textChannel{ID: "S123", Type: channelTypeGuildText}
 	connector := newTestConnector(fake, newFakeThreadRouter())
-	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "S123", Agent: "triage", AllowedUserIDs: []string{"social-human"}}}}
+	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "S123", Agents: []string{"triage"}, AllowedUserIDs: []string{"social-human"}}}}
 
 	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "S123", Content: "<@BOT> denied", Author: &textUser{ID: "intruder"}}})
 	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U2", ChannelID: "S123", Content: "no mention", Author: &textUser{ID: "social-human"}}})
@@ -360,7 +380,7 @@ func TestHandleReactionAllowsSocialCronUser(t *testing.T) {
 	fake.reactionMessageContent = "🔂 daily"
 	runner := &fakeOneOffCronjobs{loaded: cronjob.OneOffCronjob{Agent: "cron", RelativePath: "cron/daily.md", SlackChannel: "S123"}, result: cronjob.RunResult{VerbatimMessage: "done"}}
 	connector := newTestConnector(fake, newFakeThreadRouter())
-	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "S123", Agent: "triage", AllowedUserIDs: []string{"social-human"}}}}
+	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "S123", Agents: []string{"triage"}, AllowedUserIDs: []string{"social-human"}}}}
 	connector.oneOffCronjobs = runner
 
 	connector.handleReaction(t.Context(), &reactionAdd{UserID: "social-human", ChannelID: "S123", MessageID: "M1", Emoji: textEmoji{Name: discordRepeatOneEmoji}})
@@ -619,11 +639,12 @@ func (f *fakeDiscordClient) userID() string { return "BOT" }
 
 type fakeThreadRouter struct {
 	startedAgent, submittedThreadID, summarizedThreadID string
+	switchedThreadID, switchedAgent                     string
 	registeredCron                                      string
 	preparedResponse, submittedResponse                 string
 	startedPreSeed, submitThreadHandled, summaryHandled bool
 	prepareResponseHandled, submitResponseHandled       bool
-	interruptHandled                                    bool
+	interruptHandled, switchHandled                     bool
 	started, submitted                                  *events.InboundMessage
 	startedGoal                                         *events.InboundMessage
 	interruptedThreadID                                 string
@@ -691,6 +712,13 @@ func (f *fakeThreadRouter) RecordResponseCheckpoint(target events.TextConversati
 func (f *fakeThreadRouter) RegisterCronThread(_ context.Context, target events.TextConversationTarget, agent, seedText string) error {
 	f.registeredCron = target.ThreadID + ":" + agent + ":" + seedText
 	return nil
+}
+
+func (f *fakeThreadRouter) SwitchThreadAgent(target events.TextConversationTarget, agent string) (bool, error) {
+	f.switchedThreadID = target.ThreadID
+	f.switchedAgent = agent
+
+	return f.switchHandled, nil
 }
 
 type fakeOneOffCronjobs struct {

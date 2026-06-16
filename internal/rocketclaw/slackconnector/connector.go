@@ -1001,10 +1001,15 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 	dmMessage := ev.Channel == c.config.Room && ev.User == c.config.HumanUserID && strings.HasPrefix(ev.Channel, "D")
 
 	socialThreadReply := false
+	socialChannelName := ""
 
 	if c.config.SocialMode.Enabled && threadTS != "" && !strings.HasPrefix(ev.Channel, "D") && c.socialModeCouldAllowUser(ev.User) {
 		channel, _, ok := c.socialModeChannel(ctx, ev.Channel)
+
 		socialThreadReply = ok && c.socialModeAllowsUser(channel, ev.User)
+		if socialThreadReply {
+			socialChannelName = channel
+		}
 	}
 
 	rawText := strings.TrimSpace(slackMessageEventText(ev))
@@ -1092,6 +1097,11 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		}
 
 		if handled {
+			if agent, ok := primarytext.ParseSocialAgentSwitch(text); ok && socialThreadReply {
+				c.handleSlackSocialAgentSwitch(ctx, ev.Channel, threadTS, ev.User, socialChannelName, agent)
+				return
+			}
+
 			goal, rejection, isGoal := harnessbridge.ParseGoalRequest(emoji.CanonicalizeLeadingAlias(text))
 			if isGoal {
 				if rejection != "" {
@@ -1525,8 +1535,8 @@ func (c *Connector) socialModeChannel(ctx context.Context, channelID string) (ch
 	}
 
 	for _, configured := range c.config.SocialMode.Channels {
-		if configured.Channel == name {
-			return name, configured.Agent, true
+		if configured.Channel == name && len(configured.Agents) > 0 {
+			return name, configured.Agents[0], true
 		}
 	}
 
@@ -1554,6 +1564,54 @@ func (c *Connector) socialModeAllowsUser(channel, userID string) bool {
 	}
 
 	return false
+}
+
+func (c *Connector) socialModeAgents(channel string) []string {
+	for _, configured := range c.config.SocialMode.Channels {
+		if configured.Channel == channel {
+			return configured.Agents
+		}
+	}
+
+	return nil
+}
+
+func (c *Connector) handleSlackSocialAgentSwitch(ctx context.Context, channelID, threadTS, userID, socialChannel, agent string) {
+	if !slices.Contains(c.socialModeAgents(socialChannel), agent) {
+		c.postSlackEphemeral(ctx, channelID, threadTS, userID, "Agent `"+agent+"` is not configured for this channel.")
+		return
+	}
+
+	handled, err := c.threadRouter.SwitchThreadAgent(events.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS}, agent)
+	if err != nil {
+		c.log.Error("switch Slack social thread agent", "error", err, "channel", channelID, "thread_ts", threadTS, "agent", agent)
+		c.postSlackEphemeral(ctx, channelID, threadTS, userID, "I couldn't switch this thread to `"+agent+"`.")
+
+		return
+	}
+
+	if !handled {
+		c.postSlackEphemeral(ctx, channelID, threadTS, userID, "I couldn't find an active managed thread for that agent switch.")
+		return
+	}
+
+	c.postSlackEphemeral(ctx, channelID, threadTS, userID, "Switched this thread to `"+agent+"`.")
+}
+
+func (c *Connector) postSlackEphemeral(ctx context.Context, channelID, threadTS, userID, text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+
+	options := []slack.MsgOption{slack.MsgOptionText(text, false)}
+	if threadTS != "" {
+		options = append(options, slack.MsgOptionTS(threadTS))
+	}
+
+	if _, err := c.api.PostEphemeralContext(ctx, channelID, userID, options...); err != nil {
+		c.log.Warn("post Slack ephemeral", "error", err, "channel", channelID, "user", userID)
+	}
 }
 
 func (c *Connector) stripSlackBotMention(text string) string {

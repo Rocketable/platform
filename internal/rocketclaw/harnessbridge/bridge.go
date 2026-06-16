@@ -198,11 +198,18 @@ func (b *Bridge) Start(ctx context.Context) error {
 	return nil
 }
 
+// SwitchAgent changes the agent used for future turns in this conversation.
+func (b *Bridge) SwitchAgent(agent string) {
+	b.mu.Lock()
+	b.config.Agent = strings.TrimSpace(agent)
+	b.mu.Unlock()
+}
+
 // ScheduleMessage schedules one delayed prompt for this conversation.
 func (b *Bridge) ScheduleMessage(delay time.Duration, message string, recurring bool) error {
 	id := rand.Text()
 
-	scheduled := ScheduledMessageState{ConversationID: b.config.ConversationID, Agent: b.config.Agent, Message: message, DueAt: time.Now().UTC().Add(delay), Recurring: recurring}
+	scheduled := ScheduledMessageState{ConversationID: b.config.ConversationID, Agent: b.agentSnapshot(), Message: message, DueAt: time.Now().UTC().Add(delay), Recurring: recurring}
 	if recurring {
 		scheduled.Interval = delay
 	}
@@ -519,6 +526,13 @@ func (b *Bridge) SeedThreadFromCron(ctx context.Context, seedText string) error 
 	return nil
 }
 
+func (b *Bridge) agentSnapshot() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.config.Agent
+}
+
 func compactModel(model string) (responses.ResponseCompactParamsModel, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
@@ -609,7 +623,7 @@ func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.Ses
 			return nil, fmt.Errorf("open workspace agent: %w", err)
 		}
 
-		if agent, ok := agents.Items[b.config.Agent]; ok {
+		if agent, ok := agents.Items[b.agentSnapshot()]; ok {
 			if instructions := strings.TrimSpace(agent.Prompt); instructions != "" {
 				params.Instructions = openai.String(instructions)
 			}
@@ -885,6 +899,8 @@ func (b *Bridge) enqueueGoalContinuation(ctx context.Context, goal *GoalState, m
 
 //nolint:gocyclo // Turn execution coordinates model, tools, progress, and goal accounting.
 func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID string, publish bool) (runResult, error) {
+	agentName := b.agentSnapshot()
+
 	root, err := os.OpenRoot(b.runtime.Workspace)
 	if err != nil {
 		return runResult{}, fmt.Errorf("open workspace root: %w", err)
@@ -897,7 +913,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		return runResult{}, fmt.Errorf("open workspace agent and skills: %w", err)
 	}
 
-	appendOverlayPromptToAgent(agents, b.config.Agent, b.runtime)
+	appendOverlayPromptToAgent(agents, agentName, b.runtime)
 
 	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(b.runtime.WorkDirName(), ".rocketcode", "shell-outputs")), 0o755); err != nil {
 		return runResult{}, fmt.Errorf("create rocketcode shell output dir: %w", err)
@@ -1013,7 +1029,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 
 	rocketcodeConfig := b.rocketcodeConfig(shellOutputDir, shellEnv, attachments.Tool(root))
 
-	looper, err := rocketcode.NewWithProviders(providers, &rocketcodeConfig, root, agents, skills, b.config.Agent, io.Discard)
+	looper, err := rocketcode.NewWithProviders(providers, &rocketcodeConfig, root, agents, skills, agentName, io.Discard)
 	if err != nil {
 		return runResult{}, fmt.Errorf("prepare rocketcode turn: %w", err)
 	}
@@ -1080,7 +1096,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		return nil
 	}
 
-	b.log.Info("starting rocketcode looper", "conversation_id", b.config.ConversationID, "turn_id", turnID, "agent", b.config.Agent)
+	b.log.Info("starting rocketcode looper", "conversation_id", b.config.ConversationID, "turn_id", turnID, "agent", agentName)
 
 	group.Go(func() error { return looper.Loop(ctx, input, sessionIn, sessionOut, interrupts) })
 
@@ -1784,9 +1800,11 @@ func (b *Bridge) runGoalCheck(ctx context.Context, script string) (string, bool)
 		return "goal check failed before execution: " + err.Error(), false
 	}
 
-	agent, ok := agents.Items[b.config.Agent]
+	agentName := b.agentSnapshot()
+
+	agent, ok := agents.Items[agentName]
 	if !ok {
-		return "goal check failed before execution: active agent " + b.config.Agent + " is not configured", false
+		return "goal check failed before execution: active agent " + agentName + " is not configured", false
 	}
 
 	check, err := validateGoalCheckScript(root, b.runtime.Workspace, script, agent.Permission)

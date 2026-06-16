@@ -117,8 +117,15 @@ type TextSocialConfig struct {
 // TextSocialChannelConfig configures one primary text social-mode channel.
 type TextSocialChannelConfig struct {
 	Channel        string   `json:"channel"`
-	Agent          string   `json:"agent"`
+	Agents         []string `json:"agents,omitempty"`
 	AllowedUserIDs []string `json:"allowed_user_ids,omitempty"`
+}
+
+type legacyTextSocialChannelConfig struct {
+	Channel        string          `json:"channel"`
+	Agent          json.RawMessage `json:"agent,omitempty"`
+	Agents         []string        `json:"agents,omitempty"`
+	AllowedUserIDs []string        `json:"allowed_user_ids,omitempty"`
 }
 
 // OpenAIConfig configures the OpenAI audio clients.
@@ -161,7 +168,7 @@ func Load(configPath string) (*Config, error) {
 		return nil, err
 	}
 
-	if data, err = migrateSlackSocialChannelAgentsConfig(absPath, data); err != nil {
+	if data, err = migrateTextSocialConfig(absPath, data); err != nil {
 		return nil, err
 	}
 
@@ -214,7 +221,7 @@ func Migrate(data []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	if data, _, err = migrateSlackSocialChannelAgentsConfigData(data); err != nil {
+	if data, _, err = migrateTextSocialConfigData(data); err != nil {
 		return nil, err
 	}
 
@@ -267,8 +274,8 @@ func migrateThreadAgentsConfigData(data []byte) (updated []byte, changed bool, e
 	return updated, err == nil, err
 }
 
-func migrateSlackSocialChannelAgentsConfig(path string, data []byte) ([]byte, error) {
-	updated, changed, err := migrateSlackSocialChannelAgentsConfigData(data)
+func migrateTextSocialConfig(path string, data []byte) ([]byte, error) {
+	updated, changed, err := migrateTextSocialConfigData(data)
 	if err != nil || !changed {
 		return updated, err
 	}
@@ -276,62 +283,66 @@ func migrateSlackSocialChannelAgentsConfig(path string, data []byte) ([]byte, er
 	return writeMigratedConfig(path, updated)
 }
 
-func migrateSlackSocialChannelAgentsConfigData(data []byte) (updated []byte, changed bool, err error) {
+func migrateTextSocialConfigData(data []byte) (updated []byte, changed bool, err error) {
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(data, &root); err != nil {
 		return data, false, nil
 	}
 
+	changedSlack, err := migrateSlackSocialMode(root)
+	if err != nil {
+		return nil, false, err
+	}
+
+	changedDiscord, err := migrateDiscordTextSocialMode(root)
+	if err != nil {
+		return nil, false, err
+	}
+
+	if !changedSlack && !changedDiscord {
+		return data, false, nil
+	}
+
+	updated, err = marshalMigratedConfig(root)
+
+	return updated, err == nil, err
+}
+
+func migrateSlackSocialMode(root map[string]json.RawMessage) (bool, error) {
 	var slack map[string]json.RawMessage
 	if err := json.Unmarshal(root["slack"], &slack); err != nil {
-		return data, false, nil
+		return false, nil
 	}
 
 	var socialMode map[string]json.RawMessage
 	if err := json.Unmarshal(slack["social_mode"], &socialMode); err != nil {
-		return data, false, nil
+		return false, nil
 	}
 
 	rawAllowedUserIDs, hasAllowedUserIDs := socialMode["allowed_user_ids"]
+	_, hasLegacyAgent := socialMode["agent"]
 
 	allowedUserIDs := []string(nil)
 	if hasAllowedUserIDs {
 		if err := json.Unmarshal(rawAllowedUserIDs, &allowedUserIDs); err != nil {
-			return data, false, nil
+			return false, nil
 		}
 
 		allowedUserIDs = normalizeStringList(allowedUserIDs)
 	}
 
 	raw, hasChannelAgents := socialMode["channel_agents"]
-	if !hasChannelAgents && !hasAllowedUserIDs {
-		return data, false, nil
-	}
 
 	var old map[string]string
 	if hasChannelAgents {
 		if err := json.Unmarshal(raw, &old); err != nil {
-			return data, false, nil
+			return false, nil
 		}
 	}
 
-	var channels []TextSocialChannelConfig
-	if raw, ok := socialMode["channels"]; ok {
-		if err := json.Unmarshal(raw, &channels); err != nil {
-			return data, false, nil
-		}
-	}
-
-	seen := make(map[string]bool, len(channels))
-	for i, channel := range channels {
-		channels[i].AllowedUserIDs = normalizeStringList(channel.AllowedUserIDs)
-		if len(channels[i].AllowedUserIDs) == 0 && len(allowedUserIDs) > 0 {
-			channels[i].AllowedUserIDs = slices.Clone(allowedUserIDs)
-		}
-
-		if name := normalizeSlackSocialChannel(channel.Channel); name != "" {
-			seen[name] = true
-		}
+	channels, seen, changedChannels := migrateTextSocialChannels(socialMode["channels"], normalizeSlackSocialChannel, allowedUserIDs)
+	if !hasChannelAgents && !hasAllowedUserIDs && !hasLegacyAgent && !changedChannels {
+		return false, nil
 	}
 
 	for _, channel := range slices.Sorted(maps.Keys(old)) {
@@ -342,14 +353,14 @@ func migrateSlackSocialChannelAgentsConfigData(data []byte) (updated []byte, cha
 			continue
 		}
 
-		channels = append(channels, TextSocialChannelConfig{Channel: name, Agent: agent, AllowedUserIDs: slices.Clone(allowedUserIDs)})
+		channels = append(channels, TextSocialChannelConfig{Channel: name, Agents: []string{agent}, AllowedUserIDs: slices.Clone(allowedUserIDs)})
 		seen[name] = true
 	}
 
 	if len(channels) > 0 {
 		migratedChannels, err := json.Marshal(channels)
 		if err != nil {
-			return nil, false, fmt.Errorf("marshal migrated slack social channels: %w", err)
+			return false, fmt.Errorf("marshal migrated slack social channels: %w", err)
 		}
 
 		socialMode["channels"] = migratedChannels
@@ -357,24 +368,120 @@ func migrateSlackSocialChannelAgentsConfigData(data []byte) (updated []byte, cha
 
 	delete(socialMode, "channel_agents")
 	delete(socialMode, "allowed_user_ids")
+	delete(socialMode, "agent")
 
 	migratedSocialMode, err := json.Marshal(socialMode)
 	if err != nil {
-		return nil, false, fmt.Errorf("marshal migrated slack social mode: %w", err)
+		return false, fmt.Errorf("marshal migrated slack social mode: %w", err)
 	}
 
 	slack["social_mode"] = migratedSocialMode
 
 	migratedSlack, err := json.Marshal(slack)
 	if err != nil {
-		return nil, false, fmt.Errorf("marshal migrated slack config: %w", err)
+		return false, fmt.Errorf("marshal migrated slack config: %w", err)
 	}
 
 	root["slack"] = migratedSlack
 
-	updated, err = marshalMigratedConfig(root)
+	return true, nil
+}
 
-	return updated, err == nil, err
+func migrateDiscordTextSocialMode(root map[string]json.RawMessage) (bool, error) {
+	var discordText map[string]json.RawMessage
+	if err := json.Unmarshal(root["discord_text"], &discordText); err != nil {
+		return false, nil
+	}
+
+	var socialMode map[string]json.RawMessage
+	if err := json.Unmarshal(discordText["social_mode"], &socialMode); err != nil {
+		return false, nil
+	}
+
+	_, hasLegacyAgent := socialMode["agent"]
+
+	channels, _, changedChannels := migrateTextSocialChannels(socialMode["channels"], strings.TrimSpace, nil)
+	if !hasLegacyAgent && !changedChannels {
+		return false, nil
+	}
+
+	if changedChannels {
+		migratedChannels, err := json.Marshal(channels)
+		if err != nil {
+			return false, fmt.Errorf("marshal migrated discord text social channels: %w", err)
+		}
+
+		socialMode["channels"] = migratedChannels
+	}
+
+	delete(socialMode, "agent")
+
+	migratedSocialMode, err := json.Marshal(socialMode)
+	if err != nil {
+		return false, fmt.Errorf("marshal migrated discord text social mode: %w", err)
+	}
+
+	discordText["social_mode"] = migratedSocialMode
+
+	migratedDiscordText, err := json.Marshal(discordText)
+	if err != nil {
+		return false, fmt.Errorf("marshal migrated discord text config: %w", err)
+	}
+
+	root["discord_text"] = migratedDiscordText
+
+	return true, nil
+}
+
+func migrateTextSocialChannels(raw json.RawMessage, normalizeChannel func(string) string, fallbackAllowedUserIDs []string) ([]TextSocialChannelConfig, map[string]bool, bool) {
+	var legacyChannels []legacyTextSocialChannelConfig
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &legacyChannels); err != nil {
+			return nil, map[string]bool{}, false
+		}
+	}
+
+	changed := false
+	channels := make([]TextSocialChannelConfig, 0, len(legacyChannels))
+
+	seen := make(map[string]bool, len(legacyChannels))
+	for _, channel := range legacyChannels {
+		name := normalizeChannel(channel.Channel)
+		agents := normalizeStringList(channel.Agents)
+		legacyAgent, legacyAgentScalar := "", false
+
+		if len(channel.Agent) > 0 {
+			var rawAgent string
+			if err := json.Unmarshal(channel.Agent, &rawAgent); err == nil {
+				legacyAgent = strings.TrimSpace(rawAgent)
+				legacyAgentScalar = true
+			}
+		}
+
+		if len(agents) == 0 && legacyAgentScalar && legacyAgent != "" {
+			agents = []string{legacyAgent}
+			changed = true
+		} else if len(channel.Agent) > 0 && (len(agents) > 0 || legacyAgentScalar) {
+			changed = true
+		}
+
+		allowedUserIDs := normalizeStringList(channel.AllowedUserIDs)
+		if len(allowedUserIDs) == 0 && len(fallbackAllowedUserIDs) > 0 {
+			allowedUserIDs = slices.Clone(fallbackAllowedUserIDs)
+			changed = true
+		}
+
+		if name != channel.Channel || !slices.Equal(agents, channel.Agents) || !slices.Equal(allowedUserIDs, channel.AllowedUserIDs) {
+			changed = true
+		}
+
+		channels = append(channels, TextSocialChannelConfig{Channel: name, Agents: agents, AllowedUserIDs: allowedUserIDs})
+		if name != "" {
+			seen[name] = true
+		}
+	}
+
+	return channels, seen, changed
 }
 
 func marshalMigratedConfig(root map[string]json.RawMessage) ([]byte, error) {
@@ -569,23 +676,17 @@ func (c *Config) validateDiscordText() error {
 		}
 	}
 
-	normalized := make([]TextSocialChannelConfig, 0, len(c.DiscordText.SocialMode.Channels))
-	for _, channel := range c.DiscordText.SocialMode.Channels {
-		channel.Channel, channel.Agent = strings.TrimSpace(channel.Channel), strings.TrimSpace(channel.Agent)
-
-		channel.AllowedUserIDs = normalizeStringList(channel.AllowedUserIDs)
-		if channel.Channel != "" && channel.Agent != "" {
-			normalized = append(normalized, channel)
-		}
-	}
-
-	c.DiscordText.SocialMode.Channels = normalized
+	c.DiscordText.SocialMode.Channels = normalizeTextSocialChannels(c.DiscordText.SocialMode.Channels, strings.TrimSpace)
 
 	if !c.DiscordText.SocialMode.Enabled {
 		return nil
 	}
 
 	for _, channel := range c.DiscordText.SocialMode.Channels {
+		if len(channel.Agents) == 0 {
+			return errors.New("discord_text.social_mode.channels[].agents is required when discord_text social mode is enabled")
+		}
+
 		if len(channel.AllowedUserIDs) == 0 {
 			return errors.New("discord_text.social_mode.channels[].allowed_user_ids is required when discord_text social mode is enabled")
 		}
@@ -648,13 +749,17 @@ func (c *Config) validateSlack() error {
 		}
 	}
 
-	c.Slack.SocialMode.Channels = normalizeTextSocialChannels(c.Slack.SocialMode.Channels)
+	c.Slack.SocialMode.Channels = normalizeTextSocialChannels(c.Slack.SocialMode.Channels, normalizeSlackSocialChannel)
 
 	if !c.Slack.SocialMode.Enabled {
 		return nil
 	}
 
 	for _, channel := range c.Slack.SocialMode.Channels {
+		if len(channel.Agents) == 0 {
+			return errors.New("slack.social_mode.channels[].agents is required when slack social mode is enabled")
+		}
+
 		if len(channel.AllowedUserIDs) == 0 {
 			return errors.New("slack.social_mode.channels[].allowed_user_ids is required when slack social mode is enabled")
 		}
@@ -671,14 +776,14 @@ func (c *Config) validateSlack() error {
 	return nil
 }
 
-func normalizeTextSocialChannels(channels []TextSocialChannelConfig) []TextSocialChannelConfig {
+func normalizeTextSocialChannels(channels []TextSocialChannelConfig, normalizeChannel func(string) string) []TextSocialChannelConfig {
 	normalized := make([]TextSocialChannelConfig, 0, len(channels))
 	for _, channel := range channels {
-		channel.Channel = normalizeSlackSocialChannel(channel.Channel)
-		channel.Agent = strings.TrimSpace(channel.Agent)
+		channel.Channel = normalizeChannel(channel.Channel)
+		channel.Agents = normalizeStringList(channel.Agents)
 
 		channel.AllowedUserIDs = normalizeStringList(channel.AllowedUserIDs)
-		if channel.Channel == "" || channel.Agent == "" {
+		if channel.Channel == "" {
 			continue
 		}
 

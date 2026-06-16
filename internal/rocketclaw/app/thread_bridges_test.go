@@ -223,6 +223,25 @@ func TestThreadBridgeManagerCanSkipStartedThreadSeed(t *testing.T) {
 	assert.Equal(t, []string{"submit:first"}, bridge.ops)
 }
 
+func TestThreadBridgeManagerSwitchesThreadAgent(t *testing.T) {
+	workspace := t.TempDir()
+	store := newTestSessionService(t, workspace)
+	bridge := new(fakeDirectBridge)
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
+
+	replyTarget := slackTarget("D123", "111.222")
+	require.NoError(t, manager.StartThread(t.Context(), "main", false, replyTarget, newThreadInboundMessage("first", "111.222", "111.222")))
+
+	handled, err := manager.SwitchThreadAgent(replyTarget, "planner")
+	require.NoError(t, err)
+	assert.True(t, handled)
+	assert.Equal(t, []string{"submit:first", "switch:planner"}, bridge.ops)
+
+	state, err := store.Load()
+	require.NoError(t, err)
+	assert.Equal(t, "planner", state.Threads[harnessbridge.SlackThreadConversationID("D123", "111.222")].Agent)
+}
+
 func TestThreadBridgeManagerStartsGoalInExistingThreadWithPersistedAgent(t *testing.T) {
 	store := newTestSessionService(t, t.TempDir())
 	conversationID := harnessbridge.SlackThreadConversationID("D123", "111.222")
@@ -861,6 +880,10 @@ func (f *fakeDirectBridge) InterruptActiveTurn() *events.InboundMessage {
 	f.interrupts++
 
 	return f.interruptResult
+}
+
+func (f *fakeDirectBridge) SwitchAgent(agent string) {
+	f.ops = append(f.ops, "switch:"+agent)
 }
 
 func newThreadInboundMessage(text, messageTS, threadTS string) *events.InboundMessage {

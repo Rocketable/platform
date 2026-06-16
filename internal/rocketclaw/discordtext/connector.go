@@ -446,6 +446,13 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 	if isThread {
 		reply.ThreadID = msg.ChannelID
 
+		if social {
+			if agent, ok := primarytext.ParseSocialAgentSwitch(text); ok {
+				c.handleDiscordSocialAgentSwitch(reply, socialChannel, agent)
+				return
+			}
+		}
+
 		switch strings.TrimSpace(text) {
 		case discordStopSignEmoji, discordStopButtonEmoji:
 			c.stopDiscordThread(msg.ChannelID)
@@ -518,7 +525,7 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 
 		agent := "main"
 		if social {
-			agent = socialChannel.Agent
+			agent = socialChannel.Agents[0]
 		}
 
 		c.startGoal(ctx, agent, reply, goal, c.inboundMessage(ctx, msg, text, reply))
@@ -536,7 +543,7 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 		reply.ThreadID = thread.ID
 		c.recordThreadRoot(msg.ChannelID, msg.ID, thread.ID)
 
-		if err := c.threadRouter.StartThread(ctx, socialChannel.Agent, false, events.TextConversationTarget{ThreadID: thread.ID}, c.inboundMessage(ctx, msg, text, reply)); err != nil {
+		if err := c.threadRouter.StartThread(ctx, socialChannel.Agents[0], false, events.TextConversationTarget{ThreadID: thread.ID}, c.inboundMessage(ctx, msg, text, reply)); err != nil {
 			c.log.Error("start Discord social thread bridge", "thread", thread.ID, "error", err)
 		}
 
@@ -785,6 +792,44 @@ func (c *Connector) publishOnDemandCronReply(ctx context.Context, reply *events.
 
 	if err := c.bus.PublishOutbound(ctx, outbound); err != nil {
 		c.log.Warn("publish Discord on-demand cron reply", "error", err)
+	}
+}
+
+func (c *Connector) handleDiscordSocialAgentSwitch(reply *events.DiscordReplyTarget, socialChannel config.TextSocialChannelConfig, agent string) {
+	if !slices.Contains(socialChannel.Agents, agent) {
+		c.postDiscordThreadReply(reply, "Agent `"+agent+"` is not configured for this channel.")
+		return
+	}
+
+	handled, err := c.threadRouter.SwitchThreadAgent(events.TextConversationTarget{ThreadID: reply.ThreadID}, agent)
+	if err != nil {
+		c.log.Error("switch Discord social thread agent", "error", err, "thread", reply.ThreadID, "agent", agent)
+		c.postDiscordThreadReply(reply, "I couldn't switch this thread to `"+agent+"`.")
+
+		return
+	}
+
+	if !handled {
+		c.postDiscordThreadReply(reply, "I couldn't find an active managed thread for that agent switch.")
+		return
+	}
+
+	c.postDiscordThreadReply(reply, "Switched this thread to `"+agent+"`.")
+}
+
+func (c *Connector) postDiscordThreadReply(reply *events.DiscordReplyTarget, text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+
+	channelID := strings.TrimSpace(reply.ThreadID)
+	if channelID == "" {
+		channelID = strings.TrimSpace(reply.ChannelID)
+	}
+
+	if _, err := c.client.sendMessage(channelID, messageSend{Content: text}, nil); err != nil {
+		c.log.Warn("post Discord thread reply", "error", err, "channel", channelID)
 	}
 }
 

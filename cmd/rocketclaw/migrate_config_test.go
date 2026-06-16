@@ -34,7 +34,9 @@ func TestRunMigrateConfigReadsStdinAndDoesNotRequireConfig(t *testing.T) {
 
 	assert.Contains(t, output, `"channels"`)
 	assert.Contains(t, output, `"channel": "#triage"`)
+	assert.Contains(t, output, `"agents": [`)
 	assert.Contains(t, output, `"allowed_user_ids": [`)
+	assert.NotContains(t, output, `"agent"`)
 	assert.NotContains(t, output, "channel_agents")
 
 	_, err = os.Stat(filepath.Join(workspace, defaultConfigPath))
