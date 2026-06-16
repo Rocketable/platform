@@ -533,6 +533,13 @@ func (c *Connector) sendExternalMCPRelay(ctx context.Context, channelID, threadT
 		return nil, nil
 	}
 
+	if text == "" {
+		text = events.AttachmentNamesSpeech(attachments)
+		if text == "" {
+			text = "Attached files."
+		}
+	}
+
 	threadTS = strings.TrimSpace(threadTS)
 
 	var replyTarget *events.SlackReplyTarget
@@ -559,8 +566,25 @@ func (c *Connector) sendExternalMCPRelay(ctx context.Context, channelID, threadT
 		replyTarget = &events.SlackReplyTarget{ChannelID: postedChannelID, MessageTS: messageTS, ThreadTS: attachmentThreadTS}
 
 		if len(attachments) > 0 {
-			if err := c.uploadResponseAttachments(ctx, postedChannelID, attachmentThreadTS, attachments); err != nil {
-				return fmt.Errorf("send Slack external MCP relay attachments: %w", err)
+			fileIDs := make([]string, 0, len(attachments))
+			for i := range attachments {
+				attachment := attachments[i]
+
+				name := strings.TrimSpace(attachment.Name)
+				if name == "" {
+					name = "attachment"
+				}
+
+				file, err := c.api.UploadFileContext(ctx, slack.UploadFileParameters{Reader: bytes.NewReader(attachment.Data), FileSize: len(attachment.Data), Filename: name, Title: name})
+				if err != nil {
+					return fmt.Errorf("send Slack external MCP relay attachments: upload Slack attachment %q: %w", name, err)
+				}
+
+				fileIDs = append(fileIDs, file.ID)
+			}
+
+			if _, _, _, err := c.api.UpdateMessageContext(ctx, postedChannelID, messageTS, slack.MsgOptionText(text, false), slack.MsgOptionFileIDs(fileIDs)); err != nil {
+				return fmt.Errorf("send Slack external MCP relay attachments: update Slack relay files: %w", err)
 			}
 		}
 

@@ -37,7 +37,7 @@ const (
 type discordClient interface {
 	channel(channelID string) (*textChannel, error)
 	message(channelID, messageID string) (*textMessage, error)
-	sendMessage(channelID string, send messageSend) (*postedMessage, error)
+	sendMessage(channelID string, send messageSend, attachments []events.OutboundAttachment) (*postedMessage, error)
 	editMessage(channelID, messageID string, send messageSend) error
 	deleteMessage(channelID, messageID string) error
 	addReaction(channelID, messageID, emoji string) error
@@ -100,7 +100,7 @@ func (c *Connector) SendVoiceRelay(_ context.Context, text string) (*events.Disc
 		return nil, nil
 	}
 
-	posted, err := c.client.sendMessage(c.config.ChannelID, messageSend{Content: text})
+	posted, err := c.client.sendMessage(c.config.ChannelID, messageSend{Content: text}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("send Discord voice relay: %w", err)
 	}
@@ -126,7 +126,14 @@ func (c *Connector) SendExternalMCPRelay(_ context.Context, channelID, text stri
 		channelID = c.config.ChannelID
 	}
 
-	root, err := c.client.sendMessage(channelID, messageSend{Content: text})
+	send := messageSend{Content: text}
+
+	var (
+		root *postedMessage
+		err  error
+	)
+
+	root, err = c.client.sendMessage(channelID, send, attachments)
 	if err != nil {
 		return nil, fmt.Errorf("send Discord external MCP relay root: %w", err)
 	}
@@ -134,12 +141,6 @@ func (c *Connector) SendExternalMCPRelay(_ context.Context, channelID, text stri
 	thread, err := c.createThread(root.ChannelID, root.ID, text)
 	if err != nil {
 		return nil, fmt.Errorf("create Discord external MCP thread: %w", err)
-	}
-
-	if len(attachments) > 0 {
-		if err := c.uploadResponseAttachments(thread.ID, attachments); err != nil {
-			return nil, fmt.Errorf("send Discord external MCP relay attachments: %w", err)
-		}
 	}
 
 	c.recordThreadRoot(root.ChannelID, root.ID, thread.ID)
@@ -161,15 +162,16 @@ func (c *Connector) SendExternalMCPThreadRelay(_ context.Context, threadID, text
 		}
 	}
 
-	posted, err := c.client.sendMessage(threadID, messageSend{Content: text})
+	send := messageSend{Content: text}
+
+	var (
+		posted *postedMessage
+		err    error
+	)
+
+	posted, err = c.client.sendMessage(threadID, send, attachments)
 	if err != nil {
 		return nil, fmt.Errorf("send Discord external MCP thread relay: %w", err)
-	}
-
-	if len(attachments) > 0 {
-		if err := c.uploadResponseAttachments(threadID, attachments); err != nil {
-			return nil, fmt.Errorf("send Discord external MCP thread relay attachments: %w", err)
-		}
 	}
 
 	return &events.DiscordReplyTarget{ChannelID: threadID, MessageID: posted.ID, ThreadID: threadID}, nil
@@ -244,7 +246,7 @@ func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, rel
 		channelID = c.config.ChannelID
 	}
 
-	root, err := c.client.sendMessage(channelID, messageSend{Content: "Cronjob `" + relativePath + "` ran at `" + ranAt + "` with agent `" + agent + "`."})
+	root, err := c.client.sendMessage(channelID, messageSend{Content: "Cronjob `" + relativePath + "` ran at `" + ranAt + "` with agent `" + agent + "`."}, nil)
 	if err != nil {
 		return fmt.Errorf("send Discord cronjob thread root: %w", err)
 	}
@@ -296,7 +298,7 @@ func (c *Connector) sendProgress(channelID string, msg *events.OutboundMessage) 
 		return c.client.editMessage(progress.ChannelID, progress.ID, messageSend{Content: text})
 	}
 
-	posted, err := c.client.sendMessage(channelID, messageSend{Content: text})
+	posted, err := c.client.sendMessage(channelID, messageSend{Content: text}, nil)
 	if err != nil {
 		return err
 	}
@@ -806,7 +808,7 @@ func (c *Connector) postResponseChunks(channelID string, reply *events.DiscordRe
 			send.Reference = &messageReference{MessageID: reply.MessageID, ChannelID: reply.ChannelID, FailIfNotExists: &fail}
 		}
 
-		msg, err := c.client.sendMessage(channelID, send)
+		msg, err := c.client.sendMessage(channelID, send, nil)
 		if err != nil {
 			return posted, fmt.Errorf("send Discord response: %w", err)
 		}

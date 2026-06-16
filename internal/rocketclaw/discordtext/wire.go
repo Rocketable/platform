@@ -283,10 +283,77 @@ func (w *wire) typing(channelID string) error {
 	return w.restJSON(http.MethodPost, "/channels/"+channelID+"/typing", nil, nil)
 }
 
-func (w *wire) sendMessage(channelID string, message messageSend) (*postedMessage, error) {
+func (w *wire) sendMessage(channelID string, message messageSend, attachments []events.OutboundAttachment) (*postedMessage, error) {
+	if len(attachments) == 0 {
+		var posted postedMessage
+		if err := w.restJSON(http.MethodPost, "/channels/"+channelID+"/messages", message, &posted); err != nil {
+			return nil, err
+		}
+
+		return &posted, nil
+	}
+
+	var body bytes.Buffer
+
+	writer := multipart.NewWriter(&body)
+
+	payload, err := writer.CreateFormField("payload_json")
+	if err != nil {
+		return nil, fmt.Errorf("create Discord attachment payload field: %w", err)
+	}
+
+	data, err := json.Marshal(message)
+	if err != nil {
+		return nil, fmt.Errorf("encode Discord attachment payload: %w", err)
+	}
+
+	if _, err := payload.Write(data); err != nil {
+		return nil, fmt.Errorf("write Discord attachment payload field: %w", err)
+	}
+
+	for i := range attachments {
+		name := strings.TrimSpace(attachments[i].Name)
+		if name == "" {
+			name = "attachment"
+		}
+
+		part, err := writer.CreateFormFile(fmt.Sprintf("files[%d]", i), name)
+		if err != nil {
+			return nil, fmt.Errorf("create Discord attachment file field: %w", err)
+		}
+
+		if _, err := part.Write(attachments[i].Data); err != nil {
+			return nil, fmt.Errorf("write Discord attachment file field: %w", err)
+		}
+	}
+
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("finish Discord attachment request: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, discordAPI+"/channels/"+channelID+"/messages", &body)
+	if err != nil {
+		return nil, fmt.Errorf("create Discord attachment request: %w", err)
+	}
+
+	req.Header.Set("Authorization", w.token)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	resp, err := w.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("call Discord attachment API: %w", err)
+	}
+
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("discord API POST attachment failed: %s: %s", resp.Status, strings.TrimSpace(string(data)))
+	}
+
 	var posted postedMessage
-	if err := w.restJSON(http.MethodPost, "/channels/"+channelID+"/messages", message, &posted); err != nil {
-		return nil, err
+	if err := json.NewDecoder(resp.Body).Decode(&posted); err != nil {
+		return nil, fmt.Errorf("decode Discord attachment response: %w", err)
 	}
 
 	return &posted, nil
@@ -318,64 +385,9 @@ func (w *wire) createThread(channelID, messageID string, start threadStart) (*te
 
 func (w *wire) sendAttachments(channelID string, attachments []events.OutboundAttachment) error {
 	for i := range attachments {
-		if err := w.sendAttachment(channelID, attachments[i]); err != nil {
+		if _, err := w.sendMessage(channelID, messageSend{}, []events.OutboundAttachment{attachments[i]}); err != nil {
 			return err
 		}
-	}
-
-	return nil
-}
-
-func (w *wire) sendAttachment(channelID string, attachment events.OutboundAttachment) error {
-	var body bytes.Buffer
-
-	writer := multipart.NewWriter(&body)
-
-	payload, err := writer.CreateFormField("payload_json")
-	if err != nil {
-		return fmt.Errorf("create Discord attachment payload field: %w", err)
-	}
-
-	if _, err := payload.Write([]byte(`{"content":""}`)); err != nil {
-		return fmt.Errorf("write Discord attachment payload field: %w", err)
-	}
-
-	name := strings.TrimSpace(attachment.Name)
-	if name == "" {
-		name = "attachment"
-	}
-
-	part, err := writer.CreateFormFile("files[0]", name)
-	if err != nil {
-		return fmt.Errorf("create Discord attachment file field: %w", err)
-	}
-
-	if _, err := part.Write(attachment.Data); err != nil {
-		return fmt.Errorf("write Discord attachment file field: %w", err)
-	}
-
-	if err := writer.Close(); err != nil {
-		return fmt.Errorf("finish Discord attachment request: %w", err)
-	}
-
-	req, err := http.NewRequest(http.MethodPost, discordAPI+"/channels/"+channelID+"/messages", &body)
-	if err != nil {
-		return fmt.Errorf("create Discord attachment request: %w", err)
-	}
-
-	req.Header.Set("Authorization", w.token)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-
-	resp, err := w.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("call Discord attachment API: %w", err)
-	}
-
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("discord API POST attachment failed: %s: %s", resp.Status, strings.TrimSpace(string(data)))
 	}
 
 	return nil

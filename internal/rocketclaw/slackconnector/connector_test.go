@@ -1105,6 +1105,99 @@ func TestSendExternalMCPThreadRelay(t *testing.T) {
 	}
 }
 
+func TestSendExternalMCPThreadRelayAttachesFilesToRelayMessage(t *testing.T) {
+	var (
+		posted, updated               []url.Values
+		uploadURL, completed          []url.Values
+		uploadedName, uploadedContent string
+	)
+
+	var server *httptest.Server
+
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat.postMessage":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			posted = append(posted, cloneValues(r.PostForm))
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": fmt.Sprintf("222.%d", len(posted)), "text": r.PostForm.Get("text")})
+		case "/files.getUploadURLExternal":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			uploadURL = append(uploadURL, cloneValues(r.PostForm))
+			writeJSON(t, w, map[string]any{"ok": true, "upload_url": server.URL + "/upload", "file_id": fmt.Sprintf("F%d", len(uploadURL))})
+		case "/upload":
+			if !assert.NoError(t, r.ParseMultipartForm(1<<20)) {
+				return
+			}
+
+			file, header, err := r.FormFile("file")
+			if !assert.NoError(t, err) {
+				return
+			}
+
+			defer func() { assert.NoError(t, file.Close()) }()
+
+			data, err := io.ReadAll(file)
+			if !assert.NoError(t, err) {
+				return
+			}
+
+			uploadedName = header.Filename
+			uploadedContent = string(data)
+
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/files.completeUploadExternal":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			completed = append(completed, cloneValues(r.PostForm))
+			writeJSON(t, w, map[string]any{"ok": true, "files": []map[string]string{{"id": fmt.Sprintf("F%d", len(completed)), "title": "report.txt"}}})
+		case "/chat.update":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			updated = append(updated, cloneValues(r.PostForm))
+			writeJSON(t, w, map[string]any{"ok": true, "channel": r.PostForm.Get("channel"), "ts": r.PostForm.Get("ts"), "text": r.PostForm.Get("text")})
+		case "/reactions.add":
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	connector := newTestConnector(server.URL)
+	replyTarget, err := connector.SendExternalMCPThreadRelay(context.Background(), "D123", "123.456", " ", []events.OutboundAttachment{{Name: "report.txt", Data: []byte("report")}})
+	require.NoError(t, err)
+	require.NotNil(t, replyTarget)
+
+	require.Len(t, posted, 3)
+	assert.Equal(t, "Attached files: report.txt.", posted[0].Get("text"))
+	assert.Equal(t, "123.456", posted[0].Get("thread_ts"))
+	assert.Equal(t, "123.456", posted[1].Get("thread_ts"))
+	assert.Equal(t, "123.456", posted[2].Get("thread_ts"))
+	assert.Equal(t, events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.1", ThreadTS: "123.456"}, *replyTarget)
+	require.Len(t, uploadURL, 1)
+	assert.Equal(t, "report.txt", uploadURL[0].Get("filename"))
+	assert.Equal(t, "report.txt", uploadedName)
+	assert.Equal(t, "report", uploadedContent)
+	require.Len(t, completed, 1)
+	assert.Empty(t, completed[0].Get("channel_id"))
+	assert.Empty(t, completed[0].Get("thread_ts"))
+	require.Len(t, updated, 1)
+	assert.Equal(t, "D123", updated[0].Get("channel"))
+	assert.Equal(t, "222.1", updated[0].Get("ts"))
+	assert.Equal(t, "Attached files: report.txt.", updated[0].Get("text"))
+	assert.JSONEq(t, `["F1"]`, updated[0].Get("file_ids"))
+}
+
 func TestSendDiscordRelaySucceedsWhenProvenanceReactionFails(t *testing.T) {
 	var posted []url.Values
 
@@ -1153,6 +1246,7 @@ func TestSendDiscordRelaySucceedsWhenProvenanceReactionFails(t *testing.T) {
 func TestSendExternalMCPRelayCanPostTopLevelChannelRelay(t *testing.T) {
 	var (
 		uploadURL, completed          url.Values
+		updated                       url.Values
 		posted                        []url.Values
 		uploadedName, uploadedContent string
 	)
@@ -1205,6 +1299,14 @@ func TestSendExternalMCPRelayCanPostTopLevelChannelRelay(t *testing.T) {
 			completed = cloneValues(r.PostForm)
 
 			writeJSON(t, w, map[string]any{"ok": true, "files": []map[string]string{{"id": "F123", "title": "red.png"}}})
+		case "/chat.update":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			updated = cloneValues(r.PostForm)
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": r.PostForm.Get("channel"), "ts": r.PostForm.Get("ts"), "text": r.PostForm.Get("text")})
 		case "/reactions.add":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
@@ -1231,8 +1333,12 @@ func TestSendExternalMCPRelayCanPostTopLevelChannelRelay(t *testing.T) {
 	assert.Equal(t, "red.png", uploadURL.Get("filename"))
 	assert.Equal(t, "red.png", uploadedName)
 	assert.Equal(t, "png", uploadedContent)
-	assert.Equal(t, "#triage", completed.Get("channel_id"))
-	assert.Equal(t, "123.1", completed.Get("thread_ts"))
+	assert.Empty(t, completed.Get("channel_id"))
+	assert.Empty(t, completed.Get("thread_ts"))
+	assert.Equal(t, "#triage", updated.Get("channel"))
+	assert.Equal(t, "123.1", updated.Get("ts"))
+	assert.Equal(t, "hello", updated.Get("text"))
+	assert.JSONEq(t, `["F123"]`, updated.Get("file_ids"))
 }
 
 func TestExternalMCPRelayUsesAnswerPlaceholderForStackedReply(t *testing.T) {

@@ -22,6 +22,7 @@ func TestWireRESTRequests(t *testing.T) {
 		{status: http.StatusOK, body: `{"id":"M1","channel_id":"C123","content":"hello"}`},
 		{status: http.StatusOK, body: `{"id":"T1","parent_id":"C123","type":11}`},
 		{status: http.StatusOK, body: `{"id":"A1","channel_id":"C123"}`},
+		{status: http.StatusOK, body: `{"id":"A2","channel_id":"C123","content":"hello files"}`},
 	}}
 	w := &wire{client: &http.Client{Transport: transport}, token: "Bot token", log: slog.New(slog.DiscardHandler)}
 
@@ -31,7 +32,7 @@ func TestWireRESTRequests(t *testing.T) {
 
 	require.NoError(t, w.typing("C123"))
 
-	posted, err := w.sendMessage("C123", messageSend{Content: "hello", Reference: &messageReference{MessageID: "U1"}})
+	posted, err := w.sendMessage("C123", messageSend{Content: "hello", Reference: &messageReference{MessageID: "U1"}}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "M1", posted.ID)
 
@@ -40,8 +41,11 @@ func TestWireRESTRequests(t *testing.T) {
 	assert.Equal(t, "T1", thread.ID)
 
 	require.NoError(t, w.sendAttachments("C123", []events.OutboundAttachment{{Name: "note.txt", Data: []byte("body")}}))
+	postedWithFiles, err := w.sendMessage("C123", messageSend{Content: "hello files"}, []events.OutboundAttachment{{Name: "a.txt", Data: []byte("a")}, {Name: "b.txt", Data: []byte("b")}})
+	require.NoError(t, err)
+	assert.Equal(t, "A2", postedWithFiles.ID)
 
-	require.Len(t, transport.requests, 5)
+	require.Len(t, transport.requests, 6)
 	assert.Equal(t, "GET", transport.requests[0].Method)
 	assert.Equal(t, "/api/v10/channels/C123", transport.requests[0].URL.Path)
 	assert.Equal(t, "Bot token", transport.requests[0].Header.Get("Authorization"))
@@ -57,6 +61,11 @@ func TestWireRESTRequests(t *testing.T) {
 	assert.Equal(t, "/api/v10/channels/C123/messages", transport.requests[4].URL.Path)
 	assert.Contains(t, transport.bodies[4], "note.txt")
 	assert.Contains(t, transport.bodies[4], "body")
+	assert.Equal(t, "POST", transport.requests[5].Method)
+	assert.Equal(t, "/api/v10/channels/C123/messages", transport.requests[5].URL.Path)
+	assert.Contains(t, transport.bodies[5], `"content":"hello files"`)
+	assert.Contains(t, transport.bodies[5], "a.txt")
+	assert.Contains(t, transport.bodies[5], "b.txt")
 }
 
 func TestWireRESTStatusError(t *testing.T) {

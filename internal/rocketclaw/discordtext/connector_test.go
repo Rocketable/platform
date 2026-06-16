@@ -446,8 +446,28 @@ func TestSendExternalMCPRelayPostsAttachmentOnlyPrompt(t *testing.T) {
 	assert.Equal(t, "Attached files: report.txt.", fake.messages[0].send.Content)
 	require.Len(t, fake.threads, 1)
 	assert.Equal(t, "Attached files: report.txt.", fake.threads[0].start.Name)
-	assert.Equal(t, []string{"T123"}, fake.attachments)
+	assert.Empty(t, fake.attachments)
+	require.Len(t, fake.attachmentMessages, 1)
+	assert.Equal(t, "C999", fake.attachmentMessages[0].channelID)
 	assert.Equal(t, &events.DiscordReplyTarget{ChannelID: "C999", MessageID: "M1", ThreadID: "T123"}, reply)
+}
+
+func TestSendExternalMCPRelayPostsTextAndAttachmentsInOneMessage(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.threadID = "T123"
+	connector := newTestConnector(fake, newFakeThreadRouter())
+
+	reply, err := connector.SendExternalMCPRelay(t.Context(), "C999", "hello", []events.OutboundAttachment{{Name: "a.txt", Data: []byte("a")}, {Name: "b.txt", Data: []byte("b")}})
+	require.NoError(t, err)
+	require.NotNil(t, reply)
+
+	require.Len(t, fake.messages, 1)
+	assert.Equal(t, "hello", fake.messages[0].send.Content)
+	require.Len(t, fake.threads, 1)
+	assert.Empty(t, fake.attachments)
+	require.Len(t, fake.attachmentMessages, 1)
+	assert.Equal(t, "C999", fake.attachmentMessages[0].channelID)
+	assert.Len(t, fake.attachmentMessages[0].attachments, 2)
 }
 
 func TestSendExternalMCPThreadRelayPostsAttachmentOnlyPrompt(t *testing.T) {
@@ -461,7 +481,26 @@ func TestSendExternalMCPThreadRelayPostsAttachmentOnlyPrompt(t *testing.T) {
 	require.Len(t, fake.messages, 1)
 	assert.Equal(t, "T123", fake.messages[0].channelID)
 	assert.Equal(t, "Attached files.", fake.messages[0].send.Content)
-	assert.Equal(t, []string{"T123"}, fake.attachments)
+	assert.Empty(t, fake.attachments)
+	require.Len(t, fake.attachmentMessages, 1)
+	assert.Equal(t, "T123", fake.attachmentMessages[0].channelID)
+	assert.Equal(t, &events.DiscordReplyTarget{ChannelID: "T123", MessageID: "M1", ThreadID: "T123"}, reply)
+}
+
+func TestSendExternalMCPThreadRelayPostsTextAndAttachmentsInOneMessage(t *testing.T) {
+	fake := newFakeDiscordClient()
+	connector := newTestConnector(fake, newFakeThreadRouter())
+
+	reply, err := connector.SendExternalMCPThreadRelay(t.Context(), "T123", "hello", []events.OutboundAttachment{{Name: "report.txt", Data: []byte("report")}})
+	require.NoError(t, err)
+	require.NotNil(t, reply)
+
+	require.Len(t, fake.messages, 1)
+	assert.Equal(t, "T123", fake.messages[0].channelID)
+	assert.Equal(t, "hello", fake.messages[0].send.Content)
+	assert.Empty(t, fake.attachments)
+	require.Len(t, fake.attachmentMessages, 1)
+	assert.Equal(t, "T123", fake.attachmentMessages[0].channelID)
 	assert.Equal(t, &events.DiscordReplyTarget{ChannelID: "T123", MessageID: "M1", ThreadID: "T123"}, reply)
 }
 
@@ -504,6 +543,7 @@ type fakeDiscordClient struct {
 	messages               []fakeMessageSend
 	threads                []fakeThreadStart
 	attachments            []string
+	attachmentMessages     []fakeAttachmentMessage
 	reactions              []string
 }
 
@@ -515,6 +555,12 @@ type fakeMessageSend struct {
 type fakeThreadStart struct {
 	channelID, messageID string
 	start                threadStart
+}
+
+type fakeAttachmentMessage struct {
+	channelID   string
+	send        messageSend
+	attachments []events.OutboundAttachment
 }
 
 func newFakeDiscordClient() *fakeDiscordClient {
@@ -531,8 +577,12 @@ func (f *fakeDiscordClient) message(channelID, messageID string) (*textMessage, 
 	return &textMessage{ID: messageID, ChannelID: channelID, Content: f.reactionMessageContent}, nil
 }
 
-func (f *fakeDiscordClient) sendMessage(channelID string, send messageSend) (*postedMessage, error) {
+func (f *fakeDiscordClient) sendMessage(channelID string, send messageSend, attachments []events.OutboundAttachment) (*postedMessage, error) {
 	f.messages = append(f.messages, fakeMessageSend{channelID: channelID, send: send})
+	if len(attachments) > 0 {
+		f.attachmentMessages = append(f.attachmentMessages, fakeAttachmentMessage{channelID: channelID, send: send, attachments: attachments})
+	}
+
 	return &postedMessage{ID: "M" + string(rune(len(f.messages)+'0')), ChannelID: channelID, Content: send.Content}, nil
 }
 
