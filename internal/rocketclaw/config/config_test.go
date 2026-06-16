@@ -1,7 +1,6 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,39 +9,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestLoadMigratesOldThreadAgents(t *testing.T) {
-	path := writeThreadAgentsConfig(t, `"thread_agents":{" :thread: ":" main "}`)
-
-	cfg, err := Load(path)
-	require.NoError(t, err)
-	assert.Equal(t, ThreadAgents{":thread:": {Agent: "main", PreSeed: false}}, cfg.ThreadAgents)
-
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Contains(t, string(data), `"pre_seed": false`)
-}
-
-func TestMigrateThreadAgentsConfigLeavesCurrentShapesUntouched(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		data string
-	}{
-		{name: "invalid JSON", data: `{`},
-		{name: "missing thread agents", data: `{"workspace":"."}`},
-		{name: "current object shape", data: `{"thread_agents":{":thread:":{"agent":"main","pre_seed":true}}}`},
-		{name: "empty legacy map", data: `{"thread_agents":{}}`},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "rocketclaw.json")
-			require.NoError(t, os.WriteFile(path, []byte(tt.data), 0o600))
-
-			got, err := migrateThreadAgentsConfig(path, []byte(tt.data))
-			require.NoError(t, err)
-			assert.Equal(t, tt.data, string(got))
-		})
-	}
-}
 
 func TestLoadThreadAgentsObjectCanDisablePreSeed(t *testing.T) {
 	path := writeThreadAgentsConfig(t, `"thread_agents":{":thread:":{"agent":"main","pre_seed":false}}`)
@@ -417,161 +383,6 @@ func TestValidateSlackSocialMode(t *testing.T) {
 		},
 		ContextMessages: 10,
 	}, cfg.Slack.SocialMode)
-}
-
-func TestLoadMigratesSlackSocialChannelAgents(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "rocketclaw.json")
-	data := `{
-	  "workspace": ".",
-	  "minimum_wait_after_human_interaction": "",
-	  "slack": {
-	    "enabled": true,
-	    "bot_token": "xoxb",
-	    "app_token": "xapp",
-	    "room": "D123",
-	    "human_user_id": "U123",
-	    "social_mode": {
-	      "enabled": true,
-	      "channels": [
-	        {
-	          "channel": " triage ",
-	          "agent": "new",
-	          "allowed_user_ids": ["U999"]
-	        }
-	      ],
-	      "channel_agents": {
-	        "#triage": "legacy",
-	        "legacy": " old "
-	      },
-	      "allowed_user_ids": ["U123"]
-	    }
-	  },
-	  "openai": {
-	    "api_key": "sk"
-	  }
-	}`
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o600))
-
-	cfg, err := Load(path)
-	require.NoError(t, err)
-	assert.Equal(t, []TextSocialChannelConfig{
-		{Channel: "#triage", Agents: []string{"new"}, AllowedUserIDs: []string{"U999"}},
-		{Channel: "#legacy", Agents: []string{"old"}, AllowedUserIDs: []string{"U123"}},
-	}, cfg.Slack.SocialMode.Channels)
-
-	updated, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.NotContains(t, string(updated), "channel_agents")
-	assert.NotContains(t, string(updated), `"agent":`)
-	assert.Contains(t, string(updated), `"agents": [`)
-	assert.Contains(t, string(updated), `"channel": "#legacy"`)
-
-	var root map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(updated, &root))
-
-	var slack map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(root["slack"], &slack))
-
-	var socialMode map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(slack["social_mode"], &socialMode))
-	_, ok := socialMode["allowed_user_ids"]
-	assert.False(t, ok)
-}
-
-func TestLoadMigratesLegacySocialAgentToAgents(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "rocketclaw.json")
-	data := `{
-	  "workspace": ".",
-	  "minimum_wait_after_human_interaction": "",
-	  "slack": {
-	    "enabled": true,
-	    "bot_token": "xoxb",
-	    "app_token": "xapp",
-	    "room": "D123",
-	    "human_user_id": "U123",
-	    "social_mode": {
-	      "enabled": true,
-	      "channels": [
-	        {"channel": "triage", "agent": "legacy", "agents": ["new", "helper"], "allowed_user_ids": ["U123"]},
-	        {"channel": "ops", "agent": "ops", "allowed_user_ids": ["U456"]}
-	      ]
-	    }
-	  },
-	  "openai": {"api_key": "sk"}
-	}`
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o600))
-
-	cfg, err := Load(path)
-	require.NoError(t, err)
-	assert.Equal(t, []TextSocialChannelConfig{
-		{Channel: "#triage", Agents: []string{"new", "helper"}, AllowedUserIDs: []string{"U123"}},
-		{Channel: "#ops", Agents: []string{"ops"}, AllowedUserIDs: []string{"U456"}},
-	}, cfg.Slack.SocialMode.Channels)
-
-	updated, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.NotContains(t, string(updated), `"agent":`)
-	assert.Contains(t, string(updated), `"agents": [`)
-}
-
-func TestLoadMigratesDiscordTextLegacySocialAgentToAgents(t *testing.T) {
-	cfg := loadTestConfig(t, `{
-	  "workspace": ".",
-	  "minimum_wait_after_human_interaction": "",
-	  "discord_text": {
-	    "enabled": true,
-	    "token": "discord-token",
-	    "channel_id": "C123",
-	    "human_user_id": "U123",
-	    "social_mode": {
-	      "enabled": true,
-	      "channels": [
-	        {"channel": "S123", "agent": "triage", "allowed_user_ids": ["U123"]}
-	      ]
-	    }
-	  },
-	  "openai": {"api_key": "sk"}
-	}`)
-
-	assert.Equal(t, []TextSocialChannelConfig{{Channel: "S123", Agents: []string{"triage"}, AllowedUserIDs: []string{"U123"}}}, cfg.DiscordText.SocialMode.Channels)
-}
-
-func TestLoadIgnoresStaleSlackSocialModeAgent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "rocketclaw.json")
-	data := `{
-	  "workspace": ".",
-	  "discord_voice": {
-	    "enabled": true,
-	    "token": "discord-token",
-	    "voice_channel_id": "voice-123",
-	    "human_user_id": "user-123"
-	  },
-	  "openai": {
-	    "api_key": "test-key"
-	  },
-	  "slack": {
-	    "enabled": true,
-	    "bot_token": "xoxb-test",
-	    "app_token": "xapp-test",
-	    "room": "D123",
-	    "human_user_id": "U123",
-	    "social_mode": {
-	      "enabled": true,
-	      "agent": "stale",
-	      "channel_agents": {},
-	      "allowed_user_ids": ["U123"]
-	    }
-	  }
-	}`
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o644), "write config")
-
-	_, err := Load(path)
-	require.NoError(t, err)
-
-	updated, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.NotContains(t, string(updated), "channel_agents")
-	assert.NotContains(t, string(updated), `"agent":`)
 }
 
 func TestValidateSlackSocialModeRejectsInvalidConfig(t *testing.T) {

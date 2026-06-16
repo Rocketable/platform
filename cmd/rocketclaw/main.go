@@ -70,8 +70,6 @@ func run(args []string) error {
 			return runOAI(args[1:])
 		case "fc":
 			return runFC(args[1:])
-		case "migrate-config":
-			return runMigrateConfig(args[1:])
 		case "help", "-h", "--help":
 			return printHelp()
 		}

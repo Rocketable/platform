@@ -47,7 +47,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - `discord_text.enabled` requires `discord_text.token`, `discord_text.channel_id`, and `discord_text.human_user_id`.
 - `slack.enabled` and `discord_text.enabled` must not both be true.
 - The enabled primary text connector may define social-mode channel mappings. The canonical mapping shape is one connector channel, one agent, and non-empty `allowed_user_ids`.
-- Slack binding: canonical `slack.social_mode.channels[]` is the only runtime Slack social-mode channel mapping. Legacy `slack.social_mode.channel_agents` and top-level `slack.social_mode.allowed_user_ids` are migration input only and are not consulted by runtime connector behavior.
+- Slack binding: canonical `slack.social_mode.channels[]` is the only supported Slack social-mode channel mapping. Legacy `slack.social_mode.channel_agents` and top-level `slack.social_mode.allowed_user_ids` are not supported by config loading or runtime connector behavior.
 - Discord Text binding: `discord_text.social_mode.channels[]` uses the same canonical social-mode mapping shape with Discord channel IDs.
 
 ### Git Overlays
@@ -79,7 +79,6 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - ChatGPT auth for RocketCode requires `rocketclaw oai login`; STT/TTS always use API-key auth through audio keys or `api_key` fallback. ChatGPT refresh tokens are rotating, single-owner credentials and must remain under RocketClaw's selected `<runtime-dir>/auth.json` ownership.
 - ChatGPT-backed RocketCode requests refresh credentials before sending when the access token is locally expired or within 120s of expiry. When Codex returns `401 Unauthorized` for a replayable request, RocketClaw reloads stored auth and retries once with a newer same-account stored token when present; otherwise it force-refreshes with the refresh token, persists the result, and retries once. Non-replayable requests return the original `401`; repeated `401`, terminal refresh failure, or failed refresh is surfaced with re-login guidance.
 - Anthropic-backed RocketCode requests use `anthropic.api_key` and optional `anthropic.api_base_url`. ChatGPT OAuth credentials are never used for Anthropic requests.
-- Startup migrates legacy `slack.social_mode.channel_agents` config into canonical `slack.social_mode.channels[]` before runtime config decoding. Each legacy `"#channel": "agent"` pair becomes `{ "channel": "#channel", "agents": ["agent"] }`, and the migrator removes `channel_agents` after conversion. If both forms are present, existing `channels[]` entries win for duplicate channels and non-duplicate legacy entries are appended. Startup also normalizes legacy scalar `agent` entries inside social-mode channel config into canonical `agents`; when both `agent` and `agents` are present, `agents` wins and `agent` is removed. When legacy top-level `slack.social_mode.allowed_user_ids` exists, the migrator copies those users into each canonical channel that lacks a non-empty per-channel `allowed_user_ids` list, then removes the top-level list. This migrator is temporary compatibility code that can be removed after configs are migrated.
 - Startup migrates legacy state into `.rocketclaw/state.sqlite3` when applicable; rollback after destructive migration requires backup restore.
 - Startup rehydrates active persisted text connector goal loops according to ADR 0007. This is runtime state recovery and does not require configuration hot reload.
 
@@ -140,3 +139,4 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-14: Defined social-mode channel mappings as a generic primary text connector config shape with Slack and Discord Text bindings.
 - 2026-06-16: Specified that startup removes generated workspace script symlinks before local workspace overlays are scanned, then recreates current runtime script symlinks after effective runtime assets are built.
 - 2026-06-16: Updated social-mode channel config migration to emit canonical `agents` lists and normalize legacy scalar channel `agent` entries.
+- 2026-06-16: Ended temporary config migration compatibility for legacy social-mode channel mappings; config loading now requires canonical `channels[].agents` and per-channel `allowed_user_ids`.

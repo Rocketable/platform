@@ -162,6 +162,7 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 - 2026-06-11: Switched social-mode goal-loop agent selection to canonical `channels[]` with legacy `channel_agents` fallback and channel-aware authorization.
 - 2026-06-11: Removed live goal-loop agent fallback to legacy `channel_agents`; startup config migration must produce canonical `channels[]` entries.
 - 2026-06-11: Switched Slack social-mode goal-loop authorization to the channel-only authorization rule after startup migration.
+- 2026-06-16: Removed startup config migration compatibility; social-mode goal-loop agent selection requires canonical `channels[]` entries in loaded config.
 - 2026-06-12: Added optional `checkScript:` goal-start parameter, completion-check execution semantics, and ADR 0002 rejection delivery requirements.
 - 2026-06-14: Made Slack goal loops conversation-local inside normal managed threads, added existing-thread goal starts, removed `paused`, made human re-steering budget-neutral, and replaced stop-only semantics with active-turn interruption and `❗` marker targeting.
 - 2026-06-14: Specified one active goal per managed conversation, duplicate active-goal rejection, and sequential goal reuse after terminal states.
