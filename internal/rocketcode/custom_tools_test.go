@@ -126,6 +126,38 @@ func TestCustomToolParametersRequiredDefaultsToSortedPropertyNames(t *testing.T)
 	}
 }
 
+func TestCustomToolParametersClosesNestedObjectSchemas(t *testing.T) {
+	parameters, err := customToolParameters(map[string]any{
+		"properties": map[string]any{
+			"options": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"label": map[string]any{"type": "string"},
+						"value": map[string]any{"type": "string"},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("customToolParameters returned error: %v", err)
+	}
+
+	properties := parameters["properties"].(map[string]any)
+	options := properties["options"].(map[string]any)
+
+	items := options["items"].(map[string]any)
+	if got := items["additionalProperties"]; got != false {
+		t.Fatalf("parameters.properties.options.items.additionalProperties = %#v; want false", got)
+	}
+
+	if got, ok := items["required"].([]string); !ok || !slices.Equal(got, []string{"label", "value"}) {
+		t.Fatalf("parameters.properties.options.items.required = %#v; want [label value]", items["required"])
+	}
+}
+
 func TestCustomToolPermissionVisibilitySupportsWildcards(t *testing.T) {
 	tools := customPermissionTestTools(t)
 	factory := testToolFactoryWithBaseTools(tools)
