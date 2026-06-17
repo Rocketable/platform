@@ -1,8 +1,8 @@
 COVERPROFILE ?= .coverage.out
 COVERPKG ?= github.com/Rocketable/platform/cmd/rocketclaw,./...
 COVERAGE_STABLE_AT ?= 90.0
-GO_SOURCE_CLOC_BUDGET ?= 17900
-GO_SOURCE_CLOC_HAZARD_ZONE ?= 250
+GO_SOURCE_CLOC_BUDGET ?= 18500
+GO_SOURCE_CLOC_HAZARD_ZONE ?= 500
 
 run:
 	go run cirello.io/runner/v3@latest

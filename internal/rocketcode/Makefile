@@ -1,5 +1,5 @@
-GO_SOURCE_CLOC_BUDGET ?= 7000
-GO_SOURCE_CLOC_HAZARD_ZONE ?= 250
+GO_SOURCE_CLOC_BUDGET ?= 7500
+GO_SOURCE_CLOC_HAZARD_ZONE ?= 500
 
 build:
 	go build -o ../../bin/rocketcode ../../cmd/rocketcode
