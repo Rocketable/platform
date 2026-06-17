@@ -39,6 +39,7 @@ type toolFactory struct {
 	baseTools                  map[string]looperTool
 	shellOutput                shellOutputConfig
 	autoApprovePermissions     bool
+	observability              ObservabilityConfig
 
 	// inGuardrailRun reports whether this factory is executing a guardrail agent.
 	// When false, task calls apply target-agent guardrails. When true, nested task calls skip guardrail checks.

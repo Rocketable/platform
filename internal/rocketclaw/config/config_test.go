@@ -104,6 +104,43 @@ func TestLoadPreservesRocketCodeConfig(t *testing.T) {
 	assert.True(t, cfg.RocketCode.AutoApprovePermissions)
 }
 
+func TestLoadPreservesInstrumentationConfig(t *testing.T) {
+	cfg := loadTestConfig(t, `{
+	  "workspace": ".",
+	  "openai": {
+	    "api_key": "test-key"
+	  },
+	  "instrumentation": {
+	    "enabled": true,
+	    "collector_endpoint": "http://localhost:6006",
+	    "project_name": "rocketclaw-dev",
+	    "api_key": "phoenix-key",
+	    "hide_inputs": true,
+	    "hide_outputs": true
+	  },
+	  "web_ui": {
+	    "enabled": true,
+	    "listen_addr": "127.0.0.1:8766"
+	  }
+	}`)
+
+	assert.True(t, cfg.Instrumentation.Enabled)
+	assert.Equal(t, "http://localhost:6006", cfg.Instrumentation.CollectorEndpoint)
+	assert.Equal(t, "rocketclaw-dev", cfg.Instrumentation.ProjectName)
+	assert.Equal(t, "phoenix-key", cfg.Instrumentation.APIKey)
+	assert.True(t, cfg.Instrumentation.HideInputs)
+	assert.True(t, cfg.Instrumentation.HideOutputs)
+}
+
+func TestValidateRejectsEnabledInstrumentationWithoutEndpoint(t *testing.T) {
+	cfg := validConfig()
+	cfg.Instrumentation.Enabled = true
+
+	err := cfg.Validate()
+
+	require.ErrorContains(t, err, "instrumentation.collector_endpoint is required")
+}
+
 func TestLoadNormalizesOverlays(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",

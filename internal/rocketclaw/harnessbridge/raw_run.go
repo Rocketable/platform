@@ -14,9 +14,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
+	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketcode"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace/noop"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -40,12 +45,40 @@ type RawRunProgress struct {
 const rawRunMissingToolPrompt = "You did not call the mandatory " + rawRunToolName + " tool. Normal assistant replies do not count and this background run cannot finish until you call that exact tool. Before this turn ends, call " + rawRunToolName + "(\"full exact message to show the human, or empty string if the human should see nothing\"). If the human partner should see a final message from this background turn, the full final message must be the tool argument. Do not send a summary, paraphrase, or reduced view."
 
 // RunRawWithProgress executes a raw rocketcode turn and reports optional progress.
-func RunRawWithProgress(ctx context.Context, cfg *config.Config, agent, prompt string, logger *slog.Logger, progress *RawRunProgress) (RawRunResult, error) {
+func RunRawWithProgress(ctx context.Context, cfg *config.Config, agent, prompt string, logger *slog.Logger, progress *RawRunProgress) (result RawRunResult, err error) {
 	diagnostics := progress != nil
 
 	if progress == nil {
 		progress = newInertRawRunProgress()
 	}
+
+	agent = strings.TrimSpace(agent)
+	if agent == "" {
+		agent = "main"
+	}
+
+	ctx = instrumentation.WithSession(ctx, progress.ConversationID)
+
+	tracer := noop.NewTracerProvider().Tracer("rocketclaw")
+	if cfg.Instrumentation.Enabled {
+		tracer = otel.Tracer("rocketclaw")
+	}
+
+	ctx, span := tracer.Start(ctx, "rocketclaw.raw_run")
+	instrumentation.ApplyContextAttributes(ctx, span)
+	span.SetAttributes(attribute.String(semconv.OpenInferenceSpanKind, semconv.SpanKindAgent))
+	span.SetAttributes(
+		attribute.String(semconv.AgentName, agent),
+		attribute.String(semconv.SessionID, progress.ConversationID),
+		attribute.String("rocketclaw.conversation_id", progress.ConversationID),
+		rocketclawInputValue(cfg, prompt),
+	)
+
+	defer func() {
+		recordRocketClawSpanError(span, err)
+		span.SetAttributes(rocketclawOutputValue(cfg, result.Text))
+		span.End()
+	}()
 
 	memory := new(memoryStore)
 	sessionIn := memory.in()
@@ -149,7 +182,7 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 
 	customTools := []rocketcode.Tool{decision.Tool(), attachments.Tool(root), restartTool(requestRestart, recordRestartRequester), scheduleMessageTool(progress.ScheduleMessage, logger), resetScheduledMessagesTool(progress.ResetScheduledMessages)}
 
-	rocketcodeConfig := rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: diagnostics, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: true}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: cfg.RocketCode.AutoApprovePermissions, CustomTools: customTools}
+	rocketcodeConfig := rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: diagnostics, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: true}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: cfg.RocketCode.AutoApprovePermissions, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, CustomTools: customTools}
 
 	looper, err := rocketcode.NewWithProviders(providers, &rocketcodeConfig, root, agents, skills, agent, io.Discard)
 	if err != nil {

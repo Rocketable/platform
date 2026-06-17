@@ -13,9 +13,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/shared"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Config contains runtime settings supplied by the embedding application.
@@ -31,8 +33,16 @@ type Config struct {
 	ShellOutputDir             string
 	SandboxedBash              bool
 	AutoApprovePermissions     bool
+	Observability              ObservabilityConfig
 	CustomTools                []Tool
 	ShellEnv                   map[string]string
+}
+
+// ObservabilityConfig controls OpenInference-compatible tracing for RocketCode.
+type ObservabilityConfig struct {
+	Enabled     bool
+	Tracer      trace.Tracer
+	TraceConfig instrumentation.TraceConfig
 }
 
 // Providers contains model provider clients supplied by embedding applications.
@@ -279,6 +289,7 @@ func NewWithProviders(
 		baseTools:                  baseTools,
 		shellOutput:                shellOutput,
 		autoApprovePermissions:     config.AutoApprovePermissions,
+		observability:              config.Observability,
 	}
 	runtimeSystemPrompt := composeSystemPromptWithSkills(systemPrompt, skills, agentForTools)
 
@@ -299,6 +310,7 @@ func NewWithProviders(
 		Diagnostics:            config.Diagnostics,
 		AutoApprovePermissions: config.AutoApprovePermissions,
 		PermissionReviewer:     factory,
+		Observability:          config.Observability,
 		expandInputPrompts:     config.ExpandPromptShellCommands.InputPrompts,
 		promptExpansion:        promptExpansion,
 	}

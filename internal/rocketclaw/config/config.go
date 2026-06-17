@@ -17,23 +17,24 @@ import (
 
 // Config is the top-level rocketclaw runtime configuration.
 type Config struct {
-	Workspace                                string             `json:"workspace"`
-	WorkDir                                  string             `json:"-"`
-	Overlays                                 []string           `json:"overlays,omitempty"`
-	Environment                              []string           `json:"environment,omitempty"`
-	EmergencySafeWords                       []string           `json:"emergency_safe_words,omitempty"`
-	ThreadAgents                             ThreadAgents       `json:"thread_agents,omitempty"`
-	MinimumWaitAfterHumanInteraction         string             `json:"minimum_wait_after_human_interaction"`
-	MinimumWaitAfterHumanInteractionDuration time.Duration      `json:"-"`
-	Logging                                  LoggingConfig      `json:"logging"`
-	DiscordVoice                             DiscordVoiceConfig `json:"discord_voice"`
-	DiscordText                              DiscordTextConfig  `json:"discord_text"`
-	MCPExternal                              MCPExternalConfig  `json:"mcp_external"`
-	WebUI                                    WebUIConfig        `json:"web_ui"`
-	Slack                                    SlackConfig        `json:"slack"`
-	OpenAI                                   OpenAIConfig       `json:"openai"`
-	Anthropic                                AnthropicConfig    `json:"anthropic"`
-	RocketCode                               RocketCodeConfig   `json:"rocketcode"`
+	Workspace                                string                `json:"workspace"`
+	WorkDir                                  string                `json:"-"`
+	Overlays                                 []string              `json:"overlays,omitempty"`
+	Environment                              []string              `json:"environment,omitempty"`
+	EmergencySafeWords                       []string              `json:"emergency_safe_words,omitempty"`
+	ThreadAgents                             ThreadAgents          `json:"thread_agents,omitempty"`
+	MinimumWaitAfterHumanInteraction         string                `json:"minimum_wait_after_human_interaction"`
+	MinimumWaitAfterHumanInteractionDuration time.Duration         `json:"-"`
+	Logging                                  LoggingConfig         `json:"logging"`
+	DiscordVoice                             DiscordVoiceConfig    `json:"discord_voice"`
+	DiscordText                              DiscordTextConfig     `json:"discord_text"`
+	MCPExternal                              MCPExternalConfig     `json:"mcp_external"`
+	WebUI                                    WebUIConfig           `json:"web_ui"`
+	Slack                                    SlackConfig           `json:"slack"`
+	OpenAI                                   OpenAIConfig          `json:"openai"`
+	Anthropic                                AnthropicConfig       `json:"anthropic"`
+	Instrumentation                          InstrumentationConfig `json:"instrumentation"`
+	RocketCode                               RocketCodeConfig      `json:"rocketcode"`
 }
 
 // DefaultWorkDir is the generated runtime directory for rocketclaw configs.
@@ -148,6 +149,16 @@ type AnthropicConfig struct {
 // RocketCodeConfig configures RocketCode embedding behavior.
 type RocketCodeConfig struct {
 	AutoApprovePermissions bool `json:"auto_approve_permissions"`
+}
+
+// InstrumentationConfig configures OpenTelemetry/OpenInference tracing.
+type InstrumentationConfig struct {
+	Enabled           bool   `json:"enabled"`
+	CollectorEndpoint string `json:"collector_endpoint"`
+	ProjectName       string `json:"project_name"`
+	APIKey            string `json:"api_key"`
+	HideInputs        bool   `json:"hide_inputs"`
+	HideOutputs       bool   `json:"hide_outputs"`
 }
 
 // Load reads, normalizes, and validates the rocketclaw configuration file.
@@ -298,6 +309,14 @@ func (c *Config) Validate() error {
 
 	if c.OpenAI.RocketCodeAuth == "api_key" && strings.TrimSpace(c.OpenAI.APIKey) == "" {
 		return errors.New("openai.api_key is required")
+	}
+
+	c.Instrumentation.CollectorEndpoint = strings.TrimSpace(c.Instrumentation.CollectorEndpoint)
+	c.Instrumentation.ProjectName = strings.TrimSpace(c.Instrumentation.ProjectName)
+
+	c.Instrumentation.APIKey = strings.TrimSpace(c.Instrumentation.APIKey)
+	if c.Instrumentation.Enabled && c.Instrumentation.CollectorEndpoint == "" {
+		return errors.New("instrumentation.collector_endpoint is required when instrumentation is enabled")
 	}
 
 	if err := c.validateMinimumWaitAfterHumanInteraction(); err != nil {

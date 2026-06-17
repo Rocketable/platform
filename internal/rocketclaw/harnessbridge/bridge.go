@@ -28,6 +28,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
+	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/oai"
@@ -38,6 +40,9 @@ import (
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace/noop"
 	xdraw "golang.org/x/image/draw"
 	_ "golang.org/x/image/webp" // Registers a WebP decoder for image.Decode.
 	"golang.org/x/sync/errgroup"
@@ -890,8 +895,41 @@ func (b *Bridge) enqueueGoalContinuation(ctx context.Context, goal *GoalState, m
 }
 
 //nolint:gocyclo // Turn execution coordinates model, tools, progress, and goal accounting.
-func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID string, publish bool) (runResult, error) {
+func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID string, publish bool) (result runResult, err error) {
 	agentName := b.agentSnapshot()
+	ctx = instrumentation.WithSession(ctx, b.config.ConversationID)
+
+	tracer := noop.NewTracerProvider().Tracer("rocketclaw")
+	if b.runtime.Instrumentation.Enabled {
+		tracer = otel.Tracer("rocketclaw")
+	}
+
+	ctx, span := tracer.Start(ctx, "rocketclaw.turn")
+	instrumentation.ApplyContextAttributes(ctx, span)
+	span.SetAttributes(attribute.String(semconv.OpenInferenceSpanKind, semconv.SpanKindAgent))
+	span.SetAttributes(
+		attribute.String(semconv.AgentName, agentName),
+		attribute.String(semconv.SessionID, b.config.ConversationID),
+		attribute.String("rocketclaw.conversation_id", b.config.ConversationID),
+		attribute.String("rocketclaw.turn_id", turnID),
+		attribute.String("rocketclaw.source", string(msg.Source)),
+		attribute.String("rocketclaw.kind", string(msg.Kind)),
+		attribute.String("rocketclaw.label", msg.Label),
+		attribute.Bool("rocketclaw.publish", publish),
+		attribute.Int("rocketclaw.attachment_count", len(msg.Attachments)),
+		rocketclawInputValue(b.runtime, msg.Text),
+	)
+
+	defer func() {
+		recordRocketClawSpanError(span, err)
+		span.SetAttributes(
+			rocketclawOutputValue(b.runtime, result.text),
+			attribute.Int64("rocketclaw.session_entry_id", result.sessionEntryID),
+			attribute.String("rocketclaw.response_id", result.responseID),
+			attribute.String("rocketclaw.model", result.model),
+		)
+		span.End()
+	}()
 
 	root, err := os.OpenRoot(b.runtime.Workspace)
 	if err != nil {
@@ -1074,7 +1112,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 
 	var group errgroup.Group
 
-	result := runResult{turnID: turnID, text: "", thinking: "", sequence: 0, sessionEntryID: 0, responseID: "", model: ""}
+	result = runResult{turnID: turnID, text: "", thinking: "", sequence: 0, sessionEntryID: 0, responseID: "", model: ""}
 
 	var (
 		appendedMu         sync.Mutex
@@ -1411,7 +1449,7 @@ func (b *Bridge) rocketcodeConfig(shellOutputDir string, shellEnv map[string]str
 
 	tools = append(tools, customTools...)
 
-	return rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: b.runtime.RocketCode.AutoApprovePermissions, CustomTools: tools, ShellEnv: shellEnv}
+	return rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: b.runtime.RocketCode.AutoApprovePermissions, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, CustomTools: tools, ShellEnv: shellEnv}
 }
 
 func appendOverlayPromptToAgent(agents rocketcode.Agents, agentName string, cfg *config.Config) {

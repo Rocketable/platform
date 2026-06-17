@@ -140,6 +140,18 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - Diagnostics are enabled for the persistent bridge and for raw runs when progress reporting is configured.
 - RocketClaw sets RocketCode's maximum parallel tool calls to 16 in both persistent and raw paths.
 
+### Observability
+
+- RocketClaw may initialize OpenTelemetry tracing from instrumentation settings in the RocketClaw configuration file.
+- RocketClaw instrumentation configuration must be supplied exclusively through the RocketClaw configuration file. RocketClaw must not read environment variables to decide whether or how to configure instrumentation.
+- When tracing is configured, the persistent bridge and raw-run paths may create OpenInference-compatible trace and session context for RocketCode turns.
+- Persistent bridge turns may emit root `AGENT` spans carrying conversation/session id, turn id, source, kind, label, publish state, attachment count, selected agent, and redacted input/output attributes.
+- Raw runs may emit root `AGENT` spans carrying the configured conversation/session id when one is available, selected agent, and redacted input/output attributes.
+- RocketClaw-owned OpenAI and Anthropic provider clients passed into RocketCode may include OpenInference OpenTelemetry middleware so provider requests are child spans of the active RocketCode turn.
+- Observability must not alter prompt expansion settings, prompt text, attachment normalization, session replay, provider selection, ChatGPT OAuth request identity, permission behavior, tool injection, raw-run completion, diagnostics, connector delivery, or persisted conversation state.
+- OpenInference input and output redaction settings supplied through the RocketClaw configuration file must be honored by RocketClaw-authored spans. Structural metadata such as span kind, agent name, model, source, conversation id, turn id, and counts may still be emitted.
+- Tracing export failures must not fail or interrupt persistent bridge turns, raw runs, connector delivery, scheduled prompts, or cron completion.
+
 ## Non-Goals
 
 - This ADR does not duplicate RocketCode's full API documentation.
@@ -156,10 +168,13 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - `internal/rocketcode/prompts.go`
 - `internal/rocketcode/tools.go`
 - `internal/rocketcode/tasks.go`
+- OpenInference semantic conventions for span attributes.
+- OpenTelemetry trace API and SDK contracts.
 
 ## Consequences
 
 - Changing RocketCode config flags is a behavior change and requires ADR approval when it changes meaning.
+- Adding or changing RocketClaw observability must preserve RocketCode embedding semantics and remain a side effect only.
 - Dependency upgrades must be checked against this embedding contract, especially prompt expansion, tools, inter-agent guardrails, session replay, attachments, and raw-run completion.
 - Tests should verify observable RocketCode input/output behavior, not only that config structs are constructed.
 
@@ -182,3 +197,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-14: Recast goal-loop steering and attachment normalization around the generic text connector contract.
 - 2026-06-15: Updated RocketCode embedding contracts for goal-loop `progress` updates and `Progress summary:` text mirrored into `rocketclaw_update_goal.note`.
 - 2026-06-17: Added RocketClaw embedding contract for passing `rocketcode.auto_approve_permissions` into RocketCode automatic permission review.
+- 2026-06-17: Added OpenTelemetry/OpenInference observability contract for Phoenix-compatible tracing around RocketClaw-owned RocketCode turns, configured exclusively through the RocketClaw configuration file.

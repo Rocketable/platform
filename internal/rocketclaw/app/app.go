@@ -51,6 +51,20 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	stopInstrumentation, err := configureInstrumentation(runCtx, cfg.Instrumentation)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+
+		if err := stopInstrumentation(shutdownCtx); err != nil {
+			logger.Warn("stop instrumentation", "error", err)
+		}
+	}()
+
 	bus := events.New(events.Config{MinimumWaitAfterHumanInteraction: cfg.MinimumWaitAfterHumanInteractionDuration})
 	defer bus.Close()
 

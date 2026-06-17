@@ -224,6 +224,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		Diagnostics:            f.diagnostics,
 		AutoApprovePermissions: f.autoApprovePermissions,
 		PermissionReviewer:     &childFactory,
+		Observability:          f.observability,
 	}
 
 	output := make(chan ChatResponse)

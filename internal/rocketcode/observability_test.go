@@ -1,0 +1,73 @@
+package rocketcode
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+
+	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
+	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
+	"github.com/openai/openai-go/v3/responses"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+)
+
+func TestObservabilityEmitsAgentProviderAndToolSpans(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	looper := testLooper(mockResponses(
+		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "read", `{"filePath":"secret.txt"}`)}),
+		responseWithMessage("resp-final", "final answer"),
+	))
+	looper.agent = Agent{Name: "main"}
+	looper.DisplayModel = "openai/gpt-test"
+	looper.Observability = ObservabilityConfig{Enabled: true, Tracer: provider.Tracer("test")}
+	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
+	tool := testLooperTool("read")
+	tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		return TextToolResult("file contents"), nil
+	}
+	looper.Tools = map[string]looperTool{"read": tool}
+
+	record, rendered, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, testPromptInput(PromptInputRoleUser, "inspect secret", nil))
+
+	require.NoError(t, err)
+	require.False(t, interrupted)
+	require.Equal(t, "resp-final", record.ResponseID)
+	require.Equal(t, []ChatResponse{assistantMessage("final answer")}, rendered)
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 4)
+	require.Equal(t, "rocketcode.provider", spans[0].Name())
+	require.Equal(t, "rocketcode.tool.read", spans[1].Name())
+	require.Equal(t, "rocketcode.provider", spans[2].Name())
+	require.Equal(t, "rocketcode.turn", spans[3].Name())
+	require.Contains(t, spans[3].Attributes(), attribute.String(semconv.InputValue, "inspect secret"))
+	require.Contains(t, spans[3].Attributes(), attribute.String(semconv.OutputValue, "final answer"))
+	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.InputValue, `{"filePath":"secret.txt"}`))
+	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.OutputValue, "file contents"))
+}
+
+func TestObservabilityRedactionComesFromConfigObject(t *testing.T) {
+	t.Setenv(instrumentation.EnvHideInputs, "false")
+	t.Setenv(instrumentation.EnvHideOutputs, "false")
+
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	looper := testLooper(mockResponses(responseWithMessage("resp-final", "hidden output")))
+	looper.agent = Agent{Name: "main"}
+	looper.DisplayModel = "openai/gpt-test"
+	looper.Observability = ObservabilityConfig{Enabled: true, Tracer: provider.Tracer("test"), TraceConfig: instrumentation.TraceConfig{HideInputs: true, HideOutputs: true}}
+
+	_, _, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, testPromptInput(PromptInputRoleUser, "hidden input", nil))
+
+	require.NoError(t, err)
+	require.False(t, interrupted)
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 2)
+	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.InputValue, instrumentation.RedactedValue))
+	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.OutputValue, instrumentation.RedactedValue))
+}

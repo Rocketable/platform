@@ -11,12 +11,14 @@ import (
 	"strings"
 	"time"
 
+	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
 	anthropic "github.com/anthropics/anthropic-sdk-go"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
+	"go.opentelemetry.io/otel/attribute"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -80,6 +82,7 @@ type looper struct {
 	AutoApprovePermissions bool
 	PermissionReviewer     permissionReviewer
 	InPermissionReview     bool
+	Observability          ObservabilityConfig
 	expandInputPrompts     bool
 	promptExpansion        promptExpansionEnvironment
 }
@@ -347,7 +350,7 @@ func (l *looper) runTurn(
 	interrupts <-chan os.Signal,
 	baseHistory []responses.ResponseInputItemUnionParam,
 	input PromptInput,
-) (SessionEntry, []ChatResponse, bool, error) {
+) (record SessionEntry, rendered []ChatResponse, interrupted bool, err error) {
 	var emptyRecord SessionEntry
 
 	if l.expandInputPrompts {
@@ -362,7 +365,7 @@ func (l *looper) runTurn(
 		return emptyRecord, nil, false, err
 	}
 
-	record := SessionEntry{
+	record = SessionEntry{
 		Version:     1,
 		Type:        "turn",
 		Timestamp:   time.Now().UTC(),
@@ -372,6 +375,25 @@ func (l *looper) runTurn(
 
 	turnCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+
+	turnCtx, span := l.Observability.startSpan(turnCtx, "rocketcode.turn", semconv.SpanKindAgent,
+		attribute.String(semconv.AgentName, l.agent.Name),
+		l.Observability.inputValue(input.Text),
+		attribute.String("rocketcode.model", l.DisplayModel),
+		attribute.Int("rocketcode.tool_count", len(l.Tools)),
+		attribute.Int64("rocketcode.compact_threshold", l.compactThreshold()),
+		attribute.Int("rocketcode.parallel_tool_calls", l.ParallelToolCalls),
+	)
+	defer func() {
+		recordSpanError(span, err)
+		span.span.SetAttributes(attribute.String("rocketcode.response_id", record.ResponseID))
+
+		if outputText := assistantOutputText(rendered); outputText != "" {
+			span.span.SetAttributes(l.Observability.outputValue(outputText))
+		}
+
+		span.span.End()
+	}()
 
 	var group errgroup.Group
 
@@ -398,7 +420,7 @@ func (l *looper) runTurn(
 		})
 	}
 
-	rendered := []ChatResponse{}
+	rendered = []ChatResponse{}
 	doomLoop := doomLoopTrap{recent: nil}
 
 	for {
@@ -501,7 +523,26 @@ func appendReplayInput(record *SessionEntry, item *responses.ResponseInputItemUn
 	return nil
 }
 
-func (l *looper) newProviderResponse(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse) (*responses.Response, error) {
+func (l *looper) newProviderResponse(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse) (resp *responses.Response, err error) {
+	provider := modelProviderOpenAI
+	if strings.HasPrefix(l.DisplayModel, modelProviderAnthropic+"/") {
+		provider = modelProviderAnthropic
+	}
+
+	ctx, span := l.Observability.startSpan(ctx, "rocketcode.provider", semconv.SpanKindLLM,
+		attribute.String(semconv.LLMModelName, l.DisplayModel),
+		attribute.String(semconv.LLMProvider, provider),
+	)
+	defer func() {
+		recordSpanError(span, err)
+
+		if resp != nil {
+			span.span.SetAttributes(attribute.String("rocketcode.response_id", resp.ID))
+		}
+
+		span.span.End()
+	}()
+
 	if strings.HasPrefix(l.DisplayModel, modelProviderAnthropic+"/") {
 		return l.newAnthropicResponse(ctx, params, output)
 	}
@@ -762,20 +803,30 @@ func (l *looper) dispatchToolCalls(
 			continue
 		}
 
+		args := json.RawMessage(item.Arguments.OfString)
+
 		tool, ok := l.Tools[item.Name]
 		if !ok {
+			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, "", args, toolCallMetadata{})
 			result := toolCallFailureResult(item.Name, errors.New("tool not found"))
+			recordSpanError(span, errors.New("tool not found"))
+			span.span.SetAttributes(l.Observability.outputValue(result.Output), attribute.Bool("rocketcode.tool_denied", false), attribute.Bool("rocketcode.tool_failure", true))
+			span.span.End()
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result.Output})
 			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, result), Result: result, ReplayInput: nil})
 
 			continue
 		}
 
-		args := json.RawMessage(item.Arguments.OfString)
 		l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseCall, Name: item.Name, Arguments: args})
 
 		if doomLoop != nil && doomLoop.trapped(item.Name, args) {
+			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, args, toolCallMetadata{})
 			result := fmt.Sprintf("tool call rejected: repeated identical %q call detected. Review the previous tool output and choose a different action instead of retrying the same input.", item.Name)
+
+			recordSpanError(span, errors.New("repeated identical tool call"))
+			span.span.SetAttributes(l.Observability.outputValue(result), attribute.Bool("rocketcode.tool_denied", true), attribute.Bool("rocketcode.tool_failure", true))
+			span.span.End()
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
 			toolResult := TextToolResult(result)
 			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
@@ -785,7 +836,11 @@ func (l *looper) dispatchToolCalls(
 
 		decision, err := l.permissionDecision(item.Name, &tool, args)
 		if err != nil {
+			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, args, toolCallMetadata{})
 			result := toolCallFailureResult(item.Name, fmt.Errorf("check permission: %w", err))
+			recordSpanError(span, err)
+			span.span.SetAttributes(l.Observability.outputValue(result.Output), attribute.Bool("rocketcode.tool_denied", true), attribute.Bool("rocketcode.tool_failure", true))
+			span.span.End()
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result.Output})
 			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, result), Result: result, ReplayInput: nil})
 
@@ -793,7 +848,12 @@ func (l *looper) dispatchToolCalls(
 		}
 
 		if decision.denied {
+			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, args, toolCallMetadata{})
 			result := decision.message
+
+			recordSpanError(span, errors.New("tool permission denied"))
+			span.span.SetAttributes(l.Observability.outputValue(result), attribute.Bool("rocketcode.tool_denied", true), attribute.Bool("rocketcode.tool_failure", false))
+			span.span.End()
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
 			toolResult := TextToolResult(result)
 			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
@@ -804,7 +864,12 @@ func (l *looper) dispatchToolCalls(
 		if decision.review != nil {
 			reviewDecision := l.PermissionReviewer.reviewPermission(ctx, decision.review)
 			if !reviewDecision.Approved {
+				_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, args, toolCallMetadata{})
 				result := formatPermissionReviewDenied(reviewDecision)
+
+				recordSpanError(span, errors.New("automatic permission review denied tool call"))
+				span.span.SetAttributes(l.Observability.outputValue(result), attribute.Bool("rocketcode.tool_denied", true), attribute.Bool("rocketcode.tool_failure", false))
+				span.span.End()
 				l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
 				toolResult := TextToolResult(result)
 				outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
@@ -860,21 +925,29 @@ func (l *looper) dispatchToolCalls(
 			)
 
 			metadata := toolCallMetadata{subagentIndex: call.subagentIndex, subagentTotal: call.subagentTotal}
+			callCtx, span := l.Observability.startToolSpan(groupCtx, call.name, call.callID, call.tool.Permission, call.args, metadata)
 
 			if call.tool.CallReplay != nil {
-				result, replayInput, err = call.tool.CallReplay(groupCtx, call.args, output, metadata)
+				result, replayInput, err = call.tool.CallReplay(callCtx, call.args, output, metadata)
 			} else {
-				result, err = call.tool.Call(groupCtx, call.args, output, metadata)
+				result, err = call.tool.Call(callCtx, call.args, output, metadata)
 			}
 
 			if err != nil {
+				recordSpanError(span, err)
+
 				if ctx.Err() != nil {
+					span.span.End()
+
 					return fmt.Errorf("run tool %q: %w", call.name, err)
 				}
 
 				result = toolCallFailureResult(call.name, err)
 				replayInput = nil
 			}
+
+			span.span.SetAttributes(l.Observability.outputValue(attachmentOutputMessage(result)), attribute.Bool("rocketcode.tool_denied", false), attribute.Bool("rocketcode.tool_failure", err != nil))
+			span.span.End()
 
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: call.name, Result: attachmentOutputMessage(result)})
 			outputs[call.outputIndex] = dispatchedToolOutput{Param: toolCallOutput(call.callID, result), Result: result, ReplayInput: replayInput}

@@ -9,7 +9,7 @@ RocketCode preserves behavior contracts that are more important than internal co
 
 ## Scope
 
-This ADR governs regression-sensitive behavior for prompt framing, replay, output, compaction, permissions, and filesystem safety. Tool inventories and agent/skill loading details are governed by companion ADRs.
+This ADR governs regression-sensitive behavior for prompt framing, replay, output, compaction, permissions, observability, and filesystem safety. Tool inventories and agent/skill loading details are governed by companion ADRs.
 
 ## Context
 
@@ -50,6 +50,15 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 - Three repeated identical tool calls are converted into a tool-output failure for the model.
 - Tool call permission denial, unknown tool names, and malformed tool permissions are returned as model-visible tool failures rather than process-fatal errors.
 - Context cancellation during tool dispatch is fatal to that dispatch and does not become an ordinary tool failure.
+
+### Observability
+
+- RocketCode may emit OpenTelemetry spans using OpenInference-compatible semantic attributes for agent turns, provider cycles, and tool calls only when configured through RocketCode's configuration object.
+- RocketCode observability configuration must be supplied exclusively through the RocketCode configuration object. RocketCode must not read environment variables to decide whether or how to configure instrumentation.
+- Observability must not alter prompt framing, replay input, provider routing, permission decisions, tool execution order, diagnostics output, persisted session entries, or model-visible tool results.
+- Tool observability must cover successful tool calls, unknown tool names, permission denials, automatic permission review denials, repeated-call doom-loop failures, and tool execution failures without changing their existing model-visible failure text.
+- OpenInference input and output redaction settings supplied through the RocketCode configuration object must be honored by RocketCode-authored spans. When input or output redaction is enabled, structural metadata such as span kind, agent name, model, tool name, call id, status, and counts may still be emitted.
+- Tracing export failures must not fail or interrupt RocketCode turns.
 
 ### Output Contracts
 
@@ -98,12 +107,15 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 - `internal/rocketcode/filesystem.go`
 - `internal/rocketcode/tasks.go`
 - `internal/rocketcode/skills.go`
+- OpenInference semantic conventions for span attributes.
+- OpenTelemetry trace API and SDK contracts.
 - `cmd/rocketcode/main.go`
 - `cmd/rocketloop/main.go`
 
 ## Consequences
 
 - Behavior-preserving simplification must verify prompt framing, replay, output text, permission gates, and safety boundaries independently.
+- Behavior-preserving observability work must verify that traces are side effects only and do not change turn, tool, permission, replay, or persistence semantics.
 - Behavior-preserving simplification must keep linter checks active unless an exact linter suppression has explicit human approval.
 - Any change that intentionally alters these contracts must update this ADR first and receive explicit human approval.
 - Tests should assert observable contracts rather than only implementation structure.
@@ -114,3 +126,4 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 - 2026-06-11: Added linter-disable guardrail for behavior-preserving refactors.
 - 2026-06-11: Added provider-routing replay and turn-loop contracts for OpenAI and Anthropic model requests.
 - 2026-06-17: Added fail-closed `auto` permission action semantics gated by `Config.AutoApprovePermissions`.
+- 2026-06-17: Added OpenTelemetry/OpenInference observability contract for agent, provider, and tool spans, configured exclusively through the RocketCode configuration object.

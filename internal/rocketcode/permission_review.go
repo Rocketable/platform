@@ -60,6 +60,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 		AutoApprovePermissions: f.autoApprovePermissions,
 		PermissionReviewer:     &childFactory,
 		InPermissionReview:     true,
+		Observability:          f.observability,
 	}
 
 	payload, err := json.MarshalIndent(request, "", "  ")

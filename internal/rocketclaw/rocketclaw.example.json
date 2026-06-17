@@ -83,5 +83,13 @@
   "anthropic": {
     "api_key": "sk-ant-...",
     "api_base_url": ""
+  },
+  "instrumentation": {
+    "enabled": false,
+    "collector_endpoint": "http://localhost:6006",
+    "project_name": "rocketclaw-dev",
+    "api_key": "",
+    "hide_inputs": true,
+    "hide_outputs": true
   }
 }
