@@ -832,6 +832,17 @@ func (c *Connector) handleOnDemandCronRequest(ctx context.Context, reply *events
 		return
 	}
 
+	if !dm && strings.TrimSpace(reply.ThreadID) == "" {
+		thread, err := c.createThread(reply.ChannelID, reply.MessageID, loaded.RelativePath)
+		if err != nil {
+			c.log.Error("create Discord one-off cron thread", "channel", reply.ChannelID, "message", reply.MessageID, "error", err)
+			return
+		}
+
+		reply.ThreadID = thread.ID
+		c.recordThreadRoot(reply.ChannelID, reply.MessageID, thread.ID)
+	}
+
 	preview := "One-off cronjob starting.\n\nFile: `" + loaded.RelativePath + "`\nAgent: `" + strings.TrimSpace(loaded.Agent) + "`"
 	c.publishOnDemandCronReply(ctx, reply, preview, false)
 
@@ -856,7 +867,11 @@ func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCr
 		return nil
 	}
 
-	primarytext.RunOneOffCronjob(ctx, c.oneOffCronjobs, loaded, publish, func(err error) {
+	primarytext.RunOneOffCronjob(ctx, c.oneOffCronjobs, loaded, publish, func(ctx context.Context, result cronjob.RunResult) {
+		if err := c.threadRouter.RegisterCronThread(ctx, events.TextConversationTarget{ThreadID: reply.ThreadID}, loaded.Agent, primarytext.OneOffCronjobSeedText(loaded, result)); err != nil {
+			c.log.Warn("register Discord one-off cron thread", "error", err, "thread", reply.ThreadID, "cron", loaded.RelativePath)
+		}
+	}, func(err error) {
 		c.log.Warn("publish Discord on-demand cron result", "error", err)
 	})
 }

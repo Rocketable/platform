@@ -1974,7 +1974,11 @@ func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCr
 		return nil
 	}
 
-	primarytext.RunOneOffCronjob(ctx, c.oneOffCronjobs, loaded, publish, func(err error) {
+	primarytext.RunOneOffCronjob(ctx, c.oneOffCronjobs, loaded, publish, func(ctx context.Context, result cronjob.RunResult) {
+		if err := c.threadRouter.RegisterCronThread(ctx, events.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, loaded.Agent, primarytext.OneOffCronjobSeedText(loaded, result)); err != nil {
+			c.log.Warn("register Slack one-off cron thread", "error", err, "channel", replyTarget.ChannelID, "thread_ts", replyTarget.ThreadTS, "cron", loaded.RelativePath)
+		}
+	}, func(err error) {
 		c.log.Warn("publish Slack on-demand cron result", "error", err)
 	})
 }

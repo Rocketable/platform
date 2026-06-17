@@ -119,7 +119,7 @@ func GoalProgressText(turnNumber, maxTurns int) string {
 }
 
 // RunOneOffCronjob wires shared on-demand cron progress and final output handling.
-func RunOneOffCronjob(ctx context.Context, runner OneOffCronjobRunner, loaded cronjob.OneOffCronjob, publish func(context.Context, string, string, bool, bool, []events.OutboundAttachment) error, onPublishError func(error)) {
+func RunOneOffCronjob(ctx context.Context, runner OneOffCronjobRunner, loaded cronjob.OneOffCronjob, publish func(context.Context, string, string, bool, bool, []events.OutboundAttachment) error, afterFinalPublish func(context.Context, cronjob.RunResult), onPublishError func(error)) {
 	thinking := ""
 	progress := &harnessbridge.RawRunProgress{
 		Thinking: func(ctx context.Context, text string) error {
@@ -164,7 +164,23 @@ func RunOneOffCronjob(ctx context.Context, runner OneOffCronjobRunner, loaded cr
 			onPublishError(err)
 			return
 		}
+
+		afterFinalPublish(ctx, result)
 	})
+}
+
+// OneOffCronjobSeedText returns the managed-conversation seed for a completed one-off cron run.
+func OneOffCronjobSeedText(loaded cronjob.OneOffCronjob, result cronjob.RunResult) string {
+	seedText := "One-off cronjob " + loaded.RelativePath + " ran with agent " + strings.TrimSpace(loaded.Agent) + "."
+	if text := strings.TrimSpace(result.VerbatimMessage); text != "" {
+		seedText += "\n\nHuman-visible cron output:\n" + text
+	}
+
+	if names := events.AttachmentNamesSpeech(result.Attachments); names != "" {
+		seedText += "\n\n" + names
+	}
+
+	return seedText
 }
 
 func splitText(text string, preferredLimit, hardLimit int, chunkEnd func([]rune, int, int) int) []string {

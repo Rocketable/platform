@@ -4150,6 +4150,10 @@ func TestHandleMessageEventRunsOnDemandCronInSlackThread(t *testing.T) {
 
 	assert.Empty(t, router.startedSnapshot())
 	assert.Equal(t, []cronjob.OneOffCronjob{{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md"}}, runner.runsSnapshot())
+	require.Eventually(t, func() bool {
+		return len(router.cronRegistrationsSnapshot()) == 1
+	}, time.Second, time.Millisecond)
+	assert.Equal(t, cronThreadRegistration{channelID: "D123", threadTS: "171234.5678", agent: "cron", seedText: "One-off cronjob cron/daily.md ran with agent cron.\n\nHuman-visible cron output:\nfinal payload"}, router.cronRegistrationsSnapshot()[0])
 	assertNeverInbound(t, bus)
 }
 
@@ -4259,6 +4263,7 @@ func TestHandleMessageEventReportsOnDemandCronRunFailure(t *testing.T) {
 	require.Len(t, updated, 1)
 	assert.Equal(t, failure.Text, updated[0].Get("text"))
 	assert.Empty(t, router.startedSnapshot())
+	assert.Empty(t, router.cronRegistrationsSnapshot())
 }
 
 func TestRunOnDemandCronIgnoresBlankProgressAndPublishesEmptyResultFallback(t *testing.T) {
@@ -4772,7 +4777,8 @@ func TestHandleReactionAddedEventRunsOnDemandCron(t *testing.T) {
 	}))
 	defer server.Close()
 
-	connector := newTestConnectorWithOptions(server.URL, bus, nil, nil, runner)
+	router := newThreadRouterStub()
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, runner)
 	connector.handleReactionAddedEvent(context.Background(), newTestReactionAddedEvent("U123", slackOnDemandCronReaction, "171234.5678"))
 
 	assert.Equal(t, []string{"daily"}, runner.targetsSnapshot())
@@ -4784,6 +4790,10 @@ func TestHandleReactionAddedEventRunsOnDemandCron(t *testing.T) {
 	assert.Equal(t, "done", final.Text)
 	assert.True(t, final.Complete)
 	assert.Equal(t, []cronjob.OneOffCronjob{runner.loaded}, runner.runsSnapshot())
+	require.Eventually(t, func() bool {
+		return len(router.cronRegistrationsSnapshot()) == 1
+	}, time.Second, time.Millisecond)
+	assert.Equal(t, cronThreadRegistration{channelID: "D123", threadTS: "171234.5678", agent: "cron", seedText: "One-off cronjob cron/daily.md ran with agent cron.\n\nHuman-visible cron output:\ndone"}, router.cronRegistrationsSnapshot()[0])
 	assert.Equal(t, 2, posted)
 	assert.Equal(t, 1, reactions)
 }

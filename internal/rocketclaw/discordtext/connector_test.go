@@ -3,6 +3,7 @@ package discordtext
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -251,6 +252,9 @@ func TestHandleDMRunsOnDemandCronWithoutChannelMatch(t *testing.T) {
 	final := readOneOutbound(t, connector.bus)
 	assert.Equal(t, "done", final.Text)
 	assert.Equal(t, []cronjob.OneOffCronjob{runner.loaded}, runner.runs)
+	require.Eventually(t, func() bool {
+		return connector.threadRouter.(*fakeThreadRouter).registeredCronSnapshot() == "D123:cron:One-off cronjob cron/daily.md ran with agent cron.\n\nHuman-visible cron output:\ndone"
+	}, time.Second, time.Millisecond)
 }
 
 func TestHandleSocialMentionStartsConfiguredAgentThread(t *testing.T) {
@@ -368,10 +372,14 @@ func TestHandleReactionRunsOnDemandCron(t *testing.T) {
 	require.NotNil(t, preview.DiscordReply)
 	assert.Equal(t, "C123", preview.DiscordReply.ChannelID)
 	assert.Equal(t, "M1", preview.DiscordReply.MessageID)
+	assert.Equal(t, "T1", preview.DiscordReply.ThreadID)
 	final := readOneOutbound(t, connector.bus)
 	assert.Equal(t, "done", final.Text)
 	assert.True(t, final.Complete)
 	assert.Equal(t, []cronjob.OneOffCronjob{runner.loaded}, runner.runs)
+	require.Eventually(t, func() bool {
+		return connector.threadRouter.(*fakeThreadRouter).registeredCronSnapshot() == "T1:cron:One-off cronjob cron/daily.md ran with agent cron.\n\nHuman-visible cron output:\ndone"
+	}, time.Second, time.Millisecond)
 }
 
 func TestHandleReactionAllowsSocialCronUser(t *testing.T) {
@@ -449,7 +457,7 @@ func TestSendCronjobChannelThreadCreatesThreadAndPosts(t *testing.T) {
 	assert.Equal(t, "T123", fake.messages[1].channelID)
 	assert.Equal(t, "answer", fake.messages[1].send.Content)
 	assert.Equal(t, []string{"T123"}, fake.attachments)
-	assert.Equal(t, "T123:agent:Cronjob cron ran at 2026-06-02 with agent agent.\n\nHuman-visible cron output:\nanswer\n\nAttached files: a.txt.", router.registeredCron)
+	assert.Equal(t, "T123:agent:Cronjob cron ran at 2026-06-02 with agent agent.\n\nHuman-visible cron output:\nanswer\n\nAttached files: a.txt.", router.registeredCronSnapshot())
 }
 
 func TestSendExternalMCPRelayPostsAttachmentOnlyPrompt(t *testing.T) {
@@ -642,6 +650,7 @@ func (f *fakeDiscordClient) sendAttachments(channelID string, _ []events.Outboun
 func (f *fakeDiscordClient) userID() string { return "BOT" }
 
 type fakeThreadRouter struct {
+	mu                                                  sync.Mutex
 	startedAgent, submittedThreadID, summarizedThreadID string
 	switchedThreadID, switchedAgent                     string
 	registeredCron                                      string
@@ -714,7 +723,11 @@ func (f *fakeThreadRouter) RecordResponseCheckpoint(target events.TextConversati
 }
 
 func (f *fakeThreadRouter) RegisterCronThread(_ context.Context, target events.TextConversationTarget, agent, seedText string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	f.registeredCron = target.ThreadID + ":" + agent + ":" + seedText
+
 	return nil
 }
 
@@ -723,6 +736,13 @@ func (f *fakeThreadRouter) SwitchThreadAgent(target events.TextConversationTarge
 	f.switchedAgent = agent
 
 	return f.switchHandled, nil
+}
+
+func (f *fakeThreadRouter) registeredCronSnapshot() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.registeredCron
 }
 
 type fakeOneOffCronjobs struct {
