@@ -147,12 +147,7 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 		return "", fmt.Errorf("prepare RocketCode providers: %w", err)
 	}
 
-	customTools := make([]rocketcode.Tool, 5)
-	customTools[0] = decision.Tool()
-	customTools[1] = attachments.Tool(root)
-	customTools[2] = restartTool(requestRestart, recordRestartRequester)
-	customTools[3] = scheduleMessageTool(progress.ScheduleMessage, logger)
-	customTools[4] = resetScheduledMessagesTool(progress.ResetScheduledMessages)
+	customTools := []rocketcode.Tool{decision.Tool(), attachments.Tool(root), restartTool(requestRestart, recordRestartRequester), scheduleMessageTool(progress.ScheduleMessage, logger), resetScheduledMessagesTool(progress.ResetScheduledMessages)}
 
 	rocketcodeConfig := rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: diagnostics, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: true}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: cfg.RocketCode.AutoApprovePermissions, CustomTools: customTools}
 

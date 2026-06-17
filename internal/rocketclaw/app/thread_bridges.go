@@ -27,9 +27,8 @@ type directBridge interface {
 }
 
 type bridgeConfig struct {
-	ConversationID string
-	Agent          string
-	OutputTargets  []events.OutputTarget
+	ConversationID, Agent string
+	OutputTargets         []events.OutputTarget
 }
 
 type bridgeFactory func(bridgeConfig) directBridge

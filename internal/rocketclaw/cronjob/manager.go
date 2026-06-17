@@ -108,21 +108,19 @@ type RunFunc func(context.Context, string, string, *slog.Logger, *harnessbridge.
 
 // Manager loads cron definitions once at startup and schedules them.
 type Manager struct {
-	workspace        string
-	workDir          string
-	bus              *events.Bus
-	run              RunFunc
-	log              *slog.Logger
-	now              func() time.Time
-	SendSlackChannel func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error
+	workspace, workDir string
+	bus                *events.Bus
+	run                RunFunc
+	log                *slog.Logger
+	now                func() time.Time
+	SendSlackChannel   func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error
 
-	mu     sync.Mutex
-	stop   context.CancelFunc
-	cron   *cron.Cron
-	jobs   []*job
-	start  bool
-	closed bool
-	wg     sync.WaitGroup
+	mu            sync.Mutex
+	stop          context.CancelFunc
+	cron          *cron.Cron
+	jobs          []*job
+	start, closed bool
+	wg            sync.WaitGroup
 }
 
 type definition struct {

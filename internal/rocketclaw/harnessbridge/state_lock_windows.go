@@ -11,6 +11,4 @@ func lockStateStoreFile(*os.File) error {
 	return errors.New("rocketcode session db lock is unsupported on windows")
 }
 
-func unlockStateStoreFile(*os.File) error {
-	return nil
-}
+func unlockStateStoreFile(*os.File) error { return nil }

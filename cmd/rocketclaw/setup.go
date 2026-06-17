@@ -165,7 +165,7 @@ func interviewSetup(cfg *config.Config) (setupNames, error) {
 	var names setupNames
 
 	for {
-		discordEnabled, err := promptYesNo(reader, "Enable Discord voice connector? [y/N]: ")
+		discordEnabled, err := promptYesNoDefault(reader, "Enable Discord voice connector? [y/N]: ", false)
 		if err != nil {
 			return names, fmt.Errorf("prompt Discord enablement: %w", err)
 		}
@@ -175,7 +175,7 @@ func interviewSetup(cfg *config.Config) (setupNames, error) {
 			return names, err
 		}
 
-		externalMCPEnabled, err := promptYesNo(reader, "Enable external MCP HTTP server? [y/N]: ")
+		externalMCPEnabled, err := promptYesNoDefault(reader, "Enable external MCP HTTP server? [y/N]: ", false)
 		if err != nil {
 			return names, fmt.Errorf("prompt external MCP enablement: %w", err)
 		}
@@ -253,7 +253,7 @@ func interviewSetup(cfg *config.Config) (setupNames, error) {
 			return names, err
 		}
 
-		createExternalMCPUsers, err := promptYesNo(reader, "Create rocketclaw.users.json with one generated admin user? [y/N]: ")
+		createExternalMCPUsers, err := promptYesNoDefault(reader, "Create rocketclaw.users.json with one generated admin user? [y/N]: ", false)
 		if err != nil {
 			return names, fmt.Errorf("prompt external MCP users file creation: %w", err)
 		}
@@ -299,8 +299,8 @@ func promptPrimaryTextConnector(reader *bufio.Reader) (string, error) {
 
 type promptField struct {
 	prompt   string
-	required bool
 	value    *string
+	required bool
 }
 
 func promptFields(reader *bufio.Reader, fields ...promptField) error {
@@ -311,13 +311,12 @@ func promptFields(reader *bufio.Reader, fields ...promptField) error {
 				return err
 			}
 
-			if value != "" || !field.required {
-				if value == "" {
-					value = *field.value
-				}
-
+			if value != "" {
 				*field.value = value
+				break
+			}
 
+			if !field.required {
 				break
 			}
 
@@ -341,10 +340,6 @@ func promptInput(reader *bufio.Reader, prompt string) (string, error) {
 	}
 
 	return strings.TrimSpace(text), nil
-}
-
-func promptYesNo(reader *bufio.Reader, prompt string) (bool, error) {
-	return promptYesNoDefault(reader, prompt, false)
 }
 
 func promptYesNoDefault(reader *bufio.Reader, prompt string, defaultValue bool) (bool, error) {

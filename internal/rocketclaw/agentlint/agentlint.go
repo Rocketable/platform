@@ -16,14 +16,8 @@ import (
 )
 
 const (
-	rc000 = "RC000"
-	rc001 = "RC001"
-	rc002 = "RC002"
-	rc003 = "RC003"
-	rc004 = "RC004"
-	rc005 = "RC005"
-	rc006 = "RC006"
-	rc007 = "RC007"
+	rc000, rc001, rc002, rc003 = "RC000", "RC001", "RC002", "RC003"
+	rc004, rc005, rc006, rc007 = "RC004", "RC005", "RC006", "RC007"
 )
 
 // Finding is one lint result line.

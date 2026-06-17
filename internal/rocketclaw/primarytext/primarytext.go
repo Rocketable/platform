@@ -17,8 +17,7 @@ import (
 )
 
 const (
-	socialAgentSwitchPrefix        = "🎛"
-	socialAgentSwitchPrefixVariant = "🎛️"
+	socialAgentSwitchPrefix, socialAgentSwitchPrefixVariant = "🎛", "🎛️"
 )
 
 // ThreadAgent is one configured text prefix to managed-agent mapping.
@@ -129,11 +128,11 @@ func RunOneOffCronjob(ctx context.Context, runner OneOffCronjobRunner, loaded cr
 				return nil
 			}
 
-			if thinking == "" {
-				thinking = text
-			} else {
-				thinking += "\n" + text
+			if thinking != "" {
+				thinking += "\n"
 			}
+
+			thinking += text
 
 			return publish(ctx, "", thinking, false, false, nil)
 		},

@@ -378,43 +378,18 @@ func (c *Config) validateDiscordText() error {
 
 	c.DiscordText.SocialMode.Channels = normalizeTextSocialChannels(c.DiscordText.SocialMode.Channels, strings.TrimSpace)
 
-	if !c.DiscordText.SocialMode.Enabled {
-		return nil
-	}
-
-	for _, channel := range c.DiscordText.SocialMode.Channels {
-		if len(channel.Agents) == 0 {
-			return errors.New("discord_text.social_mode.channels[].agents is required when discord_text social mode is enabled")
-		}
-
-		if len(channel.AllowedUserIDs) == 0 {
-			return errors.New("discord_text.social_mode.channels[].allowed_user_ids is required when discord_text social mode is enabled")
-		}
-	}
-
-	if c.DiscordText.SocialMode.ContextMessages < 0 {
-		return errors.New("discord_text.social_mode.context_messages must be zero or greater")
-	}
-
-	if c.DiscordText.SocialMode.ContextMessages == 0 {
-		c.DiscordText.SocialMode.ContextMessages = 10
-	}
-
-	return nil
+	return validateTextSocial("discord_text", &c.DiscordText.SocialMode)
 }
 
 func normalizeStringList(values []string) []string {
-	normalized := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" || slices.Contains(normalized, value) {
-			continue
+	normalized, unique := normalizeStrings(values), []string{}
+	for _, value := range normalized {
+		if !slices.Contains(unique, value) {
+			unique = append(unique, value)
 		}
-
-		normalized = append(normalized, value)
 	}
 
-	return normalized
+	return unique
 }
 
 func (c *Config) validateMinimumWaitAfterHumanInteraction() error {
@@ -451,26 +426,30 @@ func (c *Config) validateSlack() error {
 
 	c.Slack.SocialMode.Channels = normalizeTextSocialChannels(c.Slack.SocialMode.Channels, normalizeSlackSocialChannel)
 
-	if !c.Slack.SocialMode.Enabled {
+	return validateTextSocial("slack", &c.Slack.SocialMode)
+}
+
+func validateTextSocial(label string, social *TextSocialConfig) error {
+	if !social.Enabled {
 		return nil
 	}
 
-	for _, channel := range c.Slack.SocialMode.Channels {
+	for _, channel := range social.Channels {
 		if len(channel.Agents) == 0 {
-			return errors.New("slack.social_mode.channels[].agents is required when slack social mode is enabled")
+			return fmt.Errorf("%s.social_mode.channels[].agents is required when %s social mode is enabled", label, label)
 		}
 
 		if len(channel.AllowedUserIDs) == 0 {
-			return errors.New("slack.social_mode.channels[].allowed_user_ids is required when slack social mode is enabled")
+			return fmt.Errorf("%s.social_mode.channels[].allowed_user_ids is required when %s social mode is enabled", label, label)
 		}
 	}
 
-	if c.Slack.SocialMode.ContextMessages < 0 {
-		return errors.New("slack.social_mode.context_messages must be zero or greater")
+	if social.ContextMessages < 0 {
+		return fmt.Errorf("%s.social_mode.context_messages must be zero or greater", label)
 	}
 
-	if c.Slack.SocialMode.ContextMessages == 0 {
-		c.Slack.SocialMode.ContextMessages = 10
+	if social.ContextMessages == 0 {
+		social.ContextMessages = 10
 	}
 
 	return nil
@@ -495,11 +474,7 @@ func normalizeTextSocialChannels(channels []TextSocialChannelConfig, normalizeCh
 
 func normalizeSlackSocialChannel(channel string) string {
 	channel = strings.TrimSpace(channel)
-	if channel == "" {
-		return ""
-	}
-
-	if !strings.HasPrefix(channel, "#") {
+	if channel != "" && !strings.HasPrefix(channel, "#") {
 		channel = "#" + channel
 	}
 
@@ -562,16 +537,10 @@ func normalizeEmergencySafeWords(words []string) []string {
 		}
 
 		token := b.String()
-		if token == "" {
-			continue
+		if _, ok := seen[token]; token != "" && !ok {
+			seen[token] = struct{}{}
+			normalized = append(normalized, token)
 		}
-
-		if _, ok := seen[token]; ok {
-			continue
-		}
-
-		seen[token] = struct{}{}
-		normalized = append(normalized, token)
 	}
 
 	return normalized

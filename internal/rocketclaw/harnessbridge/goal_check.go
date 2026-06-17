@@ -15,10 +15,7 @@ import (
 
 const goalCheckTimeout = 2 * 60 * 1000
 
-type goalCheckCommand struct {
-	command string
-	subject string
-}
+type goalCheckCommand struct{ command, subject string }
 
 // ValidateGoalCheckScriptStart validates a goal check script before goal persistence.
 func ValidateGoalCheckScriptStart(cfg *config.Config, agentName, script string) error {

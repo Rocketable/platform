@@ -25,15 +25,10 @@ import (
 )
 
 const (
-	voiceSocketPath      = VoiceModePath + "/ws"
-	playbackPathPrefix   = VoiceModePath + "/playback/"
-	utteranceCheckEvery  = 100 * time.Millisecond
-	defaultChunkPreroll  = 4
-	maxAudioMessageSize  = 512 * 1024
-	maxAudioSendQueue    = 32
-	browserCaptureMIME   = "audio/webm;codecs=opus"
-	transportVersion     = "ws_opus_v1"
-	webMClusterElementID = "\x1f\x43\xb6\x75"
+	voiceSocketPath, playbackPathPrefix                         = VoiceModePath + "/ws", VoiceModePath + "/playback/"
+	utteranceCheckEvery                                         = 100 * time.Millisecond
+	defaultChunkPreroll, maxAudioMessageSize, maxAudioSendQueue = 4, 512 * 1024, 32
+	browserCaptureMIME, transportVersion, webMClusterElementID  = "audio/webm;codecs=opus", "ws_opus_v1", "\x1f\x43\xb6\x75"
 )
 
 type transcriber interface {
@@ -72,8 +67,7 @@ type playbackAsset struct {
 }
 
 type playbackFormat struct {
-	ResponseFormat string
-	MIMEType       string
+	ResponseFormat, MIMEType string
 }
 
 type bufferedChunk struct {
@@ -116,15 +110,14 @@ type voiceSession struct {
 
 	send chan *serverMessage
 
-	mu           sync.Mutex
-	closed       bool
-	mimeType     string
-	muted        bool
-	webmHeader   []byte
-	preroll      []bufferedChunk
-	current      *utteranceBuffer
-	lastSequence uint64
-	turnText     map[string]string
+	mu            sync.Mutex
+	closed, muted bool
+	mimeType      string
+	webmHeader    []byte
+	preroll       []bufferedChunk
+	current       *utteranceBuffer
+	lastSequence  uint64
+	turnText      map[string]string
 }
 
 func newVoiceHub(ctx context.Context, logger *slog.Logger, transcriber transcriber, tts synthesizer, publisher *voice.TranscriptionPublisher) *voiceHub {

@@ -25,14 +25,10 @@ import (
 )
 
 const (
-	clientID         = "app_EMoamEEZ73f0CkXaXp7hrann"
-	issuer           = "https://auth.openai.com"
-	codexBaseURL     = "https://chatgpt.com/backend-api/codex"
-	dummyAPIKey      = "rocketclaw-oauth-dummy-key"
-	defaultLoginPort = 1455
-	originator       = "codex_cli_rs"
-	codexUserAgent   = "codex_cli_rs/0.0.0 (RocketClaw)"
-	refreshSkew      = 120 * time.Second
+	clientID, issuer, codexBaseURL, dummyAPIKey = "app_EMoamEEZ73f0CkXaXp7hrann", "https://auth.openai.com", "https://chatgpt.com/backend-api/codex", "rocketclaw-oauth-dummy-key"
+	defaultLoginPort                            = 1455
+	originator, codexUserAgent                  = "codex_cli_rs", "codex_cli_rs/0.0.0 (RocketClaw)"
+	refreshSkew                                 = 120 * time.Second
 )
 
 // Token is the persisted ChatGPT OAuth credential used for Codex requests.
@@ -44,8 +40,7 @@ type Token struct {
 }
 
 type pkceCodes struct {
-	verifier  string
-	challenge string
+	verifier, challenge string
 }
 
 type tokenResponse struct {
@@ -134,10 +129,6 @@ func SaveTokenIn(workspace, workDir string, token Token) error {
 
 // LoginBrowserIn completes the local browser OAuth flow and saves the resulting token in workDir.
 func LoginBrowserIn(ctx context.Context, workspace, workDir string, out io.Writer) (string, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
 	pkce, err := generatePKCE()
 	if err != nil {
 		return "", err
@@ -230,10 +221,6 @@ func LoginBrowserIn(ctx context.Context, workspace, workDir string, out io.Write
 
 // LoginDeviceIn completes the headless device OAuth flow and saves the resulting token in workDir.
 func LoginDeviceIn(ctx context.Context, workspace, workDir string, out io.Writer) (string, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
 	body, err := json.Marshal(map[string]string{"client_id": clientID})
 	if err != nil {
 		return "", fmt.Errorf("marshal device authorization request: %w", err)
@@ -315,11 +302,9 @@ func NewChatGPTClientIn(workspace, workDir string, opts ...option.RequestOption)
 }
 
 type transport struct {
-	base      http.RoundTripper
-	workspace string
-	workDir   string
-	sessionID string
-	mu        sync.Mutex
+	base                          http.RoundTripper
+	workspace, workDir, sessionID string
+	mu                            sync.Mutex
 }
 
 type codexRequestMetadata struct {
@@ -328,8 +313,7 @@ type codexRequestMetadata struct {
 }
 
 type codexStreamError struct {
-	Code    string
-	Message string
+	Code, Message string
 }
 
 func (e *codexStreamError) Error() string {

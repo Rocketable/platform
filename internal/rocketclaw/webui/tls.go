@@ -21,9 +21,8 @@ import (
 const certValidity = 365 * 24 * time.Hour
 
 type tlsAssets struct {
-	certFile string
-	keyFile  string
-	ips      []net.IP
+	certFile, keyFile string
+	ips               []net.IP
 }
 
 func prepareTLSAssetsIn(workspace, workDir, listenAddr, certFile, keyFile string, collectIPv4Addrs func() ([]net.IP, error)) (tlsAssets, error) {

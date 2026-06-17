@@ -115,9 +115,8 @@ type SessionSummary struct {
 
 // SessionListOptions bounds read-only session summary inspection.
 type SessionListOptions struct {
-	Since time.Time
-	Until time.Time
-	Limit int
+	Since, Until time.Time
+	Limit        int
 }
 
 // ObservedSessionEntry is one stored rocketcode entry with its SQLite row ID.

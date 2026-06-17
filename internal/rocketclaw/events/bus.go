@@ -149,10 +149,6 @@ func (b *Bus) PublishOutbound(ctx context.Context, msg *OutboundMessage) error {
 
 // WaitOutboundIdle waits until outbound work is queued nowhere and delivered everywhere.
 func (b *Bus) WaitOutboundIdle(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
 	stop := b.notifyOnContext(ctx)
 	defer stop()
 

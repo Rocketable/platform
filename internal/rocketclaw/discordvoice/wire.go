@@ -74,26 +74,21 @@ type voiceConnectionStatus int
 // https://docs.discord.com/developers/topics/voice-connections#connecting-to-voice
 const (
 	// New means the local voice connection exists but has not completed Discord's voice handshake.
-	voiceConnectionStatusNew voiceConnectionStatus = 0
+	voiceConnectionStatusNew, voiceConnectionStatusConnecting, voiceConnectionStatusReady, voiceConnectionStatusDead voiceConnectionStatus = 0, 1, 2, 3
 	// Connecting means Discord voice session/server details are being combined to open the voice WebSocket.
-	voiceConnectionStatusConnecting voiceConnectionStatus = 1
 	// Ready means Discord voice Ready and Session Description have completed and media can flow.
-	voiceConnectionStatusReady voiceConnectionStatus = 2
 	// Dead means the local voice connection has been closed or failed.
-	voiceConnectionStatusDead voiceConnectionStatus = 3
 )
 
 // opusPacket carries the RTP header fields and Opus payload received from Discord voice UDP.
 // https://docs.discord.com/developers/topics/voice-connections#transport-encryption-and-sending-voice
 // https://www.rfc-editor.org/rfc/rfc3550.html#section-5.1
 type opusPacket struct {
-	Flags       byte
-	PayloadType byte
-	Sequence    uint16
-	Timestamp   uint32
-	SSRC        uint32
-	SpeakerID   string
-	Opus        []byte
+	Flags, PayloadType byte
+	Sequence           uint16
+	Timestamp, SSRC    uint32
+	SpeakerID          string
+	Opus               []byte
 }
 
 type voiceEvent struct {
@@ -102,10 +97,8 @@ type voiceEvent struct {
 }
 
 type wireConfig struct {
-	token          string
-	voiceChannelID string
-	humanUserID    string
-	log            *slog.Logger
+	token, voiceChannelID, humanUserID string
+	log                                *slog.Logger
 }
 
 // voiceSpeakingUpdate is Discord voice opcode 5's Speaking payload for SSRC to user mapping.
@@ -122,26 +115,18 @@ type voiceOpcode int
 // https://docs.discord.com/developers/topics/opcodes-and-status-codes#voice-voice-opcodes
 const (
 	// Identify starts a voice WebSocket session with server, channel, user, session, token, and DAVE support.
-	voiceOpIdentify voiceOpcode = 0
+	voiceOpIdentify, voiceOpSelectProtocol, voiceOpReady, voiceOpHeartbeat, voiceOpSessionDescription, voiceOpSpeaking, voiceOpHello, voiceOpDavePrepareEpoch voiceOpcode = 0, 1, 2, 3, 4, 5, 8, 24
 	// Select Protocol tells Discord the discovered UDP address, port, encryption mode, and codec.
-	voiceOpSelectProtocol voiceOpcode = 1
 	// Ready completes the voice WebSocket handshake and provides UDP connection details.
-	voiceOpReady voiceOpcode = 2
 	// Heartbeat keeps the voice WebSocket session alive and acknowledges the latest sequence.
-	voiceOpHeartbeat voiceOpcode = 3
 	// Session Description provides the selected encryption mode, secret key, and DAVE version.
-	voiceOpSessionDescription voiceOpcode = 4
 	// Speaking updates a user's speaking state and SSRC mapping.
-	voiceOpSpeaking voiceOpcode = 5
 	// Hello provides the voice heartbeat interval.
-	voiceOpHello voiceOpcode = 8
 	// DAVE Prepare Epoch announces an upcoming DAVE protocol or MLS group transition.
-	voiceOpDavePrepareEpoch voiceOpcode = 24
 )
 
 const (
-	discordAPI        = "https://discord.com/api/v10"
-	discordGatewayURL = "wss://gateway.discord.gg/?v=10&encoding=json"
+	discordAPI, discordGatewayURL = "https://discord.com/api/v10", "wss://gateway.discord.gg/?v=10&encoding=json"
 )
 
 type gatewayOpcode int
@@ -150,15 +135,11 @@ type gatewayOpcode int
 // https://docs.discord.com/developers/topics/opcodes-and-status-codes#gateway-gateway-opcodes
 const (
 	// Dispatch delivers gateway events such as READY, VOICE_STATE_UPDATE, and VOICE_SERVER_UPDATE.
-	gatewayOpDispatch gatewayOpcode = 0
+	gatewayOpDispatch, gatewayOpHeartbeat, gatewayOpIdentify, gatewayOpVoiceStateUpdate, gatewayOpHello gatewayOpcode = 0, 1, 2, 4, 10
 	// Heartbeat keeps the main gateway session alive.
-	gatewayOpHeartbeat gatewayOpcode = 1
 	// Identify starts the main gateway session and declares requested intents.
-	gatewayOpIdentify gatewayOpcode = 2
 	// Voice State Update asks Discord to join, move, or leave a guild voice channel.
-	gatewayOpVoiceStateUpdate gatewayOpcode = 4
 	// Hello provides the main gateway heartbeat interval.
-	gatewayOpHello gatewayOpcode = 10
 )
 
 type wire struct {
@@ -190,21 +171,7 @@ func newWire(ctx context.Context, cfg wireConfig) (*wire, error) {
 		intentGuildVoiceStates = 1 << 7
 	)
 
-	wire := &wire{
-		identify:           identify{Intents: intentGuilds | intentGuildVoiceStates},
-		dialer:             websocket.DefaultDialer,
-		client:             &http.Client{Timeout: 15 * time.Second},
-		log:                cfg.log,
-		token:              cfg.token,
-		voiceChannelID:     cfg.voiceChannelID,
-		humanUserID:        cfg.humanUserID,
-		events:             make(chan voiceEvent, 16),
-		voiceStates:        make(map[string][]*voiceStateUpdate),
-		voiceSessionID:     make(map[string]string),
-		voiceServerUpdates: make(map[string]*voiceServerUpdate),
-		voiceConnections:   make(map[string]*voiceConnection),
-		ready:              make(chan struct{}),
-	}
+	wire := &wire{identify: identify{Intents: intentGuilds | intentGuildVoiceStates}, dialer: websocket.DefaultDialer, client: &http.Client{Timeout: 15 * time.Second}, log: cfg.log, token: cfg.token, voiceChannelID: cfg.voiceChannelID, humanUserID: cfg.humanUserID, events: make(chan voiceEvent, 16), voiceStates: make(map[string][]*voiceStateUpdate), voiceSessionID: make(map[string]string), voiceServerUpdates: make(map[string]*voiceServerUpdate), voiceConnections: make(map[string]*voiceConnection), ready: make(chan struct{})}
 
 	if err := wire.openGateway(); err != nil {
 		return nil, fmt.Errorf("open Discord session: %w", err)
@@ -750,24 +717,21 @@ func (s *wire) writeGatewayJSON(v any) error {
 const (
 	// RTP fixed headers are 12 bytes before CSRC or extension data.
 	// https://www.rfc-editor.org/rfc/rfc3550.html#section-5.1
-	rtpHeaderSize = 12
+	rtpHeaderSize, rtpPayloadTypeOpus, rtpNonceSuffixSize = 12, 0x78, 4
 	// Discord voice Opus packets use RTP payload type 120 (0x78).
 	// https://docs.discord.com/developers/topics/voice-connections#transport-encryption-and-sending-voice
-	rtpPayloadTypeOpus = 0x78
 	// Discord RTP-size AEAD modes append a 32-bit nonce suffix to each encrypted RTP payload.
 	// https://docs.discord.com/developers/topics/voice-connections#transport-encryption-modes
-	rtpNonceSuffixSize = 4
 	// Discord voice sends Opus frames at the 20 ms RTP audio cadence.
 	// https://docs.discord.com/developers/topics/voice-connections#voice-data-interpolation
 	rtpPacketInterval = 20 * time.Millisecond
 	// Opus audio is encoded at 48 kHz, so one 20 ms frame advances the RTP timestamp by 960 samples.
 	// https://docs.discord.com/developers/topics/voice-connections#transport-encryption-and-sending-voice
-	rtpTimestampStep = 960
+	rtpTimestampStep, udpPacketBufferSize = 960, 1500
 	// Discord UDP keepalives are sent every 5 seconds using little-endian nonces.
 	// https://docs.discord.com/developers/topics/voice-connections#heartbeating
 	udpKeepAliveInterval = 5 * time.Second
 	// udpPacketBufferSize is an Ethernet MTU-sized scratch buffer for Discord voice UDP reads.
-	udpPacketBufferSize = 1500
 )
 
 type rtpEncryptionMode string
@@ -776,9 +740,8 @@ type rtpEncryptionMode string
 // https://docs.discord.com/developers/topics/voice-connections#transport-encryption-modes
 const (
 	// AES-256-GCM RTP-size is Discord's preferred available mode when supported.
-	rtpEncryptionModeAES256GCMRTPSize rtpEncryptionMode = "aead_aes256_gcm_rtpsize"
+	rtpEncryptionModeAES256GCMRTPSize, rtpEncryptionModeXChaCha20Poly1305RTPSize rtpEncryptionMode = "aead_aes256_gcm_rtpsize", "aead_xchacha20_poly1305_rtpsize"
 	// XChaCha20-Poly1305 RTP-size is the required available mode for voice gateway compatibility.
-	rtpEncryptionModeXChaCha20Poly1305RTPSize rtpEncryptionMode = "aead_xchacha20_poly1305_rtpsize"
 )
 
 type voiceConnection struct {
@@ -788,49 +751,27 @@ type voiceConnection struct {
 	dead   chan struct{}
 	err    error
 
-	guildID   string
-	channelID string
+	guildID, channelID string
 
 	opusSend chan []byte
 	opusRecv chan *opusPacket
 
-	session   *wire
-	wsConn    *websocket.Conn
-	udpConn   *net.UDPConn
-	userID    string
-	deaf      bool
-	mute      bool
-	speaking  bool
-	ready     chan struct{}
-	dave      *daveSession
-	seqAck    uint16
-	ssrc      uint32
-	mode      rtpEncryptionMode
-	secret    [32]byte
-	sequence  uint16
-	timestamp uint32
-	nonce     uint32
-	ssrcUsers map[uint32]string
+	session                *wire
+	wsConn                 *websocket.Conn
+	udpConn                *net.UDPConn
+	userID                 string
+	deaf, mute, speaking   bool
+	ready                  chan struct{}
+	dave                   *daveSession
+	seqAck, sequence       uint16
+	ssrc, timestamp, nonce uint32
+	mode                   rtpEncryptionMode
+	secret                 [32]byte
+	ssrcUsers              map[uint32]string
 }
 
 func newVoiceConnection(s *wire, guildID, channelID string, mute, deaf bool) *voiceConnection {
-	return &voiceConnection{
-		cond:      sync.NewCond(&sync.Mutex{}),
-		status:    voiceConnectionStatusNew,
-		dead:      make(chan struct{}),
-		guildID:   guildID,
-		channelID: channelID,
-
-		session: s,
-		mute:    mute,
-		deaf:    deaf,
-
-		opusSend: make(chan []byte),
-		opusRecv: make(chan *opusPacket),
-
-		ready:     make(chan struct{}),
-		ssrcUsers: map[uint32]string{},
-	}
+	return &voiceConnection{cond: sync.NewCond(&sync.Mutex{}), status: voiceConnectionStatusNew, dead: make(chan struct{}), guildID: guildID, channelID: channelID, session: s, mute: mute, deaf: deaf, opusSend: make(chan []byte), opusRecv: make(chan *opusPacket), ready: make(chan struct{}), ssrcUsers: map[uint32]string{}}
 }
 
 func (v *voiceConnection) validate() error {
@@ -1730,108 +1671,81 @@ func (v *voiceConnection) die(err error) {
 const (
 	// DAVE MLS External Sender Package carries the MLS external sender extension material.
 	// https://daveprotocol.com/#dave_mls_external_sender_package-25
-	daveMlsExternalSenderOp = 25
+	daveMlsExternalSenderOp, daveMlsKeyPackageOp, daveMlsProposalsOp, daveMlsCommitWelcomeOp, daveMlsAnnounceCommitOp, daveMlsWelcomeOp = 25, 26, 27, 28, 29, 30
 	// DAVE MLS Key Package sends this client's raw MLS KeyPackage bytes.
 	// https://daveprotocol.com/#dave_mls_key_package-26
-	daveMlsKeyPackageOp = 26
 	// DAVE MLS Proposals carries append/revoke proposal operations.
 	// https://daveprotocol.com/#dave_mls_proposals-27
-	daveMlsProposalsOp = 27
 	// DAVE MLS Commit Welcome sends the generated MLS Commit and optional Welcome.
 	// https://daveprotocol.com/#dave_mls_commit_welcome-28
-	daveMlsCommitWelcomeOp = 28
 	// DAVE MLS Announce Commit Transition carries an accepted commit transition.
 	// https://daveprotocol.com/#dave_mls_announce_commit_transition-29
-	daveMlsAnnounceCommitOp = 29
 	// DAVE MLS Welcome carries Welcome data for joining an MLS group.
 	// https://daveprotocol.com/#dave_mls_welcome-30
-	daveMlsWelcomeOp = 30
 
 	// MLS protocol version 1.0.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-17.1
-	mlsVersion10 = 0x0001
+	mlsVersion10, mlsWireFormatPublic, mlsCredentialTypeBasic, mlsProposalAdd = 0x0001, 0x0001, 0x0001, 0x0001
 	// PublicMessage wire format.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-6
-	mlsWireFormatPublic = 0x0001
 	// Ratchet Tree extension type.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-17.4
-	mlsExtensionRatchetTree = 0x0002
+	mlsExtensionRatchetTree, mlsCipherSuiteDAVEV1, mlsSenderExternal, mlsContentTypeProposal, mlsProposalOrRefRef = 0x0002, 0x0002, 0x02, 0x02, 0x02
 	// External Senders extension type.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-17.4
 	mlsExtensionExternalSend = 0x0005
 	// DAVE v1 uses MLS_128_DHKEMP256_AES128GCM_SHA256_P256.
 	// https://daveprotocol.com/#cryptographic-specification
-	mlsCipherSuiteDAVEV1 = 0x0002
 	// Basic credential type.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-17.5
-	mlsCredentialTypeBasic = 0x0001
 	// Member sender type.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-6.1
-	mlsSenderMember = 0x01
+	mlsSenderMember, mlsContentTypeCommit = 0x01, 0x03
 	// External sender type.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-6.1
-	mlsSenderExternal = 0x02
 	// Proposal content type.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-6.1
-	mlsContentTypeProposal = 0x02
 	// Commit content type.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-6.1
-	mlsContentTypeCommit = 0x03
 	// Add proposal type.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-17.3
-	mlsProposalAdd = 0x0001
 	// Remove proposal type.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-17.3
 	mlsProposalRemove = 0x0003
 	// ProposalOrRef reference variant.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-12.4.1
-	mlsProposalOrRefRef = 0x02
 	// MLS labeled signatures and KDF labels use this fixed prefix.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-5.1.2
-	mlsSignLabelPrefix = "MLS 1.0 "
+	mlsSignLabelPrefix, mlsProposalRefLabel, mlsKeyPackageRefLabel, mlsLeafNodeTBSLabel, mlsKeyPackageTBSLabel, mlsFramedContentTBSLabel, mlsGroupInfoTBSLabel, daveMediaExporterLabel = "MLS 1.0 ", "Proposal Reference", "KeyPackage Reference", "LeafNodeTBS", "KeyPackageTBS", "FramedContentTBS", "GroupInfoTBS", "Discord Secure Frames v0"
 	// Proposal reference hash label.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-12.4.1
-	mlsProposalRefLabel = "Proposal Reference"
 	// KeyPackage reference hash label.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-10
-	mlsKeyPackageRefLabel = "KeyPackage Reference"
 	// LeafNode signature label.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-7.2
-	mlsLeafNodeTBSLabel = "LeafNodeTBS"
 	// KeyPackage signature label.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-10
-	mlsKeyPackageTBSLabel = "KeyPackageTBS"
 	// FramedContent signature label.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-6.1
-	mlsFramedContentTBSLabel = "FramedContentTBS"
 	// GroupInfo signature label.
 	// https://www.rfc-editor.org/rfc/rfc9420.html#section-11.1
-	mlsGroupInfoTBSLabel = "GroupInfoTBS"
 	// DAVE sender media keys are exported from MLS with this label.
 	// https://daveprotocol.com/#sender-key-derivation
-	daveMediaExporterLabel = "Discord Secure Frames v0"
 	// P-256 uncompressed public keys are 65 bytes in TLS/MLS wire form.
 	// https://www.rfc-editor.org/rfc/rfc8446.html#section-4.2.8.2
-	mlsP256PublicKeyWireSize = 65
+	mlsP256PublicKeyWireSize, mlsHashSize, daveMediaKeySize, daveMediaNonceSize, daveMediaTagSize, daveMagicMarker = 65, sha256.Size, 16, 12, 8, 0xfafa
 	// DAVE v1's MLS ciphersuite uses SHA-256.
-	mlsHashSize = sha256.Size
 	// DAVE media encryption uses 128-bit AES-GCM sender keys.
 	// https://daveprotocol.com/#sender-key-derivation
-	daveMediaKeySize = 16
 	// DAVE media AES-GCM nonces are 96 bits.
 	// https://daveprotocol.com/#cryptographic-specification
-	daveMediaNonceSize = 12
 	// DAVE media frames truncate AES-GCM tags to 8 bytes.
 	// https://daveprotocol.com/#media-encryption
-	daveMediaTagSize = 8
 	// DAVE media supplemental data ends with the 0xfafa magic marker.
 	// https://daveprotocol.com/#media-encryption
-	daveMagicMarker = 0xfafa
 	// Discord's Opus silence frame is f8 ff fe and is passed through outside DAVE media encryption.
 	// https://docs.discord.com/developers/topics/voice-connections#voice-data-interpolation
-	daveOpusSilence0 = 0xf8
-	daveOpusSilence1 = 0xff
-	daveOpusSilence2 = 0xfe
+	daveOpusSilence0, daveOpusSilence1, daveOpusSilence2 = 0xf8, 0xff, 0xfe
 )
 
 type mlsLeafNodeSource byte
@@ -1840,11 +1754,9 @@ type mlsLeafNodeSource byte
 // https://www.rfc-editor.org/rfc/rfc9420.html#section-7.3
 const (
 	// KeyPackage means the leaf node is used in a KeyPackage and is followed by lifetime fields.
-	mlsLeafNodeSourceKeyPackage mlsLeafNodeSource = 1
+	mlsLeafNodeSourceKeyPackage, mlsLeafNodeSourceUpdate, mlsLeafNodeSourceCommit mlsLeafNodeSource = 1, 2, 3
 	// Update means the leaf node is used in an Update proposal.
-	mlsLeafNodeSourceUpdate mlsLeafNodeSource = 2
 	// Commit means the leaf node is used in a Commit path and is followed by the parent hash.
-	mlsLeafNodeSourceCommit mlsLeafNodeSource = 3
 )
 
 type daveProposalsOperation byte
@@ -1853,25 +1765,16 @@ type daveProposalsOperation byte
 // https://daveprotocol.com/#proposal-handling
 const (
 	// Append carries MLS proposal messages to add to the local pending proposal set.
-	daveProposalsAppend daveProposalsOperation = 0
+	daveProposalsAppend, daveProposalsRevoke daveProposalsOperation = 0, 1
 	// Revoke carries proposal references to remove from the local pending proposal set.
-	daveProposalsRevoke daveProposalsOperation = 1
 )
 
 type daveSession struct {
-	userID         string
-	channelID      string
-	initKey        *ecdh.PrivateKey
-	leafKey        *ecdh.PrivateKey
-	signingKey     *ecdsa.PrivateKey
-	externalSender []byte
-	selfLeafNode   []byte
-	keyPackage     []byte
-	epochSecret    []byte
-	mediaSecret    []byte
-	initSecret     []byte
-	interimHash    []byte
-	mediaNonce     uint32
+	userID, channelID                                                                           string
+	initKey, leafKey                                                                            *ecdh.PrivateKey
+	signingKey                                                                                  *ecdsa.PrivateKey
+	externalSender, selfLeafNode, keyPackage, epochSecret, mediaSecret, initSecret, interimHash []byte
+	mediaNonce                                                                                  uint32
 }
 
 func newDaveSession(userID, channelID string) (*daveSession, error) {
@@ -1951,12 +1854,8 @@ func (d *daveSession) parseAppendedProposals(vector []byte) ([]byte, error) {
 }
 
 type daveProposalMessageInfo struct {
-	proposalType int
-	groupID      []byte
-	contentAuth  []byte
-	keyPackage   []byte
-	initKey      []byte
-	leafNode     []byte
+	proposalType                                        int
+	groupID, contentAuth, keyPackage, initKey, leafNode []byte
 }
 
 func (d *daveSession) keyPackageMessage() ([]byte, error) {
@@ -2186,13 +2085,7 @@ func (d *daveSession) commitAddProposal(proposal *daveProposalMessageInfo, propo
 	return slices.Concat(commitMessage, welcome), nil
 }
 
-type daveEpochSecrets struct {
-	joinerSecret    []byte
-	welcomeSecret   []byte
-	epochSecret     []byte
-	initSecret      []byte
-	confirmationKey []byte
-}
+type daveEpochSecrets struct{ joinerSecret, welcomeSecret, epochSecret, initSecret, confirmationKey []byte }
 
 func (d *daveSession) nextEpochSecrets(groupContext []byte) (daveEpochSecrets, error) {
 	zero := make([]byte, mlsHashSize)
@@ -2591,9 +2484,7 @@ type daveMediaFrame struct {
 	nonce                          uint32
 }
 
-type daveMediaRange struct {
-	offset, size int
-}
+type daveMediaRange struct{ offset, size int }
 
 func parseDaveMediaFrame(frame []byte) (daveMediaFrame, error) {
 	if len(frame) < daveMediaTagSize+3 {
@@ -2980,9 +2871,7 @@ type mlsReader struct {
 	off  int
 }
 
-func (r *mlsReader) remaining() int {
-	return len(r.data) - r.off
-}
+func (r *mlsReader) remaining() int { return len(r.data) - r.off }
 
 func (r *mlsReader) readUint16() (int, error) {
 	if r.remaining() < 2 {

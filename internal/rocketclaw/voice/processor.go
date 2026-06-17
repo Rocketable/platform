@@ -32,11 +32,9 @@ type Processor struct {
 }
 
 type accumulator struct {
-	startedAt   time.Time
-	lastAudioAt time.Time
-	sessionID   string
-	speakerID   string
-	packets     []events.AudioChunk
+	startedAt, lastAudioAt time.Time
+	sessionID, speakerID   string
+	packets                []events.AudioChunk
 
 	mu     sync.Mutex
 	closed bool
