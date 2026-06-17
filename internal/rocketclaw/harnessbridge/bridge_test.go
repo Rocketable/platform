@@ -540,12 +540,19 @@ func TestRocketCodeConfigEnablesDiagnosticsForThinkingUpdates(t *testing.T) {
 
 	assert.True(t, cfg.Diagnostics)
 	assert.True(t, cfg.ExperimentalStrongerSkills)
+	assert.False(t, cfg.AutoApprovePermissions)
 	assert.Equal(t, 16, cfg.ParallelToolCalls)
 	assert.Equal(t, rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, cfg.ExpandPromptShellCommands)
 	assert.Contains(t, toolNames, scheduleMessageToolName)
 	assert.Contains(t, toolNames, resetScheduledMessagesToolName)
 	assert.Contains(t, toolNames, attachFilesToolName)
 	assert.Equal(t, map[string]string{"A": "B"}, bridge.rocketcodeConfig(t.TempDir(), map[string]string{"A": "B"}).ShellEnv)
+}
+
+func TestRocketCodeConfigPassesAutoApprovePermissions(t *testing.T) {
+	bridge := &Bridge{runtime: &config.Config{RocketCode: config.RocketCodeConfig{AutoApprovePermissions: true}}, config: Config{ConversationID: events.MainConversationID(), Agent: "main", RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}}
+
+	assert.True(t, bridge.rocketcodeConfig(t.TempDir(), nil).AutoApprovePermissions)
 }
 
 func TestAppendOverlayPromptToAgentIncludesConfiguredOverlayPrompt(t *testing.T) {

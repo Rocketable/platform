@@ -86,6 +86,24 @@ func TestLoadPreservesAnthropicConfig(t *testing.T) {
 	assert.Equal(t, "https://anthropic.example/v1", cfg.Anthropic.APIBaseURL)
 }
 
+func TestLoadPreservesRocketCodeConfig(t *testing.T) {
+	cfg := loadTestConfig(t, `{
+	  "workspace": ".",
+	  "openai": {
+	    "api_key": "test-key"
+	  },
+	  "rocketcode": {
+	    "auto_approve_permissions": true
+	  },
+	  "web_ui": {
+	    "enabled": true,
+	    "listen_addr": "127.0.0.1:8766"
+	  }
+	}`)
+
+	assert.True(t, cfg.RocketCode.AutoApprovePermissions)
+}
+
 func TestLoadNormalizesOverlays(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",

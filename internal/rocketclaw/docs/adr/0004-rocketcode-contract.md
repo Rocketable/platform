@@ -24,7 +24,7 @@ Several rocketclaw capabilities exist only because of precise RocketCode configu
 | Persistent bridge | `internal/rocketclaw/harnessbridge/bridge.go`  | Main, thread, Slack, Discord text, browser, Discord voice, scheduled, and external MCP conversation turns. | `InputPrompts: false`  |
 | Raw run           | `internal/rocketclaw/harnessbridge/raw_run.go` | Cron and one-off cron background turns.                                                | `InputPrompts: true`   |
 
-Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell expansion. Persistent bridge input text remains literal. Raw input text expands because cron bodies are trusted workspace files. Both paths construct RocketCode with a provider registry that can route provider-qualified OpenAI and Anthropic model requests.
+Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell expansion. Persistent bridge input text remains literal. Raw input text expands because cron bodies are trusted workspace files. Both paths construct RocketCode with a provider registry that can route provider-qualified OpenAI and Anthropic model requests. Both paths pass `rocketcode.auto_approve_permissions` through to RocketCode's `AutoApprovePermissions` flag.
 
 ### Provider Selection
 
@@ -86,6 +86,13 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - The guardrail response contract is strict JSON with `approved` boolean and `reason` string fields. Invalid or missing guardrail JSON fails closed.
 - The guardrail receives tools only through its own `permission` frontmatter under existing RocketCode permission semantics and uses its own prompt, model, reasoning effort, verbosity, tools, and skills.
 - Guardrail execution is not recursively guarded and is not surfaced as parent progress or subagent diagnostics; only rejection reasons are bubbled through the task result.
+
+### Automatic Permission Review
+
+- RocketClaw does not implement its own automatic permission reviewer. It only passes the loaded `rocketcode.auto_approve_permissions` config value into RocketCode for both persistent bridge and raw-run paths.
+- When `rocketcode.auto_approve_permissions` is false or omitted, RocketCode `auto` permission rules fail closed according to RocketCode behavior.
+- When `rocketcode.auto_approve_permissions` is true, RocketCode owns reviewer resolution, embedded guardian behavior, custom `auto(name)` reviewer execution, reserved reviewer-name validation, and fail-closed review semantics.
+- The RocketClaw linter, agent graph, and goal-check script validation continue to use deterministic allow/deny permission evaluation unless a separate ADR explicitly expands them to model automatic review outcomes.
 
 ### Tools Injected By RocketClaw
 
@@ -174,3 +181,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-14: Removed `paused` from the active goal-update tool and goal-steering contract.
 - 2026-06-14: Recast goal-loop steering and attachment normalization around the generic text connector contract.
 - 2026-06-15: Updated RocketCode embedding contracts for goal-loop `progress` updates and `Progress summary:` text mirrored into `rocketclaw_update_goal.note`.
+- 2026-06-17: Added RocketClaw embedding contract for passing `rocketcode.auto_approve_permissions` into RocketCode automatic permission review.

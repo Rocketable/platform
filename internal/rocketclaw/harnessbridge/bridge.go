@@ -1409,7 +1409,7 @@ func (b *Bridge) rocketcodeConfig(shellOutputDir string, shellEnv map[string]str
 
 	tools = append(tools, customTools...)
 
-	return rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, CustomTools: tools, ShellEnv: shellEnv}
+	return rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: b.runtime.RocketCode.AutoApprovePermissions, CustomTools: tools, ShellEnv: shellEnv}
 }
 
 func appendOverlayPromptToAgent(agents rocketcode.Agents, agentName string, cfg *config.Config) {

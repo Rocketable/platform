@@ -19,7 +19,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 
 | File or directory | Contract |
 | --- | --- |
-| `rocketclaw.json` | Main runtime config. Relative `workspace` resolves relative to the config file. At least one of Discord voice, Discord text, Slack, external MCP, or web UI must be enabled. Slack and Discord text are mutually exclusive primary text connectors. Optional `overlays` entries name git repositories whose `agents/`, `skills/`, `cron/`, and `scripts/` trees are applied during startup. Optional `anthropic` entries configure Anthropic-backed RocketCode requests. |
+| `rocketclaw.json` | Main runtime config. Relative `workspace` resolves relative to the config file. At least one of Discord voice, Discord text, Slack, external MCP, or web UI must be enabled. Slack and Discord text are mutually exclusive primary text connectors. Optional `overlays` entries name git repositories whose `agents/`, `skills/`, `cron/`, and `scripts/` trees are applied during startup. Optional `anthropic` entries configure Anthropic-backed RocketCode requests. Optional `rocketcode` entries configure RocketCode embedding flags. |
 | `femtoclaw.json` | Legacy runtime config. If present, startup and operational commands load it instead of `rocketclaw.json` and use `.femtoclaw/` as the generated runtime directory. It supports the same optional `overlays` entries as `rocketclaw.json`. |
 | `rocketclaw.users.json` | Optional external MCP Basic Auth users next to `rocketclaw.json`. If present, it must be a JSON object and file mode `0600`. Missing means MCP runs without auth. |
 | `AGENTS.md` | Workspace instruction file generated when missing. Loaded literally; no shell interpolation. |
@@ -44,6 +44,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - Empty `minimum_wait_after_human_interaction` means `0s`; setup writes `5m` explicitly.
 - Empty or omitted `thread_agents` uses the baseline `:thread:` and `:twisted_rightward_arrows:` routes; a non-empty custom map replaces the baseline.
 - Empty or omitted `overlays` means no intermediate git overlays. Non-empty entries are applied in array order after embedded assets and before local workspace overlays.
+- Empty or omitted `rocketcode.auto_approve_permissions` defaults to `false`. When true, RocketClaw enables RocketCode automatic permission review for `auto` permission rules in both persistent bridge and raw-run construction paths.
 - `discord_text.enabled` requires `discord_text.token`, `discord_text.channel_id`, and `discord_text.human_user_id`.
 - `slack.enabled` and `discord_text.enabled` must not both be true.
 - The enabled primary text connector may define social-mode channel mappings. The canonical mapping shape is one connector channel, one agent, and non-empty `allowed_user_ids`.
@@ -140,3 +141,4 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-16: Specified that startup removes generated workspace script symlinks before local workspace overlays are scanned, then recreates current runtime script symlinks after effective runtime assets are built.
 - 2026-06-16: Updated social-mode channel config migration to emit canonical `agents` lists and normalize legacy scalar channel `agent` entries.
 - 2026-06-16: Ended temporary config migration compatibility for legacy social-mode channel mappings; config loading now requires canonical `channels[].agents` and per-channel `allowed_user_ids`.
+- 2026-06-17: Added optional `rocketcode.auto_approve_permissions` runtime config for enabling RocketCode automatic permission review in persistent and raw-run paths.
