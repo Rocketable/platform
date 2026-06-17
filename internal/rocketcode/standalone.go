@@ -60,6 +60,7 @@ func StandaloneConfigFromEnv() (Config, error) {
 
 	config.Diagnostics = os.Getenv("ROCKETCODE_DIAG") != ""
 	config.ExperimentalStrongerSkills = os.Getenv("ROCKETCODE_EXPERIMENTAL_STRONGER_SKILLS") != ""
+	config.AutoApprovePermissions = os.Getenv("ROCKETCODE_AUTO_APPROVE_PERMISSIONS") != ""
 
 	expansion := strings.TrimSpace(os.Getenv("ROCKETCODE_EXPAND_PROMPT_SHELL_COMMANDS"))
 	switch {

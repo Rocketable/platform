@@ -70,7 +70,8 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 - Tool visibility is permission-gated. Deny-by-default must not become permissive by accident.
 - Later matching permission rules overwrite earlier matching rules.
 - `apply_patch`, `write`, and `patch` permission names normalize to the `edit` permission bucket.
-- `ask`, `external_directory`, and `doom_loop` permission names are unsupported.
+- `auto` is a supported permission action that requires `Config.AutoApprovePermissions` and routes a matching tool call through automatic permission review before execution. When automatic permission approval is disabled, matching `auto` rules fail closed as model-visible tool failures. `ask`, `external_directory`, and `doom_loop` permission names are unsupported.
+- Automatic permission review is fail-closed: reviewer denial, invalid reviewer JSON, model errors, tool errors, context cancellation, timeout, missing reviewer, and explicit rejection all prevent tool execution and are returned as model-visible tool failures rather than process-fatal errors.
 - `edit` allow grants read visibility when no explicit read rule matched.
 - Permission subjects support wildcard matching with `*` and `?`, slash normalization, and `~` or `$HOME` expansion.
 - `.env` and `.env.*` basenames are blocked, while `.env.example` remains allowed.
@@ -112,3 +113,4 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 - 2026-06-11: Initial accepted snapshot.
 - 2026-06-11: Added linter-disable guardrail for behavior-preserving refactors.
 - 2026-06-11: Added provider-routing replay and turn-loop contracts for OpenAI and Anthropic model requests.
+- 2026-06-17: Added fail-closed `auto` permission action semantics gated by `Config.AutoApprovePermissions`.

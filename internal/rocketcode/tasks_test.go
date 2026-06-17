@@ -399,15 +399,15 @@ func TestBashPermissionGrantsOnlyShellOutputRead(t *testing.T) {
 		return []string{rootedPathSubject(readToolPath(params))}, nil
 	})
 
-	decision, denied, err := loop.permissionDecision("read", &readTool, json.RawMessage(`{"filePath":".tmp/shell-outputs/rocketcode-bash-123"}`))
+	decision, err := loop.permissionDecision("read", &readTool, json.RawMessage(`{"filePath":".tmp/shell-outputs/rocketcode-bash-123"}`))
 	require.NoError(t, err)
-	require.False(t, denied, "saved bash output should be readable: %#v", decision)
+	require.False(t, decision.denied, "saved bash output should be readable: %#v", decision)
 
-	decision, denied, err = loop.permissionDecision("read", &readTool, json.RawMessage(`{"filePath":".tmp/shell-outputs/tmp/script-temp"}`))
+	decision, err = loop.permissionDecision("read", &readTool, json.RawMessage(`{"filePath":".tmp/shell-outputs/tmp/script-temp"}`))
 	require.NoError(t, err)
-	require.True(t, denied)
-	require.Equal(t, "read", decision.Permission)
-	require.Equal(t, ".tmp/shell-outputs/tmp/script-temp", decision.Subject)
+	require.True(t, decision.denied)
+	require.Contains(t, decision.message, `permission "read"`)
+	require.Contains(t, decision.message, `subject ".tmp/shell-outputs/tmp/script-temp"`)
 }
 
 func TestExplicitReadDenyOverridesBashOutputReadGrant(t *testing.T) {
@@ -427,11 +427,10 @@ func TestExplicitReadDenyOverridesBashOutputReadGrant(t *testing.T) {
 		return []string{rootedPathSubject(readToolPath(params))}, nil
 	})
 
-	decision, denied, err := loop.permissionDecision("read", &readTool, json.RawMessage(`{"filePath":".tmp/shell-outputs/rocketcode-bash-123"}`))
+	decision, err := loop.permissionDecision("read", &readTool, json.RawMessage(`{"filePath":".tmp/shell-outputs/rocketcode-bash-123"}`))
 	require.NoError(t, err)
-	require.True(t, denied)
-	require.True(t, decision.Matched)
-	require.Equal(t, permissionDeny, decision.Action)
+	require.True(t, decision.denied)
+	require.Contains(t, decision.message, `=> deny`)
 }
 
 func TestTaskToolDescriptionFiltersDeniedSubagents(t *testing.T) {

@@ -30,6 +30,7 @@ type Config struct {
 	ParallelToolCalls          int
 	ShellOutputDir             string
 	SandboxedBash              bool
+	AutoApprovePermissions     bool
 	CustomTools                []Tool
 	ShellEnv                   map[string]string
 }
@@ -180,6 +181,10 @@ func NewWithProviders(
 		return nil, errors.New("agents are required")
 	}
 
+	if err := validateAutoPermissionReviewers(config.AutoApprovePermissions, agents); err != nil {
+		return nil, err
+	}
+
 	if skills.Items == nil {
 		return nil, errors.New("skills are required")
 	}
@@ -273,26 +278,29 @@ func NewWithProviders(
 		skills:                     skills,
 		baseTools:                  baseTools,
 		shellOutput:                shellOutput,
+		autoApprovePermissions:     config.AutoApprovePermissions,
 	}
 	runtimeSystemPrompt := composeSystemPromptWithSkills(systemPrompt, skills, agentForTools)
 
 	looper := &looper{
-		agent:              activeAgent,
-		Client:             openAIClient,
-		AnthropicClient:    providers.Anthropic,
-		SystemPrompt:       runtimeSystemPrompt,
-		Model:              modelRef.apiModel,
-		DisplayModel:       modelRef.display(),
-		ReasoningEffort:    reasoningEffort,
-		Verbosity:          activeAgent.Verbosity,
-		CompactThreshold:   config.CompactThreshold,
-		CompactionSteering: config.CompactionSteering,
-		ParallelToolCalls:  config.ParallelToolCalls,
-		Permissions:        activeAgent.Permission,
-		Tools:              factory.toolsFor(agentForTools),
-		Diagnostics:        config.Diagnostics,
-		expandInputPrompts: config.ExpandPromptShellCommands.InputPrompts,
-		promptExpansion:    promptExpansion,
+		agent:                  activeAgent,
+		Client:                 openAIClient,
+		AnthropicClient:        providers.Anthropic,
+		SystemPrompt:           runtimeSystemPrompt,
+		Model:                  modelRef.apiModel,
+		DisplayModel:           modelRef.display(),
+		ReasoningEffort:        reasoningEffort,
+		Verbosity:              activeAgent.Verbosity,
+		CompactThreshold:       config.CompactThreshold,
+		CompactionSteering:     config.CompactionSteering,
+		ParallelToolCalls:      config.ParallelToolCalls,
+		Permissions:            activeAgent.Permission,
+		Tools:                  factory.toolsFor(agentForTools),
+		Diagnostics:            config.Diagnostics,
+		AutoApprovePermissions: config.AutoApprovePermissions,
+		PermissionReviewer:     factory,
+		expandInputPrompts:     config.ExpandPromptShellCommands.InputPrompts,
+		promptExpansion:        promptExpansion,
 	}
 
 	if config.Diagnostics {
@@ -302,6 +310,37 @@ func NewWithProviders(
 	}
 
 	return looper, nil
+}
+
+func validateAutoPermissionReviewers(enabled bool, agents Agents) error {
+	if !enabled {
+		return nil
+	}
+
+	if _, ok := agents.Items[guardianAgentName]; ok {
+		return fmt.Errorf("agent name %q is reserved when auto permission approval is enabled", guardianAgentName)
+	}
+
+	for agentName := range agents.Items {
+		agent := agents.Items[agentName]
+		for _, bucket := range agent.Permission.Buckets {
+			for _, rule := range bucket.Rules {
+				if rule.Action != permissionAuto || rule.Reviewer == "" {
+					continue
+				}
+
+				if rule.Reviewer == guardianAgentName {
+					return fmt.Errorf("agent %q permission %q rule %q references reserved reviewer %q; use bare auto for the embedded guardian", agentName, bucket.Name, rule.Pattern, guardianAgentName)
+				}
+
+				if _, ok := agents.Items[rule.Reviewer]; !ok {
+					return fmt.Errorf("agent %q permission %q rule %q references missing reviewer agent %q", agentName, bucket.Name, rule.Pattern, rule.Reviewer)
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 func loadRootInstructions(root *os.Root) (string, error) {

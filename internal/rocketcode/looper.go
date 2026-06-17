@@ -61,24 +61,66 @@ type toolCallMetadata struct {
 
 // looper runs conversational turns against the configured model and tools.
 type looper struct {
-	agent              Agent
-	Client             responsesAPI
-	AnthropicClient    *anthropic.Client
-	SystemPrompt       string
-	Model              shared.ResponsesModel
-	DisplayModel       string
-	ReasoningEffort    shared.ReasoningEffort
-	Verbosity          string
-	CompactThreshold   int64
-	CompactionSteering string
-	ParallelToolCalls  int
-	ResponseFormat     responses.ResponseFormatTextConfigUnionParam
-	Permissions        PermissionSet
-	Tools              map[string]looperTool
-	RewriteHistory     func([]responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam
-	Diagnostics        bool
-	expandInputPrompts bool
-	promptExpansion    promptExpansionEnvironment
+	agent                  Agent
+	Client                 responsesAPI
+	AnthropicClient        *anthropic.Client
+	SystemPrompt           string
+	Model                  shared.ResponsesModel
+	DisplayModel           string
+	ReasoningEffort        shared.ReasoningEffort
+	Verbosity              string
+	CompactThreshold       int64
+	CompactionSteering     string
+	ParallelToolCalls      int
+	ResponseFormat         responses.ResponseFormatTextConfigUnionParam
+	Permissions            PermissionSet
+	Tools                  map[string]looperTool
+	RewriteHistory         func([]responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam
+	Diagnostics            bool
+	AutoApprovePermissions bool
+	PermissionReviewer     permissionReviewer
+	InPermissionReview     bool
+	expandInputPrompts     bool
+	promptExpansion        promptExpansionEnvironment
+}
+
+type permissionReviewer interface {
+	reviewPermission(context.Context, *permissionReviewRequest) permissionReviewDecision
+}
+
+type inertPermissionReviewer struct{}
+
+func (inertPermissionReviewer) reviewPermission(context.Context, *permissionReviewRequest) permissionReviewDecision {
+	return permissionReviewDecision{Approved: false, Reason: "automatic permission reviewer is unavailable"}
+}
+
+type toolPermissionDecision struct {
+	denied  bool
+	message string
+	review  *permissionReviewRequest
+}
+
+type permissionReviewSubject struct {
+	Subject     string `json:"subject"`
+	RulePattern string `json:"rule_pattern"`
+}
+
+type permissionReviewRequest struct {
+	ActiveAgent      string                    `json:"active_agent"`
+	ToolName         string                    `json:"tool_name"`
+	Permission       string                    `json:"permission"`
+	RawArguments     string                    `json:"raw_arguments"`
+	Subjects         []string                  `json:"subjects"`
+	AutoSubjects     []permissionReviewSubject `json:"auto_subjects"`
+	Reviewer         string                    `json:"reviewer"`
+	ReviewerEmbedded bool                      `json:"reviewer_embedded"`
+}
+
+type permissionReviewDecision struct {
+	Approved      bool   `json:"approved"`
+	Risk          string `json:"risk"`
+	Authorization string `json:"authorization"`
+	Reason        string `json:"reason"`
 }
 
 // Runtime is the concrete RocketCode loop runtime returned by New.
@@ -741,19 +783,34 @@ func (l *looper) dispatchToolCalls(
 			continue
 		}
 
-		if decision, denied, err := l.permissionDecision(item.Name, &tool, args); err != nil {
+		decision, err := l.permissionDecision(item.Name, &tool, args)
+		if err != nil {
 			result := toolCallFailureResult(item.Name, fmt.Errorf("check permission: %w", err))
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result.Output})
 			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, result), Result: result, ReplayInput: nil})
 
 			continue
-		} else if denied {
-			result := formatPermissionDenied(&decision)
+		}
+
+		if decision.denied {
+			result := decision.message
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
 			toolResult := TextToolResult(result)
 			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
 
 			continue
+		}
+
+		if decision.review != nil {
+			reviewDecision := l.PermissionReviewer.reviewPermission(ctx, decision.review)
+			if !reviewDecision.Approved {
+				result := formatPermissionReviewDenied(reviewDecision)
+				l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
+				toolResult := TextToolResult(result)
+				outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
+
+				continue
+			}
 		}
 
 		calls = append(calls, pendingToolCall{name: item.Name, callID: item.CallID, args: args, tool: tool, outputIndex: len(outputs), subagentIndex: 0, subagentTotal: 0})
@@ -906,7 +963,7 @@ func (d *doomLoopTrap) trapped(name string, args json.RawMessage) bool {
 	return true
 }
 
-func (l *looper) permissionDecision(toolName string, tool *looperTool, args json.RawMessage) (permissionDecision, bool, error) {
+func (l *looper) permissionDecision(toolName string, tool *looperTool, args json.RawMessage) (toolPermissionDecision, error) {
 	permission := tool.Permission
 	if permission == "" {
 		permission = toolName
@@ -919,25 +976,74 @@ func (l *looper) permissionDecision(toolName string, tool *looperTool, args json
 
 		subjects, err = tool.Subjects(args)
 		if err != nil {
-			return permissionDecision{}, false, err
+			return toolPermissionDecision{}, err
 		}
 	}
 
 	if len(subjects) == 0 {
 		decision := permissionDecision{Action: permissionDeny, Bucket: "", Rule: PermissionRule{Pattern: "", Action: ""}, Matched: false, Permission: permission, Subject: ""}
-		return decision, true, nil
+		return toolPermissionDecision{denied: true, message: formatPermissionDenied(&decision)}, nil
 	}
+
+	autoSubjects := []permissionReviewSubject{}
+	reviewer := ""
+	reviewerEmbedded := true
+	reviewerSet := false
 
 	for _, subject := range subjects {
 		decision := l.Permissions.evaluate(permission, subject)
 		if decision.Action == permissionDeny {
-			return decision, true, nil
+			return toolPermissionDecision{denied: true, message: formatPermissionDenied(&decision)}, nil
 		}
+
+		if decision.Action != permissionAuto {
+			continue
+		}
+
+		if l.InPermissionReview {
+			return toolPermissionDecision{denied: true, message: "tool call denied: automatic permission review cannot recursively require automatic approval. Choose a different action."}, nil
+		}
+
+		if !l.AutoApprovePermissions {
+			return toolPermissionDecision{denied: true, message: fmt.Sprintf("tool call denied: permission %q subject %q requires automatic approval, but automatic permission approval is disabled. Choose a different action.", permission, subject)}, nil
+		}
+
+		if !reviewerSet {
+			reviewer = decision.Rule.Reviewer
+			reviewerEmbedded = reviewer == ""
+			reviewerSet = true
+		} else if reviewer != decision.Rule.Reviewer {
+			return toolPermissionDecision{denied: true, message: fmt.Sprintf("tool call denied: permission %q matched multiple automatic reviewers. Choose a different action.", permission)}, nil
+		}
+
+		autoSubjects = append(autoSubjects, permissionReviewSubject{Subject: subject, RulePattern: decision.Rule.Pattern})
 	}
 
-	var decision permissionDecision
+	if len(autoSubjects) == 0 {
+		return toolPermissionDecision{}, nil
+	}
 
-	return decision, false, nil
+	activeAgent := l.agent.Name
+
+	return toolPermissionDecision{review: &permissionReviewRequest{
+		ActiveAgent:      activeAgent,
+		ToolName:         toolName,
+		Permission:       permission,
+		RawArguments:     canonicalToolArguments(args),
+		Subjects:         subjects,
+		AutoSubjects:     autoSubjects,
+		Reviewer:         reviewer,
+		ReviewerEmbedded: reviewerEmbedded,
+	}}, nil
+}
+
+func formatPermissionReviewDenied(decision permissionReviewDecision) string {
+	reason := strings.TrimSpace(decision.Reason)
+	if reason == "" {
+		reason = "automatic permission review denied or failed"
+	}
+
+	return "tool call denied: automatic permission review rejected the action: " + reason + ". Choose a different action."
 }
 
 func formatPermissionDenied(decision *permissionDecision) string {

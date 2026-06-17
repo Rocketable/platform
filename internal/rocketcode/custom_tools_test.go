@@ -352,6 +352,7 @@ func testLooperWithTools(tools map[string]looperTool) *looper {
 	var l looper
 
 	l.Tools = tools
+	l.PermissionReviewer = inertPermissionReviewer{}
 
 	return &l
 }

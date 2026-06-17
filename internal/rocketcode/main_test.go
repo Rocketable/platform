@@ -262,6 +262,68 @@ func TestNewRejectsMissingGuardrailAgent(t *testing.T) {
 	require.EqualError(t, err, `agent "main" references missing guardrail agent "safety"`)
 }
 
+func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	client := openai.NewClient()
+	skills := Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}
+
+	t.Run("disabled allows guardian agent", func(t *testing.T) {
+		config := testConfig(dir)
+		agents := Agents{Items: map[string]Agent{"main": {Name: "main"}, "guardian": {Name: "guardian"}}}
+
+		_, err := New(&client, config, root, agents, skills, "main", nil)
+
+		require.NoError(t, err)
+	})
+
+	t.Run("enabled rejects guardian agent", func(t *testing.T) {
+		config := testConfig(dir)
+		config.AutoApprovePermissions = true
+		agents := Agents{Items: map[string]Agent{"main": {Name: "main"}, "guardian": {Name: "guardian"}}}
+
+		_, err := New(&client, config, root, agents, skills, "main", nil)
+
+		require.EqualError(t, err, `agent name "guardian" is reserved when auto permission approval is enabled`)
+	})
+
+	t.Run("enabled rejects missing custom reviewer", func(t *testing.T) {
+		config := testConfig(dir)
+		config.AutoApprovePermissions = true
+		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(release-guardian)}`)}}}
+
+		_, err := New(&client, config, root, agents, skills, "main", nil)
+
+		require.ErrorContains(t, err, `references missing reviewer agent "release-guardian"`)
+	})
+
+	t.Run("enabled rejects explicit guardian reviewer", func(t *testing.T) {
+		config := testConfig(dir)
+		config.AutoApprovePermissions = true
+		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(guardian)}`)}}}
+
+		_, err := New(&client, config, root, agents, skills, "main", nil)
+
+		require.ErrorContains(t, err, `references reserved reviewer "guardian"`)
+	})
+
+	t.Run("enabled accepts custom reviewer", func(t *testing.T) {
+		config := testConfig(dir)
+		config.AutoApprovePermissions = true
+		agents := Agents{Items: map[string]Agent{
+			"main":             {Name: "main", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(release-guardian)}`)},
+			"release-guardian": {Name: "release-guardian"},
+		}}
+
+		_, err := New(&client, config, root, agents, skills, "main", nil)
+
+		require.NoError(t, err)
+	})
+}
+
 func testConfig(shellOutputDir string) *Config {
-	return &Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 0, ShellOutputDir: shellOutputDir, SandboxedBash: false, CustomTools: nil, ShellEnv: nil}
+	return &Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 0, ShellOutputDir: shellOutputDir, SandboxedBash: false, AutoApprovePermissions: false, CustomTools: nil, ShellEnv: nil}
 }

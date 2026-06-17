@@ -58,6 +58,17 @@ type mockSessionStore struct {
 	entries []SessionEntry
 }
 
+type mockPermissionReviewer struct {
+	decision permissionReviewDecision
+	requests []permissionReviewRequest
+}
+
+func (m *mockPermissionReviewer) reviewPermission(_ context.Context, request *permissionReviewRequest) permissionReviewDecision {
+	m.requests = append(m.requests, *request)
+
+	return m.decision
+}
+
 func mockResponses(responseItems ...*responses.Response) *mockResponsesAPI {
 	var mock mockResponsesAPI
 
@@ -87,12 +98,15 @@ func testLooper(client responsesAPI) *looper {
 
 	l.Client = client
 	l.Model = openai.ChatModelGPT5
+	l.PermissionReviewer = inertPermissionReviewer{}
 
 	return &l
 }
 
 func emptyTestLooper() *looper {
 	var l looper
+
+	l.PermissionReviewer = inertPermissionReviewer{}
 
 	return &l
 }
@@ -994,6 +1008,139 @@ func TestLooperDeniesToolCallsInBand(t *testing.T) {
 	require.Equal(t, []ChatResponse{assistantMessage("recovered")}, collectResponses(output))
 	require.Len(t, mock.calls, 2)
 	require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), "tool call denied")
+}
+
+func TestLooperAutoPermissionReview(t *testing.T) {
+	t.Run("disabled denies without executing", func(t *testing.T) {
+		called := false
+		looper := testLooper(mockResponses())
+		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "deploy *", Action: permissionAuto}}}}}
+		tool := testLooperTool("bash")
+		tool.Permission = "bash"
+		tool.Subjects = func(json.RawMessage) ([]string, error) { return []string{"deploy prod"}, nil }
+		tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+			called = true
+			return TextToolResult("called"), nil
+		}
+		looper.Tools = map[string]looperTool{"bash": tool}
+
+		outputs, hadToolCalls, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil)
+
+		require.NoError(t, err)
+		require.True(t, hadToolCalls)
+		require.False(t, called)
+		require.Contains(t, outputs[0].Result.Output, `requires automatic approval, but automatic permission approval is disabled`)
+	})
+
+	t.Run("approval executes", func(t *testing.T) {
+		called := false
+		reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{Approved: true, Risk: "low", Authorization: "unknown", Reason: "Low-risk action."}}
+		looper := testLooper(mockResponses())
+		looper.AutoApprovePermissions = true
+		looper.PermissionReviewer = reviewer
+		looper.agent = Agent{Name: "main"}
+		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "webfetch", Rules: []PermissionRule{{Pattern: "https://allowed.example/*", Action: permissionAuto}}}}}
+		tool := testLooperTool("webfetch")
+		tool.Permission = "webfetch"
+		tool.Subjects = func(json.RawMessage) ([]string, error) { return []string{"https://allowed.example/page"}, nil }
+		tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+			called = true
+			return TextToolResult("fetched"), nil
+		}
+		looper.Tools = map[string]looperTool{"webfetch": tool}
+
+		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "webfetch", `{"url":"https://allowed.example/page"}`)}), nil, nil)
+
+		require.NoError(t, err)
+		require.True(t, called)
+		require.Equal(t, "fetched", outputs[0].Result.Output)
+		require.Len(t, reviewer.requests, 1)
+		require.True(t, reviewer.requests[0].ReviewerEmbedded)
+		require.Equal(t, "main", reviewer.requests[0].ActiveAgent)
+		require.Equal(t, "webfetch", reviewer.requests[0].Permission)
+		require.Equal(t, []permissionReviewSubject{{Subject: "https://allowed.example/page", RulePattern: "https://allowed.example/*"}}, reviewer.requests[0].AutoSubjects)
+	})
+
+	t.Run("denial does not execute custom reviewer", func(t *testing.T) {
+		called := false
+		reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{Approved: false, Risk: "high", Authorization: "unknown", Reason: "Not authorized."}}
+		looper := testLooper(mockResponses())
+		looper.AutoApprovePermissions = true
+		looper.PermissionReviewer = reviewer
+		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "tools", Rules: []PermissionRule{{Pattern: "github_private_repo", Action: permissionAuto, Reviewer: "release-guardian"}}}}}
+		tool := testLooperTool("github_create_issue")
+		tool.Permission = "tools"
+		tool.Subjects = func(json.RawMessage) ([]string, error) { return []string{"github_private_repo"}, nil }
+		tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+			called = true
+			return TextToolResult("created"), nil
+		}
+		looper.Tools = map[string]looperTool{"github_create_issue": tool}
+
+		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "github_create_issue", `{}`)}), nil, nil)
+
+		require.NoError(t, err)
+		require.False(t, called)
+		require.Contains(t, outputs[0].Result.Output, "Not authorized")
+		require.Len(t, reviewer.requests, 1)
+		require.False(t, reviewer.requests[0].ReviewerEmbedded)
+		require.Equal(t, "release-guardian", reviewer.requests[0].Reviewer)
+	})
+
+	t.Run("deny short circuits auto", func(t *testing.T) {
+		reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{Approved: true, Risk: "low", Authorization: "unknown", Reason: "Low-risk action."}}
+		looper := testLooper(mockResponses())
+		looper.AutoApprovePermissions = true
+		looper.PermissionReviewer = reviewer
+		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "deploy *", Action: permissionAuto}, {Pattern: "rm -rf *", Action: permissionDeny}}}}}
+		tool := testLooperTool("bash")
+		tool.Permission = "bash"
+		tool.Subjects = func(json.RawMessage) ([]string, error) { return []string{"deploy prod", "rm -rf prod"}, nil }
+		looper.Tools = map[string]looperTool{"bash": tool}
+
+		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil)
+
+		require.NoError(t, err)
+		require.Contains(t, outputs[0].Result.Output, `=> deny`)
+		require.Empty(t, reviewer.requests)
+	})
+
+	t.Run("mixed reviewers deny without review", func(t *testing.T) {
+		reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{Approved: true, Risk: "low", Authorization: "unknown", Reason: "Low-risk action."}}
+		looper := testLooper(mockResponses())
+		looper.AutoApprovePermissions = true
+		looper.PermissionReviewer = reviewer
+		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "deploy *", Action: permissionAuto}, {Pattern: "release *", Action: permissionAuto, Reviewer: "release-guardian"}}}}}
+		tool := testLooperTool("bash")
+		tool.Permission = "bash"
+		tool.Subjects = func(json.RawMessage) ([]string, error) { return []string{"deploy prod", "release prod"}, nil }
+		looper.Tools = map[string]looperTool{"bash": tool}
+
+		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil)
+
+		require.NoError(t, err)
+		require.Contains(t, outputs[0].Result.Output, `matched multiple automatic reviewers`)
+		require.Empty(t, reviewer.requests)
+	})
+}
+
+func TestPermissionReviewFailsClosedOnInvalidJSON(t *testing.T) {
+	modelRef, err := parseModelRef(openai.ChatModelGPT5)
+	require.NoError(t, err)
+
+	factory := &toolFactory{
+		client:      mockResponses(responseWithMessage("review", "not json")),
+		modelRef:    modelRef,
+		agents:      Agents{Items: map[string]Agent{}},
+		skills:      Skills{Items: map[string]Skill{}},
+		baseTools:   map[string]looperTool{},
+		shellOutput: shellOutputConfig{},
+	}
+
+	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true})
+
+	require.False(t, decision.Approved)
+	require.Contains(t, decision.Reason, "invalid JSON")
 }
 
 func TestLooperAppliesWebFetchURLPermissions(t *testing.T) {

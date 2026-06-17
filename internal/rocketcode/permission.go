@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -22,15 +23,19 @@ const (
 	PermissionAllow PermissionAction = "allow"
 	// PermissionDeny denies a matching operation.
 	PermissionDeny PermissionAction = "deny"
+	// PermissionAuto requires automatic reviewer approval for a matching operation.
+	PermissionAuto PermissionAction = "auto"
 
 	permissionAllow = PermissionAllow
 	permissionDeny  = PermissionDeny
+	permissionAuto  = PermissionAuto
 )
 
 // PermissionRule matches a subject pattern to a permission action.
 type PermissionRule struct {
-	Pattern string
-	Action  PermissionAction
+	Pattern  string
+	Action   PermissionAction
+	Reviewer string
 }
 
 // PermissionBucket groups permission rules under a named permission category.
@@ -62,7 +67,7 @@ func parsePermissionNode(node *yaml.Node) (PermissionSet, error) {
 
 	switch node.Kind {
 	case yaml.ScalarNode:
-		if _, err := parsePermissionAction(node.Value); err != nil {
+		if _, _, err := parsePermissionAction(node.Value); err != nil {
 			return PermissionSet{}, err
 		}
 
@@ -101,22 +106,22 @@ func parsePermissionNode(node *yaml.Node) (PermissionSet, error) {
 func parsePermissionRules(node *yaml.Node) ([]PermissionRule, error) {
 	switch node.Kind {
 	case yaml.ScalarNode:
-		action, err := parsePermissionAction(node.Value)
+		action, reviewer, err := parsePermissionAction(node.Value)
 		if err != nil {
 			return nil, err
 		}
 
-		return []PermissionRule{{Pattern: "*", Action: action}}, nil
+		return []PermissionRule{{Pattern: "*", Action: action, Reviewer: reviewer}}, nil
 	case yaml.MappingNode:
 		rules := []PermissionRule{}
 
 		for i := 0; i+1 < len(node.Content); i += 2 {
-			action, err := parsePermissionAction(node.Content[i+1].Value)
+			action, reviewer, err := parsePermissionAction(node.Content[i+1].Value)
 			if err != nil {
 				return nil, fmt.Errorf("pattern %q: %w", node.Content[i].Value, err)
 			}
 
-			rules = append(rules, PermissionRule{Pattern: expandPermissionPattern(node.Content[i].Value), Action: action})
+			rules = append(rules, PermissionRule{Pattern: expandPermissionPattern(node.Content[i].Value), Action: action, Reviewer: reviewer})
 		}
 
 		return rules, nil
@@ -127,16 +132,27 @@ func parsePermissionRules(node *yaml.Node) ([]PermissionRule, error) {
 	}
 }
 
-func parsePermissionAction(value string) (PermissionAction, error) {
+func parsePermissionAction(value string) (PermissionAction, string, error) {
 	switch PermissionAction(value) {
 	case PermissionAllow:
-		return PermissionAllow, nil
+		return PermissionAllow, "", nil
 	case PermissionDeny:
-		return PermissionDeny, nil
+		return PermissionDeny, "", nil
+	case PermissionAuto:
+		return PermissionAuto, "", nil
 	case "ask":
-		return "", fmt.Errorf("permission action %q is not supported", value)
+		return "", "", fmt.Errorf("permission action %q is not supported", value)
 	default:
-		return "", fmt.Errorf("unknown permission action %q", value)
+		if reviewer, ok := strings.CutPrefix(value, "auto("); ok {
+			reviewer, closed := strings.CutSuffix(reviewer, ")")
+			if !closed || reviewer == "" || strings.ContainsAny(reviewer, "()") {
+				return "", "", fmt.Errorf("malformed permission action %q", value)
+			}
+
+			return PermissionAuto, reviewer, nil
+		}
+
+		return "", "", fmt.Errorf("unknown permission action %q", value)
 	}
 }
 
@@ -200,7 +216,7 @@ func (ps *PermissionSet) Deny(permission, pattern string) error {
 
 // Set appends a permission rule for permission and pattern.
 func (ps *PermissionSet) Set(permission, pattern string, action PermissionAction) error {
-	if _, err := parsePermissionAction(string(action)); err != nil {
+	if _, _, err := parsePermissionAction(string(action)); err != nil {
 		return err
 	}
 
@@ -268,6 +284,14 @@ func (ps PermissionSet) evaluateRules(permission, subject string) permissionDeci
 }
 
 func (ps PermissionSet) hasAllowRuleForPermission(permission string) bool {
+	return ps.hasRuleForPermission(permission, permissionAllow)
+}
+
+func (ps PermissionSet) hasActionableRuleForPermission(permission string) bool {
+	return ps.hasRuleForPermission(permission, permissionAllow, permissionAuto)
+}
+
+func (ps PermissionSet) hasRuleForPermission(permission string, actions ...PermissionAction) bool {
 	for _, bucket := range ps.Buckets {
 		permissionBucket := bucket.Name == permission
 
@@ -277,7 +301,7 @@ func (ps PermissionSet) hasAllowRuleForPermission(permission string) bool {
 		}
 
 		for _, rule := range bucket.Rules {
-			if rule.Action == permissionAllow {
+			if slices.Contains(actions, rule.Action) {
 				return true
 			}
 		}

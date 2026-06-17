@@ -60,6 +60,22 @@ websearch: allow
 	}
 }
 
+func TestParsePermissionAuto(t *testing.T) {
+	require.Equal(t, PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{
+		{Pattern: "deploy *", Action: permissionAuto},
+		{Pattern: "release *", Action: permissionAuto, Reviewer: "release-guardian"},
+	}}}}, parsePermissionYAML(t, `bash: {"deploy *": auto, "release *": auto(release-guardian)}`))
+
+	for _, input := range []string{
+		`bash: {"*": auto()}`,
+		`bash: {"*": auto(foo}`,
+		`bash: {"*": auto(foo))}`,
+	} {
+		_, err := parsePermissionNode(parseYAMLNode(t, input))
+		require.ErrorContains(t, err, "malformed permission action")
+	}
+}
+
 func TestPermissionSetHelpers(t *testing.T) {
 	var permissions PermissionSet
 	require.NoError(t, permissions.Allow("read", "docs/*.md"))
@@ -92,6 +108,7 @@ func TestPermissionSetEvaluate(t *testing.T) {
 		{name: "global bucket is ignored", yaml: `"*": {"*": allow}`, permission: "bash", subject: "git status", action: PermissionDeny, matched: false},
 		{name: "scalar allow is ignored", yaml: `allow`, permission: "bash", subject: "git status", action: PermissionDeny, matched: false},
 		{name: "explicit bash allow remains effective", yaml: `bash: {"*": allow}`, permission: "bash", subject: "git status", action: PermissionAllow, matched: true},
+		{name: "explicit auto remains effective", yaml: `bash: {"*": allow, "deploy *": auto}`, permission: "bash", subject: "deploy prod", action: PermissionAuto, matched: true},
 	}
 
 	for _, tt := range tests {

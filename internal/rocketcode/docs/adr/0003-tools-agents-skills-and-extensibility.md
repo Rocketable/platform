@@ -102,6 +102,20 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - Rejections return task-result text such as `delegation blocked: ...` or `delegation response blocked: ...` so the caller agent can continue.
 - The guardrail receives tools only through its own permission set and uses its own prompt, model, reasoning effort, verbosity, tools, and skills.
 
+### Automatic Permission Review
+
+- Permission rules may use `auto` or `auto(<agent-name>)` as actions for any permission bucket. Bare `auto` uses RocketCode's embedded guardian reviewer. `auto(<agent-name>)` uses the loaded custom reviewer agent named by `<agent-name>`.
+- Automatic permission review is enabled only when `Config.AutoApprovePermissions` is true. When it is false, matching `auto` rules fail closed without executing the reviewed tool call.
+- RocketCode owns a non-overridable embedded `guardian` reviewer for bare `auto`. The embedded guardian is not inserted into `Agents.Items`; user, workspace, overlay, or embedder-provided agents cannot replace it for bare `auto`.
+- The agent name `guardian` is reserved when `Config.AutoApprovePermissions` is enabled. Construction fails if loaded agents include `guardian`, or if an explicit `auto(guardian)` reviewer is configured.
+- Explicit custom reviewers named by `auto(<agent-name>)` must resolve to loaded agents. Missing custom reviewers are construction errors when they are statically referenced by loaded permission rules.
+- Automatic permission review applies to built-in tools, task and skill tools, RocketClaw runtime tools, and embedder custom tools through the same permission-bucket and subject machinery used by `allow` and `deny`.
+- Multi-subject tool calls execute only when every subject is allowed. Any matching `deny` rejects the call before review. If one or more subjects match `auto` and none match `deny`, RocketCode runs one automatic review for the whole tool call and executes it only when the reviewer approves.
+- The embedded guardian has read-oriented default permissions only: `read`, `glob`, and `grep` are allowed for all subjects; shell, edit, task, web, skill, and custom-tool access are not allowed by default.
+- Custom reviewer agents use their own prompt, model, reasoning effort, verbosity, tools, skills, and permission set. Reviewer tool calls are not exempt from the reviewer's own permissions.
+- Automatic permission reviewers must return strict JSON containing `approved`, `risk`, `authorization`, and `reason`. `risk` is one of `low`, `medium`, `high`, or `critical`; `authorization` is one of `unknown`, `low`, `medium`, or `high`.
+- Reviewer denial, invalid reviewer JSON, invalid enum values, model errors, tool errors, context cancellation, timeout, missing reviewer, or recursive automatic review prevents the reviewed tool call from executing.
+
 ### Skills
 
 - Skill loading recursively finds `SKILL.md` files. Directories containing skill files are recorded even when a skill file is invalid.
@@ -150,6 +164,7 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - `internal/rocketcode/skills.go`
 - `internal/rocketcode/custom_tools.go`
 - `internal/rocketcode/permission.go`
+- `internal/rocketcode/guardian.go`
 
 ## Consequences
 
@@ -162,3 +177,4 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - 2026-06-11: Initial accepted snapshot.
 - 2026-06-11: Limited hosted `websearch` to OpenAI requests and specified Anthropic local-tool adapter behavior.
 - 2026-06-12: Replaced embedding-configured inter-agent filtering with per-target-agent `guardrail` frontmatter and explicit guardrail request messages.
+- 2026-06-17: Added automatic permission review contracts for `auto` permission rules and the embedded non-overridable guardian reviewer.

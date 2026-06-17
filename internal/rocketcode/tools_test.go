@@ -59,11 +59,11 @@ func TestWebSearchPermissionIsCoarse(t *testing.T) {
 
 	loop := &looper{Permissions: PermissionSet{Buckets: []PermissionBucket{{Name: "websearch", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}}}}}}
 	tool := tools["websearch"]
-	decision, denied, err := loop.permissionDecision("websearch", &tool, json.RawMessage(`{}`))
+	decision, err := loop.permissionDecision("websearch", &tool, json.RawMessage(`{}`))
 
 	require.NoError(t, err)
-	require.True(t, denied)
-	require.Equal(t, "*", decision.Subject)
+	require.True(t, decision.denied)
+	require.Contains(t, decision.message, `subject "*"`)
 	require.Equal(t, "web_search", *tools["websearch"].Hosted.GetType())
 }
 

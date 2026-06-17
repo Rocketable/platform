@@ -38,10 +38,12 @@ type toolFactory struct {
 	skills                     Skills
 	baseTools                  map[string]looperTool
 	shellOutput                shellOutputConfig
+	autoApprovePermissions     bool
 
 	// inGuardrailRun reports whether this factory is executing a guardrail agent.
 	// When false, task calls apply target-agent guardrails. When true, nested task calls skip guardrail checks.
-	inGuardrailRun bool
+	inGuardrailRun     bool
+	inPermissionReview bool
 }
 
 type readToolParams struct {
@@ -121,7 +123,7 @@ func toolVisible(agent *Agent, name string, tool *looperTool) bool {
 
 	if len(tool.VisibilitySubjects) > 0 {
 		for _, subject := range tool.VisibilitySubjects {
-			if agent != nil && agent.Permission.evaluate(permission, subject).Action == permissionAllow {
+			if agent != nil && slices.Contains([]PermissionAction{permissionAllow, permissionAuto}, agent.Permission.evaluate(permission, subject).Action) {
 				return true
 			}
 		}
@@ -133,7 +135,7 @@ func toolVisible(agent *Agent, name string, tool *looperTool) bool {
 		return false
 	}
 
-	return agent.Permission.hasAllowRuleForPermission(permission)
+	return agent.Permission.hasActionableRuleForPermission(permission)
 }
 
 func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map[string]looperTool {
