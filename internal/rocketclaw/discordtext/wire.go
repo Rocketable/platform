@@ -21,20 +21,16 @@ import (
 )
 
 const (
-	discordAPI        = "https://discord.com/api/v10"
-	discordGatewayURL = "wss://gateway.discord.gg/?v=10&encoding=json"
+	discordAPI, discordGatewayURL = "https://discord.com/api/v10", "wss://gateway.discord.gg/?v=10&encoding=json"
 )
 
 const (
 	// Guild Text is the configured primary Discord text channel type.
 	// https://docs.discord.com/developers/resources/channel#channel-object-channel-types
-	channelTypeGuildText = 0
-	channelTypeDM        = 1
+	channelTypeGuildText, channelTypeDM = 0, 1
 	// Guild News Thread, Public Thread, and Private Thread are the Discord thread channel types we route managed replies through.
 	// https://docs.discord.com/developers/resources/channel#channel-object-channel-types
-	channelTypeGuildNewsThread    = 10
-	channelTypeGuildPublicThread  = 11
-	channelTypeGuildPrivateThread = 12
+	channelTypeGuildNewsThread, channelTypeGuildPublicThread, channelTypeGuildPrivateThread = 10, 11, 12
 )
 
 type gatewayOpcode int
@@ -99,6 +95,20 @@ type textMessage struct {
 	Thread           *textChannel      `json:"thread"`
 }
 
+type interactionCreate struct {
+	ID        string `json:"id"`
+	Token     string `json:"token"`
+	ChannelID string `json:"channel_id"`
+	Data      struct {
+		CustomID string   `json:"custom_id"`
+		Values   []string `json:"values"`
+	} `json:"data"`
+	User   *textUser `json:"user"`
+	Member *struct {
+		User *textUser `json:"user"`
+	} `json:"member"`
+}
+
 type textAttachment struct {
 	ID          string `json:"id"`
 	Filename    string `json:"filename"`
@@ -131,9 +141,12 @@ type reactionAdd struct {
 // messageSend is the REST Create Message payload subset used for text replies.
 // https://docs.discord.com/developers/resources/message#create-message-jsonform-params
 type messageSend struct {
-	Content   string            `json:"content,omitempty"`
-	Reference *messageReference `json:"message_reference,omitempty"`
+	Content    string             `json:"content,omitempty"`
+	Reference  *messageReference  `json:"message_reference,omitempty"`
+	Components []messageComponent `json:"components,omitempty"`
 }
+
+type messageComponent map[string]any
 
 // postedMessage is the REST Create Message response subset used to record response checkpoints.
 // https://docs.discord.com/developers/resources/message#message-object
@@ -152,8 +165,9 @@ type threadStart struct {
 
 // textEvent is the internal event shape decoded from Discord Gateway dispatches.
 type textEvent struct {
-	message  *messageCreate
-	reaction *reactionAdd
+	message     *messageCreate
+	reaction    *reactionAdd
+	interaction *interactionCreate
 }
 
 type wire struct {
@@ -367,6 +381,12 @@ func (w *wire) deleteMessage(channelID, messageID string) error {
 	return w.restJSON(http.MethodDelete, "/channels/"+channelID+"/messages/"+messageID, nil, nil)
 }
 
+func (w *wire) answerInteraction(id, token string) error {
+	return w.restJSON(http.MethodPost, "/interactions/"+id+"/"+token+"/callback", struct {
+		Type int `json:"type"`
+	}{Type: 6}, nil)
+}
+
 func (w *wire) addReaction(channelID, messageID, emoji string) error {
 	path := "/channels/" + channelID + "/messages/" + messageID + "/reactions/" + url.PathEscape(emoji) + "/@me"
 	return w.restJSON(http.MethodPut, path, nil, nil)
@@ -566,6 +586,11 @@ func (w *wire) handleDispatch(eventType string, data json.RawMessage) {
 		var reaction reactionAdd
 		if json.Unmarshal(data, &reaction) == nil {
 			w.events <- textEvent{reaction: &reaction}
+		}
+	case "INTERACTION_CREATE":
+		var interaction interactionCreate
+		if json.Unmarshal(data, &interaction) == nil {
+			w.events <- textEvent{interaction: &interaction}
 		}
 	}
 }

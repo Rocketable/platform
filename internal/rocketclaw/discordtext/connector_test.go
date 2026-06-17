@@ -542,14 +542,16 @@ func TestHandleResponseThreadReplyCreatesThread(t *testing.T) {
 
 func newTestConnector(client *fakeDiscordClient, router *fakeThreadRouter) *Connector {
 	return &Connector{
-		log:               slog.New(slog.DiscardHandler),
-		config:            config.DiscordTextConfig{Enabled: true, Token: "token", ChannelID: "C123", HumanUserID: "human"},
-		bus:               events.New(),
-		threadRouter:      router,
-		oneOffCronjobs:    inertOneOffCronjobs{},
-		interruptMainTurn: func() *events.InboundMessage { return nil },
-		client:            client,
-		botUserID:         "BOT",
+		log:                slog.New(slog.DiscardHandler),
+		config:             config.DiscordTextConfig{Enabled: true, Token: "token", ChannelID: "C123", HumanUserID: "human"},
+		bus:                events.New(),
+		threadRouter:       router,
+		oneOffCronjobs:     inertOneOffCronjobs{},
+		interruptMainTurn:  func() *events.InboundMessage { return nil },
+		answerQuestion:     func(string, events.AskUserQuestionAnswer) bool { return false },
+		answerQuestionText: func(events.Source, events.TextConversationTarget, string) bool { return false },
+		client:             client,
+		botUserID:          "BOT",
 	}
 }
 
@@ -615,6 +617,8 @@ func (f *fakeDiscordClient) deleteMessage(channelID, messageID string) error {
 	f.deleted = append(f.deleted, channelID+":"+messageID)
 	return nil
 }
+
+func (f *fakeDiscordClient) answerInteraction(string, string) error { return nil }
 
 func (f *fakeDiscordClient) createThread(channelID, messageID string, start threadStart) (*textChannel, error) {
 	f.threads = append(f.threads, fakeThreadStart{channelID: channelID, messageID: messageID, start: start})

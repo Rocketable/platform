@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"mime"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -60,9 +61,8 @@ const (
 
 // InboundAttachment carries an inline attachment into the shared main-session prompt.
 type InboundAttachment struct {
-	Name     string
-	MIMEType string
-	Data     []byte
+	Name, MIMEType string
+	Data           []byte
 }
 
 // InboundContent carries source-acquired inbound text and attachments before message routing details are applied.
@@ -77,74 +77,78 @@ type InboundContent struct {
 
 // OutboundAttachment carries a human-visible file attachment to output sinks.
 type OutboundAttachment struct {
-	Name     string
-	MIMEType string
-	Data     []byte
+	Name, MIMEType string
+	Data           []byte
 }
 
 // InboundMessage is a message headed into the shared main-session prompt queue.
 type InboundMessage struct {
-	Source                       Source
-	Label, Text                  string
-	VerbatimMessage              string
-	VerbatimAttachments          []OutboundAttachment
-	Attachments                  []InboundAttachment
-	SlackReply                   *SlackReplyTarget
-	DiscordReply                 *DiscordReplyTarget
-	HadAttachments               bool
-	HadNonImageAttachments       bool
-	AttachmentWarnings           []string
-	Human                        bool
-	GoalTurn                     bool
-	Kind                         InboundKind
-	ConversationID, WebSessionID string
-	Metadata                     map[string]string
+	Source                                                  Source
+	Label, Text                                             string
+	VerbatimMessage                                         string
+	VerbatimAttachments                                     []OutboundAttachment
+	Attachments                                             []InboundAttachment
+	SlackReply                                              *SlackReplyTarget
+	DiscordReply                                            *DiscordReplyTarget
+	HadAttachments, HadNonImageAttachments, Human, GoalTurn bool
+	AttachmentWarnings                                      []string
+	Kind                                                    InboundKind
+	ConversationID, WebSessionID                            string
+	Metadata                                                map[string]string
 
 	responseInit, responseOnce sync.Once
 	responseCh                 chan InboundResponse
 }
 
 // SlackReplyTarget identifies the Slack message that owns a streamed reply.
-type SlackReplyTarget struct {
-	ChannelID, MessageTS, ThreadTS string
-}
+type SlackReplyTarget struct{ ChannelID, MessageTS, ThreadTS string }
 
 // DiscordReplyTarget identifies the Discord message or thread that owns a streamed reply.
-type DiscordReplyTarget struct {
-	ChannelID, MessageID, ThreadID string
-}
+type DiscordReplyTarget struct{ ChannelID, MessageID, ThreadID string }
 
 // TextConversationTarget identifies a conversation/message in the configured primary text connector.
-type TextConversationTarget struct {
-	ChannelID, MessageID, ThreadID string
+type TextConversationTarget struct{ ChannelID, MessageID, ThreadID string }
+
+// AskUserQuestionOption is one native UI choice for ask_user_question.
+type AskUserQuestionOption struct{ Label, Value, Description string }
+
+// AskUserQuestionRequest asks the originating text connector human for input.
+type AskUserQuestionRequest struct {
+	Source                Source
+	ID, Question, Details string
+	Options               []AskUserQuestionOption
+	Multiple, AllowCustom bool
+	SlackReply            *SlackReplyTarget
+	DiscordReply          *DiscordReplyTarget
+}
+
+// AskUserQuestionAnswer is returned to RocketCode after a human answers.
+type AskUserQuestionAnswer struct {
+	Selected []string `json:"selected"`
+	Custom   string   `json:"custom"`
+	Source   Source   `json:"source"`
 }
 
 // ResponseCheckpoint identifies a persisted main-session turn that can seed a Slack thread.
 type ResponseCheckpoint struct {
-	ConversationID string
-	SessionEntryID int64
-	ResponseID     string
-	Model          string
-	AssistantText  string
+	ConversationID, ResponseID, Model, AssistantText string
+	SessionEntryID                                   int64
 }
 
 // OutboundMessage is a text message headed to enabled connectors.
 type OutboundMessage struct {
 	Text, ProgressText                   string
-	PostProgressText                     bool
 	Source                               Source
 	Targets                              []OutputTarget
 	ConversationID, TurnID, WebSessionID string
 	Sequence                             int
-	Complete                             bool
+	PostProgressText, Complete           bool
 	SlackReply                           *SlackReplyTarget
 	DiscordReply                         *DiscordReplyTarget
 	Checkpoint                           *ResponseCheckpoint
 	Attachments                          []OutboundAttachment
-	GoalTurn                             bool
-	GoalComplete                         bool
-	GoalTurnNumber                       int
-	GoalMaxTurns                         int
+	GoalTurn, GoalComplete               bool
+	GoalTurnNumber, GoalMaxTurns         int
 
 	deliveryInit, deliveredOnce sync.Once
 	delivered                   chan struct{}
@@ -207,27 +211,12 @@ func IsTextAttachment(name, mimeType string) bool {
 	}
 
 	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
-	if strings.HasPrefix(mediaType, "text/") {
-		return true
-	}
 
-	switch mediaType {
-	case "application/json", "application/jsonl", "application/ld+json", "application/xml", "application/yaml", "application/x-yaml", "application/toml", "application/x-toml", "application/csv", "application/x-ndjson":
-		return true
-	}
-
-	switch strings.ToLower(filepath.Ext(strings.TrimSpace(name))) {
-	case ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".yaml", ".yml", ".toml", ".xml", ".ini", ".log":
-		return true
-	}
-
-	return false
+	return strings.HasPrefix(mediaType, "text/") || slices.Contains([]string{"application/json", "application/jsonl", "application/ld+json", "application/xml", "application/yaml", "application/x-yaml", "application/toml", "application/x-toml", "application/csv", "application/x-ndjson"}, mediaType) || slices.Contains([]string{".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".yaml", ".yml", ".toml", ".xml", ".ini", ".log"}, strings.ToLower(filepath.Ext(strings.TrimSpace(name))))
 }
 
 // EnableResponseWait returns a channel that receives the final result for this inbound turn.
-func (m *InboundMessage) EnableResponseWait() <-chan InboundResponse {
-	return m.responseChannel()
-}
+func (m *InboundMessage) EnableResponseWait() <-chan InboundResponse { return m.responseChannel() }
 
 // CompleteResponse marks this inbound turn result ready.
 func (m *InboundMessage) CompleteResponse(text string, err error) {
@@ -335,11 +324,10 @@ func (m *InboundMessage) responseChannel() chan InboundResponse {
 
 // AudioChunk carries a connector audio frame into the transcription pipeline.
 type AudioChunk struct {
-	SessionID, SpeakerID string
-	Source               Source
-	RTPSequence          uint16
-	Timestamp, SSRC      uint32
-	SampleRate, Channels int
-	Format               string
-	Data                 []byte
+	SessionID, SpeakerID, Format string
+	Source                       Source
+	RTPSequence                  uint16
+	Timestamp, SSRC              uint32
+	SampleRate, Channels         int
+	Data                         []byte
 }

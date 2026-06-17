@@ -29,27 +29,14 @@ import (
 )
 
 const (
-	slackFileDownloadTimeout      = 30 * time.Second
-	maxSlackImageDownloadBytes    = 16 << 20
-	slackTextLimit                = 3800
-	slackBlockTextLimit           = 3000
-	slackPreferredChunkSize       = 3200
-	slackOnDemandCronPrefix       = ":repeat_one:"
-	slackOnDemandCronReaction     = "repeat_one"
-	slackRobotReaction            = "robot_face"
-	slackDiscordRelayReaction     = "calling"
-	slackWebVoiceRelayReaction    = "studio_microphone"
-	slackExternalMCPRelayReaction = "satellite_antenna"
-	slackBufferedReaction         = "hourglass_flowing_sand"
-	slackSummaryReaction          = "floppy_disk"
-	slackGoalStopSignReaction     = "octagonal_sign"
-	slackGoalStopButtonReaction   = "stop_button"
-	slackGoalCompleteReaction     = "white_check_mark"
-	slackInterruptionReaction     = "exclamation"
-	slackMainStackKey             = "main"
-	slackImmediatePlaceholder     = "_Thinking..._"
-	slackAnswerPlaceholder        = "\u200B"
-	slackThinkingFlushInterval    = 2 * time.Second
+	slackFileDownloadTimeout                                                                                                       = 30 * time.Second
+	maxSlackImageDownloadBytes                                                                                                     = 16 << 20
+	slackTextLimit, slackBlockTextLimit, slackPreferredChunkSize                                                                   = 3800, 3000, 3200
+	slackOnDemandCronPrefix, slackOnDemandCronReaction, slackRobotReaction                                                         = ":repeat_one:", "repeat_one", "robot_face"
+	slackDiscordRelayReaction, slackWebVoiceRelayReaction, slackExternalMCPRelayReaction                                           = "calling", "studio_microphone", "satellite_antenna"
+	slackBufferedReaction, slackSummaryReaction, slackGoalStopSignReaction, slackGoalStopButtonReaction, slackGoalCompleteReaction = "hourglass_flowing_sand", "floppy_disk", "octagonal_sign", "stop_button", "white_check_mark"
+	slackInterruptionReaction, slackMainStackKey, slackImmediatePlaceholder, slackAnswerPlaceholder                                = "exclamation", "main", "_Thinking..._", "\u200B"
+	slackThinkingFlushInterval                                                                                                     = 2 * time.Second
 )
 
 var errSlackDownloadLimitExceeded = errors.New("slack file download exceeded size limit")
@@ -90,6 +77,8 @@ type Connector struct {
 	threadRouter       harnessbridge.PrimaryTextRouter
 	oneOffCronjobs     primarytext.OneOffCronjobRunner
 	interruptMainTurn  func() *events.InboundMessage
+	answerQuestion     func(string, events.AskUserQuestionAnswer) bool
+	answerQuestionText func(events.Source, events.TextConversationTarget, string) bool
 
 	api          *slack.Client
 	botUserID    string
@@ -101,32 +90,26 @@ type Connector struct {
 	ackSocketEvent  func(*socketmode.Client, socketmode.Request) error
 	reconnectDelay  time.Duration
 
-	mu       sync.Mutex
-	replies  map[string]slackReplySlots
-	pending  map[string]slackReplySlots
-	thinking map[string]slackThinkingState
-	stacks   map[string][]slackBufferedMessage
+	mu               sync.Mutex
+	replies, pending map[string]slackReplySlots
+	thinking         map[string]slackThinkingState
+	stacks           map[string][]slackBufferedMessage
 
 	humanProfile *humanProfileSnapshot
 }
 
-type slackReplyState struct {
-	ChannelID, MessageTS string
-}
+type slackReplyState struct{ ChannelID, MessageTS string }
 
-type slackReplySlots struct {
-	ChannelID, ThinkingTS, AnswerTS, Key string
-}
+type slackReplySlots struct{ ChannelID, ThinkingTS, AnswerTS, Key string }
 
 type slackSocketEvent struct {
 	event socketmode.Event
 }
 
 type slackThinkingState struct {
-	Text        string
-	Placeholder string
-	State       slackReplyState
-	Timer       *time.Timer
+	Text, Placeholder string
+	State             slackReplyState
+	Timer             *time.Timer
 }
 
 type slackBufferedMessage struct {
@@ -136,12 +119,13 @@ type slackBufferedMessage struct {
 }
 
 // New constructs a Slack connector.
-func New(cfg *config.SlackConfig, bus *events.Bus, emergencySafeWords []string, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs primarytext.OneOffCronjobRunner, interruptMainTurn func() *events.InboundMessage, logger *slog.Logger) *Connector {
+func New(cfg *config.SlackConfig, bus *events.Bus, emergencySafeWords []string, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs primarytext.OneOffCronjobRunner, interruptMainTurn func() *events.InboundMessage, answerQuestion func(string, events.AskUserQuestionAnswer) bool, answerQuestionText func(events.Source, events.TextConversationTarget, string) bool, logger *slog.Logger) *Connector {
 	api := slack.New(cfg.BotToken, slack.OptionAppLevelToken(cfg.AppToken), slack.OptionRetry(3))
 
 	return &Connector{
 		log: logger.With("component", "slack"), config: *cfg, bus: bus,
 		emergencySafeWords: slices.Clone(emergencySafeWords), threadAgents: primarytext.NormalizeThreadAgents(threadAgents, true), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs, interruptMainTurn: interruptMainTurn,
+		answerQuestion: answerQuestion, answerQuestionText: answerQuestionText,
 		api: api, socketEvents: make(chan slackSocketEvent, 50),
 		newSocketClient: func(api *slack.Client) *socketmode.Client {
 			return socketmode.New(api)
@@ -450,6 +434,54 @@ func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, rel
 
 	if err := c.threadRouter.RegisterCronThread(ctx, events.TextConversationTarget{ChannelID: postedChannelID, ThreadID: threadTS}, agent, seedText); err != nil {
 		return fmt.Errorf("register Slack cronjob thread: %w", err)
+	}
+
+	return nil
+}
+
+// AskUserQuestion posts one in-message Slack question.
+func (c *Connector) AskUserQuestion(ctx context.Context, req *events.AskUserQuestionRequest) (events.TextConversationTarget, error) {
+	text := strings.TrimSpace(req.Question)
+	if details := strings.TrimSpace(req.Details); details != "" {
+		text += "\n\n" + details
+	}
+
+	if req.AllowCustom {
+		text += "\n\nReply in this conversation to answer in free text."
+	}
+
+	blocks := []slack.Block{slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, text, false, false), nil, nil)}
+
+	if len(req.Options) > 0 {
+		elements := make([]slack.BlockElement, 0, len(req.Options))
+		options := make([]*slack.OptionBlockObject, 0, len(req.Options))
+
+		for _, option := range req.Options {
+			elements = append(elements, slack.NewButtonBlockElement(req.ID, option.Value, slack.NewTextBlockObject(slack.PlainTextType, option.Label, false, false)))
+			options = append(options, slack.NewOptionBlockObject(option.Value, slack.NewTextBlockObject(slack.PlainTextType, option.Label, false, false), nil))
+		}
+
+		if req.Multiple {
+			elements = []slack.BlockElement{slack.NewOptionsMultiSelectBlockElement(slack.MultiOptTypeStatic, slack.NewTextBlockObject(slack.PlainTextType, "Select answers", false, false), req.ID, options...).WithMaxSelectedItems(len(options))}
+		}
+
+		blocks = append(blocks, slack.NewActionBlock(req.ID, elements...))
+	}
+
+	channelID, threadTS := slackReplyDestination(c.config.Room, req.SlackReply)
+
+	postedChannelID, ts, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(text, false), slack.MsgOptionTS(threadTS), slack.MsgOptionBlocks(blocks...))
+	if err != nil {
+		return events.TextConversationTarget{}, fmt.Errorf("post Slack question: %w", err)
+	}
+
+	return events.TextConversationTarget{ChannelID: postedChannelID, MessageID: ts, ThreadID: threadTS}, nil
+}
+
+// DeleteUserQuestion deletes one unanswered Slack question message.
+func (c *Connector) DeleteUserQuestion(ctx context.Context, target events.TextConversationTarget) error {
+	if _, _, err := c.api.DeleteMessageContext(ctx, target.ChannelID, target.MessageID); err != nil {
+		return fmt.Errorf("delete Slack question: %w", err)
 	}
 
 	return nil
@@ -877,8 +909,12 @@ func (c *Connector) eventLoop(ctx context.Context) {
 				c.log.Debug("received Slack socket event", "event_type", event.Type)
 			}
 
-			if event.Type == socketmode.EventTypeEventsAPI {
+			switch event.Type { //nolint:exhaustive // Only Slack app events and interactions are routed here.
+			case socketmode.EventTypeEventsAPI:
 				c.handleEventsAPI(ctx, event)
+			case socketmode.EventTypeInteractive:
+				c.handleInteractive(ctx, event)
+			default:
 			}
 		}
 	}
@@ -909,7 +945,7 @@ func (c *Connector) runSocketLoop(ctx context.Context) {
 					break clientLoop
 				}
 
-				if event.Type == socketmode.EventTypeEventsAPI && event.Request != nil {
+				if (event.Type == socketmode.EventTypeEventsAPI || event.Type == socketmode.EventTypeInteractive) && event.Request != nil {
 					if err := c.ackSocketEvent(client, *event.Request); err != nil {
 						c.log.Warn("ack Slack socket event", "error", err)
 					}
@@ -941,6 +977,39 @@ func (c *Connector) runSocketLoop(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			}
+		}
+	}
+}
+
+func (c *Connector) handleInteractive(ctx context.Context, event socketmode.Event) {
+	callback, ok := event.Data.(slack.InteractionCallback)
+	if !ok {
+		return
+	}
+
+	allowed := callback.User.ID == c.config.HumanUserID
+	if !allowed && c.config.SocialMode.Enabled {
+		channel, _, ok := c.socialModeChannel(ctx, callback.Channel.ID)
+		allowed = ok && c.socialModeAllowsUser(channel, callback.User.ID)
+	}
+
+	if !allowed {
+		return
+	}
+
+	for _, action := range callback.ActionCallback.BlockActions {
+		selected := []string{action.Value}
+
+		if len(action.SelectedOptions) > 0 {
+			selected = nil
+
+			for _, option := range action.SelectedOptions {
+				selected = append(selected, option.Value)
+			}
+		}
+
+		if c.answerQuestion(action.ActionID, events.AskUserQuestionAnswer{Selected: selected, Source: events.SourceSlack}) {
+			return
 		}
 	}
 }
@@ -1046,6 +1115,10 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 	}, text)
 	if slices.Contains(c.emergencySafeWords, normalizedText) {
 		os.Exit(254)
+	}
+
+	if c.answerQuestionText(events.SourceSlack, events.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS}, text) {
+		return
 	}
 
 	if socialThreadReply && c.slackSocialThreadReplyPingsAway(rawText) {

@@ -44,26 +44,11 @@ import (
 )
 
 const (
-	restartToolName                    = "rocketclaw_restart"
-	rawRunToolName                     = "rocketclaw_i_want_human_partner_to_see_this"
-	attachFilesToolName                = "rocketclaw_attach_files_to_response"
-	updateGoalToolName                 = "rocketclaw_update_goal"
-	scheduleMessageToolName            = "rocketclaw_schedule_message"
-	resetScheduledMessagesToolName     = "rocketclaw_reset_scheduled_messages"
-	internalErrorResponse              = "I hit an internal error while waiting for rocketcode."
-	attachmentAccessFallback           = "I can see that you attached a file, but I could not send it to the model. Please re-upload it as a supported image or send a smaller file."
-	unsupportedFileFallback            = "I can see that you attached a non-image file. I can inspect image attachments right now, but other file types are not supported yet."
-	defaultQueueSize                   = 128
-	externalMCPMetadataEntryType       = "mcp_external_metadata"
-	externalMCPConversationPrefix      = "external_mcp:"
-	goalContinuationLabel              = "goal_continuation"
-	goalKickoffLabel                   = "goal"
-	rocketclawConversationIDEnv        = "ROCKETCLAW_CONVERSATION_ID"
-	rocketclawMetadataEnvPrefix        = "ROCKETCLAW_METADATA_"
-	maxInboundAttachmentBytes          = 4 << 20
-	maxInboundAttachmentTotalBytes     = 16 << 20
-	maxInboundAttachmentResizeInput    = 16 << 20
-	maxInboundAttachmentResizeAttempts = 8
+	restartToolName, rawRunToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName, scheduleMessageToolName, resetScheduledMessagesToolName     = "rocketclaw_restart", "rocketclaw_i_want_human_partner_to_see_this", "rocketclaw_attach_files_to_response", "rocketclaw_update_goal", "ask_user_question", "rocketclaw_schedule_message", "rocketclaw_reset_scheduled_messages"
+	internalErrorResponse, attachmentAccessFallback, unsupportedFileFallback                                                                                       = "I hit an internal error while waiting for rocketcode.", "I can see that you attached a file, but I could not send it to the model. Please re-upload it as a supported image or send a smaller file.", "I can see that you attached a non-image file. I can inspect image attachments right now, but other file types are not supported yet."
+	defaultQueueSize                                                                                                                                               = 128
+	externalMCPMetadataEntryType, externalMCPConversationPrefix, goalContinuationLabel, goalKickoffLabel, rocketclawConversationIDEnv, rocketclawMetadataEnvPrefix = "mcp_external_metadata", "external_mcp:", "goal_continuation", "goal", "ROCKETCLAW_CONVERSATION_ID", "ROCKETCLAW_METADATA_"
+	maxInboundAttachmentBytes, maxInboundAttachmentTotalBytes, maxInboundAttachmentResizeInput, maxInboundAttachmentResizeAttempts                                 = 4 << 20, 16 << 20, 16 << 20, 8
 )
 
 var errBridgeStopped = errors.New("bridge stopped")
@@ -90,6 +75,7 @@ type Config struct {
 	ConsumeSharedInbound  bool
 	OutputTargets         []events.OutputTarget
 	RequestRestart        func(context.Context, string) (string, error)
+	AskUserQuestion       func(context.Context, *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error)
 	SessionService        *SessionService
 }
 
@@ -107,6 +93,7 @@ type Bridge struct {
 	handling, stopped     bool
 	activeReply           *events.InboundMessage
 	activeTurnInterrupts  chan os.Signal
+	activeTurnCancel      context.CancelFunc
 	activeTurnInterrupted bool
 }
 
@@ -297,8 +284,13 @@ func (b *Bridge) InterruptActiveTurn() *events.InboundMessage {
 	b.mu.Lock()
 	reply := b.activeReply
 	interrupts := b.activeTurnInterrupts
+	cancel := b.activeTurnCancel
 	b.activeTurnInterrupted = b.activeTurnInterrupted || interrupts != nil
 	b.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
 
 	select {
 	case interrupts <- os.Interrupt:
@@ -1027,7 +1019,12 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 
 	b.log.Info("prepared rocketcode session history", "conversation_id", b.config.ConversationID, "turn_id", turnID, "entry_count", len(observed), "replay_item_count", replayItemCount, "history_bytes", historyBytes, "compaction_count", compactionCount, "latest_entry_id", latestEntryID, "latest_entry_type", latestEntryType)
 
-	rocketcodeConfig := b.rocketcodeConfig(shellOutputDir, shellEnv, attachments.Tool(root))
+	customTools := []rocketcode.Tool{attachments.Tool(root)}
+	if msg.Human && (msg.Source == events.SourceSlack && msg.SlackReply != nil || msg.Source == events.SourceDiscordText && msg.DiscordReply != nil) {
+		customTools = append(customTools, askUserQuestionTool(b.config.AskUserQuestion, msg))
+	}
+
+	rocketcodeConfig := b.rocketcodeConfig(shellOutputDir, shellEnv, customTools...)
 
 	looper, err := rocketcode.NewWithProviders(providers, &rocketcodeConfig, root, agents, skills, agentName, io.Discard)
 	if err != nil {
@@ -1047,9 +1044,12 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		activeReply.DiscordReply = &events.DiscordReplyTarget{ChannelID: msg.DiscordReply.ChannelID, MessageID: msg.DiscordReply.MessageID, ThreadID: msg.DiscordReply.ThreadID}
 	}
 
+	turnCtx, cancelTurn := context.WithCancel(ctx)
+
 	b.mu.Lock()
 	b.activeReply = activeReply
 	b.activeTurnInterrupts = interrupts
+	b.activeTurnCancel = cancelTurn
 	b.activeTurnInterrupted = false
 	b.mu.Unlock()
 
@@ -1057,8 +1057,10 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		b.mu.Lock()
 		b.activeReply = nil
 		b.activeTurnInterrupts = nil
+		b.activeTurnCancel = nil
 		b.activeTurnInterrupted = false
 		b.mu.Unlock()
+		cancelTurn()
 	}()
 
 	prompt, err := b.buildPrompt(msg)
@@ -1098,7 +1100,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 
 	b.log.Info("starting rocketcode looper", "conversation_id", b.config.ConversationID, "turn_id", turnID, "agent", agentName)
 
-	group.Go(func() error { return looper.Loop(ctx, input, sessionIn, sessionOut, interrupts) })
+	group.Go(func() error { return looper.Loop(turnCtx, input, sessionIn, sessionOut, interrupts) })
 
 	looperStarted := time.Now()
 	firstOutput := false
@@ -1491,7 +1493,7 @@ func loadRocketCodeDefinitionsIn(root *os.Root, workspace, workDir string, mode 
 	skillsRoot := filepath.Join(workspace, workDir, "skills")
 	skillResult := rocketcode.LoadSkills(skillsFS, skillsRoot)
 
-	tools := []string{restartToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName}
+	tools := []string{restartToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName}
 	if mode == toolModeCron {
 		tools = append(tools, rawRunToolName)
 	}
@@ -1747,6 +1749,36 @@ func resetScheduledMessagesTool(reset func() error) rocketcode.Tool {
 	}}
 }
 
+func askUserQuestionTool(ask func(context.Context, *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error), msg *events.InboundMessage) rocketcode.Tool {
+	return rocketcode.Tool{Name: askUserQuestionToolName, Description: "Ask the human partner a native Slack or Discord Text question and wait for their answer. Use options for button/select choices and allow_custom when a free-text answer is acceptable.", Permission: "rocketclaw", VisibilitySubjects: []string{askUserQuestionToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{askUserQuestionToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"question": map[string]any{"type": "string"}, "details": map[string]any{"type": "string"}, "options": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"label": map[string]any{"type": "string"}, "value": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}, "required": []string{"label", "value", "description"}}}, "multiple": map[string]any{"type": "boolean"}, "allow_custom": map[string]any{"type": "boolean"}}, "required": []string{"question", "details", "options", "multiple", "allow_custom"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+		var req events.AskUserQuestionRequest
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return rocketcode.ToolResult{}, fmt.Errorf("parse human question: %w", err)
+		}
+
+		req.ID, req.Source = rand.Text(), msg.Source
+		if msg.SlackReply != nil {
+			req.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS}
+		}
+
+		if msg.DiscordReply != nil {
+			req.DiscordReply = &events.DiscordReplyTarget{ChannelID: msg.DiscordReply.ChannelID, MessageID: msg.DiscordReply.MessageID, ThreadID: msg.DiscordReply.ThreadID}
+		}
+
+		answer, err := ask(ctx, &req)
+		if err != nil {
+			return rocketcode.ToolResult{}, err
+		}
+
+		data, err := json.Marshal(answer)
+		if err != nil {
+			return rocketcode.ToolResult{}, fmt.Errorf("encode human answer: %w", err)
+		}
+
+		return rocketcode.TextToolResult(string(data)), nil
+	}}
+}
+
 func updateGoalTool(b *Bridge) rocketcode.Tool {
 	store := b.config.SessionService
 	conversationID := b.config.ConversationID
@@ -1963,10 +1995,7 @@ func (b *Bridge) newOutboundMessage(msg *events.InboundMessage, turnID string, s
 	return outbound
 }
 
-type replayInputMessage struct {
-	role string
-	text string
-}
+type replayInputMessage struct{ role, text string }
 
 func replayInputForMessage(role, text string) ([]json.RawMessage, error) {
 	message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(role), Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(text)}, Type: "message"}

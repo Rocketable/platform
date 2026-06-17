@@ -278,11 +278,13 @@ func TestRemoveReactionSkipsInvalidTargetsAndIgnoresNoReaction(t *testing.T) {
 	assert.Equal(t, "333.444", calls[1].Get("timestamp"))
 }
 
-func TestNewConnectorInstallsInertRuntimeDependencies(t *testing.T) {
+func TestNewConnectorUsesInjectedRuntimeDependencies(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	c := New(&config.SlackConfig{BotToken: "xoxb-test", AppToken: "xapp-test"}, bus, nil, nil, inertThreadRouter{}, inertOneOffCronjobs{}, func() *events.InboundMessage { return nil }, testLogger())
+	answerQuestion := func(string, events.AskUserQuestionAnswer) bool { return false }
+	answerQuestionText := func(events.Source, events.TextConversationTarget, string) bool { return false }
+	c := New(&config.SlackConfig{BotToken: "xoxb-test", AppToken: "xapp-test"}, bus, nil, nil, inertThreadRouter{}, inertOneOffCronjobs{}, func() *events.InboundMessage { return nil }, answerQuestion, answerQuestionText, testLogger())
 
 	target := events.TextConversationTarget{ChannelID: "D123", MessageID: "111.222", ThreadID: "111.222"}
 	handled, err := c.threadRouter.PrepareThreadReply(target)
@@ -5049,6 +5051,8 @@ func newTestConnectorWithOptions(apiURL string, bus *events.Bus, threadAgents co
 	connector.threadRouter = router
 	connector.oneOffCronjobs = runner
 	connector.interruptMainTurn = func() *events.InboundMessage { return nil }
+	connector.answerQuestion = func(string, events.AskUserQuestionAnswer) bool { return false }
+	connector.answerQuestionText = func(events.Source, events.TextConversationTarget, string) bool { return false }
 	connector.api = slack.New("xoxb-test", slack.OptionAPIURL(apiURL+"/"))
 	connector.socketEvents = make(chan slackSocketEvent, 50)
 	connector.newSocketClient = func(api *slack.Client) *socketmode.Client {

@@ -21,17 +21,10 @@ import (
 )
 
 const (
-	discordTextLimit          = 1900
-	discordPreferredChunkSize = 1700
-	discordSummaryEmoji       = "💾"
-	discordRepeatOneEmoji     = "🔂"
-	discordRepeatOneName      = "repeat_one"
-	discordCronPrefix         = ":repeat_one:"
-	discordStopSignEmoji      = "🛑"
-	discordStopButtonEmoji    = "⏹️"
-	discordInterruptedEmoji   = "❗"
-	discordGoalCompleteEmoji  = "✅"
-	maxDiscordAttachmentBytes = 16 << 20
+	discordTextLimit, discordPreferredChunkSize                                                     = 1900, 1700
+	discordSummaryEmoji, discordRepeatOneEmoji, discordRepeatOneName, discordCronPrefix             = "💾", "🔂", "repeat_one", ":repeat_one:"
+	discordStopSignEmoji, discordStopButtonEmoji, discordInterruptedEmoji, discordGoalCompleteEmoji = "🛑", "⏹️", "❗", "✅"
+	maxDiscordAttachmentBytes                                                                       = 16 << 20
 )
 
 type discordClient interface {
@@ -40,6 +33,7 @@ type discordClient interface {
 	sendMessage(channelID string, send messageSend, attachments []events.OutboundAttachment) (*postedMessage, error)
 	editMessage(channelID, messageID string, send messageSend) error
 	deleteMessage(channelID, messageID string) error
+	answerInteraction(id, token string) error
 	addReaction(channelID, messageID, emoji string) error
 	downloadAttachment(ctx context.Context, rawURL string, limit int64) ([]byte, error)
 	createThread(channelID, messageID string, start threadStart) (*textChannel, error)
@@ -50,23 +44,25 @@ type discordClient interface {
 
 // Connector bridges Discord text events into the shared rocketclaw bus.
 type Connector struct {
-	log               *slog.Logger
-	config            config.DiscordTextConfig
-	bus               *events.Bus
-	threadRouter      harnessbridge.PrimaryTextRouter
-	oneOffCronjobs    primarytext.OneOffCronjobRunner
-	interruptMainTurn func() *events.InboundMessage
-	threadAgents      []primarytext.ThreadAgent
-	client            discordClient
-	botUserID         string
-	mu                sync.Mutex
-	progress          map[string]*postedMessage
-	roots             map[string]string
+	log                *slog.Logger
+	config             config.DiscordTextConfig
+	bus                *events.Bus
+	threadRouter       harnessbridge.PrimaryTextRouter
+	oneOffCronjobs     primarytext.OneOffCronjobRunner
+	interruptMainTurn  func() *events.InboundMessage
+	answerQuestion     func(string, events.AskUserQuestionAnswer) bool
+	answerQuestionText func(events.Source, events.TextConversationTarget, string) bool
+	threadAgents       []primarytext.ThreadAgent
+	client             discordClient
+	botUserID          string
+	mu                 sync.Mutex
+	progress           map[string]*postedMessage
+	roots              map[string]string
 }
 
 // New constructs a Discord text connector.
-func New(cfg *config.DiscordTextConfig, bus *events.Bus, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs primarytext.OneOffCronjobRunner, interruptMainTurn func() *events.InboundMessage, logger *slog.Logger) *Connector {
-	return &Connector{log: logger.With("component", "discord_text"), config: *cfg, bus: bus, threadAgents: primarytext.NormalizeThreadAgents(threadAgents, false), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs, interruptMainTurn: interruptMainTurn}
+func New(cfg *config.DiscordTextConfig, bus *events.Bus, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs primarytext.OneOffCronjobRunner, interruptMainTurn func() *events.InboundMessage, answerQuestion func(string, events.AskUserQuestionAnswer) bool, answerQuestionText func(events.Source, events.TextConversationTarget, string) bool, logger *slog.Logger) *Connector {
+	return &Connector{log: logger.With("component", "discord_text"), config: *cfg, bus: bus, threadAgents: primarytext.NormalizeThreadAgents(threadAgents, false), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs, interruptMainTurn: interruptMainTurn, answerQuestion: answerQuestion, answerQuestionText: answerQuestionText}
 }
 
 // Start connects to Discord and begins consuming text events.
@@ -235,6 +231,54 @@ func (c *Connector) SendResponse(_ context.Context, msg *events.OutboundMessage)
 	return nil
 }
 
+// AskUserQuestion posts one in-message Discord Text question.
+func (c *Connector) AskUserQuestion(_ context.Context, req *events.AskUserQuestionRequest) (events.TextConversationTarget, error) {
+	text := strings.TrimSpace(req.Question)
+	if details := strings.TrimSpace(req.Details); details != "" {
+		text += "\n\n" + details
+	}
+
+	if req.AllowCustom {
+		text += "\n\nReply in this conversation to answer in free text."
+	}
+
+	send := messageSend{Content: text}
+
+	if len(req.Options) > 0 {
+		components := []messageComponent{}
+
+		for _, option := range req.Options {
+			if req.Multiple {
+				components = append(components, messageComponent{"label": option.Label, "value": option.Value})
+			} else {
+				components = append(components, messageComponent{"type": 2, "style": 1, "custom_id": req.ID + "\n" + option.Value, "label": option.Label})
+			}
+		}
+
+		if req.Multiple {
+			components = []messageComponent{{"type": 3, "custom_id": req.ID, "options": components, "min_values": 1, "max_values": len(components)}}
+		}
+
+		send.Components = []messageComponent{{"type": 1, "components": components}}
+	}
+
+	posted, err := c.client.sendMessage(c.replyChannel(req.DiscordReply), send, nil)
+	if err != nil {
+		return events.TextConversationTarget{}, fmt.Errorf("post Discord question: %w", err)
+	}
+
+	return events.TextConversationTarget{ChannelID: posted.ChannelID, MessageID: posted.ID, ThreadID: req.DiscordReply.ThreadID}, nil
+}
+
+// DeleteUserQuestion deletes one unanswered Discord Text question message.
+func (c *Connector) DeleteUserQuestion(_ context.Context, target events.TextConversationTarget) error {
+	if err := c.client.deleteMessage(target.ChannelID, target.MessageID); err != nil {
+		return fmt.Errorf("delete Discord question: %w", err)
+	}
+
+	return nil
+}
+
 // SendCronjobChannelThread posts one scheduled cronjob result in a new Discord thread.
 func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, relativePath, agent, ranAt, text string, attachments []events.OutboundAttachment) error {
 	if c.client == nil {
@@ -348,6 +392,10 @@ func (c *Connector) eventLoop(ctx context.Context, textEvents <-chan textEvent) 
 			if event.reaction != nil {
 				c.handleReaction(ctx, event.reaction)
 			}
+
+			if event.interaction != nil {
+				c.handleInteraction(event.interaction)
+			}
 		}
 	}
 }
@@ -410,6 +458,10 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 	text := stripBotMention(strings.TrimSpace(msg.Content), c.botUserID)
 
 	reply := &events.DiscordReplyTarget{ChannelID: msg.ChannelID, MessageID: msg.ID}
+	if c.answerQuestionText(events.SourceDiscordText, events.TextConversationTarget{ChannelID: msg.ChannelID, ThreadID: msg.ChannelID}, text) {
+		return
+	}
+
 	if isDM {
 		reply.ThreadID = msg.ChannelID
 
@@ -574,6 +626,49 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 	}
 }
 
+func (c *Connector) handleInteraction(ev *interactionCreate) {
+	userID := ""
+	if ev.Member != nil && ev.Member.User != nil {
+		userID = ev.Member.User.ID
+	} else if ev.User != nil {
+		userID = ev.User.ID
+	}
+
+	if userID != c.config.HumanUserID && !c.discordSocialAllowed(ev.ChannelID, userID) {
+		return
+	}
+
+	_ = c.client.answerInteraction(ev.ID, ev.Token)
+	id, value, ok := strings.Cut(ev.Data.CustomID, "\n")
+	selected := []string{value}
+
+	if !ok && len(ev.Data.Values) > 0 {
+		id, selected, ok = ev.Data.CustomID, ev.Data.Values, true
+	}
+
+	if ok {
+		c.answerQuestion(id, events.AskUserQuestionAnswer{Selected: selected, Source: events.SourceDiscordText})
+	}
+}
+
+func (c *Connector) discordSocialAllowed(channelID, userID string) bool {
+	if !c.config.SocialMode.Enabled {
+		return false
+	}
+
+	if channel, err := c.client.channel(strings.TrimSpace(channelID)); err == nil && strings.TrimSpace(channel.ParentID) != "" {
+		channelID = strings.TrimSpace(channel.ParentID)
+	}
+
+	for _, channel := range c.config.SocialMode.Channels {
+		if channel.Channel == channelID && slices.Contains(channel.AllowedUserIDs, userID) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (c *Connector) handleResponseThreadReply(ctx context.Context, ev *messageCreate, text string) (bool, error) {
 	msg := ev.Message
 
@@ -606,26 +701,8 @@ func (c *Connector) handleReaction(ctx context.Context, ev *reactionAdd) {
 		return
 	}
 
-	if ev.UserID != c.config.HumanUserID {
-		allowed := false
-
-		channelID := strings.TrimSpace(ev.ChannelID)
-		if channel, err := c.client.channel(channelID); err == nil && strings.TrimSpace(channel.ParentID) != "" {
-			channelID = strings.TrimSpace(channel.ParentID)
-		}
-
-		if c.config.SocialMode.Enabled {
-			for _, channel := range c.config.SocialMode.Channels {
-				if channel.Channel == channelID && slices.Contains(channel.AllowedUserIDs, ev.UserID) {
-					allowed = true
-					break
-				}
-			}
-		}
-
-		if !allowed {
-			return
-		}
+	if ev.UserID != c.config.HumanUserID && !c.discordSocialAllowed(ev.ChannelID, ev.UserID) {
+		return
 	}
 
 	switch ev.Emoji.Name {
