@@ -2393,7 +2393,7 @@ func TestRocketCodeThinkingTextHandlesStructuredToolDiagnostics(t *testing.T) {
 	result.Name = "bash"
 	result.Result = "file contents"
 
-	assert.Equal(t, "Read the file", rocketcodeThinkingText(toolResponse(&call)))
+	assert.Equal(t, "bash: Read the file", rocketcodeThinkingText(toolResponse(&call)))
 	assert.Equal(t, "bash started", rocketcodeThinkingText(toolResponse(&status)))
 	assert.Equal(t, "websearch started: Google DeepMind blog", rocketcodeThinkingText(toolResponse(&hosted)))
 	assert.Equal(t, "websearch started: Anthropic news, Google AI blog", rocketcodeThinkingText(toolResponse(&hostedQueries)))
@@ -2506,8 +2506,21 @@ func TestProcessResponsePublishesStructuredToolDiagnosticsAsThinking(t *testing.
 	require.NoError(t, bridge.processResponse(context.Background(), inbound, &result, toolResponse(&diagnostic)))
 
 	outbound := readRocketCodeOutbound(t, bus)
-	assert.Equal(t, "Read the file", outbound.ProgressText)
+	assert.Equal(t, "bash: Read the file", outbound.ProgressText)
 	assert.Equal(t, "turn-1", outbound.TurnID)
+}
+
+func TestAskUserQuestionToolRejectsUnanswerableQuestions(t *testing.T) {
+	tool := askUserQuestionTool(func(context.Context, *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error) {
+		t.Fatal("ask callback should not run")
+
+		return events.AskUserQuestionAnswer{}, nil
+	}, &events.InboundMessage{Source: events.SourceSlack, Human: true, SlackReply: &events.SlackReplyTarget{ChannelID: "C1", MessageTS: "1", ThreadTS: "1"}})
+
+	_, err := tool.Call(t.Context(), []byte(`{"question":"Approve?","details":"","options":[],"multiple":false,"allow_custom":false}`), nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires at least one option or allow_custom")
 }
 
 func TestProcessResponseSuppressesProviderOnlySubagentDiagnostics(t *testing.T) {

@@ -1237,6 +1237,10 @@ func formatToolDiagnostic(diagnostic *rocketcode.ToolDiagnostic) string {
 			return name + " started"
 		}
 
+		if strings.TrimSpace(diagnostic.Status) == "" {
+			return name + ": " + details
+		}
+
 		return details
 	case "result":
 		if strings.Contains(diagnostic.Result, "tool call denied:") {
@@ -1341,10 +1345,6 @@ func formatSubagentDiagnostic(diagnostic *rocketcode.SubagentDiagnostic) string 
 		text = formatToolDiagnostic(diagnostic.Tool)
 		if text == "" {
 			return ""
-		}
-
-		if name := strings.TrimSpace(diagnostic.Tool.Name); name != "" {
-			text = name + ": " + text
 		}
 	case diagnostic.Subagent != nil:
 		text = formatSubagentDiagnostic(diagnostic.Subagent)
@@ -1792,6 +1792,10 @@ func askUserQuestionTool(ask func(context.Context, *events.AskUserQuestionReques
 		var req events.AskUserQuestionRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return rocketcode.ToolResult{}, fmt.Errorf("parse human question: %w", err)
+		}
+
+		if !req.AllowCustom && len(req.Options) == 0 {
+			return rocketcode.ToolResult{}, errors.New("ask_user_question requires at least one option or allow_custom: true")
 		}
 
 		req.ID, req.Source = rand.Text(), msg.Source
