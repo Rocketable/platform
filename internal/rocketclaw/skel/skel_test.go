@@ -702,11 +702,18 @@ func TestEmbeddedCreateOrUpdateSkillsMentionLint(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(agentSkill), "rocketclaw lint")
 	assert.Contains(t, string(agentSkill), "Write XOR execute")
+	assert.Contains(t, string(agentSkill), "auto(<agent-name>)")
+	assert.Contains(t, string(agentSkill), "guardian")
+	assert.Contains(t, string(agentSkill), "rocketcode.auto_approve_permissions")
 
 	skillSkill, err := payload.ReadFile(".rocketclaw/skills/main-create-or-update-skill/SKILL.md")
 	require.NoError(t, err)
 	assert.Contains(t, string(skillSkill), "rocketclaw lint")
 	assert.Contains(t, string(skillSkill), "behavior, permission guidance, task delegation, or scripts")
+
+	configSkill, err := payload.ReadFile(".rocketclaw/skills/main-update-rocketclaw-json/SKILL.md")
+	require.NoError(t, err)
+	assert.Contains(t, string(configSkill), "rocketcode.auto_approve_permissions")
 }
 
 func TestSyncEffectiveRuntimeAssetsDoesNotMutateRuntimeOrScriptSymlinks(t *testing.T) {

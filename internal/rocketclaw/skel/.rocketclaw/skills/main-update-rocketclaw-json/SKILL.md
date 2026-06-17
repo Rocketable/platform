@@ -82,6 +82,12 @@ Set a boolean or number safely:
 tmp=$(mktemp "${TMPDIR:-/tmp}/rocketclaw-json-XXXXXX") && jq --argjson v true '.some_flag = $v' "rocketclaw.json" > "$tmp" && jq empty "$tmp" >/dev/null && mv "$tmp" "rocketclaw.json"
 ```
 
+Enable RocketCode automatic permission review safely:
+
+```bash
+tmp=$(mktemp "${TMPDIR:-/tmp}/rocketclaw-json-XXXXXX") && jq --argjson v true '.rocketcode.auto_approve_permissions = $v' "rocketclaw.json" > "$tmp" && jq empty "$tmp" >/dev/null && mv "$tmp" "rocketclaw.json"
+```
+
 Delete a key:
 
 ```bash
@@ -112,6 +118,8 @@ If multiple related config changes belong together, prefer a single `jq` filter 
 ## Runtime effect
 
 If `rocketclaw.json` changed successfully, call `rocketclaw_restart` exactly once after the successful write. Do not call restart for read-only inspection or unrelated file edits.
+
+The `.rocketcode.auto_approve_permissions` boolean enables RocketCode automatic permission review for agent permission rules that use `auto` or `auto(<agent-name>)`. It defaults to false. Like other runtime config changes, changing it requires `rocketclaw_restart` before the current session uses the new value.
 
 If the request was read-only:
 

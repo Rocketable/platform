@@ -42,7 +42,7 @@ Ask only for the missing items.
 
 Do not ask the human to write raw `permission` YAML. For creation, ask what kind of agent they want and which exact opt-ins it needs: bash command patterns for execution agents, writable path patterns for file-modifying agents, skill names, task agent names, or another named permission bucket.
 
-RocketCode denies all tools by default. Write only the explicit `allow` rules the agent needs. Do not write a top-level `"*": deny`, and do not add `"*": deny` as the first rule in every permission bucket. Use `deny` only after a broader `allow` when you need to subtract narrower access.
+RocketCode denies all tools by default. Write only the explicit `allow` rules the agent needs. Use `auto` only when the human wants automatic model review for a matching operation instead of deterministic allow or deny. Do not write a top-level `"*": deny`, and do not add `"*": deny` as the first rule in every permission bucket. Use `deny` only after a broader `allow` when you need to subtract narrower access.
 
 A scalar `permission: allow` does not grant global access. Use explicit permission buckets instead.
 
@@ -60,6 +60,18 @@ Built-in permission buckets:
 For edit-only agents, an `edit` allow also permits reading the same path unless a `read` rule matched first. Do not add a top-level deny that would block this fallback.
 
 For bash agents, rocketcode checks permissions against each parsed shell call. Multi-command scripts need every parsed call allowed.
+
+Automatic permission review rules use `auto` or `auto(<agent-name>)`. Bare `auto` uses RocketCode's embedded `guardian` reviewer. `auto(<agent-name>)` uses that loaded custom reviewer agent. Automatic review is fail-closed and denied unless `rocketcode.auto_approve_permissions` is enabled in `rocketclaw.json`; failed review, invalid reviewer output, or rejection denies the tool call. Do not create or rename an agent to `guardian` when automatic approval is enabled, because that name is reserved for the embedded reviewer.
+
+Prefer exact `allow` for low-risk deterministic opt-ins. Use `auto` only for operations where the human wants a reviewer judgment at runtime, for example:
+
+```yaml
+permission:
+  bash:
+    "tmux *": allow
+    "systemctl restart *": auto
+    "kubectl apply *": auto(release-reviewer)
+```
 
 Safety rules enforced by `rocketclaw lint`:
 - Write XOR execute: do not give one agent `edit` access to files that can influence its own `bash` calls.
