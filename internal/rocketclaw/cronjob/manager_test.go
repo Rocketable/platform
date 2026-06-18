@@ -300,6 +300,64 @@ func TestStartStopLoadsCronjobsWithoutRunningFutureDuration(t *testing.T) {
 	}
 }
 
+func TestRunJobLoopDoesNotStartQueuedJobAfterStopAccepting(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	runStarted := make(chan struct{}, 1)
+	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+		runStarted <- struct{}{}
+
+		return RunResult{}, nil
+	}, slog.New(slog.DiscardHandler))
+	j := &job{definition: definition{relativePath: "cron/daily.md"}, wakeCh: make(chan struct{}, 1)}
+	j.trigger()
+	m.StopAccepting()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	done := make(chan struct{})
+
+	m.wg.Add(1)
+
+	go func() {
+		m.runJobLoop(ctx, j)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-runStarted:
+		cancel()
+		<-done
+		t.Fatal("queued cronjob started after manager stopped")
+	case <-time.After(time.Second):
+		t.Fatal("cronjob loop did not stop")
+	}
+}
+
+func TestStopAfterStopAcceptingStillStopsManager(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+		return RunResult{}, nil
+	}, slog.New(slog.DiscardHandler))
+	stopCalled := false
+	m.start = true
+	m.stop = func() { stopCalled = true }
+	m.StopAccepting()
+
+	if err := m.Stop(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	if !stopCalled {
+		t.Fatal("Stop did not stop manager after StopAccepting")
+	}
+}
+
 func TestStartRejectsAlreadyStartedManager(t *testing.T) {
 	workspace := t.TempDir()
 

@@ -194,6 +194,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 			logger.Warn("shutdown requested; draining rocketclaw runtime", "reason", reason, "restart", restart)
 			stopVacuum()
+			cronjobs.StopAccepting()
 
 			go func() {
 				defer close(shutdownDone)
