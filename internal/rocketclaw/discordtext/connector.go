@@ -50,8 +50,8 @@ type Connector struct {
 	threadRouter       harnessbridge.PrimaryTextRouter
 	oneOffCronjobs     primarytext.OneOffCronjobRunner
 	interruptMainTurn  func() *events.InboundMessage
-	answerQuestion     func(string, events.AskUserQuestionAnswer) bool
-	answerQuestionText func(events.Source, events.TextConversationTarget, string) bool
+	answerQuestion     func(context.Context, string, events.AskUserQuestionAnswer) bool
+	answerQuestionText func(context.Context, events.Source, events.TextConversationTarget, string) bool
 	threadAgents       []primarytext.ThreadAgent
 	client             discordClient
 	botUserID          string
@@ -61,7 +61,7 @@ type Connector struct {
 }
 
 // New constructs a Discord text connector.
-func New(cfg *config.DiscordTextConfig, bus *events.Bus, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs primarytext.OneOffCronjobRunner, interruptMainTurn func() *events.InboundMessage, answerQuestion func(string, events.AskUserQuestionAnswer) bool, answerQuestionText func(events.Source, events.TextConversationTarget, string) bool, logger *slog.Logger) *Connector {
+func New(cfg *config.DiscordTextConfig, bus *events.Bus, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs primarytext.OneOffCronjobRunner, interruptMainTurn func() *events.InboundMessage, answerQuestion func(context.Context, string, events.AskUserQuestionAnswer) bool, answerQuestionText func(context.Context, events.Source, events.TextConversationTarget, string) bool, logger *slog.Logger) *Connector {
 	return &Connector{log: logger.With("component", "discord_text"), config: *cfg, bus: bus, threadAgents: primarytext.NormalizeThreadAgents(threadAgents, false), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs, interruptMainTurn: interruptMainTurn, answerQuestion: answerQuestion, answerQuestionText: answerQuestionText}
 }
 
@@ -268,7 +268,7 @@ func (c *Connector) AskUserQuestion(_ context.Context, req *events.AskUserQuesti
 	return events.TextConversationTarget{ChannelID: posted.ChannelID, MessageID: posted.ID, ThreadID: req.DiscordReply.ThreadID}, nil
 }
 
-// DeleteUserQuestion deletes one unanswered Discord Text question message.
+// DeleteUserQuestion deletes one Discord Text question message.
 func (c *Connector) DeleteUserQuestion(_ context.Context, target events.TextConversationTarget) error {
 	if err := c.client.deleteMessage(target.ChannelID, target.MessageID); err != nil {
 		return fmt.Errorf("delete Discord question: %w", err)
@@ -392,7 +392,7 @@ func (c *Connector) eventLoop(ctx context.Context, textEvents <-chan textEvent) 
 			}
 
 			if event.interaction != nil {
-				c.handleInteraction(event.interaction)
+				c.handleInteraction(ctx, event.interaction)
 			}
 		}
 	}
@@ -456,7 +456,7 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 	text := stripBotMention(strings.TrimSpace(msg.Content), c.botUserID)
 
 	reply := &events.DiscordReplyTarget{ChannelID: msg.ChannelID, MessageID: msg.ID}
-	if c.answerQuestionText(events.SourceDiscordText, events.TextConversationTarget{ChannelID: msg.ChannelID, ThreadID: msg.ChannelID}, text) {
+	if c.answerQuestionText(ctx, events.SourceDiscordText, events.TextConversationTarget{ChannelID: msg.ChannelID, ThreadID: msg.ChannelID}, text) {
 		return
 	}
 
@@ -624,7 +624,7 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 	}
 }
 
-func (c *Connector) handleInteraction(ev *interactionCreate) {
+func (c *Connector) handleInteraction(ctx context.Context, ev *interactionCreate) {
 	userID := ""
 	if ev.Member != nil && ev.Member.User != nil {
 		userID = ev.Member.User.ID
@@ -645,7 +645,7 @@ func (c *Connector) handleInteraction(ev *interactionCreate) {
 	}
 
 	if ok {
-		c.answerQuestion(id, events.AskUserQuestionAnswer{Selected: selected, Source: events.SourceDiscordText})
+		c.answerQuestion(ctx, id, events.AskUserQuestionAnswer{Selected: selected, Source: events.SourceDiscordText})
 	}
 }
 

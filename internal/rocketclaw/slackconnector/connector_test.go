@@ -282,8 +282,8 @@ func TestNewConnectorUsesInjectedRuntimeDependencies(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	answerQuestion := func(string, events.AskUserQuestionAnswer) bool { return false }
-	answerQuestionText := func(events.Source, events.TextConversationTarget, string) bool { return false }
+	answerQuestion := func(context.Context, string, events.AskUserQuestionAnswer) bool { return false }
+	answerQuestionText := func(context.Context, events.Source, events.TextConversationTarget, string) bool { return false }
 	c := New(&config.SlackConfig{BotToken: "xoxb-test", AppToken: "xapp-test"}, bus, nil, nil, inertThreadRouter{}, inertOneOffCronjobs{}, func() *events.InboundMessage { return nil }, answerQuestion, answerQuestionText, testLogger())
 
 	target := events.TextConversationTarget{ChannelID: "D123", MessageID: "111.222", ThreadID: "111.222"}
@@ -2292,9 +2292,7 @@ func TestHandleInteractiveAnswersQuestionBySlackBlockID(t *testing.T) {
 		gotAnswer events.AskUserQuestionAnswer
 	)
 
-	connector.answerQuestion = func(id string, answer events.AskUserQuestionAnswer) bool {
-		assert.Equal(t, "Choose one.\n\n_Answered: Defer_", updated.Get("text"))
-
+	connector.answerQuestion = func(_ context.Context, id string, answer events.AskUserQuestionAnswer) bool {
 		gotID = id
 		gotAnswer = answer
 
@@ -2315,10 +2313,7 @@ func TestHandleInteractiveAnswersQuestionBySlackBlockID(t *testing.T) {
 
 	assert.Equal(t, "question-123", gotID)
 	assert.Equal(t, events.AskUserQuestionAnswer{Selected: []string{"defer"}, Source: events.SourceSlack}, gotAnswer)
-	assert.Equal(t, "C123", updated.Get("channel"))
-	assert.Equal(t, "555.666", updated.Get("ts"))
-	assert.Equal(t, "Choose one.\n\n_Answered: Defer_", updated.Get("text"))
-	assert.Equal(t, "[]", updated.Get("blocks"))
+	assert.Empty(t, updated)
 }
 
 func TestHandleInteractiveCustomQuestionButtonOpensModal(t *testing.T) {
@@ -2411,9 +2406,7 @@ func TestHandleInteractiveCustomQuestionSubmissionAnswersQuestion(t *testing.T) 
 		gotAnswer events.AskUserQuestionAnswer
 	)
 
-	connector.answerQuestion = func(id string, answer events.AskUserQuestionAnswer) bool {
-		assert.Equal(t, "Explain.\n\n_Answered: custom answer_", updated.Get("text"))
-
+	connector.answerQuestion = func(_ context.Context, id string, answer events.AskUserQuestionAnswer) bool {
 		gotID = id
 		gotAnswer = answer
 
@@ -2441,10 +2434,7 @@ func TestHandleInteractiveCustomQuestionSubmissionAnswersQuestion(t *testing.T) 
 
 	assert.Equal(t, "question-123", gotID)
 	assert.Equal(t, events.AskUserQuestionAnswer{Custom: "custom answer", Source: events.SourceSlack}, gotAnswer)
-	assert.Equal(t, "C123", updated.Get("channel"))
-	assert.Equal(t, "555.666", updated.Get("ts"))
-	assert.Equal(t, "Explain.\n\n_Answered: custom answer_", updated.Get("text"))
-	assert.Equal(t, "[]", updated.Get("blocks"))
+	assert.Empty(t, updated)
 }
 
 func TestSendResponseSplitsLongFinalAnswerIntoThreadMessages(t *testing.T) {
@@ -5336,8 +5326,8 @@ func newTestConnectorWithOptions(apiURL string, bus *events.Bus, threadAgents co
 	connector.threadRouter = router
 	connector.oneOffCronjobs = runner
 	connector.interruptMainTurn = func() *events.InboundMessage { return nil }
-	connector.answerQuestion = func(string, events.AskUserQuestionAnswer) bool { return false }
-	connector.answerQuestionText = func(events.Source, events.TextConversationTarget, string) bool { return false }
+	connector.answerQuestion = func(context.Context, string, events.AskUserQuestionAnswer) bool { return false }
+	connector.answerQuestionText = func(context.Context, events.Source, events.TextConversationTarget, string) bool { return false }
 	connector.api = slack.New("xoxb-test", slack.OptionAPIURL(apiURL+"/"))
 	connector.socketEvents = make(chan slackSocketEvent, 50)
 	connector.newSocketClient = func(api *slack.Client) *socketmode.Client {

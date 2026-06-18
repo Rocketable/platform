@@ -79,8 +79,8 @@ type Connector struct {
 	threadRouter       harnessbridge.PrimaryTextRouter
 	oneOffCronjobs     primarytext.OneOffCronjobRunner
 	interruptMainTurn  func() *events.InboundMessage
-	answerQuestion     func(string, events.AskUserQuestionAnswer) bool
-	answerQuestionText func(events.Source, events.TextConversationTarget, string) bool
+	answerQuestion     func(context.Context, string, events.AskUserQuestionAnswer) bool
+	answerQuestionText func(context.Context, events.Source, events.TextConversationTarget, string) bool
 
 	api          *slack.Client
 	botUserID    string
@@ -121,7 +121,7 @@ type slackBufferedMessage struct {
 }
 
 // New constructs a Slack connector.
-func New(cfg *config.SlackConfig, bus *events.Bus, emergencySafeWords []string, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs primarytext.OneOffCronjobRunner, interruptMainTurn func() *events.InboundMessage, answerQuestion func(string, events.AskUserQuestionAnswer) bool, answerQuestionText func(events.Source, events.TextConversationTarget, string) bool, logger *slog.Logger) *Connector {
+func New(cfg *config.SlackConfig, bus *events.Bus, emergencySafeWords []string, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs primarytext.OneOffCronjobRunner, interruptMainTurn func() *events.InboundMessage, answerQuestion func(context.Context, string, events.AskUserQuestionAnswer) bool, answerQuestionText func(context.Context, events.Source, events.TextConversationTarget, string) bool, logger *slog.Logger) *Connector {
 	api := slack.New(cfg.BotToken, slack.OptionAppLevelToken(cfg.AppToken), slack.OptionRetry(3))
 
 	return &Connector{
@@ -476,7 +476,7 @@ func (c *Connector) AskUserQuestion(ctx context.Context, req *events.AskUserQues
 	return events.TextConversationTarget{ChannelID: postedChannelID, MessageID: ts, ThreadID: threadTS}, nil
 }
 
-// DeleteUserQuestion deletes one unanswered Slack question message.
+// DeleteUserQuestion deletes one Slack question message.
 func (c *Connector) DeleteUserQuestion(ctx context.Context, target events.TextConversationTarget) error {
 	if _, _, err := c.api.DeleteMessageContext(ctx, target.ChannelID, target.MessageID); err != nil {
 		return fmt.Errorf("delete Slack question: %w", err)
@@ -1014,8 +1014,7 @@ func (c *Connector) handleInteractive(ctx context.Context, event socketmode.Even
 	if callback.Type == slack.InteractionTypeViewSubmission && callback.View.CallbackID == slackQuestionCustomViewCallbackID {
 		custom := strings.TrimSpace(callback.View.State.Values[slackQuestionCustomBlockID][slackQuestionCustomInputActionID].Value)
 
-		c.updateAnsweredQuestion(ctx, metadata.ChannelID, metadata.MessageTS, metadata.Text, custom)
-		c.answerQuestion(metadata.ID, events.AskUserQuestionAnswer{Custom: custom, Source: events.SourceSlack})
+		c.answerQuestion(ctx, metadata.ID, events.AskUserQuestionAnswer{Custom: custom, Source: events.SourceSlack})
 
 		return
 	}
@@ -1062,43 +1061,18 @@ func (c *Connector) handleInteractive(ctx context.Context, event socketmode.Even
 		}
 
 		selected := []string{action.Value}
-		selectedLabels := []string{strings.TrimSpace(action.Text.Text)}
 
 		if len(action.SelectedOptions) > 0 {
 			selected = nil
-			selectedLabels = nil
 
 			for _, option := range action.SelectedOptions {
 				selected = append(selected, option.Value)
-				selectedLabels = append(selectedLabels, strings.TrimSpace(option.Text.Text))
 			}
 		}
 
-		channelID := strings.TrimSpace(callback.Container.ChannelID)
-		if channelID == "" {
-			channelID = strings.TrimSpace(callback.Channel.ID)
-		}
-
-		text := strings.TrimSpace(callback.Message.Text)
-		if text == "" {
-			text = strings.TrimSpace(callback.OriginalMessage.Text)
-		}
-
-		c.updateAnsweredQuestion(ctx, channelID, strings.TrimSpace(callback.Container.MessageTs), text, strings.Join(selectedLabels, ", "))
-
-		if c.answerQuestion(action.BlockID, events.AskUserQuestionAnswer{Selected: selected, Source: events.SourceSlack}) {
+		if c.answerQuestion(ctx, action.BlockID, events.AskUserQuestionAnswer{Selected: selected, Source: events.SourceSlack}) {
 			return
 		}
-	}
-}
-
-func (c *Connector) updateAnsweredQuestion(ctx context.Context, channelID, messageTS, text, label string) {
-	if strings.TrimSpace(messageTS) == "" || strings.TrimSpace(channelID) == "" {
-		return
-	}
-
-	if _, _, _, errUpdate := c.api.UpdateMessageContext(ctx, channelID, messageTS, slack.MsgOptionText(strings.TrimSpace(text)+"\n\n_Answered: "+strings.TrimSpace(label)+"_", false), slack.MsgOptionBlocks()); errUpdate != nil {
-		c.log.Warn("update answered Slack question", "channel", channelID, "message_ts", messageTS, "error", errUpdate)
 	}
 }
 
@@ -1205,7 +1179,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		os.Exit(254)
 	}
 
-	if c.answerQuestionText(events.SourceSlack, events.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS}, text) {
+	if c.answerQuestionText(ctx, events.SourceSlack, events.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS}, text) {
 		return
 	}
 

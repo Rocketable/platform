@@ -62,7 +62,7 @@ func (b *askUserQuestionBroker) ask(ctx context.Context, req *events.AskUserQues
 	}
 }
 
-func (b *askUserQuestionBroker) answer(id string, answer events.AskUserQuestionAnswer) bool {
+func (b *askUserQuestionBroker) answer(ctx context.Context, id string, answer events.AskUserQuestionAnswer) bool {
 	b.mu.Lock()
 	p := b.pending[id]
 	delete(b.pending, id)
@@ -72,22 +72,28 @@ func (b *askUserQuestionBroker) answer(id string, answer events.AskUserQuestionA
 		return false
 	}
 
+	b.deletePending(ctx, p)
+
 	p.ch <- answer
 
 	return true
 }
 
-func (b *askUserQuestionBroker) answerText(source events.Source, target events.TextConversationTarget, text string) bool {
+func (b *askUserQuestionBroker) answerText(ctx context.Context, source events.Source, target events.TextConversationTarget, text string) bool {
 	b.mu.Lock()
 	for id, p := range b.pending {
-		if p.req.Source == source && source == events.SourceDiscordText && (p.req.DiscordReply.ThreadID == target.ThreadID || p.req.DiscordReply.ChannelID == target.ChannelID) {
-			delete(b.pending, id)
-			b.mu.Unlock()
-
-			p.ch <- events.AskUserQuestionAnswer{Custom: text, Source: source}
-
-			return true
+		if p.req.Source != source || source != events.SourceDiscordText || p.req.DiscordReply.ThreadID != target.ThreadID && p.req.DiscordReply.ChannelID != target.ChannelID {
+			continue
 		}
+
+		delete(b.pending, id)
+		b.mu.Unlock()
+
+		b.deletePending(ctx, p)
+
+		p.ch <- events.AskUserQuestionAnswer{Custom: text, Source: source}
+
+		return true
 	}
 	b.mu.Unlock()
 
@@ -109,6 +115,6 @@ func (b *askUserQuestionBroker) cancelUnanswered(ctx context.Context) {
 func (b *askUserQuestionBroker) deletePending(ctx context.Context, p *askUserQuestionPending) {
 	err := b.delete(ctx, p.target)
 	if err != nil {
-		b.log.Warn("delete unanswered question", "source", p.req.Source, "error", err)
+		b.log.Warn("delete question", "source", p.req.Source, "error", err)
 	}
 }

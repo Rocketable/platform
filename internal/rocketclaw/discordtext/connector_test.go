@@ -556,8 +556,8 @@ func newTestConnector(client *fakeDiscordClient, router *fakeThreadRouter) *Conn
 		threadRouter:       router,
 		oneOffCronjobs:     inertOneOffCronjobs{},
 		interruptMainTurn:  func() *events.InboundMessage { return nil },
-		answerQuestion:     func(string, events.AskUserQuestionAnswer) bool { return false },
-		answerQuestionText: func(events.Source, events.TextConversationTarget, string) bool { return false },
+		answerQuestion:     func(context.Context, string, events.AskUserQuestionAnswer) bool { return false },
+		answerQuestionText: func(context.Context, events.Source, events.TextConversationTarget, string) bool { return false },
 		client:             client,
 		botUserID:          "BOT",
 	}
