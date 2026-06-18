@@ -2225,7 +2225,25 @@ func TestAskUserQuestionUsesUniqueSlackButtonActionIDs(t *testing.T) {
 }
 
 func TestHandleInteractiveAnswersQuestionBySlackBlockID(t *testing.T) {
-	connector := newTestConnector("http://127.0.0.1")
+	var updated url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat.update":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			updated = cloneValues(r.PostForm)
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	connector := newTestConnector(server.URL)
 
 	var (
 		gotID     string
@@ -2233,6 +2251,8 @@ func TestHandleInteractiveAnswersQuestionBySlackBlockID(t *testing.T) {
 	)
 
 	connector.answerQuestion = func(id string, answer events.AskUserQuestionAnswer) bool {
+		assert.Equal(t, "Choose one.\n\n_Answered: Defer_", updated.Get("text"))
+
 		gotID = id
 		gotAnswer = answer
 
@@ -2240,16 +2260,23 @@ func TestHandleInteractiveAnswersQuestionBySlackBlockID(t *testing.T) {
 	}
 
 	connector.handleInteractive(context.Background(), socketmode.Event{Data: slack.InteractionCallback{
-		User: slack.User{ID: "U123"},
+		User:      slack.User{ID: "U123"},
+		Message:   slack.Message{Msg: slack.Msg{Text: "Choose one.", Timestamp: "555.666"}},
+		Container: slack.Container{ChannelID: "C123", MessageTs: "555.666"},
 		ActionCallback: slack.ActionCallbacks{BlockActions: []*slack.BlockAction{{
 			BlockID:  "question-123",
 			ActionID: "option_1",
+			Text:     slack.TextBlockObject{Text: "Defer"},
 			Value:    "defer",
 		}}},
 	}})
 
 	assert.Equal(t, "question-123", gotID)
 	assert.Equal(t, events.AskUserQuestionAnswer{Selected: []string{"defer"}, Source: events.SourceSlack}, gotAnswer)
+	assert.Equal(t, "C123", updated.Get("channel"))
+	assert.Equal(t, "555.666", updated.Get("ts"))
+	assert.Equal(t, "Choose one.\n\n_Answered: Defer_", updated.Get("text"))
+	assert.Equal(t, "[]", updated.Get("blocks"))
 }
 
 func TestSendResponseSplitsLongFinalAnswerIntoThreadMessages(t *testing.T) {

@@ -999,12 +999,32 @@ func (c *Connector) handleInteractive(ctx context.Context, event socketmode.Even
 
 	for _, action := range callback.ActionCallback.BlockActions {
 		selected := []string{action.Value}
+		selectedLabels := []string{strings.TrimSpace(action.Text.Text)}
 
 		if len(action.SelectedOptions) > 0 {
 			selected = nil
+			selectedLabels = nil
 
 			for _, option := range action.SelectedOptions {
 				selected = append(selected, option.Value)
+				selectedLabels = append(selectedLabels, strings.TrimSpace(option.Text.Text))
+			}
+		}
+
+		text := strings.TrimSpace(callback.Message.Text)
+		if text == "" {
+			text = strings.TrimSpace(callback.OriginalMessage.Text)
+		}
+
+		channelID := strings.TrimSpace(callback.Container.ChannelID)
+		if channelID == "" {
+			channelID = strings.TrimSpace(callback.Channel.ID)
+		}
+
+		messageTS := strings.TrimSpace(callback.Container.MessageTs)
+		if messageTS != "" && channelID != "" {
+			if _, _, _, errUpdate := c.api.UpdateMessageContext(ctx, channelID, messageTS, slack.MsgOptionText(text+"\n\n_Answered: "+strings.Join(selectedLabels, ", ")+"_", false), slack.MsgOptionBlocks()); errUpdate != nil {
+				c.log.Warn("update answered Slack question", "channel", channelID, "message_ts", messageTS, "error", errUpdate)
 			}
 		}
 
