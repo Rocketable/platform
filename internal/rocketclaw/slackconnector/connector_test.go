@@ -2217,11 +2217,53 @@ func TestAskUserQuestionUsesUniqueSlackButtonActionIDs(t *testing.T) {
 	require.Len(t, blocks, 2)
 	assert.Equal(t, "actions", blocks[1].Type)
 	assert.Equal(t, "question-123", blocks[1].BlockID)
-	require.Len(t, blocks[1].Elements, 2)
+	require.Len(t, blocks[1].Elements, 3)
 	assert.Equal(t, "option_0", blocks[1].Elements[0].ActionID)
 	assert.Equal(t, "option_1", blocks[1].Elements[1].ActionID)
+	assert.Equal(t, slackQuestionCustomActionID, blocks[1].Elements[2].ActionID)
 	assert.Equal(t, "approve", blocks[1].Elements[0].Value)
 	assert.Equal(t, "defer", blocks[1].Elements[1].Value)
+	assert.Equal(t, slackQuestionCustomActionID, blocks[1].Elements[2].Value)
+}
+
+func TestAskUserQuestionAlwaysRendersSlackCustomButton(t *testing.T) {
+	var posted url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat.postMessage":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			posted = cloneValues(r.PostForm)
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	connector := newTestConnector(server.URL)
+	_, err := connector.AskUserQuestion(context.Background(), &events.AskUserQuestionRequest{ID: "question-123", Question: "Explain.", SlackReply: &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}})
+	require.NoError(t, err)
+
+	var blocks []struct {
+		Type     string `json:"type"`
+		BlockID  string `json:"block_id"`
+		Elements []struct {
+			ActionID string `json:"action_id"`
+			Text     struct {
+				Text string `json:"text"`
+			} `json:"text"`
+		} `json:"elements"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(posted.Get("blocks")), &blocks))
+	require.Len(t, blocks, 2)
+	require.Len(t, blocks[1].Elements, 1)
+	assert.Equal(t, slackQuestionCustomActionID, blocks[1].Elements[0].ActionID)
+	assert.Equal(t, "Custom response", blocks[1].Elements[0].Text.Text)
 }
 
 func TestHandleInteractiveAnswersQuestionBySlackBlockID(t *testing.T) {
@@ -2276,6 +2318,132 @@ func TestHandleInteractiveAnswersQuestionBySlackBlockID(t *testing.T) {
 	assert.Equal(t, "C123", updated.Get("channel"))
 	assert.Equal(t, "555.666", updated.Get("ts"))
 	assert.Equal(t, "Choose one.\n\n_Answered: Defer_", updated.Get("text"))
+	assert.Equal(t, "[]", updated.Get("blocks"))
+}
+
+func TestHandleInteractiveCustomQuestionButtonOpensModal(t *testing.T) {
+	var opened struct {
+		TriggerID string `json:"trigger_id"`
+		View      struct {
+			CallbackID      string `json:"callback_id"`
+			PrivateMetadata string `json:"private_metadata"`
+			Blocks          []struct {
+				Type    string `json:"type"`
+				BlockID string `json:"block_id"`
+				Element struct {
+					ActionID  string `json:"action_id"`
+					Multiline bool   `json:"multiline"`
+					MinLength int    `json:"min_length"`
+				} `json:"element"`
+			} `json:"blocks"`
+		} `json:"view"`
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/views.open":
+			if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&opened)) {
+				return
+			}
+
+			writeJSON(t, w, map[string]any{"ok": true, "view": map[string]any{"id": "V123"}})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	connector := newTestConnector(server.URL)
+	connector.handleInteractive(context.Background(), socketmode.Event{Data: slack.InteractionCallback{
+		Type:      slack.InteractionTypeBlockActions,
+		User:      slack.User{ID: "U123"},
+		TriggerID: "trigger-123",
+		Message:   slack.Message{Msg: slack.Msg{Text: "Explain.", Timestamp: "555.666"}},
+		Container: slack.Container{ChannelID: "C123", MessageTs: "555.666"},
+		ActionCallback: slack.ActionCallbacks{BlockActions: []*slack.BlockAction{{
+			BlockID:  "question-123",
+			ActionID: slackQuestionCustomActionID,
+			Value:    slackQuestionCustomActionID,
+		}}},
+	}})
+
+	assert.Equal(t, "trigger-123", opened.TriggerID)
+	assert.Equal(t, slackQuestionCustomViewCallbackID, opened.View.CallbackID)
+	require.Len(t, opened.View.Blocks, 1)
+	assert.Equal(t, slackQuestionCustomBlockID, opened.View.Blocks[0].BlockID)
+	assert.Equal(t, slackQuestionCustomInputActionID, opened.View.Blocks[0].Element.ActionID)
+	assert.True(t, opened.View.Blocks[0].Element.Multiline)
+	assert.Equal(t, 1, opened.View.Blocks[0].Element.MinLength)
+
+	var metadata struct {
+		ID, ChannelID, MessageTS, Text string
+	}
+	require.NoError(t, json.Unmarshal([]byte(opened.View.PrivateMetadata), &metadata))
+	assert.Equal(t, "question-123", metadata.ID)
+	assert.Equal(t, "C123", metadata.ChannelID)
+	assert.Equal(t, "555.666", metadata.MessageTS)
+	assert.Equal(t, "Explain.", metadata.Text)
+}
+
+func TestHandleInteractiveCustomQuestionSubmissionAnswersQuestion(t *testing.T) {
+	var updated url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat.update":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			updated = cloneValues(r.PostForm)
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	connector := newTestConnector(server.URL)
+
+	var (
+		gotID     string
+		gotAnswer events.AskUserQuestionAnswer
+	)
+
+	connector.answerQuestion = func(id string, answer events.AskUserQuestionAnswer) bool {
+		assert.Equal(t, "Explain.\n\n_Answered: Custom response_", updated.Get("text"))
+
+		gotID = id
+		gotAnswer = answer
+
+		return true
+	}
+
+	metadata, err := json.Marshal(struct {
+		ID, ChannelID, MessageTS, Text string
+	}{ID: "question-123", ChannelID: "C123", MessageTS: "555.666", Text: "Explain."})
+	require.NoError(t, err)
+
+	connector.handleInteractive(context.Background(), socketmode.Event{Data: slack.InteractionCallback{
+		Type: slack.InteractionTypeViewSubmission,
+		User: slack.User{ID: "U123"},
+		View: slack.View{
+			CallbackID:      slackQuestionCustomViewCallbackID,
+			PrivateMetadata: string(metadata),
+			State: &slack.ViewState{Values: map[string]map[string]slack.BlockAction{
+				slackQuestionCustomBlockID: {
+					slackQuestionCustomInputActionID: {Value: " custom answer "},
+				},
+			}},
+		},
+	}})
+
+	assert.Equal(t, "question-123", gotID)
+	assert.Equal(t, events.AskUserQuestionAnswer{Custom: "custom answer", Source: events.SourceSlack}, gotAnswer)
+	assert.Equal(t, "C123", updated.Get("channel"))
+	assert.Equal(t, "555.666", updated.Get("ts"))
+	assert.Equal(t, "Explain.\n\n_Answered: Custom response_", updated.Get("text"))
 	assert.Equal(t, "[]", updated.Get("blocks"))
 }
 

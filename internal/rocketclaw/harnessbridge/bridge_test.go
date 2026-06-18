@@ -2510,17 +2510,18 @@ func TestProcessResponsePublishesStructuredToolDiagnosticsAsThinking(t *testing.
 	assert.Equal(t, "turn-1", outbound.TurnID)
 }
 
-func TestAskUserQuestionToolRejectsUnanswerableQuestions(t *testing.T) {
-	tool := askUserQuestionTool(func(context.Context, *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error) {
-		t.Fatal("ask callback should not run")
+func TestAskUserQuestionToolAllowsEmptyOptions(t *testing.T) {
+	tool := askUserQuestionTool(func(_ context.Context, req *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error) {
+		assert.Equal(t, "Approve?", req.Question)
+		assert.Empty(t, req.Options)
 
-		return events.AskUserQuestionAnswer{}, nil
+		return events.AskUserQuestionAnswer{Custom: "approved", Source: events.SourceSlack}, nil
 	}, &events.InboundMessage{Source: events.SourceSlack, Human: true, SlackReply: &events.SlackReplyTarget{ChannelID: "C1", MessageTS: "1", ThreadTS: "1"}})
 
-	_, err := tool.Call(t.Context(), []byte(`{"question":"Approve?","details":"","options":[],"multiple":false,"allow_custom":false}`), nil)
+	result, err := tool.Call(t.Context(), []byte(`{"question":"Approve?","details":"","options":[],"multiple":false}`), nil)
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "requires at least one option or allow_custom")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"selected":null,"custom":"approved","source":"slack"}`, result.Output)
 }
 
 func TestProcessResponseSuppressesProviderOnlySubagentDiagnostics(t *testing.T) {

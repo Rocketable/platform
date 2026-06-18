@@ -238,9 +238,7 @@ func (c *Connector) AskUserQuestion(_ context.Context, req *events.AskUserQuesti
 		text += "\n\n" + details
 	}
 
-	if req.AllowCustom {
-		text += "\n\nReply in this conversation to answer in free text."
-	}
+	text += "\n\nReply in this conversation to answer in free text."
 
 	send := messageSend{Content: text}
 

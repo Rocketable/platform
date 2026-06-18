@@ -4,6 +4,7 @@ package slackconnector
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -37,6 +38,7 @@ const (
 	slackBufferedReaction, slackSummaryReaction, slackGoalStopSignReaction, slackGoalStopButtonReaction, slackGoalCompleteReaction = "hourglass_flowing_sand", "floppy_disk", "octagonal_sign", "stop_button", "white_check_mark"
 	slackInterruptionReaction, slackMainStackKey, slackImmediatePlaceholder, slackAnswerPlaceholder                                = "exclamation", "main", "_Thinking..._", "\u200B"
 	slackThinkingFlushInterval                                                                                                     = 2 * time.Second
+	slackQuestionCustomActionID, slackQuestionCustomViewCallbackID, slackQuestionCustomBlockID, slackQuestionCustomInputActionID   = "custom_answer", "ask_user_question_custom", "custom_answer", "answer"
 )
 
 var errSlackDownloadLimitExceeded = errors.New("slack file download exceeded size limit")
@@ -446,27 +448,23 @@ func (c *Connector) AskUserQuestion(ctx context.Context, req *events.AskUserQues
 		text += "\n\n" + details
 	}
 
-	if req.AllowCustom {
-		text += "\n\nReply in this conversation to answer in free text."
+	blocks := make([]slack.Block, 0, 2)
+	blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, text, false, false), nil, nil))
+
+	elements := make([]slack.BlockElement, 0, len(req.Options)+1)
+	options := make([]*slack.OptionBlockObject, 0, len(req.Options))
+
+	for i, option := range req.Options {
+		elements = append(elements, slack.NewButtonBlockElement(fmt.Sprintf("option_%d", i), option.Value, slack.NewTextBlockObject(slack.PlainTextType, option.Label, false, false)))
+		options = append(options, slack.NewOptionBlockObject(option.Value, slack.NewTextBlockObject(slack.PlainTextType, option.Label, false, false), nil))
 	}
 
-	blocks := []slack.Block{slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, text, false, false), nil, nil)}
-
-	if len(req.Options) > 0 {
-		elements := make([]slack.BlockElement, 0, len(req.Options))
-		options := make([]*slack.OptionBlockObject, 0, len(req.Options))
-
-		for i, option := range req.Options {
-			elements = append(elements, slack.NewButtonBlockElement(fmt.Sprintf("option_%d", i), option.Value, slack.NewTextBlockObject(slack.PlainTextType, option.Label, false, false)))
-			options = append(options, slack.NewOptionBlockObject(option.Value, slack.NewTextBlockObject(slack.PlainTextType, option.Label, false, false), nil))
-		}
-
-		if req.Multiple {
-			elements = []slack.BlockElement{slack.NewOptionsMultiSelectBlockElement(slack.MultiOptTypeStatic, slack.NewTextBlockObject(slack.PlainTextType, "Select answers", false, false), "options", options...).WithMaxSelectedItems(len(options))}
-		}
-
-		blocks = append(blocks, slack.NewActionBlock(req.ID, elements...))
+	if req.Multiple && len(options) > 0 {
+		elements = []slack.BlockElement{slack.NewOptionsMultiSelectBlockElement(slack.MultiOptTypeStatic, slack.NewTextBlockObject(slack.PlainTextType, "Select answers", false, false), "options", options...).WithMaxSelectedItems(len(options))}
 	}
+
+	elements = append(elements, slack.NewButtonBlockElement(slackQuestionCustomActionID, slackQuestionCustomActionID, slack.NewTextBlockObject(slack.PlainTextType, "Custom response", false, false)))
+	blocks = append(blocks, slack.NewActionBlock(req.ID, elements...))
 
 	channelID, threadTS := slackReplyDestination(c.config.Room, req.SlackReply)
 
@@ -987,9 +985,25 @@ func (c *Connector) handleInteractive(ctx context.Context, event socketmode.Even
 		return
 	}
 
+	var metadata struct {
+		ID, ChannelID, MessageTS, Text string
+	}
+	if callback.Type == slack.InteractionTypeViewSubmission && callback.View.CallbackID == slackQuestionCustomViewCallbackID {
+		if err := json.Unmarshal([]byte(callback.View.PrivateMetadata), &metadata); err != nil {
+			c.log.Warn("parse Slack custom question metadata", "error", err)
+
+			return
+		}
+	}
+
 	allowed := callback.User.ID == c.config.HumanUserID
 	if !allowed && c.config.SocialMode.Enabled {
-		channel, _, ok := c.socialModeChannel(ctx, callback.Channel.ID)
+		channelID := callback.Channel.ID
+		if channelID == "" {
+			channelID = metadata.ChannelID
+		}
+
+		channel, _, ok := c.socialModeChannel(ctx, channelID)
 		allowed = ok && c.socialModeAllowsUser(channel, callback.User.ID)
 	}
 
@@ -997,7 +1011,56 @@ func (c *Connector) handleInteractive(ctx context.Context, event socketmode.Even
 		return
 	}
 
+	if callback.Type == slack.InteractionTypeViewSubmission && callback.View.CallbackID == slackQuestionCustomViewCallbackID {
+		custom := strings.TrimSpace(callback.View.State.Values[slackQuestionCustomBlockID][slackQuestionCustomInputActionID].Value)
+
+		c.updateAnsweredQuestion(ctx, metadata.ChannelID, metadata.MessageTS, metadata.Text, "Custom response")
+		c.answerQuestion(metadata.ID, events.AskUserQuestionAnswer{Custom: custom, Source: events.SourceSlack})
+
+		return
+	}
+
 	for _, action := range callback.ActionCallback.BlockActions {
+		if action.ActionID == slackQuestionCustomActionID {
+			metadata.ID = action.BlockID
+
+			metadata.ChannelID = strings.TrimSpace(callback.Container.ChannelID)
+			if metadata.ChannelID == "" {
+				metadata.ChannelID = strings.TrimSpace(callback.Channel.ID)
+			}
+
+			metadata.MessageTS = strings.TrimSpace(callback.Container.MessageTs)
+
+			metadata.Text = strings.TrimSpace(callback.Message.Text)
+			if metadata.Text == "" {
+				metadata.Text = strings.TrimSpace(callback.OriginalMessage.Text)
+			}
+
+			encoded, err := json.Marshal(metadata)
+			if err != nil {
+				c.log.Warn("encode Slack custom question metadata", "error", err)
+
+				return
+			}
+
+			input := slack.NewPlainTextInputBlockElement(slack.NewTextBlockObject(slack.PlainTextType, "Type your answer", false, false), slackQuestionCustomInputActionID).WithMultiline(true).WithMinLength(1)
+
+			_, err = c.api.OpenViewContext(ctx, callback.TriggerID, slack.ModalViewRequest{
+				Type:            slack.VTModal,
+				Title:           slack.NewTextBlockObject(slack.PlainTextType, "Custom response", false, false),
+				Submit:          slack.NewTextBlockObject(slack.PlainTextType, "Submit", false, false),
+				Close:           slack.NewTextBlockObject(slack.PlainTextType, "Cancel", false, false),
+				CallbackID:      slackQuestionCustomViewCallbackID,
+				PrivateMetadata: string(encoded),
+				Blocks:          slack.Blocks{BlockSet: []slack.Block{slack.NewInputBlock(slackQuestionCustomBlockID, slack.NewTextBlockObject(slack.PlainTextType, "Answer", false, false), nil, input)}},
+			})
+			if err != nil {
+				c.log.Warn("open Slack custom question view", "error", err)
+			}
+
+			return
+		}
+
 		selected := []string{action.Value}
 		selectedLabels := []string{strings.TrimSpace(action.Text.Text)}
 
@@ -1011,26 +1074,31 @@ func (c *Connector) handleInteractive(ctx context.Context, event socketmode.Even
 			}
 		}
 
-		text := strings.TrimSpace(callback.Message.Text)
-		if text == "" {
-			text = strings.TrimSpace(callback.OriginalMessage.Text)
-		}
-
 		channelID := strings.TrimSpace(callback.Container.ChannelID)
 		if channelID == "" {
 			channelID = strings.TrimSpace(callback.Channel.ID)
 		}
 
-		messageTS := strings.TrimSpace(callback.Container.MessageTs)
-		if messageTS != "" && channelID != "" {
-			if _, _, _, errUpdate := c.api.UpdateMessageContext(ctx, channelID, messageTS, slack.MsgOptionText(text+"\n\n_Answered: "+strings.Join(selectedLabels, ", ")+"_", false), slack.MsgOptionBlocks()); errUpdate != nil {
-				c.log.Warn("update answered Slack question", "channel", channelID, "message_ts", messageTS, "error", errUpdate)
-			}
+		text := strings.TrimSpace(callback.Message.Text)
+		if text == "" {
+			text = strings.TrimSpace(callback.OriginalMessage.Text)
 		}
+
+		c.updateAnsweredQuestion(ctx, channelID, strings.TrimSpace(callback.Container.MessageTs), text, strings.Join(selectedLabels, ", "))
 
 		if c.answerQuestion(action.BlockID, events.AskUserQuestionAnswer{Selected: selected, Source: events.SourceSlack}) {
 			return
 		}
+	}
+}
+
+func (c *Connector) updateAnsweredQuestion(ctx context.Context, channelID, messageTS, text, label string) {
+	if strings.TrimSpace(messageTS) == "" || strings.TrimSpace(channelID) == "" {
+		return
+	}
+
+	if _, _, _, errUpdate := c.api.UpdateMessageContext(ctx, channelID, messageTS, slack.MsgOptionText(strings.TrimSpace(text)+"\n\n_Answered: "+strings.TrimSpace(label)+"_", false), slack.MsgOptionBlocks()); errUpdate != nil {
+		c.log.Warn("update answered Slack question", "channel", channelID, "message_ts", messageTS, "error", errUpdate)
 	}
 }
 

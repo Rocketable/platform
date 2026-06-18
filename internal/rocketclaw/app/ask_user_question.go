@@ -80,7 +80,7 @@ func (b *askUserQuestionBroker) answer(id string, answer events.AskUserQuestionA
 func (b *askUserQuestionBroker) answerText(source events.Source, target events.TextConversationTarget, text string) bool {
 	b.mu.Lock()
 	for id, p := range b.pending {
-		if p.req.Source == source && p.req.AllowCustom && (source == events.SourceSlack && p.req.SlackReply.ChannelID == target.ChannelID && p.req.SlackReply.ThreadTS == target.ThreadID || source == events.SourceDiscordText && (p.req.DiscordReply.ThreadID == target.ThreadID || p.req.DiscordReply.ChannelID == target.ChannelID)) {
+		if p.req.Source == source && source == events.SourceDiscordText && (p.req.DiscordReply.ThreadID == target.ThreadID || p.req.DiscordReply.ChannelID == target.ChannelID) {
 			delete(b.pending, id)
 			b.mu.Unlock()
 

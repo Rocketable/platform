@@ -117,7 +117,7 @@ type AskUserQuestionRequest struct {
 	Source                Source
 	ID, Question, Details string
 	Options               []AskUserQuestionOption
-	Multiple, AllowCustom bool
+	Multiple              bool
 	SlackReply            *SlackReplyTarget
 	DiscordReply          *DiscordReplyTarget
 }
