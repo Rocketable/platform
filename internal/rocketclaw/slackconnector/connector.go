@@ -1014,7 +1014,7 @@ func (c *Connector) handleInteractive(ctx context.Context, event socketmode.Even
 	if callback.Type == slack.InteractionTypeViewSubmission && callback.View.CallbackID == slackQuestionCustomViewCallbackID {
 		custom := strings.TrimSpace(callback.View.State.Values[slackQuestionCustomBlockID][slackQuestionCustomInputActionID].Value)
 
-		c.updateAnsweredQuestion(ctx, metadata.ChannelID, metadata.MessageTS, metadata.Text, "Custom response")
+		c.updateAnsweredQuestion(ctx, metadata.ChannelID, metadata.MessageTS, metadata.Text, custom)
 		c.answerQuestion(metadata.ID, events.AskUserQuestionAnswer{Custom: custom, Source: events.SourceSlack})
 
 		return

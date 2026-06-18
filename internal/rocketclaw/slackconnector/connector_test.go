@@ -2412,7 +2412,7 @@ func TestHandleInteractiveCustomQuestionSubmissionAnswersQuestion(t *testing.T) 
 	)
 
 	connector.answerQuestion = func(id string, answer events.AskUserQuestionAnswer) bool {
-		assert.Equal(t, "Explain.\n\n_Answered: Custom response_", updated.Get("text"))
+		assert.Equal(t, "Explain.\n\n_Answered: custom answer_", updated.Get("text"))
 
 		gotID = id
 		gotAnswer = answer
@@ -2443,7 +2443,7 @@ func TestHandleInteractiveCustomQuestionSubmissionAnswersQuestion(t *testing.T) 
 	assert.Equal(t, events.AskUserQuestionAnswer{Custom: "custom answer", Source: events.SourceSlack}, gotAnswer)
 	assert.Equal(t, "C123", updated.Get("channel"))
 	assert.Equal(t, "555.666", updated.Get("ts"))
-	assert.Equal(t, "Explain.\n\n_Answered: Custom response_", updated.Get("text"))
+	assert.Equal(t, "Explain.\n\n_Answered: custom answer_", updated.Get("text"))
 	assert.Equal(t, "[]", updated.Get("blocks"))
 }
 

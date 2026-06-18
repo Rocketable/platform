@@ -2524,6 +2524,29 @@ func TestAskUserQuestionToolAllowsEmptyOptions(t *testing.T) {
 	assert.JSONEq(t, `{"selected":null,"custom":"approved","source":"slack"}`, result.Output)
 }
 
+func TestAskUserQuestionToolDescriptionRejectsCatchAllOptions(t *testing.T) {
+	tool := askUserQuestionTool(func(context.Context, *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error) {
+		return events.AskUserQuestionAnswer{}, nil
+	}, &events.InboundMessage{Source: events.SourceSlack, Human: true, SlackReply: &events.SlackReplyTarget{ChannelID: "C1", MessageTS: "1", ThreadTS: "1"}})
+
+	assert.Contains(t, tool.Description, "only for concrete predefined choices")
+	assert.Contains(t, tool.Description, "do not include catch-all choices")
+}
+
+func TestAskUserQuestionToolFiltersRedundantCustomOptions(t *testing.T) {
+	tool := askUserQuestionTool(func(_ context.Context, req *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error) {
+		require.Len(t, req.Options, 1)
+		assert.Equal(t, "High priority", req.Options[0].Label)
+
+		return events.AskUserQuestionAnswer{Selected: []string{"high"}, Source: events.SourceSlack}, nil
+	}, &events.InboundMessage{Source: events.SourceSlack, Human: true, SlackReply: &events.SlackReplyTarget{ChannelID: "C1", MessageTS: "1", ThreadTS: "1"}})
+
+	result, err := tool.Call(t.Context(), []byte(`{"question":"Approve?","details":"","options":[{"label":"Custom answer","value":"custom_answer","description":"free text"},{"label":"High priority","value":"high","description":"Prioritize now"}],"multiple":false}`), nil)
+
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"selected":["high"],"custom":"","source":"slack"}`, result.Output)
+}
+
 func TestProcessResponseSuppressesProviderOnlySubagentDiagnostics(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()

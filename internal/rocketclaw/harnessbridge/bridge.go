@@ -1788,11 +1788,19 @@ func resetScheduledMessagesTool(reset func() error) rocketcode.Tool {
 }
 
 func askUserQuestionTool(ask func(context.Context, *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error), msg *events.InboundMessage) rocketcode.Tool {
-	return rocketcode.Tool{Name: askUserQuestionToolName, Description: "Ask the human partner a native Slack or Discord Text question and wait for their answer. Custom/free-text answers are always available; use options for additional button/select choices.", Permission: "rocketclaw", VisibilitySubjects: []string{askUserQuestionToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{askUserQuestionToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"question": map[string]any{"type": "string"}, "details": map[string]any{"type": "string"}, "options": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"label": map[string]any{"type": "string"}, "value": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}, "required": []string{"label", "value", "description"}}}, "multiple": map[string]any{"type": "boolean"}}, "required": []string{"question", "details", "options", "multiple"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+	return rocketcode.Tool{Name: askUserQuestionToolName, Description: "Ask the human partner a native Slack or Discord Text question and wait for their answer. The options array is only for concrete predefined choices to show as buttons/selects; do not include catch-all choices like Custom, Other, or Free text.", Permission: "rocketclaw", VisibilitySubjects: []string{askUserQuestionToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{askUserQuestionToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"question": map[string]any{"type": "string"}, "details": map[string]any{"type": "string"}, "options": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"label": map[string]any{"type": "string"}, "value": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}, "required": []string{"label", "value", "description"}}}, "multiple": map[string]any{"type": "boolean"}}, "required": []string{"question", "details", "options", "multiple"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		var req events.AskUserQuestionRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return rocketcode.ToolResult{}, fmt.Errorf("parse human question: %w", err)
 		}
+
+		replacer := strings.NewReplacer("_", " ", "-", " ")
+		req.Options = slices.DeleteFunc(req.Options, func(option events.AskUserQuestionOption) bool {
+			label := strings.Join(strings.Fields(strings.ToLower(replacer.Replace(option.Label))), " ")
+			value := strings.Join(strings.Fields(strings.ToLower(replacer.Replace(option.Value))), " ")
+
+			return label == "custom" || label == "custom answer" || label == "custom response" || label == "free text" || label == "other" || value == "custom" || value == "custom answer" || value == "custom response" || value == "free text" || value == "other"
+		})
 
 		req.ID, req.Source = rand.Text(), msg.Source
 		if msg.SlackReply != nil {
