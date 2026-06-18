@@ -456,13 +456,13 @@ func (c *Connector) AskUserQuestion(ctx context.Context, req *events.AskUserQues
 		elements := make([]slack.BlockElement, 0, len(req.Options))
 		options := make([]*slack.OptionBlockObject, 0, len(req.Options))
 
-		for _, option := range req.Options {
-			elements = append(elements, slack.NewButtonBlockElement(req.ID, option.Value, slack.NewTextBlockObject(slack.PlainTextType, option.Label, false, false)))
+		for i, option := range req.Options {
+			elements = append(elements, slack.NewButtonBlockElement(fmt.Sprintf("option_%d", i), option.Value, slack.NewTextBlockObject(slack.PlainTextType, option.Label, false, false)))
 			options = append(options, slack.NewOptionBlockObject(option.Value, slack.NewTextBlockObject(slack.PlainTextType, option.Label, false, false), nil))
 		}
 
 		if req.Multiple {
-			elements = []slack.BlockElement{slack.NewOptionsMultiSelectBlockElement(slack.MultiOptTypeStatic, slack.NewTextBlockObject(slack.PlainTextType, "Select answers", false, false), req.ID, options...).WithMaxSelectedItems(len(options))}
+			elements = []slack.BlockElement{slack.NewOptionsMultiSelectBlockElement(slack.MultiOptTypeStatic, slack.NewTextBlockObject(slack.PlainTextType, "Select answers", false, false), "options", options...).WithMaxSelectedItems(len(options))}
 		}
 
 		blocks = append(blocks, slack.NewActionBlock(req.ID, elements...))
@@ -1008,7 +1008,7 @@ func (c *Connector) handleInteractive(ctx context.Context, event socketmode.Even
 			}
 		}
 
-		if c.answerQuestion(action.ActionID, events.AskUserQuestionAnswer{Selected: selected, Source: events.SourceSlack}) {
+		if c.answerQuestion(action.BlockID, events.AskUserQuestionAnswer{Selected: selected, Source: events.SourceSlack}) {
 			return
 		}
 	}

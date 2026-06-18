@@ -2172,6 +2172,86 @@ func thinkingBlockText(t *testing.T, values url.Values) string {
 	return blocks[0].Text.Text
 }
 
+func TestAskUserQuestionUsesUniqueSlackButtonActionIDs(t *testing.T) {
+	var posted url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat.postMessage":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			posted = cloneValues(r.PostForm)
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	connector := newTestConnector(server.URL)
+	target, err := connector.AskUserQuestion(context.Background(), &events.AskUserQuestionRequest{
+		ID:       "question-123",
+		Question: "Choose one.",
+		Options: []events.AskUserQuestionOption{
+			{Label: "Approve", Value: "approve"},
+			{Label: "Defer", Value: "defer"},
+		},
+		SlackReply: &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, events.TextConversationTarget{ChannelID: "C123", MessageID: "555.666", ThreadID: "111.222"}, target)
+
+	var blocks []struct {
+		Type     string `json:"type"`
+		BlockID  string `json:"block_id"`
+		Elements []struct {
+			Type     string `json:"type"`
+			ActionID string `json:"action_id"`
+			Value    string `json:"value"`
+		} `json:"elements"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(posted.Get("blocks")), &blocks))
+	require.Len(t, blocks, 2)
+	assert.Equal(t, "actions", blocks[1].Type)
+	assert.Equal(t, "question-123", blocks[1].BlockID)
+	require.Len(t, blocks[1].Elements, 2)
+	assert.Equal(t, "option_0", blocks[1].Elements[0].ActionID)
+	assert.Equal(t, "option_1", blocks[1].Elements[1].ActionID)
+	assert.Equal(t, "approve", blocks[1].Elements[0].Value)
+	assert.Equal(t, "defer", blocks[1].Elements[1].Value)
+}
+
+func TestHandleInteractiveAnswersQuestionBySlackBlockID(t *testing.T) {
+	connector := newTestConnector("http://127.0.0.1")
+
+	var (
+		gotID     string
+		gotAnswer events.AskUserQuestionAnswer
+	)
+
+	connector.answerQuestion = func(id string, answer events.AskUserQuestionAnswer) bool {
+		gotID = id
+		gotAnswer = answer
+
+		return true
+	}
+
+	connector.handleInteractive(context.Background(), socketmode.Event{Data: slack.InteractionCallback{
+		User: slack.User{ID: "U123"},
+		ActionCallback: slack.ActionCallbacks{BlockActions: []*slack.BlockAction{{
+			BlockID:  "question-123",
+			ActionID: "option_1",
+			Value:    "defer",
+		}}},
+	}})
+
+	assert.Equal(t, "question-123", gotID)
+	assert.Equal(t, events.AskUserQuestionAnswer{Selected: []string{"defer"}, Source: events.SourceSlack}, gotAnswer)
+}
+
 func TestSendResponseSplitsLongFinalAnswerIntoThreadMessages(t *testing.T) {
 	var posted, deleted []url.Values
 
