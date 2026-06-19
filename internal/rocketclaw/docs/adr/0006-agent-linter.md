@@ -56,6 +56,7 @@ RocketClaw already relies on embedded create/update skills to guide agents towar
 - `RC005` reports external-content contamination when an agent with `websearch` or `webfetch` permission can edit a path another agent can read. Task reachability is not required.
 - `RC006` reports plural `permissions` frontmatter because RocketCode runtime parsing uses singular `permission`; plural `permissions` is ignored.
 - `RC007` reports a missing guardrail agent referenced by `guardrail` frontmatter.
+- `RC008` reports `reasoningEffort: xhigh` agent frontmatter because it may be excessive for normal operation.
 
 ### Matching And Evaluation
 
@@ -132,3 +133,4 @@ RocketClaw already relies on embedded create/update skills to guide agents towar
 - 2026-06-11: Initial accepted snapshot.
 - 2026-06-11: Added `rocketclaw agent-graph [next|current]` as a DOT inspection command sharing lint target and task graph semantics, including wildcard task grant expansion to concrete agent edges.
 - 2026-06-12: Added `RC007` for missing guardrail references and guardrail edges in agent graph output.
+- 2026-06-19: Added `RC008` for excessive `reasoningEffort: xhigh` agent frontmatter.

@@ -18,6 +18,7 @@ import (
 const (
 	rc000, rc001, rc002, rc003 = "RC000", "RC001", "RC002", "RC003"
 	rc004, rc005, rc006, rc007 = "RC004", "RC005", "RC006", "RC007"
+	rc008                      = "RC008"
 )
 
 // Finding is one lint result line.
@@ -72,6 +73,7 @@ func Lint(runtimeRoot string) (Result, error) {
 	findings = append(findings, lintTaskCycles(infos)...)
 	findings = append(findings, lintDelegationEscalation(infos)...)
 	findings = append(findings, lintGuardrailReferences(infos)...)
+	findings = append(findings, lintReasoningEffort(infos)...)
 	findings = filterSuppressed(findings, infos)
 	slices.SortFunc(findings, func(a, b Finding) int {
 		if n := strings.Compare(a.Code, b.Code); n != 0 {
@@ -252,7 +254,7 @@ func addSuppressionsFromNode(filePath, key string, node *yaml.Node, suppressions
 }
 
 func validCode(code string) bool {
-	return slices.Contains([]string{rc001, rc002, rc003, rc004, rc005, rc006, rc007}, code)
+	return slices.Contains([]string{rc001, rc002, rc003, rc004, rc005, rc006, rc007, rc008}, code)
 }
 
 func parseNoLint(comment string) (string, bool) {
@@ -362,6 +364,18 @@ func lintGuardrailReferences(infos map[string]*agentInfo) []Finding {
 
 		if _, ok := infos[guardrail]; !ok {
 			findings = append(findings, Finding{Code: rc007, Severity: "error", Path: info.filePath, Message: fmt.Sprintf("%s references missing guardrail agent %s", name, guardrail), keys: []string{"guardrail"}})
+		}
+	}
+
+	return findings
+}
+
+func lintReasoningEffort(infos map[string]*agentInfo) []Finding {
+	findings := []Finding{}
+
+	for name, info := range infos {
+		if info.agent.ReasoningEffort == "xhigh" {
+			findings = append(findings, Finding{Code: rc008, Severity: "error", Path: info.filePath, Message: name + " uses reasoningEffort xhigh, which may be excessive", keys: []string{"reasoningEffort"}})
 		}
 	}
 

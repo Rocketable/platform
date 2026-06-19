@@ -47,6 +47,25 @@ bad
 	assert.Contains(t, output, "RC006 error agents/lint-bad.md")
 }
 
+func TestRunLintReasoningEffortXHighFails(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	writeLintConfig(t, workspace)
+	writeLintAgent(t, filepath.Join(workspace, ".rocketclaw"), "expensive.md", `---
+description: expensive
+reasoningEffort: xhigh
+---
+expensive
+`)
+
+	output, err := captureStdoutAndError(t, func() error { return runLint([]string{"current"}) })
+	var coded exitCoder
+	require.True(t, errors.As(err, &coded))
+	assert.Equal(t, 1, coded.ExitCode())
+	assert.Contains(t, output, "rocketclaw lint current: found 1 findings")
+	assert.Contains(t, output, "RC008 error agents/expensive.md")
+}
+
 func TestRunLintRejectsUnknownTarget(t *testing.T) {
 	err := runLint([]string{"later"})
 	require.ErrorContains(t, err, "usage: rocketclaw lint [next|current]")

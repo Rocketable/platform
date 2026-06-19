@@ -81,10 +81,16 @@ guardrail: missing-safety
 ---
 guarded
 `)
+	writeAgent(t, runtimeRoot, "expensive.md", `---
+description: expensive
+reasoningEffort: xhigh
+---
+expensive
+`)
 
 	result, err := Lint(runtimeRoot)
 	require.NoError(t, err)
-	assertFindingCodes(t, result.Findings, rc001, rc002, rc003, rc004, rc005, rc006, rc007)
+	assertFindingCodes(t, result.Findings, rc001, rc002, rc003, rc004, rc005, rc006, rc007, rc008)
 }
 
 func TestLintSuppressions(t *testing.T) {
@@ -105,6 +111,12 @@ guardrail: missing-safety #nolint RC007: defined by pending overlay
 ---
 guarded
 `)
+	writeAgent(t, runtimeRoot, "expensive.md", `---
+description: expensive
+reasoningEffort: xhigh #nolint RC008: approved for hard reasoning
+---
+expensive
+`)
 
 	result, err := Lint(runtimeRoot)
 	require.NoError(t, err)
@@ -112,7 +124,24 @@ guarded
 	for _, finding := range result.Findings {
 		assert.NotEqual(t, rc001, finding.Code)
 		assert.NotEqual(t, rc007, finding.Code)
+		assert.NotEqual(t, rc008, finding.Code)
 	}
+}
+
+func TestLintReasoningEffortXHighError(t *testing.T) {
+	runtimeRoot := t.TempDir()
+	writeAgent(t, runtimeRoot, "expensive.md", `---
+description: expensive
+reasoningEffort: xhigh
+---
+expensive
+`)
+
+	result, err := Lint(runtimeRoot)
+	require.NoError(t, err)
+	require.Len(t, result.Findings, 1)
+	assert.Equal(t, rc008, result.Findings[0].Code)
+	assert.Equal(t, "error", result.Findings[0].Severity)
 }
 
 func TestLintSuppressionIsLocal(t *testing.T) {
