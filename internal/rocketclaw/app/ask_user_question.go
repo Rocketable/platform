@@ -17,11 +17,12 @@ type askUserQuestionPending struct {
 }
 
 type askUserQuestionBroker struct {
-	log     *slog.Logger
-	post    func(context.Context, *events.AskUserQuestionRequest) (events.TextConversationTarget, error)
-	delete  func(context.Context, events.TextConversationTarget) error
-	mu      sync.Mutex
-	pending map[string]*askUserQuestionPending
+	log         *slog.Logger
+	post        func(context.Context, *events.AskUserQuestionRequest) (events.TextConversationTarget, error)
+	delete      func(context.Context, events.TextConversationTarget) error
+	terminalAsk func(context.Context, *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error)
+	mu          sync.Mutex
+	pending     map[string]*askUserQuestionPending
 }
 
 func newAskUserQuestionBroker(log *slog.Logger) *askUserQuestionBroker {
@@ -29,11 +30,18 @@ func newAskUserQuestionBroker(log *slog.Logger) *askUserQuestionBroker {
 		return events.TextConversationTarget{}, errors.New("primary text connector is not ready")
 	}
 	errDelete := func(context.Context, events.TextConversationTarget) error { return nil }
+	errTerminal := func(context.Context, *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error) {
+		return events.AskUserQuestionAnswer{}, errors.New("ask_user_question requires an attached terminal CLI client")
+	}
 
-	return &askUserQuestionBroker{log: log.With("component", "ask_user_question"), post: errPost, delete: errDelete, pending: map[string]*askUserQuestionPending{}}
+	return &askUserQuestionBroker{log: log.With("component", "ask_user_question"), post: errPost, delete: errDelete, terminalAsk: errTerminal, pending: map[string]*askUserQuestionPending{}}
 }
 
 func (b *askUserQuestionBroker) ask(ctx context.Context, req *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error) {
+	if req.Source == events.SourceTerminalCLI {
+		return b.terminalAsk(ctx, req)
+	}
+
 	target, err := b.post(ctx, req)
 	if err != nil {
 		return events.AskUserQuestionAnswer{}, err

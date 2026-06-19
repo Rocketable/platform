@@ -33,7 +33,7 @@ Runnable entry points:
 
 ### RocketClaw
 
-`internal/rocketclaw` is the long-running service runtime around RocketCode. It provides persistent conversations, Slack and Discord connectors, voice input/output, browser voice mode, external MCP, cron-defined background prompts, one-shot and recurring scheduled messages, inbound and outbound attachments, graceful restart, and SQLite state under the selected runtime directory.
+`internal/rocketclaw` is the long-running service runtime around RocketCode. It provides persistent conversations, Slack and Discord connectors, voice input/output, browser voice mode, terminal CLI attachment through a local Unix control socket, external MCP, cron-defined background prompts, one-shot and recurring scheduled messages, inbound and outbound attachments, graceful restart, and SQLite state under the selected runtime directory.
 
 The runnable entry point is `cmd/rocketclaw`. Run `rocketclaw help` for setup, validation, session inspection, and operational commands.
 
@@ -71,6 +71,7 @@ For local CLI experimentation, `rocketcode` and `rocketloop` run RocketCode dire
 RocketClaw is configured with `rocketclaw.json` in the working directory. Runtime state is local to the selected workspace:
 
 - `.rocketclaw/state.sqlite3`: sessions, connector routing, scheduled messages, external MCP sessions, restart notifications, and goal-loop state.
+- `.rocketclaw/control/control.sock`: server-owned Unix socket used by `rocketclaw cli`, `rocketclaw cli --new [agent]`, and `rocketclaw cli --attach <conversation-id>`.
 - `.rocketclaw/overlays/`: configured git overlay clones for runtime assets.
 - `.rocketclaw/.rocketcode/`: RocketCode shell output and transient artifacts.
 

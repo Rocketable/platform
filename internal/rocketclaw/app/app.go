@@ -45,9 +45,17 @@ const (
 )
 
 // Run starts rocketclaw and blocks until the context is canceled or a fatal error occurs.
-//
-//nolint:gocyclo // Runtime wiring is kept in one place so startup order remains explicit.
 func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger) error {
+	return run(ctx, cfg, configPath, logger, nil)
+}
+
+// RunCLI starts rocketclaw with an attached terminal CLI connector.
+func RunCLI(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, options CLIOptions) error {
+	return run(ctx, cfg, configPath, logger, &options)
+}
+
+//nolint:gocyclo // Runtime wiring is kept in one place so startup order remains explicit.
+func run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, cliOptions *CLIOptions) error {
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -73,8 +81,10 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		shutdownDone     = make(chan struct{})
 		restartRequested = make(chan struct{})
 		mainBridge       *harnessbridge.Bridge
+		cliBridge        *harnessbridge.Bridge
 		threadBridges    *threadBridgeManager
 		cronjobs         *cronjob.Manager
+		controlSocket    *controlServer
 		slackSink        *slackconnector.Connector
 		discordTextSink  *discordtext.Connector
 		discordSink      *discordvoice.Connector
@@ -173,6 +183,8 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	}
 
 	questionBroker := newAskUserQuestionBroker(logger)
+	controlQuestions := newControlQuestionHub()
+	questionBroker.terminalAsk = controlQuestions.ask
 
 	var externalMCPUsers map[string]string
 	if cfg.MCPExternal.Enabled {
@@ -215,6 +227,12 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 					logger.Warn("graceful shutdown stopped waiting for bridge idle", "error", err)
 				}
 
+				if cliBridge != nil {
+					if err := cliBridge.WaitIdle(shutdownCtx); err != nil {
+						logger.Warn("graceful shutdown stopped waiting for CLI bridge idle", "error", err)
+					}
+				}
+
 				if err := threadBridges.WaitIdle(shutdownCtx); err != nil {
 					logger.Warn("graceful shutdown stopped waiting for thread bridges idle", "error", err)
 				}
@@ -230,11 +248,21 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 					logger.Warn("graceful shutdown stopped waiting for bridge idle", "error", err)
 				}
 
+				if cliBridge != nil {
+					if err := cliBridge.WaitIdle(shutdownCtx); err != nil {
+						logger.Warn("graceful shutdown stopped waiting for CLI bridge idle", "error", err)
+					}
+				}
+
 				if err := threadBridges.WaitIdle(shutdownCtx); err != nil {
 					logger.Warn("graceful shutdown stopped waiting for thread bridges idle", "error", err)
 				}
 
 				_ = threadBridges.Stop()
+				if cliBridge != nil {
+					_ = cliBridge.Stop()
+				}
+
 				_ = mainBridge.Stop()
 
 				if err := bus.WaitOutboundIdle(shutdownCtx); err != nil {
@@ -322,6 +350,36 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	if err := threadBridges.StartActiveGoals(); err != nil {
 		return err
+	}
+
+	if cliOptions == nil {
+		controlSocket, err = startControlServer(runCtx, cfg, bus, rocketcodeSessions, threadBridges, controlQuestions, logger)
+		if err != nil {
+			return err
+		}
+
+		stops = append(stops, namedStopper{name: "control_socket", stop: controlSocket.Close})
+	}
+
+	if cliOptions != nil {
+		cliSession := newTerminalCLI(*cliOptions, bus, func() { startShutdown("terminal CLI exited", false) })
+		questionBroker.terminalAsk = cliSession.askUserQuestion
+		if cliSession.newConversation {
+			cliBridge = harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: cliSession.conversationID, Agent: cliSession.agent, ConsumeSharedInbound: false, OutputTargets: []events.OutputTarget{events.OutputTargetTerminal}, RequestRestart: requestRestart, AskUserQuestion: questionBroker.ask, SessionService: rocketcodeSessions}, logger)
+			if err := cliBridge.Start(runCtx); err != nil {
+				return fmt.Errorf("start terminal CLI bridge: %w", err)
+			}
+
+			cliSession.submit = cliBridge.Submit
+			cliSession.summarize = cliBridge.Summarize
+			cliSession.publishMain = bus.PublishInbound
+		} else {
+			cliSession.submit = func(submitCtx context.Context, inbound *events.InboundMessage) error {
+				return bus.PublishInbound(submitCtx, inbound)
+			}
+		}
+
+		cliSession.Start(runCtx)
 	}
 
 	defer func() {

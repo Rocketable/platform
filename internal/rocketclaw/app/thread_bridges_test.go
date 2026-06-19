@@ -21,7 +21,7 @@ import (
 )
 
 func TestRunReportsPendingRestartNotificationStartupErrors(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := shortTempDir(t)
 	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultWorkDir)
 	require.NoError(t, err)
 	require.NoError(t, service.Stop(context.Background()))
@@ -37,7 +37,7 @@ func TestRunReportsPendingRestartNotificationStartupErrors(t *testing.T) {
 }
 
 func TestRunStopsWebUIOnlyRuntimeWhenContextCanceled(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := shortTempDir(t)
 	urlCh := make(chan string, 1)
 
 	ctx, cancel := context.WithCancel(t.Context())

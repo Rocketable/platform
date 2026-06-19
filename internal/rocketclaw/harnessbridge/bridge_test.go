@@ -2547,6 +2547,22 @@ func TestAskUserQuestionToolFiltersRedundantCustomOptions(t *testing.T) {
 	assert.JSONEq(t, `{"selected":["high"],"custom":"","source":"slack"}`, result.Output)
 }
 
+func TestAskUserQuestionToolCopiesTerminalMetadata(t *testing.T) {
+	tool := askUserQuestionTool(func(_ context.Context, req *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error) {
+		assert.Equal(t, events.SourceTerminalCLI, req.Source)
+		assert.Equal(t, "cli:abc", req.ConversationID)
+		assert.Equal(t, "client-1", req.TerminalClientID)
+		assert.Nil(t, req.SlackReply)
+		assert.Nil(t, req.DiscordReply)
+		return events.AskUserQuestionAnswer{Selected: []string{"yes"}, Source: events.SourceTerminalCLI}, nil
+	}, &events.InboundMessage{Source: events.SourceTerminalCLI, Human: true, ConversationID: "cli:abc", Metadata: map[string]string{events.TerminalCLIClientIDMetadataKey: "client-1"}})
+
+	result, err := tool.Call(t.Context(), []byte(`{"question":"Approve?","details":"","options":[{"label":"Yes","value":"yes","description":""}],"multiple":false}`), nil)
+
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"selected":["yes"],"custom":"","source":"terminal_cli"}`, result.Output)
+}
+
 func TestProcessResponseSuppressesProviderOnlySubagentDiagnostics(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()

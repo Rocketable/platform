@@ -15,6 +15,9 @@ const MaxInboundTextAttachmentBytes = 256 << 10
 
 const mainConversationID = "main"
 
+// TerminalCLIClientIDMetadataKey identifies the attached terminal client for terminal-originated turns.
+const TerminalCLIClientIDMetadataKey = "terminal_cli_client_id"
+
 // InboundKind describes how an inbound message should be handled.
 type InboundKind string
 
@@ -34,6 +37,7 @@ const (
 	SourceDiscordText  Source = "discord_text"
 	SourceDiscordVoice Source = "discord_voice"
 	SourceExternalMCP  Source = "external_mcp"
+	SourceTerminalCLI  Source = "terminal_cli"
 	SourceWebVoice     Source = "web_voice"
 	SourceSystem       Source = "system"
 )
@@ -57,7 +61,15 @@ const (
 	OutputTargetDiscord OutputTarget = "discord"
 	// OutputTargetWebUI delivers a response to the browser voice-mode client.
 	OutputTargetWebUI OutputTarget = "web_ui"
+	// OutputTargetTerminal delivers a response to the invoking terminal CLI.
+	OutputTargetTerminal OutputTarget = "terminal"
 )
+
+// ObservedMessage is a non-consuming bus event tap record.
+type ObservedMessage struct {
+	Inbound  *InboundMessage
+	Outbound *OutboundMessage
+}
 
 // InboundAttachment carries an inline attachment into the shared main-session prompt.
 type InboundAttachment struct {
@@ -116,6 +128,8 @@ type AskUserQuestionOption struct{ Label, Value, Description string }
 type AskUserQuestionRequest struct {
 	Source                Source
 	ID, Question, Details string
+	ConversationID        string
+	TerminalClientID      string
 	Options               []AskUserQuestionOption
 	Multiple              bool
 	SlackReply            *SlackReplyTarget

@@ -1058,7 +1058,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 	b.log.Info("prepared rocketcode session history", "conversation_id", b.config.ConversationID, "turn_id", turnID, "entry_count", len(observed), "replay_item_count", replayItemCount, "history_bytes", historyBytes, "compaction_count", compactionCount, "latest_entry_id", latestEntryID, "latest_entry_type", latestEntryType)
 
 	customTools := []rocketcode.Tool{attachments.Tool(root)}
-	if msg.Human && (msg.Source == events.SourceSlack && msg.SlackReply != nil || msg.Source == events.SourceDiscordText && msg.DiscordReply != nil) {
+	if msg.Human && (msg.Source == events.SourceSlack && msg.SlackReply != nil || msg.Source == events.SourceDiscordText && msg.DiscordReply != nil || msg.Source == events.SourceTerminalCLI && strings.TrimSpace(msg.Metadata[events.TerminalCLIClientIDMetadataKey]) != "") {
 		customTools = append(customTools, askUserQuestionTool(b.config.AskUserQuestion, msg))
 	}
 
@@ -1788,7 +1788,7 @@ func resetScheduledMessagesTool(reset func() error) rocketcode.Tool {
 }
 
 func askUserQuestionTool(ask func(context.Context, *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error), msg *events.InboundMessage) rocketcode.Tool {
-	return rocketcode.Tool{Name: askUserQuestionToolName, Description: "Ask the human partner a native Slack or Discord Text question and wait for their answer. The options array is only for concrete predefined choices to show as buttons/selects; do not include catch-all choices like Custom, Other, or Free text.", Permission: "rocketclaw", VisibilitySubjects: []string{askUserQuestionToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{askUserQuestionToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"question": map[string]any{"type": "string"}, "details": map[string]any{"type": "string"}, "options": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"label": map[string]any{"type": "string"}, "value": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}, "required": []string{"label", "value", "description"}}}, "multiple": map[string]any{"type": "boolean"}}, "required": []string{"question", "details", "options", "multiple"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+	return rocketcode.Tool{Name: askUserQuestionToolName, Description: "Ask the human partner a native Slack, Discord Text, or terminal CLI question and wait for their answer. The options array is only for concrete predefined choices to show as buttons/selects; do not include catch-all choices like Custom, Other, or Free text.", Permission: "rocketclaw", VisibilitySubjects: []string{askUserQuestionToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{askUserQuestionToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"question": map[string]any{"type": "string"}, "details": map[string]any{"type": "string"}, "options": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"label": map[string]any{"type": "string"}, "value": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}, "required": []string{"label", "value", "description"}}}, "multiple": map[string]any{"type": "boolean"}}, "required": []string{"question", "details", "options", "multiple"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		var req events.AskUserQuestionRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return rocketcode.ToolResult{}, fmt.Errorf("parse human question: %w", err)
@@ -1802,7 +1802,8 @@ func askUserQuestionTool(ask func(context.Context, *events.AskUserQuestionReques
 			return label == "custom" || label == "custom answer" || label == "custom response" || label == "free text" || label == "other" || value == "custom" || value == "custom answer" || value == "custom response" || value == "free text" || value == "other"
 		})
 
-		req.ID, req.Source = rand.Text(), msg.Source
+		req.ID, req.Source, req.ConversationID = rand.Text(), msg.Source, msg.ConversationID
+		req.TerminalClientID = strings.TrimSpace(msg.Metadata[events.TerminalCLIClientIDMetadataKey])
 		if msg.SlackReply != nil {
 			req.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS}
 		}

@@ -21,7 +21,7 @@ Several rocketclaw capabilities exist only because of precise RocketCode configu
 
 | Path              | File                                  | Purpose                                                                                | Prompt input expansion |
 |-------------------|---------------------------------------|----------------------------------------------------------------------------------------|------------------------|
-| Persistent bridge | `internal/rocketclaw/harnessbridge/bridge.go`  | Main, thread, Slack, Discord text, browser, Discord voice, scheduled, and external MCP conversation turns. | `InputPrompts: false`  |
+| Persistent bridge | `internal/rocketclaw/harnessbridge/bridge.go`  | Main, thread, Slack, Discord text, terminal CLI, browser, Discord voice, scheduled, and external MCP conversation turns. | `InputPrompts: false`  |
 | Raw run           | `internal/rocketclaw/harnessbridge/raw_run.go` | Cron and one-off cron background turns.                                                | `InputPrompts: true`   |
 
 Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell expansion. Persistent bridge input text remains literal. Raw input text expands because cron bodies are trusted workspace files. Both paths construct RocketCode with a provider registry that can route provider-qualified OpenAI and Anthropic model requests. Both paths pass `rocketcode.auto_approve_permissions` through to RocketCode's `AutoApprovePermissions` flag.
@@ -103,9 +103,10 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 | `rocketclaw_reset_scheduled_messages`         | Clears scheduled messages for the owning bridge context.                                                                      |
 | `rocketclaw_update_goal`                       | Persistent bridge tool visible only when the owning conversation has an active text connector goal loop; reports `progress`, `complete`, or `blocked` with an optional explanatory `note`. |
 | `rocketclaw_attach_files_to_response`         | Persistent bridge tool that allows RocketCode to attach collected files to the outbound response through the shared outbound attachment carrier.                              |
+| `ask_user_question`                            | Persistent bridge tool visible only for qualifying human-originated Slack, Discord Text, or terminal CLI turns with a native answer path. The tool asks the originating human through that surface, blocks until answered or canceled, and returns selected option values, optional custom text, and the answer source. |
 | `rocketclaw_i_want_human_partner_to_see_this` | Required completion tool for raw background runs; its argument is the exact human-visible final message or empty for silence. |
 
-Persistent bridge tools are restart, schedule message, reset scheduled messages, active-goal update when applicable, attach files, and path-specific custom tools. Raw-run tools are decision, outbound attachment collection, restart, schedule message, and reset scheduled messages. Raw and persistent schedule-message tools expose the same one-shot and recurring contract.
+Persistent bridge tools are restart, schedule message, reset scheduled messages, active-goal update when applicable, attach files, `ask_user_question` when the originating human turn qualifies, and path-specific custom tools. Raw-run tools are decision, outbound attachment collection, restart, schedule message, and reset scheduled messages. Raw and persistent schedule-message tools expose the same one-shot and recurring contract.
 
 ### Goal-Loop Prompting
 
@@ -198,3 +199,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-15: Updated RocketCode embedding contracts for goal-loop `progress` updates and `Progress summary:` text mirrored into `rocketclaw_update_goal.note`.
 - 2026-06-17: Added RocketClaw embedding contract for passing `rocketcode.auto_approve_permissions` into RocketCode automatic permission review.
 - 2026-06-17: Added OpenTelemetry/OpenInference observability contract for Phoenix-compatible tracing around RocketClaw-owned RocketCode turns, configured exclusively through the RocketClaw configuration file.
+- 2026-06-19: Documented `ask_user_question` as a conditional persistent-bridge RocketClaw tool and expanded its native answer path to terminal CLI turns.

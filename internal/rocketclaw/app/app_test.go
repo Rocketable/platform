@@ -1,6 +1,8 @@
 package app
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -12,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -137,6 +140,284 @@ func TestConfiguredMainOutputTargetsSelectsPrimaryTextConnector(t *testing.T) {
 			assert.Equal(t, tt.want, configuredMainOutputTargets(&tt.cfg))
 		})
 	}
+}
+
+func TestTerminalRendererPrintsEvent(t *testing.T) {
+	var out bytes.Buffer
+
+	renderer := terminalRenderer{out: &out}
+
+	renderer.printEvent("event")
+
+	assert.Equal(t, "event\n", out.String())
+}
+
+func TestTerminalCLISummaryPromptDefaultsNo(t *testing.T) {
+	var out bytes.Buffer
+
+	input := strings.NewReader("\n")
+	called := false
+	cli := terminalCLI{renderer: &terminalRenderer{out: &out}, in: input, reader: bufio.NewReader(input), summarize: func(context.Context, string) (string, error) {
+		called = true
+		return "", nil
+	}}
+
+	cli.offerSummary()
+
+	assert.False(t, called)
+}
+
+func TestTerminalCLISummaryPromptPublishesInternalizedMainNote(t *testing.T) {
+	var out bytes.Buffer
+
+	input := strings.NewReader("y\n")
+
+	var published *events.InboundMessage
+
+	cli := terminalCLI{
+		renderer: &terminalRenderer{out: &out},
+		in:       input,
+		reader:   bufio.NewReader(input),
+		summarize: func(context.Context, string) (string, error) {
+			return "session summary", nil
+		},
+		publishMain: func(_ context.Context, msg *events.InboundMessage) error {
+			published = msg
+			return nil
+		},
+	}
+
+	cli.offerSummary()
+
+	require.NotNil(t, published)
+	assert.Equal(t, events.SourceTerminalCLI, published.Source)
+	assert.Equal(t, events.InboundKindInternalize, published.Kind)
+	assert.Equal(t, events.MainConversationID(), published.ConversationID)
+	assert.Equal(t, "session summary", published.Text)
+}
+
+func TestTerminalCLIExitCanReadPipedSummaryAnswer(t *testing.T) {
+	var out bytes.Buffer
+
+	input := strings.NewReader("/exit\ny\n")
+
+	var published *events.InboundMessage
+
+	cli := terminalCLI{
+		renderer:        &terminalRenderer{out: &out},
+		in:              input,
+		reader:          bufio.NewReader(input),
+		newConversation: true,
+		onExit:          func() {},
+		submit:          func(context.Context, *events.InboundMessage) error { return nil },
+		summarize: func(context.Context, string) (string, error) {
+			return "session summary", nil
+		},
+		publishMain: func(_ context.Context, msg *events.InboundMessage) error {
+			published = msg
+			return nil
+		},
+	}
+
+	cli.readInput(context.Background())
+
+	require.NotNil(t, published)
+	assert.Equal(t, "session summary", published.Text)
+}
+
+func TestControlServerSocketModesAndCleanup(t *testing.T) {
+	workspace := shortTempDir(t)
+	cfg := &config.Config{Workspace: workspace}
+
+	bus := events.New()
+	defer bus.Close()
+
+	store := newAppTestSessionService(t, workspace)
+	manager := newThreadBridgeManager(bus, cfg, store, testLogger(), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
+
+	server, err := startControlServer(t.Context(), cfg, bus, store, manager, newControlQuestionHub(), testLogger())
+	require.NoError(t, err)
+
+	socketPath := ControlSocketPath(cfg)
+	parentInfo, err := os.Stat(filepath.Dir(socketPath))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o700), parentInfo.Mode().Perm())
+
+	socketInfo, err := os.Lstat(socketPath)
+	require.NoError(t, err)
+	assert.NotZero(t, socketInfo.Mode()&os.ModeSocket)
+	assert.Equal(t, os.FileMode(0o600), socketInfo.Mode().Perm())
+
+	require.NoError(t, server.Close(t.Context()))
+
+	_, err = os.Lstat(socketPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestControlServerDoesNotRemoveNonSocketPath(t *testing.T) {
+	workspace := shortTempDir(t)
+	cfg := &config.Config{Workspace: workspace}
+	socketPath := ControlSocketPath(cfg)
+	require.NoError(t, os.MkdirAll(filepath.Dir(socketPath), 0o700))
+	require.NoError(t, os.WriteFile(socketPath, []byte("not a socket"), 0o600))
+
+	bus := events.New()
+	defer bus.Close()
+
+	store := newAppTestSessionService(t, workspace)
+	manager := newThreadBridgeManager(bus, cfg, store, testLogger(), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
+
+	_, err := startControlServer(t.Context(), cfg, bus, store, manager, newControlQuestionHub(), testLogger())
+	require.ErrorContains(t, err, "not a socket")
+	data, err := os.ReadFile(socketPath)
+	require.NoError(t, err)
+	assert.Equal(t, "not a socket", string(data))
+}
+
+func TestControlServerNewConversationPersistsAgent(t *testing.T) {
+	workspace := shortTempDir(t)
+	cfg := &config.Config{Workspace: workspace}
+	bus := events.New()
+	defer bus.Close()
+
+	store := newAppTestSessionService(t, workspace)
+	manager := newThreadBridgeManager(bus, cfg, store, testLogger(), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
+	server, err := startControlServer(t.Context(), cfg, bus, store, manager, newControlQuestionHub(), testLogger())
+	require.NoError(t, err)
+	defer func() { require.NoError(t, server.Close(t.Context())) }()
+
+	conn, err := net.Dial("unix", ControlSocketPath(cfg))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, conn.Close()) }()
+	require.NoError(t, json.NewEncoder(conn).Encode(controlRequest{Type: "new", Agent: "planner"}))
+
+	var msg controlMessage
+	require.NoError(t, json.NewDecoder(conn).Decode(&msg))
+	require.Equal(t, "attached", msg.Type)
+
+	state, err := store.Load()
+	require.NoError(t, err)
+	assert.Equal(t, harnessbridge.ThreadState{Agent: "planner"}, state.Threads[msg.ConversationID])
+}
+
+func TestRunControlClientExitStopsReadingPipedInput(t *testing.T) {
+	workspace := shortTempDir(t)
+	cfg := &config.Config{Workspace: workspace}
+	socketPath := ControlSocketPath(cfg)
+	require.NoError(t, os.MkdirAll(filepath.Dir(socketPath), 0o700))
+
+	listener, err := net.Listen("unix", socketPath)
+	require.NoError(t, err)
+
+	defer func() { _ = listener.Close() }()
+
+	requests := make(chan controlRequest, 3)
+	done := make(chan error, 1)
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			done <- fmt.Errorf("accept control client: %w", err)
+			return
+		}
+
+		defer func() { _ = conn.Close() }()
+
+		enc, dec := json.NewEncoder(conn), json.NewDecoder(conn)
+
+		var req controlRequest
+		if err := dec.Decode(&req); err != nil {
+			done <- fmt.Errorf("decode attach: %w", err)
+			return
+		}
+
+		requests <- req
+
+		if err := enc.Encode(controlMessage{Type: "attached", ConversationID: req.ConversationID}); err != nil {
+			done <- fmt.Errorf("encode attached: %w", err)
+			return
+		}
+
+		if err := dec.Decode(&req); err != nil {
+			done <- fmt.Errorf("decode exit: %w", err)
+			return
+		}
+
+		requests <- req
+
+		_ = conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+
+		if err := dec.Decode(&req); err == nil {
+			requests <- req
+
+			done <- fmt.Errorf("unexpected request after exit: %s", req.Type)
+
+			return
+		}
+
+		done <- nil
+	}()
+
+	err = RunControlClient(t.Context(), cfg, CLIOptions{In: strings.NewReader("/exit\nignored\n"), Out: new(bytes.Buffer)})
+	require.NoError(t, err)
+	require.NoError(t, <-done)
+	assert.Equal(t, "attach", (<-requests).Type)
+	assert.Equal(t, "exit", (<-requests).Type)
+}
+
+func TestRunControlClientAnswersQuestion(t *testing.T) {
+	workspace := shortTempDir(t)
+	cfg := &config.Config{Workspace: workspace}
+	socketPath := ControlSocketPath(cfg)
+	require.NoError(t, os.MkdirAll(filepath.Dir(socketPath), 0o700))
+
+	listener, err := net.Listen("unix", socketPath)
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
+
+	requests := make(chan controlRequest, 3)
+	done := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		enc, dec := json.NewEncoder(conn), json.NewDecoder(conn)
+		var req controlRequest
+		if err := dec.Decode(&req); err != nil {
+			done <- err
+			return
+		}
+		requests <- req
+		if err := enc.Encode(controlMessage{Type: "attached", ConversationID: req.ConversationID}); err != nil {
+			done <- err
+			return
+		}
+		if err := enc.Encode(controlMessage{Type: "question", Question: &events.AskUserQuestionRequest{ID: "q1", Question: "Deploy?", Details: "Production", Options: []events.AskUserQuestionOption{{Label: "Yes", Value: "yes", Description: "Ship it"}}}}); err != nil {
+			done <- err
+			return
+		}
+		if err := dec.Decode(&req); err != nil {
+			done <- err
+			return
+		}
+		requests <- req
+		done <- nil
+	}()
+
+	out := new(bytes.Buffer)
+	err = RunControlClient(t.Context(), cfg, CLIOptions{In: strings.NewReader("1\n"), Out: out})
+	require.NoError(t, err)
+	require.NoError(t, <-done)
+	assert.Equal(t, "attach", (<-requests).Type)
+	answer := <-requests
+	assert.Equal(t, "question_answer", answer.Type)
+	assert.Equal(t, "q1", answer.QuestionID)
+	assert.Equal(t, []string{"yes"}, answer.Answer.Selected)
+	assert.Contains(t, out.String(), "Deploy?")
 }
 
 func TestOutboundLoopPropagatesDeliveryErrorsToWaitDelivered(t *testing.T) {
@@ -339,7 +620,7 @@ func TestOutboundLoopMarksMessagesWithoutTargetsDelivered(t *testing.T) {
 }
 
 func TestRunStartsRuntimeAndStopsOnCanceledContext(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := shortTempDir(t)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -379,7 +660,7 @@ func TestRunStartsRuntimeAndStopsOnCanceledContext(t *testing.T) {
 }
 
 func TestRunContextCancellationWaitsForActiveMainBridge(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := shortTempDir(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\n---\nPrompt\n"), 0o644))
 
@@ -487,7 +768,7 @@ func TestRunContextCancellationWaitsForActiveMainBridge(t *testing.T) {
 }
 
 func TestRunReturnsErrRestartRequestedAfterCronRestartTool(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := shortTempDir(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\npermission:\n  rocketclaw:\n    '*': allow\n---\nPrompt\n"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "cron"), 0o755))
@@ -1350,6 +1631,16 @@ func outboundOK(fn func(context.Context, *events.OutboundMessage)) func(context.
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
+}
+
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+
+	dir, err := os.MkdirTemp("/tmp", "rc-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
+
+	return dir
 }
 
 func inertExternalMCPRelay(context.Context, string, []events.OutboundAttachment, *events.InboundMessage, string) (*events.InboundMessage, error) {

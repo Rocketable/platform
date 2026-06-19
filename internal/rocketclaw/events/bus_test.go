@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"iter"
 	"testing"
 	"time"
 
@@ -61,6 +62,40 @@ func TestWaitOutboundIdleWaitsForDelivery(t *testing.T) {
 	require.Equal(t, outbound, requireOutboundMessage(t, bus, time.Second))
 	outbound.MarkDelivered(nil)
 	require.NoError(t, <-done)
+}
+
+func TestObserveDoesNotConsumeInboundOrOutbound(t *testing.T) {
+	bus := New()
+	defer bus.Close()
+
+	observeCtx := t.Context()
+
+	observed := bus.Observe(observeCtx)
+
+	inbound := NewMainInboundMessage(SourceSlack, InboundKindPrompt, "slack", "hello", true)
+	outbound := NewMainOutboundMessage(SourceSystem, "answer")
+
+	require.NoError(t, bus.PublishInbound(context.Background(), inbound))
+	require.NoError(t, bus.PublishOutbound(context.Background(), outbound))
+
+	require.Equal(t, inbound, requireInboundMessage(t, bus, time.Second))
+	require.Equal(t, outbound, requireOutboundMessage(t, bus, time.Second))
+	messages := requireObservedMessages(t, observed, 2, time.Second)
+	require.Equal(t, ObservedMessage{Inbound: inbound}, messages[0])
+	require.Equal(t, ObservedMessage{Outbound: outbound}, messages[1])
+}
+
+func TestObserveStopsAfterClose(t *testing.T) {
+	bus := New()
+	observed := bus.Observe(context.Background())
+	bus.Close()
+
+	var messages []ObservedMessage
+	for msg := range observed {
+		messages = append(messages, msg)
+	}
+
+	require.Empty(t, messages)
 }
 
 func TestCompleteResponseWithAttachmentsClonesAttachments(t *testing.T) {
@@ -173,6 +208,32 @@ func requireAudioChunk(t *testing.T, bus *Bus, timeout time.Duration) *AudioChun
 	}
 
 	t.Fatalf("timed out waiting for audio chunk after %v", timeout)
+
+	return nil
+}
+
+func requireObservedMessages(t *testing.T, observed iter.Seq[ObservedMessage], count int, timeout time.Duration) []ObservedMessage {
+	t.Helper()
+
+	result := make(chan []ObservedMessage, 1)
+
+	go func() {
+		messages := make([]ObservedMessage, 0, count)
+		for msg := range observed {
+			messages = append(messages, msg)
+			if len(messages) == count {
+				result <- messages
+				return
+			}
+		}
+	}()
+
+	select {
+	case messages := <-result:
+		return messages
+	case <-time.After(timeout):
+		t.Fatal("timed out waiting for observed messages")
+	}
 
 	return nil
 }

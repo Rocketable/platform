@@ -30,6 +30,13 @@ type Bus struct {
 	outbound                         []*OutboundMessage
 	outboundPending                  int
 	audio                            []*AudioChunk
+	observers                        map[*Observer]struct{}
+}
+
+// Observer receives non-consuming inbound and outbound bus events.
+type Observer struct {
+	bus   *Bus
+	queue []ObservedMessage
 }
 
 // Config controls event bus behavior.
@@ -85,6 +92,8 @@ func (b *Bus) PublishInbound(ctx context.Context, msg *InboundMessage) error {
 	} else {
 		b.inboundAutos = append(b.inboundAutos, msg)
 	}
+
+	b.publishObservedLocked(ObservedMessage{Inbound: msg})
 
 	b.cond.Broadcast()
 
@@ -142,9 +151,40 @@ func (b *Bus) PublishOutbound(ctx context.Context, msg *OutboundMessage) error {
 	}
 
 	b.outbound = append(b.outbound, msg)
+	b.publishObservedLocked(ObservedMessage{Outbound: msg})
 	b.cond.Broadcast()
 
 	return nil
+}
+
+// Observe returns a non-consuming single-use iterator over inbound and outbound text events.
+func (b *Bus) Observe(ctx context.Context) iter.Seq[ObservedMessage] {
+	observer := &Observer{bus: b}
+
+	b.mu.Lock()
+	if b.observers == nil {
+		b.observers = map[*Observer]struct{}{}
+	}
+
+	b.observers[observer] = struct{}{}
+	b.mu.Unlock()
+
+	return func(yield func(ObservedMessage) bool) {
+		stop := b.notifyOnContext(ctx)
+		defer stop()
+		defer b.removeObserver(observer)
+
+		for {
+			msg, ok := observer.next(ctx)
+			if !ok {
+				return
+			}
+
+			if !yield(msg) {
+				return
+			}
+		}
+	}
 }
 
 // WaitOutboundIdle waits until outbound work is queued nowhere and delivered everywhere.
@@ -339,6 +379,38 @@ func (b *Bus) dequeueAudio(ctx context.Context) (*AudioChunk, bool) {
 		}
 
 		b.cond.Wait()
+	}
+}
+
+func (b *Bus) publishObservedLocked(msg ObservedMessage) {
+	for observer := range b.observers {
+		observer.queue = append(observer.queue, msg)
+	}
+}
+
+func (b *Bus) removeObserver(observer *Observer) {
+	b.mu.Lock()
+	delete(b.observers, observer)
+	b.mu.Unlock()
+}
+
+func (o *Observer) next(ctx context.Context) (ObservedMessage, bool) {
+	o.bus.mu.Lock()
+	defer o.bus.mu.Unlock()
+
+	for {
+		if o.bus.closed || ctx.Err() != nil {
+			return ObservedMessage{}, false
+		}
+
+		if len(o.queue) > 0 {
+			msg := o.queue[0]
+			o.queue = o.queue[1:]
+
+			return msg, true
+		}
+
+		o.bus.cond.Wait()
 	}
 }
 
