@@ -22,11 +22,14 @@ import (
 )
 
 type mockResponsesAPI struct {
-	mu        sync.Mutex
-	calls     []responses.ResponseNewParams
-	responses []*responses.Response
-	err       error
-	newFunc   func(context.Context, *responses.ResponseNewParams) (*responses.Response, error)
+	mu               sync.Mutex
+	calls            []responses.ResponseNewParams
+	compactCalls     []responses.ResponseCompactParams
+	responses        []*responses.Response
+	compactResponses []*responses.CompactedResponse
+	err              error
+	compactErr       error
+	newFunc          func(context.Context, *responses.ResponseNewParams) (*responses.Response, error)
 }
 
 func (m *mockResponsesAPI) New(ctx context.Context, params *responses.ResponseNewParams, _ ...option.RequestOption) (*responses.Response, error) {
@@ -48,6 +51,25 @@ func (m *mockResponsesAPI) New(ctx context.Context, params *responses.ResponseNe
 
 	resp := m.responses[0]
 	m.responses = m.responses[1:]
+
+	return resp, nil
+}
+
+func (m *mockResponsesAPI) Compact(_ context.Context, params *responses.ResponseCompactParams, _ ...option.RequestOption) (*responses.CompactedResponse, error) {
+	m.mu.Lock()
+	m.compactCalls = append(m.compactCalls, *params)
+	m.mu.Unlock()
+
+	if m.compactErr != nil {
+		return nil, m.compactErr
+	}
+
+	if len(m.compactResponses) == 0 {
+		return nil, errors.New("no mock compact response configured")
+	}
+
+	resp := m.compactResponses[0]
+	m.compactResponses = m.compactResponses[1:]
 
 	return resp, nil
 }
@@ -91,6 +113,13 @@ func mockResponseFunc(newFunc func(context.Context, *responses.ResponseNewParams
 	mock.newFunc = newFunc
 
 	return &mock
+}
+
+func contextLengthExceededError() error {
+	req := httptest.NewRequest(http.MethodPost, "https://api.openai.test/v1/responses", http.NoBody)
+	resp := &http.Response{StatusCode: http.StatusBadRequest, Status: "400 Bad Request", Request: req}
+
+	return &openai.Error{Code: "context_length_exceeded", Message: "too large", StatusCode: http.StatusBadRequest, Request: req, Response: resp}
 }
 
 func testLooper(client responsesAPI) *looper {
@@ -548,6 +577,146 @@ func TestLooperPersistsAndReplaysCompactionItems(t *testing.T) {
 	require.Len(t, turns[0].ReplayInput, 3)
 	require.Len(t, history, 3)
 	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, history[1]))
+}
+
+func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
+	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		testInputMessage(responses.EasyInputMessageRole("user"), "old question", ""),
+		testInputMessage(responses.EasyInputMessageRole("assistant"), "old answer", ""),
+	})
+	require.NoError(t, err)
+
+	mock := mockResponses()
+	mock.compactResponses = []*responses.CompactedResponse{compactedResponse("cmp-old", "encrypted-old")}
+	contextErr := contextLengthExceededError()
+	mock.newFunc = func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
+		if len(mock.calls) == 1 {
+			return nil, contextErr
+		}
+
+		return responseWithMessage("resp-final", "answer"), nil
+	}
+	looper := testLooper(mock)
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "new question", output)
+
+	close(input)
+
+	var saved []SessionEntry
+
+	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), func(entry SessionEntry) error {
+		saved = append(saved, entry)
+
+		return nil
+	}, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
+	require.Len(t, mock.compactCalls, 1)
+	require.Contains(t, marshalJSON(t, mock.compactCalls[0].Input.OfResponseInputItemArray), "old question")
+	require.NotContains(t, marshalJSON(t, mock.compactCalls[0].Input.OfResponseInputItemArray), "new question")
+	require.Len(t, mock.calls, 2)
+	require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), `"type":"compaction"`)
+	require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), "new question")
+	require.Len(t, saved, 1)
+	require.Contains(t, string(saved[0].ReplayInput[0]), `"type":"compaction"`)
+}
+
+func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {
+	toolCall := functionCallReplayInput("tool-1", "call-1", "lookup", `{"q":"x"}`)
+	toolOutputParam := toolCallOutput("call-1", TextToolResult("result"))
+	toolOutput := responses.ResponseInputItemUnionParam{OfFunctionCallOutput: &toolOutputParam}
+	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		testInputMessage(responses.EasyInputMessageRole("user"), "old question", ""),
+		toolCall,
+		toolOutput,
+	})
+	require.NoError(t, err)
+
+	mock := mockResponses()
+	mock.compactResponses = []*responses.CompactedResponse{
+		compactedResponse("cmp-one", "encrypted-one"),
+		compactedResponse("cmp-two", "encrypted-two"),
+	}
+	contextErr := contextLengthExceededError()
+	mock.newFunc = func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
+		if len(mock.calls) < 3 {
+			return nil, contextErr
+		}
+
+		return responseWithMessage("resp-final", "answer"), nil
+	}
+	looper := testLooper(mock)
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "new question", output)
+
+	close(input)
+
+	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
+	require.Len(t, mock.compactCalls, 2)
+	secondCompactInput := marshalJSON(t, mock.compactCalls[1].Input.OfResponseInputItemArray)
+	require.Contains(t, secondCompactInput, `"type":"function_call"`)
+	require.Contains(t, secondCompactInput, `"type":"function_call_output"`)
+	require.Contains(t, secondCompactInput, `"call_id":"call-1"`)
+}
+
+func TestLooperDoesNotCompactUnansweredToolCall(t *testing.T) {
+	toolCall := functionCallReplayInput("tool-1", "call-1", "lookup", `{"q":"x"}`)
+	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		testInputMessage(responses.EasyInputMessageRole("user"), "old question", ""),
+		toolCall,
+	})
+	require.NoError(t, err)
+
+	mock := mockResponses()
+	mock.compactResponses = []*responses.CompactedResponse{compactedResponse("cmp-old", "encrypted-old")}
+	contextErr := contextLengthExceededError()
+	mock.newFunc = func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
+		if len(mock.calls) == 1 {
+			return nil, contextErr
+		}
+
+		return responseWithMessage("resp-final", "answer"), nil
+	}
+	looper := testLooper(mock)
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "new question", output)
+
+	close(input)
+
+	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
+	require.Len(t, mock.compactCalls, 1)
+	compactInput := marshalJSON(t, mock.compactCalls[0].Input.OfResponseInputItemArray)
+	require.Contains(t, compactInput, "old question")
+	require.NotContains(t, compactInput, `"type":"function_call"`)
+}
+
+func TestLooperDoesNotCompactOtherProviderErrors(t *testing.T) {
+	mock := mockResponseError(errors.New("provider unavailable"))
+	looper := testLooper(mock)
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "question", output)
+
+	close(input)
+
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+
+	require.Error(t, err)
+	require.Empty(t, mock.compactCalls)
 }
 
 func TestLooperPersistsAndReplaysWebSearchCalls(t *testing.T) {
@@ -1694,6 +1863,15 @@ func responseWithCommentaryAndMessage(id, commentary, text string) *responses.Re
 		testMessageOutputItem(id+"-commentary", "commentary", commentary),
 		testMessageOutputItem(id+"-msg", "final_answer", text),
 	})
+}
+
+func compactedResponse(id, encryptedContent string) *responses.CompactedResponse {
+	var compacted responses.CompactedResponse
+
+	compacted.ID = id
+	compacted.Output = []responses.ResponseOutputItemUnion{testCompactionOutputItem(id, encryptedContent)}
+
+	return &compacted
 }
 
 func testResponse(id string, output []responses.ResponseOutputItemUnion) *responses.Response {

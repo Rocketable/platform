@@ -30,6 +30,7 @@ var errTurnInterrupted = errors.New("turn interrupted")
 
 type responsesAPI interface {
 	New(context.Context, *responses.ResponseNewParams, ...option.RequestOption) (*responses.Response, error)
+	Compact(context.Context, *responses.ResponseCompactParams, ...option.RequestOption) (*responses.CompactedResponse, error)
 }
 
 type responseServiceClient struct {
@@ -40,6 +41,15 @@ func (c responseServiceClient) New(ctx context.Context, params *responses.Respon
 	resp, err := c.service.New(ctx, *params, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("create response: %w", err)
+	}
+
+	return resp, nil
+}
+
+func (c responseServiceClient) Compact(ctx context.Context, params *responses.ResponseCompactParams, opts ...option.RequestOption) (*responses.CompactedResponse, error) {
+	resp, err := c.service.Compact(ctx, *params, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("compact response: %w", err)
 	}
 
 	return resp, nil
@@ -143,6 +153,10 @@ type dispatchedToolOutput struct {
 	Param       responses.ResponseInputItemFunctionCallOutputParam
 	Result      ToolResult
 	ReplayInput []responses.ResponseInputItemUnionParam
+}
+
+type compactionBlock struct {
+	end int
 }
 
 type doomLoopTrap struct {
@@ -430,13 +444,26 @@ func (l *looper) runTurn(
 
 		params := l.buildParams(history)
 
-		resp, err := l.newProviderResponse(turnCtx, &params, output)
+		resp, recoveredHistory, err := l.newProviderResponse(turnCtx, &params, output)
 		if err != nil {
 			if errors.Is(context.Cause(turnCtx), errTurnInterrupted) {
 				return emptyRecord, nil, true, nil
 			}
 
 			return emptyRecord, nil, false, fmt.Errorf("request response: %w", err)
+		}
+
+		if len(recoveredHistory) > 0 {
+			recoveredHistory = pruneHistoryBeforeLatestCompaction(recoveredHistory)
+
+			replayInput, err := ReplayInputFromParams(recoveredHistory)
+			if err != nil {
+				return emptyRecord, nil, false, err
+			}
+
+			record.ReplayInput = replayInput
+
+			turnItems = append([]responses.ResponseInputItemUnionParam(nil), recoveredHistory...)
 		}
 
 		record.ResponseID = resp.ID
@@ -523,7 +550,7 @@ func appendReplayInput(record *SessionEntry, item *responses.ResponseInputItemUn
 	return nil
 }
 
-func (l *looper) newProviderResponse(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse) (resp *responses.Response, err error) {
+func (l *looper) newProviderResponse(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse) (resp *responses.Response, recoveredHistory []responses.ResponseInputItemUnionParam, err error) {
 	provider := modelProviderOpenAI
 	if strings.HasPrefix(l.DisplayModel, modelProviderAnthropic+"/") {
 		provider = modelProviderAnthropic
@@ -544,17 +571,18 @@ func (l *looper) newProviderResponse(ctx context.Context, params *responses.Resp
 	}()
 
 	if strings.HasPrefix(l.DisplayModel, modelProviderAnthropic+"/") {
-		return l.newAnthropicResponse(ctx, params, output)
+		resp, err := l.newAnthropicResponse(ctx, params, output)
+		return resp, nil, err
 	}
 
 	if l.Client == nil {
-		return nil, errors.New("openai provider is required")
+		return nil, nil, errors.New("openai provider is required")
 	}
 
 	return l.newResponseWithProviderRetry(ctx, params, output)
 }
 
-func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse) (*responses.Response, error) {
+func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse) (*responses.Response, []responses.ResponseInputItemUnionParam, error) {
 	attempt := 0
 
 	for {
@@ -562,6 +590,15 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 
 		resp, err := l.Client.New(ctx, params, option.WithResponseInto(&raw))
 		if err != nil {
+			if ctx.Err() == nil && isContextLengthExceeded(err) {
+				resp, recoveredHistory, err := l.newResponseAfterContextCompaction(ctx, params, err, output)
+				if err != nil {
+					return nil, nil, fmt.Errorf("new response: %w", err)
+				}
+
+				return resp, recoveredHistory, nil
+			}
+
 			if ctx.Err() == nil {
 				diagnostic := ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""}
 				if errAPI, ok := errors.AsType[*openai.Error](err); ok {
@@ -573,18 +610,18 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 				l.emitProviderDiagnostic(output, &diagnostic)
 			}
 
-			return nil, fmt.Errorf("new response: %w", err)
+			return nil, nil, fmt.Errorf("new response: %w", err)
 		}
 
 		if resp == nil {
 			err := errors.New("missing response")
 			l.emitProviderDiagnostic(output, &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""})
 
-			return nil, err
+			return nil, nil, err
 		}
 
 		if resp.Status != responses.ResponseStatusFailed {
-			return resp, nil
+			return resp, nil, nil
 		}
 
 		err = &responseFailureError{
@@ -594,11 +631,20 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 			message:    resp.Error.Message,
 		}
 
+		if isResponseContextLengthExceeded(resp) {
+			resp, recoveredHistory, err := l.newResponseAfterContextCompaction(ctx, params, err, output)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			return resp, recoveredHistory, nil
+		}
+
 		if resp.Error.Code != responses.ResponseErrorCodeRateLimitExceeded {
 			diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0)
 			l.emitProviderDiagnostic(output, &diagnostic)
 
-			return nil, err
+			return nil, nil, err
 		}
 
 		attempt++
@@ -608,9 +654,183 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 		l.emitProviderDiagnostic(output, &diagnostic)
 
 		if err := waitProviderRetry(ctx, wait); err != nil {
-			return nil, fmt.Errorf("wait for provider retry: %w", err)
+			return nil, nil, fmt.Errorf("wait for provider retry: %w", err)
 		}
 	}
+}
+
+func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *responses.ResponseNewParams, errOriginal error, output chan<- ChatResponse) (*responses.Response, []responses.ResponseInputItemUnionParam, error) {
+	original := params.Input.OfInputItemList
+
+	blocks := compactionBlocks(original)
+	if len(blocks) < 2 {
+		return nil, nil, errOriginal
+	}
+
+	eligible := len(blocks) - 1
+	chunk := (eligible + 9) / 10
+	errLast := errOriginal
+
+	for compactedBlocks := chunk; compactedBlocks <= eligible; compactedBlocks += chunk {
+		end := blocks[compactedBlocks-1].end
+		compactParams := responses.ResponseCompactParams{
+			Model:        responses.ResponseCompactParamsModel(params.Model),
+			Instructions: params.Instructions,
+			Input:        responses.ResponseCompactParamsInputUnion{OfResponseInputItemArray: original[:end]},
+		}
+
+		compacted, err := l.Client.Compact(ctx, &compactParams)
+		if err != nil {
+			return nil, nil, fmt.Errorf("compact context after context_length_exceeded: %w", err)
+		}
+
+		compactedInput, err := compactedOutputToReplayParams(compacted.Output)
+		if err != nil {
+			return nil, nil, fmt.Errorf("convert compacted response: %w", err)
+		}
+
+		recoveredHistory := append(append([]responses.ResponseInputItemUnionParam{}, compactedInput...), original[end:]...)
+		retryParams := *params
+		retryParams.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: recoveredHistory}
+
+		var raw *http.Response
+
+		resp, err := l.Client.New(ctx, &retryParams, option.WithResponseInto(&raw))
+		if err != nil {
+			errLast = err
+			if ctx.Err() == nil && isContextLengthExceeded(err) {
+				continue
+			}
+
+			if ctx.Err() == nil {
+				diagnostic := ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""}
+				if errAPI, ok := errors.AsType[*openai.Error](err); ok {
+					diagnostic.Code = errAPI.Code
+					diagnostic.Message = errAPI.Message
+					diagnostic.HTTPStatus = errAPI.StatusCode
+				}
+
+				l.emitProviderDiagnostic(output, &diagnostic)
+			}
+
+			return nil, nil, fmt.Errorf("retry compacted response: %w", err)
+		}
+
+		if resp == nil {
+			err := errors.New("missing response")
+			l.emitProviderDiagnostic(output, &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""})
+
+			return nil, nil, err
+		}
+
+		if resp.Status != responses.ResponseStatusFailed {
+			return resp, recoveredHistory, nil
+		}
+
+		errLast = &responseFailureError{responseID: resp.ID, status: resp.Status, code: resp.Error.Code, message: resp.Error.Message}
+		if isResponseContextLengthExceeded(resp) {
+			continue
+		}
+
+		diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0)
+		l.emitProviderDiagnostic(output, &diagnostic)
+
+		return nil, nil, errLast
+	}
+
+	return nil, nil, errLast
+}
+
+func compactionBlocks(items []responses.ResponseInputItemUnionParam) []compactionBlock {
+	blocks := make([]compactionBlock, 0, len(items))
+	for i := 0; i < len(items); {
+		if items[i].OfFunctionCall == nil {
+			blocks = append(blocks, compactionBlock{end: i + 1})
+			i++
+
+			continue
+		}
+
+		pending := map[string]bool{}
+
+		end := len(items)
+		for j := i; j < len(items); j++ {
+			if call := items[j].OfFunctionCall; call != nil {
+				pending[call.CallID] = true
+			}
+
+			if output := items[j].OfFunctionCallOutput; output != nil {
+				delete(pending, output.CallID)
+			}
+
+			if j > i && len(pending) == 0 {
+				end = j + 1
+
+				break
+			}
+		}
+
+		blocks = append(blocks, compactionBlock{end: end})
+		i = end
+	}
+
+	return blocks
+}
+
+func compactedOutputToReplayParams(items []responses.ResponseOutputItemUnion) ([]responses.ResponseInputItemUnionParam, error) {
+	input := make([]responses.ResponseInputItemUnionParam, 0, len(items))
+	for i := range items {
+		switch items[i].Type {
+		case "message":
+			parts := make([]string, 0, len(items[i].Content))
+			for j := range items[i].Content {
+				if items[i].Content[j].Type == "output_text" {
+					parts = append(parts, items[i].Content[j].Text)
+				}
+			}
+
+			role := strings.TrimSpace(string(items[i].Role))
+			if role == "" {
+				role = "user"
+			}
+
+			message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(role), Content: easyInputStringContent(strings.Join(parts, "")), Type: "message"}
+			if items[i].Phase != "" {
+				message.Phase = responses.EasyInputMessagePhase(items[i].Phase)
+			}
+
+			input = append(input, responses.ResponseInputItemUnionParam{OfMessage: &message})
+		case "compaction", "compaction_summary":
+			input = append(input, compactionReplayInput(items[i].ID, items[i].EncryptedContent))
+		case "reasoning":
+			summary := ""
+			if len(items[i].Summary) > 0 {
+				summary = items[i].Summary[0].Text
+			}
+
+			input = append(input, reasoningReplayInput(items[i].ID, summary, items[i].EncryptedContent))
+		default:
+			return nil, fmt.Errorf("unsupported compacted output item kind %q", items[i].Type)
+		}
+	}
+
+	return input, nil
+}
+
+func isContextLengthExceeded(err error) bool {
+	if errAPI, ok := errors.AsType[*openai.Error](err); ok {
+		return errAPI.Code == "context_length_exceeded"
+	}
+
+	if errResponse, ok := errors.AsType[*responseFailureError](err); ok {
+		return errResponse.code == responses.ResponseErrorCode("context_length_exceeded")
+	}
+
+	return false
+}
+
+func isResponseContextLengthExceeded(resp *responses.Response) bool {
+	return resp.Error.Code == responses.ResponseErrorCode("context_length_exceeded")
 }
 
 func providerDiagnosticFromFailedResponse(resp *responses.Response, phase string, attempt int, retryAfter time.Duration) ProviderDiagnostic {

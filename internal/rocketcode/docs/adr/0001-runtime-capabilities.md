@@ -26,7 +26,7 @@ RocketCode is under tight source-line budget pressure. Future simplification and
 | Model defaults | Empty model defaults to OpenAI `gpt-5.4`. Empty reasoning effort defaults to `high`. Empty compact threshold defaults to `200000`. |
 | Model selection | Models may be provider-qualified as `openai/<model>` or `anthropic/<model>`. Unprefixed model strings continue to mean OpenAI for backward compatibility. Agent frontmatter `model` values may select a different provider from the runtime default. |
 | Model request | OpenAI runtime turns use the OpenAI Responses API with stored responses disabled, encrypted reasoning content included, reasoning summary enabled when reasoning effort is set, context compaction enabled, and OpenAI parallel tool calls enabled. Anthropic runtime turns use the Anthropic Messages API through an adapter that preserves RocketCode's turn-loop, replay, and local tool semantics. |
-| Rate limits | Provider rate limits retry after at least one minute when the provider exposes retryable rate-limit status, considering provider retry/reset headers where available. Other failed responses and API errors surface as runtime errors, with provider diagnostics emitted when diagnostics are enabled. |
+| Rate limits and context limits | Provider rate limits retry after at least one minute when the provider exposes retryable rate-limit status, considering provider retry/reset headers where available. OpenAI Responses context-length API errors trigger explicit progressive compaction of older safe replay blocks and retry before surfacing a runtime error. Other failed responses and API errors surface as runtime errors, with provider diagnostics emitted when diagnostics are enabled. |
 | Interactive CLI | `cmd/rocketcode` starts an interactive prompt named `rocketcode> `, reads terminal input, runs turns through the default agent, and prints line-oriented response output. |
 | Interactive exit | `/exit`, `/quit`, and stdin EOF exit normally. Runtime errors print to stderr and exit status `1`. |
 | Interactive role prefix | In `cmd/rocketcode`, an input line whose trimmed text starts with case-sensitive `developer:` is sent as a developer-role prompt with the prefix removed. Other input is user-role prompt text. |
@@ -79,3 +79,4 @@ RocketCode is under tight source-line budget pressure. Future simplification and
 
 - 2026-06-11: Initial accepted snapshot.
 - 2026-06-11: Added provider-qualified OpenAI and Anthropic model selection while preserving OpenAI defaults and unprefixed model compatibility.
+- 2026-06-19: Added OpenAI Responses context-length recovery through explicit progressive compaction and retry.

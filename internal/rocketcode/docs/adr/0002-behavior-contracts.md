@@ -46,6 +46,7 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 - Each model cycle routes to the provider selected by the active model string. Provider adapters must preserve prompt framing, local tool call dispatch, tool-output continuation, diagnostics, and replay semantics.
 - History before the latest compaction point is pruned so replay starts from the compaction boundary when one exists.
 - Compaction steering, when configured, is appended as developer text for compaction behavior. OpenAI Responses context compaction remains provider-specific; Anthropic compaction is unsupported until an explicit provider-specific contract is approved.
+- OpenAI Responses `context_length_exceeded` API errors trigger an explicit `/responses/compact` recovery path before the turn fails. Recovery compacts older safe replay blocks progressively, retries after each successful compaction, preserves tool calls with their corresponding tool outputs, does not compact unanswered tool calls, keeps the newest active block unchanged, and persists only compaction items needed for a successful retry.
 - Tool outputs are appended to model input and the turn continues until the model returns no function calls.
 - Three repeated identical tool calls are converted into a tool-output failure for the model.
 - Tool call permission denial, unknown tool names, and malformed tool permissions are returned as model-visible tool failures rather than process-fatal errors.
@@ -127,3 +128,4 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 - 2026-06-11: Added provider-routing replay and turn-loop contracts for OpenAI and Anthropic model requests.
 - 2026-06-17: Added fail-closed `auto` permission action semantics gated by `Config.AutoApprovePermissions`.
 - 2026-06-17: Added OpenTelemetry/OpenInference observability contract for agent, provider, and tool spans, configured exclusively through the RocketCode configuration object.
+- 2026-06-19: Added explicit OpenAI Responses context-length recovery with progressive safe-block compaction.
