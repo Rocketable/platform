@@ -2554,6 +2554,7 @@ func TestAskUserQuestionToolCopiesTerminalMetadata(t *testing.T) {
 		assert.Equal(t, "client-1", req.TerminalClientID)
 		assert.Nil(t, req.SlackReply)
 		assert.Nil(t, req.DiscordReply)
+
 		return events.AskUserQuestionAnswer{Selected: []string{"yes"}, Source: events.SourceTerminalCLI}, nil
 	}, &events.InboundMessage{Source: events.SourceTerminalCLI, Human: true, ConversationID: "cli:abc", Metadata: map[string]string{events.TerminalCLIClientIDMetadataKey: "client-1"}})
 

@@ -35,7 +35,7 @@ Runnable entry points:
 
 `internal/rocketclaw` is the long-running service runtime around RocketCode. It provides persistent conversations, Slack and Discord connectors, voice input/output, browser voice mode, terminal CLI attachment through a local Unix control socket, external MCP, cron-defined background prompts, one-shot and recurring scheduled messages, inbound and outbound attachments, graceful restart, and SQLite state under the selected runtime directory.
 
-The runnable entry point is `cmd/rocketclaw`. Run `rocketclaw help` for setup, validation, session inspection, and operational commands.
+The runnable entry point is `cmd/rocketclaw`. Run `rocketclaw help` for setup, validation, session inspection, and operational commands. `rocketclaw cli` attaches a terminal to `main`, `rocketclaw cli --new [agent]` starts a private terminal conversation, and cmux terminals can use local `/new [agent]` to open another attached terminal surface.
 
 ### Supporting Tools
 

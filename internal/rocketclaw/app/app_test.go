@@ -147,7 +147,7 @@ func TestTerminalRendererPrintsEvent(t *testing.T) {
 
 	renderer := terminalRenderer{out: &out}
 
-	renderer.printEvent("event")
+	renderer.printLine("event")
 
 	assert.Equal(t, "event\n", out.String())
 }
@@ -157,7 +157,7 @@ func TestTerminalCLISummaryPromptDefaultsNo(t *testing.T) {
 
 	input := strings.NewReader("\n")
 	called := false
-	cli := terminalCLI{renderer: &terminalRenderer{out: &out}, in: input, reader: bufio.NewReader(input), summarize: func(context.Context, string) (string, error) {
+	cli := terminalCLI{renderer: &terminalRenderer{out: &out}, reader: bufio.NewReader(input), summarize: func(context.Context, string) (string, error) {
 		called = true
 		return "", nil
 	}}
@@ -176,7 +176,6 @@ func TestTerminalCLISummaryPromptPublishesInternalizedMainNote(t *testing.T) {
 
 	cli := terminalCLI{
 		renderer: &terminalRenderer{out: &out},
-		in:       input,
 		reader:   bufio.NewReader(input),
 		summarize: func(context.Context, string) (string, error) {
 			return "session summary", nil
@@ -205,7 +204,6 @@ func TestTerminalCLIExitCanReadPipedSummaryAnswer(t *testing.T) {
 
 	cli := terminalCLI{
 		renderer:        &terminalRenderer{out: &out},
-		in:              input,
 		reader:          bufio.NewReader(input),
 		newConversation: true,
 		onExit:          func() {},
@@ -277,6 +275,7 @@ func TestControlServerDoesNotRemoveNonSocketPath(t *testing.T) {
 func TestControlServerNewConversationPersistsAgent(t *testing.T) {
 	workspace := shortTempDir(t)
 	cfg := &config.Config{Workspace: workspace}
+
 	bus := events.New()
 	defer bus.Close()
 
@@ -284,11 +283,14 @@ func TestControlServerNewConversationPersistsAgent(t *testing.T) {
 	manager := newThreadBridgeManager(bus, cfg, store, testLogger(), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
 	server, err := startControlServer(t.Context(), cfg, bus, store, manager, newControlQuestionHub(), testLogger())
 	require.NoError(t, err)
+
 	defer func() { require.NoError(t, server.Close(t.Context())) }()
 
 	conn, err := net.Dial("unix", ControlSocketPath(cfg))
 	require.NoError(t, err)
+
 	defer func() { require.NoError(t, conn.Close()) }()
+
 	require.NoError(t, json.NewEncoder(conn).Encode(controlRequest{Type: "new", Agent: "planner"}))
 
 	var msg controlMessage
@@ -373,38 +375,48 @@ func TestRunControlClientAnswersQuestion(t *testing.T) {
 
 	listener, err := net.Listen("unix", socketPath)
 	require.NoError(t, err)
+
 	defer func() { _ = listener.Close() }()
 
 	requests := make(chan controlRequest, 3)
 	done := make(chan error, 1)
+
 	go func() {
 		conn, err := listener.Accept()
 		if err != nil {
 			done <- err
 			return
 		}
+
 		defer func() { _ = conn.Close() }()
 
 		enc, dec := json.NewEncoder(conn), json.NewDecoder(conn)
+
 		var req controlRequest
 		if err := dec.Decode(&req); err != nil {
 			done <- err
 			return
 		}
+
 		requests <- req
+
 		if err := enc.Encode(controlMessage{Type: "attached", ConversationID: req.ConversationID}); err != nil {
 			done <- err
 			return
 		}
+
 		if err := enc.Encode(controlMessage{Type: "question", Question: &events.AskUserQuestionRequest{ID: "q1", Question: "Deploy?", Details: "Production", Options: []events.AskUserQuestionOption{{Label: "Yes", Value: "yes", Description: "Ship it"}}}}); err != nil {
 			done <- err
 			return
 		}
+
 		if err := dec.Decode(&req); err != nil {
 			done <- err
 			return
 		}
+
 		requests <- req
+
 		done <- nil
 	}()
 
@@ -418,6 +430,84 @@ func TestRunControlClientAnswersQuestion(t *testing.T) {
 	assert.Equal(t, "q1", answer.QuestionID)
 	assert.Equal(t, []string{"yes"}, answer.Answer.Selected)
 	assert.Contains(t, out.String(), "Deploy?")
+}
+
+func TestTerminalCLINewOpensCMUXSurfaceWithServerConversation(t *testing.T) {
+	t.Setenv("CMUX_WORKSPACE_ID", "caller-workspace")
+	t.Setenv("CMUX_SURFACE_ID", "caller-surface")
+	t.Setenv("CMUX_WORKING_DIRECTORY", "/work/caller")
+
+	runner := &fakeCMUXRunner{outputs: []string{"", "new-surface-1"}}
+	cli := terminalCLI{
+		renderer: &terminalRenderer{out: new(bytes.Buffer)},
+		cmux:     runner.Run,
+		newConversationID: func(_ context.Context, agent string) (string, error) {
+			assert.Equal(t, "planner", agent)
+			return "cli:server-created", nil
+		},
+	}
+
+	err := cli.openCMUXConversation(t.Context(), "planner")
+	require.NoError(t, err)
+	require.Len(t, runner.calls, 3)
+	assert.Equal(t, []string{"identify"}, runner.calls[0])
+	assert.Equal(t, []string{"new-surface", "--type", "terminal", "--working-directory", "/work/caller", "--focus", "true", "--workspace", "caller-workspace"}, runner.calls[1])
+	assert.Equal(t, []string{"send", "--surface", "new-surface-1", "rocketclaw cli --attach cli:server-created\n"}, runner.calls[2])
+}
+
+func TestTerminalCLINewReportsNonCMUXLocalError(t *testing.T) {
+	out := new(bytes.Buffer)
+	cli := terminalCLI{
+		renderer: &terminalRenderer{out: out},
+		cmux:     (&fakeCMUXRunner{err: errors.New("cmux not found")}).Run,
+		newConversationID: func(context.Context, string) (string, error) {
+			t.Fatal("non-cmux /new requested a conversation")
+			return "", nil
+		},
+	}
+
+	handled, err := cli.handleSlashCommand(t.Context(), "/new")
+	require.NoError(t, err)
+	assert.True(t, handled)
+	assert.Contains(t, out.String(), "/new requires cmux caller context")
+}
+
+func TestTerminalCLIUnknownSlashCommandIsLocalError(t *testing.T) {
+	out := new(bytes.Buffer)
+	cli := terminalCLI{
+		renderer: &terminalRenderer{out: out},
+		cmux:     (&fakeCMUXRunner{}).Run,
+		newConversationID: func(context.Context, string) (string, error) {
+			t.Fatal("unknown slash command requested a conversation")
+			return "", nil
+		},
+	}
+
+	handled, err := cli.handleSlashCommand(t.Context(), "/fork")
+	require.NoError(t, err)
+	assert.True(t, handled)
+	assert.Contains(t, out.String(), "unknown command /fork")
+}
+
+type fakeCMUXRunner struct {
+	outputs []string
+	err     error
+	calls   [][]string
+}
+
+func (r *fakeCMUXRunner) Run(_ context.Context, args ...string) (string, error) {
+	r.calls = append(r.calls, append([]string(nil), args...))
+	if r.err != nil {
+		return "", r.err
+	}
+
+	output := ""
+	if len(r.outputs) > 0 {
+		output = r.outputs[0]
+		r.outputs = r.outputs[1:]
+	}
+
+	return output, nil
 }
 
 func TestOutboundLoopPropagatesDeliveryErrorsToWaitDelivered(t *testing.T) {

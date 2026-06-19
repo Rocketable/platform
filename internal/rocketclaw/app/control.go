@@ -120,7 +120,9 @@ func startControlServer(ctx context.Context, cfg *config.Config, bus *events.Bus
 
 func (h *controlQuestionHub) ask(ctx context.Context, req *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error) {
 	clientID := strings.TrimSpace(req.TerminalClientID)
+
 	h.mu.Lock()
+
 	client, ok := h.clients[clientID]
 	if !ok || client.conversationID != strings.TrimSpace(req.ConversationID) {
 		h.mu.Unlock()
@@ -158,6 +160,7 @@ func (h *controlQuestionHub) register(clientID, conversationID string, send func
 func (h *controlQuestionHub) unregister(clientID string) {
 	h.mu.Lock()
 	delete(h.clients, clientID)
+
 	for id, pending := range h.pending {
 		if pending.clientID == clientID {
 			delete(h.pending, id)
@@ -169,6 +172,7 @@ func (h *controlQuestionHub) unregister(clientID string) {
 
 func (h *controlQuestionHub) answer(clientID, questionID string, answer events.AskUserQuestionAnswer) bool {
 	h.mu.Lock()
+
 	pending := h.pending[questionID]
 	if pending.clientID != clientID || pending.ch == nil {
 		h.mu.Unlock()
@@ -213,6 +217,7 @@ func serveControlClient(ctx context.Context, conn net.Conn, bus *events.Bus, ses
 
 	clientCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
 	clientID := rand.Text()
 	defer questions.unregister(clientID)
 
@@ -220,6 +225,7 @@ func serveControlClient(ctx context.Context, conn net.Conn, bus *events.Bus, ses
 	if err := dec.Decode(&req); err != nil {
 		return
 	}
+
 	conversationID, private := strings.TrimSpace(req.ConversationID), false
 	switch req.Type {
 	case "attach":
@@ -232,21 +238,25 @@ func serveControlClient(ctx context.Context, conn net.Conn, bus *events.Bus, ses
 		}
 
 		conversationID, private = "cli:"+rand.Text(), true
+
 		managed, created, err := threads.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: agent}, []events.OutputTarget{events.OutputTargetTerminal})
 		if err != nil {
 			send(controlMessage{Type: "error", Text: err.Error()})
 			return
 		}
+
 		if created {
 			if err := threads.store.UpsertThread(conversationID, agent); err != nil {
 				threads.dropCreatedBridge(conversationID, managed)
 				send(controlMessage{Type: "error", Text: fmt.Errorf("persist terminal CLI thread bridge: %w", err).Error()})
+
 				return
 			}
 		}
 
 		send(controlMessage{Type: "attached", ConversationID: conversationID})
 	}
+
 	questions.register(clientID, conversationID, send)
 
 	go func() {
@@ -320,8 +330,16 @@ func controlHistory(ctx context.Context, sessions *harnessbridge.SessionService,
 
 	for i := range entries {
 		for _, raw := range entries[i].Entry.ReplayInput {
-			if role, text := replayMessagePreview(raw); role == "user" || role == "assistant" {
-				messages = append(messages, role+": "+text)
+			var object struct {
+				Role    string `json:"role"`
+				Content any    `json:"content"`
+			}
+			if err := json.Unmarshal(raw, &object); err != nil {
+				continue
+			}
+
+			if content, ok := object.Content.(string); ok && (object.Role == "user" || object.Role == "assistant") {
+				messages = append(messages, object.Role+": "+strings.Join(strings.Fields(content), " "))
 			}
 		}
 	}
@@ -348,6 +366,8 @@ func controlSummarize(ctx context.Context, bus *events.Bus, threads *threadBridg
 }
 
 // RunControlClient attaches terminal CLI I/O to a running RocketClaw server control socket.
+//
+//nolint:gocyclo // The socket protocol loop keeps request, response, and stdin state in one place.
 func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOptions) error {
 	conn, err := net.DialTimeout("unix", ControlSocketPath(cfg), time.Second)
 	if err != nil {
@@ -375,8 +395,11 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 	attached := make(chan struct{})
 	closed := make(chan struct{})
 	questionReady := make(chan struct{}, 1)
-	var pendingMu sync.Mutex
-	var pendingQuestion *events.AskUserQuestionRequest
+
+	var (
+		pendingMu       sync.Mutex
+		pendingQuestion *events.AskUserQuestionRequest
+	)
 
 	go func() {
 		defer close(closed)
@@ -392,14 +415,15 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 				renderer.printLine("terminal CLI attached to " + msg.ConversationID)
 				close(attached)
 			case "history", "event":
-				renderer.printEvent(msg.Text)
+				renderer.printLine(msg.Text)
 			case "error":
-				renderer.printEvent("error: " + msg.Text)
+				renderer.printLine("error: " + msg.Text)
 			case "question":
 				renderer.printQuestion(msg.Question)
 				pendingMu.Lock()
 				pendingQuestion = msg.Question
 				pendingMu.Unlock()
+
 				select {
 				case questionReady <- struct{}{}:
 				default:
@@ -419,15 +443,21 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 	}
 
 	exited := false
+	cli := terminalCLI{renderer: renderer, reader: reader, cmux: runCMUX, newConversationID: func(newCtx context.Context, agent string) (string, error) {
+		return newControlConversation(newCtx, cfg, agent)
+	}}
 
-	err = (&terminalCLI{renderer: renderer, in: options.In, reader: reader}).readLines(ctx, func(line string) error {
+	err = cli.readLines(func(line string) error {
 		line = strings.TrimSpace(line)
+
 		pendingMu.Lock()
+
 		question := pendingQuestion
 		if question != nil {
 			pendingQuestion = nil
 		}
 		pendingMu.Unlock()
+
 		if question == nil {
 			select {
 			case <-questionReady:
@@ -438,6 +468,7 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 			case <-time.After(10 * time.Millisecond):
 			}
 		}
+
 		if question != nil {
 			answer, err := terminalQuestionAnswer(question, line)
 			if err != nil {
@@ -445,6 +476,7 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 				pendingMu.Lock()
 				pendingQuestion = question
 				pendingMu.Unlock()
+
 				return nil
 			}
 
@@ -456,7 +488,7 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 		}
 
 		if line == "/exit" {
-			summarize := options.NewConversation && (&terminalCLI{renderer: renderer, in: options.In, reader: reader}).askYesNo("Append a summary of this CLI session to main? [y/N] ")
+			summarize := options.NewConversation && (&terminalCLI{renderer: renderer, reader: reader}).askYesNo("Append a summary of this CLI session to main? [y/N] ")
 			exited = true
 
 			if err := enc.Encode(controlRequest{Type: "exit", Summarize: summarize}); err != nil {
@@ -464,6 +496,10 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 			}
 
 			return io.EOF
+		}
+
+		if handled, err := cli.handleSlashCommand(ctx, line); handled || err != nil {
+			return err
 		}
 
 		if err := enc.Encode(controlRequest{Type: "prompt", Text: line}); err != nil {
@@ -486,4 +522,39 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 	}
 
 	return nil
+}
+
+func newControlConversation(ctx context.Context, cfg *config.Config, agent string) (string, error) {
+	var dialer net.Dialer
+
+	conn, err := dialer.DialContext(ctx, "unix", ControlSocketPath(cfg))
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrControlUnavailable, err)
+	}
+
+	defer func() { _ = conn.Close() }()
+
+	enc, dec := json.NewEncoder(conn), json.NewDecoder(conn)
+	if err := enc.Encode(controlRequest{Type: "new", Agent: agent}); err != nil {
+		return "", fmt.Errorf("send control new request: %w", err)
+	}
+
+	for {
+		var msg controlMessage
+		if err := dec.Decode(&msg); err != nil {
+			return "", fmt.Errorf("read control new response: %w", err)
+		}
+
+		switch msg.Type {
+		case "attached":
+			_ = enc.Encode(controlRequest{Type: "exit"})
+			return msg.ConversationID, nil
+		case "error":
+			return "", errors.New(msg.Text)
+		}
+
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("wait for control new response: %w", err)
+		}
+	}
 }

@@ -4,10 +4,11 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 
@@ -24,22 +25,21 @@ type CLIOptions struct {
 }
 
 type terminalCLI struct {
-	bus             *events.Bus
-	renderer        *terminalRenderer
-	in              io.Reader
-	reader          *bufio.Reader
-	agent           string
-	conversationID  string
-	newConversation bool
-	onExit          func()
-	submit          func(context.Context, *events.InboundMessage) error
-	summarize       func(context.Context, string) (string, error)
-	publishMain     func(context.Context, *events.InboundMessage) error
+	bus               *events.Bus
+	renderer          *terminalRenderer
+	reader            *bufio.Reader
+	agent             string
+	conversationID    string
+	newConversation   bool
+	onExit            func()
+	submit            func(context.Context, *events.InboundMessage) error
+	cmux              func(context.Context, ...string) (string, error)
+	newConversationID func(context.Context, string) (string, error)
+	summarize         func(context.Context, string) (string, error)
+	publishMain       func(context.Context, *events.InboundMessage) error
 }
 
-type terminalRenderer struct {
-	out io.Writer
-}
+type terminalRenderer struct{ out io.Writer }
 
 func newTerminalCLI(options CLIOptions, bus *events.Bus, onExit func()) *terminalCLI {
 	agent := strings.TrimSpace(options.Agent)
@@ -56,11 +56,14 @@ func newTerminalCLI(options CLIOptions, bus *events.Bus, onExit func()) *termina
 		conversationID = "cli:" + rand.Text()
 	}
 
-	return &terminalCLI{
-		bus: bus, renderer: &terminalRenderer{out: options.Out}, in: options.In, reader: bufio.NewReader(options.In),
-		agent: agent, conversationID: conversationID, newConversation: options.NewConversation, onExit: onExit,
-		summarize: func(context.Context, string) (string, error) { return "", nil }, publishMain: func(context.Context, *events.InboundMessage) error { return nil },
-	}
+	return &terminalCLI{bus: bus, renderer: &terminalRenderer{out: options.Out}, reader: bufio.NewReader(options.In), agent: agent, conversationID: conversationID, newConversation: options.NewConversation, onExit: onExit, cmux: runCMUX, newConversationID: func(context.Context, string) (string, error) {
+		return "", errors.New("/new requires a running RocketClaw server control socket")
+	}, summarize: func(context.Context, string) (string, error) { return "", nil }, publishMain: func(context.Context, *events.InboundMessage) error { return nil }}
+}
+
+func runCMUX(ctx context.Context, args ...string) (string, error) {
+	output, err := exec.CommandContext(ctx, "cmux", args...).CombinedOutput()
+	return string(output), err
 }
 
 func (c *terminalCLI) Start(ctx context.Context) {
@@ -69,32 +72,33 @@ func (c *terminalCLI) Start(ctx context.Context) {
 	go c.observe(ctx)
 	go c.readInput(ctx)
 }
+
 func (c *terminalCLI) observe(ctx context.Context) {
 	for observed := range c.bus.Observe(ctx) {
 		if observed.Inbound != nil && observed.Inbound.ConversationID == c.conversationID {
-			c.renderer.printEvent(formatInbound(observed.Inbound))
+			c.renderer.printLine(formatInbound(observed.Inbound))
 		}
 
 		if observed.Outbound != nil && observed.Outbound.ConversationID == c.conversationID {
-			c.renderer.printEvent(formatOutbound(observed.Outbound))
+			c.renderer.printLine(formatOutbound(observed.Outbound))
 		}
 	}
 }
 
 func (c *terminalCLI) readInput(ctx context.Context) {
-	errRead := c.readLines(ctx, func(line string) error {
+	errRead := c.readLines(func(line string) error {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			return nil
 		}
 
-		if line == "/exit" {
-			return io.EOF
+		if handled, err := c.handleSlashCommand(ctx, line); handled || err != nil {
+			return err
 		}
 
 		inbound := events.NewMainInboundMessage(events.SourceTerminalCLI, events.InboundKindPrompt, "terminal", line, true)
-
 		inbound.ConversationID = c.conversationID
+
 		inbound.Metadata = map[string]string{events.TerminalCLIClientIDMetadataKey: "embedded"}
 		if err := c.submit(ctx, inbound); err != nil {
 			return fmt.Errorf("submit terminal prompt: %w", err)
@@ -113,7 +117,61 @@ func (c *terminalCLI) readInput(ctx context.Context) {
 	c.onExit()
 }
 
-func (c *terminalCLI) readLines(_ context.Context, submit func(string) error) error {
+func (c *terminalCLI) handleSlashCommand(ctx context.Context, line string) (bool, error) {
+	if !strings.HasPrefix(line, "/") {
+		return false, nil
+	}
+
+	command, rest, _ := strings.Cut(line, " ")
+	switch command {
+	case "/exit":
+		return true, io.EOF
+	case "/new":
+		if err := c.openCMUXConversation(ctx, strings.TrimSpace(rest)); err != nil {
+			c.renderer.printLine(err.Error())
+		}
+
+		return true, nil
+	default:
+		c.renderer.printLine("unknown command " + command + "; available commands: /exit, /new [agent]")
+		return true, nil
+	}
+}
+
+func (c *terminalCLI) openCMUXConversation(ctx context.Context, agent string) error {
+	if _, err := c.cmux(ctx, "identify"); err != nil {
+		return fmt.Errorf("/new requires cmux caller context; cmux identify failed: %w", err)
+	}
+
+	workspaceID, workingDirectory := os.Getenv("CMUX_WORKSPACE_ID"), os.Getenv("CMUX_WORKING_DIRECTORY")
+	if os.Getenv("CMUX_SURFACE_ID") == "" || workingDirectory == "" {
+		return errors.New("/new requires cmux caller context")
+	}
+
+	conversationID, err := c.newConversationID(ctx, agent)
+	if err != nil {
+		return fmt.Errorf("create CLI conversation: %w", err)
+	}
+
+	newSurfaceArgs := []string{"new-surface", "--type", "terminal", "--working-directory", workingDirectory, "--focus", "true"}
+	if workspaceID != "" {
+		newSurfaceArgs = append(newSurfaceArgs, "--workspace", workspaceID)
+	}
+
+	surface, err := c.cmux(ctx, newSurfaceArgs...)
+	if err != nil {
+		return fmt.Errorf("create cmux terminal surface: %w", err)
+	}
+
+	surfaceID := strings.TrimSpace(surface)
+	if _, err := c.cmux(ctx, "send", "--surface", surfaceID, "rocketclaw cli --attach "+conversationID+"\n"); err != nil {
+		return fmt.Errorf("send attach command to cmux surface: %w", err)
+	}
+
+	return nil
+}
+
+func (c *terminalCLI) readLines(submit func(string) error) error {
 	for {
 		line, err := c.reader.ReadString('\n')
 		if err != nil && !errors.Is(err, io.EOF) {
@@ -158,28 +216,13 @@ func (c *terminalCLI) askYesNo(prompt string) bool {
 
 func (c *terminalCLI) askUserQuestion(_ context.Context, req *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error) {
 	c.renderer.printQuestion(req)
+
 	line, err := c.reader.ReadString('\n')
 	if err != nil {
 		return events.AskUserQuestionAnswer{}, fmt.Errorf("read terminal question answer: %w", err)
 	}
 
 	return terminalQuestionAnswer(req, line)
-}
-
-func replayMessagePreview(raw json.RawMessage) (role, text string) {
-	var object struct {
-		Role    string `json:"role"`
-		Content any    `json:"content"`
-	}
-	if err := json.Unmarshal(raw, &object); err != nil {
-		return "", ""
-	}
-
-	if content, ok := object.Content.(string); ok {
-		return object.Role, strings.Join(strings.Fields(content), " ")
-	}
-
-	return "", ""
 }
 
 func formatInbound(msg *events.InboundMessage) string {
@@ -190,13 +233,7 @@ func formatOutbound(msg *events.OutboundMessage) string {
 	return "[assistant] " + strings.TrimSpace(msg.Text)
 }
 
-func (r *terminalRenderer) printLine(text string) {
-	_, _ = fmt.Fprintln(r.out, text)
-}
-
-func (r *terminalRenderer) printEvent(text string) {
-	_, _ = fmt.Fprintln(r.out, text)
-}
+func (r *terminalRenderer) printLine(text string) { _, _ = fmt.Fprintln(r.out, text) }
 
 func (r *terminalRenderer) printQuestion(req *events.AskUserQuestionRequest) {
 	if req == nil {
@@ -204,6 +241,7 @@ func (r *terminalRenderer) printQuestion(req *events.AskUserQuestionRequest) {
 	}
 
 	r.printLine("[question] " + strings.TrimSpace(req.Question))
+
 	if details := strings.TrimSpace(req.Details); details != "" {
 		r.printLine(details)
 	}
@@ -217,11 +255,12 @@ func (r *terminalRenderer) printQuestion(req *events.AskUserQuestionRequest) {
 		r.printLine(line)
 	}
 
-	if req.Multiple {
+	switch {
+	case req.Multiple:
 		r.printLine("Enter one or more option numbers separated by comma or space, or type a custom answer.")
-	} else if len(req.Options) > 0 {
+	case len(req.Options) > 0:
 		r.printLine("Enter an option number, or type a custom answer.")
-	} else {
+	default:
 		r.printLine("Type your answer.")
 	}
 }
@@ -238,12 +277,7 @@ func terminalQuestionAnswer(req *events.AskUserQuestionRequest, line string) (ev
 		return answer, nil
 	}
 
-	separators := func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }
-	fields := strings.FieldsFunc(line, separators)
-	if len(fields) == 0 {
-		answer.Custom = line
-		return answer, nil
-	}
+	fields := strings.FieldsFunc(line, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' })
 
 	selected := make([]string, 0, len(fields))
 	for _, field := range fields {
@@ -265,5 +299,6 @@ func terminalQuestionAnswer(req *events.AskUserQuestionRequest, line string) (ev
 	}
 
 	answer.Selected = selected
+
 	return answer, nil
 }

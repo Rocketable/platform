@@ -1803,6 +1803,7 @@ func askUserQuestionTool(ask func(context.Context, *events.AskUserQuestionReques
 		})
 
 		req.ID, req.Source, req.ConversationID = rand.Text(), msg.Source, msg.ConversationID
+
 		req.TerminalClientID = strings.TrimSpace(msg.Metadata[events.TerminalCLIClientIDMetadataKey])
 		if msg.SlackReply != nil {
 			req.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS}

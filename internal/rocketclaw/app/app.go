@@ -363,6 +363,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	if cliOptions != nil {
 		cliSession := newTerminalCLI(*cliOptions, bus, func() { startShutdown("terminal CLI exited", false) })
+
 		questionBroker.terminalAsk = cliSession.askUserQuestion
 		if cliSession.newConversation {
 			cliBridge = harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: cliSession.conversationID, Agent: cliSession.agent, ConsumeSharedInbound: false, OutputTargets: []events.OutputTarget{events.OutputTargetTerminal}, RequestRestart: requestRestart, AskUserQuestion: questionBroker.ask, SessionService: rocketcodeSessions}, logger)

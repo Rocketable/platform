@@ -110,6 +110,7 @@ func TestAskUserQuestionBrokerRoutesTerminalQuestionToTerminalAsk(t *testing.T) 
 	b.terminalAsk = func(_ context.Context, req *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error) {
 		assert.Equal(t, "cli:abc", req.ConversationID)
 		assert.Equal(t, "client-1", req.TerminalClientID)
+
 		return events.AskUserQuestionAnswer{Selected: []string{"yes"}, Source: events.SourceTerminalCLI}, nil
 	}
 
