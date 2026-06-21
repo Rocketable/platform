@@ -143,7 +143,7 @@ func TestRunRawCronCanEditRestartAndCompleteDecision(t *testing.T) {
 			assert.Contains(t, string(data), restartToolName)
 			assert.Contains(t, string(data), attachFilesToolName)
 			assert.Contains(t, string(data), scheduleMessageToolName)
-			assert.Contains(t, string(data), `"required":["message","send_this_in","recurring"]`)
+			assert.Contains(t, string(data), `"required":["message","recurring","send_this_in"]`)
 			assert.Contains(t, string(data), resetScheduledMessagesToolName)
 		}
 

@@ -77,12 +77,15 @@ func TestCustomToolParametersRequiredJSON(t *testing.T) {
 			wantJSON: `"required":[]`,
 		},
 		{
-			name: "explicit required preserved",
+			name: "explicit partial required completed",
 			parameters: map[string]any{
-				"properties": map[string]any{},
-				"required":   []string{},
+				"properties": map[string]any{
+					"status": map[string]any{"type": "string"},
+					"note":   map[string]any{"type": "string"},
+				},
+				"required": []string{"status"},
 			},
-			wantJSON: `"required":[]`,
+			wantJSON: `"required":["note","status"]`,
 		},
 	}
 

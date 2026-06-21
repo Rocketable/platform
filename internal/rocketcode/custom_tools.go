@@ -169,14 +169,12 @@ func customToolParameters(parameters map[string]any) (map[string]any, error) {
 				result["additionalProperties"] = false
 			}
 
-			if _, ok := result["required"]; !ok {
-				required := slices.Sorted(maps.Keys(typedProperties))
-				if required == nil {
-					required = []string{}
-				}
-
-				result["required"] = required
+			required := slices.Sorted(maps.Keys(typedProperties))
+			if required == nil {
+				required = []string{}
 			}
+
+			result["required"] = required
 		}
 
 		return result, nil
