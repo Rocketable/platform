@@ -318,9 +318,9 @@ func TestValidateRejectsMissingRequiredConfig(t *testing.T) {
 			wantErr: "openai.rocketcode_auth must be api_key or chatgpt",
 		},
 		{
-			name:    "openai api key",
+			name:    "openai audio credentials",
 			update:  func(c *Config) { c.OpenAI.APIKey = "" },
-			wantErr: "openai.api_key is required",
+			wantErr: "openai stt/tts credentials are required when OpenAI-backed audio is enabled",
 		},
 		{
 			name:    "discord token",
@@ -628,11 +628,60 @@ func TestLoadExternalMCPUsersRejectsInvalidInputs(t *testing.T) {
 
 func TestValidateAllowsChatGPTAuthWithoutAPIKey(t *testing.T) {
 	cfg := validConfig()
+	cfg.DiscordVoice.Enabled = false
+	cfg.Slack.Enabled = true
+	cfg.Slack.BotToken = "xoxb-test"
+	cfg.Slack.AppToken = "xapp-test"
+	cfg.Slack.Room = "D123"
+	cfg.Slack.HumanUserID = "U123"
 	cfg.OpenAI.APIKey = ""
 	cfg.OpenAI.RocketCodeAuth = "chatgpt"
 
 	require.NoError(t, cfg.Validate())
 	assert.Equal(t, "chatgpt", cfg.OpenAI.RocketCodeAuth)
+}
+
+func TestValidateAllowsTextOnlyWithoutOpenAIKey(t *testing.T) {
+	cfg := validConfig()
+	cfg.DiscordVoice.Enabled = false
+	cfg.Slack.Enabled = true
+	cfg.Slack.BotToken = "xoxb-test"
+	cfg.Slack.AppToken = "xapp-test"
+	cfg.Slack.Room = "D123"
+	cfg.Slack.HumanUserID = "U123"
+	cfg.OpenAI.APIKey = ""
+
+	require.NoError(t, cfg.Validate())
+}
+
+func TestValidateNormalizesOpenAICompatibleProviders(t *testing.T) {
+	cfg := validConfig()
+	cfg.OpenAICompatible = map[string]OpenAICompatibleConfig{" local ": {APIKey: " key ", BaseURL: " https://compatible.example/v1 ", Mode: ""}}
+
+	require.NoError(t, cfg.Validate())
+	require.Equal(t, OpenAICompatibleConfig{APIKey: "key", BaseURL: "https://compatible.example/v1", Mode: "responses"}, cfg.OpenAICompatible["local"])
+}
+
+func TestValidateRejectsInvalidOpenAICompatibleProviders(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		config  map[string]OpenAICompatibleConfig
+		wantErr string
+	}{
+		{name: "blank name", config: map[string]OpenAICompatibleConfig{" ": {APIKey: "key", BaseURL: "https://compatible.example/v1", Mode: "responses"}}, wantErr: "openai_compatible provider name is required"},
+		{name: "api key", config: map[string]OpenAICompatibleConfig{"local": {BaseURL: "https://compatible.example/v1", Mode: "responses"}}, wantErr: "openai_compatible.local.api_key is required"},
+		{name: "base url", config: map[string]OpenAICompatibleConfig{"local": {APIKey: "key", Mode: "responses"}}, wantErr: "openai_compatible.local.base_url is required"},
+		{name: "mode", config: map[string]OpenAICompatibleConfig{"local": {APIKey: "key", BaseURL: "https://compatible.example/v1", Mode: "legacy"}}, wantErr: "openai_compatible.local.mode must be responses or chat_completions"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.OpenAICompatible = tc.config
+
+			err := cfg.Validate()
+
+			require.EqualError(t, err, tc.wantErr)
+		})
+	}
 }
 
 func loadTestConfig(t *testing.T, content string) *Config {

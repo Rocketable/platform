@@ -17,24 +17,25 @@ import (
 
 // Config is the top-level rocketclaw runtime configuration.
 type Config struct {
-	Workspace                                string                `json:"workspace"`
-	WorkDir                                  string                `json:"-"`
-	Overlays                                 []string              `json:"overlays,omitempty"`
-	Environment                              []string              `json:"environment,omitempty"`
-	EmergencySafeWords                       []string              `json:"emergency_safe_words,omitempty"`
-	ThreadAgents                             ThreadAgents          `json:"thread_agents,omitempty"`
-	MinimumWaitAfterHumanInteraction         string                `json:"minimum_wait_after_human_interaction"`
-	MinimumWaitAfterHumanInteractionDuration time.Duration         `json:"-"`
-	Logging                                  LoggingConfig         `json:"logging"`
-	DiscordVoice                             DiscordVoiceConfig    `json:"discord_voice"`
-	DiscordText                              DiscordTextConfig     `json:"discord_text"`
-	MCPExternal                              MCPExternalConfig     `json:"mcp_external"`
-	WebUI                                    WebUIConfig           `json:"web_ui"`
-	Slack                                    SlackConfig           `json:"slack"`
-	OpenAI                                   OpenAIConfig          `json:"openai"`
-	Anthropic                                AnthropicConfig       `json:"anthropic"`
-	Instrumentation                          InstrumentationConfig `json:"instrumentation"`
-	RocketCode                               RocketCodeConfig      `json:"rocketcode"`
+	Workspace                                string                            `json:"workspace"`
+	WorkDir                                  string                            `json:"-"`
+	Overlays                                 []string                          `json:"overlays,omitempty"`
+	Environment                              []string                          `json:"environment,omitempty"`
+	EmergencySafeWords                       []string                          `json:"emergency_safe_words,omitempty"`
+	ThreadAgents                             ThreadAgents                      `json:"thread_agents,omitempty"`
+	MinimumWaitAfterHumanInteraction         string                            `json:"minimum_wait_after_human_interaction"`
+	MinimumWaitAfterHumanInteractionDuration time.Duration                     `json:"-"`
+	Logging                                  LoggingConfig                     `json:"logging"`
+	DiscordVoice                             DiscordVoiceConfig                `json:"discord_voice"`
+	DiscordText                              DiscordTextConfig                 `json:"discord_text"`
+	MCPExternal                              MCPExternalConfig                 `json:"mcp_external"`
+	WebUI                                    WebUIConfig                       `json:"web_ui"`
+	Slack                                    SlackConfig                       `json:"slack"`
+	OpenAI                                   OpenAIConfig                      `json:"openai"`
+	Anthropic                                AnthropicConfig                   `json:"anthropic"`
+	OpenAICompatible                         map[string]OpenAICompatibleConfig `json:"openai_compatible,omitempty"`
+	Instrumentation                          InstrumentationConfig             `json:"instrumentation"`
+	RocketCode                               RocketCodeConfig                  `json:"rocketcode"`
 }
 
 // DefaultWorkDir is the generated runtime directory for rocketclaw configs.
@@ -144,6 +145,13 @@ type OpenAIConfig struct {
 type AnthropicConfig struct {
 	APIKey     string `json:"api_key"`
 	APIBaseURL string `json:"api_base_url"`
+}
+
+// OpenAICompatibleConfig configures one OpenAI-compatible RocketCode provider.
+type OpenAICompatibleConfig struct {
+	APIKey  string `json:"api_key"`
+	BaseURL string `json:"base_url"`
+	Mode    string `json:"mode"`
 }
 
 // RocketCodeConfig configures RocketCode embedding behavior.
@@ -307,8 +315,12 @@ func (c *Config) Validate() error {
 		return errors.New("openai.rocketcode_auth must be api_key or chatgpt")
 	}
 
-	if c.OpenAI.RocketCodeAuth == "api_key" && strings.TrimSpace(c.OpenAI.APIKey) == "" {
-		return errors.New("openai.api_key is required")
+	if err := c.validateOpenAICompatible(); err != nil {
+		return err
+	}
+
+	if (c.DiscordVoice.Enabled || c.WebUI.Enabled) && (strings.TrimSpace(c.OpenAI.STTAPIKey) == "" || strings.TrimSpace(c.OpenAI.TTSAPIKey) == "") {
+		return errors.New("openai stt/tts credentials are required when OpenAI-backed audio is enabled")
 	}
 
 	c.Instrumentation.CollectorEndpoint = strings.TrimSpace(c.Instrumentation.CollectorEndpoint)
@@ -323,12 +335,8 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	if c.DiscordVoice.Enabled {
-		for _, field := range [...]struct{ value, message string }{{c.DiscordVoice.Token, "discord_voice.token is required when discord_voice is enabled"}, {c.DiscordVoice.VoiceChannelID, "discord_voice.voice_channel_id is required when discord_voice is enabled"}, {c.DiscordVoice.HumanUserID, "discord_voice.human_user_id is required when discord_voice is enabled"}} {
-			if strings.TrimSpace(field.value) == "" {
-				return errors.New(field.message)
-			}
-		}
+	if err := c.validateDiscordVoice(); err != nil {
+		return err
 	}
 
 	if err := c.validateDiscordText(); err != nil {
@@ -348,6 +356,60 @@ func (c *Config) Validate() error {
 	if err := c.validateSlack(); err != nil {
 		return err
 	}
+
+	return nil
+}
+
+func (c *Config) validateDiscordVoice() error {
+	if !c.DiscordVoice.Enabled {
+		return nil
+	}
+
+	for _, field := range [...]struct{ value, message string }{{c.DiscordVoice.Token, "discord_voice.token is required when discord_voice is enabled"}, {c.DiscordVoice.VoiceChannelID, "discord_voice.voice_channel_id is required when discord_voice is enabled"}, {c.DiscordVoice.HumanUserID, "discord_voice.human_user_id is required when discord_voice is enabled"}} {
+		if strings.TrimSpace(field.value) == "" {
+			return errors.New(field.message)
+		}
+	}
+
+	return nil
+}
+
+func (c *Config) validateOpenAICompatible() error {
+	if len(c.OpenAICompatible) == 0 {
+		return nil
+	}
+
+	normalized := make(map[string]OpenAICompatibleConfig, len(c.OpenAICompatible))
+	for name, provider := range c.OpenAICompatible {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return errors.New("openai_compatible provider name is required")
+		}
+
+		provider.APIKey = strings.TrimSpace(provider.APIKey)
+		provider.BaseURL = strings.TrimSpace(provider.BaseURL)
+
+		provider.Mode = strings.TrimSpace(provider.Mode)
+		if provider.APIKey == "" {
+			return fmt.Errorf("openai_compatible.%s.api_key is required", name)
+		}
+
+		if provider.BaseURL == "" {
+			return fmt.Errorf("openai_compatible.%s.base_url is required", name)
+		}
+
+		switch provider.Mode {
+		case "responses", "chat_completions":
+		case "":
+			provider.Mode = "responses"
+		default:
+			return fmt.Errorf("openai_compatible.%s.mode must be responses or chat_completions", name)
+		}
+
+		normalized[name] = provider
+	}
+
+	c.OpenAICompatible = normalized
 
 	return nil
 }
