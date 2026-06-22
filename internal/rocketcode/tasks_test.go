@@ -15,7 +15,7 @@ func TestTaskTool(t *testing.T) {
 	t.Run("returns last final child text wrapped in task result", func(t *testing.T) {
 		mock := mockResponses(responseWithTaskMessages())
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": {Name: "review", Description: "", Model: "", ReasoningEffort: "", Verbosity: "low", MaxRecursion: nil, Prompt: "review carefully", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
+			"review": {Name: "review", Description: "", Model: "openai/gpt-5.4", ReasoningEffort: "", Verbosity: "low", MaxRecursion: nil, Prompt: "review carefully", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
 		}})
 
 		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
@@ -187,8 +187,8 @@ func TestTaskTool(t *testing.T) {
 		)
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
 			"main":      testAgent("main"),
-			"review":    {Name: "review", Guardrail: "safety", Prompt: "review carefully"},
-			"safety":    {Name: "safety", Guardrail: "recursive", Prompt: "guard carefully"},
+			"review":    {Name: "review", Model: "openai/gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
+			"safety":    {Name: "safety", Model: "openai/gpt-5.4", Guardrail: "recursive", Prompt: "guard carefully"},
 			"recursive": testAgentWithPrompt("recursive", "recursive guard"),
 		}})
 		mainAgent := factory.agents.Items["main"]
@@ -213,7 +213,7 @@ func TestTaskTool(t *testing.T) {
 	t.Run("guardrail rejection skips child", func(t *testing.T) {
 		mock := mockResponses(responseWithMessage("prompt-filter", `{"approved":false,"reason":"too risky"}`))
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": {Name: "review", Guardrail: "safety", Prompt: "review carefully"},
+			"review": {Name: "review", Model: "openai/gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
 			"safety": testAgentWithPrompt("safety", "guard carefully"),
 		}})
 
@@ -231,7 +231,7 @@ func TestTaskTool(t *testing.T) {
 			responseWithMessage("response-filter", `{"approved":false,"reason":"do not share"}`),
 		)
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": {Name: "review", Guardrail: "safety", Prompt: "review carefully"},
+			"review": {Name: "review", Model: "openai/gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
 			"safety": testAgentWithPrompt("safety", "guard carefully"),
 		}})
 		factory.diagnostics = true
@@ -247,7 +247,7 @@ func TestTaskTool(t *testing.T) {
 	t.Run("guardrail invalid JSON fails closed", func(t *testing.T) {
 		mock := mockResponses(responseWithMessage("prompt-filter", `not json`))
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": {Name: "review", Guardrail: "safety", Prompt: "review carefully"},
+			"review": {Name: "review", Model: "openai/gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
 			"safety": testAgentWithPrompt("safety", "guard carefully"),
 		}})
 
@@ -263,7 +263,7 @@ func TestTaskTool(t *testing.T) {
 			responseWithMessage("prompt-filter", `{"approved":false,"reason":"stop"}`),
 		)
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": {Name: "review", Guardrail: "safety", Prompt: "review carefully"},
+			"review": {Name: "review", Model: "openai/gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
 			"safety": testAgentWithPermissionName("safety", PermissionSet{Buckets: []PermissionBucket{{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}),
 		}})
 		readTool := testLooperTool("read")
@@ -684,6 +684,7 @@ func testAgent(name string) Agent {
 	var agent Agent
 
 	agent.Name = name
+	agent.Model = "openai/gpt-5.4"
 
 	return agent
 }

@@ -84,7 +84,7 @@ func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 	config.Diagnostics = true
 	config.ExpandPromptShellCommands.PrimaryPrompts = true
 	looper, err := New(&client, config, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "remember !`cat MEMORY.md`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
+		"main": {Name: "main", Description: "", Model: "openai/gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "remember !`cat MEMORY.md`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", &diagnostics)
 
 	require.NoError(t, err)
@@ -166,7 +166,7 @@ func TestNewCopiesShellEnv(t *testing.T) {
 	config := testConfig(dir)
 	config.ShellEnv = env
 	loop, err := New(&client, config, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "prompt", Location: "", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}, Frontmatter: nil, FileMode: 0},
+		"main": {Name: "main", Description: "", Model: "openai/gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "prompt", Location: "", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}, Frontmatter: nil, FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", nil)
 	require.NoError(t, err)
 
@@ -193,7 +193,7 @@ func TestNewShellEnvAppliesToPromptExpansion(t *testing.T) {
 	config.ExpandPromptShellCommands.PrimaryPrompts = true
 	config.ShellEnv = map[string]string{"ROCKETCLAW_CONVERSATION_ID": "prompt", "TMPDIR": "/ignored"}
 	_, err = New(&client, config, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "env !`printf %s \"$ROCKETCLAW_CONVERSATION_ID\"` tmp !`printf %s \"$TMPDIR\"`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
+		"main": {Name: "main", Description: "", Model: "openai/gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "env !`printf %s \"$ROCKETCLAW_CONVERSATION_ID\"` tmp !`printf %s \"$TMPDIR\"`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", &diagnostics)
 
 	require.NoError(t, err)
@@ -211,7 +211,7 @@ func TestNewSandboxedBashConfigAppliesToBashTool(t *testing.T) {
 	config.SandboxedBash = true
 
 	loop, err := New(&client, config, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "prompt", Location: "", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}, Frontmatter: nil, FileMode: 0},
+		"main": {Name: "main", Description: "", Model: "openai/gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "prompt", Location: "", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}, Frontmatter: nil, FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", nil)
 	require.NoError(t, err)
 
@@ -273,7 +273,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 
 	t.Run("disabled allows guardian agent", func(t *testing.T) {
 		config := testConfig(dir)
-		agents := Agents{Items: map[string]Agent{"main": {Name: "main"}, "guardian": {Name: "guardian"}}}
+		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "openai/gpt-5.4"}, "guardian": {Name: "guardian", Model: "openai/gpt-5.4"}}}
 
 		_, err := New(&client, config, root, agents, skills, "main", nil)
 
@@ -314,8 +314,8 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 		config := testConfig(dir)
 		config.AutoApprovePermissions = true
 		agents := Agents{Items: map[string]Agent{
-			"main":             {Name: "main", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(release-guardian)}`)},
-			"release-guardian": {Name: "release-guardian"},
+			"main":             {Name: "main", Model: "openai/gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(release-guardian)}`)},
+			"release-guardian": {Name: "release-guardian", Model: "openai/gpt-5.4"},
 		}}
 
 		_, err := New(&client, config, root, agents, skills, "main", nil)

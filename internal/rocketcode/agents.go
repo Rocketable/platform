@@ -147,10 +147,15 @@ func loadAgent(fsys fs.FS, filePath string) (Agent, error) {
 		return Agent{}, fmt.Errorf("%s: empty agent name", filePath)
 	}
 
+	model := frontmatterString(frontmatter, "model")
+	if _, err := parseAgentModelRef(model); err != nil {
+		return Agent{}, fmt.Errorf("%s: model: %w", filePath, err)
+	}
+
 	return Agent{
 		Name:            name,
 		Description:     frontmatterString(frontmatter, "description"),
-		Model:           frontmatterString(frontmatter, "model"),
+		Model:           model,
 		ReasoningEffort: frontmatterString(frontmatter, "reasoningEffort"),
 		Verbosity:       frontmatterString(frontmatter, "verbosity"),
 		MaxRecursion:    maxRecursion,

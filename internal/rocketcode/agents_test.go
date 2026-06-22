@@ -37,6 +37,7 @@ You are in review mode.
 `),
 			"plan.md": testMapFileMode(0o600, `---
 description: Plan changes only
+model: openai/gpt-5.4
 ---
 
 Plan, do not edit.
@@ -78,9 +79,9 @@ ignored
 
 	t.Run("loads max recursion values", func(t *testing.T) {
 		result := LoadAgents(fstest.MapFS{
-			"unlimited.md": testMapFile("---\ndescription: Unlimited\nmaxRecursion: -1\n---\nPrompt\n"),
-			"zero.md":      testMapFile("---\ndescription: Zero\nmaxRecursion: 0\n---\nPrompt\n"),
-			"positive.md":  testMapFile("---\ndescription: Positive\nmaxRecursion: 3\n---\nPrompt\n"),
+			"unlimited.md": testMapFile("---\ndescription: Unlimited\nmodel: openai/gpt-5.4\nmaxRecursion: -1\n---\nPrompt\n"),
+			"zero.md":      testMapFile("---\ndescription: Zero\nmodel: openai/gpt-5.4\nmaxRecursion: 0\n---\nPrompt\n"),
+			"positive.md":  testMapFile("---\ndescription: Positive\nmodel: openai/gpt-5.4\nmaxRecursion: 3\n---\nPrompt\n"),
 		})
 
 		require.Empty(t, result.Errors)
@@ -108,7 +109,7 @@ ignored
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				result := LoadAgents(fstest.MapFS{
-					"main.md": testMapFile("---\ndescription: Main\nmaxRecursion: " + tt.value + "\n---\nPrompt\n"),
+					"main.md": testMapFile("---\ndescription: Main\nmodel: openai/gpt-5.4\nmaxRecursion: " + tt.value + "\n---\nPrompt\n"),
 				})
 
 				require.Empty(t, result.Agents.Items)
@@ -122,7 +123,7 @@ ignored
 		fsys := fstest.MapFS{
 			"review.md": testMapFile(`---
 description: Review code: security and performance
-model: synthetic/hf:zai-org/GLM-4.7
+model: openai-compatible/hf/zai-org:GLM-4.7
 ---
 
 Strictly follow the rules.
@@ -133,12 +134,12 @@ Strictly follow the rules.
 
 		require.Empty(t, result.Errors)
 		require.Equal(t, "Review code: security and performance", result.Agents.Items["review"].Description)
-		require.Equal(t, "synthetic/hf:zai-org/GLM-4.7", result.Agents.Items["review"].Model)
+		require.Equal(t, "openai-compatible/hf/zai-org:GLM-4.7", result.Agents.Items["review"].Model)
 	})
 
 	t.Run("keeps prompt shell commands raw", func(t *testing.T) {
 		fsys := fstest.MapFS{
-			"main.md": testMapFile("---\ndescription: Main\n---\nUse !`printf expanded` now.\n"),
+			"main.md": testMapFile("---\ndescription: Main\nmodel: openai/gpt-5.4\n---\nUse !`printf expanded` now.\n"),
 		}
 
 		result := LoadAgents(fsys)
@@ -161,7 +162,7 @@ Strictly follow the rules.
 
 	t.Run("ignores mode frontmatter", func(t *testing.T) {
 		fsys := fstest.MapFS{
-			"main.md": testMapFile("---\ndescription: Main\nmode: invalid\n---\nPrompt\n"),
+			"main.md": testMapFile("---\ndescription: Main\nmodel: openai/gpt-5.4\nmode: invalid\n---\nPrompt\n"),
 		}
 
 		result := LoadAgents(fsys)
@@ -197,7 +198,7 @@ Strictly follow the rules.
 
 	t.Run("continues loading valid files when some are invalid", func(t *testing.T) {
 		fsys := fstest.MapFS{
-			"good.md": testMapFile("---\ndescription: Valid\n---\nready\n"),
+			"good.md": testMapFile("---\ndescription: Valid\nmodel: openai/gpt-5.4\n---\nready\n"),
 			"bad.md":  testMapFile("---\ndescription: [broken\n---\n"),
 		}
 
