@@ -3,7 +3,9 @@ package rocketcode
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"testing"
+	"testing/synctest"
 
 	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
@@ -70,4 +72,49 @@ func TestObservabilityRedactionComesFromConfigObject(t *testing.T) {
 	require.Len(t, spans, 2)
 	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.InputValue, instrumentation.RedactedValue))
 	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.OutputValue, instrumentation.RedactedValue))
+}
+
+func TestObservabilityEmitsProviderDiagnosticSpanEvents(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		recorder := tracetest.NewSpanRecorder()
+		provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+		headers := http.Header{"Retry-After-Ms": []string{"2000"}, "X-Request-ID": []string{"req-rate"}}
+		calls := 0
+		mock := mockResponseFunc(func(context.Context, *responses.ResponseNewParams) (*responses.Response, error) {
+			calls++
+			if calls == 1 {
+				return nil, openAIError("too_many_requests", "Too Many Requests", headers)
+			}
+
+			return responseWithMessage("resp-ok", "done"), nil
+		})
+		looper := testLooper(mock)
+		looper.DisplayModel = "openai/gpt-test"
+		looper.Observability = ObservabilityConfig{Enabled: true, Tracer: provider.Tracer("test")}
+
+		record, rendered, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, testPromptInput(PromptInputRoleUser, "question", nil))
+
+		require.NoError(t, err)
+		require.False(t, interrupted)
+		require.Equal(t, "resp-ok", record.ResponseID)
+		require.Equal(t, []ChatResponse{assistantMessage("done")}, rendered)
+
+		spans := recorder.Ended()
+		require.Len(t, spans, 2)
+		require.Equal(t, "rocketcode.provider", spans[0].Name())
+
+		events := spans[0].Events()
+		require.Len(t, events, 1)
+		require.Equal(t, "rocketcode.provider.diagnostic", events[0].Name)
+		require.ElementsMatch(t, []attribute.KeyValue{
+			attribute.String("rocketcode.provider_diagnostic.phase", providerDiagnosticRetry),
+			attribute.Int("rocketcode.provider_diagnostic.http_status", http.StatusTooManyRequests),
+			attribute.String("rocketcode.provider_diagnostic.code", "too_many_requests"),
+			attribute.String("rocketcode.provider_diagnostic.message", "Too Many Requests"),
+			attribute.Int("rocketcode.provider_diagnostic.attempt", 1),
+			attribute.String("rocketcode.provider_diagnostic.retry_after", "2s"),
+			attribute.String("rocketcode.provider_diagnostic.header.retry-after-ms", "2000"),
+			attribute.String("rocketcode.provider_diagnostic.header.x-request-id", "req-rate"),
+		}, events[0].Attributes)
+	})
 }

@@ -1679,7 +1679,7 @@ func TestLooperRetriesRateLimitExceededFailedResponse(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, mock.calls, 2)
 
-		diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: 0, ResponseStatus: string(responses.ResponseStatusFailed), Code: string(responses.ResponseErrorCodeRateLimitExceeded), Message: "too many requests", Attempt: 1, RetryAfter: "1m0s", ResponseID: "resp-rate"}
+		diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: 0, ResponseStatus: string(responses.ResponseStatusFailed), Code: string(responses.ResponseErrorCodeRateLimitExceeded), Message: "too many requests", Attempt: 1, RetryAfter: "1s", ResponseID: "resp-rate"}
 		require.Equal(t, []ChatResponse{
 			providerDiagnosticResponse(diagnostic),
 			assistantMessage("done"),
@@ -1709,7 +1709,7 @@ func TestLooperReportsFailedResponsesInDiagnostics(t *testing.T) {
 }
 
 func TestLooperReportsOpenAIRequestErrorsInDiagnostics(t *testing.T) {
-	mock := mockResponseError(openAIError("rate_limit_exceeded", "slow down", http.StatusTooManyRequests, nil))
+	mock := mockResponseError(openAIError("rate_limit_exceeded", "slow down", nil))
 	looper := testLooper(mock)
 	looper.Diagnostics = true
 	output := make(chan ChatResponse, 10)
@@ -1721,11 +1721,86 @@ func TestLooperReportsOpenAIRequestErrorsInDiagnostics(t *testing.T) {
 
 	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
 
-	require.EqualError(t, err, "run turn: request response: new response: POST \"https://api.openai.com/v1/responses\": 429 Too Many Requests ")
+	require.EqualError(t, err, "run turn: request response: new response: provider retry limit: status 429")
 	require.Len(t, mock.calls, 1)
+
+	_, ok := errors.AsType[*providerRetryLimitError](err)
+	require.True(t, ok)
 
 	diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: http.StatusTooManyRequests, ResponseStatus: "", Code: string(responses.ResponseErrorCodeRateLimitExceeded), Message: "slow down", Attempt: 0, RetryAfter: "", ResponseID: ""}
 	require.Equal(t, []ChatResponse{providerDiagnosticResponse(diagnostic)}, collectResponses(output))
+}
+
+func TestLooperClassifiesTerminalTooManyRequestsErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code string
+		want func(error) bool
+	}{
+		{name: "usage limit", code: "usage_limit_reached", want: func(err error) bool {
+			_, ok := errors.AsType[*providerUsageLimitError](err)
+			return ok
+		}},
+		{name: "usage not included", code: "usage_not_included", want: func(err error) bool {
+			_, ok := errors.AsType[*providerUsageNotIncludedError](err)
+			return ok
+		}},
+		{name: "generic retry limit", code: "rate_limit_exceeded", want: func(err error) bool {
+			_, ok := errors.AsType[*providerRetryLimitError](err)
+			return ok
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := mockResponseError(openAIError(tc.code, "blocked", nil))
+			looper := testLooper(mock)
+			output := make(chan ChatResponse, 10)
+
+			input := make(chan PromptInput, 1)
+			input <- testPromptInput(PromptInputRoleUser, "question", output)
+
+			close(input)
+
+			err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+
+			require.Error(t, err)
+			require.True(t, tc.want(err))
+			require.Len(t, mock.calls, 1)
+		})
+	}
+}
+
+func TestLooperRetriesTooManyRequestsRequestError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		headers := http.Header{"Retry-After-Ms": []string{"2000"}, "X-Request-ID": []string{"req-rate"}}
+		calls := 0
+		mock := mockResponseFunc(func(context.Context, *responses.ResponseNewParams) (*responses.Response, error) {
+			calls++
+			if calls == 1 {
+				return nil, openAIError("too_many_requests", "Too Many Requests", headers)
+			}
+
+			return responseWithMessage("resp-ok", "done"), nil
+		})
+		looper := testLooper(mock)
+		looper.Diagnostics = true
+		output := make(chan ChatResponse, 10)
+
+		input := make(chan PromptInput, 1)
+		input <- testPromptInput(PromptInputRoleUser, "question", output)
+
+		close(input)
+
+		err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+
+		require.NoError(t, err)
+		require.Len(t, mock.calls, 2)
+
+		diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: http.StatusTooManyRequests, Code: "too_many_requests", Message: "Too Many Requests", Attempt: 1, RetryAfter: "2s", Headers: map[string]string{"retry-after-ms": "2000", "x-request-id": "req-rate"}}
+		require.Equal(t, []ChatResponse{
+			providerDiagnosticResponse(diagnostic),
+			assistantMessage("done"),
+		}, collectResponses(output))
+	})
 }
 
 func TestLooperReportsRequestErrorsInDiagnostics(t *testing.T) {
@@ -1790,7 +1865,7 @@ func failedResponseWithCode(id string, code responses.ResponseErrorCode, message
 	return &response
 }
 
-func openAIError(code, message string, status int, headers http.Header) *openai.Error {
+func openAIError(code, message string, headers http.Header) *openai.Error {
 	req, err := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/responses", http.NoBody)
 	if err != nil {
 		panic(err)
@@ -1798,7 +1873,7 @@ func openAIError(code, message string, status int, headers http.Header) *openai.
 
 	var response http.Response
 
-	response.StatusCode = status
+	response.StatusCode = http.StatusTooManyRequests
 	response.Header = headers
 	response.Request = req
 
@@ -1806,7 +1881,7 @@ func openAIError(code, message string, status int, headers http.Header) *openai.
 
 	errOpenAI.Code = code
 	errOpenAI.Message = message
-	errOpenAI.StatusCode = status
+	errOpenAI.StatusCode = http.StatusTooManyRequests
 	errOpenAI.Request = req
 	errOpenAI.Response = &response
 

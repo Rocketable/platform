@@ -42,6 +42,48 @@ func recordSpanError(span observabilitySpan, err error) {
 	span.span.SetStatus(codes.Error, err.Error())
 }
 
+func recordProviderDiagnosticEvent(ctx context.Context, diagnostic *ProviderDiagnostic) {
+	attrs := []attribute.KeyValue{attribute.String("rocketcode.provider_diagnostic.phase", diagnostic.Phase)}
+
+	if diagnostic.HTTPStatus != 0 {
+		attrs = append(attrs, attribute.Int("rocketcode.provider_diagnostic.http_status", diagnostic.HTTPStatus))
+	}
+
+	if diagnostic.ResponseStatus != "" {
+		attrs = append(attrs, attribute.String("rocketcode.provider_diagnostic.response_status", diagnostic.ResponseStatus))
+	}
+
+	if diagnostic.Code != "" {
+		attrs = append(attrs, attribute.String("rocketcode.provider_diagnostic.code", diagnostic.Code))
+	}
+
+	if diagnostic.Type != "" {
+		attrs = append(attrs, attribute.String("rocketcode.provider_diagnostic.type", diagnostic.Type))
+	}
+
+	if diagnostic.Message != "" {
+		attrs = append(attrs, attribute.String("rocketcode.provider_diagnostic.message", diagnostic.Message))
+	}
+
+	if diagnostic.Attempt != 0 {
+		attrs = append(attrs, attribute.Int("rocketcode.provider_diagnostic.attempt", diagnostic.Attempt))
+	}
+
+	if diagnostic.RetryAfter != "" {
+		attrs = append(attrs, attribute.String("rocketcode.provider_diagnostic.retry_after", diagnostic.RetryAfter))
+	}
+
+	if diagnostic.ResponseID != "" {
+		attrs = append(attrs, attribute.String("rocketcode.provider_diagnostic.response_id", diagnostic.ResponseID))
+	}
+
+	for name, value := range diagnostic.Headers {
+		attrs = append(attrs, attribute.String("rocketcode.provider_diagnostic.header."+name, value))
+	}
+
+	trace.SpanFromContext(ctx).AddEvent("rocketcode.provider.diagnostic", trace.WithAttributes(attrs...))
+}
+
 func (o ObservabilityConfig) inputValue(text string) attribute.KeyValue {
 	return attribute.String(semconv.InputValue, o.TraceConfig.MaskInputValue(text))
 }

@@ -24,7 +24,8 @@ import (
 
 const reasoningEncryptedContent responses.ResponseIncludable = "reasoning.encrypted_content"
 const defaultCompactThreshold int64 = 200000
-const providerRateLimitRetryMinDelay = time.Minute
+const providerRateLimitMaxRetries = 5
+const providerRetryBackoffMaxDelay = time.Minute
 
 var errTurnInterrupted = errors.New("turn interrupted")
 
@@ -196,14 +197,16 @@ type SubagentDiagnostic struct {
 
 // ProviderDiagnostic describes provider request diagnostics emitted when diagnostics are enabled.
 type ProviderDiagnostic struct {
-	Phase          string `json:"phase"`
-	HTTPStatus     int    `json:"http_status,omitempty"`
-	ResponseStatus string `json:"response_status,omitempty"`
-	Code           string `json:"code,omitempty"`
-	Message        string `json:"message,omitempty"`
-	Attempt        int    `json:"attempt,omitempty"`
-	RetryAfter     string `json:"retry_after,omitempty"`
-	ResponseID     string `json:"response_id,omitempty"`
+	Phase          string            `json:"phase"`
+	HTTPStatus     int               `json:"http_status,omitempty"`
+	ResponseStatus string            `json:"response_status,omitempty"`
+	Code           string            `json:"code,omitempty"`
+	Type           string            `json:"type,omitempty"`
+	Message        string            `json:"message,omitempty"`
+	Attempt        int               `json:"attempt,omitempty"`
+	RetryAfter     string            `json:"retry_after,omitempty"`
+	ResponseID     string            `json:"response_id,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
 }
 
 const (
@@ -229,6 +232,98 @@ type responseFailureError struct {
 	status     responses.ResponseStatus
 	code       responses.ResponseErrorCode
 	message    string
+}
+
+type providerRateLimitError struct {
+	provider   string
+	code       string
+	typeName   string
+	message    string
+	retryAfter time.Duration
+	responseID string
+	requestID  string
+	cause      error
+}
+
+func (e *providerRateLimitError) Error() string {
+	if e.code != "" && e.message != "" {
+		return fmt.Sprintf("provider rate limit: %s: %s", e.code, e.message)
+	}
+
+	if e.code != "" {
+		return "provider rate limit: " + e.code
+	}
+
+	if e.message != "" {
+		return "provider rate limit: " + e.message
+	}
+
+	return "provider rate limit"
+}
+
+func (e *providerRateLimitError) Unwrap() error {
+	return e.cause
+}
+
+type providerRetryLimitError struct {
+	provider   string
+	httpStatus int
+	requestID  string
+	cause      error
+}
+
+type providerUsageLimitError struct {
+	provider  string
+	code      string
+	typeName  string
+	message   string
+	requestID string
+	cause     error
+}
+
+func (e *providerUsageLimitError) Error() string {
+	if e.message != "" {
+		return "provider usage limit: " + e.message
+	}
+
+	return "provider usage limit"
+}
+
+func (e *providerUsageLimitError) Unwrap() error {
+	return e.cause
+}
+
+type providerUsageNotIncludedError struct {
+	provider  string
+	code      string
+	typeName  string
+	message   string
+	requestID string
+	cause     error
+}
+
+func (e *providerUsageNotIncludedError) Error() string {
+	if e.message != "" {
+		return "provider usage not included: " + e.message
+	}
+
+	return "provider usage not included"
+}
+
+func (e *providerUsageNotIncludedError) Unwrap() error {
+	return e.cause
+}
+
+func (e *providerRetryLimitError) Error() string {
+	if e.requestID != "" {
+		return fmt.Sprintf("provider retry limit: status %d, request id: %s", e.httpStatus, e.requestID)
+	}
+
+	return fmt.Sprintf("provider retry limit: status %d", e.httpStatus)
+}
+
+func (e *providerRetryLimitError) Unwrap() error {
+	return e.cause
 }
 
 func (e *responseFailureError) Error() string {
@@ -599,23 +694,56 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 				return resp, recoveredHistory, nil
 			}
 
+			errReturn := err
 			if ctx.Err() == nil {
-				diagnostic := ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""}
 				if errAPI, ok := errors.AsType[*openai.Error](err); ok {
-					diagnostic.Code = errAPI.Code
-					diagnostic.Message = errAPI.Message
-					diagnostic.HTTPStatus = errAPI.StatusCode
-				}
+					if errAPI.StatusCode == http.StatusTooManyRequests && (errAPI.Code == "too_many_requests" || errAPI.Type == "too_many_requests") {
+						attempt++
+						wait := providerRetryDelay(errAPI.Response, attempt)
+						errRateLimit := &providerRateLimitError{provider: modelProviderOpenAI, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, retryAfter: wait, requestID: providerRequestID(errAPI.Response), cause: err}
 
-				l.emitProviderDiagnostic(output, &diagnostic)
+						if attempt > providerRateLimitMaxRetries {
+							diagnostic := ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: http.StatusTooManyRequests, Code: errRateLimit.code, Type: errRateLimit.typeName, Message: errRateLimit.message, RetryAfter: errRateLimit.retryAfter.String(), Headers: providerDiagnosticHeaders(errAPI.Response)}
+							l.emitProviderDiagnostic(ctx, output, &diagnostic)
+
+							return nil, nil, fmt.Errorf("new response: %w", errRateLimit)
+						}
+
+						diagnostic := ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: http.StatusTooManyRequests, Code: errRateLimit.code, Type: errRateLimit.typeName, Message: errRateLimit.message, Attempt: attempt, RetryAfter: errRateLimit.retryAfter.String(), Headers: providerDiagnosticHeaders(errAPI.Response)}
+						l.emitProviderDiagnostic(ctx, output, &diagnostic)
+
+						if err := waitProviderRetry(ctx, wait); err != nil {
+							return nil, nil, fmt.Errorf("wait for provider retry: %w", err)
+						}
+
+						continue
+					}
+
+					if errAPI.StatusCode == http.StatusTooManyRequests {
+						switch {
+						case errAPI.Code == "usage_limit_reached" || errAPI.Type == "usage_limit_reached":
+							errReturn = &providerUsageLimitError{provider: modelProviderOpenAI, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, requestID: providerRequestID(errAPI.Response), cause: err}
+						case errAPI.Code == "usage_not_included" || errAPI.Type == "usage_not_included":
+							errReturn = &providerUsageNotIncludedError{provider: modelProviderOpenAI, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, requestID: providerRequestID(errAPI.Response), cause: err}
+						default:
+							errReturn = &providerRetryLimitError{provider: modelProviderOpenAI, httpStatus: errAPI.StatusCode, requestID: providerRequestID(errAPI.Response), cause: err}
+						}
+					}
+
+					diagnostic := ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: errAPI.StatusCode, Code: errAPI.Code, Type: errAPI.Type, Message: errAPI.Message, Headers: providerDiagnosticHeaders(errAPI.Response)}
+					l.emitProviderDiagnostic(ctx, output, &diagnostic)
+				} else {
+					diagnostic := ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""}
+					l.emitProviderDiagnostic(ctx, output, &diagnostic)
+				}
 			}
 
-			return nil, nil, fmt.Errorf("new response: %w", err)
+			return nil, nil, fmt.Errorf("new response: %w", errReturn)
 		}
 
 		if resp == nil {
 			err := errors.New("missing response")
-			l.emitProviderDiagnostic(output, &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""})
+			l.emitProviderDiagnostic(ctx, output, &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""})
 
 			return nil, nil, err
 		}
@@ -641,17 +769,25 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 		}
 
 		if resp.Error.Code != responses.ResponseErrorCodeRateLimitExceeded {
-			diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0)
-			l.emitProviderDiagnostic(output, &diagnostic)
+			diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0, nil)
+			l.emitProviderDiagnostic(ctx, output, &diagnostic)
 
 			return nil, nil, err
 		}
 
 		attempt++
-		wait := providerRetryDelay(raw)
+		wait := providerRetryDelay(raw, attempt)
+		err = &providerRateLimitError{provider: modelProviderOpenAI, code: string(resp.Error.Code), message: resp.Error.Message, retryAfter: wait, responseID: resp.ID, requestID: providerRequestID(raw), cause: err}
 
-		diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticRetry, attempt, wait)
-		l.emitProviderDiagnostic(output, &diagnostic)
+		if attempt > providerRateLimitMaxRetries {
+			diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0, raw)
+			l.emitProviderDiagnostic(ctx, output, &diagnostic)
+
+			return nil, nil, err
+		}
+
+		diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticRetry, attempt, wait, raw)
+		l.emitProviderDiagnostic(ctx, output, &diagnostic)
 
 		if err := waitProviderRetry(ctx, wait); err != nil {
 			return nil, nil, fmt.Errorf("wait for provider retry: %w", err)
@@ -710,7 +846,7 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 					diagnostic.HTTPStatus = errAPI.StatusCode
 				}
 
-				l.emitProviderDiagnostic(output, &diagnostic)
+				l.emitProviderDiagnostic(ctx, output, &diagnostic)
 			}
 
 			return nil, nil, fmt.Errorf("retry compacted response: %w", err)
@@ -718,7 +854,7 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 
 		if resp == nil {
 			err := errors.New("missing response")
-			l.emitProviderDiagnostic(output, &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""})
+			l.emitProviderDiagnostic(ctx, output, &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""})
 
 			return nil, nil, err
 		}
@@ -732,8 +868,8 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 			continue
 		}
 
-		diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0)
-		l.emitProviderDiagnostic(output, &diagnostic)
+		diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0, nil)
+		l.emitProviderDiagnostic(ctx, output, &diagnostic)
 
 		return nil, nil, errLast
 	}
@@ -833,7 +969,7 @@ func isResponseContextLengthExceeded(resp *responses.Response) bool {
 	return resp.Error.Code == responses.ResponseErrorCode("context_length_exceeded")
 }
 
-func providerDiagnosticFromFailedResponse(resp *responses.Response, phase string, attempt int, retryAfter time.Duration) ProviderDiagnostic {
+func providerDiagnosticFromFailedResponse(resp *responses.Response, phase string, attempt int, retryAfter time.Duration, raw *http.Response) ProviderDiagnostic {
 	diagnostic := ProviderDiagnostic{
 		Phase:          phase,
 		ResponseStatus: string(resp.Status),
@@ -841,6 +977,7 @@ func providerDiagnosticFromFailedResponse(resp *responses.Response, phase string
 		Message:        resp.Error.Message,
 		Attempt:        attempt,
 		ResponseID:     resp.ID,
+		Headers:        providerDiagnosticHeaders(raw),
 	}
 
 	if retryAfter > 0 {
@@ -848,6 +985,57 @@ func providerDiagnosticFromFailedResponse(resp *responses.Response, phase string
 	}
 
 	return diagnostic
+}
+
+func providerRequestID(resp *http.Response) string {
+	if resp == nil {
+		return ""
+	}
+
+	if requestID := resp.Header.Get("X-Request-ID"); requestID != "" {
+		return requestID
+	}
+
+	if requestID := resp.Header.Get("X-Oai-Request-Id"); requestID != "" {
+		return requestID
+	}
+
+	return resp.Header.Get("Cf-Ray")
+}
+
+func providerDiagnosticHeaders(resp *http.Response) map[string]string {
+	if resp == nil {
+		return nil
+	}
+
+	headers := map[string]string{}
+
+	for name, values := range resp.Header {
+		if len(values) == 0 {
+			continue
+		}
+
+		nameLower := strings.ToLower(name)
+		switch {
+		case nameLower == "retry-after-ms",
+			nameLower == "retry-after",
+			nameLower == "x-ratelimit-reset-requests",
+			nameLower == "x-ratelimit-reset-tokens",
+			nameLower == "x-request-id",
+			nameLower == "x-oai-request-id",
+			nameLower == "cf-ray",
+			nameLower == "x-openai-authorization-error",
+			nameLower == "x-error-json",
+			strings.HasPrefix(nameLower, "x-codex-"):
+			headers[nameLower] = values[0]
+		}
+	}
+
+	if len(headers) == 0 {
+		return nil
+	}
+
+	return headers
 }
 
 func emitChatResponse(output chan<- ChatResponse, item ChatResponse) {
@@ -1195,7 +1383,9 @@ func (l *looper) emitToolDiagnostic(output chan<- ChatResponse, diagnostic *Tool
 	emitDiagnosticChatResponse(output, ChatResponse{Kind: ChatResponseAssistantTool, Tool: diagnostic})
 }
 
-func (l *looper) emitProviderDiagnostic(output chan<- ChatResponse, diagnostic *ProviderDiagnostic) {
+func (l *looper) emitProviderDiagnostic(ctx context.Context, output chan<- ChatResponse, diagnostic *ProviderDiagnostic) {
+	recordProviderDiagnosticEvent(ctx, diagnostic)
+
 	if !l.Diagnostics {
 		return
 	}

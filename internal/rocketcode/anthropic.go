@@ -38,13 +38,13 @@ func (l *looper) newAnthropicResponse(ctx context.Context, params *responses.Res
 				diagnostic.Code = string(errAPI.Type())
 			}
 
-			l.emitProviderDiagnostic(output, &diagnostic)
+			l.emitProviderDiagnostic(ctx, output, &diagnostic)
 
 			return nil, fmt.Errorf("new Anthropic message: %w", err)
 		}
 
-		wait := providerRetryDelay(errAPI.Response)
-		l.emitProviderDiagnostic(output, &ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: errAPI.StatusCode, Code: string(errAPI.Type()), Message: err.Error(), Attempt: attempt, RetryAfter: wait.String()})
+		wait := providerRetryDelay(errAPI.Response, attempt)
+		l.emitProviderDiagnostic(ctx, output, &ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: errAPI.StatusCode, Code: string(errAPI.Type()), Message: err.Error(), Attempt: attempt, RetryAfter: wait.String()})
 
 		if err := waitProviderRetry(ctx, wait); err != nil {
 			return nil, fmt.Errorf("wait for Anthropic retry: %w", err)
@@ -64,33 +64,61 @@ func waitProviderRetry(ctx context.Context, wait time.Duration) error {
 	}
 }
 
-func providerRetryDelay(resp *http.Response) time.Duration {
-	wait := providerRateLimitRetryMinDelay
+func providerRetryDelay(resp *http.Response, attempt int) time.Duration {
+	wait := providerRetryBackoff(attempt)
 	if resp == nil {
 		return wait
 	}
 
+	found := false
+	headerWait := time.Duration(0)
+
 	if millis, errParse := strconv.ParseFloat(resp.Header.Get("Retry-After-Ms"), 64); errParse == nil && millis >= 0 && millis == millis {
-		if delay := time.Duration(millis * float64(time.Millisecond)); delay > wait {
-			wait = delay
+		if delay := time.Duration(millis * float64(time.Millisecond)); delay >= headerWait {
+			headerWait = delay
+			found = true
 		}
 	}
 
 	for _, header := range []string{"X-RateLimit-Reset-Requests", "X-RateLimit-Reset-Tokens"} {
-		if delay, errParse := time.ParseDuration(resp.Header.Get(header)); errParse == nil && delay > wait {
-			wait = delay
+		if delay, errParse := time.ParseDuration(resp.Header.Get(header)); errParse == nil && delay >= headerWait {
+			headerWait = delay
+			found = true
 		}
 	}
 
 	retryAfter := resp.Header.Get("Retry-After")
 	if seconds, errParse := strconv.ParseFloat(retryAfter, 64); errParse == nil && seconds >= 0 && seconds == seconds {
-		if delay := time.Duration(seconds * float64(time.Second)); delay > wait {
-			wait = delay
+		if delay := time.Duration(seconds * float64(time.Second)); delay >= headerWait {
+			headerWait = delay
+			found = true
 		}
 	} else if when, errParse := time.Parse(time.RFC1123, retryAfter); errParse == nil {
-		if delay := time.Until(when); delay > wait {
-			wait = delay
+		if delay := time.Until(when); delay >= headerWait {
+			headerWait = delay
+			found = true
 		}
+	}
+
+	if found {
+		return headerWait
+	}
+
+	return wait
+}
+
+func providerRetryBackoff(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+
+	wait := time.Second
+	for range attempt - 1 {
+		if wait >= providerRetryBackoffMaxDelay/2 {
+			return providerRetryBackoffMaxDelay
+		}
+
+		wait *= 2
 	}
 
 	return wait
