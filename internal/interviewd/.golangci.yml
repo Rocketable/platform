@@ -51,6 +51,7 @@ linters:
   exclusions:
     paths:
       - third_party/.*
+      - .*_gen\..*
     rules:
       - path: _test\.go
         linters:
