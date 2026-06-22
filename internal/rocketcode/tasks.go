@@ -200,16 +200,24 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		childFactory.recursionRemaining = &remaining
 	}
 
-	modelRef, err := parseAgentModelRef(agent.Model, f.modelRef)
+	modelRef, err := parseAgentModelRef(agent.Model)
+	if err != nil {
+		return "", err
+	}
+
+	client, err := f.responsesAPIForModel(modelRef)
 	if err != nil {
 		return "", err
 	}
 
 	childFactory.modelRef = modelRef
+	childFactory.client = client.client
 
 	child := &looper{
 		agent:                  agent,
-		Client:                 f.client,
+		provider:               modelRef.provider,
+		modelRef:               modelRef,
+		Client:                 client.client,
 		AnthropicClient:        f.anthropicClient,
 		SystemPrompt:           systemPrompt,
 		Model:                  modelRef.apiModel,
@@ -340,17 +348,26 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, messag
 
 	responseFormat := guardrailResponseFormat()
 
-	modelRef, err := parseAgentModelRef(agent.Model, f.modelRef)
+	modelRef, err := parseAgentModelRef(agent.Model)
+	if err != nil {
+		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail model failed: " + err.Error()}
+	}
+
+	client, err := f.responsesAPIForModel(modelRef)
 	if err != nil {
 		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail model failed: " + err.Error()}
 	}
 
 	childFactory := *f
 	childFactory.inGuardrailRun = true
+	childFactory.modelRef = modelRef
+	childFactory.client = client.client
 
 	child := &looper{
 		agent:                  agent,
-		Client:                 f.client,
+		provider:               modelRef.provider,
+		modelRef:               modelRef,
+		Client:                 client.client,
 		AnthropicClient:        f.anthropicClient,
 		SystemPrompt:           composeSystemPromptWithSkills(agent.Prompt, f.skills, &agent),
 		Model:                  modelRef.apiModel,
