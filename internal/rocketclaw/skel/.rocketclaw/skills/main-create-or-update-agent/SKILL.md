@@ -171,6 +171,14 @@ Create or update the agent as a markdown agent file with YAML frontmatter.
 
 The resulting frontmatter must include at least:
 - `description`
+- `model`
+
+The `model` value must be provider-qualified. Valid forms are:
+- `openai/<model>`
+- `anthropic/<model>`
+- `openai-compatible/<provider>/<model>`
+
+When updating an existing agent, preserve the existing `model` unless the human explicitly asked to change it. Do not create blank or unprefixed model values.
 
 The optional `maxRecursion` frontmatter field controls task subdelegation depth for inferences started with that agent:
 - omitted or `-1` means unlimited subdelegation
