@@ -588,7 +588,7 @@ func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.Ses
 		input = append(input, items...)
 	}
 
-	for i := len(input) - 1; i >= 0; i-- {
+	for i := range slices.Backward(input) {
 		if input[i].OfCompaction != nil {
 			input = input[i:]
 

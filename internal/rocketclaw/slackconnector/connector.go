@@ -312,9 +312,9 @@ func slackThinkingMessage(placeholder, thinking string) string {
 
 	quoted.WriteString(prefix)
 
-	for i := len(lines) - 1; i >= 0; i-- {
+	for _, v := range slices.Backward(lines) {
 		quoted.WriteString("> ")
-		quoted.WriteString(lines[i])
+		quoted.WriteString(v)
 		quoted.WriteByte('\n')
 	}
 

@@ -30,7 +30,7 @@ type controlRequest struct {
 	QuestionID     string                       `json:"question_id,omitempty"`
 	Agent          string                       `json:"agent,omitempty"`
 	Text           string                       `json:"text,omitempty"`
-	Answer         events.AskUserQuestionAnswer `json:"answer,omitempty"`
+	Answer         events.AskUserQuestionAnswer `json:"answer,omitzero"`
 	Summarize      bool                         `json:"summarize,omitempty"`
 }
 type controlMessage struct {
