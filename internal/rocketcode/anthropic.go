@@ -25,7 +25,7 @@ func (l *looper) newAnthropicResponse(ctx context.Context, params *responses.Res
 	}
 
 	for attempt := 1; ; attempt++ {
-		message, err := l.AnthropicClient.Messages.New(ctx, body)
+		message, err := l.AnthropicClient.Beta.Messages.New(ctx, body)
 		if err == nil {
 			return anthropicResponse(message), nil
 		}
@@ -124,15 +124,26 @@ func providerRetryBackoff(attempt int) time.Duration {
 	return wait
 }
 
-func (l *looper) anthropicParams(params *responses.ResponseNewParams) (anthropic.MessageNewParams, error) {
+func (l *looper) anthropicParams(params *responses.ResponseNewParams) (anthropic.BetaMessageNewParams, error) {
 	messages, err := anthropicMessages(params.Input.OfInputItemList)
 	if err != nil {
-		return anthropic.MessageNewParams{}, err
+		return anthropic.BetaMessageNewParams{}, err
 	}
 
-	body := anthropic.MessageNewParams{MaxTokens: 4096, Messages: messages, Model: params.Model}
+	body := anthropic.BetaMessageNewParams{
+		MaxTokens: 4096,
+		Messages:  messages,
+		Model:     params.Model,
+		Betas:     []anthropic.AnthropicBeta{anthropic.AnthropicBeta("compact-2026-01-12")},
+		ContextManagement: anthropic.BetaContextManagementConfigParam{Edits: []anthropic.BetaContextManagementConfigEditUnionParam{{
+			OfCompact20260112: &anthropic.BetaCompact20260112EditParam{
+				PauseAfterCompaction: anthropic.Bool(true),
+				Trigger:              anthropic.BetaInputTokensTriggerParam{Value: l.compactThreshold()},
+			},
+		}}},
+	}
 	if params.Instructions.Valid() {
-		body.System = []anthropic.TextBlockParam{{Text: params.Instructions.Value}}
+		body.System = []anthropic.BetaTextBlockParam{{Text: params.Instructions.Value}}
 	}
 
 	for i := range params.Tools {
@@ -143,7 +154,7 @@ func (l *looper) anthropicParams(params *responses.ResponseNewParams) (anthropic
 
 		anthropicTool, err := anthropicToolParam(tool)
 		if err != nil {
-			return anthropic.MessageNewParams{}, err
+			return anthropic.BetaMessageNewParams{}, err
 		}
 
 		body.Tools = append(body.Tools, anthropicTool)
@@ -152,8 +163,8 @@ func (l *looper) anthropicParams(params *responses.ResponseNewParams) (anthropic
 	return body, nil
 }
 
-func anthropicMessages(items []responses.ResponseInputItemUnionParam) ([]anthropic.MessageParam, error) {
-	messages := make([]anthropic.MessageParam, 0, len(items))
+func anthropicMessages(items []responses.ResponseInputItemUnionParam) ([]anthropic.BetaMessageParam, error) {
+	messages := make([]anthropic.BetaMessageParam, 0, len(items))
 	for i := range items {
 		item := &items[i]
 		switch {
@@ -164,9 +175,9 @@ func anthropicMessages(items []responses.ResponseInputItemUnionParam) ([]anthrop
 			}
 
 			if string(item.OfMessage.Role) == "assistant" {
-				messages = append(messages, anthropic.NewAssistantMessage(blocks...))
+				messages = append(messages, anthropic.BetaMessageParam{Role: anthropic.BetaMessageParamRoleAssistant, Content: blocks})
 			} else {
-				messages = append(messages, anthropic.NewUserMessage(blocks...))
+				messages = append(messages, anthropic.NewBetaUserMessage(blocks...))
 			}
 		case item.OfFunctionCall != nil:
 			call := item.OfFunctionCall
@@ -178,26 +189,53 @@ func anthropicMessages(items []responses.ResponseInputItemUnionParam) ([]anthrop
 				}
 			}
 
-			messages = append(messages, anthropic.NewAssistantMessage(anthropic.NewToolUseBlock(call.CallID, input, call.Name)))
+			messages = append(messages, anthropic.BetaMessageParam{
+				Role:    anthropic.BetaMessageParamRoleAssistant,
+				Content: []anthropic.BetaContentBlockParamUnion{anthropic.NewBetaToolUseBlock(call.CallID, input, call.Name)},
+			})
 		case item.OfFunctionCallOutput != nil:
 			output := anthropicToolResultText(item.OfFunctionCallOutput)
-			messages = append(messages, anthropic.NewUserMessage(anthropic.NewToolResultBlock(item.OfFunctionCallOutput.CallID, output, false)))
+			messages = append(messages, anthropic.NewBetaUserMessage(anthropic.NewBetaToolResultBlock(item.OfFunctionCallOutput.CallID, output, false)))
+		case item.OfCompaction != nil:
+			compaction := item.OfCompaction
+
+			data, err := json.Marshal(compaction)
+			if err != nil {
+				return nil, fmt.Errorf("marshal Anthropic compaction replay: %w", err)
+			}
+
+			var stored struct {
+				Content *string `json:"content"`
+			}
+			if err := json.Unmarshal(data, &stored); err != nil {
+				return nil, fmt.Errorf("decode Anthropic compaction replay: %w", err)
+			}
+
+			if stored.Content == nil || *stored.Content == "" {
+				continue
+			}
+
+			compactionBlock := anthropic.BetaCompactionBlockParam{Content: anthropic.String(*stored.Content), EncryptedContent: anthropic.String(compaction.EncryptedContent)}
+			messages = append(messages, anthropic.BetaMessageParam{
+				Role:    anthropic.BetaMessageParamRoleAssistant,
+				Content: []anthropic.BetaContentBlockParamUnion{{OfCompaction: &compactionBlock}},
+			})
 		}
 	}
 
 	return messages, nil
 }
 
-func anthropicContent(content responses.EasyInputMessageContentUnionParam) ([]anthropic.ContentBlockParamUnion, error) {
+func anthropicContent(content responses.EasyInputMessageContentUnionParam) ([]anthropic.BetaContentBlockParamUnion, error) {
 	if content.OfString.Valid() {
-		return []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(content.OfString.Value)}, nil
+		return []anthropic.BetaContentBlockParamUnion{anthropic.NewBetaTextBlock(content.OfString.Value)}, nil
 	}
 
-	blocks := make([]anthropic.ContentBlockParamUnion, 0, len(content.OfInputItemContentList))
+	blocks := make([]anthropic.BetaContentBlockParamUnion, 0, len(content.OfInputItemContentList))
 	for i := range content.OfInputItemContentList {
 		item := content.OfInputItemContentList[i]
 		if item.OfInputText != nil {
-			blocks = append(blocks, anthropic.NewTextBlock(item.OfInputText.Text))
+			blocks = append(blocks, anthropic.NewBetaTextBlock(item.OfInputText.Text))
 		} else {
 			return nil, errors.New("anthropic provider does not support prompt attachments yet")
 		}
@@ -222,18 +260,18 @@ func anthropicToolResultText(output *responses.ResponseInputItemFunctionCallOutp
 	return strings.Join(parts, "\n")
 }
 
-func anthropicToolParam(tool *responses.FunctionToolParam) (anthropic.ToolUnionParam, error) {
+func anthropicToolParam(tool *responses.FunctionToolParam) (anthropic.BetaToolUnionParam, error) {
 	data, err := json.Marshal(tool.Parameters)
 	if err != nil {
-		return anthropic.ToolUnionParam{}, fmt.Errorf("marshal Anthropic tool schema %q: %w", tool.Name, err)
+		return anthropic.BetaToolUnionParam{}, fmt.Errorf("marshal Anthropic tool schema %q: %w", tool.Name, err)
 	}
 
-	var schema anthropic.ToolInputSchemaParam
+	var schema anthropic.BetaToolInputSchemaParam
 	if err := json.Unmarshal(data, &schema); err != nil {
-		return anthropic.ToolUnionParam{}, fmt.Errorf("decode Anthropic tool schema %q: %w", tool.Name, err)
+		return anthropic.BetaToolUnionParam{}, fmt.Errorf("decode Anthropic tool schema %q: %w", tool.Name, err)
 	}
 
-	param := anthropic.ToolUnionParamOfTool(schema, tool.Name)
+	param := anthropic.BetaToolUnionParamOfTool(schema, tool.Name)
 	if tool.Description.Valid() {
 		param.OfTool.Description = anthropic.String(tool.Description.Value)
 	}
@@ -245,7 +283,7 @@ func anthropicToolParam(tool *responses.FunctionToolParam) (anthropic.ToolUnionP
 	return param, nil
 }
 
-func anthropicResponse(message *anthropic.Message) *responses.Response {
+func anthropicResponse(message *anthropic.BetaMessage) *responses.Response {
 	var response responses.Response
 
 	response.ID = message.ID
@@ -256,6 +294,16 @@ func anthropicResponse(message *anthropic.Message) *responses.Response {
 			response.Output = append(response.Output, responses.ResponseOutputItemUnion{ID: message.ID + "-message", Type: "message", Role: "assistant", Status: "completed", Content: []responses.ResponseOutputMessageContentUnion{{Type: "output_text", Text: block.Text}}})
 		case "tool_use":
 			response.Output = append(response.Output, responses.ResponseOutputItemUnion{ID: block.ID, Type: "function_call", CallID: block.ID, Name: block.Name, Arguments: responses.ResponseOutputItemUnionArguments{OfString: string(block.Input)}, Status: "completed"})
+		case "compaction":
+			compaction := block.AsCompaction()
+			if !compaction.JSON.Content.Valid() || compaction.Content == "" {
+				continue
+			}
+
+			item := responses.ResponseOutputItemUnion{ID: fmt.Sprintf("%s-compaction-%d", message.ID, i), Type: "compaction", EncryptedContent: compaction.EncryptedContent}
+			item.Summary = []responses.ResponseReasoningItemSummary{{Text: compaction.Content}}
+
+			response.Output = append(response.Output, item)
 		}
 	}
 

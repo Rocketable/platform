@@ -8,6 +8,7 @@ import (
 	"iter"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -565,13 +566,9 @@ func (l *looper) runTurn(
 		l.emitHostedToolDiagnostics(output, resp.Output)
 		rendered = append(rendered, responseChatResponses(resp.Output)...)
 
-		hadCompaction := false
+		hadCompaction := slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type == "compaction" })
 
 		for i := range resp.Output {
-			if resp.Output[i].Type == "compaction" {
-				hadCompaction = true
-			}
-
 			asInput, ok := responseOutputToReplayInput(&resp.Output[i])
 			if !ok {
 				if trace, err := json.Marshal(resp.Output[i]); err == nil {
@@ -608,6 +605,10 @@ func (l *looper) runTurn(
 		}
 
 		if !hadToolCalls {
+			if len(resp.Output) > 0 && !slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type != "compaction" }) {
+				continue
+			}
+
 			return record, rendered, false, nil
 		}
 
@@ -937,7 +938,7 @@ func compactedOutputToReplayParams(items []responses.ResponseOutputItemUnion) ([
 
 			input = append(input, responses.ResponseInputItemUnionParam{OfMessage: &message})
 		case "compaction", "compaction_summary":
-			input = append(input, compactionReplayInput(items[i].ID, items[i].EncryptedContent))
+			input = append(input, compactionReplayInput(items[i].ID, items[i].EncryptedContent, ""))
 		case "reasoning":
 			summary := ""
 			if len(items[i].Summary) > 0 {
@@ -1598,7 +1599,12 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (respo
 
 		return reasoningReplayInput(reasoning.ID, summary, reasoning.EncryptedContent), true
 	case "compaction":
-		return compactionReplayInput(item.ID, item.EncryptedContent), true
+		summary := ""
+		if len(item.Summary) > 0 {
+			summary = item.Summary[0].Text
+		}
+
+		return compactionReplayInput(item.ID, item.EncryptedContent, summary), true
 	case "function_call":
 		return functionCallReplayInput(item.ID, item.CallID, item.Name, item.Arguments.OfString), true
 	case "web_search_call":
@@ -1622,8 +1628,13 @@ func reasoningReplayInput(id, summary, encryptedContent string) responses.Respon
 	}}
 }
 
-func compactionReplayInput(id, encryptedContent string) responses.ResponseInputItemUnionParam {
-	return responses.ResponseInputItemUnionParam{OfCompaction: &responses.ResponseCompactionItemParam{ID: openai.String(id), EncryptedContent: encryptedContent, Type: "compaction"}}
+func compactionReplayInput(id, encryptedContent, content string) responses.ResponseInputItemUnionParam {
+	compaction := responses.ResponseCompactionItemParam{ID: openai.String(id), EncryptedContent: encryptedContent, Type: "compaction"}
+	if content != "" {
+		compaction.SetExtraFields(map[string]any{"content": content})
+	}
+
+	return responses.ResponseInputItemUnionParam{OfCompaction: &compaction}
 }
 
 func functionCallReplayInput(id, callID, name, arguments string) responses.ResponseInputItemUnionParam {

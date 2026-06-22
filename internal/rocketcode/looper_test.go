@@ -579,6 +579,38 @@ func TestLooperPersistsAndReplaysCompactionItems(t *testing.T) {
 	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, history[1]))
 }
 
+func TestLooperContinuesAfterCompactionOnlyResponse(t *testing.T) {
+	compaction := testCompactionOutputItem("resp-compact-compaction", "encrypted-compact")
+	compaction.Summary = []responses.ResponseReasoningItemSummary{testReasoningSummary("summary of prior context")}
+
+	mock := mockResponses(
+		testResponse("resp-compact", []responses.ResponseOutputItemUnion{compaction}),
+		responseWithMessage("resp-final", "answer"),
+	)
+	looper := testLooper(mock)
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "question", output)
+
+	close(input)
+
+	var saved []SessionEntry
+
+	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
+		saved = append(saved, entry)
+
+		return nil
+	}, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
+	require.Len(t, mock.calls, 2)
+	require.JSONEq(t, `{"content":"summary of prior context","encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, mock.calls[1].Input.OfInputItemList[0]))
+	require.Len(t, saved, 1)
+	require.Len(t, saved[0].ReplayInput, 3)
+}
+
 func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
 		testInputMessage(responses.EasyInputMessageRole("user"), "old question", ""),

@@ -60,6 +60,19 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: replayInputRawKind(raw[i]), Cause: fmt.Errorf("unmarshal SDK replay input: %w", err)}
 		}
 
+		if item.OfCompaction != nil {
+			var stored struct {
+				Content *string `json:"content"`
+			}
+			if err := json.Unmarshal(raw[i], &stored); err != nil {
+				return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: replayInputRawKind(raw[i]), Cause: fmt.Errorf("decode compaction replay extras: %w", err)}
+			}
+
+			if stored.Content != nil {
+				item.OfCompaction.SetExtraFields(map[string]any{"content": *stored.Content})
+			}
+		}
+
 		data, err := json.Marshal(item)
 		if err != nil {
 			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: replayInputRawKind(raw[i]), Cause: fmt.Errorf("marshal SDK replay input: %w", err)}
