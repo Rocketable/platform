@@ -125,6 +125,8 @@ func contextLengthExceededError() error {
 func testLooper(client responsesAPI) *looper {
 	var l looper
 
+	l.provider = modelProviderOpenAI
+	l.modelRef = defaultModelRef()
 	l.Client = client
 	l.Model = openai.ChatModelGPT5
 	l.PermissionReviewer = inertPermissionReviewer{}
@@ -135,6 +137,8 @@ func testLooper(client responsesAPI) *looper {
 func emptyTestLooper() *looper {
 	var l looper
 
+	l.provider = modelProviderOpenAI
+	l.modelRef = defaultModelRef()
 	l.PermissionReviewer = inertPermissionReviewer{}
 
 	return &l
@@ -532,12 +536,56 @@ func TestLooperBuildParamsUsesConfiguredCompactThreshold(t *testing.T) {
 
 func TestLooperBuildParamsIncludesHostedWebSearchTool(t *testing.T) {
 	looper := emptyTestLooper()
+	looper.provider = modelProviderOpenAI
 	looper.Tools = map[string]looperTool{"websearch": webSearchTool()}
 
 	params := looper.buildParams(nil)
 
 	require.Len(t, params.Tools, 1)
 	require.Contains(t, marshalJSON(t, params.Tools), `"type":"web_search"`)
+}
+
+func TestLooperBuildParamsOmitsHostedToolsForNonOpenAIProviders(t *testing.T) {
+	for _, provider := range []string{modelProviderAnthropic, modelProviderOpenAICompatible} {
+		t.Run(provider, func(t *testing.T) {
+			looper := emptyTestLooper()
+			looper.provider = provider
+			looper.Tools = map[string]looperTool{"read": testLooperTool("read"), "websearch": webSearchTool()}
+
+			params := looper.buildParams(nil)
+
+			require.Len(t, params.Tools, 1)
+			body := marshalJSON(t, params.Tools)
+			require.Contains(t, body, `"name":"read"`)
+			require.NotContains(t, body, `"type":"web_search"`)
+		})
+	}
+}
+
+func TestProjectReplayForTargetLowersCompatibleProviderMismatch(t *testing.T) {
+	input := []responses.ResponseInputItemUnionParam{compactionReplayInput("cmp-a", "encrypted-a", "provider a summary", modelProviderOpenAICompatible, "a", string(OpenAICompatibleModeResponses))}
+
+	got := projectReplayForTarget(input, modelRef{provider: modelProviderOpenAICompatible, compatibleProvider: "b", apiModel: "model"})
+
+	require.Len(t, got, 1)
+	require.Nil(t, got[0].OfCompaction)
+	require.NotNil(t, got[0].OfMessage)
+	serialized := marshalJSON(t, got)
+	require.Contains(t, serialized, "provider a summary")
+	require.Contains(t, serialized, "context_checkpoint")
+	require.NotContains(t, serialized, "encrypted-a")
+}
+
+func TestProjectReplayForTargetLowersEncryptedOnlyOpenAICompaction(t *testing.T) {
+	input := []responses.ResponseInputItemUnionParam{compactionReplayInput("cmp-openai", "encrypted-openai", "", modelProviderOpenAI, "", string(OpenAICompatibleModeResponses))}
+
+	got := projectReplayForTarget(input, modelRef{provider: modelProviderOpenAICompatible, compatibleProvider: "local", apiModel: "model"})
+
+	require.Len(t, got, 1)
+	require.Nil(t, got[0].OfCompaction)
+	serialized := marshalJSON(t, got)
+	require.Contains(t, serialized, "cannot be rehydrated")
+	require.NotContains(t, serialized, "encrypted-openai")
 }
 
 func TestLooperBuildParamsIncludesConfiguredVerbosity(t *testing.T) {
@@ -576,7 +624,7 @@ func TestLooperPersistsAndReplaysCompactionItems(t *testing.T) {
 	require.Len(t, turns, 1)
 	require.Len(t, turns[0].ReplayInput, 3)
 	require.Len(t, history, 3)
-	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, history[1]))
+	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","origin_mode":"responses","origin_provider":"openai","type":"compaction"}`, marshalJSON(t, history[1]))
 }
 
 func TestLooperContinuesAfterCompactionOnlyResponse(t *testing.T) {
@@ -606,7 +654,7 @@ func TestLooperContinuesAfterCompactionOnlyResponse(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
 	require.Len(t, mock.calls, 2)
-	require.JSONEq(t, `{"content":"summary of prior context","encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, mock.calls[1].Input.OfInputItemList[0]))
+	require.JSONEq(t, `{"content":"summary of prior context","encrypted_content":"encrypted-compact","id":"resp-compact-compaction","origin_mode":"responses","origin_provider":"openai","type":"compaction"}`, marshalJSON(t, mock.calls[1].Input.OfInputItemList[0]))
 	require.Len(t, saved, 1)
 	require.Len(t, saved[0].ReplayInput, 3)
 }
@@ -863,7 +911,7 @@ func TestLooperInjectsCompactionSteering(t *testing.T) {
 	require.Len(t, mock.calls, 2)
 	items := mock.calls[1].Input.OfInputItemList
 	require.Len(t, items, 4)
-	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, items[0]))
+	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","origin_mode":"responses","origin_provider":"openai","type":"compaction"}`, marshalJSON(t, items[0]))
 	require.Contains(t, marshalJSON(t, items[1]), `"role":"assistant"`)
 	require.JSONEq(t, `{"content":"Use the compacted context carefully.","role":"developer","type":"message"}`, marshalJSON(t, items[2]))
 	require.Contains(t, marshalJSON(t, items[3]), `"content":"next question"`)
@@ -1326,7 +1374,7 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 }
 
 func TestPermissionReviewFailsClosedOnInvalidJSON(t *testing.T) {
-	modelRef, err := parseModelRef(openai.ChatModelGPT5)
+	modelRef, err := parseModelRef("openai/" + openai.ChatModelGPT5)
 	require.NoError(t, err)
 
 	factory := &toolFactory{

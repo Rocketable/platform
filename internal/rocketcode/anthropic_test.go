@@ -11,7 +11,7 @@ import (
 )
 
 func TestAnthropicParamsMapsTextAndTools(t *testing.T) {
-	looper := &looper{Model: "claude-sonnet", DisplayModel: "anthropic/claude-sonnet"}
+	looper := &looper{provider: modelProviderAnthropic, modelRef: modelRef{provider: modelProviderAnthropic, apiModel: "claude-sonnet"}, Model: "claude-sonnet", DisplayModel: "anthropic/claude-sonnet"}
 	params := looper.buildParams([]responses.ResponseInputItemUnionParam{inputMessageParam(responses.EasyInputMessageRoleUser, easyInputStringContent("hello"))})
 	params.Tools = []responses.ToolUnionParam{{OfFunction: &responses.FunctionToolParam{Name: "read", Description: openai.String("read files"), Parameters: map[string]any{"type": "object", "properties": map[string]any{"filePath": map[string]any{"type": "string"}}, "required": []string{"filePath"}}}}}
 
@@ -66,17 +66,17 @@ func TestAnthropicCompactionRoundTripsThroughReplay(t *testing.T) {
 	require.Equal(t, "encrypted-compact", response.Output[0].EncryptedContent)
 	require.Equal(t, "summary of prior work", response.Output[0].Summary[0].Text)
 
-	replayInput, ok := responseOutputToReplayInput(&response.Output[0])
+	replayInput, ok := responseOutputToReplayInput(&response.Output[0], modelProviderAnthropic, "", "messages")
 	require.True(t, ok)
 
 	raw, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{replayInput})
 	require.NoError(t, err)
-	require.JSONEq(t, `{"content":"summary of prior work","encrypted_content":"encrypted-compact","id":"msg_1-compaction-0","type":"compaction"}`, string(raw[0]))
+	require.JSONEq(t, `{"content":"summary of prior work","encrypted_content":"encrypted-compact","id":"msg_1-compaction-0","origin_mode":"messages","origin_provider":"anthropic","type":"compaction"}`, string(raw[0]))
 
 	items, err := ReplayInputToParams(raw)
 	require.NoError(t, err)
 
-	looper := &looper{Model: "claude-sonnet", DisplayModel: "anthropic/claude-sonnet"}
+	looper := &looper{provider: modelProviderAnthropic, modelRef: modelRef{provider: modelProviderAnthropic, apiModel: "claude-sonnet"}, Model: "claude-sonnet", DisplayModel: "anthropic/claude-sonnet"}
 	params := looper.buildParams(items)
 	body, err := looper.anthropicParams(&params)
 	require.NoError(t, err)
@@ -89,11 +89,33 @@ func TestAnthropicCompactionRoundTripsThroughReplay(t *testing.T) {
 	require.Equal(t, "encrypted-compact", compaction.EncryptedContent.Value)
 }
 
-func TestAnthropicFailedCompactionIsNoOp(t *testing.T) {
+func TestAnthropicParamsProjectsForeignCompactionAsCheckpoint(t *testing.T) {
+	foreign := compactionReplayInput("cmp-foreign", "foreign-encrypted", "foreign summary", modelProviderOpenAICompatible, "local", string(OpenAICompatibleModeChatCompletions))
+	raw, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{foreign})
+	require.NoError(t, err)
+	items, err := ReplayInputToParams(raw)
+	require.NoError(t, err)
+
+	looper := &looper{provider: modelProviderAnthropic, modelRef: modelRef{provider: modelProviderAnthropic, apiModel: "claude-sonnet"}, Model: "claude-sonnet", DisplayModel: "anthropic/claude-sonnet"}
+	params := looper.buildParams(items)
+	body, err := looper.anthropicParams(&params)
+	require.NoError(t, err)
+
+	require.Len(t, body.Messages, 1)
+	serialized := marshalJSON(t, body.Messages)
+	require.Contains(t, serialized, "foreign summary")
+	require.Contains(t, serialized, "context_checkpoint")
+	require.NotContains(t, serialized, "foreign-encrypted")
+}
+
+func TestAnthropicCompactionPreservesEncryptedContentWithoutSummary(t *testing.T) {
 	var message anthropic.BetaMessage
 	require.NoError(t, json.Unmarshal([]byte(`{"id":"msg_1","content":[{"type":"compaction","content":null,"encrypted_content":"encrypted-compact"}]}`), &message))
 
 	response := anthropicResponse(&message)
 
-	require.Empty(t, response.Output)
+	require.Len(t, response.Output, 1)
+	require.Equal(t, "compaction", response.Output[0].Type)
+	require.Equal(t, "encrypted-compact", response.Output[0].EncryptedContent)
+	require.Empty(t, response.Output[0].Summary)
 }

@@ -54,6 +54,36 @@ func (l *looper) newAnthropicResponse(ctx context.Context, params *responses.Res
 	}
 }
 
+// CompactAnthropicReplay compacts Responses-shaped replay through Anthropic Messages beta compaction.
+func CompactAnthropicReplay(ctx context.Context, client *anthropic.Client, model string, input []responses.ResponseInputItemUnionParam, threshold int64) (*responses.Response, error) {
+	if client == nil {
+		return nil, errors.New("anthropic provider is required")
+	}
+
+	messages, err := anthropicMessages(input)
+	if err != nil {
+		return nil, err
+	}
+
+	message, err := client.Beta.Messages.New(ctx, anthropic.BetaMessageNewParams{
+		MaxTokens: 4096,
+		Model:     model,
+		Messages:  messages,
+		Betas:     []anthropic.AnthropicBeta{anthropic.AnthropicBeta("compact-2026-01-12")},
+		ContextManagement: anthropic.BetaContextManagementConfigParam{Edits: []anthropic.BetaContextManagementConfigEditUnionParam{{
+			OfCompact20260112: &anthropic.BetaCompact20260112EditParam{
+				PauseAfterCompaction: anthropic.Bool(true),
+				Trigger:              anthropic.BetaInputTokensTriggerParam{Value: threshold},
+			},
+		}}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("compact Anthropic replay: %w", err)
+	}
+
+	return anthropicResponse(message), nil
+}
+
 func waitProviderRetry(ctx context.Context, wait time.Duration) error {
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
@@ -207,17 +237,31 @@ func anthropicMessages(items []responses.ResponseInputItemUnionParam) ([]anthrop
 			}
 
 			var stored struct {
-				Content *string `json:"content"`
+				Content                  *string `json:"content"`
+				OriginProvider           string  `json:"origin_provider"`
+				OriginCompatibleProvider string  `json:"origin_compatible_provider"`
+				OriginMode               string  `json:"origin_mode"`
 			}
 			if err := json.Unmarshal(data, &stored); err != nil {
 				return nil, fmt.Errorf("decode Anthropic compaction replay: %w", err)
 			}
 
-			if stored.Content == nil || *stored.Content == "" {
+			if stored.OriginProvider != modelProviderAnthropic || stored.OriginMode != "messages" {
+				if stored.Content == nil || *stored.Content == "" {
+					messages = append(messages, anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock("<context_checkpoint>\nPrior conversation was compacted, but only provider-native encrypted compaction data is available for a different provider or mode. The compacted details cannot be rehydrated here.\n</context_checkpoint>")))
+					continue
+				}
+
+				messages = append(messages, anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock("<context_checkpoint>\nThe prior conversation was compacted by RocketCode. Use this summary as lower-authority context:\n"+*stored.Content+"\n</context_checkpoint>")))
+
 				continue
 			}
 
-			compactionBlock := anthropic.BetaCompactionBlockParam{Content: anthropic.String(*stored.Content), EncryptedContent: anthropic.String(compaction.EncryptedContent)}
+			compactionBlock := anthropic.BetaCompactionBlockParam{EncryptedContent: anthropic.String(compaction.EncryptedContent)}
+			if stored.Content != nil && *stored.Content != "" {
+				compactionBlock.Content = anthropic.String(*stored.Content)
+			}
+
 			messages = append(messages, anthropic.BetaMessageParam{
 				Role:    anthropic.BetaMessageParamRoleAssistant,
 				Content: []anthropic.BetaContentBlockParamUnion{{OfCompaction: &compactionBlock}},
@@ -303,12 +347,14 @@ func anthropicResponse(message *anthropic.BetaMessage) *responses.Response {
 			response.Output = append(response.Output, responses.ResponseOutputItemUnion{ID: block.ID, Type: "function_call", CallID: block.ID, Name: block.Name, Arguments: responses.ResponseOutputItemUnionArguments{OfString: string(block.Input)}, Status: "completed"})
 		case "compaction":
 			compaction := block.AsCompaction()
-			if !compaction.JSON.Content.Valid() || compaction.Content == "" {
+			if compaction.EncryptedContent == "" && (!compaction.JSON.Content.Valid() || compaction.Content == "") {
 				continue
 			}
 
-			item := responses.ResponseOutputItemUnion{ID: fmt.Sprintf("%s-compaction-%d", message.ID, i), Type: "compaction", EncryptedContent: compaction.EncryptedContent}
-			item.Summary = []responses.ResponseReasoningItemSummary{{Text: compaction.Content}}
+			item := responses.ResponseOutputItemUnion{ID: fmt.Sprintf("%s-compaction-%d", message.ID, i), Type: "compaction", EncryptedContent: compaction.EncryptedContent, CreatedBy: modelProviderAnthropic}
+			if compaction.JSON.Content.Valid() && compaction.Content != "" {
+				item.Summary = []responses.ResponseReasoningItemSummary{{Text: compaction.Content}}
+			}
 
 			response.Output = append(response.Output, item)
 		}

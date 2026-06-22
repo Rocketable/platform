@@ -62,14 +62,44 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 
 		if item.OfCompaction != nil {
 			var stored struct {
-				Content *string `json:"content"`
+				Content                  *string          `json:"content"`
+				Summary                  *json.RawMessage `json:"summary"`
+				Recent                   *json.RawMessage `json:"recent"`
+				OriginProvider           *string          `json:"origin_provider"`
+				OriginCompatibleProvider *string          `json:"origin_compatible_provider"`
+				OriginMode               *string          `json:"origin_mode"`
 			}
 			if err := json.Unmarshal(raw[i], &stored); err != nil {
 				return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: replayInputRawKind(raw[i]), Cause: fmt.Errorf("decode compaction replay extras: %w", err)}
 			}
 
+			extra := map[string]any{}
 			if stored.Content != nil {
-				item.OfCompaction.SetExtraFields(map[string]any{"content": *stored.Content})
+				extra["content"] = *stored.Content
+			}
+
+			if stored.Summary != nil {
+				extra["summary"] = *stored.Summary
+			}
+
+			if stored.Recent != nil {
+				extra["recent"] = *stored.Recent
+			}
+
+			if stored.OriginProvider != nil {
+				extra["origin_provider"] = *stored.OriginProvider
+			}
+
+			if stored.OriginCompatibleProvider != nil {
+				extra["origin_compatible_provider"] = *stored.OriginCompatibleProvider
+			}
+
+			if stored.OriginMode != nil {
+				extra["origin_mode"] = *stored.OriginMode
+			}
+
+			if len(extra) > 0 {
+				item.OfCompaction.SetExtraFields(extra)
 			}
 		}
 

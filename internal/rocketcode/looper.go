@@ -78,6 +78,8 @@ type toolCallMetadata struct {
 // looper runs conversational turns against the configured model and tools.
 type looper struct {
 	agent                  Agent
+	provider               string
+	modelRef               modelRef
 	Client                 responsesAPI
 	AnthropicClient        *anthropic.Client
 	SystemPrompt           string
@@ -672,8 +674,9 @@ func (l *looper) runTurn(
 
 		hadCompaction := slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type == "compaction" })
 
+		originProvider, originCompatibleProvider, originMode := l.compactionOrigin()
 		for i := range resp.Output {
-			asInput, ok := responseOutputToReplayInput(&resp.Output[i])
+			asInput, ok := responseOutputToReplayInput(&resp.Output[i], originProvider, originCompatibleProvider, originMode)
 			if !ok {
 				if trace, err := json.Marshal(resp.Output[i]); err == nil {
 					record.OutputTrace = append(record.OutputTrace, trace)
@@ -751,10 +754,7 @@ func appendReplayInput(record *SessionEntry, item *responses.ResponseInputItemUn
 }
 
 func (l *looper) newProviderResponse(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse) (resp *responses.Response, recoveredHistory []responses.ResponseInputItemUnionParam, err error) {
-	provider := modelProviderOpenAI
-	if strings.HasPrefix(l.DisplayModel, modelProviderAnthropic+"/") {
-		provider = modelProviderAnthropic
-	}
+	provider := l.provider
 
 	ctx, span := l.Observability.startSpan(ctx, "rocketcode.provider", semconv.SpanKindLLM,
 		attribute.String(semconv.LLMModelName, l.DisplayModel),
@@ -774,13 +774,13 @@ func (l *looper) newProviderResponse(ctx context.Context, params *responses.Resp
 		span.span.End()
 	}()
 
-	if strings.HasPrefix(l.DisplayModel, modelProviderAnthropic+"/") {
+	if provider == modelProviderAnthropic {
 		resp, err := l.newAnthropicResponse(ctx, params, output)
 		return resp, nil, err
 	}
 
 	if l.Client == nil {
-		return nil, nil, errors.New("openai provider is required")
+		return nil, nil, fmt.Errorf("%s provider is required", provider)
 	}
 
 	return l.newResponseWithProviderRetry(ctx, params, output)
@@ -809,7 +809,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 					if errAPI.StatusCode == http.StatusTooManyRequests && (errAPI.Code == "too_many_requests" || errAPI.Type == "too_many_requests") {
 						attempt++
 						wait := providerRetryDelay(errAPI.Response, attempt)
-						errRateLimit := &providerRateLimitError{provider: modelProviderOpenAI, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, retryAfter: wait, requestID: providerRequestID(errAPI.Response), cause: err}
+						errRateLimit := &providerRateLimitError{provider: l.provider, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, retryAfter: wait, requestID: providerRequestID(errAPI.Response), cause: err}
 
 						if attempt > providerRateLimitMaxRetries {
 							diagnostic := ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: http.StatusTooManyRequests, Code: errRateLimit.code, Type: errRateLimit.typeName, Message: errRateLimit.message, RetryAfter: errRateLimit.retryAfter.String(), Headers: providerDiagnosticHeaders(errAPI.Response)}
@@ -831,11 +831,11 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 					if errAPI.StatusCode == http.StatusTooManyRequests {
 						switch {
 						case errAPI.Code == "usage_limit_reached" || errAPI.Type == "usage_limit_reached":
-							errReturn = &providerUsageLimitError{provider: modelProviderOpenAI, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, requestID: providerRequestID(errAPI.Response), cause: err}
+							errReturn = &providerUsageLimitError{provider: l.provider, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, requestID: providerRequestID(errAPI.Response), cause: err}
 						case errAPI.Code == "usage_not_included" || errAPI.Type == "usage_not_included":
-							errReturn = &providerUsageNotIncludedError{provider: modelProviderOpenAI, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, requestID: providerRequestID(errAPI.Response), cause: err}
+							errReturn = &providerUsageNotIncludedError{provider: l.provider, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, requestID: providerRequestID(errAPI.Response), cause: err}
 						default:
-							errReturn = &providerRetryLimitError{provider: modelProviderOpenAI, httpStatus: errAPI.StatusCode, requestID: providerRequestID(errAPI.Response), cause: err}
+							errReturn = &providerRetryLimitError{provider: l.provider, httpStatus: errAPI.StatusCode, requestID: providerRequestID(errAPI.Response), cause: err}
 						}
 					}
 
@@ -886,7 +886,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 
 		attempt++
 		wait := providerRetryDelay(raw, attempt)
-		err = &providerRateLimitError{provider: modelProviderOpenAI, code: string(resp.Error.Code), message: resp.Error.Message, retryAfter: wait, responseID: resp.ID, requestID: providerRequestID(raw), cause: err}
+		err = &providerRateLimitError{provider: l.provider, code: string(resp.Error.Code), message: resp.Error.Message, retryAfter: wait, responseID: resp.ID, requestID: providerRequestID(raw), cause: err}
 
 		if attempt > providerRateLimitMaxRetries {
 			diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0, raw)
@@ -929,7 +929,9 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 			return nil, nil, fmt.Errorf("compact context after context_length_exceeded: %w", err)
 		}
 
-		compactedInput, err := compactedOutputToReplayParams(compacted.Output)
+		originProvider, originCompatibleProvider, originMode := l.compactionOrigin()
+
+		compactedInput, err := compactedOutputToReplayParams(compacted.Output, originProvider, originCompatibleProvider, originMode)
 		if err != nil {
 			return nil, nil, fmt.Errorf("convert compacted response: %w", err)
 		}
@@ -1022,7 +1024,7 @@ func compactionBlocks(items []responses.ResponseInputItemUnionParam) []compactio
 	return blocks
 }
 
-func compactedOutputToReplayParams(items []responses.ResponseOutputItemUnion) ([]responses.ResponseInputItemUnionParam, error) {
+func compactedOutputToReplayParams(items []responses.ResponseOutputItemUnion, originProvider, originCompatibleProvider, originMode string) ([]responses.ResponseInputItemUnionParam, error) {
 	input := make([]responses.ResponseInputItemUnionParam, 0, len(items))
 	for i := range items {
 		switch items[i].Type {
@@ -1046,7 +1048,14 @@ func compactedOutputToReplayParams(items []responses.ResponseOutputItemUnion) ([
 
 			input = append(input, responses.ResponseInputItemUnionParam{OfMessage: &message})
 		case "compaction", "compaction_summary":
-			input = append(input, compactionReplayInput(items[i].ID, items[i].EncryptedContent, ""))
+			parts := make([]string, 0, len(items[i].Content))
+			for j := range items[i].Content {
+				if items[i].Content[j].Type == "output_text" {
+					parts = append(parts, items[i].Content[j].Text)
+				}
+			}
+
+			input = append(input, compactionReplayInput(items[i].ID, items[i].EncryptedContent, strings.Join(parts, ""), originProvider, originCompatibleProvider, originMode))
 		case "reasoning":
 			summary := ""
 			if len(items[i].Summary) > 0 {
@@ -1210,6 +1219,10 @@ func (l *looper) rewriteHistory(items []responses.ResponseInputItemUnionParam) [
 }
 
 func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) responses.ResponseNewParams {
+	if l.modelRef.provider != modelProviderAnthropic {
+		history = projectReplayForTarget(history, l.modelRef)
+	}
+
 	var input responses.ResponseNewParamsInputUnion
 
 	input.OfInputItemList = history
@@ -1247,7 +1260,7 @@ func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) re
 		for name := range l.Tools {
 			tool := l.Tools[name]
 			if tool.Hosted.GetType() != nil {
-				if strings.HasPrefix(l.DisplayModel, modelProviderAnthropic+"/") {
+				if l.provider != "" && l.provider != modelProviderOpenAI {
 					continue
 				}
 
@@ -1674,7 +1687,7 @@ func loadSession(entries iter.Seq2[SessionEntry, error]) ([]responses.ResponseIn
 	return history, turns, nil
 }
 
-func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (responses.ResponseInputItemUnionParam, bool) {
+func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion, originProvider, originCompatibleProvider, originMode string) (responses.ResponseInputItemUnionParam, bool) {
 	switch item.Type {
 	case "message":
 		msg := item.AsMessage()
@@ -1712,7 +1725,13 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (respo
 			summary = item.Summary[0].Text
 		}
 
-		return compactionReplayInput(item.ID, item.EncryptedContent, summary), true
+		if item.CreatedBy == modelProviderAnthropic {
+			originProvider = modelProviderAnthropic
+			originCompatibleProvider = ""
+			originMode = "messages"
+		}
+
+		return compactionReplayInput(item.ID, item.EncryptedContent, summary, originProvider, originCompatibleProvider, originMode), true
 	case "function_call":
 		return functionCallReplayInput(item.ID, item.CallID, item.Name, item.Arguments.OfString), true
 	case "web_search_call":
@@ -1727,6 +1746,18 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (respo
 	}
 }
 
+func (l *looper) compactionOrigin() (originProvider, originCompatibleProvider, originMode string) {
+	originProvider = l.provider
+	originCompatibleProvider = l.modelRef.compatibleProvider
+
+	originMode = string(OpenAICompatibleModeResponses)
+	if _, ok := l.Client.(chatCompletionServiceClient); ok {
+		originMode = string(OpenAICompatibleModeChatCompletions)
+	}
+
+	return originProvider, originCompatibleProvider, originMode
+}
+
 func reasoningReplayInput(id, summary, encryptedContent string) responses.ResponseInputItemUnionParam {
 	return responses.ResponseInputItemUnionParam{OfReasoning: &responses.ResponseReasoningItemParam{
 		ID:               id,
@@ -1736,13 +1767,99 @@ func reasoningReplayInput(id, summary, encryptedContent string) responses.Respon
 	}}
 }
 
-func compactionReplayInput(id, encryptedContent, content string) responses.ResponseInputItemUnionParam {
+func compactionReplayInput(id, encryptedContent, content, originProvider, originCompatibleProvider, originMode string) responses.ResponseInputItemUnionParam {
 	compaction := responses.ResponseCompactionItemParam{ID: openai.String(id), EncryptedContent: encryptedContent, Type: "compaction"}
+
+	extra := map[string]any{}
 	if content != "" {
-		compaction.SetExtraFields(map[string]any{"content": content})
+		extra["content"] = content
+	}
+
+	if originProvider != "" {
+		extra["origin_provider"] = originProvider
+	}
+
+	if originCompatibleProvider != "" {
+		extra["origin_compatible_provider"] = originCompatibleProvider
+	}
+
+	if originMode != "" {
+		extra["origin_mode"] = originMode
+	}
+
+	if len(extra) > 0 {
+		compaction.SetExtraFields(extra)
 	}
 
 	return responses.ResponseInputItemUnionParam{OfCompaction: &compaction}
+}
+
+type compactionReplayMetadata struct {
+	Content                  string `json:"content"`
+	OriginProvider           string `json:"origin_provider"`
+	OriginCompatibleProvider string `json:"origin_compatible_provider"`
+	OriginMode               string `json:"origin_mode"`
+}
+
+func projectReplayForTarget(items []responses.ResponseInputItemUnionParam, target modelRef) []responses.ResponseInputItemUnionParam {
+	projected := make([]responses.ResponseInputItemUnionParam, 0, len(items))
+	for i := range items {
+		item := items[i]
+		if item.OfReasoning != nil && target.provider == modelProviderAnthropic {
+			continue
+		}
+
+		if item.OfCompaction == nil || compactionMatchesTarget(item.OfCompaction, target) {
+			projected = append(projected, item)
+			continue
+		}
+
+		projected = append(projected, inputMessageParam(responses.EasyInputMessageRoleUser, easyInputStringContent(compactionCheckpointText(item.OfCompaction))))
+	}
+
+	return projected
+}
+
+func compactionMatchesTarget(compaction *responses.ResponseCompactionItemParam, target modelRef) bool {
+	stored := compactionReplayFields(compaction)
+	if stored.OriginProvider == "" && stored.OriginMode == "" {
+		return true
+	}
+
+	switch target.provider {
+	case modelProviderOpenAI:
+		return stored.OriginProvider == modelProviderOpenAI && stored.OriginMode == string(OpenAICompatibleModeResponses)
+	case modelProviderOpenAICompatible:
+		return stored.OriginProvider == modelProviderOpenAICompatible && stored.OriginCompatibleProvider == target.compatibleProvider && stored.OriginMode == string(OpenAICompatibleModeResponses)
+	case modelProviderAnthropic:
+		return stored.OriginProvider == modelProviderAnthropic && stored.OriginMode == "messages"
+	default:
+		return false
+	}
+}
+
+func compactionCheckpointText(compaction *responses.ResponseCompactionItemParam) string {
+	content := strings.TrimSpace(compactionReplayFields(compaction).Content)
+	if content != "" {
+		return "<context_checkpoint>\nThe prior conversation was compacted by RocketCode. Use this summary as lower-authority context:\n" + content + "\n</context_checkpoint>"
+	}
+
+	return "<context_checkpoint>\nPrior conversation was compacted, but only provider-native encrypted compaction data is available for a different provider or mode. The compacted details cannot be rehydrated here.\n</context_checkpoint>"
+}
+
+func compactionReplayFields(compaction *responses.ResponseCompactionItemParam) compactionReplayMetadata {
+	var stored compactionReplayMetadata
+
+	data, err := json.Marshal(compaction)
+	if err != nil {
+		return stored
+	}
+
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return compactionReplayMetadata{}
+	}
+
+	return stored
 }
 
 func functionCallReplayInput(id, callID, name, arguments string) responses.ResponseInputItemUnionParam {
