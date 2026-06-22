@@ -21,7 +21,7 @@ func ExternalMCPAgents(workspace string) ([]string, error) {
 func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "assistant", "---\ndescription: Main\nmodel: openai/gpt-5.4\nreasoningEffort: high\nverbosity: low\npermission:\n  bash:\n    \"gh *\": allow\n---\nPrompt\n")
-	writeAgent(t, workspace, "restricted", "---\ndescription: Restricted\npermission:\n  task:\n    \"go-reviewer\": allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "restricted", "---\ndescription: Restricted\nmodel: openai/gpt-5.4\npermission:\n  task:\n    \"go-reviewer\": allow\n---\nPrompt\n")
 	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: openai/gpt-5.5\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
@@ -37,8 +37,8 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	helper := agents.Items["helper"]
 	restricted := agents.Items["restricted"]
 
-	require.Equal(t, "gpt-5.4", primary.Model)
-	require.Equal(t, "gpt-5.5", helper.Model)
+	require.Equal(t, "openai/gpt-5.4", primary.Model)
+	require.Equal(t, "openai/gpt-5.5", helper.Model)
 	require.True(t, permissionSetAllows(primary.Permission, "bash", "gh *"))
 	require.False(t, permissionSetAllows(primary.Permission, "task", "*"))
 	require.False(t, permissionSetAllows(helper.Permission, "task", "*"))
@@ -64,6 +64,7 @@ func TestLoadRocketCodeDefinitionsPreparesCronAgents(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", `---
 description: Main
+model: openai/gpt-5.4
 mode: primary
 ---
 Prompt
@@ -87,7 +88,7 @@ Prompt
 
 func TestLoadRocketCodeDefinitionsPreservesGuardrailReference(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nguardrail: guardrail\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: openai/gpt-5.4\nmode: primary\nguardrail: guardrail\n---\nPrompt\n")
 	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: openai/gpt-5.5\nreasoningEffort: low\nverbosity: low\npermission:\n  read:\n    \"docs/*\": allow\n---\nCheck delegated work\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
@@ -104,7 +105,7 @@ func TestLoadRocketCodeDefinitionsPreservesGuardrailReference(t *testing.T) {
 
 	require.Equal(t, "guardrail", main.Guardrail)
 	require.Equal(t, "Check delegated work", guardrail.Prompt)
-	require.Equal(t, "gpt-5.5", guardrail.Model)
+	require.Equal(t, "openai/gpt-5.5", guardrail.Model)
 	require.Equal(t, "low", guardrail.ReasoningEffort)
 	require.Equal(t, "low", guardrail.Verbosity)
 	action, matched := guardrail.Permission.Evaluate("read", "docs/a.md")
@@ -173,7 +174,7 @@ func TestLoadRocketCodeDefinitionsPreservesRocketClawRuntimeToolDenies(t *testin
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			workspace := t.TempDir()
-			writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\n"+tt.permission+"---\nPrompt\n")
+			writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: openai/gpt-5.4\nmode: primary\n"+tt.permission+"---\nPrompt\n")
 			require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 			root, err := os.OpenRoot(workspace)
@@ -201,6 +202,7 @@ func TestLoadRocketCodeDefinitionsLoadsStructuredSkillMetadata(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", `---
 description: Main
+model: openai/gpt-5.4
 mode: primary
 ---
 Prompt
@@ -250,7 +252,7 @@ func TestLoadRocketCodeDefinitionsRejectsEscapingAgentSymlink(t *testing.T) {
 
 func TestLoadRocketCodeDefinitionsRejectsEscapingSkillSymlink(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: openai/gpt-5.4\nmode: primary\n---\nPrompt\n")
 	outside := filepath.Join(t.TempDir(), "SKILL.md")
 	require.NoError(t, os.WriteFile(outside, []byte("---\nname: outside\ndescription: Outside\n---\nOutside\n"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills", "outside"), 0o755))

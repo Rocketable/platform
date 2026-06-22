@@ -175,7 +175,7 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 
 	b := &Bridge{log: logger, config: Config{ConversationID: "", Agent: agent, ConsumeSharedInbound: false, OutputTargets: nil, RequestRestart: requestRestart, SessionService: nil}, runtime: cfg, bus: nil, inputStop: nil, requestCh: nil, stopCh: nil, mu: sync.Mutex{}, handling: false}
 
-	providers, err := b.rocketcodeProviders()
+	providers, err := b.rocketcodeProviders(agents)
 	if err != nil {
 		return "", fmt.Errorf("prepare RocketCode providers: %w", err)
 	}

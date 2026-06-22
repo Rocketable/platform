@@ -237,6 +237,8 @@ hub
 func writeAgent(t *testing.T, runtimeRoot, name, content string) {
 	t.Helper()
 
+	content = "---\nmodel: openai/gpt-5.5\n" + content[len("---\n"):]
+
 	agentsRoot := filepath.Join(runtimeRoot, "agents")
 	require.NoError(t, os.MkdirAll(agentsRoot, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(agentsRoot, name), []byte(content), 0o644))
