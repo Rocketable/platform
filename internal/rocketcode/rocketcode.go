@@ -47,8 +47,25 @@ type ObservabilityConfig struct {
 
 // Providers contains model provider clients supplied by embedding applications.
 type Providers struct {
-	OpenAI    *openai.Client
-	Anthropic *anthropic.Client
+	OpenAI           *openai.Client
+	Anthropic        *anthropic.Client
+	OpenAICompatible map[string]OpenAICompatibleProvider
+}
+
+// OpenAICompatibleMode selects which OpenAI-compatible API surface a provider supports.
+type OpenAICompatibleMode string
+
+const (
+	// OpenAICompatibleModeResponses routes through the OpenAI-compatible responses API.
+	OpenAICompatibleModeResponses OpenAICompatibleMode = "responses"
+	// OpenAICompatibleModeChatCompletions routes through the OpenAI-compatible chat completions API.
+	OpenAICompatibleModeChatCompletions OpenAICompatibleMode = "chat_completions"
+)
+
+// OpenAICompatibleProvider contains one named OpenAI-compatible provider client.
+type OpenAICompatibleProvider struct {
+	Client openai.Client
+	Mode   OpenAICompatibleMode
 }
 
 // PromptShellCommandExpansion controls which prompt sources expand !`command` snippets.
@@ -239,23 +256,22 @@ func NewWithProviders(
 	rootInstructions = strings.TrimSpace(rootInstructions) + "\n\n" + fmt.Sprintf("<current-workspace>\nWorkspace root: %s\n</current-workspace>", promptExpansion.hostDir)
 	systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + strings.TrimSpace(rootInstructions))
 
-	configModel, err := parseModelRef(config.Model)
+	if _, err := parseModelRef(config.Model); err != nil {
+		return nil, err
+	}
+
+	if err := validateAgentModels(agents, providers); err != nil {
+		return nil, err
+	}
+
+	modelRef, err := parseAgentModelRef(activeAgent.Model)
+	if err != nil {
+		return nil, fmt.Errorf("agent %q model: %w", activeAgent.Name, err)
+	}
+
+	providerClient, err := responsesAPIForModel(providers, modelRef)
 	if err != nil {
 		return nil, err
-	}
-
-	modelRef, err := parseAgentModelRef(activeAgent.Model, configModel)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := requireProvider(providers, modelRef); err != nil {
-		return nil, err
-	}
-
-	openAIClient := responsesAPI(nil)
-	if providers.OpenAI != nil {
-		openAIClient = responseServiceClient{service: &providers.OpenAI.Responses}
 	}
 
 	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, string(config.ReasoningEffort)))
@@ -270,7 +286,8 @@ func NewWithProviders(
 
 	maps.Copy(baseTools, customTools)
 	factory := &toolFactory{
-		client:                     openAIClient,
+		providers:                  providers,
+		client:                     providerClient.client,
 		anthropicClient:            providers.Anthropic,
 		systemPrompt:               systemPrompt,
 		modelRef:                   modelRef,
@@ -295,7 +312,9 @@ func NewWithProviders(
 
 	looper := &looper{
 		agent:                  activeAgent,
-		Client:                 openAIClient,
+		provider:               modelRef.provider,
+		modelRef:               modelRef,
+		Client:                 providerClient.client,
 		AnthropicClient:        providers.Anthropic,
 		SystemPrompt:           runtimeSystemPrompt,
 		Model:                  modelRef.apiModel,
@@ -383,7 +402,7 @@ func normalizeConfig(configInput *Config) Config {
 	config := *configInput
 
 	if config.Model == "" {
-		config.Model = openai.ChatModelGPT5_4
+		config.Model = modelProviderOpenAI + "/" + openai.ChatModelGPT5_4
 	}
 
 	if config.ReasoningEffort == "" {
@@ -406,7 +425,60 @@ func requireProvider(providers Providers, model modelRef) error {
 		return errors.New("anthropic provider is required")
 	}
 
+	if model.provider == modelProviderOpenAICompatible {
+		if _, ok := providers.OpenAICompatible[model.compatibleProvider]; !ok {
+			return fmt.Errorf("openai-compatible provider %q is required", model.compatibleProvider)
+		}
+	}
+
 	return nil
+}
+
+func validateAgentModels(agents Agents, providers Providers) error {
+	for name := range agents.Items {
+		agent := agents.Items[name]
+
+		modelRef, err := parseAgentModelRef(agent.Model)
+		if err != nil {
+			return fmt.Errorf("agent %q model: %w", name, err)
+		}
+
+		if err := requireProvider(providers, modelRef); err != nil {
+			return fmt.Errorf("agent %q model: %w", name, err)
+		}
+	}
+
+	return nil
+}
+
+type responsesAPISelection struct {
+	client responsesAPI
+}
+
+func responsesAPIForModel(providers Providers, model modelRef) (responsesAPISelection, error) {
+	if err := requireProvider(providers, model); err != nil {
+		return responsesAPISelection{}, err
+	}
+
+	switch model.provider {
+	case modelProviderOpenAI:
+		return responsesAPISelection{client: responseServiceClient{service: &providers.OpenAI.Responses}}, nil
+	case modelProviderOpenAICompatible:
+		provider := providers.OpenAICompatible[model.compatibleProvider]
+		if provider.Mode == "" || provider.Mode == OpenAICompatibleModeResponses {
+			return responsesAPISelection{client: responseServiceClient{service: &provider.Client.Responses}}, nil
+		}
+
+		if provider.Mode == OpenAICompatibleModeChatCompletions {
+			return responsesAPISelection{client: chatCompletionServiceClient{service: &provider.Client.Chat.Completions}}, nil
+		}
+
+		return responsesAPISelection{}, fmt.Errorf("openai-compatible provider %q mode %q is not implemented", model.compatibleProvider, provider.Mode)
+	case modelProviderAnthropic:
+		return responsesAPISelection{}, nil
+	default:
+		return responsesAPISelection{}, fmt.Errorf("unsupported model provider %q", model.provider)
+	}
 }
 
 func printRuntimeDiagnostics(w io.Writer, activeAgent *Agent, tools map[string]looperTool, skills Skills, systemPrompt string) error {

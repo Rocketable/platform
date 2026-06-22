@@ -217,7 +217,12 @@ func newRuntimeDeps(diagnostics io.Writer) (runtimeDeps, func(), error) {
 
 	oldCleanup := cleanup
 	cleanup = func() { cleanupDefinitions(); oldCleanup() }
-	providers := rocketcode.StandaloneProvidersFromEnv()
+
+	providers, err := rocketcode.StandaloneProvidersFromEnv()
+	if err != nil {
+		cleanup()
+		return runtimeDeps{}, nil, rocketcode.OperationError{Operation: rocketcode.OperationLoadConfig, Err: err}
+	}
 
 	claims := &claimRecorder{}
 	verdicts := &verdictRecorder{}

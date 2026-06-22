@@ -77,7 +77,12 @@ func run() error {
 	var group errgroup.Group
 	group.Go(func() error { return scanInput(os.Stdin, os.Stdout, input, root, cwd) })
 
-	looper, err := rocketcode.NewWithProviders(rocketcode.StandaloneProvidersFromEnv(), &config, root, agents, skills, defaultAgent, os.Stdout)
+	providers, err := rocketcode.StandaloneProvidersFromEnv()
+	if err != nil {
+		return rocketcode.OperationError{Operation: rocketcode.OperationLoadConfig, Err: err}
+	}
+
+	looper, err := rocketcode.NewWithProviders(providers, &config, root, agents, skills, defaultAgent, os.Stdout)
 	if err != nil {
 		return fmt.Errorf("initialize rocketcode: %w", err)
 	}

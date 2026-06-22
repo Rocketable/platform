@@ -20,6 +20,7 @@ import (
 )
 
 type toolFactory struct {
+	providers                  Providers
 	client                     responsesAPI
 	anthropicClient            *anthropic.Client
 	systemPrompt               string
@@ -45,6 +46,14 @@ type toolFactory struct {
 	// When false, task calls apply target-agent guardrails. When true, nested task calls skip guardrail checks.
 	inGuardrailRun     bool
 	inPermissionReview bool
+}
+
+func (f *toolFactory) responsesAPIForModel(model modelRef) (responsesAPISelection, error) {
+	if model.provider == f.modelRef.provider && model.compatibleProvider == f.modelRef.compatibleProvider {
+		return responsesAPISelection{client: f.client}, nil
+	}
+
+	return responsesAPIForModel(f.providers, model)
 }
 
 type readToolParams struct {

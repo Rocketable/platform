@@ -30,7 +30,7 @@ func TestConfigFromEnvDefaults(t *testing.T) {
 	config, err := rocketcode.StandaloneConfigFromEnv()
 
 	require.NoError(t, err)
-	require.Equal(t, openai.ChatModelGPT5_4, config.Model)
+	require.Equal(t, "openai/"+openai.ChatModelGPT5_4, config.Model)
 	require.Equal(t, "high", string(config.ReasoningEffort))
 	require.False(t, config.Diagnostics)
 	require.False(t, config.ExperimentalStrongerSkills)
@@ -136,6 +136,7 @@ func TestLoadParsedAgentsAndSkillsAllowsMutation(t *testing.T) {
 	agentsFS := fstest.MapFS{
 		"main.md": {Data: []byte(`---
 description: Main
+model: openai/gpt-5.4
 permission:
   tools:
     current_time: deny
