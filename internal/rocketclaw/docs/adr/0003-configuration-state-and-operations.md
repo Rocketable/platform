@@ -19,7 +19,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 
 | File or directory | Contract |
 | --- | --- |
-| `rocketclaw.json` | Main runtime config. Relative `workspace` resolves relative to the config file. At least one of Discord voice, Discord text, Slack, external MCP, or web UI must be enabled. Slack and Discord text are mutually exclusive primary text connectors. Optional `overlays` entries name git repositories whose `agents/`, `skills/`, `cron/`, and `scripts/` trees are applied during startup. Optional `anthropic` entries configure Anthropic-backed RocketCode requests. Optional `rocketcode` entries configure RocketCode embedding flags. |
+| `rocketclaw.json` | Main runtime config. Relative `workspace` resolves relative to the config file. At least one of Discord voice, Discord text, Slack, external MCP, or web UI must be enabled. Slack and Discord text are mutually exclusive primary text connectors. Optional `overlays` entries name git repositories whose `agents/`, `skills/`, `cron/`, and `scripts/` trees are applied during startup. Optional `anthropic` entries configure Anthropic-backed RocketCode requests. Optional top-level `openai_compatible` entries configure named OpenAI-compatible RocketCode providers. A text-only deployment whose loaded RocketCode agents resolve only to configured `openai_compatible` providers may omit first-party OpenAI credentials and ChatGPT OAuth. Optional `rocketcode` entries configure RocketCode embedding flags. |
 | `femtoclaw.json` | Legacy runtime config. If present, startup and operational commands load it instead of `rocketclaw.json` and use `.femtoclaw/` as the generated runtime directory. It supports the same optional `overlays` entries as `rocketclaw.json`. |
 | `rocketclaw.users.json` | Optional external MCP Basic Auth users next to `rocketclaw.json`. If present, it must be a JSON object and file mode `0600`. Missing means MCP runs without auth. |
 | `AGENTS.md` | Workspace instruction file generated when missing. Loaded literally; no shell interpolation. |
@@ -40,7 +40,9 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - Empty `openai.stt_model` defaults to `whisper-1`.
 - Empty `openai.tts_model` defaults to `tts-1`.
 - Empty `openai.tts_voice` defaults to `alloy`.
+- Empty or omitted `openai.api_key` is valid unless an enabled path requires first-party OpenAI API-key credentials, such as enabled OpenAI-backed audio or a selected first-party OpenAI API-key request path.
 - Empty or omitted `anthropic.api_key` and `anthropic.api_base_url` have no default. Missing Anthropic credentials are an error only when an Anthropic model is selected for a RocketCode request.
+- Empty or omitted top-level `openai_compatible` means no OpenAI-compatible providers. Each configured OpenAI-compatible provider entry is keyed by provider name and must set non-empty `api_key`, non-empty `base_url`, and `mode` equal to `responses` or `chat_completions`.
 - Empty logging level defaults to `debug`.
 - Empty `minimum_wait_after_human_interaction` means `0s`; setup writes `5m` explicitly.
 - Empty or omitted `thread_agents` uses the baseline `:thread:` and `:twisted_rightward_arrows:` routes; a non-empty custom map replaces the baseline.
@@ -71,7 +73,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 
 ### Setup And Operation
 
-- `rocketclaw setup` creates or updates setup-controlled files, asks for human partner and agent names, and replaces placeholders in files it creates.
+- `rocketclaw setup` creates or updates setup-controlled files, asks for human partner and agent names, and replaces placeholders in files it creates. Setup examples and generated documentation must describe compatible-only RocketCode text deployments and conditional first-party OpenAI credential requirements.
 - `rocketclaw setup` asks for one primary text connector: Slack, Discord text, or none. Discord text setup targets a guild text channel so managed thread semantics are available.
 - `rocketclaw doctor` validates the loaded config and RocketCode availability.
 - `rocketclaw lint [next|current]` checks agent-system safety for the selected config and runtime directory as specified by ADR 0006.
@@ -79,9 +81,10 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - Config selection prefers legacy `femtoclaw.json` when present, selecting `.femtoclaw/`; otherwise `rocketclaw.json` selects `.rocketclaw/`.
 - `rocketclaw setup files list` and `setup files get <path>` expose embedded setup payloads.
 - `rocketclaw fc list` is a read-only operational command for stored RocketCode session summaries. It supports optional bounded inspection flags `--since`, `--until`, and `--limit`, and optional output flag `--no-message-preview`. `--since` accepts either a duration relative to command execution time, such as `24h`, or an RFC3339/RFC3339Nano timestamp; `--until` accepts an RFC3339/RFC3339Nano timestamp. The selected time range is based on each session's latest stored entry timestamp, includes sessions with `LastUpdated >= since`, and excludes sessions with `LastUpdated >= until`. `--limit N` selects the `N` most recently updated sessions, with `0` meaning no limit. Without `--no-message-preview`, output includes the last user and assistant message preview columns; with it, output includes only conversation ID, turn count, and last update time.
-- ChatGPT auth for RocketCode requires `rocketclaw oai login`; STT/TTS always use API-key auth through audio keys or `api_key` fallback. ChatGPT refresh tokens are rotating, single-owner credentials and must remain under RocketClaw's selected `<runtime-dir>/auth.json` ownership.
+- ChatGPT auth is required only for selected first-party OpenAI RocketCode paths that use ChatGPT OAuth. STT/TTS always use API-key auth through audio keys or `api_key` fallback when OpenAI-backed audio is enabled. ChatGPT refresh tokens are rotating, single-owner credentials and must remain under RocketClaw's selected `<runtime-dir>/auth.json` ownership.
 - ChatGPT-backed RocketCode requests refresh credentials before sending when the access token is locally expired or within 120s of expiry. When Codex returns `401 Unauthorized` for a replayable request, RocketClaw reloads stored auth and retries once with a newer same-account stored token when present; otherwise it force-refreshes with the refresh token, persists the result, and retries once. Non-replayable requests return the original `401`; repeated `401`, terminal refresh failure, or failed refresh is surfaced with re-login guidance.
 - Anthropic-backed RocketCode requests use `anthropic.api_key` and optional `anthropic.api_base_url`. ChatGPT OAuth credentials are never used for Anthropic requests.
+- OpenAI-compatible RocketCode requests use only their selected top-level `openai_compatible` provider entry. ChatGPT OAuth credentials and first-party OpenAI API configuration are never used for OpenAI-compatible requests.
 - Startup migrates legacy state into `.rocketclaw/state.sqlite3` when applicable; rollback after destructive migration requires backup restore.
 - Startup rehydrates active persisted text connector goal loops according to ADR 0007. This is runtime state recovery and does not require configuration hot reload.
 
@@ -148,3 +151,5 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-19: Added server-owned Unix control socket operations, `rocketclaw cli --attach`, and lock-aware socket attach/fallback semantics.
 - 2026-06-19: Added control-socket operational contract for terminal-originated `ask_user_question` question and answer messages.
 - 2026-06-19: Added cmux `/new [agent]` operational expectations for caller-context terminal surface creation.
+- 2026-06-22: Added top-level `openai_compatible` runtime configuration for named OpenAI-compatible RocketCode providers.
+- 2026-06-23: Made first-party OpenAI credentials conditional and documented compatible-only RocketCode text deployment expectations.
