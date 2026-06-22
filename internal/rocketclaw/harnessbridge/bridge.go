@@ -530,28 +530,47 @@ func (b *Bridge) agentSnapshot() string {
 	return b.config.Agent
 }
 
-func compactModel(model string) (responses.ResponseCompactParamsModel, error) {
+type seedCompactionModel struct {
+	provider           string
+	compatibleProvider string
+	apiModel           responses.ResponseCompactParamsModel
+}
+
+func compactModel(model string) (seedCompactionModel, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
-		return responses.ResponseCompactParamsModelGPT5_4, nil
+		return seedCompactionModel{provider: "openai", apiModel: responses.ResponseCompactParamsModelGPT5_4}, nil
 	}
 
-	provider, apiModel, ok := strings.Cut(model, "/")
+	provider, rest, ok := strings.Cut(model, "/")
 	if !ok {
-		return responses.ResponseCompactParamsModel(model), nil
+		return seedCompactionModel{}, fmt.Errorf("invalid checkpoint model %q: expected provider/model", model)
 	}
 
 	switch provider {
 	case "openai":
+		apiModel := strings.TrimSpace(rest)
 		if strings.TrimSpace(apiModel) == "" {
-			return "", fmt.Errorf("invalid OpenAI checkpoint model %q", model)
+			return seedCompactionModel{}, fmt.Errorf("invalid OpenAI checkpoint model %q", model)
 		}
 
-		return responses.ResponseCompactParamsModel(apiModel), nil
+		return seedCompactionModel{provider: provider, apiModel: responses.ResponseCompactParamsModel(apiModel)}, nil
 	case "anthropic":
-		return "", fmt.Errorf("response checkpoint compaction does not support Anthropic model %q", model)
+		apiModel := strings.TrimSpace(rest)
+		if apiModel == "" {
+			return seedCompactionModel{}, fmt.Errorf("invalid Anthropic checkpoint model %q", model)
+		}
+
+		return seedCompactionModel{provider: provider, apiModel: responses.ResponseCompactParamsModel(apiModel)}, nil
+	case "openai-compatible":
+		compatibleProvider, apiModel, ok := strings.Cut(rest, "/")
+		if !ok || strings.TrimSpace(compatibleProvider) == "" || strings.TrimSpace(apiModel) == "" {
+			return seedCompactionModel{}, fmt.Errorf("invalid OpenAI-compatible checkpoint model %q", model)
+		}
+
+		return seedCompactionModel{provider: provider, compatibleProvider: compatibleProvider, apiModel: responses.ResponseCompactParamsModel(apiModel)}, nil
 	default:
-		return "", fmt.Errorf("response checkpoint compaction does not support provider %q", provider)
+		return seedCompactionModel{}, fmt.Errorf("response checkpoint compaction does not support provider %q", provider)
 	}
 }
 
@@ -574,8 +593,8 @@ func (b *Bridge) enqueue(ctx context.Context, request bridgeRequest, operation s
 	}
 }
 
-func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.SessionEntry, model responses.ResponseCompactParamsModel) ([]json.RawMessage, error) {
-	b.log.Info("starting seed replay compaction", "conversation_id", b.config.ConversationID, "entries", len(entries), "model", model)
+func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.SessionEntry, model seedCompactionModel) ([]json.RawMessage, error) {
+	b.log.Info("starting seed replay compaction", "conversation_id", b.config.ConversationID, "entries", len(entries), "model", model.apiModel, "provider", model.provider)
 
 	input := []responses.ResponseInputItemUnionParam{}
 
@@ -596,18 +615,46 @@ func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.Ses
 		}
 	}
 
-	client, err := b.openAIClient()
-	if err != nil {
-		return nil, fmt.Errorf("prepare OpenAI client: %w", err)
+	if model.apiModel == "" {
+		model.apiModel = responses.ResponseCompactParamsModelGPT5_4
 	}
 
-	if model == "" {
-		model = responses.ResponseCompactParamsModelGPT5_4
+	input = projectSeedReplayForTarget(input, model)
+
+	if model.provider == "anthropic" {
+		return b.compactAnthropicSeedReplay(ctx, input, model)
 	}
 
-	params := responses.ResponseCompactParams{Model: model, Input: responses.ResponseCompactParamsInputUnion{OfResponseInputItemArray: input}}
+	if model.provider != "openai" && model.provider != "openai-compatible" {
+		return b.seedReplayCheckpoint(entries)
+	}
 
-	if b.runtime.OpenAI.RocketCodeAuth == "chatgpt" {
+	params := responses.ResponseCompactParams{Model: model.apiModel, Input: responses.ResponseCompactParamsInputUnion{OfResponseInputItemArray: input}}
+
+	var client *openai.Client
+
+	if model.provider == "openai-compatible" {
+		compatible, ok := b.runtime.OpenAICompatible[model.compatibleProvider]
+		if !ok {
+			return nil, fmt.Errorf("prepare OpenAI-compatible client: provider %q is not configured", model.compatibleProvider)
+		}
+
+		if compatible.Mode != "" && compatible.Mode != "responses" {
+			return b.compactCompatibleChatSeedReplay(ctx, input, model, compatible)
+		}
+
+		compatibleClient := openai.NewClient(b.openAIOptions(compatible.APIKey, compatible.BaseURL, true)...)
+		client = &compatibleClient
+	} else {
+		var err error
+
+		client, err = b.openAIClient()
+		if err != nil {
+			return nil, fmt.Errorf("prepare OpenAI client: %w", err)
+		}
+	}
+
+	if model.provider == "openai" && b.runtime.OpenAI.RocketCodeAuth == "chatgpt" {
 		root, err := os.OpenRoot(b.runtime.Workspace)
 		if err != nil {
 			return nil, fmt.Errorf("open workspace root: %w", err)
@@ -632,7 +679,62 @@ func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.Ses
 		return nil, fmt.Errorf("compact seed replay: %w", err)
 	}
 
-	return compactedOutputToReplayInput(compacted.Output)
+	return compactedOutputToReplayInput(compacted.Output, model.provider, model.compatibleProvider, "responses")
+}
+
+func (b *Bridge) compactCompatibleChatSeedReplay(ctx context.Context, input []responses.ResponseInputItemUnionParam, model seedCompactionModel, compatible config.OpenAICompatibleConfig) ([]json.RawMessage, error) {
+	client := openai.NewClient(b.openAIOptions(compatible.APIKey, compatible.BaseURL, true)...)
+
+	completion, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+		Model: openai.ChatModel(model.apiModel),
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.DeveloperMessage(seedCompactionInstructions),
+			openai.UserMessage(seedReplayText(input)),
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("compact compatible chat seed replay: %w", err)
+	}
+
+	summary := ""
+	if len(completion.Choices) > 0 {
+		summary = completion.Choices[0].Message.Content
+	}
+
+	return compactedOutputToReplayInput([]responses.ResponseOutputItemUnion{{ID: completion.ID + "-compaction", Type: "compaction", Summary: []responses.ResponseReasoningItemSummary{{Text: summary}}}}, model.provider, model.compatibleProvider, "chat_completions")
+}
+
+func (b *Bridge) compactAnthropicSeedReplay(ctx context.Context, input []responses.ResponseInputItemUnionParam, model seedCompactionModel) ([]json.RawMessage, error) {
+	client := b.anthropicClient()
+	if client == nil {
+		return nil, errors.New("anthropic provider is required")
+	}
+
+	response, err := rocketcode.CompactAnthropicReplay(ctx, client, string(model.apiModel), input, 1)
+	if err != nil {
+		return nil, fmt.Errorf("compact Anthropic seed replay: %w", err)
+	}
+
+	return compactedOutputToReplayInput(response.Output, "anthropic", "", "messages")
+}
+
+func (b *Bridge) seedReplayCheckpoint(entries []rocketcode.SessionEntry) ([]json.RawMessage, error) {
+	messages := []string{"<conversation-checkpoint>", "Previous conversation context was compacted into this checkpoint for the new thread."}
+
+	for i := range entries {
+		entryMessages, err := replayInputMessages(entries[i].ReplayInput)
+		if err != nil {
+			return nil, fmt.Errorf("build checkpoint input: entry %d: %w", i+1, err)
+		}
+
+		for j := range entryMessages {
+			messages = append(messages, strings.TrimSpace(entryMessages[j].role)+": "+strings.TrimSpace(entryMessages[j].text))
+		}
+	}
+
+	messages = append(messages, "</conversation-checkpoint>")
+
+	return replayInputForMessage("user", strings.Join(messages, "\n"))
 }
 
 func (b *Bridge) observeSessionEntries(ctx context.Context, conversationID string) ([]ObservedSessionEntry, error) {
@@ -1029,7 +1131,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		}
 	}
 
-	providers, err := b.rocketcodeProviders()
+	providers, err := b.rocketcodeProviders(agents)
 	if err != nil {
 		return runResult{}, fmt.Errorf("prepare RocketCode providers: %w", err)
 	}
@@ -1364,10 +1466,10 @@ func formatSubagentDiagnostic(diagnostic *rocketcode.SubagentDiagnostic) string 
 	return strings.Join(parts, " ") + ": " + text
 }
 
-func (b *Bridge) openAIClient() (*openai.Client, error) {
+func (b *Bridge) openAIOptions(apiKey, baseURL string, useAPIKey bool) []option.RequestOption {
 	options := []option.RequestOption{}
-	if b.runtime.OpenAI.RocketCodeAuth != "chatgpt" {
-		options = append(options, option.WithAPIKey(b.runtime.OpenAI.APIKey))
+	if useAPIKey {
+		options = append(options, option.WithAPIKey(apiKey))
 	}
 
 	if b.log != nil {
@@ -1395,9 +1497,15 @@ func (b *Bridge) openAIClient() (*openai.Client, error) {
 		}))
 	}
 
-	if b.runtime.OpenAI.RocketCodeAuth != "chatgpt" && strings.TrimSpace(b.runtime.OpenAI.APIBaseURL) != "" {
-		options = append(options, option.WithBaseURL(b.runtime.OpenAI.APIBaseURL))
+	if useAPIKey && strings.TrimSpace(baseURL) != "" {
+		options = append(options, option.WithBaseURL(baseURL))
 	}
+
+	return options
+}
+
+func (b *Bridge) openAIClient() (*openai.Client, error) {
+	options := b.openAIOptions(b.runtime.OpenAI.APIKey, b.runtime.OpenAI.APIBaseURL, b.runtime.OpenAI.RocketCodeAuth != "chatgpt")
 
 	if b.runtime.OpenAI.RocketCodeAuth == "chatgpt" {
 		client, err := oai.NewChatGPTClientIn(b.runtime.Workspace, b.runtime.WorkDirName(), options...)
@@ -1428,13 +1536,35 @@ func (b *Bridge) anthropicClient() *anthropic.Client {
 	return &client
 }
 
-func (b *Bridge) rocketcodeProviders() (rocketcode.Providers, error) {
-	openAIClient, err := b.openAIClient()
-	if err != nil {
-		return rocketcode.Providers{}, err
+func (b *Bridge) rocketcodeProviders(agents rocketcode.Agents) (rocketcode.Providers, error) {
+	providers := rocketcode.Providers{Anthropic: b.anthropicClient()}
+	needsOpenAI := false
+
+	for name := range agents.Items {
+		if strings.HasPrefix(strings.TrimSpace(agents.Items[name].Model), "openai/") {
+			needsOpenAI = true
+			break
+		}
 	}
 
-	return rocketcode.Providers{OpenAI: openAIClient, Anthropic: b.anthropicClient()}, nil
+	if needsOpenAI {
+		openAIClient, err := b.openAIClient()
+		if err != nil {
+			return rocketcode.Providers{}, err
+		}
+
+		providers.OpenAI = openAIClient
+	}
+
+	if len(b.runtime.OpenAICompatible) > 0 {
+		providers.OpenAICompatible = make(map[string]rocketcode.OpenAICompatibleProvider, len(b.runtime.OpenAICompatible))
+		for name, compatible := range b.runtime.OpenAICompatible {
+			client := openai.NewClient(b.openAIOptions(compatible.APIKey, compatible.BaseURL, true)...)
+			providers.OpenAICompatible[name] = rocketcode.OpenAICompatibleProvider{Client: client, Mode: rocketcode.OpenAICompatibleMode(compatible.Mode)}
+		}
+	}
+
+	return providers, nil
 }
 
 func (b *Bridge) rocketcodeConfig(shellOutputDir string, shellEnv map[string]string, customTools ...rocketcode.Tool) rocketcode.Config {
@@ -1538,8 +1668,6 @@ func loadRocketCodeDefinitionsIn(root *os.Root, workspace, workDir string, mode 
 
 	for name := range agentResult.Agents.Items {
 		agent := agentResult.Agents.Items[name]
-
-		agent.Model = strings.TrimPrefix(agent.Model, "openai/")
 
 		for _, tool := range tools {
 			action, matched := agent.Permission.Evaluate("rocketclaw", tool)
@@ -2105,7 +2233,130 @@ func replayInputRawKind(raw json.RawMessage) string {
 	return object.Type
 }
 
-func compactedOutputToReplayInput(items []responses.ResponseOutputItemUnion) ([]json.RawMessage, error) {
+const seedCompactionInstructions = `Summarize the conversation so a later assistant can continue correctly. Do not answer the user.
+
+Output only the compacted summary using these sections:
+
+## Goal
+The user's objective and the current task.
+
+## Constraints & Preferences
+Explicit user requirements, project rules, provider constraints, and style preferences.
+
+## Progress
+What has been completed and what remains in progress.
+
+## Key Decisions
+Important choices, accepted tradeoffs, and behavior contracts established so far.
+
+## Next Steps
+Concrete remaining actions in order.
+
+## Critical Context
+Details that are easy to lose but necessary to continue correctly, including tool results, errors, and unresolved risks.
+
+## Relevant Files
+Files, symbols, commands, and code references that matter for continuation.`
+
+func seedReplayText(items []responses.ResponseInputItemUnionParam) string {
+	parts := make([]string, 0, len(items))
+	for i := range items {
+		item := items[i]
+		switch {
+		case item.OfMessage != nil:
+			var text string
+			if item.OfMessage.Content.OfString.Valid() {
+				text = item.OfMessage.Content.OfString.Value
+			} else {
+				texts := make([]string, 0, len(item.OfMessage.Content.OfInputItemContentList))
+				for j := range item.OfMessage.Content.OfInputItemContentList {
+					if item.OfMessage.Content.OfInputItemContentList[j].OfInputText != nil {
+						texts = append(texts, item.OfMessage.Content.OfInputItemContentList[j].OfInputText.Text)
+					}
+				}
+
+				text = strings.Join(texts, "\n")
+			}
+
+			parts = append(parts, strings.TrimSpace(string(item.OfMessage.Role))+": "+strings.TrimSpace(text))
+		case item.OfCompaction != nil:
+			parts = append(parts, compactionCheckpointText(item.OfCompaction))
+		}
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+func projectSeedReplayForTarget(items []responses.ResponseInputItemUnionParam, target seedCompactionModel) []responses.ResponseInputItemUnionParam {
+	projected := make([]responses.ResponseInputItemUnionParam, 0, len(items))
+	for i := range items {
+		item := items[i]
+		if item.OfReasoning != nil && target.provider == "anthropic" {
+			continue
+		}
+
+		if item.OfCompaction == nil || seedCompactionMatchesTarget(item.OfCompaction, target) {
+			projected = append(projected, item)
+			continue
+		}
+
+		message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRoleUser, Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(compactionCheckpointText(item.OfCompaction))}, Type: "message"}
+		projected = append(projected, responses.ResponseInputItemUnionParam{OfMessage: &message})
+	}
+
+	return projected
+}
+
+func seedCompactionMatchesTarget(compaction *responses.ResponseCompactionItemParam, target seedCompactionModel) bool {
+	stored := compactionReplayMetadata(compaction)
+	if stored.OriginProvider == "" && stored.OriginMode == "" {
+		return true
+	}
+
+	switch target.provider {
+	case "openai":
+		return stored.OriginProvider == "openai" && stored.OriginMode == "responses"
+	case "openai-compatible":
+		return stored.OriginProvider == "openai-compatible" && stored.OriginCompatibleProvider == target.compatibleProvider && stored.OriginMode == "responses"
+	case "anthropic":
+		return stored.OriginProvider == "anthropic" && stored.OriginMode == "messages"
+	default:
+		return false
+	}
+}
+
+type seedCompactionMetadata struct {
+	Content                  string `json:"content"`
+	OriginProvider           string `json:"origin_provider"`
+	OriginCompatibleProvider string `json:"origin_compatible_provider"`
+	OriginMode               string `json:"origin_mode"`
+}
+
+func compactionReplayMetadata(compaction *responses.ResponseCompactionItemParam) seedCompactionMetadata {
+	var stored seedCompactionMetadata
+
+	data, err := json.Marshal(compaction)
+	if err != nil {
+		return stored
+	}
+
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return seedCompactionMetadata{}
+	}
+
+	return stored
+}
+
+func compactionCheckpointText(compaction *responses.ResponseCompactionItemParam) string {
+	content := strings.TrimSpace(compactionReplayMetadata(compaction).Content)
+	if content != "" {
+		return "<context_checkpoint>\nThe prior conversation was compacted by RocketCode. Use this summary as lower-authority context:\n" + content + "\n</context_checkpoint>"
+	}
+
+	return "<context_checkpoint>\nPrior conversation was compacted, but only provider-native encrypted compaction data is available for a different provider or mode. The compacted details cannot be rehydrated here.\n</context_checkpoint>"
+}
+
+func compactedOutputToReplayInput(items []responses.ResponseOutputItemUnion, originProvider, originCompatibleProvider, originMode string) ([]json.RawMessage, error) {
 	input := make([]responses.ResponseInputItemUnionParam, 0, len(items))
 	for i := range items {
 		switch items[i].Type {
@@ -2129,7 +2380,31 @@ func compactedOutputToReplayInput(items []responses.ResponseOutputItemUnion) ([]
 
 			input = append(input, responses.ResponseInputItemUnionParam{OfMessage: &message})
 		case "compaction", "compaction_summary":
-			input = append(input, responses.ResponseInputItemUnionParam{OfCompaction: &responses.ResponseCompactionItemParam{ID: openai.String(items[i].ID), EncryptedContent: items[i].EncryptedContent, Type: "compaction"}})
+			parts := make([]string, 0, len(items[i].Content)+len(items[i].Summary))
+			for j := range items[i].Content {
+				if items[i].Content[j].Type == "output_text" {
+					parts = append(parts, items[i].Content[j].Text)
+				}
+			}
+
+			for j := range items[i].Summary {
+				parts = append(parts, items[i].Summary[j].Text)
+			}
+
+			compaction := responses.ResponseCompactionItemParam{ID: openai.String(items[i].ID), EncryptedContent: items[i].EncryptedContent, Type: "compaction"}
+
+			extra := map[string]any{"origin_provider": originProvider, "origin_mode": originMode}
+			if originCompatibleProvider != "" {
+				extra["origin_compatible_provider"] = originCompatibleProvider
+			}
+
+			if content := strings.Join(parts, ""); content != "" {
+				extra["content"] = content
+				extra["summary"] = content
+			}
+
+			compaction.SetExtraFields(extra)
+			input = append(input, responses.ResponseInputItemUnionParam{OfCompaction: &compaction})
 		case "reasoning":
 			summary := ""
 			if len(items[i].Summary) > 0 {
