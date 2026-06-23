@@ -1564,26 +1564,26 @@ func TestSubmitExternalMCPInputReportsErrors(t *testing.T) {
 	errSubmit := errors.New("thread bridge unavailable")
 	_, err := submitExternalMCPInput(t.Context(), func(context.Context, string, string, *events.InboundMessage) error {
 		return errSubmit
-	}, "planner", "external_mcp:planner:123", &events.InboundContent{Text: "hello"}, nil, nil, "ticket-123")
+	}, "planner", "external_mcp:planner:123", &events.InboundContent{Text: "hello"}, nil, "", nil, "ticket-123")
 	require.ErrorIs(t, err, errSubmit)
 	require.ErrorContains(t, err, `submit external MCP input to agent "planner"`)
 
 	errResponse := errors.New("assistant failed")
 	replyTarget := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
 	attachments := []events.InboundAttachment{{Name: "scorecard.png", MIMEType: "image/png", Data: []byte("png")}}
-	metadata := map[string]string{"ticket": "123"}
+	metadata := map[string]string{"ticket": "123", events.InboundPrincipalMetadataKey: "mallory", events.InboundOriginMetadataKey: "Slack", events.InboundMediaMetadataKey: "Voice"}
 	_, err = submitExternalMCPInput(t.Context(), func(_ context.Context, agent, conversationID string, inbound *events.InboundMessage) error {
 		assert.Equal(t, "planner", agent)
 		assert.Equal(t, "external_mcp:planner:123", conversationID)
 		assert.Equal(t, "hello", inbound.Text)
-		assert.Equal(t, metadata, inbound.Metadata)
+		assert.Equal(t, map[string]string{"ticket": "123", events.InboundPrincipalMetadataKey: "alice"}, inbound.Metadata)
 		assert.Equal(t, attachments, inbound.Attachments)
 		assert.True(t, inbound.HadAttachments)
 		assert.Equal(t, replyTarget, inbound.SlackReply)
 		inbound.CompleteResponse("", errResponse)
 
 		return nil
-	}, "planner", "external_mcp:planner:123", &events.InboundContent{Text: "hello", Attachments: attachments}, metadata, appTestSlackReply(replyTarget), "ticket-123")
+	}, "planner", "external_mcp:planner:123", &events.InboundContent{Text: "hello", Attachments: attachments}, metadata, "alice", appTestSlackReply(replyTarget), "ticket-123")
 	require.ErrorIs(t, err, errResponse)
 	require.ErrorContains(t, err, "wait for external MCP reply")
 
@@ -1592,7 +1592,7 @@ func TestSubmitExternalMCPInputReportsErrors(t *testing.T) {
 		cancel()
 
 		return nil
-	}, "planner", "external_mcp:planner:123", &events.InboundContent{Text: "hello"}, nil, nil, "ticket-123")
+	}, "planner", "external_mcp:planner:123", &events.InboundContent{Text: "hello"}, nil, "", nil, "ticket-123")
 	require.ErrorIs(t, err, context.Canceled)
 	require.ErrorContains(t, err, "wait for external MCP reply")
 }
@@ -1603,7 +1603,7 @@ func TestSubmitExternalMCPInputReturnsAttachments(t *testing.T) {
 		inbound.CompleteResponseWithAttachments("answer", outboundAttachments, nil)
 
 		return nil
-	}, "planner", "external_mcp:planner:123", &events.InboundContent{Text: "hello"}, nil, nil, "ticket-123")
+	}, "planner", "external_mcp:planner:123", &events.InboundContent{Text: "hello"}, nil, "", nil, "ticket-123")
 	require.NoError(t, err)
 	assert.Equal(t, "answer", reply.Answer)
 	assert.Equal(t, []externalmcp.SessionAttachment{

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"mime"
 	"slices"
 	"strings"
@@ -695,8 +696,6 @@ func startExternalMCPServer(
 	logger *slog.Logger,
 ) (*externalmcp.Server, error) {
 	server, err := externalmcp.StartSessionPromptServer(ctx, logger, cfg.MCPExternal.ListenAddr, users, defaultAgent, func(callCtx context.Context, username, externalConversationID, agent, input string, metadata map[string]string, attachments []externalmcp.SessionPromptAttachment, slackChannel string) (result externalmcp.SessionResult, err error) {
-		_ = username
-
 		var reply *events.InboundMessage
 
 		defer func() {
@@ -776,7 +775,7 @@ func startExternalMCPServer(
 					}
 				}
 
-				return submitExternalMCPInput(callCtx, submitAgent, session.Agent, session.ConversationID, &inboundContent, metadata, reply, externalConversationID)
+				return submitExternalMCPInput(callCtx, submitAgent, session.Agent, session.ConversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, externalConversationID)
 			}
 		}
 
@@ -845,7 +844,7 @@ func startExternalMCPServer(
 			}
 		}
 
-		return submitExternalMCPInput(callCtx, submitAgent, agent, conversationID, &inboundContent, metadata, reply, publicConversationID)
+		return submitExternalMCPInput(callCtx, submitAgent, agent, conversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, publicConversationID)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start external MCP HTTP server: %w", err)
@@ -907,10 +906,22 @@ func externalMCPInboundContent(attachments []externalmcp.SessionPromptAttachment
 	return content, outbound, nil
 }
 
-func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Context, string, string, *events.InboundMessage) error, agent, conversationID string, content *events.InboundContent, metadata map[string]string, reply *events.InboundMessage, externalConversationID string) (externalmcp.SessionResult, error) {
+func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Context, string, string, *events.InboundMessage) error, agent, conversationID string, content *events.InboundContent, metadata map[string]string, principal string, reply *events.InboundMessage, externalConversationID string) (externalmcp.SessionResult, error) {
 	inbound := events.NewMainInboundMessageFromContent(events.SourceExternalMCP, events.InboundKindPrompt, "", content, true)
 
-	inbound.Metadata = metadata
+	inbound.Metadata = maps.Clone(metadata)
+	delete(inbound.Metadata, events.InboundOriginMetadataKey)
+	delete(inbound.Metadata, events.InboundMediaMetadataKey)
+	delete(inbound.Metadata, events.InboundPrincipalMetadataKey)
+
+	if strings.TrimSpace(principal) != "" {
+		if inbound.Metadata == nil {
+			inbound.Metadata = map[string]string{}
+		}
+
+		inbound.Metadata[events.InboundPrincipalMetadataKey] = strings.TrimSpace(principal)
+	}
+
 	if reply != nil {
 		inbound.SlackReply = reply.SlackReply
 		inbound.DiscordReply = reply.DiscordReply

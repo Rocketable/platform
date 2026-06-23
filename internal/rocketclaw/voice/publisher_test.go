@@ -21,7 +21,7 @@ func TestPublishTranscriptionRelaysBeforePublishingInboundForWebVoice(t *testing
 		return &events.InboundMessage{SlackReply: &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: ""}}, nil
 	})
 
-	published, err := publisher.PublishTranscription(context.Background(), "hello from browser voice", "browser-session-1")
+	published, err := publisher.PublishTranscription(context.Background(), "hello from browser voice", "browser-session-1", "")
 	require.NoError(t, err)
 	require.True(t, published)
 
@@ -54,7 +54,7 @@ func TestPublishTranscriptionStopsWhenWebRelayFails(t *testing.T) {
 		return nil, errors.New("relay failed")
 	})
 
-	_, err := publisher.PublishTranscription(context.Background(), "hello from browser voice", "browser-session-1")
+	_, err := publisher.PublishTranscription(context.Background(), "hello from browser voice", "browser-session-1", "")
 	require.Error(t, err)
 
 	requireNoInboundMessages(t, bus)
@@ -70,7 +70,7 @@ func TestPublishTranscriptionReportsInboundPublishError(t *testing.T) {
 		return nil, nil
 	})
 
-	published, err := publisher.PublishTranscription(context.Background(), "hello from browser voice", "browser-session-1")
+	published, err := publisher.PublishTranscription(context.Background(), "hello from browser voice", "browser-session-1", "")
 	require.ErrorIs(t, err, events.ErrBusClosed)
 	require.ErrorContains(t, err, "publish voice utterance to inbound bus")
 	assert.False(t, published)
@@ -86,7 +86,7 @@ func TestPublishTranscriptionIgnoresBlankText(t *testing.T) {
 		return nil, nil
 	})
 
-	published, err := publisher.PublishTranscription(context.Background(), " \n\t ", "browser-session-1")
+	published, err := publisher.PublishTranscription(context.Background(), " \n\t ", "browser-session-1", "")
 	require.NoError(t, err)
 	assert.False(t, published)
 	assert.False(t, relayed)

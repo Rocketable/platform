@@ -2196,7 +2196,123 @@ func buildPrompt(msg *events.InboundMessage) string {
 		}
 	}
 
-	return instruction + "\n\n" + label + ":\n" + body
+	return instruction + "\n\n" + label + ":\n" + provenanceHeader(provenanceFromInbound(msg)) + "\n\n" + body
+}
+
+type promptProvenance struct {
+	origin, media, principal string
+}
+
+func provenanceFromInbound(msg *events.InboundMessage) promptProvenance {
+	provenance := promptProvenance{origin: originForSource(msg.Source), media: mediaForSource(msg.Source)}
+	if origin := canonicalOriginOverride(msg.Metadata[events.InboundOriginMetadataKey]); origin != "" {
+		provenance.origin = origin
+	}
+
+	if media := canonicalMediaOverride(msg.Metadata[events.InboundMediaMetadataKey]); media != "" {
+		provenance.media = media
+	}
+
+	if msg.Human {
+		provenance.principal = strings.TrimSpace(msg.Metadata[events.InboundPrincipalMetadataKey])
+	}
+
+	return provenance
+}
+
+func canonicalOriginOverride(value string) string {
+	switch strings.TrimSpace(value) {
+	case "Slack":
+		return "Slack"
+	case "Discord":
+		return "Discord"
+	case "Cron":
+		return "Cron"
+	case "ExternalMCP":
+		return "ExternalMCP"
+	case "Terminal":
+		return "Terminal"
+	case "Web":
+		return "Web"
+	case "System":
+		return "System"
+	default:
+		return ""
+	}
+}
+
+func canonicalMediaOverride(value string) string {
+	switch strings.TrimSpace(value) {
+	case "Text":
+		return "Text"
+	case "Voice":
+		return "Voice"
+	default:
+		return ""
+	}
+}
+
+func originForSource(source events.Source) string {
+	switch source {
+	case events.SourceSlack:
+		return "Slack"
+	case events.SourceDiscordText, events.SourceDiscordVoice:
+		return "Discord"
+	case events.SourceExternalMCP:
+		return "ExternalMCP"
+	case events.SourceTerminalCLI:
+		return "Terminal"
+	case events.SourceWebVoice:
+		return "Web"
+	case events.SourceSystem:
+		return "System"
+	default:
+		return "System"
+	}
+}
+
+func mediaForSource(source events.Source) string {
+	switch source {
+	case events.SourceDiscordVoice, events.SourceWebVoice:
+		return "Voice"
+	case events.SourceSlack, events.SourceDiscordText, events.SourceExternalMCP, events.SourceTerminalCLI, events.SourceSystem:
+		return "Text"
+	default:
+		return "Text"
+	}
+}
+
+func provenanceHeader(provenance promptProvenance) string {
+	origin := provenanceToken(provenance.origin)
+	if origin == "" {
+		origin = "System"
+	}
+
+	media := provenanceToken(provenance.media)
+	if media == "" {
+		media = "Text"
+	}
+
+	header := "[" + origin + " media=" + media
+	if principal := provenanceToken(provenance.principal); principal != "" {
+		header += " principal=" + principal
+	}
+
+	return header + "]"
+}
+
+func provenanceToken(value string) string {
+	fields := strings.Fields(value)
+	if len(fields) == 0 {
+		return ""
+	}
+
+	value = strings.Join(fields, "_")
+	value = strings.ReplaceAll(value, "=", "-")
+	value = strings.ReplaceAll(value, "[", "(")
+	value = strings.ReplaceAll(value, "]", ")")
+
+	return value
 }
 
 func goalSteeringPrompt(goal *GoalState) string {
@@ -2215,7 +2331,12 @@ func goalSteeringPrompt(goal *GoalState) string {
 
 func externalMCPMetadataEnv(conversationID string, metadata map[string]string) map[string]string {
 	env := map[string]string{rocketclawConversationIDEnv: strings.TrimSpace(conversationID)}
+
 	for key, value := range metadata {
+		if key == events.InboundOriginMetadataKey || key == events.InboundMediaMetadataKey || key == events.InboundPrincipalMetadataKey {
+			continue
+		}
+
 		env[rocketclawMetadataEnvPrefix+externalMCPMetadataEnvKey(key)] = value
 	}
 

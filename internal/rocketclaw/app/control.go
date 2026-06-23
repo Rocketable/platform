@@ -280,7 +280,11 @@ func serveControlClient(ctx context.Context, conn net.Conn, bus *events.Bus, ses
 		case "prompt":
 			inbound := events.NewMainInboundMessage(events.SourceTerminalCLI, events.InboundKindPrompt, "terminal", strings.TrimSpace(req.Text), true)
 			inbound.ConversationID = conversationID
+
 			inbound.Metadata = map[string]string{events.TerminalCLIClientIDMetadataKey: clientID}
+			if principal := terminalPrincipal(clientID); principal != "" {
+				inbound.Metadata[events.InboundPrincipalMetadataKey] = principal
+			}
 
 			if conversationID == events.MainConversationID() {
 				if err := bus.PublishInbound(ctx, inbound); err != nil {

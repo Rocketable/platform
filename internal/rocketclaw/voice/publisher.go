@@ -37,7 +37,7 @@ func NewTranscriptionPublisher(
 }
 
 // PublishTranscription publishes a transcribed utterance into the main conversation.
-func (p *TranscriptionPublisher) PublishTranscription(ctx context.Context, text, webSessionID string) (bool, error) {
+func (p *TranscriptionPublisher) PublishTranscription(ctx context.Context, text, webSessionID, principal string) (bool, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return false, nil
@@ -63,6 +63,10 @@ func (p *TranscriptionPublisher) PublishTranscription(ctx context.Context, text,
 	}
 
 	inbound := events.NewMainInboundMessage(p.source, events.InboundKindPrompt, "", text, true)
+	if principal = strings.TrimSpace(principal); principal != "" {
+		inbound.Metadata = map[string]string{events.InboundPrincipalMetadataKey: principal}
+	}
+
 	if reply != nil {
 		inbound.SlackReply = reply.SlackReply
 		inbound.DiscordReply = reply.DiscordReply

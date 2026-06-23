@@ -196,7 +196,7 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 	attemptCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	input <- rocketcode.PromptInput{Role: "", Text: prompt, Attachments: nil, Responses: output}
+	input <- rocketcode.PromptInput{Role: "", Text: provenanceHeader(promptProvenance{origin: "Cron", media: "Text"}) + "\n\n" + prompt, Attachments: nil, Responses: output}
 
 	close(input)
 
@@ -240,8 +240,8 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 		return last, errProgress
 	}
 
-	if errWait := group.Wait(); errWait != nil {
-		return last, fmt.Errorf("run raw rocketcode turn: %w", errWait)
+	if errGroup := group.Wait(); errGroup != nil {
+		return last, fmt.Errorf("run raw rocketcode turn: %w", errGroup)
 	}
 
 	return last, nil

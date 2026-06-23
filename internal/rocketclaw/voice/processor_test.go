@@ -27,7 +27,7 @@ func TestPublishTranscriptionRelaysBeforePublishingInbound(t *testing.T) {
 		return &events.InboundMessage{SlackReply: &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: ""}}, nil
 	})
 
-	published, err := processor.publisher.PublishTranscription(context.Background(), "hello from Discord", "")
+	published, err := processor.publisher.PublishTranscription(context.Background(), "hello from Discord", "", "speaker-1")
 	require.NoError(t, err)
 	require.True(t, published)
 
@@ -39,6 +39,7 @@ func TestPublishTranscriptionRelaysBeforePublishingInbound(t *testing.T) {
 
 		assert.Equal(t, events.SourceDiscordVoice, msg.Source)
 		assert.Equal(t, "hello from Discord", msg.Text)
+		assert.Equal(t, "speaker-1", msg.Metadata[events.InboundPrincipalMetadataKey])
 		require.NotNil(t, msg.SlackReply)
 		assert.Equal(t, "D123", msg.SlackReply.ChannelID)
 		assert.Equal(t, "111.222", msg.SlackReply.MessageTS)
@@ -58,7 +59,7 @@ func TestPublishTranscriptionStopsWhenRelayFails(t *testing.T) {
 		return nil, errors.New("relay failed")
 	})
 
-	_, err := processor.publisher.PublishTranscription(context.Background(), "hello from Discord", "")
+	_, err := processor.publisher.PublishTranscription(context.Background(), "hello from Discord", "", "speaker-1")
 	require.Error(t, err)
 
 	requireNoInboundMessages(t, bus)

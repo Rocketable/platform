@@ -1024,8 +1024,25 @@ func (c *Connector) inboundMessage(ctx context.Context, msg *textMessage, text s
 
 	inbound := events.NewMainInboundMessageFromContent(events.SourceDiscordText, events.InboundKindPrompt, "", &content, true)
 	inbound.DiscordReply = reply
+	inbound.Metadata = map[string]string{events.InboundPrincipalMetadataKey: discordPrincipal(msg.Author)}
 
 	return inbound
+}
+
+func discordPrincipal(user *textUser) string {
+	if user == nil {
+		return ""
+	}
+
+	if name := strings.TrimSpace(user.GlobalName); name != "" {
+		return name
+	}
+
+	if name := strings.TrimSpace(user.Username); name != "" {
+		return name
+	}
+
+	return strings.TrimSpace(user.ID)
 }
 
 func stripBotMention(text, botUserID string) string {

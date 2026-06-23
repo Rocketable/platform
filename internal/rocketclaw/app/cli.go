@@ -100,6 +100,10 @@ func (c *terminalCLI) readInput(ctx context.Context) {
 		inbound.ConversationID = c.conversationID
 
 		inbound.Metadata = map[string]string{events.TerminalCLIClientIDMetadataKey: "embedded"}
+		if principal := terminalPrincipal("embedded"); principal != "" {
+			inbound.Metadata[events.InboundPrincipalMetadataKey] = principal
+		}
+
 		if err := c.submit(ctx, inbound); err != nil {
 			return fmt.Errorf("submit terminal prompt: %w", err)
 		}
@@ -115,6 +119,14 @@ func (c *terminalCLI) readInput(ctx context.Context) {
 	}
 
 	c.onExit()
+}
+
+func terminalPrincipal(clientID string) string {
+	if user := strings.TrimSpace(os.Getenv("USER")); user != "" {
+		return user
+	}
+
+	return strings.TrimSpace(clientID)
 }
 
 func (c *terminalCLI) handleSlashCommand(ctx context.Context, line string) (bool, error) {

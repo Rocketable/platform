@@ -18,6 +18,15 @@ const mainConversationID = "main"
 // TerminalCLIClientIDMetadataKey identifies the attached terminal client for terminal-originated turns.
 const TerminalCLIClientIDMetadataKey = "terminal_cli_client_id"
 
+const (
+	// InboundOriginMetadataKey overrides the trusted prompt provenance origin.
+	InboundOriginMetadataKey = "rocketclaw_origin"
+	// InboundMediaMetadataKey overrides the trusted prompt provenance media.
+	InboundMediaMetadataKey = "rocketclaw_media"
+	// InboundPrincipalMetadataKey identifies the trusted human principal for prompt provenance.
+	InboundPrincipalMetadataKey = "rocketclaw_principal"
+)
+
 // InboundKind describes how an inbound message should be handled.
 type InboundKind string
 

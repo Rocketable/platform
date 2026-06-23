@@ -267,7 +267,7 @@ func (p *Processor) processUtterance(ctx context.Context, acc *accumulator) {
 
 	p.log.Info("transcribed Discord voice utterance", "text_len", len(text), "text", text)
 
-	published, err := p.publisher.PublishTranscription(ctx, text, "")
+	published, err := p.publisher.PublishTranscription(ctx, text, "", acc.speakerID)
 	if err != nil {
 		p.log.Error("publish transcribed utterance", "error", err)
 		return

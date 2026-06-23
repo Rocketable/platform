@@ -719,7 +719,7 @@ func (h *voiceHub) processUtterance(ctx context.Context, sessionID string, utter
 		return
 	}
 
-	if _, err := h.publisher.PublishTranscription(ctx, text, sessionID); err != nil {
+	if _, err := h.publisher.PublishTranscription(ctx, text, sessionID, ""); err != nil {
 		h.log.Error("publish browser voice transcription", "error", err, "session_id", sessionID)
 		return
 	}

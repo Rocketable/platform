@@ -26,6 +26,8 @@ Several rocketclaw capabilities exist only because of precise RocketCode configu
 
 Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell expansion. Persistent bridge input text remains literal. Raw input text expands because cron bodies are trusted workspace files. Both paths construct RocketCode with a provider registry that can route provider-qualified OpenAI and Anthropic model requests. Both paths pass `rocketcode.auto_approve_permissions` through to RocketCode's `AutoApprovePermissions` flag.
 
+Both construction paths must pass RocketClaw-originated `rocketcode.PromptInput` text using the trusted provenance header defined in ADR 0002. The persistent bridge derives `Origin`, `Media`, and optional `Name` from the inbound turn's RocketClaw runtime source, media, and principal metadata. Raw-run cron inputs use `Origin=Cron`, `Media=Text`, and omit `principal`. Adding this header must not alter `InputPrompts` expansion settings, which prompt bodies are eligible for shell interpolation, attachment normalization, session replay, tool injection, connector delivery behavior, or authorization decisions.
+
 ### Provider Selection
 
 - RocketClaw passes OpenAI and Anthropic provider clients into RocketCode when configured.
@@ -200,3 +202,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-17: Added RocketClaw embedding contract for passing `rocketcode.auto_approve_permissions` into RocketCode automatic permission review.
 - 2026-06-17: Added OpenTelemetry/OpenInference observability contract for Phoenix-compatible tracing around RocketClaw-owned RocketCode turns, configured exclusively through the RocketClaw configuration file.
 - 2026-06-19: Documented `ask_user_question` as a conditional persistent-bridge RocketClaw tool and expanded its native answer path to terminal CLI turns.
+- 2026-06-23: Required RocketClaw's persistent bridge and raw-run RocketCode prompt inputs to prepend trusted runtime-generated origin media/principal headers without changing prompt body semantics or shell-expansion settings.

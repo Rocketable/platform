@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -205,7 +206,7 @@ func TestRunRawCronCanEditRestartAndCompleteDecision(t *testing.T) {
 	require.Len(t, entries, 1)
 	items, err := rocketcode.ReplayInputToParams(entries[0].Entry.ReplayInput)
 	require.NoError(t, err)
-	assert.Equal(t, "raw-expanded", items[0].OfMessage.Content.OfString.Value)
+	assert.Equal(t, "[Cron media=Text]\n\nraw-expanded", items[0].OfMessage.Content.OfString.Value)
 	requestMu.Lock()
 	assert.Equal(t, 6, requests)
 	requestMu.Unlock()
@@ -219,6 +220,9 @@ func TestRunRawRetriesMissingMandatoryToolUntilDecision(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	requests := 0
+
+	var prompts []string
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" {
 			http.NotFound(w, r)
@@ -234,6 +238,10 @@ func TestRunRawRetriesMissingMandatoryToolUntilDecision(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 
 			return
+		}
+
+		if requests <= 2 {
+			prompts = append(prompts, rawRunRequestPrompt(t, body))
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -260,6 +268,30 @@ func TestRunRawRetriesMissingMandatoryToolUntilDecision(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, RawRunResult{Text: "assistant text", VerbatimMessage: "final payload"}, result)
 	assert.Equal(t, 3, requests)
+	assert.Equal(t, []string{"[Cron media=Text]\n\noriginal", "[Cron media=Text]\n\n" + rawRunMissingToolPrompt}, prompts)
+}
+
+func rawRunRequestPrompt(t *testing.T, body map[string]any) string {
+	t.Helper()
+
+	input, ok := body["input"].([]any)
+	require.True(t, ok)
+
+	if len(input) == 0 {
+		return ""
+	}
+
+	for _, v := range slices.Backward(input) {
+		message, ok := v.(map[string]any)
+		require.True(t, ok)
+
+		content, ok := message["content"].(string)
+		if ok {
+			return content
+		}
+	}
+
+	return ""
 }
 
 func TestRunRawLoadsSkillContentAsDeveloperMessage(t *testing.T) {

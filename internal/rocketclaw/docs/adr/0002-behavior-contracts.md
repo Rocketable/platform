@@ -31,6 +31,30 @@ RocketClaw has lost features when refactors treated behavior as removable plumbi
 
 Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd, stdout insertion only, and command failures do not fail prompt preparation.
 
+Every RocketClaw-originated `rocketcode.PromptInput` must be framed with one trusted runtime-generated provenance header before the prompt body:
+
+```text
+[Origin media=Media principal=Name]
+
+<body>
+```
+
+For non-human, system, and cron-originated prompts, the `principal=Name` field is omitted:
+
+```text
+[Origin media=Media]
+
+<body>
+```
+
+The first bracket token is `Origin`. It names the RocketClaw runtime source category responsible for the prompt, not a connector-provided display string. Accepted origin values are product enum values chosen by RocketClaw code from runtime context: `Slack`, `Discord`, `Cron`, `ExternalMCP`, `Terminal`, `Web`, and `System`. New origin values require product-contract review because model-visible provenance changes.
+
+`Media` names the interaction medium inside that origin. Accepted media values are product enum values chosen by RocketClaw code from runtime context: `Text` and `Voice`. `Text` covers typed connector messages, terminal input, External MCP prompts, scheduled/system text, and cron prompt files. `Voice` covers transcribed speech prompts. New media values require product-contract review.
+
+`Name` is the principal: the RocketClaw-known human actor responsible for a human-originated prompt. It should be the best runtime-authenticated or connector-derived human name available for that turn, such as a configured human profile display name, connector account name, Basic Auth username, terminal user name, or, when no safer human name is available, that connector's stable user identifier. Principal is model-visible provenance only; authorization and permissions must continue to use RocketClaw runtime metadata and connector checks, not the prompt header text. Non-human prompts, system prompts, automated continuations, scheduled-message prompts, and cron/raw-run prompts omit `principal` entirely.
+
+Field order is fixed: first `Origin`, then `media=Media`, then `principal=Name` when present. The header is generated from RocketClaw runtime metadata, never from prompt body text. Header field values must be serialized so they cannot introduce whitespace-separated fields, line breaks, `=`, `[`, or `]` into the trusted header. RocketClaw may map runtime values to safe header text, but must not recover missing or unsafe provenance values from the prompt body. The body remains the source prompt body after the blank line, with the same attachment warning, text attachment, and fallback semantics that apply before framing. This framing does not change the shell-interpolation classification above: persistent bridge human and external input remains literal, and raw cron input retains raw-run expansion behavior.
+
 ### Message Flow
 
 - Shared inbound messages are queued through the event bus and consumed by the main bridge.
@@ -178,3 +202,4 @@ Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd
 - 2026-06-19: Specified socket-attached terminal CLI routing, server-owned runtime behavior, and direct `--attach` conversation selection.
 - 2026-06-19: Expanded `ask_user_question` visibility and answer handling to qualifying terminal-originated CLI turns through the matching attached CLI client.
 - 2026-06-19: Added terminal CLI local slash-command handling and cmux `/new [agent]` caller-context surface creation semantics.
+- 2026-06-23: Required every RocketClaw-originated RocketCode prompt input to include a trusted runtime-generated origin media header, with human principals included only for human-originated prompts, while preserving prompt body semantics and existing shell-interpolation classifications.

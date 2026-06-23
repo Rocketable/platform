@@ -115,9 +115,9 @@ type slackThinkingState struct {
 }
 
 type slackBufferedMessage struct {
-	Text    string
-	Content events.InboundContent
-	Reply   *events.SlackReplyTarget
+	Text, Principal string
+	Content         events.InboundContent
+	Reply           *events.SlackReplyTarget
 }
 
 // New constructs a Slack connector.
@@ -749,9 +749,9 @@ func (c *Connector) clearProgressText(turnID string) {
 	delete(c.thinking, turnID)
 }
 
-func (c *Connector) acceptMainSlackMessage(ctx context.Context, text string, content *events.InboundContent, replyTarget *events.SlackReplyTarget) bool {
+func (c *Connector) acceptMainSlackMessage(ctx context.Context, text string, content *events.InboundContent, replyTarget *events.SlackReplyTarget, principal string) bool {
 	key := slackMainStackKey
-	if c.bufferSlackStack(ctx, key, text, content, replyTarget) {
+	if c.bufferSlackStack(ctx, key, text, content, replyTarget, principal) {
 		return false
 	}
 
@@ -759,7 +759,7 @@ func (c *Connector) acceptMainSlackMessage(ctx context.Context, text string, con
 
 	c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackImmediatePlaceholder, "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS)
 
-	if err := c.bus.PublishInbound(ctx, newSlackInboundMessage(text, content, replyTarget)); err != nil {
+	if err := c.bus.PublishInbound(ctx, newSlackInboundMessage(text, content, replyTarget, principal)); err != nil {
 		c.log.Error("publish Slack inbound message", "error", err)
 		c.finishSlackStack(key)
 
@@ -790,12 +790,12 @@ func slackThreadStackKey(replyTarget *events.SlackReplyTarget) string {
 
 func (c *Connector) beginSlackStack(key string) { c.mu.Lock(); c.stacks[key] = nil; c.mu.Unlock() }
 
-func (c *Connector) bufferSlackStack(ctx context.Context, key, text string, content *events.InboundContent, replyTarget *events.SlackReplyTarget) bool {
+func (c *Connector) bufferSlackStack(ctx context.Context, key, text string, content *events.InboundContent, replyTarget *events.SlackReplyTarget, principal string) bool {
 	c.mu.Lock()
 
 	_, active := c.stacks[key]
 	if active {
-		c.stacks[key] = append(c.stacks[key], slackBufferedMessage{Text: text, Content: *content, Reply: replyTarget})
+		c.stacks[key] = append(c.stacks[key], slackBufferedMessage{Text: text, Principal: principal, Content: *content, Reply: replyTarget})
 	}
 	c.mu.Unlock()
 
@@ -826,8 +826,8 @@ func (c *Connector) promoteSlackStack(ctx context.Context, key string, submit fu
 	c.stacks[key] = nil
 	c.mu.Unlock()
 
-	for _, msg := range buffered {
-		c.removeReaction(ctx, msg.Reply, slackBufferedReaction, "remove Slack buffered reaction")
+	for i := range buffered {
+		c.removeReaction(ctx, buffered[i].Reply, slackBufferedReaction, "remove Slack buffered reaction")
 	}
 
 	latest := buffered[len(buffered)-1].Reply
@@ -836,7 +836,7 @@ func (c *Connector) promoteSlackStack(ctx context.Context, key string, submit fu
 	c.createReplyPlaceholdersOrWarn(ctx, latest, slackImmediatePlaceholder, "channel", latest.ChannelID, "message_ts", latest.MessageTS)
 
 	text, content := combineSlackBufferedMessages(buffered)
-	if err := submit(ctx, newSlackInboundMessage(text, &content, latest)); err != nil {
+	if err := submit(ctx, newSlackInboundMessage(text, &content, latest, buffered[len(buffered)-1].Principal)); err != nil {
 		c.log.Error("publish buffered Slack inbound message", "error", err)
 		c.finishSlackStack(key)
 
@@ -851,7 +851,8 @@ func combineSlackBufferedMessages(buffered []slackBufferedMessage) (string, even
 
 	var content events.InboundContent
 
-	for _, msg := range buffered {
+	for i := range buffered {
+		msg := &buffered[i]
 		if text := strings.TrimSpace(msg.Text); text != "" {
 			parts = append(parts, text)
 		}
@@ -1251,14 +1252,14 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 				content.Text = text
 
 				key := slackThreadStackKey(replyTarget)
-				if c.bufferSlackStack(ctx, key, content.Text, &content, replyTarget) {
+				if c.bufferSlackStack(ctx, key, content.Text, &content, replyTarget, c.slackPrincipal(ev.User)) {
 					return
 				}
 
 				c.beginSlackStack(key)
 				c.createReplyPlaceholdersOrWarn(ctx, replyTarget, primarytext.GoalProgressText(1, goal.MaxTurns), "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
 
-				inbound := newSlackInboundMessage(goal.Objective, &content, replyTarget)
+				inbound := newSlackInboundMessage(goal.Objective, &content, replyTarget, c.slackPrincipal(ev.User))
 				if !c.startSlackGoal(ctx, key, replyTarget, "", goal, inbound) {
 					return
 				}
@@ -1271,7 +1272,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		content.Text = text
 
 		key := slackThreadStackKey(replyTarget)
-		if c.bufferSlackStack(ctx, key, content.Text, &content, replyTarget) {
+		if c.bufferSlackStack(ctx, key, content.Text, &content, replyTarget, c.slackPrincipal(ev.User)) {
 			return
 		}
 
@@ -1279,7 +1280,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 
 		c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackImmediatePlaceholder, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
 
-		inbound := newSlackInboundMessage(content.Text, &content, replyTarget)
+		inbound := newSlackInboundMessage(content.Text, &content, replyTarget, c.slackPrincipal(ev.User))
 
 		// Log reading guide: correlate by channel/message_ts/thread_ts. A pre-turn stuck placeholder is proven by a created placeholder, this handoff with pending_placeholder=true, then a submission failure before bridge/rocketcode logs and no later claimed-placeholder log.
 		c.log.Info("handing Slack thread reply to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "response_rooted", responseRooted, "pending_placeholder", c.hasPendingState(replyTarget))
@@ -1336,7 +1337,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		content := c.inboundContentForMessageEvent(ctx, ev)
 		content.Text = text
 
-		inbound := newSlackInboundMessage(goal.Objective, &content, replyTarget)
+		inbound := newSlackInboundMessage(goal.Objective, &content, replyTarget, c.slackPrincipal(ev.User))
 		if !c.startSlackGoal(ctx, key, replyTarget, "main", goal, inbound) {
 			return
 		}
@@ -1365,7 +1366,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 
 		content := c.inboundContentForMessageEvent(ctx, ev)
 		content.Text = text
-		inbound := newSlackInboundMessage(promptText, &content, replyTarget)
+		inbound := newSlackInboundMessage(promptText, &content, replyTarget, c.slackPrincipal(ev.User))
 		c.log.Info("handing Slack thread start to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", candidate.Agent, "pending_placeholder", c.hasPendingState(replyTarget))
 
 		if err := c.threadRouter.StartThread(ctx, candidate.Agent, candidate.PreSeed, events.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, inbound); err != nil {
@@ -1387,7 +1388,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 	content := c.inboundContentForMessageEvent(ctx, ev)
 
 	content.Text = text
-	if !c.acceptMainSlackMessage(ctx, text, &content, replyTarget) {
+	if !c.acceptMainSlackMessage(ctx, text, &content, replyTarget, c.slackPrincipal(ev.User)) {
 		return
 	}
 
@@ -1632,7 +1633,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 	content.Text = promptText
 
 	if isGoal {
-		if !c.startSlackGoal(ctx, key, replyTarget, agent, goal, newSlackInboundMessage(promptText, &content, replyTarget)) {
+		if !c.startSlackGoal(ctx, key, replyTarget, agent, goal, newSlackInboundMessage(promptText, &content, replyTarget, c.slackPrincipal(ev.User))) {
 			return
 		}
 
@@ -1641,7 +1642,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 	c.log.Info("handing Slack social thread to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent, "pending_placeholder", c.hasPendingState(replyTarget))
 
-	if err := c.threadRouter.StartThread(ctx, agent, false, events.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, newSlackInboundMessage(promptText, &content, replyTarget)); err != nil {
+	if err := c.threadRouter.StartThread(ctx, agent, false, events.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, newSlackInboundMessage(promptText, &content, replyTarget, c.slackPrincipal(ev.User))); err != nil {
 		c.log.Error("start Slack social thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent, "pending_placeholder", c.hasPendingState(replyTarget))
 		c.finishSlackStack(key)
 
@@ -1927,11 +1928,15 @@ func (c *Connector) clearReplyState(turnID string) {
 	delete(c.replies, turnID)
 }
 
-func newSlackInboundMessage(text string, content *events.InboundContent, replyTarget *events.SlackReplyTarget) *events.InboundMessage {
+func newSlackInboundMessage(text string, content *events.InboundContent, replyTarget *events.SlackReplyTarget, principal string) *events.InboundMessage {
 	contentCopy := *content
 	contentCopy.Text = text
 
 	inbound := events.NewMainInboundMessageFromContent(events.SourceSlack, events.InboundKindPrompt, "", &contentCopy, true)
+	if principal = strings.TrimSpace(principal); principal != "" {
+		inbound.Metadata = map[string]string{events.InboundPrincipalMetadataKey: principal}
+	}
+
 	if replyTarget != nil && strings.TrimSpace(replyTarget.ThreadTS) != "" {
 		inbound.ConversationID = ""
 	}
@@ -1945,6 +1950,25 @@ func newSlackInboundMessage(text string, content *events.InboundContent, replyTa
 	}
 
 	return inbound
+}
+
+func (c *Connector) slackPrincipal(userID string) string {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return ""
+	}
+
+	if userID == strings.TrimSpace(c.config.HumanUserID) {
+		c.mu.Lock()
+		profile := c.humanProfile
+		c.mu.Unlock()
+
+		if profile != nil && strings.TrimSpace(profile.DisplayName) != "" {
+			return profile.DisplayName
+		}
+	}
+
+	return userID
 }
 
 func slackPendingKey(replyTarget *events.SlackReplyTarget) string {

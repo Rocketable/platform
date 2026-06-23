@@ -345,7 +345,7 @@ func TestInboundContentDownloadsSlackTextFilesIntoPromptText(t *testing.T) {
 	assert.Contains(t, inbound.Text, "please read this\n\nSlack text file attachment payload.json (application/json):\n")
 	assert.Contains(t, inbound.Text, `{"ok":true,"rows":[1,2]}`)
 
-	inbound = newSlackInboundMessage("body", &events.InboundContent{TextAttachments: []string{"Slack text file attachment data.csv:\na,b"}, HadNonImageAttachments: true}, nil)
+	inbound = newSlackInboundMessage("body", &events.InboundContent{TextAttachments: []string{"Slack text file attachment data.csv:\na,b"}, HadNonImageAttachments: true}, nil, "")
 	assert.False(t, inbound.HadNonImageAttachments)
 	assert.Contains(t, inbound.Text, "data.csv")
 }
@@ -357,7 +357,7 @@ func TestNewSlackInboundMessageCopiesAttachments(t *testing.T) {
 	}
 	replyTarget := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "333.444"}
 
-	inbound := newSlackInboundMessage(" ", content, replyTarget)
+	inbound := newSlackInboundMessage(" ", content, replyTarget, "U123")
 	content.Attachments[0].Data[0] = 'X'
 	replyTarget.ThreadTS = "changed"
 
@@ -366,6 +366,7 @@ func TestNewSlackInboundMessageCopiesAttachments(t *testing.T) {
 	assert.Equal(t, events.InboundAttachment{Name: "photo.png", MIMEType: "image/png", Data: []byte("image")}, inbound.Attachments[0])
 	require.NotNil(t, inbound.SlackReply)
 	assert.Equal(t, "333.444", inbound.SlackReply.ThreadTS)
+	assert.Equal(t, "U123", inbound.Metadata[events.InboundPrincipalMetadataKey])
 }
 
 func TestDownloadSlackAttachmentsDownloadsImageFilesAsAttachments(t *testing.T) {

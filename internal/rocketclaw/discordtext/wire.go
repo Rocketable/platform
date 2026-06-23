@@ -61,8 +61,10 @@ type wireConfig struct {
 // textUser is the subset of Discord's User object needed for authors and the READY event's current user.
 // https://docs.discord.com/developers/resources/user#user-object
 type textUser struct {
-	ID  string `json:"id"`
-	Bot bool   `json:"bot"`
+	ID         string `json:"id"`
+	Username   string `json:"username"`
+	GlobalName string `json:"global_name"`
+	Bot        bool   `json:"bot"`
 }
 
 // textChannel is the subset of Discord's Channel object needed to resolve configured text channels and threads.

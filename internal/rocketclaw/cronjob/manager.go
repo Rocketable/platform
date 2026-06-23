@@ -459,6 +459,8 @@ func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 
 	publish := func(label, body string, visible bool) bool {
 		inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindInternalize, label, body, false)
+
+		inbound.Metadata = map[string]string{events.InboundOriginMetadataKey: "Cron", events.InboundMediaMetadataKey: "Text"}
 		if visible {
 			inbound.VerbatimMessage = result.VerbatimMessage
 			inbound.VerbatimAttachments = events.CloneOutboundAttachments(result.Attachments)

@@ -1429,19 +1429,18 @@ func TestReplayInputRawKindReportsInvalidJSON(t *testing.T) {
 }
 
 func TestBuildPromptCoversAttachmentsAndInternalNotes(t *testing.T) {
-	prompt := buildPrompt(&events.InboundMessage{Text: "  hello  ", AttachmentWarnings: []string{" skipped image ", " "}})
-	assert.Contains(t, prompt, "Reply in plain text")
-	assert.Contains(t, prompt, "User message:\nhello\n\nAttachment notes:\n- skipped image")
+	assert.Equal(t, "Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\n\nUser message:\n[Slack media=Text principal=Alice]\n\nhello\n\nAttachment notes:\n- skipped image", buildPrompt(&events.InboundMessage{Source: events.SourceSlack, Human: true, Text: "  hello  ", AttachmentWarnings: []string{" skipped image ", " "}, Metadata: map[string]string{events.InboundPrincipalMetadataKey: "Alice"}}))
 
-	prompt = buildPrompt(&events.InboundMessage{Attachments: []events.InboundAttachment{{Name: "one.png"}, {Name: "two.png"}}})
-	assert.Contains(t, prompt, "User attached 2 files with no accompanying text.")
+	assert.Equal(t, "Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\n\nUser message:\n[Discord media=Voice principal=speaker_1]\n\nUser attached 2 files with no accompanying text.", buildPrompt(&events.InboundMessage{Source: events.SourceDiscordVoice, Human: true, Attachments: []events.InboundAttachment{{Name: "one.png"}, {Name: "two.png"}}, Metadata: map[string]string{events.InboundPrincipalMetadataKey: "speaker 1"}}))
 
-	prompt = buildPrompt(&events.InboundMessage{AttachmentWarnings: []string{" unsupported PDF "}})
-	assert.Contains(t, prompt, "User message:\nAttachment notes:\n- unsupported PDF")
+	assert.Equal(t, "Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\n\nUser message:\n[System media=Text]\n\nAttachment notes:\n- unsupported PDF", buildPrompt(&events.InboundMessage{AttachmentWarnings: []string{" unsupported PDF "}}))
 
-	prompt = buildPrompt(&events.InboundMessage{Kind: events.InboundKindInternalize, Text: "  keep\nspaces  "})
-	assert.Contains(t, prompt, "Internalize the following note")
-	assert.Contains(t, prompt, "Internal note:\n  keep\nspaces  ")
+	assert.Equal(t, "Internalize the following note into the active conversation state exactly as written. Respect the content of the message and do not paraphrase, summarize, translate, or normalize whitespace. Do not reply or acknowledge it unless the human explicitly asks you to.\n\nInternal note:\n[Cron media=Text]\n\n  keep\nspaces  ", buildPrompt(&events.InboundMessage{Source: events.SourceSystem, Kind: events.InboundKindInternalize, Text: "  keep\nspaces  ", Metadata: map[string]string{events.InboundOriginMetadataKey: "Cron", events.InboundMediaMetadataKey: "Text"}}))
+}
+
+func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
+	assert.Equal(t, "[ExternalMCP media=Text principal=Alice_(ops)-lead]", provenanceHeader(promptProvenance{origin: "ExternalMCP", media: "Text", principal: " Alice [ops]=lead "}))
+	assert.Equal(t, promptProvenance{origin: "System", media: "Text"}, provenanceFromInbound(&events.InboundMessage{Source: events.SourceSystem, Metadata: map[string]string{events.InboundOriginMetadataKey: "Mallory", events.InboundMediaMetadataKey: "Dance"}}))
 }
 
 func TestBridgeScheduleMessageSubmitsAfterDelay(t *testing.T) {
