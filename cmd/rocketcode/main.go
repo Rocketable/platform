@@ -131,6 +131,7 @@ CREATE TABLE IF NOT EXISTS session_entries (
 	timestamp TEXT NOT NULL,
 	response_id TEXT NOT NULL DEFAULT '',
 	model TEXT NOT NULL DEFAULT '',
+	token_usage_json TEXT NOT NULL DEFAULT '{}',
 	replay_input_json TEXT NOT NULL DEFAULT '[]',
 	output_trace_json TEXT NOT NULL DEFAULT '[]'
 )`)
@@ -138,12 +139,33 @@ CREATE TABLE IF NOT EXISTS session_entries (
 		return fmt.Errorf("initialize session database: %w", err)
 	}
 
+	if err := ensureSessionColumn(db, "token_usage_json", `ALTER TABLE session_entries ADD COLUMN token_usage_json TEXT NOT NULL DEFAULT '{}'`); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func ensureSessionColumn(db *sql.DB, name, statement string) error {
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('session_entries') WHERE name = ?`, name).Scan(&count); err != nil {
+		return fmt.Errorf("inspect session database schema: %w", err)
+	}
+
+	if count > 0 {
+		return nil
+	}
+
+	if _, err := db.Exec(statement); err != nil {
+		return fmt.Errorf("migrate session database schema: %w", err)
+	}
+
 	return nil
 }
 
 func sqliteSessionIn(db *sql.DB) iter.Seq2[rocketcode.SessionEntry, error] {
 	return func(yield func(rocketcode.SessionEntry, error) bool) {
-		rows, err := db.Query("SELECT version, type, timestamp, response_id, model, replay_input_json, output_trace_json FROM session_entries ORDER BY id")
+		rows, err := db.Query("SELECT version, type, timestamp, response_id, model, token_usage_json, replay_input_json, output_trace_json FROM session_entries ORDER BY id")
 		if err != nil {
 			var zero rocketcode.SessionEntry
 			yield(zero, fmt.Errorf("query session entries: %w", err))
@@ -157,11 +179,12 @@ func sqliteSessionIn(db *sql.DB) iter.Seq2[rocketcode.SessionEntry, error] {
 			var (
 				entry       rocketcode.SessionEntry
 				timestamp   string
+				tokenUsage  []byte
 				replayInput []byte
 				outputTrace []byte
 			)
 
-			if err := rows.Scan(&entry.Version, &entry.Type, &timestamp, &entry.ResponseID, &entry.Model, &replayInput, &outputTrace); err != nil {
+			if err := rows.Scan(&entry.Version, &entry.Type, &timestamp, &entry.ResponseID, &entry.Model, &tokenUsage, &replayInput, &outputTrace); err != nil {
 				var zero rocketcode.SessionEntry
 				yield(zero, fmt.Errorf("scan session entry: %w", err))
 
@@ -177,6 +200,18 @@ func sqliteSessionIn(db *sql.DB) iter.Seq2[rocketcode.SessionEntry, error] {
 			}
 
 			entry.Timestamp = parsed
+
+			if string(tokenUsage) != "{}" {
+				var usage rocketcode.TokenUsage
+				if err := json.Unmarshal(tokenUsage, &usage); err != nil {
+					var zero rocketcode.SessionEntry
+					yield(zero, fmt.Errorf("decode session token usage: %w", err))
+
+					return
+				}
+
+				entry.TokenUsage = &usage
+			}
 
 			if err := json.Unmarshal(replayInput, &entry.ReplayInput); err != nil {
 				var zero rocketcode.SessionEntry
@@ -220,13 +255,25 @@ func sqliteSessionOut(db *sql.DB) func(rocketcode.SessionEntry) error {
 			return fmt.Errorf("encode session output trace: %w", err)
 		}
 
+		tokenUsage := []byte("{}")
+
+		if entry.TokenUsage != nil {
+			var err error
+
+			tokenUsage, err = json.Marshal(entry.TokenUsage)
+			if err != nil {
+				return fmt.Errorf("encode session token usage: %w", err)
+			}
+		}
+
 		_, err = db.Exec(
-			"INSERT INTO session_entries (version, type, timestamp, response_id, model, replay_input_json, output_trace_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+			"INSERT INTO session_entries (version, type, timestamp, response_id, model, token_usage_json, replay_input_json, output_trace_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 			entry.Version,
 			entry.Type,
 			entry.Timestamp.UTC().Format(time.RFC3339Nano),
 			entry.ResponseID,
 			entry.Model,
+			string(tokenUsage),
 			string(replayInput),
 			string(outputTrace),
 		)

@@ -323,6 +323,7 @@ func TestOpenSessionStoresEntriesInSQLite(t *testing.T) {
 		Timestamp:   time.Unix(123, 456).UTC(),
 		ResponseID:  "resp-1",
 		Model:       "model-1",
+		TokenUsage:  &rocketcode.TokenUsage{PromptTokens: 12, CompletionTokens: 5, TotalTokens: 17, PromptCacheReadTokens: 3, PromptCacheWriteTokens: 4, CompletionReasoningTokens: 2},
 		ReplayInput: replayInput,
 		OutputTrace: nil,
 	}
@@ -337,6 +338,7 @@ func TestOpenSessionStoresEntriesInSQLite(t *testing.T) {
 	require.Equal(t, entry.Timestamp, entries[0].Timestamp)
 	require.Equal(t, entry.ResponseID, entries[0].ResponseID)
 	require.Equal(t, entry.Model, entries[0].Model)
+	require.Equal(t, entry.TokenUsage, entries[0].TokenUsage)
 	require.Len(t, entries[0].ReplayInput, 2)
 	require.JSONEq(t, `{"content":"hello","role":"user","type":"message"}`, string(entries[0].ReplayInput[0]))
 	require.JSONEq(t, `{"content":"hi","phase":"final_answer","role":"assistant","type":"message"}`, string(entries[0].ReplayInput[1]))

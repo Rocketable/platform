@@ -85,6 +85,7 @@ func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
 
 	first := testSessionEntry("first", "assistant")
 	second := testSessionEntry("second", "assistant")
+	second.TokenUsage = &harness.TokenUsage{PromptTokens: 12, CompletionTokens: 5, TotalTokens: 17}
 	id1, err := service.AppendEntryID(context.Background(), "main", first)
 	require.NoError(t, err)
 	id2, err := service.AppendEntryID(context.Background(), "main", second)

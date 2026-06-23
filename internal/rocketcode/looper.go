@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
+	openairespjson "github.com/openai/openai-go/v3/packages/respjson"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 	"go.opentelemetry.io/otel/attribute"
@@ -354,8 +356,109 @@ type SessionEntry struct {
 	Timestamp   time.Time         `json:"timestamp"`
 	ResponseID  string            `json:"response_id,omitempty"`
 	Model       string            `json:"model,omitempty"`
+	TokenUsage  *TokenUsage       `json:"token_usage,omitempty"`
 	ReplayInput []json.RawMessage `json:"replay_input,omitempty"`
 	OutputTrace []json.RawMessage `json:"output_trace,omitempty"`
+}
+
+// TokenUsage records replay-neutral provider token counts for a completed turn.
+type TokenUsage struct {
+	PromptTokens              int64 `json:"prompt_tokens,omitempty"`
+	CompletionTokens          int64 `json:"completion_tokens,omitempty"`
+	TotalTokens               int64 `json:"total_tokens,omitempty"`
+	PromptCacheReadTokens     int64 `json:"prompt_cache_read_tokens,omitempty"`
+	PromptCacheWriteTokens    int64 `json:"prompt_cache_write_tokens,omitempty"`
+	CompletionReasoningTokens int64 `json:"completion_reasoning_tokens,omitempty"`
+}
+
+func (u *TokenUsage) add(other TokenUsage) {
+	u.PromptTokens += other.PromptTokens
+	u.CompletionTokens += other.CompletionTokens
+	u.TotalTokens += other.TotalTokens
+	u.PromptCacheReadTokens += other.PromptCacheReadTokens
+	u.PromptCacheWriteTokens += other.PromptCacheWriteTokens
+	u.CompletionReasoningTokens += other.CompletionReasoningTokens
+}
+
+func (e *SessionEntry) addTokenUsageFromResponse(resp *responses.Response) {
+	usage, ok := tokenUsageFromResponse(resp)
+	if !ok {
+		return
+	}
+
+	if e.TokenUsage == nil {
+		e.TokenUsage = &TokenUsage{}
+	}
+
+	e.TokenUsage.add(usage)
+}
+
+func (u TokenUsage) attributes() []attribute.KeyValue {
+	attrs := []attribute.KeyValue{}
+	if u.PromptTokens != 0 {
+		attrs = append(attrs, attribute.Int64(semconv.LLMTokenCountPrompt, u.PromptTokens))
+	}
+
+	if u.CompletionTokens != 0 {
+		attrs = append(attrs, attribute.Int64(semconv.LLMTokenCountCompletion, u.CompletionTokens))
+	}
+
+	if u.TotalTokens != 0 {
+		attrs = append(attrs, attribute.Int64(semconv.LLMTokenCountTotal, u.TotalTokens))
+	}
+
+	if u.PromptCacheReadTokens != 0 {
+		attrs = append(attrs, attribute.Int64(semconv.LLMTokenCountPromptDetailsCacheRead, u.PromptCacheReadTokens))
+	}
+
+	if u.PromptCacheWriteTokens != 0 {
+		attrs = append(attrs, attribute.Int64(semconv.LLMTokenCountPromptDetailsCacheWrite, u.PromptCacheWriteTokens))
+	}
+
+	if u.CompletionReasoningTokens != 0 {
+		attrs = append(attrs, attribute.Int64(semconv.LLMTokenCountCompletionDetailsReasoning, u.CompletionReasoningTokens))
+	}
+
+	return attrs
+}
+
+func tokenUsageFromResponse(resp *responses.Response) (TokenUsage, bool) {
+	if resp == nil || !presentOpenAIField(resp.JSON.Usage) {
+		return TokenUsage{}, false
+	}
+
+	var usage TokenUsage
+	if presentOpenAIField(resp.Usage.JSON.InputTokens) {
+		usage.PromptTokens = resp.Usage.InputTokens
+	}
+
+	if presentOpenAIField(resp.Usage.JSON.OutputTokens) {
+		usage.CompletionTokens = resp.Usage.OutputTokens
+	}
+
+	if presentOpenAIField(resp.Usage.JSON.TotalTokens) {
+		usage.TotalTokens = resp.Usage.TotalTokens
+	}
+
+	if presentOpenAIField(resp.Usage.InputTokensDetails.JSON.CachedTokens) {
+		usage.PromptCacheReadTokens = resp.Usage.InputTokensDetails.CachedTokens
+	}
+
+	if field, ok := resp.Usage.JSON.ExtraFields["cache_creation_input_tokens"]; ok && presentOpenAIField(field) {
+		if tokens, errParse := strconv.ParseInt(field.Raw(), 10, 64); errParse == nil {
+			usage.PromptCacheWriteTokens = tokens
+		}
+	}
+
+	if presentOpenAIField(resp.Usage.OutputTokensDetails.JSON.ReasoningTokens) {
+		usage.CompletionReasoningTokens = resp.Usage.OutputTokensDetails.ReasoningTokens
+	}
+
+	return usage, true
+}
+
+func presentOpenAIField(field openairespjson.Field) bool {
+	return field.Raw() != openairespjson.Omitted && field.Valid()
 }
 
 // Loop processes input lines until input closes or a runtime error occurs.
@@ -563,6 +666,7 @@ func (l *looper) runTurn(
 		}
 
 		record.ResponseID = resp.ID
+		record.addTokenUsageFromResponse(resp)
 		l.emitHostedToolDiagnostics(output, resp.Output)
 		rendered = append(rendered, responseChatResponses(resp.Output)...)
 
@@ -661,6 +765,10 @@ func (l *looper) newProviderResponse(ctx context.Context, params *responses.Resp
 
 		if resp != nil {
 			span.span.SetAttributes(attribute.String("rocketcode.response_id", resp.ID))
+
+			if usage, ok := tokenUsageFromResponse(resp); ok {
+				span.span.SetAttributes(usage.attributes()...)
+			}
 		}
 
 		span.span.End()

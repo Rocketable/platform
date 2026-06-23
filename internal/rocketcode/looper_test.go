@@ -1612,7 +1612,7 @@ func TestLooperPrintsReasoningSummary(t *testing.T) {
 }
 
 func TestLooperUpdatesSessionStoreAfterCompletedTurn(t *testing.T) {
-	mock := mockResponses(responseWithMessage("resp-save", "saved answer"))
+	mock := mockResponses(responseWithUsage(responseWithMessage("resp-save", "saved answer"), `{"input_tokens":12,"input_tokens_details":{"cached_tokens":3},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":2},"total_tokens":17}`))
 	store := testSessionStore()
 	looper := testLooper(mock)
 	output := make(chan ChatResponse, 10)
@@ -1629,6 +1629,7 @@ func TestLooperUpdatesSessionStoreAfterCompletedTurn(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, store.saves, 1)
 	require.Len(t, store.saves[0], 1)
+	require.Equal(t, &TokenUsage{PromptTokens: 12, CompletionTokens: 5, TotalTokens: 17, PromptCacheReadTokens: 3, CompletionReasoningTokens: 2}, store.saves[0][0].TokenUsage)
 	require.Equal(t, []ChatResponse{assistantMessage("saved answer")}, collectResponses(output))
 }
 
@@ -1884,6 +1885,18 @@ func TestLooperLoopRequiresPromptResponseChannel(t *testing.T) {
 
 func responseWithMessage(id, text string) *responses.Response {
 	return testResponse(id, []responses.ResponseOutputItemUnion{testMessageOutputItem(id+"-msg", "", text)})
+}
+
+func responseWithUsage(resp *responses.Response, usageJSON string) *responses.Response {
+	var usageResponse responses.Response
+	if err := json.Unmarshal([]byte(`{"usage":`+usageJSON+`}`), &usageResponse); err != nil {
+		panic(err)
+	}
+
+	resp.Usage = usageResponse.Usage
+	resp.JSON.Usage = usageResponse.JSON.Usage
+
+	return resp
 }
 
 func failedResponseWithCode(id string, code responses.ResponseErrorCode, message string) *responses.Response {

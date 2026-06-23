@@ -42,6 +42,17 @@ func TestAnthropicResponseMapsToolUse(t *testing.T) {
 	require.Equal(t, string(input), response.Output[0].Arguments.OfString)
 }
 
+func TestAnthropicResponseMapsUsage(t *testing.T) {
+	var message anthropic.BetaMessage
+	require.NoError(t, json.Unmarshal([]byte(`{"id":"msg_1","usage":{"input_tokens":12,"cache_read_input_tokens":3,"cache_creation_input_tokens":4,"output_tokens":5,"output_tokens_details":{"thinking_tokens":2}},"content":[{"type":"text","text":"done"}]}`), &message))
+
+	response := anthropicResponse(&message)
+	usage, ok := tokenUsageFromResponse(response)
+
+	require.True(t, ok)
+	require.Equal(t, TokenUsage{PromptTokens: 12, CompletionTokens: 5, TotalTokens: 17, PromptCacheReadTokens: 3, PromptCacheWriteTokens: 4, CompletionReasoningTokens: 2}, usage)
+}
+
 func TestAnthropicCompactionRoundTripsThroughReplay(t *testing.T) {
 	var message anthropic.BetaMessage
 	require.NoError(t, json.Unmarshal([]byte(`{"id":"msg_1","content":[{"type":"compaction","content":"summary of prior work","encrypted_content":"encrypted-compact"},{"type":"text","text":"continuing"}]}`), &message))

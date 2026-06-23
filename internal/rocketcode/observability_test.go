@@ -21,7 +21,7 @@ func TestObservabilityEmitsAgentProviderAndToolSpans(t *testing.T) {
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	looper := testLooper(mockResponses(
 		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "read", `{"filePath":"secret.txt"}`)}),
-		responseWithMessage("resp-final", "final answer"),
+		responseWithUsage(responseWithMessage("resp-final", "final answer"), `{"input_tokens":12,"input_tokens_details":{"cached_tokens":3},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":2},"total_tokens":17}`),
 	))
 	looper.agent = Agent{Name: "main"}
 	looper.DisplayModel = "openai/gpt-test"
@@ -48,6 +48,11 @@ func TestObservabilityEmitsAgentProviderAndToolSpans(t *testing.T) {
 	require.Equal(t, "rocketcode.turn", spans[3].Name())
 	require.Contains(t, spans[3].Attributes(), attribute.String(semconv.InputValue, "inspect secret"))
 	require.Contains(t, spans[3].Attributes(), attribute.String(semconv.OutputValue, "final answer"))
+	require.Contains(t, spans[2].Attributes(), attribute.Int64(semconv.LLMTokenCountPrompt, 12))
+	require.Contains(t, spans[2].Attributes(), attribute.Int64(semconv.LLMTokenCountCompletion, 5))
+	require.Contains(t, spans[2].Attributes(), attribute.Int64(semconv.LLMTokenCountTotal, 17))
+	require.Contains(t, spans[2].Attributes(), attribute.Int64(semconv.LLMTokenCountPromptDetailsCacheRead, 3))
+	require.Contains(t, spans[2].Attributes(), attribute.Int64(semconv.LLMTokenCountCompletionDetailsReasoning, 2))
 	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.InputValue, `{"filePath":"secret.txt"}`))
 	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.OutputValue, "file contents"))
 }

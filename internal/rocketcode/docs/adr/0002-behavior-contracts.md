@@ -32,10 +32,11 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 
 ### Session And Replay
 
-- Completed non-interrupted turns append `SessionEntry` rows with version `1`, type `turn`, UTC timestamp, model, replay input, replay output, and output trace.
+- Completed non-interrupted turns append `SessionEntry` rows with version `1`, type `turn`, UTC timestamp, model, replay input, replay output, output trace, and replay-neutral provider token-usage metadata when providers return it.
 - Session history is loaded lazily on the first non-empty prompt and ordered by stored row id.
 - Empty prompt input with no attachments closes that response channel and does not call the model.
 - Replay preserves user and developer messages, assistant messages, reasoning encrypted content, compaction items, function calls, function-call outputs, and supported web-search calls using RocketCode's existing OpenAI Responses-shaped replay encoding, regardless of the provider used for a turn.
+- Persisted provider token-usage metadata records numeric token counts only and must not affect replay input, prompt framing, provider routing, tool execution, or model-visible results.
 - Newly persisted provider-routed turns store provider-qualified model names. Existing unqualified stored model names remain readable as OpenAI models.
 - Response output items that cannot be converted back into replay input are recorded in output trace rather than silently becoming prompt input.
 - Replay decode errors identify the entry, item, and kind involved.
@@ -135,3 +136,4 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 - 2026-06-22: Added Codex-compatible rate-limit retry and diagnostics contracts for surfaced OpenAI provider errors with a retryable `too_many_requests` provider extension.
 - 2026-06-22: Added provider retry/error OpenTelemetry span events for provider diagnostics without changing final span status on successful retries.
 - 2026-06-22: Added Anthropic beta server-side compaction block persistence and replay semantics.
+- 2026-06-23: Added replay-neutral provider token-usage metadata to completed session entries when providers return token counts.

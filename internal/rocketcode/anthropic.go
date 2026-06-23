@@ -11,6 +11,8 @@ import (
 	"time"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
+	anthropicrespjson "github.com/anthropics/anthropic-sdk-go/packages/respjson"
+	openairespjson "github.com/openai/openai-go/v3/packages/respjson"
 	"github.com/openai/openai-go/v3/responses"
 )
 
@@ -287,6 +289,11 @@ func anthropicResponse(message *anthropic.BetaMessage) *responses.Response {
 	var response responses.Response
 
 	response.ID = message.ID
+	if usage, ok := anthropicResponseUsage(message); ok {
+		response.Usage = usage
+		response.JSON.Usage = openairespjson.NewField("{}")
+	}
+
 	for i := range message.Content {
 		block := message.Content[i]
 		switch block.Type {
@@ -308,4 +315,51 @@ func anthropicResponse(message *anthropic.BetaMessage) *responses.Response {
 	}
 
 	return &response
+}
+
+func anthropicResponseUsage(message *anthropic.BetaMessage) (responses.ResponseUsage, bool) {
+	if message == nil || !presentAnthropicField(message.JSON.Usage) {
+		return responses.ResponseUsage{}, false
+	}
+
+	var usage responses.ResponseUsage
+	if presentAnthropicField(message.Usage.JSON.InputTokens) {
+		usage.InputTokens = message.Usage.InputTokens
+		usage.JSON.InputTokens = openairespjson.NewField(strconv.FormatInt(usage.InputTokens, 10))
+	}
+
+	if presentAnthropicField(message.Usage.JSON.OutputTokens) {
+		usage.OutputTokens = message.Usage.OutputTokens
+		usage.JSON.OutputTokens = openairespjson.NewField(strconv.FormatInt(usage.OutputTokens, 10))
+	}
+
+	if presentAnthropicField(message.Usage.JSON.InputTokens) && presentAnthropicField(message.Usage.JSON.OutputTokens) {
+		usage.TotalTokens = message.Usage.InputTokens + message.Usage.OutputTokens
+		usage.JSON.TotalTokens = openairespjson.NewField(strconv.FormatInt(usage.TotalTokens, 10))
+	}
+
+	if presentAnthropicField(message.Usage.JSON.CacheReadInputTokens) {
+		usage.InputTokensDetails.CachedTokens = message.Usage.CacheReadInputTokens
+		usage.InputTokensDetails.JSON.CachedTokens = openairespjson.NewField(strconv.FormatInt(usage.InputTokensDetails.CachedTokens, 10))
+	}
+
+	if presentAnthropicField(message.Usage.JSON.CacheCreationInputTokens) {
+		usage.JSON.ExtraFields = map[string]openairespjson.Field{
+			"cache_creation_input_tokens": openairespjson.NewField(strconv.FormatInt(message.Usage.CacheCreationInputTokens, 10)),
+		}
+	}
+
+	if presentAnthropicField(message.Usage.OutputTokensDetails.JSON.ThinkingTokens) {
+		usage.OutputTokensDetails.ReasoningTokens = message.Usage.OutputTokensDetails.ThinkingTokens
+		usage.OutputTokensDetails.JSON.ReasoningTokens = openairespjson.NewField(strconv.FormatInt(usage.OutputTokensDetails.ReasoningTokens, 10))
+	}
+
+	usage.JSON.InputTokensDetails = openairespjson.NewField("{}")
+	usage.JSON.OutputTokensDetails = openairespjson.NewField("{}")
+
+	return usage, true
+}
+
+func presentAnthropicField(field anthropicrespjson.Field) bool {
+	return field.Raw() != anthropicrespjson.Omitted && field.Valid()
 }
