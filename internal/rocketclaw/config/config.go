@@ -35,7 +35,6 @@ type Config struct {
 	Anthropic                                AnthropicConfig                   `json:"anthropic"`
 	OpenAICompatible                         map[string]OpenAICompatibleConfig `json:"openai_compatible,omitempty"`
 	Instrumentation                          InstrumentationConfig             `json:"instrumentation"`
-	RocketCode                               RocketCodeConfig                  `json:"rocketcode"`
 }
 
 // DefaultWorkDir is the generated runtime directory for rocketclaw configs.
@@ -152,11 +151,6 @@ type OpenAICompatibleConfig struct {
 	APIKey  string `json:"api_key"`
 	BaseURL string `json:"base_url"`
 	Mode    string `json:"mode"`
-}
-
-// RocketCodeConfig configures RocketCode embedding behavior.
-type RocketCodeConfig struct {
-	AutoApprovePermissions bool `json:"auto_approve_permissions"`
 }
 
 // InstrumentationConfig configures OpenTelemetry/OpenInference tracing.

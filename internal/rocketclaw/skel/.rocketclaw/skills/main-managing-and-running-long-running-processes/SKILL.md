@@ -135,7 +135,7 @@ permission:
 
 Add process-specific `bash`, `read`, `edit`, `grep`, or `glob` permissions only when the monitor actually needs them. Do not write broad `bash: allow`, broad `edit: allow`, or catch-all permission grants.
 
-Prefer exact `allow` rules for routine monitor commands. If the human wants reviewer-gated access for riskier operational commands, use `auto` only when `rocketcode.auto_approve_permissions` is enabled and document why deterministic `allow` is not appropriate.
+Prefer exact `allow` rules for routine monitor commands. If the human wants reviewer-gated access for riskier operational commands, use `auto` and document why deterministic `allow` is not appropriate.
 
 # Troubleshooting
 

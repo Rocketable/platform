@@ -19,7 +19,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 
 | File or directory | Contract |
 | --- | --- |
-| `rocketclaw.json` | Main runtime config. Relative `workspace` resolves relative to the config file. At least one of Discord voice, Discord text, Slack, external MCP, or web UI must be enabled. Slack and Discord text are mutually exclusive primary text connectors. Optional `overlays` entries name git repositories whose `agents/`, `skills/`, `cron/`, and `scripts/` trees are applied during startup. Optional `anthropic` entries configure Anthropic-backed RocketCode requests. Optional top-level `openai_compatible` entries configure named OpenAI-compatible RocketCode providers. A text-only deployment whose loaded RocketCode agents resolve only to configured `openai_compatible` providers may omit first-party OpenAI credentials and ChatGPT OAuth. Optional `rocketcode` entries configure RocketCode embedding flags. |
+| `rocketclaw.json` | Main runtime config. Relative `workspace` resolves relative to the config file. At least one of Discord voice, Discord text, Slack, external MCP, or web UI must be enabled. Slack and Discord text are mutually exclusive primary text connectors. Optional `overlays` entries name git repositories whose `agents/`, `skills/`, `cron/`, and `scripts/` trees are applied during startup. Optional `anthropic` entries configure Anthropic-backed RocketCode requests. Optional top-level `openai_compatible` entries configure named OpenAI-compatible RocketCode providers. A text-only deployment whose loaded RocketCode agents resolve only to configured `openai_compatible` providers may omit first-party OpenAI credentials and ChatGPT OAuth. RocketClaw does not expose a `rocketcode` runtime config object for automatic permission review. |
 | `femtoclaw.json` | Legacy runtime config. If present, startup and operational commands load it instead of `rocketclaw.json` and use `.femtoclaw/` as the generated runtime directory. It supports the same optional `overlays` entries as `rocketclaw.json`. |
 | `rocketclaw.users.json` | Optional external MCP Basic Auth users next to `rocketclaw.json`. If present, it must be a JSON object and file mode `0600`. Missing means MCP runs without auth. |
 | `AGENTS.md` | Workspace instruction file generated when missing. Loaded literally; no shell interpolation. |
@@ -47,7 +47,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - Empty `minimum_wait_after_human_interaction` means `0s`; setup writes `5m` explicitly.
 - Empty or omitted `thread_agents` uses the baseline `:thread:` and `:twisted_rightward_arrows:` routes; a non-empty custom map replaces the baseline.
 - Empty or omitted `overlays` means no intermediate git overlays. Non-empty entries are applied in array order after embedded assets and before local workspace overlays.
-- Empty or omitted `rocketcode.auto_approve_permissions` defaults to `false`. When true, RocketClaw enables RocketCode automatic permission review for `auto` permission rules in both persistent bridge and raw-run construction paths.
+- RocketClaw does not load or honor `rocketcode.auto_approve_permissions`. Both persistent bridge and raw-run construction paths enable RocketCode automatic permission review unconditionally for `auto` permission rules.
 - `discord_text.enabled` requires `discord_text.token`, `discord_text.channel_id`, and `discord_text.human_user_id`.
 - `slack.enabled` and `discord_text.enabled` must not both be true.
 - The enabled primary text connector may define social-mode channel mappings. The canonical mapping shape is one connector channel, one agent, and non-empty `allowed_user_ids`.
@@ -153,3 +153,4 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-19: Added cmux `/new [agent]` operational expectations for caller-context terminal surface creation.
 - 2026-06-22: Added top-level `openai_compatible` runtime configuration for named OpenAI-compatible RocketCode providers.
 - 2026-06-23: Made first-party OpenAI credentials conditional and documented compatible-only RocketCode text deployment expectations.
+- 2026-06-24: Removed the optional `rocketcode.auto_approve_permissions` runtime config knob and specified that RocketClaw always enables RocketCode automatic permission review in persistent bridge and raw-run paths.

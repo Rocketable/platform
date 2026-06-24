@@ -24,7 +24,7 @@ Several rocketclaw capabilities exist only because of precise RocketCode configu
 | Persistent bridge | `internal/rocketclaw/harnessbridge/bridge.go`  | Main, thread, Slack, Discord text, terminal CLI, browser, Discord voice, scheduled, and external MCP conversation turns. | `InputPrompts: false`  |
 | Raw run           | `internal/rocketclaw/harnessbridge/raw_run.go` | Cron and one-off cron background turns.                                                | `InputPrompts: true`   |
 
-Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell expansion. Persistent bridge input text remains literal. Raw input text expands because cron bodies are trusted workspace files. Both paths construct RocketCode with a provider registry that can route provider-qualified OpenAI, Anthropic, and named OpenAI-compatible model requests. The registry contains the configured or required clients for selected resolved models and does not require a first-party OpenAI client when no first-party OpenAI RocketCode path is selected. Both paths pass `rocketcode.auto_approve_permissions` through to RocketCode's `AutoApprovePermissions` flag.
+Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell expansion. Persistent bridge input text remains literal. Raw input text expands because cron bodies are trusted workspace files. Both paths construct RocketCode with a provider registry that can route provider-qualified OpenAI, Anthropic, and named OpenAI-compatible model requests. The registry contains the configured or required clients for selected resolved models and does not require a first-party OpenAI client when no first-party OpenAI RocketCode path is selected. Both paths set RocketCode's `AutoApprovePermissions` flag to true unconditionally.
 
 Both construction paths must pass RocketClaw-originated `rocketcode.PromptInput` text using the trusted provenance header defined in ADR 0002. The persistent bridge derives `Origin`, `Media`, and optional `Name` from the inbound turn's RocketClaw runtime source, media, and principal metadata. Raw-run cron inputs use `Origin=Cron`, `Media=Text`, and omit `principal`. Adding this header must not alter `InputPrompts` expansion settings, which prompt bodies are eligible for shell interpolation, attachment normalization, session replay, tool injection, connector delivery behavior, or authorization decisions.
 
@@ -94,9 +94,9 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 
 ### Automatic Permission Review
 
-- RocketClaw does not implement its own automatic permission reviewer. It only passes the loaded `rocketcode.auto_approve_permissions` config value into RocketCode for both persistent bridge and raw-run paths.
-- When `rocketcode.auto_approve_permissions` is false or omitted, RocketCode `auto` permission rules fail closed according to RocketCode behavior.
-- When `rocketcode.auto_approve_permissions` is true, RocketCode owns reviewer resolution, embedded guardian behavior, custom `auto(name)` reviewer execution, reserved reviewer-name validation, and fail-closed review semantics.
+- RocketClaw does not implement its own automatic permission reviewer and does not expose a `rocketclaw.json` flag for automatic permission review.
+- Persistent bridge and raw-run construction paths always enable RocketCode automatic permission review. RocketCode `auto` permission rules therefore route to RocketCode's automatic reviewer instead of failing closed because of RocketClaw configuration.
+- RocketCode owns reviewer resolution, embedded guardian behavior, custom `auto(name)` reviewer execution, reserved reviewer-name validation, and fail-closed review semantics.
 - The RocketClaw linter, agent graph, and goal-check script validation continue to use deterministic allow/deny permission evaluation unless a separate ADR explicitly expands them to model automatic review outcomes.
 
 ### Tools Injected By RocketClaw
@@ -211,3 +211,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-23: Required Anthropic response checkpoint seeding parity, including internal capability parity, through Anthropic-compatible summarization and replay projection instead of treating Anthropic as unsupported.
 - 2026-06-23: Required RocketClaw to enforce RocketCode's non-empty model frontmatter requirement for every loaded agent across embedded, generated, configured-overlay, and workspace-overlay sources.
 - 2026-06-23: Strengthened RocketClaw provider-family parity requirements for provider construction, shared tools, and response checkpoint seeding.
+- 2026-06-24: Removed RocketClaw pass-through of `rocketcode.auto_approve_permissions` and required persistent bridge and raw-run construction paths to set RocketCode `AutoApprovePermissions` true unconditionally.

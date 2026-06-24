@@ -533,7 +533,7 @@ func TestRunRawReturnsProgressThinkingError(t *testing.T) {
 	require.ErrorIs(t, err, errProgress)
 }
 
-func TestRunRawPassesAutoApprovePermissions(t *testing.T) {
+func TestRunRawAlwaysEnablesAutoApprovePermissions(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\npermission:\n  bash:\n    \"printf ok\": auto\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -561,7 +561,7 @@ func TestRunRawPassesAutoApprovePermissions(t *testing.T) {
 		case 1:
 			writeRawRunFunctionCall(t, w, "resp_1", "call_1", "bash", map[string]string{"command": "printf ok", "description": "print ok"})
 		case 2:
-			writeRawRunMessage(t, w, "resp_2", "msg_2", `{"approved":true,"risk":"low","authorization":"unknown","reason":"Low-risk action."}`)
+			writeRawRunMessage(t, w, "resp_2", "msg_2", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low-risk action."}`)
 		case 3:
 			writeRawRunFunctionCall(t, w, "resp_3", "call_3", rawRunToolName, map[string]string{"payload": "done"})
 		case 4:
@@ -572,7 +572,7 @@ func TestRunRawPassesAutoApprovePermissions(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	result, err := RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, RocketCode: config.RocketCodeConfig{AutoApprovePermissions: true}}, "main", "prompt", slog.New(slog.DiscardHandler), newInertRawRunProgress())
+	result, err := RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, "main", "prompt", slog.New(slog.DiscardHandler), newInertRawRunProgress())
 
 	require.NoError(t, err)
 	require.Equal(t, RawRunResult{Text: "assistant text", VerbatimMessage: "done"}, result)
