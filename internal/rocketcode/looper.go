@@ -162,7 +162,8 @@ type dispatchedToolOutput struct {
 }
 
 type compactionBlock struct {
-	end int
+	end      int
+	complete bool
 }
 
 type doomLoopTrap struct {
@@ -858,6 +859,10 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 		}
 
 		if resp.Status != responses.ResponseStatusFailed {
+			if err := l.compactChatCompletionResponse(ctx, params, resp); err != nil {
+				return nil, nil, err
+			}
+
 			return resp, nil, nil
 		}
 
@@ -988,11 +993,50 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 	return nil, nil, errLast
 }
 
+func (l *looper) compactChatCompletionResponse(ctx context.Context, params *responses.ResponseNewParams, resp *responses.Response) error {
+	switch l.Client.(type) {
+	case chatCompletionServiceClient, *chatCompletionServiceClient:
+	default:
+		return nil
+	}
+
+	usage, ok := tokenUsageFromResponse(resp)
+	if !ok || usage.TotalTokens < l.compactThreshold() {
+		return nil
+	}
+
+	if slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type == "compaction" }) {
+		return nil
+	}
+
+	original := params.Input.OfInputItemList
+
+	blocks := compactionBlocks(original)
+	if len(blocks) == 0 || !blocks[len(blocks)-1].complete {
+		return nil
+	}
+
+	compactParams := responses.ResponseCompactParams{
+		Model:        responses.ResponseCompactParamsModel(params.Model),
+		Instructions: params.Instructions,
+		Input:        responses.ResponseCompactParamsInputUnion{OfResponseInputItemArray: original},
+	}
+
+	compacted, err := l.Client.Compact(ctx, &compactParams)
+	if err != nil {
+		return fmt.Errorf("compact chat completion response: %w", err)
+	}
+
+	resp.Output = append(append([]responses.ResponseOutputItemUnion{}, compacted.Output...), resp.Output...)
+
+	return nil
+}
+
 func compactionBlocks(items []responses.ResponseInputItemUnionParam) []compactionBlock {
 	blocks := make([]compactionBlock, 0, len(items))
 	for i := 0; i < len(items); {
 		if items[i].OfFunctionCall == nil {
-			blocks = append(blocks, compactionBlock{end: i + 1})
+			blocks = append(blocks, compactionBlock{end: i + 1, complete: true})
 			i++
 
 			continue
@@ -1001,6 +1045,8 @@ func compactionBlocks(items []responses.ResponseInputItemUnionParam) []compactio
 		pending := map[string]bool{}
 
 		end := len(items)
+		complete := false
+
 		for j := i; j < len(items); j++ {
 			if call := items[j].OfFunctionCall; call != nil {
 				pending[call.CallID] = true
@@ -1012,12 +1058,13 @@ func compactionBlocks(items []responses.ResponseInputItemUnionParam) []compactio
 
 			if j > i && len(pending) == 0 {
 				end = j + 1
+				complete = true
 
 				break
 			}
 		}
 
-		blocks = append(blocks, compactionBlock{end: end})
+		blocks = append(blocks, compactionBlock{end: end, complete: complete})
 		i = end
 	}
 
@@ -1725,6 +1772,18 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion, origin
 			summary = item.Summary[0].Text
 		}
 
+		if summary == "" {
+			parts := make([]string, 0, len(item.Content))
+			for i := range item.Content {
+				content := item.Content[i]
+				if content.Type == "output_text" {
+					parts = append(parts, content.Text)
+				}
+			}
+
+			summary = strings.Join(parts, "")
+		}
+
 		if item.CreatedBy == modelProviderAnthropic {
 			originProvider = modelProviderAnthropic
 			originCompatibleProvider = ""
@@ -1751,7 +1810,9 @@ func (l *looper) compactionOrigin() (originProvider, originCompatibleProvider, o
 	originCompatibleProvider = l.modelRef.compatibleProvider
 
 	originMode = string(OpenAICompatibleModeResponses)
-	if _, ok := l.Client.(chatCompletionServiceClient); ok {
+
+	switch l.Client.(type) {
+	case chatCompletionServiceClient, *chatCompletionServiceClient:
 		originMode = string(OpenAICompatibleModeChatCompletions)
 	}
 

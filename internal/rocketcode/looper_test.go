@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -797,6 +798,112 @@ func TestLooperDoesNotCompactOtherProviderErrors(t *testing.T) {
 
 	require.Error(t, err)
 	require.Empty(t, mock.compactCalls)
+}
+
+func TestLooperAutoCompactsCompatibleChatCompletionAboveThreshold(t *testing.T) {
+	calls := 0
+	compactCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+
+			return
+		}
+
+		calls++
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if calls == 2 {
+			compactCalls++
+
+			_, err = io.WriteString(w, `{"id":"chatcmpl-compact","object":"chat.completion","created":1,"model":"gpt-oss","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"summary of prior context"}}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`)
+			if err != nil {
+				t.Errorf("write compact response body: %v", err)
+			}
+
+			return
+		}
+
+		_, err = io.WriteString(w, `{"id":"chatcmpl-final","object":"chat.completion","created":1,"model":"gpt-oss","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"answer"}}],"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}`)
+		if err != nil {
+			t.Errorf("write final response body: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
+	looper := testCompatibleLoop(t, &client, OpenAICompatibleModeChatCompletions)
+	looper.CompactThreshold = 10
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "question", output)
+
+	close(input)
+
+	var saved []SessionEntry
+
+	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
+		saved = append(saved, entry)
+
+		return nil
+	}, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
+	require.Equal(t, 1, compactCalls)
+	require.Len(t, saved, 1)
+
+	items, err := ReplayInputToParams(saved[0].ReplayInput)
+	require.NoError(t, err)
+	require.Len(t, items, 3)
+	require.JSONEq(t, `{"content":"summary of prior context","encrypted_content":"","id":"chatcmpl-compact-compaction","origin_compatible_provider":"local","origin_mode":"chat_completions","origin_provider":"openai-compatible","type":"compaction"}`, marshalJSON(t, items[1]))
+}
+
+func TestLooperSkipsCompatibleChatAutoCompactionWithUnansweredToolCall(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+
+			return
+		}
+
+		calls++
+
+		w.Header().Set("Content-Type", "application/json")
+
+		_, err = io.WriteString(w, `{"id":"chatcmpl-final","object":"chat.completion","created":1,"model":"gpt-oss","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"answer"}}],"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}`)
+		if err != nil {
+			t.Errorf("write final response body: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		testInputMessage(responses.EasyInputMessageRole("user"), "old question", ""),
+		functionCallReplayInput("tool-1", "call-1", "lookup", `{"q":"x"}`),
+	})
+	require.NoError(t, err)
+
+	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
+	looper := testCompatibleLoop(t, &client, OpenAICompatibleModeChatCompletions)
+	looper.CompactThreshold = 10
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "new question", output)
+
+	close(input)
+
+	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
+	require.Equal(t, 1, calls)
 }
 
 func TestLooperPersistsAndReplaysWebSearchCalls(t *testing.T) {

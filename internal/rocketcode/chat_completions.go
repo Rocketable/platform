@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	openairespjson "github.com/openai/openai-go/v3/packages/respjson"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 )
@@ -331,6 +333,22 @@ func chatCompletionResponseFormat(format responses.ResponseFormatTextConfigUnion
 
 func chatCompletionResponse(completion *openai.ChatCompletion) *responses.Response {
 	resp := &responses.Response{ID: completion.ID, Model: completion.Model}
+	if presentOpenAIField(completion.JSON.Usage) || completion.Usage.PromptTokens != 0 || completion.Usage.CompletionTokens != 0 || completion.Usage.TotalTokens != 0 {
+		resp.Usage.InputTokens = completion.Usage.PromptTokens
+		resp.Usage.OutputTokens = completion.Usage.CompletionTokens
+		resp.Usage.TotalTokens = completion.Usage.TotalTokens
+		resp.Usage.InputTokensDetails.CachedTokens = completion.Usage.PromptTokensDetails.CachedTokens
+		resp.Usage.OutputTokensDetails.ReasoningTokens = completion.Usage.CompletionTokensDetails.ReasoningTokens
+		resp.Usage.JSON.InputTokens = openairespjson.NewField(strconv.FormatInt(resp.Usage.InputTokens, 10))
+		resp.Usage.JSON.OutputTokens = openairespjson.NewField(strconv.FormatInt(resp.Usage.OutputTokens, 10))
+		resp.Usage.JSON.TotalTokens = openairespjson.NewField(strconv.FormatInt(resp.Usage.TotalTokens, 10))
+		resp.Usage.InputTokensDetails.JSON.CachedTokens = openairespjson.NewField(strconv.FormatInt(resp.Usage.InputTokensDetails.CachedTokens, 10))
+		resp.Usage.OutputTokensDetails.JSON.ReasoningTokens = openairespjson.NewField(strconv.FormatInt(resp.Usage.OutputTokensDetails.ReasoningTokens, 10))
+		resp.Usage.JSON.InputTokensDetails = openairespjson.NewField("{}")
+		resp.Usage.JSON.OutputTokensDetails = openairespjson.NewField("{}")
+		resp.JSON.Usage = openairespjson.NewField("{}")
+	}
+
 	if len(completion.Choices) == 0 {
 		return resp
 	}
