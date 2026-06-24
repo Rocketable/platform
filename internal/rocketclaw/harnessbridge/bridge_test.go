@@ -2388,7 +2388,7 @@ func TestSeedResponseThreadReportsThreadSessionLoadFailure(t *testing.T) {
 }
 
 func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
-	status := http.StatusBadRequest
+	status := http.StatusTooManyRequests
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if status == http.StatusOK {
 			w.Header().Set("Content-Type", "application/json")
@@ -2397,7 +2397,9 @@ func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
 			return
 		}
 
-		http.Error(w, `{"error":{"message":"blocked"}}`, http.StatusBadRequest)
+		w.Header().Set("Retry-After", "2")
+		w.Header().Set("X-Request-ID", "req-rate")
+		http.Error(w, `{"error":{"message":"blocked"}}`, status)
 	}))
 	t.Cleanup(server.Close)
 
@@ -2412,6 +2414,7 @@ func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
 
 	var params responses.ResponseNewParams
 
+	bridge.log = bridge.log.With("conversation_id", "main", "turn_id", "turn-1", "agent", "main", "source", string(events.SourceSlack), "kind", string(events.InboundKindPrompt), "label", "goal", "human", true, "goal_turn", true, "publish", true, "attachment_count", 2, "web_session_id", "browser-session-1")
 	client, err := bridge.openAIClient()
 	require.NoError(t, err)
 
@@ -2419,8 +2422,21 @@ func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, logs.String(), "provider request failed")
 	assert.Contains(t, logs.String(), `"path":"/responses"`)
-	assert.Contains(t, logs.String(), `"status":400`)
-	assert.Contains(t, logs.String(), `"error":"provider returned status 400"`)
+	assert.Contains(t, logs.String(), `"status":429`)
+	assert.Contains(t, logs.String(), `"error":"provider returned status 429"`)
+	assert.Contains(t, logs.String(), `"conversation_id":"main"`)
+	assert.Contains(t, logs.String(), `"turn_id":"turn-1"`)
+	assert.Contains(t, logs.String(), `"agent":"main"`)
+	assert.Contains(t, logs.String(), `"source":"slack"`)
+	assert.Contains(t, logs.String(), `"kind":"prompt"`)
+	assert.Contains(t, logs.String(), `"label":"goal"`)
+	assert.Contains(t, logs.String(), `"human":true`)
+	assert.Contains(t, logs.String(), `"goal_turn":true`)
+	assert.Contains(t, logs.String(), `"publish":true`)
+	assert.Contains(t, logs.String(), `"attachment_count":2`)
+	assert.Contains(t, logs.String(), `"web_session_id":"browser-session-1"`)
+	assert.Contains(t, logs.String(), `"provider_request_id":"req-rate"`)
+	assert.Contains(t, logs.String(), `"retry_after":"2"`)
 	logs.Reset()
 
 	status = http.StatusOK

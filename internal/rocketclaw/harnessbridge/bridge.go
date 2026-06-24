@@ -1131,7 +1131,18 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		}
 	}
 
-	providers, err := b.rocketcodeProviders(agents)
+	providerLog := b.log.With("conversation_id", b.config.ConversationID, "turn_id", turnID, "agent", agentName, "source", string(msg.Source), "kind", string(msg.Kind), "human", msg.Human, "goal_turn", msg.GoalTurn, "publish", publish, "attachment_count", len(msg.Attachments))
+	if msg.Label != "" {
+		providerLog = providerLog.With("label", msg.Label)
+	}
+
+	if msg.WebSessionID != "" {
+		providerLog = providerLog.With("web_session_id", msg.WebSessionID)
+	}
+
+	providerBridge := &Bridge{runtime: b.runtime, log: providerLog}
+
+	providers, err := providerBridge.rocketcodeProviders(agents)
 	if err != nil {
 		return runResult{}, fmt.Errorf("prepare RocketCode providers: %w", err)
 	}
@@ -1472,7 +1483,7 @@ func (b *Bridge) openAIOptions(apiKey, baseURL string, useAPIKey bool) []option.
 		options = append(options, option.WithAPIKey(apiKey))
 	}
 
-	if b.log != nil {
+	if b.log.Enabled(context.Background(), slog.LevelError) {
 		options = append(options, option.WithMiddleware(func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
 			startedAt := time.Now()
 			resp, err := next(req)
@@ -1488,9 +1499,9 @@ func (b *Bridge) openAIOptions(apiKey, baseURL string, useAPIKey bool) []option.
 					errProvider = fmt.Errorf("provider returned status %d", status)
 				}
 
-				b.log.Error("provider request failed", "method", req.Method, "path", req.URL.Path, "status", status, "duration", time.Since(startedAt), "error", errProvider)
+				b.log.Error("provider request failed", providerLogAttrs(req, resp, status, time.Since(startedAt), errProvider)...)
 			} else if time.Since(startedAt) > time.Minute {
-				b.log.Info("provider request completed", "method", req.Method, "path", req.URL.Path, "status", status, "duration", time.Since(startedAt), "error", err)
+				b.log.Info("provider request completed", providerLogAttrs(req, resp, status, time.Since(startedAt), err)...)
 			}
 
 			return resp, err
@@ -1519,6 +1530,39 @@ func (b *Bridge) openAIClient() (*openai.Client, error) {
 	client := openai.NewClient(options...)
 
 	return &client, nil
+}
+
+func providerLogAttrs(req *http.Request, resp *http.Response, status int, duration time.Duration, err error) []any {
+	attrs := []any{"method", req.Method, "path", req.URL.Path, "status", status, "duration", duration, "error", err}
+	if resp == nil {
+		return attrs
+	}
+
+	if requestID := resp.Header.Get("X-Request-ID"); requestID != "" {
+		attrs = append(attrs, "provider_request_id", requestID)
+	} else if requestID := resp.Header.Get("X-Oai-Request-Id"); requestID != "" {
+		attrs = append(attrs, "provider_request_id", requestID)
+	} else if requestID := resp.Header.Get("Cf-Ray"); requestID != "" {
+		attrs = append(attrs, "provider_request_id", requestID)
+	}
+
+	if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+		attrs = append(attrs, "retry_after", retryAfter)
+	}
+
+	if retryAfterMillis := resp.Header.Get("Retry-After-Ms"); retryAfterMillis != "" {
+		attrs = append(attrs, "retry_after_ms", retryAfterMillis)
+	}
+
+	if resetRequests := resp.Header.Get("X-Ratelimit-Reset-Requests"); resetRequests != "" {
+		attrs = append(attrs, "ratelimit_reset_requests", resetRequests)
+	}
+
+	if resetTokens := resp.Header.Get("X-Ratelimit-Reset-Tokens"); resetTokens != "" {
+		attrs = append(attrs, "ratelimit_reset_tokens", resetTokens)
+	}
+
+	return attrs
 }
 
 func (b *Bridge) anthropicClient() *anthropic.Client {
