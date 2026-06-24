@@ -28,6 +28,21 @@ func TestAnthropicParamsMapsTextAndTools(t *testing.T) {
 	require.Equal(t, "read", *body.Tools[0].GetName())
 }
 
+func TestAnthropicParamsMapsJSONSchemaResponseFormat(t *testing.T) {
+	looper := &looper{provider: modelProviderAnthropic, modelRef: modelRef{provider: modelProviderAnthropic, apiModel: "claude-sonnet"}, Model: "claude-sonnet", DisplayModel: "anthropic/claude-sonnet"}
+	params := looper.buildParams([]responses.ResponseInputItemUnionParam{inputMessageParam(responses.EasyInputMessageRoleUser, easyInputStringContent("review"))})
+	params.Text.Format = permissionReviewResponseFormat()
+
+	body, err := looper.anthropicParams(&params)
+
+	require.NoError(t, err)
+	require.Equal(t, params.Text.Format.OfJSONSchema.Schema, body.OutputConfig.Format.Schema)
+	encoded := marshalJSON(t, body)
+	require.Contains(t, encoded, `"output_config"`)
+	require.Contains(t, encoded, `"type":"json_schema"`)
+	require.Contains(t, encoded, `"pattern":"[\\s\\S]"`)
+}
+
 func TestAnthropicResponseMapsToolUse(t *testing.T) {
 	input := json.RawMessage(`{"filePath":"README.md"}`)
 	message := &anthropic.BetaMessage{ID: "msg_1", Content: []anthropic.BetaContentBlockUnion{{Type: "tool_use", ID: "toolu_1", Name: "read", Input: input}}}

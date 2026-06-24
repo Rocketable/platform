@@ -1390,7 +1390,7 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 
 	t.Run("approval executes", func(t *testing.T) {
 		called := false
-		reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{Approved: true, Risk: "low", Authorization: "unknown", Reason: "Low-risk action."}}
+		reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{RiskLevel: permissionReviewRiskLevelLow, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeAllow, Rationale: "Low-risk action."}}
 		looper := testLooper(mockResponses())
 		looper.AutoApprovePermissions = true
 		looper.PermissionReviewer = reviewer
@@ -1405,6 +1405,8 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		}
 		looper.Tools = map[string]looperTool{"webfetch": tool}
 
+		reviewContext := []responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleUser, "fetch the allowed page", "")}
+		looper.permissionReviewInput = reviewContext
 		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "webfetch", `{"url":"https://allowed.example/page"}`)}), nil, nil)
 
 		require.NoError(t, err)
@@ -1415,11 +1417,12 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		require.Equal(t, "main", reviewer.requests[0].ActiveAgent)
 		require.Equal(t, "webfetch", reviewer.requests[0].Permission)
 		require.Equal(t, []permissionReviewSubject{{Subject: "https://allowed.example/page", RulePattern: "https://allowed.example/*"}}, reviewer.requests[0].AutoSubjects)
+		require.Equal(t, reviewContext, reviewer.requests[0].ReviewContext)
 	})
 
 	t.Run("denial does not execute custom reviewer", func(t *testing.T) {
 		called := false
-		reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{Approved: false, Risk: "high", Authorization: "unknown", Reason: "Not authorized."}}
+		reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{RiskLevel: permissionReviewRiskLevelHigh, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeDeny, Rationale: "Not authorized."}}
 		looper := testLooper(mockResponses())
 		looper.AutoApprovePermissions = true
 		looper.PermissionReviewer = reviewer
@@ -1444,7 +1447,7 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 	})
 
 	t.Run("deny short circuits auto", func(t *testing.T) {
-		reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{Approved: true, Risk: "low", Authorization: "unknown", Reason: "Low-risk action."}}
+		reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{RiskLevel: permissionReviewRiskLevelLow, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeAllow, Rationale: "Low-risk action."}}
 		looper := testLooper(mockResponses())
 		looper.AutoApprovePermissions = true
 		looper.PermissionReviewer = reviewer
@@ -1462,7 +1465,7 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 	})
 
 	t.Run("mixed reviewers deny without review", func(t *testing.T) {
-		reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{Approved: true, Risk: "low", Authorization: "unknown", Reason: "Low-risk action."}}
+		reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{RiskLevel: permissionReviewRiskLevelLow, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeAllow, Rationale: "Low-risk action."}}
 		looper := testLooper(mockResponses())
 		looper.AutoApprovePermissions = true
 		looper.PermissionReviewer = reviewer
@@ -1480,7 +1483,7 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 	})
 }
 
-func TestPermissionReviewFailsClosedOnInvalidJSON(t *testing.T) {
+func TestPermissionReviewFailsClosedOnInvalidReviewerOutput(t *testing.T) {
 	modelRef, err := parseModelRef("openai/" + openai.ChatModelGPT5)
 	require.NoError(t, err)
 
@@ -1495,8 +1498,10 @@ func TestPermissionReviewFailsClosedOnInvalidJSON(t *testing.T) {
 
 	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true})
 
-	require.False(t, decision.Approved)
-	require.Contains(t, decision.Reason, "invalid JSON")
+	require.Equal(t, permissionReviewRiskLevelHigh, decision.RiskLevel)
+	require.Equal(t, permissionReviewUserAuthorizationUnknown, decision.UserAuthorization)
+	require.Equal(t, permissionReviewOutcomeDeny, decision.Outcome)
+	require.Contains(t, decision.Rationale, "invalid JSON")
 }
 
 func TestLooperAppliesWebFetchURLPermissions(t *testing.T) {

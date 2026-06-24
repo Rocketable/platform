@@ -93,6 +93,7 @@ type looper struct {
 	ResponseFormat         responses.ResponseFormatTextConfigUnionParam
 	Permissions            PermissionSet
 	Tools                  map[string]looperTool
+	permissionReviewInput  []responses.ResponseInputItemUnionParam
 	RewriteHistory         func([]responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam
 	Diagnostics            bool
 	AutoApprovePermissions bool
@@ -110,7 +111,7 @@ type permissionReviewer interface {
 type inertPermissionReviewer struct{}
 
 func (inertPermissionReviewer) reviewPermission(context.Context, *permissionReviewRequest) permissionReviewDecision {
-	return permissionReviewDecision{Approved: false, Reason: "automatic permission reviewer is unavailable"}
+	return permissionReviewFailure("automatic permission reviewer is unavailable")
 }
 
 type toolPermissionDecision struct {
@@ -125,21 +126,47 @@ type permissionReviewSubject struct {
 }
 
 type permissionReviewRequest struct {
-	ActiveAgent      string                    `json:"active_agent"`
-	ToolName         string                    `json:"tool_name"`
-	Permission       string                    `json:"permission"`
-	RawArguments     string                    `json:"raw_arguments"`
-	Subjects         []string                  `json:"subjects"`
-	AutoSubjects     []permissionReviewSubject `json:"auto_subjects"`
-	Reviewer         string                    `json:"reviewer"`
-	ReviewerEmbedded bool                      `json:"reviewer_embedded"`
+	ActiveAgent      string                                  `json:"active_agent"`
+	ToolName         string                                  `json:"tool_name"`
+	Permission       string                                  `json:"permission"`
+	RawArguments     string                                  `json:"raw_arguments"`
+	Subjects         []string                                `json:"subjects"`
+	AutoSubjects     []permissionReviewSubject               `json:"auto_subjects"`
+	Reviewer         string                                  `json:"reviewer"`
+	ReviewerEmbedded bool                                    `json:"reviewer_embedded"`
+	ReviewContext    []responses.ResponseInputItemUnionParam `json:"-"`
 }
 
+type permissionReviewRiskLevel string
+
+const (
+	permissionReviewRiskLevelLow      permissionReviewRiskLevel = "low"
+	permissionReviewRiskLevelMedium   permissionReviewRiskLevel = "medium"
+	permissionReviewRiskLevelHigh     permissionReviewRiskLevel = "high"
+	permissionReviewRiskLevelCritical permissionReviewRiskLevel = "critical"
+)
+
+type permissionReviewUserAuthorization string
+
+const (
+	permissionReviewUserAuthorizationUnknown permissionReviewUserAuthorization = "unknown"
+	permissionReviewUserAuthorizationLow     permissionReviewUserAuthorization = "low"
+	permissionReviewUserAuthorizationMedium  permissionReviewUserAuthorization = "medium"
+	permissionReviewUserAuthorizationHigh    permissionReviewUserAuthorization = "high"
+)
+
+type permissionReviewOutcome string
+
+const (
+	permissionReviewOutcomeAllow permissionReviewOutcome = "allow"
+	permissionReviewOutcomeDeny  permissionReviewOutcome = "deny"
+)
+
 type permissionReviewDecision struct {
-	Approved      bool   `json:"approved"`
-	Risk          string `json:"risk"`
-	Authorization string `json:"authorization"`
-	Reason        string `json:"reason"`
+	RiskLevel         permissionReviewRiskLevel         `json:"risk_level"`
+	UserAuthorization permissionReviewUserAuthorization `json:"user_authorization"`
+	Outcome           permissionReviewOutcome           `json:"outcome"`
+	Rationale         string                            `json:"rationale"`
 }
 
 // Runtime is the concrete RocketCode loop runtime returned by New.
@@ -703,7 +730,13 @@ func (l *looper) runTurn(
 			turnItems = append(turnItems, steeringInput)
 		}
 
+		reviewContext := append(append([]responses.ResponseInputItemUnionParam{}, baseHistory...), turnItems...)
+
+		previousReviewInput := l.permissionReviewInput
+		l.permissionReviewInput = reviewContext
 		toolOutputs, hadToolCalls, err := l.dispatchToolCalls(turnCtx, resp, &doomLoop, output)
+		l.permissionReviewInput = previousReviewInput
+
 		if err != nil {
 			if errors.Is(context.Cause(turnCtx), errTurnInterrupted) {
 				return emptyRecord, nil, true, nil
@@ -1439,8 +1472,10 @@ func (l *looper) dispatchToolCalls(
 		}
 
 		if decision.review != nil {
+			decision.review.ReviewContext = slices.Clone(l.permissionReviewInput)
+
 			reviewDecision := l.PermissionReviewer.reviewPermission(ctx, decision.review)
-			if !reviewDecision.Approved {
+			if reviewDecision.Outcome != permissionReviewOutcomeAllow {
 				_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, args, toolCallMetadata{})
 				result := formatPermissionReviewDenied(reviewDecision)
 
@@ -1517,6 +1552,12 @@ func (l *looper) dispatchToolCalls(
 					span.span.End()
 
 					return fmt.Errorf("run tool %q: %w", call.name, err)
+				}
+
+				if l.InPermissionReview {
+					span.span.End()
+
+					return fmt.Errorf("run reviewer tool %q: %w", call.name, err)
 				}
 
 				result = toolCallFailureResult(call.name, err)
@@ -1690,7 +1731,7 @@ func (l *looper) permissionDecision(toolName string, tool *looperTool, args json
 }
 
 func formatPermissionReviewDenied(decision permissionReviewDecision) string {
-	reason := strings.TrimSpace(decision.Reason)
+	reason := strings.TrimSpace(decision.Rationale)
 	if reason == "" {
 		reason = "automatic permission review denied or failed"
 	}

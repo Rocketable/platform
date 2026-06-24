@@ -178,6 +178,12 @@ func (l *looper) anthropicParams(params *responses.ResponseNewParams) (anthropic
 		body.System = []anthropic.BetaTextBlockParam{{Text: params.Instructions.Value}}
 	}
 
+	if format := params.Text.Format; format.OfJSONSchema != nil {
+		body.OutputConfig.Format = anthropic.BetaJSONOutputFormatParam{Schema: format.OfJSONSchema.Schema}
+	} else if format.GetType() != nil {
+		return anthropic.BetaMessageNewParams{}, errors.New("anthropic provider does not support this response format")
+	}
+
 	for i := range params.Tools {
 		tool := params.Tools[i].OfFunction
 		if tool == nil {

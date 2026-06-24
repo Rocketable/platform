@@ -95,8 +95,8 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 - Tool visibility is permission-gated. Deny-by-default must not become permissive by accident.
 - Later matching permission rules overwrite earlier matching rules.
 - `apply_patch`, `write`, and `patch` permission names normalize to the `edit` permission bucket.
-- `auto` is a supported permission action that requires `Config.AutoApprovePermissions` and routes a matching tool call through automatic permission review before execution. When automatic permission approval is disabled, matching `auto` rules fail closed as model-visible tool failures. `ask`, `external_directory`, and `doom_loop` permission names are unsupported.
-- Automatic permission review is fail-closed: reviewer denial, invalid reviewer JSON, model errors, tool errors, context cancellation, timeout, missing reviewer, and explicit rejection all prevent tool execution and are returned as model-visible tool failures rather than process-fatal errors.
+- `auto` is a supported permission action that requires `Config.AutoApprovePermissions` and routes a matching tool call through automatic permission review. The reviewed tool call executes only when the reviewer returns valid structured output with `outcome:"allow"`. When automatic permission approval is disabled, matching `auto` rules fail closed as model-visible tool failures. `ask`, `external_directory`, and `doom_loop` permission names are unsupported.
+- Automatic permission review is fail-closed: reviewer `outcome:"deny"`, invalid reviewer JSON, missing required review fields, invalid enum values, empty `rationale`, model errors, tool errors, context cancellation, timeout, missing reviewer, and recursive automatic review all prevent tool execution and are returned as model-visible tool failures rather than process-fatal errors.
 - `edit` allow grants read visibility when no explicit read rule matched.
 - Permission subjects support wildcard matching with `*` and `?`, slash normalization, and `~` or `$HOME` expansion.
 - `.env` and `.env.*` basenames are blocked, while `.env.example` remains allowed.
@@ -153,3 +153,4 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 - 2026-06-23: Required every loaded agent to declare non-empty model frontmatter instead of inheriting the runtime/default model.
 - 2026-06-23: Added provider-family parity requirements for OpenAI, OpenAI-compatible, and Anthropic runtime capabilities, including shared replay projection semantics and test expectations.
 - 2026-06-24: Added OpenAI-compatible chat-completions ChatGPT-style automatic compaction after successful above-threshold responses.
+- 2026-06-24: Required automatic permission review to execute only on valid structured `outcome:"allow"` output and fail closed on missing fields, invalid enums, empty rationale, timeout, or recursive review.
