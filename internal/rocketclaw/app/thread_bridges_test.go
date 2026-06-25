@@ -242,6 +242,24 @@ func TestThreadBridgeManagerSwitchesThreadAgent(t *testing.T) {
 	assert.Equal(t, "planner", state.Threads[harnessbridge.SlackThreadConversationID("D123", "111.222")].Agent)
 }
 
+func TestThreadBridgeManagerReadsThreadAgent(t *testing.T) {
+	store := newTestSessionService(t, t.TempDir())
+	conversationID := harnessbridge.SlackThreadConversationID("D123", "111.222")
+	require.NoError(t, store.UpsertThread(conversationID, " planner "))
+
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
+
+	agent, handled, err := manager.ThreadAgent(slackTarget("D123", "111.222"))
+	require.NoError(t, err)
+	assert.True(t, handled)
+	assert.Equal(t, "planner", agent)
+
+	agent, handled, err = manager.ThreadAgent(slackTarget("D123", "222.333"))
+	require.NoError(t, err)
+	assert.False(t, handled)
+	assert.Empty(t, agent)
+}
+
 func TestThreadBridgeManagerStartsGoalInExistingThreadWithPersistedAgent(t *testing.T) {
 	store := newTestSessionService(t, t.TempDir())
 	conversationID := harnessbridge.SlackThreadConversationID("D123", "111.222")

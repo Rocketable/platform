@@ -28,6 +28,9 @@ func (inertThreadRouter) RegisterCronThread(_ context.Context, _ events.TextConv
 func (inertThreadRouter) SwitchThreadAgent(_ events.TextConversationTarget, _ string) (bool, error) {
 	return false, nil
 }
+func (inertThreadRouter) ThreadAgent(_ events.TextConversationTarget) (agent string, handled bool, err error) {
+	return "", false, nil
+}
 func (inertThreadRouter) PrepareThreadReply(target events.TextConversationTarget) (bool, error) {
 	_ = target
 	return false, nil

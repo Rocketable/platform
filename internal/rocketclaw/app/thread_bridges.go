@@ -303,6 +303,25 @@ func (m *threadBridgeManager) SwitchThreadAgent(target events.TextConversationTa
 	return true, nil
 }
 
+func (m *threadBridgeManager) ThreadAgent(target events.TextConversationTarget) (agent string, handled bool, err error) {
+	conversationID := m.text.conversationID(target)
+	if conversationID == "" {
+		return "", false, nil
+	}
+
+	state, err := m.store.Load()
+	if err != nil {
+		return "", false, fmt.Errorf("load persisted %s thread state: %w", m.text.label, err)
+	}
+
+	thread, ok := state.Threads[conversationID]
+	if !ok {
+		return "", false, nil
+	}
+
+	return strings.TrimSpace(thread.Agent), true, nil
+}
+
 func (m *threadBridgeManager) RecordResponseCheckpoint(target events.TextConversationTarget, checkpoint events.ResponseCheckpoint) error {
 	return m.recordResponseCheckpoint(m.text.checkpointKey(target), checkpoint, m.text.label)
 }

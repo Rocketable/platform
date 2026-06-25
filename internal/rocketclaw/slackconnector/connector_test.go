@@ -3986,6 +3986,98 @@ func TestHandleMessageEventSwitchesManagedSocialThreadAgent(t *testing.T) {
 	assertNeverInbound(t, bus)
 }
 
+func TestHandleMessageEventCyclesManagedSocialThreadAgent(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	var ephemeral []url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/conversations.info":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
+		case "/chat.postEphemeral":
+			if err := r.ParseForm(); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			ephemeral = append(ephemeral, cloneValues(r.PostForm))
+
+			writeJSON(t, w, map[string]any{"ok": true, "message_ts": "222.333"})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.prepareHandled = true
+	router.switchHandled = true
+	router.threadAgentHandled = true
+	router.threadAgent = "social"
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "#social", Agents: []string{"social", "planner", "reviewer"}, AllowedUserIDs: []string{"U123"}}}, ContextMessages: 2}
+
+	ev := newSlackMessageEvent("171234.9999", "171234.5678", "🎛")
+	ev.Channel = "C123"
+	connector.handleMessageEvent(context.Background(), ev)
+
+	router.mu.Lock()
+	reads := append([]threadAgentReadCall(nil), router.threadAgentReads...)
+	switched := append([]threadAgentSwitchCall(nil), router.switched...)
+	router.mu.Unlock()
+
+	require.Equal(t, []threadAgentReadCall{{channelID: "C123", threadTS: "171234.5678"}}, reads)
+	require.Equal(t, []threadAgentSwitchCall{{channelID: "C123", threadTS: "171234.5678", agent: "planner"}}, switched)
+	assert.Empty(t, router.repliesSnapshot())
+	require.Len(t, ephemeral, 1)
+	assert.Contains(t, ephemeral[0].Get("text"), "Switched")
+	assert.Contains(t, ephemeral[0].Get("text"), "`planner`")
+	assert.Equal(t, "171234.5678", ephemeral[0].Get("thread_ts"))
+	assertNeverInbound(t, bus)
+}
+
+func TestHandleMessageEventCycleReportsMissingManagedSocialThread(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	var ephemeral []url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/conversations.info":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
+		case "/chat.postEphemeral":
+			if err := r.ParseForm(); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			ephemeral = append(ephemeral, cloneValues(r.PostForm))
+
+			writeJSON(t, w, map[string]any{"ok": true, "message_ts": "222.333"})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "#social", Agents: []string{"social", "planner"}, AllowedUserIDs: []string{"U123"}}}, ContextMessages: 2}
+
+	ev := newSlackMessageEvent("171234.9999", "171234.5678", "🎛")
+	ev.Channel = "C123"
+	connector.handleMessageEvent(context.Background(), ev)
+
+	assert.Empty(t, router.repliesSnapshot())
+	require.Len(t, ephemeral, 1)
+	assert.Contains(t, ephemeral[0].Get("text"), "couldn't find an active managed thread")
+	assert.Equal(t, "171234.5678", ephemeral[0].Get("thread_ts"))
+	assertNeverInbound(t, bus)
+}
+
 func TestHandleMessageEventUsesPerChannelAllowlist(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
@@ -5483,9 +5575,12 @@ type threadRouterStub struct {
 	checkpoints            []threadCheckpointCall
 	cronRegistrations      []cronThreadRegistration
 	switched               []threadAgentSwitchCall
+	threadAgentReads       []threadAgentReadCall
 	goalStarts             []goalThreadStartCall
 	goalStops              []goalThreadStopCall
+	threadAgent            string
 	switchHandled          bool
+	threadAgentHandled     bool
 	submitHandled          bool
 	summarizeHandled       bool
 	summarizeErr           error
@@ -5538,6 +5633,10 @@ type cronThreadRegistration struct {
 
 type threadAgentSwitchCall struct {
 	channelID, threadTS, agent string
+}
+
+type threadAgentReadCall struct {
+	channelID, threadTS string
 }
 
 type goalThreadStartCall struct {
@@ -5606,6 +5705,16 @@ func (s *threadRouterStub) SwitchThreadAgent(target events.TextConversationTarge
 	s.mu.Unlock()
 
 	return s.switchHandled, errSwitch
+}
+
+func (s *threadRouterStub) ThreadAgent(target events.TextConversationTarget) (agent string, handled bool, err error) {
+	s.mu.Lock()
+	s.threadAgentReads = append(s.threadAgentReads, threadAgentReadCall{channelID: target.ChannelID, threadTS: target.ThreadID})
+	agent = s.threadAgent
+	handled = s.threadAgentHandled
+	s.mu.Unlock()
+
+	return agent, handled, err
 }
 
 func (s *threadRouterStub) PrepareThreadReply(target events.TextConversationTarget) (bool, error) {

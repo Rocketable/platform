@@ -292,6 +292,34 @@ func TestHandleSocialThreadMessageSwitchesAgent(t *testing.T) {
 	assert.Contains(t, fake.messages[1].send.Content, "Switched")
 }
 
+func TestHandleSocialThreadMessageCyclesAgent(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.channels["T123"] = &textChannel{ID: "T123", ParentID: "S123", Type: channelTypeGuildPublicThread}
+	router := newFakeThreadRouter()
+	router.switchHandled = true
+	router.threadAgentHandled = true
+	router.threadAgent = "triage"
+	connector := newTestConnector(fake, router)
+	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "S123", Agents: []string{"triage", "planner", "reviewer"}, AllowedUserIDs: []string{"social-human"}}}}
+	answeredQuestion := false
+	connector.answerQuestionText = func(context.Context, events.Source, events.TextConversationTarget, string) bool {
+		answeredQuestion = true
+		return true
+	}
+
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "T123", Content: "🎛", Author: &textUser{ID: "social-human"}}})
+
+	assert.False(t, answeredQuestion)
+	assert.Equal(t, "T123", router.threadAgentThreadID)
+	assert.Equal(t, "T123", router.switchedThreadID)
+	assert.Equal(t, "planner", router.switchedAgent)
+	assert.Empty(t, router.submittedThreadID)
+	require.Len(t, fake.messages, 1)
+	assert.Equal(t, "T123", fake.messages[0].channelID)
+	assert.Contains(t, fake.messages[0].send.Content, "Switched")
+	assert.Contains(t, fake.messages[0].send.Content, "`planner`")
+}
+
 func TestHandleSocialMessageRequiresAllowedMention(t *testing.T) {
 	fake := newFakeDiscordClient()
 	fake.channels["S123"] = &textChannel{ID: "S123", Type: channelTypeGuildText}
@@ -653,10 +681,12 @@ type fakeThreadRouter struct {
 	mu                                                  sync.Mutex
 	startedAgent, submittedThreadID, summarizedThreadID string
 	switchedThreadID, switchedAgent                     string
+	threadAgentThreadID, threadAgent                    string
 	registeredCron                                      string
 	preparedResponse, submittedResponse                 string
 	startedPreSeed, submitThreadHandled, summaryHandled bool
 	prepareResponseHandled, submitResponseHandled       bool
+	threadAgentHandled                                  bool
 	interruptHandled, switchHandled                     bool
 	started, submitted                                  *events.InboundMessage
 	startedGoal                                         *events.InboundMessage
@@ -736,6 +766,11 @@ func (f *fakeThreadRouter) SwitchThreadAgent(target events.TextConversationTarge
 	f.switchedAgent = agent
 
 	return f.switchHandled, nil
+}
+
+func (f *fakeThreadRouter) ThreadAgent(target events.TextConversationTarget) (agent string, handled bool, err error) {
+	f.threadAgentThreadID = target.ThreadID
+	return f.threadAgent, f.threadAgentHandled, nil
 }
 
 func (f *fakeThreadRouter) registeredCronSnapshot() string {

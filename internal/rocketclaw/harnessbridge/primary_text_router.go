@@ -12,6 +12,7 @@ type PrimaryTextRouter interface {
 	StartGoalInThread(ctx context.Context, agent, objective, checkScript string, maxTurns int, target events.TextConversationTarget, inbound *events.InboundMessage) error
 	InterruptThread(target events.TextConversationTarget) (*events.InboundMessage, error)
 	RegisterCronThread(ctx context.Context, target events.TextConversationTarget, agent, seedText string) error
+	ThreadAgent(target events.TextConversationTarget) (agent string, handled bool, err error)
 	SwitchThreadAgent(target events.TextConversationTarget, agent string) (bool, error)
 	PrepareThreadReply(target events.TextConversationTarget) (bool, error)
 	PrepareResponseThreadReply(target events.TextConversationTarget) (bool, error)

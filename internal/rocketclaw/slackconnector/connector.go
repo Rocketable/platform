@@ -1200,6 +1200,11 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 
 		responseRooted := false
 
+		if agent, ok := primarytext.ParseSocialAgentSwitch(text); ok && socialThreadReply {
+			c.handleSlackSocialAgentSwitch(ctx, ev.Channel, threadTS, ev.User, socialChannelName, agent)
+			return
+		}
+
 		if !handled {
 			if socialThreadReply {
 				return
@@ -1233,11 +1238,6 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		}
 
 		if handled {
-			if agent, ok := primarytext.ParseSocialAgentSwitch(text); ok && socialThreadReply {
-				c.handleSlackSocialAgentSwitch(ctx, ev.Channel, threadTS, ev.User, socialChannelName, agent)
-				return
-			}
-
 			goal, rejection, isGoal := harnessbridge.ParseGoalRequest(emoji.CanonicalizeLeadingAlias(text))
 			if isGoal {
 				if rejection != "" {
@@ -1713,7 +1713,25 @@ func (c *Connector) socialModeAgents(channel string) []string {
 }
 
 func (c *Connector) handleSlackSocialAgentSwitch(ctx context.Context, channelID, threadTS, userID, socialChannel, agent string) {
-	if !slices.Contains(c.socialModeAgents(socialChannel), agent) {
+	agents := c.socialModeAgents(socialChannel)
+	if agent == "" {
+		current, handled, err := c.threadRouter.ThreadAgent(events.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS})
+		if err != nil {
+			c.log.Error("load Slack social thread agent", "error", err, "channel", channelID, "thread_ts", threadTS)
+			c.postSlackEphemeral(ctx, channelID, threadTS, userID, "I couldn't switch this thread's agent.")
+
+			return
+		}
+
+		if !handled {
+			c.postSlackEphemeral(ctx, channelID, threadTS, userID, "I couldn't find an active managed thread for that agent switch.")
+			return
+		}
+
+		agent = primarytext.NextSocialAgent(current, agents)
+	}
+
+	if !slices.Contains(agents, agent) {
 		c.postSlackEphemeral(ctx, channelID, threadTS, userID, "Agent `"+agent+"` is not configured for this channel.")
 		return
 	}
