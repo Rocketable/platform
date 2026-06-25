@@ -1532,17 +1532,25 @@ func TestReplayInputRawKindReportsInvalidJSON(t *testing.T) {
 }
 
 func TestBuildPromptCoversAttachmentsAndInternalNotes(t *testing.T) {
-	assert.Equal(t, "Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\n\nUser message:\n[Slack media=Text principal=Alice]\n\nhello\n\nAttachment notes:\n- skipped image", buildPrompt(&events.InboundMessage{Source: events.SourceSlack, Human: true, Text: "  hello  ", AttachmentWarnings: []string{" skipped image ", " "}, Metadata: map[string]string{events.InboundPrincipalMetadataKey: "Alice"}}))
+	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\"]\n\nhello\n\nAttachment notes:\n- skipped image", buildPrompt(&events.InboundMessage{Source: events.SourceSlack, Human: true, Text: "  hello  ", AttachmentWarnings: []string{" skipped image ", " "}, Metadata: map[string]string{events.InboundPrincipalMetadataKey: "Alice"}}, nil))
 
-	assert.Equal(t, "Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\n\nUser message:\n[Discord media=Voice principal=speaker_1]\n\nUser attached 2 files with no accompanying text.", buildPrompt(&events.InboundMessage{Source: events.SourceDiscordVoice, Human: true, Attachments: []events.InboundAttachment{{Name: "one.png"}, {Name: "two.png"}}, Metadata: map[string]string{events.InboundPrincipalMetadataKey: "speaker 1"}}))
+	assert.Equal(t, "[Discord media=Voice principal=speaker_1 additional_instructions=\"Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\"]\n\nUser attached 2 files with no accompanying text.", buildPrompt(&events.InboundMessage{Source: events.SourceDiscordVoice, Human: true, Attachments: []events.InboundAttachment{{Name: "one.png"}, {Name: "two.png"}}, Metadata: map[string]string{events.InboundPrincipalMetadataKey: "speaker 1"}}, nil))
 
-	assert.Equal(t, "Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\n\nUser message:\n[System media=Text]\n\nAttachment notes:\n- unsupported PDF", buildPrompt(&events.InboundMessage{AttachmentWarnings: []string{" unsupported PDF "}}))
+	assert.Equal(t, "[System media=Text additional_instructions=\"Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\"]\n\nAttachment notes:\n- unsupported PDF", buildPrompt(&events.InboundMessage{AttachmentWarnings: []string{" unsupported PDF "}}, nil))
 
-	assert.Equal(t, "Internalize the following note into the active conversation state exactly as written. Respect the content of the message and do not paraphrase, summarize, translate, or normalize whitespace. Do not reply or acknowledge it unless the human explicitly asks you to.\n\nInternal note:\n[Cron media=Text]\n\n  keep\nspaces  ", buildPrompt(&events.InboundMessage{Source: events.SourceSystem, Kind: events.InboundKindInternalize, Text: "  keep\nspaces  ", Metadata: map[string]string{events.InboundOriginMetadataKey: "Cron", events.InboundMediaMetadataKey: "Text"}}))
+	assert.Equal(t, "[Cron media=Text additional_instructions=\"Internalize the following note into the active conversation state exactly as written. Respect the content of the message and do not paraphrase, summarize, translate, or normalize whitespace. Do not reply or acknowledge it unless the human explicitly asks you to.\"]\n\n  keep\nspaces  ", buildPrompt(&events.InboundMessage{Source: events.SourceSystem, Kind: events.InboundKindInternalize, Text: "  keep\nspaces  ", Metadata: map[string]string{events.InboundOriginMetadataKey: "Cron", events.InboundMediaMetadataKey: "Text"}}, map[string]any{"additionalInstructions": "Reply casually."}))
+}
+
+func TestBuildPromptAdditionalInstructionsFrontmatter(t *testing.T) {
+	msg := &events.InboundMessage{Source: events.SourceSlack, Human: true, Text: "hello", Metadata: map[string]string{events.InboundPrincipalMetadataKey: "Alice"}}
+
+	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in one sentence.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": "Reply in one sentence."}))
+	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": " "}))
+	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": 7}))
 }
 
 func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
-	assert.Equal(t, "[ExternalMCP media=Text principal=Alice_(ops)-lead]", provenanceHeader(promptProvenance{origin: "ExternalMCP", media: "Text", principal: " Alice [ops]=lead "}))
+	assert.Equal(t, "[ExternalMCP media=Text principal=Alice_(ops)-lead additional_instructions=\"line \\\"one\\\"\\nnext\"]", provenanceHeader(promptProvenance{origin: "ExternalMCP", media: "Text", principal: " Alice [ops]=lead ", additionalInstructions: "line \"one\"\nnext"}))
 	assert.Equal(t, promptProvenance{origin: "System", media: "Text"}, provenanceFromInbound(&events.InboundMessage{Source: events.SourceSystem, Metadata: map[string]string{events.InboundOriginMetadataKey: "Mallory", events.InboundMediaMetadataKey: "Dance"}}))
 }
 
@@ -2815,6 +2823,65 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	}
 
 	assert.Equal(t, 1, metadataEntries)
+}
+
+func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\nadditionalInstructions: Reply in one sentence.\npermission: {}\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	var (
+		requestBody struct {
+			Input []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"input"`
+		}
+		errRequest error
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			errRequest = assert.AnError
+
+			http.NotFound(w, r)
+
+			return
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			errRequest = err
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	service, err := NewSessionService(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
+
+	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: events.MainConversationID(), Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}, log: slog.New(slog.DiscardHandler)}
+	msg := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
+	msg.Metadata = map[string]string{events.InboundPrincipalMetadataKey: "Alice"}
+
+	_, err = bridge.runTurn(context.Background(), msg, "turn-1", false)
+	require.NoError(t, err)
+	require.NoError(t, errRequest)
+
+	userContent := ""
+
+	for i := range requestBody.Input {
+		if requestBody.Input[i].Role == "user" {
+			userContent = requestBody.Input[i].Content
+		}
+	}
+
+	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in one sentence.\"]\n\nhello", userContent)
 }
 
 func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {

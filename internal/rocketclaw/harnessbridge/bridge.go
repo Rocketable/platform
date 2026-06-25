@@ -1215,7 +1215,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		cancelTurn()
 	}()
 
-	prompt, err := b.buildPrompt(msg)
+	prompt, err := b.buildPrompt(msg, agents.Items[agentName].Frontmatter)
 	if err != nil {
 		return runResult{}, err
 	}
@@ -2484,8 +2484,12 @@ func compactedOutputToReplayInput(items []responses.ResponseOutputItemUnion, ori
 	return raw, nil
 }
 
-func (b *Bridge) buildPrompt(msg *events.InboundMessage) (string, error) {
-	prompt := buildPrompt(msg)
+const defaultReplyInstruction = "Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary."
+
+const internalNoteInstruction = "Internalize the following note into the active conversation state exactly as written. Respect the content of the message and do not paraphrase, summarize, translate, or normalize whitespace. Do not reply or acknowledge it unless the human explicitly asks you to."
+
+func (b *Bridge) buildPrompt(msg *events.InboundMessage, agentFrontmatter map[string]any) (string, error) {
+	prompt := buildPrompt(msg, agentFrontmatter)
 
 	goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID)
 	if err != nil {
@@ -2499,14 +2503,15 @@ func (b *Bridge) buildPrompt(msg *events.InboundMessage) (string, error) {
 	return prompt + "\n\n" + goalSteeringPrompt(&goal), nil
 }
 
-func buildPrompt(msg *events.InboundMessage) string {
-	label := "User message"
-	instruction := "Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary."
+func buildPrompt(msg *events.InboundMessage, agentFrontmatter map[string]any) string {
+	instruction := defaultReplyInstruction
+	if override, ok := agentFrontmatter["additionalInstructions"].(string); ok && strings.TrimSpace(override) != "" {
+		instruction = override
+	}
 
 	body := strings.TrimSpace(msg.Text)
 	if msg.Kind == events.InboundKindInternalize {
-		label = "Internal note"
-		instruction = "Internalize the following note into the active conversation state exactly as written. Respect the content of the message and do not paraphrase, summarize, translate, or normalize whitespace. Do not reply or acknowledge it unless the human explicitly asks you to."
+		instruction = internalNoteInstruction
 		body = msg.Text
 	}
 
@@ -2525,11 +2530,14 @@ func buildPrompt(msg *events.InboundMessage) string {
 		}
 	}
 
-	return instruction + "\n\n" + label + ":\n" + provenanceHeader(provenanceFromInbound(msg)) + "\n\n" + body
+	provenance := provenanceFromInbound(msg)
+	provenance.additionalInstructions = instruction
+
+	return provenanceHeader(provenance) + "\n\n" + body
 }
 
 type promptProvenance struct {
-	origin, media, principal string
+	origin, media, principal, additionalInstructions string
 }
 
 func provenanceFromInbound(msg *events.InboundMessage) promptProvenance {
@@ -2625,6 +2633,10 @@ func provenanceHeader(provenance promptProvenance) string {
 	header := "[" + origin + " media=" + media
 	if principal := provenanceToken(provenance.principal); principal != "" {
 		header += " principal=" + principal
+	}
+
+	if provenance.additionalInstructions != "" {
+		header += " additional_instructions=" + strconv.Quote(provenance.additionalInstructions)
 	}
 
 	return header + "]"

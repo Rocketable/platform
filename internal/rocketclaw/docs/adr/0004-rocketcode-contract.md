@@ -26,7 +26,7 @@ Several rocketclaw capabilities exist only because of precise RocketCode configu
 
 Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell expansion. Persistent bridge input text remains literal. Raw input text expands because cron bodies are trusted workspace files. Both paths construct RocketCode with a provider registry that can route provider-qualified OpenAI, Anthropic, and named OpenAI-compatible model requests. The registry contains the configured or required clients for selected resolved models and does not require a first-party OpenAI client when no first-party OpenAI RocketCode path is selected. Both paths set RocketCode's `AutoApprovePermissions` flag to true unconditionally.
 
-Both construction paths must pass RocketClaw-originated `rocketcode.PromptInput` text using the trusted provenance header defined in ADR 0002. The persistent bridge derives `Origin`, `Media`, and optional `Name` from the inbound turn's RocketClaw runtime source, media, and principal metadata. Raw-run cron inputs use `Origin=Cron`, `Media=Text`, and omit `principal`. Adding this header must not alter `InputPrompts` expansion settings, which prompt bodies are eligible for shell interpolation, attachment normalization, session replay, tool injection, connector delivery behavior, or authorization decisions.
+Both construction paths must pass RocketClaw-originated `rocketcode.PromptInput` text using the trusted prompt header defined in ADR 0002. The persistent bridge derives `Origin`, `Media`, optional `Name`, and the required or omitted `additional_instructions` from the inbound turn's RocketClaw runtime source, media, principal metadata, turn handling semantics, and selected agent frontmatter according to ADR 0002. Raw-run cron inputs use `Origin=Cron`, `Media=Text`, and omit `principal` and `additional_instructions`. Adding this header must not alter `InputPrompts` expansion settings, which prompt bodies are eligible for shell interpolation, attachment normalization, session replay, tool injection, connector delivery behavior, or authorization decisions.
 
 ### Provider Selection
 
@@ -47,6 +47,7 @@ Both construction paths must pass RocketClaw-originated `rocketcode.PromptInput`
 - Subagent prompt expansion happens when the `task` tool launches another agent.
 - Skill content expansion happens when the `skill` tool loads skill content.
 - `AGENTS.md` root workspace instructions remain literal.
+- Agents may declare optional YAML frontmatter field `additionalInstructions`. In the persistent bridge, a non-empty string value overrides the default normal-reply `additional_instructions` text defined in ADR 0002 for turns handled by that selected agent. Missing, empty, or non-string values do not override the default. This field does not affect internal-note turns or raw-run cron prompts.
 
 ### Subdelegation Recursion Limit
 
@@ -212,3 +213,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-23: Required RocketClaw to enforce RocketCode's non-empty model frontmatter requirement for every loaded agent across embedded, generated, configured-overlay, and workspace-overlay sources.
 - 2026-06-23: Strengthened RocketClaw provider-family parity requirements for provider construction, shared tools, and response checkpoint seeding.
 - 2026-06-24: Removed RocketClaw pass-through of `rocketcode.auto_approve_permissions` and required persistent bridge and raw-run construction paths to set RocketCode `AutoApprovePermissions` true unconditionally.
+- 2026-06-25: Specified that persistent bridge prompt headers may include trusted `additional_instructions`, normal reply turns may override the default through selected agent `additionalInstructions` frontmatter, internal notes cannot be overridden, and raw-run cron headers omit the field.

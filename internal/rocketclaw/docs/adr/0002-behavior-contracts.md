@@ -31,18 +31,18 @@ RocketClaw has lost features when refactors treated behavior as removable plumbi
 
 Expansion uses RocketCode semantics: pattern ``!`command` ``, workspace-root cwd, stdout insertion only, and command failures do not fail prompt preparation.
 
-Every RocketClaw-originated `rocketcode.PromptInput` must be framed with one trusted runtime-generated provenance header before the prompt body:
+Every RocketClaw-originated `rocketcode.PromptInput` must be framed with one trusted runtime-generated prompt header before the prompt body:
 
 ```text
-[Origin media=Media principal=Name]
+[Origin media=Media principal=Name additional_instructions="Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary."]
 
 <body>
 ```
 
-For non-human, system, and cron-originated prompts, the `principal=Name` field is omitted:
+For prompts without a human principal, the `principal=Name` field is omitted. For example, raw-run cron prompts also omit `additional_instructions`, so their header is:
 
 ```text
-[Origin media=Media]
+[Cron media=Text]
 
 <body>
 ```
@@ -53,7 +53,25 @@ The first bracket token is `Origin`. It names the RocketClaw runtime source cate
 
 `Name` is the principal: the RocketClaw-known human actor responsible for a human-originated prompt. It should be the best runtime-authenticated or connector-derived human name available for that turn, such as a configured human profile display name, connector account name, Basic Auth username, terminal user name, or, when no safer human name is available, that connector's stable user identifier. Principal is model-visible provenance only; authorization and permissions must continue to use RocketClaw runtime metadata and connector checks, not the prompt header text. Non-human prompts, system prompts, automated continuations, scheduled-message prompts, and cron/raw-run prompts omit `principal` entirely.
 
-Field order is fixed: first `Origin`, then `media=Media`, then `principal=Name` when present. The header is generated from RocketClaw runtime metadata, never from prompt body text. Header field values must be serialized so they cannot introduce whitespace-separated fields, line breaks, `=`, `[`, or `]` into the trusted header. RocketClaw may map runtime values to safe header text, but must not recover missing or unsafe provenance values from the prompt body. The body remains the source prompt body after the blank line, with the same attachment warning, text attachment, and fallback semantics that apply before framing. This framing does not change the shell-interpolation classification above: persistent bridge human and external input remains literal, and raw cron input retains raw-run expansion behavior.
+`additional_instructions` is trusted turn guidance for how RocketCode should handle the prompt body. It is not provenance. It must not be derived from external prompt body text. When present, it is serialized as a quoted string value in the header. Persistent bridge prompt text must not include separate model-visible instruction paragraphs, `User message:` labels, or `Internal note:` labels; the instruction belongs in the header and the prompt body begins after the blank line.
+
+Normal persistent-bridge reply turns use this default `additional_instructions` text:
+
+```text
+Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.
+```
+
+A selected agent may override that normal-reply default by declaring a non-empty string `additionalInstructions` field in trusted agent frontmatter. Missing, empty, or non-string `additionalInstructions` values do not override the default. This override applies only to normal persistent-bridge reply turns.
+
+Persistent-bridge internal-note turns use this fixed `additional_instructions` text:
+
+```text
+Internalize the following note into the active conversation state exactly as written. Respect the content of the message and do not paraphrase, summarize, translate, or normalize whitespace. Do not reply or acknowledge it unless the human explicitly asks you to.
+```
+
+Agent frontmatter must not override the internal-note instruction. Raw-run cron prompts use `[Cron media=Text]` and omit `additional_instructions`.
+
+Field order is fixed: first `Origin`, then `media=Media`, then `principal=Name` when present, then `additional_instructions="..."` when present. The header is generated from RocketClaw runtime metadata and trusted runtime-selected instruction text, never from prompt body text. Header field values must be serialized so they cannot introduce whitespace-separated fields, line breaks, `=`, `[`, or `]` into the trusted header. RocketClaw may map runtime values to safe header text, but must not recover missing or unsafe provenance or instruction values from the prompt body. The body remains the source prompt body after the blank line, with the same attachment warning, text attachment, and fallback semantics that apply before framing. This framing does not change the shell-interpolation classification above: persistent bridge human and external input remains literal, and raw cron input retains raw-run expansion behavior.
 
 ### Message Flow
 
@@ -206,3 +224,4 @@ Field order is fixed: first `Origin`, then `media=Media`, then `principal=Name` 
 - 2026-06-23: Required product, operational, and internal provider parity for managed and response-rooted thread seeding across OpenAI, OpenAI-compatible, and Anthropic selections.
 - 2026-06-23: Clarified provider/mode projection for response-thread and pre-seeded managed-conversation inherited context.
 - 2026-06-25: Added bare `🎛` social-mode managed-conversation agent cycling in configured `agents` order, with wraparound, first-agent fallback when the persisted current agent is no longer configured, and the same authorization, feedback, and no-model-input control-message semantics as named agent switching.
+- 2026-06-25: Added trusted `additional_instructions` prompt header field, exact default normal-reply and internal-note instructions, optional normal-reply override from agent `additionalInstructions` frontmatter, and raw-run cron omission of the field.
