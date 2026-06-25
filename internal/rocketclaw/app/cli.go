@@ -99,8 +99,8 @@ func (c *terminalCLI) readInput(ctx context.Context) {
 		inbound := events.NewMainInboundMessage(events.SourceTerminalCLI, events.InboundKindPrompt, "terminal", line, true)
 		inbound.ConversationID = c.conversationID
 
-		inbound.Metadata = map[string]string{events.TerminalCLIClientIDMetadataKey: "embedded"}
-		if principal := terminalPrincipal("embedded"); principal != "" {
+		inbound.Metadata = map[string]string{events.TerminalCLIClientIDMetadataKey: events.TerminalCLIEmbeddedClientID, events.InboundStartNewThreadDisabledMetadataKey: "true"}
+		if principal := terminalPrincipal(events.TerminalCLIEmbeddedClientID); principal != "" {
 			inbound.Metadata[events.InboundPrincipalMetadataKey] = principal
 		}
 
@@ -151,13 +151,9 @@ func (c *terminalCLI) handleSlashCommand(ctx context.Context, line string) (bool
 }
 
 func (c *terminalCLI) openCMUXConversation(ctx context.Context, agent string) error {
-	if _, err := c.cmux(ctx, "identify"); err != nil {
-		return fmt.Errorf("/new requires cmux caller context; cmux identify failed: %w", err)
-	}
-
-	workspaceID, workingDirectory := os.Getenv("CMUX_WORKSPACE_ID"), os.Getenv("CMUX_WORKING_DIRECTORY")
-	if os.Getenv("CMUX_SURFACE_ID") == "" || workingDirectory == "" {
-		return errors.New("/new requires cmux caller context")
+	workspaceID, workingDirectory, err := c.cmuxContext(ctx)
+	if err != nil {
+		return err
 	}
 
 	conversationID, err := c.newConversationID(ctx, agent)
@@ -165,6 +161,32 @@ func (c *terminalCLI) openCMUXConversation(ctx context.Context, agent string) er
 		return fmt.Errorf("create CLI conversation: %w", err)
 	}
 
+	return c.openCMUXAttachedInContext(ctx, conversationID, workspaceID, workingDirectory)
+}
+
+func (c *terminalCLI) openCMUXAttached(ctx context.Context, conversationID string) error {
+	workspaceID, workingDirectory, err := c.cmuxContext(ctx)
+	if err != nil {
+		return err
+	}
+
+	return c.openCMUXAttachedInContext(ctx, conversationID, workspaceID, workingDirectory)
+}
+
+func (c *terminalCLI) cmuxContext(ctx context.Context) (workspaceID, workingDirectory string, err error) {
+	if _, err := c.cmux(ctx, "identify"); err != nil {
+		return "", "", fmt.Errorf("/new requires cmux caller context; cmux identify failed: %w", err)
+	}
+
+	workspaceID, workingDirectory = os.Getenv("CMUX_WORKSPACE_ID"), os.Getenv("CMUX_WORKING_DIRECTORY")
+	if os.Getenv("CMUX_SURFACE_ID") == "" || workingDirectory == "" {
+		return "", "", errors.New("/new requires cmux caller context")
+	}
+
+	return workspaceID, workingDirectory, nil
+}
+
+func (c *terminalCLI) openCMUXAttachedInContext(ctx context.Context, conversationID, workspaceID, workingDirectory string) error {
 	newSurfaceArgs := []string{"new-surface", "--type", "terminal", "--working-directory", workingDirectory, "--focus", "true"}
 	if workspaceID != "" {
 		newSurfaceArgs = append(newSurfaceArgs, "--workspace", workspaceID)

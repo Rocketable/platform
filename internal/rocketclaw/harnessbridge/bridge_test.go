@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -310,6 +311,10 @@ func TestRestartToolAcceptsEmptyOutputAndPropagatesErrors(t *testing.T) {
 
 func testNoopRestart(context.Context, string) (string, error) { return "", nil }
 
+func testNoopStartNewThread(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadResult, error) {
+	return events.StartNewThreadResult{}, errors.New("start new thread is inert in this test")
+}
+
 func testNoopRestartRecorder(context.Context) error { return nil }
 
 func TestNormalizeConfigDefaultsAndCopiesTargets(t *testing.T) {
@@ -541,7 +546,7 @@ func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
 
-	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: []events.OutputTarget{events.OutputTargetSlackMain}, RequestRestart: testNoopRestart, SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: []events.OutputTarget{events.OutputTargetSlackMain}, RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
 	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
 
 	var group errgroup.Group
@@ -576,7 +581,7 @@ func TestHandleInboundInternalizeCompletesResponseWithRocketCodeError(t *testing
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
 
-	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: []events.OutputTarget{events.OutputTargetSlackMain}, RequestRestart: testNoopRestart, SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: []events.OutputTarget{events.OutputTargetSlackMain}, RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
 	inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindInternalize, "cron", "internal note", false)
 	responseCh := inbound.EnableResponseWait()
 
@@ -632,7 +637,7 @@ func TestNewConversationKeepsInjectedSessionService(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	bridge := NewConversation(new(config.Config), bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(new(config.Config), bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
 	assert.Same(t, service, bridge.config.SessionService)
 }
 
@@ -640,7 +645,7 @@ func TestBridgeSubmitReturnsErrorAfterStop(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	bridge := NewConversation(&config.Config{Workspace: t.TempDir()}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(&config.Config{Workspace: t.TempDir()}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), StartNewThread: testNoopStartNewThread, SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
 	require.NoError(t, bridge.Start(context.Background()))
 	require.NoError(t, bridge.Stop())
 
@@ -655,7 +660,7 @@ func TestBridgeStartReportsStateLoadError(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	bridge := NewConversation(&config.Config{Workspace: t.TempDir()}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(&config.Config{Workspace: t.TempDir()}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
 	err := bridge.Start(context.Background())
 	require.ErrorContains(t, err, "load scheduled messages")
 }
@@ -791,7 +796,7 @@ func TestBridgeSummarizeRunsQueuedSummary(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	bridge := NewConversation(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
 	require.NoError(t, bridge.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 
@@ -870,7 +875,7 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	bridge := NewConversation(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
 	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
 
 	var group errgroup.Group
@@ -902,7 +907,7 @@ func TestBridgeStopAfterStartContextCanceledIsIdempotent(t *testing.T) {
 	defer bus.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	bridge := NewConversation(&config.Config{Workspace: t.TempDir()}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(&config.Config{Workspace: t.TempDir()}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), StartNewThread: testNoopStartNewThread, SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
 	require.NoError(t, bridge.Start(ctx))
 
 	cancel()
@@ -1730,6 +1735,7 @@ func TestBuildPromptAdditionalInstructionsFrontmatter(t *testing.T) {
 	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in one sentence.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": "Reply in one sentence."}))
 	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": " "}))
 	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": 7}))
+	assert.Equal(t, "[System media=Text additional_instructions=\"Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\"]\n\n task \n", buildPrompt(&events.InboundMessage{Source: events.SourceSystem, Label: startNewThreadToolName, Text: " task \n", Metadata: map[string]string{events.InboundOriginMetadataKey: "System", events.InboundMediaMetadataKey: "Text"}}, nil))
 }
 
 func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
@@ -1866,7 +1872,7 @@ func TestBridgeDeletesScheduledMessageAfterSuccessfulHandling(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
 	bridge.requestCh = make(chan bridgeRequest, 1)
 	bridge.stopCh = make(chan struct{})
 
@@ -1900,7 +1906,7 @@ func TestBridgeKeepsScheduledMessageAfterHandlingError(t *testing.T) {
 	bus := events.New()
 	bus.Close()
 
-	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
 	bridge.requestCh = make(chan bridgeRequest, 1)
 	bridge.stopCh = make(chan struct{})
 
@@ -1930,7 +1936,7 @@ func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.
 	bus := events.New()
 	defer bus.Close()
 
-	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
 	bridge.requestCh = make(chan bridgeRequest, 1)
 	bridge.stopCh = make(chan struct{})
 
@@ -1986,7 +1992,7 @@ func TestBridgeResetScheduledMessagesDeletesPersistedAndCancelsArmed(t *testing.
 
 		logger := slog.New(slog.NewJSONHandler(&logs, nil))
 		conversationID := events.MainConversationID()
-		bridge := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: conversationID, Agent: "main", SessionService: store}, logger)
+		bridge := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: conversationID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, logger)
 		bridge.requestCh = make(chan bridgeRequest, 1)
 		bridge.stopCh = make(chan struct{})
 
@@ -2139,14 +2145,14 @@ func TestBridgeRestoresScheduledMessageAfterRestart(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, store.Stop(context.Background())) })
 
-		first := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: events.MainConversationID(), Agent: "main", SessionService: store}, slog.New(slog.DiscardHandler))
+		first := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: events.MainConversationID(), Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
 		require.NoError(t, first.Start(t.Context()))
 		require.NoError(t, first.ScheduleMessage(5*time.Second, "later", false))
 		require.NoError(t, first.Stop())
 
 		var logs bytes.Buffer
 
-		second := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: events.MainConversationID(), Agent: "main", SessionService: store}, slog.New(slog.NewJSONHandler(&logs, nil)))
+		second := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: events.MainConversationID(), Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.NewJSONHandler(&logs, nil)))
 		second.requestCh = make(chan bridgeRequest, 1)
 		second.stopCh = make(chan struct{})
 		state, err := store.Load()
@@ -2197,7 +2203,7 @@ func TestBridgeStartLogsRestoredScheduledMessage(t *testing.T) {
 
 	bus := events.New()
 	t.Cleanup(bus.Close)
-	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", SessionService: store}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.NewJSONHandler(&logs, nil)))
 	require.NoError(t, bridge.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 
@@ -2371,7 +2377,7 @@ func TestSeedThreadFromMainReportsThreadSessionLoadFailure(t *testing.T) {
 	bridge.log = slog.New(slog.DiscardHandler)
 
 	err = bridge.SeedThreadFromMain(context.Background())
-	require.ErrorContains(t, err, "load Slack thread session")
+	require.ErrorContains(t, err, "load thread session")
 }
 
 func TestSeedResponseThreadCompactsMainCheckpoint(t *testing.T) {
@@ -2871,6 +2877,41 @@ func TestAskUserQuestionToolCopiesTerminalMetadata(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"selected":["yes"],"custom":"","source":"terminal_cli"}`, result.Output)
+}
+
+func TestStartNewThreadNativeTurnGate(t *testing.T) {
+	assert.True(t, startNewThreadNativeTurn(&events.InboundMessage{Source: events.SourceSlack, Human: true, SlackReply: &events.SlackReplyTarget{ChannelID: "C1", MessageTS: "1"}}))
+	assert.True(t, startNewThreadNativeTurn(&events.InboundMessage{Source: events.SourceDiscordText, Human: true, DiscordReply: &events.DiscordReplyTarget{ChannelID: "C1", MessageID: "M1"}}))
+	assert.True(t, startNewThreadNativeTurn(&events.InboundMessage{Source: events.SourceTerminalCLI, Human: true, Metadata: map[string]string{events.TerminalCLIClientIDMetadataKey: "client-1"}}))
+	assert.False(t, startNewThreadNativeTurn(&events.InboundMessage{Source: events.SourceTerminalCLI, Human: true, Metadata: map[string]string{events.TerminalCLIClientIDMetadataKey: events.TerminalCLIEmbeddedClientID}}))
+	assert.False(t, startNewThreadNativeTurn(&events.InboundMessage{Source: events.SourceSlack, Human: true, SlackReply: &events.SlackReplyTarget{ChannelID: "C1", MessageTS: "1"}, Metadata: map[string]string{events.InboundStartNewThreadDisabledMetadataKey: "true"}}))
+	assert.False(t, startNewThreadNativeTurn(&events.InboundMessage{Source: events.SourceExternalMCP, Human: true}))
+	assert.False(t, startNewThreadNativeTurn(&events.InboundMessage{Source: events.SourceSlack, Human: false, SlackReply: &events.SlackReplyTarget{ChannelID: "C1", MessageTS: "1"}}))
+}
+
+func TestAgentExplicitlyAllowsStartNewThreadRequiresAllow(t *testing.T) {
+	var allowed, auto, denied, missing rocketcode.PermissionSet
+	require.NoError(t, allowed.Set("rocketclaw", startNewThreadToolName, rocketcode.PermissionAllow))
+	require.NoError(t, auto.Set("rocketclaw", startNewThreadToolName, rocketcode.PermissionAuto))
+	require.NoError(t, denied.Set("rocketclaw", startNewThreadToolName, rocketcode.PermissionDeny))
+
+	assert.True(t, agentExplicitlyAllowsStartNewThread(&rocketcode.Agent{Permission: allowed}))
+	assert.False(t, agentExplicitlyAllowsStartNewThread(&rocketcode.Agent{Permission: auto}))
+	assert.False(t, agentExplicitlyAllowsStartNewThread(&rocketcode.Agent{Permission: denied}))
+	assert.False(t, agentExplicitlyAllowsStartNewThread(&rocketcode.Agent{Permission: missing}))
+}
+
+func TestStartNewThreadToolPreservesLiteralPrompt(t *testing.T) {
+	tool := startNewThreadTool(func(_ context.Context, req *events.StartNewThreadRequest) (events.StartNewThreadResult, error) {
+		assert.Equal(t, " literal $(date) ", req.Prompt)
+		assert.Equal(t, "Child", req.Title)
+
+		return events.StartNewThreadResult{ConversationID: "slack-thread:C1:2"}, nil
+	}, &events.InboundMessage{Source: events.SourceSlack, Human: true, ConversationID: "slack-thread:C1:1", SlackReply: &events.SlackReplyTarget{ChannelID: "C1", MessageTS: "1", ThreadTS: "1"}}, "main")
+
+	result, err := tool.Call(t.Context(), []byte(`{"title":" Child ","prompt":" literal $(date) "}`), nil)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"conversation_id":"slack-thread:C1:2"}`, result.Output)
 }
 
 func TestProcessResponseSuppressesProviderOnlySubagentDiagnostics(t *testing.T) {

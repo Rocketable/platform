@@ -28,14 +28,17 @@ type controlRequest struct {
 	Type           string                       `json:"type"`
 	ConversationID string                       `json:"conversation_id,omitempty"`
 	QuestionID     string                       `json:"question_id,omitempty"`
+	OpenID         string                       `json:"open_id,omitempty"`
 	Agent          string                       `json:"agent,omitempty"`
 	Text           string                       `json:"text,omitempty"`
 	Answer         events.AskUserQuestionAnswer `json:"answer,omitzero"`
 	Summarize      bool                         `json:"summarize,omitempty"`
+	Success        bool                         `json:"success,omitempty"`
 }
 type controlMessage struct {
 	Type           string                         `json:"type"`
 	ConversationID string                         `json:"conversation_id,omitempty"`
+	OpenID         string                         `json:"open_id,omitempty"`
 	Text           string                         `json:"text,omitempty"`
 	Question       *events.AskUserQuestionRequest `json:"question,omitempty"`
 }
@@ -46,9 +49,10 @@ type controlServer struct {
 }
 
 type controlQuestionHub struct {
-	mu      sync.Mutex
-	clients map[string]controlQuestionClient
-	pending map[string]controlQuestionPending
+	mu          sync.Mutex
+	clients     map[string]controlQuestionClient
+	pending     map[string]controlQuestionPending
+	pendingOpen map[string]controlOpenPending
 }
 
 type controlQuestionClient struct {
@@ -61,8 +65,13 @@ type controlQuestionPending struct {
 	ch       chan events.AskUserQuestionAnswer
 }
 
+type controlOpenPending struct {
+	clientID string
+	ch       chan bool
+}
+
 func newControlQuestionHub() *controlQuestionHub {
-	return &controlQuestionHub{clients: map[string]controlQuestionClient{}, pending: map[string]controlQuestionPending{}}
+	return &controlQuestionHub{clients: map[string]controlQuestionClient{}, pending: map[string]controlQuestionPending{}, pendingOpen: map[string]controlOpenPending{}}
 }
 
 func startControlServer(ctx context.Context, cfg *config.Config, bus *events.Bus, sessions *harnessbridge.SessionService, threads *threadBridgeManager, questions *controlQuestionHub, logger *slog.Logger) (*controlServer, error) {
@@ -157,6 +166,53 @@ func (h *controlQuestionHub) register(clientID, conversationID string, send func
 	h.mu.Unlock()
 }
 
+func (h *controlQuestionHub) openThread(ctx context.Context, clientID, conversationID string) bool {
+	clientID, conversationID = strings.TrimSpace(clientID), strings.TrimSpace(conversationID)
+
+	h.mu.Lock()
+
+	client, ok := h.clients[clientID]
+	if !ok {
+		h.mu.Unlock()
+		return false
+	}
+
+	openID := rand.Text()
+	ch := make(chan bool, 1)
+	h.pendingOpen[openID] = controlOpenPending{clientID: clientID, ch: ch}
+	h.mu.Unlock()
+
+	client.send(controlMessage{Type: "open_thread", ConversationID: conversationID, OpenID: openID})
+
+	select {
+	case opened := <-ch:
+		return opened
+	case <-ctx.Done():
+		h.mu.Lock()
+		delete(h.pendingOpen, openID)
+		h.mu.Unlock()
+
+		return false
+	}
+}
+
+func (h *controlQuestionHub) acknowledgeOpen(openID string, success bool) bool {
+	h.mu.Lock()
+
+	pending := h.pendingOpen[strings.TrimSpace(openID)]
+	if pending.ch == nil {
+		h.mu.Unlock()
+		return false
+	}
+
+	delete(h.pendingOpen, strings.TrimSpace(openID))
+	h.mu.Unlock()
+
+	pending.ch <- success
+
+	return true
+}
+
 func (h *controlQuestionHub) unregister(clientID string) {
 	h.mu.Lock()
 	delete(h.clients, clientID)
@@ -165,6 +221,14 @@ func (h *controlQuestionHub) unregister(clientID string) {
 		if pending.clientID == clientID {
 			delete(h.pending, id)
 			close(pending.ch)
+		}
+	}
+
+	for id, pending := range h.pendingOpen {
+		if pending.clientID == clientID {
+			delete(h.pendingOpen, id)
+
+			pending.ch <- false
 		}
 	}
 	h.mu.Unlock()
@@ -239,19 +303,9 @@ func serveControlClient(ctx context.Context, conn net.Conn, bus *events.Bus, ses
 
 		conversationID, private = "cli:"+rand.Text(), true
 
-		managed, created, err := threads.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: agent}, []events.OutputTarget{events.OutputTargetTerminal})
-		if err != nil {
+		if _, err := threads.ensureStartedThread(ctx, &threadStart{conversationID: conversationID, agent: agent, outputTargets: []events.OutputTarget{events.OutputTargetTerminal}, persistErr: "persist terminal CLI thread bridge"}); err != nil {
 			send(controlMessage{Type: "error", Text: err.Error()})
 			return
-		}
-
-		if created {
-			if err := threads.store.UpsertThread(conversationID, agent); err != nil {
-				threads.dropCreatedBridge(conversationID, managed)
-				send(controlMessage{Type: "error", Text: fmt.Errorf("persist terminal CLI thread bridge: %w", err).Error()})
-
-				return
-			}
 		}
 
 		send(controlMessage{Type: "attached", ConversationID: conversationID})
@@ -319,6 +373,10 @@ func serveControlClient(ctx context.Context, conn net.Conn, bus *events.Bus, ses
 			if !questions.answer(clientID, req.QuestionID, req.Answer) {
 				send(controlMessage{Type: "error", Text: "question is not pending for this terminal CLI client"})
 			}
+		case "open_thread_result":
+			if !questions.acknowledgeOpen(req.OpenID, req.Success) {
+				send(controlMessage{Type: "error", Text: "open_thread request is not pending"})
+			}
 		}
 	}
 }
@@ -383,6 +441,15 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 	renderer := &terminalRenderer{out: options.Out}
 	enc, dec, reader := json.NewEncoder(conn), json.NewDecoder(conn), bufio.NewReader(options.In)
 
+	var sendMu sync.Mutex
+
+	sendRequest := func(req controlRequest) error {
+		sendMu.Lock()
+		defer sendMu.Unlock()
+
+		return enc.Encode(req)
+	}
+
 	request := controlRequest{Type: "attach", ConversationID: strings.TrimSpace(options.ConversationID)}
 	if request.ConversationID == "" {
 		request.ConversationID = events.MainConversationID()
@@ -392,7 +459,7 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 		request = controlRequest{Type: "new", Agent: options.Agent}
 	}
 
-	if err := enc.Encode(request); err != nil {
+	if err := sendRequest(request); err != nil {
 		return fmt.Errorf("send control attach request: %w", err)
 	}
 
@@ -404,6 +471,10 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 		pendingMu       sync.Mutex
 		pendingQuestion *events.AskUserQuestionRequest
 	)
+
+	cli := terminalCLI{renderer: renderer, reader: reader, cmux: runCMUX, newConversationID: func(newCtx context.Context, agent string) (string, error) {
+		return newControlConversation(newCtx, cfg, agent)
+	}}
 
 	go func() {
 		defer close(closed)
@@ -434,6 +505,13 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 				}
 			case "closed":
 				return
+			case "open_thread":
+				err := cli.openCMUXAttached(ctx, msg.ConversationID)
+				if err != nil {
+					renderer.printLine(err.Error())
+				}
+
+				_ = sendRequest(controlRequest{Type: "open_thread_result", OpenID: msg.OpenID, Success: err == nil})
 			}
 		}
 	}()
@@ -447,9 +525,6 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 	}
 
 	exited := false
-	cli := terminalCLI{renderer: renderer, reader: reader, cmux: runCMUX, newConversationID: func(newCtx context.Context, agent string) (string, error) {
-		return newControlConversation(newCtx, cfg, agent)
-	}}
 
 	err = cli.readLines(func(line string) error {
 		line = strings.TrimSpace(line)
@@ -484,7 +559,7 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 				return nil
 			}
 
-			if err := enc.Encode(controlRequest{Type: "question_answer", QuestionID: question.ID, Answer: answer}); err != nil {
+			if err := sendRequest(controlRequest{Type: "question_answer", QuestionID: question.ID, Answer: answer}); err != nil {
 				return fmt.Errorf("send control question answer: %w", err)
 			}
 
@@ -495,7 +570,7 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 			summarize := options.NewConversation && (&terminalCLI{renderer: renderer, reader: reader}).askYesNo("Append a summary of this CLI session to main? [y/N] ")
 			exited = true
 
-			if err := enc.Encode(controlRequest{Type: "exit", Summarize: summarize}); err != nil {
+			if err := sendRequest(controlRequest{Type: "exit", Summarize: summarize}); err != nil {
 				return fmt.Errorf("send control exit request: %w", err)
 			}
 
@@ -506,7 +581,7 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 			return err
 		}
 
-		if err := enc.Encode(controlRequest{Type: "prompt", Text: line}); err != nil {
+		if err := sendRequest(controlRequest{Type: "prompt", Text: line}); err != nil {
 			return fmt.Errorf("send control prompt request: %w", err)
 		}
 
@@ -517,7 +592,7 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 	}
 
 	if !exited {
-		_ = enc.Encode(controlRequest{Type: "exit"})
+		_ = sendRequest(controlRequest{Type: "exit"})
 	}
 
 	select {

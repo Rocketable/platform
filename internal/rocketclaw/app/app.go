@@ -90,7 +90,12 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		discordTextSink  *discordtext.Connector
 		discordSink      *discordvoice.Connector
 		stops            []namedStopper
+		startThreadRoot  startNewThreadRootFunc
 	)
+
+	startThreadRoot = func(_ context.Context, req *events.StartNewThreadRequest) (events.StartNewThreadRootResult, error) {
+		return events.StartNewThreadRootResult{}, fmt.Errorf("text root is not available for %s turns", req.Source)
+	}
 
 	stateStoreLock, err := harnessbridge.AcquireStateStoreLock(cfg.Workspace, cfg.WorkDirName())
 	if err != nil {
@@ -293,6 +298,10 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		return "graceful restart scheduled", nil
 	}
 
+	startNewThread := func(startCtx context.Context, req *events.StartNewThreadRequest) (events.StartNewThreadResult, error) {
+		return threadBridges.StartNewThread(startCtx, req, startThreadRoot, controlQuestions.openThread)
+	}
+
 	cronjobs = cronjob.New(cfg.Workspace, cfg.WorkDirName(), bus, func(jobCtx context.Context, agent, prompt string, log *slog.Logger, progress *harnessbridge.RawRunProgress) (cronjob.RunResult, error) {
 		progress.SessionService = rocketcodeSessions
 		progress.ScheduleMessage = mainBridge.ScheduleMessage
@@ -331,9 +340,9 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	)
 
 	mainOutputTargets := configuredMainOutputTargets(cfg)
-	mainBridge = harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: true, OutputTargets: mainOutputTargets, RequestRestart: requestRestart, AskUserQuestion: questionBroker.ask, SessionService: rocketcodeSessions}, logger)
+	mainBridge = harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: true, OutputTargets: mainOutputTargets, RequestRestart: requestRestart, AskUserQuestion: questionBroker.ask, StartNewThread: startNewThread, SessionService: rocketcodeSessions}, logger)
 	threadBridges = newThreadBridgeManager(bus, cfg, rocketcodeSessions, logger, func(bridgeConfig bridgeConfig) directBridge {
-		return harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: bridgeConfig.ConversationID, Agent: bridgeConfig.Agent, ConsumeSharedInbound: false, OutputTargets: bridgeConfig.OutputTargets, RequestRestart: requestRestart, AskUserQuestion: questionBroker.ask, SessionService: rocketcodeSessions}, logger)
+		return harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: bridgeConfig.ConversationID, Agent: bridgeConfig.Agent, ConsumeSharedInbound: false, OutputTargets: bridgeConfig.OutputTargets, RequestRestart: requestRestart, AskUserQuestion: questionBroker.ask, StartNewThread: startNewThread, SessionService: rocketcodeSessions}, logger)
 	})
 	threadBridges.targets = mainOutputTargets
 
@@ -367,7 +376,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 		questionBroker.terminalAsk = cliSession.askUserQuestion
 		if cliSession.newConversation {
-			cliBridge = harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: cliSession.conversationID, Agent: cliSession.agent, ConsumeSharedInbound: false, OutputTargets: []events.OutputTarget{events.OutputTargetTerminal}, RequestRestart: requestRestart, AskUserQuestion: questionBroker.ask, SessionService: rocketcodeSessions}, logger)
+			cliBridge = harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: cliSession.conversationID, Agent: cliSession.agent, ConsumeSharedInbound: false, OutputTargets: []events.OutputTarget{events.OutputTargetTerminal}, RequestRestart: requestRestart, AskUserQuestion: questionBroker.ask, StartNewThread: startNewThread, SessionService: rocketcodeSessions}, logger)
 			if err := cliBridge.Start(runCtx); err != nil {
 				return fmt.Errorf("start terminal CLI bridge: %w", err)
 			}
@@ -395,6 +404,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 		slackSink = slackconnector.New(&cfg.Slack, bus, cfg.EmergencySafeWords, cfg.ThreadAgents, threadBridges, cronjobs, mainBridge.InterruptActiveTurn, questionBroker.answer, questionBroker.answerText, logger)
 		questionBroker.post, questionBroker.delete = slackSink.AskUserQuestion, slackSink.DeleteUserQuestion
+		startThreadRoot = slackSink.StartNewThreadRoot
 
 		cronjobs.SendSlackChannel = slackSink.SendCronjobChannelThread
 		if err := slackSink.Start(runCtx); err != nil {
@@ -409,6 +419,9 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 		discordTextSink = discordtext.New(&cfg.DiscordText, bus, cfg.ThreadAgents, threadBridges, cronjobs, mainBridge.InterruptActiveTurn, questionBroker.answer, questionBroker.answerText, logger)
 		questionBroker.post, questionBroker.delete = discordTextSink.AskUserQuestion, discordTextSink.DeleteUserQuestion
+		startThreadRoot = func(_ context.Context, req *events.StartNewThreadRequest) (events.StartNewThreadRootResult, error) {
+			return discordTextSink.StartNewThreadRoot(req)
+		}
 
 		if err := discordTextSink.Start(runCtx); err != nil {
 			return fmt.Errorf("start Discord text connector: %w", err)

@@ -55,9 +55,16 @@ const (
 
 // ThreadState is the persisted state for one text-thread bridge.
 type ThreadState struct {
-	Agent              string `json:"agent,omitempty"`
-	SeededFromResponse string `json:"seeded_from_response,omitempty"`
+	Agent              string        `json:"agent,omitempty"`
+	SeededFromResponse string        `json:"seeded_from_response,omitempty"`
+	CreatedBy          ThreadCreator `json:"created_by,omitempty"`
 }
+
+// ThreadCreator records which subsystem created a managed text conversation.
+type ThreadCreator string
+
+// ThreadCreatedByCron marks managed conversations created for cron output.
+const ThreadCreatedByCron ThreadCreator = "cron"
 
 // ResponseCheckpointState records enough metadata to seed a response-rooted thread.
 type ResponseCheckpointState struct {
@@ -186,6 +193,24 @@ func (s *SessionService) UpsertThread(conversationID, agent string) error {
 
 		thread := state.Threads[conversationID]
 		thread.Agent = strings.TrimSpace(agent)
+		state.Threads[conversationID] = thread
+	})
+}
+
+// MarkThreadCreatedBy records the creator class for origin-restricted managed conversations.
+func (s *SessionService) MarkThreadCreatedBy(conversationID string, createdBy ThreadCreator) error {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return errors.New("thread conversation ID is required")
+	}
+
+	return s.updateState(func(state *State) {
+		if state.Threads == nil {
+			state.Threads = map[string]ThreadState{}
+		}
+
+		thread := state.Threads[conversationID]
+		thread.CreatedBy = ThreadCreator(strings.TrimSpace(string(createdBy)))
 		state.Threads[conversationID] = thread
 	})
 }

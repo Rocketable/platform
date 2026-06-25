@@ -49,11 +49,11 @@ import (
 )
 
 const (
-	restartToolName, rawRunToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName, scheduleMessageToolName, resetScheduledMessagesToolName     = "rocketclaw_restart", "rocketclaw_i_want_human_partner_to_see_this", "rocketclaw_attach_files_to_response", "rocketclaw_update_goal", "ask_user_question", "rocketclaw_schedule_message", "rocketclaw_reset_scheduled_messages"
-	internalErrorResponse, attachmentAccessFallback, unsupportedFileFallback                                                                                       = "I hit an internal error while waiting for rocketcode.", "I can see that you attached a file, but I could not send it to the model. Please re-upload it as a supported image or send a smaller file.", "I can see that you attached a non-image file. I can inspect image attachments right now, but other file types are not supported yet."
-	defaultQueueSize                                                                                                                                               = 128
-	externalMCPMetadataEntryType, externalMCPConversationPrefix, goalContinuationLabel, goalKickoffLabel, rocketclawConversationIDEnv, rocketclawMetadataEnvPrefix = "mcp_external_metadata", "external_mcp:", "goal_continuation", "goal", "ROCKETCLAW_CONVERSATION_ID", "ROCKETCLAW_METADATA_"
-	maxInboundAttachmentBytes, maxInboundAttachmentTotalBytes, maxInboundAttachmentResizeInput, maxInboundAttachmentResizeAttempts                                 = 4 << 20, 16 << 20, 16 << 20, 8
+	restartToolName, rawRunToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName, startNewThreadToolName, scheduleMessageToolName, resetScheduledMessagesToolName = "rocketclaw_restart", "rocketclaw_i_want_human_partner_to_see_this", "rocketclaw_attach_files_to_response", "rocketclaw_update_goal", "ask_user_question", "rocketclaw_start_new_thread", "rocketclaw_schedule_message", "rocketclaw_reset_scheduled_messages"
+	internalErrorResponse, attachmentAccessFallback, unsupportedFileFallback                                                                                                           = "I hit an internal error while waiting for rocketcode.", "I can see that you attached a file, but I could not send it to the model. Please re-upload it as a supported image or send a smaller file.", "I can see that you attached a non-image file. I can inspect image attachments right now, but other file types are not supported yet."
+	defaultQueueSize                                                                                                                                                                   = 128
+	externalMCPMetadataEntryType, externalMCPConversationPrefix, goalContinuationLabel, goalKickoffLabel, rocketclawConversationIDEnv, rocketclawMetadataEnvPrefix                     = "mcp_external_metadata", "external_mcp:", "goal_continuation", "goal", "ROCKETCLAW_CONVERSATION_ID", "ROCKETCLAW_METADATA_"
+	maxInboundAttachmentBytes, maxInboundAttachmentTotalBytes, maxInboundAttachmentResizeInput, maxInboundAttachmentResizeAttempts                                                     = 4 << 20, 16 << 20, 16 << 20, 8
 )
 
 var errBridgeStopped = errors.New("bridge stopped")
@@ -81,6 +81,7 @@ type Config struct {
 	OutputTargets         []events.OutputTarget
 	RequestRestart        func(context.Context, string) (string, error)
 	AskUserQuestion       func(context.Context, *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error)
+	StartNewThread        func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadResult, error)
 	SessionService        *SessionService
 }
 
@@ -441,59 +442,27 @@ func (b *Bridge) SeedResponseThread(ctx context.Context, checkpoint events.Respo
 	return nil
 }
 
-// SeedThreadFromMain initializes an empty thread session from current main-session context.
-func (b *Bridge) SeedThreadFromMain(ctx context.Context) error {
-	threadEntries, err := b.observeSessionEntries(ctx, b.config.ConversationID)
-	if err != nil {
-		return fmt.Errorf("load Slack thread session: %w", err)
+// SeedThreadFromConversation initializes an empty thread session from source conversation context.
+func (b *Bridge) SeedThreadFromConversation(ctx context.Context, sourceConversationID string) error {
+	sourceConversationID = strings.TrimSpace(sourceConversationID)
+	if sourceConversationID == "" {
+		return errors.New("source conversation ID is required")
 	}
 
-	if len(threadEntries) > 0 {
-		return nil
+	entryType := "conversation_thread_seed"
+	if sourceConversationID == events.MainConversationID() {
+		entryType = "main_thread_seed"
 	}
 
-	observed, err := b.observeSessionEntries(ctx, events.MainConversationID())
-	if err != nil {
-		return fmt.Errorf("load main session entries: %w", err)
-	}
-
-	if len(observed) == 0 {
-		return nil
-	}
-
-	seedEntries := make([]rocketcode.SessionEntry, 0, len(observed))
-	model := responses.ResponseCompactParamsModel("")
-
-	for i := range observed {
-		entry := observed[i].Entry
-
-		seedEntries = append(seedEntries, entry)
-		if strings.TrimSpace(entry.Model) != "" {
-			model = responses.ResponseCompactParamsModel(strings.TrimSpace(entry.Model))
-		}
-	}
-
-	compactionModel, err := compactModel(string(model))
-	if err != nil {
-		return err
-	}
-
-	seedReplay, err := b.compactSeedReplay(ctx, seedEntries, compactionModel)
-	if err != nil {
-		return fmt.Errorf("compact main session: %w", err)
-	}
-
-	threadStore := newSessionStore(b.config.ConversationID, b.config.SessionService)
-
-	_, err = threadStore.outID(rocketcode.SessionEntry{Version: 1, Type: "main_thread_seed", Timestamp: time.Now().UTC(), Model: string(model), ReplayInput: seedReplay})
-	if err != nil {
-		return fmt.Errorf("persist main-thread seed: %w", err)
-	}
-
-	return nil
+	return b.seedThreadFromConversation(ctx, sourceConversationID, entryType)
 }
 
-// SeedThreadFromCron initializes an empty Slack thread session from cron output.
+// SeedThreadFromMain initializes an empty thread session from current main-session context.
+func (b *Bridge) SeedThreadFromMain(ctx context.Context) error {
+	return b.seedThreadFromConversation(ctx, events.MainConversationID(), "main_thread_seed")
+}
+
+// SeedThreadFromCron initializes an empty thread session from cron output.
 func (b *Bridge) SeedThreadFromCron(ctx context.Context, seedText string) error {
 	seedText = strings.TrimSpace(seedText)
 	if seedText == "" {
@@ -519,6 +488,57 @@ func (b *Bridge) SeedThreadFromCron(ctx context.Context, seedText string) error 
 	_, err = threadStore.outID(rocketcode.SessionEntry{Version: 1, Type: "cron_thread_seed", Timestamp: time.Now().UTC(), ReplayInput: seedReplay})
 	if err != nil {
 		return fmt.Errorf("persist cron thread seed: %w", err)
+	}
+
+	return nil
+}
+
+func (b *Bridge) seedThreadFromConversation(ctx context.Context, sourceConversationID, entryType string) error {
+	threadEntries, err := b.observeSessionEntries(ctx, b.config.ConversationID)
+	if err != nil {
+		return fmt.Errorf("load thread session: %w", err)
+	}
+
+	if len(threadEntries) > 0 {
+		return nil
+	}
+
+	observed, err := b.observeSessionEntries(ctx, sourceConversationID)
+	if err != nil {
+		return fmt.Errorf("load source session entries: %w", err)
+	}
+
+	if len(observed) == 0 {
+		return nil
+	}
+
+	seedEntries := make([]rocketcode.SessionEntry, 0, len(observed))
+	model := responses.ResponseCompactParamsModel("")
+
+	for i := range observed {
+		entry := observed[i].Entry
+
+		seedEntries = append(seedEntries, entry)
+		if strings.TrimSpace(entry.Model) != "" {
+			model = responses.ResponseCompactParamsModel(strings.TrimSpace(entry.Model))
+		}
+	}
+
+	compactionModel, err := compactModel(string(model))
+	if err != nil {
+		return err
+	}
+
+	seedReplay, err := b.compactSeedReplay(ctx, seedEntries, compactionModel)
+	if err != nil {
+		return fmt.Errorf("compact source session: %w", err)
+	}
+
+	threadStore := newSessionStore(b.config.ConversationID, b.config.SessionService)
+
+	_, err = threadStore.outID(rocketcode.SessionEntry{Version: 1, Type: entryType, Timestamp: time.Now().UTC(), Model: string(model), ReplayInput: seedReplay})
+	if err != nil {
+		return fmt.Errorf("persist thread seed: %w", err)
 	}
 
 	return nil
@@ -1205,8 +1225,13 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 	b.log.Info("prepared rocketcode session history", "conversation_id", b.config.ConversationID, "turn_id", turnID, "entry_count", len(observed), "replay_item_count", replayItemCount, "history_bytes", historyBytes, "compaction_count", compactionCount, "latest_entry_id", latestEntryID, "latest_entry_type", latestEntryType)
 
 	customTools := []rocketcode.Tool{attachments.Tool(root)}
-	if msg.Human && (msg.Source == events.SourceSlack && msg.SlackReply != nil || msg.Source == events.SourceDiscordText && msg.DiscordReply != nil || msg.Source == events.SourceTerminalCLI && strings.TrimSpace(msg.Metadata[events.TerminalCLIClientIDMetadataKey]) != "") {
+	if nativeQuestionTurn(msg) {
 		customTools = append(customTools, askUserQuestionTool(b.config.AskUserQuestion, msg))
+
+		agent := agents.Items[agentName]
+		if startNewThreadNativeTurn(msg) && agentExplicitlyAllowsStartNewThread(&agent) {
+			customTools = append(customTools, startNewThreadTool(b.config.StartNewThread, msg, agentName))
+		}
 	}
 
 	rocketcodeConfig := b.rocketcodeConfig(shellOutputDir, shellEnv, customTools...)
@@ -2042,6 +2067,122 @@ func askUserQuestionTool(ask func(context.Context, *events.AskUserQuestionReques
 	}}
 }
 
+func startNewThreadTool(start func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadResult, error), msg *events.InboundMessage, currentAgent string) rocketcode.Tool {
+	parameters := map[string]any{
+		"properties": map[string]any{
+			"title":  map[string]any{"type": "string"},
+			"prompt": map[string]any{"type": "string"},
+			"agent":  map[string]any{"type": "string"},
+		},
+		"required": []string{"title", "prompt"},
+	}
+
+	return rocketcode.Tool{
+		Name:               startNewThreadToolName,
+		Description:        "Start a new human-visible RocketClaw managed conversation on the same native surface as this turn. The new conversation inherits this conversation's context before receiving prompt as its first task. Use agent only when a specific configured agent should handle the new thread.",
+		Permission:         "rocketclaw",
+		VisibilitySubjects: []string{startNewThreadToolName},
+		Subjects:           func(json.RawMessage) ([]string, error) { return []string{startNewThreadToolName}, nil },
+		Parameters:         parameters,
+		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+			var input struct {
+				Title  string `json:"title"`
+				Prompt string `json:"prompt"`
+				Agent  string `json:"agent"`
+			}
+			if err := json.Unmarshal(raw, &input); err != nil {
+				return rocketcode.ToolResult{}, fmt.Errorf("parse new thread request: %w", err)
+			}
+
+			title, prompt := strings.TrimSpace(input.Title), input.Prompt
+			if title == "" {
+				return rocketcode.ToolResult{}, errors.New("title is required")
+			}
+
+			if strings.TrimSpace(prompt) == "" {
+				return rocketcode.ToolResult{}, errors.New("prompt is required")
+			}
+
+			req := events.StartNewThreadRequest{Source: msg.Source, SourceConversationID: msg.ConversationID, CurrentAgent: currentAgent, Agent: strings.TrimSpace(input.Agent), Title: title, Prompt: prompt, TerminalClientID: strings.TrimSpace(msg.Metadata[events.TerminalCLIClientIDMetadataKey]), AllowedAgents: metadataList(msg.Metadata[events.InboundAllowedAgentsMetadataKey])}
+			if msg.SlackReply != nil {
+				req.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS}
+			}
+
+			if msg.DiscordReply != nil {
+				req.DiscordReply = &events.DiscordReplyTarget{ChannelID: msg.DiscordReply.ChannelID, MessageID: msg.DiscordReply.MessageID, ThreadID: msg.DiscordReply.ThreadID}
+			}
+
+			result, err := start(ctx, &req)
+			if err != nil {
+				return rocketcode.ToolResult{}, err
+			}
+
+			data, err := json.Marshal(result)
+			if err != nil {
+				return rocketcode.ToolResult{}, fmt.Errorf("encode new thread result: %w", err)
+			}
+
+			return rocketcode.TextToolResult(string(data)), nil
+		},
+	}
+}
+
+func agentExplicitlyAllowsStartNewThread(agent *rocketcode.Agent) bool {
+	action, matched := agent.Permission.Evaluate("rocketclaw", startNewThreadToolName)
+
+	return matched && action == rocketcode.PermissionAllow
+}
+
+func metadataList(value string) []string {
+	items := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == '\n' || r == '\t' || r == ' ' })
+
+	items = slices.DeleteFunc(items, func(item string) bool { return strings.TrimSpace(item) == "" })
+	for i := range items {
+		items[i] = strings.TrimSpace(items[i])
+	}
+
+	return items
+}
+
+func nativeQuestionTurn(msg *events.InboundMessage) bool {
+	if !msg.Human {
+		return false
+	}
+
+	switch msg.Source {
+	case events.SourceSlack:
+		return msg.SlackReply != nil
+	case events.SourceDiscordText:
+		return msg.DiscordReply != nil
+	case events.SourceTerminalCLI:
+		return strings.TrimSpace(msg.Metadata[events.TerminalCLIClientIDMetadataKey]) != ""
+	case events.SourceDiscordVoice, events.SourceExternalMCP, events.SourceWebVoice, events.SourceSystem:
+		return false
+	}
+
+	return false
+}
+
+func startNewThreadNativeTurn(msg *events.InboundMessage) bool {
+	if !msg.Human || msg.Metadata[events.InboundStartNewThreadDisabledMetadataKey] == "true" {
+		return false
+	}
+
+	switch msg.Source {
+	case events.SourceSlack:
+		return msg.SlackReply != nil
+	case events.SourceDiscordText:
+		return msg.DiscordReply != nil
+	case events.SourceTerminalCLI:
+		clientID := strings.TrimSpace(msg.Metadata[events.TerminalCLIClientIDMetadataKey])
+		return clientID != "" && clientID != events.TerminalCLIEmbeddedClientID
+	case events.SourceDiscordVoice, events.SourceExternalMCP, events.SourceWebVoice, events.SourceSystem:
+		return false
+	}
+
+	return false
+}
+
 func updateGoalTool(b *Bridge) rocketcode.Tool {
 	store := b.config.SessionService
 	conversationID := b.config.ConversationID
@@ -2444,7 +2585,9 @@ func buildPrompt(msg *events.InboundMessage, agentFrontmatter map[string]any) st
 	}
 
 	body := strings.TrimSpace(msg.Text)
-	if msg.Kind == events.InboundKindInternalize {
+	if msg.Label == startNewThreadToolName {
+		body = msg.Text
+	} else if msg.Kind == events.InboundKindInternalize {
 		instruction = internalNoteInstruction
 		body = msg.Text
 	}

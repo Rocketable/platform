@@ -18,6 +18,9 @@ const mainConversationID = "main"
 // TerminalCLIClientIDMetadataKey identifies the attached terminal client for terminal-originated turns.
 const TerminalCLIClientIDMetadataKey = "terminal_cli_client_id"
 
+// TerminalCLIEmbeddedClientID marks direct in-process CLI input that has no server-owned control client.
+const TerminalCLIEmbeddedClientID = "embedded"
+
 const (
 	// InboundOriginMetadataKey overrides the trusted prompt provenance origin.
 	InboundOriginMetadataKey = "rocketclaw_origin"
@@ -25,6 +28,10 @@ const (
 	InboundMediaMetadataKey = "rocketclaw_media"
 	// InboundPrincipalMetadataKey identifies the trusted human principal for prompt provenance.
 	InboundPrincipalMetadataKey = "rocketclaw_principal"
+	// InboundAllowedAgentsMetadataKey lists source-surface allowed agents for model-created child conversations.
+	InboundAllowedAgentsMetadataKey = "rocketclaw_allowed_agents"
+	// InboundStartNewThreadDisabledMetadataKey suppresses model-created child conversation tooling for this turn.
+	InboundStartNewThreadDisabledMetadataKey = "rocketclaw_start_new_thread_disabled"
 )
 
 // InboundKind describes how an inbound message should be handled.
@@ -152,6 +159,30 @@ type AskUserQuestionAnswer struct {
 	Source   Source   `json:"source"`
 }
 
+// StartNewThreadRequest asks RocketClaw to create a new managed conversation from the current turn.
+type StartNewThreadRequest struct {
+	Source                                                   Source
+	SourceConversationID, CurrentAgent, Agent, Title, Prompt string
+	TerminalClientID                                         string
+	AllowedAgents                                            []string
+	SlackReply                                               *SlackReplyTarget
+	DiscordReply                                             *DiscordReplyTarget
+}
+
+// StartNewThreadResult reports the created conversation and openable surface.
+type StartNewThreadResult struct {
+	ConversationID string `json:"conversation_id"`
+	URL            string `json:"url,omitempty"`
+	AttachCommand  string `json:"attach_command,omitempty"`
+	CMUXOpened     bool   `json:"cmux_opened,omitempty"`
+}
+
+// StartNewThreadRootResult reports the native root surface created by a text connector.
+type StartNewThreadRootResult struct {
+	Target TextConversationTarget
+	URL    string
+}
+
 // ResponseCheckpoint identifies a persisted main-session turn that can seed a Slack thread.
 type ResponseCheckpoint struct {
 	ConversationID, ResponseID, Model, AssistantText string
@@ -193,6 +224,36 @@ func NewMainInboundMessage(source Source, kind InboundKind, label, text string, 
 		Source: source, Label: label, Text: text, Human: human, Kind: kind,
 		ConversationID: MainConversationID(),
 	}
+}
+
+// StartNewThreadRootText returns the human-visible root text for tool-created text conversations.
+func StartNewThreadRootText(title, prompt string) string {
+	return "New thread: " + strings.TrimSpace(title) + "\n\nStarted by RocketClaw from this conversation.\n\nTask:\n" + prompt
+}
+
+// StartNewThreadFirstPrompt returns the first model-visible task prompt body for tool-created conversations.
+func StartNewThreadFirstPrompt(req *StartNewThreadRequest, targetAgent string) string {
+	source := string(req.Source)
+	if req.SourceConversationID != "" {
+		source += " " + strings.TrimSpace(req.SourceConversationID)
+	}
+
+	return "A RocketClaw agent started this new thread from an existing conversation.\n\n" +
+		"Title: " + strings.TrimSpace(req.Title) + "\n" +
+		"Started from: " + strings.TrimSpace(source) + "\n" +
+		"Source conversation ID: " + strings.TrimSpace(req.SourceConversationID) + "\n" +
+		"Requesting agent: " + strings.TrimSpace(req.CurrentAgent) + "\n" +
+		"Target agent: " + strings.TrimSpace(targetAgent) + "\n\n" +
+		"Task:\n" + req.Prompt
+}
+
+// SetInboundAllowedAgents records surface-constrained agents on an inbound message.
+func SetInboundAllowedAgents(inbound *InboundMessage, agents []string) {
+	if inbound.Metadata == nil {
+		inbound.Metadata = map[string]string{}
+	}
+
+	inbound.Metadata[InboundAllowedAgentsMetadataKey] = strings.Join(agents, ",")
 }
 
 // NewMainInboundMessageFromContent constructs a main inbound message from normalized source content.

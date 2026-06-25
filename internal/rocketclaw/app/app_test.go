@@ -1212,7 +1212,7 @@ func TestExternalMCPExistingExternalConversationIDRunsAgentAndRepliesInSeededSla
 	cfg.MCPExternal.ListenAddr = "127.0.0.1:0"
 	rocketcodeSessions := newAppTestSessionService(t, workspace)
 	threadBridges := newThreadBridgeManager(bus, nil, rocketcodeSessions, testLogger(), func(bridgeConfig bridgeConfig) directBridge {
-		return harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: bridgeConfig.ConversationID, Agent: bridgeConfig.Agent, ConsumeSharedInbound: false, OutputTargets: bridgeConfig.OutputTargets, SessionService: rocketcodeSessions}, testLogger())
+		return harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: bridgeConfig.ConversationID, Agent: bridgeConfig.Agent, ConsumeSharedInbound: false, OutputTargets: bridgeConfig.OutputTargets, StartNewThread: inertStartNewThread, SessionService: rocketcodeSessions}, testLogger())
 	})
 
 	defer func() { require.NoError(t, threadBridges.Stop()) }()
@@ -1796,6 +1796,10 @@ func inertExternalMCPRelay(context.Context, string, []events.OutboundAttachment,
 }
 
 func inertExternalMCPCleanup(context.Context, *events.InboundMessage) {}
+
+func inertStartNewThread(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadResult, error) {
+	return events.StartNewThreadResult{}, errors.New("start new thread is inert in this test")
+}
 
 func appTestSlackReply(replyTarget *events.SlackReplyTarget) *events.InboundMessage {
 	return &events.InboundMessage{SlackReply: replyTarget}

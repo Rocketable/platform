@@ -288,14 +288,9 @@ func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, rel
 		channelID = c.config.ChannelID
 	}
 
-	root, err := c.client.sendMessage(channelID, messageSend{Content: "Cronjob `" + relativePath + "` ran at `" + ranAt + "` with agent `" + agent + "`."}, nil)
+	_, thread, err := c.createManagedThreadRoot(channelID, "Cronjob `"+relativePath+"` ran at `"+ranAt+"` with agent `"+agent+"`.", relativePath, "send Discord cronjob thread root", "create Discord cronjob thread")
 	if err != nil {
-		return fmt.Errorf("send Discord cronjob thread root: %w", err)
-	}
-
-	thread, err := c.createThread(root.ChannelID, root.ID, relativePath)
-	if err != nil {
-		return fmt.Errorf("create Discord cronjob thread: %w", err)
+		return err
 	}
 
 	if strings.TrimSpace(text) != "" {
@@ -324,6 +319,74 @@ func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, rel
 	}
 
 	return nil
+}
+
+// StartNewThreadRoot posts the root message for a model-created Discord Text conversation.
+func (c *Connector) StartNewThreadRoot(req *events.StartNewThreadRequest) (events.StartNewThreadRootResult, error) {
+	if c.client == nil {
+		return events.StartNewThreadRootResult{}, errors.New("discord text connector is not started")
+	}
+
+	channelID := c.config.ChannelID
+	if req.DiscordReply != nil {
+		if strings.TrimSpace(req.DiscordReply.ThreadID) != "" {
+			channelID = strings.TrimSpace(req.DiscordReply.ThreadID)
+		} else if strings.TrimSpace(req.DiscordReply.ChannelID) != "" {
+			channelID = strings.TrimSpace(req.DiscordReply.ChannelID)
+		}
+	}
+
+	channel, err := c.client.channel(channelID)
+	if err != nil {
+		return events.StartNewThreadRootResult{}, fmt.Errorf("fetch Discord new thread source channel: %w", err)
+	}
+
+	if channel.Type == channelTypeDM {
+		return events.StartNewThreadRootResult{}, errors.New("rocketclaw_start_new_thread cannot create Discord DM managed threads")
+	}
+
+	rootChannelID := channelID
+	if channel.Type == channelTypeGuildPublicThread || channel.Type == channelTypeGuildPrivateThread || channel.Type == channelTypeGuildNewsThread {
+		rootChannelID = strings.TrimSpace(channel.ParentID)
+	}
+
+	if rootChannelID == "" {
+		return events.StartNewThreadRootResult{}, errors.New("discord new thread source channel has no guild text parent")
+	}
+
+	root, thread, err := c.createManagedThreadRoot(rootChannelID, events.StartNewThreadRootText(req.Title, req.Prompt), req.Title, "send Discord new thread root", "create Discord new thread")
+	if err != nil {
+		return events.StartNewThreadRootResult{}, err
+	}
+
+	c.recordThreadRoot(root.ChannelID, root.ID, thread.ID)
+
+	url := ""
+
+	guildID := strings.TrimSpace(thread.GuildID)
+	if guildID == "" {
+		guildID = strings.TrimSpace(channel.GuildID)
+	}
+
+	if guildID != "" {
+		url = "https://discord.com/channels/" + guildID + "/" + thread.ID
+	}
+
+	return events.StartNewThreadRootResult{Target: events.TextConversationTarget{ChannelID: root.ChannelID, MessageID: root.ID, ThreadID: thread.ID}, URL: url}, nil
+}
+
+func (c *Connector) createManagedThreadRoot(channelID, content, name, rootErr, threadErr string) (*postedMessage, *textChannel, error) {
+	root, err := c.client.sendMessage(channelID, messageSend{Content: content}, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", rootErr, err)
+	}
+
+	thread, err := c.createThread(root.ChannelID, root.ID, name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", threadErr, err)
+	}
+
+	return root, thread, nil
 }
 
 func (c *Connector) sendProgress(channelID string, msg *events.OutboundMessage) error {
@@ -491,7 +554,12 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 			return
 		}
 
-		handled, err := c.threadRouter.SubmitThreadReply(ctx, events.TextConversationTarget{ThreadID: msg.ChannelID}, c.inboundMessage(ctx, msg, text, reply))
+		inbound := c.inboundMessage(ctx, msg, text, reply)
+		if social {
+			events.SetInboundAllowedAgents(inbound, socialChannel.Agents)
+		}
+
+		handled, err := c.threadRouter.SubmitThreadReply(ctx, events.TextConversationTarget{ThreadID: msg.ChannelID}, inbound)
 		if err != nil {
 			c.log.Error("submit Discord DM managed reply", "channel", msg.ChannelID, "error", err)
 		}
@@ -515,13 +583,23 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 			if rejection != "" {
 				c.publishOnDemandCronReply(ctx, reply, rejection, true)
 			} else {
-				c.startGoal(ctx, "", reply, goal, c.inboundMessage(ctx, msg, text, reply))
+				inbound := c.inboundMessage(ctx, msg, text, reply)
+				if social {
+					events.SetInboundAllowedAgents(inbound, socialChannel.Agents)
+				}
+
+				c.startGoal(ctx, "", reply, goal, inbound)
 			}
 
 			return
 		}
 
-		handled, err := c.threadRouter.SubmitThreadReply(ctx, events.TextConversationTarget{ThreadID: msg.ChannelID}, c.inboundMessage(ctx, msg, text, reply))
+		inbound := c.inboundMessage(ctx, msg, text, reply)
+		if social {
+			events.SetInboundAllowedAgents(inbound, socialChannel.Agents)
+		}
+
+		handled, err := c.threadRouter.SubmitThreadReply(ctx, events.TextConversationTarget{ThreadID: msg.ChannelID}, inbound)
 		if err != nil {
 			c.log.Error("submit Discord thread reply", "thread", msg.ChannelID, "error", err)
 		}
@@ -579,7 +657,12 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 			agent = socialChannel.Agents[0]
 		}
 
-		c.startGoal(ctx, agent, reply, goal, c.inboundMessage(ctx, msg, text, reply))
+		inbound := c.inboundMessage(ctx, msg, text, reply)
+		if social {
+			events.SetInboundAllowedAgents(inbound, socialChannel.Agents)
+		}
+
+		c.startGoal(ctx, agent, reply, goal, inbound)
 
 		return
 	}
@@ -594,7 +677,10 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 		reply.ThreadID = thread.ID
 		c.recordThreadRoot(msg.ChannelID, msg.ID, thread.ID)
 
-		if err := c.threadRouter.StartThread(ctx, socialChannel.Agents[0], false, events.TextConversationTarget{ThreadID: thread.ID}, c.inboundMessage(ctx, msg, text, reply)); err != nil {
+		inbound := c.inboundMessage(ctx, msg, text, reply)
+		events.SetInboundAllowedAgents(inbound, socialChannel.Agents)
+
+		if err := c.threadRouter.StartThread(ctx, socialChannel.Agents[0], false, events.TextConversationTarget{ThreadID: thread.ID}, inbound); err != nil {
 			c.log.Error("start Discord social thread bridge", "thread", thread.ID, "error", err)
 		}
 
