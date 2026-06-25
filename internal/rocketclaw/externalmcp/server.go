@@ -44,6 +44,7 @@ type SessionPromptAttachment = SessionAttachment
 // SessionResult is the app-level result for an external MCP session tool call.
 type SessionResult struct {
 	ExternalConversationID string              `json:"external_conversation_id,omitempty" jsonschema:"external conversation ID for this MCP conversation"`
+	Agent                  string              `json:"agent,omitempty" jsonschema:"agent used for this MCP conversation turn"`
 	Answer                 string              `json:"answer" jsonschema:"plain-text answer from rocketclaw"`
 	Attachments            []SessionAttachment `json:"attachments,omitempty" jsonschema:"attachments returned by rocketclaw"`
 }
@@ -69,12 +70,12 @@ func StartSessionPromptServer(ctx context.Context, logger *slog.Logger, listenAd
 
 		username, _ := callCtx.Value(usernameContextKey{}).(string)
 
-		agent := strings.TrimSpace(input.Agent)
-		if agent == "" && strings.TrimSpace(input.ExternalConversationID) == "" {
-			agent = defaultAgent
+		requestedAgent := strings.TrimSpace(input.Agent)
+		if requestedAgent == "" && strings.TrimSpace(input.ExternalConversationID) == "" {
+			requestedAgent = defaultAgent
 		}
 
-		reply, err := sessionPromptHandler(callCtx, username, strings.TrimSpace(input.ExternalConversationID), agent, input.Input, input.Metadata, input.Attachments, strings.TrimSpace(input.SlackChannel))
+		reply, err := sessionPromptHandler(callCtx, username, strings.TrimSpace(input.ExternalConversationID), requestedAgent, input.Input, input.Metadata, input.Attachments, strings.TrimSpace(input.SlackChannel))
 		if err != nil {
 			return nil, SessionResult{}, err
 		}

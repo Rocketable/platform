@@ -695,7 +695,7 @@ func startExternalMCPServer(
 	submitAgent func(context.Context, string, string, *events.InboundMessage) error,
 	logger *slog.Logger,
 ) (*externalmcp.Server, error) {
-	server, err := externalmcp.StartSessionPromptServer(ctx, logger, cfg.MCPExternal.ListenAddr, users, defaultAgent, func(callCtx context.Context, username, externalConversationID, agent, input string, metadata map[string]string, attachments []externalmcp.SessionPromptAttachment, slackChannel string) (result externalmcp.SessionResult, err error) {
+	server, err := externalmcp.StartSessionPromptServer(ctx, logger, cfg.MCPExternal.ListenAddr, users, defaultAgent, func(callCtx context.Context, username, externalConversationID, requestedAgent, input string, metadata map[string]string, attachments []externalmcp.SessionPromptAttachment, slackChannel string) (result externalmcp.SessionResult, err error) {
 		var reply *events.InboundMessage
 
 		defer func() {
@@ -706,7 +706,7 @@ func startExternalMCPServer(
 
 		externalConversationID = strings.TrimSpace(externalConversationID)
 
-		agent = strings.TrimSpace(agent)
+		requestedAgent = strings.TrimSpace(requestedAgent)
 
 		inboundContent, outboundAttachments, err := externalMCPInboundContent(attachments)
 		if err != nil {
@@ -725,16 +725,23 @@ func startExternalMCPServer(
 				session.Agent = strings.TrimSpace(session.Agent)
 
 				session.ConversationID = strings.TrimSpace(session.ConversationID)
-				if agent != "" && agent != session.Agent {
-					return externalmcp.SessionResult{}, fmt.Errorf("external_conversation_id %q belongs to agent %q, not %q", externalConversationID, session.Agent, agent)
+
+				usedAgent := session.Agent
+				if requestedAgent != "" && requestedAgent != usedAgent {
+					logger.Warn(
+						"external MCP requested agent mismatched persisted session agent; using persisted agent",
+						"external_conversation_id", externalConversationID,
+						"requested_agent", requestedAgent,
+						"used_agent", usedAgent,
+					)
 				}
 
-				if session.Agent == "" || session.ConversationID == "" {
+				if usedAgent == "" || session.ConversationID == "" {
 					return externalmcp.SessionResult{}, fmt.Errorf("external_conversation_id %q has incomplete persisted state", externalConversationID)
 				}
 
-				if !slices.Contains(agents, session.Agent) {
-					return externalmcp.SessionResult{}, fmt.Errorf("external MCP agent %q is not exposed", session.Agent)
+				if !slices.Contains(agents, usedAgent) {
+					return externalmcp.SessionResult{}, fmt.Errorf("external MCP agent %q is not exposed", usedAgent)
 				}
 
 				for conversationID, thread := range state.Threads {
@@ -775,16 +782,17 @@ func startExternalMCPServer(
 					}
 				}
 
-				return submitExternalMCPInput(callCtx, submitAgent, session.Agent, session.ConversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, externalConversationID)
+				return submitExternalMCPInput(callCtx, submitAgent, usedAgent, session.ConversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, externalConversationID)
 			}
 		}
 
-		if agent == "" {
-			agent = strings.TrimSpace(defaultAgent)
+		usedAgent := requestedAgent
+		if usedAgent == "" {
+			usedAgent = strings.TrimSpace(defaultAgent)
 		}
 
-		if !slices.Contains(agents, agent) {
-			return externalmcp.SessionResult{}, fmt.Errorf("external MCP agent %q is not exposed", agent)
+		if !slices.Contains(agents, usedAgent) {
+			return externalmcp.SessionResult{}, fmt.Errorf("external MCP agent %q is not exposed", usedAgent)
 		}
 
 		publicConversationID := externalConversationID
@@ -792,8 +800,8 @@ func startExternalMCPServer(
 			publicConversationID = rand.Text()
 		}
 
-		conversationID := "external_mcp:" + agent + ":" + rand.Text()
-		if err := store.UpsertExternalMCPSession(publicConversationID, harnessbridge.ExternalMCPSessionState{Agent: agent, ConversationID: conversationID}); err != nil {
+		conversationID := "external_mcp:" + usedAgent + ":" + rand.Text()
+		if err := store.UpsertExternalMCPSession(publicConversationID, harnessbridge.ExternalMCPSessionState{Agent: usedAgent, ConversationID: conversationID}); err != nil {
 			return externalmcp.SessionResult{}, fmt.Errorf("persist external MCP session mapping: %w", err)
 		}
 
@@ -801,7 +809,7 @@ func startExternalMCPServer(
 
 		threadPrefix := ""
 		for prefix, threadAgent := range cfg.ThreadAgents {
-			if prefix = strings.TrimSpace(prefix); prefix != "" && strings.TrimSpace(threadAgent.Agent) == agent && (threadPrefix == "" || prefix < threadPrefix) {
+			if prefix = strings.TrimSpace(prefix); prefix != "" && strings.TrimSpace(threadAgent.Agent) == usedAgent && (threadPrefix == "" || prefix < threadPrefix) {
 				threadPrefix = prefix
 			}
 		}
@@ -835,7 +843,7 @@ func startExternalMCPServer(
 				threadKey = harnessbridge.DiscordThreadConversationID(reply.DiscordReply.ThreadID)
 			}
 
-			if err := store.UpsertThread(threadKey, agent); err != nil {
+			if err := store.UpsertThread(threadKey, usedAgent); err != nil {
 				return externalmcp.SessionResult{}, fmt.Errorf("persist external MCP text thread alias: %w", err)
 			}
 
@@ -844,7 +852,7 @@ func startExternalMCPServer(
 			}
 		}
 
-		return submitExternalMCPInput(callCtx, submitAgent, agent, conversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, publicConversationID)
+		return submitExternalMCPInput(callCtx, submitAgent, usedAgent, conversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, publicConversationID)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start external MCP HTTP server: %w", err)
@@ -906,7 +914,7 @@ func externalMCPInboundContent(attachments []externalmcp.SessionPromptAttachment
 	return content, outbound, nil
 }
 
-func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Context, string, string, *events.InboundMessage) error, agent, conversationID string, content *events.InboundContent, metadata map[string]string, principal string, reply *events.InboundMessage, externalConversationID string) (externalmcp.SessionResult, error) {
+func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Context, string, string, *events.InboundMessage) error, usedAgent, conversationID string, content *events.InboundContent, metadata map[string]string, principal string, reply *events.InboundMessage, externalConversationID string) (externalmcp.SessionResult, error) {
 	inbound := events.NewMainInboundMessageFromContent(events.SourceExternalMCP, events.InboundKindPrompt, "", content, true)
 
 	inbound.Metadata = maps.Clone(metadata)
@@ -929,8 +937,8 @@ func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Contex
 
 	resultCh := inbound.EnableResponseWait()
 
-	if err := submitAgent(ctx, agent, conversationID, inbound); err != nil {
-		return externalmcp.SessionResult{}, fmt.Errorf("submit external MCP input to agent %q: %w", agent, err)
+	if err := submitAgent(ctx, usedAgent, conversationID, inbound); err != nil {
+		return externalmcp.SessionResult{}, fmt.Errorf("submit external MCP input to agent %q: %w", usedAgent, err)
 	}
 
 	select {
@@ -955,7 +963,7 @@ func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Contex
 			attachments = append(attachments, externalmcp.SessionAttachment{Name: name, MIMEType: result.Attachments[i].MIMEType, DataBase64: base64.StdEncoding.EncodeToString(result.Attachments[i].Data)})
 		}
 
-		return externalmcp.SessionResult{ExternalConversationID: externalConversationID, Answer: result.Text, Attachments: attachments}, nil
+		return externalmcp.SessionResult{ExternalConversationID: externalConversationID, Agent: usedAgent, Answer: result.Text, Attachments: attachments}, nil
 	}
 }
 

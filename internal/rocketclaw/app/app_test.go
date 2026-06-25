@@ -970,6 +970,7 @@ func TestStartExternalMCPServerRoutesSelectedAgentDirectly(t *testing.T) {
 	reply, err := callSessionPromptForAgent(ctx, server.URL(), "", "hello", map[string]string{"ticket": "123", "owner": "alice"})
 	require.NoError(t, err)
 	assert.Equal(t, "planner answer", reply.answer)
+	assert.Equal(t, "planner", reply.usedAgent)
 	assert.NotEmpty(t, reply.externalConversationID)
 	assert.Equal(t, "planner", <-selectedAgent)
 
@@ -1034,6 +1035,7 @@ func TestStartExternalMCPServerRoutesAttachments(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "planner answer", reply.answer)
+	assert.Equal(t, "planner", reply.usedAgent)
 
 	inbound := <-threadTarget
 	require.Len(t, inbound.Attachments, 1)
@@ -1114,6 +1116,7 @@ func TestStartExternalMCPServerRoutesExistingExternalConversationIDToSeededSlack
 	reply, err := callMCPTool(ctx, server.URL(), map[string]any{"external_conversation_id": externalConversationID, "input": "follow up", "metadata": map[string]string{"ticket": "123"}})
 	require.NoError(t, err)
 	assert.Equal(t, "follow-up answer", reply.answer)
+	assert.Equal(t, "planner", reply.usedAgent)
 	assert.Equal(t, externalConversationID, reply.externalConversationID)
 	assert.Equal(t, conversationID, <-selectedConversationID)
 
@@ -1154,6 +1157,7 @@ func TestStartExternalMCPServerCreatesConversationForUnknownExternalConversation
 	reply, err := callMCPTool(ctx, server.URL(), map[string]any{"external_conversation_id": externalConversationID, "input": "start"})
 	require.NoError(t, err)
 	assert.Equal(t, "created answer", reply.answer)
+	assert.Equal(t, "main", reply.usedAgent)
 	assert.Equal(t, externalConversationID, reply.externalConversationID)
 
 	conversationID := <-selectedConversationID
@@ -1232,6 +1236,7 @@ func TestExternalMCPExistingExternalConversationIDRunsAgentAndRepliesInSeededSla
 	first, err := callSessionPromptForAgent(ctx, server.URL(), "", "first", map[string]string{"ticket": "123"})
 	require.NoError(t, err)
 	assert.Equal(t, "first answer", first.answer)
+	assert.Equal(t, "planner", first.usedAgent)
 
 	firstSlack := <-slackSeen
 	require.NotNil(t, firstSlack.SlackReply)
@@ -1240,6 +1245,7 @@ func TestExternalMCPExistingExternalConversationIDRunsAgentAndRepliesInSeededSla
 	second, err := callMCPTool(ctx, server.URL(), map[string]any{"external_conversation_id": first.externalConversationID, "input": "second", "metadata": map[string]string{"ticket": "456"}})
 	require.NoError(t, err)
 	assert.Equal(t, "second answer", second.answer)
+	assert.Equal(t, "planner", second.usedAgent)
 	assert.Equal(t, first.externalConversationID, second.externalConversationID)
 
 	secondSlack := <-slackSeen
@@ -1300,6 +1306,7 @@ func TestStartExternalMCPServerRoutesDefaultAgentToIsolatedSession(t *testing.T)
 	reply, err := callSessionPromptForAgent(ctx, server.URL(), "", "hello", map[string]string{})
 	require.NoError(t, err)
 	assert.Equal(t, "main answer", reply.answer)
+	assert.Equal(t, "main", reply.usedAgent)
 	assert.NotEmpty(t, reply.externalConversationID)
 	assert.Equal(t, "main", <-selectedAgent)
 	assert.Contains(t, <-selectedConversationID, "external_mcp:main:")
@@ -1358,6 +1365,7 @@ func TestStartExternalMCPServerRelaysPromptToRequestedSlackChannel(t *testing.T)
 	reply, err := callMCPTool(ctx, server.URL(), map[string]any{"input": "hello", "slack_channel": "#triage", "attachments": []map[string]string{{"name": "red.png", "mime_type": "image/png", "data_base64": base64.StdEncoding.EncodeToString([]byte("png"))}}})
 	require.NoError(t, err)
 	assert.Equal(t, "main answer", reply.answer)
+	assert.Equal(t, "main", reply.usedAgent)
 	assert.Equal(t, "#triage", relayChannel)
 	assert.Equal(t, []events.OutboundAttachment{{Name: "red.png", MIMEType: "image/png", Data: []byte("png")}}, relayAttachments)
 
@@ -1484,6 +1492,63 @@ func TestStartExternalMCPServerCleansExistingExternalMCPRelayWhenSubmitFails(t *
 	assert.Equal(t, &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "111.222"}, cleaned[0])
 }
 
+func TestStartExternalMCPServerIgnoresMismatchedRequestedAgentForExistingSession(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	const (
+		externalConversationID = "caller-conversation-1"
+		conversationID         = "external_mcp:planner:abc"
+	)
+
+	store := newAppTestSessionService(t, t.TempDir())
+	session := harnessbridge.ExternalMCPSessionState{Agent: "planner", ConversationID: conversationID}
+	require.NoError(t, store.UpsertExternalMCPSession(externalConversationID, session))
+
+	selectedAgent := make(chan string, 1)
+	selectedConversationID := make(chan string, 1)
+	submitAgent := func(submitCtx context.Context, agent, conversationID string, inbound *events.InboundMessage) error {
+		_ = submitCtx
+
+		selectedAgent <- agent
+
+		selectedConversationID <- conversationID
+
+		inbound.CompleteResponse("planner answer", nil)
+
+		return nil
+	}
+
+	var logs bytes.Buffer
+
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+	cfg := new(config.Config)
+	cfg.MCPExternal.ListenAddr = "127.0.0.1:0"
+	server, err := startExternalMCPServer(ctx, cfg, inertExternalMCPRelay, inertExternalMCPCleanup, nil, []string{"main", "planner"}, "main", store, submitAgent, logger)
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, server.Close(context.Background())) }()
+
+	reply, err := callMCPTool(ctx, server.URL(), map[string]any{"external_conversation_id": externalConversationID, "agent": "main", "input": "hello"})
+	require.NoError(t, err)
+	assert.Equal(t, "planner answer", reply.answer)
+	assert.Equal(t, "planner", reply.usedAgent)
+	assert.Equal(t, externalConversationID, reply.externalConversationID)
+	assert.Equal(t, "planner", <-selectedAgent)
+	assert.Equal(t, conversationID, <-selectedConversationID)
+
+	state, err := store.Load()
+	require.NoError(t, err)
+	assert.Equal(t, session, state.ExternalMCPSessions[externalConversationID])
+
+	logText := logs.String()
+	assert.Contains(t, logText, "mismatched persisted session agent")
+	assert.Contains(t, logText, "external_conversation_id=caller-conversation-1")
+	assert.Contains(t, logText, "requested_agent=main")
+	assert.Contains(t, logText, "used_agent=planner")
+}
+
 func TestStartExternalMCPServerRejectsInvalidExternalMCPConversationState(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -1492,13 +1557,6 @@ func TestStartExternalMCPServerRejectsInvalidExternalMCPConversationState(t *tes
 		session        harnessbridge.ExternalMCPSessionState
 		wantErr        string
 	}{
-		{
-			name:           "agent mismatch",
-			agents:         []string{"main", "planner"},
-			requestedAgent: "main",
-			session:        harnessbridge.ExternalMCPSessionState{Agent: "planner", ConversationID: "external_mcp:planner:abc"},
-			wantErr:        `belongs to agent "planner", not "main"`,
-		},
 		{
 			name:    "incomplete state",
 			agents:  []string{"planner"},
@@ -1798,6 +1856,7 @@ func writeAppRawRunFunctionCall(t *testing.T, w http.ResponseWriter, responseID,
 
 type mcpToolReply struct {
 	answer                 string
+	usedAgent              string
 	externalConversationID string
 }
 
@@ -1856,6 +1915,7 @@ func callMCPTool(ctx context.Context, endpoint string, args map[string]any) (mcp
 
 	var structured struct {
 		Answer                 string `json:"answer"`
+		Agent                  string `json:"agent"`
 		ExternalConversationID string `json:"external_conversation_id"`
 	}
 
@@ -1868,5 +1928,5 @@ func callMCPTool(ctx context.Context, endpoint string, args map[string]any) (mcp
 		return mcpToolReply{}, fmt.Errorf("parse structured %s content: %w", externalmcp.SessionPromptToolName, err)
 	}
 
-	return mcpToolReply{answer: structured.Answer, externalConversationID: structured.ExternalConversationID}, nil
+	return mcpToolReply{answer: structured.Answer, usedAgent: structured.Agent, externalConversationID: structured.ExternalConversationID}, nil
 }
