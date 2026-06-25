@@ -1436,6 +1436,22 @@ func TestProjectSeedReplayForTargetStripsCompactionReplayMetadataFromNativePaylo
 	}
 }
 
+func TestProjectSeedReplayForTargetLowersOriginlessCompactionWithSummary(t *testing.T) {
+	input, err := rocketcode.ReplayInputToParams([]json.RawMessage{json.RawMessage(`{"encrypted_content":"encrypted-originless","id":"cmp-originless","summary":{"text":"summary-only checkpoint"},"type":"compaction"}`)})
+	require.NoError(t, err)
+
+	got := projectSeedReplayForTarget(input, seedCompactionModel{provider: "openai-compatible", compatibleProvider: "local", apiModel: "gpt-oss"})
+
+	require.Len(t, got, 1)
+	require.Nil(t, got[0].OfCompaction)
+	data, err := json.Marshal(got)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "summary-only checkpoint")
+	require.Contains(t, string(data), "context_checkpoint")
+	require.NotContains(t, string(data), "encrypted-originless")
+	require.NotContains(t, string(data), "summary\":")
+}
+
 func TestCompactSeedReplayKeepsAnthropicNativeCompaction(t *testing.T) {
 	requestBody := ""
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1506,6 +1522,47 @@ func TestCompactSeedReplayCompatibleChatKeepsCheckpointText(t *testing.T) {
 	require.NotContains(t, requestBody, "private-recent-id")
 	require.Len(t, got, 1)
 	assert.JSONEq(t, `{"content":"chat seed summary","encrypted_content":"","id":"chatcmpl_1-compaction","origin_compatible_provider":"local","origin_mode":"chat_completions","origin_provider":"openai-compatible","summary":"chat seed summary","type":"compaction"}`, string(got[0]))
+}
+
+func TestCompactSeedReplayCompatibleChatIncludesToolContext(t *testing.T) {
+	requestBody := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Errorf("request path = %q; want /chat/completions", r.URL.Path)
+			http.NotFound(w, r)
+
+			return
+		}
+
+		data, err := io.ReadAll(r.Body)
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		requestBody = string(data)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, err = io.WriteString(w, `{"id":"chatcmpl_1","object":"chat.completion","created":1,"model":"gpt-oss","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"chat seed summary"}}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`)
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+
+	input := []responses.ResponseInputItemUnionParam{
+		{OfCompaction: &responses.ResponseCompactionItemParam{EncryptedContent: "sealed", ID: openai.String("cmp-1"), Type: "compaction"}},
+		{OfFunctionCall: &responses.ResponseFunctionToolCallParam{CallID: "call-1", Name: "lookup", Arguments: `{"q":"x"}`, Type: "function_call"}},
+		{OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{CallID: "call-1", Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.String("lookup result")}, Type: "function_call_output"}},
+	}
+	replay, err := rocketcode.ReplayInputFromParams(input)
+	require.NoError(t, err)
+
+	bridge := &Bridge{runtime: &config.Config{Workspace: t.TempDir(), OpenAICompatible: map[string]config.OpenAICompatibleConfig{"local": {APIKey: "test-key", BaseURL: server.URL, Mode: "chat_completions"}}}, log: slog.New(slog.DiscardHandler), config: Config{ConversationID: events.MainConversationID()}}
+	_, err = bridge.compactSeedReplay(context.Background(), []rocketcode.SessionEntry{{ReplayInput: replay}}, seedCompactionModel{provider: "openai-compatible", compatibleProvider: "local", apiModel: "gpt-oss"})
+
+	require.NoError(t, err)
+	require.Contains(t, requestBody, "lookup")
+	require.Contains(t, requestBody, `\"q\"`)
+	require.Contains(t, requestBody, `\"x\"`)
+	require.Contains(t, requestBody, "lookup result")
 }
 
 func TestCompactSeedReplayReportsInvalidReplayInput(t *testing.T) {
@@ -1633,6 +1690,13 @@ func TestReplayInputMessagesFiltersBlankMessages(t *testing.T) {
 func TestReplayInputMessagesReportsBadJSON(t *testing.T) {
 	_, err := replayInputMessages([]json.RawMessage{json.RawMessage("{")})
 	require.ErrorContains(t, err, "decode replay input messages")
+}
+
+func TestSeedReplayTextIncludesWebSearchContext(t *testing.T) {
+	text := seedReplayText([]responses.ResponseInputItemUnionParam{{OfWebSearchCall: &responses.ResponseFunctionWebSearchParam{Action: responses.ResponseFunctionWebSearchActionUnionParam{OfSearch: &responses.ResponseFunctionWebSearchActionSearchParam{Query: "golang release"}}, Status: "completed"}}})
+
+	assert.Contains(t, text, "web search completed")
+	assert.Contains(t, text, "golang release")
 }
 
 func TestReplayInputRawKindReportsInvalidJSON(t *testing.T) {
@@ -2202,8 +2266,8 @@ func TestSeedThreadFromMainReusesLatestCompaction(t *testing.T) {
 
 	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Model: "openai/gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "old question"}, replayInputMessage{role: "assistant", text: "old answer"})})
 	require.NoError(t, err)
-	compactionReplay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfCompaction: &responses.ResponseCompactionItemParam{ID: openai.String("cmp_main"), EncryptedContent: "sealed-main", Type: "compaction"}}})
-	require.NoError(t, err)
+
+	compactionReplay := []json.RawMessage{json.RawMessage(`{"encrypted_content":"sealed-main","id":"cmp_main","origin_mode":"responses","origin_provider":"openai","type":"compaction"}`)}
 	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(2, 0).UTC(), Model: "openai/gpt-5.5", ReplayInput: compactionReplay})
 	require.NoError(t, err)
 	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(3, 0).UTC(), Model: "openai/gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "new question"}, replayInputMessage{role: "assistant", text: "new answer"})})
@@ -2367,8 +2431,8 @@ func TestSeedResponseThreadReusesLatestCompaction(t *testing.T) {
 
 	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Model: "openai/gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "old question"}, replayInputMessage{role: "assistant", text: "old answer"})})
 	require.NoError(t, err)
-	compactionReplay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfCompaction: &responses.ResponseCompactionItemParam{ID: openai.String("cmp_response"), EncryptedContent: "sealed-response", Type: "compaction"}}})
-	require.NoError(t, err)
+
+	compactionReplay := []json.RawMessage{json.RawMessage(`{"encrypted_content":"sealed-response","id":"cmp_response","origin_mode":"responses","origin_provider":"openai","type":"compaction"}`)}
 	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(2, 0).UTC(), Model: "openai/gpt-5.5", ReplayInput: compactionReplay})
 	require.NoError(t, err)
 	id, err := service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(3, 0).UTC(), ResponseID: "resp-1", Model: "openai/gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "checkpoint question"}, replayInputMessage{role: "assistant", text: "checkpoint answer"})})

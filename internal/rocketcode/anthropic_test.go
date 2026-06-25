@@ -129,6 +129,23 @@ func TestAnthropicParamsProjectsForeignCompactionAsCheckpoint(t *testing.T) {
 	require.NotContains(t, serialized, "foreign-encrypted")
 }
 
+func TestAnthropicParamsProjectsForeignSummaryOnlyCompactionAsCheckpoint(t *testing.T) {
+	items, err := ReplayInputToParams([]json.RawMessage{json.RawMessage(`{"encrypted_content":"foreign-encrypted","id":"cmp-foreign","origin_mode":"responses","origin_provider":"openai","recent":[{"id":"private-recent-id"}],"summary":{"text":"summary-only checkpoint"},"type":"compaction"}`)})
+	require.NoError(t, err)
+
+	looper := &looper{provider: modelProviderAnthropic, modelRef: modelRef{provider: modelProviderAnthropic, apiModel: "claude-sonnet"}, Model: "claude-sonnet", DisplayModel: "anthropic/claude-sonnet"}
+	params := looper.buildParams(items)
+	body, err := looper.anthropicParams(&params)
+	require.NoError(t, err)
+
+	serialized := marshalJSON(t, body.Messages)
+	require.Contains(t, serialized, "summary-only checkpoint")
+	require.Contains(t, serialized, "context_checkpoint")
+	require.NotContains(t, serialized, "foreign-encrypted")
+	require.NotContains(t, serialized, "origin_provider")
+	require.NotContains(t, serialized, "private-recent-id")
+}
+
 func TestAnthropicCompactionPreservesEncryptedContentWithoutSummary(t *testing.T) {
 	var message anthropic.BetaMessage
 	require.NoError(t, json.Unmarshal([]byte(`{"id":"msg_1","content":[{"type":"compaction","content":null,"encrypted_content":"encrypted-compact"}]}`), &message))

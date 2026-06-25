@@ -950,11 +950,14 @@ func TestTransportPrefixesCompactionWhenUsageExceedsThreshold(t *testing.T) {
 	body, compactCalls := runAutoCompactTransportTest(t,
 		`{"model":"gpt-5.5","instructions":"be brief","store":false,"context_management":[{"type":"compaction","compact_threshold":10}],"input":[{"id":"item-1","type":"message"}]}`,
 		codexStream(`{"id":"resp","usage":{"total_tokens":100},"output":[]}`, `{"id":"msg","type":"message"}`),
-		`{"output":[{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}]}`,
+		`{"output":[{"content":"private-content-value","encrypted_content":"sealed","id":"cmp_1","origin_mode":"responses","origin_provider":"openai","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}]}`,
 	)
 
 	require.Equal(t, 1, compactCalls)
-	require.JSONEq(t, `{"id":"resp","usage":{"total_tokens":100},"output":[{"encrypted_content":"sealed","id":"cmp_1","type":"compaction"},{"id":"msg","type":"message"}]}`, body)
+	require.JSONEq(t, `{"id":"resp","usage":{"total_tokens":100},"output":[{"content":"private-content-value","encrypted_content":"sealed","id":"cmp_1","summary":{"text":"private-summary-value"},"type":"compaction"},{"id":"msg","type":"message"}]}`, body)
+	require.Contains(t, body, "private-content-value")
+	require.NotContains(t, body, "origin_provider")
+	require.NotContains(t, body, "private-recent-id")
 }
 
 func TestTransportRetriesContextOverflowAfterCompaction(t *testing.T) {
@@ -973,7 +976,7 @@ func TestTransportRetriesContextOverflowAfterCompaction(t *testing.T) {
 			require.NotContains(t, string(data), `"id"`)
 			require.Contains(t, string(data), `"input"`)
 
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"output":[{"id":"cmp_1","type":"compaction_summary","encrypted_content":"sealed"}]}`)), Header: make(http.Header)}, nil
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"output":[{"content":"private-content-value","encrypted_content":"sealed","id":"cmp_1","origin_mode":"responses","origin_provider":"openai","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction_summary"}]}`)), Header: make(http.Header)}, nil
 		}
 
 		responseCalls++

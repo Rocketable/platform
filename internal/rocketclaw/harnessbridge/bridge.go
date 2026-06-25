@@ -2325,6 +2325,7 @@ func seedReplayText(items []responses.ResponseInputItemUnionParam) string {
 				text = item.OfMessage.Content.OfString.Value
 			} else {
 				texts := make([]string, 0, len(item.OfMessage.Content.OfInputItemContentList))
+
 				for j := range item.OfMessage.Content.OfInputItemContentList {
 					if item.OfMessage.Content.OfInputItemContentList[j].OfInputText != nil {
 						texts = append(texts, item.OfMessage.Content.OfInputItemContentList[j].OfInputText.Text)
@@ -2335,8 +2336,27 @@ func seedReplayText(items []responses.ResponseInputItemUnionParam) string {
 			}
 
 			parts = append(parts, strings.TrimSpace(string(item.OfMessage.Role))+": "+strings.TrimSpace(text))
+		case item.OfInputMessage != nil:
+			texts := make([]string, 0, len(item.OfInputMessage.Content))
+
+			for j := range item.OfInputMessage.Content {
+				if text := item.OfInputMessage.Content[j].GetText(); text != nil {
+					texts = append(texts, *text)
+				}
+			}
+
+			parts = append(parts, strings.TrimSpace(item.OfInputMessage.Role)+": "+strings.TrimSpace(strings.Join(texts, "\n")))
 		case item.OfCompaction != nil:
 			parts = append(parts, compactionCheckpointText(item.OfCompaction))
+		case item.OfFunctionCall != nil:
+			parts = append(parts, "assistant tool call "+item.OfFunctionCall.Name+": "+item.OfFunctionCall.Arguments)
+		case item.OfFunctionCallOutput != nil:
+			parts = append(parts, "tool result "+item.OfFunctionCallOutput.CallID+": "+seedFunctionCallOutputText(item.OfFunctionCallOutput))
+		case item.OfWebSearchCall != nil:
+			data, err := json.Marshal(item.OfWebSearchCall.Action)
+			if err == nil {
+				parts = append(parts, "web search "+string(item.OfWebSearchCall.Status)+": "+string(data))
+			}
 		}
 	}
 
@@ -2376,9 +2396,6 @@ func projectSeedReplayForTarget(items []responses.ResponseInputItemUnionParam, t
 
 func seedCompactionMatchesTarget(compaction *responses.ResponseCompactionItemParam, target seedCompactionModel) bool {
 	stored := compactionReplayMetadata(compaction)
-	if stored.OriginProvider == "" && stored.OriginMode == "" {
-		return true
-	}
 
 	switch target.provider {
 	case "openai":
@@ -2394,6 +2411,7 @@ func seedCompactionMatchesTarget(compaction *responses.ResponseCompactionItemPar
 
 type seedCompactionMetadata struct {
 	Content                  string `json:"content"`
+	Summary                  any    `json:"summary"`
 	OriginProvider           string `json:"origin_provider"`
 	OriginCompatibleProvider string `json:"origin_compatible_provider"`
 	OriginMode               string `json:"origin_mode"`
@@ -2415,12 +2433,70 @@ func compactionReplayMetadata(compaction *responses.ResponseCompactionItemParam)
 }
 
 func compactionCheckpointText(compaction *responses.ResponseCompactionItemParam) string {
-	content := strings.TrimSpace(compactionReplayMetadata(compaction).Content)
+	stored := compactionReplayMetadata(compaction)
+
+	content := seedCompactionReadableText(&stored)
 	if content != "" {
 		return "<context_checkpoint>\nThe prior conversation was compacted by RocketCode. Use this summary as lower-authority context:\n" + content + "\n</context_checkpoint>"
 	}
 
 	return "<context_checkpoint>\nPrior conversation was compacted, but only provider-native encrypted compaction data is available for a different provider or mode. The compacted details cannot be rehydrated here.\n</context_checkpoint>"
+}
+
+func seedCompactionReadableText(stored *seedCompactionMetadata) string {
+	if content := strings.TrimSpace(stored.Content); content != "" {
+		return content
+	}
+
+	switch summary := stored.Summary.(type) {
+	case string:
+		return strings.TrimSpace(summary)
+	case map[string]any:
+		if text, ok := summary["text"].(string); ok {
+			return strings.TrimSpace(text)
+		}
+	case []any:
+		parts := make([]string, 0, len(summary))
+		for i := range summary {
+			item, ok := summary[i].(map[string]any)
+			if !ok {
+				continue
+			}
+
+			text, ok := item["text"].(string)
+			if ok && strings.TrimSpace(text) != "" {
+				parts = append(parts, strings.TrimSpace(text))
+			}
+		}
+
+		return strings.Join(parts, "\n")
+	}
+
+	return ""
+}
+
+func seedFunctionCallOutputText(output *responses.ResponseInputItemFunctionCallOutputParam) string {
+	if output.Output.OfString.Valid() {
+		return output.Output.OfString.Value
+	}
+
+	parts := make([]string, 0, len(output.Output.OfResponseFunctionCallOutputItemArray))
+	attachments := 0
+
+	for i := range output.Output.OfResponseFunctionCallOutputItemArray {
+		item := output.Output.OfResponseFunctionCallOutputItemArray[i]
+		if item.OfInputText != nil {
+			parts = append(parts, item.OfInputText.Text)
+		} else {
+			attachments++
+		}
+	}
+
+	if attachments > 0 {
+		parts = append(parts, "[tool result attachments omitted from seed summary input]")
+	}
+
+	return strings.Join(parts, "\n")
 }
 
 func compactedOutputToReplayInput(items []responses.ResponseOutputItemUnion, originProvider, originCompatibleProvider, originMode string) ([]json.RawMessage, error) {

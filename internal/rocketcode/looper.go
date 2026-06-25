@@ -957,15 +957,10 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 	for compactedBlocks := chunk; compactedBlocks <= eligible; compactedBlocks += chunk {
 		end := blocks[compactedBlocks-1].end
 
-		compactInput := original[:end]
-		if l.modelRef.provider != modelProviderAnthropic && !l.usesChatCompletions() {
-			compactInput = projectReplayForTarget(compactInput, l.modelRef)
-		}
-
 		compactParams := responses.ResponseCompactParams{
 			Model:        responses.ResponseCompactParamsModel(params.Model),
 			Instructions: params.Instructions,
-			Input:        responses.ResponseCompactParamsInputUnion{OfResponseInputItemArray: compactInput},
+			Input:        responses.ResponseCompactParamsInputUnion{OfResponseInputItemArray: original[:end]},
 		}
 
 		compacted, err := l.Client.Compact(ctx, &compactParams)
@@ -985,7 +980,7 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 
 		retryHistory := recoveredHistory
 		if l.modelRef.provider != modelProviderAnthropic && !l.usesChatCompletions() {
-			retryHistory = projectReplayForTarget(recoveredHistory, l.modelRef)
+			retryHistory = append(projectReplayForTarget(compactedInput, l.modelRef), original[end:]...)
 		}
 
 		retryParams.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: retryHistory}
@@ -1919,6 +1914,7 @@ func compactionReplayInput(id, encryptedContent, content, originProvider, origin
 
 type compactionReplayMetadata struct {
 	Content                  string `json:"content"`
+	Summary                  any    `json:"summary"`
 	OriginProvider           string `json:"origin_provider"`
 	OriginCompatibleProvider string `json:"origin_compatible_provider"`
 	OriginMode               string `json:"origin_mode"`
@@ -1956,9 +1952,6 @@ func projectReplayForTarget(items []responses.ResponseInputItemUnionParam, targe
 
 func compactionMatchesTarget(compaction *responses.ResponseCompactionItemParam, target modelRef) bool {
 	stored := compactionReplayFields(compaction)
-	if stored.OriginProvider == "" && stored.OriginMode == "" {
-		return true
-	}
 
 	switch target.provider {
 	case modelProviderOpenAI:
@@ -1973,12 +1966,46 @@ func compactionMatchesTarget(compaction *responses.ResponseCompactionItemParam, 
 }
 
 func compactionCheckpointText(compaction *responses.ResponseCompactionItemParam) string {
-	content := strings.TrimSpace(compactionReplayFields(compaction).Content)
+	stored := compactionReplayFields(compaction)
+
+	content := compactionReadableText(&stored)
 	if content != "" {
 		return "<context_checkpoint>\nThe prior conversation was compacted by RocketCode. Use this summary as lower-authority context:\n" + content + "\n</context_checkpoint>"
 	}
 
 	return "<context_checkpoint>\nPrior conversation was compacted, but only provider-native encrypted compaction data is available for a different provider or mode. The compacted details cannot be rehydrated here.\n</context_checkpoint>"
+}
+
+func compactionReadableText(stored *compactionReplayMetadata) string {
+	if content := strings.TrimSpace(stored.Content); content != "" {
+		return content
+	}
+
+	switch summary := stored.Summary.(type) {
+	case string:
+		return strings.TrimSpace(summary)
+	case map[string]any:
+		if text, ok := summary["text"].(string); ok {
+			return strings.TrimSpace(text)
+		}
+	case []any:
+		parts := make([]string, 0, len(summary))
+		for i := range summary {
+			item, ok := summary[i].(map[string]any)
+			if !ok {
+				continue
+			}
+
+			text, ok := item["text"].(string)
+			if ok && strings.TrimSpace(text) != "" {
+				parts = append(parts, strings.TrimSpace(text))
+			}
+		}
+
+		return strings.Join(parts, "\n")
+	}
+
+	return ""
 }
 
 func compactionReplayFields(compaction *responses.ResponseCompactionItemParam) compactionReplayMetadata {

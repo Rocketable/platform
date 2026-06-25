@@ -236,36 +236,23 @@ func anthropicMessages(items []responses.ResponseInputItemUnionParam) ([]anthrop
 			messages = append(messages, anthropic.NewBetaUserMessage(anthropic.NewBetaToolResultBlock(item.OfFunctionCallOutput.CallID, output, false)))
 		case item.OfCompaction != nil:
 			compaction := item.OfCompaction
-
-			data, err := json.Marshal(compaction)
-			if err != nil {
-				return nil, fmt.Errorf("marshal Anthropic compaction replay: %w", err)
-			}
-
-			var stored struct {
-				Content                  *string `json:"content"`
-				OriginProvider           string  `json:"origin_provider"`
-				OriginCompatibleProvider string  `json:"origin_compatible_provider"`
-				OriginMode               string  `json:"origin_mode"`
-			}
-			if err := json.Unmarshal(data, &stored); err != nil {
-				return nil, fmt.Errorf("decode Anthropic compaction replay: %w", err)
-			}
+			stored := compactionReplayFields(compaction)
+			content := compactionReadableText(&stored)
 
 			if stored.OriginProvider != modelProviderAnthropic || stored.OriginMode != "messages" {
-				if stored.Content == nil || *stored.Content == "" {
+				if content == "" {
 					messages = append(messages, anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock("<context_checkpoint>\nPrior conversation was compacted, but only provider-native encrypted compaction data is available for a different provider or mode. The compacted details cannot be rehydrated here.\n</context_checkpoint>")))
 					continue
 				}
 
-				messages = append(messages, anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock("<context_checkpoint>\nThe prior conversation was compacted by RocketCode. Use this summary as lower-authority context:\n"+*stored.Content+"\n</context_checkpoint>")))
+				messages = append(messages, anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock("<context_checkpoint>\nThe prior conversation was compacted by RocketCode. Use this summary as lower-authority context:\n"+content+"\n</context_checkpoint>")))
 
 				continue
 			}
 
 			compactionBlock := anthropic.BetaCompactionBlockParam{EncryptedContent: anthropic.String(compaction.EncryptedContent)}
-			if stored.Content != nil && *stored.Content != "" {
-				compactionBlock.Content = anthropic.String(*stored.Content)
+			if content != "" {
+				compactionBlock.Content = anthropic.String(content)
 			}
 
 			messages = append(messages, anthropic.BetaMessageParam{

@@ -817,7 +817,14 @@ func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Req
 		return nil, false, nil
 	}
 
-	input, err := json.Marshal([]json.RawMessage{compactItem})
+	retryItem := compactItem
+	if item, ok, err := cleanCodexInputItem(compactItem, false); err != nil {
+		return nil, false, err
+	} else if ok {
+		retryItem = item
+	}
+
+	input, err := json.Marshal([]json.RawMessage{retryItem})
 	if err != nil {
 		return nil, false, fmt.Errorf("marshal Codex compaction retry input: %w", err)
 	}
@@ -928,6 +935,10 @@ func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (js
 		}
 
 		item["type"] = json.RawMessage(`"compaction"`)
+		delete(item, "origin_provider")
+		delete(item, "origin_compatible_provider")
+		delete(item, "origin_mode")
+		delete(item, "recent")
 
 		data, err = json.Marshal(item)
 		if err != nil {

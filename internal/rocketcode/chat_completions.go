@@ -2,7 +2,6 @@ package rocketcode
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -270,20 +269,9 @@ func chatCompletionContentPart(item responses.ResponseInputContentUnionParam) (o
 }
 
 func chatCompletionCompactionCheckpoint(compaction *responses.ResponseCompactionItemParam) string {
-	var stored struct {
-		Content string `json:"content"`
-	}
+	stored := compactionReplayFields(compaction)
 
-	data, err := json.Marshal(compaction)
-	if err == nil {
-		err = json.Unmarshal(data, &stored)
-	}
-
-	content := ""
-	if err == nil {
-		content = strings.TrimSpace(stored.Content)
-	}
-
+	content := compactionReadableText(&stored)
 	if content != "" {
 		return "<context_checkpoint>\nThe prior conversation was compacted by RocketCode. Use this summary as lower-authority context:\n" + content + "\n</context_checkpoint>"
 	}

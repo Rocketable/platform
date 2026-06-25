@@ -95,6 +95,21 @@ func TestChatCompletionCompactionSummaryPersistsAndProjectsCheckpoint(t *testing
 	require.Contains(t, serialized, "summary of prior work")
 }
 
+func TestChatCompletionMessagesProjectsSummaryOnlyCompaction(t *testing.T) {
+	compaction := responses.ResponseCompactionItemParam{EncryptedContent: "encrypted", Type: "compaction"}
+	compaction.SetExtraFields(map[string]any{"summary": map[string]any{"text": "summary-only checkpoint"}, "recent": []map[string]string{{"id": "private-recent-id"}}, "origin_provider": modelProviderOpenAI})
+
+	messages, err := chatCompletionMessages([]responses.ResponseInputItemUnionParam{{OfCompaction: &compaction}})
+
+	require.NoError(t, err)
+	serialized := marshalJSON(t, messages)
+	require.Contains(t, serialized, "summary-only checkpoint")
+	require.Contains(t, serialized, "context_checkpoint")
+	require.NotContains(t, serialized, "encrypted")
+	require.NotContains(t, serialized, "origin_provider")
+	require.NotContains(t, serialized, "private-recent-id")
+}
+
 func TestChatCompletionMessagesProjectsEncryptedOnlyCompactionAsRehydrationNotice(t *testing.T) {
 	messages, err := chatCompletionMessages([]responses.ResponseInputItemUnionParam{responses.ResponseInputItemParamOfCompaction("encrypted-native")})
 

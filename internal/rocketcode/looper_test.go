@@ -617,6 +617,22 @@ func TestProjectReplayForTargetLowersCompatibleProviderMismatch(t *testing.T) {
 	require.NotContains(t, serialized, "encrypted-a")
 }
 
+func TestProjectReplayForTargetLowersOriginlessCompactionWithSummary(t *testing.T) {
+	input, err := ReplayInputToParams([]json.RawMessage{json.RawMessage(`{"encrypted_content":"encrypted-originless","id":"cmp-originless","summary":{"text":"summary-only checkpoint"},"type":"compaction"}`)})
+	require.NoError(t, err)
+
+	got := projectReplayForTarget(input, modelRef{provider: modelProviderOpenAICompatible, compatibleProvider: "local", apiModel: "model"})
+
+	require.Len(t, got, 1)
+	require.Nil(t, got[0].OfCompaction)
+	serialized := marshalJSON(t, got)
+	require.Contains(t, serialized, "summary-only checkpoint")
+	require.Contains(t, serialized, "context_checkpoint")
+	require.NotContains(t, serialized, "encrypted-originless")
+	require.NotContains(t, serialized, "origin_provider")
+	require.NotContains(t, serialized, "summary\":")
+}
+
 func TestProjectReplayForTargetLowersEncryptedOnlyOpenAICompaction(t *testing.T) {
 	input := []responses.ResponseInputItemUnionParam{compactionReplayInput("cmp-openai", "encrypted-openai", "", modelProviderOpenAI, "", string(OpenAICompatibleModeResponses))}
 
