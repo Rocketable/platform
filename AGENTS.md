@@ -40,7 +40,7 @@ On start, you must always read:
 
 - Read the relevant source code before asking clarifying questions or proposing edits.
 - Never use `git`. Use `jj` for repository inspection and history, and always use `jj diff --git` for diffs.
-- Use `go doc` and `gopls` often to find issues and opportunities to improve Go code.
+- Use `go doc` and `gopls` (use `go run golang.org/x/tools/gopls@latest --help`) often to find issues and opportunities to improve Go code.
 - Always react to GPT comments (`// GPT:`) by doing what the human partner asked and then deleting the comment when you accomplish the stated goal.
 - Do not disable linters with `//nolint`, config changes, or command flags without explicit human approval. If a linter finding seems wrong, first fix the code or ask for approval with the exact suppression and rationale.
 - Prefer the same abstraction in tests that production code uses.
