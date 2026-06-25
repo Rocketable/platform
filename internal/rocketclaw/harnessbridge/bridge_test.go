@@ -372,6 +372,51 @@ func TestPublishFinalAttachesMainResponseCheckpoint(t *testing.T) {
 	require.NoError(t, group.Wait())
 }
 
+func TestPublishFinalMarksCurrentGoalCompletion(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	bridge := new(Bridge)
+	bridge.bus = bus
+	bridge.log = slog.New(slog.DiscardHandler)
+	bridge.config = Config{ConversationID: "thread-1", Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}
+	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "done", true)
+	result := runResult{turnID: "turn-1", text: "done", goalCompleted: true}
+
+	var group errgroup.Group
+	group.Go(func() error { return bridge.publishFinal(context.Background(), inbound, result, true) })
+
+	outbound := readRocketCodeOutbound(t, bus)
+	assert.True(t, outbound.GoalComplete)
+	outbound.MarkDelivered(nil)
+	require.NoError(t, group.Wait())
+}
+
+func TestPublishFinalDoesNotReuseCompletedGoal(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	store := newTestSessionService(t)
+	require.NoError(t, store.BeginGoal("thread-1", "ship it", "", 3))
+	_, err := store.UpdateGoalStatus("thread-1", GoalStatusComplete, "done")
+	require.NoError(t, err)
+
+	bridge := new(Bridge)
+	bridge.bus = bus
+	bridge.log = slog.New(slog.DiscardHandler)
+	bridge.config = Config{ConversationID: "thread-1", Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: store}
+	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "trailing message", true)
+	result := runResult{turnID: "turn-2", text: "normal reply"}
+
+	var group errgroup.Group
+	group.Go(func() error { return bridge.publishFinal(context.Background(), inbound, result, true) })
+
+	outbound := readRocketCodeOutbound(t, bus)
+	assert.False(t, outbound.GoalComplete)
+	outbound.MarkDelivered(nil)
+	require.NoError(t, group.Wait())
+}
+
 func TestPublishFinalCarriesMainResponseAttachments(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()

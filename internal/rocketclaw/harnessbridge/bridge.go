@@ -126,6 +126,7 @@ type runResult struct {
 	sessionEntryID         int64
 	responseID, model      string
 	attachments            []events.OutboundAttachment
+	goalCompleted          bool
 }
 
 // NewConversation constructs a rocketcode bridge for one conversation.
@@ -926,7 +927,7 @@ func (b *Bridge) publishFinal(ctx context.Context, msg *events.InboundMessage, r
 	outbound := b.newOutboundMessage(msg, result.turnID, result.sequence+1, result.text, "", true)
 
 	outbound.Attachments = events.CloneOutboundAttachments(result.attachments)
-	if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err == nil && ok && strings.TrimSpace(goal.Status) == GoalStatusComplete {
+	if result.goalCompleted {
 		outbound.GoalComplete = true
 	}
 
@@ -1306,6 +1307,15 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 	appendedMu.Unlock()
 
 	result.attachments = attachments.Attachments()
+
+	if msg.GoalTurn {
+		goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID)
+		if err != nil {
+			return result, fmt.Errorf("load goal completion status: %w", err)
+		}
+
+		result.goalCompleted = ok && strings.TrimSpace(goal.Status) == GoalStatusComplete
+	}
 
 	return result, nil
 }
