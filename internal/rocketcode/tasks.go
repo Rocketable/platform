@@ -212,11 +212,13 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 
 	childFactory.modelRef = modelRef
 	childFactory.client = client.client
+	childFactory.target = client.target
 
 	child := &looper{
 		agent:                  agent,
 		provider:               modelRef.provider,
 		modelRef:               modelRef,
+		target:                 client.target,
 		Client:                 client.client,
 		AnthropicClient:        f.anthropicClient,
 		SystemPrompt:           systemPrompt,
@@ -362,11 +364,13 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, messag
 	childFactory.inGuardrailRun = true
 	childFactory.modelRef = modelRef
 	childFactory.client = client.client
+	childFactory.target = client.target
 
 	child := &looper{
 		agent:                  agent,
 		provider:               modelRef.provider,
 		modelRef:               modelRef,
+		target:                 client.target,
 		Client:                 client.client,
 		AnthropicClient:        f.anthropicClient,
 		SystemPrompt:           composeSystemPromptWithSkills(agent.Prompt, f.skills, &agent),

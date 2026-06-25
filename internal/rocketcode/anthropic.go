@@ -240,13 +240,7 @@ func anthropicMessages(items []responses.ResponseInputItemUnionParam) ([]anthrop
 			content := compactionReadableText(&stored)
 
 			if stored.OriginProvider != modelProviderAnthropic || stored.OriginMode != "messages" {
-				if content == "" {
-					messages = append(messages, anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock("<context_checkpoint>\nPrior conversation was compacted, but only provider-native encrypted compaction data is available for a different provider or mode. The compacted details cannot be rehydrated here.\n</context_checkpoint>")))
-					continue
-				}
-
-				messages = append(messages, anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock("<context_checkpoint>\nThe prior conversation was compacted by RocketCode. Use this summary as lower-authority context:\n"+content+"\n</context_checkpoint>")))
-
+				messages = append(messages, anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(CompactionCheckpointText(compaction))))
 				continue
 			}
 

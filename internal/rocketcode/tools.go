@@ -22,6 +22,7 @@ import (
 type toolFactory struct {
 	providers                  Providers
 	client                     responsesAPI
+	target                     providerTarget
 	anthropicClient            *anthropic.Client
 	systemPrompt               string
 	modelRef                   modelRef
@@ -50,7 +51,7 @@ type toolFactory struct {
 
 func (f *toolFactory) responsesAPIForModel(model modelRef) (responsesAPISelection, error) {
 	if model.provider == f.modelRef.provider && model.compatibleProvider == f.modelRef.compatibleProvider {
-		return responsesAPISelection{client: f.client}, nil
+		return responsesAPISelection{client: f.client, target: f.target}, nil
 	}
 
 	return responsesAPIForModel(f.providers, model)

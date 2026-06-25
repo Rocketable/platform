@@ -288,6 +288,7 @@ func NewWithProviders(
 	factory := &toolFactory{
 		providers:                  providers,
 		client:                     providerClient.client,
+		target:                     providerClient.target,
 		anthropicClient:            providers.Anthropic,
 		systemPrompt:               systemPrompt,
 		modelRef:                   modelRef,
@@ -314,6 +315,7 @@ func NewWithProviders(
 		agent:                  activeAgent,
 		provider:               modelRef.provider,
 		modelRef:               modelRef,
+		target:                 providerClient.target,
 		Client:                 providerClient.client,
 		AnthropicClient:        providers.Anthropic,
 		SystemPrompt:           runtimeSystemPrompt,
@@ -453,6 +455,20 @@ func validateAgentModels(agents Agents, providers Providers) error {
 
 type responsesAPISelection struct {
 	client responsesAPI
+	target providerTarget
+}
+
+type providerSurface string
+
+const (
+	providerSurfaceResponses       providerSurface = "responses"
+	providerSurfaceChatCompletions providerSurface = "chat_completions"
+	providerSurfaceAnthropic       providerSurface = "messages"
+)
+
+type providerTarget struct {
+	modelRef modelRef
+	surface  providerSurface
 }
 
 func responsesAPIForModel(providers Providers, model modelRef) (responsesAPISelection, error) {
@@ -462,20 +478,20 @@ func responsesAPIForModel(providers Providers, model modelRef) (responsesAPISele
 
 	switch model.provider {
 	case modelProviderOpenAI:
-		return responsesAPISelection{client: responseServiceClient{service: &providers.OpenAI.Responses}}, nil
+		return responsesAPISelection{client: responseServiceClient{service: &providers.OpenAI.Responses}, target: providerTarget{modelRef: model, surface: providerSurfaceResponses}}, nil
 	case modelProviderOpenAICompatible:
 		provider := providers.OpenAICompatible[model.compatibleProvider]
 		if provider.Mode == "" || provider.Mode == OpenAICompatibleModeResponses {
-			return responsesAPISelection{client: responseServiceClient{service: &provider.Client.Responses}}, nil
+			return responsesAPISelection{client: responseServiceClient{service: &provider.Client.Responses}, target: providerTarget{modelRef: model, surface: providerSurfaceResponses}}, nil
 		}
 
 		if provider.Mode == OpenAICompatibleModeChatCompletions {
-			return responsesAPISelection{client: chatCompletionServiceClient{service: &provider.Client.Chat.Completions}}, nil
+			return responsesAPISelection{client: chatCompletionServiceClient{service: &provider.Client.Chat.Completions}, target: providerTarget{modelRef: model, surface: providerSurfaceChatCompletions}}, nil
 		}
 
 		return responsesAPISelection{}, fmt.Errorf("openai-compatible provider %q mode %q is not implemented", model.compatibleProvider, provider.Mode)
 	case modelProviderAnthropic:
-		return responsesAPISelection{}, nil
+		return responsesAPISelection{target: providerTarget{modelRef: model, surface: providerSurfaceAnthropic}}, nil
 	default:
 		return responsesAPISelection{}, fmt.Errorf("unsupported model provider %q", model.provider)
 	}

@@ -37,6 +37,15 @@ func (f bridgeRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error
 	return f(req)
 }
 
+func mustReplayProjectionTarget(t *testing.T, provider, compatibleProvider, mode string) rocketcode.ReplayProjectionTarget {
+	t.Helper()
+
+	target, err := rocketcode.NewReplayProjectionTarget(provider, compatibleProvider, mode)
+	require.NoError(t, err)
+
+	return target
+}
+
 func TestRestartToolScopesDescriptionToRuntimeConfig(t *testing.T) {
 	tool := restartTool(testNoopRestart, testNoopRestartRecorder)
 
@@ -1379,7 +1388,7 @@ func TestCompactedOutputToReplayInputPreservesSupportedItems(t *testing.T) {
 		{Type: "reasoning", ID: "rsn_2"},
 	}
 
-	got, err := compactedOutputToReplayInput(items, "openai", "", "responses")
+	got, err := rocketcode.CompactedOutputToReplayInput(items, "openai", "", "responses")
 	require.NoError(t, err)
 	params, err := rocketcode.ReplayInputToParams(got)
 	require.NoError(t, err)
@@ -1396,7 +1405,7 @@ func TestCompactedOutputToReplayInputPreservesSupportedItems(t *testing.T) {
 }
 
 func TestCompactedOutputToReplayInputRejectsUnsupportedKind(t *testing.T) {
-	_, err := compactedOutputToReplayInput([]responses.ResponseOutputItemUnion{{Type: "tool_search_call"}}, "openai", "", "responses")
+	_, err := rocketcode.CompactedOutputToReplayInput([]responses.ResponseOutputItemUnion{{Type: "tool_search_call"}}, "openai", "", "responses")
 	require.ErrorContains(t, err, `unsupported compacted output item kind "tool_search_call"`)
 }
 
@@ -1405,25 +1414,26 @@ func TestProjectSeedReplayForTargetStripsCompactionReplayMetadataFromNativePaylo
 		name               string
 		originProvider     string
 		compatibleProvider string
-		target             seedCompactionModel
+		target             rocketcode.ReplayProjectionTarget
 	}{
 		{
 			name:           "openai",
 			originProvider: "openai",
-			target:         seedCompactionModel{provider: "openai", apiModel: "gpt-5.5"},
+			target:         mustReplayProjectionTarget(t, "openai", "", "responses"),
 		},
 		{
 			name:               "openai-compatible",
 			originProvider:     "openai-compatible",
 			compatibleProvider: "local",
-			target:             seedCompactionModel{provider: "openai-compatible", compatibleProvider: "local", apiModel: "gpt-oss"},
+			target:             mustReplayProjectionTarget(t, "openai-compatible", "local", "responses"),
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			input, err := rocketcode.ReplayInputToParams([]json.RawMessage{json.RawMessage(fmt.Sprintf(`{"content":"private-content-value","encrypted_content":"sealed","id":"cmp-1","origin_compatible_provider":%q,"origin_mode":"responses","origin_provider":%q,"recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}`, tt.compatibleProvider, tt.originProvider))})
 			require.NoError(t, err)
 
-			got := projectSeedReplayForTarget(input, tt.target)
+			got, err := rocketcode.ProjectReplayForTarget(input, tt.target)
+			require.NoError(t, err)
 
 			require.Len(t, got, 1)
 			data, err := json.Marshal(got[0])
@@ -1440,7 +1450,8 @@ func TestProjectSeedReplayForTargetLowersOriginlessCompactionWithSummary(t *test
 	input, err := rocketcode.ReplayInputToParams([]json.RawMessage{json.RawMessage(`{"encrypted_content":"encrypted-originless","id":"cmp-originless","summary":{"text":"summary-only checkpoint"},"type":"compaction"}`)})
 	require.NoError(t, err)
 
-	got := projectSeedReplayForTarget(input, seedCompactionModel{provider: "openai-compatible", compatibleProvider: "local", apiModel: "gpt-oss"})
+	got, err := rocketcode.ProjectReplayForTarget(input, mustReplayProjectionTarget(t, "openai-compatible", "local", "responses"))
+	require.NoError(t, err)
 
 	require.Len(t, got, 1)
 	require.Nil(t, got[0].OfCompaction)

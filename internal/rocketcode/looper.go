@@ -80,6 +80,7 @@ type looper struct {
 	agent                  Agent
 	provider               string
 	modelRef               modelRef
+	target                 providerTarget
 	Client                 responsesAPI
 	AnthropicClient        *anthropic.Client
 	SystemPrompt           string
@@ -808,7 +809,7 @@ func (l *looper) newProviderResponse(ctx context.Context, params *responses.Resp
 		span.span.End()
 	}()
 
-	if provider == modelProviderAnthropic {
+	if l.target.surface == providerSurfaceAnthropic {
 		resp, err := l.newAnthropicResponse(ctx, params, output)
 		return resp, nil, err
 	}
@@ -979,8 +980,8 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 		retryParams := *params
 
 		retryHistory := recoveredHistory
-		if l.modelRef.provider != modelProviderAnthropic && !l.usesChatCompletions() {
-			retryHistory = append(projectReplayForTarget(compactedInput, l.modelRef), original[end:]...)
+		if l.target.surface == providerSurfaceResponses {
+			retryHistory = append(projectReplayForTarget(compactedInput, replayProjectionTargetFromProviderTarget(l.target)), original[end:]...)
 		}
 
 		retryParams.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: retryHistory}
@@ -1034,9 +1035,7 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 }
 
 func (l *looper) compactChatCompletionResponse(ctx context.Context, params *responses.ResponseNewParams, resp *responses.Response) error {
-	switch l.Client.(type) {
-	case chatCompletionServiceClient, *chatCompletionServiceClient:
-	default:
+	if l.target.surface != providerSurfaceChatCompletions {
 		return nil
 	}
 
@@ -1306,8 +1305,8 @@ func (l *looper) rewriteHistory(items []responses.ResponseInputItemUnionParam) [
 }
 
 func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) responses.ResponseNewParams {
-	if l.modelRef.provider != modelProviderAnthropic && !l.usesChatCompletions() {
-		history = projectReplayForTarget(history, l.modelRef)
+	if l.target.surface == providerSurfaceResponses {
+		history = projectReplayForTarget(history, replayProjectionTargetFromProviderTarget(l.target))
 	}
 
 	var input responses.ResponseNewParamsInputUnion
@@ -1785,36 +1784,37 @@ func loadSession(entries iter.Seq2[SessionEntry, error]) ([]responses.ResponseIn
 func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion, originProvider, originCompatibleProvider, originMode string) (responses.ResponseInputItemUnionParam, bool) {
 	switch item.Type {
 	case "message":
-		msg := item.AsMessage()
-
-		parts := make([]string, 0, len(msg.Content))
-		for i := range msg.Content {
-			content := msg.Content[i]
+		parts := make([]string, 0, len(item.Content))
+		for i := range item.Content {
+			content := item.Content[i]
 			if content.Type == "output_text" {
 				parts = append(parts, content.Text)
 			}
 		}
 
+		role := strings.TrimSpace(string(item.Role))
+		if role == "" {
+			role = "assistant"
+		}
+
 		assistant := responses.EasyInputMessageParam{
 			Content: easyInputStringContent(strings.Join(parts, "")),
-			Role:    responses.EasyInputMessageRole("assistant"),
+			Role:    responses.EasyInputMessageRole(role),
 			Type:    "message",
 		}
-		if msg.Phase != "" {
-			assistant.Phase = responses.EasyInputMessagePhase(msg.Phase)
+		if item.Phase != "" {
+			assistant.Phase = responses.EasyInputMessagePhase(item.Phase)
 		}
 
 		return responses.ResponseInputItemUnionParam{OfMessage: &assistant}, true
 	case "reasoning":
-		reasoning := item.AsReasoning()
-
 		summary := ""
-		if len(reasoning.Summary) > 0 {
-			summary = reasoning.Summary[0].Text
+		if len(item.Summary) > 0 {
+			summary = item.Summary[0].Text
 		}
 
-		return reasoningReplayInput(reasoning.ID, summary, reasoning.EncryptedContent), true
-	case "compaction":
+		return reasoningReplayInput(item.ID, summary, item.EncryptedContent), true
+	case "compaction", "compaction_summary":
 		summary := ""
 		if len(item.Summary) > 0 {
 			summary = item.Summary[0].Text
@@ -1853,24 +1853,18 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion, origin
 	}
 }
 
-func (l *looper) usesChatCompletions() bool {
-	switch l.Client.(type) {
-	case chatCompletionServiceClient, *chatCompletionServiceClient:
-		return true
-	default:
-		return false
-	}
-}
-
 func (l *looper) compactionOrigin() (originProvider, originCompatibleProvider, originMode string) {
-	originProvider = l.provider
-	originCompatibleProvider = l.modelRef.compatibleProvider
+	originProvider = l.target.modelRef.provider
+	originCompatibleProvider = l.target.modelRef.compatibleProvider
 
 	originMode = string(OpenAICompatibleModeResponses)
 
-	switch l.Client.(type) {
-	case chatCompletionServiceClient, *chatCompletionServiceClient:
+	switch l.target.surface {
+	case providerSurfaceResponses:
+	case providerSurfaceChatCompletions:
 		originMode = string(OpenAICompatibleModeChatCompletions)
+	case providerSurfaceAnthropic:
+		originMode = string(providerSurfaceAnthropic)
 	}
 
 	return originProvider, originCompatibleProvider, originMode
@@ -1920,52 +1914,8 @@ type compactionReplayMetadata struct {
 	OriginMode               string `json:"origin_mode"`
 }
 
-func projectReplayForTarget(items []responses.ResponseInputItemUnionParam, target modelRef) []responses.ResponseInputItemUnionParam {
-	projected := make([]responses.ResponseInputItemUnionParam, 0, len(items))
-	for i := range items {
-		item := items[i]
-		if item.OfReasoning != nil && target.provider == modelProviderAnthropic {
-			continue
-		}
-
-		if item.OfCompaction == nil {
-			projected = append(projected, item)
-			continue
-		}
-
-		if compactionMatchesTarget(item.OfCompaction, target) {
-			compaction := responses.ResponseCompactionItemParam{
-				EncryptedContent: item.OfCompaction.EncryptedContent,
-				ID:               item.OfCompaction.ID,
-				Type:             item.OfCompaction.Type,
-			}
-			projected = append(projected, responses.ResponseInputItemUnionParam{OfCompaction: &compaction})
-
-			continue
-		}
-
-		projected = append(projected, inputMessageParam(responses.EasyInputMessageRoleUser, easyInputStringContent(compactionCheckpointText(item.OfCompaction))))
-	}
-
-	return projected
-}
-
-func compactionMatchesTarget(compaction *responses.ResponseCompactionItemParam, target modelRef) bool {
-	stored := compactionReplayFields(compaction)
-
-	switch target.provider {
-	case modelProviderOpenAI:
-		return stored.OriginProvider == modelProviderOpenAI && stored.OriginMode == string(OpenAICompatibleModeResponses)
-	case modelProviderOpenAICompatible:
-		return stored.OriginProvider == modelProviderOpenAICompatible && stored.OriginCompatibleProvider == target.compatibleProvider && stored.OriginMode == string(OpenAICompatibleModeResponses)
-	case modelProviderAnthropic:
-		return stored.OriginProvider == modelProviderAnthropic && stored.OriginMode == "messages"
-	default:
-		return false
-	}
-}
-
-func compactionCheckpointText(compaction *responses.ResponseCompactionItemParam) string {
+// CompactionCheckpointText returns portable text for compaction replay that cannot be rehydrated natively.
+func CompactionCheckpointText(compaction *responses.ResponseCompactionItemParam) string {
 	stored := compactionReplayFields(compaction)
 
 	content := compactionReadableText(&stored)

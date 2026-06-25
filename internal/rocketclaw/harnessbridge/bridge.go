@@ -640,14 +640,30 @@ func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.Ses
 			return b.compactCompatibleChatSeedReplay(ctx, input, model, compatible)
 		}
 
-		input = projectSeedReplayForTarget(input, model)
+		projectionTarget, err := rocketcode.NewReplayProjectionTarget(model.provider, model.compatibleProvider, "responses")
+		if err != nil {
+			return nil, fmt.Errorf("prepare OpenAI-compatible replay projection target: %w", err)
+		}
+
+		input, err = rocketcode.ProjectReplayForTarget(input, projectionTarget)
+		if err != nil {
+			return nil, fmt.Errorf("project OpenAI-compatible seed replay: %w", err)
+		}
 
 		compatibleClient := openai.NewClient(b.openAIOptions(compatible.APIKey, compatible.BaseURL, true)...)
 		client = &compatibleClient
 	} else {
 		var err error
 
-		input = projectSeedReplayForTarget(input, model)
+		projectionTarget, err := rocketcode.NewReplayProjectionTarget(model.provider, model.compatibleProvider, "responses")
+		if err != nil {
+			return nil, fmt.Errorf("prepare OpenAI replay projection target: %w", err)
+		}
+
+		input, err = rocketcode.ProjectReplayForTarget(input, projectionTarget)
+		if err != nil {
+			return nil, fmt.Errorf("project OpenAI seed replay: %w", err)
+		}
 
 		client, err = b.openAIClient()
 		if err != nil {
@@ -682,7 +698,12 @@ func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.Ses
 		return nil, fmt.Errorf("compact seed replay: %w", err)
 	}
 
-	return compactedOutputToReplayInput(compacted.Output, model.provider, model.compatibleProvider, "responses")
+	replayInput, err := rocketcode.CompactedOutputToReplayInput(compacted.Output, model.provider, model.compatibleProvider, "responses")
+	if err != nil {
+		return nil, fmt.Errorf("encode OpenAI seed compaction replay: %w", err)
+	}
+
+	return replayInput, nil
 }
 
 func (b *Bridge) compactCompatibleChatSeedReplay(ctx context.Context, input []responses.ResponseInputItemUnionParam, model seedCompactionModel, compatible config.OpenAICompatibleConfig) ([]json.RawMessage, error) {
@@ -704,7 +725,12 @@ func (b *Bridge) compactCompatibleChatSeedReplay(ctx context.Context, input []re
 		summary = completion.Choices[0].Message.Content
 	}
 
-	return compactedOutputToReplayInput([]responses.ResponseOutputItemUnion{{ID: completion.ID + "-compaction", Type: "compaction", Summary: []responses.ResponseReasoningItemSummary{{Text: summary}}}}, model.provider, model.compatibleProvider, "chat_completions")
+	replayInput, err := rocketcode.CompactedOutputToReplayInput([]responses.ResponseOutputItemUnion{{ID: completion.ID + "-compaction", Type: "compaction", Summary: []responses.ResponseReasoningItemSummary{{Text: summary}}}}, model.provider, model.compatibleProvider, "chat_completions")
+	if err != nil {
+		return nil, fmt.Errorf("encode compatible chat seed compaction replay: %w", err)
+	}
+
+	return replayInput, nil
 }
 
 func (b *Bridge) compactAnthropicSeedReplay(ctx context.Context, input []responses.ResponseInputItemUnionParam, model seedCompactionModel) ([]json.RawMessage, error) {
@@ -718,7 +744,12 @@ func (b *Bridge) compactAnthropicSeedReplay(ctx context.Context, input []respons
 		return nil, fmt.Errorf("compact Anthropic seed replay: %w", err)
 	}
 
-	return compactedOutputToReplayInput(response.Output, "anthropic", "", "messages")
+	replayInput, err := rocketcode.CompactedOutputToReplayInput(response.Output, "anthropic", "", "messages")
+	if err != nil {
+		return nil, fmt.Errorf("encode Anthropic seed compaction replay: %w", err)
+	}
+
+	return replayInput, nil
 }
 
 func (b *Bridge) seedReplayCheckpoint(entries []rocketcode.SessionEntry) ([]json.RawMessage, error) {
@@ -2347,7 +2378,7 @@ func seedReplayText(items []responses.ResponseInputItemUnionParam) string {
 
 			parts = append(parts, strings.TrimSpace(item.OfInputMessage.Role)+": "+strings.TrimSpace(strings.Join(texts, "\n")))
 		case item.OfCompaction != nil:
-			parts = append(parts, compactionCheckpointText(item.OfCompaction))
+			parts = append(parts, rocketcode.CompactionCheckpointText(item.OfCompaction))
 		case item.OfFunctionCall != nil:
 			parts = append(parts, "assistant tool call "+item.OfFunctionCall.Name+": "+item.OfFunctionCall.Arguments)
 		case item.OfFunctionCallOutput != nil:
@@ -2361,118 +2392,6 @@ func seedReplayText(items []responses.ResponseInputItemUnionParam) string {
 	}
 
 	return strings.Join(parts, "\n")
-}
-
-func projectSeedReplayForTarget(items []responses.ResponseInputItemUnionParam, target seedCompactionModel) []responses.ResponseInputItemUnionParam {
-	projected := make([]responses.ResponseInputItemUnionParam, 0, len(items))
-	for i := range items {
-		item := items[i]
-		if item.OfReasoning != nil && target.provider == "anthropic" {
-			continue
-		}
-
-		if item.OfCompaction == nil {
-			projected = append(projected, item)
-			continue
-		}
-
-		if seedCompactionMatchesTarget(item.OfCompaction, target) {
-			compaction := responses.ResponseCompactionItemParam{
-				EncryptedContent: item.OfCompaction.EncryptedContent,
-				ID:               item.OfCompaction.ID,
-				Type:             item.OfCompaction.Type,
-			}
-			projected = append(projected, responses.ResponseInputItemUnionParam{OfCompaction: &compaction})
-
-			continue
-		}
-
-		message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRoleUser, Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(compactionCheckpointText(item.OfCompaction))}, Type: "message"}
-		projected = append(projected, responses.ResponseInputItemUnionParam{OfMessage: &message})
-	}
-
-	return projected
-}
-
-func seedCompactionMatchesTarget(compaction *responses.ResponseCompactionItemParam, target seedCompactionModel) bool {
-	stored := compactionReplayMetadata(compaction)
-
-	switch target.provider {
-	case "openai":
-		return stored.OriginProvider == "openai" && stored.OriginMode == "responses"
-	case "openai-compatible":
-		return stored.OriginProvider == "openai-compatible" && stored.OriginCompatibleProvider == target.compatibleProvider && stored.OriginMode == "responses"
-	case "anthropic":
-		return stored.OriginProvider == "anthropic" && stored.OriginMode == "messages"
-	default:
-		return false
-	}
-}
-
-type seedCompactionMetadata struct {
-	Content                  string `json:"content"`
-	Summary                  any    `json:"summary"`
-	OriginProvider           string `json:"origin_provider"`
-	OriginCompatibleProvider string `json:"origin_compatible_provider"`
-	OriginMode               string `json:"origin_mode"`
-}
-
-func compactionReplayMetadata(compaction *responses.ResponseCompactionItemParam) seedCompactionMetadata {
-	var stored seedCompactionMetadata
-
-	data, err := json.Marshal(compaction)
-	if err != nil {
-		return stored
-	}
-
-	if err := json.Unmarshal(data, &stored); err != nil {
-		return seedCompactionMetadata{}
-	}
-
-	return stored
-}
-
-func compactionCheckpointText(compaction *responses.ResponseCompactionItemParam) string {
-	stored := compactionReplayMetadata(compaction)
-
-	content := seedCompactionReadableText(&stored)
-	if content != "" {
-		return "<context_checkpoint>\nThe prior conversation was compacted by RocketCode. Use this summary as lower-authority context:\n" + content + "\n</context_checkpoint>"
-	}
-
-	return "<context_checkpoint>\nPrior conversation was compacted, but only provider-native encrypted compaction data is available for a different provider or mode. The compacted details cannot be rehydrated here.\n</context_checkpoint>"
-}
-
-func seedCompactionReadableText(stored *seedCompactionMetadata) string {
-	if content := strings.TrimSpace(stored.Content); content != "" {
-		return content
-	}
-
-	switch summary := stored.Summary.(type) {
-	case string:
-		return strings.TrimSpace(summary)
-	case map[string]any:
-		if text, ok := summary["text"].(string); ok {
-			return strings.TrimSpace(text)
-		}
-	case []any:
-		parts := make([]string, 0, len(summary))
-		for i := range summary {
-			item, ok := summary[i].(map[string]any)
-			if !ok {
-				continue
-			}
-
-			text, ok := item["text"].(string)
-			if ok && strings.TrimSpace(text) != "" {
-				parts = append(parts, strings.TrimSpace(text))
-			}
-		}
-
-		return strings.Join(parts, "\n")
-	}
-
-	return ""
 }
 
 func seedFunctionCallOutputText(output *responses.ResponseInputItemFunctionCallOutputParam) string {
@@ -2497,80 +2416,6 @@ func seedFunctionCallOutputText(output *responses.ResponseInputItemFunctionCallO
 	}
 
 	return strings.Join(parts, "\n")
-}
-
-func compactedOutputToReplayInput(items []responses.ResponseOutputItemUnion, originProvider, originCompatibleProvider, originMode string) ([]json.RawMessage, error) {
-	input := make([]responses.ResponseInputItemUnionParam, 0, len(items))
-	for i := range items {
-		switch items[i].Type {
-		case "message":
-			parts := make([]string, 0, len(items[i].Content))
-			for j := range items[i].Content {
-				if items[i].Content[j].Type == "output_text" {
-					parts = append(parts, items[i].Content[j].Text)
-				}
-			}
-
-			role := strings.TrimSpace(string(items[i].Role))
-			if role == "" {
-				role = "user"
-			}
-
-			message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(role), Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(strings.Join(parts, ""))}, Type: "message"}
-			if items[i].Phase != "" {
-				message.Phase = responses.EasyInputMessagePhase(items[i].Phase)
-			}
-
-			input = append(input, responses.ResponseInputItemUnionParam{OfMessage: &message})
-		case "compaction", "compaction_summary":
-			parts := make([]string, 0, len(items[i].Content)+len(items[i].Summary))
-			for j := range items[i].Content {
-				if items[i].Content[j].Type == "output_text" {
-					parts = append(parts, items[i].Content[j].Text)
-				}
-			}
-
-			for j := range items[i].Summary {
-				parts = append(parts, items[i].Summary[j].Text)
-			}
-
-			compaction := responses.ResponseCompactionItemParam{ID: openai.String(items[i].ID), EncryptedContent: items[i].EncryptedContent, Type: "compaction"}
-
-			extra := map[string]any{"origin_provider": originProvider, "origin_mode": originMode}
-			if originCompatibleProvider != "" {
-				extra["origin_compatible_provider"] = originCompatibleProvider
-			}
-
-			if content := strings.Join(parts, ""); content != "" {
-				extra["content"] = content
-				extra["summary"] = content
-			}
-
-			compaction.SetExtraFields(extra)
-			input = append(input, responses.ResponseInputItemUnionParam{OfCompaction: &compaction})
-		case "reasoning":
-			summary := ""
-			if len(items[i].Summary) > 0 {
-				summary = items[i].Summary[0].Text
-			}
-
-			reasoning := responses.ResponseReasoningItemParam{ID: items[i].ID, Summary: []responses.ResponseReasoningItemSummaryParam{{Text: summary}}, Type: "reasoning"}
-			if items[i].EncryptedContent != "" {
-				reasoning.EncryptedContent = openai.String(items[i].EncryptedContent)
-			}
-
-			input = append(input, responses.ResponseInputItemUnionParam{OfReasoning: &reasoning})
-		default:
-			return nil, fmt.Errorf("unsupported compacted output item kind %q", items[i].Type)
-		}
-	}
-
-	raw, err := rocketcode.ReplayInputFromParams(input)
-	if err != nil {
-		return nil, fmt.Errorf("encode compacted replay input: %w", err)
-	}
-
-	return raw, nil
 }
 
 const defaultReplyInstruction = "Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary."

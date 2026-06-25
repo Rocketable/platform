@@ -190,7 +190,7 @@ func chatCompletionMessages(items []responses.ResponseInputItemUnionParam) ([]op
 				messages = append(messages, openai.UserMessage(parts))
 			}
 		case item.OfCompaction != nil:
-			messages = append(messages, openai.UserMessage(chatCompletionCompactionCheckpoint(item.OfCompaction)))
+			messages = append(messages, openai.UserMessage(CompactionCheckpointText(item.OfCompaction)))
 		case item.OfReasoning != nil:
 			continue
 		default:
@@ -266,17 +266,6 @@ func chatCompletionContentPart(item responses.ResponseInputContentUnionParam) (o
 	default:
 		return openai.ChatCompletionContentPartUnionParam{}, "", errors.New("chat completions provider does not support this prompt attachment")
 	}
-}
-
-func chatCompletionCompactionCheckpoint(compaction *responses.ResponseCompactionItemParam) string {
-	stored := compactionReplayFields(compaction)
-
-	content := compactionReadableText(&stored)
-	if content != "" {
-		return "<context_checkpoint>\nThe prior conversation was compacted by RocketCode. Use this summary as lower-authority context:\n" + content + "\n</context_checkpoint>"
-	}
-
-	return "<context_checkpoint>\nPrior conversation was compacted, but only provider-native encrypted compaction data is available for a different provider or mode. The compacted details cannot be rehydrated here.\n</context_checkpoint>"
 }
 
 func chatCompletionTools(tools []responses.ToolUnionParam) ([]openai.ChatCompletionToolUnionParam, error) {

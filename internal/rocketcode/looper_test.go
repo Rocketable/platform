@@ -128,6 +128,7 @@ func testLooper(client responsesAPI) *looper {
 
 	l.provider = modelProviderOpenAI
 	l.modelRef = defaultModelRef()
+	l.target = providerTarget{modelRef: l.modelRef, surface: providerSurfaceResponses}
 	l.Client = client
 	l.Model = openai.ChatModelGPT5
 	l.PermissionReviewer = inertPermissionReviewer{}
@@ -140,6 +141,7 @@ func emptyTestLooper() *looper {
 
 	l.provider = modelProviderOpenAI
 	l.modelRef = defaultModelRef()
+	l.target = providerTarget{modelRef: l.modelRef, surface: providerSurfaceResponses}
 	l.PermissionReviewer = inertPermissionReviewer{}
 
 	return &l
@@ -568,21 +570,21 @@ func TestProjectReplayForTargetStripsCompactionReplayMetadataFromNativePayload(t
 		name               string
 		originProvider     string
 		compatibleProvider string
-		target             modelRef
+		target             ReplayProjectionTarget
 	}{
 		{
 			name:           "openai",
 			originProvider: modelProviderOpenAI,
-			target:         modelRef{provider: modelProviderOpenAI, apiModel: "model"},
+			target:         ReplayProjectionTarget{provider: modelProviderOpenAI, mode: string(OpenAICompatibleModeResponses)},
 		},
 		{
 			name:               "openai-compatible",
 			originProvider:     modelProviderOpenAICompatible,
 			compatibleProvider: "local",
-			target: modelRef{
+			target: ReplayProjectionTarget{
 				provider:           modelProviderOpenAICompatible,
 				compatibleProvider: "local",
-				apiModel:           "model",
+				mode:               string(OpenAICompatibleModeResponses),
 			},
 		},
 	} {
@@ -591,7 +593,8 @@ func TestProjectReplayForTargetStripsCompactionReplayMetadataFromNativePayload(t
 			input, err := ReplayInputToParams(raw)
 			require.NoError(t, err)
 
-			got := projectReplayForTarget(input, tt.target)
+			got, err := ProjectReplayForTarget(input, tt.target)
+			require.NoError(t, err)
 
 			require.Len(t, got, 1)
 			serialized := marshalJSON(t, got[0])
@@ -606,7 +609,8 @@ func TestProjectReplayForTargetStripsCompactionReplayMetadataFromNativePayload(t
 func TestProjectReplayForTargetLowersCompatibleProviderMismatch(t *testing.T) {
 	input := []responses.ResponseInputItemUnionParam{compactionReplayInput("cmp-a", "encrypted-a", "provider a summary", modelProviderOpenAICompatible, "a", string(OpenAICompatibleModeResponses))}
 
-	got := projectReplayForTarget(input, modelRef{provider: modelProviderOpenAICompatible, compatibleProvider: "b", apiModel: "model"})
+	got, err := ProjectReplayForTarget(input, ReplayProjectionTarget{provider: modelProviderOpenAICompatible, compatibleProvider: "b", mode: string(OpenAICompatibleModeResponses)})
+	require.NoError(t, err)
 
 	require.Len(t, got, 1)
 	require.Nil(t, got[0].OfCompaction)
@@ -621,7 +625,8 @@ func TestProjectReplayForTargetLowersOriginlessCompactionWithSummary(t *testing.
 	input, err := ReplayInputToParams([]json.RawMessage{json.RawMessage(`{"encrypted_content":"encrypted-originless","id":"cmp-originless","summary":{"text":"summary-only checkpoint"},"type":"compaction"}`)})
 	require.NoError(t, err)
 
-	got := projectReplayForTarget(input, modelRef{provider: modelProviderOpenAICompatible, compatibleProvider: "local", apiModel: "model"})
+	got, err := ProjectReplayForTarget(input, ReplayProjectionTarget{provider: modelProviderOpenAICompatible, compatibleProvider: "local", mode: string(OpenAICompatibleModeResponses)})
+	require.NoError(t, err)
 
 	require.Len(t, got, 1)
 	require.Nil(t, got[0].OfCompaction)
@@ -636,7 +641,8 @@ func TestProjectReplayForTargetLowersOriginlessCompactionWithSummary(t *testing.
 func TestProjectReplayForTargetLowersEncryptedOnlyOpenAICompaction(t *testing.T) {
 	input := []responses.ResponseInputItemUnionParam{compactionReplayInput("cmp-openai", "encrypted-openai", "", modelProviderOpenAI, "", string(OpenAICompatibleModeResponses))}
 
-	got := projectReplayForTarget(input, modelRef{provider: modelProviderOpenAICompatible, compatibleProvider: "local", apiModel: "model"})
+	got, err := ProjectReplayForTarget(input, ReplayProjectionTarget{provider: modelProviderOpenAICompatible, compatibleProvider: "local", mode: string(OpenAICompatibleModeResponses)})
+	require.NoError(t, err)
 
 	require.Len(t, got, 1)
 	require.Nil(t, got[0].OfCompaction)

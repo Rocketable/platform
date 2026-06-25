@@ -53,11 +53,13 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	childFactory.inPermissionReview = true
 	childFactory.modelRef = modelRef
 	childFactory.client = client.client
+	childFactory.target = client.target
 
 	child := &looper{
 		agent:                  agent,
 		provider:               modelRef.provider,
 		modelRef:               modelRef,
+		target:                 client.target,
 		Client:                 client.client,
 		AnthropicClient:        f.anthropicClient,
 		SystemPrompt:           composeSystemPromptWithSkills(agent.Prompt, f.skills, &agent),
@@ -260,7 +262,7 @@ func permissionReviewTranscriptEntries(items []responses.ResponseInputItemUnionP
 
 			entries = append(entries, permissionReviewTranscriptEntry{role: "reasoning summary", text: text})
 		case item.OfCompaction != nil:
-			entries = append(entries, permissionReviewTranscriptEntry{role: "compaction", text: compactionCheckpointText(item.OfCompaction)})
+			entries = append(entries, permissionReviewTranscriptEntry{role: "compaction", text: CompactionCheckpointText(item.OfCompaction)})
 		default:
 			role := "item"
 			if typ := item.GetType(); typ != nil {
