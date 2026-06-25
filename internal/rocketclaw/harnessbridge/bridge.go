@@ -620,8 +620,6 @@ func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.Ses
 		model.apiModel = responses.ResponseCompactParamsModelGPT5_4
 	}
 
-	input = projectSeedReplayForTarget(input, model)
-
 	if model.provider == "anthropic" {
 		return b.compactAnthropicSeedReplay(ctx, input, model)
 	}
@@ -629,8 +627,6 @@ func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.Ses
 	if model.provider != "openai" && model.provider != "openai-compatible" {
 		return b.seedReplayCheckpoint(entries)
 	}
-
-	params := responses.ResponseCompactParams{Model: model.apiModel, Input: responses.ResponseCompactParamsInputUnion{OfResponseInputItemArray: input}}
 
 	var client *openai.Client
 
@@ -644,16 +640,22 @@ func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.Ses
 			return b.compactCompatibleChatSeedReplay(ctx, input, model, compatible)
 		}
 
+		input = projectSeedReplayForTarget(input, model)
+
 		compatibleClient := openai.NewClient(b.openAIOptions(compatible.APIKey, compatible.BaseURL, true)...)
 		client = &compatibleClient
 	} else {
 		var err error
+
+		input = projectSeedReplayForTarget(input, model)
 
 		client, err = b.openAIClient()
 		if err != nil {
 			return nil, fmt.Errorf("prepare OpenAI client: %w", err)
 		}
 	}
+
+	params := responses.ResponseCompactParams{Model: model.apiModel, Input: responses.ResponseCompactParamsInputUnion{OfResponseInputItemArray: input}}
 
 	if model.provider == "openai" && b.runtime.OpenAI.RocketCodeAuth == "chatgpt" {
 		root, err := os.OpenRoot(b.runtime.Workspace)
@@ -2349,8 +2351,19 @@ func projectSeedReplayForTarget(items []responses.ResponseInputItemUnionParam, t
 			continue
 		}
 
-		if item.OfCompaction == nil || seedCompactionMatchesTarget(item.OfCompaction, target) {
+		if item.OfCompaction == nil {
 			projected = append(projected, item)
+			continue
+		}
+
+		if seedCompactionMatchesTarget(item.OfCompaction, target) {
+			compaction := responses.ResponseCompactionItemParam{
+				EncryptedContent: item.OfCompaction.EncryptedContent,
+				ID:               item.OfCompaction.ID,
+				Type:             item.OfCompaction.Type,
+			}
+			projected = append(projected, responses.ResponseInputItemUnionParam{OfCompaction: &compaction})
+
 			continue
 		}
 

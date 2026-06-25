@@ -20,6 +20,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 )
 
@@ -715,18 +716,33 @@ func TestNewChatGPTClientRequiresSavedToken(t *testing.T) {
 }
 
 func TestStripInputIDsRemovesIDsWhenStoreFalse(t *testing.T) {
-	req := requestWithBody(`{"store":false,"context_management":[{"type":"compaction"}],"max_output_tokens":100,"input":[{"id":"item-1","type":"message"},{"id":"item-2","type":"function_call"}]}`)
+	req := requestWithBody(`{"store":false,"context_management":[{"type":"compaction"}],"max_output_tokens":100,"input":[{"id":"item-1","type":"message"},{"id":"item-2","type":"function_call"},{"content":"summary","encrypted_content":"sealed","id":"cmp-1","origin_compatible_provider":"local","origin_mode":"responses","origin_provider":"openai-compatible","recent":[{"id":"msg-1"}],"summary":{"text":"summary"},"type":"compaction"}]}`)
 
 	_, err := cleanCodexRequest(req, true)
 	require.NoError(t, err)
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
-	require.NotContains(t, body, "context_management")
-	require.NotContains(t, body, "max_output_tokens")
-	items := body["input"].([]any)
-	require.NotContains(t, items[0].(map[string]any), "id")
-	require.NotContains(t, items[1].(map[string]any), "id")
+	data, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "context_management")
+	require.NotContains(t, string(data), "max_output_tokens")
+
+	var body struct {
+		Input []json.RawMessage `json:"input"`
+	}
+	require.NoError(t, json.Unmarshal(data, &body))
+	require.NotContains(t, string(body.Input[0]), `"id"`)
+	require.NotContains(t, string(body.Input[1]), `"id"`)
+
+	var compaction responses.ResponseCompactionItemParam
+	require.NoError(t, json.Unmarshal(body.Input[2], &compaction))
+	require.Equal(t, "sealed", compaction.EncryptedContent)
+	require.NotContains(t, string(body.Input[2]), `"id"`)
+	require.NotContains(t, string(body.Input[2]), `"content":`)
+	require.NotContains(t, string(body.Input[2]), "origin_provider")
+	require.NotContains(t, string(body.Input[2]), "origin_compatible_provider")
+	require.NotContains(t, string(body.Input[2]), "origin_mode")
+	require.NotContains(t, string(body.Input[2]), "recent")
+	require.NotContains(t, string(body.Input[2]), "summary")
 }
 
 func TestCleanCodexRequestLeavesNonJSONAndInvalidJSONBodies(t *testing.T) {
@@ -771,12 +787,16 @@ func TestCleanCodexRequestSkipsNonObjectMetadataAndInputItems(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, metadata.hasCompact)
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(req.Body).Decode(&body))
-	require.NotContains(t, body, "context_management")
-	items := body["input"].([]any)
-	require.Equal(t, "skip", items[0])
-	require.NotContains(t, items[1].(map[string]any), "id")
+	data, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "context_management")
+
+	var body struct {
+		Input []json.RawMessage `json:"input"`
+	}
+	require.NoError(t, json.Unmarshal(data, &body))
+	require.JSONEq(t, `"skip"`, string(body.Input[0]))
+	require.NotContains(t, string(body.Input[1]), `"id"`)
 }
 
 func TestCleanCodexRequestNoopsForNonPostOrNilBody(t *testing.T) {
@@ -840,12 +860,18 @@ func TestTransportAddsOAuthHeadersAndStripsBodyIDs(t *testing.T) {
 		data, err := io.ReadAll(req.Body)
 		require.NoError(t, err)
 		require.NotContains(t, string(data), `"id"`)
+		require.NotContains(t, string(data), "origin_provider")
+		require.NotContains(t, string(data), "origin_compatible_provider")
+		require.NotContains(t, string(data), "origin_mode")
+		require.NotContains(t, string(data), "private-content-value")
+		require.NotContains(t, string(data), "private-summary-value")
+		require.NotContains(t, string(data), "private-recent-id")
 		require.Contains(t, string(data), `"stream":true`)
 		require.Contains(t, string(data), `"instructions":""`)
 
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"msg\",\"type\":\"message\"}}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp\",\"output\":[]}}\n")), Header: make(http.Header)}, nil
 	})}
-	req := requestWithPathAndBody("/backend-api/codex/responses", `{"store":false,"input":[{"id":"item-1","type":"message"}]}`)
+	req := requestWithPathAndBody("/backend-api/codex/responses", `{"store":false,"input":[{"id":"item-1","type":"message"},{"content":"private-content-value","encrypted_content":"sealed","id":"cmp-1","origin_compatible_provider":"local","origin_mode":"responses","origin_provider":"openai","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}]}`)
 	req.Header.Set("Authorization", "Bearer dummy")
 
 	resp, err := transport.RoundTrip(req)
@@ -1677,11 +1703,16 @@ func TestTransportLeavesCompactRequestsAsJSON(t *testing.T) {
 		require.NoError(t, err)
 		require.NotContains(t, string(data), `"stream"`)
 		require.NotContains(t, string(data), `"instructions"`)
+		require.NotContains(t, string(data), "origin_provider")
+		require.NotContains(t, string(data), "origin_compatible_provider")
+		require.NotContains(t, string(data), "origin_mode")
+		require.NotContains(t, string(data), "private-summary-value")
+		require.NotContains(t, string(data), "private-recent-id")
 
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"id":"resp_1","object":"response.compaction","output":[{"id":"cmp_1","type":"compaction","encrypted_content":"sealed"}]}`)), Header: make(http.Header)}, nil
 	})}
 
-	req := requestWithPathAndBody("/backend-api/codex/responses/compact", `{"model":"gpt-5.5","input":[{"id":"item-1","type":"message"}]}`)
+	req := requestWithPathAndBody("/backend-api/codex/responses/compact", `{"model":"gpt-5.5","input":[{"id":"item-1","type":"message"},{"content":"summary","encrypted_content":"sealed","origin_compatible_provider":"local","origin_mode":"responses","origin_provider":"openai","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}]}`)
 	req.Header.Set("Authorization", "Bearer dummy")
 
 	resp, err := transport.RoundTrip(req)

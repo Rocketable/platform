@@ -563,6 +563,46 @@ func TestLooperBuildParamsOmitsHostedToolsForNonOpenAIProviders(t *testing.T) {
 	}
 }
 
+func TestProjectReplayForTargetStripsCompactionReplayMetadataFromNativePayload(t *testing.T) {
+	for _, tt := range []struct {
+		name               string
+		originProvider     string
+		compatibleProvider string
+		target             modelRef
+	}{
+		{
+			name:           "openai",
+			originProvider: modelProviderOpenAI,
+			target:         modelRef{provider: modelProviderOpenAI, apiModel: "model"},
+		},
+		{
+			name:               "openai-compatible",
+			originProvider:     modelProviderOpenAICompatible,
+			compatibleProvider: "local",
+			target: modelRef{
+				provider:           modelProviderOpenAICompatible,
+				compatibleProvider: "local",
+				apiModel:           "model",
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"content":"private-content-value","encrypted_content":"encrypted","id":"cmp","origin_compatible_provider":%q,"origin_mode":"responses","origin_provider":%q,"recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}`, tt.compatibleProvider, tt.originProvider))}
+			input, err := ReplayInputToParams(raw)
+			require.NoError(t, err)
+
+			got := projectReplayForTarget(input, tt.target)
+
+			require.Len(t, got, 1)
+			serialized := marshalJSON(t, got[0])
+			require.JSONEq(t, `{"encrypted_content":"encrypted","id":"cmp","type":"compaction"}`, serialized)
+			require.NotContains(t, serialized, "private-content-value")
+			require.NotContains(t, serialized, "private-summary-value")
+			require.NotContains(t, serialized, "private-recent-id")
+		})
+	}
+}
+
 func TestProjectReplayForTargetLowersCompatibleProviderMismatch(t *testing.T) {
 	input := []responses.ResponseInputItemUnionParam{compactionReplayInput("cmp-a", "encrypted-a", "provider a summary", modelProviderOpenAICompatible, "a", string(OpenAICompatibleModeResponses))}
 
@@ -655,13 +695,15 @@ func TestLooperContinuesAfterCompactionOnlyResponse(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
 	require.Len(t, mock.calls, 2)
-	require.JSONEq(t, `{"content":"summary of prior context","encrypted_content":"encrypted-compact","id":"resp-compact-compaction","origin_mode":"responses","origin_provider":"openai","type":"compaction"}`, marshalJSON(t, mock.calls[1].Input.OfInputItemList[0]))
+	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, mock.calls[1].Input.OfInputItemList[0]))
 	require.Len(t, saved, 1)
 	require.Len(t, saved[0].ReplayInput, 3)
+	require.JSONEq(t, `{"content":"summary of prior context","encrypted_content":"encrypted-compact","id":"resp-compact-compaction","origin_mode":"responses","origin_provider":"openai","type":"compaction"}`, string(saved[0].ReplayInput[1]))
 }
 
 func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		compactionReplayInput("cmp-prior", "sealed-prior", "private-content-value", modelProviderOpenAI, "", string(OpenAICompatibleModeResponses)),
 		testInputMessage(responses.EasyInputMessageRole("user"), "old question", ""),
 		testInputMessage(responses.EasyInputMessageRole("assistant"), "old answer", ""),
 	})
@@ -696,13 +738,19 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
 	require.Len(t, mock.compactCalls, 1)
-	require.Contains(t, marshalJSON(t, mock.compactCalls[0].Input.OfResponseInputItemArray), "old question")
-	require.NotContains(t, marshalJSON(t, mock.compactCalls[0].Input.OfResponseInputItemArray), "new question")
+	compactInput := marshalJSON(t, mock.compactCalls[0].Input.OfResponseInputItemArray)
+	require.Contains(t, compactInput, "sealed-prior")
+	require.NotContains(t, compactInput, "private-content-value")
+	require.NotContains(t, compactInput, "origin_provider")
+	require.NotContains(t, compactInput, "new question")
 	require.Len(t, mock.calls, 2)
-	require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), `"type":"compaction"`)
-	require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), "new question")
+	retryInput := marshalJSON(t, mock.calls[1].Input.OfInputItemList)
+	require.Contains(t, retryInput, `"type":"compaction"`)
+	require.NotContains(t, retryInput, "origin_provider")
+	require.Contains(t, retryInput, "new question")
 	require.Len(t, saved, 1)
 	require.Contains(t, string(saved[0].ReplayInput[0]), `"type":"compaction"`)
+	require.Contains(t, string(saved[0].ReplayInput[0]), `"origin_provider":"openai"`)
 }
 
 func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {
@@ -1018,7 +1066,7 @@ func TestLooperInjectsCompactionSteering(t *testing.T) {
 	require.Len(t, mock.calls, 2)
 	items := mock.calls[1].Input.OfInputItemList
 	require.Len(t, items, 4)
-	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","origin_mode":"responses","origin_provider":"openai","type":"compaction"}`, marshalJSON(t, items[0]))
+	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, items[0]))
 	require.Contains(t, marshalJSON(t, items[1]), `"role":"assistant"`)
 	require.JSONEq(t, `{"content":"Use the compacted context carefully.","role":"developer","type":"message"}`, marshalJSON(t, items[2]))
 	require.Contains(t, marshalJSON(t, items[3]), `"content":"next question"`)

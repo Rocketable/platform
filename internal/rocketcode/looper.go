@@ -956,10 +956,16 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 
 	for compactedBlocks := chunk; compactedBlocks <= eligible; compactedBlocks += chunk {
 		end := blocks[compactedBlocks-1].end
+
+		compactInput := original[:end]
+		if l.modelRef.provider != modelProviderAnthropic && !l.usesChatCompletions() {
+			compactInput = projectReplayForTarget(compactInput, l.modelRef)
+		}
+
 		compactParams := responses.ResponseCompactParams{
 			Model:        responses.ResponseCompactParamsModel(params.Model),
 			Instructions: params.Instructions,
-			Input:        responses.ResponseCompactParamsInputUnion{OfResponseInputItemArray: original[:end]},
+			Input:        responses.ResponseCompactParamsInputUnion{OfResponseInputItemArray: compactInput},
 		}
 
 		compacted, err := l.Client.Compact(ctx, &compactParams)
@@ -976,7 +982,13 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 
 		recoveredHistory := append(append([]responses.ResponseInputItemUnionParam{}, compactedInput...), original[end:]...)
 		retryParams := *params
-		retryParams.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: recoveredHistory}
+
+		retryHistory := recoveredHistory
+		if l.modelRef.provider != modelProviderAnthropic && !l.usesChatCompletions() {
+			retryHistory = projectReplayForTarget(recoveredHistory, l.modelRef)
+		}
+
+		retryParams.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: retryHistory}
 
 		var raw *http.Response
 
@@ -1299,7 +1311,7 @@ func (l *looper) rewriteHistory(items []responses.ResponseInputItemUnionParam) [
 }
 
 func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) responses.ResponseNewParams {
-	if l.modelRef.provider != modelProviderAnthropic {
+	if l.modelRef.provider != modelProviderAnthropic && !l.usesChatCompletions() {
 		history = projectReplayForTarget(history, l.modelRef)
 	}
 
@@ -1846,6 +1858,15 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion, origin
 	}
 }
 
+func (l *looper) usesChatCompletions() bool {
+	switch l.Client.(type) {
+	case chatCompletionServiceClient, *chatCompletionServiceClient:
+		return true
+	default:
+		return false
+	}
+}
+
 func (l *looper) compactionOrigin() (originProvider, originCompatibleProvider, originMode string) {
 	originProvider = l.provider
 	originCompatibleProvider = l.modelRef.compatibleProvider
@@ -1911,8 +1932,19 @@ func projectReplayForTarget(items []responses.ResponseInputItemUnionParam, targe
 			continue
 		}
 
-		if item.OfCompaction == nil || compactionMatchesTarget(item.OfCompaction, target) {
+		if item.OfCompaction == nil {
 			projected = append(projected, item)
+			continue
+		}
+
+		if compactionMatchesTarget(item.OfCompaction, target) {
+			compaction := responses.ResponseCompactionItemParam{
+				EncryptedContent: item.OfCompaction.EncryptedContent,
+				ID:               item.OfCompaction.ID,
+				Type:             item.OfCompaction.Type,
+			}
+			projected = append(projected, responses.ResponseInputItemUnionParam{OfCompaction: &compaction})
+
 			continue
 		}
 

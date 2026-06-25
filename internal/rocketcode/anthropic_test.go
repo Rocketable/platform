@@ -88,7 +88,7 @@ func TestAnthropicCompactionRoundTripsThroughReplay(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `{"content":"summary of prior work","encrypted_content":"encrypted-compact","id":"msg_1-compaction-0","origin_mode":"messages","origin_provider":"anthropic","type":"compaction"}`, string(raw[0]))
 
-	items, err := ReplayInputToParams(raw)
+	items, err := ReplayInputToParams([]json.RawMessage{json.RawMessage(`{"content":"summary of prior work","encrypted_content":"encrypted-compact","id":"msg_1-compaction-0","origin_compatible_provider":"local","origin_mode":"messages","origin_provider":"anthropic","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}`)})
 	require.NoError(t, err)
 
 	looper := &looper{provider: modelProviderAnthropic, modelRef: modelRef{provider: modelProviderAnthropic, apiModel: "claude-sonnet"}, Model: "claude-sonnet", DisplayModel: "anthropic/claude-sonnet"}
@@ -102,6 +102,12 @@ func TestAnthropicCompactionRoundTripsThroughReplay(t *testing.T) {
 	require.NotNil(t, compaction)
 	require.Equal(t, "summary of prior work", compaction.Content.Value)
 	require.Equal(t, "encrypted-compact", compaction.EncryptedContent.Value)
+	serialized := marshalJSON(t, body.Messages)
+	require.NotContains(t, serialized, "origin_provider")
+	require.NotContains(t, serialized, "origin_compatible_provider")
+	require.NotContains(t, serialized, "origin_mode")
+	require.NotContains(t, serialized, "private-summary-value")
+	require.NotContains(t, serialized, "private-recent-id")
 }
 
 func TestAnthropicParamsProjectsForeignCompactionAsCheckpoint(t *testing.T) {

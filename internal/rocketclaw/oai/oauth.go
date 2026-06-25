@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/responses"
 )
 
 const (
@@ -544,7 +545,7 @@ func cleanCodexRequest(req *http.Request, streaming bool) (codexRequestMetadata,
 
 	_ = req.Body.Close()
 
-	var body map[string]any
+	var body map[string]json.RawMessage
 	if err := json.Unmarshal(data, &body); err != nil {
 		req.Body = io.NopCloser(bytes.NewReader(data))
 		return codexRequestMetadata{}, nil
@@ -552,20 +553,10 @@ func cleanCodexRequest(req *http.Request, streaming bool) (codexRequestMetadata,
 
 	var metadata codexRequestMetadata
 
-	if contextManagement, ok := body["context_management"].([]any); ok {
-		for _, item := range contextManagement {
-			object, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-
-			threshold, ok := object["compact_threshold"].(float64)
-			if ok {
-				metadata.compactThreshold = threshold
-				metadata.hasCompact = true
-
-				break
-			}
+	if raw, ok := body["context_management"]; ok {
+		if threshold, ok := codexCompactionThreshold(raw); ok {
+			metadata.compactThreshold = threshold
+			metadata.hasCompact = true
 		}
 	}
 
@@ -581,30 +572,35 @@ func cleanCodexRequest(req *http.Request, streaming bool) (codexRequestMetadata,
 
 	if streaming {
 		if _, ok := body["instructions"]; !ok {
-			body["instructions"] = ""
+			body["instructions"] = json.RawMessage(`""`)
 			changed = true
 		}
 
-		if body["stream"] != true {
-			body["stream"] = true
+		var stream bool
+		if err := json.Unmarshal(body["stream"], &stream); err != nil || !stream {
+			body["stream"] = json.RawMessage("true")
 			changed = true
 		}
 	}
 
-	if body["store"] != true {
-		if items, ok := body["input"].([]any); ok {
-			for _, item := range items {
-				object, ok := item.(map[string]any)
-				if !ok {
-					continue
-				}
+	stripIDs := true
 
-				if _, ok := object["id"]; ok {
-					delete(object, "id")
+	if raw, ok := body["store"]; ok {
+		var store bool
+		if err := json.Unmarshal(raw, &store); err == nil && store {
+			stripIDs = false
+		}
+	}
 
-					changed = true
-				}
-			}
+	if raw, ok := body["input"]; ok {
+		input, ok, err := cleanCodexInput(raw, stripIDs)
+		if err != nil {
+			return codexRequestMetadata{}, err
+		}
+
+		if ok {
+			body["input"] = input
+			changed = true
 		}
 	}
 
@@ -620,6 +616,105 @@ func cleanCodexRequest(req *http.Request, streaming bool) (codexRequestMetadata,
 	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }
 
 	return metadata, nil
+}
+
+func codexCompactionThreshold(raw json.RawMessage) (float64, bool) {
+	var contextManagement []struct {
+		CompactThreshold *float64 `json:"compact_threshold"`
+	}
+	if err := json.Unmarshal(raw, &contextManagement); err != nil {
+		return 0, false
+	}
+
+	for i := range contextManagement {
+		if contextManagement[i].CompactThreshold != nil {
+			return *contextManagement[i].CompactThreshold, true
+		}
+	}
+
+	return 0, false
+}
+
+func cleanCodexInput(raw json.RawMessage, stripIDs bool) (json.RawMessage, bool, error) {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return nil, false, nil
+	}
+
+	changed := false
+
+	for i := range items {
+		item, ok, err := cleanCodexInputItem(items[i], stripIDs)
+		if err != nil {
+			return nil, false, err
+		}
+
+		if ok {
+			items[i] = item
+			changed = true
+		}
+	}
+
+	if !changed {
+		return nil, false, nil
+	}
+
+	data, err := json.Marshal(items)
+	if err != nil {
+		return nil, false, fmt.Errorf("marshal Codex input items: %w", err)
+	}
+
+	return data, true, nil
+}
+
+func cleanCodexInputItem(raw json.RawMessage, stripIDs bool) (json.RawMessage, bool, error) {
+	var item struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return nil, false, nil
+	}
+
+	if item.Type == "compaction" {
+		var compaction responses.ResponseCompactionItemParam
+		if err := json.Unmarshal(raw, &compaction); err != nil {
+			return nil, false, nil
+		}
+
+		projected := responses.ResponseCompactionItemParam{EncryptedContent: compaction.EncryptedContent, Type: compaction.Type}
+		if !stripIDs {
+			projected.ID = compaction.ID
+		}
+
+		data, err := json.Marshal(projected)
+		if err != nil {
+			return nil, false, fmt.Errorf("marshal Codex compaction input: %w", err)
+		}
+
+		return data, true, nil
+	}
+
+	if !stripIDs {
+		return nil, false, nil
+	}
+
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return nil, false, nil
+	}
+
+	if _, ok := object["id"]; !ok {
+		return nil, false, nil
+	}
+
+	delete(object, "id")
+
+	data, err := json.Marshal(object)
+	if err != nil {
+		return nil, false, fmt.Errorf("marshal Codex input item: %w", err)
+	}
+
+	return data, true, nil
 }
 
 func (t *transport) codexCompaction(ctx context.Context, req *http.Request, resp *http.Response, metadata *codexRequestMetadata) (*http.Response, error) {

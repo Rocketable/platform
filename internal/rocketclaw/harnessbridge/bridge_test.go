@@ -1400,6 +1400,114 @@ func TestCompactedOutputToReplayInputRejectsUnsupportedKind(t *testing.T) {
 	require.ErrorContains(t, err, `unsupported compacted output item kind "tool_search_call"`)
 }
 
+func TestProjectSeedReplayForTargetStripsCompactionReplayMetadataFromNativePayload(t *testing.T) {
+	for _, tt := range []struct {
+		name               string
+		originProvider     string
+		compatibleProvider string
+		target             seedCompactionModel
+	}{
+		{
+			name:           "openai",
+			originProvider: "openai",
+			target:         seedCompactionModel{provider: "openai", apiModel: "gpt-5.5"},
+		},
+		{
+			name:               "openai-compatible",
+			originProvider:     "openai-compatible",
+			compatibleProvider: "local",
+			target:             seedCompactionModel{provider: "openai-compatible", compatibleProvider: "local", apiModel: "gpt-oss"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			input, err := rocketcode.ReplayInputToParams([]json.RawMessage{json.RawMessage(fmt.Sprintf(`{"content":"private-content-value","encrypted_content":"sealed","id":"cmp-1","origin_compatible_provider":%q,"origin_mode":"responses","origin_provider":%q,"recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}`, tt.compatibleProvider, tt.originProvider))})
+			require.NoError(t, err)
+
+			got := projectSeedReplayForTarget(input, tt.target)
+
+			require.Len(t, got, 1)
+			data, err := json.Marshal(got[0])
+			require.NoError(t, err)
+			assert.JSONEq(t, `{"encrypted_content":"sealed","id":"cmp-1","type":"compaction"}`, string(data))
+			require.NotContains(t, string(data), "private-content-value")
+			require.NotContains(t, string(data), "private-summary-value")
+			require.NotContains(t, string(data), "private-recent-id")
+		})
+	}
+}
+
+func TestCompactSeedReplayKeepsAnthropicNativeCompaction(t *testing.T) {
+	requestBody := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, err := io.ReadAll(r.Body)
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		requestBody = string(data)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, err = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet","content":[{"type":"compaction","content":"new summary","encrypted_content":"new-sealed"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+
+	bridge := &Bridge{runtime: &config.Config{Workspace: t.TempDir(), Anthropic: config.AnthropicConfig{APIKey: "test-key", APIBaseURL: server.URL}}, log: slog.New(slog.DiscardHandler), config: Config{ConversationID: events.MainConversationID()}}
+	got, err := bridge.compactSeedReplay(context.Background(), []rocketcode.SessionEntry{{ReplayInput: []json.RawMessage{json.RawMessage(`{"content":"prior summary","encrypted_content":"old-sealed","id":"cmp-1","origin_compatible_provider":"local","origin_mode":"messages","origin_provider":"anthropic","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}`)}}}, seedCompactionModel{provider: "anthropic", apiModel: "claude-sonnet"})
+
+	require.NoError(t, err)
+	require.Contains(t, requestBody, `"type":"compaction"`)
+	require.Contains(t, requestBody, `"content":"prior summary"`)
+	require.Contains(t, requestBody, `"encrypted_content":"old-sealed"`)
+	require.NotContains(t, requestBody, "context_checkpoint")
+	require.NotContains(t, requestBody, "origin_provider")
+	require.NotContains(t, requestBody, "origin_compatible_provider")
+	require.NotContains(t, requestBody, "origin_mode")
+	require.NotContains(t, requestBody, "private-summary-value")
+	require.NotContains(t, requestBody, "private-recent-id")
+	require.Len(t, got, 1)
+	assert.JSONEq(t, `{"content":"new summary","encrypted_content":"new-sealed","id":"msg_1-compaction-0","origin_mode":"messages","origin_provider":"anthropic","summary":"new summary","type":"compaction"}`, string(got[0]))
+}
+
+func TestCompactSeedReplayCompatibleChatKeepsCheckpointText(t *testing.T) {
+	requestBody := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Errorf("request path = %q; want /chat/completions", r.URL.Path)
+			http.NotFound(w, r)
+
+			return
+		}
+
+		data, err := io.ReadAll(r.Body)
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		requestBody = string(data)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, err = io.WriteString(w, `{"id":"chatcmpl_1","object":"chat.completion","created":1,"model":"gpt-oss","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"chat seed summary"}}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`)
+		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+
+	bridge := &Bridge{runtime: &config.Config{Workspace: t.TempDir(), OpenAICompatible: map[string]config.OpenAICompatibleConfig{"local": {APIKey: "test-key", BaseURL: server.URL, Mode: "chat_completions"}}}, log: slog.New(slog.DiscardHandler), config: Config{ConversationID: events.MainConversationID()}}
+	got, err := bridge.compactSeedReplay(context.Background(), []rocketcode.SessionEntry{{ReplayInput: []json.RawMessage{json.RawMessage(`{"content":"private-checkpoint-value","encrypted_content":"private-encrypted-value","id":"cmp-1","origin_compatible_provider":"local","origin_mode":"responses","origin_provider":"openai-compatible","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}`)}}}, seedCompactionModel{provider: "openai-compatible", compatibleProvider: "local", apiModel: "gpt-oss"})
+
+	require.NoError(t, err)
+	require.Contains(t, requestBody, "private-checkpoint-value")
+	require.Contains(t, requestBody, "context_checkpoint")
+	require.NotContains(t, requestBody, "private-encrypted-value")
+	require.NotContains(t, requestBody, "origin_provider")
+	require.NotContains(t, requestBody, "origin_compatible_provider")
+	require.NotContains(t, requestBody, "origin_mode")
+	require.NotContains(t, requestBody, "private-summary-value")
+	require.NotContains(t, requestBody, "private-recent-id")
+	require.Len(t, got, 1)
+	assert.JSONEq(t, `{"content":"chat seed summary","encrypted_content":"","id":"chatcmpl_1-compaction","origin_compatible_provider":"local","origin_mode":"chat_completions","origin_provider":"openai-compatible","summary":"chat seed summary","type":"compaction"}`, string(got[0]))
+}
+
 func TestCompactSeedReplayReportsInvalidReplayInput(t *testing.T) {
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: events.MainConversationID()}}
 
