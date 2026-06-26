@@ -447,14 +447,22 @@ func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 	humanVisible := result.VerbatimMessage != "" || len(result.Attachments) > 0
 	log.Info("completed cronjob", "text", result.Text, "verbatim_message", result.VerbatimMessage, "human_visible", humanVisible)
 
+	visiblePayload := strings.TrimSpace(result.VerbatimMessage) != "" || len(result.Attachments) > 0
 	if definition.slackChannel != "" {
-		if strings.TrimSpace(result.VerbatimMessage) != "" || len(result.Attachments) > 0 {
+		if visiblePayload {
 			if err := m.SendSlackChannel(ctx, definition.slackChannel, definition.relativePath, definition.agent, ranAt, strings.TrimSpace(result.VerbatimMessage), result.Attachments); err != nil {
-				log.Warn("send cronjob Slack channel delivery", "slack_channel", definition.slackChannel, "error", err)
+				log.Warn("send cronjob text delivery", "channel", definition.slackChannel, "error", err)
 			}
 		}
 
 		return
+	}
+
+	if visiblePayload {
+		if err := m.SendSlackChannel(ctx, "", definition.relativePath, definition.agent, ranAt, strings.TrimSpace(result.VerbatimMessage), result.Attachments); err != nil {
+			log.Warn("send cronjob text delivery", "error", err)
+			return
+		}
 	}
 
 	publish := func(label, body string, visible bool) bool {

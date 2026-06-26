@@ -409,6 +409,11 @@ func (c *Connector) CleanupPendingReplyPlaceholder(ctx context.Context, replyTar
 
 // SendCronjobChannelThread posts one scheduled cronjob result in a new Slack channel thread.
 func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, relativePath, agent, ranAt, text string, attachments []events.OutboundAttachment) error {
+	channelID = strings.TrimSpace(channelID)
+	if channelID == "" {
+		channelID = c.config.Room
+	}
+
 	root, err := c.postThreadRoot(ctx, channelID, "Cronjob `"+relativePath+"` ran at `"+ranAt+"` with agent `"+agent+"`.", "send Slack cronjob thread root")
 	if err != nil {
 		return err

@@ -710,7 +710,7 @@ func TestExecuteJobWithSlackChannelSkipsEmptyFinalPayload(t *testing.T) {
 	defer bus.Close()
 
 	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
-		return RunResult{Text: "internal note", VerbatimMessage: " \t\n "}, nil
+		return RunResult{Text: "internal note"}, nil
 	}, slog.New(slog.DiscardHandler))
 	m.SendSlackChannel = func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
 		t.Fatal("Slack delivery called for empty final payload")
@@ -720,6 +720,94 @@ func TestExecuteJobWithSlackChannelSkipsEmptyFinalPayload(t *testing.T) {
 	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", slackChannel: "#triage", body: "Body"})
 
 	assertNoInbound(t, bus)
+}
+
+func TestExecuteJobWithoutChannelSendsDefaultTextThread(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+		return RunResult{Text: "internal note", VerbatimMessage: " final payload ", Attachments: []events.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}}, nil
+	}, slog.New(slog.DiscardHandler))
+	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC) }
+
+	var (
+		gotChannel, gotPath, gotAgent, gotRanAt, gotText string
+		gotAttachments                                   []events.OutboundAttachment
+	)
+
+	m.SendSlackChannel = func(_ context.Context, channel, path, agent, ranAt, text string, attachments []events.OutboundAttachment) error {
+		gotChannel, gotPath, gotAgent, gotRanAt, gotText = channel, path, agent, ranAt, text
+		gotAttachments = attachments
+
+		return nil
+	}
+
+	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", body: "Body"})
+
+	if gotChannel != "" || gotPath != "cron/daily.md" || gotAgent != "helper" || gotRanAt != "2000-01-02T03:04:05Z" || gotText != "final payload" {
+		t.Fatalf("default text delivery = (%q, %q, %q, %q, %q); want empty channel/path/agent/time/final payload", gotChannel, gotPath, gotAgent, gotRanAt, gotText)
+	}
+
+	if len(gotAttachments) != 1 || gotAttachments[0].Name != "report.txt" || gotAttachments[0].MIMEType != "text/plain" || string(gotAttachments[0].Data) != "report" {
+		t.Fatalf("default text attachments = %#v; want report.txt text/plain report", gotAttachments)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	var messages []*events.InboundMessage
+	for msg := range bus.Inbound(ctx) {
+		messages = append(messages, msg)
+		if len(messages) == 2 {
+			break
+		}
+	}
+
+	if len(messages) != 2 {
+		t.Fatalf("executeJob published %d messages; want visible and internal main notes", len(messages))
+	}
+
+	if messages[0].Label != "cronjob human_visible file=cron/daily.md ran_at=2000-01-02T03:04:05Z" || messages[0].VerbatimMessage != " final payload " {
+		t.Fatalf("visible main note = %#v; want verbatim main note", messages[0])
+	}
+
+	if messages[1].Label != "cronjob file=cron/daily.md ran_at=2000-01-02T03:04:05Z" || !strings.Contains(messages[1].Text, "internal note") {
+		t.Fatalf("internal main note = %#v; want internal note", messages[1])
+	}
+}
+
+func TestExecuteJobDefaultTextDeliveryKeepsInternalOnlyOutputInMain(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+		return RunResult{Text: "internal note"}, nil
+	}, slog.New(slog.DiscardHandler))
+	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC) }
+	m.SendSlackChannel = func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
+		t.Fatal("default text delivery called for empty final payload")
+		return nil
+	}
+
+	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", body: "Body"})
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	var msg *events.InboundMessage
+	for inbound := range bus.Inbound(ctx) {
+		msg = inbound
+		break
+	}
+
+	if msg == nil {
+		t.Fatal("executeJob did not publish internal-only message")
+	}
+
+	if msg.Label != "cronjob file=cron/daily.md ran_at=2000-01-02T03:04:05Z" || !strings.Contains(msg.Text, "internal note") {
+		t.Fatalf("internal-only message = %#v; want labeled internal note", msg)
+	}
 }
 
 func assertNoInbound(t *testing.T, bus *events.Bus) {

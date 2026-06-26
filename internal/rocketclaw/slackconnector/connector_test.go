@@ -1770,6 +1770,28 @@ func TestSendCronjobChannelThreadPostsRootThenThreadReply(t *testing.T) {
 	assert.Equal(t, cronThreadRegistration{channelID: "#triage", threadTS: "111.222", agent: "planner", seedText: "Cronjob cron/daily.md ran at 2000-01-02T03:04:05Z with agent planner.\n\nHuman-visible cron output:\nfinal payload\n\nAttached files: report.txt."}, registrations[0])
 }
 
+func TestSendCronjobChannelThreadDefaultsBlankChannelToConfiguredRoom(t *testing.T) {
+	var posted []url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/chat.postMessage", r.URL.Path)
+
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		posted = append(posted, cloneValues(r.PostForm))
+		writeJSON(t, w, map[string]any{"ok": true, "channel": posted[len(posted)-1].Get("channel"), "ts": "111.222", "text": posted[len(posted)-1].Get("text")})
+	}))
+	defer server.Close()
+
+	connector := newTestConnector(server.URL)
+	require.NoError(t, connector.SendCronjobChannelThread(context.Background(), "", "cron/daily.md", "planner", "2000-01-02T03:04:05Z", "", nil))
+
+	require.Len(t, posted, 1)
+	assert.Equal(t, "D123", posted[0].Get("channel"))
+}
+
 func TestSendCronjobChannelThreadReportsSlackFailures(t *testing.T) {
 	t.Run("root", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

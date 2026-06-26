@@ -507,6 +507,17 @@ func TestSendCronjobChannelThreadCreatesThreadAndPosts(t *testing.T) {
 	assert.Equal(t, "T123:agent:Cronjob cron ran at 2026-06-02 with agent agent.\n\nHuman-visible cron output:\nanswer\n\nAttached files: a.txt.", router.registeredCronSnapshot())
 }
 
+func TestSendCronjobChannelThreadDefaultsBlankChannelToConfiguredChannel(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.threadID = "T123"
+	connector := newTestConnector(fake, newFakeThreadRouter())
+
+	require.NoError(t, connector.SendCronjobChannelThread(t.Context(), "", "cron", "agent", "2026-06-02", "", nil))
+
+	require.Len(t, fake.messages, 1)
+	assert.Equal(t, "C123", fake.messages[0].channelID)
+}
+
 func TestSendExternalMCPRelayPostsAttachmentOnlyPrompt(t *testing.T) {
 	fake := newFakeDiscordClient()
 	fake.threadID = "T123"
