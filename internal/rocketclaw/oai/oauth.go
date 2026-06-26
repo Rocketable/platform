@@ -935,9 +935,6 @@ func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (js
 		}
 
 		item["type"] = json.RawMessage(`"compaction"`)
-		delete(item, "origin_provider")
-		delete(item, "origin_compatible_provider")
-		delete(item, "origin_mode")
 		delete(item, "recent")
 
 		data, err = json.Marshal(item)

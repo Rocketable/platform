@@ -9,7 +9,7 @@ import (
 )
 
 func TestParseOptionsAllowsInterspersedFlags(t *testing.T) {
-	opt, err := parseOptions([]string{"./benches", "--model", "openai/gpt-5.5?reasoningEffort=high&verbosity=low", "--runs=2", "--json", "--timeout", "30s"})
+	opt, err := parseOptions([]string{"./benches", "--model", "gpt-5.5?reasoningEffort=high&verbosity=low", "--runs=2", "--json", "--timeout", "30s"})
 	if err != nil {
 		t.Fatalf("parseOptions returned error: %v", err)
 	}
@@ -27,12 +27,12 @@ func TestParseOptionsAllowsInterspersedFlags(t *testing.T) {
 	}
 
 	if len(opt.models) != 1 || opt.models[0].Provider != "openai" || opt.models[0].Model != "gpt-5.5" {
-		t.Fatalf("models = %+v, want openai/gpt-5.5", opt.models)
+		t.Fatalf("models = %+v, want gpt-5.5", opt.models)
 	}
 }
 
 func TestParseModelSelectorRejectsUnknownOption(t *testing.T) {
-	_, err := parseModelSelector("openai/gpt-5.5?temperature=0")
+	_, err := parseModelSelector("gpt-5.5?temperature=0")
 	if err == nil || !strings.Contains(err.Error(), `unknown option "temperature"`) {
 		t.Fatalf("parseModelSelector error = %v, want unknown option", err)
 	}
@@ -72,7 +72,7 @@ func TestLoadProviderConfigFailsOnMissingEnv(t *testing.T) {
 func TestLoadProviderConfigIgnoresUnselectedProviderEnv(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "quickbench.json")
-	if err := os.WriteFile(path, []byte(`{"providers":{"openai":{"apiKey":"{{ env.QUICKBENCH_TEST_OPENAI_KEY }}"},"anthropic":{"apiKey":"{{ env.QUICKBENCH_TEST_MISSING_ANTHROPIC_KEY }}"}}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"providers":{"openai":{"apiKey":"{{ env.QUICKBENCH_TEST_OPENAI_KEY }}"},"unused":{"apiKey":"{{ env.QUICKBENCH_TEST_MISSING_UNUSED_KEY }}"}}}`), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 

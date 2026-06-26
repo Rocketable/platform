@@ -918,7 +918,7 @@ func TestRunStartsRuntimeAndStopsOnCanceledContext(t *testing.T) {
 func TestRunContextCancellationWaitsForActiveMainBridge(t *testing.T) {
 	workspace := shortTempDir(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\n---\nPrompt\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\n---\nPrompt\n"), 0o644))
 
 	requestStarted := make(chan struct{})
 	releaseProvider := make(chan struct{})
@@ -1026,7 +1026,7 @@ func TestRunContextCancellationWaitsForActiveMainBridge(t *testing.T) {
 func TestRunReturnsErrRestartRequestedAfterCronRestartTool(t *testing.T) {
 	workspace := shortTempDir(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\npermission:\n  rocketclaw:\n    '*': allow\n---\nPrompt\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  rocketclaw:\n    '*': allow\n---\nPrompt\n"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "cron"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "cron", "restart.md"), []byte("---\nschedule: \"2000-01-01T00:00:00Z\"\nagent: main\n---\nRestart now\n"), 0o644))
 
@@ -1337,7 +1337,7 @@ func TestExternalMCPExistingExternalConversationIDRunsAgentAndRepliesInSeededSla
 	defer cancel()
 
 	workspace := t.TempDir()
-	writeAppTestAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: openai/gpt-5.5\n---\nPrompt\n")
+	writeAppTestAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-5.5\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	answers := make(chan string, 2)

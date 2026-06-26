@@ -9,7 +9,7 @@ metadata:
 
 Use this skill when the user wants to create or review `quickbench` benchmark YAML files.
 
-Quickbench benchmark files describe benchmark behavior only. They do not select models. Models are selected at runtime with repeatable `--model` flags such as `openai/gpt-5.5?reasoningEffort=high&verbosity=low` or `anthropic/claude-sonnet-4-20250514`.
+Quickbench benchmark files describe benchmark behavior only. They do not select models. Models are selected at runtime with repeatable `--model` flags such as `gpt-5.5?reasoningEffort=high&verbosity=low`.
 
 ## File Placement
 
@@ -163,8 +163,7 @@ Good:
 
 ```sh
 go run ./cmd/quickbench \
-  --model 'openai/gpt-5.5?reasoningEffort=high&verbosity=low' \
-  --model 'anthropic/claude-sonnet-4-20250514' \
+  --model 'gpt-5.5?reasoningEffort=high&verbosity=low' \
   cmd/quickbench/examples
 ```
 
@@ -172,7 +171,7 @@ Bad:
 
 ```yaml
 models:
-  - openai/gpt-5.5
+  - gpt-5.5
 ```
 
 ## Authoring Checklist

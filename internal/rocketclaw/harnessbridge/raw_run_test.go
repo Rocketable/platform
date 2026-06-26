@@ -102,7 +102,7 @@ func TestRawRunDecisionToolStoresPayload(t *testing.T) {
 
 func TestRunRawCronCanEditRestartAndCompleteDecision(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\npermission:\n  edit: allow\n  rocketclaw:\n    rocketclaw_schedule_message: allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  edit: allow\n  rocketclaw:\n    rocketclaw_schedule_message: allow\n---\nPrompt\n")
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
 
@@ -216,7 +216,7 @@ func TestRunRawCronCanEditRestartAndCompleteDecision(t *testing.T) {
 
 func TestRunRawRetriesMissingMandatoryToolUntilDecision(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	requests := 0
@@ -296,7 +296,7 @@ func rawRunRequestPrompt(t *testing.T, body map[string]any) string {
 
 func TestRunRawLoadsSkillContentAsDeveloperMessage(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\npermission:\n  skill:\n    demo: allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  skill:\n    demo: allow\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills", "demo"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "skills", "demo", "SKILL.md"), []byte("---\nname: demo\ndescription: Demo skill\n---\nDemo skill body\n"), 0o644))
 
@@ -346,9 +346,9 @@ func TestRunRawLoadsSkillContentAsDeveloperMessage(t *testing.T) {
 
 func TestRunRawPassesLocalGuardrailToRocketCode(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\npermission:\n  task:\n    helper: allow\n---\nPrompt\n")
-	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: openai/gpt-5.5\nguardrail: guardrail\n---\nHelper prompt\n")
-	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: openai/gpt-5.5\n---\nGuard delegated work\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  task:\n    helper: allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: gpt-5.5\nguardrail: guardrail\n---\nHelper prompt\n")
+	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: gpt-5.5\n---\nGuard delegated work\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	requests := 0
@@ -411,7 +411,7 @@ func TestRunRawPassesLocalGuardrailToRocketCode(t *testing.T) {
 
 func TestRunRawReturnsQueuedAttachmentsWithNonEmptyDecision(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, "report.txt"), []byte("report body"), 0o644))
 
@@ -450,7 +450,7 @@ func TestRunRawReturnsQueuedAttachmentsWithNonEmptyDecision(t *testing.T) {
 
 func TestRunRawDropsQueuedAttachmentsWithEmptyDecision(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	requests := 0
@@ -486,7 +486,7 @@ func TestRunRawDropsQueuedAttachmentsWithEmptyDecision(t *testing.T) {
 
 func TestRunRawReturnsProgressMessageError(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -511,7 +511,7 @@ func TestRunRawReturnsProgressMessageError(t *testing.T) {
 
 func TestRunRawReturnsProgressThinkingError(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\npermission:\n  bash:\n    \"*\": allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  bash:\n    \"*\": allow\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -535,7 +535,7 @@ func TestRunRawReturnsProgressThinkingError(t *testing.T) {
 
 func TestRunRawAlwaysEnablesAutoApprovePermissions(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\npermission:\n  bash:\n    \"printf ok\": auto\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  bash:\n    \"printf ok\": auto\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var (

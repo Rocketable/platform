@@ -5,7 +5,7 @@ Human approval required for meaning changes: Yes
 
 ## Decision
 
-RocketCode is a workspace-local Go reasoning runtime with an interactive CLI, a non-interactive autonomous loop CLI, and an embeddable library API. It uses provider-routed model requests, an OpenAI Responses-shaped internal replay model, workspace-local agent and skill definitions, sandbox-aware tools, and replayable session history.
+RocketCode is a workspace-local Go reasoning runtime with an interactive CLI, a non-interactive autonomous loop CLI, and an embeddable library API. It uses Responses API model requests, an OpenAI Responses-shaped internal replay model, workspace-local agent and skill definitions, sandbox-aware tools, and replayable session history.
 
 ## Scope
 
@@ -19,14 +19,14 @@ RocketCode is under tight source-line budget pressure. Future simplification and
 
 | Area | Current capability |
 | --- | --- |
-| Library runtime | `rocketcode.New` constructs a `Looper` from an OpenAI client, config, rooted workspace filesystem, parsed agents, parsed skills, default agent name, and optional diagnostics writer. Provider-aware construction may also supply OpenAI, Anthropic, and named OpenAI-compatible clients explicitly. RocketCode startup validates that every loaded agent declares a frontmatter model and that each declared model uses a configured provider. |
-| Default agent | The standalone commands require a loaded `main` agent. Missing default agent is a startup error. Missing or empty `model` frontmatter on any loaded agent is a startup error. |
+| Library runtime | `rocketcode.New` constructs a `Looper` from an OpenAI Responses client, config, rooted workspace filesystem, parsed agents, parsed skills, default agent name, and optional diagnostics writer. Agent model declarations, when present, select first-party OpenAI Responses model IDs only; missing or empty agent model declarations inherit the runtime/default model. |
+| Default agent | The standalone commands require a loaded `main` agent. Missing default agent is a startup error. Missing or empty `model` frontmatter on loaded agents is allowed and inherits the runtime/default model. |
 | Workspace root | Standalone `rocketcode` and `rocketloop` use the process current working directory as the workspace root and open it through `*os.Root`. |
 | Root instructions | `AGENTS.md`, when present in the workspace root, is loaded literally into the system prompt and followed by a current-workspace block containing the host workspace root. |
 | Model defaults | Empty model defaults to OpenAI `gpt-5.4`. Empty reasoning effort defaults to `high`. Empty compact threshold defaults to `200000`. |
-| Model selection | Models must be provider-qualified as `openai/<model>`, `anthropic/<model>`, or `openai-compatible/<provider>/<model>`. Unprefixed model strings and empty model reference parts are startup errors. Every loaded agent must declare non-empty `model` frontmatter; runtime/default models do not fill missing agent model declarations. Agent frontmatter `model` values may select a different provider from the runtime default. |
-| Model request | OpenAI runtime turns use the OpenAI Responses API with stored responses disabled, encrypted reasoning content included, reasoning summary enabled when reasoning effort is set, context compaction enabled, and OpenAI parallel tool calls enabled. Anthropic runtime turns use the Anthropic Messages API through an adapter that preserves RocketCode's turn-loop, replay, local tool semantics, and Anthropic server-side compaction blocks. OpenAI-compatible runtime turns use the configured named compatible provider in either `responses` mode or `chat_completions` mode; `chat_completions` mode performs ChatGPT-style client-side automatic compaction after successful responses whose provider-reported total token usage reaches the configured compact threshold. Missing selected compatible providers fail at startup and, if somehow reached, fail clearly before request dispatch. |
-| Rate limits and context limits | Provider rate limits retry after at least one minute when the provider exposes retryable rate-limit status, considering provider retry/reset headers where available. OpenAI-compatible `chat_completions` rate-limit errors follow the same retry semantics as OpenAI when SDK status, code, or type fields expose a retryable status. OpenAI Responses and OpenAI-compatible `chat_completions` context-length API errors trigger explicit progressive compaction of older safe replay blocks and retry before surfacing a runtime error. OpenAI-compatible `chat_completions` successful responses whose provider-reported total token usage reaches `ROCKETCODE_COMPACT_THRESHOLD` trigger client-side compaction so later turns continue from a persisted compaction boundary. Other failed responses and API errors surface as runtime errors, with provider diagnostics emitted when diagnostics are enabled. |
+| Model selection | Models are unprefixed first-party OpenAI Responses model IDs such as `gpt-5.4`. Empty runtime/default model uses OpenAI `gpt-5.4`. Provider-qualified model strings such as `openai/...`, `openai-compatible/...`, `anthropic/...`, and empty model reference parts are startup errors. Agent frontmatter `model` values, when non-empty, may select a different OpenAI model ID from the runtime default. |
+| Model request | Runtime turns use the first-party OpenAI Responses API with stored responses disabled, encrypted reasoning content included, reasoning summary enabled when reasoning effort is set, context compaction enabled, and OpenAI parallel tool calls enabled. |
+| Rate limits and context limits | OpenAI rate limits retry after at least one minute when OpenAI exposes retryable rate-limit status, considering retry/reset headers where available. OpenAI Responses context-length API errors trigger explicit progressive compaction of older safe replay blocks and retry before surfacing a runtime error. Other failed responses and API errors surface as runtime errors, with diagnostics emitted when diagnostics are enabled. |
 | Interactive CLI | `cmd/rocketcode` starts an interactive prompt named `rocketcode> `, reads terminal input, runs turns through the default agent, and prints line-oriented response output. |
 | Interactive exit | `/exit`, `/quit`, and stdin EOF exit normally. Runtime errors print to stderr and exit status `1`. |
 | Interactive role prefix | In `cmd/rocketcode`, an input line whose trimmed text starts with case-sensitive `developer:` is sent as a developer-role prompt with the prefix removed. Other input is user-role prompt text. |
@@ -46,17 +46,13 @@ RocketCode is under tight source-line budget pressure. Future simplification and
 
 | Environment variable | Contract |
 | --- | --- |
-| `ROCKETCODE_MODEL` | Overrides the default model string for standalone commands. It must use `openai/<model>`, `anthropic/<model>`, or `openai-compatible/<provider>/<model>`. Unprefixed values are startup errors. |
+| `ROCKETCODE_MODEL` | Overrides the default OpenAI model ID for standalone commands. Provider-qualified, OpenAI-compatible, and Anthropic values are startup errors. |
 | `ROCKETCODE_REASONING_EFFORT` | Overrides the default reasoning effort for standalone commands. |
 | `ROCKETCODE_DIAG` | Any non-empty value enables diagnostics. |
 | `ROCKETCODE_EXPERIMENTAL_STRONGER_SKILLS` | Any non-empty value enables stronger skill replay behavior. |
 | `ROCKETCODE_EXPAND_PROMPT_SHELL_COMMANDS` | Empty, `0`, or `false` disables shell expansion. `1` or `true` enables primary, subagent, and skill prompts but not input prompts. Comma tokens may include `primary`, `subagent`, `skill`, `input`, and `all`; unknown tokens are errors. |
 | `ROCKETCODE_COMPACT_THRESHOLD` | Overrides compact threshold and must be a positive integer. |
 | `ROCKETCODE_COMPACTION_STEERING` | Adds compaction steering text when set. |
-| `ROCKETCODE_OPENAI_COMPATIBLE_PROVIDER` | Names the single standalone OpenAI-compatible provider. If any `ROCKETCODE_OPENAI_COMPATIBLE_*` variable is set, provider, API key, base URL, and mode are all required. |
-| `ROCKETCODE_OPENAI_COMPATIBLE_API_KEY` | Supplies the standalone OpenAI-compatible provider API key. |
-| `ROCKETCODE_OPENAI_COMPATIBLE_BASE_URL` | Supplies the standalone OpenAI-compatible provider base URL. |
-| `ROCKETCODE_OPENAI_COMPATIBLE_MODE` | Supplies the standalone OpenAI-compatible provider mode, either `responses` or `chat_completions`. |
 
 ## Non-Goals
 
@@ -90,3 +86,5 @@ RocketCode is under tight source-line budget pressure. Future simplification and
 - 2026-06-23: Clarified resolved loaded-agent model validation, empty agent model inheritance, missing compatible-provider failure, chat-completions rate-limit retry parity, and compatible chat context recovery.
 - 2026-06-23: Required every loaded agent to declare non-empty model frontmatter instead of inheriting the runtime/default model.
 - 2026-06-24: Added OpenAI-compatible chat-completions automatic compaction after successful above-threshold responses.
+- 2026-06-26: Removed Anthropic and OpenAI-compatible chat-completions support; RocketCode now supports only first-party OpenAI Responses and named OpenAI-compatible Responses providers.
+- 2026-06-26: Removed remaining OpenAI-compatible Responses provider support, provider-qualified model syntax, and required agent model declarations; RocketCode model behavior returns to unprefixed first-party OpenAI Responses model IDs with missing agent models inheriting the runtime/default model.

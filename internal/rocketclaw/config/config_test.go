@@ -66,26 +66,6 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	assert.Zero(t, cfg.MinimumWaitAfterHumanInteractionDuration)
 }
 
-func TestLoadPreservesAnthropicConfig(t *testing.T) {
-	cfg := loadTestConfig(t, `{
-	  "workspace": ".",
-	  "openai": {
-	    "api_key": "test-key"
-	  },
-	  "anthropic": {
-	    "api_key": "anthropic-key",
-	    "api_base_url": "https://anthropic.example/v1"
-	  },
-	  "web_ui": {
-	    "enabled": true,
-	    "listen_addr": "127.0.0.1:8766"
-	  }
-	}`)
-
-	assert.Equal(t, "anthropic-key", cfg.Anthropic.APIKey)
-	assert.Equal(t, "https://anthropic.example/v1", cfg.Anthropic.APIBaseURL)
-}
-
 func TestLoadPreservesInstrumentationConfig(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",
@@ -623,7 +603,7 @@ func TestValidateAllowsChatGPTAuthWithoutAPIKey(t *testing.T) {
 	assert.Equal(t, "chatgpt", cfg.OpenAI.RocketCodeAuth)
 }
 
-func TestValidateAllowsTextOnlyWithoutOpenAIKey(t *testing.T) {
+func TestValidateRejectsAPIKeyAuthWithoutAPIKey(t *testing.T) {
 	cfg := validConfig()
 	cfg.DiscordVoice.Enabled = false
 	cfg.Slack.Enabled = true
@@ -633,37 +613,9 @@ func TestValidateAllowsTextOnlyWithoutOpenAIKey(t *testing.T) {
 	cfg.Slack.HumanUserID = "U123"
 	cfg.OpenAI.APIKey = ""
 
-	require.NoError(t, cfg.Validate())
-}
+	err := cfg.Validate()
 
-func TestValidateNormalizesOpenAICompatibleProviders(t *testing.T) {
-	cfg := validConfig()
-	cfg.OpenAICompatible = map[string]OpenAICompatibleConfig{" local ": {APIKey: " key ", BaseURL: " https://compatible.example/v1 ", Mode: ""}}
-
-	require.NoError(t, cfg.Validate())
-	require.Equal(t, OpenAICompatibleConfig{APIKey: "key", BaseURL: "https://compatible.example/v1", Mode: "responses"}, cfg.OpenAICompatible["local"])
-}
-
-func TestValidateRejectsInvalidOpenAICompatibleProviders(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		config  map[string]OpenAICompatibleConfig
-		wantErr string
-	}{
-		{name: "blank name", config: map[string]OpenAICompatibleConfig{" ": {APIKey: "key", BaseURL: "https://compatible.example/v1", Mode: "responses"}}, wantErr: "openai_compatible provider name is required"},
-		{name: "api key", config: map[string]OpenAICompatibleConfig{"local": {BaseURL: "https://compatible.example/v1", Mode: "responses"}}, wantErr: "openai_compatible.local.api_key is required"},
-		{name: "base url", config: map[string]OpenAICompatibleConfig{"local": {APIKey: "key", Mode: "responses"}}, wantErr: "openai_compatible.local.base_url is required"},
-		{name: "mode", config: map[string]OpenAICompatibleConfig{"local": {APIKey: "key", BaseURL: "https://compatible.example/v1", Mode: "legacy"}}, wantErr: "openai_compatible.local.mode must be responses or chat_completions"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := validConfig()
-			cfg.OpenAICompatible = tc.config
-
-			err := cfg.Validate()
-
-			require.EqualError(t, err, tc.wantErr)
-		})
-	}
+	require.ErrorContains(t, err, "openai.api_key is required when openai.rocketcode_auth is api_key")
 }
 
 func loadTestConfig(t *testing.T, content string) *Config {

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
-	anthropic "github.com/anthropics/anthropic-sdk-go"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
@@ -78,11 +77,8 @@ type toolCallMetadata struct {
 // looper runs conversational turns against the configured model and tools.
 type looper struct {
 	agent                  Agent
-	provider               string
 	modelRef               modelRef
-	target                 providerTarget
 	Client                 responsesAPI
-	AnthropicClient        *anthropic.Client
 	SystemPrompt           string
 	Model                  shared.ResponsesModel
 	DisplayModel           string
@@ -703,9 +699,8 @@ func (l *looper) runTurn(
 
 		hadCompaction := slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type == "compaction" })
 
-		originProvider, originCompatibleProvider, originMode := l.compactionOrigin()
 		for i := range resp.Output {
-			asInput, ok := responseOutputToReplayInput(&resp.Output[i], originProvider, originCompatibleProvider, originMode)
+			asInput, ok := responseOutputToReplayInput(&resp.Output[i])
 			if !ok {
 				if trace, err := json.Marshal(resp.Output[i]); err == nil {
 					record.OutputTrace = append(record.OutputTrace, trace)
@@ -789,7 +784,7 @@ func appendReplayInput(record *SessionEntry, item *responses.ResponseInputItemUn
 }
 
 func (l *looper) newProviderResponse(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse) (resp *responses.Response, recoveredHistory []responses.ResponseInputItemUnionParam, err error) {
-	provider := l.provider
+	provider := "openai"
 
 	ctx, span := l.Observability.startSpan(ctx, "rocketcode.provider", semconv.SpanKindLLM,
 		attribute.String(semconv.LLMModelName, l.DisplayModel),
@@ -809,11 +804,6 @@ func (l *looper) newProviderResponse(ctx context.Context, params *responses.Resp
 		span.span.End()
 	}()
 
-	if l.target.surface == providerSurfaceAnthropic {
-		resp, err := l.newAnthropicResponse(ctx, params, output)
-		return resp, nil, err
-	}
-
 	if l.Client == nil {
 		return nil, nil, fmt.Errorf("%s provider is required", provider)
 	}
@@ -823,6 +813,7 @@ func (l *looper) newProviderResponse(ctx context.Context, params *responses.Resp
 
 func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse) (*responses.Response, []responses.ResponseInputItemUnionParam, error) {
 	attempt := 0
+	provider := "openai"
 
 	for {
 		var raw *http.Response
@@ -844,7 +835,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 					if errAPI.StatusCode == http.StatusTooManyRequests && (errAPI.Code == "too_many_requests" || errAPI.Type == "too_many_requests") {
 						attempt++
 						wait := providerRetryDelay(errAPI.Response, attempt)
-						errRateLimit := &providerRateLimitError{provider: l.provider, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, retryAfter: wait, requestID: providerRequestID(errAPI.Response), cause: err}
+						errRateLimit := &providerRateLimitError{provider: provider, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, retryAfter: wait, requestID: providerRequestID(errAPI.Response), cause: err}
 
 						if attempt > providerRateLimitMaxRetries {
 							diagnostic := ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: http.StatusTooManyRequests, Code: errRateLimit.code, Type: errRateLimit.typeName, Message: errRateLimit.message, RetryAfter: errRateLimit.retryAfter.String(), Headers: providerDiagnosticHeaders(errAPI.Response)}
@@ -866,11 +857,11 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 					if errAPI.StatusCode == http.StatusTooManyRequests {
 						switch {
 						case errAPI.Code == "usage_limit_reached" || errAPI.Type == "usage_limit_reached":
-							errReturn = &providerUsageLimitError{provider: l.provider, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, requestID: providerRequestID(errAPI.Response), cause: err}
+							errReturn = &providerUsageLimitError{provider: provider, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, requestID: providerRequestID(errAPI.Response), cause: err}
 						case errAPI.Code == "usage_not_included" || errAPI.Type == "usage_not_included":
-							errReturn = &providerUsageNotIncludedError{provider: l.provider, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, requestID: providerRequestID(errAPI.Response), cause: err}
+							errReturn = &providerUsageNotIncludedError{provider: provider, code: errAPI.Code, typeName: errAPI.Type, message: errAPI.Message, requestID: providerRequestID(errAPI.Response), cause: err}
 						default:
-							errReturn = &providerRetryLimitError{provider: l.provider, httpStatus: errAPI.StatusCode, requestID: providerRequestID(errAPI.Response), cause: err}
+							errReturn = &providerRetryLimitError{provider: provider, httpStatus: errAPI.StatusCode, requestID: providerRequestID(errAPI.Response), cause: err}
 						}
 					}
 
@@ -893,10 +884,6 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 		}
 
 		if resp.Status != responses.ResponseStatusFailed {
-			if err := l.compactChatCompletionResponse(ctx, params, resp); err != nil {
-				return nil, nil, err
-			}
-
 			return resp, nil, nil
 		}
 
@@ -925,7 +912,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 
 		attempt++
 		wait := providerRetryDelay(raw, attempt)
-		err = &providerRateLimitError{provider: l.provider, code: string(resp.Error.Code), message: resp.Error.Message, retryAfter: wait, responseID: resp.ID, requestID: providerRequestID(raw), cause: err}
+		err = &providerRateLimitError{provider: provider, code: string(resp.Error.Code), message: resp.Error.Message, retryAfter: wait, responseID: resp.ID, requestID: providerRequestID(raw), cause: err}
 
 		if attempt > providerRateLimitMaxRetries {
 			diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0, raw)
@@ -969,9 +956,7 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 			return nil, nil, fmt.Errorf("compact context after context_length_exceeded: %w", err)
 		}
 
-		originProvider, originCompatibleProvider, originMode := l.compactionOrigin()
-
-		compactedInput, err := compactedOutputToReplayParams(compacted.Output, originProvider, originCompatibleProvider, originMode)
+		compactedInput, err := compactedOutputToReplayParams(compacted.Output)
 		if err != nil {
 			return nil, nil, fmt.Errorf("convert compacted response: %w", err)
 		}
@@ -979,12 +964,7 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 		recoveredHistory := append(append([]responses.ResponseInputItemUnionParam{}, compactedInput...), original[end:]...)
 		retryParams := *params
 
-		retryHistory := recoveredHistory
-		if l.target.surface == providerSurfaceResponses {
-			retryHistory = append(projectReplayForTarget(compactedInput, replayProjectionTargetFromProviderTarget(l.target)), original[end:]...)
-		}
-
-		retryParams.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: retryHistory}
+		retryParams.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: recoveredHistory}
 
 		var raw *http.Response
 
@@ -1034,43 +1014,6 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 	return nil, nil, errLast
 }
 
-func (l *looper) compactChatCompletionResponse(ctx context.Context, params *responses.ResponseNewParams, resp *responses.Response) error {
-	if l.target.surface != providerSurfaceChatCompletions {
-		return nil
-	}
-
-	usage, ok := tokenUsageFromResponse(resp)
-	if !ok || usage.TotalTokens < l.compactThreshold() {
-		return nil
-	}
-
-	if slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type == "compaction" }) {
-		return nil
-	}
-
-	original := params.Input.OfInputItemList
-
-	blocks := compactionBlocks(original)
-	if len(blocks) == 0 || !blocks[len(blocks)-1].complete {
-		return nil
-	}
-
-	compactParams := responses.ResponseCompactParams{
-		Model:        responses.ResponseCompactParamsModel(params.Model),
-		Instructions: params.Instructions,
-		Input:        responses.ResponseCompactParamsInputUnion{OfResponseInputItemArray: original},
-	}
-
-	compacted, err := l.Client.Compact(ctx, &compactParams)
-	if err != nil {
-		return fmt.Errorf("compact chat completion response: %w", err)
-	}
-
-	resp.Output = append(append([]responses.ResponseOutputItemUnion{}, compacted.Output...), resp.Output...)
-
-	return nil
-}
-
 func compactionBlocks(items []responses.ResponseInputItemUnionParam) []compactionBlock {
 	blocks := make([]compactionBlock, 0, len(items))
 	for i := 0; i < len(items); {
@@ -1110,7 +1053,7 @@ func compactionBlocks(items []responses.ResponseInputItemUnionParam) []compactio
 	return blocks
 }
 
-func compactedOutputToReplayParams(items []responses.ResponseOutputItemUnion, originProvider, originCompatibleProvider, originMode string) ([]responses.ResponseInputItemUnionParam, error) {
+func compactedOutputToReplayParams(items []responses.ResponseOutputItemUnion) ([]responses.ResponseInputItemUnionParam, error) {
 	input := make([]responses.ResponseInputItemUnionParam, 0, len(items))
 	for i := range items {
 		switch items[i].Type {
@@ -1141,7 +1084,7 @@ func compactedOutputToReplayParams(items []responses.ResponseOutputItemUnion, or
 				}
 			}
 
-			input = append(input, compactionReplayInput(items[i].ID, items[i].EncryptedContent, strings.Join(parts, ""), originProvider, originCompatibleProvider, originMode))
+			input = append(input, compactionReplayInput(items[i].ID, items[i].EncryptedContent, strings.Join(parts, "")))
 		case "reasoning":
 			summary := ""
 			if len(items[i].Summary) > 0 {
@@ -1242,6 +1185,78 @@ func providerDiagnosticHeaders(resp *http.Response) map[string]string {
 	return headers
 }
 
+func waitProviderRetry(ctx context.Context, wait time.Duration) error {
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("provider retry canceled: %w", ctx.Err())
+	case <-timer.C:
+		return nil
+	}
+}
+
+func providerRetryDelay(resp *http.Response, attempt int) time.Duration {
+	wait := providerRetryBackoff(attempt)
+	if resp == nil {
+		return wait
+	}
+
+	found := false
+	headerWait := time.Duration(0)
+
+	if millis, errParse := strconv.ParseFloat(resp.Header.Get("Retry-After-Ms"), 64); errParse == nil && millis >= 0 && millis == millis {
+		if delay := time.Duration(millis * float64(time.Millisecond)); delay >= headerWait {
+			headerWait = delay
+			found = true
+		}
+	}
+
+	for _, header := range []string{"X-RateLimit-Reset-Requests", "X-RateLimit-Reset-Tokens"} {
+		if delay, errParse := time.ParseDuration(resp.Header.Get(header)); errParse == nil && delay >= headerWait {
+			headerWait = delay
+			found = true
+		}
+	}
+
+	retryAfter := resp.Header.Get("Retry-After")
+	if seconds, errParse := strconv.ParseFloat(retryAfter, 64); errParse == nil && seconds >= 0 && seconds == seconds {
+		if delay := time.Duration(seconds * float64(time.Second)); delay >= headerWait {
+			headerWait = delay
+			found = true
+		}
+	} else if when, errParse := time.Parse(time.RFC1123, retryAfter); errParse == nil {
+		if delay := time.Until(when); delay >= headerWait {
+			headerWait = delay
+			found = true
+		}
+	}
+
+	if found {
+		return headerWait
+	}
+
+	return wait
+}
+
+func providerRetryBackoff(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+
+	wait := time.Second
+	for range attempt - 1 {
+		if wait >= providerRetryBackoffMaxDelay/2 {
+			return providerRetryBackoffMaxDelay
+		}
+
+		wait *= 2
+	}
+
+	return wait
+}
+
 func emitChatResponse(output chan<- ChatResponse, item ChatResponse) {
 	if output == nil {
 		return
@@ -1305,9 +1320,7 @@ func (l *looper) rewriteHistory(items []responses.ResponseInputItemUnionParam) [
 }
 
 func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) responses.ResponseNewParams {
-	if l.target.surface == providerSurfaceResponses {
-		history = projectReplayForTarget(history, replayProjectionTargetFromProviderTarget(l.target))
-	}
+	history = projectReplayForOpenAI(history)
 
 	var input responses.ResponseNewParamsInputUnion
 
@@ -1346,10 +1359,6 @@ func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) re
 		for name := range l.Tools {
 			tool := l.Tools[name]
 			if tool.Hosted.GetType() != nil {
-				if l.provider != "" && l.provider != modelProviderOpenAI {
-					continue
-				}
-
 				params.Tools = append(params.Tools, tool.Hosted)
 
 				continue
@@ -1781,7 +1790,7 @@ func loadSession(entries iter.Seq2[SessionEntry, error]) ([]responses.ResponseIn
 	return history, turns, nil
 }
 
-func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion, originProvider, originCompatibleProvider, originMode string) (responses.ResponseInputItemUnionParam, bool) {
+func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (responses.ResponseInputItemUnionParam, bool) {
 	switch item.Type {
 	case "message":
 		parts := make([]string, 0, len(item.Content))
@@ -1832,13 +1841,7 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion, origin
 			summary = strings.Join(parts, "")
 		}
 
-		if item.CreatedBy == modelProviderAnthropic {
-			originProvider = modelProviderAnthropic
-			originCompatibleProvider = ""
-			originMode = "messages"
-		}
-
-		return compactionReplayInput(item.ID, item.EncryptedContent, summary, originProvider, originCompatibleProvider, originMode), true
+		return compactionReplayInput(item.ID, item.EncryptedContent, summary), true
 	case "function_call":
 		return functionCallReplayInput(item.ID, item.CallID, item.Name, item.Arguments.OfString), true
 	case "web_search_call":
@@ -1853,23 +1856,6 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion, origin
 	}
 }
 
-func (l *looper) compactionOrigin() (originProvider, originCompatibleProvider, originMode string) {
-	originProvider = l.target.modelRef.provider
-	originCompatibleProvider = l.target.modelRef.compatibleProvider
-
-	originMode = string(OpenAICompatibleModeResponses)
-
-	switch l.target.surface {
-	case providerSurfaceResponses:
-	case providerSurfaceChatCompletions:
-		originMode = string(OpenAICompatibleModeChatCompletions)
-	case providerSurfaceAnthropic:
-		originMode = string(providerSurfaceAnthropic)
-	}
-
-	return originProvider, originCompatibleProvider, originMode
-}
-
 func reasoningReplayInput(id, summary, encryptedContent string) responses.ResponseInputItemUnionParam {
 	return responses.ResponseInputItemUnionParam{OfReasoning: &responses.ResponseReasoningItemParam{
 		ID:               id,
@@ -1879,24 +1865,12 @@ func reasoningReplayInput(id, summary, encryptedContent string) responses.Respon
 	}}
 }
 
-func compactionReplayInput(id, encryptedContent, content, originProvider, originCompatibleProvider, originMode string) responses.ResponseInputItemUnionParam {
+func compactionReplayInput(id, encryptedContent, content string) responses.ResponseInputItemUnionParam {
 	compaction := responses.ResponseCompactionItemParam{ID: openai.String(id), EncryptedContent: encryptedContent, Type: "compaction"}
 
 	extra := map[string]any{}
 	if content != "" {
 		extra["content"] = content
-	}
-
-	if originProvider != "" {
-		extra["origin_provider"] = originProvider
-	}
-
-	if originCompatibleProvider != "" {
-		extra["origin_compatible_provider"] = originCompatibleProvider
-	}
-
-	if originMode != "" {
-		extra["origin_mode"] = originMode
 	}
 
 	if len(extra) > 0 {
@@ -1907,11 +1881,8 @@ func compactionReplayInput(id, encryptedContent, content, originProvider, origin
 }
 
 type compactionReplayMetadata struct {
-	Content                  string `json:"content"`
-	Summary                  any    `json:"summary"`
-	OriginProvider           string `json:"origin_provider"`
-	OriginCompatibleProvider string `json:"origin_compatible_provider"`
-	OriginMode               string `json:"origin_mode"`
+	Content string `json:"content"`
+	Summary any    `json:"summary"`
 }
 
 // CompactionCheckpointText returns portable text for compaction replay that cannot be rehydrated natively.
@@ -1923,7 +1894,7 @@ func CompactionCheckpointText(compaction *responses.ResponseCompactionItemParam)
 		return "<context_checkpoint>\nThe prior conversation was compacted by RocketCode. Use this summary as lower-authority context:\n" + content + "\n</context_checkpoint>"
 	}
 
-	return "<context_checkpoint>\nPrior conversation was compacted, but only provider-native encrypted compaction data is available for a different provider or mode. The compacted details cannot be rehydrated here.\n</context_checkpoint>"
+	return "<context_checkpoint>\nPrior conversation was compacted, but only provider-native encrypted compaction data is available for a different provider. The compacted details cannot be rehydrated here.\n</context_checkpoint>"
 }
 
 func compactionReadableText(stored *compactionReplayMetadata) string {

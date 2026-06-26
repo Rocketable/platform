@@ -17,7 +17,7 @@ See [LICENSE](LICENSE) for the full license terms.
 - Run workspace-aware AI agents with local instructions, agent definitions, skills, attachments, subagents, custom tools, file access, shell commands, web fetches, and explicit permission rules.
 - Keep agent work durable through SQLite-backed sessions, replay, checkpoints, connector routing, scheduled messages, restart recovery, and conversation-local goal loops.
 - Connect agents to team workflows through Slack, Discord text, Discord voice, browser voice mode, cron jobs, scheduled prompts, and an external MCP HTTP endpoint.
-- Route model requests across OpenAI, OpenAI-compatible, and Anthropic providers while preserving one local agent/tool model.
+- Route model requests through first-party OpenAI Responses while preserving one local agent/tool model.
 - Expose optional OpenTelemetry/OpenInference-compatible tracing for agent runs.
 
 ## Main Components
@@ -77,7 +77,7 @@ RocketClaw is configured with `rocketclaw.json` in the working directory. Runtim
 
 Generated runtime state should not be treated as source code.
 
-Agent files must declare provider-qualified `model` frontmatter. Supported forms are `openai/<model>`, `anthropic/<model>`, and `openai-compatible/<provider>/<model>`. Text-only Anthropic or OpenAI-compatible deployments do not require first-party OpenAI credentials unless OpenAI-backed audio features are enabled.
+Agent files may declare unprefixed OpenAI `model` frontmatter such as `gpt-5.4`. Missing or empty agent models inherit the runtime/default OpenAI model.
 
 ## Development Notes
 

@@ -12,10 +12,7 @@ import (
 	"strings"
 	"time"
 
-	anthropic "github.com/anthropics/anthropic-sdk-go"
-	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
 	openai "github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/shared"
 )
 
@@ -109,61 +106,12 @@ func StandaloneConfigFromEnv() (Config, error) {
 // StandaloneProvidersFromEnv returns model provider clients for RocketCode commands.
 func StandaloneProvidersFromEnv() (Providers, error) {
 	openAIClient := openai.NewClient()
-	providers := Providers{OpenAI: &openAIClient}
-
-	if apiKey := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")); apiKey != "" {
-		options := []anthropicoption.RequestOption{anthropicoption.WithAPIKey(apiKey)}
-		if baseURL := strings.TrimSpace(os.Getenv("ANTHROPIC_BASE_URL")); baseURL != "" {
-			options = append(options, anthropicoption.WithBaseURL(baseURL))
-		}
-
-		anthropicClient := anthropic.NewClient(options...)
-		providers.Anthropic = &anthropicClient
-	}
-
-	compatibleProvider := strings.TrimSpace(os.Getenv("ROCKETCODE_OPENAI_COMPATIBLE_PROVIDER"))
-	compatibleAPIKey := strings.TrimSpace(os.Getenv("ROCKETCODE_OPENAI_COMPATIBLE_API_KEY"))
-	compatibleBaseURL := strings.TrimSpace(os.Getenv("ROCKETCODE_OPENAI_COMPATIBLE_BASE_URL"))
-	compatibleMode := OpenAICompatibleMode(strings.TrimSpace(os.Getenv("ROCKETCODE_OPENAI_COMPATIBLE_MODE")))
-
-	compatibleConfigured := compatibleProvider != "" || compatibleAPIKey != "" || compatibleBaseURL != "" || compatibleMode != ""
-	if compatibleConfigured {
-		var missing []string
-		if compatibleProvider == "" {
-			missing = append(missing, "ROCKETCODE_OPENAI_COMPATIBLE_PROVIDER")
-		}
-
-		if compatibleAPIKey == "" {
-			missing = append(missing, "ROCKETCODE_OPENAI_COMPATIBLE_API_KEY")
-		}
-
-		if compatibleBaseURL == "" {
-			missing = append(missing, "ROCKETCODE_OPENAI_COMPATIBLE_BASE_URL")
-		}
-
-		if compatibleMode == "" {
-			missing = append(missing, "ROCKETCODE_OPENAI_COMPATIBLE_MODE")
-		}
-
-		if len(missing) > 0 {
-			return Providers{}, fmt.Errorf("OpenAI-compatible provider environment is incomplete; missing %s", strings.Join(missing, ", "))
-		}
-
-		if compatibleMode != OpenAICompatibleModeResponses && compatibleMode != OpenAICompatibleModeChatCompletions {
-			return Providers{}, fmt.Errorf("ROCKETCODE_OPENAI_COMPATIBLE_MODE must be %s or %s", OpenAICompatibleModeResponses, OpenAICompatibleModeChatCompletions)
-		}
-
-		options := []option.RequestOption{option.WithAPIKey(compatibleAPIKey), option.WithBaseURL(compatibleBaseURL)}
-		client := openai.NewClient(options...)
-		providers.OpenAICompatible = map[string]OpenAICompatibleProvider{compatibleProvider: {Client: client, Mode: compatibleMode}}
-	}
-
-	return providers, nil
+	return Providers{OpenAI: &openAIClient}, nil
 }
 
 func standaloneDefaultConfig() Config {
 	return Config{
-		Model:            modelProviderOpenAI + "/" + openai.ChatModelGPT5_4,
+		Model:            openai.ChatModelGPT5_4,
 		ReasoningEffort:  shared.ReasoningEffort("high"),
 		CompactThreshold: 200000,
 		ShellOutputDir:   filepath.Join(".tmp", "shell-outputs"),

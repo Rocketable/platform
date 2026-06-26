@@ -35,8 +35,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/oai"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/Rocketable/platform/internal/rocketcode"
-	anthropic "github.com/anthropics/anthropic-sdk-go"
-	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
@@ -547,47 +545,20 @@ func (b *Bridge) agentSnapshot() string {
 }
 
 type seedCompactionModel struct {
-	provider           string
-	compatibleProvider string
-	apiModel           responses.ResponseCompactParamsModel
+	apiModel responses.ResponseCompactParamsModel
 }
 
 func compactModel(model string) (seedCompactionModel, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
-		return seedCompactionModel{provider: "openai", apiModel: responses.ResponseCompactParamsModelGPT5_4}, nil
+		return seedCompactionModel{apiModel: responses.ResponseCompactParamsModelGPT5_4}, nil
 	}
 
-	provider, rest, ok := strings.Cut(model, "/")
-	if !ok {
-		return seedCompactionModel{}, fmt.Errorf("invalid checkpoint model %q: expected provider/model", model)
+	if strings.Contains(model, "/") {
+		return seedCompactionModel{}, fmt.Errorf("invalid checkpoint model %q: expected unprefixed OpenAI model ID", model)
 	}
 
-	switch provider {
-	case "openai":
-		apiModel := strings.TrimSpace(rest)
-		if strings.TrimSpace(apiModel) == "" {
-			return seedCompactionModel{}, fmt.Errorf("invalid OpenAI checkpoint model %q", model)
-		}
-
-		return seedCompactionModel{provider: provider, apiModel: responses.ResponseCompactParamsModel(apiModel)}, nil
-	case "anthropic":
-		apiModel := strings.TrimSpace(rest)
-		if apiModel == "" {
-			return seedCompactionModel{}, fmt.Errorf("invalid Anthropic checkpoint model %q", model)
-		}
-
-		return seedCompactionModel{provider: provider, apiModel: responses.ResponseCompactParamsModel(apiModel)}, nil
-	case "openai-compatible":
-		compatibleProvider, apiModel, ok := strings.Cut(rest, "/")
-		if !ok || strings.TrimSpace(compatibleProvider) == "" || strings.TrimSpace(apiModel) == "" {
-			return seedCompactionModel{}, fmt.Errorf("invalid OpenAI-compatible checkpoint model %q", model)
-		}
-
-		return seedCompactionModel{provider: provider, compatibleProvider: compatibleProvider, apiModel: responses.ResponseCompactParamsModel(apiModel)}, nil
-	default:
-		return seedCompactionModel{}, fmt.Errorf("response checkpoint compaction does not support provider %q", provider)
-	}
+	return seedCompactionModel{apiModel: responses.ResponseCompactParamsModel(model)}, nil
 }
 
 func (b *Bridge) enqueue(ctx context.Context, request bridgeRequest, operation string) error {
@@ -610,7 +581,7 @@ func (b *Bridge) enqueue(ctx context.Context, request bridgeRequest, operation s
 }
 
 func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.SessionEntry, model seedCompactionModel) ([]json.RawMessage, error) {
-	b.log.Info("starting seed replay compaction", "conversation_id", b.config.ConversationID, "entries", len(entries), "model", model.apiModel, "provider", model.provider)
+	b.log.Info("starting seed replay compaction", "conversation_id", b.config.ConversationID, "entries", len(entries), "model", model.apiModel)
 
 	input := []responses.ResponseInputItemUnionParam{}
 
@@ -635,60 +606,14 @@ func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.Ses
 		model.apiModel = responses.ResponseCompactParamsModelGPT5_4
 	}
 
-	if model.provider == "anthropic" {
-		return b.compactAnthropicSeedReplay(ctx, input, model)
-	}
-
-	if model.provider != "openai" && model.provider != "openai-compatible" {
-		return b.seedReplayCheckpoint(entries)
-	}
-
-	var client *openai.Client
-
-	if model.provider == "openai-compatible" {
-		compatible, ok := b.runtime.OpenAICompatible[model.compatibleProvider]
-		if !ok {
-			return nil, fmt.Errorf("prepare OpenAI-compatible client: provider %q is not configured", model.compatibleProvider)
-		}
-
-		if compatible.Mode != "" && compatible.Mode != "responses" {
-			return b.compactCompatibleChatSeedReplay(ctx, input, model, compatible)
-		}
-
-		projectionTarget, err := rocketcode.NewReplayProjectionTarget(model.provider, model.compatibleProvider, "responses")
-		if err != nil {
-			return nil, fmt.Errorf("prepare OpenAI-compatible replay projection target: %w", err)
-		}
-
-		input, err = rocketcode.ProjectReplayForTarget(input, projectionTarget)
-		if err != nil {
-			return nil, fmt.Errorf("project OpenAI-compatible seed replay: %w", err)
-		}
-
-		compatibleClient := openai.NewClient(b.openAIOptions(compatible.APIKey, compatible.BaseURL, true)...)
-		client = &compatibleClient
-	} else {
-		var err error
-
-		projectionTarget, err := rocketcode.NewReplayProjectionTarget(model.provider, model.compatibleProvider, "responses")
-		if err != nil {
-			return nil, fmt.Errorf("prepare OpenAI replay projection target: %w", err)
-		}
-
-		input, err = rocketcode.ProjectReplayForTarget(input, projectionTarget)
-		if err != nil {
-			return nil, fmt.Errorf("project OpenAI seed replay: %w", err)
-		}
-
-		client, err = b.openAIClient()
-		if err != nil {
-			return nil, fmt.Errorf("prepare OpenAI client: %w", err)
-		}
+	client, err := b.openAIClient()
+	if err != nil {
+		return nil, fmt.Errorf("prepare OpenAI client: %w", err)
 	}
 
 	params := responses.ResponseCompactParams{Model: model.apiModel, Input: responses.ResponseCompactParamsInputUnion{OfResponseInputItemArray: input}}
 
-	if model.provider == "openai" && b.runtime.OpenAI.RocketCodeAuth == "chatgpt" {
+	if b.runtime.OpenAI.RocketCodeAuth == "chatgpt" {
 		root, err := os.OpenRoot(b.runtime.Workspace)
 		if err != nil {
 			return nil, fmt.Errorf("open workspace root: %w", err)
@@ -713,77 +638,12 @@ func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.Ses
 		return nil, fmt.Errorf("compact seed replay: %w", err)
 	}
 
-	replayInput, err := rocketcode.CompactedOutputToReplayInput(compacted.Output, model.provider, model.compatibleProvider, "responses")
+	replayInput, err := rocketcode.CompactedOutputToReplayInput(compacted.Output)
 	if err != nil {
 		return nil, fmt.Errorf("encode OpenAI seed compaction replay: %w", err)
 	}
 
 	return replayInput, nil
-}
-
-func (b *Bridge) compactCompatibleChatSeedReplay(ctx context.Context, input []responses.ResponseInputItemUnionParam, model seedCompactionModel, compatible config.OpenAICompatibleConfig) ([]json.RawMessage, error) {
-	client := openai.NewClient(b.openAIOptions(compatible.APIKey, compatible.BaseURL, true)...)
-
-	completion, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-		Model: openai.ChatModel(model.apiModel),
-		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.DeveloperMessage(seedCompactionInstructions),
-			openai.UserMessage(seedReplayText(input)),
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("compact compatible chat seed replay: %w", err)
-	}
-
-	summary := ""
-	if len(completion.Choices) > 0 {
-		summary = completion.Choices[0].Message.Content
-	}
-
-	replayInput, err := rocketcode.CompactedOutputToReplayInput([]responses.ResponseOutputItemUnion{{ID: completion.ID + "-compaction", Type: "compaction", Summary: []responses.ResponseReasoningItemSummary{{Text: summary}}}}, model.provider, model.compatibleProvider, "chat_completions")
-	if err != nil {
-		return nil, fmt.Errorf("encode compatible chat seed compaction replay: %w", err)
-	}
-
-	return replayInput, nil
-}
-
-func (b *Bridge) compactAnthropicSeedReplay(ctx context.Context, input []responses.ResponseInputItemUnionParam, model seedCompactionModel) ([]json.RawMessage, error) {
-	client := b.anthropicClient()
-	if client == nil {
-		return nil, errors.New("anthropic provider is required")
-	}
-
-	response, err := rocketcode.CompactAnthropicReplay(ctx, client, string(model.apiModel), input, 1)
-	if err != nil {
-		return nil, fmt.Errorf("compact Anthropic seed replay: %w", err)
-	}
-
-	replayInput, err := rocketcode.CompactedOutputToReplayInput(response.Output, "anthropic", "", "messages")
-	if err != nil {
-		return nil, fmt.Errorf("encode Anthropic seed compaction replay: %w", err)
-	}
-
-	return replayInput, nil
-}
-
-func (b *Bridge) seedReplayCheckpoint(entries []rocketcode.SessionEntry) ([]json.RawMessage, error) {
-	messages := []string{"<conversation-checkpoint>", "Previous conversation context was compacted into this checkpoint for the new thread."}
-
-	for i := range entries {
-		entryMessages, err := replayInputMessages(entries[i].ReplayInput)
-		if err != nil {
-			return nil, fmt.Errorf("build checkpoint input: entry %d: %w", i+1, err)
-		}
-
-		for j := range entryMessages {
-			messages = append(messages, strings.TrimSpace(entryMessages[j].role)+": "+strings.TrimSpace(entryMessages[j].text))
-		}
-	}
-
-	messages = append(messages, "</conversation-checkpoint>")
-
-	return replayInputForMessage("user", strings.Join(messages, "\n"))
 }
 
 func (b *Bridge) observeSessionEntries(ctx context.Context, conversationID string) ([]ObservedSessionEntry, error) {
@@ -1628,50 +1488,13 @@ func providerLogAttrs(req *http.Request, resp *http.Response, status int, durati
 	return attrs
 }
 
-func (b *Bridge) anthropicClient() *anthropic.Client {
-	if strings.TrimSpace(b.runtime.Anthropic.APIKey) == "" {
-		return nil
+func (b *Bridge) rocketcodeProviders(_ rocketcode.Agents) (rocketcode.Providers, error) {
+	openAIClient, err := b.openAIClient()
+	if err != nil {
+		return rocketcode.Providers{}, err
 	}
 
-	options := []anthropicoption.RequestOption{anthropicoption.WithAPIKey(b.runtime.Anthropic.APIKey)}
-	if strings.TrimSpace(b.runtime.Anthropic.APIBaseURL) != "" {
-		options = append(options, anthropicoption.WithBaseURL(b.runtime.Anthropic.APIBaseURL))
-	}
-
-	client := anthropic.NewClient(options...)
-
-	return &client
-}
-
-func (b *Bridge) rocketcodeProviders(agents rocketcode.Agents) (rocketcode.Providers, error) {
-	providers := rocketcode.Providers{Anthropic: b.anthropicClient()}
-	needsOpenAI := false
-
-	for name := range agents.Items {
-		if strings.HasPrefix(strings.TrimSpace(agents.Items[name].Model), "openai/") {
-			needsOpenAI = true
-			break
-		}
-	}
-
-	if needsOpenAI {
-		openAIClient, err := b.openAIClient()
-		if err != nil {
-			return rocketcode.Providers{}, err
-		}
-
-		providers.OpenAI = openAIClient
-	}
-
-	if len(b.runtime.OpenAICompatible) > 0 {
-		providers.OpenAICompatible = make(map[string]rocketcode.OpenAICompatibleProvider, len(b.runtime.OpenAICompatible))
-		for name, compatible := range b.runtime.OpenAICompatible {
-			client := openai.NewClient(b.openAIOptions(compatible.APIKey, compatible.BaseURL, true)...)
-			providers.OpenAICompatible[name] = rocketcode.OpenAICompatibleProvider{Client: client, Mode: rocketcode.OpenAICompatibleMode(compatible.Mode)}
-		}
-	}
-
-	return providers, nil
+	return rocketcode.Providers{OpenAI: openAIClient}, nil
 }
 
 func (b *Bridge) rocketcodeConfig(shellOutputDir string, shellEnv map[string]string, customTools ...rocketcode.Tool) rocketcode.Config {
@@ -2438,31 +2261,6 @@ func replayInputRawKind(raw json.RawMessage) string {
 
 	return object.Type
 }
-
-const seedCompactionInstructions = `Summarize the conversation so a later assistant can continue correctly. Do not answer the user.
-
-Output only the compacted summary using these sections:
-
-## Goal
-The user's objective and the current task.
-
-## Constraints & Preferences
-Explicit user requirements, project rules, provider constraints, and style preferences.
-
-## Progress
-What has been completed and what remains in progress.
-
-## Key Decisions
-Important choices, accepted tradeoffs, and behavior contracts established so far.
-
-## Next Steps
-Concrete remaining actions in order.
-
-## Critical Context
-Details that are easy to lose but necessary to continue correctly, including tool results, errors, and unresolved risks.
-
-## Relevant Files
-Files, symbols, commands, and code references that matter for continuation.`
 
 func seedReplayText(items []responses.ResponseInputItemUnionParam) string {
 	parts := make([]string, 0, len(items))

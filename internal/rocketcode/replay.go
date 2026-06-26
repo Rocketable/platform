@@ -2,7 +2,6 @@ package rocketcode
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -10,118 +9,31 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 )
 
-// ReplayProjectionTarget identifies the provider surface that will consume
-// durable Responses-shaped replay.
-type ReplayProjectionTarget struct {
-	provider           string
-	compatibleProvider string
-	mode               string
-}
-
-// NewReplayProjectionTarget validates a replay projection target.
-func NewReplayProjectionTarget(provider, compatibleProvider, mode string) (ReplayProjectionTarget, error) {
-	target := ReplayProjectionTarget{provider: strings.TrimSpace(provider), compatibleProvider: strings.TrimSpace(compatibleProvider), mode: strings.TrimSpace(mode)}
-	if err := target.validate(); err != nil {
-		return ReplayProjectionTarget{}, err
-	}
-
-	return target, nil
-}
-
-func (target ReplayProjectionTarget) validate() error {
-	switch target.provider {
-	case modelProviderOpenAI:
-		if target.compatibleProvider != "" || target.mode != string(OpenAICompatibleModeResponses) {
-			return errors.New("invalid OpenAI replay projection target")
-		}
-	case modelProviderOpenAICompatible:
-		if target.compatibleProvider == "" || (target.mode != string(OpenAICompatibleModeResponses) && target.mode != string(OpenAICompatibleModeChatCompletions)) {
-			return errors.New("invalid OpenAI-compatible replay projection target")
-		}
-	case modelProviderAnthropic:
-		if target.compatibleProvider != "" || target.mode != string(providerSurfaceAnthropic) {
-			return errors.New("invalid Anthropic replay projection target")
-		}
-	default:
-		return fmt.Errorf("unsupported replay projection provider %q", target.provider)
-	}
-
-	return nil
-}
-
-func replayProjectionTargetFromProviderTarget(target providerTarget) ReplayProjectionTarget {
-	mode := string(OpenAICompatibleModeResponses)
-
-	switch target.surface {
-	case providerSurfaceResponses:
-	case providerSurfaceChatCompletions:
-		mode = string(OpenAICompatibleModeChatCompletions)
-	case providerSurfaceAnthropic:
-		mode = string(providerSurfaceAnthropic)
-	}
-
-	return ReplayProjectionTarget{provider: target.modelRef.provider, compatibleProvider: target.modelRef.compatibleProvider, mode: mode}
-}
-
-// ProjectReplayForTarget translates durable replay for a provider surface.
-func ProjectReplayForTarget(items []responses.ResponseInputItemUnionParam, target ReplayProjectionTarget) ([]responses.ResponseInputItemUnionParam, error) {
-	if err := target.validate(); err != nil {
-		return nil, err
-	}
-
-	return projectReplayForTarget(items, target), nil
-}
-
-func projectReplayForTarget(items []responses.ResponseInputItemUnionParam, target ReplayProjectionTarget) []responses.ResponseInputItemUnionParam {
+func projectReplayForOpenAI(items []responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam {
 	projected := make([]responses.ResponseInputItemUnionParam, 0, len(items))
 	for i := range items {
 		item := items[i]
-		if item.OfReasoning != nil && target.provider == modelProviderAnthropic {
-			continue
-		}
-
 		if item.OfCompaction == nil {
 			projected = append(projected, item)
 			continue
 		}
 
-		if compactionMatchesTarget(item.OfCompaction, target) {
-			compaction := responses.ResponseCompactionItemParam{
-				EncryptedContent: item.OfCompaction.EncryptedContent,
-				ID:               item.OfCompaction.ID,
-				Type:             item.OfCompaction.Type,
-			}
-			projected = append(projected, responses.ResponseInputItemUnionParam{OfCompaction: &compaction})
-
-			continue
+		compaction := responses.ResponseCompactionItemParam{
+			EncryptedContent: item.OfCompaction.EncryptedContent,
+			ID:               item.OfCompaction.ID,
+			Type:             item.OfCompaction.Type,
 		}
-
-		message := responses.EasyInputMessageParam{Role: responses.EasyInputMessageRoleUser, Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(CompactionCheckpointText(item.OfCompaction))}, Type: "message"}
-		projected = append(projected, responses.ResponseInputItemUnionParam{OfMessage: &message})
+		projected = append(projected, responses.ResponseInputItemUnionParam{OfCompaction: &compaction})
 	}
 
 	return projected
 }
 
-func compactionMatchesTarget(compaction *responses.ResponseCompactionItemParam, target ReplayProjectionTarget) bool {
-	stored := compactionReplayFields(compaction)
-
-	if stored.OriginProvider != target.provider || stored.OriginMode != target.mode {
-		return false
-	}
-
-	if target.provider == modelProviderOpenAICompatible {
-		return stored.OriginCompatibleProvider == target.compatibleProvider
-	}
-
-	return true
-}
-
 // CompactedOutputToReplayInput converts provider compaction output into durable replay input.
-func CompactedOutputToReplayInput(items []responses.ResponseOutputItemUnion, originProvider, originCompatibleProvider, originMode string) ([]json.RawMessage, error) {
+func CompactedOutputToReplayInput(items []responses.ResponseOutputItemUnion) ([]json.RawMessage, error) {
 	input := make([]responses.ResponseInputItemUnionParam, 0, len(items))
 	for i := range items {
-		item, ok := compactedOutputItemToReplayInput(&items[i], originProvider, originCompatibleProvider, originMode)
+		item, ok := compactedOutputItemToReplayInput(&items[i])
 		if !ok {
 			return nil, fmt.Errorf("unsupported compacted output item kind %q", items[i].Type)
 		}
@@ -137,7 +49,7 @@ func CompactedOutputToReplayInput(items []responses.ResponseOutputItemUnion, ori
 	return raw, nil
 }
 
-func compactedOutputItemToReplayInput(item *responses.ResponseOutputItemUnion, originProvider, originCompatibleProvider, originMode string) (responses.ResponseInputItemUnionParam, bool) {
+func compactedOutputItemToReplayInput(item *responses.ResponseOutputItemUnion) (responses.ResponseInputItemUnionParam, bool) {
 	switch item.Type {
 	case "message":
 		parts := make([]string, 0, len(item.Content))
@@ -172,10 +84,7 @@ func compactedOutputItemToReplayInput(item *responses.ResponseOutputItemUnion, o
 
 		compaction := responses.ResponseCompactionItemParam{ID: openai.String(item.ID), EncryptedContent: item.EncryptedContent, Type: "compaction"}
 
-		extra := map[string]any{"origin_provider": originProvider, "origin_mode": originMode}
-		if originCompatibleProvider != "" {
-			extra["origin_compatible_provider"] = originCompatibleProvider
-		}
+		extra := map[string]any{}
 
 		if content := strings.Join(parts, ""); content != "" {
 			extra["content"] = content
@@ -257,12 +166,9 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 
 		if item.OfCompaction != nil {
 			var stored struct {
-				Content                  *string          `json:"content"`
-				Summary                  *json.RawMessage `json:"summary"`
-				Recent                   *json.RawMessage `json:"recent"`
-				OriginProvider           *string          `json:"origin_provider"`
-				OriginCompatibleProvider *string          `json:"origin_compatible_provider"`
-				OriginMode               *string          `json:"origin_mode"`
+				Content *string          `json:"content"`
+				Summary *json.RawMessage `json:"summary"`
+				Recent  *json.RawMessage `json:"recent"`
 			}
 			if err := json.Unmarshal(raw[i], &stored); err != nil {
 				return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: replayInputRawKind(raw[i]), Cause: fmt.Errorf("decode compaction replay extras: %w", err)}
@@ -279,18 +185,6 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 
 			if stored.Recent != nil {
 				extra["recent"] = *stored.Recent
-			}
-
-			if stored.OriginProvider != nil {
-				extra["origin_provider"] = *stored.OriginProvider
-			}
-
-			if stored.OriginCompatibleProvider != nil {
-				extra["origin_compatible_provider"] = *stored.OriginCompatibleProvider
-			}
-
-			if stored.OriginMode != nil {
-				extra["origin_mode"] = *stored.OriginMode
 			}
 
 			if len(extra) > 0 {

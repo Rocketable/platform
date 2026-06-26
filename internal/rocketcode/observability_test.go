@@ -24,7 +24,7 @@ func TestObservabilityEmitsAgentProviderAndToolSpans(t *testing.T) {
 		responseWithUsage(responseWithMessage("resp-final", "final answer"), `{"input_tokens":12,"input_tokens_details":{"cached_tokens":3},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":2},"total_tokens":17}`),
 	))
 	looper.agent = Agent{Name: "main"}
-	looper.DisplayModel = "openai/gpt-test"
+	looper.DisplayModel = "gpt-test"
 	looper.Observability = ObservabilityConfig{Enabled: true, Tracer: provider.Tracer("test")}
 	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
 	tool := testLooperTool("read")
@@ -65,7 +65,7 @@ func TestObservabilityRedactionComesFromConfigObject(t *testing.T) {
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	looper := testLooper(mockResponses(responseWithMessage("resp-final", "hidden output")))
 	looper.agent = Agent{Name: "main"}
-	looper.DisplayModel = "openai/gpt-test"
+	looper.DisplayModel = "gpt-test"
 	looper.Observability = ObservabilityConfig{Enabled: true, Tracer: provider.Tracer("test"), TraceConfig: instrumentation.TraceConfig{HideInputs: true, HideOutputs: true}}
 
 	_, _, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, testPromptInput(PromptInputRoleUser, "hidden input", nil))
@@ -94,7 +94,7 @@ func TestObservabilityEmitsProviderDiagnosticSpanEvents(t *testing.T) {
 			return responseWithMessage("resp-ok", "done"), nil
 		})
 		looper := testLooper(mock)
-		looper.DisplayModel = "openai/gpt-test"
+		looper.DisplayModel = "gpt-test"
 		looper.Observability = ObservabilityConfig{Enabled: true, Tracer: provider.Tracer("test")}
 
 		record, rendered, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, testPromptInput(PromptInputRoleUser, "question", nil))

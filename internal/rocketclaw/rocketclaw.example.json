@@ -80,22 +80,6 @@
     "tts_key": "",
     "tts_base_url": ""
   },
-  "anthropic": {
-    "api_key": "sk-ant-...",
-    "api_base_url": ""
-  },
-  "openai_compatible": {
-    "local": {
-      "api_key": "local-provider-key",
-      "base_url": "http://127.0.0.1:11434/v1",
-      "mode": "chat_completions"
-    },
-    "responses-compatible": {
-      "api_key": "compatible-provider-key",
-      "base_url": "https://compatible.example/v1",
-      "mode": "responses"
-    }
-  },
   "instrumentation": {
     "enabled": false,
     "collector_endpoint": "http://localhost:6006",

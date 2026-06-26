@@ -17,24 +17,22 @@ import (
 
 // Config is the top-level rocketclaw runtime configuration.
 type Config struct {
-	Workspace                                string                            `json:"workspace"`
-	WorkDir                                  string                            `json:"-"`
-	Overlays                                 []string                          `json:"overlays,omitempty"`
-	Environment                              []string                          `json:"environment,omitempty"`
-	EmergencySafeWords                       []string                          `json:"emergency_safe_words,omitempty"`
-	ThreadAgents                             ThreadAgents                      `json:"thread_agents,omitempty"`
-	MinimumWaitAfterHumanInteraction         string                            `json:"minimum_wait_after_human_interaction"`
-	MinimumWaitAfterHumanInteractionDuration time.Duration                     `json:"-"`
-	Logging                                  LoggingConfig                     `json:"logging"`
-	DiscordVoice                             DiscordVoiceConfig                `json:"discord_voice"`
-	DiscordText                              DiscordTextConfig                 `json:"discord_text"`
-	MCPExternal                              MCPExternalConfig                 `json:"mcp_external"`
-	WebUI                                    WebUIConfig                       `json:"web_ui"`
-	Slack                                    SlackConfig                       `json:"slack"`
-	OpenAI                                   OpenAIConfig                      `json:"openai"`
-	Anthropic                                AnthropicConfig                   `json:"anthropic"`
-	OpenAICompatible                         map[string]OpenAICompatibleConfig `json:"openai_compatible,omitempty"`
-	Instrumentation                          InstrumentationConfig             `json:"instrumentation"`
+	Workspace                                string                `json:"workspace"`
+	WorkDir                                  string                `json:"-"`
+	Overlays                                 []string              `json:"overlays,omitempty"`
+	Environment                              []string              `json:"environment,omitempty"`
+	EmergencySafeWords                       []string              `json:"emergency_safe_words,omitempty"`
+	ThreadAgents                             ThreadAgents          `json:"thread_agents,omitempty"`
+	MinimumWaitAfterHumanInteraction         string                `json:"minimum_wait_after_human_interaction"`
+	MinimumWaitAfterHumanInteractionDuration time.Duration         `json:"-"`
+	Logging                                  LoggingConfig         `json:"logging"`
+	DiscordVoice                             DiscordVoiceConfig    `json:"discord_voice"`
+	DiscordText                              DiscordTextConfig     `json:"discord_text"`
+	MCPExternal                              MCPExternalConfig     `json:"mcp_external"`
+	WebUI                                    WebUIConfig           `json:"web_ui"`
+	Slack                                    SlackConfig           `json:"slack"`
+	OpenAI                                   OpenAIConfig          `json:"openai"`
+	Instrumentation                          InstrumentationConfig `json:"instrumentation"`
 }
 
 // DefaultWorkDir is the generated runtime directory for rocketclaw configs.
@@ -138,19 +136,6 @@ type OpenAIConfig struct {
 	TTSInstructions string `json:"tts_instructions"`
 	TTSAPIKey       string `json:"tts_key"`
 	TTSAPIBaseURL   string `json:"tts_base_url"`
-}
-
-// AnthropicConfig configures Anthropic RocketCode clients.
-type AnthropicConfig struct {
-	APIKey     string `json:"api_key"`
-	APIBaseURL string `json:"api_base_url"`
-}
-
-// OpenAICompatibleConfig configures one OpenAI-compatible RocketCode provider.
-type OpenAICompatibleConfig struct {
-	APIKey  string `json:"api_key"`
-	BaseURL string `json:"base_url"`
-	Mode    string `json:"mode"`
 }
 
 // InstrumentationConfig configures OpenTelemetry/OpenInference tracing.
@@ -301,20 +286,16 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	switch strings.TrimSpace(c.OpenAI.RocketCodeAuth) {
-	case "", "api_key":
-		c.OpenAI.RocketCodeAuth = "api_key"
-	case "chatgpt":
-	default:
-		return errors.New("openai.rocketcode_auth must be api_key or chatgpt")
-	}
-
-	if err := c.validateOpenAICompatible(); err != nil {
+	if err := c.normalizeRocketCodeAuth(); err != nil {
 		return err
 	}
 
 	if (c.DiscordVoice.Enabled || c.WebUI.Enabled) && (strings.TrimSpace(c.OpenAI.STTAPIKey) == "" || strings.TrimSpace(c.OpenAI.TTSAPIKey) == "") {
 		return errors.New("openai stt/tts credentials are required when OpenAI-backed audio is enabled")
+	}
+
+	if c.OpenAI.RocketCodeAuth == "api_key" && strings.TrimSpace(c.OpenAI.APIKey) == "" {
+		return errors.New("openai.api_key is required when openai.rocketcode_auth is api_key")
 	}
 
 	c.Instrumentation.CollectorEndpoint = strings.TrimSpace(c.Instrumentation.CollectorEndpoint)
@@ -354,6 +335,18 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+func (c *Config) normalizeRocketCodeAuth() error {
+	switch strings.TrimSpace(c.OpenAI.RocketCodeAuth) {
+	case "", "api_key":
+		c.OpenAI.RocketCodeAuth = "api_key"
+	case "chatgpt":
+	default:
+		return errors.New("openai.rocketcode_auth must be api_key or chatgpt")
+	}
+
+	return nil
+}
+
 func (c *Config) validateDiscordVoice() error {
 	if !c.DiscordVoice.Enabled {
 		return nil
@@ -364,46 +357,6 @@ func (c *Config) validateDiscordVoice() error {
 			return errors.New(field.message)
 		}
 	}
-
-	return nil
-}
-
-func (c *Config) validateOpenAICompatible() error {
-	if len(c.OpenAICompatible) == 0 {
-		return nil
-	}
-
-	normalized := make(map[string]OpenAICompatibleConfig, len(c.OpenAICompatible))
-	for name, provider := range c.OpenAICompatible {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			return errors.New("openai_compatible provider name is required")
-		}
-
-		provider.APIKey = strings.TrimSpace(provider.APIKey)
-		provider.BaseURL = strings.TrimSpace(provider.BaseURL)
-
-		provider.Mode = strings.TrimSpace(provider.Mode)
-		if provider.APIKey == "" {
-			return fmt.Errorf("openai_compatible.%s.api_key is required", name)
-		}
-
-		if provider.BaseURL == "" {
-			return fmt.Errorf("openai_compatible.%s.base_url is required", name)
-		}
-
-		switch provider.Mode {
-		case "responses", "chat_completions":
-		case "":
-			provider.Mode = "responses"
-		default:
-			return fmt.Errorf("openai_compatible.%s.mode must be responses or chat_completions", name)
-		}
-
-		normalized[name] = provider
-	}
-
-	c.OpenAICompatible = normalized
 
 	return nil
 }

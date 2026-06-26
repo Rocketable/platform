@@ -82,14 +82,6 @@ Set a boolean or number safely:
 tmp=$(mktemp "${TMPDIR:-/tmp}/rocketclaw-json-XXXXXX") && jq --argjson v true '.some_flag = $v' "rocketclaw.json" > "$tmp" && jq empty "$tmp" >/dev/null && mv "$tmp" "rocketclaw.json"
 ```
 
-Configure an OpenAI-compatible provider safely:
-
-```bash
-tmp=$(mktemp "${TMPDIR:-/tmp}/rocketclaw-json-XXXXXX") && jq --arg provider "local" --arg key "local-provider-key" --arg base_url "http://127.0.0.1:11434/v1" --arg mode "chat_completions" '.openai_compatible[$provider] = {api_key: $key, base_url: $base_url, mode: $mode}' "rocketclaw.json" > "$tmp" && jq empty "$tmp" >/dev/null && mv "$tmp" "rocketclaw.json"
-```
-
-Agents select compatible providers with `model: openai-compatible/<provider>/<model>`. Valid compatible modes are `responses` and `chat_completions`. OpenAI-compatible RocketCode requests use the selected `openai_compatible` provider entry; they do not use ChatGPT OAuth or first-party OpenAI config. First-party OpenAI credentials are still required for OpenAI-backed audio features.
-
 Delete a key:
 
 ```bash

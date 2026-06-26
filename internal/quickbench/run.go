@@ -248,11 +248,11 @@ func helpText(cmd string) string {
 
 Usage:
 
-  %[1]s [--json] [--runs N] [--timeout 2m] --model provider/model[?option=value] FULL_PATH_TO_DIR
+  %[1]s [--json] [--runs N] [--timeout 2m] --model model[?option=value] FULL_PATH_TO_DIR
 
 Flags:
 
-  --model    Model selector. Repeat for multiple models. Example: openai/gpt-5.5?reasoningEffort=high&verbosity=low
+  --model    Model selector. Repeat for multiple models. Example: gpt-5.5?reasoningEffort=high&verbosity=low
   --json     Write JSON report instead of human-readable output.
   --runs     Override YAML runs with a positive integer.
   --timeout  Override YAML timeout with a positive Go duration.

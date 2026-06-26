@@ -25,7 +25,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	}
 
 	agent := embeddedGuardianAgent()
-	agent.Model = f.modelRef.display()
+	agent.Model = f.defaultModelRef.display()
 
 	if !request.ReviewerEmbedded {
 		customAgent, ok := f.agents.Items[request.Reviewer]
@@ -39,12 +39,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	agent.Permission = f.shellOutput.effectivePermissions(agent.Permission)
 	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
 
-	modelRef, err := parseAgentModelRef(agent.Model)
-	if err != nil {
-		return permissionReviewFailure("automatic permission reviewer model failed: " + err.Error())
-	}
-
-	client, err := f.responsesAPIForModel(modelRef)
+	modelRef, err := resolveAgentModelRef(agent.Model, f.defaultModelRef)
 	if err != nil {
 		return permissionReviewFailure("automatic permission reviewer model failed: " + err.Error())
 	}
@@ -52,16 +47,11 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	childFactory := *f
 	childFactory.inPermissionReview = true
 	childFactory.modelRef = modelRef
-	childFactory.client = client.client
-	childFactory.target = client.target
 
 	child := &looper{
 		agent:                  agent,
-		provider:               modelRef.provider,
 		modelRef:               modelRef,
-		target:                 client.target,
-		Client:                 client.client,
-		AnthropicClient:        f.anthropicClient,
+		Client:                 f.client,
 		SystemPrompt:           composeSystemPromptWithSkills(agent.Prompt, f.skills, &agent),
 		Model:                  modelRef.apiModel,
 		DisplayModel:           modelRef.display(),
@@ -210,13 +200,22 @@ func permissionReviewTranscriptEntries(items []responses.ResponseInputItemUnionP
 		case item.OfMessage != nil:
 			role := string(item.OfMessage.Role)
 
-			text, _, err := chatCompletionContent(item.OfMessage.Content)
+			var text string
+			if item.OfMessage.Content.OfString.Valid() {
+				text = item.OfMessage.Content.OfString.Value
+			} else {
+				parts := make([]string, 0, len(item.OfMessage.Content.OfInputItemContentList))
+				for j := range item.OfMessage.Content.OfInputItemContentList {
+					part := item.OfMessage.Content.OfInputItemContentList[j]
+					if part.OfInputText != nil {
+						parts = append(parts, part.OfInputText.Text)
+					}
+				}
+
+				text = strings.Join(parts, "\n")
+			}
+
 			switch {
-			case err != nil:
-				entries = append(entries, permissionReviewTranscriptEntry{
-					role: role,
-					text: "<message content omitted from permission review transcript>",
-				})
 			case strings.TrimSpace(text) != "":
 				entries = append(entries, permissionReviewTranscriptEntry{role: role, text: text})
 			case len(item.OfMessage.Content.OfInputItemContentList) > 0:
@@ -235,10 +234,22 @@ func permissionReviewTranscriptEntries(items []responses.ResponseInputItemUnionP
 				})
 			}
 		case item.OfFunctionCallOutput != nil:
-			text, _, err := chatCompletionToolResult(item.OfFunctionCallOutput)
-			if err != nil {
-				text = "<tool result content omitted from permission review transcript>"
-			} else if strings.TrimSpace(text) == "" {
+			var text string
+			if item.OfFunctionCallOutput.Output.OfString.Valid() {
+				text = item.OfFunctionCallOutput.Output.OfString.Value
+			} else {
+				parts := make([]string, 0, len(item.OfFunctionCallOutput.Output.OfResponseFunctionCallOutputItemArray))
+				for j := range item.OfFunctionCallOutput.Output.OfResponseFunctionCallOutputItemArray {
+					part := item.OfFunctionCallOutput.Output.OfResponseFunctionCallOutputItemArray[j]
+					if part.OfInputText != nil {
+						parts = append(parts, part.OfInputText.Text)
+					}
+				}
+
+				text = strings.Join(parts, "\n")
+			}
+
+			if strings.TrimSpace(text) == "" {
 				if len(item.OfFunctionCallOutput.Output.OfResponseFunctionCallOutputItemArray) == 0 {
 					continue
 				}

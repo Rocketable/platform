@@ -9,8 +9,6 @@ import (
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketcode"
-	anthropic "github.com/anthropics/anthropic-sdk-go"
-	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 )
@@ -80,26 +78,6 @@ func loadProviderConfig(path string, models []modelSelector) (rocketcode.Provide
 
 		client := openai.NewClient(options...)
 		providers.OpenAI = &client
-	}
-
-	if selected["anthropic"] {
-		provider, ok := cfg.Providers["anthropic"]
-		if !ok {
-			return rocketcode.Providers{}, errors.New("quickbench.json missing selected provider anthropic")
-		}
-
-		apiKey := strings.TrimSpace(provider.APIKey)
-		if apiKey == "" {
-			return rocketcode.Providers{}, errors.New("quickbench.json provider anthropic requires apiKey")
-		}
-
-		options := []anthropicoption.RequestOption{anthropicoption.WithAPIKey(apiKey)}
-		if baseURL := strings.TrimSpace(provider.BaseURL); baseURL != "" {
-			options = append(options, anthropicoption.WithBaseURL(baseURL))
-		}
-
-		client := anthropic.NewClient(options...)
-		providers.Anthropic = &client
 	}
 
 	return providers, nil

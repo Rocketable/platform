@@ -1,27 +1,20 @@
 package rocketcode
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
 	openai "github.com/openai/openai-go/v3"
 )
 
-const modelProviderOpenAI, modelProviderAnthropic, modelProviderOpenAICompatible = "openai", "anthropic", "openai-compatible"
-
-type modelRef struct{ provider, compatibleProvider, apiModel string }
+type modelRef struct{ apiModel string }
 
 func defaultModelRef() modelRef {
-	return modelRef{provider: modelProviderOpenAI, apiModel: openai.ChatModelGPT5_4}
+	return modelRef{apiModel: openai.ChatModelGPT5_4}
 }
 
 func (m modelRef) display() string {
-	if m.provider == modelProviderOpenAICompatible {
-		return m.provider + "/" + m.compatibleProvider + "/" + m.apiModel
-	}
-
-	return m.provider + "/" + m.apiModel
+	return m.apiModel
 }
 
 func parseModelRef(model string) (modelRef, error) {
@@ -30,37 +23,16 @@ func parseModelRef(model string) (modelRef, error) {
 		return defaultModelRef(), nil
 	}
 
-	provider, rest, ok := strings.Cut(model, "/")
-	if !ok {
-		return modelRef{}, fmt.Errorf("invalid model %q: expected provider/model", model)
+	if strings.Contains(model, "/") {
+		return modelRef{}, fmt.Errorf("invalid model %q: expected unprefixed OpenAI model ID", model)
 	}
 
-	if provider == "" || rest == "" {
-		return modelRef{}, fmt.Errorf("invalid model %q: expected provider/model", model)
-	}
-
-	switch provider {
-	case modelProviderOpenAI, modelProviderAnthropic:
-		if strings.Contains(rest, "/") {
-			return modelRef{}, fmt.Errorf("invalid model %q: expected provider/model", model)
-		}
-
-		return modelRef{provider: provider, apiModel: rest}, nil
-	case modelProviderOpenAICompatible:
-		compatibleProvider, apiModel, ok := strings.Cut(rest, "/")
-		if !ok || compatibleProvider == "" || apiModel == "" || strings.Contains(apiModel, "/") {
-			return modelRef{}, fmt.Errorf("invalid model %q: expected openai-compatible/provider/model", model)
-		}
-
-		return modelRef{provider: provider, compatibleProvider: compatibleProvider, apiModel: apiModel}, nil
-	default:
-		return modelRef{}, fmt.Errorf("unsupported model provider %q", provider)
-	}
+	return modelRef{apiModel: model}, nil
 }
 
-func parseAgentModelRef(model string) (modelRef, error) {
+func resolveAgentModelRef(model string, defaultModel modelRef) (modelRef, error) {
 	if strings.TrimSpace(model) == "" {
-		return modelRef{}, errors.New("model is required")
+		return defaultModel, nil
 	}
 
 	return parseModelRef(model)

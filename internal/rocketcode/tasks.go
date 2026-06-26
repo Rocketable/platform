@@ -200,27 +200,17 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		childFactory.recursionRemaining = &remaining
 	}
 
-	modelRef, err := parseAgentModelRef(agent.Model)
-	if err != nil {
-		return "", err
-	}
-
-	client, err := f.responsesAPIForModel(modelRef)
+	modelRef, err := resolveAgentModelRef(agent.Model, f.defaultModelRef)
 	if err != nil {
 		return "", err
 	}
 
 	childFactory.modelRef = modelRef
-	childFactory.client = client.client
-	childFactory.target = client.target
 
 	child := &looper{
 		agent:                  agent,
-		provider:               modelRef.provider,
 		modelRef:               modelRef,
-		target:                 client.target,
-		Client:                 client.client,
-		AnthropicClient:        f.anthropicClient,
+		Client:                 f.client,
 		SystemPrompt:           systemPrompt,
 		Model:                  modelRef.apiModel,
 		DisplayModel:           modelRef.display(),
@@ -350,12 +340,7 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, messag
 
 	responseFormat := guardrailResponseFormat()
 
-	modelRef, err := parseAgentModelRef(agent.Model)
-	if err != nil {
-		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail model failed: " + err.Error()}
-	}
-
-	client, err := f.responsesAPIForModel(modelRef)
+	modelRef, err := resolveAgentModelRef(agent.Model, f.defaultModelRef)
 	if err != nil {
 		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail model failed: " + err.Error()}
 	}
@@ -363,16 +348,11 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, messag
 	childFactory := *f
 	childFactory.inGuardrailRun = true
 	childFactory.modelRef = modelRef
-	childFactory.client = client.client
-	childFactory.target = client.target
 
 	child := &looper{
 		agent:                  agent,
-		provider:               modelRef.provider,
 		modelRef:               modelRef,
-		target:                 client.target,
-		Client:                 client.client,
-		AnthropicClient:        f.anthropicClient,
+		Client:                 f.client,
 		SystemPrompt:           composeSystemPromptWithSkills(agent.Prompt, f.skills, &agent),
 		Model:                  modelRef.apiModel,
 		DisplayModel:           modelRef.display(),

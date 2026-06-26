@@ -3,10 +3,6 @@
     "openai": {
       "apiKey": "{{ env.OPENAI_API_KEY }}",
       "baseURL": ""
-    },
-    "anthropic": {
-      "apiKey": "{{ env.ANTHROPIC_API_KEY }}",
-      "baseURL": ""
     }
   }
 }

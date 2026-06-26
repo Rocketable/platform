@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestReplayInputPreservesCompactionMetadata(t *testing.T) {
-	raw := []json.RawMessage{json.RawMessage(`{"content":"summary","summary":{"text":"summary"},"recent":[{"id":"msg-1"}],"encrypted_content":"encrypted","id":"cmp-1","origin_compatible_provider":"local","origin_mode":"responses","origin_provider":"openai-compatible","type":"compaction"}`)}
+func TestReplayInputPreservesCompactionPayload(t *testing.T) {
+	raw := []json.RawMessage{json.RawMessage(`{"content":"summary","summary":{"text":"summary"},"recent":[{"id":"msg-1"}],"encrypted_content":"encrypted","id":"cmp-1","type":"compaction"}`)}
 
 	params, err := ReplayInputToParams(raw)
 	require.NoError(t, err)

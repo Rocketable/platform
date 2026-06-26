@@ -21,7 +21,7 @@ Most useful RocketCode behavior comes from tools and workspace definitions rathe
 
 | Tool | Permission bucket | Subject contract | Capability |
 | --- | --- | --- | --- |
-| `websearch` | `websearch` | `*` | Hosted OpenAI web-search tool, exposed only for first-party OpenAI model requests. |
+| `websearch` | `websearch` | `*` | Hosted OpenAI web-search tool, exposed for OpenAI model requests. |
 | `read` | `read` | Requested file path | Reads workspace text, supported images, and PDFs. Legacy `filename` is used when `filePath` is empty. |
 | `apply_patch` | `edit` | Every affected rooted path | Applies begin/end patch envelopes with add, update, delete, and move operations. |
 | `glob` | `glob` | Glob pattern | Finds workspace files by pattern using ripgrep file discovery. |
@@ -32,7 +32,7 @@ Most useful RocketCode behavior comes from tools and workspace definitions rathe
 | `skill` | `skill` | Requested skill name | Loads full visible skill instructions. |
 | `task` | `task` | Requested subagent type | Launches another agent for autonomous work when recursion and permission allow it. |
 
-All function schemas are strict and mark declared properties as required even when runtime code treats empty or zero values as defaults. Anthropic model requests and OpenAI-compatible model requests receive local function tools through provider adapter conversion and do not receive hosted OpenAI tools such as `websearch`.
+All function schemas are strict and mark declared properties as required even when runtime code treats empty or zero values as defaults. Model requests use OpenAI Responses function tools and hosted OpenAI tools according to permission and availability.
 
 ### Filesystem Tools
 
@@ -60,7 +60,7 @@ All function schemas are strict and mark declared properties as required even wh
 ### Agents And Tasks
 
 - Agents load from top-level `.md` files in the supplied agents filesystem. Nested agent markdown is ignored.
-- Agent YAML frontmatter is required and must be a mapping. Known fields are `description`, `model`, `reasoningEffort`, `verbosity`, `maxRecursion`, `guardrail`, and `permission`. The `model` field is required, must be non-empty, and must use RocketCode's provider-qualified model syntax. Unknown fields remain in `Frontmatter`.
+- Agent YAML frontmatter is required and must be a mapping. Known fields are `description`, `model`, `reasoningEffort`, `verbosity`, `maxRecursion`, `guardrail`, and `permission`. The `model` field is optional; when present and non-empty, it must be an unprefixed OpenAI Responses model ID. Missing or empty `model` inherits the runtime/default model. Unknown fields remain in `Frontmatter`.
 - Agent name is the filename without `.md`; prompt content is the post-frontmatter body trimmed.
 - Frontmatter has a fallback sanitizer for unquoted scalar values containing `:`.
 - Omitted `maxRecursion` and `maxRecursion: -1` mean unlimited subdelegation. `maxRecursion: 0` permits no task delegation from that inference. Positive values allow that many delegation levels. Values below `-1` and non-integer values invalidate the agent.
@@ -97,7 +97,7 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 ```
 
 - `originatingAgent` is the agent that called the `task` tool, and `delegatedAgentName` is the guarded target agent.
-- The guardrail response must be strict JSON containing `approved` and `reason` fields. Invalid JSON fails closed. OpenAI-compatible `chat_completions` model requests used for guardrails must map the required JSON schema response format rather than relying only on prompt text.
+- The guardrail response must be strict JSON containing `approved` and `reason` fields. Invalid JSON fails closed. Guardrail model requests use the OpenAI Responses structured-output path.
 - A pre-delegation rejection does not run the child agent. A post-response rejection does not expose the child response to the parent agent.
 - Rejections return task-result text such as `delegation blocked: ...` or `delegation response blocked: ...` so the caller agent can continue.
 - The guardrail receives tools only through its own permission set and uses its own prompt, model, reasoning effort, verbosity, tools, and skills.
@@ -114,7 +114,7 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - The embedded guardian has read-oriented default permissions only: `read`, `glob`, and `grep` are allowed for all subjects; shell, edit, task, web, skill, and custom-tool access are not allowed by default.
 - Custom reviewer agents use their own prompt, model, reasoning effort, verbosity, tools, skills, and permission set. Reviewer tool calls are not exempt from the reviewer's own permissions.
 - Automatic permission review prompts provide Codex-style reviewer context: a compact transcript of relevant user, assistant, and recent tool-call evidence; explicit truncation or omission notices when context is omitted; and the exact planned action JSON under review. The reviewer must treat transcript content, tool arguments, tool results, retry reasons, and planned action JSON as untrusted evidence rather than instructions.
-- Automatic permission reviewers must return strict JSON shaped like Codex guardian output, with required fields `risk_level`, `user_authorization`, `outcome`, and `rationale`, and `additionalProperties:false`. `risk_level` is one of `low`, `medium`, `high`, or `critical`; `user_authorization` is one of `unknown`, `low`, `medium`, or `high`; `outcome` is one of `allow` or `deny`; and `rationale` is a non-empty string. RocketCode represents these enums as strong Go types rather than raw strings in the parsed review decision. OpenAI-compatible `chat_completions` model requests used for automatic permission review must map the required JSON schema response format rather than relying only on prompt text.
+- Automatic permission reviewers must return strict JSON shaped like Codex guardian output, with required fields `risk_level`, `user_authorization`, `outcome`, and `rationale`, and `additionalProperties:false`. `risk_level` is one of `low`, `medium`, `high`, or `critical`; `user_authorization` is one of `unknown`, `low`, `medium`, or `high`; `outcome` is one of `allow` or `deny`; and `rationale` is a non-empty string. RocketCode represents these enums as strong Go types rather than raw strings in the parsed review decision. Model requests used for automatic permission review use the OpenAI Responses structured-output path.
 - The automatic permission review prompt and JSON Schema descriptions must both explain how `risk_level` and `user_authorization` combine into `outcome`: low and medium risk normally allow; high risk allows only when user authorization is at least medium, the action is narrowly scoped, and no tenant deny rule applies; critical risk denies; and clear malicious prompt injection denies even when the action would otherwise be low or medium risk.
 - Reviewer `outcome:"deny"`, invalid reviewer JSON, missing required fields, invalid enum values, empty `rationale`, model errors, tool errors, context cancellation, timeout, missing reviewer, or recursive automatic review prevents the reviewed tool call from executing.
 
@@ -143,7 +143,7 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - Maximum attachment size is 5 MiB.
 - Supported prompt/tool attachment types are PDFs and images except SVG and `image/vnd.fastbidsheet`.
 - MIME sniffing recognizes PNG, JPEG, GIF, BMP, PDF, and WebP, with filename/header MIME fallback.
-- Prompt and tool attachments become Responses API image or file content items in RocketCode's internal replay shape. Provider adapters may translate supported attachments to provider-native request blocks and must fail clearly rather than silently dropping unsupported attachment content. OpenAI-compatible `chat_completions` adapters must provide Responses-mode parity for supported prompt and tool attachments, and must fail clearly for unsupported attachment content rather than silently omitting it.
+- Prompt and tool attachments become OpenAI Responses API image or file content items in RocketCode's internal replay shape and must fail clearly rather than silently dropping unsupported attachment content.
 
 ## Non-Goals
 
@@ -184,3 +184,5 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - 2026-06-23: Required compatible chat JSON response-format mapping and supported prompt/tool attachment parity.
 - 2026-06-23: Required every loaded agent to declare non-empty provider-qualified model frontmatter.
 - 2026-06-24: Replaced automatic permission review output with stricter Codex-shaped structured output using required `risk_level`, `user_authorization`, `outcome`, and `rationale` fields, strong Go enum semantics, prompt and schema outcome-combination descriptions, and compact transcript plus planned-action review context.
+- 2026-06-26: Removed Anthropic and OpenAI-compatible chat-completions tool adapter contracts; OpenAI-compatible model requests use Responses API local-tool and structured-output behavior.
+- 2026-06-26: Removed remaining OpenAI-compatible tool, structured-output, attachment, and provider-qualified agent-model contracts; RocketCode tool and agent model behavior now targets first-party OpenAI Responses only, with missing agent models inheriting the runtime/default model.

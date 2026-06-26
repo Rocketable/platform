@@ -169,16 +169,11 @@ If the requested agent does not exist, create it directly in `agents/`.
 
 Create or update the agent as a markdown agent file with YAML frontmatter.
 
-The resulting frontmatter must include at least:
-- `description`
-- `model`
+The resulting frontmatter must include at least `description`.
 
-The `model` value must be provider-qualified. Valid forms are:
-- `openai/<model>`
-- `anthropic/<model>`
-- `openai-compatible/<provider>/<model>`
+The optional `model` value must be an unprefixed OpenAI model ID, such as `gpt-5.4`. Missing or empty `model` inherits the runtime/default model.
 
-When updating an existing agent, preserve the existing `model` unless the human explicitly asked to change it. Do not create blank or unprefixed model values.
+When updating an existing agent, preserve the existing `model` unless the human explicitly asked to change it.
 
 The optional `maxRecursion` frontmatter field controls task subdelegation depth for inferences started with that agent:
 - omitted or `-1` means unlimited subdelegation

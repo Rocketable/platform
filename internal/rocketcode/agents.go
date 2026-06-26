@@ -148,8 +148,10 @@ func loadAgent(fsys fs.FS, filePath string) (Agent, error) {
 	}
 
 	model := frontmatterString(frontmatter, "model")
-	if _, err := parseAgentModelRef(model); err != nil {
-		return Agent{}, fmt.Errorf("%s: model: %w", filePath, err)
+	if strings.TrimSpace(model) != "" {
+		if _, err := parseModelRef(model); err != nil {
+			return Agent{}, fmt.Errorf("%s: model: %w", filePath, err)
+		}
 	}
 
 	return Agent{

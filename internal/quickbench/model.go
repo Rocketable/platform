@@ -20,17 +20,12 @@ func parseModelSelector(input string) (modelSelector, error) {
 		return modelSelector{}, fmt.Errorf("empty selector")
 	}
 
-	path, rawQuery, _ := strings.Cut(input, "?")
-	provider, model, ok := strings.Cut(path, "/")
-	if !ok || provider == "" || model == "" {
-		return modelSelector{}, fmt.Errorf("invalid selector %q: expected provider/model", input)
+	model, rawQuery, _ := strings.Cut(input, "?")
+	if strings.TrimSpace(model) == "" || strings.Contains(model, "/") {
+		return modelSelector{}, fmt.Errorf("invalid selector %q: expected unprefixed OpenAI model ID", input)
 	}
 
-	if provider != "openai" && provider != "anthropic" {
-		return modelSelector{}, fmt.Errorf("unsupported provider %q", provider)
-	}
-
-	selector := modelSelector{Raw: input, Provider: provider, Model: model}
+	selector := modelSelector{Raw: input, Provider: "openai", Model: model}
 	query, err := url.ParseQuery(rawQuery)
 	if err != nil {
 		return modelSelector{}, fmt.Errorf("parse query: %w", err)
@@ -63,5 +58,5 @@ func parseModelSelector(input string) (modelSelector, error) {
 }
 
 func (m modelSelector) rocketCodeModel() string {
-	return m.Provider + "/" + m.Model
+	return m.Model
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -126,9 +125,7 @@ func contextLengthExceededError() error {
 func testLooper(client responsesAPI) *looper {
 	var l looper
 
-	l.provider = modelProviderOpenAI
 	l.modelRef = defaultModelRef()
-	l.target = providerTarget{modelRef: l.modelRef, surface: providerSurfaceResponses}
 	l.Client = client
 	l.Model = openai.ChatModelGPT5
 	l.PermissionReviewer = inertPermissionReviewer{}
@@ -139,9 +136,7 @@ func testLooper(client responsesAPI) *looper {
 func emptyTestLooper() *looper {
 	var l looper
 
-	l.provider = modelProviderOpenAI
 	l.modelRef = defaultModelRef()
-	l.target = providerTarget{modelRef: l.modelRef, surface: providerSurfaceResponses}
 	l.PermissionReviewer = inertPermissionReviewer{}
 
 	return &l
@@ -539,116 +534,12 @@ func TestLooperBuildParamsUsesConfiguredCompactThreshold(t *testing.T) {
 
 func TestLooperBuildParamsIncludesHostedWebSearchTool(t *testing.T) {
 	looper := emptyTestLooper()
-	looper.provider = modelProviderOpenAI
 	looper.Tools = map[string]looperTool{"websearch": webSearchTool()}
 
 	params := looper.buildParams(nil)
 
 	require.Len(t, params.Tools, 1)
 	require.Contains(t, marshalJSON(t, params.Tools), `"type":"web_search"`)
-}
-
-func TestLooperBuildParamsOmitsHostedToolsForNonOpenAIProviders(t *testing.T) {
-	for _, provider := range []string{modelProviderAnthropic, modelProviderOpenAICompatible} {
-		t.Run(provider, func(t *testing.T) {
-			looper := emptyTestLooper()
-			looper.provider = provider
-			looper.Tools = map[string]looperTool{"read": testLooperTool("read"), "websearch": webSearchTool()}
-
-			params := looper.buildParams(nil)
-
-			require.Len(t, params.Tools, 1)
-			body := marshalJSON(t, params.Tools)
-			require.Contains(t, body, `"name":"read"`)
-			require.NotContains(t, body, `"type":"web_search"`)
-		})
-	}
-}
-
-func TestProjectReplayForTargetStripsCompactionReplayMetadataFromNativePayload(t *testing.T) {
-	for _, tt := range []struct {
-		name               string
-		originProvider     string
-		compatibleProvider string
-		target             ReplayProjectionTarget
-	}{
-		{
-			name:           "openai",
-			originProvider: modelProviderOpenAI,
-			target:         ReplayProjectionTarget{provider: modelProviderOpenAI, mode: string(OpenAICompatibleModeResponses)},
-		},
-		{
-			name:               "openai-compatible",
-			originProvider:     modelProviderOpenAICompatible,
-			compatibleProvider: "local",
-			target: ReplayProjectionTarget{
-				provider:           modelProviderOpenAICompatible,
-				compatibleProvider: "local",
-				mode:               string(OpenAICompatibleModeResponses),
-			},
-		},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			raw := []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"content":"private-content-value","encrypted_content":"encrypted","id":"cmp","origin_compatible_provider":%q,"origin_mode":"responses","origin_provider":%q,"recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}`, tt.compatibleProvider, tt.originProvider))}
-			input, err := ReplayInputToParams(raw)
-			require.NoError(t, err)
-
-			got, err := ProjectReplayForTarget(input, tt.target)
-			require.NoError(t, err)
-
-			require.Len(t, got, 1)
-			serialized := marshalJSON(t, got[0])
-			require.JSONEq(t, `{"encrypted_content":"encrypted","id":"cmp","type":"compaction"}`, serialized)
-			require.NotContains(t, serialized, "private-content-value")
-			require.NotContains(t, serialized, "private-summary-value")
-			require.NotContains(t, serialized, "private-recent-id")
-		})
-	}
-}
-
-func TestProjectReplayForTargetLowersCompatibleProviderMismatch(t *testing.T) {
-	input := []responses.ResponseInputItemUnionParam{compactionReplayInput("cmp-a", "encrypted-a", "provider a summary", modelProviderOpenAICompatible, "a", string(OpenAICompatibleModeResponses))}
-
-	got, err := ProjectReplayForTarget(input, ReplayProjectionTarget{provider: modelProviderOpenAICompatible, compatibleProvider: "b", mode: string(OpenAICompatibleModeResponses)})
-	require.NoError(t, err)
-
-	require.Len(t, got, 1)
-	require.Nil(t, got[0].OfCompaction)
-	require.NotNil(t, got[0].OfMessage)
-	serialized := marshalJSON(t, got)
-	require.Contains(t, serialized, "provider a summary")
-	require.Contains(t, serialized, "context_checkpoint")
-	require.NotContains(t, serialized, "encrypted-a")
-}
-
-func TestProjectReplayForTargetLowersOriginlessCompactionWithSummary(t *testing.T) {
-	input, err := ReplayInputToParams([]json.RawMessage{json.RawMessage(`{"encrypted_content":"encrypted-originless","id":"cmp-originless","summary":{"text":"summary-only checkpoint"},"type":"compaction"}`)})
-	require.NoError(t, err)
-
-	got, err := ProjectReplayForTarget(input, ReplayProjectionTarget{provider: modelProviderOpenAICompatible, compatibleProvider: "local", mode: string(OpenAICompatibleModeResponses)})
-	require.NoError(t, err)
-
-	require.Len(t, got, 1)
-	require.Nil(t, got[0].OfCompaction)
-	serialized := marshalJSON(t, got)
-	require.Contains(t, serialized, "summary-only checkpoint")
-	require.Contains(t, serialized, "context_checkpoint")
-	require.NotContains(t, serialized, "encrypted-originless")
-	require.NotContains(t, serialized, "origin_provider")
-	require.NotContains(t, serialized, "summary\":")
-}
-
-func TestProjectReplayForTargetLowersEncryptedOnlyOpenAICompaction(t *testing.T) {
-	input := []responses.ResponseInputItemUnionParam{compactionReplayInput("cmp-openai", "encrypted-openai", "", modelProviderOpenAI, "", string(OpenAICompatibleModeResponses))}
-
-	got, err := ProjectReplayForTarget(input, ReplayProjectionTarget{provider: modelProviderOpenAICompatible, compatibleProvider: "local", mode: string(OpenAICompatibleModeResponses)})
-	require.NoError(t, err)
-
-	require.Len(t, got, 1)
-	require.Nil(t, got[0].OfCompaction)
-	serialized := marshalJSON(t, got)
-	require.Contains(t, serialized, "cannot be rehydrated")
-	require.NotContains(t, serialized, "encrypted-openai")
 }
 
 func TestLooperBuildParamsIncludesConfiguredVerbosity(t *testing.T) {
@@ -687,7 +578,7 @@ func TestLooperPersistsAndReplaysCompactionItems(t *testing.T) {
 	require.Len(t, turns, 1)
 	require.Len(t, turns[0].ReplayInput, 3)
 	require.Len(t, history, 3)
-	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","origin_mode":"responses","origin_provider":"openai","type":"compaction"}`, marshalJSON(t, history[1]))
+	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, history[1]))
 }
 
 func TestLooperContinuesAfterCompactionOnlyResponse(t *testing.T) {
@@ -720,12 +611,12 @@ func TestLooperContinuesAfterCompactionOnlyResponse(t *testing.T) {
 	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, mock.calls[1].Input.OfInputItemList[0]))
 	require.Len(t, saved, 1)
 	require.Len(t, saved[0].ReplayInput, 3)
-	require.JSONEq(t, `{"content":"summary of prior context","encrypted_content":"encrypted-compact","id":"resp-compact-compaction","origin_mode":"responses","origin_provider":"openai","type":"compaction"}`, string(saved[0].ReplayInput[1]))
+	require.JSONEq(t, `{"content":"summary of prior context","encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, string(saved[0].ReplayInput[1]))
 }
 
 func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
-		compactionReplayInput("cmp-prior", "sealed-prior", "private-content-value", modelProviderOpenAI, "", string(OpenAICompatibleModeResponses)),
+		compactionReplayInput("cmp-prior", "sealed-prior", "private-content-value"),
 		testInputMessage(responses.EasyInputMessageRole("user"), "old question", ""),
 		testInputMessage(responses.EasyInputMessageRole("assistant"), "old answer", ""),
 	})
@@ -763,16 +654,13 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 	compactInput := marshalJSON(t, mock.compactCalls[0].Input.OfResponseInputItemArray)
 	require.Contains(t, compactInput, "sealed-prior")
 	require.NotContains(t, compactInput, "private-content-value")
-	require.NotContains(t, compactInput, "origin_provider")
 	require.NotContains(t, compactInput, "new question")
 	require.Len(t, mock.calls, 2)
 	retryInput := marshalJSON(t, mock.calls[1].Input.OfInputItemList)
 	require.Contains(t, retryInput, `"type":"compaction"`)
-	require.NotContains(t, retryInput, "origin_provider")
 	require.Contains(t, retryInput, "new question")
 	require.Len(t, saved, 1)
 	require.Contains(t, string(saved[0].ReplayInput[0]), `"type":"compaction"`)
-	require.Contains(t, string(saved[0].ReplayInput[0]), `"origin_provider":"openai"`)
 }
 
 func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {
@@ -868,112 +756,6 @@ func TestLooperDoesNotCompactOtherProviderErrors(t *testing.T) {
 
 	require.Error(t, err)
 	require.Empty(t, mock.compactCalls)
-}
-
-func TestLooperAutoCompactsCompatibleChatCompletionAboveThreshold(t *testing.T) {
-	calls := 0
-	compactCalls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Errorf("read request body: %v", err)
-
-			return
-		}
-
-		calls++
-
-		w.Header().Set("Content-Type", "application/json")
-
-		if calls == 2 {
-			compactCalls++
-
-			_, err = io.WriteString(w, `{"id":"chatcmpl-compact","object":"chat.completion","created":1,"model":"gpt-oss","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"summary of prior context"}}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`)
-			if err != nil {
-				t.Errorf("write compact response body: %v", err)
-			}
-
-			return
-		}
-
-		_, err = io.WriteString(w, `{"id":"chatcmpl-final","object":"chat.completion","created":1,"model":"gpt-oss","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"answer"}}],"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}`)
-		if err != nil {
-			t.Errorf("write final response body: %v", err)
-		}
-	}))
-	t.Cleanup(server.Close)
-
-	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
-	looper := testCompatibleLoop(t, &client, OpenAICompatibleModeChatCompletions)
-	looper.CompactThreshold = 10
-	output := make(chan ChatResponse, 10)
-
-	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "question", output)
-
-	close(input)
-
-	var saved []SessionEntry
-
-	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-		saved = append(saved, entry)
-
-		return nil
-	}, make(chan os.Signal, 1))
-
-	require.NoError(t, err)
-	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
-	require.Equal(t, 1, compactCalls)
-	require.Len(t, saved, 1)
-
-	items, err := ReplayInputToParams(saved[0].ReplayInput)
-	require.NoError(t, err)
-	require.Len(t, items, 3)
-	require.JSONEq(t, `{"content":"summary of prior context","encrypted_content":"","id":"chatcmpl-compact-compaction","origin_compatible_provider":"local","origin_mode":"chat_completions","origin_provider":"openai-compatible","type":"compaction"}`, marshalJSON(t, items[1]))
-}
-
-func TestLooperSkipsCompatibleChatAutoCompactionWithUnansweredToolCall(t *testing.T) {
-	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Errorf("read request body: %v", err)
-
-			return
-		}
-
-		calls++
-
-		w.Header().Set("Content-Type", "application/json")
-
-		_, err = io.WriteString(w, `{"id":"chatcmpl-final","object":"chat.completion","created":1,"model":"gpt-oss","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"answer"}}],"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}`)
-		if err != nil {
-			t.Errorf("write final response body: %v", err)
-		}
-	}))
-	t.Cleanup(server.Close)
-
-	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
-		testInputMessage(responses.EasyInputMessageRole("user"), "old question", ""),
-		functionCallReplayInput("tool-1", "call-1", "lookup", `{"q":"x"}`),
-	})
-	require.NoError(t, err)
-
-	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
-	looper := testCompatibleLoop(t, &client, OpenAICompatibleModeChatCompletions)
-	looper.CompactThreshold = 10
-	output := make(chan ChatResponse, 10)
-
-	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "new question", output)
-
-	close(input)
-
-	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
-
-	require.NoError(t, err)
-	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
-	require.Equal(t, 1, calls)
 }
 
 func TestLooperPersistsAndReplaysWebSearchCalls(t *testing.T) {
@@ -1554,16 +1336,17 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 }
 
 func TestPermissionReviewFailsClosedOnInvalidReviewerOutput(t *testing.T) {
-	modelRef, err := parseModelRef("openai/" + openai.ChatModelGPT5)
+	modelRef, err := parseModelRef(openai.ChatModelGPT5)
 	require.NoError(t, err)
 
 	factory := &toolFactory{
-		client:      mockResponses(responseWithMessage("review", "not json")),
-		modelRef:    modelRef,
-		agents:      Agents{Items: map[string]Agent{}},
-		skills:      Skills{Items: map[string]Skill{}},
-		baseTools:   map[string]looperTool{},
-		shellOutput: shellOutputConfig{},
+		client:          mockResponses(responseWithMessage("review", "not json")),
+		defaultModelRef: modelRef,
+		modelRef:        modelRef,
+		agents:          Agents{Items: map[string]Agent{}},
+		skills:          Skills{Items: map[string]Skill{}},
+		baseTools:       map[string]looperTool{},
+		shellOutput:     shellOutputConfig{},
 	}
 
 	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true})

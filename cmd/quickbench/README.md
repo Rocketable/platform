@@ -20,10 +20,6 @@ The example file includes every supported provider shape:
     "openai": {
       "apiKey": "{{ env.OPENAI_API_KEY }}",
       "baseURL": ""
-    },
-    "anthropic": {
-      "apiKey": "{{ env.ANTHROPIC_API_KEY }}",
-      "baseURL": ""
     }
   }
 }
@@ -37,29 +33,7 @@ Run the included example benchmark with OpenAI:
 
 ```sh
 export OPENAI_API_KEY=sk-...
-go run ./cmd/quickbench --model 'openai/gpt-5.5?reasoningEffort=high&verbosity=low' cmd/quickbench/examples
-```
-
-## Anthropic
-
-Run the included example benchmark with Anthropic:
-
-```sh
-export ANTHROPIC_API_KEY=sk-ant-...
-go run ./cmd/quickbench --model 'anthropic/claude-sonnet-4-20250514' cmd/quickbench/examples
-```
-
-## Compare Providers
-
-Compare both providers in one run:
-
-```sh
-export OPENAI_API_KEY=sk-...
-export ANTHROPIC_API_KEY=sk-ant-...
-go run ./cmd/quickbench \
-  --model 'openai/gpt-5.5?reasoningEffort=high&verbosity=low' \
-  --model 'anthropic/claude-sonnet-4-20250514' \
-  cmd/quickbench/examples
+go run ./cmd/quickbench --model 'gpt-5.5?reasoningEffort=high&verbosity=low' cmd/quickbench/examples
 ```
 
 ## JSON Output
@@ -67,7 +41,7 @@ go run ./cmd/quickbench \
 Use `--json` for machine-readable output:
 
 ```sh
-go run ./cmd/quickbench --json --model 'openai/gpt-5.5' cmd/quickbench/examples
+go run ./cmd/quickbench --json --model 'gpt-5.5' cmd/quickbench/examples
 ```
 
 ## Benchmark Files

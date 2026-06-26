@@ -473,7 +473,7 @@ func TestThreadBridgeManagerDisablesStartNewThreadForLegacyCronThreadReply(t *te
 func TestThreadBridgeManagerStartNewThreadSeedsBeforeFirstPrompt(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, config.DefaultWorkDir, "skills"), 0o755))
-	writeAppTestAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: openai/gpt-5.5\n---\nPrompt\n")
+	writeAppTestAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: gpt-5.5\n---\nPrompt\n")
 
 	store := newTestSessionService(t, workspace)
 	bridge := new(fakeDirectBridge)

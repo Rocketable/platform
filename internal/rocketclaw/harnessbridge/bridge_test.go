@@ -38,15 +38,6 @@ func (f bridgeRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error
 	return f(req)
 }
 
-func mustReplayProjectionTarget(t *testing.T, provider, compatibleProvider, mode string) rocketcode.ReplayProjectionTarget {
-	t.Helper()
-
-	target, err := rocketcode.NewReplayProjectionTarget(provider, compatibleProvider, mode)
-	require.NoError(t, err)
-
-	return target
-}
-
 func TestRestartToolScopesDescriptionToRuntimeConfig(t *testing.T) {
 	tool := restartTool(testNoopRestart, testNoopRestartRecorder)
 
@@ -84,7 +75,7 @@ func TestRestartToolCallsConfiguredRestart(t *testing.T) {
 func TestUpdateGoalToolRunsSuccessfulCheckBeforeComplete(t *testing.T) {
 	bridge := newGoalCheckTestBridge(t, `---
 description: Main
-model: openai/gpt-5.4
+model: gpt-5.4
 permission:
   bash:
     "./scripts/check.sh": allow
@@ -107,7 +98,7 @@ Prompt
 func TestUpdateGoalToolRecordsProgressNoteWithoutEndingGoal(t *testing.T) {
 	bridge := newGoalCheckTestBridge(t, `---
 description: Main
-model: openai/gpt-5.4
+model: gpt-5.4
 permission: {}
 ---
 Prompt
@@ -131,7 +122,7 @@ Prompt
 func TestUpdateGoalToolKeepsGoalActiveWhenCheckFails(t *testing.T) {
 	bridge := newGoalCheckTestBridge(t, `---
 description: Main
-model: openai/gpt-5.4
+model: gpt-5.4
 permission:
   bash:
     "./scripts/check.sh": allow
@@ -154,7 +145,7 @@ Prompt
 func TestUpdateGoalToolKeepsGoalActiveWhenCheckPermissionDenied(t *testing.T) {
 	bridge := newGoalCheckTestBridge(t, `---
 description: Main
-model: openai/gpt-5.4
+model: gpt-5.4
 permission:
   bash:
     "./scripts/check.sh --safe": allow
@@ -176,7 +167,7 @@ Prompt
 func TestUpdateGoalToolDoesNotRunCheckForBlocked(t *testing.T) {
 	bridge := newGoalCheckTestBridge(t, `---
 description: Main
-model: openai/gpt-5.4
+model: gpt-5.4
 permission:
   bash:
     "./scripts/check.sh": allow
@@ -753,7 +744,7 @@ func TestBridgeEnqueueReturnsContextOrStopErrors(t *testing.T) {
 
 func TestBridgeSummarizeRunsQueuedSummary(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var requestBody struct {
@@ -813,9 +804,9 @@ func TestBridgeSummarizeRunsQueuedSummary(t *testing.T) {
 
 func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\npermission:\n  task:\n    helper: allow\n---\nPrompt\n")
-	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: openai/gpt-5.5\nguardrail: guardrail\n---\nHelper prompt\n")
-	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: openai/gpt-5.5\n---\nGuard delegated work\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  task:\n    helper: allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: gpt-5.5\nguardrail: guardrail\n---\nHelper prompt\n")
+	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: gpt-5.5\n---\nGuard delegated work\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	requests := 0
@@ -1393,7 +1384,7 @@ func TestCompactedOutputToReplayInputPreservesSupportedItems(t *testing.T) {
 		{Type: "reasoning", ID: "rsn_2"},
 	}
 
-	got, err := rocketcode.CompactedOutputToReplayInput(items, "openai", "", "responses")
+	got, err := rocketcode.CompactedOutputToReplayInput(items)
 	require.NoError(t, err)
 	params, err := rocketcode.ReplayInputToParams(got)
 	require.NoError(t, err)
@@ -1404,181 +1395,14 @@ func TestCompactedOutputToReplayInputPreservesSupportedItems(t *testing.T) {
 	assert.Equal(t, "assistant", params[1].OfMessage.Content.OfString.Value)
 	assert.Equal(t, "sealed", params[2].OfCompaction.EncryptedContent)
 	assert.Equal(t, "chatgpt-sealed", params[3].OfCompaction.EncryptedContent)
-	assert.JSONEq(t, `{"encrypted_content":"sealed","id":"cmp_1","origin_mode":"responses","origin_provider":"openai","type":"compaction"}`, string(got[2]))
+	assert.JSONEq(t, `{"encrypted_content":"sealed","id":"cmp_1","type":"compaction"}`, string(got[2]))
 	assert.Equal(t, "summary", params[4].OfReasoning.Summary[0].Text)
 	assert.Equal(t, "rsn_2", params[5].OfReasoning.ID)
 }
 
 func TestCompactedOutputToReplayInputRejectsUnsupportedKind(t *testing.T) {
-	_, err := rocketcode.CompactedOutputToReplayInput([]responses.ResponseOutputItemUnion{{Type: "tool_search_call"}}, "openai", "", "responses")
+	_, err := rocketcode.CompactedOutputToReplayInput([]responses.ResponseOutputItemUnion{{Type: "tool_search_call"}})
 	require.ErrorContains(t, err, `unsupported compacted output item kind "tool_search_call"`)
-}
-
-func TestProjectSeedReplayForTargetStripsCompactionReplayMetadataFromNativePayload(t *testing.T) {
-	for _, tt := range []struct {
-		name               string
-		originProvider     string
-		compatibleProvider string
-		target             rocketcode.ReplayProjectionTarget
-	}{
-		{
-			name:           "openai",
-			originProvider: "openai",
-			target:         mustReplayProjectionTarget(t, "openai", "", "responses"),
-		},
-		{
-			name:               "openai-compatible",
-			originProvider:     "openai-compatible",
-			compatibleProvider: "local",
-			target:             mustReplayProjectionTarget(t, "openai-compatible", "local", "responses"),
-		},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			input, err := rocketcode.ReplayInputToParams([]json.RawMessage{json.RawMessage(fmt.Sprintf(`{"content":"private-content-value","encrypted_content":"sealed","id":"cmp-1","origin_compatible_provider":%q,"origin_mode":"responses","origin_provider":%q,"recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}`, tt.compatibleProvider, tt.originProvider))})
-			require.NoError(t, err)
-
-			got, err := rocketcode.ProjectReplayForTarget(input, tt.target)
-			require.NoError(t, err)
-
-			require.Len(t, got, 1)
-			data, err := json.Marshal(got[0])
-			require.NoError(t, err)
-			assert.JSONEq(t, `{"encrypted_content":"sealed","id":"cmp-1","type":"compaction"}`, string(data))
-			require.NotContains(t, string(data), "private-content-value")
-			require.NotContains(t, string(data), "private-summary-value")
-			require.NotContains(t, string(data), "private-recent-id")
-		})
-	}
-}
-
-func TestProjectSeedReplayForTargetLowersOriginlessCompactionWithSummary(t *testing.T) {
-	input, err := rocketcode.ReplayInputToParams([]json.RawMessage{json.RawMessage(`{"encrypted_content":"encrypted-originless","id":"cmp-originless","summary":{"text":"summary-only checkpoint"},"type":"compaction"}`)})
-	require.NoError(t, err)
-
-	got, err := rocketcode.ProjectReplayForTarget(input, mustReplayProjectionTarget(t, "openai-compatible", "local", "responses"))
-	require.NoError(t, err)
-
-	require.Len(t, got, 1)
-	require.Nil(t, got[0].OfCompaction)
-	data, err := json.Marshal(got)
-	require.NoError(t, err)
-	require.Contains(t, string(data), "summary-only checkpoint")
-	require.Contains(t, string(data), "context_checkpoint")
-	require.NotContains(t, string(data), "encrypted-originless")
-	require.NotContains(t, string(data), "summary\":")
-}
-
-func TestCompactSeedReplayKeepsAnthropicNativeCompaction(t *testing.T) {
-	requestBody := ""
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		data, err := io.ReadAll(r.Body)
-		if !assert.NoError(t, err) {
-			return
-		}
-
-		requestBody = string(data)
-
-		w.Header().Set("Content-Type", "application/json")
-		_, err = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet","content":[{"type":"compaction","content":"new summary","encrypted_content":"new-sealed"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
-		assert.NoError(t, err)
-	}))
-	t.Cleanup(server.Close)
-
-	bridge := &Bridge{runtime: &config.Config{Workspace: t.TempDir(), Anthropic: config.AnthropicConfig{APIKey: "test-key", APIBaseURL: server.URL}}, log: slog.New(slog.DiscardHandler), config: Config{ConversationID: events.MainConversationID()}}
-	got, err := bridge.compactSeedReplay(context.Background(), []rocketcode.SessionEntry{{ReplayInput: []json.RawMessage{json.RawMessage(`{"content":"prior summary","encrypted_content":"old-sealed","id":"cmp-1","origin_compatible_provider":"local","origin_mode":"messages","origin_provider":"anthropic","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}`)}}}, seedCompactionModel{provider: "anthropic", apiModel: "claude-sonnet"})
-
-	require.NoError(t, err)
-	require.Contains(t, requestBody, `"type":"compaction"`)
-	require.Contains(t, requestBody, `"content":"prior summary"`)
-	require.Contains(t, requestBody, `"encrypted_content":"old-sealed"`)
-	require.NotContains(t, requestBody, "context_checkpoint")
-	require.NotContains(t, requestBody, "origin_provider")
-	require.NotContains(t, requestBody, "origin_compatible_provider")
-	require.NotContains(t, requestBody, "origin_mode")
-	require.NotContains(t, requestBody, "private-summary-value")
-	require.NotContains(t, requestBody, "private-recent-id")
-	require.Len(t, got, 1)
-	assert.JSONEq(t, `{"content":"new summary","encrypted_content":"new-sealed","id":"msg_1-compaction-0","origin_mode":"messages","origin_provider":"anthropic","summary":"new summary","type":"compaction"}`, string(got[0]))
-}
-
-func TestCompactSeedReplayCompatibleChatKeepsCheckpointText(t *testing.T) {
-	requestBody := ""
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/chat/completions" {
-			t.Errorf("request path = %q; want /chat/completions", r.URL.Path)
-			http.NotFound(w, r)
-
-			return
-		}
-
-		data, err := io.ReadAll(r.Body)
-		if !assert.NoError(t, err) {
-			return
-		}
-
-		requestBody = string(data)
-
-		w.Header().Set("Content-Type", "application/json")
-		_, err = io.WriteString(w, `{"id":"chatcmpl_1","object":"chat.completion","created":1,"model":"gpt-oss","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"chat seed summary"}}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`)
-		assert.NoError(t, err)
-	}))
-	t.Cleanup(server.Close)
-
-	bridge := &Bridge{runtime: &config.Config{Workspace: t.TempDir(), OpenAICompatible: map[string]config.OpenAICompatibleConfig{"local": {APIKey: "test-key", BaseURL: server.URL, Mode: "chat_completions"}}}, log: slog.New(slog.DiscardHandler), config: Config{ConversationID: events.MainConversationID()}}
-	got, err := bridge.compactSeedReplay(context.Background(), []rocketcode.SessionEntry{{ReplayInput: []json.RawMessage{json.RawMessage(`{"content":"private-checkpoint-value","encrypted_content":"private-encrypted-value","id":"cmp-1","origin_compatible_provider":"local","origin_mode":"responses","origin_provider":"openai-compatible","recent":[{"id":"private-recent-id"}],"summary":{"text":"private-summary-value"},"type":"compaction"}`)}}}, seedCompactionModel{provider: "openai-compatible", compatibleProvider: "local", apiModel: "gpt-oss"})
-
-	require.NoError(t, err)
-	require.Contains(t, requestBody, "private-checkpoint-value")
-	require.Contains(t, requestBody, "context_checkpoint")
-	require.NotContains(t, requestBody, "private-encrypted-value")
-	require.NotContains(t, requestBody, "origin_provider")
-	require.NotContains(t, requestBody, "origin_compatible_provider")
-	require.NotContains(t, requestBody, "origin_mode")
-	require.NotContains(t, requestBody, "private-summary-value")
-	require.NotContains(t, requestBody, "private-recent-id")
-	require.Len(t, got, 1)
-	assert.JSONEq(t, `{"content":"chat seed summary","encrypted_content":"","id":"chatcmpl_1-compaction","origin_compatible_provider":"local","origin_mode":"chat_completions","origin_provider":"openai-compatible","summary":"chat seed summary","type":"compaction"}`, string(got[0]))
-}
-
-func TestCompactSeedReplayCompatibleChatIncludesToolContext(t *testing.T) {
-	requestBody := ""
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/chat/completions" {
-			t.Errorf("request path = %q; want /chat/completions", r.URL.Path)
-			http.NotFound(w, r)
-
-			return
-		}
-
-		data, err := io.ReadAll(r.Body)
-		if !assert.NoError(t, err) {
-			return
-		}
-
-		requestBody = string(data)
-
-		w.Header().Set("Content-Type", "application/json")
-		_, err = io.WriteString(w, `{"id":"chatcmpl_1","object":"chat.completion","created":1,"model":"gpt-oss","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"chat seed summary"}}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`)
-		assert.NoError(t, err)
-	}))
-	t.Cleanup(server.Close)
-
-	input := []responses.ResponseInputItemUnionParam{
-		{OfCompaction: &responses.ResponseCompactionItemParam{EncryptedContent: "sealed", ID: openai.String("cmp-1"), Type: "compaction"}},
-		{OfFunctionCall: &responses.ResponseFunctionToolCallParam{CallID: "call-1", Name: "lookup", Arguments: `{"q":"x"}`, Type: "function_call"}},
-		{OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{CallID: "call-1", Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.String("lookup result")}, Type: "function_call_output"}},
-	}
-	replay, err := rocketcode.ReplayInputFromParams(input)
-	require.NoError(t, err)
-
-	bridge := &Bridge{runtime: &config.Config{Workspace: t.TempDir(), OpenAICompatible: map[string]config.OpenAICompatibleConfig{"local": {APIKey: "test-key", BaseURL: server.URL, Mode: "chat_completions"}}}, log: slog.New(slog.DiscardHandler), config: Config{ConversationID: events.MainConversationID()}}
-	_, err = bridge.compactSeedReplay(context.Background(), []rocketcode.SessionEntry{{ReplayInput: replay}}, seedCompactionModel{provider: "openai-compatible", compatibleProvider: "local", apiModel: "gpt-oss"})
-
-	require.NoError(t, err)
-	require.Contains(t, requestBody, "lookup")
-	require.Contains(t, requestBody, `\"q\"`)
-	require.Contains(t, requestBody, `\"x\"`)
-	require.Contains(t, requestBody, "lookup result")
 }
 
 func TestCompactSeedReplayReportsInvalidReplayInput(t *testing.T) {
@@ -1611,16 +1435,16 @@ func TestCompactSeedReplayUsesDefaultModelAndReportsProviderError(t *testing.T) 
 	t.Cleanup(server.Close)
 
 	bridge := &Bridge{runtime: &config.Config{Workspace: t.TempDir(), OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, log: slog.New(slog.DiscardHandler), config: Config{ConversationID: events.MainConversationID()}}
-	_, err := bridge.compactSeedReplay(context.Background(), []rocketcode.SessionEntry{{ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "main question"})}}, seedCompactionModel{provider: "openai"})
+	_, err := bridge.compactSeedReplay(context.Background(), []rocketcode.SessionEntry{{ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "main question"})}}, seedCompactionModel{})
 	require.ErrorContains(t, err, "compact seed replay")
 	assert.Equal(t, string(responses.ResponseCompactParamsModelGPT5_4), requestBody.Model)
 }
 
-func TestRocketCodeProvidersSkipsOpenAIForAnthropicOnlyAgents(t *testing.T) {
+func TestRocketCodeProvidersConfiguresOpenAI(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", `---
 description: Main
-model: anthropic/claude-sonnet-4-20250514
+model: gpt-5.5
 ---
 Prompt
 `)
@@ -1632,41 +1456,11 @@ Prompt
 	agents, skills, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
 	require.NoError(t, err)
 
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{RocketCodeAuth: "chatgpt"}, Anthropic: config.AnthropicConfig{APIKey: "anthropic-key"}}, log: slog.New(slog.DiscardHandler)}
+	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test-key", RocketCodeAuth: "api_key"}}, log: slog.New(slog.DiscardHandler)}
 
 	providers, err := bridge.rocketcodeProviders(agents)
 	require.NoError(t, err)
-	require.Nil(t, providers.OpenAI)
-	require.NotNil(t, providers.Anthropic)
-
-	shellOutputDir := filepath.Join(workspace, "shell-output")
-	require.NoError(t, os.Mkdir(shellOutputDir, 0o755))
-	_, err = rocketcode.NewWithProviders(providers, &rocketcode.Config{ShellOutputDir: shellOutputDir}, root, agents, skills, "main", io.Discard)
-	require.NoError(t, err)
-}
-
-func TestRocketCodeProvidersSkipsDefaultOpenAIForCompatibleOnlyAgents(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", `---
-description: Main
-model: openai-compatible/local/gpt-oss
----
-Prompt
-`)
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-	root, err := os.OpenRoot(workspace)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	agents, skills, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
-	require.NoError(t, err)
-
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{RocketCodeAuth: "chatgpt"}, OpenAICompatible: map[string]config.OpenAICompatibleConfig{"local": {APIKey: "compatible-key", BaseURL: "http://127.0.0.1:1", Mode: "responses"}}}, log: slog.New(slog.DiscardHandler)}
-
-	providers, err := bridge.rocketcodeProviders(agents)
-	require.NoError(t, err)
-	require.Nil(t, providers.OpenAI)
-	require.NotEmpty(t, providers.OpenAICompatible["local"].Client)
+	require.NotNil(t, providers.OpenAI)
 
 	shellOutputDir := filepath.Join(workspace, "shell-output")
 	require.NoError(t, os.Mkdir(shellOutputDir, 0o755))
@@ -2216,7 +2010,7 @@ func TestSeedThreadFromConversationCompactsMainSessionOnce(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
 
-	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Model: "openai/gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "main question"}, replayInputMessage{role: "assistant", text: "main answer"})})
+	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Model: "gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "main question"}, replayInputMessage{role: "assistant", text: "main answer"})})
 	require.NoError(t, err)
 
 	var (
@@ -2268,7 +2062,7 @@ func TestSeedThreadFromConversationCompactsMainSessionOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "main_thread_seed", entries[0].Entry.Type)
-	assert.Equal(t, "openai/gpt-5.5", entries[0].Entry.Model)
+	assert.Equal(t, "gpt-5.5", entries[0].Entry.Model)
 	params, err := rocketcode.ReplayInputToParams(entries[0].Entry.ReplayInput)
 	require.NoError(t, err)
 	require.Len(t, params, 1)
@@ -2281,13 +2075,13 @@ func TestSeedThreadFromConversationReusesLatestMainCompaction(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
 
-	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Model: "openai/gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "old question"}, replayInputMessage{role: "assistant", text: "old answer"})})
+	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Model: "gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "old question"}, replayInputMessage{role: "assistant", text: "old answer"})})
 	require.NoError(t, err)
 
-	compactionReplay := []json.RawMessage{json.RawMessage(`{"encrypted_content":"sealed-main","id":"cmp_main","origin_mode":"responses","origin_provider":"openai","type":"compaction"}`)}
-	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(2, 0).UTC(), Model: "openai/gpt-5.5", ReplayInput: compactionReplay})
+	compactionReplay := []json.RawMessage{json.RawMessage(`{"encrypted_content":"sealed-main","id":"cmp_main","type":"compaction"}`)}
+	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(2, 0).UTC(), Model: "gpt-5.5", ReplayInput: compactionReplay})
 	require.NoError(t, err)
-	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(3, 0).UTC(), Model: "openai/gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "new question"}, replayInputMessage{role: "assistant", text: "new answer"})})
+	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(3, 0).UTC(), Model: "gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "new question"}, replayInputMessage{role: "assistant", text: "new answer"})})
 	require.NoError(t, err)
 
 	var requestBody struct {
@@ -2386,7 +2180,7 @@ func TestSeedResponseThreadCompactsMainCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
 
-	id, err := service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ResponseID: "resp-1", Model: "openai/gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "main question"}, replayInputMessage{role: "assistant", text: "main answer"})})
+	id, err := service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ResponseID: "resp-1", Model: "gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "main question"}, replayInputMessage{role: "assistant", text: "main answer"})})
 	require.NoError(t, err)
 
 	var (
@@ -2423,7 +2217,7 @@ func TestSeedResponseThreadCompactsMainCheckpoint(t *testing.T) {
 	bridge.config = Config{ConversationID: SlackThreadConversationID("D123", "111.222"), Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}
 	bridge.log = slog.New(slog.DiscardHandler)
 
-	require.NoError(t, bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{ConversationID: events.MainConversationID(), SessionEntryID: id, ResponseID: "resp-1", Model: "openai/gpt-5.5", AssistantText: "thread root answer"}))
+	require.NoError(t, bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{ConversationID: events.MainConversationID(), SessionEntryID: id, ResponseID: "resp-1", Model: "gpt-5.5", AssistantText: "thread root answer"}))
 	require.NoError(t, errRequest)
 	require.Len(t, requestBody.Input, 1)
 	assert.Equal(t, "user", requestBody.Input[0].Role)
@@ -2446,13 +2240,13 @@ func TestSeedResponseThreadReusesLatestCompaction(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
 
-	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Model: "openai/gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "old question"}, replayInputMessage{role: "assistant", text: "old answer"})})
+	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Model: "gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "old question"}, replayInputMessage{role: "assistant", text: "old answer"})})
 	require.NoError(t, err)
 
-	compactionReplay := []json.RawMessage{json.RawMessage(`{"encrypted_content":"sealed-response","id":"cmp_response","origin_mode":"responses","origin_provider":"openai","type":"compaction"}`)}
-	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(2, 0).UTC(), Model: "openai/gpt-5.5", ReplayInput: compactionReplay})
+	compactionReplay := []json.RawMessage{json.RawMessage(`{"encrypted_content":"sealed-response","id":"cmp_response","type":"compaction"}`)}
+	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(2, 0).UTC(), Model: "gpt-5.5", ReplayInput: compactionReplay})
 	require.NoError(t, err)
-	id, err := service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(3, 0).UTC(), ResponseID: "resp-1", Model: "openai/gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "checkpoint question"}, replayInputMessage{role: "assistant", text: "checkpoint answer"})})
+	id, err := service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(3, 0).UTC(), ResponseID: "resp-1", Model: "gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "checkpoint question"}, replayInputMessage{role: "assistant", text: "checkpoint answer"})})
 	require.NoError(t, err)
 
 	var requestBody struct {
@@ -2487,7 +2281,7 @@ func TestSeedResponseThreadReusesLatestCompaction(t *testing.T) {
 	bridge.config = Config{ConversationID: SlackThreadConversationID("D123", "111.222"), Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}
 	bridge.log = slog.New(slog.DiscardHandler)
 
-	require.NoError(t, bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{ConversationID: events.MainConversationID(), SessionEntryID: id, ResponseID: "resp-1", Model: "openai/gpt-5.5", AssistantText: "thread root answer"}))
+	require.NoError(t, bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{ConversationID: events.MainConversationID(), SessionEntryID: id, ResponseID: "resp-1", Model: "gpt-5.5", AssistantText: "thread root answer"}))
 	require.Len(t, requestBody.Input, 2)
 	assert.Equal(t, "compaction", requestBody.Input[0].Type)
 	assert.Equal(t, "sealed-response", requestBody.Input[0].EncryptedContent)
@@ -2505,7 +2299,7 @@ func TestSeedResponseThreadReusesLatestCompaction(t *testing.T) {
 
 func TestSeedResponseThreadCompactsPriorMainEntriesWithChatGPTInstructions(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\n---\nAgent instructions\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\n---\nAgent instructions\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 	require.NoError(t, oai.SaveTokenIn(workspace, config.DefaultWorkDir, oai.Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acct"}))
 
@@ -2513,9 +2307,9 @@ func TestSeedResponseThreadCompactsPriorMainEntriesWithChatGPTInstructions(t *te
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
 
-	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ResponseID: "resp-1", Model: "openai/gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "earlier question"}, replayInputMessage{role: "assistant", text: "earlier answer"})})
+	_, err = service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ResponseID: "resp-1", Model: "gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "earlier question"}, replayInputMessage{role: "assistant", text: "earlier answer"})})
 	require.NoError(t, err)
-	id, err := service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(2, 0).UTC(), ResponseID: "resp-2", Model: "openai/gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "checkpoint question"}, replayInputMessage{role: "assistant", text: "checkpoint answer"})})
+	id, err := service.AppendEntryID(context.Background(), events.MainConversationID(), &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(2, 0).UTC(), ResponseID: "resp-2", Model: "gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "checkpoint question"}, replayInputMessage{role: "assistant", text: "checkpoint answer"})})
 	require.NoError(t, err)
 
 	var requestBody struct {
@@ -2541,7 +2335,7 @@ func TestSeedResponseThreadCompactsPriorMainEntriesWithChatGPTInstructions(t *te
 	bridge.config = Config{ConversationID: SlackThreadConversationID("D123", "111.222"), Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}
 	bridge.log = slog.New(slog.DiscardHandler)
 
-	require.NoError(t, bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{SessionEntryID: id, ResponseID: "resp-2", Model: "openai/gpt-5.5", AssistantText: "thread root answer"}))
+	require.NoError(t, bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{SessionEntryID: id, ResponseID: "resp-2", Model: "gpt-5.5", AssistantText: "thread root answer"}))
 	assert.Equal(t, "Agent instructions", requestBody.Instructions)
 	require.Len(t, requestBody.Input, 3)
 	assert.Equal(t, "earlier question", requestBody.Input[0].Content)
@@ -2699,7 +2493,7 @@ func TestRocketCodeThinkingTextHandlesStructuredToolDiagnostics(t *testing.T) {
 	hostedQueries.Phase = "call"
 	hostedQueries.Name = "websearch"
 	hostedQueries.Status = "started"
-	hostedQueries.Action = []byte(`{"type":"search","queries":["Anthropic news","Google AI blog"]}`)
+	hostedQueries.Action = []byte(`{"type":"search","queries":["OpenAI news","Google AI blog"]}`)
 	raw.Phase = "call"
 	raw.Name = "custom"
 	raw.Status = "started"
@@ -2711,7 +2505,7 @@ func TestRocketCodeThinkingTextHandlesStructuredToolDiagnostics(t *testing.T) {
 	assert.Equal(t, "bash: Read the file", rocketcodeThinkingText(toolResponse(&call)))
 	assert.Equal(t, "bash started", rocketcodeThinkingText(toolResponse(&status)))
 	assert.Equal(t, "websearch started: Google DeepMind blog", rocketcodeThinkingText(toolResponse(&hosted)))
-	assert.Equal(t, "websearch started: Anthropic news, Google AI blog", rocketcodeThinkingText(toolResponse(&hostedQueries)))
+	assert.Equal(t, "websearch started: OpenAI news, Google AI blog", rocketcodeThinkingText(toolResponse(&hostedQueries)))
 	assert.Equal(t, "custom started: plain text", rocketcodeThinkingText(toolResponse(&raw)))
 	assert.Empty(t, rocketcodeThinkingText(toolResponse(&result)))
 
@@ -2939,7 +2733,7 @@ func TestProcessResponseSuppressesProviderOnlySubagentDiagnostics(t *testing.T) 
 
 func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: openai/gpt-5.5\npermission:\n  bash:\n    \"*\": allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-5.5\npermission:\n  bash:\n    \"*\": allow\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var (
@@ -3051,7 +2845,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 
 func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\nadditionalInstructions: Reply in one sentence.\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\nadditionalInstructions: Reply in one sentence.\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var (
@@ -3110,7 +2904,7 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 
 func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var (
@@ -3170,7 +2964,7 @@ func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {
 
 func TestRunTurnSkipsActiveGoalDeveloperMessageWithoutNote(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/gpt-5.5\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var (

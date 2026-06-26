@@ -86,7 +86,7 @@ func writeLintConfig(t *testing.T, workspace string) {
 
 func writeLintAgent(t *testing.T, root, name, content string) {
 	t.Helper()
-	content = "---\nmodel: openai/gpt-5.5\n" + content[len("---\n"):]
+	content = "---\nmodel: gpt-5.5\n" + content[len("---\n"):]
 
 	agentsRoot := filepath.Join(root, "agents")
 	require.NoError(t, os.MkdirAll(agentsRoot, 0o755))

@@ -72,8 +72,8 @@ func TestPermissionReviewTranscriptOmitsEncryptedReplayPayloads(t *testing.T) {
 	request := &permissionReviewRequest{
 		ReviewContext: []responses.ResponseInputItemUnionParam{
 			reasoningReplayInput("rsn-1", "safe reasoning summary", "ENCRYPTED_REASONING_SECRET"),
-			compactionReplayInput("cmp-1", "ENCRYPTED_COMPACTION_SECRET", "safe compaction summary", modelProviderOpenAI, "", string(OpenAICompatibleModeResponses)),
-			compactionReplayInput("cmp-2", "ENCRYPTED_ONLY_SECRET", "", modelProviderOpenAI, "", string(OpenAICompatibleModeResponses)),
+			compactionReplayInput("cmp-1", "ENCRYPTED_COMPACTION_SECRET", "safe compaction summary"),
+			compactionReplayInput("cmp-2", "ENCRYPTED_ONLY_SECRET", ""),
 		},
 	}
 
