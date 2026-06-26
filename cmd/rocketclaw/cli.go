@@ -55,13 +55,10 @@ func runCLI(args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	logger := newLogger(cfg.Logging.Level)
-	logger.Info("loaded rocketclaw configuration", "config_path", selected.Path, "workspace", cfg.Workspace, "work_dir", cfg.WorkDirName(), "log_level", cfg.Logging.Level, "discord_enabled", cfg.DiscordVoice.Enabled, "slack_enabled", cfg.Slack.Enabled)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	logger.Info("starting rocketclaw CLI", "version", buildInfoMainVersion(), "new", *newConversation, "agent", agent, "attach", *attachConversationID)
 	options := app.CLIOptions{In: os.Stdin, Out: os.Stdout, Agent: agent, ConversationID: *attachConversationID, NewConversation: *newConversation}
 	if err := app.RunControlClient(ctx, cfg, options); err == nil {
-		logger.Info("rocketclaw CLI stopped")
 		return nil
 	} else if !errors.Is(err, app.ErrControlUnavailable) {
 		return fmt.Errorf("run rocketclaw CLI control client: %w", err)
@@ -89,6 +86,5 @@ func runCLI(args []string) error {
 		logger.Error("rocketclaw CLI exited with error", "error", err)
 		return fmt.Errorf("run rocketclaw CLI: %w", err)
 	}
-	logger.Info("rocketclaw CLI stopped")
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 )
@@ -38,7 +39,18 @@ type terminalCLI struct {
 	publishMain       func(context.Context, *events.InboundMessage) error
 }
 
-type terminalRenderer struct{ out io.Writer }
+type terminalRenderer struct {
+	out           io.Writer
+	lastAssistant string
+	interactive   bool
+	promptActive  bool
+	mu            sync.Mutex
+}
+
+const terminalCLIHelpText = `available commands:
+  /help         Show terminal CLI commands.
+  /exit         Close this terminal CLI session.
+  /new [agent]  In cmux, open a new terminal surface attached to a fresh private CLI conversation.`
 
 func newTerminalCLI(options CLIOptions, bus *events.Bus, onExit func()) *terminalCLI {
 	agent := strings.TrimSpace(options.Agent)
@@ -55,9 +67,20 @@ func newTerminalCLI(options CLIOptions, bus *events.Bus, onExit func()) *termina
 		conversationID = newTerminalConversationID()
 	}
 
-	return &terminalCLI{bus: bus, renderer: &terminalRenderer{out: options.Out}, reader: bufio.NewReader(options.In), agent: agent, conversationID: conversationID, newConversation: options.NewConversation, onExit: onExit, cmux: runCMUX, newConversationID: func(context.Context, string) (string, error) {
+	return &terminalCLI{bus: bus, renderer: newTerminalRenderer(options.Out), reader: bufio.NewReader(options.In), agent: agent, conversationID: conversationID, newConversation: options.NewConversation, onExit: onExit, cmux: runCMUX, newConversationID: func(context.Context, string) (string, error) {
 		return "", errors.New("/new requires a running RocketClaw server control socket")
 	}, summarize: func(context.Context, string) (string, error) { return "", nil }, publishMain: func(context.Context, *events.InboundMessage) error { return nil }}
+}
+
+func newTerminalRenderer(out io.Writer) *terminalRenderer {
+	r := &terminalRenderer{out: out}
+	if file, ok := out.(*os.File); ok {
+		if info, err := file.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
+			r.interactive = true
+		}
+	}
+
+	return r
 }
 
 func runCMUX(ctx context.Context, args ...string) (string, error) {
@@ -139,6 +162,9 @@ func (c *terminalCLI) handleSlashCommand(ctx context.Context, line string) (bool
 	switch command {
 	case "/exit":
 		return true, io.EOF
+	case "/help":
+		c.renderer.printLine(terminalCLIHelpText)
+		return true, nil
 	case "/new":
 		if err := c.openCMUXConversation(ctx, strings.TrimSpace(rest)); err != nil {
 			c.renderer.printLine(err.Error())
@@ -176,12 +202,12 @@ func (c *terminalCLI) openCMUXAttached(ctx context.Context, conversationID strin
 
 func (c *terminalCLI) cmuxContext(ctx context.Context) (workspaceID, workingDirectory string, err error) {
 	if _, err := c.cmux(ctx, "identify"); err != nil {
-		return "", "", fmt.Errorf("/new requires cmux caller context; cmux identify failed: %w", err)
+		return "", "", fmt.Errorf("/new only opens a new cmux terminal. Outside cmux, run `rocketclaw cli --new [agent]` in another terminal. cmux identify failed: %w", err)
 	}
 
 	workspaceID, workingDirectory = os.Getenv("CMUX_WORKSPACE_ID"), os.Getenv("CMUX_WORKING_DIRECTORY")
 	if os.Getenv("CMUX_SURFACE_ID") == "" || workingDirectory == "" {
-		return "", "", errors.New("/new requires cmux caller context")
+		return "", "", errors.New("/new only opens a new cmux terminal. Outside cmux, run `rocketclaw cli --new [agent]` in another terminal")
 	}
 
 	return workspaceID, workingDirectory, nil
@@ -208,7 +234,10 @@ func (c *terminalCLI) openCMUXAttachedInContext(ctx context.Context, conversatio
 
 func (c *terminalCLI) readLines(submit func(string) error) error {
 	for {
+		c.renderer.printPrompt()
 		line, err := c.reader.ReadString('\n')
+		c.renderer.finishPrompt()
+
 		if err != nil && !errors.Is(err, io.EOF) {
 			return fmt.Errorf("read terminal input: %w", err)
 		}
@@ -231,7 +260,17 @@ func (c *terminalCLI) offerSummary() {
 		return
 	}
 
-	summary, _ := c.summarize(context.Background(), "Summarize this terminal CLI session for the main RocketClaw conversation. Include decisions, useful context, and unresolved follow-ups.")
+	summary, err := c.summarize(context.Background(), "Summarize this terminal CLI session for the main RocketClaw conversation. Include decisions, useful context, and unresolved follow-ups.")
+	if err != nil {
+		c.renderer.printLine("summary failed: " + err.Error())
+		return
+	}
+
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		c.renderer.printLine("summary was empty; main was not updated")
+		return
+	}
 
 	inbound := events.NewMainInboundMessage(events.SourceTerminalCLI, events.InboundKindInternalize, "terminal_cli_summary", summary, false)
 	if err := c.publishMain(context.Background(), inbound); err != nil {
@@ -261,14 +300,64 @@ func (c *terminalCLI) askUserQuestion(_ context.Context, req *events.AskUserQues
 }
 
 func formatInbound(msg *events.InboundMessage) string {
+	if msg.Source == events.SourceTerminalCLI {
+		return "[you] " + strings.TrimSpace(msg.Text)
+	}
+
 	return fmt.Sprintf("[%s inbound] %s", msg.Source, strings.TrimSpace(msg.Text))
 }
 
 func formatOutbound(msg *events.OutboundMessage) string {
-	return "[assistant] " + strings.TrimSpace(msg.Text)
+	text := strings.TrimSpace(msg.Text)
+	if text == "" {
+		return "[assistant] (empty response)"
+	}
+
+	return "[assistant] " + text
 }
 
-func (r *terminalRenderer) printLine(text string) { _, _ = fmt.Fprintln(r.out, text) }
+func (r *terminalRenderer) printLine(text string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if strings.HasPrefix(text, "[assistant] ") {
+		if text == r.lastAssistant {
+			return
+		}
+
+		r.lastAssistant = text
+	} else {
+		r.lastAssistant = ""
+	}
+
+	if r.promptActive {
+		_, _ = fmt.Fprint(r.out, "\r\033[2K")
+	}
+
+	_, _ = fmt.Fprintln(r.out, text)
+	if r.promptActive {
+		_, _ = fmt.Fprint(r.out, "rocketclaw> ")
+	}
+}
+
+func (r *terminalRenderer) printPrompt() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if !r.interactive {
+		return
+	}
+
+	r.promptActive = true
+	_, _ = fmt.Fprint(r.out, "rocketclaw> ")
+}
+
+func (r *terminalRenderer) finishPrompt() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.promptActive = false
+}
 
 func (r *terminalRenderer) printQuestion(req *events.AskUserQuestionRequest) {
 	if req == nil {

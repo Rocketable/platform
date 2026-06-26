@@ -152,6 +152,19 @@ func TestTerminalRendererPrintsEvent(t *testing.T) {
 	assert.Equal(t, "event\n", out.String())
 }
 
+func TestTerminalRendererSuppressesConsecutiveDuplicateAssistantLine(t *testing.T) {
+	var out bytes.Buffer
+
+	renderer := terminalRenderer{out: &out}
+
+	renderer.printLine("[assistant] hello")
+	renderer.printLine("[assistant] hello")
+	renderer.printLine("[you] ok")
+	renderer.printLine("[assistant] hello")
+
+	assert.Equal(t, "[assistant] hello\n[you] ok\n[assistant] hello\n", out.String())
+}
+
 func TestTerminalCLISummaryPromptDefaultsNo(t *testing.T) {
 	var out bytes.Buffer
 
@@ -193,6 +206,54 @@ func TestTerminalCLISummaryPromptPublishesInternalizedMainNote(t *testing.T) {
 	assert.Equal(t, events.InboundKindInternalize, published.Kind)
 	assert.Equal(t, events.MainConversationID(), published.ConversationID)
 	assert.Equal(t, "session summary", published.Text)
+}
+
+func TestTerminalCLISummaryPromptDoesNotPublishEmptySummary(t *testing.T) {
+	var out bytes.Buffer
+
+	input := strings.NewReader("y\n")
+	called := false
+
+	cli := terminalCLI{
+		renderer: &terminalRenderer{out: &out},
+		reader:   bufio.NewReader(input),
+		summarize: func(context.Context, string) (string, error) {
+			return " \n ", nil
+		},
+		publishMain: func(context.Context, *events.InboundMessage) error {
+			called = true
+			return nil
+		},
+	}
+
+	cli.offerSummary()
+
+	assert.False(t, called)
+	assert.Contains(t, out.String(), "summary was empty")
+}
+
+func TestTerminalCLISummaryPromptDoesNotPublishOnSummaryError(t *testing.T) {
+	var out bytes.Buffer
+
+	input := strings.NewReader("y\n")
+	called := false
+
+	cli := terminalCLI{
+		renderer: &terminalRenderer{out: &out},
+		reader:   bufio.NewReader(input),
+		summarize: func(context.Context, string) (string, error) {
+			return "", assert.AnError
+		},
+		publishMain: func(context.Context, *events.InboundMessage) error {
+			called = true
+			return nil
+		},
+	}
+
+	cli.offerSummary()
+
+	assert.False(t, called)
+	assert.Contains(t, out.String(), "summary failed")
 }
 
 func TestTerminalCLIExitCanReadPipedSummaryAnswer(t *testing.T) {
@@ -302,6 +363,33 @@ func TestControlServerNewConversationPersistsAgent(t *testing.T) {
 	assert.Equal(t, harnessbridge.ThreadState{Agent: "planner"}, state.Threads[msg.ConversationID])
 }
 
+func TestControlServerAttachRejectsUnknownConversation(t *testing.T) {
+	workspace := shortTempDir(t)
+	cfg := &config.Config{Workspace: workspace}
+
+	bus := events.New()
+	defer bus.Close()
+
+	store := newAppTestSessionService(t, workspace)
+	manager := newThreadBridgeManager(bus, cfg, store, testLogger(), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
+	server, err := startControlServer(t.Context(), cfg, bus, store, manager, newControlQuestionHub(), testLogger())
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, server.Close(t.Context())) }()
+
+	conn, err := net.Dial("unix", ControlSocketPath(cfg))
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, conn.Close()) }()
+
+	require.NoError(t, json.NewEncoder(conn).Encode(controlRequest{Type: "attach", ConversationID: "cli:missing"}))
+
+	var msg controlMessage
+	require.NoError(t, json.NewDecoder(conn).Decode(&msg))
+	assert.Equal(t, "error", msg.Type)
+	assert.Contains(t, msg.Text, "not an existing server-owned conversation")
+}
+
 func TestRunControlClientExitStopsReadingPipedInput(t *testing.T) {
 	workspace := shortTempDir(t)
 	cfg := &config.Config{Workspace: workspace}
@@ -365,6 +453,65 @@ func TestRunControlClientExitStopsReadingPipedInput(t *testing.T) {
 	require.NoError(t, <-done)
 	assert.Equal(t, "attach", (<-requests).Type)
 	assert.Equal(t, "exit", (<-requests).Type)
+}
+
+func TestRunControlClientEOFPresentsSummaryPromptForNewConversation(t *testing.T) {
+	workspace := shortTempDir(t)
+	cfg := &config.Config{Workspace: workspace}
+	socketPath := ControlSocketPath(cfg)
+	require.NoError(t, os.MkdirAll(filepath.Dir(socketPath), 0o700))
+
+	listener, err := net.Listen("unix", socketPath)
+	require.NoError(t, err)
+
+	defer func() { _ = listener.Close() }()
+
+	requests := make(chan controlRequest, 3)
+	done := make(chan error, 1)
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			done <- fmt.Errorf("accept control client: %w", err)
+			return
+		}
+
+		defer func() { _ = conn.Close() }()
+
+		enc, dec := json.NewEncoder(conn), json.NewDecoder(conn)
+
+		var req controlRequest
+		if err := dec.Decode(&req); err != nil {
+			done <- fmt.Errorf("decode new: %w", err)
+			return
+		}
+
+		requests <- req
+
+		if err := enc.Encode(controlMessage{Type: "attached", ConversationID: "cli:new"}); err != nil {
+			done <- fmt.Errorf("encode attached: %w", err)
+			return
+		}
+
+		if err := dec.Decode(&req); err != nil {
+			done <- fmt.Errorf("decode exit: %w", err)
+			return
+		}
+
+		requests <- req
+
+		done <- nil
+	}()
+
+	out := new(bytes.Buffer)
+	err = RunControlClient(t.Context(), cfg, CLIOptions{In: strings.NewReader(""), Out: out, NewConversation: true})
+	require.NoError(t, err)
+	require.NoError(t, <-done)
+	assert.Equal(t, "new", (<-requests).Type)
+	exit := <-requests
+	assert.Equal(t, "exit", exit.Type)
+	assert.False(t, exit.Summarize)
+	assert.Contains(t, out.String(), "Append a summary")
 }
 
 func TestRunControlClientAnswersQuestion(t *testing.T) {
@@ -469,7 +616,8 @@ func TestTerminalCLINewReportsNonCMUXLocalError(t *testing.T) {
 	handled, err := cli.handleSlashCommand(t.Context(), "/new")
 	require.NoError(t, err)
 	assert.True(t, handled)
-	assert.Contains(t, out.String(), "/new requires cmux caller context")
+	assert.Contains(t, out.String(), "/new only opens a new cmux terminal")
+	assert.Contains(t, out.String(), "rocketclaw cli --new [agent]")
 }
 
 func TestTerminalCLIUnknownSlashCommandIsLocalError(t *testing.T) {
@@ -487,6 +635,24 @@ func TestTerminalCLIUnknownSlashCommandIsLocalError(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, handled)
 	assert.Contains(t, out.String(), "unknown command /fork")
+}
+
+func TestTerminalCLIHelpSlashCommandIsLocal(t *testing.T) {
+	out := new(bytes.Buffer)
+	cli := terminalCLI{
+		renderer: &terminalRenderer{out: out},
+		cmux:     (&fakeCMUXRunner{}).Run,
+		newConversationID: func(context.Context, string) (string, error) {
+			t.Fatal("help slash command requested a conversation")
+			return "", nil
+		},
+	}
+
+	handled, err := cli.handleSlashCommand(t.Context(), "/help")
+	require.NoError(t, err)
+	assert.True(t, handled)
+	assert.Contains(t, out.String(), "/exit")
+	assert.Contains(t, out.String(), "/new [agent]")
 }
 
 type fakeCMUXRunner struct {

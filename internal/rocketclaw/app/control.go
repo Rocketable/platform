@@ -293,6 +293,19 @@ func serveControlClient(ctx context.Context, conn net.Conn, bus *events.Bus, ses
 	conversationID, private := strings.TrimSpace(req.ConversationID), false
 	switch req.Type {
 	case "attach":
+		if conversationID != events.MainConversationID() {
+			state, err := sessions.Load()
+			if err != nil {
+				send(controlMessage{Type: "error", Text: "load conversations: " + err.Error()})
+				return
+			}
+
+			if _, ok := state.Threads[conversationID]; !ok {
+				send(controlMessage{Type: "error", Text: fmt.Sprintf("conversation %q is not an existing server-owned conversation", conversationID)})
+				return
+			}
+		}
+
 		send(controlMessage{Type: "attached", ConversationID: conversationID})
 		controlHistory(ctx, sessions, conversationID, send)
 	case "new":
@@ -410,9 +423,17 @@ func controlHistory(ctx context.Context, sessions *harnessbridge.SessionService,
 		}
 	}
 
+	if len(messages) == 0 {
+		return
+	}
+
+	send(controlMessage{Type: "history", Text: "--- recent history ---"})
+
 	for _, message := range messages[max(0, len(messages)-8):] {
 		send(controlMessage{Type: "history", Text: message})
 	}
+
+	send(controlMessage{Type: "history", Text: "--- live ---"})
 }
 
 func controlSummarize(ctx context.Context, bus *events.Bus, threads *threadBridgeManager, conversationID string, send func(controlMessage)) {
@@ -442,7 +463,7 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 
 	defer func() { _ = conn.Close() }()
 
-	renderer := &terminalRenderer{out: options.Out}
+	renderer := newTerminalRenderer(options.Out)
 	enc, dec, reader := json.NewEncoder(conn), json.NewDecoder(conn), bufio.NewReader(options.In)
 
 	var sendMu sync.Mutex
@@ -596,7 +617,8 @@ func RunControlClient(ctx context.Context, cfg *config.Config, options CLIOption
 	}
 
 	if !exited {
-		_ = sendRequest(controlRequest{Type: "exit"})
+		summarize := options.NewConversation && (&terminalCLI{renderer: renderer, reader: reader}).askYesNo("Append a summary of this CLI session to main? [y/N] ")
+		_ = sendRequest(controlRequest{Type: "exit", Summarize: summarize})
 	}
 
 	select {
