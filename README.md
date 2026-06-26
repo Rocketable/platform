@@ -18,6 +18,7 @@ See [LICENSE](LICENSE) for the full license terms.
 - Keep agent work durable through SQLite-backed sessions, replay, checkpoints, connector routing, scheduled messages, restart recovery, and conversation-local goal loops.
 - Connect agents to team workflows through Slack, Discord text, Discord voice, browser voice mode, cron jobs, scheduled prompts, and an external MCP HTTP endpoint.
 - Route model requests through first-party OpenAI Responses while preserving one local agent/tool model.
+- Run `openresponsesd` as a separate local OpenResponses-shaped API daemon that can route to OpenAI Responses, OpenAI-compatible Chat Completions, or Anthropic Messages upstreams.
 - Expose optional OpenTelemetry/OpenInference-compatible tracing for agent runs.
 
 ## Main Components
@@ -39,6 +40,7 @@ The runnable entry point is `cmd/rocketclaw`. Run `rocketclaw help` for setup, v
 
 ### Supporting Tools
 
+- `cmd/openresponsesd`: serves `/healthz`, `/v1/responses`, and `/v1/responses/compact` with optional bearer auth and provider routing configured by `openresponsesd.json`.
 - `cmd/quickbench`: runs YAML benchmarks through RocketCode with CLI-selected models. See [cmd/quickbench/README.md](cmd/quickbench/README.md).
 - `cmd/quickweb`: serves trusted internal static applets with one persistent JSON document per page. See [cmd/quickweb/README.md](cmd/quickweb/README.md).
 - `cmd/interviewd`: serves a temporary local HTML form for structured interview questions and prints submitted answers as Markdown.
@@ -60,6 +62,7 @@ For local CLI experimentation, `rocketcode` and `rocketloop` run RocketCode dire
 - `cmd/`: runnable binaries.
 - `internal/rocketcode/`: core workspace agent runtime.
 - `internal/rocketclaw/`: connector service runtime around RocketCode.
+- `internal/openresponsesd/`: OpenResponses-shaped daemon, config loading, HTTP/WebSocket handling, provider adapters, and daemon ADRs.
 - `internal/quickbench/`: benchmark runner implementation.
 - `internal/quickweb/`: lightweight static applet server.
 - `internal/interviewd/`: structured interview form server.
@@ -79,6 +82,8 @@ Generated runtime state should not be treated as source code.
 
 Agent files may declare unprefixed OpenAI `model` frontmatter such as `gpt-5.4`. Missing or empty agent models inherit the runtime/default OpenAI model.
 
+`openresponsesd` is configured with `openresponsesd.json` by default, or with `--config` / `OPENRESPONSESD_CONFIG`. Its documented credential environment variables are `OPENRESPONSESD_OPENAI_API_KEY` and `OPENRESPONSESD_ANTHROPIC_API_KEY`; bearer-token auth can be set in config or overridden locally with `--auth-token` / `OPENRESPONSESD_AUTH_TOKEN`.
+
 ## Development Notes
 
 This repository uses vendored dependencies and standard Go commands:
@@ -91,5 +96,6 @@ Important behavior contracts are captured as architecture decision records under
 
 - `internal/rocketcode/docs/adr/`
 - `internal/rocketclaw/docs/adr/`
+- `internal/openresponsesd/docs/adr/`
 
 Those architecture decision records describe the product behavior that refactors are expected to preserve.
