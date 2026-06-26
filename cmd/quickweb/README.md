@@ -11,6 +11,18 @@ go run github.com/Rocketable/platform/cmd/quickweb@main --db ./alitu-quickweb.sq
 
 Quickweb does not have a `--root` flag. The content root is always the process working directory.
 
+## Agent Skills
+
+Use `quickweb skill` to print built-in agent-facing guidance before starting a server. Use `quickweb skill <name>` for focused guidance.
+
+Available names:
+
+- `install`
+- `run`
+- `create-applet`
+- `find-applet`
+- `troubleshoot`
+
 ## Flags
 
 - `--addr`: bind address, default `0.0.0.0:8797`.
@@ -21,7 +33,6 @@ Quickweb does not have a `--root` flag. The content root is always the process w
 ## Endpoints
 
 - `GET /healthz`: health and diagnostics JSON.
-- `GET /skills`: Markdown applet-authoring instructions.
 - `GET /data?path=/applet/`: read the applet page JSON document.
 - `PUT /data?path=/applet/`: full JSON overwrite.
 - `POST /data?path=/applet/`: full JSON overwrite.

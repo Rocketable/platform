@@ -36,6 +36,10 @@ type Config struct {
 // Run executes quickweb with argv0 and args.
 func Run(ctx context.Context, argv0 string, args []string) error {
 	invocation := invocationCommand(argv0)
+	if len(args) != 0 && args[0] == "skill" {
+		return runSkillCommand(os.Stdout, invocation, args[1:])
+	}
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get working directory: %w", err)
@@ -64,7 +68,7 @@ func Run(ctx context.Context, argv0 string, args []string) error {
 	}
 
 	if len(fs.Args()) != 0 {
-		return fmt.Errorf("quickweb takes flags only, got extra arguments: %s\n\n%s", strings.Join(fs.Args(), " "), helpText(invocation))
+		return fmt.Errorf("quickweb takes flags only, got extra arguments: %s; use %s skill [name] for agent-facing guidance\n\n%s", strings.Join(fs.Args(), " "), invocation, helpText(invocation))
 	}
 
 	cfg.BaseURL = strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
@@ -192,6 +196,7 @@ func helpText(cmd string) string {
 Usage:
 
   %[1]s [--addr 0.0.0.0:8797] [--db ./quickweb.sqlite] [--service-name name] [--base-url https://host]
+  %[1]s skill [name]
 
 Flags:
 
@@ -203,6 +208,10 @@ Flags:
 Content root:
 
   Quickweb always serves files from the current working directory. Start it from the applet content root.
+
+Agent guidance:
+
+  Run %[1]s skill for Quickweb operating guidance before starting a server.
 
 Example:
 
@@ -229,7 +238,6 @@ Systemd example:
 Endpoints:
 
   GET /healthz
-  GET /skills
   GET /data?path=/applet/
   PUT /data?path=/applet/   full JSON overwrite
   POST /data?path=/applet/  full JSON overwrite

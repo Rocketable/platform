@@ -1,6 +1,8 @@
 package quickweb
 
 import (
+	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"io"
@@ -11,6 +13,131 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestSkillCommandIndex(t *testing.T) {
+	var out bytes.Buffer
+	if err := runSkillCommand(&out, "quickweb", nil); err != nil {
+		t.Fatalf("runSkillCommand returned error: %v", err)
+	}
+
+	body := out.String()
+	for _, want := range []string{"# Quickweb Skill Index", "quickweb skill install", "quickweb skill run", "quickweb skill create-applet", "quickweb skill find-applet", "quickweb skill troubleshoot"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("skill index missing %q", want)
+		}
+	}
+	if strings.Contains(body, "# Quickweb Skill: create-applet") {
+		t.Fatalf("skill index includes focused skill body")
+	}
+}
+
+func TestSkillCommandHelp(t *testing.T) {
+	for _, arg := range []string{"--help", "-h"} {
+		t.Run(arg, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := runSkillCommand(&out, "quickweb", []string{arg}); err != nil {
+				t.Fatalf("runSkillCommand returned error: %v", err)
+			}
+			if body := out.String(); !strings.Contains(body, "# Quickweb Skill Index") || !strings.Contains(body, "quickweb skill create-applet") {
+				t.Fatalf("skill help output missing index: %s", body)
+			}
+		})
+	}
+}
+
+func TestSkillCommandNamedSkills(t *testing.T) {
+	tests := []struct {
+		name    string
+		want    []string
+		missing string
+	}{
+		{name: "install", want: []string{"# Quickweb Skill: install", "not a hosted service", "already installed", "go run ./cmd/quickweb --help"}, missing: "# Quickweb Skill: run"},
+		{name: "run", want: []string{"# Quickweb Skill: run", "There is no `--root` flag", "`--db`", "`--addr`", "`--service-name`", "`--base-url`"}, missing: "# Quickweb Skill: create-applet"},
+		{name: "create-applet", want: []string{"# Quickweb Skill: create-applet", "static HTML", "`/data`", "`location.pathname`", "full overwrite", "There is no `PATCH` endpoint", "Last write wins", "No browser libraries are approved yet"}, missing: "# Quickweb Skill: troubleshoot"},
+		{name: "find-applet", want: []string{"# Quickweb Skill: find-applet", "`/tool`", "`/tool/`", "dotfiles", "SQLite files"}, missing: "# Quickweb Skill: install"},
+		{name: "troubleshoot", want: []string{"# Quickweb Skill: troubleshoot", "Missing state", "directory applets normalize", "Startup failure", "Browser 404"}, missing: "# Quickweb Skill: find-applet"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := runSkillCommand(&out, "quickweb", []string{tt.name}); err != nil {
+				t.Fatalf("runSkillCommand returned error: %v", err)
+			}
+
+			body := out.String()
+			for _, want := range tt.want {
+				if !strings.Contains(body, want) {
+					t.Fatalf("skill %s missing %q", tt.name, want)
+				}
+			}
+			if strings.Contains(body, tt.missing) {
+				t.Fatalf("skill %s includes unrelated focused skill body", tt.name)
+			}
+		})
+	}
+}
+
+func TestSkillCommandErrors(t *testing.T) {
+	var out bytes.Buffer
+	err := runSkillCommand(&out, "quickweb", []string{"bad-name"})
+	if err == nil {
+		t.Fatal("runSkillCommand returned nil error for unknown skill")
+	}
+	for _, want := range []string{"unknown quickweb skill", "install", "run", "create-applet", "find-applet", "troubleshoot"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("unknown skill error missing %q: %v", want, err)
+		}
+	}
+
+	err = runSkillCommand(&out, "quickweb", []string{"create-applet", "extra"})
+	if err == nil {
+		t.Fatal("runSkillCommand returned nil error for extra arg")
+	}
+	if !strings.Contains(err.Error(), "usage: quickweb skill [name]") {
+		t.Fatalf("extra arg error missing usage: %v", err)
+	}
+}
+
+func TestRunDispatchesNamedSkillArguments(t *testing.T) {
+	err := Run(context.Background(), "quickweb", []string{"skill", "bad-name"})
+	if err == nil {
+		t.Fatal("Run returned nil error for unknown skill")
+	}
+	if !strings.Contains(err.Error(), "unknown quickweb skill") {
+		t.Fatalf("Run skill error = %v, want unknown skill error", err)
+	}
+}
+
+func TestSkillRunDoesNotNeedWorkingDirectory(t *testing.T) {
+	removedDir := filepath.Join(t.TempDir(), "removed")
+	if err := os.Mkdir(removedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(removedDir)
+	if err := os.Remove(removedDir); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Run(context.Background(), "quickweb", []string{"skill", "--help"}); err != nil {
+		t.Fatalf("Run skill returned error from removed working directory: %v", err)
+	}
+}
+
+func TestHelpMentionsSkillCommand(t *testing.T) {
+	body := helpText("quickweb")
+	if !strings.Contains(body, "quickweb skill [name]") {
+		t.Fatalf("help text missing skill command: %s", body)
+	}
+
+	err := Run(context.Background(), "quickweb", []string{"not-skill"})
+	if err == nil {
+		t.Fatal("Run returned nil error for positional argument")
+	}
+	if !strings.Contains(err.Error(), "quickweb skill [name]") {
+		t.Fatalf("positional argument error missing skill guidance: %v", err)
+	}
+}
 
 func TestNormalizeNamespace(t *testing.T) {
 	rootDir := t.TempDir()
@@ -68,9 +195,11 @@ func TestStaticServing(t *testing.T) {
 	server, rootDir := newTestServer(t)
 	writeFile(t, rootDir, "index.html", "home")
 	writeFile(t, rootDir, "demo/index.html", "demo")
+	writeFile(t, rootDir, "skills", "user skills")
 
 	assertResponse(t, server.Handler(), http.MethodGet, "/", nil, http.StatusOK, "home")
 	assertResponse(t, server.Handler(), http.MethodGet, "/demo/", nil, http.StatusOK, "demo")
+	assertResponse(t, server.Handler(), http.MethodGet, "/skills", nil, http.StatusOK, "user skills")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/demo", nil)
@@ -137,20 +266,16 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
-func TestSkillsEndpoint(t *testing.T) {
-	server, _ := newTestServer(t)
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/skills", nil)
-	server.Handler().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /skills status = %d, want 200", rec.Code)
+func TestCreateAppletSkillIncludesAppletGuidanceFacts(t *testing.T) {
+	var out bytes.Buffer
+	if err := runSkillCommand(&out, "quickweb", []string{"create-applet"}); err != nil {
+		t.Fatalf("runSkillCommand returned error: %v", err)
 	}
 
-	body := rec.Body.String()
-	for _, want := range []string{"/data", "full overwrite", "index.html", "There is no PATCH endpoint", "saveState"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("/skills response missing %q", want)
+	cliBody := out.String()
+	for _, want := range []string{"/data", "location.pathname", "full overwrite", "PATCH", "directory applets normalize", "static HTML", "SQLite files", "dotfiles", "Last write wins", "No browser libraries are approved yet"} {
+		if !strings.Contains(strings.ToLower(cliBody), strings.ToLower(want)) {
+			t.Fatalf("create-applet skill missing %q", want)
 		}
 	}
 }
@@ -158,7 +283,6 @@ func TestSkillsEndpoint(t *testing.T) {
 func TestMethodRestrictions(t *testing.T) {
 	server, _ := newTestServer(t)
 	assertResponse(t, server.Handler(), http.MethodPatch, "/data?path=%2Fdemo%2F", nil, http.StatusMethodNotAllowed, "")
-	assertResponse(t, server.Handler(), http.MethodPost, "/skills", nil, http.StatusMethodNotAllowed, "")
 	assertResponse(t, server.Handler(), http.MethodPost, "/index.html", nil, http.StatusMethodNotAllowed, "")
 }
 

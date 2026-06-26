@@ -27,8 +27,6 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/healthz":
 		s.handleHealth(w, r)
-	case "/skills":
-		s.handleSkills(w, r)
 	case "/data":
 		s.handleData(w, r)
 	default:
