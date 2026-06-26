@@ -90,7 +90,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		discordTextSink  *discordtext.Connector
 		discordSink      *discordvoice.Connector
 		stops            []namedStopper
-		startThreadRoot  startNewThreadRootFunc
+		startThreadRoot  func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadRootResult, error)
 	)
 
 	startThreadRoot = func(_ context.Context, req *events.StartNewThreadRequest) (events.StartNewThreadRootResult, error) {

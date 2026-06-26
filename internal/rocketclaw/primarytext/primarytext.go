@@ -124,12 +124,11 @@ func NextSocialAgent(current string, agents []string) string {
 
 // GoalProgressText returns the shared visible goal progress prefix.
 func GoalProgressText(turnNumber, maxTurns int) string {
-	suffix := ""
 	if maxTurns > 0 && turnNumber > 0 {
-		suffix = fmt.Sprintf(" (%d/%d)", turnNumber, maxTurns)
+		return fmt.Sprintf("_Pursuing Goal (%d/%d)..._", turnNumber, maxTurns)
 	}
 
-	return fmt.Sprintf("_Pursuing Goal%s..._", suffix)
+	return "_Pursuing Goal..._"
 }
 
 // RunOneOffCronjob wires shared on-demand cron progress and final output handling.
@@ -191,6 +190,20 @@ func OneOffCronjobSeedText(loaded cronjob.OneOffCronjob, result cronjob.RunResul
 	}
 
 	if names := events.AttachmentNamesSpeech(result.Attachments); names != "" {
+		seedText += "\n\n" + names
+	}
+
+	return seedText
+}
+
+// ScheduledCronjobSeedText returns the managed-conversation seed for a scheduled cron result.
+func ScheduledCronjobSeedText(relativePath, ranAt, agent, text string, attachments []events.OutboundAttachment) string {
+	seedText := "Cronjob " + relativePath + " ran at " + ranAt + " with agent " + strings.TrimSpace(agent) + "."
+	if text := strings.TrimSpace(text); text != "" {
+		seedText += "\n\nHuman-visible cron output:\n" + text
+	}
+
+	if names := events.AttachmentNamesSpeech(attachments); names != "" {
 		seedText += "\n\n" + names
 	}
 

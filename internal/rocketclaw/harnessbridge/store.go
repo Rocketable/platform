@@ -1319,7 +1319,7 @@ ORDER BY c.last_updated DESC, c.conversation_id, se.id`
 
 // SlackThreadConversationID returns the stable conversation ID for a Slack thread.
 func SlackThreadConversationID(channelID, threadTS string) string {
-	return slackPairKey("slack-thread:", channelID, threadTS)
+	return textPairKey("slack-thread:", channelID, threadTS)
 }
 
 // SessionDBPathIn returns the SQLite database path for rocketcode session inspection in workDir.
@@ -1340,7 +1340,7 @@ func SlackThreadTarget(conversationID string) (channelID, threadTS string, ok bo
 
 // SlackResponseCheckpointKey returns the stable key for one posted Slack AI response message.
 func SlackResponseCheckpointKey(channelID, messageTS string) string {
-	return slackPairKey("slack-response:", channelID, messageTS)
+	return textPairKey("slack-response:", channelID, messageTS)
 }
 
 // DiscordThreadConversationID returns the stable conversation ID for a Discord thread.
@@ -1363,15 +1363,10 @@ func DiscordThreadTarget(conversationID string) (threadID string, ok bool) {
 
 // DiscordResponseCheckpointKey returns the stable key for one posted Discord AI response message.
 func DiscordResponseCheckpointKey(channelID, messageID string) string {
-	channelID, messageID = strings.TrimSpace(channelID), strings.TrimSpace(messageID)
-	if channelID == "" || messageID == "" {
-		return ""
-	}
-
-	return "discord-response:" + channelID + ":" + messageID
+	return textPairKey("discord-response:", channelID, messageID)
 }
 
-func slackPairKey(prefix, channelID, ts string) string {
+func textPairKey(prefix, channelID, ts string) string {
 	channelID, ts = strings.TrimSpace(channelID), strings.TrimSpace(ts)
 	if channelID == "" || ts == "" {
 		return ""

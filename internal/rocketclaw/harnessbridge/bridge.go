@@ -341,7 +341,7 @@ func (b *Bridge) Summarize(ctx context.Context, prompt string) (string, error) {
 }
 
 // SeedResponseThread initializes an empty thread session from a main-session response checkpoint.
-func (b *Bridge) SeedResponseThread(ctx context.Context, checkpoint events.ResponseCheckpoint, _ string) error {
+func (b *Bridge) SeedResponseThread(ctx context.Context, checkpoint events.ResponseCheckpoint) error {
 	if checkpoint.SessionEntryID <= 0 {
 		return errors.New("response checkpoint session entry ID is required")
 	}
@@ -455,11 +455,6 @@ func (b *Bridge) SeedThreadFromConversation(ctx context.Context, sourceConversat
 	}
 
 	return b.seedThreadFromConversation(ctx, sourceConversationID, entryType)
-}
-
-// SeedThreadFromMain initializes an empty thread session from current main-session context.
-func (b *Bridge) SeedThreadFromMain(ctx context.Context) error {
-	return b.seedThreadFromConversation(ctx, events.MainConversationID(), "main_thread_seed")
 }
 
 // SeedThreadFromCron initializes an empty thread session from cron output.
@@ -2103,7 +2098,9 @@ func startNewThreadTool(start func(context.Context, *events.StartNewThreadReques
 				return rocketcode.ToolResult{}, errors.New("prompt is required")
 			}
 
-			req := events.StartNewThreadRequest{Source: msg.Source, SourceConversationID: msg.ConversationID, CurrentAgent: currentAgent, Agent: strings.TrimSpace(input.Agent), Title: title, Prompt: prompt, TerminalClientID: strings.TrimSpace(msg.Metadata[events.TerminalCLIClientIDMetadataKey]), AllowedAgents: metadataList(msg.Metadata[events.InboundAllowedAgentsMetadataKey])}
+			allowedAgents := strings.FieldsFunc(msg.Metadata[events.InboundAllowedAgentsMetadataKey], func(r rune) bool { return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' ' })
+
+			req := events.StartNewThreadRequest{Source: msg.Source, SourceConversationID: msg.ConversationID, CurrentAgent: currentAgent, Agent: strings.TrimSpace(input.Agent), Title: title, Prompt: prompt, TerminalClientID: strings.TrimSpace(msg.Metadata[events.TerminalCLIClientIDMetadataKey]), AllowedAgents: allowedAgents}
 			if msg.SlackReply != nil {
 				req.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS}
 			}
@@ -2133,17 +2130,6 @@ func agentExplicitlyAllowsStartNewThread(agent *rocketcode.Agent) bool {
 	return matched && action == rocketcode.PermissionAllow
 }
 
-func metadataList(value string) []string {
-	items := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == '\n' || r == '\t' || r == ' ' })
-
-	items = slices.DeleteFunc(items, func(item string) bool { return strings.TrimSpace(item) == "" })
-	for i := range items {
-		items[i] = strings.TrimSpace(items[i])
-	}
-
-	return items
-}
-
 func nativeQuestionTurn(msg *events.InboundMessage) bool {
 	if !msg.Human {
 		return false
@@ -2164,23 +2150,15 @@ func nativeQuestionTurn(msg *events.InboundMessage) bool {
 }
 
 func startNewThreadNativeTurn(msg *events.InboundMessage) bool {
-	if !msg.Human || msg.Metadata[events.InboundStartNewThreadDisabledMetadataKey] == "true" {
+	if !nativeQuestionTurn(msg) || msg.Metadata[events.InboundStartNewThreadDisabledMetadataKey] == "true" {
 		return false
 	}
 
-	switch msg.Source {
-	case events.SourceSlack:
-		return msg.SlackReply != nil
-	case events.SourceDiscordText:
-		return msg.DiscordReply != nil
-	case events.SourceTerminalCLI:
-		clientID := strings.TrimSpace(msg.Metadata[events.TerminalCLIClientIDMetadataKey])
-		return clientID != "" && clientID != events.TerminalCLIEmbeddedClientID
-	case events.SourceDiscordVoice, events.SourceExternalMCP, events.SourceWebVoice, events.SourceSystem:
-		return false
+	if msg.Source == events.SourceTerminalCLI {
+		return strings.TrimSpace(msg.Metadata[events.TerminalCLIClientIDMetadataKey]) != events.TerminalCLIEmbeddedClientID
 	}
 
-	return false
+	return true
 }
 
 func updateGoalTool(b *Bridge) rocketcode.Tool {
@@ -2619,11 +2597,11 @@ type promptProvenance struct {
 
 func provenanceFromInbound(msg *events.InboundMessage) promptProvenance {
 	provenance := promptProvenance{origin: originForSource(msg.Source), media: mediaForSource(msg.Source)}
-	if origin := canonicalOriginOverride(msg.Metadata[events.InboundOriginMetadataKey]); origin != "" {
+	if origin := canonicalOverride(msg.Metadata[events.InboundOriginMetadataKey], "Slack", "Discord", "Cron", "ExternalMCP", "Terminal", "Web", "System"); origin != "" {
 		provenance.origin = origin
 	}
 
-	if media := canonicalMediaOverride(msg.Metadata[events.InboundMediaMetadataKey]); media != "" {
+	if media := canonicalOverride(msg.Metadata[events.InboundMediaMetadataKey], "Text", "Voice"); media != "" {
 		provenance.media = media
 	}
 
@@ -2634,36 +2612,12 @@ func provenanceFromInbound(msg *events.InboundMessage) promptProvenance {
 	return provenance
 }
 
-func canonicalOriginOverride(value string) string {
-	switch strings.TrimSpace(value) {
-	case "Slack":
-		return "Slack"
-	case "Discord":
-		return "Discord"
-	case "Cron":
-		return "Cron"
-	case "ExternalMCP":
-		return "ExternalMCP"
-	case "Terminal":
-		return "Terminal"
-	case "Web":
-		return "Web"
-	case "System":
-		return "System"
-	default:
-		return ""
+func canonicalOverride(value string, allowed ...string) string {
+	if value = strings.TrimSpace(value); slices.Contains(allowed, value) {
+		return value
 	}
-}
 
-func canonicalMediaOverride(value string) string {
-	switch strings.TrimSpace(value) {
-	case "Text":
-		return "Text"
-	case "Voice":
-		return "Voice"
-	default:
-		return ""
-	}
+	return ""
 }
 
 func originForSource(source events.Source) string {
@@ -2686,14 +2640,11 @@ func originForSource(source events.Source) string {
 }
 
 func mediaForSource(source events.Source) string {
-	switch source {
-	case events.SourceDiscordVoice, events.SourceWebVoice:
+	if source == events.SourceDiscordVoice || source == events.SourceWebVoice {
 		return "Voice"
-	case events.SourceSlack, events.SourceDiscordText, events.SourceExternalMCP, events.SourceTerminalCLI, events.SourceSystem:
-		return "Text"
-	default:
-		return "Text"
 	}
+
+	return "Text"
 }
 
 func provenanceHeader(provenance promptProvenance) string {

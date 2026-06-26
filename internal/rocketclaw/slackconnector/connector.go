@@ -426,16 +426,7 @@ func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, rel
 		}
 	}
 
-	seedText := "Cronjob " + relativePath + " ran at " + ranAt + " with agent " + strings.TrimSpace(agent) + "."
-	if strings.TrimSpace(text) != "" {
-		seedText += "\n\nHuman-visible cron output:\n" + strings.TrimSpace(text)
-	}
-
-	if names := events.AttachmentNamesSpeech(attachments); names != "" {
-		seedText += "\n\n" + names
-	}
-
-	if err := c.threadRouter.RegisterCronThread(ctx, root, agent, seedText); err != nil {
+	if err := c.threadRouter.RegisterCronThread(ctx, root, agent, primarytext.ScheduledCronjobSeedText(relativePath, ranAt, agent, text, attachments)); err != nil {
 		return fmt.Errorf("register Slack cronjob thread: %w", err)
 	}
 
@@ -1228,7 +1219,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 
 	replyTarget := &events.SlackReplyTarget{ChannelID: ev.Channel, MessageTS: ev.TimeStamp, ThreadTS: threadTS}
 	if threadTS != "" {
-		handled, err := c.threadRouter.PrepareThreadReply(events.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS})
+		_, handled, err := c.threadRouter.ThreadAgent(events.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS})
 		if err != nil {
 			c.log.Error("prepare Slack thread reply", "error", err, "channel", ev.Channel, "thread_ts", threadTS)
 			return
@@ -2276,7 +2267,7 @@ func (c *Connector) ensureSlackStackLocked(key string) {
 }
 
 func (c *Connector) resolveManagedThreadTS(ctx context.Context, channelID, messageTS string) (threadTS string, handled bool, err error) {
-	handled, err = c.threadRouter.PrepareThreadReply(events.TextConversationTarget{ChannelID: channelID, ThreadID: messageTS})
+	_, handled, err = c.threadRouter.ThreadAgent(events.TextConversationTarget{ChannelID: channelID, ThreadID: messageTS})
 	if err != nil {
 		return "", false, fmt.Errorf("prepare Slack thread reply: %w", err)
 	}
@@ -2292,7 +2283,7 @@ func (c *Connector) resolveManagedThreadTS(ctx context.Context, channelID, messa
 
 	threadTS = strings.TrimSpace(item.Message.ThreadTimestamp)
 
-	handled, err = c.threadRouter.PrepareThreadReply(events.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS})
+	_, handled, err = c.threadRouter.ThreadAgent(events.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS})
 	if err != nil {
 		return "", false, fmt.Errorf("prepare Slack thread reply: %w", err)
 	}

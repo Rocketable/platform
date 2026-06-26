@@ -287,7 +287,7 @@ func TestNewConnectorUsesInjectedRuntimeDependencies(t *testing.T) {
 	c := New(&config.SlackConfig{BotToken: "xoxb-test", AppToken: "xapp-test"}, bus, nil, nil, inertThreadRouter{}, inertOneOffCronjobs{}, func() *events.InboundMessage { return nil }, answerQuestion, answerQuestionText, testLogger())
 
 	target := events.TextConversationTarget{ChannelID: "D123", MessageID: "111.222", ThreadID: "111.222"}
-	handled, err := c.threadRouter.PrepareThreadReply(target)
+	_, handled, err := c.threadRouter.ThreadAgent(target)
 	require.NoError(t, err)
 	assert.False(t, handled)
 	handled, err = c.threadRouter.PrepareResponseThreadReply(target)
@@ -4024,17 +4024,28 @@ func TestHandleMessageEventCyclesManagedSocialThreadAgent(t *testing.T) {
 	connector.handleMessageEvent(context.Background(), ev)
 
 	router.mu.Lock()
+	router.threadAgent = ""
+	router.mu.Unlock()
+
+	ev = newSlackMessageEvent("171235.0000", "171234.5678", "🎛")
+	ev.Channel = "C123"
+	connector.handleMessageEvent(context.Background(), ev)
+
+	router.mu.Lock()
 	reads := append([]threadAgentReadCall(nil), router.threadAgentReads...)
 	switched := append([]threadAgentSwitchCall(nil), router.switched...)
 	router.mu.Unlock()
 
-	require.Equal(t, []threadAgentReadCall{{channelID: "C123", threadTS: "171234.5678"}}, reads)
-	require.Equal(t, []threadAgentSwitchCall{{channelID: "C123", threadTS: "171234.5678", agent: "planner"}}, switched)
+	require.Equal(t, []threadAgentReadCall{{channelID: "C123", threadTS: "171234.5678"}, {channelID: "C123", threadTS: "171234.5678"}, {channelID: "C123", threadTS: "171234.5678"}, {channelID: "C123", threadTS: "171234.5678"}}, reads)
+	require.Equal(t, []threadAgentSwitchCall{{channelID: "C123", threadTS: "171234.5678", agent: "planner"}, {channelID: "C123", threadTS: "171234.5678", agent: "social"}}, switched)
 	assert.Empty(t, router.repliesSnapshot())
-	require.Len(t, ephemeral, 1)
+	require.Len(t, ephemeral, 2)
 	assert.Contains(t, ephemeral[0].Get("text"), "Switched")
 	assert.Contains(t, ephemeral[0].Get("text"), "`planner`")
 	assert.Equal(t, "171234.5678", ephemeral[0].Get("thread_ts"))
+	assert.Contains(t, ephemeral[1].Get("text"), "Switched")
+	assert.Contains(t, ephemeral[1].Get("text"), "`social`")
+	assert.Equal(t, "171234.5678", ephemeral[1].Get("thread_ts"))
 	assertNeverInbound(t, bus)
 }
 
@@ -5709,36 +5720,30 @@ func (s *threadRouterStub) SwitchThreadAgent(target events.TextConversationTarge
 
 func (s *threadRouterStub) ThreadAgent(target events.TextConversationTarget) (agent string, handled bool, err error) {
 	s.mu.Lock()
+
 	s.threadAgentReads = append(s.threadAgentReads, threadAgentReadCall{channelID: target.ChannelID, threadTS: target.ThreadID})
-	agent = s.threadAgent
-	handled = s.threadAgentHandled
-	s.mu.Unlock()
-
-	return agent, handled, err
-}
-
-func (s *threadRouterStub) PrepareThreadReply(target events.TextConversationTarget) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	_ = target
-
 	if s.errPrepare != nil {
-		return false, s.errPrepare
+		err = s.errPrepare
+		s.mu.Unlock()
+
+		return agent, handled, err
 	}
 
 	if len(s.prepareResults) > 0 {
-		result := s.prepareResults[0]
+		handled = s.prepareResults[0]
 		s.prepareResults = s.prepareResults[1:]
-
-		return result, nil
+	} else if s.prepareHandled || s.submitHandled {
+		handled = true
 	}
 
-	if s.prepareHandled {
-		return true, nil
+	agent = s.threadAgent
+	if s.threadAgentHandled {
+		handled = true
 	}
 
-	return s.submitHandled, nil
+	s.mu.Unlock()
+
+	return agent, handled, err
 }
 
 func (s *threadRouterStub) PrepareResponseThreadReply(target events.TextConversationTarget) (bool, error) {

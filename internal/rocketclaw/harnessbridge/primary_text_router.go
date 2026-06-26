@@ -14,7 +14,6 @@ type PrimaryTextRouter interface {
 	RegisterCronThread(ctx context.Context, target events.TextConversationTarget, agent, seedText string) error
 	ThreadAgent(target events.TextConversationTarget) (agent string, handled bool, err error)
 	SwitchThreadAgent(target events.TextConversationTarget, agent string) (bool, error)
-	PrepareThreadReply(target events.TextConversationTarget) (bool, error)
 	PrepareResponseThreadReply(target events.TextConversationTarget) (bool, error)
 	SubmitThreadReply(ctx context.Context, target events.TextConversationTarget, inbound *events.InboundMessage) (bool, error)
 	SubmitResponseThreadReply(ctx context.Context, target events.TextConversationTarget, inbound *events.InboundMessage) (bool, error)

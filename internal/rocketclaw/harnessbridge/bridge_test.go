@@ -2210,7 +2210,7 @@ func TestBridgeStartLogsRestoredScheduledMessage(t *testing.T) {
 	assert.Contains(t, logs.String(), "scheduled message restored")
 }
 
-func TestSeedThreadFromMainCompactsMainSessionOnce(t *testing.T) {
+func TestSeedThreadFromConversationCompactsMainSessionOnce(t *testing.T) {
 	workspace := t.TempDir()
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)
@@ -2256,8 +2256,8 @@ func TestSeedThreadFromMainCompactsMainSessionOnce(t *testing.T) {
 	bridge.config = Config{ConversationID: SlackThreadConversationID("D123", "111.222"), Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}
 	bridge.log = slog.New(slog.DiscardHandler)
 
-	require.NoError(t, bridge.SeedThreadFromMain(context.Background()))
-	require.NoError(t, bridge.SeedThreadFromMain(context.Background()))
+	require.NoError(t, bridge.SeedThreadFromConversation(context.Background(), events.MainConversationID()))
+	require.NoError(t, bridge.SeedThreadFromConversation(context.Background(), events.MainConversationID()))
 
 	mu.Lock()
 	assert.Equal(t, 1, compacts)
@@ -2275,7 +2275,7 @@ func TestSeedThreadFromMainCompactsMainSessionOnce(t *testing.T) {
 	assert.Equal(t, "sealed", params[0].OfCompaction.EncryptedContent)
 }
 
-func TestSeedThreadFromMainReusesLatestCompaction(t *testing.T) {
+func TestSeedThreadFromConversationReusesLatestMainCompaction(t *testing.T) {
 	workspace := t.TempDir()
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)
@@ -2322,7 +2322,7 @@ func TestSeedThreadFromMainReusesLatestCompaction(t *testing.T) {
 	bridge.config = Config{ConversationID: SlackThreadConversationID("D123", "111.222"), Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}
 	bridge.log = slog.New(slog.DiscardHandler)
 
-	require.NoError(t, bridge.SeedThreadFromMain(context.Background()))
+	require.NoError(t, bridge.SeedThreadFromConversation(context.Background(), events.MainConversationID()))
 	require.Len(t, requestBody.Input, 3)
 	assert.Equal(t, "compaction", requestBody.Input[0].Type)
 	assert.Equal(t, "sealed-main", requestBody.Input[0].EncryptedContent)
@@ -2330,7 +2330,7 @@ func TestSeedThreadFromMainReusesLatestCompaction(t *testing.T) {
 	assert.Equal(t, "new answer", requestBody.Input[2].Content)
 }
 
-func TestSeedThreadFromMainReturnsWhenMainSessionEmpty(t *testing.T) {
+func TestSeedThreadFromConversationReturnsWhenMainSessionEmpty(t *testing.T) {
 	service := newTestSessionService(t)
 	conversationID := SlackThreadConversationID("D123", "111.222")
 
@@ -2339,7 +2339,7 @@ func TestSeedThreadFromMainReturnsWhenMainSessionEmpty(t *testing.T) {
 	bridge.config = Config{ConversationID: conversationID, Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}
 	bridge.log = slog.New(slog.DiscardHandler)
 
-	require.NoError(t, bridge.SeedThreadFromMain(context.Background()))
+	require.NoError(t, bridge.SeedThreadFromConversation(context.Background(), events.MainConversationID()))
 
 	entries, err := service.ObserveEntries(context.Background(), conversationID, 0)
 	require.NoError(t, err)
@@ -2366,7 +2366,7 @@ func TestSeedThreadFromCronPersistsAssistantSeedOnce(t *testing.T) {
 	assert.Equal(t, []replayInputMessage{{role: "assistant", text: "cron output"}}, messages)
 }
 
-func TestSeedThreadFromMainReportsThreadSessionLoadFailure(t *testing.T) {
+func TestSeedThreadFromConversationReportsThreadSessionLoadFailure(t *testing.T) {
 	service, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
 	require.NoError(t, service.Stop(context.Background()))
@@ -2376,7 +2376,7 @@ func TestSeedThreadFromMainReportsThreadSessionLoadFailure(t *testing.T) {
 	bridge.config = Config{ConversationID: SlackThreadConversationID("D123", "111.222"), Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}
 	bridge.log = slog.New(slog.DiscardHandler)
 
-	err = bridge.SeedThreadFromMain(context.Background())
+	err = bridge.SeedThreadFromConversation(context.Background(), events.MainConversationID())
 	require.ErrorContains(t, err, "load thread session")
 }
 
@@ -2423,7 +2423,7 @@ func TestSeedResponseThreadCompactsMainCheckpoint(t *testing.T) {
 	bridge.config = Config{ConversationID: SlackThreadConversationID("D123", "111.222"), Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}
 	bridge.log = slog.New(slog.DiscardHandler)
 
-	require.NoError(t, bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{ConversationID: events.MainConversationID(), SessionEntryID: id, ResponseID: "resp-1", Model: "openai/gpt-5.5", AssistantText: "thread root answer"}, "seed-key"))
+	require.NoError(t, bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{ConversationID: events.MainConversationID(), SessionEntryID: id, ResponseID: "resp-1", Model: "openai/gpt-5.5", AssistantText: "thread root answer"}))
 	require.NoError(t, errRequest)
 	require.Len(t, requestBody.Input, 1)
 	assert.Equal(t, "user", requestBody.Input[0].Role)
@@ -2487,7 +2487,7 @@ func TestSeedResponseThreadReusesLatestCompaction(t *testing.T) {
 	bridge.config = Config{ConversationID: SlackThreadConversationID("D123", "111.222"), Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}
 	bridge.log = slog.New(slog.DiscardHandler)
 
-	require.NoError(t, bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{ConversationID: events.MainConversationID(), SessionEntryID: id, ResponseID: "resp-1", Model: "openai/gpt-5.5", AssistantText: "thread root answer"}, "seed-key"))
+	require.NoError(t, bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{ConversationID: events.MainConversationID(), SessionEntryID: id, ResponseID: "resp-1", Model: "openai/gpt-5.5", AssistantText: "thread root answer"}))
 	require.Len(t, requestBody.Input, 2)
 	assert.Equal(t, "compaction", requestBody.Input[0].Type)
 	assert.Equal(t, "sealed-response", requestBody.Input[0].EncryptedContent)
@@ -2541,7 +2541,7 @@ func TestSeedResponseThreadCompactsPriorMainEntriesWithChatGPTInstructions(t *te
 	bridge.config = Config{ConversationID: SlackThreadConversationID("D123", "111.222"), Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}
 	bridge.log = slog.New(slog.DiscardHandler)
 
-	require.NoError(t, bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{SessionEntryID: id, ResponseID: "resp-2", Model: "openai/gpt-5.5", AssistantText: "thread root answer"}, "seed-key"))
+	require.NoError(t, bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{SessionEntryID: id, ResponseID: "resp-2", Model: "openai/gpt-5.5", AssistantText: "thread root answer"}))
 	assert.Equal(t, "Agent instructions", requestBody.Instructions)
 	require.Len(t, requestBody.Input, 3)
 	assert.Equal(t, "earlier question", requestBody.Input[0].Content)
@@ -2582,7 +2582,7 @@ func TestSeedResponseThreadRejectsInvalidCheckpoint(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			err := bridge.SeedResponseThread(context.Background(), tt.checkpoint, "seed-key")
+			err := bridge.SeedResponseThread(context.Background(), tt.checkpoint)
 			require.ErrorContains(t, err, tt.wantErr)
 		})
 	}
@@ -2600,7 +2600,7 @@ func TestSeedResponseThreadReturnsWhenThreadAlreadySeeded(t *testing.T) {
 	bridge.config = Config{ConversationID: conversationID, Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}
 	bridge.log = slog.New(slog.DiscardHandler)
 
-	err = bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{SessionEntryID: 1, AssistantText: "thread root answer"}, "seed-key")
+	err = bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{SessionEntryID: 1, AssistantText: "thread root answer"})
 	require.NoError(t, err)
 
 	entries, err := service.ObserveEntries(context.Background(), conversationID, 0)
@@ -2619,7 +2619,7 @@ func TestSeedResponseThreadReportsThreadSessionLoadFailure(t *testing.T) {
 	bridge.config = Config{ConversationID: SlackThreadConversationID("D123", "111.222"), Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}
 	bridge.log = slog.New(slog.DiscardHandler)
 
-	err = bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{SessionEntryID: 1, AssistantText: "thread root answer"}, "seed-key")
+	err = bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{SessionEntryID: 1, AssistantText: "thread root answer"})
 	require.ErrorContains(t, err, "load response-rooted thread session")
 }
 

@@ -3,7 +3,6 @@ package app
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -53,7 +52,7 @@ func newTerminalCLI(options CLIOptions, bus *events.Bus, onExit func()) *termina
 	}
 
 	if options.NewConversation {
-		conversationID = "cli:" + rand.Text()
+		conversationID = newTerminalConversationID()
 	}
 
 	return &terminalCLI{bus: bus, renderer: &terminalRenderer{out: options.Out}, reader: bufio.NewReader(options.In), agent: agent, conversationID: conversationID, newConversation: options.NewConversation, onExit: onExit, cmux: runCMUX, newConversationID: func(context.Context, string) (string, error) {
@@ -99,7 +98,9 @@ func (c *terminalCLI) readInput(ctx context.Context) {
 		inbound := events.NewMainInboundMessage(events.SourceTerminalCLI, events.InboundKindPrompt, "terminal", line, true)
 		inbound.ConversationID = c.conversationID
 
-		inbound.Metadata = map[string]string{events.TerminalCLIClientIDMetadataKey: events.TerminalCLIEmbeddedClientID, events.InboundStartNewThreadDisabledMetadataKey: "true"}
+		inbound.Metadata = map[string]string{events.TerminalCLIClientIDMetadataKey: events.TerminalCLIEmbeddedClientID}
+		disableStartNewThread(inbound)
+
 		if principal := terminalPrincipal(events.TerminalCLIEmbeddedClientID); principal != "" {
 			inbound.Metadata[events.InboundPrincipalMetadataKey] = principal
 		}

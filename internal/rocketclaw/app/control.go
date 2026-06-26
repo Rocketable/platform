@@ -301,7 +301,7 @@ func serveControlClient(ctx context.Context, conn net.Conn, bus *events.Bus, ses
 			agent = "main"
 		}
 
-		conversationID, private = "cli:"+rand.Text(), true
+		conversationID, private = newTerminalConversationID(), true
 
 		if _, err := threads.ensureStartedThread(ctx, &threadStart{conversationID: conversationID, agent: agent, outputTargets: []events.OutputTarget{events.OutputTargetTerminal}, persistErr: "persist terminal CLI thread bridge"}); err != nil {
 			send(controlMessage{Type: "error", Text: err.Error()})
@@ -379,6 +379,10 @@ func serveControlClient(ctx context.Context, conn net.Conn, bus *events.Bus, ses
 			}
 		}
 	}
+}
+
+func newTerminalConversationID() string {
+	return "cli:" + rand.Text()
 }
 
 func controlHistory(ctx context.Context, sessions *harnessbridge.SessionService, conversationID string, send func(controlMessage)) {

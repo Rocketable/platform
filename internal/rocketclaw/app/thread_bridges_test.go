@@ -183,11 +183,11 @@ func TestThreadBridgeManagerSeedsStartedThreadBeforeSubmit(t *testing.T) {
 
 	require.NoError(t, manager.StartThread(t.Context(), "main", true, slackTarget("D123", "111.222"), newThreadInboundMessage("first", "111.222", "111.222")))
 
-	assert.Equal(t, []string{"seed_main", "submit:first"}, bridge.ops)
+	assert.Equal(t, []string{"seed_conversation:main", "submit:first"}, bridge.ops)
 }
 
 func TestThreadBridgeManagerStopsStartedThreadWhenSeedFails(t *testing.T) {
-	bridge := &fakeDirectBridge{errSeedMain: assert.AnError}
+	bridge := &fakeDirectBridge{errSeedConversation: assert.AnError}
 	manager := newThreadBridgeManager(events.New(), nil, newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge {
 		return bridge
 	})
@@ -254,6 +254,14 @@ func TestThreadBridgeManagerReadsThreadAgent(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, handled)
 	assert.Equal(t, "planner", agent)
+
+	conversationID = harnessbridge.SlackThreadConversationID("D123", "333.444")
+	require.NoError(t, store.UpsertThread(conversationID, " "))
+
+	agent, handled, err = manager.ThreadAgent(slackTarget("D123", "333.444"))
+	require.NoError(t, err)
+	assert.True(t, handled)
+	assert.Empty(t, agent)
 
 	agent, handled, err = manager.ThreadAgent(slackTarget("D123", "222.333"))
 	require.NoError(t, err)
@@ -397,7 +405,7 @@ func TestThreadBridgeManagerSubmitsPersistedThreadReply(t *testing.T) {
 	bridge := new(fakeDirectBridge)
 	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 
-	handled, err := manager.PrepareThreadReply(slackTarget("D123", "111.222"))
+	_, handled, err := manager.ThreadAgent(slackTarget("D123", "111.222"))
 	require.NoError(t, err)
 	assert.True(t, handled)
 
@@ -557,13 +565,15 @@ func TestThreadBridgeManagerIgnoresUnmanagedThreadTargets(t *testing.T) {
 		{
 			name: "blank prepare",
 			call: func() (bool, error) {
-				return manager.PrepareThreadReply(slackTarget(" ", " "))
+				_, handled, err := manager.ThreadAgent(slackTarget(" ", " "))
+				return handled, err
 			},
 		},
 		{
 			name: "missing prepare",
 			call: func() (bool, error) {
-				return manager.PrepareThreadReply(slackTarget("D123", "111.222"))
+				_, handled, err := manager.ThreadAgent(slackTarget("D123", "111.222"))
+				return handled, err
 			},
 		},
 	} {
@@ -768,7 +778,7 @@ func TestThreadBridgeManagerRoutesExternalMCPThreadAlias(t *testing.T) {
 		return bridge
 	})
 
-	handled, err := manager.PrepareThreadReply(slackTarget("D123", "111.222"))
+	_, handled, err := manager.ThreadAgent(slackTarget("D123", "111.222"))
 	require.NoError(t, err)
 	assert.True(t, handled)
 
@@ -893,20 +903,19 @@ func TestThreadBridgeManagerStopAcceptingRejectsNewSubmissions(t *testing.T) {
 }
 
 type fakeDirectBridge struct {
-	submits          []*events.InboundMessage
-	seeds            []events.ResponseCheckpoint
-	cronSeeds        []string
-	mainSeeds        int
-	stops            int
-	ops              []string
-	errSeedMain      error
-	summarizeStarted chan struct{}
-	releaseSummarize chan summarizeOutcome
-	waitStarted      chan struct{}
-	releaseWait      chan error
-	startedCtx       context.Context
-	interrupts       int
-	interruptResult  *events.InboundMessage
+	submits             []*events.InboundMessage
+	seeds               []events.ResponseCheckpoint
+	cronSeeds           []string
+	stops               int
+	ops                 []string
+	errSeedConversation error
+	summarizeStarted    chan struct{}
+	releaseSummarize    chan summarizeOutcome
+	waitStarted         chan struct{}
+	releaseWait         chan error
+	startedCtx          context.Context
+	interrupts          int
+	interruptResult     *events.InboundMessage
 }
 
 type summarizeOutcome struct {
@@ -929,17 +938,10 @@ func (f *fakeDirectBridge) Submit(_ context.Context, msg *events.InboundMessage)
 	return nil
 }
 
-func (f *fakeDirectBridge) SeedThreadFromMain(context.Context) error {
-	f.mainSeeds++
-	f.ops = append(f.ops, "seed_main")
-
-	return f.errSeedMain
-}
-
 func (f *fakeDirectBridge) SeedThreadFromConversation(_ context.Context, sourceConversationID string) error {
 	f.ops = append(f.ops, "seed_conversation:"+sourceConversationID)
 
-	return nil
+	return f.errSeedConversation
 }
 
 func (f *fakeDirectBridge) SeedThreadFromCron(_ context.Context, seedText string) error {
@@ -949,7 +951,7 @@ func (f *fakeDirectBridge) SeedThreadFromCron(_ context.Context, seedText string
 	return nil
 }
 
-func (f *fakeDirectBridge) SeedResponseThread(_ context.Context, checkpoint events.ResponseCheckpoint, _ string) error {
+func (f *fakeDirectBridge) SeedResponseThread(_ context.Context, checkpoint events.ResponseCheckpoint) error {
 	f.seeds = append(f.seeds, checkpoint)
 	f.ops = append(f.ops, "seed_response")
 

@@ -305,16 +305,7 @@ func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, rel
 		}
 	}
 
-	seedText := "Cronjob " + relativePath + " ran at " + ranAt + " with agent " + strings.TrimSpace(agent) + "."
-	if strings.TrimSpace(text) != "" {
-		seedText += "\n\nHuman-visible cron output:\n" + strings.TrimSpace(text)
-	}
-
-	if names := events.AttachmentNamesSpeech(attachments); names != "" {
-		seedText += "\n\n" + names
-	}
-
-	if err := c.threadRouter.RegisterCronThread(ctx, events.TextConversationTarget{ThreadID: thread.ID}, agent, seedText); err != nil {
+	if err := c.threadRouter.RegisterCronThread(ctx, events.TextConversationTarget{ThreadID: thread.ID}, agent, primarytext.ScheduledCronjobSeedText(relativePath, ranAt, agent, text, attachments)); err != nil {
 		return fmt.Errorf("register Discord cronjob thread: %w", err)
 	}
 
@@ -845,7 +836,7 @@ func (c *Connector) stopDiscordThread(threadID string) bool {
 		return false
 	}
 
-	if marker != nil {
+	if marker != nil && marker.DiscordReply != nil {
 		c.addReaction(marker.DiscordReply.ChannelID, marker.DiscordReply.MessageID, discordInterruptedEmoji)
 	}
 

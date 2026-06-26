@@ -31,10 +31,6 @@ func (inertThreadRouter) SwitchThreadAgent(_ events.TextConversationTarget, _ st
 func (inertThreadRouter) ThreadAgent(_ events.TextConversationTarget) (agent string, handled bool, err error) {
 	return "", false, nil
 }
-func (inertThreadRouter) PrepareThreadReply(target events.TextConversationTarget) (bool, error) {
-	_ = target
-	return false, nil
-}
 func (inertThreadRouter) PrepareResponseThreadReply(target events.TextConversationTarget) (bool, error) {
 	_ = target
 	return false, nil

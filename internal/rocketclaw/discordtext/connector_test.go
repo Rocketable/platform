@@ -309,15 +309,22 @@ func TestHandleSocialThreadMessageCyclesAgent(t *testing.T) {
 
 	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "T123", Content: "🎛", Author: &textUser{ID: "social-human"}}})
 
+	router.threadAgent = ""
+
+	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U2", ChannelID: "T123", Content: "🎛", Author: &textUser{ID: "social-human"}}})
+
 	assert.False(t, answeredQuestion)
 	assert.Equal(t, "T123", router.threadAgentThreadID)
 	assert.Equal(t, "T123", router.switchedThreadID)
-	assert.Equal(t, "planner", router.switchedAgent)
+	assert.Equal(t, "triage", router.switchedAgent)
 	assert.Empty(t, router.submittedThreadID)
-	require.Len(t, fake.messages, 1)
+	require.Len(t, fake.messages, 2)
 	assert.Equal(t, "T123", fake.messages[0].channelID)
 	assert.Contains(t, fake.messages[0].send.Content, "Switched")
 	assert.Contains(t, fake.messages[0].send.Content, "`planner`")
+	assert.Equal(t, "T123", fake.messages[1].channelID)
+	assert.Contains(t, fake.messages[1].send.Content, "Switched")
+	assert.Contains(t, fake.messages[1].send.Content, "`triage`")
 }
 
 func TestHandleSocialMessageRequiresAllowedMention(t *testing.T) {
@@ -341,6 +348,18 @@ func TestHandleStopReactionInterruptsThread(t *testing.T) {
 	router := connector.threadRouter.(*fakeThreadRouter)
 	assert.Equal(t, "T123", router.interruptedThreadID)
 	assert.Equal(t, []string{"T123:M1:❗"}, fake.reactions)
+}
+
+func TestStopDiscordThreadWithoutDiscordMarkerSkipsReaction(t *testing.T) {
+	fake := newFakeDiscordClient()
+	router := newFakeThreadRouter()
+	router.interruptResult = events.InboundMessage{}
+	router.hasInterruptResult = true
+	connector := newTestConnector(fake, router)
+
+	assert.True(t, connector.stopDiscordThread("T123"))
+	assert.Equal(t, "T123", router.interruptedThreadID)
+	assert.Empty(t, fake.reactions)
 }
 
 func TestHandleStopReactionStopsMainWhenNoManagedTurn(t *testing.T) {
@@ -688,8 +707,10 @@ type fakeThreadRouter struct {
 	prepareResponseHandled, submitResponseHandled       bool
 	threadAgentHandled                                  bool
 	interruptHandled, switchHandled                     bool
+	hasInterruptResult                                  bool
 	started, submitted                                  *events.InboundMessage
 	startedGoal                                         *events.InboundMessage
+	interruptResult                                     events.InboundMessage
 	interruptedThreadID                                 string
 	recordedCheckpoints                                 []string
 }
@@ -710,11 +731,6 @@ func (f *fakeThreadRouter) PrepareResponseThreadReply(target events.TextConversa
 	return f.prepareResponseHandled, nil
 }
 
-func (f *fakeThreadRouter) PrepareThreadReply(target events.TextConversationTarget) (bool, error) {
-	_ = target
-	return false, nil
-}
-
 func (f *fakeThreadRouter) SubmitThreadReply(_ context.Context, target events.TextConversationTarget, inbound *events.InboundMessage) (bool, error) {
 	f.submittedThreadID = target.ThreadID
 	f.submitted = inbound
@@ -732,6 +748,10 @@ func (f *fakeThreadRouter) InterruptThread(target events.TextConversationTarget)
 	f.interruptedThreadID = target.ThreadID
 	if !f.interruptHandled {
 		return nil, nil
+	}
+
+	if f.hasInterruptResult {
+		return &f.interruptResult, nil
 	}
 
 	return &events.InboundMessage{DiscordReply: &events.DiscordReplyTarget{ChannelID: target.ThreadID, MessageID: "M1", ThreadID: target.ThreadID}}, nil
