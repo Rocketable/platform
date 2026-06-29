@@ -4,6 +4,7 @@ package cronjob
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -29,7 +30,7 @@ type RunResult struct {
 
 // OneOffCronjob captures a live one-off cronjob prompt loaded from disk.
 type OneOffCronjob struct {
-	Agent, Prompt, RelativePath, SlackChannel string
+	Agent, Prompt, RelativePath, TextChannel string
 }
 
 // OnDemandCronTarget extracts one deterministic top-level cron target from connector text.
@@ -113,7 +114,7 @@ type Manager struct {
 	run                RunFunc
 	log                *slog.Logger
 	now                func() time.Time
-	SendSlackChannel   func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error
+	SendTextChannel    func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error
 
 	mu            sync.Mutex
 	stop          context.CancelFunc
@@ -124,8 +125,8 @@ type Manager struct {
 }
 
 type definition struct {
-	relativePath, agent, slackChannel, body string
-	schedules                               []schedule
+	relativePath, agent, textChannel, body string
+	schedules                              []schedule
 }
 
 type schedule struct {
@@ -149,7 +150,7 @@ type job struct {
 
 // New constructs a cronjob manager using workDir for effective runtime cron definitions.
 func New(workspace, workDir string, bus *events.Bus, run RunFunc, logger *slog.Logger) *Manager {
-	return &Manager{workspace: workspace, bus: bus, run: run, log: logger.With("component", "cronjob"), now: time.Now, SendSlackChannel: func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
+	return &Manager{workspace: workspace, bus: bus, run: run, log: logger.With("component", "cronjob"), now: time.Now, SendTextChannel: func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
 		return nil
 	}, workDir: workDir}
 }
@@ -315,7 +316,7 @@ func (m *Manager) LoadOneOffCronjob(target string) (OneOffCronjob, error) {
 		return OneOffCronjob{}, err
 	}
 
-	return OneOffCronjob{Agent: definition.agent, Prompt: m.preparePrompt(definition.body), RelativePath: relativePath, SlackChannel: definition.slackChannel}, nil
+	return OneOffCronjob{Agent: definition.agent, Prompt: m.preparePrompt(definition.body), RelativePath: relativePath, TextChannel: definition.textChannel}, nil
 }
 
 // RunOneOffCronjob executes a loaded cronjob once with optional progress delivery.
@@ -448,10 +449,10 @@ func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 	log.Info("completed cronjob", "text", result.Text, "verbatim_message", result.VerbatimMessage, "human_visible", humanVisible)
 
 	visiblePayload := strings.TrimSpace(result.VerbatimMessage) != "" || len(result.Attachments) > 0
-	if definition.slackChannel != "" {
+	if definition.textChannel != "" {
 		if visiblePayload {
-			if err := m.SendSlackChannel(ctx, definition.slackChannel, definition.relativePath, definition.agent, ranAt, strings.TrimSpace(result.VerbatimMessage), result.Attachments); err != nil {
-				log.Warn("send cronjob text delivery", "channel", definition.slackChannel, "error", err)
+			if err := m.SendTextChannel(ctx, definition.textChannel, definition.relativePath, definition.agent, ranAt, strings.TrimSpace(result.VerbatimMessage), result.Attachments); err != nil {
+				log.Warn("send cronjob text delivery", "channel", definition.textChannel, "error", err)
 			}
 		}
 
@@ -459,7 +460,7 @@ func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 	}
 
 	if visiblePayload {
-		if err := m.SendSlackChannel(ctx, "", definition.relativePath, definition.agent, ranAt, strings.TrimSpace(result.VerbatimMessage), result.Attachments); err != nil {
+		if err := m.SendTextChannel(ctx, "", definition.relativePath, definition.agent, ranAt, strings.TrimSpace(result.VerbatimMessage), result.Attachments); err != nil {
 			log.Warn("send cronjob text delivery", "error", err)
 			return
 		}
@@ -613,7 +614,7 @@ func loadDefinition(data []byte, relativePath string) (definition, error) {
 		return definition{}, fmt.Errorf("parse cronjob %s: %w", relativePath, err)
 	}
 
-	scheduleValues, agent, slackChannel, err := parseFrontmatter(frontmatterBytes)
+	scheduleValues, agent, textChannel, err := parseFrontmatter(frontmatterBytes)
 	if err != nil {
 		return definition{}, fmt.Errorf("parse cronjob %s frontmatter: %w", relativePath, err)
 	}
@@ -638,77 +639,93 @@ func loadDefinition(data []byte, relativePath string) (definition, error) {
 	return definition{
 		relativePath: relativePath,
 		agent:        agent,
-		slackChannel: slackChannel,
+		textChannel:  textChannel,
 		body:         body,
 		schedules:    schedules,
 	}, nil
 }
 
-func parseFrontmatter(data []byte) (scheduleValues []string, agent, slackChannel string, err error) {
-	var raw map[string]any
+func parseFrontmatter(data []byte) (scheduleValues []string, agent, textChannel string, err error) {
+	var raw frontmatter
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, "", "", fmt.Errorf("unmarshal frontmatter yaml: %w", err)
 	}
 
-	scheduleValues, err = parseFrontmatterSchedule(raw["schedule"])
-	if err != nil {
-		return nil, "", "", err
+	if !raw.Schedule.present {
+		return nil, "", "", errors.New("schedule is required")
 	}
 
-	agent, err = parseFrontmatterAgent(raw["agent"])
-	if err != nil {
-		return nil, "", "", err
+	agent = string(raw.Agent)
+	if agent == "" {
+		agent = "main"
 	}
 
-	if text, ok := raw["channel"].(string); ok {
-		slackChannel = strings.TrimSpace(text)
-	} else if text, ok := raw["slack-channel"].(string); ok {
-		slackChannel = strings.TrimSpace(text)
-	}
-
-	return scheduleValues, agent, slackChannel, nil
+	return slices.Clone(raw.Schedule.values), agent, string(raw.Channel), nil
 }
 
-func parseFrontmatterSchedule(value any) ([]string, error) {
-	switch value := value.(type) {
-	case nil:
-		return nil, errors.New("schedule is required")
-	case string:
-		return []string{value}, nil
-	case []string:
-		return append([]string(nil), value...), nil
-	case []any:
-		schedules := make([]string, 0, len(value))
-		for _, item := range value {
-			text, ok := item.(string)
-			if !ok {
-				return nil, errors.New("schedule must be a string or list of strings")
-			}
-
-			schedules = append(schedules, text)
-		}
-
-		return schedules, nil
-	default:
-		return nil, errors.New("schedule must be a string or list of strings")
-	}
+type frontmatter struct {
+	Schedule frontmatterSchedule `json:"schedule"`
+	Agent    frontmatterAgent    `json:"agent"`
+	Channel  frontmatterChannel  `json:"channel"`
 }
 
-func parseFrontmatterAgent(value any) (string, error) {
-	if value == nil {
-		return "main", nil
+type frontmatterSchedule struct {
+	present bool
+	values  []string
+}
+
+func (s *frontmatterSchedule) UnmarshalJSON(data []byte) error {
+	if strings.TrimSpace(string(data)) == "null" {
+		return nil
 	}
 
-	text, ok := value.(string)
-	if !ok {
-		return "", errors.New("agent must be a string")
+	var single string
+	if err := json.Unmarshal(data, &single); err == nil {
+		s.present = true
+		s.values = []string{single}
+
+		return nil
 	}
 
-	if text = strings.TrimSpace(text); text != "" {
-		return text, nil
+	var list []string
+	if err := json.Unmarshal(data, &list); err == nil {
+		s.present = true
+		s.values = slices.Clone(list)
+
+		return nil
 	}
 
-	return "main", nil
+	return errors.New("schedule must be a string or list of strings")
+}
+
+type frontmatterAgent string
+
+func (a *frontmatterAgent) UnmarshalJSON(data []byte) error {
+	if strings.TrimSpace(string(data)) == "null" {
+		return nil
+	}
+
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		*a = frontmatterAgent(strings.TrimSpace(text))
+
+		return nil
+	}
+
+	*a = frontmatterAgent(strings.TrimSpace(string(data)))
+
+	return nil
+}
+
+type frontmatterChannel string
+
+func (c *frontmatterChannel) UnmarshalJSON(data []byte) error {
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		*c = frontmatterChannel(strings.TrimSpace(text))
+	}
+
+	return nil
 }
 
 func splitFrontmatter(data []byte) (frontmatter []byte, body string, err error) {

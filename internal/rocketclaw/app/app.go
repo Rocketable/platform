@@ -406,7 +406,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		questionBroker.post, questionBroker.delete = slackSink.AskUserQuestion, slackSink.DeleteUserQuestion
 		startThreadRoot = slackSink.StartNewThreadRoot
 
-		cronjobs.SendSlackChannel = slackSink.SendCronjobChannelThread
+		cronjobs.SendTextChannel = slackSink.SendCronjobChannelThread
 		if err := slackSink.Start(runCtx); err != nil {
 			return fmt.Errorf("start Slack connector: %w", err)
 		}
@@ -427,7 +427,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 			return fmt.Errorf("start Discord text connector: %w", err)
 		}
 
-		cronjobs.SendSlackChannel = discordTextSink.SendCronjobChannelThread
+		cronjobs.SendTextChannel = discordTextSink.SendCronjobChannelThread
 		stops = append(stops, namedStopper{name: "discord_text", stop: discordTextSink.Stop})
 	}
 

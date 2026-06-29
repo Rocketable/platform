@@ -94,3 +94,4 @@ RocketClaw grew by adding Slack, Discord voice, external MCP, browser voice, cro
 - 2026-06-25: Clarified that `rocketclaw_start_new_thread` is never exposed through MCP-originated or cron-originated turns.
 - 2026-06-26: Specified that scheduled cron visible output without `channel` uses the enabled primary text connector's default Slack DM room or Discord guild channel.
 - 2026-06-26: Clarified that no-`channel` scheduled cron results keep the existing main-session internalization path after any text-sink delivery attempt.
+- 2026-06-29: Removed the legacy cron `slack-channel` frontmatter alias; cron text routing uses `channel` only.

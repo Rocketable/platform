@@ -54,9 +54,9 @@ schedule:
 
 The `schedule:` frontmatter value is the cronjob frequency or cadence.
 
-Cronjobs may also set `channel:` to route non-empty `rocketclaw_i_want_human_partner_to_see_this` output into a managed Slack channel thread instead of the default main outputs. Highlight this option back to the human when they ask where cron output should go, when the cron is meant for a team/channel audience, or when they mention Slack/channel delivery.
+Cronjobs may also set `channel:` to route non-empty `rocketclaw_i_want_human_partner_to_see_this` output into a managed primary text connector thread instead of the default text target. Highlight this option back to the human when they ask where cron output should go, when the cron is meant for a team/channel audience, or when they mention text connector delivery.
 
-The source code reads `channel` as a trimmed YAML string and passes it directly to the Slack sender. It does not add `#`, resolve names, or validate the value before sending. `slack-channel` is supported only as a backward-compatible alias for existing cron files.
+The source code reads `channel` as a trimmed YAML string and passes it directly to the text connector sender. It does not add `#`, resolve names, or validate the value before sending.
 
 For Slack channel names, include the leading `#` and quote the value because unquoted `#...` is a YAML comment:
 

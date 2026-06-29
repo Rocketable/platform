@@ -14,7 +14,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 )
 
-func TestNewInstallsSlackChannelNoop(t *testing.T) {
+func TestNewInstallsTextChannelNoop(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
@@ -24,8 +24,8 @@ func TestNewInstallsSlackChannelNoop(t *testing.T) {
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
 
-	if err := m.SendSlackChannel(t.Context(), "C123", "cron/daily.md", "main", "now", "done", nil); err != nil {
-		t.Fatalf("SendSlackChannel() = %v; want nil", err)
+	if err := m.SendTextChannel(t.Context(), "C123", "cron/daily.md", "main", "now", "done", nil); err != nil {
+		t.Fatalf("SendTextChannel() = %v; want nil", err)
 	}
 }
 
@@ -63,7 +63,7 @@ func TestLoadDefinitionsLoadsMarkdownAndSkipsTemplates(t *testing.T) {
 	}
 
 	def := defs[0]
-	if def.relativePath != "cron/daily.md" || def.agent != "worker" || def.slackChannel != "#triage" || def.body != "Run daily\n" {
+	if def.relativePath != "cron/daily.md" || def.agent != "worker" || def.textChannel != "#triage" || def.body != "Run daily\n" {
 		t.Fatalf("definition = %#v; want daily worker body", def)
 	}
 
@@ -620,7 +620,6 @@ func TestLoadDefinitionRejectsInvalidFrontmatter(t *testing.T) {
 		{name: "missing schedule", data: "---\nagent: main\n---\nbody", want: "schedule is required"},
 		{name: "invalid schedule list item", data: "---\nschedule:\n  - 1h\n  - 3\n---\nbody", want: "schedule must be a string or list of strings"},
 		{name: "invalid schedule scalar", data: "---\nschedule: 123\n---\nbody", want: "schedule must be a string or list of strings"},
-		{name: "invalid agent", data: "---\nschedule: 1h\nagent: 7\n---\nbody", want: "agent must be a string"},
 		{name: "blank duration", data: "---\nschedule: ''\n---\nbody", want: "schedule must not be blank"},
 		{name: "zero duration", data: "---\nschedule: 0s\n---\nbody", want: "duration schedules must be greater than zero"},
 		{name: "every unsupported", data: "---\nschedule: '@every 1h'\n---\nbody", want: "@every is not supported"},
@@ -638,40 +637,40 @@ func TestLoadDefinitionRejectsInvalidFrontmatter(t *testing.T) {
 	}
 }
 
+func TestLoadDefinitionLeavesNonStringAgentForValidation(t *testing.T) {
+	def, err := loadDefinition([]byte("---\nschedule: 1h\nagent: 7\n---\nBody"), "cron/test.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if def.agent != "7" {
+		t.Fatalf("definition agent = %q; want 7", def.agent)
+	}
+}
+
 func TestLoadDefinitionDefaultsBlankAgentAndTrimsChannel(t *testing.T) {
 	def, err := loadDefinition([]byte("---\nschedule: 1h\nagent: '  \t  '\nchannel: '  #ops  '\n---\nBody"), "cron/test.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if def.agent != "main" || def.slackChannel != "#ops" {
-		t.Fatalf("definition agent/slackChannel = %q/%q; want main/#ops", def.agent, def.slackChannel)
+	if def.agent != "main" || def.textChannel != "#ops" {
+		t.Fatalf("definition agent/textChannel = %q/%q; want main/#ops", def.agent, def.textChannel)
 	}
 }
 
-func TestLoadDefinitionSupportsLegacySlackChannel(t *testing.T) {
+func TestLoadDefinitionIgnoresLegacyTextChannelAlias(t *testing.T) {
 	def, err := loadDefinition([]byte("---\nschedule: 1h\nslack-channel: '  #legacy  '\n---\nBody"), "cron/test.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if def.slackChannel != "#legacy" {
-		t.Fatalf("definition slackChannel = %q; want #legacy", def.slackChannel)
+	if def.textChannel != "" {
+		t.Fatalf("definition textChannel = %q; want empty", def.textChannel)
 	}
 }
 
-func TestLoadDefinitionChannelOverridesLegacySlackChannel(t *testing.T) {
-	def, err := loadDefinition([]byte("---\nschedule: 1h\nchannel: '#canonical'\nslack-channel: '#legacy'\n---\nBody"), "cron/test.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if def.slackChannel != "#canonical" {
-		t.Fatalf("definition slackChannel = %q; want #canonical", def.slackChannel)
-	}
-}
-
-func TestExecuteJobWithSlackChannelSendsThreadOnlyFinalPayload(t *testing.T) {
+func TestExecuteJobWithTextChannelSendsThreadOnlyFinalPayload(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
@@ -685,39 +684,39 @@ func TestExecuteJobWithSlackChannelSendsThreadOnlyFinalPayload(t *testing.T) {
 		gotAttachments                                   []events.OutboundAttachment
 	)
 
-	m.SendSlackChannel = func(_ context.Context, channel, path, agent, ranAt, text string, attachments []events.OutboundAttachment) error {
+	m.SendTextChannel = func(_ context.Context, channel, path, agent, ranAt, text string, attachments []events.OutboundAttachment) error {
 		gotChannel, gotPath, gotAgent, gotRanAt, gotText = channel, path, agent, ranAt, text
 		gotAttachments = attachments
 
 		return nil
 	}
 
-	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", slackChannel: "#triage", body: "Body"})
+	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", textChannel: "#triage", body: "Body"})
 
 	if gotChannel != "#triage" || gotPath != "cron/daily.md" || gotAgent != "helper" || gotRanAt != "2000-01-02T03:04:05Z" || gotText != "final payload" {
-		t.Fatalf("Slack delivery = (%q, %q, %q, %q, %q); want channel/path/agent/time/final payload", gotChannel, gotPath, gotAgent, gotRanAt, gotText)
+		t.Fatalf("text delivery = (%q, %q, %q, %q, %q); want channel/path/agent/time/final payload", gotChannel, gotPath, gotAgent, gotRanAt, gotText)
 	}
 
 	if len(gotAttachments) != 1 || gotAttachments[0].Name != "report.txt" || gotAttachments[0].MIMEType != "text/plain" || string(gotAttachments[0].Data) != "report" {
-		t.Fatalf("Slack attachments = %#v; want report.txt text/plain report", gotAttachments)
+		t.Fatalf("text attachments = %#v; want report.txt text/plain report", gotAttachments)
 	}
 
 	assertNoInbound(t, bus)
 }
 
-func TestExecuteJobWithSlackChannelSkipsEmptyFinalPayload(t *testing.T) {
+func TestExecuteJobWithTextChannelSkipsEmptyFinalPayload(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
 	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{Text: "internal note"}, nil
 	}, slog.New(slog.DiscardHandler))
-	m.SendSlackChannel = func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
-		t.Fatal("Slack delivery called for empty final payload")
+	m.SendTextChannel = func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
+		t.Fatal("text delivery called for empty final payload")
 		return nil
 	}
 
-	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", slackChannel: "#triage", body: "Body"})
+	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", textChannel: "#triage", body: "Body"})
 
 	assertNoInbound(t, bus)
 }
@@ -736,7 +735,7 @@ func TestExecuteJobWithoutChannelSendsDefaultTextThread(t *testing.T) {
 		gotAttachments                                   []events.OutboundAttachment
 	)
 
-	m.SendSlackChannel = func(_ context.Context, channel, path, agent, ranAt, text string, attachments []events.OutboundAttachment) error {
+	m.SendTextChannel = func(_ context.Context, channel, path, agent, ranAt, text string, attachments []events.OutboundAttachment) error {
 		gotChannel, gotPath, gotAgent, gotRanAt, gotText = channel, path, agent, ranAt, text
 		gotAttachments = attachments
 
@@ -785,7 +784,7 @@ func TestExecuteJobDefaultTextDeliveryKeepsInternalOnlyOutputInMain(t *testing.T
 		return RunResult{Text: "internal note"}, nil
 	}, slog.New(slog.DiscardHandler))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC) }
-	m.SendSlackChannel = func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
+	m.SendTextChannel = func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
 		t.Fatal("default text delivery called for empty final payload")
 		return nil
 	}
@@ -844,7 +843,7 @@ func TestLoadOneOffCronjobValidatesTargetsAndPreparesPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if job.Agent != "helper" || job.RelativePath != "cron/daily.md" || job.SlackChannel != "#triage" {
+	if job.Agent != "helper" || job.RelativePath != "cron/daily.md" || job.TextChannel != "#triage" {
 		t.Fatalf("job = %#v; want helper cron/daily.md #triage", job)
 	}
 

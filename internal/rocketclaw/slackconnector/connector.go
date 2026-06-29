@@ -2072,7 +2072,7 @@ func (c *Connector) handleOnDemandCronRequest(ctx context.Context, ev *slackeven
 		return
 	}
 
-	if !strings.HasPrefix(ev.Channel, "D") && !c.cronTargetsSlackChannel(ctx, loaded, ev.Channel) {
+	if !strings.HasPrefix(ev.Channel, "D") && !c.cronTargetsTextChannel(ctx, loaded, ev.Channel) {
 		if errPost := c.publishOnDemandCronReply(ctx, replyTarget, "That cronjob is not configured to run in this Slack channel.", true); errPost != nil {
 			c.log.Warn("publish Slack on-demand cron channel rejection", "error", errPost, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", replyTarget.ThreadTS)
 		}
@@ -2098,15 +2098,15 @@ func (c *Connector) handleOnDemandCronRequest(ctx context.Context, ev *slackeven
 	go c.runOnDemandCron(ctx, loaded, replyTarget, turnID)
 }
 
-func (c *Connector) cronTargetsSlackChannel(ctx context.Context, loaded cronjob.OneOffCronjob, channelID string) bool {
-	slackChannel := strings.TrimSpace(loaded.SlackChannel)
+func (c *Connector) cronTargetsTextChannel(ctx context.Context, loaded cronjob.OneOffCronjob, channelID string) bool {
+	textChannel := strings.TrimSpace(loaded.TextChannel)
 
 	channelID = strings.TrimSpace(channelID)
-	if slackChannel == "" || channelID == "" {
+	if textChannel == "" || channelID == "" {
 		return false
 	}
 
-	if slackChannel == channelID {
+	if textChannel == channelID {
 		return true
 	}
 
@@ -2115,7 +2115,7 @@ func (c *Connector) cronTargetsSlackChannel(ctx context.Context, loaded cronjob.
 		return false
 	}
 
-	return slackChannel == "#"+strings.TrimSpace(channel.Name)
+	return textChannel == "#"+strings.TrimSpace(channel.Name)
 }
 
 func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCronjob, replyTarget *events.SlackReplyTarget, turnID string) {

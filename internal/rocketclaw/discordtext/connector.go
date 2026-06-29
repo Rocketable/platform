@@ -903,7 +903,7 @@ func (c *Connector) handleOnDemandCronRequest(ctx context.Context, reply *events
 		return
 	}
 
-	if !dm && strings.TrimSpace(loaded.SlackChannel) != strings.TrimSpace(channelID) {
+	if !dm && strings.TrimSpace(loaded.TextChannel) != strings.TrimSpace(channelID) {
 		c.publishOnDemandCronReply(ctx, reply, "That cronjob is not configured to run in this Discord channel.", true)
 		return
 	}

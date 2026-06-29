@@ -240,7 +240,7 @@ func TestHandleDMStopMessageStopsMainWhenNoManagedTurn(t *testing.T) {
 func TestHandleDMRunsOnDemandCronWithoutChannelMatch(t *testing.T) {
 	fake := newFakeDiscordClient()
 	fake.channels["D123"] = &textChannel{ID: "D123", Type: channelTypeDM}
-	runner := &fakeOneOffCronjobs{loaded: cronjob.OneOffCronjob{Agent: "cron", RelativePath: "cron/daily.md", SlackChannel: "C999"}, result: cronjob.RunResult{VerbatimMessage: "done"}}
+	runner := &fakeOneOffCronjobs{loaded: cronjob.OneOffCronjob{Agent: "cron", RelativePath: "cron/daily.md", TextChannel: "C999"}, result: cronjob.RunResult{VerbatimMessage: "done"}}
 	connector := newTestConnector(fake, newFakeThreadRouter())
 	connector.oneOffCronjobs = runner
 
@@ -407,7 +407,7 @@ func TestHandleReactionSummarizesThread(t *testing.T) {
 func TestHandleReactionRunsOnDemandCron(t *testing.T) {
 	fake := newFakeDiscordClient()
 	fake.reactionMessageContent = "🔂 daily"
-	runner := &fakeOneOffCronjobs{loaded: cronjob.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", SlackChannel: "C123"}, result: cronjob.RunResult{VerbatimMessage: "done"}}
+	runner := &fakeOneOffCronjobs{loaded: cronjob.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", TextChannel: "C123"}, result: cronjob.RunResult{VerbatimMessage: "done"}}
 	connector := newTestConnector(fake, newFakeThreadRouter())
 	connector.oneOffCronjobs = runner
 
@@ -433,7 +433,7 @@ func TestHandleReactionAllowsSocialCronUser(t *testing.T) {
 	fake := newFakeDiscordClient()
 	fake.channels["S123"] = &textChannel{ID: "S123", Type: channelTypeGuildText}
 	fake.reactionMessageContent = "🔂 daily"
-	runner := &fakeOneOffCronjobs{loaded: cronjob.OneOffCronjob{Agent: "cron", RelativePath: "cron/daily.md", SlackChannel: "S123"}, result: cronjob.RunResult{VerbatimMessage: "done"}}
+	runner := &fakeOneOffCronjobs{loaded: cronjob.OneOffCronjob{Agent: "cron", RelativePath: "cron/daily.md", TextChannel: "S123"}, result: cronjob.RunResult{VerbatimMessage: "done"}}
 	connector := newTestConnector(fake, newFakeThreadRouter())
 	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "S123", Agents: []string{"triage"}, AllowedUserIDs: []string{"social-human"}}}}
 	connector.oneOffCronjobs = runner
@@ -449,7 +449,7 @@ func TestHandleReactionAllowsSocialCronUser(t *testing.T) {
 func TestHandleReactionRejectsCronForDifferentDiscordChannel(t *testing.T) {
 	fake := newFakeDiscordClient()
 	fake.reactionMessageContent = "daily"
-	runner := &fakeOneOffCronjobs{loaded: cronjob.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", SlackChannel: "C999"}}
+	runner := &fakeOneOffCronjobs{loaded: cronjob.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", TextChannel: "C999"}}
 	connector := newTestConnector(fake, newFakeThreadRouter())
 	connector.oneOffCronjobs = runner
 

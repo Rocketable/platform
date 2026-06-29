@@ -5254,7 +5254,7 @@ func TestHandleReactionAddedEventRejectsCronForDifferentChannel(t *testing.T) {
 	defer bus.Close()
 
 	runner := newOneOffCronjobLoaderStub()
-	runner.loaded = cronjob.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", SlackChannel: "#ops"}
+	runner.loaded = cronjob.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", TextChannel: "#ops"}
 
 	var posted []url.Values
 
@@ -5304,7 +5304,7 @@ func TestHandleReactionAddedEventRerunsScheduledCronThreadRoot(t *testing.T) {
 	defer bus.Close()
 
 	runner := newOneOffCronjobLoaderStub()
-	runner.loaded = cronjob.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", SlackChannel: "#triage"}
+	runner.loaded = cronjob.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", TextChannel: "#triage"}
 	runner.runResult = cronjob.RunResult{VerbatimMessage: "done"}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
