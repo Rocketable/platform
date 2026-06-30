@@ -188,20 +188,35 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", body: "Body"})
 }
 
-func TestExecuteJobPublishesVisibleAndInternalMessages(t *testing.T) {
+func TestExecuteJobPublishesExtraOutputToThreadAndSilentSummaryToMain(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
 	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{
-			Text:            "internal summary",
 			VerbatimMessage: "visible answer",
 			Attachments:     []events.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}},
 		}, nil
 	}, slog.New(slog.DiscardHandler))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC) }
 
+	var gotText string
+
+	m.SendTextChannel = func(_ context.Context, channel, path, agent, ranAt, text string, attachments []events.OutboundAttachment) error {
+		if channel != "" || path != "cron/daily.md" || agent != "helper" || ranAt != "2000-01-02T03:04:05Z" || len(attachments) != 1 {
+			t.Fatalf("text delivery = (%q, %q, %q, %q, %#v); want default thread delivery", channel, path, agent, ranAt, attachments)
+		}
+
+		gotText = text
+
+		return nil
+	}
+
 	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", body: "Body"})
+
+	if gotText != "visible answer" {
+		t.Fatalf("text thread output = %q; want visible answer", gotText)
+	}
 
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
@@ -209,31 +224,22 @@ func TestExecuteJobPublishesVisibleAndInternalMessages(t *testing.T) {
 	var messages []*events.InboundMessage
 	for msg := range bus.Inbound(ctx) {
 		messages = append(messages, msg)
-		if len(messages) == 2 {
+		if len(messages) == 1 {
 			break
 		}
 	}
 
-	if len(messages) != 2 {
-		t.Fatalf("executeJob published %d messages; want 2", len(messages))
+	if len(messages) != 1 {
+		t.Fatalf("executeJob published %d messages; want one silent main summary", len(messages))
 	}
 
-	visible := messages[0]
-	if visible.Label != "cronjob human_visible file=cron/daily.md ran_at=2000-01-02T03:04:05Z" || !strings.Contains(visible.Text, "visible answer") {
-		t.Fatalf("visible message = %#v; want labeled verbatim delivery", visible)
+	msg := messages[0]
+	if msg.Label != "cronjob file=cron/daily.md ran_at=2000-01-02T03:04:05Z" || !strings.Contains(msg.Text, "Sent extra output to the cron output thread.") {
+		t.Fatalf("main summary = %#v; want silent summary noting thread output", msg)
 	}
 
-	if visible.VerbatimMessage != "visible answer" || len(visible.VerbatimAttachments) != 1 || visible.VerbatimAttachments[0].Name != "report.txt" || string(visible.VerbatimAttachments[0].Data) != "report" {
-		t.Fatalf("visible verbatim payload = (%q, %#v); want answer with report attachment", visible.VerbatimMessage, visible.VerbatimAttachments)
-	}
-
-	internal := messages[1]
-	if internal.Label != "cronjob file=cron/daily.md ran_at=2000-01-02T03:04:05Z" || !strings.Contains(internal.Text, "internal summary") {
-		t.Fatalf("internal message = %#v; want labeled internal summary", internal)
-	}
-
-	if internal.VerbatimMessage != "" || len(internal.VerbatimAttachments) != 0 {
-		t.Fatalf("internal verbatim payload = (%q, %#v); want none", internal.VerbatimMessage, internal.VerbatimAttachments)
+	if strings.Contains(msg.Text, "visible answer") || msg.VerbatimMessage != "" || len(msg.VerbatimAttachments) != 0 || msg.Human {
+		t.Fatalf("main summary = %#v; want no extra output payload", msg)
 	}
 }
 
@@ -701,7 +707,26 @@ func TestExecuteJobWithTextChannelSendsThreadOnlyFinalPayload(t *testing.T) {
 		t.Fatalf("text attachments = %#v; want report.txt text/plain report", gotAttachments)
 	}
 
-	assertNoInbound(t, bus)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	var msg *events.InboundMessage
+	for inbound := range bus.Inbound(ctx) {
+		msg = inbound
+		break
+	}
+
+	if msg == nil {
+		t.Fatal("executeJob did not publish silent main summary")
+	}
+
+	if msg.Label != "cronjob file=cron/daily.md ran_at=2000-01-02T03:04:05Z" || !strings.Contains(msg.Text, "internal note") || !strings.Contains(msg.Text, "Sent extra output to the cron output thread.") {
+		t.Fatalf("main summary = %#v; want internal note and thread-output note", msg)
+	}
+
+	if msg.VerbatimMessage != "" || len(msg.VerbatimAttachments) != 0 || msg.Human {
+		t.Fatalf("main summary = %#v; want silent non-human summary without extra output payload", msg)
+	}
 }
 
 func TestExecuteJobWithTextChannelSkipsEmptyFinalPayload(t *testing.T) {
@@ -711,6 +736,7 @@ func TestExecuteJobWithTextChannelSkipsEmptyFinalPayload(t *testing.T) {
 	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{Text: "internal note"}, nil
 	}, slog.New(slog.DiscardHandler))
+	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC) }
 	m.SendTextChannel = func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
 		t.Fatal("text delivery called for empty final payload")
 		return nil
@@ -718,7 +744,26 @@ func TestExecuteJobWithTextChannelSkipsEmptyFinalPayload(t *testing.T) {
 
 	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", textChannel: "#triage", body: "Body"})
 
-	assertNoInbound(t, bus)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	var msg *events.InboundMessage
+	for inbound := range bus.Inbound(ctx) {
+		msg = inbound
+		break
+	}
+
+	if msg == nil {
+		t.Fatal("executeJob did not publish silent main summary")
+	}
+
+	if msg.Label != "cronjob file=cron/daily.md ran_at=2000-01-02T03:04:05Z" || !strings.Contains(msg.Text, "internal note") {
+		t.Fatalf("main summary = %#v; want internal note", msg)
+	}
+
+	if msg.VerbatimMessage != "" || len(msg.VerbatimAttachments) != 0 || msg.Human {
+		t.Fatalf("main summary = %#v; want silent non-human summary without extra output payload", msg)
+	}
 }
 
 func TestExecuteJobWithoutChannelSendsDefaultTextThread(t *testing.T) {
@@ -758,21 +803,22 @@ func TestExecuteJobWithoutChannelSendsDefaultTextThread(t *testing.T) {
 	var messages []*events.InboundMessage
 	for msg := range bus.Inbound(ctx) {
 		messages = append(messages, msg)
-		if len(messages) == 2 {
+		if len(messages) == 1 {
 			break
 		}
 	}
 
-	if len(messages) != 2 {
-		t.Fatalf("executeJob published %d messages; want visible and internal main notes", len(messages))
+	if len(messages) != 1 {
+		t.Fatalf("executeJob published %d messages; want one silent main summary", len(messages))
 	}
 
-	if messages[0].Label != "cronjob human_visible file=cron/daily.md ran_at=2000-01-02T03:04:05Z" || messages[0].VerbatimMessage != " final payload " {
-		t.Fatalf("visible main note = %#v; want verbatim main note", messages[0])
+	msg := messages[0]
+	if msg.Label != "cronjob file=cron/daily.md ran_at=2000-01-02T03:04:05Z" || !strings.Contains(msg.Text, "internal note") || !strings.Contains(msg.Text, "Sent extra output to the cron output thread.") {
+		t.Fatalf("main summary = %#v; want internal note and thread-output note", msg)
 	}
 
-	if messages[1].Label != "cronjob file=cron/daily.md ran_at=2000-01-02T03:04:05Z" || !strings.Contains(messages[1].Text, "internal note") {
-		t.Fatalf("internal main note = %#v; want internal note", messages[1])
+	if strings.Contains(msg.Text, "final payload") || msg.VerbatimMessage != "" || len(msg.VerbatimAttachments) != 0 || msg.Human {
+		t.Fatalf("main summary = %#v; want silent summary without extra output payload", msg)
 	}
 }
 
@@ -807,15 +853,9 @@ func TestExecuteJobDefaultTextDeliveryKeepsInternalOnlyOutputInMain(t *testing.T
 	if msg.Label != "cronjob file=cron/daily.md ran_at=2000-01-02T03:04:05Z" || !strings.Contains(msg.Text, "internal note") {
 		t.Fatalf("internal-only message = %#v; want labeled internal note", msg)
 	}
-}
 
-func assertNoInbound(t *testing.T, bus *events.Bus) {
-	t.Helper()
-
-	bus.StopInbound()
-
-	for range bus.Inbound(context.Background()) {
-		t.Fatal("unexpected inbound message")
+	if msg.VerbatimMessage != "" || len(msg.VerbatimAttachments) != 0 || msg.Human {
+		t.Fatalf("internal-only message = %#v; want silent non-human summary without extra output payload", msg)
 	}
 }
 

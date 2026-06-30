@@ -445,57 +445,43 @@ func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 		return
 	}
 
-	humanVisible := result.VerbatimMessage != "" || len(result.Attachments) > 0
-	log.Info("completed cronjob", "text", result.Text, "verbatim_message", result.VerbatimMessage, "human_visible", humanVisible)
-
 	visiblePayload := strings.TrimSpace(result.VerbatimMessage) != "" || len(result.Attachments) > 0
-	if definition.textChannel != "" {
-		if visiblePayload {
-			if err := m.SendTextChannel(ctx, definition.textChannel, definition.relativePath, definition.agent, ranAt, strings.TrimSpace(result.VerbatimMessage), result.Attachments); err != nil {
-				log.Warn("send cronjob text delivery", "channel", definition.textChannel, "error", err)
-			}
-		}
-
-		return
-	}
+	log.Info("completed cronjob", "text", result.Text, "verbatim_message", result.VerbatimMessage, "human_visible", visiblePayload)
 
 	if visiblePayload {
-		if err := m.SendTextChannel(ctx, "", definition.relativePath, definition.agent, ranAt, strings.TrimSpace(result.VerbatimMessage), result.Attachments); err != nil {
-			log.Warn("send cronjob text delivery", "error", err)
-			return
+		if err := m.SendTextChannel(ctx, definition.textChannel, definition.relativePath, definition.agent, ranAt, strings.TrimSpace(result.VerbatimMessage), result.Attachments); err != nil {
+			log.Warn("send cronjob text delivery", "channel", definition.textChannel, "error", err)
 		}
 	}
 
-	publish := func(label, body string, visible bool) bool {
+	publish := func(label, body string) bool {
 		inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindInternalize, label, body, false)
 
 		inbound.Metadata = map[string]string{events.InboundOriginMetadataKey: "Cron", events.InboundMediaMetadataKey: "Text"}
-		if visible {
-			inbound.VerbatimMessage = result.VerbatimMessage
-			inbound.VerbatimAttachments = events.CloneOutboundAttachments(result.Attachments)
-		}
 
 		if err := m.bus.PublishInbound(ctx, inbound); err != nil {
 			if ctx.Err() == nil {
-				log.Error("publish cronjob result to main session inbound queue", "label", label, "body", body, "human_visible", visible, "error", err)
+				log.Error("publish cronjob result to main session inbound queue", "label", label, "body", body, "error", err)
 			}
 
 			return false
 		}
 
-		log.Info("published cronjob result to main session inbound queue", "label", label, "body", body, "human_visible", visible)
+		log.Info("published cronjob result to main session inbound queue", "label", label, "body", body)
 
 		return true
 	}
-	if humanVisible && !publish("cronjob human_visible file="+definition.relativePath+" ran_at="+ranAt, "Cronjob "+definition.relativePath+" ran at "+ranAt+" requested verbatim delivery to the main session outbound targets:\n\n"+result.VerbatimMessage, true) {
-		return
+
+	summary := strings.TrimSpace(result.Text)
+	if summary == "" {
+		summary = "Cronjob completed."
 	}
 
-	if strings.TrimSpace(result.Text) == "" {
-		return
+	if visiblePayload {
+		summary += "\n\nSent extra output to the cron output thread."
 	}
 
-	publish("cronjob file="+definition.relativePath+" ran_at="+ranAt, "Cronjob "+definition.relativePath+" ran at "+ranAt+":\n\n"+result.Text, false)
+	publish("cronjob file="+definition.relativePath+" ran_at="+ranAt, "Cronjob "+definition.relativePath+" ran at "+ranAt+":\n\n"+summary)
 }
 
 func cronTraceConversationID(prefix, relativePath string, ts time.Time) string {

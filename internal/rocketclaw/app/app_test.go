@@ -1057,6 +1057,9 @@ func TestRunReturnsErrRestartRequestedAfterCronRestartTool(t *testing.T) {
 		case 3:
 			_, err := w.Write([]byte(`{"id":"resp_3","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"","annotations":[]}]}]}`))
 			assert.NoError(t, err)
+		case 4:
+			_, err := w.Write([]byte(`{"id":"resp_4","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_2","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"","annotations":[]}]}]}`))
+			assert.NoError(t, err)
 		default:
 			t.Fatalf("unexpected response request %d", request)
 		}
@@ -1073,7 +1076,7 @@ func TestRunReturnsErrRestartRequestedAfterCronRestartTool(t *testing.T) {
 	requestMu.Lock()
 	defer requestMu.Unlock()
 
-	assert.Equal(t, 3, requests)
+	assert.Equal(t, 4, requests)
 }
 
 func TestStartExternalMCPServerRoutesSelectedAgentDirectly(t *testing.T) {
