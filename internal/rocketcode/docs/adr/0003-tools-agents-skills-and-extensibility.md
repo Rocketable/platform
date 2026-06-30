@@ -60,7 +60,7 @@ All function schemas are strict and mark declared properties as required even wh
 ### Agents And Tasks
 
 - Agents load from top-level `.md` files in the supplied agents filesystem. Nested agent markdown is ignored.
-- Agent YAML frontmatter is required and must be a mapping. Known fields are `description`, `model`, `reasoningEffort`, `verbosity`, `maxRecursion`, `guardrail`, and `permission`. The `model` field is optional; when present and non-empty, it must be an unprefixed OpenAI Responses model ID. Missing or empty `model` inherits the runtime/default model. Unknown fields remain in `Frontmatter`.
+- Agent YAML frontmatter is required and must be a mapping. Known fields are `description`, `model`, `reasoningEffort`, `verbosity`, `maxRecursion`, `guardrail`, and `permission`. The `model` field is optional; when present and non-empty, it must be an unprefixed OpenAI Responses model ID or a legacy `openai/<model>` alias normalized to `<model>`. Missing or empty `model` inherits the runtime/default model. Unknown fields remain in `Frontmatter`.
 - Agent name is the filename without `.md`; prompt content is the post-frontmatter body trimmed.
 - Frontmatter has a fallback sanitizer for unquoted scalar values containing `:`.
 - Omitted `maxRecursion` and `maxRecursion: -1` mean unlimited subdelegation. `maxRecursion: 0` permits no task delegation from that inference. Positive values allow that many delegation levels. Values below `-1` and non-integer values invalidate the agent.
@@ -186,3 +186,4 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - 2026-06-24: Replaced automatic permission review output with stricter Codex-shaped structured output using required `risk_level`, `user_authorization`, `outcome`, and `rationale` fields, strong Go enum semantics, prompt and schema outcome-combination descriptions, and compact transcript plus planned-action review context.
 - 2026-06-26: Removed Anthropic and OpenAI-compatible chat-completions tool adapter contracts; OpenAI-compatible model requests use Responses API local-tool and structured-output behavior.
 - 2026-06-26: Removed remaining OpenAI-compatible tool, structured-output, attachment, and provider-qualified agent-model contracts; RocketCode tool and agent model behavior now targets first-party OpenAI Responses only, with missing agent models inheriting the runtime/default model.
+- 2026-06-30: Allowed legacy `openai/<model>` agent model strings as aliases normalized to unprefixed first-party OpenAI model IDs while keeping other provider-qualified model strings invalid.

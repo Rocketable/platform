@@ -24,7 +24,7 @@ RocketCode is under tight source-line budget pressure. Future simplification and
 | Workspace root | Standalone `rocketcode` and `rocketloop` use the process current working directory as the workspace root and open it through `*os.Root`. |
 | Root instructions | `AGENTS.md`, when present in the workspace root, is loaded literally into the system prompt and followed by a current-workspace block containing the host workspace root. |
 | Model defaults | Empty model defaults to OpenAI `gpt-5.4`. Empty reasoning effort defaults to `high`. Empty compact threshold defaults to `200000`. |
-| Model selection | Models are unprefixed first-party OpenAI Responses model IDs such as `gpt-5.4`. Empty runtime/default model uses OpenAI `gpt-5.4`. Provider-qualified model strings such as `openai/...`, `openai-compatible/...`, `anthropic/...`, and empty model reference parts are startup errors. Agent frontmatter `model` values, when non-empty, may select a different OpenAI model ID from the runtime default. |
+| Model selection | Models are unprefixed first-party OpenAI Responses model IDs such as `gpt-5.4`. Empty runtime/default model uses OpenAI `gpt-5.4`. Legacy `openai/<model>` strings are accepted only as first-party OpenAI aliases and normalized to `<model>`. Other provider-qualified model strings, including `openai-compatible/...` and `anthropic/...`, and empty model reference parts are startup errors. Agent frontmatter `model` values, when non-empty, may select a different OpenAI model ID from the runtime default. |
 | Model request | Runtime turns use the first-party OpenAI Responses API with stored responses disabled, encrypted reasoning content included, reasoning summary enabled when reasoning effort is set, context compaction enabled, and OpenAI parallel tool calls enabled. |
 | Rate limits and context limits | OpenAI rate limits retry after at least one minute when OpenAI exposes retryable rate-limit status, considering retry/reset headers where available. OpenAI Responses context-length API errors trigger explicit progressive compaction of older safe replay blocks and retry before surfacing a runtime error. Other failed responses and API errors surface as runtime errors, with diagnostics emitted when diagnostics are enabled. |
 | Interactive CLI | `cmd/rocketcode` starts an interactive prompt named `rocketcode> `, reads terminal input, runs turns through the default agent, and prints line-oriented response output. |
@@ -46,7 +46,7 @@ RocketCode is under tight source-line budget pressure. Future simplification and
 
 | Environment variable | Contract |
 | --- | --- |
-| `ROCKETCODE_MODEL` | Overrides the default OpenAI model ID for standalone commands. Provider-qualified, OpenAI-compatible, and Anthropic values are startup errors. |
+| `ROCKETCODE_MODEL` | Overrides the default OpenAI model ID for standalone commands. Legacy `openai/<model>` values are accepted only as first-party OpenAI aliases and normalized to `<model>`. OpenAI-compatible, Anthropic, and other provider-qualified values are startup errors. |
 | `ROCKETCODE_REASONING_EFFORT` | Overrides the default reasoning effort for standalone commands. |
 | `ROCKETCODE_DIAG` | Any non-empty value enables diagnostics. |
 | `ROCKETCODE_EXPERIMENTAL_STRONGER_SKILLS` | Any non-empty value enables stronger skill replay behavior. |
@@ -88,3 +88,4 @@ RocketCode is under tight source-line budget pressure. Future simplification and
 - 2026-06-24: Added OpenAI-compatible chat-completions automatic compaction after successful above-threshold responses.
 - 2026-06-26: Removed Anthropic and OpenAI-compatible chat-completions support; RocketCode now supports only first-party OpenAI Responses and named OpenAI-compatible Responses providers.
 - 2026-06-26: Removed remaining OpenAI-compatible Responses provider support, provider-qualified model syntax, and required agent model declarations; RocketCode model behavior returns to unprefixed first-party OpenAI Responses model IDs with missing agent models inheriting the runtime/default model.
+- 2026-06-30: Allowed legacy `openai/<model>` strings as aliases normalized to unprefixed first-party OpenAI model IDs while keeping other provider-qualified model strings invalid.
