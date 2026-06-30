@@ -4071,7 +4071,7 @@ func TestHandleMessageEventCyclesManagedSocialThreadAgent(t *testing.T) {
 	assertNeverInbound(t, bus)
 }
 
-func TestHandleMessageEventCycleReportsMissingManagedSocialThread(t *testing.T) {
+func TestHandleMessageEventSilentlySkipsUnownedSocialThreadAgentSwitch(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
@@ -4098,16 +4098,16 @@ func TestHandleMessageEventCycleReportsMissingManagedSocialThread(t *testing.T) 
 
 	router := newThreadRouterStub()
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
-	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "#social", Agents: []string{"social", "planner"}, AllowedUserIDs: []string{"U123"}}}, ContextMessages: 2}
+	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "#social", Agents: []string{"social", "sudo"}, AllowedUserIDs: []string{"U123"}}}, ContextMessages: 2}
 
-	ev := newSlackMessageEvent("171234.9999", "171234.5678", "🎛")
-	ev.Channel = "C123"
-	connector.handleMessageEvent(context.Background(), ev)
+	for _, text := range []string{"🎛", ":control_knobs: sudo"} {
+		ev := newSlackMessageEvent("171234.9999", "171234.5678", text)
+		ev.Channel = "C123"
+		connector.handleMessageEvent(context.Background(), ev)
+	}
 
 	assert.Empty(t, router.repliesSnapshot())
-	require.Len(t, ephemeral, 1)
-	assert.Contains(t, ephemeral[0].Get("text"), "couldn't find an active managed thread")
-	assert.Equal(t, "171234.5678", ephemeral[0].Get("thread_ts"))
+	assert.Empty(t, ephemeral)
 	assertNeverInbound(t, bus)
 }
 

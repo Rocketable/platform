@@ -1233,7 +1233,12 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		responseRooted := false
 
 		if agent, ok := primarytext.ParseSocialAgentSwitch(text); ok && socialThreadReply {
+			if !handled {
+				return
+			}
+
 			c.handleSlackSocialAgentSwitch(ctx, ev.Channel, threadTS, ev.User, socialChannelName, agent)
+
 			return
 		}
 
