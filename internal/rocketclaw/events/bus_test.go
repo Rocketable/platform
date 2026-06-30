@@ -1,13 +1,47 @@
 package events
 
 import (
+	"bytes"
 	"context"
 	"iter"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestBusWaitsLogQueuedState(t *testing.T) {
+	bus := New()
+	defer bus.Close()
+
+	var logs bytes.Buffer
+
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+	require.NoError(t, bus.PublishInbound(context.Background(), NewMainInboundMessage(SourceSlack, InboundKindPrompt, "slack", "inbound", true)))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, bus.WaitInboundDequeued(ctx, logger), context.Canceled)
+
+	outbound := NewMainOutboundMessage(SourceSystem, "outbound")
+	outbound.ConversationID = "main"
+	outbound.TurnID = "turn-1"
+	outbound.Sequence = 7
+	require.NoError(t, bus.PublishOutbound(context.Background(), outbound))
+	require.ErrorIs(t, bus.WaitOutboundIdle(ctx, logger), context.Canceled)
+
+	logOutput := logs.String()
+	require.Contains(t, logOutput, "inbound queue handoff wait state")
+	require.Contains(t, logOutput, "human_queue_len=1")
+	require.Contains(t, logOutput, "outbound drain wait state")
+	require.Contains(t, logOutput, "outbound_queue_len=1")
+	require.Contains(t, logOutput, "outbound_pending=1")
+	require.Contains(t, logOutput, "next_conversation_id=main")
+	require.Contains(t, logOutput, "next_turn_id=turn-1")
+	require.Contains(t, logOutput, "next_sequence=7")
+}
 
 func TestStopInboundKeepsAcceptedMessages(t *testing.T) {
 	bus := New(Config{MinimumWaitAfterHumanInteraction: time.Hour})
@@ -20,7 +54,7 @@ func TestStopInboundKeepsAcceptedMessages(t *testing.T) {
 	bus.StopInbound()
 	require.ErrorIs(t, bus.PublishInbound(context.Background(), NewMainInboundMessage("test", InboundKindPrompt, "", "late", true)), ErrBusClosed)
 	require.Equal(t, "auto", requireInboundMessage(t, bus, 100*time.Millisecond).Text)
-	require.NoError(t, bus.WaitInboundDequeued(context.Background()))
+	require.NoError(t, bus.WaitInboundDequeued(context.Background(), slog.New(slog.DiscardHandler)))
 
 	iterCtx, cancelIter := context.WithCancel(context.Background())
 	defer cancelIter()
@@ -57,7 +91,7 @@ func TestWaitOutboundIdleWaitsForDelivery(t *testing.T) {
 
 	done := make(chan error, 1)
 
-	go func() { done <- bus.WaitOutboundIdle(context.Background()) }()
+	go func() { done <- bus.WaitOutboundIdle(context.Background(), slog.New(slog.DiscardHandler)) }()
 
 	require.Equal(t, outbound, requireOutboundMessage(t, bus, time.Second))
 	outbound.MarkDelivered(nil)
@@ -132,10 +166,10 @@ func TestBusCanceledOperations(t *testing.T) {
 	require.ErrorIs(t, bus.PublishAudio(ctx, &AudioChunk{}), context.Canceled)
 
 	require.NoError(t, bus.PublishInbound(context.Background(), NewMainInboundMessage("test", InboundKindPrompt, "", "inbound", true)))
-	require.ErrorIs(t, bus.WaitInboundDequeued(ctx), context.Canceled)
+	require.ErrorIs(t, bus.WaitInboundDequeued(ctx, slog.New(slog.DiscardHandler)), context.Canceled)
 
 	require.NoError(t, bus.PublishOutbound(context.Background(), NewMainOutboundMessage(SourceSystem, "pending")))
-	require.ErrorIs(t, bus.WaitOutboundIdle(ctx), context.Canceled)
+	require.ErrorIs(t, bus.WaitOutboundIdle(ctx, slog.New(slog.DiscardHandler)), context.Canceled)
 }
 
 func TestPublishAudioAfterCloseReturnsErrBusClosed(t *testing.T) {

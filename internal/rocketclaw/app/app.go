@@ -219,50 +219,72 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 				shutdownCtx := context.Background()
 
+				logger.Info("graceful shutdown waiting for active cron jobs")
+
 				if err := cronjobs.Stop(shutdownCtx); err != nil {
 					logger.Warn("graceful shutdown stopped waiting for cronjobs idle", "error", err)
 				}
 
+				logger.Info("graceful shutdown canceling unanswered questions")
 				questionBroker.cancelUnanswered(shutdownCtx)
 
-				if err := bus.WaitInboundDequeued(shutdownCtx); err != nil {
+				logger.Info("graceful shutdown waiting for inbound queue handoff", "phase", "before intake stop")
+
+				if err := bus.WaitInboundDequeued(shutdownCtx, logger.With("phase", "before intake stop")); err != nil {
 					logger.Warn("graceful shutdown stopped waiting for inbound queue handoff", "error", err)
 				}
+
+				logger.Info("graceful shutdown waiting for bridge idle", "bridge", "main", "phase", "before bridge stop")
 
 				if err := mainBridge.WaitIdle(shutdownCtx); err != nil {
 					logger.Warn("graceful shutdown stopped waiting for bridge idle", "error", err)
 				}
 
 				if cliBridge != nil {
+					logger.Info("graceful shutdown waiting for bridge idle", "bridge", "cli", "phase", "before bridge stop")
+
 					if err := cliBridge.WaitIdle(shutdownCtx); err != nil {
 						logger.Warn("graceful shutdown stopped waiting for CLI bridge idle", "error", err)
 					}
 				}
 
+				logger.Info("graceful shutdown waiting for bridge idle", "bridge", "threads", "phase", "before bridge stop")
+
 				if err := threadBridges.WaitIdle(shutdownCtx); err != nil {
 					logger.Warn("graceful shutdown stopped waiting for thread bridges idle", "error", err)
 				}
 
+				logger.Info("graceful shutdown stopping inbound intake and thread bridge accepts")
 				bus.StopInbound()
 				threadBridges.StopAccepting()
 
-				if err := bus.WaitInboundDequeued(shutdownCtx); err != nil {
+				logger.Info("graceful shutdown waiting for inbound queue handoff", "phase", "after intake stop")
+
+				if err := bus.WaitInboundDequeued(shutdownCtx, logger.With("phase", "after intake stop")); err != nil {
 					logger.Warn("graceful shutdown stopped waiting for inbound queue handoff", "error", err)
 				}
+
+				logger.Info("graceful shutdown waiting for bridge idle", "bridge", "main", "phase", "after intake stop")
 
 				if err := mainBridge.WaitIdle(shutdownCtx); err != nil {
 					logger.Warn("graceful shutdown stopped waiting for bridge idle", "error", err)
 				}
 
 				if cliBridge != nil {
+					logger.Info("graceful shutdown waiting for bridge idle", "bridge", "cli", "phase", "after intake stop")
+
 					if err := cliBridge.WaitIdle(shutdownCtx); err != nil {
 						logger.Warn("graceful shutdown stopped waiting for CLI bridge idle", "error", err)
 					}
 				}
 
+				logger.Info("graceful shutdown waiting for bridge idle", "bridge", "threads", "phase", "after intake stop")
+
 				if err := threadBridges.WaitIdle(shutdownCtx); err != nil {
 					logger.Warn("graceful shutdown stopped waiting for thread bridges idle", "error", err)
 				}
+
+				logger.Info("graceful shutdown stopping bridges")
 
 				_ = threadBridges.Stop()
 				if cliBridge != nil {
@@ -271,9 +293,13 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 				_ = mainBridge.Stop()
 
-				if err := bus.WaitOutboundIdle(shutdownCtx); err != nil {
+				logger.Info("graceful shutdown waiting for outbound drain")
+
+				if err := bus.WaitOutboundIdle(shutdownCtx, logger); err != nil {
 					logger.Warn("graceful shutdown stopped waiting for outbound drain", "error", err)
 				}
+
+				logger.Info("graceful shutdown stopping connectors")
 
 				for _, sink := range stops {
 					if err := sink.stop(shutdownCtx); err != nil {
@@ -281,6 +307,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 					}
 				}
 
+				logger.Info("graceful shutdown drain complete; canceling runtime", "restart", restart)
 				cancel()
 			}()
 		})

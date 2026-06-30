@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -109,22 +110,38 @@ func (b *Bus) StopInbound() {
 }
 
 // WaitInboundDequeued waits for accepted inbound work to leave the bus queues.
-func (b *Bus) WaitInboundDequeued(ctx context.Context) error {
+func (b *Bus) WaitInboundDequeued(ctx context.Context, logger *slog.Logger) error {
 	stop := b.notifyOnContext(ctx)
 	defer stop()
 
 	b.mu.Lock()
-	defer b.mu.Unlock()
 
-	for len(b.inboundHumans) > 0 || len(b.inboundAutos) > 0 || b.inboundPending > 0 {
+	for {
+		humanQueueLen := len(b.inboundHumans)
+		autoQueueLen := len(b.inboundAutos)
+		inboundPending := b.inboundPending
+		inboundClosed := b.inboundClosed
+		busClosed := b.closed
+		idle := humanQueueLen == 0 && autoQueueLen == 0 && inboundPending == 0
+		b.mu.Unlock()
+
+		logger.Info("inbound queue handoff wait state", "human_queue_len", humanQueueLen, "auto_queue_len", autoQueueLen, "inbound_pending", inboundPending, "inbound_closed", inboundClosed, "bus_closed", busClosed)
+
+		if idle {
+			return nil
+		}
+
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("wait for inbound idle: %w", err)
 		}
 
+		b.mu.Lock()
+		if len(b.inboundHumans) == 0 && len(b.inboundAutos) == 0 && b.inboundPending == 0 {
+			continue
+		}
+
 		b.cond.Wait()
 	}
-
-	return nil
 }
 
 // PublishOutbound publishes a text message to all output sinks.
@@ -188,20 +205,39 @@ func (b *Bus) Observe(ctx context.Context) iter.Seq[ObservedMessage] {
 }
 
 // WaitOutboundIdle waits until outbound work is queued nowhere and delivered everywhere.
-func (b *Bus) WaitOutboundIdle(ctx context.Context) error {
+func (b *Bus) WaitOutboundIdle(ctx context.Context, logger *slog.Logger) error {
 	stop := b.notifyOnContext(ctx)
 	defer stop()
 
 	b.mu.Lock()
-	defer b.mu.Unlock()
 
 	for {
-		if len(b.outbound) == 0 && b.outboundPending == 0 {
+		outboundQueueLen := len(b.outbound)
+		outboundPending := b.outboundPending
+		busClosed := b.closed
+		idle := outboundQueueLen == 0 && outboundPending == 0
+		args := []any{"outbound_queue_len", outboundQueueLen, "outbound_pending", outboundPending, "bus_closed", busClosed}
+
+		if len(b.outbound) > 0 && b.outbound[0] != nil {
+			queued := b.outbound[0]
+			targets := append([]OutputTarget(nil), queued.Targets...)
+			args = append(args, "next_source", queued.Source, "next_targets", targets, "next_conversation_id", queued.ConversationID, "next_turn_id", queued.TurnID, "next_sequence", queued.Sequence, "next_progress", queued.PostProgressText, "next_complete", queued.Complete)
+		}
+		b.mu.Unlock()
+
+		logger.Info("outbound drain wait state", args...)
+
+		if idle {
 			return nil
 		}
 
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("wait for outbound idle: %w", err)
+		}
+
+		b.mu.Lock()
+		if len(b.outbound) == 0 && b.outboundPending == 0 {
+			continue
 		}
 
 		b.cond.Wait()

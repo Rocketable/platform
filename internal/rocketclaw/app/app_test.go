@@ -108,14 +108,14 @@ func TestOutboundLoopDeliversChannelsInParallelAndPreservesPerChannelOrder(t *te
 	assertDeliveryBlocked(t, second, 100*time.Millisecond)
 
 	waitCtx, stopWait := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	errWait := bus.WaitOutboundIdle(waitCtx)
+	errWait := bus.WaitOutboundIdle(waitCtx, testLogger())
 
 	stopWait()
 	require.ErrorContains(t, errWait, "wait for outbound idle")
 
 	close(slackFirstRelease)
 	require.NoError(t, second.WaitDelivered(context.Background()))
-	require.NoError(t, bus.WaitOutboundIdle(context.Background()))
+	require.NoError(t, bus.WaitOutboundIdle(context.Background(), testLogger()))
 	assert.Equal(t, []int{1, 2}, recordedOrder(order, &mu, "slack"))
 	assert.Equal(t, []int{1, 2}, recordedOrder(order, &mu, "discord"))
 
@@ -725,7 +725,7 @@ func TestOutboundLoopTreatsInterruptedDiscordPlaybackAsDelivered(t *testing.T) {
 	msg.Targets = []events.OutputTarget{events.OutputTargetDiscord}
 	require.NoError(t, bus.PublishOutbound(context.Background(), msg))
 	require.NoError(t, msg.WaitDelivered(context.Background()))
-	require.NoError(t, bus.WaitOutboundIdle(context.Background()))
+	require.NoError(t, bus.WaitOutboundIdle(context.Background(), testLogger()))
 
 	cancel()
 	require.NoError(t, <-done)
@@ -869,7 +869,7 @@ func TestOutboundLoopMarksMessagesWithoutTargetsDelivered(t *testing.T) {
 	msg.Targets = nil
 	require.NoError(t, bus.PublishOutbound(context.Background(), msg))
 	require.NoError(t, msg.WaitDelivered(context.Background()))
-	require.NoError(t, bus.WaitOutboundIdle(context.Background()))
+	require.NoError(t, bus.WaitOutboundIdle(context.Background(), testLogger()))
 
 	cancel()
 	require.NoError(t, <-done)
@@ -1070,8 +1070,35 @@ func TestRunReturnsErrRestartRequestedAfterCronRestartTool(t *testing.T) {
 	defer cancel()
 
 	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
-	err := Run(ctx, cfg, filepath.Join(workspace, "rocketclaw.json"), testLogger())
+
+	var logs bytes.Buffer
+
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	err := Run(ctx, cfg, filepath.Join(workspace, "rocketclaw.json"), logger)
 	require.ErrorIs(t, err, ErrRestartRequested)
+
+	logOutput := logs.String()
+	assert.Contains(t, logOutput, "graceful shutdown waiting for active cron jobs")
+	assert.Contains(t, logOutput, "graceful shutdown waiting for inbound queue handoff")
+	assert.Contains(t, logOutput, "inbound queue handoff wait state")
+	assert.Contains(t, logOutput, "human_queue_len=0")
+	assert.Contains(t, logOutput, "auto_queue_len=0")
+	assert.Contains(t, logOutput, "inbound_pending=0")
+	assert.Contains(t, logOutput, "graceful shutdown waiting for bridge idle")
+	assert.Contains(t, logOutput, "bridge idle wait state")
+	assert.Contains(t, logOutput, "queue_len=0")
+	assert.Contains(t, logOutput, "thread bridge manager idle wait state")
+	assert.Contains(t, logOutput, "bridge_count=0")
+	assert.Contains(t, logOutput, `phase="before intake stop"`)
+	assert.Contains(t, logOutput, `phase="after intake stop"`)
+	assert.Contains(t, logOutput, "bridge=main")
+	assert.Contains(t, logOutput, "bridge=threads")
+	assert.Contains(t, logOutput, "graceful shutdown waiting for outbound drain")
+	assert.Contains(t, logOutput, "outbound drain wait state")
+	assert.Contains(t, logOutput, "outbound_queue_len=0")
+	assert.Contains(t, logOutput, "outbound_pending=0")
+	assert.Contains(t, logOutput, "graceful shutdown drain complete; canceling runtime")
+	assert.Contains(t, logOutput, "restart=true")
 
 	requestMu.Lock()
 	defer requestMu.Unlock()

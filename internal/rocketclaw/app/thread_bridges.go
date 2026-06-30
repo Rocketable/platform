@@ -40,6 +40,13 @@ type managedThreadBridge struct {
 	queuedReplies []*events.InboundMessage
 }
 
+type threadBridgeSnapshot struct {
+	conversationID string
+	bridge         directBridge
+	summarizing    bool
+	queuedReplies  int
+}
+
 type threadStart struct {
 	conversationID, agent, seedConversationID, seedCronText string
 	outputTargets                                           []events.OutputTarget
@@ -155,7 +162,7 @@ func (m *threadBridgeManager) Stop() error {
 
 	bridges := m.bridgesSnapshot()
 	for i := range bridges {
-		errStop = errors.Join(errStop, bridges[i].Stop())
+		errStop = errors.Join(errStop, bridges[i].bridge.Stop())
 	}
 
 	return errStop
@@ -171,8 +178,15 @@ func (m *threadBridgeManager) WaitIdle(ctx context.Context) error {
 	var errWait error
 
 	bridges := m.bridgesSnapshot()
+	m.mu.Lock()
+	draining := m.draining
+	m.mu.Unlock()
+
+	m.log.Info("thread bridge manager idle wait state", "bridge_count", len(bridges), "draining", draining)
+
 	for i := range bridges {
-		errWait = errors.Join(errWait, bridges[i].WaitIdle(ctx))
+		m.log.Info("thread bridge idle wait state", "conversation_id", bridges[i].conversationID, "summarizing", bridges[i].summarizing, "queued_replies", bridges[i].queuedReplies)
+		errWait = errors.Join(errWait, bridges[i].bridge.WaitIdle(ctx))
 	}
 
 	return errWait
@@ -759,14 +773,16 @@ func (m *threadBridgeManager) cronCreatedThread(ctx context.Context, conversatio
 	return false, nil
 }
 
-func (m *threadBridgeManager) bridgesSnapshot() []directBridge {
+func (m *threadBridgeManager) bridgesSnapshot() []threadBridgeSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	bridges := make([]directBridge, 0, len(m.bridges))
-	for _, managed := range m.bridges {
-		bridges = append(bridges, managed.bridge)
+	bridges := make([]threadBridgeSnapshot, 0, len(m.bridges))
+	for conversationID, managed := range m.bridges {
+		bridges = append(bridges, threadBridgeSnapshot{conversationID: conversationID, bridge: managed.bridge, summarizing: managed.summarizing, queuedReplies: len(managed.queuedReplies)})
 	}
+
+	slices.SortFunc(bridges, func(a, b threadBridgeSnapshot) int { return strings.Compare(a.conversationID, b.conversationID) })
 
 	return bridges
 }

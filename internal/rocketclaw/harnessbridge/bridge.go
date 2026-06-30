@@ -260,12 +260,36 @@ func (b *Bridge) WaitIdle(ctx context.Context) error {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 
+	logged := false
+
 	for {
 		b.mu.Lock()
 		handling := b.handling
+		stopped := b.stopped
+		agent := b.config.Agent
+		activeReply := b.activeReply
+		activeTurnInterrupted := b.activeTurnInterrupted
 		b.mu.Unlock()
 
-		if !handling && len(b.requestCh) == 0 {
+		queueLen := len(b.requestCh)
+		queueCap := cap(b.requestCh)
+
+		if !logged {
+			args := []any{"conversation_id", b.config.ConversationID, "agent", agent, "handling", handling, "queue_len", queueLen, "queue_cap", queueCap, "stopped", stopped, "active_turn_interrupted", activeTurnInterrupted}
+			if activeReply != nil && activeReply.SlackReply != nil {
+				args = append(args, "active_slack_channel", activeReply.SlackReply.ChannelID, "active_slack_thread", activeReply.SlackReply.ThreadTS)
+			}
+
+			if activeReply != nil && activeReply.DiscordReply != nil {
+				args = append(args, "active_discord_channel", activeReply.DiscordReply.ChannelID, "active_discord_thread", activeReply.DiscordReply.ThreadID)
+			}
+
+			b.log.Info("bridge idle wait state", args...)
+
+			logged = true
+		}
+
+		if !handling && queueLen == 0 {
 			return nil
 		}
 

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -831,7 +832,10 @@ func TestThreadBridgeManagerWaitIdleWaitsForActiveBridges(t *testing.T) {
 	workspace := t.TempDir()
 	store := newTestSessionService(t, workspace)
 	bridge := &fakeDirectBridge{submits: nil, seeds: nil, summarizeStarted: nil, releaseSummarize: nil, waitStarted: make(chan struct{}, 1), releaseWait: make(chan error, 1)}
-	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
+
+	var logs bytes.Buffer
+
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.NewTextHandler(&logs, nil)), func(bridgeConfig) directBridge { return bridge })
 	require.NoError(t, manager.StartThread(context.Background(), "main", true, slackTarget("D123", "111.222"), newThreadInboundMessage("start", "111.222", "111.222")))
 
 	waitDone := make(chan error, 1)
@@ -849,6 +853,12 @@ func TestThreadBridgeManagerWaitIdleWaitsForActiveBridges(t *testing.T) {
 	bridge.releaseWait <- nil
 
 	require.NoError(t, <-waitDone)
+
+	logOutput := logs.String()
+	assert.Contains(t, logOutput, "thread bridge manager idle wait state")
+	assert.Contains(t, logOutput, "bridge_count=1")
+	assert.Contains(t, logOutput, "thread bridge idle wait state")
+	assert.Contains(t, logOutput, "conversation_id=slack-thread:D123:111.222")
 }
 
 func TestThreadBridgeManagerStopStopsActiveBridges(t *testing.T) {

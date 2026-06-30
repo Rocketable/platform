@@ -913,15 +913,22 @@ func TestBridgeStopAfterStartContextCanceledIsIdempotent(t *testing.T) {
 }
 
 func TestBridgeWaitIdle(t *testing.T) {
-	bridge := &Bridge{requestCh: make(chan bridgeRequest, 1)}
+	var logs bytes.Buffer
+
+	bridge := &Bridge{log: slog.New(slog.NewTextHandler(&logs, nil)), config: Config{ConversationID: events.MainConversationID(), Agent: "main"}, requestCh: make(chan bridgeRequest, 1)}
 	require.NoError(t, bridge.WaitIdle(t.Context()))
+	assert.Contains(t, logs.String(), "bridge idle wait state")
+	assert.Contains(t, logs.String(), "conversation_id=main")
+	assert.Contains(t, logs.String(), "queue_len=0")
 
 	bridge.setHandling(true)
+	logs.Reset()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
 	defer cancel()
 
 	require.Error(t, bridge.WaitIdle(ctx))
+	assert.Contains(t, logs.String(), "handling=true")
 }
 
 func TestBridgeForwardInboundFiltersConversation(t *testing.T) {
