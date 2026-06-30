@@ -115,28 +115,7 @@ RocketClaw injects these tools into RocketCode turns. Most are auto-allowed by R
 | `rocketclaw_i_want_human_partner_to_see_this` | Raw/cron runs only. | Auto-allow in raw/cron tool mode unless explicitly denied by the cron agent. | Required raw-run completion tool. Its argument is the exact human-visible output, or an empty string for silence. |
 | `ask_user_question` | Qualifying human-originated Slack, Discord Text, or terminal CLI turns with a native answer path. | Auto-allow unless explicitly denied, but hidden when the turn has no answer path. | Asks the originating human through native UI, blocks until answered or canceled, and returns selected options and/or custom text. Not exposed for cron/raw, MCP, voice, web, scheduled/system/automation, automatic goal continuations, or restart recovery continuations. |
 
-### Permission Defaults
-
-| Permission Action | Meaning |
-| --- | --- |
-| `allow` | The matching tool subject may run without automatic reviewer approval. |
-| `deny` | The matching tool subject is blocked. Use this to override RocketClaw's auto-allowed tools. |
-| `auto` | RocketCode asks the embedded `guardian` automatic permission reviewer before running the tool. For RocketClaw auto-allowed tools, use `deny` rather than `auto` if the intent is to block or force review, because RocketClaw appends default `allow` rules for most of these tools. |
-| `auto(agent-name)` | RocketCode asks a custom loaded approval-reviewer agent before running the tool. The reviewer must return `allow`; failures deny the action. |
-
-RocketCode permission evaluation is deny-by-default, and later matching rules win. RocketClaw's default tool allows are injected after agent permissions unless an explicit deny already matched.
-
-## Guardrails And Approval Reviewers
-
-| Mechanism | Configure With | Applies To | Contract |
-| --- | --- | --- | --- |
-| Guardrail agent | `guardrail: safety-agent` in the target agent's frontmatter. | `task` delegation to that guarded target agent. | RocketCode runs the guardrail before the child agent receives the delegated prompt and again after the child final response. The guardrail must return strict JSON with `approved` and `reason`. Invalid output fails closed. Rejections are returned to the caller as task-result text; child responses rejected by the guardrail are not exposed to the caller. |
-| Embedded approval reviewer | Permission action `auto`. | Any tool permission subject that resolves to `auto`. | Uses RocketCode's built-in `guardian` reviewer. RocketClaw always enables automatic permission review; there is no `rocketclaw.json` toggle for it. Reviewer failures, invalid output, or denial prevent the tool from running. |
-| Custom approval-reviewer agent | Permission action `auto(reviewer-agent)`. | Any tool permission subject that resolves to that reviewer. | The named reviewer must be a loaded agent. `guardian` is reserved for the embedded reviewer and cannot be used as a custom agent name. Multiple `auto` matches for one tool call must agree on the same reviewer or the call is denied without review. |
-
-Guardrails and approval reviewers are separate mechanisms. Guardrails review inter-agent delegation and child responses. Approval reviewers review tool execution permission. Both fail closed and use their own agent permissions, prompts, model settings, tools, and skills.
-
-Run `rocketclaw lint` after agent, skill, or script edits. Run `rocketclaw agent-graph` to inspect task delegation and guardrail edges.
+For general `permission` syntax, action values, guardrails, and approval reviewers, see Agent Frontmatter And Permissions below. RocketCode is deny-by-default and later matching rules win. RocketClaw's default tool allows are injected after agent permissions unless an explicit deny already matched, so use `deny` rather than `auto` when the intent is to block or force review of a RocketClaw auto-allowed tool.
 
 ## Emoji Translation Table
 
@@ -159,6 +138,79 @@ Run `rocketclaw lint` after agent, skill, or script edits. Run `rocketclaw agent
 | `📲` | `:calling:`, `calling` | Slack Discord voice relay marker. |
 | `🎙️` | `:studio_microphone:`, `studio_microphone` | Slack browser voice relay marker. |
 | `📡` | `:satellite_antenna:`, `satellite_antenna` | Slack External MCP relay marker. |
+
+## Agent Frontmatter And Permissions
+
+Agents are top-level Markdown files in `agents/*.md`. The filename without `.md` is the agent name. YAML frontmatter is required, followed by the agent prompt body.
+
+```yaml
+---
+description: Short human-readable purpose
+model: gpt-5.4
+reasoningEffort: high
+verbosity: medium
+maxRecursion: 2
+guardrail: safety-agent
+additionalInstructions: Reply in plain text suitable for Slack.
+permission:
+  read:
+    "README.md": allow
+    "docs/**": allow
+  edit:
+    "docs/**": allow
+  bash:
+    "go test ./...": allow
+    "make lint": auto
+  skill:
+    "main-*": allow
+  task:
+    "reviewer": allow
+---
+
+Agent instructions go here.
+```
+
+Known frontmatter fields:
+
+| Field | Meaning |
+| --- | --- |
+| `description` | Required short purpose shown when selecting agents. |
+| `model` | Optional unprefixed OpenAI Responses model ID. Missing or empty inherits the runtime/default model. |
+| `reasoningEffort` | Optional model reasoning effort. Avoid `xhigh`; `rocketclaw lint` reports it. |
+| `verbosity` | Optional model verbosity. |
+| `maxRecursion` | Optional task delegation depth for inferences started with this agent. Omitted or `-1` is unlimited, `0` disables `task`, and positive integers allow that many levels. |
+| `guardrail` | Optional loaded agent name that reviews task delegations to this agent before the child runs and after its response. The guardrail must return strict JSON with `approved` and `reason`. |
+| `additionalInstructions` | Optional RocketClaw normal-reply prompt-header override for this selected agent. Use it for response-format guidance, such as telling an agent to avoid Markdown for Slack/TTS, prefer Markdown for technical answers, keep answers terse, or follow another surface-specific style. When omitted, RocketClaw uses `Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.` It does not affect internal notes or raw cron runs. |
+| `permission` | Optional singular permission map. Omit it when the agent needs no tools. Do not use plural `permissions`; RocketCode ignores it and `rocketclaw lint` reports it. |
+
+RocketCode denies tools by default. `permission` grants are grouped by bucket, and each bucket maps subjects to actions. Later matching rules override earlier matching rules, so put broad allows before narrower denies when subtracting access.
+
+Permission actions:
+
+| Action | Meaning |
+| --- | --- |
+| `allow` | Run matching tool calls without automatic review. |
+| `deny` | Block matching tool calls. Use it after a broader allow to subtract specific subjects. |
+| `auto` | Ask RocketCode's embedded `guardian` automatic reviewer. RocketClaw enables automatic review. Review failure, invalid JSON, or denial blocks the call. |
+| `auto(agent-name)` | Ask the named loaded custom reviewer agent. Do not create an agent named `guardian`; that name is reserved. |
+
+Guardrails and approval reviewers are separate mechanisms. `guardrail` reviews inter-agent delegation and child responses; `auto` and `auto(agent-name)` review tool execution permission.
+
+Permission buckets:
+
+| Bucket | Subject |
+| --- | --- |
+| `read` | Workspace-relative file paths for `read`. An `edit` allow also permits reading the same path unless a `read` rule matched first. |
+| `glob` | Requested glob patterns for `glob`. |
+| `grep` | Requested search patterns for `grep`. |
+| `webfetch` | Requested URLs for `webfetch`. |
+| `websearch` | Coarse hosted web search toggle, usually `websearch: allow`, `deny`, or `auto`. |
+| `edit` | Workspace-relative file paths touched by `apply_patch`. |
+| `bash` | Parsed shell command call expressions. Multi-command scripts need every parsed call allowed. |
+| `skill` | Skill names visible to `find_skills` and loadable by `skill`. |
+| `task` | Subagent names visible and callable through `task`. `maxRecursion` can still hide `task` when the delegation budget is exhausted. |
+
+Run `rocketclaw lint` after agent, skill, or script edits. It checks write-to-execute risk, read-plus-execute leakage, task delegation cycles, delegation-chain escalation, external-content contamination, plural `permissions`, missing guardrails, and excessive `reasoningEffort`.
 
 ## Subcommands
 
