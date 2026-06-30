@@ -123,7 +123,7 @@ ignored
 		fsys := fstest.MapFS{
 			"review.md": testMapFile(`---
 description: Review code: security and performance
-model: gpt-5.4
+model: openai/gpt-5.4
 ---
 
 Strictly follow the rules.

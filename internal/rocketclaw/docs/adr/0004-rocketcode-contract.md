@@ -31,7 +31,7 @@ Both construction paths must pass RocketClaw-originated `rocketcode.PromptInput`
 ### Provider Selection
 
 - RocketClaw treats first-party OpenAI Responses as the only supported RocketCode model provider surface.
-- Model strings in agent frontmatter and runtime defaults are unprefixed OpenAI model IDs. Provider-qualified model strings such as `openai/...`, `openai-compatible/...`, and `anthropic/...` are construction errors.
+- Model strings in agent frontmatter and runtime defaults are unprefixed OpenAI model IDs. Legacy `openai/<model>` strings are accepted only as first-party OpenAI aliases and normalized to `<model>`. Other provider-qualified model strings, including `openai-compatible/...` and `anthropic/...`, are construction errors.
 - Every loaded agent may omit `model` frontmatter or set it empty; missing or empty agent models inherit the runtime/default OpenAI model. RocketClaw startup must preserve this inheritance across embedded, generated, configured-overlay, and workspace-overlay agents.
 - RocketClaw passes one first-party OpenAI client into RocketCode. ChatGPT OAuth and OpenAI API-key behavior follow `openai.rocketcode_auth`.
 - Hosted OpenAI tools, including hosted `websearch`, remain OpenAI-only tools governed by RocketCode permissions.
@@ -213,3 +213,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-25: Specified that persistent bridge prompt headers may include trusted `additional_instructions`, normal reply turns may override the default through selected agent `additionalInstructions` frontmatter, internal notes cannot be overridden, and raw-run cron headers omit the field.
 - 2026-06-26: Removed Anthropic and OpenAI-compatible chat-completions embedding support; RocketClaw constructs only first-party OpenAI Responses and named OpenAI-compatible Responses providers.
 - 2026-06-26: Removed remaining OpenAI-compatible Responses provider support, provider-family parity, provider-qualified model strings, and required agent model declarations from the RocketClaw/RocketCode contract; RocketClaw now embeds RocketCode with first-party OpenAI Responses only.
+- 2026-06-30: Allowed legacy `openai/<model>` strings as aliases normalized to unprefixed first-party OpenAI model IDs while keeping other provider-qualified model strings invalid.

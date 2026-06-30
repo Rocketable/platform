@@ -23,6 +23,15 @@ func parseModelRef(model string) (modelRef, error) {
 		return defaultModelRef(), nil
 	}
 
+	if after, ok := strings.CutPrefix(model, "openai/"); ok {
+		model = after
+		if model == "" || strings.Contains(model, "/") {
+			return modelRef{}, fmt.Errorf("invalid model %q: expected openai/model", "openai/"+model)
+		}
+
+		return modelRef{apiModel: model}, nil
+	}
+
 	if strings.Contains(model, "/") {
 		return modelRef{}, fmt.Errorf("invalid model %q: expected unprefixed OpenAI model ID", model)
 	}
