@@ -1,5 +1,31 @@
 # RocketClaw Cheatsheet
 
+## Subcommands
+
+Running `rocketclaw` without a subcommand starts the server when `femtoclaw.json` or `rocketclaw.json` is present. If neither config exists, it prints help instead. When both configs exist, `femtoclaw.json` is selected for legacy compatibility.
+
+| Command | Purpose |
+| --- | --- |
+| `rocketclaw run` | Starts the RocketClaw server/runtime and fails if the selected configuration is missing or invalid. |
+| `rocketclaw cli` | Attaches a terminal CLI to the server-owned `main` conversation, or uses embedded fallback only when no server owns state. |
+| `rocketclaw cli --new [agent]` | Asks the server to create a private persisted terminal conversation using `agent`, or `main` when omitted. |
+| `rocketclaw cli --attach <conversation-id>` | Attaches the terminal CLI to an existing server-owned conversation. |
+| `rocketclaw setup` | Interactively creates or updates `rocketclaw.json`, root setup files, workspace overlays, and `.rocketclaw/`. |
+| `rocketclaw setup files list` | Lists embedded setup payload files. |
+| `rocketclaw setup files get <path>` | Prints one embedded setup payload file. |
+| `rocketclaw doctor` | Validates the loaded configuration and RocketCode availability. |
+| `rocketclaw doctor tts [-text <text>]` | Runs a TTS diagnostic probe. |
+| `rocketclaw doctor stt -file <audio-file>` | Runs an STT diagnostic probe. |
+| `rocketclaw lint [next|current]` | Checks effective RocketCode agent-system safety. Defaults to `next`. |
+| `rocketclaw agent-graph [next|current]` | Prints the effective RocketCode task delegation and guardrail graph as Graphviz/DOT. Defaults to `next`. |
+| `rocketclaw oai login [--headless]` | Authenticates RocketClaw to ChatGPT for RocketCode model requests and writes the selected runtime `auth.json`. |
+| `rocketclaw fc list [--since 24h|RFC3339] [--until RFC3339] [--limit N] [--no-message-preview]` | Lists stored RocketCode sessions. |
+| `rocketclaw fc observe [--follow|-f] [conversation-id]` | Prints stored session entries as JSONL; defaults to `main`. |
+| `rocketclaw fc delete <conversation-id>` | Deletes a stored session when the daemon does not own the state store. |
+| `rocketclaw help`, `rocketclaw -h`, `rocketclaw --help` | Prints top-level help. |
+
+For `lint` and `agent-graph`, `next` builds a temporary startup-equivalent runtime view from embedded assets, overlays, and workspace files. `current` inspects the selected generated runtime directory as it exists now.
+
 ## Text Connector Emoji
 
 | Emoji | Aliases | Surface | What It Does | Notes |
