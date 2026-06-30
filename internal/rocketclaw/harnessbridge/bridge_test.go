@@ -1464,7 +1464,7 @@ Prompt
 
 	shellOutputDir := filepath.Join(workspace, "shell-output")
 	require.NoError(t, os.Mkdir(shellOutputDir, 0o755))
-	_, err = rocketcode.NewWithProviders(providers, &rocketcode.Config{ShellOutputDir: shellOutputDir}, root, agents, skills, "main", io.Discard)
+	_, err = rocketcode.NewWithProviders(providers, &rocketcode.Config{ShellOutputDir: shellOutputDir, ChildRunLogger: rocketcode.DiscardChildRunLog}, root, agents, skills, "main", io.Discard)
 	require.NoError(t, err)
 }
 
@@ -1597,6 +1597,30 @@ func TestBridgeScheduleMessageLogsPersistFailure(t *testing.T) {
 
 	require.Error(t, bridge.ScheduleMessage(time.Minute, "later", false))
 	assert.Contains(t, logs.String(), "scheduled message persist failed")
+}
+
+func TestBridgeLogsRocketCodeHiddenChildRunOutput(t *testing.T) {
+	var logs bytes.Buffer
+
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	bridge := &Bridge{log: logger, config: Config{ConversationID: events.MainConversationID()}}
+
+	bridge.logRocketCodeChildRun(&rocketcode.ChildRunEvent{
+		Kind:  rocketcode.ChildRunKindGuardrail,
+		Stage: rocketcode.ChildRunStageResponse,
+		Agent: "safety",
+		Item:  rocketcode.ChatResponse{Kind: rocketcode.ChatResponseReasoningSummary, Text: "checking response"},
+	})
+
+	got := logs.String()
+	assert.Contains(t, got, "rocketcode hidden child run output")
+	assert.Contains(t, got, `"component":"rocketcode_child_run"`)
+	assert.Contains(t, got, `"conversation_id":"main"`)
+	assert.Contains(t, got, `"child_run_kind":"guardrail"`)
+	assert.Contains(t, got, `"child_run_stage":"response"`)
+	assert.Contains(t, got, `"agent":"safety"`)
+	assert.Contains(t, got, `"item_kind":"reasoning_summary"`)
+	assert.Contains(t, got, `"text":"checking response"`)
 }
 
 func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testing.T) {

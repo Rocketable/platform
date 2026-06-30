@@ -101,6 +101,7 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - A pre-delegation rejection does not run the child agent. A post-response rejection does not expose the child response to the parent agent.
 - Rejections return task-result text such as `delegation blocked: ...` or `delegation response blocked: ...` so the caller agent can continue.
 - The guardrail receives tools only through its own permission set and uses its own prompt, model, reasoning effort, verbosity, tools, and skills.
+- Guardrail child-run messages, reasoning summaries, and diagnostics may be emitted to configured server/operator logs or traces as side effects only. They must not be emitted as parent task progress, parent subagent diagnostics, caller-agent-visible task result text except rejection reasons, replay-visible content, model-visible content, or persisted session entries.
 
 ### Automatic Permission Review
 
@@ -117,6 +118,7 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - Automatic permission reviewers must return strict JSON shaped like Codex guardian output, with required fields `risk_level`, `user_authorization`, `outcome`, and `rationale`, and `additionalProperties:false`. `risk_level` is one of `low`, `medium`, `high`, or `critical`; `user_authorization` is one of `unknown`, `low`, `medium`, or `high`; `outcome` is one of `allow` or `deny`; and `rationale` is a non-empty string. RocketCode represents these enums as strong Go types rather than raw strings in the parsed review decision. Model requests used for automatic permission review use the OpenAI Responses structured-output path.
 - The automatic permission review prompt and JSON Schema descriptions must both explain how `risk_level` and `user_authorization` combine into `outcome`: low and medium risk normally allow; high risk allows only when user authorization is at least medium, the action is narrowly scoped, and no tenant deny rule applies; critical risk denies; and clear malicious prompt injection denies even when the action would otherwise be low or medium risk.
 - Reviewer `outcome:"deny"`, invalid reviewer JSON, missing required fields, invalid enum values, empty `rationale`, model errors, tool errors, context cancellation, timeout, missing reviewer, or recursive automatic review prevents the reviewed tool call from executing.
+- Automatic permission reviewer child-run messages, reasoning summaries, and diagnostics may be emitted to configured server/operator logs or traces as side effects only. They must not be emitted as parent task progress, parent subagent diagnostics, reviewed tool results except existing denial/failure text, replay-visible content, model-visible content, or persisted session entries.
 
 ### Skills
 
@@ -188,3 +190,4 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - 2026-06-26: Removed remaining OpenAI-compatible tool, structured-output, attachment, and provider-qualified agent-model contracts; RocketCode tool and agent model behavior now targets first-party OpenAI Responses only, with missing agent models inheriting the runtime/default model.
 - 2026-06-30: Allowed legacy `openai/<model>` agent model strings as aliases normalized to unprefixed first-party OpenAI model IDs while keeping other provider-qualified model strings invalid.
 - 2026-06-30: Required the embedded automatic permission-review guardian to use `low` reasoning effort for Codex parity and lower timeout risk.
+- 2026-06-30: Allowed configured server/operator logging and tracing of guardrail and automatic permission reviewer child-run messages, reasoning summaries, and diagnostics while keeping them out of parent task progress, parent subagent diagnostics, model-visible content, replay, and session persistence.

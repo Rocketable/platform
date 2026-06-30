@@ -225,6 +225,8 @@ func TestTaskTool(t *testing.T) {
 	})
 
 	t.Run("guardrail response rejection bubbles reason", func(t *testing.T) {
+		var childRunEvents []ChildRunEvent
+
 		mock := mockResponses(
 			responseWithMessage("prompt-filter", `{"approved":true,"reason":""}`),
 			responseWithTaskMessages(),
@@ -235,6 +237,9 @@ func TestTaskTool(t *testing.T) {
 			"safety": testAgentWithPrompt("safety", "guard carefully"),
 		}})
 		factory.diagnostics = true
+		factory.childRunLogger = func(event *ChildRunEvent) {
+			childRunEvents = append(childRunEvents, *event)
+		}
 		output := make(chan ChatResponse, 10)
 
 		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, output)
@@ -242,6 +247,10 @@ func TestTaskTool(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\ndelegation response blocked: do not share\n</task_result>", got)
 		require.Equal(t, []ChatResponse{subagentDiagnosticResponse(testReviewSubagentDiagnostic("delegation", 1, 1, "started: Review"))}, drainBufferedResponses(output))
+		require.Equal(t, []ChildRunEvent{
+			{Kind: ChildRunKindGuardrail, Stage: ChildRunStageDelegation, Agent: "safety", Item: assistantMessage(`{"approved":true,"reason":""}`)},
+			{Kind: ChildRunKindGuardrail, Stage: ChildRunStageResponse, Agent: "safety", Item: assistantMessage(`{"approved":false,"reason":"do not share"}`)},
+		}, childRunEvents)
 	})
 
 	t.Run("guardrail invalid JSON fails closed", func(t *testing.T) {
@@ -676,6 +685,7 @@ func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
 		"bash": bashTool,
 		"read": readTool,
 	}
+	factory.childRunLogger = DiscardChildRunLog
 
 	return &factory
 }

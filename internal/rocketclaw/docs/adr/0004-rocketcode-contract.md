@@ -88,13 +88,14 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - RocketCode runs the guardrail after each inbound guarded child agent final response. When the guardrail returns `approved:false`, the guardrail reason is returned to the caller agent instead of the child response.
 - The guardrail response contract is strict JSON with `approved` boolean and `reason` string fields. Invalid or missing guardrail JSON fails closed.
 - The guardrail receives tools only through its own `permission` frontmatter under existing RocketCode permission semantics and uses its own prompt, model, reasoning effort, verbosity, tools, and skills.
-- Guardrail execution is not recursively guarded and is not surfaced as parent progress or subagent diagnostics; only rejection reasons are bubbled through the task result.
+- Guardrail execution is not recursively guarded and is not surfaced as parent progress or subagent diagnostics; only rejection reasons are bubbled through the task result. Guardrail child-run messages, reasoning summaries, and diagnostics may be emitted to server/operator logs or traces as side effects only, and must not be emitted to connector-visible thinking, parent RocketCode output, task results except rejection reasons, replay-visible content, model-visible content, or persisted session entries.
 
 ### Automatic Permission Review
 
 - RocketClaw does not implement its own automatic permission reviewer and does not expose a `rocketclaw.json` flag for automatic permission review.
 - Persistent bridge and raw-run construction paths always enable RocketCode automatic permission review. RocketCode `auto` permission rules therefore route to RocketCode's automatic reviewer instead of failing closed because of RocketClaw configuration.
 - RocketCode owns reviewer resolution, embedded guardian behavior, custom `auto(name)` reviewer execution, reserved reviewer-name validation, and fail-closed review semantics.
+- Automatic permission reviewer child-run messages, reasoning summaries, and diagnostics may be emitted to server/operator logs or traces as side effects only, and must not be emitted to connector-visible thinking, parent RocketCode output, reviewed tool results except existing denial/failure text, replay-visible content, model-visible content, or persisted session entries.
 - The RocketClaw linter, agent graph, and goal-check script validation continue to use deterministic allow/deny permission evaluation unless a separate ADR explicitly expands them to model automatic review outcomes.
 
 ### Tools Injected By RocketClaw
@@ -214,3 +215,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-26: Removed Anthropic and OpenAI-compatible chat-completions embedding support; RocketClaw constructs only first-party OpenAI Responses and named OpenAI-compatible Responses providers.
 - 2026-06-26: Removed remaining OpenAI-compatible Responses provider support, provider-family parity, provider-qualified model strings, and required agent model declarations from the RocketClaw/RocketCode contract; RocketClaw now embeds RocketCode with first-party OpenAI Responses only.
 - 2026-06-30: Allowed legacy `openai/<model>` strings as aliases normalized to unprefixed first-party OpenAI model IDs while keeping other provider-qualified model strings invalid.
+- 2026-06-30: Allowed guardrail and automatic permission reviewer child-run output to reach server/operator logs or traces only, while preserving exclusion from connector-visible progress, parent RocketCode output, task/tool results except existing rejection or denial text, replay, model-visible content, and session persistence.

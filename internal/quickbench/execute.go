@@ -182,6 +182,7 @@ func runOne(ctx context.Context, providers rocketcode.Providers, opt options, be
 		Diagnostics:       true,
 		ParallelToolCalls: 16,
 		ShellOutputDir:    shellOutputDir,
+		ChildRunLogger:    rocketcode.DiscardChildRunLog,
 		CustomTools:       tools,
 	}
 

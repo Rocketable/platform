@@ -179,7 +179,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 			params.Prompt,
 		}, "\n")
 
-		decision := f.runGuardrail(ctx, &guardrailAgent, message)
+		decision := f.runGuardrail(ctx, &guardrailAgent, ChildRunStageDelegation, message)
 		if !decision.Approved {
 			reason := strings.TrimSpace(decision.Reason)
 			if reason == "" {
@@ -305,7 +305,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 			last,
 		}, "\n")
 
-		decision := f.runGuardrail(ctx, &guardrailAgent, message)
+		decision := f.runGuardrail(ctx, &guardrailAgent, ChildRunStageResponse, message)
 		if !decision.Approved {
 			reason := strings.TrimSpace(decision.Reason)
 			if reason == "" {
@@ -333,7 +333,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	return strings.Join([]string{"<task_result>", last, "</task_result>"}, "\n"), nil
 }
 
-func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, message string) guardrailDecision {
+func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage ChildRunStage, message string) guardrailDecision {
 	agent := *guardrail
 	agent.Permission = f.shellOutput.effectivePermissions(agent.Permission)
 	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
@@ -364,9 +364,11 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, messag
 		ResponseFormat:         responseFormat,
 		Permissions:            agent.Permission,
 		Tools:                  childFactory.toolsFor(&agent),
+		Diagnostics:            f.diagnostics,
 		AutoApprovePermissions: f.autoApprovePermissions,
 		PermissionReviewer:     &childFactory,
 		InPermissionReview:     f.inPermissionReview,
+		Observability:          f.observability,
 	}
 
 	output := make(chan ChatResponse)
@@ -383,6 +385,8 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, messag
 
 	group.Go(func() error {
 		for item := range output {
+			f.childRunLogger(&ChildRunEvent{Kind: ChildRunKindGuardrail, Stage: stage, Agent: agent.Name, Item: item})
+
 			if item.Kind == ChatResponseAssistantMessage {
 				last = item.Text
 			}

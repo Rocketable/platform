@@ -1509,7 +1509,53 @@ func (b *Bridge) rocketcodeConfig(shellOutputDir string, shellEnv map[string]str
 
 	tools = append(tools, customTools...)
 
-	return rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, CustomTools: tools, ShellEnv: shellEnv}
+	return rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CustomTools: tools, ShellEnv: shellEnv}
+}
+
+func (b *Bridge) logRocketCodeChildRun(event *rocketcode.ChildRunEvent) {
+	text := rocketcodeThinkingText(event.Item)
+
+	attrs := []any{
+		"component", "rocketcode_child_run",
+		"conversation_id", b.config.ConversationID,
+		"child_run_kind", event.Kind,
+		"child_run_stage", event.Stage,
+		"agent", event.Agent,
+		"item_kind", event.Item.Kind,
+		"text_len", len([]rune(text)),
+	}
+	if text != "" {
+		attrs = append(attrs, "text", text)
+	}
+
+	if event.Item.Tool != nil {
+		attrs = append(attrs,
+			"tool_name", event.Item.Tool.Name,
+			"tool_phase", event.Item.Tool.Phase,
+			"tool_status", event.Item.Tool.Status,
+		)
+	}
+
+	if event.Item.Subagent != nil {
+		attrs = append(attrs,
+			"subagent_name", event.Item.Subagent.Name,
+			"subagent_label", event.Item.Subagent.Label,
+			"subagent_index", event.Item.Subagent.Index,
+			"subagent_total", event.Item.Subagent.Total,
+		)
+	}
+
+	if event.Item.Provider != nil {
+		attrs = append(attrs,
+			"provider_phase", event.Item.Provider.Phase,
+			"provider_status", event.Item.Provider.ResponseStatus,
+			"provider_code", event.Item.Provider.Code,
+			"provider_type", event.Item.Provider.Type,
+			"provider_attempt", event.Item.Provider.Attempt,
+		)
+	}
+
+	b.log.Debug("rocketcode hidden child run output", attrs...)
 }
 
 func appendOverlayPromptToAgent(agents rocketcode.Agents, agentName string, cfg *config.Config) {

@@ -115,6 +115,7 @@ func standaloneDefaultConfig() Config {
 		ReasoningEffort:  shared.ReasoningEffort("high"),
 		CompactThreshold: 200000,
 		ShellOutputDir:   filepath.Join(".tmp", "shell-outputs"),
+		ChildRunLogger:   DiscardChildRunLog,
 		CustomTools: []Tool{{
 			Name:        "current_time",
 			Description: "Tell the current time anywhere in the world.",

@@ -1,6 +1,7 @@
 package rocketcode
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -34,6 +35,39 @@ func TestEmbeddedGuardianAgentUsesLowReasoningEffort(t *testing.T) {
 	agent := embeddedGuardianAgent()
 
 	require.Equal(t, "low", agent.ReasoningEffort)
+}
+
+func TestPermissionReviewLogsHiddenChildRunOutput(t *testing.T) {
+	modelRef, err := parseModelRef(openai.ChatModelGPT5)
+	require.NoError(t, err)
+
+	var childRunEvents []ChildRunEvent
+
+	factory := &toolFactory{
+		client: mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
+			testReasoningOutputItem("review-reasoning", "", "considering risk"),
+			testMessageOutputItem("review-commentary", "commentary", "checking authorization"),
+			testMessageOutputItem("review-final", "", `{"risk_level":"low","user_authorization":"medium","outcome":"allow","rationale":"Low-risk action."}`),
+		})),
+		defaultModelRef: modelRef,
+		modelRef:        modelRef,
+		agents:          Agents{Items: map[string]Agent{}},
+		skills:          Skills{Items: map[string]Skill{}},
+		baseTools:       map[string]looperTool{},
+		shellOutput:     shellOutputConfig{},
+		childRunLogger: func(event *ChildRunEvent) {
+			childRunEvents = append(childRunEvents, *event)
+		},
+	}
+
+	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true})
+
+	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
+	require.Equal(t, []ChildRunEvent{
+		{Kind: ChildRunKindPermissionReview, Stage: ChildRunStageToolPermission, Agent: "guardian", Item: reasoningSummary("considering risk")},
+		{Kind: ChildRunKindPermissionReview, Stage: ChildRunStageToolPermission, Agent: "guardian", Item: assistantCommentary("checking authorization")},
+		{Kind: ChildRunKindPermissionReview, Stage: ChildRunStageToolPermission, Agent: "guardian", Item: assistantMessage(`{"risk_level":"low","user_authorization":"medium","outcome":"allow","rationale":"Low-risk action."}`)},
+	}, childRunEvents)
 }
 
 func TestPermissionReviewPromptIncludesReviewContextAndPlannedAction(t *testing.T) {

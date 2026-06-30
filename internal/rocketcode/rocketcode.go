@@ -33,9 +33,46 @@ type Config struct {
 	SandboxedBash              bool
 	AutoApprovePermissions     bool
 	Observability              ObservabilityConfig
+	ChildRunLogger             ChildRunLogger
 	CustomTools                []Tool
 	ShellEnv                   map[string]string
 }
+
+// ChildRunKind identifies a hidden child-run category.
+type ChildRunKind string
+
+const (
+	// ChildRunKindGuardrail identifies an inter-agent guardrail child run.
+	ChildRunKindGuardrail ChildRunKind = "guardrail"
+	// ChildRunKindPermissionReview identifies an automatic permission reviewer child run.
+	ChildRunKindPermissionReview ChildRunKind = "permission_review"
+)
+
+// ChildRunStage identifies the operation being reviewed by a hidden child run.
+type ChildRunStage string
+
+const (
+	// ChildRunStageDelegation identifies guardrail review before delegation.
+	ChildRunStageDelegation ChildRunStage = "delegation"
+	// ChildRunStageResponse identifies guardrail review after a child response.
+	ChildRunStageResponse ChildRunStage = "response"
+	// ChildRunStageToolPermission identifies automatic tool permission review.
+	ChildRunStageToolPermission ChildRunStage = "tool_permission"
+)
+
+// ChildRunEvent contains server/operator-only hidden child-run output.
+type ChildRunEvent struct {
+	Kind  ChildRunKind
+	Stage ChildRunStage
+	Agent string
+	Item  ChatResponse
+}
+
+// ChildRunLogger consumes server/operator-only hidden child-run output.
+type ChildRunLogger func(*ChildRunEvent)
+
+// DiscardChildRunLog ignores hidden child-run output.
+func DiscardChildRunLog(*ChildRunEvent) {}
 
 // ObservabilityConfig controls OpenInference-compatible tracing for RocketCode.
 type ObservabilityConfig struct {
@@ -205,6 +242,10 @@ func NewWithProviders(
 		return nil, errors.New("diagnosticsWriter is required when diagnostics are enabled")
 	}
 
+	if config.ChildRunLogger == nil {
+		return nil, errors.New("child run logger is required")
+	}
+
 	promptExpansion, err := newPromptExpansionEnvironment(root, shellOutput, shellEnv)
 	if err != nil {
 		return nil, fmt.Errorf("initialize prompt expansion: %w", err)
@@ -288,6 +329,7 @@ func NewWithProviders(
 		shellOutput:                shellOutput,
 		autoApprovePermissions:     config.AutoApprovePermissions,
 		observability:              config.Observability,
+		childRunLogger:             config.ChildRunLogger,
 	}
 	runtimeSystemPrompt := composeSystemPromptWithSkills(systemPrompt, skills, agentForTools)
 

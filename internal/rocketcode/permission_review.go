@@ -63,6 +63,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 		ResponseFormat:         permissionReviewResponseFormat(),
 		Permissions:            agent.Permission,
 		Tools:                  childFactory.toolsFor(&agent),
+		Diagnostics:            f.diagnostics,
 		AutoApprovePermissions: f.autoApprovePermissions,
 		PermissionReviewer:     &childFactory,
 		InPermissionReview:     true,
@@ -96,6 +97,8 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 
 	group.Go(func() error {
 		for item := range output {
+			f.childRunLogger(&ChildRunEvent{Kind: ChildRunKindPermissionReview, Stage: ChildRunStageToolPermission, Agent: agent.Name, Item: item})
+
 			if item.Kind == ChatResponseAssistantMessage {
 				last = item.Text
 			}
