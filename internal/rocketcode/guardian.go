@@ -6,7 +6,7 @@ func embeddedGuardianAgent() Agent {
 	return Agent{
 		Name:            guardianAgentName,
 		Description:     "automatic permission risk reviewer",
-		ReasoningEffort: "high",
+		ReasoningEffort: "low",
 		Verbosity:       "low",
 		Prompt:          embeddedGuardianPrompt,
 		Permission: PermissionSet{Buckets: []PermissionBucket{

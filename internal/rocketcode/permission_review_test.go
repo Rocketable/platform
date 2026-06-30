@@ -30,6 +30,12 @@ func TestPermissionReviewResponseFormatUsesStrictFourFieldSchema(t *testing.T) {
 	require.Contains(t, properties["outcome"].(map[string]any)["description"], "high risk allows only with at least medium user_authorization")
 }
 
+func TestEmbeddedGuardianAgentUsesLowReasoningEffort(t *testing.T) {
+	agent := embeddedGuardianAgent()
+
+	require.Equal(t, "low", agent.ReasoningEffort)
+}
+
 func TestPermissionReviewPromptIncludesReviewContextAndPlannedAction(t *testing.T) {
 	toolResult := toolCallOutput("call-1", TextToolResult("lookup result"))
 	request := &permissionReviewRequest{
