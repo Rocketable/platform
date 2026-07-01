@@ -3958,25 +3958,12 @@ func TestHandleMessageEventSwitchesManagedSocialThreadAgent(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	var ephemeral []url.Values
+	var (
+		ephemeral []url.Values
+		posted    []url.Values
+	)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/conversations.info":
-			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
-		case "/chat.postEphemeral":
-			if err := r.ParseForm(); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-
-			ephemeral = append(ephemeral, cloneValues(r.PostForm))
-
-			writeJSON(t, w, map[string]any{"ok": true, "message_ts": "222.333"})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
+	server := newSlackAgentSwitchTestServer(t, &posted, &ephemeral)
 	defer server.Close()
 
 	router := newThreadRouterStub()
@@ -4000,33 +3987,34 @@ func TestHandleMessageEventSwitchesManagedSocialThreadAgent(t *testing.T) {
 	require.Len(t, switched, 1)
 	assert.Equal(t, threadAgentSwitchCall{channelID: "C123", threadTS: "171234.5678", agent: "planner"}, switched[0])
 	assert.Empty(t, router.repliesSnapshot())
-	require.Len(t, ephemeral, 2)
+	require.Len(t, ephemeral, 1)
 	assert.Contains(t, ephemeral[0].Get("text"), "not configured")
 	assert.Equal(t, "171234.5678", ephemeral[0].Get("thread_ts"))
-	assert.Contains(t, ephemeral[1].Get("text"), "Switched")
-	assert.Equal(t, "171234.5678", ephemeral[1].Get("thread_ts"))
+	require.Len(t, posted, 1)
+	assert.Contains(t, posted[0].Get("text"), "Switched")
+	assert.Equal(t, "171234.5678", posted[0].Get("thread_ts"))
 	assertNeverInbound(t, bus)
 }
 
-func TestHandleMessageEventCyclesManagedSocialThreadAgent(t *testing.T) {
+func TestHandleMessageEventShowsManagedSocialThreadAgentSelector(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	var ephemeral []url.Values
+	var posted []url.Values
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/conversations.info":
 			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
-		case "/chat.postEphemeral":
+		case "/chat.postMessage":
 			if err := r.ParseForm(); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 
-			ephemeral = append(ephemeral, cloneValues(r.PostForm))
+			posted = append(posted, cloneValues(r.PostForm))
 
-			writeJSON(t, w, map[string]any{"ok": true, "message_ts": "222.333"})
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "222.333"})
 		default:
 			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
 		}
@@ -4035,9 +4023,7 @@ func TestHandleMessageEventCyclesManagedSocialThreadAgent(t *testing.T) {
 
 	router := newThreadRouterStub()
 	router.prepareHandled = true
-	router.switchHandled = true
 	router.threadAgentHandled = true
-	router.threadAgent = "social"
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
 	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "#social", Agents: []string{"social", "planner", "reviewer"}, AllowedUserIDs: []string{"U123"}}}, ContextMessages: 2}
 
@@ -4046,28 +4032,83 @@ func TestHandleMessageEventCyclesManagedSocialThreadAgent(t *testing.T) {
 	connector.handleMessageEvent(context.Background(), ev)
 
 	router.mu.Lock()
-	router.threadAgent = ""
-	router.mu.Unlock()
-
-	ev = newSlackMessageEvent("171235.0000", "171234.5678", "🎛")
-	ev.Channel = "C123"
-	connector.handleMessageEvent(context.Background(), ev)
-
-	router.mu.Lock()
 	reads := append([]threadAgentReadCall(nil), router.threadAgentReads...)
 	switched := append([]threadAgentSwitchCall(nil), router.switched...)
 	router.mu.Unlock()
 
-	require.Equal(t, []threadAgentReadCall{{channelID: "C123", threadTS: "171234.5678"}, {channelID: "C123", threadTS: "171234.5678"}, {channelID: "C123", threadTS: "171234.5678"}, {channelID: "C123", threadTS: "171234.5678"}}, reads)
-	require.Equal(t, []threadAgentSwitchCall{{channelID: "C123", threadTS: "171234.5678", agent: "planner"}, {channelID: "C123", threadTS: "171234.5678", agent: "social"}}, switched)
+	assert.Contains(t, reads, threadAgentReadCall{channelID: "C123", threadTS: "171234.5678"})
+	assert.Empty(t, switched)
 	assert.Empty(t, router.repliesSnapshot())
-	require.Len(t, ephemeral, 2)
-	assert.Contains(t, ephemeral[0].Get("text"), "Switched")
-	assert.Contains(t, ephemeral[0].Get("text"), "`planner`")
-	assert.Equal(t, "171234.5678", ephemeral[0].Get("thread_ts"))
-	assert.Contains(t, ephemeral[1].Get("text"), "Switched")
-	assert.Contains(t, ephemeral[1].Get("text"), "`social`")
-	assert.Equal(t, "171234.5678", ephemeral[1].Get("thread_ts"))
+	require.Len(t, posted, 1)
+	assert.Equal(t, "Select the agent for this thread.", posted[0].Get("text"))
+	assert.Equal(t, "171234.5678", posted[0].Get("thread_ts"))
+	assert.Contains(t, posted[0].Get("blocks"), slackAgentSwitchSelectActionID)
+	assert.Contains(t, posted[0].Get("blocks"), "social")
+	assert.Contains(t, posted[0].Get("blocks"), "planner")
+	assert.Contains(t, posted[0].Get("blocks"), "reviewer")
+
+	var blocks []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(posted[0].Get("blocks")), &blocks))
+	require.Len(t, blocks, 2)
+	blockID, ok := blocks[1]["block_id"].(string)
+	require.True(t, ok)
+
+	var metadata slackAgentSwitchMetadata
+	require.NoError(t, json.Unmarshal([]byte(blockID), &metadata))
+	assert.Equal(t, slackAgentSwitchMetadata{ChannelID: "C123", ThreadTS: "171234.5678", UserID: "U123", SocialChannel: "#social"}, metadata)
+	assertNeverInbound(t, bus)
+}
+
+func TestHandleInteractiveSlackAgentSelectorRequiresRequester(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	var (
+		ephemeral []url.Values
+		posted    []url.Values
+	)
+
+	server := newSlackAgentSwitchTestServer(t, &posted, &ephemeral)
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.switchHandled = true
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "#social", Agents: []string{"social", "planner"}, AllowedUserIDs: []string{"U123", "U999"}}}, ContextMessages: 2}
+
+	metadata, err := json.Marshal(slackAgentSwitchMetadata{ChannelID: "C123", ThreadTS: "171234.5678", UserID: "U123", SocialChannel: "#social"})
+	require.NoError(t, err)
+
+	callback := slack.InteractionCallback{
+		Type:      slack.InteractionTypeBlockActions,
+		Container: slack.Container{ChannelID: "C123", ThreadTs: "171234.5678"},
+		ActionCallback: slack.ActionCallbacks{BlockActions: []*slack.BlockAction{{
+			BlockID:        string(metadata),
+			ActionID:       slackAgentSwitchSelectActionID,
+			SelectedOption: slack.OptionBlockObject{Value: "planner"},
+		}}},
+	}
+
+	callback.User = slack.User{ID: "U999"}
+	connector.handleInteractive(context.Background(), socketmode.Event{Data: callback})
+
+	router.mu.Lock()
+	require.Empty(t, router.switched)
+	router.mu.Unlock()
+	require.Len(t, ephemeral, 1)
+	assert.Contains(t, ephemeral[0].Get("text"), "Only the user")
+	assert.Empty(t, posted)
+
+	callback.User = slack.User{ID: "U123"}
+	connector.handleInteractive(context.Background(), socketmode.Event{Data: callback})
+
+	router.mu.Lock()
+	switched := append([]threadAgentSwitchCall(nil), router.switched...)
+	router.mu.Unlock()
+	require.Equal(t, []threadAgentSwitchCall{{channelID: "C123", threadTS: "171234.5678", agent: "planner"}}, switched)
+	require.Len(t, posted, 1)
+	assert.Contains(t, posted[0].Get("text"), "Switched")
+	assert.Equal(t, "171234.5678", posted[0].Get("thread_ts"))
 	assertNeverInbound(t, bus)
 }
 
@@ -5508,6 +5549,37 @@ func cloneValues(values url.Values) url.Values {
 	}
 
 	return cloned
+}
+
+func newSlackAgentSwitchTestServer(t *testing.T, posted, ephemeral *[]url.Values) *httptest.Server {
+	t.Helper()
+
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/conversations.info":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
+		case "/chat.postMessage":
+			if err := r.ParseForm(); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			*posted = append(*posted, cloneValues(r.PostForm))
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "333.444"})
+		case "/chat.postEphemeral":
+			if err := r.ParseForm(); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			*ephemeral = append(*ephemeral, cloneValues(r.PostForm))
+
+			writeJSON(t, w, map[string]any{"ok": true, "message_ts": "222.333"})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
 }
 
 func writeJSON(t *testing.T, w http.ResponseWriter, payload map[string]any) {

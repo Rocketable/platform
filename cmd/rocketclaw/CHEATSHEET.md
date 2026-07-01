@@ -14,7 +14,7 @@
 | `✅` | Slack `:white_check_mark:` | Slack, Discord Text | Completion marker. | Added when a goal reaches `complete`; Slack also uses it for successful summary completion. Not added for `blocked`, `stopped`, or `budget_exhausted`. |
 | `💾` | Slack `:floppy_disk:` | Slack, Discord Text | Summarizes a managed conversation back to main. | Requires the configured/authorized human or social-mode allowed user. |
 | `🔂` | `:repeat_one:`, Slack reaction `repeat_one`, Discord `repeat_one` | Slack, Discord Text | Runs a one-off cron request by text prefix or reaction. | Examples: `🔂 daily`, `🔂 daily.md`. Reaction reruns inspect the acted-on message and require exactly one deterministic cron target. |
-| `🎛` | `:control_knobs:` | Slack, Discord Text social-mode managed conversations | Switches or cycles the persisted agent for the managed conversation. | `🎛 agent-name` switches to a configured channel agent. Bare `🎛` cycles to the next configured agent. Does not route to RocketCode as prompt input. |
+| `🎛` | `:control_knobs:` | Slack, Discord Text social-mode managed conversations | Switches the persisted agent for the managed conversation. | `🎛 agent-name` switches to a configured channel agent. Bare `🎛` opens an agent selector usable only by the user who sent the control message. Does not route to RocketCode as prompt input. |
 | `🤖` | Slack `:robot_face:` | Slack | Processing/accepted marker. | Added when RocketClaw accepts a Slack-originated or relayed turn; removed after final response delivery. |
 | `⏳` | Slack `:hourglass_flowing_sand:` | Slack | Buffered or in-progress marker. | Marks stacked/buffered Slack messages and summary-in-progress state. Removed when processing advances or summary finishes. |
 | `📲` | Slack `:calling:` | Slack | Discord voice relay marker. | Added to Slack relay messages created from Discord voice input. |
@@ -33,7 +33,7 @@
 | Social Mode start | Mention the RocketClaw bot/app in a configured social-mode channel. | New social-mode conversations use the first agent in that channel's configured `agents` list. Literal `@AgentName` is not an agent-selection command. |
 | Social Mode with another human mention | Mention RocketClaw too when the message also pings another person, bot, broadcast target, or user group. | Slack social-mode thread replies that ping someone else are suppressed unless RocketClaw is also mentioned. Raw unresolved `@word` text is not treated as a Slack ping. |
 | Social Mode internalize thread | `💾` from an authorized user in the managed conversation. | Uses the same summary/internalize behavior as DM managed conversations. |
-| Social Mode agent switch | `🎛 agent-name` or bare `🎛` as the whole message. | `agent-name` must be in the channel's configured `agents` list. Bare `🎛` cycles through that list. |
+| Social Mode agent switch | `🎛 agent-name` or bare `🎛` as the whole message. | `agent-name` must be in the channel's configured `agents` list. Bare `🎛` opens a connector-native selector for that list. |
 | One-off cron | `🔂 daily`, `🔂 daily.md`, or a supported `repeat_one` reaction. | DM one-off cron can run any top-level cron. Channel requests and reruns are restricted to cronjobs targeting that connector channel. |
 
 ## Goal Examples

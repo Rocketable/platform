@@ -108,20 +108,6 @@ func ParseSocialAgentSwitch(text string) (string, bool) {
 	return strings.TrimSpace(after), true
 }
 
-// NextSocialAgent returns the next configured social agent after current.
-func NextSocialAgent(current string, agents []string) string {
-	if len(agents) == 0 {
-		return ""
-	}
-
-	index := slices.Index(agents, strings.TrimSpace(current))
-	if index < 0 {
-		return agents[0]
-	}
-
-	return agents[(index+1)%len(agents)]
-}
-
 // GoalProgressText returns the shared visible goal progress prefix.
 func GoalProgressText(turnNumber, maxTurns int) string {
 	if maxTurns > 0 && turnNumber > 0 {

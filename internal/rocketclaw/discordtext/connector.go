@@ -25,6 +25,7 @@ const (
 	discordSummaryEmoji, discordRepeatOneEmoji, discordRepeatOneName, discordCronPrefix             = "💾", "🔂", "repeat_one", ":repeat_one:"
 	discordStopSignEmoji, discordStopButtonEmoji, discordInterruptedEmoji, discordGoalCompleteEmoji = "🛑", "⏹️", "❗", "✅"
 	maxDiscordAttachmentBytes                                                                       = 16 << 20
+	discordAgentSwitchSelectID                                                                      = "agent_switch_select"
 )
 
 type discordClient interface {
@@ -513,7 +514,7 @@ func (c *Connector) handleMessage(ctx context.Context, ev *messageCreate) {
 	if isThread && social {
 		reply.ThreadID = msg.ChannelID
 		if agent, ok := primarytext.ParseSocialAgentSwitch(text); ok {
-			c.handleDiscordSocialAgentSwitch(reply, socialChannel, agent)
+			c.handleDiscordSocialAgentSwitch(reply, socialChannel, msg.Author.ID, agent)
 			return
 		}
 	}
@@ -715,6 +716,11 @@ func (c *Connector) handleInteraction(ctx context.Context, ev *interactionCreate
 	}
 
 	_ = c.client.answerInteraction(ev.ID, ev.Token)
+	if requesterID, ok := strings.CutPrefix(ev.Data.CustomID, discordAgentSwitchSelectID+"\n"); ok {
+		c.handleDiscordAgentSwitchSelection(ev.ChannelID, userID, requesterID, ev.Data.Values)
+		return
+	}
+
 	id, value, ok := strings.Cut(ev.Data.CustomID, "\n")
 	selected := []string{value}
 
@@ -963,9 +969,9 @@ func (c *Connector) publishOnDemandCronReply(ctx context.Context, reply *events.
 	}
 }
 
-func (c *Connector) handleDiscordSocialAgentSwitch(reply *events.DiscordReplyTarget, socialChannel config.TextSocialChannelConfig, agent string) {
+func (c *Connector) handleDiscordSocialAgentSwitch(reply *events.DiscordReplyTarget, socialChannel config.TextSocialChannelConfig, userID, agent string) {
 	if agent == "" {
-		current, handled, err := c.threadRouter.ThreadAgent(events.TextConversationTarget{ThreadID: reply.ThreadID})
+		_, handled, err := c.threadRouter.ThreadAgent(events.TextConversationTarget{ThreadID: reply.ThreadID})
 		if err != nil {
 			c.log.Error("load Discord social thread agent", "error", err, "thread", reply.ThreadID)
 			c.postDiscordThreadReply(reply, "I couldn't switch this thread's agent.")
@@ -978,7 +984,9 @@ func (c *Connector) handleDiscordSocialAgentSwitch(reply *events.DiscordReplyTar
 			return
 		}
 
-		agent = primarytext.NextSocialAgent(current, socialChannel.Agents)
+		c.postDiscordAgentSwitchSelector(reply, socialChannel, userID)
+
+		return
 	}
 
 	if !slices.Contains(socialChannel.Agents, agent) {
@@ -1002,18 +1010,92 @@ func (c *Connector) handleDiscordSocialAgentSwitch(reply *events.DiscordReplyTar
 	c.postDiscordThreadReply(reply, "Switched this thread to `"+agent+"`.")
 }
 
+func (c *Connector) postDiscordAgentSwitchSelector(reply *events.DiscordReplyTarget, socialChannel config.TextSocialChannelConfig, userID string) {
+	options := make([]messageComponent, 0, len(socialChannel.Agents))
+	for _, agent := range socialChannel.Agents {
+		options = append(options, messageComponent{"label": agent, "value": agent})
+	}
+
+	c.postDiscordThreadMessage(reply, messageSend{
+		Content: "Select the agent for this thread.",
+		Components: []messageComponent{{"type": 1, "components": []messageComponent{{
+			"type":        3,
+			"custom_id":   discordAgentSwitchSelectID + "\n" + userID,
+			"placeholder": "Select agent",
+			"options":     options,
+			"min_values":  1,
+			"max_values":  1,
+		}}}},
+	})
+}
+
+func (c *Connector) handleDiscordAgentSwitchSelection(channelID, userID, requesterID string, values []string) {
+	reply := &events.DiscordReplyTarget{ThreadID: channelID}
+	if userID != requesterID {
+		c.postDiscordThreadReply(reply, "Only the user who opened this selector can use it.")
+		return
+	}
+
+	baseChannelID := channelID
+	if channel, err := c.client.channel(strings.TrimSpace(channelID)); err == nil && strings.TrimSpace(channel.ParentID) != "" {
+		baseChannelID = strings.TrimSpace(channel.ParentID)
+	}
+
+	socialChannel := config.TextSocialChannelConfig{}
+	social := false
+
+	for _, channel := range c.config.SocialMode.Channels {
+		if channel.Channel == baseChannelID {
+			socialChannel, social = channel, true
+			break
+		}
+	}
+
+	if !social || len(values) == 0 || !slices.Contains(socialChannel.Agents, values[0]) {
+		agent := ""
+		if len(values) > 0 {
+			agent = values[0]
+		}
+
+		c.postDiscordThreadReply(reply, "Agent `"+agent+"` is not configured for this channel.")
+
+		return
+	}
+
+	agent := values[0]
+
+	handled, err := c.threadRouter.SwitchThreadAgent(events.TextConversationTarget{ThreadID: channelID}, agent)
+	if err != nil {
+		c.log.Error("select Discord social thread agent", "error", err, "thread", channelID, "agent", agent)
+		c.postDiscordThreadReply(reply, "I couldn't switch this thread to `"+agent+"`.")
+
+		return
+	}
+
+	if !handled {
+		c.postDiscordThreadReply(reply, "I couldn't find an active managed thread for that agent switch.")
+		return
+	}
+
+	c.postDiscordThreadReply(reply, "Switched this thread to `"+agent+"`.")
+}
+
 func (c *Connector) postDiscordThreadReply(reply *events.DiscordReplyTarget, text string) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return
 	}
 
+	c.postDiscordThreadMessage(reply, messageSend{Content: text})
+}
+
+func (c *Connector) postDiscordThreadMessage(reply *events.DiscordReplyTarget, send messageSend) {
 	channelID := strings.TrimSpace(reply.ThreadID)
 	if channelID == "" {
 		channelID = strings.TrimSpace(reply.ChannelID)
 	}
 
-	if _, err := c.client.sendMessage(channelID, messageSend{Content: text}, nil); err != nil {
+	if _, err := c.client.sendMessage(channelID, send, nil); err != nil {
 		c.log.Warn("post Discord thread reply", "error", err, "channel", channelID)
 	}
 }

@@ -39,12 +39,17 @@ const (
 	slackInterruptionReaction, slackMainStackKey, slackImmediatePlaceholder, slackAnswerPlaceholder                                = "exclamation", "main", "_Thinking..._", "\u200B"
 	slackThinkingFlushInterval                                                                                                     = 2 * time.Second
 	slackQuestionCustomActionID, slackQuestionCustomViewCallbackID, slackQuestionCustomBlockID, slackQuestionCustomInputActionID   = "custom_answer", "ask_user_question_custom", "custom_answer", "answer"
+	slackAgentSwitchSelectActionID                                                                                                 = "agent_switch_select"
 )
 
 var errSlackDownloadLimitExceeded = errors.New("slack file download exceeded size limit")
 
 type humanProfileSnapshot struct {
 	DisplayName, IconURL string
+}
+
+type slackAgentSwitchMetadata struct {
+	ChannelID, ThreadTS, UserID, SocialChannel string
 }
 
 type limitedBuffer struct {
@@ -1036,6 +1041,10 @@ func (c *Connector) handleInteractive(ctx context.Context, event socketmode.Even
 			channelID = metadata.ChannelID
 		}
 
+		if channelID == "" {
+			channelID = strings.TrimSpace(callback.Container.ChannelID)
+		}
+
 		channel, _, ok := c.socialModeChannel(ctx, channelID)
 		allowed = ok && c.socialModeAllowsUser(channel, callback.User.ID)
 	}
@@ -1053,6 +1062,11 @@ func (c *Connector) handleInteractive(ctx context.Context, event socketmode.Even
 	}
 
 	for _, action := range callback.ActionCallback.BlockActions {
+		if action.ActionID == slackAgentSwitchSelectActionID {
+			c.handleSlackAgentSwitchSelection(ctx, callback.User.ID, action)
+			return
+		}
+
 		if action.ActionID == slackQuestionCustomActionID {
 			metadata.ID = action.BlockID
 
@@ -1777,7 +1791,7 @@ func (c *Connector) socialModeAgents(channel string) []string {
 func (c *Connector) handleSlackSocialAgentSwitch(ctx context.Context, channelID, threadTS, userID, socialChannel, agent string) {
 	agents := c.socialModeAgents(socialChannel)
 	if agent == "" {
-		current, handled, err := c.threadRouter.ThreadAgent(events.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS})
+		_, handled, err := c.threadRouter.ThreadAgent(events.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS})
 		if err != nil {
 			c.log.Error("load Slack social thread agent", "error", err, "channel", channelID, "thread_ts", threadTS)
 			c.postSlackEphemeral(ctx, channelID, threadTS, userID, "I couldn't switch this thread's agent.")
@@ -1790,7 +1804,9 @@ func (c *Connector) handleSlackSocialAgentSwitch(ctx context.Context, channelID,
 			return
 		}
 
-		agent = primarytext.NextSocialAgent(current, agents)
+		c.postSlackAgentSwitchSelector(ctx, channelID, threadTS, userID, socialChannel, agents)
+
+		return
 	}
 
 	if !slices.Contains(agents, agent) {
@@ -1811,7 +1827,71 @@ func (c *Connector) handleSlackSocialAgentSwitch(ctx context.Context, channelID,
 		return
 	}
 
-	c.postSlackEphemeral(ctx, channelID, threadTS, userID, "Switched this thread to `"+agent+"`.")
+	if err := c.postSlackThreadReply(ctx, channelID, threadTS, "Switched this thread to `"+agent+"`."); err != nil {
+		c.log.Warn("post Slack agent switch acknowledgement", "error", err, "channel", channelID, "thread_ts", threadTS)
+	}
+}
+
+func (c *Connector) postSlackAgentSwitchSelector(ctx context.Context, channelID, threadTS, userID, socialChannel string, agents []string) {
+	metadata := slackAgentSwitchMetadata{ChannelID: channelID, ThreadTS: threadTS, UserID: userID, SocialChannel: socialChannel}
+
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		c.log.Warn("encode Slack agent selector metadata", "error", err, "channel", channelID, "thread_ts", threadTS)
+		return
+	}
+
+	options := make([]*slack.OptionBlockObject, 0, len(agents))
+	for _, agent := range agents {
+		options = append(options, slack.NewOptionBlockObject(agent, slack.NewTextBlockObject(slack.PlainTextType, agent, false, false), nil))
+	}
+
+	text := "Select the agent for this thread."
+	selectElement := slack.NewOptionsSelectBlockElement(slack.OptTypeStatic, slack.NewTextBlockObject(slack.PlainTextType, "Select agent", false, false), slackAgentSwitchSelectActionID, options...)
+	blocks := []slack.Block{
+		slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, text, false, false), nil, nil),
+		slack.NewActionBlock(string(encoded), selectElement),
+	}
+
+	if _, _, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(text, false), slack.MsgOptionTS(threadTS), slack.MsgOptionBlocks(blocks...)); err != nil {
+		c.log.Warn("post Slack agent selector", "error", err, "channel", channelID, "thread_ts", threadTS)
+	}
+}
+
+func (c *Connector) handleSlackAgentSwitchSelection(ctx context.Context, userID string, action *slack.BlockAction) {
+	var metadata slackAgentSwitchMetadata
+	if err := json.Unmarshal([]byte(action.BlockID), &metadata); err != nil {
+		c.log.Warn("parse Slack agent selector metadata", "error", err)
+		return
+	}
+
+	if userID != metadata.UserID {
+		c.postSlackEphemeral(ctx, metadata.ChannelID, metadata.ThreadTS, userID, "Only the user who opened this selector can use it.")
+		return
+	}
+
+	agent := strings.TrimSpace(action.SelectedOption.Value)
+	if !slices.Contains(c.socialModeAgents(metadata.SocialChannel), agent) {
+		c.postSlackEphemeral(ctx, metadata.ChannelID, metadata.ThreadTS, userID, "Agent `"+agent+"` is not configured for this channel.")
+		return
+	}
+
+	handled, err := c.threadRouter.SwitchThreadAgent(events.TextConversationTarget{ChannelID: metadata.ChannelID, ThreadID: metadata.ThreadTS}, agent)
+	if err != nil {
+		c.log.Error("select Slack social thread agent", "error", err, "channel", metadata.ChannelID, "thread_ts", metadata.ThreadTS, "agent", agent)
+		c.postSlackEphemeral(ctx, metadata.ChannelID, metadata.ThreadTS, userID, "I couldn't switch this thread to `"+agent+"`.")
+
+		return
+	}
+
+	if !handled {
+		c.postSlackEphemeral(ctx, metadata.ChannelID, metadata.ThreadTS, userID, "I couldn't find an active managed thread for that agent switch.")
+		return
+	}
+
+	if err := c.postSlackThreadReply(ctx, metadata.ChannelID, metadata.ThreadTS, "Switched this thread to `"+agent+"`."); err != nil {
+		c.log.Warn("post Slack selected agent switch acknowledgement", "error", err, "channel", metadata.ChannelID, "thread_ts", metadata.ThreadTS)
+	}
 }
 
 func (c *Connector) postSlackEphemeral(ctx context.Context, channelID, threadTS, userID, text string) {

@@ -292,13 +292,11 @@ func TestHandleSocialThreadMessageSwitchesAgent(t *testing.T) {
 	assert.Contains(t, fake.messages[1].send.Content, "Switched")
 }
 
-func TestHandleSocialThreadMessageCyclesAgent(t *testing.T) {
+func TestHandleSocialThreadMessageShowsAgentSelector(t *testing.T) {
 	fake := newFakeDiscordClient()
 	fake.channels["T123"] = &textChannel{ID: "T123", ParentID: "S123", Type: channelTypeGuildPublicThread}
 	router := newFakeThreadRouter()
-	router.switchHandled = true
 	router.threadAgentHandled = true
-	router.threadAgent = "triage"
 	connector := newTestConnector(fake, router)
 	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "S123", Agents: []string{"triage", "planner", "reviewer"}, AllowedUserIDs: []string{"social-human"}}}}
 	answeredQuestion := false
@@ -309,22 +307,54 @@ func TestHandleSocialThreadMessageCyclesAgent(t *testing.T) {
 
 	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U1", ChannelID: "T123", Content: "🎛", Author: &textUser{ID: "social-human"}}})
 
-	router.threadAgent = ""
-
-	connector.handleMessage(t.Context(), &messageCreate{Message: &textMessage{ID: "U2", ChannelID: "T123", Content: "🎛", Author: &textUser{ID: "social-human"}}})
-
 	assert.False(t, answeredQuestion)
 	assert.Equal(t, "T123", router.threadAgentThreadID)
-	assert.Equal(t, "T123", router.switchedThreadID)
-	assert.Equal(t, "triage", router.switchedAgent)
+	assert.Empty(t, router.switchedThreadID)
+	assert.Empty(t, router.switchedAgent)
 	assert.Empty(t, router.submittedThreadID)
-	require.Len(t, fake.messages, 2)
+	require.Len(t, fake.messages, 1)
 	assert.Equal(t, "T123", fake.messages[0].channelID)
-	assert.Contains(t, fake.messages[0].send.Content, "Switched")
-	assert.Contains(t, fake.messages[0].send.Content, "`planner`")
-	assert.Equal(t, "T123", fake.messages[1].channelID)
+	assert.Equal(t, "Select the agent for this thread.", fake.messages[0].send.Content)
+	require.Len(t, fake.messages[0].send.Components, 1)
+	rowComponents, ok := fake.messages[0].send.Components[0]["components"].([]messageComponent)
+	require.True(t, ok)
+	require.Len(t, rowComponents, 1)
+	assert.Equal(t, 3, rowComponents[0]["type"])
+	assert.Equal(t, discordAgentSwitchSelectID+"\n"+"social-human", rowComponents[0]["custom_id"])
+	options, ok := rowComponents[0]["options"].([]messageComponent)
+	require.True(t, ok)
+	require.Len(t, options, 3)
+	assert.Equal(t, "triage", options[0]["value"])
+	assert.Equal(t, "planner", options[1]["value"])
+	assert.Equal(t, "reviewer", options[2]["value"])
+}
+
+func TestHandleDiscordAgentSelectorRequiresRequester(t *testing.T) {
+	fake := newFakeDiscordClient()
+	fake.channels["T123"] = &textChannel{ID: "T123", ParentID: "S123", Type: channelTypeGuildPublicThread}
+	router := newFakeThreadRouter()
+	router.switchHandled = true
+	connector := newTestConnector(fake, router)
+	connector.config.SocialMode = config.TextSocialConfig{Enabled: true, Channels: []config.TextSocialChannelConfig{{Channel: "S123", Agents: []string{"triage", "planner"}, AllowedUserIDs: []string{"social-human", "other-human"}}}}
+
+	connector.handleInteraction(t.Context(), &interactionCreate{ID: "I1", Token: "token", ChannelID: "T123", Data: struct {
+		CustomID string   `json:"custom_id"`
+		Values   []string `json:"values"`
+	}{CustomID: discordAgentSwitchSelectID + "\n" + "social-human", Values: []string{"planner"}}, User: &textUser{ID: "other-human"}})
+
+	assert.Empty(t, router.switchedThreadID)
+	require.Len(t, fake.messages, 1)
+	assert.Contains(t, fake.messages[0].send.Content, "Only the user")
+
+	connector.handleInteraction(t.Context(), &interactionCreate{ID: "I2", Token: "token", ChannelID: "T123", Data: struct {
+		CustomID string   `json:"custom_id"`
+		Values   []string `json:"values"`
+	}{CustomID: discordAgentSwitchSelectID + "\n" + "social-human", Values: []string{"planner"}}, User: &textUser{ID: "social-human"}})
+
+	assert.Equal(t, "T123", router.switchedThreadID)
+	assert.Equal(t, "planner", router.switchedAgent)
+	require.Len(t, fake.messages, 2)
 	assert.Contains(t, fake.messages[1].send.Content, "Switched")
-	assert.Contains(t, fake.messages[1].send.Content, "`triage`")
 }
 
 func TestHandleSocialMessageRequiresAllowedMention(t *testing.T) {
