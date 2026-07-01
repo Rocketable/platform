@@ -344,6 +344,77 @@ func TestThreadBridgeManagerInterruptSlackThreadInterruptsActiveTurn(t *testing.
 	assert.Equal(t, harnessbridge.GoalStatusStopped, goal.Status)
 }
 
+func TestThreadBridgeManagerInterruptsExternalMCPSlackThreadAlias(t *testing.T) {
+	store := newTestSessionService(t, t.TempDir())
+	threadKey := harnessbridge.SlackThreadConversationID("D123", "111.222")
+	conversationID := "external_mcp:planner:abc"
+
+	require.NoError(t, store.UpsertThread(threadKey, "planner"))
+	require.NoError(t, store.MarkThreadSeeded(threadKey, conversationID))
+
+	marker := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "111.222"}
+	bridge := &fakeDirectBridge{}
+	externalBridge := &fakeDirectBridge{interruptResult: &events.InboundMessage{SlackReply: marker}}
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
+		switch cfg.ConversationID {
+		case threadKey:
+			assert.Equal(t, bridgeConfig{ConversationID: threadKey, Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetSlackMain}}, cfg)
+
+			return bridge
+		case conversationID:
+			assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "planner", OutputTargets: events.MainOutputTargets()}, cfg)
+
+			return externalBridge
+		default:
+			t.Fatalf("unexpected bridge config: %#v", cfg)
+		}
+
+		return nil
+	})
+
+	require.NoError(t, manager.StartThread(context.Background(), "planner", false, slackTarget("D123", "111.222"), newThreadInboundMessage("visible", "111.222", "111.222")))
+	require.NoError(t, manager.SubmitExternalMCP(context.Background(), "planner", conversationID, newThreadInboundMessage("initial", "123.456", "111.222")))
+
+	manager.mu.Lock()
+	manager.bridges[threadKey].queuedReplies = []*events.InboundMessage{newThreadInboundMessage("queued", "333.444", "111.222")}
+	manager.mu.Unlock()
+
+	result, err := manager.InterruptThread(slackTarget("D123", "111.222"))
+	require.NoError(t, err)
+	assert.Equal(t, marker, result.SlackReply)
+	assert.Equal(t, 0, bridge.interrupts)
+	assert.Equal(t, 1, externalBridge.interrupts)
+
+	manager.mu.Lock()
+	queuedReplies := manager.bridges[threadKey].queuedReplies
+	manager.mu.Unlock()
+	assert.Empty(t, queuedReplies)
+}
+
+func TestThreadBridgeManagerInterruptsExternalMCPDiscordThreadAlias(t *testing.T) {
+	store := newTestSessionService(t, t.TempDir())
+	threadKey := harnessbridge.DiscordThreadConversationID("T123")
+	conversationID := "external_mcp:planner:abc"
+
+	require.NoError(t, store.UpsertThread(threadKey, "planner"))
+	require.NoError(t, store.MarkThreadSeeded(threadKey, conversationID))
+
+	marker := &events.DiscordReplyTarget{ChannelID: "T123", MessageID: "222", ThreadID: "T123"}
+	bridge := &fakeDirectBridge{interruptResult: &events.InboundMessage{DiscordReply: marker}}
+	manager := newThreadBridgeManager(events.New(), &config.Config{DiscordText: config.DiscordTextConfig{Enabled: true}}, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
+		assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "planner", OutputTargets: events.MainOutputTargets()}, cfg)
+
+		return bridge
+	})
+
+	require.NoError(t, manager.SubmitExternalMCP(context.Background(), "planner", conversationID, &events.InboundMessage{}))
+
+	result, err := manager.InterruptThread(events.TextConversationTarget{ThreadID: "T123"})
+	require.NoError(t, err)
+	assert.Equal(t, marker, result.DiscordReply)
+	assert.Equal(t, 1, bridge.interrupts)
+}
+
 func TestThreadBridgeManagerRegistersCronThreadWithoutSubmitting(t *testing.T) {
 	workspace := t.TempDir()
 	store := newTestSessionService(t, workspace)

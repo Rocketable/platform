@@ -650,15 +650,32 @@ func (m *threadBridgeManager) InterruptThread(target events.TextConversationTarg
 		return nil, nil
 	}
 
+	bridgeConversationID := conversationID
+
+	state, err := m.store.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load persisted %s thread state: %w", m.text.label, err)
+	}
+
+	if thread, ok := state.Threads[conversationID]; ok && strings.HasPrefix(thread.SeededFromResponse, "external_mcp:") {
+		bridgeConversationID = thread.SeededFromResponse
+	}
+
 	if err := m.store.StopGoal(conversationID); err != nil {
 		return nil, fmt.Errorf("stop goal thread: %w", err)
 	}
 
 	m.mu.Lock()
 
-	managed := m.bridges[conversationID]
+	managed := m.bridges[bridgeConversationID]
 	if managed != nil {
 		managed.queuedReplies = nil
+	}
+
+	if bridgeConversationID != conversationID {
+		if visible := m.bridges[conversationID]; visible != nil {
+			visible.queuedReplies = nil
+		}
 	}
 	m.mu.Unlock()
 
