@@ -200,7 +200,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		childFactory.recursionRemaining = &remaining
 	}
 
-	modelRef, err := resolveAgentModelRef(agent.Model, f.defaultModelRef)
+	modelRef, err := resolveAgentModelRef(agent.Model)
 	if err != nil {
 		return "", err
 	}
@@ -340,7 +340,7 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 
 	responseFormat := guardrailResponseFormat()
 
-	modelRef, err := resolveAgentModelRef(agent.Model, f.defaultModelRef)
+	modelRef, err := resolveAgentModelRef(agent.Model)
 	if err != nil {
 		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail model failed: " + err.Error()}
 	}

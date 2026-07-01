@@ -147,15 +147,19 @@ func loadAgent(fsys fs.FS, filePath string) (Agent, error) {
 		return Agent{}, fmt.Errorf("%s: empty agent name", filePath)
 	}
 
-	model := frontmatterString(frontmatter, "model")
-	if strings.TrimSpace(model) != "" {
-		parsedModel, err := parseModelRef(model)
-		if err != nil {
-			return Agent{}, fmt.Errorf("%s: model: %w", filePath, err)
-		}
-
-		model = parsedModel.display()
+	modelField := frontmatterField(frontmatterNode, "model")
+	if modelField == nil || modelField.Kind != yaml.ScalarNode || modelField.ShortTag() != "!!str" || strings.TrimSpace(modelField.Value) == "" {
+		return Agent{}, fmt.Errorf("%s: model: required non-empty string", filePath)
 	}
+
+	model := modelField.Value
+
+	parsedModel, err := parseModelRef(model)
+	if err != nil {
+		return Agent{}, fmt.Errorf("%s: model: %w", filePath, err)
+	}
+
+	model = parsedModel.display()
 
 	return Agent{
 		Name:            name,

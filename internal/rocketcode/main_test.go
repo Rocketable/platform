@@ -254,7 +254,7 @@ func TestNewRejectsMissingGuardrailAgent(t *testing.T) {
 
 	client := openai.NewClient()
 	config := testConfig(dir)
-	agents := Agents{Items: map[string]Agent{"main": {Name: "main", Guardrail: "safety"}}}
+	agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Guardrail: "safety"}}}
 	skills := Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}
 
 	_, err = New(&client, config, root, agents, skills, "main", nil)
@@ -283,7 +283,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 	t.Run("enabled rejects guardian agent", func(t *testing.T) {
 		config := testConfig(dir)
 		config.AutoApprovePermissions = true
-		agents := Agents{Items: map[string]Agent{"main": {Name: "main"}, "guardian": {Name: "guardian"}}}
+		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4"}, "guardian": {Name: "guardian", Model: "gpt-5.4"}}}
 
 		_, err := New(&client, config, root, agents, skills, "main", nil)
 
@@ -293,7 +293,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 	t.Run("enabled rejects missing custom reviewer", func(t *testing.T) {
 		config := testConfig(dir)
 		config.AutoApprovePermissions = true
-		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(release-guardian)}`)}}}
+		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(release-guardian)}`)}}}
 
 		_, err := New(&client, config, root, agents, skills, "main", nil)
 
@@ -303,7 +303,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 	t.Run("enabled rejects explicit guardian reviewer", func(t *testing.T) {
 		config := testConfig(dir)
 		config.AutoApprovePermissions = true
-		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(guardian)}`)}}}
+		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(guardian)}`)}}}
 
 		_, err := New(&client, config, root, agents, skills, "main", nil)
 

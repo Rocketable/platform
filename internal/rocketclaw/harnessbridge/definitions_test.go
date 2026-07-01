@@ -115,7 +115,7 @@ func TestLoadRocketCodeDefinitionsPreservesGuardrailReference(t *testing.T) {
 
 func TestLoadRocketCodeDefinitionsReportsInvalidMaxRecursion(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmaxRecursion: nope\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\nmaxRecursion: nope\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	root, err := os.OpenRoot(workspace)
@@ -125,6 +125,20 @@ func TestLoadRocketCodeDefinitionsReportsInvalidMaxRecursion(t *testing.T) {
 
 	_, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
 	require.ErrorContains(t, err, "main.md: parse maxRecursion:")
+}
+
+func TestLoadRocketCodeDefinitionsReportsMissingModel(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, root.Close()) }()
+
+	_, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+	require.ErrorContains(t, err, "main.md: model: required non-empty string")
 }
 
 func TestLoadRocketCodeDefinitionsPreservesRocketClawRuntimeToolDenies(t *testing.T) {
@@ -245,9 +259,8 @@ func TestLoadRocketCodeDefinitionsRejectsEscapingAgentSymlink(t *testing.T) {
 
 	defer func() { require.NoError(t, root.Close()) }()
 
-	agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
-	require.NoError(t, err)
-	require.Empty(t, agents.Items)
+	_, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+	require.ErrorContains(t, err, "main.md: read agent: openat main.md: path escapes from parent")
 }
 
 func TestLoadRocketCodeDefinitionsRejectsEscapingSkillSymlink(t *testing.T) {

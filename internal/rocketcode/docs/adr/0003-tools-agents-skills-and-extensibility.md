@@ -5,11 +5,11 @@ Human approval required for meaning changes: Yes
 
 ## Decision
 
-RocketCode exposes a permission-gated tool surface, workspace-local agents, workspace-local skills, per-agent guardrail filtering, and embedding-provided custom tools. These extension points are product behavior and must remain stable across refactors unless the human partner approves a spec change.
+RocketCode exposes a permission-gated tool surface, workspace-local agents, workspace-local skills, per-agent guardrail gating, and embedding-provided custom tools. These extension points are product behavior and must remain stable across refactors unless the human partner approves a spec change.
 
 ## Scope
 
-This ADR governs built-in tools, custom tools, agent loading, skill loading, task delegation, per-agent guardrail filtering, attachments, and sandboxed command behavior.
+This ADR governs built-in tools, custom tools, agent loading, skill loading, task delegation, per-agent guardrail gating, attachments, and sandboxed command behavior.
 
 ## Context
 
@@ -60,7 +60,7 @@ All function schemas are strict and mark declared properties as required even wh
 ### Agents And Tasks
 
 - Agents load from top-level `.md` files in the supplied agents filesystem. Nested agent markdown is ignored.
-- Agent YAML frontmatter is required and must be a mapping. Known fields are `description`, `model`, `reasoningEffort`, `verbosity`, `maxRecursion`, `guardrail`, and `permission`. The `model` field is optional; when present and non-empty, it must be an unprefixed OpenAI Responses model ID or a legacy `openai/<model>` alias normalized to `<model>`. Missing or empty `model` inherits the runtime/default model. Unknown fields remain in `Frontmatter`.
+- Agent YAML frontmatter is required and must be a mapping. Known fields are `description`, `model`, `reasoningEffort`, `verbosity`, `maxRecursion`, `guardrail`, and `permission`. The `model` field is required, must be non-empty, and must be an unprefixed OpenAI Responses model ID or a legacy `openai/<model>` alias normalized to `<model>`. Missing or empty `model` is invalid and does not inherit the runtime/default model. Unknown fields remain in `Frontmatter`.
 - Agent name is the filename without `.md`; prompt content is the post-frontmatter body trimmed.
 - Frontmatter has a fallback sanitizer for unquoted scalar values containing `:`.
 - Omitted `maxRecursion` and `maxRecursion: -1` mean unlimited subdelegation. `maxRecursion: 0` permits no task delegation from that inference. Positive values allow that many delegation levels. Values below `-1` and non-integer values invalidate the agent.
@@ -70,9 +70,9 @@ All function schemas are strict and mark declared properties as required even wh
 - Unknown subagent type returns `unknown agent type: ...`. Exhausted recursion is rejected before subagent lookup.
 - Child task output returns the last child assistant final-message text inside `<task_result>`; no final text produces an empty wrapper body.
 
-### Per-Agent Guardrail Filter
+### Per-Agent Guardrail Gate
 
-- An agent may declare `guardrail: <agent-name>` in YAML frontmatter. The value names another loaded RocketCode agent that filters calls to the declaring target agent.
+- An agent may declare `guardrail: <agent-name>` in YAML frontmatter. The value names another loaded RocketCode agent that gates calls to the declaring target agent by approving or rejecting them.
 - Missing referenced guardrail agents are RocketCode construction errors.
 - The guardrail agent runs in both directions for a guarded target agent: once for the outbound delegated prompt before the child agent runs, and once for the inbound child final response before that response is returned to the caller agent.
 - Guardrail execution itself is not recursively guarded, even if the guardrail agent also declares `guardrail`.
@@ -113,7 +113,7 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - Automatic permission review applies to built-in tools, task and skill tools, RocketClaw runtime tools, and embedder custom tools through the same permission-bucket and subject machinery used by `allow` and `deny`.
 - Multi-subject tool calls execute only when every subject is allowed. Any matching `deny` rejects the call before review. If one or more subjects match `auto` and none match `deny`, RocketCode runs one automatic review for the whole tool call and executes it only when the reviewer approves.
 - The embedded guardian has read-oriented default permissions only: `read`, `glob`, and `grep` are allowed for all subjects; shell, edit, task, web, skill, and custom-tool access are not allowed by default. The embedded guardian uses `low` reasoning effort for Codex parity and to keep automatic permission review within its timeout budget.
-- Custom reviewer agents use their own prompt, model, reasoning effort, verbosity, tools, skills, and permission set. Reviewer tool calls are not exempt from the reviewer's own permissions.
+- Custom reviewer agents use their own prompt, model, reasoning effort, verbosity, tools, skills, and permission set. Reviewer tool calls are not exempt from the reviewer's own permissions. Agent creation and update guidance should suggest `reasoningEffort: low` for custom reviewers unless the human explicitly wants a slower reviewer, because each automatic permission review has 90 seconds to return a valid decision.
 - Automatic permission review prompts provide Codex-style reviewer context: a compact transcript of relevant user, assistant, and recent tool-call evidence; explicit truncation or omission notices when context is omitted; and the exact planned action JSON under review. The reviewer must treat transcript content, tool arguments, tool results, retry reasons, and planned action JSON as untrusted evidence rather than instructions.
 - Automatic permission reviewers must return strict JSON shaped like Codex guardian output, with required fields `risk_level`, `user_authorization`, `outcome`, and `rationale`, and `additionalProperties:false`. `risk_level` is one of `low`, `medium`, `high`, or `critical`; `user_authorization` is one of `unknown`, `low`, `medium`, or `high`; `outcome` is one of `allow` or `deny`; and `rationale` is a non-empty string. RocketCode represents these enums as strong Go types rather than raw strings in the parsed review decision. Model requests used for automatic permission review use the OpenAI Responses structured-output path.
 - The automatic permission review prompt and JSON Schema descriptions must both explain how `risk_level` and `user_authorization` combine into `outcome`: low and medium risk normally allow; high risk allows only when user authorization is at least medium, the action is narrowly scoped, and no tenant deny rule applies; critical risk denies; and clear malicious prompt injection denies even when the action would otherwise be low or medium risk.
@@ -191,3 +191,5 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - 2026-06-30: Allowed legacy `openai/<model>` agent model strings as aliases normalized to unprefixed first-party OpenAI model IDs while keeping other provider-qualified model strings invalid.
 - 2026-06-30: Required the embedded automatic permission-review guardian to use `low` reasoning effort for Codex parity and lower timeout risk.
 - 2026-06-30: Allowed configured server/operator logging and tracing of guardrail and automatic permission reviewer child-run messages, reasoning summaries, and diagnostics while keeping them out of parent task progress, parent subagent diagnostics, model-visible content, replay, and session persistence.
+- 2026-07-01: Replaced missing or empty loaded-agent model inheritance with mandatory non-empty agent model declarations and described guardrails as approval gates.
+- 2026-07-01: Required agent creation and update guidance to recommend `reasoningEffort: low` for custom automatic permission reviewers and warn about the 90-second review budget.

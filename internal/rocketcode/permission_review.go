@@ -39,7 +39,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	agent.Permission = f.shellOutput.effectivePermissions(agent.Permission)
 	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
 
-	modelRef, err := resolveAgentModelRef(agent.Model, f.defaultModelRef)
+	modelRef, err := resolveAgentModelRef(agent.Model)
 	if err != nil {
 		return permissionReviewFailure("automatic permission reviewer model failed: " + err.Error())
 	}

@@ -704,6 +704,9 @@ func TestEmbeddedCreateOrUpdateSkillsMentionLint(t *testing.T) {
 	assert.Contains(t, string(agentSkill), "Write XOR execute")
 	assert.Contains(t, string(agentSkill), "auto(<agent-name>)")
 	assert.Contains(t, string(agentSkill), "guardian")
+	assert.Contains(t, string(agentSkill), "model` value is required")
+	assert.Contains(t, string(agentSkill), "reasoningEffort: low")
+	assert.Contains(t, string(agentSkill), "90 seconds")
 
 	skillSkill, err := payload.ReadFile(".rocketclaw/skills/main-create-or-update-skill/SKILL.md")
 	require.NoError(t, err)

@@ -155,6 +155,10 @@ func LoadWorkspaceDefinitions(root *os.Root) (Agents, Skills, func(), error) {
 	agentResult := AgentLoadResult{Agents: Agents{Items: map[string]Agent{}}}
 	if agentsFS != nil {
 		agentResult = LoadAgents(agentsFS)
+		if len(agentResult.Errors) > 0 {
+			cleanup()
+			return Agents{}, Skills{}, func() {}, errors.Join(agentResult.Errors...)
+		}
 	}
 
 	skillResult := SkillLoadResult{Skills: Skills{Items: map[string]Skill{}}}

@@ -61,7 +61,7 @@ func TestRunRawReturnsPreLooperErrorsAndLogs(t *testing.T) {
 
 func TestRunRawReportsInvalidMaxRecursion(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmaxRecursion: nope\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.4\nmaxRecursion: nope\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	_, err := RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace}, "main", "prompt", slog.New(slog.DiscardHandler), nil)

@@ -1,6 +1,7 @@
 package rocketcode
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -39,9 +40,9 @@ func parseModelRef(model string) (modelRef, error) {
 	return modelRef{apiModel: model}, nil
 }
 
-func resolveAgentModelRef(model string, defaultModel modelRef) (modelRef, error) {
+func resolveAgentModelRef(model string) (modelRef, error) {
 	if strings.TrimSpace(model) == "" {
-		return defaultModel, nil
+		return modelRef{}, errors.New("required non-empty string")
 	}
 
 	return parseModelRef(model)

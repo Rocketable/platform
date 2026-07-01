@@ -27,7 +27,7 @@ Only use these runtime paths:
 ## Required inputs
 
 For creation, you must know:
-- target name under `agents/`, description, and purpose
+- target name under `agents/`, description, model, and purpose
 - agent kind and exact opt-ins: bash command patterns, writable path patterns, skill names, task agent names, or another named permission bucket
 
 For updates, you must know:
@@ -61,7 +61,7 @@ For edit-only agents, an `edit` allow also permits reading the same path unless 
 
 For bash agents, rocketcode checks permissions against each parsed shell call. Multi-command scripts need every parsed call allowed.
 
-Automatic permission review rules use `auto` or `auto(<agent-name>)`. Bare `auto` uses RocketCode's embedded `guardian` reviewer. `auto(<agent-name>)` uses that loaded custom reviewer agent. RocketClaw always enables RocketCode automatic review; failed review, invalid reviewer output, recursive review, or rejection denies the tool call. Do not create or rename an agent to `guardian`, because that name is reserved for the embedded reviewer.
+Automatic permission review rules use `auto` or `auto(<agent-name>)`. Bare `auto` uses RocketCode's embedded `guardian` reviewer. `auto(<agent-name>)` uses that loaded custom reviewer agent. RocketClaw always enables RocketCode automatic review; failed review, invalid reviewer output, recursive review, timeout, or rejection denies the tool call. Do not create or rename an agent to `guardian`, because that name is reserved for the embedded reviewer. Custom reviewer agents should normally set `reasoningEffort: low` because each automatic permission review has 90 seconds to return a valid decision.
 
 Prefer exact `allow` for low-risk deterministic opt-ins. Use `auto` only for operations where the human wants a reviewer judgment at runtime, for example:
 
@@ -169,11 +169,13 @@ If the requested agent does not exist, create it directly in `agents/`.
 
 Create or update the agent as a markdown agent file with YAML frontmatter.
 
-The resulting frontmatter must include at least `description`.
+The resulting frontmatter must include at least:
+- `description`
+- `model`
 
-The optional `model` value must be an unprefixed OpenAI model ID, such as `gpt-5.4`. Missing or empty `model` inherits the runtime/default model.
+The `model` value is required and must be a non-empty unprefixed OpenAI model ID, such as `gpt-5.4`. If the human has not specified the model for a new agent, ask before writing the file.
 
-When updating an existing agent, preserve the existing `model` unless the human explicitly asked to change it.
+When updating an existing agent, preserve the existing non-empty `model` unless the human explicitly asked to change it. If the existing agent has no `model` or an empty `model`, ask the human which model to use and add it.
 
 The optional `maxRecursion` frontmatter field controls task subdelegation depth for inferences started with that agent:
 - omitted or `-1` means unlimited subdelegation

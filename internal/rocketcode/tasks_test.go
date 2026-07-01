@@ -181,9 +181,9 @@ func TestTaskTool(t *testing.T) {
 
 	t.Run("guardrail approval allows child and response", func(t *testing.T) {
 		mock := mockResponses(
-			responseWithMessage("prompt-filter", `{"approved":true,"reason":""}`),
+			responseWithMessage("delegation-gate", `{"approved":true,"reason":""}`),
 			responseWithTaskMessages(),
-			responseWithMessage("response-filter", `{"approved":true,"reason":""}`),
+			responseWithMessage("response-gate", `{"approved":true,"reason":""}`),
 		)
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
 			"main":      testAgent("main"),
@@ -211,7 +211,7 @@ func TestTaskTool(t *testing.T) {
 	})
 
 	t.Run("guardrail rejection skips child", func(t *testing.T) {
-		mock := mockResponses(responseWithMessage("prompt-filter", `{"approved":false,"reason":"too risky"}`))
+		mock := mockResponses(responseWithMessage("delegation-gate", `{"approved":false,"reason":"too risky"}`))
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
 			"review": {Name: "review", Model: "gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
 			"safety": testAgentWithPrompt("safety", "guard carefully"),
@@ -228,9 +228,9 @@ func TestTaskTool(t *testing.T) {
 		var childRunEvents []ChildRunEvent
 
 		mock := mockResponses(
-			responseWithMessage("prompt-filter", `{"approved":true,"reason":""}`),
+			responseWithMessage("delegation-gate", `{"approved":true,"reason":""}`),
 			responseWithTaskMessages(),
-			responseWithMessage("response-filter", `{"approved":false,"reason":"do not share"}`),
+			responseWithMessage("response-gate", `{"approved":false,"reason":"do not share"}`),
 		)
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
 			"review": {Name: "review", Model: "gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
@@ -254,7 +254,7 @@ func TestTaskTool(t *testing.T) {
 	})
 
 	t.Run("guardrail invalid JSON fails closed", func(t *testing.T) {
-		mock := mockResponses(responseWithMessage("prompt-filter", `not json`))
+		mock := mockResponses(responseWithMessage("delegation-gate", `not json`))
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
 			"review": {Name: "review", Model: "gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
 			"safety": testAgentWithPrompt("safety", "guard carefully"),
@@ -269,7 +269,7 @@ func TestTaskTool(t *testing.T) {
 
 	t.Run("guardrail tools follow its permissions", func(t *testing.T) {
 		mock := mockResponses(
-			responseWithMessage("prompt-filter", `{"approved":false,"reason":"stop"}`),
+			responseWithMessage("delegation-gate", `{"approved":false,"reason":"stop"}`),
 		)
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
 			"review": {Name: "review", Model: "gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},

@@ -40,6 +40,19 @@ func TestParseModelRefRejectsInvalidOrUnsupportedQualifiedModel(t *testing.T) {
 	}
 }
 
+func TestResolveAgentModelRefRejectsEmptyAgentModel(t *testing.T) {
+	for _, tc := range []struct{ name, model string }{
+		{name: "empty", model: ""},
+		{name: "whitespace", model: "   "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := resolveAgentModelRef(tc.model)
+
+			require.EqualError(t, err, "required non-empty string")
+		})
+	}
+}
+
 func TestNewWithProvidersNormalizesOpenAIPrefixedAgentModel(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
@@ -70,7 +83,7 @@ func TestNewWithProvidersRejectsNonOpenAIProviderQualifiedAgentModel(t *testing.
 	require.EqualError(t, err, `agent "main" model: invalid model "anthropic/claude": expected unprefixed OpenAI model ID`)
 }
 
-func TestNewWithProvidersInheritsDefaultModelForEmptyAgentModel(t *testing.T) {
+func TestNewWithProvidersRejectsEmptyAgentModel(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
 	require.NoError(t, err)
@@ -79,13 +92,11 @@ func TestNewWithProvidersInheritsDefaultModelForEmptyAgentModel(t *testing.T) {
 	client := openai.NewClient()
 	config := testConfig(dir)
 	config.Model = "gpt-5.5"
-	loop, err := NewWithProviders(Providers{OpenAI: &client}, config, root, Agents{Items: map[string]Agent{
+	_, err = NewWithProviders(Providers{OpenAI: &client}, config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Prompt: "prompt"},
 	}}, Skills{Items: map[string]Skill{}}, "main", nil)
 
-	require.NoError(t, err)
-	require.Equal(t, "gpt-5.5", loop.DisplayModel)
-	require.Equal(t, "gpt-5.5", loop.Model)
+	require.EqualError(t, err, `agent "main" model: required non-empty string`)
 }
 
 func TestOpenAIResponsesModeUsesResponsesEndpoint(t *testing.T) {

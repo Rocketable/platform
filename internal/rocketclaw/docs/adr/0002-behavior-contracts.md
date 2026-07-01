@@ -95,7 +95,7 @@ Field order is fixed: first `Origin`, then `media=Media`, then `principal=Name` 
 - External MCP conversations are isolated by external conversation ID; omitted ID starts a new isolated conversation. For a new external MCP conversation, the requested agent or configured default agent becomes the persisted conversation agent. For an existing external MCP conversation ID, the persisted agent is authoritative; if a request supplies a different agent, RocketClaw logs the mismatch and continues the turn with the persisted agent instead of rejecting the request or changing the persisted agent.
 - External MCP prompt relays into the primary text connector must deliver MCP-provided relay attachments as part of the same visible native connector message as the relay text. If the relay text is blank and attachments exist, the relay text is `events.AttachmentNamesSpeech(attachments)` when names exist and `Attached files.` otherwise.
 - External MCP blocking replies return the same outbound response attachments that the persistent bridge publishes through connector delivery. RocketCode-produced response attachments use one shared internal carrier before each edge adapts them to connector upload or MCP result content.
-- When a target agent declares `guardrail: <agent-name>`, RocketCode filters both directions through the named guardrail agent: the outbound `task` delegation prompt before the child agent runs, and the inbound child final response before the task result is returned to the caller agent.
+- When a target agent declares `guardrail: <agent-name>`, RocketCode gates both directions through the named guardrail agent: the outbound `task` delegation prompt before the child agent runs, and the inbound child final response before the task result is returned to the caller agent. The guardrail approves or rejects; it does not transform the delegated prompt or child response.
 - Guardrail rejections do not run the rejected child prompt or expose the rejected child response; the guardrail reason is returned through the task result so the caller agent can continue from the rejection.
 
 ### Routing And Delivery
@@ -272,3 +272,4 @@ Task:
 - 2026-06-29: Removed the legacy cron `slack-channel` frontmatter alias; cron text routing uses `channel` only.
 - 2026-06-30: Clarified scheduled cron wording by separating the always-silent main summary from extra human-visible output.
 - 2026-07-01: Changed bare `🎛` social-mode agent switching from immediate cycle to connector-native requester-scoped selectors for Slack and Discord Text, and changed successful Slack switch acknowledgements to visible thread replies.
+- 2026-07-01: Clarified per-target-agent guardrails as approve-or-reject gates rather than prompt or response transformers.

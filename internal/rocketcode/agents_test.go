@@ -160,6 +160,31 @@ Strictly follow the rules.
 		require.Equal(t, "review.md: missing YAML frontmatter", result.Errors[0].Error())
 	})
 
+	t.Run("rejects missing empty or non string model", func(t *testing.T) {
+		tests := []struct {
+			name        string
+			frontmatter string
+		}{
+			{name: "missing", frontmatter: "description: Main"},
+			{name: "empty", frontmatter: "description: Main\nmodel: \"\""},
+			{name: "whitespace", frontmatter: "description: Main\nmodel: \"   \""},
+			{name: "number", frontmatter: "description: Main\nmodel: 123"},
+			{name: "null", frontmatter: "description: Main\nmodel: null"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				result := LoadAgents(fstest.MapFS{
+					"main.md": testMapFile("---\n" + tt.frontmatter + "\n---\nPrompt\n"),
+				})
+
+				require.Empty(t, result.Agents.Items)
+				require.Len(t, result.Errors, 1)
+				require.Equal(t, "main.md: model: required non-empty string", result.Errors[0].Error())
+			})
+		}
+	})
+
 	t.Run("ignores mode frontmatter", func(t *testing.T) {
 		fsys := fstest.MapFS{
 			"main.md": testMapFile("---\ndescription: Main\nmodel: gpt-5.4\nmode: invalid\n---\nPrompt\n"),

@@ -287,7 +287,7 @@ func NewWithProviders(
 		return nil, err
 	}
 
-	modelRef, err := resolveAgentModelRef(activeAgent.Model, defaultModelRef)
+	modelRef, err := resolveAgentModelRef(activeAgent.Model)
 	if err != nil {
 		return nil, fmt.Errorf("agent %q model: %w", activeAgent.Name, err)
 	}
@@ -449,7 +449,7 @@ func validateAgentModels(agents Agents) error {
 	for name := range agents.Items {
 		agent := agents.Items[name]
 		if strings.TrimSpace(agent.Model) == "" {
-			continue
+			return fmt.Errorf("agent %q model: required non-empty string", name)
 		}
 
 		if _, err := parseModelRef(agent.Model); err != nil {

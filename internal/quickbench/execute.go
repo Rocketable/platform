@@ -175,9 +175,10 @@ func runOne(ctx context.Context, providers rocketcode.Providers, opt options, be
 		return result
 	}
 
-	agent := rocketcode.Agent{Name: "main", Prompt: systemPrompt, Verbosity: model.Verbosity, Permission: permission}
+	agentModel := shared.ResponsesModel(model.rocketCodeModel())
+	agent := rocketcode.Agent{Name: "main", Model: agentModel, Prompt: systemPrompt, Verbosity: model.Verbosity, Permission: permission}
 	config := rocketcode.Config{
-		Model:             shared.ResponsesModel(model.rocketCodeModel()),
+		Model:             agentModel,
 		ReasoningEffort:   shared.ReasoningEffort(model.ReasoningEffort),
 		Diagnostics:       true,
 		ParallelToolCalls: 16,

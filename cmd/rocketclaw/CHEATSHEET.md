@@ -178,11 +178,11 @@ Known frontmatter fields:
 | Field | Meaning |
 | --- | --- |
 | `description` | Required short purpose shown when selecting agents. |
-| `model` | Optional unprefixed OpenAI Responses model ID. Missing or empty inherits the runtime/default model. |
+| `model` | Required non-empty unprefixed OpenAI Responses model ID. |
 | `reasoningEffort` | Optional model reasoning effort. Avoid `xhigh`; `rocketclaw lint` reports it. |
 | `verbosity` | Optional model verbosity. |
 | `maxRecursion` | Optional task delegation depth for inferences started with this agent. Omitted or `-1` is unlimited, `0` disables `task`, and positive integers allow that many levels. |
-| `guardrail` | Optional loaded agent name that reviews task delegations to this agent before the child runs and after its response. The guardrail must return strict JSON with `approved` and `reason`. |
+| `guardrail` | Optional loaded agent name that gates task delegations to this agent before the child runs and after its response. The guardrail must approve or reject with strict JSON containing `approved` and `reason`; it does not transform the delegated prompt or child response. |
 | `additionalInstructions` | Optional RocketClaw normal-reply prompt-header override for this selected agent. Use it for response-format guidance, such as telling an agent to avoid Markdown for Slack/TTS, prefer Markdown for technical answers, keep answers terse, or follow another surface-specific style. When omitted, RocketClaw uses `Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.` It does not affect internal notes or raw cron runs. |
 | `permission` | Optional singular permission map. Omit it when the agent needs no tools. Do not use plural `permissions`; RocketCode ignores it and `rocketclaw lint` reports it. |
 
@@ -195,7 +195,7 @@ Permission actions:
 | `allow` | Run matching tool calls without automatic review. |
 | `deny` | Block matching tool calls. Use it after a broader allow to subtract specific subjects. |
 | `auto` | Ask RocketCode's embedded `guardian` automatic reviewer. RocketClaw enables automatic review. Review failure, invalid JSON, or denial blocks the call. |
-| `auto(agent-name)` | Ask the named loaded custom reviewer agent. Do not create an agent named `guardian`; that name is reserved. |
+| `auto(agent-name)` | Ask the named loaded custom reviewer agent. Do not create an agent named `guardian`; that name is reserved. Custom reviewer agents should normally set `reasoningEffort: low` because each automatic permission review has 90 seconds to return a valid decision. |
 
 Guardrails and approval reviewers are separate mechanisms. `guardrail` reviews inter-agent delegation and child responses; `auto` and `auto(agent-name)` review tool execution permission.
 

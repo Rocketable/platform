@@ -32,7 +32,7 @@ Both construction paths must pass RocketClaw-originated `rocketcode.PromptInput`
 
 - RocketClaw treats first-party OpenAI Responses as the only supported RocketCode model provider surface.
 - Model strings in agent frontmatter and runtime defaults are unprefixed OpenAI model IDs. Legacy `openai/<model>` strings are accepted only as first-party OpenAI aliases and normalized to `<model>`. Other provider-qualified model strings, including `openai-compatible/...` and `anthropic/...`, are construction errors.
-- Every loaded agent may omit `model` frontmatter or set it empty; missing or empty agent models inherit the runtime/default OpenAI model. RocketClaw startup must preserve this inheritance across embedded, generated, configured-overlay, and workspace-overlay agents.
+- Every loaded agent must declare a non-empty `model` frontmatter value. Missing or empty agent models are invalid rather than inherited from the runtime/default OpenAI model. RocketClaw startup must enforce this requirement across embedded, generated, configured-overlay, and workspace-overlay agents. Agent creation and update guidance must ask the human which model to use before writing an agent without a non-empty model.
 - RocketClaw passes one first-party OpenAI client into RocketCode. ChatGPT OAuth and OpenAI API-key behavior follow `openai.rocketcode_auth`.
 - Hosted OpenAI tools, including hosted `websearch`, remain OpenAI-only tools governed by RocketCode permissions.
 
@@ -94,7 +94,7 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 
 - RocketClaw does not implement its own automatic permission reviewer and does not expose a `rocketclaw.json` flag for automatic permission review.
 - Persistent bridge and raw-run construction paths always enable RocketCode automatic permission review. RocketCode `auto` permission rules therefore route to RocketCode's automatic reviewer instead of failing closed because of RocketClaw configuration.
-- RocketCode owns reviewer resolution, embedded guardian behavior, custom `auto(name)` reviewer execution, reserved reviewer-name validation, and fail-closed review semantics.
+- RocketCode owns reviewer resolution, embedded guardian behavior, custom `auto(name)` reviewer execution, reserved reviewer-name validation, the 90-second automatic review budget, and fail-closed review semantics.
 - Automatic permission reviewer child-run messages, reasoning summaries, and diagnostics may be emitted to server/operator logs or traces as side effects only, and must not be emitted to connector-visible thinking, parent RocketCode output, reviewed tool results except existing denial/failure text, replay-visible content, model-visible content, or persisted session entries.
 - The RocketClaw linter, agent graph, and goal-check script validation continue to use deterministic allow/deny permission evaluation unless a separate ADR explicitly expands them to model automatic review outcomes.
 
@@ -216,3 +216,5 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-26: Removed remaining OpenAI-compatible Responses provider support, provider-family parity, provider-qualified model strings, and required agent model declarations from the RocketClaw/RocketCode contract; RocketClaw now embeds RocketCode with first-party OpenAI Responses only.
 - 2026-06-30: Allowed legacy `openai/<model>` strings as aliases normalized to unprefixed first-party OpenAI model IDs while keeping other provider-qualified model strings invalid.
 - 2026-06-30: Allowed guardrail and automatic permission reviewer child-run output to reach server/operator logs or traces only, while preserving exclusion from connector-visible progress, parent RocketCode output, task/tool results except existing rejection or denial text, replay, model-visible content, and session persistence.
+- 2026-07-01: Replaced missing or empty agent model inheritance with mandatory non-empty agent model declarations across all loaded agent sources and required agent creation/update guidance to ask the human for missing models.
+- 2026-07-01: Recorded the 90-second automatic permission review budget so custom reviewer guidance can recommend `reasoningEffort: low`.
