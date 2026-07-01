@@ -19,7 +19,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 
 | File or directory | Contract |
 | --- | --- |
-| `rocketclaw.json` | Main runtime config. Relative `workspace` resolves relative to the config file. At least one of Discord voice, Discord text, Slack, external MCP, or web UI must be enabled. Slack and Discord text are mutually exclusive primary text connectors. Optional `overlays` entries name git repositories whose `agents/`, `skills/`, `cron/`, and `scripts/` trees are applied during startup. RocketCode model requests use first-party OpenAI Responses through the configured OpenAI RocketCode auth path. RocketClaw does not expose a `rocketcode` runtime config object for automatic permission review. |
+| `rocketclaw.json` | Main runtime config. Relative `workspace` resolves relative to the config file. At least one of Slack or external MCP must be enabled. Slack is the primary text connector. Optional `overlays` entries name git repositories whose `agents/`, `skills/`, `cron/`, and `scripts/` trees are applied during startup. RocketCode model requests use first-party OpenAI Responses through the configured OpenAI RocketCode auth path. |
 | `femtoclaw.json` | Legacy runtime config. If present, startup and operational commands load it instead of `rocketclaw.json` and use `.femtoclaw/` as the generated runtime directory. It supports the same optional `overlays` entries as `rocketclaw.json`. |
 | `rocketclaw.users.json` | Optional external MCP Basic Auth users next to `rocketclaw.json`. If present, it must be a JSON object and file mode `0600`. Missing means MCP runs without auth. |
 | `AGENTS.md` | Workspace instruction file generated when missing. Loaded literally; no shell interpolation. |
@@ -27,9 +27,8 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 | `.rocketclaw/` | Generated runtime directory. Setup and startup may create or maintain it. |
 | `.femtoclaw/` | Legacy generated runtime directory used only when `femtoclaw.json` is selected. |
 | `<runtime-dir>/overlays/` | Managed parent directory for configured git overlay clones. Startup preserves the parent directory, reconciles its children against the current `overlays` config entries, removes unconfigured clone directories, and discards uncommitted or untracked changes inside active configured clone directories before fetching and applying them. |
-| `<runtime-dir>/state.sqlite3` | Persists RocketCode sessions including terminal CLI private sessions, text connector thread routing, response checkpoints, external MCP sessions, scheduled messages with recurrence metadata, text connector goal-loop state, restart notifications, tool-created conversation routing/session state, source conversation ID, seed marker when source seed state exists, first submitted prompt, and other seed markers. Opened and initialized through the centralized SQLite state-store opener defined by ADR 0005. Tool-created conversation seed state is recorded before the first prompt. |
-| `<runtime-dir>/control/control.sock` | Server-owned Unix-domain control socket for local terminal CLI clients. Server mode always creates the `control` parent with mode `0700`, removes a stale existing socket only when the path is confirmed to be a socket rather than a symlink or regular file, listens on `control.sock`, chmods the socket to `0600`, and removes the socket on shutdown. The socket protocol supports attach, new private CLI conversation creation, prompt submission, terminal-originated `ask_user_question` question delivery, question answers, tool-created terminal conversation cmux-open requests to the matching attached CLI client after the server has created the private conversation, exit, history, event, error, summary prompt, and close messages. The control socket is not configurable and has no TCP listener. |
-| `<runtime-dir>/auth.json` | Workspace-local ChatGPT OAuth credential for RocketCode Codex requests. Written by `rocketclaw oai login` with `0600` permissions. It is runtime state, not setup payload, and STT/TTS do not read it. RocketClaw owns this credential file and must not read, import, or write Codex CLI credentials such as `~/.codex/auth.json`. |
+| `<runtime-dir>/state.sqlite3` | Persists RocketCode sessions including text connector thread routing, response checkpoints, external MCP sessions, scheduled messages with recurrence metadata, text connector goal-loop state, restart notifications, tool-created conversation routing/session state, source conversation ID, seed marker when source seed state exists, first submitted prompt, and other seed markers. Opened and initialized through the centralized SQLite state-store opener defined by ADR 0005. Tool-created conversation seed state is recorded before the first prompt. |
+| `<runtime-dir>/auth.json` | Workspace-local ChatGPT OAuth credential for RocketCode Codex requests. Written by `rocketclaw oai login` with `0600` permissions. It is runtime state, not setup payload. RocketClaw owns this credential file and must not read, import, or write Codex CLI credentials such as `~/.codex/auth.json`. |
 | `<runtime-dir>/.gitignore` | Setup-generated runtime-directory ignore file that ignores `auth.json` so workspace-local ChatGPT OAuth material is not accidentally added to source control. |
 | `<runtime-dir>/.rocketcode/` | RocketCode shell output and transient runtime artifacts. |
 | `cron/` | User-overridable workspace cron definitions. Effective `cron/*.md` definitions load only at startup from the merged runtime view. `*.example.md` is ignored. Changes require restart. Local one-off cron files can be deleted after a run attempt; one-off cron definitions supplied only by a git overlay may reappear on restart until removed from the source repository. |
@@ -37,21 +36,15 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 
 ### Config Defaults And Normalization
 
-- Empty `openai.stt_model` defaults to `whisper-1`.
-- Empty `openai.tts_model` defaults to `tts-1`.
-- Empty `openai.tts_voice` defaults to `alloy`.
-- Empty or omitted `openai.api_key` is valid unless an enabled path requires first-party OpenAI API-key credentials, such as enabled OpenAI-backed audio or a selected first-party OpenAI API-key request path.
+- Empty or omitted `openai.api_key` is valid unless an enabled path requires first-party OpenAI API-key credentials, such as a selected first-party OpenAI API-key request path.
 - There is no top-level `openai_compatible` runtime configuration contract.
 - Empty logging level defaults to `debug`.
 - Empty `minimum_wait_after_human_interaction` means `0s`; setup writes `5m` explicitly.
 - Empty or omitted `thread_agents` uses the baseline `:thread:` and `:twisted_rightward_arrows:` routes; a non-empty custom map replaces the baseline.
 - Empty or omitted `overlays` means no intermediate git overlays. Non-empty entries are applied in array order after embedded assets and before local workspace overlays.
-- RocketClaw does not load or honor `rocketcode.auto_approve_permissions`. Both persistent bridge and raw-run construction paths enable RocketCode automatic permission review unconditionally for `auto` permission rules.
-- `discord_text.enabled` requires `discord_text.token`, `discord_text.channel_id`, and `discord_text.human_user_id`.
-- `slack.enabled` and `discord_text.enabled` must not both be true.
+- Both persistent bridge and raw-run construction paths enable RocketCode automatic permission review unconditionally for `auto` permission rules.
 - The enabled primary text connector may define social-mode channel mappings. The canonical mapping shape is one connector channel, one ordered non-empty `agents` list, and non-empty `allowed_user_ids`.
-- Slack binding: canonical `slack.social_mode.channels[]` is the only supported Slack social-mode channel mapping. Legacy `slack.social_mode.channel_agents` and top-level `slack.social_mode.allowed_user_ids` are not supported by config loading or runtime connector behavior.
-- Discord Text binding: `discord_text.social_mode.channels[]` uses the same canonical social-mode mapping shape with Discord channel IDs.
+- Slack binding: canonical `slack.social_mode.channels[]` is the Slack social-mode channel mapping loaded by config and used by runtime connector behavior.
 
 ### Git Overlays
 
@@ -72,15 +65,14 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 
 ### Setup And Operation
 
-- `rocketclaw setup` creates or updates setup-controlled files, asks for human partner and agent names, and replaces placeholders in files it creates. Setup examples and generated documentation must describe first-party OpenAI Responses RocketCode deployments and the applicable OpenAI API-key, ChatGPT OAuth, and OpenAI-backed audio credential requirements.
-- `rocketclaw setup` asks for one primary text connector: Slack, Discord text, or none. Discord text setup targets a guild text channel so managed thread semantics are available.
+- `rocketclaw setup` creates or updates setup-controlled files, asks for human partner and agent names, and replaces placeholders in files it creates. Setup examples and generated documentation must describe first-party OpenAI Responses RocketCode deployments and the applicable OpenAI API-key and ChatGPT OAuth credential requirements.
+- `rocketclaw setup` asks whether to configure Slack as the primary text connector.
 - `rocketclaw doctor` validates the loaded config and RocketCode availability.
 - `rocketclaw lint [next|current]` checks agent-system safety for the selected config and runtime directory as specified by ADR 0006.
-- `rocketclaw cli` first attempts to attach to the selected runtime's Unix control socket and defaults to `main`. `rocketclaw cli --attach <conversation-id>` attaches to a specific existing server-owned conversation. `rocketclaw cli --new` asks the server to start a fresh generated private terminal conversation using agent `main`; `rocketclaw cli --new <agent>` uses the supplied agent. The optional `--new` positional argument is an agent name, not a session name. Extra positional arguments are rejected. A socket-attached CLI process does not acquire the selected runtime state-store lock. When a terminal-originated RocketCode turn asks `ask_user_question`, the server sends a question message to the matching attached CLI client and the client returns the selected option values and/or custom free text over the control socket. When a terminal-originated RocketCode turn calls explicitly allowed `rocketclaw_start_new_thread`, the server creates the private conversation, records inherited source-context seed state before submitting the first prompt, then sends a cmux-open request to the matching attached CLI client when a cmux surface can be opened from that client context; otherwise the tool result returns the attach command. If no matching cmux-capable client exists or opening fails, the tool result returns `rocketclaw cli --attach <conversation-id>`. If the socket is unavailable and the state-store lock is free, CLI may run embedded fallback, including local terminal question prompts; if the socket is unavailable and the lock is held, CLI fails clearly instead of starting another runtime. Running without `--new` does not change no-argument `rocketclaw` daemon behavior. When a running CLI is inside cmux, `/new [agent]` uses `cmux identify` to detect caller terminal context, creates a new cmux terminal surface in that caller workspace context, and sends `rocketclaw cli --attach <conversation-id>` after the server creates the private conversation.
 - Config selection prefers legacy `femtoclaw.json` when present, selecting `.femtoclaw/`; otherwise `rocketclaw.json` selects `.rocketclaw/`.
 - `rocketclaw setup files list` and `setup files get <path>` expose embedded setup payloads.
 - `rocketclaw fc list` is a read-only operational command for stored RocketCode session summaries. It supports optional bounded inspection flags `--since`, `--until`, and `--limit`, and optional output flag `--no-message-preview`. `--since` accepts either a duration relative to command execution time, such as `24h`, or an RFC3339/RFC3339Nano timestamp; `--until` accepts an RFC3339/RFC3339Nano timestamp. The selected time range is based on each session's latest stored entry timestamp, includes sessions with `LastUpdated >= since`, and excludes sessions with `LastUpdated >= until`. `--limit N` selects the `N` most recently updated sessions, with `0` meaning no limit. Without `--no-message-preview`, output includes the last user and assistant message preview columns; with it, output includes only conversation ID, turn count, and last update time.
-- ChatGPT auth is required only for selected first-party OpenAI RocketCode paths that use ChatGPT OAuth. STT/TTS always use API-key auth through audio keys or `api_key` fallback when OpenAI-backed audio is enabled. ChatGPT refresh tokens are rotating, single-owner credentials and must remain under RocketClaw's selected `<runtime-dir>/auth.json` ownership.
+- ChatGPT auth is required only for selected first-party OpenAI RocketCode paths that use ChatGPT OAuth. ChatGPT refresh tokens are rotating, single-owner credentials and must remain under RocketClaw's selected `<runtime-dir>/auth.json` ownership.
 - ChatGPT-backed RocketCode requests refresh credentials before sending when the access token is locally expired or within 120s of expiry. When Codex returns `401 Unauthorized` for a replayable request, RocketClaw reloads stored auth and retries once with a newer same-account stored token when present; otherwise it force-refreshes with the refresh token, persists the result, and retries once. Non-replayable requests return the original `401`; repeated `401`, terminal refresh failure, or failed refresh is surfaced with re-login guidance.
 - RocketCode requests use the configured first-party OpenAI RocketCode auth path. OpenAI-compatible provider configuration is not used.
 - Startup migrates legacy state into `.rocketclaw/state.sqlite3` when applicable; rollback after destructive migration requires backup restore.
@@ -89,7 +81,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 ## Non-Goals
 
 - This ADR is not a step-by-step installation guide.
-- This ADR does not list every Slack or Discord setup screen.
+- This ADR does not list every Slack setup screen.
 - This ADR does not promise hot reload for configuration, agents, skills, or cron files.
 
 ## Evidence
@@ -97,7 +89,6 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - `README.md`
 - `SETUP.md`
 - `SLACK_SETUP.md`
-- `DISCORD_SETUP.md`
 - `internal/config/config.go`
 - `internal/rocketclaw/oai/oauth.go`
 - `internal/rocketclaw/skel/skel.go`
@@ -157,3 +148,5 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-25: Corrected the canonical social-mode config shape to the ordered `agents` list used by current routing and tool target-agent constraints.
 - 2026-06-26: Removed Anthropic and OpenAI-compatible chat-completions configuration support; OpenAI-compatible providers always use the Responses API.
 - 2026-06-26: Removed remaining OpenAI-compatible Responses configuration support; RocketClaw RocketCode requests now use first-party OpenAI Responses through the configured OpenAI RocketCode auth path only.
+- 2026-07-01: Removed Discord Text, Discord voice, browser voice, and OpenAI-backed audio runtime configuration contracts.
+- 2026-07-01: Removed terminal CLI, control-socket, terminal private-session, terminal question, and cmux operational contracts.

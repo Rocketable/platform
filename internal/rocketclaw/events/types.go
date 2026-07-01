@@ -15,12 +15,6 @@ const MaxInboundTextAttachmentBytes = 256 << 10
 
 const mainConversationID = "main"
 
-// TerminalCLIClientIDMetadataKey identifies the attached terminal client for terminal-originated turns.
-const TerminalCLIClientIDMetadataKey = "terminal_cli_client_id"
-
-// TerminalCLIEmbeddedClientID marks direct in-process CLI input that has no server-owned control client.
-const TerminalCLIEmbeddedClientID = "embedded"
-
 const (
 	// InboundOriginMetadataKey overrides the trusted prompt provenance origin.
 	InboundOriginMetadataKey = "rocketclaw_origin"
@@ -49,13 +43,9 @@ type Source string
 
 // Known inbound and outbound message source labels.
 const (
-	SourceSlack        Source = "slack"
-	SourceDiscordText  Source = "discord_text"
-	SourceDiscordVoice Source = "discord_voice"
-	SourceExternalMCP  Source = "external_mcp"
-	SourceTerminalCLI  Source = "terminal_cli"
-	SourceWebVoice     Source = "web_voice"
-	SourceSystem       Source = "system"
+	SourceSlack       Source = "slack"
+	SourceExternalMCP Source = "external_mcp"
+	SourceSystem      Source = "system"
 )
 
 // InboundResponse is the final plain-text result for a queued inbound turn.
@@ -71,14 +61,6 @@ type OutputTarget string
 const (
 	// OutputTargetSlackMain delivers a response to the main Slack DM.
 	OutputTargetSlackMain OutputTarget = "slack_main"
-	// OutputTargetDiscordText delivers a response to Discord text.
-	OutputTargetDiscordText OutputTarget = "discord_text"
-	// OutputTargetDiscord delivers a response to Discord voice.
-	OutputTargetDiscord OutputTarget = "discord"
-	// OutputTargetWebUI delivers a response to the browser voice-mode client.
-	OutputTargetWebUI OutputTarget = "web_ui"
-	// OutputTargetTerminal delivers a response to the invoking terminal CLI.
-	OutputTargetTerminal OutputTarget = "terminal"
 )
 
 // ObservedMessage is a non-consuming bus event tap record.
@@ -117,11 +99,10 @@ type InboundMessage struct {
 	VerbatimAttachments                                     []OutboundAttachment
 	Attachments                                             []InboundAttachment
 	SlackReply                                              *SlackReplyTarget
-	DiscordReply                                            *DiscordReplyTarget
 	HadAttachments, HadNonImageAttachments, Human, GoalTurn bool
 	AttachmentWarnings                                      []string
 	Kind                                                    InboundKind
-	ConversationID, WebSessionID                            string
+	ConversationID                                          string
 	Metadata                                                map[string]string
 
 	responseInit, responseOnce sync.Once
@@ -130,9 +111,6 @@ type InboundMessage struct {
 
 // SlackReplyTarget identifies the Slack message that owns a streamed reply.
 type SlackReplyTarget struct{ ChannelID, MessageTS, ThreadTS string }
-
-// DiscordReplyTarget identifies the Discord message or thread that owns a streamed reply.
-type DiscordReplyTarget struct{ ChannelID, MessageID, ThreadID string }
 
 // TextConversationTarget identifies a conversation/message in the configured primary text connector.
 type TextConversationTarget struct{ ChannelID, MessageID, ThreadID string }
@@ -145,11 +123,9 @@ type AskUserQuestionRequest struct {
 	Source                Source
 	ID, Question, Details string
 	ConversationID        string
-	TerminalClientID      string
 	Options               []AskUserQuestionOption
 	Multiple              bool
 	SlackReply            *SlackReplyTarget
-	DiscordReply          *DiscordReplyTarget
 }
 
 // AskUserQuestionAnswer is returned to RocketCode after a human answers.
@@ -163,18 +139,14 @@ type AskUserQuestionAnswer struct {
 type StartNewThreadRequest struct {
 	Source                                                   Source
 	SourceConversationID, CurrentAgent, Agent, Title, Prompt string
-	TerminalClientID                                         string
 	AllowedAgents                                            []string
 	SlackReply                                               *SlackReplyTarget
-	DiscordReply                                             *DiscordReplyTarget
 }
 
 // StartNewThreadResult reports the created conversation and openable surface.
 type StartNewThreadResult struct {
 	ConversationID string `json:"conversation_id"`
 	URL            string `json:"url,omitempty"`
-	AttachCommand  string `json:"attach_command,omitempty"`
-	CMUXOpened     bool   `json:"cmux_opened,omitempty"`
 }
 
 // StartNewThreadRootResult reports the native root surface created by a text connector.
@@ -191,18 +163,17 @@ type ResponseCheckpoint struct {
 
 // OutboundMessage is a text message headed to enabled connectors.
 type OutboundMessage struct {
-	Text, ProgressText                   string
-	Source                               Source
-	Targets                              []OutputTarget
-	ConversationID, TurnID, WebSessionID string
-	Sequence                             int
-	PostProgressText, Complete           bool
-	SlackReply                           *SlackReplyTarget
-	DiscordReply                         *DiscordReplyTarget
-	Checkpoint                           *ResponseCheckpoint
-	Attachments                          []OutboundAttachment
-	GoalTurn, GoalComplete               bool
-	GoalTurnNumber, GoalMaxTurns         int
+	Text, ProgressText           string
+	Source                       Source
+	Targets                      []OutputTarget
+	ConversationID, TurnID       string
+	Sequence                     int
+	PostProgressText, Complete   bool
+	SlackReply                   *SlackReplyTarget
+	Checkpoint                   *ResponseCheckpoint
+	Attachments                  []OutboundAttachment
+	GoalTurn, GoalComplete       bool
+	GoalTurnNumber, GoalMaxTurns int
 
 	deliveryInit, deliveredOnce sync.Once
 	delivered                   chan struct{}
@@ -215,7 +186,7 @@ func MainConversationID() string { return mainConversationID }
 
 // MainOutputTargets returns the default targets for main-session replies.
 func MainOutputTargets() []OutputTarget {
-	return []OutputTarget{OutputTargetSlackMain, OutputTargetDiscord}
+	return []OutputTarget{OutputTargetSlackMain}
 }
 
 // NewMainInboundMessage constructs a message for the shared main session.
@@ -404,14 +375,4 @@ func (m *InboundMessage) responseChannel() chan InboundResponse {
 	})
 
 	return m.responseCh
-}
-
-// AudioChunk carries a connector audio frame into the transcription pipeline.
-type AudioChunk struct {
-	SessionID, SpeakerID, Format string
-	Source                       Source
-	RTPSequence                  uint16
-	Timestamp, SSRC              uint32
-	SampleRate, Channels         int
-	Data                         []byte
 }

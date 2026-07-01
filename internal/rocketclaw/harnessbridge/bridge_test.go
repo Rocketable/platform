@@ -317,7 +317,7 @@ func TestNormalizeConfigDefaultsAndCopiesTargets(t *testing.T) {
 
 	targets := []events.OutputTarget{events.OutputTargetSlackMain}
 	configured := normalizeConfig(&Config{ConversationID: "thread", Agent: "helper", OutputTargets: targets})
-	targets[0] = events.OutputTargetDiscord
+	targets[0] = events.OutputTarget("mutated")
 
 	assert.Equal(t, "thread", configured.ConversationID)
 	assert.Equal(t, "helper", configured.Agent)
@@ -1521,11 +1521,9 @@ func TestReplayInputRawKindReportsInvalidJSON(t *testing.T) {
 }
 
 func TestBuildPromptCoversAttachmentsAndInternalNotes(t *testing.T) {
-	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\"]\n\nhello\n\nAttachment notes:\n- skipped image", buildPrompt(&events.InboundMessage{Source: events.SourceSlack, Human: true, Text: "  hello  ", AttachmentWarnings: []string{" skipped image ", " "}, Metadata: map[string]string{events.InboundPrincipalMetadataKey: "Alice"}}, nil))
+	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello\n\nAttachment notes:\n- skipped image", buildPrompt(&events.InboundMessage{Source: events.SourceSlack, Human: true, Text: "  hello  ", AttachmentWarnings: []string{" skipped image ", " "}, Metadata: map[string]string{events.InboundPrincipalMetadataKey: "Alice"}}, nil))
 
-	assert.Equal(t, "[Discord media=Voice principal=speaker_1 additional_instructions=\"Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\"]\n\nUser attached 2 files with no accompanying text.", buildPrompt(&events.InboundMessage{Source: events.SourceDiscordVoice, Human: true, Attachments: []events.InboundAttachment{{Name: "one.png"}, {Name: "two.png"}}, Metadata: map[string]string{events.InboundPrincipalMetadataKey: "speaker 1"}}, nil))
-
-	assert.Equal(t, "[System media=Text additional_instructions=\"Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\"]\n\nAttachment notes:\n- unsupported PDF", buildPrompt(&events.InboundMessage{AttachmentWarnings: []string{" unsupported PDF "}}, nil))
+	assert.Equal(t, "[System media=Text additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nAttachment notes:\n- unsupported PDF", buildPrompt(&events.InboundMessage{AttachmentWarnings: []string{" unsupported PDF "}}, nil))
 
 	assert.Equal(t, "[Cron media=Text additional_instructions=\"Internalize the following note into the active conversation state exactly as written. Respect the content of the message and do not paraphrase, summarize, translate, or normalize whitespace. Do not reply or acknowledge it unless the human explicitly asks you to.\"]\n\n  keep\nspaces  ", buildPrompt(&events.InboundMessage{Source: events.SourceSystem, Kind: events.InboundKindInternalize, Text: "  keep\nspaces  ", Metadata: map[string]string{events.InboundOriginMetadataKey: "Cron", events.InboundMediaMetadataKey: "Text"}}, map[string]any{"additionalInstructions": "Reply casually."}))
 }
@@ -1534,9 +1532,9 @@ func TestBuildPromptAdditionalInstructionsFrontmatter(t *testing.T) {
 	msg := &events.InboundMessage{Source: events.SourceSlack, Human: true, Text: "hello", Metadata: map[string]string{events.InboundPrincipalMetadataKey: "Alice"}}
 
 	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in one sentence.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": "Reply in one sentence."}))
-	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": " "}))
-	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": 7}))
-	assert.Equal(t, "[System media=Text additional_instructions=\"Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary.\"]\n\n task \n", buildPrompt(&events.InboundMessage{Source: events.SourceSystem, Label: startNewThreadToolName, Text: " task \n", Metadata: map[string]string{events.InboundOriginMetadataKey: "System", events.InboundMediaMetadataKey: "Text"}}, nil))
+	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": " "}))
+	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": 7}))
+	assert.Equal(t, "[System media=Text additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n task \n", buildPrompt(&events.InboundMessage{Source: events.SourceSystem, Label: startNewThreadToolName, Text: " task \n", Metadata: map[string]string{events.InboundOriginMetadataKey: "System", events.InboundMediaMetadataKey: "Text"}}, nil))
 }
 
 func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
@@ -2687,28 +2685,8 @@ func TestAskUserQuestionToolFiltersRedundantCustomOptions(t *testing.T) {
 	assert.JSONEq(t, `{"selected":["high"],"custom":"","source":"slack"}`, result.Output)
 }
 
-func TestAskUserQuestionToolCopiesTerminalMetadata(t *testing.T) {
-	tool := askUserQuestionTool(func(_ context.Context, req *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error) {
-		assert.Equal(t, events.SourceTerminalCLI, req.Source)
-		assert.Equal(t, "cli:abc", req.ConversationID)
-		assert.Equal(t, "client-1", req.TerminalClientID)
-		assert.Nil(t, req.SlackReply)
-		assert.Nil(t, req.DiscordReply)
-
-		return events.AskUserQuestionAnswer{Selected: []string{"yes"}, Source: events.SourceTerminalCLI}, nil
-	}, &events.InboundMessage{Source: events.SourceTerminalCLI, Human: true, ConversationID: "cli:abc", Metadata: map[string]string{events.TerminalCLIClientIDMetadataKey: "client-1"}})
-
-	result, err := tool.Call(t.Context(), []byte(`{"question":"Approve?","details":"","options":[{"label":"Yes","value":"yes","description":""}],"multiple":false}`), nil)
-
-	require.NoError(t, err)
-	assert.JSONEq(t, `{"selected":["yes"],"custom":"","source":"terminal_cli"}`, result.Output)
-}
-
 func TestStartNewThreadNativeTurnGate(t *testing.T) {
 	assert.True(t, startNewThreadNativeTurn(&events.InboundMessage{Source: events.SourceSlack, Human: true, SlackReply: &events.SlackReplyTarget{ChannelID: "C1", MessageTS: "1"}}))
-	assert.True(t, startNewThreadNativeTurn(&events.InboundMessage{Source: events.SourceDiscordText, Human: true, DiscordReply: &events.DiscordReplyTarget{ChannelID: "C1", MessageID: "M1"}}))
-	assert.True(t, startNewThreadNativeTurn(&events.InboundMessage{Source: events.SourceTerminalCLI, Human: true, Metadata: map[string]string{events.TerminalCLIClientIDMetadataKey: "client-1"}}))
-	assert.False(t, startNewThreadNativeTurn(&events.InboundMessage{Source: events.SourceTerminalCLI, Human: true, Metadata: map[string]string{events.TerminalCLIClientIDMetadataKey: events.TerminalCLIEmbeddedClientID}}))
 	assert.False(t, startNewThreadNativeTurn(&events.InboundMessage{Source: events.SourceSlack, Human: true, SlackReply: &events.SlackReplyTarget{ChannelID: "C1", MessageTS: "1"}, Metadata: map[string]string{events.InboundStartNewThreadDisabledMetadataKey: "true"}}))
 	assert.False(t, startNewThreadNativeTurn(&events.InboundMessage{Source: events.SourceExternalMCP, Human: true}))
 	assert.False(t, startNewThreadNativeTurn(&events.InboundMessage{Source: events.SourceSlack, Human: false, SlackReply: &events.SlackReplyTarget{ChannelID: "C1", MessageTS: "1"}}))
@@ -3112,21 +3090,6 @@ func TestExternalMCPStoredMetadataEnvSkipsInvalidEntriesAndUsesLatestMatch(t *te
 	assert.False(t, ok)
 }
 
-func TestNewOutboundMessageRoutesBrowserVoiceToWebUIWithoutDiscord(t *testing.T) {
-	bridge := new(Bridge)
-	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}
-
-	inbound := events.NewMainInboundMessage(events.SourceWebVoice, events.InboundKindPrompt, "", "hello", true)
-	inbound.WebSessionID = "browser-session-1"
-
-	outbound := bridge.newOutboundMessage(inbound, "turn-1", 1, "reply", "", true)
-
-	assert.Equal(t, "browser-session-1", outbound.WebSessionID)
-	assert.Contains(t, outbound.Targets, events.OutputTargetSlackMain)
-	assert.Contains(t, outbound.Targets, events.OutputTargetWebUI)
-	assert.NotContains(t, outbound.Targets, events.OutputTargetDiscord)
-}
-
 func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 	store := newTestSessionService(t)
 	bridge := new(Bridge)
@@ -3166,35 +3129,6 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 	assert.Zero(t, outbound.GoalMaxTurns)
 }
 
-func TestProcessResponseKeepsWebUITargetForBrowserThinking(t *testing.T) {
-	bus := events.New()
-	defer bus.Close()
-
-	bridge := new(Bridge)
-	bridge.bus = bus
-	bridge.log = slog.New(slog.DiscardHandler)
-	bridge.config = Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}
-	inbound := events.NewMainInboundMessage(events.SourceWebVoice, events.InboundKindPrompt, "", "hello", true)
-	inbound.WebSessionID = "browser-session-1"
-	result := runResult{turnID: "turn-1", text: "", thinking: "", sequence: 0}
-
-	var diagnostic rocketcode.ToolDiagnostic
-
-	diagnostic.Phase = "call"
-	diagnostic.Name = "bash"
-	diagnostic.Arguments = []byte(`{"command":"cat /tmp/file","description":"Read the file"}`)
-
-	var item rocketcode.ChatResponse
-
-	item.Kind = rocketcode.ChatResponseAssistantTool
-	item.Tool = &diagnostic
-
-	require.NoError(t, bridge.processResponse(context.Background(), inbound, &result, item))
-	outbound := readRocketCodeOutbound(t, bus)
-	assert.Contains(t, outbound.Targets, events.OutputTargetSlackMain)
-	assert.Contains(t, outbound.Targets, events.OutputTargetWebUI)
-	assert.Equal(t, "browser-session-1", outbound.WebSessionID)
-}
 func readRocketCodeOutbound(t *testing.T, bus *events.Bus) *events.OutboundMessage {
 	t.Helper()
 

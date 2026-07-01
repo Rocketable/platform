@@ -14,7 +14,7 @@ import (
 // ErrBusClosed reports that an event was published after the bus shut down.
 var ErrBusClosed = errors.New("bus closed")
 
-// Bus routes inbound text, outbound text, and audio events between components.
+// Bus routes inbound and outbound text events between components.
 type Bus struct {
 	mu            sync.Mutex
 	cond          *sync.Cond
@@ -30,7 +30,6 @@ type Bus struct {
 	inboundPending                   int
 	outbound                         []*OutboundMessage
 	outboundPending                  int
-	audio                            []*AudioChunk
 	observers                        map[*Observer]struct{}
 }
 
@@ -244,25 +243,6 @@ func (b *Bus) WaitOutboundIdle(ctx context.Context, logger *slog.Logger) error {
 	}
 }
 
-// PublishAudio publishes an audio chunk into the voice pipeline.
-func (b *Bus) PublishAudio(ctx context.Context, chunk *AudioChunk) error {
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("publish to bus canceled: %w", err)
-	}
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if b.closed {
-		return ErrBusClosed
-	}
-
-	b.audio = append(b.audio, chunk)
-	b.cond.Broadcast()
-
-	return nil
-}
-
 // Inbound returns a single-use iterator over inbound text messages.
 func (b *Bus) Inbound(ctx context.Context) iter.Seq[*InboundMessage] {
 	return func(yield func(*InboundMessage) bool) {
@@ -302,25 +282,6 @@ func (b *Bus) Outbound(ctx context.Context) iter.Seq[*OutboundMessage] {
 			}
 
 			if !yield(msg) {
-				return
-			}
-		}
-	}
-}
-
-// Audio returns a single-use iterator over inbound audio chunks.
-func (b *Bus) Audio(ctx context.Context) iter.Seq[*AudioChunk] {
-	return func(yield func(*AudioChunk) bool) {
-		stop := b.notifyOnContext(ctx)
-		defer stop()
-
-		for {
-			chunk, ok := b.dequeueAudio(ctx)
-			if !ok {
-				return
-			}
-
-			if !yield(chunk) {
 				return
 			}
 		}
@@ -392,26 +353,6 @@ func (b *Bus) dequeueOutbound(ctx context.Context) (*OutboundMessage, bool) {
 			b.cond.Broadcast()
 
 			return msg, true
-		}
-
-		b.cond.Wait()
-	}
-}
-
-func (b *Bus) dequeueAudio(ctx context.Context) (*AudioChunk, bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	for {
-		if b.closed || ctx.Err() != nil {
-			return nil, false
-		}
-
-		if len(b.audio) > 0 {
-			chunk := b.audio[0]
-			b.audio = b.audio[1:]
-
-			return chunk, true
 		}
 
 		b.cond.Wait()

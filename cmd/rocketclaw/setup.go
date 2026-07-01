@@ -45,31 +45,14 @@ func runSetup(args []string) error {
 	cfg.Workspace = workspace
 	cfg.MinimumWaitAfterHumanInteraction = "5m"
 	cfg.Logging.Level = "debug"
-	cfg.OpenAI.STTModel = "gpt-4o-mini-transcribe"
-	cfg.OpenAI.TTSModel = "gpt-4o-mini-tts"
-	cfg.OpenAI.TTSVoice = "alloy"
-	cfg.WebUI.Enabled = true
-	cfg.WebUI.ListenAddr = config.DefaultWebUIListenAddr
 
 	setupNames, err := interviewSetup(cfg)
 	if err != nil {
 		return err
 	}
 
-	blankOpenAIOverrides := []*string{}
-
-	for _, field := range []*string{&cfg.OpenAI.STTAPIKey, &cfg.OpenAI.STTAPIBaseURL, &cfg.OpenAI.TTSAPIKey, &cfg.OpenAI.TTSAPIBaseURL} {
-		if *field == "" {
-			blankOpenAIOverrides = append(blankOpenAIOverrides, field)
-		}
-	}
-
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("validate generated configuration: %w", err)
-	}
-
-	for _, field := range blankOpenAIOverrides {
-		*field = ""
 	}
 
 	if err := skel.SyncInWithOverlays(workspace, config.DefaultWorkDir, nil, newLogger("info")); err != nil {
@@ -165,14 +148,9 @@ func interviewSetup(cfg *config.Config) (setupNames, error) {
 	var names setupNames
 
 	for {
-		discordEnabled, err := promptYesNoDefault(reader, "Enable Discord voice connector? [y/N]: ", false)
+		slackEnabled, err := promptYesNoDefault(reader, "Enable Slack connector? [y/N]: ", false)
 		if err != nil {
-			return names, fmt.Errorf("prompt Discord enablement: %w", err)
-		}
-
-		primaryText, err := promptPrimaryTextConnector(reader)
-		if err != nil {
-			return names, err
+			return names, fmt.Errorf("prompt Slack enablement: %w", err)
 		}
 
 		externalMCPEnabled, err := promptYesNoDefault(reader, "Enable external MCP HTTP server? [y/N]: ", false)
@@ -180,24 +158,16 @@ func interviewSetup(cfg *config.Config) (setupNames, error) {
 			return names, fmt.Errorf("prompt external MCP enablement: %w", err)
 		}
 
-		webUIEnabled, err := promptYesNoDefault(reader, "Enable browser voice mode web UI? [Y/n]: ", true)
-		if err != nil {
-			return names, fmt.Errorf("prompt browser voice mode enablement: %w", err)
-		}
-
-		if !discordEnabled && primaryText == "" && !externalMCPEnabled && !webUIEnabled {
-			if _, err := fmt.Fprintln(os.Stdout, "At least one connector, browser voice mode, or external MCP server must be enabled."); err != nil {
+		if !slackEnabled && !externalMCPEnabled {
+			if _, err := fmt.Fprintln(os.Stdout, "At least one connector or external MCP server must be enabled."); err != nil {
 				return names, fmt.Errorf("report missing connector selection: %w", err)
 			}
 
 			continue
 		}
 
-		cfg.DiscordVoice.Enabled = discordEnabled
-		cfg.Slack.Enabled = primaryText == "slack"
-		cfg.DiscordText.Enabled = primaryText == "discord_text"
+		cfg.Slack.Enabled = slackEnabled
 		cfg.MCPExternal.Enabled = externalMCPEnabled
-		cfg.WebUI.Enabled = webUIEnabled
 
 		break
 	}
@@ -205,25 +175,11 @@ func interviewSetup(cfg *config.Config) (setupNames, error) {
 	if err := promptFields(reader,
 		promptField{prompt: "OpenAI API key: ", required: true, value: &cfg.OpenAI.APIKey},
 		promptField{prompt: "OpenAI API base URL (leave blank for default): ", value: &cfg.OpenAI.APIBaseURL},
-		promptField{prompt: "OpenAI STT API key (leave blank to use OpenAI API key): ", value: &cfg.OpenAI.STTAPIKey},
-		promptField{prompt: "OpenAI STT API base URL (leave blank to use OpenAI API base URL): ", value: &cfg.OpenAI.STTAPIBaseURL},
-		promptField{prompt: "OpenAI TTS API key (leave blank to use OpenAI API key): ", value: &cfg.OpenAI.TTSAPIKey},
-		promptField{prompt: "OpenAI TTS API base URL (leave blank to use OpenAI API base URL): ", value: &cfg.OpenAI.TTSAPIBaseURL},
 		promptField{prompt: "Human partner name: ", required: true, value: &names.humanPartnerName},
 		promptField{prompt: "Agent name: ", required: true, value: &names.agentName},
 		promptField{prompt: "Minimum wait after human interaction before automated messages [5m]: ", value: &cfg.MinimumWaitAfterHumanInteraction},
 	); err != nil {
 		return names, err
-	}
-
-	if cfg.DiscordVoice.Enabled {
-		if err := promptFields(reader,
-			promptField{prompt: "Discord bot token: ", required: true, value: &cfg.DiscordVoice.Token},
-			promptField{prompt: "Discord voice channel ID: ", required: true, value: &cfg.DiscordVoice.VoiceChannelID},
-			promptField{prompt: "Discord human partner user ID: ", required: true, value: &cfg.DiscordVoice.HumanUserID},
-		); err != nil {
-			return names, err
-		}
 	}
 
 	if cfg.Slack.Enabled {
@@ -232,16 +188,6 @@ func interviewSetup(cfg *config.Config) (setupNames, error) {
 			promptField{prompt: "Slack app token: ", required: true, value: &cfg.Slack.AppToken},
 			promptField{prompt: "Slack DM room/channel ID: ", required: true, value: &cfg.Slack.Room},
 			promptField{prompt: "Slack human partner user ID: ", required: true, value: &cfg.Slack.HumanUserID},
-		); err != nil {
-			return names, err
-		}
-	}
-
-	if cfg.DiscordText.Enabled {
-		if err := promptFields(reader,
-			promptField{prompt: "Discord text bot token: ", required: true, value: &cfg.DiscordText.Token},
-			promptField{prompt: "Discord guild text channel ID: ", required: true, value: &cfg.DiscordText.ChannelID},
-			promptField{prompt: "Discord human partner user ID: ", required: true, value: &cfg.DiscordText.HumanUserID},
 		); err != nil {
 			return names, err
 		}
@@ -261,40 +207,7 @@ func interviewSetup(cfg *config.Config) (setupNames, error) {
 		names.createExternalMCPUsers = createExternalMCPUsers
 	}
 
-	if cfg.WebUI.Enabled {
-		if err := promptFields(reader, promptField{
-			prompt: "Browser voice mode listen address (serves /voice-mode over HTTPS) [" + config.DefaultWebUIListenAddr + "]: ",
-			value:  &cfg.WebUI.ListenAddr,
-		}); err != nil {
-			return names, err
-		}
-	} else {
-		cfg.WebUI.ListenAddr = ""
-	}
-
 	return names, nil
-}
-
-func promptPrimaryTextConnector(reader *bufio.Reader) (string, error) {
-	for {
-		text, err := promptInput(reader, "Primary text connector: slack, discord, or none [none]: ")
-		if err != nil {
-			return "", fmt.Errorf("prompt primary text connector: %w", err)
-		}
-
-		switch strings.ToLower(text) {
-		case "", "none", "no", "n":
-			return "", nil
-		case "slack", "s":
-			return "slack", nil
-		case "discord", "discord_text", "d":
-			return "discord_text", nil
-		default:
-			if _, err := fmt.Fprintln(os.Stdout, "Please choose slack, discord, or none."); err != nil {
-				return "", fmt.Errorf("print primary text connector guidance: %w", err)
-			}
-		}
-	}
 }
 
 type promptField struct {

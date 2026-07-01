@@ -280,10 +280,6 @@ func (b *Bridge) WaitIdle(ctx context.Context) error {
 				args = append(args, "active_slack_channel", activeReply.SlackReply.ChannelID, "active_slack_thread", activeReply.SlackReply.ThreadTS)
 			}
 
-			if activeReply != nil && activeReply.DiscordReply != nil {
-				args = append(args, "active_discord_channel", activeReply.DiscordReply.ChannelID, "active_discord_thread", activeReply.DiscordReply.ThreadID)
-			}
-
 			b.log.Info("bridge idle wait state", args...)
 
 			logged = true
@@ -756,14 +752,9 @@ func (b *Bridge) handleInbound(ctx context.Context, msg *events.InboundMessage) 
 		slackChannel, slackMessageTS, slackThreadTS = reply.ChannelID, reply.MessageTS, reply.ThreadTS
 	}
 
-	discordChannel, discordMessageID, discordThreadID := "", "", ""
-	if reply := msg.DiscordReply; reply != nil {
-		discordChannel, discordMessageID, discordThreadID = reply.ChannelID, reply.MessageID, reply.ThreadID
-	}
-
 	normalizeInboundAttachments(msg)
 
-	b.log.Info("starting rocketcode turn", "conversation_id", b.config.ConversationID, "turn_id", turnID, "source", msg.Source, "kind", msg.Kind, "label", msg.Label, "text_len", len([]rune(msg.Text)), "attachment_count", len(msg.Attachments), "slack_channel", slackChannel, "slack_message_ts", slackMessageTS, "slack_thread_ts", slackThreadTS, "discord_channel", discordChannel, "discord_message_id", discordMessageID, "discord_thread_id", discordThreadID)
+	b.log.Info("starting rocketcode turn", "conversation_id", b.config.ConversationID, "turn_id", turnID, "source", msg.Source, "kind", msg.Kind, "label", msg.Label, "text_len", len([]rune(msg.Text)), "attachment_count", len(msg.Attachments), "slack_channel", slackChannel, "slack_message_ts", slackMessageTS, "slack_thread_ts", slackThreadTS)
 
 	defer func() {
 		b.log.Info("finished rocketcode turn", "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(started).Milliseconds(), "text_len", len([]rune(result.text)), "thinking_len", len([]rune(result.thinking)), "session_entry_id", result.sessionEntryID, "error", errLog)
@@ -918,12 +909,8 @@ func (b *Bridge) enqueueGoalContinuation(ctx context.Context, goal *GoalState, m
 	inbound.ConversationID = b.config.ConversationID
 	if msg != nil && msg.SlackReply != nil {
 		inbound.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.ThreadTS, ThreadTS: msg.SlackReply.ThreadTS}
-	} else if msg != nil && msg.DiscordReply != nil {
-		inbound.DiscordReply = &events.DiscordReplyTarget{ChannelID: msg.DiscordReply.ChannelID, MessageID: msg.DiscordReply.MessageID, ThreadID: msg.DiscordReply.ThreadID}
 	} else if channelID, threadTS, ok := SlackThreadTarget(b.config.ConversationID); ok {
 		inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
-	} else if threadID, ok := DiscordThreadTarget(b.config.ConversationID); ok {
-		inbound.DiscordReply = &events.DiscordReplyTarget{ChannelID: threadID, ThreadID: threadID}
 	}
 
 	return b.enqueue(ctx, bridgeRequest{inbound: inbound}, "submit goal continuation")
@@ -1069,10 +1056,6 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		providerLog = providerLog.With("label", msg.Label)
 	}
 
-	if msg.WebSessionID != "" {
-		providerLog = providerLog.With("web_session_id", msg.WebSessionID)
-	}
-
 	providerBridge := &Bridge{runtime: b.runtime, log: providerLog}
 
 	providers, err := providerBridge.rocketcodeProviders(agents)
@@ -1127,10 +1110,6 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 	activeReply := new(events.InboundMessage)
 	if msg.SlackReply != nil {
 		activeReply.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS}
-	}
-
-	if msg.DiscordReply != nil {
-		activeReply.DiscordReply = &events.DiscordReplyTarget{ChannelID: msg.DiscordReply.ChannelID, MessageID: msg.DiscordReply.MessageID, ThreadID: msg.DiscordReply.ThreadID}
 	}
 
 	turnCtx, cancelTurn := context.WithCancel(ctx)
@@ -1914,7 +1893,7 @@ func resetScheduledMessagesTool(reset func() error) rocketcode.Tool {
 }
 
 func askUserQuestionTool(ask func(context.Context, *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error), msg *events.InboundMessage) rocketcode.Tool {
-	return rocketcode.Tool{Name: askUserQuestionToolName, Description: "Ask the human partner a native Slack, Discord Text, or terminal CLI question and wait for their answer. The options array is only for concrete predefined choices to show as buttons/selects; do not include catch-all choices like Custom, Other, or Free text.", Permission: "rocketclaw", VisibilitySubjects: []string{askUserQuestionToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{askUserQuestionToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"question": map[string]any{"type": "string"}, "details": map[string]any{"type": "string"}, "options": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"label": map[string]any{"type": "string"}, "value": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}, "required": []string{"label", "value", "description"}}}, "multiple": map[string]any{"type": "boolean"}}, "required": []string{"question", "details", "options", "multiple"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+	return rocketcode.Tool{Name: askUserQuestionToolName, Description: "Ask the human partner a native Slack question and wait for their answer. The options array is only for concrete predefined choices to show as buttons/selects; do not include catch-all choices like Custom, Other, or Free text.", Permission: "rocketclaw", VisibilitySubjects: []string{askUserQuestionToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{askUserQuestionToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"question": map[string]any{"type": "string"}, "details": map[string]any{"type": "string"}, "options": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"label": map[string]any{"type": "string"}, "value": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}, "required": []string{"label", "value", "description"}}}, "multiple": map[string]any{"type": "boolean"}}, "required": []string{"question", "details", "options", "multiple"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		var req events.AskUserQuestionRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
 			return rocketcode.ToolResult{}, fmt.Errorf("parse human question: %w", err)
@@ -1929,14 +1908,8 @@ func askUserQuestionTool(ask func(context.Context, *events.AskUserQuestionReques
 		})
 
 		req.ID, req.Source, req.ConversationID = rand.Text(), msg.Source, msg.ConversationID
-
-		req.TerminalClientID = strings.TrimSpace(msg.Metadata[events.TerminalCLIClientIDMetadataKey])
 		if msg.SlackReply != nil {
 			req.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS}
-		}
-
-		if msg.DiscordReply != nil {
-			req.DiscordReply = &events.DiscordReplyTarget{ChannelID: msg.DiscordReply.ChannelID, MessageID: msg.DiscordReply.MessageID, ThreadID: msg.DiscordReply.ThreadID}
 		}
 
 		answer, err := ask(ctx, &req)
@@ -1991,13 +1964,9 @@ func startNewThreadTool(start func(context.Context, *events.StartNewThreadReques
 
 			allowedAgents := strings.FieldsFunc(msg.Metadata[events.InboundAllowedAgentsMetadataKey], func(r rune) bool { return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' ' })
 
-			req := events.StartNewThreadRequest{Source: msg.Source, SourceConversationID: msg.ConversationID, CurrentAgent: currentAgent, Agent: strings.TrimSpace(input.Agent), Title: title, Prompt: prompt, TerminalClientID: strings.TrimSpace(msg.Metadata[events.TerminalCLIClientIDMetadataKey]), AllowedAgents: allowedAgents}
+			req := events.StartNewThreadRequest{Source: msg.Source, SourceConversationID: msg.ConversationID, CurrentAgent: currentAgent, Agent: strings.TrimSpace(input.Agent), Title: title, Prompt: prompt, AllowedAgents: allowedAgents}
 			if msg.SlackReply != nil {
 				req.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS}
-			}
-
-			if msg.DiscordReply != nil {
-				req.DiscordReply = &events.DiscordReplyTarget{ChannelID: msg.DiscordReply.ChannelID, MessageID: msg.DiscordReply.MessageID, ThreadID: msg.DiscordReply.ThreadID}
 			}
 
 			result, err := start(ctx, &req)
@@ -2029,11 +1998,7 @@ func nativeQuestionTurn(msg *events.InboundMessage) bool {
 	switch msg.Source {
 	case events.SourceSlack:
 		return msg.SlackReply != nil
-	case events.SourceDiscordText:
-		return msg.DiscordReply != nil
-	case events.SourceTerminalCLI:
-		return strings.TrimSpace(msg.Metadata[events.TerminalCLIClientIDMetadataKey]) != ""
-	case events.SourceDiscordVoice, events.SourceExternalMCP, events.SourceWebVoice, events.SourceSystem:
+	case events.SourceExternalMCP, events.SourceSystem:
 		return false
 	}
 
@@ -2043,10 +2008,6 @@ func nativeQuestionTurn(msg *events.InboundMessage) bool {
 func startNewThreadNativeTurn(msg *events.InboundMessage) bool {
 	if !nativeQuestionTurn(msg) || msg.Metadata[events.InboundStartNewThreadDisabledMetadataKey] == "true" {
 		return false
-	}
-
-	if msg.Source == events.SourceTerminalCLI {
-		return strings.TrimSpace(msg.Metadata[events.TerminalCLIClientIDMetadataKey]) != events.TerminalCLIEmbeddedClientID
 	}
 
 	return true
@@ -2173,8 +2134,6 @@ func (b *Bridge) armScheduledMessage(id string, message *ScheduledMessageState) 
 			if channelID, threadTS, ok := strings.Cut(rest, ":"); ok {
 				inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
 			}
-		} else if threadID, ok := strings.CutPrefix(armed.ConversationID, "discord-thread:"); ok {
-			inbound.DiscordReply = &events.DiscordReplyTarget{ChannelID: threadID, ThreadID: threadID}
 		} else if strings.HasPrefix(armed.ConversationID, externalMCPConversationPrefix) {
 			for conversationID, thread := range threads {
 				if strings.TrimSpace(thread.SeededFromResponse) != armed.ConversationID {
@@ -2189,11 +2148,6 @@ func (b *Bridge) armScheduledMessage(id string, message *ScheduledMessageState) 
 
 					inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
 
-					break
-				}
-
-				if threadID, ok := strings.CutPrefix(conversationID, "discord-thread:"); ok {
-					inbound.DiscordReply = &events.DiscordReplyTarget{ChannelID: threadID, ThreadID: threadID}
 					break
 				}
 			}
@@ -2240,29 +2194,9 @@ func (b *Bridge) newOutboundMessage(msg *events.InboundMessage, turnID string, s
 			outbound.GoalMaxTurns = goal.MaxTurns
 		}
 
-		outbound.WebSessionID = msg.WebSessionID
 		if msg.SlackReply != nil {
 			outbound.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS}
 		}
-
-		if msg.DiscordReply != nil {
-			outbound.DiscordReply = &events.DiscordReplyTarget{ChannelID: msg.DiscordReply.ChannelID, MessageID: msg.DiscordReply.MessageID, ThreadID: msg.DiscordReply.ThreadID}
-		}
-	}
-
-	if msg != nil && msg.Source == events.SourceWebVoice {
-		targets := make([]events.OutputTarget, 0, len(outbound.Targets)+1)
-		for _, target := range outbound.Targets {
-			if target != events.OutputTargetDiscord {
-				targets = append(targets, target)
-			}
-		}
-
-		if !slices.Contains(targets, events.OutputTargetWebUI) {
-			targets = append(targets, events.OutputTargetWebUI)
-		}
-
-		outbound.Targets = targets
 	}
 
 	return outbound
@@ -2403,7 +2337,7 @@ func seedFunctionCallOutputText(output *responses.ResponseInputItemFunctionCallO
 	return strings.Join(parts, "\n")
 }
 
-const defaultReplyInstruction = "Reply in plain text suitable for both Slack and text-to-speech. Avoid markdown unless it is necessary."
+const defaultReplyInstruction = "Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."
 
 const internalNoteInstruction = "Internalize the following note into the active conversation state exactly as written. Respect the content of the message and do not paraphrase, summarize, translate, or normalize whitespace. Do not reply or acknowledge it unless the human explicitly asks you to."
 
@@ -2463,11 +2397,11 @@ type promptProvenance struct {
 
 func provenanceFromInbound(msg *events.InboundMessage) promptProvenance {
 	provenance := promptProvenance{origin: originForSource(msg.Source), media: mediaForSource(msg.Source)}
-	if origin := canonicalOverride(msg.Metadata[events.InboundOriginMetadataKey], "Slack", "Discord", "Cron", "ExternalMCP", "Terminal", "Web", "System"); origin != "" {
+	if origin := canonicalOverride(msg.Metadata[events.InboundOriginMetadataKey], "Slack", "Cron", "ExternalMCP", "System"); origin != "" {
 		provenance.origin = origin
 	}
 
-	if media := canonicalOverride(msg.Metadata[events.InboundMediaMetadataKey], "Text", "Voice"); media != "" {
+	if media := canonicalOverride(msg.Metadata[events.InboundMediaMetadataKey], "Text"); media != "" {
 		provenance.media = media
 	}
 
@@ -2490,14 +2424,8 @@ func originForSource(source events.Source) string {
 	switch source {
 	case events.SourceSlack:
 		return "Slack"
-	case events.SourceDiscordText, events.SourceDiscordVoice:
-		return "Discord"
 	case events.SourceExternalMCP:
 		return "ExternalMCP"
-	case events.SourceTerminalCLI:
-		return "Terminal"
-	case events.SourceWebVoice:
-		return "Web"
 	case events.SourceSystem:
 		return "System"
 	default:
@@ -2505,11 +2433,7 @@ func originForSource(source events.Source) string {
 	}
 }
 
-func mediaForSource(source events.Source) string {
-	if source == events.SourceDiscordVoice || source == events.SourceWebVoice {
-		return "Voice"
-	}
-
+func mediaForSource(events.Source) string {
 	return "Text"
 }
 

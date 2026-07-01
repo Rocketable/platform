@@ -42,9 +42,7 @@ func TestNormalizeThreadAgentsDropsBlankEntries(t *testing.T) {
 func TestLoadAppliesDefaults(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",
-	  "openai": {
-	    "api_key": "test-key"
-	  },
+	  "openai": {"api_key": "test-key"},
 	  "slack": {
 	    "enabled": true,
 	    "bot_token": "xoxb-test",
@@ -54,13 +52,6 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	  }
 	}`)
 
-	assert.Equal(t, "whisper-1", cfg.OpenAI.STTModel)
-	assert.Equal(t, "tts-1", cfg.OpenAI.TTSModel)
-	assert.Equal(t, "alloy", cfg.OpenAI.TTSVoice)
-	assert.Equal(t, "test-key", cfg.OpenAI.STTAPIKey)
-	assert.Equal(t, "test-key", cfg.OpenAI.TTSAPIKey)
-	assert.False(t, cfg.WebUI.Enabled)
-	assert.Empty(t, cfg.WebUI.ListenAddr)
 	assert.Equal(t, "api_key", cfg.OpenAI.RocketCodeAuth)
 	assert.True(t, filepath.IsAbs(cfg.Workspace))
 	assert.Zero(t, cfg.MinimumWaitAfterHumanInteractionDuration)
@@ -69,9 +60,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 func TestLoadPreservesInstrumentationConfig(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",
-	  "openai": {
-	    "api_key": "test-key"
-	  },
+	  "openai": {"api_key": "test-key"},
 	  "instrumentation": {
 	    "enabled": true,
 	    "collector_endpoint": "http://localhost:6006",
@@ -80,10 +69,7 @@ func TestLoadPreservesInstrumentationConfig(t *testing.T) {
 	    "hide_inputs": true,
 	    "hide_outputs": true
 	  },
-	  "web_ui": {
-	    "enabled": true,
-	    "listen_addr": "127.0.0.1:8766"
-	  }
+	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
 	}`)
 
 	assert.True(t, cfg.Instrumentation.Enabled)
@@ -107,13 +93,8 @@ func TestLoadNormalizesOverlays(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",
 	  "overlays": [" github.com/rocketable/overlay1@main ", "", "github.com/rocketable/overlay2"],
-	  "openai": {
-	    "api_key": "test-key"
-	  },
-	  "web_ui": {
-	    "enabled": true,
-	    "listen_addr": "127.0.0.1:8766"
-	  }
+	  "openai": {"api_key": "test-key"},
+	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
 	}`)
 
 	assert.Equal(t, []string{"github.com/rocketable/overlay1@main", "github.com/rocketable/overlay2"}, cfg.Overlays)
@@ -123,107 +104,13 @@ func TestLoadDefaultsWorkspaceToConfigDirectory(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rocketclaw.json")
 	require.NoError(t, os.WriteFile(path, []byte(`{
-	  "openai": {
-	    "api_key": "test-key"
-	  },
-	  "web_ui": {
-	    "enabled": true,
-	    "listen_addr": "127.0.0.1:8766"
-	  }
+	  "openai": {"api_key": "test-key"},
+	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
 	}`), 0o600))
 
 	cfg, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, dir, cfg.Workspace)
-}
-
-func TestLoadPreservesExplicitWebUIListenAddr(t *testing.T) {
-	cfg := loadTestConfig(t, `{
-	  "workspace": ".",
-	  "web_ui": {
-	    "enabled": true,
-	    "listen_addr": "0.0.0.0:9999"
-	  },
-	  "openai": {
-	    "api_key": "test-key"
-	  },
-	  "slack": {
-	    "enabled": true,
-	    "bot_token": "xoxb-test",
-	    "app_token": "xapp-test",
-	    "room": "D123",
-	    "human_user_id": "U123"
-	  }
-	}`)
-
-	assert.True(t, cfg.WebUI.Enabled)
-	assert.Equal(t, "0.0.0.0:9999", cfg.WebUI.ListenAddr)
-}
-
-func TestLoadPreservesExplicitWebUICertificateFiles(t *testing.T) {
-	cfg := loadTestConfig(t, `{
-	  "workspace": ".",
-	  "web_ui": {
-	    "enabled": true,
-	    "listen_addr": "0.0.0.0:9999",
-	    "cert_file": "web-ui.crt",
-	    "key_file": "web-ui.key"
-	  },
-	  "openai": {
-	    "api_key": "test-key"
-	  }
-	}`)
-
-	assert.Equal(t, "web-ui.crt", cfg.WebUI.CertFile)
-	assert.Equal(t, "web-ui.key", cfg.WebUI.KeyFile)
-}
-
-func TestLoadLeavesWebUIDisabledWhenExplicitlyFalse(t *testing.T) {
-	cfg := loadTestConfig(t, `{
-	  "workspace": ".",
-	  "web_ui": {
-	    "enabled": false
-	  },
-	  "openai": {
-	    "api_key": "test-key"
-	  },
-	  "slack": {
-	    "enabled": true,
-	    "bot_token": "xoxb-test",
-	    "app_token": "xapp-test",
-	    "room": "D123",
-	    "human_user_id": "U123"
-	  }
-	}`)
-
-	assert.False(t, cfg.WebUI.Enabled)
-	assert.Empty(t, cfg.WebUI.ListenAddr)
-}
-
-func TestLoadFallsBackOpenAIServiceOverridesToSharedDefaults(t *testing.T) {
-	cfg := loadTestConfig(t, `{
-	  "workspace": ".",
-	  "openai": {
-	    "api_key": "shared-key",
-	    "api_base_url": "https://example.com/v1",
-	    "stt_key": "   ",
-	    "stt_base_url": "",
-	    "tts_key": "",
-	    "tts_base_url": "   "
-	  },
-	  "slack": {
-	    "enabled": true,
-	    "bot_token": "xoxb-test",
-	    "app_token": "xapp-test",
-	    "room": "D123",
-	    "human_user_id": "U123"
-	  }
-	}`)
-
-	assert.Equal(t, "shared-key", cfg.OpenAI.STTAPIKey)
-	assert.Equal(t, "https://example.com/v1", cfg.OpenAI.STTAPIBaseURL)
-	assert.Equal(t, "shared-key", cfg.OpenAI.TTSAPIKey)
-	assert.Equal(t, "https://example.com/v1", cfg.OpenAI.TTSAPIBaseURL)
 }
 
 func TestLoadRejectsUnreadableOrInvalidConfig(t *testing.T) {
@@ -237,122 +124,23 @@ func TestLoadRejectsUnreadableOrInvalidConfig(t *testing.T) {
 	require.ErrorContains(t, err, "parse config JSON")
 }
 
-func TestValidatePreservesExplicitOpenAIServiceOverrides(t *testing.T) {
-	cfg := validConfig()
-	cfg.DiscordVoice.Enabled = false
-	cfg.Slack.Enabled = true
-	cfg.Slack.BotToken = "xoxb-test"
-	cfg.Slack.AppToken = "xapp-test"
-	cfg.Slack.Room = "D123"
-	cfg.Slack.HumanUserID = "U123"
-	cfg.OpenAI.APIBaseURL = "https://shared.example/v1"
-	cfg.OpenAI.STTAPIKey = "stt-key"
-	cfg.OpenAI.STTAPIBaseURL = "https://stt.example/v1"
-	cfg.OpenAI.TTSAPIKey = "tts-key"
-	cfg.OpenAI.TTSAPIBaseURL = "https://tts.example/v1"
-
-	require.NoError(t, cfg.Validate())
-	assert.Equal(t, "stt-key", cfg.OpenAI.STTAPIKey)
-	assert.Equal(t, "https://stt.example/v1", cfg.OpenAI.STTAPIBaseURL)
-	assert.Equal(t, "tts-key", cfg.OpenAI.TTSAPIKey)
-	assert.Equal(t, "https://tts.example/v1", cfg.OpenAI.TTSAPIBaseURL)
-}
-
 func TestValidateRejectsMissingRequiredConfig(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
 		update  func(*Config)
 		wantErr string
 	}{
-		{
-			name:    "no connectors",
-			update:  func(c *Config) { c.DiscordVoice.Enabled = false },
-			wantErr: "enable at least one connector, web_ui, or mcp_external",
-		},
-		{
-			name:    "workspace",
-			update:  func(c *Config) { c.Workspace = "" },
-			wantErr: "workspace is required",
-		},
-		{
-			name:    "rocketcode auth",
-			update:  func(c *Config) { c.OpenAI.RocketCodeAuth = "browser" },
-			wantErr: "openai.rocketcode_auth must be api_key or chatgpt",
-		},
-		{
-			name:    "openai audio credentials",
-			update:  func(c *Config) { c.OpenAI.APIKey = "" },
-			wantErr: "openai stt/tts credentials are required when OpenAI-backed audio is enabled",
-		},
-		{
-			name:    "discord token",
-			update:  func(c *Config) { c.DiscordVoice.Token = "" },
-			wantErr: "discord_voice.token is required when discord_voice is enabled",
-		},
-		{
-			name: "discord text token",
-			update: func(c *Config) {
-				c.DiscordVoice.Enabled = false
-				c.DiscordText = DiscordTextConfig{Enabled: true, ChannelID: "channel-123", HumanUserID: "user-123"}
-			},
-			wantErr: "discord_text.token is required when discord_text is enabled",
-		},
-		{
-			name: "discord text channel",
-			update: func(c *Config) {
-				c.DiscordVoice.Enabled = false
-				c.DiscordText = DiscordTextConfig{Enabled: true, Token: "discord-token", HumanUserID: "user-123"}
-			},
-			wantErr: "discord_text.channel_id is required when discord_text is enabled",
-		},
-		{
-			name: "discord text human user",
-			update: func(c *Config) {
-				c.DiscordVoice.Enabled = false
-				c.DiscordText = DiscordTextConfig{Enabled: true, Token: "discord-token", ChannelID: "channel-123"}
-			},
-			wantErr: "discord_text.human_user_id is required when discord_text is enabled",
-		},
-		{
-			name: "slack and discord text",
-			update: func(c *Config) {
-				c.DiscordText = DiscordTextConfig{Enabled: true, Token: "discord-token", ChannelID: "channel-123", HumanUserID: "user-123"}
-				c.Slack.Enabled = true
-			},
-			wantErr: "slack and discord_text are mutually exclusive primary text connectors",
-		},
-		{
-			name:    "mcp external listen addr",
-			update:  func(c *Config) { c.MCPExternal.Enabled = true },
-			wantErr: "mcp_external.listen_addr is required when mcp_external is enabled",
-		},
-		{
-			name:    "slack bot token",
-			update:  func(c *Config) { c.Slack.Enabled, c.Slack.BotToken = true, "" },
-			wantErr: "slack.bot_token is required when slack is enabled",
-		},
-		{
-			name:    "slack app token",
-			update:  func(c *Config) { c.Slack.Enabled, c.Slack.AppToken = true, "" },
-			wantErr: "slack.app_token is required when slack is enabled",
-		},
-		{
-			name:    "slack room",
-			update:  func(c *Config) { c.Slack.Enabled, c.Slack.Room = true, "" },
-			wantErr: "slack.room is required when slack is enabled",
-		},
-		{
-			name:    "slack human user id",
-			update:  func(c *Config) { c.Slack.Enabled, c.Slack.HumanUserID = true, "" },
-			wantErr: "slack.human_user_id is required when slack is enabled",
-		},
+		{name: "no connectors", update: func(c *Config) { c.Slack.Enabled = false }, wantErr: "enable at least one connector or mcp_external"},
+		{name: "workspace", update: func(c *Config) { c.Workspace = "" }, wantErr: "workspace is required"},
+		{name: "rocketcode auth", update: func(c *Config) { c.OpenAI.RocketCodeAuth = "browser" }, wantErr: "openai.rocketcode_auth must be api_key or chatgpt"},
+		{name: "mcp external listen addr", update: func(c *Config) { c.MCPExternal.Enabled = true }, wantErr: "mcp_external.listen_addr is required when mcp_external is enabled"},
+		{name: "slack bot token", update: func(c *Config) { c.Slack.BotToken = "" }, wantErr: "slack.bot_token is required when slack is enabled"},
+		{name: "slack app token", update: func(c *Config) { c.Slack.AppToken = "" }, wantErr: "slack.app_token is required when slack is enabled"},
+		{name: "slack room", update: func(c *Config) { c.Slack.Room = "" }, wantErr: "slack.room is required when slack is enabled"},
+		{name: "slack human user id", update: func(c *Config) { c.Slack.HumanUserID = "" }, wantErr: "slack.human_user_id is required when slack is enabled"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()
-			cfg.Slack.BotToken = "xoxb-test"
-			cfg.Slack.AppToken = "xapp-test"
-			cfg.Slack.Room = "D123"
-			cfg.Slack.HumanUserID = "U123"
 			tt.update(cfg)
 
 			err := cfg.Validate()
@@ -363,14 +151,16 @@ func TestValidateRejectsMissingRequiredConfig(t *testing.T) {
 
 func TestValidateNormalizesEmergencySafeWords(t *testing.T) {
 	cfg := validConfig()
-	cfg.EmergencySafeWords = []string{"  Red Button! ", "red-button", "Ångström 42", "!!!", ""}
+	cfg.EmergencySafeWords = []string{"  Red Button! ", "red-button", "Angstrom 42", "!!!", ""}
 
 	require.NoError(t, cfg.Validate())
-	assert.Equal(t, []string{"redbutton", "ångström42"}, cfg.EmergencySafeWords)
+	assert.Equal(t, []string{"redbutton", "angstrom42"}, cfg.EmergencySafeWords)
 }
 
 func TestValidateNormalizesExternalMCPAllowedAgents(t *testing.T) {
 	cfg := validConfig()
+	cfg.MCPExternal.Enabled = true
+	cfg.MCPExternal.ListenAddr = "127.0.0.1:8765"
 	cfg.MCPExternal.AllowedAgents = []string{" main ", "", "main", "worker"}
 
 	require.NoError(t, cfg.Validate())
@@ -379,11 +169,6 @@ func TestValidateNormalizesExternalMCPAllowedAgents(t *testing.T) {
 
 func TestValidateSlackSocialMode(t *testing.T) {
 	cfg := validConfig()
-	cfg.Slack.Enabled = true
-	cfg.Slack.BotToken = "xoxb-test"
-	cfg.Slack.AppToken = "xapp-test"
-	cfg.Slack.Room = "D123"
-	cfg.Slack.HumanUserID = "U123"
 	cfg.Slack.SocialMode.Enabled = true
 	cfg.Slack.SocialMode.Channels = []TextSocialChannelConfig{
 		{Channel: " triage ", Agents: []string{" planner ", "", "planner", "helper"}, AllowedUserIDs: []string{" U999 ", "", "U999"}},
@@ -418,11 +203,6 @@ func TestValidateSlackSocialModeRejectsInvalidConfig(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()
-			cfg.Slack.Enabled = true
-			cfg.Slack.BotToken = "xoxb-test"
-			cfg.Slack.AppToken = "xapp-test"
-			cfg.Slack.Room = "D123"
-			cfg.Slack.HumanUserID = "U123"
 			cfg.Slack.SocialMode = TextSocialConfig{Enabled: true, Channels: []TextSocialChannelConfig{{Channel: "#triage", Agents: []string{"triage"}, AllowedUserIDs: []string{"U123"}}}, ContextMessages: 10}
 			tt.update(&cfg.Slack.SocialMode)
 
@@ -458,52 +238,6 @@ func TestValidateMinimumWaitAfterHumanInteraction(t *testing.T) {
 			assert.Equal(t, tt.want, cfg.MinimumWaitAfterHumanInteractionDuration)
 		})
 	}
-}
-
-func TestValidateRequiresWebUIListenAddrWhenEnabled(t *testing.T) {
-	cfg := validConfig()
-	cfg.WebUI.Enabled = true
-
-	err := cfg.Validate()
-	require.ErrorContains(t, err, "web_ui.listen_addr is required when web_ui is enabled")
-}
-
-func TestValidateRejectsIPv6WebUIListenAddr(t *testing.T) {
-	cfg := validConfig()
-	cfg.WebUI.Enabled = true
-	cfg.WebUI.ListenAddr = "[::1]:8766"
-
-	err := cfg.Validate()
-	require.ErrorContains(t, err, "web_ui.listen_addr must be IPv4-only")
-}
-
-func TestValidateRejectsMalformedWebUIListenAddr(t *testing.T) {
-	cfg := validConfig()
-	cfg.WebUI.Enabled = true
-	cfg.WebUI.ListenAddr = "127.0.0.1"
-
-	err := cfg.Validate()
-	require.ErrorContains(t, err, "parse web_ui.listen_addr")
-}
-
-func TestValidateRequiresWebUICertAndKeyTogether(t *testing.T) {
-	cfg := validConfig()
-	cfg.WebUI.Enabled = true
-	cfg.WebUI.ListenAddr = DefaultWebUIListenAddr
-	cfg.WebUI.CertFile = "web-ui.crt"
-
-	err := cfg.Validate()
-	require.ErrorContains(t, err, "web_ui.cert_file and web_ui.key_file must be set together")
-}
-
-func TestValidateAllowsWebUIOnly(t *testing.T) {
-	cfg := new(Config)
-	cfg.Workspace = "/tmp/project"
-	cfg.WebUI.Enabled = true
-	cfg.WebUI.ListenAddr = DefaultWebUIListenAddr
-	cfg.OpenAI.APIKey = "test-key"
-
-	require.NoError(t, cfg.Validate())
 }
 
 func TestValidateEnvironmentEntries(t *testing.T) {
@@ -590,12 +324,6 @@ func TestLoadExternalMCPUsersRejectsInvalidInputs(t *testing.T) {
 
 func TestValidateAllowsChatGPTAuthWithoutAPIKey(t *testing.T) {
 	cfg := validConfig()
-	cfg.DiscordVoice.Enabled = false
-	cfg.Slack.Enabled = true
-	cfg.Slack.BotToken = "xoxb-test"
-	cfg.Slack.AppToken = "xapp-test"
-	cfg.Slack.Room = "D123"
-	cfg.Slack.HumanUserID = "U123"
 	cfg.OpenAI.APIKey = ""
 	cfg.OpenAI.RocketCodeAuth = "chatgpt"
 
@@ -605,12 +333,6 @@ func TestValidateAllowsChatGPTAuthWithoutAPIKey(t *testing.T) {
 
 func TestValidateRejectsAPIKeyAuthWithoutAPIKey(t *testing.T) {
 	cfg := validConfig()
-	cfg.DiscordVoice.Enabled = false
-	cfg.Slack.Enabled = true
-	cfg.Slack.BotToken = "xoxb-test"
-	cfg.Slack.AppToken = "xapp-test"
-	cfg.Slack.Room = "D123"
-	cfg.Slack.HumanUserID = "U123"
 	cfg.OpenAI.APIKey = ""
 
 	err := cfg.Validate()
@@ -631,10 +353,11 @@ func loadTestConfig(t *testing.T, content string) *Config {
 func validConfig() *Config {
 	cfg := new(Config)
 	cfg.Workspace = "/tmp/project"
-	cfg.DiscordVoice.Enabled = true
-	cfg.DiscordVoice.Token = "discord-token"
-	cfg.DiscordVoice.VoiceChannelID = "voice-123"
-	cfg.DiscordVoice.HumanUserID = "user-123"
+	cfg.Slack.Enabled = true
+	cfg.Slack.BotToken = "xoxb-test"
+	cfg.Slack.AppToken = "xapp-test"
+	cfg.Slack.Room = "D123"
+	cfg.Slack.HumanUserID = "U123"
 	cfg.OpenAI.APIKey = "test-key"
 
 	return cfg

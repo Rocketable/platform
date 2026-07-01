@@ -21,7 +21,7 @@ Several rocketclaw capabilities exist only because of precise RocketCode configu
 
 | Path              | File                                  | Purpose                                                                                | Prompt input expansion |
 |-------------------|---------------------------------------|----------------------------------------------------------------------------------------|------------------------|
-| Persistent bridge | `internal/rocketclaw/harnessbridge/bridge.go`  | Main, thread, Slack, Discord text, terminal CLI, browser, Discord voice, scheduled, and external MCP conversation turns. | `InputPrompts: false`  |
+| Persistent bridge | `internal/rocketclaw/harnessbridge/bridge.go`  | Main, thread, Slack, scheduled, and external MCP conversation turns. | `InputPrompts: false`  |
 | Raw run           | `internal/rocketclaw/harnessbridge/raw_run.go` | Cron and one-off cron background turns.                                                | `InputPrompts: true`   |
 
 Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell expansion. Persistent bridge input text remains literal. Raw input text expands because cron bodies are trusted workspace files. Both paths construct RocketCode with a first-party OpenAI Responses client using the configured RocketClaw OpenAI RocketCode auth path. Both paths set RocketCode's `AutoApprovePermissions` flag to true unconditionally.
@@ -107,7 +107,7 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 | `rocketclaw_reset_scheduled_messages`         | Clears scheduled messages for the owning bridge context.                                                                      |
 | `rocketclaw_update_goal`                       | Persistent bridge tool visible only when the owning conversation has an active text connector goal loop; reports `progress`, `complete`, or `blocked` with an optional explanatory `note`. |
 | `rocketclaw_attach_files_to_response`         | Persistent bridge tool that allows RocketCode to attach collected files to the outbound response through the shared outbound attachment carrier.                              |
-| `ask_user_question`                            | Persistent bridge tool visible only for qualifying human-originated Slack, Discord Text, or terminal CLI turns with a native answer path. The tool asks the originating human through that surface, blocks until answered or canceled, and returns selected option values, optional custom text, and the answer source. |
+| `ask_user_question`                            | Persistent bridge tool visible only for qualifying human-originated Slack turns with a native answer path. The tool asks the originating human through Slack, blocks until answered or canceled, and returns selected option values, optional custom text, and the answer source. |
 | `rocketclaw_i_want_human_partner_to_see_this` | Required completion tool for raw background runs; its argument is the exact human-visible final message or empty for silence. |
 
 Persistent bridge tools are restart, schedule message, reset scheduled messages, active-goal update when applicable, attach files, `ask_user_question` when the originating human turn qualifies, and path-specific custom tools. Raw-run tools are decision, outbound attachment collection, restart, schedule message, and reset scheduled messages. Raw and persistent schedule-message tools expose the same one-shot and recurring contract.
@@ -218,3 +218,5 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-06-30: Allowed guardrail and automatic permission reviewer child-run output to reach server/operator logs or traces only, while preserving exclusion from connector-visible progress, parent RocketCode output, task/tool results except existing rejection or denial text, replay, model-visible content, and session persistence.
 - 2026-07-01: Replaced missing or empty agent model inheritance with mandatory non-empty agent model declarations across all loaded agent sources and required agent creation/update guidance to ask the human for missing models.
 - 2026-07-01: Recorded the 90-second automatic permission review budget so custom reviewer guidance can recommend `reasoningEffort: low`.
+- 2026-07-01: Removed Discord Text, Discord voice, and browser voice from RocketClaw persistent-bridge embedding contracts.
+- 2026-07-01: Removed terminal CLI from RocketClaw persistent-bridge embedding contracts and `ask_user_question` native answer paths.

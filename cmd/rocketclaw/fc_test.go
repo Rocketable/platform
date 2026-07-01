@@ -392,9 +392,7 @@ func fcTestConfigJSON() string {
 	return strings.TrimSpace(`{
   "workspace": ".",
   "openai": {
-    "api_key": "shared-key",
-    "stt_key": "stt-key",
-    "tts_key": "tts-key"
+    "api_key": "shared-key"
   },
   "slack": {
     "enabled": true,

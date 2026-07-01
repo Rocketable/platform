@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -134,7 +132,7 @@ func TestRunDispatchesSubcommandErrorsBeforeDefaultConfig(t *testing.T) {
 		want string
 	}{
 		{name: "serve", args: []string{"run", "--bad-flag"}, want: "parse serve flags"},
-		{name: "doctor", args: []string{"doctor", "tts", "extra"}, want: "does not accept positional"},
+		{name: "doctor", args: []string{"doctor", "--bad"}, want: "parse doctor flags"},
 		{name: "oai", args: []string{"oai", "bogus"}, want: `unknown oai command "bogus"`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -147,34 +145,7 @@ func TestRunDispatchesSubcommandErrorsBeforeDefaultConfig(t *testing.T) {
 func TestRunDispatchesHelp(t *testing.T) {
 	output := captureStdout(t, func() error { return run([]string{"help"}) })
 	assert.Contains(t, output, "Usage:")
-	assert.Contains(t, output, "rocketclaw cli --new [agent]")
-}
-
-func TestRunDispatchesCLIHelp(t *testing.T) {
-	output := captureStdout(t, func() error { return run([]string{"cli", "help"}) })
-	assert.Contains(t, output, "rocketclaw cli --new [agent]")
-}
-
-func TestRunCLIRejectsInvalidArgumentsBeforeConfigLoad(t *testing.T) {
-	require.ErrorContains(t, runCLI([]string{"planner"}), "only with --new")
-	require.ErrorContains(t, runCLI([]string{"--new", "planner", "extra"}), "at most one agent")
-	require.ErrorContains(t, runCLI([]string{"--new", "--attach", "main"}), "only one of --new and --attach")
-}
-
-func TestRunCLIFailsClearlyWhenSocketMissingAndLockHeld(t *testing.T) {
-	workspace, err := os.MkdirTemp("/tmp", "rc-cmd-*")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(workspace)) })
-
-	t.Chdir(workspace)
-	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(`{"web_ui":{"enabled":true,"listen_addr":"127.0.0.1:0"},"openai":{"api_key":"test-key"}}`), 0o600))
-	lock, err := harnessbridge.AcquireStateStoreLock(workspace, config.DefaultWorkDir)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, lock.Close()) }()
-
-	err = runCLI([]string{"--attach", "main"})
-	require.ErrorContains(t, err, "control socket is unavailable")
-	require.ErrorIs(t, err, harnessbridge.ErrStateStoreLocked)
+	assert.NotContains(t, output, "rocketclaw cli")
 }
 
 func TestPrintStdoutReportsWriteError(t *testing.T) {

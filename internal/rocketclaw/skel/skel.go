@@ -608,8 +608,6 @@ func resetTarget(target string, logger *slog.Logger) error {
 		"state.sqlite3-shm":  {},
 		"state.sqlite3-wal":  {},
 		"state.sqlite3.lock": {},
-		"web-ui.crt":         {},
-		"web-ui.key":         {},
 	}
 
 	info, err := os.Stat(target)

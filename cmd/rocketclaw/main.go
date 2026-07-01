@@ -1,4 +1,4 @@
-// Command rocketclaw bridges Slack and Discord connectors to rocketcode.
+// Command rocketclaw bridges Slack and external MCP inputs to RocketCode.
 package main
 
 import (
@@ -21,7 +21,7 @@ type runtimeConfigFile struct {
 	Found         bool
 }
 
-const helpText = "rocketclaw\n\nUsage:\n  rocketclaw run\n  rocketclaw cli\n  rocketclaw cli --new [agent]\n  rocketclaw cli --attach <conversation-id>\n  rocketclaw setup\n  rocketclaw setup files list\n  rocketclaw setup files get <path>\n  rocketclaw doctor\n  rocketclaw lint [next|current]\n  rocketclaw agent-graph [next|current]\n  rocketclaw oai login [--headless]\n  rocketclaw fc list\n  rocketclaw fc observe [--follow|-f] [conversation-id]\n  rocketclaw fc delete <conversation-id>\n  rocketclaw help\n\nCommands:\n  run          Start rocketclaw and fail if the configuration file is missing or invalid.\n  cli          Attach a terminal CLI to the server or use embedded fallback when no server owns state.\n  setup        Interactively create rocketclaw.json, prepare root setup files, seed workspace overlays, and prepare .rocketclaw.\n  doctor       Validate configuration.\n  lint         Check effective RocketCode agent-system safety.\n  agent-graph  Print the effective RocketCode task delegation graph as DOT.\n  oai          Authenticate rocketclaw to ChatGPT for RocketCode model requests.\n  fc           Inspect rocketcode sessions.\n  help         Show this help screen.\n\nRunning `rocketclaw` without a subcommand starts the server when femtoclaw.json or rocketclaw.json is present.\nIf both files are missing, this help screen is shown instead.\n"
+const helpText = "rocketclaw\n\nUsage:\n  rocketclaw run\n  rocketclaw setup\n  rocketclaw setup files list\n  rocketclaw setup files get <path>\n  rocketclaw doctor\n  rocketclaw lint [next|current]\n  rocketclaw agent-graph [next|current]\n  rocketclaw oai login [--headless]\n  rocketclaw fc list\n  rocketclaw fc observe [--follow|-f] [conversation-id]\n  rocketclaw fc delete <conversation-id>\n  rocketclaw help\n\nCommands:\n  run          Start rocketclaw and fail if the configuration file is missing or invalid.\n  setup        Interactively create rocketclaw.json, prepare root setup files, seed workspace overlays, and prepare .rocketclaw.\n  doctor       Validate configuration.\n  lint         Check effective RocketCode agent-system safety.\n  agent-graph  Print the effective RocketCode task delegation graph as DOT.\n  oai          Authenticate rocketclaw to ChatGPT for RocketCode model requests.\n  fc           Inspect rocketcode sessions.\n  help         Show this help screen.\n\nRunning `rocketclaw` without a subcommand starts the server when femtoclaw.json or rocketclaw.json is present.\nIf both files are missing, this help screen is shown instead.\n"
 
 type exitCoder interface{ ExitCode() int }
 type exitCodeError int
@@ -48,8 +48,6 @@ func run(args []string) error {
 		switch args[0] {
 		case "run":
 			return runServe(args[1:])
-		case "cli":
-			return runCLI(args[1:])
 		case "setup":
 			return runSetup(args[1:])
 		case "doctor":

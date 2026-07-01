@@ -37,11 +37,6 @@ func SplitSlackText(text string, preferredLimit, hardLimit int) []string {
 	return splitText(text, preferredLimit, hardLimit, slackChunkEnd)
 }
 
-// SplitDiscordText splits Discord responses on the same preferred boundaries as the connector.
-func SplitDiscordText(text string, preferredLimit, hardLimit int) []string {
-	return splitText(text, preferredLimit, hardLimit, discordChunkEnd)
-}
-
 // NormalizeThreadAgents trims configured managed-agent prefixes and preserves connector-specific ordering.
 func NormalizeThreadAgents(threadAgents config.ThreadAgents, longestFirst bool) []ThreadAgent {
 	agents := make([]ThreadAgent, 0, len(threadAgents))
@@ -229,14 +224,6 @@ func slackChunkEnd(runes []rune, preferredLimit, hardLimit int) int {
 	return min(len(runes), hardLimit)
 }
 
-func discordChunkEnd(runes []rune, preferredLimit, hardLimit int) int {
-	if end := discordBoundary(runes[:min(len(runes), preferredLimit)]); end > 0 {
-		return end
-	}
-
-	return min(len(runes), hardLimit)
-}
-
 func slackBoundary(runes []rune) int {
 	for i := range slices.Backward(runes) {
 		if i > 0 && runes[i-1] == '\n' && runes[i] == '\n' {
@@ -252,16 +239,6 @@ func slackBoundary(runes []rune) int {
 
 	for i := range slices.Backward(runes) {
 		if unicode.IsSpace(runes[i]) && runes[i] != '\n' {
-			return i + 1
-		}
-	}
-
-	return 0
-}
-
-func discordBoundary(runes []rune) int {
-	for i := range slices.Backward(runes) {
-		if i > 0 && unicode.IsSpace(runes[i]) {
 			return i + 1
 		}
 	}

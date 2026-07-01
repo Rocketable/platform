@@ -3,12 +3,10 @@ package app
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -37,98 +35,6 @@ func TestRunReportsPendingRestartNotificationStartupErrors(t *testing.T) {
 	err = Run(context.Background(), &config.Config{Workspace: workspace}, "", slog.New(slog.DiscardHandler))
 	require.ErrorContains(t, err, "apply pending restart notifications")
 }
-
-func TestRunStopsWebUIOnlyRuntimeWhenContextCanceled(t *testing.T) {
-	workspace := shortTempDir(t)
-	urlCh := make(chan string, 1)
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	done := make(chan error, 1)
-
-	go func() {
-		done <- Run(ctx, &config.Config{
-			Workspace: workspace,
-			WebUI: config.WebUIConfig{
-				Enabled:    true,
-				ListenAddr: "127.0.0.1:0",
-			},
-		}, "", slog.New(webUIURLHandler{urlCh: urlCh}))
-	}()
-
-	var webURL string
-	select {
-	case webURL = <-urlCh:
-	case err := <-done:
-		require.NoError(t, err)
-		t.Fatal("Run stopped before web UI startup")
-	case <-time.After(5 * time.Second):
-		t.Fatal("Run did not report web UI URL")
-	}
-
-	certPEM, err := os.ReadFile(filepath.Join(workspace, ".rocketclaw", "web-ui.crt"))
-	require.NoError(t, err)
-
-	certPool := x509.NewCertPool()
-	require.True(t, certPool.AppendCertsFromPEM(certPEM))
-
-	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: certPool}}
-	defer transport.CloseIdleConnections()
-
-	client := &http.Client{Transport: transport}
-
-	reqCtx, stopRequest := context.WithTimeout(t.Context(), 5*time.Second)
-	defer stopRequest()
-
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, webURL, http.NoBody)
-	require.NoError(t, err)
-	resp, err := client.Do(req)
-	require.NoError(t, err)
-	require.NoError(t, resp.Body.Close())
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	cancel()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("Run did not stop after context cancellation")
-	}
-}
-
-type webUIURLHandler struct {
-	urlCh chan string
-}
-
-func (h webUIURLHandler) Enabled(context.Context, slog.Level) bool { return true }
-
-//nolint:gocritic // slog.Handler requires slog.Record by value.
-func (h webUIURLHandler) Handle(_ context.Context, r slog.Record) error {
-	if r.Message != "web UI voice mode available" {
-		return nil
-	}
-
-	r.Attrs(func(a slog.Attr) bool {
-		if a.Key != "url" {
-			return true
-		}
-
-		select {
-		case h.urlCh <- a.Value.String():
-		default:
-		}
-
-		return false
-	})
-
-	return nil
-}
-
-func (h webUIURLHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
-
-func (h webUIURLHandler) WithGroup(string) slog.Handler { return h }
 
 func TestThreadBridgeManagerCreatesSeparateBridgesPerThreadAndPersistsThem(t *testing.T) {
 	workspace := t.TempDir()
@@ -305,7 +211,7 @@ func TestThreadBridgeManagerRejectsDuplicateActiveGoal(t *testing.T) {
 	assert.Empty(t, bridge.submits)
 }
 
-func TestThreadBridgeManagerAllowsGoalAfterTerminalGoal(t *testing.T) {
+func TestThreadBridgeManagerAllowsGoalAfterCompletedGoal(t *testing.T) {
 	store := newTestSessionService(t, t.TempDir())
 	conversationID := harnessbridge.SlackThreadConversationID("D123", "111.222")
 	require.NoError(t, store.BeginGoal(conversationID, "first", "", 5))
@@ -391,30 +297,6 @@ func TestThreadBridgeManagerInterruptsExternalMCPSlackThreadAlias(t *testing.T) 
 	assert.Empty(t, queuedReplies)
 }
 
-func TestThreadBridgeManagerInterruptsExternalMCPDiscordThreadAlias(t *testing.T) {
-	store := newTestSessionService(t, t.TempDir())
-	threadKey := harnessbridge.DiscordThreadConversationID("T123")
-	conversationID := "external_mcp:planner:abc"
-
-	require.NoError(t, store.UpsertThread(threadKey, "planner"))
-	require.NoError(t, store.MarkThreadSeeded(threadKey, conversationID))
-
-	marker := &events.DiscordReplyTarget{ChannelID: "T123", MessageID: "222", ThreadID: "T123"}
-	bridge := &fakeDirectBridge{interruptResult: &events.InboundMessage{DiscordReply: marker}}
-	manager := newThreadBridgeManager(events.New(), &config.Config{DiscordText: config.DiscordTextConfig{Enabled: true}}, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
-		assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "planner", OutputTargets: events.MainOutputTargets()}, cfg)
-
-		return bridge
-	})
-
-	require.NoError(t, manager.SubmitExternalMCP(context.Background(), "planner", conversationID, &events.InboundMessage{}))
-
-	result, err := manager.InterruptThread(events.TextConversationTarget{ThreadID: "T123"})
-	require.NoError(t, err)
-	assert.Equal(t, marker, result.DiscordReply)
-	assert.Equal(t, 1, bridge.interrupts)
-}
-
 func TestThreadBridgeManagerRegistersCronThreadWithoutSubmitting(t *testing.T) {
 	workspace := t.TempDir()
 	store := newTestSessionService(t, workspace)
@@ -437,24 +319,6 @@ func TestThreadBridgeManagerRegistersCronThreadWithoutSubmitting(t *testing.T) {
 	state, err := store.Load()
 	require.NoError(t, err)
 	assert.Equal(t, harnessbridge.ThreadState{Agent: "planner", CreatedBy: harnessbridge.ThreadCreatedByCron}, state.Threads[conversationID])
-}
-
-func TestThreadBridgeManagerRegistersDiscordCronThread(t *testing.T) {
-	store := newTestSessionService(t, t.TempDir())
-	bridge := new(fakeDirectBridge)
-
-	var created bridgeConfig
-
-	manager := newThreadBridgeManager(events.New(), &config.Config{DiscordText: config.DiscordTextConfig{Enabled: true}}, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
-		created = cfg
-		return bridge
-	})
-
-	require.NoError(t, manager.RegisterCronThread(t.Context(), events.TextConversationTarget{ThreadID: "T123"}, "planner", "cron result"))
-
-	conversationID := harnessbridge.DiscordThreadConversationID("T123")
-	assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetDiscordText}}, created)
-	assert.Equal(t, []string{"seed_cron:cron result"}, bridge.ops)
 }
 
 func TestThreadBridgeManagerRejectsMissingSlackThreadTarget(t *testing.T) {
@@ -561,7 +425,7 @@ func TestThreadBridgeManagerStartNewThreadSeedsBeforeFirstPrompt(t *testing.T) {
 	result, err := manager.StartNewThread(t.Context(), &events.StartNewThreadRequest{Source: events.SourceSlack, SourceConversationID: "source-1", CurrentAgent: "main", Title: "Child", Prompt: " literal $(date) ", SlackReply: &events.SlackReplyTarget{ChannelID: "C1", MessageTS: "1", ThreadTS: "1"}}, func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadRootResult, error) {
 		rootCalls++
 		return events.StartNewThreadRootResult{Target: events.TextConversationTarget{ChannelID: "C2", MessageID: "2", ThreadID: "2"}, URL: "https://example.invalid/thread"}, nil
-	}, func(context.Context, string, string) bool { return false })
+	})
 	require.NoError(t, err)
 
 	conversationID := harnessbridge.SlackThreadConversationID("C2", "2")
@@ -1114,4 +978,21 @@ func newTestSessionService(t *testing.T, workspace string) *harnessbridge.Sessio
 	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
 
 	return service
+}
+
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	return t.TempDir()
+}
+
+func writeAppTestAgent(t *testing.T, workspace, name, content string) {
+	t.Helper()
+
+	dir := filepath.Join(workspace, config.DefaultWorkDir, "agents")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name+".md"), []byte(content), 0o600))
+}
+
+func inertStartNewThread(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadResult, error) {
+	return events.StartNewThreadResult{}, errors.New("start new thread is inert in this test")
 }

@@ -5,11 +5,11 @@ Human approval required for meaning changes: Yes
 
 ## Decision
 
-RocketClaw supports goal loops for the enabled primary text connector, started from either the `🔁` or `🏁` text trigger. A goal loop is conversation-local: it belongs to a normal managed connector conversation/session rather than to a separate goal-owned thread/session. Top-level DM and social-mode goal starts create or reuse the normal managed connector conversation first, then persist goal state for that managed conversation. Goal starts inside an existing managed text conversation attach the goal to that existing conversation/session. Each goal turn is visibly delivered in the owning managed connector conversation and continues through that persistent bridge until the goal reaches a terminal state or its turn budget is exhausted. Goal starts may include an optional `checkScript:` completion gate.
+RocketClaw supports goal loops for Slack, started from either the `🔁` or `🏁` text trigger. A goal loop is conversation-local: it belongs to a normal managed Slack conversation/session rather than to a separate goal-owned thread/session. Top-level DM and social-mode goal starts create or reuse the normal managed Slack conversation first, then persist goal state for that managed conversation. Goal starts inside an existing managed Slack conversation attach the goal to that existing conversation/session. Each goal turn is visibly delivered in the owning managed Slack conversation and continues through that persistent bridge until the goal reaches a terminal state or its turn budget is exhausted. Goal starts may include an optional `checkScript:` completion gate.
 
 ## Scope
 
-This ADR governs primary text connector goal-loop behavior, including trigger grammar, optional completion check scripts, managed-conversation routing, agent selection, existing-conversation starts, persistence, visible connector delivery, stop and interruption emojis, completion reactions, restart recovery, turn accounting, continuation ordering, the RocketCode goal-update tool, and connector-specific bindings.
+This ADR governs Slack goal-loop behavior, including trigger grammar, optional completion check scripts, managed-conversation routing, agent selection, existing-conversation starts, persistence, visible delivery, stop and interruption emojis, completion reactions, restart recovery, turn accounting, continuation ordering, and the RocketCode goal-update tool.
 
 ## Context
 
@@ -19,10 +19,10 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 
 ### Trigger Grammar
 
-- In a text connector DM, a configured-human message starts a goal loop when its trimmed text begins with `🔁` or `🏁`.
-- In text connector social mode, an allowed app/bot mention starts a goal loop when the text remaining after RocketClaw bot mention stripping begins with `🔁` or `🏁`.
-- In an existing managed text conversation, an authorized human message starts a goal loop for that existing conversation when its trimmed text begins with `🔁` or `🏁`.
-- Each text connector applies the same connector-local emoji-prefix normalization to goal starts that it applies to other emoji-prefixed starts before entering the shared goal parser. For Slack, this includes accepting Slack's `:repeat:` and `:checkered_flag:` transport text for `🔁` and `🏁` in every goal-start location.
+- In a Slack DM, a configured-human message starts a goal loop when its trimmed text begins with `🔁` or `🏁`.
+- In Slack social mode, an allowed app/bot mention starts a goal loop when the text remaining after RocketClaw bot mention stripping begins with `🔁` or `🏁`.
+- In an existing managed Slack conversation, an authorized human message starts a goal loop for that existing conversation when its trimmed text begins with `🔁` or `🏁`.
+- Slack applies the same connector-local emoji-prefix normalization to goal starts that it applies to other emoji-prefixed starts before entering the shared goal parser, including accepting Slack's `:repeat:` and `:checkered_flag:` transport text for `🔁` and `🏁` in every goal-start location.
 - If the target managed conversation already has an active goal, a new goal start must be rejected with a `❗` reaction and a visible message explaining that a goal is already in progress.
 - The shared trigger syntax is `(🔁|🏁) [maxTurns: VALUE|maxTurns:VALUE] [checkScript: VALUE|checkScript:VALUE] OBJECTIVE` after connector-local emoji-prefix normalization. Slack text-prefix normalization accepts `:repeat:` and `:checkered_flag:` in place of the emoji token.
 - `maxTurns:` is an optional leading Smalltalk-style keyword parameter. It consumes either the value attached immediately after the colon or the next whitespace-delimited value.
@@ -55,18 +55,16 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 - A goal start inside an existing managed text conversation reuses that managed conversation's existing conversation ID, session, output target, root message, and agent.
 - The persisted goal objective is the user's parsed objective text. Social-mode kickoff prompts may include recent channel context, but that contextual wrapper is not the persisted objective.
 
-### Connector Bindings
+### Slack Binding
 
 - Slack DM goal starts create normal managed Slack DM threads rooted at the triggering DM message. Slack social-mode goal starts create or use normal managed Slack channel threads rooted at app-mention messages. Slack social-mode goal starts use canonical `slack.social_mode.channels[]`; runtime connector behavior never consults legacy `slack.social_mode.channel_agents`.
 - Slack goal-loop turns use `_Pursuing Goal..._` as their infinite-goal Slack progress placeholder and `_Pursuing Goal (n/m)..._` as their finite-goal Slack progress placeholder, including kickoff turns, human re-steering turns, and automatic continuations. Non-goal Slack-visible assistant turns continue to use `_Thinking..._`.
-- Discord DM goal starts create or reuse normal managed Discord DM conversations without guild-thread mechanics. Discord social-mode goal starts create or use normal managed Discord guild-thread conversations rooted at bot-mention messages. Discord social-mode goal starts use canonical `discord_text.social_mode.channels[]`.
-- Discord Text goal-loop progress messages use `_Pursuing Goal..._` for infinite goals and `_Pursuing Goal (n/m)..._` for finite goals to visibly distinguish goal work while preserving the accumulated RocketCode progress text.
 
 ### Implementation Shape
 
-- Goal-loop ownership is connector-neutral after the enabled primary text connector has accepted and authorized the trigger. Persistent bridges and managed-conversation bridge managers use one injected primary text connector API for conversation targets, visible progress, replies, stop markers, completion markers, summaries, and restart recovery.
-- The runtime must inject exactly one primary text connector binding, Slack or Discord Text, according to configuration. Shared bridge code must not contain two parallel Slack and Discord implementations for the same goal-loop or managed-conversation operation.
-- Slack-specific and Discord-specific mechanics remain inside the connector binding implementations: Slack timestamps and threads, Discord channel/thread/message IDs, transport-native reactions, and transport-native progress surfaces.
+- Goal-loop ownership is connector-neutral after Slack has accepted and authorized the trigger. Persistent bridges and managed-conversation bridge managers use one injected primary text connector API for conversation targets, visible progress, replies, stop markers, completion markers, summaries, and restart recovery.
+- The runtime injects Slack as the primary text connector binding. Shared bridge code uses that binding for goal-loop and managed-conversation operations.
+- Slack-specific mechanics remain inside the connector binding implementation: Slack timestamps and threads, transport-native reactions, and transport-native progress surfaces.
 
 ### State And Turn Accounting
 
@@ -93,7 +91,7 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 - Every goal-loop kickoff, human re-steering turn, and automatic continuation turn must be delivered as a visible assistant turn in the owning text conversation. Goal continuation turns must not run as silent internalization-only turns.
 - An active goal continuation prompt must include the objective and current turn-budget state, and must instruct the agent to keep making progress until it can report progress, mark the goal complete, or mark the goal blocked. When a check script exists, the prompt must include the check command and explain that declaring `complete` runs it, and that check failure means the agent must use the failure output to continue working instead of declaring done.
 - RocketClaw injects a persistent-bridge goal-update tool while an active goal exists for the current conversation.
-- RocketClaw may inject the `ask_user_question` tool during human goal kickoff and human re-steering turns when the originating Slack or Discord Text message qualifies under ADR 0002. Automatic goal continuations and restart recovery continuations must not receive `ask_user_question`.
+- RocketClaw may inject the `ask_user_question` tool during human goal kickoff and human re-steering turns when the originating Slack message qualifies under ADR 0002. Automatic goal continuations and restart recovery continuations must not receive `ask_user_question`.
 - The goal-update tool lets the agent report status `progress`, `complete`, or `blocked`, with an optional `note`.
 - The goal-update tool's `note` field is the structured explanatory field for status notes, what is going on, what changed, what the agent is thinking, where the goal is heading next, what was completed, and what is blocking progress. The `note` should mirror the substance of the visible `Progress summary:` section.
 - `progress` is non-terminal: it records the latest note on the active goal, keeps persisted status `active`, does not run check scripts, does not consume an extra turn by itself, and does not enqueue extra work by itself.
@@ -126,7 +124,6 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 - Active persisted text goal loops survive RocketClaw restart.
 - Startup uses persisted managed-conversation state and output targets to ensure the managed bridge exists for each active text goal loop and enqueues one continuation for each active goal.
 - Restart recovery does not replay missed turns and does not enqueue more than one startup continuation per active goal.
-- Terminal goals do not restart.
 
 ## Non-Goals
 
@@ -174,3 +171,4 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 - 2026-06-15: Changed omitted `maxTurns:` default to `5`, added finite `_Pursuing Goal (n/m)..._` progress markers, required visible `Progress summary:` sections, extended the goal-update tool with non-terminal `progress` and explanatory `note`, and specified developer-context injection of latest active goal notes.
 - 2026-06-16: Specified that `ask_user_question` is available for human goal kickoff and re-steering turns only, not automatic or restart-recovery continuations.
 - 2026-07-01: Allowed goal-start `maxTurns:` and `checkScript:` values to be attached immediately after the colon as well as separated by whitespace.
+- 2026-07-01: Removed Discord Text and terminal goal-loop contracts, leaving Slack as the goal-loop connector binding.

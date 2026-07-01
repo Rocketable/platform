@@ -152,8 +152,8 @@ On start, you must always read:
 
 ## RocketClaw-Specific Requirements
 
-- Slack and Discord Text are product-peer text connectors.
-- Any cron reaction rerun behavior, authorization rule, channel-target restriction, rejection semantics, or scheduled cron thread behavior added to one must be checked against `internal/rocketclaw/docs/adr/0001-runtime-capabilities.md` and `internal/rocketclaw/docs/adr/0002-behavior-contracts.md`, and kept in parity with the other unless an ADR explicitly says otherwise.
+- Slack is RocketClaw's primary text connector.
+- Any cron reaction rerun behavior, authorization rule, channel-target restriction, rejection semantics, or scheduled cron thread behavior must be checked against `internal/rocketclaw/docs/adr/0001-runtime-capabilities.md` and `internal/rocketclaw/docs/adr/0002-behavior-contracts.md`.
 
 ## RocketCode-Specific Requirements
 

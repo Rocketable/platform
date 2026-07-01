@@ -1,6 +1,6 @@
 # Rocketable Platform
 
-Rocketable Platform is Rocketable's workspace-local AI agent runtime. It turns a repository or working directory into an agent environment where humans can interact through a CLI, Slack, Discord, browser voice mode, or an external MCP endpoint, while agents operate through controlled access to local files, shell commands, tools, skills, attachments, and connected services.
+Rocketable Platform is Rocketable's workspace-local AI agent runtime. It turns a repository or working directory into an agent environment where humans can interact through Slack or an external MCP endpoint, while agents operate through controlled access to local files, shell commands, tools, skills, attachments, and connected services.
 
 The platform is written in Go and is oriented around internal, workspace-local deployment rather than hosted multi-tenant SaaS.
 
@@ -16,7 +16,7 @@ See [LICENSE](LICENSE) for the full license terms.
 
 - Run workspace-aware AI agents with local instructions, agent definitions, skills, attachments, subagents, custom tools, file access, shell commands, web fetches, and explicit permission rules.
 - Keep agent work durable through SQLite-backed sessions, replay, checkpoints, connector routing, scheduled messages, restart recovery, and conversation-local goal loops.
-- Connect agents to team workflows through Slack, Discord text, Discord voice, browser voice mode, cron jobs, scheduled prompts, and an external MCP HTTP endpoint.
+- Connect agents to team workflows through Slack, cron jobs, scheduled prompts, and an external MCP HTTP endpoint.
 - Route model requests through first-party OpenAI Responses while preserving one local agent/tool model.
 - Run `openresponsesd` as a separate local OpenResponses-shaped API daemon that can route to OpenAI Responses, OpenAI-compatible Chat Completions, or Anthropic Messages upstreams.
 - Expose optional OpenTelemetry/OpenInference-compatible tracing for agent runs.
@@ -34,9 +34,9 @@ Runnable entry points:
 
 ### RocketClaw
 
-`internal/rocketclaw` is the long-running service runtime around RocketCode. It provides persistent conversations, Slack and Discord connectors, voice input/output, browser voice mode, terminal CLI attachment through a local Unix control socket, external MCP, cron-defined background prompts, one-shot and recurring scheduled messages, inbound and outbound attachments, graceful restart, and SQLite state under the selected runtime directory.
+`internal/rocketclaw` is the long-running service runtime around RocketCode. It provides persistent conversations, Slack connector handling, external MCP, cron-defined background prompts, one-shot and recurring scheduled messages, inbound and outbound attachments, graceful restart, and SQLite state under the selected runtime directory.
 
-The runnable entry point is `cmd/rocketclaw`. Run `rocketclaw help` for setup, validation, session inspection, and operational commands. `rocketclaw cli` attaches a terminal to `main`, `rocketclaw cli --new [agent]` starts a private terminal conversation, and cmux terminals can use local `/new [agent]` to open another attached terminal surface.
+The runnable entry point is `cmd/rocketclaw`. Run `rocketclaw help` for setup, validation, session inspection, and operational commands.
 
 ### Supporting Tools
 
@@ -50,9 +50,9 @@ The runnable entry point is `cmd/rocketclaw`. Run `rocketclaw help` for setup, v
 1. A workspace contains `AGENTS.md` plus optional `agents/`, `skills/`, `scripts/`, and `cron/` definitions.
 2. `rocketclaw.json` points RocketClaw at that workspace and enables connectors.
 3. RocketClaw builds runtime assets from embedded defaults, configured git overlays, and local workspace overrides.
-4. A human message, cron job, scheduled prompt, voice transcript, or MCP request enters RocketClaw and invokes RocketCode with the selected agent.
+4. A human message, cron job, scheduled prompt, or MCP request enters RocketClaw and invokes RocketCode with the selected agent.
 5. RocketCode runs model/tool turns under configured permissions.
-6. RocketClaw publishes progress, final responses, files, reactions, or voice output back through the originating connector.
+6. RocketClaw publishes progress, final responses, files, or reactions back through the originating connector.
 7. Conversation state, scheduled work, and routing metadata are persisted so the runtime can continue after restart.
 
 For local CLI experimentation, `rocketcode` and `rocketloop` run RocketCode directly in the current working directory.
@@ -74,7 +74,6 @@ For local CLI experimentation, `rocketcode` and `rocketloop` run RocketCode dire
 RocketClaw is configured with `rocketclaw.json` in the working directory. Runtime state is local to the selected workspace:
 
 - `.rocketclaw/state.sqlite3`: sessions, connector routing, scheduled messages, external MCP sessions, restart notifications, and goal-loop state.
-- `.rocketclaw/control/control.sock`: server-owned Unix socket used by `rocketclaw cli`, `rocketclaw cli --new [agent]`, and `rocketclaw cli --attach <conversation-id>`.
 - `.rocketclaw/overlays/`: configured git overlay clones for runtime assets.
 - `.rocketclaw/.rocketcode/`: RocketCode shell output and transient artifacts.
 

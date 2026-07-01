@@ -19,16 +19,11 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/cronjob"
-	"github.com/Rocketable/platform/internal/rocketclaw/discordtext"
-	"github.com/Rocketable/platform/internal/rocketclaw/discordvoice"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/externalmcp"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
-	"github.com/Rocketable/platform/internal/rocketclaw/openaiaudio"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/Rocketable/platform/internal/rocketclaw/slackconnector"
-	"github.com/Rocketable/platform/internal/rocketclaw/voice"
-	"github.com/Rocketable/platform/internal/rocketclaw/webui"
 )
 
 // ErrRestartRequested indicates rocketclaw should exit so a supervisor can restart it.
@@ -47,16 +42,11 @@ const (
 
 // Run starts rocketclaw and blocks until the context is canceled or a fatal error occurs.
 func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger) error {
-	return run(ctx, cfg, configPath, logger, nil)
-}
-
-// RunCLI starts rocketclaw with an attached terminal CLI connector.
-func RunCLI(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, options CLIOptions) error {
-	return run(ctx, cfg, configPath, logger, &options)
+	return run(ctx, cfg, configPath, logger)
 }
 
 //nolint:gocyclo // Runtime wiring is kept in one place so startup order remains explicit.
-func run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, cliOptions *CLIOptions) error {
+func run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger) error {
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -82,13 +72,9 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		shutdownDone     = make(chan struct{})
 		restartRequested = make(chan struct{})
 		mainBridge       *harnessbridge.Bridge
-		cliBridge        *harnessbridge.Bridge
 		threadBridges    *threadBridgeManager
 		cronjobs         *cronjob.Manager
-		controlSocket    *controlServer
 		slackSink        *slackconnector.Connector
-		discordTextSink  *discordtext.Connector
-		discordSink      *discordvoice.Connector
 		stops            []namedStopper
 		startThreadRoot  func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadRootResult, error)
 	)
@@ -189,8 +175,6 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	}
 
 	questionBroker := newAskUserQuestionBroker(logger)
-	controlQuestions := newControlQuestionHub()
-	questionBroker.terminalAsk = controlQuestions.ask
 
 	var externalMCPUsers map[string]string
 	if cfg.MCPExternal.Enabled {
@@ -240,14 +224,6 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 					logger.Warn("graceful shutdown stopped waiting for bridge idle", "error", err)
 				}
 
-				if cliBridge != nil {
-					logger.Info("graceful shutdown waiting for bridge idle", "bridge", "cli", "phase", "before bridge stop")
-
-					if err := cliBridge.WaitIdle(shutdownCtx); err != nil {
-						logger.Warn("graceful shutdown stopped waiting for CLI bridge idle", "error", err)
-					}
-				}
-
 				logger.Info("graceful shutdown waiting for bridge idle", "bridge", "threads", "phase", "before bridge stop")
 
 				if err := threadBridges.WaitIdle(shutdownCtx); err != nil {
@@ -270,14 +246,6 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 					logger.Warn("graceful shutdown stopped waiting for bridge idle", "error", err)
 				}
 
-				if cliBridge != nil {
-					logger.Info("graceful shutdown waiting for bridge idle", "bridge", "cli", "phase", "after intake stop")
-
-					if err := cliBridge.WaitIdle(shutdownCtx); err != nil {
-						logger.Warn("graceful shutdown stopped waiting for CLI bridge idle", "error", err)
-					}
-				}
-
 				logger.Info("graceful shutdown waiting for bridge idle", "bridge", "threads", "phase", "after intake stop")
 
 				if err := threadBridges.WaitIdle(shutdownCtx); err != nil {
@@ -287,10 +255,6 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 				logger.Info("graceful shutdown stopping bridges")
 
 				_ = threadBridges.Stop()
-				if cliBridge != nil {
-					_ = cliBridge.Stop()
-				}
-
 				_ = mainBridge.Stop()
 
 				logger.Info("graceful shutdown waiting for outbound drain")
@@ -326,7 +290,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	}
 
 	startNewThread := func(startCtx context.Context, req *events.StartNewThreadRequest) (events.StartNewThreadResult, error) {
-		return threadBridges.StartNewThread(startCtx, req, startThreadRoot, controlQuestions.openThread)
+		return threadBridges.StartNewThread(startCtx, req, startThreadRoot)
 	}
 
 	cronjobs = cronjob.New(cfg.Workspace, cfg.WorkDirName(), bus, func(jobCtx context.Context, agent, prompt string, log *slog.Logger, progress *harnessbridge.RawRunProgress) (cronjob.RunResult, error) {
@@ -346,24 +310,8 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	logger.Info(
 		"initializing rocketclaw runtime",
 		"workspace", cfg.Workspace,
-		"discord_text_enabled", cfg.DiscordText.Enabled,
-		"discord_voice_enabled", cfg.DiscordVoice.Enabled,
 		"mcp_external_enabled", cfg.MCPExternal.Enabled,
 		"slack_enabled", cfg.Slack.Enabled,
-	)
-
-	whisper := openaiaudio.NewWhisperClient(
-		cfg.OpenAI.STTAPIKey,
-		cfg.OpenAI.STTAPIBaseURL,
-		cfg.OpenAI.STTModel,
-		cfg.OpenAI.STTPrompt,
-	)
-	tts := openaiaudio.NewTTSClient(
-		cfg.OpenAI.TTSAPIKey,
-		cfg.OpenAI.TTSAPIBaseURL,
-		cfg.OpenAI.TTSModel,
-		cfg.OpenAI.TTSVoice,
-		cfg.OpenAI.TTSInstructions,
 	)
 
 	mainOutputTargets := configuredMainOutputTargets(cfg)
@@ -389,37 +337,6 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		return err
 	}
 
-	if cliOptions == nil {
-		controlSocket, err = startControlServer(runCtx, cfg, bus, rocketcodeSessions, threadBridges, controlQuestions, logger)
-		if err != nil {
-			return err
-		}
-
-		stops = append(stops, namedStopper{name: "control_socket", stop: controlSocket.Close})
-	}
-
-	if cliOptions != nil {
-		cliSession := newTerminalCLI(*cliOptions, bus, func() { startShutdown("terminal CLI exited", false) })
-
-		questionBroker.terminalAsk = cliSession.askUserQuestion
-		if cliSession.newConversation {
-			cliBridge = harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: cliSession.conversationID, Agent: cliSession.agent, ConsumeSharedInbound: false, OutputTargets: []events.OutputTarget{events.OutputTargetTerminal}, RequestRestart: requestRestart, AskUserQuestion: questionBroker.ask, StartNewThread: startNewThread, SessionService: rocketcodeSessions}, logger)
-			if err := cliBridge.Start(runCtx); err != nil {
-				return fmt.Errorf("start terminal CLI bridge: %w", err)
-			}
-
-			cliSession.submit = cliBridge.Submit
-			cliSession.summarize = cliBridge.Summarize
-			cliSession.publishMain = bus.PublishInbound
-		} else {
-			cliSession.submit = func(submitCtx context.Context, inbound *events.InboundMessage) error {
-				return bus.PublishInbound(submitCtx, inbound)
-			}
-		}
-
-		cliSession.Start(runCtx)
-	}
-
 	defer func() {
 		logger.Info("shutting down rocketclaw runtime")
 		startShutdown("runtime cleanup", false)
@@ -429,7 +346,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	if cfg.Slack.Enabled {
 		logger.Info("starting Slack connector", "room", cfg.Slack.Room)
 
-		slackSink = slackconnector.New(&cfg.Slack, bus, cfg.EmergencySafeWords, cfg.ThreadAgents, threadBridges, cronjobs, mainBridge.InterruptActiveTurn, questionBroker.answer, questionBroker.answerText, logger)
+		slackSink = slackconnector.New(&cfg.Slack, bus, cfg.EmergencySafeWords, cfg.ThreadAgents, threadBridges, cronjobs, mainBridge.InterruptActiveTurn, questionBroker.answer, logger)
 		questionBroker.post, questionBroker.delete = slackSink.AskUserQuestion, slackSink.DeleteUserQuestion
 		startThreadRoot = slackSink.StartNewThreadRoot
 
@@ -441,25 +358,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		stops = append(stops, namedStopper{name: "slack", stop: slackSink.Stop})
 	}
 
-	if cfg.DiscordText.Enabled {
-		logger.Info("starting Discord text connector", "channel_id", cfg.DiscordText.ChannelID)
-
-		discordTextSink = discordtext.New(&cfg.DiscordText, bus, cfg.ThreadAgents, threadBridges, cronjobs, mainBridge.InterruptActiveTurn, questionBroker.answer, questionBroker.answerText, logger)
-		questionBroker.post, questionBroker.delete = discordTextSink.AskUserQuestion, discordTextSink.DeleteUserQuestion
-		startThreadRoot = func(_ context.Context, req *events.StartNewThreadRequest) (events.StartNewThreadRootResult, error) {
-			return discordTextSink.StartNewThreadRoot(req)
-		}
-
-		if err := discordTextSink.Start(runCtx); err != nil {
-			return fmt.Errorf("start Discord text connector: %w", err)
-		}
-
-		cronjobs.SendTextChannel = discordTextSink.SendCronjobChannelThread
-		stops = append(stops, namedStopper{name: "discord_text", stop: discordTextSink.Stop})
-	}
-
 	primaryTextSend := func(context.Context, *events.OutboundMessage) error { return nil }
-	relayPrimaryTextVoice := func(context.Context, string, string) (*events.InboundMessage, error) { return nil, nil }
 	textRelay := func(context.Context, string, []events.OutboundAttachment, *events.InboundMessage, string) (*events.InboundMessage, error) {
 		return nil, nil
 	}
@@ -467,9 +366,6 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	if slackSink != nil {
 		primaryTextSend = slackSink.SendResponse
-		relayPrimaryTextVoice = func(relayCtx context.Context, text, purpose string) (*events.InboundMessage, error) {
-			return relayVoiceUtteranceToSlack(relayCtx, slackSink, text, logger, purpose)
-		}
 		textRelay = func(relayCtx context.Context, text string, attachments []events.OutboundAttachment, reply *events.InboundMessage, channelName string) (*events.InboundMessage, error) {
 			var (
 				target *events.SlackReplyTarget
@@ -502,56 +398,10 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 				slackSink.CleanupPendingReplyPlaceholder(cleanupCtx, reply.SlackReply)
 			}
 		}
-	} else if discordTextSink != nil {
-		primaryTextSend = discordTextSink.SendResponse
-		relayPrimaryTextVoice = func(relayCtx context.Context, text, purpose string) (*events.InboundMessage, error) {
-			return relayVoiceUtteranceToDiscord(relayCtx, discordTextSink, text, logger, purpose)
-		}
-		textRelay = func(relayCtx context.Context, text string, attachments []events.OutboundAttachment, reply *events.InboundMessage, channelID string) (*events.InboundMessage, error) {
-			var (
-				target *events.DiscordReplyTarget
-				err    error
-			)
-
-			if reply != nil && reply.DiscordReply != nil {
-				target, err = discordTextSink.SendExternalMCPThreadRelay(relayCtx, reply.DiscordReply.ThreadID, text, attachments)
-			} else {
-				target, err = discordTextSink.SendExternalMCPRelay(relayCtx, channelID, text, attachments)
-			}
-
-			if err != nil {
-				return nil, fmt.Errorf("send Discord external MCP relay: %w", err)
-			}
-
-			return &events.InboundMessage{DiscordReply: target}, nil
-		}
 	}
 
 	if err := cronjobs.Start(runCtx); err != nil {
 		return fmt.Errorf("start cronjobs: %w", err)
-	}
-
-	var webUI *webui.Server
-
-	if cfg.WebUI.Enabled {
-		webRelay := func(relayCtx context.Context, text string) (*events.InboundMessage, error) {
-			return relayPrimaryTextVoice(relayCtx, text, "browser voice utterance")
-		}
-
-		webPublisher := voice.NewTranscriptionPublisher(bus, logger, events.SourceWebVoice, cfg.EmergencySafeWords, webRelay)
-
-		logger.Info("starting web UI listener", "listen_addr", cfg.WebUI.ListenAddr)
-
-		webUI, err = webui.StartIn(runCtx, logger, cfg.Workspace, cfg.WorkDirName(), cfg.WebUI.ListenAddr, cfg.WebUI.CertFile, cfg.WebUI.KeyFile, whisper, tts, webPublisher)
-		if err != nil {
-			return fmt.Errorf("start web UI HTTPS server: %w", err)
-		}
-
-		for _, url := range webUI.URLs() {
-			logger.Info("web UI voice mode available", "url", url)
-		}
-
-		stops = append(stops, namedStopper{name: "web_ui", stop: webUI.Close})
 	}
 
 	if cfg.MCPExternal.Enabled {
@@ -585,57 +435,14 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		stops = append(stops, namedStopper{name: "external_mcp", stop: externalMCP.Close})
 	}
 
-	if cfg.DiscordVoice.Enabled {
-		if cfg.OpenAI.STTAPIKey == "" || cfg.OpenAI.TTSAPIKey == "" {
-			logger.Warn("Discord voice disabled because OpenAI TTS/STT API keys are missing")
-		} else {
-			logger.Info("starting Discord voice connector", "voice_channel_id", cfg.DiscordVoice.VoiceChannelID)
-
-			discordSink, err = discordvoice.New(runCtx, cfg.DiscordVoice, bus, tts, requestRestart, logger)
-			if err != nil {
-				return fmt.Errorf("start Discord connector: %w", err)
-			}
-
-			discordRelay := func(relayCtx context.Context, text string) (*events.InboundMessage, error) {
-				return relayPrimaryTextVoice(relayCtx, text, "discord voice utterance")
-			}
-
-			processor := voice.NewProcessor(bus, whisper, logger, cfg.EmergencySafeWords, discordRelay)
-			processor.Start(runCtx)
-		}
-	}
-
-	if discordSink != nil {
-		stops = append(stops, namedStopper{name: "discord_voice", stop: func(context.Context) error {
-			return discordSink.Stop()
-		}})
-	}
-
 	slackSend := func(context.Context, *events.OutboundMessage) error { return nil }
 	if slackSink != nil {
 		slackSend = primaryTextSend
 	}
 
-	discordSend := func(context.Context, *events.OutboundMessage) error { return nil }
-	if discordSink != nil {
-		discordSend = discordSink.SendResponse
-	}
-
-	discordTextSend := func(context.Context, *events.OutboundMessage) error { return nil }
-	if discordTextSink != nil {
-		discordTextSend = primaryTextSend
-	}
-
-	webSend := func(context.Context, *events.OutboundMessage) error { return nil }
-	if webUI != nil {
-		webSend = webUI.SendResponse
-	}
-
 	logger.Info(
 		"outbound routing loop started",
 		"slack_enabled", slackSink != nil,
-		"discord_text_enabled", discordTextSink != nil,
-		"discord_voice_enabled", discordSink != nil,
 	)
 
 	go func() {
@@ -646,7 +453,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		}
 	}()
 
-	err = outboundLoopWithDiscordText(runCtx, bus, slackSend, discordTextSend, discordSend, webSend, logger)
+	err = outboundLoop(runCtx, bus, slackSend, logger)
 
 	select {
 	case <-restartRequested:
@@ -663,63 +470,7 @@ func configuredMainOutputTargets(cfg *config.Config) []events.OutputTarget {
 		targets = append(targets, events.OutputTargetSlackMain)
 	}
 
-	if cfg.DiscordText.Enabled {
-		targets = append(targets, events.OutputTargetDiscordText)
-	}
-
-	if cfg.DiscordVoice.Enabled {
-		targets = append(targets, events.OutputTargetDiscord)
-	}
-
 	return targets
-}
-
-func relayVoiceUtteranceToSlack(
-	ctx context.Context,
-	slackSink *slackconnector.Connector,
-	text string,
-	logger *slog.Logger,
-	purpose string,
-) (*events.InboundMessage, error) {
-	logger.Info("relaying voice utterance to Slack before main session", "purpose", purpose, "text_len", len(text), "text", text)
-
-	var replyTarget *events.SlackReplyTarget
-
-	err := retrySlackDelivery(ctx, logger, purpose+" relay", func(sendCtx context.Context) error {
-		var err error
-		if purpose == "browser voice utterance" {
-			replyTarget, err = slackSink.SendWebVoiceRelay(sendCtx, text)
-		} else {
-			replyTarget, err = slackSink.SendDiscordRelay(sendCtx, text)
-		}
-
-		if err != nil {
-			return fmt.Errorf("send Slack voice relay: %w", err)
-		}
-
-		return nil
-	})
-
-	if err != nil || replyTarget == nil {
-		return nil, err
-	}
-
-	return &events.InboundMessage{SlackReply: replyTarget}, nil
-}
-
-func relayVoiceUtteranceToDiscord(ctx context.Context, discordSink *discordtext.Connector, text string, logger *slog.Logger, purpose string) (*events.InboundMessage, error) {
-	logger.Info("relaying voice utterance to Discord text before main session", "purpose", purpose, "text_len", len(text), "text", text)
-
-	replyTarget, err := discordSink.SendVoiceRelay(ctx, text)
-	if err != nil {
-		return nil, fmt.Errorf("send Discord voice relay: %w", err)
-	}
-
-	if replyTarget == nil {
-		return nil, nil
-	}
-
-	return &events.InboundMessage{DiscordReply: replyTarget}, nil
 }
 
 //nolint:gocyclo // External MCP routing branches are explicit to preserve main vs fork semantics.
@@ -791,11 +542,6 @@ func startExternalMCPServer(
 
 					if channelID, threadTS, ok := harnessbridge.SlackThreadTarget(conversationID); ok {
 						reply = &events.InboundMessage{SlackReply: &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}}
-						break
-					}
-
-					if threadID, ok := harnessbridge.DiscordThreadTarget(conversationID); ok {
-						reply = &events.InboundMessage{DiscordReply: &events.DiscordReplyTarget{ChannelID: threadID, ThreadID: threadID}}
 						break
 					}
 				}
@@ -879,8 +625,6 @@ func startExternalMCPServer(
 			if reply.SlackReply != nil {
 				reply.SlackReply.ThreadTS = reply.SlackReply.MessageTS
 				threadKey = harnessbridge.SlackThreadConversationID(reply.SlackReply.ChannelID, reply.SlackReply.ThreadTS)
-			} else if reply.DiscordReply != nil {
-				threadKey = harnessbridge.DiscordThreadConversationID(reply.DiscordReply.ThreadID)
 			}
 
 			if err := store.UpsertThread(threadKey, usedAgent); err != nil {
@@ -972,7 +716,6 @@ func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Contex
 
 	if reply != nil {
 		inbound.SlackReply = reply.SlackReply
-		inbound.DiscordReply = reply.DiscordReply
 	}
 
 	resultCh := inbound.EnableResponseWait()
@@ -1007,13 +750,10 @@ func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Contex
 	}
 }
 
-func outboundLoopWithDiscordText(
+func outboundLoop(
 	ctx context.Context,
 	bus *events.Bus,
 	slackSend func(context.Context, *events.OutboundMessage) error,
-	discordTextSend func(context.Context, *events.OutboundMessage) error,
-	discordSend func(context.Context, *events.OutboundMessage) error,
-	webSend func(context.Context, *events.OutboundMessage) error,
 	logger *slog.Logger,
 ) error {
 	type outboundTargetDelivery struct {
@@ -1028,7 +768,7 @@ func outboundLoopWithDiscordText(
 			for delivery := range queue {
 				started := time.Now()
 				attrs := make([]any, 0, 26)
-				attrs = append(attrs, "target", target, "source", delivery.msg.Source, "conversation_id", delivery.msg.ConversationID, "turn_id", delivery.msg.TurnID, "web_session_id", delivery.msg.WebSessionID, "sequence", delivery.msg.Sequence, "complete", delivery.msg.Complete, "post_progress_text", delivery.msg.PostProgressText, "text_len", len(delivery.msg.Text), "text_rune_len", len([]rune(delivery.msg.Text)), "progress_text_len", len([]rune(delivery.msg.ProgressText)))
+				attrs = append(attrs, "target", target, "source", delivery.msg.Source, "conversation_id", delivery.msg.ConversationID, "turn_id", delivery.msg.TurnID, "sequence", delivery.msg.Sequence, "complete", delivery.msg.Complete, "post_progress_text", delivery.msg.PostProgressText, "text_len", len(delivery.msg.Text), "text_rune_len", len([]rune(delivery.msg.Text)), "progress_text_len", len([]rune(delivery.msg.ProgressText)))
 				logger.Info("starting outbound target delivery", attrs...)
 
 				err := deliver(ctx, delivery.msg)
@@ -1055,45 +795,8 @@ func outboundLoopWithDiscordText(
 
 	slackQueue := startWorker("slack_main", slackDeliver)
 
-	discordTextDeliver := func(sendCtx context.Context, msg *events.OutboundMessage) error {
-		if err := discordTextSend(sendCtx, msg); err != nil {
-			return fmt.Errorf("send Discord text response: %w", err)
-		}
-
-		return nil
-	}
-
-	discordTextQueue := startWorker("discord_text", discordTextDeliver)
-
-	discordDeliver := func(sendCtx context.Context, msg *events.OutboundMessage) error {
-		err := discordSend(sendCtx, msg)
-		if errors.Is(err, discordvoice.ErrPlaybackInterrupted) {
-			return nil
-		}
-
-		if err != nil {
-			return fmt.Errorf("send Discord response: %w", err)
-		}
-
-		return nil
-	}
-
-	discordQueue := startWorker("discord", discordDeliver)
-
-	webDeliver := func(sendCtx context.Context, msg *events.OutboundMessage) error {
-		if err := webSend(sendCtx, msg); err != nil {
-			return fmt.Errorf("send web UI response: %w", err)
-		}
-
-		return nil
-	}
-
-	webQueue := startWorker("web_ui", webDeliver)
-
 	defer func() {
-		for _, queue := range []chan outboundTargetDelivery{slackQueue, discordTextQueue, discordQueue, webQueue} {
-			close(queue)
-		}
+		close(slackQueue)
 	}()
 
 	dispatch := func(queue chan outboundTargetDelivery, msg *events.OutboundMessage, notify func(error)) {
@@ -1119,24 +822,6 @@ func outboundLoopWithDiscordText(
 			pending++
 
 			dispatch(slackQueue, msg, notify)
-		}
-
-		if slices.Contains(msg.Targets, events.OutputTargetDiscordText) {
-			pending++
-
-			dispatch(discordTextQueue, msg, notify)
-		}
-
-		if slices.Contains(msg.Targets, events.OutputTargetDiscord) || discordQueue != nil && msg.Source == events.SourceDiscordVoice && msg.ProgressText != "" {
-			pending++
-
-			dispatch(discordQueue, msg, notify)
-		}
-
-		if slices.Contains(msg.Targets, events.OutputTargetWebUI) {
-			pending++
-
-			dispatch(webQueue, msg, notify)
 		}
 
 		if pending == 0 {

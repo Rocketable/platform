@@ -34,7 +34,7 @@ const (
 	maxSlackImageDownloadBytes                                                                                                     = 16 << 20
 	slackTextLimit, slackBlockTextLimit, slackPreferredChunkSize                                                                   = 3800, 3000, 3200
 	slackOnDemandCronPrefix, slackOnDemandCronReaction, slackRobotReaction                                                         = ":repeat_one:", "repeat_one", "robot_face"
-	slackDiscordRelayReaction, slackWebVoiceRelayReaction, slackExternalMCPRelayReaction                                           = "calling", "studio_microphone", "satellite_antenna"
+	slackExternalMCPRelayReaction                                                                                                  = "satellite_antenna"
 	slackBufferedReaction, slackSummaryReaction, slackGoalStopSignReaction, slackGoalStopButtonReaction, slackGoalCompleteReaction = "hourglass_flowing_sand", "floppy_disk", "octagonal_sign", "stop_button", "white_check_mark"
 	slackInterruptionReaction, slackMainStackKey, slackImmediatePlaceholder, slackAnswerPlaceholder                                = "exclamation", "main", "_Thinking..._", "\u200B"
 	slackThinkingFlushInterval                                                                                                     = 2 * time.Second
@@ -85,7 +85,6 @@ type Connector struct {
 	oneOffCronjobs     primarytext.OneOffCronjobRunner
 	interruptMainTurn  func() *events.InboundMessage
 	answerQuestion     func(context.Context, string, events.AskUserQuestionAnswer) bool
-	answerQuestionText func(context.Context, events.Source, events.TextConversationTarget, string) bool
 
 	api          *slack.Client
 	botUserID    string
@@ -127,14 +126,14 @@ type slackBufferedMessage struct {
 }
 
 // New constructs a Slack connector.
-func New(cfg *config.SlackConfig, bus *events.Bus, emergencySafeWords []string, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs primarytext.OneOffCronjobRunner, interruptMainTurn func() *events.InboundMessage, answerQuestion func(context.Context, string, events.AskUserQuestionAnswer) bool, answerQuestionText func(context.Context, events.Source, events.TextConversationTarget, string) bool, logger *slog.Logger) *Connector {
+func New(cfg *config.SlackConfig, bus *events.Bus, emergencySafeWords []string, threadAgents config.ThreadAgents, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs primarytext.OneOffCronjobRunner, interruptMainTurn func() *events.InboundMessage, answerQuestion func(context.Context, string, events.AskUserQuestionAnswer) bool, logger *slog.Logger) *Connector {
 	api := slack.New(cfg.BotToken, slack.OptionAppLevelToken(cfg.AppToken), slack.OptionRetry(3))
 
 	return &Connector{
 		log: logger.With("component", "slack"), config: *cfg, bus: bus,
 		emergencySafeWords: slices.Clone(emergencySafeWords), threadAgents: primarytext.NormalizeThreadAgents(threadAgents, true), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs, interruptMainTurn: interruptMainTurn,
-		answerQuestion: answerQuestion, answerQuestionText: answerQuestionText,
-		api: api, socketEvents: make(chan slackSocketEvent, 50),
+		answerQuestion: answerQuestion,
+		api:            api, socketEvents: make(chan slackSocketEvent, 50),
 		newSocketClient: func(api *slack.Client) *socketmode.Client {
 			return socketmode.New(api)
 		},
@@ -338,60 +337,6 @@ func slackReplyDestination(defaultChannelID string, replyTarget *events.SlackRep
 	}
 
 	return channelID, strings.TrimSpace(replyTarget.ThreadTS)
-}
-
-// SendDiscordRelay mirrors a Discord utterance into Slack before the main session handles it.
-func (c *Connector) SendDiscordRelay(ctx context.Context, text string) (*events.SlackReplyTarget, error) {
-	return c.sendVoiceRelay(ctx, text, slackDiscordRelayReaction, "send Slack Discord relay")
-}
-
-// SendWebVoiceRelay mirrors a browser web voice utterance into Slack before the main session handles it.
-func (c *Connector) SendWebVoiceRelay(ctx context.Context, text string) (*events.SlackReplyTarget, error) {
-	return c.sendVoiceRelay(ctx, text, slackWebVoiceRelayReaction, "send Slack web voice relay")
-}
-
-//nolint:funcorder // Shared helper is kept next to the voice relay entrypoints.
-func (c *Connector) sendVoiceRelay(ctx context.Context, text, reaction, errLabel string) (*events.SlackReplyTarget, error) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return nil, nil
-	}
-
-	options := []slack.MsgOption{slack.MsgOptionText(text, false)}
-
-	profile := c.humanProfile
-	if profile == nil {
-		fetched, err := c.fetchHumanProfile(ctx)
-		if err == nil {
-			c.humanProfile = fetched
-			profile = fetched
-		}
-	}
-
-	if profile != nil {
-		options = append(options, slack.MsgOptionUsername(profile.DisplayName))
-		if profile.IconURL != "" {
-			options = append(options, slack.MsgOptionIconURL(profile.IconURL))
-		}
-	} else {
-		options = []slack.MsgOption{slack.MsgOptionText(quoteDiscordRelay(text), false)}
-	}
-
-	channelID, messageTS, err := c.api.PostMessageContext(ctx, c.config.Room, options...)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", errLabel, err)
-	}
-
-	replyTarget := &events.SlackReplyTarget{ChannelID: channelID, MessageTS: messageTS, ThreadTS: ""}
-	if _, err := c.createReplyPlaceholders(ctx, replyTarget, slackImmediatePlaceholder); err != nil {
-		return nil, err
-	}
-
-	c.ensureSlackStack(slackMainStackKey)
-	c.addRobotReaction(ctx, replyTarget)
-	c.addReaction(ctx, replyTarget, reaction, "add Slack voice relay reaction")
-
-	return replyTarget, nil
 }
 
 // SendExternalMCPRelay mirrors an external MCP prompt into Slack before the main session handles it.
@@ -1224,10 +1169,6 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 	}, text)
 	if slices.Contains(c.emergencySafeWords, normalizedText) {
 		os.Exit(254)
-	}
-
-	if c.answerQuestionText(ctx, events.SourceSlack, events.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS}, text) {
-		return
 	}
 
 	if socialThreadReply && c.slackSocialThreadReplyPingsAway(rawText) {
@@ -2336,16 +2277,6 @@ func (c *Connector) createReplyPlaceholdersOrWarn(ctx context.Context, replyTarg
 	}
 }
 
-func (c *Connector) ensureSlackStack(key string) {
-	if strings.TrimSpace(key) == "" {
-		return
-	}
-
-	c.mu.Lock()
-	c.ensureSlackStackLocked(key)
-	c.mu.Unlock()
-}
-
 func (c *Connector) ensureSlackStackLocked(key string) {
 	if strings.TrimSpace(key) == "" {
 		return
@@ -2679,13 +2610,4 @@ func (c *Connector) fetchHumanProfile(ctx context.Context) (*humanProfileSnapsho
 		DisplayName: displayName,
 		IconURL:     iconURL,
 	}, nil
-}
-
-func quoteDiscordRelay(text string) string {
-	quotedLines := make([]string, 0, strings.Count(text, "\n")+1)
-	for line := range strings.SplitSeq(text, "\n") {
-		quotedLines = append(quotedLines, "> "+line)
-	}
-
-	return "Discord utterance:\n" + strings.Join(quotedLines, "\n")
 }

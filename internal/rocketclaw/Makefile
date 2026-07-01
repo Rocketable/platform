@@ -12,7 +12,6 @@ vendor: .FORCE
 	go mod vendor
 
 generate: vendor
-	go generate ./discordvoice/internal/aesgcm8
 	go generate ./emoji
 
 lint: vendor
@@ -22,11 +21,11 @@ build: generate lint
 	go build -o ../../bin/rocketclaw ../../cmd/rocketclaw
 
 cloc:
-	@printf "Go cloc (cmd/rocketclaw and internal/rocketclaw, excluding generated discordvoice/internal/aesgcm8 and emoji only)\n"
+	@printf "Go cloc (cmd/rocketclaw and internal/rocketclaw, excluding generated emoji only)\n"
 	@set -eu; \
-	go_source_cloc=$$(cloc --json --include-lang=Go --fullpath --not-match-d='(discordvoice/internal/aesgcm8|emoji)' --not-match-f='(_test\.go)$$' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
-	go_test_cloc=$$(cloc --json --include-lang=Go --fullpath --not-match-d='(discordvoice/internal/aesgcm8|emoji)' --match-f='(_test\.go)$$' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
-	go_total_cloc=$$(cloc --json --include-lang=Go --fullpath --not-match-d='(discordvoice/internal/aesgcm8|emoji)' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
+	go_source_cloc=$$(cloc --json --include-lang=Go --fullpath --not-match-d='emoji' --not-match-f='(_test\.go)$$' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
+	go_test_cloc=$$(cloc --json --include-lang=Go --fullpath --not-match-d='emoji' --match-f='(_test\.go)$$' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
+	go_total_cloc=$$(cloc --json --include-lang=Go --fullpath --not-match-d='emoji' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
 	limit=$(GO_SOURCE_CLOC_BUDGET); \
 	hazard_zone=$(GO_SOURCE_CLOC_HAZARD_ZONE); \
 	hazard_cloc=$$((limit - hazard_zone)); \
@@ -48,7 +47,7 @@ check-code-metrics:
 
 check-cloc-budget:
 	@set -eu; \
-	go_source_cloc=$$(cloc --json --include-lang=Go --fullpath --not-match-d='(discordvoice/internal/aesgcm8|emoji)' --not-match-f='(_test\.go)$$' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
+	go_source_cloc=$$(cloc --json --include-lang=Go --fullpath --not-match-d='emoji' --not-match-f='(_test\.go)$$' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
 	[ -n "$$go_source_cloc" ] || { printf "source cloc budget failed: unable to read source cloc\n"; exit 1; }; \
 	limit=$(GO_SOURCE_CLOC_BUDGET); \
 	hazard_zone=$(GO_SOURCE_CLOC_HAZARD_ZONE); \

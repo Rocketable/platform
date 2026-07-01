@@ -145,15 +145,6 @@ func TestCompleteResponseWithAttachmentsClonesAttachments(t *testing.T) {
 	require.Equal(t, []OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}, result.Attachments)
 }
 
-func TestAudioQueue(t *testing.T) {
-	bus := New()
-	defer bus.Close()
-
-	chunk := &AudioChunk{SessionID: "s", SpeakerID: "u", Source: SourceDiscordVoice, RTPSequence: 1, Timestamp: 2, SSRC: 3, SampleRate: 48000, Channels: 2, Format: "opus", Data: []byte{1, 2, 3}}
-	require.NoError(t, bus.PublishAudio(context.Background(), chunk))
-	require.Equal(t, chunk, requireAudioChunk(t, bus, time.Second))
-}
-
 func TestBusCanceledOperations(t *testing.T) {
 	bus := New()
 	defer bus.Close()
@@ -163,7 +154,6 @@ func TestBusCanceledOperations(t *testing.T) {
 
 	require.ErrorIs(t, bus.PublishInbound(ctx, NewMainInboundMessage("test", InboundKindPrompt, "", "inbound", true)), context.Canceled)
 	require.ErrorIs(t, bus.PublishOutbound(ctx, NewMainOutboundMessage(SourceSystem, "outbound")), context.Canceled)
-	require.ErrorIs(t, bus.PublishAudio(ctx, &AudioChunk{}), context.Canceled)
 
 	require.NoError(t, bus.PublishInbound(context.Background(), NewMainInboundMessage("test", InboundKindPrompt, "", "inbound", true)))
 	require.ErrorIs(t, bus.WaitInboundDequeued(ctx, slog.New(slog.DiscardHandler)), context.Canceled)
@@ -172,15 +162,14 @@ func TestBusCanceledOperations(t *testing.T) {
 	require.ErrorIs(t, bus.WaitOutboundIdle(ctx, slog.New(slog.DiscardHandler)), context.Canceled)
 }
 
-func TestPublishAudioAfterCloseReturnsErrBusClosed(t *testing.T) {
+func TestPublishOutboundAfterCloseReturnsErrBusClosed(t *testing.T) {
 	bus := New()
 	bus.Close()
 
 	require.ErrorIs(t, bus.PublishOutbound(context.Background(), NewMainOutboundMessage(SourceSystem, "late")), ErrBusClosed)
-	require.ErrorIs(t, bus.PublishAudio(context.Background(), &AudioChunk{}), ErrBusClosed)
 }
 
-func TestBusCloseStopsInboundPublishAndAudioIterator(t *testing.T) {
+func TestBusCloseStopsInboundPublishAndIterator(t *testing.T) {
 	bus := New()
 	bus.Close()
 
@@ -192,13 +181,6 @@ func TestBusCloseStopsInboundPublishAndAudioIterator(t *testing.T) {
 	}
 
 	require.Empty(t, inbound)
-
-	var chunks []*AudioChunk
-	for chunk := range bus.Audio(context.Background()) {
-		chunks = append(chunks, chunk)
-	}
-
-	require.Empty(t, chunks)
 }
 
 func requireInboundMessage(t *testing.T, bus *Bus, timeout time.Duration) *InboundMessage {
@@ -227,21 +209,6 @@ func requireOutboundMessage(t *testing.T, bus *Bus, timeout time.Duration) *Outb
 	}
 
 	t.Fatalf("timed out waiting for outbound message after %v", timeout)
-
-	return nil
-}
-
-func requireAudioChunk(t *testing.T, bus *Bus, timeout time.Duration) *AudioChunk {
-	t.Helper()
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	for chunk := range bus.Audio(ctx) {
-		return chunk
-	}
-
-	t.Fatalf("timed out waiting for audio chunk after %v", timeout)
 
 	return nil
 }

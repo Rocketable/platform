@@ -75,7 +75,7 @@ func TestAskUserQuestionBrokerDeletesQuestionBeforeTextAnswerReturns(t *testing.
 	errs := make(chan error, 1)
 
 	go func() {
-		answer, err := b.ask(t.Context(), &events.AskUserQuestionRequest{ID: "question-1", Source: events.SourceDiscordText, DiscordReply: &events.DiscordReplyTarget{ChannelID: "C1", ThreadID: "C1"}})
+		answer, err := b.ask(t.Context(), &events.AskUserQuestionRequest{ID: "question-1", Source: events.SourceSlack})
 		if err != nil {
 			errs <- err
 
@@ -94,27 +94,9 @@ func TestAskUserQuestionBrokerDeletesQuestionBeforeTextAnswerReturns(t *testing.
 		return b.pending["question-1"] != nil
 	}, time.Second, time.Millisecond)
 
-	assert.True(t, b.answerText(t.Context(), events.SourceDiscordText, events.TextConversationTarget{ChannelID: "C1", ThreadID: "C1"}, "free text"))
+	assert.True(t, b.answer(t.Context(), "question-1", events.AskUserQuestionAnswer{Custom: "free text", Source: events.SourceSlack}))
 	assert.Equal(t, "delete", <-order)
 	assert.Equal(t, "answer", <-order)
-	assert.Equal(t, events.AskUserQuestionAnswer{Custom: "free text", Source: events.SourceDiscordText}, <-done)
+	assert.Equal(t, events.AskUserQuestionAnswer{Custom: "free text", Source: events.SourceSlack}, <-done)
 	assert.Empty(t, errs)
-}
-
-func TestAskUserQuestionBrokerRoutesTerminalQuestionToTerminalAsk(t *testing.T) {
-	b := newAskUserQuestionBroker(slog.New(slog.DiscardHandler))
-	b.post = func(context.Context, *events.AskUserQuestionRequest) (events.TextConversationTarget, error) {
-		t.Fatal("terminal question used primary text connector")
-		return events.TextConversationTarget{}, nil
-	}
-	b.terminalAsk = func(_ context.Context, req *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error) {
-		assert.Equal(t, "cli:abc", req.ConversationID)
-		assert.Equal(t, "client-1", req.TerminalClientID)
-
-		return events.AskUserQuestionAnswer{Selected: []string{"yes"}, Source: events.SourceTerminalCLI}, nil
-	}
-
-	answer, err := b.ask(t.Context(), &events.AskUserQuestionRequest{ID: "question-1", Source: events.SourceTerminalCLI, ConversationID: "cli:abc", TerminalClientID: "client-1"})
-	require.NoError(t, err)
-	assert.Equal(t, events.AskUserQuestionAnswer{Selected: []string{"yes"}, Source: events.SourceTerminalCLI}, answer)
 }

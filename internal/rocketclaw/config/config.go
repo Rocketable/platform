@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -26,10 +24,7 @@ type Config struct {
 	MinimumWaitAfterHumanInteraction         string                `json:"minimum_wait_after_human_interaction"`
 	MinimumWaitAfterHumanInteractionDuration time.Duration         `json:"-"`
 	Logging                                  LoggingConfig         `json:"logging"`
-	DiscordVoice                             DiscordVoiceConfig    `json:"discord_voice"`
-	DiscordText                              DiscordTextConfig     `json:"discord_text"`
 	MCPExternal                              MCPExternalConfig     `json:"mcp_external"`
-	WebUI                                    WebUIConfig           `json:"web_ui"`
 	Slack                                    SlackConfig           `json:"slack"`
 	OpenAI                                   OpenAIConfig          `json:"openai"`
 	Instrumentation                          InstrumentationConfig `json:"instrumentation"`
@@ -56,29 +51,9 @@ type ThreadAgent struct {
 // ThreadAgents maps Slack emoji prefixes to thread routing config.
 type ThreadAgents map[string]ThreadAgent
 
-// DefaultWebUIListenAddr is the baseline browser voice-mode listener.
-const DefaultWebUIListenAddr = "0.0.0.0:8766"
-
 // LoggingConfig controls rocketclaw logging.
 type LoggingConfig struct {
 	Level string `json:"level"`
-}
-
-// DiscordVoiceConfig configures the Discord voice connector.
-type DiscordVoiceConfig struct {
-	Enabled        bool   `json:"enabled"`
-	Token          string `json:"token"`
-	VoiceChannelID string `json:"voice_channel_id"`
-	HumanUserID    string `json:"human_user_id"`
-}
-
-// DiscordTextConfig configures the Discord text connector.
-type DiscordTextConfig struct {
-	Enabled     bool             `json:"enabled"`
-	Token       string           `json:"token"`
-	ChannelID   string           `json:"channel_id"`
-	HumanUserID string           `json:"human_user_id"`
-	SocialMode  TextSocialConfig `json:"social_mode"`
 }
 
 // MCPExternalConfig configures the persistent external MCP HTTP server.
@@ -86,14 +61,6 @@ type MCPExternalConfig struct {
 	Enabled       bool     `json:"enabled"`
 	ListenAddr    string   `json:"listen_addr"`
 	AllowedAgents []string `json:"allowed_agents,omitempty"`
-}
-
-// WebUIConfig configures the browser voice-mode listener.
-type WebUIConfig struct {
-	Enabled    bool   `json:"enabled"`
-	ListenAddr string `json:"listen_addr"`
-	CertFile   string `json:"cert_file"`
-	KeyFile    string `json:"key_file"`
 }
 
 // SlackConfig configures the Slack DM connector.
@@ -120,22 +87,11 @@ type TextSocialChannelConfig struct {
 	AllowedUserIDs []string `json:"allowed_user_ids,omitempty"`
 }
 
-// OpenAIConfig configures the OpenAI audio clients.
+// OpenAIConfig configures the OpenAI client used by RocketCode.
 type OpenAIConfig struct {
 	APIKey         string `json:"api_key"`
 	APIBaseURL     string `json:"api_base_url"`
 	RocketCodeAuth string `json:"rocketcode_auth"`
-
-	STTModel      string `json:"stt_model"`
-	STTPrompt     string `json:"stt_prompt"`
-	STTAPIKey     string `json:"stt_key"`
-	STTAPIBaseURL string `json:"stt_base_url"`
-
-	TTSModel        string `json:"tts_model"`
-	TTSVoice        string `json:"tts_voice"`
-	TTSInstructions string `json:"tts_instructions"`
-	TTSAPIKey       string `json:"tts_key"`
-	TTSAPIBaseURL   string `json:"tts_base_url"`
 }
 
 // InstrumentationConfig configures OpenTelemetry/OpenInference tracing.
@@ -176,18 +132,6 @@ func Load(configPath string) (*Config, error) {
 
 	if cfg.Workspace, err = filepath.Abs(cfg.Workspace); err != nil {
 		return nil, fmt.Errorf("resolve workspace: %w", err)
-	}
-
-	if cfg.OpenAI.STTModel == "" {
-		cfg.OpenAI.STTModel = "whisper-1"
-	}
-
-	if cfg.OpenAI.TTSModel == "" {
-		cfg.OpenAI.TTSModel = "tts-1"
-	}
-
-	if cfg.OpenAI.TTSVoice == "" {
-		cfg.OpenAI.TTSVoice = "alloy"
 	}
 
 	if strings.TrimSpace(cfg.Logging.Level) == "" {
@@ -247,12 +191,8 @@ func LoadExternalMCPUsers(configPath string) (map[string]string, error) {
 
 // Validate verifies the configuration is usable for the enabled connectors.
 func (c *Config) Validate() error {
-	if !c.DiscordVoice.Enabled && !c.DiscordText.Enabled && !c.Slack.Enabled && !c.MCPExternal.Enabled && !c.WebUI.Enabled {
-		return errors.New("enable at least one connector, web_ui, or mcp_external")
-	}
-
-	if c.Slack.Enabled && c.DiscordText.Enabled {
-		return errors.New("slack and discord_text are mutually exclusive primary text connectors")
+	if !c.Slack.Enabled && !c.MCPExternal.Enabled {
+		return errors.New("enable at least one connector or mcp_external")
 	}
 
 	if c.Workspace == "" {
@@ -277,21 +217,8 @@ func (c *Config) Validate() error {
 		c.ThreadAgents = ThreadAgents{":thread:": {Agent: "main", PreSeed: false}, ":twisted_rightward_arrows:": {Agent: "main", PreSeed: true}}
 	}
 
-	for _, field := range [...]struct {
-		value    *string
-		fallback string
-	}{{&c.OpenAI.STTAPIKey, c.OpenAI.APIKey}, {&c.OpenAI.STTAPIBaseURL, c.OpenAI.APIBaseURL}, {&c.OpenAI.TTSAPIKey, c.OpenAI.APIKey}, {&c.OpenAI.TTSAPIBaseURL, c.OpenAI.APIBaseURL}} {
-		if strings.TrimSpace(*field.value) == "" {
-			*field.value = field.fallback
-		}
-	}
-
 	if err := c.normalizeRocketCodeAuth(); err != nil {
 		return err
-	}
-
-	if (c.DiscordVoice.Enabled || c.WebUI.Enabled) && (strings.TrimSpace(c.OpenAI.STTAPIKey) == "" || strings.TrimSpace(c.OpenAI.TTSAPIKey) == "") {
-		return errors.New("openai stt/tts credentials are required when OpenAI-backed audio is enabled")
 	}
 
 	if c.OpenAI.RocketCodeAuth == "api_key" && strings.TrimSpace(c.OpenAI.APIKey) == "" {
@@ -310,23 +237,11 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	if err := c.validateDiscordVoice(); err != nil {
-		return err
-	}
-
-	if err := c.validateDiscordText(); err != nil {
-		return err
-	}
-
 	if c.MCPExternal.Enabled && strings.TrimSpace(c.MCPExternal.ListenAddr) == "" {
 		return errors.New("mcp_external.listen_addr is required when mcp_external is enabled")
 	}
 
 	c.MCPExternal.AllowedAgents = normalizeStringList(c.MCPExternal.AllowedAgents)
-
-	if err := c.validateWebUI(); err != nil {
-		return err
-	}
 
 	if err := c.validateSlack(); err != nil {
 		return err
@@ -345,68 +260,6 @@ func (c *Config) normalizeRocketCodeAuth() error {
 	}
 
 	return nil
-}
-
-func (c *Config) validateDiscordVoice() error {
-	if !c.DiscordVoice.Enabled {
-		return nil
-	}
-
-	for _, field := range [...]struct{ value, message string }{{c.DiscordVoice.Token, "discord_voice.token is required when discord_voice is enabled"}, {c.DiscordVoice.VoiceChannelID, "discord_voice.voice_channel_id is required when discord_voice is enabled"}, {c.DiscordVoice.HumanUserID, "discord_voice.human_user_id is required when discord_voice is enabled"}} {
-		if strings.TrimSpace(field.value) == "" {
-			return errors.New(field.message)
-		}
-	}
-
-	return nil
-}
-
-func (c *Config) validateWebUI() error {
-	c.WebUI.CertFile = strings.TrimSpace(c.WebUI.CertFile)
-	c.WebUI.KeyFile = strings.TrimSpace(c.WebUI.KeyFile)
-
-	if (c.WebUI.CertFile == "") != (c.WebUI.KeyFile == "") {
-		return errors.New("web_ui.cert_file and web_ui.key_file must be set together")
-	}
-
-	if !c.WebUI.Enabled {
-		return nil
-	}
-
-	listenAddr := strings.TrimSpace(c.WebUI.ListenAddr)
-	if listenAddr == "" {
-		return errors.New("web_ui.listen_addr is required when web_ui is enabled")
-	}
-
-	host, _, err := net.SplitHostPort(listenAddr)
-	if err != nil {
-		return fmt.Errorf("validate web_ui: parse web_ui.listen_addr: %w", err)
-	}
-
-	addr, err := netip.ParseAddr(host)
-	if err == nil && addr.Is6() {
-		return errors.New("web_ui.listen_addr must be IPv4-only")
-	}
-
-	c.WebUI.ListenAddr = listenAddr
-
-	return nil
-}
-
-func (c *Config) validateDiscordText() error {
-	if !c.DiscordText.Enabled {
-		return nil
-	}
-
-	for _, field := range [...]struct{ value, message string }{{c.DiscordText.Token, "discord_text.token is required when discord_text is enabled"}, {c.DiscordText.ChannelID, "discord_text.channel_id is required when discord_text is enabled"}, {c.DiscordText.HumanUserID, "discord_text.human_user_id is required when discord_text is enabled"}} {
-		if strings.TrimSpace(field.value) == "" {
-			return errors.New(field.message)
-		}
-	}
-
-	c.DiscordText.SocialMode.Channels = normalizeTextSocialChannels(c.DiscordText.SocialMode.Channels, strings.TrimSpace)
-
-	return validateTextSocial("discord_text", &c.DiscordText.SocialMode)
 }
 
 func normalizeStringList(values []string) []string {

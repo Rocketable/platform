@@ -36,7 +36,6 @@ func runServe(args []string) error {
 		"workspace", cfg.Workspace,
 		"work_dir", cfg.WorkDirName(),
 		"log_level", cfg.Logging.Level,
-		"discord_enabled", cfg.DiscordVoice.Enabled,
 		"slack_enabled", cfg.Slack.Enabled,
 	)
 

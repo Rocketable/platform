@@ -60,7 +60,6 @@ const textThreadSummaryPrompt = "Summarize the current state of this managed tex
 type primaryTextBinding struct {
 	label         string
 	outputTargets []events.OutputTarget
-	discord       bool
 }
 
 type threadBridgeManager struct {
@@ -78,58 +77,35 @@ type threadBridgeManager struct {
 }
 
 func newThreadBridgeManager(bus *events.Bus, runtime *config.Config, store *harnessbridge.SessionService, logger *slog.Logger, factory bridgeFactory) *threadBridgeManager {
-	return &threadBridgeManager{log: logger.With("component", "thread_bridges"), runtime: runtime, store: store, bus: bus, factory: factory, targets: events.MainOutputTargets(), text: primaryTextBindingFor(runtime), mu: sync.Mutex{}, bridges: map[string]*managedThreadBridge{}}
+	return &threadBridgeManager{log: logger.With("component", "thread_bridges"), runtime: runtime, store: store, bus: bus, factory: factory, targets: events.MainOutputTargets(), text: primaryTextBindingFor(), mu: sync.Mutex{}, bridges: map[string]*managedThreadBridge{}}
 }
 
-func primaryTextBindingFor(runtime *config.Config) primaryTextBinding {
-	if runtime != nil && runtime.DiscordText.Enabled && !runtime.Slack.Enabled {
-		return primaryTextBinding{label: "Discord", outputTargets: []events.OutputTarget{events.OutputTargetDiscordText}, discord: true}
-	}
-
+func primaryTextBindingFor() primaryTextBinding {
 	return primaryTextBinding{label: "Slack", outputTargets: []events.OutputTarget{events.OutputTargetSlackMain}}
 }
 
 func (b primaryTextBinding) conversationID(target events.TextConversationTarget) string {
-	if b.discord {
-		return harnessbridge.DiscordThreadConversationID(strings.TrimSpace(target.ThreadID))
-	}
-
 	return harnessbridge.SlackThreadConversationID(strings.TrimSpace(target.ChannelID), strings.TrimSpace(target.ThreadID))
 }
 
 func (b primaryTextBinding) checkpointKey(target events.TextConversationTarget) string {
-	if b.discord {
-		return harnessbridge.DiscordResponseCheckpointKey(target.ChannelID, target.MessageID)
-	}
-
 	return harnessbridge.SlackResponseCheckpointKey(target.ChannelID, target.MessageID)
 }
 
 func (b primaryTextBinding) targetForConversationID(conversationID string) (events.TextConversationTarget, bool) {
-	if b.discord {
-		threadID, ok := harnessbridge.DiscordThreadTarget(conversationID)
-		return events.TextConversationTarget{ChannelID: threadID, ThreadID: threadID}, ok
-	}
-
 	channelID, threadTS, ok := harnessbridge.SlackThreadTarget(conversationID)
 
 	return events.TextConversationTarget{ChannelID: channelID, MessageID: threadTS, ThreadID: threadTS}, ok
 }
 
 func (b primaryTextBinding) setReplyThread(inbound *events.InboundMessage, target events.TextConversationTarget) {
-	if b.discord && inbound.DiscordReply != nil {
-		inbound.DiscordReply.ThreadID = strings.TrimSpace(target.ThreadID)
-	} else if !b.discord && inbound.SlackReply != nil {
+	if inbound.SlackReply != nil {
 		inbound.SlackReply.ThreadTS = strings.TrimSpace(target.ThreadID)
 	}
 }
 
 func (b primaryTextBinding) setContinuationReply(inbound *events.InboundMessage, target events.TextConversationTarget) {
-	if b.discord {
-		inbound.DiscordReply = &events.DiscordReplyTarget{ChannelID: target.ThreadID, ThreadID: target.ThreadID}
-	} else {
-		inbound.SlackReply = &events.SlackReplyTarget{ChannelID: target.ChannelID, MessageTS: target.MessageID, ThreadTS: target.ThreadID}
-	}
+	inbound.SlackReply = &events.SlackReplyTarget{ChannelID: target.ChannelID, MessageTS: target.MessageID, ThreadTS: target.ThreadID}
 }
 
 func (b primaryTextBinding) publishSummary(ctx context.Context, bus *events.Bus, log *slog.Logger, target events.TextConversationTarget, summary string) error {
@@ -138,14 +114,8 @@ func (b primaryTextBinding) publishSummary(ctx context.Context, bus *events.Bus,
 		return errors.New("thread summary is empty")
 	}
 
-	label := strings.ToLower(b.label)
-	metadata := label + "_thread_summary thread=" + strings.TrimSpace(target.ThreadID)
-
-	body := b.label + " thread summary from thread " + strings.TrimSpace(target.ThreadID) + ":\n\n" + summary
-	if !b.discord {
-		metadata = "slack_thread_summary channel=" + strings.TrimSpace(target.ChannelID) + " thread=" + strings.TrimSpace(target.ThreadID)
-		body = "Slack thread summary from channel " + strings.TrimSpace(target.ChannelID) + " thread " + strings.TrimSpace(target.ThreadID) + ":\n\n" + summary
-	}
+	metadata := "slack_thread_summary channel=" + strings.TrimSpace(target.ChannelID) + " thread=" + strings.TrimSpace(target.ThreadID)
+	body := "Slack thread summary from channel " + strings.TrimSpace(target.ChannelID) + " thread " + strings.TrimSpace(target.ThreadID) + ":\n\n" + summary
 
 	inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindInternalize, metadata, body, false)
 	if err := bus.PublishInbound(ctx, inbound); err != nil {
@@ -205,10 +175,6 @@ func (m *threadBridgeManager) StartPendingScheduledMessages() error {
 		}
 
 		outputTargets := []events.OutputTarget{events.OutputTargetSlackMain}
-		if strings.HasPrefix(conversationID, "discord-thread:") {
-			outputTargets = []events.OutputTarget{events.OutputTargetDiscordText}
-		}
-
 		if strings.HasPrefix(conversationID, "external_mcp:") {
 			outputTargets = m.targets
 		}
@@ -522,7 +488,7 @@ func (m *threadBridgeManager) StartThread(ctx context.Context, agent string, pre
 	return nil
 }
 
-func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *events.StartNewThreadRequest, createRoot func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadRootResult, error), openTerminal func(context.Context, string, string) bool) (events.StartNewThreadResult, error) {
+func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *events.StartNewThreadRequest, createRoot func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadRootResult, error)) (events.StartNewThreadResult, error) {
 	targetAgent := startNewThreadTargetAgent(req)
 	if len(req.AllowedAgents) > 0 && !slices.Contains(req.AllowedAgents, targetAgent) {
 		return events.StartNewThreadResult{}, fmt.Errorf("agent %q is not allowed on this source surface", targetAgent)
@@ -543,7 +509,7 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *events.St
 	)
 
 	switch req.Source {
-	case events.SourceSlack, events.SourceDiscordText:
+	case events.SourceSlack:
 		root, err := createRoot(ctx, req)
 		if err != nil {
 			return events.StartNewThreadResult{}, err
@@ -551,10 +517,7 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *events.St
 
 		conversationID, url = m.text.conversationID(root.Target), root.URL
 		outputTargets, label = m.text.outputTargets, m.text.label
-	case events.SourceTerminalCLI:
-		conversationID = newTerminalConversationID()
-		outputTargets, label = []events.OutputTarget{events.OutputTargetTerminal}, "terminal CLI"
-	case events.SourceDiscordVoice, events.SourceExternalMCP, events.SourceWebVoice, events.SourceSystem:
+	case events.SourceExternalMCP, events.SourceSystem:
 		return events.StartNewThreadResult{}, fmt.Errorf("rocketclaw_start_new_thread is not available for %s turns", req.Source)
 	}
 
@@ -571,20 +534,12 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *events.St
 		return events.StartNewThreadResult{}, fmt.Errorf("submit %s new thread first prompt: %w", label, err)
 	}
 
-	result := events.StartNewThreadResult{ConversationID: conversationID, URL: url}
-	if req.Source == events.SourceTerminalCLI {
-		result.AttachCommand = "rocketclaw cli --attach " + conversationID
-		result.CMUXOpened = openTerminal(ctx, req.TerminalClientID, conversationID)
-	}
-
-	return result, nil
+	return events.StartNewThreadResult{ConversationID: conversationID, URL: url}, nil
 }
 
 func startNewThreadTargetAgent(req *events.StartNewThreadRequest) string {
 	targetAgent := strings.TrimSpace(req.Agent)
-	if targetAgent == "" && req.Source == events.SourceTerminalCLI {
-		targetAgent = "main"
-	} else if targetAgent == "" {
+	if targetAgent == "" {
 		targetAgent = strings.TrimSpace(req.CurrentAgent)
 	}
 

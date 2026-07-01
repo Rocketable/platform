@@ -6,12 +6,9 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/openai/openai-go/v3 v3.37.0
-	github.com/pion/rtp v1.10.2
-	github.com/pion/webrtc/v3 v3.3.6
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/slack-go/slack v0.24.0
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/crypto v0.52.0
 	golang.org/x/image v0.41.0
 	golang.org/x/sync v0.20.0
 	modernc.org/sqlite v1.50.1
@@ -60,7 +57,6 @@ require (
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
-	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/segmentio/asm v1.2.1 // indirect

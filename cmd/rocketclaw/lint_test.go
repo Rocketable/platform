@@ -80,7 +80,7 @@ func writeLintConfig(t *testing.T, workspace string) {
 	t.Helper()
 	workspaceJSON, err := json.Marshal(workspace)
 	require.NoError(t, err)
-	content := `{"workspace":` + string(workspaceJSON) + `,"web_ui":{"enabled":true,"listen_addr":"127.0.0.1:8766"},"openai":{"api_key":"test"}}`
+	content := `{"workspace":` + string(workspaceJSON) + `,"mcp_external":{"enabled":true,"listen_addr":"127.0.0.1:8766"},"openai":{"api_key":"test"}}`
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(content), 0o600))
 }
 
