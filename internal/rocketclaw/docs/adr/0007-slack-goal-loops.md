@@ -24,9 +24,9 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 - In an existing managed text conversation, an authorized human message starts a goal loop for that existing conversation when its trimmed text begins with `🔁` or `🏁`.
 - Each text connector applies the same connector-local emoji-prefix normalization to goal starts that it applies to other emoji-prefixed starts before entering the shared goal parser. For Slack, this includes accepting Slack's `:repeat:` and `:checkered_flag:` transport text for `🔁` and `🏁` in every goal-start location.
 - If the target managed conversation already has an active goal, a new goal start must be rejected with a `❗` reaction and a visible message explaining that a goal is already in progress.
-- The shared trigger syntax is `(🔁|🏁) [maxTurns: VALUE] [checkScript: VALUE] OBJECTIVE` after connector-local emoji-prefix normalization. Slack text-prefix normalization accepts `:repeat:` and `:checkered_flag:` in place of the emoji token.
-- `maxTurns:` is an optional leading Smalltalk-style keyword parameter. It consumes the next whitespace-delimited value.
-- `checkScript:` is an optional leading Smalltalk-style keyword parameter. It consumes either the next whitespace-delimited value or one quoted command-line string, for example `checkScript: ./scripts/check.sh` or `checkScript: "./scripts/check.sh --linter-mode"`.
+- The shared trigger syntax is `(🔁|🏁) [maxTurns: VALUE|maxTurns:VALUE] [checkScript: VALUE|checkScript:VALUE] OBJECTIVE` after connector-local emoji-prefix normalization. Slack text-prefix normalization accepts `:repeat:` and `:checkered_flag:` in place of the emoji token.
+- `maxTurns:` is an optional leading Smalltalk-style keyword parameter. It consumes either the value attached immediately after the colon or the next whitespace-delimited value.
+- `checkScript:` is an optional leading Smalltalk-style keyword parameter. It consumes either the value attached immediately after the colon, the next whitespace-delimited value, or one quoted command-line string, for example `checkScript:./scripts/check.sh`, `checkScript: ./scripts/check.sh`, `checkScript:"./scripts/check.sh --linter-mode"`, or `checkScript: "./scripts/check.sh --linter-mode"`.
 - Omitted `maxTurns:` defaults to `5`.
 - Omitted `checkScript:` means completion is agent-declared with no script gate.
 - Accepted infinite values are `0`, `-1`, and case-insensitive `infinite`; all are normalized to persisted `MaxTurns: 0`.
@@ -173,3 +173,4 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 - 2026-06-14: Specified that each text connector applies connector-local emoji-prefix normalization to goal starts before the shared goal parser, including Slack's `:repeat:` and `:checkered_flag:` transport text, while preserving Slack/Discord Text symmetry.
 - 2026-06-15: Changed omitted `maxTurns:` default to `5`, added finite `_Pursuing Goal (n/m)..._` progress markers, required visible `Progress summary:` sections, extended the goal-update tool with non-terminal `progress` and explanatory `note`, and specified developer-context injection of latest active goal notes.
 - 2026-06-16: Specified that `ask_user_question` is available for human goal kickoff and re-steering turns only, not automatic or restart-recovery continuations.
+- 2026-07-01: Allowed goal-start `maxTurns:` and `checkScript:` values to be attached immediately after the colon as well as separated by whitespace.

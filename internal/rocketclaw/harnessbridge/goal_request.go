@@ -34,18 +34,18 @@ func ParseGoalRequest(text string) (GoalRequest, string, bool) {
 	}
 
 	for {
-		fields := strings.Fields(text)
-		if len(fields) == 0 {
+		text = strings.TrimSpace(text)
+		if text == "" {
 			return GoalRequest{}, "Tell me the goal after the parameters, for example `🔁 maxTurns: 5 update the docs`.", true
 		}
 
-		switch fields[0] {
-		case "maxTurns:":
-			if len(fields) == 1 {
+		if after, ok := strings.CutPrefix(text, "maxTurns:"); ok {
+			fields := strings.Fields(after)
+			if len(fields) == 0 {
 				return GoalRequest{}, "`maxTurns:` needs a value like `20`, `0`, `-1`, or `infinite`.", true
 			}
 
-			value := strings.ToLower(fields[1])
+			value := strings.ToLower(fields[0])
 			switch value {
 			case "infinite":
 				maxTurns = 0
@@ -58,16 +58,16 @@ func ParseGoalRequest(text string) (GoalRequest, string, bool) {
 				maxTurns = max(parsed, 0)
 			}
 
-			text = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(strings.TrimPrefix(text, fields[0])), fields[1]))
-		case "checkScript:":
-			value, rest, err := consumeGoalCheckScriptValue(strings.TrimSpace(strings.TrimPrefix(text, fields[0])))
+			text = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(after), fields[0]))
+		} else if after, ok := strings.CutPrefix(text, "checkScript:"); ok {
+			value, rest, err := consumeGoalCheckScriptValue(strings.TrimSpace(after))
 			if err != nil {
 				return GoalRequest{}, err.Error(), true
 			}
 
 			checkScript = value
 			text = rest
-		default:
+		} else {
 			objective := strings.TrimSpace(text)
 			if objective == "" {
 				return GoalRequest{}, "Tell me the goal after the parameters, for example `🔁 maxTurns: 5 update the docs`.", true

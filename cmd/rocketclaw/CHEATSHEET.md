@@ -7,7 +7,7 @@
 | `🧵` | `:thread:` | Slack, Discord Text | Starts a managed conversation using the configured `thread_agents` entry. | Default config maps `🧵` to agent `main` without pre-seeding. Leading known aliases are normalized before matching. |
 | `🔀` | `:twisted_rightward_arrows:` | Slack, Discord Text | Starts a managed conversation using the configured `thread_agents` entry. | Default config maps this to agent `main` with `pre_seed: true`. |
 | Configured `thread_agents` emoji or prefix | Config-specific | Slack, Discord Text | Starts a managed conversation with the configured agent and pre-seed behavior. | Prefixes may be aliases or Unicode emoji. Unknown aliases remain literal, so custom aliases can still be configured. |
-| `🔁` | Slack `:repeat:` | Slack, Discord Text | Starts a text goal loop. | Syntax: `🔁 [maxTurns: VALUE] [checkScript: VALUE] OBJECTIVE`. |
+| `🔁` | Slack `:repeat:` | Slack, Discord Text | Starts a text goal loop. | Syntax: `🔁 [maxTurns: VALUE|maxTurns:VALUE] [checkScript: VALUE|checkScript:VALUE] OBJECTIVE`. |
 | `🏁` | Slack `:checkered_flag:` | Slack, Discord Text | Starts a text goal loop. | Same grammar as `🔁`. |
 | `🛑`, `⏹️` | Slack reactions `:octagonal_sign:`, `:stop_button:` | Slack, Discord Text | Stops the active main or managed-conversation turn. | Works as an exact message. Also works as a stop reaction on supported managed/main turn surfaces. Stop feedback is marker-only: RocketClaw adds `❗` and sends no stop text. Discord uses the Unicode emoji. |
 | `❗` | Slack `:exclamation:` | Slack, Discord Text | Interruption or rejection marker. | Added by RocketClaw after stop/interruption and for duplicate active-goal rejection. Humans generally do not use this as a command. |
@@ -42,8 +42,11 @@
 | --- | --- |
 | `🏁 ship the release` | Starts a goal loop with default `maxTurns: 5`. |
 | `🏁 maxTurns: 10 ship the release` | Starts a finite goal loop with a 10-turn budget. |
+| `🏁 maxTurns:10 ship the release` | Same as above; goal parameters may attach values directly after `:`. |
 | `🏁 checkScript: ./scripts/check.sh ship the release` | Starts a goal loop that must pass the workspace-local check script before `complete` can stick. |
+| `🏁 checkScript:./scripts/check.sh ship the release` | Same as above; `checkScript:` values may attach directly after `:`. |
 | `🏁 checkScript: "./scripts/check.sh --full" ship the release` | Uses a quoted simple command for the check script. |
+| `🏁 checkScript:"./scripts/check.sh --full" ship the release` | Same as above with the quoted command attached directly after `:`. |
 | `🔁 ship the release` | Same goal-loop grammar as `🏁`; `🏁` and `🔁` are equivalent triggers. |
 | `🛑` or `⏹️` | Stops the active main or managed-conversation turn. If an active goal is present, it becomes `stopped`. |
 | `✅` | Marker RocketClaw adds when a goal reaches `complete`. Humans generally do not send it as a command. |
