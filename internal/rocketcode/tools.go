@@ -347,13 +347,16 @@ func (f *toolFactory) availableSkillSubjects() []string {
 }
 
 type skillToolParams struct {
-	Name string `json:"name"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+	Direct    bool   `json:"direct,omitempty"`
 }
 
 func (f *toolFactory) skillTool() looperTool {
 	return looperTool{
 		Definition: *functionTool("skill", f.skillDescription(), map[string]any{
-			"name": map[string]any{"type": "string"},
+			"arguments": map[string]any{"type": "string"},
+			"name":      map[string]any{"type": "string"},
 		}),
 		Permission: "skill",
 		Subjects: func(raw json.RawMessage) ([]string, error) {
@@ -397,7 +400,7 @@ func (f *toolFactory) renderSkillToolOutput(ctx context.Context, raw json.RawMes
 
 	skill, ok := f.skills.Items[input.Name]
 	if !ok {
-		return skillToolParams{}, "", fmt.Errorf("skill %q not found. Available skills: %s", input.Name, strings.Join(slices.Sorted(maps.Keys(f.skills.Items)), ", "))
+		return skillToolParams{}, "", fmt.Errorf("skill %q not found. Available skills: %s", input.Name, strings.Join(f.availableSkillNames(), ", "))
 	}
 
 	dir := path.Dir(skill.Location)
@@ -451,7 +454,33 @@ func (f *toolFactory) renderSkillToolOutput(ctx context.Context, raw json.RawMes
 		output = f.promptExpansion.expandShellCommands(ctx, output)
 	}
 
+	output = renderSkillArguments(output, input.Arguments, input.Direct)
+
 	return input, output, nil
+}
+
+func renderSkillArguments(output, arguments string, appendUnused bool) string {
+	hasPlaceholder := strings.Contains(output, "$ARGUMENTS")
+
+	output = strings.ReplaceAll(output, "$ARGUMENTS", arguments)
+	if appendUnused && !hasPlaceholder && arguments != "" {
+		output += "\n\n" + arguments
+	}
+
+	return output
+}
+
+func (f *toolFactory) availableSkillNames() []string {
+	if f.agent == nil {
+		return slices.Sorted(maps.Keys(f.skills.Items))
+	}
+
+	names := []string{}
+	for _, skill := range availableSkills(f.skills.Items, f.agent) {
+		names = append(names, skill.Name)
+	}
+
+	return names
 }
 
 func (f *toolFactory) skillDescription() string {

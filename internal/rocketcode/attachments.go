@@ -31,12 +31,19 @@ const (
 // PromptInput is one prompt plus optional model-visible attachments.
 type PromptInput struct {
 	// Role defaults to PromptInputRoleUser when empty.
-	Role        PromptInputRole `json:"role,omitempty"`
-	Text        string          `json:"text"`
-	Attachments []Attachment    `json:"attachments,omitempty"`
+	Role        PromptInputRole         `json:"role,omitempty"`
+	Text        string                  `json:"text"`
+	Attachments []Attachment            `json:"attachments,omitempty"`
+	DirectSkill *PromptInputDirectSkill `json:"directSkill,omitempty"`
 	// Responses receives user-visible response items for this prompt. The runtime
 	// closes it after the prompt's turn reaches a terminal state.
 	Responses chan<- ChatResponse `json:"-"`
+}
+
+// PromptInputDirectSkill requests a skill load before the model turn starts.
+type PromptInputDirectSkill struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 // Attachment is a model-visible file attachment encoded as a URL, usually a data URL.

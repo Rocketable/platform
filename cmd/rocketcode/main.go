@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"golang.org/x/sync/errgroup"
@@ -368,6 +369,14 @@ func promptInput(text string, root *os.Root, cwd string) (rocketcode.PromptInput
 	role := rocketcode.PromptInputRoleUser
 
 	text = strings.TrimLeftFunc(text, unicode.IsSpace)
+	if directSkill, ok, err := promptInputDirectSkill(text); ok || err != nil {
+		if err != nil {
+			return rocketcode.PromptInput{}, err
+		}
+
+		return rocketcode.PromptInput{DirectSkill: &directSkill}, nil
+	}
+
 	if rest, ok := strings.CutPrefix(text, "developer:"); ok {
 		role = rocketcode.PromptInputRoleDeveloper
 		text = strings.TrimLeftFunc(rest, unicode.IsSpace)
@@ -388,6 +397,34 @@ func promptInput(text string, root *os.Root, cwd string) (rocketcode.PromptInput
 	}
 
 	return rocketcode.PromptInput{Role: role, Text: text, Attachments: attachments}, nil
+}
+
+func promptInputDirectSkill(text string) (rocketcode.PromptInputDirectSkill, bool, error) {
+	rest, ok := strings.CutPrefix(text, "/skill")
+	if !ok {
+		return rocketcode.PromptInputDirectSkill{}, false, nil
+	}
+
+	if rest != "" {
+		if ch, _ := utf8.DecodeRuneInString(rest); !unicode.IsSpace(ch) {
+			return rocketcode.PromptInputDirectSkill{}, false, nil
+		}
+	}
+
+	rest = strings.TrimLeftFunc(rest, unicode.IsSpace)
+	if rest == "" {
+		return rocketcode.PromptInputDirectSkill{}, true, errors.New("/skill requires a skill name")
+	}
+
+	name := rest
+	arguments := ""
+
+	if i := strings.IndexFunc(rest, unicode.IsSpace); i >= 0 {
+		name = rest[:i]
+		arguments = strings.TrimLeftFunc(rest[i:], unicode.IsSpace)
+	}
+
+	return rocketcode.PromptInputDirectSkill{Name: name, Arguments: arguments}, true, nil
 }
 
 func printOutput(w io.Writer, output <-chan rocketcode.ChatResponse) error {

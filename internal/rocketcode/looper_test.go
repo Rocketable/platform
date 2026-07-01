@@ -10,6 +10,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"testing/synctest"
 	"time"
 
@@ -1486,6 +1487,123 @@ func TestLooperGatesSkillByName(t *testing.T) {
 	serialized := marshalJSON(t, mock.calls[1].Input.OfInputItemList)
 	require.Contains(t, serialized, "tool call denied")
 	require.Contains(t, serialized, "loaded docs-helper")
+}
+
+func TestLooperDirectSkillInjectsDeveloperInput(t *testing.T) {
+	loaded := LoadSkills(fstest.MapFS{"docs-helper/SKILL.md": mapFile(`---
+name: docs-helper
+description: Write docs
+---
+
+Use this skill for docs.
+`)}, "/virtual/skills").Skills
+	agent := agentWithSkillPermission()
+	factory := testSkillFactory(t, loaded, agent)
+	factory.experimentalStrongerSkills = true
+
+	mock := mockResponses(responseWithMessage("resp-final", "done"))
+	looper := testLooper(mock)
+	looper.Permissions = agent.Permission
+	looper.Tools = map[string]looperTool{"skill": factory.skillTool()}
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- PromptInput{Text: "apply it", DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "write the API guide"}, Responses: output}
+
+	close(input)
+
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
+	require.Len(t, mock.calls, 1)
+	serialized := marshalJSON(t, mock.calls[0].Input.OfInputItemList)
+	require.Contains(t, serialized, `"role":"developer"`)
+	require.Contains(t, serialized, "Use this skill for docs.")
+	require.Contains(t, serialized, "write the API guide")
+	require.Contains(t, serialized, `"role":"user"`)
+	require.Contains(t, serialized, "apply it")
+}
+
+func TestLooperDirectSkillRejectsBeforeModelRequest(t *testing.T) {
+	mock := mockResponses(responseWithMessage("resp-final", "should not run"))
+	looper := testLooper(mock)
+	looper.Tools = map[string]looperTool{"skill": testLooperTool("skill")}
+	output := make(chan ChatResponse, 10)
+	saves := 0
+
+	input := make(chan PromptInput, 1)
+	input <- PromptInput{DirectSkill: &PromptInputDirectSkill{}, Responses: output}
+
+	close(input)
+
+	err := looper.Loop(context.Background(), input, emptySession(), func(SessionEntry) error {
+		saves++
+
+		return nil
+	}, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	require.Empty(t, mock.calls)
+	require.Zero(t, saves)
+	require.Equal(t, []ChatResponse{assistantMessage("direct skill invocation requires a skill name")}, collectResponses(output))
+}
+
+func TestLooperDirectSkillRejectsUnknownAndDeniedSkillsBeforeModelRequest(t *testing.T) {
+	loaded := LoadSkills(fstest.MapFS{"docs-helper/SKILL.md": mapFile(`---
+name: docs-helper
+description: Write docs
+---
+
+Use this skill for docs.
+`)}, "/virtual/skills").Skills
+
+	run := func(t *testing.T, agent *Agent, skillName string) []ChatResponse {
+		t.Helper()
+
+		mock := mockResponses(responseWithMessage("resp-final", "should not run"))
+		looper := testLooper(mock)
+		looper.Permissions = agent.Permission
+		looper.Tools = map[string]looperTool{"skill": testSkillFactory(t, loaded, agent).skillTool()}
+		output := make(chan ChatResponse, 10)
+		saves := 0
+
+		input := make(chan PromptInput, 1)
+		input <- PromptInput{DirectSkill: &PromptInputDirectSkill{Name: skillName}, Responses: output}
+
+		close(input)
+
+		err := looper.Loop(context.Background(), input, emptySession(), func(SessionEntry) error {
+			saves++
+
+			return nil
+		}, make(chan os.Signal, 1))
+
+		require.NoError(t, err)
+		require.Empty(t, mock.calls)
+		require.Zero(t, saves)
+
+		return collectResponses(output)
+	}
+
+	t.Run("unknown skill", func(t *testing.T) {
+		got := run(t, agentWithSkillPermission(), "missing-skill")
+
+		require.Len(t, got, 1)
+		require.Equal(t, ChatResponseAssistantMessage, got[0].Kind)
+		require.Contains(t, got[0].Text, `skill "missing-skill" not found`)
+		require.Contains(t, got[0].Text, "Available skills: docs-helper")
+	})
+
+	t.Run("denied skill", func(t *testing.T) {
+		got := run(t, agentWithSkillRules(PermissionRule{Pattern: "docs-helper", Action: permissionDeny}), "docs-helper")
+
+		require.Len(t, got, 1)
+		require.Equal(t, ChatResponseAssistantMessage, got[0].Kind)
+		require.Contains(t, got[0].Text, "tool call denied")
+		require.Contains(t, got[0].Text, `permission "skill"`)
+		require.Contains(t, got[0].Text, `subject "docs-helper"`)
+	})
 }
 
 func TestLooperEmitsToolDiagnosticsWhenEnabled(t *testing.T) {

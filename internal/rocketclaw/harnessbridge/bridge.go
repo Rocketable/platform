@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
@@ -1131,12 +1132,28 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		cancelTurn()
 	}()
 
-	prompt, err := b.buildPrompt(msg, agents.Items[agentName].Frontmatter)
+	promptMsg := events.InboundMessage{
+		Source:             msg.Source,
+		Label:              msg.Label,
+		Text:               msg.Text,
+		Attachments:        msg.Attachments,
+		AttachmentWarnings: msg.AttachmentWarnings,
+		Human:              msg.Human,
+		Kind:               msg.Kind,
+		Metadata:           msg.Metadata,
+	}
+
+	directSkill, directSkillTriggered := slackDirectSkillTrigger(msg)
+	if directSkillTriggered {
+		promptMsg.Text = ""
+	}
+
+	prompt, err := b.buildPrompt(&promptMsg, agents.Items[agentName].Frontmatter)
 	if err != nil {
 		return runResult{}, err
 	}
 
-	input <- rocketcode.PromptInput{Role: "", Text: prompt, Attachments: attachmentsFromInbound(msg.Attachments), Responses: output}
+	input <- rocketcode.PromptInput{Role: "", Text: prompt, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: directSkill, Responses: output}
 
 	close(input)
 
@@ -2389,6 +2406,54 @@ func buildPrompt(msg *events.InboundMessage, agentFrontmatter map[string]any) st
 	provenance.additionalInstructions = instruction
 
 	return provenanceHeader(provenance) + "\n\n" + body
+}
+
+func slackDirectSkillTrigger(msg *events.InboundMessage) (*rocketcode.PromptInputDirectSkill, bool) {
+	if msg.Source != events.SourceSlack || msg.Kind != events.InboundKindPrompt {
+		return nil, false
+	}
+
+	directSkill, ok := parseSlackDirectSkillTrigger(msg.Text)
+	if !ok {
+		return nil, false
+	}
+
+	return &directSkill, true
+}
+
+func parseSlackDirectSkillTrigger(text string) (rocketcode.PromptInputDirectSkill, bool) {
+	text = strings.TrimLeftFunc(text, unicode.IsSpace)
+
+	rest, ok := strings.CutPrefix(text, "💡")
+	if !ok {
+		for _, alias := range []string{":light_bulb:", ":electric_light_bulb:"} {
+			if after, found := strings.CutPrefix(text, alias); found {
+				rest = after
+				ok = true
+
+				break
+			}
+		}
+	}
+
+	if !ok {
+		return rocketcode.PromptInputDirectSkill{}, false
+	}
+
+	rest = strings.TrimLeftFunc(rest, unicode.IsSpace)
+	if rest == "" {
+		return rocketcode.PromptInputDirectSkill{}, true
+	}
+
+	name := rest
+	arguments := ""
+
+	if i := strings.IndexFunc(rest, unicode.IsSpace); i >= 0 {
+		name = rest[:i]
+		arguments = strings.TrimLeftFunc(rest[i:], unicode.IsSpace)
+	}
+
+	return rocketcode.PromptInputDirectSkill{Name: name, Arguments: arguments}, true
 }
 
 type promptProvenance struct {

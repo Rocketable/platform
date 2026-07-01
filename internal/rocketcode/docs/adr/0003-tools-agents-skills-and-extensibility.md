@@ -5,11 +5,11 @@ Human approval required for meaning changes: Yes
 
 ## Decision
 
-RocketCode exposes a permission-gated tool surface, workspace-local agents, workspace-local skills, per-agent guardrail gating, and embedding-provided custom tools. These extension points are product behavior and must remain stable across refactors unless the human partner approves a spec change.
+RocketCode exposes a permission-gated tool surface, workspace-local agents, workspace-local skills, direct skill invocation, per-agent guardrail gating, and embedding-provided custom tools. These extension points are product behavior and must remain stable across refactors unless the human partner approves a spec change.
 
 ## Scope
 
-This ADR governs built-in tools, custom tools, agent loading, skill loading, task delegation, per-agent guardrail gating, attachments, and sandboxed command behavior.
+This ADR governs built-in tools, custom tools, agent loading, skill loading, direct skill invocation, task delegation, per-agent guardrail gating, attachments, and sandboxed command behavior.
 
 ## Context
 
@@ -29,7 +29,7 @@ Most useful RocketCode behavior comes from tools and workspace definitions rathe
 | `webfetch` | `webfetch` | URL | Fetches HTTP(S) content and returns markdown, text, HTML, image attachment, or PDF attachment. |
 | `bash` | `bash` | Static command path subjects when available | Runs shell commands in the workspace, with optional sandboxing and bounded output handling. |
 | `find_skills` | `skill` | Available skill names | Searches visible skill names, descriptions, and content. |
-| `skill` | `skill` | Requested skill name | Loads full visible skill instructions. |
+| `skill` | `skill` | Requested skill name | Loads full visible skill instructions, with optional one-shot argument replacement. |
 | `task` | `task` | Requested subagent type | Launches another agent for autonomous work when recursion and permission allow it. |
 
 All function schemas are strict and mark declared properties as required even when runtime code treats empty or zero values as defaults. Model requests use OpenAI Responses function tools and hosted OpenAI tools according to permission and availability.
@@ -128,7 +128,12 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - Duplicate skill names report a non-fatal error and keep the last discovered skill.
 - Skills are visible only when active-agent `skill` permission allows the skill name. Nil active agent means no skills are allowed.
 - The system prompt does not list skill names. It instructs the model to use `find_skills` and `skill` when skills are available. Tool descriptions list allowed skills.
+- The `skill` tool accepts `name` and optional `arguments`. Skill rendering replaces every exact literal `$ARGUMENTS` occurrence in skill content with the supplied argument string, but the argument string remains literal user/model-provided data and is never shell-executable through skill prompt shell expansion. Missing arguments replace `$ARGUMENTS` with an empty string. The ordinary `skill` tool does not append unused arguments when the skill content has no `$ARGUMENTS` placeholder; embedding-owned direct skill invocation paths may define append behavior separately.
 - With `ExperimentalStrongerSkills`, the `skill` tool returns short text `skill NAME loaded` and replays full skill content as a developer message.
+- RocketCode direct skill invocation is a first-class non-model input path that accepts a skill name plus an argument string for the active conversation and active agent. It bypasses the model's choice to call the `skill` tool, but it must reuse RocketCode skill loading, skill visibility, permission checks, `$ARGUMENTS` rendering, prompt shell-expansion safety, stronger-skill rendering behavior, and session/replay semantics.
+- Direct skill invocation rejects missing skill names, unknown skills, and skills not visible to the active agent before creating a model request. Unknown-skill errors may list only skills visible to the active agent. Rejection text must be clear enough for embedders and CLIs to show directly to a human without wrapping it as an internal runtime failure.
+- For direct skill invocation only, if rendered skill content contains no `$ARGUMENTS` and the argument string is non-empty, RocketCode appends the argument string to the rendered skill content after one blank line. The appended argument string remains literal user/model-provided data and is never shell-executable through skill prompt shell expansion.
+- `cmd/rocketcode` maps terminal input `/skill <skill-name> [arguments]` to RocketCode direct skill invocation. `<skill-name>` is the first whitespace-delimited token after `/skill`; `[arguments]` is the remaining text after the skill name. `/skill` with no skill name fails before model request. `💡` is not RocketCode CLI syntax.
 
 ### Custom Tools
 
@@ -193,3 +198,6 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - 2026-06-30: Allowed configured server/operator logging and tracing of guardrail and automatic permission reviewer child-run messages, reasoning summaries, and diagnostics while keeping them out of parent task progress, parent subagent diagnostics, model-visible content, replay, and session persistence.
 - 2026-07-01: Replaced missing or empty loaded-agent model inheritance with mandatory non-empty agent model declarations and described guardrails as approval gates.
 - 2026-07-01: Required agent creation and update guidance to recommend `reasoningEffort: low` for custom automatic permission reviewers and warn about the 90-second review budget.
+- 2026-07-01: Added optional `skill.arguments` replacement semantics for `$ARGUMENTS` in skill rendering.
+- 2026-07-01: Clarified that `skill.arguments` data remains literal and is not shell-executable through skill prompt shell expansion.
+- 2026-07-02: Added RocketCode-first direct skill invocation and `cmd/rocketcode` `/skill <skill-name> [arguments]` syntax.

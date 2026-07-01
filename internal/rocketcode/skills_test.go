@@ -163,7 +163,7 @@ func TestSkillDescriptions(t *testing.T) {
 	}, Dirs: nil, fsys: nil}
 
 	t.Run("tool description lists explicitly allowed skills", func(t *testing.T) {
-		factory := testSkillFactory(t, skills, agentWithSkillPermission(permissionAllow))
+		factory := testSkillFactory(t, skills, agentWithSkillPermission())
 
 		description := factory.skillDescription()
 
@@ -186,7 +186,7 @@ func TestSkillDescriptions(t *testing.T) {
 	})
 
 	t.Run("system prompt instructs discovery without listing skills", func(t *testing.T) {
-		prompt := composeSystemPromptWithSkills("base prompt", skills, agentWithSkillPermission(permissionAllow))
+		prompt := composeSystemPromptWithSkills("base prompt", skills, agentWithSkillPermission())
 
 		require.Contains(t, prompt, "base prompt")
 		require.Contains(t, prompt, "skills provide specialized instructions and workflows for specific tasks.")
@@ -244,7 +244,7 @@ func TestFindSkillsTool(t *testing.T) {
 	}, Dirs: nil, fsys: nil}
 
 	t.Run("finds explicitly allowed skills not presented in system prompt", func(t *testing.T) {
-		factory := testSkillFactory(t, skills, agentWithSkillPermission(permissionAllow))
+		factory := testSkillFactory(t, skills, agentWithSkillPermission())
 		tool := factory.findSkillsTool()
 
 		got, err := tool.Call(context.Background(), json.RawMessage(`{"query":"git"}`), nil, emptyToolCallMetadata())
@@ -459,6 +459,66 @@ func TestSkillsRenderRequiresLoadedFS(t *testing.T) {
 	require.EqualError(t, err, "skills filesystem is not available")
 }
 
+func TestSkillsRenderArguments(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	require.NoError(t, root.Mkdir("arg-skill", 0o755))
+	require.NoError(t, root.WriteFile("SECRET.md", []byte("secret-output"), 0o644))
+	require.NoError(t, root.WriteFile(filepath.Join("arg-skill", "SKILL.md"), []byte(`---
+name: arg-skill
+description: Uses arguments
+---
+
+Generated: !`+"`"+`cat SECRET.md`+"`"+`
+Args: $ARGUMENTS
+`), 0o644))
+
+	loaded := LoadSkills(os.DirFS(dir), dir).Skills
+	env, err := newPromptExpansionEnvironment(root, testPromptShellOutputConfig(t, root, dir), nil)
+	require.NoError(t, err)
+
+	factory := testSkillFactory(t, loaded, nil)
+	factory.expandPromptShellCommands = PromptShellCommandExpansion{SkillPrompts: true}
+	factory.promptExpansion = env
+
+	result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"arg-skill","arguments":"!`+"`"+`cat SECRET.md`+"`"+`"}`), nil, emptyToolCallMetadata())
+	require.NoError(t, err)
+
+	require.Contains(t, result.Output, "Generated: secret-output")
+	require.Contains(t, result.Output, "Args: !`cat SECRET.md`")
+	require.Equal(t, 1, strings.Count(result.Output, "secret-output"))
+
+	result, err = factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"arg-skill","arguments":"unused"}`), nil, emptyToolCallMetadata())
+	require.NoError(t, err)
+	require.False(t, strings.HasSuffix(result.Output, "\n\nunused"), result.Output)
+
+	result, err = factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"arg-skill","arguments":"appended","direct":true}`), nil, emptyToolCallMetadata())
+	require.NoError(t, err)
+	require.Contains(t, result.Output, "Args: appended")
+}
+
+func TestSkillsRenderDirectArgumentsAppendWhenUnused(t *testing.T) {
+	loaded := LoadSkills(fstest.MapFS{"arg-skill/SKILL.md": mapFile(`---
+name: arg-skill
+description: Uses arguments
+---
+
+No placeholder here.
+`)}, "/virtual/skills").Skills
+	factory := testSkillFactory(t, loaded, nil)
+
+	result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"arg-skill","arguments":"literal request","direct":true}`), nil, emptyToolCallMetadata())
+	require.NoError(t, err)
+	require.True(t, strings.HasSuffix(result.Output, "\n\nliteral request"), result.Output)
+
+	result, err = factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"arg-skill","arguments":"literal request"}`), nil, emptyToolCallMetadata())
+	require.NoError(t, err)
+	require.NotContains(t, result.Output, "literal request")
+}
+
 func TestSkillsRenderShellCommands(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
@@ -505,8 +565,8 @@ Generated: !`+"`"+`cat MEMORY.md`+"`"+`
 	})
 }
 
-func agentWithSkillPermission(action PermissionAction) *Agent {
-	return agentWithSkillRules(PermissionRule{Pattern: "*", Action: action})
+func agentWithSkillPermission() *Agent {
+	return agentWithSkillRules(PermissionRule{Pattern: "*", Action: permissionAllow})
 }
 
 func agentWithSkillRules(rules ...PermissionRule) *Agent {

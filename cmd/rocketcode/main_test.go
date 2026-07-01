@@ -217,6 +217,24 @@ func TestScanInputExitsOnCommand(t *testing.T) {
 	require.Equal(t, []rocketcode.PromptInput{{Role: rocketcode.PromptInputRoleUser, Text: "hello", Attachments: nil, Responses: nil}}, got)
 }
 
+func TestScanInputParsesSkillCommand(t *testing.T) {
+	got, _, err := collectScannedInput(t, "/skill docs-helper write API docs\n💡 docs-helper not cli syntax\n/skillful ordinary\n")
+
+	require.NoError(t, err)
+	require.Equal(t, []rocketcode.PromptInput{
+		{DirectSkill: &rocketcode.PromptInputDirectSkill{Name: "docs-helper", Arguments: "write API docs"}, Attachments: nil, Responses: nil},
+		{Role: rocketcode.PromptInputRoleUser, Text: "💡 docs-helper not cli syntax", Attachments: nil, Responses: nil},
+		{Role: rocketcode.PromptInputRoleUser, Text: "/skillful ordinary", Attachments: nil, Responses: nil},
+	}, got)
+}
+
+func TestScanInputRejectsSkillCommandWithoutName(t *testing.T) {
+	got, _, err := collectScannedInput(t, "/skill   \n")
+
+	require.EqualError(t, err, "/skill requires a skill name")
+	require.Empty(t, got)
+}
+
 func TestScanInputAttachesInlineFiles(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)

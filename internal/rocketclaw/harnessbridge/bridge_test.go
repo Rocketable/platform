@@ -1537,6 +1537,22 @@ func TestBuildPromptAdditionalInstructionsFrontmatter(t *testing.T) {
 	assert.Equal(t, "[System media=Text additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n task \n", buildPrompt(&events.InboundMessage{Source: events.SourceSystem, Label: startNewThreadToolName, Text: " task \n", Metadata: map[string]string{events.InboundOriginMetadataKey: "System", events.InboundMediaMetadataKey: "Text"}}, nil))
 }
 
+func TestParseSlackDirectSkillTrigger(t *testing.T) {
+	for _, text := range []string{"💡 docs-helper write docs", ":light_bulb: docs-helper write docs", ":electric_light_bulb: docs-helper write docs"} {
+		directSkill, ok := parseSlackDirectSkillTrigger(text)
+
+		require.True(t, ok)
+		assert.Equal(t, rocketcode.PromptInputDirectSkill{Name: "docs-helper", Arguments: "write docs"}, directSkill)
+	}
+
+	directSkill, ok := parseSlackDirectSkillTrigger("💡   ")
+	require.True(t, ok)
+	assert.Empty(t, directSkill.Name)
+
+	_, ok = parseSlackDirectSkillTrigger("hello 💡 docs-helper")
+	assert.False(t, ok)
+}
+
 func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
 	assert.Equal(t, "[ExternalMCP media=Text principal=Alice_(ops)-lead additional_instructions=\"line \\\"one\\\"\\nnext\"]", provenanceHeader(promptProvenance{origin: "ExternalMCP", media: "Text", principal: " Alice [ops]=lead ", additionalInstructions: "line \"one\"\nnext"}))
 	assert.Equal(t, promptProvenance{origin: "System", media: "Text"}, provenanceFromInbound(&events.InboundMessage{Source: events.SourceSystem, Metadata: map[string]string{events.InboundOriginMetadataKey: "Mallory", events.InboundMediaMetadataKey: "Dance"}}))
@@ -2850,6 +2866,73 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	}
 
 	assert.Equal(t, 1, metadataEntries)
+}
+
+func TestRunTurnTranslatesSlackLightbulbToDirectSkill(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  skill:\n    docs-helper: allow\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills", "docs-helper"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "skills", "docs-helper", "SKILL.md"), []byte(`---
+name: docs-helper
+description: Write docs
+---
+
+Use this skill for docs.
+Request: $ARGUMENTS
+`), 0o644))
+
+	var (
+		requestBody struct {
+			Input []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"input"`
+		}
+		errRequest error
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			errRequest = assert.AnError
+
+			http.NotFound(w, r)
+
+			return
+		}
+
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			errRequest = err
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	service, err := NewSessionService(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
+
+	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: events.MainConversationID(), Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}, log: slog.New(slog.DiscardHandler)}
+	msg := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "💡 docs-helper write API docs", true)
+	msg.Metadata = map[string]string{events.InboundPrincipalMetadataKey: "Alice"}
+
+	result, err := bridge.runTurn(context.Background(), msg, "turn-1", false)
+
+	require.NoError(t, err)
+	require.NoError(t, errRequest)
+	assert.Equal(t, "ok", result.text)
+	require.Len(t, requestBody.Input, 2)
+	assert.Equal(t, "developer", requestBody.Input[0].Role)
+	assert.Contains(t, requestBody.Input[0].Content, "Use this skill for docs.")
+	assert.Contains(t, requestBody.Input[0].Content, "Request: write API docs")
+	assert.Equal(t, "user", requestBody.Input[1].Role)
+	assert.Contains(t, requestBody.Input[1].Content, "[Slack media=Text principal=Alice")
+	assert.NotContains(t, requestBody.Input[1].Content, "💡")
+	assert.NotContains(t, requestBody.Input[1].Content, "docs-helper write API docs")
 }
 
 func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {

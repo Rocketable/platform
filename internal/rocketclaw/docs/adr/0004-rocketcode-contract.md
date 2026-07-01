@@ -42,7 +42,8 @@ Both construction paths must pass RocketClaw-originated `rocketcode.PromptInput`
 - Skills load from `.rocketclaw/skills` plus workspace overlays according to bridge mode.
 - Primary agent prompt expansion happens during RocketCode construction.
 - Subagent prompt expansion happens when the `task` tool launches another agent.
-- Skill content expansion happens when the `skill` tool loads skill content.
+- Skill content expansion happens when RocketCode loads skill content through the `skill` tool or RocketCode direct skill invocation.
+- RocketClaw does not render direct skill invocations itself. When Slack text uses `💡 <skill-name> [arguments]`, RocketClaw passes the parsed skill name and argument string into RocketCode's direct skill invocation input path for the existing conversation and selected agent. RocketCode owns skill lookup, permission checks, `$ARGUMENTS` rendering, literal argument safety, stronger-skill behavior, and model input construction.
 - `AGENTS.md` root workspace instructions remain literal.
 - Agents may declare optional YAML frontmatter field `additionalInstructions`. In the persistent bridge, a non-empty string value overrides the default normal-reply `additional_instructions` text defined in ADR 0002 for turns handled by that selected agent. Missing, empty, or non-string values do not override the default. This field does not affect internal-note turns or raw-run cron prompts.
 
@@ -220,3 +221,6 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-07-01: Recorded the 90-second automatic permission review budget so custom reviewer guidance can recommend `reasoningEffort: low`.
 - 2026-07-01: Removed Discord Text, Discord voice, and browser voice from RocketClaw persistent-bridge embedding contracts.
 - 2026-07-01: Removed terminal CLI from RocketClaw persistent-bridge embedding contracts and `ask_user_question` native answer paths.
+- 2026-07-01: Added `$ARGUMENTS` replacement semantics for skill rendering and direct skill invocation arguments.
+- 2026-07-01: Clarified that `$ARGUMENTS` data remains literal and is not shell-executable through skill prompt shell expansion.
+- 2026-07-02: Clarified that RocketClaw translates Slack `💡` syntax to RocketCode direct skill invocation and does not render direct skill content itself.

@@ -117,6 +117,14 @@ type toolPermissionDecision struct {
 	review  *permissionReviewRequest
 }
 
+type directSkillInputError struct {
+	message string
+}
+
+func (e directSkillInputError) Error() string {
+	return e.message
+}
+
 type permissionReviewSubject struct {
 	Subject     string `json:"subject"`
 	RulePattern string `json:"rule_pattern"`
@@ -527,7 +535,7 @@ func (l *looper) Loop(
 
 		turnOutput := line.Responses
 
-		if line.Text == "" && len(line.Attachments) == 0 {
+		if line.Text == "" && len(line.Attachments) == 0 && line.DirectSkill == nil {
 			close(turnOutput)
 
 			continue
@@ -548,6 +556,14 @@ func (l *looper) Loop(
 
 		turn, rendered, interrupted, err := l.runTurn(ctx, turnOutput, interrupts, history, line)
 		if err != nil {
+			var errDirectSkill directSkillInputError
+			if errors.As(err, &errDirectSkill) {
+				emitChatResponse(turnOutput, ChatResponse{Kind: ChatResponseAssistantMessage, Text: errDirectSkill.Error()})
+				close(turnOutput)
+
+				continue
+			}
+
 			close(turnOutput)
 
 			return fmt.Errorf("run turn: %w", err)
@@ -593,12 +609,10 @@ func (l *looper) runTurn(
 ) (record SessionEntry, rendered []ChatResponse, interrupted bool, err error) {
 	var emptyRecord SessionEntry
 
-	if l.expandInputPrompts {
-		input.Text = l.promptExpansion.expandShellCommands(ctx, input.Text)
+	input, turnItems, err := l.promptTurnItems(ctx, input)
+	if err != nil {
+		return emptyRecord, nil, false, err
 	}
-
-	promptItem := promptInputMessage(input)
-	turnItems := []responses.ResponseInputItemUnionParam{promptItem}
 
 	replayInput, err := ReplayInputFromParams(turnItems)
 	if err != nil {
@@ -770,6 +784,66 @@ func (l *looper) runTurn(
 			}
 		}
 	}
+}
+
+func (l *looper) promptTurnItems(ctx context.Context, input PromptInput) (PromptInput, []responses.ResponseInputItemUnionParam, error) {
+	if l.expandInputPrompts {
+		input.Text = l.promptExpansion.expandShellCommands(ctx, input.Text)
+	}
+
+	turnItems := []responses.ResponseInputItemUnionParam{}
+
+	if input.DirectSkill != nil {
+		directSkillItem, err := l.directSkillInput(ctx, input.DirectSkill)
+		if err != nil {
+			return PromptInput{}, nil, err
+		}
+
+		turnItems = append(turnItems, directSkillItem)
+	}
+
+	return input, append(turnItems, promptInputMessage(input)), nil
+}
+
+func (l *looper) directSkillInput(ctx context.Context, input *PromptInputDirectSkill) (responses.ResponseInputItemUnionParam, error) {
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		return responses.ResponseInputItemUnionParam{}, directSkillInputError{message: "direct skill invocation requires a skill name"}
+	}
+
+	tool, ok := l.Tools["skill"]
+	if !ok {
+		return responses.ResponseInputItemUnionParam{}, directSkillInputError{message: fmt.Sprintf("skill %q is not available to the active agent", name)}
+	}
+
+	raw, err := json.Marshal(skillToolParams{Name: name, Arguments: input.Arguments, Direct: true})
+	if err != nil {
+		return responses.ResponseInputItemUnionParam{}, fmt.Errorf("marshal direct skill input: %w", err)
+	}
+
+	decision, err := l.permissionDecision("skill", &tool, raw)
+	if err != nil {
+		return responses.ResponseInputItemUnionParam{}, directSkillInputError{message: err.Error()}
+	}
+
+	if decision.denied {
+		return responses.ResponseInputItemUnionParam{}, directSkillInputError{message: decision.message}
+	}
+
+	if decision.review != nil {
+		return responses.ResponseInputItemUnionParam{}, directSkillInputError{message: fmt.Sprintf("skill %q is not visible to the active agent", name)}
+	}
+
+	result, replayInput, err := tool.CallReplay(ctx, raw, nil, toolCallMetadata{})
+	if err != nil {
+		return responses.ResponseInputItemUnionParam{}, directSkillInputError{message: err.Error()}
+	}
+
+	if len(replayInput) > 0 {
+		return replayInput[0], nil
+	}
+
+	return inputMessageParam(responses.EasyInputMessageRoleDeveloper, easyInputStringContent(result.Output)), nil
 }
 
 func appendReplayInput(record *SessionEntry, item *responses.ResponseInputItemUnionParam) error {
