@@ -98,6 +98,7 @@ On start, you must always read:
 - If the code's contract is unclear, stop and ask instead of adding a guardrail.
 - Before finalizing any change, actively remove defensive guards you added or touched.
 - In particular, do not add or preserve `if ctx == nil { ctx = context.Background() }`, `if value == nil { return nil }`, double-start/double-stop checks, not-started checks, fallback initialization for required constructor fields, or silent handling for invalid internal call ordering unless the user explicitly asked for defensive behavior or an external/public API contract requires it.
+- When a nil or NilChecks value would be used to mean disabled, absent behavior, or safe fallback, use an explicit inert implementation or the type's zero value instead. Do not encode optional behavior as nil checks.
 - Tests should not assert misuse behavior for deleted guards; update tests to exercise the real contract instead.
 
 ## Injected Behavior Dependencies
@@ -138,6 +139,7 @@ On start, you must always read:
 - In Go, error variables always start with `err` and error types always end with `Error`. For example: `errWriter` and `WriterError`.
 - Before finalizing Go edits, review every new or renamed error variable in the touched diff and rename nonconforming locals such as `runErr`, `waitErr`, or `parseErr` to `errRun`, `errWait`, or `errParse`.
 - Bias toward strong error types for new error contexts when practical. Prefer typed errors with `Unwrap` over ad hoc string-only `fmt.Errorf` wrappers when callers may benefit from structured operation context.
+- Prefer strong types over `map[string]any`. Use `map[string]any` only at truly dynamic boundaries where the key set is not known at compile time; otherwise define a small struct with explicit fields.
 - Use Go-style enum types for operation/category fields instead of raw strings.
 - Use `errors.AsType[T]()` for typed error extraction instead of legacy `errors.As` target variables.
 - Use all appropriate features of Go 1.26.2 or newer.
