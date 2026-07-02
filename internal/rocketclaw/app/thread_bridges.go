@@ -163,12 +163,12 @@ func (m *threadBridgeManager) WaitIdle(ctx context.Context) error {
 }
 
 func (m *threadBridgeManager) StartPendingScheduledMessages() error {
-	state, err := m.store.Load()
+	scheduledMessages, err := m.store.ScheduledMessages()
 	if err != nil {
 		return fmt.Errorf("load pending scheduled message bridges: %w", err)
 	}
 
-	for _, message := range state.ScheduledMessages {
+	for _, message := range scheduledMessages {
 		conversationID := strings.TrimSpace(message.ConversationID)
 		if conversationID == events.MainConversationID() {
 			continue
@@ -188,19 +188,12 @@ func (m *threadBridgeManager) StartPendingScheduledMessages() error {
 }
 
 func (m *threadBridgeManager) StartActiveGoals() error {
-	state, err := m.store.Load()
+	threads, err := m.store.ActiveGoalThreads()
 	if err != nil {
 		return fmt.Errorf("load active goal bridges: %w", err)
 	}
 
-	for conversationID := range state.Goals {
-		goal := state.Goals[conversationID]
-		if strings.TrimSpace(goal.Status) != harnessbridge.GoalStatusActive {
-			continue
-		}
-
-		thread := state.Threads[conversationID]
-
+	for conversationID, thread := range threads {
 		target, ok := m.text.targetForConversationID(conversationID)
 		if !ok {
 			continue
@@ -229,12 +222,11 @@ func (m *threadBridgeManager) SubmitThreadReply(ctx context.Context, target even
 		return false, nil
 	}
 
-	state, err := m.store.Load()
+	thread, ok, err := m.store.Thread(conversationID)
 	if err != nil {
 		return false, fmt.Errorf("load persisted %s thread state: %w", m.text.label, err)
 	}
 
-	thread, ok := state.Threads[conversationID]
 	if !ok {
 		return false, nil
 	}
@@ -292,17 +284,13 @@ func (m *threadBridgeManager) SwitchThreadAgent(target events.TextConversationTa
 		return false, nil
 	}
 
-	state, err := m.store.Load()
+	ok, err := m.store.SetThreadAgentIfExists(conversationID, agent)
 	if err != nil {
-		return false, fmt.Errorf("load persisted %s thread state: %w", m.text.label, err)
+		return false, fmt.Errorf("persist %s thread agent switch: %w", m.text.label, err)
 	}
 
-	if _, ok := state.Threads[conversationID]; !ok {
+	if !ok {
 		return false, nil
-	}
-
-	if err := m.store.UpsertThread(conversationID, agent); err != nil {
-		return true, fmt.Errorf("persist %s thread agent switch: %w", m.text.label, err)
 	}
 
 	m.mu.Lock()
@@ -322,12 +310,11 @@ func (m *threadBridgeManager) ThreadAgent(target events.TextConversationTarget) 
 		return "", false, nil
 	}
 
-	state, err := m.store.Load()
+	thread, ok, err := m.store.Thread(conversationID)
 	if err != nil {
 		return "", false, fmt.Errorf("load persisted %s thread state: %w", m.text.label, err)
 	}
 
-	thread, ok := state.Threads[conversationID]
 	if !ok {
 		return "", false, nil
 	}
@@ -356,12 +343,10 @@ func (m *threadBridgeManager) PrepareResponseThreadReply(target events.TextConve
 		return false, nil
 	}
 
-	state, err := m.store.Load()
+	_, ok, err := m.store.ResponseCheckpoint(checkpointKey)
 	if err != nil {
 		return false, fmt.Errorf("load persisted %s response checkpoint: %w", m.text.label, err)
 	}
-
-	_, ok := state.ResponseCheckpoints[checkpointKey]
 
 	return ok, nil
 }
@@ -376,22 +361,26 @@ func (m *threadBridgeManager) SubmitResponseThreadReply(ctx context.Context, tar
 
 	m.text.setReplyThread(inbound, target)
 
-	state, err := m.store.Load()
+	checkpoint, ok, err := m.store.ResponseCheckpoint(checkpointKey)
 	if err != nil {
 		return false, fmt.Errorf("load persisted %s response checkpoint: %w", m.text.label, err)
 	}
 
-	checkpoint, ok := state.ResponseCheckpoints[checkpointKey]
 	if !ok {
 		return false, nil
 	}
 
-	managed, _, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: "main", SeededFromResponse: strings.TrimSpace(state.Threads[conversationID].SeededFromResponse)}, m.text.outputTargets)
+	thread, _, err := m.store.Thread(conversationID)
+	if err != nil {
+		return false, fmt.Errorf("load persisted %s thread state: %w", m.text.label, err)
+	}
+
+	managed, _, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: "main", SeededFromResponse: strings.TrimSpace(thread.SeededFromResponse)}, m.text.outputTargets)
 	if err != nil {
 		return true, err
 	}
 
-	seededFrom := strings.TrimSpace(state.Threads[conversationID].SeededFromResponse)
+	seededFrom := strings.TrimSpace(thread.SeededFromResponse)
 	if seededFrom != checkpointKey {
 		if seededFrom != "" {
 			return true, fmt.Errorf("%s thread already seeded from %s", strings.ToLower(m.text.label), seededFrom)
@@ -426,12 +415,11 @@ func (m *threadBridgeManager) SummarizeThread(ctx context.Context, target events
 	m.mu.Unlock()
 
 	if managed == nil {
-		state, err := m.store.Load()
+		thread, ok, err := m.store.Thread(conversationID)
 		if err != nil {
 			return false, fmt.Errorf("load persisted %s thread state: %w", m.text.label, err)
 		}
 
-		thread, ok := state.Threads[conversationID]
 		if !ok {
 			return false, nil
 		}
@@ -556,12 +544,12 @@ func (m *threadBridgeManager) StartGoalInThread(ctx context.Context, agent, obje
 		return fmt.Errorf("%s thread target is required", strings.ToLower(m.text.label))
 	}
 
-	state, err := m.store.Load()
+	thread, _, err := m.store.Thread(conversationID)
 	if err != nil {
 		return fmt.Errorf("load goal thread state: %w", err)
 	}
 
-	cronCreated, err := m.cronCreatedThread(ctx, conversationID, state.Threads[conversationID])
+	cronCreated, err := m.cronCreatedThread(ctx, conversationID, thread)
 	if err != nil {
 		return err
 	}
@@ -570,7 +558,7 @@ func (m *threadBridgeManager) StartGoalInThread(ctx context.Context, agent, obje
 		disableStartNewThread(inbound)
 	}
 
-	if storedAgent := strings.TrimSpace(state.Threads[conversationID].Agent); storedAgent != "" {
+	if storedAgent := strings.TrimSpace(thread.Agent); storedAgent != "" {
 		agent = storedAgent
 	}
 
@@ -607,12 +595,12 @@ func (m *threadBridgeManager) InterruptThread(target events.TextConversationTarg
 
 	bridgeConversationID := conversationID
 
-	state, err := m.store.Load()
+	thread, ok, err := m.store.Thread(conversationID)
 	if err != nil {
 		return nil, fmt.Errorf("load persisted %s thread state: %w", m.text.label, err)
 	}
 
-	if thread, ok := state.Threads[conversationID]; ok && strings.HasPrefix(thread.SeededFromResponse, "external_mcp:") {
+	if ok && strings.HasPrefix(thread.SeededFromResponse, "external_mcp:") {
 		bridgeConversationID = thread.SeededFromResponse
 	}
 

@@ -174,11 +174,6 @@ func NewSessionServiceIn(workspace, workDir string) (*SessionService, error) {
 	return &SessionService{db: db}, nil
 }
 
-// Load returns the current persisted session state.
-func (s *SessionService) Load() (State, error) {
-	return loadRocketClawState(context.Background(), s.db)
-}
-
 // UpsertThread records or updates a text-thread bridge entry.
 func (s *SessionService) UpsertThread(conversationID, agent string) error {
 	conversationID = strings.TrimSpace(conversationID)
@@ -186,15 +181,7 @@ func (s *SessionService) UpsertThread(conversationID, agent string) error {
 		return errors.New("thread conversation ID is required")
 	}
 
-	return s.updateState(func(state *State) {
-		if state.Threads == nil {
-			state.Threads = map[string]ThreadState{}
-		}
-
-		thread := state.Threads[conversationID]
-		thread.Agent = strings.TrimSpace(agent)
-		state.Threads[conversationID] = thread
-	})
+	return stateDAO{db: s.db}.upsertThreadAgent(context.Background(), conversationID, agent)
 }
 
 // MarkThreadCreatedBy records the creator class for origin-restricted managed conversations.
@@ -204,15 +191,7 @@ func (s *SessionService) MarkThreadCreatedBy(conversationID string, createdBy Th
 		return errors.New("thread conversation ID is required")
 	}
 
-	return s.updateState(func(state *State) {
-		if state.Threads == nil {
-			state.Threads = map[string]ThreadState{}
-		}
-
-		thread := state.Threads[conversationID]
-		thread.CreatedBy = ThreadCreator(strings.TrimSpace(string(createdBy)))
-		state.Threads[conversationID] = thread
-	})
+	return stateDAO{db: s.db}.markThreadCreatedBy(context.Background(), conversationID, ThreadCreator(strings.TrimSpace(string(createdBy))))
 }
 
 // BeginGoal records a new active goal for a managed conversation.
@@ -235,103 +214,51 @@ func (s *SessionService) BeginGoal(conversationID, objective, checkScript string
 
 	now := time.Now().UTC()
 
-	var errBegin error
-
-	err := s.updateState(func(state *State) {
-		if state.Goals == nil {
-			state.Goals = map[string]GoalState{}
-		}
-
-		current := state.Goals[conversationID]
-		if strings.TrimSpace(current.Status) == GoalStatusActive {
-			errBegin = ErrGoalAlreadyActive
-			return
-		}
-
-		state.Goals[conversationID] = GoalState{Objective: objective, CheckScript: checkScript, MaxTurns: maxTurns, Status: GoalStatusActive, CreatedAt: now, UpdatedAt: now}
-	})
+	ok, err := stateDAO{db: s.db}.beginGoal(context.Background(), conversationID, &GoalState{Objective: objective, CheckScript: checkScript, MaxTurns: maxTurns, Status: GoalStatusActive, CreatedAt: now, UpdatedAt: now})
 	if err != nil {
 		return err
 	}
 
-	return errBegin
+	if !ok {
+		return ErrGoalAlreadyActive
+	}
+
+	return nil
 }
 
 // Goal returns the persisted goal state for a conversation.
 func (s *SessionService) Goal(conversationID string) (GoalState, bool, error) {
-	state, err := s.Load()
-	if err != nil {
-		return GoalState{}, false, err
-	}
-
-	goal, ok := state.Goals[strings.TrimSpace(conversationID)]
-
-	goal.Status = strings.TrimSpace(goal.Status)
-	if goal.Status == "" {
-		goal.Status = GoalStatusActive
-	}
-
-	return goal, ok, nil
+	return stateDAO{db: s.db}.goal(context.Background(), conversationID)
 }
 
 // ActiveGoals returns persisted active goals keyed by conversation ID.
 func (s *SessionService) ActiveGoals() (map[string]GoalState, error) {
-	state, err := s.Load()
-	if err != nil {
-		return nil, err
-	}
-
-	active := map[string]GoalState{}
-
-	for conversationID := range state.Goals {
-		goal := state.Goals[conversationID]
-		if strings.TrimSpace(goal.Status) == GoalStatusActive {
-			active[conversationID] = goal
-		}
-	}
-
-	if len(active) == 0 {
-		return nil, nil
-	}
-
-	return active, nil
+	return stateDAO{db: s.db}.activeGoals(context.Background())
 }
 
 // AccountGoalTurn increments one active goal turn and applies budget exhaustion.
 func (s *SessionService) AccountGoalTurn(conversationID string) (GoalState, bool, error) {
 	conversationID = strings.TrimSpace(conversationID)
+	ctx := context.Background()
 
-	var (
-		goal GoalState
-		ok   bool
-	)
-
-	err := s.updateState(func(state *State) {
-		goal, ok = state.Goals[conversationID]
-		if !ok {
-			return
-		}
-
-		status := strings.TrimSpace(goal.Status)
-		if status == "" {
-			status = GoalStatusActive
-		}
-
-		if status != GoalStatusActive {
-			return
-		}
-
-		goal.TurnsUsed++
-
-		goal.UpdatedAt = time.Now().UTC()
-		if goal.MaxTurns > 0 && goal.TurnsUsed >= goal.MaxTurns {
-			goal.Status = GoalStatusBudgetExhausted
-		}
-
-		state.Goals[conversationID] = goal
-	})
+	tx, err := s.beginStateTx(ctx, "goal turn accounting")
 	if err != nil {
 		return GoalState{}, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	dao := stateDAO{db: tx}
+	if _, err := dao.accountGoalTurn(ctx, conversationID, time.Now().UTC()); err != nil {
+		return GoalState{}, false, err
+	}
+
+	goal, ok, err := dao.goal(ctx, conversationID)
+	if err != nil {
+		return GoalState{}, false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return GoalState{}, false, fmt.Errorf("commit goal turn accounting: %w", err)
 	}
 
 	return goal, ok, nil
@@ -364,21 +291,7 @@ func (s *SessionService) MarkThreadSeeded(conversationID, seedKey string) error 
 		return errors.New("thread conversation ID is required")
 	}
 
-	return s.updateState(func(state *State) {
-		if state.Threads == nil {
-			state.Threads = map[string]ThreadState{}
-		}
-
-		thread := state.Threads[conversationID]
-
-		thread.Agent = strings.TrimSpace(thread.Agent)
-		if thread.Agent == "" {
-			thread.Agent = mainConversationID
-		}
-
-		thread.SeededFromResponse = strings.TrimSpace(seedKey)
-		state.Threads[conversationID] = thread
-	})
+	return stateDAO{db: s.db}.markThreadSeeded(context.Background(), conversationID, seedKey)
 }
 
 // UpsertResponseCheckpoint records a response checkpoint.
@@ -388,16 +301,11 @@ func (s *SessionService) UpsertResponseCheckpoint(key string, checkpoint Respons
 		return errors.New("response checkpoint key is required")
 	}
 
-	return s.updateState(func(state *State) {
-		if state.ResponseCheckpoints == nil {
-			state.ResponseCheckpoints = map[string]ResponseCheckpointState{}
-		}
+	checkpoint.ConversationID = strings.TrimSpace(checkpoint.ConversationID)
+	checkpoint.ResponseID = strings.TrimSpace(checkpoint.ResponseID)
+	checkpoint.Model = strings.TrimSpace(checkpoint.Model)
 
-		checkpoint.ConversationID = strings.TrimSpace(checkpoint.ConversationID)
-		checkpoint.ResponseID = strings.TrimSpace(checkpoint.ResponseID)
-		checkpoint.Model = strings.TrimSpace(checkpoint.Model)
-		state.ResponseCheckpoints[key] = checkpoint
-	})
+	return stateDAO{db: s.db}.upsertResponseCheckpoint(context.Background(), key, checkpoint)
 }
 
 // UpsertExternalMCPSession records an external MCP conversation ID mapping.
@@ -407,15 +315,10 @@ func (s *SessionService) UpsertExternalMCPSession(externalConversationID string,
 		return errors.New("external MCP conversation ID is required")
 	}
 
-	return s.updateState(func(state *State) {
-		if state.ExternalMCPSessions == nil {
-			state.ExternalMCPSessions = map[string]ExternalMCPSessionState{}
-		}
+	session.Agent = strings.TrimSpace(session.Agent)
+	session.ConversationID = strings.TrimSpace(session.ConversationID)
 
-		session.Agent = strings.TrimSpace(session.Agent)
-		session.ConversationID = strings.TrimSpace(session.ConversationID)
-		state.ExternalMCPSessions[externalConversationID] = session
-	})
+	return stateDAO{db: s.db}.upsertExternalMCPSession(context.Background(), externalConversationID, session)
 }
 
 // MarkRestartRequester records that conversationID should see the post-restart notice.
@@ -425,13 +328,129 @@ func (s *SessionService) MarkRestartRequester(ctx context.Context, conversationI
 		return errors.New("restart requester conversation ID is required")
 	}
 
-	return s.updateStateContext(ctx, func(state *State) {
-		if state.PendingRestartNotifications == nil {
-			state.PendingRestartNotifications = map[string]bool{}
+	return stateDAO{db: s.db}.markRestartRequester(ctx, conversationID)
+}
+
+// Thread returns the persisted managed conversation state.
+func (s *SessionService) Thread(conversationID string) (ThreadState, bool, error) {
+	return stateDAO{db: s.db}.thread(context.Background(), conversationID)
+}
+
+// SetThreadAgentIfExists updates a managed conversation agent without creating a thread.
+func (s *SessionService) SetThreadAgentIfExists(conversationID, agent string) (bool, error) {
+	return stateDAO{db: s.db}.setThreadAgent(context.Background(), conversationID, agent)
+}
+
+// ThreadForSeed returns the first managed conversation seeded from seedConversationID.
+func (s *SessionService) ThreadForSeed(seedConversationID string) (conversationID string, thread ThreadState, ok bool, err error) {
+	return stateDAO{db: s.db}.threadForSeed(context.Background(), seedConversationID)
+}
+
+// ResponseCheckpoint returns a persisted response checkpoint.
+func (s *SessionService) ResponseCheckpoint(key string) (ResponseCheckpointState, bool, error) {
+	return stateDAO{db: s.db}.responseCheckpoint(context.Background(), key)
+}
+
+// ExternalMCPSession returns a persisted external MCP session mapping.
+func (s *SessionService) ExternalMCPSession(externalConversationID string) (ExternalMCPSessionState, bool, error) {
+	return stateDAO{db: s.db}.externalMCPSession(context.Background(), externalConversationID)
+}
+
+// ScheduledMessages returns all persisted scheduled messages.
+func (s *SessionService) ScheduledMessages() (map[string]ScheduledMessageState, error) {
+	return stateDAO{db: s.db}.scheduledMessages(context.Background(), "")
+}
+
+// ScheduledMessagesForConversation returns persisted scheduled messages for one conversation.
+func (s *SessionService) ScheduledMessagesForConversation(conversationID string) (map[string]ScheduledMessageState, error) {
+	return stateDAO{db: s.db}.scheduledMessages(context.Background(), conversationID)
+}
+
+// PutScheduledMessage persists one scheduled message.
+func (s *SessionService) PutScheduledMessage(id string, message *ScheduledMessageState) error {
+	return stateDAO{db: s.db}.putScheduledMessage(context.Background(), id, message)
+}
+
+// DeleteScheduledMessage deletes one scheduled message.
+func (s *SessionService) DeleteScheduledMessage(id string) error {
+	return stateDAO{db: s.db}.deleteScheduledMessage(context.Background(), id)
+}
+
+// ResetScheduledMessages deletes pending scheduled messages for one conversation.
+func (s *SessionService) ResetScheduledMessages(conversationID string) error {
+	return stateDAO{db: s.db}.resetScheduledMessages(context.Background(), conversationID)
+}
+
+// ClaimScheduledMessage verifies one due scheduled message and advances recurring messages atomically.
+func (s *SessionService) ClaimScheduledMessage(id, conversationID string, dueAt, now time.Time) (ScheduledMessageState, bool, error) {
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return ScheduledMessageState{}, false, fmt.Errorf("begin scheduled message claim: %w", err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	row := tx.QueryRowContext(context.Background(), `SELECT scheduled_message_id, conversation_id, agent, message, due_at_unix_ns, recurring, interval_ns FROM scheduled_messages WHERE scheduled_message_id = ?`, strings.TrimSpace(id))
+
+	_, message, err := scanScheduledMessage(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ScheduledMessageState{}, false, nil
 		}
 
-		state.PendingRestartNotifications[conversationID] = true
-	})
+		return ScheduledMessageState{}, false, err
+	}
+
+	if message.ConversationID != strings.TrimSpace(conversationID) || !message.DueAt.Equal(dueAt) {
+		return ScheduledMessageState{}, false, nil
+	}
+
+	if message.Recurring {
+		message.DueAt = now.UTC().Add(message.Interval)
+		if err := (stateDAO{db: tx}).putScheduledMessage(context.Background(), id, &message); err != nil {
+			return ScheduledMessageState{}, false, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return ScheduledMessageState{}, false, fmt.Errorf("commit scheduled message claim: %w", err)
+	}
+
+	return message, true, nil
+}
+
+// ActiveGoalThreads returns managed thread state for conversations with active goals.
+func (s *SessionService) ActiveGoalThreads() (map[string]ThreadState, error) {
+	rows, err := s.db.QueryContext(context.Background(), `SELECT g.conversation_id, m.agent, m.seeded_from_response, m.created_by FROM conversation_goals g JOIN managed_conversations m ON m.conversation_id = g.conversation_id WHERE g.status = '' OR g.status = ? ORDER BY g.conversation_id`, GoalStatusActive)
+	if err != nil {
+		return nil, fmt.Errorf("query active goal threads: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	threads := map[string]ThreadState{}
+
+	for rows.Next() {
+		var (
+			conversationID, createdBy string
+			thread                    ThreadState
+		)
+		if err := rows.Scan(&conversationID, &thread.Agent, &thread.SeededFromResponse, &createdBy); err != nil {
+			return nil, fmt.Errorf("scan active goal thread: %w", err)
+		}
+
+		thread.CreatedBy = ThreadCreator(createdBy)
+		threads[conversationID] = thread
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read active goal threads: %w", err)
+	}
+
+	if len(threads) == 0 {
+		return nil, nil
+	}
+
+	return threads, nil
 }
 
 // ApplyPendingRestartNotifications appends one developer notice to pending requester sessions.
@@ -443,17 +462,26 @@ func (s *SessionService) ApplyPendingRestartNotifications(ctx context.Context) e
 
 	defer func() { _ = tx.Rollback() }()
 
-	state, err := loadRocketClawState(ctx, tx)
+	rows, err := tx.QueryContext(ctx, `SELECT conversation_id FROM pending_restart_notifications ORDER BY conversation_id`)
 	if err != nil {
-		return err
+		return fmt.Errorf("query restart notification requesters: %w", err)
 	}
+	defer func() { _ = rows.Close() }()
 
-	conversationIDs := make([]string, 0, len(state.PendingRestartNotifications))
-	for conversationID := range state.PendingRestartNotifications {
+	var conversationIDs []string
+
+	for rows.Next() {
+		var conversationID string
+		if err := rows.Scan(&conversationID); err != nil {
+			return fmt.Errorf("scan restart notification requester: %w", err)
+		}
+
 		conversationIDs = append(conversationIDs, conversationID)
 	}
 
-	slices.Sort(conversationIDs)
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read restart notification requesters: %w", err)
+	}
 
 	for _, conversationID := range conversationIDs {
 		replayInput, err := replayInputForMessage("developer", restartNotificationDeveloperMessage)
@@ -467,9 +495,8 @@ func (s *SessionService) ApplyPendingRestartNotifications(ctx context.Context) e
 		}
 	}
 
-	state.PendingRestartNotifications = nil
-	if err := saveRocketClawState(ctx, tx, state); err != nil {
-		return err
+	if _, err := tx.ExecContext(ctx, `DELETE FROM pending_restart_notifications`); err != nil {
+		return fmt.Errorf("clear restart notification requesters: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -488,7 +515,7 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 
 	defer func() { _ = tx.Rollback() }()
 
-	state, err := loadRocketClawState(ctx, tx)
+	threadIDs, err := managedConversationIDs(ctx, tx)
 	if err != nil {
 		return PruneStateStats{}, err
 	}
@@ -497,22 +524,25 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 
 	deleteConversations := map[string]struct{}{}
 
-	for conversationID := range state.Threads {
+	for _, conversationID := range threadIDs {
 		prune, err := shouldPruneThreadConversation(ctx, tx, conversationID, cutoff)
 		if err != nil {
 			return PruneStateStats{}, err
 		}
 
 		if prune {
-			delete(state.Threads, conversationID)
-			delete(state.Goals, conversationID)
 			deleteConversations[conversationID] = struct{}{}
 			stats.Threads++
 		}
 	}
 
-	for conversationID := range state.Goals {
-		if _, ok := state.Threads[conversationID]; ok {
+	goalIDs, err := goalConversationIDs(ctx, tx)
+	if err != nil {
+		return PruneStateStats{}, err
+	}
+
+	for _, conversationID := range goalIDs {
+		if slices.Contains(threadIDs, conversationID) {
 			continue
 		}
 
@@ -522,21 +552,31 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 		}
 
 		if prune {
-			delete(state.Goals, conversationID)
+			if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_goals WHERE conversation_id = ?`, conversationID); err != nil {
+				return PruneStateStats{}, fmt.Errorf("delete stale goal: %w", err)
+			}
 		}
 	}
 
-	for key := range state.ResponseCheckpoints {
-		if ts, ok := responseCheckpointTime(key); ok && ts.Before(cutoff) {
-			delete(state.ResponseCheckpoints, key)
-			stats.ResponseCheckpoints++
-		}
+	responseCheckpoints, err := pruneResponseCheckpoints(ctx, tx, cutoff)
+	if err != nil {
+		return PruneStateStats{}, err
 	}
 
-	for externalConversationID, session := range state.ExternalMCPSessions {
+	stats.ResponseCheckpoints = responseCheckpoints
+
+	externalSessions, err := externalMCPSessions(ctx, tx)
+	if err != nil {
+		return PruneStateStats{}, err
+	}
+
+	for externalConversationID, session := range externalSessions {
 		conversationID := strings.TrimSpace(session.ConversationID)
 		if conversationID == "" {
-			delete(state.ExternalMCPSessions, externalConversationID)
+			if _, err := tx.ExecContext(ctx, `DELETE FROM external_mcp_sessions WHERE external_conversation_id = ?`, externalConversationID); err != nil {
+				return PruneStateStats{}, fmt.Errorf("delete incomplete external MCP session: %w", err)
+			}
+
 			stats.ExternalMCPSessions++
 
 			continue
@@ -548,14 +588,16 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 		}
 
 		if prune {
-			delete(state.ExternalMCPSessions, externalConversationID)
+			if _, err := tx.ExecContext(ctx, `DELETE FROM external_mcp_sessions WHERE external_conversation_id = ?`, externalConversationID); err != nil {
+				return PruneStateStats{}, fmt.Errorf("delete stale external MCP session: %w", err)
+			}
 
 			deleteConversations[conversationID] = struct{}{}
 			stats.ExternalMCPSessions++
 		}
 	}
 
-	orphans, err := stalePrivateConversationIDs(ctx, tx, cutoff, state)
+	orphans, err := stalePrivateConversationIDs(ctx, tx, cutoff)
 	if err != nil {
 		return PruneStateStats{}, err
 	}
@@ -570,15 +612,20 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 	}
 
 	for conversationID := range deleteConversations {
-		delete(state.PendingRestartNotifications, conversationID)
-		delete(state.Goals, conversationID)
+		if _, err := tx.ExecContext(ctx, `DELETE FROM pending_restart_notifications WHERE conversation_id = ?`, conversationID); err != nil {
+			return PruneStateStats{}, fmt.Errorf("delete stale pending restart notification: %w", err)
+		}
+
+		if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_goals WHERE conversation_id = ?`, conversationID); err != nil {
+			return PruneStateStats{}, fmt.Errorf("delete stale conversation goal: %w", err)
+		}
+
+		if _, err := tx.ExecContext(ctx, `DELETE FROM managed_conversations WHERE conversation_id = ?`, conversationID); err != nil {
+			return PruneStateStats{}, fmt.Errorf("delete stale managed conversation: %w", err)
+		}
 	}
 
 	stats.SessionRows = rows
-
-	if err := saveRocketClawState(ctx, tx, state); err != nil {
-		return PruneStateStats{}, err
-	}
 
 	if err := tx.Commit(); err != nil {
 		return PruneStateStats{}, fmt.Errorf("commit state prune: %w", err)
@@ -652,57 +699,38 @@ func (s *SessionService) CheckpointWAL(ctx context.Context) (WALCheckpointStats,
 
 func (s *SessionService) setGoalStatus(conversationID, status, note string) (GoalState, error) {
 	conversationID = strings.TrimSpace(conversationID)
+	ctx := context.Background()
 
-	var goal GoalState
-
-	err := s.updateState(func(state *State) {
-		current, ok := state.Goals[conversationID]
-		if !ok || strings.TrimSpace(current.Status) != GoalStatusActive {
-			goal = current
-			return
-		}
-
-		current.Status = status
-		current.Note = strings.TrimSpace(note)
-		current.UpdatedAt = time.Now().UTC()
-		state.Goals[conversationID] = current
-		goal = current
-	})
+	tx, err := s.beginStateTx(ctx, "goal status update")
 	if err != nil {
 		return GoalState{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	dao := stateDAO{db: tx}
+	if _, err := dao.setActiveGoalStatus(ctx, conversationID, status, note, time.Now().UTC()); err != nil {
+		return GoalState{}, err
+	}
+
+	goal, _, err := dao.goal(ctx, conversationID)
+	if err != nil {
+		return GoalState{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return GoalState{}, fmt.Errorf("commit goal status update: %w", err)
 	}
 
 	return goal, nil
 }
 
-func (s *SessionService) updateState(mutate func(*State)) error {
-	return s.updateStateContext(context.Background(), mutate)
-}
-
-func (s *SessionService) updateStateContext(ctx context.Context, mutate func(*State)) error {
+func (s *SessionService) beginStateTx(ctx context.Context, label string) (*sql.Tx, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin state update: %w", err)
+		return nil, fmt.Errorf("begin %s: %w", label, err)
 	}
 
-	defer func() { _ = tx.Rollback() }()
-
-	state, err := loadRocketClawState(ctx, tx)
-	if err != nil {
-		return err
-	}
-
-	mutate(&state)
-
-	if err := saveRocketClawState(ctx, tx, state); err != nil {
-		return err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit state update: %w", err)
-	}
-
-	return nil
+	return tx, nil
 }
 
 func sessionDBPathIn(workspace, workDir string) string {
@@ -1395,21 +1423,6 @@ func loadRocketClawState(ctx context.Context, db stateStoreDB) (State, error) {
 	return state, nil
 }
 
-func saveRocketClawState(ctx context.Context, db stateStoreDB, state State) error {
-	normalizeState(&state)
-
-	data, err := json.Marshal(state)
-	if err != nil {
-		return fmt.Errorf("marshal persisted state: %w", err)
-	}
-
-	if _, err := db.ExecContext(ctx, `INSERT INTO session_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, "rocketclaw_state", string(data)); err != nil {
-		return fmt.Errorf("write persisted state: %w", err)
-	}
-
-	return nil
-}
-
 func slackStateKeyTime(key, prefix string) (time.Time, bool) {
 	key = strings.TrimSpace(key)
 	if !strings.HasPrefix(key, prefix) {
@@ -1457,6 +1470,27 @@ func responseCheckpointTime(key string) (time.Time, bool) {
 	return slackStateKeyTime(key, "slack-response:")
 }
 
+func pruneResponseCheckpoints(ctx context.Context, db stateStoreDB, cutoff time.Time) (int, error) {
+	checkpointKeys, err := responseCheckpointKeys(ctx, db)
+	if err != nil {
+		return 0, err
+	}
+
+	pruned := 0
+
+	for _, key := range checkpointKeys {
+		if ts, ok := responseCheckpointTime(key); ok && ts.Before(cutoff) {
+			if _, err := db.ExecContext(ctx, `DELETE FROM response_checkpoints WHERE checkpoint_key = ?`, key); err != nil {
+				return 0, fmt.Errorf("delete stale response checkpoint: %w", err)
+			}
+
+			pruned++
+		}
+	}
+
+	return pruned, nil
+}
+
 func sessionLatestBefore(ctx context.Context, db stateStoreDB, conversationID string, fallback, cutoff time.Time) (bool, error) {
 	var before bool
 
@@ -1468,7 +1502,81 @@ func sessionLatestBefore(ctx context.Context, db stateStoreDB, conversationID st
 	return before, nil
 }
 
-func stalePrivateConversationIDs(ctx context.Context, db *sql.Tx, cutoff time.Time, state State) ([]string, error) {
+func managedConversationIDs(ctx context.Context, db stateStoreDB) ([]string, error) {
+	return queryStrings(ctx, db, `SELECT conversation_id FROM managed_conversations ORDER BY conversation_id`, "managed conversation IDs")
+}
+
+func goalConversationIDs(ctx context.Context, db stateStoreDB) ([]string, error) {
+	return queryStrings(ctx, db, `SELECT conversation_id FROM conversation_goals ORDER BY conversation_id`, "goal conversation IDs")
+}
+
+func responseCheckpointKeys(ctx context.Context, db stateStoreDB) ([]string, error) {
+	return queryStrings(ctx, db, `SELECT checkpoint_key FROM response_checkpoints ORDER BY checkpoint_key`, "response checkpoint keys")
+}
+
+func externalMCPSessions(ctx context.Context, db stateStoreDB) (map[string]ExternalMCPSessionState, error) {
+	rows, err := db.QueryContext(ctx, `SELECT external_conversation_id, agent, conversation_id FROM external_mcp_sessions ORDER BY external_conversation_id`)
+	if err != nil {
+		return nil, fmt.Errorf("query external MCP sessions: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	sessions := map[string]ExternalMCPSessionState{}
+
+	for rows.Next() {
+		var (
+			externalConversationID string
+			session                ExternalMCPSessionState
+		)
+		if err := rows.Scan(&externalConversationID, &session.Agent, &session.ConversationID); err != nil {
+			return nil, fmt.Errorf("scan external MCP session: %w", err)
+		}
+
+		sessions[externalConversationID] = session
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read external MCP sessions: %w", err)
+	}
+
+	return sessions, nil
+}
+
+func queryStrings(ctx context.Context, db stateStoreDB, query, label string) ([]string, error) {
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("query %s: %w", label, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var values []string
+
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, fmt.Errorf("scan %s: %w", label, err)
+		}
+
+		values = append(values, value)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read %s: %w", label, err)
+	}
+
+	return values, nil
+}
+
+func conversationExists(ctx context.Context, db stateStoreDB, table, column, conversationID string) (bool, error) {
+	var exists bool
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM `+table+` WHERE `+column+` = ?)`, conversationID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check conversation reference in %s: %w", table, err)
+	}
+
+	return exists, nil
+}
+
+func stalePrivateConversationIDs(ctx context.Context, db *sql.Tx, cutoff time.Time) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `SELECT conversation_id FROM session_entries WHERE conversation_id LIKE 'slack-thread:%' OR conversation_id LIKE 'external_mcp:%' OR conversation_id LIKE 'cron:%' OR conversation_id LIKE 'one-off-cron:%' GROUP BY conversation_id HAVING MAX(julianday(entry_timestamp)) < julianday(?)`, cutoff.Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, fmt.Errorf("query stale private session conversations: %w", err)
@@ -1478,21 +1586,22 @@ func stalePrivateConversationIDs(ctx context.Context, db *sql.Tx, cutoff time.Ti
 
 	stale := []string{}
 
-rowsLoop:
 	for rows.Next() {
 		var conversationID string
 		if err := rows.Scan(&conversationID); err != nil {
 			return nil, fmt.Errorf("scan stale private session conversation: %w", err)
 		}
 
-		if _, ok := state.Threads[conversationID]; ok {
+		if ok, err := conversationExists(ctx, db, `managed_conversations`, `conversation_id`, conversationID); err != nil {
+			return nil, err
+		} else if ok {
 			continue
 		}
 
-		for _, session := range state.ExternalMCPSessions {
-			if strings.TrimSpace(session.ConversationID) == conversationID {
-				continue rowsLoop
-			}
+		if ok, err := conversationExists(ctx, db, `external_mcp_sessions`, `conversation_id`, conversationID); err != nil {
+			return nil, err
+		} else if ok {
+			continue
 		}
 
 		stale = append(stale, conversationID)
@@ -1560,40 +1669,9 @@ func openSessionDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
-	// page_size and auto_vacuum must precede schema creation for new databases.
-	for _, statement := range []string{
-		`PRAGMA busy_timeout = 30000`,
-		`PRAGMA page_size = 4096`,
-		`PRAGMA auto_vacuum = INCREMENTAL`,
-		`PRAGMA journal_mode = WAL`,
-		`PRAGMA synchronous = NORMAL`,
-		`PRAGMA cache_size = -64000`,
-		`PRAGMA mmap_size = 268435456`,
-		`PRAGMA temp_store = MEMORY`,
-		`CREATE TABLE IF NOT EXISTS session_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL, entry_json TEXT NOT NULL, entry_timestamp TEXT NOT NULL)`,
-		`CREATE TABLE IF NOT EXISTS session_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
-		`CREATE INDEX IF NOT EXISTS session_entries_conversation_id_id ON session_entries (conversation_id, id)`,
-	} {
-		deadline := time.Now().Add(30 * time.Second)
-
-		for {
-			_, err := db.ExecContext(ctx, statement)
-			if err == nil {
-				break
-			}
-
-			if !strings.Contains(err.Error(), "database is locked") || time.Now().After(deadline) {
-				_ = db.Close()
-				return nil, fmt.Errorf("initialize rocketcode session db: %w", err)
-			}
-
-			select {
-			case <-ctx.Done():
-				_ = db.Close()
-				return nil, fmt.Errorf("initialize rocketcode session db: %w", ctx.Err())
-			case <-time.After(50 * time.Millisecond):
-			}
-		}
+	if err := initializeSessionDB(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 
 	return db, nil

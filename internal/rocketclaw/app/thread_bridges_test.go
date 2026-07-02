@@ -24,11 +24,12 @@ func TestRunReportsPendingRestartNotificationStartupErrors(t *testing.T) {
 	workspace := shortTempDir(t)
 	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultWorkDir)
 	require.NoError(t, err)
+	require.NoError(t, service.MarkRestartRequester(context.Background(), "main"))
 	require.NoError(t, service.Stop(context.Background()))
 
 	db, err := sql.Open("sqlite", filepath.Join(workspace, config.DefaultWorkDir, "state.sqlite3"))
 	require.NoError(t, err)
-	_, err = db.ExecContext(context.Background(), `INSERT INTO session_meta (key, value) VALUES (?, ?)`, "rocketclaw_state", "not-json")
+	_, err = db.ExecContext(context.Background(), `CREATE TRIGGER fail_session_entries_insert BEFORE INSERT ON session_entries BEGIN SELECT RAISE(FAIL, 'no append'); END`)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
@@ -50,9 +51,10 @@ func TestThreadBridgeManagerCreatesSeparateBridgesPerThreadAndPersistsThem(t *te
 
 	require.Len(t, created, 2)
 
-	state, err := store.Load()
+	thread, ok, err := store.Thread(created[0].ConversationID)
 	require.NoError(t, err)
-	assert.Equal(t, harnessbridge.ThreadState{Agent: "main", SeededFromResponse: ""}, state.Threads[created[0].ConversationID])
+	require.True(t, ok)
+	assert.Equal(t, harnessbridge.ThreadState{Agent: "main", SeededFromResponse: ""}, thread)
 }
 
 func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
@@ -145,9 +147,10 @@ func TestThreadBridgeManagerSwitchesThreadAgent(t *testing.T) {
 	assert.True(t, handled)
 	assert.Equal(t, []string{"submit:first", "switch:planner"}, bridge.ops)
 
-	state, err := store.Load()
+	thread, ok, err := store.Thread(harnessbridge.SlackThreadConversationID("D123", "111.222"))
 	require.NoError(t, err)
-	assert.Equal(t, "planner", state.Threads[harnessbridge.SlackThreadConversationID("D123", "111.222")].Agent)
+	require.True(t, ok)
+	assert.Equal(t, "planner", thread.Agent)
 }
 
 func TestThreadBridgeManagerReadsThreadAgent(t *testing.T) {
@@ -196,6 +199,27 @@ func TestThreadBridgeManagerStartsGoalInExistingThreadWithPersistedAgent(t *test
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "ship it", goal.Objective)
+}
+
+func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
+	store := newTestSessionService(t, t.TempDir())
+	conversationID := harnessbridge.SlackThreadConversationID("D123", "111.222")
+	require.NoError(t, store.UpsertThread(conversationID, "planner"))
+	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 5))
+
+	bridge := new(fakeDirectBridge)
+	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
+		assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetSlackMain}}, cfg)
+
+		return bridge
+	})
+
+	require.NoError(t, manager.StartActiveGoals())
+	require.Len(t, bridge.submits, 1)
+	assert.Equal(t, "goal_continuation", bridge.submits[0].Label)
+	assert.Equal(t, "Continue the active goal loop.", bridge.submits[0].Text)
+	assert.Equal(t, conversationID, bridge.submits[0].ConversationID)
+	assert.Equal(t, &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}, bridge.submits[0].SlackReply)
 }
 
 func TestThreadBridgeManagerRejectsDuplicateActiveGoal(t *testing.T) {
@@ -316,9 +340,10 @@ func TestThreadBridgeManagerRegistersCronThreadWithoutSubmitting(t *testing.T) {
 	assert.Equal(t, []string{"seed_cron:cron result"}, bridge.ops)
 	assert.Empty(t, bridge.submits)
 
-	state, err := store.Load()
+	thread, ok, err := store.Thread(conversationID)
 	require.NoError(t, err)
-	assert.Equal(t, harnessbridge.ThreadState{Agent: "planner", CreatedBy: harnessbridge.ThreadCreatedByCron}, state.Threads[conversationID])
+	require.True(t, ok)
+	assert.Equal(t, harnessbridge.ThreadState{Agent: "planner", CreatedBy: harnessbridge.ThreadCreatedByCron}, thread)
 }
 
 func TestThreadBridgeManagerRejectsMissingSlackThreadTarget(t *testing.T) {
@@ -664,11 +689,11 @@ func TestThreadBridgeManagerSeedsResponseRootedThreadOnce(t *testing.T) {
 	require.Len(t, bridge.seeds, 1)
 	require.Len(t, bridge.submits, 2)
 
-	state, err := store.Load()
-	require.NoError(t, err)
-
 	conversationID := harnessbridge.SlackThreadConversationID("D123", "111.222")
-	assert.Equal(t, harnessbridge.ThreadState{Agent: "main", SeededFromResponse: checkpointKey}, state.Threads[conversationID])
+	thread, ok, err := store.Thread(conversationID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, harnessbridge.ThreadState{Agent: "main", SeededFromResponse: checkpointKey}, thread)
 }
 
 func TestThreadBridgeManagerIgnoresMissingResponseCheckpoint(t *testing.T) {
@@ -758,9 +783,10 @@ func TestThreadBridgeManagerRecordsResponseCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, manager.RecordResponseCheckpoint(events.TextConversationTarget{ChannelID: "", MessageID: "111.222"}, events.ResponseCheckpoint{}))
 
-	state, err := store.Load()
+	checkpoint, ok, err := store.ResponseCheckpoint(harnessbridge.SlackResponseCheckpointKey("D123", "111.222"))
 	require.NoError(t, err)
-	assert.Equal(t, harnessbridge.ResponseCheckpointState{ConversationID: "main", SessionEntryID: 7, ResponseID: "resp", Model: "gpt-5.5", AssistantText: "answer"}, state.ResponseCheckpoints[harnessbridge.SlackResponseCheckpointKey("D123", "111.222")])
+	require.True(t, ok)
+	assert.Equal(t, harnessbridge.ResponseCheckpointState{ConversationID: "main", SessionEntryID: 7, ResponseID: "resp", Model: "gpt-5.5", AssistantText: "answer"}, checkpoint)
 }
 
 func TestThreadBridgeManagerWaitIdleWaitsForActiveBridges(t *testing.T) {

@@ -68,7 +68,7 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 
 ### State And Turn Accounting
 
-- Goal state is persisted in `<runtime-dir>/state.sqlite3` as part of RocketClaw's existing state JSON, keyed by the owning managed-conversation ID.
+- Goal state is persisted in `<runtime-dir>/state.sqlite3`, keyed by the owning managed-conversation ID. The runtime may store goal state in normalized SQLite tables rather than the legacy aggregate state JSON, as long as the centralized RocketClaw SQLite opener and migration contracts remain preserved.
 - Goal state records at least objective, normalized max turns, optional check script, turns used, status, timestamps, and optional terminal note.
 - Goal statuses are `active`, `complete`, `blocked`, `stopped`, and `budget_exhausted`.
 - A managed conversation may run many goals over its lifetime, but only one goal may be active at a time.
@@ -148,7 +148,7 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 ## Consequences
 
 - The implementation must keep connector trigger parsing separate from persistent bridge continuation ownership.
-- Persisted state changes must continue using the centralized RocketClaw SQLite opener and existing state JSON path.
+- Persisted state changes must continue using the centralized RocketClaw SQLite opener and must preserve restart recovery and migration of legacy goal state.
 - Tests must cover trigger parsing, malformed rejection, agent selection, existing-conversation goal starts, visible connector turn delivery, stop emoji messages and reactions, interruption marker targeting, completion reactions, persistence, restart recovery, budget exhaustion, tool-based terminal statuses, human re-steering turn accounting, and human-reply-before-continuation ordering.
 - Tests must cover duplicate active-goal rejection and starting a later goal after the previous goal is terminal.
 
@@ -172,3 +172,4 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 - 2026-06-16: Specified that `ask_user_question` is available for human goal kickoff and re-steering turns only, not automatic or restart-recovery continuations.
 - 2026-07-01: Allowed goal-start `maxTurns:` and `checkScript:` values to be attached immediately after the colon as well as separated by whitespace.
 - 2026-07-01: Removed Discord Text and terminal goal-loop contracts, leaving Slack as the goal-loop connector binding.
+- 2026-07-01: Allowed goal state to move from legacy aggregate state JSON into normalized SQLite state tables while preserving centralized opener, migration, and restart-recovery contracts.

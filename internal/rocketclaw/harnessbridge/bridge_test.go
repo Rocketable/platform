@@ -1585,9 +1585,9 @@ func TestBridgeScheduleMessageSubmitsAfterDelay(t *testing.T) {
 			t.Fatal("scheduled message was not submitted")
 		}
 
-		state, err := bridge.config.SessionService.Load()
+		messages, err := bridge.config.SessionService.ScheduledMessages()
 		require.NoError(t, err)
-		require.Len(t, state.ScheduledMessages, 1)
+		require.Len(t, messages, 1)
 	})
 }
 
@@ -1597,11 +1597,11 @@ func TestBridgeScheduleMessagePersistsRecurringMetadata(t *testing.T) {
 
 	require.NoError(t, bridge.ScheduleMessage(time.Minute, "again", true))
 
-	state, err := service.Load()
+	messages, err := service.ScheduledMessages()
 	require.NoError(t, err)
-	require.Len(t, state.ScheduledMessages, 1)
+	require.Len(t, messages, 1)
 
-	for _, scheduled := range state.ScheduledMessages {
+	for _, scheduled := range messages {
 		assert.True(t, scheduled.Recurring)
 		assert.Equal(t, time.Minute, scheduled.Interval)
 		assert.Equal(t, "again", scheduled.Message)
@@ -1650,9 +1650,8 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 		conversationID := "external_mcp:planner:abc"
 		threadKey := SlackThreadConversationID("D123", "111.222")
 
-		require.NoError(t, service.updateState(func(state *State) {
-			state.Threads = map[string]ThreadState{threadKey: {Agent: "planner", SeededFromResponse: conversationID}}
-		}))
+		require.NoError(t, service.UpsertThread(threadKey, "planner"))
+		require.NoError(t, service.MarkThreadSeeded(threadKey, conversationID))
 
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, Agent: "planner", SessionService: service}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 		require.NoError(t, bridge.ScheduleMessage(5*time.Second, "later", false))
@@ -1679,9 +1678,8 @@ func TestBridgeScheduleMessageExternalMCPDoesNotUseUnrelatedSlackThread(t *testi
 		conversationID := "external_mcp:planner:abc"
 		threadKey := SlackThreadConversationID("D123", "111.222")
 
-		require.NoError(t, service.updateState(func(state *State) {
-			state.Threads = map[string]ThreadState{threadKey: {Agent: "planner", SeededFromResponse: "external_mcp:planner:other"}}
-		}))
+		require.NoError(t, service.UpsertThread(threadKey, "planner"))
+		require.NoError(t, service.MarkThreadSeeded(threadKey, "external_mcp:planner:other"))
 
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, Agent: "planner", SessionService: service}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 		require.NoError(t, bridge.ScheduleMessage(5*time.Second, "later", false))
@@ -1704,9 +1702,7 @@ func TestBridgeScheduleMessageExternalMCPDoesNotUseUnrelatedSlackThread(t *testi
 func TestBridgeDeletesScheduledMessageAfterSuccessfulHandling(t *testing.T) {
 	workspace := t.TempDir()
 	service := newTestSessionServiceAt(t, workspace)
-	require.NoError(t, service.updateState(func(state *State) {
-		state.ScheduledMessages = map[string]ScheduledMessageState{"schedule-1": {ConversationID: events.MainConversationID(), Agent: "main", Message: "later", DueAt: time.Now().UTC()}}
-	}))
+	require.NoError(t, service.PutScheduledMessage("schedule-1", &ScheduledMessageState{ConversationID: events.MainConversationID(), Agent: "main", Message: "later", DueAt: time.Now().UTC()}))
 
 	bus := events.New()
 	defer bus.Close()
@@ -1730,17 +1726,15 @@ func TestBridgeDeletesScheduledMessageAfterSuccessfulHandling(t *testing.T) {
 
 	require.NoError(t, bridge.WaitIdle(waitCtx))
 
-	state, err := service.Load()
+	messages, err := service.ScheduledMessages()
 	require.NoError(t, err)
-	assert.Empty(t, state.ScheduledMessages)
+	assert.Empty(t, messages)
 }
 
 func TestBridgeKeepsScheduledMessageAfterHandlingError(t *testing.T) {
 	workspace := t.TempDir()
 	service := newTestSessionServiceAt(t, workspace)
-	require.NoError(t, service.updateState(func(state *State) {
-		state.ScheduledMessages = map[string]ScheduledMessageState{"schedule-1": {ConversationID: events.MainConversationID(), Agent: "main", Message: "later", DueAt: time.Now().UTC()}}
-	}))
+	require.NoError(t, service.PutScheduledMessage("schedule-1", &ScheduledMessageState{ConversationID: events.MainConversationID(), Agent: "main", Message: "later", DueAt: time.Now().UTC()}))
 
 	bus := events.New()
 	bus.Close()
@@ -1760,17 +1754,15 @@ func TestBridgeKeepsScheduledMessageAfterHandlingError(t *testing.T) {
 
 	require.NoError(t, bridge.WaitIdle(waitCtx))
 
-	state, err := service.Load()
+	messages, err := service.ScheduledMessages()
 	require.NoError(t, err)
-	require.Len(t, state.ScheduledMessages, 1)
+	require.Len(t, messages, 1)
 }
 
 func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.T) {
 	workspace := t.TempDir()
 	service := newTestSessionServiceAt(t, workspace)
-	require.NoError(t, service.updateState(func(state *State) {
-		state.ScheduledMessages = map[string]ScheduledMessageState{"schedule-1": {ConversationID: events.MainConversationID(), Agent: "main", Message: "later", DueAt: time.Now().UTC(), Recurring: true, Interval: time.Minute}}
-	}))
+	require.NoError(t, service.PutScheduledMessage("schedule-1", &ScheduledMessageState{ConversationID: events.MainConversationID(), Agent: "main", Message: "later", DueAt: time.Now().UTC(), Recurring: true, Interval: time.Minute}))
 
 	bus := events.New()
 	defer bus.Close()
@@ -1794,9 +1786,9 @@ func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.
 
 	require.NoError(t, bridge.WaitIdle(waitCtx))
 
-	state, err := service.Load()
+	messages, err := service.ScheduledMessages()
 	require.NoError(t, err)
-	require.Contains(t, state.ScheduledMessages, "schedule-1")
+	require.Contains(t, messages, "schedule-1")
 }
 
 func TestBridgeStopDisarmsScheduledMessage(t *testing.T) {
@@ -1836,9 +1828,7 @@ func TestBridgeResetScheduledMessagesDeletesPersistedAndCancelsArmed(t *testing.
 		bridge.stopCh = make(chan struct{})
 
 		require.NoError(t, bridge.ScheduleMessage(5*time.Second, "later", false))
-		require.NoError(t, store.updateState(func(state *State) {
-			state.ScheduledMessages["other"] = ScheduledMessageState{ConversationID: "other", Agent: "main", Message: "keep", DueAt: time.Now().UTC().Add(time.Hour)}
-		}))
+		require.NoError(t, store.PutScheduledMessage("other", &ScheduledMessageState{ConversationID: "other", Agent: "main", Message: "keep", DueAt: time.Now().UTC().Add(time.Hour)}))
 
 		require.NoError(t, bridge.ResetScheduledMessages())
 		synctest.Wait()
@@ -1851,11 +1841,11 @@ func TestBridgeResetScheduledMessagesDeletesPersistedAndCancelsArmed(t *testing.
 		default:
 		}
 
-		state, err := store.Load()
+		messages, err := store.ScheduledMessages()
 		require.NoError(t, err)
-		require.Len(t, state.ScheduledMessages, 1)
-		assert.Equal(t, "other", state.ScheduledMessages["other"].ConversationID)
-		assert.Equal(t, "keep", state.ScheduledMessages["other"].Message)
+		require.Len(t, messages, 1)
+		assert.Equal(t, "other", messages["other"].ConversationID)
+		assert.Equal(t, "keep", messages["other"].Message)
 		assert.Contains(t, logs.String(), "scheduled message persisted")
 		assert.Contains(t, logs.String(), "scheduled messages reset")
 		assert.Contains(t, logs.String(), "scheduled message missing or stale at due time")
@@ -1876,7 +1866,7 @@ func TestBridgeArmsOverdueScheduledMessage(t *testing.T) {
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: events.MainConversationID(), SessionService: service}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 		due := ScheduledMessageState{ConversationID: events.MainConversationID(), Agent: "main", Message: "now", DueAt: time.Now().UTC().Add(-time.Second)}
 
-		require.NoError(t, service.updateState(func(state *State) { state.ScheduledMessages = map[string]ScheduledMessageState{"due": due} }))
+		require.NoError(t, service.PutScheduledMessage("due", &due))
 		bridge.armScheduledMessage("due", &due)
 		synctest.Wait()
 
@@ -1897,7 +1887,7 @@ func TestBridgeRecurringScheduledMessageAdvancesAndRearms(t *testing.T) {
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: events.MainConversationID(), SessionService: service}, requestCh: make(chan bridgeRequest, 2), stopCh: make(chan struct{})}
 		due := ScheduledMessageState{ConversationID: events.MainConversationID(), Agent: "main", Message: "again", DueAt: time.Now().UTC().Add(5 * time.Second), Recurring: true, Interval: time.Minute}
 
-		require.NoError(t, service.updateState(func(state *State) { state.ScheduledMessages = map[string]ScheduledMessageState{"repeat": due} }))
+		require.NoError(t, service.PutScheduledMessage("repeat", &due))
 		bridge.armScheduledMessage("repeat", &due)
 
 		time.Sleep(5 * time.Second)
@@ -1912,10 +1902,10 @@ func TestBridgeRecurringScheduledMessageAdvancesAndRearms(t *testing.T) {
 			t.Fatal("recurring scheduled message was not submitted")
 		}
 
-		state, err := service.Load()
+		messages, err := service.ScheduledMessages()
 		require.NoError(t, err)
 
-		advanced := state.ScheduledMessages["repeat"]
+		advanced := messages["repeat"]
 		assert.True(t, advanced.Recurring)
 		assert.Equal(t, time.Minute, advanced.Interval)
 		assert.True(t, advanced.DueAt.After(due.DueAt))
@@ -1942,7 +1932,7 @@ func TestBridgeStaleScheduledMessageTimerDoesNotSubmit(t *testing.T) {
 		newDue := oldDue
 		newDue.DueAt = newDue.DueAt.Add(time.Minute)
 
-		require.NoError(t, service.updateState(func(state *State) { state.ScheduledMessages = map[string]ScheduledMessageState{"stale": newDue} }))
+		require.NoError(t, service.PutScheduledMessage("stale", &newDue))
 		bridge.armScheduledMessage("stale", &oldDue)
 
 		time.Sleep(5 * time.Second)
@@ -1962,7 +1952,7 @@ func TestBridgeScheduledMessageTimerStopsOnStoreError(t *testing.T) {
 		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: events.MainConversationID(), SessionService: service}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 		due := ScheduledMessageState{ConversationID: events.MainConversationID(), Agent: "main", Message: "later", DueAt: time.Now().UTC().Add(5 * time.Second)}
 
-		require.NoError(t, service.updateState(func(state *State) { state.ScheduledMessages = map[string]ScheduledMessageState{"broken": due} }))
+		require.NoError(t, service.PutScheduledMessage("broken", &due))
 		require.NoError(t, service.Stop(context.Background()))
 		bridge.armScheduledMessage("broken", &due)
 
@@ -1994,10 +1984,10 @@ func TestBridgeRestoresScheduledMessageAfterRestart(t *testing.T) {
 		second := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: events.MainConversationID(), Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.NewJSONHandler(&logs, nil)))
 		second.requestCh = make(chan bridgeRequest, 1)
 		second.stopCh = make(chan struct{})
-		state, err := store.Load()
+		messages, err := store.ScheduledMessages()
 		require.NoError(t, err)
 
-		for id, message := range state.ScheduledMessages {
+		for id, message := range messages {
 			second.armScheduledMessage(id, &message)
 		}
 
@@ -2021,9 +2011,9 @@ func TestBridgeRestoresScheduledMessageAfterRestart(t *testing.T) {
 			t.Fatal("restored scheduled message was not submitted")
 		}
 
-		state, err = store.Load()
+		messages, err = store.ScheduledMessages()
 		require.NoError(t, err)
-		require.Len(t, state.ScheduledMessages, 1)
+		require.Len(t, messages, 1)
 		assert.Contains(t, logs.String(), "scheduled message enqueued")
 	})
 }
@@ -2034,9 +2024,7 @@ func TestBridgeStartLogsRestoredScheduledMessage(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop(context.Background())) })
 
-	require.NoError(t, store.updateState(func(state *State) {
-		state.ScheduledMessages = map[string]ScheduledMessageState{"schedule-1": {ConversationID: events.MainConversationID(), Agent: "main", Message: "later", DueAt: time.Now().UTC().Add(time.Hour)}}
-	}))
+	require.NoError(t, store.PutScheduledMessage("schedule-1", &ScheduledMessageState{ConversationID: events.MainConversationID(), Agent: "main", Message: "later", DueAt: time.Now().UTC().Add(time.Hour)}))
 
 	var logs bytes.Buffer
 

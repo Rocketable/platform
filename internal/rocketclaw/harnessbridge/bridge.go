@@ -167,16 +167,14 @@ func (b *Bridge) Start(ctx context.Context) error {
 
 	b.stopCh = make(chan struct{})
 
-	state, err := b.config.SessionService.Load()
+	scheduledMessages, err := b.config.SessionService.ScheduledMessagesForConversation(b.config.ConversationID)
 	if err != nil {
 		return fmt.Errorf("load scheduled messages: %w", err)
 	}
 
-	for id, message := range state.ScheduledMessages {
-		if message.ConversationID == b.config.ConversationID {
-			b.log.Info("scheduled message restored", "scheduled_message_id", id, "conversation_id", message.ConversationID, "agent", message.Agent, "due_at", message.DueAt, "remaining_ms", time.Until(message.DueAt).Milliseconds())
-			b.armScheduledMessage(id, &message)
-		}
+	for id, message := range scheduledMessages {
+		b.log.Info("scheduled message restored", "scheduled_message_id", id, "conversation_id", message.ConversationID, "agent", message.Agent, "due_at", message.DueAt, "remaining_ms", time.Until(message.DueAt).Milliseconds())
+		b.armScheduledMessage(id, &message)
 	}
 
 	if b.config.ConsumeSharedInbound {
@@ -207,13 +205,7 @@ func (b *Bridge) ScheduleMessage(delay time.Duration, message string, recurring 
 		scheduled.Interval = delay
 	}
 
-	if err := b.config.SessionService.updateState(func(state *State) {
-		if state.ScheduledMessages == nil {
-			state.ScheduledMessages = map[string]ScheduledMessageState{}
-		}
-
-		state.ScheduledMessages[id] = scheduled
-	}); err != nil {
+	if err := b.config.SessionService.PutScheduledMessage(id, &scheduled); err != nil {
 		b.log.Error("scheduled message persist failed", "scheduled_message_id", id, "conversation_id", scheduled.ConversationID, "agent", scheduled.Agent, "due_at", scheduled.DueAt, "delay_ms", delay.Milliseconds(), "recurring", recurring, "interval_ms", scheduled.Interval.Milliseconds(), "message_len", len([]rune(message)), "error", err)
 		return fmt.Errorf("persist scheduled message: %w", err)
 	}
@@ -226,11 +218,7 @@ func (b *Bridge) ScheduleMessage(delay time.Duration, message string, recurring 
 
 // ResetScheduledMessages deletes pending scheduled prompts for this conversation.
 func (b *Bridge) ResetScheduledMessages() error {
-	if err := b.config.SessionService.updateState(func(state *State) {
-		maps.DeleteFunc(state.ScheduledMessages, func(_ string, message ScheduledMessageState) bool {
-			return message.ConversationID == b.config.ConversationID
-		})
-	}); err != nil {
+	if err := b.config.SessionService.ResetScheduledMessages(b.config.ConversationID); err != nil {
 		return fmt.Errorf("reset scheduled messages: %w", err)
 	}
 
@@ -702,7 +690,7 @@ func (b *Bridge) loop(ctx context.Context) {
 				}
 
 				if errHandle == nil && request.scheduledMessageID != "" && !request.scheduledMessageRecurring {
-					if errDelete := b.config.SessionService.updateState(func(state *State) { delete(state.ScheduledMessages, request.scheduledMessageID) }); errDelete != nil {
+					if errDelete := b.config.SessionService.DeleteScheduledMessage(request.scheduledMessageID); errDelete != nil {
 						b.log.Error("delete handled scheduled message", "error", errDelete)
 					} else {
 						b.log.Info("scheduled message deleted after successful handling", "scheduled_message_id", request.scheduledMessageID, "conversation_id", b.config.ConversationID)
@@ -2115,27 +2103,12 @@ func (b *Bridge) armScheduledMessage(id string, message *ScheduledMessageState) 
 	armed := *message
 	time.AfterFunc(max(time.Until(armed.DueAt), 0), func() {
 		var (
-			stored  ScheduledMessageState
-			threads map[string]ThreadState
-			ready   bool
+			stored ScheduledMessageState
+			ready  bool
 		)
 
-		if err := b.config.SessionService.updateState(func(state *State) {
-			current, ok := state.ScheduledMessages[id]
-			if !ok || current.ConversationID != armed.ConversationID || !current.DueAt.Equal(armed.DueAt) {
-				return
-			}
-
-			stored = current
-			threads = maps.Clone(state.Threads)
-			ready = true
-
-			if current.Recurring {
-				current.DueAt = time.Now().UTC().Add(current.Interval)
-				state.ScheduledMessages[id] = current
-				stored = current
-			}
-		}); err != nil {
+		stored, ready, err := b.config.SessionService.ClaimScheduledMessage(id, armed.ConversationID, armed.DueAt, time.Now().UTC())
+		if err != nil {
 			b.log.Error("prepare scheduled message", "scheduled_message_id", id, "conversation_id", armed.ConversationID, "error", err)
 			return
 		}
@@ -2152,20 +2125,17 @@ func (b *Bridge) armScheduledMessage(id string, message *ScheduledMessageState) 
 				inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
 			}
 		} else if strings.HasPrefix(armed.ConversationID, externalMCPConversationPrefix) {
-			for conversationID, thread := range threads {
-				if strings.TrimSpace(thread.SeededFromResponse) != armed.ConversationID {
-					continue
-				}
+			conversationID, _, ok, err := b.config.SessionService.ThreadForSeed(armed.ConversationID)
+			if err != nil {
+				b.log.Error("load scheduled external MCP thread alias", "scheduled_message_id", id, "conversation_id", armed.ConversationID, "error", err)
+				return
+			}
 
+			if ok {
 				if rest, ok := strings.CutPrefix(conversationID, "slack-thread:"); ok {
-					channelID, threadTS, ok := strings.Cut(rest, ":")
-					if !ok {
-						continue
+					if channelID, threadTS, ok := strings.Cut(rest, ":"); ok {
+						inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
 					}
-
-					inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
-
-					break
 				}
 			}
 		}

@@ -506,13 +506,13 @@ func startExternalMCPServer(
 
 		inboundContent.Text = input
 
-		state, err := store.Load()
-		if err != nil {
-			return externalmcp.SessionResult{}, fmt.Errorf("load external MCP session state: %w", err)
-		}
-
 		if externalConversationID != "" {
-			if session, ok := state.ExternalMCPSessions[externalConversationID]; ok {
+			session, ok, err := store.ExternalMCPSession(externalConversationID)
+			if err != nil {
+				return externalmcp.SessionResult{}, fmt.Errorf("load external MCP session state: %w", err)
+			}
+
+			if ok {
 				session.Agent = strings.TrimSpace(session.Agent)
 
 				session.ConversationID = strings.TrimSpace(session.ConversationID)
@@ -535,14 +535,14 @@ func startExternalMCPServer(
 					return externalmcp.SessionResult{}, fmt.Errorf("external MCP agent %q is not exposed", usedAgent)
 				}
 
-				for conversationID, thread := range state.Threads {
-					if strings.TrimSpace(thread.SeededFromResponse) != session.ConversationID {
-						continue
-					}
+				conversationID, _, ok, err := store.ThreadForSeed(session.ConversationID)
+				if err != nil {
+					return externalmcp.SessionResult{}, fmt.Errorf("load external MCP text thread alias: %w", err)
+				}
 
+				if ok {
 					if channelID, threadTS, ok := harnessbridge.SlackThreadTarget(conversationID); ok {
 						reply = &events.InboundMessage{SlackReply: &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}}
-						break
 					}
 				}
 
