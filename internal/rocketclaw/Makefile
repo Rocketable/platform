@@ -1,7 +1,7 @@
 COVERPROFILE ?= .coverage.out
 COVERPKG ?= github.com/Rocketable/platform/cmd/rocketclaw,./...
 COVERAGE_STABLE_AT ?= 90.0
-GO_SOURCE_CLOC_BUDGET ?= 20250
+GO_SOURCE_CLOC_BUDGET ?= 14000
 GO_SOURCE_CLOC_HAZARD_ZONE ?= 500
 
 run:
