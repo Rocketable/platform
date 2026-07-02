@@ -41,6 +41,7 @@ The runnable entry point is `cmd/rocketclaw`. Run `rocketclaw help` for setup, v
 ### Supporting Tools
 
 - `cmd/openresponsesd`: serves `/healthz`, `/v1/responses`, and `/v1/responses/compact` with optional bearer auth and provider routing configured by `openresponsesd.json`.
+- `cmd/funneld`: serves a small HTTPS reverse-proxy funnel from public mount paths to target base URLs configured by `funneld.json`.
 - `cmd/quickbench`: runs YAML benchmarks through RocketCode with CLI-selected models. See [cmd/quickbench/README.md](cmd/quickbench/README.md).
 - `cmd/quickweb`: serves trusted internal static applets with one persistent JSON document per page. See [cmd/quickweb/README.md](cmd/quickweb/README.md).
 - `cmd/interviewd`: serves a temporary local HTML form for structured interview questions and prints submitted answers as Markdown.
@@ -63,6 +64,7 @@ For local CLI experimentation, `rocketcode` and `rocketloop` run RocketCode dire
 - `internal/rocketcode/`: core workspace agent runtime.
 - `internal/rocketclaw/`: connector service runtime around RocketCode.
 - `internal/openresponsesd/`: OpenResponses-shaped daemon, config loading, HTTP/WebSocket handling, provider adapters, and daemon ADRs.
+- `internal/funneld/`: HTTPS funnel proxy daemon and JSON route config loading.
 - `internal/quickbench/`: benchmark runner implementation.
 - `internal/quickweb/`: lightweight static applet server.
 - `internal/interviewd/`: structured interview form server.
@@ -82,6 +84,8 @@ Generated runtime state should not be treated as source code.
 Agent files must declare non-empty unprefixed OpenAI `model` frontmatter such as `gpt-5.4`.
 
 `openresponsesd` is configured with `openresponsesd.json` by default, or with `--config` / `OPENRESPONSESD_CONFIG`. Its documented credential environment variables are `OPENRESPONSESD_OPENAI_API_KEY` and `OPENRESPONSESD_ANTHROPIC_API_KEY`; bearer-token auth can be set in config or overridden locally with `--auth-token` / `OPENRESPONSESD_AUTH_TOKEN`.
+
+`funneld` is configured with `funneld.json` by default, or with `--config` / `FUNNELD_CONFIG`. Its config declares a certificate `host`, an optional `cert_cache`, and routes from public mount paths to target base URLs.
 
 ## Development Notes
 
