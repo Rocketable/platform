@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
-	"time"
 )
 
 const (
@@ -28,15 +27,12 @@ type Bus struct {
 	inboundClosed bool
 	closeOnce     sync.Once
 
-	minimumWaitAfterHumanInteraction time.Duration
-	inboundHumans                    []inboundMessageEntry
-	lastHumanMessage                 time.Time
-	stopTicker                       chan struct{}
-	inboundAutos                     []inboundMessageEntry
-	inboundPending                   []inboundMessageEntry
-	outbound                         []*OutboundMessage
-	outboundPending                  int
-	observers                        map[*Observer]struct{}
+	inboundHumans   []inboundMessageEntry
+	inboundAutos    []inboundMessageEntry
+	inboundPending  []inboundMessageEntry
+	outbound        []*OutboundMessage
+	outboundPending int
+	observers       map[*Observer]struct{}
 }
 
 type inboundMessageEntry struct {
@@ -71,37 +67,11 @@ type Observer struct {
 	queue []ObservedMessage
 }
 
-// Config controls event bus behavior.
-type Config struct {
-	MinimumWaitAfterHumanInteraction time.Duration
-}
-
 // New constructs an event bus.
-func New(configs ...Config) *Bus {
+func New() *Bus {
 	b := new(Bus)
 
 	b.cond = sync.NewCond(&b.mu)
-	if len(configs) > 0 {
-		b.minimumWaitAfterHumanInteraction = configs[0].MinimumWaitAfterHumanInteraction
-	}
-
-	if b.minimumWaitAfterHumanInteraction > 0 {
-		b.stopTicker = make(chan struct{})
-		ticker := time.NewTicker(b.minimumWaitAfterHumanInteraction)
-
-		go func() {
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-ticker.C:
-					b.cond.Broadcast()
-				case <-b.stopTicker:
-					return
-				}
-			}
-		}()
-	}
 
 	return b
 }
@@ -359,10 +329,6 @@ func (b *Bus) Close() {
 		b.mu.Lock()
 
 		b.closed = true
-		if b.stopTicker != nil {
-			close(b.stopTicker)
-		}
-
 		b.cond.Broadcast()
 		b.mu.Unlock()
 	})
@@ -372,7 +338,6 @@ func (b *Bus) dequeueInbound(ctx context.Context) (*InboundMessage, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	minimumWaitAfterHumanInteraction := b.minimumWaitAfterHumanInteraction
 	for {
 		if b.closed || ctx.Err() != nil {
 			return nil, false
@@ -382,12 +347,11 @@ func (b *Bus) dequeueInbound(ctx context.Context) (*InboundMessage, bool) {
 			entry := b.inboundHumans[0]
 			b.inboundHumans = b.inboundHumans[1:]
 			b.inboundPending = append(b.inboundPending, entry)
-			b.lastHumanMessage = time.Now()
 
 			return entry.msg, true
 		}
 
-		if len(b.inboundAutos) > 0 && (b.inboundClosed || minimumWaitAfterHumanInteraction <= 0 || time.Since(b.lastHumanMessage) >= minimumWaitAfterHumanInteraction) {
+		if len(b.inboundAutos) > 0 {
 			entry := b.inboundAutos[0]
 			b.inboundAutos = b.inboundAutos[1:]
 			b.inboundPending = append(b.inboundPending, entry)

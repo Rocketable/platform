@@ -46,7 +46,7 @@ func TestBusWaitsLogQueuedState(t *testing.T) {
 }
 
 func TestWaitInboundDequeuedLogsQueuedMessageSummaries(t *testing.T) {
-	bus := New(Config{MinimumWaitAfterHumanInteraction: time.Hour})
+	bus := New()
 	defer bus.Close()
 
 	longText := strings.Repeat("x", inboundLogPreviewRunes+10)
@@ -94,7 +94,7 @@ func TestWaitInboundDequeuedLogsQueuedMessageSummaries(t *testing.T) {
 }
 
 func TestWaitInboundDequeuedLogsQueueOmittedCounts(t *testing.T) {
-	bus := New(Config{MinimumWaitAfterHumanInteraction: time.Hour})
+	bus := New()
 	defer bus.Close()
 
 	for i := range inboundLogQueueLimit + 2 {
@@ -168,13 +168,21 @@ func TestWaitInboundDequeuedLogsPendingMessageSummary(t *testing.T) {
 	require.Equal(t, "pending text", pendingSummary.TextPreview)
 }
 
-func TestStopInboundKeepsAcceptedMessages(t *testing.T) {
-	bus := New(Config{MinimumWaitAfterHumanInteraction: time.Hour})
+func TestInboundPrioritizesQueuedHumansBeforeAutomation(t *testing.T) {
+	bus := New()
 	defer bus.Close()
 
-	require.NoError(t, bus.PublishInbound(context.Background(), NewMainInboundMessage("test", InboundKindPrompt, "", "human", true)))
 	require.NoError(t, bus.PublishInbound(context.Background(), NewMainInboundMessage("test", InboundKindPrompt, "", "auto", false)))
+	require.NoError(t, bus.PublishInbound(context.Background(), NewMainInboundMessage("test", InboundKindPrompt, "", "human", true)))
 	require.Equal(t, "human", requireInboundMessage(t, bus, 100*time.Millisecond).Text)
+	require.Equal(t, "auto", requireInboundMessage(t, bus, 100*time.Millisecond).Text)
+}
+
+func TestStopInboundKeepsAcceptedMessages(t *testing.T) {
+	bus := New()
+	defer bus.Close()
+
+	require.NoError(t, bus.PublishInbound(context.Background(), NewMainInboundMessage("test", InboundKindPrompt, "", "auto", false)))
 
 	bus.StopInbound()
 	require.ErrorIs(t, bus.PublishInbound(context.Background(), NewMainInboundMessage("test", InboundKindPrompt, "", "late", true)), ErrBusClosed)

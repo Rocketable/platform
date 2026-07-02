@@ -59,7 +59,6 @@ func TestRunSetupRepromptsWhenNoConnectorSelected(t *testing.T) {
 		"",
 		"Ulderico",
 		"Maschine",
-		"",
 		"xoxb-test",
 		"xapp-test",
 		"D123",
@@ -93,9 +92,9 @@ func TestRunSetupPromptReadErrors(t *testing.T) {
 		{name: "slack enablement", wantErr: "prompt Slack enablement"},
 		{name: "external mcp enablement", input: "n\n", wantErr: "prompt external MCP enablement"},
 		{name: "common fields", input: "y\nn\n", wantErr: "read prompt input"},
-		{name: "slack fields", input: strings.Join([]string{"y", "n", "sk-test", "", "Ulderico", "Maschine", ""}, "\n") + "\n", wantErr: "read prompt input"},
-		{name: "external mcp listen address", input: strings.Join([]string{"n", "y", "sk-test", "", "Ulderico", "Maschine", ""}, "\n") + "\n", wantErr: "read prompt input"},
-		{name: "external mcp users file", input: strings.Join([]string{"n", "y", "sk-test", "", "Ulderico", "Maschine", "", "127.0.0.1:8765"}, "\n") + "\n", wantErr: "prompt external MCP users file creation"},
+		{name: "slack fields", input: strings.Join([]string{"y", "n", "sk-test", "", "Ulderico", "Maschine"}, "\n") + "\n", wantErr: "read prompt input"},
+		{name: "external mcp listen address", input: strings.Join([]string{"n", "y", "sk-test", "", "Ulderico", "Maschine"}, "\n") + "\n", wantErr: "read prompt input"},
+		{name: "external mcp users file", input: strings.Join([]string{"n", "y", "sk-test", "", "Ulderico", "Maschine", "127.0.0.1:8765"}, "\n") + "\n", wantErr: "prompt external MCP users file creation"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -246,7 +245,6 @@ func slackSetupInput(apiBase string) string {
 		apiBase,
 		"Ulderico",
 		"Maschine",
-		"",
 		"xoxb-test",
 		"xapp-test",
 		"D123",
@@ -262,7 +260,6 @@ func mcpOnlySetupInput(listenAddr, createExternalMCPUsers string) string {
 		"",
 		"Ulderico",
 		"Maschine",
-		"",
 		listenAddr,
 		createExternalMCPUsers,
 	}, "\n") + "\n"

@@ -9,25 +9,22 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 	"unicode"
 )
 
 // Config is the top-level rocketclaw runtime configuration.
 type Config struct {
-	Workspace                                string                `json:"workspace"`
-	WorkDir                                  string                `json:"-"`
-	Overlays                                 []string              `json:"overlays,omitempty"`
-	Environment                              []string              `json:"environment,omitempty"`
-	EmergencySafeWords                       []string              `json:"emergency_safe_words,omitempty"`
-	ThreadAgents                             ThreadAgents          `json:"thread_agents,omitempty"`
-	MinimumWaitAfterHumanInteraction         string                `json:"minimum_wait_after_human_interaction"`
-	MinimumWaitAfterHumanInteractionDuration time.Duration         `json:"-"`
-	Logging                                  LoggingConfig         `json:"logging"`
-	MCPExternal                              MCPExternalConfig     `json:"mcp_external"`
-	Slack                                    SlackConfig           `json:"slack"`
-	OpenAI                                   OpenAIConfig          `json:"openai"`
-	Instrumentation                          InstrumentationConfig `json:"instrumentation"`
+	Workspace          string                `json:"workspace"`
+	WorkDir            string                `json:"-"`
+	Overlays           []string              `json:"overlays,omitempty"`
+	Environment        []string              `json:"environment,omitempty"`
+	EmergencySafeWords []string              `json:"emergency_safe_words,omitempty"`
+	ThreadAgents       ThreadAgents          `json:"thread_agents,omitempty"`
+	Logging            LoggingConfig         `json:"logging"`
+	MCPExternal        MCPExternalConfig     `json:"mcp_external"`
+	Slack              SlackConfig           `json:"slack"`
+	OpenAI             OpenAIConfig          `json:"openai"`
+	Instrumentation    InstrumentationConfig `json:"instrumentation"`
 }
 
 // DefaultWorkDir is the generated runtime directory for rocketclaw configs.
@@ -233,10 +230,6 @@ func (c *Config) Validate() error {
 		return errors.New("instrumentation.collector_endpoint is required when instrumentation is enabled")
 	}
 
-	if err := c.validateMinimumWaitAfterHumanInteraction(); err != nil {
-		return err
-	}
-
 	if c.MCPExternal.Enabled && strings.TrimSpace(c.MCPExternal.ListenAddr) == "" {
 		return errors.New("mcp_external.listen_addr is required when mcp_external is enabled")
 	}
@@ -271,27 +264,6 @@ func normalizeStringList(values []string) []string {
 	}
 
 	return unique
-}
-
-func (c *Config) validateMinimumWaitAfterHumanInteraction() error {
-	minimumWaitRaw := strings.TrimSpace(c.MinimumWaitAfterHumanInteraction)
-	if minimumWaitRaw == "" {
-		c.MinimumWaitAfterHumanInteractionDuration = 0
-		return nil
-	}
-
-	minimumWait, err := time.ParseDuration(minimumWaitRaw)
-	if err != nil {
-		return fmt.Errorf("parse minimum_wait_after_human_interaction: %w", err)
-	}
-
-	if minimumWait < 0 {
-		return errors.New("minimum_wait_after_human_interaction must be zero or greater")
-	}
-
-	c.MinimumWaitAfterHumanInteractionDuration = minimumWait
-
-	return nil
 }
 
 func (c *Config) validateSlack() error {

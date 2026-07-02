@@ -21,7 +21,6 @@
       "pre_seed": false
     }
   },
-  "minimum_wait_after_human_interaction": "5m",
   "logging": {
     "level": "debug"
   },

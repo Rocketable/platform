@@ -39,7 +39,6 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - Empty or omitted `openai.api_key` is valid unless an enabled path requires first-party OpenAI API-key credentials, such as a selected first-party OpenAI API-key request path.
 - There is no top-level `openai_compatible` runtime configuration contract.
 - Empty logging level defaults to `debug`.
-- Empty `minimum_wait_after_human_interaction` means `0s`; setup writes `5m` explicitly.
 - Empty or omitted `thread_agents` uses the baseline `:thread:` and `:twisted_rightward_arrows:` routes; a non-empty custom map replaces the baseline.
 - Empty or omitted `overlays` means no intermediate git overlays. Non-empty entries are applied in array order after embedded assets and before local workspace overlays.
 - Both persistent bridge and raw-run construction paths enable RocketCode automatic permission review unconditionally for `auto` permission rules.
@@ -150,3 +149,4 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-06-26: Removed remaining OpenAI-compatible Responses configuration support; RocketClaw RocketCode requests now use first-party OpenAI Responses through the configured OpenAI RocketCode auth path only.
 - 2026-07-01: Removed Discord Text, Discord voice, browser voice, and OpenAI-backed audio runtime configuration contracts.
 - 2026-07-01: Removed terminal CLI, control-socket, terminal private-session, terminal question, and cmux operational contracts.
+- 2026-07-02: Removed `minimum_wait_after_human_interaction` from runtime configuration defaults and setup-generated config.

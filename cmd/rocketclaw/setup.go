@@ -43,7 +43,6 @@ func runSetup(args []string) error {
 
 	cfg := new(config.Config)
 	cfg.Workspace = workspace
-	cfg.MinimumWaitAfterHumanInteraction = "5m"
 	cfg.Logging.Level = "debug"
 
 	setupNames, err := interviewSetup(cfg)
@@ -177,7 +176,6 @@ func interviewSetup(cfg *config.Config) (setupNames, error) {
 		promptField{prompt: "OpenAI API base URL (leave blank for default): ", value: &cfg.OpenAI.APIBaseURL},
 		promptField{prompt: "Human partner name: ", required: true, value: &names.humanPartnerName},
 		promptField{prompt: "Agent name: ", required: true, value: &names.agentName},
-		promptField{prompt: "Minimum wait after human interaction before automated messages [5m]: ", value: &cfg.MinimumWaitAfterHumanInteraction},
 	); err != nil {
 		return names, err
 	}

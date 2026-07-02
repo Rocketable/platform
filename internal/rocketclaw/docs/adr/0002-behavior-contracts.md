@@ -77,7 +77,8 @@ Field order is fixed: first `Origin`, then `media=Media`, then `principal=Name` 
 ### Message Flow
 
 - Shared inbound messages are queued through the event bus and consumed by the main bridge.
-- Automated inbound messages honor `minimum_wait_after_human_interaction` before processing.
+- Shared inbound preserves human-priority ordering: when human and automated inbound messages are both waiting, human inbound messages are consumed before automated inbound messages.
+- Automated inbound messages are eligible for processing as soon as the shared inbound human queue is empty.
 - Text connector stacked or buffered messages must preserve prompt order and avoid duplicated deliveries.
 - Pending `ask_user_question` free-text answers from authorized Slack users must be consumed by the pending question and must not also route as normal RocketCode prompts, managed-thread replies, goal steering, cron requests, stop controls, summaries, or response-rooted replies.
 - `rocketclaw_start_new_thread` tool-created first prompts are queued into the newly created conversation only and must not also route as input to the originating conversation, main conversation, goal steering, cron requests, stop controls, summaries, or response-rooted replies. The originating turn continues normally and the tool result reports the created conversation ID and openable surface information. The final response for the originating turn remains delivered to the originating conversation.
@@ -267,3 +268,4 @@ Task:
 - 2026-07-01: Removed terminal CLI behavior contracts, including terminal input, live observation, slash commands, private terminal conversations, terminal `ask_user_question`, terminal `rocketclaw_start_new_thread`, cmux behavior, and control-socket behavior.
 - 2026-07-01: Added Slack `💡 <skill-name> [arguments]` triggers for RocketCode direct skill invocation and their routing, permission, and prompt-framing constraints.
 - 2026-07-02: Specified breadcrumb rendering for nested subagent, guardrail, and automatic permission-review progress diagnostics in connector-visible thinking.
+- 2026-07-02: Removed the automated inbound post-human quiet-window contract while preserving shared inbound human-priority ordering over automation.

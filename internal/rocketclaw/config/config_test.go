@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,7 +53,6 @@ func TestLoadAppliesDefaults(t *testing.T) {
 
 	assert.Equal(t, "api_key", cfg.OpenAI.RocketCodeAuth)
 	assert.True(t, filepath.IsAbs(cfg.Workspace))
-	assert.Zero(t, cfg.MinimumWaitAfterHumanInteractionDuration)
 }
 
 func TestLoadPreservesInstrumentationConfig(t *testing.T) {
@@ -212,34 +210,6 @@ func TestValidateSlackSocialModeRejectsInvalidConfig(t *testing.T) {
 	}
 }
 
-func TestValidateMinimumWaitAfterHumanInteraction(t *testing.T) {
-	for _, tt := range []struct {
-		name    string
-		raw     string
-		want    time.Duration
-		wantErr string
-	}{
-		{name: "blank", raw: " \t\n ", want: 0},
-		{name: "valid duration", raw: " 250ms ", want: 250 * time.Millisecond},
-		{name: "invalid duration", raw: "soon", wantErr: "parse minimum_wait_after_human_interaction"},
-		{name: "negative duration", raw: "-1s", wantErr: "minimum_wait_after_human_interaction must be zero or greater"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := validConfig()
-			cfg.MinimumWaitAfterHumanInteraction = tt.raw
-
-			err := cfg.Validate()
-			if tt.wantErr != "" {
-				require.ErrorContains(t, err, tt.wantErr)
-				return
-			}
-
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, cfg.MinimumWaitAfterHumanInteractionDuration)
-		})
-	}
-}
-
 func TestValidateEnvironmentEntries(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -366,7 +336,7 @@ func validConfig() *Config {
 func writeThreadAgentsConfig(t *testing.T, threadAgents string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "rocketclaw.json")
-	data := `{"workspace":".",` + threadAgents + `,"minimum_wait_after_human_interaction":"","slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","room":"D123","human_user_id":"U123"},"openai":{"api_key":"sk"}}`
+	data := `{"workspace":".",` + threadAgents + `,"slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","room":"D123","human_user_id":"U123"},"openai":{"api_key":"sk"}}`
 	require.NoError(t, os.WriteFile(path, []byte(data), 0o600))
 
 	return path

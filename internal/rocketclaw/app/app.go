@@ -64,7 +64,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		}
 	}()
 
-	bus := events.New(events.Config{MinimumWaitAfterHumanInteraction: cfg.MinimumWaitAfterHumanInteractionDuration})
+	bus := events.New()
 	defer bus.Close()
 
 	var (
