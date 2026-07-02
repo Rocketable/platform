@@ -2557,7 +2557,7 @@ func TestRocketCodeThinkingTextHandlesSubagentToolDiagnostics(t *testing.T) {
 	call := rocketcode.ToolDiagnostic{Phase: "call", Name: "bash", Arguments: []byte(`{"command":"cat /tmp/file","description":"Read the file"}`)}
 	result := rocketcode.ToolDiagnostic{Phase: "result", Name: "bash", Result: "file contents"}
 
-	assert.Equal(t, "subagent (1/20) hally-google-workspace assistant tool: bash: Read the file", rocketcodeThinkingText(subagentToolResponse(&call)))
+	assert.Equal(t, "subagent(1/20) → hally-google-workspace → tool: bash: Read the file", rocketcodeThinkingText(subagentToolResponse(&call)))
 	assert.Empty(t, rocketcodeThinkingText(subagentToolResponse(&result)))
 }
 
@@ -2607,7 +2607,112 @@ func TestRocketCodeThinkingTextKeepsExplicitSubagentProviderText(t *testing.T) {
 		},
 	}
 
-	assert.Equal(t, "subagent (1/1) alitu-scenario-manager assistant tool: provider retrying", rocketcodeThinkingText(response))
+	assert.Equal(t, "subagent(1/1) → alitu-scenario-manager → tool: provider retrying", rocketcodeThinkingText(response))
+}
+
+func TestRocketCodeThinkingTextRendersBreadcrumbDiagnostics(t *testing.T) {
+	delegationStarted := rocketcode.ChatResponse{
+		Kind: rocketcode.ChatResponseAssistantTool,
+		Subagent: &rocketcode.SubagentDiagnostic{
+			Name:  "review",
+			Label: "delegation",
+			Index: 1,
+			Total: 1,
+			Text:  "started: Review",
+		},
+	}
+	delegationFinished := rocketcode.ChatResponse{
+		Kind: rocketcode.ChatResponseAssistantTool,
+		Subagent: &rocketcode.SubagentDiagnostic{
+			Name:  "review",
+			Label: "delegation",
+			Index: 1,
+			Total: 1,
+			Text:  "finished",
+		},
+	}
+	guardrailReasoning := rocketcode.ChatResponse{
+		Kind: rocketcode.ChatResponseAssistantTool,
+		Subagent: &rocketcode.SubagentDiagnostic{
+			Name:  "review",
+			Index: 1,
+			Total: 1,
+			Subagent: &rocketcode.SubagentDiagnostic{
+				Name:  "safety",
+				Label: "guardrail(delegation)",
+				Subagent: &rocketcode.SubagentDiagnostic{
+					Label: "reasoning summary",
+					Text:  "checking delegation",
+				},
+			},
+		},
+	}
+	guardrailResult := rocketcode.ChatResponse{
+		Kind: rocketcode.ChatResponseAssistantTool,
+		Subagent: &rocketcode.SubagentDiagnostic{
+			Name:  "review",
+			Index: 1,
+			Total: 1,
+			Subagent: &rocketcode.SubagentDiagnostic{
+				Name:  "safety",
+				Label: "guardrail(response)",
+				Text:  "reject: do not share",
+				Subagent: &rocketcode.SubagentDiagnostic{
+					Label: "result",
+				},
+			},
+		},
+	}
+	autoApprover := rocketcode.ChatResponse{
+		Kind: rocketcode.ChatResponseAssistantTool,
+		Subagent: &rocketcode.SubagentDiagnostic{
+			Name:  "guardian",
+			Label: "auto-approver",
+			Text:  "allow: Low-risk action.",
+			Subagent: &rocketcode.SubagentDiagnostic{
+				Label: "result",
+			},
+		},
+	}
+	nestedAutoApprover := rocketcode.ChatResponse{
+		Kind: rocketcode.ChatResponseAssistantTool,
+		Subagent: &rocketcode.SubagentDiagnostic{
+			Name:  "review",
+			Index: 1,
+			Total: 1,
+			Subagent: &rocketcode.SubagentDiagnostic{
+				Name:  "guardian",
+				Label: "auto-approver",
+				Text:  "allow: Low-risk action.",
+				Subagent: &rocketcode.SubagentDiagnostic{
+					Label: "result",
+				},
+			},
+		},
+	}
+	nestedSubagent := rocketcode.ChatResponse{
+		Kind: rocketcode.ChatResponseAssistantTool,
+		Subagent: &rocketcode.SubagentDiagnostic{
+			Name:  "review",
+			Index: 1,
+			Total: 1,
+			Subagent: &rocketcode.SubagentDiagnostic{
+				Name:  "researcher",
+				Index: 1,
+				Total: 2,
+				Label: "reasoning summary",
+				Text:  "found context",
+			},
+		},
+	}
+
+	assert.Equal(t, "subagent(1/1) → review: started: Review", rocketcodeThinkingText(delegationStarted))
+	assert.Equal(t, "subagent(1/1) → review: finished", rocketcodeThinkingText(delegationFinished))
+	assert.Equal(t, "subagent(1/1) → review → guardrail(delegation) → safety → reasoning: checking delegation", rocketcodeThinkingText(guardrailReasoning))
+	assert.Equal(t, "subagent(1/1) → review → guardrail(response) → safety → result: reject: do not share", rocketcodeThinkingText(guardrailResult))
+	assert.Equal(t, "auto-approver → guardian → result: allow: Low-risk action.", rocketcodeThinkingText(autoApprover))
+	assert.Equal(t, "subagent(1/1) → review → auto-approver → guardian → result: allow: Low-risk action.", rocketcodeThinkingText(nestedAutoApprover))
+	assert.Equal(t, "subagent(1/1) → review → subagent(1/2) → researcher → reasoning: found context", rocketcodeThinkingText(nestedSubagent))
 }
 
 func toolResponse(tool *rocketcode.ToolDiagnostic) rocketcode.ChatResponse {

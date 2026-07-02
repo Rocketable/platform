@@ -53,6 +53,7 @@ const (
 	defaultQueueSize                                                                                                                                                                   = 128
 	externalMCPMetadataEntryType, externalMCPConversationPrefix, goalContinuationLabel, goalKickoffLabel, rocketclawConversationIDEnv, rocketclawMetadataEnvPrefix                     = "mcp_external_metadata", "external_mcp:", "goal_continuation", "goal", "ROCKETCLAW_CONVERSATION_ID", "ROCKETCLAW_METADATA_"
 	maxInboundAttachmentBytes, maxInboundAttachmentTotalBytes, maxInboundAttachmentResizeInput, maxInboundAttachmentResizeAttempts                                                     = 4 << 20, 16 << 20, 16 << 20, 8
+	rocketcodeBreadcrumbSeparator                                                                                                                                                      = " \u2192 "
 )
 
 var errBridgeStopped = errors.New("bridge stopped")
@@ -1370,42 +1371,88 @@ func formatToolCallDetails(diagnostic *rocketcode.ToolDiagnostic) string {
 }
 
 func formatSubagentDiagnostic(diagnostic *rocketcode.SubagentDiagnostic) string {
-	parts := []string{"subagent"}
+	parts, text, ok := subagentBreadcrumb(diagnostic)
+	if !ok {
+		return ""
+	}
+
+	if len(parts) == 0 {
+		return text
+	}
+
+	if text == "" {
+		return strings.Join(parts, rocketcodeBreadcrumbSeparator)
+	}
+
+	return strings.Join(parts, rocketcodeBreadcrumbSeparator) + ": " + text
+}
+
+func subagentBreadcrumb(diagnostic *rocketcode.SubagentDiagnostic) (parts []string, text string, ok bool) {
 	if diagnostic.Total > 0 {
-		parts = append(parts, fmt.Sprintf("(%d/%d)", diagnostic.Index, diagnostic.Total))
+		parts = append(parts, fmt.Sprintf("subagent(%d/%d)", diagnostic.Index, diagnostic.Total))
+	}
+
+	label := visibleSubagentLabel(diagnostic.Label)
+
+	labelBefore := strings.HasPrefix(label, "guardrail(") || label == "auto-approver"
+	if labelBefore {
+		parts = append(parts, label)
 	}
 
 	if name := strings.TrimSpace(diagnostic.Name); name != "" {
 		parts = append(parts, name)
 	}
 
-	if label := strings.TrimSpace(diagnostic.Label); label != "" {
+	if label != "" && !labelBefore {
 		parts = append(parts, label)
 	}
 
-	text := strings.TrimSpace(diagnostic.Text)
+	text = strings.TrimSpace(diagnostic.Text)
 	switch {
 	case diagnostic.Tool != nil:
-		text = formatToolDiagnostic(diagnostic.Tool)
-		if text == "" {
-			return ""
+		toolText := formatToolDiagnostic(diagnostic.Tool)
+		if toolText == "" {
+			return nil, "", false
 		}
-	case diagnostic.Subagent != nil:
-		text = formatSubagentDiagnostic(diagnostic.Subagent)
-		if text == "" {
-			return ""
-		}
+
+		text = toolText
 	case diagnostic.Provider != nil:
 		if text == "" {
-			return ""
+			return nil, "", false
 		}
 	}
 
-	if text == "" {
-		return strings.Join(parts, " ")
+	if diagnostic.Subagent != nil {
+		nestedParts, nestedText, ok := subagentBreadcrumb(diagnostic.Subagent)
+		if !ok {
+			return nil, "", false
+		}
+
+		parts = append(parts, nestedParts...)
+
+		if nestedText != "" {
+			text = nestedText
+		}
 	}
 
-	return strings.Join(parts, " ") + ": " + text
+	return parts, text, true
+}
+
+func visibleSubagentLabel(label string) string {
+	switch strings.TrimSpace(label) {
+	case "reasoning summary":
+		return "reasoning"
+	case "assistant commentary":
+		return "commentary"
+	case "assistant message":
+		return "result"
+	case "assistant tool":
+		return "tool"
+	case "delegation":
+		return ""
+	default:
+		return strings.TrimSpace(label)
+	}
 }
 
 func (b *Bridge) openAIOptions(apiKey, baseURL string, useAPIKey bool) []option.RequestOption {
