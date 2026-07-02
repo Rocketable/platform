@@ -18,7 +18,7 @@ func TestTaskTool(t *testing.T) {
 			"review": {Name: "review", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "low", MaxRecursion: nil, Prompt: "review carefully", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
 		}})
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -34,7 +34,7 @@ func TestTaskTool(t *testing.T) {
 			"empty": testAgent("empty"),
 		}})
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Empty", "do it", "empty"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
+		got, err := factory.runTask(context.Background(), testTaskParams("Empty", "do it", "empty"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\n\n</task_result>", got)
@@ -43,7 +43,7 @@ func TestTaskTool(t *testing.T) {
 	t.Run("rejects unknown subagent", func(t *testing.T) {
 		factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
 
-		_, err := factory.runTask(context.Background(), testTaskParams("", "", "missing"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
+		_, err := factory.runTask(context.Background(), testTaskParams("", "", "missing"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
 
 		require.EqualError(t, err, "unknown agent type: missing is not a valid agent type")
 	})
@@ -55,7 +55,7 @@ func TestTaskTool(t *testing.T) {
 		}})
 		factory.recursionRemaining = &remaining
 
-		_, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
+		_, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
 
 		require.EqualError(t, err, "maxRecursion limit reached: task delegation is unavailable")
 	})
@@ -66,7 +66,7 @@ func TestTaskTool(t *testing.T) {
 			"helper": testAgentWithPrompt("helper", "help carefully"),
 		}})
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Help", "assist", "helper"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
+		got, err := factory.runTask(context.Background(), testTaskParams("Help", "assist", "helper"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -79,7 +79,7 @@ func TestTaskTool(t *testing.T) {
 		}})
 		factory.systemPrompt = "base prompt"
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -106,7 +106,7 @@ func TestTaskTool(t *testing.T) {
 		factory.expandPromptShellCommands = testPromptExpansion(false, true, false)
 		factory.promptExpansion = env
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -122,7 +122,7 @@ func TestTaskTool(t *testing.T) {
 		factory.systemPrompt = "base prompt"
 		factory.expandPromptShellCommands = testPromptExpansion(true, false, false)
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
@@ -145,7 +145,7 @@ func TestTaskTool(t *testing.T) {
 		var group errgroup.Group
 
 		group.Go(func() error {
-			_, err := factory.runTask(ctx, testTaskParams("Slow", "wait", "slow"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
+			_, err := factory.runTask(ctx, testTaskParams("Slow", "wait", "slow"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
 			return err
 		})
 
@@ -181,7 +181,11 @@ func TestTaskTool(t *testing.T) {
 
 	t.Run("guardrail approval allows child and response", func(t *testing.T) {
 		mock := mockResponses(
-			responseWithMessage("delegation-gate", `{"approved":true,"reason":""}`),
+			testResponse("delegation-gate", []responses.ResponseOutputItemUnion{
+				testReasoningOutputItem("delegation-reasoning", "", "checking delegation"),
+				testMessageOutputItem("delegation-commentary", "commentary", "verifying target"),
+				testMessageOutputItem("delegation-final", "", `{"approved":true,"reason":"ok"}`),
+			}),
 			responseWithTaskMessages(),
 			responseWithMessage("response-gate", `{"approved":true,"reason":""}`),
 		)
@@ -193,11 +197,25 @@ func TestTaskTool(t *testing.T) {
 		}})
 		mainAgent := factory.agents.Items["main"]
 		factory.agent = &mainAgent
+		factory.diagnostics = true
+		output := make(chan ChatResponse, 20)
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, output)
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
+		require.Equal(t, []ChatResponse{
+			subagentDiagnosticResponse(testGuardrailSubagentDiagnostic("review", "safety", ChildRunStageDelegation, "reasoning summary", 1, 1, "checking delegation")),
+			subagentDiagnosticResponse(testGuardrailSubagentDiagnostic("review", "safety", ChildRunStageDelegation, "assistant commentary", 1, 1, "verifying target")),
+			subagentDiagnosticResponse(testGuardrailResultDiagnostic(ChildRunStageDelegation, "approve: ok")),
+			subagentDiagnosticResponse(testReviewSubagentDiagnostic("delegation", 1, 1, "started: Review")),
+			subagentDiagnosticResponse(testGuardrailResultDiagnostic(ChildRunStageResponse, "approve")),
+			subagentDiagnosticResponse(testReviewSubagentDiagnostic("reasoning summary", 1, 1, "thinking")),
+			subagentDiagnosticResponse(testReviewSubagentDiagnostic("assistant commentary", 1, 1, "commentary")),
+			subagentDiagnosticResponse(testReviewSubagentDiagnostic("assistant message", 1, 1, "first")),
+			subagentDiagnosticResponse(testReviewSubagentDiagnostic("assistant message", 1, 1, "second")),
+			subagentDiagnosticResponse(testReviewSubagentDiagnostic("delegation", 1, 1, "finished")),
+		}, drainBufferedResponses(output))
 		require.Len(t, mock.calls, 3)
 		require.Equal(t, "guard carefully", mock.calls[0].Instructions.Value)
 		require.NotNil(t, mock.calls[0].Text.Format.OfJSONSchema)
@@ -217,7 +235,7 @@ func TestTaskTool(t *testing.T) {
 			"safety": testAgentWithPrompt("safety", "guard carefully"),
 		}})
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\ndelegation blocked: too risky\n</task_result>", got)
@@ -246,7 +264,11 @@ func TestTaskTool(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\ndelegation response blocked: do not share\n</task_result>", got)
-		require.Equal(t, []ChatResponse{subagentDiagnosticResponse(testReviewSubagentDiagnostic("delegation", 1, 1, "started: Review"))}, drainBufferedResponses(output))
+		require.Equal(t, []ChatResponse{
+			subagentDiagnosticResponse(testGuardrailResultDiagnostic(ChildRunStageDelegation, "approve")),
+			subagentDiagnosticResponse(testReviewSubagentDiagnostic("delegation", 1, 1, "started: Review")),
+			subagentDiagnosticResponse(testGuardrailResultDiagnostic(ChildRunStageResponse, "reject: do not share")),
+		}, drainBufferedResponses(output))
 		require.Equal(t, []ChildRunEvent{
 			{Kind: ChildRunKindGuardrail, Stage: ChildRunStageDelegation, Agent: "safety", Item: assistantMessage(`{"approved":true,"reason":""}`)},
 			{Kind: ChildRunKindGuardrail, Stage: ChildRunStageResponse, Agent: "safety", Item: assistantMessage(`{"approved":false,"reason":"do not share"}`)},
@@ -260,7 +282,7 @@ func TestTaskTool(t *testing.T) {
 			"safety": testAgentWithPrompt("safety", "guard carefully"),
 		}})
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\ndelegation blocked: inter-agent guardrail returned invalid JSON\n</task_result>", got)
@@ -280,7 +302,7 @@ func TestTaskTool(t *testing.T) {
 		readTool.Permission = "read"
 		factory.baseTools["read"] = readTool
 
-		_, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1})
+		_, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
 
 		require.NoError(t, err)
 		require.Len(t, mock.calls, 1)
@@ -728,6 +750,21 @@ func testTaskParams(description, prompt, subagentType string) taskParams {
 	params.SubagentType = subagentType
 
 	return params
+}
+
+func testTaskOutput() chan ChatResponse {
+	return make(chan ChatResponse, 20)
+}
+
+func testGuardrailSubagentDiagnostic(guardedAgent, guardrailAgent string, stage ChildRunStage, label string, index, total int, text string) *SubagentDiagnostic {
+	return &SubagentDiagnostic{Name: guardedAgent, Index: index, Total: total, Subagent: &SubagentDiagnostic{Name: guardrailAgent, Label: "guardrail(" + string(stage) + ")", Subagent: &SubagentDiagnostic{Label: label, Text: text}}}
+}
+
+func testGuardrailResultDiagnostic(stage ChildRunStage, text string) *SubagentDiagnostic {
+	diagnostic := testGuardrailSubagentDiagnostic("review", "safety", stage, "result", 1, 1, "")
+	diagnostic.Subagent.Text = text
+
+	return diagnostic
 }
 
 func testPromptExpansion(primary, subagent, skill bool) PromptShellCommandExpansion {

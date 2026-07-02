@@ -102,12 +102,12 @@ type looper struct {
 }
 
 type permissionReviewer interface {
-	reviewPermission(context.Context, *permissionReviewRequest) permissionReviewDecision
+	reviewPermission(context.Context, *permissionReviewRequest, chan<- ChatResponse) permissionReviewDecision
 }
 
 type inertPermissionReviewer struct{}
 
-func (inertPermissionReviewer) reviewPermission(context.Context, *permissionReviewRequest) permissionReviewDecision {
+func (inertPermissionReviewer) reviewPermission(context.Context, *permissionReviewRequest, chan<- ChatResponse) permissionReviewDecision {
 	return permissionReviewFailure("automatic permission reviewer is unavailable")
 }
 
@@ -1563,7 +1563,7 @@ func (l *looper) dispatchToolCalls(
 		if decision.review != nil {
 			decision.review.ReviewContext = slices.Clone(l.permissionReviewInput)
 
-			reviewDecision := l.PermissionReviewer.reviewPermission(ctx, decision.review)
+			reviewDecision := l.PermissionReviewer.reviewPermission(ctx, decision.review, output)
 			if reviewDecision.Outcome != permissionReviewOutcomeAllow {
 				_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, args, toolCallMetadata{})
 				result := formatPermissionReviewDenied(reviewDecision)

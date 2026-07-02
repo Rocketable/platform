@@ -19,7 +19,7 @@ const (
 	permissionReviewTimeout = 90 * time.Second
 )
 
-func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionReviewRequest) permissionReviewDecision {
+func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionReviewRequest, parentOutput chan<- ChatResponse) permissionReviewDecision {
 	if f.inPermissionReview {
 		return permissionReviewFailure("automatic permission review cannot recursively require automatic approval")
 	}
@@ -99,6 +99,10 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 		for item := range output {
 			f.childRunLogger(&ChildRunEvent{Kind: ChildRunKindPermissionReview, Stage: ChildRunStageToolPermission, Agent: agent.Name, Item: item})
 
+			if f.diagnostics {
+				emitPermissionReviewDiagnostic(parentOutput, agent.Name, item)
+			}
+
 			if item.Kind == ChatResponseAssistantMessage {
 				last = item.Text
 			}
@@ -126,7 +130,45 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 		return permissionReviewFailure("automatic permission reviewer returned invalid structured output: " + err.Error())
 	}
 
+	if f.diagnostics {
+		emitPermissionReviewResult(parentOutput, agent.Name, decision)
+	}
+
 	return decision
+}
+
+func emitPermissionReviewDiagnostic(output chan<- ChatResponse, reviewer string, item ChatResponse) {
+	if item.Kind == ChatResponseAssistantMessage {
+		return
+	}
+
+	emitSubagentDiagnostic(output, &SubagentDiagnostic{
+		Name:  reviewer,
+		Label: "auto-approver",
+		Subagent: &SubagentDiagnostic{
+			Label:    nestedDiagnosticLabel(item),
+			Text:     item.Text,
+			Tool:     item.Tool,
+			Subagent: item.Subagent,
+			Provider: item.Provider,
+		},
+	})
+}
+
+func emitPermissionReviewResult(output chan<- ChatResponse, reviewer string, decision permissionReviewDecision) {
+	text := string(decision.Outcome)
+	if rationale := strings.TrimSpace(decision.Rationale); rationale != "" {
+		text += ": " + rationale
+	}
+
+	emitSubagentDiagnostic(output, &SubagentDiagnostic{
+		Name:  reviewer,
+		Label: "auto-approver",
+		Text:  text,
+		Subagent: &SubagentDiagnostic{
+			Label: "result",
+		},
+	})
 }
 
 func permissionReviewFailure(rationale string) permissionReviewDecision {

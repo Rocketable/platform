@@ -156,7 +156,7 @@ func (f *toolFactory) availableSubagentsDescription() string {
 	return strings.Join(lines, "\n")
 }
 
-func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata toolCallMetadata, parentOutput ...chan<- ChatResponse) (string, error) {
+func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata toolCallMetadata, parentOutput chan<- ChatResponse) (string, error) {
 	if f.recursionRemaining != nil && *f.recursionRemaining == 0 {
 		return "", errors.New("maxRecursion limit reached: task delegation is unavailable")
 	}
@@ -179,7 +179,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 			params.Prompt,
 		}, "\n")
 
-		decision := f.runGuardrail(ctx, &guardrailAgent, ChildRunStageDelegation, message)
+		decision := f.runGuardrail(ctx, &guardrailAgent, ChildRunStageDelegation, message, agent.Name, metadata, parentOutput)
 		if !decision.Approved {
 			reason := strings.TrimSpace(decision.Reason)
 			if reason == "" {
@@ -240,13 +240,8 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		childDiagnostics []ChatResponse
 	)
 
-	var outputSink chan<- ChatResponse
-	if len(parentOutput) > 0 {
-		outputSink = parentOutput[0]
-	}
-
 	if f.diagnostics {
-		emitSubagentDiagnostic(outputSink, &SubagentDiagnostic{
+		emitSubagentDiagnostic(parentOutput, &SubagentDiagnostic{
 			Name:  agent.Name,
 			Label: "delegation",
 			Index: metadata.subagentIndex,
@@ -261,7 +256,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 			if f.diagnostics {
 				childDiagnostics = append(childDiagnostics, ChatResponse{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{
 					Name:     agent.Name,
-					Label:    subagentResponseLabel(item.Kind),
+					Label:    nestedDiagnosticLabel(item),
 					Index:    metadata.subagentIndex,
 					Total:    metadata.subagentTotal,
 					Text:     item.Text,
@@ -305,7 +300,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 			last,
 		}, "\n")
 
-		decision := f.runGuardrail(ctx, &guardrailAgent, ChildRunStageResponse, message)
+		decision := f.runGuardrail(ctx, &guardrailAgent, ChildRunStageResponse, message, agent.Name, metadata, parentOutput)
 		if !decision.Approved {
 			reason := strings.TrimSpace(decision.Reason)
 			if reason == "" {
@@ -318,10 +313,10 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 
 	if f.diagnostics {
 		for _, diagnostic := range childDiagnostics {
-			emitDiagnosticChatResponse(outputSink, diagnostic)
+			emitDiagnosticChatResponse(parentOutput, diagnostic)
 		}
 
-		emitSubagentDiagnostic(outputSink, &SubagentDiagnostic{
+		emitSubagentDiagnostic(parentOutput, &SubagentDiagnostic{
 			Name:  agent.Name,
 			Label: "delegation",
 			Index: metadata.subagentIndex,
@@ -333,7 +328,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	return strings.Join([]string{"<task_result>", last, "</task_result>"}, "\n"), nil
 }
 
-func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage ChildRunStage, message string) guardrailDecision {
+func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage ChildRunStage, message, guardedAgent string, metadata toolCallMetadata, parentOutput chan<- ChatResponse) guardrailDecision {
 	agent := *guardrail
 	agent.Permission = f.shellOutput.effectivePermissions(agent.Permission)
 	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
@@ -387,6 +382,10 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 		for item := range output {
 			f.childRunLogger(&ChildRunEvent{Kind: ChildRunKindGuardrail, Stage: stage, Agent: agent.Name, Item: item})
 
+			if f.diagnostics {
+				emitGuardrailDiagnostic(parentOutput, guardedAgent, agent.Name, stage, metadata, item)
+			}
+
 			if item.Kind == ChatResponseAssistantMessage {
 				last = item.Text
 			}
@@ -409,7 +408,68 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail returned invalid JSON"}
 	}
 
+	if f.diagnostics {
+		emitGuardrailResult(parentOutput, guardedAgent, agent.Name, stage, metadata, decision)
+	}
+
 	return decision
+}
+
+func emitGuardrailDiagnostic(output chan<- ChatResponse, guardedAgent, guardrailAgent string, stage ChildRunStage, metadata toolCallMetadata, item ChatResponse) {
+	if item.Kind == ChatResponseAssistantMessage {
+		return
+	}
+
+	emitSubagentDiagnostic(output, &SubagentDiagnostic{
+		Name:  guardedAgent,
+		Index: metadata.subagentIndex,
+		Total: metadata.subagentTotal,
+		Subagent: &SubagentDiagnostic{
+			Name:  guardrailAgent,
+			Label: "guardrail(" + string(stage) + ")",
+			Subagent: &SubagentDiagnostic{
+				Label:    nestedDiagnosticLabel(item),
+				Text:     item.Text,
+				Tool:     item.Tool,
+				Subagent: item.Subagent,
+				Provider: item.Provider,
+			},
+		},
+	})
+}
+
+func emitGuardrailResult(output chan<- ChatResponse, guardedAgent, guardrailAgent string, stage ChildRunStage, metadata toolCallMetadata, decision guardrailDecision) {
+	action := "reject"
+	if decision.Approved {
+		action = "approve"
+	}
+
+	text := action
+	if reason := strings.TrimSpace(decision.Reason); reason != "" {
+		text += ": " + reason
+	}
+
+	emitSubagentDiagnostic(output, &SubagentDiagnostic{
+		Name:  guardedAgent,
+		Index: metadata.subagentIndex,
+		Total: metadata.subagentTotal,
+		Subagent: &SubagentDiagnostic{
+			Name:  guardrailAgent,
+			Label: "guardrail(" + string(stage) + ")",
+			Text:  text,
+			Subagent: &SubagentDiagnostic{
+				Label: "result",
+			},
+		},
+	})
+}
+
+func nestedDiagnosticLabel(item ChatResponse) string {
+	if item.Subagent != nil {
+		return ""
+	}
+
+	return subagentResponseLabel(item.Kind)
 }
 
 func emitSubagentDiagnostic(output chan<- ChatResponse, diagnostic *SubagentDiagnostic) {

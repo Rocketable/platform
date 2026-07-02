@@ -86,8 +86,9 @@ type mockPermissionReviewer struct {
 	requests []permissionReviewRequest
 }
 
-func (m *mockPermissionReviewer) reviewPermission(_ context.Context, request *permissionReviewRequest) permissionReviewDecision {
+func (m *mockPermissionReviewer) reviewPermission(_ context.Context, request *permissionReviewRequest, output chan<- ChatResponse) permissionReviewDecision {
 	m.requests = append(m.requests, *request)
+	emitPermissionReviewResult(output, "guardian", m.decision)
 
 	return m.decision
 }
@@ -1260,11 +1261,13 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 
 		reviewContext := []responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleUser, "fetch the allowed page", "")}
 		looper.permissionReviewInput = reviewContext
-		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "webfetch", `{"url":"https://allowed.example/page"}`)}), nil, nil)
+		output := make(chan ChatResponse, 10)
+		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "webfetch", `{"url":"https://allowed.example/page"}`)}), nil, output)
 
 		require.NoError(t, err)
 		require.True(t, called)
 		require.Equal(t, "fetched", outputs[0].Result.Output)
+		require.Equal(t, []ChatResponse{subagentDiagnosticResponse(&SubagentDiagnostic{Name: "guardian", Label: "auto-approver", Text: "allow: Low-risk action.", Subagent: &SubagentDiagnostic{Label: "result"}})}, drainBufferedResponses(output))
 		require.Len(t, reviewer.requests, 1)
 		require.True(t, reviewer.requests[0].ReviewerEmbedded)
 		require.Equal(t, "main", reviewer.requests[0].ActiveAgent)
@@ -1289,11 +1292,13 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		}
 		looper.Tools = map[string]looperTool{"github_create_issue": tool}
 
-		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "github_create_issue", `{}`)}), nil, nil)
+		output := make(chan ChatResponse, 10)
+		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "github_create_issue", `{}`)}), nil, output)
 
 		require.NoError(t, err)
 		require.False(t, called)
 		require.Contains(t, outputs[0].Result.Output, "Not authorized")
+		require.Equal(t, []ChatResponse{subagentDiagnosticResponse(&SubagentDiagnostic{Name: "guardian", Label: "auto-approver", Text: "deny: Not authorized.", Subagent: &SubagentDiagnostic{Label: "result"}})}, drainBufferedResponses(output))
 		require.Len(t, reviewer.requests, 1)
 		require.False(t, reviewer.requests[0].ReviewerEmbedded)
 		require.Equal(t, "release-guardian", reviewer.requests[0].Reviewer)
@@ -1351,7 +1356,7 @@ func TestPermissionReviewFailsClosedOnInvalidReviewerOutput(t *testing.T) {
 		childRunLogger:  DiscardChildRunLog,
 	}
 
-	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true})
+	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, make(chan ChatResponse, 10))
 
 	require.Equal(t, permissionReviewRiskLevelHigh, decision.RiskLevel)
 	require.Equal(t, permissionReviewUserAuthorizationUnknown, decision.UserAuthorization)

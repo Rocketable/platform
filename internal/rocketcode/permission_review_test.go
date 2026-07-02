@@ -58,11 +58,18 @@ func TestPermissionReviewLogsHiddenChildRunOutput(t *testing.T) {
 		childRunLogger: func(event *ChildRunEvent) {
 			childRunEvents = append(childRunEvents, *event)
 		},
+		diagnostics: true,
 	}
+	output := make(chan ChatResponse, 10)
 
-	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true})
+	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, output)
 
 	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
+	require.Equal(t, []ChatResponse{
+		subagentDiagnosticResponse(&SubagentDiagnostic{Name: "guardian", Label: "auto-approver", Subagent: &SubagentDiagnostic{Label: "reasoning summary", Text: "considering risk"}}),
+		subagentDiagnosticResponse(&SubagentDiagnostic{Name: "guardian", Label: "auto-approver", Subagent: &SubagentDiagnostic{Label: "assistant commentary", Text: "checking authorization"}}),
+		subagentDiagnosticResponse(&SubagentDiagnostic{Name: "guardian", Label: "auto-approver", Text: "allow: Low-risk action.", Subagent: &SubagentDiagnostic{Label: "result"}}),
+	}, drainBufferedResponses(output))
 	require.Equal(t, []ChildRunEvent{
 		{Kind: ChildRunKindPermissionReview, Stage: ChildRunStageToolPermission, Agent: "guardian", Item: reasoningSummary("considering risk")},
 		{Kind: ChildRunKindPermissionReview, Stage: ChildRunStageToolPermission, Agent: "guardian", Item: assistantCommentary("checking authorization")},
