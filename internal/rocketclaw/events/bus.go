@@ -7,8 +7,14 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	inboundLogPreviewRunes = 160
+	inboundLogQueueLimit   = 5
 )
 
 // ErrBusClosed reports that an event was published after the bus shut down.
@@ -23,14 +29,40 @@ type Bus struct {
 	closeOnce     sync.Once
 
 	minimumWaitAfterHumanInteraction time.Duration
-	inboundHumans                    []*InboundMessage
+	inboundHumans                    []inboundMessageEntry
 	lastHumanMessage                 time.Time
 	stopTicker                       chan struct{}
-	inboundAutos                     []*InboundMessage
-	inboundPending                   int
+	inboundAutos                     []inboundMessageEntry
+	inboundPending                   []inboundMessageEntry
 	outbound                         []*OutboundMessage
 	outboundPending                  int
 	observers                        map[*Observer]struct{}
+}
+
+type inboundMessageEntry struct {
+	msg     *InboundMessage
+	summary inboundLogMessageSummary
+}
+
+type inboundLogMessageSummary struct {
+	Source                  Source      `json:"source,omitempty"`
+	Kind                    InboundKind `json:"kind,omitempty"`
+	Label                   string      `json:"label,omitempty"`
+	Human                   bool        `json:"human"`
+	GoalTurn                bool        `json:"goal_turn"`
+	ConversationID          string      `json:"conversation_id,omitempty"`
+	TextPreview             string      `json:"text_preview"`
+	TextLen                 int         `json:"text_len"`
+	TextTruncated           bool        `json:"text_truncated"`
+	VerbatimPreview         *string     `json:"verbatim_preview,omitempty"`
+	VerbatimLen             *int        `json:"verbatim_len,omitempty"`
+	VerbatimTruncated       *bool       `json:"verbatim_truncated,omitempty"`
+	AttachmentCount         int         `json:"attachment_count"`
+	VerbatimAttachmentCount int         `json:"verbatim_attachment_count"`
+	AttachmentWarningCount  int         `json:"attachment_warning_count"`
+	SlackChannel            string      `json:"slack_channel,omitempty"`
+	SlackMessageTS          string      `json:"slack_message_ts,omitempty"`
+	SlackThreadTS           string      `json:"slack_thread_ts,omitempty"`
 }
 
 // Observer receives non-consuming inbound and outbound bus events.
@@ -87,10 +119,11 @@ func (b *Bus) PublishInbound(ctx context.Context, msg *InboundMessage) error {
 		return ErrBusClosed
 	}
 
+	entry := inboundMessageEntry{msg: msg, summary: inboundLogSummary(msg)}
 	if msg != nil && msg.Human {
-		b.inboundHumans = append(b.inboundHumans, msg)
+		b.inboundHumans = append(b.inboundHumans, entry)
 	} else {
-		b.inboundAutos = append(b.inboundAutos, msg)
+		b.inboundAutos = append(b.inboundAutos, entry)
 	}
 
 	b.publishObservedLocked(ObservedMessage{Inbound: msg})
@@ -118,13 +151,39 @@ func (b *Bus) WaitInboundDequeued(ctx context.Context, logger *slog.Logger) erro
 	for {
 		humanQueueLen := len(b.inboundHumans)
 		autoQueueLen := len(b.inboundAutos)
-		inboundPending := b.inboundPending
+		inboundPending := len(b.inboundPending)
 		inboundClosed := b.inboundClosed
 		busClosed := b.closed
 		idle := humanQueueLen == 0 && autoQueueLen == 0 && inboundPending == 0
+		humanQueue, humanQueueOmitted := inboundLogSummaries(b.inboundHumans)
+		autoQueue, autoQueueOmitted := inboundLogSummaries(b.inboundAutos)
+		inboundPendingMessages, inboundPendingOmitted := inboundLogSummaries(b.inboundPending)
+
+		args := []any{
+			"human_queue_len", humanQueueLen,
+			"auto_queue_len", autoQueueLen,
+			"inbound_pending", inboundPending,
+			"inbound_pending_len", inboundPending,
+			"inbound_closed", inboundClosed,
+			"bus_closed", busClosed,
+			"human_queue", humanQueue,
+			"auto_queue", autoQueue,
+			"inbound_pending_messages", inboundPendingMessages,
+		}
+		if humanQueueOmitted > 0 {
+			args = append(args, "human_queue_omitted", humanQueueOmitted)
+		}
+
+		if autoQueueOmitted > 0 {
+			args = append(args, "auto_queue_omitted", autoQueueOmitted)
+		}
+
+		if inboundPendingOmitted > 0 {
+			args = append(args, "inbound_pending_omitted", inboundPendingOmitted)
+		}
 		b.mu.Unlock()
 
-		logger.Info("inbound queue handoff wait state", "human_queue_len", humanQueueLen, "auto_queue_len", autoQueueLen, "inbound_pending", inboundPending, "inbound_closed", inboundClosed, "bus_closed", busClosed)
+		logger.Info("inbound queue handoff wait state", args...)
 
 		if idle {
 			return nil
@@ -135,7 +194,7 @@ func (b *Bus) WaitInboundDequeued(ctx context.Context, logger *slog.Logger) erro
 		}
 
 		b.mu.Lock()
-		if len(b.inboundHumans) == 0 && len(b.inboundAutos) == 0 && b.inboundPending == 0 {
+		if len(b.inboundHumans) == 0 && len(b.inboundAutos) == 0 && len(b.inboundPending) == 0 {
 			continue
 		}
 
@@ -258,7 +317,13 @@ func (b *Bus) Inbound(ctx context.Context) iter.Seq[*InboundMessage] {
 			keepGoing := yield(msg)
 
 			b.mu.Lock()
-			b.inboundPending--
+			for i := range b.inboundPending {
+				if b.inboundPending[i].msg == msg {
+					b.inboundPending = append(b.inboundPending[:i], b.inboundPending[i+1:]...)
+					break
+				}
+			}
+
 			b.cond.Broadcast()
 			b.mu.Unlock()
 
@@ -314,20 +379,20 @@ func (b *Bus) dequeueInbound(ctx context.Context) (*InboundMessage, bool) {
 		}
 
 		if len(b.inboundHumans) > 0 {
-			msg := b.inboundHumans[0]
+			entry := b.inboundHumans[0]
 			b.inboundHumans = b.inboundHumans[1:]
-			b.inboundPending++
+			b.inboundPending = append(b.inboundPending, entry)
 			b.lastHumanMessage = time.Now()
 
-			return msg, true
+			return entry.msg, true
 		}
 
 		if len(b.inboundAutos) > 0 && (b.inboundClosed || minimumWaitAfterHumanInteraction <= 0 || time.Since(b.lastHumanMessage) >= minimumWaitAfterHumanInteraction) {
-			msg := b.inboundAutos[0]
+			entry := b.inboundAutos[0]
 			b.inboundAutos = b.inboundAutos[1:]
-			b.inboundPending++
+			b.inboundPending = append(b.inboundPending, entry)
 
-			return msg, true
+			return entry.msg, true
 		}
 
 		if b.inboundClosed {
@@ -357,6 +422,65 @@ func (b *Bus) dequeueOutbound(ctx context.Context) (*OutboundMessage, bool) {
 
 		b.cond.Wait()
 	}
+}
+
+func inboundLogSummaries(entries []inboundMessageEntry) (summaries []inboundLogMessageSummary, omitted int) {
+	limit := min(len(entries), inboundLogQueueLimit)
+
+	summaries = make([]inboundLogMessageSummary, 0, limit)
+	for i := range entries[:limit] {
+		summaries = append(summaries, entries[i].summary)
+	}
+
+	return summaries, len(entries) - limit
+}
+
+func inboundLogSummary(msg *InboundMessage) inboundLogMessageSummary {
+	if msg == nil {
+		return inboundLogMessageSummary{}
+	}
+
+	textPreview, textLen, textTruncated := inboundLogPreview(msg.Text)
+	summary := inboundLogMessageSummary{
+		Source:                  msg.Source,
+		Kind:                    msg.Kind,
+		Label:                   msg.Label,
+		Human:                   msg.Human,
+		GoalTurn:                msg.GoalTurn,
+		ConversationID:          msg.ConversationID,
+		TextPreview:             textPreview,
+		TextLen:                 textLen,
+		TextTruncated:           textTruncated,
+		AttachmentCount:         len(msg.Attachments),
+		VerbatimAttachmentCount: len(msg.VerbatimAttachments),
+		AttachmentWarningCount:  len(msg.AttachmentWarnings),
+	}
+
+	if msg.VerbatimMessage != "" {
+		verbatimPreview, verbatimLen, verbatimTruncated := inboundLogPreview(msg.VerbatimMessage)
+		summary.VerbatimPreview = &verbatimPreview
+		summary.VerbatimLen = &verbatimLen
+		summary.VerbatimTruncated = &verbatimTruncated
+	}
+
+	if msg.SlackReply != nil {
+		summary.SlackChannel = msg.SlackReply.ChannelID
+		summary.SlackMessageTS = msg.SlackReply.MessageTS
+		summary.SlackThreadTS = msg.SlackReply.ThreadTS
+	}
+
+	return summary
+}
+
+func inboundLogPreview(text string) (preview string, textLen int, truncated bool) {
+	textLen = len([]rune(text))
+
+	trimmed := []rune(strings.TrimSpace(text))
+	if len(trimmed) <= inboundLogPreviewRunes {
+		return string(trimmed), textLen, false
+	}
+
+	return string(trimmed[:inboundLogPreviewRunes]), textLen, true
 }
 
 func (b *Bus) publishObservedLocked(msg ObservedMessage) {
