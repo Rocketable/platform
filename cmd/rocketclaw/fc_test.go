@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,7 +27,7 @@ func fcSessionDBPath(workspace string) string {
 }
 
 func fcAppendSessionEntryID(ctx context.Context, workspace, conversationID string, entry *rocketcode.SessionEntry) (int64, error) {
-	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultWorkDir)
+	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultWorkDir, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return 0, err
 	}

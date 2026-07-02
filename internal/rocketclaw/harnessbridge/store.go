@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
@@ -165,8 +166,8 @@ func newSessionStore(conversationID string, service *SessionService) sqliteSessi
 }
 
 // NewSessionServiceIn starts a runtime-owned SQLite session service in workDir.
-func NewSessionServiceIn(workspace, workDir string) (*SessionService, error) {
-	db, err := openWorkspaceSessionDB(context.Background(), workspace, workDir)
+func NewSessionServiceIn(workspace, workDir string, logger *slog.Logger) (*SessionService, error) {
+	db, err := openWorkspaceSessionDB(context.Background(), workspace, workDir, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -917,7 +918,7 @@ func openExistingSessionDB(ctx context.Context, workspace, workDir string) (*sql
 		return nil, false, err
 	}
 
-	db, err := openSessionDB(ctx, sessionDBPathIn(workspace, workDir))
+	db, err := openSessionDB(ctx, sessionDBPathIn(workspace, workDir), slog.New(slog.DiscardHandler))
 
 	return db, err == nil, err
 }
@@ -1129,7 +1130,7 @@ func recoverSessionDBSnapshot(ctx context.Context, workspace, recoveryRel string
 		return err
 	}
 
-	db, err := openSessionDB(ctx, recoveredPath)
+	db, err := openSessionDB(ctx, recoveredPath, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return err
 	}
@@ -1660,7 +1661,7 @@ func normalizeState(state *State) {
 	}
 }
 
-func openSessionDB(ctx context.Context, dbPath string) (*sql.DB, error) {
+func openSessionDB(ctx context.Context, dbPath string, logger *slog.Logger) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open rocketcode session db: %w", err)
@@ -1669,7 +1670,7 @@ func openSessionDB(ctx context.Context, dbPath string) (*sql.DB, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
-	if err := initializeSessionDB(ctx, db); err != nil {
+	if err := initializeSessionDB(ctx, db, logger); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -1694,12 +1695,12 @@ func openSessionDBReadOnly(ctx context.Context, dbPath string) (*sql.DB, error) 
 	return db, nil
 }
 
-func openWorkspaceSessionDB(ctx context.Context, workspace, workDir string) (*sql.DB, error) {
+func openWorkspaceSessionDB(ctx context.Context, workspace, workDir string, logger *slog.Logger) (*sql.DB, error) {
 	if err := prepareSessionDBPathIn(workspace, workDir); err != nil {
 		return nil, err
 	}
 
-	return openSessionDB(ctx, sessionDBPathIn(workspace, workDir))
+	return openSessionDB(ctx, sessionDBPathIn(workspace, workDir), logger)
 }
 
 type memoryStore struct{ entries []harness.SessionEntry }

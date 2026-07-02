@@ -4,13 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 )
 
 const sessionDBSchemaVersion = 1
 
-func initializeSessionDB(ctx context.Context, db *sql.DB) error {
+func initializeSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 	for _, statement := range []string{
 		`PRAGMA busy_timeout = 30000`,
 		`PRAGMA page_size = 4096`,
@@ -26,7 +27,7 @@ func initializeSessionDB(ctx context.Context, db *sql.DB) error {
 		}
 	}
 
-	if err := migrateSessionDB(ctx, db); err != nil {
+	if err := migrateSessionDB(ctx, db, logger); err != nil {
 		return fmt.Errorf("migrate rocketcode session db: %w", err)
 	}
 

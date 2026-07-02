@@ -104,7 +104,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		logger.Warn("recovered corrupt rocketcode session db")
 	}
 
-	rocketcodeSessions, err := harnessbridge.NewSessionServiceIn(cfg.Workspace, cfg.WorkDirName())
+	rocketcodeSessions, err := harnessbridge.NewSessionServiceIn(cfg.Workspace, cfg.WorkDirName(), logger.With("component", "state_store"))
 	if err != nil {
 		return fmt.Errorf("start rocketcode session service: %w", err)
 	}

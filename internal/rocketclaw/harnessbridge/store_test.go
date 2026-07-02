@@ -1,12 +1,14 @@
 package harnessbridge
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,7 +25,7 @@ import (
 )
 
 func NewSessionService(workspace string) (*SessionService, error) {
-	return NewSessionServiceIn(workspace, config.DefaultWorkDir)
+	return NewSessionServiceIn(workspace, config.DefaultWorkDir, slog.New(slog.DiscardHandler))
 }
 
 func sessionDBPath(workspace string) string {
@@ -48,7 +50,7 @@ func AppendSessionEntryID(ctx context.Context, dbPath, conversationID string, en
 		return 0, err
 	}
 
-	db, err := openSessionDB(ctx, dbPath)
+	db, err := openSessionDB(ctx, dbPath, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return 0, err
 	}
@@ -274,7 +276,12 @@ func TestSessionServiceMigratesLegacyStateToNormalizedTables(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
-	store := newTestSessionServiceAt(t, workspace)
+	var logs bytes.Buffer
+
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	store, err := NewSessionServiceIn(workspace, config.DefaultWorkDir, logger)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Stop(context.Background())) })
 
 	thread, ok, err := store.Thread("slack-thread:D123:111.222")
 	require.NoError(t, err)
@@ -304,6 +311,10 @@ func TestSessionServiceMigratesLegacyStateToNormalizedTables(t *testing.T) {
 	version, err := sessionDBUserVersion(context.Background(), store.db)
 	require.NoError(t, err)
 	assert.Equal(t, sessionDBSchemaVersion, version)
+	assert.Contains(t, logs.String(), "loaded legacy rocketclaw state for normalized migration")
+	assert.Contains(t, logs.String(), "importing legacy rocketclaw managed conversations")
+	assert.Contains(t, logs.String(), "importing legacy rocketclaw pending restart notifications")
+	assert.Contains(t, logs.String(), "finished rocketclaw state schema migration")
 }
 
 func TestSQLiteSessionStoreLoadsLargeImageTurn(t *testing.T) {
@@ -396,7 +407,7 @@ func TestSQLiteSessionStoreReportsCorruptDB(t *testing.T) {
 func TestSQLiteSessionStoreReportsCorruptEntry(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Dir(sessionDBPath(workspace)), 0o755))
-	db, err := openSessionDB(context.Background(), sessionDBPath(workspace))
+	db, err := openSessionDB(context.Background(), sessionDBPath(workspace), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
@@ -439,7 +450,7 @@ func TestSessionDBPathReturnsWorkspaceSessionDB(t *testing.T) {
 
 func TestSessionDBPathInUsesWorkDir(t *testing.T) {
 	workspace := t.TempDir()
-	service, err := NewSessionServiceIn(workspace, ".femtoclaw")
+	service, err := NewSessionServiceIn(workspace, ".femtoclaw", slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop(t.Context())) })
 
@@ -587,7 +598,7 @@ func TestRecoverSessionDBIfCorruptRecoversIndexPageCorruption(t *testing.T) {
 	_, err := AppendSessionEntryID(context.Background(), dbPath, "main", testSessionEntry("user", "assistant"))
 	require.NoError(t, err)
 
-	db, err := openSessionDB(context.Background(), dbPath)
+	db, err := openSessionDB(context.Background(), dbPath, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	var rootPage, pageSize int64
@@ -618,7 +629,7 @@ func TestRecoverSessionDBIfCorruptRecoversIndexPageCorruption(t *testing.T) {
 func TestListSessionsReportsCorruptEntry(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Dir(sessionDBPath(workspace)), 0o755))
-	db, err := openSessionDB(context.Background(), sessionDBPath(workspace))
+	db, err := openSessionDB(context.Background(), sessionDBPath(workspace), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
@@ -632,7 +643,7 @@ func TestListSessionsReportsCorruptEntry(t *testing.T) {
 func TestListSessionsReportsReplayInputDecodeError(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Dir(sessionDBPath(workspace)), 0o755))
-	db, err := openSessionDB(context.Background(), sessionDBPath(workspace))
+	db, err := openSessionDB(context.Background(), sessionDBPath(workspace), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
@@ -646,7 +657,7 @@ func TestListSessionsReportsReplayInputDecodeError(t *testing.T) {
 func TestListSessionsKeepsSummaryWithInvalidTimestamp(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Dir(sessionDBPath(workspace)), 0o755))
-	db, err := openSessionDB(context.Background(), sessionDBPath(workspace))
+	db, err := openSessionDB(context.Background(), sessionDBPath(workspace), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
@@ -849,7 +860,7 @@ func TestOpenSessionDBWaitsForTransientWriteLock(t *testing.T) {
 	errCh := make(chan error, 1)
 
 	go func() {
-		db, errOpen := openSessionDB(context.Background(), dbPath)
+		db, errOpen := openSessionDB(context.Background(), dbPath, slog.New(slog.DiscardHandler))
 		if errOpen == nil {
 			errOpen = db.Close()
 		}
@@ -873,7 +884,7 @@ func TestOpenSessionDBConfiguresSQLitePolicy(t *testing.T) {
 	dbPath := sessionDBPath(workspace)
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
 
-	db, err := openSessionDB(context.Background(), dbPath)
+	db, err := openSessionDB(context.Background(), dbPath, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 
@@ -999,7 +1010,7 @@ func TestSessionServiceRejectsBlankKeys(t *testing.T) {
 func TestLoadRocketClawStateHandlesMissingAndClosedDB(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, prepareSessionDBPath(workspace))
-	db, err := openSessionDB(context.Background(), sessionDBPath(workspace))
+	db, err := openSessionDB(context.Background(), sessionDBPath(workspace), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	state, err := loadRocketClawState(context.Background(), db)
