@@ -89,6 +89,8 @@ func Run(ctx context.Context, argv0 string, args []string) error {
 
 		go func() { serveErr <- httpServer.Serve(httpListener) }()
 	}
+	logConfiguredRoutes(ctx, slog.Default(), cfg.Routes)
+	slog.Default().LogAttrs(ctx, slog.LevelInfo, "funneld started", configAttrs(cfg)...)
 
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -101,6 +103,7 @@ func Run(ctx context.Context, argv0 string, args []string) error {
 
 		return nil
 	case <-runCtx.Done():
+		slog.Default().LogAttrs(context.Background(), slog.LevelInfo, "funneld shutting down", configAttrs(cfg)...)
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
@@ -113,7 +116,37 @@ func Run(ctx context.Context, argv0 string, args []string) error {
 			}
 		}
 
+		slog.Default().LogAttrs(context.Background(), slog.LevelInfo, "funneld shut down", configAttrs(cfg)...)
 		return nil
+	}
+}
+
+func configAttrs(cfg config) []slog.Attr {
+	attrs := []slog.Attr{
+		slog.String("addr", cfg.Addr),
+		slog.String("http_addr", cfg.HTTPAddr),
+		slog.String("host", cfg.Host),
+		slog.String("cert_cache", cfg.CertCache),
+		slog.Int("route_count", len(cfg.Routes)),
+	}
+
+	for i, route := range cfg.Routes {
+		attrs = append(attrs, slog.GroupAttrs(fmt.Sprintf("route_%d", i),
+			slog.String("path", route.Path),
+			slog.String("target", route.Target),
+		))
+	}
+
+	return attrs
+}
+
+func logConfiguredRoutes(ctx context.Context, logger *slog.Logger, routes []routeConfig) {
+	for i, route := range routes {
+		logger.LogAttrs(ctx, slog.LevelInfo, "funneld route configured",
+			slog.Int("route", i),
+			slog.String("path", route.Path),
+			slog.String("target", route.Target),
+		)
 	}
 }
 
