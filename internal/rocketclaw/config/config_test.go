@@ -155,16 +155,6 @@ func TestValidateNormalizesEmergencySafeWords(t *testing.T) {
 	assert.Equal(t, []string{"redbutton", "angstrom42"}, cfg.EmergencySafeWords)
 }
 
-func TestValidateNormalizesExternalMCPAllowedAgents(t *testing.T) {
-	cfg := validConfig()
-	cfg.MCPExternal.Enabled = true
-	cfg.MCPExternal.ListenAddr = "127.0.0.1:8765"
-	cfg.MCPExternal.AllowedAgents = []string{" main ", "", "main", "worker"}
-
-	require.NoError(t, cfg.Validate())
-	assert.Equal(t, []string{"main", "worker"}, cfg.MCPExternal.AllowedAgents)
-}
-
 func TestValidateSlackSocialMode(t *testing.T) {
 	cfg := validConfig()
 	cfg.Slack.SocialMode.Enabled = true

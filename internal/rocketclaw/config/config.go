@@ -55,9 +55,8 @@ type LoggingConfig struct {
 
 // MCPExternalConfig configures the persistent external MCP HTTP server.
 type MCPExternalConfig struct {
-	Enabled       bool     `json:"enabled"`
-	ListenAddr    string   `json:"listen_addr"`
-	AllowedAgents []string `json:"allowed_agents,omitempty"`
+	Enabled    bool   `json:"enabled"`
+	ListenAddr string `json:"listen_addr"`
 }
 
 // SlackConfig configures the Slack DM connector.
@@ -233,8 +232,6 @@ func (c *Config) Validate() error {
 	if c.MCPExternal.Enabled && strings.TrimSpace(c.MCPExternal.ListenAddr) == "" {
 		return errors.New("mcp_external.listen_addr is required when mcp_external is enabled")
 	}
-
-	c.MCPExternal.AllowedAgents = normalizeStringList(c.MCPExternal.AllowedAgents)
 
 	if err := c.validateSlack(); err != nil {
 		return err

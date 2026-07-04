@@ -410,24 +410,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 			return fmt.Errorf("load external MCP agents: %w", err)
 		}
 
-		if len(cfg.MCPExternal.AllowedAgents) > 0 {
-			filtered := make([]string, 0, len(cfg.MCPExternal.AllowedAgents))
-			for _, agent := range cfg.MCPExternal.AllowedAgents {
-				agent = strings.TrimSpace(agent)
-				if slices.Contains(externalMCPAgents, agent) {
-					filtered = append(filtered, agent)
-				}
-			}
-
-			externalMCPAgents = filtered
-		}
-
-		externalMCPDefaultAgent := events.MainConversationID()
-		if len(cfg.MCPExternal.AllowedAgents) > 0 && len(externalMCPAgents) > 0 {
-			externalMCPDefaultAgent = externalMCPAgents[0]
-		}
-
-		externalMCP, err := startExternalMCPServer(runCtx, cfg, textRelay, cleanupTextRelay, externalMCPUsers, externalMCPAgents, externalMCPDefaultAgent, rocketcodeSessions, threadBridges.SubmitExternalMCP, logger)
+		externalMCP, err := startExternalMCPServer(runCtx, cfg, textRelay, cleanupTextRelay, externalMCPUsers, externalMCPAgents, rocketcodeSessions, threadBridges.SubmitExternalMCP, logger)
 		if err != nil {
 			return err
 		}
@@ -481,12 +464,11 @@ func startExternalMCPServer(
 	cleanupTextRelay func(context.Context, *events.InboundMessage),
 	users map[string]string,
 	agents []string,
-	defaultAgent string,
 	store *harnessbridge.SessionService,
 	submitAgent func(context.Context, string, string, *events.InboundMessage) error,
 	logger *slog.Logger,
 ) (*externalmcp.Server, error) {
-	server, err := externalmcp.StartSessionPromptServer(ctx, logger, cfg.MCPExternal.ListenAddr, users, defaultAgent, func(callCtx context.Context, username, externalConversationID, requestedAgent, input string, metadata map[string]string, attachments []externalmcp.SessionPromptAttachment, slackChannel string) (result externalmcp.SessionResult, err error) {
+	server, err := externalmcp.StartSessionPromptServer(ctx, logger, cfg.MCPExternal.ListenAddr, users, func(callCtx context.Context, username, externalConversationID, requestedAgent, input string, metadata map[string]string, attachments []externalmcp.SessionPromptAttachment, slackChannel string) (result externalmcp.SessionResult, err error) {
 		var reply *events.InboundMessage
 
 		defer func() {
@@ -574,7 +556,7 @@ func startExternalMCPServer(
 
 		usedAgent := requestedAgent
 		if usedAgent == "" {
-			usedAgent = strings.TrimSpace(defaultAgent)
+			return externalmcp.SessionResult{}, errors.New("external MCP agent is required for new conversations")
 		}
 
 		if !slices.Contains(agents, usedAgent) {

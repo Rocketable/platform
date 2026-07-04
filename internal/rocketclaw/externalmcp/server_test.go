@@ -17,7 +17,7 @@ import (
 )
 
 func TestStartSessionPromptServerCallsHandler(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, "main", func(_ context.Context, username, externalConversationID, agent, input string, metadata map[string]string, attachments []SessionPromptAttachment, slackChannel string) (SessionResult, error) {
+	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, username, externalConversationID, agent, input string, metadata map[string]string, attachments []SessionPromptAttachment, slackChannel string) (SessionResult, error) {
 		assert.Empty(t, username)
 		assert.Empty(t, externalConversationID)
 		assert.Equal(t, "main", agent)
@@ -32,7 +32,7 @@ func TestStartSessionPromptServerCallsHandler(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	result := callSessionPrompt(t, server.url, "", "", "", "what now?", nil)
+	result := callSessionPrompt(t, server.url, "", "", "main", "what now?", nil)
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Equal(t, "plain text reply", content.Text)
@@ -40,7 +40,7 @@ func TestStartSessionPromptServerCallsHandler(t *testing.T) {
 }
 
 func TestStartSessionPromptServerReturnsExternalConversationID(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, "main", func(_ context.Context, _, externalConversationID, agent, input string, metadata map[string]string, _ []SessionPromptAttachment, slackChannel string) (SessionResult, error) {
+	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, externalConversationID, agent, input string, metadata map[string]string, _ []SessionPromptAttachment, slackChannel string) (SessionResult, error) {
 		assert.Empty(t, externalConversationID)
 		assert.Equal(t, "planner", agent)
 		assert.Equal(t, "what now?", input)
@@ -61,7 +61,7 @@ func TestStartSessionPromptServerReturnsExternalConversationID(t *testing.T) {
 }
 
 func TestStartSessionPromptServerReturnsHandlerAgent(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, "main", func(_ context.Context, _, externalConversationID, agent, input string, _ map[string]string, _ []SessionPromptAttachment, _ string) (SessionResult, error) {
+	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, externalConversationID, agent, input string, _ map[string]string, _ []SessionPromptAttachment, _ string) (SessionResult, error) {
 		assert.Equal(t, "external-1", externalConversationID)
 		assert.Equal(t, "main", agent)
 		assert.Equal(t, "what now?", input)
@@ -80,7 +80,7 @@ func TestStartSessionPromptServerReturnsHandlerAgent(t *testing.T) {
 }
 
 func TestStartSessionPromptServerPassesSlackChannel(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, "main", func(_ context.Context, _, _, _, input string, _ map[string]string, _ []SessionPromptAttachment, slackChannel string) (SessionResult, error) {
+	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, _, _, input string, _ map[string]string, _ []SessionPromptAttachment, slackChannel string) (SessionResult, error) {
 		assert.Equal(t, "what now?", input)
 		assert.Equal(t, "#triage", slackChannel)
 
@@ -97,7 +97,7 @@ func TestStartSessionPromptServerPassesSlackChannel(t *testing.T) {
 }
 
 func TestStartSessionPromptServerPassesAttachments(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, "main", func(_ context.Context, _, _, _, input string, _ map[string]string, attachments []SessionPromptAttachment, _ string) (SessionResult, error) {
+	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, _, _, input string, _ map[string]string, attachments []SessionPromptAttachment, _ string) (SessionResult, error) {
 		assert.Equal(t, "look", input)
 		require.Len(t, attachments, 1)
 		assert.Equal(t, "scorecard.png", attachments[0].Name)
@@ -124,7 +124,7 @@ func TestStartSessionPromptServerPassesAttachments(t *testing.T) {
 }
 
 func TestStartSessionPromptServerReturnsAttachments(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, "main", func(context.Context, string, string, string, string, map[string]string, []SessionPromptAttachment, string) (SessionResult, error) {
+	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(context.Context, string, string, string, string, map[string]string, []SessionPromptAttachment, string) (SessionResult, error) {
 		return SessionResult{Agent: "main", Answer: "plain text reply", Attachments: []SessionAttachment{
 			{Name: "chart.png", MIMEType: "image/png; charset=binary", DataBase64: base64.StdEncoding.EncodeToString([]byte("png"))},
 			{Name: "report.txt", MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte("report"))},
@@ -155,7 +155,7 @@ func TestStartSessionPromptServerReturnsAttachments(t *testing.T) {
 }
 
 func TestStartSessionPromptServerContinuesSession(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, "main", func(_ context.Context, username, externalConversationID, agent, input string, metadata map[string]string, _ []SessionPromptAttachment, slackChannel string) (SessionResult, error) {
+	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, username, externalConversationID, agent, input string, metadata map[string]string, _ []SessionPromptAttachment, slackChannel string) (SessionResult, error) {
 		assert.Empty(t, username)
 		assert.Empty(t, agent)
 		assert.Equal(t, "external_mcp:planner:abc", externalConversationID)
@@ -177,7 +177,7 @@ func TestStartSessionPromptServerContinuesSession(t *testing.T) {
 }
 
 func TestStartSessionPromptServerExposesMetadataSchema(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, "main", func(context.Context, string, string, string, string, map[string]string, []SessionPromptAttachment, string) (SessionResult, error) {
+	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(context.Context, string, string, string, string, map[string]string, []SessionPromptAttachment, string) (SessionResult, error) {
 		return SessionResult{}, nil
 	})
 	require.NoError(t, err)
@@ -224,7 +224,6 @@ func TestStartSessionPromptServerExposesMetadataSchema(t *testing.T) {
 
 	_, ok = properties["input"].(map[string]any)
 	assert.True(t, ok)
-
 	_, ok = properties["slack_channel"].(map[string]any)
 	assert.True(t, ok)
 
@@ -234,7 +233,7 @@ func TestStartSessionPromptServerExposesMetadataSchema(t *testing.T) {
 }
 
 func TestStartSessionPromptServerRequiresBasicAuth(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"alice": "secret"}, "main", func(_ context.Context, username, externalConversationID, agent, input string, metadata map[string]string, _ []SessionPromptAttachment, slackChannel string) (SessionResult, error) {
+	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"alice": "secret"}, func(_ context.Context, username, externalConversationID, agent, input string, metadata map[string]string, _ []SessionPromptAttachment, slackChannel string) (SessionResult, error) {
 		assert.Equal(t, "alice", username)
 		assert.Empty(t, externalConversationID)
 		assert.Equal(t, "main", agent)
@@ -272,14 +271,14 @@ func TestStartSessionPromptServerRequiresBasicAuth(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	assert.Equal(t, `Basic realm="rocketclaw external mcp"`, resp.Header.Get("WWW-Authenticate"))
 
-	result := callSessionPrompt(t, server.url, "alice", "secret", "", "what now?", nil)
+	result := callSessionPrompt(t, server.url, "alice", "secret", "main", "what now?", nil)
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Equal(t, "plain text reply", content.Text)
 }
 
 func TestServerAccessorsAndClose(t *testing.T) {
-	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, "main", func(context.Context, string, string, string, string, map[string]string, []SessionPromptAttachment, string) (SessionResult, error) {
+	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(context.Context, string, string, string, string, map[string]string, []SessionPromptAttachment, string) (SessionResult, error) {
 		return SessionResult{Answer: "plain text reply"}, nil
 	})
 	require.NoError(t, err)
@@ -290,7 +289,7 @@ func TestServerAccessorsAndClose(t *testing.T) {
 }
 
 func TestStartSessionPromptServerRejectsInvalidListenAddr(t *testing.T) {
-	_, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "bad listen address", nil, "main", func(context.Context, string, string, string, string, map[string]string, []SessionPromptAttachment, string) (SessionResult, error) {
+	_, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "bad listen address", nil, func(context.Context, string, string, string, string, map[string]string, []SessionPromptAttachment, string) (SessionResult, error) {
 		return SessionResult{}, nil
 	})
 	require.ErrorContains(t, err, "listen for external MCP HTTP server")

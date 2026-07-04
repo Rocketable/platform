@@ -71,6 +71,7 @@ On start, you must always read:
 - Reuse existing concepts first. Do not add a new kind, type, field, helper, package, wrapper, callback, or exported symbol unless the existing code cannot express the change.
 - Keep feature-local logic private. Do not export new functions or types unless another package truly needs them.
 - Prefer existing domain types over parallel mirror types.
+- When removing a config field, API option, feature branch, or behavior, remove its field, call sites, docs, examples, normalization, filtering, and dedicated tests. Do not replace removed behavior with new explicit validation, rejection paths, compatibility shims, migration code, or error-message tests unless the human partner explicitly asks for that preserved rejection contract.
 - Prefer standard-library helpers such as `slices.Contains`, `slices.Clone`, `slices.SortFunc`, `slices.CompactFunc`, and `cmp.Compare` over custom bookkeeping.
 - Do not add instrumentation, counters, logging, extra state, or extra indirection unless required for correctness or explicitly requested.
 - Do not add indirection around hard exits, panics, clocks, callbacks, or process control unless the user explicitly asks for it or the subsystem already uses that pattern.
@@ -116,6 +117,8 @@ On start, you must always read:
 - Keep regression tests minimal, behavioral, and targeted to the reported failure. Prefer one narrow contract test over scaffolding-driven tests.
 - When simplifying, remove or compress repetitive tests along with the code. Prefer one table-driven test over many near-duplicates if coverage stays equivalent.
 - Do not add tests for behavior that is being removed.
+- Before adding any new test, search for existing tests that already exercise the affected public behavior. Prefer updating or deleting those tests over adding parallel coverage, especially for removed behavior, signature changes, config shape changes, or defaulting changes.
+- If a removed field or option is ignored by normal decoding after deletion, do not add a test that asserts it is rejected. Unknown-field rejection is new behavior unless it already existed for that config surface.
 - For simplification work, avoid adding broad new tests unless they are required to protect behavior during deletion.
 - For message-flow changes, verify queue order, prompt framing, silent or delivery behavior, and outbound routing separately. Do not assume fixing one fixes the others.
 
@@ -139,7 +142,7 @@ On start, you must always read:
 - In Go, error variables always start with `err` and error types always end with `Error`. For example: `errWriter` and `WriterError`.
 - Before finalizing Go edits, review every new or renamed error variable in the touched diff and rename nonconforming locals such as `runErr`, `waitErr`, or `parseErr` to `errRun`, `errWait`, or `errParse`.
 - Bias toward strong error types for new error contexts when practical. Prefer typed errors with `Unwrap` over ad hoc string-only `fmt.Errorf` wrappers when callers may benefit from structured operation context.
-- Prefer strong types over `map[string]any`. Use `map[string]any` only at truly dynamic boundaries where the key set is not known at compile time; otherwise define a small struct with explicit fields.
+- Prefer strong types over `map[string]any`. Use `map[string]any` only at truly dynamic boundaries where the key set is not known at compile time; otherwise define a small struct with explicit fields. In tests, typed request/result structs are still required when the shape is known; keep `map[string]any` confined to the unavoidable protocol/schema boundary and do not let it spread into helper APIs or assertions.
 - Use Go-style enum types for operation/category fields instead of raw strings.
 - Use `errors.AsType[T]()` for typed error extraction instead of legacy `errors.As` target variables.
 - Use all appropriate features of Go 1.26.2 or newer.

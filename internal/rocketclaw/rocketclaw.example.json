@@ -26,10 +26,7 @@
   },
   "mcp_external": {
     "enabled": true,
-    "listen_addr": "127.0.0.1:8765",
-    "allowed_agents": [
-      "main"
-    ]
+    "listen_addr": "127.0.0.1:8765"
   },
   "slack": {
     "enabled": true,
