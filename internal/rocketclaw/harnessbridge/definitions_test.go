@@ -11,11 +11,11 @@ import (
 )
 
 func loadRocketCodeDefinitions(root *os.Root, workspace string, mode toolMode) (rocketcode.Agents, rocketcode.Skills, error) {
-	return loadRocketCodeDefinitionsIn(root, workspace, config.DefaultWorkDir, mode)
+	return loadRocketCodeDefinitionsIn(root, workspace, config.DefaultRuntimeDir, mode)
 }
 
 func ExternalMCPAgents(workspace string) ([]string, error) {
-	return ExternalMCPAgentsIn(workspace, config.DefaultWorkDir)
+	return ExternalMCPAgentsIn(workspace, config.DefaultRuntimeDir)
 }
 
 func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
@@ -45,11 +45,13 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	require.True(t, permissionSetAllows(restricted.Permission, "task", "go-reviewer"))
 	require.False(t, permissionSetAllows(restricted.Permission, "task", "*"))
 	requireRocketClawPermissionAction(t, primary.Permission, restartToolName, rocketcode.PermissionAllow)
+	requireRocketClawPermissionAction(t, primary.Permission, reloadToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, primary.Permission, scheduleMessageToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, primary.Permission, resetScheduledMessagesToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, primary.Permission, attachFilesToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, primary.Permission, updateGoalToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, helper.Permission, restartToolName, rocketcode.PermissionAllow)
+	requireRocketClawPermissionAction(t, helper.Permission, reloadToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, helper.Permission, scheduleMessageToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, helper.Permission, resetScheduledMessagesToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, helper.Permission, attachFilesToolName, rocketcode.PermissionAllow)
@@ -80,6 +82,7 @@ Prompt
 	require.NoError(t, err)
 	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, rawRunToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, restartToolName, rocketcode.PermissionAllow)
+	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, reloadToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, scheduleMessageToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, resetScheduledMessagesToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, attachFilesToolName, rocketcode.PermissionAllow)
@@ -141,6 +144,16 @@ func TestLoadRocketCodeDefinitionsReportsMissingModel(t *testing.T) {
 	require.ErrorContains(t, err, "main.md: model: required non-empty string")
 }
 
+func TestValidateRuntimeDefinitionsReportsInvalidStagedAgent(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw-stage", "agents"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw-stage", "skills"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw-stage", "agents", "main.md"), []byte("---\ndescription: Main\n---\nPrompt\n"), 0o644))
+
+	err := ValidateRuntimeDefinitions(workspace, ".rocketclaw-stage")
+	require.ErrorContains(t, err, "main.md: model: required non-empty string")
+}
+
 func TestLoadRocketCodeDefinitionsPreservesRocketClawRuntimeToolDenies(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -157,7 +170,7 @@ func TestLoadRocketCodeDefinitionsPreservesRocketClawRuntimeToolDenies(t *testin
 			permission:     "permission:\n  rocketclaw:\n    rocketclaw_restart: deny\n",
 			wantTool:       restartToolName,
 			wantAction:     rocketcode.PermissionDeny,
-			wantAllowTools: []string{scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
+			wantAllowTools: []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
 		},
 		{
 			name:           "exact cron restart deny",
@@ -165,7 +178,7 @@ func TestLoadRocketCodeDefinitionsPreservesRocketClawRuntimeToolDenies(t *testin
 			permission:     "permission:\n  rocketclaw:\n    rocketclaw_restart: deny\n",
 			wantTool:       restartToolName,
 			wantAction:     rocketcode.PermissionDeny,
-			wantAllowTools: []string{rawRunToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
+			wantAllowTools: []string{reloadToolName, rawRunToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
 		},
 		{
 			name:          "wildcard deny",
@@ -173,7 +186,7 @@ func TestLoadRocketCodeDefinitionsPreservesRocketClawRuntimeToolDenies(t *testin
 			permission:    "permission:\n  rocketclaw:\n    rocketclaw_*: deny\n",
 			wantTool:      restartToolName,
 			wantAction:    rocketcode.PermissionDeny,
-			wantDenyTools: []string{scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
+			wantDenyTools: []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
 		},
 		{
 			name:          "broad deny followed by narrow allow",
@@ -181,7 +194,7 @@ func TestLoadRocketCodeDefinitionsPreservesRocketClawRuntimeToolDenies(t *testin
 			permission:    "permission:\n  rocketclaw:\n    '*': deny\n    rocketclaw_restart: allow\n",
 			wantTool:      restartToolName,
 			wantAction:    rocketcode.PermissionAllow,
-			wantDenyTools: []string{scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
+			wantDenyTools: []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
 		},
 	}
 

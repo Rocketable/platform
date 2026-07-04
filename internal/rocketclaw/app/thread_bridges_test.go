@@ -22,12 +22,12 @@ import (
 
 func TestRunReportsPendingRestartNotificationStartupErrors(t *testing.T) {
 	workspace := shortTempDir(t)
-	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultWorkDir, slog.New(slog.DiscardHandler))
+	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	require.NoError(t, service.MarkRestartRequester(context.Background(), "main"))
 	require.NoError(t, service.Stop(context.Background()))
 
-	db, err := sql.Open("sqlite", filepath.Join(workspace, config.DefaultWorkDir, "state.sqlite3"))
+	db, err := sql.Open("sqlite", filepath.Join(workspace, config.DefaultRuntimeDir, "state.sqlite3"))
 	require.NoError(t, err)
 	_, err = db.ExecContext(context.Background(), `CREATE TRIGGER fail_session_entries_insert BEFORE INSERT ON session_entries BEGIN SELECT RAISE(FAIL, 'no append'); END`)
 	require.NoError(t, err)
@@ -109,7 +109,7 @@ func TestThreadBridgeManagerStopsStartedThreadWhenSeedFails(t *testing.T) {
 }
 
 func TestThreadBridgeManagerStopsStartedThreadWhenPersistFails(t *testing.T) {
-	store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), config.DefaultWorkDir, slog.New(slog.DiscardHandler))
+	store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	require.NoError(t, store.Stop(context.Background()))
 
@@ -433,7 +433,7 @@ func TestThreadBridgeManagerDisablesStartNewThreadForLegacyCronThreadReply(t *te
 
 func TestThreadBridgeManagerStartNewThreadSeedsBeforeFirstPrompt(t *testing.T) {
 	workspace := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, config.DefaultWorkDir, "skills"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, config.DefaultRuntimeDir, "skills"), 0o755))
 	writeAppTestAgent(t, workspace, "main", "---\ndescription: Test agent\nmodel: gpt-5.5\n---\nPrompt\n")
 
 	store := newTestSessionService(t, workspace)
@@ -999,7 +999,7 @@ func readOneInbound(t *testing.T, bus *events.Bus) *events.InboundMessage {
 func newTestSessionService(t *testing.T, workspace string) *harnessbridge.SessionService {
 	t.Helper()
 
-	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultWorkDir, slog.New(slog.DiscardHandler))
+	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
 
@@ -1014,7 +1014,7 @@ func shortTempDir(t *testing.T) string {
 func writeAppTestAgent(t *testing.T, workspace, name, content string) {
 	t.Helper()
 
-	dir := filepath.Join(workspace, config.DefaultWorkDir, "agents")
+	dir := filepath.Join(workspace, config.DefaultRuntimeDir, "agents")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name+".md"), []byte(content), 0o600))
 }

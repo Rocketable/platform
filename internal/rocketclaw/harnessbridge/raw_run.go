@@ -40,6 +40,7 @@ type RawRunProgress struct {
 	ScheduleMessage        func(time.Duration, string, bool) error
 	ResetScheduledMessages func() error
 	RequestRestart         func(context.Context, string) (string, error)
+	RequestReload          func(context.Context, string) (string, error)
 }
 
 const rawRunMissingToolPrompt = "You did not call the mandatory " + rawRunToolName + " tool. Normal assistant replies do not count and this background run cannot finish until you call that exact tool. Before this turn ends, call " + rawRunToolName + "(\"full exact message to show the human, or empty string if the human should see nothing\"). If the human partner should see a final message from this background turn, the full final message must be the tool argument. Do not send a summary, paraphrase, or reduced view."
@@ -126,6 +127,7 @@ func newInertRawRunProgress() *RawRunProgress {
 		ScheduleMessage:        func(time.Duration, string, bool) error { return nil },
 		ResetScheduledMessages: func() error { return nil },
 		RequestRestart:         func(context.Context, string) (string, error) { return "", nil },
+		RequestReload:          func(context.Context, string) (string, error) { return "rocketclaw runtime assets reloaded", nil },
 	}
 }
 
@@ -144,18 +146,18 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 
 	defer func() { _ = root.Close() }()
 
-	agents, skills, err := loadRocketCodeDefinitionsIn(root, cfg.Workspace, cfg.WorkDirName(), toolModeCron)
+	agents, skills, err := loadRocketCodeDefinitionsIn(root, cfg.Workspace, cfg.RuntimeDirName(), toolModeCron)
 	if err != nil {
 		return "", fmt.Errorf("open workspace agent and skills: %w", err)
 	}
 
 	appendOverlayPromptToAgent(agents, agent, cfg)
 
-	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(cfg.WorkDirName(), ".rocketcode")), 0o755); err != nil {
+	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(cfg.RuntimeDirName(), ".rocketcode")), 0o755); err != nil {
 		return "", fmt.Errorf("create rocketcode cron shell output parent dir: %w", err)
 	}
 
-	shellOutputRel := filepath.ToSlash(filepath.Join(cfg.WorkDirName(), ".rocketcode", "cron-"+rand.Text()))
+	shellOutputRel := filepath.ToSlash(filepath.Join(cfg.RuntimeDirName(), ".rocketcode", "cron-"+rand.Text()))
 	if err := root.Mkdir(shellOutputRel, 0o700); err != nil {
 		return "", fmt.Errorf("create rocketcode cron shell output dir: %w", err)
 	}
@@ -165,6 +167,7 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 	defer func() { _ = root.RemoveAll(shellOutputRel) }()
 
 	requestRestart := progress.RequestRestart
+	requestReload := progress.RequestReload
 
 	recordRestartRequester := func(context.Context) error { return nil }
 	if strings.TrimSpace(progress.ConversationID) != "" {
@@ -173,14 +176,14 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 		}
 	}
 
-	b := &Bridge{log: logger, config: Config{ConversationID: "", Agent: agent, ConsumeSharedInbound: false, OutputTargets: nil, RequestRestart: requestRestart, SessionService: nil}, runtime: cfg, bus: nil, inputStop: nil, requestCh: nil, stopCh: nil, mu: sync.Mutex{}, handling: false}
+	b := &Bridge{log: logger, config: Config{ConversationID: "", Agent: agent, ConsumeSharedInbound: false, OutputTargets: nil, RequestRestart: requestRestart, RequestReload: requestReload, SessionService: nil}, runtime: cfg, bus: nil, inputStop: nil, requestCh: nil, stopCh: nil, mu: sync.Mutex{}, handling: false}
 
 	providers, err := b.rocketcodeProviders(agents)
 	if err != nil {
 		return "", fmt.Errorf("prepare RocketCode providers: %w", err)
 	}
 
-	customTools := []rocketcode.Tool{decision.Tool(), attachments.Tool(root), restartTool(requestRestart, recordRestartRequester), scheduleMessageTool(progress.ScheduleMessage, logger), resetScheduledMessagesTool(progress.ResetScheduledMessages)}
+	customTools := []rocketcode.Tool{decision.Tool(), attachments.Tool(root), restartTool(requestRestart, recordRestartRequester), reloadTool(requestReload), scheduleMessageTool(progress.ScheduleMessage, logger), resetScheduledMessagesTool(progress.ResetScheduledMessages)}
 
 	rocketcodeConfig := rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: diagnostics, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: true}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CustomTools: customTools}
 

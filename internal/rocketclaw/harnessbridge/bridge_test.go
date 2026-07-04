@@ -43,6 +43,9 @@ func TestRestartToolScopesDescriptionToRuntimeConfig(t *testing.T) {
 
 	assert.Contains(t, tool.Description, "explicitly requested runtime configuration change")
 	assert.Contains(t, tool.Description, "rocketclaw.json")
+	assert.Contains(t, tool.Description, "femtoclaw.json")
+	assert.Contains(t, tool.Description, "configured overlay entries")
+	assert.Contains(t, tool.Description, "Use rocketclaw_reload instead")
 	assert.Contains(t, tool.Description, "agents/")
 	assert.Contains(t, tool.Description, "skills/")
 	assert.Contains(t, tool.Description, "cron/")
@@ -70,6 +73,19 @@ func TestRestartToolCallsConfiguredRestart(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"record", "restart:rocketclaw.json changed and runtime config must reload"}, order)
 	assert.Equal(t, "custom restart output", result.Output)
+}
+
+func TestReloadToolReturnsModelVisibleFailure(t *testing.T) {
+	tool := reloadTool(func(context.Context, string) (string, error) {
+		return "", errors.New("invalid staged cron")
+	})
+
+	result, err := tool.Call(t.Context(), []byte(`{"reason":"cron changed"}`), nil)
+	require.NoError(t, err)
+	assert.Equal(t, "rocketclaw_reload failed; live runtime assets were not changed:\n\ninvalid staged cron", result.Output)
+
+	_, err = tool.Call(t.Context(), []byte(`{"reason":"  "}`), nil)
+	require.ErrorContains(t, err, "reason is required")
 }
 
 func TestUpdateGoalToolRunsSuccessfulCheckBeforeComplete(t *testing.T) {
@@ -585,7 +601,9 @@ func TestHandleInboundInternalizeCompletesResponseWithRocketCodeError(t *testing
 }
 
 func TestRocketCodeConfigEnablesDiagnosticsForThinkingUpdates(t *testing.T) {
-	bridge := &Bridge{runtime: new(config.Config), config: Config{ConversationID: events.MainConversationID(), Agent: "main", RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}}
+	bridge := &Bridge{runtime: new(config.Config), config: Config{ConversationID: events.MainConversationID(), Agent: "main", RequestRestart: testNoopRestart, RequestReload: func(context.Context, string) (string, error) {
+		return "rocketclaw runtime assets reloaded", nil
+	}, SessionService: newTestSessionService(t)}}
 	cfg := bridge.rocketcodeConfig(t.TempDir(), nil, rocketcode.Tool{Name: attachFilesToolName})
 
 	toolNames := make([]string, 0, len(cfg.CustomTools))
@@ -599,6 +617,7 @@ func TestRocketCodeConfigEnablesDiagnosticsForThinkingUpdates(t *testing.T) {
 	assert.Equal(t, 16, cfg.ParallelToolCalls)
 	assert.Equal(t, rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, cfg.ExpandPromptShellCommands)
 	assert.Contains(t, toolNames, scheduleMessageToolName)
+	assert.Contains(t, toolNames, reloadToolName)
 	assert.Contains(t, toolNames, resetScheduledMessagesToolName)
 	assert.Contains(t, toolNames, attachFilesToolName)
 	assert.Equal(t, map[string]string{"A": "B"}, bridge.rocketcodeConfig(t.TempDir(), map[string]string{"A": "B"}).ShellEnv)
@@ -2334,7 +2353,7 @@ func TestSeedResponseThreadCompactsPriorMainEntriesWithChatGPTInstructions(t *te
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\n---\nAgent instructions\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-	require.NoError(t, oai.SaveTokenIn(workspace, config.DefaultWorkDir, oai.Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acct"}))
+	require.NoError(t, oai.SaveTokenIn(workspace, config.DefaultRuntimeDir, oai.Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acct"}))
 
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)

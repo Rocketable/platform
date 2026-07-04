@@ -34,7 +34,7 @@ func runServe(args []string) error {
 		"loaded rocketclaw configuration",
 		"config_path", selected.Path,
 		"workspace", cfg.Workspace,
-		"work_dir", cfg.WorkDirName(),
+		"work_dir", cfg.RuntimeDirName(),
 		"log_level", cfg.Logging.Level,
 		"slack_enabled", cfg.Slack.Enabled,
 	)

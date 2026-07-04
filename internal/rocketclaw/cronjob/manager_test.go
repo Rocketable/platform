@@ -114,6 +114,27 @@ func TestLoadDefinitionsInUsesEffectiveRuntimeCron(t *testing.T) {
 	}
 }
 
+func TestValidateRuntimeDefinitionsReportsStagedCronParseErrors(t *testing.T) {
+	workspace := t.TempDir()
+
+	cronDir := filepath.Join(workspace, ".rocketclaw-stage", "cron")
+	if err := os.MkdirAll(cronDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(cronDir, "broken.md"), []byte("not frontmatter"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ValidateRuntimeDefinitions(workspace, ".rocketclaw-stage"); err == nil || !strings.Contains(err.Error(), "yaml frontmatter is required") {
+		t.Fatalf("ValidateRuntimeDefinitions() error = %v; want frontmatter error", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(workspace, ".rocketclaw-stage", "state.sqlite3")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ValidateRuntimeDefinitions created state file err=%v; want not exist", err)
+	}
+}
+
 func TestLoadOneOffCronjobUsesEffectiveRuntimeCron(t *testing.T) {
 	workspace := t.TempDir()
 

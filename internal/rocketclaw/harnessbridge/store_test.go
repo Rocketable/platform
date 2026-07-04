@@ -25,15 +25,15 @@ import (
 )
 
 func NewSessionService(workspace string) (*SessionService, error) {
-	return NewSessionServiceIn(workspace, config.DefaultWorkDir, slog.New(slog.DiscardHandler))
+	return NewSessionServiceIn(workspace, config.DefaultRuntimeDir, slog.New(slog.DiscardHandler))
 }
 
 func sessionDBPath(workspace string) string {
-	return sessionDBPathIn(workspace, config.DefaultWorkDir)
+	return sessionDBPathIn(workspace, config.DefaultRuntimeDir)
 }
 
 func prepareSessionDBPath(workspace string) error {
-	return prepareSessionDBPathIn(workspace, config.DefaultWorkDir)
+	return prepareSessionDBPathIn(workspace, config.DefaultRuntimeDir)
 }
 
 func AppendSessionEntryID(ctx context.Context, dbPath, conversationID string, entry *harness.SessionEntry) (int64, error) {
@@ -61,7 +61,7 @@ func AppendSessionEntryID(ctx context.Context, dbPath, conversationID string, en
 }
 
 func DeleteSession(ctx context.Context, workspace, conversationID string) (int64, error) {
-	return DeleteSessionIn(ctx, workspace, config.DefaultWorkDir, conversationID)
+	return DeleteSessionIn(ctx, workspace, config.DefaultRuntimeDir, conversationID)
 }
 
 func TestSQLiteSessionStoreAppendAndLoad(t *testing.T) {
@@ -404,7 +404,7 @@ func TestSessionServiceMigratesLegacyStateToNormalizedTables(t *testing.T) {
 	var logs bytes.Buffer
 
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	store, err := NewSessionServiceIn(workspace, config.DefaultWorkDir, logger)
+	store, err := NewSessionServiceIn(workspace, config.DefaultRuntimeDir, logger)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop(context.Background())) })
 
@@ -598,7 +598,7 @@ func TestSQLiteSessionStoreRejectsEscapingDBSymlink(t *testing.T) {
 func TestSessionInspectionMissingDBDoesNotCreateRuntimeDir(t *testing.T) {
 	workspace := t.TempDir()
 
-	summaries, err := ListSessionsInOptions(context.Background(), workspace, config.DefaultWorkDir, SessionListOptions{})
+	summaries, err := ListSessionsInOptions(context.Background(), workspace, config.DefaultRuntimeDir, SessionListOptions{})
 	require.NoError(t, err)
 	assert.Empty(t, summaries)
 
@@ -630,7 +630,7 @@ func TestListSessionsIncludesLastMessages(t *testing.T) {
 	_, err = AppendSessionEntryID(context.Background(), dbPath, "slack-thread:D123:111.222", testSessionEntry("thread user", "thread assistant"))
 	require.NoError(t, err)
 
-	summaries, err := ListSessionsInOptions(context.Background(), workspace, config.DefaultWorkDir, SessionListOptions{})
+	summaries, err := ListSessionsInOptions(context.Background(), workspace, config.DefaultRuntimeDir, SessionListOptions{})
 	require.NoError(t, err)
 	require.Len(t, summaries, 2)
 
@@ -653,18 +653,18 @@ func TestListSessionsOptionsBoundsByLatestUpdate(t *testing.T) {
 	_, err = AppendSessionEntryID(context.Background(), dbPath, "until", testSessionEntryAt(until, "until"))
 	require.NoError(t, err)
 
-	summaries, err := ListSessionsInOptions(context.Background(), workspace, config.DefaultWorkDir, SessionListOptions{Since: since, Until: until})
+	summaries, err := ListSessionsInOptions(context.Background(), workspace, config.DefaultRuntimeDir, SessionListOptions{Since: since, Until: until})
 	require.NoError(t, err)
 	require.Len(t, summaries, 2)
 	assert.Equal(t, "inside", summaries[0].ConversationID)
 	assert.Equal(t, "boundary", summaries[1].ConversationID)
 
-	summaries, err = ListSessionsInOptions(context.Background(), workspace, config.DefaultWorkDir, SessionListOptions{Since: since})
+	summaries, err = ListSessionsInOptions(context.Background(), workspace, config.DefaultRuntimeDir, SessionListOptions{Since: since})
 	require.NoError(t, err)
 	require.Len(t, summaries, 3)
 	assert.Equal(t, "until", summaries[0].ConversationID)
 
-	summaries, err = ListSessionsInOptions(context.Background(), workspace, config.DefaultWorkDir, SessionListOptions{Until: until})
+	summaries, err = ListSessionsInOptions(context.Background(), workspace, config.DefaultRuntimeDir, SessionListOptions{Until: until})
 	require.NoError(t, err)
 	require.Len(t, summaries, 3)
 	assert.Equal(t, "inside", summaries[0].ConversationID)
@@ -680,7 +680,7 @@ func TestListSessionsOptionsLimitUsesMostRecent(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	summaries, err := ListSessionsInOptions(context.Background(), workspace, config.DefaultWorkDir, SessionListOptions{Limit: 2})
+	summaries, err := ListSessionsInOptions(context.Background(), workspace, config.DefaultRuntimeDir, SessionListOptions{Limit: 2})
 	require.NoError(t, err)
 	require.Len(t, summaries, 2)
 	assert.Equal(t, "new", summaries[0].ConversationID)
@@ -688,13 +688,13 @@ func TestListSessionsOptionsLimitUsesMostRecent(t *testing.T) {
 }
 
 func TestListSessionsMissingDBIsEmpty(t *testing.T) {
-	summaries, err := ListSessionsInOptions(context.Background(), t.TempDir(), config.DefaultWorkDir, SessionListOptions{})
+	summaries, err := ListSessionsInOptions(context.Background(), t.TempDir(), config.DefaultRuntimeDir, SessionListOptions{})
 	require.NoError(t, err)
 	assert.Empty(t, summaries)
 }
 
 func TestListSessionsOptionsMissingDBIsEmpty(t *testing.T) {
-	summaries, err := ListSessionsInOptions(context.Background(), t.TempDir(), config.DefaultWorkDir, SessionListOptions{Limit: 1})
+	summaries, err := ListSessionsInOptions(context.Background(), t.TempDir(), config.DefaultRuntimeDir, SessionListOptions{Limit: 1})
 	require.NoError(t, err)
 	assert.Empty(t, summaries)
 }
@@ -761,7 +761,7 @@ func TestListSessionsReportsCorruptEntry(t *testing.T) {
 	_, err = db.ExecContext(context.Background(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES (?, ?, ?)`, "main", "not-json", time.Unix(1, 0).UTC().Format(time.RFC3339Nano))
 	require.NoError(t, err)
 
-	_, err = ListSessionsInOptions(context.Background(), workspace, config.DefaultWorkDir, SessionListOptions{})
+	_, err = ListSessionsInOptions(context.Background(), workspace, config.DefaultRuntimeDir, SessionListOptions{})
 	require.ErrorContains(t, err, "parse rocketcode session summary entry")
 }
 
@@ -775,7 +775,7 @@ func TestListSessionsReportsReplayInputDecodeError(t *testing.T) {
 	_, err = db.ExecContext(context.Background(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES (?, ?, ?)`, "main", `{"version":1,"type":"turn","replay_input":[true]}`, time.Unix(1, 0).UTC().Format(time.RFC3339Nano))
 	require.NoError(t, err)
 
-	_, err = ListSessionsInOptions(context.Background(), workspace, config.DefaultWorkDir, SessionListOptions{})
+	_, err = ListSessionsInOptions(context.Background(), workspace, config.DefaultRuntimeDir, SessionListOptions{})
 	require.ErrorContains(t, err, "decode rocketcode session summary replay input")
 }
 
@@ -791,7 +791,7 @@ func TestListSessionsKeepsSummaryWithInvalidTimestamp(t *testing.T) {
 	_, err = db.ExecContext(context.Background(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES (?, ?, ?)`, "main", string(data), "not-a-time")
 	require.NoError(t, err)
 
-	summaries, err := ListSessionsInOptions(context.Background(), workspace, config.DefaultWorkDir, SessionListOptions{})
+	summaries, err := ListSessionsInOptions(context.Background(), workspace, config.DefaultRuntimeDir, SessionListOptions{})
 	require.NoError(t, err)
 	require.Len(t, summaries, 1)
 	assert.True(t, summaries[0].LastUpdated.IsZero())

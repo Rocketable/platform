@@ -21,7 +21,7 @@ Only use these runtime paths:
 - read the current effective agent from `.rocketclaw`
 - copy the current effective content from `.rocketclaw` into `agents/` before editing an existing agent
 - make the requested edits in `agents/`
-- after all requested `agents/` overlay edits are complete, call `rocketclaw_restart` exactly once so the runtime reloads the updated agent definitions. Do not call restart for memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.
+- after all requested `agents/` overlay edits are complete, call `rocketclaw_reload` exactly once so the runtime validates and reloads the updated agent definitions. Use `rocketclaw_restart` instead only when runtime configuration or overlay-list entries changed. Do not call reload or restart for memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.
 - never edit `.rocketclaw` directly
 
 ## Required inputs

@@ -21,7 +21,7 @@ func runDoctor(args []string) error {
 	lines := []string{
 		fmt.Sprintf("Configuration: OK (%s)", selected.Path),
 		"Workspace: " + cfg.Workspace,
-		"Work directory: " + cfg.WorkDirName(),
+		"Work directory: " + cfg.RuntimeDirName(),
 		fmt.Sprintf("Slack: %t", cfg.Slack.Enabled),
 		fmt.Sprintf("External MCP: %t", cfg.MCPExternal.Enabled),
 		"RocketCode: OK (library)",

@@ -41,11 +41,11 @@ func runFC(args []string) error {
 
 	switch args[0] {
 	case "list":
-		return runFCListIn(cfg.Workspace, cfg.WorkDirName(), args[1:], os.Stdout)
+		return runFCListIn(cfg.Workspace, cfg.RuntimeDirName(), args[1:], os.Stdout)
 	case "observe":
-		return runFCObserveIn(cfg.Workspace, cfg.WorkDirName(), args[1:], os.Stdout)
+		return runFCObserveIn(cfg.Workspace, cfg.RuntimeDirName(), args[1:], os.Stdout)
 	case "delete":
-		return runFCDeleteIn(cfg.Workspace, cfg.WorkDirName(), args[1:], os.Stdout)
+		return runFCDeleteIn(cfg.Workspace, cfg.RuntimeDirName(), args[1:], os.Stdout)
 	case "help", "-h", "--help":
 		return printStdout(fcHelpText, "rocketcode help")
 	default:
@@ -53,7 +53,7 @@ func runFC(args []string) error {
 	}
 }
 
-func runFCDeleteIn(workspace, workDir string, args []string, out io.Writer) error {
+func runFCDeleteIn(workspace, runtimeDir string, args []string, out io.Writer) error {
 	flagSet := flag.NewFlagSet("rocketclaw fc delete", flag.ContinueOnError)
 
 	if err := flagSet.Parse(args); err != nil {
@@ -67,14 +67,14 @@ func runFCDeleteIn(workspace, workDir string, args []string, out io.Writer) erro
 
 	conversationID := strings.TrimSpace(remaining[0])
 
-	lock, err := acquireFCMutationLock(workspace, workDir, "delete")
+	lock, err := acquireFCMutationLock(workspace, runtimeDir, "delete")
 	if err != nil {
 		return fmt.Errorf("delete rocketcode session: %w", err)
 	}
 
 	defer func() { _ = lock.Close() }()
 
-	deleted, err := harnessbridge.DeleteSessionIn(context.Background(), workspace, workDir, conversationID)
+	deleted, err := harnessbridge.DeleteSessionIn(context.Background(), workspace, runtimeDir, conversationID)
 	if err != nil {
 		return fmt.Errorf("delete rocketcode session: %w", err)
 	}
@@ -86,8 +86,8 @@ func runFCDeleteIn(workspace, workDir string, args []string, out io.Writer) erro
 	return nil
 }
 
-func acquireFCMutationLock(workspace, workDir, command string) (*harnessbridge.StateStoreLock, error) {
-	lock, err := harnessbridge.AcquireStateStoreLock(workspace, workDir)
+func acquireFCMutationLock(workspace, runtimeDir, command string) (*harnessbridge.StateStoreLock, error) {
+	lock, err := harnessbridge.AcquireStateStoreLock(workspace, runtimeDir)
 	if errors.Is(err, harnessbridge.ErrStateStoreLocked) {
 		return nil, fmt.Errorf("rocketclaw daemon is running; stop it before running fc %s: %w", command, err)
 	}
@@ -99,7 +99,7 @@ func acquireFCMutationLock(workspace, workDir, command string) (*harnessbridge.S
 	return lock, nil
 }
 
-func runFCListIn(workspace, workDir string, args []string, out io.Writer) error {
+func runFCListIn(workspace, runtimeDir string, args []string, out io.Writer) error {
 	flagSet := flag.NewFlagSet("rocketclaw fc list", flag.ContinueOnError)
 	sinceText := flagSet.String("since", "", "show sessions updated since duration or RFC3339 time")
 	untilText := flagSet.String("until", "", "show sessions updated before RFC3339 time")
@@ -145,11 +145,11 @@ func runFCListIn(workspace, workDir string, args []string, out io.Writer) error 
 		options.Until = until
 	}
 
-	return writeFCListInOptions(context.Background(), workspace, workDir, options, !*noMessagePreview, out)
+	return writeFCListInOptions(context.Background(), workspace, runtimeDir, options, !*noMessagePreview, out)
 }
 
-func writeFCListInOptions(ctx context.Context, workspace, workDir string, options harnessbridge.SessionListOptions, includeMessagePreview bool, out io.Writer) error {
-	summaries, err := harnessbridge.ListSessionsInOptions(ctx, workspace, workDir, options)
+func writeFCListInOptions(ctx context.Context, workspace, runtimeDir string, options harnessbridge.SessionListOptions, includeMessagePreview bool, out io.Writer) error {
+	summaries, err := harnessbridge.ListSessionsInOptions(ctx, workspace, runtimeDir, options)
 	if err != nil {
 		return fmt.Errorf("list rocketcode sessions: %w", err)
 	}
@@ -193,7 +193,7 @@ func writeFCListInOptions(ctx context.Context, workspace, workDir string, option
 	return nil
 }
 
-func runFCObserveIn(workspace, workDir string, args []string, out io.Writer) error {
+func runFCObserveIn(workspace, runtimeDir string, args []string, out io.Writer) error {
 	flagSet := flag.NewFlagSet("rocketclaw fc observe", flag.ContinueOnError)
 	follow := flagSet.Bool("follow", false, "follow session entries")
 	flagSet.BoolVar(follow, "f", false, "follow session entries")
@@ -212,17 +212,17 @@ func runFCObserveIn(workspace, workDir string, args []string, out io.Writer) err
 		conversationID = strings.TrimSpace(remaining[0])
 	}
 
-	return writeFCObserveIn(context.Background(), workspace, workDir, conversationID, *follow, time.Second, out)
+	return writeFCObserveIn(context.Background(), workspace, runtimeDir, conversationID, *follow, time.Second, out)
 }
 
-func writeFCObserveIn(ctx context.Context, workspace, workDir, conversationID string, follow bool, pollInterval time.Duration, out io.Writer) error {
+func writeFCObserveIn(ctx context.Context, workspace, runtimeDir, conversationID string, follow bool, pollInterval time.Duration, out io.Writer) error {
 	if strings.TrimSpace(conversationID) == "" {
 		conversationID = events.MainConversationID()
 	}
 
 	var lastID int64
 	for {
-		entries, err := harnessbridge.ObserveSessionEntries(ctx, harnessbridge.SessionDBPathIn(workspace, workDir), conversationID, lastID)
+		entries, err := harnessbridge.ObserveSessionEntries(ctx, harnessbridge.SessionDBPathIn(workspace, runtimeDir), conversationID, lastID)
 		if err != nil {
 			return fmt.Errorf("observe rocketcode session entries: %w", err)
 		}

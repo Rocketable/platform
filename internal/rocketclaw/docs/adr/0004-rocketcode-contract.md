@@ -103,7 +103,8 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 
 | Tool                                         | Contract                                                                                                                      |
 |----------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------|
-| `rocketclaw_restart`                          | Schedules graceful restart for approved runtime config/asset changes.                                                         |
+| `rocketclaw_restart`                          | Schedules graceful restart for approved runtime configuration changes, including selected config file and overlay-list changes.                                                         |
+| `rocketclaw_reload`                           | Reapplies effective runtime assets from the already-loaded runtime configuration, including fresh remote content for already-loaded overlay entries and local workspace overlays from disk, after staged validation succeeds; failed validation returns model-visible failure text and leaves live runtime assets unchanged. |
 | `rocketclaw_schedule_message`                 | Schedules one-shot delayed prompts or recurring delayed prompts through the owning bridge context. Recurring prompts use optional `recurring: true`, require `send_this_in` from 1m through 1h, persist until reset, and do not replay missed intervals. |
 | `rocketclaw_reset_scheduled_messages`         | Clears scheduled messages for the owning bridge context.                                                                      |
 | `rocketclaw_update_goal`                       | Persistent bridge tool visible only when the owning conversation has an active text connector goal loop; reports `progress`, `complete`, or `blocked` with an optional explanatory `note`. |
@@ -111,7 +112,7 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 | `ask_user_question`                            | Persistent bridge tool visible only for qualifying human-originated Slack turns with a native answer path. The tool asks the originating human through Slack, blocks until answered or canceled, and returns selected option values, optional custom text, and the answer source. |
 | `rocketclaw_i_want_human_partner_to_see_this` | Required completion tool for raw background runs; its argument is the exact human-visible final message or empty for silence. |
 
-Persistent bridge tools are restart, schedule message, reset scheduled messages, active-goal update when applicable, attach files, `ask_user_question` when the originating human turn qualifies, and path-specific custom tools. Raw-run tools are decision, outbound attachment collection, restart, schedule message, and reset scheduled messages. Raw and persistent schedule-message tools expose the same one-shot and recurring contract.
+Persistent bridge tools are restart, reload, schedule message, reset scheduled messages, active-goal update when applicable, attach files, `ask_user_question` when the originating human turn qualifies, and path-specific custom tools. Raw-run tools are decision, outbound attachment collection, restart, reload, schedule message, and reset scheduled messages. Raw and persistent schedule-message tools expose the same one-shot and recurring contract.
 
 ### Goal-Loop Prompting
 
@@ -225,3 +226,4 @@ Persistent bridge tools are restart, schedule message, reset scheduled messages,
 - 2026-07-01: Clarified that `$ARGUMENTS` data remains literal and is not shell-executable through skill prompt shell expansion.
 - 2026-07-02: Clarified that RocketClaw translates Slack `💡` syntax to RocketCode direct skill invocation and does not render direct skill content itself.
 - 2026-07-02: Allowed guardrail and automatic permission-review child-run diagnostics and parsed results to reach connector-visible thinking/progress while preserving exclusion from model-visible content, replay, reviewed task/tool results except existing rejection or denial text, and session persistence.
+- 2026-07-04: Added `rocketclaw_reload` to persistent bridge and raw-run RocketClaw tools with validation-before-commit runtime asset semantics.

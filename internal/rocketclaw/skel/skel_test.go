@@ -1,6 +1,7 @@
 package skel
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -137,14 +138,14 @@ func TestSyncReportsWorkspaceDirectoryConflicts(t *testing.T) {
 }
 
 func TestResetTargetMissingIsNoop(t *testing.T) {
-	require.NoError(t, resetTarget(filepath.Join(t.TempDir(), targetRoot), testLogger()))
+	require.NoError(t, resetRuntimeDirectoryForStartup(filepath.Join(t.TempDir(), targetRoot), testLogger()))
 }
 
 func TestResetTargetRejectsFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), targetRoot)
 	require.NoError(t, os.WriteFile(path, []byte("file"), 0o644))
 
-	err := resetTarget(path, testLogger())
+	err := resetRuntimeDirectoryForStartup(path, testLogger())
 	require.ErrorContains(t, err, "rocketclaw target path is not a directory")
 }
 
@@ -730,6 +731,76 @@ func TestSyncEffectiveRuntimeAssetsDoesNotMutateRuntimeOrScriptSymlinks(t *testi
 	info, err := os.Lstat(filepath.Join(realScripts, "helper.sh"))
 	require.NoError(t, err)
 	assert.Zero(t, info.Mode()&os.ModeSymlink)
+}
+
+func TestReplaceRuntimeAssetsAfterValidationLeavesLiveAssetsUnchangedOnValidationFailure(t *testing.T) {
+	workspace := t.TempDir()
+	liveAgents := filepath.Join(workspace, targetRoot, agentsRoot)
+	realScripts := filepath.Join(workspace, scriptsRoot)
+
+	require.NoError(t, os.MkdirAll(liveAgents, 0o755))
+	require.NoError(t, os.MkdirAll(realScripts, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(liveAgents, "main.md"), []byte("live"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(realScripts, "tool.sh"), []byte("regular"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, agentsRoot), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "main.md"), []byte("broken"), 0o644))
+
+	errValidate := errors.New("invalid staged assets")
+	err := ReplaceRuntimeAssetsAfterValidation(workspace, targetRoot, nil, testLogger(), func(string) error { return errValidate })
+	require.ErrorIs(t, err, errValidate)
+
+	data, err := os.ReadFile(filepath.Join(liveAgents, "main.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "live", string(data))
+	data, err = os.ReadFile(filepath.Join(realScripts, "tool.sh"))
+	require.NoError(t, err)
+	assert.Equal(t, "regular", string(data))
+}
+
+func TestReplaceRuntimeAssetsAfterValidationCommitsFreshOverlayAndRefreshesScripts(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for overlay test")
+	}
+
+	tmp := t.TempDir()
+	repo := filepath.Join(tmp, "repo")
+	repoGit(t, repo, "init")
+	repoGit(t, repo, "config", "user.email", "test@example.com")
+	repoGit(t, repo, "config", "user.name", "Test User")
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, agentsRoot), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, scriptsRoot), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, agentsRoot, "remote.md"), []byte("old remote"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, scriptsRoot, "remote.sh"), []byte("old script"), 0o644))
+	repoGit(t, repo, "add", ".")
+	repoGit(t, repo, "commit", "-m", "old")
+
+	workspace := filepath.Join(tmp, "workspace")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, agentsRoot), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "local.md"), []byte("local"), 0o644))
+	require.NoError(t, SyncInWithOverlays(workspace, targetRoot, []string{repo}, testLogger()))
+
+	require.NoError(t, os.WriteFile(filepath.Join(repo, agentsRoot, "remote.md"), []byte("new remote"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, scriptsRoot, "remote.sh"), []byte("new script"), 0o644))
+	repoGit(t, repo, "add", ".")
+	repoGit(t, repo, "commit", "-m", "new")
+
+	require.NoError(t, ReplaceRuntimeAssetsAfterValidation(workspace, targetRoot, []string{repo}, testLogger(), func(stagedWorkDir string) error {
+		data, err := os.ReadFile(filepath.Join(workspace, stagedWorkDir, agentsRoot, "remote.md"))
+		require.NoError(t, err)
+		assert.Equal(t, "new remote", string(data))
+
+		return nil
+	}))
+
+	data, err := os.ReadFile(filepath.Join(workspace, targetRoot, agentsRoot, "remote.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "new remote", string(data))
+	data, err = os.ReadFile(filepath.Join(workspace, targetRoot, agentsRoot, "local.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "local", string(data))
+	data, err = os.ReadFile(filepath.Join(workspace, scriptsRoot, "remote.sh"))
+	require.NoError(t, err)
+	assert.Equal(t, "new script", string(data))
 }
 
 func TestRelativePath(t *testing.T) {

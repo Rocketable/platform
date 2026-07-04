@@ -58,14 +58,14 @@ func runOAILogin(args []string) error {
 		login = oai.LoginDeviceIn
 	}
 
-	workDir := config.DefaultWorkDir
+	runtimeDir := config.DefaultRuntimeDir
 	if selected, err := selectRuntimeConfigFile(); err != nil {
 		return fmt.Errorf("stat config path: %w", err)
 	} else if selected.Found {
-		workDir = selected.WorkDir
+		runtimeDir = selected.WorkDir
 	}
 
-	path, err := login(context.Background(), workspace, workDir, os.Stdout)
+	path, err := login(context.Background(), workspace, runtimeDir, os.Stdout)
 	if err != nil {
 		return fmt.Errorf("login with ChatGPT OAuth: %w", err)
 	}

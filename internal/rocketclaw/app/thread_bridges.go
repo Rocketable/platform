@@ -482,7 +482,7 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *events.St
 		return events.StartNewThreadResult{}, fmt.Errorf("agent %q is not allowed on this source surface", targetAgent)
 	}
 
-	agents, err := harnessbridge.ExternalMCPAgentsIn(m.runtime.Workspace, m.runtime.WorkDirName())
+	agents, err := harnessbridge.ExternalMCPAgentsIn(m.runtime.Workspace, m.runtime.RuntimeDirName())
 	if err != nil {
 		return events.StartNewThreadResult{}, fmt.Errorf("load configured agents: %w", err)
 	}

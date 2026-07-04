@@ -61,8 +61,8 @@ type claims struct {
 	} `json:"https://api.openai.com/auth"`
 }
 
-// AuthFilePathIn returns the workspace-local token file path in workDir.
-func AuthFilePathIn(workspace, workDir string) (string, error) {
+// AuthFilePathIn returns the workspace-local token file path in runtimeDir.
+func AuthFilePathIn(workspace, runtimeDir string) (string, error) {
 	if strings.TrimSpace(workspace) == "" {
 		wd, err := os.Getwd()
 		if err != nil {
@@ -77,12 +77,12 @@ func AuthFilePathIn(workspace, workDir string) (string, error) {
 		return "", fmt.Errorf("resolve workspace path: %w", err)
 	}
 
-	return filepath.Join(workspace, workDir, "auth.json"), nil
+	return filepath.Join(workspace, runtimeDir, "auth.json"), nil
 }
 
-// LoadTokenIn reads the persisted ChatGPT OAuth token from workDir.
-func LoadTokenIn(workspace, workDir string) (Token, error) {
-	path, err := AuthFilePathIn(workspace, workDir)
+// LoadTokenIn reads the persisted ChatGPT OAuth token from runtimeDir.
+func LoadTokenIn(workspace, runtimeDir string) (Token, error) {
+	path, err := AuthFilePathIn(workspace, runtimeDir)
 	if err != nil {
 		return Token{}, err
 	}
@@ -104,9 +104,9 @@ func LoadTokenIn(workspace, workDir string) (Token, error) {
 	return token, nil
 }
 
-// SaveTokenIn writes the ChatGPT OAuth token to workDir with owner-only permissions.
-func SaveTokenIn(workspace, workDir string, token Token) error {
-	path, err := AuthFilePathIn(workspace, workDir)
+// SaveTokenIn writes the ChatGPT OAuth token to runtimeDir with owner-only permissions.
+func SaveTokenIn(workspace, runtimeDir string, token Token) error {
+	path, err := AuthFilePathIn(workspace, runtimeDir)
 	if err != nil {
 		return err
 	}
@@ -128,8 +128,8 @@ func SaveTokenIn(workspace, workDir string, token Token) error {
 	return nil
 }
 
-// LoginBrowserIn completes the local browser OAuth flow and saves the resulting token in workDir.
-func LoginBrowserIn(ctx context.Context, workspace, workDir string, out io.Writer) (string, error) {
+// LoginBrowserIn completes the local browser OAuth flow and saves the resulting token in runtimeDir.
+func LoginBrowserIn(ctx context.Context, workspace, runtimeDir string, out io.Writer) (string, error) {
 	pkce, err := generatePKCE()
 	if err != nil {
 		return "", err
@@ -217,11 +217,11 @@ func LoginBrowserIn(ctx context.Context, workspace, workDir string, out io.Write
 		return "", err
 	}
 
-	return saveTokenResponseIn(workspace, workDir, response)
+	return saveTokenResponseIn(workspace, runtimeDir, response)
 }
 
-// LoginDeviceIn completes the headless device OAuth flow and saves the resulting token in workDir.
-func LoginDeviceIn(ctx context.Context, workspace, workDir string, out io.Writer) (string, error) {
+// LoginDeviceIn completes the headless device OAuth flow and saves the resulting token in runtimeDir.
+func LoginDeviceIn(ctx context.Context, workspace, runtimeDir string, out io.Writer) (string, error) {
 	body, err := json.Marshal(map[string]string{"client_id": clientID})
 	if err != nil {
 		return "", fmt.Errorf("marshal device authorization request: %w", err)
@@ -272,7 +272,7 @@ func LoginDeviceIn(ctx context.Context, workspace, workDir string, out io.Writer
 		case <-time.After(interval + 3*time.Second):
 		}
 
-		path, done, err := pollDeviceIn(ctx, workspace, workDir, device.DeviceAuthID, device.UserCode)
+		path, done, err := pollDeviceIn(ctx, workspace, runtimeDir, device.DeviceAuthID, device.UserCode)
 		if err != nil {
 			return "", err
 		}
@@ -283,9 +283,9 @@ func LoginDeviceIn(ctx context.Context, workspace, workDir string, out io.Writer
 	}
 }
 
-// NewChatGPTClientIn creates an OpenAI client that sends Responses API requests to ChatGPT Codex using workDir auth.
-func NewChatGPTClientIn(workspace, workDir string, opts ...option.RequestOption) (*openai.Client, error) {
-	if _, err := LoadTokenIn(workspace, workDir); err != nil {
+// NewChatGPTClientIn creates an OpenAI client that sends Responses API requests to ChatGPT Codex using runtimeDir auth.
+func NewChatGPTClientIn(workspace, runtimeDir string, opts ...option.RequestOption) (*openai.Client, error) {
+	if _, err := LoadTokenIn(workspace, runtimeDir); err != nil {
 		return nil, err
 	}
 
@@ -294,7 +294,7 @@ func NewChatGPTClientIn(workspace, workDir string, opts ...option.RequestOption)
 	client := openai.NewClient(append([]option.RequestOption{
 		option.WithAPIKey(dummyAPIKey),
 		option.WithBaseURL(codexBaseURL),
-		option.WithHTTPClient(&http.Client{Transport: &transport{base: http.DefaultTransport, workspace: workspace, workDir: workDir, sessionID: sessionID}}),
+		option.WithHTTPClient(&http.Client{Transport: &transport{base: http.DefaultTransport, workspace: workspace, runtimeDir: runtimeDir, sessionID: sessionID}}),
 		option.WithHeader("originator", originator),
 		option.WithHeader("User-Agent", codexUserAgent),
 	}, opts...)...)
@@ -303,9 +303,9 @@ func NewChatGPTClientIn(workspace, workDir string, opts ...option.RequestOption)
 }
 
 type transport struct {
-	base                          http.RoundTripper
-	workspace, workDir, sessionID string
-	mu                            sync.Mutex
+	base                             http.RoundTripper
+	workspace, runtimeDir, sessionID string
+	mu                               sync.Mutex
 }
 
 type codexRequestMetadata struct {
@@ -479,7 +479,7 @@ func (t *transport) token(ctx context.Context) (Token, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	token, err := LoadTokenIn(t.workspace, t.workDir)
+	token, err := LoadTokenIn(t.workspace, t.runtimeDir)
 	if err != nil {
 		return Token{}, err
 	}
@@ -495,7 +495,7 @@ func (t *transport) token(ctx context.Context) (Token, error) {
 
 	next := tokenFromRefreshResponse(response, token)
 
-	if err := SaveTokenIn(t.workspace, t.workDir, next); err != nil {
+	if err := SaveTokenIn(t.workspace, t.runtimeDir, next); err != nil {
 		return Token{}, err
 	}
 
@@ -506,7 +506,7 @@ func (t *transport) recoveryToken(ctx context.Context, failed Token) (Token, err
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	token, err := LoadTokenIn(t.workspace, t.workDir)
+	token, err := LoadTokenIn(t.workspace, t.runtimeDir)
 	if err != nil {
 		return Token{}, err
 	}
@@ -521,7 +521,7 @@ func (t *transport) recoveryToken(ctx context.Context, failed Token) (Token, err
 	}
 
 	next := tokenFromRefreshResponse(response, token)
-	if err := SaveTokenIn(t.workspace, t.workDir, next); err != nil {
+	if err := SaveTokenIn(t.workspace, t.runtimeDir, next); err != nil {
 		return Token{}, err
 	}
 
@@ -1193,7 +1193,7 @@ func postToken(ctx context.Context, form url.Values) (tokenResponse, error) {
 	return response, nil
 }
 
-func pollDeviceIn(ctx context.Context, workspace, workDir, deviceAuthID, userCode string) (path string, done bool, err error) {
+func pollDeviceIn(ctx context.Context, workspace, runtimeDir, deviceAuthID, userCode string) (path string, done bool, err error) {
 	body, err := json.Marshal(map[string]string{"device_auth_id": deviceAuthID, "user_code": userCode})
 	if err != nil {
 		return "", false, fmt.Errorf("marshal device token request: %w", err)
@@ -1236,7 +1236,7 @@ func pollDeviceIn(ctx context.Context, workspace, workDir, deviceAuthID, userCod
 		return "", false, err
 	}
 
-	path, err = saveTokenResponseIn(workspace, workDir, response)
+	path, err = saveTokenResponseIn(workspace, runtimeDir, response)
 	if err != nil {
 		return "", false, err
 	}
@@ -1244,13 +1244,13 @@ func pollDeviceIn(ctx context.Context, workspace, workDir, deviceAuthID, userCod
 	return path, true, nil
 }
 
-func saveTokenResponseIn(workspace, workDir string, response tokenResponse) (string, error) {
+func saveTokenResponseIn(workspace, runtimeDir string, response tokenResponse) (string, error) {
 	token := tokenFromResponse(response)
-	if err := SaveTokenIn(workspace, workDir, token); err != nil {
+	if err := SaveTokenIn(workspace, runtimeDir, token); err != nil {
 		return "", err
 	}
 
-	path, err := AuthFilePathIn(workspace, workDir)
+	path, err := AuthFilePathIn(workspace, runtimeDir)
 	if err != nil {
 		return "", err
 	}

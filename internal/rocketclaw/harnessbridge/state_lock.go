@@ -16,8 +16,8 @@ type StateStoreLock struct {
 }
 
 // AcquireStateStoreLock acquires non-blocking advisory ownership of the state store.
-func AcquireStateStoreLock(workspace, workDir string) (*StateStoreLock, error) {
-	if err := prepareSessionDBPathIn(workspace, workDir); err != nil {
+func AcquireStateStoreLock(workspace, runtimeDir string) (*StateStoreLock, error) {
+	if err := prepareSessionDBPathIn(workspace, runtimeDir); err != nil {
 		return nil, err
 	}
 
@@ -28,7 +28,7 @@ func AcquireStateStoreLock(workspace, workDir string) (*StateStoreLock, error) {
 
 	defer func() { _ = root.Close() }()
 
-	path := filepath.ToSlash(filepath.Join(workDir, "state.sqlite3.lock"))
+	path := filepath.ToSlash(filepath.Join(runtimeDir, "state.sqlite3.lock"))
 	if _, err := rootPathExistsNoSymlink(root, path, "rocketcode session db lock"); err != nil {
 		return nil, err
 	}

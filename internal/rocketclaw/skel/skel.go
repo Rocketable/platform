@@ -36,8 +36,8 @@ type OverlayInfo struct {
 //go:embed AGENTS.md main-update-cortex.sh all:.rocketclaw all:agents all:cron
 var payload embed.FS
 
-// SyncInWithOverlays materializes embedded setup files, configured git overlays, and local overlays into workDir.
-func SyncInWithOverlays(workspace, workDir string, overlays []string, logger *slog.Logger) error {
+// SyncInWithOverlays materializes embedded setup files, configured git overlays, and local overlays into runtimeDir.
+func SyncInWithOverlays(workspace, runtimeDir string, overlays []string, logger *slog.Logger) error {
 	entries, err := fs.ReadDir(payload, ".")
 	if err != nil {
 		return fmt.Errorf("read embedded root setup files: %w", err)
@@ -87,8 +87,8 @@ func SyncInWithOverlays(workspace, workDir string, overlays []string, logger *sl
 		return fmt.Errorf("create rocketclaw skills overlay directory: %w", err)
 	}
 
-	target := filepath.Join(workspace, workDir)
-	if err := resetTarget(target, logger); err != nil {
+	target := filepath.Join(workspace, runtimeDir)
+	if err := resetRuntimeDirectoryForStartup(target, logger); err != nil {
 		return fmt.Errorf("reset rocketclaw target: %w", err)
 	}
 
@@ -100,7 +100,7 @@ func SyncInWithOverlays(workspace, workDir string, overlays []string, logger *sl
 		return err
 	}
 
-	if err := syncWorkspaceScriptSymlinks(workspace, workDir, logger); err != nil {
+	if err := syncWorkspaceScriptSymlinks(workspace, runtimeDir, logger); err != nil {
 		return fmt.Errorf("sync workspace script symlinks: %w", err)
 	}
 
@@ -137,9 +137,74 @@ func SyncEffectiveRuntimeAssets(workspace, target string, overlays []string, log
 	return nil
 }
 
-func syncWorkspaceScriptSymlinks(workspace, workDir string, logger *slog.Logger) error {
+// ReplaceRuntimeAssetsAfterValidation rebuilds runtime assets in a stage and replaces live assets only after validate accepts the staged work dir.
+func ReplaceRuntimeAssetsAfterValidation(workspace, runtimeDir string, overlays []string, logger *slog.Logger, validate func(string) error) error {
+	stage, err := os.MkdirTemp(workspace, ".rocketclaw-reload-*")
+	if err != nil {
+		return fmt.Errorf("create rocketclaw reload stage: %w", err)
+	}
+
+	defer func() { _ = os.RemoveAll(stage) }()
+
+	if err := SyncEffectiveRuntimeAssets(workspace, stage, overlays, logger); err != nil {
+		return err
+	}
+
+	stagedWorkDir, err := filepath.Rel(workspace, stage)
+	if err != nil {
+		return fmt.Errorf("compute rocketclaw reload stage path: %w", err)
+	}
+
+	if err := validate(filepath.ToSlash(stagedWorkDir)); err != nil {
+		return err
+	}
+
+	live := filepath.Join(workspace, runtimeDir)
+	if err := resetRuntimeDirectoryForReload(live, logger); err != nil {
+		return err
+	}
+
+	if err := commitStagedRuntimeAssets(stage, live); err != nil {
+		return fmt.Errorf("commit rocketclaw reload stage: %w", err)
+	}
+
+	if err := syncWorkspaceScriptSymlinks(workspace, runtimeDir, logger); err != nil {
+		return fmt.Errorf("sync workspace script symlinks: %w", err)
+	}
+
+	return nil
+}
+
+func commitStagedRuntimeAssets(stage, live string) error {
+	info, err := os.Stat(stage)
+	if err != nil {
+		return fmt.Errorf("stat staged runtime asset root %s: %w", stage, err)
+	}
+
+	if err := os.MkdirAll(live, info.Mode().Perm()); err != nil {
+		return fmt.Errorf("create runtime asset directory %s: %w", live, err)
+	}
+
+	entries, err := os.ReadDir(stage)
+	if err != nil {
+		return fmt.Errorf("read staged runtime asset root %s: %w", stage, err)
+	}
+
+	for _, entry := range entries {
+		from := filepath.Join(stage, entry.Name())
+
+		to := filepath.Join(live, entry.Name())
+		if err := os.Rename(from, to); err != nil {
+			return fmt.Errorf("move staged runtime asset %s to %s: %w", from, to, err)
+		}
+	}
+
+	return nil
+}
+
+func syncWorkspaceScriptSymlinks(workspace, runtimeDir string, logger *slog.Logger) error {
 	workspaceScripts := filepath.Join(workspace, scriptsRoot)
-	runtimeScripts := filepath.Join(workspace, workDir, scriptsRoot)
+	runtimeScripts := filepath.Join(workspace, runtimeDir, scriptsRoot)
 
 	if err := removeWorkspaceRuntimeScriptSymlinksIfPresent(workspace, logger); err != nil {
 		return err
@@ -319,11 +384,6 @@ func syncScriptSymlinkGitExclude(workspace string, generated []string, logger *s
 }
 
 func removeRuntimeScriptSymlinks(workspace, workspaceScripts string, logger *slog.Logger) error {
-	runtimeRoots := []string{
-		filepath.Clean(filepath.Join(workspace, ".rocketclaw")),
-		filepath.Clean(filepath.Join(workspace, ".femtoclaw")),
-	}
-
 	if err := filepath.WalkDir(workspaceScripts, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return fmt.Errorf("walk workspace scripts %s: %w", path, err)
@@ -333,27 +393,19 @@ func removeRuntimeScriptSymlinks(workspace, workspaceScripts string, logger *slo
 			return nil
 		}
 
-		target, err := os.Readlink(path)
-		if err != nil {
+		if _, err := os.Readlink(path); err != nil {
 			return fmt.Errorf("read workspace script symlink %s: %w", path, err)
 		}
 
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(filepath.Dir(path), target)
+		if !isRuntimeScriptSymlink(workspace, path) {
+			return nil
 		}
 
-		target = filepath.Clean(target)
-		for _, root := range runtimeRoots {
-			if target == root || strings.HasPrefix(target, root+string(filepath.Separator)) {
-				if err := os.Remove(path); err != nil {
-					return fmt.Errorf("remove runtime workspace script symlink %s: %w", path, err)
-				}
-
-				logger.Debug("removed runtime workspace script symlink", "path", path, "target", target)
-
-				return nil
-			}
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("remove runtime workspace script symlink %s: %w", path, err)
 		}
+
+		logger.Debug("removed runtime workspace script symlink", "path", path)
 
 		return nil
 	}); err != nil {
@@ -392,6 +444,10 @@ func overlayWorkspaceIn(workspace, target string, logger *slog.Logger) error {
 			true,
 			true,
 			func(name string, d fs.DirEntry) bool {
+				if root == scriptsRoot && d.Type()&os.ModeSymlink != 0 && isRuntimeScriptSymlink(workspace, filepath.Join(workspace, filepath.FromSlash(name))) {
+					return true
+				}
+
 				return !d.IsDir() && strings.HasSuffix(strings.ToLower(filepath.Base(name)), "example.md")
 			},
 		); err != nil {
@@ -402,9 +458,30 @@ func overlayWorkspaceIn(workspace, target string, logger *slog.Logger) error {
 	return nil
 }
 
+func isRuntimeScriptSymlink(workspace, path string) bool {
+	target, err := os.Readlink(path)
+	if err != nil {
+		return false
+	}
+
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(filepath.Dir(path), target)
+	}
+
+	target = filepath.Clean(target)
+	for _, root := range []string{filepath.Join(workspace, ".rocketclaw"), filepath.Join(workspace, ".femtoclaw")} {
+		root = filepath.Clean(root)
+		if target == root || strings.HasPrefix(target, root+string(filepath.Separator)) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // OverlayInfos returns normalized configured overlay clone metadata in config order.
-func OverlayInfos(workspace, workDir string, overlays []string) []OverlayInfo {
-	return overlayInfosIn(filepath.Join(workspace, workDir), overlays)
+func OverlayInfos(workspace, runtimeDir string, overlays []string) []OverlayInfo {
+	return overlayInfosIn(filepath.Join(workspace, runtimeDir), overlays)
 }
 
 func overlayInfosIn(target string, overlays []string) []OverlayInfo {
@@ -599,8 +676,8 @@ func runGit(dir string, args ...string) error {
 	return nil
 }
 
-func resetTarget(target string, logger *slog.Logger) error {
-	preservedTargetEntries := map[string]struct{}{
+func resetRuntimeDirectoryForStartup(target string, logger *slog.Logger) error {
+	preserved := map[string]struct{}{
 		".rocketcode":        {},
 		"auth.json":          {},
 		"overlays":           {},
@@ -610,6 +687,23 @@ func resetTarget(target string, logger *slog.Logger) error {
 		"state.sqlite3.lock": {},
 	}
 
+	return resetRuntimeDirectory(target, logger, preserved)
+}
+
+func resetRuntimeDirectoryForReload(target string, logger *slog.Logger) error {
+	preserved := map[string]struct{}{
+		".rocketcode":        {},
+		"auth.json":          {},
+		"state.sqlite3":      {},
+		"state.sqlite3-shm":  {},
+		"state.sqlite3-wal":  {},
+		"state.sqlite3.lock": {},
+	}
+
+	return resetRuntimeDirectory(target, logger, preserved)
+}
+
+func resetRuntimeDirectory(target string, logger *slog.Logger, preserved map[string]struct{}) error {
 	info, err := os.Stat(target)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -629,7 +723,7 @@ func resetTarget(target string, logger *slog.Logger) error {
 	}
 
 	for _, entry := range entries {
-		if _, ok := preservedTargetEntries[entry.Name()]; ok {
+		if _, ok := preserved[entry.Name()]; ok {
 			logger.Debug("preserved rocketclaw target entry", "path", filepath.Join(target, entry.Name()))
 			continue
 		}

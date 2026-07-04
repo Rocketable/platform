@@ -110,14 +110,14 @@ type RunFunc func(context.Context, string, string, *slog.Logger, *harnessbridge.
 
 // Manager loads and runs workspace cron definitions.
 type Manager struct {
-	workspace, workDir string
-	bus                *events.Bus
-	store              cronScheduleStore
-	run                RunFunc
-	log                *slog.Logger
-	now                func() time.Time
-	tickerInterval     time.Duration
-	SendTextChannel    func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error
+	workspace, runtimeDir string
+	bus                   *events.Bus
+	store                 cronScheduleStore
+	run                   RunFunc
+	log                   *slog.Logger
+	now                   func() time.Time
+	tickerInterval        time.Duration
+	SendTextChannel       func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error
 
 	mu            sync.Mutex
 	stop          context.CancelFunc
@@ -150,11 +150,18 @@ const (
 	oneOffCronTracePrefix = "one-off-cron:"
 )
 
-// New constructs a cronjob manager using workDir for effective runtime cron definitions.
-func New(workspace, workDir string, bus *events.Bus, store cronScheduleStore, run RunFunc, logger *slog.Logger) *Manager {
+// New constructs a cronjob manager using runtimeDir for effective runtime cron definitions.
+func New(workspace, runtimeDir string, bus *events.Bus, store cronScheduleStore, run RunFunc, logger *slog.Logger) *Manager {
 	return &Manager{workspace: workspace, bus: bus, store: store, run: run, log: logger.With("component", "cronjob"), now: time.Now, tickerInterval: time.Minute, SendTextChannel: func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
 		return nil
-	}, workDir: workDir}
+	}, runtimeDir: runtimeDir}
+}
+
+// ValidateRuntimeDefinitions loads cron definitions from runtimeDir without mutating scheduler state.
+func ValidateRuntimeDefinitions(workspace, runtimeDir string) error {
+	_, err := loadDefinitionsIn(workspace, runtimeDir)
+
+	return err
 }
 
 // Start loads cron definitions and starts scheduling them.
@@ -166,7 +173,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 	m.mu.Unlock()
 
-	definitions, err := loadDefinitionsIn(m.workspace, m.workDir)
+	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir)
 	if err != nil {
 		return err
 	}
@@ -354,7 +361,7 @@ func (m *Manager) deleteOneOffCronjob(definition *definition) {
 		m.log.Warn("delete one-off cronjob", "file", definition.relativePath, "error", err)
 	}
 
-	if m.workDir != "." {
+	if m.runtimeDir != "." {
 		if err := os.Remove(filepath.Join(m.workspace, definition.relativePath)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			m.log.Warn("delete local one-off cronjob", "file", definition.relativePath, "error", err)
 		}
@@ -385,7 +392,7 @@ func (m *Manager) runTickerLoop(ctx context.Context) {
 func (m *Manager) scanScheduled(ctx context.Context) error {
 	now := m.now()
 
-	definitions, err := loadDefinitionsIn(m.workspace, m.workDir)
+	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir)
 	if err != nil {
 		return err
 	}
@@ -606,7 +613,7 @@ func (m *Manager) logLoadedDefinitions(definitions []definition) {
 	}
 }
 
-func loadDefinitionsIn(workspace, workDir string) ([]definition, error) {
+func loadDefinitionsIn(workspace, runtimeDir string) ([]definition, error) {
 	root, err := os.OpenRoot(workspace)
 	if err != nil {
 		return nil, fmt.Errorf("open workspace root: %w", err)
@@ -614,7 +621,7 @@ func loadDefinitionsIn(workspace, workDir string) ([]definition, error) {
 
 	defer func() { _ = root.Close() }()
 
-	cronPath := filepath.ToSlash(filepath.Join(workDir, "cron"))
+	cronPath := filepath.ToSlash(filepath.Join(runtimeDir, "cron"))
 
 	cronRoot, err := root.OpenRoot(cronPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -662,7 +669,7 @@ func loadDefinitionsIn(workspace, workDir string) ([]definition, error) {
 }
 
 func (m *Manager) cronRelativePath(name string) string {
-	return filepath.ToSlash(filepath.Join(m.workDir, "cron", name))
+	return filepath.ToSlash(filepath.Join(m.runtimeDir, "cron", name))
 }
 
 func loadDefinition(data []byte, relativePath string) (definition, error) {

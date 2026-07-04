@@ -83,7 +83,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		return events.StartNewThreadRootResult{}, fmt.Errorf("text root is not available for %s turns", req.Source)
 	}
 
-	stateStoreLock, err := harnessbridge.AcquireStateStoreLock(cfg.Workspace, cfg.WorkDirName())
+	stateStoreLock, err := harnessbridge.AcquireStateStoreLock(cfg.Workspace, cfg.RuntimeDirName())
 	if err != nil {
 		if errors.Is(err, harnessbridge.ErrStateStoreLocked) {
 			return fmt.Errorf("rocketclaw daemon already owns state store: %w", err)
@@ -98,13 +98,13 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		}
 	}()
 
-	if recovered, err := harnessbridge.RecoverSessionDBIfCorrupt(runCtx, cfg.Workspace, cfg.WorkDirName()); err != nil {
+	if recovered, err := harnessbridge.RecoverSessionDBIfCorrupt(runCtx, cfg.Workspace, cfg.RuntimeDirName()); err != nil {
 		return fmt.Errorf("recover rocketcode session db: %w", err)
 	} else if recovered {
 		logger.Warn("recovered corrupt rocketcode session db")
 	}
 
-	rocketcodeSessions, err := harnessbridge.NewSessionServiceIn(cfg.Workspace, cfg.WorkDirName(), logger.With("component", "state_store"))
+	rocketcodeSessions, err := harnessbridge.NewSessionServiceIn(cfg.Workspace, cfg.RuntimeDirName(), logger.With("component", "state_store"))
 	if err != nil {
 		return fmt.Errorf("start rocketcode session service: %w", err)
 	}
@@ -170,7 +170,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		return fmt.Errorf("apply pending restart notifications: %w", err)
 	}
 
-	if err := skel.SyncInWithOverlays(cfg.Workspace, cfg.WorkDirName(), cfg.Overlays, logger); err != nil {
+	if err := skel.SyncInWithOverlays(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, logger); err != nil {
 		return fmt.Errorf("sync rocketclaw skeleton: %w", err)
 	}
 
@@ -289,15 +289,51 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		return "graceful restart scheduled", nil
 	}
 
+	var (
+		reloadMu sync.Mutex
+
+		refreshExternalMCPAgents = func() error { return nil }
+	)
+
+	requestReload := func(_ context.Context, reason string) (string, error) {
+		reloadMu.Lock()
+		defer reloadMu.Unlock()
+
+		logger.Info("reload requested", "reason", reason)
+
+		validate := func(runtimeDir string) error {
+			if err := harnessbridge.ValidateRuntimeDefinitions(cfg.Workspace, runtimeDir); err != nil {
+				return fmt.Errorf("validate rocketcode definitions: %w", err)
+			}
+
+			if err := cronjob.ValidateRuntimeDefinitions(cfg.Workspace, runtimeDir); err != nil {
+				return fmt.Errorf("validate cron definitions: %w", err)
+			}
+
+			return nil
+		}
+
+		if err := skel.ReplaceRuntimeAssetsAfterValidation(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, logger, validate); err != nil {
+			return "", fmt.Errorf("reload runtime assets: %w", err)
+		}
+
+		if err := refreshExternalMCPAgents(); err != nil {
+			return "", err
+		}
+
+		return "rocketclaw runtime assets reloaded", nil
+	}
+
 	startNewThread := func(startCtx context.Context, req *events.StartNewThreadRequest) (events.StartNewThreadResult, error) {
 		return threadBridges.StartNewThread(startCtx, req, startThreadRoot)
 	}
 
-	cronjobs = cronjob.New(cfg.Workspace, cfg.WorkDirName(), bus, rocketcodeSessions, func(jobCtx context.Context, agent, prompt string, log *slog.Logger, progress *harnessbridge.RawRunProgress) (cronjob.RunResult, error) {
+	cronjobs = cronjob.New(cfg.Workspace, cfg.RuntimeDirName(), bus, rocketcodeSessions, func(jobCtx context.Context, agent, prompt string, log *slog.Logger, progress *harnessbridge.RawRunProgress) (cronjob.RunResult, error) {
 		progress.SessionService = rocketcodeSessions
 		progress.ScheduleMessage = mainBridge.ScheduleMessage
 		progress.ResetScheduledMessages = mainBridge.ResetScheduledMessages
 		progress.RequestRestart = requestRestart
+		progress.RequestReload = requestReload
 
 		result, err := harnessbridge.RunRawWithProgress(jobCtx, cfg, agent, prompt, log, progress)
 		if err != nil {
@@ -315,9 +351,9 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	)
 
 	mainOutputTargets := configuredMainOutputTargets(cfg)
-	mainBridge = harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: true, OutputTargets: mainOutputTargets, RequestRestart: requestRestart, AskUserQuestion: questionBroker.ask, StartNewThread: startNewThread, SessionService: rocketcodeSessions}, logger)
+	mainBridge = harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: true, OutputTargets: mainOutputTargets, RequestRestart: requestRestart, RequestReload: requestReload, AskUserQuestion: questionBroker.ask, StartNewThread: startNewThread, SessionService: rocketcodeSessions}, logger)
 	threadBridges = newThreadBridgeManager(bus, cfg, rocketcodeSessions, logger, func(bridgeConfig bridgeConfig) directBridge {
-		return harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: bridgeConfig.ConversationID, Agent: bridgeConfig.Agent, ConsumeSharedInbound: false, OutputTargets: bridgeConfig.OutputTargets, RequestRestart: requestRestart, AskUserQuestion: questionBroker.ask, StartNewThread: startNewThread, SessionService: rocketcodeSessions}, logger)
+		return harnessbridge.NewConversation(cfg, bus, &harnessbridge.Config{ConversationID: bridgeConfig.ConversationID, Agent: bridgeConfig.Agent, ConsumeSharedInbound: false, OutputTargets: bridgeConfig.OutputTargets, RequestRestart: requestRestart, RequestReload: requestReload, AskUserQuestion: questionBroker.ask, StartNewThread: startNewThread, SessionService: rocketcodeSessions}, logger)
 	})
 	threadBridges.targets = mainOutputTargets
 
@@ -405,12 +441,36 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	}
 
 	if cfg.MCPExternal.Enabled {
-		externalMCPAgents, err := harnessbridge.ExternalMCPAgentsIn(cfg.Workspace, cfg.WorkDirName())
-		if err != nil {
-			return fmt.Errorf("load external MCP agents: %w", err)
+		var (
+			externalMCPAgentsMu sync.Mutex
+			externalMCPAgents   = []string{}
+		)
+
+		refreshExternalMCPAgents = func() error {
+			agents, err := harnessbridge.ExternalMCPAgentsIn(cfg.Workspace, cfg.RuntimeDirName())
+			if err != nil {
+				return fmt.Errorf("load external MCP agents: %w", err)
+			}
+
+			externalMCPAgentsMu.Lock()
+			externalMCPAgents = agents
+			externalMCPAgentsMu.Unlock()
+
+			return nil
 		}
 
-		externalMCP, err := startExternalMCPServer(runCtx, cfg, textRelay, cleanupTextRelay, externalMCPUsers, externalMCPAgents, rocketcodeSessions, threadBridges.SubmitExternalMCP, logger)
+		if err := refreshExternalMCPAgents(); err != nil {
+			return err
+		}
+
+		externalMCPAgentExposed := func(agent string) bool {
+			externalMCPAgentsMu.Lock()
+			defer externalMCPAgentsMu.Unlock()
+
+			return slices.Contains(externalMCPAgents, agent)
+		}
+
+		externalMCP, err := startExternalMCPServer(runCtx, cfg, textRelay, cleanupTextRelay, externalMCPUsers, externalMCPAgentExposed, rocketcodeSessions, threadBridges.SubmitExternalMCP, logger)
 		if err != nil {
 			return err
 		}
@@ -463,7 +523,7 @@ func startExternalMCPServer(
 	textRelay func(context.Context, string, []events.OutboundAttachment, *events.InboundMessage, string) (*events.InboundMessage, error),
 	cleanupTextRelay func(context.Context, *events.InboundMessage),
 	users map[string]string,
-	agents []string,
+	agentExposed func(string) bool,
 	store *harnessbridge.SessionService,
 	submitAgent func(context.Context, string, string, *events.InboundMessage) error,
 	logger *slog.Logger,
@@ -513,7 +573,7 @@ func startExternalMCPServer(
 					return externalmcp.SessionResult{}, fmt.Errorf("external_conversation_id %q has incomplete persisted state", externalConversationID)
 				}
 
-				if !slices.Contains(agents, usedAgent) {
+				if !agentExposed(usedAgent) {
 					return externalmcp.SessionResult{}, fmt.Errorf("external MCP agent %q is not exposed", usedAgent)
 				}
 
@@ -559,7 +619,7 @@ func startExternalMCPServer(
 			return externalmcp.SessionResult{}, errors.New("external MCP agent is required for new conversations")
 		}
 
-		if !slices.Contains(agents, usedAgent) {
+		if !agentExposed(usedAgent) {
 			return externalmcp.SessionResult{}, fmt.Errorf("external MCP agent %q is not exposed", usedAgent)
 		}
 

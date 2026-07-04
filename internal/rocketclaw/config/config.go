@@ -27,16 +27,16 @@ type Config struct {
 	Instrumentation    InstrumentationConfig `json:"instrumentation"`
 }
 
-// DefaultWorkDir is the generated runtime directory for rocketclaw configs.
-const DefaultWorkDir = ".rocketclaw"
+// DefaultRuntimeDir is the generated runtime directory for rocketclaw configs.
+const DefaultRuntimeDir = ".rocketclaw"
 
-// WorkDirName returns the selected generated runtime directory name.
-func (c *Config) WorkDirName() string {
+// RuntimeDirName returns the selected generated runtime directory name.
+func (c *Config) RuntimeDirName() string {
 	if strings.TrimSpace(c.WorkDir) != "" {
 		return c.WorkDir
 	}
 
-	return DefaultWorkDir
+	return DefaultRuntimeDir
 }
 
 // ThreadAgent configures one Slack emoji prefix thread target.

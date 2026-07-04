@@ -179,9 +179,9 @@ func newSessionStore(conversationID string, service *SessionService) sqliteSessi
 	return sqliteSessionStore{conversationID: conversationID, service: service}
 }
 
-// NewSessionServiceIn starts a runtime-owned SQLite session service in workDir.
-func NewSessionServiceIn(workspace, workDir string, logger *slog.Logger) (*SessionService, error) {
-	db, err := openWorkspaceSessionDB(context.Background(), workspace, workDir, logger)
+// NewSessionServiceIn starts a runtime-owned SQLite session service in runtimeDir.
+func NewSessionServiceIn(workspace, runtimeDir string, logger *slog.Logger) (*SessionService, error) {
+	db, err := openWorkspaceSessionDB(context.Background(), workspace, runtimeDir, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -938,11 +938,11 @@ func (s *SessionService) beginStateTx(ctx context.Context, label string) (*sql.T
 	return tx, nil
 }
 
-func sessionDBPathIn(workspace, workDir string) string {
-	return filepath.Join(workspace, workDir, "state.sqlite3")
+func sessionDBPathIn(workspace, runtimeDir string) string {
+	return filepath.Join(workspace, runtimeDir, "state.sqlite3")
 }
 
-func prepareSessionDBPathIn(workspace, workDir string) error {
+func prepareSessionDBPathIn(workspace, runtimeDir string) error {
 	root, err := os.OpenRoot(workspace)
 	if err != nil {
 		return fmt.Errorf("open workspace root: %w", err)
@@ -950,11 +950,11 @@ func prepareSessionDBPathIn(workspace, workDir string) error {
 
 	defer func() { _ = root.Close() }()
 
-	if err := root.MkdirAll(workDir, 0o755); err != nil {
+	if err := root.MkdirAll(runtimeDir, 0o755); err != nil {
 		return fmt.Errorf("create rocketcode session db dir: %w", err)
 	}
 
-	_, err = rootPathExistsNoSymlink(root, filepath.ToSlash(filepath.Join(workDir, "state.sqlite3")), "rocketcode session db")
+	_, err = rootPathExistsNoSymlink(root, filepath.ToSlash(filepath.Join(runtimeDir, "state.sqlite3")), "rocketcode session db")
 
 	return err
 }
@@ -995,9 +995,9 @@ func ObserveSessionEntries(ctx context.Context, dbPath, conversationID string, l
 	}
 
 	workspace := filepath.Dir(filepath.Dir(dbPath))
-	workDir := filepath.Base(filepath.Dir(dbPath))
+	runtimeDir := filepath.Base(filepath.Dir(dbPath))
 
-	db, ok, err := openExistingSessionDBReadOnly(ctx, workspace, workDir)
+	db, ok, err := openExistingSessionDBReadOnly(ctx, workspace, runtimeDir)
 	if err != nil {
 		return nil, err
 	}
@@ -1065,14 +1065,14 @@ func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID s
 	return id, nil
 }
 
-// DeleteSessionIn removes all entries for one conversation ID in workDir and returns deleted rows.
-func DeleteSessionIn(ctx context.Context, workspace, workDir, conversationID string) (int64, error) {
+// DeleteSessionIn removes all entries for one conversation ID in runtimeDir and returns deleted rows.
+func DeleteSessionIn(ctx context.Context, workspace, runtimeDir, conversationID string) (int64, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
 		return 0, errors.New("conversation ID is required")
 	}
 
-	db, ok, err := openExistingSessionDB(ctx, workspace, workDir)
+	db, ok, err := openExistingSessionDB(ctx, workspace, runtimeDir)
 	if err != nil {
 		return 0, err
 	}
@@ -1105,8 +1105,8 @@ func checkpointWALDB(ctx context.Context, db *sql.DB) (WALCheckpointStats, error
 	return stats, nil
 }
 
-func openExistingSessionDB(ctx context.Context, workspace, workDir string) (*sql.DB, bool, error) {
-	if err := prepareSessionDBPathIn(workspace, workDir); err != nil {
+func openExistingSessionDB(ctx context.Context, workspace, runtimeDir string) (*sql.DB, bool, error) {
+	if err := prepareSessionDBPathIn(workspace, runtimeDir); err != nil {
 		return nil, false, err
 	}
 
@@ -1117,19 +1117,19 @@ func openExistingSessionDB(ctx context.Context, workspace, workDir string) (*sql
 
 	defer func() { _ = root.Close() }()
 
-	ok, err := rootPathExistsNoSymlink(root, filepath.ToSlash(filepath.Join(workDir, "state.sqlite3")), "rocketcode session db")
+	ok, err := rootPathExistsNoSymlink(root, filepath.ToSlash(filepath.Join(runtimeDir, "state.sqlite3")), "rocketcode session db")
 	if err != nil || !ok {
 		return nil, false, err
 	}
 
-	db, err := openSessionDB(ctx, sessionDBPathIn(workspace, workDir), slog.New(slog.DiscardHandler))
+	db, err := openSessionDB(ctx, sessionDBPathIn(workspace, runtimeDir), slog.New(slog.DiscardHandler))
 
 	return db, err == nil, err
 }
 
 // RecoverSessionDBIfCorrupt recovers a corrupt existing state DB before daemon startup proceeds.
-func RecoverSessionDBIfCorrupt(ctx context.Context, workspace, workDir string) (bool, error) {
-	db, ok, err := openExistingSessionDBReadOnly(ctx, workspace, workDir)
+func RecoverSessionDBIfCorrupt(ctx context.Context, workspace, runtimeDir string) (bool, error) {
+	db, ok, err := openExistingSessionDBReadOnly(ctx, workspace, runtimeDir)
 	switch {
 	case err != nil:
 		if !isSQLiteCorruptionError(err) {
@@ -1154,7 +1154,7 @@ func RecoverSessionDBIfCorrupt(ctx context.Context, workspace, workDir string) (
 		return false, fmt.Errorf("recover corrupt rocketcode session db: sqlite3 command not found: %w", err)
 	}
 
-	recoveryRel, err := snapshotSessionDBForRecovery(workspace, workDir)
+	recoveryRel, err := snapshotSessionDBForRecovery(workspace, runtimeDir)
 	if err != nil {
 		return false, err
 	}
@@ -1163,7 +1163,7 @@ func RecoverSessionDBIfCorrupt(ctx context.Context, workspace, workDir string) (
 		return false, err
 	}
 
-	if err := swapRecoveredSessionDB(workspace, workDir, recoveryRel); err != nil {
+	if err := swapRecoveredSessionDB(workspace, runtimeDir, recoveryRel); err != nil {
 		return false, err
 	}
 
@@ -1220,7 +1220,7 @@ func isSQLiteCorruptionError(err error) bool {
 	return strings.Contains(text, "database disk image is malformed") || strings.Contains(text, "sqlite_corrupt") || strings.Contains(text, "file is not a database") || strings.Contains(text, "malformed")
 }
 
-func snapshotSessionDBForRecovery(workspace, workDir string) (string, error) {
+func snapshotSessionDBForRecovery(workspace, runtimeDir string) (string, error) {
 	root, err := os.OpenRoot(workspace)
 	if err != nil {
 		return "", fmt.Errorf("open workspace root: %w", err)
@@ -1228,8 +1228,8 @@ func snapshotSessionDBForRecovery(workspace, workDir string) (string, error) {
 
 	defer func() { _ = root.Close() }()
 
-	recoveryRel := filepath.ToSlash(filepath.Join(workDir, "tmp", "sqlite-recovery-"+strconv.FormatInt(time.Now().UTC().UnixNano(), 10)))
-	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(workDir, "tmp")), 0o755); err != nil {
+	recoveryRel := filepath.ToSlash(filepath.Join(runtimeDir, "tmp", "sqlite-recovery-"+strconv.FormatInt(time.Now().UTC().UnixNano(), 10)))
+	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(runtimeDir, "tmp")), 0o755); err != nil {
 		return "", fmt.Errorf("create rocketcode session db recovery parent: %w", err)
 	}
 
@@ -1239,7 +1239,7 @@ func snapshotSessionDBForRecovery(workspace, workDir string) (string, error) {
 
 	for _, name := range []string{"state.sqlite3", "state.sqlite3-wal", "state.sqlite3-shm"} {
 		required := name == "state.sqlite3"
-		if err := copyRecoveryFile(root, filepath.ToSlash(filepath.Join(workDir, name)), filepath.ToSlash(filepath.Join(recoveryRel, name)), required); err != nil {
+		if err := copyRecoveryFile(root, filepath.ToSlash(filepath.Join(runtimeDir, name)), filepath.ToSlash(filepath.Join(recoveryRel, name)), required); err != nil {
 			return "", err
 		}
 	}
@@ -1387,7 +1387,7 @@ func validateRecoveredSessionDB(ctx context.Context, recoveredPath string) error
 	return nil
 }
 
-func swapRecoveredSessionDB(workspace, workDir, recoveryRel string) error {
+func swapRecoveredSessionDB(workspace, runtimeDir, recoveryRel string) error {
 	root, err := os.OpenRoot(workspace)
 	if err != nil {
 		return fmt.Errorf("open workspace root: %w", err)
@@ -1396,7 +1396,7 @@ func swapRecoveredSessionDB(workspace, workDir, recoveryRel string) error {
 	defer func() { _ = root.Close() }()
 
 	for _, name := range []string{"state.sqlite3", "state.sqlite3-wal", "state.sqlite3-shm"} {
-		src := filepath.ToSlash(filepath.Join(workDir, name))
+		src := filepath.ToSlash(filepath.Join(runtimeDir, name))
 
 		ok, err := rootPathExistsNoSymlink(root, src, "rocketcode session db")
 		if err != nil {
@@ -1412,14 +1412,14 @@ func swapRecoveredSessionDB(workspace, workDir, recoveryRel string) error {
 		}
 	}
 
-	if err := root.Rename(filepath.ToSlash(filepath.Join(recoveryRel, "state.recovered.sqlite3")), filepath.ToSlash(filepath.Join(workDir, "state.sqlite3"))); err != nil {
+	if err := root.Rename(filepath.ToSlash(filepath.Join(recoveryRel, "state.recovered.sqlite3")), filepath.ToSlash(filepath.Join(runtimeDir, "state.sqlite3"))); err != nil {
 		return fmt.Errorf("install recovered rocketcode session db: %w", err)
 	}
 
 	return nil
 }
 
-func openExistingSessionDBReadOnly(ctx context.Context, workspace, workDir string) (*sql.DB, bool, error) {
+func openExistingSessionDBReadOnly(ctx context.Context, workspace, runtimeDir string) (*sql.DB, bool, error) {
 	root, err := os.OpenRoot(workspace)
 	if err != nil {
 		return nil, false, fmt.Errorf("open workspace root: %w", err)
@@ -1427,12 +1427,12 @@ func openExistingSessionDBReadOnly(ctx context.Context, workspace, workDir strin
 
 	defer func() { _ = root.Close() }()
 
-	ok, err := rootPathExistsNoSymlink(root, filepath.ToSlash(filepath.Join(workDir, "state.sqlite3")), "rocketcode session db")
+	ok, err := rootPathExistsNoSymlink(root, filepath.ToSlash(filepath.Join(runtimeDir, "state.sqlite3")), "rocketcode session db")
 	if err != nil || !ok {
 		return nil, false, err
 	}
 
-	db, err := openSessionDBReadOnly(ctx, sessionDBPathIn(workspace, workDir))
+	db, err := openSessionDBReadOnly(ctx, sessionDBPathIn(workspace, runtimeDir))
 
 	return db, err == nil, err
 }
@@ -1446,9 +1446,9 @@ func queryPragmaInt(ctx context.Context, db *sql.DB, name string) (int64, error)
 	return value, nil
 }
 
-// ListSessionsInOptions returns summaries for stored rocketcode sessions in workDir.
-func ListSessionsInOptions(ctx context.Context, workspace, workDir string, options SessionListOptions) ([]SessionSummary, error) {
-	db, ok, err := openExistingSessionDBReadOnly(ctx, workspace, workDir)
+// ListSessionsInOptions returns summaries for stored rocketcode sessions in runtimeDir.
+func ListSessionsInOptions(ctx context.Context, workspace, runtimeDir string, options SessionListOptions) ([]SessionSummary, error) {
+	db, ok, err := openExistingSessionDBReadOnly(ctx, workspace, runtimeDir)
 	if err != nil {
 		return nil, err
 	}
@@ -1555,8 +1555,10 @@ func SlackThreadConversationID(channelID, threadTS string) string {
 	return textPairKey("slack-thread:", channelID, threadTS)
 }
 
-// SessionDBPathIn returns the SQLite database path for rocketcode session inspection in workDir.
-func SessionDBPathIn(workspace, workDir string) string { return sessionDBPathIn(workspace, workDir) }
+// SessionDBPathIn returns the SQLite database path for rocketcode session inspection in runtimeDir.
+func SessionDBPathIn(workspace, runtimeDir string) string {
+	return sessionDBPathIn(workspace, runtimeDir)
+}
 
 // SlackThreadTarget returns the Slack channel and thread timestamp for a Slack thread conversation ID.
 func SlackThreadTarget(conversationID string) (channelID, threadTS string, ok bool) {
@@ -1899,12 +1901,12 @@ func openSessionDBReadOnly(ctx context.Context, dbPath string) (*sql.DB, error) 
 	return db, nil
 }
 
-func openWorkspaceSessionDB(ctx context.Context, workspace, workDir string, logger *slog.Logger) (*sql.DB, error) {
-	if err := prepareSessionDBPathIn(workspace, workDir); err != nil {
+func openWorkspaceSessionDB(ctx context.Context, workspace, runtimeDir string, logger *slog.Logger) (*sql.DB, error) {
+	if err := prepareSessionDBPathIn(workspace, runtimeDir); err != nil {
 		return nil, err
 	}
 
-	return openSessionDB(ctx, sessionDBPathIn(workspace, workDir), logger)
+	return openSessionDB(ctx, sessionDBPathIn(workspace, runtimeDir), logger)
 }
 
 type memoryStore struct{ entries []harness.SessionEntry }

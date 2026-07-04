@@ -101,7 +101,7 @@ func selectRuntimeConfigFile() (runtimeConfigFile, error) {
 		return runtimeConfigFile{}, err
 	}
 	if !missing {
-		return runtimeConfigFile{Path: defaultConfigPath, WorkDir: config.DefaultWorkDir, Found: true}, nil
+		return runtimeConfigFile{Path: defaultConfigPath, WorkDir: config.DefaultRuntimeDir, Found: true}, nil
 	}
 	return runtimeConfigFile{}, nil
 }

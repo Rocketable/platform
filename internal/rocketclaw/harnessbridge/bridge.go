@@ -48,12 +48,32 @@ import (
 )
 
 const (
-	restartToolName, rawRunToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName, startNewThreadToolName, scheduleMessageToolName, resetScheduledMessagesToolName = "rocketclaw_restart", "rocketclaw_i_want_human_partner_to_see_this", "rocketclaw_attach_files_to_response", "rocketclaw_update_goal", "ask_user_question", "rocketclaw_start_new_thread", "rocketclaw_schedule_message", "rocketclaw_reset_scheduled_messages"
-	internalErrorResponse, attachmentAccessFallback, unsupportedFileFallback                                                                                                           = "I hit an internal error while waiting for rocketcode.", "I can see that you attached a file, but I could not send it to the model. Please re-upload it as a supported image or send a smaller file.", "I can see that you attached a non-image file. I can inspect image attachments right now, but other file types are not supported yet."
-	defaultQueueSize                                                                                                                                                                   = 128
-	externalMCPMetadataEntryType, externalMCPConversationPrefix, goalContinuationLabel, goalKickoffLabel, rocketclawConversationIDEnv, rocketclawMetadataEnvPrefix                     = "mcp_external_metadata", "external_mcp:", "goal_continuation", "goal", "ROCKETCLAW_CONVERSATION_ID", "ROCKETCLAW_METADATA_"
-	maxInboundAttachmentBytes, maxInboundAttachmentTotalBytes, maxInboundAttachmentResizeInput, maxInboundAttachmentResizeAttempts                                                     = 4 << 20, 16 << 20, 16 << 20, 8
-	rocketcodeBreadcrumbSeparator                                                                                                                                                      = " \u2192 "
+	restartToolName                = "rocketclaw_restart"
+	reloadToolName                 = "rocketclaw_reload"
+	rawRunToolName                 = "rocketclaw_i_want_human_partner_to_see_this"
+	attachFilesToolName            = "rocketclaw_attach_files_to_response"
+	updateGoalToolName             = "rocketclaw_update_goal"
+	askUserQuestionToolName        = "ask_user_question"
+	startNewThreadToolName         = "rocketclaw_start_new_thread"
+	scheduleMessageToolName        = "rocketclaw_schedule_message"
+	resetScheduledMessagesToolName = "rocketclaw_reset_scheduled_messages"
+
+	internalErrorResponse         = "I hit an internal error while waiting for rocketcode."
+	attachmentAccessFallback      = "I can see that you attached a file, but I could not send it to the model. Please re-upload it as a supported image or send a smaller file."
+	unsupportedFileFallback       = "I can see that you attached a non-image file. I can inspect image attachments right now, but other file types are not supported yet."
+	defaultQueueSize              = 128
+	externalMCPMetadataEntryType  = "mcp_external_metadata"
+	externalMCPConversationPrefix = "external_mcp:"
+	goalContinuationLabel         = "goal_continuation"
+	goalKickoffLabel              = "goal"
+	rocketclawConversationIDEnv   = "ROCKETCLAW_CONVERSATION_ID"
+	rocketclawMetadataEnvPrefix   = "ROCKETCLAW_METADATA_"
+
+	maxInboundAttachmentBytes          = 4 << 20
+	maxInboundAttachmentTotalBytes     = 16 << 20
+	maxInboundAttachmentResizeInput    = 16 << 20
+	maxInboundAttachmentResizeAttempts = 8
+	rocketcodeBreadcrumbSeparator      = " \u2192 "
 )
 
 var errBridgeStopped = errors.New("bridge stopped")
@@ -80,6 +100,7 @@ type Config struct {
 	ConsumeSharedInbound  bool
 	OutputTargets         []events.OutputTarget
 	RequestRestart        func(context.Context, string) (string, error)
+	RequestReload         func(context.Context, string) (string, error)
 	AskUserQuestion       func(context.Context, *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error)
 	StartNewThread        func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadResult, error)
 	SessionService        *SessionService
@@ -629,7 +650,7 @@ func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.Ses
 			return nil, fmt.Errorf("open workspace root: %w", err)
 		}
 
-		agents, _, err := loadRocketCodeDefinitionsIn(root, b.runtime.Workspace, b.runtime.WorkDirName(), toolModePersistent)
+		agents, _, err := loadRocketCodeDefinitionsIn(root, b.runtime.Workspace, b.runtime.RuntimeDirName(), toolModePersistent)
 		_ = root.Close()
 
 		if err != nil {
@@ -950,18 +971,18 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 
 	defer func() { _ = root.Close() }()
 
-	agents, skills, err := loadRocketCodeDefinitionsIn(root, b.runtime.Workspace, b.runtime.WorkDirName(), toolModePersistent)
+	agents, skills, err := loadRocketCodeDefinitionsIn(root, b.runtime.Workspace, b.runtime.RuntimeDirName(), toolModePersistent)
 	if err != nil {
 		return runResult{}, fmt.Errorf("open workspace agent and skills: %w", err)
 	}
 
 	appendOverlayPromptToAgent(agents, agentName, b.runtime)
 
-	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(b.runtime.WorkDirName(), ".rocketcode", "shell-outputs")), 0o755); err != nil {
+	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(b.runtime.RuntimeDirName(), ".rocketcode", "shell-outputs")), 0o755); err != nil {
 		return runResult{}, fmt.Errorf("create rocketcode shell output dir: %w", err)
 	}
 
-	shellOutputDir, store := filepath.Join(b.runtime.Workspace, b.runtime.WorkDirName(), ".rocketcode", "shell-outputs"), newSessionStore(b.config.ConversationID, b.config.SessionService)
+	shellOutputDir, store := filepath.Join(b.runtime.Workspace, b.runtime.RuntimeDirName(), ".rocketcode", "shell-outputs"), newSessionStore(b.config.ConversationID, b.config.SessionService)
 
 	var shellEnv map[string]string
 
@@ -1497,7 +1518,7 @@ func (b *Bridge) openAIClient() (*openai.Client, error) {
 	options := b.openAIOptions(b.runtime.OpenAI.APIKey, b.runtime.OpenAI.APIBaseURL, b.runtime.OpenAI.RocketCodeAuth != "chatgpt")
 
 	if b.runtime.OpenAI.RocketCodeAuth == "chatgpt" {
-		client, err := oai.NewChatGPTClientIn(b.runtime.Workspace, b.runtime.WorkDirName(), options...)
+		client, err := oai.NewChatGPTClientIn(b.runtime.Workspace, b.runtime.RuntimeDirName(), options...)
 		if err != nil {
 			return nil, fmt.Errorf("create ChatGPT OAuth OpenAI client: %w", err)
 		}
@@ -1557,7 +1578,7 @@ func (b *Bridge) rocketcodeConfig(shellOutputDir string, shellEnv map[string]str
 
 	tools = append(tools, restartTool(b.config.RequestRestart, func(ctx context.Context) error {
 		return b.config.SessionService.MarkRestartRequester(ctx, b.config.ConversationID)
-	}), scheduleMessageTool(b.ScheduleMessage, b.log), resetScheduledMessagesTool(b.ResetScheduledMessages))
+	}), reloadTool(b.config.RequestReload), scheduleMessageTool(b.ScheduleMessage, b.log), resetScheduledMessagesTool(b.ResetScheduledMessages))
 	if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err == nil && ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
 		tools = append(tools, updateGoalTool(b))
 	}
@@ -1614,7 +1635,7 @@ func (b *Bridge) logRocketCodeChildRun(event *rocketcode.ChildRunEvent) {
 }
 
 func appendOverlayPromptToAgent(agents rocketcode.Agents, agentName string, cfg *config.Config) {
-	section := overlayPromptSection(cfg, skel.OverlayInfos(cfg.Workspace, cfg.WorkDirName(), cfg.Overlays))
+	section := overlayPromptSection(cfg, skel.OverlayInfos(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays))
 	if section == "" {
 		return
 	}
@@ -1659,25 +1680,25 @@ func overlayPromptSection(cfg *config.Config, overlays []skel.OverlayInfo) strin
 		"",
 		"To update an overlay:",
 		"- Edit the listed clone path when the requested change belongs to that overlay.",
-		"- Commit and push overlay repository changes before restart.",
-		"- Uncommitted, untracked, or unconfigured files under "+filepath.Join(cfg.WorkDirName(), "overlays")+" may be discarded on startup/restart.",
-		"- Do not treat generated effective files under "+filepath.Join(cfg.WorkDirName(), "agents")+", "+filepath.Join(cfg.WorkDirName(), "skills")+", "+filepath.Join(cfg.WorkDirName(), "cron")+", or "+filepath.Join(cfg.WorkDirName(), "scripts")+" as source of truth.",
-		"- Restart RocketClaw after overlay source/config changes so overlays are fetched and merged again.",
+		"- Commit and push overlay repository changes before reload or restart.",
+		"- Uncommitted, untracked, or unconfigured files under "+filepath.Join(cfg.RuntimeDirName(), "overlays")+" may be discarded on startup/restart.",
+		"- Do not treat generated effective files under "+filepath.Join(cfg.RuntimeDirName(), "agents")+", "+filepath.Join(cfg.RuntimeDirName(), "skills")+", "+filepath.Join(cfg.RuntimeDirName(), "cron")+", or "+filepath.Join(cfg.RuntimeDirName(), "scripts")+" as source of truth.",
+		"- Reload RocketClaw after already-configured overlay source changes so overlays are fetched and merged again; restart is required after overlay config entry changes.",
 		"- Local workspace agents/, skills/, cron/, and scripts/ override configured overlays.",
 	)
 
 	return strings.Join(lines, "\n")
 }
 
-func loadRocketCodeDefinitionsIn(root *os.Root, workspace, workDir string, mode toolMode) (rocketcode.Agents, rocketcode.Skills, error) {
+func loadRocketCodeDefinitionsIn(root *os.Root, workspace, runtimeDir string, mode toolMode) (rocketcode.Agents, rocketcode.Skills, error) {
 	rootFS := root.FS()
 
-	agentsFS, err := fs.Sub(rootFS, filepath.ToSlash(filepath.Join(workDir, "agents")))
+	agentsFS, err := fs.Sub(rootFS, filepath.ToSlash(filepath.Join(runtimeDir, "agents")))
 	if err != nil {
 		return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("open agents dir: %w", err)
 	}
 
-	skillsFS, err := fs.Sub(rootFS, filepath.ToSlash(filepath.Join(workDir, "skills")))
+	skillsFS, err := fs.Sub(rootFS, filepath.ToSlash(filepath.Join(runtimeDir, "skills")))
 	if err != nil {
 		return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("open skills dir: %w", err)
 	}
@@ -1687,10 +1708,10 @@ func loadRocketCodeDefinitionsIn(root *os.Root, workspace, workDir string, mode 
 		return rocketcode.Agents{}, rocketcode.Skills{}, errors.Join(agentResult.Errors...)
 	}
 
-	skillsRoot := filepath.Join(workspace, workDir, "skills")
+	skillsRoot := filepath.Join(workspace, runtimeDir, "skills")
 	skillResult := rocketcode.LoadSkills(skillsFS, skillsRoot)
 
-	tools := []string{restartToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName}
+	tools := []string{restartToolName, reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName}
 	if mode == toolModeCron {
 		tools = append(tools, rawRunToolName)
 	}
@@ -1715,8 +1736,22 @@ func loadRocketCodeDefinitionsIn(root *os.Root, workspace, workDir string, mode 
 	return agentResult.Agents, skillResult.Skills, nil
 }
 
-// ExternalMCPAgentsIn returns agents externally selectable through MCP in workDir.
-func ExternalMCPAgentsIn(workspace, workDir string) ([]string, error) {
+// ValidateRuntimeDefinitions loads RocketCode definitions from runtimeDir without starting a run.
+func ValidateRuntimeDefinitions(workspace, runtimeDir string) error {
+	root, err := os.OpenRoot(workspace)
+	if err != nil {
+		return fmt.Errorf("open workspace root: %w", err)
+	}
+
+	defer func() { _ = root.Close() }()
+
+	_, _, err = loadRocketCodeDefinitionsIn(root, workspace, runtimeDir, toolModePersistent)
+
+	return err
+}
+
+// ExternalMCPAgentsIn returns agents externally selectable through MCP in runtimeDir.
+func ExternalMCPAgentsIn(workspace, runtimeDir string) ([]string, error) {
 	root, err := os.OpenRoot(workspace)
 	if err != nil {
 		return nil, fmt.Errorf("open workspace root: %w", err)
@@ -1724,7 +1759,7 @@ func ExternalMCPAgentsIn(workspace, workDir string) ([]string, error) {
 
 	defer func() { _ = root.Close() }()
 
-	agents, _, err := loadRocketCodeDefinitionsIn(root, workspace, workDir, toolModePersistent)
+	agents, _, err := loadRocketCodeDefinitionsIn(root, workspace, runtimeDir, toolModePersistent)
 	if err != nil {
 		return nil, err
 	}
@@ -1740,7 +1775,7 @@ func ExternalMCPAgentsIn(workspace, workDir string) ([]string, error) {
 }
 
 func restartTool(requestRestart func(context.Context, string) (string, error), recordRestartRequester func(context.Context) error) rocketcode.Tool {
-	return rocketcode.Tool{Name: restartToolName, Description: "Restart rocketclaw only after completing an explicitly requested runtime configuration change that requires reload, such as changes to rocketclaw.json, agents/, skills/, or cron/. The reason field must explain why rocketclaw needs to restart. Do not call this after memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.", Permission: "rocketclaw", VisibilitySubjects: []string{restartToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{restartToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+	return rocketcode.Tool{Name: restartToolName, Description: "Restart rocketclaw only after completing an explicitly requested runtime configuration change that requires restart, such as changes to rocketclaw.json, femtoclaw.json, or configured overlay entries. Use rocketclaw_reload instead for agents/, skills/, cron/, scripts/, or already-configured overlay repository content changes. The reason field must explain why rocketclaw needs to restart. Do not call this after memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.", Permission: "rocketclaw", VisibilitySubjects: []string{restartToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{restartToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		var input struct {
 			Reason string `json:"reason"`
 		}
@@ -1761,6 +1796,30 @@ func restartTool(requestRestart func(context.Context, string) (string, error), r
 		output, err := requestRestart(ctx, reason)
 		if err != nil {
 			return rocketcode.ToolResult{}, err
+		}
+
+		return rocketcode.TextToolResult(output), nil
+	}}
+}
+
+func reloadTool(requestReload func(context.Context, string) (string, error)) rocketcode.Tool {
+	return rocketcode.Tool{Name: reloadToolName, Description: "Reload rocketclaw runtime assets after changing agents/, skills/, cron/, scripts/, or already-configured overlay repository content. The reason field must explain what runtime assets changed. This validates staged runtime assets before changing the live runtime. It does not reread rocketclaw.json or femtoclaw.json; adding, removing, or changing configured overlay entries requires rocketclaw_restart.", Permission: "rocketclaw", VisibilitySubjects: []string{reloadToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{reloadToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+		var input struct {
+			Reason string `json:"reason"`
+		}
+
+		if err := json.Unmarshal(raw, &input); err != nil {
+			return rocketcode.ToolResult{}, fmt.Errorf("parse reload request: %w", err)
+		}
+
+		reason := strings.TrimSpace(input.Reason)
+		if reason == "" {
+			return rocketcode.ToolResult{}, errors.New("reason is required")
+		}
+
+		output, err := requestReload(ctx, reason)
+		if err != nil {
+			return rocketcode.TextToolResult("rocketclaw_reload failed; live runtime assets were not changed:\n\n" + err.Error()), nil
 		}
 
 		return rocketcode.TextToolResult(output), nil
@@ -2113,7 +2172,7 @@ func (b *Bridge) runGoalCheck(ctx context.Context, script string) (string, bool)
 
 	defer func() { _ = root.Close() }()
 
-	agents, _, err := loadRocketCodeDefinitionsIn(root, b.runtime.Workspace, b.runtime.WorkDirName(), toolModePersistent)
+	agents, _, err := loadRocketCodeDefinitionsIn(root, b.runtime.Workspace, b.runtime.RuntimeDirName(), toolModePersistent)
 	if err != nil {
 		return "goal check failed before execution: " + err.Error(), false
 	}
@@ -2130,11 +2189,11 @@ func (b *Bridge) runGoalCheck(ctx context.Context, script string) (string, bool)
 		return "goal check failed before execution: " + err.Error(), false
 	}
 
-	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(b.runtime.WorkDirName(), ".rocketcode", "shell-outputs")), 0o755); err != nil {
+	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(b.runtime.RuntimeDirName(), ".rocketcode", "shell-outputs")), 0o755); err != nil {
 		return "goal check failed before execution: " + err.Error(), false
 	}
 
-	result, err := rocketcode.RunBash(ctx, root, filepath.Join(b.runtime.Workspace, b.runtime.WorkDirName(), ".rocketcode", "shell-outputs"), nil, false, rocketcode.BashCommand{Command: check.command, Timeout: goalCheckTimeout, Workdir: "", Description: "Run goal completion check"})
+	result, err := rocketcode.RunBash(ctx, root, filepath.Join(b.runtime.Workspace, b.runtime.RuntimeDirName(), ".rocketcode", "shell-outputs"), nil, false, rocketcode.BashCommand{Command: check.command, Timeout: goalCheckTimeout, Workdir: "", Description: "Run goal completion check"})
 	if err != nil {
 		return "goal check failed before execution: " + err.Error(), false
 	}

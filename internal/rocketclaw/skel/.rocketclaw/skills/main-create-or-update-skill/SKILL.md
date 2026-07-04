@@ -22,8 +22,8 @@ Only use these runtime paths:
 - read the current effective skill from `.rocketclaw`
 - copy the current effective content from `.rocketclaw` into `skills/` before editing an existing skill
 - make the requested edits in `skills/`
-- if the skill edit affects agent behavior, permission guidance, task delegation, or scripts, run `rocketclaw lint` before restart
-- after all requested `skills/` overlay edits are complete, call `rocketclaw_restart` exactly once so the runtime reloads the updated skill definitions. Do not call restart for memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.
+- if the skill edit affects agent behavior, permission guidance, task delegation, or scripts, run `rocketclaw lint` before reload
+- after all requested `skills/` overlay edits are complete, call `rocketclaw_reload` exactly once so the runtime validates and reloads the updated skill definitions. Use `rocketclaw_restart` instead only when runtime configuration or overlay-list entries changed. Do not call reload or restart for memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.
 - never edit `.rocketclaw` directly
 ## Required inputs
 

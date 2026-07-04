@@ -56,7 +56,7 @@ func runtimeRootForInspectionTarget(target, tempPattern, buildName string) (stri
 		return "", cleanup, fmt.Errorf("load config: %w", err)
 	}
 
-	runtimeRoot := filepath.Join(cfg.Workspace, cfg.WorkDirName())
+	runtimeRoot := filepath.Join(cfg.Workspace, cfg.RuntimeDirName())
 	if target == "next" {
 		tmp, err := os.MkdirTemp("", tempPattern)
 		if err != nil {
@@ -66,7 +66,7 @@ func runtimeRootForInspectionTarget(target, tempPattern, buildName string) (stri
 			os.RemoveAll(tmp)
 		}
 
-		runtimeRoot = filepath.Join(tmp, cfg.WorkDirName())
+		runtimeRoot = filepath.Join(tmp, cfg.RuntimeDirName())
 		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 		if err := skel.SyncEffectiveRuntimeAssets(cfg.Workspace, runtimeRoot, cfg.Overlays, logger); err != nil {
 			cleanup()

@@ -142,6 +142,7 @@ func TestRunRawCronCanEditRestartAndCompleteDecision(t *testing.T) {
 			data, err := json.Marshal(body["tools"])
 			assert.NoError(t, err)
 			assert.Contains(t, string(data), restartToolName)
+			assert.Contains(t, string(data), reloadToolName)
 			assert.Contains(t, string(data), attachFilesToolName)
 			assert.Contains(t, string(data), scheduleMessageToolName)
 			assert.Contains(t, string(data), `"required":["message","recurring","send_this_in"]`)
