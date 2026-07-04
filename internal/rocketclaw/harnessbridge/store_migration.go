@@ -39,6 +39,59 @@ func migrateSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) erro
 
 	migrated := false
 
+	if version == 1 {
+		logger.Info("removing persisted cron schedule specs")
+
+		rows, err := tx.QueryContext(ctx, `PRAGMA table_info(cron_schedules)`)
+		if err != nil {
+			return fmt.Errorf("inspect cron schedule schema: %w", err)
+		}
+
+		hasScheduleSpec := false
+
+		for rows.Next() {
+			var (
+				cid          int
+				name         string
+				columnType   string
+				notNull      int
+				defaultValue sql.NullString
+				primaryKey   int
+			)
+
+			if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("scan cron schedule schema: %w", err)
+			}
+
+			if name == "schedule_spec" {
+				hasScheduleSpec = true
+			}
+		}
+
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close cron schedule schema rows: %w", err)
+		}
+
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("read cron schedule schema: %w", err)
+		}
+
+		if hasScheduleSpec {
+			if _, err := tx.ExecContext(ctx, `ALTER TABLE cron_schedules DROP COLUMN schedule_spec`); err != nil {
+				return fmt.Errorf("remove cron schedule spec column: %w", err)
+			}
+		}
+
+		logger.Info("setting rocketclaw state schema version", "version", sessionDBSchemaVersion)
+
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sessionDBSchemaVersion)); err != nil {
+			return fmt.Errorf("set rocketclaw state schema version: %w", err)
+		}
+
+		migrated = true
+	}
+
 	if version == 0 {
 		logger.Info("loading legacy rocketclaw state for normalized migration")
 
@@ -68,7 +121,7 @@ func migrateSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) erro
 		}
 
 		migrated = true
-	} else {
+	} else if !migrated {
 		logger.Info("rocketclaw state schema already current", "version", version)
 	}
 

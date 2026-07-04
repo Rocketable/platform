@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const sessionDBSchemaVersion = 1
+const sessionDBSchemaVersion = 2
 
 func initializeSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 	for _, statement := range []string{
@@ -66,6 +66,11 @@ func createSessionSchema(ctx context.Context, db stateStoreDB) error {
 		`CREATE TABLE IF NOT EXISTS external_mcp_sessions (external_conversation_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, agent TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS response_checkpoints (checkpoint_key TEXT PRIMARY KEY, source_conversation_id TEXT NOT NULL, session_entry_id INTEGER NOT NULL, response_id TEXT NOT NULL, model TEXT NOT NULL, assistant_text TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS scheduled_messages (scheduled_message_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, agent TEXT NOT NULL, message TEXT NOT NULL, due_at_unix_ns INTEGER NOT NULL, recurring INTEGER NOT NULL, interval_ns INTEGER NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS cron_schedules (schedule_id TEXT PRIMARY KEY, relative_path TEXT NOT NULL, next_due_unix_ns INTEGER NOT NULL, updated_at_unix_ns INTEGER NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS cron_schedule_runs (relative_path TEXT PRIMARY KEY, running INTEGER NOT NULL, running_since_unix_ns INTEGER NOT NULL, updated_at_unix_ns INTEGER NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS cron_schedules_next_due_id ON cron_schedules (next_due_unix_ns, schedule_id)`,
+		`CREATE INDEX IF NOT EXISTS cron_schedules_relative_path ON cron_schedules (relative_path)`,
+		`CREATE INDEX IF NOT EXISTS cron_schedule_runs_running_path ON cron_schedule_runs (running, relative_path)`,
 		`CREATE TABLE IF NOT EXISTS pending_restart_notifications (conversation_id TEXT PRIMARY KEY)`,
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {

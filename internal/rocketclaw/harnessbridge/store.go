@@ -92,6 +92,20 @@ type ScheduledMessageState struct {
 	Interval       time.Duration `json:"interval,omitempty"`
 }
 
+// CronScheduleState records one observed scheduled cron trigger.
+type CronScheduleState struct {
+	ScheduleID   string
+	RelativePath string
+	NextDue      time.Time
+}
+
+// CronScheduleRun is a claimed scheduled cron run.
+type CronScheduleRun struct {
+	ScheduleID   string
+	RelativePath string
+	DueAt        time.Time
+}
+
 // GoalState records one active or terminal managed-thread goal loop.
 type GoalState struct {
 	Objective   string    `json:"objective,omitempty"`
@@ -418,6 +432,196 @@ func (s *SessionService) ClaimScheduledMessage(id, conversationID string, dueAt,
 	}
 
 	return message, true, nil
+}
+
+// SyncCronSchedules replaces observed scheduled cron definitions.
+func (s *SessionService) SyncCronSchedules(schedules []CronScheduleState, now time.Time) error {
+	ctx := context.Background()
+
+	tx, err := s.beginStateTx(ctx, "cron schedule sync")
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	seen := map[string]struct{}{}
+
+	for _, schedule := range schedules {
+		schedule.ScheduleID = strings.TrimSpace(schedule.ScheduleID)
+		schedule.RelativePath = strings.TrimSpace(schedule.RelativePath)
+		seen[schedule.ScheduleID] = struct{}{}
+
+		_, err := tx.ExecContext(ctx, `INSERT INTO cron_schedules (schedule_id, relative_path, next_due_unix_ns, updated_at_unix_ns) VALUES (?, ?, ?, ?) ON CONFLICT(schedule_id) DO UPDATE SET relative_path = excluded.relative_path, updated_at_unix_ns = excluded.updated_at_unix_ns`, schedule.ScheduleID, schedule.RelativePath, timeUnixNano(schedule.NextDue), timeUnixNano(now))
+		if err != nil {
+			return fmt.Errorf("upsert cron schedule: %w", err)
+		}
+
+		_, err = tx.ExecContext(ctx, `INSERT INTO cron_schedule_runs (relative_path, running, running_since_unix_ns, updated_at_unix_ns) VALUES (?, 0, 0, ?) ON CONFLICT(relative_path) DO NOTHING`, schedule.RelativePath, timeUnixNano(now))
+		if err != nil {
+			return fmt.Errorf("ensure cron run state: %w", err)
+		}
+	}
+
+	rows, err := tx.QueryContext(ctx, `SELECT schedule_id FROM cron_schedules ORDER BY schedule_id`)
+	if err != nil {
+		return fmt.Errorf("query cron schedules for sync: %w", err)
+	}
+
+	var stale []string
+
+	for rows.Next() {
+		var scheduleID string
+		if err := rows.Scan(&scheduleID); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scan cron schedule for sync: %w", err)
+		}
+
+		if _, ok := seen[scheduleID]; !ok {
+			stale = append(stale, scheduleID)
+		}
+	}
+
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close cron schedule sync rows: %w", err)
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read cron schedules for sync: %w", err)
+	}
+
+	for _, scheduleID := range stale {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM cron_schedules WHERE schedule_id = ?`, scheduleID); err != nil {
+			return fmt.Errorf("delete stale cron schedule: %w", err)
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM cron_schedule_runs WHERE running = 0 AND relative_path NOT IN (SELECT relative_path FROM cron_schedules)`); err != nil {
+		return fmt.Errorf("delete stale cron run state: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit cron schedule sync: %w", err)
+	}
+
+	return nil
+}
+
+// ResetCronSchedules clears scheduled cron state at daemon observation start.
+func (s *SessionService) ResetCronSchedules() error {
+	ctx := context.Background()
+
+	tx, err := s.beginStateTx(ctx, "cron schedule reset")
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM cron_schedules`); err != nil {
+		return fmt.Errorf("delete cron schedules: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM cron_schedule_runs`); err != nil {
+		return fmt.Errorf("delete cron run state: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit cron schedule reset: %w", err)
+	}
+
+	return nil
+}
+
+// DueCronSchedules returns observed scheduled cron definitions due at now.
+func (s *SessionService) DueCronSchedules(now time.Time, limit int) ([]CronScheduleState, error) {
+	rows, err := s.db.QueryContext(context.Background(), `SELECT schedule_id, relative_path, next_due_unix_ns FROM cron_schedules WHERE next_due_unix_ns <= ? ORDER BY next_due_unix_ns, schedule_id LIMIT CASE WHEN ? > 0 THEN ? ELSE -1 END`, timeUnixNano(now), limit, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query due cron schedules: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var schedules []CronScheduleState
+
+	for rows.Next() {
+		schedule, err := scanCronSchedule(rows)
+		if err != nil {
+			return nil, err
+		}
+
+		schedules = append(schedules, schedule)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read due cron schedules: %w", err)
+	}
+
+	return schedules, nil
+}
+
+// ClaimCronSchedule verifies one due scheduled cron trigger and records per-file running state.
+func (s *SessionService) ClaimCronSchedule(due CronScheduleState, nextDue, now time.Time) (CronScheduleRun, bool, error) {
+	ctx := context.Background()
+
+	tx, err := s.beginStateTx(ctx, "cron schedule claim")
+	if err != nil {
+		return CronScheduleRun{}, false, err
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	schedule, err := scanCronSchedule(tx.QueryRowContext(ctx, `SELECT schedule_id, relative_path, next_due_unix_ns FROM cron_schedules WHERE schedule_id = ?`, strings.TrimSpace(due.ScheduleID)))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return CronScheduleRun{}, false, nil
+		}
+
+		return CronScheduleRun{}, false, err
+	}
+
+	if schedule.RelativePath != strings.TrimSpace(due.RelativePath) || !schedule.NextDue.Equal(due.NextDue) || schedule.NextDue.After(now) {
+		return CronScheduleRun{}, false, nil
+	}
+
+	var running int
+
+	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM cron_schedule_runs WHERE relative_path = ? AND running != 0)`, schedule.RelativePath).Scan(&running)
+	if err != nil {
+		return CronScheduleRun{}, false, fmt.Errorf("check cron run state: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE cron_schedules SET next_due_unix_ns = ?, updated_at_unix_ns = ? WHERE schedule_id = ?`, timeUnixNano(nextDue), timeUnixNano(now), schedule.ScheduleID); err != nil {
+		return CronScheduleRun{}, false, fmt.Errorf("advance cron schedule: %w", err)
+	}
+
+	if running != 0 {
+		if err := tx.Commit(); err != nil {
+			return CronScheduleRun{}, false, fmt.Errorf("commit overlapped cron schedule claim: %w", err)
+		}
+
+		return CronScheduleRun{}, false, nil
+	}
+
+	_, err = tx.ExecContext(ctx, `INSERT INTO cron_schedule_runs (relative_path, running, running_since_unix_ns, updated_at_unix_ns) VALUES (?, 1, ?, ?) ON CONFLICT(relative_path) DO UPDATE SET running = 1, running_since_unix_ns = excluded.running_since_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns`, schedule.RelativePath, timeUnixNano(now), timeUnixNano(now))
+	if err != nil {
+		return CronScheduleRun{}, false, fmt.Errorf("claim cron run state: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return CronScheduleRun{}, false, fmt.Errorf("commit cron schedule claim: %w", err)
+	}
+
+	return CronScheduleRun{ScheduleID: schedule.ScheduleID, RelativePath: schedule.RelativePath, DueAt: schedule.NextDue}, true, nil
+}
+
+// CompleteCronRun clears per-file scheduled cron running state.
+func (s *SessionService) CompleteCronRun(relativePath string, now time.Time) error {
+	_, err := s.db.ExecContext(context.Background(), `UPDATE cron_schedule_runs SET running = 0, running_since_unix_ns = 0, updated_at_unix_ns = ? WHERE relative_path = ?`, timeUnixNano(now), strings.TrimSpace(relativePath))
+	if err != nil {
+		return fmt.Errorf("complete cron run: %w", err)
+	}
+
+	return nil
 }
 
 // ActiveGoalThreads returns managed thread state for conversations with active goals.

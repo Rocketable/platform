@@ -5,7 +5,7 @@ Human approval required for meaning changes: Yes
 
 ## Decision
 
-RocketClaw keeps runtime configuration and first-party workspace assets in explicit workspace files, persists runtime continuity and ChatGPT OAuth state in the selected runtime directory, and requires restart for configuration/asset changes that affect RocketCode or cron discovery.
+RocketClaw keeps runtime configuration and first-party workspace assets in explicit workspace files, persists runtime continuity and ChatGPT OAuth state in the selected runtime directory, requires restart for runtime configuration changes, and observes effective scheduled cron definition content changes through the scheduled cron runner's global ticker scan without requiring config reread or restart.
 
 ## Scope
 
@@ -27,11 +27,11 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 | `.rocketclaw/` | Generated runtime directory. Setup and startup may create or maintain it. |
 | `.femtoclaw/` | Legacy generated runtime directory used only when `femtoclaw.json` is selected. |
 | `<runtime-dir>/overlays/` | Managed parent directory for configured git overlay clones. Startup preserves the parent directory, reconciles its children against the current `overlays` config entries, removes unconfigured clone directories, and discards uncommitted or untracked changes inside active configured clone directories before fetching and applying them. |
-| `<runtime-dir>/state.sqlite3` | Persists RocketCode sessions including text connector thread routing, response checkpoints, external MCP sessions, scheduled messages with recurrence metadata, text connector goal-loop state, restart notifications, tool-created conversation routing/session state, source conversation ID, seed marker when source seed state exists, first submitted prompt, and other seed markers. Opened and initialized through the centralized SQLite state-store opener defined by ADR 0005. Tool-created conversation seed state is recorded before the first prompt. |
+| `<runtime-dir>/state.sqlite3` | Persists RocketCode sessions including text connector thread routing, response checkpoints, external MCP sessions, scheduled messages with recurrence metadata, scheduled cron per-file execution state, text connector goal-loop state, restart notifications, tool-created conversation routing/session state, source conversation ID, seed marker when source seed state exists, first submitted prompt, and other seed markers. Opened and initialized through the centralized SQLite state-store opener defined by ADR 0005. Tool-created conversation seed state is recorded before the first prompt. |
 | `<runtime-dir>/auth.json` | Workspace-local ChatGPT OAuth credential for RocketCode Codex requests. Written by `rocketclaw oai login` with `0600` permissions. It is runtime state, not setup payload. RocketClaw owns this credential file and must not read, import, or write Codex CLI credentials such as `~/.codex/auth.json`. |
 | `<runtime-dir>/.gitignore` | Setup-generated runtime-directory ignore file that ignores `auth.json` so workspace-local ChatGPT OAuth material is not accidentally added to source control. |
 | `<runtime-dir>/.rocketcode/` | RocketCode shell output and transient runtime artifacts. |
-| `cron/` | User-overridable workspace cron definitions. Effective `cron/*.md` definitions load only at startup from the merged runtime view. `*.example.md` is ignored. Changes require restart. Local one-off cron files can be deleted after a run attempt; one-off cron definitions supplied only by a git overlay may reappear on restart until removed from the source repository. |
+| `cron/` | User-overridable workspace cron definitions. Effective `cron/*.md` definitions load at startup from the merged runtime view. Scheduled cron definition content changes under the effective `<runtime-dir>/cron/` directory are observed by the scheduled cron runner's global ticker scan at the next scheduled decision point without rereading runtime configuration or restarting. Runtime configuration and overlay-list changes still require restart. `*.example.md` is ignored. Local one-off cron files can be deleted after a run attempt; one-off cron definitions supplied only by a git overlay may reappear on restart until removed from the source repository. |
 | `main-update-cortex.sh` | Setup-generated helper for updating the Cortex index in `AGENTS.md`. |
 
 ### Config Defaults And Normalization
@@ -81,7 +81,7 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 
 - This ADR is not a step-by-step installation guide.
 - This ADR does not list every Slack setup screen.
-- This ADR does not promise hot reload for configuration, agents, skills, or cron files.
+- This ADR does not promise hot reload for runtime configuration. Configuration and overlay-list changes still require restart. Scheduled cron content changes under the effective runtime directory are governed by the scheduled cron global-ticker scan contract above.
 
 ## Evidence
 
@@ -150,3 +150,4 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-07-01: Removed Discord Text, Discord voice, browser voice, and OpenAI-backed audio runtime configuration contracts.
 - 2026-07-01: Removed terminal CLI, control-socket, terminal private-session, terminal question, and cmux operational contracts.
 - 2026-07-02: Removed `minimum_wait_after_human_interaction` from runtime configuration defaults and setup-generated config.
+- 2026-07-04: Added global-ticker scanning of effective scheduled cron definition content changes without config reread or restart, while preserving restart for config and overlay-list changes, and added scheduled cron execution state to the SQLite state store contract.

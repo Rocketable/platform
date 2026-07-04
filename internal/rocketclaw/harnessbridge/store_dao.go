@@ -364,11 +364,11 @@ func timeFromUnixNano(value int64) time.Time {
 	return time.Unix(0, value).UTC()
 }
 
-type scheduledMessageScanner interface {
+type rowScanner interface {
 	Scan(...any) error
 }
 
-func scanScheduledMessage(scanner scheduledMessageScanner) (string, ScheduledMessageState, error) {
+func scanScheduledMessage(scanner rowScanner) (string, ScheduledMessageState, error) {
 	var (
 		id              string
 		message         ScheduledMessageState
@@ -384,4 +384,19 @@ func scanScheduledMessage(scanner scheduledMessageScanner) (string, ScheduledMes
 	message.Interval = time.Duration(interval)
 
 	return id, message, nil
+}
+
+func scanCronSchedule(scanner rowScanner) (CronScheduleState, error) {
+	var (
+		schedule CronScheduleState
+		nextDue  int64
+	)
+
+	if err := scanner.Scan(&schedule.ScheduleID, &schedule.RelativePath, &nextDue); err != nil {
+		return CronScheduleState{}, fmt.Errorf("scan cron schedule: %w", err)
+	}
+
+	schedule.NextDue = timeFromUnixNano(nextDue)
+
+	return schedule, nil
 }

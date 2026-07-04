@@ -132,6 +132,131 @@ func TestSessionServiceScheduledMessageDefaults(t *testing.T) {
 	assert.Equal(t, ScheduledMessageState{ConversationID: mainConversationID, Agent: mainConversationID, Message: "later", DueAt: dueAt}, messages["schedule-1"])
 }
 
+func TestSessionServiceInitializesCronScheduleSchema(t *testing.T) {
+	store := newTestSessionService(t)
+
+	rows, err := store.db.QueryContext(context.Background(), `SELECT name FROM sqlite_master WHERE type IN ('table', 'index') AND name LIKE 'cron_%' ORDER BY name`)
+
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+
+	var names []string
+
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		names = append(names, name)
+	}
+
+	require.NoError(t, rows.Err())
+
+	assert.Equal(t, []string{"cron_schedule_runs", "cron_schedule_runs_running_path", "cron_schedules", "cron_schedules_next_due_id", "cron_schedules_relative_path"}, names)
+}
+
+func TestSessionServiceMigratesVersionOneWithoutCronScheduleSpec(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, prepareSessionDBPath(workspace))
+	db, err := sql.Open("sqlite", sessionDBPath(workspace))
+	require.NoError(t, err)
+	require.NoError(t, createSessionSchema(context.Background(), db))
+	_, err = db.ExecContext(context.Background(), `PRAGMA user_version = 1`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	store := newTestSessionServiceAt(t, workspace)
+
+	version, err := sessionDBUserVersion(context.Background(), store.db)
+	require.NoError(t, err)
+	assert.Equal(t, sessionDBSchemaVersion, version)
+}
+
+func TestSessionServiceSyncCronSchedulesInsertsUpdatesAndDeletes(t *testing.T) {
+	store := newTestSessionService(t)
+	now := time.Date(2026, 7, 4, 10, 0, 0, 0, time.UTC)
+	due := now.Add(time.Minute)
+
+	require.NoError(t, store.SyncCronSchedules([]CronScheduleState{
+		{ScheduleID: "daily#0", RelativePath: "daily.md", NextDue: due},
+		{ScheduleID: "weekly#0", RelativePath: "weekly.md", NextDue: due.Add(time.Hour)},
+	}, now))
+
+	require.NoError(t, store.SyncCronSchedules([]CronScheduleState{
+		{ScheduleID: "daily#0", RelativePath: "daily.md", NextDue: due.Add(2 * time.Hour)},
+	}, now.Add(time.Second)))
+
+	rows, err := store.db.QueryContext(context.Background(), `SELECT schedule_id, relative_path, next_due_unix_ns FROM cron_schedules ORDER BY schedule_id`)
+
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+
+	var schedules []CronScheduleState
+
+	for rows.Next() {
+		schedule, err := scanCronSchedule(rows)
+		require.NoError(t, err)
+
+		schedules = append(schedules, schedule)
+	}
+
+	require.NoError(t, rows.Err())
+
+	assert.Equal(t, []CronScheduleState{{ScheduleID: "daily#0", RelativePath: "daily.md", NextDue: due}}, schedules)
+}
+
+func TestSessionServiceDueCronSchedulesHonorsDueTimeAndLimit(t *testing.T) {
+	store := newTestSessionService(t)
+	now := time.Date(2026, 7, 4, 10, 0, 0, 0, time.UTC)
+
+	require.NoError(t, store.SyncCronSchedules([]CronScheduleState{
+		{ScheduleID: "second", RelativePath: "second.md", NextDue: now},
+		{ScheduleID: "first", RelativePath: "first.md", NextDue: now.Add(-time.Minute)},
+		{ScheduleID: "later", RelativePath: "later.md", NextDue: now.Add(time.Minute)},
+	}, now))
+
+	due, err := store.DueCronSchedules(now, 1)
+	require.NoError(t, err)
+	assert.Equal(t, []CronScheduleState{{ScheduleID: "first", RelativePath: "first.md", NextDue: now.Add(-time.Minute)}}, due)
+}
+
+func TestSessionServiceClaimCronScheduleSerializesSamePathAndCompletionClearsRunning(t *testing.T) {
+	store := newTestSessionService(t)
+	now := time.Date(2026, 7, 4, 10, 0, 0, 0, time.UTC)
+	next := now.Add(time.Hour)
+
+	dueDaily := CronScheduleState{ScheduleID: "daily#0", RelativePath: "daily.md", NextDue: now}
+	dueDailySecond := CronScheduleState{ScheduleID: "daily#1", RelativePath: "daily.md", NextDue: now}
+	require.NoError(t, store.SyncCronSchedules([]CronScheduleState{
+		dueDaily,
+		dueDailySecond,
+	}, now))
+
+	run, ok, err := store.ClaimCronSchedule(dueDaily, next, now)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, CronScheduleRun{ScheduleID: "daily#0", RelativePath: "daily.md", DueAt: now}, run)
+
+	run, ok, err = store.ClaimCronSchedule(dueDailySecond, next, now)
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Zero(t, run)
+
+	due, err := store.DueCronSchedules(now, 10)
+	require.NoError(t, err)
+	assert.Empty(t, due)
+
+	_, ok, err = store.ClaimCronSchedule(dueDaily, next.Add(time.Hour), now)
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	require.NoError(t, store.CompleteCronRun("daily.md", now.Add(time.Minute)))
+
+	dueDaily.NextDue = next
+	run, ok, err = store.ClaimCronSchedule(dueDaily, next.Add(time.Hour), next)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, CronScheduleRun{ScheduleID: "daily#0", RelativePath: "daily.md", DueAt: next}, run)
+}
+
 func TestSessionServiceBeginGoalPersistsCheckScript(t *testing.T) {
 	store := newTestSessionService(t)
 

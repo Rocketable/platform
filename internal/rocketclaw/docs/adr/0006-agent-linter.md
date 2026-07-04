@@ -106,7 +106,7 @@ RocketClaw already relies on embedded create/update skills to guide agents towar
 - This ADR does not make `rocketclaw run` fail automatically on lint findings.
 - This ADR does not change RocketCode runtime permission semantics.
 - This ADR does not make plural `permissions` valid configuration.
-- This ADR does not require hot reload of agents, skills, cron, scripts, or overlays.
+- This ADR does not define live observation or hot reload behavior for agents, skills, cron, scripts, or overlays; scheduled cron global-ticker scanning is governed by ADR 0002 and ADR 0003.
 - This ADR does not define a general static-analysis framework outside RocketClaw agent-system safety.
 
 ## Evidence
@@ -134,3 +134,4 @@ RocketClaw already relies on embedded create/update skills to guide agents towar
 - 2026-06-11: Added `rocketclaw agent-graph [next|current]` as a DOT inspection command sharing lint target and task graph semantics, including wildcard task grant expansion to concrete agent edges.
 - 2026-06-12: Added `RC007` for missing guardrail references and guardrail edges in agent graph output.
 - 2026-06-19: Added `RC008` for excessive `reasoningEffort: xhigh` agent frontmatter.
+- 2026-07-04: Clarified that scheduled cron global-ticker scanning is governed outside the agent-linter ADR.

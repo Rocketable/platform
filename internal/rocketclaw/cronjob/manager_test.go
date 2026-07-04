@@ -14,11 +14,31 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 )
 
+func newCronScheduleStore(t *testing.T) *harnessbridge.SessionService {
+	t.Helper()
+
+	store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), ".", slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+
+		if err := store.Stop(ctx); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	return store
+}
+
 func TestNewInstallsTextChannelNoop(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		t.Fatal("cronjob manager ran during construction")
 
 		return RunResult{}, nil
@@ -109,7 +129,7 @@ func TestLoadOneOffCronjobUsesEffectiveRuntimeCron(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(workspace, ".rocketclaw", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".rocketclaw", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		t.Fatal("cronjob manager ran during load test")
 
 		return RunResult{}, nil
@@ -129,7 +149,7 @@ func TestRunOneOffCronjobSetsTraceConversationID(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), ".", bus, func(_ context.Context, _, _ string, _ *slog.Logger, progress *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, newCronScheduleStore(t), func(_ context.Context, _, _ string, _ *slog.Logger, progress *harnessbridge.RawRunProgress) (RunResult, error) {
 		if !strings.HasPrefix(progress.ConversationID, "one-off-cron:cron/daily.md:20000102T030405.000000006Z:") {
 			t.Fatalf("ConversationID = %q; want one-off trace ID", progress.ConversationID)
 		}
@@ -145,7 +165,7 @@ func TestRunOneOffCronjobRejectsStoppedManager(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		t.Fatal("stopped cronjob manager ran one-off cronjob")
 
 		return RunResult{}, nil
@@ -176,7 +196,7 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), ".", bus, func(_ context.Context, _, _ string, _ *slog.Logger, progress *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, newCronScheduleStore(t), func(_ context.Context, _, _ string, _ *slog.Logger, progress *harnessbridge.RawRunProgress) (RunResult, error) {
 		if !strings.HasPrefix(progress.ConversationID, "cron:cron/daily.md:20000102T030405.000000006Z:") {
 			t.Fatalf("ConversationID = %q; want scheduled trace ID", progress.ConversationID)
 		}
@@ -192,7 +212,7 @@ func TestExecuteJobPublishesExtraOutputToThreadAndSilentSummaryToMain(t *testing
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{
 			VerbatimMessage: "visible answer",
 			Attachments:     []events.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}},
@@ -289,7 +309,7 @@ func TestStartStopLoadsCronjobsWithoutRunningFutureDuration(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(workspace, ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		t.Fatal("future duration cronjob ran during start/stop test")
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
@@ -306,40 +326,52 @@ func TestStartStopLoadsCronjobsWithoutRunningFutureDuration(t *testing.T) {
 	}
 }
 
-func TestRunJobLoopDoesNotStartQueuedJobAfterStopAccepting(t *testing.T) {
+func TestScanScheduledDoesNotClaimAfterStopAccepting(t *testing.T) {
+	workspace := t.TempDir()
+
+	cronDir := filepath.Join(workspace, "cron")
+	if err := os.Mkdir(cronDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1s\n---\nBody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	bus := events.New()
 	defer bus.Close()
 
-	runStarted := make(chan struct{}, 1)
-	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
-		runStarted <- struct{}{}
-
+	store := newCronScheduleStore(t)
+	m := New(workspace, ".", bus, store, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+		t.Fatal("scheduled cronjob ran after StopAccepting")
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
-	j := &job{definition: definition{relativePath: "cron/daily.md"}, wakeCh: make(chan struct{}, 1)}
-	j.trigger()
+	now := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
+	m.now = func() time.Time { return now }
+
+	defs, err := loadDefinitionsIn(workspace, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	states := m.scheduledStates(defs, now.Add(-2*time.Second))
+	if err := store.SyncCronSchedules(states, now.Add(-2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
 	m.StopAccepting()
 
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+	if err := m.scanScheduled(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 
-	done := make(chan struct{})
+	due, err := store.DueCronSchedules(now, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	m.wg.Add(1)
-
-	go func() {
-		m.runJobLoop(ctx, j)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-runStarted:
-		cancel()
-		<-done
-		t.Fatal("queued cronjob started after manager stopped")
-	case <-time.After(time.Second):
-		t.Fatal("cronjob loop did not stop")
+	if len(due) != 1 {
+		t.Fatalf("due schedules after stopped scan = %d; want still unclaimed", len(due))
 	}
 }
 
@@ -347,7 +379,7 @@ func TestStopAfterStopAcceptingStillStopsManager(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
 	stopCalled := false
@@ -379,7 +411,7 @@ func TestStartRejectsAlreadyStartedManager(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(workspace, ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		t.Fatal("future duration cronjob ran during duplicate start test")
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
@@ -430,7 +462,7 @@ func TestOneOffCronjobRunsImmediatelyAndDeletesFile(t *testing.T) {
 	defer bus.Close()
 
 	runDone := make(chan struct{})
-	m := New(workspace, ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		close(runDone)
 
 		return RunResult{}, nil
@@ -476,7 +508,7 @@ func TestOneOffCronjobRunsAfterFutureDueTime(t *testing.T) {
 	defer bus.Close()
 
 	runDone := make(chan struct{})
-	m := New(workspace, ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		close(runDone)
 
 		return RunResult{}, nil
@@ -520,7 +552,7 @@ func TestOneOffCronjobDeletesFileAfterRunError(t *testing.T) {
 	defer bus.Close()
 
 	runDone := make(chan struct{})
-	m := New(workspace, ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		close(runDone)
 
 		return RunResult{}, errors.New("boom")
@@ -558,11 +590,191 @@ func stopCronManager(t *testing.T, m *Manager) {
 	}
 }
 
+func TestScanScheduledUsesLatestDefinitionAndPersistsState(t *testing.T) {
+	workspace := t.TempDir()
+
+	cronDir := filepath.Join(workspace, "cron")
+	if err := os.Mkdir(cronDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cronPath := filepath.Join(cronDir, "daily.md")
+	if err := os.WriteFile(cronPath, []byte("---\nschedule: 1s\nagent: helper\n---\nold body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bus := events.New()
+	defer bus.Close()
+
+	store := newCronScheduleStore(t)
+	runPrompt := make(chan string, 1)
+	m := New(workspace, ".", bus, store, func(_ context.Context, _ string, prompt string, _ *slog.Logger, _ *harnessbridge.RawRunProgress) (RunResult, error) {
+		runPrompt <- prompt
+		return RunResult{}, nil
+	}, slog.New(slog.DiscardHandler))
+
+	start := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
+	m.now = func() time.Time { return start }
+
+	defs, err := loadDefinitionsIn(workspace, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.SyncCronSchedules(m.scheduledStates(defs, start), start); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(cronPath, []byte("---\nschedule: 1s\nagent: helper\n---\nnew body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m.now = func() time.Time { return start.Add(time.Second) }
+
+	if err := m.scanScheduled(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case prompt := <-runPrompt:
+		if !strings.Contains(prompt, "new body") {
+			t.Fatalf("scheduled prompt = %q; want latest body", prompt)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("scheduled cronjob did not run")
+	}
+}
+
+func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
+	workspace := t.TempDir()
+
+	cronDir := filepath.Join(workspace, "cron")
+	if err := os.Mkdir(cronDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule:\n  - 1s\n  - 1s\nagent: helper\n---\nBody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bus := events.New()
+	defer bus.Close()
+
+	store := newCronScheduleStore(t)
+	runStarted := make(chan struct{}, 2)
+	release := make(chan struct{})
+	m := New(workspace, ".", bus, store, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+		runStarted <- struct{}{}
+
+		<-release
+
+		return RunResult{}, nil
+	}, slog.New(slog.DiscardHandler))
+
+	start := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
+	m.now = func() time.Time { return start }
+
+	defs, err := loadDefinitionsIn(workspace, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.SyncCronSchedules(m.scheduledStates(defs, start), start); err != nil {
+		t.Fatal(err)
+	}
+
+	m.now = func() time.Time { return start.Add(time.Second) }
+	if err := m.scanScheduled(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-runStarted:
+	case <-time.After(time.Second):
+		t.Fatal("scheduled cronjob did not run")
+	}
+
+	if err := m.scanScheduled(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-runStarted:
+		t.Fatal("same-file scheduled cronjob overlapped or replayed backlog")
+	default:
+	}
+
+	close(release)
+}
+
+func TestStopWaitsForActiveScheduledRun(t *testing.T) {
+	workspace := t.TempDir()
+
+	cronDir := filepath.Join(workspace, "cron")
+	if err := os.Mkdir(cronDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(cronDir, "daily.md"), []byte("---\nschedule: 1s\n---\nBody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bus := events.New()
+	defer bus.Close()
+
+	runStarted := make(chan struct{})
+	release := make(chan struct{})
+	m := New(workspace, ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+		close(runStarted)
+		<-release
+
+		return RunResult{}, nil
+	}, slog.New(slog.DiscardHandler))
+	m.tickerInterval = time.Hour
+	start := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
+	m.now = func() time.Time { return start }
+
+	if err := m.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	m.now = func() time.Time { return start.Add(time.Second) }
+	if err := m.scanScheduled(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	<-runStarted
+
+	stopped := make(chan struct{})
+
+	go func() {
+		if err := m.Stop(context.Background()); err != nil {
+			t.Error(err)
+		}
+
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned before active scheduled run finished")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(release)
+
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not return after active scheduled run finished")
+	}
+}
+
 func TestPreparePromptInstructionCases(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
 
@@ -583,34 +795,6 @@ func TestPreparePromptInstructionCases(t *testing.T) {
 				t.Fatalf("preparePrompt(%q) = %q; want %q", tt.body, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestJobTriggerCoalescesPendingWakeups(t *testing.T) {
-	j := &job{wakeCh: make(chan struct{}, 1)}
-
-	j.trigger()
-
-	if j.pending != 1 {
-		t.Fatalf("pending after first trigger = %d; want 1", j.pending)
-	}
-
-	select {
-	case <-j.wakeCh:
-	default:
-		t.Fatal("trigger did not send initial wakeup")
-	}
-
-	j.trigger()
-
-	if j.pending != 2 {
-		t.Fatalf("pending after second trigger = %d; want 2", j.pending)
-	}
-
-	select {
-	case <-j.wakeCh:
-		t.Fatal("second trigger sent duplicate wakeup")
-	default:
 	}
 }
 
@@ -680,7 +864,7 @@ func TestExecuteJobWithTextChannelSendsThreadOnlyFinalPayload(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{Text: "internal note", VerbatimMessage: " final payload ", Attachments: []events.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}}, nil
 	}, slog.New(slog.DiscardHandler))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC) }
@@ -733,7 +917,7 @@ func TestExecuteJobWithTextChannelSkipsEmptyFinalPayload(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{Text: "internal note"}, nil
 	}, slog.New(slog.DiscardHandler))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC) }
@@ -770,7 +954,7 @@ func TestExecuteJobWithoutChannelSendsDefaultTextThread(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{Text: "internal note", VerbatimMessage: " final payload ", Attachments: []events.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}}, nil
 	}, slog.New(slog.DiscardHandler))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC) }
@@ -826,7 +1010,7 @@ func TestExecuteJobDefaultTextDeliveryKeepsInternalOnlyOutputInMain(t *testing.T
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(t.TempDir(), ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{Text: "internal note"}, nil
 	}, slog.New(slog.DiscardHandler))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC) }
@@ -874,7 +1058,7 @@ func TestLoadOneOffCronjobValidatesTargetsAndPreparesPrompt(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(workspace, ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
 
@@ -913,7 +1097,7 @@ func TestLoadOneOffCronjobReportsReadAndDefinitionErrors(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(workspace, ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
 
@@ -935,7 +1119,7 @@ func TestLoadOneOffCronjobReportsWorkspaceOpenError(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	m := New(workspace, ".", bus, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
 

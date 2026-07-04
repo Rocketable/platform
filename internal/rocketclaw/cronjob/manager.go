@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -107,21 +108,29 @@ func onDemandCronPathTarget(text string) (string, bool) {
 // RunFunc executes one cronjob prompt and returns the cronjob result.
 type RunFunc func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error)
 
-// Manager loads cron definitions once at startup and schedules them.
+// Manager loads and runs workspace cron definitions.
 type Manager struct {
 	workspace, workDir string
 	bus                *events.Bus
+	store              cronScheduleStore
 	run                RunFunc
 	log                *slog.Logger
 	now                func() time.Time
+	tickerInterval     time.Duration
 	SendTextChannel    func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error
 
 	mu            sync.Mutex
 	stop          context.CancelFunc
-	cron          *cron.Cron
-	jobs          []*job
 	start, closed bool
 	wg            sync.WaitGroup
+}
+
+type cronScheduleStore interface {
+	ResetCronSchedules() error
+	SyncCronSchedules([]harnessbridge.CronScheduleState, time.Time) error
+	DueCronSchedules(time.Time, int) ([]harnessbridge.CronScheduleState, error)
+	ClaimCronSchedule(harnessbridge.CronScheduleState, time.Time, time.Time) (harnessbridge.CronScheduleRun, bool, error)
+	CompleteCronRun(string, time.Time) error
 }
 
 type definition struct {
@@ -130,6 +139,7 @@ type definition struct {
 }
 
 type schedule struct {
+	raw      string
 	dueAt    time.Time
 	duration time.Duration
 	parsed   cron.Schedule
@@ -140,43 +150,34 @@ const (
 	oneOffCronTracePrefix = "one-off-cron:"
 )
 
-type job struct {
-	definition definition
-	wakeCh     chan struct{}
-
-	mu      sync.Mutex
-	pending int
-}
-
 // New constructs a cronjob manager using workDir for effective runtime cron definitions.
-func New(workspace, workDir string, bus *events.Bus, run RunFunc, logger *slog.Logger) *Manager {
-	return &Manager{workspace: workspace, bus: bus, run: run, log: logger.With("component", "cronjob"), now: time.Now, SendTextChannel: func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
+func New(workspace, workDir string, bus *events.Bus, store cronScheduleStore, run RunFunc, logger *slog.Logger) *Manager {
+	return &Manager{workspace: workspace, bus: bus, store: store, run: run, log: logger.With("component", "cronjob"), now: time.Now, tickerInterval: time.Minute, SendTextChannel: func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
 		return nil
 	}, workDir: workDir}
 }
 
 // Start loads cron definitions and starts scheduling them.
 func (m *Manager) Start(ctx context.Context) error {
+	m.mu.Lock()
+	if m.start {
+		m.mu.Unlock()
+		return errors.New("cronjob manager already started")
+	}
+	m.mu.Unlock()
+
 	definitions, err := loadDefinitionsIn(m.workspace, m.workDir)
 	if err != nil {
 		return err
 	}
 
-	scheduler := cron.New(cron.WithLocation(time.Local))
+	now := m.now()
+	if err := m.store.ResetCronSchedules(); err != nil {
+		return fmt.Errorf("reset cron schedules: %w", err)
+	}
 
-	jobs := make([]*job, 0, len(definitions))
-
-	for i := range definitions {
-		current := &job{definition: definitions[i], wakeCh: make(chan struct{}, 1)}
-		for _, schedule := range definitions[i].schedules {
-			if schedule.duration > 0 || !schedule.dueAt.IsZero() {
-				continue
-			}
-
-			scheduler.Schedule(schedule.parsed, cron.FuncJob(current.trigger))
-		}
-
-		jobs = append(jobs, current)
+	if err := m.store.SyncCronSchedules(m.scheduledStates(definitions, now), now); err != nil {
+		return fmt.Errorf("sync cron schedules: %w", err)
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -190,33 +191,21 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 
 	m.stop = cancel
-	m.cron = scheduler
-	m.jobs = jobs
 	m.start = true
 	m.closed = false
 
-	for i := range jobs {
-		m.wg.Add(1)
-
-		go m.runJobLoop(runCtx, jobs[i])
-
-		for _, schedule := range jobs[i].definition.schedules {
-			interval := schedule.duration
-			if !schedule.dueAt.IsZero() {
-				interval = max(schedule.dueAt.Sub(m.now()), 0)
-			}
-
-			if interval <= 0 && schedule.dueAt.IsZero() {
-				continue
-			}
+	for i := range definitions {
+		if len(definitions[i].schedules) == 1 && !definitions[i].schedules[0].dueAt.IsZero() {
+			definition := definitions[i]
 
 			m.wg.Add(1)
-
-			go m.runDurationLoop(runCtx, jobs[i], interval, !schedule.dueAt.IsZero())
+			go m.runOneOffTimer(runCtx, &definition, max(definition.schedules[0].dueAt.Sub(now), 0))
 		}
 	}
 
-	m.cron.Start()
+	m.wg.Add(1)
+	go m.runTickerLoop(runCtx)
+
 	m.logLoadedDefinitions(definitions)
 
 	return nil
@@ -232,21 +221,9 @@ func (m *Manager) Stop(ctx context.Context) error {
 
 	m.closed = true
 	stop := m.stop
-	scheduler := m.cron
 	m.mu.Unlock()
 
-	if stop != nil {
-		stop()
-	}
-
-	if scheduler != nil {
-		stopped := scheduler.Stop()
-		select {
-		case <-stopped.Done():
-		case <-ctx.Done():
-			return fmt.Errorf("stop cron scheduler: %w", ctx.Err())
-		}
-	}
+	stop()
 
 	done := make(chan struct{})
 
@@ -348,77 +325,186 @@ func (m *Manager) RunOneOffCronjob(ctx context.Context, job OneOffCronjob, progr
 	finish(runCtx, result, err)
 }
 
-func (m *Manager) runDurationLoop(ctx context.Context, job *job, interval time.Duration, once bool) {
+func (m *Manager) runOneOffTimer(ctx context.Context, definition *definition, interval time.Duration) {
 	defer m.wg.Done()
 
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			job.trigger()
-		}
+	select {
+	case <-ctx.Done():
+		return
+	case <-timer.C:
+	}
 
-		if once {
-			return
-		}
+	m.mu.Lock()
+	closed := m.closed
+	m.mu.Unlock()
 
-		timer.Reset(interval)
+	if closed {
+		return
+	}
+
+	m.executeJob(context.WithoutCancel(ctx), definition)
+	m.deleteOneOffCronjob(definition)
+}
+
+func (m *Manager) deleteOneOffCronjob(definition *definition) {
+	if err := os.Remove(filepath.Join(m.workspace, m.cronRelativePath(filepath.Base(definition.relativePath)))); err != nil && !errors.Is(err, os.ErrNotExist) {
+		m.log.Warn("delete one-off cronjob", "file", definition.relativePath, "error", err)
+	}
+
+	if m.workDir != "." {
+		if err := os.Remove(filepath.Join(m.workspace, definition.relativePath)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			m.log.Warn("delete local one-off cronjob", "file", definition.relativePath, "error", err)
+		}
 	}
 }
 
-func (m *Manager) runJobLoop(ctx context.Context, job *job) {
+func (m *Manager) runTickerLoop(ctx context.Context) {
 	defer m.wg.Done()
+
+	ticker := time.NewTicker(m.tickerInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-job.wakeCh:
+		case <-ticker.C:
 		}
 
-		for {
-			if ctx.Err() != nil {
-				return
-			}
-
-			job.mu.Lock()
-			if job.pending == 0 {
-				job.mu.Unlock()
-				break
-			}
-
-			job.pending--
-			job.mu.Unlock()
-
-			m.mu.Lock()
-			closed := m.closed
-			m.mu.Unlock()
-
-			if closed {
-				return
-			}
-
-			m.executeJob(context.WithoutCancel(ctx), &job.definition)
-
-			if len(job.definition.schedules) == 1 && !job.definition.schedules[0].dueAt.IsZero() {
-				if err := os.Remove(filepath.Join(m.workspace, m.cronRelativePath(filepath.Base(job.definition.relativePath)))); err != nil && !errors.Is(err, os.ErrNotExist) {
-					m.log.Warn("delete one-off cronjob", "file", job.definition.relativePath, "error", err)
-				}
-
-				if m.workDir != "." {
-					if err := os.Remove(filepath.Join(m.workspace, job.definition.relativePath)); err != nil && !errors.Is(err, os.ErrNotExist) {
-						m.log.Warn("delete local one-off cronjob", "file", job.definition.relativePath, "error", err)
-					}
-				}
-
-				return
+		if err := m.scanScheduled(ctx); err != nil {
+			if ctx.Err() == nil {
+				m.log.Error("scan scheduled cronjobs", "error", err)
 			}
 		}
 	}
+}
+
+func (m *Manager) scanScheduled(ctx context.Context) error {
+	now := m.now()
+
+	definitions, err := loadDefinitionsIn(m.workspace, m.workDir)
+	if err != nil {
+		return err
+	}
+
+	states := m.scheduledStates(definitions, now)
+	if err := m.store.SyncCronSchedules(states, now); err != nil {
+		return fmt.Errorf("sync cron schedules: %w", err)
+	}
+
+	m.mu.Lock()
+	closed := m.closed
+	m.mu.Unlock()
+
+	if closed {
+		return nil
+	}
+
+	due, err := m.store.DueCronSchedules(now, 0)
+	if err != nil {
+		return fmt.Errorf("load due cron schedules: %w", err)
+	}
+
+	if len(due) == 0 {
+		return nil
+	}
+
+	type scheduledDefinition struct {
+		definition definition
+		schedule   schedule
+	}
+
+	scheduledDefinitions := map[string]scheduledDefinition{}
+
+	for i := range definitions {
+		definition := definitions[i]
+		for index, schedule := range definition.schedules {
+			if !schedule.dueAt.IsZero() {
+				continue
+			}
+
+			id := scheduleID(definition.relativePath, index, schedule.raw)
+			scheduledDefinitions[id] = scheduledDefinition{definition: definition, schedule: schedule}
+		}
+	}
+
+	startedFiles := map[string]struct{}{}
+
+	for _, state := range due {
+		scheduled, ok := scheduledDefinitions[state.ScheduleID]
+		if !ok {
+			continue
+		}
+
+		definition := scheduled.definition
+
+		if _, ok := startedFiles[definition.relativePath]; ok {
+			continue
+		}
+
+		run, ok, err := m.store.ClaimCronSchedule(state, scheduled.schedule.next(now), now)
+		if err != nil {
+			return fmt.Errorf("claim cron schedule: %w", err)
+		}
+
+		if !ok {
+			continue
+		}
+
+		m.mu.Lock()
+		if m.closed {
+			m.mu.Unlock()
+
+			if err := m.store.CompleteCronRun(run.RelativePath, m.now()); err != nil {
+				return fmt.Errorf("complete cron run after stopped claim: %w", err)
+			}
+
+			continue
+		}
+
+		m.wg.Add(1)
+		m.mu.Unlock()
+
+		startedFiles[definition.relativePath] = struct{}{}
+		go m.runScheduled(ctx, run, &definition)
+	}
+
+	return nil
+}
+
+func (m *Manager) runScheduled(ctx context.Context, run harnessbridge.CronScheduleRun, definition *definition) {
+	defer m.wg.Done()
+	defer func() {
+		if err := m.store.CompleteCronRun(run.RelativePath, m.now()); err != nil {
+			m.log.Error("complete cron run", "file", run.RelativePath, "error", err)
+		}
+	}()
+
+	m.executeJob(context.WithoutCancel(ctx), definition)
+}
+
+func (m *Manager) scheduledStates(definitions []definition, now time.Time) []harnessbridge.CronScheduleState {
+	var states []harnessbridge.CronScheduleState
+
+	for i := range definitions {
+		definition := definitions[i]
+		for index, schedule := range definition.schedules {
+			if !schedule.dueAt.IsZero() {
+				continue
+			}
+
+			states = append(states, harnessbridge.CronScheduleState{
+				ScheduleID:   scheduleID(definition.relativePath, index, schedule.raw),
+				RelativePath: definition.relativePath,
+				NextDue:      schedule.next(now),
+			})
+		}
+	}
+
+	return states
 }
 
 const humanVisibleEmptyCallInstruction = `When you are done YOU MUST CALL ` + harnessbridge.RawRunExposedToolName + `("") (empty string)`
@@ -503,21 +589,6 @@ func (m *Manager) preparePrompt(body string) string {
 	}
 
 	return prompt + "\n\n" + humanVisibleEmptyCallInstruction
-}
-
-func (j *job) trigger() {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-
-	j.pending++
-	if j.pending != 1 {
-		return
-	}
-
-	select {
-	case j.wakeCh <- struct{}{}:
-	default:
-	}
 }
 
 func (m *Manager) logLoadedDefinitions(definitions []definition) {
@@ -613,6 +684,8 @@ func loadDefinition(data []byte, relativePath string) (definition, error) {
 		if err != nil {
 			return definition{}, fmt.Errorf("parse cronjob %s schedule %q: %w", relativePath, raw, err)
 		}
+
+		schedule.raw = strings.TrimSpace(raw)
 
 		oneOff = oneOff || !schedule.dueAt.IsZero()
 		schedules = append(schedules, schedule)
@@ -780,4 +853,16 @@ func parseSchedule(raw string) (schedule, error) {
 	}
 
 	return schedule{duration: 0, parsed: parsed}, nil
+}
+
+func (s schedule) next(now time.Time) time.Time {
+	if s.duration > 0 {
+		return now.Add(s.duration)
+	}
+
+	return s.parsed.Next(now)
+}
+
+func scheduleID(relativePath string, index int, raw string) string {
+	return relativePath + "#" + strconv.Itoa(index) + "#" + raw
 }

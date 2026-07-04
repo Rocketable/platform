@@ -293,7 +293,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		return threadBridges.StartNewThread(startCtx, req, startThreadRoot)
 	}
 
-	cronjobs = cronjob.New(cfg.Workspace, cfg.WorkDirName(), bus, func(jobCtx context.Context, agent, prompt string, log *slog.Logger, progress *harnessbridge.RawRunProgress) (cronjob.RunResult, error) {
+	cronjobs = cronjob.New(cfg.Workspace, cfg.WorkDirName(), bus, rocketcodeSessions, func(jobCtx context.Context, agent, prompt string, log *slog.Logger, progress *harnessbridge.RawRunProgress) (cronjob.RunResult, error) {
 		progress.SessionService = rocketcodeSessions
 		progress.ScheduleMessage = mainBridge.ScheduleMessage
 		progress.ResetScheduledMessages = mainBridge.ResetScheduledMessages
