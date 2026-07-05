@@ -37,7 +37,7 @@ RocketClaw stores persistent RocketCode sessions, managed thread routing, respon
 
 - Daemon startup must acquire and hold a runtime-owned advisory lock for `<runtime-dir>/state.sqlite3` ownership before opening the state store.
 - A second daemon must fail startup while that lock is held.
-- `rocketclaw fc delete` must refuse to run while that lock is held because it mutates the state store outside the daemon.
+- `rocketclaw fc delete` and `rocketclaw fc check` must refuse to run while that lock is held because they mutate or may mutate the state store outside the daemon.
 - `rocketclaw fc list` and `rocketclaw fc observe` remain allowed while the daemon is running because they are inspection commands, and must use the read-only opener mode.
 
 ### Inspection Queries
@@ -69,11 +69,11 @@ For newly created state stores, `PRAGMA page_size = 4096` and `PRAGMA auto_vacuu
 
 ### Daemon Maintenance
 
-- Daemon startup must quick-check an existing state store before pruning, checkpointing, applying restart notifications, or starting connectors.
-- If the quick-check proves corruption, daemon startup must attempt copy-first recovery while holding the daemon ownership lock.
-- Startup corruption recovery must invoke the external `sqlite3` command-line shell `.recover` command only for a corruption-proven existing database.
-- Startup corruption recovery must snapshot `state.sqlite3`, `state.sqlite3-wal`, and `state.sqlite3-shm` when present into `<runtime-dir>/tmp/`, recover from that snapshot into a fresh database, validate the recovered database, move the corrupt live database files aside, and install only the validated recovered main database.
-- If recovery fails, daemon startup must fail and must not continue to pruning, checkpoint, restart notification application, connector startup, or another state-store mutation.
+- Daemon startup must not proactively run `PRAGMA quick_check` or copy-first corruption recovery.
+- `rocketclaw fc check` is the manual state-store integrity and recovery operation.
+- `rocketclaw fc check` must run `PRAGMA quick_check` for an existing state store.
+- If the quick-check proves corruption, `rocketclaw fc check` must attempt copy-first recovery using the external `sqlite3` command-line shell `.recover` command.
+- Recovery must snapshot `state.sqlite3`, `state.sqlite3-wal`, and `state.sqlite3-shm` when present into `<runtime-dir>/tmp/`, recover from that snapshot into a fresh database, validate the recovered database, move the corrupt live database files aside, and install only the validated recovered main database.
 - Daemon startup must run WAL checkpoint cleanup after startup retention pruning and before normal connector, cron, and bridge startup continues.
 - Daemon startup checkpoint cleanup must run through the already-open centralized SQLite handle, not by opening a second SQLite handle.
 - Daemon startup checkpoint cleanup must run `PRAGMA wal_checkpoint(TRUNCATE)`.
@@ -114,3 +114,4 @@ For newly created state stores, `PRAGMA page_size = 4096` and `PRAGMA auto_vacuu
 - 2026-06-12: Removed operational `rocketclaw fc vacuum`, replaced startup full `VACUUM` with daemon-owned background incremental vacuum, and required new state stores to be created ready for incremental vacuum.
 - 2026-06-14: Expanded goal-loop state storage to the generic text connector contract.
 - 2026-07-04: Added scheduled cron execution state to the centralized SQLite state store contract.
+- 2026-07-04: Moved state-store quick-check and copy-first corruption recovery from daemon startup to explicit `rocketclaw fc check`, which refuses while the daemon owns the state-store lock.

@@ -713,9 +713,9 @@ func TestOpenSessionDBReadOnlyRejectsWrites(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestRecoverSessionDBIfCorruptRecoversIndexPageCorruption(t *testing.T) {
+func TestCheckAndRecoverSessionDBRecoversIndexPageCorruption(t *testing.T) {
 	if _, err := exec.LookPath("sqlite3"); err != nil {
-		t.Skip("sqlite3 command is required for startup recovery")
+		t.Skip("sqlite3 command is required for state store recovery")
 	}
 
 	workspace := t.TempDir()
@@ -737,9 +737,11 @@ func TestRecoverSessionDBIfCorruptRecoversIndexPageCorruption(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, file.Close())
 
-	recovered, err := RecoverSessionDBIfCorrupt(context.Background(), workspace, ".rocketclaw", slog.New(slog.DiscardHandler))
+	result, err := CheckAndRecoverSessionDB(context.Background(), workspace, ".rocketclaw", slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
-	assert.True(t, recovered)
+	assert.True(t, result.DBExists)
+	assert.True(t, result.Healthy)
+	assert.True(t, result.Recovered)
 
 	entries, err := ObserveSessionEntries(context.Background(), dbPath, "main", 0)
 	require.NoError(t, err)

@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -22,11 +23,13 @@ Usage:
   rocketclaw fc list [--since 24h|RFC3339] [--until RFC3339] [--limit N] [--no-message-preview]
   rocketclaw fc observe [--follow|-f] [conversation-id]
   rocketclaw fc delete <conversation-id>
+  rocketclaw fc check
 
 Commands:
   list     List stored rocketcode sessions.
   observe  Print stored rocketcode session entries as JSONL. Defaults to main.
   delete   Delete one rocketcode session.
+  check    Check and recover the rocketclaw state store.
 `
 
 func runFC(args []string) error {
@@ -46,11 +49,50 @@ func runFC(args []string) error {
 		return runFCObserveIn(cfg.Workspace, cfg.RuntimeDirName(), args[1:], os.Stdout)
 	case "delete":
 		return runFCDeleteIn(cfg.Workspace, cfg.RuntimeDirName(), args[1:], os.Stdout)
+	case "check":
+		return runFCCheckIn(cfg.Workspace, cfg.RuntimeDirName(), args[1:], os.Stdout)
 	case "help", "-h", "--help":
 		return printStdout(fcHelpText, "rocketcode help")
 	default:
 		return fmt.Errorf("unknown rocketcode command %q", args[0])
 	}
+}
+
+func runFCCheckIn(workspace, runtimeDir string, args []string, out io.Writer) error {
+	flagSet := flag.NewFlagSet("rocketclaw fc check", flag.ContinueOnError)
+
+	if err := flagSet.Parse(args); err != nil {
+		return fmt.Errorf("parse rocketcode check flags: %w", err)
+	}
+
+	if len(flagSet.Args()) != 0 {
+		return errors.New("check does not accept arguments")
+	}
+
+	lock, err := acquireFCMutationLock(workspace, runtimeDir, "check")
+	if err != nil {
+		return fmt.Errorf("check rocketclaw state store: %w", err)
+	}
+
+	defer func() { _ = lock.Close() }()
+
+	result, err := harnessbridge.CheckAndRecoverSessionDB(context.Background(), workspace, runtimeDir, slog.New(slog.DiscardHandler))
+	if err != nil {
+		return fmt.Errorf("check rocketclaw state store: %w", err)
+	}
+
+	message := "state store ok"
+	if !result.DBExists {
+		message = "state store does not exist"
+	} else if result.Recovered {
+		message = "state store recovered"
+	}
+
+	if _, err := fmt.Fprintln(out, message); err != nil {
+		return fmt.Errorf("write rocketcode check result: %w", err)
+	}
+
+	return nil
 }
 
 func runFCDeleteIn(workspace, runtimeDir string, args []string, out io.Writer) error {

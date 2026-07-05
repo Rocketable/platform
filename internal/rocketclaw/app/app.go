@@ -108,21 +108,6 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	startedAt = time.Now()
 
-	stateLogger.Info("checking rocketclaw state store corruption", "workspace", cfg.Workspace, "runtime_dir", cfg.RuntimeDirName())
-
-	recovered, err := harnessbridge.RecoverSessionDBIfCorrupt(runCtx, cfg.Workspace, cfg.RuntimeDirName(), stateLogger)
-	if err != nil {
-		return fmt.Errorf("recover rocketcode session db: %w", err)
-	}
-
-	stateLogger.Info("checked rocketclaw state store corruption", "recovered", recovered, "elapsed", time.Since(startedAt))
-
-	if recovered {
-		logger.Warn("recovered corrupt rocketcode session db")
-	}
-
-	startedAt = time.Now()
-
 	stateLogger.Info("starting rocketclaw state store", "workspace", cfg.Workspace, "runtime_dir", cfg.RuntimeDirName())
 
 	rocketcodeSessions, err := harnessbridge.NewSessionServiceIn(cfg.Workspace, cfg.RuntimeDirName(), stateLogger)

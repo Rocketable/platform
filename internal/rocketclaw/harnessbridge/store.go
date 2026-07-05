@@ -165,6 +165,13 @@ type PruneStateStats struct {
 	SessionRows                                       int64
 }
 
+// CheckAndRecoverSessionDBResult reports the manual state-store check outcome.
+type CheckAndRecoverSessionDBResult struct {
+	DBExists  bool
+	Healthy   bool
+	Recovered bool
+}
+
 type stateStoreDB interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
@@ -1127,16 +1134,20 @@ func openExistingSessionDB(ctx context.Context, workspace, runtimeDir string) (*
 	return db, err == nil, err
 }
 
-// RecoverSessionDBIfCorrupt recovers a corrupt existing state DB before daemon startup proceeds.
-func RecoverSessionDBIfCorrupt(ctx context.Context, workspace, runtimeDir string, logger *slog.Logger) (bool, error) {
+// CheckAndRecoverSessionDB checks and recovers the state DB for the fc check command.
+func CheckAndRecoverSessionDB(ctx context.Context, workspace, runtimeDir string, logger *slog.Logger) (CheckAndRecoverSessionDBResult, error) {
 	db, ok, err := openExistingSessionDBReadOnly(ctx, workspace, runtimeDir)
+	result := CheckAndRecoverSessionDBResult{DBExists: ok}
+
 	switch {
 	case err != nil:
 		if !isSQLiteCorruptionError(err) {
-			return false, err
+			return CheckAndRecoverSessionDBResult{}, err
 		}
+
+		result.DBExists = true
 	case !ok:
-		return false, nil
+		return result, nil
 	default:
 		startedAt := time.Now()
 
@@ -1152,32 +1163,37 @@ func RecoverSessionDBIfCorrupt(ctx context.Context, workspace, runtimeDir string
 		}
 
 		if err == nil {
-			return false, nil
+			result.Healthy = true
+
+			return result, nil
 		}
 
 		if !errors.Is(err, errStateStoreCorrupt) {
-			return false, err
+			return CheckAndRecoverSessionDBResult{}, err
 		}
 	}
 
 	if _, err := exec.LookPath("sqlite3"); err != nil {
-		return false, fmt.Errorf("recover corrupt rocketcode session db: sqlite3 command not found: %w", err)
+		return CheckAndRecoverSessionDBResult{}, fmt.Errorf("recover corrupt rocketcode session db: sqlite3 command not found: %w", err)
 	}
 
 	recoveryRel, err := snapshotSessionDBForRecovery(workspace, runtimeDir)
 	if err != nil {
-		return false, err
+		return CheckAndRecoverSessionDBResult{}, err
 	}
 
 	if err := recoverSessionDBSnapshot(ctx, workspace, recoveryRel); err != nil {
-		return false, err
+		return CheckAndRecoverSessionDBResult{}, err
 	}
 
 	if err := swapRecoveredSessionDB(workspace, runtimeDir, recoveryRel); err != nil {
-		return false, err
+		return CheckAndRecoverSessionDBResult{}, err
 	}
 
-	return true, nil
+	result.Healthy = true
+	result.Recovered = true
+
+	return result, nil
 }
 
 func quickCheckSessionDB(ctx context.Context, db *sql.DB) error {

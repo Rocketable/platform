@@ -211,6 +211,9 @@ func TestRunFCDispatchesConfigBackedCommands(t *testing.T) {
 
 	output = captureStdout(t, func() error { return runFC([]string{"delete", "main"}) })
 	assert.Contains(t, output, "deleted 1 turns")
+
+	output = captureStdout(t, func() error { return runFC([]string{"check"}) })
+	assert.Equal(t, "state store ok\n", output)
 }
 
 func TestRunFCNoArgsPrintsHelpWithoutConfig(t *testing.T) {
@@ -224,6 +227,7 @@ func TestRunFCNoArgsPrintsHelpWithoutConfig(t *testing.T) {
 	assert.Contains(t, output, "rocketclaw fc list")
 	assert.Contains(t, output, "rocketclaw fc observe")
 	assert.Contains(t, output, "rocketclaw fc delete")
+	assert.Contains(t, output, "rocketclaw fc check")
 }
 
 func TestRunFCHelpAliasesLoadConfigAndPrintHelp(t *testing.T) {
@@ -240,6 +244,7 @@ func TestRunFCHelpAliasesLoadConfigAndPrintHelp(t *testing.T) {
 		assert.Contains(t, output, "rocketclaw fc list")
 		assert.Contains(t, output, "rocketclaw fc observe")
 		assert.Contains(t, output, "rocketclaw fc delete")
+		assert.Contains(t, output, "rocketclaw fc check")
 	}
 }
 
@@ -315,6 +320,29 @@ func TestRunFCDeleteRefusesWhileStateStoreLocked(t *testing.T) {
 
 	err = runFCDeleteIn(workspace, config.DefaultRuntimeDir, []string{"main"}, io.Discard)
 	require.ErrorContains(t, err, "rocketclaw daemon is running; stop it before running fc delete")
+	require.ErrorIs(t, err, harnessbridge.ErrStateStoreLocked)
+}
+
+func TestRunFCCheck(t *testing.T) {
+	var out bytes.Buffer
+	require.NoError(t, runFCCheckIn(t.TempDir(), config.DefaultRuntimeDir, nil, &out))
+	assert.Equal(t, "state store does not exist\n", out.String())
+}
+
+func TestRunFCCheckRejectsArguments(t *testing.T) {
+	var out bytes.Buffer
+	err := runFCCheckIn(t.TempDir(), config.DefaultRuntimeDir, []string{"extra"}, &out)
+	require.ErrorContains(t, err, "check does not accept arguments")
+}
+
+func TestRunFCCheckRefusesWhileStateStoreLocked(t *testing.T) {
+	workspace := t.TempDir()
+	lock, err := harnessbridge.AcquireStateStoreLock(workspace, ".rocketclaw")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, lock.Close()) })
+
+	err = runFCCheckIn(workspace, config.DefaultRuntimeDir, nil, io.Discard)
+	require.ErrorContains(t, err, "rocketclaw daemon is running; stop it before running fc check")
 	require.ErrorIs(t, err, harnessbridge.ErrStateStoreLocked)
 }
 
