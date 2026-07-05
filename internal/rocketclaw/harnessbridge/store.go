@@ -1128,7 +1128,7 @@ func openExistingSessionDB(ctx context.Context, workspace, runtimeDir string) (*
 }
 
 // RecoverSessionDBIfCorrupt recovers a corrupt existing state DB before daemon startup proceeds.
-func RecoverSessionDBIfCorrupt(ctx context.Context, workspace, runtimeDir string) (bool, error) {
+func RecoverSessionDBIfCorrupt(ctx context.Context, workspace, runtimeDir string, logger *slog.Logger) (bool, error) {
 	db, ok, err := openExistingSessionDBReadOnly(ctx, workspace, runtimeDir)
 	switch {
 	case err != nil:
@@ -1138,8 +1138,18 @@ func RecoverSessionDBIfCorrupt(ctx context.Context, workspace, runtimeDir string
 	case !ok:
 		return false, nil
 	default:
+		startedAt := time.Now()
+
+		logger.Info("quick-checking rocketclaw state store")
+
 		err = quickCheckSessionDB(ctx, db)
 		_ = db.Close()
+
+		if err != nil {
+			logger.Info("quick-checked rocketclaw state store", "elapsed", time.Since(startedAt), "error", err)
+		} else {
+			logger.Info("quick-checked rocketclaw state store", "elapsed", time.Since(startedAt))
+		}
 
 		if err == nil {
 			return false, nil

@@ -12,6 +12,10 @@ import (
 const sessionDBSchemaVersion = 2
 
 func initializeSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
+	startedAt := time.Now()
+
+	logger.Info("initializing rocketclaw state sqlite pragmas")
+
 	for _, statement := range []string{
 		`PRAGMA busy_timeout = 30000`,
 		`PRAGMA page_size = 4096`,
@@ -22,10 +26,18 @@ func initializeSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) e
 		`PRAGMA mmap_size = 268435456`,
 		`PRAGMA temp_store = MEMORY`,
 	} {
+		statementStartedAt := time.Now()
+
 		if err := execSessionDBStatement(ctx, db, statement); err != nil {
 			return err
 		}
+
+		if elapsed := time.Since(statementStartedAt); elapsed > time.Second {
+			logger.Warn("slow rocketclaw state sqlite pragma", "statement", statement, "elapsed", elapsed)
+		}
 	}
+
+	logger.Info("initialized rocketclaw state sqlite pragmas", "elapsed", time.Since(startedAt))
 
 	if err := migrateSessionDB(ctx, db, logger); err != nil {
 		return fmt.Errorf("migrate rocketcode session db: %w", err)

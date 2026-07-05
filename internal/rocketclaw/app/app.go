@@ -83,6 +83,12 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		return events.StartNewThreadRootResult{}, fmt.Errorf("text root is not available for %s turns", req.Source)
 	}
 
+	stateLogger := logger.With("component", "state_store")
+
+	startedAt := time.Now()
+
+	stateLogger.Info("acquiring rocketclaw state store lock", "workspace", cfg.Workspace, "runtime_dir", cfg.RuntimeDirName())
+
 	stateStoreLock, err := harnessbridge.AcquireStateStoreLock(cfg.Workspace, cfg.RuntimeDirName())
 	if err != nil {
 		if errors.Is(err, harnessbridge.ErrStateStoreLocked) {
@@ -92,22 +98,39 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		return fmt.Errorf("lock rocketcode session db: %w", err)
 	}
 
+	stateLogger.Info("acquired rocketclaw state store lock", "elapsed", time.Since(startedAt))
+
 	defer func() {
 		if err := stateStoreLock.Close(); err != nil {
 			logger.Warn("release rocketcode session db lock", "error", err)
 		}
 	}()
 
-	if recovered, err := harnessbridge.RecoverSessionDBIfCorrupt(runCtx, cfg.Workspace, cfg.RuntimeDirName()); err != nil {
+	startedAt = time.Now()
+
+	stateLogger.Info("checking rocketclaw state store corruption", "workspace", cfg.Workspace, "runtime_dir", cfg.RuntimeDirName())
+
+	recovered, err := harnessbridge.RecoverSessionDBIfCorrupt(runCtx, cfg.Workspace, cfg.RuntimeDirName(), stateLogger)
+	if err != nil {
 		return fmt.Errorf("recover rocketcode session db: %w", err)
-	} else if recovered {
+	}
+
+	stateLogger.Info("checked rocketclaw state store corruption", "recovered", recovered, "elapsed", time.Since(startedAt))
+
+	if recovered {
 		logger.Warn("recovered corrupt rocketcode session db")
 	}
 
-	rocketcodeSessions, err := harnessbridge.NewSessionServiceIn(cfg.Workspace, cfg.RuntimeDirName(), logger.With("component", "state_store"))
+	startedAt = time.Now()
+
+	stateLogger.Info("starting rocketclaw state store", "workspace", cfg.Workspace, "runtime_dir", cfg.RuntimeDirName())
+
+	rocketcodeSessions, err := harnessbridge.NewSessionServiceIn(cfg.Workspace, cfg.RuntimeDirName(), stateLogger)
 	if err != nil {
 		return fmt.Errorf("start rocketcode session service: %w", err)
 	}
+
+	stateLogger.Info("started rocketclaw state store", "elapsed", time.Since(startedAt))
 
 	defer func() {
 		stopCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)

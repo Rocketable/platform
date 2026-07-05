@@ -737,7 +737,7 @@ func TestRecoverSessionDBIfCorruptRecoversIndexPageCorruption(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, file.Close())
 
-	recovered, err := RecoverSessionDBIfCorrupt(context.Background(), workspace, ".rocketclaw")
+	recovered, err := RecoverSessionDBIfCorrupt(context.Background(), workspace, ".rocketclaw", slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	assert.True(t, recovered)
 
