@@ -205,6 +205,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 			logger.Warn("shutdown requested; draining rocketclaw runtime", "reason", reason, "restart", restart)
 			stopVacuum()
 			cronjobs.StopAccepting()
+			questionBroker.timeoutUnanswered(context.Background())
 
 			go func() {
 				defer close(shutdownDone)
@@ -216,9 +217,6 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 				if err := cronjobs.Stop(shutdownCtx); err != nil {
 					logger.Warn("graceful shutdown stopped waiting for cronjobs idle", "error", err)
 				}
-
-				logger.Info("graceful shutdown canceling unanswered questions")
-				questionBroker.cancelUnanswered(shutdownCtx)
 
 				logger.Info("graceful shutdown waiting for inbound queue handoff", "phase", "before intake stop")
 

@@ -100,3 +100,62 @@ func TestAskUserQuestionBrokerDeletesQuestionBeforeTextAnswerReturns(t *testing.
 	assert.Equal(t, events.AskUserQuestionAnswer{Custom: "free text", Source: events.SourceSlack}, <-done)
 	assert.Empty(t, errs)
 }
+
+func TestAskUserQuestionBrokerShutdownTimeoutCompletesPendingWait(t *testing.T) {
+	b := newAskUserQuestionBroker(slog.New(slog.DiscardHandler))
+	target := events.TextConversationTarget{ChannelID: "C1", MessageID: "M1", ThreadID: "T1"}
+	deleted := make(chan events.TextConversationTarget, 1)
+	b.post = func(context.Context, *events.AskUserQuestionRequest) (events.TextConversationTarget, error) {
+		return target, nil
+	}
+	b.delete = func(_ context.Context, got events.TextConversationTarget) error {
+		deleted <- got
+
+		return nil
+	}
+
+	done := make(chan events.AskUserQuestionAnswer, 1)
+	errs := make(chan error, 1)
+
+	go func() {
+		answer, err := b.ask(t.Context(), &events.AskUserQuestionRequest{ID: "question-1", Source: events.SourceSlack})
+		if err != nil {
+			errs <- err
+
+			return
+		}
+
+		done <- answer
+	}()
+
+	require.Eventually(t, func() bool {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+
+		return b.pending["question-1"] != nil
+	}, time.Second, time.Millisecond)
+
+	b.timeoutUnanswered(t.Context())
+
+	assert.Equal(t, target, <-deleted)
+	assert.Equal(t, events.AskUserQuestionAnswer{Custom: askUserQuestionDrainText, Source: events.SourceSlack}, <-done)
+	assert.Empty(t, errs)
+}
+
+func TestAskUserQuestionBrokerShutdownTimeoutMakesLaterCallsInert(t *testing.T) {
+	b := newAskUserQuestionBroker(slog.New(slog.DiscardHandler))
+	posts := 0
+	b.post = func(context.Context, *events.AskUserQuestionRequest) (events.TextConversationTarget, error) {
+		posts++
+
+		return events.TextConversationTarget{}, nil
+	}
+
+	b.timeoutUnanswered(t.Context())
+
+	answer, err := b.ask(t.Context(), &events.AskUserQuestionRequest{ID: "question-1", Source: events.SourceSlack})
+	require.NoError(t, err)
+
+	assert.Equal(t, events.AskUserQuestionAnswer{Custom: askUserQuestionDrainText, Source: events.SourceSlack}, answer)
+	assert.Zero(t, posts)
+}
