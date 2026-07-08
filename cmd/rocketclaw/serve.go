@@ -47,12 +47,12 @@ func runServe(args []string) error {
 	if err := app.Run(ctx, cfg, configPath, logger); err != nil {
 		if errors.Is(err, app.ErrRestartRequested) {
 			logger.Info("rocketclaw restart requested; exiting with code 255 for supervisor restart")
-			return exitCodeError(255)
+			return serveRunError(err)
 		}
 
 		logger.Error("rocketclaw exited with error", "error", err)
 
-		return fmt.Errorf("run rocketclaw: %w", err)
+		return serveRunError(err)
 	}
 
 	logger.Info("rocketclaw stopped")
@@ -62,6 +62,14 @@ func runServe(args []string) error {
 	}
 
 	return nil
+}
+
+func serveRunError(err error) error {
+	if errors.Is(err, app.ErrRestartRequested) {
+		return exitCodeError(255)
+	}
+
+	return fmt.Errorf("run rocketclaw: %w", err)
 }
 
 func buildInfoMainVersion() string {

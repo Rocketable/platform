@@ -17,15 +17,12 @@ type askUserQuestionPending struct {
 }
 
 type askUserQuestionBroker struct {
-	log      *slog.Logger
-	post     func(context.Context, *events.AskUserQuestionRequest) (events.TextConversationTarget, error)
-	delete   func(context.Context, events.TextConversationTarget) error
-	mu       sync.Mutex
-	draining bool
-	pending  map[string]*askUserQuestionPending
+	log     *slog.Logger
+	post    func(context.Context, *events.AskUserQuestionRequest) (events.TextConversationTarget, error)
+	delete  func(context.Context, events.TextConversationTarget) error
+	mu      sync.Mutex
+	pending map[string]*askUserQuestionPending
 }
-
-const askUserQuestionDrainText = "timed out while waiting for human partner answer"
 
 func newAskUserQuestionBroker(log *slog.Logger) *askUserQuestionBroker {
 	errPost := func(context.Context, *events.AskUserQuestionRequest) (events.TextConversationTarget, error) {
@@ -38,11 +35,6 @@ func newAskUserQuestionBroker(log *slog.Logger) *askUserQuestionBroker {
 
 func (b *askUserQuestionBroker) ask(ctx context.Context, req *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error) {
 	b.mu.Lock()
-	if b.draining {
-		b.mu.Unlock()
-
-		return events.AskUserQuestionAnswer{Custom: askUserQuestionDrainText, Source: events.SourceSlack}, nil
-	}
 
 	target, err := b.post(ctx, req)
 	if err != nil {
@@ -66,7 +58,7 @@ func (b *askUserQuestionBroker) ask(ctx context.Context, req *events.AskUserQues
 		b.mu.Lock()
 		delete(b.pending, req.ID)
 		b.mu.Unlock()
-		b.deletePending(ctx, p)
+		b.deletePending(context.WithoutCancel(ctx), p)
 
 		return events.AskUserQuestionAnswer{}, fmt.Errorf("wait for human answer: %w", ctx.Err())
 	}
@@ -87,20 +79,6 @@ func (b *askUserQuestionBroker) answer(ctx context.Context, id string, answer ev
 	p.ch <- answer
 
 	return true
-}
-
-func (b *askUserQuestionBroker) timeoutUnanswered(ctx context.Context) {
-	b.mu.Lock()
-	pending := b.pending
-	b.pending = map[string]*askUserQuestionPending{}
-	b.draining = true
-	b.mu.Unlock()
-
-	for _, p := range pending {
-		b.deletePending(ctx, p)
-
-		p.ch <- events.AskUserQuestionAnswer{Custom: askUserQuestionDrainText, Source: events.SourceSlack}
-	}
 }
 
 func (b *askUserQuestionBroker) deletePending(ctx context.Context, p *askUserQuestionPending) {

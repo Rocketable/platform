@@ -178,7 +178,6 @@ type OutboundMessage struct {
 	deliveryInit, deliveredOnce sync.Once
 	delivered                   chan struct{}
 	deliveryErr                 error
-	deliveryNotify              func(error)
 }
 
 // MainConversationID returns the stable key for the shared main session.
@@ -353,9 +352,6 @@ func (m *OutboundMessage) MarkDelivered(err error) {
 	ch := m.deliveryChannel()
 	m.deliveredOnce.Do(func() {
 		m.deliveryErr = err
-		if m.deliveryNotify != nil {
-			m.deliveryNotify(err)
-		}
 
 		close(ch)
 	})

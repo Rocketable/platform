@@ -34,7 +34,7 @@ Runnable entry points:
 
 ### RocketClaw
 
-`internal/rocketclaw` is the long-running service runtime around RocketCode. It provides persistent conversations, Slack connector handling, external MCP, cron-defined background prompts, one-shot and recurring scheduled messages, inbound and outbound attachments, graceful restart, and SQLite state under the selected runtime directory.
+`internal/rocketclaw` is the long-running service runtime around RocketCode. It provides persistent conversations, Slack connector handling, external MCP, cron-defined background prompts, one-shot and recurring scheduled messages, inbound and outbound attachments, supervisor restart, and SQLite state under the selected runtime directory.
 
 The runnable entry point is `cmd/rocketclaw`. Run `rocketclaw help` for setup, validation, session inspection, and operational commands.
 

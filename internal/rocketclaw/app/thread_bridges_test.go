@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -652,7 +651,7 @@ func TestThreadBridgeManagerCanSummarizeRestoredThread(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	bridge := &fakeDirectBridge{submits: nil, seeds: nil, summarizeStarted: nil, releaseSummarize: make(chan summarizeOutcome, 1), waitStarted: nil, releaseWait: nil}
+	bridge := &fakeDirectBridge{submits: nil, seeds: nil, summarizeStarted: nil, releaseSummarize: make(chan summarizeOutcome, 1)}
 	manager := newThreadBridgeManager(bus, nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
 
 	bridge.releaseSummarize <- summarizeOutcome{text: "summary text", err: nil}
@@ -789,39 +788,6 @@ func TestThreadBridgeManagerRecordsResponseCheckpoint(t *testing.T) {
 	assert.Equal(t, harnessbridge.ResponseCheckpointState{ConversationID: "main", SessionEntryID: 7, ResponseID: "resp", Model: "gpt-5.5", AssistantText: "answer"}, checkpoint)
 }
 
-func TestThreadBridgeManagerWaitIdleWaitsForActiveBridges(t *testing.T) {
-	workspace := t.TempDir()
-	store := newTestSessionService(t, workspace)
-	bridge := &fakeDirectBridge{submits: nil, seeds: nil, summarizeStarted: nil, releaseSummarize: nil, waitStarted: make(chan struct{}, 1), releaseWait: make(chan error, 1)}
-
-	var logs bytes.Buffer
-
-	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.NewTextHandler(&logs, nil)), func(bridgeConfig) directBridge { return bridge })
-	require.NoError(t, manager.StartThread(context.Background(), "main", true, slackTarget("D123", "111.222"), newThreadInboundMessage("start", "111.222", "111.222")))
-
-	waitDone := make(chan error, 1)
-
-	go func() { waitDone <- manager.WaitIdle(context.Background()) }()
-
-	<-bridge.waitStarted
-
-	select {
-	case err := <-waitDone:
-		t.Fatalf("WaitIdle returned before bridge idle: %v", err)
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	bridge.releaseWait <- nil
-
-	require.NoError(t, <-waitDone)
-
-	logOutput := logs.String()
-	assert.Contains(t, logOutput, "thread bridge manager idle wait state")
-	assert.Contains(t, logOutput, "bridge_count=1")
-	assert.Contains(t, logOutput, "thread bridge idle wait state")
-	assert.Contains(t, logOutput, "conversation_id=slack-thread:D123:111.222")
-}
-
 func TestThreadBridgeManagerStopStopsActiveBridges(t *testing.T) {
 	store := newTestSessionService(t, t.TempDir())
 	bridges := make([]*fakeDirectBridge, 0, 2)
@@ -841,38 +807,6 @@ func TestThreadBridgeManagerStopStopsActiveBridges(t *testing.T) {
 	assert.Equal(t, 1, bridges[1].stops)
 }
 
-func TestThreadBridgeManagerStopAcceptingRejectsNewSubmissions(t *testing.T) {
-	workspace := t.TempDir()
-	store := newTestSessionService(t, workspace)
-	conversationID := harnessbridge.SlackThreadConversationID("D123", "111.222")
-	require.NoError(t, store.UpsertThread(conversationID, "main"))
-
-	checkpointKey := harnessbridge.SlackResponseCheckpointKey("D123", "111.222")
-	require.NoError(t, store.UpsertResponseCheckpoint(checkpointKey, harnessbridge.ResponseCheckpointState{ConversationID: "main", SessionEntryID: 9, ResponseID: "resp", Model: "gpt-5.5", AssistantText: "answer"}))
-
-	bridge := new(fakeDirectBridge)
-	manager := newThreadBridgeManager(events.New(), nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
-	require.NoError(t, manager.StartThread(context.Background(), "main", false, slackTarget("D123", "111.222"), newThreadInboundMessage("start", "111.222", "111.222")))
-	manager.StopAccepting()
-
-	err := manager.StartThread(context.Background(), "main", false, slackTarget("D123", "222.333"), newThreadInboundMessage("late start", "222.333", "222.333"))
-	require.ErrorContains(t, err, "thread bridges are draining")
-
-	handled, err := manager.SubmitThreadReply(context.Background(), slackTarget("D123", "111.222"), newThreadInboundMessage("late reply", "333.444", "111.222"))
-	require.ErrorContains(t, err, "thread bridges are draining")
-	assert.False(t, handled)
-
-	err = manager.SubmitExternalMCP(context.Background(), "main", "external_mcp:main:late", newThreadInboundMessage("late external", "444.555", "111.222"))
-	require.ErrorContains(t, err, "thread bridges are draining")
-
-	handled, err = manager.SubmitResponseThreadReply(context.Background(), events.TextConversationTarget{ChannelID: "D123", MessageID: "111.222", ThreadID: "111.222"}, newThreadInboundMessage("late response", "555.666", "111.222"))
-	require.ErrorContains(t, err, "thread bridges are draining")
-	assert.True(t, handled)
-
-	require.Len(t, bridge.submits, 1)
-	assert.Equal(t, "start", bridge.submits[0].Text)
-}
-
 type fakeDirectBridge struct {
 	submits             []*events.InboundMessage
 	seeds               []events.ResponseCheckpoint
@@ -882,8 +816,6 @@ type fakeDirectBridge struct {
 	errSeedConversation error
 	summarizeStarted    chan struct{}
 	releaseSummarize    chan summarizeOutcome
-	waitStarted         chan struct{}
-	releaseWait         chan error
 	startedCtx          context.Context
 	interrupts          int
 	interruptResult     *events.InboundMessage
@@ -941,23 +873,6 @@ func (f *fakeDirectBridge) Summarize(_ context.Context, _ string) (string, error
 	outcome := <-f.releaseSummarize
 
 	return outcome.text, outcome.err
-}
-
-func (f *fakeDirectBridge) WaitIdle(ctx context.Context) error {
-	if f.waitStarted != nil {
-		f.waitStarted <- struct{}{}
-	}
-
-	if f.releaseWait == nil {
-		return nil
-	}
-
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("wait for fake bridge idle: %w", ctx.Err())
-	case err := <-f.releaseWait:
-		return err
-	}
 }
 
 func (f *fakeDirectBridge) InterruptActiveTurn() *events.InboundMessage {

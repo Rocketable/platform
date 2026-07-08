@@ -247,13 +247,6 @@ func (m *Manager) Stop(ctx context.Context) error {
 	}
 }
 
-// StopAccepting prevents queued cron triggers from starting new jobs.
-func (m *Manager) StopAccepting() {
-	m.mu.Lock()
-	m.closed = true
-	m.mu.Unlock()
-}
-
 // LoadOneOffCronjob resolves and loads one live cronjob for a managed Slack thread run.
 func (m *Manager) LoadOneOffCronjob(target string) (OneOffCronjob, error) {
 	target = strings.TrimSpace(target)

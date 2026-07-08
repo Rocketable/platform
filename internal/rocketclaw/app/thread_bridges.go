@@ -22,7 +22,6 @@ type directBridge interface {
 	SeedThreadFromCron(ctx context.Context, seedText string) error
 	SeedResponseThread(ctx context.Context, checkpoint events.ResponseCheckpoint) error
 	Summarize(ctx context.Context, prompt string) (string, error)
-	WaitIdle(ctx context.Context) error
 	InterruptActiveTurn() *events.InboundMessage
 	SwitchAgent(agent string)
 }
@@ -71,9 +70,8 @@ type threadBridgeManager struct {
 	targets []events.OutputTarget
 	text    primaryTextBinding
 
-	mu       sync.Mutex
-	draining bool
-	bridges  map[string]*managedThreadBridge
+	mu      sync.Mutex
+	bridges map[string]*managedThreadBridge
 }
 
 func newThreadBridgeManager(bus *events.Bus, runtime *config.Config, store *harnessbridge.SessionService, logger *slog.Logger, factory bridgeFactory) *threadBridgeManager {
@@ -136,30 +134,6 @@ func (m *threadBridgeManager) Stop() error {
 	}
 
 	return errStop
-}
-
-func (m *threadBridgeManager) StopAccepting() {
-	m.mu.Lock()
-	m.draining = true
-	m.mu.Unlock()
-}
-
-func (m *threadBridgeManager) WaitIdle(ctx context.Context) error {
-	var errWait error
-
-	bridges := m.bridgesSnapshot()
-	m.mu.Lock()
-	draining := m.draining
-	m.mu.Unlock()
-
-	m.log.Info("thread bridge manager idle wait state", "bridge_count", len(bridges), "draining", draining)
-
-	for i := range bridges {
-		m.log.Info("thread bridge idle wait state", "conversation_id", bridges[i].conversationID, "summarizing", bridges[i].summarizing, "queued_replies", bridges[i].queuedReplies)
-		errWait = errors.Join(errWait, bridges[i].bridge.WaitIdle(ctx))
-	}
-
-	return errWait
 }
 
 func (m *threadBridgeManager) StartPendingScheduledMessages() error {
@@ -755,10 +729,6 @@ func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread h
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	if m.draining {
-		return nil, false, errors.New("thread bridges are draining")
-	}
 
 	if managed := m.bridges[conversationID]; managed != nil {
 		return managed, false, nil

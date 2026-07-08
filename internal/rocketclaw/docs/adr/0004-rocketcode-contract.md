@@ -104,7 +104,7 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 
 | Tool                                         | Contract                                                                                                                      |
 |----------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------|
-| `rocketclaw_restart`                          | Schedules graceful restart for approved runtime configuration changes, including selected config file and overlay-list changes.                                                         |
+| `rocketclaw_restart`                          | Records pending restart notification/requester state for approved runtime configuration changes, including selected config file and overlay-list changes, then cancels the runtime for supervisor restart. |
 | `rocketclaw_reload`                           | Reapplies effective runtime assets from the already-loaded runtime configuration, including fresh remote content for already-loaded overlay entries and local workspace overlays from disk, after staged validation succeeds; failed validation returns model-visible failure text and leaves live runtime assets unchanged. |
 | `rocketclaw_schedule_message`                 | Schedules one-shot delayed prompts or recurring delayed prompts through the owning bridge context. Recurring prompts use optional `recurring: true`, require `send_this_in` from 1m through 1h, persist until reset, and do not replay missed intervals. |
 | `rocketclaw_reset_scheduled_messages`         | Clears scheduled messages for the owning bridge context.                                                                      |
@@ -230,3 +230,4 @@ Persistent bridge tools are restart, reload, schedule message, reset scheduled m
 - 2026-07-04: Added `rocketclaw_reload` to persistent bridge and raw-run RocketClaw tools with validation-before-commit runtime asset semantics.
 - 2026-07-07: Changed the empty RocketCode runtime/default model to `gpt-5.5` and added RocketClaw pass-through of top-level `auto_approver_model` for embedded automatic permission reviews.
 - 2026-07-07: Added top-level `seed_compaction_model` for RocketClaw-owned response checkpoint and inherited-context seed replay compaction model selection.
+- 2026-07-07: Replaced `rocketclaw_restart` graceful-restart tool wording with pending restart notification/requester recording followed by runtime cancellation for supervisor restart.

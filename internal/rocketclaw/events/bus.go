@@ -6,14 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"log/slog"
-	"strings"
 	"sync"
-)
-
-const (
-	inboundLogPreviewRunes = 160
-	inboundLogQueueLimit   = 5
 )
 
 // ErrBusClosed reports that an event was published after the bus shut down.
@@ -27,38 +20,11 @@ type Bus struct {
 	inboundClosed bool
 	closeOnce     sync.Once
 
-	inboundHumans   []inboundMessageEntry
-	inboundAutos    []inboundMessageEntry
-	inboundPending  []inboundMessageEntry
-	outbound        []*OutboundMessage
-	outboundPending int
-	observers       map[*Observer]struct{}
-}
-
-type inboundMessageEntry struct {
-	msg     *InboundMessage
-	summary inboundLogMessageSummary
-}
-
-type inboundLogMessageSummary struct {
-	Source                  Source      `json:"source,omitempty"`
-	Kind                    InboundKind `json:"kind,omitempty"`
-	Label                   string      `json:"label,omitempty"`
-	Human                   bool        `json:"human"`
-	GoalTurn                bool        `json:"goal_turn"`
-	ConversationID          string      `json:"conversation_id,omitempty"`
-	TextPreview             string      `json:"text_preview"`
-	TextLen                 int         `json:"text_len"`
-	TextTruncated           bool        `json:"text_truncated"`
-	VerbatimPreview         *string     `json:"verbatim_preview,omitempty"`
-	VerbatimLen             *int        `json:"verbatim_len,omitempty"`
-	VerbatimTruncated       *bool       `json:"verbatim_truncated,omitempty"`
-	AttachmentCount         int         `json:"attachment_count"`
-	VerbatimAttachmentCount int         `json:"verbatim_attachment_count"`
-	AttachmentWarningCount  int         `json:"attachment_warning_count"`
-	SlackChannel            string      `json:"slack_channel,omitempty"`
-	SlackMessageTS          string      `json:"slack_message_ts,omitempty"`
-	SlackThreadTS           string      `json:"slack_thread_ts,omitempty"`
+	inboundHumans  []*InboundMessage
+	inboundAutos   []*InboundMessage
+	inboundPending []*InboundMessage
+	outbound       []*OutboundMessage
+	observers      map[*Observer]struct{}
 }
 
 // Observer receives non-consuming inbound and outbound bus events.
@@ -89,11 +55,10 @@ func (b *Bus) PublishInbound(ctx context.Context, msg *InboundMessage) error {
 		return ErrBusClosed
 	}
 
-	entry := inboundMessageEntry{msg: msg, summary: inboundLogSummary(msg)}
 	if msg != nil && msg.Human {
-		b.inboundHumans = append(b.inboundHumans, entry)
+		b.inboundHumans = append(b.inboundHumans, msg)
 	} else {
-		b.inboundAutos = append(b.inboundAutos, entry)
+		b.inboundAutos = append(b.inboundAutos, msg)
 	}
 
 	b.publishObservedLocked(ObservedMessage{Inbound: msg})
@@ -111,67 +76,6 @@ func (b *Bus) StopInbound() {
 	b.mu.Unlock()
 }
 
-// WaitInboundDequeued waits for accepted inbound work to leave the bus queues.
-func (b *Bus) WaitInboundDequeued(ctx context.Context, logger *slog.Logger) error {
-	stop := b.notifyOnContext(ctx)
-	defer stop()
-
-	b.mu.Lock()
-
-	for {
-		humanQueueLen := len(b.inboundHumans)
-		autoQueueLen := len(b.inboundAutos)
-		inboundPending := len(b.inboundPending)
-		inboundClosed := b.inboundClosed
-		busClosed := b.closed
-		idle := humanQueueLen == 0 && autoQueueLen == 0 && inboundPending == 0
-		humanQueue, humanQueueOmitted := inboundLogSummaries(b.inboundHumans)
-		autoQueue, autoQueueOmitted := inboundLogSummaries(b.inboundAutos)
-		inboundPendingMessages, inboundPendingOmitted := inboundLogSummaries(b.inboundPending)
-
-		args := []any{
-			"human_queue_len", humanQueueLen,
-			"auto_queue_len", autoQueueLen,
-			"inbound_pending", inboundPending,
-			"inbound_pending_len", inboundPending,
-			"inbound_closed", inboundClosed,
-			"bus_closed", busClosed,
-			"human_queue", humanQueue,
-			"auto_queue", autoQueue,
-			"inbound_pending_messages", inboundPendingMessages,
-		}
-		if humanQueueOmitted > 0 {
-			args = append(args, "human_queue_omitted", humanQueueOmitted)
-		}
-
-		if autoQueueOmitted > 0 {
-			args = append(args, "auto_queue_omitted", autoQueueOmitted)
-		}
-
-		if inboundPendingOmitted > 0 {
-			args = append(args, "inbound_pending_omitted", inboundPendingOmitted)
-		}
-		b.mu.Unlock()
-
-		logger.Info("inbound queue handoff wait state", args...)
-
-		if idle {
-			return nil
-		}
-
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("wait for inbound idle: %w", err)
-		}
-
-		b.mu.Lock()
-		if len(b.inboundHumans) == 0 && len(b.inboundAutos) == 0 && len(b.inboundPending) == 0 {
-			continue
-		}
-
-		b.cond.Wait()
-	}
-}
-
 // PublishOutbound publishes a text message to all output sinks.
 func (b *Bus) PublishOutbound(ctx context.Context, msg *OutboundMessage) error {
 	if err := ctx.Err(); err != nil {
@@ -183,16 +87,6 @@ func (b *Bus) PublishOutbound(ctx context.Context, msg *OutboundMessage) error {
 
 	if b.closed {
 		return ErrBusClosed
-	}
-
-	if msg != nil {
-		b.outboundPending++
-		msg.deliveryNotify = func(error) {
-			b.mu.Lock()
-			b.outboundPending--
-			b.cond.Broadcast()
-			b.mu.Unlock()
-		}
 	}
 
 	b.outbound = append(b.outbound, msg)
@@ -232,46 +126,6 @@ func (b *Bus) Observe(ctx context.Context) iter.Seq[ObservedMessage] {
 	}
 }
 
-// WaitOutboundIdle waits until outbound work is queued nowhere and delivered everywhere.
-func (b *Bus) WaitOutboundIdle(ctx context.Context, logger *slog.Logger) error {
-	stop := b.notifyOnContext(ctx)
-	defer stop()
-
-	b.mu.Lock()
-
-	for {
-		outboundQueueLen := len(b.outbound)
-		outboundPending := b.outboundPending
-		busClosed := b.closed
-		idle := outboundQueueLen == 0 && outboundPending == 0
-		args := []any{"outbound_queue_len", outboundQueueLen, "outbound_pending", outboundPending, "bus_closed", busClosed}
-
-		if len(b.outbound) > 0 && b.outbound[0] != nil {
-			queued := b.outbound[0]
-			targets := append([]OutputTarget(nil), queued.Targets...)
-			args = append(args, "next_source", queued.Source, "next_targets", targets, "next_conversation_id", queued.ConversationID, "next_turn_id", queued.TurnID, "next_sequence", queued.Sequence, "next_progress", queued.PostProgressText, "next_complete", queued.Complete)
-		}
-		b.mu.Unlock()
-
-		logger.Info("outbound drain wait state", args...)
-
-		if idle {
-			return nil
-		}
-
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("wait for outbound idle: %w", err)
-		}
-
-		b.mu.Lock()
-		if len(b.outbound) == 0 && b.outboundPending == 0 {
-			continue
-		}
-
-		b.cond.Wait()
-	}
-}
-
 // Inbound returns a single-use iterator over inbound text messages.
 func (b *Bus) Inbound(ctx context.Context) iter.Seq[*InboundMessage] {
 	return func(yield func(*InboundMessage) bool) {
@@ -288,7 +142,7 @@ func (b *Bus) Inbound(ctx context.Context) iter.Seq[*InboundMessage] {
 
 			b.mu.Lock()
 			for i := range b.inboundPending {
-				if b.inboundPending[i].msg == msg {
+				if b.inboundPending[i] == msg {
 					b.inboundPending = append(b.inboundPending[:i], b.inboundPending[i+1:]...)
 					break
 				}
@@ -344,19 +198,19 @@ func (b *Bus) dequeueInbound(ctx context.Context) (*InboundMessage, bool) {
 		}
 
 		if len(b.inboundHumans) > 0 {
-			entry := b.inboundHumans[0]
+			msg := b.inboundHumans[0]
 			b.inboundHumans = b.inboundHumans[1:]
-			b.inboundPending = append(b.inboundPending, entry)
+			b.inboundPending = append(b.inboundPending, msg)
 
-			return entry.msg, true
+			return msg, true
 		}
 
 		if len(b.inboundAutos) > 0 {
-			entry := b.inboundAutos[0]
+			msg := b.inboundAutos[0]
 			b.inboundAutos = b.inboundAutos[1:]
-			b.inboundPending = append(b.inboundPending, entry)
+			b.inboundPending = append(b.inboundPending, msg)
 
-			return entry.msg, true
+			return msg, true
 		}
 
 		if b.inboundClosed {
@@ -386,65 +240,6 @@ func (b *Bus) dequeueOutbound(ctx context.Context) (*OutboundMessage, bool) {
 
 		b.cond.Wait()
 	}
-}
-
-func inboundLogSummaries(entries []inboundMessageEntry) (summaries []inboundLogMessageSummary, omitted int) {
-	limit := min(len(entries), inboundLogQueueLimit)
-
-	summaries = make([]inboundLogMessageSummary, 0, limit)
-	for i := range entries[:limit] {
-		summaries = append(summaries, entries[i].summary)
-	}
-
-	return summaries, len(entries) - limit
-}
-
-func inboundLogSummary(msg *InboundMessage) inboundLogMessageSummary {
-	if msg == nil {
-		return inboundLogMessageSummary{}
-	}
-
-	textPreview, textLen, textTruncated := inboundLogPreview(msg.Text)
-	summary := inboundLogMessageSummary{
-		Source:                  msg.Source,
-		Kind:                    msg.Kind,
-		Label:                   msg.Label,
-		Human:                   msg.Human,
-		GoalTurn:                msg.GoalTurn,
-		ConversationID:          msg.ConversationID,
-		TextPreview:             textPreview,
-		TextLen:                 textLen,
-		TextTruncated:           textTruncated,
-		AttachmentCount:         len(msg.Attachments),
-		VerbatimAttachmentCount: len(msg.VerbatimAttachments),
-		AttachmentWarningCount:  len(msg.AttachmentWarnings),
-	}
-
-	if msg.VerbatimMessage != "" {
-		verbatimPreview, verbatimLen, verbatimTruncated := inboundLogPreview(msg.VerbatimMessage)
-		summary.VerbatimPreview = &verbatimPreview
-		summary.VerbatimLen = &verbatimLen
-		summary.VerbatimTruncated = &verbatimTruncated
-	}
-
-	if msg.SlackReply != nil {
-		summary.SlackChannel = msg.SlackReply.ChannelID
-		summary.SlackMessageTS = msg.SlackReply.MessageTS
-		summary.SlackThreadTS = msg.SlackReply.ThreadTS
-	}
-
-	return summary
-}
-
-func inboundLogPreview(text string) (preview string, textLen int, truncated bool) {
-	textLen = len([]rune(text))
-
-	trimmed := []rune(strings.TrimSpace(text))
-	if len(trimmed) <= inboundLogPreviewRunes {
-		return string(trimmed), textLen, false
-	}
-
-	return string(trimmed[:inboundLogPreviewRunes]), textLen, true
 }
 
 func (b *Bus) publishObservedLocked(msg ObservedMessage) {

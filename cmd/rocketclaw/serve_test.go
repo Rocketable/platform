@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/app"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,4 +47,9 @@ func TestRunServeReportsConfigLoadError(t *testing.T) {
 
 	err = runServe(nil)
 	require.ErrorContains(t, err, "load config")
+}
+
+func TestServeRunErrorMapsRestartRequestToSupervisorExitCode(t *testing.T) {
+	err := serveRunError(app.ErrRestartRequested)
+	require.ErrorIs(t, err, exitCodeError(255))
 }

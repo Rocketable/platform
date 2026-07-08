@@ -69,7 +69,6 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	var (
 		shutdownOnce     sync.Once
-		shutdownDone     = make(chan struct{})
 		restartRequested = make(chan struct{})
 		mainBridge       *harnessbridge.Bridge
 		threadBridges    *threadBridgeManager
@@ -202,84 +201,8 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 				close(restartRequested)
 			}
 
-			logger.Warn("shutdown requested; draining rocketclaw runtime", "reason", reason, "restart", restart)
-			stopVacuum()
-			cronjobs.StopAccepting()
-			questionBroker.timeoutUnanswered(context.Background())
-
-			go func() {
-				defer close(shutdownDone)
-
-				shutdownCtx := context.Background()
-
-				logger.Info("graceful shutdown waiting for active cron jobs")
-
-				if err := cronjobs.Stop(shutdownCtx); err != nil {
-					logger.Warn("graceful shutdown stopped waiting for cronjobs idle", "error", err)
-				}
-
-				logger.Info("graceful shutdown waiting for inbound queue handoff", "phase", "before intake stop")
-
-				if err := bus.WaitInboundDequeued(shutdownCtx, logger.With("phase", "before intake stop")); err != nil {
-					logger.Warn("graceful shutdown stopped waiting for inbound queue handoff", "error", err)
-				}
-
-				logger.Info("graceful shutdown waiting for bridge idle", "bridge", "main", "phase", "before bridge stop")
-
-				if err := mainBridge.WaitIdle(shutdownCtx); err != nil {
-					logger.Warn("graceful shutdown stopped waiting for bridge idle", "error", err)
-				}
-
-				logger.Info("graceful shutdown waiting for bridge idle", "bridge", "threads", "phase", "before bridge stop")
-
-				if err := threadBridges.WaitIdle(shutdownCtx); err != nil {
-					logger.Warn("graceful shutdown stopped waiting for thread bridges idle", "error", err)
-				}
-
-				logger.Info("graceful shutdown stopping inbound intake and thread bridge accepts")
-				bus.StopInbound()
-				threadBridges.StopAccepting()
-
-				logger.Info("graceful shutdown waiting for inbound queue handoff", "phase", "after intake stop")
-
-				if err := bus.WaitInboundDequeued(shutdownCtx, logger.With("phase", "after intake stop")); err != nil {
-					logger.Warn("graceful shutdown stopped waiting for inbound queue handoff", "error", err)
-				}
-
-				logger.Info("graceful shutdown waiting for bridge idle", "bridge", "main", "phase", "after intake stop")
-
-				if err := mainBridge.WaitIdle(shutdownCtx); err != nil {
-					logger.Warn("graceful shutdown stopped waiting for bridge idle", "error", err)
-				}
-
-				logger.Info("graceful shutdown waiting for bridge idle", "bridge", "threads", "phase", "after intake stop")
-
-				if err := threadBridges.WaitIdle(shutdownCtx); err != nil {
-					logger.Warn("graceful shutdown stopped waiting for thread bridges idle", "error", err)
-				}
-
-				logger.Info("graceful shutdown stopping bridges")
-
-				_ = threadBridges.Stop()
-				_ = mainBridge.Stop()
-
-				logger.Info("graceful shutdown waiting for outbound drain")
-
-				if err := bus.WaitOutboundIdle(shutdownCtx, logger); err != nil {
-					logger.Warn("graceful shutdown stopped waiting for outbound drain", "error", err)
-				}
-
-				logger.Info("graceful shutdown stopping connectors")
-
-				for _, sink := range stops {
-					if err := sink.stop(shutdownCtx); err != nil {
-						logger.Warn("stop connector", "connector", sink.name, "error", err)
-					}
-				}
-
-				logger.Info("graceful shutdown drain complete; canceling runtime", "restart", restart)
-				cancel()
-			}()
+			logger.Warn("shutdown requested; canceling rocketclaw runtime", "reason", reason, "restart", restart)
+			cancel()
 		})
 
 		return started
@@ -292,7 +215,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 			logger.Warn("restart requested while shutdown already in progress", "reason", reason)
 		}
 
-		return "graceful restart scheduled", nil
+		return "restart requested; runtime cancellation started", nil
 	}
 
 	var (
@@ -382,7 +305,13 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	defer func() {
 		logger.Info("shutting down rocketclaw runtime")
 		startShutdown("runtime cleanup", false)
-		<-shutdownDone
+
+		cleanupCtx := context.Background()
+		for _, sink := range stops {
+			if err := sink.stop(cleanupCtx); err != nil {
+				logger.Warn("stop connector", "connector", sink.name, "error", err)
+			}
+		}
 	}()
 
 	if cfg.Slack.Enabled {

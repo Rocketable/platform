@@ -932,25 +932,6 @@ func TestBridgeStopAfterStartContextCanceledIsIdempotent(t *testing.T) {
 	require.NoError(t, bridge.Stop())
 }
 
-func TestBridgeWaitIdle(t *testing.T) {
-	var logs bytes.Buffer
-
-	bridge := &Bridge{log: slog.New(slog.NewTextHandler(&logs, nil)), config: Config{ConversationID: events.MainConversationID(), Agent: "main"}, requestCh: make(chan bridgeRequest, 1)}
-	require.NoError(t, bridge.WaitIdle(t.Context()))
-	assert.Contains(t, logs.String(), "bridge idle wait state")
-	assert.Contains(t, logs.String(), "conversation_id=main")
-	assert.Contains(t, logs.String(), "queue_len=0")
-
-	bridge.setHandling(true)
-	logs.Reset()
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
-	defer cancel()
-
-	require.Error(t, bridge.WaitIdle(ctx))
-	assert.Contains(t, logs.String(), "handling=true")
-}
-
 func TestBridgeForwardInboundFiltersConversation(t *testing.T) {
 	ctx := t.Context()
 
@@ -1735,20 +1716,26 @@ func TestBridgeDeletesScheduledMessageAfterSuccessfulHandling(t *testing.T) {
 
 	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "scheduled_message", "later", false)
 	inbound.HadNonImageAttachments = true
+	responseCh := inbound.EnableResponseWait()
 	require.NoError(t, bridge.enqueue(context.Background(), bridgeRequest{inbound: inbound, scheduledMessageID: "schedule-1"}, "submit scheduled message"))
 
 	outbound := readRocketCodeOutbound(t, bus)
 	assert.Equal(t, unsupportedFileFallback, outbound.Text)
 	outbound.MarkDelivered(nil)
 
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
-	defer waitCancel()
+	select {
+	case response := <-responseCh:
+		require.NoError(t, response.Err)
+	case <-time.After(time.Second):
+		t.Fatal("scheduled message response was not completed")
+	}
 
-	require.NoError(t, bridge.WaitIdle(waitCtx))
+	require.Eventually(t, func() bool {
+		messages, err := service.ScheduledMessages()
+		require.NoError(t, err)
 
-	messages, err := service.ScheduledMessages()
-	require.NoError(t, err)
-	assert.Empty(t, messages)
+		return len(messages) == 0
+	}, time.Second, time.Millisecond)
 }
 
 func TestBridgeKeepsScheduledMessageAfterHandlingError(t *testing.T) {
@@ -1767,16 +1754,22 @@ func TestBridgeKeepsScheduledMessageAfterHandlingError(t *testing.T) {
 
 	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "scheduled_message", "later", false)
 	inbound.HadNonImageAttachments = true
+	responseCh := inbound.EnableResponseWait()
 	require.NoError(t, bridge.enqueue(context.Background(), bridgeRequest{inbound: inbound, scheduledMessageID: "schedule-1"}, "submit scheduled message"))
 
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
-	defer waitCancel()
+	select {
+	case response := <-responseCh:
+		require.Error(t, response.Err)
+	case <-time.After(time.Second):
+		t.Fatal("scheduled message response was not completed")
+	}
 
-	require.NoError(t, bridge.WaitIdle(waitCtx))
+	require.Eventually(t, func() bool {
+		messages, err := service.ScheduledMessages()
+		require.NoError(t, err)
 
-	messages, err := service.ScheduledMessages()
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
+		return len(messages) == 1
+	}, time.Second, time.Millisecond)
 }
 
 func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.T) {
@@ -1795,20 +1788,28 @@ func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.
 
 	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "scheduled_message", "later", false)
 	inbound.HadNonImageAttachments = true
+	responseCh := inbound.EnableResponseWait()
 	require.NoError(t, bridge.enqueue(context.Background(), bridgeRequest{inbound: inbound, scheduledMessageID: "schedule-1", scheduledMessageRecurring: true}, "submit scheduled message"))
 
 	outbound := readRocketCodeOutbound(t, bus)
 	assert.Equal(t, unsupportedFileFallback, outbound.Text)
 	outbound.MarkDelivered(nil)
 
-	waitCtx, waitCancel := context.WithTimeout(context.Background(), time.Second)
-	defer waitCancel()
+	select {
+	case response := <-responseCh:
+		require.NoError(t, response.Err)
+	case <-time.After(time.Second):
+		t.Fatal("scheduled message response was not completed")
+	}
 
-	require.NoError(t, bridge.WaitIdle(waitCtx))
+	require.Eventually(t, func() bool {
+		messages, err := service.ScheduledMessages()
+		require.NoError(t, err)
 
-	messages, err := service.ScheduledMessages()
-	require.NoError(t, err)
-	require.Contains(t, messages, "schedule-1")
+		_, ok := messages["schedule-1"]
+
+		return ok
+	}, time.Second, time.Millisecond)
 }
 
 func TestBridgeStopDisarmsScheduledMessage(t *testing.T) {

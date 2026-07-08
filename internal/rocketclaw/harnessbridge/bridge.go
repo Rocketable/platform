@@ -267,48 +267,6 @@ func (b *Bridge) Stop() error {
 	return nil
 }
 
-// WaitIdle waits until queued bridge work has drained.
-func (b *Bridge) WaitIdle(ctx context.Context) error {
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-
-	logged := false
-
-	for {
-		b.mu.Lock()
-		handling := b.handling
-		stopped := b.stopped
-		agent := b.config.Agent
-		activeReply := b.activeReply
-		activeTurnInterrupted := b.activeTurnInterrupted
-		b.mu.Unlock()
-
-		queueLen := len(b.requestCh)
-		queueCap := cap(b.requestCh)
-
-		if !logged {
-			args := []any{"conversation_id", b.config.ConversationID, "agent", agent, "handling", handling, "queue_len", queueLen, "queue_cap", queueCap, "stopped", stopped, "active_turn_interrupted", activeTurnInterrupted}
-			if activeReply != nil && activeReply.SlackReply != nil {
-				args = append(args, "active_slack_channel", activeReply.SlackReply.ChannelID, "active_slack_thread", activeReply.SlackReply.ThreadTS)
-			}
-
-			b.log.Info("bridge idle wait state", args...)
-
-			logged = true
-		}
-
-		if !handling && queueLen == 0 {
-			return nil
-		}
-
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("wait for bridge idle: %w", ctx.Err())
-		case <-ticker.C:
-		}
-	}
-}
-
 // Submit enqueues one inbound message for this conversation.
 func (b *Bridge) Submit(ctx context.Context, msg *events.InboundMessage) error {
 	msg.ConversationID = b.config.ConversationID
