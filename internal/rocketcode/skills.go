@@ -264,7 +264,7 @@ func permissionPrompt(permissions PermissionSet) string {
 
 func permissionRulesHaveAllow(rules []PermissionRule) bool {
 	for _, rule := range rules {
-		if rule.Action == permissionAllow {
+		if rule.Action == permissionAllow || rule.Action == permissionAuto {
 			return true
 		}
 	}
@@ -276,7 +276,7 @@ func permissionRuleLines(bucketName string, rules []PermissionRule) []string {
 	fullAllowIndex := -1
 
 	for i, rule := range rules {
-		if rule.Pattern == "*" && rule.Action == permissionAllow {
+		if rule.Pattern == "*" && (rule.Action == permissionAllow || rule.Action == permissionAuto) {
 			fullAllowIndex = i
 		}
 	}
@@ -309,7 +309,7 @@ func permissionRuleLines(bucketName string, rules []PermissionRule) []string {
 	lines := []string{}
 
 	for _, rule := range rules {
-		if rule.Action == permissionAllow {
+		if rule.Action == permissionAllow || rule.Action == permissionAuto {
 			lines = append(lines, "- `"+markdownInlineCode(rule.Pattern)+"`")
 		}
 	}
