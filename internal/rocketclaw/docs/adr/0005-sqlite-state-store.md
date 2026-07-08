@@ -13,7 +13,7 @@ This ADR governs RocketClaw access to `<runtime-dir>/state.sqlite3`, including d
 
 ## Context
 
-RocketClaw stores persistent RocketCode sessions, managed thread routing, response checkpoints, external MCP mappings, scheduled messages, scheduled cron execution state, text connector goal-loop state, and restart notifications in one workspace-local SQLite file. The daemon and operational commands may access that file concurrently from separate processes. Divergent open paths, SQLite PRAGMAs, or connection limits would make lock behavior and durability depend on which interface touched the file.
+RocketClaw stores persistent RocketCode sessions, managed thread routing, response checkpoints, active-turn restart handoff rows, external MCP mappings, scheduled messages, scheduled cron execution state, text connector goal-loop state, and restart notifications in one workspace-local SQLite file. The daemon and operational commands may access that file concurrently from separate processes. Divergent open paths, SQLite PRAGMAs, or connection limits would make lock behavior and durability depend on which interface touched the file.
 
 ## Normative Contracts
 
@@ -26,6 +26,7 @@ RocketClaw stores persistent RocketCode sessions, managed thread routing, respon
 - That opener is the only place schema initialization and schema migrations for `<runtime-dir>/state.sqlite3` are applied.
 - All RocketClaw interfaces that inspect or mutate the state store, including the daemon runtime and `rocketclaw fc`, must use this opener or wrappers that delegate to it.
 - Scheduled cron execution state for `<runtime-dir>/state.sqlite3` must also use this centralized opener and schema initialization path.
+- Active-turn restart handoff rows for `<runtime-dir>/state.sqlite3` must also use this centralized opener and schema initialization path.
 
 ### Connection Concurrency
 
@@ -115,3 +116,4 @@ For newly created state stores, `PRAGMA page_size = 4096` and `PRAGMA auto_vacuu
 - 2026-06-14: Expanded goal-loop state storage to the generic text connector contract.
 - 2026-07-04: Added scheduled cron execution state to the centralized SQLite state store contract.
 - 2026-07-04: Moved state-store quick-check and copy-first corruption recovery from daemon startup to explicit `rocketclaw fc check`, which refuses while the daemon owns the state-store lock.
+- 2026-07-07: Added active-turn restart handoff rows to the centralized SQLite state store contract.

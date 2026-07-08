@@ -3,10 +3,13 @@ package harnessbridge
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	harness "github.com/Rocketable/platform/internal/rocketcode"
 )
 
 type stateDAO struct {
@@ -340,6 +343,175 @@ func (d stateDAO) markRestartRequester(ctx context.Context, conversationID strin
 	return nil
 }
 
+func (d stateDAO) upsertActiveTurn(ctx context.Context, checkpoint *harness.ActiveTurnCheckpoint, now time.Time) error {
+	turn, err := activeTurnStateFromCheckpoint(checkpoint, now)
+	if err != nil {
+		return err
+	}
+
+	return d.upsertActiveTurnState(ctx, &turn)
+}
+
+func (d stateDAO) upsertActiveTurnWithSourceMetadata(ctx context.Context, checkpoint *harness.ActiveTurnCheckpoint, sourceMetadata map[string]string, now time.Time) error {
+	turn, err := activeTurnStateFromCheckpoint(checkpoint, now)
+	if err != nil {
+		return err
+	}
+
+	turn.SourceMetadata = sourceMetadata
+
+	return d.upsertActiveTurnState(ctx, &turn)
+}
+
+func (d stateDAO) upsertActiveTurnState(ctx context.Context, turn *ActiveTurnState) error {
+	checkpointState := turn.Checkpoint
+
+	metadata, err := marshalActiveTurnJSON(turn.SourceMetadata)
+	if err != nil {
+		return fmt.Errorf("marshal active turn source metadata: %w", err)
+	}
+
+	replayInput, err := marshalActiveTurnJSON(checkpointState.ReplayInput)
+	if err != nil {
+		return fmt.Errorf("marshal active turn replay input: %w", err)
+	}
+
+	outputTrace, err := marshalActiveTurnJSON(checkpointState.OutputTrace)
+	if err != nil {
+		return fmt.Errorf("marshal active turn output trace: %w", err)
+	}
+
+	tokenUsage, err := marshalActiveTurnJSON(checkpointState.TokenUsage)
+	if err != nil {
+		return fmt.Errorf("marshal active turn token usage: %w", err)
+	}
+
+	openCalls, err := marshalActiveTurnJSON(checkpointState.OpenFunctionCalls)
+	if err != nil {
+		return fmt.Errorf("marshal active turn open function calls: %w", err)
+	}
+
+	completedOutputs, err := marshalActiveTurnJSON(checkpointState.CompletedFunctionOutputs)
+	if err != nil {
+		return fmt.Errorf("marshal active turn completed function outputs: %w", err)
+	}
+
+	_, err = d.db.ExecContext(ctx, `INSERT INTO active_turns (id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent, model = excluded.model, display_model = excluded.display_model, replay_input_json = excluded.replay_input_json, output_trace_json = excluded.output_trace_json, token_usage_json = excluded.token_usage_json, response_id = excluded.response_id, open_function_calls_json = excluded.open_function_calls_json, completed_function_outputs_json = excluded.completed_function_outputs_json, restart_notice_json = excluded.restart_notice_json, source_metadata_json = excluded.source_metadata_json, updated_at_unix_ns = excluded.updated_at_unix_ns`, checkpointState.TurnID, checkpointState.ConversationKey, checkpointState.Agent, checkpointState.Model, checkpointState.DisplayModel, replayInput, outputTrace, tokenUsage, checkpointState.ResponseID, openCalls, completedOutputs, "", metadata, timeUnixNano(turn.CreatedAt), timeUnixNano(turn.UpdatedAt))
+	if err != nil {
+		return fmt.Errorf("upsert active turn: %w", err)
+	}
+
+	return nil
+}
+
+func (d stateDAO) clearActiveTurn(ctx context.Context, turnID string) error {
+	turnID = strings.TrimSpace(turnID)
+	if turnID == "" {
+		return errors.New("active turn ID is required")
+	}
+
+	if _, err := d.db.ExecContext(ctx, `DELETE FROM active_turns WHERE id = ?`, turnID); err != nil {
+		return fmt.Errorf("clear active turn: %w", err)
+	}
+
+	return nil
+}
+
+func (d stateDAO) recoverableActiveTurns(ctx context.Context) ([]ActiveTurnState, error) {
+	rows, err := d.db.QueryContext(ctx, `SELECT id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns FROM active_turns ORDER BY conversation_id, updated_at_unix_ns DESC, id`)
+	if err != nil {
+		return nil, fmt.Errorf("query recoverable active turns: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var (
+		turns    []ActiveTurnState
+		corrupts []activeTurnCorruptError
+	)
+
+	for rows.Next() {
+		turn, err := scanActiveTurn(rows)
+		if err != nil {
+			if errCorrupt, ok := errors.AsType[activeTurnCorruptError](err); ok {
+				corrupts = append(corrupts, errCorrupt)
+
+				continue
+			}
+
+			return nil, err
+		}
+
+		turns = append(turns, turn)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read recoverable active turns: %w", err)
+	}
+
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close recoverable active turns rows: %w", err)
+	}
+
+	for _, errCorrupt := range corrupts {
+		_, err := d.db.ExecContext(ctx, `DELETE FROM active_turns WHERE id = ?`, errCorrupt.turnID)
+		if err != nil {
+			return nil, fmt.Errorf("delete corrupt active turn: %w", err)
+		}
+	}
+
+	return turns, nil
+}
+
+func (d stateDAO) activeTurn(ctx context.Context, turnID string) (ActiveTurnState, bool, error) {
+	row := d.db.QueryRowContext(ctx, `SELECT id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns FROM active_turns WHERE id = ?`, strings.TrimSpace(turnID))
+
+	turn, err := scanActiveTurn(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ActiveTurnState{}, false, nil
+	}
+
+	if err != nil {
+		return ActiveTurnState{}, false, fmt.Errorf("read active turn: %w", err)
+	}
+
+	return turn, true, nil
+}
+
+func activeTurnStateFromCheckpoint(checkpoint *harness.ActiveTurnCheckpoint, now time.Time) (ActiveTurnState, error) {
+	if checkpoint == nil {
+		return ActiveTurnState{}, errors.New("active turn checkpoint is required")
+	}
+
+	checkpointCopy := *checkpoint
+	checkpointCopy.TurnID = strings.TrimSpace(checkpointCopy.TurnID)
+	checkpointCopy.ConversationKey = strings.TrimSpace(checkpointCopy.ConversationKey)
+	checkpointCopy.Agent = strings.TrimSpace(checkpointCopy.Agent)
+	checkpointCopy.Model = strings.TrimSpace(checkpointCopy.Model)
+	checkpointCopy.DisplayModel = strings.TrimSpace(checkpointCopy.DisplayModel)
+	checkpointCopy.ResponseID = strings.TrimSpace(checkpointCopy.ResponseID)
+
+	turn := ActiveTurnState{Checkpoint: checkpointCopy, SourceMetadata: map[string]string{}, CreatedAt: now, UpdatedAt: now}
+
+	if turn.Checkpoint.TurnID == "" {
+		return ActiveTurnState{}, errors.New("active turn ID is required")
+	}
+
+	if turn.Checkpoint.ConversationKey == "" {
+		return ActiveTurnState{}, errors.New("active turn conversation ID is required")
+	}
+
+	return turn, nil
+}
+
+func marshalActiveTurnJSON(value any) (string, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("marshal active turn JSON: %w", err)
+	}
+
+	return string(data), nil
+}
+
 func boolInt(value bool) int {
 	if value {
 		return 1
@@ -366,6 +538,21 @@ func timeFromUnixNano(value int64) time.Time {
 
 type rowScanner interface {
 	Scan(...any) error
+}
+
+type activeTurnCorruptError struct {
+	turnID         string
+	conversationID string
+	field          string
+	err            error
+}
+
+func (e activeTurnCorruptError) Error() string {
+	return fmt.Sprintf("active turn %q conversation %q has corrupt %s: %v", e.turnID, e.conversationID, e.field, e.err)
+}
+
+func (e activeTurnCorruptError) Unwrap() error {
+	return e.err
 }
 
 func scanScheduledMessage(scanner rowScanner) (string, ScheduledMessageState, error) {
@@ -399,4 +586,64 @@ func scanCronSchedule(scanner rowScanner) (CronScheduleState, error) {
 	schedule.NextDue = timeFromUnixNano(nextDue)
 
 	return schedule, nil
+}
+
+func scanActiveTurn(scanner rowScanner) (ActiveTurnState, error) {
+	var (
+		turn              ActiveTurnState
+		replayInput       string
+		outputTrace       string
+		tokenUsage        string
+		openCalls         string
+		completedOutputs  string
+		restartNotice     string
+		sourceMetadata    string
+		createdAtUnixNano int64
+		updatedAtUnixNano int64
+	)
+
+	if err := scanner.Scan(&turn.Checkpoint.TurnID, &turn.Checkpoint.ConversationKey, &turn.Checkpoint.Agent, &turn.Checkpoint.Model, &turn.Checkpoint.DisplayModel, &replayInput, &outputTrace, &tokenUsage, &turn.Checkpoint.ResponseID, &openCalls, &completedOutputs, &restartNotice, &sourceMetadata, &createdAtUnixNano, &updatedAtUnixNano); err != nil {
+		return ActiveTurnState{}, fmt.Errorf("scan active turn: %w", err)
+	}
+
+	turn.CreatedAt = timeFromUnixNano(createdAtUnixNano)
+	turn.UpdatedAt = timeFromUnixNano(updatedAtUnixNano)
+
+	if err := json.Unmarshal([]byte(replayInput), &turn.Checkpoint.ReplayInput); err != nil {
+		return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "replay input", err: err}
+	}
+
+	if err := json.Unmarshal([]byte(outputTrace), &turn.Checkpoint.OutputTrace); err != nil {
+		return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "output trace", err: err}
+	}
+
+	if err := json.Unmarshal([]byte(tokenUsage), &turn.Checkpoint.TokenUsage); err != nil {
+		return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "token usage", err: err}
+	}
+
+	if err := json.Unmarshal([]byte(openCalls), &turn.Checkpoint.OpenFunctionCalls); err != nil {
+		return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "open function calls", err: err}
+	}
+
+	if err := json.Unmarshal([]byte(completedOutputs), &turn.Checkpoint.CompletedFunctionOutputs); err != nil {
+		return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "completed function outputs", err: err}
+	}
+
+	if strings.TrimSpace(sourceMetadata) == "" {
+		sourceMetadata = "{}"
+	}
+
+	if err := json.Unmarshal([]byte(sourceMetadata), &turn.SourceMetadata); err != nil {
+		return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "source metadata", err: err}
+	}
+
+	if turn.SourceMetadata == nil {
+		turn.SourceMetadata = map[string]string{}
+	}
+
+	if strings.TrimSpace(restartNotice) != "" {
+		turn.SourceMetadata["restart_notice_json"] = restartNotice
+	}
+
+	return turn, nil
 }

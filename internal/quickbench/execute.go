@@ -184,6 +184,7 @@ func runOne(ctx context.Context, providers rocketcode.Providers, opt options, be
 		ParallelToolCalls: 16,
 		ShellOutputDir:    shellOutputDir,
 		ChildRunLogger:    rocketcode.DiscardChildRunLog,
+		CheckpointSink:    rocketcode.InertCheckpointSink{},
 		CustomTools:       tools,
 	}
 

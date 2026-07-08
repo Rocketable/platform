@@ -3,11 +3,18 @@ package rocketcode
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 )
+
+const recoveryReplayMessageText = "The previous runtime was interrupted and has now restarted. Some tool calls or delegated subagent tasks from the interrupted turn may have partially completed without their results being recorded. Evaluate the current environment and conversation state before retrying actions, continuing work, or reporting completion."
+
+const genericAbortedToolOutputText = "tool call aborted because the runtime stopped before the call completed. Side effects may have partially occurred. Inspect the current environment before deciding whether to retry or continue."
+
+const taskAbortedToolOutputText = "subagent task aborted because the runtime stopped before the child result was delivered. The subagent may have partially completed work or spawned nested work. Inspect the environment and conversation state before deciding whether to retry, continue, or summarize uncertainty."
 
 func projectReplayForOpenAI(items []responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam {
 	projected := make([]responses.ResponseInputItemUnionParam, 0, len(items))
@@ -27,6 +34,86 @@ func projectReplayForOpenAI(items []responses.ResponseInputItemUnionParam) []res
 	}
 
 	return projected
+}
+
+// RecoveredReplayInput converts an interrupted active-turn checkpoint into replay input for a recovered model turn.
+func RecoveredReplayInput(checkpoint *ActiveTurnCheckpoint) ([]json.RawMessage, error) {
+	items, err := ReplayInputToParams(checkpoint.ReplayInput)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range checkpoint.CompletedFunctionOutputs {
+		if slices.ContainsFunc(items, func(item responses.ResponseInputItemUnionParam) bool {
+			output := item.OfFunctionCallOutput
+
+			return output != nil && output.CallID == checkpoint.CompletedFunctionOutputs[i].CallID
+		}) {
+			continue
+		}
+
+		outputItems, err := ReplayInputToParams(checkpoint.CompletedFunctionOutputs[i].ReplayInput)
+		if err != nil {
+			return nil, err
+		}
+
+		items = append(items, outputItems...)
+	}
+
+	items = append(items, abortedFunctionCallOutputs(items, checkpoint.OpenFunctionCalls)...)
+	if !hasRecoveryReplayMessage(items) {
+		items = appendRecoveryReplayMessage(items)
+	}
+
+	return ReplayInputFromParams(items)
+}
+
+func abortedFunctionCallOutputs(items []responses.ResponseInputItemUnionParam, openCalls []FunctionCallCheckpoint) []responses.ResponseInputItemUnionParam {
+	completed := map[string]bool{}
+
+	for i := range items {
+		output := items[i].OfFunctionCallOutput
+		if output == nil {
+			continue
+		}
+
+		completed[output.CallID] = true
+	}
+
+	outputs := make([]responses.ResponseInputItemUnionParam, 0, len(openCalls))
+	for _, call := range openCalls {
+		if completed[call.CallID] {
+			continue
+		}
+
+		outputText := genericAbortedToolOutputText
+		if call.Name == "task" {
+			outputText = taskAbortedToolOutputText
+		}
+
+		outputs = append(outputs, responses.ResponseInputItemUnionParam{OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
+			CallID: call.CallID,
+			Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.String(outputText)},
+			Type:   "function_call_output",
+		}})
+		completed[call.CallID] = true
+	}
+
+	return outputs
+}
+
+func appendRecoveryReplayMessage(items []responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam {
+	message := inputMessageParam(responses.EasyInputMessageRoleDeveloper, easyInputStringContent(recoveryReplayMessageText))
+
+	return append(items, message)
+}
+
+func hasRecoveryReplayMessage(items []responses.ResponseInputItemUnionParam) bool {
+	return slices.ContainsFunc(items, func(item responses.ResponseInputItemUnionParam) bool {
+		message := item.OfMessage
+
+		return message != nil && message.Role == responses.EasyInputMessageRoleDeveloper && message.Content.OfString.Valid() && message.Content.OfString.Value == recoveryReplayMessageText
+	})
 }
 
 // CompactedOutputToReplayInput converts provider compaction output into durable replay input.

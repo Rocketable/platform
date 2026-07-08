@@ -97,6 +97,7 @@ type looper struct {
 	PermissionReviewer     permissionReviewer
 	InPermissionReview     bool
 	Observability          ObservabilityConfig
+	CheckpointSink         CheckpointSink
 	expandInputPrompts     bool
 	promptExpansion        promptExpansionEnvironment
 }
@@ -188,6 +189,7 @@ type toolCallSignature struct {
 }
 
 type dispatchedToolOutput struct {
+	Name        string
 	Param       responses.ResponseInputItemFunctionCallOutputParam
 	Result      ToolResult
 	ReplayInput []responses.ResponseInputItemUnionParam
@@ -581,6 +583,12 @@ func (l *looper) Loop(
 			return fmt.Errorf("append session turn: %w", err)
 		}
 
+		if err := l.CheckpointSink.ClearCompletedTurn(ctx, activeTurnID(&turn)); err != nil {
+			close(turnOutput)
+
+			return fmt.Errorf("clear active turn checkpoint: %w", err)
+		}
+
 		items, err := ReplayInputToParams(turn.ReplayInput)
 		if err != nil {
 			close(turnOutput)
@@ -625,6 +633,24 @@ func (l *looper) runTurn(
 		Timestamp:   time.Now().UTC(),
 		Model:       l.DisplayModel,
 		ReplayInput: replayInput,
+	}
+
+	checkpoint := l.activeTurnCheckpoint(&record, nil, nil)
+	if err := l.CheckpointSink.StartActiveTurn(ctx, &checkpoint); err != nil {
+		return emptyRecord, nil, false, fmt.Errorf("start active turn checkpoint: %w", err)
+	}
+
+	markInterrupted := func() error {
+		checkpoint = l.activeTurnCheckpoint(&record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
+
+		recoveredReplayInput, err := RecoveredReplayInput(&checkpoint)
+		if err != nil {
+			return fmt.Errorf("build interrupted turn replay: %w", err)
+		}
+
+		checkpoint.ReplayInput = recoveredReplayInput
+
+		return l.CheckpointSink.RecordRecoveredReplay(context.WithoutCancel(ctx), &checkpoint)
 	}
 
 	turnCtx, cancel := context.WithCancelCause(ctx)
@@ -684,10 +710,34 @@ func (l *looper) runTurn(
 
 		params := l.buildParams(history)
 
-		resp, recoveredHistory, err := l.newProviderResponse(turnCtx, &params, output)
+		resp, recoveredHistory, err := l.newProviderResponse(turnCtx, &params, output, func(recovered []responses.ResponseInputItemUnionParam) error {
+			recovered = pruneHistoryBeforeLatestCompaction(recovered)
+
+			replayInput, errReplay := ReplayInputFromParams(recovered)
+			if errReplay != nil {
+				return errReplay
+			}
+
+			record.ReplayInput = replayInput
+
+			turnItems = append([]responses.ResponseInputItemUnionParam(nil), recovered...)
+			checkpoint = l.activeTurnCheckpoint(&record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
+
+			return l.CheckpointSink.RecordProviderResponse(turnCtx, &checkpoint)
+		})
 		if err != nil {
 			if errors.Is(context.Cause(turnCtx), errTurnInterrupted) {
+				if err := markInterrupted(); err != nil {
+					return emptyRecord, nil, false, err
+				}
+
 				return emptyRecord, nil, true, nil
+			}
+
+			if turnCtx.Err() != nil {
+				if err := markInterrupted(); err != nil {
+					return emptyRecord, nil, false, err
+				}
 			}
 
 			return emptyRecord, nil, false, fmt.Errorf("request response: %w", err)
@@ -704,43 +754,22 @@ func (l *looper) runTurn(
 			record.ReplayInput = replayInput
 
 			turnItems = append([]responses.ResponseInputItemUnionParam(nil), recoveredHistory...)
+			checkpoint = l.activeTurnCheckpoint(&record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
 		}
 
-		record.ResponseID = resp.ID
-		record.addTokenUsageFromResponse(resp)
 		l.emitHostedToolDiagnostics(output, resp.Output)
 		rendered = append(rendered, responseChatResponses(resp.Output)...)
 
-		hadCompaction := slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type == "compaction" })
-
-		for i := range resp.Output {
-			asInput, ok := responseOutputToReplayInput(&resp.Output[i])
-			if !ok {
-				if trace, err := json.Marshal(resp.Output[i]); err == nil {
-					record.OutputTrace = append(record.OutputTrace, trace)
-				}
-
-				continue
-			}
-
-			if err := appendReplayInput(&record, &asInput); err != nil {
-				return emptyRecord, nil, false, err
-			}
-
-			turnItems = append(turnItems, asInput)
-		}
-
-		if hadCompaction && l.CompactionSteering != "" {
-			steeringInput := inputMessageParam(responses.EasyInputMessageRole("developer"), easyInputStringContent(l.CompactionSteering))
-
-			if err := appendReplayInput(&record, &steeringInput); err != nil {
-				return emptyRecord, nil, false, err
-			}
-
-			turnItems = append(turnItems, steeringInput)
+		if err := l.appendProviderReplay(&record, &turnItems, resp); err != nil {
+			return emptyRecord, nil, false, err
 		}
 
 		reviewContext := append(append([]responses.ResponseInputItemUnionParam{}, baseHistory...), turnItems...)
+
+		checkpoint = l.activeTurnCheckpoint(&record, openFunctionCallCheckpoints(resp.Output), checkpoint.CompletedFunctionOutputs)
+		if err := l.CheckpointSink.RecordProviderResponse(turnCtx, &checkpoint); err != nil {
+			return emptyRecord, nil, false, fmt.Errorf("record provider response checkpoint: %w", err)
+		}
 
 		previousReviewInput := l.permissionReviewInput
 		l.permissionReviewInput = reviewContext
@@ -749,7 +778,17 @@ func (l *looper) runTurn(
 
 		if err != nil {
 			if errors.Is(context.Cause(turnCtx), errTurnInterrupted) {
+				if err := markInterrupted(); err != nil {
+					return emptyRecord, nil, false, err
+				}
+
 				return emptyRecord, nil, true, nil
+			}
+
+			if turnCtx.Err() != nil {
+				if err := markInterrupted(); err != nil {
+					return emptyRecord, nil, false, err
+				}
 			}
 
 			return emptyRecord, nil, false, fmt.Errorf("dispatch tool calls: %w", err)
@@ -763,27 +802,134 @@ func (l *looper) runTurn(
 			return record, rendered, false, nil
 		}
 
-		for i := range toolOutputs {
-			toolInput := responses.ResponseInputItemUnionParam{OfFunctionCallOutput: &toolOutputs[i].Param}
-
-			if err := appendReplayInput(&record, &toolInput); err != nil {
-				return emptyRecord, nil, false, err
-			}
-
-			turnItems = append(turnItems, toolInput)
-		}
-
-		for i := range toolOutputs {
-			for j := range toolOutputs[i].ReplayInput {
-				replayInput := &toolOutputs[i].ReplayInput[j]
-				if err := appendReplayInput(&record, replayInput); err != nil {
-					return emptyRecord, nil, false, err
-				}
-
-				turnItems = append(turnItems, *replayInput)
-			}
+		if err := l.appendToolOutputReplay(turnCtx, &record, &turnItems, &checkpoint, toolOutputs); err != nil {
+			return emptyRecord, nil, false, err
 		}
 	}
+}
+
+func activeTurnID(record *SessionEntry) string {
+	return strconv.FormatInt(record.Timestamp.UnixNano(), 10)
+}
+
+func (l *looper) appendProviderReplay(record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, resp *responses.Response) error {
+	record.ResponseID = resp.ID
+	record.addTokenUsageFromResponse(resp)
+	hadCompaction := slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type == "compaction" })
+
+	for i := range resp.Output {
+		asInput, ok := responseOutputToReplayInput(&resp.Output[i])
+		if !ok {
+			if trace, err := json.Marshal(resp.Output[i]); err == nil {
+				record.OutputTrace = append(record.OutputTrace, trace)
+			}
+
+			continue
+		}
+
+		if err := appendReplayInput(record, &asInput); err != nil {
+			return err
+		}
+
+		*turnItems = append(*turnItems, asInput)
+	}
+
+	if hadCompaction && l.CompactionSteering != "" {
+		steeringInput := inputMessageParam(responses.EasyInputMessageRole("developer"), easyInputStringContent(l.CompactionSteering))
+
+		if err := appendReplayInput(record, &steeringInput); err != nil {
+			return err
+		}
+
+		*turnItems = append(*turnItems, steeringInput)
+	}
+
+	return nil
+}
+
+func (l *looper) appendToolOutputReplay(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, checkpoint *ActiveTurnCheckpoint, toolOutputs []dispatchedToolOutput) error {
+	for i := range toolOutputs {
+		toolInput := responses.ResponseInputItemUnionParam{OfFunctionCallOutput: &toolOutputs[i].Param}
+
+		if err := appendReplayInput(record, &toolInput); err != nil {
+			return err
+		}
+
+		*turnItems = append(*turnItems, toolInput)
+
+		raw, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{toolInput})
+		if err != nil {
+			return err
+		}
+
+		completed := FunctionOutputCheckpoint{CallID: toolInput.OfFunctionCallOutput.CallID, Name: toolOutputs[i].Name, ReplayInput: raw}
+		checkpoint.CompletedFunctionOutputs = append(checkpoint.CompletedFunctionOutputs, completed)
+		checkpoint.OpenFunctionCalls = slices.DeleteFunc(checkpoint.OpenFunctionCalls, func(call FunctionCallCheckpoint) bool {
+			return call.CallID == completed.CallID
+		})
+
+		*checkpoint = l.activeTurnCheckpoint(record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
+		if err := l.CheckpointSink.RecordCompletedToolOutput(ctx, checkpoint); err != nil {
+			return fmt.Errorf("record completed tool output checkpoint: %w", err)
+		}
+	}
+
+	for i := range toolOutputs {
+		for j := range toolOutputs[i].ReplayInput {
+			replayInput := &toolOutputs[i].ReplayInput[j]
+			if err := appendReplayInput(record, replayInput); err != nil {
+				return err
+			}
+
+			*turnItems = append(*turnItems, *replayInput)
+		}
+	}
+
+	if len(toolOutputs) > 0 {
+		*checkpoint = l.activeTurnCheckpoint(record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
+		if err := l.CheckpointSink.RecordCompletedToolOutput(ctx, checkpoint); err != nil {
+			return fmt.Errorf("record completed tool replay checkpoint: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (l *looper) activeTurnCheckpoint(record *SessionEntry, openCalls []FunctionCallCheckpoint, completedOutputs []FunctionOutputCheckpoint) ActiveTurnCheckpoint {
+	var tokenUsage *TokenUsage
+
+	if record.TokenUsage != nil {
+		usage := *record.TokenUsage
+		tokenUsage = &usage
+	}
+
+	return ActiveTurnCheckpoint{
+		TurnID:                   activeTurnID(record),
+		Agent:                    l.agent.Name,
+		Model:                    l.Model,
+		DisplayModel:             l.DisplayModel,
+		ReplayInput:              slices.Clone(record.ReplayInput),
+		OutputTrace:              slices.Clone(record.OutputTrace),
+		TokenUsage:               tokenUsage,
+		ResponseID:               record.ResponseID,
+		OpenFunctionCalls:        slices.Clone(openCalls),
+		CompletedFunctionOutputs: slices.Clone(completedOutputs),
+	}
+}
+
+func openFunctionCallCheckpoints(items []responses.ResponseOutputItemUnion) []FunctionCallCheckpoint {
+	openCalls := []FunctionCallCheckpoint{}
+
+	for i := range items {
+		item := &items[i]
+		if item.Type != "function_call" {
+			continue
+		}
+
+		openCalls = append(openCalls, FunctionCallCheckpoint{CallID: item.CallID, Name: item.Name, Arguments: json.RawMessage(item.Arguments.OfString)})
+	}
+
+	return openCalls
 }
 
 func (l *looper) promptTurnItems(ctx context.Context, input PromptInput) (PromptInput, []responses.ResponseInputItemUnionParam, error) {
@@ -857,7 +1003,12 @@ func appendReplayInput(record *SessionEntry, item *responses.ResponseInputItemUn
 	return nil
 }
 
-func (l *looper) newProviderResponse(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse) (resp *responses.Response, recoveredHistory []responses.ResponseInputItemUnionParam, err error) {
+func (l *looper) newProviderResponse(
+	ctx context.Context,
+	params *responses.ResponseNewParams,
+	output chan<- ChatResponse,
+	checkpointCompacted func([]responses.ResponseInputItemUnionParam) error,
+) (resp *responses.Response, recoveredHistory []responses.ResponseInputItemUnionParam, err error) {
 	provider := "openai"
 
 	ctx, span := l.Observability.startSpan(ctx, "rocketcode.provider", semconv.SpanKindLLM,
@@ -882,10 +1033,10 @@ func (l *looper) newProviderResponse(ctx context.Context, params *responses.Resp
 		return nil, nil, fmt.Errorf("%s provider is required", provider)
 	}
 
-	return l.newResponseWithProviderRetry(ctx, params, output)
+	return l.newResponseWithProviderRetry(ctx, params, output, checkpointCompacted)
 }
 
-func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse) (*responses.Response, []responses.ResponseInputItemUnionParam, error) {
+func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam) error) (*responses.Response, []responses.ResponseInputItemUnionParam, error) {
 	attempt := 0
 	provider := "openai"
 
@@ -895,7 +1046,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 		resp, err := l.Client.New(ctx, params, option.WithResponseInto(&raw))
 		if err != nil {
 			if ctx.Err() == nil && isContextLengthExceeded(err) {
-				resp, recoveredHistory, err := l.newResponseAfterContextCompaction(ctx, params, err, output)
+				resp, recoveredHistory, err := l.newResponseAfterContextCompaction(ctx, params, err, output, checkpointCompacted)
 				if err != nil {
 					return nil, nil, fmt.Errorf("new response: %w", err)
 				}
@@ -969,7 +1120,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 		}
 
 		if isResponseContextLengthExceeded(resp) {
-			resp, recoveredHistory, err := l.newResponseAfterContextCompaction(ctx, params, err, output)
+			resp, recoveredHistory, err := l.newResponseAfterContextCompaction(ctx, params, err, output, checkpointCompacted)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -1004,7 +1155,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 	}
 }
 
-func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *responses.ResponseNewParams, errOriginal error, output chan<- ChatResponse) (*responses.Response, []responses.ResponseInputItemUnionParam, error) {
+func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *responses.ResponseNewParams, errOriginal error, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam) error) (*responses.Response, []responses.ResponseInputItemUnionParam, error) {
 	original := params.Input.OfInputItemList
 
 	blocks := compactionBlocks(original)
@@ -1039,6 +1190,9 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 		retryParams := *params
 
 		retryParams.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: recoveredHistory}
+		if err := checkpointCompacted(recoveredHistory); err != nil {
+			return nil, nil, fmt.Errorf("checkpoint compacted response input: %w", err)
+		}
 
 		var raw *http.Response
 
@@ -1512,7 +1666,7 @@ func (l *looper) dispatchToolCalls(
 			span.span.SetAttributes(l.Observability.outputValue(result.Output), attribute.Bool("rocketcode.tool_denied", false), attribute.Bool("rocketcode.tool_failure", true))
 			span.span.End()
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result.Output})
-			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, result), Result: result, ReplayInput: nil})
+			outputs = append(outputs, dispatchedToolOutput{Name: item.Name, Param: toolCallOutput(item.CallID, result), Result: result, ReplayInput: nil})
 
 			continue
 		}
@@ -1528,7 +1682,7 @@ func (l *looper) dispatchToolCalls(
 			span.span.End()
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
 			toolResult := TextToolResult(result)
-			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
+			outputs = append(outputs, dispatchedToolOutput{Name: item.Name, Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
 
 			continue
 		}
@@ -1541,7 +1695,7 @@ func (l *looper) dispatchToolCalls(
 			span.span.SetAttributes(l.Observability.outputValue(result.Output), attribute.Bool("rocketcode.tool_denied", true), attribute.Bool("rocketcode.tool_failure", true))
 			span.span.End()
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result.Output})
-			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, result), Result: result, ReplayInput: nil})
+			outputs = append(outputs, dispatchedToolOutput{Name: item.Name, Param: toolCallOutput(item.CallID, result), Result: result, ReplayInput: nil})
 
 			continue
 		}
@@ -1555,7 +1709,7 @@ func (l *looper) dispatchToolCalls(
 			span.span.End()
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
 			toolResult := TextToolResult(result)
-			outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
+			outputs = append(outputs, dispatchedToolOutput{Name: item.Name, Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
 
 			continue
 		}
@@ -1573,7 +1727,7 @@ func (l *looper) dispatchToolCalls(
 				span.span.End()
 				l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
 				toolResult := TextToolResult(result)
-				outputs = append(outputs, dispatchedToolOutput{Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
+				outputs = append(outputs, dispatchedToolOutput{Name: item.Name, Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
 
 				continue
 			}
@@ -1657,7 +1811,7 @@ func (l *looper) dispatchToolCalls(
 			span.span.End()
 
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: call.name, Result: attachmentOutputMessage(result)})
-			outputs[call.outputIndex] = dispatchedToolOutput{Param: toolCallOutput(call.callID, result), Result: result, ReplayInput: replayInput}
+			outputs[call.outputIndex] = dispatchedToolOutput{Name: call.name, Param: toolCallOutput(call.callID, result), Result: result, ReplayInput: replayInput}
 
 			return nil
 		})

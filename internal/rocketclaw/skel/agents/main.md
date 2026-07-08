@@ -8,6 +8,8 @@ permission:
   skill:
     "*": "deny"
     "main-*": "allow"
+  rocketclaw:
+    rocketclaw_restart: "allow"
 ---
 
 # Basic Behavior Guidelines

@@ -82,6 +82,14 @@ type ExternalMCPSessionState struct {
 	ConversationID string `json:"conversation_id,omitempty"`
 }
 
+// ActiveTurnState records one durable RocketCode active-turn checkpoint.
+type ActiveTurnState struct {
+	Checkpoint     harness.ActiveTurnCheckpoint `json:"checkpoint"`
+	SourceMetadata map[string]string            `json:"source_metadata,omitempty"`
+	CreatedAt      time.Time                    `json:"created_at,omitzero"`
+	UpdatedAt      time.Time                    `json:"updated_at,omitzero"`
+}
+
 // ScheduledMessageState records one pending delayed system prompt.
 type ScheduledMessageState struct {
 	ConversationID string        `json:"conversation_id,omitempty"`
@@ -351,6 +359,41 @@ func (s *SessionService) MarkRestartRequester(ctx context.Context, conversationI
 	}
 
 	return stateDAO{db: s.db}.markRestartRequester(ctx, conversationID)
+}
+
+// StartActiveTurn upserts a durable active root-turn checkpoint.
+func (s *SessionService) StartActiveTurn(ctx context.Context, checkpoint *harness.ActiveTurnCheckpoint) error {
+	return stateDAO{db: s.db}.upsertActiveTurn(ctx, checkpoint, time.Now().UTC())
+}
+
+// RecordActiveTurnCheckpoint upserts an in-progress active root-turn checkpoint.
+func (s *SessionService) RecordActiveTurnCheckpoint(ctx context.Context, checkpoint *harness.ActiveTurnCheckpoint) error {
+	return stateDAO{db: s.db}.upsertActiveTurn(ctx, checkpoint, time.Now().UTC())
+}
+
+// UpsertActiveTurn records a RocketCode active-turn restart handoff checkpoint with source metadata.
+func (s *SessionService) UpsertActiveTurn(ctx context.Context, checkpoint *harness.ActiveTurnCheckpoint, sourceMetadata map[string]string) error {
+	return stateDAO{db: s.db}.upsertActiveTurnWithSourceMetadata(ctx, checkpoint, sourceMetadata, time.Now().UTC())
+}
+
+// ClearCompletedActiveTurn deletes the restart handoff after the completed session entry is durable.
+func (s *SessionService) ClearCompletedActiveTurn(ctx context.Context, turnID string) error {
+	return stateDAO{db: s.db}.clearActiveTurn(ctx, turnID)
+}
+
+// ClearActiveTurn removes an active root-turn checkpoint.
+func (s *SessionService) ClearActiveTurn(ctx context.Context, turnID string) error {
+	return stateDAO{db: s.db}.clearActiveTurn(ctx, turnID)
+}
+
+// RecoverableActiveTurns returns remaining active-turn handoff rows for startup recovery.
+func (s *SessionService) RecoverableActiveTurns(ctx context.Context) ([]ActiveTurnState, error) {
+	return stateDAO{db: s.db}.recoverableActiveTurns(ctx)
+}
+
+// ActiveTurn returns a durable active-turn checkpoint.
+func (s *SessionService) ActiveTurn(ctx context.Context, turnID string) (ActiveTurnState, bool, error) {
+	return stateDAO{db: s.db}.activeTurn(ctx, turnID)
 }
 
 // Thread returns the persisted managed conversation state.

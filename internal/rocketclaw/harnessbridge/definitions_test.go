@@ -44,13 +44,13 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	require.False(t, permissionSetAllows(helper.Permission, "task", "*"))
 	require.True(t, permissionSetAllows(restricted.Permission, "task", "go-reviewer"))
 	require.False(t, permissionSetAllows(restricted.Permission, "task", "*"))
-	requireRocketClawPermissionAction(t, primary.Permission, restartToolName, rocketcode.PermissionAllow)
+	requireNoRocketClawPermissionMatch(t, primary.Permission, restartToolName)
 	requireRocketClawPermissionAction(t, primary.Permission, reloadToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, primary.Permission, scheduleMessageToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, primary.Permission, resetScheduledMessagesToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, primary.Permission, attachFilesToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, primary.Permission, updateGoalToolName, rocketcode.PermissionAllow)
-	requireRocketClawPermissionAction(t, helper.Permission, restartToolName, rocketcode.PermissionAllow)
+	requireNoRocketClawPermissionMatch(t, helper.Permission, restartToolName)
 	requireRocketClawPermissionAction(t, helper.Permission, reloadToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, helper.Permission, scheduleMessageToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, helper.Permission, resetScheduledMessagesToolName, rocketcode.PermissionAllow)
@@ -81,7 +81,7 @@ Prompt
 	agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModeCron)
 	require.NoError(t, err)
 	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, rawRunToolName, rocketcode.PermissionAllow)
-	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, restartToolName, rocketcode.PermissionAllow)
+	requireNoRocketClawPermissionMatch(t, agents.Items["main"].Permission, restartToolName)
 	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, reloadToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, scheduleMessageToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, resetScheduledMessagesToolName, rocketcode.PermissionAllow)
@@ -154,7 +154,7 @@ func TestValidateRuntimeDefinitionsReportsInvalidStagedAgent(t *testing.T) {
 	require.ErrorContains(t, err, "main.md: model: required non-empty string")
 }
 
-func TestLoadRocketCodeDefinitionsPreservesRocketClawRuntimeToolDenies(t *testing.T) {
+func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *testing.T) {
 	tests := []struct {
 		name           string
 		mode           toolMode
@@ -164,6 +164,22 @@ func TestLoadRocketCodeDefinitionsPreservesRocketClawRuntimeToolDenies(t *testin
 		wantAllowTools []string
 		wantDenyTools  []string
 	}{
+		{
+			name:           "exact persistent restart allow",
+			mode:           toolModePersistent,
+			permission:     "permission:\n  rocketclaw:\n    rocketclaw_restart: allow\n",
+			wantTool:       restartToolName,
+			wantAction:     rocketcode.PermissionAllow,
+			wantAllowTools: []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
+		},
+		{
+			name:           "exact cron restart allow",
+			mode:           toolModeCron,
+			permission:     "permission:\n  rocketclaw:\n    rocketclaw_restart: allow\n",
+			wantTool:       restartToolName,
+			wantAction:     rocketcode.PermissionAllow,
+			wantAllowTools: []string{reloadToolName, rawRunToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName},
+		},
 		{
 			name:           "exact persistent restart deny",
 			mode:           toolModePersistent,
@@ -308,6 +324,13 @@ func requireRocketClawPermissionAction(t *testing.T, set rocketcode.PermissionSe
 	action, matched := set.Evaluate("rocketclaw", subject)
 	require.True(t, matched)
 	require.Equal(t, want, action)
+}
+
+func requireNoRocketClawPermissionMatch(t *testing.T, set rocketcode.PermissionSet, subject string) {
+	t.Helper()
+
+	_, matched := set.Evaluate("rocketclaw", subject)
+	require.False(t, matched)
 }
 
 func permissionSetAllows(set rocketcode.PermissionSet, bucket, pattern string) bool {

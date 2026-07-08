@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const sessionDBSchemaVersion = 2
+const sessionDBSchemaVersion = 5
 
 func initializeSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 	startedAt := time.Now()
@@ -84,6 +84,8 @@ func createSessionSchema(ctx context.Context, db stateStoreDB) error {
 		`CREATE INDEX IF NOT EXISTS cron_schedules_relative_path ON cron_schedules (relative_path)`,
 		`CREATE INDEX IF NOT EXISTS cron_schedule_runs_running_path ON cron_schedule_runs (running, relative_path)`,
 		`CREATE TABLE IF NOT EXISTS pending_restart_notifications (conversation_id TEXT PRIMARY KEY)`,
+		`CREATE TABLE IF NOT EXISTS active_turns (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, agent TEXT NOT NULL, model TEXT NOT NULL, display_model TEXT NOT NULL, replay_input_json TEXT NOT NULL, output_trace_json TEXT NOT NULL, token_usage_json TEXT NOT NULL, response_id TEXT NOT NULL, open_function_calls_json TEXT NOT NULL, completed_function_outputs_json TEXT NOT NULL, restart_notice_json TEXT NOT NULL, source_metadata_json TEXT NOT NULL, created_at_unix_ns INTEGER NOT NULL, updated_at_unix_ns INTEGER NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS active_turns_conversation_updated ON active_turns (conversation_id, updated_at_unix_ns)`,
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("initialize rocketcode session schema: %w", err)

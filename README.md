@@ -15,7 +15,7 @@ See [LICENSE](LICENSE) for the full license terms.
 ## Core Capabilities
 
 - Run workspace-aware AI agents with local instructions, agent definitions, skills, attachments, subagents, custom tools, file access, shell commands, web fetches, and explicit permission rules.
-- Keep agent work durable through SQLite-backed sessions, replay, checkpoints, connector routing, scheduled messages, restart recovery, and conversation-local goal loops.
+- Keep agent work durable through SQLite-backed sessions, replay, active-turn checkpoints, connector routing, scheduled messages, restart recovery, and conversation-local goal loops.
 - Connect agents to team workflows through Slack, cron jobs, scheduled prompts, and an external MCP HTTP endpoint.
 - Route model requests through first-party OpenAI Responses while preserving one local agent/tool model.
 - Run `openresponsesd` as a separate local OpenResponses-shaped API daemon that can route to OpenAI Responses, OpenAI-compatible Chat Completions, or Anthropic Messages upstreams.
@@ -54,7 +54,7 @@ The runnable entry point is `cmd/rocketclaw`. Run `rocketclaw help` for setup, v
 4. A human message, cron job, scheduled prompt, or MCP request enters RocketClaw and invokes RocketCode with the selected agent.
 5. RocketCode runs model/tool turns under configured permissions.
 6. RocketClaw publishes progress, final responses, files, or reactions back through the originating connector.
-7. Conversation state, scheduled work, and routing metadata are persisted so the runtime can continue after restart.
+7. Conversation state, active-turn handoffs, scheduled work, and routing metadata are persisted so restart recovery can refire interrupted turns as model-guided continuations from uncertain state.
 
 For local CLI experimentation, `rocketcode` and `rocketloop` run RocketCode directly in the current working directory.
 
@@ -75,7 +75,7 @@ For local CLI experimentation, `rocketcode` and `rocketloop` run RocketCode dire
 
 RocketClaw is configured with `rocketclaw.json` in the working directory. Runtime state is local to the selected workspace:
 
-- `.rocketclaw/state.sqlite3`: sessions, connector routing, scheduled messages, external MCP sessions, restart notifications, and goal-loop state.
+- `.rocketclaw/state.sqlite3`: sessions, active-turn restart handoffs, connector routing, scheduled messages, external MCP sessions, restart notifications, and goal-loop state.
 - `.rocketclaw/overlays/`: configured git overlay clones for runtime assets.
 - `.rocketclaw/.rocketcode/`: RocketCode shell output and transient artifacts.
 

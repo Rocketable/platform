@@ -103,11 +103,11 @@ Result: `🔀 continue from main context` starts a managed conversation with age
 
 ## RocketClaw Tools
 
-RocketClaw injects these tools into RocketCode turns. Most are auto-allowed by RocketClaw unless a per-agent permission rule explicitly denies them. `rocketclaw_start_new_thread` is the main exception: it is default-deny and requires an explicit per-agent `allow`.
+RocketClaw injects these tools into RocketCode turns. Most are auto-allowed by RocketClaw unless a per-agent permission rule explicitly denies them. `rocketclaw_restart` and `rocketclaw_start_new_thread` are default-deny and require an explicit per-agent `allow`.
 
 | Tool | Available In | Permission Default | What It Does |
 | --- | --- | --- | --- |
-| `rocketclaw_restart` | Persistent bridge turns and raw/cron runs. | Auto-allow unless explicitly denied. | Schedules a graceful RocketClaw restart after approved runtime config, agent, skill, cron, script, or overlay changes. |
+| `rocketclaw_restart` | Persistent bridge turns and raw/cron runs. | Default-deny. Requires explicit per-agent `allow`; generated `main` agents include that allow. | Records the restart requester and cancels RocketClaw for supervisor restart after approved runtime config or overlay-list changes. |
 | `rocketclaw_schedule_message` | Persistent bridge turns and raw/cron runs. | Auto-allow unless explicitly denied. | Schedules a one-shot or recurring prompt in the current conversation. Recurring schedules persist until reset and do not replay missed intervals. |
 | `rocketclaw_reset_scheduled_messages` | Persistent bridge turns and raw/cron runs. | Treat as part of the schedule-message permission family. Deny `rocketclaw_schedule_message` to block schedule reset behavior. | Clears scheduled messages for the current conversation. |
 | `rocketclaw_attach_files_to_response` | Persistent bridge turns and raw/cron runs. | Auto-allow unless explicitly denied. | Attaches collected files to the final outbound response through RocketClaw's shared response-attachment path. |
@@ -116,7 +116,7 @@ RocketClaw injects these tools into RocketCode turns. Most are auto-allowed by R
 | `rocketclaw_i_want_human_partner_to_see_this` | Raw/cron runs only. | Auto-allow in raw/cron tool mode unless explicitly denied by the cron agent. | Required raw-run completion tool. Its argument is the exact human-visible output, or an empty string for silence. |
 | `ask_user_question` | Qualifying human-originated Slack turns with a native answer path. | Auto-allow unless explicitly denied, but hidden when the turn has no answer path. | Asks the originating human through native UI, blocks until answered or canceled, and returns selected options and/or custom text. Not exposed for cron/raw, MCP, scheduled/system/automation, automatic goal continuations, or restart recovery continuations. |
 
-For general `permission` syntax, action values, guardrails, and approval reviewers, see Agent Frontmatter And Permissions below. RocketCode is deny-by-default and later matching rules win. RocketClaw's default tool allows are injected after agent permissions unless an explicit deny already matched, so use `deny` rather than `auto` when the intent is to block or force review of a RocketClaw auto-allowed tool.
+For general `permission` syntax, action values, guardrails, and approval reviewers, see Agent Frontmatter And Permissions below. RocketCode is deny-by-default and later matching rules win. RocketClaw's default tool allows are injected after agent permissions unless an explicit deny already matched, so use `deny` rather than `auto` when the intent is to block or force review of a RocketClaw auto-allowed tool. For default-deny tools such as `rocketclaw_restart` and `rocketclaw_start_new_thread`, `auto` is not enough; use explicit `allow`.
 
 ## Emoji Translation Table
 

@@ -81,6 +81,69 @@ type mockSessionStore struct {
 	entries []SessionEntry
 }
 
+type checkpointCall struct {
+	name       string
+	checkpoint ActiveTurnCheckpoint
+	turnID     string
+}
+
+type mockCheckpointSink struct {
+	mu    sync.Mutex
+	calls []checkpointCall
+}
+
+func (m *mockCheckpointSink) StartActiveTurn(_ context.Context, checkpoint *ActiveTurnCheckpoint) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.calls = append(m.calls, checkpointCall{name: "start", checkpoint: *checkpoint})
+
+	return nil
+}
+
+func (m *mockCheckpointSink) RecordProviderResponse(_ context.Context, checkpoint *ActiveTurnCheckpoint) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.calls = append(m.calls, checkpointCall{name: "provider", checkpoint: *checkpoint})
+
+	return nil
+}
+
+func (m *mockCheckpointSink) RecordCompletedToolOutput(_ context.Context, checkpoint *ActiveTurnCheckpoint) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.calls = append(m.calls, checkpointCall{name: "tool", checkpoint: *checkpoint})
+
+	return nil
+}
+
+func (m *mockCheckpointSink) RecordRecoveredReplay(_ context.Context, checkpoint *ActiveTurnCheckpoint) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.calls = append(m.calls, checkpointCall{name: "recovered", checkpoint: *checkpoint})
+
+	return nil
+}
+
+func (m *mockCheckpointSink) ClearCompletedTurn(_ context.Context, turnID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.calls = append(m.calls, checkpointCall{name: "clear", turnID: turnID})
+
+	return nil
+}
+
+func (m *mockCheckpointSink) snapshot() []checkpointCall {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return append([]checkpointCall{}, m.calls...)
+}
+
 type mockPermissionReviewer struct {
 	decision permissionReviewDecision
 	requests []permissionReviewRequest
@@ -131,6 +194,7 @@ func testLooper(client responsesAPI) *looper {
 	l.Client = client
 	l.Model = openai.ChatModelGPT5
 	l.PermissionReviewer = inertPermissionReviewer{}
+	l.CheckpointSink = InertCheckpointSink{}
 
 	return &l
 }
@@ -140,6 +204,7 @@ func emptyTestLooper() *looper {
 
 	l.modelRef = defaultModelRef()
 	l.PermissionReviewer = inertPermissionReviewer{}
+	l.CheckpointSink = InertCheckpointSink{}
 
 	return &l
 }
@@ -495,6 +560,38 @@ func TestLooperClosesPromptResponseChannelAfterTurn(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
+}
+
+func TestLooperAppendsOneSessionEntryPerCompletedTurn(t *testing.T) {
+	mock := mockResponses(
+		responseWithMessage("resp-one", "first answer"),
+		responseWithMessage("resp-two", "second answer"),
+	)
+	looper := testLooper(mock)
+	store := testSessionStore()
+	firstOutput := make(chan ChatResponse, 10)
+	secondOutput := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 2)
+	input <- testPromptInput(PromptInputRoleUser, "first question", firstOutput)
+
+	input <- testPromptInput(PromptInputRoleUser, "second question", secondOutput)
+
+	close(input)
+
+	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
+		return store.appendEntry(&entry)
+	}, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	require.Equal(t, []ChatResponse{assistantMessage("first answer")}, collectResponses(firstOutput))
+	require.Equal(t, []ChatResponse{assistantMessage("second answer")}, collectResponses(secondOutput))
+	require.Len(t, store.entries, 2)
+	require.Equal(t, "resp-one", store.entries[0].ResponseID)
+	require.Equal(t, "resp-two", store.entries[1].ResponseID)
+	require.Len(t, store.saves, 2)
+	require.Len(t, store.saves[0], 1)
+	require.Len(t, store.saves[1], 2)
 }
 
 func TestLoopClosesPromptResponsesWhenSessionLoadFails(t *testing.T) {
@@ -894,6 +991,106 @@ func TestPruneHistoryBeforeLatestCompaction(t *testing.T) {
 	require.Contains(t, marshalJSON(t, pruned[1]), `"content":"new"`)
 }
 
+func TestCheckpointBeforeFirstProviderCall(t *testing.T) {
+	sink := &mockCheckpointSink{}
+	mock := mockResponseFunc(func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
+		calls := sink.snapshot()
+		require.Len(t, calls, 1)
+		require.Equal(t, "start", calls[0].name)
+		require.NotEmpty(t, calls[0].checkpoint.TurnID)
+		require.JSONEq(t, `{"content":"hello","role":"user","type":"message"}`, string(calls[0].checkpoint.ReplayInput[0]))
+
+		return responseWithMessage("resp-final", "done"), nil
+	})
+	looper := testLooper(mock)
+	looper.CheckpointSink = sink
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "hello", output)
+
+	close(input)
+
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	require.NoError(t, err)
+	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
+}
+
+func TestCheckpointProviderResponseOpenCallsBeforeToolDispatch(t *testing.T) {
+	sink := &mockCheckpointSink{}
+	mock := mockResponses(
+		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "read", `{"filePath":"README.md"}`)}),
+		responseWithMessage("resp-final", "done"),
+	)
+	looper := testLooper(mock)
+	looper.CheckpointSink = sink
+	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
+	tool := testLooperTool("read")
+	tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		calls := sink.snapshot()
+		require.GreaterOrEqual(t, len(calls), 2)
+		provider := calls[1]
+		require.Equal(t, "provider", provider.name)
+		require.Equal(t, "resp-tool", provider.checkpoint.ResponseID)
+		require.Len(t, provider.checkpoint.OpenFunctionCalls, 1)
+		require.Equal(t, "call-1", provider.checkpoint.OpenFunctionCalls[0].CallID)
+		require.Equal(t, "read", provider.checkpoint.OpenFunctionCalls[0].Name)
+		require.JSONEq(t, `{"filePath":"README.md"}`, string(provider.checkpoint.OpenFunctionCalls[0].Arguments))
+
+		return TextToolResult("contents"), nil
+	}
+	looper.Tools = map[string]looperTool{"read": tool}
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "read", output)
+
+	close(input)
+
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	require.NoError(t, err)
+	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
+}
+
+func TestCheckpointAfterCompactionRecoveryBeforeProviderRetry(t *testing.T) {
+	sink := &mockCheckpointSink{}
+	providerCalls := 0
+	mock := mockResponseFunc(func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
+		providerCalls++
+		if providerCalls == 1 {
+			return nil, contextLengthExceededError()
+		}
+
+		calls := sink.snapshot()
+		require.GreaterOrEqual(t, len(calls), 2)
+		compacted := calls[1]
+		require.Equal(t, "provider", compacted.name)
+		require.Len(t, compacted.checkpoint.ReplayInput, 2)
+		require.Contains(t, string(compacted.checkpoint.ReplayInput[0]), `"type":"compaction"`)
+		require.Contains(t, string(compacted.checkpoint.ReplayInput[1]), `"content":"new prompt"`)
+
+		return responseWithMessage("resp-final", "done"), nil
+	})
+	mock.compactResponses = []*responses.CompactedResponse{compactedResponse("cmp-old", "encrypted-old")}
+	looper := testLooper(mock)
+	looper.CheckpointSink = sink
+	output := make(chan ChatResponse, 10)
+	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		testInputMessage(responses.EasyInputMessageRole("user"), "old prompt", ""),
+	})
+	require.NoError(t, err)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "new prompt", output)
+
+	close(input)
+
+	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
+	require.NoError(t, err)
+	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
+	require.Equal(t, 2, providerCalls)
+}
+
 func TestLooperDispatchesToolCalls(t *testing.T) {
 	mock := mockResponses(
 		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{
@@ -982,6 +1179,101 @@ func TestLooperDispatchesToolCalls(t *testing.T) {
 	require.Equal(t, "function_call_output", *history[4].GetType())
 	require.Equal(t, "message", *history[5].GetType())
 	require.Equal(t, "message", *history[6].GetType())
+}
+
+func TestLooperCheckpointsCompletedToolOutputBeforeContinuation(t *testing.T) {
+	sink := &mockCheckpointSink{}
+	mock := mockResponses()
+	mock.newFunc = func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
+		if len(mock.calls) == 1 {
+			return responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "first", `{"step":1}`)}), nil
+		}
+
+		toolCheckpoints := 0
+
+		for _, call := range sink.snapshot() {
+			if call.name == "tool" {
+				toolCheckpoints++
+			}
+		}
+
+		require.Positive(t, toolCheckpoints, "tool output checkpoint should be durable before continuation request")
+
+		return responseWithMessage("resp-final", "done"), nil
+	}
+	looper := testLooper(mock)
+	looper.CheckpointSink = sink
+	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "first", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
+	tool := testLooperTool("first")
+	tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		return TextToolResult("first-result"), nil
+	}
+	looper.Tools = map[string]looperTool{"first": tool}
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "run tool", output)
+
+	close(input)
+
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+
+	var toolCheckpoints []ActiveTurnCheckpoint
+
+	for _, call := range sink.snapshot() {
+		if call.name == "tool" {
+			toolCheckpoints = append(toolCheckpoints, call.checkpoint)
+		}
+	}
+
+	require.NotEmpty(t, toolCheckpoints)
+	last := toolCheckpoints[len(toolCheckpoints)-1]
+	require.Empty(t, last.OpenFunctionCalls)
+	require.Len(t, last.CompletedFunctionOutputs, 1)
+	require.Equal(t, "call-1", last.CompletedFunctionOutputs[0].CallID)
+	require.Equal(t, "first", last.CompletedFunctionOutputs[0].Name)
+	require.Contains(t, marshalJSON(t, last.ReplayInput), `"function_call_output"`)
+}
+
+func TestLooperClearsCheckpointAfterCompletedSessionEntry(t *testing.T) {
+	sink := &mockCheckpointSink{}
+	mock := mockResponses(responseWithMessage("resp-final", "done"))
+	looper := testLooper(mock)
+	looper.CheckpointSink = sink
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "question", output)
+
+	close(input)
+
+	var saved []SessionEntry
+
+	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
+		for _, call := range sink.snapshot() {
+			require.NotEqual(t, "clear", call.name, "checkpoint should not clear before session entry is durable")
+		}
+
+		saved = append(saved, entry)
+
+		return nil
+	}, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	require.Len(t, saved, 1)
+
+	var cleared []string
+
+	for _, call := range sink.snapshot() {
+		if call.name == "clear" {
+			cleared = append(cleared, call.turnID)
+		}
+	}
+
+	require.Len(t, cleared, 1)
+	require.Equal(t, activeTurnID(&saved[0]), cleared[0])
 }
 
 func TestLooperReportsToolErrorsInBand(t *testing.T) {
@@ -1780,6 +2072,8 @@ func TestLooperOmitsInterruptedTurnsFromSession(t *testing.T) {
 		return nil, ctx.Err()
 	})
 	looper := testLooper(mock)
+	sink := &mockCheckpointSink{}
+	looper.CheckpointSink = sink
 	interrupts := make(chan os.Signal, 1)
 
 	var saved []SessionEntry
@@ -1811,6 +2105,95 @@ func TestLooperOmitsInterruptedTurnsFromSession(t *testing.T) {
 	_, turns, err := loadSession(sessionEntries(saved))
 	require.NoError(t, err)
 	require.Empty(t, turns)
+
+	calls := sink.snapshot()
+	require.NotEmpty(t, calls)
+	interrupted := calls[len(calls)-1]
+	require.Equal(t, "recovered", interrupted.name)
+	require.Len(t, interrupted.checkpoint.ReplayInput, 2)
+	require.Contains(t, string(interrupted.checkpoint.ReplayInput[1]), recoveryReplayMessageText)
+}
+
+func TestLooperContextCancellationDuringProviderCallMarksInterruptedCheckpoint(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	mock := mockResponseFunc(func(ctx context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
+		close(started)
+		<-ctx.Done()
+
+		return nil, ctx.Err()
+	})
+	looper := testLooper(mock)
+	sink := &mockCheckpointSink{}
+	looper.CheckpointSink = sink
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "will cancel", output)
+
+	close(input)
+
+	var group errgroup.Group
+	group.Go(func() error {
+		return looper.Loop(ctx, input, emptySession(), discardSession, make(chan os.Signal, 1))
+	})
+	<-started
+	cancel()
+
+	err := group.Wait()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "request response")
+
+	calls := sink.snapshot()
+	require.NotEmpty(t, calls)
+	interrupted := calls[len(calls)-1]
+	require.Equal(t, "recovered", interrupted.name)
+	require.Contains(t, marshalJSON(t, interrupted.checkpoint.ReplayInput), recoveryReplayMessageText)
+}
+
+func TestLooperCancellationDuringToolDispatchMarksInterruptedCheckpoint(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mock := mockResponses(responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "task", `{"description":"work"}`)}))
+	looper := testLooper(mock)
+	sink := &mockCheckpointSink{}
+	looper.CheckpointSink = sink
+	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
+	tool := testLooperTool("task")
+	tool.Call = func(ctx context.Context, _ json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+		cancel()
+		<-ctx.Done()
+
+		return ToolResult{}, ctx.Err()
+	}
+	looper.Tools = map[string]looperTool{"task": tool}
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "delegate", output)
+
+	close(input)
+
+	saved := []SessionEntry{}
+	err := looper.Loop(ctx, input, emptySession(), func(entry SessionEntry) error {
+		saved = append(saved, entry)
+
+		return nil
+	}, make(chan os.Signal, 1))
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "dispatch tool calls")
+	require.Empty(t, saved)
+
+	calls := sink.snapshot()
+	require.NotEmpty(t, calls)
+	interrupted := calls[len(calls)-1]
+	require.Equal(t, "recovered", interrupted.name)
+	require.Len(t, interrupted.checkpoint.OpenFunctionCalls, 1)
+	require.Equal(t, "call-1", interrupted.checkpoint.OpenFunctionCalls[0].CallID)
+	require.Contains(t, marshalJSON(t, interrupted.checkpoint.ReplayInput), taskAbortedToolOutputText)
+	require.Contains(t, marshalJSON(t, interrupted.checkpoint.ReplayInput), recoveryReplayMessageText)
 }
 
 func TestLooperPrintsCommentaryResponses(t *testing.T) {

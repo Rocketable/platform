@@ -32,6 +32,7 @@ RocketCode is under tight source-line budget pressure. Future simplification and
 | Interactive role prefix | In `cmd/rocketcode`, an input line whose trimmed text starts with case-sensitive `developer:` is sent as a developer-role prompt with the prefix removed. Other input is user-role prompt text. |
 | Interactive attachments | `@attach:path` tokens are removed from prompt text and loaded as prompt attachments when the referenced workspace file is supported and no larger than 5 MiB. |
 | Interactive session | `cmd/rocketcode` persists completed, non-interrupted turns in `.tmp/session.sqlite` and reloads ordered history lazily on the first non-empty prompt. |
+| Active root-turn checkpoints | Embedders may persist active root-turn checkpoint state separately from completed session entries. Completed `SessionEntry` rows remain ordinary history and are appended only after a root turn completes; active-turn checkpoint state is the durable restart handoff for incomplete root turns. RocketCode's checkpoint contract is embedder-neutral and does not assume RocketClaw storage, Slack, External MCP, SQLite, or a specific table schema. |
 | Non-interactive CLI | `cmd/rocketloop` runs an autonomous loop toward a goal supplied either by positional arguments or stdin, but not both. Empty goal is an error. |
 | Non-interactive flags | `rocketloop` supports `--script`, `--max-loops`, and `--script-output-limit`. Negative loop or output-limit values are errors. |
 | Non-interactive output | `rocketloop` writes JSONL events to stdout for chat responses, goal claims, critic verdicts, script results, and loop results. |
@@ -39,6 +40,7 @@ RocketCode is under tight source-line budget pressure. Future simplification and
 | Script verification | When `rocketloop --script` is set, script exit `0` ends successfully. Nonzero script output becomes developer feedback and the loop continues until success, error, or loop exhaustion. |
 | Non-interactive session | `rocketloop` uses in-memory sessions only. It does not persist or resume `.tmp/session.sqlite`. |
 | Interrupts | Interrupting an active `rocketcode` turn cancels that turn, emits `(interrupted)` commentary, does not append the interrupted turn to session history, and leaves the loop available for further input. |
+| Interrupted-turn recovery | Interrupted root turns recover by reconstructed replay and a new model request, not exact provider resume, local-tool resume, or task-tree resume. The recovered replay tells the model the runtime restarted, tool and subagent side effects may be partial, and the model must inspect current state before retrying, continuing, or reporting uncertainty. |
 | Tool loop | A turn may iterate across model responses and tool outputs until the model response contains no tool calls. Unknown, denied, or repeated identical tool calls are returned to the model as tool-output failures rather than process-fatal errors. |
 | Parallel tools | `Config.ParallelToolCalls` limits local concurrent tool execution when greater than zero. A zero value leaves local dispatch unlimited. |
 
@@ -60,6 +62,7 @@ RocketCode is under tight source-line budget pressure. Future simplification and
 - This ADR does not document every internal type or every test-only helper.
 - This ADR does not require preserving deprecated implementation shape when current observable behavior is preserved.
 - This ADR does not make human input shell-executable by default.
+- This ADR does not require a particular active-turn storage schema, helper name, or persistence backend.
 
 ## Evidence
 
@@ -92,3 +95,4 @@ RocketCode is under tight source-line budget pressure. Future simplification and
 - 2026-06-30: Allowed legacy `openai/<model>` strings as aliases normalized to unprefixed first-party OpenAI model IDs while keeping other provider-qualified model strings invalid.
 - 2026-07-01: Replaced missing or empty loaded-agent model inheritance with mandatory non-empty agent model declarations.
 - 2026-07-07: Changed the default RocketCode model to `gpt-5.5` and added an explicit automatic permission reviewer model configuration surface.
+- 2026-07-07: Added embedder-neutral active root-turn checkpoint capability and interrupted-turn recovery by reconstructed replay rather than exact provider/tool/task resume.

@@ -183,9 +183,14 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 		return "", fmt.Errorf("prepare RocketCode providers: %w", err)
 	}
 
-	customTools := []rocketcode.Tool{decision.Tool(), attachments.Tool(root), restartTool(requestRestart, recordRestartRequester), reloadTool(requestReload), scheduleMessageTool(progress.ScheduleMessage, logger), resetScheduledMessagesTool(progress.ResetScheduledMessages)}
+	customTools := []rocketcode.Tool{decision.Tool(), attachments.Tool(root), reloadTool(requestReload), scheduleMessageTool(progress.ScheduleMessage, logger), resetScheduledMessagesTool(progress.ResetScheduledMessages)}
 
-	rocketcodeConfig := rocketcode.Config{Model: "", AutoApproverModel: cfg.AutoApproverModel, ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: diagnostics, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: true}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CustomTools: customTools}
+	activeAgent := agents.Items[agent]
+	if agentExplicitlyAllowsRocketClawTool(&activeAgent, restartToolName) {
+		customTools = append(customTools, restartTool(requestRestart, recordRestartRequester))
+	}
+
+	rocketcodeConfig := rocketcode.Config{Model: "", AutoApproverModel: cfg.AutoApproverModel, ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: diagnostics, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: true}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CheckpointSink: rocketcode.InertCheckpointSink{}, CustomTools: customTools}
 
 	looper, err := rocketcode.NewWithProviders(providers, &rocketcodeConfig, root, agents, skills, agent, io.Discard)
 	if err != nil {

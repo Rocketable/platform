@@ -225,6 +225,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		AutoApprovePermissions: f.autoApprovePermissions,
 		PermissionReviewer:     &childFactory,
 		Observability:          f.observability,
+		CheckpointSink:         InertCheckpointSink{},
 	}
 
 	output := make(chan ChatResponse)
@@ -364,6 +365,7 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 		PermissionReviewer:     &childFactory,
 		InPermissionReview:     f.inPermissionReview,
 		Observability:          f.observability,
+		CheckpointSink:         InertCheckpointSink{},
 	}
 
 	output := make(chan ChatResponse)

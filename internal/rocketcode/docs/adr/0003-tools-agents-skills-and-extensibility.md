@@ -69,6 +69,7 @@ All function schemas are strict and mark declared properties as required even wh
 - Available subagents in the `task` tool description are filtered by active-agent `task` permission. With no active agent, none are listed.
 - Unknown subagent type returns `unknown agent type: ...`. Exhausted recursion is rejected before subagent lookup.
 - Child task output returns the last child assistant final-message text inside `<task_result>`; no final text produces an empty wrapper body.
+- If a root turn is interrupted after the model emits a `task` call but before the parent receives the completed `<task_result>`, restart recovery must not claim exact child-tree resume. The recovered parent replay uses a task-specific aborted or uncertain output explaining that the subagent may have partially completed work, spawned nested work, or produced side effects, and that the model must inspect current state before retrying, continuing, or summarizing uncertainty.
 
 ### Per-Agent Guardrail Gate
 
@@ -202,3 +203,4 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - 2026-07-01: Clarified that `skill.arguments` data remains literal and is not shell-executable through skill prompt shell expansion.
 - 2026-07-02: Added RocketCode-first direct skill invocation and `cmd/rocketcode` `/skill <skill-name> [arguments]` syntax.
 - 2026-07-07: Specified embedded guardian model selection through `Config.AutoApproverModel`, falling back to the resolved runtime/default model.
+- 2026-07-07: Added task-call restart recovery semantics for interrupted parent turns, requiring task-specific uncertainty instead of exact subagent tree resume.

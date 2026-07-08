@@ -33,6 +33,10 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 ### Session And Replay
 
 - Completed non-interrupted turns append `SessionEntry` rows with version `1`, type `turn`, UTC timestamp, model, replay input, replay output, output trace, and replay-neutral provider token-usage metadata when providers return it.
+- Active root-turn checkpoint state is separate from completed `SessionEntry` history. A checkpoint records the in-progress root turn's durable replay input, model/agent metadata, provider response identity and output/token traces when known, model-emitted function calls that have not yet received outputs, and completed function-call outputs already known to RocketCode. It must contain replay-safe data rather than provider SDK structs, process-local contexts, channels, or functions.
+- RocketCode writes active root-turn checkpoints before provider inference, before local tool or subagent dispatch, after completed tool outputs are appended, after compaction recovery replaces replay, on normal completion, and on interruption. The pre-provider and pre-dispatch checkpoints are the safety boundary: if the old process disappears after them, the next process can recover without assuming the provider call, tool call, or subagent task did not start.
+- On normal completion, the completed `SessionEntry` is the durable ordinary-history record. The active-turn checkpoint is deleted only after the completed session entry is durable, so cleanup cannot erase the only restart handoff before ordinary history exists. If completion or cleanup returns an error caused by runtime shutdown or context cancellation, RocketCode must leave the active-turn checkpoint intact for embedder startup recovery rather than treating it as a completed or unrecoverable turn.
+- On interruption or shutdown/cancellation, RocketCode updates the active-turn checkpoint so reconstructed replay is structurally valid for model refire when it can, does not append a normal completed `SessionEntry` for that root turn, synthesizes function-call outputs only as needed, and does not require embedders to represent interruption as a retained status/state row. Deeper unrecoverable checkpoint or replay errors may be reported to the embedder for logging and deletion according to the embedder's handoff policy.
 - Session history is loaded lazily on the first non-empty prompt and ordered by stored row id.
 - Empty prompt input with no attachments closes that response channel and does not call the model.
 - Replay preserves user and developer messages, assistant messages, reasoning encrypted content, compaction items, function calls, function-call outputs, and supported web-search calls using RocketCode's OpenAI Responses-shaped replay encoding.
@@ -60,6 +64,8 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 - Three repeated identical tool calls are converted into a tool-output failure for the model.
 - Tool call permission denial, unknown tool names, and malformed tool permissions are returned as model-visible tool failures rather than process-fatal errors.
 - Context cancellation during tool dispatch is fatal to that dispatch and does not become an ordinary tool failure.
+- Recovery of an interrupted root turn is a reconstructed-replay continuation. RocketCode does not resume an old OpenAI response, complete an in-flight local tool call in the old process, rerun an incomplete tool implicitly, or resume a child `task` tree. The recovered request includes model-visible recovery guidance requiring inspection of the environment and conversation state before retrying work, continuing work, or claiming completion.
+- Incomplete model-emitted function calls in recovered replay receive explicit aborted or uncertain function-call outputs only where the replay needs an output for validity. Incomplete `task` calls receive task-specific uncertainty text because the child subagent tree may have partially run, spawned nested work, or produced side effects before its `<task_result>` reached the parent.
 
 ### Observability
 
@@ -131,6 +137,7 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 - Behavior-preserving observability work must verify that traces are side effects only and do not change turn, tool, permission, replay, or persistence semantics.
 - Behavior-preserving simplification must keep linter checks active unless an exact linter suppression has explicit human approval.
 - Any change that intentionally alters these contracts must update this ADR first and receive explicit human approval.
+- Active-turn recovery work must establish RocketCode's generic checkpoint and reconstructed-replay contract before embedders add connector-specific storage, routing, or delivery behavior.
 - Tests should assert observable contracts rather than only implementation structure.
 
 ## Changelog
@@ -157,3 +164,5 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 - 2026-06-30: Allowed configured server/operator logging and tracing of guardrail and automatic permission reviewer child-run messages, reasoning summaries, and diagnostics as side effects that must not change replay, parent output, permissions, tool results, or session persistence.
 - 2026-07-01: Replaced missing or empty loaded-agent model inheritance with mandatory non-empty agent model declarations.
 - 2026-07-07: Changed the empty runtime/default model to `gpt-5.5` and specified `Config.AutoApproverModel` for embedded automatic permission reviewer model selection.
+- 2026-07-07: Added active root-turn checkpoint lifecycle semantics, including durable handoff writes before provider/tool boundaries, completion cleanup after durable session entries, and reconstructed-replay recovery with aborted or uncertain outputs for incomplete calls.
+- 2026-07-07: Clarified that RocketCode does not require retained active-turn status/state rows for interruption and must preserve active-turn checkpoints when shutdown or cancellation causes completion or cleanup errors.

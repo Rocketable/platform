@@ -153,6 +153,188 @@ func TestSessionServiceInitializesCronScheduleSchema(t *testing.T) {
 	assert.Equal(t, []string{"cron_schedule_runs", "cron_schedule_runs_running_path", "cron_schedules", "cron_schedules_next_due_id", "cron_schedules_relative_path"}, names)
 }
 
+func TestSessionServiceInitializesActiveTurnIndexes(t *testing.T) {
+	store := newTestSessionService(t)
+
+	rows, err := store.db.QueryContext(context.Background(), `SELECT name FROM sqlite_master WHERE type IN ('table', 'index') AND name LIKE 'active_turns%' ORDER BY name`)
+
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+
+	var names []string
+
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		names = append(names, name)
+	}
+
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{"active_turns", "active_turns_conversation_updated"}, names)
+}
+
+func TestSessionServiceActiveTurnLifecycle(t *testing.T) {
+	store := newTestSessionService(t)
+	checkpoint := &harness.ActiveTurnCheckpoint{
+		TurnID:          " turn-1 ",
+		ConversationKey: " conversation-1 ",
+		Agent:           " planner ",
+		Model:           " gpt-5.5 ",
+		DisplayModel:    " GPT-5.5 ",
+		ReplayInput:     []json.RawMessage{json.RawMessage(`{"type":"message","role":"user"}`)},
+		OutputTrace:     []json.RawMessage{json.RawMessage(`{"id":"output-1"}`)},
+		TokenUsage:      &harness.TokenUsage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5},
+		ResponseID:      " resp-1 ",
+		OpenFunctionCalls: []harness.FunctionCallCheckpoint{{
+			CallID:    "call-1",
+			Name:      "read",
+			Arguments: json.RawMessage(`{"filePath":"README.md"}`),
+		}},
+	}
+
+	require.NoError(t, store.StartActiveTurn(context.Background(), checkpoint))
+
+	checkpoint.ResponseID = "resp-2"
+	checkpoint.OpenFunctionCalls = nil
+	checkpoint.CompletedFunctionOutputs = []harness.FunctionOutputCheckpoint{{CallID: "call-1", Name: "read", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"function_call_output"}`)}}}
+	require.NoError(t, store.RecordActiveTurnCheckpoint(context.Background(), checkpoint))
+
+	turns, err := store.RecoverableActiveTurns(context.Background())
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	assert.Equal(t, "turn-1", turns[0].Checkpoint.TurnID)
+	assert.Equal(t, "conversation-1", turns[0].Checkpoint.ConversationKey)
+	assert.Equal(t, "planner", turns[0].Checkpoint.Agent)
+	assert.Equal(t, "gpt-5.5", turns[0].Checkpoint.Model)
+	assert.Equal(t, "GPT-5.5", turns[0].Checkpoint.DisplayModel)
+	assert.Equal(t, "resp-2", turns[0].Checkpoint.ResponseID)
+	assert.Equal(t, checkpoint.ReplayInput, turns[0].Checkpoint.ReplayInput)
+	assert.Equal(t, checkpoint.CompletedFunctionOutputs, turns[0].Checkpoint.CompletedFunctionOutputs)
+
+	require.NoError(t, store.ClearCompletedActiveTurn(context.Background(), " turn-1 "))
+	turns, err = store.RecoverableActiveTurns(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, turns)
+}
+
+func TestSessionServiceActiveTurnPersistsThroughCentralizedOpener(t *testing.T) {
+	workspace := t.TempDir()
+	store, err := NewSessionService(workspace)
+	require.NoError(t, err)
+
+	checkpoint := &harness.ActiveTurnCheckpoint{
+		TurnID:          "turn-1",
+		ConversationKey: "conversation-1",
+		Agent:           "planner",
+		Model:           "gpt-5.5",
+		DisplayModel:    "gpt-5.5",
+		ReplayInput:     []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"hello"}`)},
+	}
+
+	require.NoError(t, store.StartActiveTurn(context.Background(), checkpoint))
+	require.NoError(t, store.Stop(context.Background()))
+
+	reopened := newTestSessionServiceAt(t, workspace)
+	turns, err := reopened.RecoverableActiveTurns(context.Background())
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	assert.Equal(t, "turn-1", turns[0].Checkpoint.TurnID)
+	assert.Equal(t, "conversation-1", turns[0].Checkpoint.ConversationKey)
+}
+
+func TestSessionServiceRecoverableActiveTurnsReturnsEveryRemainingRow(t *testing.T) {
+	store := newTestSessionService(t)
+
+	for _, turnID := range []string{"turn-1", "turn-2", "turn-3"} {
+		checkpoint := &harness.ActiveTurnCheckpoint{TurnID: turnID, ConversationKey: "conversation-" + turnID, Agent: "planner", Model: "gpt-5.5", DisplayModel: "gpt-5.5"}
+		require.NoError(t, store.StartActiveTurn(context.Background(), checkpoint))
+	}
+
+	turns, err := store.RecoverableActiveTurns(context.Background())
+	require.NoError(t, err)
+
+	turnIDs := make([]string, 0, len(turns))
+	for _, turn := range turns {
+		turnIDs = append(turnIDs, turn.Checkpoint.TurnID)
+	}
+
+	assert.ElementsMatch(t, []string{"turn-1", "turn-2", "turn-3"}, turnIDs)
+}
+
+func TestSessionServiceRecoverableActiveTurnsDeletesCorruptRows(t *testing.T) {
+	store := newTestSessionService(t)
+	valid := &harness.ActiveTurnCheckpoint{TurnID: "turn-valid", ConversationKey: "conversation-valid", Agent: "planner", Model: "gpt-5.5", DisplayModel: "gpt-5.5"}
+	require.NoError(t, store.StartActiveTurn(context.Background(), valid))
+
+	_, err := store.db.ExecContext(context.Background(), `INSERT INTO active_turns (id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "turn-corrupt", "conversation-corrupt", "planner", "gpt-5.5", "gpt-5.5", `{`, `null`, `null`, "", `null`, `null`, "", `{}`, int64(1), int64(1))
+	require.NoError(t, err)
+
+	turns, err := store.RecoverableActiveTurns(context.Background())
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	assert.Equal(t, "turn-valid", turns[0].Checkpoint.TurnID)
+
+	var count int
+	require.NoError(t, store.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM active_turns WHERE id = ?`, "turn-corrupt").Scan(&count))
+	assert.Equal(t, 0, count)
+}
+
+func TestSessionServiceRecoverableActiveTurnsReportsDBFailures(t *testing.T) {
+	store := newTestSessionService(t)
+	require.NoError(t, store.Stop(context.Background()))
+
+	_, err := store.RecoverableActiveTurns(context.Background())
+	require.ErrorContains(t, err, "query recoverable active turns")
+}
+
+func TestSessionServiceInitializesActiveTurnSchema(t *testing.T) {
+	store := newTestSessionService(t)
+
+	rows, err := store.db.QueryContext(context.Background(), `PRAGMA table_info(active_turns)`)
+
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+
+	columns := map[string]string{}
+
+	for rows.Next() {
+		var (
+			cid          int
+			name         string
+			columnType   string
+			notNull      int
+			defaultValue sql.NullString
+			primaryKey   int
+		)
+		require.NoError(t, rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey))
+		columns[name] = columnType
+	}
+
+	require.NoError(t, rows.Err())
+
+	assert.Equal(t, map[string]string{
+		"id":                              "TEXT",
+		"conversation_id":                 "TEXT",
+		"agent":                           "TEXT",
+		"model":                           "TEXT",
+		"display_model":                   "TEXT",
+		"replay_input_json":               "TEXT",
+		"output_trace_json":               "TEXT",
+		"token_usage_json":                "TEXT",
+		"response_id":                     "TEXT",
+		"open_function_calls_json":        "TEXT",
+		"completed_function_outputs_json": "TEXT",
+		"restart_notice_json":             "TEXT",
+		"source_metadata_json":            "TEXT",
+		"created_at_unix_ns":              "INTEGER",
+		"updated_at_unix_ns":              "INTEGER",
+	}, columns)
+
+	var indexCount int
+	require.NoError(t, store.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM sqlite_schema WHERE type = 'index' AND name = 'active_turns_conversation_updated'`).Scan(&indexCount))
+	assert.Equal(t, 1, indexCount)
+}
+
 func TestSessionServiceMigratesVersionOneWithoutCronScheduleSpec(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, prepareSessionDBPath(workspace))
@@ -168,6 +350,70 @@ func TestSessionServiceMigratesVersionOneWithoutCronScheduleSpec(t *testing.T) {
 	version, err := sessionDBUserVersion(context.Background(), store.db)
 	require.NoError(t, err)
 	assert.Equal(t, sessionDBSchemaVersion, version)
+}
+
+func TestSessionServiceMigratesVersionTwoWithActiveTurnSchema(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, prepareSessionDBPath(workspace))
+	db, err := sql.Open("sqlite", sessionDBPath(workspace))
+	require.NoError(t, err)
+	require.NoError(t, createSessionSchema(context.Background(), db))
+	_, err = db.ExecContext(context.Background(), `DROP TABLE active_turns`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(context.Background(), `PRAGMA user_version = 2`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	store := newTestSessionServiceAt(t, workspace)
+	reopened := newTestSessionServiceAt(t, workspace)
+
+	version, err := sessionDBUserVersion(context.Background(), reopened.db)
+	require.NoError(t, err)
+	assert.Equal(t, sessionDBSchemaVersion, version)
+
+	var count int
+	require.NoError(t, store.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'active_turns'`).Scan(&count))
+	assert.Equal(t, 1, count)
+}
+
+func TestSessionServiceMigratesActiveTurnStatusSchemaDeletesTerminalRows(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, prepareSessionDBPath(workspace))
+	db, err := sql.Open("sqlite", sessionDBPath(workspace))
+	require.NoError(t, err)
+	require.NoError(t, createSessionSchema(context.Background(), db))
+	_, err = db.ExecContext(context.Background(), `DROP TABLE active_turns`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(context.Background(), `CREATE TABLE active_turns (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, status TEXT NOT NULL, agent TEXT NOT NULL, model TEXT NOT NULL, display_model TEXT NOT NULL, replay_input_json TEXT NOT NULL, output_trace_json TEXT NOT NULL, token_usage_json TEXT NOT NULL, response_id TEXT NOT NULL, open_function_calls_json TEXT NOT NULL, completed_function_outputs_json TEXT NOT NULL, restart_notice_json TEXT NOT NULL, source_metadata_json TEXT NOT NULL, created_at_unix_ns INTEGER NOT NULL, updated_at_unix_ns INTEGER NOT NULL)`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(context.Background(), `CREATE INDEX active_turns_conversation_status ON active_turns (conversation_id, status, updated_at_unix_ns)`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(context.Background(), `CREATE INDEX active_turns_status_updated ON active_turns (status, updated_at_unix_ns)`)
+	require.NoError(t, err)
+
+	for _, status := range []string{"active", "interrupting", "interrupted", "recovering", "completed", "failed", "canceled"} {
+		_, err = db.ExecContext(context.Background(), `INSERT INTO active_turns (id, conversation_id, status, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "turn-"+status, "conversation-"+status, status, "planner", "gpt-5.5", "gpt-5.5", `[]`, `null`, `null`, "", `null`, `null`, "", `{}`, int64(1), int64(1))
+		require.NoError(t, err)
+	}
+
+	_, err = db.ExecContext(context.Background(), `PRAGMA user_version = 4`)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	store := newTestSessionServiceAt(t, workspace)
+	turns, err := store.RecoverableActiveTurns(context.Background())
+	require.NoError(t, err)
+
+	turnIDs := make([]string, 0, len(turns))
+	for _, turn := range turns {
+		turnIDs = append(turnIDs, turn.Checkpoint.TurnID)
+	}
+
+	assert.ElementsMatch(t, []string{"turn-active", "turn-interrupting", "turn-interrupted", "turn-recovering"}, turnIDs)
+
+	hasStatus, err := activeTurnsHasColumn(context.Background(), store.db, "status")
+	require.NoError(t, err)
+	assert.False(t, hasStatus)
 }
 
 func TestSessionServiceSyncCronSchedulesInsertsUpdatesAndDeletes(t *testing.T) {
@@ -1104,6 +1350,33 @@ func TestSessionServicePersistsExternalMCPSessionMapping(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, ExternalMCPSessionState{Agent: "planner", ConversationID: "external_mcp:planner:def"}, session)
+}
+
+func TestSessionServicePersistsActiveTurnSourceMetadata(t *testing.T) {
+	store := newTestSessionService(t)
+	checkpoint := &harness.ActiveTurnCheckpoint{
+		TurnID:          "turn-1",
+		ConversationKey: "external_mcp:planner:private",
+		Agent:           "planner",
+		Model:           "gpt-5.5",
+		DisplayModel:    "gpt-5.5",
+		ReplayInput:     []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"hello"}`)},
+	}
+
+	require.NoError(t, store.UpsertActiveTurn(context.Background(), checkpoint, map[string]string{"source": "external_mcp", "external_conversation_id": "public-1"}))
+
+	turns, err := store.RecoverableActiveTurns(context.Background())
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	state := turns[0]
+	assert.Equal(t, "external_mcp:planner:private", state.Checkpoint.ConversationKey)
+	assert.Equal(t, "public-1", state.SourceMetadata["external_conversation_id"])
+	assert.Equal(t, "external_mcp", state.SourceMetadata["source"])
+
+	require.NoError(t, store.ClearCompletedActiveTurn(context.Background(), "turn-1"))
+	turns, err = store.RecoverableActiveTurns(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, turns)
 }
 
 func TestSessionServiceMarksThreadSeeded(t *testing.T) {

@@ -35,6 +35,7 @@ type Config struct {
 	AutoApprovePermissions     bool
 	Observability              ObservabilityConfig
 	ChildRunLogger             ChildRunLogger
+	CheckpointSink             CheckpointSink
 	CustomTools                []Tool
 	ShellEnv                   map[string]string
 }
@@ -247,6 +248,10 @@ func NewWithProviders(
 		return nil, errors.New("child run logger is required")
 	}
 
+	if config.CheckpointSink == nil {
+		return nil, errors.New("checkpoint sink is required")
+	}
+
 	promptExpansion, err := newPromptExpansionEnvironment(root, shellOutput, shellEnv)
 	if err != nil {
 		return nil, fmt.Errorf("initialize prompt expansion: %w", err)
@@ -361,6 +366,7 @@ func NewWithProviders(
 		AutoApprovePermissions: config.AutoApprovePermissions,
 		PermissionReviewer:     factory,
 		Observability:          config.Observability,
+		CheckpointSink:         config.CheckpointSink,
 		expandInputPrompts:     config.ExpandPromptShellCommands.InputPrompts,
 		promptExpansion:        promptExpansion,
 	}

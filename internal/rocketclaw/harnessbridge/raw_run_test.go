@@ -103,7 +103,7 @@ func TestRawRunDecisionToolStoresPayload(t *testing.T) {
 
 func TestRunRawCronCanEditRestartAndCompleteDecision(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  edit: allow\n  rocketclaw:\n    rocketclaw_schedule_message: allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  edit: allow\n  rocketclaw:\n    rocketclaw_restart: allow\n    rocketclaw_schedule_message: allow\n---\nPrompt\n")
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
 
@@ -214,6 +214,177 @@ func TestRunRawCronCanEditRestartAndCompleteDecision(t *testing.T) {
 	requestMu.Unlock()
 	assertFileContent(t, root, "cron/HEARTBEAT.md", "new heartbeat\n")
 	assertFileContent(t, root, "rocketclaw.json", "{\"name\":\"new\"}\n")
+}
+
+func TestRunRawHidesRestartWithoutExplicitAllow(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	var (
+		requestMu sync.Mutex
+		requests  int
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		requestMu.Lock()
+		requests++
+		request := requests
+		requestMu.Unlock()
+
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		if request == 1 {
+			var tools []struct {
+				Name string `json:"name"`
+			}
+
+			data, err := json.Marshal(body["tools"])
+			if !assert.NoError(t, err) || !assert.NoError(t, json.Unmarshal(data, &tools)) {
+				http.Error(w, "decode tools", http.StatusInternalServerError)
+
+				return
+			}
+
+			toolNames := make([]string, 0, len(tools))
+			for _, tool := range tools {
+				toolNames = append(toolNames, tool.Name)
+			}
+
+			assert.NotContains(t, toolNames, restartToolName)
+			assert.Contains(t, toolNames, reloadToolName)
+			assert.Contains(t, toolNames, scheduleMessageToolName)
+			assert.Contains(t, toolNames, resetScheduledMessagesToolName)
+			assert.Contains(t, toolNames, rawRunToolName)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		switch request {
+		case 1:
+			writeRawRunFunctionCall(t, w, "resp_1", "call_1", rawRunToolName, map[string]string{"payload": "done"})
+		case 2:
+			_, err := w.Write([]byte(`{"id":"resp_2","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"assistant complete","annotations":[]}]}]}`))
+			assert.NoError(t, err)
+		default:
+			t.Fatalf("unexpected response request %d", request)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
+	result, err := RunRawWithProgress(t.Context(), cfg, "main", "prompt", slog.New(slog.DiscardHandler), nil)
+	require.NoError(t, err)
+	assert.Equal(t, RawRunResult{Text: "assistant complete", VerbatimMessage: "done"}, result)
+	requestMu.Lock()
+	assert.Equal(t, 2, requests)
+	requestMu.Unlock()
+}
+
+func TestRunRawOptsOutOfActiveTurnRecoveryWithConversationKey(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	service, err := NewSessionService(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		requests++
+		if requests == 1 {
+			turns, err := service.RecoverableActiveTurns(r.Context())
+			if !assert.NoError(t, err) {
+				return
+			}
+
+			assert.Empty(t, turns)
+
+			w.Header().Set("Content-Type", "application/json")
+			writeRawRunFunctionCall(t, w, "resp_1", "call_1", rawRunToolName, map[string]string{"payload": "done"})
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		writeRawRunMessage(t, w, "resp_2", "msg_1", "assistant done")
+	}))
+	t.Cleanup(server.Close)
+
+	progress := newInertRawRunProgress()
+	progress.SessionService = service
+	progress.ConversationID = "cron:durable"
+
+	result, err := RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, "main", "prompt", slog.New(slog.DiscardHandler), progress)
+	require.NoError(t, err)
+	assert.Equal(t, RawRunResult{Text: "assistant done", VerbatimMessage: "done"}, result)
+
+	turns, err := service.RecoverableActiveTurns(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, turns)
+}
+
+func TestRunRawOptsOutOfCheckpointsWithoutConversationKey(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	service, err := NewSessionService(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		requests++
+		if requests == 1 {
+			turns, err := service.RecoverableActiveTurns(r.Context())
+			if !assert.NoError(t, err) {
+				return
+			}
+
+			assert.Empty(t, turns)
+
+			w.Header().Set("Content-Type", "application/json")
+			writeRawRunFunctionCall(t, w, "resp_1", "call_1", rawRunToolName, map[string]string{"payload": "done"})
+
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		writeRawRunMessage(t, w, "resp_2", "msg_1", "assistant done")
+	}))
+	t.Cleanup(server.Close)
+
+	progress := newInertRawRunProgress()
+	progress.SessionService = service
+
+	_, err = RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, "main", "prompt", slog.New(slog.DiscardHandler), progress)
+	require.NoError(t, err)
 }
 
 func TestRunRawRetriesMissingMandatoryToolUntilDecision(t *testing.T) {
