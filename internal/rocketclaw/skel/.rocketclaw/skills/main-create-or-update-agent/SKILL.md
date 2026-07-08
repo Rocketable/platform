@@ -173,7 +173,7 @@ The resulting frontmatter must include at least:
 - `description`
 - `model`
 
-The `model` value is required and must be a non-empty unprefixed OpenAI model ID, such as `gpt-5.4`. If the human has not specified the model for a new agent, ask before writing the file.
+The `model` value is required and must be a non-empty unprefixed OpenAI model ID, such as `gpt-5.5`. If the human has not specified the model for a new agent, ask before writing the file.
 
 When updating an existing agent, preserve the existing non-empty `model` unless the human explicitly asked to change it. If the existing agent has no `model` or an empty `model`, ask the human which model to use and add it.
 

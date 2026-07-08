@@ -145,7 +145,7 @@ Agents are top-level Markdown files in `agents/*.md`. The filename without `.md`
 ```yaml
 ---
 description: Short human-readable purpose
-model: gpt-5.4
+model: gpt-5.5
 reasoningEffort: high
 verbosity: medium
 maxRecursion: 2

@@ -18,7 +18,7 @@ func TestCompactModelDefaultsEmptyModel(t *testing.T) {
 	model, err := compactModel("")
 
 	require.NoError(t, err)
-	require.Equal(t, seedCompactionModel{apiModel: responses.ResponseCompactParamsModelGPT5_4}, model)
+	require.Equal(t, seedCompactionModel{apiModel: defaultSeedCompactionModel}, model)
 }
 
 func TestCompactModelRejectsProviderQualifiedModel(t *testing.T) {

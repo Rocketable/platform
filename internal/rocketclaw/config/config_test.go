@@ -52,7 +52,22 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	}`)
 
 	assert.Equal(t, "api_key", cfg.OpenAI.RocketCodeAuth)
+	assert.Empty(t, cfg.AutoApproverModel)
+	assert.Empty(t, cfg.SeedCompactionModel)
 	assert.True(t, filepath.IsAbs(cfg.Workspace))
+}
+
+func TestLoadPreservesModelConfig(t *testing.T) {
+	cfg := loadTestConfig(t, `{
+	  "workspace": ".",
+	  "auto_approver_model": " openai/gpt-5.5 ",
+	  "seed_compaction_model": " gpt-5.4 ",
+	  "openai": {"api_key": "test-key"},
+	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
+	}`)
+
+	assert.Equal(t, "gpt-5.5", cfg.AutoApproverModel)
+	assert.Equal(t, "gpt-5.4", cfg.SeedCompactionModel)
 }
 
 func TestLoadPreservesInstrumentationConfig(t *testing.T) {
@@ -131,6 +146,8 @@ func TestValidateRejectsMissingRequiredConfig(t *testing.T) {
 		{name: "no connectors", update: func(c *Config) { c.Slack.Enabled = false }, wantErr: "enable at least one connector or mcp_external"},
 		{name: "workspace", update: func(c *Config) { c.Workspace = "" }, wantErr: "workspace is required"},
 		{name: "rocketcode auth", update: func(c *Config) { c.OpenAI.RocketCodeAuth = "browser" }, wantErr: "openai.rocketcode_auth must be api_key or chatgpt"},
+		{name: "auto approver model", update: func(c *Config) { c.AutoApproverModel = "anthropic/claude" }, wantErr: `auto_approver_model: invalid model "anthropic/claude": expected unprefixed OpenAI model ID`},
+		{name: "seed compaction model", update: func(c *Config) { c.SeedCompactionModel = "openai/" }, wantErr: `seed_compaction_model: invalid model "openai/": expected openai/model`},
 		{name: "mcp external listen addr", update: func(c *Config) { c.MCPExternal.Enabled = true }, wantErr: "mcp_external.listen_addr is required when mcp_external is enabled"},
 		{name: "slack bot token", update: func(c *Config) { c.Slack.BotToken = "" }, wantErr: "slack.bot_token is required when slack is enabled"},
 		{name: "slack app token", update: func(c *Config) { c.Slack.AppToken = "" }, wantErr: "slack.app_token is required when slack is enabled"},

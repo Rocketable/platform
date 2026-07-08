@@ -22,6 +22,7 @@ import (
 // Config contains runtime settings supplied by the embedding application.
 type Config struct {
 	Model                      shared.ResponsesModel
+	AutoApproverModel          shared.ResponsesModel
 	ReasoningEffort            shared.ReasoningEffort
 	Diagnostics                bool
 	ExperimentalStrongerSkills bool
@@ -283,6 +284,14 @@ func NewWithProviders(
 		return nil, err
 	}
 
+	autoApproverModelRef := defaultModelRef
+	if config.AutoApproverModel != "" {
+		autoApproverModelRef, err = parseModelRef(config.AutoApproverModel)
+		if err != nil {
+			return nil, fmt.Errorf("auto approver model: %w", err)
+		}
+	}
+
 	if err := validateAgentModels(agents); err != nil {
 		return nil, err
 	}
@@ -312,6 +321,7 @@ func NewWithProviders(
 		client:                     providerClient.client,
 		systemPrompt:               systemPrompt,
 		defaultModelRef:            defaultModelRef,
+		autoApproverModelRef:       autoApproverModelRef,
 		modelRef:                   modelRef,
 		reasoningEffort:            reasoningEffort,
 		compactThreshold:           config.CompactThreshold,

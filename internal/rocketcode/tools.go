@@ -22,6 +22,7 @@ type toolFactory struct {
 	client                     responsesAPI
 	systemPrompt               string
 	defaultModelRef            modelRef
+	autoApproverModelRef       modelRef
 	modelRef                   modelRef
 	reasoningEffort            shared.ReasoningEffort
 	compactThreshold           int64

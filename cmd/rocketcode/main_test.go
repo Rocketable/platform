@@ -20,6 +20,7 @@ import (
 
 func TestConfigFromEnvDefaults(t *testing.T) {
 	t.Setenv("ROCKETCODE_MODEL", "")
+	t.Setenv("ROCKETCODE_AUTO_APPROVER_MODEL", "")
 	t.Setenv("ROCKETCODE_REASONING_EFFORT", "")
 	t.Setenv("ROCKETCODE_DIAG", "")
 	t.Setenv("ROCKETCODE_EXPERIMENTAL_STRONGER_SKILLS", "")
@@ -30,7 +31,8 @@ func TestConfigFromEnvDefaults(t *testing.T) {
 	config, err := rocketcode.StandaloneConfigFromEnv()
 
 	require.NoError(t, err)
-	require.Equal(t, "gpt-5.4", config.Model)
+	require.Equal(t, "gpt-5.5", config.Model)
+	require.Empty(t, config.AutoApproverModel)
 	require.Equal(t, "high", string(config.ReasoningEffort))
 	require.False(t, config.Diagnostics)
 	require.False(t, config.ExperimentalStrongerSkills)
@@ -49,6 +51,7 @@ func TestConfigFromEnvDefaults(t *testing.T) {
 
 func TestConfigFromEnvReadsOverrides(t *testing.T) {
 	t.Setenv("ROCKETCODE_MODEL", "custom-model")
+	t.Setenv("ROCKETCODE_AUTO_APPROVER_MODEL", "review-model")
 	t.Setenv("ROCKETCODE_REASONING_EFFORT", "low")
 	t.Setenv("ROCKETCODE_DIAG", "1")
 	t.Setenv("ROCKETCODE_EXPERIMENTAL_STRONGER_SKILLS", "1")
@@ -60,6 +63,7 @@ func TestConfigFromEnvReadsOverrides(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, "custom-model", config.Model)
+	require.Equal(t, "review-model", config.AutoApproverModel)
 	require.Equal(t, "low", string(config.ReasoningEffort))
 	require.True(t, config.Diagnostics)
 	require.True(t, config.ExperimentalStrongerSkills)

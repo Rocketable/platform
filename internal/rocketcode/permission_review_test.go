@@ -49,12 +49,13 @@ func TestPermissionReviewLogsHiddenChildRunOutput(t *testing.T) {
 			testMessageOutputItem("review-commentary", "commentary", "checking authorization"),
 			testMessageOutputItem("review-final", "", `{"risk_level":"low","user_authorization":"medium","outcome":"allow","rationale":"Low-risk action."}`),
 		})),
-		defaultModelRef: modelRef,
-		modelRef:        modelRef,
-		agents:          Agents{Items: map[string]Agent{}},
-		skills:          Skills{Items: map[string]Skill{}},
-		baseTools:       map[string]looperTool{},
-		shellOutput:     shellOutputConfig{},
+		defaultModelRef:      modelRef,
+		autoApproverModelRef: modelRef,
+		modelRef:             modelRef,
+		agents:               Agents{Items: map[string]Agent{}},
+		skills:               Skills{Items: map[string]Skill{}},
+		baseTools:            map[string]looperTool{},
+		shellOutput:          shellOutputConfig{},
 		childRunLogger: func(event *ChildRunEvent) {
 			childRunEvents = append(childRunEvents, *event)
 		},
@@ -75,6 +76,34 @@ func TestPermissionReviewLogsHiddenChildRunOutput(t *testing.T) {
 		{Kind: ChildRunKindPermissionReview, Stage: ChildRunStageToolPermission, Agent: "guardian", Item: assistantCommentary("checking authorization")},
 		{Kind: ChildRunKindPermissionReview, Stage: ChildRunStageToolPermission, Agent: "guardian", Item: assistantMessage(`{"risk_level":"low","user_authorization":"medium","outcome":"allow","rationale":"Low-risk action."}`)},
 	}, childRunEvents)
+}
+
+func TestPermissionReviewUsesConfiguredAutoApproverModel(t *testing.T) {
+	defaultModel, err := parseModelRef("gpt-5.5")
+	require.NoError(t, err)
+	autoApproverModel, err := parseModelRef("gpt-5.4-mini")
+	require.NoError(t, err)
+
+	mock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
+		testMessageOutputItem("review-final", "", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low-risk action."}`),
+	}))
+	factory := &toolFactory{
+		client:               mock,
+		defaultModelRef:      defaultModel,
+		autoApproverModelRef: autoApproverModel,
+		modelRef:             defaultModel,
+		agents:               Agents{Items: map[string]Agent{}},
+		skills:               Skills{Items: map[string]Skill{}},
+		baseTools:            map[string]looperTool{},
+		shellOutput:          shellOutputConfig{},
+		childRunLogger:       DiscardChildRunLog,
+	}
+
+	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, make(chan ChatResponse, 10))
+
+	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
+	require.Len(t, mock.calls, 1)
+	require.Equal(t, "gpt-5.4-mini", mock.calls[0].Model)
 }
 
 func TestPermissionReviewPromptIncludesReviewContextAndPlannedAction(t *testing.T) {

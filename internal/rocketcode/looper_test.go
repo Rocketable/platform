@@ -1346,14 +1346,15 @@ func TestPermissionReviewFailsClosedOnInvalidReviewerOutput(t *testing.T) {
 	require.NoError(t, err)
 
 	factory := &toolFactory{
-		client:          mockResponses(responseWithMessage("review", "not json")),
-		defaultModelRef: modelRef,
-		modelRef:        modelRef,
-		agents:          Agents{Items: map[string]Agent{}},
-		skills:          Skills{Items: map[string]Skill{}},
-		baseTools:       map[string]looperTool{},
-		shellOutput:     shellOutputConfig{},
-		childRunLogger:  DiscardChildRunLog,
+		client:               mockResponses(responseWithMessage("review", "not json")),
+		defaultModelRef:      modelRef,
+		autoApproverModelRef: modelRef,
+		modelRef:             modelRef,
+		agents:               Agents{Items: map[string]Agent{}},
+		skills:               Skills{Items: map[string]Skill{}},
+		baseTools:            map[string]looperTool{},
+		shellOutput:          shellOutputConfig{},
+		childRunLogger:       DiscardChildRunLog,
 	}
 
 	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, make(chan ChatResponse, 10))

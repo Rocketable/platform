@@ -52,6 +52,10 @@ func StandaloneConfigFromEnv() (Config, error) {
 		config.Model = value
 	}
 
+	if value := os.Getenv("ROCKETCODE_AUTO_APPROVER_MODEL"); value != "" {
+		config.AutoApproverModel = value
+	}
+
 	if value := os.Getenv("ROCKETCODE_REASONING_EFFORT"); value != "" {
 		config.ReasoningEffort = shared.ReasoningEffort(value)
 	}
@@ -111,7 +115,7 @@ func StandaloneProvidersFromEnv() (Providers, error) {
 
 func standaloneDefaultConfig() Config {
 	return Config{
-		Model:            openai.ChatModelGPT5_4,
+		Model:            defaultOpenAIModel,
 		ReasoningEffort:  shared.ReasoningEffort("high"),
 		CompactThreshold: 200000,
 		ShellOutputDir:   filepath.Join(".tmp", "shell-outputs"),

@@ -5,13 +5,15 @@ import (
 	"fmt"
 	"strings"
 
-	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/shared"
 )
+
+const defaultOpenAIModel shared.ResponsesModel = "gpt-5.5"
 
 type modelRef struct{ apiModel string }
 
 func defaultModelRef() modelRef {
-	return modelRef{apiModel: openai.ChatModelGPT5_4}
+	return modelRef{apiModel: defaultOpenAIModel}
 }
 
 func (m modelRef) display() string {

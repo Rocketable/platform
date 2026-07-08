@@ -601,7 +601,7 @@ func TestHandleInboundInternalizeCompletesResponseWithRocketCodeError(t *testing
 }
 
 func TestRocketCodeConfigEnablesDiagnosticsForThinkingUpdates(t *testing.T) {
-	bridge := &Bridge{runtime: new(config.Config), config: Config{ConversationID: events.MainConversationID(), Agent: "main", RequestRestart: testNoopRestart, RequestReload: func(context.Context, string) (string, error) {
+	bridge := &Bridge{runtime: &config.Config{AutoApproverModel: "gpt-5.4-mini"}, config: Config{ConversationID: events.MainConversationID(), Agent: "main", RequestRestart: testNoopRestart, RequestReload: func(context.Context, string) (string, error) {
 		return "rocketclaw runtime assets reloaded", nil
 	}, SessionService: newTestSessionService(t)}}
 	cfg := bridge.rocketcodeConfig(t.TempDir(), nil, rocketcode.Tool{Name: attachFilesToolName})
@@ -614,6 +614,7 @@ func TestRocketCodeConfigEnablesDiagnosticsForThinkingUpdates(t *testing.T) {
 	assert.True(t, cfg.Diagnostics)
 	assert.True(t, cfg.ExperimentalStrongerSkills)
 	assert.True(t, cfg.AutoApprovePermissions)
+	assert.Equal(t, "gpt-5.4-mini", cfg.AutoApproverModel)
 	assert.Equal(t, 16, cfg.ParallelToolCalls)
 	assert.Equal(t, rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, cfg.ExpandPromptShellCommands)
 	assert.Contains(t, toolNames, scheduleMessageToolName)
@@ -1463,7 +1464,7 @@ func TestCompactSeedReplayUsesDefaultModelAndReportsProviderError(t *testing.T) 
 	bridge := &Bridge{runtime: &config.Config{Workspace: t.TempDir(), OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, log: slog.New(slog.DiscardHandler), config: Config{ConversationID: events.MainConversationID()}}
 	_, err := bridge.compactSeedReplay(context.Background(), []rocketcode.SessionEntry{{ReplayInput: testReplayInput(replayInputMessage{role: "user", text: "main question"})}}, seedCompactionModel{})
 	require.ErrorContains(t, err, "compact seed replay")
-	assert.Equal(t, string(responses.ResponseCompactParamsModelGPT5_4), requestBody.Model)
+	assert.Equal(t, "gpt-5.5", requestBody.Model)
 }
 
 func TestRocketCodeProvidersConfiguresOpenAI(t *testing.T) {
@@ -2098,7 +2099,7 @@ func TestSeedThreadFromConversationCompactsMainSessionOnce(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	bridge := new(Bridge)
-	bridge.runtime = &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
+	bridge.runtime = &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, SeedCompactionModel: "gpt-5.4-mini"}
 	bridge.config = Config{ConversationID: SlackThreadConversationID("D123", "111.222"), Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}
 	bridge.log = slog.New(slog.DiscardHandler)
 
@@ -2107,7 +2108,7 @@ func TestSeedThreadFromConversationCompactsMainSessionOnce(t *testing.T) {
 
 	mu.Lock()
 	assert.Equal(t, 1, compacts)
-	assert.Equal(t, "gpt-5.5", model)
+	assert.Equal(t, "gpt-5.4-mini", model)
 	mu.Unlock()
 
 	entries, err := service.ObserveEntries(context.Background(), bridge.config.ConversationID, 0)
@@ -2238,6 +2239,7 @@ func TestSeedResponseThreadCompactsMainCheckpoint(t *testing.T) {
 	var (
 		errRequest  error
 		requestBody struct {
+			Model string `json:"model"`
 			Input []struct {
 				Role    string `json:"role"`
 				Content string `json:"content"`
@@ -2265,12 +2267,13 @@ func TestSeedResponseThreadCompactsMainCheckpoint(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	bridge := new(Bridge)
-	bridge.runtime = &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
+	bridge.runtime = &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, SeedCompactionModel: "gpt-5.4-mini"}
 	bridge.config = Config{ConversationID: SlackThreadConversationID("D123", "111.222"), Agent: "main", OutputTargets: events.MainOutputTargets(), SessionService: service}
 	bridge.log = slog.New(slog.DiscardHandler)
 
 	require.NoError(t, bridge.SeedResponseThread(context.Background(), events.ResponseCheckpoint{ConversationID: events.MainConversationID(), SessionEntryID: id, ResponseID: "resp-1", Model: "gpt-5.5", AssistantText: "thread root answer"}))
 	require.NoError(t, errRequest)
+	assert.Equal(t, "gpt-5.4-mini", requestBody.Model)
 	require.Len(t, requestBody.Input, 1)
 	assert.Equal(t, "user", requestBody.Input[0].Role)
 	assert.Equal(t, "main question", requestBody.Input[0].Content)

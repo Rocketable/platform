@@ -74,6 +74,7 @@ const (
 	maxInboundAttachmentResizeInput    = 16 << 20
 	maxInboundAttachmentResizeAttempts = 8
 	rocketcodeBreadcrumbSeparator      = " \u2192 "
+	defaultSeedCompactionModel         = responses.ResponseCompactParamsModel("gpt-5.5")
 )
 
 var errBridgeStopped = errors.New("bridge stopped")
@@ -439,7 +440,7 @@ func (b *Bridge) SeedResponseThread(ctx context.Context, checkpoint events.Respo
 		return fmt.Errorf("main session checkpoint entry %d was not found", checkpoint.SessionEntryID)
 	}
 
-	model, err := compactModel(strings.TrimSpace(checkpoint.Model))
+	model, err := b.seedCompactionModel(checkpoint.Model)
 	if err != nil {
 		return err
 	}
@@ -548,7 +549,7 @@ func (b *Bridge) seedThreadFromConversation(ctx context.Context, sourceConversat
 		}
 	}
 
-	compactionModel, err := compactModel(string(model))
+	compactionModel, err := b.seedCompactionModel(string(model))
 	if err != nil {
 		return err
 	}
@@ -582,7 +583,7 @@ type seedCompactionModel struct {
 func compactModel(model string) (seedCompactionModel, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
-		return seedCompactionModel{apiModel: responses.ResponseCompactParamsModelGPT5_4}, nil
+		return seedCompactionModel{apiModel: defaultSeedCompactionModel}, nil
 	}
 
 	if strings.Contains(model, "/") {
@@ -590,6 +591,14 @@ func compactModel(model string) (seedCompactionModel, error) {
 	}
 
 	return seedCompactionModel{apiModel: responses.ResponseCompactParamsModel(model)}, nil
+}
+
+func (b *Bridge) seedCompactionModel(sourceModel string) (seedCompactionModel, error) {
+	if strings.TrimSpace(b.runtime.SeedCompactionModel) != "" {
+		return compactModel(b.runtime.SeedCompactionModel)
+	}
+
+	return compactModel(sourceModel)
 }
 
 func (b *Bridge) enqueue(ctx context.Context, request bridgeRequest, operation string) error {
@@ -634,7 +643,7 @@ func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.Ses
 	}
 
 	if model.apiModel == "" {
-		model.apiModel = responses.ResponseCompactParamsModelGPT5_4
+		model.apiModel = defaultSeedCompactionModel
 	}
 
 	client, err := b.openAIClient()
@@ -1585,7 +1594,7 @@ func (b *Bridge) rocketcodeConfig(shellOutputDir string, shellEnv map[string]str
 
 	tools = append(tools, customTools...)
 
-	return rocketcode.Config{Model: "", ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CustomTools: tools, ShellEnv: shellEnv}
+	return rocketcode.Config{Model: "", AutoApproverModel: b.runtime.AutoApproverModel, ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CustomTools: tools, ShellEnv: shellEnv}
 }
 
 func (b *Bridge) logRocketCodeChildRun(event *rocketcode.ChildRunEvent) {

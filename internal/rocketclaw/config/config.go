@@ -14,17 +14,19 @@ import (
 
 // Config is the top-level rocketclaw runtime configuration.
 type Config struct {
-	Workspace          string                `json:"workspace"`
-	WorkDir            string                `json:"-"`
-	Overlays           []string              `json:"overlays,omitempty"`
-	Environment        []string              `json:"environment,omitempty"`
-	EmergencySafeWords []string              `json:"emergency_safe_words,omitempty"`
-	ThreadAgents       ThreadAgents          `json:"thread_agents,omitempty"`
-	Logging            LoggingConfig         `json:"logging"`
-	MCPExternal        MCPExternalConfig     `json:"mcp_external"`
-	Slack              SlackConfig           `json:"slack"`
-	OpenAI             OpenAIConfig          `json:"openai"`
-	Instrumentation    InstrumentationConfig `json:"instrumentation"`
+	Workspace           string                `json:"workspace"`
+	WorkDir             string                `json:"-"`
+	Overlays            []string              `json:"overlays,omitempty"`
+	Environment         []string              `json:"environment,omitempty"`
+	EmergencySafeWords  []string              `json:"emergency_safe_words,omitempty"`
+	ThreadAgents        ThreadAgents          `json:"thread_agents,omitempty"`
+	Logging             LoggingConfig         `json:"logging"`
+	MCPExternal         MCPExternalConfig     `json:"mcp_external"`
+	Slack               SlackConfig           `json:"slack"`
+	OpenAI              OpenAIConfig          `json:"openai"`
+	AutoApproverModel   string                `json:"auto_approver_model"`
+	SeedCompactionModel string                `json:"seed_compaction_model"`
+	Instrumentation     InstrumentationConfig `json:"instrumentation"`
 }
 
 // DefaultRuntimeDir is the generated runtime directory for rocketclaw configs.
@@ -217,6 +219,16 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	c.AutoApproverModel, err = normalizeOpenAIModel("auto_approver_model", c.AutoApproverModel)
+	if err != nil {
+		return err
+	}
+
+	c.SeedCompactionModel, err = normalizeOpenAIModel("seed_compaction_model", c.SeedCompactionModel)
+	if err != nil {
+		return err
+	}
+
 	if c.OpenAI.RocketCodeAuth == "api_key" && strings.TrimSpace(c.OpenAI.APIKey) == "" {
 		return errors.New("openai.api_key is required when openai.rocketcode_auth is api_key")
 	}
@@ -238,6 +250,23 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+func normalizeOpenAIModel(field, model string) (string, error) {
+	model = strings.TrimSpace(model)
+	if after, ok := strings.CutPrefix(model, "openai/"); ok {
+		if after == "" || strings.Contains(after, "/") {
+			return "", fmt.Errorf("%s: invalid model %q: expected openai/model", field, model)
+		}
+
+		return after, nil
+	}
+
+	if strings.Contains(model, "/") {
+		return "", fmt.Errorf("%s: invalid model %q: expected unprefixed OpenAI model ID", field, model)
+	}
+
+	return model, nil
 }
 
 func (c *Config) normalizeRocketCodeAuth() error {

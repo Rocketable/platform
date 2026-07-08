@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -506,7 +507,7 @@ func TestRunRawReturnsProgressMessageError(t *testing.T) {
 	errProgress := errors.New("progress failed")
 	progress := newInertRawRunProgress()
 	progress.Message = func(context.Context, string) error { return errProgress }
-	_, err := RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, "main", "prompt", slog.New(slog.DiscardHandler), progress)
+	_, err := RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "gpt-5.4-mini"}, "main", "prompt", slog.New(slog.DiscardHandler), progress)
 	require.ErrorIs(t, err, errProgress)
 }
 
@@ -556,12 +557,21 @@ func TestRunRawAlwaysEnablesAutoApprovePermissions(t *testing.T) {
 		current := request
 		mu.Unlock()
 
+		data, err := io.ReadAll(r.Body)
+		if !assert.NoError(t, err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 
 		switch current {
 		case 1:
+			assert.Contains(t, string(data), `"model":"gpt-5.5"`)
 			writeRawRunFunctionCall(t, w, "resp_1", "call_1", "bash", map[string]string{"command": "printf ok", "description": "print ok"})
 		case 2:
+			assert.Contains(t, string(data), `"model":"gpt-5.4-mini"`)
 			writeRawRunMessage(t, w, "resp_2", "msg_2", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low-risk action."}`)
 		case 3:
 			writeRawRunFunctionCall(t, w, "resp_3", "call_3", rawRunToolName, map[string]string{"payload": "done"})
@@ -573,7 +583,7 @@ func TestRunRawAlwaysEnablesAutoApprovePermissions(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	result, err := RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, "main", "prompt", slog.New(slog.DiscardHandler), newInertRawRunProgress())
+	result, err := RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "gpt-5.4-mini"}, "main", "prompt", slog.New(slog.DiscardHandler), newInertRawRunProgress())
 
 	require.NoError(t, err)
 	require.Equal(t, RawRunResult{Text: "assistant text", VerbatimMessage: "done"}, result)

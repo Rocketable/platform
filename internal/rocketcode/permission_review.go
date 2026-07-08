@@ -25,7 +25,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	}
 
 	agent := embeddedGuardianAgent()
-	agent.Model = f.defaultModelRef.display()
+	agent.Model = f.autoApproverModelRef.display()
 
 	if !request.ReviewerEmbedded {
 		customAgent, ok := f.agents.Items[request.Reviewer]

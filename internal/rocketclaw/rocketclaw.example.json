@@ -55,6 +55,8 @@
     "api_base_url": "https://api.openai.com/v1",
     "rocketcode_auth": "api_key"
   },
+  "auto_approver_model": "",
+  "seed_compaction_model": "",
   "instrumentation": {
     "enabled": false,
     "collector_endpoint": "http://localhost:6006",
