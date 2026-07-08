@@ -641,6 +641,22 @@ func TestLooperBuildParamsIncludesHostedWebSearchTool(t *testing.T) {
 	require.Contains(t, marshalJSON(t, params.Tools), `"type":"web_search"`)
 }
 
+func TestLooperBuildParamsSortsToolsByName(t *testing.T) {
+	looper := emptyTestLooper()
+	looper.Tools = map[string]looperTool{
+		"read":        testLooperTool("read"),
+		"apply_patch": testLooperTool("apply_patch"),
+		"bash":        testLooperTool("bash"),
+	}
+
+	params := looper.buildParams(nil)
+
+	require.Len(t, params.Tools, 3)
+	require.Equal(t, "apply_patch", params.Tools[0].OfFunction.Name)
+	require.Equal(t, "bash", params.Tools[1].OfFunction.Name)
+	require.Equal(t, "read", params.Tools[2].OfFunction.Name)
+}
+
 func TestLooperBuildParamsIncludesConfiguredVerbosity(t *testing.T) {
 	looper := emptyTestLooper()
 	looper.Verbosity = "low"

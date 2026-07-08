@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"maps"
 	"net/http"
 	"os"
 	"slices"
@@ -1584,7 +1585,7 @@ func (l *looper) buildParams(history []responses.ResponseInputItemUnionParam) re
 
 	if len(l.Tools) > 0 {
 		params.Tools = make([]responses.ToolUnionParam, 0, len(l.Tools))
-		for name := range l.Tools {
+		for _, name := range slices.Sorted(maps.Keys(l.Tools)) {
 			tool := l.Tools[name]
 			if tool.Hosted.GetType() != nil {
 				params.Tools = append(params.Tools, tool.Hosted)
