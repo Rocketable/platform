@@ -796,6 +796,12 @@ const (
 // Configuration options for
 // [reasoning models](https://platform.openai.com/docs/guides/reasoning).
 type Reasoning struct {
+	// Controls which reasoning items are rendered back to the model on later turns.
+	// When returned on a response, this is the effective reasoning context mode used
+	// for the response.
+	//
+	// Any of "auto", "current_turn", "all_turns".
+	Context ReasoningContext `json:"context" api:"nullable"`
 	// Constrains effort on reasoning for
 	// [reasoning models](https://platform.openai.com/docs/guides/reasoning). Currently
 	// supported values are `none`, `minimal`, `low`, `medium`, `high`, and `xhigh`.
@@ -833,6 +839,7 @@ type Reasoning struct {
 	Summary ReasoningSummary `json:"summary" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
+		Context         respjson.Field
 		Effort          respjson.Field
 		GenerateSummary respjson.Field
 		Summary         respjson.Field
@@ -855,6 +862,17 @@ func (r *Reasoning) UnmarshalJSON(data []byte) error {
 func (r Reasoning) ToParam() ReasoningParam {
 	return param.Override[ReasoningParam](json.RawMessage(r.RawJSON()))
 }
+
+// Controls which reasoning items are rendered back to the model on later turns.
+// When returned on a response, this is the effective reasoning context mode used
+// for the response.
+type ReasoningContext string
+
+const (
+	ReasoningContextAuto        ReasoningContext = "auto"
+	ReasoningContextCurrentTurn ReasoningContext = "current_turn"
+	ReasoningContextAllTurns    ReasoningContext = "all_turns"
+)
 
 // **Deprecated:** use `summary` instead.
 //
@@ -888,6 +906,12 @@ const (
 // Configuration options for
 // [reasoning models](https://platform.openai.com/docs/guides/reasoning).
 type ReasoningParam struct {
+	// Controls which reasoning items are rendered back to the model on later turns.
+	// When returned on a response, this is the effective reasoning context mode used
+	// for the response.
+	//
+	// Any of "auto", "current_turn", "all_turns".
+	Context ReasoningContext `json:"context,omitzero"`
 	// Constrains effort on reasoning for
 	// [reasoning models](https://platform.openai.com/docs/guides/reasoning). Currently
 	// supported values are `none`, `minimal`, `low`, `medium`, `high`, and `xhigh`.

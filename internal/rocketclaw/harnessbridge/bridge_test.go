@@ -28,6 +28,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/oai"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1806,7 +1807,7 @@ func TestReplayInputMessagesReportsBadJSON(t *testing.T) {
 }
 
 func TestSeedReplayTextIncludesWebSearchContext(t *testing.T) {
-	text := seedReplayText([]responses.ResponseInputItemUnionParam{{OfWebSearchCall: &responses.ResponseFunctionWebSearchParam{Action: responses.ResponseFunctionWebSearchActionUnionParam{OfSearch: &responses.ResponseFunctionWebSearchActionSearchParam{Query: "golang release"}}, Status: "completed"}}})
+	text := seedReplayText([]responses.ResponseInputItemUnionParam{{OfWebSearchCall: &responses.ResponseFunctionWebSearchParam{Action: responses.ResponseFunctionWebSearchActionUnionParam{OfSearch: &responses.ResponseFunctionWebSearchActionSearchParam{Query: param.NewOpt("golang release")}}, Status: "completed"}}})
 
 	assert.Contains(t, text, "web search completed")
 	assert.Contains(t, text, "golang release")

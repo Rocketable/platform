@@ -1,5 +1,56 @@
 # Changelog
 
+## 1.56.0 (2026-07-02)
+
+Full Changelog: [v1.55.1...v1.56.0](https://github.com/anthropics/anthropic-sdk-go/compare/v1.55.1...v1.56.0)
+
+### Features
+
+* **api:** add agent-memory-2026-07-22 beta header ([5bcfda4](https://github.com/anthropics/anthropic-sdk-go/commit/5bcfda43d70d05ea124f6b6efa678807b8aba064))
+
+## 1.55.1 (2026-07-01)
+
+Full Changelog: [v1.55.0...v1.55.1](https://github.com/anthropics/anthropic-sdk-go/compare/v1.55.0...v1.55.1)
+
+### Chores
+
+* **api:** remove some nonfunctional types from the SDKs ([9bd3d09](https://github.com/anthropics/anthropic-sdk-go/commit/9bd3d099c5c5cb69f7011376a63a882216d30fcb))
+
+## 1.55.0 (2026-06-30)
+
+Full Changelog: [v1.54.0...v1.55.0](https://github.com/anthropics/anthropic-sdk-go/compare/v1.54.0...v1.55.0)
+
+### Features
+
+* **api:** add support for Managed Agents event delta streaming, agent overrides, reverse pagination, vault credential injection scoping, and agent and deployment webhook events ([021ef45](https://github.com/anthropics/anthropic-sdk-go/commit/021ef45adcc13691ce8e8f234b9b5ae387a565ae))
+
+## 1.54.0 (2026-06-30)
+
+Full Changelog: [v1.53.0...v1.54.0](https://github.com/anthropics/anthropic-sdk-go/compare/v1.53.0...v1.54.0)
+
+### Features
+
+* **api:** add support for claude-sonnet-5 ([232cfe6](https://github.com/anthropics/anthropic-sdk-go/commit/232cfe6f8889dc30dd759a4027e95f5c9ece46d1))
+
+
+### Bug Fixes
+
+* **agenttoolset:** allow absolute paths that resolve inside workdir ([#93](https://github.com/anthropics/anthropic-sdk-go/issues/93)) ([3735258](https://github.com/anthropics/anthropic-sdk-go/commit/3735258e449804336781339ef25fa7008fc8717f))
+
+## 1.53.0 (2026-06-29)
+
+Full Changelog: [v1.52.0...v1.53.0](https://github.com/anthropics/anthropic-sdk-go/compare/v1.52.0...v1.53.0)
+
+### Features
+
+* **api:** add support for 20260318 web fetch and support tools ([6396455](https://github.com/anthropics/anthropic-sdk-go/commit/6396455a220b3e37cc87ce44b6d1e615d6386c74))
+
+
+### Chores
+
+* **api:** accept user profile ID's when counting tokens ([d31ba27](https://github.com/anthropics/anthropic-sdk-go/commit/d31ba27f74d9a39dcaaabe8dc0d37b5b811c150c))
+* **docs:** updates to descriptions and example values ([cb00f34](https://github.com/anthropics/anthropic-sdk-go/commit/cb00f34a3c75e9f183d569321ff2de6da8efc29c))
+
 ## 1.52.0 (2026-06-24)
 
 Full Changelog: [v1.51.1...v1.52.0](https://github.com/anthropics/anthropic-sdk-go/compare/v1.51.1...v1.52.0)

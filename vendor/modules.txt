@@ -4,10 +4,10 @@ github.com/Arize-ai/openinference/go/openinference-instrumentation
 # github.com/Arize-ai/openinference/go/openinference-semantic-conventions v0.1.1
 ## explicit; go 1.25
 github.com/Arize-ai/openinference/go/openinference-semantic-conventions
-# github.com/JohannesKaufmann/dom v0.2.0
-## explicit; go 1.22.1
+# github.com/JohannesKaufmann/dom v0.3.1
+## explicit; go 1.25.0
 github.com/JohannesKaufmann/dom
-# github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.1
+# github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 ## explicit; go 1.25.0
 github.com/JohannesKaufmann/html-to-markdown/v2
 github.com/JohannesKaufmann/html-to-markdown/v2/collapse
@@ -18,7 +18,7 @@ github.com/JohannesKaufmann/html-to-markdown/v2/internal/textutils
 github.com/JohannesKaufmann/html-to-markdown/v2/marker
 github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base
 github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark
-# github.com/anthropics/anthropic-sdk-go v1.52.0
+# github.com/anthropics/anthropic-sdk-go v1.56.0
 ## explicit; go 1.24
 github.com/anthropics/anthropic-sdk-go
 github.com/anthropics/anthropic-sdk-go/config
@@ -45,7 +45,7 @@ github.com/anthropics/anthropic-sdk-go/shared/constant
 # github.com/bahlo/generic-list-go v0.2.0
 ## explicit; go 1.18
 github.com/bahlo/generic-list-go
-# github.com/buger/jsonparser v1.1.2
+# github.com/buger/jsonparser v1.2.0
 ## explicit; go 1.13
 github.com/buger/jsonparser
 # github.com/cenkalti/backoff/v5 v5.0.3
@@ -101,7 +101,7 @@ github.com/modelcontextprotocol/go-sdk/oauthex
 # github.com/ncruces/go-strftime v1.0.0
 ## explicit; go 1.17
 github.com/ncruces/go-strftime
-# github.com/openai/openai-go/v3 v3.37.0
+# github.com/openai/openai-go/v3 v3.41.1
 ## explicit; go 1.22
 github.com/openai/openai-go/v3
 github.com/openai/openai-go/v3/auth
@@ -154,7 +154,7 @@ github.com/segmentio/asm/keyset
 github.com/segmentio/encoding/ascii
 github.com/segmentio/encoding/iso8601
 github.com/segmentio/encoding/json
-# github.com/slack-go/slack v0.24.0
+# github.com/slack-go/slack v0.27.0
 ## explicit; go 1.25
 github.com/slack-go/slack
 github.com/slack-go/slack/internal/backoff
@@ -249,14 +249,16 @@ go.opentelemetry.io/proto/otlp/trace/v1
 # go.yaml.in/yaml/v2 v2.4.4
 ## explicit; go 1.15
 go.yaml.in/yaml/v2
-# go.yaml.in/yaml/v4 v4.0.0-rc.2
+# go.yaml.in/yaml/v4 v4.0.0-rc.6
 ## explicit; go 1.18
 go.yaml.in/yaml/v4
-# golang.org/x/crypto v0.52.0
+go.yaml.in/yaml/v4/internal/libyaml
+go.yaml.in/yaml/v4/plugin/limit
+# golang.org/x/crypto v0.54.0
 ## explicit; go 1.25.0
 golang.org/x/crypto/acme
 golang.org/x/crypto/acme/autocert
-# golang.org/x/image v0.41.0
+# golang.org/x/image v0.44.0
 ## explicit; go 1.25.0
 golang.org/x/image/draw
 golang.org/x/image/math/f64
@@ -264,7 +266,7 @@ golang.org/x/image/riff
 golang.org/x/image/vp8
 golang.org/x/image/vp8l
 golang.org/x/image/webp
-# golang.org/x/net v0.55.0
+# golang.org/x/net v0.57.0
 ## explicit; go 1.25.0
 golang.org/x/net/html
 golang.org/x/net/html/atom
@@ -280,28 +282,28 @@ golang.org/x/net/trace
 ## explicit; go 1.25.0
 golang.org/x/oauth2
 golang.org/x/oauth2/internal
-# golang.org/x/sync v0.20.0
+# golang.org/x/sync v0.22.0
 ## explicit; go 1.25.0
 golang.org/x/sync/errgroup
-# golang.org/x/sys v0.45.0
+# golang.org/x/sys v0.47.0
 ## explicit; go 1.25.0
 golang.org/x/sys/cpu
 golang.org/x/sys/unix
 golang.org/x/sys/windows
 golang.org/x/sys/windows/registry
-# golang.org/x/text v0.37.0
+# golang.org/x/text v0.40.0
 ## explicit; go 1.25.0
 golang.org/x/text/secure/bidirule
 golang.org/x/text/transform
 golang.org/x/text/unicode/bidi
 golang.org/x/text/unicode/norm
-# google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa
+# google.golang.org/genproto/googleapis/api v0.0.0-20260706201446-f0a921348800
 ## explicit; go 1.25.0
 google.golang.org/genproto/googleapis/api/httpbody
-# google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa
+# google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800
 ## explicit; go 1.25.0
 google.golang.org/genproto/googleapis/rpc/status
-# google.golang.org/grpc v1.81.1
+# google.golang.org/grpc v1.82.0
 ## explicit; go 1.25.0
 google.golang.org/grpc
 google.golang.org/grpc/attributes
@@ -323,6 +325,7 @@ google.golang.org/grpc/encoding
 google.golang.org/grpc/encoding/gzip
 google.golang.org/grpc/encoding/internal
 google.golang.org/grpc/encoding/proto
+google.golang.org/grpc/experimental/balancer/weight
 google.golang.org/grpc/experimental/stats
 google.golang.org/grpc/grpclog
 google.golang.org/grpc/grpclog/internal
@@ -330,7 +333,6 @@ google.golang.org/grpc/health/grpc_health_v1
 google.golang.org/grpc/internal
 google.golang.org/grpc/internal/backoff
 google.golang.org/grpc/internal/balancer/gracefulswitch
-google.golang.org/grpc/internal/balancer/weight
 google.golang.org/grpc/internal/balancerload
 google.golang.org/grpc/internal/binarylog
 google.golang.org/grpc/internal/buffer
@@ -356,6 +358,7 @@ google.golang.org/grpc/internal/stats
 google.golang.org/grpc/internal/status
 google.golang.org/grpc/internal/syscall
 google.golang.org/grpc/internal/transport
+google.golang.org/grpc/internal/transport/internal
 google.golang.org/grpc/internal/transport/networktype
 google.golang.org/grpc/internal/transport/readyreader
 google.golang.org/grpc/keepalive
@@ -409,7 +412,7 @@ google.golang.org/protobuf/types/known/wrapperspb
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
-# modernc.org/libc v1.72.4
+# modernc.org/libc v1.74.1
 ## explicit; go 1.25.0
 modernc.org/libc
 modernc.org/libc/errno
@@ -443,7 +446,7 @@ modernc.org/mathutil
 # modernc.org/memory v1.11.0
 ## explicit; go 1.23.0
 modernc.org/memory
-# modernc.org/sqlite v1.50.1
+# modernc.org/sqlite v1.53.0
 ## explicit; go 1.25.0
 modernc.org/sqlite
 modernc.org/sqlite/lib

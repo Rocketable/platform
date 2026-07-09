@@ -465,6 +465,22 @@ const OAuthErrorCodeInvalidSubjectToken = shared.OAuthErrorCodeInvalidSubjectTok
 // This is an alias to an internal type.
 type Reasoning = shared.Reasoning
 
+// Controls which reasoning items are rendered back to the model on later turns.
+// When returned on a response, this is the effective reasoning context mode used
+// for the response.
+//
+// This is an alias to an internal type.
+type ReasoningContext = shared.ReasoningContext
+
+// Equals "auto"
+const ReasoningContextAuto = shared.ReasoningContextAuto
+
+// Equals "current_turn"
+const ReasoningContextCurrentTurn = shared.ReasoningContextCurrentTurn
+
+// Equals "all_turns"
+const ReasoningContextAllTurns = shared.ReasoningContextAllTurns
+
 // **Deprecated:** use `summary` instead.
 //
 // A summary of the reasoning performed by the model. This can be useful for

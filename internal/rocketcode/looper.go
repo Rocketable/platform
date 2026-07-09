@@ -1294,7 +1294,7 @@ func compactedOutputToReplayParams(items []responses.ResponseOutputItemUnion) ([
 				}
 			}
 
-			role := strings.TrimSpace(string(items[i].Role))
+			role := strings.TrimSpace(items[i].Role)
 			if role == "" {
 				role = "user"
 			}
@@ -2030,7 +2030,7 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (respo
 			}
 		}
 
-		role := strings.TrimSpace(string(item.Role))
+		role := strings.TrimSpace(item.Role)
 		if role == "" {
 			role = "assistant"
 		}
@@ -2184,7 +2184,7 @@ func webSearchReplayInput(id, status string, action responses.ResponseFunctionWe
 func webSearchOutputActionParam(action *responses.ResponseOutputItemUnionAction) (responses.ResponseFunctionWebSearchActionUnionParam, bool) {
 	switch action.Type {
 	case "search":
-		return responses.ResponseFunctionWebSearchActionUnionParam{OfSearch: &responses.ResponseFunctionWebSearchActionSearchParam{Query: action.Query, Queries: action.Queries}}, true
+		return responses.ResponseFunctionWebSearchActionUnionParam{OfSearch: &responses.ResponseFunctionWebSearchActionSearchParam{Query: param.NewOpt(action.Query), Queries: action.Queries}}, true
 	case "open_page":
 		return responses.ResponseFunctionWebSearchActionUnionParam{OfOpenPage: &responses.ResponseFunctionWebSearchActionOpenPageParam{URL: openai.String(action.URL)}}, true
 	case "find_in_page":

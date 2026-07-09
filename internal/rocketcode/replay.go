@@ -146,7 +146,7 @@ func compactedOutputItemToReplayInput(item *responses.ResponseOutputItemUnion) (
 			}
 		}
 
-		role := strings.TrimSpace(string(item.Role))
+		role := strings.TrimSpace(item.Role)
 		if role == "" {
 			role = "user"
 		}
