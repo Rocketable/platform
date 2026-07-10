@@ -38,6 +38,8 @@ Runnable entry points:
 
 The runnable entry point is `cmd/rocketclaw`. Run `rocketclaw help` for setup, validation, session inspection, and operational commands.
 
+Slack native forwarded-thread expansion requires the bot scopes `channels:read` and `channels:history`; reinstall the Slack app after adding scopes. RocketClaw expands only source channels Slack confirms are public and that the bot can already read. It never auto-joins a channel. Private, inaccessible, malformed, or partially unreadable source threads retain only Slack's forwarded preview.
+
 ### Supporting Tools
 
 - `cmd/openresponsesd`: serves `/healthz`, `/v1/responses`, and `/v1/responses/compact` with optional bearer auth and provider routing configured by `openresponsesd.json`.
