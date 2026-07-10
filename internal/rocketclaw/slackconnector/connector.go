@@ -2503,8 +2503,6 @@ func (c *Connector) addSlackForward(ctx context.Context, content *events.Inbound
 		channel, errInfo := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: forward.channelID})
 		if errInfo != nil || channel == nil || !channel.IsChannel || channel.IsPrivate || channel.IsIM || channel.IsMpIM {
 			content.TextAttachments = append(content.TextAttachments, renderSlackForward(forward, nil, nil))
-			content.HadAttachments = true
-			content.HadNonImageAttachments = true
 
 			return
 		}
@@ -2562,7 +2560,7 @@ func (c *Connector) addSlackForward(ctx context.Context, content *events.Inbound
 		}
 	}
 
-	attachments, textAttachments, hadAttachments, hadNonImageAttachments, warnings := c.downloadSlackAttachments(ctx, files)
+	attachments, textAttachments, _, _, warnings := c.downloadSlackAttachments(ctx, files)
 
 	var fileNotes []string
 	for i := range attachments {
@@ -2574,11 +2572,8 @@ func (c *Connector) addSlackForward(ctx context.Context, content *events.Inbound
 	}
 
 	content.TextAttachments = append(content.TextAttachments, renderSlackForward(forward, messages, fileNotes))
-	content.HadAttachments = true
-	content.HadNonImageAttachments = true
 	content.Attachments = append(content.Attachments, attachments...)
-	content.HadAttachments = content.HadAttachments || hadAttachments
-	content.HadNonImageAttachments = content.HadNonImageAttachments || hadNonImageAttachments
+	content.HadAttachments = content.HadAttachments || len(attachments) > 0
 	content.AttachmentWarnings = append(content.AttachmentWarnings, warnings...)
 }
 
