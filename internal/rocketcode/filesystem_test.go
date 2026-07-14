@@ -33,9 +33,12 @@ func TestIsDeniedEnvPath(t *testing.T) {
 		{path: ".env.local", want: true},
 		{path: ".env.production", want: true},
 		{path: ".env.development.local", want: true},
+		{path: ".ENV", want: true},
+		{path: ".ENV.LOCAL", want: true},
 		{path: "nested/.env", want: true},
 		{path: "service.env", want: true},
 		{path: ".env.example", want: false},
+		{path: ".ENV.EXAMPLE", want: false},
 		{path: "nested/.env.example", want: false},
 		{path: ".envrc", want: false},
 		{path: "environment.ts", want: false},
@@ -197,6 +200,9 @@ func TestTSandboxedFileSystem(t *testing.T) {
 	require.NoError(t, root.WriteFile(".env", []byte("SECRET=value"), 0o644))
 	require.NoError(t, root.WriteFile(".env.example", []byte("SECRET=example"), 0o644))
 	requireRootSymlink(t, root, ".env", "safe-env-link.txt")
+	require.NoError(t, root.Mkdir("secret", 0o755))
+	require.NoError(t, root.WriteFile("secret/value.txt", []byte("hidden"), 0o644))
+	requireRootSymlink(t, root, "secret", "linked-secret")
 	require.NoError(t, root.WriteFile("image.png", []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}, 0o644))
 	require.NoError(t, root.WriteFile("doc.pdf", []byte("%PDF-1.7\n"), 0o644))
 
@@ -276,6 +282,11 @@ func TestTSandboxedFileSystem(t *testing.T) {
 	{
 		file := sfs.ReadResult("safe-env-link.txt", 1).Output
 		require.Equal(t, "symlink access denied: safe-env-link.txt", file)
+	}
+
+	{
+		file := sfs.ReadResult("linked-secret/value.txt", 1).Output
+		require.Equal(t, "symlink access denied: linked-secret", file)
 	}
 
 	{

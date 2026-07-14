@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -51,6 +53,12 @@ type skillFrontmatter struct {
 	License       string         `yaml:"license"`
 	Compatibility string         `yaml:"compatibility"`
 	Metadata      map[string]any `yaml:"metadata"`
+}
+
+type skillReadDir struct {
+	subject string
+	rooted  bool
+	folded  bool
 }
 
 // LoadSkills scans fsys for SKILL.md files and preloads valid skills.
@@ -198,6 +206,107 @@ func (s Skills) FindAvailable(query string, agent *Agent) string {
 	}
 
 	return (Skills{Root: s.Root, Items: items, Dirs: s.Dirs, fsys: s.fsys}).Find(query)
+}
+
+func (s Skills) withReadPermissions(root *os.Root, agents Agents) Agents {
+	hasAllowedSkill := false
+
+	for name := range agents.Items {
+		agent := agents.Items[name]
+		if len(availableSkills(s.Items, &agent)) > 0 {
+			hasAllowedSkill = true
+			break
+		}
+	}
+
+	if !hasAllowedSkill {
+		return agents
+	}
+
+	dirs := s.readableDirs(root)
+	if len(dirs) == 0 {
+		return agents
+	}
+
+	skills := make(map[string]Skill, len(s.Items))
+	for _, skill := range s.Items {
+		skills[path.Dir(skill.Location)] = skill
+	}
+
+	items := maps.Clone(agents.Items)
+	for name := range items {
+		agent := items[name]
+		read := make(map[string]skillReadAccess, len(dirs))
+		allowed := false
+
+		for dir, readable := range dirs {
+			skill, ok := skills[dir]
+			access := skillReadAccess{allowed: ok && readable.rooted && skillAllowedForAgent(&skill, &agent), folded: readable.folded}
+			read[readable.subject] = access
+			allowed = allowed || access.allowed
+		}
+
+		if !allowed {
+			continue
+		}
+
+		agent.Permission.skillRead = read
+		items[name] = agent
+	}
+
+	return Agents{Items: items}
+}
+
+func (s Skills) readableDirs(root *os.Root) map[string]skillReadDir {
+	dirs := make(map[string]skillReadDir, len(s.Dirs))
+	for _, dir := range s.Dirs {
+		skillRoot, err := normalizeRootName(root, filepath.Join(s.Root, filepath.FromSlash(dir)))
+		if err != nil || !filepath.IsLocal(skillRoot) {
+			continue
+		}
+
+		readable := skillReadDir{subject: rootedPathSubject(skillRoot)}
+		dirs[dir] = readable
+
+		info, err := root.Lstat(skillRoot)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
+
+		skillInfo := info
+
+		safe := true
+
+		for parent := filepath.Dir(skillRoot); parent != "."; parent = filepath.Dir(parent) {
+			info, err = root.Lstat(parent)
+			if err != nil || info.Mode()&os.ModeSymlink != 0 {
+				safe = false
+				break
+			}
+		}
+
+		if !safe {
+			continue
+		}
+
+		sourceInfo, errSource := fs.Stat(s.fsys, dir)
+		localInfo, errLocal := root.Lstat(skillRoot)
+		readable.rooted = errSource == nil && errLocal == nil && sourceInfo.Sys() != nil && localInfo.Sys() != nil && os.SameFile(sourceInfo, localInfo)
+
+		alias := []byte(skillRoot)
+		for i, char := range alias {
+			if char >= 'a' && char <= 'z' {
+				alias[i] -= 'a' - 'A'
+				break
+			}
+		}
+
+		aliasInfo, errAlias := root.Stat(string(alias))
+		readable.folded = errAlias == nil && os.SameFile(skillInfo, aliasInfo)
+		dirs[dir] = readable
+	}
+
+	return dirs
 }
 
 func formatAvailableSkills(skills []Skill) string {
@@ -497,12 +606,25 @@ func (s Skills) skillFiles(dir string) ([]string, error) {
 		return nil, errors.New("skills filesystem is not available")
 	}
 
+	boundaries := make(map[string]struct{}, len(s.Dirs))
+	for _, dir := range s.Dirs {
+		boundaries[dir] = struct{}{}
+	}
+
 	err := fs.WalkDir(fsys, dir, func(filePath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if d.Type()&fs.ModeSymlink != 0 || d.IsDir() || filepath.Base(filePath) == "SKILL.md" {
+		if d.IsDir() {
+			if _, nestedSkill := boundaries[filePath]; filePath != dir && nestedSkill {
+				return fs.SkipDir
+			}
+
+			return nil
+		}
+
+		if d.Type()&fs.ModeSymlink != 0 || filepath.Base(filePath) == "SKILL.md" {
 			return nil
 		}
 

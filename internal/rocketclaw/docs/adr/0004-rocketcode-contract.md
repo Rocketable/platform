@@ -39,14 +39,12 @@ Both construction paths must pass RocketClaw-originated `rocketcode.PromptInput`
 
 ### Prompt And Definition Loading
 
-- Agents load from `.rocketclaw/agents` plus workspace overlays according to bridge mode.
-- Skills load from `.rocketclaw/skills` plus workspace overlays according to bridge mode.
-- Primary agent prompt expansion happens during RocketCode construction.
-- Subagent prompt expansion happens when the `task` tool launches another agent.
-- Skill content expansion happens when RocketCode loads skill content through the `skill` tool or RocketCode direct skill invocation.
-- RocketClaw does not render direct skill invocations itself. When Slack text uses `💡 <skill-name> [arguments]`, RocketClaw passes the parsed skill name and argument string into RocketCode's direct skill invocation input path for the existing conversation and selected agent. RocketCode owns skill lookup, permission checks, `$ARGUMENTS` rendering, literal argument safety, stronger-skill behavior, and model input construction.
-- `AGENTS.md` root workspace instructions remain literal.
-- Agents may declare optional YAML frontmatter field `additionalInstructions`. In the persistent bridge, a non-empty string value overrides the default normal-reply `additional_instructions` text defined in ADR 0002 for turns handled by that selected agent. Missing, empty, or non-string values do not override the default. This field does not affect internal-note turns or raw-run cron prompts.
+- RocketClaw loads agents and skills from the configured runtime directory after merging built-in files, configured repositories, and local workspace files.
+- An agent may read files in each loaded skill that its `skill` permission allows. RocketCode derives this access from the loaded skill path, so it works with any configured runtime directory name. A matching `read` rule on the agent takes priority.
+- RocketCode expands the primary agent prompt during construction, a subagent prompt when `task` starts that agent, and skill content when the skill is loaded.
+- When Slack text uses `💡 <skill-name> [arguments]`, RocketClaw passes the skill name and arguments to RocketCode for the existing conversation and selected agent. RocketCode finds the skill, checks permissions, replaces `$ARGUMENTS`, keeps arguments from running shell commands, applies `ExperimentalStrongerSkills`, and prepares the model input.
+- Root `AGENTS.md` instructions remain literal.
+- Agents may set `additionalInstructions` in the YAML header. For persistent normal replies, a non-empty string replaces the default `additional_instructions` text from ADR 0002. Missing, empty, or non-string values keep the default. This setting does not affect internal notes or raw cron runs.
 
 ### Subdelegation Recursion Limit
 
@@ -233,4 +231,5 @@ Persistent bridge tools are restart, reload, schedule message, reset scheduled m
 - 2026-07-07: Added top-level `seed_compaction_model` for RocketClaw-owned response checkpoint and inherited-context seed replay compaction model selection.
 - 2026-07-07: Replaced `rocketclaw_restart` graceful-restart tool wording with pending restart notification/requester recording followed by runtime cancellation for supervisor restart.
 - 2026-07-08: Made `rocketclaw_restart` default-deny unless the active agent explicitly allows the `rocketclaw_restart` permission subject, with generated `main` agents granting that permission.
+- 2026-07-14: Recorded that agents may read files in loaded skills they are allowed to use.
 - 2026-07-14: Added config-backed agent model placeholders.

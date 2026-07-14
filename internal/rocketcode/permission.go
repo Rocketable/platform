@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"golang.org/x/text/unicode/norm"
 	"gopkg.in/yaml.v3"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -46,7 +47,13 @@ type PermissionBucket struct {
 
 // PermissionSet contains all permission buckets configured for an agent.
 type PermissionSet struct {
-	Buckets []PermissionBucket
+	Buckets   []PermissionBucket
+	skillRead map[string]skillReadAccess
+}
+
+type skillReadAccess struct {
+	allowed bool
+	folded  bool
 }
 
 type permissionDecision struct {
@@ -248,9 +255,33 @@ func (ps PermissionSet) Evaluate(permission, subject string) (action PermissionA
 }
 
 func (ps PermissionSet) evaluate(permission, subject string) permissionDecision {
-	decision := ps.evaluateRules(permission, subject)
+	skillAllowed := false
+	skillFolded := false
+	skillSubject := rootedPathSubject(subject)
+	matchedLength := -1
+
+	if permission == "read" {
+		for dir, access := range ps.skillRead {
+			subjectPath, dirPath := skillSubject, dir
+			if access.folded {
+				subjectPath, dirPath = foldPermissionPath(subjectPath), foldPermissionPath(dirPath)
+			}
+
+			if (subjectPath == dirPath || strings.HasPrefix(subjectPath, dirPath+"/")) && len(dirPath) > matchedLength {
+				skillAllowed = access.allowed
+				skillFolded = access.folded
+				matchedLength = len(dirPath)
+			}
+		}
+	}
+
+	decision := ps.evaluateRules(permission, subject, skillFolded)
 	if permission == "read" && !decision.Matched {
-		editDecision := ps.evaluateRules("edit", subject)
+		if skillAllowed {
+			return permissionDecision{Action: permissionAllow, Bucket: "read", Rule: PermissionRule{Pattern: skillSubject, Action: permissionAllow}, Matched: true, Permission: "read", Subject: subject}
+		}
+
+		editDecision := ps.evaluateRules("edit", subject, skillFolded)
 		if editDecision.Action == permissionAllow {
 			editDecision.Permission = "read"
 			return editDecision
@@ -260,7 +291,7 @@ func (ps PermissionSet) evaluate(permission, subject string) permissionDecision 
 	return decision
 }
 
-func (ps PermissionSet) evaluateRules(permission, subject string) permissionDecision {
+func (ps PermissionSet) evaluateRules(permission, subject string, folded bool) permissionDecision {
 	decision := permissionDecision{Action: permissionDeny, Bucket: "", Rule: PermissionRule{Pattern: "", Action: ""}, Matched: false, Permission: permission, Subject: subject}
 
 	for _, bucket := range ps.Buckets {
@@ -269,7 +300,12 @@ func (ps PermissionSet) evaluateRules(permission, subject string) permissionDeci
 		}
 
 		for _, rule := range bucket.Rules {
-			if !permissionWildcardMatch(subject, rule.Pattern) {
+			input, pattern := subject, rule.Pattern
+			if folded {
+				input, pattern = foldPermissionPath(input), foldPermissionPath(pattern)
+			}
+
+			if !permissionWildcardMatch(input, pattern) {
 				continue
 			}
 
@@ -292,6 +328,14 @@ func (ps PermissionSet) hasActionableRuleForPermission(permission string) bool {
 }
 
 func (ps PermissionSet) hasRuleForPermission(permission string, actions ...PermissionAction) bool {
+	if permission == "read" && slices.Contains(actions, permissionAllow) {
+		for _, access := range ps.skillRead {
+			if access.allowed {
+				return true
+			}
+		}
+	}
+
 	for _, bucket := range ps.Buckets {
 		permissionBucket := bucket.Name == permission
 
@@ -325,6 +369,10 @@ func permissionWildcardMatch(input, pattern string) bool {
 	matched, err := regexp.MatchString("(?s)^"+escaped+"$", input)
 
 	return err == nil && matched
+}
+
+func foldPermissionPath(path string) string {
+	return norm.NFC.String(strings.ToLower(path))
 }
 
 func canonicalToolArguments(raw json.RawMessage) string {
@@ -395,7 +443,7 @@ func rootedPathSubject(path string) string {
 func isDeniedEnvPath(path string) bool {
 	base := filepath.Base(filepath.Clean(filepath.FromSlash(path)))
 	base = strings.ReplaceAll(base, "\\", "/")
-	base = filepath.Base(base)
+	base = strings.ToLower(filepath.Base(base))
 
 	if strings.HasSuffix(base, ".env.example") {
 		return false

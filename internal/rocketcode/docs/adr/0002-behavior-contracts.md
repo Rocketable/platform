@@ -95,14 +95,16 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 
 ### Permissions And Safety
 
-- Tool visibility is permission-gated. Deny-by-default must not become permissive by accident.
+- Tools are shown and run only when the agent's permissions allow them. No matching rule means deny.
 - Later matching permission rules overwrite earlier matching rules.
-- `apply_patch`, `write`, and `patch` permission names normalize to the `edit` permission bucket.
-- `auto` is a supported permission action that requires `Config.AutoApprovePermissions` and routes a matching tool call through automatic permission review. Bare `auto` uses the embedded reviewer model selected by `Config.AutoApproverModel` when non-empty, otherwise the resolved runtime/default model. The reviewed tool call executes only when the reviewer returns valid structured output with `outcome:"allow"`. When automatic permission approval is disabled, matching `auto` rules fail closed as model-visible tool failures. `ask`, `external_directory`, and `doom_loop` permission names are unsupported.
-- Automatic permission review is fail-closed: reviewer `outcome:"deny"`, invalid reviewer JSON, missing required review fields, invalid enum values, empty `rationale`, model errors, tool errors, context cancellation, timeout, missing reviewer, and recursive automatic review all prevent tool execution and are returned as model-visible tool failures rather than process-fatal errors.
-- `edit` allow grants read visibility when no explicit read rule matched.
-- Permission subjects support wildcard matching with `*` and `?`, slash normalization, and `~` or `$HOME` expansion.
-- `.env` and `.env.*` basenames are blocked, while `.env.example` remains allowed.
+- The permission names `apply_patch`, `write`, and `patch` all use the `edit` rules.
+- An `edit` allow also grants `read` when no `read` rule matches.
+- A `skill` allow grants `read` for files in that skill's loaded directory. A matching `read` rule on the agent takes priority. It does not grant `edit`, `bash`, `glob`, `grep`, or any other permission.
+- The `auto` action requires `Config.AutoApprovePermissions`. Bare `auto` uses the model named by `Config.AutoApproverModel`, or the runtime model when that setting is empty.
+- A call allowed by `auto` runs only when the reviewer returns valid JSON with `outcome:"allow"`. A denial, invalid answer, missing field, empty `rationale`, error, cancellation, timeout, missing reviewer, or review that starts another review stops the call and returns a tool failure to the model. The process keeps running.
+- When automatic permission approval is off, `auto` stops the call and returns a tool failure to the model. The permission names `ask`, `external_directory`, and `doom_loop` are not supported.
+- Permission patterns support `*` and `?`, treat slashes consistently, and expand `~` and `$HOME`.
+- Files named `.env` or `.env.*` are blocked. `.env.example` remains allowed.
 - Absolute paths must resolve under the workspace root. Paths that escape the root are rejected.
 - Reads, patches, glob targets, grep targets, glob results, and grep results must not follow symlinks.
 
@@ -166,3 +168,4 @@ Shell interpolation, when enabled, uses RocketCode prompt expansion semantics: `
 - 2026-07-07: Changed the empty runtime/default model to `gpt-5.5` and specified `Config.AutoApproverModel` for embedded automatic permission reviewer model selection.
 - 2026-07-07: Added active root-turn checkpoint lifecycle semantics, including durable handoff writes before provider/tool boundaries, completion cleanup after durable session entries, and reconstructed-replay recovery with aborted or uncertain outputs for incomplete calls.
 - 2026-07-07: Clarified that RocketCode does not require retained active-turn status/state rows for interruption and must preserve active-turn checkpoints when shutdown or cancellation causes completion or cleanup errors.
+- 2026-07-14: Allowed agents to read files in skills they are allowed to use.

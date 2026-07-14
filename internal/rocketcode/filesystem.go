@@ -613,13 +613,19 @@ func writeTextFile(sfs *sandboxedFileSystem, name, text string, bom bool) error 
 }
 
 func rejectSymlink(sfs *sandboxedFileSystem, name string) error {
-	info, err := sfs.root.Lstat(name)
-	if err != nil {
-		return fmt.Errorf("lstat %q: %w", name, err)
-	}
+	for current := filepath.Clean(name); current != "."; current = filepath.Dir(current) {
+		info, err := sfs.root.Lstat(current)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("symlink access denied: %s", name)
+			return fmt.Errorf("lstat %q: %w", current, err)
+		}
+
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symlink access denied: %s", current)
+		}
 	}
 
 	return nil

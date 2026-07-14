@@ -7,6 +7,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketcode"
+	openai "github.com/openai/openai-go/v3"
 	"github.com/stretchr/testify/require"
 )
 
@@ -305,6 +306,34 @@ Content
 	skill := skills.Items["example"]
 	require.Equal(t, "Structured metadata should load", skill.Description)
 	require.Equal(t, map[string]any{"tools": true}, skill.Metadata["openclaw"])
+}
+
+func TestRocketCodeReadsAllowedSkillFilesFromConfiguredRuntimeDirectory(t *testing.T) {
+	for _, runtimeDir := range []string{".rocketclaw", ".femtoclaw"} {
+		t.Run(runtimeDir, func(t *testing.T) {
+			workspace := t.TempDir()
+			root, err := os.OpenRoot(workspace)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+			require.NoError(t, root.MkdirAll(filepath.Join(runtimeDir, "agents"), 0o755))
+			require.NoError(t, root.WriteFile(filepath.Join(runtimeDir, "agents", "main.md"), []byte("---\ndescription: Main\nmodel: gpt-5.4\npermission:\n  skill:\n    example: allow\n---\nPrompt\n"), 0o644))
+			skillDir := filepath.Join(runtimeDir, "skills", "example")
+			require.NoError(t, root.MkdirAll(skillDir, 0o755))
+			require.NoError(t, root.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: example\ndescription: Example\n---\n"), 0o644))
+			require.NoError(t, root.WriteFile(filepath.Join(skillDir, "asset.txt"), []byte("asset"), 0o644))
+
+			agents, skills, err := loadRocketCodeDefinitionsIn(root, &config.Config{Workspace: workspace}, runtimeDir, toolModePersistent)
+			require.NoError(t, err)
+
+			client := openai.NewClient()
+			runtime, err := rocketcode.New(&client, &rocketcode.Config{ShellOutputDir: workspace, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}}, root, agents, skills, "main", nil)
+			require.NoError(t, err)
+
+			action, _ := runtime.Permissions.Evaluate("read", filepath.ToSlash(filepath.Join(skillDir, "asset.txt")))
+			require.Equal(t, rocketcode.PermissionAllow, action)
+		})
+	}
 }
 
 func TestLoadRocketCodeDefinitionsRejectsEscapingAgentSymlink(t *testing.T) {

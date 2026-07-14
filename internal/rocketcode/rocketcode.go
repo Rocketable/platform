@@ -157,7 +157,7 @@ func (c *shellOutputConfig) effectivePermissions(permissions PermissionSet) Perm
 	buckets = append(buckets, PermissionBucket{Name: "read", Rules: []PermissionRule{{Pattern: c.readPattern, Action: permissionAllow}}})
 	buckets = append(buckets, permissions.Buckets...)
 
-	return PermissionSet{Buckets: buckets}
+	return PermissionSet{Buckets: buckets, skillRead: permissions.skillRead}
 }
 
 func (c shellOutputConfig) ensureTempDir(root *os.Root) error {
@@ -251,6 +251,8 @@ func NewWithProviders(
 	if config.CheckpointSink == nil {
 		return nil, errors.New("checkpoint sink is required")
 	}
+
+	agents = skills.withReadPermissions(root, agents)
 
 	promptExpansion, err := newPromptExpansionEnvironment(root, shellOutput, shellEnv)
 	if err != nil {

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/stretchr/testify/require"
@@ -222,6 +224,231 @@ func TestNewSandboxedBashConfigAppliesToBashTool(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, result.Output, "sandboxed bash:")
 	require.Contains(t, result.Output, "not found")
+}
+
+func TestNewAllowsReadingFilesFromAllowedSkills(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	seed := map[string][]byte{
+		"skills/parent/private.txt":        []byte("private"),
+		"skills/parent/review.txt":         []byte("review"),
+		"skills/parent/reference/guide.md": []byte("guide"),
+		"skills/parent/broken/SKILL.md":    []byte("---\nname: broken\n---\n"),
+		"skills/parent/broken/asset.txt":   []byte("broken asset"),
+	}
+	for name, description := range map[string]string{
+		"parent":       "Parent",
+		"parent/child": "Child",
+		"other":        "Other",
+		"aaa/dupe":     "First duplicate",
+		"zzz/dupe":     "Second duplicate",
+	} {
+		seed[filepath.Join("skills", name, "SKILL.md")] = fmt.Appendf(nil, "---\nname: %s\ndescription: %s\n---\n", filepath.Base(name), description)
+		seed[filepath.Join("skills", name, "asset.txt")] = []byte(name + " asset")
+	}
+
+	seedRoot(t, root, seed, nil)
+
+	skillsRoot, err := root.OpenRoot("skills")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, skillsRoot.Close()) })
+
+	skills := LoadSkills(skillsRoot.FS(), skillsRoot.Name()).Skills
+
+	permissions := parsePermissionYAML(t, `skill:
+  "*": deny
+  parent: allow
+  dupe: allow
+read:
+  "skills/parent/private*": deny
+  "skills/parent/review*": auto`)
+	agents := Agents{Items: map[string]Agent{
+		"main":   {Name: "main", Model: "gpt-5.4", Permission: permissions},
+		"worker": {Name: "worker", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {child: allow}`)},
+		"review": {Name: "review", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {parent: auto}`)},
+	}}
+	client := openai.NewClient()
+
+	loop, err := New(&client, testConfig(dir), root, agents, skills, "main", nil)
+	require.NoError(t, err)
+
+	for _, tt := range []struct {
+		path   string
+		action PermissionAction
+	}{
+		{path: "skills/parent/asset.txt", action: permissionAllow},
+		{path: "skills/parent/reference/guide.md", action: permissionAllow},
+		{path: "skills/zzz/dupe/asset.txt", action: permissionAllow},
+		{path: "skills/parent/private.txt", action: permissionDeny},
+		{path: "skills/parent/review.txt", action: permissionAuto},
+		{path: "skills/parent/child/asset.txt", action: permissionDeny},
+		{path: "skills/other/asset.txt", action: permissionDeny},
+		{path: "skills/aaa/dupe/asset.txt", action: permissionDeny},
+		{path: "skills/parent/broken/asset.txt", action: permissionDeny},
+	} {
+		action, _ := loop.Permissions.Evaluate("read", tt.path)
+		require.Equal(t, tt.action, action, tt.path)
+	}
+
+	caseVariantChild := "skills/parent/CHILD/asset.txt"
+	if _, err := root.Stat(caseVariantChild); err == nil {
+		action, _ := loop.Permissions.Evaluate("read", caseVariantChild)
+		require.Equal(t, PermissionDeny, action)
+		action, _ = loop.Permissions.Evaluate("read", "skills/parent/PRIVATE.TXT")
+		require.Equal(t, PermissionDeny, action)
+		action, _ = loop.Permissions.Evaluate("read", "skills/parent/REVIEW.TXT")
+		require.Equal(t, PermissionAuto, action)
+	}
+
+	require.Contains(t, loop.Tools, "read")
+	require.Contains(t, loop.Tools, "skill")
+	require.NotContains(t, loop.Tools, "edit")
+	require.NotContains(t, loop.Tools, "bash")
+	require.NotContains(t, loop.Tools, "glob")
+	require.NotContains(t, loop.Tools, "grep")
+	require.NotContains(t, loop.SystemPrompt, "skills/parent/asset.txt")
+
+	readTool := loop.Tools["read"]
+	readArgs := json.RawMessage(`{"filePath":"skills/parent/asset.txt"}`)
+	decision, err := loop.permissionDecision("read", &readTool, readArgs)
+	require.NoError(t, err)
+	require.False(t, decision.denied)
+
+	deniedArgs := json.RawMessage(`{"filePath":"skills/parent/child/asset.txt"}`)
+	decision, err = loop.permissionDecision("read", &readTool, deniedArgs)
+	require.NoError(t, err)
+	require.True(t, decision.denied)
+
+	result, err := readTool.Call(context.Background(), readArgs, nil, emptyToolCallMetadata())
+	require.NoError(t, err)
+	require.Contains(t, result.Output, "1: parent asset")
+
+	skillResult, err := loop.Tools["skill"].Call(context.Background(), json.RawMessage(`{"name":"parent"}`), nil, emptyToolCallMetadata())
+	require.NoError(t, err)
+	require.NotContains(t, skillResult.Output, "parent/broken/asset.txt")
+
+	action, matched := agents.Items["main"].Permission.Evaluate("read", "skills/parent/asset.txt")
+	require.Equal(t, PermissionDeny, action)
+	require.False(t, matched)
+
+	factory := loop.PermissionReviewer.(*toolFactory)
+	worker := factory.agents.Items["worker"]
+	action, _ = worker.Permission.Evaluate("read", "skills/parent/child/asset.txt")
+	require.Equal(t, PermissionAllow, action)
+	action, _ = worker.Permission.Evaluate("read", "skills/parent/asset.txt")
+	require.Equal(t, PermissionDeny, action)
+	action, _ = factory.agents.Items["review"].Permission.Evaluate("read", "skills/parent/asset.txt")
+	require.Equal(t, PermissionDeny, action)
+}
+
+func TestNewDoesNotAllowReadingFilesFromVirtualSkills(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	skills := LoadSkills(fstest.MapFS{
+		"virtual/SKILL.md":  mapFile("---\nname: virtual\ndescription: Virtual\n---\n"),
+		"virtual/asset.txt": mapFile("asset"),
+	}, "/virtual/skills").Skills
+	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {virtual: allow}`)}
+	client := openai.NewClient()
+
+	loop, err := New(&client, testConfig(dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+	require.NoError(t, err)
+	require.NotContains(t, loop.Tools, "read")
+}
+
+func TestNewDoesNotTrustVirtualSkillsWithWorkspaceDisplayPath(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	seedRoot(t, root, map[string][]byte{
+		"skills/virtual/SKILL.md":   []byte("---\nname: virtual\ndescription: Physical\n---\n"),
+		"skills/virtual/secret.txt": []byte("secret"),
+	}, nil)
+
+	skills := LoadSkills(fstest.MapFS{
+		"virtual/SKILL.md": mapFile("---\nname: virtual\ndescription: Virtual\n---\n"),
+	}, filepath.Join(dir, "skills")).Skills
+	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {virtual: allow}`)}
+	client := openai.NewClient()
+
+	loop, err := New(&client, testConfig(dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+	require.NoError(t, err)
+	require.NotContains(t, loop.Tools, "read")
+}
+
+func TestNewDoesNotTrustExternalSkillDirectoryWithLinkedMarker(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	seedRoot(t, root, map[string][]byte{
+		"skills/external/SKILL.md":   []byte("---\nname: external\ndescription: External\n---\n"),
+		"skills/external/secret.txt": []byte("secret"),
+	}, nil)
+	external := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(external, "external"), 0o755))
+	// A host hard link is required to prove that matching SKILL.md files do not establish directory identity.
+	require.NoError(t, os.Link(filepath.Join(dir, "skills", "external", "SKILL.md"), filepath.Join(external, "external", "SKILL.md")))
+	skills := LoadSkills(os.DirFS(external), filepath.Join(dir, "skills")).Skills
+	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {external: allow}`)}
+	client := openai.NewClient()
+
+	loop, err := New(&client, testConfig(dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+	require.NoError(t, err)
+	require.NotContains(t, loop.Tools, "read")
+}
+
+func TestNewDoesNotAllowReadingFilesFromExternalSkills(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	// This fixture must live outside the sandbox root to exercise rejection.
+	external := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(external, "external"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(external, "external", "SKILL.md"), []byte("---\nname: external\ndescription: External\n---\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(external, "external", "asset.txt"), []byte("asset"), 0o644))
+	skills := LoadSkills(os.DirFS(external), external).Skills
+	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {external: allow}`)}
+	client := openai.NewClient()
+
+	loop, err := New(&client, testConfig(dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+	require.NoError(t, err)
+	require.NotContains(t, loop.Tools, "read")
+}
+
+func TestNewDoesNotAllowReadingFilesThroughSymlinkedSkillRoot(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	seedRoot(t, root, map[string][]byte{
+		"skill-source/linked/SKILL.md":  []byte("---\nname: linked\ndescription: Linked\n---\n"),
+		"skill-source/linked/asset.txt": []byte("asset"),
+	}, func(t *testing.T, root *os.Root) {
+		t.Helper()
+		requireRootSymlink(t, root, "skill-source", "skills-link")
+	})
+
+	// os.DirFS intentionally follows the host symlink so construction can reject its root.
+	skills := LoadSkills(os.DirFS(filepath.Join(dir, "skills-link")), filepath.Join(dir, "skills-link")).Skills
+	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {linked: allow}`)}
+	client := openai.NewClient()
+
+	loop, err := New(&client, testConfig(dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+	require.NoError(t, err)
+	require.NotContains(t, loop.Tools, "read")
 }
 
 func TestNewRequiresParsedAgentsAndSkills(t *testing.T) {

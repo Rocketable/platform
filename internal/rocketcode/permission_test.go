@@ -120,6 +120,31 @@ func TestPermissionSetEvaluate(t *testing.T) {
 	}
 }
 
+func TestSkillReadPermissionsUseFoldedPaths(t *testing.T) {
+	permissions := parsePermissionYAML(t, `read:
+  "skills/parent/private*": deny
+  "skills/parent/review*": auto
+  "skills/parent/café.txt": deny`)
+	permissions.skillRead = map[string]skillReadAccess{
+		"skills/parent":       {allowed: true, folded: true},
+		"skills/parent/child": {allowed: false, folded: true},
+	}
+
+	for _, tt := range []struct {
+		path   string
+		action PermissionAction
+	}{
+		{path: "skills/parent/ASSET.TXT", action: permissionAllow},
+		{path: "skills/parent/CHILD/asset.txt", action: permissionDeny},
+		{path: "skills/parent/PRIVATE.TXT", action: permissionDeny},
+		{path: "skills/parent/REVIEW.TXT", action: permissionAuto},
+		{path: "skills/parent/cafe\u0301.txt", action: permissionDeny},
+	} {
+		action, _ := permissions.Evaluate("read", tt.path)
+		require.Equal(t, tt.action, action, tt.path)
+	}
+}
+
 func TestReadPermissionInheritsEditAllow(t *testing.T) {
 	tests := []struct {
 		name, yaml, subject, bucket string

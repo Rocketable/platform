@@ -123,17 +123,15 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 
 ### Skills
 
-- Skill loading recursively finds `SKILL.md` files. Directories containing skill files are recorded even when a skill file is invalid.
-- Required skill frontmatter fields are `name` and `description`.
-- Skill names must be lowercase alphanumeric with single dashes, no `--`, at most 64 characters, and must match the directory basename. Descriptions are capped at 1024 characters.
-- Duplicate skill names report a non-fatal error and keep the last discovered skill.
-- Skills are visible only when active-agent `skill` permission allows the skill name. Nil active agent means no skills are allowed.
-- The system prompt does not list skill names. It instructs the model to use `find_skills` and `skill` when skills are available. Tool descriptions list allowed skills.
-- The `skill` tool accepts `name` and optional `arguments`. Skill rendering replaces every exact literal `$ARGUMENTS` occurrence in skill content with the supplied argument string, but the argument string remains literal user/model-provided data and is never shell-executable through skill prompt shell expansion. Missing arguments replace `$ARGUMENTS` with an empty string. The ordinary `skill` tool does not append unused arguments when the skill content has no `$ARGUMENTS` placeholder; embedding-owned direct skill invocation paths may define append behavior separately.
-- With `ExperimentalStrongerSkills`, the `skill` tool returns short text `skill NAME loaded` and replays full skill content as a developer message.
-- RocketCode direct skill invocation is a first-class non-model input path that accepts a skill name plus an argument string for the active conversation and active agent. It bypasses the model's choice to call the `skill` tool, but it must reuse RocketCode skill loading, skill visibility, permission checks, `$ARGUMENTS` rendering, prompt shell-expansion safety, stronger-skill rendering behavior, and session/replay semantics.
-- Direct skill invocation rejects missing skill names, unknown skills, and skills not visible to the active agent before creating a model request. Unknown-skill errors may list only skills visible to the active agent. Rejection text must be clear enough for embedders and CLIs to show directly to a human without wrapping it as an internal runtime failure.
-- For direct skill invocation only, if rendered skill content contains no `$ARGUMENTS` and the argument string is non-empty, RocketCode appends the argument string to the rendered skill content after one blank line. The appended argument string remains literal user/model-provided data and is never shell-executable through skill prompt shell expansion.
+- RocketCode searches all skill directories for `SKILL.md`. It records each directory it finds, even when the file is invalid.
+- Every skill needs `name` and `description` in its YAML header. The name must match the directory name, use lowercase letters and numbers separated by single dashes, and contain at most 64 characters. The description may contain at most 1024 characters.
+- When two skills have the same name, RocketCode reports the duplicate and keeps the last one found.
+- An agent may see and use a skill only when its `skill` permission allows that skill's name. An agent that may use a skill may also read files in that skill's loaded directory. A matching `read` rule on the agent takes priority. No agent means no available skills.
+- The system prompt tells the model to use `find_skills` and `skill`, but does not list skill names. The tool descriptions list the skills the agent may use.
+- The `skill` tool accepts `name` and optional `arguments`. It replaces each exact `$ARGUMENTS` in the skill with the supplied text, or with an empty string when no text is supplied. The supplied text stays literal and cannot run shell commands. The tool does not append text when the skill has no `$ARGUMENTS`.
+- With `ExperimentalStrongerSkills`, the tool returns `skill NAME loaded` and sends the full skill to the model as a developer message.
+- Direct skill invocation follows the same rules as the `skill` tool for loading, permissions, arguments, shell commands, `ExperimentalStrongerSkills`, and stored conversation history. It rejects a missing, unknown, or unavailable skill before calling the model. An unknown-skill error may list only skills the agent may use and must be clear enough to show directly to a human.
+- During direct skill invocation, non-empty arguments are appended after one blank line only when the skill has no `$ARGUMENTS`. The appended text stays literal and cannot run shell commands.
 - `cmd/rocketcode` maps terminal input `/skill <skill-name> [arguments]` to RocketCode direct skill invocation. `<skill-name>` is the first whitespace-delimited token after `/skill`; `[arguments]` is the remaining text after the skill name. `/skill` with no skill name fails before model request. `💡` is not RocketCode CLI syntax.
 
 ### Custom Tools
@@ -204,3 +202,4 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 - 2026-07-02: Added RocketCode-first direct skill invocation and `cmd/rocketcode` `/skill <skill-name> [arguments]` syntax.
 - 2026-07-07: Specified embedded guardian model selection through `Config.AutoApproverModel`, falling back to the resolved runtime/default model.
 - 2026-07-07: Added task-call restart recovery semantics for interrupted parent turns, requiring task-specific uncertainty instead of exact subagent tree resume.
+- 2026-07-14: Allowed agents to read files in skills they are allowed to use.
