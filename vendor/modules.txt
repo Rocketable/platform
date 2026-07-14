@@ -18,7 +18,7 @@ github.com/JohannesKaufmann/html-to-markdown/v2/internal/textutils
 github.com/JohannesKaufmann/html-to-markdown/v2/marker
 github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base
 github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark
-# github.com/anthropics/anthropic-sdk-go v1.56.0
+# github.com/anthropics/anthropic-sdk-go v1.57.0
 ## explicit; go 1.24
 github.com/anthropics/anthropic-sdk-go
 github.com/anthropics/anthropic-sdk-go/config
@@ -101,7 +101,7 @@ github.com/modelcontextprotocol/go-sdk/oauthex
 # github.com/ncruces/go-strftime v1.0.0
 ## explicit; go 1.17
 github.com/ncruces/go-strftime
-# github.com/openai/openai-go/v3 v3.41.1
+# github.com/openai/openai-go/v3 v3.42.0
 ## explicit; go 1.22
 github.com/openai/openai-go/v3
 github.com/openai/openai-go/v3/auth
@@ -297,10 +297,10 @@ golang.org/x/text/secure/bidirule
 golang.org/x/text/transform
 golang.org/x/text/unicode/bidi
 golang.org/x/text/unicode/norm
-# google.golang.org/genproto/googleapis/api v0.0.0-20260706201446-f0a921348800
+# google.golang.org/genproto/googleapis/api v0.0.0-20260713224248-f5fc221cf8c4
 ## explicit; go 1.25.0
 google.golang.org/genproto/googleapis/api/httpbody
-# google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800
+# google.golang.org/genproto/googleapis/rpc v0.0.0-20260713224248-f5fc221cf8c4
 ## explicit; go 1.25.0
 google.golang.org/genproto/googleapis/rpc/status
 # google.golang.org/grpc v1.82.0
