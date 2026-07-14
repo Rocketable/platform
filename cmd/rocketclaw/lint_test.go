@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -24,6 +25,25 @@ main
 
 	output := captureStdout(t, func() error { return runLint([]string{"current"}) })
 	assert.Equal(t, "rocketclaw lint current: OK\n", output)
+}
+
+func TestRunLintResolvesConfiguredModel(t *testing.T) {
+	for _, target := range []string{"current", "next"} {
+		t.Run(target, func(t *testing.T) {
+			workspace := t.TempDir()
+			t.Chdir(workspace)
+			writeLintConfig(t, workspace, map[string]string{"coding-high": "software-development-sol"})
+
+			root := workspace
+			if target == "current" {
+				root = filepath.Join(workspace, ".rocketclaw")
+			}
+			writeLintAgent(t, root, "main.md", "---\ndescription: main\n---\nmain\n", `{{ model "coding-high" }}`)
+
+			output := captureStdout(t, func() error { return runLint([]string{target}) })
+			assert.Equal(t, "rocketclaw lint "+target+": OK\n", output)
+		})
+	}
 }
 
 func TestRunLintDefaultUsesNext(t *testing.T) {
@@ -76,17 +96,38 @@ func TestHelpMentionsLint(t *testing.T) {
 	assert.Contains(t, output, "rocketclaw lint [next|current]")
 }
 
-func writeLintConfig(t *testing.T, workspace string) {
+func writeLintConfig(t *testing.T, workspace string, models ...map[string]string) {
 	t.Helper()
-	workspaceJSON, err := json.Marshal(workspace)
+	data := struct {
+		Workspace   string            `json:"workspace"`
+		Models      map[string]string `json:"models,omitempty"`
+		MCPExternal struct {
+			Enabled    bool   `json:"enabled"`
+			ListenAddr string `json:"listen_addr"`
+		} `json:"mcp_external"`
+		OpenAI struct {
+			APIKey string `json:"api_key"`
+		} `json:"openai"`
+	}{Workspace: workspace}
+	if len(models) > 0 {
+		data.Models = models[0]
+	}
+	data.MCPExternal.Enabled = true
+	data.MCPExternal.ListenAddr = "127.0.0.1:8766"
+	data.OpenAI.APIKey = "test"
+
+	content, err := json.Marshal(data)
 	require.NoError(t, err)
-	content := `{"workspace":` + string(workspaceJSON) + `,"mcp_external":{"enabled":true,"listen_addr":"127.0.0.1:8766"},"openai":{"api_key":"test"}}`
-	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(content), 0o600))
+	require.NoError(t, os.WriteFile(defaultConfigPath, content, 0o600))
 }
 
-func writeLintAgent(t *testing.T, root, name, content string) {
+func writeLintAgent(t *testing.T, root, name, content string, models ...string) {
 	t.Helper()
-	content = "---\nmodel: gpt-5.5\n" + content[len("---\n"):]
+	model := "gpt-5.5"
+	if len(models) > 0 {
+		model = models[0]
+	}
+	content = fmt.Sprintf("---\nmodel: %q\n", model) + content[len("---\n"):]
 
 	agentsRoot := filepath.Join(root, "agents")
 	require.NoError(t, os.MkdirAll(agentsRoot, 0o755))

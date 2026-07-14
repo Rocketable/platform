@@ -83,7 +83,15 @@ RocketClaw is configured with `rocketclaw.json` in the working directory. Runtim
 
 Generated runtime state should not be treated as source code.
 
-Agent files must declare non-empty unprefixed OpenAI `model` frontmatter such as `gpt-5.5`.
+Agent files must declare `model` frontmatter. Use a concrete model such as `gpt-5.5`, or map a deployment-specific name in `rocketclaw.json` or `femtoclaw.json`:
+
+```yaml
+model: '{{ model "coding-high" }}'
+```
+
+```json
+"models": {"coding-high": "software-development-sol"}
+```
 
 `openresponsesd` is configured with `openresponsesd.json` by default, or with `--config` / `OPENRESPONSESD_CONFIG`. Its documented credential environment variables are `OPENRESPONSESD_OPENAI_API_KEY` and `OPENRESPONSESD_ANTHROPIC_API_KEY`; bearer-token auth can be set in config or overridden locally with `--auth-token` / `OPENRESPONSESD_AUTH_TOKEN`.
 

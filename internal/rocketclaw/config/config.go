@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"text/template"
 	"unicode"
 )
 
@@ -17,6 +18,7 @@ type Config struct {
 	Workspace           string                `json:"workspace"`
 	WorkDir             string                `json:"-"`
 	Overlays            []string              `json:"overlays,omitempty"`
+	Models              map[string]string     `json:"models,omitempty"`
 	Environment         []string              `json:"environment,omitempty"`
 	EmergencySafeWords  []string              `json:"emergency_safe_words,omitempty"`
 	ThreadAgents        ThreadAgents          `json:"thread_agents,omitempty"`
@@ -203,6 +205,12 @@ func (c *Config) Validate() error {
 
 	c.Overlays = normalizeStrings(c.Overlays)
 
+	for name, model := range c.Models {
+		if strings.TrimSpace(name) == "" || strings.TrimSpace(model) == "" {
+			return errors.New("models keys and values must not be empty")
+		}
+	}
+
 	threadAgents, err := normalizeThreadAgents(c.ThreadAgents)
 	if err != nil {
 		return err
@@ -250,6 +258,43 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// RenderAgentModel renders an agent model with the mappings from the loaded config.
+func (c *Config) RenderAgentModel(model string) (string, error) {
+	if literal := strings.TrimSpace(model); literal != "" && !strings.Contains(model, "{{") && !strings.Contains(model, "}}") {
+		return literal, nil
+	}
+
+	tmpl, err := template.New("model").Funcs(template.FuncMap{
+		"model": func(name string) (string, error) {
+			model, ok := c.Models[name]
+			if !ok {
+				return "", fmt.Errorf("model %q is not configured", name)
+			}
+
+			return model, nil
+		},
+	}).Parse(model)
+	if err != nil {
+		return "", fmt.Errorf("parse model template: %w", err)
+	}
+
+	var rendered strings.Builder
+	if err := tmpl.Execute(&rendered, nil); err != nil {
+		return "", fmt.Errorf("execute model template: %w", err)
+	}
+
+	resolved := strings.TrimSpace(rendered.String())
+	if resolved == "" {
+		return "", errors.New("model template returned an empty model")
+	}
+
+	if strings.Contains(resolved, "{{") || strings.Contains(resolved, "}}") {
+		return "", errors.New("model template returned another template")
+	}
+
+	return resolved, nil
 }
 
 func normalizeOpenAIModel(field, model string) (string, error) {

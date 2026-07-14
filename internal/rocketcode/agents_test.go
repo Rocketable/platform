@@ -50,7 +50,7 @@ ignored
 `),
 		}
 
-		result := LoadAgents(fsys)
+		result := LoadAgents(fsys, passThroughAgentModel)
 
 		require.Empty(t, result.Errors)
 		require.Len(t, result.Agents.Items, 2)
@@ -82,7 +82,7 @@ ignored
 			"unlimited.md": testMapFile("---\ndescription: Unlimited\nmodel: gpt-5.4\nmaxRecursion: -1\n---\nPrompt\n"),
 			"zero.md":      testMapFile("---\ndescription: Zero\nmodel: gpt-5.4\nmaxRecursion: 0\n---\nPrompt\n"),
 			"positive.md":  testMapFile("---\ndescription: Positive\nmodel: gpt-5.4\nmaxRecursion: 3\n---\nPrompt\n"),
-		})
+		}, passThroughAgentModel)
 
 		require.Empty(t, result.Errors)
 		require.Nil(t, result.Agents.Items["unlimited"].MaxRecursion)
@@ -110,7 +110,7 @@ ignored
 			t.Run(tt.name, func(t *testing.T) {
 				result := LoadAgents(fstest.MapFS{
 					"main.md": testMapFile("---\ndescription: Main\nmodel: gpt-5.4\nmaxRecursion: " + tt.value + "\n---\nPrompt\n"),
-				})
+				}, passThroughAgentModel)
 
 				require.Empty(t, result.Agents.Items)
 				require.Len(t, result.Errors, 1)
@@ -130,7 +130,7 @@ Strictly follow the rules.
 `),
 		}
 
-		result := LoadAgents(fsys)
+		result := LoadAgents(fsys, passThroughAgentModel)
 
 		require.Empty(t, result.Errors)
 		require.Equal(t, "Review code: security and performance", result.Agents.Items["review"].Description)
@@ -142,7 +142,7 @@ Strictly follow the rules.
 			"main.md": testMapFile("---\ndescription: Main\nmodel: gpt-5.4\n---\nUse !`printf expanded` now.\n"),
 		}
 
-		result := LoadAgents(fsys)
+		result := LoadAgents(fsys, passThroughAgentModel)
 
 		require.Empty(t, result.Errors)
 		require.Equal(t, "Use !`printf expanded` now.", result.Agents.Items["main"].Prompt)
@@ -153,7 +153,7 @@ Strictly follow the rules.
 			"review.md": testMapFile("# Missing frontmatter\n"),
 		}
 
-		result := LoadAgents(fsys)
+		result := LoadAgents(fsys, passThroughAgentModel)
 
 		require.Empty(t, result.Agents.Items)
 		require.Len(t, result.Errors, 1)
@@ -176,7 +176,7 @@ Strictly follow the rules.
 			t.Run(tt.name, func(t *testing.T) {
 				result := LoadAgents(fstest.MapFS{
 					"main.md": testMapFile("---\n" + tt.frontmatter + "\n---\nPrompt\n"),
-				})
+				}, passThroughAgentModel)
 
 				require.Empty(t, result.Agents.Items)
 				require.Len(t, result.Errors, 1)
@@ -185,12 +185,24 @@ Strictly follow the rules.
 		}
 	})
 
+	t.Run("rejects empty resolved model", func(t *testing.T) {
+		result := LoadAgents(fstest.MapFS{
+			"main.md": testMapFile("---\ndescription: Main\nmodel: source-model\n---\nPrompt\n"),
+		}, func(string) (string, error) {
+			return "", nil
+		})
+
+		require.Empty(t, result.Agents.Items)
+		require.Len(t, result.Errors, 1)
+		require.Equal(t, "main.md: model: required non-empty string", result.Errors[0].Error())
+	})
+
 	t.Run("ignores mode frontmatter", func(t *testing.T) {
 		fsys := fstest.MapFS{
 			"main.md": testMapFile("---\ndescription: Main\nmodel: gpt-5.4\nmode: invalid\n---\nPrompt\n"),
 		}
 
-		result := LoadAgents(fsys)
+		result := LoadAgents(fsys, passThroughAgentModel)
 
 		require.Empty(t, result.Errors)
 		require.Equal(t, "Prompt", result.Agents.Items["main"].Prompt)
@@ -202,7 +214,7 @@ Strictly follow the rules.
 			"review.md": testMapFile("---\ndescription: [unterminated\n---\n"),
 		}
 
-		result := LoadAgents(fsys)
+		result := LoadAgents(fsys, passThroughAgentModel)
 
 		require.Empty(t, result.Agents.Items)
 		require.Len(t, result.Errors, 1)
@@ -214,7 +226,7 @@ Strictly follow the rules.
 			"review.md": testMapFile("---\n- not\n- a\n- map\n---\n"),
 		}
 
-		result := LoadAgents(fsys)
+		result := LoadAgents(fsys, passThroughAgentModel)
 
 		require.Empty(t, result.Agents.Items)
 		require.Len(t, result.Errors, 1)
@@ -227,7 +239,7 @@ Strictly follow the rules.
 			"bad.md":  testMapFile("---\ndescription: [broken\n---\n"),
 		}
 
-		result := LoadAgents(fsys)
+		result := LoadAgents(fsys, passThroughAgentModel)
 
 		require.Len(t, result.Agents.Items, 1)
 		require.Equal(t, "ready", result.Agents.Items["good"].Prompt)
@@ -243,14 +255,14 @@ description: ignored nested agent
 ---
 ignored
 `),
-		})
+		}, passThroughAgentModel)
 
 		require.Empty(t, result.Errors)
 		require.Empty(t, result.Agents.Items)
 	})
 
 	t.Run("reports read dir failure", func(t *testing.T) {
-		result := LoadAgents(failingFS{})
+		result := LoadAgents(failingFS{}, passThroughAgentModel)
 
 		require.Empty(t, result.Agents.Items)
 		require.Len(t, result.Errors, 1)

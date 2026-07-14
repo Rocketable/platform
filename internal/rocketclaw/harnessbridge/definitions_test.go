@@ -10,12 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func loadRocketCodeDefinitions(root *os.Root, workspace string, mode toolMode) (rocketcode.Agents, rocketcode.Skills, error) {
-	return loadRocketCodeDefinitionsIn(root, workspace, config.DefaultRuntimeDir, mode)
-}
+func loadRocketCodeDefinitions(root *os.Root, workspace string, mode toolMode, models ...map[string]string) (rocketcode.Agents, rocketcode.Skills, error) {
+	cfg := &config.Config{Workspace: workspace}
+	if len(models) > 0 {
+		cfg.Models = models[0]
+	}
 
-func ExternalMCPAgents(workspace string) ([]string, error) {
-	return ExternalMCPAgentsIn(workspace, config.DefaultRuntimeDir)
+	return loadRocketCodeDefinitionsIn(root, cfg, config.DefaultRuntimeDir, mode)
 }
 
 func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
@@ -57,9 +58,28 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	requireRocketClawPermissionAction(t, helper.Permission, attachFilesToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, helper.Permission, updateGoalToolName, rocketcode.PermissionAllow)
 
-	externalAgents, err := ExternalMCPAgents(workspace)
+	externalAgents, err := ExternalMCPAgentsIn(&config.Config{Workspace: workspace}, config.DefaultRuntimeDir)
 	require.NoError(t, err)
 	require.Equal(t, []string{"assistant", "helper", "restricted"}, externalAgents)
+}
+
+func TestLoadRocketCodeDefinitionsResolvesModelTemplate(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: '{{ model \"team/coding-high\" }}'\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	root, err := os.OpenRoot(workspace)
+
+	require.NoError(t, err)
+	defer func() { require.NoError(t, root.Close()) }()
+
+	agents, _, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent, map[string]string{"team/coding-high": "software-development-sol"})
+	require.NoError(t, err)
+	require.Equal(t, "software-development-sol", agents.Items["main"].Model)
+
+	_, _, err = loadRocketCodeDefinitions(root, workspace, toolModePersistent)
+	require.ErrorContains(t, err, `main.md: model: execute model template`)
+	require.ErrorContains(t, err, `model "team/coding-high" is not configured`)
 }
 
 func TestLoadRocketCodeDefinitionsPreparesCronAgents(t *testing.T) {
@@ -144,14 +164,26 @@ func TestLoadRocketCodeDefinitionsReportsMissingModel(t *testing.T) {
 	require.ErrorContains(t, err, "main.md: model: required non-empty string")
 }
 
-func TestValidateRuntimeDefinitionsReportsInvalidStagedAgent(t *testing.T) {
+func TestLoadRuntimeDefinitionsReportsInvalidStagedAgent(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw-stage", "agents"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw-stage", "skills"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw-stage", "agents", "main.md"), []byte("---\ndescription: Main\n---\nPrompt\n"), 0o644))
 
-	err := ValidateRuntimeDefinitions(workspace, ".rocketclaw-stage")
+	_, _, err := LoadRuntimeDefinitions(&config.Config{Workspace: workspace}, ".rocketclaw-stage")
 	require.ErrorContains(t, err, "main.md: model: required non-empty string")
+}
+
+func TestLoadRuntimeDefinitionsUsesLoadedModels(t *testing.T) {
+	workspace := t.TempDir()
+	stage := ".rocketclaw-stage"
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, stage, "agents"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, stage, "skills"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, stage, "agents", "main.md"), []byte("---\ndescription: Main\nmodel: '{{ model \"loaded\" }}'\n---\nPrompt\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.json"), []byte(`{"models":{"disk":"gpt-5.5"}}`), 0o600))
+
+	_, _, err := LoadRuntimeDefinitions(&config.Config{Workspace: workspace, Models: map[string]string{"loaded": "gpt-5.5"}}, stage)
+	require.NoError(t, err)
 }
 
 func TestLoadRocketCodeDefinitionsPreparesRocketClawRuntimeToolPermissions(t *testing.T) {

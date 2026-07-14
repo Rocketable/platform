@@ -146,7 +146,7 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 
 	defer func() { _ = root.Close() }()
 
-	agents, skills, err := loadRocketCodeDefinitionsIn(root, cfg.Workspace, cfg.RuntimeDirName(), toolModeCron)
+	agents, skills, err := loadRocketCodeDefinitionsIn(root, cfg, cfg.RuntimeDirName(), toolModeCron)
 	if err != nil {
 		return "", fmt.Errorf("open workspace agent and skills: %w", err)
 	}

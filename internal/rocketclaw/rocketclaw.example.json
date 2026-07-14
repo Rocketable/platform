@@ -8,6 +8,10 @@
     "https://github.com/Rocketable/overlay2.git@commit-hash",
     "git@github.com:Rocketable/overlay3.git"
   ],
+  "models": {
+    "coding-high": "gpt-5.5",
+    "review-fast": "software-development-sol"
+  },
   "emergency_safe_words": [
     "stop"
   ],

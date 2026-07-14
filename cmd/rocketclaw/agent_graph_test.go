@@ -12,7 +12,7 @@ import (
 func TestRunAgentGraphCurrent(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
-	writeLintConfig(t, workspace)
+	writeLintConfig(t, workspace, map[string]string{"coding-high": "software-development-sol"})
 	writeLintAgent(t, filepath.Join(workspace, ".rocketclaw"), "main.md", `---
 description: main
 maxRecursion: 0
@@ -21,7 +21,7 @@ permission:
     "worker": allow
 ---
 main
-`)
+`, `{{ model "coding-high" }}`)
 	writeLintAgent(t, filepath.Join(workspace, ".rocketclaw"), "worker.md", `---
 description: worker
 ---

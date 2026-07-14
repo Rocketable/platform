@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/agentlint"
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 )
 
@@ -21,13 +22,13 @@ func runLint(args []string) error {
 		return fmt.Errorf("usage: rocketclaw lint [next|current]")
 	}
 
-	runtimeRoot, cleanup, err := runtimeRootForInspectionTarget(target, "rocketclaw-lint-*", "lint")
+	runtimeRoot, cfg, cleanup, err := runtimeRootForInspectionTarget(target, "rocketclaw-lint-*", "lint")
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	result, err := agentlint.Lint(runtimeRoot)
+	result, err := agentlint.Lint(runtimeRoot, cfg)
 	if err != nil {
 		return err
 	}
@@ -47,20 +48,20 @@ func runLint(args []string) error {
 	return exitCodeError(1)
 }
 
-func runtimeRootForInspectionTarget(target, tempPattern, buildName string) (string, func(), error) {
+func runtimeRootForInspectionTarget(target, tempPattern, buildName string) (string, *config.Config, func(), error) {
 	cleanup := func() {
 	}
 
 	_, cfg, err := loadRuntimeConfig()
 	if err != nil {
-		return "", cleanup, fmt.Errorf("load config: %w", err)
+		return "", nil, cleanup, fmt.Errorf("load config: %w", err)
 	}
 
 	runtimeRoot := filepath.Join(cfg.Workspace, cfg.RuntimeDirName())
 	if target == "next" {
 		tmp, err := os.MkdirTemp("", tempPattern)
 		if err != nil {
-			return "", cleanup, fmt.Errorf("create %s temp dir: %w", buildName, err)
+			return "", nil, cleanup, fmt.Errorf("create %s temp dir: %w", buildName, err)
 		}
 		cleanup = func() {
 			os.RemoveAll(tmp)
@@ -70,9 +71,9 @@ func runtimeRootForInspectionTarget(target, tempPattern, buildName string) (stri
 		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 		if err := skel.SyncEffectiveRuntimeAssets(cfg.Workspace, runtimeRoot, cfg.Overlays, logger); err != nil {
 			cleanup()
-			return "", cleanup, fmt.Errorf("build %s target: %w", buildName, err)
+			return "", nil, cleanup, fmt.Errorf("build %s target: %w", buildName, err)
 		}
 	}
 
-	return runtimeRoot, cleanup, nil
+	return runtimeRoot, cfg, cleanup, nil
 }

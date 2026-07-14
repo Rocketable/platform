@@ -1120,9 +1120,9 @@ func TestBridgeSummarizeRunsQueuedSummary(t *testing.T) {
 
 func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  task:\n    helper: allow\n---\nPrompt\n")
-	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: gpt-5.5\nguardrail: guardrail\n---\nHelper prompt\n")
-	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: gpt-5.5\n---\nGuard delegated work\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: '{{ model \"main\" }}'\npermission:\n  task:\n    helper: allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: '{{ model \"helper\" }}'\nguardrail: guardrail\n---\nHelper prompt\n")
+	writeAgent(t, workspace, "guardrail", "---\ndescription: Guardrail\nmodel: '{{ model \"guardrail\" }}'\n---\nGuard delegated work\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	requests := 0
@@ -1147,8 +1147,10 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 
 		switch requests {
 		case 1:
+			assert.Equal(t, "main-model", body["model"])
 			writeRawRunFunctionCall(t, w, "resp_1", "call_1", "task", map[string]string{"description": "delegate", "prompt": "delegated prompt", "subagent_type": "helper"})
 		case 2:
+			assert.Equal(t, "guardrail-model", body["model"])
 			assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard delegated work")
 			assert.Contains(t, fmt.Sprint(body), "Current Action: delegation")
 			assert.Contains(t, fmt.Sprint(body), "The agent main wants to delegate to helper")
@@ -1156,10 +1158,12 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 			assert.Contains(t, fmt.Sprint(body["text"]), "json_schema")
 			writeRawRunMessage(t, w, "resp_2", "msg_2", `{"approved":true,"reason":""}`)
 		case 3:
+			assert.Equal(t, "helper-model", body["model"])
 			assert.Contains(t, fmt.Sprint(body["instructions"]), "Helper prompt")
 			assert.Contains(t, fmt.Sprint(body), "delegated prompt")
 			writeRawRunMessage(t, w, "resp_3", "msg_3", "child response")
 		case 4:
+			assert.Equal(t, "guardrail-model", body["model"])
 			assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard delegated work")
 			assert.Contains(t, fmt.Sprint(body), "Current Action: response")
 			assert.Contains(t, fmt.Sprint(body), "And the response from helper to main")
@@ -1167,6 +1171,7 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 			assert.Contains(t, fmt.Sprint(body["text"]), "json_schema")
 			writeRawRunMessage(t, w, "resp_4", "msg_4", `{"approved":true,"reason":""}`)
 		case 5:
+			assert.Equal(t, "main-model", body["model"])
 			assert.Contains(t, fmt.Sprint(body), "<task_result>\nchild response\n</task_result>")
 			writeRawRunMessage(t, w, "resp_5", "msg_5", "persistent done")
 		default:
@@ -1182,7 +1187,7 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	bridge := NewConversation(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(&config.Config{Workspace: workspace, Models: map[string]string{"main": "main-model", "helper": "helper-model", "guardrail": "guardrail-model"}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus, &Config{ConversationID: events.MainConversationID(), Agent: "main", ConsumeSharedInbound: false, OutputTargets: events.MainOutputTargets(), StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
 	inbound := events.NewMainInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
 
 	var group errgroup.Group
@@ -1207,6 +1212,11 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	require.Equal(t, "persistent done", outbound.Text)
 	require.NoError(t, group.Wait())
 	require.Equal(t, 5, requests)
+
+	entries, err := service.ObserveEntries(context.Background(), events.MainConversationID(), 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "main-model", entries[0].Entry.Model)
 }
 
 func TestBridgeStopAfterStartContextCanceledIsIdempotent(t *testing.T) {

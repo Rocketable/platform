@@ -157,7 +157,7 @@ Use for docs.
 `)},
 	}
 
-	agentResult := rocketcode.LoadAgents(agentsFS)
+	agentResult := rocketcode.LoadAgents(agentsFS, func(model string) (string, error) { return model, nil })
 	skillResult := rocketcode.LoadSkills(skillsFS, "/virtual/skills")
 	agents, skills := agentResult.Agents, skillResult.Skills
 

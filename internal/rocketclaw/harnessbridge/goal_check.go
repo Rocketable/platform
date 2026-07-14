@@ -26,7 +26,7 @@ func ValidateGoalCheckScriptStart(cfg *config.Config, agentName, script string) 
 
 	defer func() { _ = root.Close() }()
 
-	agents, _, err := loadRocketCodeDefinitionsIn(root, cfg.Workspace, cfg.RuntimeDirName(), toolModePersistent)
+	agents, _, err := loadRocketCodeDefinitionsIn(root, cfg, cfg.RuntimeDirName(), toolModePersistent)
 	if err != nil {
 		return err
 	}

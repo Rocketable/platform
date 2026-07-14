@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"gopkg.in/yaml.v3"
 )
@@ -53,7 +54,7 @@ type suppression struct {
 }
 
 // Lint checks the effective agent system rooted at runtimeRoot.
-func Lint(runtimeRoot string) (Result, error) {
+func Lint(runtimeRoot string, cfg *config.Config) (Result, error) {
 	skillsRoot := filepath.Join(runtimeRoot, "skills")
 	if _, err := os.Stat(skillsRoot); err == nil {
 		skillLoad := rocketcode.LoadSkills(os.DirFS(skillsRoot), skillsRoot)
@@ -64,7 +65,7 @@ func Lint(runtimeRoot string) (Result, error) {
 		return Result{}, fmt.Errorf("stat skills: %w", err)
 	}
 
-	infos, findings, err := loadRuntimeAgentInfos(runtimeRoot)
+	infos, findings, err := loadRuntimeAgentInfos(runtimeRoot, cfg)
 	if err != nil {
 		return Result{}, err
 	}
@@ -91,8 +92,8 @@ func Lint(runtimeRoot string) (Result, error) {
 }
 
 // AgentGraphDOT returns a deterministic Graphviz/DOT task delegation graph for the effective agents under runtimeRoot.
-func AgentGraphDOT(runtimeRoot string) (string, error) {
-	infos, _, err := loadRuntimeAgentInfos(runtimeRoot)
+func AgentGraphDOT(runtimeRoot string, cfg *config.Config) (string, error) {
+	infos, _, err := loadRuntimeAgentInfos(runtimeRoot, cfg)
 	if err != nil {
 		return "", err
 	}
@@ -135,10 +136,10 @@ func AgentGraphDOT(runtimeRoot string) (string, error) {
 	return b.String(), nil
 }
 
-func loadRuntimeAgentInfos(runtimeRoot string) (map[string]*agentInfo, []Finding, error) {
+func loadRuntimeAgentInfos(runtimeRoot string, cfg *config.Config) (map[string]*agentInfo, []Finding, error) {
 	agentsRoot := filepath.Join(runtimeRoot, "agents")
 
-	agentLoad := rocketcode.LoadAgents(os.DirFS(agentsRoot))
+	agentLoad := rocketcode.LoadAgents(os.DirFS(agentsRoot), cfg.RenderAgentModel)
 	if len(agentLoad.Errors) > 0 {
 		return nil, nil, fmt.Errorf("load agents: %w", agentLoad.Errors[0])
 	}

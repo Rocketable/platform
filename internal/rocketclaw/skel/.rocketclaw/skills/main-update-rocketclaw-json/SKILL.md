@@ -105,6 +105,8 @@ When the human asks for a config change in plain English:
 - preserve the correct JSON type
 - if the target path or intended type is ambiguous, ask a clarifying question before writing
 
+The top-level `models` object maps arbitrary placeholder names to deployment model names. Agent frontmatter uses a mapping as `model: '{{ model "name" }}'`.
+
 Use `jq` operations for arrays and object updates instead of rewriting large sections by hand.
 
 If multiple related config changes belong together, prefer a single `jq` filter that performs all of them in one pass.

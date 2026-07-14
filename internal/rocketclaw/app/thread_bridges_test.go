@@ -35,6 +35,17 @@ func TestRunReportsPendingRestartNotificationStartupErrors(t *testing.T) {
 	require.ErrorContains(t, err, "apply pending restart notifications")
 }
 
+func TestRunRejectsUnresolvedAgentModelAtStartup(t *testing.T) {
+	workspace := shortTempDir(t)
+	agentsRoot := filepath.Join(workspace, "agents")
+	require.NoError(t, os.MkdirAll(agentsRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(agentsRoot, "main.md"), []byte("---\ndescription: Main\nmodel: '{{ model \"missing\" }}'\n---\nPrompt\n"), 0o600))
+
+	err := Run(t.Context(), &config.Config{Workspace: workspace, Slack: config.SlackConfig{Enabled: true}}, "", slog.New(slog.DiscardHandler))
+	require.ErrorContains(t, err, "validate rocketcode definitions")
+	require.ErrorContains(t, err, `model "missing" is not configured`)
+}
+
 func TestThreadBridgeManagerCreatesSeparateBridgesPerThreadAndPersistsThem(t *testing.T) {
 	workspace := t.TempDir()
 	store := newTestSessionService(t, workspace)

@@ -27,7 +27,7 @@ Only use these runtime paths:
 ## Required inputs
 
 For creation, you must know:
-- target name under `agents/`, description, model, and purpose
+- target name under `agents/`, description, concrete model or configured model placeholder, and purpose
 - agent kind and exact opt-ins: bash command patterns, writable path patterns, skill names, task agent names, or another named permission bucket
 
 For updates, you must know:
@@ -173,7 +173,7 @@ The resulting frontmatter must include at least:
 - `description`
 - `model`
 
-The `model` value is required and must be a non-empty unprefixed OpenAI model ID, such as `gpt-5.5`. If the human has not specified the model for a new agent, ask before writing the file.
+The `model` value is required. Use a concrete model such as `gpt-5.5`, or `{{ model "name" }}` when `name` already exists in the selected config's `models` object. If the human has not specified either one, ask before writing the file. Do not invent a mapping.
 
 When updating an existing agent, preserve the existing non-empty `model` unless the human explicitly asked to change it. If the existing agent has no `model` or an empty `model`, ask the human which model to use and add it.
 

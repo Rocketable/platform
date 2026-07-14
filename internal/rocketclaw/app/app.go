@@ -181,6 +181,10 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		return fmt.Errorf("sync rocketclaw skeleton: %w", err)
 	}
 
+	if _, _, err := harnessbridge.LoadRuntimeDefinitions(cfg, cfg.RuntimeDirName()); err != nil {
+		return fmt.Errorf("validate rocketcode definitions: %w", err)
+	}
+
 	questionBroker := newAskUserQuestionBroker(logger)
 
 	var externalMCPUsers map[string]string
@@ -231,7 +235,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		logger.Info("reload requested", "reason", reason)
 
 		validate := func(runtimeDir string) error {
-			if err := harnessbridge.ValidateRuntimeDefinitions(cfg.Workspace, runtimeDir); err != nil {
+			if _, _, err := harnessbridge.LoadRuntimeDefinitions(cfg, runtimeDir); err != nil {
 				return fmt.Errorf("validate rocketcode definitions: %w", err)
 			}
 
@@ -427,7 +431,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		)
 
 		refreshExternalMCPAgents = func() error {
-			agents, err := harnessbridge.ExternalMCPAgentsIn(cfg.Workspace, cfg.RuntimeDirName())
+			agents, err := harnessbridge.ExternalMCPAgentsIn(cfg, cfg.RuntimeDirName())
 			if err != nil {
 				return fmt.Errorf("load external MCP agents: %w", err)
 			}

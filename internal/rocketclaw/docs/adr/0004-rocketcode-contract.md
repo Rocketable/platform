@@ -33,6 +33,7 @@ Both construction paths must pass RocketClaw-originated `rocketcode.PromptInput`
 - RocketClaw treats first-party OpenAI Responses as the only supported RocketCode model provider surface.
 - Model strings in agent frontmatter and runtime defaults are unprefixed OpenAI model IDs. Empty RocketCode runtime/default model resolves to `gpt-5.5`. Legacy `openai/<model>` strings are accepted only as first-party OpenAI aliases and normalized to `<model>`. Other provider-qualified model strings, including `openai-compatible/...` and `anthropic/...`, are construction errors.
 - Every loaded agent must declare a non-empty `model` frontmatter value. Missing or empty agent models are invalid rather than inherited from the runtime/default OpenAI model. RocketClaw startup must enforce this requirement across embedded, generated, configured-overlay, and workspace-overlay agents. Agent creation and update guidance must ask the human which model to use before writing an agent without a non-empty model.
+- An agent `model` may use Go `text/template` syntax. RocketClaw renders only that field and provides `model "<name>"`, which returns any matching value from the selected config's `models` object. For example: `{{ model "coding-high" }}`. Missing mappings and invalid templates are errors. This applies to startup, reload, normal runs, cron runs, lint, and agent graphs.
 - RocketClaw passes one first-party OpenAI client into RocketCode. ChatGPT OAuth and OpenAI API-key behavior follow `openai.rocketcode_auth`.
 - Hosted OpenAI tools, including hosted `websearch`, remain OpenAI-only tools governed by RocketCode permissions.
 
@@ -232,3 +233,4 @@ Persistent bridge tools are restart, reload, schedule message, reset scheduled m
 - 2026-07-07: Added top-level `seed_compaction_model` for RocketClaw-owned response checkpoint and inherited-context seed replay compaction model selection.
 - 2026-07-07: Replaced `rocketclaw_restart` graceful-restart tool wording with pending restart notification/requester recording followed by runtime cancellation for supervisor restart.
 - 2026-07-08: Made `rocketclaw_restart` default-deny unless the active agent explicitly allows the `rocketclaw_restart` permission subject, with generated `main` agents granting that permission.
+- 2026-07-14: Added config-backed agent model placeholders.

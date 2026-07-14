@@ -708,7 +708,7 @@ func TestRunRawReturnsProgressThinkingError(t *testing.T) {
 
 func TestRunRawAlwaysEnablesAutoApprovePermissions(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  bash:\n    \"printf ok\": auto\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: '{{ model \"coding-high\" }}'\npermission:\n  bash:\n    \"printf ok\": auto\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var (
@@ -739,7 +739,7 @@ func TestRunRawAlwaysEnablesAutoApprovePermissions(t *testing.T) {
 
 		switch current {
 		case 1:
-			assert.Contains(t, string(data), `"model":"gpt-5.5"`)
+			assert.Contains(t, string(data), `"model":"software-development-sol"`)
 			writeRawRunFunctionCall(t, w, "resp_1", "call_1", "bash", map[string]string{"command": "printf ok", "description": "print ok"})
 		case 2:
 			assert.Contains(t, string(data), `"model":"gpt-5.4-mini"`)
@@ -754,7 +754,7 @@ func TestRunRawAlwaysEnablesAutoApprovePermissions(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	result, err := RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "gpt-5.4-mini"}, "main", "prompt", slog.New(slog.DiscardHandler), newInertRawRunProgress())
+	result, err := RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace, Models: map[string]string{"coding-high": "software-development-sol"}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "gpt-5.4-mini"}, "main", "prompt", slog.New(slog.DiscardHandler), newInertRawRunProgress())
 
 	require.NoError(t, err)
 	require.Equal(t, RawRunResult{Text: "assistant text", VerbatimMessage: "done"}, result)

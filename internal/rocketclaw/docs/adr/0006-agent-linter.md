@@ -28,12 +28,14 @@ RocketClaw already relies on embedded create/update skills to guide agents towar
 - A clean lint exits `0` and prints a concise OK line that names the target.
 - Lint findings exit `1` and print deterministic line-oriented findings.
 - Config, load, and internal errors return normal command errors.
+- Lint resolves agent model placeholders with the selected config. Invalid placeholders are load errors, not lint findings.
 - Help text lists `rocketclaw lint [next|current]`.
 - `rocketclaw agent-graph` is equivalent to `rocketclaw agent-graph next`.
 - `rocketclaw agent-graph next` writes a DOT graph for the effective runtime assets that would be materialized after a RocketClaw restart using the selected config.
 - `rocketclaw agent-graph current` writes a DOT graph for the currently materialized selected runtime directory.
 - Unknown agent-graph targets must return a usage-style error.
 - A successful agent graph exits `0` and writes deterministic Graphviz/DOT to stdout.
+- Agent graphs resolve model placeholders the same way. Invalid placeholders do not produce a graph.
 - Help text lists `rocketclaw agent-graph [next|current]`.
 
 ### Target Semantics
@@ -42,6 +44,7 @@ RocketClaw already relies on embedded create/update skills to guide agents towar
 - `current` reads effective assets from the selected `<runtime-dir>/agents`, `<runtime-dir>/skills`, and `<runtime-dir>/scripts` as they already exist on disk.
 - `current` does not apply overlays, fetch git overlays, inspect pending local overlay edits, or recreate workspace script symlinks.
 - `next` builds a temporary startup-equivalent effective runtime tree from embedded assets, configured git overlays, and local workspace overlays in startup order.
+- Both targets use the selected config's `models` mapping.
 - `next` must not mutate the real `.rocketclaw/` or `.femtoclaw/` directory.
 - `next` must not recreate or remove workspace `scripts/` symlinks.
 - `next` must not modify real configured overlay clone directories under the selected runtime directory.
@@ -135,3 +138,4 @@ RocketClaw already relies on embedded create/update skills to guide agents towar
 - 2026-06-12: Added `RC007` for missing guardrail references and guardrail edges in agent graph output.
 - 2026-06-19: Added `RC008` for excessive `reasoningEffort: xhigh` agent frontmatter.
 - 2026-07-04: Clarified that scheduled cron global-ticker scanning is governed outside the agent-linter ADR.
+- 2026-07-14: Added model placeholder resolution to lint and agent graphs.

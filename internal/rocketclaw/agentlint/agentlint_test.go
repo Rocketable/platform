@@ -1,11 +1,13 @@
 package agentlint
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -88,7 +90,7 @@ reasoningEffort: xhigh
 expensive
 `)
 
-	result, err := Lint(runtimeRoot)
+	result, err := Lint(runtimeRoot, new(config.Config))
 	require.NoError(t, err)
 	assertFindingCodes(t, result.Findings, rc001, rc002, rc003, rc004, rc005, rc006, rc007, rc008)
 }
@@ -118,7 +120,7 @@ reasoningEffort: xhigh #nolint RC008: approved for hard reasoning
 expensive
 `)
 
-	result, err := Lint(runtimeRoot)
+	result, err := Lint(runtimeRoot, new(config.Config))
 	require.NoError(t, err)
 
 	for _, finding := range result.Findings {
@@ -137,7 +139,7 @@ reasoningEffort: xhigh
 expensive
 `)
 
-	result, err := Lint(runtimeRoot)
+	result, err := Lint(runtimeRoot, new(config.Config))
 	require.NoError(t, err)
 	require.Len(t, result.Findings, 1)
 	assert.Equal(t, rc008, result.Findings[0].Code)
@@ -159,7 +161,7 @@ permission:
 same
 `)
 
-	result, err := Lint(runtimeRoot)
+	result, err := Lint(runtimeRoot, new(config.Config))
 	require.NoError(t, err)
 
 	foundUnsuppressed := false
@@ -187,7 +189,7 @@ permission:
 bad
 `)
 
-	result, err := Lint(runtimeRoot)
+	result, err := Lint(runtimeRoot, new(config.Config))
 	require.NoError(t, err)
 	assertFindingCodes(t, result.Findings, rc000)
 }
@@ -220,7 +222,7 @@ permission:
 hub
 `)
 
-	dot, err := AgentGraphDOT(runtimeRoot)
+	dot, err := AgentGraphDOT(runtimeRoot, new(config.Config))
 	require.NoError(t, err)
 	assert.Equal(t, `digraph agent_graph {
   "alpha" [label="alpha\nmaxRecursion=0"];
@@ -234,10 +236,26 @@ hub
 `, dot)
 }
 
-func writeAgent(t *testing.T, runtimeRoot, name, content string) {
+func TestLintResolvesModelTemplate(t *testing.T) {
+	runtimeRoot := t.TempDir()
+	writeAgent(t, runtimeRoot, "main.md", "---\n---\nmain\n", `{{ model "coding-high" }}`)
+
+	_, err := Lint(runtimeRoot, &config.Config{Models: map[string]string{"coding-high": "software-development-sol"}})
+	require.NoError(t, err)
+
+	_, err = Lint(runtimeRoot, new(config.Config))
+	require.ErrorContains(t, err, `model "coding-high" is not configured`)
+}
+
+func writeAgent(t *testing.T, runtimeRoot, name, content string, models ...string) {
 	t.Helper()
 
-	content = "---\nmodel: gpt-5.5\n" + content[len("---\n"):]
+	model := "gpt-5.5"
+	if len(models) > 0 {
+		model = models[0]
+	}
+
+	content = fmt.Sprintf("---\nmodel: %q\n", model) + content[len("---\n"):]
 
 	agentsRoot := filepath.Join(runtimeRoot, "agents")
 	require.NoError(t, os.MkdirAll(agentsRoot, 0o755))

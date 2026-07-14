@@ -56,7 +56,7 @@ func (e *AgentMaxRecursionError) Unwrap() error {
 }
 
 // LoadAgents scans the top level of fsys for markdown agent files.
-func LoadAgents(fsys fs.FS) AgentLoadResult {
+func LoadAgents(fsys fs.FS, resolveModel func(string) (string, error)) AgentLoadResult {
 	result := AgentLoadResult{
 		Agents: Agents{Items: map[string]Agent{}},
 		Errors: nil,
@@ -84,7 +84,7 @@ func LoadAgents(fsys fs.FS) AgentLoadResult {
 	sort.Strings(paths)
 
 	for _, filePath := range paths {
-		agent, err := loadAgent(fsys, filePath)
+		agent, err := loadAgent(fsys, filePath, resolveModel)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 			continue
@@ -100,7 +100,7 @@ func LoadAgents(fsys fs.FS) AgentLoadResult {
 	return result
 }
 
-func loadAgent(fsys fs.FS, filePath string) (Agent, error) {
+func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, error)) (Agent, error) {
 	data, err := fs.ReadFile(fsys, filePath)
 	if err != nil {
 		return Agent{}, fmt.Errorf("%s: read agent: %w", filePath, err)
@@ -152,9 +152,12 @@ func loadAgent(fsys fs.FS, filePath string) (Agent, error) {
 		return Agent{}, fmt.Errorf("%s: model: required non-empty string", filePath)
 	}
 
-	model := modelField.Value
+	model, err := resolveModel(modelField.Value)
+	if err != nil {
+		return Agent{}, fmt.Errorf("%s: model: %w", filePath, err)
+	}
 
-	parsedModel, err := parseModelRef(model)
+	parsedModel, err := resolveAgentModelRef(model)
 	if err != nil {
 		return Agent{}, fmt.Errorf("%s: model: %w", filePath, err)
 	}
@@ -175,6 +178,10 @@ func loadAgent(fsys fs.FS, filePath string) (Agent, error) {
 		Frontmatter:     frontmatter,
 		FileMode:        info.Mode(),
 	}, nil
+}
+
+func passThroughAgentModel(model string) (string, error) {
+	return model, nil
 }
 
 func parseAgentFrontmatter(content string) (frontmatter map[string]any, frontmatterNode *yaml.Node, prompt string, err error) {

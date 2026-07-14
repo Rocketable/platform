@@ -174,13 +174,27 @@ Known frontmatter fields:
 | Field | Meaning |
 | --- | --- |
 | `description` | Required short purpose shown when selecting agents. |
-| `model` | Required non-empty unprefixed OpenAI Responses model ID. |
+| `model` | Required concrete model or `{{ model "name" }}` placeholder configured in `models`. |
 | `reasoningEffort` | Optional model reasoning effort. Avoid `xhigh`; `rocketclaw lint` reports it. |
 | `verbosity` | Optional model verbosity. |
 | `maxRecursion` | Optional task delegation depth for inferences started with this agent. Omitted or `-1` is unlimited, `0` disables `task`, and positive integers allow that many levels. |
 | `guardrail` | Optional loaded agent name that gates task delegations to this agent before the child runs and after its response. The guardrail must approve or reject with strict JSON containing `approved` and `reason`; it does not transform the delegated prompt or child response. |
 | `additionalInstructions` | Optional RocketClaw normal-reply prompt-header override for this selected agent. Use it for response-format guidance, such as telling an agent to avoid Markdown for Slack, prefer Markdown for technical answers, keep answers terse, or follow another surface-specific style. When omitted, RocketClaw uses `Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.` It does not affect internal notes or raw cron runs. |
 | `permission` | Optional singular permission map. Omit it when the agent needs no tools. Do not use plural `permissions`; RocketCode ignores it and `rocketclaw lint` reports it. |
+
+Deployment-specific model names can be kept out of shared agents:
+
+```json
+"models": {
+  "coding-high": "software-development-sol"
+}
+```
+
+```yaml
+model: '{{ model "coding-high" }}'
+```
+
+Changing `models` requires restart. Agent changes using an existing mapping can use reload.
 
 RocketCode denies tools by default. `permission` grants are grouped by bucket, and each bucket maps subjects to actions. Later matching rules override earlier matching rules, so put broad allows before narrower denies when subtracting access.
 

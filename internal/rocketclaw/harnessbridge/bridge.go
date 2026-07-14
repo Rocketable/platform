@@ -829,7 +829,7 @@ func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.Ses
 			return nil, fmt.Errorf("open workspace root: %w", err)
 		}
 
-		agents, _, err := loadRocketCodeDefinitionsIn(root, b.runtime.Workspace, b.runtime.RuntimeDirName(), toolModePersistent)
+		agents, _, err := loadRocketCodeDefinitionsIn(root, b.runtime, b.runtime.RuntimeDirName(), toolModePersistent)
 		_ = root.Close()
 
 		if err != nil {
@@ -1255,7 +1255,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 
 	defer func() { _ = root.Close() }()
 
-	agents, skills, err := loadRocketCodeDefinitionsIn(root, b.runtime.Workspace, b.runtime.RuntimeDirName(), toolModePersistent)
+	agents, skills, err := loadRocketCodeDefinitionsIn(root, b.runtime, b.runtime.RuntimeDirName(), toolModePersistent)
 	if err != nil {
 		return runResult{}, fmt.Errorf("open workspace agent and skills: %w", err)
 	}
@@ -2053,7 +2053,7 @@ func overlayPromptSection(cfg *config.Config, overlays []skel.OverlayInfo) strin
 	return strings.Join(lines, "\n")
 }
 
-func loadRocketCodeDefinitionsIn(root *os.Root, workspace, runtimeDir string, mode toolMode) (rocketcode.Agents, rocketcode.Skills, error) {
+func loadRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir string, mode toolMode) (rocketcode.Agents, rocketcode.Skills, error) {
 	rootFS := root.FS()
 
 	agentsFS, err := fs.Sub(rootFS, filepath.ToSlash(filepath.Join(runtimeDir, "agents")))
@@ -2066,12 +2066,12 @@ func loadRocketCodeDefinitionsIn(root *os.Root, workspace, runtimeDir string, mo
 		return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("open skills dir: %w", err)
 	}
 
-	agentResult := rocketcode.LoadAgents(agentsFS)
+	agentResult := rocketcode.LoadAgents(agentsFS, cfg.RenderAgentModel)
 	if len(agentResult.Errors) > 0 {
 		return rocketcode.Agents{}, rocketcode.Skills{}, errors.Join(agentResult.Errors...)
 	}
 
-	skillsRoot := filepath.Join(workspace, runtimeDir, "skills")
+	skillsRoot := filepath.Join(cfg.Workspace, runtimeDir, "skills")
 	skillResult := rocketcode.LoadSkills(skillsFS, skillsRoot)
 
 	tools := []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName}
@@ -2099,30 +2099,21 @@ func loadRocketCodeDefinitionsIn(root *os.Root, workspace, runtimeDir string, mo
 	return agentResult.Agents, skillResult.Skills, nil
 }
 
-// ValidateRuntimeDefinitions loads RocketCode definitions from runtimeDir without starting a run.
-func ValidateRuntimeDefinitions(workspace, runtimeDir string) error {
-	root, err := os.OpenRoot(workspace)
+// LoadRuntimeDefinitions loads RocketCode definitions from runtimeDir without starting a run.
+func LoadRuntimeDefinitions(cfg *config.Config, runtimeDir string) (rocketcode.Agents, rocketcode.Skills, error) {
+	root, err := os.OpenRoot(cfg.Workspace)
 	if err != nil {
-		return fmt.Errorf("open workspace root: %w", err)
+		return rocketcode.Agents{}, rocketcode.Skills{}, fmt.Errorf("open workspace root: %w", err)
 	}
 
 	defer func() { _ = root.Close() }()
 
-	_, _, err = loadRocketCodeDefinitionsIn(root, workspace, runtimeDir, toolModePersistent)
-
-	return err
+	return loadRocketCodeDefinitionsIn(root, cfg, runtimeDir, toolModePersistent)
 }
 
 // ExternalMCPAgentsIn returns agents externally selectable through MCP in runtimeDir.
-func ExternalMCPAgentsIn(workspace, runtimeDir string) ([]string, error) {
-	root, err := os.OpenRoot(workspace)
-	if err != nil {
-		return nil, fmt.Errorf("open workspace root: %w", err)
-	}
-
-	defer func() { _ = root.Close() }()
-
-	agents, _, err := loadRocketCodeDefinitionsIn(root, workspace, runtimeDir, toolModePersistent)
+func ExternalMCPAgentsIn(cfg *config.Config, runtimeDir string) ([]string, error) {
+	agents, _, err := LoadRuntimeDefinitions(cfg, runtimeDir)
 	if err != nil {
 		return nil, err
 	}
@@ -2535,7 +2526,7 @@ func (b *Bridge) runGoalCheck(ctx context.Context, script string) (string, bool)
 
 	defer func() { _ = root.Close() }()
 
-	agents, _, err := loadRocketCodeDefinitionsIn(root, b.runtime.Workspace, b.runtime.RuntimeDirName(), toolModePersistent)
+	agents, _, err := loadRocketCodeDefinitionsIn(root, b.runtime, b.runtime.RuntimeDirName(), toolModePersistent)
 	if err != nil {
 		return "goal check failed before execution: " + err.Error(), false
 	}

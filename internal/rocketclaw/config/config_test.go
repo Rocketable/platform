@@ -60,6 +60,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 func TestLoadPreservesModelConfig(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",
+	  "models": {"coding-high": "software-development-sol", "review-fast": "gpt-5.6-luna"},
 	  "auto_approver_model": " openai/gpt-5.5 ",
 	  "seed_compaction_model": " gpt-5.4 ",
 	  "openai": {"api_key": "test-key"},
@@ -68,6 +69,63 @@ func TestLoadPreservesModelConfig(t *testing.T) {
 
 	assert.Equal(t, "gpt-5.5", cfg.AutoApproverModel)
 	assert.Equal(t, "gpt-5.4", cfg.SeedCompactionModel)
+	assert.Equal(t, map[string]string{"coding-high": "software-development-sol", "review-fast": "gpt-5.6-luna"}, cfg.Models)
+}
+
+func TestValidateRejectsInvalidModels(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		models map[string]string
+	}{
+		{name: "empty name", models: map[string]string{" ": "gpt-5.5"}},
+		{name: "empty model", models: map[string]string{"coding-high": " "}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Models = tt.models
+
+			err := cfg.Validate()
+			require.ErrorContains(t, err, "models")
+		})
+	}
+}
+
+func TestRenderAgentModel(t *testing.T) {
+	cfg := validConfig()
+	cfg.Models = map[string]string{
+		"coding-high":        "software-development-sol",
+		`quoted"placeholder`: "gpt-5.6-luna",
+		"nested":             `{{ model "coding-high" }}`,
+		"invalid":            "anthropic/claude",
+	}
+	require.NoError(t, cfg.Validate())
+
+	for _, tt := range []struct {
+		name    string
+		model   string
+		want    string
+		wantErr string
+	}{
+		{name: "concrete", model: "gpt-5.5", want: "gpt-5.5"},
+		{name: "placeholder", model: `{{ model "coding-high" }}`, want: "software-development-sol"},
+		{name: "arbitrary quoted name", model: `{{ model "quoted\"placeholder" }}`, want: "gpt-5.6-luna"},
+		{name: "missing", model: `{{ model "missing" }}`, wantErr: `model "missing" is not configured`},
+		{name: "invalid template", model: `{{ model "coding-high" }`, wantErr: "parse model template"},
+		{name: "empty result", model: `{{ "" }}`, wantErr: "model template returned an empty model"},
+		{name: "nested", model: `{{ model "nested" }}`, wantErr: "model template returned another template"},
+		{name: "provider validation is separate", model: `{{ model "invalid" }}`, want: "anthropic/claude"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := cfg.RenderAgentModel(tt.model)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestLoadPreservesInstrumentationConfig(t *testing.T) {
