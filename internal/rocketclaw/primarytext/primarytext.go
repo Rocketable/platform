@@ -9,7 +9,6 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/cronjob"
 	"github.com/Rocketable/platform/internal/rocketclaw/emoji"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
@@ -19,12 +18,6 @@ import (
 const (
 	socialAgentSwitchPrefix, socialAgentSwitchPrefixVariant = "🎛", "🎛️"
 )
-
-// ThreadAgent is one configured text prefix to managed-agent mapping.
-type ThreadAgent struct {
-	Prefix, Agent string
-	PreSeed       bool
-}
 
 // OneOffCronjobRunner runs one loaded cronjob with progress callbacks.
 type OneOffCronjobRunner interface {
@@ -37,48 +30,7 @@ func SplitSlackText(text string, preferredLimit, hardLimit int) []string {
 	return splitText(text, preferredLimit, hardLimit, slackChunkEnd)
 }
 
-// NormalizeThreadAgents trims configured managed-agent prefixes and preserves connector-specific ordering.
-func NormalizeThreadAgents(threadAgents config.ThreadAgents, longestFirst bool) []ThreadAgent {
-	agents := make([]ThreadAgent, 0, len(threadAgents))
-	for prefix, entry := range threadAgents {
-		prefix, agent := strings.TrimSpace(prefix), strings.TrimSpace(entry.Agent)
-		if prefix != "" && agent != "" {
-			agents = append(agents, ThreadAgent{Prefix: prefix, Agent: agent, PreSeed: entry.PreSeed})
-		}
-	}
-
-	slices.SortFunc(agents, func(a, b ThreadAgent) int {
-		if longestFirst && len(a.Prefix) != len(b.Prefix) {
-			return len(b.Prefix) - len(a.Prefix)
-		}
-
-		if longestFirst {
-			return strings.Compare(a.Prefix, b.Prefix)
-		}
-
-		return strings.Compare(b.Prefix, a.Prefix)
-	})
-
-	return agents
-}
-
-// MatchThreadAgent returns the configured agent matched by a connector-normalized prefix.
-func MatchThreadAgent(text string, agents []ThreadAgent, trimText bool) (ThreadAgent, string, bool) {
-	text = emoji.CanonicalizeLeadingAlias(text)
-	if trimText {
-		text = strings.TrimSpace(text)
-	}
-
-	for _, agent := range agents {
-		if after, ok := strings.CutPrefix(text, emoji.CanonicalizeLeadingAlias(agent.Prefix)); ok {
-			return agent, strings.TrimSpace(after), true
-		}
-	}
-
-	return ThreadAgent{}, "", false
-}
-
-// ParseSocialAgentSwitch returns the social-mode agent switch target, if text is a switch control message.
+// ParseSocialAgentSwitch returns the managed-conversation agent switch target, if text is a switch control message.
 func ParseSocialAgentSwitch(text string) (string, bool) {
 	text = emoji.CanonicalizeLeadingAlias(text)
 	text = strings.TrimSpace(text)
@@ -161,34 +113,6 @@ func RunOneOffCronjob(ctx context.Context, runner OneOffCronjobRunner, loaded cr
 
 		afterFinalPublish(ctx, result)
 	})
-}
-
-// OneOffCronjobSeedText returns the managed-conversation seed for a completed one-off cron run.
-func OneOffCronjobSeedText(loaded cronjob.OneOffCronjob, result cronjob.RunResult) string {
-	seedText := "One-off cronjob " + loaded.RelativePath + " ran with agent " + strings.TrimSpace(loaded.Agent) + "."
-	if text := strings.TrimSpace(result.VerbatimMessage); text != "" {
-		seedText += "\n\nHuman-visible cron output:\n" + text
-	}
-
-	if names := events.AttachmentNamesSpeech(result.Attachments); names != "" {
-		seedText += "\n\n" + names
-	}
-
-	return seedText
-}
-
-// ScheduledCronjobSeedText returns the managed-conversation seed for a scheduled cron result.
-func ScheduledCronjobSeedText(relativePath, ranAt, agent, text string, attachments []events.OutboundAttachment) string {
-	seedText := "Cronjob " + relativePath + " ran at " + ranAt + " with agent " + strings.TrimSpace(agent) + "."
-	if text := strings.TrimSpace(text); text != "" {
-		seedText += "\n\nHuman-visible cron output:\n" + text
-	}
-
-	if names := events.AttachmentNamesSpeech(attachments); names != "" {
-		seedText += "\n\n" + names
-	}
-
-	return seedText
 }
 
 func splitText(text string, preferredLimit, hardLimit int, chunkEnd func([]rune, int, int) int) []string {

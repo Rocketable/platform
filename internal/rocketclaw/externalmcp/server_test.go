@@ -24,7 +24,7 @@ func TestStartSessionPromptServerCallsHandler(t *testing.T) {
 		assert.Equal(t, "what now?", input)
 		assert.Nil(t, metadata)
 		assert.Empty(t, attachments)
-		assert.Empty(t, slackChannel)
+		assert.Equal(t, "#triage", slackChannel)
 
 		return SessionResult{Agent: "main", Answer: "plain text reply"}, nil
 	})
@@ -45,7 +45,7 @@ func TestStartSessionPromptServerReturnsExternalConversationID(t *testing.T) {
 		assert.Equal(t, "planner", agent)
 		assert.Equal(t, "what now?", input)
 		assert.Equal(t, map[string]string{"ticket-id": "123"}, metadata)
-		assert.Empty(t, slackChannel)
+		assert.Equal(t, "#triage", slackChannel)
 
 		return SessionResult{ExternalConversationID: "external_mcp:planner:abc", Agent: "planner", Answer: "planner reply"}, nil
 	})
@@ -161,7 +161,7 @@ func TestStartSessionPromptServerContinuesSession(t *testing.T) {
 		assert.Equal(t, "external_mcp:planner:abc", externalConversationID)
 		assert.Equal(t, "follow up", input)
 		assert.Nil(t, metadata)
-		assert.Empty(t, slackChannel)
+		assert.Equal(t, "#triage", slackChannel)
 
 		return SessionResult{ExternalConversationID: externalConversationID, Agent: "planner", Answer: "continued reply"}, nil
 	})
@@ -212,7 +212,7 @@ func TestStartSessionPromptServerExposesMetadataSchema(t *testing.T) {
 
 	schema, ok := sessionPromptTool.InputSchema.(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, []any{"input"}, schema["required"])
+	assert.Equal(t, []any{"input", "slack_channel"}, schema["required"])
 	properties, ok := schema["properties"].(map[string]any)
 	require.True(t, ok)
 	metadata, ok := properties["metadata"].(map[string]any)
@@ -232,6 +232,48 @@ func TestStartSessionPromptServerExposesMetadataSchema(t *testing.T) {
 	assert.Equal(t, "array", attachments["type"])
 }
 
+func TestStartSessionPromptServerRejectsMissingSlackChannel(t *testing.T) {
+	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(context.Context, string, string, string, string, map[string]string, []SessionPromptAttachment, string) (SessionResult, error) {
+		t.Fatal("handler called without required Slack channel")
+		return SessionResult{}, nil
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+	result := callTool(t, server.url, "", "", map[string]any{"input": "hello", "slack_channel": nil})
+	assert.Contains(t, result.Content[0].(*mcp.TextContent).Text, "slack_channel")
+}
+
+func TestStartSessionPromptServerRejectsBlankInputWithoutAttachments(t *testing.T) {
+	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(context.Context, string, string, string, string, map[string]string, []SessionPromptAttachment, string) (SessionResult, error) {
+		t.Fatal("handler called for blank turn")
+		return SessionResult{}, nil
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+	result := callTool(t, server.url, "", "", map[string]any{"input": " \n\t", "slack_channel": "#ops"})
+	assert.Contains(t, result.Content[0].(*mcp.TextContent).Text, "input or attachments")
+}
+
+func TestStartSessionPromptServerAcceptsAttachmentsWithoutInput(t *testing.T) {
+	called := false
+	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, _, _, input string, _ map[string]string, attachments []SessionPromptAttachment, _ string) (SessionResult, error) {
+		called = true
+
+		assert.Empty(t, input)
+		require.Len(t, attachments, 1)
+
+		return SessionResult{Answer: "accepted"}, nil
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+	result := callTool(t, server.url, "", "", map[string]any{"input": "", "slack_channel": "#ops", "attachments": []any{map[string]any{"data_base64": "eA=="}}})
+	require.True(t, called)
+	assert.Equal(t, "accepted", result.Content[0].(*mcp.TextContent).Text)
+}
+
 func TestStartSessionPromptServerRequiresBasicAuth(t *testing.T) {
 	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"alice": "secret"}, func(_ context.Context, username, externalConversationID, agent, input string, metadata map[string]string, _ []SessionPromptAttachment, slackChannel string) (SessionResult, error) {
 		assert.Equal(t, "alice", username)
@@ -239,7 +281,7 @@ func TestStartSessionPromptServerRequiresBasicAuth(t *testing.T) {
 		assert.Equal(t, "main", agent)
 		assert.Equal(t, "what now?", input)
 		assert.Nil(t, metadata)
-		assert.Empty(t, slackChannel)
+		assert.Equal(t, "#triage", slackChannel)
 
 		return SessionResult{Answer: "plain text reply"}, nil
 	})
@@ -334,6 +376,10 @@ func callSessionPrompt(t *testing.T, endpoint, username, password, agent, input 
 
 func callTool(t *testing.T, endpoint, username, password string, args map[string]any) *mcp.CallToolResult {
 	t.Helper()
+
+	if _, ok := args["slack_channel"]; !ok {
+		args["slack_channel"] = "#triage"
+	}
 
 	implementation := new(mcp.Implementation)
 	implementation.Name = "test-client"

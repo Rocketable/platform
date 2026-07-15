@@ -58,26 +58,24 @@ const (
 	scheduleMessageToolName        = "rocketclaw_schedule_message"
 	resetScheduledMessagesToolName = "rocketclaw_reset_scheduled_messages"
 
-	internalErrorResponse         = "I hit an internal error while waiting for rocketcode."
-	attachmentAccessFallback      = "I can see that you attached a file, but I could not send it to the model. Please re-upload it as a supported image or send a smaller file."
-	unsupportedFileFallback       = "I can see that you attached a non-image file. I can inspect image attachments right now, but other file types are not supported yet."
-	defaultQueueSize              = 128
-	externalMCPMetadataEntryType  = "mcp_external_metadata"
-	externalMCPConversationPrefix = "external_mcp:"
-	goalContinuationLabel         = "goal_continuation"
-	goalKickoffLabel              = "goal"
-	rocketclawConversationIDEnv   = "ROCKETCLAW_CONVERSATION_ID"
-	rocketclawMetadataEnvPrefix   = "ROCKETCLAW_METADATA_"
-	recoveredTurnMetadataKey      = "recovered_active_turn"
-	activeTurnGoalTurnKey         = "goal_turn"
-	activeTurnGoalAccountingKey   = "goal_accounting_label"
+	internalErrorResponse        = "I hit an internal error while waiting for rocketcode."
+	attachmentAccessFallback     = "I can see that you attached a file, but I could not send it to the model. Please re-upload it as a supported image or send a smaller file."
+	unsupportedFileFallback      = "I can see that you attached a non-image file. I can inspect image attachments right now, but other file types are not supported yet."
+	defaultQueueSize             = 128
+	externalMCPMetadataEntryType = "mcp_external_metadata"
+	goalContinuationLabel        = "goal_continuation"
+	goalKickoffLabel             = "goal"
+	rocketclawConversationIDEnv  = "ROCKETCLAW_CONVERSATION_ID"
+	rocketclawMetadataEnvPrefix  = "ROCKETCLAW_METADATA_"
+	recoveredTurnMetadataKey     = "recovered_active_turn"
+	activeTurnGoalTurnKey        = "goal_turn"
+	activeTurnGoalAccountingKey  = "goal_accounting_label"
 
 	maxInboundAttachmentBytes          = 4 << 20
 	maxInboundAttachmentTotalBytes     = 16 << 20
 	maxInboundAttachmentResizeInput    = 16 << 20
 	maxInboundAttachmentResizeAttempts = 8
 	rocketcodeBreadcrumbSeparator      = " \u2192 "
-	defaultSeedCompactionModel         = responses.ResponseCompactParamsModel("gpt-5.5")
 )
 
 var errBridgeStopped = errors.New("bridge stopped")
@@ -106,7 +104,6 @@ const (
 // Config controls one rocketcode bridge conversation.
 type Config struct {
 	ConversationID, Agent string
-	ConsumeSharedInbound  bool
 	OutputTargets         []events.OutputTarget
 	RecoveringActiveTurn  bool
 	RequestRestart        func(context.Context, string) (string, error)
@@ -122,7 +119,6 @@ type Bridge struct {
 	config    Config
 	runtime   *config.Config
 	bus       *events.Bus
-	inputStop context.CancelFunc
 	requestCh chan bridgeRequest
 	stopCh    chan struct{}
 
@@ -136,7 +132,6 @@ type Bridge struct {
 
 type bridgeRequest struct {
 	inbound                   *events.InboundMessage
-	summary                   *summaryRequest
 	activeTurn                *ActiveTurnState
 	scheduledMessageID        string
 	scheduledMessageRecurring bool
@@ -149,17 +144,6 @@ type ActivationHook func(context.Context, *events.InboundMessage) error
 // NoopActivationHook leaves queued request activation unchanged.
 func NoopActivationHook(_ context.Context, _ *events.InboundMessage) error {
 	return nil
-}
-
-type summaryRequest struct {
-	ctx      context.Context
-	prompt   string
-	resultCh chan summaryResult
-}
-
-type summaryResult struct {
-	text string
-	err  error
 }
 
 type runResult struct {
@@ -344,32 +328,17 @@ func (s activeTurnIDCheckpointSink) record(checkpoint *rocketcode.ActiveTurnChec
 
 // NewConversation constructs a rocketcode bridge for one conversation.
 func NewConversation(cfg *config.Config, bus *events.Bus, bridgeConfig *Config, logger *slog.Logger) *Bridge {
-	b := &Bridge{log: nil, config: normalizeConfig(bridgeConfig), runtime: cfg, bus: bus, inputStop: func() {}, requestCh: nil, stopCh: nil, mu: sync.Mutex{}, handling: false}
+	b := &Bridge{log: nil, config: normalizeConfig(bridgeConfig), runtime: cfg, bus: bus, requestCh: nil, stopCh: nil, mu: sync.Mutex{}, handling: false}
 	b.log = logger.With("component", "rocketcode")
 
 	return b
 }
 
 func normalizeConfig(cfg *Config) Config {
-	if cfg == nil {
-		cfg = new(Config)
-	}
-
 	normalized := *cfg
-	if strings.TrimSpace(normalized.ConversationID) == "" {
-		normalized.ConversationID = events.MainConversationID()
-		normalized.ConsumeSharedInbound = true
-	}
-
-	if strings.TrimSpace(normalized.Agent) == "" {
-		normalized.Agent = "main"
-	}
-
-	if len(normalized.OutputTargets) == 0 {
-		normalized.OutputTargets = events.MainOutputTargets()
-	} else {
-		normalized.OutputTargets = append([]events.OutputTarget(nil), normalized.OutputTargets...)
-	}
+	normalized.ConversationID = strings.TrimSpace(normalized.ConversationID)
+	normalized.Agent = strings.TrimSpace(normalized.Agent)
+	normalized.OutputTargets = append([]events.OutputTarget(nil), normalized.OutputTargets...)
 
 	return normalized
 }
@@ -384,13 +353,6 @@ func (b *Bridge) Start(ctx context.Context) error {
 		if err := b.armPendingScheduledMessages(); err != nil {
 			return err
 		}
-	}
-
-	if b.config.ConsumeSharedInbound {
-		inboundCtx, cancel := context.WithCancel(ctx)
-
-		b.inputStop = cancel
-		go b.forwardInbound(inboundCtx)
 	}
 
 	go b.loop(ctx)
@@ -438,8 +400,6 @@ func (b *Bridge) ResetScheduledMessages() error {
 
 // Stop cancels bridge activity.
 func (b *Bridge) Stop() error {
-	b.inputStop()
-
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -499,181 +459,6 @@ func (b *Bridge) InterruptActiveTurn() *events.InboundMessage {
 	}
 }
 
-// Summarize asks the conversation to produce a short summary.
-func (b *Bridge) Summarize(ctx context.Context, prompt string) (string, error) {
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
-		return "", errors.New("summary prompt is required")
-	}
-
-	request := &summaryRequest{ctx: ctx, prompt: prompt, resultCh: make(chan summaryResult, 1)}
-
-	if err := b.enqueue(ctx, bridgeRequest{summary: request}, "summarize thread"); err != nil {
-		return "", err
-	}
-
-	b.mu.Lock()
-	stopCh := b.stopCh
-	b.mu.Unlock()
-
-	select {
-	case <-ctx.Done():
-		return "", fmt.Errorf("summarize thread: %w", ctx.Err())
-	case <-stopCh:
-		return "", fmt.Errorf("summarize thread: %w", errBridgeStopped)
-	case result := <-request.resultCh:
-		return result.text, result.err
-	}
-}
-
-// SeedResponseThread initializes an empty thread session from a main-session response checkpoint.
-func (b *Bridge) SeedResponseThread(ctx context.Context, checkpoint events.ResponseCheckpoint) error {
-	if checkpoint.SessionEntryID <= 0 {
-		return errors.New("response checkpoint session entry ID is required")
-	}
-
-	assistantText := strings.TrimSpace(checkpoint.AssistantText)
-	if assistantText == "" {
-		return errors.New("response checkpoint assistant text is required")
-	}
-
-	threadStore := newSessionStore(b.config.ConversationID, b.config.SessionService)
-
-	threadEntries, err := b.observeSessionEntries(ctx, b.config.ConversationID)
-	if err != nil {
-		return fmt.Errorf("load response-rooted thread session: %w", err)
-	}
-
-	if len(threadEntries) > 0 {
-		return nil
-	}
-
-	mainConversationID := strings.TrimSpace(checkpoint.ConversationID)
-	if mainConversationID == "" {
-		mainConversationID = events.MainConversationID()
-	}
-
-	observed, err := b.observeSessionEntries(ctx, mainConversationID)
-	if err != nil {
-		return fmt.Errorf("load main session checkpoint entries: %w", err)
-	}
-
-	seedEntries := make([]rocketcode.SessionEntry, 0, len(observed))
-	found := false
-
-	for i := range observed {
-		entry := observed[i].Entry
-		if observed[i].ID == checkpoint.SessionEntryID {
-			items, err := rocketcode.ReplayInputToParams(entry.ReplayInput)
-			if err != nil {
-				return fmt.Errorf("decode checkpoint replay input: %w", err)
-			}
-
-			for j := range items {
-				role, _, ok := replayInputMessageRoleText(&items[j])
-				if !ok || strings.TrimSpace(role) == "assistant" {
-					entry.ReplayInput, err = rocketcode.ReplayInputFromParams(items[:j])
-					if err != nil {
-						return fmt.Errorf("encode checkpoint replay input: %w", err)
-					}
-
-					break
-				}
-			}
-
-			seedEntries = append(seedEntries, entry)
-			found = true
-
-			break
-		}
-
-		if observed[i].ID < checkpoint.SessionEntryID {
-			seedEntries = append(seedEntries, entry)
-		}
-	}
-
-	if !found {
-		return fmt.Errorf("main session checkpoint entry %d was not found", checkpoint.SessionEntryID)
-	}
-
-	model, err := b.seedCompactionModel(checkpoint.Model)
-	if err != nil {
-		return err
-	}
-
-	seedReplay, err := b.compactSeedReplay(ctx, seedEntries, model)
-	if err != nil {
-		return fmt.Errorf("compact main session checkpoint: %w", err)
-	}
-
-	assistantReplay, err := replayInputForMessage("assistant", assistantText)
-	if err != nil {
-		return fmt.Errorf("encode response-rooted thread assistant seed: %w", err)
-	}
-
-	seedReplay = append(seedReplay, assistantReplay...)
-
-	_, err = threadStore.outID(rocketcode.SessionEntry{
-		Version:     1,
-		Type:        "response_thread_seed",
-		Timestamp:   time.Now().UTC(),
-		ResponseID:  strings.TrimSpace(checkpoint.ResponseID),
-		Model:       strings.TrimSpace(checkpoint.Model),
-		ReplayInput: seedReplay,
-	})
-	if err != nil {
-		return fmt.Errorf("persist response-rooted thread seed: %w", err)
-	}
-
-	return nil
-}
-
-// SeedThreadFromConversation initializes an empty thread session from source conversation context.
-func (b *Bridge) SeedThreadFromConversation(ctx context.Context, sourceConversationID string) error {
-	sourceConversationID = strings.TrimSpace(sourceConversationID)
-	if sourceConversationID == "" {
-		return errors.New("source conversation ID is required")
-	}
-
-	entryType := "conversation_thread_seed"
-	if sourceConversationID == events.MainConversationID() {
-		entryType = "main_thread_seed"
-	}
-
-	return b.seedThreadFromConversation(ctx, sourceConversationID, entryType)
-}
-
-// SeedThreadFromCron initializes an empty thread session from cron output.
-func (b *Bridge) SeedThreadFromCron(ctx context.Context, seedText string) error {
-	seedText = strings.TrimSpace(seedText)
-	if seedText == "" {
-		return errors.New("cron thread seed text is required")
-	}
-
-	threadStore := newSessionStore(b.config.ConversationID, b.config.SessionService)
-
-	threadEntries, err := b.observeSessionEntries(ctx, b.config.ConversationID)
-	if err != nil {
-		return fmt.Errorf("load Slack cron thread session: %w", err)
-	}
-
-	if len(threadEntries) > 0 {
-		return nil
-	}
-
-	seedReplay, err := replayInputForMessage("assistant", seedText)
-	if err != nil {
-		return fmt.Errorf("encode cron thread seed: %w", err)
-	}
-
-	_, err = threadStore.outID(rocketcode.SessionEntry{Version: 1, Type: "cron_thread_seed", Timestamp: time.Now().UTC(), ReplayInput: seedReplay})
-	if err != nil {
-		return fmt.Errorf("persist cron thread seed: %w", err)
-	}
-
-	return nil
-}
-
 func (b *Bridge) armPendingScheduledMessages() error {
 	scheduledMessages, err := b.config.SessionService.ScheduledMessagesForConversation(b.config.ConversationID)
 	if err != nil {
@@ -688,87 +473,11 @@ func (b *Bridge) armPendingScheduledMessages() error {
 	return nil
 }
 
-func (b *Bridge) seedThreadFromConversation(ctx context.Context, sourceConversationID, entryType string) error {
-	threadEntries, err := b.observeSessionEntries(ctx, b.config.ConversationID)
-	if err != nil {
-		return fmt.Errorf("load thread session: %w", err)
-	}
-
-	if len(threadEntries) > 0 {
-		return nil
-	}
-
-	observed, err := b.observeSessionEntries(ctx, sourceConversationID)
-	if err != nil {
-		return fmt.Errorf("load source session entries: %w", err)
-	}
-
-	if len(observed) == 0 {
-		return nil
-	}
-
-	seedEntries := make([]rocketcode.SessionEntry, 0, len(observed))
-	model := responses.ResponseCompactParamsModel("")
-
-	for i := range observed {
-		entry := observed[i].Entry
-
-		seedEntries = append(seedEntries, entry)
-		if strings.TrimSpace(entry.Model) != "" {
-			model = responses.ResponseCompactParamsModel(strings.TrimSpace(entry.Model))
-		}
-	}
-
-	compactionModel, err := b.seedCompactionModel(string(model))
-	if err != nil {
-		return err
-	}
-
-	seedReplay, err := b.compactSeedReplay(ctx, seedEntries, compactionModel)
-	if err != nil {
-		return fmt.Errorf("compact source session: %w", err)
-	}
-
-	threadStore := newSessionStore(b.config.ConversationID, b.config.SessionService)
-
-	_, err = threadStore.outID(rocketcode.SessionEntry{Version: 1, Type: entryType, Timestamp: time.Now().UTC(), Model: string(model), ReplayInput: seedReplay})
-	if err != nil {
-		return fmt.Errorf("persist thread seed: %w", err)
-	}
-
-	return nil
-}
-
 func (b *Bridge) agentSnapshot() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	return b.config.Agent
-}
-
-type seedCompactionModel struct {
-	apiModel responses.ResponseCompactParamsModel
-}
-
-func compactModel(model string) (seedCompactionModel, error) {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return seedCompactionModel{apiModel: defaultSeedCompactionModel}, nil
-	}
-
-	if strings.Contains(model, "/") {
-		return seedCompactionModel{}, fmt.Errorf("invalid checkpoint model %q: expected unprefixed OpenAI model ID", model)
-	}
-
-	return seedCompactionModel{apiModel: responses.ResponseCompactParamsModel(model)}, nil
-}
-
-func (b *Bridge) seedCompactionModel(sourceModel string) (seedCompactionModel, error) {
-	if strings.TrimSpace(b.runtime.SeedCompactionModel) != "" {
-		return compactModel(b.runtime.SeedCompactionModel)
-	}
-
-	return compactModel(sourceModel)
 }
 
 func (b *Bridge) enqueue(ctx context.Context, request bridgeRequest, operation string) error {
@@ -790,86 +499,8 @@ func (b *Bridge) enqueue(ctx context.Context, request bridgeRequest, operation s
 	}
 }
 
-func (b *Bridge) compactSeedReplay(ctx context.Context, entries []rocketcode.SessionEntry, model seedCompactionModel) ([]json.RawMessage, error) {
-	b.log.Info("starting seed replay compaction", "conversation_id", b.config.ConversationID, "entries", len(entries), "model", model.apiModel)
-
-	input := []responses.ResponseInputItemUnionParam{}
-
-	for i := range entries {
-		items, err := rocketcode.ReplayInputToParams(entries[i].ReplayInput)
-		if err != nil {
-			return nil, fmt.Errorf("build compaction input: entry %d: %w", i+1, err)
-		}
-
-		input = append(input, items...)
-	}
-
-	for i := range slices.Backward(input) {
-		if input[i].OfCompaction != nil {
-			input = input[i:]
-
-			break
-		}
-	}
-
-	if model.apiModel == "" {
-		model.apiModel = defaultSeedCompactionModel
-	}
-
-	client, err := b.openAIClient()
-	if err != nil {
-		return nil, fmt.Errorf("prepare OpenAI client: %w", err)
-	}
-
-	params := responses.ResponseCompactParams{Model: model.apiModel, Input: responses.ResponseCompactParamsInputUnion{OfResponseInputItemArray: input}}
-
-	if b.runtime.OpenAI.RocketCodeAuth == "chatgpt" {
-		root, err := os.OpenRoot(b.runtime.Workspace)
-		if err != nil {
-			return nil, fmt.Errorf("open workspace root: %w", err)
-		}
-
-		agents, _, err := loadRocketCodeDefinitionsIn(root, b.runtime, b.runtime.RuntimeDirName(), toolModePersistent)
-		_ = root.Close()
-
-		if err != nil {
-			return nil, fmt.Errorf("open workspace agent: %w", err)
-		}
-
-		if agent, ok := agents.Items[b.agentSnapshot()]; ok {
-			if instructions := strings.TrimSpace(agent.Prompt); instructions != "" {
-				params.Instructions = openai.String(instructions)
-			}
-		}
-	}
-
-	compacted, err := client.Responses.Compact(ctx, params)
-	if err != nil {
-		return nil, fmt.Errorf("compact seed replay: %w", err)
-	}
-
-	replayInput, err := rocketcode.CompactedOutputToReplayInput(compacted.Output)
-	if err != nil {
-		return nil, fmt.Errorf("encode OpenAI seed compaction replay: %w", err)
-	}
-
-	return replayInput, nil
-}
-
 func (b *Bridge) observeSessionEntries(ctx context.Context, conversationID string) ([]ObservedSessionEntry, error) {
 	return b.config.SessionService.ObserveEntries(ctx, conversationID, 0)
-}
-
-func (b *Bridge) forwardInbound(ctx context.Context) {
-	for msg := range b.bus.Inbound(ctx) {
-		if msg == nil || msg.ConversationID != b.config.ConversationID {
-			continue
-		}
-
-		if err := b.Submit(ctx, msg); err != nil && !errors.Is(err, context.Canceled) {
-			b.log.Error("submit shared inbound rocketcode message", "error", err)
-		}
-	}
 }
 
 func (b *Bridge) loop(ctx context.Context) {
@@ -881,7 +512,7 @@ func (b *Bridge) loop(ctx context.Context) {
 		case <-b.stopCh:
 			return
 		case request := <-b.requestCh:
-			b.log.Info("bridge dequeued request", "conversation_id", b.config.ConversationID, "has_inbound", request.inbound != nil, "has_summary", request.summary != nil, "has_active_turn_recovery", request.activeTurn != nil, "scheduled_message_id", request.scheduledMessageID, "queue_len", len(b.requestCh))
+			b.log.Info("bridge dequeued request", "conversation_id", b.config.ConversationID, "has_inbound", request.inbound != nil, "has_active_turn_recovery", request.activeTurn != nil, "scheduled_message_id", request.scheduledMessageID, "queue_len", len(b.requestCh))
 			b.setHandling(true)
 
 			switch {
@@ -904,8 +535,6 @@ func (b *Bridge) loop(ctx context.Context) {
 						b.log.Info("scheduled message deleted after successful handling", "scheduled_message_id", request.scheduledMessageID, "conversation_id", b.config.ConversationID)
 					}
 				}
-			case request.summary != nil:
-				b.handleSummary(ctx, request.summary)
 			case request.activeTurn != nil:
 				errHandle := b.handleRecoveredActiveTurn(ctx, request.activeTurn)
 				if errHandle != nil && !activeTurnRecoveryPreserveError(errHandle) {
@@ -926,16 +555,6 @@ func (b *Bridge) loop(ctx context.Context) {
 
 func (b *Bridge) setHandling(handling bool) { b.mu.Lock(); b.handling = handling; b.mu.Unlock() }
 
-func (b *Bridge) handleSummary(_ context.Context, request *summaryRequest) {
-	result, err := b.runTurn(request.ctx, events.NewMainInboundMessage(events.SourceSystem, events.InboundKindPrompt, "", request.prompt, false), fmt.Sprintf("turn-%d", time.Now().UnixNano()), false)
-	if err != nil {
-		request.resultCh <- summaryResult{text: "", err: fmt.Errorf("summarize thread: %w", err)}
-		return
-	}
-
-	request.resultCh <- summaryResult{text: result.text, err: nil}
-}
-
 func (b *Bridge) handleRecoveredActiveTurn(ctx context.Context, turn *ActiveTurnState) error {
 	checkpoint := turn.Checkpoint
 
@@ -944,7 +563,7 @@ func (b *Bridge) handleRecoveredActiveTurn(ctx context.Context, turn *ActiveTurn
 		return fmt.Errorf("build recovered active turn replay: %w", err)
 	}
 
-	msg := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindPrompt, "restart_recovery", "Continue from the recovered restart handoff.", false)
+	msg := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "restart_recovery", "Continue from the recovered restart handoff.", false)
 	msg.ConversationID = b.config.ConversationID
 
 	msg.Metadata = maps.Clone(turn.SourceMetadata)
@@ -1107,31 +726,6 @@ func (b *Bridge) handleInbound(ctx context.Context, msg *events.InboundMessage) 
 //nolint:gocritic // runResult is kept by value to avoid nil handling in the hot publish path.
 func (b *Bridge) publishFinal(ctx context.Context, msg *events.InboundMessage, result runResult, publish bool) error {
 	if !publish {
-		if msg.ConversationID == events.MainConversationID() && (msg.VerbatimMessage != "" || len(msg.VerbatimAttachments) > 0) {
-			outbound := b.newOutboundMessage(msg, result.turnID, result.sequence+1, msg.VerbatimMessage, "", true)
-
-			outbound.Attachments = events.CloneOutboundAttachments(msg.VerbatimAttachments)
-			if result.sessionEntryID > 0 {
-				outbound.Checkpoint = &events.ResponseCheckpoint{
-					ConversationID: b.config.ConversationID,
-					SessionEntryID: result.sessionEntryID,
-					ResponseID:     result.responseID,
-					Model:          result.model,
-					AssistantText:  msg.VerbatimMessage,
-				}
-			}
-
-			if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
-				msg.CompleteResponse("", err)
-				return fmt.Errorf("publish verbatim outbound message: %w", err)
-			}
-
-			if err := outbound.WaitDelivered(ctx); err != nil {
-				msg.CompleteResponse("", err)
-				return fmt.Errorf("wait for verbatim outbound delivery: %w", err)
-			}
-		}
-
 		msg.CompleteResponse("", nil)
 
 		return nil
@@ -1142,16 +736,6 @@ func (b *Bridge) publishFinal(ctx context.Context, msg *events.InboundMessage, r
 	outbound.Attachments = events.CloneOutboundAttachments(result.attachments)
 	if result.goalCompleted {
 		outbound.GoalComplete = true
-	}
-
-	if b.config.ConversationID == events.MainConversationID() && msg.Kind == events.InboundKindPrompt && strings.TrimSpace(result.text) != "" && result.sessionEntryID > 0 {
-		outbound.Checkpoint = &events.ResponseCheckpoint{
-			ConversationID: b.config.ConversationID,
-			SessionEntryID: result.sessionEntryID,
-			ResponseID:     result.responseID,
-			Model:          result.model,
-			AssistantText:  result.text,
-		}
 	}
 
 	if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
@@ -1194,7 +778,7 @@ func (b *Bridge) finishGoalTurn(ctx context.Context, msg *events.InboundMessage)
 }
 
 func (b *Bridge) enqueueGoalContinuation(ctx context.Context, goal *GoalState, msg *events.InboundMessage) error {
-	inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindPrompt, goalContinuationLabel, "Continue the active goal loop.\n\n"+goalSteeringPrompt(goal), false)
+	inbound := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, goalContinuationLabel, "Continue the active goal loop.\n\n"+goalSteeringPrompt(goal), false)
 
 	inbound.ConversationID = b.config.ConversationID
 	if msg != nil && msg.SlackReply != nil {
@@ -1308,53 +892,23 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		}
 	}
 
-	if strings.HasPrefix(b.config.ConversationID, externalMCPConversationPrefix) {
-		entries, err := b.observeSessionEntries(ctx, b.config.ConversationID)
-		if err != nil {
-			return runResult{}, fmt.Errorf("load external MCP metadata: %w", err)
-		}
-
-		metadataEnv, ok := externalMCPStoredMetadataEnv(b.config.ConversationID, entries)
-		if !ok {
-			metadataEnv = externalMCPMetadataEnv(b.config.ConversationID, msg.Metadata)
-
-			shellEnv = metadataEnv
-
-			replayInput, err := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", metadataEnv))
+	if msg.Source == events.SourceExternalMCP {
+		shellEnv = externalMCPMetadataEnv(b.config.ConversationID, msg.Metadata)
+		if len(shellEnv) > 1 {
+			replayInput, err := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP turn has metadata:", shellEnv))
 			if err != nil {
 				return runResult{}, fmt.Errorf("encode external MCP metadata: %w", err)
 			}
 
-			if _, err := store.outID(rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Now().UTC(), ReplayInput: replayInput}); err != nil {
-				return runResult{}, fmt.Errorf("append external MCP metadata: %w", err)
-			}
-		} else {
-			shellEnv = metadataEnv
-
-			transientEnv := externalMCPMetadataEnv(b.config.ConversationID, msg.Metadata)
-			for key := range metadataEnv {
-				delete(transientEnv, key)
-			}
-
-			if len(transientEnv) > 0 {
-				shellEnv = maps.Clone(metadataEnv)
-				maps.Copy(shellEnv, transientEnv)
-
-				replayInput, err := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP turn has additional metadata:", transientEnv))
-				if err != nil {
-					return runResult{}, fmt.Errorf("encode transient external MCP metadata: %w", err)
-				}
-
-				previousSessionIn := sessionIn
-				sessionIn = func(yield func(rocketcode.SessionEntry, error) bool) {
-					for entry, err := range previousSessionIn {
-						if !yield(entry, err) {
-							return
-						}
+			previousSessionIn := sessionIn
+			sessionIn = func(yield func(rocketcode.SessionEntry, error) bool) {
+				for entry, err := range previousSessionIn {
+					if !yield(entry, err) {
+						return
 					}
-
-					yield(rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Now().UTC(), ReplayInput: replayInput}, nil)
 				}
+
+				yield(rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Now().UTC(), ReplayInput: replayInput}, nil)
 			}
 		}
 	}
@@ -2578,25 +2132,11 @@ func (b *Bridge) armScheduledMessage(id string, message *ScheduledMessageState) 
 			return
 		}
 
-		inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindPrompt, "scheduled_message", armed.Message, false)
+		inbound := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "scheduled_message", armed.Message, false)
 
 		if rest, ok := strings.CutPrefix(armed.ConversationID, "slack-thread:"); ok {
 			if channelID, threadTS, ok := strings.Cut(rest, ":"); ok {
 				inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
-			}
-		} else if strings.HasPrefix(armed.ConversationID, externalMCPConversationPrefix) {
-			conversationID, _, ok, err := b.config.SessionService.ThreadForSeed(armed.ConversationID)
-			if err != nil {
-				b.log.Error("load scheduled external MCP thread alias", "scheduled_message_id", id, "conversation_id", armed.ConversationID, "error", err)
-				return
-			}
-
-			if ok {
-				if rest, ok := strings.CutPrefix(conversationID, "slack-thread:"); ok {
-					if channelID, threadTS, ok := strings.Cut(rest, ":"); ok {
-						inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
-					}
-				}
 			}
 		}
 
@@ -2620,7 +2160,7 @@ func (b *Bridge) newOutboundMessage(msg *events.InboundMessage, turnID string, s
 		source = msg.Source
 	}
 
-	outbound := events.NewMainOutboundMessage(source, text, b.config.OutputTargets...)
+	outbound := events.NewOutboundMessage(source, b.config.ConversationID, text, b.config.OutputTargets...)
 	outbound.ProgressText = thinking
 	outbound.ConversationID = b.config.ConversationID
 	outbound.TurnID = turnID
@@ -2643,10 +2183,6 @@ func (b *Bridge) newOutboundMessage(msg *events.InboundMessage, turnID string, s
 
 		if msg.SlackReply != nil {
 			outbound.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS}
-		} else if recoveredTurn(msg) {
-			if slackReply := b.externalMCPRecoveredSlackReply(); slackReply != nil {
-				outbound.SlackReply = slackReply
-			}
 		}
 	}
 
@@ -2655,30 +2191,6 @@ func (b *Bridge) newOutboundMessage(msg *events.InboundMessage, turnID string, s
 
 func recoveredTurn(msg *events.InboundMessage) bool {
 	return msg != nil && (msg.Label == recoveredTurnMetadataKey || msg.Metadata[recoveredTurnMetadataKey] == "true")
-}
-
-func (b *Bridge) externalMCPRecoveredSlackReply() *events.SlackReplyTarget {
-	conversationID := strings.TrimSpace(b.config.ConversationID)
-	if !strings.HasPrefix(conversationID, externalMCPConversationPrefix) {
-		return nil
-	}
-
-	threadConversationID, _, ok, err := b.config.SessionService.ThreadForSeed(conversationID)
-	if err != nil {
-		b.log.Warn("load external MCP Slack thread alias", "conversation_id", conversationID, "error", err)
-		return nil
-	}
-
-	if !ok {
-		return nil
-	}
-
-	channelID, threadTS, ok := SlackThreadTarget(threadConversationID)
-	if !ok {
-		return nil
-	}
-
-	return &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
 }
 
 type replayInputMessage struct{ role, text string }

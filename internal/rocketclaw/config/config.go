@@ -15,20 +15,18 @@ import (
 
 // Config is the top-level rocketclaw runtime configuration.
 type Config struct {
-	Workspace           string                `json:"workspace"`
-	WorkDir             string                `json:"-"`
-	Overlays            []string              `json:"overlays,omitempty"`
-	Models              map[string]string     `json:"models,omitempty"`
-	Environment         []string              `json:"environment,omitempty"`
-	EmergencySafeWords  []string              `json:"emergency_safe_words,omitempty"`
-	ThreadAgents        ThreadAgents          `json:"thread_agents,omitempty"`
-	Logging             LoggingConfig         `json:"logging"`
-	MCPExternal         MCPExternalConfig     `json:"mcp_external"`
-	Slack               SlackConfig           `json:"slack"`
-	OpenAI              OpenAIConfig          `json:"openai"`
-	AutoApproverModel   string                `json:"auto_approver_model"`
-	SeedCompactionModel string                `json:"seed_compaction_model"`
-	Instrumentation     InstrumentationConfig `json:"instrumentation"`
+	Workspace          string                `json:"workspace"`
+	WorkDir            string                `json:"-"`
+	Overlays           []string              `json:"overlays,omitempty"`
+	Models             map[string]string     `json:"models,omitempty"`
+	Environment        []string              `json:"environment,omitempty"`
+	EmergencySafeWords []string              `json:"emergency_safe_words,omitempty"`
+	Logging            LoggingConfig         `json:"logging"`
+	MCPExternal        MCPExternalConfig     `json:"mcp_external"`
+	Slack              SlackConfig           `json:"slack"`
+	OpenAI             OpenAIConfig          `json:"openai"`
+	AutoApproverModel  string                `json:"auto_approver_model"`
+	Instrumentation    InstrumentationConfig `json:"instrumentation"`
 }
 
 // DefaultRuntimeDir is the generated runtime directory for rocketclaw configs.
@@ -43,15 +41,6 @@ func (c *Config) RuntimeDirName() string {
 	return DefaultRuntimeDir
 }
 
-// ThreadAgent configures one Slack emoji prefix thread target.
-type ThreadAgent struct {
-	Agent   string `json:"agent"`
-	PreSeed bool   `json:"pre_seed"`
-}
-
-// ThreadAgents maps Slack emoji prefixes to thread routing config.
-type ThreadAgents map[string]ThreadAgent
-
 // LoggingConfig controls rocketclaw logging.
 type LoggingConfig struct {
 	Level string `json:"level"`
@@ -63,25 +52,15 @@ type MCPExternalConfig struct {
 	ListenAddr string `json:"listen_addr"`
 }
 
-// SlackConfig configures the Slack DM connector.
+// SlackConfig configures Slack channel conversations.
 type SlackConfig struct {
-	Enabled     bool             `json:"enabled"`
-	BotToken    string           `json:"bot_token"`
-	AppToken    string           `json:"app_token"`
-	Room        string           `json:"room"`
-	HumanUserID string           `json:"human_user_id"`
-	SocialMode  TextSocialConfig `json:"social_mode"`
+	BotToken string               `json:"bot_token"`
+	AppToken string               `json:"app_token"`
+	Channels []SlackChannelConfig `json:"channels,omitempty"`
 }
 
-// TextSocialConfig configures mention-triggered primary text channel conversations.
-type TextSocialConfig struct {
-	Enabled         bool                      `json:"enabled"`
-	Channels        []TextSocialChannelConfig `json:"channels,omitempty"`
-	ContextMessages int                       `json:"context_messages"`
-}
-
-// TextSocialChannelConfig configures one primary text social-mode channel.
-type TextSocialChannelConfig struct {
+// SlackChannelConfig configures one Slack channel.
+type SlackChannelConfig struct {
 	Channel        string   `json:"channel"`
 	Agents         []string `json:"agents,omitempty"`
 	AllowedUserIDs []string `json:"allowed_user_ids,omitempty"`
@@ -189,12 +168,8 @@ func LoadExternalMCPUsers(configPath string) (map[string]string, error) {
 	return users, nil
 }
 
-// Validate verifies the configuration is usable for the enabled connectors.
+// Validate verifies the configuration is usable.
 func (c *Config) Validate() error {
-	if !c.Slack.Enabled && !c.MCPExternal.Enabled {
-		return errors.New("enable at least one connector or mcp_external")
-	}
-
 	if c.Workspace == "" {
 		return errors.New("workspace is required")
 	}
@@ -211,28 +186,15 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	threadAgents, err := normalizeThreadAgents(c.ThreadAgents)
-	if err != nil {
-		return err
-	}
-
 	c.EmergencySafeWords = normalizeEmergencySafeWords(c.EmergencySafeWords)
-
-	c.ThreadAgents = threadAgents
-	if len(c.ThreadAgents) == 0 {
-		c.ThreadAgents = ThreadAgents{":thread:": {Agent: "main", PreSeed: false}, ":twisted_rightward_arrows:": {Agent: "main", PreSeed: true}}
-	}
 
 	if err := c.normalizeRocketCodeAuth(); err != nil {
 		return err
 	}
 
-	c.AutoApproverModel, err = normalizeOpenAIModel("auto_approver_model", c.AutoApproverModel)
-	if err != nil {
-		return err
-	}
+	var err error
 
-	c.SeedCompactionModel, err = normalizeOpenAIModel("seed_compaction_model", c.SeedCompactionModel)
+	c.AutoApproverModel, err = normalizeOpenAIModel("auto_approver_model", c.AutoApproverModel)
 	if err != nil {
 		return err
 	}
@@ -338,51 +300,34 @@ func normalizeStringList(values []string) []string {
 }
 
 func (c *Config) validateSlack() error {
-	if !c.Slack.Enabled {
-		return nil
-	}
-
-	for _, field := range [...]struct{ value, message string }{{c.Slack.BotToken, "slack.bot_token is required when slack is enabled"}, {c.Slack.AppToken, "slack.app_token is required when slack is enabled"}, {c.Slack.Room, "slack.room is required when slack is enabled"}, {c.Slack.HumanUserID, "slack.human_user_id is required when slack is enabled"}} {
+	for _, field := range [...]struct{ value, message string }{{c.Slack.BotToken, "slack.bot_token is required"}, {c.Slack.AppToken, "slack.app_token is required"}} {
 		if strings.TrimSpace(field.value) == "" {
 			return errors.New(field.message)
 		}
 	}
 
-	c.Slack.SocialMode.Channels = normalizeTextSocialChannels(c.Slack.SocialMode.Channels, normalizeSlackSocialChannel)
-
-	return validateTextSocial("slack", &c.Slack.SocialMode)
-}
-
-func validateTextSocial(label string, social *TextSocialConfig) error {
-	if !social.Enabled {
-		return nil
+	c.Slack.Channels = normalizeSlackChannels(c.Slack.Channels)
+	if len(c.Slack.Channels) == 0 {
+		return errors.New("slack.channels is required")
 	}
 
-	for _, channel := range social.Channels {
+	for _, channel := range c.Slack.Channels {
 		if len(channel.Agents) == 0 {
-			return fmt.Errorf("%s.social_mode.channels[].agents is required when %s social mode is enabled", label, label)
+			return errors.New("slack.channels[].agents is required")
 		}
 
 		if len(channel.AllowedUserIDs) == 0 {
-			return fmt.Errorf("%s.social_mode.channels[].allowed_user_ids is required when %s social mode is enabled", label, label)
+			return errors.New("slack.channels[].allowed_user_ids is required")
 		}
-	}
-
-	if social.ContextMessages < 0 {
-		return fmt.Errorf("%s.social_mode.context_messages must be zero or greater", label)
-	}
-
-	if social.ContextMessages == 0 {
-		social.ContextMessages = 10
 	}
 
 	return nil
 }
 
-func normalizeTextSocialChannels(channels []TextSocialChannelConfig, normalizeChannel func(string) string) []TextSocialChannelConfig {
-	normalized := make([]TextSocialChannelConfig, 0, len(channels))
+func normalizeSlackChannels(channels []SlackChannelConfig) []SlackChannelConfig {
+	normalized := make([]SlackChannelConfig, 0, len(channels))
 	for _, channel := range channels {
-		channel.Channel = normalizeChannel(channel.Channel)
+		channel.Channel = normalizeSlackChannel(channel.Channel)
 		channel.Agents = normalizeStringList(channel.Agents)
 
 		channel.AllowedUserIDs = normalizeStringList(channel.AllowedUserIDs)
@@ -396,7 +341,7 @@ func normalizeTextSocialChannels(channels []TextSocialChannelConfig, normalizeCh
 	return normalized
 }
 
-func normalizeSlackSocialChannel(channel string) string {
+func normalizeSlackChannel(channel string) string {
 	channel = strings.TrimSpace(channel)
 	if channel != "" && !strings.HasPrefix(channel, "#") {
 		channel = "#" + channel
@@ -468,36 +413,4 @@ func normalizeEmergencySafeWords(words []string) []string {
 	}
 
 	return normalized
-}
-
-func normalizeThreadAgents(threadAgents ThreadAgents) (ThreadAgents, error) {
-	if len(threadAgents) == 0 {
-		return nil, nil
-	}
-
-	normalized := make(ThreadAgents, len(threadAgents))
-
-	seen := make(map[string]string, len(threadAgents))
-	for prefix, entry := range threadAgents {
-		rawPrefix := prefix
-		prefix = strings.TrimSpace(prefix)
-
-		entry.Agent = strings.TrimSpace(entry.Agent)
-		if prefix == "" || entry.Agent == "" {
-			continue
-		}
-
-		if previous, ok := seen[prefix]; ok {
-			return nil, fmt.Errorf("thread_agents prefix %q duplicates normalized prefix from %q", rawPrefix, previous)
-		}
-
-		seen[prefix] = rawPrefix
-		normalized[prefix] = entry
-	}
-
-	if len(normalized) == 0 {
-		return nil, nil
-	}
-
-	return normalized, nil
 }

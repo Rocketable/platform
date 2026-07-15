@@ -1,5 +1,6 @@
 ---
 schedule: 15m
+channel: "#ops"
 ---
 
 This is the heartbeat.

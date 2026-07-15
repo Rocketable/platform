@@ -1,5 +1,6 @@
 ---
 schedule: "@weekly"
+channel: "#ops"
 ---
 
 Review the past week's activity and identify stale tasks, risky work, or follow-ups that deserve attention.

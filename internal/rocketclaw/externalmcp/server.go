@@ -4,6 +4,7 @@ package externalmcp
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"mime"
@@ -26,7 +27,7 @@ type sessionPromptInput struct {
 	ExternalConversationID string                    `json:"external_conversation_id,omitempty" jsonschema:"external MCP conversation ID; omitted starts a new conversation and returns its ID"`
 	Input                  string                    `json:"input" jsonschema:"plain-text input to send to the selected rocketclaw session"`
 	Agent                  string                    `json:"agent,omitempty" jsonschema:"agent to send the input to in the external MCP conversation; required for new conversations"`
-	SlackChannel           string                    `json:"slack_channel,omitempty" jsonschema:"optional Slack channel name for the relay message, for example #triage"`
+	SlackChannel           string                    `json:"slack_channel" jsonschema:"required configured Slack channel name for the relay message, for example #triage"`
 	Metadata               map[string]string         `json:"metadata,omitempty" jsonschema:"metadata for external MCP conversations"`
 	Attachments            []SessionPromptAttachment `json:"attachments,omitempty" jsonschema:"optional attachments to send with this turn"`
 }
@@ -61,8 +62,12 @@ type Server struct {
 // StartSessionPromptServer starts the persistent external MCP HTTP server.
 func StartSessionPromptServer(ctx context.Context, logger *slog.Logger, listenAddr string, users map[string]string, sessionPromptHandler func(context.Context, string, string, string, string, map[string]string, []SessionPromptAttachment, string) (SessionResult, error)) (*Server, error) {
 	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "rocketclaw-external-mcp", Version: "1.0.0"}, nil)
-	mcp.AddTool(mcpServer, &mcp.Tool{Name: SessionPromptToolName, Description: "Queue blocking input for a selectable rocketclaw session and return the final plain-text reply.", InputSchema: map[string]any{"type": "object", "required": []string{"input"}, "properties": map[string]any{"external_conversation_id": map[string]any{"type": "string", "description": "external MCP conversation ID; omitted starts a new conversation and returns its ID"}, "input": map[string]any{"type": "string", "description": "plain-text input to send to the selected rocketclaw session"}, "agent": map[string]any{"type": "string", "description": "agent to send the input to in the external MCP conversation; required for new conversations"}, "slack_channel": map[string]any{"type": "string", "description": "optional Slack channel name for the relay message, for example #triage"}, "metadata": map[string]any{"type": "object", "description": "metadata for external MCP conversations", "additionalProperties": map[string]any{"type": "string"}}, "attachments": map[string]any{"type": "array", "description": "optional attachments for this turn", "items": map[string]any{"type": "object", "required": []string{"data_base64"}, "properties": map[string]any{"name": map[string]any{"type": "string", "description": "display filename for the attachment"}, "mime_type": map[string]any{"type": "string", "description": "attachment MIME type, for example image/png"}, "data_base64": map[string]any{"type": "string", "description": "base64-encoded attachment bytes"}}, "additionalProperties": false}}}, "additionalProperties": false}}, func(callCtx context.Context, request *mcp.CallToolRequest, input sessionPromptInput) (*mcp.CallToolResult, SessionResult, error) {
+	mcp.AddTool(mcpServer, &mcp.Tool{Name: SessionPromptToolName, Description: "Queue blocking input for a selectable rocketclaw session and return the final plain-text reply.", InputSchema: map[string]any{"type": "object", "required": []string{"input", "slack_channel"}, "properties": map[string]any{"external_conversation_id": map[string]any{"type": "string", "description": "external MCP conversation ID; omitted starts a new conversation and returns its ID"}, "input": map[string]any{"type": "string", "description": "plain-text input to send to the selected rocketclaw session"}, "agent": map[string]any{"type": "string", "description": "agent to send the input to in the external MCP conversation; required for new conversations"}, "slack_channel": map[string]any{"type": "string", "description": "configured Slack channel name for every turn, for example #triage"}, "metadata": map[string]any{"type": "object", "description": "metadata for external MCP conversations", "additionalProperties": map[string]any{"type": "string"}}, "attachments": map[string]any{"type": "array", "description": "optional attachments for this turn", "items": map[string]any{"type": "object", "required": []string{"data_base64"}, "properties": map[string]any{"name": map[string]any{"type": "string", "description": "display filename for the attachment"}, "mime_type": map[string]any{"type": "string", "description": "attachment MIME type, for example image/png"}, "data_base64": map[string]any{"type": "string", "description": "base64-encoded attachment bytes"}}, "additionalProperties": false}}}, "additionalProperties": false}}, func(callCtx context.Context, request *mcp.CallToolRequest, input sessionPromptInput) (*mcp.CallToolResult, SessionResult, error) {
 		_ = request
+
+		if strings.TrimSpace(input.Input) == "" && len(input.Attachments) == 0 {
+			return nil, SessionResult{}, errors.New("session_prompt requires input or attachments")
+		}
 
 		username, _ := callCtx.Value(usernameContextKey{}).(string)
 

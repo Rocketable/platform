@@ -14,6 +14,7 @@ import (
 type startupRecoveryStore interface {
 	RecoverableActiveTurns(context.Context) ([]harnessbridge.ActiveTurnState, error)
 	ClearActiveTurn(context.Context, string) error
+	Thread(string) (harnessbridge.ThreadState, bool, error)
 }
 
 type startupRecoveryHandoff func(context.Context, *harnessbridge.ActiveTurnState) error
@@ -46,6 +47,18 @@ func recoverStartupActiveTurns(ctx context.Context, store startupRecoveryStore, 
 			}
 
 			log.Warn("deleted raw cron startup active turn", "conversation_id", conversationID, "turn_id", turn.Checkpoint.TurnID)
+
+			continue
+		}
+
+		if _, ok, err := store.Thread(conversationID); err != nil {
+			return fmt.Errorf("validate startup active turn conversation: %w", err)
+		} else if !ok {
+			if errClear := store.ClearActiveTurn(ctx, turn.Checkpoint.TurnID); errClear != nil {
+				return fmt.Errorf("delete unknown startup active turn: %w", errClear)
+			}
+
+			log.Warn("deleted unknown startup active turn", "conversation_id", conversationID, "turn_id", turn.Checkpoint.TurnID)
 
 			continue
 		}

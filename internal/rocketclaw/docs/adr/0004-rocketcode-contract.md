@@ -21,7 +21,7 @@ Several rocketclaw capabilities exist only because of precise RocketCode configu
 
 | Path              | File                                  | Purpose                                                                                | Prompt input expansion |
 |-------------------|---------------------------------------|----------------------------------------------------------------------------------------|------------------------|
-| Persistent bridge | `internal/rocketclaw/harnessbridge/bridge.go`  | Main, thread, Slack, scheduled, and external MCP conversation turns. | `InputPrompts: false`  |
+| Persistent bridge | `internal/rocketclaw/harnessbridge/bridge.go`  | Managed Slack thread turns, scheduled turns owned by those conversations, and Slack-bound External MCP turns. | `InputPrompts: false`  |
 | Raw run           | `internal/rocketclaw/harnessbridge/raw_run.go` | Cron and one-off cron background turns.                                                | `InputPrompts: true`   |
 
 Both paths enable `PrimaryPrompts`, `SubagentPrompts`, and `SkillPrompts` shell expansion. Persistent bridge input text remains literal. Raw input text expands because cron bodies are trusted workspace files. Both paths construct RocketCode with a first-party OpenAI Responses client using the configured RocketClaw OpenAI RocketCode auth path. Both paths set RocketCode's `AutoApprovePermissions` flag to true unconditionally and pass `auto_approver_model` into RocketCode when it is configured.
@@ -44,7 +44,7 @@ Both construction paths must pass RocketClaw-originated `rocketcode.PromptInput`
 - RocketCode expands the primary agent prompt during construction, a subagent prompt when `task` starts that agent, and skill content when the skill is loaded.
 - When Slack text uses `💡 <skill-name> [arguments]`, RocketClaw passes the skill name and arguments to RocketCode for the existing conversation and selected agent. RocketCode finds the skill, checks permissions, replaces `$ARGUMENTS`, keeps arguments from running shell commands, applies `ExperimentalStrongerSkills`, and prepares the model input.
 - Root `AGENTS.md` instructions remain literal.
-- Agents may set `additionalInstructions` in the YAML header. For persistent normal replies, a non-empty string replaces the default `additional_instructions` text from ADR 0002. Missing, empty, or non-string values keep the default. This setting does not affect internal notes or raw cron runs.
+- Agents may set `additionalInstructions` in the YAML header. For persistent normal replies, a non-empty string replaces the default `additional_instructions` text from ADR 0002. Missing, empty, or non-string values keep the default. This setting does not affect raw cron runs.
 
 ### Subdelegation Recursion Limit
 
@@ -105,14 +105,14 @@ And the response from <delegatedAgentName> to <originatingAgent>:
 |----------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------|
 | `rocketclaw_restart`                          | Default-deny persistent and raw-run tool that is visible/callable only when the active agent explicitly allows RocketCode permission bucket `rocketclaw` subject `rocketclaw_restart`. When allowed, it records pending restart notification/requester state for approved runtime configuration changes, including selected config file and overlay-list changes, then cancels the runtime for supervisor restart. Generated `main` agents allow it so fresh deployments can restart themselves; newly added agents do not inherit restart permission. |
 | `rocketclaw_reload`                           | Reapplies effective runtime assets from the already-loaded runtime configuration, including fresh remote content for already-loaded overlay entries and local workspace overlays from disk, after staged validation succeeds; failed validation returns model-visible failure text and leaves live runtime assets unchanged. |
-| `rocketclaw_schedule_message`                 | Schedules one-shot delayed prompts or recurring delayed prompts through the owning bridge context. Recurring prompts use optional `recurring: true`, require `send_this_in` from 1m through 1h, persist until reset, and do not replay missed intervals. |
-| `rocketclaw_reset_scheduled_messages`         | Clears scheduled messages for the owning bridge context.                                                                      |
+| `rocketclaw_schedule_message`                 | Schedules one-shot delayed prompts or recurring delayed prompts through the owning persistent bridge context. Recurring prompts use optional `recurring: true`, require `send_this_in` from 1m through 1h, persist until reset, and do not replay missed intervals. |
+| `rocketclaw_reset_scheduled_messages`         | Clears scheduled messages for the owning persistent bridge context.                                                          |
 | `rocketclaw_update_goal`                       | Persistent bridge tool visible only when the owning conversation has an active text connector goal loop; reports `progress`, `complete`, or `blocked` with an optional explanatory `note`. |
 | `rocketclaw_attach_files_to_response`         | Persistent bridge tool that allows RocketCode to attach collected files to the outbound response through the shared outbound attachment carrier.                              |
 | `ask_user_question`                            | Persistent bridge tool visible only for qualifying human-originated Slack turns with a native answer path. The tool asks the originating human through Slack, blocks until answered or canceled, and returns selected option values, optional custom text, and the answer source. |
 | `rocketclaw_i_want_human_partner_to_see_this` | Required completion tool for raw background runs; its argument is the exact human-visible final message or empty for silence. |
 
-Persistent bridge tools are restart, reload, schedule message, reset scheduled messages, active-goal update when applicable, attach files, `ask_user_question` when the originating human turn qualifies, and path-specific custom tools. Raw-run tools are decision, outbound attachment collection, restart, reload, schedule message, and reset scheduled messages. Raw and persistent schedule-message tools expose the same one-shot and recurring contract.
+Persistent bridge tools are restart, reload, schedule message, reset scheduled messages, active-goal update when applicable, attach files, `ask_user_question` when the originating human turn qualifies, and path-specific custom tools. Raw-run tools are decision, outbound attachment collection, restart, and reload.
 
 ### Goal-Loop Prompting
 
@@ -124,11 +124,12 @@ Persistent bridge tools are restart, reload, schedule message, reset scheduled m
 ### Session And Replay
 
 - Persistent conversations use SQLite-backed session storage under `.rocketclaw/state.sqlite3`, opened through the centralized RocketClaw SQLite state-store opener defined by ADR 0005.
-- Raw runs can persist into a configured conversation when supplied with `RawRunProgress.SessionService` and `ConversationID`.
+- Every persistent Slack conversation starts with an empty session. The initiating human, External MCP, tool-created, or scheduled prompt is its first local turn, and later replay consists exclusively of that conversation's own history.
+- Normal RocketCode context management, conversation-local compaction, durable replay, and active-turn restart checkpoints remain available within the owning persistent conversation.
+- Raw cron runs start with empty history and complete through their raw-run result path.
 - External MCP metadata is injected as a developer message for the turn that supplied it and must not become ambient global state.
 - Attachments are normalized before RocketCode prompt construction through the shared inbound attachment path. Supported image attachments become RocketCode prompt attachments. Text attachments from text connectors and external MCP become literal prompt text before the persistent bridge builds the RocketCode input. Unsupported or over-budget attachments are omitted from RocketCode attachment input and represented through attachment warnings or fallback text.
 - RocketCode response attachments collected through `rocketclaw_attach_files_to_response` become shared outbound attachment values owned by the persistent bridge result. Connector delivery and blocking caller delivery, including external MCP `session_prompt` results, adapt those same outbound attachment values at the edge instead of maintaining separate attachment pipelines.
-- Response checkpoint seeding through replay compaction uses first-party OpenAI Responses. The compaction request model is `seed_compaction_model` when configured; otherwise RocketClaw uses the source checkpoint or latest source session entry model when present, falling back to `gpt-5.5`. The setting affects only RocketClaw-owned seed replay compaction; it does not affect RocketCode turn models, agent model frontmatter, automatic permission reviewer model selection, or custom `auto(name)` reviewers. The purpose of this step is to seed a new conversation from prior main-session context without making the human repeat context. Provider-family parity and cross-provider replay projection are not part of this contract.
 
 ### ChatGPT Codex Backend Requests
 
@@ -233,3 +234,6 @@ Persistent bridge tools are restart, reload, schedule message, reset scheduled m
 - 2026-07-08: Made `rocketclaw_restart` default-deny unless the active agent explicitly allows the `rocketclaw_restart` permission subject, with generated `main` agents granting that permission.
 - 2026-07-14: Recorded that agents may read files in loaded skills they are allowed to use.
 - 2026-07-14: Added config-backed agent model placeholders.
+- 2026-07-15: Defined persistent bridge sessions as conversation-local, with ordinary per-conversation replay, compaction, and active-turn recovery.
+- 2026-07-15: Defined raw-run tools as decision, outbound attachment collection, restart, and reload.
+- 2026-07-15: Defined Slack-bound External MCP turns as one persistent thread-local conversation shared with authorized Slack replies.

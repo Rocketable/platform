@@ -1,7 +1,6 @@
 package harnessbridge
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -43,7 +42,7 @@ func AppendSessionEntryID(ctx context.Context, dbPath, conversationID string, en
 
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
-		conversationID = mainConversationID
+		return 0, errors.New("conversation ID is required")
 	}
 
 	if err := prepareSessionDBPathIn(filepath.Dir(filepath.Dir(dbPath)), filepath.Base(filepath.Dir(dbPath))); err != nil {
@@ -66,7 +65,7 @@ func DeleteSession(ctx context.Context, workspace, conversationID string) (int64
 
 func TestSQLiteSessionStoreAppendAndLoad(t *testing.T) {
 	service := newTestSessionService(t)
-	store := newSessionStore(" ", service)
+	store := newSessionStore("slack-thread:C123:111.222", service)
 	entry := testSessionEntry("hello", "hi")
 
 	id, err := store.outID(*entry)
@@ -99,15 +98,6 @@ func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
 	require.Len(t, observed, 1)
 	assert.Equal(t, id2, observed[0].ID)
 	assert.Equal(t, *second, observed[0].Entry)
-
-	defaulted := testSessionEntry("default conversation", "assistant")
-	_, err = service.AppendEntryID(context.Background(), " \t ", defaulted)
-	require.NoError(t, err)
-
-	observed, err = service.ObserveEntries(context.Background(), " \n ", 0)
-	require.NoError(t, err)
-	require.Len(t, observed, 3)
-	assert.Equal(t, *defaulted, observed[2].Entry)
 }
 
 func TestSessionServiceScheduledMessages(t *testing.T) {
@@ -119,17 +109,6 @@ func TestSessionServiceScheduledMessages(t *testing.T) {
 	messages, err := store.ScheduledMessages()
 	require.NoError(t, err)
 	assert.Equal(t, map[string]ScheduledMessageState{"schedule-1": {ConversationID: "slack-thread:D123:111.222", Agent: "helper", Message: "later", DueAt: dueAt}}, messages)
-}
-
-func TestSessionServiceScheduledMessageDefaults(t *testing.T) {
-	store := newTestSessionService(t)
-	dueAt := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
-
-	require.NoError(t, store.PutScheduledMessage("schedule-1", &ScheduledMessageState{ConversationID: mainConversationID, Agent: mainConversationID, Message: "later", DueAt: dueAt}))
-
-	messages, err := store.ScheduledMessages()
-	require.NoError(t, err)
-	assert.Equal(t, ScheduledMessageState{ConversationID: mainConversationID, Agent: mainConversationID, Message: "later", DueAt: dueAt}, messages["schedule-1"])
 }
 
 func TestSessionServiceInitializesCronScheduleSchema(t *testing.T) {
@@ -376,7 +355,7 @@ func TestSessionServiceMigratesVersionTwoWithActiveTurnSchema(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
-func TestSessionServiceMigratesActiveTurnStatusSchemaDeletesTerminalRows(t *testing.T) {
+func TestSessionServiceMigratesActiveTurnStatusSchemaDeletesLegacyRows(t *testing.T) {
 	workspace := t.TempDir()
 	require.NoError(t, prepareSessionDBPath(workspace))
 	db, err := sql.Open("sqlite", sessionDBPath(workspace))
@@ -409,7 +388,7 @@ func TestSessionServiceMigratesActiveTurnStatusSchemaDeletesTerminalRows(t *test
 		turnIDs = append(turnIDs, turn.Checkpoint.TurnID)
 	}
 
-	assert.ElementsMatch(t, []string{"turn-active", "turn-interrupting", "turn-interrupted", "turn-recovering"}, turnIDs)
+	assert.Empty(t, turnIDs)
 
 	hasStatus, err := activeTurnsHasColumn(context.Background(), store.db, "status")
 	require.NoError(t, err)
@@ -614,80 +593,6 @@ func TestSessionServiceTreatsEmptyPersistedStateAsMissing(t *testing.T) {
 	assert.Empty(t, threads)
 }
 
-func TestSessionServiceMigratesLegacyStateToNormalizedTables(t *testing.T) {
-	workspace := t.TempDir()
-	require.NoError(t, prepareSessionDBPath(workspace))
-	db, err := sql.Open("sqlite", sessionDBPath(workspace))
-	require.NoError(t, err)
-	require.NoError(t, createSessionSchema(context.Background(), db))
-
-	dueAt := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	now := time.Date(2026, 1, 2, 3, 0, 0, 0, time.UTC)
-	legacy := State{
-		Threads: map[string]ThreadState{
-			"slack-thread:D123:111.222": {Agent: "planner", SeededFromResponse: "response-seed", CreatedBy: ThreadCreatedByCron},
-		},
-		Goals: map[string]GoalState{
-			"slack-thread:D123:111.222": {Objective: "ship", CheckScript: "./check.sh", MaxTurns: 3, TurnsUsed: 1, Status: GoalStatusActive, Note: "working", CreatedAt: now, UpdatedAt: now},
-		},
-		ExternalMCPSessions: map[string]ExternalMCPSessionState{
-			"ticket-123": {Agent: "planner", ConversationID: "external_mcp:planner:abc"},
-		},
-		ResponseCheckpoints: map[string]ResponseCheckpointState{
-			"slack-response:D123:111.222": {ConversationID: "main", SessionEntryID: 7, ResponseID: "resp-7", Model: "gpt-5.5", AssistantText: "answer"},
-		},
-		ScheduledMessages: map[string]ScheduledMessageState{
-			"schedule-1": {ConversationID: "slack-thread:D123:111.222", Agent: "planner", Message: "later", DueAt: dueAt, Recurring: true, Interval: time.Hour},
-		},
-		PendingRestartNotifications: map[string]bool{"main": true},
-	}
-	data, err := json.Marshal(legacy)
-	require.NoError(t, err)
-	_, err = db.ExecContext(context.Background(), `INSERT INTO session_meta (key, value) VALUES (?, ?)`, "rocketclaw_state", string(data))
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
-
-	var logs bytes.Buffer
-
-	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	store, err := NewSessionServiceIn(workspace, config.DefaultRuntimeDir, logger)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Stop(context.Background())) })
-
-	thread, ok, err := store.Thread("slack-thread:D123:111.222")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, legacy.Threads["slack-thread:D123:111.222"], thread)
-
-	goal, ok, err := store.Goal("slack-thread:D123:111.222")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, legacy.Goals["slack-thread:D123:111.222"], goal)
-
-	session, ok, err := store.ExternalMCPSession("ticket-123")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, legacy.ExternalMCPSessions["ticket-123"], session)
-
-	checkpoint, ok, err := store.ResponseCheckpoint("slack-response:D123:111.222")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, legacy.ResponseCheckpoints["slack-response:D123:111.222"], checkpoint)
-
-	messages, err := store.ScheduledMessages()
-	require.NoError(t, err)
-	assert.Equal(t, legacy.ScheduledMessages, messages)
-	assert.Equal(t, map[string]bool{"main": true}, pendingRestartNotifications(t, store.db))
-
-	version, err := sessionDBUserVersion(context.Background(), store.db)
-	require.NoError(t, err)
-	assert.Equal(t, sessionDBSchemaVersion, version)
-	assert.Contains(t, logs.String(), "loaded legacy rocketclaw state for normalized migration")
-	assert.Contains(t, logs.String(), "importing legacy rocketclaw managed conversations")
-	assert.Contains(t, logs.String(), "importing legacy rocketclaw pending restart notifications")
-	assert.Contains(t, logs.String(), "finished rocketclaw state schema migration")
-}
-
 func TestSQLiteSessionStoreLoadsLargeImageTurn(t *testing.T) {
 	service := newTestSessionService(t)
 	store := newSessionStore("main", service)
@@ -794,23 +699,13 @@ func TestSQLiteSessionStoreRejectsNilEntry(t *testing.T) {
 	require.ErrorContains(t, err, "rocketcode session entry is required")
 }
 
-func TestAppendSessionEntryIDDefaultsBlankConversationID(t *testing.T) {
+func TestAppendSessionEntryIDRejectsBlankConversationID(t *testing.T) {
 	workspace := t.TempDir()
 	dbPath := sessionDBPath(workspace)
 	entry := testSessionEntry("blank conversation", "assistant")
 
 	_, err := AppendSessionEntryID(context.Background(), dbPath, " \t ", entry)
-	require.NoError(t, err)
-
-	observed, err := ObserveSessionEntries(context.Background(), dbPath, mainConversationID, 0)
-	require.NoError(t, err)
-	require.Len(t, observed, 1)
-	assert.Equal(t, *entry, observed[0].Entry)
-
-	observed, err = ObserveSessionEntries(context.Background(), dbPath, " \t ", 0)
-	require.NoError(t, err)
-	require.Len(t, observed, 1)
-	assert.Equal(t, *entry, observed[0].Entry)
+	require.EqualError(t, err, "conversation ID is required")
 }
 
 func TestSessionDBPathReturnsWorkspaceSessionDB(t *testing.T) {
@@ -1082,7 +977,7 @@ func TestSessionServiceSerializesConcurrentAccess(t *testing.T) {
 			_, err := service.AppendEntryID(context.Background(), "main", testSessionEntry(fmt.Sprintf("user %d", i), "assistant"))
 			errCh <- err
 
-			errCh <- service.UpsertThread(fmt.Sprintf("thread-%02d", i), "main")
+			errCh <- service.UpsertThread(fmt.Sprintf("thread-%02d", i), ThreadState{Agent: "main"})
 		}(i)
 	}
 
@@ -1169,44 +1064,29 @@ func TestSessionServiceConcurrentGoalTurnsPreserveAccounting(t *testing.T) {
 	assert.Equal(t, GoalStatusBudgetExhausted, goal.Status)
 }
 
-func TestSessionServiceConcurrentThreadFieldUpdatesMerge(t *testing.T) {
+func TestSessionServiceThreadStatePersistsAtomically(t *testing.T) {
 	service := newTestSessionService(t)
 
 	for i := range 25 {
 		conversationID := fmt.Sprintf("thread-%02d", i)
-		errCh := make(chan error, 3)
-
-		var group sync.WaitGroup
-
-		group.Add(3)
-		go func() {
-			defer group.Done()
-
-			errCh <- service.UpsertThread(conversationID, "planner")
-		}()
-		go func() {
-			defer group.Done()
-
-			errCh <- service.MarkThreadSeeded(conversationID, "response")
-		}()
-		go func() {
-			defer group.Done()
-
-			errCh <- service.MarkThreadCreatedBy(conversationID, ThreadCreatedByCron)
-		}()
-
-		group.Wait()
-		close(errCh)
-
-		for err := range errCh {
-			require.NoError(t, err)
-		}
+		require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
 
 		thread, ok, err := service.Thread(conversationID)
 		require.NoError(t, err)
 		require.True(t, ok)
-		assert.Equal(t, ThreadState{Agent: "planner", SeededFromResponse: "response", CreatedBy: ThreadCreatedByCron}, thread)
+		assert.Equal(t, ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}, thread)
 	}
+}
+
+func TestSessionServiceThreadAgentUpdatePreservesCreator(t *testing.T) {
+	service := newTestSessionService(t)
+	require.NoError(t, service.UpsertThread("thread", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
+	require.NoError(t, service.UpsertThread("thread", ThreadState{Agent: "main"}))
+
+	thread, ok, err := service.Thread("thread")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}, thread)
 }
 
 func TestOpenSessionDBWaitsForTransientWriteLock(t *testing.T) {
@@ -1337,14 +1217,14 @@ func TestSessionServicePersistsExternalMCPSessionMapping(t *testing.T) {
 	workspace := t.TempDir()
 	store := newTestSessionServiceAt(t, workspace)
 
-	require.NoError(t, store.UpsertExternalMCPSession("ticket-123", ExternalMCPSessionState{Agent: " cron ", ConversationID: " external_mcp:cron:abc "}))
+	require.NoError(t, store.UpsertExternalMCPSession("ticket-123", &ExternalMCPSessionState{Agent: " cron ", ConversationID: " external_mcp:cron:abc "}))
 
 	session, ok, err := store.ExternalMCPSession("ticket-123")
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, ExternalMCPSessionState{Agent: "cron", ConversationID: "external_mcp:cron:abc"}, session)
 
-	require.NoError(t, store.UpsertExternalMCPSession("ticket-123", ExternalMCPSessionState{Agent: "planner", ConversationID: "external_mcp:planner:def"}))
+	require.NoError(t, store.UpsertExternalMCPSession("ticket-123", &ExternalMCPSessionState{Agent: "planner", ConversationID: "external_mcp:planner:def"}))
 
 	session, ok, err = store.ExternalMCPSession("ticket-123")
 	require.NoError(t, err)
@@ -1379,32 +1259,11 @@ func TestSessionServicePersistsActiveTurnSourceMetadata(t *testing.T) {
 	assert.Empty(t, turns)
 }
 
-func TestSessionServiceMarksThreadSeeded(t *testing.T) {
-	store := newTestSessionService(t)
-
-	require.NoError(t, store.MarkThreadSeeded(" thread ", " response "))
-
-	thread, ok, err := store.Thread("thread")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, ThreadState{Agent: "main", SeededFromResponse: "response"}, thread)
-
-	require.NoError(t, store.UpsertThread("thread", " planner "))
-	require.NoError(t, store.MarkThreadSeeded("thread", " other-response "))
-
-	thread, ok, err = store.Thread("thread")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, ThreadState{Agent: "planner", SeededFromResponse: "other-response"}, thread)
-}
-
 func TestSessionServiceRejectsBlankKeys(t *testing.T) {
 	store := newTestSessionService(t)
 
-	require.ErrorContains(t, store.UpsertThread(" ", "agent"), "thread conversation ID is required")
-	require.ErrorContains(t, store.MarkThreadSeeded(" ", "response"), "thread conversation ID is required")
-	require.ErrorContains(t, store.UpsertResponseCheckpoint(" ", ResponseCheckpointState{}), "response checkpoint key is required")
-	require.ErrorContains(t, store.UpsertExternalMCPSession(" ", ExternalMCPSessionState{}), "external MCP conversation ID is required")
+	require.ErrorContains(t, store.UpsertThread(" ", ThreadState{Agent: "agent"}), "thread conversation ID is required")
+	require.ErrorContains(t, store.UpsertExternalMCPSession(" ", &ExternalMCPSessionState{}), "external MCP conversation ID is required")
 }
 
 func TestLoadRocketClawStateHandlesMissingAndClosedDB(t *testing.T) {
@@ -1441,38 +1300,21 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	oldThread := SlackThreadConversationID("DOLD", slackTestTS(oldTime))
 	activeOldThread := SlackThreadConversationID("DACTIVE", slackTestTS(oldTime))
 	newThread := SlackThreadConversationID("DNEW", slackTestTS(newTime))
+
 	boundaryThread := SlackThreadConversationID("DBOUNDARY", slackTestTS(cutoff))
-	oldCheckpoint := SlackResponseCheckpointKey("DOLD", slackTestTS(oldTime))
-	newCheckpoint := SlackResponseCheckpointKey("DNEW", slackTestTS(newTime))
-	boundaryCheckpoint := SlackResponseCheckpointKey("DBOUNDARY", slackTestTS(cutoff))
-
 	for _, conversationID := range []string{oldThread, activeOldThread, newThread, boundaryThread, "slack-thread:D123:not-a-time"} {
-		require.NoError(t, store.UpsertThread(conversationID, "planner"))
+		require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "planner"}))
 	}
-
-	for _, key := range []string{oldCheckpoint, newCheckpoint, boundaryCheckpoint, "slack-response:D123:not-a-time"} {
-		require.NoError(t, store.UpsertResponseCheckpoint(key, ResponseCheckpointState{ConversationID: "main", SessionEntryID: 1, ResponseID: "resp", Model: "gpt-5.5", AssistantText: "answer"}))
-	}
-
-	require.NoError(t, store.UpsertExternalMCPSession("old-mcp", ExternalMCPSessionState{Agent: "cron", ConversationID: "external_mcp:cron:old"}))
-	require.NoError(t, store.UpsertExternalMCPSession("new-mcp", ExternalMCPSessionState{Agent: "cron", ConversationID: "external_mcp:cron:new"}))
-	require.NoError(t, store.UpsertExternalMCPSession("boundary-mcp", ExternalMCPSessionState{Agent: "cron", ConversationID: "external_mcp:cron:boundary"}))
-	require.NoError(t, store.UpsertExternalMCPSession("empty-mcp", ExternalMCPSessionState{Agent: "cron", ConversationID: "external_mcp:cron:empty"}))
-	require.NoError(t, store.UpsertExternalMCPSession("blank-mcp", ExternalMCPSessionState{Agent: "cron", ConversationID: " "}))
 
 	for conversationID, ts := range map[string]time.Time{
 		oldThread:                      oldTime,
 		activeOldThread:                newTime,
 		"slack-thread:D123:not-a-time": oldTime,
-		"external_mcp:cron:old":        oldTime,
-		"external_mcp:cron:new":        newTime,
-		"external_mcp:cron:boundary":   cutoff,
 		"external_mcp:cron:orphan":     oldTime,
 		"cron:daily:old":               oldTime,
 		"one-off-cron:daily:old":       oldTime,
 		"cron:daily:new":               newTime,
 		"slack-thread:DORPHAN:1.000":   oldTime,
-		"main":                         oldTime,
 	} {
 		_, err := AppendSessionEntryID(context.Background(), dbPath, conversationID, testSessionEntryAt(ts, conversationID))
 		require.NoError(t, err)
@@ -1480,11 +1322,11 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 
 	require.NoError(t, store.MarkRestartRequester(context.Background(), oldThread))
 	require.NoError(t, store.MarkRestartRequester(context.Background(), activeOldThread))
-	require.NoError(t, store.MarkRestartRequester(context.Background(), "external_mcp:cron:old"))
+	require.NoError(t, store.MarkRestartRequester(context.Background(), oldThread))
 
 	stats, err := store.PruneStateBefore(context.Background(), cutoff)
 	require.NoError(t, err)
-	assert.Equal(t, PruneStateStats{Threads: 1, ResponseCheckpoints: 1, ExternalMCPSessions: 3, SessionRows: 6}, stats)
+	assert.Equal(t, PruneStateStats{Threads: 1, SessionRows: 5}, stats)
 
 	threadIDs, err := managedConversationIDs(context.Background(), store.db)
 	require.NoError(t, err)
@@ -1494,33 +1336,17 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	assert.Contains(t, threadIDs, boundaryThread)
 	assert.Contains(t, threadIDs, "slack-thread:D123:not-a-time")
 
-	checkpointKeys, err := responseCheckpointKeys(context.Background(), store.db)
-	require.NoError(t, err)
-	assert.NotContains(t, checkpointKeys, oldCheckpoint)
-	assert.Contains(t, checkpointKeys, newCheckpoint)
-	assert.Contains(t, checkpointKeys, boundaryCheckpoint)
-	assert.Contains(t, checkpointKeys, "slack-response:D123:not-a-time")
-
-	externalSessions, err := externalMCPSessions(context.Background(), store.db)
-	require.NoError(t, err)
-	assert.NotContains(t, externalSessions, "old-mcp")
-	assert.NotContains(t, externalSessions, "empty-mcp")
-	assert.NotContains(t, externalSessions, "blank-mcp")
-	assert.Contains(t, externalSessions, "new-mcp")
-	assert.Contains(t, externalSessions, "boundary-mcp")
-
 	restartNotifications := pendingRestartNotifications(t, store.db)
 	assert.NotContains(t, restartNotifications, oldThread)
-	assert.NotContains(t, restartNotifications, "external_mcp:cron:old")
 	assert.Contains(t, restartNotifications, activeOldThread)
 
-	for _, conversationID := range []string{oldThread, "external_mcp:cron:old", "external_mcp:cron:orphan", "cron:daily:old", "one-off-cron:daily:old", "slack-thread:DORPHAN:1.000"} {
+	for _, conversationID := range []string{oldThread, "external_mcp:cron:orphan", "cron:daily:old", "one-off-cron:daily:old", "slack-thread:DORPHAN:1.000"} {
 		entries, err := ObserveSessionEntries(context.Background(), dbPath, conversationID, 0)
 		require.NoError(t, err)
 		assert.Empty(t, entries, conversationID)
 	}
 
-	for _, conversationID := range []string{"main", activeOldThread, "slack-thread:D123:not-a-time", "external_mcp:cron:new", "external_mcp:cron:boundary", "cron:daily:new"} {
+	for _, conversationID := range []string{activeOldThread, "slack-thread:D123:not-a-time", "cron:daily:new"} {
 		entries, err := ObserveSessionEntries(context.Background(), dbPath, conversationID, 0)
 		require.NoError(t, err)
 		assert.Len(t, entries, 1, conversationID)

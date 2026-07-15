@@ -111,6 +111,7 @@ type RunFunc func(context.Context, string, string, *slog.Logger, *harnessbridge.
 // Manager loads and runs workspace cron definitions.
 type Manager struct {
 	workspace, runtimeDir string
+	channels              []string
 	bus                   *events.Bus
 	store                 cronScheduleStore
 	run                   RunFunc
@@ -151,17 +152,34 @@ const (
 )
 
 // New constructs a cronjob manager using runtimeDir for effective runtime cron definitions.
-func New(workspace, runtimeDir string, bus *events.Bus, store cronScheduleStore, run RunFunc, logger *slog.Logger) *Manager {
-	return &Manager{workspace: workspace, bus: bus, store: store, run: run, log: logger.With("component", "cronjob"), now: time.Now, tickerInterval: time.Minute, SendTextChannel: func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
+func New(workspace, runtimeDir string, channels []string, bus *events.Bus, store cronScheduleStore, run RunFunc, logger *slog.Logger) *Manager {
+	channels = slices.Clone(channels)
+	for i := range channels {
+		channels[i] = strings.TrimSpace(channels[i])
+	}
+
+	slices.Sort(channels)
+	channels = slices.Compact(channels)
+
+	return &Manager{workspace: workspace, channels: channels, bus: bus, store: store, run: run, log: logger.With("component", "cronjob"), now: time.Now, tickerInterval: time.Minute, SendTextChannel: func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
 		return nil
 	}, runtimeDir: runtimeDir}
 }
 
 // ValidateRuntimeDefinitions loads cron definitions from runtimeDir without mutating scheduler state.
-func ValidateRuntimeDefinitions(workspace, runtimeDir string) error {
-	_, err := loadDefinitionsIn(workspace, runtimeDir)
+func ValidateRuntimeDefinitions(workspace, runtimeDir string, channels []string) error {
+	definitions, err := loadDefinitionsIn(workspace, runtimeDir)
+	if err != nil {
+		return err
+	}
 
-	return err
+	for _, definition := range definitions {
+		if !slices.Contains(channels, definition.textChannel) {
+			return fmt.Errorf("cronjob %s channel %q is not configured", definition.relativePath, definition.textChannel)
+		}
+	}
+
+	return nil
 }
 
 // Start loads cron definitions and starts scheduling them.
@@ -175,6 +193,10 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir)
 	if err != nil {
+		return err
+	}
+
+	if err := validateDefinitionChannels(definitions, m.channels); err != nil {
 		return err
 	}
 
@@ -390,6 +412,10 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 		return err
 	}
 
+	if err := validateDefinitionChannels(definitions, m.channels); err != nil {
+		return err
+	}
+
 	states := m.scheduledStates(definitions, now)
 	if err := m.store.SyncCronSchedules(states, now); err != nil {
 		return fmt.Errorf("sync cron schedules: %w", err)
@@ -475,6 +501,16 @@ func (m *Manager) scanScheduled(ctx context.Context) error {
 	return nil
 }
 
+func validateDefinitionChannels(definitions []definition, channels []string) error {
+	for _, definition := range definitions {
+		if !slices.Contains(channels, definition.textChannel) {
+			return fmt.Errorf("cronjob %s channel %q is not configured", definition.relativePath, definition.textChannel)
+		}
+	}
+
+	return nil
+}
+
 func (m *Manager) runScheduled(ctx context.Context, run harnessbridge.CronScheduleRun, definition *definition) {
 	defer m.wg.Done()
 	defer func() {
@@ -539,35 +575,6 @@ func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 			log.Warn("send cronjob text delivery", "channel", definition.textChannel, "error", err)
 		}
 	}
-
-	publish := func(label, body string) bool {
-		inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindInternalize, label, body, false)
-
-		inbound.Metadata = map[string]string{events.InboundOriginMetadataKey: "Cron", events.InboundMediaMetadataKey: "Text"}
-
-		if err := m.bus.PublishInbound(ctx, inbound); err != nil {
-			if ctx.Err() == nil {
-				log.Error("publish cronjob result to main session inbound queue", "label", label, "body", body, "error", err)
-			}
-
-			return false
-		}
-
-		log.Info("published cronjob result to main session inbound queue", "label", label, "body", body)
-
-		return true
-	}
-
-	summary := strings.TrimSpace(result.Text)
-	if summary == "" {
-		summary = "Cronjob completed."
-	}
-
-	if visiblePayload {
-		summary += "\n\nSent extra output to the cron output thread."
-	}
-
-	publish("cronjob file="+definition.relativePath+" ran_at="+ranAt, "Cronjob "+definition.relativePath+" ran at "+ranAt+":\n\n"+summary)
 }
 
 func cronTraceConversationID(prefix, relativePath string, ts time.Time) string {
@@ -674,6 +681,10 @@ func loadDefinition(data []byte, relativePath string) (definition, error) {
 	scheduleValues, agent, textChannel, err := parseFrontmatter(frontmatterBytes)
 	if err != nil {
 		return definition{}, fmt.Errorf("parse cronjob %s frontmatter: %w", relativePath, err)
+	}
+
+	if textChannel == "" {
+		return definition{}, fmt.Errorf("parse cronjob %s frontmatter: channel is required", relativePath)
 	}
 
 	schedules := make([]schedule, 0, len(scheduleValues))

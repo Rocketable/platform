@@ -20,10 +20,6 @@ type directBridge interface {
 	Submit(ctx context.Context, msg *events.InboundMessage) error
 	SubmitWhenActive(ctx context.Context, msg *events.InboundMessage, activation harnessbridge.ActivationHook) error
 	RecoverActiveTurn(ctx context.Context, turn *harnessbridge.ActiveTurnState) error
-	SeedThreadFromConversation(ctx context.Context, sourceConversationID string) error
-	SeedThreadFromCron(ctx context.Context, seedText string) error
-	SeedResponseThread(ctx context.Context, checkpoint events.ResponseCheckpoint) error
-	Summarize(ctx context.Context, prompt string) (string, error)
 	InterruptActiveTurn() *events.InboundMessage
 	SwitchAgent(agent string)
 }
@@ -37,27 +33,21 @@ type bridgeConfig struct {
 type bridgeFactory func(bridgeConfig) directBridge
 
 type managedThreadBridge struct {
-	bridge        directBridge
-	summarizing   bool
-	queuedReplies []*events.InboundMessage
+	bridge directBridge
 }
 
 type threadBridgeSnapshot struct {
 	conversationID string
 	bridge         directBridge
-	summarizing    bool
-	queuedReplies  int
 }
 
 type threadStart struct {
-	conversationID, agent, seedConversationID, seedCronText string
-	outputTargets                                           []events.OutputTarget
-	requireCreated                                          bool
-	existingErr, seedErr, persistErr, makerErr              string
-	createdBy                                               harnessbridge.ThreadCreator
+	conversationID, agent   string
+	outputTargets           []events.OutputTarget
+	requireCreated          bool
+	existingErr, persistErr string
+	createdBy               harnessbridge.ThreadCreator
 }
-
-const textThreadSummaryPrompt = "Summarize the current state of this managed text thread for handoff to the main session. Keep it concise. Include the user's goal, the important facts, decisions already made, open questions, and the next useful follow-up. Return only the summary text."
 
 type primaryTextBinding struct {
 	label         string
@@ -68,29 +58,19 @@ type threadBridgeManager struct {
 	log     *slog.Logger
 	runtime *config.Config
 	store   *harnessbridge.SessionService
-	bus     *events.Bus
 	factory bridgeFactory
-	targets []events.OutputTarget
 	text    primaryTextBinding
 
 	mu      sync.Mutex
 	bridges map[string]*managedThreadBridge
 }
 
-func newThreadBridgeManager(bus *events.Bus, runtime *config.Config, store *harnessbridge.SessionService, logger *slog.Logger, factory bridgeFactory) *threadBridgeManager {
-	return &threadBridgeManager{log: logger.With("component", "thread_bridges"), runtime: runtime, store: store, bus: bus, factory: factory, targets: events.MainOutputTargets(), text: primaryTextBindingFor(), mu: sync.Mutex{}, bridges: map[string]*managedThreadBridge{}}
-}
-
-func primaryTextBindingFor() primaryTextBinding {
-	return primaryTextBinding{label: "Slack", outputTargets: []events.OutputTarget{events.OutputTargetSlackMain}}
+func newThreadBridgeManager(runtime *config.Config, store *harnessbridge.SessionService, logger *slog.Logger, factory bridgeFactory) *threadBridgeManager {
+	return &threadBridgeManager{log: logger.With("component", "thread_bridges"), runtime: runtime, store: store, factory: factory, text: primaryTextBinding{label: "Slack", outputTargets: []events.OutputTarget{events.OutputTargetSlack}}, mu: sync.Mutex{}, bridges: map[string]*managedThreadBridge{}}
 }
 
 func (b primaryTextBinding) conversationID(target events.TextConversationTarget) string {
 	return harnessbridge.SlackThreadConversationID(strings.TrimSpace(target.ChannelID), strings.TrimSpace(target.ThreadID))
-}
-
-func (b primaryTextBinding) checkpointKey(target events.TextConversationTarget) string {
-	return harnessbridge.SlackResponseCheckpointKey(target.ChannelID, target.MessageID)
 }
 
 func (b primaryTextBinding) targetForConversationID(conversationID string) (events.TextConversationTarget, bool) {
@@ -107,25 +87,6 @@ func (b primaryTextBinding) setReplyThread(inbound *events.InboundMessage, targe
 
 func (b primaryTextBinding) setContinuationReply(inbound *events.InboundMessage, target events.TextConversationTarget) {
 	inbound.SlackReply = &events.SlackReplyTarget{ChannelID: target.ChannelID, MessageTS: target.MessageID, ThreadTS: target.ThreadID}
-}
-
-func (b primaryTextBinding) publishSummary(ctx context.Context, bus *events.Bus, log *slog.Logger, target events.TextConversationTarget, summary string) error {
-	summary = strings.TrimSpace(summary)
-	if summary == "" {
-		return errors.New("thread summary is empty")
-	}
-
-	metadata := "slack_thread_summary channel=" + strings.TrimSpace(target.ChannelID) + " thread=" + strings.TrimSpace(target.ThreadID)
-	body := "Slack thread summary from channel " + strings.TrimSpace(target.ChannelID) + " thread " + strings.TrimSpace(target.ThreadID) + ":\n\n" + summary
-
-	inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindInternalize, metadata, body, false)
-	if err := bus.PublishInbound(ctx, inbound); err != nil {
-		return fmt.Errorf("publish %s thread summary: %w", b.label, err)
-	}
-
-	log.Info("enqueued text thread summary in main inbound queue", "connector", b.label, "channel", strings.TrimSpace(target.ChannelID), "thread_id", strings.TrimSpace(target.ThreadID), "text_len", len(summary))
-
-	return nil
 }
 
 func (m *threadBridgeManager) Stop() error {
@@ -147,20 +108,11 @@ func (m *threadBridgeManager) StartPendingScheduledMessages(recovering map[strin
 
 	for _, message := range scheduledMessages {
 		conversationID := strings.TrimSpace(message.ConversationID)
-		if conversationID == events.MainConversationID() {
-			continue
-		}
-
 		if recovering[conversationID] {
 			continue
 		}
 
-		outputTargets := []events.OutputTarget{events.OutputTargetSlackMain}
-		if strings.HasPrefix(conversationID, "external_mcp:") {
-			outputTargets = m.targets
-		}
-
-		if _, _, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: message.Agent}, outputTargets, false); err != nil {
+		if _, _, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: message.Agent}, m.text.outputTargets, false); err != nil {
 			return fmt.Errorf("start pending scheduled message bridge: %w", err)
 		}
 	}
@@ -189,7 +141,7 @@ func (m *threadBridgeManager) StartActiveGoals(recovering map[string]bool) error
 			return fmt.Errorf("start active goal bridge: %w", err)
 		}
 
-		inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindPrompt, "goal_continuation", "Continue the active goal loop.", false)
+		inbound := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "goal_continuation", "Continue the active goal loop.", false)
 		inbound.ConversationID = conversationID
 		m.text.setContinuationReply(inbound, target)
 
@@ -216,21 +168,7 @@ func (m *threadBridgeManager) SubmitThreadReply(ctx context.Context, target even
 		return false, nil
 	}
 
-	cronCreated, err := m.cronCreatedThread(ctx, conversationID, thread)
-	if err != nil {
-		return false, err
-	}
-
-	if strings.HasPrefix(thread.SeededFromResponse, "external_mcp:") {
-		disableStartNewThread(inbound)
-		m.text.setReplyThread(inbound, target)
-
-		if err := m.SubmitExternalMCP(ctx, thread.Agent, thread.SeededFromResponse, inbound, harnessbridge.NoopActivationHook); err != nil {
-			return true, fmt.Errorf("submit external MCP %s thread reply: %w", m.text.label, err)
-		}
-
-		return true, nil
-	}
+	cronCreated := thread.CreatedBy == harnessbridge.ThreadCreatedByCron
 
 	if cronCreated {
 		disableStartNewThread(inbound)
@@ -245,18 +183,7 @@ func (m *threadBridgeManager) SubmitThreadReply(ctx context.Context, target even
 
 	inbound.ConversationID = conversationID
 
-	m.mu.Lock()
-	if managed.summarizing {
-		managed.queuedReplies = append(managed.queuedReplies, inbound)
-		m.mu.Unlock()
-
-		return true, nil
-	}
-
-	bridge := managed.bridge
-	m.mu.Unlock()
-
-	if err := bridge.Submit(ctx, inbound); err != nil {
+	if err := managed.bridge.Submit(ctx, inbound); err != nil {
 		return true, fmt.Errorf("submit %s thread reply: %w", m.text.label, err)
 	}
 
@@ -309,146 +236,13 @@ func (m *threadBridgeManager) ThreadAgent(target events.TextConversationTarget) 
 	return agent, true, nil
 }
 
-func (m *threadBridgeManager) RecordResponseCheckpoint(target events.TextConversationTarget, checkpoint events.ResponseCheckpoint) error {
-	checkpointKey := m.text.checkpointKey(target)
-	if checkpointKey == "" {
-		return nil
-	}
-
-	if err := m.store.UpsertResponseCheckpoint(checkpointKey, harnessbridge.ResponseCheckpointState{ConversationID: checkpoint.ConversationID, SessionEntryID: checkpoint.SessionEntryID, ResponseID: checkpoint.ResponseID, Model: checkpoint.Model, AssistantText: checkpoint.AssistantText}); err != nil {
-		return fmt.Errorf("persist %s response checkpoint: %w", m.text.label, err)
-	}
-
-	return nil
-}
-
-func (m *threadBridgeManager) PrepareResponseThreadReply(target events.TextConversationTarget) (bool, error) {
-	checkpointKey := m.text.checkpointKey(target)
-	if checkpointKey == "" {
-		return false, nil
-	}
-
-	_, ok, err := m.store.ResponseCheckpoint(checkpointKey)
-	if err != nil {
-		return false, fmt.Errorf("load persisted %s response checkpoint: %w", m.text.label, err)
-	}
-
-	return ok, nil
-}
-
-func (m *threadBridgeManager) SubmitResponseThreadReply(ctx context.Context, target events.TextConversationTarget, inbound *events.InboundMessage) (bool, error) {
-	conversationID := m.text.conversationID(target)
-
-	checkpointKey := m.text.checkpointKey(target)
-	if conversationID == "" || checkpointKey == "" {
-		return false, nil
-	}
-
-	m.text.setReplyThread(inbound, target)
-
-	checkpoint, ok, err := m.store.ResponseCheckpoint(checkpointKey)
-	if err != nil {
-		return false, fmt.Errorf("load persisted %s response checkpoint: %w", m.text.label, err)
-	}
-
-	if !ok {
-		return false, nil
-	}
-
-	thread, _, err := m.store.Thread(conversationID)
-	if err != nil {
-		return false, fmt.Errorf("load persisted %s thread state: %w", m.text.label, err)
-	}
-
-	managed, _, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: "main", SeededFromResponse: strings.TrimSpace(thread.SeededFromResponse)}, m.text.outputTargets, false)
-	if err != nil {
-		return true, err
-	}
-
-	seededFrom := strings.TrimSpace(thread.SeededFromResponse)
-	if seededFrom != checkpointKey {
-		if seededFrom != "" {
-			return true, fmt.Errorf("%s thread already seeded from %s", strings.ToLower(m.text.label), seededFrom)
-		}
-
-		if err := managed.bridge.SeedResponseThread(ctx, events.ResponseCheckpoint{ConversationID: checkpoint.ConversationID, SessionEntryID: checkpoint.SessionEntryID, ResponseID: checkpoint.ResponseID, Model: checkpoint.Model, AssistantText: checkpoint.AssistantText}); err != nil {
-			return true, fmt.Errorf("seed %s response-rooted thread: %w", m.text.label, err)
-		}
-
-		if err := m.store.MarkThreadSeeded(conversationID, checkpointKey); err != nil {
-			return true, fmt.Errorf("persist %s response-rooted thread seed: %w", m.text.label, err)
-		}
-	}
-
-	inbound.ConversationID = conversationID
-
-	if err := managed.bridge.Submit(ctx, inbound); err != nil {
-		return true, fmt.Errorf("submit %s response-rooted thread reply: %w", m.text.label, err)
-	}
-
-	return true, nil
-}
-
-func (m *threadBridgeManager) SummarizeThread(ctx context.Context, target events.TextConversationTarget) (bool, error) {
-	conversationID := m.text.conversationID(target)
-	if conversationID == "" {
-		return false, nil
-	}
-
-	m.mu.Lock()
-	managed := m.bridges[conversationID]
-	m.mu.Unlock()
-
-	if managed == nil {
-		thread, ok, err := m.store.Thread(conversationID)
-		if err != nil {
-			return false, fmt.Errorf("load persisted %s thread state: %w", m.text.label, err)
-		}
-
-		if !ok {
-			return false, nil
-		}
-
-		managed, _, err = m.ensureThreadBridge(conversationID, thread, m.text.outputTargets, false)
-		if err != nil {
-			return true, err
-		}
-	}
-
-	m.mu.Lock()
-	if managed.summarizing {
-		m.mu.Unlock()
-		return true, nil
-	}
-
-	managed.summarizing = true
-	bridge := managed.bridge
-	m.mu.Unlock()
-
-	summary, errSummarize := bridge.Summarize(ctx, textThreadSummaryPrompt)
-
-	var errPublish error
-	if errSummarize == nil {
-		errPublish = m.text.publishSummary(ctx, m.bus, m.log, target, summary)
-	}
-
-	errDrain := m.finishSummarizeThread(conversationID, managed)
-
-	return true, errors.Join(errSummarize, errPublish, errDrain)
-}
-
-func (m *threadBridgeManager) StartThread(ctx context.Context, agent string, preSeed bool, target events.TextConversationTarget, inbound *events.InboundMessage) error {
+func (m *threadBridgeManager) StartThread(ctx context.Context, agent string, target events.TextConversationTarget, inbound *events.InboundMessage) error {
 	conversationID := m.text.conversationID(target)
 	if conversationID == "" {
 		return fmt.Errorf("%s thread target is required", strings.ToLower(m.text.label))
 	}
 
-	seedConversationID := ""
-	if preSeed {
-		seedConversationID = events.MainConversationID()
-	}
-
-	managed, err := m.ensureStartedThread(ctx, &threadStart{conversationID: conversationID, agent: agent, outputTargets: m.text.outputTargets, seedConversationID: seedConversationID, seedErr: "seed " + m.text.label + " thread from main session", persistErr: "persist " + m.text.label + " thread bridge"})
+	managed, err := m.ensureStartedThread(&threadStart{conversationID: conversationID, agent: agent, outputTargets: m.text.outputTargets, persistErr: "persist " + m.text.label + " thread bridge"})
 	if err != nil {
 		return err
 	}
@@ -479,6 +273,7 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *events.St
 	var (
 		conversationID, url, label string
 		outputTargets              []events.OutputTarget
+		rootTarget                 events.TextConversationTarget
 	)
 
 	switch req.Source {
@@ -488,19 +283,21 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *events.St
 			return events.StartNewThreadResult{}, err
 		}
 
-		conversationID, url = m.text.conversationID(root.Target), root.URL
+		rootTarget = root.Target
+		conversationID, url = m.text.conversationID(rootTarget), root.URL
 		outputTargets, label = m.text.outputTargets, m.text.label
 	case events.SourceExternalMCP, events.SourceSystem:
 		return events.StartNewThreadResult{}, fmt.Errorf("rocketclaw_start_new_thread is not available for %s turns", req.Source)
 	}
 
-	managed, err := m.ensureStartedThread(ctx, &threadStart{conversationID: conversationID, agent: targetAgent, outputTargets: outputTargets, requireCreated: true, existingErr: label + " new thread conversation already exists", seedConversationID: req.SourceConversationID, seedErr: "seed " + label + " new thread from source conversation", persistErr: "persist " + label + " new thread bridge"})
+	managed, err := m.ensureStartedThread(&threadStart{conversationID: conversationID, agent: targetAgent, outputTargets: outputTargets, requireCreated: true, existingErr: label + " new thread conversation already exists", persistErr: "persist " + label + " new thread bridge"})
 	if err != nil {
 		return events.StartNewThreadResult{}, err
 	}
 
-	inbound := events.NewMainInboundMessage(events.SourceSystem, events.InboundKindPrompt, "rocketclaw_start_new_thread", events.StartNewThreadFirstPrompt(req, targetAgent), false)
+	inbound := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "rocketclaw_start_new_thread", req.Prompt, false)
 	inbound.ConversationID = conversationID
+	m.text.setContinuationReply(inbound, events.TextConversationTarget{ChannelID: strings.TrimSpace(rootTarget.ChannelID), MessageID: strings.TrimSpace(rootTarget.MessageID), ThreadID: strings.TrimSpace(rootTarget.ThreadID)})
 
 	inbound.Metadata = map[string]string{events.InboundOriginMetadataKey: "System", events.InboundMediaMetadataKey: "Text"}
 	if err := managed.bridge.Submit(ctx, inbound); err != nil {
@@ -534,10 +331,7 @@ func (m *threadBridgeManager) StartGoalInThread(ctx context.Context, agent, obje
 		return fmt.Errorf("load goal thread state: %w", err)
 	}
 
-	cronCreated, err := m.cronCreatedThread(ctx, conversationID, thread)
-	if err != nil {
-		return err
-	}
+	cronCreated := thread.CreatedBy == harnessbridge.ThreadCreatedByCron
 
 	if cronCreated {
 		disableStartNewThread(inbound)
@@ -553,7 +347,7 @@ func (m *threadBridgeManager) StartGoalInThread(ctx context.Context, agent, obje
 		}
 	}
 
-	managed, err := m.ensureStartedThread(ctx, &threadStart{conversationID: conversationID, agent: agent, outputTargets: m.text.outputTargets, persistErr: "persist goal thread bridge"})
+	managed, err := m.ensureStartedThread(&threadStart{conversationID: conversationID, agent: agent, outputTargets: m.text.outputTargets, persistErr: "persist goal thread bridge"})
 	if err != nil {
 		return err
 	}
@@ -578,33 +372,12 @@ func (m *threadBridgeManager) InterruptThread(target events.TextConversationTarg
 		return nil, nil
 	}
 
-	bridgeConversationID := conversationID
-
-	thread, ok, err := m.store.Thread(conversationID)
-	if err != nil {
-		return nil, fmt.Errorf("load persisted %s thread state: %w", m.text.label, err)
-	}
-
-	if ok && strings.HasPrefix(thread.SeededFromResponse, "external_mcp:") {
-		bridgeConversationID = thread.SeededFromResponse
-	}
-
 	if err := m.store.StopGoal(conversationID); err != nil {
 		return nil, fmt.Errorf("stop goal thread: %w", err)
 	}
 
 	m.mu.Lock()
-
-	managed := m.bridges[bridgeConversationID]
-	if managed != nil {
-		managed.queuedReplies = nil
-	}
-
-	if bridgeConversationID != conversationID {
-		if visible := m.bridges[conversationID]; visible != nil {
-			visible.queuedReplies = nil
-		}
-	}
+	managed := m.bridges[conversationID]
 	m.mu.Unlock()
 
 	if managed == nil {
@@ -614,19 +387,19 @@ func (m *threadBridgeManager) InterruptThread(target events.TextConversationTarg
 	return managed.bridge.InterruptActiveTurn(), nil
 }
 
-func (m *threadBridgeManager) RegisterCronThread(ctx context.Context, target events.TextConversationTarget, agent, seedText string) error {
+func (m *threadBridgeManager) RegisterCronThread(_ context.Context, target events.TextConversationTarget, agent string) error {
 	conversationID := m.text.conversationID(target)
 	if conversationID == "" {
 		return errors.New("text thread target is required")
 	}
 
-	_, err := m.ensureStartedThread(ctx, &threadStart{conversationID: conversationID, agent: agent, outputTargets: m.text.outputTargets, seedCronText: seedText, seedErr: "seed text cron thread", persistErr: "persist text cron thread bridge", createdBy: harnessbridge.ThreadCreatedByCron, makerErr: "persist text cron thread origin"})
+	_, err := m.ensureStartedThread(&threadStart{conversationID: conversationID, agent: agent, outputTargets: m.text.outputTargets, persistErr: "persist text cron thread bridge", createdBy: harnessbridge.ThreadCreatedByCron})
 
 	return err
 }
 
 func (m *threadBridgeManager) SubmitExternalMCP(ctx context.Context, agent, conversationID string, inbound *events.InboundMessage, activation harnessbridge.ActivationHook) error {
-	managed, _, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: agent}, m.targets, false)
+	managed, _, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: agent}, m.text.outputTargets, false)
 	if err != nil {
 		return err
 	}
@@ -642,16 +415,8 @@ func (m *threadBridgeManager) RecoverActiveTurn(ctx context.Context, turn *harne
 	checkpoint := turn.Checkpoint
 
 	conversationID := strings.TrimSpace(checkpoint.ConversationKey)
-	if conversationID == events.MainConversationID() {
-		return errors.New("main active turn recovery must use the main bridge")
-	}
 
-	outputTargets := m.text.outputTargets
-	if strings.HasPrefix(conversationID, "external_mcp:") {
-		outputTargets = m.targets
-	}
-
-	managed, _, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: checkpoint.Agent}, outputTargets, true)
+	managed, _, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: checkpoint.Agent}, m.text.outputTargets, true)
 	if err != nil {
 		return err
 	}
@@ -663,7 +428,7 @@ func (m *threadBridgeManager) RecoverActiveTurn(ctx context.Context, turn *harne
 	return nil
 }
 
-func (m *threadBridgeManager) ensureStartedThread(ctx context.Context, start *threadStart) (*managedThreadBridge, error) {
+func (m *threadBridgeManager) ensureStartedThread(start *threadStart) (*managedThreadBridge, error) {
 	managed, created, err := m.ensureThreadBridge(start.conversationID, harnessbridge.ThreadState{Agent: start.agent}, start.outputTargets, false)
 	if err != nil {
 		return nil, err
@@ -674,30 +439,9 @@ func (m *threadBridgeManager) ensureStartedThread(ctx context.Context, start *th
 	}
 
 	if created {
-		if start.seedConversationID != "" {
-			if err := managed.bridge.SeedThreadFromConversation(ctx, start.seedConversationID); err != nil {
-				m.dropCreatedBridge(start.conversationID, managed)
-				return nil, fmt.Errorf("%s: seed thread from source conversation: %w", start.seedErr, err)
-			}
-		}
-
-		if start.seedCronText != "" {
-			if err := managed.bridge.SeedThreadFromCron(ctx, start.seedCronText); err != nil {
-				m.dropCreatedBridge(start.conversationID, managed)
-				return nil, fmt.Errorf("%s: seed thread from cron: %w", start.seedErr, err)
-			}
-		}
-
-		if err := m.store.UpsertThread(start.conversationID, start.agent); err != nil {
+		if err := m.store.UpsertThread(start.conversationID, harnessbridge.ThreadState{Agent: start.agent, CreatedBy: start.createdBy}); err != nil {
 			m.dropCreatedBridge(start.conversationID, managed)
 			return nil, fmt.Errorf("%s: %w", start.persistErr, err)
-		}
-
-		if start.createdBy != "" {
-			if err := m.store.MarkThreadCreatedBy(start.conversationID, start.createdBy); err != nil {
-				m.dropCreatedBridge(start.conversationID, managed)
-				return nil, fmt.Errorf("%s: %w", start.makerErr, err)
-			}
 		}
 	}
 
@@ -720,36 +464,13 @@ func (m *threadBridgeManager) dropCreatedBridge(conversationID string, managed *
 	_ = managed.bridge.Stop()
 }
 
-func (m *threadBridgeManager) cronCreatedThread(ctx context.Context, conversationID string, thread harnessbridge.ThreadState) (bool, error) {
-	if thread.CreatedBy == harnessbridge.ThreadCreatedByCron {
-		return true, nil
-	}
-
-	entries, err := m.store.ObserveEntries(ctx, conversationID, 0)
-	if err != nil {
-		return false, fmt.Errorf("load thread seed entries: %w", err)
-	}
-
-	for i := range entries {
-		if entries[i].Entry.Type == "cron_thread_seed" {
-			if err := m.store.MarkThreadCreatedBy(conversationID, harnessbridge.ThreadCreatedByCron); err != nil {
-				return false, fmt.Errorf("persist legacy cron thread origin: %w", err)
-			}
-
-			return true, nil
-		}
-	}
-
-	return false, nil
-}
-
 func (m *threadBridgeManager) bridgesSnapshot() []threadBridgeSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	bridges := make([]threadBridgeSnapshot, 0, len(m.bridges))
 	for conversationID, managed := range m.bridges {
-		bridges = append(bridges, threadBridgeSnapshot{conversationID: conversationID, bridge: managed.bridge, summarizing: managed.summarizing, queuedReplies: len(managed.queuedReplies)})
+		bridges = append(bridges, threadBridgeSnapshot{conversationID: conversationID, bridge: managed.bridge})
 	}
 
 	slices.SortFunc(bridges, func(a, b threadBridgeSnapshot) int { return strings.Compare(a.conversationID, b.conversationID) })
@@ -790,27 +511,4 @@ func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread h
 	m.bridges[conversationID] = managed
 
 	return managed, true, nil
-}
-
-func (m *threadBridgeManager) finishSummarizeThread(conversationID string, managed *managedThreadBridge) error {
-	var errDrain error
-
-	for {
-		m.mu.Lock()
-		queuedReplies := managed.queuedReplies
-
-		managed.queuedReplies = nil
-		if len(queuedReplies) == 0 {
-			managed.summarizing = false
-			m.mu.Unlock()
-
-			return errDrain
-		}
-		m.mu.Unlock()
-
-		for i := range queuedReplies {
-			queuedReplies[i].ConversationID = conversationID
-			errDrain = errors.Join(errDrain, managed.bridge.Submit(context.Background(), queuedReplies[i]))
-		}
-	}
 }

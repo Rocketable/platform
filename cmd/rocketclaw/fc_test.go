@@ -50,7 +50,7 @@ func TestWriteFCListIncludesLastMessages(t *testing.T) {
 	assert.Contains(t, text, "hi there")
 }
 
-func TestWriteFCObserveDefaultsToMain(t *testing.T) {
+func TestWriteFCObserveRequiresConversationID(t *testing.T) {
 	workspace := t.TempDir()
 	_, err := fcAppendSessionEntryID(t.Context(), workspace, "main", fcTestEntry("main user", "main assistant"))
 	require.NoError(t, err)
@@ -58,10 +58,8 @@ func TestWriteFCObserveDefaultsToMain(t *testing.T) {
 	require.NoError(t, err)
 
 	var out bytes.Buffer
-	require.NoError(t, writeFCObserveIn(t.Context(), workspace, config.DefaultRuntimeDir, "", false, time.Millisecond, &out))
-
-	assert.Contains(t, out.String(), "main user")
-	assert.NotContains(t, out.String(), "thread user")
+	require.EqualError(t, writeFCObserveIn(t.Context(), workspace, config.DefaultRuntimeDir, "", false, time.Millisecond, &out), "conversation ID is required")
+	assert.Empty(t, out.String())
 }
 
 func TestWriteFCObserveFollowEmitsLaterRows(t *testing.T) {
@@ -95,7 +93,7 @@ func TestRunFCObserveRejectsExtraArguments(t *testing.T) {
 	var out bytes.Buffer
 
 	err := runFCObserveIn(t.TempDir(), config.DefaultRuntimeDir, []string{"one", "two"}, &out)
-	require.ErrorContains(t, err, "at most one conversation-id")
+	require.ErrorContains(t, err, "requires exactly one conversation-id")
 }
 
 func TestRunFCObserveRejectsBadFlag(t *testing.T) {
@@ -424,11 +422,9 @@ func fcTestConfigJSON() string {
     "api_key": "shared-key"
   },
   "slack": {
-    "enabled": true,
     "bot_token": "xoxb-test",
     "app_token": "xapp-test",
-    "room": "D123",
-    "human_user_id": "U123"
+    "channels": [{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]
   }
 }`)
 }

@@ -13,7 +13,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 )
 
@@ -21,13 +20,13 @@ const fcHelpText = `rocketclaw fc
 
 Usage:
   rocketclaw fc list [--since 24h|RFC3339] [--until RFC3339] [--limit N] [--no-message-preview]
-  rocketclaw fc observe [--follow|-f] [conversation-id]
+  rocketclaw fc observe [--follow|-f] <conversation-id>
   rocketclaw fc delete <conversation-id>
   rocketclaw fc check
 
 Commands:
   list     List stored rocketcode sessions.
-  observe  Print stored rocketcode session entries as JSONL. Defaults to main.
+  observe  Print one conversation's stored rocketcode session entries as JSONL.
   delete   Delete one rocketcode session.
   check    Check and recover the rocketclaw state store.
 `
@@ -245,21 +244,18 @@ func runFCObserveIn(workspace, runtimeDir string, args []string, out io.Writer) 
 	}
 
 	remaining := flagSet.Args()
-	if len(remaining) > 1 {
-		return errors.New("observe accepts at most one conversation-id")
+	if len(remaining) != 1 || strings.TrimSpace(remaining[0]) == "" {
+		return errors.New("observe requires exactly one conversation-id")
 	}
 
-	conversationID := events.MainConversationID()
-	if len(remaining) == 1 {
-		conversationID = strings.TrimSpace(remaining[0])
-	}
+	conversationID := strings.TrimSpace(remaining[0])
 
 	return writeFCObserveIn(context.Background(), workspace, runtimeDir, conversationID, *follow, time.Second, out)
 }
 
 func writeFCObserveIn(ctx context.Context, workspace, runtimeDir, conversationID string, follow bool, pollInterval time.Duration, out io.Writer) error {
 	if strings.TrimSpace(conversationID) == "" {
-		conversationID = events.MainConversationID()
+		return errors.New("conversation ID is required")
 	}
 
 	var lastID int64

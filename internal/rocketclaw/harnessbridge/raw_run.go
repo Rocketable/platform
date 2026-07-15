@@ -176,14 +176,14 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 		}
 	}
 
-	b := &Bridge{log: logger, config: Config{ConversationID: "", Agent: agent, ConsumeSharedInbound: false, OutputTargets: nil, RequestRestart: requestRestart, RequestReload: requestReload, SessionService: nil}, runtime: cfg, bus: nil, inputStop: nil, requestCh: nil, stopCh: nil, mu: sync.Mutex{}, handling: false}
+	b := &Bridge{log: logger, config: Config{Agent: agent, RequestRestart: requestRestart, RequestReload: requestReload}, runtime: cfg, mu: sync.Mutex{}}
 
 	providers, err := b.rocketcodeProviders(agents)
 	if err != nil {
 		return "", fmt.Errorf("prepare RocketCode providers: %w", err)
 	}
 
-	customTools := []rocketcode.Tool{decision.Tool(), attachments.Tool(root), reloadTool(requestReload), scheduleMessageTool(progress.ScheduleMessage, logger), resetScheduledMessagesTool(progress.ResetScheduledMessages)}
+	customTools := []rocketcode.Tool{decision.Tool(), attachments.Tool(root), reloadTool(requestReload)}
 
 	activeAgent := agents.Items[agent]
 	if agentExplicitlyAllowsRocketClawTool(&activeAgent, restartToolName) {

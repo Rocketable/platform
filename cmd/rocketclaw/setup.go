@@ -146,30 +146,11 @@ func interviewSetup(cfg *config.Config) (setupNames, error) {
 
 	var names setupNames
 
-	for {
-		slackEnabled, err := promptYesNoDefault(reader, "Enable Slack connector? [y/N]: ", false)
-		if err != nil {
-			return names, fmt.Errorf("prompt Slack enablement: %w", err)
-		}
-
-		externalMCPEnabled, err := promptYesNoDefault(reader, "Enable external MCP HTTP server? [y/N]: ", false)
-		if err != nil {
-			return names, fmt.Errorf("prompt external MCP enablement: %w", err)
-		}
-
-		if !slackEnabled && !externalMCPEnabled {
-			if _, err := fmt.Fprintln(os.Stdout, "At least one connector or external MCP server must be enabled."); err != nil {
-				return names, fmt.Errorf("report missing connector selection: %w", err)
-			}
-
-			continue
-		}
-
-		cfg.Slack.Enabled = slackEnabled
-		cfg.MCPExternal.Enabled = externalMCPEnabled
-
-		break
+	externalMCPEnabled, err := promptYesNoDefault(reader, "Enable external MCP HTTP server? [y/N]: ", false)
+	if err != nil {
+		return names, fmt.Errorf("prompt external MCP enablement: %w", err)
 	}
+	cfg.MCPExternal.Enabled = externalMCPEnabled
 
 	if err := promptFields(reader,
 		promptField{prompt: "OpenAI API key: ", required: true, value: &cfg.OpenAI.APIKey},
@@ -180,16 +161,16 @@ func interviewSetup(cfg *config.Config) (setupNames, error) {
 		return names, err
 	}
 
-	if cfg.Slack.Enabled {
-		if err := promptFields(reader,
-			promptField{prompt: "Slack bot token: ", required: true, value: &cfg.Slack.BotToken},
-			promptField{prompt: "Slack app token: ", required: true, value: &cfg.Slack.AppToken},
-			promptField{prompt: "Slack DM room/channel ID: ", required: true, value: &cfg.Slack.Room},
-			promptField{prompt: "Slack human partner user ID: ", required: true, value: &cfg.Slack.HumanUserID},
-		); err != nil {
-			return names, err
-		}
+	var channel, userID string
+	if err := promptFields(reader,
+		promptField{prompt: "Slack bot token: ", required: true, value: &cfg.Slack.BotToken},
+		promptField{prompt: "Slack app token: ", required: true, value: &cfg.Slack.AppToken},
+		promptField{prompt: "Slack channel: ", required: true, value: &channel},
+		promptField{prompt: "Slack allowed user ID: ", required: true, value: &userID},
+	); err != nil {
+		return names, err
 	}
+	cfg.Slack.Channels = []config.SlackChannelConfig{{Channel: channel, Agents: []string{names.agentName}, AllowedUserIDs: []string{userID}}}
 
 	if cfg.MCPExternal.Enabled {
 		cfg.MCPExternal.ListenAddr = "127.0.0.1:8765"

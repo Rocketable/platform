@@ -13,8 +13,6 @@ import (
 // MaxInboundTextAttachmentBytes is the per-file size limit for attachments converted to prompt text.
 const MaxInboundTextAttachmentBytes = 256 << 10
 
-const mainConversationID = "main"
-
 const (
 	// InboundOriginMetadataKey overrides the trusted prompt provenance origin.
 	InboundOriginMetadataKey = "rocketclaw_origin"
@@ -59,17 +57,11 @@ type InboundResponse struct {
 type OutputTarget string
 
 const (
-	// OutputTargetSlackMain delivers a response to the main Slack DM.
-	OutputTargetSlackMain OutputTarget = "slack_main"
+	// OutputTargetSlack delivers a response to its explicit Slack thread.
+	OutputTargetSlack OutputTarget = "slack"
 )
 
-// ObservedMessage is a non-consuming bus event tap record.
-type ObservedMessage struct {
-	Inbound  *InboundMessage
-	Outbound *OutboundMessage
-}
-
-// InboundAttachment carries an inline attachment into the shared main-session prompt.
+// InboundAttachment carries an inline attachment into a conversation prompt.
 type InboundAttachment struct {
 	Name, MIMEType string
 	Data           []byte
@@ -91,7 +83,7 @@ type OutboundAttachment struct {
 	Data           []byte
 }
 
-// InboundMessage is a message headed into the shared main-session prompt queue.
+// InboundMessage is a message headed into its conversation prompt queue.
 type InboundMessage struct {
 	Source                                                  Source
 	Label, Text                                             string
@@ -155,12 +147,6 @@ type StartNewThreadRootResult struct {
 	URL    string
 }
 
-// ResponseCheckpoint identifies a persisted main-session turn that can seed a Slack thread.
-type ResponseCheckpoint struct {
-	ConversationID, ResponseID, Model, AssistantText string
-	SessionEntryID                                   int64
-}
-
 // OutboundMessage is a text message headed to enabled connectors.
 type OutboundMessage struct {
 	Text, ProgressText           string
@@ -170,7 +156,6 @@ type OutboundMessage struct {
 	Sequence                     int
 	PostProgressText, Complete   bool
 	SlackReply                   *SlackReplyTarget
-	Checkpoint                   *ResponseCheckpoint
 	Attachments                  []OutboundAttachment
 	GoalTurn, GoalComplete       bool
 	GoalTurnNumber, GoalMaxTurns int
@@ -180,41 +165,16 @@ type OutboundMessage struct {
 	deliveryErr                 error
 }
 
-// MainConversationID returns the stable key for the shared main session.
-func MainConversationID() string { return mainConversationID }
-
-// MainOutputTargets returns the default targets for main-session replies.
-func MainOutputTargets() []OutputTarget {
-	return []OutputTarget{OutputTargetSlackMain}
-}
-
-// NewMainInboundMessage constructs a message for the shared main session.
-func NewMainInboundMessage(source Source, kind InboundKind, label, text string, human bool) *InboundMessage {
+// NewInboundMessage constructs an unrouted inbound message.
+func NewInboundMessage(source Source, kind InboundKind, label, text string, human bool) *InboundMessage {
 	return &InboundMessage{
 		Source: source, Label: label, Text: text, Human: human, Kind: kind,
-		ConversationID: MainConversationID(),
 	}
 }
 
 // StartNewThreadRootText returns the human-visible root text for tool-created text conversations.
 func StartNewThreadRootText(title, prompt string) string {
 	return "New thread: " + strings.TrimSpace(title) + "\n\nStarted by RocketClaw from this conversation.\n\nTask:\n" + prompt
-}
-
-// StartNewThreadFirstPrompt returns the first model-visible task prompt body for tool-created conversations.
-func StartNewThreadFirstPrompt(req *StartNewThreadRequest, targetAgent string) string {
-	source := string(req.Source)
-	if req.SourceConversationID != "" {
-		source += " " + strings.TrimSpace(req.SourceConversationID)
-	}
-
-	return "A RocketClaw agent started this new thread from an existing conversation.\n\n" +
-		"Title: " + strings.TrimSpace(req.Title) + "\n" +
-		"Started from: " + strings.TrimSpace(source) + "\n" +
-		"Source conversation ID: " + strings.TrimSpace(req.SourceConversationID) + "\n" +
-		"Requesting agent: " + strings.TrimSpace(req.CurrentAgent) + "\n" +
-		"Target agent: " + strings.TrimSpace(targetAgent) + "\n\n" +
-		"Task:\n" + req.Prompt
 }
 
 // SetInboundAllowedAgents records surface-constrained agents on an inbound message.
@@ -226,8 +186,8 @@ func SetInboundAllowedAgents(inbound *InboundMessage, agents []string) {
 	inbound.Metadata[InboundAllowedAgentsMetadataKey] = strings.Join(agents, ",")
 }
 
-// NewMainInboundMessageFromContent constructs a main inbound message from normalized source content.
-func NewMainInboundMessageFromContent(source Source, kind InboundKind, label string, content *InboundContent, human bool) *InboundMessage {
+// NewInboundMessageFromContent constructs an unrouted inbound message from normalized source content.
+func NewInboundMessageFromContent(source Source, kind InboundKind, label string, content *InboundContent, human bool) *InboundMessage {
 	text := content.Text
 	if len(content.TextAttachments) > 0 {
 		attachmentText := strings.Join(content.TextAttachments, "\n\n")
@@ -238,7 +198,7 @@ func NewMainInboundMessageFromContent(source Source, kind InboundKind, label str
 		}
 	}
 
-	inbound := NewMainInboundMessage(source, kind, label, text, human)
+	inbound := NewInboundMessage(source, kind, label, text, human)
 	if len(content.Attachments) > 0 {
 		inbound.Attachments = make([]InboundAttachment, 0, len(content.Attachments))
 		for i := range content.Attachments {
@@ -292,16 +252,9 @@ func (m *InboundMessage) CompleteResponseWithAttachments(text string, attachment
 	})
 }
 
-// NewMainOutboundMessage constructs an outbound message for the shared main session.
-func NewMainOutboundMessage(source Source, text string, targets ...OutputTarget) *OutboundMessage {
-	message := OutboundMessage{
-		Text: text, Source: source, Targets: MainOutputTargets(), ConversationID: MainConversationID(),
-	}
-	if len(targets) > 0 {
-		message.Targets = append([]OutputTarget(nil), targets...)
-	}
-
-	return &message
+// NewOutboundMessage constructs an outbound message for one explicit conversation.
+func NewOutboundMessage(source Source, conversationID, text string, targets ...OutputTarget) *OutboundMessage {
+	return &OutboundMessage{Text: text, Source: source, Targets: append([]OutputTarget(nil), targets...), ConversationID: strings.TrimSpace(conversationID)}
 }
 
 // CloneOutboundAttachments returns a deep copy of attachments.

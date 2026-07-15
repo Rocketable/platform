@@ -145,9 +145,8 @@ func TestRunRawCronCanEditRestartAndCompleteDecision(t *testing.T) {
 			assert.Contains(t, string(data), restartToolName)
 			assert.Contains(t, string(data), reloadToolName)
 			assert.Contains(t, string(data), attachFilesToolName)
-			assert.Contains(t, string(data), scheduleMessageToolName)
-			assert.Contains(t, string(data), `"required":["message","recurring","send_this_in"]`)
-			assert.Contains(t, string(data), resetScheduledMessagesToolName)
+			assert.NotContains(t, string(data), scheduleMessageToolName)
+			assert.NotContains(t, string(data), resetScheduledMessagesToolName)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -160,11 +159,9 @@ func TestRunRawCronCanEditRestartAndCompleteDecision(t *testing.T) {
 		case 3:
 			writeRawRunFunctionCall(t, w, "resp_3", "call_3", restartToolName, map[string]string{"reason": "rocketclaw.json changed and runtime config must reload"})
 		case 4:
-			writeRawRunFunctionCall(t, w, "resp_4", "call_4", scheduleMessageToolName, map[string]any{"message": "follow up", "send_this_in": "5m", "recurring": false})
+			writeRawRunFunctionCall(t, w, "resp_4", "call_4", rawRunToolName, map[string]string{"payload": "cron done"})
 		case 5:
-			writeRawRunFunctionCall(t, w, "resp_5", "call_5", rawRunToolName, map[string]string{"payload": "cron done"})
-		case 6:
-			_, err := w.Write([]byte(`{"id":"resp_6","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"assistant complete","annotations":[]}]}]}`))
+			_, err := w.Write([]byte(`{"id":"resp_5","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"assistant complete","annotations":[]}]}]}`))
 			assert.NoError(t, err)
 		default:
 			t.Fatalf("unexpected response request %d", request)
@@ -202,7 +199,7 @@ func TestRunRawCronCanEditRestartAndCompleteDecision(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, RawRunResult{Text: "assistant complete", VerbatimMessage: "cron done"}, result)
 	assert.Equal(t, 1, restarts)
-	assert.Equal(t, 1, schedules)
+	assert.Zero(t, schedules)
 	entries, err := ObserveSessionEntries(t.Context(), sessionDBPath(workspace), progress.ConversationID, 0)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -210,7 +207,7 @@ func TestRunRawCronCanEditRestartAndCompleteDecision(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "[Cron media=Text]\n\nraw-expanded", items[0].OfMessage.Content.OfString.Value)
 	requestMu.Lock()
-	assert.Equal(t, 6, requests)
+	assert.Equal(t, 5, requests)
 	requestMu.Unlock()
 	assertFileContent(t, root, "cron/HEARTBEAT.md", "new heartbeat\n")
 	assertFileContent(t, root, "rocketclaw.json", "{\"name\":\"new\"}\n")
@@ -265,8 +262,8 @@ func TestRunRawHidesRestartWithoutExplicitAllow(t *testing.T) {
 
 			assert.NotContains(t, toolNames, restartToolName)
 			assert.Contains(t, toolNames, reloadToolName)
-			assert.Contains(t, toolNames, scheduleMessageToolName)
-			assert.Contains(t, toolNames, resetScheduledMessagesToolName)
+			assert.NotContains(t, toolNames, scheduleMessageToolName)
+			assert.NotContains(t, toolNames, resetScheduledMessagesToolName)
 			assert.Contains(t, toolNames, rawRunToolName)
 		}
 

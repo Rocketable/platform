@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,14 +13,10 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/externalmcp"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestConfiguredMainOutputTargetsSelectsSlack(t *testing.T) {
-	assert.Equal(t, []events.OutputTarget{events.OutputTargetSlackMain}, configuredMainOutputTargets(&config.Config{Slack: config.SlackConfig{Enabled: true}}))
-	assert.Empty(t, configuredMainOutputTargets(&config.Config{}))
-}
 
 func TestOutboundLoopDeliversSlackMessagesInOrder(t *testing.T) {
 	bus := events.New()
@@ -34,15 +32,14 @@ func TestOutboundLoopDeliversSlackMessagesInOrder(t *testing.T) {
 		done <- outboundLoop(ctx, bus, func(_ context.Context, msg *events.OutboundMessage) error {
 			seen <- msg.Sequence
 			return nil
-		}, testLogger())
+		}, func(*events.OutboundMessage) {}, testLogger())
 	}()
 
-	first := events.NewMainOutboundMessage(events.SourceSystem, "first")
+	conversationID := harnessbridge.SlackThreadConversationID("C123", "111.222")
+	first := events.NewOutboundMessage(events.SourceSystem, conversationID, "first", events.OutputTargetSlack)
 	first.Sequence = 1
-	first.Targets = []events.OutputTarget{events.OutputTargetSlackMain}
-	second := events.NewMainOutboundMessage(events.SourceSystem, "second")
+	second := events.NewOutboundMessage(events.SourceSystem, conversationID, "second", events.OutputTargetSlack)
 	second.Sequence = 2
-	second.Targets = []events.OutputTarget{events.OutputTargetSlackMain}
 
 	require.NoError(t, bus.PublishOutbound(context.Background(), first))
 	require.NoError(t, bus.PublishOutbound(context.Background(), second))
@@ -55,32 +52,34 @@ func TestOutboundLoopDeliversSlackMessagesInOrder(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
-func TestOutboundLoopPropagatesSlackDeliveryErrorsToWaitDelivered(t *testing.T) {
+func TestOutboundLoopAbortsCompleteSlackTurnAfterOneFailedDelivery(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	errDelivery := errors.New("send failed")
-	attempted := make(chan struct{}, 1)
+	aborted := make(chan *events.OutboundMessage, 1)
+	attempts := 0
 
 	done := make(chan error, 1)
 	go func() {
 		done <- outboundLoop(ctx, bus, func(context.Context, *events.OutboundMessage) error {
-			attempted <- struct{}{}
+			attempts++
 			return errDelivery
-		}, testLogger())
+		}, func(msg *events.OutboundMessage) { aborted <- msg }, testLogger())
 	}()
 
-	msg := events.NewMainOutboundMessage(events.SourceSystem, "hello")
-	msg.Targets = []events.OutputTarget{events.OutputTargetSlackMain}
-	require.NoError(t, bus.PublishOutbound(context.Background(), msg))
-	<-attempted
-	cancel()
+	msg := events.NewOutboundMessage(events.SourceSystem, harnessbridge.SlackThreadConversationID("C123", "111.222"), "hello", events.OutputTargetSlack)
+	msg.Complete = true
+	require.NoError(t, bus.PublishOutbound(t.Context(), msg))
 
-	err := msg.WaitDelivered(context.Background())
+	err := msg.WaitDelivered(t.Context())
 	require.ErrorContains(t, err, "send failed")
+	assert.Equal(t, 1, attempts)
+	assert.Same(t, msg, <-aborted)
+	cancel()
 	require.NoError(t, <-done)
 }
 
@@ -93,10 +92,10 @@ func TestOutboundLoopMarksNoTargetMessagesDelivered(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- outboundLoop(ctx, bus, func(context.Context, *events.OutboundMessage) error { return nil }, testLogger())
+		done <- outboundLoop(ctx, bus, func(context.Context, *events.OutboundMessage) error { return nil }, func(*events.OutboundMessage) {}, testLogger())
 	}()
 
-	msg := events.NewMainOutboundMessage(events.SourceSystem, "hello")
+	msg := events.NewOutboundMessage(events.SourceSystem, harnessbridge.SlackThreadConversationID("C123", "111.222"), "hello")
 	require.NoError(t, bus.PublishOutbound(context.Background(), msg))
 	require.NoError(t, msg.WaitDelivered(context.Background()))
 	cancel()
@@ -110,16 +109,18 @@ func TestOutboundLoopReturnsDeadlineError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
 	defer cancel()
 
-	err := outboundLoop(ctx, bus, func(context.Context, *events.OutboundMessage) error { return nil }, testLogger())
+	err := outboundLoop(ctx, bus, func(context.Context, *events.OutboundMessage) error { return nil }, func(*events.OutboundMessage) {}, testLogger())
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestSubmitExternalMCPInputPreservesPublicConversationMetadata(t *testing.T) {
 	var captured *events.InboundMessage
 
-	submit := func(_ context.Context, agent, conversationID string, inbound *events.InboundMessage, activation harnessbridge.ActivationHook) error {
+	conversationID := harnessbridge.SlackThreadConversationID("C123", "111.222")
+
+	submit := func(_ context.Context, agent, gotConversationID string, inbound *events.InboundMessage, activation harnessbridge.ActivationHook) error {
 		assert.Equal(t, "planner", agent)
-		assert.Equal(t, "external_mcp:planner:private", conversationID)
+		assert.Equal(t, conversationID, gotConversationID)
 
 		captured = inbound
 		require.NoError(t, activation(context.Background(), inbound))
@@ -129,9 +130,10 @@ func TestSubmitExternalMCPInputPreservesPublicConversationMetadata(t *testing.T)
 	}
 
 	content := &events.InboundContent{Text: "prompt"}
-	result, err := submitExternalMCPInput(context.Background(), submit, "planner", "external_mcp:planner:private", content, map[string]string{"ticket": "123"}, "alice", nil, "public-1", harnessbridge.NoopActivationHook)
+	result, accepted, err := submitExternalMCPInput(context.Background(), submit, "planner", conversationID, content, map[string]string{"ticket": "123"}, "alice", nil, "public-1", harnessbridge.NoopActivationHook)
 
 	require.NoError(t, err)
+	assert.True(t, accepted)
 	require.NotNil(t, captured)
 	assert.Equal(t, events.SourceExternalMCP, captured.Source)
 	assert.Equal(t, "public-1", captured.Metadata["external_conversation_id"])
@@ -174,13 +176,14 @@ func TestSubmitExternalMCPInputWaitsForOwnQueuedTurnResult(t *testing.T) {
 		}
 	}()
 
-	recovered := events.NewMainInboundMessage(events.SourceExternalMCP, events.InboundKindPrompt, "", "recovered", false)
+	recovered := events.NewInboundMessage(events.SourceExternalMCP, events.InboundKindPrompt, "", "recovered", false)
 	queue <- queuedTurn{inbound: recovered, activation: harnessbridge.NoopActivationHook}
 
 	require.Equal(t, "recovered", <-started)
 
 	resultCh := make(chan externalmcp.SessionResult, 1)
 	errCh := make(chan error, 1)
+	conversationID := harnessbridge.SlackThreadConversationID("C123", "111.222")
 	submit := func(ctx context.Context, _ string, _ string, inbound *events.InboundMessage, activation harnessbridge.ActivationHook) error {
 		select {
 		case queue <- queuedTurn{inbound: inbound, activation: activation}:
@@ -198,7 +201,7 @@ func TestSubmitExternalMCPInputWaitsForOwnQueuedTurnResult(t *testing.T) {
 			return nil
 		}
 
-		result, err := submitExternalMCPInput(context.Background(), submit, "planner", "external_mcp:planner:private", content, nil, "", nil, "public-1", activation)
+		result, _, err := submitExternalMCPInput(context.Background(), submit, "planner", conversationID, content, nil, "", nil, "public-1", activation)
 		if err != nil {
 			errCh <- err
 
@@ -244,6 +247,250 @@ func TestExternalMCPInboundContentProvidesRelayAttachments(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"External MCP text file attachment report.txt (text/plain):\nreport"}, content.TextAttachments)
 	assert.Equal(t, []events.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}, outbound)
+}
+
+func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
+	store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, testLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
+
+	var (
+		mu        sync.Mutex
+		rootCount int
+	)
+
+	textRelay := func(_ context.Context, _ string, _ []events.OutboundAttachment, reply *events.InboundMessage, _ string) (*events.InboundMessage, error) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		if reply == nil {
+			rootCount++
+			return &events.InboundMessage{SlackReply: &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}}, nil
+		}
+
+		return reply, nil
+	}
+	submit := func(ctx context.Context, _ string, _ string, inbound *events.InboundMessage, activation harnessbridge.ActivationHook) error {
+		if err := activation(ctx, inbound); err != nil {
+			return err
+		}
+
+		inbound.CompleteResponse("answer", nil)
+
+		return nil
+	}
+	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops"}}}}
+	server, err := startExternalMCPServer(t.Context(), cfg, textRelay, func(context.Context, *events.InboundMessage) {}, func(context.Context, string) (string, error) { return "#ops", nil }, nil, func(string) bool { return true }, store, submit, testLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+	const calls = 8
+
+	errCh := make(chan error, calls)
+
+	var group sync.WaitGroup
+	for range calls {
+		group.Go(func() {
+			client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
+			transport := &mcp.StreamableClientTransport{Endpoint: server.URL(), HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}
+
+			session, err := client.Connect(t.Context(), transport, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+
+			_, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "shared-1", "agent": "planner", "input": "hello", "slack_channel": "#ops"}})
+
+			errClose := session.Close()
+			if errors.Is(errClose, context.Canceled) {
+				errClose = nil
+			}
+
+			errCh <- errors.Join(err, errClose)
+		})
+	}
+
+	group.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+
+	mu.Lock()
+	assert.Equal(t, 1, rootCount)
+	mu.Unlock()
+
+	session, ok, err := store.ExternalMCPSession("shared-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, harnessbridge.SlackThreadConversationID("C123", "111.222"), session.ConversationID)
+}
+
+func TestExternalMCPFollowupRelayAttemptsOnce(t *testing.T) {
+	store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, testLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
+
+	conversationID := harnessbridge.SlackThreadConversationID("C123", "111.222")
+	require.NoError(t, store.RegisterExternalMCPConversation("existing-1", &harnessbridge.ExternalMCPSessionState{Agent: "planner", ConversationID: conversationID, SlackChannel: "#ops"}))
+
+	relayCalls := 0
+	errRelay := errors.New("post failed")
+	textRelay := func(context.Context, string, []events.OutboundAttachment, *events.InboundMessage, string) (*events.InboundMessage, error) {
+		relayCalls++
+		return nil, errRelay
+	}
+	submit := func(ctx context.Context, _ string, _ string, inbound *events.InboundMessage, activation harnessbridge.ActivationHook) error {
+		return activation(ctx, inbound)
+	}
+	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops"}}}}
+	server, err := startExternalMCPServer(t.Context(), cfg, textRelay, func(context.Context, *events.InboundMessage) {}, func(context.Context, string) (string, error) { return "#ops", nil }, nil, func(string) bool { return true }, store, submit, testLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
+	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: server.URL(), HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = session.Close() })
+
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "existing-1", "agent": "planner", "input": "follow up", "slack_channel": "#ops"}})
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	assert.Equal(t, 1, relayCalls)
+}
+
+func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
+	for _, tt := range []struct {
+		name                string
+		prepare             func(*harnessbridge.SessionService) error
+		relayErr, submitErr error
+		resultErr           error
+		cancelAfterSubmit   bool
+		wantCleanup         bool
+		wantBinding         bool
+	}{
+		{name: "root creation", relayErr: errors.New("post failed")},
+		{name: "atomic persistence", prepare: func(store *harnessbridge.SessionService) error {
+			return store.UpsertThread(harnessbridge.SlackThreadConversationID("C123", "111.222"), harnessbridge.ThreadState{Agent: "existing"})
+		}, wantCleanup: true},
+		{name: "first submit", submitErr: errors.New("submit failed"), wantCleanup: true},
+		{name: "provider error after acceptance", resultErr: errors.New("provider failed"), wantBinding: true},
+		{name: "caller cancellation after acceptance", cancelAfterSubmit: true, wantBinding: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, testLogger())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
+
+			if tt.prepare != nil {
+				require.NoError(t, tt.prepare(store))
+			}
+
+			cleanupCalls := 0
+			relayCalls := 0
+			textRelay := func(context.Context, string, []events.OutboundAttachment, *events.InboundMessage, string) (*events.InboundMessage, error) {
+				relayCalls++
+
+				if tt.relayErr != nil {
+					return nil, tt.relayErr
+				}
+
+				return &events.InboundMessage{SlackReply: &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}}, nil
+			}
+			cleanup := func(context.Context, *events.InboundMessage) { cleanupCalls++ }
+
+			callCtx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
+			submit := func(_ context.Context, _ string, _ string, inbound *events.InboundMessage, _ harnessbridge.ActivationHook) error {
+				if tt.submitErr != nil {
+					return tt.submitErr
+				}
+
+				switch {
+				case tt.cancelAfterSubmit:
+					cancel()
+				case tt.resultErr != nil:
+					inbound.CompleteResponse("", tt.resultErr)
+				default:
+					inbound.CompleteResponse("answer", nil)
+				}
+
+				return nil
+			}
+			cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops"}}}}
+			server, err := startExternalMCPServer(t.Context(), cfg, textRelay, cleanup, func(context.Context, string) (string, error) { return "#ops", nil }, nil, func(string) bool { return true }, store, submit, testLogger())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+			client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
+			session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: server.URL(), HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = session.Close() })
+
+			_, _ = session.CallTool(callCtx, &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "failed-1", "agent": "planner", "input": "hello", "slack_channel": "#ops"}})
+
+			_, ok, err := store.ExternalMCPSession("failed-1")
+			require.NoError(t, err)
+			assert.Equal(t, 1, relayCalls)
+			assert.Equal(t, tt.wantBinding, ok)
+			assert.Equal(t, tt.wantCleanup, cleanupCalls == 1)
+		})
+	}
+}
+
+func TestKeyedConversationLocksSerializeOneIDAndReleaseEntries(t *testing.T) {
+	locks := newKeyedConversationLocks()
+	unlockFirst := locks.lock("shared")
+	acquired := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		unlockSecond := locks.lock("shared")
+
+		close(acquired)
+		<-releaseSecond
+		unlockSecond()
+		close(done)
+	}()
+
+	select {
+	case <-acquired:
+		t.Fatal("same conversation lock overtook first holder")
+	default:
+	}
+
+	unlockFirst()
+	<-acquired
+	close(releaseSecond)
+	<-done
+
+	locks.mu.Lock()
+	assert.Empty(t, locks.locks)
+	locks.mu.Unlock()
+}
+
+func TestKeyedConversationLocksAllowIndependentIDs(t *testing.T) {
+	locks := newKeyedConversationLocks()
+	unlockFirst := locks.lock("first")
+	unlockedSecond := make(chan struct{})
+
+	go func() {
+		unlockSecond := locks.lock("second")
+		unlockSecond()
+		close(unlockedSecond)
+	}()
+
+	select {
+	case <-unlockedSecond:
+	case <-time.After(time.Second):
+		t.Fatal("independent conversation ID was blocked")
+	}
+
+	unlockFirst()
 }
 
 func testLogger() *slog.Logger {

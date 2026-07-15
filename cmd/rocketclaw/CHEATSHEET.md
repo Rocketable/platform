@@ -4,35 +4,27 @@
 
 | Emoji | Aliases | Surface | What It Does | Notes |
 | --- | --- | --- | --- | --- |
-| `🧵` | `:thread:` | Slack | Starts a managed conversation using the configured `thread_agents` entry. | Default config maps `🧵` to agent `main` without pre-seeding. Leading known aliases are normalized before matching. |
-| `🔀` | `:twisted_rightward_arrows:` | Slack | Starts a managed conversation using the configured `thread_agents` entry. | Default config maps this to agent `main` with `pre_seed: true`. |
-| Configured `thread_agents` emoji or prefix | Config-specific | Slack | Starts a managed conversation with the configured agent and pre-seed behavior. | Prefixes may be aliases or Unicode emoji. Unknown aliases remain literal, so custom aliases can still be configured. |
 | `🔁` | Slack `:repeat:` | Slack | Starts a text goal loop. | Syntax: `🔁 [maxTurns: VALUE|maxTurns:VALUE] [checkScript: VALUE|checkScript:VALUE] OBJECTIVE`. |
 | `🏁` | Slack `:checkered_flag:` | Slack | Starts a text goal loop. | Same grammar as `🔁`. |
-| `🛑`, `⏹️` | Slack reactions `:octagonal_sign:`, `:stop_button:` | Slack | Stops the active main or managed-conversation turn. | Works as an exact message. Also works as a stop reaction on supported managed/main turn surfaces. Stop feedback is marker-only: RocketClaw adds `❗` and sends no stop text. |
+| `🛑`, `⏹️` | Slack reactions `:octagonal_sign:`, `:stop_button:` | Slack | Stops the active managed-conversation turn. | Works as an exact message or reaction in a managed thread. Stop feedback is marker-only: RocketClaw adds `❗` and sends no stop text. |
 | `❗` | Slack `:exclamation:` | Slack | Interruption or rejection marker. | Added by RocketClaw after stop/interruption and for duplicate active-goal rejection. Humans generally do not use this as a command. |
-| `✅` | Slack `:white_check_mark:` | Slack | Completion marker. | Added when a goal reaches `complete`; Slack also uses it for successful summary completion. Not added for `blocked`, `stopped`, or `budget_exhausted`. |
-| `💾` | Slack `:floppy_disk:` | Slack | Summarizes a managed conversation back to main. | Requires the configured/authorized human or social-mode allowed user. |
+| `✅` | Slack `:white_check_mark:` | Slack | Completion marker. | Added when a goal reaches `complete`. Not added for `blocked`, `stopped`, or `budget_exhausted`. |
 | `🔂` | `:repeat_one:`, Slack reaction `repeat_one` | Slack | Runs a one-off cron request by text prefix or reaction. | Examples: `🔂 daily`, `🔂 daily.md`. Reaction reruns inspect the acted-on message and require exactly one deterministic cron target. |
-| `🎛` | `:control_knobs:` | Slack social-mode managed conversations | Switches the persisted agent for the managed conversation. | `🎛 agent-name` switches to a configured channel agent. Bare `🎛` opens an agent selector usable only by the user who sent the control message. Does not route to RocketCode as prompt input. |
+| `🎛` | `:control_knobs:` | Slack managed conversations | Switches the persisted agent for the managed conversation. | `🎛 agent-name` switches to a configured channel agent. Bare `🎛` opens an agent selector usable only by the user who sent the control message. Does not route to RocketCode as prompt input. |
 | `🤖` | Slack `:robot_face:` | Slack | Processing/accepted marker. | Added when RocketClaw accepts a Slack-originated or relayed turn; removed after final response delivery. |
-| `⏳` | Slack `:hourglass_flowing_sand:` | Slack | Buffered or in-progress marker. | Marks stacked/buffered Slack messages and summary-in-progress state. Removed when processing advances or summary finishes. |
+| `⏳` | Slack `:hourglass_flowing_sand:` | Slack | Buffered or in-progress marker. | Marks stacked or buffered Slack messages. Removed when processing advances. |
 | `📡` | Slack `:satellite_antenna:` | Slack | External MCP relay marker. | Added to Slack relay messages created from External MCP prompts. |
 
-## DM And Social Mode Scenarios
+## Slack Channel Scenarios
 
 | Scenario | How To Trigger | Notes |
 | --- | --- | --- |
-| DM thread | `🧵 prompt` in a configured-human DM. | Starts a managed DM conversation using the default `main` agent unless `thread_agents` changes the prefix mapping. |
-| DM thread with seed | `🔀 prompt` in a configured-human DM. | Starts a managed DM conversation with `pre_seed: true`, seeding from existing main context when available. |
-| DM thread from a DM response | Reply in a supported response-rooted thread under a RocketClaw DM response. | Response-rooted text conversations stay isolated from `main` until summarized. |
-| Custom emoji for special DM threads | Configure a `thread_agents` prefix such as `🏭` or `:factory:`. | A non-empty `thread_agents` map replaces the defaults, so include `🧵` and `🔀` mappings if you still want them. |
-| Internalize thread | `💾` in a managed or response-rooted conversation. | Summarizes the conversation back to `main` as an internalized note. RocketClaw does not send a normal visible answer for the internalized note itself. |
-| Social Mode start | Mention the RocketClaw bot/app in a configured social-mode channel. | New social-mode conversations use the first agent in that channel's configured `agents` list. Literal `@AgentName` is not an agent-selection command. |
-| Social Mode with another human mention | Mention RocketClaw too when the message also pings another person, bot, broadcast target, or user group. | Slack social-mode thread replies that ping someone else are suppressed unless RocketClaw is also mentioned. Raw unresolved `@word` text is not treated as a Slack ping. |
-| Social Mode internalize thread | `💾` from an authorized user in the managed conversation. | Uses the same summary/internalize behavior as DM managed conversations. |
-| Social Mode agent switch | `🎛 agent-name` or bare `🎛` as the whole message. | `agent-name` must be in the channel's configured `agents` list. Bare `🎛` opens a Slack-native selector for that list. |
-| One-off cron | `🔂 daily`, `🔂 daily.md`, or a supported `repeat_one` reaction. | DM one-off cron can run any top-level cron. Channel requests and reruns are restricted to cronjobs targeting that connector channel. |
+| Start a conversation | Mention the RocketClaw bot/app in a configured channel. | Starts a fresh managed thread using the first agent in that channel's ordered `agents` list. The mention is the first turn. |
+| Continue a conversation | Reply in a known managed thread. | Uses only that thread's persisted history. |
+| Message with another human mention | Mention RocketClaw too when the message also pings another person, bot, broadcast target, or user group. | Managed-thread replies that ping someone else are suppressed unless RocketClaw is also mentioned. Raw unresolved `@word` text is not treated as a Slack ping. |
+| Agent switch | `🎛 agent-name` or bare `🎛` as the whole message. | `agent-name` must be in the channel's configured `agents` list. Bare `🎛` opens a Slack-native selector for that list. |
+| One-off cron | `🔂 daily`, `🔂 daily.md`, or a supported `repeat_one` reaction. | Requests and reruns can run cronjobs whose required `channel` matches the acted-on configured channel. |
+| External MCP conversation | Call `session_prompt` with an external conversation ID and configured channel. | The ID owns one Slack thread and one history shared by MCP turns and authorized Slack replies. Later calls use the same channel. |
 
 ## Goal Examples
 
@@ -46,7 +38,7 @@
 | `🏁 checkScript: "./scripts/check.sh --full" ship the release` | Uses a quoted simple command for the check script. |
 | `🏁 checkScript:"./scripts/check.sh --full" ship the release` | Same as above with the quoted command attached directly after `:`. |
 | `🔁 ship the release` | Same goal-loop grammar as `🏁`; `🏁` and `🔁` are equivalent triggers. |
-| `🛑` or `⏹️` | Stops the active main or managed-conversation turn. If an active goal is present, it becomes `stopped`. |
+| `🛑` or `⏹️` | Stops the active managed-conversation turn. If an active goal is present, it becomes `stopped`. |
 | `✅` | Marker RocketClaw adds when a goal reaches `complete`. Humans generally do not send it as a command. |
 
 | Goal Parameter | Accepted Values | Meaning |
@@ -56,50 +48,27 @@
 | `maxTurns:` | `0`, `-1`, `infinite` | Infinite goal budget. Progress shows `_Pursuing Goal..._`. |
 | `checkScript:` | Workspace-local safe simple command | Runs when the model calls `rocketclaw_update_goal` with `complete`; failure keeps the goal active. |
 
-## `thread_agents` Examples
-
-Alias prefix mapped to a custom agent:
+## Channel Configuration Example
 
 ```json
-"thread_agents": {
-  ":thread:": {
-    "agent": "main",
-    "pre_seed": false
-  },
-  ":factory:": {
-    "agent": "factory",
-    "pre_seed": false
-  }
+"slack": {
+  "bot_token": "xoxb-...",
+  "app_token": "xapp-...",
+  "channels": [
+    {
+      "channel": "#ops",
+      "agents": ["main", "factory"],
+      "allowed_user_ids": ["U0123456789"]
+    }
+  ]
 }
 ```
 
-Result: `🏭 build the release` starts a managed conversation with agent `factory` and prompt `build the release`.
+New `#ops` conversations use agent `main`. Authorized replies can select `factory` with `🎛 factory` or the native selector.
 
-Unicode emoji prefix mapped to a custom agent:
+## State Upgrades
 
-```json
-"thread_agents": {
-  "🏭": {
-    "agent": "factory",
-    "pre_seed": false
-  }
-}
-```
-
-Result: `🏭 build the release` starts a managed conversation with agent `factory` and prompt `build the release`.
-
-Pre-seeded default thread:
-
-```json
-"thread_agents": {
-  ":twisted_rightward_arrows:": {
-    "agent": "main",
-    "pre_seed": true
-  }
-}
-```
-
-Result: `🔀 continue from main context` starts a managed conversation with agent `main` and pre-seeds it from existing context.
+State schema upgrades are one-way. Back up `.rocketclaw/state.sqlite3` before upgrading when rollback may be needed; rollback requires restoring that backup.
 
 ## RocketClaw Tools
 
@@ -112,7 +81,7 @@ RocketClaw injects these tools into RocketCode turns. Most are auto-allowed by R
 | `rocketclaw_reset_scheduled_messages` | Persistent bridge turns and raw/cron runs. | Treat as part of the schedule-message permission family. Deny `rocketclaw_schedule_message` to block schedule reset behavior. | Clears scheduled messages for the current conversation. |
 | `rocketclaw_attach_files_to_response` | Persistent bridge turns and raw/cron runs. | Auto-allow unless explicitly denied. | Attaches collected files to the final outbound response through RocketClaw's shared response-attachment path. |
 | `rocketclaw_update_goal` | Persistent bridge turns only, and only when the current text conversation has an active goal. | Auto-allow unless explicitly denied, but hidden when no active goal exists. | Reports goal status as `progress`, `complete`, or `blocked` with an optional note. `complete` runs any configured `checkScript:` before the goal becomes complete. |
-| `rocketclaw_start_new_thread` | Qualifying human-originated Slack turns with a native originating surface. | Default-deny. Requires explicit per-agent `allow`; missing, `auto`, or `deny` keeps it unavailable. | Creates a new managed conversation on the same native surface, inherits source conversation context, and submits the tool prompt as the first task. It is never exposed for cron, MCP, scheduled/system/automation, or automatic goal continuation turns. |
+| `rocketclaw_start_new_thread` | Qualifying human-originated managed Slack turns. | Default-deny. Requires explicit per-agent `allow`; missing, `auto`, or `deny` keeps it unavailable. | Creates a fresh managed conversation in the same configured channel and submits the literal tool prompt as its first turn. It is never exposed for cron, MCP, scheduled/system/automation, or automatic goal continuation turns. |
 | `rocketclaw_i_want_human_partner_to_see_this` | Raw/cron runs only. | Auto-allow in raw/cron tool mode unless explicitly denied by the cron agent. | Required raw-run completion tool. Its argument is the exact human-visible output, or an empty string for silence. |
 | `ask_user_question` | Qualifying human-originated Slack turns with a native answer path. | Auto-allow unless explicitly denied, but hidden when the turn has no answer path. | Asks the originating human through native UI, blocks until answered or canceled, and returns selected options and/or custom text. Not exposed for cron/raw, MCP, scheduled/system/automation, automatic goal continuations, or restart recovery continuations. |
 
@@ -122,16 +91,12 @@ For general `permission` syntax, action values, guardrails, and approval reviewe
 
 | Emoji | Alias or Reaction Name | Meaning |
 | --- | --- | --- |
-| `🧵` | `:thread:` | Default managed conversation prefix. |
-| `🔀` | `:twisted_rightward_arrows:` | Pre-seeded managed conversation prefix. |
-| `🏭` | `:factory:` | Example custom `thread_agents` prefix. |
 | `🔁` | `:repeat:` | Goal loop prefix. |
 | `🏁` | `:checkered_flag:` | Goal loop prefix. |
 | `🛑` | `:octagonal_sign:`, `octagonal_sign` | Stop command or reaction. |
 | `⏹️` | `:stop_button:`, `stop_button` | Stop command or reaction. |
 | `❗` | `:exclamation:`, `exclamation` | Interruption or rejection marker. |
 | `✅` | `:white_check_mark:`, `white_check_mark` | Completion marker. |
-| `💾` | `:floppy_disk:`, `floppy_disk` | Managed conversation summary command. |
 | `🔂` | `:repeat_one:`, `repeat_one` | Cron one-off request prefix or reaction. |
 | `🎛` | `:control_knobs:` | Managed conversation agent switch command. |
 | `🤖` | `:robot_face:`, `robot_face` | Slack processing/accepted marker. |
@@ -240,7 +205,7 @@ Running `rocketclaw` without a subcommand starts the server when `femtoclaw.json
 | `rocketclaw agent-graph [next|current]` | Prints the effective RocketCode task delegation and guardrail graph as Graphviz/DOT. Defaults to `next`. |
 | `rocketclaw oai login [--headless]` | Authenticates RocketClaw to ChatGPT for RocketCode model requests and writes the selected runtime `auth.json`. |
 | `rocketclaw fc list [--since 24h|RFC3339] [--until RFC3339] [--limit N] [--no-message-preview]` | Lists stored RocketCode sessions. |
-| `rocketclaw fc observe [--follow|-f] [conversation-id]` | Prints stored session entries as JSONL; defaults to `main`. |
+| `rocketclaw fc observe [--follow|-f] <conversation-id>` | Prints one conversation's stored session entries as JSONL. The conversation ID is required. |
 | `rocketclaw fc delete <conversation-id>` | Deletes a stored session when the daemon does not own the state store. |
 | `rocketclaw help`, `rocketclaw -h`, `rocketclaw --help` | Prints top-level help. |
 

@@ -15,7 +15,7 @@ func TestRunDoctorReportsRuntime(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, defaultConfigPath), []byte(`{
 		"workspace": ".",
 		"openai": {"api_key": "test-key"},
-		"slack": {"enabled": true, "bot_token": "xoxb-test", "app_token": "xapp-test", "room": "D123", "human_user_id": "U123"},
+		"slack": {"bot_token": "xoxb-test", "app_token": "xapp-test", "channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
 		"mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
 	}`), 0o600))
 
@@ -23,7 +23,7 @@ func TestRunDoctorReportsRuntime(t *testing.T) {
 	require.Contains(t, output, "Configuration: OK (rocketclaw.json)")
 	require.Contains(t, output, "Workspace: "+workspace)
 	require.Contains(t, output, "Work directory: .rocketclaw")
-	require.Contains(t, output, "Slack: true")
+	require.Contains(t, output, "Slack: active")
 	require.Contains(t, output, "External MCP: true")
 	require.Contains(t, output, "RocketCode: OK (library)")
 }
@@ -35,11 +35,13 @@ func TestRunDoctorReportsLegacyConfigAndWorkDir(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, defaultConfigPath), []byte(`{
 		"workspace": ".",
 		"openai": {"api_key": "rocket-key"},
+		"slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
 		"mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
 	}`), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, legacyConfigPath), []byte(`{
 		"workspace": ".",
 		"openai": {"api_key": "legacy-key"},
+		"slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
 		"mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
 	}`), 0o600))
 
@@ -65,6 +67,7 @@ func TestRunDoctorReportsOutputWriteError(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, defaultConfigPath), []byte(`{
 		"workspace": ".",
 		"openai": {"api_key": "test-key"},
+		"slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
 		"mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
 	}`), 0o600))
 

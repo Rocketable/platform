@@ -36,7 +36,6 @@ func runServe(args []string) error {
 		"workspace", cfg.Workspace,
 		"work_dir", cfg.RuntimeDirName(),
 		"log_level", cfg.Logging.Level,
-		"slack_enabled", cfg.Slack.Enabled,
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

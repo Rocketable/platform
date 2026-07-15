@@ -30,6 +30,10 @@ func (f *fakeStartupRecoveryStore) ClearActiveTurn(_ context.Context, turnID str
 	return nil
 }
 
+func (f *fakeStartupRecoveryStore) Thread(conversationID string) (harnessbridge.ThreadState, bool, error) {
+	return harnessbridge.ThreadState{Agent: "main"}, conversationID != "unknown", nil
+}
+
 func TestRecoverStartupActiveTurnsSelectsAtMostOnePerConversation(t *testing.T) {
 	replay := startupRecoveryReplayInput(t)
 	store := &fakeStartupRecoveryStore{turns: []harnessbridge.ActiveTurnState{

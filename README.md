@@ -34,11 +34,17 @@ Runnable entry points:
 
 ### RocketClaw
 
-`internal/rocketclaw` is the long-running service runtime around RocketCode. It provides persistent conversations, Slack connector handling, external MCP, cron-defined background prompts, one-shot and recurring scheduled messages, inbound and outbound attachments, supervisor restart, and SQLite state under the selected runtime directory.
+`internal/rocketclaw` is the long-running service runtime around RocketCode. It provides thread-local conversations in configured Slack channels, external MCP, cron-defined background prompts, one-shot and recurring scheduled messages, inbound and outbound attachments, supervisor restart, and SQLite state under the selected runtime directory.
 
 The runnable entry point is `cmd/rocketclaw`. Run `rocketclaw help` for setup, validation, session inspection, and operational commands.
 
 Slack native forwarded-thread expansion requires the bot scopes `channels:read` and `channels:history`; reinstall the Slack app after adding scopes. RocketClaw expands only source channels Slack confirms are public and that the bot can already read. It never auto-joins a channel. Private, inaccessible, malformed, or partially unreadable source threads retain only Slack's forwarded preview.
+
+Slack configuration uses direct `slack.channels` mappings. Each mapping names a channel, an ordered non-empty `agents` list, and its authorized `allowed_user_ids`. An authorized app mention in a configured channel starts a fresh managed thread whose initiating message is its first turn. Later replies use only that thread's persisted history.
+
+External MCP exposes `session_prompt`. Every call supplies a configured Slack channel. A new external conversation ID creates one Slack thread in that channel; later calls with that ID and authorized Slack replies share the same thread and history. The channel remains required and unchanged for the life of the external conversation.
+
+Every active `cron/*.md` definition declares a quoted `channel` that matches a configured Slack channel. Empty completion output is silent; non-empty output starts a fresh managed thread in that channel.
 
 ### Supporting Tools
 
@@ -77,11 +83,13 @@ For local CLI experimentation, `rocketcode` and `rocketloop` run RocketCode dire
 
 RocketClaw is configured with `rocketclaw.json` in the working directory. Runtime state is local to the selected workspace:
 
-- `.rocketclaw/state.sqlite3`: sessions, active-turn restart handoffs, connector routing, scheduled messages, external MCP sessions, restart notifications, and goal-loop state.
+- `.rocketclaw/state.sqlite3`: thread-local sessions, active-turn restart handoffs, managed Slack routing, External MCP conversation-to-thread bindings, scheduled messages, cron execution state, restart notifications, and goal-loop state.
 - `.rocketclaw/overlays/`: configured git overlay clones for runtime assets.
 - `.rocketclaw/.rocketcode/`: RocketCode shell output and transient artifacts.
 
 Generated runtime state should not be treated as source code.
+
+State upgrades are one-way. Back up `.rocketclaw/state.sqlite3` before upgrading when rollback may be needed; rollback after migration requires restoring that backup.
 
 Agent files must declare `model` frontmatter. Use a concrete model such as `gpt-5.5`, or map a deployment-specific name in `rocketclaw.json` or `femtoclaw.json`:
 

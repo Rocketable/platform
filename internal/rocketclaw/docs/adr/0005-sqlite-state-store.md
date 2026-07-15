@@ -13,7 +13,9 @@ This ADR governs RocketClaw access to `<runtime-dir>/state.sqlite3`, including d
 
 ## Context
 
-RocketClaw stores persistent RocketCode sessions, managed thread routing, response checkpoints, active-turn restart handoff rows, external MCP mappings, scheduled messages, scheduled cron execution state, text connector goal-loop state, and restart notifications in one workspace-local SQLite file. The daemon and operational commands may access that file concurrently from separate processes. Divergent open paths, SQLite PRAGMAs, or connection limits would make lock behavior and durability depend on which interface touched the file.
+RocketClaw stores thread-local RocketCode sessions, managed Slack thread routing, explicit External MCP conversation-to-Slack-thread bindings, active-turn restart handoff rows, scheduled messages, scheduled cron execution state, goal-loop state, and restart notifications in one workspace-local SQLite file. The daemon and operational commands may access the file concurrently from separate processes. Divergent open paths, SQLite PRAGMAs, or connection limits would make lock behavior and durability depend on which interface touched the file.
+
+The one-way migration retains valid thread-local conversations and creates explicit conversation-to-thread bindings from valid External MCP Slack associations. Conversation cleanup is keyed by conversation identity rather than selected agent name.
 
 ## Normative Contracts
 
@@ -117,3 +119,4 @@ For newly created state stores, `PRAGMA page_size = 4096` and `PRAGMA auto_vacuu
 - 2026-07-04: Added scheduled cron execution state to the centralized SQLite state store contract.
 - 2026-07-04: Moved state-store quick-check and copy-first corruption recovery from daemon startup to explicit `rocketclaw fc check`, which refuses while the daemon owns the state-store lock.
 - 2026-07-07: Added active-turn restart handoff rows to the centralized SQLite state store contract.
+- 2026-07-15: Defined the centralized state inventory to include thread-local sessions, explicit External MCP Slack-thread bindings, and active-turn recovery.

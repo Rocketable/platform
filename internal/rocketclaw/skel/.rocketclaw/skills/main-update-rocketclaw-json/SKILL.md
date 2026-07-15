@@ -67,13 +67,13 @@ Examples:
 Read a value:
 
 ```bash
-jq '.slack.room' "rocketclaw.json"
+jq '.slack.channels' "rocketclaw.json"
 ```
 
-Set a string value safely:
+Set the first configured channel safely:
 
 ```bash
-tmp=$(mktemp "${TMPDIR:-/tmp}/rocketclaw-json-XXXXXX") && jq --arg v "D0123456789" '.slack.room = $v' "rocketclaw.json" > "$tmp" && jq empty "$tmp" >/dev/null && mv "$tmp" "rocketclaw.json"
+tmp=$(mktemp "${TMPDIR:-/tmp}/rocketclaw-json-XXXXXX") && jq --arg v "#ops" '.slack.channels[0].channel = $v' "rocketclaw.json" > "$tmp" && jq empty "$tmp" >/dev/null && mv "$tmp" "rocketclaw.json"
 ```
 
 Set a boolean or number safely:
@@ -106,6 +106,8 @@ When the human asks for a config change in plain English:
 - if the target path or intended type is ambiguous, ask a clarifying question before writing
 
 The top-level `models` object maps arbitrary placeholder names to deployment model names. Agent frontmatter uses a mapping as `model: '{{ model "name" }}'`.
+
+Slack uses direct `slack.channels` mappings. Each mapping requires `channel`, a non-empty ordered `agents` list, and non-empty `allowed_user_ids`. External MCP `session_prompt` calls and active cron definitions each require one of these configured channels. One External MCP conversation ID remains bound to one Slack thread and its shared thread-local history.
 
 Use `jq` operations for arrays and object updates instead of rewriting large sections by hand.
 

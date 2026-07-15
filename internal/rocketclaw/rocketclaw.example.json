@@ -15,16 +15,6 @@
   "emergency_safe_words": [
     "stop"
   ],
-  "thread_agents": {
-    ":thread:": {
-      "agent": "main",
-      "pre_seed": false
-    },
-    ":factory:": {
-      "agent": "factory",
-      "pre_seed": false
-    }
-  },
   "logging": {
     "level": "debug"
   },
@@ -33,26 +23,20 @@
     "listen_addr": "127.0.0.1:8765"
   },
   "slack": {
-    "enabled": true,
     "bot_token": "xoxb-...",
     "app_token": "xapp-...",
-    "room": "D0123456789",
-    "human_user_id": "U0123456789",
-    "social_mode": {
-      "enabled": false,
-      "channels": [
-        {
-          "channel": "#channel-name",
-          "agents": [
-            "main"
-          ],
-          "allowed_user_ids": [
-            "U0987654321"
-          ]
-        }
-      ],
-      "context_messages": 10
-    }
+    "channels": [
+      {
+        "channel": "#channel-name",
+        "agents": [
+          "main",
+          "factory"
+        ],
+        "allowed_user_ids": [
+          "U0987654321"
+        ]
+      }
+    ]
   },
   "openai": {
     "api_key": "sk-...",
@@ -60,7 +44,6 @@
     "rocketcode_auth": "api_key"
   },
   "auto_approver_model": "",
-  "seed_compaction_model": "",
   "instrumentation": {
     "enabled": false,
     "collector_endpoint": "http://localhost:6006",

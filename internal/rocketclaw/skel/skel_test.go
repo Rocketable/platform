@@ -2,6 +2,8 @@ package skel
 
 import (
 	"errors"
+	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -705,6 +707,65 @@ func TestEmbeddedCreateOrUpdateSkillsMentionLint(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(skillSkill), "rocketclaw lint")
 	assert.Contains(t, string(skillSkill), "behavior, permission guidance, task delegation, or scripts")
+}
+
+func TestEmbeddedCronExamplesUseQuotedConfiguredChannels(t *testing.T) {
+	examples, err := fs.Glob(payload, "cron/*.example.md")
+	require.NoError(t, err)
+	require.NotEmpty(t, examples)
+
+	for _, example := range examples {
+		data, err := payload.ReadFile(example)
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "channel: \"#ops\"", example)
+	}
+}
+
+func TestEmbeddedConfigurationSkillsRequireConfiguredChannels(t *testing.T) {
+	cronSkill, err := payload.ReadFile(".rocketclaw/skills/main-update-cron-or-heartbeat/SKILL.md")
+	require.NoError(t, err)
+	assert.Contains(t, string(cronSkill), "Every active cron definition must set `channel:`")
+	assert.Contains(t, string(cronSkill), "channel listed in `slack.channels`")
+
+	configSkill, err := payload.ReadFile(".rocketclaw/skills/main-update-rocketclaw-json/SKILL.md")
+	require.NoError(t, err)
+	assert.Contains(t, string(configSkill), "External MCP `session_prompt` calls and active cron definitions each require one of these configured channels")
+}
+
+func TestEmbeddedCurrentDocumentationOmitsDeletedConceptInstructions(t *testing.T) {
+	removed := []string{
+		"`thread_agents`",
+		"`pre_seed`",
+		"`context_messages`",
+		"`seed_compaction_model`",
+		"social-mode",
+		"social mode",
+		"Defaults to main",
+		"summarizes a managed conversation back to main",
+		"inherits source conversation context",
+		"response-rooted",
+	}
+
+	require.NoError(t, fs.WalkDir(payload, ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return fmt.Errorf("walk embedded documentation %s: %w", path, err)
+		}
+
+		if entry.IsDir() || filepath.Ext(path) != ".md" {
+			return nil
+		}
+
+		data, err := payload.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read embedded documentation %s: %w", path, err)
+		}
+
+		for _, phrase := range removed {
+			assert.NotContains(t, string(data), phrase, path)
+		}
+
+		return nil
+	}))
 }
 
 func TestSyncEffectiveRuntimeAssetsDoesNotMutateRuntimeOrScriptSymlinks(t *testing.T) {

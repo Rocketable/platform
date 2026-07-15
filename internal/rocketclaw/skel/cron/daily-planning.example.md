@@ -1,8 +1,9 @@
 ---
 schedule: 0 9 * * 1-5
+channel: "#ops"
 ---
 
-Review the recent conversation and current workspace context.
+Review the current workspace context.
 
 If there are unfinished threads, prepare a short, prioritized plan for today.
 

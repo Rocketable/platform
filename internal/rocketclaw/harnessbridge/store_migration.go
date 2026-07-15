@@ -53,45 +53,15 @@ func migrateSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) erro
 		migrated = true
 	}
 
-	if version == 2 {
+	if version == 2 || version == 3 {
 		logger.Info("adding rocketclaw active-turn restart handoff schema")
 
 		if err := migrateActiveTurnSourceMetadata(ctx, tx, logger); err != nil {
 			return err
 		}
-
-		if err := migrateActiveTurnRowExistence(ctx, tx, logger); err != nil {
-			return err
-		}
-
-		logger.Info("setting rocketclaw state schema version", "version", sessionDBSchemaVersion)
-
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sessionDBSchemaVersion)); err != nil {
-			return fmt.Errorf("set rocketclaw state schema version: %w", err)
-		}
-
-		migrated = true
 	}
 
-	if version == 3 {
-		if err := migrateActiveTurnSourceMetadata(ctx, tx, logger); err != nil {
-			return err
-		}
-
-		if err := migrateActiveTurnRowExistence(ctx, tx, logger); err != nil {
-			return err
-		}
-
-		logger.Info("setting rocketclaw state schema version", "version", sessionDBSchemaVersion)
-
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sessionDBSchemaVersion)); err != nil {
-			return fmt.Errorf("set rocketclaw state schema version: %w", err)
-		}
-
-		migrated = true
-	}
-
-	if version == 4 {
+	if version >= 2 && version <= 4 {
 		if err := migrateActiveTurnRowExistence(ctx, tx, logger); err != nil {
 			return err
 		}
@@ -118,7 +88,6 @@ func migrateSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) erro
 			"threads", len(state.Threads),
 			"goals", len(state.Goals),
 			"external_mcp_sessions", len(state.ExternalMCPSessions),
-			"response_checkpoints", len(state.ResponseCheckpoints),
 			"scheduled_messages", len(state.ScheduledMessages),
 			"pending_restart_notifications", len(state.PendingRestartNotifications),
 		)
@@ -138,6 +107,27 @@ func migrateSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) erro
 		logger.Info("rocketclaw state schema already current", "version", version)
 	}
 
+	if version == 6 {
+		migratedExternalMCP, err := migrateExternalMCPSessionState(ctx, tx, version)
+		if err != nil {
+			return err
+		}
+
+		migrated = migrated || migratedExternalMCP
+	}
+
+	if version <= 6 {
+		if err := migrateChannelOnlyState(ctx, tx); err != nil {
+			return err
+		}
+
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sessionDBSchemaVersion)); err != nil {
+			return fmt.Errorf("set rocketclaw state schema version: %w", err)
+		}
+
+		migrated = true
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit session db migration: %w", err)
 	}
@@ -149,6 +139,139 @@ func migrateSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) erro
 	}
 
 	return nil
+}
+
+func migrateExternalMCPSessionState(ctx context.Context, tx *sql.Tx, version int) (bool, error) {
+	if version != 6 {
+		return false, nil
+	}
+
+	for _, statement := range []string{
+		`CREATE TABLE external_mcp_sessions_v7 (external_conversation_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL UNIQUE, agent TEXT NOT NULL, slack_channel TEXT NOT NULL)`,
+		`INSERT INTO external_mcp_sessions_v7 SELECT external_conversation_id, conversation_id, agent, slack_channel FROM external_mcp_sessions WHERE trim(slack_channel) <> '' AND conversation_id LIKE 'slack-thread:%' AND instr(substr(conversation_id, 14), ':') > 1 AND trim(substr(substr(conversation_id, 14), instr(substr(conversation_id, 14), ':') + 1)) <> ''`,
+		`DROP TABLE external_mcp_sessions`,
+		`ALTER TABLE external_mcp_sessions_v7 RENAME TO external_mcp_sessions`,
+	} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return false, fmt.Errorf("migrate external MCP session state: %w", err)
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sessionDBSchemaVersion)); err != nil {
+		return false, fmt.Errorf("set rocketclaw state schema version: %w", err)
+	}
+
+	return true, nil
+}
+
+func migrateChannelOnlyState(ctx context.Context, tx stateStoreDB) error {
+	hasSeeded, err := tableHasColumn(ctx, tx, "managed_conversations", "seeded_from_response")
+	if err != nil {
+		return err
+	}
+
+	if !hasSeeded {
+		hasSlackChannel, err := tableHasColumn(ctx, tx, "external_mcp_sessions", "slack_channel")
+		if err != nil {
+			return err
+		}
+
+		statements := []string{}
+		if !hasSlackChannel {
+			statements = append(statements,
+				`DROP TABLE external_mcp_sessions`,
+				`CREATE TABLE external_mcp_sessions (external_conversation_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL UNIQUE, agent TEXT NOT NULL, slack_channel TEXT NOT NULL)`,
+			)
+		}
+
+		statements = append(statements,
+			`DELETE FROM external_mcp_sessions WHERE trim(slack_channel) = '' OR conversation_id NOT LIKE 'slack-thread:%' OR conversation_id LIKE 'slack-thread:D%'`,
+			`DELETE FROM session_entries WHERE conversation_id = 'main' OR conversation_id LIKE 'slack-thread:D%' OR json_extract(entry_json, '$.type') IN ('main_thread_seed', 'conversation_thread_seed', 'response_thread_seed', 'cron_thread_seed')`,
+			`DELETE FROM conversation_goals WHERE conversation_id = 'main' OR conversation_id LIKE 'slack-thread:D%'`,
+			`DELETE FROM scheduled_messages WHERE conversation_id = 'main' OR conversation_id LIKE 'slack-thread:D%'`,
+			`DELETE FROM pending_restart_notifications WHERE conversation_id = 'main' OR conversation_id LIKE 'slack-thread:D%'`,
+			`DELETE FROM active_turns WHERE conversation_id = 'main' OR conversation_id LIKE 'slack-thread:D%' OR conversation_id NOT IN (SELECT conversation_id FROM managed_conversations)`,
+			`DELETE FROM managed_conversations WHERE conversation_id = 'main' OR conversation_id LIKE 'slack-thread:D%'`,
+			`DROP TABLE IF EXISTS response_checkpoints`,
+		)
+		for _, statement := range statements {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("migrate channel-only state: %w", err)
+			}
+		}
+
+		return nil
+	}
+
+	statements := []string{
+		`CREATE TEMP TABLE mcp_alias_migrations (old_conversation_id TEXT PRIMARY KEY, new_conversation_id TEXT NOT NULL UNIQUE, external_conversation_id TEXT NOT NULL, agent TEXT NOT NULL, slack_channel TEXT NOT NULL)`,
+		`INSERT INTO mcp_alias_migrations SELECT e.conversation_id, m.conversation_id, e.external_conversation_id, m.agent, substr(m.conversation_id, 14, instr(substr(m.conversation_id, 14), ':') - 1) FROM external_mcp_sessions e JOIN managed_conversations m ON m.seeded_from_response = e.conversation_id WHERE m.conversation_id LIKE 'slack-thread:%' AND m.conversation_id NOT LIKE 'slack-thread:D%' AND instr(substr(m.conversation_id, 14), ':') > 1 AND trim(substr(substr(m.conversation_id, 14), instr(substr(m.conversation_id, 14), ':') + 1)) <> ''`,
+		`CREATE TEMP TABLE invalid_seeded_conversations AS SELECT conversation_id FROM managed_conversations WHERE seeded_from_response <> '' AND conversation_id NOT IN (SELECT new_conversation_id FROM mcp_alias_migrations)`,
+		`CREATE TEMP TABLE invalid_mcp_conversations AS SELECT conversation_id FROM external_mcp_sessions WHERE conversation_id NOT IN (SELECT old_conversation_id FROM mcp_alias_migrations)`,
+		`CREATE TABLE external_mcp_sessions_v7 (external_conversation_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL UNIQUE, agent TEXT NOT NULL, slack_channel TEXT NOT NULL)`,
+		`INSERT INTO external_mcp_sessions_v7 SELECT external_conversation_id, new_conversation_id, agent, slack_channel FROM mcp_alias_migrations`,
+		`DROP TABLE external_mcp_sessions`,
+		`ALTER TABLE external_mcp_sessions_v7 RENAME TO external_mcp_sessions`,
+		`DELETE FROM session_entries WHERE conversation_id IN (SELECT new_conversation_id FROM mcp_alias_migrations) OR conversation_id IN (SELECT conversation_id FROM invalid_seeded_conversations) OR conversation_id IN (SELECT conversation_id FROM invalid_mcp_conversations)`,
+		`UPDATE session_entries SET conversation_id = (SELECT new_conversation_id FROM mcp_alias_migrations WHERE old_conversation_id = session_entries.conversation_id) WHERE conversation_id IN (SELECT old_conversation_id FROM mcp_alias_migrations)`,
+		`DELETE FROM active_turns WHERE conversation_id IN (SELECT conversation_id FROM invalid_seeded_conversations) OR conversation_id IN (SELECT conversation_id FROM invalid_mcp_conversations)`,
+		`UPDATE active_turns SET conversation_id = (SELECT new_conversation_id FROM mcp_alias_migrations WHERE old_conversation_id = active_turns.conversation_id) WHERE conversation_id IN (SELECT old_conversation_id FROM mcp_alias_migrations)`,
+		`DELETE FROM scheduled_messages WHERE conversation_id IN (SELECT conversation_id FROM invalid_seeded_conversations) OR conversation_id IN (SELECT conversation_id FROM invalid_mcp_conversations)`,
+		`UPDATE scheduled_messages SET conversation_id = (SELECT new_conversation_id FROM mcp_alias_migrations WHERE old_conversation_id = scheduled_messages.conversation_id) WHERE conversation_id IN (SELECT old_conversation_id FROM mcp_alias_migrations)`,
+		`DELETE FROM pending_restart_notifications WHERE conversation_id IN (SELECT conversation_id FROM invalid_seeded_conversations) OR conversation_id IN (SELECT conversation_id FROM invalid_mcp_conversations)`,
+		`INSERT OR IGNORE INTO pending_restart_notifications SELECT new_conversation_id FROM mcp_alias_migrations JOIN pending_restart_notifications ON pending_restart_notifications.conversation_id = old_conversation_id`,
+		`DELETE FROM pending_restart_notifications WHERE conversation_id IN (SELECT old_conversation_id FROM mcp_alias_migrations)`,
+		`DELETE FROM conversation_goals WHERE conversation_id IN (SELECT conversation_id FROM invalid_seeded_conversations) OR conversation_id IN (SELECT conversation_id FROM invalid_mcp_conversations)`,
+		`DELETE FROM conversation_goals WHERE conversation_id IN (SELECT new_conversation_id FROM mcp_alias_migrations) AND conversation_id IN (SELECT conversation_id FROM conversation_goals) AND EXISTS (SELECT 1 FROM conversation_goals old_goal JOIN mcp_alias_migrations ON old_goal.conversation_id = old_conversation_id WHERE new_conversation_id = conversation_goals.conversation_id)`,
+		`UPDATE conversation_goals SET conversation_id = (SELECT new_conversation_id FROM mcp_alias_migrations WHERE old_conversation_id = conversation_goals.conversation_id) WHERE conversation_id IN (SELECT old_conversation_id FROM mcp_alias_migrations)`,
+		`DELETE FROM session_entries WHERE conversation_id = 'main' OR conversation_id LIKE 'slack-thread:D%' OR conversation_id IN (SELECT conversation_id FROM invalid_seeded_conversations) OR json_extract(entry_json, '$.type') IN ('main_thread_seed', 'conversation_thread_seed', 'response_thread_seed', 'cron_thread_seed')`,
+		`DELETE FROM conversation_goals WHERE conversation_id = 'main' OR conversation_id LIKE 'slack-thread:D%'`,
+		`DELETE FROM scheduled_messages WHERE conversation_id = 'main' OR conversation_id LIKE 'slack-thread:D%'`,
+		`DELETE FROM pending_restart_notifications WHERE conversation_id = 'main' OR conversation_id LIKE 'slack-thread:D%'`,
+		`DELETE FROM active_turns WHERE conversation_id = 'main' OR conversation_id LIKE 'slack-thread:D%'`,
+		`CREATE TABLE managed_conversations_v6 (conversation_id TEXT PRIMARY KEY, agent TEXT NOT NULL, created_by TEXT NOT NULL)`,
+		`INSERT INTO managed_conversations_v6 SELECT conversation_id, agent, created_by FROM managed_conversations WHERE conversation_id <> 'main' AND conversation_id NOT LIKE 'slack-thread:D%' AND conversation_id NOT IN (SELECT conversation_id FROM invalid_seeded_conversations)`,
+		`DROP TABLE managed_conversations`,
+		`ALTER TABLE managed_conversations_v6 RENAME TO managed_conversations`,
+		`DELETE FROM active_turns WHERE conversation_id NOT IN (SELECT conversation_id FROM managed_conversations)`,
+		`DROP TABLE IF EXISTS response_checkpoints`,
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("migrate channel-only state: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func tableHasColumn(ctx context.Context, db stateStoreDB, table, column string) (bool, error) {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return false, fmt.Errorf("inspect %s schema: %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var (
+			cid, notNull, primaryKey int
+			name, columnType         string
+			defaultValue             sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, fmt.Errorf("scan %s schema: %w", table, err)
+		}
+
+		if name == column {
+			return true, nil
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("iterate %s schema: %w", table, err)
+	}
+
+	return false, nil
 }
 
 func migrateCronScheduleSpec(ctx context.Context, tx *sql.Tx, logger *slog.Logger) error {
@@ -289,6 +412,21 @@ func sessionDBUserVersion(ctx context.Context, db stateStoreDB) (int, error) {
 }
 
 func importLegacyState(ctx context.Context, dao stateDAO, state State, logger *slog.Logger) error {
+	hasSeeded, err := tableHasColumn(ctx, dao.db, "managed_conversations", "seeded_from_response")
+	if err != nil {
+		return err
+	}
+
+	if hasSeeded {
+		if err := migrateChannelOnlyState(ctx, dao.db); err != nil {
+			return err
+		}
+
+		if err := createSessionSchema(ctx, dao.db); err != nil {
+			return err
+		}
+	}
+
 	logger.Info("importing legacy rocketclaw managed conversations", "count", len(state.Threads))
 
 	for conversationID, thread := range state.Threads {
@@ -309,15 +447,13 @@ func importLegacyState(ctx context.Context, dao stateDAO, state State, logger *s
 	logger.Info("importing legacy rocketclaw external MCP sessions", "count", len(state.ExternalMCPSessions))
 
 	for externalConversationID, session := range state.ExternalMCPSessions {
-		if err := dao.upsertExternalMCPSession(ctx, externalConversationID, session); err != nil {
+		if _, ok, err := dao.externalMCPSession(ctx, externalConversationID); err != nil {
 			return err
+		} else if ok {
+			continue
 		}
-	}
 
-	logger.Info("importing legacy rocketclaw response checkpoints", "count", len(state.ResponseCheckpoints))
-
-	for key, checkpoint := range state.ResponseCheckpoints {
-		if err := dao.upsertResponseCheckpoint(ctx, key, checkpoint); err != nil {
+		if err := dao.upsertExternalMCPSession(ctx, externalConversationID, &session); err != nil {
 			return err
 		}
 	}

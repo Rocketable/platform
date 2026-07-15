@@ -3,9 +3,10 @@ schedule:
   - 0 9 * * 1-5
   - "@weekly"
 agent: main
+channel: "#ops"
 ---
 
-Review the current conversation and workspace state.
+Review the current workspace state.
 
 Use the same instructions for both the weekday and weekly runs.
 

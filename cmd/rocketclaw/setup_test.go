@@ -12,12 +12,29 @@ import (
 )
 
 func TestRunSetupWritesSlackConfig(t *testing.T) {
-	workspace, cfg := runSetupWithInput(t, slackSetupInput(""), nil)
+	workspace, cfg, output := runSetupWithInputOutput(t, slackSetupInput(""), nil)
 
-	require.Equal(t, config.SlackConfig{Enabled: true, BotToken: "xoxb-test", AppToken: "xapp-test", Room: "D123", HumanUserID: "U123"}, cfg.Slack)
+	require.Equal(t, config.SlackConfig{
+		BotToken: "xoxb-test",
+		AppToken: "xapp-test",
+		Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"Maschine"}, AllowedUserIDs: []string{"U123"}}},
+	}, cfg.Slack)
 	require.Equal(t, config.OpenAIConfig{APIKey: "sk-test", APIBaseURL: "", RocketCodeAuth: "api_key"}, cfg.OpenAI)
 	require.False(t, cfg.MCPExternal.Enabled)
-	require.Equal(t, config.ThreadAgents{":thread:": {Agent: "main", PreSeed: false}, ":twisted_rightward_arrows:": {Agent: "main", PreSeed: true}}, cfg.ThreadAgents)
+
+	configData, err := os.ReadFile(filepath.Join(workspace, defaultConfigPath))
+	require.NoError(t, err)
+	var generated map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(configData, &generated))
+	for _, removed := range []string{"thread_agents", "pre_seed", "context_messages", "seed_compaction_model"} {
+		require.NotContains(t, string(configData), `"`+removed+`"`)
+	}
+	var slack map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(generated["slack"], &slack))
+	for _, removed := range []string{"enabled", "room", "human_user_id", "allowed_user_ids", "social_mode"} {
+		require.NotContains(t, slack, removed)
+	}
+	require.NotContains(t, output, "Enable Slack")
 
 	for _, name := range []string{"AGENTS.md", "main-update-cortex.sh"} {
 		data, err := os.ReadFile(filepath.Join(workspace, name))
@@ -36,38 +53,20 @@ func TestRunSetupWritesSlackConfig(t *testing.T) {
 	require.NotContains(t, string(mainAgentData), "%AGENT_NAME%")
 	require.Contains(t, string(mainAgentData), "Ulderico")
 	require.Contains(t, string(mainAgentData), "Maschine")
+
+	ignoreData, err := os.ReadFile(filepath.Join(workspace, config.DefaultRuntimeDir, ".gitignore"))
+	require.NoError(t, err)
+	require.Contains(t, string(ignoreData), "auth.json")
 }
 
-func TestRunSetupAllowsMCPOnlyMode(t *testing.T) {
-	workspace, cfg := runSetupWithInput(t, mcpOnlySetupInput("", "n"), nil)
+func TestRunSetupConfiguresExternalMCPWithSlack(t *testing.T) {
+	workspace, cfg := runSetupWithInput(t, slackMCPSetupInput("", "n"), nil)
 
-	require.False(t, cfg.Slack.Enabled)
 	require.True(t, cfg.MCPExternal.Enabled)
 	require.Equal(t, "127.0.0.1:8765", cfg.MCPExternal.ListenAddr)
 
 	_, err := os.Stat(filepath.Join(workspace, externalMCPUsersFilename))
 	require.ErrorIs(t, err, os.ErrNotExist)
-}
-
-func TestRunSetupRepromptsWhenNoConnectorSelected(t *testing.T) {
-	_, cfg, output := runSetupWithInputOutput(t, strings.Join([]string{
-		"n",
-		"n",
-		"y",
-		"n",
-		"sk-test",
-		"",
-		"Ulderico",
-		"Maschine",
-		"xoxb-test",
-		"xapp-test",
-		"D123",
-		"U123",
-	}, "\n")+"\n", nil)
-
-	require.Contains(t, output, "At least one connector or external MCP server must be enabled.")
-	require.True(t, cfg.Slack.Enabled)
-	require.False(t, cfg.MCPExternal.Enabled)
 }
 
 func TestRunSetupAcceptsConfiguredOpenAIBaseURL(t *testing.T) {
@@ -77,7 +76,7 @@ func TestRunSetupAcceptsConfiguredOpenAIBaseURL(t *testing.T) {
 }
 
 func TestRunSetupAcceptsConfiguredExternalMCPListenAddr(t *testing.T) {
-	_, cfg := runSetupWithInput(t, mcpOnlySetupInput("127.0.0.1:9999", "n"), nil)
+	_, cfg := runSetupWithInput(t, slackMCPSetupInput("127.0.0.1:9999", "n"), nil)
 
 	require.True(t, cfg.MCPExternal.Enabled)
 	require.Equal(t, "127.0.0.1:9999", cfg.MCPExternal.ListenAddr)
@@ -89,12 +88,11 @@ func TestRunSetupPromptReadErrors(t *testing.T) {
 		input   string
 		wantErr string
 	}{
-		{name: "slack enablement", wantErr: "prompt Slack enablement"},
-		{name: "external mcp enablement", input: "n\n", wantErr: "prompt external MCP enablement"},
-		{name: "common fields", input: "y\nn\n", wantErr: "read prompt input"},
-		{name: "slack fields", input: strings.Join([]string{"y", "n", "sk-test", "", "Ulderico", "Maschine"}, "\n") + "\n", wantErr: "read prompt input"},
-		{name: "external mcp listen address", input: strings.Join([]string{"n", "y", "sk-test", "", "Ulderico", "Maschine"}, "\n") + "\n", wantErr: "read prompt input"},
-		{name: "external mcp users file", input: strings.Join([]string{"n", "y", "sk-test", "", "Ulderico", "Maschine", "127.0.0.1:8765"}, "\n") + "\n", wantErr: "prompt external MCP users file creation"},
+		{name: "external mcp enablement", wantErr: "prompt external MCP enablement"},
+		{name: "common fields", input: "n\n", wantErr: "read prompt input"},
+		{name: "slack fields", input: strings.Join([]string{"n", "sk-test", "", "Ulderico", "Maschine"}, "\n") + "\n", wantErr: "read prompt input"},
+		{name: "external mcp listen address", input: strings.Join([]string{"y", "sk-test", "", "Ulderico", "Maschine", "xoxb-test", "xapp-test", "ops", "U123"}, "\n") + "\n", wantErr: "read prompt input"},
+		{name: "external mcp users file", input: strings.Join([]string{"y", "sk-test", "", "Ulderico", "Maschine", "xoxb-test", "xapp-test", "ops", "U123", "127.0.0.1:8765"}, "\n") + "\n", wantErr: "prompt external MCP users file creation"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -124,7 +122,7 @@ func TestRunSetupPromptReadErrors(t *testing.T) {
 }
 
 func TestRunSetupWritesExternalMCPUsersFile(t *testing.T) {
-	workspace, _, output := runSetupWithInputOutput(t, mcpOnlySetupInput("", "y"), nil)
+	workspace, _, output := runSetupWithInputOutput(t, slackMCPSetupInput("", "y"), nil)
 
 	info, err := os.Stat(filepath.Join(workspace, externalMCPUsersFilename))
 	require.NoError(t, err)
@@ -144,6 +142,8 @@ func TestRunSetupPreservesExistingRootSetupFiles(t *testing.T) {
 		for _, name := range []string{"AGENTS.md", "main-update-cortex.sh"} {
 			require.NoError(t, os.WriteFile(filepath.Join(workspace, name), []byte(name+" preserved\n"), 0o755))
 		}
+		require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), []byte("%AGENT_NAME% preserved\n"), 0o644))
 	})
 
 	for _, name := range []string{"AGENTS.md", "main-update-cortex.sh"} {
@@ -151,6 +151,10 @@ func TestRunSetupPreservesExistingRootSetupFiles(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, name+" preserved\n", string(data))
 	}
+
+	data, err := os.ReadFile(filepath.Join(workspace, "agents", "main.md"))
+	require.NoError(t, err)
+	require.Equal(t, "%AGENT_NAME% preserved\n", string(data))
 }
 
 func TestRunSetupFilesListShowsKnownFiles(t *testing.T) {
@@ -239,7 +243,6 @@ func runSetupWithInputOutput(t *testing.T, input string, prepare func(string)) (
 
 func slackSetupInput(apiBase string) string {
 	return strings.Join([]string{
-		"y",
 		"n",
 		"sk-test",
 		apiBase,
@@ -247,19 +250,22 @@ func slackSetupInput(apiBase string) string {
 		"Maschine",
 		"xoxb-test",
 		"xapp-test",
-		"D123",
+		"ops",
 		"U123",
 	}, "\n") + "\n"
 }
 
-func mcpOnlySetupInput(listenAddr, createExternalMCPUsers string) string {
+func slackMCPSetupInput(listenAddr, createExternalMCPUsers string) string {
 	return strings.Join([]string{
-		"n",
 		"y",
 		"sk-test",
 		"",
 		"Ulderico",
 		"Maschine",
+		"xoxb-test",
+		"xapp-test",
+		"ops",
+		"U123",
 		listenAddr,
 		createExternalMCPUsers,
 	}, "\n") + "\n"

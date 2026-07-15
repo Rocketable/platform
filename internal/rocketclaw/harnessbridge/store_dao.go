@@ -22,36 +22,9 @@ func (d stateDAO) upsertThread(ctx context.Context, conversationID string, threa
 		return errors.New("thread conversation ID is required")
 	}
 
-	_, err := d.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, seeded_from_response, created_by) VALUES (?, ?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET agent = excluded.agent, seeded_from_response = excluded.seeded_from_response, created_by = excluded.created_by`, conversationID, strings.TrimSpace(thread.Agent), strings.TrimSpace(thread.SeededFromResponse), strings.TrimSpace(string(thread.CreatedBy)))
+	_, err := d.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES (?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET agent = excluded.agent, created_by = CASE WHEN excluded.created_by = '' THEN managed_conversations.created_by ELSE excluded.created_by END`, conversationID, strings.TrimSpace(thread.Agent), strings.TrimSpace(string(thread.CreatedBy)))
 	if err != nil {
 		return fmt.Errorf("upsert managed conversation: %w", err)
-	}
-
-	return nil
-}
-
-func (d stateDAO) upsertThreadAgent(ctx context.Context, conversationID, agent string) error {
-	_, err := d.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, seeded_from_response, created_by) VALUES (?, ?, '', '') ON CONFLICT(conversation_id) DO UPDATE SET agent = excluded.agent`, strings.TrimSpace(conversationID), strings.TrimSpace(agent))
-	if err != nil {
-		return fmt.Errorf("upsert managed conversation agent: %w", err)
-	}
-
-	return nil
-}
-
-func (d stateDAO) markThreadCreatedBy(ctx context.Context, conversationID string, createdBy ThreadCreator) error {
-	_, err := d.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, seeded_from_response, created_by) VALUES (?, '', '', ?) ON CONFLICT(conversation_id) DO UPDATE SET created_by = excluded.created_by`, strings.TrimSpace(conversationID), strings.TrimSpace(string(createdBy)))
-	if err != nil {
-		return fmt.Errorf("mark managed conversation creator: %w", err)
-	}
-
-	return nil
-}
-
-func (d stateDAO) markThreadSeeded(ctx context.Context, conversationID, seedKey string) error {
-	_, err := d.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, seeded_from_response, created_by) VALUES (?, ?, ?, '') ON CONFLICT(conversation_id) DO UPDATE SET seeded_from_response = excluded.seeded_from_response, agent = CASE WHEN trim(managed_conversations.agent) = '' THEN excluded.agent ELSE managed_conversations.agent END`, strings.TrimSpace(conversationID), mainConversationID, strings.TrimSpace(seedKey))
-	if err != nil {
-		return fmt.Errorf("mark managed conversation seeded: %w", err)
 	}
 
 	return nil
@@ -63,7 +36,7 @@ func (d stateDAO) thread(ctx context.Context, conversationID string) (ThreadStat
 		createdBy string
 	)
 
-	err := d.db.QueryRowContext(ctx, `SELECT agent, seeded_from_response, created_by FROM managed_conversations WHERE conversation_id = ?`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &thread.SeededFromResponse, &createdBy)
+	err := d.db.QueryRowContext(ctx, `SELECT agent, created_by FROM managed_conversations WHERE conversation_id = ?`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &createdBy)
 	if err == sql.ErrNoRows {
 		return ThreadState{}, false, nil
 	}
@@ -91,49 +64,8 @@ func (d stateDAO) setThreadAgent(ctx context.Context, conversationID, agent stri
 	return rows > 0, nil
 }
 
-func (d stateDAO) threadForSeed(ctx context.Context, seedConversationID string) (conversationID string, thread ThreadState, ok bool, err error) {
-	var createdBy string
-
-	err = d.db.QueryRowContext(ctx, `SELECT conversation_id, agent, seeded_from_response, created_by FROM managed_conversations WHERE seeded_from_response = ? ORDER BY conversation_id LIMIT 1`, strings.TrimSpace(seedConversationID)).Scan(&conversationID, &thread.Agent, &thread.SeededFromResponse, &createdBy)
-	if err == sql.ErrNoRows {
-		return "", ThreadState{}, false, nil
-	}
-
-	if err != nil {
-		return "", ThreadState{}, false, fmt.Errorf("read managed conversation by seed: %w", err)
-	}
-
-	thread.CreatedBy = ThreadCreator(createdBy)
-
-	return conversationID, thread, true, nil
-}
-
-func (d stateDAO) upsertResponseCheckpoint(ctx context.Context, key string, checkpoint ResponseCheckpointState) error {
-	_, err := d.db.ExecContext(ctx, `INSERT INTO response_checkpoints (checkpoint_key, source_conversation_id, session_entry_id, response_id, model, assistant_text) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(checkpoint_key) DO UPDATE SET source_conversation_id = excluded.source_conversation_id, session_entry_id = excluded.session_entry_id, response_id = excluded.response_id, model = excluded.model, assistant_text = excluded.assistant_text`, strings.TrimSpace(key), strings.TrimSpace(checkpoint.ConversationID), checkpoint.SessionEntryID, strings.TrimSpace(checkpoint.ResponseID), strings.TrimSpace(checkpoint.Model), checkpoint.AssistantText)
-	if err != nil {
-		return fmt.Errorf("upsert response checkpoint: %w", err)
-	}
-
-	return nil
-}
-
-func (d stateDAO) responseCheckpoint(ctx context.Context, key string) (ResponseCheckpointState, bool, error) {
-	var checkpoint ResponseCheckpointState
-
-	err := d.db.QueryRowContext(ctx, `SELECT source_conversation_id, session_entry_id, response_id, model, assistant_text FROM response_checkpoints WHERE checkpoint_key = ?`, strings.TrimSpace(key)).Scan(&checkpoint.ConversationID, &checkpoint.SessionEntryID, &checkpoint.ResponseID, &checkpoint.Model, &checkpoint.AssistantText)
-	if err == sql.ErrNoRows {
-		return ResponseCheckpointState{}, false, nil
-	}
-
-	if err != nil {
-		return ResponseCheckpointState{}, false, fmt.Errorf("read response checkpoint: %w", err)
-	}
-
-	return checkpoint, true, nil
-}
-
-func (d stateDAO) upsertExternalMCPSession(ctx context.Context, externalConversationID string, session ExternalMCPSessionState) error {
-	_, err := d.db.ExecContext(ctx, `INSERT INTO external_mcp_sessions (external_conversation_id, conversation_id, agent) VALUES (?, ?, ?) ON CONFLICT(external_conversation_id) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent`, strings.TrimSpace(externalConversationID), strings.TrimSpace(session.ConversationID), strings.TrimSpace(session.Agent))
+func (d stateDAO) upsertExternalMCPSession(ctx context.Context, externalConversationID string, session *ExternalMCPSessionState) error {
+	_, err := d.db.ExecContext(ctx, `INSERT INTO external_mcp_sessions (external_conversation_id, conversation_id, agent, slack_channel) VALUES (?, ?, ?, ?) ON CONFLICT(external_conversation_id) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent, slack_channel = excluded.slack_channel`, strings.TrimSpace(externalConversationID), strings.TrimSpace(session.ConversationID), strings.TrimSpace(session.Agent), strings.TrimSpace(session.SlackChannel))
 	if err != nil {
 		return fmt.Errorf("upsert external MCP session: %w", err)
 	}
@@ -144,7 +76,7 @@ func (d stateDAO) upsertExternalMCPSession(ctx context.Context, externalConversa
 func (d stateDAO) externalMCPSession(ctx context.Context, externalConversationID string) (ExternalMCPSessionState, bool, error) {
 	var session ExternalMCPSessionState
 
-	err := d.db.QueryRowContext(ctx, `SELECT agent, conversation_id FROM external_mcp_sessions WHERE external_conversation_id = ?`, strings.TrimSpace(externalConversationID)).Scan(&session.Agent, &session.ConversationID)
+	err := d.db.QueryRowContext(ctx, `SELECT agent, conversation_id, slack_channel FROM external_mcp_sessions WHERE external_conversation_id = ?`, strings.TrimSpace(externalConversationID)).Scan(&session.Agent, &session.ConversationID, &session.SlackChannel)
 	if err == sql.ErrNoRows {
 		return ExternalMCPSessionState{}, false, nil
 	}

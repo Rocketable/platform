@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,33 +10,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadThreadAgentsObjectCanDisablePreSeed(t *testing.T) {
-	path := writeThreadAgentsConfig(t, `"thread_agents":{":thread:":{"agent":"main","pre_seed":false}}`)
-
-	cfg, err := Load(path)
+func TestExampleConfigUsesDirectSlackChannels(t *testing.T) {
+	data, err := os.ReadFile("../rocketclaw.example.json")
 	require.NoError(t, err)
-	assert.Equal(t, ThreadAgents{":thread:": {Agent: "main", PreSeed: false}}, cfg.ThreadAgents)
-}
 
-func TestLoadDefaultsThreadAgents(t *testing.T) {
-	path := writeThreadAgentsConfig(t, `"thread_agents":{}`)
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(data, &raw))
 
-	cfg, err := Load(path)
-	require.NoError(t, err)
-	assert.Equal(t, ThreadAgents{":thread:": {Agent: "main", PreSeed: false}, ":twisted_rightward_arrows:": {Agent: "main", PreSeed: true}}, cfg.ThreadAgents)
-}
+	for _, removed := range []string{"thread_agents", "pre_seed", "context_messages", "seed_compaction_model"} {
+		require.NotContains(t, string(data), `"`+removed+`"`)
+	}
 
-func TestLoadRejectsDuplicateThreadAgentPrefixes(t *testing.T) {
-	path := writeThreadAgentsConfig(t, `"thread_agents":{" :thread:":{"agent":"main"},":thread: ":{"agent":"main"}}`)
+	var cfg Config
+	require.NoError(t, json.Unmarshal(data, &cfg))
+	require.NoError(t, cfg.Validate())
 
-	_, err := Load(path)
-	require.ErrorContains(t, err, "duplicates normalized prefix")
-}
-
-func TestNormalizeThreadAgentsDropsBlankEntries(t *testing.T) {
-	agents, err := normalizeThreadAgents(ThreadAgents{" ": {Agent: "main"}, ":skip:": {Agent: " \t "}})
-	require.NoError(t, err)
-	assert.Empty(t, agents)
+	var slack map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(raw["slack"], &slack))
+	require.NotContains(t, slack, "enabled")
+	require.NotEmpty(t, cfg.Slack.Channels)
+	assert.NotEmpty(t, cfg.Slack.Channels[0].Agents)
+	assert.NotEmpty(t, cfg.Slack.Channels[0].AllowedUserIDs)
 }
 
 func TestLoadAppliesDefaults(t *testing.T) {
@@ -43,17 +38,14 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	  "workspace": ".",
 	  "openai": {"api_key": "test-key"},
 	  "slack": {
-	    "enabled": true,
 	    "bot_token": "xoxb-test",
 	    "app_token": "xapp-test",
-	    "room": "D123",
-	    "human_user_id": "U123"
+	    "channels": [{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]
 	  }
 	}`)
 
 	assert.Equal(t, "api_key", cfg.OpenAI.RocketCodeAuth)
 	assert.Empty(t, cfg.AutoApproverModel)
-	assert.Empty(t, cfg.SeedCompactionModel)
 	assert.True(t, filepath.IsAbs(cfg.Workspace))
 }
 
@@ -62,13 +54,12 @@ func TestLoadPreservesModelConfig(t *testing.T) {
 	  "workspace": ".",
 	  "models": {"coding-high": "software-development-sol", "review-fast": "gpt-5.6-luna"},
 	  "auto_approver_model": " openai/gpt-5.5 ",
-	  "seed_compaction_model": " gpt-5.4 ",
 	  "openai": {"api_key": "test-key"},
+	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
 	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
 	}`)
 
 	assert.Equal(t, "gpt-5.5", cfg.AutoApproverModel)
-	assert.Equal(t, "gpt-5.4", cfg.SeedCompactionModel)
 	assert.Equal(t, map[string]string{"coding-high": "software-development-sol", "review-fast": "gpt-5.6-luna"}, cfg.Models)
 }
 
@@ -132,6 +123,7 @@ func TestLoadPreservesInstrumentationConfig(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",
 	  "openai": {"api_key": "test-key"},
+	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
 	  "instrumentation": {
 	    "enabled": true,
 	    "collector_endpoint": "http://localhost:6006",
@@ -165,6 +157,7 @@ func TestLoadNormalizesOverlays(t *testing.T) {
 	  "workspace": ".",
 	  "overlays": [" github.com/rocketable/overlay1@main ", "", "github.com/rocketable/overlay2"],
 	  "openai": {"api_key": "test-key"},
+	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
 	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
 	}`)
 
@@ -176,6 +169,7 @@ func TestLoadDefaultsWorkspaceToConfigDirectory(t *testing.T) {
 	path := filepath.Join(dir, "rocketclaw.json")
 	require.NoError(t, os.WriteFile(path, []byte(`{
 	  "openai": {"api_key": "test-key"},
+	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
 	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
 	}`), 0o600))
 
@@ -201,16 +195,13 @@ func TestValidateRejectsMissingRequiredConfig(t *testing.T) {
 		update  func(*Config)
 		wantErr string
 	}{
-		{name: "no connectors", update: func(c *Config) { c.Slack.Enabled = false }, wantErr: "enable at least one connector or mcp_external"},
 		{name: "workspace", update: func(c *Config) { c.Workspace = "" }, wantErr: "workspace is required"},
 		{name: "rocketcode auth", update: func(c *Config) { c.OpenAI.RocketCodeAuth = "browser" }, wantErr: "openai.rocketcode_auth must be api_key or chatgpt"},
 		{name: "auto approver model", update: func(c *Config) { c.AutoApproverModel = "anthropic/claude" }, wantErr: `auto_approver_model: invalid model "anthropic/claude": expected unprefixed OpenAI model ID`},
-		{name: "seed compaction model", update: func(c *Config) { c.SeedCompactionModel = "openai/" }, wantErr: `seed_compaction_model: invalid model "openai/": expected openai/model`},
 		{name: "mcp external listen addr", update: func(c *Config) { c.MCPExternal.Enabled = true }, wantErr: "mcp_external.listen_addr is required when mcp_external is enabled"},
-		{name: "slack bot token", update: func(c *Config) { c.Slack.BotToken = "" }, wantErr: "slack.bot_token is required when slack is enabled"},
-		{name: "slack app token", update: func(c *Config) { c.Slack.AppToken = "" }, wantErr: "slack.app_token is required when slack is enabled"},
-		{name: "slack room", update: func(c *Config) { c.Slack.Room = "" }, wantErr: "slack.room is required when slack is enabled"},
-		{name: "slack human user id", update: func(c *Config) { c.Slack.HumanUserID = "" }, wantErr: "slack.human_user_id is required when slack is enabled"},
+		{name: "slack bot token", update: func(c *Config) { c.Slack.BotToken = "" }, wantErr: "slack.bot_token is required"},
+		{name: "slack app token", update: func(c *Config) { c.Slack.AppToken = "" }, wantErr: "slack.app_token is required"},
+		{name: "slack channels", update: func(c *Config) { c.Slack.Channels = nil }, wantErr: "slack.channels is required"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()
@@ -230,44 +221,38 @@ func TestValidateNormalizesEmergencySafeWords(t *testing.T) {
 	assert.Equal(t, []string{"redbutton", "angstrom42"}, cfg.EmergencySafeWords)
 }
 
-func TestValidateSlackSocialMode(t *testing.T) {
+func TestValidateSlackChannelsLegacyCoverage(t *testing.T) {
 	cfg := validConfig()
-	cfg.Slack.SocialMode.Enabled = true
-	cfg.Slack.SocialMode.Channels = []TextSocialChannelConfig{
+	cfg.Slack.Channels = []SlackChannelConfig{
 		{Channel: " triage ", Agents: []string{" planner ", "", "planner", "helper"}, AllowedUserIDs: []string{" U999 ", "", "U999"}},
 		{Channel: " #team ", Agents: []string{" team "}, AllowedUserIDs: []string{" U123 ", "", "U123", "U456"}},
 		{Channel: " ", Agents: []string{"ignored"}},
 	}
 
 	require.NoError(t, cfg.Validate())
-	assert.Equal(t, TextSocialConfig{
-		Enabled: true,
-		Channels: []TextSocialChannelConfig{
-			{Channel: "#triage", Agents: []string{"planner", "helper"}, AllowedUserIDs: []string{"U999"}},
-			{Channel: "#team", Agents: []string{"team"}, AllowedUserIDs: []string{"U123", "U456"}},
-		},
-		ContextMessages: 10,
-	}, cfg.Slack.SocialMode)
+	assert.Equal(t, []SlackChannelConfig{
+		{Channel: "#triage", Agents: []string{"planner", "helper"}, AllowedUserIDs: []string{"U999"}},
+		{Channel: "#team", Agents: []string{"team"}, AllowedUserIDs: []string{"U123", "U456"}},
+	}, cfg.Slack.Channels)
 }
 
-func TestValidateSlackSocialModeRejectsInvalidConfig(t *testing.T) {
+func TestValidateSlackChannelsRejectsInvalidConfig(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
-		update  func(*TextSocialConfig)
+		update  func(*[]SlackChannelConfig)
 		wantErr string
 	}{
-		{name: "missing agents", update: func(s *TextSocialConfig) {
-			s.Channels = []TextSocialChannelConfig{{Channel: "#triage", AllowedUserIDs: []string{"U123"}}}
-		}, wantErr: "slack.social_mode.channels[].agents is required when slack social mode is enabled"},
-		{name: "missing channel allowlist", update: func(s *TextSocialConfig) {
-			s.Channels = []TextSocialChannelConfig{{Channel: "#triage", Agents: []string{"triage"}}}
-		}, wantErr: "slack.social_mode.channels[].allowed_user_ids is required when slack social mode is enabled"},
-		{name: "negative context", update: func(s *TextSocialConfig) { s.ContextMessages = -1 }, wantErr: "slack.social_mode.context_messages must be zero or greater"},
+		{name: "missing agents", update: func(channels *[]SlackChannelConfig) {
+			*channels = []SlackChannelConfig{{Channel: "#triage", AllowedUserIDs: []string{"U123"}}}
+		}, wantErr: "slack.channels[].agents is required"},
+		{name: "missing channel allowlist", update: func(channels *[]SlackChannelConfig) {
+			*channels = []SlackChannelConfig{{Channel: "#triage", Agents: []string{"triage"}}}
+		}, wantErr: "slack.channels[].allowed_user_ids is required"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()
-			cfg.Slack.SocialMode = TextSocialConfig{Enabled: true, Channels: []TextSocialChannelConfig{{Channel: "#triage", Agents: []string{"triage"}, AllowedUserIDs: []string{"U123"}}}, ContextMessages: 10}
-			tt.update(&cfg.Slack.SocialMode)
+			cfg.Slack.Channels = []SlackChannelConfig{{Channel: "#triage", Agents: []string{"triage"}, AllowedUserIDs: []string{"U123"}}}
+			tt.update(&cfg.Slack.Channels)
 
 			err := cfg.Validate()
 			require.ErrorContains(t, err, tt.wantErr)
@@ -388,21 +373,10 @@ func loadTestConfig(t *testing.T, content string) *Config {
 func validConfig() *Config {
 	cfg := new(Config)
 	cfg.Workspace = "/tmp/project"
-	cfg.Slack.Enabled = true
 	cfg.Slack.BotToken = "xoxb-test"
 	cfg.Slack.AppToken = "xapp-test"
-	cfg.Slack.Room = "D123"
-	cfg.Slack.HumanUserID = "U123"
+	cfg.Slack.Channels = []SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U123"}}}
 	cfg.OpenAI.APIKey = "test-key"
 
 	return cfg
-}
-
-func writeThreadAgentsConfig(t *testing.T, threadAgents string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "rocketclaw.json")
-	data := `{"workspace":".",` + threadAgents + `,"slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","room":"D123","human_user_id":"U123"},"openai":{"api_key":"sk"}}`
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o600))
-
-	return path
 }

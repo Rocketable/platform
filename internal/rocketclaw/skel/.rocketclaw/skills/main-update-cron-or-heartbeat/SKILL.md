@@ -29,18 +29,21 @@ Valid Examples:
 ```
 ---
 schedule: "5s"
+channel: "#ops"
 ---
 ```
 - Crontab format
 ```
 ---
 schedule: "*/5 * * * *"
+channel: "#ops"
 ---
 ```
 - One-off timestamp format
 ```
 ---
 schedule: "2026-05-21T15:04:05Z"
+channel: "#ops"
 ---
 ```
 - Many schedules
@@ -49,14 +52,15 @@ schedule: "2026-05-21T15:04:05Z"
 schedule:
   - "5s"
   - "*/5 * * * *"
+channel: "#ops"
 ---
 ```
 
 The `schedule:` frontmatter value is the cronjob frequency or cadence.
 
-Cronjobs may also set `channel:` to route non-empty `rocketclaw_i_want_human_partner_to_see_this` output into a managed primary text connector thread instead of the default text target. Highlight this option back to the human when they ask where cron output should go, when the cron is meant for a team/channel audience, or when they mention text connector delivery.
+Every active cron definition must set `channel:` to a channel listed in `slack.channels`. Non-empty `rocketclaw_i_want_human_partner_to_see_this` output starts a fresh managed Slack thread in that channel. An empty value completes silently.
 
-The source code reads `channel` as a trimmed YAML string and passes it directly to the text connector sender. It does not add `#`, resolve names, or validate the value before sending.
+Use the configured channel exactly as it appears in `slack.channels`.
 
 For Slack channel names, include the leading `#` and quote the value because unquoted `#...` is a YAML comment:
 
@@ -76,9 +80,9 @@ channel: "C0123456789"
 ---
 ```
 
-Do not write `channel: #triage`; YAML parses that as an empty value/comment, so the cron will not route to Slack. If the human gives a channel name without `#`, ask whether to use the Slack display form with `#` or a channel ID rather than silently rewriting it.
+Do not write `channel: #triage`; YAML parses that as an empty value/comment. If the human gives a channel name without `#`, ask whether to use the configured Slack display form with `#` or a configured channel ID rather than silently rewriting it.
 
-Replies and `:floppy_disk:` summaries for those cron-created channel threads follow the existing Slack social-mode gate.
+Cron output starts a fresh thread-local conversation. Its first later authorized human reply is the first model-visible conversational turn in that thread.
 
 Timestamp schedules are one-off crons. A one-off cron is a durable `cron/*.md` file that survives rocketclaw restarts until due, runs through normal cronjob execution and output routing, and self-deletes after one completed run attempt. Do not combine a timestamp schedule with any other schedule.
 
@@ -148,4 +152,5 @@ When `cron/HEARTBEAT.md` already exists:
 - do not create a new file
 - preserve the existing `schedule:` value unless the human explicitly asked to change it
 - update the existing file in place
+- preserve the existing `channel:` value unless the human explicitly asked to change it
 - update only the heartbeat body/content

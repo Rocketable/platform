@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -98,24 +99,10 @@ func TestHelpMentionsLint(t *testing.T) {
 
 func writeLintConfig(t *testing.T, workspace string, models ...map[string]string) {
 	t.Helper()
-	data := struct {
-		Workspace   string            `json:"workspace"`
-		Models      map[string]string `json:"models,omitempty"`
-		MCPExternal struct {
-			Enabled    bool   `json:"enabled"`
-			ListenAddr string `json:"listen_addr"`
-		} `json:"mcp_external"`
-		OpenAI struct {
-			APIKey string `json:"api_key"`
-		} `json:"openai"`
-	}{Workspace: workspace}
+	data := config.Config{Workspace: workspace, Slack: config.SlackConfig{BotToken: "xoxb", AppToken: "xapp", Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U123"}}}}, OpenAI: config.OpenAIConfig{APIKey: "test"}}
 	if len(models) > 0 {
 		data.Models = models[0]
 	}
-	data.MCPExternal.Enabled = true
-	data.MCPExternal.ListenAddr = "127.0.0.1:8766"
-	data.OpenAI.APIKey = "test"
-
 	content, err := json.Marshal(data)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(defaultConfigPath, content, 0o600))
