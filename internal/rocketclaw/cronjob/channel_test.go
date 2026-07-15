@@ -31,8 +31,8 @@ func TestValidateRuntimeDefinitionsRequiresConfiguredChannel(t *testing.T) {
 	require.NoError(t, ValidateRuntimeDefinitions(workspace, ".", []string{"#ops"}))
 }
 
-func TestLoadDefinitionKeepsConfiguredChannel(t *testing.T) {
-	definition, err := loadDefinition([]byte("---\nschedule: 1h\nchannel: ' #ops '\n---\nBody"), "cron/test.md")
+func TestLoadDefinitionNormalizesConfiguredChannel(t *testing.T) {
+	definition, err := loadDefinition([]byte("---\nschedule: 1h\nchannel: ' ops '\n---\nBody"), "cron/test.md")
 	require.NoError(t, err)
 	assert.Equal(t, "#ops", definition.textChannel)
 }

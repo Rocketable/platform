@@ -792,7 +792,12 @@ type frontmatterChannel string
 func (c *frontmatterChannel) UnmarshalJSON(data []byte) error {
 	var text string
 	if err := json.Unmarshal(data, &text); err == nil {
-		*c = frontmatterChannel(strings.TrimSpace(text))
+		text = strings.TrimSpace(text)
+		if text != "" && !strings.HasPrefix(text, "#") {
+			text = "#" + text
+		}
+
+		*c = frontmatterChannel(text)
 	}
 
 	return nil
