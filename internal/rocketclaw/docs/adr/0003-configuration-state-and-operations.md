@@ -45,6 +45,15 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - Empty or omitted `auto_approver_model` uses RocketCode's resolved runtime/default model for the embedded automatic permission reviewer. Non-empty values must be unprefixed first-party OpenAI model IDs or legacy `openai/<model>` aliases normalized by RocketCode; other provider-qualified values are config validation errors.
 - `slack.channels[]` contains at least one mapping. Each mapping has one normalized channel, one ordered non-empty `agents` list, and non-empty `allowed_user_ids`. Empty and duplicate entries inside those lists are normalized out before validation and routing.
 
+### Startup Config Migration
+
+- Before daemon startup loads the selected `rocketclaw.json` or `femtoclaw.json`, it migrates the prior Slack object shape into the current shape in the same file.
+- When `slack.channels` is absent and `slack.social_mode.channels` is present, the migrator promotes that channel array to `slack.channels`. When both are present, the existing `slack.channels` value is authoritative.
+- The migrated Slack object contains `bot_token`, `app_token`, and `channels`. The migrator removes `enabled`, `human_user_id`, `room`, and `social_mode` from that object.
+- The migrator validates the complete candidate configuration before replacing the source file. Invalid candidates leave the source file unchanged and fail startup.
+- A valid migration rewrites the selected config file with the migrated JSON and preserves its permission mode. Startup loads the migrated file after the write succeeds.
+- Config inspection and maintenance commands keep their read-only behavior; automatic rewriting belongs to daemon startup.
+
 ### Git Overlays
 
 - Overlay entries may use shorthand `github.com/org/repo`, shorthand with a ref suffix like `github.com/org/repo@main` or `github.com/org/repo@<commit>`, or explicit git clone URLs copied from GitHub such as HTTPS, SSH, or SCP-like `git@github.com:org/repo.git`.
@@ -161,3 +170,4 @@ RocketClaw is operated by humans and agents in a shared workspace. Its behavior 
 - 2026-07-15: Required every active cron definition and External MCP turn to use a configured Slack channel and made Slack mandatory for those capabilities.
 - 2026-07-15: Defined the SQLite inventory around thread-local sessions, managed Slack routing, explicit External MCP Slack-thread bindings, active-turn recovery, scheduled work, goals, and restart notifications.
 - 2026-07-15: Defined Slack as an unconditional runtime connector and its configuration as credentials plus direct channel mappings.
+- 2026-07-15: Added daemon-start migration from the prior nested Slack channel configuration to direct `slack.channels` before normal config loading.

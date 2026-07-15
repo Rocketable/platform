@@ -81,6 +81,7 @@ func loadRuntimeConfig() (runtimeConfigFile, *config.Config, error) {
 	if !selected.Found {
 		return runtimeConfigFile{}, nil, os.ErrNotExist
 	}
+
 	cfg, err := config.Load(selected.Path)
 	if err != nil {
 		return runtimeConfigFile{}, nil, err

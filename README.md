@@ -42,6 +42,8 @@ Slack native forwarded-thread expansion requires the bot scopes `channels:read` 
 
 Slack configuration uses direct `slack.channels` mappings. Each mapping names a channel, an ordered non-empty `agents` list, and its authorized `allowed_user_ids`. An authorized app mention in a configured channel starts a fresh managed thread whose initiating message is its first turn. Later replies use only that thread's persisted history.
 
+On daemon startup, RocketClaw upgrades the prior nested `slack.social_mode.channels` shape in place. It validates the candidate first, rewrites the config with direct `slack.channels`, and preserves the config file permissions; inspection commands remain read-only.
+
 External MCP exposes `session_prompt`. Every call supplies a configured Slack channel. A new external conversation ID creates one Slack thread in that channel; later calls with that ID and authorized Slack replies share the same thread and history. The channel remains required and unchanged for the life of the external conversation.
 
 Every active `cron/*.md` definition declares a quoted `channel` that matches a configured Slack channel. Empty completion output is silent; non-empty output starts a fresh managed thread in that channel.
@@ -57,7 +59,7 @@ Every active `cron/*.md` definition declares a quoted `channel` that matches a c
 ## Runtime Flow
 
 1. A workspace contains `AGENTS.md` plus optional `agents/`, `skills/`, `scripts/`, and `cron/` definitions.
-2. `rocketclaw.json` points RocketClaw at that workspace and enables connectors.
+2. `rocketclaw.json` points RocketClaw at that workspace, provides Slack credentials and channels, and configures optional integrations.
 3. RocketClaw builds runtime assets from embedded defaults, configured git overlays, and local workspace overrides.
 4. A human message, cron job, scheduled prompt, or MCP request enters RocketClaw and invokes RocketCode with the selected agent.
 5. RocketCode runs model/tool turns under configured permissions.

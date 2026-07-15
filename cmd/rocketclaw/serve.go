@@ -5,12 +5,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
 	"syscall"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/app"
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 )
 
 func runServe(args []string) error {
@@ -19,10 +21,22 @@ func runServe(args []string) error {
 		return fmt.Errorf("parse serve flags: %w", err)
 	}
 
-	selected, cfg, err := loadRuntimeConfig()
+	selected, err := selectRuntimeConfigFile()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	if !selected.Found {
+		return fmt.Errorf("load config: %w", os.ErrNotExist)
+	}
+	if _, err := config.MigrateSlackConfig(selected.Path); err != nil {
+		return fmt.Errorf("load config: migrate Slack config: %w", err)
+	}
+
+	cfg, err := config.Load(selected.Path)
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	cfg.WorkDir = selected.WorkDir
 
 	configPath, err := filepath.Abs(selected.Path)
 	if err != nil {

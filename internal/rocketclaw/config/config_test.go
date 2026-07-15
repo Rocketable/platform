@@ -360,6 +360,99 @@ func TestValidateRejectsAPIKeyAuthWithoutAPIKey(t *testing.T) {
 	require.ErrorContains(t, err, "openai.api_key is required when openai.rocketcode_auth is api_key")
 }
 
+func TestMigrateSlackConfigRewritesLegacyChannels(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rocketclaw.json")
+	legacy := []byte(`{
+  "workspace": ".",
+  "slack": {
+    "enabled": true,
+    "bot_token": "xoxb-test",
+    "app_token": "xapp-test",
+    "human_user_id": "U123",
+    "room": "D123",
+    "social_mode": {
+      "enabled": true,
+      "context_messages": 10,
+      "channels": [{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]
+    }
+  },
+  "openai": {"api_key":"test-key"}
+}`)
+	require.NoError(t, os.WriteFile(path, legacy, 0o600))
+
+	migrated, err := MigrateSlackConfig(path)
+	require.NoError(t, err)
+	assert.True(t, migrated)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	for _, removed := range []string{"enabled", "human_user_id", "room", "social_mode"} {
+		assert.NotContains(t, string(data), `"`+removed+`"`)
+	}
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Len(t, cfg.Slack.Channels, 1)
+	assert.Equal(t, "#ops", cfg.Slack.Channels[0].Channel)
+}
+
+func TestMigrateSlackConfigKeepsCanonicalChannels(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rocketclaw.json")
+	legacy := []byte(`{
+  "workspace": ".",
+  "slack": {
+    "bot_token": "xoxb-test",
+    "app_token": "xapp-test",
+    "channels": [{"channel":"#canonical","agents":["main"],"allowed_user_ids":["U123"]}],
+    "social_mode": {"channels":[{"channel":"#legacy","agents":["main"],"allowed_user_ids":["U123"]}]}
+  },
+  "openai": {"api_key":"test-key"}
+}`)
+	require.NoError(t, os.WriteFile(path, legacy, 0o640))
+
+	migrated, err := MigrateSlackConfig(path)
+	require.NoError(t, err)
+	assert.True(t, migrated)
+
+	cfg, err := Load(path)
+	require.NoError(t, err)
+	require.Len(t, cfg.Slack.Channels, 1)
+	assert.Equal(t, "#canonical", cfg.Slack.Channels[0].Channel)
+}
+
+func TestMigrateSlackConfigLeavesInvalidCandidateUntouched(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rocketclaw.json")
+	legacy := []byte(`{"workspace":".","slack":{"enabled":true,"bot_token":"xoxb-test","app_token":"xapp-test","room":"D123"},"openai":{"api_key":"test-key"}}`)
+	require.NoError(t, os.WriteFile(path, legacy, 0o600))
+
+	migrated, err := MigrateSlackConfig(path)
+	require.ErrorContains(t, err, "slack.channels is required")
+	assert.False(t, migrated)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, legacy, data)
+}
+
+func TestMigrateSlackConfigLeavesCurrentConfigUnchanged(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rocketclaw.json")
+	current := []byte(`{"workspace":".","slack":{"bot_token":"xoxb-test","app_token":"xapp-test","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"openai":{"api_key":"test-key"}}`)
+	require.NoError(t, os.WriteFile(path, current, 0o600))
+
+	migrated, err := MigrateSlackConfig(path)
+	require.NoError(t, err)
+	assert.False(t, migrated)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, current, data)
+}
+
 func loadTestConfig(t *testing.T, content string) *Config {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "rocketclaw.json")

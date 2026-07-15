@@ -95,6 +95,99 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 
+	return loadConfigData(absPath, data)
+}
+
+// MigrateSlackConfig atomically promotes the prior Slack channel shape in configPath.
+func MigrateSlackConfig(configPath string) (bool, error) {
+	absPath, err := filepath.Abs(configPath)
+	if err != nil {
+		return false, fmt.Errorf("resolve config path: %w", err)
+	}
+
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		return false, fmt.Errorf("read config for migration: %w", err)
+	}
+
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(data, &document); err != nil {
+		return false, fmt.Errorf("parse config JSON for migration: %w", err)
+	}
+
+	if len(document["slack"]) == 0 {
+		return false, nil
+	}
+
+	var slack map[string]json.RawMessage
+	if err := json.Unmarshal(document["slack"], &slack); err != nil {
+		return false, fmt.Errorf("parse Slack config for migration: %w", err)
+	}
+
+	legacyKeys := [...]string{"enabled", "human_user_id", "room", "social_mode"}
+	migrate := false
+
+	for _, key := range legacyKeys {
+		_, migrateKey := slack[key]
+		migrate = migrate || migrateKey
+	}
+
+	if !migrate {
+		return false, nil
+	}
+
+	if _, canonical := slack["channels"]; !canonical {
+		var socialMode map[string]json.RawMessage
+		if raw := slack["social_mode"]; len(raw) > 0 {
+			if err := json.Unmarshal(raw, &socialMode); err != nil {
+				return false, fmt.Errorf("parse Slack social mode for migration: %w", err)
+			}
+		}
+
+		if channels := socialMode["channels"]; len(channels) > 0 {
+			slack["channels"] = channels
+		}
+	}
+
+	for _, key := range legacyKeys {
+		delete(slack, key)
+	}
+
+	slackData, err := json.Marshal(slack)
+	if err != nil {
+		return false, fmt.Errorf("encode migrated Slack config: %w", err)
+	}
+
+	document["slack"] = slackData
+
+	migrated, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return false, fmt.Errorf("encode migrated config: %w", err)
+	}
+
+	migrated = append(migrated, '\n')
+
+	if _, err := loadConfigData(absPath, migrated); err != nil {
+		return false, fmt.Errorf("validate migrated config: %w", err)
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return false, fmt.Errorf("stat config for migration: %w", err)
+	}
+
+	if err := os.WriteFile(absPath, migrated, info.Mode().Perm()); err != nil {
+		return false, fmt.Errorf("write migrated config: %w", err)
+	}
+
+	if err := os.Chmod(absPath, info.Mode().Perm()); err != nil {
+		return false, fmt.Errorf("restore migrated config mode: %w", err)
+	}
+
+	return true, nil
+}
+
+func loadConfigData(absPath string, data []byte) (*Config, error) {
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config JSON: %w", err)
@@ -109,9 +202,12 @@ func Load(configPath string) (*Config, error) {
 		cfg.Workspace = filepath.Join(configDir, cfg.Workspace)
 	}
 
-	if cfg.Workspace, err = filepath.Abs(cfg.Workspace); err != nil {
+	workspace, err := filepath.Abs(cfg.Workspace)
+	if err != nil {
 		return nil, fmt.Errorf("resolve workspace: %w", err)
 	}
+
+	cfg.Workspace = workspace
 
 	if strings.TrimSpace(cfg.Logging.Level) == "" {
 		cfg.Logging.Level = "debug"
