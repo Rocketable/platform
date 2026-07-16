@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -44,7 +46,12 @@ func TestFreshSchemaHasNoSeedState(t *testing.T) {
 	}
 
 	require.NoError(t, rows.Err())
-	assert.Equal(t, []string{"external_conversation_id", "conversation_id", "agent", "slack_channel"}, columns)
+	assert.Equal(t, []string{"external_conversation_id", "private_conversation_id", "managed_conversation_id", "agent", "slack_channel"}, columns)
+
+	_, err = store.db.ExecContext(t.Context(), `INSERT INTO external_mcp_sessions VALUES ('blank-private', '', 'managed', 'agent', '#ops')`)
+	require.Error(t, err)
+	_, err = store.db.ExecContext(t.Context(), `INSERT INTO external_mcp_sessions VALUES ('blank-managed', 'private', '', 'agent', '#ops')`)
+	require.Error(t, err)
 }
 
 func TestSessionStoreRequiresConversationID(t *testing.T) {
@@ -56,18 +63,26 @@ func TestSessionStoreRequiresConversationID(t *testing.T) {
 	require.EqualError(t, err, "conversation ID is required")
 }
 
-func TestExternalMCPBindingPersistsOneSlackThread(t *testing.T) {
+func TestExternalMCPBindingPersistsPrivateAndManagedConversations(t *testing.T) {
 	store, err := NewSessionServiceIn(t.TempDir(), ".rocketclaw", slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
 
-	binding := ExternalMCPSessionState{Agent: "main", ConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops"}
+	binding := ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops"}
 	require.NoError(t, store.UpsertExternalMCPSession("deploy-42", &binding))
 
 	got, ok, err := store.ExternalMCPSession("deploy-42")
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, binding, got)
+
+	for _, conversationID := range []string{binding.PrivateConversationID, binding.ManagedConversationID} {
+		externalConversationID, found, foundOK, err := store.ExternalMCPSessionByConversationID(conversationID)
+		require.NoError(t, err)
+		require.True(t, foundOK)
+		assert.Equal(t, "deploy-42", externalConversationID)
+		assert.Equal(t, binding, found)
+	}
 }
 
 func TestExternalMCPConversationRegistrationIsAtomic(t *testing.T) {
@@ -75,13 +90,57 @@ func TestExternalMCPConversationRegistrationIsAtomic(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
 
-	require.NoError(t, store.RegisterExternalMCPConversation("existing", &ExternalMCPSessionState{Agent: "main", ConversationID: "slack-thread:C1:1.1", SlackChannel: "#ops"}))
-	err = store.RegisterExternalMCPConversation("existing", &ExternalMCPSessionState{Agent: "planner", ConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops"})
+	require.NoError(t, store.RegisterExternalMCPConversation("existing", "managed-agent", &ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private-1", ManagedConversationID: "slack-thread:C1:1.1", SlackChannel: "#ops"}))
+	thread, ok, err := store.Thread("slack-thread:C1:1.1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "managed-agent", thread.Agent)
+
+	err = store.RegisterExternalMCPConversation("existing", "other-managed", &ExternalMCPSessionState{Agent: "other-private", PrivateConversationID: "external_mcp:private-2", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops"})
 	require.Error(t, err)
 
-	_, ok, err := store.Thread("slack-thread:C1:2.2")
+	_, ok, err = store.Thread("slack-thread:C1:2.2")
 	require.NoError(t, err)
 	assert.False(t, ok)
+}
+
+func TestExternalMCPConversationCleanupRemovesOnlyBoundSessions(t *testing.T) {
+	store, err := NewSessionServiceIn(t.TempDir(), ".rocketclaw", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
+
+	session := ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private", ManagedConversationID: "slack-thread:C1:1.1", SlackChannel: "#ops"}
+	require.NoError(t, store.RegisterExternalMCPConversation("public", "managed-agent", &session))
+
+	for _, conversationID := range []string{session.PrivateConversationID, session.ManagedConversationID, "unrelated"} {
+		_, err := store.AppendEntryID(t.Context(), conversationID, testSessionEntry(conversationID, "assistant"))
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, store.UpsertThread("unrelated", ThreadState{Agent: "other"}))
+
+	require.NoError(t, store.RemoveExternalMCPConversation("public"))
+
+	_, ok, err := store.ExternalMCPSession("public")
+	require.NoError(t, err)
+	assert.False(t, ok)
+	_, ok, err = store.Thread(session.ManagedConversationID)
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	for _, conversationID := range []string{session.PrivateConversationID, session.ManagedConversationID} {
+		entries, err := store.ObserveEntries(t.Context(), conversationID, 0)
+		require.NoError(t, err)
+		assert.Empty(t, entries)
+	}
+
+	entries, err := store.ObserveEntries(t.Context(), "unrelated", 0)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1)
+
+	_, ok, err = store.Thread("unrelated")
+	require.NoError(t, err)
+	assert.True(t, ok)
 }
 
 func TestMigrationRemovesMainDMAndSeedState(t *testing.T) {
@@ -135,7 +194,8 @@ func TestMigrationRemovesMainDMAndSeedState(t *testing.T) {
 	session, ok, err := store.ExternalMCPSession("deploy-42")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, "slack-thread:C1:2.2", session.ConversationID)
+	assert.Empty(t, session.PrivateConversationID)
+	assert.Equal(t, "slack-thread:C1:2.2", session.ManagedConversationID)
 	assert.Equal(t, "C1", session.SlackChannel)
 	assert.Equal(t, "main", session.Agent)
 
@@ -170,10 +230,6 @@ func TestVersionZeroMigrationAppliesChannelOnlyCleanupAndIsIdempotent(t *testing
 			"main":                {Agent: "main"},
 			"slack-thread:D1:1.1": {Agent: "dm"},
 			"slack-thread:C2:3.3": {Agent: "aggregate"},
-		},
-		ExternalMCPSessions: map[string]ExternalMCPSessionState{
-			"valid": {Agent: "stale", ConversationID: "external_mcp:planner:valid"},
-			"dm":    {Agent: "dm", ConversationID: "slack-thread:D1:1.1", SlackChannel: "#ops"},
 		},
 		Goals:                       map[string]GoalState{"main": {Objective: "old"}, "slack-thread:C2:3.3": {Objective: "keep"}},
 		ScheduledMessages:           map[string]ScheduledMessageState{"old": {ConversationID: "main"}, "keep": {ConversationID: "slack-thread:C2:3.3"}},
@@ -230,7 +286,7 @@ func TestVersionZeroMigrationAppliesChannelOnlyCleanupAndIsIdempotent(t *testing
 	session, ok, err := store.ExternalMCPSession("valid")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, ExternalMCPSessionState{Agent: "planner", ConversationID: "slack-thread:C1:2.2", SlackChannel: "C1"}, session)
+	assert.Equal(t, ExternalMCPSessionState{Agent: "planner", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "C1"}, session)
 
 	_, ok, err = store.Thread("main")
 	require.NoError(t, err)
@@ -291,7 +347,7 @@ func TestVersionSixMigrationRemovesRedundantSlackCoordinates(t *testing.T) {
 	session, ok, err := store.ExternalMCPSession("deploy-42")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, ExternalMCPSessionState{Agent: "main", ConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops"}, session)
+	assert.Equal(t, ExternalMCPSessionState{Agent: "main", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops"}, session)
 
 	hasChannelID, err := tableHasColumn(t.Context(), store.db, "external_mcp_sessions", "slack_channel_id")
 	require.NoError(t, err)
@@ -309,6 +365,66 @@ func TestVersionSixMigrationRemovesRedundantSlackCoordinates(t *testing.T) {
 	_, ok, err = store.ExternalMCPSession("deploy-42")
 	require.NoError(t, err)
 	assert.True(t, ok)
+}
+
+func TestVersionSevenMigrationPreservesLegacySessionHistory(t *testing.T) {
+	workspace := t.TempDir()
+	runtimeDir := filepath.Join(workspace, ".rocketclaw")
+	require.NoError(t, os.MkdirAll(runtimeDir, 0o755))
+
+	db, err := sql.Open("sqlite", filepath.Join(runtimeDir, "state.sqlite3"))
+	require.NoError(t, err)
+
+	mcpEntry := testSessionEntry("legacy request", "legacy answer")
+	mcpEntry.ReplayInput[0] = testReplayInput(replayInputMessage{role: "user", text: "[ExternalMCP media=Text]\n\nlegacy request"})[0]
+	mcpEntry.ReplayInput = append(mcpEntry.ReplayInput[:1], json.RawMessage(`{"type":"compaction","encrypted_content":"private"}`), mcpEntry.ReplayInput[1])
+	slackEntry := testSessionEntry("[Slack media=Text]\n\nprivate human note", "managed answer")
+	metadataReplay, err := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", externalMCPMetadataEnv("slack-thread:C1:2.2", map[string]string{"owner": "alice"})))
+	require.NoError(t, err)
+
+	metadataEntry := &rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Unix(1, 0).UTC(), ReplayInput: metadataReplay}
+	mcpJSON, err := json.Marshal(mcpEntry)
+	require.NoError(t, err)
+	slackJSON, err := json.Marshal(slackEntry)
+	require.NoError(t, err)
+	metadataJSON, err := json.Marshal(metadataEntry)
+	require.NoError(t, err)
+
+	for _, statement := range []string{
+		`CREATE TABLE managed_conversations (conversation_id TEXT PRIMARY KEY, agent TEXT NOT NULL, created_by TEXT NOT NULL)`,
+		`CREATE TABLE session_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL, entry_json TEXT NOT NULL, entry_timestamp TEXT NOT NULL)`,
+		`CREATE TABLE external_mcp_sessions (external_conversation_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL UNIQUE, agent TEXT NOT NULL, slack_channel TEXT NOT NULL)`,
+		`INSERT INTO managed_conversations VALUES ('slack-thread:C1:2.2', 'managed-agent', '')`,
+		`INSERT INTO external_mcp_sessions VALUES ('deploy-42', 'slack-thread:C1:2.2', 'private-agent', '#ops')`,
+		`PRAGMA user_version = 7`,
+	} {
+		_, err = db.ExecContext(t.Context(), statement)
+		require.NoError(t, err)
+	}
+
+	_, err = db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('slack-thread:C1:2.2', ?, '2026-01-01T00:00:00Z'), ('slack-thread:C1:2.2', ?, '2026-01-02T00:00:00Z'), ('slack-thread:C1:2.2', ?, '2026-01-03T00:00:00Z')`, string(metadataJSON), string(mcpJSON), string(slackJSON))
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	store, err := NewSessionServiceIn(workspace, ".rocketclaw", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
+
+	session, ok, err := store.ExternalMCPSession("deploy-42")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, ExternalMCPSessionState{Agent: "private-agent", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops"}, session)
+	thread, ok, err := store.Thread(session.ManagedConversationID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "managed-agent", thread.Agent)
+
+	managed, err := store.ObserveEntries(t.Context(), session.ManagedConversationID, 0)
+	require.NoError(t, err)
+	require.Len(t, managed, 3)
+	assert.Contains(t, string(managed[0].Entry.ReplayInput[0]), `ROCKETCLAW_CONVERSATION_ID=\"slack-thread:C1:2.2\"`)
+	assert.Equal(t, mcpEntry.ReplayInput, managed[1].Entry.ReplayInput)
+	assert.Equal(t, slackEntry.ReplayInput, managed[2].Entry.ReplayInput)
 }
 
 func TestFutureSchemaVersionIsRejected(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -24,21 +25,8 @@ type directBridge interface {
 	SwitchAgent(agent string)
 }
 
-type bridgeConfig struct {
-	ConversationID, Agent string
-	OutputTargets         []events.OutputTarget
-	RecoveringActiveTurn  bool
-}
-
-type bridgeFactory func(bridgeConfig) directBridge
-
 type managedThreadBridge struct {
 	bridge directBridge
-}
-
-type threadBridgeSnapshot struct {
-	conversationID string
-	bridge         directBridge
 }
 
 type threadStart struct {
@@ -58,14 +46,14 @@ type threadBridgeManager struct {
 	log     *slog.Logger
 	runtime *config.Config
 	store   *harnessbridge.SessionService
-	factory bridgeFactory
+	factory func(harnessbridge.Config) directBridge
 	text    primaryTextBinding
 
 	mu      sync.Mutex
 	bridges map[string]*managedThreadBridge
 }
 
-func newThreadBridgeManager(runtime *config.Config, store *harnessbridge.SessionService, logger *slog.Logger, factory bridgeFactory) *threadBridgeManager {
+func newThreadBridgeManager(runtime *config.Config, store *harnessbridge.SessionService, logger *slog.Logger, factory func(harnessbridge.Config) directBridge) *threadBridgeManager {
 	return &threadBridgeManager{log: logger.With("component", "thread_bridges"), runtime: runtime, store: store, factory: factory, text: primaryTextBinding{label: "Slack", outputTargets: []events.OutputTarget{events.OutputTargetSlack}}, mu: sync.Mutex{}, bridges: map[string]*managedThreadBridge{}}
 }
 
@@ -90,11 +78,18 @@ func (b primaryTextBinding) setContinuationReply(inbound *events.InboundMessage,
 }
 
 func (m *threadBridgeManager) Stop() error {
-	var errStop error
+	m.mu.Lock()
+	conversationIDs := slices.Sorted(maps.Keys(m.bridges))
 
-	bridges := m.bridgesSnapshot()
-	for i := range bridges {
-		errStop = errors.Join(errStop, bridges[i].bridge.Stop())
+	bridges := make([]directBridge, 0, len(conversationIDs))
+	for _, conversationID := range conversationIDs {
+		bridges = append(bridges, m.bridges[conversationID].bridge)
+	}
+	m.mu.Unlock()
+
+	var errStop error
+	for _, bridge := range bridges {
+		errStop = errors.Join(errStop, bridge.Stop())
 	}
 
 	return errStop
@@ -404,6 +399,8 @@ func (m *threadBridgeManager) SubmitExternalMCP(ctx context.Context, agent, conv
 		return err
 	}
 
+	managed.bridge.SwitchAgent(agent)
+
 	if err := managed.bridge.SubmitWhenActive(ctx, inbound, activation); err != nil {
 		return fmt.Errorf("submit external MCP agent prompt: %w", err)
 	}
@@ -440,7 +437,12 @@ func (m *threadBridgeManager) ensureStartedThread(start *threadStart) (*managedT
 
 	if created {
 		if err := m.store.UpsertThread(start.conversationID, harnessbridge.ThreadState{Agent: start.agent, CreatedBy: start.createdBy}); err != nil {
-			m.dropCreatedBridge(start.conversationID, managed)
+			m.mu.Lock()
+			delete(m.bridges, start.conversationID)
+			m.mu.Unlock()
+
+			_ = managed.bridge.Stop()
+
 			return nil, fmt.Errorf("%s: %w", start.persistErr, err)
 		}
 	}
@@ -456,32 +458,46 @@ func disableStartNewThread(inbound *events.InboundMessage) {
 	inbound.Metadata[events.InboundStartNewThreadDisabledMetadataKey] = "true"
 }
 
-func (m *threadBridgeManager) dropCreatedBridge(conversationID string, managed *managedThreadBridge) {
-	m.mu.Lock()
-	delete(m.bridges, conversationID)
-	m.mu.Unlock()
-
-	_ = managed.bridge.Stop()
-}
-
-func (m *threadBridgeManager) bridgesSnapshot() []threadBridgeSnapshot {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	bridges := make([]threadBridgeSnapshot, 0, len(m.bridges))
-	for conversationID, managed := range m.bridges {
-		bridges = append(bridges, threadBridgeSnapshot{conversationID: conversationID, bridge: managed.bridge})
-	}
-
-	slices.SortFunc(bridges, func(a, b threadBridgeSnapshot) int { return strings.Compare(a.conversationID, b.conversationID) })
-
-	return bridges
-}
-
 func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread harnessbridge.ThreadState, outputTargets []events.OutputTarget, recoveringActiveTurn bool) (*managedThreadBridge, bool, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
 		return nil, false, errors.New("text thread conversation ID is required")
+	}
+
+	m.mu.Lock()
+	existing := m.bridges[conversationID]
+	m.mu.Unlock()
+
+	if existing != nil {
+		return existing, false, nil
+	}
+
+	bridgeCfg := harnessbridge.Config{ConversationID: conversationID, Agent: strings.TrimSpace(thread.Agent), OutputTargets: outputTargets, RecoveringActiveTurn: recoveringActiveTurn}
+
+	externalConversationID, externalSession, external, err := m.store.ExternalMCPSessionByConversationID(conversationID)
+	if err != nil {
+		return nil, false, fmt.Errorf("load external MCP paired conversation: %w", err)
+	}
+
+	if external {
+		bridgeCfg.ManagedConversationID = externalSession.ManagedConversationID
+		if conversationID == externalSession.PrivateConversationID {
+			bridgeCfg.Agent = externalSession.Agent
+			bridgeCfg.ExternalConversationID = externalConversationID
+		} else {
+			managedThread, ok, err := m.store.Thread(externalSession.ManagedConversationID)
+			if err != nil {
+				return nil, false, fmt.Errorf("load managed external MCP conversation: %w", err)
+			}
+
+			if ok {
+				if recoveringActiveTurn {
+					bridgeCfg.AgentAfterRecovery = strings.TrimSpace(managedThread.Agent)
+				} else {
+					bridgeCfg.Agent = strings.TrimSpace(managedThread.Agent)
+				}
+			}
+		}
 	}
 
 	m.mu.Lock()
@@ -491,19 +507,11 @@ func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread h
 		return managed, false, nil
 	}
 
-	thread.Agent = strings.TrimSpace(thread.Agent)
-	if thread.Agent == "" {
-		thread.Agent = "main"
+	if bridgeCfg.Agent == "" {
+		return nil, false, errors.New("text thread agent is required")
 	}
 
-	managed := &managedThreadBridge{
-		bridge: m.factory(bridgeConfig{
-			ConversationID:       conversationID,
-			Agent:                thread.Agent,
-			OutputTargets:        outputTargets,
-			RecoveringActiveTurn: recoveringActiveTurn,
-		}),
-	}
+	managed := &managedThreadBridge{bridge: m.factory(bridgeCfg)}
 	if err := managed.bridge.Start(context.Background()); err != nil {
 		return nil, false, fmt.Errorf("start text thread bridge: %w", err)
 	}

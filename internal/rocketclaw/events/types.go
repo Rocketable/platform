@@ -83,6 +83,12 @@ type OutboundAttachment struct {
 	Data           []byte
 }
 
+// ExternalMCPRelay carries one MCP request to its Slack surface.
+type ExternalMCPRelay struct {
+	ExternalConversationID, Agent, Text string
+	Attachments                         []OutboundAttachment
+}
+
 // InboundMessage is a message headed into its conversation prompt queue.
 type InboundMessage struct {
 	Source                                                  Source
@@ -102,7 +108,9 @@ type InboundMessage struct {
 }
 
 // SlackReplyTarget identifies the Slack message that owns a streamed reply.
-type SlackReplyTarget struct{ ChannelID, MessageTS, ThreadTS string }
+type SlackReplyTarget struct {
+	ChannelID, MessageTS, ThreadTS string
+}
 
 // TextConversationTarget identifies a conversation/message in the configured primary text connector.
 type TextConversationTarget struct{ ChannelID, MessageID, ThreadID string }
@@ -153,6 +161,8 @@ type OutboundMessage struct {
 	Source                       Source
 	Targets                      []OutputTarget
 	ConversationID, TurnID       string
+	ExternalConversationID       string
+	Agent                        string
 	Sequence                     int
 	PostProgressText, Complete   bool
 	SlackReply                   *SlackReplyTarget

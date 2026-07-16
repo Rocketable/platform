@@ -259,7 +259,7 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
 		rootCount int
 	)
 
-	textRelay := func(_ context.Context, _ string, _ []events.OutboundAttachment, reply *events.InboundMessage, _ string) (*events.InboundMessage, error) {
+	textRelay := func(_ context.Context, _ events.ExternalMCPRelay, reply *events.InboundMessage, _ string) (*events.InboundMessage, error) {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -279,7 +279,7 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
 
 		return nil
 	}
-	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops"}}}}
+	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}}}}
 	server, err := startExternalMCPServer(t.Context(), cfg, textRelay, func(context.Context, *events.InboundMessage) {}, func(context.Context, string) (string, error) { return "#ops", nil }, nil, func(string) bool { return true }, store, submit, testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
@@ -325,27 +325,39 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
 	session, ok, err := store.ExternalMCPSession("shared-1")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, harnessbridge.SlackThreadConversationID("C123", "111.222"), session.ConversationID)
+	assert.Equal(t, harnessbridge.SlackThreadConversationID("C123", "111.222"), session.ManagedConversationID)
+	assert.Equal(t, "planner", session.Agent)
+	assert.Contains(t, session.PrivateConversationID, "external_mcp:planner:")
+	thread, ok, err := store.Thread(session.ManagedConversationID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "managed", thread.Agent)
 }
 
-func TestExternalMCPFollowupRelayAttemptsOnce(t *testing.T) {
+func TestLegacyExternalMCPFollowupUsesExistingSharedConversation(t *testing.T) {
 	store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
 
 	conversationID := harnessbridge.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, store.RegisterExternalMCPConversation("existing-1", &harnessbridge.ExternalMCPSessionState{Agent: "planner", ConversationID: conversationID, SlackChannel: "#ops"}))
+	require.NoError(t, store.UpsertThread(conversationID, harnessbridge.ThreadState{Agent: "planner"}))
+	require.NoError(t, store.UpsertExternalMCPSession("existing-1", &harnessbridge.ExternalMCPSessionState{Agent: "planner", ManagedConversationID: conversationID, SlackChannel: "#ops"}))
 
 	relayCalls := 0
+	usedAgent := ""
+	usedConversationID := ""
 	errRelay := errors.New("post failed")
-	textRelay := func(context.Context, string, []events.OutboundAttachment, *events.InboundMessage, string) (*events.InboundMessage, error) {
+	textRelay := func(context.Context, events.ExternalMCPRelay, *events.InboundMessage, string) (*events.InboundMessage, error) {
 		relayCalls++
 		return nil, errRelay
 	}
-	submit := func(ctx context.Context, _ string, _ string, inbound *events.InboundMessage, activation harnessbridge.ActivationHook) error {
+	submit := func(ctx context.Context, agent, gotConversationID string, inbound *events.InboundMessage, activation harnessbridge.ActivationHook) error {
+		usedAgent = agent
+		usedConversationID = gotConversationID
+
 		return activation(ctx, inbound)
 	}
-	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops"}}}}
+	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}}}}
 	server, err := startExternalMCPServer(t.Context(), cfg, textRelay, func(context.Context, *events.InboundMessage) {}, func(context.Context, string) (string, error) { return "#ops", nil }, nil, func(string) bool { return true }, store, submit, testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
@@ -355,10 +367,12 @@ func TestExternalMCPFollowupRelayAttemptsOnce(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = session.Close() })
 
-	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "existing-1", "agent": "planner", "input": "follow up", "slack_channel": "#ops"}})
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "existing-1", "agent": "other", "input": "follow up", "slack_channel": "#ops"}})
 	require.NoError(t, err)
 	require.True(t, result.IsError)
 	assert.Equal(t, 1, relayCalls)
+	assert.Equal(t, "planner", usedAgent)
+	assert.Equal(t, conversationID, usedConversationID)
 }
 
 func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
@@ -390,7 +404,7 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 
 			cleanupCalls := 0
 			relayCalls := 0
-			textRelay := func(context.Context, string, []events.OutboundAttachment, *events.InboundMessage, string) (*events.InboundMessage, error) {
+			textRelay := func(context.Context, events.ExternalMCPRelay, *events.InboundMessage, string) (*events.InboundMessage, error) {
 				relayCalls++
 
 				if tt.relayErr != nil {
@@ -420,7 +434,7 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 
 				return nil
 			}
-			cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops"}}}}
+			cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}}}}
 			server, err := startExternalMCPServer(t.Context(), cfg, textRelay, cleanup, func(context.Context, string) (string, error) { return "#ops", nil }, nil, func(string) bool { return true }, store, submit, testLogger())
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })

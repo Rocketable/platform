@@ -1625,11 +1625,12 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
 		threadKey := SlackThreadConversationID("D123", "111.222")
+		privateConversationID := "external_mcp:planner:private"
 
 		require.NoError(t, service.UpsertThread(threadKey, ThreadState{Agent: "planner"}))
-		require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{Agent: "planner", ConversationID: threadKey, SlackChannel: "ops"}))
+		require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: threadKey, SlackChannel: "ops"}))
 
-		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: threadKey, Agent: "planner", SessionService: service}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: privateConversationID, Agent: "planner", ManagedConversationID: threadKey, ExternalConversationID: "public-1", SessionService: service}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 		require.NoError(t, bridge.ScheduleMessage(5*time.Second, "later", false))
 
 		time.Sleep(5 * time.Second)
@@ -1639,12 +1640,66 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 		case request := <-bridge.requestCh:
 			require.NotNil(t, request.inbound)
 			assert.Equal(t, "later", request.inbound.Text)
-			assert.Equal(t, threadKey, request.inbound.ConversationID)
+			assert.Equal(t, privateConversationID, request.inbound.ConversationID)
 			require.NotNil(t, request.inbound.SlackReply)
 			assert.Equal(t, events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}, *request.inbound.SlackReply)
 		case <-time.After(time.Nanosecond):
 			t.Fatal("scheduled external MCP message was not submitted")
 		}
+	})
+}
+
+func TestBridgeInterruptCancelsTurnWaitingForPairedSession(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		service := newTestSessionService(t)
+		pairID, privateID := SlackThreadConversationID("C123", "111.222"), "external_mcp:private"
+		service.reserveTurnPair(pairID, privateID)
+
+		bridge := &Bridge{runtime: &config.Config{}, config: Config{ConversationID: pairID, Agent: "main", ManagedConversationID: pairID, SessionService: service}, log: slog.New(slog.DiscardHandler)}
+		require.NoError(t, bridge.Start(t.Context()))
+		t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+
+		activated := false
+		inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "wait", true)
+		result := inbound.EnableResponseWait()
+		require.NoError(t, bridge.SubmitWhenActive(t.Context(), inbound, func(context.Context, *events.InboundMessage) error {
+			activated = true
+			return nil
+		}))
+		synctest.Wait()
+
+		assert.Same(t, inbound, bridge.InterruptActiveTurn())
+		service.completeTurnPairReservation(pairID, privateID)
+		synctest.Wait()
+		assert.False(t, activated)
+
+		response := <-result
+		require.ErrorIs(t, response.Err, context.Canceled)
+		assert.Nil(t, bridge.InterruptActiveTurn())
+	})
+}
+
+func TestBridgePermanentFirstTurnFailureReleasesManagedSession(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		service := newTestSessionService(t)
+		pairID, privateID := SlackThreadConversationID("C123", "111.222"), "external_mcp:private"
+		service.reserveTurnPair(pairID, privateID)
+
+		bridge := &Bridge{runtime: &config.Config{}, config: Config{ConversationID: privateID, Agent: "planner", ManagedConversationID: pairID, ExternalConversationID: "public-1", SessionService: service}, log: slog.New(slog.DiscardHandler)}
+		require.NoError(t, bridge.Start(t.Context()))
+		t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+
+		inbound := events.NewInboundMessage(events.SourceExternalMCP, events.InboundKindPrompt, "", "fail", true)
+		result := inbound.EnableResponseWait()
+		errActivation := errors.New("relay failed")
+
+		require.NoError(t, bridge.SubmitWhenActive(t.Context(), inbound, func(context.Context, *events.InboundMessage) error { return errActivation }))
+		synctest.Wait()
+		require.ErrorIs(t, (<-result).Err, errActivation)
+
+		unlock, err := service.lockTurnPair(t.Context(), pairID, pairID)
+		require.NoError(t, err)
+		unlock()
 	})
 }
 
@@ -2532,7 +2587,8 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
 
-	bridge.config = Config{ConversationID: SlackThreadConversationID("C123", "111.222"), Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}
+	managedConversationID := SlackThreadConversationID("C123", "111.222")
+	bridge.config = Config{ConversationID: "external_mcp:planner:private", Agent: "planner", ManagedConversationID: managedConversationID, ExternalConversationID: "public-1", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}
 	bridge.log = slog.New(slog.DiscardHandler)
 
 	msg := events.NewInboundMessage(events.SourceExternalMCP, events.InboundKindPrompt, "", "hello", true)
@@ -2545,7 +2601,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	assert.Equal(t, "ok", result.text)
 	require.Len(t, requestBody.Input, 2)
 	assert.Equal(t, "developer", requestBody.Input[0].Role)
-	assert.Equal(t, "This external MCP turn has metadata:\nROCKETCLAW_CONVERSATION_ID=\"slack-thread:C123:111.222\"\nROCKETCLAW_METADATA_A=\"first\"\nROCKETCLAW_METADATA_Z=\"last\"", requestBody.Input[0].Content)
+	assert.Equal(t, "This external MCP thread has metadata:\nROCKETCLAW_CONVERSATION_ID=\"external_mcp:planner:private\"\nROCKETCLAW_METADATA_A=\"first\"\nROCKETCLAW_METADATA_Z=\"last\"", requestBody.Input[0].Content)
 	assert.Equal(t, "user", requestBody.Input[1].Role)
 
 	msg.Metadata = map[string]string{"a": "ignored", "later-key": "fresh"}
@@ -2560,10 +2616,11 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 		}
 	}
 
-	assert.Contains(t, developerMessages, "This external MCP turn has metadata:\nROCKETCLAW_CONVERSATION_ID=\"slack-thread:C123:111.222\"\nROCKETCLAW_METADATA_A=\"ignored\"\nROCKETCLAW_METADATA_LATER_KEY=\"fresh\"")
+	assert.Contains(t, developerMessages, "This external MCP thread has metadata:\nROCKETCLAW_CONVERSATION_ID=\"external_mcp:planner:private\"\nROCKETCLAW_METADATA_A=\"first\"\nROCKETCLAW_METADATA_Z=\"last\"")
+	assert.Contains(t, developerMessages, "This external MCP turn has additional metadata:\nROCKETCLAW_METADATA_LATER_KEY=\"fresh\"")
 
 	require.NotEmpty(t, requestBody.Input)
-	assert.Equal(t, "ignored|fresh|", requestBody.Input[len(requestBody.Input)-1].Output)
+	assert.Equal(t, "first|fresh|last", requestBody.Input[len(requestBody.Input)-1].Output)
 
 	msg.Metadata = map[string]string{"a": "ignored"}
 	_, err = bridge.runTurn(context.Background(), msg, "turn-3", false)
@@ -2584,7 +2641,22 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 		}
 	}
 
-	assert.Zero(t, metadataEntries)
+	assert.Equal(t, 1, metadataEntries)
+
+	managedEntries, err := service.ObserveEntries(context.Background(), managedConversationID, 0)
+	require.NoError(t, err)
+	require.Len(t, managedEntries, 4)
+	assert.Equal(t, externalMCPMetadataEntryType, managedEntries[0].Entry.Type)
+	assert.Contains(t, string(managedEntries[2].Entry.ReplayInput[0]), "ROCKETCLAW_METADATA_LATER_KEY")
+
+	for i := range entries {
+		messages, err := replayInputMessages(entries[i].Entry.ReplayInput)
+		require.NoError(t, err)
+
+		for _, message := range messages {
+			assert.NotContains(t, message.text, "ROCKETCLAW_METADATA_LATER_KEY")
+		}
+	}
 }
 
 func TestRunTurnPreservesRecoveredExternalMCPReplayWithTransientMetadata(t *testing.T) {
@@ -2636,7 +2708,7 @@ func TestRunTurnPreservesRecoveredExternalMCPReplayWithTransientMetadata(t *test
 	}))
 	t.Cleanup(server.Close)
 
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: conversationID, Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}, log: slog.New(slog.DiscardHandler)}
+	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: conversationID, Agent: "planner", ExternalConversationID: "public-1", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}, log: slog.New(slog.DiscardHandler)}
 	msg := events.NewInboundMessage(events.SourceExternalMCP, events.InboundKindPrompt, "restart_recovery", "Continue from the recovered restart handoff.", false)
 	msg.ConversationID = conversationID
 	msg.Metadata = map[string]string{"later-key": "fresh"}
@@ -2654,7 +2726,7 @@ func TestRunTurnPreservesRecoveredExternalMCPReplayWithTransientMetadata(t *test
 	requestInput := input.String()
 	threadMetadata := strings.Index(requestInput, "This external MCP thread has metadata:")
 	recoveredTurn := strings.Index(requestInput, "interrupted external turn")
-	transientMetadata := strings.Index(requestInput, "This external MCP turn has metadata:")
+	transientMetadata := strings.Index(requestInput, "This external MCP turn has additional metadata:")
 	require.NotEqual(t, -1, threadMetadata, "provider request missing stored metadata: %s", requestInput)
 	require.NotEqual(t, -1, recoveredTurn, "provider request missing recovered replay: %s", requestInput)
 	require.NotEqual(t, -1, transientMetadata, "provider request missing transient metadata: %s", requestInput)
@@ -2724,7 +2796,7 @@ func TestRecoveredExternalMCPActiveTurnUsesStoredSourceMetadata(t *testing.T) {
 
 	bus := events.New()
 	t.Cleanup(bus.Close)
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: conversationID, Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}, bus: bus, log: slog.New(slog.DiscardHandler)}
+	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: conversationID, Agent: "planner", ExternalConversationID: "public-1", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}, bus: bus, log: slog.New(slog.DiscardHandler)}
 	turn := ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: conversationID, Agent: "planner", Model: "gpt-5.5", DisplayModel: "gpt-5.5", ReplayInput: recoveredReplay}, SourceMetadata: map[string]string{"later-key": "fresh"}}
 
 	var group errgroup.Group
@@ -2750,9 +2822,9 @@ func TestRecoveredExternalMCPActiveTurnUsesStoredSourceMetadata(t *testing.T) {
 		}
 	}
 
-	assert.NotContains(t, developerMessages, "ROCKETCLAW_METADATA_LATER_KEY")
+	assert.Contains(t, developerMessages, "This external MCP turn has additional metadata:\nROCKETCLAW_METADATA_LATER_KEY=\"fresh\"")
 	require.NotEmpty(t, requestBody.Input)
-	assert.Equal(t, "|", requestBody.Input[len(requestBody.Input)-1].Output)
+	assert.Equal(t, "first|fresh", requestBody.Input[len(requestBody.Input)-1].Output)
 }
 
 func TestRunTurnTranslatesSlackLightbulbToDirectSkill(t *testing.T) {

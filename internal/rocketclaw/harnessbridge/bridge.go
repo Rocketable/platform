@@ -103,14 +103,14 @@ const (
 
 // Config controls one rocketcode bridge conversation.
 type Config struct {
-	ConversationID, Agent string
-	OutputTargets         []events.OutputTarget
-	RecoveringActiveTurn  bool
-	RequestRestart        func(context.Context, string) (string, error)
-	RequestReload         func(context.Context, string) (string, error)
-	AskUserQuestion       func(context.Context, *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error)
-	StartNewThread        func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadResult, error)
-	SessionService        *SessionService
+	ConversationID, Agent, AgentAfterRecovery, ManagedConversationID, ExternalConversationID string
+	OutputTargets                                                                            []events.OutputTarget
+	RecoveringActiveTurn                                                                     bool
+	RequestRestart                                                                           func(context.Context, string) (string, error)
+	RequestReload                                                                            func(context.Context, string) (string, error)
+	AskUserQuestion                                                                          func(context.Context, *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error)
+	StartNewThread                                                                           func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadResult, error)
+	SessionService                                                                           *SessionService
 }
 
 // Bridge forwards rocketclaw messages into one turn-lived rocketcode run per turn.
@@ -127,6 +127,7 @@ type Bridge struct {
 	activeReply           *events.InboundMessage
 	activeTurnInterrupts  chan os.Signal
 	activeTurnCancel      context.CancelFunc
+	waitingTurnCancel     context.CancelFunc
 	activeTurnInterrupted bool
 }
 
@@ -338,6 +339,9 @@ func normalizeConfig(cfg *Config) Config {
 	normalized := *cfg
 	normalized.ConversationID = strings.TrimSpace(normalized.ConversationID)
 	normalized.Agent = strings.TrimSpace(normalized.Agent)
+	normalized.AgentAfterRecovery = strings.TrimSpace(normalized.AgentAfterRecovery)
+	normalized.ManagedConversationID = strings.TrimSpace(normalized.ManagedConversationID)
+	normalized.ExternalConversationID = strings.TrimSpace(normalized.ExternalConversationID)
 	normalized.OutputTargets = append([]events.OutputTarget(nil), normalized.OutputTargets...)
 
 	return normalized
@@ -401,14 +405,19 @@ func (b *Bridge) ResetScheduledMessages() error {
 // Stop cancels bridge activity.
 func (b *Bridge) Stop() error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	if b.stopped {
+		b.mu.Unlock()
 		return nil
 	}
 
 	close(b.stopCh)
 	b.stopped = true
+	cancel := b.waitingTurnCancel
+	b.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
 
 	return nil
 }
@@ -438,8 +447,13 @@ func (b *Bridge) InterruptActiveTurn() *events.InboundMessage {
 	reply := b.activeReply
 	interrupts := b.activeTurnInterrupts
 	cancel := b.activeTurnCancel
+	waitingCancel := b.waitingTurnCancel
 	b.activeTurnInterrupted = b.activeTurnInterrupted || interrupts != nil
 	b.mu.Unlock()
+
+	if waitingCancel != nil {
+		waitingCancel()
+	}
 
 	if cancel != nil {
 		cancel()
@@ -515,39 +529,91 @@ func (b *Bridge) loop(ctx context.Context) {
 			b.log.Info("bridge dequeued request", "conversation_id", b.config.ConversationID, "has_inbound", request.inbound != nil, "has_active_turn_recovery", request.activeTurn != nil, "scheduled_message_id", request.scheduledMessageID, "queue_len", len(b.requestCh))
 			b.setHandling(true)
 
-			switch {
-			case request.inbound != nil:
-				errHandle := request.activation(ctx, request.inbound)
-				if errHandle == nil {
-					errHandle = b.handleInbound(ctx, request.inbound)
-				} else {
-					request.inbound.CompleteResponse("", errHandle)
-				}
+			unlock := func() {}
 
-				if errHandle != nil && !errors.Is(errHandle, context.Canceled) {
-					b.log.Error("handle inbound rocketcode message", "error", errHandle)
-				}
+			if b.config.ManagedConversationID != "" {
+				waitCtx, cancelWait := context.WithCancel(ctx)
 
-				if errHandle == nil && request.scheduledMessageID != "" && !request.scheduledMessageRecurring {
-					if errDelete := b.config.SessionService.DeleteScheduledMessage(request.scheduledMessageID); errDelete != nil {
-						b.log.Error("delete handled scheduled message", "error", errDelete)
-					} else {
-						b.log.Info("scheduled message deleted after successful handling", "scheduled_message_id", request.scheduledMessageID, "conversation_id", b.config.ConversationID)
+				b.mu.Lock()
+				b.waitingTurnCancel = cancelWait
+				b.activeReply = request.inbound
+				b.mu.Unlock()
+
+				var errLock error
+
+				unlock, errLock = b.config.SessionService.lockTurnPair(waitCtx, b.config.ManagedConversationID, b.config.ConversationID)
+
+				cancelWait()
+				b.mu.Lock()
+				b.waitingTurnCancel = nil
+				b.mu.Unlock()
+
+				if errLock != nil {
+					if request.inbound != nil {
+						request.inbound.CompleteResponse("", errLock)
 					}
-				}
-			case request.activeTurn != nil:
-				errHandle := b.handleRecoveredActiveTurn(ctx, request.activeTurn)
-				if errHandle != nil && !activeTurnRecoveryPreserveError(errHandle) {
-					b.log.Error("handle recovered active turn", "error", errHandle)
-				}
 
-				if !activeTurnRecoveryPreserveError(errHandle) && b.config.RecoveringActiveTurn {
-					if errArm := b.armPendingScheduledMessages(); errArm != nil {
-						b.log.Error("arm scheduled messages after active turn recovery", "error", errArm)
-					}
+					b.mu.Lock()
+					b.activeReply = nil
+					b.mu.Unlock()
+					b.setHandling(false)
+
+					continue
 				}
 			}
 
+			func() {
+				defer unlock()
+
+				switch {
+				case request.inbound != nil:
+					errHandle := request.activation(ctx, request.inbound)
+					if errHandle == nil {
+						errHandle = b.handleInbound(ctx, request.inbound)
+					} else {
+						request.inbound.CompleteResponse("", errHandle)
+					}
+
+					if errHandle != nil && !errors.Is(errHandle, context.Canceled) {
+						b.log.Error("handle inbound rocketcode message", "error", errHandle)
+					}
+
+					if b.config.ExternalConversationID != "" && b.config.ManagedConversationID != "" && !activeTurnRecoveryPreserveError(errHandle) {
+						b.config.SessionService.completeTurnPairReservation(b.config.ManagedConversationID, b.config.ConversationID)
+					}
+
+					if errHandle == nil && request.scheduledMessageID != "" && !request.scheduledMessageRecurring {
+						if errDelete := b.config.SessionService.DeleteScheduledMessage(request.scheduledMessageID); errDelete != nil {
+							b.log.Error("delete handled scheduled message", "error", errDelete)
+						} else {
+							b.log.Info("scheduled message deleted after successful handling", "scheduled_message_id", request.scheduledMessageID, "conversation_id", b.config.ConversationID)
+						}
+					}
+				case request.activeTurn != nil:
+					errHandle := b.handleRecoveredActiveTurn(ctx, request.activeTurn)
+					if !activeTurnRecoveryPreserveError(errHandle) && b.config.ManagedConversationID != "" {
+						b.config.SessionService.completeTurnPairReservation(b.config.ManagedConversationID, b.config.ConversationID)
+					}
+
+					if errHandle != nil && !activeTurnRecoveryPreserveError(errHandle) {
+						b.log.Error("handle recovered active turn", "error", errHandle)
+					}
+
+					if !activeTurnRecoveryPreserveError(errHandle) && b.config.RecoveringActiveTurn {
+						if errArm := b.armPendingScheduledMessages(); errArm != nil {
+							b.log.Error("arm scheduled messages after active turn recovery", "error", errArm)
+						}
+
+						if b.config.AgentAfterRecovery != "" {
+							b.SwitchAgent(b.config.AgentAfterRecovery)
+						}
+					}
+				}
+			}()
+
+			b.mu.Lock()
+			b.activeReply = nil
+			b.mu.Unlock()
 			b.setHandling(false)
 		}
 	}
@@ -575,7 +641,12 @@ func (b *Bridge) handleRecoveredActiveTurn(ctx context.Context, turn *ActiveTurn
 	msg.Metadata[events.InboundMediaMetadataKey] = "Text"
 	msg.Metadata[recoveredTurnMetadataKey] = "true"
 
-	if channelID, threadTS, ok := SlackThreadTarget(b.config.ConversationID); ok {
+	replyConversationID := b.config.ConversationID
+	if b.config.ManagedConversationID != "" {
+		replyConversationID = b.config.ManagedConversationID
+	}
+
+	if channelID, threadTS, ok := SlackThreadTarget(replyConversationID); ok {
 		msg.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
 	}
 
@@ -851,6 +922,9 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 	}
 
 	shellOutputDir, store := filepath.Join(b.runtime.Workspace, b.runtime.RuntimeDirName(), ".rocketcode", "shell-outputs"), newSessionStore(b.config.ConversationID, b.config.SessionService)
+	if b.config.ManagedConversationID != b.config.ConversationID {
+		store.managedConversationID = b.config.ManagedConversationID
+	}
 
 	var shellEnv map[string]string
 
@@ -892,23 +966,59 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		}
 	}
 
-	if msg.Source == events.SourceExternalMCP {
-		shellEnv = externalMCPMetadataEnv(b.config.ConversationID, msg.Metadata)
-		if len(shellEnv) > 1 {
-			replayInput, err := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP turn has metadata:", shellEnv))
+	if msg.Source == events.SourceExternalMCP || b.config.ExternalConversationID != "" && msg.Source == events.SourceSystem {
+		metadataEntry, foundMetadata, err := b.config.SessionService.externalMCPMetadataEntry(ctx, b.config.ConversationID)
+		if err != nil {
+			return runResult{}, fmt.Errorf("load external MCP metadata: %w", err)
+		}
+
+		var entries []ObservedSessionEntry
+		if foundMetadata {
+			entries = []ObservedSessionEntry{metadataEntry}
+		}
+
+		metadataEnv, ok := externalMCPStoredMetadataEnv(b.config.ConversationID, entries)
+		if !ok {
+			metadataEnv = externalMCPMetadataEnv(b.config.ConversationID, msg.Metadata)
+			shellEnv = metadataEnv
+
+			replayInput, err := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", metadataEnv))
 			if err != nil {
 				return runResult{}, fmt.Errorf("encode external MCP metadata: %w", err)
 			}
 
-			previousSessionIn := sessionIn
-			sessionIn = func(yield func(rocketcode.SessionEntry, error) bool) {
-				for entry, err := range previousSessionIn {
-					if !yield(entry, err) {
-						return
-					}
+			if _, err := store.outID(rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Now().UTC(), ReplayInput: replayInput}); err != nil {
+				return runResult{}, fmt.Errorf("append external MCP metadata: %w", err)
+			}
+		} else {
+			shellEnv = metadataEnv
+
+			transientEnv := externalMCPMetadataEnv(b.config.ConversationID, msg.Metadata)
+			for key := range metadataEnv {
+				delete(transientEnv, key)
+			}
+
+			if len(transientEnv) > 0 {
+				shellEnv = maps.Clone(metadataEnv)
+				maps.Copy(shellEnv, transientEnv)
+
+				replayInput, err := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP turn has additional metadata:", transientEnv))
+				if err != nil {
+					return runResult{}, fmt.Errorf("encode transient external MCP metadata: %w", err)
 				}
 
-				yield(rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Now().UTC(), ReplayInput: replayInput}, nil)
+				store.managedReplayPrefix = replayInput
+
+				previousSessionIn := sessionIn
+				sessionIn = func(yield func(rocketcode.SessionEntry, error) bool) {
+					for entry, err := range previousSessionIn {
+						if !yield(entry, err) {
+							return
+						}
+					}
+
+					yield(rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Now().UTC(), ReplayInput: replayInput}, nil)
+				}
 			}
 		}
 	}
@@ -2134,7 +2244,12 @@ func (b *Bridge) armScheduledMessage(id string, message *ScheduledMessageState) 
 
 		inbound := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "scheduled_message", armed.Message, false)
 
-		if rest, ok := strings.CutPrefix(armed.ConversationID, "slack-thread:"); ok {
+		replyConversationID := armed.ConversationID
+		if b.config.ManagedConversationID != "" {
+			replyConversationID = b.config.ManagedConversationID
+		}
+
+		if rest, ok := strings.CutPrefix(replyConversationID, "slack-thread:"); ok {
 			if channelID, threadTS, ok := strings.Cut(rest, ":"); ok {
 				inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
 			}
@@ -2163,6 +2278,16 @@ func (b *Bridge) newOutboundMessage(msg *events.InboundMessage, turnID string, s
 	outbound := events.NewOutboundMessage(source, b.config.ConversationID, text, b.config.OutputTargets...)
 	outbound.ProgressText = thinking
 	outbound.ConversationID = b.config.ConversationID
+
+	outbound.ExternalConversationID = b.config.ExternalConversationID
+	if msg != nil && msg.Source == events.SourceExternalMCP {
+		outbound.ExternalConversationID = strings.TrimSpace(msg.Metadata["external_conversation_id"])
+	}
+
+	if outbound.ExternalConversationID != "" {
+		outbound.Agent = b.config.Agent
+	}
+
 	outbound.TurnID = turnID
 	outbound.Sequence = sequence
 

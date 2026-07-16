@@ -128,6 +128,13 @@ func migrateSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) erro
 		migrated = true
 	}
 
+	migratedExternalMCP, err := migrateExternalMCPDualSessionsIfNeeded(ctx, tx, version)
+	if err != nil {
+		return err
+	}
+
+	migrated = migrated || migratedExternalMCP
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit session db migration: %w", err)
 	}
@@ -139,6 +146,23 @@ func migrateSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) erro
 	}
 
 	return nil
+}
+
+func migrateExternalMCPDualSessionsIfNeeded(ctx context.Context, tx *sql.Tx, version int) (changed bool, err error) {
+	if version > 7 {
+		return false, nil
+	}
+
+	migrated, err := migrateExternalMCPDualSessionState(ctx, tx)
+	if err != nil {
+		return false, err
+	}
+
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sessionDBSchemaVersion)); err != nil {
+		return false, fmt.Errorf("set rocketclaw state schema version: %w", err)
+	}
+
+	return migrated, nil
 }
 
 func migrateExternalMCPSessionState(ctx context.Context, tx *sql.Tx, version int) (bool, error) {
@@ -164,7 +188,36 @@ func migrateExternalMCPSessionState(ctx context.Context, tx *sql.Tx, version int
 	return true, nil
 }
 
+func migrateExternalMCPDualSessionState(ctx context.Context, db stateStoreDB) (bool, error) {
+	hasPrivateConversationID, err := tableHasColumn(ctx, db, "external_mcp_sessions", "private_conversation_id")
+	if err != nil {
+		return false, err
+	}
+
+	if hasPrivateConversationID {
+		return false, nil
+	}
+
+	for _, statement := range []string{
+		`CREATE TABLE external_mcp_sessions_v8 (external_conversation_id TEXT PRIMARY KEY, private_conversation_id TEXT UNIQUE CHECK (private_conversation_id IS NULL OR trim(private_conversation_id) <> ''), managed_conversation_id TEXT NOT NULL UNIQUE CHECK (trim(managed_conversation_id) <> ''), agent TEXT NOT NULL, slack_channel TEXT NOT NULL)`,
+		`INSERT INTO external_mcp_sessions_v8 (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) SELECT external_conversation_id, NULL, conversation_id, agent, slack_channel FROM external_mcp_sessions`,
+		`DROP TABLE external_mcp_sessions`,
+		`ALTER TABLE external_mcp_sessions_v8 RENAME TO external_mcp_sessions`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			return false, fmt.Errorf("install v8 external MCP sessions: %w", err)
+		}
+	}
+
+	return true, nil
+}
+
 func migrateChannelOnlyState(ctx context.Context, tx stateStoreDB) error {
+	hasPrivateConversationID, err := tableHasColumn(ctx, tx, "external_mcp_sessions", "private_conversation_id")
+	if err != nil {
+		return err
+	}
+
 	hasSeeded, err := tableHasColumn(ctx, tx, "managed_conversations", "seeded_from_response")
 	if err != nil {
 		return err
@@ -184,8 +237,13 @@ func migrateChannelOnlyState(ctx context.Context, tx stateStoreDB) error {
 			)
 		}
 
+		externalCleanup := `DELETE FROM external_mcp_sessions WHERE trim(slack_channel) = '' OR conversation_id NOT LIKE 'slack-thread:%' OR conversation_id LIKE 'slack-thread:D%'`
+		if hasPrivateConversationID {
+			externalCleanup = `DELETE FROM external_mcp_sessions WHERE trim(slack_channel) = '' OR managed_conversation_id NOT LIKE 'slack-thread:%' OR managed_conversation_id LIKE 'slack-thread:D%'`
+		}
+
 		statements = append(statements,
-			`DELETE FROM external_mcp_sessions WHERE trim(slack_channel) = '' OR conversation_id NOT LIKE 'slack-thread:%' OR conversation_id LIKE 'slack-thread:D%'`,
+			externalCleanup,
 			`DELETE FROM session_entries WHERE conversation_id = 'main' OR conversation_id LIKE 'slack-thread:D%' OR json_extract(entry_json, '$.type') IN ('main_thread_seed', 'conversation_thread_seed', 'response_thread_seed', 'cron_thread_seed')`,
 			`DELETE FROM conversation_goals WHERE conversation_id = 'main' OR conversation_id LIKE 'slack-thread:D%'`,
 			`DELETE FROM scheduled_messages WHERE conversation_id = 'main' OR conversation_id LIKE 'slack-thread:D%'`,
@@ -412,19 +470,16 @@ func sessionDBUserVersion(ctx context.Context, db stateStoreDB) (int, error) {
 }
 
 func importLegacyState(ctx context.Context, dao stateDAO, state State, logger *slog.Logger) error {
-	hasSeeded, err := tableHasColumn(ctx, dao.db, "managed_conversations", "seeded_from_response")
-	if err != nil {
+	if err := migrateChannelOnlyState(ctx, dao.db); err != nil {
 		return err
 	}
 
-	if hasSeeded {
-		if err := migrateChannelOnlyState(ctx, dao.db); err != nil {
-			return err
-		}
+	if _, err := migrateExternalMCPDualSessionState(ctx, dao.db); err != nil {
+		return err
+	}
 
-		if err := createSessionSchema(ctx, dao.db); err != nil {
-			return err
-		}
+	if err := createSessionSchema(ctx, dao.db); err != nil {
+		return err
 	}
 
 	logger.Info("importing legacy rocketclaw managed conversations", "count", len(state.Threads))
@@ -450,6 +505,10 @@ func importLegacyState(ctx context.Context, dao stateDAO, state State, logger *s
 		if _, ok, err := dao.externalMCPSession(ctx, externalConversationID); err != nil {
 			return err
 		} else if ok {
+			continue
+		}
+
+		if session.ManagedConversationID == "" {
 			continue
 		}
 

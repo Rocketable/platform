@@ -24,7 +24,7 @@
 | Message with another human mention | Mention RocketClaw too when the message also pings another person, bot, broadcast target, or user group. | Managed-thread replies that ping someone else are suppressed unless RocketClaw is also mentioned. Raw unresolved `@word` text is not treated as a Slack ping. |
 | Agent switch | `🎛 agent-name` or bare `🎛` as the whole message. | `agent-name` must be in the channel's configured `agents` list. Bare `🎛` opens a Slack-native selector for that list. |
 | One-off cron | `🔂 daily`, `🔂 daily.md`, or a supported `repeat_one` reaction. | Requests and reruns can run cronjobs whose required `channel` matches the acted-on configured channel. |
-| External MCP conversation | Call `session_prompt` with an external conversation ID and configured channel. | The ID owns one Slack thread and one history shared by MCP turns and authorized Slack replies. Later calls use the same channel. |
+| External MCP conversation | Call `session_prompt` with an external conversation ID, agent, and configured channel. | The ID owns one private MCP session and one managed Slack session on the same thread. The MCP agent stays fixed. MCP history copies into managed history; Slack history does not copy back. |
 
 ## Goal Examples
 

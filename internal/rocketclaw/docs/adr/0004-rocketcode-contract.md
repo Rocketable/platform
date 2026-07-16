@@ -124,10 +124,10 @@ Persistent bridge tools are restart, reload, schedule message, reset scheduled m
 ### Session And Replay
 
 - Persistent conversations use SQLite-backed session storage under `.rocketclaw/state.sqlite3`, opened through the centralized RocketClaw SQLite state-store opener defined by ADR 0005.
-- Every persistent Slack conversation starts with an empty session. The initiating human, External MCP, tool-created, or scheduled prompt is its first local turn, and later replay consists exclusively of that conversation's own history.
-- Normal RocketCode context management, conversation-local compaction, durable replay, and active-turn restart checkpoints remain available within the owning persistent conversation.
+- Every persistent Slack conversation starts with empty managed history. A Slack human, tool, or schedule normally provides its first turn. An External MCP-created thread instead receives copies of completed turns from its separate private MCP session. Slack turns stay only in managed history and never copy back into private MCP history.
+- Private MCP and managed Slack sessions keep separate RocketCode context, replay, compaction, and restart checkpoints. Only one of the pair may run at a time. Completed MCP entries are copied into managed history without provider compaction items.
 - Raw cron runs start with empty history and complete through their raw-run result path.
-- External MCP metadata is injected as a developer message for the turn that supplied it and must not become ambient global state.
+- The first External MCP turn stores its metadata as the private session's base metadata and copies it into managed history. Later calls cannot replace base keys. New later keys apply only to that MCP turn, and the managed copy records the metadata seen by that turn.
 - Attachments are normalized before RocketCode prompt construction through the shared inbound attachment path. Supported image attachments become RocketCode prompt attachments. Text attachments from text connectors and external MCP become literal prompt text before the persistent bridge builds the RocketCode input. Unsupported or over-budget attachments are omitted from RocketCode attachment input and represented through attachment warnings or fallback text.
 - RocketCode response attachments collected through `rocketclaw_attach_files_to_response` become shared outbound attachment values owned by the persistent bridge result. Connector delivery and blocking caller delivery, including external MCP `session_prompt` results, adapt those same outbound attachment values at the edge instead of maintaining separate attachment pipelines.
 
@@ -237,3 +237,4 @@ Persistent bridge tools are restart, reload, schedule message, reset scheduled m
 - 2026-07-15: Defined persistent bridge sessions as conversation-local, with ordinary per-conversation replay, compaction, and active-turn recovery.
 - 2026-07-15: Defined raw-run tools as decision, outbound attachment collection, restart, and reload.
 - 2026-07-15: Defined Slack-bound External MCP turns as one persistent thread-local conversation shared with authorized Slack replies.
+- 2026-07-16: Replaced the shared MCP and Slack history with separate private MCP and managed Slack histories, one-way copying without compactions, one-at-a-time execution, and restored persistent base metadata.

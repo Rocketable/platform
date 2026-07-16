@@ -65,7 +65,12 @@ func (d stateDAO) setThreadAgent(ctx context.Context, conversationID, agent stri
 }
 
 func (d stateDAO) upsertExternalMCPSession(ctx context.Context, externalConversationID string, session *ExternalMCPSessionState) error {
-	_, err := d.db.ExecContext(ctx, `INSERT INTO external_mcp_sessions (external_conversation_id, conversation_id, agent, slack_channel) VALUES (?, ?, ?, ?) ON CONFLICT(external_conversation_id) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent, slack_channel = excluded.slack_channel`, strings.TrimSpace(externalConversationID), strings.TrimSpace(session.ConversationID), strings.TrimSpace(session.Agent), strings.TrimSpace(session.SlackChannel))
+	var privateConversationID any
+	if privateID := strings.TrimSpace(session.PrivateConversationID); privateID != "" {
+		privateConversationID = privateID
+	}
+
+	_, err := d.db.ExecContext(ctx, `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES (?, ?, ?, ?, ?) ON CONFLICT(external_conversation_id) DO UPDATE SET private_conversation_id = excluded.private_conversation_id, managed_conversation_id = excluded.managed_conversation_id, agent = excluded.agent, slack_channel = excluded.slack_channel`, strings.TrimSpace(externalConversationID), privateConversationID, strings.TrimSpace(session.ManagedConversationID), strings.TrimSpace(session.Agent), strings.TrimSpace(session.SlackChannel))
 	if err != nil {
 		return fmt.Errorf("upsert external MCP session: %w", err)
 	}
@@ -74,10 +79,8 @@ func (d stateDAO) upsertExternalMCPSession(ctx context.Context, externalConversa
 }
 
 func (d stateDAO) externalMCPSession(ctx context.Context, externalConversationID string) (ExternalMCPSessionState, bool, error) {
-	var session ExternalMCPSessionState
-
-	err := d.db.QueryRowContext(ctx, `SELECT agent, conversation_id, slack_channel FROM external_mcp_sessions WHERE external_conversation_id = ?`, strings.TrimSpace(externalConversationID)).Scan(&session.Agent, &session.ConversationID, &session.SlackChannel)
-	if err == sql.ErrNoRows {
+	_, session, err := scanExternalMCPSession(d.db.QueryRowContext(ctx, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel FROM external_mcp_sessions WHERE external_conversation_id = ?`, strings.TrimSpace(externalConversationID)))
+	if errors.Is(err, sql.ErrNoRows) {
 		return ExternalMCPSessionState{}, false, nil
 	}
 
@@ -86,6 +89,34 @@ func (d stateDAO) externalMCPSession(ctx context.Context, externalConversationID
 	}
 
 	return session, true, nil
+}
+
+func (d stateDAO) externalMCPSessionByConversationID(ctx context.Context, conversationID string) (externalConversationID string, session ExternalMCPSessionState, found bool, err error) {
+	externalConversationID, session, err = scanExternalMCPSession(d.db.QueryRowContext(ctx, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel FROM external_mcp_sessions WHERE private_conversation_id = ? OR managed_conversation_id = ?`, strings.TrimSpace(conversationID), strings.TrimSpace(conversationID)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ExternalMCPSessionState{}, false, nil
+	}
+
+	if err != nil {
+		return "", ExternalMCPSessionState{}, false, fmt.Errorf("read external MCP session by conversation ID: %w", err)
+	}
+
+	return externalConversationID, session, true, nil
+}
+
+func scanExternalMCPSession(scanner rowScanner) (string, ExternalMCPSessionState, error) {
+	var (
+		externalConversationID string
+		session                ExternalMCPSessionState
+		privateConversationID  sql.NullString
+	)
+	if err := scanner.Scan(&externalConversationID, &session.Agent, &privateConversationID, &session.ManagedConversationID, &session.SlackChannel); err != nil {
+		return "", ExternalMCPSessionState{}, fmt.Errorf("scan external MCP session: %w", err)
+	}
+
+	session.PrivateConversationID = privateConversationID.String
+
+	return externalConversationID, session, nil
 }
 
 func (d stateDAO) upsertGoal(ctx context.Context, conversationID string, goal *GoalState) error {

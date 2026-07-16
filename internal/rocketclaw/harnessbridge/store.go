@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	harness "github.com/Rocketable/platform/internal/rocketcode"
@@ -63,11 +64,13 @@ type ThreadCreator string
 // ThreadCreatedByCron marks managed conversations created for cron output.
 const ThreadCreatedByCron ThreadCreator = "cron"
 
-// ExternalMCPSessionState binds an external MCP conversation ID to one Slack thread.
+// ExternalMCPSessionState binds an external MCP conversation ID to private and managed sessions.
 type ExternalMCPSessionState struct {
-	Agent          string `json:"agent,omitempty"`
-	ConversationID string `json:"conversation_id,omitempty"`
-	SlackChannel   string `json:"slack_channel,omitempty"`
+	Agent                 string `json:"agent,omitempty"`
+	PrivateConversationID string `json:"private_conversation_id,omitempty"`
+	ManagedConversationID string `json:"managed_conversation_id,omitempty"`
+	ConversationID        string `json:"conversation_id,omitempty"`
+	SlackChannel          string `json:"slack_channel,omitempty"`
 }
 
 // ActiveTurnState records one durable RocketCode active-turn checkpoint.
@@ -115,13 +118,24 @@ type GoalState struct {
 }
 
 type sqliteSessionStore struct {
-	conversationID string
-	service        *SessionService
+	conversationID, managedConversationID string
+	managedReplayPrefix                   []json.RawMessage
+	service                               *SessionService
 }
 
 // SessionService owns runtime SQLite session and state access inside one rocketclaw process.
 type SessionService struct {
 	db *sql.DB
+
+	turnGatesMu sync.Mutex
+	turnGates   map[string]*sessionTurnGate
+}
+
+type sessionTurnGate struct {
+	token       chan struct{}
+	reserved    chan struct{}
+	reservedFor string
+	refs        int
 }
 
 // SessionSummary is the compact observable state of one rocketcode session.
@@ -185,7 +199,7 @@ func NewSessionServiceIn(workspace, runtimeDir string, logger *slog.Logger) (*Se
 		return nil, err
 	}
 
-	return &SessionService{db: db}, nil
+	return &SessionService{db: db, turnGates: map[string]*sessionTurnGate{}}, nil
 }
 
 // UpsertThread records or updates a text-thread bridge entry.
@@ -299,30 +313,52 @@ func (s *SessionService) UpsertExternalMCPSession(externalConversationID string,
 	}
 
 	session.Agent = strings.TrimSpace(session.Agent)
-	session.ConversationID = strings.TrimSpace(session.ConversationID)
+	session.PrivateConversationID = strings.TrimSpace(session.PrivateConversationID)
+
+	session.ManagedConversationID = strings.TrimSpace(session.ManagedConversationID)
+	if session.ManagedConversationID == "" {
+		session.ManagedConversationID = strings.TrimSpace(session.ConversationID)
+	}
+
+	session.ConversationID = ""
 	session.SlackChannel = strings.TrimSpace(session.SlackChannel)
 
 	return stateDAO{db: s.db}.upsertExternalMCPSession(context.Background(), externalConversationID, session)
 }
 
 // RegisterExternalMCPConversation atomically persists a managed conversation and its public binding.
-func (s *SessionService) RegisterExternalMCPConversation(externalConversationID string, session *ExternalMCPSessionState) error {
+func (s *SessionService) RegisterExternalMCPConversation(externalConversationID, managedAgent string, session *ExternalMCPSessionState) error {
 	externalConversationID = strings.TrimSpace(externalConversationID)
+	managedAgent = strings.TrimSpace(managedAgent)
 	session.Agent = strings.TrimSpace(session.Agent)
-	session.ConversationID = strings.TrimSpace(session.ConversationID)
+	session.PrivateConversationID = strings.TrimSpace(session.PrivateConversationID)
+	session.ManagedConversationID = strings.TrimSpace(session.ManagedConversationID)
 	session.SlackChannel = strings.TrimSpace(session.SlackChannel)
+	s.reserveTurnPair(session.ManagedConversationID, session.PrivateConversationID)
 
-	tx, err := s.db.BeginTx(context.Background(), nil)
+	ctx := context.Background()
+
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		s.completeTurnPairReservation(session.ManagedConversationID, session.PrivateConversationID)
 		return fmt.Errorf("begin external MCP conversation registration: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(context.Background(), `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES (?, ?, '')`, session.ConversationID, session.Agent); err != nil {
+	committed := false
+
+	defer func() {
+		_ = tx.Rollback()
+
+		if !committed {
+			s.completeTurnPairReservation(session.ManagedConversationID, session.PrivateConversationID)
+		}
+	}()
+
+	if _, err := tx.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES (?, ?, '')`, session.ManagedConversationID, managedAgent); err != nil {
 		return fmt.Errorf("register external MCP managed conversation: %w", err)
 	}
 
-	if _, err := tx.ExecContext(context.Background(), `INSERT INTO external_mcp_sessions (external_conversation_id, conversation_id, agent, slack_channel) VALUES (?, ?, ?, ?)`, externalConversationID, session.ConversationID, session.Agent, session.SlackChannel); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES (?, ?, ?, ?, ?)`, externalConversationID, session.PrivateConversationID, session.ManagedConversationID, session.Agent, session.SlackChannel); err != nil {
 		return fmt.Errorf("register external MCP binding: %w", err)
 	}
 
@@ -330,39 +366,62 @@ func (s *SessionService) RegisterExternalMCPConversation(externalConversationID 
 		return fmt.Errorf("commit external MCP conversation registration: %w", err)
 	}
 
+	committed = true
+
 	return nil
 }
 
 // RemoveExternalMCPConversation removes a failed newly-created conversation and all of its durable state.
-func (s *SessionService) RemoveExternalMCPConversation(externalConversationID, conversationID string) error {
-	tx, err := s.db.BeginTx(context.Background(), nil)
+func (s *SessionService) RemoveExternalMCPConversation(externalConversationID string) error {
+	ctx := context.Background()
+
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin external MCP conversation cleanup: %w", err)
 	}
+
 	defer func() { _ = tx.Rollback() }()
 
-	for _, statement := range []string{
-		`DELETE FROM external_mcp_sessions WHERE external_conversation_id = ? AND conversation_id = ?`,
-		`DELETE FROM session_entries WHERE conversation_id = ?`,
-		`DELETE FROM active_turns WHERE conversation_id = ?`,
-		`DELETE FROM scheduled_messages WHERE conversation_id = ?`,
-		`DELETE FROM pending_restart_notifications WHERE conversation_id = ?`,
-		`DELETE FROM conversation_goals WHERE conversation_id = ?`,
-		`DELETE FROM managed_conversations WHERE conversation_id = ?`,
-	} {
-		args := []any{strings.TrimSpace(conversationID)}
-		if strings.Contains(statement, "external_mcp_sessions") {
-			args = []any{strings.TrimSpace(externalConversationID), strings.TrimSpace(conversationID)}
+	session, ok, err := (stateDAO{db: tx}).externalMCPSession(ctx, externalConversationID)
+	if err != nil {
+		return err
+	}
+
+	if !ok {
+		return nil
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM external_mcp_sessions WHERE external_conversation_id = ? AND managed_conversation_id = ?`, strings.TrimSpace(externalConversationID), session.ManagedConversationID); err != nil {
+		return fmt.Errorf("clean failed external MCP binding: %w", err)
+	}
+
+	for _, conversationID := range []string{session.PrivateConversationID, session.ManagedConversationID} {
+		if conversationID == "" {
+			continue
 		}
 
-		if _, err := tx.ExecContext(context.Background(), statement, args...); err != nil {
-			return fmt.Errorf("clean failed external MCP conversation: %w", err)
+		for _, statement := range []string{
+			`DELETE FROM session_entries WHERE conversation_id = ?`,
+			`DELETE FROM active_turns WHERE conversation_id = ?`,
+			`DELETE FROM scheduled_messages WHERE conversation_id = ?`,
+			`DELETE FROM pending_restart_notifications WHERE conversation_id = ?`,
+			`DELETE FROM conversation_goals WHERE conversation_id = ?`,
+		} {
+			if _, err := tx.ExecContext(ctx, statement, conversationID); err != nil {
+				return fmt.Errorf("clean failed external MCP conversation: %w", err)
+			}
 		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM managed_conversations WHERE conversation_id = ?`, session.ManagedConversationID); err != nil {
+		return fmt.Errorf("clean failed external MCP managed conversation: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit external MCP conversation cleanup: %w", err)
 	}
+
+	s.completeTurnPairReservation(session.ManagedConversationID, session.PrivateConversationID)
 
 	return nil
 }
@@ -425,6 +484,37 @@ func (s *SessionService) SetThreadAgentIfExists(conversationID, agent string) (b
 // ExternalMCPSession returns a persisted external MCP session mapping.
 func (s *SessionService) ExternalMCPSession(externalConversationID string) (ExternalMCPSessionState, bool, error) {
 	return stateDAO{db: s.db}.externalMCPSession(context.Background(), externalConversationID)
+}
+
+// ExternalMCPSessionByConversationID returns the public ID and binding for either session ID.
+func (s *SessionService) ExternalMCPSessionByConversationID(conversationID string) (externalConversationID string, session ExternalMCPSessionState, ok bool, err error) {
+	return stateDAO{db: s.db}.externalMCPSessionByConversationID(context.Background(), conversationID)
+}
+
+// ReserveExternalMCPRecovery makes paired work wait for the recovering owner.
+func (s *SessionService) ReserveExternalMCPRecovery(conversationID string) error {
+	_, session, ok, err := s.ExternalMCPSessionByConversationID(conversationID)
+	if err != nil || !ok {
+		return err
+	}
+
+	if session.PrivateConversationID != "" {
+		s.reserveTurnPair(session.ManagedConversationID, conversationID)
+	}
+
+	return nil
+}
+
+// ReleaseExternalMCPRecovery releases paired work after recovery is abandoned.
+func (s *SessionService) ReleaseExternalMCPRecovery(conversationID string) error {
+	_, session, ok, err := s.ExternalMCPSessionByConversationID(conversationID)
+	if err != nil || !ok || session.PrivateConversationID == "" {
+		return err
+	}
+
+	s.completeTurnPairReservation(session.ManagedConversationID, conversationID)
+
+	return nil
 }
 
 // ScheduledMessages returns all persisted scheduled messages.
@@ -781,11 +871,25 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 		return PruneStateStats{}, err
 	}
 
+	externalSessions, err := externalMCPSessions(ctx, tx)
+	if err != nil {
+		return PruneStateStats{}, err
+	}
+
+	externalManagedIDs := map[string]struct{}{}
+	for _, session := range externalSessions {
+		externalManagedIDs[session.ManagedConversationID] = struct{}{}
+	}
+
 	var stats PruneStateStats
 
 	deleteConversations := map[string]struct{}{}
 
 	for _, conversationID := range threadIDs {
+		if _, external := externalManagedIDs[conversationID]; external {
+			continue
+		}
+
 		prune, err := shouldPruneThreadConversation(ctx, tx, conversationID, cutoff)
 		if err != nil {
 			return PruneStateStats{}, err
@@ -819,37 +923,13 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 		}
 	}
 
-	externalSessions, err := externalMCPSessions(ctx, tx)
+	externalStats, err := pruneExternalMCPSessions(ctx, tx, cutoff, threadIDs, externalSessions, deleteConversations)
 	if err != nil {
 		return PruneStateStats{}, err
 	}
 
-	for externalConversationID, session := range externalSessions {
-		conversationID := strings.TrimSpace(session.ConversationID)
-		if conversationID == "" {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM external_mcp_sessions WHERE external_conversation_id = ?`, externalConversationID); err != nil {
-				return PruneStateStats{}, fmt.Errorf("delete incomplete external MCP session: %w", err)
-			}
-
-			stats.ExternalMCPSessions++
-
-			continue
-		}
-
-		prune, err := sessionLatestBefore(ctx, tx, conversationID, time.Unix(0, 0).UTC(), cutoff)
-		if err != nil {
-			return PruneStateStats{}, err
-		}
-
-		if prune {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM external_mcp_sessions WHERE external_conversation_id = ?`, externalConversationID); err != nil {
-				return PruneStateStats{}, fmt.Errorf("delete stale external MCP session: %w", err)
-			}
-
-			deleteConversations[conversationID] = struct{}{}
-			stats.ExternalMCPSessions++
-		}
-	}
+	stats.Threads += externalStats.Threads
+	stats.ExternalMCPSessions = externalStats.ExternalMCPSessions
 
 	orphans, err := stalePrivateConversationIDs(ctx, tx, cutoff)
 	if err != nil {
@@ -866,6 +946,10 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 	}
 
 	for conversationID := range deleteConversations {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM active_turns WHERE conversation_id = ?`, conversationID); err != nil {
+			return PruneStateStats{}, fmt.Errorf("delete stale active turn: %w", err)
+		}
+
 		if _, err := tx.ExecContext(ctx, `DELETE FROM pending_restart_notifications WHERE conversation_id = ?`, conversationID); err != nil {
 			return PruneStateStats{}, fmt.Errorf("delete stale pending restart notification: %w", err)
 		}
@@ -951,6 +1035,151 @@ func (s *SessionService) CheckpointWAL(ctx context.Context) (WALCheckpointStats,
 	return checkpointWALDB(ctx, s.db)
 }
 
+func (s *SessionService) appendExternalMCPEntry(ctx context.Context, privateConversationID, managedConversationID string, entry *harness.SessionEntry, managedReplayPrefix []json.RawMessage) (int64, error) {
+	managedEntry, err := externalMCPManagedEntry(entry, managedReplayPrefix)
+	if err != nil {
+		return 0, err
+	}
+
+	tx, err := s.beginStateTx(ctx, "external MCP session entry append")
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	privateID, err := appendSessionEntryDB(ctx, tx, strings.TrimSpace(privateConversationID), entry)
+	if err != nil {
+		return 0, err
+	}
+
+	if _, err := appendSessionEntryDB(ctx, tx, strings.TrimSpace(managedConversationID), &managedEntry); err != nil {
+		return 0, fmt.Errorf("append managed external MCP session entry: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit external MCP session entry append: %w", err)
+	}
+
+	if entry.Type != externalMCPMetadataEntryType {
+		s.completeTurnPairReservation(managedConversationID, privateConversationID)
+	}
+
+	return privateID, nil
+}
+
+func (s *SessionService) lockTurnPair(ctx context.Context, pairID, conversationID string) (func(), error) {
+	pairID = strings.TrimSpace(pairID)
+	conversationID = strings.TrimSpace(conversationID)
+
+	s.turnGatesMu.Lock()
+
+	gate := s.turnGates[pairID]
+	if gate == nil {
+		gate = &sessionTurnGate{token: make(chan struct{}, 1)}
+		gate.token <- struct{}{}
+
+		s.turnGates[pairID] = gate
+	}
+
+	gate.refs++
+	reserved := gate.reserved
+	waitForReservation := gate.reservedFor != "" && gate.reservedFor != conversationID
+	s.turnGatesMu.Unlock()
+
+	if waitForReservation {
+		select {
+		case <-ctx.Done():
+			s.releaseTurnGateReference(pairID, gate)
+			return nil, fmt.Errorf("wait for paired turn reservation: %w", ctx.Err())
+		case <-reserved:
+		}
+	}
+
+	select {
+	case <-ctx.Done():
+		s.releaseTurnGateReference(pairID, gate)
+		return nil, fmt.Errorf("wait for paired turn: %w", ctx.Err())
+	case <-gate.token:
+	}
+
+	return func() {
+		gate.token <- struct{}{}
+
+		s.releaseTurnGateReference(pairID, gate)
+	}, nil
+}
+
+func (s *SessionService) reserveTurnPair(pairID, conversationID string) {
+	pairID = strings.TrimSpace(pairID)
+	conversationID = strings.TrimSpace(conversationID)
+
+	s.turnGatesMu.Lock()
+	defer s.turnGatesMu.Unlock()
+
+	gate := s.turnGates[pairID]
+	if gate == nil {
+		gate = &sessionTurnGate{token: make(chan struct{}, 1)}
+		gate.token <- struct{}{}
+
+		s.turnGates[pairID] = gate
+	}
+
+	if gate.reservedFor == "" {
+		gate.reservedFor = conversationID
+		gate.reserved = make(chan struct{})
+	}
+}
+
+func (s *SessionService) completeTurnPairReservation(pairID, conversationID string) {
+	s.turnGatesMu.Lock()
+	defer s.turnGatesMu.Unlock()
+
+	gate := s.turnGates[strings.TrimSpace(pairID)]
+	if gate == nil || gate.reservedFor != strings.TrimSpace(conversationID) {
+		return
+	}
+
+	close(gate.reserved)
+	gate.reservedFor = ""
+
+	gate.reserved = nil
+	if gate.refs == 0 {
+		delete(s.turnGates, strings.TrimSpace(pairID))
+	}
+}
+
+func (s *SessionService) releaseTurnGateReference(pairID string, gate *sessionTurnGate) {
+	s.turnGatesMu.Lock()
+	defer s.turnGatesMu.Unlock()
+
+	gate.refs--
+	if gate.refs == 0 && gate.reservedFor == "" {
+		delete(s.turnGates, pairID)
+	}
+}
+
+func (s *SessionService) externalMCPMetadataEntry(ctx context.Context, conversationID string) (ObservedSessionEntry, bool, error) {
+	var (
+		entry ObservedSessionEntry
+		raw   string
+	)
+
+	err := s.db.QueryRowContext(ctx, `SELECT id, entry_json FROM session_entries WHERE conversation_id = ? AND json_extract(entry_json, '$.type') = ? ORDER BY id DESC LIMIT 1`, strings.TrimSpace(conversationID), externalMCPMetadataEntryType).Scan(&entry.ID, &raw)
+	if err == sql.ErrNoRows {
+		return ObservedSessionEntry{}, false, nil
+	}
+
+	if err != nil {
+		return ObservedSessionEntry{}, false, fmt.Errorf("read external MCP metadata entry: %w", err)
+	}
+
+	if err := json.Unmarshal([]byte(raw), &entry.Entry); err != nil {
+		return ObservedSessionEntry{}, false, fmt.Errorf("parse external MCP metadata entry: %w", err)
+	}
+
+	return entry, true, nil
+}
+
 func (s *SessionService) setGoalStatus(conversationID, status, note string) (GoalState, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	ctx := context.Background()
@@ -1033,6 +1262,10 @@ func (s sqliteSessionStore) in() iter.Seq2[harness.SessionEntry, error] {
 
 //nolint:gocritic // rocketcode requires value-shaped session entries at this boundary.
 func (s sqliteSessionStore) outID(entry harness.SessionEntry) (int64, error) {
+	if s.managedConversationID != "" {
+		return s.service.appendExternalMCPEntry(context.Background(), s.conversationID, s.managedConversationID, &entry, s.managedReplayPrefix)
+	}
+
 	return s.service.AppendEntryID(context.Background(), s.conversationID, &entry)
 }
 
@@ -1112,6 +1345,26 @@ func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID s
 	}
 
 	return id, nil
+}
+
+func externalMCPManagedEntry(entry *harness.SessionEntry, replayPrefix []json.RawMessage) (harness.SessionEntry, error) {
+	managed := *entry
+	managed.ReplayInput = append(make([]json.RawMessage, 0, len(replayPrefix)+len(entry.ReplayInput)), replayPrefix...)
+
+	for _, raw := range entry.ReplayInput {
+		var item struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return harness.SessionEntry{}, fmt.Errorf("read external MCP replay item type: %w", err)
+		}
+
+		if item.Type != "compaction" && item.Type != "compaction_summary" {
+			managed.ReplayInput = append(managed.ReplayInput, raw)
+		}
+	}
+
+	return managed, nil
 }
 
 // DeleteSessionIn removes all entries for one conversation ID in runtimeDir and returns deleted rows.
@@ -1756,7 +2009,7 @@ func goalConversationIDs(ctx context.Context, db stateStoreDB) ([]string, error)
 }
 
 func externalMCPSessions(ctx context.Context, db stateStoreDB) (map[string]ExternalMCPSessionState, error) {
-	rows, err := db.QueryContext(ctx, `SELECT external_conversation_id, agent, conversation_id, slack_channel FROM external_mcp_sessions ORDER BY external_conversation_id`)
+	rows, err := db.QueryContext(ctx, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel FROM external_mcp_sessions ORDER BY external_conversation_id`)
 	if err != nil {
 		return nil, fmt.Errorf("query external MCP sessions: %w", err)
 	}
@@ -1765,12 +2018,9 @@ func externalMCPSessions(ctx context.Context, db stateStoreDB) (map[string]Exter
 	sessions := map[string]ExternalMCPSessionState{}
 
 	for rows.Next() {
-		var (
-			externalConversationID string
-			session                ExternalMCPSessionState
-		)
-		if err := rows.Scan(&externalConversationID, &session.Agent, &session.ConversationID, &session.SlackChannel); err != nil {
-			return nil, fmt.Errorf("scan external MCP session: %w", err)
+		externalConversationID, session, err := scanExternalMCPSession(rows)
+		if err != nil {
+			return nil, err
 		}
 
 		sessions[externalConversationID] = session
@@ -1817,6 +2067,50 @@ func conversationExists(ctx context.Context, db stateStoreDB, table, column, con
 	return exists, nil
 }
 
+func pruneExternalMCPSessions(ctx context.Context, tx *sql.Tx, cutoff time.Time, threadIDs []string, sessions map[string]ExternalMCPSessionState, deleteConversations map[string]struct{}) (PruneStateStats, error) {
+	var stats PruneStateStats
+
+	for externalConversationID, session := range sessions {
+		privateConversationID := strings.TrimSpace(session.PrivateConversationID)
+		managedConversationID := strings.TrimSpace(session.ManagedConversationID)
+
+		pruneManaged, err := shouldPruneThreadConversation(ctx, tx, managedConversationID, cutoff)
+		if err != nil {
+			return PruneStateStats{}, err
+		}
+
+		if !pruneManaged {
+			continue
+		}
+
+		if privateConversationID != "" {
+			prunePrivate, err := sessionLatestBefore(ctx, tx, privateConversationID, time.Unix(0, 0).UTC(), cutoff)
+			if err != nil {
+				return PruneStateStats{}, err
+			}
+
+			if !prunePrivate {
+				continue
+			}
+
+			deleteConversations[privateConversationID] = struct{}{}
+		}
+
+		if _, err := tx.ExecContext(ctx, `DELETE FROM external_mcp_sessions WHERE external_conversation_id = ?`, externalConversationID); err != nil {
+			return PruneStateStats{}, fmt.Errorf("delete stale external MCP session: %w", err)
+		}
+
+		deleteConversations[managedConversationID] = struct{}{}
+		if slices.Contains(threadIDs, managedConversationID) {
+			stats.Threads++
+		}
+
+		stats.ExternalMCPSessions++
+	}
+
+	return stats, nil
+}
+
 func stalePrivateConversationIDs(ctx context.Context, db *sql.Tx, cutoff time.Time) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `SELECT conversation_id FROM session_entries WHERE conversation_id LIKE 'slack-thread:%' OR conversation_id LIKE 'external_mcp:%' OR conversation_id LIKE 'cron:%' OR conversation_id LIKE 'one-off-cron:%' GROUP BY conversation_id HAVING MAX(julianday(entry_timestamp)) < julianday(?)`, cutoff.Format(time.RFC3339Nano))
 	if err != nil {
@@ -1839,7 +2133,7 @@ func stalePrivateConversationIDs(ctx context.Context, db *sql.Tx, cutoff time.Ti
 			continue
 		}
 
-		if ok, err := conversationExists(ctx, db, `external_mcp_sessions`, `conversation_id`, conversationID); err != nil {
+		if ok, err := conversationExists(ctx, db, `external_mcp_sessions`, `private_conversation_id`, conversationID); err != nil {
 			return nil, err
 		} else if ok {
 			continue

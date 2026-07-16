@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const sessionDBSchemaVersion = 7
+const sessionDBSchemaVersion = 8
 
 func initializeSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 	startedAt := time.Now()
@@ -75,7 +75,7 @@ func createSessionSchema(ctx context.Context, db stateStoreDB) error {
 		`CREATE INDEX IF NOT EXISTS session_entries_conversation_id_timestamp_jd ON session_entries (conversation_id, julianday(entry_timestamp))`,
 		`CREATE TABLE IF NOT EXISTS managed_conversations (conversation_id TEXT PRIMARY KEY, agent TEXT NOT NULL, created_by TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS conversation_goals (conversation_id TEXT PRIMARY KEY, objective TEXT NOT NULL, check_script TEXT NOT NULL, max_turns INTEGER NOT NULL, turns_used INTEGER NOT NULL, status TEXT NOT NULL, note TEXT NOT NULL, created_at_unix_ns INTEGER NOT NULL, updated_at_unix_ns INTEGER NOT NULL)`,
-		`CREATE TABLE IF NOT EXISTS external_mcp_sessions (external_conversation_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL UNIQUE, agent TEXT NOT NULL, slack_channel TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS external_mcp_sessions (external_conversation_id TEXT PRIMARY KEY, private_conversation_id TEXT UNIQUE CHECK (private_conversation_id IS NULL OR trim(private_conversation_id) <> ''), managed_conversation_id TEXT NOT NULL UNIQUE CHECK (trim(managed_conversation_id) <> ''), agent TEXT NOT NULL, slack_channel TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS scheduled_messages (scheduled_message_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, agent TEXT NOT NULL, message TEXT NOT NULL, due_at_unix_ns INTEGER NOT NULL, recurring INTEGER NOT NULL, interval_ns INTEGER NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS cron_schedules (schedule_id TEXT PRIMARY KEY, relative_path TEXT NOT NULL, next_due_unix_ns INTEGER NOT NULL, updated_at_unix_ns INTEGER NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS cron_schedule_runs (relative_path TEXT PRIMARY KEY, running INTEGER NOT NULL, running_since_unix_ns INTEGER NOT NULL, updated_at_unix_ns INTEGER NOT NULL)`,

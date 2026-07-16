@@ -44,7 +44,7 @@ Slack configuration uses direct `slack.channels` mappings. Each mapping names a 
 
 On daemon startup, RocketClaw upgrades the prior nested `slack.social_mode.channels` shape in place. It validates the candidate first, rewrites the config with direct `slack.channels`, and preserves the config file permissions; inspection commands remain read-only.
 
-External MCP exposes `session_prompt`. Every call supplies a configured Slack channel. A new external conversation ID creates one Slack thread in that channel; later calls with that ID and authorized Slack replies share the same thread and history. The channel remains required and unchanged for the life of the external conversation.
+External MCP exposes `session_prompt`. Every call supplies an external conversation ID, agent, and configured Slack channel. A new ID creates one private MCP session and one managed Slack session on the same Slack thread. The MCP agent remains fixed; the managed agent starts from the channel configuration and can be switched from Slack. MCP history is copied into managed history, but Slack history is never copied back. Later calls keep the same channel and Slack thread. Slack Blocks label MCP requests and responses with their conversation ID and agent.
 
 Every active `cron/*.md` definition declares a quoted `channel` that matches a configured Slack channel. Empty completion output is silent; non-empty output starts a fresh managed thread in that channel.
 
@@ -85,7 +85,7 @@ For local CLI experimentation, `rocketcode` and `rocketloop` run RocketCode dire
 
 RocketClaw is configured with `rocketclaw.json` in the working directory. Runtime state is local to the selected workspace:
 
-- `.rocketclaw/state.sqlite3`: thread-local sessions, active-turn restart handoffs, managed Slack routing, External MCP conversation-to-thread bindings, scheduled messages, cron execution state, restart notifications, and goal-loop state.
+- `.rocketclaw/state.sqlite3`: private MCP and managed Slack sessions, active-turn restart handoffs, managed Slack routing, External MCP bindings to both sessions, scheduled messages, cron execution state, restart notifications, and goal-loop state.
 - `.rocketclaw/overlays/`: configured git overlay clones for runtime assets.
 - `.rocketclaw/.rocketcode/`: RocketCode shell output and transient artifacts.
 

@@ -35,6 +35,10 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/primarytext"
 )
 
+func testExternalMCPRelay(text string, attachments []events.OutboundAttachment) events.ExternalMCPRelay {
+	return events.ExternalMCPRelay{ExternalConversationID: "public-conversation", Agent: "private-agent", Text: text, Attachments: attachments}
+}
+
 func TestSlackImageHelpers(t *testing.T) {
 	assert.Equal(t, "photo (image/png)", slackFileDescriptor(&slack.File{Name: " photo ", Mimetype: " image/png "}))
 	assert.Equal(t, "https://example.com/download", slackFileDownloadURL(&slack.File{URLPrivate: "https://example.com/private", URLPrivateDownload: " https://example.com/download "}))
@@ -55,6 +59,62 @@ func TestSlackImageHelpers(t *testing.T) {
 	data := mustPNG(t, 2, 2)
 	assert.Equal(t, "image/png", normalizedSlackMIMEType(http.DetectContentType(data)))
 	assert.Equal(t, "text/plain", normalizedSlackMIMEType(http.DetectContentType(nil)))
+}
+
+func TestSlackMCPBlocksStayWithinSlackLimit(t *testing.T) {
+	messages := slackMCPBlockMessages("MCP request", strings.Repeat("conversation", 400), "private-agent", strings.Repeat("body", slackBlockTextLimit*60), slack.PlainTextType)
+	assert.Greater(t, len(messages), 1)
+
+	for _, message := range messages {
+		assert.LessOrEqual(t, len(message.blocks), 50)
+	}
+}
+
+func TestSendExternalMCPRelayContinuesHugeRequestBeforePlaceholders(t *testing.T) {
+	var (
+		posted  []url.Values
+		deleted []string
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		switch r.URL.Path {
+		case "/chat.postMessage":
+			posted = append(posted, cloneValues(r.PostForm))
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": fmt.Sprintf("1.%d", len(posted))})
+		case "/reactions.add":
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/chat.delete":
+			deleted = append(deleted, r.PostForm.Get("ts"))
+
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	request := strings.Repeat("x", slackBlockTextLimit*50)
+	replyTarget, err := connector.SendExternalMCPRelay(t.Context(), "D123", "", testExternalMCPRelay(request, nil))
+	require.NoError(t, err)
+	require.Len(t, posted, 4)
+	assert.Empty(t, posted[0].Get("thread_ts"))
+
+	for i := 1; i < len(posted); i++ {
+		assert.Equal(t, "1.1", posted[i].Get("thread_ts"))
+	}
+
+	var rootBlocks, continuationBlocks []any
+	require.NoError(t, json.Unmarshal([]byte(posted[0].Get("blocks")), &rootBlocks))
+	require.NoError(t, json.Unmarshal([]byte(posted[1].Get("blocks")), &continuationBlocks))
+	assert.Len(t, rootBlocks, 50)
+	assert.Greater(t, len(continuationBlocks), 1)
+	connector.CleanupExternalMCPRelay(t.Context(), replyTarget)
+	assert.Equal(t, []string{"1.4", "1.3", "1.2", "1.1"}, deleted)
 }
 
 func TestSlackMessageEventHelpers(t *testing.T) {
@@ -890,7 +950,7 @@ func TestSendExternalMCPThreadRelay(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	replyTarget, err := connector.SendExternalMCPThreadRelay(context.Background(), "D123", "123.456", "follow up", nil)
+	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "123.456", testExternalMCPRelay("follow up", nil))
 	require.NoError(t, err)
 	require.NotNil(t, replyTarget)
 	assert.Equal(t, events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.1", ThreadTS: "123.456"}, *replyTarget)
@@ -898,6 +958,10 @@ func TestSendExternalMCPThreadRelay(t *testing.T) {
 	assert.Equal(t, "D123", posted[0].Get("channel"))
 	assert.Equal(t, "follow up", posted[0].Get("text"))
 	assert.Equal(t, "123.456", posted[0].Get("thread_ts"))
+	assert.JSONEq(t, `[
+		{"type":"section","text":{"type":"plain_text","text":"MCP request\nExternal conversation ID: public-conversation\nPrivate agent: private-agent","emoji":false}},
+		{"type":"section","text":{"type":"plain_text","text":"follow up","emoji":false}}
+	]`, posted[0].Get("blocks"))
 	assert.Equal(t, slackImmediatePlaceholder, posted[1].Get("text"))
 	assert.Equal(t, "123.456", posted[1].Get("thread_ts"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[2].Get("text"))
@@ -980,13 +1044,17 @@ func TestSendExternalMCPThreadRelayAttachesFilesToRelayMessage(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	replyTarget, err := connector.SendExternalMCPThreadRelay(context.Background(), "D123", "123.456", " ", []events.OutboundAttachment{{Name: "report.txt", Data: []byte("report")}})
+	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "123.456", testExternalMCPRelay(" ", []events.OutboundAttachment{{Name: "report.txt", Data: []byte("report")}}))
 	require.NoError(t, err)
 	require.NotNil(t, replyTarget)
 
 	require.Len(t, posted, 3)
 	assert.Equal(t, "Attached files: report.txt.", posted[0].Get("text"))
 	assert.Equal(t, "123.456", posted[0].Get("thread_ts"))
+	assert.JSONEq(t, `[
+		{"type":"section","text":{"type":"plain_text","text":"MCP request\nExternal conversation ID: public-conversation\nPrivate agent: private-agent","emoji":false}},
+		{"type":"section","text":{"type":"plain_text","text":"Attached files: report.txt.","emoji":false}}
+	]`, posted[0].Get("blocks"))
 	assert.Equal(t, "123.456", posted[1].Get("thread_ts"))
 	assert.Equal(t, "123.456", posted[2].Get("thread_ts"))
 	assert.Equal(t, events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.1", ThreadTS: "123.456"}, *replyTarget)
@@ -1002,6 +1070,7 @@ func TestSendExternalMCPThreadRelayAttachesFilesToRelayMessage(t *testing.T) {
 	assert.Equal(t, "222.1", updated[0].Get("ts"))
 	assert.Equal(t, "Attached files: report.txt.", updated[0].Get("text"))
 	assert.JSONEq(t, `["F1"]`, updated[0].Get("file_ids"))
+	assert.JSONEq(t, posted[0].Get("blocks"), updated[0].Get("blocks"))
 }
 
 func TestSendExternalMCPRelayCanPostTopLevelChannelRelay(t *testing.T) {
@@ -1077,13 +1146,17 @@ func TestSendExternalMCPRelayCanPostTopLevelChannelRelay(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "#triage", "hello", []events.OutboundAttachment{{Name: "red.png", MIMEType: "image/png", Data: []byte("png")}})
+	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "#triage", "", testExternalMCPRelay("hello", []events.OutboundAttachment{{Name: "red.png", MIMEType: "image/png", Data: []byte("png")}}))
 	require.NoError(t, err)
 	require.NotNil(t, replyTarget)
 	require.Len(t, posted, 3)
 	assert.Equal(t, "#triage", posted[0].Get("channel"))
 	assert.Empty(t, posted[0].Get("thread_ts"))
 	assert.Equal(t, "hello", posted[0].Get("text"))
+	assert.JSONEq(t, `[
+		{"type":"section","text":{"type":"plain_text","text":"MCP request\nExternal conversation ID: public-conversation\nPrivate agent: private-agent","emoji":false}},
+		{"type":"section","text":{"type":"plain_text","text":"hello","emoji":false}}
+	]`, posted[0].Get("blocks"))
 	assert.Equal(t, slackImmediatePlaceholder, posted[1].Get("text"))
 	assert.Equal(t, "123.1", posted[1].Get("thread_ts"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[2].Get("text"))
@@ -1100,6 +1173,7 @@ func TestSendExternalMCPRelayCanPostTopLevelChannelRelay(t *testing.T) {
 	assert.Equal(t, "123.1", updated.Get("ts"))
 	assert.Equal(t, "hello", updated.Get("text"))
 	assert.JSONEq(t, `["F123"]`, updated.Get("file_ids"))
+	assert.JSONEq(t, posted[0].Get("blocks"), updated.Get("blocks"))
 }
 
 func TestSendExternalMCPRelayResolvesPrivateConfiguredChannelName(t *testing.T) {
@@ -1126,7 +1200,7 @@ func TestSendExternalMCPRelayResolvesPrivateConfiguredChannelName(t *testing.T) 
 
 	connector := newTestConnector(server.URL)
 	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#triage", Agents: []string{"main"}}}
-	_, err := connector.SendExternalMCPRelay(t.Context(), "#triage", "hello", nil)
+	_, err := connector.SendExternalMCPRelay(t.Context(), "#triage", "", testExternalMCPRelay("hello", nil))
 	require.NoError(t, err)
 	assert.Equal(t, "G123", postedChannel)
 }
@@ -1136,15 +1210,17 @@ func TestExternalMCPRelayUsesAnswerPlaceholderForStackedReply(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	first, err := connector.SendExternalMCPThreadRelay(context.Background(), "D123", "111.222", "first", nil)
+	first, err := connector.SendExternalMCPRelay(context.Background(), "D123", "111.222", testExternalMCPRelay("first", nil))
 	require.NoError(t, err)
-	second, err := connector.SendExternalMCPThreadRelay(context.Background(), "D123", "111.222", "second", nil)
+	second, err := connector.SendExternalMCPRelay(context.Background(), "D123", "111.222", testExternalMCPRelay("second", nil))
 	require.NoError(t, err)
 	require.NotNil(t, second)
 
 	final := events.NewOutboundMessage(events.SourceExternalMCP, "test", "first answer", events.OutputTargetSlack)
 	final.TurnID = "turn-1"
 	final.Complete = true
+	final.ExternalConversationID = "public-conversation"
+	final.Agent = "private-agent"
 	final.SlackReply = first
 	require.NoError(t, connector.SendResponse(context.Background(), final))
 
@@ -1152,6 +1228,10 @@ func TestExternalMCPRelayUsesAnswerPlaceholderForStackedReply(t *testing.T) {
 	require.Len(t, *updated, 1)
 	assert.Equal(t, "555.3", (*updated)[0].Get("ts"))
 	assert.Equal(t, "first answer", (*updated)[0].Get("text"))
+	assert.JSONEq(t, `[
+		{"type":"section","text":{"type":"plain_text","text":"MCP response\nExternal conversation ID: public-conversation\nPrivate agent: private-agent","emoji":false}},
+		{"type":"section","text":{"type":"mrkdwn","text":"first answer"}}
+	]`, (*updated)[0].Get("blocks"))
 }
 
 func TestExternalMCPRelayCreatesAnswerPlaceholderUpFront(t *testing.T) {
@@ -1159,7 +1239,7 @@ func TestExternalMCPRelayCreatesAnswerPlaceholderUpFront(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	first, err := connector.SendExternalMCPThreadRelay(context.Background(), "D123", "111.222", "first", nil)
+	first, err := connector.SendExternalMCPRelay(context.Background(), "D123", "111.222", testExternalMCPRelay("first", nil))
 	require.NoError(t, err)
 	require.Len(t, *posted, 3)
 	assert.Equal(t, slackAnswerPlaceholder, (*posted)[2].Get("text"))
@@ -1167,23 +1247,34 @@ func TestExternalMCPRelayCreatesAnswerPlaceholderUpFront(t *testing.T) {
 	thinking := events.NewOutboundMessage(events.SourceExternalMCP, "test", "", events.OutputTargetSlack)
 	thinking.TurnID = "turn-1"
 	thinking.ProgressText = "working"
+	thinking.ExternalConversationID = "public-conversation"
+	thinking.Agent = "private-agent"
 	thinking.SlackReply = first
 	require.NoError(t, connector.SendResponse(context.Background(), thinking))
+	require.NoError(t, connector.flushProgressText(context.Background(), thinking.TurnID))
 
-	_, err = connector.SendExternalMCPThreadRelay(context.Background(), "D123", "111.222", "second", nil)
+	_, err = connector.SendExternalMCPRelay(context.Background(), "D123", "111.222", testExternalMCPRelay("second", nil))
 	require.NoError(t, err)
 
 	final := events.NewOutboundMessage(events.SourceExternalMCP, "test", "first answer", events.OutputTargetSlack)
 	final.TurnID = "turn-1"
 	final.Complete = true
+	final.ExternalConversationID = "public-conversation"
+	final.Agent = "private-agent"
 	final.SlackReply = first
 	require.NoError(t, connector.SendResponse(context.Background(), final))
 
 	require.Len(t, *posted, 6)
-	require.Len(t, *updated, 1)
+	require.Len(t, *updated, 2)
 	assert.Equal(t, slackAnswerPlaceholder, (*posted)[2].Get("text"))
-	assert.Equal(t, "555.3", (*updated)[0].Get("ts"))
-	assert.Equal(t, "first answer", (*updated)[0].Get("text"))
+	assert.Equal(t, "555.2", (*updated)[0].Get("ts"))
+	assert.Equal(t, slackImmediatePlaceholder+"\n\n> working", (*updated)[0].Get("text"))
+	assert.Contains(t, (*updated)[0].Get("blocks"), "MCP response")
+	assert.Contains(t, (*updated)[0].Get("blocks"), "public-conversation")
+	assert.Contains(t, (*updated)[0].Get("blocks"), "private-agent")
+	assert.Equal(t, "555.3", (*updated)[1].Get("ts"))
+	assert.Equal(t, "first answer", (*updated)[1].Get("text"))
+	assert.Contains(t, (*updated)[1].Get("blocks"), "MCP response")
 }
 
 func newExternalMCPReplyServer(t *testing.T) (server *httptest.Server, posted, updated *[]url.Values) {
@@ -1222,12 +1313,14 @@ func TestExternalMCPRelayTailResponseUpdatesAnswerPlaceholder(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	replyTarget, err := connector.SendExternalMCPThreadRelay(context.Background(), "D123", "111.222", "tail", nil)
+	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "111.222", testExternalMCPRelay("tail", nil))
 	require.NoError(t, err)
 
 	final := events.NewOutboundMessage(events.SourceExternalMCP, "test", "tail answer", events.OutputTargetSlack)
 	final.TurnID = "turn-1"
 	final.Complete = true
+	final.ExternalConversationID = "public-conversation"
+	final.Agent = "private-agent"
 	final.SlackReply = replyTarget
 	require.NoError(t, connector.SendResponse(context.Background(), final))
 
@@ -1240,19 +1333,72 @@ func TestExternalMCPRelayTailResponseUpdatesAnswerPlaceholder(t *testing.T) {
 	assert.Equal(t, "tail answer", (*updated)[0].Get("text"))
 }
 
+func TestExternalMCPResponseBlocksSurviveChunking(t *testing.T) {
+	server, posted, updated := newExternalMCPReplyServer(t)
+	defer server.Close()
+
+	connector := newTestConnector(server.URL)
+	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "111.222", testExternalMCPRelay("request", nil))
+	require.NoError(t, err)
+
+	text := strings.Repeat("0123456789", 500)
+	final := events.NewOutboundMessage(events.SourceExternalMCP, "test", text, events.OutputTargetSlack)
+	final.TurnID = "turn-1"
+	final.Complete = true
+	final.ExternalConversationID = "public-conversation"
+	final.Agent = "private-agent"
+	final.SlackReply = replyTarget
+	require.NoError(t, connector.SendResponse(context.Background(), final))
+
+	assert.Empty(t, *updated)
+	require.Greater(t, len(*posted), 4)
+
+	var rebuilt strings.Builder
+
+	for _, values := range (*posted)[3:] {
+		var blocks []struct {
+			Type string `json:"type"`
+			Text struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"text"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(values.Get("blocks")), &blocks))
+		require.GreaterOrEqual(t, len(blocks), 2)
+		assert.Equal(t, "MCP response\nExternal conversation ID: public-conversation\nPrivate agent: private-agent", blocks[0].Text.Text)
+
+		var blockBody strings.Builder
+
+		for _, block := range blocks {
+			assert.LessOrEqual(t, len([]rune(block.Text.Text)), slackBlockTextLimit)
+		}
+
+		for _, block := range blocks[1:] {
+			blockBody.WriteString(block.Text.Text)
+		}
+
+		assert.Equal(t, values.Get("text"), blockBody.String())
+		rebuilt.WriteString(values.Get("text"))
+	}
+
+	assert.Equal(t, text, rebuilt.String())
+}
+
 func TestExternalMCPRelayStackedTailResponseUpdatesAnswerPlaceholder(t *testing.T) {
 	server, posted, updated := newExternalMCPReplyServer(t)
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	_, err := connector.SendExternalMCPThreadRelay(context.Background(), "D123", "111.222", "first", nil)
+	_, err := connector.SendExternalMCPRelay(context.Background(), "D123", "111.222", testExternalMCPRelay("first", nil))
 	require.NoError(t, err)
-	tail, err := connector.SendExternalMCPThreadRelay(context.Background(), "D123", "111.222", "second", nil)
+	tail, err := connector.SendExternalMCPRelay(context.Background(), "D123", "111.222", testExternalMCPRelay("second", nil))
 	require.NoError(t, err)
 
 	final := events.NewOutboundMessage(events.SourceExternalMCP, "test", "second answer", events.OutputTargetSlack)
 	final.TurnID = "turn-2"
 	final.Complete = true
+	final.ExternalConversationID = "public-conversation"
+	final.Agent = "private-agent"
 	final.SlackReply = tail
 	require.NoError(t, connector.SendResponse(context.Background(), final))
 
@@ -1293,7 +1439,7 @@ func TestExternalMCPRelayDoesNotHoldMutexDuringNetworkCalls(t *testing.T) {
 	errCh := make(chan error, 1)
 
 	go func() {
-		_, err := connector.SendExternalMCPThreadRelay(context.Background(), "D123", "111.222", "first", nil)
+		_, err := connector.SendExternalMCPRelay(context.Background(), "D123", "111.222", testExternalMCPRelay("first", nil))
 		errCh <- err
 	}()
 
@@ -1313,7 +1459,7 @@ func TestSendExternalMCPRelayReturnsPlaceholderError(t *testing.T) {
 		switch r.URL.Path {
 		case "/chat.postMessage":
 			posts++
-			if posts == 2 {
+			if posts == 3 {
 				writeJSON(t, w, map[string]any{"ok": false, "error": "ratelimited"})
 				return
 			}
@@ -1334,11 +1480,12 @@ func TestSendExternalMCPRelayReturnsPlaceholderError(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "hello", nil)
+	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "", testExternalMCPRelay(strings.Repeat("x", slackBlockTextLimit*50), nil))
 	require.ErrorContains(t, err, "post Slack thinking placeholder")
 	assert.Nil(t, replyTarget)
-	require.Len(t, deleted, 1)
-	assert.Equal(t, "555.1", deleted[0].Get("ts"))
+	require.Len(t, deleted, 2)
+	assert.Equal(t, "555.2", deleted[0].Get("ts"))
+	assert.Equal(t, "555.1", deleted[1].Get("ts"))
 }
 
 func TestCleanupPendingReplyPlaceholderDeletesUnclaimedExternalMCPThinking(t *testing.T) {
@@ -1368,7 +1515,7 @@ func TestCleanupPendingReplyPlaceholderDeletesUnclaimedExternalMCPThinking(t *te
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "hello", nil)
+	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "", testExternalMCPRelay("hello", nil))
 	require.NoError(t, err)
 	require.True(t, connector.hasPendingState(replyTarget))
 
@@ -1391,7 +1538,7 @@ func TestReplyStateTracksPendingSlots(t *testing.T) {
 	assert.False(t, connector.hasPendingState(nil))
 	assert.True(t, connector.hasPendingState(replyTarget))
 
-	connector.setReplyState("turn-1", slots)
+	connector.setReplyState("turn-1", &slots)
 	assert.False(t, connector.hasPendingState(replyTarget))
 
 	got, ok := connector.replyState("turn-1")
@@ -1414,7 +1561,7 @@ func TestReplyStateTracksPendingSlots(t *testing.T) {
 func TestSendExternalMCPRelayEdgeFailures(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
 		connector := newTestConnector("http://127.0.0.1:1")
-		replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", " ", nil)
+		replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "", testExternalMCPRelay(" ", nil))
 		require.NoError(t, err)
 		assert.Nil(t, replyTarget)
 	})
@@ -1427,7 +1574,7 @@ func TestSendExternalMCPRelayEdgeFailures(t *testing.T) {
 		defer server.Close()
 
 		connector := newTestConnector(server.URL)
-		replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "hello", nil)
+		replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "", testExternalMCPRelay("hello", nil))
 		require.ErrorContains(t, err, "send Slack external MCP relay")
 		assert.Nil(t, replyTarget)
 	})
@@ -1456,7 +1603,7 @@ func TestSendExternalMCPRelayEdgeFailures(t *testing.T) {
 		defer server.Close()
 
 		connector := newTestConnector(server.URL)
-		replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "hello", []events.OutboundAttachment{{Name: "report.txt", Data: []byte("report")}})
+		replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "", testExternalMCPRelay("hello", []events.OutboundAttachment{{Name: "report.txt", Data: []byte("report")}}))
 		require.ErrorContains(t, err, "send Slack external MCP relay attachments")
 		assert.Nil(t, replyTarget)
 		require.Len(t, deleted, 1)
@@ -1496,7 +1643,7 @@ func TestSendExternalMCPRelayEdgeFailures(t *testing.T) {
 		defer server.Close()
 
 		connector := newTestConnector(server.URL)
-		replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "hello", []events.OutboundAttachment{{Name: "report.txt", Data: []byte("report")}})
+		replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "", testExternalMCPRelay("hello", []events.OutboundAttachment{{Name: "report.txt", Data: []byte("report")}}))
 		require.ErrorContains(t, err, "update Slack relay files")
 		assert.Nil(t, replyTarget)
 		require.Len(t, deleted, 1)
@@ -1754,7 +1901,9 @@ func TestSendResponseStreamsThinkingInPlaceThenReplacesItWithFinalAnswer(t *test
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Equal(t, "_Thinking..._\n\n> second thought\n> first thought", updated[0].Get("text"))
 	assert.Equal(t, updated[0].Get("text"), thinkingBlockText(t, updated[0]))
+	assert.NotContains(t, updated[0].Get("blocks"), "MCP response")
 	assert.Equal(t, "Final answer", updated[1].Get("text"))
+	assert.JSONEq(t, `[]`, updated[1].Get("blocks"))
 	assert.Equal(t, "111.222", removed.Get("timestamp"))
 	require.Len(t, deleted, 1)
 	assert.Equal(t, "555.666", deleted[0].Get("ts"))
@@ -2255,7 +2404,7 @@ func TestPostResponseChunksDeletesPostedChunksOnFailure(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	_, err := connector.postResponseChunks(context.Background(), "D123", "111.222", []string{"one", "two", "three"})
+	_, err := connector.postResponseChunks(context.Background(), "D123", "111.222", []string{"one", "two", "three"}, nil)
 	require.ErrorContains(t, err, "send Slack response chunk 3/3")
 
 	require.Len(t, posted, 3)
@@ -2634,7 +2783,7 @@ func TestSendResponseWithBlankTurnIDDoesNotClaimPendingPlaceholder(t *testing.T)
 	assert.True(t, connector.hasPendingState(replyTarget))
 }
 
-func TestSendResponseUploadsAttachmentsToSlackThread(t *testing.T) {
+func TestSendResponseUploadsAttachmentOnlyMCPResponseToSlackThread(t *testing.T) {
 	var (
 		posted, uploadURL, completed  url.Values
 		uploadedName, uploadedContent string
@@ -2695,13 +2844,17 @@ func TestSendResponseUploadsAttachmentsToSlackThread(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	msg := events.NewOutboundMessage(events.SourceSystem, "test", "final payload", events.OutputTargetSlack)
+	msg := events.NewOutboundMessage(events.SourceExternalMCP, "test", "", events.OutputTargetSlack)
 	msg.Complete = true
+	msg.ExternalConversationID = "public-conversation"
+	msg.Agent = "private-agent"
 	msg.SlackReply = &events.SlackReplyTarget{ChannelID: "D123", ThreadTS: "111.222"}
 	msg.Attachments = []events.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report body")}}
 	require.NoError(t, connector.SendResponse(context.Background(), msg))
 
-	assert.Equal(t, "final payload", posted.Get("text"))
+	assert.Equal(t, "Attached files: report.txt.", posted.Get("text"))
+	assert.Contains(t, posted.Get("blocks"), "MCP response")
+	assert.Contains(t, posted.Get("blocks"), "public-conversation")
 	assert.Equal(t, "111.222", posted.Get("thread_ts"))
 	assert.Equal(t, "report.txt", uploadURL.Get("filename"))
 	assert.Equal(t, strconv.Itoa(len("report body")), uploadURL.Get("length"))

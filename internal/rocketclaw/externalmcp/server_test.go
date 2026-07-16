@@ -19,14 +19,14 @@ import (
 func TestStartSessionPromptServerCallsHandler(t *testing.T) {
 	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, username, externalConversationID, agent, input string, metadata map[string]string, attachments []SessionPromptAttachment, slackChannel string) (SessionResult, error) {
 		assert.Empty(t, username)
-		assert.Empty(t, externalConversationID)
+		assert.Equal(t, "test-conversation", externalConversationID)
 		assert.Equal(t, "main", agent)
 		assert.Equal(t, "what now?", input)
 		assert.Nil(t, metadata)
 		assert.Empty(t, attachments)
 		assert.Equal(t, "#triage", slackChannel)
 
-		return SessionResult{Agent: "main", Answer: "plain text reply"}, nil
+		return SessionResult{ExternalConversationID: externalConversationID, Agent: "main", Answer: "plain text reply"}, nil
 	})
 	require.NoError(t, err)
 
@@ -36,12 +36,12 @@ func TestStartSessionPromptServerCallsHandler(t *testing.T) {
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Equal(t, "plain text reply", content.Text)
-	assert.Equal(t, map[string]any{"agent": "main", "answer": "plain text reply"}, structuredContentMap(t, result))
+	assert.Equal(t, map[string]any{"external_conversation_id": "test-conversation", "agent": "main", "answer": "plain text reply"}, structuredContentMap(t, result))
 }
 
 func TestStartSessionPromptServerReturnsExternalConversationID(t *testing.T) {
 	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, externalConversationID, agent, input string, metadata map[string]string, _ []SessionPromptAttachment, slackChannel string) (SessionResult, error) {
-		assert.Empty(t, externalConversationID)
+		assert.Equal(t, "test-conversation", externalConversationID)
 		assert.Equal(t, "planner", agent)
 		assert.Equal(t, "what now?", input)
 		assert.Equal(t, map[string]string{"ticket-id": "123"}, metadata)
@@ -72,7 +72,7 @@ func TestStartSessionPromptServerReturnsHandlerAgent(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	result := callTool(t, server.url, "", "", map[string]any{"external_conversation_id": "external-1", "agent": "main", "input": "what now?"})
+	result := callTool(t, server.url, "", "", map[string]any{"external_conversation_id": "external-1", "agent": "main", "input": "what now?", "slack_channel": "#triage"})
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Equal(t, "planner reply", content.Text)
@@ -90,7 +90,7 @@ func TestStartSessionPromptServerPassesSlackChannel(t *testing.T) {
 
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
-	result := callTool(t, server.url, "", "", map[string]any{"input": "what now?", "slack_channel": " #triage "})
+	result := callTool(t, server.url, "", "", map[string]any{"external_conversation_id": "external-1", "agent": "main", "input": "what now?", "slack_channel": " #triage "})
 	content, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Equal(t, "plain text reply", content.Text)
@@ -111,7 +111,10 @@ func TestStartSessionPromptServerPassesAttachments(t *testing.T) {
 	defer func() { require.NoError(t, server.Close(context.Background())) }()
 
 	result := callTool(t, server.url, "", "", map[string]any{
-		"input": "look",
+		"external_conversation_id": "external-1",
+		"agent":                    "main",
+		"input":                    "look",
+		"slack_channel":            "#ops",
 		"attachments": []map[string]any{{
 			"name":        "scorecard.png",
 			"mime_type":   "image/png",
@@ -125,7 +128,7 @@ func TestStartSessionPromptServerPassesAttachments(t *testing.T) {
 
 func TestStartSessionPromptServerReturnsAttachments(t *testing.T) {
 	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(context.Context, string, string, string, string, map[string]string, []SessionPromptAttachment, string) (SessionResult, error) {
-		return SessionResult{Agent: "main", Answer: "plain text reply", Attachments: []SessionAttachment{
+		return SessionResult{ExternalConversationID: "test-conversation", Agent: "main", Answer: "plain text reply", Attachments: []SessionAttachment{
 			{Name: "chart.png", MIMEType: "image/png; charset=binary", DataBase64: base64.StdEncoding.EncodeToString([]byte("png"))},
 			{Name: "report.txt", MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte("report"))},
 		}}, nil
@@ -151,13 +154,13 @@ func TestStartSessionPromptServerReturnsAttachments(t *testing.T) {
 	assert.Equal(t, "attachment://2/report.txt", resource.Resource.URI)
 	assert.Equal(t, "text/plain", resource.Resource.MIMEType)
 	assert.Equal(t, []byte("report"), resource.Resource.Blob)
-	assert.Equal(t, map[string]any{"agent": "main", "answer": "plain text reply", "attachments": []any{map[string]any{"name": "chart.png", "mime_type": "image/png; charset=binary", "data_base64": base64.StdEncoding.EncodeToString([]byte("png"))}, map[string]any{"name": "report.txt", "mime_type": "text/plain", "data_base64": base64.StdEncoding.EncodeToString([]byte("report"))}}}, structuredContentMap(t, result))
+	assert.Equal(t, map[string]any{"external_conversation_id": "test-conversation", "agent": "main", "answer": "plain text reply", "attachments": []any{map[string]any{"name": "chart.png", "mime_type": "image/png; charset=binary", "data_base64": base64.StdEncoding.EncodeToString([]byte("png"))}, map[string]any{"name": "report.txt", "mime_type": "text/plain", "data_base64": base64.StdEncoding.EncodeToString([]byte("report"))}}}, structuredContentMap(t, result))
 }
 
 func TestStartSessionPromptServerContinuesSession(t *testing.T) {
 	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, username, externalConversationID, agent, input string, metadata map[string]string, _ []SessionPromptAttachment, slackChannel string) (SessionResult, error) {
 		assert.Empty(t, username)
-		assert.Empty(t, agent)
+		assert.Equal(t, "planner", agent)
 		assert.Equal(t, "external_mcp:planner:abc", externalConversationID)
 		assert.Equal(t, "follow up", input)
 		assert.Nil(t, metadata)
@@ -212,7 +215,7 @@ func TestStartSessionPromptServerExposesMetadataSchema(t *testing.T) {
 
 	schema, ok := sessionPromptTool.InputSchema.(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, []any{"input", "slack_channel"}, schema["required"])
+	assert.Equal(t, []any{"external_conversation_id", "input", "agent", "slack_channel"}, schema["required"])
 	properties, ok := schema["properties"].(map[string]any)
 	require.True(t, ok)
 	metadata, ok := properties["metadata"].(map[string]any)
@@ -230,6 +233,12 @@ func TestStartSessionPromptServerExposesMetadataSchema(t *testing.T) {
 	attachments, ok := properties["attachments"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "array", attachments["type"])
+
+	outputSchema, ok := sessionPromptTool.OutputSchema.(map[string]any)
+	require.True(t, ok)
+	required, ok := outputSchema["required"].([]any)
+	require.True(t, ok)
+	assert.ElementsMatch(t, []any{"external_conversation_id", "agent", "answer"}, required)
 }
 
 func TestStartSessionPromptServerRejectsMissingSlackChannel(t *testing.T) {
@@ -240,7 +249,7 @@ func TestStartSessionPromptServerRejectsMissingSlackChannel(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
-	result := callTool(t, server.url, "", "", map[string]any{"input": "hello", "slack_channel": nil})
+	result := callTool(t, server.url, "", "", map[string]any{"external_conversation_id": "external-1", "agent": "main", "input": "hello", "slack_channel": nil})
 	assert.Contains(t, result.Content[0].(*mcp.TextContent).Text, "slack_channel")
 }
 
@@ -252,7 +261,7 @@ func TestStartSessionPromptServerRejectsBlankInputWithoutAttachments(t *testing.
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
-	result := callTool(t, server.url, "", "", map[string]any{"input": " \n\t", "slack_channel": "#ops"})
+	result := callTool(t, server.url, "", "", map[string]any{"external_conversation_id": "external-1", "agent": "main", "input": " \n\t", "slack_channel": "#ops"})
 	assert.Contains(t, result.Content[0].(*mcp.TextContent).Text, "input or attachments")
 }
 
@@ -269,7 +278,7 @@ func TestStartSessionPromptServerAcceptsAttachmentsWithoutInput(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
-	result := callTool(t, server.url, "", "", map[string]any{"input": "", "slack_channel": "#ops", "attachments": []any{map[string]any{"data_base64": "eA=="}}})
+	result := callTool(t, server.url, "", "", map[string]any{"external_conversation_id": "external-1", "agent": "main", "input": "", "slack_channel": "#ops", "attachments": []any{map[string]any{"data_base64": "eA=="}}})
 	require.True(t, called)
 	assert.Equal(t, "accepted", result.Content[0].(*mcp.TextContent).Text)
 }
@@ -277,7 +286,7 @@ func TestStartSessionPromptServerAcceptsAttachmentsWithoutInput(t *testing.T) {
 func TestStartSessionPromptServerRequiresBasicAuth(t *testing.T) {
 	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"alice": "secret"}, func(_ context.Context, username, externalConversationID, agent, input string, metadata map[string]string, _ []SessionPromptAttachment, slackChannel string) (SessionResult, error) {
 		assert.Equal(t, "alice", username)
-		assert.Empty(t, externalConversationID)
+		assert.Equal(t, "test-conversation", externalConversationID)
 		assert.Equal(t, "main", agent)
 		assert.Equal(t, "what now?", input)
 		assert.Nil(t, metadata)
@@ -351,7 +360,7 @@ func TestWithBasicAuthAllowsNilUsers(t *testing.T) {
 func callSessionPromptWithExternalConversationID(t *testing.T, endpoint, externalConversationID, input string, metadata map[string]string) *mcp.CallToolResult {
 	t.Helper()
 
-	args := map[string]any{"external_conversation_id": externalConversationID, "input": input}
+	args := map[string]any{"external_conversation_id": externalConversationID, "agent": "planner", "input": input, "slack_channel": "#triage"}
 	if metadata != nil {
 		args["metadata"] = metadata
 	}
@@ -362,10 +371,11 @@ func callSessionPromptWithExternalConversationID(t *testing.T, endpoint, externa
 func callSessionPrompt(t *testing.T, endpoint, username, password, agent, input string, metadata map[string]string) *mcp.CallToolResult {
 	t.Helper()
 
-	args := map[string]any{"input": input}
-	if agent != "" {
-		args["agent"] = agent
+	if agent == "" {
+		agent = "main"
 	}
+
+	args := map[string]any{"external_conversation_id": "test-conversation", "agent": agent, "input": input, "slack_channel": "#triage"}
 
 	if metadata != nil {
 		args["metadata"] = metadata

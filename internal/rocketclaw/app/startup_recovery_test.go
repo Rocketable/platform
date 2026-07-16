@@ -12,6 +12,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketcode"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,6 +33,14 @@ func (f *fakeStartupRecoveryStore) ClearActiveTurn(_ context.Context, turnID str
 
 func (f *fakeStartupRecoveryStore) Thread(conversationID string) (harnessbridge.ThreadState, bool, error) {
 	return harnessbridge.ThreadState{Agent: "main"}, conversationID != "unknown", nil
+}
+
+func (f *fakeStartupRecoveryStore) ExternalMCPSessionByConversationID(conversationID string) (externalConversationID string, session harnessbridge.ExternalMCPSessionState, ok bool, err error) {
+	if conversationID == "external_mcp:planner:private" {
+		return "public-1", harnessbridge.ExternalMCPSessionState{Agent: "planner", PrivateConversationID: conversationID, ManagedConversationID: "slack-thread:C1:1.1", SlackChannel: "#ops"}, true, nil
+	}
+
+	return "", harnessbridge.ExternalMCPSessionState{}, false, nil
 }
 
 func TestRecoverStartupActiveTurnsSelectsAtMostOnePerConversation(t *testing.T) {
@@ -55,6 +64,22 @@ func TestRecoverStartupActiveTurnsSelectsAtMostOnePerConversation(t *testing.T) 
 	require.Len(t, handed, 2)
 	require.Equal(t, "turn-new", handed[0].Checkpoint.TurnID)
 	require.Equal(t, "turn-other", handed[1].Checkpoint.TurnID)
+}
+
+func TestRecoverStartupActiveTurnsAcceptsPrivateExternalMCPConversation(t *testing.T) {
+	replay := startupRecoveryReplayInput(t)
+	store := &fakeStartupRecoveryStore{turns: []harnessbridge.ActiveTurnState{startupRecoveryTurn("turn-mcp", "external_mcp:planner:private", replay)}}
+
+	var handed []harnessbridge.ActiveTurnState
+
+	require.NoError(t, recoverStartupActiveTurns(t.Context(), store, func(_ context.Context, turn *harnessbridge.ActiveTurnState) error {
+		handed = append(handed, *turn)
+		return nil
+	}, slog.New(slog.DiscardHandler)))
+
+	require.Len(t, handed, 1)
+	assert.Equal(t, "external_mcp:planner:private", handed[0].Checkpoint.ConversationKey)
+	assert.Empty(t, store.deleted)
 }
 
 func TestRecoverStartupActiveTurnsDeletesCompetingRowsAfterCorruptSelectedRow(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -98,6 +99,144 @@ func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
 	require.Len(t, observed, 1)
 	assert.Equal(t, id2, observed[0].ID)
 	assert.Equal(t, *second, observed[0].Entry)
+}
+
+func TestSessionServiceAppendExternalMCPEntryMirrorsProjectionAtomically(t *testing.T) {
+	service := newTestSessionService(t)
+	privateConversationID := "external_mcp:private"
+	managedConversationID := "slack-thread:C1:1.1"
+	metadata := json.RawMessage(`{"type":"message","role":"developer","content":"turn metadata"}`)
+	entry := testSessionEntry("private prompt", "private answer")
+	entry.ResponseID = "response-private"
+	entry.OutputTrace = []json.RawMessage{json.RawMessage(`{"private":"trace"}`)}
+	entry.ReplayInput = append(entry.ReplayInput[:1], json.RawMessage(`{"type":"compaction","encrypted_content":"private"}`), json.RawMessage(`{"type":"compaction_summary","content":"private summary"}`), entry.ReplayInput[1])
+
+	id, err := service.appendExternalMCPEntry(t.Context(), privateConversationID, managedConversationID, entry, []json.RawMessage{metadata})
+	require.NoError(t, err)
+	assert.Positive(t, id)
+
+	private, err := service.ObserveEntries(t.Context(), privateConversationID, 0)
+	require.NoError(t, err)
+	require.Len(t, private, 1)
+	assert.Equal(t, *entry, private[0].Entry)
+	assert.Equal(t, id, private[0].ID)
+
+	managed, err := service.ObserveEntries(t.Context(), managedConversationID, 0)
+	require.NoError(t, err)
+	require.Len(t, managed, 1)
+
+	wantManaged := *entry
+	wantManaged.ReplayInput = []json.RawMessage{metadata, entry.ReplayInput[0], entry.ReplayInput[3]}
+	assert.Equal(t, wantManaged, managed[0].Entry)
+
+	metadataEntry := &harness.SessionEntry{Version: 1, Type: "mcp_external_metadata", Timestamp: time.Unix(2, 0).UTC(), ReplayInput: []json.RawMessage{metadata}}
+	_, err = service.appendExternalMCPEntry(t.Context(), privateConversationID, managedConversationID, metadataEntry, nil)
+	require.NoError(t, err)
+	managed, err = service.ObserveEntries(t.Context(), managedConversationID, 0)
+	require.NoError(t, err)
+	require.Len(t, managed, 2)
+	assert.Equal(t, *metadataEntry, managed[1].Entry)
+
+	_, err = service.db.ExecContext(t.Context(), `CREATE TRIGGER reject_managed_entry BEFORE INSERT ON session_entries WHEN NEW.conversation_id = 'managed-failure' BEGIN SELECT RAISE(ABORT, 'managed failure'); END`)
+	require.NoError(t, err)
+	_, err = service.appendExternalMCPEntry(t.Context(), "private-failure", "managed-failure", entry, nil)
+	require.ErrorContains(t, err, "managed failure")
+	private, err = service.ObserveEntries(t.Context(), "private-failure", 0)
+	require.NoError(t, err)
+	assert.Empty(t, private)
+}
+
+func TestSessionServiceTurnPairAllowsOnlyOneActiveTurn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		service := newTestSessionService(t)
+		unlockFirst, err := service.lockTurnPair(t.Context(), "slack-thread:C1:1.1", "external_mcp:private")
+		require.NoError(t, err)
+
+		secondAcquired := false
+
+		var errSecond error
+
+		go func() {
+			var unlockSecond func()
+
+			unlockSecond, errSecond = service.lockTurnPair(t.Context(), "slack-thread:C1:1.1", "slack-thread:C1:1.1")
+			if errSecond != nil {
+				return
+			}
+
+			secondAcquired = true
+
+			unlockSecond()
+		}()
+
+		synctest.Wait()
+		assert.False(t, secondAcquired)
+
+		unlockFirst()
+		synctest.Wait()
+		require.NoError(t, errSecond)
+		assert.True(t, secondAcquired)
+	})
+}
+
+func TestSessionServiceTurnPairReservationPrioritizesPrivateTurn(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		service := newTestSessionService(t)
+		pairID, privateID := "slack-thread:C1:1.1", "external_mcp:private"
+		service.reserveTurnPair(pairID, privateID)
+
+		managedAcquired := false
+
+		go func() {
+			unlock, err := service.lockTurnPair(t.Context(), pairID, pairID)
+			if err != nil {
+				return
+			}
+
+			managedAcquired = true
+
+			unlock()
+		}()
+
+		synctest.Wait()
+		assert.False(t, managedAcquired)
+
+		privateAcquired := false
+
+		go func() {
+			unlock, err := service.lockTurnPair(t.Context(), pairID, privateID)
+			if err != nil {
+				return
+			}
+
+			privateAcquired = true
+
+			unlock()
+		}()
+
+		synctest.Wait()
+		assert.True(t, privateAcquired)
+		assert.False(t, managedAcquired)
+
+		service.completeTurnPairReservation(pairID, privateID)
+		synctest.Wait()
+		assert.True(t, managedAcquired)
+	})
+}
+
+func TestSessionServiceReleasesAbandonedExternalMCPRecovery(t *testing.T) {
+	service := newTestSessionService(t)
+	pairID, privateID := SlackThreadConversationID("C1", "1.1"), "external_mcp:private"
+	require.NoError(t, service.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateID, ManagedConversationID: pairID, SlackChannel: "#ops"}))
+	_, err := service.appendExternalMCPEntry(t.Context(), privateID, pairID, testSessionEntry("first", "answer"), nil)
+	require.NoError(t, err)
+
+	require.NoError(t, service.ReserveExternalMCPRecovery(privateID))
+	require.NoError(t, service.ReleaseExternalMCPRecovery(privateID))
+
+	unlock, err := service.lockTurnPair(t.Context(), pairID, pairID)
+	require.NoError(t, err)
+	unlock()
 }
 
 func TestSessionServiceScheduledMessages(t *testing.T) {
@@ -1217,19 +1356,19 @@ func TestSessionServicePersistsExternalMCPSessionMapping(t *testing.T) {
 	workspace := t.TempDir()
 	store := newTestSessionServiceAt(t, workspace)
 
-	require.NoError(t, store.UpsertExternalMCPSession("ticket-123", &ExternalMCPSessionState{Agent: " cron ", ConversationID: " external_mcp:cron:abc "}))
+	require.NoError(t, store.UpsertExternalMCPSession("ticket-123", &ExternalMCPSessionState{Agent: " cron ", PrivateConversationID: " external_mcp:cron:abc ", ManagedConversationID: " slack-thread:C1:1.1 ", SlackChannel: " #ops "}))
 
 	session, ok, err := store.ExternalMCPSession("ticket-123")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, ExternalMCPSessionState{Agent: "cron", ConversationID: "external_mcp:cron:abc"}, session)
+	assert.Equal(t, ExternalMCPSessionState{Agent: "cron", PrivateConversationID: "external_mcp:cron:abc", ManagedConversationID: "slack-thread:C1:1.1", SlackChannel: "#ops"}, session)
 
-	require.NoError(t, store.UpsertExternalMCPSession("ticket-123", &ExternalMCPSessionState{Agent: "planner", ConversationID: "external_mcp:planner:def"}))
+	require.NoError(t, store.UpsertExternalMCPSession("ticket-123", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:def", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops"}))
 
 	session, ok, err = store.ExternalMCPSession("ticket-123")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, ExternalMCPSessionState{Agent: "planner", ConversationID: "external_mcp:planner:def"}, session)
+	assert.Equal(t, ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:def", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops"}, session)
 }
 
 func TestSessionServicePersistsActiveTurnSourceMetadata(t *testing.T) {
@@ -1351,6 +1490,88 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, entries, 1, conversationID)
 	}
+}
+
+func TestSessionServicePrunesStaleExternalConversationWithActiveTurn(t *testing.T) {
+	workspace := t.TempDir()
+	store := newTestSessionServiceAt(t, workspace)
+	cutoff := time.Unix(1_700_000_000, 0).UTC()
+	managedConversationID := SlackThreadConversationID("C1", slackTestTS(cutoff.Add(-time.Hour)))
+	privateConversationID := "external_mcp:planner:private"
+	require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, SlackChannel: "#ops"}))
+
+	for _, conversationID := range []string{privateConversationID, managedConversationID} {
+		_, err := store.AppendEntryID(t.Context(), conversationID, testSessionEntryAt(cutoff.Add(-time.Hour), conversationID))
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, store.UpsertActiveTurn(t.Context(), &harness.ActiveTurnCheckpoint{TurnID: "active-mcp", ConversationKey: privateConversationID, Agent: "planner", Model: "model", DisplayModel: "model"}, map[string]string{"source": "external_mcp"}))
+
+	stats, err := store.PruneStateBefore(t.Context(), cutoff)
+	require.NoError(t, err)
+	assert.Equal(t, PruneStateStats{Threads: 1, ExternalMCPSessions: 1, SessionRows: 2}, stats)
+
+	_, ok, err := store.ExternalMCPSession("public-1")
+	require.NoError(t, err)
+	assert.False(t, ok)
+	_, ok, err = store.Thread(managedConversationID)
+	require.NoError(t, err)
+	assert.False(t, ok)
+	_, ok, err = store.ActiveTurn(t.Context(), "active-mcp")
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestSessionServicePrunesExternalConversationOnlyWhenAllHistoriesAreStale(t *testing.T) {
+	cutoff := time.Unix(1_700_000_000, 0).UTC()
+
+	for _, tt := range []struct {
+		name                                           string
+		paired, privateFresh, managedFresh, wantPruned bool
+	}{
+		{name: "paired both stale", paired: true, wantPruned: true},
+		{name: "paired private fresh", paired: true, privateFresh: true},
+		{name: "paired managed fresh", paired: true, managedFresh: true},
+		{name: "paired both fresh", paired: true, privateFresh: true, managedFresh: true},
+		{name: "legacy stale", wantPruned: true},
+		{name: "legacy fresh", managedFresh: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newTestSessionServiceAt(t, t.TempDir())
+			managedConversationID := SlackThreadConversationID("C1", slackTestTS(cutoff.Add(-time.Hour)))
+
+			privateConversationID := ""
+			if tt.paired {
+				privateConversationID = "external_mcp:planner:private"
+				require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, SlackChannel: "#ops"}))
+			} else {
+				require.NoError(t, store.UpsertThread(managedConversationID, ThreadState{Agent: "main"}))
+				require.NoError(t, store.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{Agent: "planner", ManagedConversationID: managedConversationID, SlackChannel: "#ops"}))
+			}
+
+			if privateConversationID != "" {
+				_, err := store.AppendEntryID(t.Context(), privateConversationID, testSessionEntryAt(pruneTestTime(cutoff, tt.privateFresh), "private"))
+				require.NoError(t, err)
+			}
+
+			_, err := store.AppendEntryID(t.Context(), managedConversationID, testSessionEntryAt(pruneTestTime(cutoff, tt.managedFresh), "managed"))
+			require.NoError(t, err)
+
+			_, err = store.PruneStateBefore(t.Context(), cutoff)
+			require.NoError(t, err)
+			_, ok, err := store.ExternalMCPSession("public-1")
+			require.NoError(t, err)
+			assert.Equal(t, !tt.wantPruned, ok)
+		})
+	}
+}
+
+func pruneTestTime(cutoff time.Time, fresh bool) time.Time {
+	if fresh {
+		return cutoff.Add(time.Second)
+	}
+
+	return cutoff.Add(-time.Second)
 }
 
 func collectEntries(t *testing.T, seq iter.Seq2[harness.SessionEntry, error]) []harness.SessionEntry {

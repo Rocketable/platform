@@ -107,7 +107,7 @@ When the human asks for a config change in plain English:
 
 The top-level `models` object maps arbitrary placeholder names to deployment model names. Agent frontmatter uses a mapping as `model: '{{ model "name" }}'`.
 
-Slack uses direct `slack.channels` mappings. Each mapping requires `channel`, a non-empty ordered `agents` list, and non-empty `allowed_user_ids`. External MCP `session_prompt` calls and active cron definitions each require one of these configured channels. One External MCP conversation ID remains bound to one Slack thread and its shared thread-local history.
+Slack uses direct `slack.channels` mappings. Each mapping requires `channel`, a non-empty ordered `agents` list, and non-empty `allowed_user_ids`. External MCP `session_prompt` calls and active cron definitions each require one of these configured channels. One External MCP conversation ID remains bound to one Slack thread, one private MCP session, and one managed Slack session. MCP history copies into managed history, but managed history does not copy back.
 
 Use `jq` operations for arrays and object updates instead of rewriting large sections by hand.
 
