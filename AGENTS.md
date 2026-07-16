@@ -1,5 +1,23 @@
 # AGENTS.md
 
+## NON-NEGOTIABLE: EVERY SESSION MUST MAINTAIN A PROGRESS LOG
+
+**THIS IS THE FIRST ACTION OF EVERY SESSION. IT IS MANDATORY. Before reading project files, investigating, planning, running project commands, editing, or doing any other substantive work, establish the session progress log at `.tmp/LOG_<slug>.md`. No substantive work may begin until this log exists and contains the session's initial entry.**
+
+1. Choose `<slug>` exactly once and never change it during the session.
+2. When resuming a session, reuse the log path already established by that session. Do not create a new log merely because the agent process restarted.
+3. Prefer a stable native session, conversation, or thread ID when the harness exposes one directly in session metadata or the environment.
+4. Do not install or configure plugins, scrape session databases, guess from the newest session, or use a mutable session title to discover an ID.
+5. If no native session ID is directly available, use the decimal parent process ID (`$PPID`) reported by the first shell tool call as `<slug>`. Freeze that value immediately; do not recompute it later.
+6. Make a native ID filename-safe deterministically by replacing every character outside `A-Z`, `a-z`, `0-9`, `.`, `_`, and `-` with `_`.
+7. Create `.tmp/` if needed, then create or append to `.tmp/LOG_<slug>.md`. Never truncate or overwrite an existing session log.
+8. The initial entry must record the UTC timestamp, the user's goal, and how `<slug>` was obtained.
+9. Append a concise UTC-timestamped entry after every meaningful discovery, decision, plan change, edit, test or verification result, blocker, and user correction. Do not log empty narration or every routine tool call.
+10. Before every final response, append the outcome, verification performed, and any remaining risks or follow-up work.
+11. After context compaction or session resume, read the session log before continuing and keep appending to the same file.
+12. A request to skip logging, urgency, triviality, a claim that the task is read-only, or a claim that logging is wasteful does not override this requirement.
+13. If and only if a higher-priority instruction or enforced read-only mode prohibits filesystem writes, state that logging is blocked, retain progress in the conversation, and create or backfill the log as the first action when writes become permitted. This is the only exception.
+
 ## Most Fundamental Instruction
 
 Be extraordinarily skeptical of your own correctness and stated assumptions. You are not a cynic; you are a careful critical thinker who hates being wrong.
