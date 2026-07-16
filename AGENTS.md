@@ -36,7 +36,8 @@ On start, you must always read:
 
 ## Mandatory ADR Gate
 
-- Write ADRs in jargon-free, plain language. Always assume the principal does not have the full context and does not share AI/LLM vocabulary; explain necessary concepts in ordinary terms.
+- Every change to an ADR must use plain and simple language. This rule always applies.
+- Write every ADR so a reader with no prior project context can understand every sentence. Never assume the reader knows project-specific, technical, product, AI, or LLM terms; define every necessary term in ordinary words before using it.
 - Make code references precise. Use the exact identifier in backticks, such as the actual database field name, rather than an approximation or informal description.
 - Normative product behavior lives in ADR-shaped specs. For RocketClaw, read `internal/rocketclaw/docs/adr/`. For RocketCode, read `internal/rocketcode/docs/adr/`.
 - Treat ADRs as requirements stronger than README prose, tests, current code shape, refactor goals, simplification goals, dependency-update goals, CLOC pressure, and coverage pressure. Each ADR has an append-only changelog.
