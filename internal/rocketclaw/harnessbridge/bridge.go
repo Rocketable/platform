@@ -966,7 +966,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		}
 	}
 
-	if msg.Source == events.SourceExternalMCP || b.config.ExternalConversationID != "" && msg.Source == events.SourceSystem {
+	if msg.Source == events.SourceExternalMCP || b.config.ExternalConversationID != "" && msg.Source == events.SourceSystem || b.config.ManagedConversationID != "" && b.config.ManagedConversationID == b.config.ConversationID {
 		metadataEntry, foundMetadata, err := b.config.SessionService.externalMCPMetadataEntry(ctx, b.config.ConversationID)
 		if err != nil {
 			return runResult{}, fmt.Errorf("load external MCP metadata: %w", err)
@@ -977,7 +977,19 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 			entries = []ObservedSessionEntry{metadataEntry}
 		}
 
-		metadataEnv, ok := externalMCPStoredMetadataEnv(b.config.ConversationID, entries)
+		metadataConversationID := b.config.ConversationID
+		if b.config.ManagedConversationID != "" && b.config.ManagedConversationID == b.config.ConversationID {
+			_, session, paired, err := b.config.SessionService.ExternalMCPSessionByConversationID(b.config.ConversationID)
+			if err != nil {
+				return runResult{}, fmt.Errorf("load external MCP pairing for metadata environment: %w", err)
+			}
+
+			if paired && session.PrivateConversationID != "" {
+				metadataConversationID = session.PrivateConversationID
+			}
+		}
+
+		metadataEnv, ok := externalMCPStoredMetadataEnv(metadataConversationID, entries)
 		if !ok {
 			metadataEnv = externalMCPMetadataEnv(b.config.ConversationID, msg.Metadata)
 			shellEnv = metadataEnv
@@ -991,6 +1003,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 				return runResult{}, fmt.Errorf("append external MCP metadata: %w", err)
 			}
 		} else {
+			metadataEnv[rocketclawConversationIDEnv] = b.config.ConversationID
 			shellEnv = metadataEnv
 
 			transientEnv := externalMCPMetadataEnv(b.config.ConversationID, msg.Metadata)

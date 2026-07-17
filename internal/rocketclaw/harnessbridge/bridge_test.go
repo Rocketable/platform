@@ -2571,7 +2571,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 
-		if requests == 2 {
+		if requests == 2 || requests == 5 {
 			_, _ = w.Write([]byte(`{"id":"resp_2","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"call_1","type":"function_call","status":"completed","call_id":"call_1","name":"bash","arguments":"{\"command\":\"printf '%s|%s|%s' \\\"$ROCKETCLAW_METADATA_A\\\" \\\"$ROCKETCLAW_METADATA_LATER_KEY\\\" \\\"$ROCKETCLAW_METADATA_Z\\\"\",\"description\":\"check env\"}"}]}`))
 
 			return
@@ -2588,6 +2588,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
 
 	managedConversationID := SlackThreadConversationID("C123", "111.222")
+	require.NoError(t, service.RegisterExternalMCPConversation("public-1", "planner", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:private", ManagedConversationID: managedConversationID, SlackChannel: "#ops"}))
 	bridge.config = Config{ConversationID: "external_mcp:planner:private", Agent: "planner", ManagedConversationID: managedConversationID, ExternalConversationID: "public-1", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}
 	bridge.log = slog.New(slog.DiscardHandler)
 
@@ -2657,6 +2658,14 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 			assert.NotContains(t, message.text, "ROCKETCLAW_METADATA_LATER_KEY")
 		}
 	}
+
+	managedBridge := &Bridge{runtime: bridge.runtime, config: Config{ConversationID: managedConversationID, Agent: "planner", ManagedConversationID: managedConversationID, OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}, log: slog.New(slog.DiscardHandler)}
+	managedMsg := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "check metadata", true)
+	managedMsg.ConversationID = managedConversationID
+	_, err = managedBridge.runTurn(context.Background(), managedMsg, "turn-managed", false)
+	require.NoError(t, err)
+	require.NotEmpty(t, requestBody.Input)
+	assert.Equal(t, "first||last", requestBody.Input[len(requestBody.Input)-1].Output)
 }
 
 func TestRunTurnPreservesRecoveredExternalMCPReplayWithTransientMetadata(t *testing.T) {

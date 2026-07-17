@@ -931,7 +931,15 @@ func (c *Connector) promoteSlackStack(ctx context.Context, key string, submit fu
 	}
 }
 
-func (c *Connector) finishSlackStack(key string) { c.mu.Lock(); delete(c.stacks, key); c.mu.Unlock() }
+func (c *Connector) finishSlackStack(key string) []slackBufferedMessage {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	buffered := c.stacks[key]
+	delete(c.stacks, key)
+
+	return buffered
+}
 
 func combineSlackBufferedMessages(buffered []slackBufferedMessage) (string, events.InboundContent) {
 	parts := make([]string, 0, len(buffered))
@@ -991,10 +999,14 @@ type slackMCPBlockMessage struct {
 }
 
 func slackMCPBlocks(label, externalConversationID, agent, text, bodyType string) []slack.Block {
-	identity := label + "\nExternal conversation ID: " + externalConversationID + "\nPrivate agent: " + agent
+	identity := "External conversation ID: " + externalConversationID + " | Private agent: " + agent
 	chunks := primarytext.SplitSlackText(text, slackBlockTextLimit, slackBlockTextLimit)
-	blocks := make([]slack.Block, 0, len(chunks)+1)
-	blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.PlainTextType, slackTruncatedText(identity, slackBlockTextLimit, "\n[MCP identity truncated]"), false, false), nil, nil))
+	blocks := make([]slack.Block, 0, len(chunks)+3)
+	blocks = append(blocks,
+		slack.NewHeaderBlock(slack.NewTextBlockObject(slack.PlainTextType, label, false, false)),
+		slack.NewContextBlock("", slack.NewTextBlockObject(slack.PlainTextType, slackTruncatedText(identity, slackBlockTextLimit, " [MCP identity truncated]"), false, false)),
+		slack.NewDividerBlock(),
+	)
 
 	for _, chunk := range chunks {
 		blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(bodyType, chunk, false, false), nil, nil))
@@ -1006,8 +1018,8 @@ func slackMCPBlocks(label, externalConversationID, agent, text, bodyType string)
 func slackMCPBlockMessages(label, externalConversationID, agent, text, bodyType string) []slackMCPBlockMessage {
 	chunks := primarytext.SplitSlackText(text, slackBlockTextLimit, slackBlockTextLimit)
 
-	messages := make([]slackMCPBlockMessage, 0, (len(chunks)+48)/49)
-	for group := range slices.Chunk(chunks, 49) {
+	messages := make([]slackMCPBlockMessage, 0, (len(chunks)+46)/47)
+	for group := range slices.Chunk(chunks, 47) {
 		messageText := strings.Join(group, "")
 		messages = append(messages, slackMCPBlockMessage{text: messageText, blocks: slackMCPBlocks(label, externalConversationID, agent, messageText, bodyType)})
 	}
@@ -2276,7 +2288,11 @@ func (c *Connector) stopSlackThread(ctx context.Context, channelID, threadTS str
 		return fmt.Errorf("stop Slack thread: %w", err)
 	}
 
-	c.finishSlackStack(slackThreadStackKey(&events.SlackReplyTarget{ChannelID: channelID, ThreadTS: threadTS}))
+	buffered := c.finishSlackStack(slackThreadStackKey(&events.SlackReplyTarget{ChannelID: channelID, ThreadTS: threadTS}))
+	for i := range buffered {
+		c.removeReaction(ctx, buffered[i].Reply, slackBufferedReaction, "remove discarded Slack buffered reaction")
+		c.addReaction(ctx, buffered[i].Reply, slackInterruptionReaction, "add discarded Slack interruption reaction")
+	}
 
 	if marker != nil && marker.SlackReply != nil {
 		c.addReaction(ctx, marker.SlackReply, slackInterruptionReaction, "add Slack interruption reaction")

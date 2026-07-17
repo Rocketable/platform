@@ -70,6 +70,24 @@ func TestSlackMCPBlocksStayWithinSlackLimit(t *testing.T) {
 	}
 }
 
+func TestSlackMCPBlocksUseDistinctFrame(t *testing.T) {
+	blocks := slackMCPBlocks("MCP request", "conversation-1", "private-agent", "body", slack.PlainTextType)
+	require.Len(t, blocks, 4)
+
+	header, ok := blocks[0].(*slack.HeaderBlock)
+	require.True(t, ok)
+	assert.Equal(t, "MCP request", header.Text.Text)
+
+	contextBlock, ok := blocks[1].(*slack.ContextBlock)
+	require.True(t, ok)
+	require.Len(t, contextBlock.ContextElements.Elements, 1)
+	identity, ok := contextBlock.ContextElements.Elements[0].(*slack.TextBlockObject)
+	require.True(t, ok)
+	assert.Equal(t, "External conversation ID: conversation-1 | Private agent: private-agent", identity.Text)
+	assert.IsType(t, new(slack.DividerBlock), blocks[2])
+	assert.IsType(t, new(slack.SectionBlock), blocks[3])
+}
+
 func TestSendExternalMCPRelayContinuesHugeRequestBeforePlaceholders(t *testing.T) {
 	var (
 		posted  []url.Values
@@ -959,7 +977,9 @@ func TestSendExternalMCPThreadRelay(t *testing.T) {
 	assert.Equal(t, "follow up", posted[0].Get("text"))
 	assert.Equal(t, "123.456", posted[0].Get("thread_ts"))
 	assert.JSONEq(t, `[
-		{"type":"section","text":{"type":"plain_text","text":"MCP request\nExternal conversation ID: public-conversation\nPrivate agent: private-agent","emoji":false}},
+		{"type":"header","text":{"type":"plain_text","text":"MCP request","emoji":false}},
+		{"type":"context","elements":[{"type":"plain_text","text":"External conversation ID: public-conversation | Private agent: private-agent","emoji":false}]},
+		{"type":"divider"},
 		{"type":"section","text":{"type":"plain_text","text":"follow up","emoji":false}}
 	]`, posted[0].Get("blocks"))
 	assert.Equal(t, slackImmediatePlaceholder, posted[1].Get("text"))
@@ -1052,7 +1072,9 @@ func TestSendExternalMCPThreadRelayAttachesFilesToRelayMessage(t *testing.T) {
 	assert.Equal(t, "Attached files: report.txt.", posted[0].Get("text"))
 	assert.Equal(t, "123.456", posted[0].Get("thread_ts"))
 	assert.JSONEq(t, `[
-		{"type":"section","text":{"type":"plain_text","text":"MCP request\nExternal conversation ID: public-conversation\nPrivate agent: private-agent","emoji":false}},
+		{"type":"header","text":{"type":"plain_text","text":"MCP request","emoji":false}},
+		{"type":"context","elements":[{"type":"plain_text","text":"External conversation ID: public-conversation | Private agent: private-agent","emoji":false}]},
+		{"type":"divider"},
 		{"type":"section","text":{"type":"plain_text","text":"Attached files: report.txt.","emoji":false}}
 	]`, posted[0].Get("blocks"))
 	assert.Equal(t, "123.456", posted[1].Get("thread_ts"))
@@ -1154,7 +1176,9 @@ func TestSendExternalMCPRelayCanPostTopLevelChannelRelay(t *testing.T) {
 	assert.Empty(t, posted[0].Get("thread_ts"))
 	assert.Equal(t, "hello", posted[0].Get("text"))
 	assert.JSONEq(t, `[
-		{"type":"section","text":{"type":"plain_text","text":"MCP request\nExternal conversation ID: public-conversation\nPrivate agent: private-agent","emoji":false}},
+		{"type":"header","text":{"type":"plain_text","text":"MCP request","emoji":false}},
+		{"type":"context","elements":[{"type":"plain_text","text":"External conversation ID: public-conversation | Private agent: private-agent","emoji":false}]},
+		{"type":"divider"},
 		{"type":"section","text":{"type":"plain_text","text":"hello","emoji":false}}
 	]`, posted[0].Get("blocks"))
 	assert.Equal(t, slackImmediatePlaceholder, posted[1].Get("text"))
@@ -1229,7 +1253,9 @@ func TestExternalMCPRelayUsesAnswerPlaceholderForStackedReply(t *testing.T) {
 	assert.Equal(t, "555.3", (*updated)[0].Get("ts"))
 	assert.Equal(t, "first answer", (*updated)[0].Get("text"))
 	assert.JSONEq(t, `[
-		{"type":"section","text":{"type":"plain_text","text":"MCP response\nExternal conversation ID: public-conversation\nPrivate agent: private-agent","emoji":false}},
+		{"type":"header","text":{"type":"plain_text","text":"MCP response","emoji":false}},
+		{"type":"context","elements":[{"type":"plain_text","text":"External conversation ID: public-conversation | Private agent: private-agent","emoji":false}]},
+		{"type":"divider"},
 		{"type":"section","text":{"type":"mrkdwn","text":"first answer"}}
 	]`, (*updated)[0].Get("blocks"))
 }
@@ -1364,8 +1390,11 @@ func TestExternalMCPResponseBlocksSurviveChunking(t *testing.T) {
 			} `json:"text"`
 		}
 		require.NoError(t, json.Unmarshal([]byte(values.Get("blocks")), &blocks))
-		require.GreaterOrEqual(t, len(blocks), 2)
-		assert.Equal(t, "MCP response\nExternal conversation ID: public-conversation\nPrivate agent: private-agent", blocks[0].Text.Text)
+		require.GreaterOrEqual(t, len(blocks), 4)
+		assert.Equal(t, "header", blocks[0].Type)
+		assert.Equal(t, "MCP response", blocks[0].Text.Text)
+		assert.Equal(t, "context", blocks[1].Type)
+		assert.Equal(t, "divider", blocks[2].Type)
 
 		var blockBody strings.Builder
 
@@ -1373,7 +1402,7 @@ func TestExternalMCPResponseBlocksSurviveChunking(t *testing.T) {
 			assert.LessOrEqual(t, len([]rune(block.Text.Text)), slackBlockTextLimit)
 		}
 
-		for _, block := range blocks[1:] {
+		for _, block := range blocks[3:] {
 			blockBody.WriteString(block.Text.Text)
 		}
 
@@ -3551,6 +3580,8 @@ func TestHandleMessageEventStopMarksOriginalTurnStart(t *testing.T) {
 	router.prepareHandled = true
 	router.stopResult = &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+	key := slackThreadStackKey(&events.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.222"})
+	connector.stacks[key] = []slackBufferedMessage{{Reply: &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "444.555", ThreadTS: "111.222"}}}
 
 	event := newSlackMessageEvent("333.444", "111.222", "🛑")
 	event.Channel = "C123"
@@ -3559,6 +3590,8 @@ func TestHandleMessageEventStopMarksOriginalTurnStart(t *testing.T) {
 	require.Len(t, router.goalStops, 1)
 	assert.Equal(t, goalThreadStopCall{channelID: "C123", threadTS: "111.222"}, router.goalStops[0])
 	assert.Contains(t, reactions, "/reactions.add "+slackInterruptionReaction+" 222.333")
+	assert.Contains(t, reactions, "/reactions.remove "+slackBufferedReaction+" 444.555")
+	assert.Contains(t, reactions, "/reactions.add "+slackInterruptionReaction+" 444.555")
 	assert.Empty(t, posted)
 }
 
