@@ -181,12 +181,12 @@ func TestSplitSlackResponseTextBoundaries(t *testing.T) {
 
 func TestProgressTextMessageQuotesAndBoundsText(t *testing.T) {
 	assert.Empty(t, slackThinkingMessage(slackImmediatePlaceholder, " \n\t "))
-	assert.Equal(t, slackImmediatePlaceholder+"\n\n> beta\n> alpha", slackThinkingMessage(slackImmediatePlaceholder, " alpha\nbeta "))
-	assert.Equal(t, primarytext.GoalProgressText(0, 0)+"\n\n> beta\n> alpha", slackThinkingMessage(primarytext.GoalProgressText(0, 0), " alpha\nbeta "))
+	assert.Equal(t, slackImmediatePlaceholder+"\n\nbeta\nalpha", slackThinkingMessage(slackImmediatePlaceholder, " alpha\nbeta "))
+	assert.Equal(t, primarytext.GoalProgressText(0, 0)+"\n\nbeta\nalpha", slackThinkingMessage(primarytext.GoalProgressText(0, 0), " alpha\nbeta "))
 	assert.Equal(t, "_Pursuing Goal (2/5)..._", primarytext.GoalProgressText(2, 5))
 
 	got := slackThinkingMessage(slackImmediatePlaceholder, strings.Repeat("x", slackBlockTextLimit+20))
-	assert.True(t, strings.HasPrefix(got, slackImmediatePlaceholder+"\n\n> "))
+	assert.True(t, strings.HasPrefix(got, slackImmediatePlaceholder+"\n\n"))
 	assert.Less(t, len([]rune(got)), slackBlockTextLimit)
 }
 
@@ -1294,7 +1294,7 @@ func TestExternalMCPRelayCreatesAnswerPlaceholderUpFront(t *testing.T) {
 	require.Len(t, *updated, 2)
 	assert.Equal(t, slackAnswerPlaceholder, (*posted)[2].Get("text"))
 	assert.Equal(t, "555.2", (*updated)[0].Get("ts"))
-	assert.Equal(t, slackImmediatePlaceholder+"\n\n> working", (*updated)[0].Get("text"))
+	assert.Equal(t, slackImmediatePlaceholder+"\n\nworking", (*updated)[0].Get("text"))
 	assert.Contains(t, (*updated)[0].Get("blocks"), "MCP response")
 	assert.Contains(t, (*updated)[0].Get("blocks"), "public-conversation")
 	assert.Contains(t, (*updated)[0].Get("blocks"), "private-agent")
@@ -1928,7 +1928,7 @@ func TestSendResponseStreamsThinkingInPlaceThenReplacesItWithFinalAnswer(t *test
 	require.Len(t, updated, 2)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
-	assert.Equal(t, "_Thinking..._\n\n> second thought\n> first thought", updated[0].Get("text"))
+	assert.Equal(t, "_Thinking..._\n\nsecond thought\nfirst thought", updated[0].Get("text"))
 	assert.Equal(t, updated[0].Get("text"), thinkingBlockText(t, updated[0]))
 	assert.NotContains(t, updated[0].Get("blocks"), "MCP response")
 	assert.Equal(t, "Final answer", updated[1].Get("text"))
@@ -1982,7 +1982,7 @@ func TestSendResponseClampsThinkingToSlackLimit(t *testing.T) {
 	require.Len(t, posted, 2)
 	require.Len(t, updated, 1)
 	assert.Contains(t, updated[0].Get("text"), "TAIL MARKER")
-	assert.True(t, strings.HasPrefix(updated[0].Get("text"), slackImmediatePlaceholder+"\n\n> "))
+	assert.True(t, strings.HasPrefix(updated[0].Get("text"), slackImmediatePlaceholder+"\n\n"))
 	assert.Equal(t, updated[0].Get("text"), thinkingBlockText(t, updated[0]))
 }
 
@@ -2035,7 +2035,7 @@ func TestSendResponseUsesGoalPlaceholderForGoalProgress(t *testing.T) {
 	require.Len(t, updated, 1)
 	assert.Equal(t, "_Pursuing Goal (2/5)..._", posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
-	assert.Equal(t, "_Pursuing Goal (2/5)..._\n\n> second thought\n> first thought", updated[0].Get("text"))
+	assert.Equal(t, "_Pursuing Goal (2/5)..._\n\nsecond thought\nfirst thought", updated[0].Get("text"))
 	assert.Equal(t, updated[0].Get("text"), thinkingBlockText(t, updated[0]))
 }
 

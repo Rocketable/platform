@@ -355,8 +355,7 @@ func slackThinkingMessage(placeholder, thinking string) string {
 
 	quoted.WriteString(prefix)
 
-	for _, v := range slices.Backward(lines) {
-		quoted.WriteString("> ")
+	for _, v := range lines {
 		quoted.WriteString(v)
 		quoted.WriteByte('\n')
 	}
@@ -805,8 +804,13 @@ func (c *Connector) flushProgressText(ctx context.Context, turnID string) error 
 		var blocks []slack.Block
 		if pending.ExternalConversationID != "" {
 			blocks = slackMCPBlocks("MCP response", pending.ExternalConversationID, pending.Agent, thinkingText, slack.MarkdownType)
+			for _, block := range blocks {
+				if section, ok := block.(*slack.SectionBlock); ok {
+					section.Expand = true
+				}
+			}
 		} else {
-			blocks = []slack.Block{slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, thinkingText, false, false), nil, nil)}
+			blocks = []slack.Block{slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, thinkingText, false, false), nil, nil, slack.SectionBlockOptionExpand(true))}
 		}
 
 		if _, _, _, errUpdate := c.api.UpdateMessageContext(ctx, pending.State.ChannelID, pending.State.MessageTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(blocks...)); errUpdate != nil {
