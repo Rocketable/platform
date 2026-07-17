@@ -649,6 +649,21 @@ func (c *Connector) finishCompleteResponse(ctx context.Context, msg *events.Outb
 		}
 	}
 
+	if hasSlots {
+		c.mu.Lock()
+		pending, hasProgress := c.thinking[msg.TurnID]
+		c.mu.Unlock()
+
+		if hasProgress {
+			thinkingText := slackThinkingMessage(pending.Placeholder, pending.Text)
+			if _, _, _, err := c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.ThinkingTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(slackThinkingBlocks(msg.TurnID, &pending, slack.TaskCardStatusComplete)...)); err != nil {
+				c.log.Warn("complete Slack thinking card", "error", err)
+			} else {
+				slots.ThinkingTS = ""
+			}
+		}
+	}
+
 	c.finishResponse(ctx, msg, slots, hasSlots, strings.TrimSpace(msg.Text) == "")
 
 	return nil
@@ -801,40 +816,35 @@ func (c *Connector) flushProgressText(ctx context.Context, turnID string) error 
 	var err error
 
 	if thinkingText != "" {
-		var blocks []slack.Block
-		if pending.ExternalConversationID != "" {
-			blocks = slackMCPBlocks("MCP response", pending.ExternalConversationID, pending.Agent, thinkingText, slack.MarkdownType)
-			for _, block := range blocks {
-				if section, ok := block.(*slack.SectionBlock); ok {
-					section.Expand = true
-				}
-			}
-		} else {
-			blocks = []slack.Block{slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, thinkingText, false, false), nil, nil, slack.SectionBlockOptionExpand(true))}
-		}
-
-		if _, _, _, errUpdate := c.api.UpdateMessageContext(ctx, pending.State.ChannelID, pending.State.MessageTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(blocks...)); errUpdate != nil {
+		if _, _, _, errUpdate := c.api.UpdateMessageContext(ctx, pending.State.ChannelID, pending.State.MessageTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(slackThinkingBlocks(turnID, &pending, slack.TaskCardStatusInProgress)...)); errUpdate != nil {
 			err = fmt.Errorf("update Slack thinking message len=%d: %w", len([]rune(thinkingText)), errUpdate)
 		}
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	return err
+}
 
-	current, ok := c.thinking[turnID]
-	if !ok {
-		return err
+func slackThinkingBlocks(turnID string, pending *slackThinkingState, status slack.TaskCardStatus) []slack.Block {
+	lines := strings.Split(strings.TrimSpace(pending.Text), "\n")
+	card := slack.NewTaskCardBlock(turnID, lines[len(lines)-1]).WithStatus(status)
+
+	if len(lines) > 1 {
+		details := make([]slack.RichTextElement, 0, len(lines)-1)
+		for _, line := range lines[:len(lines)-1] {
+			details = append(details, slack.NewRichTextSection(slack.NewRichTextSectionTextElement(line, nil)))
+		}
+
+		card.WithDetails(slack.NewRichTextBlock("", details...))
 	}
 
-	if err != nil {
-		return err
+	var blocks []slack.Block
+	if pending.ExternalConversationID != "" {
+		blocks = slackMCPBlocks("MCP response", pending.ExternalConversationID, pending.Agent, pending.Placeholder, slack.MarkdownType)
+	} else {
+		blocks = []slack.Block{slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, pending.Placeholder, false, false), nil, nil)}
 	}
 
-	if current.Text == pending.Text && current.Timer == nil {
-		delete(c.thinking, turnID)
-	}
-
-	return nil
+	return append(blocks, card)
 }
 
 func (c *Connector) clearProgressText(turnID string) {

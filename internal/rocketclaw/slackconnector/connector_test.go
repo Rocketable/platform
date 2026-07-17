@@ -181,8 +181,8 @@ func TestSplitSlackResponseTextBoundaries(t *testing.T) {
 
 func TestProgressTextMessageQuotesAndBoundsText(t *testing.T) {
 	assert.Empty(t, slackThinkingMessage(slackImmediatePlaceholder, " \n\t "))
-	assert.Equal(t, slackImmediatePlaceholder+"\n\nbeta\nalpha", slackThinkingMessage(slackImmediatePlaceholder, " alpha\nbeta "))
-	assert.Equal(t, primarytext.GoalProgressText(0, 0)+"\n\nbeta\nalpha", slackThinkingMessage(primarytext.GoalProgressText(0, 0), " alpha\nbeta "))
+	assert.Equal(t, slackImmediatePlaceholder+"\n\nalpha\nbeta", slackThinkingMessage(slackImmediatePlaceholder, " alpha\nbeta "))
+	assert.Equal(t, primarytext.GoalProgressText(0, 0)+"\n\nalpha\nbeta", slackThinkingMessage(primarytext.GoalProgressText(0, 0), " alpha\nbeta "))
 	assert.Equal(t, "_Pursuing Goal (2/5)..._", primarytext.GoalProgressText(2, 5))
 
 	got := slackThinkingMessage(slackImmediatePlaceholder, strings.Repeat("x", slackBlockTextLimit+20))
@@ -1291,7 +1291,7 @@ func TestExternalMCPRelayCreatesAnswerPlaceholderUpFront(t *testing.T) {
 	require.NoError(t, connector.SendResponse(context.Background(), final))
 
 	require.Len(t, *posted, 6)
-	require.Len(t, *updated, 2)
+	require.Len(t, *updated, 3)
 	assert.Equal(t, slackAnswerPlaceholder, (*posted)[2].Get("text"))
 	assert.Equal(t, "555.2", (*updated)[0].Get("ts"))
 	assert.Equal(t, slackImmediatePlaceholder+"\n\nworking", (*updated)[0].Get("text"))
@@ -1300,6 +1300,7 @@ func TestExternalMCPRelayCreatesAnswerPlaceholderUpFront(t *testing.T) {
 	assert.Contains(t, (*updated)[0].Get("blocks"), "private-agent")
 	assert.Equal(t, "555.3", (*updated)[1].Get("ts"))
 	assert.Equal(t, "first answer", (*updated)[1].Get("text"))
+	assert.Contains(t, (*updated)[2].Get("blocks"), `"status":"complete"`)
 	assert.Contains(t, (*updated)[1].Get("blocks"), "MCP response")
 }
 
@@ -1925,17 +1926,19 @@ func TestSendResponseStreamsThinkingInPlaceThenReplacesItWithFinalAnswer(t *test
 	require.NoError(t, connector.SendResponse(context.Background(), final))
 
 	require.Len(t, posted, 2)
-	require.Len(t, updated, 2)
+	require.Len(t, updated, 3)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
-	assert.Equal(t, "_Thinking..._\n\nsecond thought\nfirst thought", updated[0].Get("text"))
-	assert.Equal(t, updated[0].Get("text"), thinkingBlockText(t, updated[0]))
+	assert.Equal(t, "_Thinking..._\n\nfirst thought\nsecond thought", updated[0].Get("text"))
+	assert.Equal(t, slackImmediatePlaceholder, thinkingBlockText(t, updated[0]))
+	assert.Contains(t, updated[0].Get("blocks"), `"title":"second thought"`)
+	assert.Contains(t, updated[0].Get("blocks"), `"text":"first thought"`)
 	assert.NotContains(t, updated[0].Get("blocks"), "MCP response")
 	assert.Equal(t, "Final answer", updated[1].Get("text"))
 	assert.JSONEq(t, `[]`, updated[1].Get("blocks"))
+	assert.Contains(t, updated[2].Get("blocks"), `"status":"complete"`)
 	assert.Equal(t, "111.222", removed.Get("timestamp"))
-	require.Len(t, deleted, 1)
-	assert.Equal(t, "555.666", deleted[0].Get("ts"))
+	assert.Empty(t, deleted)
 }
 
 func TestSendResponseClampsThinkingToSlackLimit(t *testing.T) {
@@ -1983,7 +1986,7 @@ func TestSendResponseClampsThinkingToSlackLimit(t *testing.T) {
 	require.Len(t, updated, 1)
 	assert.Contains(t, updated[0].Get("text"), "TAIL MARKER")
 	assert.True(t, strings.HasPrefix(updated[0].Get("text"), slackImmediatePlaceholder+"\n\n"))
-	assert.Equal(t, updated[0].Get("text"), thinkingBlockText(t, updated[0]))
+	assert.Equal(t, slackImmediatePlaceholder, thinkingBlockText(t, updated[0]))
 }
 
 func TestSendResponseUsesGoalPlaceholderForGoalProgress(t *testing.T) {
@@ -2035,8 +2038,8 @@ func TestSendResponseUsesGoalPlaceholderForGoalProgress(t *testing.T) {
 	require.Len(t, updated, 1)
 	assert.Equal(t, "_Pursuing Goal (2/5)..._", posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
-	assert.Equal(t, "_Pursuing Goal (2/5)..._\n\nsecond thought\nfirst thought", updated[0].Get("text"))
-	assert.Equal(t, updated[0].Get("text"), thinkingBlockText(t, updated[0]))
+	assert.Equal(t, "_Pursuing Goal (2/5)..._\n\nfirst thought\nsecond thought", updated[0].Get("text"))
+	assert.Equal(t, primarytext.GoalProgressText(2, 5), thinkingBlockText(t, updated[0]))
 }
 
 func thinkingBlockText(t *testing.T, values url.Values) string {
@@ -2051,7 +2054,7 @@ func thinkingBlockText(t *testing.T, values url.Values) string {
 	}
 
 	require.NoError(t, json.Unmarshal([]byte(values.Get("blocks")), &blocks))
-	require.Len(t, blocks, 1)
+	require.NotEmpty(t, blocks)
 	assert.Equal(t, "section", blocks[0].Type)
 	assert.Equal(t, "mrkdwn", blocks[0].Text.Type)
 
@@ -2548,11 +2551,11 @@ func TestSendResponseUpdatesNonTailAnswerPlaceholder(t *testing.T) {
 	require.NoError(t, connector.SendResponse(context.Background(), msg))
 
 	require.Len(t, posted, 2)
-	require.Len(t, updated, 1)
+	require.Len(t, updated, 2)
 	assert.Equal(t, "first answer", updated[0].Get("text"))
 	assert.Equal(t, "555.2", updated[0].Get("ts"))
-	require.Len(t, deleted, 1)
-	assert.Equal(t, "555.1", deleted[0].Get("ts"))
+	assert.Contains(t, updated[1].Get("blocks"), `"status":"complete"`)
+	assert.Empty(t, deleted)
 }
 
 func TestSendResponseSucceedsWhenThinkingDeleteFails(t *testing.T) {
@@ -4406,10 +4409,10 @@ func TestHandleMessageEventRunsOnDemandCronInSlackThread(t *testing.T) {
 	require.NoError(t, connector.SendResponse(context.Background(), final))
 	final.MarkDelivered(nil)
 	require.Len(t, posted, 4)
-	require.Len(t, deleted, 1)
-	assert.Equal(t, "555.666", deleted[0].Get("ts"))
-	require.Len(t, updated, 2)
+	assert.Empty(t, deleted)
+	require.Len(t, updated, 3)
 	assert.Equal(t, "final payload", updated[1].Get("text"))
+	assert.Contains(t, updated[2].Get("blocks"), `"status":"complete"`)
 
 	assert.Empty(t, router.startedSnapshot())
 	assert.Equal(t, []cronjob.OneOffCronjob{{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", TextChannel: "C123"}}, runner.runsSnapshot())
