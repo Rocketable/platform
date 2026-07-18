@@ -826,11 +826,19 @@ func (c *Connector) flushProgressText(ctx context.Context, turnID string) error 
 
 func slackThinkingBlocks(turnID string, pending *slackThinkingState, status slack.TaskCardStatus) []slack.Block {
 	lines := strings.Split(strings.TrimSpace(pending.Text), "\n")
-	card := slack.NewTaskCardBlock(turnID, lines[len(lines)-1]).WithStatus(status)
+	title := lines[len(lines)-1]
+	detailLines := lines[:len(lines)-1]
 
-	if len(lines) > 1 {
-		details := make([]slack.RichTextElement, 0, len(lines)-1)
-		for _, line := range lines[:len(lines)-1] {
+	if status == slack.TaskCardStatusComplete {
+		title = "Complete"
+		detailLines = lines
+	}
+
+	card := slack.NewTaskCardBlock(turnID, title).WithStatus(status)
+
+	if len(detailLines) > 0 {
+		details := make([]slack.RichTextElement, 0, len(detailLines))
+		for _, line := range detailLines {
 			details = append(details, slack.NewRichTextSection(slack.NewRichTextSectionTextElement(line, nil)))
 		}
 

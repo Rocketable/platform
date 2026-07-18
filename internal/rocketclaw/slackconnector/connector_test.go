@@ -1937,6 +1937,8 @@ func TestSendResponseStreamsThinkingInPlaceThenReplacesItWithFinalAnswer(t *test
 	assert.Equal(t, "Final answer", updated[1].Get("text"))
 	assert.JSONEq(t, `[]`, updated[1].Get("blocks"))
 	assert.Contains(t, updated[2].Get("blocks"), `"status":"complete"`)
+	assert.Contains(t, updated[2].Get("blocks"), `"title":"Complete"`)
+	assert.Contains(t, updated[2].Get("blocks"), `second thought`)
 	assert.Equal(t, "111.222", removed.Get("timestamp"))
 	assert.Empty(t, deleted)
 }
