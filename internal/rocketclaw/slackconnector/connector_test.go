@@ -1931,8 +1931,9 @@ func TestSendResponseStreamsThinkingInPlaceThenReplacesItWithFinalAnswer(t *test
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Equal(t, "_Thinking..._\n\nfirst thought\nsecond thought", updated[0].Get("text"))
 	assert.Equal(t, slackImmediatePlaceholder, thinkingBlockText(t, updated[0]))
-	assert.Contains(t, updated[0].Get("blocks"), `"title":"second thought"`)
+	assert.Contains(t, updated[0].Get("blocks"), `"title":"_Thinking..._"`)
 	assert.Contains(t, updated[0].Get("blocks"), `"text":"first thought"`)
+	assert.Contains(t, updated[0].Get("blocks"), `"text":"second thought"`)
 	assert.NotContains(t, updated[0].Get("blocks"), "MCP response")
 	assert.Equal(t, "Final answer", updated[1].Get("text"))
 	assert.JSONEq(t, `[]`, updated[1].Get("blocks"))
@@ -2048,8 +2049,9 @@ func thinkingBlockText(t *testing.T, values url.Values) string {
 	t.Helper()
 
 	var blocks []struct {
-		Type string `json:"type"`
-		Text struct {
+		Type  string `json:"type"`
+		Title string `json:"title"`
+		Text  struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"text"`
@@ -2057,10 +2059,20 @@ func thinkingBlockText(t *testing.T, values url.Values) string {
 
 	require.NoError(t, json.Unmarshal([]byte(values.Get("blocks")), &blocks))
 	require.NotEmpty(t, blocks)
-	assert.Equal(t, "section", blocks[0].Type)
-	assert.Equal(t, "mrkdwn", blocks[0].Text.Type)
 
-	return blocks[0].Text.Text
+	for _, block := range blocks {
+		if block.Type == "section" {
+			return block.Text.Text
+		}
+
+		if block.Type == "task_card" {
+			return block.Title
+		}
+	}
+
+	t.Fatal("thinking label not found")
+
+	return ""
 }
 
 func TestAskUserQuestionUsesUniqueSlackButtonActionIDs(t *testing.T) {

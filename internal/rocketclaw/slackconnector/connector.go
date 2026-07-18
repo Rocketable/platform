@@ -826,30 +826,24 @@ func (c *Connector) flushProgressText(ctx context.Context, turnID string) error 
 
 func slackThinkingBlocks(turnID string, pending *slackThinkingState, status slack.TaskCardStatus) []slack.Block {
 	lines := strings.Split(strings.TrimSpace(pending.Text), "\n")
-	title := lines[len(lines)-1]
-	detailLines := lines[:len(lines)-1]
+	title := pending.Placeholder
 
 	if status == slack.TaskCardStatusComplete {
 		title = "Complete"
-		detailLines = lines
 	}
 
 	card := slack.NewTaskCardBlock(turnID, title).WithStatus(status)
 
-	if len(detailLines) > 0 {
-		details := make([]slack.RichTextElement, 0, len(detailLines))
-		for _, line := range detailLines {
-			details = append(details, slack.NewRichTextSection(slack.NewRichTextSectionTextElement(line, nil)))
-		}
-
-		card.WithDetails(slack.NewRichTextBlock("", details...))
+	details := make([]slack.RichTextElement, 0, len(lines))
+	for _, line := range lines {
+		details = append(details, slack.NewRichTextSection(slack.NewRichTextSectionTextElement(line, nil)))
 	}
+
+	card.WithDetails(slack.NewRichTextBlock("", details...))
 
 	var blocks []slack.Block
 	if pending.ExternalConversationID != "" {
-		blocks = slackMCPBlocks("MCP response", pending.ExternalConversationID, pending.Agent, pending.Placeholder, slack.MarkdownType)
-	} else {
-		blocks = []slack.Block{slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, pending.Placeholder, false, false), nil, nil)}
+		blocks = slackMCPBlocks("MCP response", pending.ExternalConversationID, pending.Agent, "", slack.MarkdownType)
 	}
 
 	return append(blocks, card)
