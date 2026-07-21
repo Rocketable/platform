@@ -651,15 +651,29 @@ func (c *Connector) finishCompleteResponse(ctx context.Context, msg *events.Outb
 
 	if hasSlots {
 		c.mu.Lock()
-		pending, hasProgress := c.thinking[msg.TurnID]
+		pending := c.thinking[msg.TurnID]
 		c.mu.Unlock()
 
-		if hasProgress {
-			thinkingText := slackThinkingMessage(pending.Placeholder, pending.Text)
-			if _, _, _, err := c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.ThinkingTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(slackThinkingBlocks(msg.TurnID, &pending, slack.TaskCardStatusComplete)...)); err != nil {
-				c.log.Warn("complete Slack thinking card", "error", err)
+		if pending.Placeholder == "" {
+			pending.Placeholder = slackImmediatePlaceholder
+			if msg.GoalTurn {
+				pending.Placeholder = primarytext.GoalProgressText(msg.GoalTurnNumber, msg.GoalMaxTurns)
+			}
+		}
+
+		thinkingText := slackThinkingMessage(pending.Placeholder, pending.Text)
+		if thinkingText == "" {
+			thinkingText = "Complete"
+		}
+
+		_, _, _, err := c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.ThinkingTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(slackThinkingBlocks(msg.TurnID, &pending, slack.TaskCardStatusComplete)...))
+		slots.ThinkingTS = ""
+
+		if err != nil {
+			if errSlack, ok := errors.AsType[slack.SlackErrorResponse](err); ok {
+				c.log.Warn("complete Slack thinking card", "error", err, "slack_errors", errSlack.Errors, "slack_messages", errSlack.ResponseMetadata.Messages)
 			} else {
-				slots.ThinkingTS = ""
+				c.log.Warn("complete Slack thinking card", "error", err)
 			}
 		}
 	}
@@ -836,10 +850,16 @@ func slackThinkingBlocks(turnID string, pending *slackThinkingState, status slac
 
 	details := make([]slack.RichTextElement, 0, len(lines))
 	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+
 		details = append(details, slack.NewRichTextSection(slack.NewRichTextSectionTextElement(line, nil)))
 	}
 
-	card.WithDetails(slack.NewRichTextBlock("", details...))
+	if len(details) > 0 {
+		card.WithDetails(slack.NewRichTextBlock("", details...))
+	}
 
 	var blocks []slack.Block
 	if pending.ExternalConversationID != "" {

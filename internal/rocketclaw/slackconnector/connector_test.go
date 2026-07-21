@@ -1249,9 +1249,10 @@ func TestExternalMCPRelayUsesAnswerPlaceholderForStackedReply(t *testing.T) {
 	require.NoError(t, connector.SendResponse(context.Background(), final))
 
 	require.Len(t, *posted, 6)
-	require.Len(t, *updated, 1)
+	require.Len(t, *updated, 2)
 	assert.Equal(t, "555.3", (*updated)[0].Get("ts"))
 	assert.Equal(t, "first answer", (*updated)[0].Get("text"))
+	assert.Contains(t, (*updated)[1].Get("blocks"), `"status":"complete"`)
 	assert.JSONEq(t, `[
 		{"type":"header","text":{"type":"plain_text","text":"MCP response","emoji":false}},
 		{"type":"context","elements":[{"type":"plain_text","text":"External conversation ID: public-conversation | Private agent: private-agent","emoji":false}]},
@@ -1355,9 +1356,10 @@ func TestExternalMCPRelayTailResponseUpdatesAnswerPlaceholder(t *testing.T) {
 	assert.Equal(t, "tail", (*posted)[0].Get("text"))
 	assert.Equal(t, slackImmediatePlaceholder, (*posted)[1].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, (*posted)[2].Get("text"))
-	require.Len(t, *updated, 1)
+	require.Len(t, *updated, 2)
 	assert.Equal(t, "555.3", (*updated)[0].Get("ts"))
 	assert.Equal(t, "tail answer", (*updated)[0].Get("text"))
+	assert.Contains(t, (*updated)[1].Get("blocks"), `"status":"complete"`)
 }
 
 func TestExternalMCPResponseBlocksSurviveChunking(t *testing.T) {
@@ -1377,7 +1379,8 @@ func TestExternalMCPResponseBlocksSurviveChunking(t *testing.T) {
 	final.SlackReply = replyTarget
 	require.NoError(t, connector.SendResponse(context.Background(), final))
 
-	assert.Empty(t, *updated)
+	require.Len(t, *updated, 1)
+	assert.Contains(t, (*updated)[0].Get("blocks"), `"status":"complete"`)
 	require.Greater(t, len(*posted), 4)
 
 	var rebuilt strings.Builder
@@ -1437,9 +1440,10 @@ func TestExternalMCPRelayStackedTailResponseUpdatesAnswerPlaceholder(t *testing.
 	assert.Equal(t, "second", (*posted)[3].Get("text"))
 	assert.Equal(t, slackImmediatePlaceholder, (*posted)[4].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, (*posted)[5].Get("text"))
-	require.Len(t, *updated, 1)
+	require.Len(t, *updated, 2)
 	assert.Equal(t, "555.6", (*updated)[0].Get("ts"))
 	assert.Equal(t, "second answer", (*updated)[0].Get("text"))
+	assert.Contains(t, (*updated)[1].Get("blocks"), `"status":"complete"`)
 }
 
 func TestExternalMCPRelayDoesNotHoldMutexDuringNetworkCalls(t *testing.T) {
@@ -1908,7 +1912,7 @@ func TestSendResponseStreamsThinkingInPlaceThenReplacesItWithFinalAnswer(t *test
 
 	second := events.NewOutboundMessage(events.SourceSlack, "test", "", []events.OutputTarget{events.OutputTargetSlack}...)
 	second.TurnID = "turn-1"
-	second.ProgressText = "first thought\nsecond thought"
+	second.ProgressText = "first thought\n**Identifying key constraints**\n\nsecond thought"
 	second.SlackReply = &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: ""}
 	require.NoError(t, connector.SendResponse(context.Background(), second))
 	require.Empty(t, updated)
@@ -1929,11 +1933,13 @@ func TestSendResponseStreamsThinkingInPlaceThenReplacesItWithFinalAnswer(t *test
 	require.Len(t, updated, 3)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
-	assert.Equal(t, "_Thinking..._\n\nfirst thought\nsecond thought", updated[0].Get("text"))
+	assert.Equal(t, "_Thinking..._\n\nfirst thought\n**Identifying key constraints**\n\nsecond thought", updated[0].Get("text"))
 	assert.Equal(t, slackImmediatePlaceholder, thinkingBlockText(t, updated[0]))
 	assert.Contains(t, updated[0].Get("blocks"), `"title":"_Thinking..._"`)
 	assert.Contains(t, updated[0].Get("blocks"), `"text":"first thought"`)
+	assert.Contains(t, updated[0].Get("blocks"), `"text":"**Identifying key constraints**"`)
 	assert.Contains(t, updated[0].Get("blocks"), `"text":"second thought"`)
+	assert.NotContains(t, updated[0].Get("blocks"), `"text":""`)
 	assert.NotContains(t, updated[0].Get("blocks"), "MCP response")
 	assert.Equal(t, "Final answer", updated[1].Get("text"))
 	assert.JSONEq(t, `[]`, updated[1].Get("blocks"))
@@ -2350,7 +2356,7 @@ func TestHandleInteractiveCustomQuestionSubmissionAnswersQuestion(t *testing.T) 
 }
 
 func TestSendResponseSplitsLongFinalAnswerIntoThreadMessages(t *testing.T) {
-	var posted, deleted []url.Values
+	var posted, deleted, updated []url.Values
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -2366,6 +2372,13 @@ func TestSendResponseSplitsLongFinalAnswerIntoThreadMessages(t *testing.T) {
 			_ = r.ParseForm()
 			deleted = append(deleted, cloneValues(r.PostForm))
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": deleted[len(deleted)-1].Get("ts")})
+		case "/chat.update":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			updated = append(updated, cloneValues(r.PostForm))
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": updated[len(updated)-1].Get("ts"), "text": updated[len(updated)-1].Get("text")})
 		case "/reactions.remove":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
@@ -2388,9 +2401,10 @@ func TestSendResponseSplitsLongFinalAnswerIntoThreadMessages(t *testing.T) {
 	msg.SlackReply = replyTarget
 	require.NoError(t, connector.SendResponse(context.Background(), msg))
 
-	require.Len(t, deleted, 2)
+	require.Len(t, deleted, 1)
 	assert.Equal(t, "555.666", deleted[0].Get("ts"))
-	assert.Equal(t, "555.666", deleted[1].Get("ts"))
+	require.Len(t, updated, 1)
+	assert.Contains(t, updated[0].Get("blocks"), `"status":"complete"`)
 	require.Greater(t, len(posted), 3)
 
 	chunks := posted[2:]
@@ -2504,14 +2518,14 @@ func TestSendResponseUpdatesTailAnswerPlaceholder(t *testing.T) {
 	msg.SlackReply = replyTarget
 	require.NoError(t, connector.SendResponse(context.Background(), msg))
 
-	require.Len(t, deleted, 1)
-	assert.Equal(t, "555.666", deleted[0].Get("ts"))
+	assert.Empty(t, deleted)
 	require.Len(t, posted, 2)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Equal(t, "111.222", posted[1].Get("thread_ts"))
-	require.Len(t, updated, 1)
+	require.Len(t, updated, 2)
 	assert.Equal(t, "thread answer", updated[0].Get("text"))
+	assert.Contains(t, updated[1].Get("blocks"), `"status":"complete"`)
 }
 
 func TestSendResponseUpdatesNonTailAnswerPlaceholder(t *testing.T) {
@@ -2572,7 +2586,7 @@ func TestSendResponseUpdatesNonTailAnswerPlaceholder(t *testing.T) {
 	assert.Empty(t, deleted)
 }
 
-func TestSendResponseSucceedsWhenThinkingDeleteFails(t *testing.T) {
+func TestSendResponseCompletesThinkingWithoutProgress(t *testing.T) {
 	var deleted, posted, updated []url.Values
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2598,7 +2612,7 @@ func TestSendResponseSucceedsWhenThinkingDeleteFails(t *testing.T) {
 
 			deleted = append(deleted, cloneValues(r.PostForm))
 
-			writeJSON(t, w, map[string]any{"ok": false, "error": "message_not_found"})
+			writeJSON(t, w, map[string]any{"ok": true})
 		case "/reactions.remove":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
@@ -2620,14 +2634,92 @@ func TestSendResponseSucceedsWhenThinkingDeleteFails(t *testing.T) {
 
 	require.Len(t, posted, 2)
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
-	require.Len(t, updated, 1)
+	require.Len(t, updated, 2)
 	assert.Equal(t, "final answer", updated[0].Get("text"))
-	require.Len(t, deleted, 1)
-	assert.Equal(t, "555.1", deleted[0].Get("ts"))
+	assert.Equal(t, "Complete", updated[1].Get("text"))
+	assert.Contains(t, updated[1].Get("blocks"), `"status":"complete"`)
+	assert.NotContains(t, updated[1].Get("blocks"), `"details"`)
+	assert.Empty(t, deleted)
+}
+
+func TestSendResponsePreservesThinkingWhenCompletionUpdateFails(t *testing.T) {
+	var deleted, posted, updated []url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat.postMessage":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			posted = append(posted, cloneValues(r.PostForm))
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555." + strconv.Itoa(len(posted)), "text": posted[len(posted)-1].Get("text")})
+		case "/chat.update":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			updated = append(updated, cloneValues(r.PostForm))
+			if strings.Contains(r.PostForm.Get("blocks"), `"status":"complete"`) {
+				writeJSON(t, w, map[string]any{
+					"ok":    false,
+					"error": "invalid_blocks",
+					"response_metadata": map[string]any{
+						"messages": []string{"invalid text at /0/details/elements/2/elements/0/text"},
+					},
+				})
+
+				return
+			}
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": updated[len(updated)-1].Get("ts"), "text": updated[len(updated)-1].Get("text")})
+		case "/chat.delete":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			deleted = append(deleted, cloneValues(r.PostForm))
+
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/reactions.remove":
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	connector := newTestConnector(server.URL)
+
+	var logs bytes.Buffer
+
+	connector.log = slog.New(slog.NewJSONHandler(&logs, nil))
+	replyTarget := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
+	_, err := connector.createReplyPlaceholders(context.Background(), replyTarget, slackImmediatePlaceholder)
+	require.NoError(t, err)
+
+	thinking := events.NewOutboundMessage(events.SourceSlack, "test", "", events.OutputTargetSlack)
+	thinking.TurnID = "turn-thread"
+	thinking.ProgressText = "thinking"
+	thinking.SlackReply = replyTarget
+	require.NoError(t, connector.SendResponse(context.Background(), thinking))
+
+	msg := events.NewOutboundMessage(events.SourceSlack, "test", "final answer", events.OutputTargetSlack)
+	msg.TurnID = "turn-thread"
+	msg.Complete = true
+	msg.SlackReply = replyTarget
+	require.NoError(t, connector.SendResponse(context.Background(), msg))
+
+	require.Len(t, posted, 2)
+	require.Len(t, updated, 2)
+	assert.Equal(t, "final answer", updated[0].Get("text"))
+	assert.Contains(t, updated[1].Get("blocks"), `"status":"complete"`)
+	assert.Empty(t, deleted)
+	assert.Contains(t, logs.String(), "invalid text at /0/details/elements/2/elements/0/text")
 }
 
 func TestSendResponseDeletesPlaceholdersForEmptyFinal(t *testing.T) {
-	var deleted, posted []url.Values
+	var deleted, posted, updated []url.Values
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -2646,6 +2738,13 @@ func TestSendResponseDeletesPlaceholdersForEmptyFinal(t *testing.T) {
 			deleted = append(deleted, cloneValues(r.PostForm))
 
 			writeJSON(t, w, map[string]any{"ok": true})
+		case "/chat.update":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			updated = append(updated, cloneValues(r.PostForm))
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": updated[len(updated)-1].Get("ts"), "text": updated[len(updated)-1].Get("text")})
 		case "/reactions.remove":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
@@ -2668,9 +2767,10 @@ func TestSendResponseDeletesPlaceholdersForEmptyFinal(t *testing.T) {
 	require.Len(t, posted, 2)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
-	require.Len(t, deleted, 2)
+	require.Len(t, updated, 1)
+	assert.Contains(t, updated[0].Get("blocks"), `"status":"complete"`)
+	require.Len(t, deleted, 1)
 	assert.Equal(t, "555.2", deleted[0].Get("ts"))
-	assert.Equal(t, "555.1", deleted[1].Get("ts"))
 }
 
 func TestCreateReplyPlaceholdersCreatesThinkingAndAnswerPlaceholders(t *testing.T) {
@@ -3316,13 +3416,15 @@ func TestHandleMessageEventFinishesStackWhenThreadReplySubmitFails(t *testing.T)
 	require.Len(t, replies, 2)
 	assert.Equal(t, "status?", replies[0].inbound.Text)
 	assert.Equal(t, "again?", replies[1].inbound.Text)
-	require.Len(t, posted, 6)
+	require.Len(t, posted, 8)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Contains(t, posted[2].Get("text"), "couldn't submit that Slack thread reply")
-	assert.Equal(t, slackImmediatePlaceholder, posted[3].Get("text"))
-	assert.Equal(t, slackAnswerPlaceholder, posted[4].Get("text"))
-	assert.Contains(t, posted[5].Get("text"), "couldn't submit that Slack thread reply")
+	assert.Contains(t, posted[3].Get("blocks"), `"status":"complete"`)
+	assert.Equal(t, slackImmediatePlaceholder, posted[4].Get("text"))
+	assert.Equal(t, slackAnswerPlaceholder, posted[5].Get("text"))
+	assert.Contains(t, posted[6].Get("text"), "couldn't submit that Slack thread reply")
+	assert.Contains(t, posted[7].Get("blocks"), `"status":"complete"`)
 }
 
 func TestHandleMessageEventFinishesStackWhenThreadReplyUnhandled(t *testing.T) {
@@ -3354,13 +3456,15 @@ func TestHandleMessageEventFinishesStackWhenThreadReplyUnhandled(t *testing.T) {
 	require.Len(t, replies, 2)
 	assert.Equal(t, "status?", replies[0].inbound.Text)
 	assert.Equal(t, "again?", replies[1].inbound.Text)
-	require.Len(t, posted, 6)
+	require.Len(t, posted, 8)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Contains(t, posted[2].Get("text"), "couldn't find an active managed thread")
-	assert.Equal(t, slackImmediatePlaceholder, posted[3].Get("text"))
-	assert.Equal(t, slackAnswerPlaceholder, posted[4].Get("text"))
-	assert.Contains(t, posted[5].Get("text"), "couldn't find an active managed thread")
+	assert.Contains(t, posted[3].Get("blocks"), `"status":"complete"`)
+	assert.Equal(t, slackImmediatePlaceholder, posted[4].Get("text"))
+	assert.Equal(t, slackAnswerPlaceholder, posted[5].Get("text"))
+	assert.Contains(t, posted[6].Get("text"), "couldn't find an active managed thread")
+	assert.Contains(t, posted[7].Get("blocks"), `"status":"complete"`)
 	assert.Contains(t, reactions, "/reactions.remove "+slackRobotReaction+" 171234.9999")
 	assert.Contains(t, reactions, "/reactions.remove "+slackRobotReaction+" 171235.9999")
 }
@@ -3403,12 +3507,13 @@ func TestHandleMessageEventBuffersSlackMessagesWhileActive(t *testing.T) {
 	require.Len(t, replies, 2)
 	assert.Equal(t, "first", replies[0].inbound.Text)
 	assert.Equal(t, "second\n\nthird", replies[1].inbound.Text)
-	require.Len(t, posted, 5)
+	require.Len(t, posted, 6)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Equal(t, "done", posted[2].Get("text"))
-	assert.Equal(t, slackImmediatePlaceholder, posted[3].Get("text"))
-	assert.Equal(t, slackAnswerPlaceholder, posted[4].Get("text"))
+	assert.Contains(t, posted[3].Get("blocks"), `"status":"complete"`)
+	assert.Equal(t, slackImmediatePlaceholder, posted[4].Get("text"))
+	assert.Equal(t, slackAnswerPlaceholder, posted[5].Get("text"))
 
 	for _, want := range []string{slackRobotReaction + " 111.1", slackBufferedReaction + " 111.2", slackBufferedReaction + " 111.3"} {
 		assert.Contains(t, reactions, "/reactions.add "+want)
@@ -3514,10 +3619,11 @@ func TestHandleMessageEventConsumesGoalStartRejectionPlaceholder(t *testing.T) {
 	assert.Equal(t, "fix lint", router.goalStarts[0].objective)
 	assert.Equal(t, "./scripts/check.sh", router.goalStarts[0].checkScript)
 	assert.Contains(t, reactions, "/reactions.remove "+slackRobotReaction+" 171234.5678")
-	require.Len(t, posted, 3)
+	require.Len(t, posted, 4)
 	assert.Equal(t, "_Pursuing Goal (1/5)..._", posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Contains(t, posted[2].Get("text"), "couldn't start that goal")
+	assert.Contains(t, posted[3].Get("blocks"), `"status":"complete"`)
 	assert.False(t, connector.hasPendingState(&events.SlackReplyTarget{ChannelID: "C123", MessageTS: "171234.5678", ThreadTS: "171234.1111"}))
 }
 
@@ -3575,10 +3681,11 @@ func TestHandleMessageEventRejectsDuplicateActiveGoal(t *testing.T) {
 
 	require.Len(t, router.goalStarts, 1)
 	assert.Contains(t, reactions, "/reactions.add "+slackInterruptionReaction+" 222.333")
-	require.Len(t, posted, 3)
+	require.Len(t, posted, 4)
 	assert.Equal(t, "_Pursuing Goal (1/5)..._", posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Contains(t, posted[2].Get("text"), "already in progress")
+	assert.Contains(t, posted[3].Get("blocks"), `"status":"complete"`)
 }
 
 func TestHandleMessageEventStopMarksOriginalTurnStart(t *testing.T) {
@@ -3753,10 +3860,11 @@ func TestHandleAppMentionEventClearsSlackStackWhenThreadStartFails(t *testing.T)
 	require.Len(t, started, 1)
 	assert.Equal(t, "triage", started[0].agent)
 	assert.Equal(t, "please check this", started[0].inbound.Text)
-	require.Len(t, posted, 3)
+	require.Len(t, posted, 4)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Contains(t, posted[2].Get("text"), "couldn't start that managed thread")
+	assert.Contains(t, posted[3].Get("blocks"), `"status":"complete"`)
 	assert.Equal(t, []string{slackRobotReaction}, reactionNames)
 
 	connector.mu.Lock()
@@ -4549,8 +4657,9 @@ func TestHandleMessageEventReportsOnDemandCronRunFailure(t *testing.T) {
 	require.NoError(t, connector.SendResponse(context.Background(), failure))
 	failure.MarkDelivered(nil)
 	require.Len(t, posted, 3)
-	require.Len(t, updated, 1)
+	require.Len(t, updated, 2)
 	assert.Equal(t, failure.Text, updated[0].Get("text"))
+	assert.Contains(t, updated[1].Get("blocks"), `"status":"complete"`)
 	assert.Empty(t, router.startedSnapshot())
 	assert.Empty(t, router.cronRegistrationsSnapshot())
 }
