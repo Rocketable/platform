@@ -62,7 +62,7 @@ func TestSlackImageHelpers(t *testing.T) {
 }
 
 func TestSlackMCPBlocksStayWithinSlackLimit(t *testing.T) {
-	messages := slackMCPBlockMessages("MCP request", strings.Repeat("conversation", 400), "private-agent", strings.Repeat("body", slackBlockTextLimit*60), slack.PlainTextType)
+	messages := slackMCPBlockMessages("MCP request", strings.Repeat("conversation", 400), "private-agent", strings.Repeat("body", slackBlockTextLimit*60), slack.PlainTextType, true)
 	assert.Greater(t, len(messages), 1)
 
 	for _, message := range messages {
@@ -71,7 +71,7 @@ func TestSlackMCPBlocksStayWithinSlackLimit(t *testing.T) {
 }
 
 func TestSlackMCPBlocksUseDistinctFrame(t *testing.T) {
-	blocks := slackMCPBlocks("MCP request", "conversation-1", "private-agent", "body", slack.PlainTextType)
+	blocks := slackMCPBlocks("MCP request", "conversation-1", "private-agent", "body", slack.PlainTextType, true)
 	require.Len(t, blocks, 4)
 
 	header, ok := blocks[0].(*slack.HeaderBlock)
@@ -86,6 +86,59 @@ func TestSlackMCPBlocksUseDistinctFrame(t *testing.T) {
 	assert.Equal(t, "External conversation ID: conversation-1 | Private agent: private-agent", identity.Text)
 	assert.IsType(t, new(slack.DividerBlock), blocks[2])
 	assert.IsType(t, new(slack.SectionBlock), blocks[3])
+}
+
+func TestSlackMCPResponseBlocksKeepAutomaticParsing(t *testing.T) {
+	blocks := slackMCPBlocks("MCP response", "conversation-1", "private-agent", "*answer* @here", slack.MarkdownType, false)
+	require.Len(t, blocks, 4)
+
+	body, ok := blocks[3].(*slack.SectionBlock)
+	require.True(t, ok)
+	assert.False(t, body.Text.Verbatim)
+}
+
+func TestSendExternalMCPRelayRendersMarkdownWithoutNotifications(t *testing.T) {
+	var posted []url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		switch r.URL.Path {
+		case "/chat.postMessage":
+			posted = append(posted, cloneValues(r.PostForm))
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": fmt.Sprintf("1.%d", len(posted))})
+		case "/reactions.add":
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	request := "*bold* <@U123> <@W123> <!subteam^S123> <!here> <!channel> <!everyone> @here @channel @everyone @admins <https://example.com|Example>"
+	_, err := connector.SendExternalMCPRelay(t.Context(), "D123", "123.456", testExternalMCPRelay(request, nil))
+	require.NoError(t, err)
+	require.NotEmpty(t, posted)
+
+	want := "*bold* &lt;@U123> &lt;@W123> &lt;!subteam^S123> &lt;!here> &lt;!channel> &lt;!everyone> @here @channel @everyone @admins <https://example.com|Example>"
+	assert.Equal(t, want, posted[0].Get("text"))
+
+	var blocks []struct {
+		Type string `json:"type"`
+		Text struct {
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			Verbatim bool   `json:"verbatim"`
+		} `json:"text"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(posted[0].Get("blocks")), &blocks))
+	require.Len(t, blocks, 4)
+	assert.Equal(t, slack.MarkdownType, blocks[3].Text.Type)
+	assert.Equal(t, want, blocks[3].Text.Text)
+	assert.True(t, blocks[3].Text.Verbatim)
 }
 
 func TestSendExternalMCPRelayContinuesHugeRequestBeforePlaceholders(t *testing.T) {
@@ -116,7 +169,7 @@ func TestSendExternalMCPRelayContinuesHugeRequestBeforePlaceholders(t *testing.T
 	t.Cleanup(server.Close)
 
 	connector := newTestConnector(server.URL)
-	request := strings.Repeat("x", slackBlockTextLimit*50)
+	request := strings.Repeat("x", slackBlockTextLimit*47) + "\n\n_tail_ <@U999> <@W123> <!here> <https://example.com/tail|Tail>"
 	replyTarget, err := connector.SendExternalMCPRelay(t.Context(), "D123", "", testExternalMCPRelay(request, nil))
 	require.NoError(t, err)
 	require.Len(t, posted, 4)
@@ -131,6 +184,12 @@ func TestSendExternalMCPRelayContinuesHugeRequestBeforePlaceholders(t *testing.T
 	require.NoError(t, json.Unmarshal([]byte(posted[1].Get("blocks")), &continuationBlocks))
 	assert.Len(t, rootBlocks, 50)
 	assert.Greater(t, len(continuationBlocks), 1)
+	assert.Contains(t, posted[1].Get("text"), "_tail_ &lt;@U999> &lt;@W123> &lt;!here> <https://example.com/tail|Tail>")
+	assert.Contains(t, posted[1].Get("blocks"), `_tail_ \u0026lt;@U999\u003e \u0026lt;@W123\u003e \u0026lt;!here\u003e \u003chttps://example.com/tail|Tail\u003e`)
+	assert.Contains(t, posted[1].Get("blocks"), `"verbatim":true`)
+	assert.NotContains(t, posted[1].Get("text"), "<@U999>")
+	assert.NotContains(t, posted[1].Get("text"), "<@W123>")
+	assert.NotContains(t, posted[1].Get("blocks"), `<@U999>`)
 	connector.CleanupExternalMCPRelay(t.Context(), replyTarget)
 	assert.Equal(t, []string{"1.4", "1.3", "1.2", "1.1"}, deleted)
 }
@@ -188,6 +247,59 @@ func TestProgressTextMessageQuotesAndBoundsText(t *testing.T) {
 	got := slackThinkingMessage(slackImmediatePlaceholder, strings.Repeat("x", slackBlockTextLimit+20))
 	assert.True(t, strings.HasPrefix(got, slackImmediatePlaceholder+"\n\n"))
 	assert.Less(t, len([]rune(got)), slackBlockTextLimit)
+}
+
+func TestSlackThinkingBlocksRenderLinks(t *testing.T) {
+	type richTextElement struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+		URL  string `json:"url"`
+	}
+
+	tests := []struct {
+		name string
+		text string
+		want []richTextElement
+	}{
+		{name: "labeled HTTPS", text: "See <https://example.com|Example> now", want: []richTextElement{
+			{Type: "text", Text: "See "},
+			{Type: "link", URL: "https://example.com", Text: "Example"},
+			{Type: "text", Text: " now"},
+		}},
+		{name: "malformed token before valid link", text: "<https://broken then <https://example.com|Example>", want: []richTextElement{
+			{Type: "text", Text: "<https://broken then "},
+			{Type: "link", URL: "https://example.com", Text: "Example"},
+		}},
+		{name: "hostless URL", text: "<https:///path|Missing>", want: []richTextElement{{Type: "text", Text: "<https:///path|Missing>"}}},
+		{name: "unsupported scheme", text: "<ftp://example.com|FTP>", want: []richTextElement{{Type: "text", Text: "<ftp://example.com|FTP>"}}},
+		{name: "malformed authority", text: "<https://[broken|Broken>", want: []richTextElement{{Type: "text", Text: "<https://[broken|Broken>"}}},
+		{name: "unlabeled HTTP", text: "<http://example.com>", want: []richTextElement{{Type: "link", URL: "http://example.com"}}},
+		{name: "unlabeled HTTPS", text: "<https://example.com>", want: []richTextElement{{Type: "link", URL: "https://example.com"}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blocksJSON, err := json.Marshal(slackThinkingBlocks("turn-1", &slackThinkingState{
+				Placeholder: slackImmediatePlaceholder,
+				Text:        tt.text,
+			}, slack.TaskCardStatusInProgress))
+			require.NoError(t, err)
+
+			var blocks []struct {
+				Type    string `json:"type"`
+				Details struct {
+					Elements []struct {
+						Type     string            `json:"type"`
+						Elements []richTextElement `json:"elements"`
+					} `json:"elements"`
+				} `json:"details"`
+			}
+			require.NoError(t, json.Unmarshal(blocksJSON, &blocks))
+			require.Len(t, blocks, 1)
+			require.Len(t, blocks[0].Details.Elements, 1)
+			assert.Equal(t, tt.want, blocks[0].Details.Elements[0].Elements)
+		})
+	}
 }
 
 func TestGoalRequestForTextParsesSupportedTriggers(t *testing.T) {
@@ -599,7 +711,7 @@ func TestStartStopCancelsInboundContext(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/auth.test":
-			writeJSON(t, w, map[string]any{"ok": true, "user_id": "UBOT"})
+			writeJSON(t, w, map[string]any{"ok": true, "team_id": "T123", "user_id": "UBOT"})
 		case "/users.profile.get":
 			writeJSON(t, w, map[string]any{"ok": true, "profile": map[string]any{"display_name": "human", "image_72": "https://example.com/avatar.png"}})
 		default:
@@ -620,6 +732,8 @@ func TestStartStopCancelsInboundContext(t *testing.T) {
 	}
 
 	require.NoError(t, connector.Start(context.Background()))
+	assert.Equal(t, "UBOT", connector.botUserID)
+	assert.Equal(t, "T123", connector.teamID)
 	<-started
 	require.NoError(t, connector.Stop(context.Background()))
 
@@ -980,7 +1094,7 @@ func TestSendExternalMCPThreadRelay(t *testing.T) {
 		{"type":"header","text":{"type":"plain_text","text":"MCP request","emoji":false}},
 		{"type":"context","elements":[{"type":"plain_text","text":"External conversation ID: public-conversation | Private agent: private-agent","emoji":false}]},
 		{"type":"divider"},
-		{"type":"section","text":{"type":"plain_text","text":"follow up","emoji":false}}
+		{"type":"section","text":{"type":"mrkdwn","text":"follow up","verbatim":true}}
 	]`, posted[0].Get("blocks"))
 	assert.Equal(t, slackImmediatePlaceholder, posted[1].Get("text"))
 	assert.Equal(t, "123.456", posted[1].Get("thread_ts"))
@@ -1075,7 +1189,7 @@ func TestSendExternalMCPThreadRelayAttachesFilesToRelayMessage(t *testing.T) {
 		{"type":"header","text":{"type":"plain_text","text":"MCP request","emoji":false}},
 		{"type":"context","elements":[{"type":"plain_text","text":"External conversation ID: public-conversation | Private agent: private-agent","emoji":false}]},
 		{"type":"divider"},
-		{"type":"section","text":{"type":"plain_text","text":"Attached files: report.txt.","emoji":false}}
+		{"type":"section","text":{"type":"mrkdwn","text":"Attached files: report.txt.","verbatim":true}}
 	]`, posted[0].Get("blocks"))
 	assert.Equal(t, "123.456", posted[1].Get("thread_ts"))
 	assert.Equal(t, "123.456", posted[2].Get("thread_ts"))
@@ -1168,6 +1282,7 @@ func TestSendExternalMCPRelayCanPostTopLevelChannelRelay(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
+	connector.teamID = "T123"
 	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "#triage", "", testExternalMCPRelay("hello", []events.OutboundAttachment{{Name: "red.png", MIMEType: "image/png", Data: []byte("png")}}))
 	require.NoError(t, err)
 	require.NotNil(t, replyTarget)
@@ -1179,9 +1294,11 @@ func TestSendExternalMCPRelayCanPostTopLevelChannelRelay(t *testing.T) {
 		{"type":"header","text":{"type":"plain_text","text":"MCP request","emoji":false}},
 		{"type":"context","elements":[{"type":"plain_text","text":"External conversation ID: public-conversation | Private agent: private-agent","emoji":false}]},
 		{"type":"divider"},
-		{"type":"section","text":{"type":"plain_text","text":"hello","emoji":false}}
+		{"type":"section","text":{"type":"mrkdwn","text":"hello","verbatim":true}}
 	]`, posted[0].Get("blocks"))
 	assert.Equal(t, slackImmediatePlaceholder, posted[1].Get("text"))
+	assert.Empty(t, posted[1].Get("recipient_team_id"))
+	assert.Empty(t, posted[1].Get("recipient_user_id"))
 	assert.Equal(t, "123.1", posted[1].Get("thread_ts"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[2].Get("text"))
 	assert.Equal(t, "123.1", posted[2].Get("thread_ts"))
@@ -1562,6 +1679,48 @@ func TestCleanupPendingReplyPlaceholderDeletesUnclaimedExternalMCPThinking(t *te
 	assert.Equal(t, "555.2", deleted[1].Get("ts"))
 }
 
+func TestCleanupPendingReplyPlaceholderStopsHumanStreamBeforeDeleting(t *testing.T) {
+	var operations []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		switch r.URL.Path {
+		case "/chat.startStream":
+			operations = append(operations, "start")
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.1"})
+		case "/chat.postMessage":
+			operations = append(operations, "post")
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.2"})
+		case "/chat.stopStream":
+			operations = append(operations, "stop "+r.PostForm.Get("ts"))
+
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/chat.delete":
+			operations = append(operations, "delete "+r.PostForm.Get("ts"))
+
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	connector.teamID = "T123"
+	reply := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222"}
+	_, err := connector.createReplyPlaceholders(t.Context(), reply, slackImmediatePlaceholder, "U123")
+	require.NoError(t, err)
+
+	connector.CleanupPendingReplyPlaceholder(t.Context(), reply)
+
+	assert.Equal(t, []string{"start", "post", "stop 555.1", "delete 555.2", "delete 555.1"}, operations)
+}
+
 func TestReplyStateTracksPendingSlots(t *testing.T) {
 	replyTarget := &events.SlackReplyTarget{ChannelID: " D123 ", MessageTS: " 111.222 ", ThreadTS: " 333.444 "}
 	key := slackPendingKey(replyTarget)
@@ -1866,88 +2025,250 @@ func TestSendCronjobChannelThreadReportsSlackFailures(t *testing.T) {
 	})
 }
 
-func TestSendResponseStreamsThinkingInPlaceThenReplacesItWithFinalAnswer(t *testing.T) {
-	var posted, deleted, updated []url.Values
-
-	removed := url.Values{}
+func TestSendResponseStreamsHumanThinkingBeforeFinalAnswer(t *testing.T) {
+	var operations []string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
 		switch r.URL.Path {
+		case "/chat.startStream":
+			operations = append(operations, "start "+r.PostForm.Get("markdown_text"))
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.1"})
 		case "/chat.postMessage":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
+			operations = append(operations, "post "+r.PostForm.Get("text"))
 
-			posted = append(posted, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.666", "text": posted[len(posted)-1].Get("text")})
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.2"})
+		case "/chat.appendStream":
+			operations = append(operations, "append "+r.PostForm.Get("markdown_text"))
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.1"})
 		case "/chat.update":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			updated = append(updated, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": updated[len(updated)-1].Get("ts"), "text": updated[len(updated)-1].Get("text")})
-		case "/chat.delete":
-			_ = r.ParseForm()
-			deleted = append(deleted, cloneValues(r.PostForm))
-
+			operations = append(operations, "update "+r.PostForm.Get("ts")+" "+r.PostForm.Get("text"))
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": r.PostForm.Get("ts")})
-		case "/reactions.remove":
-			_ = r.ParseForm()
-			removed = cloneValues(r.PostForm)
+		case "/chat.stopStream":
+			operations = append(operations, "stop "+r.PostForm.Get("ts"))
 
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.1"})
+		case "/reactions.remove":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	connector := newTestConnector(server.URL)
-	first := events.NewOutboundMessage(events.SourceSlack, "test", "", []events.OutputTarget{events.OutputTargetSlack}...)
-	first.TurnID = "turn-1"
-	first.ProgressText = "first thought"
-	first.SlackReply = &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: ""}
-	require.NoError(t, connector.SendResponse(context.Background(), first))
+	connector.teamID = "T123"
+	reply := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222"}
+	_, err := connector.createReplyPlaceholders(t.Context(), reply, slackImmediatePlaceholder, "U123")
+	require.NoError(t, err)
 
-	second := events.NewOutboundMessage(events.SourceSlack, "test", "", []events.OutputTarget{events.OutputTargetSlack}...)
-	second.TurnID = "turn-1"
-	second.ProgressText = "first thought\n**Identifying key constraints**\n\nsecond thought"
-	second.SlackReply = &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: ""}
-	require.NoError(t, connector.SendResponse(context.Background(), second))
-	require.Empty(t, updated)
-	require.NoError(t, connector.flushProgressText(context.Background(), "turn-1"))
+	for _, progress := range []string{"first thought", "first thought", "first thought\nsecond thought"} {
+		msg := events.NewOutboundMessage(events.SourceSlack, "test", "", events.OutputTargetSlack)
+		msg.TurnID = "turn-1"
+		msg.ProgressText = progress
+		msg.SlackReply = reply
+		require.NoError(t, connector.SendResponse(t.Context(), msg))
+	}
 
-	partial := events.NewOutboundMessage(events.SourceSlack, "test", "Partial answer", []events.OutputTarget{events.OutputTargetSlack}...)
+	partial := events.NewOutboundMessage(events.SourceSlack, "test", "Partial answer", events.OutputTargetSlack)
 	partial.TurnID = "turn-1"
-	partial.SlackReply = &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: ""}
-	require.NoError(t, connector.SendResponse(context.Background(), partial))
+	partial.SlackReply = reply
+	require.NoError(t, connector.SendResponse(t.Context(), partial))
 
-	final := events.NewOutboundMessage(events.SourceSlack, "test", "Final answer", []events.OutputTarget{events.OutputTargetSlack}...)
+	final := events.NewOutboundMessage(events.SourceSlack, "test", "Final answer", events.OutputTargetSlack)
 	final.TurnID = "turn-1"
 	final.Complete = true
-	final.SlackReply = &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: ""}
-	require.NoError(t, connector.SendResponse(context.Background(), final))
+	final.SlackReply = reply
+	require.NoError(t, connector.SendResponse(t.Context(), final))
 
-	require.Len(t, posted, 2)
-	require.Len(t, updated, 3)
-	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
-	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
-	assert.Equal(t, "_Thinking..._\n\nfirst thought\n**Identifying key constraints**\n\nsecond thought", updated[0].Get("text"))
-	assert.Equal(t, slackImmediatePlaceholder, thinkingBlockText(t, updated[0]))
-	assert.Contains(t, updated[0].Get("blocks"), `"title":"_Thinking..._"`)
-	assert.Contains(t, updated[0].Get("blocks"), `"text":"first thought"`)
-	assert.Contains(t, updated[0].Get("blocks"), `"text":"**Identifying key constraints**"`)
-	assert.Contains(t, updated[0].Get("blocks"), `"text":"second thought"`)
-	assert.NotContains(t, updated[0].Get("blocks"), `"text":""`)
-	assert.NotContains(t, updated[0].Get("blocks"), "MCP response")
-	assert.Equal(t, "Final answer", updated[1].Get("text"))
-	assert.JSONEq(t, `[]`, updated[1].Get("blocks"))
-	assert.Contains(t, updated[2].Get("blocks"), `"status":"complete"`)
-	assert.Contains(t, updated[2].Get("blocks"), `"title":"Complete"`)
-	assert.Contains(t, updated[2].Get("blocks"), `second thought`)
-	assert.Equal(t, "111.222", removed.Get("timestamp"))
+	assert.Equal(t, []string{
+		"start " + slackImmediatePlaceholder,
+		"post " + slackAnswerPlaceholder,
+		"append \n\nfirst thought",
+		"append \nsecond thought",
+		"update 555.2 Final answer",
+		"stop 555.1",
+	}, operations)
+}
+
+func TestSendResponseChunksUnicodeThinkingStreamAppends(t *testing.T) {
+	var appended []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		switch r.URL.Path {
+		case "/chat.startStream":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.1"})
+		case "/chat.postMessage":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.2"})
+		case "/chat.appendStream":
+			appended = append(appended, r.PostForm.Get("markdown_text"))
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.1"})
+		default:
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	connector.teamID = "T123"
+	reply := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222"}
+	_, err := connector.createReplyPlaceholders(t.Context(), reply, slackImmediatePlaceholder, "U123")
+	require.NoError(t, err)
+
+	progress := strings.Repeat("界", 12001)
+	msg := events.NewOutboundMessage(events.SourceSlack, "test", "", events.OutputTargetSlack)
+	msg.TurnID = "turn-1"
+	msg.ProgressText = progress
+	msg.SlackReply = reply
+	require.NoError(t, connector.SendResponse(t.Context(), msg))
+
+	require.Len(t, appended, 2)
+
+	for _, chunk := range appended {
+		assert.LessOrEqual(t, len([]rune(chunk)), 12000)
+		assert.True(t, utf8.ValidString(chunk))
+	}
+
+	assert.Equal(t, "\n\n"+progress, strings.Join(appended, ""))
+}
+
+func TestSendResponseResumesThinkingStreamAfterPartialChunkFailure(t *testing.T) {
+	var appended []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		switch r.URL.Path {
+		case "/chat.startStream":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.1"})
+		case "/chat.postMessage":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.2"})
+		case "/chat.appendStream":
+			appended = append(appended, r.PostForm.Get("markdown_text"))
+			if len(appended) == 2 {
+				writeJSON(t, w, map[string]any{"ok": false, "error": "append_failed"})
+				return
+			}
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.1"})
+		default:
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	connector.teamID = "T123"
+	reply := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222"}
+	_, err := connector.createReplyPlaceholders(t.Context(), reply, slackImmediatePlaceholder, "U123")
+	require.NoError(t, err)
+
+	progress := strings.Repeat("界", 23998)
+	msg := events.NewOutboundMessage(events.SourceSlack, "test", "", events.OutputTargetSlack)
+	msg.TurnID = "turn-1"
+	msg.ProgressText = progress
+	msg.SlackReply = reply
+	require.ErrorContains(t, connector.SendResponse(t.Context(), msg), "append Slack thinking stream")
+
+	slots, ok := connector.replyState("turn-1")
+	require.True(t, ok)
+	assert.Equal(t, strings.Repeat("界", 11998), slots.streamedThinking)
+
+	require.NoError(t, connector.SendResponse(t.Context(), msg))
+	require.Len(t, appended, 3)
+	assert.Equal(t, appended[1], appended[2])
+	assert.Equal(t, "\n\n"+progress, appended[0]+appended[2])
+}
+
+func TestSendResponseKeepsDeliveredAnswerWhenStopStreamFails(t *testing.T) {
+	var (
+		deleted   []string
+		stopCalls int
+		updated   []string
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		switch r.URL.Path {
+		case "/chat.startStream":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.1"})
+		case "/chat.postMessage":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.2"})
+		case "/chat.update":
+			updated = append(updated, r.PostForm.Get("ts")+" "+r.PostForm.Get("text"))
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": r.PostForm.Get("ts")})
+		case "/chat.stopStream":
+			stopCalls++
+
+			writeJSON(t, w, map[string]any{"ok": false, "error": "stop_failed"})
+		case "/chat.delete":
+			deleted = append(deleted, r.PostForm.Get("ts"))
+
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/reactions.add", "/reactions.remove":
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	router := newThreadRouterStub()
+	router.submitHandled = true
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
+	connector.teamID = "T123"
+
+	var logs bytes.Buffer
+
+	connector.log = slog.New(slog.NewJSONHandler(&logs, nil))
+	reply := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.000"}
+	_, err := connector.createReplyPlaceholders(t.Context(), reply, slackImmediatePlaceholder, "U123")
+	require.NoError(t, err)
+
+	key := slackThreadStackKey(reply)
+	connector.stacks[key] = []slackBufferedMessage{{
+		Text:      "next",
+		Principal: "U456",
+		Content:   events.InboundContent{Text: "next"},
+		Reply:     &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "111.000"},
+	}}
+
+	final := events.NewOutboundMessage(events.SourceSlack, "test", "Final answer", events.OutputTargetSlack)
+	final.TurnID = "turn-1"
+	final.Complete = true
+	final.SlackReply = reply
+
+	err = connector.SendResponse(t.Context(), final)
+	if err != nil {
+		connector.AbortResponse(final)
+	}
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, stopCalls)
+	assert.Equal(t, []string{"555.2 Final answer"}, updated)
 	assert.Empty(t, deleted)
+	assert.Contains(t, logs.String(), "stop Slack thinking stream after final answer delivery")
+	assert.NotContains(t, connector.replies, "turn-1")
+	assert.NotContains(t, connector.thinking, "turn-1")
+
+	replies := router.repliesSnapshot()
+	require.Len(t, replies, 1)
+	assert.Equal(t, "next", replies[0].inbound.Text)
 }
 
 func TestSendResponseClampsThinkingToSlackLimit(t *testing.T) {
@@ -2389,7 +2710,7 @@ func TestSendResponseSplitsLongFinalAnswerIntoThreadMessages(t *testing.T) {
 
 	connector := newTestConnector(server.URL)
 	replyTarget := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
-	_, err := connector.createReplyPlaceholders(context.Background(), replyTarget, slackImmediatePlaceholder)
+	_, err := connector.createReplyPlaceholders(context.Background(), replyTarget, slackImmediatePlaceholder, "")
 	require.NoError(t, err)
 
 	paragraph := strings.Repeat("word ", 170) + "\n\n"
@@ -2509,7 +2830,7 @@ func TestSendResponseUpdatesTailAnswerPlaceholder(t *testing.T) {
 
 	connector := newTestConnector(server.URL)
 	replyTarget := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
-	_, err := connector.createReplyPlaceholders(context.Background(), replyTarget, slackImmediatePlaceholder)
+	_, err := connector.createReplyPlaceholders(context.Background(), replyTarget, slackImmediatePlaceholder, "")
 	require.NoError(t, err)
 
 	msg := events.NewOutboundMessage(events.SourceSlack, "test", "thread answer", events.OutputTargetSlack)
@@ -2563,7 +2884,7 @@ func TestSendResponseUpdatesNonTailAnswerPlaceholder(t *testing.T) {
 	connector := newTestConnector(server.URL)
 	first := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.1", ThreadTS: "111.1"}
 
-	_, err := connector.createReplyPlaceholders(context.Background(), first, slackImmediatePlaceholder)
+	_, err := connector.createReplyPlaceholders(context.Background(), first, slackImmediatePlaceholder, "")
 	require.NoError(t, err)
 
 	thinking := events.NewOutboundMessage(events.SourceSlack, "test", "", events.OutputTargetSlack)
@@ -2623,7 +2944,7 @@ func TestSendResponseCompletesThinkingWithoutProgress(t *testing.T) {
 
 	connector := newTestConnector(server.URL)
 	replyTarget := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
-	_, err := connector.createReplyPlaceholders(context.Background(), replyTarget, slackImmediatePlaceholder)
+	_, err := connector.createReplyPlaceholders(context.Background(), replyTarget, slackImmediatePlaceholder, "")
 	require.NoError(t, err)
 
 	msg := events.NewOutboundMessage(events.SourceSlack, "test", "final answer", events.OutputTargetSlack)
@@ -2695,7 +3016,7 @@ func TestSendResponsePreservesThinkingWhenCompletionUpdateFails(t *testing.T) {
 
 	connector.log = slog.New(slog.NewJSONHandler(&logs, nil))
 	replyTarget := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
-	_, err := connector.createReplyPlaceholders(context.Background(), replyTarget, slackImmediatePlaceholder)
+	_, err := connector.createReplyPlaceholders(context.Background(), replyTarget, slackImmediatePlaceholder, "")
 	require.NoError(t, err)
 
 	thinking := events.NewOutboundMessage(events.SourceSlack, "test", "", events.OutputTargetSlack)
@@ -2719,23 +3040,44 @@ func TestSendResponsePreservesThinkingWhenCompletionUpdateFails(t *testing.T) {
 }
 
 func TestSendResponseDeletesPlaceholdersForEmptyFinal(t *testing.T) {
-	var deleted, posted, updated []url.Values
+	var (
+		deleted, posted, stopped, updated []url.Values
+		operations                        []string
+	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/chat.startStream":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			posted = append(posted, cloneValues(r.PostForm))
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.1"})
 		case "/chat.postMessage":
 			if !assert.NoError(t, r.ParseForm()) {
 				return
 			}
 
 			posted = append(posted, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555." + strconv.Itoa(len(posted)), "text": posted[len(posted)-1].Get("text")})
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "555.2", "text": posted[len(posted)-1].Get("text")})
+		case "/chat.stopStream":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			stopped = append(stopped, cloneValues(r.PostForm))
+			operations = append(operations, "stop "+r.PostForm.Get("ts"))
+
+			writeJSON(t, w, map[string]any{"ok": true})
 		case "/chat.delete":
 			if !assert.NoError(t, r.ParseForm()) {
 				return
 			}
 
 			deleted = append(deleted, cloneValues(r.PostForm))
+			operations = append(operations, "delete "+r.PostForm.Get("ts"))
 
 			writeJSON(t, w, map[string]any{"ok": true})
 		case "/chat.update":
@@ -2754,8 +3096,9 @@ func TestSendResponseDeletesPlaceholdersForEmptyFinal(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
+	connector.teamID = "T123"
 	replyTarget := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
-	_, err := connector.createReplyPlaceholders(context.Background(), replyTarget, slackImmediatePlaceholder)
+	_, err := connector.createReplyPlaceholders(context.Background(), replyTarget, slackImmediatePlaceholder, "U123")
 	require.NoError(t, err)
 
 	msg := events.NewOutboundMessage(events.SourceSlack, "test", "", events.OutputTargetSlack)
@@ -2765,12 +3108,102 @@ func TestSendResponseDeletesPlaceholdersForEmptyFinal(t *testing.T) {
 	require.NoError(t, connector.SendResponse(context.Background(), msg))
 
 	require.Len(t, posted, 2)
-	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
+	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("markdown_text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
-	require.Len(t, updated, 1)
-	assert.Contains(t, updated[0].Get("blocks"), `"status":"complete"`)
+	require.Len(t, stopped, 1)
+	assert.Equal(t, "555.1", stopped[0].Get("ts"))
+	assert.Empty(t, updated)
 	require.Len(t, deleted, 1)
 	assert.Equal(t, "555.2", deleted[0].Get("ts"))
+	assert.Equal(t, []string{"stop 555.1", "delete 555.2"}, operations)
+}
+
+func TestCreateReplyPlaceholdersStartsHumanThinkingStreamBeforeAnswer(t *testing.T) {
+	var operations []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		switch r.URL.Path {
+		case "/chat.startStream":
+			operations = append(operations, fmt.Sprintf(
+				"%s channel=%s thread_ts=%s recipient_team_id=%s recipient_user_id=%s markdown_text=%s",
+				r.URL.Path,
+				r.PostForm.Get("channel"),
+				r.PostForm.Get("thread_ts"),
+				r.PostForm.Get("recipient_team_id"),
+				r.PostForm.Get("recipient_user_id"),
+				r.PostForm.Get("markdown_text"),
+			))
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+		case "/chat.postMessage":
+			operations = append(operations, fmt.Sprintf(
+				"%s channel=%s thread_ts=%s text=%s",
+				r.URL.Path,
+				r.PostForm.Get("channel"),
+				r.PostForm.Get("thread_ts"),
+				r.PostForm.Get("text"),
+			))
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.2"})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	connector.teamID = "T123"
+	slots, err := connector.createReplyPlaceholders(t.Context(), &events.SlackReplyTarget{
+		ChannelID: "C123",
+		MessageTS: "111.222",
+		ThreadTS:  "111.222",
+	}, slackImmediatePlaceholder, "U123")
+	require.NoError(t, err)
+	assert.True(t, slots.thinkingStream)
+	assert.Empty(t, slots.streamedThinking)
+
+	assert.Equal(t, []string{
+		"/chat.startStream channel=C123 thread_ts=111.222 recipient_team_id=T123 recipient_user_id=U123 markdown_text=_Thinking..._",
+		"/chat.postMessage channel=C123 thread_ts=111.222 text=" + slackAnswerPlaceholder,
+	}, operations)
+}
+
+func TestCreateReplyPlaceholdersCleansHumanStreamAfterCanceledAnswerReservation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	var operations []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		operations = append(operations, r.URL.Path)
+
+		switch r.URL.Path {
+		case "/chat.startStream":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+		case "/chat.postMessage":
+			writeJSON(t, w, map[string]any{"ok": false, "error": "ratelimited"})
+			cancel()
+		case "/chat.stopStream", "/chat.delete":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	connector.teamID = "T123"
+	_, err := connector.createReplyPlaceholders(ctx, &events.SlackReplyTarget{
+		ChannelID: "C123",
+		MessageTS: "111.222",
+		ThreadTS:  "111.222",
+	}, slackImmediatePlaceholder, "U123")
+	require.Error(t, err)
+	assert.Equal(t, []string{"/chat.startStream", "/chat.postMessage", "/chat.stopStream", "/chat.delete"}, operations)
 }
 
 func TestCreateReplyPlaceholdersCreatesThinkingAndAnswerPlaceholders(t *testing.T) {
@@ -2793,7 +3226,7 @@ func TestCreateReplyPlaceholdersCreatesThinkingAndAnswerPlaceholders(t *testing.
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	_, err := connector.createReplyPlaceholders(context.Background(), &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}, slackImmediatePlaceholder)
+	_, err := connector.createReplyPlaceholders(context.Background(), &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}, slackImmediatePlaceholder, "")
 
 	require.NoError(t, err)
 	require.Len(t, posted, 2)
@@ -2808,7 +3241,7 @@ func TestCreateReplyPlaceholdersSkipsMissingReplyTarget(t *testing.T) {
 	connector := newTestConnector("http://127.0.0.1:1")
 
 	for _, replyTarget := range []*events.SlackReplyTarget{nil, &events.SlackReplyTarget{ChannelID: " "}} {
-		slots, err := connector.createReplyPlaceholders(context.Background(), replyTarget, slackImmediatePlaceholder)
+		slots, err := connector.createReplyPlaceholders(context.Background(), replyTarget, slackImmediatePlaceholder, "")
 		require.NoError(t, err)
 		assert.Equal(t, slackReplySlots{}, slots)
 	}
@@ -2847,7 +3280,7 @@ func TestCreateReplyPlaceholdersDeletesThinkingWhenAnswerPlaceholderFails(t *tes
 
 	connector := newTestConnector(server.URL)
 	replyTarget := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
-	slots, err := connector.createReplyPlaceholders(context.Background(), replyTarget, slackImmediatePlaceholder)
+	slots, err := connector.createReplyPlaceholders(context.Background(), replyTarget, slackImmediatePlaceholder, "")
 	require.ErrorContains(t, err, "post Slack answer placeholder")
 	assert.Equal(t, slackReplySlots{}, slots)
 	require.Len(t, posted, 2)
@@ -2914,7 +3347,7 @@ func TestSendResponseWithBlankTurnIDDoesNotClaimPendingPlaceholder(t *testing.T)
 
 	connector := newTestConnector(server.URL)
 	replyTarget := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
-	_, err := connector.createReplyPlaceholders(context.Background(), replyTarget, slackImmediatePlaceholder)
+	_, err := connector.createReplyPlaceholders(context.Background(), replyTarget, slackImmediatePlaceholder, "")
 	require.NoError(t, err)
 
 	msg := events.NewOutboundMessage(events.SourceSlack, "test", "metadata", events.OutputTargetSlack)
@@ -3520,11 +3953,69 @@ func TestHandleMessageEventBuffersSlackMessagesWhileActive(t *testing.T) {
 	}
 }
 
+func TestHandleMessageEventPropagatesHumanStreamRecipient(t *testing.T) {
+	var (
+		posted    []url.Values
+		reactions []string
+	)
+
+	server := newSlackStackTestServer(t, &posted, &reactions)
+	t.Cleanup(server.Close)
+
+	router := newThreadRouterStub()
+	router.prepareHandled = true
+	router.submitHandled = true
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
+	connector.teamID = "T123"
+
+	connector.handleMessageEvent(t.Context(), newSlackMessageEvent("222.333", "111.222", "status?"), slackNativeForward{})
+
+	require.Len(t, router.repliesSnapshot(), 1)
+	require.Len(t, posted, 2)
+	assert.Equal(t, "T123", posted[0].Get("recipient_team_id"))
+	assert.Equal(t, "U123", posted[0].Get("recipient_user_id"))
+	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("markdown_text"))
+	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
+}
+
+func TestPromoteSlackStackPropagatesBufferedHumanPrincipal(t *testing.T) {
+	var (
+		posted    []url.Values
+		reactions []string
+	)
+
+	server := newSlackStackTestServer(t, &posted, &reactions)
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	connector.teamID = "T123"
+	replyTarget := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+	key := slackThreadStackKey(replyTarget)
+	connector.stacks[key] = []slackBufferedMessage{{
+		Text:      "follow up",
+		Principal: "U456",
+		Content:   events.InboundContent{Text: "follow up"},
+		Reply:     replyTarget,
+	}}
+
+	connector.promoteSlackStack(t.Context(), key, func(_ context.Context, inbound *events.InboundMessage) error {
+		assert.Equal(t, "U456", inbound.Metadata[events.InboundPrincipalMetadataKey])
+		return nil
+	})
+
+	require.Len(t, posted, 2)
+	assert.Equal(t, "T123", posted[0].Get("recipient_team_id"))
+	assert.Equal(t, "U456", posted[0].Get("recipient_user_id"))
+	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("markdown_text"))
+	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
+}
+
 func TestAbortResponseReleasesFailedFinalTurnAndPromotesBufferedReply(t *testing.T) {
 	var (
 		mu             sync.Mutex
 		failFinal      = true
 		postedMessages int
+		cleanup        []string
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -3543,7 +4034,23 @@ func TestAbortResponseReleasesFailedFinalTurnAndPromotesBufferedReply(t *testing
 		case "/chat.postMessage":
 			postedMessages++
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": fmt.Sprintf("promoted-%d", postedMessages)})
-		case "/chat.delete", "/reactions.add", "/reactions.remove":
+		case "/chat.stopStream":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			cleanup = append(cleanup, "stop "+r.PostForm.Get("ts"))
+
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/chat.delete":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			cleanup = append(cleanup, "delete "+r.PostForm.Get("ts"))
+
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/reactions.add", "/reactions.remove":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
 			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
@@ -3556,7 +4063,7 @@ func TestAbortResponseReleasesFailedFinalTurnAndPromotesBufferedReply(t *testing
 	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
 	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.1", ThreadTS: "111.0"}
 	key := slackThreadStackKey(reply)
-	connector.replies["turn-1"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "thinking-1", AnswerTS: "answer-1"}
+	connector.replies["turn-1"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "thinking-1", AnswerTS: "answer-1", thinkingStream: true}
 	connector.thinking["turn-1"] = slackThinkingState{Text: "working"}
 	connector.stacks[key] = []slackBufferedMessage{{Text: "second", Content: events.InboundContent{Text: "second"}, Reply: &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.0"}}}
 
@@ -3572,6 +4079,7 @@ func TestAbortResponseReleasesFailedFinalTurnAndPromotesBufferedReply(t *testing
 	require.Len(t, connector.stacks[key], 1)
 
 	connector.AbortResponse(failed)
+	assert.Equal(t, []string{"stop thinking-1", "delete answer-1", "delete thinking-1"}, cleanup)
 
 	assert.NotContains(t, connector.replies, "turn-1")
 	assert.NotContains(t, connector.thinking, "turn-1")
@@ -3642,6 +4150,7 @@ func TestHandleMessageEventStartsGoalInExistingManagedThread(t *testing.T) {
 	router := newThreadRouterStub()
 	router.prepareHandled = true
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+	connector.teamID = "T123"
 
 	event := newSlackMessageEvent("222.333", "111.222", ":checkered_flag: maxTurns: 2 fix lint")
 	event.Channel = "C123"
@@ -3654,7 +4163,9 @@ func TestHandleMessageEventStartsGoalInExistingManagedThread(t *testing.T) {
 	assert.Equal(t, "fix lint", router.goalStarts[0].inbound.Text)
 	assert.Contains(t, reactions, "/reactions.add "+slackRobotReaction+" 222.333")
 	require.Len(t, posted, 2)
-	assert.Equal(t, "_Pursuing Goal (1/2)..._", posted[0].Get("text"))
+	assert.Equal(t, "T123", posted[0].Get("recipient_team_id"))
+	assert.Equal(t, "U123", posted[0].Get("recipient_user_id"))
+	assert.Equal(t, "_Pursuing Goal (1/2)..._", posted[0].Get("markdown_text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 }
 
@@ -3741,7 +4252,7 @@ func TestHandleAppMentionEventUsesConfiguredChannelAgentAndReaction(t *testing.T
 			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "triage"}})
 		case "/conversations.history":
 			writeJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{}})
-		case "/chat.postMessage":
+		case "/chat.startStream", "/chat.postMessage":
 			if !assert.NoError(t, r.ParseForm()) {
 				return
 			}
@@ -3781,6 +4292,7 @@ func TestHandleAppMentionEventUsesConfiguredChannelAgentAndReaction(t *testing.T
 
 	connector := newTestConnectorWithOptions(server.URL, bus, []config.SlackChannelConfig{{Channel: "#triage", Agents: []string{"triage"}, AllowedUserIDs: []string{"U123"}}}, router, nil)
 	connector.botUserID = "U999"
+	connector.teamID = "T123"
 	connector.handleAppMentionEvent(context.Background(), newSlackAppMentionEvent(), slackNativeForward{previews: []string{"forwarded preview"}})
 
 	started := router.startedSnapshot()
@@ -3788,7 +4300,9 @@ func TestHandleAppMentionEventUsesConfiguredChannelAgentAndReaction(t *testing.T
 	assert.Equal(t, "triage", started[0].agent)
 	assert.Contains(t, started[0].inbound.Text, "Slack forwarded preview:\nforwarded preview")
 	require.Len(t, posted, 2)
-	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
+	assert.Equal(t, "T123", posted[0].Get("recipient_team_id"))
+	assert.Equal(t, "U123", posted[0].Get("recipient_user_id"))
+	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("markdown_text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Equal(t, []string{slackRobotReaction}, reactionNames)
 }
@@ -4468,6 +4982,7 @@ func TestHandleMessageEventRunsOnDemandCronInSlackThread(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, runner)
+	connector.teamID = "T123"
 	event := newSlackMessageEvent("171234.5678", "171234.5678", "🔂 daily")
 	event.Channel = "C123"
 	connector.handleMessageEvent(context.Background(), event, slackNativeForward{})
@@ -4476,6 +4991,8 @@ func TestHandleMessageEventRunsOnDemandCronInSlackThread(t *testing.T) {
 	assert.Equal(t, []string{"daily"}, runner.targetsSnapshot())
 	require.Len(t, posted, 2)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
+	assert.Empty(t, posted[0].Get("recipient_team_id"))
+	assert.Empty(t, posted[0].Get("recipient_user_id"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Equal(t, 1, reactionCalls)
 	preview := readOneOutbound(t, bus)
@@ -5249,7 +5766,7 @@ func newSlackStackTestServer(t *testing.T, posted *[]url.Values, reactions *[]st
 		switch r.URL.Path {
 		case "/conversations.info":
 			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
-		case "/chat.postMessage":
+		case "/chat.startStream", "/chat.postMessage":
 			if !assert.NoError(t, r.ParseForm()) {
 				return
 			}
