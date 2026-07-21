@@ -314,7 +314,7 @@ func TestNewConnectorUsesInjectedRuntimeDependencies(t *testing.T) {
 	defer bus.Close()
 
 	answerQuestion := func(context.Context, string, events.AskUserQuestionAnswer) bool { return false }
-	c := New(&config.SlackConfig{BotToken: "xoxb-test", AppToken: "xapp-test"}, bus, nil, inertThreadRouter{}, inertOneOffCronjobs{}, answerQuestion, testLogger())
+	c := New(&config.SlackConfig{BotToken: "xoxb-test", AppToken: "xapp-test"}, bus, inertThreadRouter{}, inertOneOffCronjobs{}, answerQuestion, testLogger())
 
 	target := events.TextConversationTarget{ChannelID: "D123", MessageID: "111.222", ThreadID: "111.222"}
 	_, handled, err := c.threadRouter.ThreadAgent(target)
@@ -337,7 +337,7 @@ func TestNewConnectorUsesInjectedRuntimeDependencies(t *testing.T) {
 func TestDirectMessagesHaveNoEffect(t *testing.T) {
 	connector := New(
 		&config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}}},
-		events.New(), nil, inertThreadRouter{}, inertOneOffCronjobs{},
+		events.New(), inertThreadRouter{}, inertOneOffCronjobs{},
 		func(context.Context, string, events.AskUserQuestionAnswer) bool { return false },
 		testLogger(),
 	)

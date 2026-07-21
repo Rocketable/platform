@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"mime"
 	neturl "net/url"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -76,10 +75,9 @@ type Connector struct {
 	config config.SlackConfig
 	bus    *events.Bus
 
-	emergencySafeWords []string
-	threadRouter       harnessbridge.PrimaryTextRouter
-	oneOffCronjobs     primarytext.OneOffCronjobRunner
-	answerQuestion     func(context.Context, string, events.AskUserQuestionAnswer) bool
+	threadRouter   harnessbridge.PrimaryTextRouter
+	oneOffCronjobs primarytext.OneOffCronjobRunner
+	answerQuestion func(context.Context, string, events.AskUserQuestionAnswer) bool
 
 	api          *slack.Client
 	botUserID    string
@@ -143,12 +141,12 @@ type rawSlackEventsPayload struct {
 }
 
 // New constructs a Slack connector.
-func New(cfg *config.SlackConfig, bus *events.Bus, emergencySafeWords []string, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs primarytext.OneOffCronjobRunner, answerQuestion func(context.Context, string, events.AskUserQuestionAnswer) bool, logger *slog.Logger) *Connector {
+func New(cfg *config.SlackConfig, bus *events.Bus, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs primarytext.OneOffCronjobRunner, answerQuestion func(context.Context, string, events.AskUserQuestionAnswer) bool, logger *slog.Logger) *Connector {
 	api := slack.New(cfg.BotToken, slack.OptionAppLevelToken(cfg.AppToken), slack.OptionRetry(3))
 
 	return &Connector{
 		log: logger.With("component", "slack"), config: *cfg, bus: bus,
-		emergencySafeWords: slices.Clone(emergencySafeWords), threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs,
+		threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs,
 		answerQuestion: answerQuestion,
 		api:            api, socketEvents: make(chan slackSocketEvent, 50),
 		newSocketClient: func(api *slack.Client) *socketmode.Client {
@@ -1353,20 +1351,6 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		c.log.Debug("ignored Slack message event", "reason", "empty_text_and_no_files", "user", ev.User, "channel", ev.Channel, "channel_type", ev.ChannelType, "thread_ts_present", threadTS != "")
 
 		return
-	}
-
-	normalizedText := strings.Map(func(r rune) rune {
-		switch {
-		case unicode.IsLetter(r):
-			return unicode.ToLower(r)
-		case unicode.IsDigit(r):
-			return r
-		default:
-			return -1
-		}
-	}, text)
-	if slices.Contains(c.emergencySafeWords, normalizedText) {
-		os.Exit(254)
 	}
 
 	if socialThreadReply && c.slackSocialThreadReplyPingsAway(rawText) {

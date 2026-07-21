@@ -12,9 +12,6 @@
     "coding-high": "gpt-5.5",
     "review-fast": "software-development-sol"
   },
-  "emergency_safe_words": [
-    "stop"
-  ],
   "logging": {
     "level": "debug"
   },

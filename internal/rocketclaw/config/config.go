@@ -10,23 +10,21 @@ import (
 	"slices"
 	"strings"
 	"text/template"
-	"unicode"
 )
 
 // Config is the top-level rocketclaw runtime configuration.
 type Config struct {
-	Workspace          string                `json:"workspace"`
-	WorkDir            string                `json:"-"`
-	Overlays           []string              `json:"overlays,omitempty"`
-	Models             map[string]string     `json:"models,omitempty"`
-	Environment        []string              `json:"environment,omitempty"`
-	EmergencySafeWords []string              `json:"emergency_safe_words,omitempty"`
-	Logging            LoggingConfig         `json:"logging"`
-	MCPExternal        MCPExternalConfig     `json:"mcp_external"`
-	Slack              SlackConfig           `json:"slack"`
-	OpenAI             OpenAIConfig          `json:"openai"`
-	AutoApproverModel  string                `json:"auto_approver_model"`
-	Instrumentation    InstrumentationConfig `json:"instrumentation"`
+	Workspace         string                `json:"workspace"`
+	WorkDir           string                `json:"-"`
+	Overlays          []string              `json:"overlays,omitempty"`
+	Models            map[string]string     `json:"models,omitempty"`
+	Environment       []string              `json:"environment,omitempty"`
+	Logging           LoggingConfig         `json:"logging"`
+	MCPExternal       MCPExternalConfig     `json:"mcp_external"`
+	Slack             SlackConfig           `json:"slack"`
+	OpenAI            OpenAIConfig          `json:"openai"`
+	AutoApproverModel string                `json:"auto_approver_model"`
+	Instrumentation   InstrumentationConfig `json:"instrumentation"`
 }
 
 // DefaultRuntimeDir is the generated runtime directory for rocketclaw configs.
@@ -282,8 +280,6 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	c.EmergencySafeWords = normalizeEmergencySafeWords(c.EmergencySafeWords)
-
 	if err := c.normalizeRocketCodeAuth(); err != nil {
 		return err
 	}
@@ -469,42 +465,6 @@ func normalizeStrings(values []string) []string {
 	for _, value := range values {
 		if value = strings.TrimSpace(value); value != "" {
 			normalized = append(normalized, value)
-		}
-	}
-
-	return normalized
-}
-
-func normalizeEmergencySafeWords(words []string) []string {
-	if len(words) == 0 {
-		return nil
-	}
-
-	normalized := make([]string, 0, len(words))
-
-	seen := make(map[string]struct{}, len(words))
-	for _, word := range words {
-		word = strings.TrimSpace(word)
-		if word == "" {
-			continue
-		}
-
-		var b strings.Builder
-		b.Grow(len(word))
-
-		for _, r := range word {
-			switch {
-			case unicode.IsLetter(r):
-				b.WriteRune(unicode.ToLower(r))
-			case unicode.IsDigit(r):
-				b.WriteRune(r)
-			}
-		}
-
-		token := b.String()
-		if _, ok := seen[token]; token != "" && !ok {
-			seen[token] = struct{}{}
-			normalized = append(normalized, token)
 		}
 	}
 

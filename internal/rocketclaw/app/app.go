@@ -368,7 +368,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	logger.Info("starting Slack connector")
 
-	slackSink = slackconnector.New(&cfg.Slack, bus, cfg.EmergencySafeWords, threadBridges, cronjobs, questionBroker.answer, logger)
+	slackSink = slackconnector.New(&cfg.Slack, bus, threadBridges, cronjobs, questionBroker.answer, logger)
 	questionBroker.post, questionBroker.delete = slackSink.AskUserQuestion, slackSink.DeleteUserQuestion
 	startThreadRoot = slackSink.StartNewThreadRoot
 

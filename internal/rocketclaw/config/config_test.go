@@ -213,14 +213,6 @@ func TestValidateRejectsMissingRequiredConfig(t *testing.T) {
 	}
 }
 
-func TestValidateNormalizesEmergencySafeWords(t *testing.T) {
-	cfg := validConfig()
-	cfg.EmergencySafeWords = []string{"  Red Button! ", "red-button", "Angstrom 42", "!!!", ""}
-
-	require.NoError(t, cfg.Validate())
-	assert.Equal(t, []string{"redbutton", "angstrom42"}, cfg.EmergencySafeWords)
-}
-
 func TestValidateSlackChannelsLegacyCoverage(t *testing.T) {
 	cfg := validConfig()
 	cfg.Slack.Channels = []SlackChannelConfig{
