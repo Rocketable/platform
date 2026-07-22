@@ -121,6 +121,11 @@ func (m *threadBridgeManager) StartActiveGoals(recovering map[string]bool) error
 		return fmt.Errorf("load active goal bridges: %w", err)
 	}
 
+	goals, err := m.store.ActiveGoals()
+	if err != nil {
+		return fmt.Errorf("load active goals: %w", err)
+	}
+
 	for conversationID, thread := range threads {
 		if recovering[conversationID] {
 			continue
@@ -139,6 +144,8 @@ func (m *threadBridgeManager) StartActiveGoals(recovering map[string]bool) error
 		inbound := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "goal_continuation", "Continue the active goal loop.", false)
 		inbound.ConversationID = conversationID
 		m.text.setContinuationReply(inbound, target)
+		inbound.SlackReply.RecipientTeamID = goals[conversationID].SlackRecipientTeamID
+		inbound.SlackReply.RecipientUserID = goals[conversationID].SlackRecipientUserID
 
 		if err := managed.bridge.Submit(context.Background(), inbound); err != nil {
 			return fmt.Errorf("submit active goal continuation: %w", err)
@@ -347,7 +354,7 @@ func (m *threadBridgeManager) StartGoalInThread(ctx context.Context, agent, obje
 		return err
 	}
 
-	if err := m.store.BeginGoal(conversationID, objective, checkScript, maxTurns); err != nil {
+	if err := m.store.BeginGoal(conversationID, objective, checkScript, maxTurns, inbound.SlackReply.RecipientTeamID, inbound.SlackReply.RecipientUserID); err != nil {
 		return fmt.Errorf("persist goal: %w", err)
 	}
 

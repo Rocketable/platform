@@ -231,7 +231,10 @@ func TestVersionZeroMigrationAppliesChannelOnlyCleanupAndIsIdempotent(t *testing
 			"slack-thread:D1:1.1": {Agent: "dm"},
 			"slack-thread:C2:3.3": {Agent: "aggregate"},
 		},
-		Goals:                       map[string]GoalState{"main": {Objective: "old"}, "slack-thread:C2:3.3": {Objective: "keep"}},
+		Goals: map[string]GoalState{
+			"main":                {Objective: "old"},
+			"slack-thread:C2:3.3": {Objective: "keep", SlackRecipientTeamID: "T123", SlackRecipientUserID: "U456"},
+		},
 		ScheduledMessages:           map[string]ScheduledMessageState{"old": {ConversationID: "main"}, "keep": {ConversationID: "slack-thread:C2:3.3"}},
 		PendingRestartNotifications: map[string]bool{"main": true, "slack-thread:C2:3.3": true},
 	})
@@ -287,6 +290,12 @@ func TestVersionZeroMigrationAppliesChannelOnlyCleanupAndIsIdempotent(t *testing
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, ExternalMCPSessionState{Agent: "planner", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "C1"}, session)
+
+	goal, ok, err := store.Goal("slack-thread:C2:3.3")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "T123", goal.SlackRecipientTeamID)
+	assert.Equal(t, "U456", goal.SlackRecipientUserID)
 
 	_, ok, err = store.Thread("main")
 	require.NoError(t, err)

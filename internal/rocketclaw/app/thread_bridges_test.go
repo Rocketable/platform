@@ -190,7 +190,10 @@ func TestThreadBridgeManagerStartsGoalInExistingThreadWithPersistedAgent(t *test
 		return bridge
 	})
 
-	require.NoError(t, manager.StartGoalInThread(t.Context(), "", "ship it", "", 5, slackTarget("D123", "111.222"), newThreadInboundMessage("ship it", "222.333", "111.222")))
+	inbound := newThreadInboundMessage("ship it", "222.333", "111.222")
+	inbound.SlackReply.RecipientTeamID = "T123"
+	inbound.SlackReply.RecipientUserID = "U456"
+	require.NoError(t, manager.StartGoalInThread(t.Context(), "", "ship it", "", 5, slackTarget("D123", "111.222"), inbound))
 	require.Len(t, bridge.submits, 1)
 	assert.Equal(t, "goal", bridge.submits[0].Label)
 
@@ -198,13 +201,15 @@ func TestThreadBridgeManagerStartsGoalInExistingThreadWithPersistedAgent(t *test
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "ship it", goal.Objective)
+	assert.Equal(t, "T123", goal.SlackRecipientTeamID)
+	assert.Equal(t, "U456", goal.SlackRecipientUserID)
 }
 
 func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 	store := newTestSessionService(t, t.TempDir())
 	conversationID := harnessbridge.SlackThreadConversationID("D123", "111.222")
 	require.NoError(t, store.UpsertThread(conversationID, harnessbridge.ThreadState{Agent: "planner"}))
-	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 5))
+	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 5, "T123", "U456"))
 
 	bridge := new(fakeDirectBridge)
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
@@ -218,14 +223,14 @@ func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 	assert.Equal(t, "goal_continuation", bridge.submits[0].Label)
 	assert.Equal(t, "Continue the active goal loop.", bridge.submits[0].Text)
 	assert.Equal(t, conversationID, bridge.submits[0].ConversationID)
-	assert.Equal(t, &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}, bridge.submits[0].SlackReply)
+	assert.Equal(t, &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222", RecipientTeamID: "T123", RecipientUserID: "U456"}, bridge.submits[0].SlackReply)
 }
 
 func TestThreadBridgeManagerSkipsActiveGoalContinuationDuringActiveTurnRecovery(t *testing.T) {
 	store := newTestSessionService(t, t.TempDir())
 	conversationID := harnessbridge.SlackThreadConversationID("D123", "111.222")
 	require.NoError(t, store.UpsertThread(conversationID, harnessbridge.ThreadState{Agent: "planner"}))
-	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 5))
+	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 5, "", ""))
 
 	bridge := new(fakeDirectBridge)
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
@@ -237,7 +242,7 @@ func TestThreadBridgeManagerSkipsActiveGoalContinuationDuringActiveTurnRecovery(
 func TestThreadBridgeManagerRejectsDuplicateActiveGoal(t *testing.T) {
 	store := newTestSessionService(t, t.TempDir())
 	conversationID := harnessbridge.SlackThreadConversationID("D123", "111.222")
-	require.NoError(t, store.BeginGoal(conversationID, "first", "", 5))
+	require.NoError(t, store.BeginGoal(conversationID, "first", "", 5, "", ""))
 
 	bridge := new(fakeDirectBridge)
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
@@ -250,7 +255,7 @@ func TestThreadBridgeManagerRejectsDuplicateActiveGoal(t *testing.T) {
 func TestThreadBridgeManagerAllowsGoalAfterCompletedGoal(t *testing.T) {
 	store := newTestSessionService(t, t.TempDir())
 	conversationID := harnessbridge.SlackThreadConversationID("D123", "111.222")
-	require.NoError(t, store.BeginGoal(conversationID, "first", "", 5))
+	require.NoError(t, store.BeginGoal(conversationID, "first", "", 5, "", ""))
 	_, err := store.UpdateGoalStatus(conversationID, harnessbridge.GoalStatusComplete, "done")
 	require.NoError(t, err)
 
@@ -268,7 +273,7 @@ func TestThreadBridgeManagerAllowsGoalAfterCompletedGoal(t *testing.T) {
 func TestThreadBridgeManagerInterruptSlackThreadInterruptsActiveTurn(t *testing.T) {
 	store := newTestSessionService(t, t.TempDir())
 	conversationID := harnessbridge.SlackThreadConversationID("D123", "111.222")
-	require.NoError(t, store.BeginGoal(conversationID, "first", "", 5))
+	require.NoError(t, store.BeginGoal(conversationID, "first", "", 5, "", ""))
 
 	marker := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "111.222"}
 	bridge := &fakeDirectBridge{interruptResult: &events.InboundMessage{SlackReply: marker}}

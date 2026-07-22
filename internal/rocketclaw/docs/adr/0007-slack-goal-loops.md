@@ -56,7 +56,7 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 ### Slack Binding
 
 - Slack goal starts create or use managed channel threads rooted at app-mention messages and use canonical `slack.channels[]`.
-- Slack goal-loop turns use `_Pursuing Goal..._` as their infinite-goal Slack progress placeholder and `_Pursuing Goal (n/m)..._` as their finite-goal Slack progress placeholder, including kickoff turns, human re-steering turns, and automatic continuations. Non-goal Slack-visible assistant turns continue to use `_Thinking..._`.
+- Slack goal-loop turns use `_Pursuing Goal..._` as their infinite-goal fallback task-card progress placeholder and `_Pursuing Goal (n/m)..._` as their finite-goal fallback task-card progress placeholder, including kickoff turns, human re-steering turns, and automatic continuations. Non-goal fallback task cards use `_Thinking..._`. During the pre-release Plan evaluation governed by ADR 0002, Plan titles are plain text: `Pursuing Goal...`, `Pursuing Goal (n/m)...`, and `Thinking...` without surrounding underscore emphasis markers.
 
 ### Implementation Shape
 
@@ -67,7 +67,7 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 ### State And Turn Accounting
 
 - Goal state is persisted in `<runtime-dir>/state.sqlite3`, keyed by the owning managed-conversation ID. The runtime may store goal state in normalized SQLite tables rather than the legacy aggregate state JSON, as long as the centralized RocketClaw SQLite opener and migration contracts remain preserved.
-- Goal state records at least objective, normalized max turns, optional check script, turns used, status, timestamps, and optional terminal note.
+- Goal state records at least objective, normalized max turns, optional check script, turns used, status, timestamps, optional terminal note, `GoalState.SlackRecipientTeamID`, and `GoalState.SlackRecipientUserID`. SQLite stores those recipient values in `conversation_goals.slack_recipient_team_id` and `conversation_goals.slack_recipient_user_id`.
 - Goal statuses are `active`, `complete`, `blocked`, `stopped`, and `budget_exhausted`.
 - A managed conversation may run many goals over its lifetime, but only one goal may be active at a time.
 - A new goal may start in a managed conversation that has no goal state or whose existing goal is terminal.
@@ -120,7 +120,7 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 ### Restart Recovery
 
 - Active persisted text goal loops survive RocketClaw restart.
-- Startup uses persisted managed-conversation state and output targets to ensure the managed bridge exists for each active text goal loop and enqueues one continuation for each active goal.
+- Startup uses persisted managed-conversation state, output targets, `GoalState.SlackRecipientTeamID`, and `GoalState.SlackRecipientUserID` to ensure the managed bridge exists for each active text goal loop and enqueues one continuation for each active goal. The continuation uses the persisted recipient so its thinking message has the same Slack Plan UI as the kickoff turn.
 - Restart recovery does not replay missed turns and does not enqueue more than one startup continuation per active goal.
 
 ## Non-Goals
@@ -173,3 +173,4 @@ RocketClaw already has managed text conversations, persisted thread routing, dur
 - 2026-07-01: Allowed goal state to move from legacy aggregate state JSON into normalized SQLite state tables while preserving centralized opener, migration, and restart-recovery contracts.
 - 2026-07-15: Defined goal-loop starts for authorized users in configured Slack channels and existing managed threads.
 - 2026-07-15: Defined the parsed objective, current-turn attachments, and explicitly shared reference material as the initial input for a new goal thread.
+- 2026-07-22: Added persisted Slack stream recipient team and user IDs to goal state so automatic and restart continuations use the same Plan thinking UI as human goal turns. Defined plain-text Plan titles without underscore emphasis markers while retaining existing fallback task-card titles.

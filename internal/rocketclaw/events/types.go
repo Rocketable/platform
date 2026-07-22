@@ -109,7 +109,8 @@ type InboundMessage struct {
 
 // SlackReplyTarget identifies the Slack message that owns a streamed reply.
 type SlackReplyTarget struct {
-	ChannelID, MessageTS, ThreadTS string
+	ChannelID, MessageTS, ThreadTS   string
+	RecipientTeamID, RecipientUserID string
 }
 
 // TextConversationTarget identifies a conversation/message in the configured primary text connector.

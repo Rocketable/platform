@@ -20,24 +20,10 @@ func migrateSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) erro
 
 	defer func() { _ = tx.Rollback() }()
 
-	logger.Info("ensuring rocketclaw normalized state tables")
-
-	if err := createSessionSchema(ctx, tx); err != nil {
-		return err
-	}
-
-	version, err := sessionDBUserVersion(ctx, tx)
+	version, migrated, err := prepareSessionSchemaMigration(ctx, tx, logger)
 	if err != nil {
 		return err
 	}
-
-	if version > sessionDBSchemaVersion {
-		return fmt.Errorf("unsupported rocketclaw state schema version %d", version)
-	}
-
-	logger.Info("checked rocketclaw state schema", "version", version, "target_version", sessionDBSchemaVersion)
-
-	migrated := false
 
 	if version == 1 {
 		if err := migrateCronScheduleSpec(ctx, tx, logger); err != nil {
@@ -135,6 +121,14 @@ func migrateSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) erro
 
 	migrated = migrated || migratedExternalMCP
 
+	if version < sessionDBSchemaVersion {
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sessionDBSchemaVersion)); err != nil {
+			return fmt.Errorf("set rocketclaw state schema version: %w", err)
+		}
+
+		migrated = true
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit session db migration: %w", err)
 	}
@@ -146,6 +140,52 @@ func migrateSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) erro
 	}
 
 	return nil
+}
+
+func prepareSessionSchemaMigration(ctx context.Context, db stateStoreDB, logger *slog.Logger) (version int, migrated bool, err error) {
+	logger.Info("ensuring rocketclaw normalized state tables")
+
+	if err := createSessionSchema(ctx, db); err != nil {
+		return 0, false, err
+	}
+
+	version, err = sessionDBUserVersion(ctx, db)
+	if err != nil {
+		return 0, false, err
+	}
+
+	if version > sessionDBSchemaVersion {
+		return 0, false, fmt.Errorf("unsupported rocketclaw state schema version %d", version)
+	}
+
+	logger.Info("checked rocketclaw state schema", "version", version, "target_version", sessionDBSchemaVersion)
+
+	migrated, err = migrateGoalRecipients(ctx, db)
+
+	return version, migrated, err
+}
+
+func migrateGoalRecipients(ctx context.Context, db stateStoreDB) (bool, error) {
+	changed := false
+
+	for _, column := range []string{"slack_recipient_team_id", "slack_recipient_user_id"} {
+		hasColumn, err := tableHasColumn(ctx, db, "conversation_goals", column)
+		if err != nil {
+			return false, err
+		}
+
+		if hasColumn {
+			continue
+		}
+
+		if _, err := db.ExecContext(ctx, `ALTER TABLE conversation_goals ADD COLUMN `+column+` TEXT NOT NULL DEFAULT ''`); err != nil {
+			return false, fmt.Errorf("add conversation goal %s: %w", column, err)
+		}
+
+		changed = true
+	}
+
+	return changed, nil
 }
 
 func migrateExternalMCPDualSessionsIfNeeded(ctx context.Context, tx *sql.Tx, version int) (changed bool, err error) {

@@ -650,6 +650,16 @@ func (b *Bridge) handleRecoveredActiveTurn(ctx context.Context, turn *ActiveTurn
 		msg.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
 	}
 
+	goal, goalOK, err := b.config.SessionService.Goal(b.config.ConversationID)
+	if err != nil {
+		return fmt.Errorf("load recovered active goal: %w", err)
+	}
+
+	if goalOK && goal.Status == GoalStatusActive && msg.SlackReply != nil {
+		msg.SlackReply.RecipientTeamID = goal.SlackRecipientTeamID
+		msg.SlackReply.RecipientUserID = goal.SlackRecipientUserID
+	}
+
 	turnID := fmt.Sprintf("turn-%d", time.Now().UnixNano())
 
 	result, err := b.runTurn(ctx, msg, turnID, true, recoveredReplay)
@@ -852,10 +862,12 @@ func (b *Bridge) enqueueGoalContinuation(ctx context.Context, goal *GoalState, m
 	inbound := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, goalContinuationLabel, "Continue the active goal loop.\n\n"+goalSteeringPrompt(goal), false)
 
 	inbound.ConversationID = b.config.ConversationID
+
+	inbound.SlackReply = &events.SlackReplyTarget{RecipientTeamID: goal.SlackRecipientTeamID, RecipientUserID: goal.SlackRecipientUserID}
 	if msg != nil && msg.SlackReply != nil {
-		inbound.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.ThreadTS, ThreadTS: msg.SlackReply.ThreadTS}
+		inbound.SlackReply.ChannelID, inbound.SlackReply.MessageTS, inbound.SlackReply.ThreadTS = msg.SlackReply.ChannelID, msg.SlackReply.ThreadTS, msg.SlackReply.ThreadTS
 	} else if channelID, threadTS, ok := SlackThreadTarget(b.config.ConversationID); ok {
-		inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
+		inbound.SlackReply.ChannelID, inbound.SlackReply.MessageTS, inbound.SlackReply.ThreadTS = channelID, threadTS, threadTS
 	}
 
 	return b.enqueue(ctx, bridgeRequest{inbound: inbound, activation: NoopActivationHook}, "submit goal continuation")
@@ -1108,7 +1120,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 
 	activeReply := new(events.InboundMessage)
 	if msg.SlackReply != nil {
-		activeReply.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS}
+		activeReply.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS, RecipientTeamID: msg.SlackReply.RecipientTeamID, RecipientUserID: msg.SlackReply.RecipientUserID}
 	}
 
 	turnCtx, cancelTurn := context.WithCancel(ctx)
@@ -2051,7 +2063,7 @@ func askUserQuestionTool(ask func(context.Context, *events.AskUserQuestionReques
 
 		req.ID, req.Source, req.ConversationID = rand.Text(), msg.Source, msg.ConversationID
 		if msg.SlackReply != nil {
-			req.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS}
+			req.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS, RecipientTeamID: msg.SlackReply.RecipientTeamID, RecipientUserID: msg.SlackReply.RecipientUserID}
 		}
 
 		answer, err := ask(ctx, &req)
@@ -2108,7 +2120,7 @@ func startNewThreadTool(start func(context.Context, *events.StartNewThreadReques
 
 			req := events.StartNewThreadRequest{Source: msg.Source, SourceConversationID: msg.ConversationID, CurrentAgent: currentAgent, Agent: strings.TrimSpace(input.Agent), Title: title, Prompt: prompt, AllowedAgents: allowedAgents}
 			if msg.SlackReply != nil {
-				req.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS}
+				req.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS, RecipientTeamID: msg.SlackReply.RecipientTeamID, RecipientUserID: msg.SlackReply.RecipientUserID}
 			}
 
 			result, err := start(ctx, &req)
@@ -2320,7 +2332,7 @@ func (b *Bridge) newOutboundMessage(msg *events.InboundMessage, turnID string, s
 		}
 
 		if msg.SlackReply != nil {
-			outbound.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS}
+			outbound.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS, RecipientTeamID: msg.SlackReply.RecipientTeamID, RecipientUserID: msg.SlackReply.RecipientUserID}
 		}
 	}
 

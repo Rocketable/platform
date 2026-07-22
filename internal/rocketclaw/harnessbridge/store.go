@@ -107,14 +107,16 @@ type CronScheduleRun struct {
 
 // GoalState records one active or terminal managed-thread goal loop.
 type GoalState struct {
-	Objective   string    `json:"objective,omitempty"`
-	CheckScript string    `json:"check_script,omitempty"`
-	MaxTurns    int       `json:"max_turns,omitempty"`
-	TurnsUsed   int       `json:"turns_used,omitempty"`
-	Status      string    `json:"status,omitempty"`
-	Note        string    `json:"note,omitempty"`
-	CreatedAt   time.Time `json:"created_at,omitzero"`
-	UpdatedAt   time.Time `json:"updated_at,omitzero"`
+	Objective            string    `json:"objective,omitempty"`
+	CheckScript          string    `json:"check_script,omitempty"`
+	MaxTurns             int       `json:"max_turns,omitempty"`
+	TurnsUsed            int       `json:"turns_used,omitempty"`
+	Status               string    `json:"status,omitempty"`
+	Note                 string    `json:"note,omitempty"`
+	SlackRecipientTeamID string    `json:"slack_recipient_team_id,omitempty"`
+	SlackRecipientUserID string    `json:"slack_recipient_user_id,omitempty"`
+	CreatedAt            time.Time `json:"created_at,omitzero"`
+	UpdatedAt            time.Time `json:"updated_at,omitzero"`
 }
 
 type sqliteSessionStore struct {
@@ -216,10 +218,12 @@ func (s *SessionService) UpsertThread(conversationID string, thread ThreadState)
 }
 
 // BeginGoal records a new active goal for a managed conversation.
-func (s *SessionService) BeginGoal(conversationID, objective, checkScript string, maxTurns int) error {
+func (s *SessionService) BeginGoal(conversationID, objective, checkScript string, maxTurns int, recipientTeamID, recipientUserID string) error {
 	conversationID = strings.TrimSpace(conversationID)
 	objective = strings.TrimSpace(objective)
 	checkScript = strings.TrimSpace(checkScript)
+	recipientTeamID = strings.TrimSpace(recipientTeamID)
+	recipientUserID = strings.TrimSpace(recipientUserID)
 
 	if conversationID == "" {
 		return errors.New("goal conversation ID is required")
@@ -235,7 +239,7 @@ func (s *SessionService) BeginGoal(conversationID, objective, checkScript string
 
 	now := time.Now().UTC()
 
-	ok, err := stateDAO{db: s.db}.beginGoal(context.Background(), conversationID, &GoalState{Objective: objective, CheckScript: checkScript, MaxTurns: maxTurns, Status: GoalStatusActive, CreatedAt: now, UpdatedAt: now})
+	ok, err := stateDAO{db: s.db}.beginGoal(context.Background(), conversationID, &GoalState{Objective: objective, CheckScript: checkScript, MaxTurns: maxTurns, Status: GoalStatusActive, SlackRecipientTeamID: recipientTeamID, SlackRecipientUserID: recipientUserID, CreatedAt: now, UpdatedAt: now})
 	if err != nil {
 		return err
 	}
