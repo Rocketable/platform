@@ -2105,7 +2105,7 @@ func TestSendResponseKeepsHumanThinkingTaskCardLifecycle(t *testing.T) {
 	assert.Equal(t, string(slack.TaskCardStatusComplete), completeBlocks[0].Status)
 }
 
-func TestSendResponseCompletesThinkingTaskStreamAfterUnchangedAnswer(t *testing.T) {
+func TestSendResponseCompletesThinkingPlanStreamAfterUnchangedAnswer(t *testing.T) {
 	var (
 		operations                        []string
 		started, appended, final, stopped url.Values
@@ -2182,27 +2182,32 @@ func TestSendResponseCompletesThinkingTaskStreamAfterUnchangedAnswer(t *testing.
 		"token":   {"xoxb-test"},
 		"ts":      {"555.2"},
 	}, final)
+	assert.Equal(t, string(slack.TaskDisplayModePlan), started.Get("task_display_mode"))
 
-	var startChunks, appendChunks, stopChunks []slack.TaskUpdateChunk
+	var (
+		startChunks, stopChunks []slack.PlanUpdateChunk
+		appendChunks            []slack.TaskUpdateChunk
+	)
+
 	require.NoError(t, json.Unmarshal([]byte(started.Get("chunks")), &startChunks))
 	require.NoError(t, json.Unmarshal([]byte(appended.Get("chunks")), &appendChunks))
 	require.NoError(t, json.Unmarshal([]byte(stopped.Get("chunks")), &stopChunks))
-	assert.Equal(t, []slack.TaskUpdateChunk{{
-		Type:   slack.StreamChunkTaskUpdate,
-		ID:     "111.222",
-		Title:  slackImmediatePlaceholder,
-		Status: slack.TaskCardStatusInProgress,
+	assert.Equal(t, []slack.PlanUpdateChunk{{
+		Type:  slack.StreamChunkPlanUpdate,
+		Title: slackImmediatePlaceholder,
 	}}, startChunks)
+	assert.NotContains(t, started.Get("chunks"), string(slack.StreamChunkTaskUpdate))
 	assert.Equal(t, []slack.TaskUpdateChunk{
 		{Type: slack.StreamChunkTaskUpdate, ID: "111.222-activity-1-1", Title: "reasoning: **Finding instructions**", Status: slack.TaskCardStatusComplete},
 		{Type: slack.StreamChunkTaskUpdate, ID: "111.222-activity-2-1", Title: "glob: **/APPLE.md", Status: slack.TaskCardStatusComplete},
 	}, appendChunks)
-	assert.Equal(t, []slack.TaskUpdateChunk{{
-		Type:   slack.StreamChunkTaskUpdate,
-		ID:     "111.222",
-		Title:  "Complete",
-		Status: slack.TaskCardStatusComplete,
+	assert.NotContains(t, appended.Get("chunks"), string(slack.StreamChunkPlanUpdate))
+	assert.Equal(t, []slack.PlanUpdateChunk{{
+		Type:  slack.StreamChunkPlanUpdate,
+		Title: "Complete",
 	}}, stopChunks)
+	assert.NotContains(t, stopped.Get("chunks"), string(slack.StreamChunkTaskUpdate))
+	assert.NotContains(t, stopped.Get("chunks"), "-activity-")
 	assert.NotContains(t, started.Get("chunks"), "Final answer")
 	assert.NotContains(t, appended.Get("chunks"), "Final answer")
 	assert.NotContains(t, stopped.Get("chunks"), "Final answer")
@@ -2590,13 +2595,11 @@ func TestSendResponseStopsTaskStreamAndDeletesOnlyAnswerPlaceholderForEmptyFinal
 		"/reactions.remove",
 	}, operations)
 
-	var chunks []slack.TaskUpdateChunk
+	var chunks []slack.PlanUpdateChunk
 	require.NoError(t, json.Unmarshal([]byte(stopped.Get("chunks")), &chunks))
-	assert.Equal(t, []slack.TaskUpdateChunk{{
-		Type:   slack.StreamChunkTaskUpdate,
-		ID:     "111.222",
-		Title:  "Complete",
-		Status: slack.TaskCardStatusComplete,
+	assert.Equal(t, []slack.PlanUpdateChunk{{
+		Type:  slack.StreamChunkPlanUpdate,
+		Title: "Complete",
 	}}, chunks)
 }
 
@@ -3674,7 +3677,7 @@ func TestCreateReplyPlaceholdersCreatesThinkingAndAnswerPlaceholders(t *testing.
 	assert.True(t, connector.hasPendingState(&events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}))
 }
 
-func TestCreateReplyPlaceholdersStartsThinkingTaskStreamBeforeUnchangedAnswer(t *testing.T) {
+func TestCreateReplyPlaceholdersStartsThinkingPlanStreamBeforeUnchangedAnswer(t *testing.T) {
 	var (
 		operations        []string
 		started, answered url.Values
@@ -3737,17 +3740,15 @@ func TestCreateReplyPlaceholdersStartsThinkingTaskStreamBeforeUnchangedAnswer(t 
 	assert.Equal(t, "111.222", started.Get("thread_ts"))
 	assert.Equal(t, "T-SLACK-CONNECT", started.Get("recipient_team_id"))
 	assert.Equal(t, "U123", started.Get("recipient_user_id"))
-	assert.Equal(t, string(slack.TaskDisplayModeTimeline), started.Get("task_display_mode"))
+	assert.Equal(t, string(slack.TaskDisplayModePlan), started.Get("task_display_mode"))
 	assert.Empty(t, started.Get("text"))
 	assert.Empty(t, started.Get("markdown_text"))
 
 	var chunks []map[string]any
 	require.NoError(t, json.Unmarshal([]byte(started.Get("chunks")), &chunks))
 	assert.Equal(t, []map[string]any{{
-		"type":   "task_update",
-		"id":     "111.222",
-		"title":  slackImmediatePlaceholder,
-		"status": string(slack.TaskCardStatusInProgress),
+		"type":  "plan_update",
+		"title": slackImmediatePlaceholder,
 	}}, chunks)
 
 	assert.Equal(t, "C123", answered.Get("channel"))

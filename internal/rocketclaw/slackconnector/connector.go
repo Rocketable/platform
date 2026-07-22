@@ -288,7 +288,7 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 		} else {
 			channelID, threadTS := slackReplyDestination(msg.SlackReply)
 
-			postedChannelID, postedThinkingTS, postedAnswerTS, err := c.postReplyPlaceholderPair(ctx, channelID, "", threadTS, placeholder, "", "")
+			postedChannelID, postedThinkingTS, postedAnswerTS, err := c.postReplyPlaceholderPair(ctx, channelID, threadTS, placeholder, "", "")
 			if err != nil {
 				return fmt.Errorf("send Slack reply placeholders len=%d: %w", len([]rune(thinkingText)), err)
 			}
@@ -637,7 +637,7 @@ func (c *Connector) SendExternalMCPRelay(ctx context.Context, channelID, threadT
 		continuationMessageTS = append(continuationMessageTS, continuationTS)
 	}
 
-	placeholderChannelID, thinkingTS, answerTS, err := c.postReplyPlaceholderPair(ctx, postedChannelID, replyTarget.MessageTS, replyTarget.ThreadTS, slackImmediatePlaceholder, "", "")
+	placeholderChannelID, thinkingTS, answerTS, err := c.postReplyPlaceholderPair(ctx, postedChannelID, replyTarget.ThreadTS, slackImmediatePlaceholder, "", "")
 	if err != nil {
 		return nil, err
 	}
@@ -710,8 +710,7 @@ func (c *Connector) finishCompleteResponse(ctx context.Context, msg *events.Outb
 		var err error
 
 		if slots.thinkingStream {
-			chunk := slack.NewTaskUpdateChunk(slots.thinkingTaskID, "Complete")
-			chunk.Status = slack.TaskCardStatusComplete
+			chunk := slack.NewPlanUpdateChunk("Complete")
 			_, _, err = c.api.StopStreamContext(ctx, slots.ChannelID, slots.ThinkingTS, slack.MsgOptionChunks(chunk))
 			slots.thinkingStream = false
 		} else {
@@ -2465,7 +2464,7 @@ func (c *Connector) createReplyPlaceholders(ctx context.Context, replyTarget *ev
 		return slackReplySlots{}, nil
 	}
 
-	placeholderChannelID, thinkingTS, answerTS, err := c.postReplyPlaceholderPair(ctx, channelID, replyTarget.MessageTS, replyTarget.ThreadTS, placeholder, recipientTeamID, recipientUserID)
+	placeholderChannelID, thinkingTS, answerTS, err := c.postReplyPlaceholderPair(ctx, channelID, replyTarget.ThreadTS, placeholder, recipientTeamID, recipientUserID)
 	if err != nil {
 		return slackReplySlots{}, err
 	}
@@ -2500,7 +2499,7 @@ func (c *Connector) createReplyPlaceholderStateLocked(replyTarget *events.SlackR
 	c.pending[key] = *slots
 }
 
-func (c *Connector) postReplyPlaceholderPair(ctx context.Context, channelID, messageTS, threadTS, placeholder, recipientTeamID, recipientUserID string) (placeholderChannelID, thinkingTS, answerTS string, err error) {
+func (c *Connector) postReplyPlaceholderPair(ctx context.Context, channelID, threadTS, placeholder, recipientTeamID, recipientUserID string) (placeholderChannelID, thinkingTS, answerTS string, err error) {
 	var options []slack.MsgOption
 	if threadTS = strings.TrimSpace(threadTS); threadTS != "" {
 		options = append(options, slack.MsgOptionTS(threadTS))
@@ -2508,13 +2507,12 @@ func (c *Connector) postReplyPlaceholderPair(ctx context.Context, channelID, mes
 
 	thinkingStream := recipientTeamID != "" && recipientUserID != ""
 	if thinkingStream {
-		chunk := slack.NewTaskUpdateChunk(messageTS, placeholder)
-		chunk.Status = slack.TaskCardStatusInProgress
+		chunk := slack.NewPlanUpdateChunk(placeholder)
 		options = append(options,
 			slack.MsgOptionChunks(chunk),
 			slack.MsgOptionRecipientTeamID(recipientTeamID),
 			slack.MsgOptionRecipientUserID(recipientUserID),
-			slack.MsgOptionTaskDisplayMode(slack.TaskDisplayModeTimeline),
+			slack.MsgOptionTaskDisplayMode(slack.TaskDisplayModePlan),
 		)
 
 		placeholderChannelID, thinkingTS, err = c.api.StartStreamContext(ctx, channelID, options...)
