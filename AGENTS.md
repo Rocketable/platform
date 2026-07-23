@@ -8,6 +8,8 @@ When appropriate, broaden the inquiry beyond the stated assumptions to identify 
 
 Before calling anything "done" or "working", take a second look and red-team whether it is really done or really working.
 
+Always communicate with the human partner in plain, simple language. Keep responses concise and avoid walls of text.
+
 ## Bootstrap
 
 On start, you must always read:
@@ -18,7 +20,7 @@ On start, you must always read:
 - https://go.dev/blog/testing-time
 - https://go.dev/blog/osroot
 - https://go.dev/blog/cleanups-and-weak
-- https://go.dev/blog/synctest
+- https://pkg.go.dev/testing/synctest
 - https://pkg.go.dev/iter
 - https://dmitri.shuralyov.com/idiomatic-go/entries/2
 - https://go.dev/blog/context-and-structs
