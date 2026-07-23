@@ -712,17 +712,12 @@ func (c *Connector) finishCompleteResponse(ctx context.Context, msg *events.Outb
 		pending := c.thinking[msg.TurnID]
 		c.mu.Unlock()
 
-		if pending.Placeholder == "" {
-			pending.Placeholder = slackImmediatePlaceholder
-			if msg.GoalTurn {
-				pending.Placeholder = primarytext.GoalProgressText(msg.GoalTurnNumber, msg.GoalMaxTurns)
-			}
+		if strings.TrimSpace(pending.Text) == "" {
+			c.finishResponse(ctx, msg, slots, hasSlots, strings.TrimSpace(msg.Text) == "")
+			return nil
 		}
 
 		thinkingText := slackThinkingMessage(pending.Placeholder, pending.Text)
-		if thinkingText == "" {
-			thinkingText = "Complete"
-		}
 
 		var err error
 
