@@ -27,7 +27,7 @@ On start, you must always read:
 
 - Read the relevant source code before asking clarifying questions or proposing edits.
 - **NON-NEGOTIABLE TEMPORARY-DIRECTORY POLICY:** The only acceptable location for temporary files, scratch data, throwaway artifacts, clones, Git worktrees, and Jujutsu workspaces is `<repo-root>/.tmp/`. Never use `/tmp`, `$TMPDIR`, system temporary directories, or temporary directories anywhere else. Create `<repo-root>/.tmp/` when needed. Every repository skill must include and enforce this policy; if any skill conflicts with it, this policy wins.
-- Whenever you create a Markdown file of any kind, including a spec or plan, and detect that you are running inside cmux, immediately open it in a preview tab with `cmux markdown open <path> --focus true`.
+- Whenever you create a Markdown file of any kind, including a spec or plan, and detect that you are running inside cmux, immediately open it in a preview tab with `cmux markdown open <path>`.
 - Place documents produced by Superpowers, Compound Engineering, or similar workflows under the narrowest affected component's `docs` directory, such as `internal/rocketclaw/docs` or `internal/rocketcode/docs`. Use purpose-based paths that contain no workflow or tool branding, including `superpower`, `superpowers`, `compound-engineering`, `ce`, or variants. Before placing a document at repository scope for a repository-wide change, ask the human partner/principal for approval.
 - Never use `git`. Use `jj` for repository inspection and history, and always use `jj diff --git` for diffs.
 - Use `go doc` and `gopls` (use `go run golang.org/x/tools/gopls@latest --help`) often to find issues and opportunities to improve Go code.
