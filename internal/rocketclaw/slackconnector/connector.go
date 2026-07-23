@@ -1710,13 +1710,6 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 
 	replyTarget := &events.SlackReplyTarget{ChannelID: ev.Channel, MessageTS: ev.TimeStamp, ThreadTS: threadTS, RecipientTeamID: recipientTeamID, RecipientUserID: ev.User}
 
-	if strings.HasPrefix(text, slackOnDemandCronPrefix) || strings.HasPrefix(text, "🔂") {
-		if target, ok := cronjob.OnDemandCronTarget(text, slackOnDemandCronPrefix, "🔂"); ok {
-			c.handleOnDemandCronRequest(ctx, ev, target, replyTarget)
-			return
-		}
-	}
-
 	if threadTS != "" {
 		_, handled, err := c.threadRouter.ThreadAgent(events.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS})
 		if err != nil {
@@ -1735,6 +1728,11 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		}
 
 		if !handled {
+			return
+		}
+
+		if target, ok := slackOnDemandCronTarget(text); ok {
+			c.handleOnDemandCronRequest(ctx, target, replyTarget)
 			return
 		}
 
@@ -1939,6 +1937,10 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 	}
 
 	replyTarget := &events.SlackReplyTarget{ChannelID: ev.Channel, MessageTS: ev.TimeStamp, ThreadTS: threadTS, RecipientTeamID: recipientTeamID, RecipientUserID: ev.User}
+	if target, ok := slackOnDemandCronTarget(text); ok {
+		c.handleOnDemandCronRequest(ctx, target, replyTarget)
+		return
+	}
 
 	goal, rejection, isGoal := harnessbridge.ParseGoalRequest(emoji.CanonicalizeLeadingAlias(text))
 	if isGoal && rejection != "" {
@@ -2366,11 +2368,33 @@ func slackPendingKey(replyTarget *events.SlackReplyTarget) string {
 	return channelID + "\x00" + messageTS + "\x00" + threadTS
 }
 
-func (c *Connector) handleOnDemandCronRequest(ctx context.Context, ev *slackevents.MessageEvent, target string, replyTarget *events.SlackReplyTarget) {
+func slackOnDemandCronTarget(text string) (string, bool) {
+	text = strings.TrimSpace(text)
+
+	prefixes := []string{slackOnDemandCronPrefix, ":repeat-one:", "🔂"}
+	for _, prefix := range prefixes {
+		remainder, ok := strings.CutPrefix(text, prefix)
+		if !ok {
+			continue
+		}
+
+		if target, ok := cronjob.OnDemandCronTarget(text, prefixes...); ok {
+			return target, true
+		}
+
+		target := strings.TrimSpace(remainder)
+
+		return target, target != ""
+	}
+
+	return "", false
+}
+
+func (c *Connector) handleOnDemandCronRequest(ctx context.Context, target string, replyTarget *events.SlackReplyTarget) {
 	loaded, err := c.oneOffCronjobs.LoadOneOffCronjob(target)
 	if err != nil {
 		if errPost := c.publishOnDemandCronReply(ctx, replyTarget, "I couldn't find that cronjob. Use a top-level cron filename like `daily` or `daily.md`.", true); errPost != nil {
-			c.log.Warn("publish Slack on-demand cron rejection", "error", errPost, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", replyTarget.ThreadTS)
+			c.log.Warn("publish Slack on-demand cron rejection", "error", errPost, "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS, "thread_ts", replyTarget.ThreadTS)
 		}
 
 		return
@@ -2378,7 +2402,7 @@ func (c *Connector) handleOnDemandCronRequest(ctx context.Context, ev *slackeven
 
 	preview := "One-off cronjob starting.\n\nFile: `" + loaded.RelativePath + "`\nAgent: `" + strings.TrimSpace(loaded.Agent) + "`"
 	if err := c.publishOnDemandCronReply(ctx, replyTarget, preview, false); err != nil {
-		c.log.Warn("publish Slack on-demand cron preview", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", replyTarget.ThreadTS, "cron", loaded.RelativePath)
+		c.log.Warn("publish Slack on-demand cron preview", "error", err, "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS, "thread_ts", replyTarget.ThreadTS, "cron", loaded.RelativePath)
 	}
 
 	c.addRobotReaction(ctx, replyTarget)

@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -5815,6 +5816,154 @@ func TestHandleMessageEventIgnoresUnknownSocialThreadReply(t *testing.T) {
 	assert.Empty(t, router.repliesSnapshot())
 }
 
+func TestSlackOnDemandCronTarget(t *testing.T) {
+	for _, tt := range []struct {
+		name, text, want string
+		ok               bool
+	}{
+		{name: "legacy", text: ":repeat_one: daily", want: "daily", ok: true},
+		{name: "spaced target", text: ":repeat-one: main cronjob", want: "main cronjob", ok: true},
+		{name: "normalized path", text: "🔂 cron/daily.md", want: "daily", ok: true},
+		{name: "empty", text: ":repeat-one:"},
+		{name: "unprefixed", text: "please run daily"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := slackOnDemandCronTarget(tt.text)
+			assert.Equal(t, tt.ok, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestHandleAppMentionEventRunsOnDemandCronInRootThread(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	runner := newOneOffCronjobLoaderStub()
+	runner.loaded = cronjob.OneOffCronjob{Agent: "cron", RelativePath: "cron/main-cronjob.md"}
+	router := newThreadRouterStub()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/conversations.info":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
+		case "/chat.postMessage":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
+		case "/reactions.add":
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, runner)
+	connector.botUserID = "U999"
+	event := newSlackAppMentionEvent()
+	event.Text = "<@U999> :repeat-one: main-cronjob"
+	connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
+
+	require.Equal(t, []string{"main-cronjob"}, runner.targetsSnapshot())
+	assert.Empty(t, router.startedSnapshot())
+	preview := readOneOutbound(t, bus)
+	require.NotNil(t, preview.SlackReply)
+	assert.Equal(t, event.TimeStamp, preview.SlackReply.ThreadTS)
+	final := readOneOutbound(t, bus)
+	final.MarkDelivered(nil)
+
+	wantRegistration := []cronThreadRegistration{{channelID: "C123", threadTS: event.TimeStamp, agent: "cron"}}
+
+	require.Eventually(t, func() bool {
+		return slices.Equal(wantRegistration, router.cronRegistrationsSnapshot())
+	}, time.Second, time.Millisecond)
+	assert.Equal(t, wantRegistration, router.cronRegistrationsSnapshot())
+}
+
+func TestHandleMessageEventRunsHyphenOnDemandCronInManagedThread(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	runner := newOneOffCronjobLoaderStub()
+	runner.loaded = cronjob.OneOffCronjob{Agent: "cron", RelativePath: "cron/main cronjob.md"}
+	router := newThreadRouterStub()
+	router.threadAgentHandled = true
+	router.submitHandled = true
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/conversations.info":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
+		case "/chat.postMessage":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
+		case "/reactions.add":
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, runner)
+	event := newSlackMessageEvent("171234.9999", "171234.5678", ":repeat-one: main cronjob")
+	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
+
+	require.Equal(t, []string{"main cronjob"}, runner.targetsSnapshot())
+	router.mu.Lock()
+	reads := append([]threadAgentReadCall(nil), router.threadAgentReads...)
+	router.mu.Unlock()
+	assert.Equal(t, []threadAgentReadCall{{channelID: "C123", threadTS: event.ThreadTimeStamp}}, reads)
+	preview := readOneOutbound(t, bus)
+	require.NotNil(t, preview.SlackReply)
+	assert.Equal(t, event.ThreadTimeStamp, preview.SlackReply.ThreadTS)
+	final := readOneOutbound(t, bus)
+	final.MarkDelivered(nil)
+
+	wantRegistration := []cronThreadRegistration{{channelID: "C123", threadTS: event.ThreadTimeStamp, agent: "cron"}}
+
+	require.Eventually(t, func() bool {
+		return slices.Equal(wantRegistration, router.cronRegistrationsSnapshot())
+	}, time.Second, time.Millisecond)
+	assert.Equal(t, wantRegistration, router.cronRegistrationsSnapshot())
+}
+
+func TestHandleMessageEventIgnoresOnDemandCronInUnmanagedThread(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	runner := newOneOffCronjobLoaderStub()
+	runner.loaded = cronjob.OneOffCronjob{Agent: "cron", RelativePath: "cron/main-cronjob.md"}
+	router := newThreadRouterStub()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/conversations.info":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, runner)
+	event := newSlackMessageEvent("171234.9999", "171234.5678", ":repeat-one: main-cronjob")
+	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
+
+	assert.Empty(t, runner.targetsSnapshot())
+	assert.Empty(t, runner.runsSnapshot())
+}
+
+func TestHandleMessageEventIgnoresPlainRootOnDemandCron(t *testing.T) {
+	runner := newOneOffCronjobLoaderStub()
+	router := newThreadRouterStub()
+	connector := newTestConnectorWithOptions("http://127.0.0.1", nil, nil, router, runner)
+
+	event := newSlackMessageEvent("171234.5678", "", ":repeat-one: main-cronjob")
+	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
+
+	assert.Empty(t, runner.targetsSnapshot())
+	assert.Empty(t, router.startedSnapshot())
+}
+
 func TestHandleMessageEventRunsOnDemandCronInSlackThread(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
@@ -5958,6 +6107,7 @@ func TestHandleMessageEventRunsOnDemandCronWhenSlackFeedbackFails(t *testing.T) 
 	runner.loaded = cronjob.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", TextChannel: "#ops"}
 	runner.runResult = cronjob.RunResult{VerbatimMessage: "done"}
 	router := newThreadRouterStub()
+	router.threadAgentHandled = true
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -6050,7 +6200,7 @@ func TestHandleOnDemandCronRequestDoesNotRunMissingCronWhenReplyFails(t *testing
 	connector := newTestConnectorWithOptions("http://127.0.0.1", bus, nil, nil, runner)
 	replyTarget := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "171234.5678", ThreadTS: "171234.5678"}
 
-	connector.handleOnDemandCronRequest(context.Background(), &slackevents.MessageEvent{Channel: "C123", TimeStamp: "171234.5678"}, "missing", replyTarget)
+	connector.handleOnDemandCronRequest(context.Background(), "missing", replyTarget)
 
 	assert.Equal(t, []string{"missing"}, runner.targetsSnapshot())
 	assert.Empty(t, runner.runsSnapshot())
