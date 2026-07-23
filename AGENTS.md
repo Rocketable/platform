@@ -26,6 +26,7 @@ On start, you must always read:
 ## General Workflow
 
 - Read the relevant source code before asking clarifying questions or proposing edits.
+- Whenever you create a Markdown file of any kind, including a spec or plan, and detect that you are running inside cmux, immediately open it in a preview tab with `cmux markdown open <path> --focus true`.
 - Never use `git`. Use `jj` for repository inspection and history, and always use `jj diff --git` for diffs.
 - Use `go doc` and `gopls` (use `go run golang.org/x/tools/gopls@latest --help`) often to find issues and opportunities to improve Go code.
 - Always react to GPT comments (`// GPT:`) by doing what the human partner asked and then deleting the comment when you accomplish the stated goal.
