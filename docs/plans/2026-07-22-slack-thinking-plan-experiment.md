@@ -15,7 +15,7 @@ Produce one pre-release `main` commit that groups Variant A activity task update
 - Use plain Plan titles without underscore emphasis markers while retaining existing fallback task-card titles.
 - Persist the goal starter's Slack recipient team/user and reuse it for automatic and restart goal continuations.
 - Use no `markdown_text`.
-- Do not release without live acceptance and a final ADR decision.
+- Do not release without live acceptance and an explicit final product decision.
 
 ## Steps
 

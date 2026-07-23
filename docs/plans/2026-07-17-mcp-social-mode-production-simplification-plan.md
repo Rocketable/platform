@@ -13,7 +13,7 @@ execution: code
 ## Goal Capsule
 
 - **Objective:** Remove every independently justified production concept and line from the current MCP and Social Mode implementation while preserving every approved runtime, persistence, migration, recovery, cancellation, API, and Slack behavior. A 120-Go-CLOC reduction is the stretch target.
-- **Authority:** Accepted RocketClaw ADRs remain stronger than this refactor plan. Any behavior change stops at the ADR gate.
+- **Authority:** Current tested product behavior remains stronger than this refactor plan. Any behavior change is outside this refactor's scope.
 - **Execution profile:** Characterize behavior first, simplify one subsystem at a time, and verify each subtraction before moving to the next.
 - **Stop conditions:** Stop if a proposed deletion changes provider input, history ownership, queue order, restart behavior, Slack payloads, schema behavior, or managed-only stop semantics. If all named safe candidates are exhausted below 120 production CLOC, report the shortfall and stop rather than widening deletion scope.
 - **Tail ownership:** The implementation run owns focused tests, `go test ./...`, `make lint`, `make test`, CLOC measurement, and final diff review.
@@ -70,7 +70,7 @@ The simplification must reduce concepts rather than rearrange them. File moves, 
 
 ### Scope Boundaries
 
-- No ADR meaning changes.
+- No intentional behavior changes.
 - No MCP schema, authentication, conversation ownership, attachment limit, or error-contract changes.
 - No schema version 9 and no conversion of version-7 one-session rows into paired sessions.
 - No RocketCode provider, replay format, compaction format, tool visibility, prompt framing, permission, skill, or workspace changes.
@@ -79,7 +79,7 @@ The simplification must reduce concepts rather than rearrange them. File moves, 
 
 ### Dependencies
 
-- The current accepted ADR wording and exact existing behavioral tests are the source of truth.
+- Current user-visible behavior and exact existing behavioral tests are the source of truth.
 - The installed-base migration starts from schema version 7.
 - Current baseline: 13,901 RocketClaw production Go CLOC.
 
@@ -137,7 +137,7 @@ Characterize public behavior before deleting internals. Replace implementation-c
 ### Risks and Mitigations
 
 - **Risk:** Removing eager recovery reservations lets paired startup work overtake recovery. **Mitigation:** Reserve every validated selected recovery in `app.run` before starting pending messages or goals; prove with deterministic channels.
-- **Risk:** Simplifying recovery-agent restoration changes whether a concurrent switch wins. **Mitigation:** Preserve the current startup snapshot semantics and `AgentAfterRecovery` unless an ADR explicitly changes that race.
+- **Risk:** Simplifying recovery-agent restoration changes whether a concurrent switch wins. **Mitigation:** Preserve the current startup snapshot semantics and `AgentAfterRecovery` throughout this refactor.
 - **Risk:** Simplifying gate eviction leaks pair entries or deletes a gate with waiters. **Mitigation:** Retain `refs` until an alternative proves bounded growth across repeated turns, failed registrations, removals, and pruning.
 - **Risk:** Localizing continuation cleanup loses timestamps before pending state exists. **Mitigation:** Use local rollback ownership before placeholders succeed, then transfer to pending state; test middle-continuation failure, both placeholder failures, and later compensation.
 - **Risk:** Test deletion hides semantic drift. **Mitigation:** Behavioral replacements land before production deletion and assert provider requests, database histories, Slack API forms, and queue order.
@@ -250,7 +250,7 @@ Characterize public behavior before deleting internals. Replace implementation-c
 - Slack root, continuation, attachment, placeholder, response, and cleanup payloads remain exact.
 - All Verification Contract checks pass.
 - Abandoned experimental code and tests for deleted internal shapes are removed from the working copy.
-- README and ADR meaning remain unchanged; the existing feature documentation remains accurate.
+- README meaning remains unchanged; the existing feature documentation remains accurate.
 
 ---
 

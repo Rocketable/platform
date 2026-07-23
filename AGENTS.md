@@ -52,24 +52,6 @@ On start, you must always read:
 - Rocketable Platform targets Unix-like systems only: Linux and macOS. Do not add Windows-specific code paths or preserve Windows compatibility unless the human partner explicitly changes this policy.
 - In the final response, state whether README impact was considered and whether a README update was needed.
 
-## Mandatory ADR Gate
-
-- Every change to an ADR must use plain and simple language. This rule always applies.
-- Write every ADR so a reader with no prior project context can understand every sentence. Never assume the reader knows project-specific, technical, product, AI, or LLM terms; define every necessary term in ordinary words before using it.
-- Make code references precise. Use the exact identifier in backticks, such as the actual database field name, rather than an approximation or informal description.
-- Normative product behavior lives in ADR-shaped specs. For RocketClaw, read `internal/rocketclaw/docs/adr/`. For RocketCode, read `internal/rocketcode/docs/adr/`.
-- Treat ADRs as requirements stronger than README prose, tests, current code shape, refactor goals, simplification goals, dependency-update goals, CLOC pressure, and coverage pressure. Each ADR has an append-only changelog.
-- Before changing code or tests that can affect product behavior, read the relevant ADRs. If you have not read the relevant ADRs, you are not allowed to edit behavior-affecting code or tests.
-- Behavior-affecting work includes feature work, bug fixes, refactors, simplification, deletion, dependency updates, config/default changes, message flow, prompt framing, persistence, routing, tools, permissions, scheduled/cron behavior, connector behavior, sandbox behavior, agent loading, skill loading, task delegation, RocketCode embedding, and RocketClaw embedding.
-- If unsure whether work can affect product behavior, assume it can and read the ADRs.
-- Intentional feature behavior changes must start with an ADR update, including exact replacement text and append-only changelog entries, so the human partner can inspect the concrete file diff.
-- After applying ADR edits, stop before implementation and ask this exact question: "Do you explicitly approve these ADR meaning changes?"
-- Only a human answer that clearly approves the ADR meaning change itself counts, such as "I approve these ADR changes" or "approved ADR wording." Generic implementation approval such as "proceed", "go ahead", "sounds good", or approval of a plan does not count unless it explicitly mentions ADR/spec approval.
-- Implementation code and behavior-affecting tests may begin only after the edited ADR diff is visible and the human partner explicitly approves the ADR meaning changes.
-- Bug fixes must read the relevant ADR first and change implementation to match the ADR. If the bug reveals behavior worth preserving that is absent from the ADRs, ask whether to promote it into an ADR before treating it as normative.
-- If code, tests, docs, history, or current behavior conflict with an ADR, stop and ask whether to update the ADR or change the implementation. Do not silently choose implementation over ADR.
-- Do not delete or simplify code that supports an ADR contract unless the human partner first approves the ADR meaning change. Typo, formatting, and link fixes may be made without approval only when they do not change meaning.
-
 ## Change Discipline
 
 - For bug fixes, make the smallest root-cause-aware change that fits the existing structure.
@@ -166,7 +148,6 @@ On start, you must always read:
 ## RocketClaw-Specific Requirements
 
 - Slack is RocketClaw's primary text connector.
-- Any cron reaction rerun behavior, authorization rule, channel-target restriction, rejection semantics, or scheduled cron thread behavior must be checked against `internal/rocketclaw/docs/adr/0001-runtime-capabilities.md` and `internal/rocketclaw/docs/adr/0002-behavior-contracts.md`.
 
 ## RocketCode-Specific Requirements
 

@@ -73,7 +73,7 @@ For local CLI experimentation, `rocketcode` and `rocketloop` run RocketCode dire
 - `cmd/`: runnable binaries.
 - `internal/rocketcode/`: core workspace agent runtime.
 - `internal/rocketclaw/`: connector service runtime around RocketCode.
-- `internal/openresponsesd/`: OpenResponses-shaped daemon, config loading, HTTP/WebSocket handling, provider adapters, and daemon ADRs.
+- `internal/openresponsesd/`: OpenResponses-shaped daemon, config loading, HTTP/WebSocket handling, and provider adapters.
 - `internal/funneld/`: HTTPS funnel proxy daemon and JSON route config loading.
 - `internal/quickbench/`: benchmark runner implementation.
 - `internal/quickweb/`: lightweight static applet server.
@@ -114,11 +114,3 @@ This repository uses vendored dependencies and standard Go commands:
 ```sh
 go test ./...
 ```
-
-Important behavior contracts are captured as architecture decision records under:
-
-- `internal/rocketcode/docs/adr/`
-- `internal/rocketclaw/docs/adr/`
-- `internal/openresponsesd/docs/adr/`
-
-Those architecture decision records describe the product behavior that refactors are expected to preserve.

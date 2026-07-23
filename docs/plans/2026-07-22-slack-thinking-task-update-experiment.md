@@ -20,7 +20,7 @@
 - Split an activity over 256 Unicode code points using the approved newline, sentence, whitespace, then hard-boundary priority while preserving every character.
 - Preserve MCP Markdown/mention safety and task-card HTTP(S) link behavior on the non-streaming path.
 - Add no configuration, persistence, dependency, package, exported symbol, or unrelated refactor.
-- Variant A is a test-environment commit and is not release-ready until live acceptance and a later ADR selection.
+- Variant A is a test-environment commit and is not release-ready until live acceptance and explicit selection.
 - Use Jujutsu only; never use Git.
 
 ---
@@ -185,7 +185,6 @@ Expected: PASS.
 **Files:**
 - Review: `internal/rocketclaw/slackconnector/connector.go`
 - Review: `internal/rocketclaw/slackconnector/connector_test.go`
-- Review: `internal/rocketclaw/docs/adr/0002-behavior-contracts.md`
 - Review: `docs/specs/2026-07-22-slack-thinking-task-update-experiment.md`
 
 - [ ] **Step 1: Run formatting and language-server checks**
