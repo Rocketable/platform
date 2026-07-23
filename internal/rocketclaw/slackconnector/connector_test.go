@@ -1826,14 +1826,55 @@ func TestSendExternalMCPRelayEdgeFailures(t *testing.T) {
 	})
 }
 
-func TestSendCronjobChannelThreadPostsRootThenThreadReply(t *testing.T) {
-	var (
-		posted               []url.Values
-		uploadURL, completed url.Values
-		uploadedContent      string
-	)
+func TestSendCronjobChannelThreadPostsBodyInRoot(t *testing.T) {
+	var posted url.Values
 
-	var server *httptest.Server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/chat.postMessage", r.URL.Path)
+
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		posted = cloneValues(r.PostForm)
+
+		writeJSON(t, w, map[string]any{"ok": true, "channel": "#triage", "ts": "111.222"})
+	}))
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
+	require.NoError(t, connector.SendCronjobChannelThread(context.Background(), "#triage", "cron/daily.md", "planner", "2000-01-02T03:04:05Z", "final payload", nil))
+
+	assert.Equal(t, "#triage", posted.Get("channel"))
+	assert.Empty(t, posted.Get("thread_ts"))
+	assert.Equal(t, "Cronjob `cron/daily.md` ran at `2000-01-02T03:04:05Z` with agent `planner`.", posted.Get("text"))
+
+	var blocks []struct {
+		Type string `json:"type"`
+		Text struct {
+			Text string `json:"text"`
+		} `json:"text"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(posted.Get("blocks")), &blocks))
+	require.Len(t, blocks, 3)
+	assert.Equal(t, "header", blocks[0].Type)
+	assert.Equal(t, "🔁 daily.md | planner | 2000-01-02T03:04:05Z", blocks[0].Text.Text)
+	assert.Equal(t, "divider", blocks[1].Type)
+	assert.Equal(t, "section", blocks[2].Type)
+	assert.Equal(t, "final payload", blocks[2].Text.Text)
+
+	registrations := router.cronRegistrationsSnapshot()
+	require.Len(t, registrations, 1)
+	assert.Equal(t, cronThreadRegistration{channelID: "#triage", threadTS: "111.222", agent: "planner"}, registrations[0])
+}
+
+func TestSendCronjobChannelThreadPostsAttachmentOnlyInRootThread(t *testing.T) {
+	var (
+		posted, uploadURL, completed url.Values
+		uploadedContent              string
+		server                       *httptest.Server
+	)
 
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -1842,14 +1883,9 @@ func TestSendCronjobChannelThreadPostsRootThenThreadReply(t *testing.T) {
 				return
 			}
 
-			posted = append(posted, cloneValues(r.PostForm))
+			posted = cloneValues(r.PostForm)
 
-			ts := "111.222"
-			if len(posted) == 2 {
-				ts = "333.444"
-			}
-
-			writeJSON(t, w, map[string]any{"ok": true, "channel": posted[len(posted)-1].Get("channel"), "ts": ts, "text": posted[len(posted)-1].Get("text")})
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "#triage", "ts": "111.222"})
 		case "/files.getUploadURLExternal":
 			if !assert.NoError(t, r.ParseForm()) {
 				return
@@ -1892,21 +1928,116 @@ func TestSendCronjobChannelThreadPostsRootThenThreadReply(t *testing.T) {
 	}))
 	defer server.Close()
 
-	router := newThreadRouterStub()
-	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
-	require.NoError(t, connector.SendCronjobChannelThread(context.Background(), "#triage", "cron/daily.md", "planner", "2000-01-02T03:04:05Z", "final payload", []events.OutboundAttachment{{Name: "report.txt", Data: []byte("report body")}}))
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, newThreadRouterStub(), nil)
+	require.NoError(t, connector.SendCronjobChannelThread(context.Background(), "#triage", "cron/daily.md", "planner", "2000-01-02T03:04:05Z", "", []events.OutboundAttachment{{Name: "report.txt", Data: []byte("report body")}}))
 
-	require.Len(t, posted, 2)
-	assert.Equal(t, "#triage", posted[0].Get("channel"))
-	assert.Contains(t, posted[0].Get("text"), "Cronjob `cron/daily.md` ran at `2000-01-02T03:04:05Z` with agent `planner`.")
-	assert.Empty(t, posted[0].Get("thread_ts"))
-	assert.Equal(t, "#triage", posted[1].Get("channel"))
-	assert.Equal(t, "final payload", posted[1].Get("text"))
-	assert.Equal(t, "111.222", posted[1].Get("thread_ts"))
+	var blocks []struct {
+		Type string `json:"type"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(posted.Get("blocks")), &blocks))
+	require.Len(t, blocks, 2)
+	assert.Equal(t, "header", blocks[0].Type)
+	assert.Equal(t, "divider", blocks[1].Type)
+	assert.Empty(t, posted.Get("thread_ts"))
 	assert.Equal(t, "report.txt", uploadURL.Get("filename"))
 	assert.Equal(t, "report body", uploadedContent)
 	assert.Equal(t, "#triage", completed.Get("channel_id"))
 	assert.Equal(t, "111.222", completed.Get("thread_ts"))
+}
+
+func TestSendCronjobChannelThreadHeaderLimit(t *testing.T) {
+	var posted url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/chat.postMessage", r.URL.Path)
+
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		posted = cloneValues(r.PostForm)
+
+		writeJSON(t, w, map[string]any{"ok": true, "channel": "#triage", "ts": "111.222"})
+	}))
+	defer server.Close()
+
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, newThreadRouterStub(), nil)
+	prefix := "🔁 daily.md | "
+	suffix := " | 2000-01-02T03:04:05Z"
+	tests := []struct {
+		name      string
+		agent     string
+		truncated bool
+	}{
+		{name: "ASCII over limit", agent: strings.Repeat("a", 150), truncated: true},
+		{name: "Unicode over limit", agent: strings.Repeat("界", 150), truncated: true},
+		{name: "exactly 150 runes", agent: strings.Repeat("界", 150-utf8.RuneCountInString(prefix+suffix))},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NoError(t, connector.SendCronjobChannelThread(context.Background(), "#triage", "cron/daily.md", tt.agent, "2000-01-02T03:04:05Z", "final payload", nil))
+
+			var blocks []struct {
+				Type string `json:"type"`
+				Text struct {
+					Text string `json:"text"`
+				} `json:"text"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(posted.Get("blocks")), &blocks))
+			require.NotEmpty(t, blocks)
+			assert.Equal(t, "header", blocks[0].Type)
+			assert.Len(t, []rune(blocks[0].Text.Text), 150)
+
+			if tt.truncated {
+				assert.True(t, strings.HasSuffix(blocks[0].Text.Text, "..."), "header = %q; want ellipsis suffix", blocks[0].Text.Text)
+			} else {
+				assert.Equal(t, prefix+tt.agent+suffix, blocks[0].Text.Text)
+			}
+		})
+	}
+}
+
+func TestSendCronjobChannelThreadContinuesOverflowInThread(t *testing.T) {
+	var posted []url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/chat.postMessage", r.URL.Path)
+
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		posted = append(posted, cloneValues(r.PostForm))
+		writeJSON(t, w, map[string]any{"ok": true, "channel": posted[len(posted)-1].Get("channel"), "ts": "111.222"})
+	}))
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
+	require.NoError(t, connector.SendCronjobChannelThread(context.Background(), "#triage", "cron/daily.md", "planner", "2000-01-02T03:04:05Z", strings.Repeat("x", slackBlockTextLimit*48+4), nil))
+
+	require.Len(t, posted, 2)
+	assert.Empty(t, posted[0].Get("thread_ts"))
+
+	var blocks []struct {
+		Type string `json:"type"`
+		Text struct {
+			Text string `json:"text"`
+		} `json:"text"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(posted[0].Get("blocks")), &blocks))
+	require.Len(t, blocks, 50)
+	assert.Equal(t, "🔁 daily.md | planner | 2000-01-02T03:04:05Z", blocks[0].Text.Text)
+	assert.Equal(t, "divider", blocks[1].Type)
+
+	for _, block := range blocks[2:] {
+		assert.Equal(t, "section", block.Type)
+		assert.Equal(t, strings.Repeat("x", slackBlockTextLimit), block.Text.Text)
+	}
+
+	assert.Equal(t, "111.222", posted[1].Get("thread_ts"))
+	assert.Equal(t, "xxxx", posted[1].Get("text"))
 
 	registrations := router.cronRegistrationsSnapshot()
 	require.Len(t, registrations, 1)
@@ -1914,6 +2045,19 @@ func TestSendCronjobChannelThreadPostsRootThenThreadReply(t *testing.T) {
 }
 
 func TestSendCronjobChannelThreadReportsSlackFailures(t *testing.T) {
+	t.Run("channel resolution", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "/conversations.list", r.URL.Path)
+			writeJSON(t, w, map[string]any{"ok": false, "error": "ratelimited"})
+		}))
+		defer server.Close()
+
+		connector := newTestConnector(server.URL)
+		connector.config.Channels = []config.SlackChannelConfig{{Channel: "#triage"}}
+		err := connector.SendCronjobChannelThread(context.Background(), "#triage", "cron/daily.md", "planner", "2000-01-02T03:04:05Z", "final payload", nil)
+		require.ErrorContains(t, err, `resolve configured Slack channel "#triage"`)
+	})
+
 	t.Run("root", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, "/chat.postMessage", r.URL.Path)
@@ -1950,7 +2094,7 @@ func TestSendCronjobChannelThreadReportsSlackFailures(t *testing.T) {
 		defer server.Close()
 
 		connector := newTestConnector(server.URL)
-		err := connector.SendCronjobChannelThread(context.Background(), "#triage", "cron/daily.md", "planner", "2000-01-02T03:04:05Z", "final payload", nil)
+		err := connector.SendCronjobChannelThread(context.Background(), "#triage", "cron/daily.md", "planner", "2000-01-02T03:04:05Z", strings.Repeat("x", slackBlockTextLimit*48+4), nil)
 		require.ErrorContains(t, err, "send Slack cronjob thread reply")
 		assert.Equal(t, 2, posts)
 		assert.Equal(t, 1, deletes)

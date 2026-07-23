@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"mime"
 	neturl "net/url"
+	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -426,12 +427,33 @@ func (c *Connector) CleanupExternalMCPRelay(ctx context.Context, replyTarget *ev
 
 // SendCronjobChannelThread posts one scheduled cronjob result in a new Slack channel thread.
 func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, relativePath, agent, ranAt, text string, attachments []events.OutboundAttachment) error {
-	channelID = strings.TrimSpace(channelID)
+	header := slackTruncatedText("🔁 "+path.Base(relativePath)+" | "+agent+" | "+ranAt, 150, "...")
+	bodyChunks := primarytext.SplitSlackText(text, slackBlockTextLimit, slackBlockTextLimit)
+	rootBodyCount := min(len(bodyChunks), 48)
 
-	root, err := c.postThreadRoot(ctx, channelID, "Cronjob `"+relativePath+"` ran at `"+ranAt+"` with agent `"+agent+"`.", "send Slack cronjob thread root")
+	blocks := make([]slack.Block, 0, rootBodyCount+2)
+
+	blocks = append(blocks,
+		slack.NewHeaderBlock(slack.NewTextBlockObject(slack.PlainTextType, header, false, false)),
+		slack.NewDividerBlock(),
+	)
+	for _, chunk := range bodyChunks[:rootBodyCount] {
+		blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, chunk, false, false), nil, nil))
+	}
+
+	fallbackText := "Cronjob `" + relativePath + "` ran at `" + ranAt + "` with agent `" + agent + "`."
+
+	channelID, err := c.resolveConfiguredChannelID(ctx, channelID)
 	if err != nil {
 		return err
 	}
+
+	postedChannelID, threadTS, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...))
+	if err != nil {
+		return fmt.Errorf("send Slack cronjob thread root: %w", err)
+	}
+
+	root := events.TextConversationTarget{ChannelID: postedChannelID, MessageID: threadTS, ThreadID: threadTS}
 
 	delivered := false
 	defer func() {
@@ -445,8 +467,8 @@ func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, rel
 		c.deleteSlackMessage(cleanupCtx, slackReplyState{ChannelID: root.ChannelID, MessageTS: root.MessageID}, "delete failed Slack cronjob thread root")
 	}()
 
-	if strings.TrimSpace(text) != "" {
-		if _, err := c.postResponseChunks(ctx, root.ChannelID, root.ThreadID, primarytext.SplitSlackText(text, slackPreferredChunkSize, slackTextLimit), nil); err != nil {
+	if len(bodyChunks) > rootBodyCount {
+		if _, err := c.postResponseChunks(ctx, root.ChannelID, root.ThreadID, bodyChunks[rootBodyCount:], nil); err != nil {
 			return fmt.Errorf("send Slack cronjob thread reply: %w", err)
 		}
 	}
