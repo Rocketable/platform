@@ -9,7 +9,7 @@
 | `🛑`, `⏹️` | Slack reactions `:octagonal_sign:`, `:stop_button:` | Slack | Stops the active managed-conversation turn. | Works as an exact message or reaction in a managed thread. Stop feedback is marker-only: RocketClaw adds `❗` and sends no stop text. |
 | `❗` | Slack `:exclamation:` | Slack | Interruption or rejection marker. | Added by RocketClaw after stop/interruption and for duplicate active-goal rejection. Humans generally do not use this as a command. |
 | `✅` | Slack `:white_check_mark:` | Slack | Completion marker. | Added when a goal reaches `complete`. Not added for `blocked`, `stopped`, or `budget_exhausted`. |
-| `🔂` | `:repeat_one:`, Slack reaction `repeat_one` | Slack | Runs a one-off cron request by text prefix or reaction. | Examples: `🔂 daily`, `🔂 daily.md`. Reaction reruns inspect the acted-on message and require exactly one deterministic cron target. |
+| `🔂` | `:repeat_one:` | Slack | Runs a one-off cron request by text prefix. | Examples: `🔂 daily`, `🔂 daily.md`. |
 | `🎛` | `:control_knobs:` | Slack managed conversations | Switches the persisted agent for the managed conversation. | `🎛 agent-name` switches to a configured channel agent. Bare `🎛` opens an agent selector usable only by the user who sent the control message. Does not route to RocketCode as prompt input. |
 | `🤖` | Slack `:robot_face:` | Slack | Processing/accepted marker. | Added when RocketClaw accepts a Slack-originated or relayed turn; removed after final response delivery. |
 | `⏳` | Slack `:hourglass_flowing_sand:` | Slack | Buffered or in-progress marker. | Marks stacked or buffered Slack messages. Removed when processing advances. |
@@ -23,7 +23,7 @@
 | Continue a conversation | Reply in a known managed thread. | Uses only that thread's persisted history. |
 | Message with another human mention | Mention RocketClaw too when the message also pings another person, bot, broadcast target, or user group. | Managed-thread replies that ping someone else are suppressed unless RocketClaw is also mentioned. Raw unresolved `@word` text is not treated as a Slack ping. |
 | Agent switch | `🎛 agent-name` or bare `🎛` as the whole message. | `agent-name` must be in the channel's configured `agents` list. Bare `🎛` opens a Slack-native selector for that list. |
-| One-off cron | `🔂 daily`, `🔂 daily.md`, or a supported `repeat_one` reaction. | Requests and reruns can run cronjobs whose required `channel` matches the acted-on configured channel. |
+| One-off cron | `🔂 daily` or `🔂 daily.md`. | Any top-level cronjob can be started from any configured Slack channel. |
 | External MCP conversation | Call `session_prompt` with an external conversation ID, agent, and configured channel. | The ID owns one private MCP session and one managed Slack session on the same thread. The MCP agent stays fixed. MCP history copies into managed history; Slack history does not copy back. |
 
 ## Goal Examples
@@ -97,7 +97,7 @@ For general `permission` syntax, action values, guardrails, and approval reviewe
 | `⏹️` | `:stop_button:`, `stop_button` | Stop command or reaction. |
 | `❗` | `:exclamation:`, `exclamation` | Interruption or rejection marker. |
 | `✅` | `:white_check_mark:`, `white_check_mark` | Completion marker. |
-| `🔂` | `:repeat_one:`, `repeat_one` | Cron one-off request prefix or reaction. |
+| `🔂` | `:repeat_one:` | Cron one-off request prefix. |
 | `🎛` | `:control_knobs:` | Managed conversation agent switch command. |
 | `🤖` | `:robot_face:`, `robot_face` | Slack processing/accepted marker. |
 | `⏳` | `:hourglass_flowing_sand:`, `hourglass_flowing_sand` | Slack buffered or in-progress marker. |
