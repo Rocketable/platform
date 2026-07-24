@@ -17,6 +17,7 @@
 - Emoji and dollar forms must produce identical stored objective text, queue behavior, placeholders, routing, and feedback.
 - Managed threads allow all four commands; root app mentions allow only goal and cron.
 - Bare `$`, unknown commands, unavailable commands, and `$stop` with arguments produce ephemeral help and are never submitted as prompts.
+- Ephemeral command help uses a Block Kit table; root app-mention help omits `thread_ts` because no active thread exists yet.
 - Goal validation messages use canonical `$goal` examples.
 - Delete `internal/rocketclaw/primarytext`; keep its remaining behavior private to `slackconnector`.
 - Do not alter app, cronjob, events, configuration, or externally visible connector behavior beyond canonical goal error examples and emoji/dollar parity.
@@ -226,7 +227,7 @@ if isCommand {
 		return
 	case "stop":
 		if args != "" {
-			c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, slackDollarCommandHelp)
+			c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, slackDollarCommandHelp, slackDollarCommandHelpTable())
 			return
 		}
 		if err := c.stopSlackThread(ctx, ev.Channel, threadTS); err != nil {
@@ -237,7 +238,7 @@ if isCommand {
 		goal, rejection = harnessbridge.ParseGoalRequest(args)
 		isGoal = true
 	default:
-		c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, slackDollarCommandHelp)
+		c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, slackDollarCommandHelp, slackDollarCommandHelpTable())
 		return
 	}
 }
@@ -265,7 +266,7 @@ if isCommand {
 		goal, rejection = harnessbridge.ParseGoalRequest(args)
 		isGoal = true
 	default:
-		c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, slackDollarCommandHelp)
+		c.postSlackEphemeral(ctx, ev.Channel, "", ev.User, slackDollarCommandHelp, slackDollarCommandHelpTable())
 		return
 	}
 }

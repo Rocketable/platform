@@ -40,10 +40,10 @@ const (
 	slackThinkingFlushInterval                                                                                                   = 2 * time.Second
 	slackQuestionCustomActionID, slackQuestionCustomViewCallbackID, slackQuestionCustomBlockID, slackQuestionCustomInputActionID = "custom_answer", "ask_user_question_custom", "custom_answer", "answer"
 	slackAgentSwitchSelectActionID                                                                                               = "agent_switch_select"
-	slackDollarCommandHelp                                                                                                       = "$goal <objective>       🏁 Start a goal\n" +
-		"$stop                   🛑 Stop the active turn\n" +
-		"$cron <job>             🔂 Run a cron job\n" +
-		"$agent [name]           🎛 Switch or select an agent"
+	slackDollarCommandHelp                                                                                                       = "$goal <objective> - 🏁 Start a goal\n" +
+		"$stop - 🛑 Stop the active turn\n" +
+		"$cron <job> - 🔂 Run a cron job\n" +
+		"$agent [name] - 🎛 Switch or select an agent"
 )
 
 var errSlackDownloadLimitExceeded = errors.New("slack file download exceeded size limit")
@@ -1739,7 +1739,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 				return
 			case "stop":
 				if args != "" {
-					c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, slackDollarCommandHelp)
+					c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, slackDollarCommandHelp, slackDollarCommandHelpTable())
 					return
 				}
 
@@ -1786,7 +1786,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 
 				return
 			default:
-				c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, slackDollarCommandHelp)
+				c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, slackDollarCommandHelp, slackDollarCommandHelpTable())
 				return
 			}
 		}
@@ -1956,7 +1956,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 			goal, rejection = harnessbridge.ParseGoalRequest(args)
 			isGoal = true
 		default:
-			c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, slackDollarCommandHelp)
+			c.postSlackEphemeral(ctx, ev.Channel, "", ev.User, slackDollarCommandHelp, slackDollarCommandHelpTable())
 			return
 		}
 	}
@@ -2186,7 +2186,15 @@ func (c *Connector) handleSlackAgentSwitchSelection(ctx context.Context, userID 
 	}
 }
 
-func (c *Connector) postSlackEphemeral(ctx context.Context, channelID, threadTS, userID, text string) {
+func slackDollarCommandHelpTable() *slack.TableBlock {
+	return slack.NewTableBlock("").
+		AddRow(slack.NewTableRawTextCell("$goal <objective>"), slack.NewTableRawTextCell("🏁"), slack.NewTableRawTextCell("Start a goal")).
+		AddRow(slack.NewTableRawTextCell("$stop"), slack.NewTableRawTextCell("🛑"), slack.NewTableRawTextCell("Stop the active turn")).
+		AddRow(slack.NewTableRawTextCell("$cron <job>"), slack.NewTableRawTextCell("🔂"), slack.NewTableRawTextCell("Run a cron job")).
+		AddRow(slack.NewTableRawTextCell("$agent [name]"), slack.NewTableRawTextCell("🎛"), slack.NewTableRawTextCell("Switch or select an agent"))
+}
+
+func (c *Connector) postSlackEphemeral(ctx context.Context, channelID, threadTS, userID, text string, blocks ...slack.Block) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return
@@ -2195,6 +2203,10 @@ func (c *Connector) postSlackEphemeral(ctx context.Context, channelID, threadTS,
 	options := []slack.MsgOption{slack.MsgOptionText(text, false)}
 	if threadTS != "" {
 		options = append(options, slack.MsgOptionTS(threadTS))
+	}
+
+	if len(blocks) > 0 {
+		options = append(options, slack.MsgOptionBlocks(blocks...))
 	}
 
 	if _, err := c.api.PostEphemeralContext(ctx, channelID, userID, options...); err != nil {

@@ -33,14 +33,14 @@ Managed threads allow all four commands. Root app mentions allow goal and cron; 
 
 ## Help And Errors
 
-Bare `$`, unknown command names, commands unavailable in the current Slack context, and `$stop` with arguments send the triggering user an ephemeral command list in the triggering thread and perform no other action:
+Bare `$`, unknown command names, commands unavailable in the current Slack context, and `$stop` with arguments send the triggering user an ephemeral Block Kit table and perform no other action. Managed-thread help stays in the active thread. Root app-mention help omits `thread_ts`, because Slack only displays threaded ephemeral messages when a thread is already active.
 
-```text
-$goal <objective>       🏁 Start a goal
-$stop                   🛑 Stop the active turn
-$cron <job>             🔂 Run a cron job
-$agent [name]           🎛 Switch or select an agent
-```
+| Command | Emoji Alias | Action |
+| --- | --- | --- |
+| `$goal <objective>` | `🏁` | Start a goal |
+| `$stop` | `🛑` | Stop the active turn |
+| `$cron <job>` | `🔂` | Run a cron job |
+| `$agent [name]` | `🎛` | Switch or select an agent |
 
 Known commands retain their current feedback. Goal validation messages use canonical `$goal` examples. Invalid cron targets use existing cron feedback, and invalid agent names use existing ephemeral feedback. Ephemeral-post failures use the existing logging behavior.
 

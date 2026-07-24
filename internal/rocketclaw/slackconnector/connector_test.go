@@ -5563,7 +5563,7 @@ func TestHandleMessageEventShowsDollarCommandHelp(t *testing.T) {
 		connector.handleMessageEvent(t.Context(), ev, slackNativeForward{})
 
 		require.Len(t, ephemeral, i+1)
-		assert.Equal(t, slackDollarCommandHelp, ephemeral[i].Get("text"))
+		assertSlackCommandHelpTable(t, ephemeral[i])
 		assert.Equal(t, "171234.5678", ephemeral[i].Get("thread_ts"))
 	}
 
@@ -5574,6 +5574,33 @@ func TestHandleMessageEventShowsDollarCommandHelp(t *testing.T) {
 	assert.Empty(t, router.goalStops)
 	assert.Empty(t, router.switched)
 	assert.Empty(t, runner.targetsSnapshot())
+}
+
+func assertSlackCommandHelpTable(t *testing.T, values url.Values) {
+	t.Helper()
+
+	assert.Equal(t, slackDollarCommandHelp, values.Get("text"))
+
+	type tableCell struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+
+	type tableBlock struct {
+		Type string        `json:"type"`
+		Rows [][]tableCell `json:"rows"`
+	}
+
+	var blocks []tableBlock
+	require.NoError(t, json.Unmarshal([]byte(values.Get("blocks")), &blocks))
+	require.Len(t, blocks, 1)
+	assert.Equal(t, "table", blocks[0].Type)
+	assert.Equal(t, [][]tableCell{
+		{{Type: "raw_text", Text: "$goal <objective>"}, {Type: "raw_text", Text: "🏁"}, {Type: "raw_text", Text: "Start a goal"}},
+		{{Type: "raw_text", Text: "$stop"}, {Type: "raw_text", Text: "🛑"}, {Type: "raw_text", Text: "Stop the active turn"}},
+		{{Type: "raw_text", Text: "$cron <job>"}, {Type: "raw_text", Text: "🔂"}, {Type: "raw_text", Text: "Run a cron job"}},
+		{{Type: "raw_text", Text: "$agent [name]"}, {Type: "raw_text", Text: "🎛"}, {Type: "raw_text", Text: "Switch or select an agent"}},
+	}, blocks[0].Rows)
 }
 
 func TestHandleInteractiveSlackAgentSelectorRequiresRequester(t *testing.T) {
@@ -6069,9 +6096,9 @@ func TestHandleAppMentionEventShowsDollarCommandHelp(t *testing.T) {
 		connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
 
 		require.Len(t, ephemeral, i+1)
-		assert.Equal(t, slackDollarCommandHelp, ephemeral[i].Get("text"))
+		assertSlackCommandHelpTable(t, ephemeral[i])
 		assert.Equal(t, "U123", ephemeral[i].Get("user"))
-		assert.Equal(t, event.TimeStamp, ephemeral[i].Get("thread_ts"))
+		assert.Empty(t, ephemeral[i].Get("thread_ts"))
 	}
 
 	assert.Empty(t, router.startedSnapshot())
