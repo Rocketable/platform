@@ -315,11 +315,50 @@ func TestThreadBridgeManagerRegistersCronThreadWithoutSubmitting(t *testing.T) {
 	assert.Equal(t, harnessbridge.ThreadState{Agent: "planner", CreatedBy: harnessbridge.ThreadCreatedByCron}, thread)
 }
 
+func TestThreadBridgeManagerRegistersThreadWithoutSubmitting(t *testing.T) {
+	store := newTestSessionService(t, t.TempDir())
+	bridge := new(fakeDirectBridge)
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
+	target := slackTarget("C123", "111.222")
+
+	created, err := manager.RegisterThread(target, "planner")
+	require.NoError(t, err)
+	require.True(t, created)
+
+	conversationID := harnessbridge.SlackThreadConversationID("C123", "111.222")
+	thread, ok, err := store.Thread(conversationID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, harnessbridge.ThreadState{Agent: "planner"}, thread)
+	assert.Empty(t, bridge.submits)
+	entries, err := store.ObserveEntries(t.Context(), conversationID, 0)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+
+	created, err = manager.RegisterThread(target, "other")
+	require.NoError(t, err)
+	assert.False(t, created)
+
+	thread, ok, err = store.Thread(conversationID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, harnessbridge.ThreadState{Agent: "planner"}, thread)
+
+	inbound := newThreadInboundMessage("first agentic turn", "222.333", "111.222")
+	handled, err := manager.SubmitThreadReply(t.Context(), target, inbound)
+	require.NoError(t, err)
+	require.True(t, handled)
+	require.Len(t, bridge.submits, 1)
+	assert.Equal(t, inbound, bridge.submits[0])
+}
+
 func TestThreadBridgeManagerRejectsMissingSlackThreadTarget(t *testing.T) {
 	manager := newThreadBridgeManager(nil, newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
+	_, err := manager.RegisterThread(slackTarget("", ""), "main")
+	require.ErrorContains(t, err, "text thread target is required")
 
 	inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
-	err := manager.StartThread(t.Context(), "main", slackTarget("", ""), inbound)
+	err = manager.StartThread(t.Context(), "main", slackTarget("", ""), inbound)
 	require.ErrorContains(t, err, "slack thread target is required")
 
 	inbound.SlackReply = &events.SlackReplyTarget{ChannelID: " ", ThreadTS: " "}

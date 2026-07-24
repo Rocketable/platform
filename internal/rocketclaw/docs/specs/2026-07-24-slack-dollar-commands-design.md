@@ -33,7 +33,7 @@ Managed threads allow all four commands. Root app mentions allow goal and cron; 
 
 ## Help And Errors
 
-Bare `$`, unknown command names, commands unavailable in the current Slack context, and `$stop` with arguments send the triggering user an ephemeral Block Kit table and perform no other action. Managed-thread help stays in the active thread. Root app-mention help omits `thread_ts`, because Slack only displays threaded ephemeral messages when a thread is already active.
+Bare `$`, unknown command names, commands unavailable in the current Slack context, and `$stop` with arguments post the Block Kit help table permanently and perform no agent turn. In a root app mention, the mention remains the root, the help table is the first thread reply, and RocketClaw registers the thread with the channel's first configured agent without adding either message to agentic context. The next human reply is the first agentic turn.
 
 | Command | Emoji Alias | Action |
 | --- | --- | --- |

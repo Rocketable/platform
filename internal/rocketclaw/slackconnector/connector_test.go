@@ -5562,13 +5562,12 @@ func TestHandleMessageEventShowsDollarCommandHelp(t *testing.T) {
 		ev := newSlackMessageEvent("171234.9999", "171234.5678", text)
 		connector.handleMessageEvent(t.Context(), ev, slackNativeForward{})
 
-		require.Len(t, ephemeral, i+1)
-		assertSlackCommandHelpTable(t, ephemeral[i])
-		assert.Equal(t, "171234.5678", ephemeral[i].Get("thread_ts"))
+		require.Len(t, posted, i+1)
+		assertSlackCommandHelpTable(t, posted[i])
+		assert.Equal(t, "171234.5678", posted[i].Get("thread_ts"))
 	}
 
-	require.Len(t, ephemeral, 3)
-	assert.Empty(t, posted)
+	assert.Empty(t, ephemeral)
 	assert.Empty(t, router.repliesSnapshot())
 	assert.Empty(t, router.goalStarts)
 	assert.Empty(t, router.goalStops)
@@ -6095,16 +6094,78 @@ func TestHandleAppMentionEventShowsDollarCommandHelp(t *testing.T) {
 		event.Text = text
 		connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
 
-		require.Len(t, ephemeral, i+1)
-		assertSlackCommandHelpTable(t, ephemeral[i])
-		assert.Equal(t, "U123", ephemeral[i].Get("user"))
-		assert.Empty(t, ephemeral[i].Get("thread_ts"))
+		require.Len(t, posted, i+1)
+		assertSlackCommandHelpTable(t, posted[i])
+		assert.Equal(t, event.TimeStamp, posted[i].Get("thread_ts"))
+		require.Len(t, router.threadRegistrations, i+1)
+		assert.Equal(t, threadRegistration{channelID: "C123", threadTS: event.TimeStamp, agent: "social"}, router.threadRegistrations[i])
 	}
 
+	assert.Empty(t, ephemeral)
 	assert.Empty(t, router.startedSnapshot())
 	assert.Empty(t, router.goalStarts)
 	assert.Empty(t, runner.targetsSnapshot())
-	assert.Empty(t, posted)
+}
+
+func TestHandleAppMentionEventCleansUpUnregisteredDollarCommandHelp(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		errStart error
+		existing bool
+	}{
+		{name: "registration failed", errStart: assert.AnError},
+		{name: "duplicate event", existing: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bus := events.New()
+			defer bus.Close()
+
+			var posted, deleted []url.Values
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/conversations.info":
+					writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
+				case "/chat.postMessage":
+					if !assert.NoError(t, r.ParseForm()) {
+						return
+					}
+
+					posted = append(posted, cloneValues(r.PostForm))
+
+					writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
+				case "/chat.delete":
+					if !assert.NoError(t, r.ParseForm()) {
+						return
+					}
+
+					deleted = append(deleted, cloneValues(r.PostForm))
+
+					writeJSON(t, w, map[string]any{"ok": true})
+				default:
+					assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			router := newThreadRouterStub()
+			router.errStart = tt.errStart
+			router.registerExisting = tt.existing
+			connector := newTestConnectorWithOptions(server.URL, bus, nil, router, newOneOffCronjobLoaderStub())
+			connector.botUserID = "U999"
+			connector.config.Channels = []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social"}, AllowedUserIDs: []string{"U123"}}}
+
+			event := newSlackAppMentionEvent()
+			event.Text = "<@U999> $"
+			connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
+
+			require.Len(t, posted, 1)
+			require.Len(t, deleted, 1)
+			assert.Equal(t, "C123", deleted[0].Get("channel"))
+			assert.Equal(t, "555.666", deleted[0].Get("ts"))
+			assert.Empty(t, router.startedSnapshot())
+		})
+	}
 }
 
 func TestHandleMessageEventRunsHyphenOnDemandCronInManagedThread(t *testing.T) {
@@ -7004,27 +7065,29 @@ func readOneOutbound(t *testing.T, bus *events.Bus) *events.OutboundMessage {
 }
 
 type threadRouterStub struct {
-	mu                 sync.Mutex
-	started            []threadStartCall
-	replies            []threadReplyCall
-	cronRegistrations  []cronThreadRegistration
-	switched           []threadAgentSwitchCall
-	threadAgentReads   []threadAgentReadCall
-	goalStarts         []goalThreadStartCall
-	goalStops          []goalThreadStopCall
-	threadAgent        string
-	switchHandled      bool
-	threadAgentHandled bool
-	submitHandled      bool
-	prepareHandled     bool
-	prepareResults     []bool
-	errStart           error
-	errSubmit          error
-	errPrepare         error
-	errSwitch          error
-	stopResult         *events.SlackReplyTarget
-	onStart            func()
-	onReply            func()
+	mu                  sync.Mutex
+	started             []threadStartCall
+	replies             []threadReplyCall
+	cronRegistrations   []cronThreadRegistration
+	threadRegistrations []threadRegistration
+	switched            []threadAgentSwitchCall
+	threadAgentReads    []threadAgentReadCall
+	goalStarts          []goalThreadStartCall
+	goalStops           []goalThreadStopCall
+	threadAgent         string
+	switchHandled       bool
+	threadAgentHandled  bool
+	submitHandled       bool
+	prepareHandled      bool
+	prepareResults      []bool
+	errStart            error
+	errSubmit           error
+	errPrepare          error
+	errSwitch           error
+	registerExisting    bool
+	stopResult          *events.SlackReplyTarget
+	onStart             func()
+	onReply             func()
 }
 
 func newThreadRouterStub() *threadRouterStub {
@@ -7045,6 +7108,10 @@ type threadReplyCall struct {
 }
 
 type cronThreadRegistration struct {
+	channelID, threadTS, agent string
+}
+
+type threadRegistration struct {
 	channelID, threadTS, agent string
 }
 
@@ -7113,6 +7180,15 @@ func (s *threadRouterStub) RegisterCronThread(_ context.Context, target events.T
 	s.mu.Unlock()
 
 	return errStart
+}
+
+func (s *threadRouterStub) RegisterThread(target events.TextConversationTarget, agent string) (bool, error) {
+	s.mu.Lock()
+	s.threadRegistrations = append(s.threadRegistrations, threadRegistration{channelID: target.ChannelID, threadTS: target.ThreadID, agent: agent})
+	errStart := s.errStart
+	s.mu.Unlock()
+
+	return !s.registerExisting && errStart == nil, errStart
 }
 
 func (s *threadRouterStub) SwitchThreadAgent(target events.TextConversationTarget, agent string) (bool, error) {

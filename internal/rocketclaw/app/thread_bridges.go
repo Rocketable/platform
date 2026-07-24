@@ -400,6 +400,23 @@ func (m *threadBridgeManager) RegisterCronThread(_ context.Context, target event
 	return err
 }
 
+func (m *threadBridgeManager) RegisterThread(target events.TextConversationTarget, agent string) (bool, error) {
+	conversationID := m.text.conversationID(target)
+	if conversationID == "" {
+		return false, errors.New("text thread target is required")
+	}
+
+	if _, ok, err := m.store.Thread(conversationID); err != nil {
+		return false, fmt.Errorf("load text thread bridge: %w", err)
+	} else if ok {
+		return false, nil
+	}
+
+	_, err := m.ensureStartedThread(&threadStart{conversationID: conversationID, agent: agent, outputTargets: m.text.outputTargets, persistErr: "persist text thread bridge"})
+
+	return err == nil, err
+}
+
 func (m *threadBridgeManager) SubmitExternalMCP(ctx context.Context, agent, conversationID string, inbound *events.InboundMessage, activation harnessbridge.ActivationHook) error {
 	managed, _, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: agent}, m.text.outputTargets, false)
 	if err != nil {

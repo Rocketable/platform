@@ -1739,7 +1739,10 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 				return
 			case "stop":
 				if args != "" {
-					c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, slackDollarCommandHelp, slackDollarCommandHelpTable())
+					if _, err := c.postSlackDollarCommandHelp(ctx, ev.Channel, threadTS); err != nil {
+						c.log.Warn("post Slack dollar command help", "error", err, "channel", ev.Channel, "thread_ts", threadTS)
+					}
+
 					return
 				}
 
@@ -1786,7 +1789,10 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 
 				return
 			default:
-				c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, slackDollarCommandHelp, slackDollarCommandHelpTable())
+				if _, err := c.postSlackDollarCommandHelp(ctx, ev.Channel, threadTS); err != nil {
+					c.log.Warn("post Slack dollar command help", "error", err, "channel", ev.Channel, "thread_ts", threadTS)
+				}
+
 				return
 			}
 		}
@@ -1956,7 +1962,24 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 			goal, rejection = harnessbridge.ParseGoalRequest(args)
 			isGoal = true
 		default:
-			c.postSlackEphemeral(ctx, ev.Channel, "", ev.User, slackDollarCommandHelp, slackDollarCommandHelpTable())
+			help, err := c.postSlackDollarCommandHelp(ctx, ev.Channel, threadTS)
+			if err != nil {
+				c.log.Warn("post Slack dollar command help", "error", err, "channel", ev.Channel, "thread_ts", threadTS)
+				return
+			}
+
+			created, err := c.threadRouter.RegisterThread(events.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS}, agent)
+			if err != nil {
+				c.deleteSlackMessage(ctx, help, "delete Slack command help after thread registration failure")
+				c.log.Error("register Slack command help thread", "error", err, "channel", ev.Channel, "thread_ts", threadTS, "agent", agent)
+
+				return
+			}
+
+			if !created {
+				c.deleteSlackMessage(ctx, help, "delete duplicate Slack command help")
+			}
+
 			return
 		}
 	}
@@ -2194,7 +2217,16 @@ func slackDollarCommandHelpTable() *slack.TableBlock {
 		AddRow(slack.NewTableRawTextCell("$agent [name]"), slack.NewTableRawTextCell("🎛"), slack.NewTableRawTextCell("Switch or select an agent"))
 }
 
-func (c *Connector) postSlackEphemeral(ctx context.Context, channelID, threadTS, userID, text string, blocks ...slack.Block) {
+func (c *Connector) postSlackDollarCommandHelp(ctx context.Context, channelID, threadTS string) (slackReplyState, error) {
+	postedChannelID, messageTS, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(slackDollarCommandHelp, false), slack.MsgOptionTS(threadTS), slack.MsgOptionBlocks(slackDollarCommandHelpTable()))
+	if err != nil {
+		return slackReplyState{}, fmt.Errorf("post Slack dollar command help: %w", err)
+	}
+
+	return slackReplyState{ChannelID: postedChannelID, MessageTS: messageTS}, nil
+}
+
+func (c *Connector) postSlackEphemeral(ctx context.Context, channelID, threadTS, userID, text string) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return
@@ -2203,10 +2235,6 @@ func (c *Connector) postSlackEphemeral(ctx context.Context, channelID, threadTS,
 	options := []slack.MsgOption{slack.MsgOptionText(text, false)}
 	if threadTS != "" {
 		options = append(options, slack.MsgOptionTS(threadTS))
-	}
-
-	if len(blocks) > 0 {
-		options = append(options, slack.MsgOptionBlocks(blocks...))
 	}
 
 	if _, err := c.api.PostEphemeralContext(ctx, channelID, userID, options...); err != nil {

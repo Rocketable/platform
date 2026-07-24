@@ -16,7 +16,7 @@ Dollar commands are canonical. RocketClaw translates the listed emoji and Slack 
 | `⏳` |  | Slack `:hourglass_flowing_sand:` | Slack | Buffered or in-progress marker. | Marks stacked or buffered Slack messages. Removed when processing advances. |
 | `📡` |  | Slack `:satellite_antenna:` | Slack | External MCP relay marker. | Added to Slack relay messages created from External MCP prompts. |
 
-Bare `$` and unknown or unavailable dollar commands show the command list in an ephemeral Slack message.
+Bare `$` and unknown or unavailable dollar commands post the command table permanently. A root help mention keeps the mention as the thread root and posts help as the first reply without starting an agent turn.
 Agent controls are consumed by RocketClaw and do not route to RocketCode as prompts.
 
 ## Slack Channel Scenarios

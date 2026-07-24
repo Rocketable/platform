@@ -40,7 +40,7 @@ The runnable entry point is `cmd/rocketclaw`. Run `rocketclaw help` for setup, v
 
 Slack native forwarded-thread expansion requires the bot scopes `channels:read` and `channels:history`; reinstall the Slack app after adding scopes. RocketClaw expands only source channels Slack confirms are public and that the bot can already read. It never auto-joins a channel. Private, inaccessible, malformed, or partially unreadable source threads retain only Slack's forwarded preview.
 
-Slack configuration uses direct `slack.channels` mappings. Each mapping names a channel, an ordered non-empty `agents` list, and its authorized `allowed_user_ids`. An authorized app mention in a configured channel starts a fresh managed thread whose initiating message is its first turn. Later replies use only that thread's persisted history.
+Slack configuration uses direct `slack.channels` mappings. Each mapping names a channel, an ordered non-empty `agents` list, and its authorized `allowed_user_ids`. An authorized app mention in a configured channel starts a fresh managed thread whose initiating message is its first turn. A command-help mention is the exception: RocketClaw posts permanent help as the first thread reply without adding either message to agent history, so the next human reply is the first turn. Later replies use only that thread's persisted history.
 
 On daemon startup, RocketClaw upgrades the prior nested `slack.social_mode.channels` shape in place. It validates the candidate first, rewrites the config with direct `slack.channels`, and preserves the config file permissions; inspection commands remain read-only.
 
