@@ -389,6 +389,18 @@ func (m *threadBridgeManager) InterruptThread(target events.TextConversationTarg
 	return managed.bridge.InterruptActiveTurn(), nil
 }
 
+func (m *threadBridgeManager) InterruptConversation(conversationID string) *events.InboundMessage {
+	m.mu.Lock()
+	managed := m.bridges[conversationID]
+	m.mu.Unlock()
+
+	if managed == nil {
+		return nil
+	}
+
+	return managed.bridge.InterruptActiveTurn()
+}
+
 func (m *threadBridgeManager) RegisterCronThread(_ context.Context, target events.TextConversationTarget, agent string) error {
 	conversationID := m.text.conversationID(target)
 	if conversationID == "" {

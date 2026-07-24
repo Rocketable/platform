@@ -259,7 +259,7 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
 		rootCount int
 	)
 
-	textRelay := func(_ context.Context, _ events.ExternalMCPRelay, reply *events.InboundMessage, _ string) (*events.InboundMessage, error) {
+	textRelay := func(_ context.Context, _ *events.ExternalMCPRelay, reply *events.InboundMessage, _ string) (*events.InboundMessage, error) {
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -344,11 +344,14 @@ func TestLegacyExternalMCPFollowupUsesExistingSharedConversation(t *testing.T) {
 	require.NoError(t, store.UpsertExternalMCPSession("existing-1", &harnessbridge.ExternalMCPSessionState{Agent: "planner", ManagedConversationID: conversationID, SlackChannel: "#ops"}))
 
 	relayCalls := 0
+	relayConversationID := ""
 	usedAgent := ""
 	usedConversationID := ""
 	errRelay := errors.New("post failed")
-	textRelay := func(context.Context, events.ExternalMCPRelay, *events.InboundMessage, string) (*events.InboundMessage, error) {
+	textRelay := func(_ context.Context, relay *events.ExternalMCPRelay, _ *events.InboundMessage, _ string) (*events.InboundMessage, error) {
 		relayCalls++
+		relayConversationID = relay.ConversationID
+
 		return nil, errRelay
 	}
 	submit := func(ctx context.Context, agent, gotConversationID string, inbound *events.InboundMessage, activation harnessbridge.ActivationHook) error {
@@ -373,6 +376,7 @@ func TestLegacyExternalMCPFollowupUsesExistingSharedConversation(t *testing.T) {
 	assert.Equal(t, 1, relayCalls)
 	assert.Equal(t, "planner", usedAgent)
 	assert.Equal(t, conversationID, usedConversationID)
+	assert.Equal(t, conversationID, relayConversationID)
 }
 
 func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
@@ -404,7 +408,7 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 
 			cleanupCalls := 0
 			relayCalls := 0
-			textRelay := func(context.Context, events.ExternalMCPRelay, *events.InboundMessage, string) (*events.InboundMessage, error) {
+			textRelay := func(context.Context, *events.ExternalMCPRelay, *events.InboundMessage, string) (*events.InboundMessage, error) {
 				relayCalls++
 
 				if tt.relayErr != nil {

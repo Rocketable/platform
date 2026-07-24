@@ -551,6 +551,9 @@ func TestThreadBridgeManagerExternalMCPAndSlackUsePairedSeparateBridges(t *testi
 	require.NoError(t, err)
 	assert.Equal(t, 1, bridges[managedConversationID].interrupts)
 	assert.Zero(t, bridges[privateConversationID].interrupts)
+
+	manager.InterruptConversation(privateConversationID)
+	assert.Equal(t, 1, bridges[privateConversationID].interrupts)
 }
 
 func TestThreadBridgeManagerSubmitsSameExternalMCPConversationToOneBridge(t *testing.T) {

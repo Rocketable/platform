@@ -21,6 +21,9 @@ func (inertThreadRouter) InterruptThread(target events.TextConversationTarget) (
 	_ = target
 	return nil, nil
 }
+func (inertThreadRouter) InterruptConversation(string) *events.InboundMessage {
+	return nil
+}
 func (inertThreadRouter) RegisterCronThread(_ context.Context, _ events.TextConversationTarget, _ string) error {
 	return nil
 }

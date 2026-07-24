@@ -35,8 +35,8 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 )
 
-func testExternalMCPRelay(text string, attachments []events.OutboundAttachment) events.ExternalMCPRelay {
-	return events.ExternalMCPRelay{ExternalConversationID: "public-conversation", Agent: "private-agent", Text: text, Attachments: attachments}
+func testExternalMCPRelay(text string, attachments []events.OutboundAttachment) *events.ExternalMCPRelay {
+	return &events.ExternalMCPRelay{ConversationID: "external_mcp:private-agent:private", ExternalConversationID: "public-conversation", Agent: "private-agent", Text: text, Attachments: attachments}
 }
 
 func TestSlackImageHelpers(t *testing.T) {
@@ -119,9 +119,10 @@ func TestSendExternalMCPRelayRendersMarkdownWithoutNotifications(t *testing.T) {
 
 	connector := newTestConnector(server.URL)
 	request := "*bold* <@U123> <@W123> <!subteam^S123> <!here> <!channel> <!everyone> @here @channel @everyone @admins <https://example.com|Example>"
-	_, err := connector.SendExternalMCPRelay(t.Context(), "D123", "123.456", testExternalMCPRelay(request, nil))
+	target, err := connector.SendExternalMCPRelay(t.Context(), "D123", "123.456", testExternalMCPRelay(request, nil))
 	require.NoError(t, err)
 	require.NotEmpty(t, posted)
+	assert.Equal(t, "external_mcp:private-agent:private", connector.pending[slackPendingKey(target)].ConversationID)
 
 	want := "*bold* &lt;@U123> &lt;@W123> &lt;!subteam^S123> &lt;!here> &lt;!channel> &lt;!everyone> @here @channel @everyone @admins <https://example.com|Example>"
 	assert.Equal(t, want, posted[0].Get("text"))
@@ -6836,6 +6837,21 @@ func TestHandleReactionAddedEventStopsReplyThread(t *testing.T) {
 			router.prepareResults = []bool{false, true}
 			router.stopResult = &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "171234.5678"}
 			connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+			replyTarget := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "171234.5678", ThreadTS: "171234.5678"}
+			key := slackPendingKey(replyTarget)
+			connector.pending[key] = slackReplySlots{ChannelID: "C123", ThinkingTS: "171234.9998", AnswerTS: "171234.9999", Key: key}
+			progress := events.NewOutboundMessage(events.SourceSystem, harnessbridge.SlackThreadConversationID("C123", "171234.5678"), "", events.OutputTargetSlack)
+			progress.TurnID = "slack-turn"
+			progress.ProgressText = "Working"
+			progress.SlackReply = replyTarget
+			require.NoError(t, connector.SendResponse(t.Context(), progress))
+			t.Cleanup(func() {
+				connector.mu.Lock()
+				if timer := connector.thinking[progress.TurnID].Timer; timer != nil {
+					timer.Stop()
+				}
+				connector.mu.Unlock()
+			})
 
 			connector.handleReactionAddedEvent(context.Background(), newTestReactionAddedEvent("U123", reaction, "171234.9999"))
 
@@ -6843,6 +6859,35 @@ func TestHandleReactionAddedEventStopsReplyThread(t *testing.T) {
 			assert.Contains(t, reactions, "/reactions.add "+slackInterruptionReaction+" 222.333")
 		})
 	}
+}
+
+func TestHandleReactionAddedEventStopsExternalMCPResponseConversation(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/conversations.info":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
+		case "/reactions.add":
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.stopResult = &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "171234.9999", ThreadTS: "171234.5678"}
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+	replyTarget := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "171234.0001", ThreadTS: "171234.5678"}
+	key := slackPendingKey(replyTarget)
+	connector.pending[key] = slackReplySlots{ChannelID: "C123", ThinkingTS: "171234.9998", AnswerTS: "171234.9999", Key: key, ConversationID: "external_mcp:customer:private"}
+
+	connector.handleReactionAddedEvent(t.Context(), newTestReactionAddedEvent("U123", slackGoalStopSignReaction, "171234.9999"))
+
+	assert.Equal(t, []string{"external_mcp:customer:private"}, router.conversationStops)
+	assert.Empty(t, router.goalStops)
 }
 
 func TestHandleReactionAddedEventIgnoresCronReaction(t *testing.T) {
@@ -7074,6 +7119,7 @@ type threadRouterStub struct {
 	threadAgentReads    []threadAgentReadCall
 	goalStarts          []goalThreadStartCall
 	goalStops           []goalThreadStopCall
+	conversationStops   []string
 	threadAgent         string
 	switchHandled       bool
 	threadAgentHandled  bool
@@ -7171,6 +7217,15 @@ func (s *threadRouterStub) InterruptThread(target events.TextConversationTarget)
 	}
 
 	return &events.InboundMessage{SlackReply: result}, nil
+}
+
+func (s *threadRouterStub) InterruptConversation(conversationID string) *events.InboundMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.conversationStops = append(s.conversationStops, conversationID)
+
+	return &events.InboundMessage{SlackReply: s.stopResult}
 }
 
 func (s *threadRouterStub) RegisterCronThread(_ context.Context, target events.TextConversationTarget, agent string) error {

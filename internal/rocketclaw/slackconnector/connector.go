@@ -108,10 +108,10 @@ type oneOffCronjobRunner interface {
 type slackReplyState struct{ ChannelID, MessageTS string }
 
 type slackReplySlots struct {
-	ChannelID, ThinkingTS, AnswerTS, Key string
-	cleanupMessageTS                     []string
-	thinkingStream                       bool
-	thinkingTaskID                       string
+	ChannelID, ThinkingTS, AnswerTS, Key, ConversationID string
+	cleanupMessageTS                                     []string
+	thinkingStream                                       bool
+	thinkingTaskID                                       string
 }
 
 type slackSocketEvent struct {
@@ -233,6 +233,10 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 	if !ok && strings.TrimSpace(msg.TurnID) != "" {
 		slots, ok = c.claimPendingState(msg.SlackReply)
 		if ok {
+			if msg.ExternalConversationID != "" {
+				slots.ConversationID = msg.ConversationID
+			}
+
 			c.setReplyState(msg.TurnID, &slots)
 			c.log.Info("claimed Slack placeholder", "turn_id", msg.TurnID, "channel", slots.ChannelID, "thinking_ts", slots.ThinkingTS, "answer_ts", slots.AnswerTS, "reply_channel", msg.SlackReply.ChannelID, "reply_message_ts", msg.SlackReply.MessageTS, "reply_thread_ts", msg.SlackReply.ThreadTS)
 		}
@@ -298,6 +302,10 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 			}
 
 			slots = slackReplySlots{ChannelID: postedChannelID, ThinkingTS: postedThinkingTS, AnswerTS: postedAnswerTS}
+			if msg.ExternalConversationID != "" {
+				slots.ConversationID = msg.ConversationID
+			}
+
 			c.setReplyState(msg.TurnID, &slots)
 			c.bufferProgressText(msg.TurnID, &slots, placeholder, thinkingText, msg)
 		}
@@ -558,7 +566,7 @@ func (c *Connector) DeleteUserQuestion(ctx context.Context, target events.TextCo
 }
 
 // SendExternalMCPRelay mirrors one external MCP request into a Slack root or thread.
-func (c *Connector) SendExternalMCPRelay(ctx context.Context, channelID, threadTS string, relay events.ExternalMCPRelay) (*events.SlackReplyTarget, error) {
+func (c *Connector) SendExternalMCPRelay(ctx context.Context, channelID, threadTS string, relay *events.ExternalMCPRelay) (*events.SlackReplyTarget, error) {
 	if strings.TrimSpace(relay.Text) == "" && len(relay.Attachments) == 0 {
 		return nil, nil
 	}
@@ -667,7 +675,7 @@ func (c *Connector) SendExternalMCPRelay(ctx context.Context, channelID, threadT
 		return nil, err
 	}
 
-	slots := slackReplySlots{ChannelID: placeholderChannelID, ThinkingTS: thinkingTS, AnswerTS: answerTS}
+	slots := slackReplySlots{ChannelID: placeholderChannelID, ThinkingTS: thinkingTS, AnswerTS: answerTS, ConversationID: relay.ConversationID}
 
 	c.mu.Lock()
 	c.createReplyPlaceholderStateLocked(replyTarget, &slots, continuationMessageTS)
@@ -1880,6 +1888,35 @@ func (c *Connector) handleReactionAddedEvent(ctx context.Context, ev *slackevent
 
 	channel, _, ok := c.socialModeChannel(ctx, channelID)
 	if !ok || !c.socialModeAllowsUser(channel, ev.User) {
+		return
+	}
+
+	c.mu.Lock()
+	conversationID := ""
+
+	for turnID := range c.replies {
+		if c.replies[turnID].ChannelID == channelID && (c.replies[turnID].ThinkingTS == messageTS || c.replies[turnID].AnswerTS == messageTS) {
+			conversationID = c.replies[turnID].ConversationID
+			break
+		}
+	}
+
+	if conversationID == "" {
+		for key := range c.pending {
+			if c.pending[key].ChannelID == channelID && (c.pending[key].ThinkingTS == messageTS || c.pending[key].AnswerTS == messageTS) {
+				conversationID = c.pending[key].ConversationID
+				break
+			}
+		}
+	}
+	c.mu.Unlock()
+
+	if conversationID != "" {
+		marker := c.threadRouter.InterruptConversation(conversationID)
+		if marker != nil && marker.SlackReply != nil {
+			c.addReaction(ctx, marker.SlackReply, slackInterruptionReaction, "add Slack interruption reaction")
+		}
+
 		return
 	}
 

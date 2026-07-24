@@ -85,8 +85,8 @@ type OutboundAttachment struct {
 
 // ExternalMCPRelay carries one MCP request to its Slack surface.
 type ExternalMCPRelay struct {
-	ExternalConversationID, Agent, Text string
-	Attachments                         []OutboundAttachment
+	ConversationID, ExternalConversationID, Agent, Text string
+	Attachments                                         []OutboundAttachment
 }
 
 // InboundMessage is a message headed into its conversation prompt queue.

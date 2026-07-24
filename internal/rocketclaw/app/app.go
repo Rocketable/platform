@@ -379,7 +379,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	stops = append(stops, namedStopper{name: "slack", stop: slackSink.Stop})
 
-	textRelay := func(relayCtx context.Context, relay events.ExternalMCPRelay, reply *events.InboundMessage, channelName string) (*events.InboundMessage, error) {
+	textRelay := func(relayCtx context.Context, relay *events.ExternalMCPRelay, reply *events.InboundMessage, channelName string) (*events.InboundMessage, error) {
 		channelID, threadTS := channelName, ""
 		if reply != nil && reply.SlackReply != nil {
 			channelID, threadTS = reply.SlackReply.ChannelID, reply.SlackReply.ThreadTS
@@ -464,7 +464,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 func startExternalMCPServer(
 	ctx context.Context,
 	cfg *config.Config,
-	textRelay func(context.Context, events.ExternalMCPRelay, *events.InboundMessage, string) (*events.InboundMessage, error),
+	textRelay func(context.Context, *events.ExternalMCPRelay, *events.InboundMessage, string) (*events.InboundMessage, error),
 	cleanupTextRelay func(context.Context, *events.InboundMessage),
 	resolveSlackChannel func(context.Context, string) (string, error),
 	users map[string]string,
@@ -573,8 +573,13 @@ func startExternalMCPServer(
 
 			reply = &events.InboundMessage{SlackReply: &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}}
 
+			conversationID := session.PrivateConversationID
+			if conversationID == "" {
+				conversationID = session.ManagedConversationID
+			}
+
 			activation := func(activeCtx context.Context, inbound *events.InboundMessage) error {
-				relayed, err := textRelay(activeCtx, events.ExternalMCPRelay{ExternalConversationID: externalConversationID, Agent: usedAgent, Text: input, Attachments: outboundAttachments}, reply, "")
+				relayed, err := textRelay(activeCtx, &events.ExternalMCPRelay{ConversationID: conversationID, ExternalConversationID: externalConversationID, Agent: usedAgent, Text: input, Attachments: outboundAttachments}, reply, "")
 				if err != nil {
 					return fmt.Errorf("send text connector external MCP thread relay: %w", err)
 				}
@@ -585,11 +590,6 @@ func startExternalMCPServer(
 				}
 
 				return nil
-			}
-
-			conversationID := session.PrivateConversationID
-			if conversationID == "" {
-				conversationID = session.ManagedConversationID
 			}
 
 			result, _, err := submitExternalMCPInput(callCtx, submitAgent, usedAgent, conversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, externalConversationID, activation)
@@ -603,7 +603,9 @@ func startExternalMCPServer(
 			return externalmcp.SessionResult{}, fmt.Errorf("external MCP agent %q is not exposed", usedAgent)
 		}
 
-		reply, err = textRelay(callCtx, events.ExternalMCPRelay{ExternalConversationID: externalConversationID, Agent: usedAgent, Text: input, Attachments: outboundAttachments}, nil, slackChannel)
+		privateConversationID := "external_mcp:" + usedAgent + ":" + rand.Text()
+
+		reply, err = textRelay(callCtx, &events.ExternalMCPRelay{ConversationID: privateConversationID, ExternalConversationID: externalConversationID, Agent: usedAgent, Text: input, Attachments: outboundAttachments}, nil, slackChannel)
 		if err != nil {
 			return externalmcp.SessionResult{}, err
 		}
@@ -615,7 +617,6 @@ func startExternalMCPServer(
 		reply.SlackReply.ThreadTS = reply.SlackReply.MessageTS
 
 		managedConversationID := harnessbridge.SlackThreadConversationID(reply.SlackReply.ChannelID, reply.SlackReply.ThreadTS)
-		privateConversationID := "external_mcp:" + usedAgent + ":" + rand.Text()
 
 		createdConversationID = managedConversationID
 		if err := store.RegisterExternalMCPConversation(externalConversationID, managedAgent, &harnessbridge.ExternalMCPSessionState{Agent: usedAgent, PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, SlackChannel: slackChannel}); err != nil {

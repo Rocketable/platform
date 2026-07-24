@@ -10,6 +10,7 @@ import (
 type PrimaryTextRouter interface {
 	StartThread(ctx context.Context, agent string, target events.TextConversationTarget, inbound *events.InboundMessage) error
 	StartGoalInThread(ctx context.Context, agent, objective, checkScript string, maxTurns int, target events.TextConversationTarget, inbound *events.InboundMessage) error
+	InterruptConversation(conversationID string) *events.InboundMessage
 	InterruptThread(target events.TextConversationTarget) (*events.InboundMessage, error)
 	RegisterThread(target events.TextConversationTarget, agent string) (created bool, err error)
 	RegisterCronThread(ctx context.Context, target events.TextConversationTarget, agent string) error
