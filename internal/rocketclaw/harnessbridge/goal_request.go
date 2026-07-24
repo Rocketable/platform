@@ -14,35 +14,26 @@ type GoalRequest struct {
 	MaxTurns               int
 }
 
-// ParseGoalRequest parses a text-connector goal trigger. The boolean reports whether the text was a goal trigger.
-func ParseGoalRequest(text string) (GoalRequest, string, bool) {
-	text = strings.TrimSpace(text)
-	if after, ok := strings.CutPrefix(text, "🔁"); ok {
-		text = after
-	} else if after, ok := strings.CutPrefix(text, "🏁"); ok {
-		text = after
-	} else {
-		return GoalRequest{}, "", false
-	}
-
+// ParseGoalRequest parses canonical $goal arguments.
+func ParseGoalRequest(text string) (goal GoalRequest, rejection string) {
 	text = strings.TrimSpace(text)
 	maxTurns := 5
 	checkScript := ""
 
 	if text == "" {
-		return GoalRequest{}, "Tell me the goal after `🔁`, for example `🔁 maxTurns: 5 update the docs`.", true
+		return GoalRequest{}, "Tell me the goal after `$goal`, for example `$goal maxTurns: 5 update the docs`."
 	}
 
 	for {
 		text = strings.TrimSpace(text)
 		if text == "" {
-			return GoalRequest{}, "Tell me the goal after the parameters, for example `🔁 maxTurns: 5 update the docs`.", true
+			return GoalRequest{}, "Tell me the goal after the parameters, for example `$goal maxTurns: 5 update the docs`."
 		}
 
 		if after, ok := strings.CutPrefix(text, "maxTurns:"); ok {
 			fields := strings.Fields(after)
 			if len(fields) == 0 {
-				return GoalRequest{}, "`maxTurns:` needs a value like `20`, `0`, `-1`, or `infinite`.", true
+				return GoalRequest{}, "`maxTurns:` needs a value like `20`, `0`, `-1`, or `infinite`."
 			}
 
 			value := strings.ToLower(fields[0])
@@ -52,7 +43,7 @@ func ParseGoalRequest(text string) (GoalRequest, string, bool) {
 			default:
 				parsed, err := strconv.Atoi(value)
 				if err != nil || parsed < -1 {
-					return GoalRequest{}, "`maxTurns:` must be a positive integer, `0`, `-1`, or `infinite`.", true
+					return GoalRequest{}, "`maxTurns:` must be a positive integer, `0`, `-1`, or `infinite`."
 				}
 
 				maxTurns = max(parsed, 0)
@@ -62,7 +53,7 @@ func ParseGoalRequest(text string) (GoalRequest, string, bool) {
 		} else if after, ok := strings.CutPrefix(text, "checkScript:"); ok {
 			value, rest, err := consumeGoalCheckScriptValue(strings.TrimSpace(after))
 			if err != nil {
-				return GoalRequest{}, err.Error(), true
+				return GoalRequest{}, err.Error()
 			}
 
 			checkScript = value
@@ -70,10 +61,10 @@ func ParseGoalRequest(text string) (GoalRequest, string, bool) {
 		} else {
 			objective := strings.TrimSpace(text)
 			if objective == "" {
-				return GoalRequest{}, "Tell me the goal after the parameters, for example `🔁 maxTurns: 5 update the docs`.", true
+				return GoalRequest{}, "Tell me the goal after the parameters, for example `$goal maxTurns: 5 update the docs`."
 			}
 
-			return GoalRequest{Objective: objective, CheckScript: checkScript, MaxTurns: maxTurns}, "", true
+			return GoalRequest{Objective: objective, CheckScript: checkScript, MaxTurns: maxTurns}, ""
 		}
 	}
 }

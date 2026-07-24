@@ -1,19 +1,23 @@
 # RocketClaw Cheatsheet
 
-## Text Connector Emoji
+## Slack Text Controls
 
-| Emoji | Aliases | Surface | What It Does | Notes |
-| --- | --- | --- | --- | --- |
-| `🔁` | Slack `:repeat:` | Slack | Starts a text goal loop. | Syntax: `🔁 [maxTurns: VALUE|maxTurns:VALUE] [checkScript: VALUE|checkScript:VALUE] OBJECTIVE`. |
-| `🏁` | Slack `:checkered_flag:` | Slack | Starts a text goal loop. | Same grammar as `🔁`. |
-| `🛑`, `⏹️` | Slack reactions `:octagonal_sign:`, `:stop_button:` | Slack | Stops the active managed-conversation turn. | Works as an exact message or reaction in a managed thread. Stop feedback is marker-only: RocketClaw adds `❗` and sends no stop text. |
-| `❗` | Slack `:exclamation:` | Slack | Interruption or rejection marker. | Added by RocketClaw after stop/interruption and for duplicate active-goal rejection. Humans generally do not use this as a command. |
-| `✅` | Slack `:white_check_mark:` | Slack | Completion marker. | Added when a goal reaches `complete`. Not added for `blocked`, `stopped`, or `budget_exhausted`. |
-| `🔂` | `:repeat_one:` | Slack | Runs a one-off cron request by text prefix. | Examples: `🔂 daily`, `🔂 daily.md`. |
-| `🎛` | `:control_knobs:` | Slack managed conversations | Switches the persisted agent for the managed conversation. | `🎛 agent-name` switches to a configured channel agent. Bare `🎛` opens an agent selector usable only by the user who sent the control message. Does not route to RocketCode as prompt input. |
-| `🤖` | Slack `:robot_face:` | Slack | Processing/accepted marker. | Added when RocketClaw accepts a Slack-originated or relayed turn; removed after final response delivery. |
-| `⏳` | Slack `:hourglass_flowing_sand:` | Slack | Buffered or in-progress marker. | Marks stacked or buffered Slack messages. Removed when processing advances. |
-| `📡` | Slack `:satellite_antenna:` | Slack | External MCP relay marker. | Added to Slack relay messages created from External MCP prompts. |
+Dollar commands are canonical. RocketClaw translates the listed emoji and Slack aliases into the corresponding dollar command before dispatch.
+
+| Emoji | Dollar Command | Aliases | Surface | What It Does | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `🔁`, `🏁` | `$goal`, `$ goal` | Slack `:repeat:`, `:checkered_flag:` | Slack | Starts a text goal loop. | Dollar command names are case-insensitive; goal arguments use the existing grammar. |
+| `🛑`, `⏹️` | `$stop`, `$ stop` | Slack reactions `:octagonal_sign:`, `:stop_button:` | Slack managed threads | Stops the active managed-conversation turn. | Emoji controls work as an exact message or reaction. Stop feedback is marker-only: RocketClaw adds `❗` and sends no stop text. Dollar stop takes no arguments. |
+| `❗` |  | Slack `:exclamation:` | Slack | Interruption or rejection marker. | Added by RocketClaw after stop/interruption and for duplicate active-goal rejection. Humans generally do not use this as a command. |
+| `✅` |  | Slack `:white_check_mark:` | Slack | Completion marker. | Added when a goal reaches `complete`. Not added for `blocked`, `stopped`, or `budget_exhausted`. |
+| `🔂` | `$cron`, `$ cron` | `:repeat_one:` | Slack | Runs a one-off cron request by text prefix. | Example: `$cron daily`. |
+| `🎛` | `$agent`, `$ agent` | `:control_knobs:` | Slack managed conversations | Switches the persisted agent. | `🎛 agent-name` or `$agent name` switches. Bare `🎛` or `$agent` opens the selector, which only the user who sent the control message can use. |
+| `🤖` |  | Slack `:robot_face:` | Slack | Processing/accepted marker. | Added when RocketClaw accepts a Slack-originated or relayed turn; removed after final response delivery. |
+| `⏳` |  | Slack `:hourglass_flowing_sand:` | Slack | Buffered or in-progress marker. | Marks stacked or buffered Slack messages. Removed when processing advances. |
+| `📡` |  | Slack `:satellite_antenna:` | Slack | External MCP relay marker. | Added to Slack relay messages created from External MCP prompts. |
+
+Bare `$` and unknown or unavailable dollar commands show the command list in an ephemeral Slack message.
+Agent controls are consumed by RocketClaw and do not route to RocketCode as prompts.
 
 ## Slack Channel Scenarios
 
@@ -22,23 +26,23 @@
 | Start a conversation | Mention the RocketClaw bot/app in a configured channel. | Starts a fresh managed thread using the first agent in that channel's ordered `agents` list. The mention is the first turn. |
 | Continue a conversation | Reply in a known managed thread. | Uses only that thread's persisted history. |
 | Message with another human mention | Mention RocketClaw too when the message also pings another person, bot, broadcast target, or user group. | Managed-thread replies that ping someone else are suppressed unless RocketClaw is also mentioned. Raw unresolved `@word` text is not treated as a Slack ping. |
-| Agent switch | `🎛 agent-name` or bare `🎛` as the whole message. | `agent-name` must be in the channel's configured `agents` list. Bare `🎛` opens a Slack-native selector for that list. |
-| One-off cron | `🔂 daily` or `🔂 daily.md`. | Any top-level cronjob can be started from any configured Slack channel. |
+| Agent switch | `$agent agent-name` or bare `$agent` as the whole message. | `agent-name` must be in the channel's configured `agents` list. Bare `$agent` opens a Slack-native selector for that list. `🎛` is an alias. |
+| One-off cron | `$cron daily` or `$cron daily.md`. | Any top-level cronjob can be started from any configured Slack channel. `🔂` is an alias. |
 | External MCP conversation | Call `session_prompt` with an external conversation ID, agent, and configured channel. | The ID owns one private MCP session and one managed Slack session on the same thread. The MCP agent stays fixed. MCP history copies into managed history; Slack history does not copy back. |
 
 ## Goal Examples
 
 | Example | Meaning |
 | --- | --- |
-| `🏁 ship the release` | Starts a goal loop with default `maxTurns: 5`. |
-| `🏁 maxTurns: 10 ship the release` | Starts a finite goal loop with a 10-turn budget. |
-| `🏁 maxTurns:10 ship the release` | Same as above; goal parameters may attach values directly after `:`. |
-| `🏁 checkScript: ./scripts/check.sh ship the release` | Starts a goal loop that must pass the workspace-local check script before `complete` can stick. |
-| `🏁 checkScript:./scripts/check.sh ship the release` | Same as above; `checkScript:` values may attach directly after `:`. |
-| `🏁 checkScript: "./scripts/check.sh --full" ship the release` | Uses a quoted simple command for the check script. |
-| `🏁 checkScript:"./scripts/check.sh --full" ship the release` | Same as above with the quoted command attached directly after `:`. |
-| `🔁 ship the release` | Same goal-loop grammar as `🏁`; `🏁` and `🔁` are equivalent triggers. |
-| `🛑` or `⏹️` | Stops the active managed-conversation turn. If an active goal is present, it becomes `stopped`. |
+| `$goal ship the release` | Starts a goal loop with default `maxTurns: 5`. |
+| `$goal maxTurns: 10 ship the release` | Starts a finite goal loop with a 10-turn budget. |
+| `$goal maxTurns:10 ship the release` | Same as above; goal parameters may attach values directly after `:`. |
+| `$goal checkScript: ./scripts/check.sh ship the release` | Starts a goal loop that must pass the workspace-local check script before `complete` can stick. |
+| `$goal checkScript:./scripts/check.sh ship the release` | Same as above; `checkScript:` values may attach directly after `:`. |
+| `$goal checkScript: "./scripts/check.sh --full" ship the release` | Uses a quoted simple command for the check script. |
+| `$goal checkScript:"./scripts/check.sh --full" ship the release` | Same as above with the quoted command attached directly after `:`. |
+| `🏁 ship the release` or `🔁 ship the release` | Emoji aliases for `$goal ship the release`. |
+| `$stop`, `🛑`, or `⏹️` | Stops the active managed-conversation turn. If an active goal is present, it becomes `stopped`. |
 | `✅` | Marker RocketClaw adds when a goal reaches `complete`. Humans generally do not send it as a command. |
 
 | Goal Parameter | Accepted Values | Meaning |
@@ -64,7 +68,7 @@
 }
 ```
 
-New `#ops` conversations use agent `main`. Authorized replies can select `factory` with `🎛 factory` or the native selector.
+New `#ops` conversations use agent `main`. Authorized replies can select `factory` with `$agent factory`, its `🎛 factory` alias, or the native selector.
 
 ## State Upgrades
 

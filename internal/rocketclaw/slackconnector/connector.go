@@ -27,20 +27,23 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/emoji"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
-	"github.com/Rocketable/platform/internal/rocketclaw/primarytext"
 )
 
 const (
 	slackFileDownloadTimeout                                                                                                     = 30 * time.Second
 	maxSlackImageDownloadBytes                                                                                                   = 16 << 20
 	slackTextLimit, slackBlockTextLimit, slackPreferredChunkSize                                                                 = 3800, 3000, 3200
-	slackOnDemandCronPrefix, slackRobotReaction                                                                                  = ":repeat_one:", "robot_face"
+	slackRobotReaction                                                                                                           = "robot_face"
 	slackExternalMCPRelayReaction                                                                                                = "satellite_antenna"
 	slackBufferedReaction, slackGoalStopSignReaction, slackGoalStopButtonReaction, slackGoalCompleteReaction                     = "hourglass_flowing_sand", "octagonal_sign", "stop_button", "white_check_mark"
 	slackInterruptionReaction, slackImmediatePlaceholder, slackAnswerPlaceholder                                                 = "exclamation", "_Thinking..._", "\u200B"
 	slackThinkingFlushInterval                                                                                                   = 2 * time.Second
 	slackQuestionCustomActionID, slackQuestionCustomViewCallbackID, slackQuestionCustomBlockID, slackQuestionCustomInputActionID = "custom_answer", "ask_user_question_custom", "custom_answer", "answer"
 	slackAgentSwitchSelectActionID                                                                                               = "agent_switch_select"
+	slackDollarCommandHelp                                                                                                       = "$goal <objective>       🏁 Start a goal\n" +
+		"$stop                   🛑 Stop the active turn\n" +
+		"$cron <job>             🔂 Run a cron job\n" +
+		"$agent [name]           🎛 Switch or select an agent"
 )
 
 var errSlackDownloadLimitExceeded = errors.New("slack file download exceeded size limit")
@@ -77,7 +80,7 @@ type Connector struct {
 	bus    *events.Bus
 
 	threadRouter   harnessbridge.PrimaryTextRouter
-	oneOffCronjobs primarytext.OneOffCronjobRunner
+	oneOffCronjobs oneOffCronjobRunner
 	answerQuestion func(context.Context, string, events.AskUserQuestionAnswer) bool
 
 	api          *slack.Client
@@ -95,6 +98,11 @@ type Connector struct {
 	replies, pending map[string]slackReplySlots
 	thinking         map[string]slackThinkingState
 	stacks           map[string][]slackBufferedMessage
+}
+
+type oneOffCronjobRunner interface {
+	LoadOneOffCronjob(string) (cronjob.OneOffCronjob, error)
+	RunOneOffCronjob(context.Context, cronjob.OneOffCronjob, *harnessbridge.RawRunProgress, func(context.Context, cronjob.RunResult, error))
 }
 
 type slackReplyState struct{ ChannelID, MessageTS string }
@@ -152,7 +160,7 @@ type rawSlackEventsPayload struct {
 }
 
 // New constructs a Slack connector.
-func New(cfg *config.SlackConfig, bus *events.Bus, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs primarytext.OneOffCronjobRunner, answerQuestion func(context.Context, string, events.AskUserQuestionAnswer) bool, logger *slog.Logger) *Connector {
+func New(cfg *config.SlackConfig, bus *events.Bus, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs oneOffCronjobRunner, answerQuestion func(context.Context, string, events.AskUserQuestionAnswer) bool, logger *slog.Logger) *Connector {
 	api := slack.New(cfg.BotToken, slack.OptionAppLevelToken(cfg.AppToken), slack.OptionRetry(3))
 
 	return &Connector{
@@ -234,12 +242,12 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 
 	placeholder := slackImmediatePlaceholder
 	if msg.GoalTurn {
-		placeholder = primarytext.GoalProgressText(msg.GoalTurnNumber, msg.GoalMaxTurns)
+		placeholder = slackGoalProgressText(msg.GoalTurnNumber, msg.GoalMaxTurns)
 	}
 
 	switch {
 	case msg.Text != "" && (msg.Complete || msg.PostProgressText):
-		chunks := primarytext.SplitSlackText(msg.Text, slackPreferredChunkSize, slackTextLimit)
+		chunks := splitSlackText(msg.Text, slackPreferredChunkSize, slackTextLimit)
 
 		var (
 			posted []slackReplyState
@@ -428,7 +436,7 @@ func (c *Connector) CleanupExternalMCPRelay(ctx context.Context, replyTarget *ev
 // SendCronjobChannelThread posts one scheduled cronjob result in a new Slack channel thread.
 func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, relativePath, agent, ranAt, text string, attachments []events.OutboundAttachment) error {
 	header := slackTruncatedText("🔁 "+path.Base(relativePath)+" | "+agent+" | "+ranAt, 150, "...")
-	bodyChunks := primarytext.SplitSlackText(text, slackBlockTextLimit, slackBlockTextLimit)
+	bodyChunks := splitSlackText(text, slackBlockTextLimit, slackBlockTextLimit)
 	rootBodyCount := min(len(bodyChunks), 48)
 
 	blocks := make([]slack.Block, 0, rootBodyCount+2)
@@ -1378,7 +1386,7 @@ type slackMCPBlockMessage struct {
 
 func slackMCPBlocks(label, externalConversationID, agent, text, bodyType string, bodyVerbatim bool) []slack.Block {
 	identity := "External conversation ID: " + externalConversationID + " | Private agent: " + agent
-	chunks := primarytext.SplitSlackText(text, slackBlockTextLimit, slackBlockTextLimit)
+	chunks := splitSlackText(text, slackBlockTextLimit, slackBlockTextLimit)
 	blocks := make([]slack.Block, 0, len(chunks)+3)
 	blocks = append(blocks,
 		slack.NewHeaderBlock(slack.NewTextBlockObject(slack.PlainTextType, label, false, false)),
@@ -1394,7 +1402,7 @@ func slackMCPBlocks(label, externalConversationID, agent, text, bodyType string,
 }
 
 func slackMCPBlockMessages(label, externalConversationID, agent, text, bodyType string, bodyVerbatim bool) []slackMCPBlockMessage {
-	chunks := primarytext.SplitSlackText(text, slackBlockTextLimit, slackBlockTextLimit)
+	chunks := splitSlackText(text, slackBlockTextLimit, slackBlockTextLimit)
 
 	messages := make([]slackMCPBlockMessage, 0, (len(chunks)+46)/47)
 	for group := range slices.Chunk(chunks, 47) {
@@ -1717,38 +1725,31 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 			return
 		}
 
-		if agent, ok := primarytext.ParseSocialAgentSwitch(text); ok && socialThreadReply {
-			if !handled {
-				return
-			}
-
-			c.handleSlackSocialAgentSwitch(ctx, ev.Channel, threadTS, ev.User, socialChannelName, agent)
-
-			return
-		}
-
 		if !handled {
 			return
 		}
 
-		if target, ok := slackOnDemandCronTarget(text); ok {
-			c.handleOnDemandCronRequest(ctx, target, replyTarget)
-			return
-		}
-
-		switch strings.TrimSpace(text) {
-		case "🛑", "⏹️":
-			if err := c.stopSlackThread(ctx, ev.Channel, threadTS); err != nil {
-				c.log.Error("stop Slack goal thread", "error", err, "channel", ev.Channel, "thread_ts", threadTS)
+		if command, args, ok := parseCanonicalSlackCommand(text); ok {
+			switch command {
+			case "agent":
+				c.handleSlackSocialAgentSwitch(ctx, ev.Channel, threadTS, ev.User, socialChannelName, args)
 				return
-			}
+			case "cron":
+				c.handleOnDemandCronRequest(ctx, args, replyTarget)
+				return
+			case "stop":
+				if args != "" {
+					c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, slackDollarCommandHelp)
+					return
+				}
 
-			return
-		}
+				if err := c.stopSlackThread(ctx, ev.Channel, threadTS); err != nil {
+					c.log.Error("stop Slack goal thread", "error", err, "channel", ev.Channel, "thread_ts", threadTS)
+				}
 
-		if handled {
-			goal, rejection, isGoal := harnessbridge.ParseGoalRequest(emoji.CanonicalizeLeadingAlias(text))
-			if isGoal {
+				return
+			case "goal":
+				goal, rejection := harnessbridge.ParseGoalRequest(args)
 				if rejection != "" {
 					if err := c.postSlackThreadReply(ctx, ev.Channel, threadTS, rejection); err != nil {
 						c.log.Warn("post Slack thread goal rejection", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
@@ -1758,7 +1759,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 				}
 
 				content := c.inboundContentForMessageEvent(ctx, ev, forward)
-				content.Text = text
+				content.Text = goal.Objective
 
 				key := slackThreadStackKey(replyTarget)
 
@@ -1772,7 +1773,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 				}
 
 				c.beginSlackStack(key)
-				c.createReplyPlaceholdersOrWarn(ctx, replyTarget, primarytext.GoalProgressText(1, goal.MaxTurns), recipientTeamID, ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
+				c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackGoalProgressText(1, goal.MaxTurns), recipientTeamID, ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
 
 				inbound := newSlackInboundMessage(goal.Objective, &content, replyTarget, c.slackPrincipal(ev.User))
 				if socialThreadReply {
@@ -1783,6 +1784,9 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 					return
 				}
 
+				return
+			default:
+				c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, slackDollarCommandHelp)
 				return
 			}
 		}
@@ -1937,12 +1941,26 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 	}
 
 	replyTarget := &events.SlackReplyTarget{ChannelID: ev.Channel, MessageTS: ev.TimeStamp, ThreadTS: threadTS, RecipientTeamID: recipientTeamID, RecipientUserID: ev.User}
-	if target, ok := slackOnDemandCronTarget(text); ok {
-		c.handleOnDemandCronRequest(ctx, target, replyTarget)
-		return
+
+	var goal harnessbridge.GoalRequest
+
+	rejection := ""
+	isGoal := false
+
+	if command, args, ok := parseCanonicalSlackCommand(text); ok {
+		switch command {
+		case "cron":
+			c.handleOnDemandCronRequest(ctx, args, replyTarget)
+			return
+		case "goal":
+			goal, rejection = harnessbridge.ParseGoalRequest(args)
+			isGoal = true
+		default:
+			c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, slackDollarCommandHelp)
+			return
+		}
 	}
 
-	goal, rejection, isGoal := harnessbridge.ParseGoalRequest(emoji.CanonicalizeLeadingAlias(text))
 	if isGoal && rejection != "" {
 		if err := c.postSlackThreadReply(ctx, ev.Channel, threadTS, rejection); err != nil {
 			c.log.Warn("post Slack social goal rejection", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
@@ -1956,7 +1974,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 	placeholder := slackImmediatePlaceholder
 	if isGoal {
-		placeholder = primarytext.GoalProgressText(1, goal.MaxTurns)
+		placeholder = slackGoalProgressText(1, goal.MaxTurns)
 	}
 
 	c.createReplyPlaceholdersOrWarn(ctx, replyTarget, placeholder, recipientTeamID, ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)
@@ -2368,26 +2386,85 @@ func slackPendingKey(replyTarget *events.SlackReplyTarget) string {
 	return channelID + "\x00" + messageTS + "\x00" + threadTS
 }
 
-func slackOnDemandCronTarget(text string) (string, bool) {
+func slackDollarCommand(text string) (command, args string, ok bool) {
+	after, ok := strings.CutPrefix(strings.TrimSpace(text), "$")
+	if !ok {
+		return "", "", false
+	}
+
+	after = strings.TrimSpace(after)
+
+	separator := strings.IndexFunc(after, unicode.IsSpace)
+	if separator < 0 {
+		return strings.ToLower(after), "", true
+	}
+
+	return strings.ToLower(after[:separator]), strings.TrimSpace(after[separator:]), true
+}
+
+func canonicalSlackCommand(text string) (string, bool) {
 	text = strings.TrimSpace(text)
+	if _, _, ok := slackDollarCommand(text); ok {
+		return text, true
+	}
 
-	prefixes := []string{slackOnDemandCronPrefix, ":repeat-one:", "🔂"}
-	for _, prefix := range prefixes {
-		remainder, ok := strings.CutPrefix(text, prefix)
-		if !ok {
-			continue
+	if after, ok := strings.CutPrefix(text, ":repeat-one:"); ok {
+		return strings.TrimSpace("$cron " + strings.TrimSpace(after)), true
+	}
+
+	canonicalEmoji := emoji.CanonicalizeLeadingAlias(text)
+	if after, ok := strings.CutPrefix(canonicalEmoji, "🔁"); ok {
+		return "$goal " + strings.TrimSpace(after), true
+	}
+
+	if after, ok := strings.CutPrefix(canonicalEmoji, "🏁"); ok {
+		return "$goal " + strings.TrimSpace(after), true
+	}
+
+	if after, ok := strings.CutPrefix(canonicalEmoji, "🔂"); ok {
+		return strings.TrimSpace("$cron " + strings.TrimSpace(after)), true
+	}
+
+	after, isAgent := strings.CutPrefix(canonicalEmoji, "🎛️")
+	if !isAgent {
+		after, isAgent = strings.CutPrefix(canonicalEmoji, "🎛")
+	}
+
+	if isAgent {
+		if after != "" {
+			r, size := utf8.DecodeRuneInString(after)
+			if !unicode.IsSpace(r) {
+				return "", false
+			}
+
+			after = after[size:]
 		}
 
-		if target, ok := cronjob.OnDemandCronTarget(text, prefixes...); ok {
-			return target, true
-		}
+		return strings.TrimSpace("$agent " + strings.TrimSpace(after)), true
+	}
 
-		target := strings.TrimSpace(remainder)
-
-		return target, target != ""
+	switch canonicalEmoji {
+	case "🛑", "⏹️":
+		return "$stop", true
 	}
 
 	return "", false
+}
+
+func parseCanonicalSlackCommand(text string) (command, args string, ok bool) {
+	canonical, ok := canonicalSlackCommand(text)
+	if !ok {
+		return "", "", false
+	}
+
+	command, args, _ = slackDollarCommand(canonical)
+	if command == "cron" {
+		if target, ok := cronjob.OnDemandCronTarget(args); ok {
+			args = target
+		}
+	}
+
+	return command, args, true
 }
 
 func (c *Connector) handleOnDemandCronRequest(ctx context.Context, target string, replyTarget *events.SlackReplyTarget) {
@@ -2441,12 +2518,54 @@ func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCr
 		return nil
 	}
 
-	primarytext.RunOneOffCronjob(ctx, c.oneOffCronjobs, loaded, publish, func(ctx context.Context, _ cronjob.RunResult) {
-		if err := c.threadRouter.RegisterCronThread(ctx, events.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, loaded.Agent); err != nil {
-			c.log.Warn("register Slack one-off cron thread", "error", err, "channel", replyTarget.ChannelID, "thread_ts", replyTarget.ThreadTS, "cron", loaded.RelativePath)
+	thinking := ""
+	progress := &harnessbridge.RawRunProgress{
+		Thinking: func(ctx context.Context, text string) error {
+			text = strings.TrimSpace(text)
+			if text == "" {
+				return nil
+			}
+
+			if thinking != "" {
+				thinking += "\n"
+			}
+
+			thinking += text
+
+			return publish(ctx, "", thinking, false, false, nil)
+		},
+		Message: func(ctx context.Context, text string) error {
+			text = strings.TrimSpace(text)
+			if text == "" {
+				return nil
+			}
+
+			return publish(ctx, text, "", false, true, nil)
+		},
+	}
+
+	c.oneOffCronjobs.RunOneOffCronjob(ctx, loaded, progress, func(ctx context.Context, result cronjob.RunResult, err error) {
+		if err != nil {
+			if errPublish := publish(ctx, "I couldn't run that on-demand cron right now.", "", true, false, nil); errPublish != nil {
+				c.log.Warn("publish Slack on-demand cron result", "error", errPublish)
+			}
+
+			return
 		}
-	}, func(err error) {
-		c.log.Warn("publish Slack on-demand cron result", "error", err)
+
+		payload := strings.TrimSpace(result.VerbatimMessage)
+		if payload == "" && len(result.Attachments) == 0 {
+			payload = "Cronjob completed and decided to emit no human-visible output."
+		}
+
+		if errPublish := publish(ctx, payload, "", true, false, result.Attachments); errPublish != nil {
+			c.log.Warn("publish Slack on-demand cron result", "error", errPublish)
+			return
+		}
+
+		if errRegister := c.threadRouter.RegisterCronThread(ctx, events.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, loaded.Agent); errRegister != nil {
+			c.log.Warn("register Slack one-off cron thread", "error", errRegister, "channel", replyTarget.ChannelID, "thread_ts", replyTarget.ThreadTS, "cron", loaded.RelativePath)
+		}
 	})
 }
 
