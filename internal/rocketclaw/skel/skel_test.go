@@ -17,6 +17,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestWorkflowExamplesFormatFanoutTupleAsOneArgument(t *testing.T) {
+	data, err := fs.ReadFile(payload, ".rocketclaw/skills/main-create-or-update-workflow/SKILL.md")
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "% (audits,)")
+	assert.NotContains(t, string(data), "% audits")
+}
+
 func TestSyncFSOverwritesEmbeddedFiles(t *testing.T) {
 	tmp := t.TempDir()
 	root := filepath.Join(tmp, targetRoot)
@@ -140,14 +147,14 @@ func TestSyncReportsWorkspaceDirectoryConflicts(t *testing.T) {
 }
 
 func TestResetTargetMissingIsNoop(t *testing.T) {
-	require.NoError(t, resetRuntimeDirectoryForStartup(filepath.Join(t.TempDir(), targetRoot), testLogger()))
+	require.NoError(t, resetRuntimeDirectory(filepath.Join(t.TempDir(), targetRoot), testLogger(), true))
 }
 
 func TestResetTargetRejectsFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), targetRoot)
 	require.NoError(t, os.WriteFile(path, []byte("file"), 0o644))
 
-	err := resetRuntimeDirectoryForStartup(path, testLogger())
+	err := resetRuntimeDirectory(path, testLogger(), true)
 	require.ErrorContains(t, err, "rocketclaw target path is not a directory")
 }
 
@@ -176,6 +183,34 @@ func TestSyncPreservesExistingWorkspaceSetupFiles(t *testing.T) {
 	data, err = os.ReadFile(filepath.Join(tmp, targetRoot, "skills", "example", "SKILL.md"))
 	require.NoError(t, err)
 	assert.Equal(t, "keep skill", string(data))
+}
+
+func TestSyncMaterializesLocalWorkflowOverlay(t *testing.T) {
+	workspace := t.TempDir()
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.Mkdir("workflows", 0o755))
+	require.NoError(t, root.WriteFile("workflows/audit.star", []byte("local workflow"), 0o644))
+
+	require.NoError(t, SyncInWithOverlays(workspace, targetRoot, nil, testLogger()))
+
+	data, err := root.ReadFile(targetRoot + "/workflows/audit.star")
+	require.NoError(t, err)
+	assert.Equal(t, "local workflow", string(data))
+}
+
+func TestSyncCreatesEmptyWorkspaceWorkflowsWithoutRuntimePlaceholder(t *testing.T) {
+	workspace := t.TempDir()
+
+	require.NoError(t, SyncInWithOverlays(workspace, targetRoot, nil, testLogger()))
+
+	entries, err := os.ReadDir(filepath.Join(workspace, workflowsRoot))
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+
+	_, err = os.Stat(filepath.Join(workspace, targetRoot, workflowsRoot))
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestSyncFSFilteredPreservesExistingWhenOverwriteFalse(t *testing.T) {
@@ -310,6 +345,7 @@ func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, "skills", "remote"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, "cron"), 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, "scripts"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "workflows"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "agents", "main.md"), []byte("remote agent"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "skills", "remote", "SKILL.md"), []byte("remote skill"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "cron", "daily.md"), []byte("remote cron"), 0o644))
@@ -319,6 +355,7 @@ func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "scripts", "run"), []byte("remote executable"), 0o755))
 	require.NoError(t, os.Chmod(filepath.Join(repo, "scripts", "run"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "scripts", "plain.sh"), []byte("remote non-executable"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "workflows", "audit.star"), []byte("remote workflow"), 0o644))
 	repoGit(t, repo, "add", ".")
 	repoGit(t, repo, "commit", "-m", "overlay")
 
@@ -348,6 +385,10 @@ func TestSyncInWithOverlaysAppliesGitBeforeLocalOverlay(t *testing.T) {
 	data, err = os.ReadFile(filepath.Join(workspace, targetRoot, "scripts", "tool.sh"))
 	require.NoError(t, err)
 	assert.Equal(t, "local script", string(data))
+
+	data, err = os.ReadFile(filepath.Join(workspace, targetRoot, "workflows", "audit.star"))
+	require.NoError(t, err)
+	assert.Equal(t, "remote workflow", string(data))
 
 	data, err = os.ReadFile(filepath.Join(workspace, "scripts", "tool.sh"))
 	require.NoError(t, err)
@@ -679,6 +720,8 @@ func TestListSetupFiles(t *testing.T) {
 	assert.NotContains(t, names, ".rocketclaw")
 	assert.NotContains(t, names, "agents")
 	assert.NotContains(t, names, "cron")
+	assert.NotContains(t, names, "workflows")
+	assert.NotContains(t, names, "workflows/.gitkeep")
 }
 
 func TestReadSetupFile(t *testing.T) {
@@ -707,6 +750,49 @@ func TestEmbeddedCreateOrUpdateSkillsMentionLint(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(skillSkill), "rocketclaw lint")
 	assert.Contains(t, string(skillSkill), "behavior, permission guidance, task delegation, or scripts")
+}
+
+func TestEmbeddedWorkflowAuthoringSkillDocumentsContract(t *testing.T) {
+	skill, err := payload.ReadFile(".rocketclaw/skills/main-create-or-update-workflow/SKILL.md")
+	require.NoError(t, err)
+
+	content := string(skill)
+	for _, phrase := range []string{
+		"workflows/<name>.star",
+		".rocketclaw/workflows/<name>.star",
+		"def main(args)",
+		"worker(name, instructions, model=None, tools=None)",
+		"agent(prompt, worker=None, label=\"\", schema=None)",
+		"parallel(callables)",
+		"pipeline(items, fn)",
+		"phase(name, fn)",
+		"nested fan-out",
+		"disjoint file ownership",
+		"rocketclaw_reload",
+		"exactly once",
+		"$stop",
+	} {
+		assert.Contains(t, content, phrase)
+	}
+
+	assert.NotContains(t, content, "rocketclaw_restart")
+}
+
+func TestEmbeddedWorkflowAuthoringSkillDefinesSharedFileRecipe(t *testing.T) {
+	skill, err := payload.ReadFile(".rocketclaw/skills/main-create-or-update-workflow/SKILL.md")
+	require.NoError(t, err)
+
+	content := string(skill)
+	for _, phrase := range []string{
+		"parallel_batches",
+		"shared_files",
+		"After all parallel workers finish",
+		"exactly one sequential worker",
+		"exclusive ownership",
+		"BLOCKED",
+	} {
+		assert.Contains(t, content, phrase)
+	}
 }
 
 func TestEmbeddedCronExamplesUseQuotedConfiguredChannels(t *testing.T) {

@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"testing/fstest"
 
@@ -342,6 +344,58 @@ read:
 	require.Equal(t, PermissionDeny, action)
 	action, _ = factory.agents.Items["review"].Permission.Evaluate("read", "skills/parent/asset.txt")
 	require.Equal(t, PermissionDeny, action)
+}
+
+func TestRuntimeRestrictTools(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	client := openai.NewClient()
+	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {demo: allow}`)}
+	skills := LoadSkills(fstest.MapFS{"demo/SKILL.md": mapFile("---\nname: demo\ndescription: Demo\n---\n")}, "/virtual/skills").Skills
+
+	newRuntime := func(t *testing.T) *Runtime {
+		t.Helper()
+
+		runtime, err := New(&client, testConfig(dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+		require.NoError(t, err)
+
+		return runtime
+	}
+
+	t.Run("nil keeps all derived tools", func(t *testing.T) {
+		runtime := newRuntime(t)
+		before := slices.Sorted(maps.Keys(runtime.Tools))
+		require.NoError(t, runtime.RestrictTools(nil))
+		require.Equal(t, before, slices.Sorted(maps.Keys(runtime.Tools)))
+	})
+
+	t.Run("exact and empty allowlists", func(t *testing.T) {
+		runtime := newRuntime(t)
+		require.Contains(t, runtime.Tools, "skill")
+		require.Contains(t, runtime.Tools, "find_skills")
+		require.NoError(t, runtime.RestrictTools([]string{"skill"}))
+		require.Equal(t, []string{"skill"}, slices.Sorted(maps.Keys(runtime.Tools)))
+		require.NoError(t, runtime.RestrictTools([]string{}))
+		require.Empty(t, runtime.Tools)
+	})
+
+	for _, tc := range []struct {
+		name  string
+		tools []string
+	}{
+		{name: "unknown", tools: []string{"missing"}},
+		{name: "duplicate", tools: []string{"skill", "skill"}},
+	} {
+		t.Run(tc.name+" is atomic", func(t *testing.T) {
+			runtime := newRuntime(t)
+			before := slices.Sorted(maps.Keys(runtime.Tools))
+			require.Error(t, runtime.RestrictTools(tc.tools))
+			require.Equal(t, before, slices.Sorted(maps.Keys(runtime.Tools)))
+		})
+	}
 }
 
 func TestNewDoesNotAllowReadingFilesFromVirtualSkills(t *testing.T) {

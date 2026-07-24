@@ -227,8 +227,6 @@ func executeExecRun(ctx context.Context, cfg *config.Config, agent, prompt strin
 		Message: func(_ context.Context, text string) error {
 			return writer.write(execEvent{Type: "message", Text: text})
 		},
-		ScheduleMessage:        func(time.Duration, string, bool) error { return nil },
-		ResetScheduledMessages: func() error { return nil },
 		RequestRestart: func(context.Context, string) (string, error) {
 			return "", errors.New("restart is unavailable in rocketclaw exec")
 		},

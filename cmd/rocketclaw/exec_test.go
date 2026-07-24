@@ -152,9 +152,6 @@ func TestExecuteExecRunStreamsEventsInOrder(t *testing.T) {
 		require.NoError(t, progress.Thinking(ctx, "reading logs"))
 		require.NoError(t, progress.Message(ctx, "found it"))
 
-		assert.NoError(t, progress.ScheduleMessage(0, "", false))
-		assert.NoError(t, progress.ResetScheduledMessages())
-
 		_, err := progress.RequestRestart(ctx, "")
 		assert.ErrorContains(t, err, "unavailable in rocketclaw exec")
 

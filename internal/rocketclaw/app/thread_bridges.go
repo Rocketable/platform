@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
+	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 )
 
 type directBridge interface {
@@ -238,6 +240,17 @@ func (m *threadBridgeManager) ThreadAgent(target events.TextConversationTarget) 
 	return agent, true, nil
 }
 
+func (m *threadBridgeManager) ReserveWorkflowTurn(target events.TextConversationTarget) (release func(), reserved bool, err error) {
+	conversationID := m.text.conversationID(target)
+
+	release, reserved, err = m.store.ReserveWorkflowTurn(conversationID)
+	if err != nil {
+		err = fmt.Errorf("reserve workflow turn: %w", err)
+	}
+
+	return release, reserved, err
+}
+
 func (m *threadBridgeManager) StartThread(ctx context.Context, agent string, target events.TextConversationTarget, inbound *events.InboundMessage) error {
 	conversationID := m.text.conversationID(target)
 	if conversationID == "" {
@@ -368,6 +381,58 @@ func (m *threadBridgeManager) StartGoalInThread(ctx context.Context, agent, obje
 	return nil
 }
 
+func (m *threadBridgeManager) WorkflowDescriptions() ([]workflow.Description, error) {
+	definitions, err := m.loadWorkflowDefinitions()
+	if err != nil {
+		return nil, err
+	}
+
+	descriptions := make([]workflow.Description, 0, len(definitions))
+	for _, name := range slices.Sorted(maps.Keys(definitions)) {
+		descriptions = append(descriptions, workflow.Description{Name: name, Description: definitions[name].Description})
+	}
+
+	return descriptions, nil
+}
+
+func (m *threadBridgeManager) StartWorkflowInThread(ctx context.Context, agent, name, args string, target events.TextConversationTarget, inbound *events.InboundMessage) error {
+	definitions, err := m.loadWorkflowDefinitions()
+	if err != nil {
+		return err
+	}
+
+	definition := definitions[name]
+	if definition == nil {
+		return fmt.Errorf("workflow %q is not configured", name)
+	}
+
+	conversationID := m.text.conversationID(target)
+
+	thread, _, err := m.store.Thread(conversationID)
+	if err != nil {
+		return fmt.Errorf("load workflow thread state: %w", err)
+	}
+
+	if storedAgent := strings.TrimSpace(thread.Agent); storedAgent != "" {
+		agent = storedAgent
+	}
+
+	managed, err := m.ensureStartedThread(&threadStart{conversationID: conversationID, agent: agent, outputTargets: m.text.outputTargets, persistErr: "persist workflow thread bridge"})
+	if err != nil {
+		return err
+	}
+
+	inbound.Label, inbound.ConversationID = "workflow", conversationID
+	inbound.Text = strings.TrimSpace("$workflow " + name + " " + args)
+
+	inbound.Workflow = &workflow.RunRequest{Args: args, Definition: definition}
+	if err := managed.bridge.Submit(ctx, inbound); err != nil {
+		return fmt.Errorf("submit workflow thread start: %w", err)
+	}
+
+	return nil
+}
+
 func (m *threadBridgeManager) InterruptThread(target events.TextConversationTarget) (*events.InboundMessage, error) {
 	conversationID := m.text.conversationID(target)
 	if conversationID == "" {
@@ -459,6 +524,21 @@ func (m *threadBridgeManager) RecoverActiveTurn(ctx context.Context, turn *harne
 	}
 
 	return nil
+}
+
+func (m *threadBridgeManager) loadWorkflowDefinitions() (definitions map[string]*workflow.Definition, err error) {
+	root, err := os.OpenRoot(m.runtime.Workspace)
+	if err != nil {
+		return nil, fmt.Errorf("open workflow root: %w", err)
+	}
+	defer func() { err = errors.Join(err, root.Close()) }()
+
+	definitions, err = workflow.Load(root, m.runtime.RuntimeDirName())
+	if err != nil {
+		return nil, fmt.Errorf("load workflow definitions: %w", err)
+	}
+
+	return definitions, nil
 }
 
 func (m *threadBridgeManager) ensureStartedThread(start *threadStart) (*managedThreadBridge, error) {

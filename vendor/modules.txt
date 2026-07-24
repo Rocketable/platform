@@ -246,6 +246,15 @@ go.opentelemetry.io/proto/otlp/collector/trace/v1
 go.opentelemetry.io/proto/otlp/common/v1
 go.opentelemetry.io/proto/otlp/resource/v1
 go.opentelemetry.io/proto/otlp/trace/v1
+# go.starlark.net v0.0.0-20260708150628-5395d018f003
+## explicit; go 1.25.0
+go.starlark.net/internal/compile
+go.starlark.net/internal/spell
+go.starlark.net/lib/json
+go.starlark.net/resolve
+go.starlark.net/starlark
+go.starlark.net/starlarkstruct
+go.starlark.net/syntax
 # go.yaml.in/yaml/v2 v2.4.4
 ## explicit; go 1.15
 go.yaml.in/yaml/v2

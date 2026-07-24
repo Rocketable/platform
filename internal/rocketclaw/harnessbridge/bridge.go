@@ -35,6 +35,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/oai"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
+	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -99,6 +100,7 @@ type toolMode string
 const (
 	toolModePersistent toolMode = "persistent"
 	toolModeCron       toolMode = "cron"
+	toolModeWorkflow   toolMode = "workflow"
 )
 
 // Config controls one rocketcode bridge conversation.
@@ -154,6 +156,7 @@ type runResult struct {
 	responseID, model                        string
 	attachments                              []events.OutboundAttachment
 	goalCompleted                            bool
+	workflowTerminal                         workflow.Terminal
 }
 
 type activeTurnCheckpointSink struct {
@@ -412,11 +415,16 @@ func (b *Bridge) Stop() error {
 
 	close(b.stopCh)
 	b.stopped = true
-	cancel := b.waitingTurnCancel
+	cancel, activeCancel := b.waitingTurnCancel, b.activeTurnCancel
+	b.activeTurnInterrupted = b.activeTurnInterrupted || b.activeReply != nil && b.activeReply.Workflow != nil
 	b.mu.Unlock()
 
 	if cancel != nil {
 		cancel()
+	}
+
+	if activeCancel != nil {
+		activeCancel()
 	}
 
 	return nil
@@ -448,7 +456,7 @@ func (b *Bridge) InterruptActiveTurn() *events.InboundMessage {
 	interrupts := b.activeTurnInterrupts
 	cancel := b.activeTurnCancel
 	waitingCancel := b.waitingTurnCancel
-	b.activeTurnInterrupted = b.activeTurnInterrupted || interrupts != nil
+	b.activeTurnInterrupted = b.activeTurnInterrupted || interrupts != nil || cancel != nil
 	b.mu.Unlock()
 
 	if waitingCancel != nil {
@@ -466,7 +474,8 @@ func (b *Bridge) InterruptActiveTurn() *events.InboundMessage {
 
 	for {
 		select {
-		case <-b.requestCh:
+		case request := <-b.requestCh:
+			b.completeRequestTurnPairReservation(request)
 		default:
 			return reply
 		}
@@ -513,10 +522,6 @@ func (b *Bridge) enqueue(ctx context.Context, request bridgeRequest, operation s
 	}
 }
 
-func (b *Bridge) observeSessionEntries(ctx context.Context, conversationID string) ([]ObservedSessionEntry, error) {
-	return b.config.SessionService.ObserveEntries(ctx, conversationID, 0)
-}
-
 func (b *Bridge) loop(ctx context.Context) {
 	for {
 		select {
@@ -549,6 +554,8 @@ func (b *Bridge) loop(ctx context.Context) {
 				b.mu.Unlock()
 
 				if errLock != nil {
+					b.completeRequestTurnPairReservation(request)
+
 					if request.inbound != nil {
 						request.inbound.CompleteResponse("", errLock)
 					}
@@ -578,8 +585,8 @@ func (b *Bridge) loop(ctx context.Context) {
 						b.log.Error("handle inbound rocketcode message", "error", errHandle)
 					}
 
-					if b.config.ExternalConversationID != "" && b.config.ManagedConversationID != "" && !activeTurnRecoveryPreserveError(errHandle) {
-						b.config.SessionService.completeTurnPairReservation(b.config.ManagedConversationID, b.config.ConversationID)
+					if !activeTurnRecoveryPreserveError(errHandle) {
+						b.completeRequestTurnPairReservation(request)
 					}
 
 					if errHandle == nil && request.scheduledMessageID != "" && !request.scheduledMessageRecurring {
@@ -591,8 +598,8 @@ func (b *Bridge) loop(ctx context.Context) {
 					}
 				case request.activeTurn != nil:
 					errHandle := b.handleRecoveredActiveTurn(ctx, request.activeTurn)
-					if !activeTurnRecoveryPreserveError(errHandle) && b.config.ManagedConversationID != "" {
-						b.config.SessionService.completeTurnPairReservation(b.config.ManagedConversationID, b.config.ConversationID)
+					if !activeTurnRecoveryPreserveError(errHandle) {
+						b.completeRequestTurnPairReservation(request)
 					}
 
 					if errHandle != nil && !activeTurnRecoveryPreserveError(errHandle) {
@@ -620,6 +627,14 @@ func (b *Bridge) loop(ctx context.Context) {
 }
 
 func (b *Bridge) setHandling(handling bool) { b.mu.Lock(); b.handling = handling; b.mu.Unlock() }
+
+func (b *Bridge) completeRequestTurnPairReservation(request bridgeRequest) {
+	if b.config.ManagedConversationID == "" || (b.config.ConversationID == b.config.ManagedConversationID && (request.inbound == nil || request.inbound.Workflow == nil)) {
+		return
+	}
+
+	b.config.SessionService.completeTurnPairReservation(b.config.ManagedConversationID, b.config.ConversationID)
+}
 
 func (b *Bridge) handleRecoveredActiveTurn(ctx context.Context, turn *ActiveTurnState) error {
 	checkpoint := turn.Checkpoint
@@ -760,11 +775,15 @@ func (b *Bridge) handleInbound(ctx context.Context, msg *events.InboundMessage) 
 	}
 
 	var errTurn error
+	if msg.Workflow != nil {
+		result, errTurn = b.runWorkflow(ctx, msg, turnID)
+	} else {
+		result, errTurn = b.runTurn(ctx, msg, turnID, publish)
+	}
 
-	result, errTurn = b.runTurn(ctx, msg, turnID, publish)
 	if errTurn != nil {
 		if errors.Is(errTurn, errTurnInterrupted) {
-			result = runResult{turnID: turnID}
+			result = runResult{turnID: turnID, workflowTerminal: result.workflowTerminal}
 			errPublish := b.publishFinal(ctx, msg, result, publish)
 			errLog = errors.Join(errTurn, errPublish)
 
@@ -781,7 +800,7 @@ func (b *Bridge) handleInbound(ctx context.Context, msg *events.InboundMessage) 
 		}
 
 		text := internalErrorResponse + "\n\n" + errTurn.Error()
-		result = runResult{turnID: turnID, text: text, thinking: "", sequence: 0, sessionEntryID: 0, responseID: "", model: ""}
+		result = runResult{turnID: turnID, text: text, workflowTerminal: result.workflowTerminal}
 		errPublish := b.publishFinal(ctx, msg, result, true)
 		errLog = errors.Join(errTurn, errPublish)
 
@@ -804,6 +823,81 @@ func (b *Bridge) handleInbound(ctx context.Context, msg *events.InboundMessage) 
 	return nil
 }
 
+func (b *Bridge) runWorkflow(ctx context.Context, msg *events.InboundMessage, turnID string) (result runResult, err error) {
+	run, closeRunner, err := newWorkflowAgentRunner(b.runtime, b.agentSnapshot(), b.log)
+	if err != nil {
+		return result, fmt.Errorf("prepare workflow agent runner: %w", err)
+	}
+
+	request := *msg.Workflow
+	request.RunID = turnID
+
+	turnCtx, cancel := context.WithCancel(ctx)
+
+	b.mu.Lock()
+	b.activeReply, b.activeTurnCancel, b.activeTurnInterrupted = msg, cancel, false
+
+	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		b.activeReply, b.activeTurnCancel, b.activeTurnInterrupted = nil, nil, false
+		b.mu.Unlock()
+		cancel()
+	}()
+
+	sequence := 0
+	progress := func(ctx context.Context, update workflow.PhaseUpdate) error {
+		sequence++
+		outbound := b.newOutboundMessage(msg, turnID, sequence, "", "", false)
+
+		outbound.WorkflowPhase = &update
+		if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
+			return fmt.Errorf("publish workflow phase: %w", err)
+		}
+
+		return nil
+	}
+
+	workflowResult, errRun := workflow.Run(turnCtx, request.Definition, request, run, progress)
+	errRun = errors.Join(errRun, closeRunner())
+
+	b.mu.Lock()
+	interrupted := b.activeTurnInterrupted
+	b.mu.Unlock()
+
+	if interrupted {
+		return runResult{turnID: turnID, sequence: sequence, workflowTerminal: workflow.TerminalStopped}, errors.Join(errTurnInterrupted, errRun)
+	}
+
+	if errRun != nil {
+		return runResult{turnID: turnID, sequence: sequence, workflowTerminal: workflow.TerminalFailed}, fmt.Errorf("run workflow: %w", errRun)
+	}
+
+	assistant := workflowResult.Text
+	if workflowResult.Silent {
+		assistant = "Workflow completed silently."
+	}
+
+	userReplay, err := replayInputForMessage("user", msg.Text)
+	if err != nil {
+		return runResult{turnID: turnID, sequence: sequence, workflowTerminal: workflow.TerminalFailed}, err
+	}
+
+	assistantReplay, err := replayInputForMessage("assistant", assistant)
+	if err != nil {
+		return runResult{turnID: turnID, sequence: sequence, workflowTerminal: workflow.TerminalFailed}, err
+	}
+
+	store := newSessionStore(b.config.ConversationID, b.config.SessionService)
+
+	id, err := store.outID(rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now().UTC(), ReplayInput: append(userReplay, assistantReplay...)})
+	if err != nil {
+		return runResult{turnID: turnID, sequence: sequence, workflowTerminal: workflow.TerminalFailed}, fmt.Errorf("store workflow result: %w", err)
+	}
+
+	return runResult{turnID: turnID, text: workflowResult.Text, sequence: sequence, sessionEntryID: id, workflowTerminal: workflow.TerminalComplete}, nil
+}
+
 //nolint:gocritic // runResult is kept by value to avoid nil handling in the hot publish path.
 func (b *Bridge) publishFinal(ctx context.Context, msg *events.InboundMessage, result runResult, publish bool) error {
 	if !publish {
@@ -813,6 +907,7 @@ func (b *Bridge) publishFinal(ctx context.Context, msg *events.InboundMessage, r
 	}
 
 	outbound := b.newOutboundMessage(msg, result.turnID, result.sequence+1, result.text, "", true)
+	outbound.WorkflowTerminal = result.workflowTerminal
 
 	outbound.Attachments = events.CloneOutboundAttachments(result.attachments)
 	if result.goalCompleted {
@@ -1062,7 +1157,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 
 	attachments := new(outboundAttachmentCollector)
 
-	observed, err := b.observeSessionEntries(ctx, b.config.ConversationID)
+	observed, err := b.config.SessionService.ObserveEntries(ctx, b.config.ConversationID, 0)
 	if err != nil {
 		return runResult{}, fmt.Errorf("load rocketcode session history metrics: %w", err)
 	}
@@ -1763,7 +1858,11 @@ func loadRocketCodeDefinitionsIn(root *os.Root, cfg *config.Config, runtimeDir s
 	skillsRoot := filepath.Join(cfg.Workspace, runtimeDir, "skills")
 	skillResult := rocketcode.LoadSkills(skillsFS, skillsRoot)
 
-	tools := []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName}
+	var tools []string
+	if mode != toolModeWorkflow {
+		tools = []string{reloadToolName, scheduleMessageToolName, resetScheduledMessagesToolName, attachFilesToolName, updateGoalToolName, askUserQuestionToolName}
+	}
+
 	if mode == toolModeCron {
 		tools = append(tools, rawRunToolName)
 	}
@@ -2319,16 +2418,18 @@ func (b *Bridge) newOutboundMessage(msg *events.InboundMessage, turnID string, s
 	outbound.Complete = complete
 
 	if msg != nil {
-		goal, goalOK, err := b.config.SessionService.Goal(b.config.ConversationID)
-		if msg.Label == goalKickoffLabel || msg.Label == goalContinuationLabel || msg.GoalTurn {
-			outbound.GoalTurn = true
-		} else if err == nil && goalOK && strings.TrimSpace(goal.Status) == GoalStatusActive {
-			outbound.GoalTurn = true
-		}
+		if msg.Workflow == nil {
+			goal, goalOK, err := b.config.SessionService.Goal(b.config.ConversationID)
+			if msg.Label == goalKickoffLabel || msg.Label == goalContinuationLabel || msg.GoalTurn {
+				outbound.GoalTurn = true
+			} else if err == nil && goalOK && strings.TrimSpace(goal.Status) == GoalStatusActive {
+				outbound.GoalTurn = true
+			}
 
-		if outbound.GoalTurn && err == nil && goalOK && goal.MaxTurns > 0 {
-			outbound.GoalTurnNumber = goal.TurnsUsed + 1
-			outbound.GoalMaxTurns = goal.MaxTurns
+			if outbound.GoalTurn && err == nil && goalOK && goal.MaxTurns > 0 {
+				outbound.GoalTurnNumber = goal.TurnsUsed + 1
+				outbound.GoalMaxTurns = goal.MaxTurns
+			}
 		}
 
 		if msg.SlackReply != nil {

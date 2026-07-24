@@ -25,6 +25,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
+	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/packages/param"
@@ -409,6 +410,26 @@ func TestInterruptActiveTurnSignalsAndClearsQueue(t *testing.T) {
 	assert.Empty(t, bridge.requestCh)
 	assert.True(t, bridge.activeTurnInterrupted)
 	assert.Equal(t, os.Interrupt, <-interrupts)
+}
+
+func TestBridgeStopDoesNotClassifyOrdinaryTurnAsInterrupted(t *testing.T) {
+	bridge := &Bridge{stopCh: make(chan struct{}), activeReply: events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "ordinary", true)}
+	_, bridge.activeTurnCancel = context.WithCancel(t.Context())
+	require.NoError(t, bridge.Stop())
+	assert.False(t, bridge.activeTurnInterrupted)
+}
+
+func TestInterruptActiveWorkflowCancelsWithoutSignalChannel(t *testing.T) {
+	canceled := make(chan struct{})
+	bridge := &Bridge{requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{}), activeReply: new(events.InboundMessage)}
+	ctx, cancel := context.WithCancel(t.Context())
+	bridge.activeTurnCancel = cancel
+
+	context.AfterFunc(ctx, func() { close(canceled) })
+
+	bridge.InterruptActiveTurn()
+	<-canceled
+	assert.True(t, bridge.activeTurnInterrupted)
 }
 
 func TestActiveTurnCheckpointSinkMapsLifecycleToSessionService(t *testing.T) {
@@ -1709,6 +1730,199 @@ func TestBridgePermanentFirstTurnFailureReleasesManagedSession(t *testing.T) {
 		require.NoError(t, err)
 		unlock()
 	})
+}
+
+func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		workspace := t.TempDir()
+		writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
+		root, err := os.OpenRoot(workspace)
+		require.NoError(t, err)
+		require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
+		require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
+		require.NoError(t, root.WriteFile(".rocketclaw/workflows/audit.star", []byte("meta = {\"name\": \"audit\", \"description\": \"Audit\"}\ndef main(args): return \"finished\"\n"), 0o600))
+		definitions, err := workflow.Load(root, ".rocketclaw")
+		require.NoError(t, err)
+		require.NoError(t, root.Close())
+
+		service := newTestSessionServiceAt(t, workspace)
+		pairID, privateID := SlackThreadConversationID("C123", "111.222"), "external_mcp:private"
+		require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{PrivateConversationID: privateID, ManagedConversationID: pairID}))
+		releaseWorkflow, reserved, err := service.ReserveWorkflowTurn(pairID)
+		require.NoError(t, err)
+		require.True(t, reserved)
+
+		bus := events.New()
+		t.Cleanup(bus.Close)
+		bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: &config.Config{Workspace: workspace}, bus: bus, config: Config{ConversationID: pairID, ManagedConversationID: pairID, Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}}
+		require.NoError(t, bridge.Start(t.Context()))
+		t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+
+		delivered := make(chan struct{})
+
+		go func() {
+			for outbound := range bus.Outbound(t.Context()) {
+				outbound.MarkDelivered(nil)
+
+				if outbound.Complete {
+					close(delivered)
+					return
+				}
+			}
+		}()
+
+		inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "workflow", "$workflow audit", true)
+		inbound.Workflow = &workflow.RunRequest{RunID: "run-1", Definition: definitions["audit"]}
+		response := inbound.EnableResponseWait()
+		require.NoError(t, bridge.Submit(t.Context(), inbound))
+		require.NoError(t, (<-response).Err)
+		<-delivered
+		synctest.Wait()
+
+		entries, err := service.ObserveEntries(t.Context(), pairID, 0)
+		require.NoError(t, err)
+		require.Len(t, entries, 1)
+		messages, err := replayInputMessages(entries[0].Entry.ReplayInput)
+		require.NoError(t, err)
+		assert.Equal(t, []replayInputMessage{{role: "user", text: "$workflow audit"}, {role: "assistant", text: "finished"}}, messages)
+
+		privateAcquired := false
+
+		var unlockPrivate func()
+		go func() {
+			unlockPrivate, err = service.lockTurnPair(t.Context(), pairID, privateID)
+			privateAcquired = err == nil
+		}()
+
+		synctest.Wait()
+
+		if !privateAcquired {
+			releaseWorkflow()
+			synctest.Wait()
+			t.Fatal("private turn remained blocked after managed workflow completed")
+		}
+
+		unlockPrivate()
+
+		releaseWorkflow, reserved, err = service.ReserveWorkflowTurn(pairID)
+		require.NoError(t, err)
+		assert.True(t, reserved)
+		releaseWorkflow()
+	})
+}
+
+func TestBridgeInterruptReleasesDrainedWorkflowReservation(t *testing.T) {
+	service := newTestSessionService(t)
+	pairID, privateID := SlackThreadConversationID("C123", "111.222"), "external_mcp:private"
+	require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{PrivateConversationID: privateID, ManagedConversationID: pairID}))
+	release, reserved, err := service.ReserveWorkflowTurn(pairID)
+	require.NoError(t, err)
+	require.True(t, reserved)
+	t.Cleanup(release)
+
+	inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "workflow", "$workflow audit", true)
+	inbound.Workflow = &workflow.RunRequest{}
+
+	bridge := &Bridge{requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{}), config: Config{ConversationID: pairID, ManagedConversationID: pairID, SessionService: service}}
+	bridge.requestCh <- bridgeRequest{inbound: inbound, activation: NoopActivationHook}
+
+	bridge.InterruptActiveTurn()
+
+	releaseAgain, reserved, err := service.ReserveWorkflowTurn(pairID)
+	require.NoError(t, err)
+	assert.True(t, reserved)
+	releaseAgain()
+}
+
+func TestBridgePairLockFailureReleasesWorkflowReservation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		service := newTestSessionService(t)
+		pairID, privateID := SlackThreadConversationID("C123", "111.222"), "external_mcp:private"
+		require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{PrivateConversationID: privateID, ManagedConversationID: pairID}))
+		release, reserved, err := service.ReserveWorkflowTurn(pairID)
+		require.NoError(t, err)
+		require.True(t, reserved)
+		t.Cleanup(release)
+
+		unlock, err := service.lockTurnPair(t.Context(), pairID, pairID)
+		require.NoError(t, err)
+
+		bridge := &Bridge{runtime: &config.Config{}, config: Config{ConversationID: pairID, ManagedConversationID: pairID, SessionService: service}, log: slog.New(slog.DiscardHandler)}
+		require.NoError(t, bridge.Start(t.Context()))
+		t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+
+		inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "workflow", "$workflow audit", true)
+		inbound.Workflow = &workflow.RunRequest{}
+		response := inbound.EnableResponseWait()
+		require.NoError(t, bridge.Submit(t.Context(), inbound))
+		synctest.Wait()
+		assert.Same(t, inbound, bridge.InterruptActiveTurn())
+		synctest.Wait()
+		require.ErrorIs(t, (<-response).Err, context.Canceled)
+		unlock()
+		synctest.Wait()
+
+		releaseAgain, reserved, err := service.ReserveWorkflowTurn(pairID)
+		require.NoError(t, err)
+		assert.True(t, reserved)
+		releaseAgain()
+	})
+}
+
+func TestBridgeUnrelatedManagedTurnDoesNotReleaseWorkflowReservation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		service := newTestSessionService(t)
+		pairID, privateID := SlackThreadConversationID("C123", "111.222"), "external_mcp:private"
+		require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{PrivateConversationID: privateID, ManagedConversationID: pairID}))
+		release, reserved, err := service.ReserveWorkflowTurn(pairID)
+		require.NoError(t, err)
+		require.True(t, reserved)
+		t.Cleanup(release)
+
+		bridge := &Bridge{runtime: &config.Config{}, config: Config{ConversationID: pairID, ManagedConversationID: pairID, SessionService: service}, log: slog.New(slog.DiscardHandler)}
+		require.NoError(t, bridge.Start(t.Context()))
+		t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+
+		inbound := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "scheduled_message", "scheduled", false)
+		response := inbound.EnableResponseWait()
+		errActivation := errors.New("scheduled turn stopped")
+
+		require.NoError(t, bridge.SubmitWhenActive(t.Context(), inbound, func(context.Context, *events.InboundMessage) error { return errActivation }))
+		require.ErrorIs(t, (<-response).Err, errActivation)
+		synctest.Wait()
+
+		releaseAgain, reserved, err := service.ReserveWorkflowTurn(pairID)
+		require.NoError(t, err)
+		assert.False(t, reserved)
+		releaseAgain()
+	})
+}
+
+func TestBridgeRequestReservationOwnershipPreservesManagedRecovery(t *testing.T) {
+	service := newTestSessionService(t)
+	pairID, privateID := SlackThreadConversationID("C123", "111.222"), "external_mcp:private"
+
+	service.reserveTurnPair(pairID, privateID)
+	private := &Bridge{config: Config{ConversationID: privateID, ManagedConversationID: pairID, SessionService: service}}
+	private.completeRequestTurnPairReservation(bridgeRequest{activeTurn: new(ActiveTurnState)})
+
+	unlocked, err := service.lockTurnPair(t.Context(), pairID, pairID)
+	require.NoError(t, err)
+	unlocked()
+
+	require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{PrivateConversationID: privateID, ManagedConversationID: pairID}))
+	release, reserved, err := service.ReserveWorkflowTurn(pairID)
+	require.NoError(t, err)
+	require.True(t, reserved)
+	t.Cleanup(release)
+
+	managed := &Bridge{config: Config{ConversationID: pairID, ManagedConversationID: pairID, SessionService: service}}
+	managed.completeRequestTurnPairReservation(bridgeRequest{activeTurn: new(ActiveTurnState)})
+
+	releaseAgain, reserved, err := service.ReserveWorkflowTurn(pairID)
+	require.NoError(t, err)
+	assert.False(t, reserved)
+	releaseAgain()
 }
 
 func TestBridgeScheduleMessageUsesOwningSlackThread(t *testing.T) {
@@ -3523,6 +3737,25 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 	assert.True(t, outbound.GoalTurn)
 	assert.Zero(t, outbound.GoalTurnNumber)
 	assert.Zero(t, outbound.GoalMaxTurns)
+}
+
+func TestWorkflowPhaseOutboundDoesNotLookupGoal(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	bridge := &Bridge{bus: bus, config: Config{ConversationID: "thread-1", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}}}
+	inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "workflow", "$workflow audit", true)
+	inbound.Workflow = new(workflow.RunRequest)
+	inbound.SlackReply = &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.1", RecipientTeamID: "T123", RecipientUserID: "U456"}
+	phase := workflow.PhaseUpdate{PhaseID: "turn-1/phase/audit", Name: "audit", Status: workflow.PhaseInProgress}
+
+	outbound := bridge.newOutboundMessage(inbound, "turn-1", 1, "", "", false)
+	outbound.WorkflowPhase = &phase
+	require.NoError(t, bus.PublishOutbound(t.Context(), outbound))
+
+	published := readRocketCodeOutbound(t, bus)
+	assert.Equal(t, &phase, published.WorkflowPhase)
+	assert.Equal(t, inbound.SlackReply, published.SlackReply)
 }
 
 func readRocketCodeOutbound(t *testing.T, bus *events.Bus) *events.OutboundMessage {

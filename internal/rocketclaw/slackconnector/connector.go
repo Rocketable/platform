@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"mime"
 	neturl "net/url"
 	"path"
@@ -27,6 +28,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/emoji"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
+	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 )
 
 const (
@@ -41,6 +43,7 @@ const (
 	slackQuestionCustomActionID, slackQuestionCustomViewCallbackID, slackQuestionCustomBlockID, slackQuestionCustomInputActionID = "custom_answer", "ask_user_question_custom", "custom_answer", "answer"
 	slackAgentSwitchSelectActionID                                                                                               = "agent_switch_select"
 	slackDollarCommandHelp                                                                                                       = "$goal <objective> - 🏁 Start a goal\n" +
+		"$workflow <name> [args] - ⏩ Run a workflow\n" +
 		"$stop - 🛑 Stop the active turn\n" +
 		"$cron <job> - 🔂 Run a cron job\n" +
 		"$agent [name] - 🎛 Switch or select an agent"
@@ -126,6 +129,7 @@ type slackThinkingState struct {
 	thinkingStream                bool
 	thinkingTaskID                string
 	activities                    []string
+	phases                        map[string]workflow.PhaseUpdate
 	activitySequence              int
 	flushDone                     chan struct{}
 	closing                       bool
@@ -243,6 +247,10 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 	}
 
 	thinkingText := strings.TrimSpace(msg.ProgressText)
+	if msg.WorkflowPhase != nil {
+		c.bufferWorkflowPhase(msg.TurnID, &slots, msg.WorkflowPhase)
+		return nil
+	}
 
 	placeholder := slackImmediatePlaceholder
 	if msg.GoalTurn {
@@ -726,9 +734,10 @@ func (c *Connector) finishCompleteResponse(ctx context.Context, msg *events.Outb
 	if hasSlots {
 		c.mu.Lock()
 		pending := c.thinking[msg.TurnID]
+		pending.phases = maps.Clone(pending.phases)
 		c.mu.Unlock()
 
-		if strings.TrimSpace(pending.Text) == "" {
+		if strings.TrimSpace(pending.Text) == "" && len(pending.phases) == 0 && msg.WorkflowTerminal == "" {
 			c.finishResponse(ctx, msg, slots, hasSlots, strings.TrimSpace(msg.Text) == "")
 			return nil
 		}
@@ -765,10 +774,23 @@ func (c *Connector) finishCompleteResponse(ctx context.Context, msg *events.Outb
 
 				pending = c.thinking[msg.TurnID]
 				activities := slices.Clone(pending.activities)
+				phases := maps.Clone(pending.phases)
 				c.mu.Unlock()
 
 				chunks := slackThinkingActivityChunks(&pending, activities)
-				chunks = append(chunks, slack.NewPlanUpdateChunk("Complete"))
+				chunks = append(chunks, slackWorkflowPhaseChunks(phases)...)
+				title := "Complete"
+
+				switch msg.WorkflowTerminal {
+				case workflow.TerminalComplete:
+					title = "Workflow complete"
+				case workflow.TerminalFailed:
+					title = "Workflow failed"
+				case workflow.TerminalStopped:
+					title = "Workflow stopped"
+				}
+
+				chunks = append(chunks, slack.NewPlanUpdateChunk(title))
 
 				_, _, err = c.api.StopStreamContext(ctx, slots.ChannelID, slots.ThinkingTS, slack.MsgOptionChunks(chunks...))
 				if err == nil {
@@ -776,7 +798,14 @@ func (c *Connector) finishCompleteResponse(ctx context.Context, msg *events.Outb
 
 					current := c.thinking[msg.TurnID]
 					current.activities = current.activities[len(activities):]
+
 					current.activitySequence += len(activities)
+					for id, update := range phases {
+						if current.phases[id] == update {
+							delete(current.phases, id)
+						}
+					}
+
 					c.thinking[msg.TurnID] = current
 					c.mu.Unlock()
 				}
@@ -941,6 +970,30 @@ func (c *Connector) bufferProgressText(turnID string, slots *slackReplySlots, pl
 	c.thinking[turnID] = pending
 }
 
+func (c *Connector) bufferWorkflowPhase(turnID string, slots *slackReplySlots, update *workflow.PhaseUpdate) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	pending := c.thinking[turnID]
+	if pending.phases == nil {
+		pending.phases = make(map[string]workflow.PhaseUpdate)
+	}
+
+	pending.phases[update.PhaseID] = *update
+	pending.State = slackReplyState{ChannelID: slots.ChannelID, MessageTS: slots.ThinkingTS}
+
+	pending.thinkingStream, pending.thinkingTaskID = slots.thinkingStream, slots.thinkingTaskID
+	if pending.Timer == nil {
+		pending.Timer = time.AfterFunc(slackThinkingFlushInterval, func() {
+			if err := c.flushProgressText(context.Background(), turnID); err != nil {
+				c.log.Warn("flush Slack workflow update", "turn_id", turnID, "error", err)
+			}
+		})
+	}
+
+	c.thinking[turnID] = pending
+}
+
 func (c *Connector) addGoalCompleteReactions(ctx context.Context, channelID, threadTS string, posted []slackReplyState) {
 	if threadTS != "" {
 		c.addReaction(ctx, &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}, slackGoalCompleteReaction, "add Slack goal complete root reaction")
@@ -989,7 +1042,7 @@ func (c *Connector) flushProgressText(ctx context.Context, turnID string) error 
 		}
 
 		if pending.thinkingStream {
-			if len(pending.activities) == 0 {
+			if len(pending.activities) == 0 && len(pending.phases) == 0 {
 				c.thinking[turnID] = pending
 				c.mu.Unlock()
 
@@ -999,10 +1052,12 @@ func (c *Connector) flushProgressText(ctx context.Context, turnID string) error 
 			pending.flushDone = make(chan struct{})
 			done := pending.flushDone
 			activities := slices.Clone(pending.activities)
+			phases := maps.Clone(pending.phases)
 			c.thinking[turnID] = pending
 			c.mu.Unlock()
 
 			chunks := slackThinkingActivityChunks(&pending, activities)
+			chunks = append(chunks, slackWorkflowPhaseChunks(phases)...)
 
 			_, _, err := c.api.AppendStreamContext(ctx, pending.State.ChannelID, pending.State.MessageTS, slack.MsgOptionChunks(chunks...))
 
@@ -1013,7 +1068,13 @@ func (c *Connector) flushProgressText(ctx context.Context, turnID string) error 
 				current.flushDone = nil
 				if err == nil {
 					current.activities = current.activities[len(activities):]
+
 					current.activitySequence += len(activities)
+					for id, update := range phases {
+						if current.phases[id] == update {
+							delete(current.phases, id)
+						}
+					}
 				}
 
 				c.thinking[turnID] = current
@@ -1071,6 +1132,35 @@ func slackThinkingActivityChunks(pending *slackThinkingState, activities []strin
 
 			chunks = append(chunks, chunk)
 		}
+	}
+
+	return chunks
+}
+
+func slackWorkflowPhaseChunks(phases map[string]workflow.PhaseUpdate) []slack.StreamChunk {
+	chunks := make([]slack.StreamChunk, 0, len(phases))
+	for _, id := range slices.Sorted(maps.Keys(phases)) {
+		update := phases[id]
+
+		chunk := slack.NewTaskUpdateChunk(id, update.Name)
+		switch update.Status {
+		case workflow.PhasePending:
+			chunk.Status = slack.TaskCardStatusPending
+		case workflow.PhaseInProgress:
+			chunk.Status = slack.TaskCardStatusInProgress
+		case workflow.PhaseComplete:
+			chunk.Status = slack.TaskCardStatusComplete
+		case workflow.PhaseError:
+			chunk.Status = slack.TaskCardStatusError
+		}
+
+		chunk.Details = fmt.Sprintf("complete %d, running %d, scheduled %d", update.Complete, update.Running, update.Scheduled)
+		if update.Details != "" {
+			chunk.Details += "; " + update.Details
+		}
+
+		chunk.Details = string([]rune(chunk.Details)[:min(len([]rune(chunk.Details)), 256)])
+		chunks = append(chunks, chunk)
 	}
 
 	return chunks
@@ -1745,6 +1835,12 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 			case "cron":
 				c.handleOnDemandCronRequest(ctx, args, replyTarget)
 				return
+			case "workflow":
+				content := events.InboundContent{Text: text}
+				inbound := newSlackInboundMessage(text, &content, replyTarget, c.slackPrincipal(ev.User))
+				c.handleWorkflowRequest(ctx, slackThreadStackKey(replyTarget), "", args, ev.User, replyTarget, inbound)
+
+				return
 			case "stop":
 				if args != "" {
 					if _, err := c.postSlackDollarCommandHelp(ctx, ev.Channel, threadTS); err != nil {
@@ -1998,6 +2094,13 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 		case "goal":
 			goal, rejection = harnessbridge.ParseGoalRequest(args)
 			isGoal = true
+		case "workflow":
+			content := events.InboundContent{Text: text}
+			inbound := newSlackInboundMessage(text, &content, replyTarget, c.slackPrincipal(ev.User))
+			events.SetInboundAllowedAgents(inbound, c.socialModeAgents(channel))
+			c.handleWorkflowRequest(ctx, slackThreadStackKey(replyTarget), agent, args, ev.User, replyTarget, inbound)
+
+			return
 		default:
 			help, err := c.postSlackDollarCommandHelp(ctx, ev.Channel, threadTS)
 			if err != nil {
@@ -2249,6 +2352,7 @@ func (c *Connector) handleSlackAgentSwitchSelection(ctx context.Context, userID 
 func slackDollarCommandHelpTable() *slack.TableBlock {
 	return slack.NewTableBlock("").
 		AddRow(slack.NewTableRawTextCell("$goal <objective>"), slack.NewTableRawTextCell("🏁"), slack.NewTableRawTextCell("Start a goal")).
+		AddRow(slack.NewTableRawTextCell("$workflow <name> [args]"), slack.NewTableRawTextCell("⏩"), slack.NewTableRawTextCell("Run a workflow")).
 		AddRow(slack.NewTableRawTextCell("$stop"), slack.NewTableRawTextCell("🛑"), slack.NewTableRawTextCell("Stop the active turn")).
 		AddRow(slack.NewTableRawTextCell("$cron <job>"), slack.NewTableRawTextCell("🔂"), slack.NewTableRawTextCell("Run a cron job")).
 		AddRow(slack.NewTableRawTextCell("$agent [name]"), slack.NewTableRawTextCell("🎛"), slack.NewTableRawTextCell("Switch or select an agent"))
@@ -2261,6 +2365,86 @@ func (c *Connector) postSlackDollarCommandHelp(ctx context.Context, channelID, t
 	}
 
 	return slackReplyState{ChannelID: postedChannelID, MessageTS: messageTS}, nil
+}
+
+func (c *Connector) handleWorkflowRequest(ctx context.Context, key, agent, args, userID string, replyTarget *events.SlackReplyTarget, inbound *events.InboundMessage) {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		descriptions, err := c.threadRouter.WorkflowDescriptions()
+		if err != nil {
+			c.postSlackEphemeral(ctx, replyTarget.ChannelID, replyTarget.ThreadTS, userID, "I couldn't list workflows: "+err.Error())
+			return
+		}
+
+		if len(descriptions) == 0 {
+			c.postSlackEphemeral(ctx, replyTarget.ChannelID, replyTarget.ThreadTS, userID, "No workflows are configured.")
+			return
+		}
+
+		lines := make([]string, 0, len(descriptions))
+		for _, description := range descriptions {
+			lines = append(lines, description.Name+" - "+description.Description)
+		}
+
+		c.postSlackEphemeral(ctx, replyTarget.ChannelID, replyTarget.ThreadTS, userID, strings.Join(lines, "\n"))
+
+		return
+	}
+
+	target := events.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}
+
+	releasePair, reserved, err := c.threadRouter.ReserveWorkflowTurn(target)
+	if err != nil {
+		c.log.Error("reserve Slack workflow turn", "error", err, "channel", replyTarget.ChannelID, "thread_ts", replyTarget.ThreadTS)
+		c.postSlackEphemeral(ctx, replyTarget.ChannelID, replyTarget.ThreadTS, userID, "I couldn't check this thread's turn state. Try again.")
+
+		return
+	}
+
+	if !reserved {
+		c.postSlackEphemeral(ctx, replyTarget.ChannelID, replyTarget.ThreadTS, userID, "Wait for the active turn to finish, then run $workflow again.")
+		return
+	}
+
+	c.mu.Lock()
+
+	_, active := c.stacks[key]
+	if !active {
+		c.stacks[key] = nil
+	}
+	c.mu.Unlock()
+
+	if active {
+		releasePair()
+		c.postSlackEphemeral(ctx, replyTarget.ChannelID, replyTarget.ThreadTS, userID, "Wait for the active turn to finish, then run $workflow again.")
+
+		return
+	}
+
+	name, workflowArgs := args, ""
+	if index := strings.IndexFunc(args, unicode.IsSpace); index >= 0 {
+		name, workflowArgs = args[:index], strings.TrimSpace(args[index:])
+	}
+
+	c.createReplyPlaceholdersOrWarn(ctx, replyTarget, "Workflow: "+name, replyTarget.RecipientTeamID, replyTarget.RecipientUserID, "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS)
+	c.addRobotReaction(ctx, replyTarget)
+
+	if err := c.threadRouter.StartWorkflowInThread(ctx, agent, name, workflowArgs, target, inbound); err != nil {
+		releasePair()
+
+		if !c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't start that workflow: "+err.Error(), "consume Slack workflow rejection placeholder") {
+			c.promoteSlackStack(ctx, key, func(submitCtx context.Context, inbound *events.InboundMessage) error {
+				_, err := c.threadRouter.SubmitThreadReply(submitCtx, events.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, inbound)
+				if err != nil {
+					return fmt.Errorf("submit buffered Slack thread reply: %w", err)
+				}
+
+				return nil
+			})
+		}
+
+		return
+	}
 }
 
 func (c *Connector) postSlackEphemeral(ctx context.Context, channelID, threadTS, userID, text string) {
@@ -2502,6 +2686,10 @@ func canonicalSlackCommand(text string) (string, bool) {
 		return strings.TrimSpace("$cron " + strings.TrimSpace(after)), true
 	}
 
+	if after, ok := strings.CutPrefix(canonicalEmoji, "⏩"); ok {
+		return strings.TrimSpace("$workflow " + strings.TrimSpace(after)), true
+	}
+
 	after, isAgent := strings.CutPrefix(canonicalEmoji, "🎛️")
 	if !isAgent {
 		after, isAgent = strings.CutPrefix(canonicalEmoji, "🎛")
@@ -2673,10 +2861,13 @@ func (c *Connector) consumeReservedPlaceholder(ctx context.Context, replyTarget 
 	return c.SendResponse(ctx, msg)
 }
 
-func (c *Connector) warnConsumeReservedPlaceholder(ctx context.Context, replyTarget *events.SlackReplyTarget, text, logMessage string) {
+func (c *Connector) warnConsumeReservedPlaceholder(ctx context.Context, replyTarget *events.SlackReplyTarget, text, logMessage string) bool {
 	if err := c.consumeReservedPlaceholder(ctx, replyTarget, text); err != nil {
 		c.log.Warn(logMessage, "error", err, "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS, "thread_ts", replyTarget.ThreadTS)
+		return false
 	}
+
+	return true
 }
 
 func cloneSlackReplyTarget(replyTarget *events.SlackReplyTarget) *events.SlackReplyTarget {

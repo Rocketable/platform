@@ -1,6 +1,6 @@
 # Rocketable Platform
 
-Rocketable Platform is Rocketable's workspace-local AI agent runtime. It turns a repository or working directory into an agent environment where humans can interact through Slack or an external MCP endpoint, while agents operate through controlled access to local files, shell commands, tools, skills, attachments, and connected services.
+Rocketable Platform is Rocketable's workspace-local AI agent runtime. It turns a repository or working directory into an agent environment where humans can interact through Slack or an external MCP endpoint, while agents operate through controlled access to local files, shell commands, tools, skills, saved Starlark workflows, attachments, and connected services.
 
 The platform is written in Go and is oriented around internal, workspace-local deployment rather than hosted multi-tenant SaaS.
 
@@ -17,6 +17,7 @@ See [LICENSE](LICENSE) for the full license terms.
 - Run workspace-aware AI agents with local instructions, agent definitions, skills, attachments, subagents, custom tools, file access, shell commands, web fetches, and explicit permission rules.
 - Keep agent work durable through SQLite-backed sessions, replay, active-turn checkpoints, connector routing, scheduled messages, restart recovery, and conversation-local goal loops.
 - Connect agents to team workflows through Slack, cron jobs, scheduled prompts, and an external MCP HTTP endpoint.
+- Run checked-in Starlark workflows as foreground managed turns with isolated custom workers and Slack phase progress.
 - Route model requests through first-party OpenAI Responses while preserving one local agent/tool model.
 - Run `openresponsesd` as a separate local OpenResponses-shaped API daemon that can route to OpenAI Responses, OpenAI-compatible Chat Completions, or Anthropic Messages upstreams.
 - Expose optional OpenTelemetry/OpenInference-compatible tracing for agent runs.
@@ -34,7 +35,7 @@ Runnable entry points:
 
 ### RocketClaw
 
-`internal/rocketclaw` is the long-running service runtime around RocketCode. It provides thread-local conversations in configured Slack channels, external MCP, cron-defined background prompts, one-shot and recurring scheduled messages, inbound and outbound attachments, supervisor restart, and SQLite state under the selected runtime directory.
+`internal/rocketclaw` is the long-running service runtime around RocketCode. It provides thread-local conversations in configured Slack channels, saved Starlark workflows, external MCP, cron-defined background prompts, one-shot and recurring scheduled messages, inbound and outbound attachments, supervisor restart, and SQLite state under the selected runtime directory.
 
 The runnable entry point is `cmd/rocketclaw`. Run `rocketclaw help` for setup, validation, session inspection, and operational commands.
 
@@ -58,13 +59,15 @@ Every active `cron/*.md` definition declares a quoted `channel` that matches a c
 
 ## Runtime Flow
 
-1. A workspace contains `AGENTS.md` plus optional `agents/`, `skills/`, `scripts/`, and `cron/` definitions.
+1. A workspace contains `AGENTS.md` plus optional `agents/`, `skills/`, `scripts/`, `cron/`, and `workflows/` definitions.
 2. `rocketclaw.json` points RocketClaw at that workspace, provides Slack credentials and channels, and configures optional integrations.
 3. RocketClaw builds runtime assets from embedded defaults, configured git overlays, and local workspace overrides.
-4. A human message, cron job, scheduled prompt, or MCP request enters RocketClaw and invokes RocketCode with the selected agent.
+4. A human message, `$workflow` command, cron job, scheduled prompt, or MCP request enters RocketClaw and invokes RocketCode with the selected agent.
 5. RocketCode runs model/tool turns under configured permissions.
 6. RocketClaw publishes progress, final responses, files, or reactions back through the originating connector.
 7. Conversation state, active-turn handoffs, scheduled work, and routing metadata are persisted so restart recovery can refire interrupted turns as model-guided continuations from uncertain state.
+
+Saved workflows run only as foreground managed turns. Each workflow launches fresh isolated custom workers, keeps intermediate values out of managed history, and records and delivers only its final value. Slack shows phase progress with plan/task cards. Fan-out workers share one checkout, so parallel writers must own disjoint files. SQLite does not persist workflow progress: `$stop` ends the run, and daemon restart requires a new `$workflow` invocation.
 
 For local CLI experimentation, `rocketcode` and `rocketloop` run RocketCode directly in the current working directory.
 
@@ -88,6 +91,7 @@ RocketClaw is configured with `rocketclaw.json` in the working directory. Runtim
 - `.rocketclaw/state.sqlite3`: private MCP and managed Slack sessions, active-turn restart handoffs, managed Slack routing, External MCP bindings to both sessions, scheduled messages, cron execution state, restart notifications, and goal-loop state.
 - `.rocketclaw/overlays/`: configured git overlay clones for runtime assets.
 - `.rocketclaw/.rocketcode/`: RocketCode shell output and transient artifacts.
+- `.rocketclaw/workflows/`: effective saved Starlark workflows assembled from embedded, overlay, and workspace `workflows/` assets.
 
 Generated runtime state should not be treated as source code.
 

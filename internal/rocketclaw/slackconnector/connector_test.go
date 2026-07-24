@@ -33,6 +33,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/cronjob"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
+	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 )
 
 func testExternalMCPRelay(text string, attachments []events.OutboundAttachment) *events.ExternalMCPRelay {
@@ -347,6 +348,9 @@ func TestCanonicalSlackCommand(t *testing.T) {
 		{name: "stop button alias", text: ":stop_button:", want: "$stop", ok: true},
 		{name: "cron", text: "🔂 cron/daily.md", want: "$cron cron/daily.md", ok: true},
 		{name: "cron alias", text: ":repeat_one: daily", want: "$cron daily", ok: true},
+		{name: "workflow", text: "⏩ audit src/routes", want: "$workflow audit src/routes", ok: true},
+		{name: "workflow alias", text: ":fast_forward_button: audit", want: "$workflow audit", ok: true},
+		{name: "bare workflow", text: "⏩", want: "$workflow", ok: true},
 		{name: "agent", text: "🎛 planner", want: "$agent planner", ok: true},
 		{name: "agent emoji presentation", text: "🎛️ planner", want: "$agent planner", ok: true},
 		{name: "agent alias", text: ":control_knobs: planner", want: "$agent planner", ok: true},
@@ -5597,6 +5601,7 @@ func assertSlackCommandHelpTable(t *testing.T, values url.Values) {
 	assert.Equal(t, "table", blocks[0].Type)
 	assert.Equal(t, [][]tableCell{
 		{{Type: "raw_text", Text: "$goal <objective>"}, {Type: "raw_text", Text: "🏁"}, {Type: "raw_text", Text: "Start a goal"}},
+		{{Type: "raw_text", Text: "$workflow <name> [args]"}, {Type: "raw_text", Text: "⏩"}, {Type: "raw_text", Text: "Run a workflow"}},
 		{{Type: "raw_text", Text: "$stop"}, {Type: "raw_text", Text: "🛑"}, {Type: "raw_text", Text: "Stop the active turn"}},
 		{{Type: "raw_text", Text: "$cron <job>"}, {Type: "raw_text", Text: "🔂"}, {Type: "raw_text", Text: "Run a cron job"}},
 		{{Type: "raw_text", Text: "$agent [name]"}, {Type: "raw_text", Text: "🎛"}, {Type: "raw_text", Text: "Switch or select an agent"}},
@@ -5922,6 +5927,7 @@ func TestSlackDollarCommand(t *testing.T) {
 		{name: "attached", text: "$goal ship it", command: "goal", args: "ship it", ok: true},
 		{name: "spaced", text: "  $ goal ship it  ", command: "goal", args: "ship it", ok: true},
 		{name: "case insensitive", text: "$ GoAl maxTurns: 2 ship it", command: "goal", args: "maxTurns: 2 ship it", ok: true},
+		{name: "workflow args", text: "$workflow audit   src/routes ", command: "workflow", args: "audit   src/routes", ok: true},
 		{name: "bare", text: "$", ok: true},
 		{name: "ordinary text", text: "cost is $5"},
 		{name: "dollar after text", text: "please $goal ship it"},
@@ -5933,6 +5939,518 @@ func TestSlackDollarCommand(t *testing.T) {
 			assert.Equal(t, tt.args, args)
 		})
 	}
+}
+
+func TestWorkflowPhaseUsesStableTaskUpdateAndTerminalPlan(t *testing.T) {
+	var appended, stopped url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		switch r.URL.Path {
+		case "/chat.appendStream":
+			appended = cloneValues(r.PostForm)
+		case "/chat.stopStream":
+			stopped = cloneValues(r.PostForm)
+		case "/chat.update", "/reactions.remove":
+		default:
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+
+		writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	connector.replies["run-1"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", AnswerTS: "555.2", thinkingStream: true, thinkingTaskID: "222.333"}
+	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+	progress := events.NewOutboundMessage(events.SourceSlack, "thread", "", events.OutputTargetSlack)
+	progress.TurnID, progress.SlackReply = "run-1", reply
+	progress.WorkflowPhase = &workflow.PhaseUpdate{PhaseID: "run-1/phase/audit", Name: "audit", Status: "in-progress", Scheduled: 3, Running: 1, Complete: 2, Details: "checking"}
+	require.NoError(t, connector.SendResponse(t.Context(), progress))
+	require.NoError(t, connector.flushProgressText(t.Context(), "run-1"))
+
+	final := events.NewOutboundMessage(events.SourceSlack, "thread", "finished", events.OutputTargetSlack)
+	final.TurnID, final.SlackReply, final.Complete, final.WorkflowTerminal = "run-1", reply, true, workflow.TerminalComplete
+	require.NoError(t, connector.SendResponse(t.Context(), final))
+	assert.JSONEq(t, `[{"type":"task_update","id":"run-1/phase/audit","title":"audit","status":"in_progress","details":"complete 2, running 1, scheduled 3; checking"}]`, appended.Get("chunks"))
+	assert.JSONEq(t, `[{"type":"plan_update","title":"Workflow complete"}]`, stopped.Get("chunks"))
+}
+
+func TestWorkflowPhaseChunksPreserveOrder(t *testing.T) {
+	for _, tt := range []struct {
+		name, want string
+		phases     map[string]workflow.PhaseUpdate
+	}{
+		{name: "declared", phases: map[string]workflow.PhaseUpdate{
+			"run/phase/000000/discover": {PhaseID: "run/phase/000000/discover", Name: "discover", Status: workflow.PhaseComplete, Details: "not run"},
+			"run/phase/000001/audit":    {PhaseID: "run/phase/000001/audit", Name: "audit", Status: workflow.PhaseComplete, Details: "not run"},
+			"run/phase/000002/verify":   {PhaseID: "run/phase/000002/verify", Name: "verify", Status: workflow.PhaseComplete, Details: "not run"},
+		}, want: `[
+			{"type":"task_update","id":"run/phase/000000/discover","title":"discover","status":"complete","details":"complete 0, running 0, scheduled 0; not run"},
+			{"type":"task_update","id":"run/phase/000001/audit","title":"audit","status":"complete","details":"complete 0, running 0, scheduled 0; not run"},
+			{"type":"task_update","id":"run/phase/000002/verify","title":"verify","status":"complete","details":"complete 0, running 0, scheduled 0; not run"}
+		]`},
+		{name: "dynamic", phases: map[string]workflow.PhaseUpdate{
+			"run/phase/000000/verify": {PhaseID: "run/phase/000000/verify", Name: "verify", Status: workflow.PhaseComplete},
+			"run/phase/000001/audit":  {PhaseID: "run/phase/000001/audit", Name: "audit", Status: workflow.PhaseComplete},
+		}, want: `[
+			{"type":"task_update","id":"run/phase/000000/verify","title":"verify","status":"complete","details":"complete 0, running 0, scheduled 0"},
+			{"type":"task_update","id":"run/phase/000001/audit","title":"audit","status":"complete","details":"complete 0, running 0, scheduled 0"}
+		]`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := json.Marshal(slackWorkflowPhaseChunks(tt.phases))
+			require.NoError(t, err)
+			assert.JSONEq(t, tt.want, string(encoded))
+		})
+	}
+}
+
+func TestWorkflowPhaseContinuousUpdatesDoNotPostponeFlush(t *testing.T) {
+	appended := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		appended <- struct{}{}
+
+		writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	slots := slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", thinkingStream: true}
+	update := workflow.PhaseUpdate{PhaseID: "run/phase/000000/work", Name: "work", Status: workflow.PhaseInProgress}
+
+	connector.bufferWorkflowPhase("run", &slots, &update)
+	defer func() {
+		connector.mu.Lock()
+		if timer := connector.thinking["run"].Timer; timer != nil {
+			timer.Stop()
+		}
+		connector.mu.Unlock()
+	}()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	timeout := time.NewTimer(3 * time.Second)
+	defer timeout.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			update.Scheduled++
+			connector.bufferWorkflowPhase("run", &slots, &update)
+		case <-appended:
+			return
+		case <-timeout.C:
+			t.Fatal("continuous updates postponed the armed workflow flush")
+		}
+	}
+}
+
+func TestWorkflowRequestListsLaunchesAndRejectsActiveStack(t *testing.T) {
+	var (
+		posted, ephemeral []url.Values
+		reactions         []string
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		switch r.URL.Path {
+		case "/chat.postMessage", "/chat.update":
+			posted = append(posted, cloneValues(r.PostForm))
+		case "/chat.postEphemeral":
+			ephemeral = append(ephemeral, cloneValues(r.PostForm))
+		case "/reactions.add":
+			reactions = append(reactions, r.PostForm.Get("name"))
+		case "/chat.delete", "/reactions.remove":
+		default:
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+
+		writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+	}))
+	t.Cleanup(server.Close)
+
+	router := newThreadRouterStub()
+	router.workflows = []workflow.Description{{Name: "audit", Description: "Audit routes"}}
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
+	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222", RecipientUserID: "U123"}
+	inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "$workflow audit   src/routes", true)
+	key := slackThreadStackKey(reply)
+
+	connector.handleWorkflowRequest(t.Context(), key, "planner", "", "U123", reply, inbound)
+	require.Len(t, ephemeral, 1)
+	assert.Equal(t, "audit - Audit routes", ephemeral[0].Get("text"))
+
+	connector.handleWorkflowRequest(t.Context(), key, "planner", "audit   src/routes", "U123", reply, inbound)
+	require.Len(t, router.workflowStarts, 1)
+	assert.Equal(t, workflowThreadStartCall{agent: "planner", name: "audit", args: "src/routes", inbound: inbound}, router.workflowStarts[0])
+	assert.Equal(t, "Workflow: audit", posted[0].Get("text"))
+	assert.Contains(t, reactions, slackRobotReaction)
+
+	connector.handleWorkflowRequest(t.Context(), key, "planner", "audit again", "U123", reply, inbound)
+	require.Len(t, router.workflowStarts, 1)
+	require.Len(t, ephemeral, 2)
+	assert.Equal(t, "Wait for the active turn to finish, then run $workflow again.", ephemeral[1].Get("text"))
+
+	connector.finishSlackStack(key)
+
+	router.errStart = errors.New("unknown workflow")
+
+	connector.handleWorkflowRequest(t.Context(), key, "planner", "missing", "U123", reply, inbound)
+	connector.mu.Lock()
+	_, active := connector.stacks[key]
+	connector.mu.Unlock()
+	assert.False(t, active)
+	assert.False(t, connector.hasPendingState(reply))
+}
+
+func TestWorkflowRequestParsesUnicodeWhitespace(t *testing.T) {
+	for _, args := range []string{"audit\tsrc/routes", "audit\nsrc/routes"} {
+		server := newSlackStackTestServer(t, new([]url.Values), new([]string))
+		router := newThreadRouterStub()
+		connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
+		reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+
+		connector.handleWorkflowRequest(t.Context(), slackThreadStackKey(reply), "planner", args, "U123", reply, events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "$workflow "+args, true))
+		require.Len(t, router.workflowStarts, 1)
+		assert.Equal(t, "audit", router.workflowStarts[0].name)
+		assert.Equal(t, "src/routes", router.workflowStarts[0].args)
+		server.Close()
+	}
+}
+
+func TestWorkflowRequestRejectsBusyPairedTurnBeforeReservation(t *testing.T) {
+	var ephemeral []url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		if r.URL.Path != "/chat.postEphemeral" {
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+
+		ephemeral = append(ephemeral, cloneValues(r.PostForm))
+
+		writeJSON(t, w, map[string]any{"ok": true})
+	}))
+	t.Cleanup(server.Close)
+
+	router := newThreadRouterStub()
+	router.workflowReserved = false
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
+	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+
+	connector.handleWorkflowRequest(t.Context(), slackThreadStackKey(reply), "planner", "audit", "U123", reply, events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "$workflow audit", true))
+	require.Len(t, ephemeral, 1)
+	assert.Equal(t, "Wait for the active turn to finish, then run $workflow again.", ephemeral[0].Get("text"))
+	assert.Empty(t, router.workflowStarts)
+	assert.False(t, connector.hasPendingState(reply))
+}
+
+func TestWorkflowRequestLogsReservationFailure(t *testing.T) {
+	var (
+		logs      bytes.Buffer
+		ephemeral []url.Values
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		if r.URL.Path != "/chat.postEphemeral" {
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+
+		ephemeral = append(ephemeral, cloneValues(r.PostForm))
+
+		writeJSON(t, w, map[string]any{"ok": true})
+	}))
+	t.Cleanup(server.Close)
+
+	router := newThreadRouterStub()
+	router.errReserveWorkflow = errors.New("state unavailable")
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
+	connector.log = slog.New(slog.NewTextHandler(&logs, nil))
+	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+
+	connector.handleWorkflowRequest(t.Context(), slackThreadStackKey(reply), "planner", "audit", "U123", reply, events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "$workflow audit", true))
+	require.Len(t, ephemeral, 1)
+	assert.Equal(t, "I couldn't check this thread's turn state. Try again.", ephemeral[0].Get("text"))
+	assert.Contains(t, logs.String(), "state unavailable")
+	assert.Empty(t, router.workflowStarts)
+}
+
+func TestWorkflowRequestReleasesPairedReservationOnLaunchFailure(t *testing.T) {
+	server := newSlackStackTestServer(t, new([]url.Values), new([]string))
+	t.Cleanup(server.Close)
+
+	router := newThreadRouterStub()
+	router.workflowReserved, router.errStart = true, errors.New("launch failed")
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
+	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+
+	connector.handleWorkflowRequest(t.Context(), slackThreadStackKey(reply), "planner", "audit", "U123", reply, events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "$workflow audit", true))
+	assert.Equal(t, 1, router.workflowReleases)
+}
+
+func TestWorkflowStackIsReservedBeforeSynchronousCompletion(t *testing.T) {
+	server := newSlackStackTestServer(t, new([]url.Values), new([]string))
+	t.Cleanup(server.Close)
+
+	router := newThreadRouterStub()
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
+	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+	key := slackThreadStackKey(reply)
+	router.onWorkflowStart = func() { connector.finishSlackStack(key) }
+
+	connector.handleWorkflowRequest(t.Context(), key, "planner", "audit", "U123", reply, events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "$workflow audit", true))
+
+	connector.mu.Lock()
+	_, active := connector.stacks[key]
+	connector.mu.Unlock()
+	assert.False(t, active)
+}
+
+func TestConcurrentWorkflowStartsReserveOnce(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+	}))
+	t.Cleanup(server.Close)
+
+	router := newThreadRouterStub()
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
+	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+	key := slackThreadStackKey(reply)
+	started, release := make(chan struct{}), make(chan struct{})
+
+	var mu sync.Mutex
+
+	starts := 0
+	router.onWorkflowStart = func() {
+		mu.Lock()
+		starts++
+		current := starts
+		mu.Unlock()
+
+		if current == 1 {
+			close(started)
+			<-release
+		}
+	}
+
+	done := make(chan struct{})
+
+	go func() {
+		connector.handleWorkflowRequest(t.Context(), key, "planner", "audit", "U123", reply, events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "$workflow audit", true))
+		close(done)
+	}()
+
+	<-started
+	connector.handleWorkflowRequest(t.Context(), key, "planner", "audit", "U123", reply, events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "$workflow audit", true))
+	close(release)
+	<-done
+	mu.Lock()
+	assert.Equal(t, 1, starts)
+	mu.Unlock()
+	assert.Equal(t, 1, router.workflowReleases)
+}
+
+func TestFailedWorkflowLaunchPromotesBufferedMessage(t *testing.T) {
+	server := newSlackStackTestServer(t, new([]url.Values), new([]string))
+	t.Cleanup(server.Close)
+
+	router := newThreadRouterStub()
+	router.errStart = errors.New("launch failed")
+	router.submitHandled = true
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
+	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+	key := slackThreadStackKey(reply)
+	router.onWorkflowStart = func() {
+		bufferedReply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.334", ThreadTS: "111.222"}
+		content := events.InboundContent{Text: "ordinary follow-up"}
+		assert.True(t, connector.bufferSlackStack(t.Context(), key, content.Text, &content, bufferedReply, "U123", "", "U123", nil))
+	}
+
+	connector.handleWorkflowRequest(t.Context(), key, "planner", "audit", "U123", reply, events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "$workflow audit", true))
+
+	replies := router.repliesSnapshot()
+	require.Len(t, replies, 1)
+	assert.Equal(t, "ordinary follow-up", replies[0].inbound.Text)
+	connector.mu.Lock()
+	_, active := connector.stacks[key]
+	connector.mu.Unlock()
+	assert.True(t, active)
+	connector.promoteSlackStack(t.Context(), key, func(context.Context, *events.InboundMessage) error {
+		return errors.New("unexpected submit")
+	})
+	connector.mu.Lock()
+	_, active = connector.stacks[key]
+	connector.mu.Unlock()
+	assert.False(t, active)
+}
+
+func TestFailedWorkflowRejectionDeliveryStillPromotesBufferedMessage(t *testing.T) {
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		switch r.URL.Path {
+		case "/chat.postMessage":
+			posts++
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": fmt.Sprintf("555.%d", posts)})
+		case "/chat.update":
+			writeJSON(t, w, map[string]any{"ok": false, "error": "fatal_error"})
+		case "/reactions.add", "/reactions.remove":
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	router := newThreadRouterStub()
+	router.errStart = errors.New("launch failed")
+	router.submitHandled = true
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
+	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+	key := slackThreadStackKey(reply)
+	router.onWorkflowStart = func() {
+		bufferedReply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.334", ThreadTS: "111.222"}
+		content := events.InboundContent{Text: "ordinary follow-up"}
+		assert.True(t, connector.bufferSlackStack(t.Context(), key, content.Text, &content, bufferedReply, "U123", "", "U123", nil))
+	}
+
+	connector.handleWorkflowRequest(t.Context(), key, "planner", "audit", "U123", reply, events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "$workflow audit", true))
+
+	replies := router.repliesSnapshot()
+	require.Len(t, replies, 1)
+	assert.Equal(t, "ordinary follow-up", replies[0].inbound.Text)
+	connector.promoteSlackStack(t.Context(), key, func(context.Context, *events.InboundMessage) error { return errors.New("unexpected submit") })
+	connector.mu.Lock()
+	_, active := connector.stacks[key]
+	connector.mu.Unlock()
+	assert.False(t, active)
+	assert.Empty(t, router.startedSnapshot())
+}
+
+func TestWorkflowPhaseUpdateArrivingDuringAppendIsPreserved(t *testing.T) {
+	appendStarted := make(chan struct{})
+	releaseAppend := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(appendStarted)
+		<-releaseAppend
+		writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	slots := slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", thinkingStream: true}
+	first := workflow.PhaseUpdate{PhaseID: "run/phase/audit", Name: "audit", Status: workflow.PhaseInProgress}
+	connector.bufferWorkflowPhase("run", &slots, &first)
+
+	errFlush := make(chan error, 1)
+	go func() { errFlush <- connector.flushProgressText(t.Context(), "run") }()
+
+	<-appendStarted
+
+	latest := first
+	latest.Status = workflow.PhaseComplete
+	connector.bufferWorkflowPhase("run", &slots, &latest)
+	close(releaseAppend)
+	require.NoError(t, <-errFlush)
+	connector.mu.Lock()
+	if connector.thinking["run"].Timer != nil {
+		connector.thinking["run"].Timer.Stop()
+	}
+
+	assert.Equal(t, workflow.PhaseComplete, connector.thinking["run"].phases[first.PhaseID].Status)
+	connector.mu.Unlock()
+}
+
+func TestWorkflowFinalizationDuringAppendPreservesLatestPhase(t *testing.T) {
+	appendStarted, releaseAppend := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat.appendStream":
+			close(appendStarted)
+			<-releaseAppend
+		case "/chat.stopStream", "/chat.update", "/chat.delete", "/reactions.remove":
+		default:
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+
+		writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+	connector.replies["run"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", AnswerTS: "555.2", thinkingStream: true}
+	slots := connector.replies["run"]
+	phase := workflow.PhaseUpdate{PhaseID: "run/phase/audit", Name: "audit", Status: workflow.PhaseInProgress}
+	connector.bufferWorkflowPhase("run", &slots, &phase)
+	connector.mu.Lock()
+	pending := connector.thinking["run"]
+
+	for i := range 10_000 {
+		id := fmt.Sprintf("run/phase/%d", i)
+		pending.phases[id] = workflow.PhaseUpdate{PhaseID: id, Name: id, Status: workflow.PhaseInProgress}
+	}
+
+	connector.thinking["run"] = pending
+	connector.mu.Unlock()
+
+	errFlush := make(chan error, 1)
+	go func() { errFlush <- connector.flushProgressText(t.Context(), "run") }()
+
+	<-appendStarted
+
+	final := events.NewOutboundMessage(events.SourceSlack, "thread", "done", events.OutputTargetSlack)
+	final.TurnID, final.SlackReply, final.Complete, final.WorkflowTerminal = "run", reply, true, workflow.TerminalComplete
+
+	errFinal, startedFinal, finalDone := make(chan error, 1), make(chan struct{}), make(chan struct{})
+	go func() {
+		close(startedFinal)
+
+		errFinal <- connector.SendResponse(t.Context(), final)
+
+		close(finalDone)
+	}()
+
+	<-startedFinal
+
+	phase.Status = workflow.PhaseComplete
+
+	updateDone := make(chan struct{})
+	go func() {
+		defer close(updateDone)
+
+		for {
+			select {
+			case <-finalDone:
+				return
+			default:
+				connector.bufferWorkflowPhase("run", &slots, &phase)
+			}
+		}
+	}()
+
+	close(releaseAppend)
+	require.NoError(t, <-errFlush)
+	require.NoError(t, <-errFinal)
+	<-updateDone
 }
 
 func TestParseCanonicalSlackCommandNormalizesCronTargets(t *testing.T) {
@@ -7118,11 +7636,15 @@ type threadRouterStub struct {
 	switched            []threadAgentSwitchCall
 	threadAgentReads    []threadAgentReadCall
 	goalStarts          []goalThreadStartCall
+	workflowStarts      []workflowThreadStartCall
+	workflows           []workflow.Description
 	goalStops           []goalThreadStopCall
 	conversationStops   []string
 	threadAgent         string
 	switchHandled       bool
 	threadAgentHandled  bool
+	workflowReserved    bool
+	workflowReleases    int
 	submitHandled       bool
 	prepareHandled      bool
 	prepareResults      []bool
@@ -7130,14 +7652,16 @@ type threadRouterStub struct {
 	errSubmit           error
 	errPrepare          error
 	errSwitch           error
+	errReserveWorkflow  error
 	registerExisting    bool
 	stopResult          *events.SlackReplyTarget
 	onStart             func()
+	onWorkflowStart     func()
 	onReply             func()
 }
 
 func newThreadRouterStub() *threadRouterStub {
-	return &threadRouterStub{}
+	return &threadRouterStub{workflowReserved: true}
 }
 
 type threadStartCall struct {
@@ -7177,6 +7701,11 @@ type goalThreadStartCall struct {
 	inbound     *events.InboundMessage
 }
 
+type workflowThreadStartCall struct {
+	agent, name, args string
+	inbound           *events.InboundMessage
+}
+
 type goalThreadStopCall struct {
 	channelID string
 	threadTS  string
@@ -7204,6 +7733,34 @@ func (s *threadRouterStub) StartGoalInThread(_ context.Context, agent, objective
 	_ = target
 
 	return errStart
+}
+
+func (s *threadRouterStub) StartWorkflowInThread(_ context.Context, agent, name, args string, _ events.TextConversationTarget, inbound *events.InboundMessage) error {
+	if s.onWorkflowStart != nil {
+		s.onWorkflowStart()
+	}
+
+	s.mu.Lock()
+	s.workflowStarts = append(s.workflowStarts, workflowThreadStartCall{agent: agent, name: name, args: args, inbound: inbound})
+	errStart := s.errStart
+	s.mu.Unlock()
+
+	return errStart
+}
+
+func (s *threadRouterStub) ReserveWorkflowTurn(events.TextConversationTarget) (release func(), reserved bool, err error) {
+	return func() {
+		s.mu.Lock()
+		s.workflowReleases++
+		s.mu.Unlock()
+	}, s.workflowReserved, s.errReserveWorkflow
+}
+
+func (s *threadRouterStub) WorkflowDescriptions() ([]workflow.Description, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return slices.Clone(s.workflows), s.errStart
 }
 
 func (s *threadRouterStub) InterruptThread(target events.TextConversationTarget) (*events.InboundMessage, error) {

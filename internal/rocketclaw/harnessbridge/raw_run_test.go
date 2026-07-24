@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -19,9 +20,13 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
+	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestRunRawReturnsPreLooperErrorsAndLogs(t *testing.T) {
@@ -75,8 +80,6 @@ func TestInertRawRunProgressCallbacksAreNoops(t *testing.T) {
 
 	require.NoError(t, progress.Thinking(context.Background(), "thinking"))
 	require.NoError(t, progress.Message(context.Background(), "message"))
-	require.NoError(t, progress.ScheduleMessage(time.Second, "later", false))
-	require.NoError(t, progress.ResetScheduledMessages())
 
 	restarted, err := progress.RequestRestart(context.Background(), "reason")
 	require.NoError(t, err)
@@ -170,7 +173,6 @@ func TestRunRawCronCanEditRestartAndCompleteDecision(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	restarts := 0
-	schedules := 0
 	progress := newInertRawRunProgress()
 	progress.SessionService, err = NewSessionService(workspace)
 	require.NoError(t, err)
@@ -184,22 +186,12 @@ func TestRunRawCronCanEditRestartAndCompleteDecision(t *testing.T) {
 
 		return "", nil
 	}
-	progress.ScheduleMessage = func(delay time.Duration, message string, recurring bool) error {
-		schedules++
-
-		assert.Equal(t, 5*time.Minute, delay)
-		assert.Equal(t, "follow up", message)
-		assert.False(t, recurring)
-
-		return nil
-	}
 	cfg := &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
 
 	result, err := RunRawWithProgress(t.Context(), cfg, "main", "!`printf raw-expanded`", slog.New(slog.DiscardHandler), progress)
 	require.NoError(t, err)
 	assert.Equal(t, RawRunResult{Text: "assistant complete", VerbatimMessage: "cron done"}, result)
 	assert.Equal(t, 1, restarts)
-	assert.Zero(t, schedules)
 	entries, err := ObserveSessionEntries(t.Context(), sessionDBPath(workspace), progress.ConversationID, 0)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
@@ -755,6 +747,402 @@ func TestRunRawAlwaysEnablesAutoApprovePermissions(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, RawRunResult{Text: "assistant text", VerbatimMessage: "done"}, result)
+}
+
+func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: '{{ model \"active\" }}'\npermission:\n  read: {\"*\": allow}\n  edit: allow\n  glob: allow\n  grep: allow\n  bash: {\"*\": allow}\n  webfetch: {\"*\": allow}\n  websearch: allow\n  skill: {\"demo\": allow}\n  task: {\"*\": allow}\n  rocketclaw: {\"rocketclaw_reload\": allow}\n---\nMain prompt\n")
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(".rocketclaw/skills/demo", 0o755))
+	require.NoError(t, root.WriteFile(".rocketclaw/skills/demo/SKILL.md", []byte("---\nname: demo\ndescription: Demo\n---\nDemo\n"), 0o644))
+
+	var (
+		mu       sync.Mutex
+		requests []map[string]any
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); !assert.NoError(t, err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		mu.Lock()
+
+		requests = append(requests, body)
+		mu.Unlock()
+
+		prompt := rawRunRequestPrompt(t, body)
+
+		text := "first"
+
+		switch prompt {
+		case "structured":
+			text = `{"ok":true}`
+		case "second":
+			text = "second"
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		writeRawRunMessage(t, w, "response", "message", text)
+	}))
+	t.Cleanup(server.Close)
+
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	previousProvider := otel.GetTracerProvider()
+
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previousProvider)
+		require.NoError(t, provider.Shutdown(context.Background()))
+	})
+
+	cfg := &config.Config{Workspace: workspace, Models: map[string]string{"active": "active-model", "fast": "fast-model", "nested": `{{ model "fast" }}`}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, Instrumentation: config.InstrumentationConfig{Enabled: true, HideInputs: true, HideOutputs: true}}
+	run, cleanup, err := newWorkflowAgentRunner(cfg, "main", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cleanup()) })
+
+	require.NoError(t, root.Remove(".rocketclaw/agents/main.md"))
+
+	cfg.OpenAI.APIBaseURL = "http://127.0.0.1:1"
+
+	result, err := run(t.Context(), workflow.AgentRequest{Prompt: "literal !`printf unsafe`"})
+	require.NoError(t, err)
+	require.JSONEq(t, `"first"`, string(result))
+
+	result, err = run(t.Context(), workflow.AgentRequest{Prompt: "structured", Worker: workflow.Worker{Name: "reviewer", Instructions: "Worker !`printf unsafe`", Model: "nested", Tools: []string{"skill"}}, Schema: map[string]any{"type": "object", "properties": map[string]any{"ok": map[string]any{"type": "boolean"}}, "required": []string{"ok"}}})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"ok":true}`, string(result))
+
+	result, err = run(t.Context(), workflow.AgentRequest{Prompt: "second"})
+	require.NoError(t, err)
+	require.JSONEq(t, `"second"`, string(result))
+
+	result, err = run(t.Context(), workflow.AgentRequest{Prompt: "no-tools", Worker: workflow.Worker{Name: "reasoner", Instructions: "Reason", Tools: []string{}}})
+	require.NoError(t, err)
+	require.JSONEq(t, `"first"`, string(result))
+
+	mu.Lock()
+	require.Len(t, requests, 4)
+	first, structured, second, noTools := requests[0], requests[1], requests[2], requests[3]
+	mu.Unlock()
+
+	require.Equal(t, "active-model", first["model"])
+	require.Contains(t, fmt.Sprint(first["instructions"]), "Main prompt")
+	require.Contains(t, fmt.Sprint(first), "literal !`printf unsafe`")
+	require.NotContains(t, fmt.Sprint(first["tools"]), `"name":"task"`)
+	require.NotContains(t, fmt.Sprint(first["tools"]), "rocketclaw_")
+	require.Contains(t, fmt.Sprint(first["tools"]), `name:read`)
+
+	require.Equal(t, "fast-model", structured["model"])
+	require.Contains(t, fmt.Sprint(structured["instructions"]), "Worker !`printf unsafe`")
+	require.NotContains(t, fmt.Sprint(structured["instructions"]), "Main prompt")
+	require.Contains(t, fmt.Sprint(structured["tools"]), `name:skill`)
+	require.Contains(t, fmt.Sprint(structured["tools"]), `name:find_skills`)
+	require.NotContains(t, fmt.Sprint(structured["tools"]), `name:read`)
+	require.Contains(t, fmt.Sprint(structured["text"]), "json_schema")
+	require.NotContains(t, fmt.Sprint(structured["text"]), "strict:true")
+
+	require.NotContains(t, fmt.Sprint(second["input"])+" "+fmt.Sprint(second["previous_response_id"]), "first")
+	require.Empty(t, noTools["tools"])
+	assert.NotEmpty(t, recorder.Ended(), "workflow run should emit configured tracing spans")
+}
+
+func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  bash:\n    \"printf ok\": auto\n---\nMain prompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	var models []string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); !assert.NoError(t, err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		models = append(models, fmt.Sprint(body["model"]))
+
+		w.Header().Set("Content-Type", "application/json")
+
+		switch len(models) {
+		case 1:
+			writeRawRunFunctionCall(t, w, "resp_1", "call_1", "bash", map[string]string{"command": "printf ok", "description": "print ok"})
+		case 2:
+			writeRawRunMessage(t, w, "resp_2", "msg_2", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low risk."}`)
+		case 3:
+			writeRawRunMessage(t, w, "resp_3", "msg_3", "done")
+		default:
+			t.Fatalf("unexpected request %d", len(models))
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	run, cleanup, err := newWorkflowAgentRunner(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "review-model"}, "main", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cleanup()) })
+	result, err := run(t.Context(), workflow.AgentRequest{Prompt: "run", Worker: workflow.Worker{Name: "worker", Instructions: "work", Tools: []string{"bash"}}})
+	require.NoError(t, err)
+	require.JSONEq(t, `"done"`, string(result))
+	require.Equal(t, []string{"gpt-5.5", "review-model", "gpt-5.5"}, models)
+}
+
+func TestWorkflowAgentRunnerStructuredOutputUsesFinalAssistantMessage(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  read: {\"*\": allow}\n---\nMain prompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "README.md"), []byte("fixture"), 0o644))
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+
+		w.Header().Set("Content-Type", "application/json")
+
+		switch requests {
+		case 1:
+			_, err := w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"checking the fixture","annotations":[]}]},{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"read","arguments":"{\"filePath\":\"README.md\",\"offset\":1}"}]}`))
+			assert.NoError(t, err)
+		case 2:
+			writeRawRunMessage(t, w, "resp_2", "msg_2", `{"ok":true}`)
+		default:
+			t.Fatalf("unexpected request %d", requests)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	run, cleanup, err := newWorkflowAgentRunner(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, "main", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cleanup()) })
+
+	result, err := run(t.Context(), workflow.AgentRequest{Prompt: "review", Schema: map[string]any{"type": "object", "properties": map[string]any{"ok": map[string]any{"type": "boolean"}}, "required": []string{"ok"}}})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"ok":true}`, string(result))
+	require.Equal(t, 2, requests)
+}
+
+func TestWorkflowExplicitSkillWithoutAvailableSubjects(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  skill:\n    unavailable: allow\n---\nMain prompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	var request map[string]any
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); !assert.NoError(t, err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		writeRawRunMessage(t, w, "resp", "msg", "done")
+	}))
+	t.Cleanup(server.Close)
+
+	run, cleanup, err := newWorkflowAgentRunner(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, "main", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cleanup()) })
+
+	_, err = run(t.Context(), workflow.AgentRequest{Prompt: "prompt", Worker: workflow.Worker{Name: "worker", Instructions: "work", Tools: []string{"skill"}}})
+	require.NoError(t, err)
+	assert.Contains(t, fmt.Sprint(request["tools"]), `name:skill`)
+	assert.NotContains(t, fmt.Sprint(request["tools"]), `name:find_skills`)
+}
+
+func TestWorkflowAgentRunnerRejectsInvalidOverridesAndStructuredOutput(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  read: {\"*\": allow}\n---\nMain prompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+
+		w.Header().Set("Content-Type", "application/json")
+		writeRawRunMessage(t, w, "response", "message", "not JSON")
+	}))
+	t.Cleanup(server.Close)
+
+	run, cleanup, err := newWorkflowAgentRunner(&config.Config{Workspace: workspace, Models: map[string]string{"known": "gpt-5.5", "broken": `{{ model "missing" }}`}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, "main", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cleanup()) })
+
+	_, err = run(t.Context(), workflow.AgentRequest{Worker: workflow.Worker{Name: "worker", Instructions: "prompt", Model: "missing"}, Prompt: "model"})
+	require.ErrorContains(t, err, `workflow worker model "missing" is not configured`)
+	_, err = run(t.Context(), workflow.AgentRequest{Worker: workflow.Worker{Name: "worker", Instructions: "prompt", Model: "broken"}, Prompt: "model"})
+	require.ErrorContains(t, err, `render workflow worker model "broken"`)
+	require.ErrorContains(t, err, `model "missing" is not configured`)
+	_, err = run(t.Context(), workflow.AgentRequest{Worker: workflow.Worker{Name: "worker", Instructions: "prompt", Tools: []string{"missing"}}, Prompt: "tools"})
+	require.ErrorContains(t, err, `unknown tool "missing"`)
+	_, err = run(t.Context(), workflow.AgentRequest{Prompt: "schema", Schema: map[string]any{"type": "string"}})
+	require.ErrorContains(t, err, "workflow worker returned invalid JSON")
+	require.Equal(t, 1, requests)
+}
+
+func TestWorkflowAgentRunnerConcurrentDirectoriesAndCancellation(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
+
+	arrived := make(chan struct{}, 2)
+	release := make(chan struct{})
+	cancelArrived := make(chan struct{})
+	cancelDone := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); !assert.NoError(t, err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		if rawRunRequestPrompt(t, body) == "cancel" {
+			close(cancelArrived)
+			<-r.Context().Done()
+			close(cancelDone)
+
+			return
+		}
+
+		arrived <- struct{}{}
+
+		<-release
+		w.Header().Set("Content-Type", "application/json")
+		writeRawRunMessage(t, w, "response", "message", "ok")
+	}))
+	t.Cleanup(server.Close)
+
+	run, cleanup, err := newWorkflowAgentRunner(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, "main", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cleanup()) })
+
+	type result struct {
+		raw json.RawMessage
+		err error
+	}
+
+	results := make(chan result, 2)
+
+	for _, prompt := range []string{"one", "two"} {
+		go func() {
+			raw, err := run(t.Context(), workflow.AgentRequest{Prompt: prompt})
+			results <- result{raw: raw, err: err}
+		}()
+	}
+
+	<-arrived
+	<-arrived
+
+	dirs, err := fs.Glob(root.FS(), ".rocketclaw/.rocketcode/workflow-*")
+	require.NoError(t, err)
+	require.Len(t, dirs, 2)
+	close(release)
+
+	for range 2 {
+		result := <-results
+		require.NoError(t, result.err)
+		require.JSONEq(t, `"ok"`, string(result.raw))
+	}
+
+	dirs, err = fs.Glob(root.FS(), ".rocketclaw/.rocketcode/workflow-*")
+	require.NoError(t, err)
+	require.Empty(t, dirs)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	canceled := make(chan error, 1)
+
+	go func() {
+		_, err := run(ctx, workflow.AgentRequest{Prompt: "cancel"})
+		canceled <- err
+	}()
+
+	<-cancelArrived
+	cancel()
+	require.ErrorIs(t, <-canceled, context.Canceled)
+	<-cancelDone
+
+	dirs, err = fs.Glob(root.FS(), ".rocketclaw/.rocketcode/workflow-*")
+	require.NoError(t, err)
+	require.Empty(t, dirs)
+}
+
+func TestWorkflowAgentRunnerReturnsShellDirectoryCleanupError(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		runFailure bool
+	}{
+		{name: "cleanup failure"},
+		{name: "run and cleanup failure", runFailure: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
+			root, err := os.OpenRoot(workspace)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, root.Close()) })
+			require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
+
+			const (
+				parent      = ".rocketclaw/.rocketcode"
+				savedParent = ".rocketclaw/.rocketcode-saved"
+			)
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				dirs, err := fs.Glob(root.FS(), parent+"/workflow-*")
+				if !assert.NoError(t, err) || !assert.Len(t, dirs, 1) {
+					http.Error(w, "inspect workflow directory", http.StatusInternalServerError)
+
+					return
+				}
+
+				if !assert.NoError(t, root.Rename(parent, savedParent)) || !assert.NoError(t, root.Symlink("../..", parent)) {
+					http.Error(w, "replace workflow parent", http.StatusInternalServerError)
+
+					return
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+
+				if tc.runFailure {
+					_, err := w.Write([]byte("{"))
+					assert.NoError(t, err)
+
+					return
+				}
+
+				writeRawRunMessage(t, w, "response", "message", "ok")
+			}))
+			t.Cleanup(server.Close)
+
+			run, cleanup, err := newWorkflowAgentRunner(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, "main", slog.New(slog.DiscardHandler))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, cleanup()) })
+
+			_, err = run(t.Context(), workflow.AgentRequest{Prompt: "run"})
+
+			require.NoError(t, root.Remove(parent))
+			require.NoError(t, root.Rename(savedParent, parent))
+			dirs, errGlob := fs.Glob(root.FS(), parent+"/workflow-*")
+			require.NoError(t, errGlob)
+			require.Len(t, dirs, 1)
+			require.NoError(t, root.RemoveAll(dirs[0]))
+
+			require.ErrorContains(t, err, "remove workflow shell output dir")
+
+			if tc.runFailure {
+				require.ErrorContains(t, err, "run workflow rocketcode turn")
+			}
+		})
+	}
 }
 
 func writeRawRunFunctionCall(t *testing.T, w http.ResponseWriter, responseID, callID, name string, args any) {

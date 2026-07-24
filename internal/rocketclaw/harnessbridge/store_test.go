@@ -179,6 +179,80 @@ func TestSessionServiceTurnPairAllowsOnlyOneActiveTurn(t *testing.T) {
 	})
 }
 
+func TestSessionServiceWorkflowAndMCPReservationsHaveOneWinner(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		service := newTestSessionService(t)
+		pairID, privateID := "slack-thread:C1:1.1", "external_mcp:private"
+		require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{PrivateConversationID: privateID, ManagedConversationID: pairID}))
+
+		start, privateRelease := make(chan struct{}), make(chan struct{})
+		privateAcquired := false
+
+		go func() {
+			<-start
+			service.reserveTurnPair(pairID, privateID)
+
+			unlock, err := service.lockTurnPair(t.Context(), pairID, privateID)
+			if err != nil {
+				return
+			}
+
+			privateAcquired = true
+
+			<-privateRelease
+			unlock()
+			service.completeTurnPairReservation(pairID, privateID)
+		}()
+
+		workflowResult := make(chan struct {
+			release  func()
+			reserved bool
+			err      error
+		}, 1)
+
+		go func() {
+			<-start
+
+			release, reserved, err := service.ReserveWorkflowTurn(pairID)
+			workflowResult <- struct {
+				release  func()
+				reserved bool
+				err      error
+			}{release, reserved, err}
+		}()
+
+		close(start)
+
+		result := <-workflowResult
+
+		synctest.Wait()
+		require.NoError(t, result.err)
+		assert.NotEqual(t, result.reserved, privateAcquired)
+		result.release()
+		close(privateRelease)
+	})
+}
+
+func TestSessionServiceWorkflowReservationReleaseAndUnpairedInert(t *testing.T) {
+	service := newTestSessionService(t)
+	pairID := "slack-thread:C1:1.1"
+	release, reserved, err := service.ReserveWorkflowTurn(pairID)
+	require.NoError(t, err)
+	require.True(t, reserved)
+	release()
+	assert.Empty(t, service.turnGates)
+
+	require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{PrivateConversationID: "external_mcp:private", ManagedConversationID: pairID}))
+	release, reserved, err = service.ReserveWorkflowTurn(pairID)
+	require.NoError(t, err)
+	require.True(t, reserved)
+	release()
+
+	_, reserved, err = service.ReserveWorkflowTurn(pairID)
+	require.NoError(t, err)
+	assert.True(t, reserved)
+}
+
 func TestSessionServiceTurnPairReservationPrioritizesPrivateTurn(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
@@ -580,7 +654,7 @@ func TestSessionServiceMigratesActiveTurnStatusSchemaDeletesLegacyRows(t *testin
 
 	assert.Empty(t, turnIDs)
 
-	hasStatus, err := activeTurnsHasColumn(context.Background(), store.db, "status")
+	hasStatus, err := tableHasColumn(context.Background(), store.db, "active_turns", "status", "active turn", "read")
 	require.NoError(t, err)
 	assert.False(t, hasStatus)
 }

@@ -4,21 +4,25 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
+	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/openai/openai-go/v3/responses"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace/noop"
@@ -36,11 +40,9 @@ type RawRunProgress struct {
 	SessionService *SessionService
 	ConversationID string
 
-	Thinking, Message      func(context.Context, string) error
-	ScheduleMessage        func(time.Duration, string, bool) error
-	ResetScheduledMessages func() error
-	RequestRestart         func(context.Context, string) (string, error)
-	RequestReload          func(context.Context, string) (string, error)
+	Thinking, Message func(context.Context, string) error
+	RequestRestart    func(context.Context, string) (string, error)
+	RequestReload     func(context.Context, string) (string, error)
 }
 
 const rawRunMissingToolPrompt = "You did not call the mandatory " + rawRunToolName + " tool. Normal assistant replies do not count and this background run cannot finish until you call that exact tool. Before this turn ends, call " + rawRunToolName + "(\"full exact message to show the human, or empty string if the human should see nothing\"). If the human partner should see a final message from this background turn, the full final message must be the tool argument. Do not send a summary, paraphrase, or reduced view."
@@ -122,36 +124,155 @@ func RunRawWithProgress(ctx context.Context, cfg *config.Config, agent, prompt s
 
 func newInertRawRunProgress() *RawRunProgress {
 	return &RawRunProgress{
-		Thinking:               func(context.Context, string) error { return nil },
-		Message:                func(context.Context, string) error { return nil },
-		ScheduleMessage:        func(time.Duration, string, bool) error { return nil },
-		ResetScheduledMessages: func() error { return nil },
-		RequestRestart:         func(context.Context, string) (string, error) { return "", nil },
-		RequestReload:          func(context.Context, string) (string, error) { return "rocketclaw runtime assets reloaded", nil },
+		Thinking:       func(context.Context, string) error { return nil },
+		Message:        func(context.Context, string) error { return nil },
+		RequestRestart: func(context.Context, string) (string, error) { return "", nil },
+		RequestReload:  func(context.Context, string) (string, error) { return "rocketclaw runtime assets reloaded", nil },
 	}
+}
+
+func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logger) (workflow.AgentRunFunc, func() error, error) {
+	root, agents, skills, providers, err := prepareRocketCode(cfg, agent, logger, toolModeWorkflow)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	parent := filepath.ToSlash(filepath.Join(cfg.RuntimeDirName(), ".rocketcode"))
+	if err := root.MkdirAll(parent, 0o755); err != nil {
+		_ = root.Close()
+		return nil, nil, fmt.Errorf("create workflow shell output parent dir: %w", err)
+	}
+
+	run := func(ctx context.Context, request workflow.AgentRequest) (result json.RawMessage, err error) {
+		callAgents := rocketcode.Agents{Items: maps.Clone(agents.Items)}
+
+		active := callAgents.Items[agent]
+		if request.Worker.Name != "" {
+			active.Prompt = request.Worker.Instructions
+		}
+
+		if request.Worker.Model != "" {
+			model, ok := cfg.Models[request.Worker.Model]
+			if !ok {
+				return nil, fmt.Errorf("workflow worker model %q is not configured", request.Worker.Model)
+			}
+
+			active.Model, err = cfg.RenderAgentModel(model)
+			if err != nil {
+				return nil, fmt.Errorf("render workflow worker model %q: %w", request.Worker.Model, err)
+			}
+		}
+
+		callAgents.Items[agent] = active
+
+		shellOutputRel := filepath.ToSlash(filepath.Join(parent, "workflow-"+rand.Text()))
+		if err := root.Mkdir(shellOutputRel, 0o700); err != nil {
+			return nil, fmt.Errorf("create workflow shell output dir: %w", err)
+		}
+		defer func() {
+			if errRemove := root.RemoveAll(shellOutputRel); errRemove != nil {
+				err = errors.Join(err, fmt.Errorf("remove workflow shell output dir: %w", errRemove))
+			}
+		}()
+
+		runtimeConfig := rocketcode.Config{AutoApproverModel: cfg.AutoApproverModel, ShellOutputDir: filepath.Join(cfg.Workspace, filepath.FromSlash(shellOutputRel)), ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}}
+
+		runtime, err := rocketcode.NewWithProviders(providers, &runtimeConfig, root, callAgents, skills, agent, io.Discard)
+		if err != nil {
+			return nil, fmt.Errorf("prepare workflow rocketcode run: %w", err)
+		}
+
+		tools := slices.Clone(request.Worker.Tools)
+		if tools == nil {
+			tools = slices.DeleteFunc(slices.Collect(maps.Keys(runtime.Tools)), func(name string) bool { return name == "task" })
+		}
+
+		if _, available := runtime.Tools["find_skills"]; available && slices.Contains(tools, "skill") && !slices.Contains(tools, "find_skills") {
+			tools = append(tools, "find_skills")
+		}
+
+		if err := runtime.RestrictTools(tools); err != nil {
+			return nil, fmt.Errorf("restrict workflow worker tools: %w", err)
+		}
+
+		if request.Schema != nil {
+			runtime.ResponseFormat.OfJSONSchema = &responses.ResponseFormatTextJSONSchemaConfigParam{Name: "workflow_response", Schema: request.Schema}
+		}
+
+		memory := new(memoryStore)
+		input := make(chan rocketcode.PromptInput, 1)
+
+		output := make(chan rocketcode.ChatResponse, 128)
+		input <- rocketcode.PromptInput{Role: rocketcode.PromptInputRoleUser, Text: request.Prompt, Responses: output}
+
+		close(input)
+
+		var group errgroup.Group
+		group.Go(func() error { return runtime.Loop(ctx, input, memory.in(), memory.out, make(chan os.Signal, 1)) })
+
+		last := ""
+
+		for item := range output {
+			if item.Kind == rocketcode.ChatResponseAssistantMessage {
+				if request.Schema != nil {
+					last = item.Text
+				} else {
+					last = appendText(last, item.Text)
+				}
+			}
+		}
+
+		if err := group.Wait(); err != nil {
+			return nil, fmt.Errorf("run workflow rocketcode turn: %w", err)
+		}
+
+		if request.Schema == nil {
+			return json.Marshal(last)
+		}
+
+		if !json.Valid([]byte(last)) {
+			return nil, errors.New("workflow worker returned invalid JSON")
+		}
+
+		return json.RawMessage(last), nil
+	}
+
+	return run, root.Close, nil
+}
+
+func prepareRocketCode(cfg *config.Config, agent string, logger *slog.Logger, mode toolMode) (*os.Root, rocketcode.Agents, rocketcode.Skills, rocketcode.Providers, error) {
+	root, err := os.OpenRoot(cfg.Workspace)
+	if err != nil {
+		return nil, rocketcode.Agents{}, rocketcode.Skills{}, rocketcode.Providers{}, fmt.Errorf("open workspace root: %w", err)
+	}
+
+	agents, skills, err := loadRocketCodeDefinitionsIn(root, cfg, cfg.RuntimeDirName(), mode)
+	if err != nil {
+		_ = root.Close()
+		return nil, rocketcode.Agents{}, rocketcode.Skills{}, rocketcode.Providers{}, fmt.Errorf("open workspace agent and skills: %w", err)
+	}
+
+	appendOverlayPromptToAgent(agents, agent, cfg)
+
+	b := &Bridge{log: logger, config: Config{Agent: agent}, runtime: cfg}
+
+	providers, err := b.rocketcodeProviders(agents)
+	if err != nil {
+		_ = root.Close()
+		return nil, rocketcode.Agents{}, rocketcode.Skills{}, rocketcode.Providers{}, fmt.Errorf("prepare RocketCode providers: %w", err)
+	}
+
+	return root, agents, skills, providers, nil
 }
 
 func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string, logger *slog.Logger, sessionIn iter.Seq2[rocketcode.SessionEntry, error], sessionOut func(rocketcode.SessionEntry) error, decision *rawRunDecision, attachments *outboundAttachmentCollector, progress *RawRunProgress, diagnostics bool) (string, error) {
 	last := ""
 
-	agent = strings.TrimSpace(agent)
-	if agent == "" {
-		agent = "main"
-	}
-
-	root, err := os.OpenRoot(cfg.Workspace)
+	root, agents, skills, providers, err := prepareRocketCode(cfg, agent, logger, toolModeCron)
 	if err != nil {
-		return "", fmt.Errorf("open workspace root: %w", err)
+		return "", err
 	}
-
 	defer func() { _ = root.Close() }()
-
-	agents, skills, err := loadRocketCodeDefinitionsIn(root, cfg, cfg.RuntimeDirName(), toolModeCron)
-	if err != nil {
-		return "", fmt.Errorf("open workspace agent and skills: %w", err)
-	}
-
-	appendOverlayPromptToAgent(agents, agent, cfg)
 
 	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(cfg.RuntimeDirName(), ".rocketcode")), 0o755); err != nil {
 		return "", fmt.Errorf("create rocketcode cron shell output parent dir: %w", err)
@@ -177,11 +298,6 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 	}
 
 	b := &Bridge{log: logger, config: Config{Agent: agent, RequestRestart: requestRestart, RequestReload: requestReload}, runtime: cfg, mu: sync.Mutex{}}
-
-	providers, err := b.rocketcodeProviders(agents)
-	if err != nil {
-		return "", fmt.Errorf("prepare RocketCode providers: %w", err)
-	}
 
 	customTools := []rocketcode.Tool{decision.Tool(), attachments.Tool(root), reloadTool(requestReload)}
 

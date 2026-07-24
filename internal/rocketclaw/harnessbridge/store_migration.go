@@ -32,10 +32,6 @@ func migrateSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) erro
 
 		logger.Info("setting rocketclaw state schema version", "version", sessionDBSchemaVersion)
 
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sessionDBSchemaVersion)); err != nil {
-			return fmt.Errorf("set rocketclaw state schema version: %w", err)
-		}
-
 		migrated = true
 	}
 
@@ -53,10 +49,6 @@ func migrateSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) erro
 		}
 
 		logger.Info("setting rocketclaw state schema version", "version", sessionDBSchemaVersion)
-
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sessionDBSchemaVersion)); err != nil {
-			return fmt.Errorf("set rocketclaw state schema version: %w", err)
-		}
 
 		migrated = true
 	}
@@ -84,10 +76,6 @@ func migrateSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) erro
 
 		logger.Info("setting rocketclaw state schema version", "version", sessionDBSchemaVersion)
 
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sessionDBSchemaVersion)); err != nil {
-			return fmt.Errorf("set rocketclaw state schema version: %w", err)
-		}
-
 		migrated = true
 	} else if !migrated {
 		logger.Info("rocketclaw state schema already current", "version", version)
@@ -105,10 +93,6 @@ func migrateSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) erro
 	if version <= 6 {
 		if err := migrateChannelOnlyState(ctx, tx); err != nil {
 			return err
-		}
-
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sessionDBSchemaVersion)); err != nil {
-			return fmt.Errorf("set rocketclaw state schema version: %w", err)
 		}
 
 		migrated = true
@@ -169,7 +153,7 @@ func migrateGoalRecipients(ctx context.Context, db stateStoreDB) (bool, error) {
 	changed := false
 
 	for _, column := range []string{"slack_recipient_team_id", "slack_recipient_user_id"} {
-		hasColumn, err := tableHasColumn(ctx, db, "conversation_goals", column)
+		hasColumn, err := tableHasColumn(ctx, db, "conversation_goals", column, "conversation_goals", "iterate")
 		if err != nil {
 			return false, err
 		}
@@ -198,10 +182,6 @@ func migrateExternalMCPDualSessionsIfNeeded(ctx context.Context, tx *sql.Tx, ver
 		return false, err
 	}
 
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sessionDBSchemaVersion)); err != nil {
-		return false, fmt.Errorf("set rocketclaw state schema version: %w", err)
-	}
-
 	return migrated, nil
 }
 
@@ -221,15 +201,11 @@ func migrateExternalMCPSessionState(ctx context.Context, tx *sql.Tx, version int
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sessionDBSchemaVersion)); err != nil {
-		return false, fmt.Errorf("set rocketclaw state schema version: %w", err)
-	}
-
 	return true, nil
 }
 
 func migrateExternalMCPDualSessionState(ctx context.Context, db stateStoreDB) (bool, error) {
-	hasPrivateConversationID, err := tableHasColumn(ctx, db, "external_mcp_sessions", "private_conversation_id")
+	hasPrivateConversationID, err := tableHasColumn(ctx, db, "external_mcp_sessions", "private_conversation_id", "external_mcp_sessions", "iterate")
 	if err != nil {
 		return false, err
 	}
@@ -253,18 +229,18 @@ func migrateExternalMCPDualSessionState(ctx context.Context, db stateStoreDB) (b
 }
 
 func migrateChannelOnlyState(ctx context.Context, tx stateStoreDB) error {
-	hasPrivateConversationID, err := tableHasColumn(ctx, tx, "external_mcp_sessions", "private_conversation_id")
+	hasPrivateConversationID, err := tableHasColumn(ctx, tx, "external_mcp_sessions", "private_conversation_id", "external_mcp_sessions", "iterate")
 	if err != nil {
 		return err
 	}
 
-	hasSeeded, err := tableHasColumn(ctx, tx, "managed_conversations", "seeded_from_response")
+	hasSeeded, err := tableHasColumn(ctx, tx, "managed_conversations", "seeded_from_response", "managed_conversations", "iterate")
 	if err != nil {
 		return err
 	}
 
 	if !hasSeeded {
-		hasSlackChannel, err := tableHasColumn(ctx, tx, "external_mcp_sessions", "slack_channel")
+		hasSlackChannel, err := tableHasColumn(ctx, tx, "external_mcp_sessions", "slack_channel", "external_mcp_sessions", "iterate")
 		if err != nil {
 			return err
 		}
@@ -343,10 +319,10 @@ func migrateChannelOnlyState(ctx context.Context, tx stateStoreDB) error {
 	return nil
 }
 
-func tableHasColumn(ctx context.Context, db stateStoreDB, table, column string) (bool, error) {
+func tableHasColumn(ctx context.Context, db stateStoreDB, table, column, schemaDisplay, readDisplay string) (bool, error) {
 	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
-		return false, fmt.Errorf("inspect %s schema: %w", table, err)
+		return false, fmt.Errorf("inspect %s schema: %w", schemaDisplay, err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -357,7 +333,7 @@ func tableHasColumn(ctx context.Context, db stateStoreDB, table, column string) 
 			defaultValue             sql.NullString
 		)
 		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return false, fmt.Errorf("scan %s schema: %w", table, err)
+			return false, fmt.Errorf("scan %s schema: %w", schemaDisplay, err)
 		}
 
 		if name == column {
@@ -366,7 +342,7 @@ func tableHasColumn(ctx context.Context, db stateStoreDB, table, column string) 
 	}
 
 	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("iterate %s schema: %w", table, err)
+		return false, fmt.Errorf("%s %s schema: %w", readDisplay, schemaDisplay, err)
 	}
 
 	return false, nil
@@ -422,7 +398,7 @@ func migrateCronScheduleSpec(ctx context.Context, tx *sql.Tx, logger *slog.Logge
 func migrateActiveTurnSourceMetadata(ctx context.Context, tx *sql.Tx, logger *slog.Logger) error {
 	logger.Info("adding rocketclaw active-turn source metadata schema")
 
-	hasMetadata, err := activeTurnsHasColumn(ctx, tx, "source_metadata_json")
+	hasMetadata, err := tableHasColumn(ctx, tx, "active_turns", "source_metadata_json", "active turn", "read")
 	if err != nil {
 		return err
 	}
@@ -445,7 +421,7 @@ func migrateActiveTurnRowExistence(ctx context.Context, tx *sql.Tx, logger *slog
 		}
 	}
 
-	hasStatus, err := activeTurnsHasColumn(ctx, tx, "status")
+	hasStatus, err := tableHasColumn(ctx, tx, "active_turns", "status", "active turn", "read")
 	if err != nil {
 		return err
 	}
@@ -465,39 +441,6 @@ func migrateActiveTurnRowExistence(ctx context.Context, tx *sql.Tx, logger *slog
 	}
 
 	return nil
-}
-
-func activeTurnsHasColumn(ctx context.Context, db stateStoreDB, column string) (bool, error) {
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(active_turns)`)
-	if err != nil {
-		return false, fmt.Errorf("inspect active turn schema: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	for rows.Next() {
-		var (
-			cid          int
-			name         string
-			columnType   string
-			notNull      int
-			defaultValue sql.NullString
-			primaryKey   int
-		)
-
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return false, fmt.Errorf("scan active turn schema: %w", err)
-		}
-
-		if name == column {
-			return true, nil
-		}
-	}
-
-	if err := rows.Err(); err != nil {
-		return false, fmt.Errorf("read active turn schema: %w", err)
-	}
-
-	return false, nil
 }
 
 func sessionDBUserVersion(ctx context.Context, db stateStoreDB) (int, error) {

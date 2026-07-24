@@ -11,6 +11,7 @@ Dollar commands are canonical. RocketClaw translates the listed emoji and Slack 
 | `❗` |  | Slack `:exclamation:` | Slack | Interruption or rejection marker. | Added by RocketClaw after stop/interruption and for duplicate active-goal rejection. Humans generally do not use this as a command. |
 | `✅` |  | Slack `:white_check_mark:` | Slack | Completion marker. | Added when a goal reaches `complete`. Not added for `blocked`, `stopped`, or `budget_exhausted`. |
 | `🔂` | `$cron`, `$ cron` | `:repeat_one:` | Slack | Runs a one-off cron request by text prefix. | Example: `$cron daily`. |
+| `⏩` | `$workflow <name> [args]` | Slack `:fast_forward_button:` | Slack configured channels | Runs a saved Starlark workflow as the foreground managed turn. | Bare `$workflow` lists names and descriptions. Retry after the active turn finishes. `$stop` ends a running workflow. |
 | `🎛` | `$agent`, `$ agent` | `:control_knobs:` | Slack managed conversations | Switches the persisted agent. | `🎛 agent-name` or `$agent name` switches. Bare `🎛` or `$agent` opens the selector, which only the user who sent the control message can use. |
 | `🤖` |  | Slack `:robot_face:` | Slack | Processing/accepted marker. | Added when RocketClaw accepts a Slack-originated or relayed turn; removed after final response delivery. |
 | `⏳` |  | Slack `:hourglass_flowing_sand:` | Slack | Buffered or in-progress marker. | Marks stacked or buffered Slack messages. Removed when processing advances. |
@@ -28,6 +29,7 @@ Agent controls are consumed by RocketClaw and do not route to RocketCode as prom
 | Message with another human mention | Mention RocketClaw too when the message also pings another person, bot, broadcast target, or user group. | Managed-thread replies that ping someone else are suppressed unless RocketClaw is also mentioned. Raw unresolved `@word` text is not treated as a Slack ping. |
 | Agent switch | `$agent agent-name` or bare `$agent` as the whole message. | `agent-name` must be in the channel's configured `agents` list. Bare `$agent` opens a Slack-native selector for that list. `🎛` is an alias. |
 | One-off cron | `$cron daily` or `$cron daily.md`. | Any top-level cronjob can be started from any configured Slack channel. `🔂` is an alias. |
+| Saved workflow | `$workflow audit-routes src/routes`. | Works in an existing managed thread or in an authorized root app mention that creates one. Bare `$workflow` lists available workflows. If a turn is active, wait and retry. `$stop` terminates the run. |
 | External MCP conversation | Call `session_prompt` with an external conversation ID, agent, and configured channel. | The ID owns one private MCP session and one managed Slack session on the same thread. The MCP agent stays fixed. MCP history copies into managed history; Slack history does not copy back. |
 
 ## Goal Examples
@@ -51,6 +53,34 @@ Agent controls are consumed by RocketClaw and do not route to RocketCode as prom
 | `maxTurns:` | Positive integer | Finite goal budget. Progress shows `_Pursuing Goal (n/m)..._`. |
 | `maxTurns:` | `0`, `-1`, `infinite` | Infinite goal budget. Progress shows `_Pursuing Goal..._`. |
 | `checkScript:` | Workspace-local safe simple command | Runs when the model calls `rocketclaw_update_goal` with `complete`; failure keeps the goal active. |
+
+## Saved Starlark Workflows
+
+Author source lives at `workflows/<name>.star`; RocketClaw runs the effective `.rocketclaw/workflows/<name>.star`. Names are lowercase hyphenated stems of at most 64 characters, and `meta.name` must match. Use the bundled `main-create-or-update-workflow` skill to create, update, review, or troubleshoot workflows, then activate all requested edits with exactly one `rocketclaw_reload` call.
+
+```python
+meta = {"name": "summarize", "description": "Summarize a requested scope", "phases": ["run"]}
+reader = worker(name = "reader", instructions = "Read and summarize the requested scope.", tools = ["read", "glob", "grep"])
+
+def main(args):
+    return phase("run", lambda: agent(args, worker = reader))
+```
+
+Exact builtins:
+
+- `worker(name, instructions, model=None, tools=None)` defines a workflow-local worker. Omit `model` and `tools` to inherit the invoking agent; `tools=[]` grants no tools, explicit `task` is rejected, and `skill` also grants its required `find_skills` companion. Explicit tools may only narrow access. Workers never receive RocketClaw behavior tools.
+- `agent(prompt, worker=None, label="", schema=None)` runs a fresh isolated worker and returns text or schema-shaped native Starlark data.
+- `parallel(callables)` runs zero-argument callbacks concurrently and preserves declaration order.
+- `pipeline(items, fn)` concurrently maps items and preserves input order.
+- `phase(name, fn)` runs a phase once. Declared phase names must be unique; when `meta.phases` is present, only those named phases may run. Calls outside named phases still use the implicit `run` phase even when `run` is not declared. Declared, dynamic, and implicit phases count toward a limit of 100 total phases.
+
+Fan-out is flat: nested `parallel` or `pipeline` calls are rejected. A run allows 16 concurrent fan-out callbacks, 1,000 callback dispatches, 1,000 agent calls, 100 total phases, and a shared 10-million-step Starlark budget. Bound every `while` loop and stop on success, no progress, blocked work, or an attempt limit.
+
+Prompt shell expansion is disabled for workflow worker instructions, input prompts, and loaded skill bodies, so syntax such as `` !`command` `` remains literal. This is intentional to preserve the workflow permission boundary.
+
+Return the human-visible value directly from `main`: strings render directly, other JSON-compatible values render as JSON, and only `None` or `""` is silent. Parallel workers share one checkout; assign disjoint file ownership and integrate shared files sequentially. Workflow progress uses Slack plan/task cards, but intermediate values do not enter managed history. `$stop` is terminal, SQLite stores no workflow progress, and daemon restart requires reinvocation.
+
+`workflow_button` belongs to Slack Workflow Builder. RocketClaw saved workflows do not use it.
 
 ## Channel Configuration Example
 

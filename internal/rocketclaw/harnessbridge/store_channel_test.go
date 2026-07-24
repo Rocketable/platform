@@ -24,7 +24,7 @@ func TestFreshSchemaHasNoSeedState(t *testing.T) {
 	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'response_checkpoints'`).Scan(&count))
 	assert.Zero(t, count)
 
-	hasSeeded, err := tableHasColumn(t.Context(), store.db, "managed_conversations", "seeded_from_response")
+	hasSeeded, err := tableHasColumn(t.Context(), store.db, "managed_conversations", "seeded_from_response", "managed_conversations", "iterate")
 	require.NoError(t, err)
 	assert.False(t, hasSeeded)
 
@@ -358,7 +358,7 @@ func TestVersionSixMigrationRemovesRedundantSlackCoordinates(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, ExternalMCPSessionState{Agent: "main", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops"}, session)
 
-	hasChannelID, err := tableHasColumn(t.Context(), store.db, "external_mcp_sessions", "slack_channel_id")
+	hasChannelID, err := tableHasColumn(t.Context(), store.db, "external_mcp_sessions", "slack_channel_id", "external_mcp_sessions", "iterate")
 	require.NoError(t, err)
 	assert.False(t, hasChannelID)
 

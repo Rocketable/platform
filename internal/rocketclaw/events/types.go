@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 )
 
 // MaxInboundTextAttachmentBytes is the per-file size limit for attachments converted to prompt text.
@@ -102,6 +104,7 @@ type InboundMessage struct {
 	Kind                                                    InboundKind
 	ConversationID                                          string
 	Metadata                                                map[string]string
+	Workflow                                                *workflow.RunRequest
 
 	responseInit, responseOnce sync.Once
 	responseCh                 chan InboundResponse
@@ -170,6 +173,8 @@ type OutboundMessage struct {
 	Attachments                  []OutboundAttachment
 	GoalTurn, GoalComplete       bool
 	GoalTurnNumber, GoalMaxTurns int
+	WorkflowPhase                *workflow.PhaseUpdate
+	WorkflowTerminal             workflow.Terminal
 
 	deliveryInit, deliveredOnce sync.Once
 	delivered                   chan struct{}

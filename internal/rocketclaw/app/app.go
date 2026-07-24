@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"maps"
 	"mime"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/Rocketable/platform/internal/rocketclaw/slackconnector"
+	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 )
 
 // ErrRestartRequested indicates rocketclaw should exit so a supervisor can restart it.
@@ -191,6 +193,10 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		return fmt.Errorf("validate cron definitions: %w", err)
 	}
 
+	if err := validateWorkflowDefinitions(cfg, cfg.RuntimeDirName()); err != nil {
+		return err
+	}
+
 	questionBroker := newAskUserQuestionBroker(logger)
 
 	var externalMCPUsers map[string]string
@@ -247,6 +253,10 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 			if err := cronjob.ValidateRuntimeDefinitions(cfg.Workspace, runtimeDir, channels); err != nil {
 				return fmt.Errorf("validate cron definitions: %w", err)
+			}
+
+			if err := validateWorkflowDefinitions(cfg, runtimeDir); err != nil {
+				return err
 			}
 
 			return nil
@@ -364,6 +374,10 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 				logger.Warn("stop connector", "connector", sink.name, "error", err)
 			}
 		}
+
+		if err := threadBridges.Stop(); err != nil {
+			logger.Warn("stop thread bridges", "error", err)
+		}
 	}()
 
 	logger.Info("starting Slack connector")
@@ -459,6 +473,29 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	}
 
 	return err
+}
+
+func validateWorkflowDefinitions(cfg *config.Config, runtimeDir string) (err error) {
+	root, err := os.OpenRoot(cfg.Workspace)
+	if err != nil {
+		return fmt.Errorf("open workflow root: %w", err)
+	}
+	defer func() { err = errors.Join(err, root.Close()) }()
+
+	definitions, err := workflow.Load(root, runtimeDir)
+	if err != nil {
+		return fmt.Errorf("validate workflow definitions: %w", err)
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(definitions)) {
+		for _, model := range definitions[name].WorkerModels {
+			if _, ok := cfg.Models[model]; !ok {
+				return fmt.Errorf("validate workflow definitions: workflow worker model %q is not configured", model)
+			}
+		}
+	}
+
+	return nil
 }
 
 func startExternalMCPServer(

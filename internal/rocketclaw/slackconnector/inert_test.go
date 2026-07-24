@@ -7,6 +7,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/cronjob"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
+	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 )
 
 type inertThreadRouter struct{}
@@ -16,6 +17,15 @@ func (inertThreadRouter) StartThread(_ context.Context, _ string, _ events.TextC
 }
 func (inertThreadRouter) StartGoalInThread(_ context.Context, _, _, _ string, _ int, _ events.TextConversationTarget, _ *events.InboundMessage) error {
 	return errors.New("slack thread routing is not configured")
+}
+func (inertThreadRouter) StartWorkflowInThread(context.Context, string, string, string, events.TextConversationTarget, *events.InboundMessage) error {
+	return errors.New("slack thread routing is not configured")
+}
+func (inertThreadRouter) WorkflowDescriptions() ([]workflow.Description, error) {
+	return nil, errors.New("slack thread routing is not configured")
+}
+func (inertThreadRouter) ReserveWorkflowTurn(events.TextConversationTarget) (release func(), reserved bool, err error) {
+	return func() {}, true, nil
 }
 func (inertThreadRouter) InterruptThread(target events.TextConversationTarget) (*events.InboundMessage, error) {
 	_ = target

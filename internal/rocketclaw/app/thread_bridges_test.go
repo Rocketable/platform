@@ -13,6 +13,8 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
+	"github.com/Rocketable/platform/internal/rocketclaw/skel"
+	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,6 +48,83 @@ func TestRunRejectsUnresolvedAgentModelAtStartup(t *testing.T) {
 	err := Run(t.Context(), &config.Config{Workspace: workspace}, "", slog.New(slog.DiscardHandler))
 	require.ErrorContains(t, err, "validate rocketcode definitions")
 	require.ErrorContains(t, err, `model "missing" is not configured`)
+}
+
+func TestRunRejectsInvalidWorkflowAtStartup(t *testing.T) {
+	for _, tt := range []struct{ name, source, want string }{
+		{name: "syntax", source: "not valid starlark", want: "validate workflow definitions"},
+		{name: "worker model", source: "meta = {\"name\": \"bad\", \"description\": \"Bad\"}\nw = worker(name=\"w\", instructions=\"work\", model=\"missing\")\ndef main(args): return None\n", want: `workflow worker model "missing" is not configured`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := shortTempDir(t)
+			root, err := os.OpenRoot(workspace)
+			require.NoError(t, err)
+			require.NoError(t, root.Mkdir("workflows", 0o755))
+			require.NoError(t, root.WriteFile("workflows/bad.star", []byte(tt.source), 0o600))
+			t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+			err = Run(t.Context(), &config.Config{Workspace: workspace}, "", slog.New(slog.DiscardHandler))
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
+}
+
+func TestThreadBridgeManagerListsAndStartsWorkflowWithPersistedAgent(t *testing.T) {
+	workspace := t.TempDir()
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
+	require.NoError(t, root.WriteFile(".rocketclaw/workflows/audit.star", []byte("meta = {\"name\": \"audit\", \"description\": \"Audit routes\"}\ndef main(args): return args\n"), 0o600))
+	require.NoError(t, root.Close())
+
+	store := newTestSessionService(t, workspace)
+	conversationID := harnessbridge.SlackThreadConversationID("C123", "111.222")
+	require.NoError(t, store.UpsertThread(conversationID, harnessbridge.ThreadState{Agent: "planner"}))
+
+	bridge := new(fakeDirectBridge)
+	startedAgent := ""
+	manager := newThreadBridgeManager(&config.Config{Workspace: workspace}, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge { startedAgent = cfg.Agent; return bridge })
+
+	descriptions, err := manager.WorkflowDescriptions()
+	require.NoError(t, err)
+	assert.Equal(t, []workflow.Description{{Name: "audit", Description: "Audit routes"}}, descriptions)
+
+	inbound := newThreadInboundMessage("$workflow audit src", "222.333", "111.222")
+	require.NoError(t, manager.StartWorkflowInThread(t.Context(), "main", "audit", "src", slackTarget("C123", "111.222"), inbound))
+	require.Len(t, bridge.submits, 1)
+	assert.Equal(t, "planner", startedAgent)
+	assert.Equal(t, "audit", bridge.submits[0].Workflow.Definition.Name)
+	assert.Equal(t, "src", bridge.submits[0].Workflow.Args)
+	err = manager.StartWorkflowInThread(t.Context(), "main", "missing", "", slackTarget("C123", "111.222"), inbound)
+	require.ErrorContains(t, err, `workflow "missing" is not configured`)
+	require.Len(t, bridge.submits, 1)
+}
+
+func TestWorkflowValidationKeepsLiveAssetsOnInvalidReload(t *testing.T) {
+	for _, tt := range []struct{ name, source, want string }{
+		{name: "invalid syntax", source: "not valid starlark", want: "validate workflow definitions"},
+		{name: "unknown worker model", source: "meta = {\"name\": \"bad\", \"description\": \"Bad\"}\nw = worker(name=\"w\", instructions=\"work\", model=\"missing\")\ndef main(args): return None\n", want: `workflow worker model "missing" is not configured`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			root, err := os.OpenRoot(workspace)
+			require.NoError(t, err)
+			require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
+			require.NoError(t, root.WriteFile(".rocketclaw/workflows/live.star", []byte("live"), 0o600))
+			require.NoError(t, root.Mkdir("workflows", 0o755))
+			require.NoError(t, root.WriteFile("workflows/bad.star", []byte(tt.source), 0o600))
+			t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+			cfg := &config.Config{Workspace: workspace}
+			err = skel.ReplaceRuntimeAssetsAfterValidation(workspace, cfg.RuntimeDirName(), nil, slog.New(slog.DiscardHandler), func(runtimeDir string) error {
+				return validateWorkflowDefinitions(cfg, runtimeDir)
+			})
+			require.ErrorContains(t, err, tt.want)
+			data, err := root.ReadFile(".rocketclaw/workflows/live.star")
+			require.NoError(t, err)
+			assert.Equal(t, "live", string(data))
+		})
+	}
 }
 
 func TestThreadBridgeManagerCreatesSeparateBridgesPerThreadAndPersistsThem(t *testing.T) {
