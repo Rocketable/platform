@@ -201,6 +201,7 @@ Running `rocketclaw` without a subcommand starts the server when `femtoclaw.json
 | Command | Purpose |
 | --- | --- |
 | `rocketclaw run` | Starts the RocketClaw server/runtime and fails if the selected configuration is missing or invalid. |
+| `rocketclaw exec [--timeout <duration>] <agent> <prompt>` | Run one agent once, non-interactively, and print the run as JSONL. |
 | `rocketclaw setup` | Interactively creates or updates `rocketclaw.json`, root setup files, workspace overlays, and `.rocketclaw/`. |
 | `rocketclaw setup files list` | Lists embedded setup payload files. |
 | `rocketclaw setup files get <path>` | Prints one embedded setup payload file. |
