@@ -846,6 +846,7 @@ func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 	require.Contains(t, fmt.Sprint(structured["tools"]), `name:find_skills`)
 	require.NotContains(t, fmt.Sprint(structured["tools"]), `name:read`)
 	require.Contains(t, fmt.Sprint(structured["text"]), "json_schema")
+	require.Contains(t, fmt.Sprint(structured["text"]), "additionalProperties:false")
 	require.NotContains(t, fmt.Sprint(structured["text"]), "strict:true")
 
 	require.NotContains(t, fmt.Sprint(second["input"])+" "+fmt.Sprint(second["previous_response_id"]), "first")

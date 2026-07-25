@@ -196,7 +196,12 @@ func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logge
 		}
 
 		if request.Schema != nil {
-			runtime.ResponseFormat.OfJSONSchema = &responses.ResponseFormatTextJSONSchemaConfigParam{Name: "workflow_response", Schema: request.Schema}
+			schema := maps.Clone(request.Schema)
+			if schema["type"] == "object" {
+				schema["additionalProperties"] = false
+			}
+
+			runtime.ResponseFormat.OfJSONSchema = &responses.ResponseFormatTextJSONSchemaConfigParam{Name: "workflow_response", Schema: schema}
 		}
 
 		memory := new(memoryStore)
