@@ -39,8 +39,22 @@ func initializeSessionDB(ctx context.Context, db *sql.DB, logger *slog.Logger) e
 
 	logger.Info("initialized rocketclaw state sqlite pragmas", "elapsed", time.Since(startedAt))
 
-	if err := migrateSessionDB(ctx, db, logger); err != nil {
-		return fmt.Errorf("migrate rocketcode session db: %w", err)
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin rocketcode session schema initialization: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := createSessionSchema(ctx, tx); err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, sessionDBSchemaVersion)); err != nil {
+		return fmt.Errorf("set rocketclaw state schema version: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit rocketcode session schema initialization: %w", err)
 	}
 
 	return nil
@@ -70,7 +84,6 @@ func execSessionDBStatement(ctx context.Context, db *sql.DB, statement string) e
 func createSessionSchema(ctx context.Context, db stateStoreDB) error {
 	for _, statement := range []string{
 		`CREATE TABLE IF NOT EXISTS session_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL, entry_json TEXT NOT NULL, entry_timestamp TEXT NOT NULL)`,
-		`CREATE TABLE IF NOT EXISTS session_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS session_entries_conversation_id_id ON session_entries (conversation_id, id)`,
 		`CREATE INDEX IF NOT EXISTS session_entries_conversation_id_timestamp_jd ON session_entries (conversation_id, julianday(entry_timestamp))`,
 		`CREATE TABLE IF NOT EXISTS managed_conversations (conversation_id TEXT PRIMARY KEY, agent TEXT NOT NULL, created_by TEXT NOT NULL)`,

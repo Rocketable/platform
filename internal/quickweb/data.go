@@ -21,25 +21,22 @@ func openDatabase(path string) (*sql.DB, error) {
 	}
 
 	if err := db.Ping(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 
-	return db, nil
-}
-
-func migrateDatabase(db *sql.DB) error {
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS page_state (
+	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS page_state (
   namespace TEXT PRIMARY KEY,
   document_json TEXT NOT NULL,
   created_utc TEXT NOT NULL,
   updated_utc TEXT NOT NULL
 );`)
 	if err != nil {
-		return fmt.Errorf("migrate database: %w", err)
+		_ = db.Close()
+		return nil, fmt.Errorf("initialize database: %w", err)
 	}
 
-	return nil
+	return db, nil
 }
 
 func (s *Server) handleData(w http.ResponseWriter, r *http.Request) {

@@ -33,15 +33,6 @@ var errStateStoreCorrupt = errors.New("rocketclaw state store is corrupt")
 // ErrGoalAlreadyActive reports that a conversation already has an active goal.
 var ErrGoalAlreadyActive = errors.New("goal already active")
 
-// State is the persisted rocketclaw session state.
-type State struct {
-	Threads                     map[string]ThreadState             `json:"threads,omitempty"`
-	ExternalMCPSessions         map[string]ExternalMCPSessionState `json:"external_mcp_sessions,omitempty"`
-	ScheduledMessages           map[string]ScheduledMessageState   `json:"scheduled_messages,omitempty"`
-	Goals                       map[string]GoalState               `json:"goals,omitempty"`
-	PendingRestartNotifications map[string]bool                    `json:"pending_restart_notifications,omitempty"`
-}
-
 // GoalStatusActive and related constants are persisted goal-loop statuses.
 const (
 	GoalStatusActive          = "active"
@@ -69,7 +60,6 @@ type ExternalMCPSessionState struct {
 	Agent                 string `json:"agent,omitempty"`
 	PrivateConversationID string `json:"private_conversation_id,omitempty"`
 	ManagedConversationID string `json:"managed_conversation_id,omitempty"`
-	ConversationID        string `json:"conversation_id,omitempty"`
 	SlackChannel          string `json:"slack_channel,omitempty"`
 }
 
@@ -318,13 +308,7 @@ func (s *SessionService) UpsertExternalMCPSession(externalConversationID string,
 
 	session.Agent = strings.TrimSpace(session.Agent)
 	session.PrivateConversationID = strings.TrimSpace(session.PrivateConversationID)
-
 	session.ManagedConversationID = strings.TrimSpace(session.ManagedConversationID)
-	if session.ManagedConversationID == "" {
-		session.ManagedConversationID = strings.TrimSpace(session.ConversationID)
-	}
-
-	session.ConversationID = ""
 	session.SlackChannel = strings.TrimSpace(session.SlackChannel)
 
 	return stateDAO{db: s.db}.upsertExternalMCPSession(context.Background(), externalConversationID, session)
@@ -1959,32 +1943,6 @@ func rootPathExistsNoSymlink(root *os.Root, path, label string) (bool, error) {
 	return true, nil
 }
 
-func loadRocketClawState(ctx context.Context, db stateStoreDB) (State, error) {
-	var raw string
-
-	err := db.QueryRowContext(ctx, `SELECT value FROM session_meta WHERE key = ?`, "rocketclaw_state").Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return State{}, nil
-	}
-
-	if err != nil {
-		return State{}, fmt.Errorf("read persisted state: %w", err)
-	}
-
-	if strings.TrimSpace(raw) == "" {
-		return State{}, nil
-	}
-
-	var state State
-	if err := json.Unmarshal([]byte(raw), &state); err != nil {
-		return State{}, fmt.Errorf("parse persisted state: %w", err)
-	}
-
-	normalizeState(&state)
-
-	return state, nil
-}
-
 func slackStateKeyTime(key, prefix string) (time.Time, bool) {
 	key = strings.TrimSpace(key)
 	if !strings.HasPrefix(key, prefix) {
@@ -2206,28 +2164,6 @@ func deleteSessionEntries(ctx context.Context, db stateStoreDB, conversationIDs 
 	}
 
 	return deleted, nil
-}
-
-func normalizeState(state *State) {
-	if len(state.Threads) == 0 {
-		state.Threads = nil
-	}
-
-	if len(state.ExternalMCPSessions) == 0 {
-		state.ExternalMCPSessions = nil
-	}
-
-	if len(state.ScheduledMessages) == 0 {
-		state.ScheduledMessages = nil
-	}
-
-	if len(state.Goals) == 0 {
-		state.Goals = nil
-	}
-
-	if len(state.PendingRestartNotifications) == 0 {
-		state.PendingRestartNotifications = nil
-	}
 }
 
 func openSessionDB(ctx context.Context, dbPath string, logger *slog.Logger) (*sql.DB, error) {

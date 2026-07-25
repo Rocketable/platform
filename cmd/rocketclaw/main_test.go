@@ -79,19 +79,18 @@ func TestRunWithLegacyConfigAttemptsServe(t *testing.T) {
 	require.ErrorContains(t, err, "load config")
 }
 
-func TestRunServeMigratesSlackChannelsBeforeLoading(t *testing.T) {
+func TestRunServeKeepsLegacyConfigReadOnly(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	legacy := []byte(`{"workspace":".","slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","human_user_id":"U123","room":"D123","social_mode":{"channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}},"openai":{"api_key":"test"}}`)
 	require.NoError(t, os.WriteFile(defaultConfigPath, legacy, 0o600))
 
 	err := runServe(nil)
-	require.Error(t, err)
+	require.ErrorContains(t, err, "slack.channels is required")
 
 	data, err := os.ReadFile(defaultConfigPath)
 	require.NoError(t, err)
-	assert.NotContains(t, string(data), `"social_mode"`)
-	assert.Contains(t, string(data), `"channels"`)
+	assert.Equal(t, legacy, data)
 }
 
 func TestLoadRuntimeConfigKeepsLegacyConfigReadOnly(t *testing.T) {

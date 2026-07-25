@@ -32,10 +32,6 @@ func sessionDBPath(workspace string) string {
 	return sessionDBPathIn(workspace, config.DefaultRuntimeDir)
 }
 
-func prepareSessionDBPath(workspace string) error {
-	return prepareSessionDBPathIn(workspace, config.DefaultRuntimeDir)
-}
-
 func AppendSessionEntryID(ctx context.Context, dbPath, conversationID string, entry *harness.SessionEntry) (int64, error) {
 	if entry == nil {
 		return 0, errors.New("rocketcode session entry is required")
@@ -542,123 +538,6 @@ func TestSessionServiceInitializesGoalRecipientSchema(t *testing.T) {
 	}
 }
 
-func TestSessionServiceMigratesVersionEightGoalRecipients(t *testing.T) {
-	workspace := t.TempDir()
-	require.NoError(t, prepareSessionDBPath(workspace))
-	db, err := sql.Open("sqlite", sessionDBPath(workspace))
-	require.NoError(t, err)
-	_, err = db.ExecContext(t.Context(), `CREATE TABLE conversation_goals (conversation_id TEXT PRIMARY KEY, objective TEXT NOT NULL, check_script TEXT NOT NULL, max_turns INTEGER NOT NULL, turns_used INTEGER NOT NULL, status TEXT NOT NULL, note TEXT NOT NULL, created_at_unix_ns INTEGER NOT NULL, updated_at_unix_ns INTEGER NOT NULL)`)
-	require.NoError(t, err)
-	_, err = db.ExecContext(t.Context(), `INSERT INTO conversation_goals VALUES ('thread-1', 'ship it', './check.sh', 5, 2, 'active', 'working', 1, 2)`)
-	require.NoError(t, err)
-	_, err = db.ExecContext(t.Context(), `PRAGMA user_version = 8`)
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
-
-	store := newTestSessionServiceAt(t, workspace)
-	reopened := newTestSessionServiceAt(t, workspace)
-	goal, ok, err := reopened.Goal("thread-1")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, GoalState{
-		Objective:            "ship it",
-		CheckScript:          "./check.sh",
-		MaxTurns:             5,
-		TurnsUsed:            2,
-		Status:               GoalStatusActive,
-		Note:                 "working",
-		SlackRecipientTeamID: "",
-		SlackRecipientUserID: "",
-		CreatedAt:            time.Unix(0, 1).UTC(),
-		UpdatedAt:            time.Unix(0, 2).UTC(),
-	}, goal)
-
-	version, err := sessionDBUserVersion(t.Context(), store.db)
-	require.NoError(t, err)
-	assert.Equal(t, 9, version)
-}
-
-func TestSessionServiceMigratesVersionOneWithoutCronScheduleSpec(t *testing.T) {
-	workspace := t.TempDir()
-	require.NoError(t, prepareSessionDBPath(workspace))
-	db, err := sql.Open("sqlite", sessionDBPath(workspace))
-	require.NoError(t, err)
-	require.NoError(t, createSessionSchema(context.Background(), db))
-	_, err = db.ExecContext(context.Background(), `PRAGMA user_version = 1`)
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
-
-	store := newTestSessionServiceAt(t, workspace)
-
-	version, err := sessionDBUserVersion(context.Background(), store.db)
-	require.NoError(t, err)
-	assert.Equal(t, sessionDBSchemaVersion, version)
-}
-
-func TestSessionServiceMigratesVersionTwoWithActiveTurnSchema(t *testing.T) {
-	workspace := t.TempDir()
-	require.NoError(t, prepareSessionDBPath(workspace))
-	db, err := sql.Open("sqlite", sessionDBPath(workspace))
-	require.NoError(t, err)
-	require.NoError(t, createSessionSchema(context.Background(), db))
-	_, err = db.ExecContext(context.Background(), `DROP TABLE active_turns`)
-	require.NoError(t, err)
-	_, err = db.ExecContext(context.Background(), `PRAGMA user_version = 2`)
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
-
-	store := newTestSessionServiceAt(t, workspace)
-	reopened := newTestSessionServiceAt(t, workspace)
-
-	version, err := sessionDBUserVersion(context.Background(), reopened.db)
-	require.NoError(t, err)
-	assert.Equal(t, sessionDBSchemaVersion, version)
-
-	var count int
-	require.NoError(t, store.db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'active_turns'`).Scan(&count))
-	assert.Equal(t, 1, count)
-}
-
-func TestSessionServiceMigratesActiveTurnStatusSchemaDeletesLegacyRows(t *testing.T) {
-	workspace := t.TempDir()
-	require.NoError(t, prepareSessionDBPath(workspace))
-	db, err := sql.Open("sqlite", sessionDBPath(workspace))
-	require.NoError(t, err)
-	require.NoError(t, createSessionSchema(context.Background(), db))
-	_, err = db.ExecContext(context.Background(), `DROP TABLE active_turns`)
-	require.NoError(t, err)
-	_, err = db.ExecContext(context.Background(), `CREATE TABLE active_turns (id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, status TEXT NOT NULL, agent TEXT NOT NULL, model TEXT NOT NULL, display_model TEXT NOT NULL, replay_input_json TEXT NOT NULL, output_trace_json TEXT NOT NULL, token_usage_json TEXT NOT NULL, response_id TEXT NOT NULL, open_function_calls_json TEXT NOT NULL, completed_function_outputs_json TEXT NOT NULL, restart_notice_json TEXT NOT NULL, source_metadata_json TEXT NOT NULL, created_at_unix_ns INTEGER NOT NULL, updated_at_unix_ns INTEGER NOT NULL)`)
-	require.NoError(t, err)
-	_, err = db.ExecContext(context.Background(), `CREATE INDEX active_turns_conversation_status ON active_turns (conversation_id, status, updated_at_unix_ns)`)
-	require.NoError(t, err)
-	_, err = db.ExecContext(context.Background(), `CREATE INDEX active_turns_status_updated ON active_turns (status, updated_at_unix_ns)`)
-	require.NoError(t, err)
-
-	for _, status := range []string{"active", "interrupting", "interrupted", "recovering", "completed", "failed", "canceled"} {
-		_, err = db.ExecContext(context.Background(), `INSERT INTO active_turns (id, conversation_id, status, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "turn-"+status, "conversation-"+status, status, "planner", "gpt-5.5", "gpt-5.5", `[]`, `null`, `null`, "", `null`, `null`, "", `{}`, int64(1), int64(1))
-		require.NoError(t, err)
-	}
-
-	_, err = db.ExecContext(context.Background(), `PRAGMA user_version = 4`)
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
-
-	store := newTestSessionServiceAt(t, workspace)
-	turns, err := store.RecoverableActiveTurns(context.Background())
-	require.NoError(t, err)
-
-	turnIDs := make([]string, 0, len(turns))
-	for _, turn := range turns {
-		turnIDs = append(turnIDs, turn.Checkpoint.TurnID)
-	}
-
-	assert.Empty(t, turnIDs)
-
-	hasStatus, err := tableHasColumn(context.Background(), store.db, "active_turns", "status", "active turn", "read")
-	require.NoError(t, err)
-	assert.False(t, hasStatus)
-}
-
 func TestSessionServiceSyncCronSchedulesInsertsUpdatesAndDeletes(t *testing.T) {
 	store := newTestSessionService(t)
 	now := time.Date(2026, 7, 4, 10, 0, 0, 0, time.UTC)
@@ -801,13 +680,6 @@ func TestSessionServiceBeginGoalAllowsGoalAfterTerminal(t *testing.T) {
 	assert.Equal(t, "new-user", goal.SlackRecipientUserID)
 }
 
-func TestGoalStateLegacyJSONDefaultsRecipientsToEmpty(t *testing.T) {
-	var goal GoalState
-	require.NoError(t, json.Unmarshal([]byte(`{"objective":"ship it"}`), &goal))
-	assert.Empty(t, goal.SlackRecipientTeamID)
-	assert.Empty(t, goal.SlackRecipientUserID)
-}
-
 func TestSessionServiceProgressGoalKeepsGoalActiveAndRecordsNote(t *testing.T) {
 	store := newTestSessionService(t)
 
@@ -853,23 +725,6 @@ func TestSessionServiceAppliesPendingRestartNotificationsOnce(t *testing.T) {
 	entries, err := store.ObserveEntries(context.Background(), "unmarked", 0)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
-}
-
-func TestSessionServiceTreatsEmptyPersistedStateAsMissing(t *testing.T) {
-	workspace := t.TempDir()
-	require.NoError(t, prepareSessionDBPath(workspace))
-	db, err := sql.Open("sqlite", sessionDBPath(workspace))
-	require.NoError(t, err)
-	require.NoError(t, createSessionSchema(context.Background(), db))
-	_, err = db.ExecContext(context.Background(), `INSERT INTO session_meta (key, value) VALUES (?, ?)`, "rocketclaw_state", "")
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
-
-	store := newTestSessionServiceAt(t, workspace)
-
-	threads, err := managedConversationIDs(context.Background(), store.db)
-	require.NoError(t, err)
-	assert.Empty(t, threads)
 }
 
 func TestSQLiteSessionStoreLoadsLargeImageTurn(t *testing.T) {
@@ -1543,21 +1398,6 @@ func TestSessionServiceRejectsBlankKeys(t *testing.T) {
 
 	require.ErrorContains(t, store.UpsertThread(" ", ThreadState{Agent: "agent"}), "thread conversation ID is required")
 	require.ErrorContains(t, store.UpsertExternalMCPSession(" ", &ExternalMCPSessionState{}), "external MCP conversation ID is required")
-}
-
-func TestLoadRocketClawStateHandlesMissingAndClosedDB(t *testing.T) {
-	workspace := t.TempDir()
-	require.NoError(t, prepareSessionDBPath(workspace))
-	db, err := openSessionDB(context.Background(), sessionDBPath(workspace), slog.New(slog.DiscardHandler))
-	require.NoError(t, err)
-
-	state, err := loadRocketClawState(context.Background(), db)
-	require.NoError(t, err)
-	assert.Empty(t, state)
-
-	require.NoError(t, db.Close())
-	_, err = loadRocketClawState(context.Background(), db)
-	require.ErrorContains(t, err, "read persisted state")
 }
 
 func TestDeleteSessionEntriesReportsDeleteFailures(t *testing.T) {

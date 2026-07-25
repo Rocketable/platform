@@ -12,12 +12,11 @@ type Server struct {
 	root          *osRoot
 	db            *sql.DB
 	candidateURLs []string
-	migrationOK   bool
 }
 
 // NewServer constructs a Quickweb server.
-func NewServer(cfg Config, root *osRoot, db *sql.DB, candidateURLs []string, migrationOK bool) *Server {
-	return &Server{cfg: cfg, root: root, db: db, candidateURLs: candidateURLs, migrationOK: migrationOK}
+func NewServer(cfg Config, root *osRoot, db *sql.DB, candidateURLs []string) *Server {
+	return &Server{cfg: cfg, root: root, db: db, candidateURLs: candidateURLs}
 }
 
 // Handler returns the HTTP handler for this server.
@@ -42,7 +41,6 @@ type healthResponse struct {
 	Addr          string   `json:"addr"`
 	BaseURL       string   `json:"base_url,omitempty"`
 	CandidateURLs []string `json:"candidate_urls"`
-	MigrationOK   bool     `json:"migration_ok"`
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -69,7 +67,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		Addr:          s.cfg.Addr,
 		BaseURL:       s.cfg.BaseURL,
 		CandidateURLs: s.candidateURLs,
-		MigrationOK:   s.migrationOK,
 	})
 }
 

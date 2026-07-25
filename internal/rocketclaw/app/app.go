@@ -446,7 +446,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 			return slices.Contains(externalMCPAgents, agent)
 		}
 
-		externalMCP, err := startExternalMCPServer(runCtx, cfg, textRelay, cleanupTextRelay, slackSink.ResolveChannelName, externalMCPUsers, externalMCPAgentExposed, rocketcodeSessions, threadBridges.SubmitExternalMCP, logger)
+		externalMCP, err := startExternalMCPServer(runCtx, cfg, textRelay, cleanupTextRelay, externalMCPUsers, externalMCPAgentExposed, rocketcodeSessions, threadBridges.SubmitExternalMCP, logger)
 		if err != nil {
 			return err
 		}
@@ -503,7 +503,6 @@ func startExternalMCPServer(
 	cfg *config.Config,
 	textRelay func(context.Context, *events.ExternalMCPRelay, *events.InboundMessage, string) (*events.InboundMessage, error),
 	cleanupTextRelay func(context.Context, *events.InboundMessage),
-	resolveSlackChannel func(context.Context, string) (string, error),
 	users map[string]string,
 	agentExposed func(string) bool,
 	store *harnessbridge.SessionService,
@@ -588,18 +587,6 @@ func startExternalMCPServer(
 			}
 
 			persistedChannel := strings.TrimSpace(session.SlackChannel)
-			if !strings.HasPrefix(persistedChannel, "#") {
-				persistedChannel, err = resolveSlackChannel(callCtx, channelID)
-				if err != nil {
-					return externalmcp.SessionResult{}, fmt.Errorf("resolve migrated external MCP Slack channel: %w", err)
-				}
-
-				session.SlackChannel = persistedChannel
-				if err := store.UpsertExternalMCPSession(externalConversationID, &session); err != nil {
-					return externalmcp.SessionResult{}, fmt.Errorf("persist migrated external MCP Slack channel: %w", err)
-				}
-			}
-
 			if slackChannel != persistedChannel {
 				return externalmcp.SessionResult{}, fmt.Errorf("external_conversation_id %q is bound to Slack channel %q", externalConversationID, session.SlackChannel)
 			}

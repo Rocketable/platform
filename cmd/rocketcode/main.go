@@ -145,27 +145,6 @@ CREATE TABLE IF NOT EXISTS session_entries (
 		return fmt.Errorf("initialize session database: %w", err)
 	}
 
-	if err := ensureSessionColumn(db, "token_usage_json", `ALTER TABLE session_entries ADD COLUMN token_usage_json TEXT NOT NULL DEFAULT '{}'`); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func ensureSessionColumn(db *sql.DB, name, statement string) error {
-	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('session_entries') WHERE name = ?`, name).Scan(&count); err != nil {
-		return fmt.Errorf("inspect session database schema: %w", err)
-	}
-
-	if count > 0 {
-		return nil
-	}
-
-	if _, err := db.Exec(statement); err != nil {
-		return fmt.Errorf("migrate session database schema: %w", err)
-	}
-
 	return nil
 }
 

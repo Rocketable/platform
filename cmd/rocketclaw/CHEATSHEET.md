@@ -100,9 +100,9 @@ Return the human-visible value directly from `main`: strings render directly, ot
 
 New `#ops` conversations use agent `main`. Authorized replies can select `factory` with `$agent factory`, its `🎛 factory` alias, or the native selector.
 
-## State Upgrades
+## Current State Schema
 
-State schema upgrades are one-way. Back up `.rocketclaw/state.sqlite3` before upgrading when rollback may be needed; rollback requires restoring that backup.
+Fresh RocketClaw runtime directories initialize the current SQLite schema directly with schema marker `user_version = 9`. Existing state and configuration must already use current formats; startup does not migrate historical formats.
 
 ## RocketClaw Tools
 

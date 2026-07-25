@@ -28,9 +28,6 @@ func runServe(args []string) error {
 	if !selected.Found {
 		return fmt.Errorf("load config: %w", os.ErrNotExist)
 	}
-	if _, err := config.MigrateSlackConfig(selected.Path); err != nil {
-		return fmt.Errorf("load config: migrate Slack config: %w", err)
-	}
 
 	cfg, err := config.Load(selected.Path)
 	if err != nil {

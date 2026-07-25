@@ -43,8 +43,6 @@ Slack native forwarded-thread expansion requires the bot scopes `channels:read` 
 
 Slack configuration uses direct `slack.channels` mappings. Each mapping names a channel, an ordered non-empty `agents` list, and its authorized `allowed_user_ids`. An authorized app mention in a configured channel starts a fresh managed thread whose initiating message is its first turn. A command-help mention is the exception: RocketClaw posts permanent help as the first thread reply without adding either message to agent history, so the next human reply is the first turn. Later replies use only that thread's persisted history.
 
-On daemon startup, RocketClaw upgrades the prior nested `slack.social_mode.channels` shape in place. It validates the candidate first, rewrites the config with direct `slack.channels`, and preserves the config file permissions; inspection commands remain read-only.
-
 External MCP exposes `session_prompt`. Every call supplies an external conversation ID, agent, and configured Slack channel. A new ID creates one private MCP session and one managed Slack session on the same Slack thread. The MCP agent remains fixed; the managed agent starts from the channel configuration and can be switched from Slack. MCP history is copied into managed history, but Slack history is never copied back. Later calls keep the same channel and Slack thread. Slack Blocks label MCP requests and responses with their conversation ID and agent.
 
 Every active `cron/*.md` definition declares a quoted `channel` that matches a configured Slack channel. Empty completion output is silent; non-empty output starts a fresh managed thread in that channel.
@@ -95,7 +93,7 @@ RocketClaw is configured with `rocketclaw.json` in the working directory. Runtim
 
 Generated runtime state should not be treated as source code.
 
-State upgrades are one-way. Back up `.rocketclaw/state.sqlite3` before upgrading when rollback may be needed; rollback after migration requires restoring that backup.
+Fresh RocketClaw runtime directories initialize the current SQLite schema directly with schema marker `user_version = 9`. Existing state and configuration must already use current formats; startup does not migrate historical formats.
 
 Agent files must declare `model` frontmatter. Use a concrete model such as `gpt-5.5`, or map a deployment-specific name in `rocketclaw.json` or `femtoclaw.json`:
 

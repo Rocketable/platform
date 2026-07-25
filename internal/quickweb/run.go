@@ -89,12 +89,8 @@ func Run(ctx context.Context, argv0 string, args []string) error {
 	}
 	defer db.Close()
 
-	if err := migrateDatabase(db); err != nil {
-		return err
-	}
-
 	candidates := candidateURLs(cfg.Addr, cfg.BaseURL)
-	server := NewServer(cfg, root, db, candidates, true)
+	server := NewServer(cfg, root, db, candidates)
 	httpServer := &http.Server{Addr: cfg.Addr, Handler: server.Handler(), ReadHeaderTimeout: 15 * time.Second}
 	logger := log.New(os.Stdout, "quickweb: ", log.LstdFlags)
 	logStartup(logger, cfg, candidates)
@@ -135,7 +131,6 @@ func logStartup(logger *log.Logger, cfg Config, candidates []string) {
 	logger.Printf("content_root=%s", cfg.ContentRoot)
 	logger.Printf("db_path=%s", cfg.DBPath)
 	logger.Printf("addr=%s", cfg.Addr)
-	logger.Printf("data_migration=ok")
 	logger.Printf("candidate_urls in preference order:")
 	for _, url := range candidates {
 		logger.Printf("- %s", url)

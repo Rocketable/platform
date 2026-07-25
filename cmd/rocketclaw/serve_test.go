@@ -32,6 +32,19 @@ func TestRunServeReportsAppStartupError(t *testing.T) {
 	require.ErrorContains(t, err, "lock rocketcode session db")
 }
 
+func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	configData := fmt.Sprintf(
+		`{"workspace":%q,"slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"openai":{"api_key":"sk-test"}}`,
+		workspace,
+	)
+	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(configData), 0o600))
+
+	err := runServe(nil)
+	require.ErrorContains(t, err, "run rocketclaw")
+}
+
 func TestRunServeRejectsBadFlagBeforeConfigLoad(t *testing.T) {
 	require.ErrorContains(t, runServe([]string{"--bad"}), "parse serve flags")
 }

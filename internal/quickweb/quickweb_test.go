@@ -3,7 +3,6 @@ package quickweb
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -261,7 +260,7 @@ func TestHealthEndpoint(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode health response: %v", err)
 	}
-	if !got.OK || !got.MigrationOK || got.ContentRoot == "" || got.DBPath == "" || got.Addr == "" || len(got.CandidateURLs) == 0 {
+	if !got.OK || got.ContentRoot == "" || got.DBPath == "" || got.Addr == "" || len(got.CandidateURLs) == 0 {
 		t.Fatalf("health response missing diagnostics: %+v", got)
 	}
 }
@@ -295,11 +294,8 @@ func newTestServer(t *testing.T) (*Server, string) {
 		t.Fatal(err)
 	}
 
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "state.sqlite"))
+	db, err := openDatabase(filepath.Join(t.TempDir(), "state.sqlite"))
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := migrateDatabase(db); err != nil {
 		t.Fatal(err)
 	}
 
@@ -309,7 +305,7 @@ func newTestServer(t *testing.T) (*Server, string) {
 	})
 
 	cfg := Config{ContentRoot: rootDir, DBPath: filepath.Join(rootDir, "quickweb.sqlite"), Addr: "127.0.0.1:8797", ServiceName: "test-quickweb"}
-	server := NewServer(cfg, root, db, []string{"http://127.0.0.1:8797"}, true)
+	server := NewServer(cfg, root, db, []string{"http://127.0.0.1:8797"})
 
 	return server, rootDir
 }

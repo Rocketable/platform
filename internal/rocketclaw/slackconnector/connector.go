@@ -399,16 +399,6 @@ func slackReplyDestination(replyTarget *events.SlackReplyTarget) (channelID, thr
 	return strings.TrimSpace(replyTarget.ChannelID), strings.TrimSpace(replyTarget.ThreadTS)
 }
 
-// ResolveChannelName returns the configured canonical name for a Slack channel ID.
-func (c *Connector) ResolveChannelName(ctx context.Context, channelID string) (string, error) {
-	channel, _, ok := c.socialModeChannel(ctx, channelID)
-	if !ok {
-		return "", fmt.Errorf("slack channel %q is not configured", channelID)
-	}
-
-	return channel, nil
-}
-
 // CleanupPendingReplyPlaceholder removes a relay placeholder that no response turn claimed.
 func (c *Connector) CleanupPendingReplyPlaceholder(ctx context.Context, replyTarget *events.SlackReplyTarget) {
 	key := slackPendingKey(replyTarget)

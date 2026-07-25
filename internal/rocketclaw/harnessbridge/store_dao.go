@@ -119,15 +119,6 @@ func scanExternalMCPSession(scanner rowScanner) (string, ExternalMCPSessionState
 	return externalConversationID, session, nil
 }
 
-func (d stateDAO) upsertGoal(ctx context.Context, conversationID string, goal *GoalState) error {
-	_, err := d.db.ExecContext(ctx, `INSERT INTO conversation_goals (conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET objective = excluded.objective, check_script = excluded.check_script, max_turns = excluded.max_turns, turns_used = excluded.turns_used, status = excluded.status, note = excluded.note, slack_recipient_team_id = excluded.slack_recipient_team_id, slack_recipient_user_id = excluded.slack_recipient_user_id, created_at_unix_ns = excluded.created_at_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns`, strings.TrimSpace(conversationID), strings.TrimSpace(goal.Objective), strings.TrimSpace(goal.CheckScript), goal.MaxTurns, goal.TurnsUsed, strings.TrimSpace(goal.Status), strings.TrimSpace(goal.Note), strings.TrimSpace(goal.SlackRecipientTeamID), strings.TrimSpace(goal.SlackRecipientUserID), timeUnixNano(goal.CreatedAt), timeUnixNano(goal.UpdatedAt))
-	if err != nil {
-		return fmt.Errorf("upsert goal: %w", err)
-	}
-
-	return nil
-}
-
 func (d stateDAO) beginGoal(ctx context.Context, conversationID string, goal *GoalState) (bool, error) {
 	result, err := d.db.ExecContext(ctx, `INSERT INTO conversation_goals (conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET objective = excluded.objective, check_script = excluded.check_script, max_turns = excluded.max_turns, turns_used = excluded.turns_used, status = excluded.status, note = excluded.note, slack_recipient_team_id = excluded.slack_recipient_team_id, slack_recipient_user_id = excluded.slack_recipient_user_id, created_at_unix_ns = excluded.created_at_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns WHERE conversation_goals.status NOT IN ('', ?)`, strings.TrimSpace(conversationID), strings.TrimSpace(goal.Objective), strings.TrimSpace(goal.CheckScript), goal.MaxTurns, goal.TurnsUsed, strings.TrimSpace(goal.Status), strings.TrimSpace(goal.Note), strings.TrimSpace(goal.SlackRecipientTeamID), strings.TrimSpace(goal.SlackRecipientUserID), timeUnixNano(goal.CreatedAt), timeUnixNano(goal.UpdatedAt), GoalStatusActive)
 	if err != nil {

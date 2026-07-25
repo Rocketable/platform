@@ -280,7 +280,7 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
 		return nil
 	}
 	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}}}}
-	server, err := startExternalMCPServer(t.Context(), cfg, textRelay, func(context.Context, *events.InboundMessage) {}, func(context.Context, string) (string, error) { return "#ops", nil }, nil, func(string) bool { return true }, store, submit, testLogger())
+	server, err := startExternalMCPServer(t.Context(), cfg, textRelay, func(context.Context, *events.InboundMessage) {}, nil, func(string) bool { return true }, store, submit, testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -361,7 +361,7 @@ func TestLegacyExternalMCPFollowupUsesExistingSharedConversation(t *testing.T) {
 		return activation(ctx, inbound)
 	}
 	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}}}}
-	server, err := startExternalMCPServer(t.Context(), cfg, textRelay, func(context.Context, *events.InboundMessage) {}, func(context.Context, string) (string, error) { return "#ops", nil }, nil, func(string) bool { return true }, store, submit, testLogger())
+	server, err := startExternalMCPServer(t.Context(), cfg, textRelay, func(context.Context, *events.InboundMessage) {}, nil, func(string) bool { return true }, store, submit, testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -439,7 +439,7 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 				return nil
 			}
 			cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}}}}
-			server, err := startExternalMCPServer(t.Context(), cfg, textRelay, cleanup, func(context.Context, string) (string, error) { return "#ops", nil }, nil, func(string) bool { return true }, store, submit, testLogger())
+			server, err := startExternalMCPServer(t.Context(), cfg, textRelay, cleanup, nil, func(string) bool { return true }, store, submit, testLogger())
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
