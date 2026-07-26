@@ -154,13 +154,14 @@ func Run(ctx context.Context, definition *Definition, request RunRequest, agent 
 			return Result{}, fmt.Errorf("initialize workflow: %w", errContext)
 		}
 
-		return Result{}, fmt.Errorf("initialize workflow: %w", errInit)
+		return Result{}, fmt.Errorf("initialize workflow: %w", workflowEvalError(errInit))
 	}
 
 	globals.Freeze()
 
 	value, errCall := starlark.Call(thread, globals["main"], starlark.Tuple{starlark.String(request.Args)}, nil)
 	if errCall != nil {
+		errCall = workflowEvalError(errCall)
 		if errContext := context.Cause(ctx); errContext != nil {
 			return Result{}, fmt.Errorf("call workflow: %w", errors.Join(errCall, errContext))
 		}
@@ -182,6 +183,31 @@ func Run(ctx context.Context, definition *Definition, request RunRequest, agent 
 	}
 
 	return Result{Text: string(encoded)}, nil
+}
+
+func workflowEvalError(err error) error {
+	errEval, ok := errors.AsType[*starlark.EvalError](err)
+	if !ok {
+		return err
+	}
+
+	for {
+		errNested, ok := errors.AsType[*starlark.EvalError](errEval.Unwrap())
+		if !ok {
+			break
+		}
+
+		errEval = errNested
+	}
+
+	for _, v := range slices.Backward(errEval.CallStack) {
+		frame := v
+		if frame.Pos.Filename() != "<builtin>" {
+			return fmt.Errorf("%s in %s: %w", frame.Pos, frame.Name, err)
+		}
+	}
+
+	return err
 }
 
 func (e *engine) thread(ctx context.Context, name, phase string, fanout bool) (thread *starlark.Thread, stop func()) {

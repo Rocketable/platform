@@ -192,6 +192,36 @@ func TestRunRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestRunReportsStarlarkErrorLocations(t *testing.T) {
+	for _, tt := range []struct {
+		name, body, location, function string
+	}{
+		{name: "main", body: `def main(args):
+    return "%s" % ()`, location: "test.star:3:17", function: "in main"},
+		{name: "callback", body: `def audit(item):
+    return "%s" % ()
+def main(args):
+    return pipeline(["one"], audit)`, location: "test.star:3:17", function: "in audit"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Run(t.Context(), engineDefinition(t, tt.body), RunRequest{RunID: tt.name}, inertAgent, discardProgress)
+			if err == nil {
+				t.Fatal("Run() error = nil, want Starlark evaluation error")
+			}
+
+			if _, ok := errors.AsType[*starlark.EvalError](err); !ok {
+				t.Fatalf("Run() error = %v, want wrapped *starlark.EvalError", err)
+			}
+
+			for _, want := range []string{tt.location, tt.function, "not enough arguments for format string"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Run() error = %v, want containing %q", err, want)
+				}
+			}
+		})
+	}
+}
+
 func TestRunFreezesModuleGlobals(t *testing.T) {
 	t.Run("concurrent callbacks cannot mutate a module global", func(t *testing.T) {
 		definition := engineDefinition(t, `
