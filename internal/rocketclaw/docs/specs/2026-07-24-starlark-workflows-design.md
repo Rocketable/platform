@@ -2,7 +2,7 @@
 
 ## Goal
 
-Add saved, bridge-native RocketClaw workflows written in Starlark. A human invokes a checked-in workflow with `$workflow <name> [args]`; the managed bridge runs it as the active foreground turn, shows phase progress in Slack, and records only the command and final result in managed conversation history.
+Add saved, bridge-native RocketClaw workflows written in Starlark. A human invokes a checked-in workflow with `$workflow <name> [args]`; the managed bridge runs it as the active foreground turn, shows phase progress in Slack, and records the command, final result when available, and compact terminal phase summary in managed conversation history.
 
 ## Files And Invocation
 
@@ -77,13 +77,13 @@ Infrastructure errors cancel sibling work and fail the run. Model conclusions su
 
 ## Lifecycle
 
-Workflow execution is in memory and foreground-only. The bridge serializes it with ordinary managed turns and `$stop` cancels it terminally. Daemon shutdown or crash ends the run; after restart the human invokes the workflow again. No workflow run, call cache, or resumable state is added to SQLite in the first release.
+Workflow execution is in memory and foreground-only. The bridge serializes it with ordinary managed turns and `$stop` cancels it terminally. Daemon shutdown or crash ends the run; after restart the human invokes the workflow again. No call cache or resumable workflow state is added to SQLite.
 
-On success, the bridge appends one normal paired user/assistant replay entry containing the command and final result, then publishes the final response through the existing delivery path. Intermediate worker values never enter managed history.
+Every started workflow persists one compact terminal summary containing its complete, error, stopped, and skipped phase outcomes. Later turns receive that summary as developer context. Successful entries also retain the normal paired user command and assistant result before final delivery. Intermediate worker prompts, values, tools, and reasoning never enter managed history.
 
 ## Slack
 
-Workflow progress reuses `chat.startStream` with `task_display_mode=plan`. There is one stable task card per phase. Cards transition through pending, in-progress, complete, or error and show aggregate scheduled, running, and completed call counts plus errors. Worker findings remain private to the script. The direct final result uses RocketClaw's separate answer message.
+Workflow progress reuses `chat.startStream` with `task_display_mode=plan`. There is one stable task card per phase. Cards transition through pending, in-progress, complete, error, or the connector-neutral skipped state. Slack projects skipped phases as completed cards titled `phase · skipped`; fan-out titles show `complete/scheduled` progress without accumulating task details. Worker findings remain private to the script. The direct final result uses RocketClaw's separate answer message.
 
 `$stop` remains the control. Slack Workflow Builder buttons are not used.
 

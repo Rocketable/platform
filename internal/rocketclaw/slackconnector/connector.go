@@ -1133,7 +1133,9 @@ func slackWorkflowPhaseChunks(phases map[string]workflow.PhaseUpdate) []slack.St
 		update := phases[id]
 
 		title := update.Name
-		if update.Scheduled > 1 {
+		if update.Status == workflow.PhaseSkipped {
+			title += " · skipped"
+		} else if update.Scheduled > 1 {
 			title += fmt.Sprintf(" · %d/%d", update.Complete, update.Scheduled)
 		}
 
@@ -1148,6 +1150,8 @@ func slackWorkflowPhaseChunks(phases map[string]workflow.PhaseUpdate) []slack.St
 			chunk.Status = slack.TaskCardStatusComplete
 		case workflow.PhaseError:
 			chunk.Status = slack.TaskCardStatusError
+		case workflow.PhaseSkipped:
+			chunk.Status = slack.TaskCardStatusComplete
 		}
 
 		chunks = append(chunks, chunk)

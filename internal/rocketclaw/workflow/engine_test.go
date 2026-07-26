@@ -279,6 +279,10 @@ def main(args):
 		t.Fatalf("Run().Text = %q, want two", result.Text)
 	}
 
+	if got := phaseStatuses(result.Phases); !slices.Equal(got, []PhaseStatus{PhaseComplete, PhaseComplete}) {
+		t.Fatalf("Run().Phases statuses = %v, want both complete", got)
+	}
+
 	if len(updates) < 8 || updates[0].Status != "pending" || updates[1].Status != "pending" {
 		t.Fatalf("phase updates = %+v, want declared pending updates first", updates)
 	}
@@ -349,12 +353,26 @@ def main(args):
 		}
 	})
 
+	t.Run("later failure does not overwrite completed run phase", func(t *testing.T) {
+		result, err := Run(t.Context(), engineDefinitionWithPhases(t, []string{"run", "work"}, `def main(args):
+    phase("run", lambda: None)
+    return phase("work", lambda: agent("fail"))`), RunRequest{RunID: "completed-run"}, func(context.Context, AgentRequest) (json.RawMessage, error) {
+			return nil, errors.New("failed")
+		}, discardProgress)
+		if err == nil {
+			t.Fatal("Run() error = nil, want later phase failure")
+		}
+
+		if got := phaseStatuses(result.Phases); !slices.Equal(got, []PhaseStatus{PhaseComplete, PhaseError}) {
+			t.Fatalf("Run().Phases statuses = %v, want completed run then failed work", got)
+		}
+	})
+
 	for _, tt := range []struct {
-		name, body  string
-		runner      AgentRunFunc
-		wantSkipped bool
+		name, body string
+		runner     AgentRunFunc
 	}{
-		{name: "success", body: `def main(args): return None`, runner: inertAgent, wantSkipped: true},
+		{name: "success", body: `def main(args): return None`, runner: inertAgent},
 		{name: "failure", body: `def main(args): return phase("work", lambda: agent("fail"))`, runner: func(context.Context, AgentRequest) (json.RawMessage, error) {
 			return nil, errors.New("failed")
 		}},
@@ -362,7 +380,7 @@ def main(args):
 		t.Run("untouched declared phases on "+tt.name, func(t *testing.T) {
 			var updates []PhaseUpdate
 
-			_, _ = Run(t.Context(), engineDefinitionWithPhases(t, []string{"run", "work", "other"}, tt.body), RunRequest{RunID: "pending-" + tt.name}, tt.runner, func(_ context.Context, update PhaseUpdate) error {
+			result, _ := Run(t.Context(), engineDefinitionWithPhases(t, []string{"run", "work", "other"}, tt.body), RunRequest{RunID: "pending-" + tt.name}, tt.runner, func(_ context.Context, update PhaseUpdate) error {
 				updates = append(updates, update)
 				return nil
 			})
@@ -376,13 +394,13 @@ def main(args):
 					}
 				}
 
-				if tt.wantSkipped {
-					if last.Status != PhaseComplete || last.Details != "not run" {
-						t.Fatalf("untouched phase %q = %+v, want complete not run", name, last)
-					}
-				} else if last.Status != PhasePending {
-					t.Fatalf("untouched phase %q = %+v, want pending", name, last)
+				if last.Status != PhaseSkipped || last.Details != "" {
+					t.Fatalf("untouched phase %q = %+v, want skipped", name, last)
 				}
+			}
+
+			if got := phaseStatuses(result.Phases); !slices.Equal(got, []PhaseStatus{PhaseSkipped, map[string]PhaseStatus{"success": PhaseSkipped, "failure": PhaseError}[tt.name], PhaseSkipped}) {
+				t.Fatalf("Run().Phases statuses = %v, want final declared statuses", got)
 			}
 		})
 	}
@@ -390,7 +408,7 @@ def main(args):
 	t.Run("dynamic phases preserve encounter order", func(t *testing.T) {
 		var updates []PhaseUpdate
 
-		_, err := Run(t.Context(), engineDefinition(t, `
+		result, err := Run(t.Context(), engineDefinition(t, `
 def main(args):
     phase("verify", lambda: None)
     return phase("audit", lambda: None)
@@ -413,6 +431,15 @@ def main(args):
 		want := []string{"dynamic-order/phase/000000/verify", "dynamic-order/phase/000001/audit"}
 		if !slices.Equal(ids, want) {
 			t.Fatalf("dynamic phase IDs = %v, want %v", ids, want)
+		}
+
+		resultIDs := make([]string, 0, len(result.Phases))
+		for _, phase := range result.Phases {
+			resultIDs = append(resultIDs, phase.PhaseID)
+		}
+
+		if !slices.Equal(resultIDs, want) {
+			t.Fatalf("Run().Phases IDs = %v, want %v", resultIDs, want)
 		}
 	})
 
@@ -487,8 +514,8 @@ def main(args):
 			t.Fatalf("Run() error = %v, want 100-phase limit", err)
 		}
 
-		if runnerCalls != 0 || progressCalls != 100 {
-			t.Fatalf("runner calls = %d, progress calls = %d, want 0 and 100", runnerCalls, progressCalls)
+		if runnerCalls != 0 || progressCalls != 200 {
+			t.Fatalf("runner calls = %d, progress calls = %d, want 0 and 200", runnerCalls, progressCalls)
 		}
 	})
 
@@ -735,6 +762,27 @@ def main(args):
 }
 
 func TestRunCancellationAndInfrastructureErrors(t *testing.T) {
+	t.Run("initial progress failure skips every declared phase", func(t *testing.T) {
+		errProgress := errors.New("pending progress broke")
+		failed := false
+
+		result, err := Run(t.Context(), engineDefinitionWithPhases(t, []string{"one", "two"}, `def main(args): return None`), RunRequest{RunID: "pending-progress"}, inertAgent, func(_ context.Context, update PhaseUpdate) error {
+			if !failed && update.Status == PhasePending {
+				failed = true
+				return errProgress
+			}
+
+			return nil
+		})
+		if !errors.Is(err, errProgress) {
+			t.Fatalf("Run() error = %v, want pending progress failure", err)
+		}
+
+		if got := phaseStatuses(result.Phases); !slices.Equal(got, []PhaseStatus{PhaseSkipped, PhaseSkipped}) {
+			t.Fatalf("Run().Phases statuses = %v, want both skipped", got)
+		}
+	})
+
 	t.Run("phase entry progress failure still emits terminal error", func(t *testing.T) {
 		errEntry := errors.New("entry progress broke")
 		errTerminal := errors.New("terminal progress broke")
@@ -752,7 +800,7 @@ func TestRunCancellationAndInfrastructureErrors(t *testing.T) {
 				}
 
 				return errTerminal
-			case PhasePending, PhaseComplete:
+			case PhasePending, PhaseComplete, PhaseSkipped:
 				return nil
 			default:
 				return nil
@@ -953,4 +1001,13 @@ func inertAgent(context.Context, AgentRequest) (json.RawMessage, error) {
 
 func discardProgress(context.Context, PhaseUpdate) error {
 	return nil
+}
+
+func phaseStatuses(phases []PhaseUpdate) []PhaseStatus {
+	statuses := make([]PhaseStatus, 0, len(phases))
+	for _, phase := range phases {
+		statuses = append(statuses, phase.Status)
+	}
+
+	return statuses
 }

@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -68,6 +69,8 @@ const (
 	PhaseComplete PhaseStatus = "complete"
 	// PhaseError failed.
 	PhaseError PhaseStatus = "error"
+	// PhaseSkipped was not entered before the workflow terminated.
+	PhaseSkipped PhaseStatus = "skipped"
 )
 
 // PhaseUpdate reports connector-neutral workflow progress.
@@ -85,6 +88,7 @@ type ProgressFunc func(context.Context, PhaseUpdate) error
 type Result struct {
 	Text   string
 	Silent bool
+	Phases []PhaseUpdate
 }
 
 type workerValue Worker
@@ -118,28 +122,35 @@ func Run(ctx context.Context, definition *Definition, request RunRequest, agent 
 	e := &engine{agent: agent, progress: progress, cancel: cancel, runID: request.RunID, phases: make(map[string]*PhaseUpdate), phaseSequence: len(definition.Phases), strict: len(definition.Phases) > 0, active: make(map[*starlark.Thread]uint64), remaining: 10_000_000}
 	defer func() {
 		err = e.finishPhase(context.WithoutCancel(ctx), "run", err)
-		if err != nil {
-			return
-		}
+
+		// Fan-out callbacks have joined before Run returns, so finalization owns phase state.
+		var errProgress error
 
 		for _, name := range definition.Phases {
-			e.mu.Lock()
-
 			state := e.phases[name]
 			if state.Status == PhasePending {
-				state.Status, state.Details = PhaseComplete, "not run"
-				err = e.progress(context.WithoutCancel(ctx), *state)
-			}
-			e.mu.Unlock()
-
-			if err != nil {
-				return
+				state.Status = PhaseSkipped
+				if errPhase := e.progress(context.WithoutCancel(ctx), *state); errProgress == nil {
+					errProgress = errPhase
+				}
 			}
 		}
+
+		err = errors.Join(err, errProgress)
+
+		result.Phases = make([]PhaseUpdate, 0, len(e.phases))
+		for _, state := range e.phases {
+			result.Phases = append(result.Phases, *state)
+		}
+
+		slices.SortFunc(result.Phases, func(a, b PhaseUpdate) int { return cmp.Compare(a.PhaseID, b.PhaseID) })
 	}()
 
 	for i, name := range definition.Phases {
 		e.phases[name] = &PhaseUpdate{PhaseID: fmt.Sprintf("%s/phase/%06d/%s", request.RunID, i, name), Name: name, Status: PhasePending}
+	}
+
+	for _, name := range definition.Phases {
 		if err := progress(ctx, *e.phases[name]); err != nil {
 			return Result{}, err
 		}
@@ -606,7 +617,7 @@ func (e *engine) finishPhase(ctx context.Context, name string, errRun error) err
 	e.mu.Lock()
 
 	state := e.phases[name]
-	if state == nil || state.Status == PhasePending {
+	if state == nil || state.Status != PhaseInProgress {
 		e.mu.Unlock()
 		return errRun
 	}

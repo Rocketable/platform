@@ -606,6 +606,33 @@ func TestRestartToolAcceptsEmptyOutputAndPropagatesErrors(t *testing.T) {
 
 func testNoopRestart(context.Context, string) (string, error) { return "", nil }
 
+func workflowSummaryPayloadFromEntry(t *testing.T, entry *rocketcode.SessionEntry) string {
+	t.Helper()
+
+	messages, err := replayInputMessages(entry.ReplayInput)
+	require.NoError(t, err)
+
+	for _, message := range messages {
+		if payload, found := strings.CutPrefix(message.text, workflowRunSummaryPrefix); found {
+			require.Equal(t, "developer", message.role)
+			return payload
+		}
+	}
+
+	t.Fatal("workflow run summary developer message not found")
+
+	return ""
+}
+
+func workflowSummaryFromEntry(t *testing.T, entry *rocketcode.SessionEntry) workflowRunSummary {
+	t.Helper()
+
+	var summary workflowRunSummary
+	require.NoError(t, json.Unmarshal([]byte(workflowSummaryPayloadFromEntry(t, entry)), &summary))
+
+	return summary
+}
+
 func testNoopStartNewThread(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadResult, error) {
 	return events.StartNewThreadResult{}, errors.New("start new thread is inert in this test")
 }
@@ -1740,7 +1767,7 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) 
 		require.NoError(t, err)
 		require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
 		require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
-		require.NoError(t, root.WriteFile(".rocketclaw/workflows/audit.star", []byte("meta = {\"name\": \"audit\", \"description\": \"Audit\"}\ndef main(args): return \"finished\"\n"), 0o600))
+		require.NoError(t, root.WriteFile(".rocketclaw/workflows/audit.star", []byte("meta = {\"name\": \"audit\", \"description\": \"Audit\", \"phases\": [\"work\", \"later\"]}\ndef main(args): return phase(\"work\", lambda: \"finished\")\n"), 0o600))
 		definitions, err := workflow.Load(root, ".rocketclaw")
 		require.NoError(t, err)
 		require.NoError(t, root.Close())
@@ -1759,9 +1786,11 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) 
 		t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 
 		delivered := make(chan struct{})
+		workflowTurnID := ""
 
 		go func() {
 			for outbound := range bus.Outbound(t.Context()) {
+				workflowTurnID = outbound.TurnID
 				outbound.MarkDelivered(nil)
 
 				if outbound.Complete {
@@ -1782,9 +1811,17 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) 
 		entries, err := service.ObserveEntries(t.Context(), pairID, 0)
 		require.NoError(t, err)
 		require.Len(t, entries, 1)
+		assert.Equal(t, workflowRunEntryType, entries[0].Entry.Type)
 		messages, err := replayInputMessages(entries[0].Entry.ReplayInput)
 		require.NoError(t, err)
-		assert.Equal(t, []replayInputMessage{{role: "user", text: "$workflow audit"}, {role: "assistant", text: "finished"}}, messages)
+		require.Len(t, messages, 3)
+		assert.Equal(t, []replayInputMessage{{role: "user", text: "$workflow audit"}, {role: "assistant", text: "finished"}}, messages[:2])
+		payload := workflowSummaryPayloadFromEntry(t, &entries[0].Entry)
+
+		var summary workflowRunSummary
+		require.NoError(t, json.Unmarshal([]byte(payload), &summary))
+		assert.Equal(t, workflowTurnID, summary.RunID)
+		assert.JSONEq(t, fmt.Sprintf(`{"workflow":"audit","run_id":%q,"terminal":"complete","phases":[{"name":"work","status":"complete","scheduled":0,"complete":0},{"name":"later","status":"skipped","scheduled":0,"complete":0}]}`, workflowTurnID), payload)
 
 		privateAcquired := false
 
@@ -1809,6 +1846,341 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) 
 		assert.True(t, reserved)
 		releaseWorkflow()
 	})
+}
+
+func TestBridgeFailedManagedWorkflowPersistsRunSummary(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		workspace := t.TempDir()
+		writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
+		root, err := os.OpenRoot(workspace)
+		require.NoError(t, err)
+		require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
+		require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
+		require.NoError(t, root.WriteFile(".rocketclaw/workflows/fail.star", []byte("meta = {\"name\": \"fail\", \"description\": \"Fail\", \"phases\": [\"work\", \"later\"]}\ndef main(args): return parallel([lambda: phase(\"work\", lambda: 1 // 0), lambda: phase(\"later\", lambda: 1 // 0)])\n"), 0o600))
+		definitions, err := workflow.Load(root, ".rocketclaw")
+		require.NoError(t, err)
+		require.NoError(t, root.Close())
+
+		service := newTestSessionServiceAt(t, workspace)
+		conversationID := SlackThreadConversationID("C123", "111.222")
+		bus := events.New()
+		t.Cleanup(bus.Close)
+		bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: &config.Config{Workspace: workspace}, bus: bus, config: Config{ConversationID: conversationID, Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}}
+		require.NoError(t, bridge.Start(t.Context()))
+		t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+
+		delivered := make(chan struct{})
+
+		go func() {
+			for outbound := range bus.Outbound(t.Context()) {
+				outbound.MarkDelivered(nil)
+
+				if outbound.Complete {
+					close(delivered)
+					return
+				}
+			}
+		}()
+
+		inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "workflow", "$workflow fail", true)
+		inbound.Workflow = &workflow.RunRequest{Definition: definitions["fail"]}
+		response := inbound.EnableResponseWait()
+		require.NoError(t, bridge.Submit(t.Context(), inbound))
+		require.NoError(t, (<-response).Err)
+		<-delivered
+		synctest.Wait()
+
+		entries, err := service.ObserveEntries(t.Context(), conversationID, 0)
+		require.NoError(t, err)
+		require.Len(t, entries, 1)
+		assert.Equal(t, workflowRunEntryType, entries[0].Entry.Type)
+		summary := workflowSummaryFromEntry(t, &entries[0].Entry)
+		assert.Equal(t, workflow.TerminalFailed, summary.Terminal)
+		assert.Equal(t, []workflowRunPhaseSummary{{Name: "work", Status: workflow.PhaseError}, {Name: "later", Status: workflow.PhaseError}}, summary.Phases)
+		assert.Equal(t, "workflow execution failed", summary.Error)
+	})
+}
+
+func TestBridgeFailedWorkerErrorIsNotPersisted(t *testing.T) {
+	const privateError = "PRIVATE_WORKER_ERROR"
+
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
+	require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
+	require.NoError(t, root.WriteFile(".rocketclaw/workflows/fail-worker.star", []byte("meta = {\"name\": \"fail-worker\", \"description\": \"Fail worker\", \"phases\": [\"work\", \"later\"]}\ndef main(args): return phase(\"work\", lambda: agent(\"fail\"))\n"), 0o600))
+	definitions, err := workflow.Load(root, ".rocketclaw")
+	require.NoError(t, err)
+	require.NoError(t, root.Close())
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, privateError, http.StatusInternalServerError)
+	}))
+	t.Cleanup(server.Close)
+
+	service := newTestSessionServiceAt(t, workspace)
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	bus := events.New()
+	t.Cleanup(bus.Close)
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus: bus, config: Config{ConversationID: conversationID, Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}}
+	require.NoError(t, bridge.Start(t.Context()))
+	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+
+	delivered := make(chan struct{})
+
+	go func() {
+		for outbound := range bus.Outbound(t.Context()) {
+			outbound.MarkDelivered(nil)
+
+			if outbound.Complete {
+				close(delivered)
+				return
+			}
+		}
+	}()
+
+	inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "workflow", "$workflow fail-worker", true)
+	inbound.Workflow = &workflow.RunRequest{Definition: definitions["fail-worker"]}
+	response := inbound.EnableResponseWait()
+	require.NoError(t, bridge.Submit(t.Context(), inbound))
+	require.NoError(t, (<-response).Err)
+	<-delivered
+
+	entries, err := service.ObserveEntries(t.Context(), conversationID, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	encodedEntry, err := json.Marshal(entries[0].Entry)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encodedEntry), privateError)
+	summary := workflowSummaryFromEntry(t, &entries[0].Entry)
+	assert.Equal(t, `phase "work" failed`, summary.Error)
+}
+
+func TestBridgeStoppedManagedWorkflowPersistsRunSummary(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
+	require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
+	require.NoError(t, root.WriteFile(".rocketclaw/workflows/stop.star", []byte("meta = {\"name\": \"stop\", \"description\": \"Stop\", \"phases\": [\"work\", \"later\"]}\ndef main(args): return phase(\"work\", lambda: agent(\"wait\"))\n"), 0o600))
+	definitions, err := workflow.Load(root, ".rocketclaw")
+	require.NoError(t, err)
+	require.NoError(t, root.Close())
+
+	requestArrived, releaseRequest := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		close(requestArrived)
+
+		select {
+		case <-request.Context().Done():
+		case <-releaseRequest:
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	service := newTestSessionServiceAt(t, workspace)
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	bus := events.New()
+	t.Cleanup(bus.Close)
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus: bus, config: Config{ConversationID: conversationID, Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}}
+	require.NoError(t, bridge.Start(t.Context()))
+	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+
+	delivered := make(chan struct{})
+
+	go func() {
+		for outbound := range bus.Outbound(t.Context()) {
+			outbound.MarkDelivered(nil)
+
+			if outbound.Complete {
+				close(delivered)
+				return
+			}
+		}
+	}()
+
+	inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "workflow", "$workflow stop", true)
+	inbound.Workflow = &workflow.RunRequest{Definition: definitions["stop"]}
+	response := inbound.EnableResponseWait()
+	require.NoError(t, bridge.Submit(t.Context(), inbound))
+	<-requestArrived
+	assert.Same(t, inbound, bridge.InterruptActiveTurn())
+	close(releaseRequest)
+	require.NoError(t, (<-response).Err)
+	<-delivered
+
+	entries, err := service.ObserveEntries(t.Context(), conversationID, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	summary := workflowSummaryFromEntry(t, &entries[0].Entry)
+	assert.Equal(t, workflow.TerminalStopped, summary.Terminal)
+	assert.Equal(t, []workflowRunPhaseSummary{{Name: "work", Status: workflow.PhaseError, Scheduled: 1}, {Name: "later", Status: workflow.PhaseSkipped}}, summary.Phases)
+	assert.Equal(t, "workflow stopped by user", summary.Error)
+}
+
+func TestBridgeStoppedWorkflowReportsSummaryStorageFailure(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
+	require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
+	require.NoError(t, root.WriteFile(".rocketclaw/workflows/stop-store.star", []byte("meta = {\"name\": \"stop-store\", \"description\": \"Stop store\", \"phases\": [\"work\", \"later\"]}\ndef spin():\n    while True:\n        pass\ndef main(args): return phase(\"work\", spin)\n"), 0o600))
+	definitions, err := workflow.Load(root, ".rocketclaw")
+	require.NoError(t, err)
+	require.NoError(t, root.Close())
+
+	service := newTestSessionServiceAt(t, workspace)
+	_, err = service.db.ExecContext(t.Context(), `CREATE TRIGGER reject_workflow_summary BEFORE INSERT ON session_entries BEGIN SELECT RAISE(ABORT, 'summary rejected'); END`)
+	require.NoError(t, err)
+
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	bus := events.New()
+	t.Cleanup(bus.Close)
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: &config.Config{Workspace: workspace}, bus: bus, config: Config{ConversationID: conversationID, Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}}
+	require.NoError(t, bridge.Start(t.Context()))
+	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+
+	type completion struct {
+		text     string
+		terminal workflow.Terminal
+	}
+
+	completed := make(chan completion, 1)
+
+	go func() {
+		interrupted := false
+		for outbound := range bus.Outbound(t.Context()) {
+			if !interrupted && outbound.WorkflowPhase != nil && outbound.WorkflowPhase.Status == workflow.PhaseInProgress {
+				interrupted = true
+
+				bridge.InterruptActiveTurn()
+			}
+
+			outbound.MarkDelivered(nil)
+
+			if outbound.Complete {
+				completed <- completion{text: outbound.Text, terminal: outbound.WorkflowTerminal}
+				return
+			}
+		}
+	}()
+
+	inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "workflow", "$workflow stop-store", true)
+	inbound.Workflow = &workflow.RunRequest{Definition: definitions["stop-store"]}
+	response := inbound.EnableResponseWait()
+	require.NoError(t, bridge.Submit(t.Context(), inbound))
+	require.NoError(t, (<-response).Err)
+
+	result := <-completed
+	assert.Contains(t, result.text, "store workflow run")
+	assert.Contains(t, result.text, "context canceled")
+	assert.Equal(t, workflow.TerminalFailed, result.terminal)
+	entries, err := service.ObserveEntries(t.Context(), conversationID, 0)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+func TestWorkflowRunSummaryIsVisibleWithoutIntermediateOutput(t *testing.T) {
+	const intermediate = "PRIVATE_INTERMEDIATE_WORKFLOW_OUTPUT"
+
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
+	require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
+	require.NoError(t, root.WriteFile(".rocketclaw/workflows/private.star", []byte("meta = {\"name\": \"private\", \"description\": \"Private\", \"phases\": [\"work\", \"later\"]}\ndef main(args):\n    phase(\"work\", lambda: agent(\"produce intermediate\"))\n    return \"public result\"\n"), 0o600))
+	definitions, err := workflow.Load(root, ".rocketclaw")
+	require.NoError(t, err)
+	require.NoError(t, root.Close())
+
+	requests := 0
+
+	var followUpInput string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests++
+
+		var body map[string]any
+		if !assert.NoError(t, json.NewDecoder(request.Body).Decode(&body)) {
+			http.Error(w, "decode request", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if requests == 1 {
+			writeRawRunMessage(t, w, "workflow-response", "workflow-message", intermediate)
+			return
+		}
+
+		encoded, err := json.Marshal(body["input"])
+		if !assert.NoError(t, err) {
+			http.Error(w, "encode request input", http.StatusInternalServerError)
+			return
+		}
+
+		followUpInput = string(encoded)
+
+		writeRawRunMessage(t, w, "follow-up-response", "follow-up-message", "follow-up answer")
+	}))
+	t.Cleanup(server.Close)
+
+	service := newTestSessionServiceAt(t, workspace)
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	bus := events.New()
+	t.Cleanup(bus.Close)
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus: bus, config: Config{ConversationID: conversationID, Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}}
+	require.NoError(t, bridge.Start(t.Context()))
+	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+
+	completed := make(chan string, 2)
+
+	go func() {
+		for outbound := range bus.Outbound(t.Context()) {
+			outbound.MarkDelivered(nil)
+
+			if outbound.Complete {
+				completed <- outbound.Text
+			}
+		}
+	}()
+
+	inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "workflow", "$workflow private", true)
+	inbound.Workflow = &workflow.RunRequest{Definition: definitions["private"]}
+	response := inbound.EnableResponseWait()
+	require.NoError(t, bridge.Submit(t.Context(), inbound))
+	require.NoError(t, (<-response).Err)
+	assert.Equal(t, "public result", <-completed)
+
+	entries, err := service.ObserveEntries(t.Context(), conversationID, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	encodedEntry, err := json.Marshal(entries[0].Entry)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encodedEntry), intermediate)
+
+	followUp := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "What happened?", true)
+	followUpResponse := followUp.EnableResponseWait()
+	require.NoError(t, bridge.Submit(t.Context(), followUp))
+	require.NoError(t, (<-followUpResponse).Err)
+	assert.Equal(t, "follow-up answer", <-completed)
+	assert.Contains(t, followUpInput, "Workflow run summary.")
+	assert.Contains(t, followUpInput, `\"workflow\":\"private\"`)
+	assert.Contains(t, followUpInput, `\"name\":\"work\",\"status\":\"complete\"`)
+	assert.Contains(t, followUpInput, `\"name\":\"later\",\"status\":\"skipped\"`)
+	assert.NotContains(t, followUpInput, intermediate)
+	assert.NotContains(t, followUpInput, "produce intermediate")
+	assert.NotContains(t, followUpInput, "function_call")
+	assert.NotContains(t, followUpInput, "reasoning")
+	entries, err = service.ObserveEntries(t.Context(), conversationID, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	assert.Equal(t, "turn", entries[1].Entry.Type)
 }
 
 func TestBridgeInterruptReleasesDrainedWorkflowReservation(t *testing.T) {

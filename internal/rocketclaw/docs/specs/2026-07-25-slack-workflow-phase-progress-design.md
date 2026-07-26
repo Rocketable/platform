@@ -22,6 +22,12 @@ summarize · 3/8
 
 The numerator is `Complete` and the denominator is `Scheduled`. The title changes as Slack receives updates for the same task ID. The status separately communicates pending, in-progress, complete, or error, so the title does not repeat a running count.
 
+Connector-neutral skipped phases render with Slack's terminal complete status and an explicit title:
+
+```text
+implement · skipped
+```
+
 Routine workflow phase updates do not set `details`, `output`, or `sources`. Workflow errors remain in the final answer path instead of being accumulated in task details.
 
 ## Implementation
@@ -36,6 +42,7 @@ Update the Slack phase chunk tests to assert:
 
 - zero-call and one-call phases keep the plain phase title;
 - fan-out titles render `name · complete/scheduled`;
+- skipped phases render `name · skipped` with terminal complete status;
 - task IDs and statuses remain unchanged;
 - generated chunks omit `details`, including across successive snapshots of the same phase;
 - terminal `plan_update` behavior remains unchanged.

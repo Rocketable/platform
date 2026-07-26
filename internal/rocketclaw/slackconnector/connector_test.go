@@ -5985,9 +5985,9 @@ func TestWorkflowPhaseChunksPreserveOrder(t *testing.T) {
 		phases     map[string]workflow.PhaseUpdate
 	}{
 		{name: "declared", phases: map[string]workflow.PhaseUpdate{
-			"run/phase/000000/discover": {PhaseID: "run/phase/000000/discover", Name: "discover", Status: workflow.PhaseComplete, Details: "not run"},
-			"run/phase/000001/audit":    {PhaseID: "run/phase/000001/audit", Name: "audit", Status: workflow.PhaseComplete, Details: "not run"},
-			"run/phase/000002/verify":   {PhaseID: "run/phase/000002/verify", Name: "verify", Status: workflow.PhaseComplete, Details: "not run"},
+			"run/phase/000000/discover": {PhaseID: "run/phase/000000/discover", Name: "discover", Status: workflow.PhaseComplete},
+			"run/phase/000001/audit":    {PhaseID: "run/phase/000001/audit", Name: "audit", Status: workflow.PhaseComplete},
+			"run/phase/000002/verify":   {PhaseID: "run/phase/000002/verify", Name: "verify", Status: workflow.PhaseComplete},
 		}, want: `[
 			{"type":"task_update","id":"run/phase/000000/discover","title":"discover","status":"complete"},
 			{"type":"task_update","id":"run/phase/000001/audit","title":"audit","status":"complete"},
@@ -6004,6 +6004,13 @@ func TestWorkflowPhaseChunksPreserveOrder(t *testing.T) {
 			"run/phase/000000/find": {PhaseID: "run/phase/000000/find", Name: "find", Status: workflow.PhaseComplete, Scheduled: 1, Complete: 1},
 		}, want: `[
 			{"type":"task_update","id":"run/phase/000000/find","title":"find","status":"complete"}
+		]`},
+		{name: "skipped", phases: map[string]workflow.PhaseUpdate{
+			"run/phase/000000/audit":    {PhaseID: "run/phase/000000/audit", Name: "audit", Status: workflow.PhaseSkipped, Scheduled: 3},
+			"run/phase/000001/discover": {PhaseID: "run/phase/000001/discover", Name: "discover", Status: workflow.PhaseComplete, Scheduled: 1, Complete: 1},
+		}, want: `[
+			{"type":"task_update","id":"run/phase/000000/audit","title":"audit · skipped","status":"complete"},
+			{"type":"task_update","id":"run/phase/000001/discover","title":"discover","status":"complete"}
 		]`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
