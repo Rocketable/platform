@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -54,8 +55,12 @@ type AgentRequest struct {
 	Schema map[string]any
 }
 
+// AgentThinkingFunc receives serialized observable activity from one isolated agent call.
+// Implementations must not invoke it concurrently or after the agent run returns.
+type AgentThinkingFunc func(context.Context, string) error
+
 // AgentRunFunc runs one isolated agent call.
-type AgentRunFunc func(context.Context, AgentRequest) (json.RawMessage, error)
+type AgentRunFunc func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error)
 
 // PhaseStatus identifies one workflow phase state.
 type PhaseStatus string
@@ -81,8 +86,17 @@ type PhaseUpdate struct {
 	Details                      string
 }
 
+// AgentUpdate reports one workflow agent call's latest observable activity.
+type AgentUpdate struct {
+	CallID, Label, Activity string
+	Status                  PhaseStatus
+}
+
 // ProgressFunc receives serialized workflow progress updates and is never invoked concurrently.
 type ProgressFunc func(context.Context, PhaseUpdate) error
+
+// AgentProgressFunc receives serialized workflow agent activity updates and is never invoked concurrently.
+type AgentProgressFunc func(context.Context, AgentUpdate) error
 
 // Result is the rendered workflow result.
 type Result struct {
@@ -100,11 +114,12 @@ func (*workerValue) Truth() starlark.Bool  { return true }
 func (*workerValue) Hash() (uint32, error) { return 0, errors.New("worker is unhashable") }
 
 type engine struct {
-	agent    AgentRunFunc
-	progress ProgressFunc
-	cancel   context.CancelCauseFunc
-	runID    string
-	strict   bool
+	agent         AgentRunFunc
+	progress      ProgressFunc
+	agentProgress AgentProgressFunc
+	cancel        context.CancelCauseFunc
+	runID         string
+	strict        bool
 
 	mu                sync.Mutex
 	phases            map[string]*PhaseUpdate
@@ -115,11 +130,11 @@ type engine struct {
 }
 
 // Run executes a compiled workflow in the foreground.
-func Run(ctx context.Context, definition *Definition, request RunRequest, agent AgentRunFunc, progress ProgressFunc) (result Result, err error) {
+func Run(ctx context.Context, definition *Definition, request RunRequest, agent AgentRunFunc, progress ProgressFunc, agentProgress AgentProgressFunc) (result Result, err error) {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
-	e := &engine{agent: agent, progress: progress, cancel: cancel, runID: request.RunID, phases: make(map[string]*PhaseUpdate), phaseSequence: len(definition.Phases), strict: len(definition.Phases) > 0, active: make(map[*starlark.Thread]uint64), remaining: 10_000_000}
+	e := &engine{agent: agent, progress: progress, agentProgress: agentProgress, cancel: cancel, runID: request.RunID, phases: make(map[string]*PhaseUpdate), phaseSequence: len(definition.Phases), strict: len(definition.Phases) > 0, active: make(map[*starlark.Thread]uint64), remaining: 10_000_000}
 	defer func() {
 		err = e.finishPhase(context.WithoutCancel(ctx), "run", err)
 
@@ -494,6 +509,8 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 
 		e.mu.Lock()
 
+		callSequence := e.agents
+
 		e.agents++
 		if e.agents > 1_000 {
 			e.mu.Unlock()
@@ -542,30 +559,72 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 			return nil, err
 		}
 
-		raw, errAgent := e.agent(ctx, request)
+		callLabel := strings.TrimSpace(label)
+		if callLabel == "" {
+			callLabel = strings.TrimSpace(request.Worker.Name)
+		}
+
+		if callLabel == "" {
+			callLabel = fmt.Sprintf("%s call %d", phase, callSequence+1)
+		}
+
+		callID := fmt.Sprintf("%s/agent/%06d", e.runID, callSequence)
+
+		update := AgentUpdate{CallID: callID, Label: callLabel, Status: PhaseInProgress}
+		if err := e.agentActivity(ctx, update); err != nil {
+			return nil, err
+		}
+
+		raw, errAgent := e.agent(ctx, request, func(activityCtx context.Context, activity string) error {
+			update.Activity = activity
+			return e.agentActivity(activityCtx, update)
+		})
 		if errAgent != nil {
+			update.Status = PhaseError
+
 			e.cancel(errAgent)
+			errAgent = errors.Join(errAgent, e.agentActivity(context.WithoutCancel(ctx), update))
+
 			return nil, errAgent
+		}
+
+		var instance any
+
+		errResult := json.Unmarshal(raw, &instance)
+		if errResult != nil {
+			errResult = fmt.Errorf("decode agent result: %w", errResult)
+		}
+
+		if errResult == nil && resolved != nil {
+			if errValidate := resolved.Validate(instance); errValidate != nil {
+				errResult = fmt.Errorf("validate agent result: %w", errValidate)
+			}
+		}
+
+		var decoded starlark.Value
+		if errResult == nil {
+			decoded, errResult = starlark.Call(thread, starjson.Module.Members["decode"], starlark.Tuple{starlark.String(raw)}, nil)
+			if errResult != nil {
+				errResult = fmt.Errorf("decode agent result: %w", errResult)
+			}
+		}
+
+		if errResult != nil {
+			update.Status = PhaseError
+
+			e.cancel(errResult)
+			errResult = errors.Join(errResult, e.agentActivity(context.WithoutCancel(ctx), update))
+
+			return nil, errResult
+		}
+
+		update.Status = PhaseComplete
+		if err := e.agentActivity(ctx, update); err != nil {
+			return nil, err
 		}
 
 		if err := e.phaseCount(ctx, phase, "", 0, -1, 1); err != nil {
 			return nil, err
-		}
-
-		var instance any
-		if err := json.Unmarshal(raw, &instance); err != nil {
-			return nil, fmt.Errorf("decode agent result: %w", err)
-		}
-
-		if resolved != nil {
-			if err := resolved.Validate(instance); err != nil {
-				return nil, fmt.Errorf("validate agent result: %w", err)
-			}
-		}
-
-		decoded, errDecode := starlark.Call(thread, starjson.Module.Members["decode"], starlark.Tuple{starlark.String(raw)}, nil)
-		if errDecode != nil {
-			return nil, fmt.Errorf("decode agent result: %w", errDecode)
 		}
 
 		if schema == starlark.None {
@@ -575,6 +634,18 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 
 		return decoded, nil
 	})
+}
+
+func (e *engine) agentActivity(ctx context.Context, update AgentUpdate) error {
+	e.mu.Lock()
+	err := e.agentProgress(ctx, update)
+	e.mu.Unlock()
+
+	if err != nil {
+		e.cancel(err)
+	}
+
+	return err
 }
 
 func (e *engine) phaseCount(ctx context.Context, name, label string, scheduled, running, complete int) error {

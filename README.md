@@ -17,7 +17,7 @@ See [LICENSE](LICENSE) for the full license terms.
 - Run workspace-aware AI agents with local instructions, agent definitions, skills, attachments, subagents, custom tools, file access, shell commands, web fetches, and explicit permission rules.
 - Keep agent work durable through SQLite-backed sessions, replay, active-turn checkpoints, connector routing, scheduled messages, restart recovery, and conversation-local goal loops.
 - Connect agents to team workflows through Slack, cron jobs, scheduled prompts, and an external MCP HTTP endpoint.
-- Run checked-in Starlark workflows as foreground managed turns with isolated custom workers and Slack phase progress.
+- Run checked-in Starlark workflows as foreground managed turns with isolated custom workers and Slack phase and worker activity progress.
 - Route model requests through first-party OpenAI Responses while preserving one local agent/tool model.
 - Run `openresponsesd` as a separate local OpenResponses-shaped API daemon that can route to OpenAI Responses, OpenAI-compatible Chat Completions, or Anthropic Messages upstreams.
 - Expose optional OpenTelemetry/OpenInference-compatible tracing for agent runs.
@@ -65,7 +65,7 @@ Every active `cron/*.md` definition declares a quoted `channel` that matches a c
 6. RocketClaw publishes progress, final responses, files, or reactions back through the originating connector.
 7. Conversation state, active-turn handoffs, scheduled work, and routing metadata are persisted so restart recovery can refire interrupted turns as model-guided continuations from uncertain state.
 
-Saved workflows run only as foreground managed turns. Each workflow launches fresh isolated custom workers, keeps intermediate values out of managed history, and persists a compact terminal summary of completed, failed, stopped, and skipped phases so later turns can explain what happened. Successful runs also record and deliver the final value. Slack shows phase progress with plan/task cards. Fan-out workers share one checkout, so parallel writers must own disjoint files. SQLite does not persist resumable workflow progress: `$stop` ends the run, and daemon restart requires a new `$workflow` invocation.
+Saved workflows run only as foreground managed turns. Each workflow launches fresh isolated custom workers, keeps intermediate values out of managed history, and persists a compact terminal summary of completed, failed, stopped, and skipped phases so later turns can explain what happened. Successful runs also record and deliver the final value. Slack shows phase progress and each worker's latest attributed activity with plan/task cards. Fan-out workers share one checkout, so parallel writers must own disjoint files. SQLite does not persist resumable workflow progress: `$stop` ends the run, and daemon restart requires a new `$workflow` invocation.
 
 For local CLI experimentation, `rocketcode` and `rocketloop` run RocketCode directly in the current working directory.
 

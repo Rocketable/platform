@@ -874,8 +874,19 @@ func (b *Bridge) runWorkflow(ctx context.Context, msg *events.InboundMessage, tu
 
 		return nil
 	}
+	agentProgress := func(ctx context.Context, update workflow.AgentUpdate) error {
+		sequence++
+		outbound := b.newOutboundMessage(msg, turnID, sequence, "", "", false)
 
-	workflowResult, errRun := workflow.Run(turnCtx, request.Definition, request, run, progress)
+		outbound.WorkflowAgent = &update
+		if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
+			return fmt.Errorf("publish workflow agent activity: %w", err)
+		}
+
+		return nil
+	}
+
+	workflowResult, errRun := workflow.Run(turnCtx, request.Definition, request, run, progress, agentProgress)
 	errRun = errors.Join(errRun, closeRunner())
 
 	b.mu.Lock()

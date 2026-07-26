@@ -173,6 +173,7 @@ type OutboundMessage struct {
 	Attachments                  []OutboundAttachment
 	GoalTurn, GoalComplete       bool
 	GoalTurnNumber, GoalMaxTurns int
+	WorkflowAgent                *workflow.AgentUpdate
 	WorkflowPhase                *workflow.PhaseUpdate
 	WorkflowTerminal             workflow.Terminal
 

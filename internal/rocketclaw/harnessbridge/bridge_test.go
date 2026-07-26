@@ -1763,11 +1763,19 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) 
 	synctest.Test(t, func(t *testing.T) {
 		workspace := t.TempDir()
 		writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, err := w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"checking workflow","annotations":[]}]},{"id":"msg_2","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"finished","annotations":[]}]}]}`))
+			assert.NoError(t, err)
+		}))
+		t.Cleanup(server.Close)
+
 		root, err := os.OpenRoot(workspace)
 		require.NoError(t, err)
 		require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
 		require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
-		require.NoError(t, root.WriteFile(".rocketclaw/workflows/audit.star", []byte("meta = {\"name\": \"audit\", \"description\": \"Audit\", \"phases\": [\"work\", \"later\"]}\ndef main(args): return phase(\"work\", lambda: \"finished\")\n"), 0o600))
+		require.NoError(t, root.WriteFile(".rocketclaw/workflows/audit.star", []byte("meta = {\"name\": \"audit\", \"description\": \"Audit\", \"phases\": [\"work\", \"later\"]}\ndef main(args): return phase(\"work\", lambda: agent(\"prompt\", label=\"worker\"))\n"), 0o600))
 		definitions, err := workflow.Load(root, ".rocketclaw")
 		require.NoError(t, err)
 		require.NoError(t, root.Close())
@@ -1781,16 +1789,22 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) 
 
 		bus := events.New()
 		t.Cleanup(bus.Close)
-		bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: &config.Config{Workspace: workspace}, bus: bus, config: Config{ConversationID: pairID, ManagedConversationID: pairID, Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}}
+		bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus: bus, config: Config{ConversationID: pairID, ManagedConversationID: pairID, Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}}
 		require.NoError(t, bridge.Start(t.Context()))
 		t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
 
 		delivered := make(chan struct{})
 		workflowTurnID := ""
 
+		var agentUpdates []workflow.AgentUpdate
+
 		go func() {
 			for outbound := range bus.Outbound(t.Context()) {
 				workflowTurnID = outbound.TurnID
+				if outbound.WorkflowAgent != nil {
+					agentUpdates = append(agentUpdates, *outbound.WorkflowAgent)
+				}
+
 				outbound.MarkDelivered(nil)
 
 				if outbound.Complete {
@@ -1806,6 +1820,7 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) 
 		require.NoError(t, bridge.Submit(t.Context(), inbound))
 		require.NoError(t, (<-response).Err)
 		<-delivered
+		server.Close()
 		synctest.Wait()
 
 		entries, err := service.ObserveEntries(t.Context(), pairID, 0)
@@ -1821,7 +1836,13 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) 
 		var summary workflowRunSummary
 		require.NoError(t, json.Unmarshal([]byte(payload), &summary))
 		assert.Equal(t, workflowTurnID, summary.RunID)
-		assert.JSONEq(t, fmt.Sprintf(`{"workflow":"audit","run_id":%q,"terminal":"complete","phases":[{"name":"work","status":"complete","scheduled":0,"complete":0},{"name":"later","status":"skipped","scheduled":0,"complete":0}]}`, workflowTurnID), payload)
+		assert.JSONEq(t, fmt.Sprintf(`{"workflow":"audit","run_id":%q,"terminal":"complete","phases":[{"name":"work","status":"complete","scheduled":1,"complete":1},{"name":"later","status":"skipped","scheduled":0,"complete":0}]}`, workflowTurnID), payload)
+		require.Len(t, agentUpdates, 3)
+		assert.Equal(t, "worker", agentUpdates[0].Label)
+		assert.Equal(t, workflow.PhaseInProgress, agentUpdates[0].Status)
+		assert.Equal(t, "checking workflow", agentUpdates[1].Activity)
+		assert.Equal(t, workflow.PhaseComplete, agentUpdates[2].Status)
+		assert.Equal(t, "checking workflow", agentUpdates[2].Activity)
 
 		privateAcquired := false
 
@@ -4111,7 +4132,7 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 	assert.Zero(t, outbound.GoalMaxTurns)
 }
 
-func TestWorkflowPhaseOutboundDoesNotLookupGoal(t *testing.T) {
+func TestWorkflowProgressOutboundDoesNotLookupGoal(t *testing.T) {
 	bus := events.New()
 	defer bus.Close()
 
@@ -4127,6 +4148,17 @@ func TestWorkflowPhaseOutboundDoesNotLookupGoal(t *testing.T) {
 
 	published := readRocketCodeOutbound(t, bus)
 	assert.Equal(t, &phase, published.WorkflowPhase)
+	assert.Equal(t, inbound.SlackReply, published.SlackReply)
+
+	agent := workflow.AgentUpdate{CallID: "turn-1/agent/000000", Label: "failure-trace", Activity: "grep: turn limit", Status: workflow.PhaseInProgress}
+	outbound = bridge.newOutboundMessage(inbound, "turn-1", 2, "", "", false)
+	outbound.WorkflowAgent = &agent
+	require.NoError(t, bus.PublishOutbound(t.Context(), outbound))
+
+	published = readRocketCodeOutbound(t, bus)
+	assert.Equal(t, &agent, published.WorkflowAgent)
+	assert.Nil(t, published.WorkflowPhase)
+	assert.Empty(t, published.ProgressText)
 	assert.Equal(t, inbound.SlackReply, published.SlackReply)
 }
 

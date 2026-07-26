@@ -20,7 +20,7 @@ Define literal `meta` with matching non-empty `name` and `description`, plus an 
 ## Quick Reference
 
 - `worker(name, instructions, model=None, tools=None)` defines a workflow-local worker. Omit `model` to inherit, or use an existing configured model mapping key. Omit `tools` to inherit, use `tools=[]` for no tools, never include `task`, and remember that `skill` also grants its required `find_skills` companion. Never invent a model, named agent file, or permission.
-- `agent(prompt, worker=None, label="", schema=None)` runs one isolated worker, returning text or schema-shaped native Starlark JSON values. Every object schema must set `"additionalProperties": False`.
+- `agent(prompt, worker=None, label="", schema=None)` runs one isolated worker, returning text or schema-shaped native Starlark JSON values. `label` identifies that call's live activity in Slack; otherwise the worker name is used. Every object schema must set `"additionalProperties": False`.
 - `parallel(callables)` concurrently runs zero-argument callbacks in declaration order.
 - `pipeline(items, fn)` concurrently applies one callback per item in input order.
 - `phase(name, fn)` executes one unique named phase once and reports its progress. Calls outside named phases use the implicit `run` phase even when strict metadata does not declare it. Declared, dynamic, and implicit phases count toward a limit of 100 total phases.

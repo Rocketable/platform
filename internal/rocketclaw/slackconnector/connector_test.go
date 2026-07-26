@@ -2951,9 +2951,13 @@ func TestFlushProgressFallsBackToPlanUpdateWhenStreamEnded(t *testing.T) {
 			connector := newTestConnector(server.URL)
 			connector.replies["run"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", thinkingStream: true, thinkingTaskID: "222.333"}
 			connector.thinking["run"] = slackThinkingState{Placeholder: slackImmediatePlaceholder, State: slackReplyState{ChannelID: "C123", MessageTS: "555.1"}, thinkingStream: true, thinkingTaskID: "222.333"}
+			agent := workflow.AgentUpdate{CallID: "run/agent/000000", Label: "failure-trace", Activity: "read: <https://example.com/report|report>", Status: workflow.PhaseInProgress}
+			secondAgent := workflow.AgentUpdate{CallID: "run/agent/000001", Label: "canonical-owner", Activity: "grep: ownership", Status: workflow.PhaseInProgress}
 			phase := workflow.PhaseUpdate{PhaseID: "run/phase/000000/audit", Name: "audit", Status: workflow.PhaseInProgress, Scheduled: 3, Running: 1, Complete: 2}
 			slots, _ := connector.replyState("run")
-			connector.bufferWorkflowPhase("run", &slots, &phase)
+			connector.bufferWorkflowUpdate("run", &slots, &agent, nil)
+			connector.bufferWorkflowUpdate("run", &slots, &secondAgent, nil)
+			connector.bufferWorkflowUpdate("run", &slots, nil, &phase)
 			require.NoError(t, connector.flushProgressText(t.Context(), "run"))
 
 			require.Len(t, requests, 2)
@@ -2961,16 +2965,19 @@ func TestFlushProgressFallsBackToPlanUpdateWhenStreamEnded(t *testing.T) {
 			assert.Equal(t, "/chat.update", requests[1].path)
 			assert.Equal(t, "C123", requests[1].form.Get("channel"))
 			assert.Equal(t, "555.1", requests[1].form.Get("ts"))
-			assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress"}]}]`, requests[1].form.Get("blocks"))
+			assert.JSONEq(t, `[{"type":"task_update","id":"run/agent/000000","title":"failure-trace: read: <https://example.com/report|report>","status":"in_progress","sources":[{"type":"url","url":"https://example.com/report","text":"report"}]},{"type":"task_update","id":"run/agent/000001","title":"canonical-owner: grep: ownership","status":"in_progress"},{"type":"task_update","id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress"}]`, requests[0].form.Get("chunks"))
+			assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"run/agent/000000","title":"failure-trace: read: <https://example.com/report|report>","status":"in_progress","sources":[{"type":"url","url":"https://example.com/report","text":"report"}]},{"type":"task_card","task_id":"run/agent/000001","title":"canonical-owner: grep: ownership","status":"in_progress"},{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress"}]}]`, requests[1].form.Get("blocks"))
 
+			agent.Activity, agent.Status = "bash: verify", workflow.PhaseComplete
 			phase.Status, phase.Running, phase.Complete = workflow.PhaseComplete, 0, 3
 			slots, _ = connector.replyState("run")
-			connector.bufferWorkflowPhase("run", &slots, &phase)
+			connector.bufferWorkflowUpdate("run", &slots, &agent, nil)
+			connector.bufferWorkflowUpdate("run", &slots, nil, &phase)
 			require.NoError(t, connector.flushProgressText(t.Context(), "run"))
 
 			require.Len(t, requests, 3)
 			assert.Equal(t, "/chat.update", requests[2].path)
-			assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 3/3","status":"complete"}]}]`, requests[2].form.Get("blocks"))
+			assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"run/agent/000000","title":"failure-trace: bash: verify","status":"complete"},{"type":"task_card","task_id":"run/agent/000001","title":"canonical-owner: grep: ownership","status":"in_progress"},{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 3/3","status":"complete"}]}]`, requests[2].form.Get("blocks"))
 		})
 	}
 }
@@ -3003,7 +3010,7 @@ func TestFlushProgressRetriesFailedFallbackThroughUpdate(t *testing.T) {
 	connector.thinking["run"] = slackThinkingState{Placeholder: slackImmediatePlaceholder, State: slackReplyState{ChannelID: "C123", MessageTS: "555.1"}, thinkingStream: true, thinkingTaskID: "222.333"}
 	phase := workflow.PhaseUpdate{PhaseID: "run/phase/000000/audit", Name: "audit", Status: workflow.PhaseInProgress}
 	slots, _ := connector.replyState("run")
-	connector.bufferWorkflowPhase("run", &slots, &phase)
+	connector.bufferWorkflowUpdate("run", &slots, nil, &phase)
 
 	require.ErrorContains(t, connector.flushProgressText(t.Context(), "run"), "ratelimited")
 	require.NoError(t, connector.flushProgressText(t.Context(), "run"))
@@ -3036,7 +3043,7 @@ func TestFlushProgressSerializesAfterAppendFallback(t *testing.T) {
 	connector.thinking["run"] = slackThinkingState{Placeholder: slackImmediatePlaceholder, State: slackReplyState{ChannelID: "C123", MessageTS: "555.1"}, thinkingStream: true, thinkingTaskID: "222.333"}
 	phase := workflow.PhaseUpdate{PhaseID: "run/phase/000000/audit", Name: "audit", Status: workflow.PhaseInProgress, Scheduled: 3, Complete: 2}
 	slots, _ := connector.replyState("run")
-	connector.bufferWorkflowPhase("run", &slots, &phase)
+	connector.bufferWorkflowUpdate("run", &slots, nil, &phase)
 
 	errFirst := make(chan error, 1)
 	go func() { errFirst <- connector.flushProgressText(t.Context(), "run") }()
@@ -3047,7 +3054,7 @@ func TestFlushProgressSerializesAfterAppendFallback(t *testing.T) {
 
 	phase.Status, phase.Complete = workflow.PhaseComplete, 3
 	slots, _ = connector.replyState("run")
-	connector.bufferWorkflowPhase("run", &slots, &phase)
+	connector.bufferWorkflowUpdate("run", &slots, nil, &phase)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -3082,7 +3089,7 @@ func TestBufferProgressDoesNotResurrectEndedStream(t *testing.T) {
 				connector.bufferProgressText("run", &staleSlots, slackImmediatePlaceholder, "late activity", progress)
 			} else {
 				phase := workflow.PhaseUpdate{PhaseID: "run/phase/audit", Name: "audit", Status: workflow.PhaseComplete}
-				connector.bufferWorkflowPhase("run", &staleSlots, &phase)
+				connector.bufferWorkflowUpdate("run", &staleSlots, nil, &phase)
 			}
 
 			require.NoError(t, connector.flushProgressText(t.Context(), "run"))
@@ -6208,7 +6215,7 @@ func TestSendResponseCompletesFallbackPlanAndPromotesQueuedReply(t *testing.T) {
 
 	phase := workflow.PhaseUpdate{PhaseID: "run/phase/000000/audit", Name: "audit", Status: workflow.PhaseInProgress, Scheduled: 3, Running: 1, Complete: 2}
 	slots, _ = connector.replyState("run")
-	connector.bufferWorkflowPhase("run", &slots, &phase)
+	connector.bufferWorkflowUpdate("run", &slots, nil, &phase)
 	require.NoError(t, connector.flushProgressText(t.Context(), "run"))
 
 	key := slackThreadStackKey(reply)
@@ -6479,8 +6486,9 @@ func TestSendResponseTerminalIncludesProgressBufferedWhileWaiting(t *testing.T) 
 	connector.thinking["run"] = slackThinkingState{
 		Text: "diagnostic", Placeholder: slackImmediatePlaceholder,
 		State: slackReplyState{ChannelID: "C123", MessageTS: "555.1"}, thinkingTaskID: "222.333",
-		activities: []string{"diagnostic"},
-		phases:     map[string]workflow.PhaseUpdate{phaseID: {PhaseID: phaseID, Name: "audit", Status: workflow.PhaseInProgress, Scheduled: 3, Complete: 2}},
+		activities:     []string{"diagnostic"},
+		workflowAgents: map[string]workflow.AgentUpdate{"run/agent/000000": {CallID: "run/agent/000000", Label: "worker", Activity: "reading", Status: workflow.PhaseInProgress}},
+		phases:         map[string]workflow.PhaseUpdate{phaseID: {PhaseID: phaseID, Name: "audit", Status: workflow.PhaseInProgress, Scheduled: 3, Complete: 2}},
 	}
 
 	errFlush := make(chan error, 1)
@@ -6506,14 +6514,92 @@ func TestSendResponseTerminalIncludesProgressBufferedWhileWaiting(t *testing.T) 
 	progress.TurnID = "run"
 	connector.bufferProgressText("run", &slots, slackImmediatePlaceholder, "diagnostic\nlate activity", progress)
 
+	agent := workflow.AgentUpdate{CallID: "run/agent/000000", Label: "worker", Activity: "verified", Status: workflow.PhaseComplete}
 	phase := workflow.PhaseUpdate{PhaseID: phaseID, Name: "audit", Status: workflow.PhaseComplete, Scheduled: 3, Complete: 3}
-	connector.bufferWorkflowPhase("run", &slots, &phase)
+
+	connector.bufferWorkflowUpdate("run", &slots, &agent, nil)
+	connector.bufferWorkflowUpdate("run", &slots, nil, &phase)
 	close(releaseProgressUpdate)
 	require.NoError(t, <-errFlush)
 	require.NoError(t, <-errComplete)
 
 	assert.Contains(t, terminalUpdate.Get("text"), "late activity")
-	assert.JSONEq(t, `[{"type":"plan","title":"Workflow complete","tasks":[{"type":"task_card","task_id":"222.333-activity-1-1","title":"diagnostic","status":"complete"},{"type":"task_card","task_id":"run/phase/audit","title":"audit · 3/3","status":"complete"},{"type":"task_card","task_id":"222.333-activity-2-1","title":"late activity","status":"complete"}]}]`, terminalUpdate.Get("blocks"))
+	assert.JSONEq(t, `[{"type":"plan","title":"Workflow complete","tasks":[{"type":"task_card","task_id":"222.333-activity-1-1","title":"diagnostic","status":"complete"},{"type":"task_card","task_id":"run/agent/000000","title":"worker: verified","status":"complete"},{"type":"task_card","task_id":"run/phase/audit","title":"audit · 3/3","status":"complete"},{"type":"task_card","task_id":"222.333-activity-2-1","title":"late activity","status":"complete"}]}]`, terminalUpdate.Get("blocks"))
+}
+
+func TestWorkflowAgentChunksRenderLatestAttributedActivity(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		update workflow.AgentUpdate
+		want   string
+	}{
+		{name: "initial", update: workflow.AgentUpdate{CallID: "run/agent/000000", Label: "failure-trace", Status: workflow.PhaseInProgress}, want: `[{"type":"task_update","id":"run/agent/000000","title":"failure-trace","status":"in_progress"}]`},
+		{name: "latest", update: workflow.AgentUpdate{CallID: "run/agent/000000", Label: "failure-trace", Activity: "grep: turn limit", Status: workflow.PhaseInProgress}, want: `[{"type":"task_update","id":"run/agent/000000","title":"failure-trace: grep: turn limit","status":"in_progress"}]`},
+		{name: "complete", update: workflow.AgentUpdate{CallID: "run/agent/000000", Label: "failure-trace", Activity: "bash: Run focused tests", Status: workflow.PhaseComplete}, want: `[{"type":"task_update","id":"run/agent/000000","title":"failure-trace: bash: Run focused tests","status":"complete"}]`},
+		{name: "error", update: workflow.AgentUpdate{CallID: "run/agent/000000", Label: "failure-trace", Activity: "read: prompt.md", Status: workflow.PhaseError}, want: `[{"type":"task_update","id":"run/agent/000000","title":"failure-trace: read: prompt.md","status":"error"}]`},
+		{name: "source", update: workflow.AgentUpdate{CallID: "run/agent/000000", Label: "failure-trace", Activity: "read: <https://example.com/report|report>", Status: workflow.PhaseInProgress}, want: `[{"type":"task_update","id":"run/agent/000000","title":"failure-trace: read: <https://example.com/report|report>","status":"in_progress","sources":[{"type":"url","url":"https://example.com/report","text":"report"}]}]`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := json.Marshal(slackWorkflowAgentChunks(map[string]workflow.AgentUpdate{tt.update.CallID: tt.update}))
+			require.NoError(t, err)
+			assert.JSONEq(t, tt.want, string(encoded))
+		})
+	}
+
+	long := workflow.AgentUpdate{CallID: "run/agent/000000", Label: "worker", Activity: strings.Repeat("界", 300), Status: workflow.PhaseInProgress}
+	chunks := slackWorkflowAgentChunks(map[string]workflow.AgentUpdate{long.CallID: long})
+	require.Len(t, chunks, 1)
+	task := chunks[0].(slack.TaskUpdateChunk)
+	assert.LessOrEqual(t, len([]rune(task.Title)), 256)
+}
+
+func TestWorkflowAgentUpdatesReplaceStableTask(t *testing.T) {
+	var appended []url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		assert.Equal(t, "/chat.appendStream", r.URL.Path)
+		appended = append(appended, cloneValues(r.PostForm))
+
+		writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+	connector.replies["run"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", AnswerTS: "555.2", thinkingStream: true, thinkingTaskID: "222.333"}
+
+	for _, update := range []workflow.AgentUpdate{
+		{CallID: "run/agent/000000", Label: "failure-trace", Status: workflow.PhaseInProgress},
+		{CallID: "run/agent/000000", Label: "failure-trace", Activity: "read: prompt.md", Status: workflow.PhaseInProgress},
+		{CallID: "run/agent/000000", Label: "failure-trace", Activity: "grep: turn limit", Status: workflow.PhaseInProgress},
+		{CallID: "run/agent/000000", Label: "failure-trace", Activity: "grep: turn limit", Status: workflow.PhaseComplete},
+	} {
+		msg := events.NewOutboundMessage(events.SourceSlack, "thread", "", events.OutputTargetSlack)
+		msg.TurnID, msg.SlackReply, msg.WorkflowAgent = "run", reply, &update
+		require.NoError(t, connector.SendResponse(t.Context(), msg))
+		require.NoError(t, connector.flushProgressText(t.Context(), "run"))
+	}
+
+	phase := events.NewOutboundMessage(events.SourceSlack, "thread", "", events.OutputTargetSlack)
+	phase.TurnID, phase.SlackReply = "run", reply
+	phase.WorkflowPhase = &workflow.PhaseUpdate{PhaseID: "run/phase/investigate", Name: "investigate", Status: workflow.PhaseInProgress, Scheduled: 2}
+	require.NoError(t, connector.SendResponse(t.Context(), phase))
+	require.NoError(t, connector.flushProgressText(t.Context(), "run"))
+
+	require.Len(t, appended, 5)
+	assert.JSONEq(t, `[{"type":"task_update","id":"run/agent/000000","title":"failure-trace","status":"in_progress"}]`, appended[0].Get("chunks"))
+	assert.JSONEq(t, `[{"type":"task_update","id":"run/agent/000000","title":"failure-trace: read: prompt.md","status":"in_progress"}]`, appended[1].Get("chunks"))
+	assert.JSONEq(t, `[{"type":"task_update","id":"run/agent/000000","title":"failure-trace: grep: turn limit","status":"in_progress"}]`, appended[2].Get("chunks"))
+	assert.JSONEq(t, `[{"type":"task_update","id":"run/agent/000000","title":"failure-trace: grep: turn limit","status":"complete"}]`, appended[3].Get("chunks"))
+	assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/investigate","title":"investigate · 0/2","status":"in_progress"}]`, appended[4].Get("chunks"))
+
+	for _, request := range appended {
+		assert.NotContains(t, request.Get("chunks"), "-activity-")
+	}
 }
 
 func TestWorkflowPhaseChunksPreserveOrder(t *testing.T) {
@@ -6590,7 +6676,7 @@ func TestWorkflowPhaseContinuousUpdatesDoNotPostponeFlush(t *testing.T) {
 	slots := slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", thinkingStream: true}
 	update := workflow.PhaseUpdate{PhaseID: "run/phase/000000/work", Name: "work", Status: workflow.PhaseInProgress}
 
-	connector.bufferWorkflowPhase("run", &slots, &update)
+	connector.bufferWorkflowUpdate("run", &slots, nil, &update)
 	defer func() {
 		connector.mu.Lock()
 		if timer := connector.thinking["run"].Timer; timer != nil {
@@ -6609,7 +6695,7 @@ func TestWorkflowPhaseContinuousUpdatesDoNotPostponeFlush(t *testing.T) {
 		select {
 		case <-ticker.C:
 			update.Scheduled++
-			connector.bufferWorkflowPhase("run", &slots, &update)
+			connector.bufferWorkflowUpdate("run", &slots, nil, &update)
 		case <-appended:
 			return
 		case <-timeout.C:
@@ -6913,38 +6999,59 @@ func TestFailedWorkflowRejectionDeliveryStillPromotesBufferedMessage(t *testing.
 	assert.Empty(t, router.startedSnapshot())
 }
 
-func TestWorkflowPhaseUpdateArrivingDuringAppendIsPreserved(t *testing.T) {
-	appendStarted := make(chan struct{})
-	releaseAppend := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		close(appendStarted)
-		<-releaseAppend
-		writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
-	}))
-	t.Cleanup(server.Close)
+func TestWorkflowUpdateArrivingDuringAppendIsPreserved(t *testing.T) {
+	for _, kind := range []string{"agent", "phase"} {
+		t.Run(kind, func(t *testing.T) {
+			appendStarted := make(chan struct{})
+			releaseAppend := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				close(appendStarted)
+				<-releaseAppend
+				writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+			}))
+			t.Cleanup(server.Close)
 
-	connector := newTestConnector(server.URL)
-	slots := slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", thinkingStream: true}
-	first := workflow.PhaseUpdate{PhaseID: "run/phase/audit", Name: "audit", Status: workflow.PhaseInProgress}
-	connector.bufferWorkflowPhase("run", &slots, &first)
+			connector := newTestConnector(server.URL)
+			slots := slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", thinkingStream: true, thinkingTaskID: "222.333"}
+			firstAgent := workflow.AgentUpdate{CallID: "run/agent/000000", Label: "worker", Activity: "reading", Status: workflow.PhaseInProgress}
+			firstPhase := workflow.PhaseUpdate{PhaseID: "run/phase/audit", Name: "audit", Status: workflow.PhaseInProgress}
 
-	errFlush := make(chan error, 1)
-	go func() { errFlush <- connector.flushProgressText(t.Context(), "run") }()
+			if kind == "agent" {
+				connector.bufferWorkflowUpdate("run", &slots, &firstAgent, nil)
+			} else {
+				connector.bufferWorkflowUpdate("run", &slots, nil, &firstPhase)
+			}
 
-	<-appendStarted
+			errFlush := make(chan error, 1)
+			go func() { errFlush <- connector.flushProgressText(t.Context(), "run") }()
 
-	latest := first
-	latest.Status = workflow.PhaseComplete
-	connector.bufferWorkflowPhase("run", &slots, &latest)
-	close(releaseAppend)
-	require.NoError(t, <-errFlush)
-	connector.mu.Lock()
-	if connector.thinking["run"].Timer != nil {
-		connector.thinking["run"].Timer.Stop()
+			<-appendStarted
+
+			if kind == "agent" {
+				latest := firstAgent
+				latest.Activity, latest.Status = "verified", workflow.PhaseComplete
+				connector.bufferWorkflowUpdate("run", &slots, &latest, nil)
+			} else {
+				latest := firstPhase
+				latest.Status = workflow.PhaseComplete
+				connector.bufferWorkflowUpdate("run", &slots, nil, &latest)
+			}
+
+			close(releaseAppend)
+			require.NoError(t, <-errFlush)
+			connector.mu.Lock()
+			if connector.thinking["run"].Timer != nil {
+				connector.thinking["run"].Timer.Stop()
+			}
+
+			if kind == "agent" {
+				assert.Equal(t, workflow.AgentUpdate{CallID: "run/agent/000000", Label: "worker", Activity: "verified", Status: workflow.PhaseComplete}, connector.thinking["run"].workflowAgents[firstAgent.CallID])
+			} else {
+				assert.Equal(t, workflow.PhaseComplete, connector.thinking["run"].phases[firstPhase.PhaseID].Status)
+			}
+			connector.mu.Unlock()
+		})
 	}
-
-	assert.Equal(t, workflow.PhaseComplete, connector.thinking["run"].phases[first.PhaseID].Status)
-	connector.mu.Unlock()
 }
 
 func TestWorkflowFinalizationDuringAppendPreservesLatestPhase(t *testing.T) {
@@ -6968,7 +7075,7 @@ func TestWorkflowFinalizationDuringAppendPreservesLatestPhase(t *testing.T) {
 	connector.replies["run"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", AnswerTS: "555.2", thinkingStream: true}
 	slots := connector.replies["run"]
 	phase := workflow.PhaseUpdate{PhaseID: "run/phase/audit", Name: "audit", Status: workflow.PhaseInProgress}
-	connector.bufferWorkflowPhase("run", &slots, &phase)
+	connector.bufferWorkflowUpdate("run", &slots, nil, &phase)
 	connector.mu.Lock()
 	pending := connector.thinking["run"]
 
@@ -7010,7 +7117,7 @@ func TestWorkflowFinalizationDuringAppendPreservesLatestPhase(t *testing.T) {
 			case <-finalDone:
 				return
 			default:
-				connector.bufferWorkflowPhase("run", &slots, &phase)
+				connector.bufferWorkflowUpdate("run", &slots, nil, &phase)
 			}
 		}
 	}()

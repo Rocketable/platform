@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -811,19 +812,19 @@ func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 
 	cfg.OpenAI.APIBaseURL = "http://127.0.0.1:1"
 
-	result, err := run(t.Context(), workflow.AgentRequest{Prompt: "literal !`printf unsafe`"})
+	result, err := run(t.Context(), workflow.AgentRequest{Prompt: "literal !`printf unsafe`"}, discardWorkflowThinking)
 	require.NoError(t, err)
 	require.JSONEq(t, `"first"`, string(result))
 
-	result, err = run(t.Context(), workflow.AgentRequest{Prompt: "structured", Worker: workflow.Worker{Name: "reviewer", Instructions: "Worker !`printf unsafe`", Model: "nested", Tools: []string{"skill"}}, Schema: map[string]any{"type": "object", "properties": map[string]any{"ok": map[string]any{"type": "boolean"}}, "required": []string{"ok"}}})
+	result, err = run(t.Context(), workflow.AgentRequest{Prompt: "structured", Worker: workflow.Worker{Name: "reviewer", Instructions: "Worker !`printf unsafe`", Model: "nested", Tools: []string{"skill"}}, Schema: map[string]any{"type": "object", "properties": map[string]any{"ok": map[string]any{"type": "boolean"}}, "required": []string{"ok"}}}, discardWorkflowThinking)
 	require.NoError(t, err)
 	require.JSONEq(t, `{"ok":true}`, string(result))
 
-	result, err = run(t.Context(), workflow.AgentRequest{Prompt: "second"})
+	result, err = run(t.Context(), workflow.AgentRequest{Prompt: "second"}, discardWorkflowThinking)
 	require.NoError(t, err)
 	require.JSONEq(t, `"second"`, string(result))
 
-	result, err = run(t.Context(), workflow.AgentRequest{Prompt: "no-tools", Worker: workflow.Worker{Name: "reasoner", Instructions: "Reason", Tools: []string{}}})
+	result, err = run(t.Context(), workflow.AgentRequest{Prompt: "no-tools", Worker: workflow.Worker{Name: "reasoner", Instructions: "Reason", Tools: []string{}}}, discardWorkflowThinking)
 	require.NoError(t, err)
 	require.JSONEq(t, `"first"`, string(result))
 
@@ -888,7 +889,7 @@ func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {
 	run, cleanup, err := newWorkflowAgentRunner(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "review-model"}, "main", slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, cleanup()) })
-	result, err := run(t.Context(), workflow.AgentRequest{Prompt: "run", Worker: workflow.Worker{Name: "worker", Instructions: "work", Tools: []string{"bash"}}})
+	result, err := run(t.Context(), workflow.AgentRequest{Prompt: "run", Worker: workflow.Worker{Name: "worker", Instructions: "work", Tools: []string{"bash"}}}, discardWorkflowThinking)
 	require.NoError(t, err)
 	require.JSONEq(t, `"done"`, string(result))
 	require.Equal(t, []string{"gpt-5.5", "review-model", "gpt-5.5"}, models)
@@ -898,7 +899,7 @@ func TestWorkflowAgentRunnerStructuredOutputUsesFinalAssistantMessage(t *testing
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  read: {\"*\": allow}\n---\nMain prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, "README.md"), []byte("fixture"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "README.md"), []byte("PRIVATE TOOL RESULT"), 0o644))
 
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -908,10 +909,10 @@ func TestWorkflowAgentRunnerStructuredOutputUsesFinalAssistantMessage(t *testing
 
 		switch requests {
 		case 1:
-			_, err := w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"checking the fixture","annotations":[]}]},{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"read","arguments":"{\"filePath\":\"README.md\",\"offset\":1}"}]}`))
+			_, err := w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"rsn_1","type":"reasoning","summary":[{"type":"summary_text","text":"checking context"}]},{"id":"msg_1","type":"message","status":"completed","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"checking the fixture","annotations":[]}]},{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"read","arguments":"{\"filePath\":\"README.md\",\"offset\":1}"}]}`))
 			assert.NoError(t, err)
 		case 2:
-			writeRawRunMessage(t, w, "resp_2", "msg_2", `{"ok":true}`)
+			writeRawRunMessage(t, w, "resp_2", "msg_2", `{"ok":true,"private":"PRIVATE WORKER RESULT"}`)
 		default:
 			t.Fatalf("unexpected request %d", requests)
 		}
@@ -922,10 +923,57 @@ func TestWorkflowAgentRunnerStructuredOutputUsesFinalAssistantMessage(t *testing
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, cleanup()) })
 
-	result, err := run(t.Context(), workflow.AgentRequest{Prompt: "review", Schema: map[string]any{"type": "object", "properties": map[string]any{"ok": map[string]any{"type": "boolean"}}, "required": []string{"ok"}}})
+	var thinking []string
+
+	request := workflow.AgentRequest{
+		Prompt: "PRIVATE WORKER PROMPT",
+		Schema: map[string]any{
+			"type":        "object",
+			"description": "PRIVATE SCHEMA",
+			"properties": map[string]any{
+				"ok":      map[string]any{"type": "boolean"},
+				"private": map[string]any{"type": "string"},
+			},
+			"required": []string{"ok", "private"},
+		},
+	}
+	result, err := run(t.Context(), request, func(_ context.Context, text string) error {
+		thinking = append(thinking, text)
+		return nil
+	})
 	require.NoError(t, err)
-	require.JSONEq(t, `{"ok":true}`, string(result))
+	require.JSONEq(t, `{"ok":true,"private":"PRIVATE WORKER RESULT"}`, string(result))
 	require.Equal(t, 2, requests)
+	assert.Equal(t, []string{"read: README.md", "checking context", "checking the fixture"}, thinking)
+
+	for _, private := range []string{"PRIVATE TOOL RESULT", "PRIVATE WORKER RESULT", "PRIVATE WORKER PROMPT", "PRIVATE SCHEMA"} {
+		assert.NotContains(t, strings.Join(thinking, "\n"), private)
+	}
+}
+
+func TestWorkflowAgentRunnerCancelsOnThinkingFailure(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  read: {\"*\": allow}\n---\nMain prompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "README.md"), []byte("fixture"), 0o644))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		writeRawRunFunctionCall(t, w, "resp_1", "call_1", "read", struct {
+			FilePath string `json:"filePath"`
+			Offset   int    `json:"offset"`
+		}{FilePath: "README.md", Offset: 1})
+	}))
+	t.Cleanup(server.Close)
+
+	run, cleanup, err := newWorkflowAgentRunner(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, "main", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cleanup()) })
+
+	errThinking := errors.New("publish activity")
+	_, err = run(t.Context(), workflow.AgentRequest{Prompt: "review"}, func(context.Context, string) error { return errThinking })
+	require.ErrorIs(t, err, errThinking)
+	require.ErrorContains(t, err, "publish workflow agent thinking")
 }
 
 func TestWorkflowExplicitSkillWithoutAvailableSubjects(t *testing.T) {
@@ -950,7 +998,7 @@ func TestWorkflowExplicitSkillWithoutAvailableSubjects(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, cleanup()) })
 
-	_, err = run(t.Context(), workflow.AgentRequest{Prompt: "prompt", Worker: workflow.Worker{Name: "worker", Instructions: "work", Tools: []string{"skill"}}})
+	_, err = run(t.Context(), workflow.AgentRequest{Prompt: "prompt", Worker: workflow.Worker{Name: "worker", Instructions: "work", Tools: []string{"skill"}}}, discardWorkflowThinking)
 	require.NoError(t, err)
 	assert.Contains(t, fmt.Sprint(request["tools"]), `name:skill`)
 	assert.NotContains(t, fmt.Sprint(request["tools"]), `name:find_skills`)
@@ -974,14 +1022,14 @@ func TestWorkflowAgentRunnerRejectsInvalidOverridesAndStructuredOutput(t *testin
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, cleanup()) })
 
-	_, err = run(t.Context(), workflow.AgentRequest{Worker: workflow.Worker{Name: "worker", Instructions: "prompt", Model: "missing"}, Prompt: "model"})
+	_, err = run(t.Context(), workflow.AgentRequest{Worker: workflow.Worker{Name: "worker", Instructions: "prompt", Model: "missing"}, Prompt: "model"}, discardWorkflowThinking)
 	require.ErrorContains(t, err, `workflow worker model "missing" is not configured`)
-	_, err = run(t.Context(), workflow.AgentRequest{Worker: workflow.Worker{Name: "worker", Instructions: "prompt", Model: "broken"}, Prompt: "model"})
+	_, err = run(t.Context(), workflow.AgentRequest{Worker: workflow.Worker{Name: "worker", Instructions: "prompt", Model: "broken"}, Prompt: "model"}, discardWorkflowThinking)
 	require.ErrorContains(t, err, `render workflow worker model "broken"`)
 	require.ErrorContains(t, err, `model "missing" is not configured`)
-	_, err = run(t.Context(), workflow.AgentRequest{Worker: workflow.Worker{Name: "worker", Instructions: "prompt", Tools: []string{"missing"}}, Prompt: "tools"})
+	_, err = run(t.Context(), workflow.AgentRequest{Worker: workflow.Worker{Name: "worker", Instructions: "prompt", Tools: []string{"missing"}}, Prompt: "tools"}, discardWorkflowThinking)
 	require.ErrorContains(t, err, `unknown tool "missing"`)
-	_, err = run(t.Context(), workflow.AgentRequest{Prompt: "schema", Schema: map[string]any{"type": "string"}})
+	_, err = run(t.Context(), workflow.AgentRequest{Prompt: "schema", Schema: map[string]any{"type": "string"}}, discardWorkflowThinking)
 	require.ErrorContains(t, err, "workflow worker returned invalid JSON")
 	require.Equal(t, 1, requests)
 }
@@ -1035,7 +1083,7 @@ func TestWorkflowAgentRunnerConcurrentDirectoriesAndCancellation(t *testing.T) {
 
 	for _, prompt := range []string{"one", "two"} {
 		go func() {
-			raw, err := run(t.Context(), workflow.AgentRequest{Prompt: prompt})
+			raw, err := run(t.Context(), workflow.AgentRequest{Prompt: prompt}, discardWorkflowThinking)
 			results <- result{raw: raw, err: err}
 		}()
 	}
@@ -1062,7 +1110,7 @@ func TestWorkflowAgentRunnerConcurrentDirectoriesAndCancellation(t *testing.T) {
 	canceled := make(chan error, 1)
 
 	go func() {
-		_, err := run(ctx, workflow.AgentRequest{Prompt: "cancel"})
+		_, err := run(ctx, workflow.AgentRequest{Prompt: "cancel"}, discardWorkflowThinking)
 		canceled <- err
 	}()
 
@@ -1128,7 +1176,7 @@ func TestWorkflowAgentRunnerReturnsShellDirectoryCleanupError(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, cleanup()) })
 
-			_, err = run(t.Context(), workflow.AgentRequest{Prompt: "run"})
+			_, err = run(t.Context(), workflow.AgentRequest{Prompt: "run"}, discardWorkflowThinking)
 
 			require.NoError(t, root.Remove(parent))
 			require.NoError(t, root.Rename(savedParent, parent))
@@ -1145,6 +1193,8 @@ func TestWorkflowAgentRunnerReturnsShellDirectoryCleanupError(t *testing.T) {
 		})
 	}
 }
+
+func discardWorkflowThinking(context.Context, string) error { return nil }
 
 func writeRawRunFunctionCall(t *testing.T, w http.ResponseWriter, responseID, callID, name string, args any) {
 	t.Helper()

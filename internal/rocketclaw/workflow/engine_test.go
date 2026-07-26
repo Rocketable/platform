@@ -25,10 +25,10 @@ def main(args):
 
 		var request AgentRequest
 
-		result, err := Run(t.Context(), definition, RunRequest{RunID: "run-1", Args: "question"}, func(_ context.Context, got AgentRequest) (json.RawMessage, error) {
+		result, err := Run(t.Context(), definition, RunRequest{RunID: "run-1", Args: "question"}, func(_ context.Context, got AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
 			request = got
 			return json.RawMessage(`"answer"`), nil
-		}, discardProgress)
+		}, discardProgress, discardAgentProgress)
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -50,13 +50,13 @@ def main(args):
     return [value["ok"], value["count"] + 1]
 `)
 
-		result, err := Run(t.Context(), definition, RunRequest{RunID: "structured"}, func(_ context.Context, request AgentRequest) (json.RawMessage, error) {
+		result, err := Run(t.Context(), definition, RunRequest{RunID: "structured"}, func(_ context.Context, request AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
 			if request.Schema["type"] != "object" {
 				t.Fatalf("agent schema = %v, want object schema", request.Schema)
 			}
 
 			return json.RawMessage(`{"ok":true,"count":2}`), nil
-		}, discardProgress)
+		}, discardProgress, discardAgentProgress)
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -72,9 +72,9 @@ def main(args):
     return agent("structured", schema={"type": "object", "properties": {"count": {"type": "integer"}}, "required": ["count"]})
 `)
 
-		_, err := Run(t.Context(), definition, RunRequest{RunID: "mismatch"}, func(context.Context, AgentRequest) (json.RawMessage, error) {
+		_, err := Run(t.Context(), definition, RunRequest{RunID: "mismatch"}, func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
 			return json.RawMessage(`{"count":"two"}`), nil
-		}, discardProgress)
+		}, discardProgress, discardAgentProgress)
 		if err == nil || !strings.Contains(err.Error(), "count") {
 			t.Fatalf("Run() error = %v, want schema mismatch", err)
 		}
@@ -89,7 +89,7 @@ def main(args):
 `)
 		calls := 0
 
-		_, err := Run(t.Context(), definition, RunRequest{RunID: "immutable"}, func(_ context.Context, request AgentRequest) (json.RawMessage, error) {
+		_, err := Run(t.Context(), definition, RunRequest{RunID: "immutable"}, func(_ context.Context, request AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
 			calls++
 			if request.Worker.Tools[0] != "read" {
 				t.Fatalf("agent %d tools = %v, want immutable read tool", calls, request.Worker.Tools)
@@ -98,7 +98,7 @@ def main(args):
 			request.Worker.Tools[0] = "changed"
 
 			return json.RawMessage(`"ok"`), nil
-		}, discardProgress)
+		}, discardProgress, discardAgentProgress)
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -110,13 +110,13 @@ w = worker(name="worker", instructions="work", tools=[])
 def main(args): return agent("prompt", worker=w)
 `)
 
-		_, err := Run(t.Context(), definition, RunRequest{RunID: "empty-tools"}, func(_ context.Context, request AgentRequest) (json.RawMessage, error) {
+		_, err := Run(t.Context(), definition, RunRequest{RunID: "empty-tools"}, func(_ context.Context, request AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
 			if request.Worker.Tools == nil || len(request.Worker.Tools) != 0 {
 				t.Fatalf("worker tools = %#v, want non-nil empty slice", request.Worker.Tools)
 			}
 
 			return json.RawMessage(`"ok"`), nil
-		}, discardProgress)
+		}, discardProgress, discardAgentProgress)
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -135,7 +135,7 @@ def main(args): return agent("prompt", worker=w)
 		{name: "list tuple and dict", expression: `{"b": (2, None), "a": [True]}`, wantText: `{"a":[true],"b":[2,null]}`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := Run(t.Context(), engineDefinition(t, "def main(args):\n    return "+tt.expression+"\n"), RunRequest{RunID: tt.name}, inertAgent, discardProgress)
+			result, err := Run(t.Context(), engineDefinition(t, "def main(args):\n    return "+tt.expression+"\n"), RunRequest{RunID: tt.name}, inertAgent, discardProgress, discardAgentProgress)
 			if err != nil {
 				t.Fatalf("Run() error = %v", err)
 			}
@@ -152,7 +152,7 @@ def main(args): return agent("prompt", worker=w)
 		_, err := Run(t.Context(), engineDefinitionWithPhases(t, []string{"run"}, `def main(args): return agent("prompt")`), RunRequest{RunID: "declared-run"}, inertAgent, func(_ context.Context, update PhaseUpdate) error {
 			updates = append(updates, update)
 			return nil
-		})
+		}, discardAgentProgress)
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -184,7 +184,7 @@ func TestRunRejectsInvalidValues(t *testing.T) {
     return x`, want: "cycle"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Run(t.Context(), engineDefinition(t, tt.body), RunRequest{RunID: tt.name}, inertAgent, discardProgress)
+			_, err := Run(t.Context(), engineDefinition(t, tt.body), RunRequest{RunID: tt.name}, inertAgent, discardProgress, discardAgentProgress)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Run() error = %v, want containing %q", err, tt.want)
 			}
@@ -204,7 +204,7 @@ def main(args):
     return pipeline(["one"], audit)`, location: "test.star:3:17", function: "in audit"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Run(t.Context(), engineDefinition(t, tt.body), RunRequest{RunID: tt.name}, inertAgent, discardProgress)
+			_, err := Run(t.Context(), engineDefinition(t, tt.body), RunRequest{RunID: tt.name}, inertAgent, discardProgress, discardAgentProgress)
 			if err == nil {
 				t.Fatal("Run() error = nil, want Starlark evaluation error")
 			}
@@ -232,7 +232,7 @@ def main(args):
     return parallel([mutate, mutate])
 `)
 
-		_, err := Run(t.Context(), definition, RunRequest{RunID: "frozen-global"}, inertAgent, discardProgress)
+		_, err := Run(t.Context(), definition, RunRequest{RunID: "frozen-global"}, inertAgent, discardProgress, discardAgentProgress)
 		if err == nil || !strings.Contains(err.Error(), "frozen") {
 			t.Fatalf("Run() error = %v, want frozen module-global mutation rejection", err)
 		}
@@ -245,7 +245,7 @@ def main(args):
     return local
 `)
 
-		result, err := Run(t.Context(), definition, RunRequest{RunID: "local", Args: "kept"}, inertAgent, discardProgress)
+		result, err := Run(t.Context(), definition, RunRequest{RunID: "local", Args: "kept"}, inertAgent, discardProgress, discardAgentProgress)
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -265,12 +265,12 @@ def main(args):
 
 	var updates []PhaseUpdate
 
-	result, err := Run(t.Context(), definition, RunRequest{RunID: "phase-run"}, func(_ context.Context, request AgentRequest) (json.RawMessage, error) {
+	result, err := Run(t.Context(), definition, RunRequest{RunID: "phase-run"}, func(_ context.Context, request AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
 		return json.RawMessage(fmt.Sprintf("%q", request.Prompt)), nil
 	}, func(_ context.Context, update PhaseUpdate) error {
 		updates = append(updates, update)
 		return nil
-	})
+	}, discardAgentProgress)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -318,7 +318,7 @@ def main(args):
 		wantStatus PhaseStatus
 	}{
 		{name: "implicit complete", runner: inertAgent, wantStatus: PhaseComplete},
-		{name: "implicit error", runner: func(context.Context, AgentRequest) (json.RawMessage, error) {
+		{name: "implicit error", runner: func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
 			return nil, errors.New("agent failed")
 		}, wantStatus: PhaseError},
 	} {
@@ -328,7 +328,7 @@ def main(args):
 			_, _ = Run(t.Context(), engineDefinition(t, `def main(args): return agent("prompt")`), RunRequest{RunID: tt.name}, tt.runner, func(_ context.Context, update PhaseUpdate) error {
 				updates = append(updates, update)
 				return nil
-			})
+			}, discardAgentProgress)
 
 			last := updates[len(updates)-1]
 			if last.Name != "run" || last.Status != tt.wantStatus || last.Running != 0 {
@@ -340,12 +340,12 @@ def main(args):
 	t.Run("explicit error clears running calls", func(t *testing.T) {
 		var updates []PhaseUpdate
 
-		_, _ = Run(t.Context(), engineDefinitionWithPhases(t, []string{"work"}, `def main(args): return phase("work", lambda: agent("prompt"))`), RunRequest{RunID: "phase-error"}, func(context.Context, AgentRequest) (json.RawMessage, error) {
+		_, _ = Run(t.Context(), engineDefinitionWithPhases(t, []string{"work"}, `def main(args): return phase("work", lambda: agent("prompt"))`), RunRequest{RunID: "phase-error"}, func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
 			return nil, errors.New("agent failed")
 		}, func(_ context.Context, update PhaseUpdate) error {
 			updates = append(updates, update)
 			return nil
-		})
+		}, discardAgentProgress)
 
 		last := updates[len(updates)-1]
 		if last.Status != "error" || last.Running != 0 {
@@ -356,9 +356,9 @@ def main(args):
 	t.Run("later failure does not overwrite completed run phase", func(t *testing.T) {
 		result, err := Run(t.Context(), engineDefinitionWithPhases(t, []string{"run", "work"}, `def main(args):
     phase("run", lambda: None)
-    return phase("work", lambda: agent("fail"))`), RunRequest{RunID: "completed-run"}, func(context.Context, AgentRequest) (json.RawMessage, error) {
+    return phase("work", lambda: agent("fail"))`), RunRequest{RunID: "completed-run"}, func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
 			return nil, errors.New("failed")
-		}, discardProgress)
+		}, discardProgress, discardAgentProgress)
 		if err == nil {
 			t.Fatal("Run() error = nil, want later phase failure")
 		}
@@ -373,7 +373,7 @@ def main(args):
 		runner     AgentRunFunc
 	}{
 		{name: "success", body: `def main(args): return None`, runner: inertAgent},
-		{name: "failure", body: `def main(args): return phase("work", lambda: agent("fail"))`, runner: func(context.Context, AgentRequest) (json.RawMessage, error) {
+		{name: "failure", body: `def main(args): return phase("work", lambda: agent("fail"))`, runner: func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
 			return nil, errors.New("failed")
 		}},
 	} {
@@ -383,7 +383,7 @@ def main(args):
 			result, _ := Run(t.Context(), engineDefinitionWithPhases(t, []string{"run", "work", "other"}, tt.body), RunRequest{RunID: "pending-" + tt.name}, tt.runner, func(_ context.Context, update PhaseUpdate) error {
 				updates = append(updates, update)
 				return nil
-			})
+			}, discardAgentProgress)
 
 			for _, name := range []string{"run", "other"} {
 				last := PhaseUpdate{}
@@ -415,7 +415,7 @@ def main(args):
 `), RunRequest{RunID: "dynamic-order"}, inertAgent, func(_ context.Context, update PhaseUpdate) error {
 			updates = append(updates, update)
 			return nil
-		})
+		}, discardAgentProgress)
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -452,7 +452,7 @@ def main(args):
 			}
 
 			return nil
-		})
+		}, discardAgentProgress)
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -473,7 +473,7 @@ def main(args):
 
 		source.WriteString("    return None\n")
 
-		_, err := Run(t.Context(), engineDefinition(t, source.String()), RunRequest{RunID: "dynamic-100"}, inertAgent, discardProgress)
+		_, err := Run(t.Context(), engineDefinition(t, source.String()), RunRequest{RunID: "dynamic-100"}, inertAgent, discardProgress, discardAgentProgress)
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -489,7 +489,7 @@ def main(args):
 
 		source.WriteString("    return None\n")
 
-		_, err := Run(t.Context(), engineDefinition(t, source.String()), RunRequest{RunID: "dynamic-101"}, inertAgent, discardProgress)
+		_, err := Run(t.Context(), engineDefinition(t, source.String()), RunRequest{RunID: "dynamic-101"}, inertAgent, discardProgress, discardAgentProgress)
 		if err == nil || !strings.Contains(err.Error(), "at most 100 phases") {
 			t.Fatalf("Run() error = %v, want 100-phase limit", err)
 		}
@@ -503,13 +503,13 @@ def main(args):
 
 		runnerCalls, progressCalls := 0, 0
 
-		_, err := Run(t.Context(), engineDefinitionWithPhases(t, phases, `def main(args): return agent("prompt")`), RunRequest{RunID: "declared-100"}, func(context.Context, AgentRequest) (json.RawMessage, error) {
+		_, err := Run(t.Context(), engineDefinitionWithPhases(t, phases, `def main(args): return agent("prompt")`), RunRequest{RunID: "declared-100"}, func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
 			runnerCalls++
 			return json.RawMessage(`"unexpected"`), nil
 		}, func(context.Context, PhaseUpdate) error {
 			progressCalls++
 			return nil
-		})
+		}, discardAgentProgress)
 		if err == nil || !strings.Contains(err.Error(), "at most 100 phases") {
 			t.Fatalf("Run() error = %v, want 100-phase limit", err)
 		}
@@ -527,7 +527,7 @@ def main(args):
     audits = pipeline(`+items+`, audit)
     return "Verify and synthesize these audits:\\n%s" % (audits,)
 `)
-			if _, err := Run(t.Context(), definition, RunRequest{RunID: "format"}, inertAgent, discardProgress); err != nil {
+			if _, err := Run(t.Context(), definition, RunRequest{RunID: "format"}, inertAgent, discardProgress, discardAgentProgress); err != nil {
 				t.Fatalf("Run() with items %s error = %v", items, err)
 			}
 		}
@@ -546,7 +546,7 @@ def main(args):
 				t.Fatalf("compileDefinition() error = %v", errCompile)
 			}
 
-			_, err := Run(t.Context(), definition, RunRequest{RunID: tt.name}, inertAgent, discardProgress)
+			_, err := Run(t.Context(), definition, RunRequest{RunID: tt.name}, inertAgent, discardProgress, discardAgentProgress)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Run() error = %v, want containing %q", err, tt.want)
 			}
@@ -556,7 +556,7 @@ def main(args):
 
 func TestRunFanout(t *testing.T) {
 	t.Run("parallel accepts a tuple", func(t *testing.T) {
-		result, err := Run(t.Context(), engineDefinition(t, `def main(args): return parallel((lambda: 1, lambda: 2))`), RunRequest{RunID: "tuple"}, inertAgent, discardProgress)
+		result, err := Run(t.Context(), engineDefinition(t, `def main(args): return parallel((lambda: 1, lambda: 2))`), RunRequest{RunID: "tuple"}, inertAgent, discardProgress, discardAgentProgress)
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -573,7 +573,7 @@ def main(args):
     return pipeline(a, lambda item: agent(item))
 `)
 
-		result, err := Run(t.Context(), definition, RunRequest{RunID: "order"}, func(ctx context.Context, request AgentRequest) (json.RawMessage, error) {
+		result, err := Run(t.Context(), definition, RunRequest{RunID: "order"}, func(ctx context.Context, request AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
 			delay := map[string]time.Duration{"3": 3 * time.Millisecond, "2": 2 * time.Millisecond, "1": time.Millisecond}[request.Prompt]
 			select {
 			case <-ctx.Done():
@@ -581,7 +581,7 @@ def main(args):
 			case <-time.After(delay):
 				return json.RawMessage(fmt.Sprintf("%q", request.Prompt)), nil
 			}
-		}, discardProgress)
+		}, discardProgress, discardAgentProgress)
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -602,12 +602,12 @@ def main(args):
 
 		var updates []PhaseUpdate
 
-		_, err := Run(t.Context(), definition, RunRequest{RunID: "labels"}, func(_ context.Context, request AgentRequest) (json.RawMessage, error) {
+		_, err := Run(t.Context(), definition, RunRequest{RunID: "labels"}, func(_ context.Context, request AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
 			return json.RawMessage(fmt.Sprintf("%q", "private result "+request.Prompt)), nil
 		}, func(_ context.Context, update PhaseUpdate) error {
 			updates = append(updates, update)
 			return nil
-		})
+		}, discardAgentProgress)
 		if err != nil {
 			t.Fatalf("Run() error = %v", err)
 		}
@@ -649,7 +649,7 @@ def main(args):
 		active, maximum := 0, 0
 		release := make(chan struct{})
 		started := make(chan struct{}, 32)
-		runner := func(ctx context.Context, _ AgentRequest) (json.RawMessage, error) {
+		runner := func(ctx context.Context, _ AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
 			mu.Lock()
 			active++
 			maximum = max(maximum, active)
@@ -672,7 +672,7 @@ def main(args):
 		done := make(chan error, 1)
 
 		go func() {
-			_, err := Run(t.Context(), definition, RunRequest{RunID: "concurrency"}, runner, discardProgress)
+			_, err := Run(t.Context(), definition, RunRequest{RunID: "concurrency"}, runner, discardProgress, discardAgentProgress)
 			done <- err
 		}()
 
@@ -710,7 +710,7 @@ def main(args):
     return parallel([lambda: fan([])])`, want: "nested"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Run(t.Context(), engineDefinition(t, tt.source), RunRequest{RunID: tt.name}, inertAgent, discardProgress)
+			_, err := Run(t.Context(), engineDefinition(t, tt.source), RunRequest{RunID: tt.name}, inertAgent, discardProgress, discardAgentProgress)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Run() error = %v, want containing %q", err, tt.want)
 			}
@@ -747,10 +747,10 @@ def main(args):
 	t.Run("rejects huge range without runner calls", func(t *testing.T) {
 		runnerCalls := 0
 
-		_, err := Run(t.Context(), engineDefinition(t, `def main(args): return pipeline(range(1000000000000), lambda item: agent(str(item)))`), RunRequest{RunID: "huge-range"}, func(context.Context, AgentRequest) (json.RawMessage, error) {
+		_, err := Run(t.Context(), engineDefinition(t, `def main(args): return pipeline(range(1000000000000), lambda item: agent(str(item)))`), RunRequest{RunID: "huge-range"}, func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
 			runnerCalls++
 			return json.RawMessage(`"unexpected"`), nil
-		}, discardProgress)
+		}, discardProgress, discardAgentProgress)
 		if err == nil || !strings.Contains(err.Error(), "callback limit exceeded") {
 			t.Fatalf("Run() error = %v, want callback limit", err)
 		}
@@ -773,7 +773,7 @@ func TestRunCancellationAndInfrastructureErrors(t *testing.T) {
 			}
 
 			return nil
-		})
+		}, discardAgentProgress)
 		if !errors.Is(err, errProgress) {
 			t.Fatalf("Run() error = %v, want pending progress failure", err)
 		}
@@ -805,7 +805,7 @@ func TestRunCancellationAndInfrastructureErrors(t *testing.T) {
 			default:
 				return nil
 			}
-		})
+		}, discardAgentProgress)
 		if !errors.Is(err, errEntry) || !errors.Is(err, errTerminal) {
 			t.Fatalf("Run() error = %v, want entry and terminal progress failures", err)
 		}
@@ -826,7 +826,7 @@ func TestRunCancellationAndInfrastructureErrors(t *testing.T) {
     return phase("work", lambda: parallel([lambda: agent("block"), lambda: agent("fail")]))
 `)
 
-		_, err := Run(t.Context(), definition, RunRequest{RunID: "runner-phase"}, func(ctx context.Context, request AgentRequest) (json.RawMessage, error) {
+		_, err := Run(t.Context(), definition, RunRequest{RunID: "runner-phase"}, func(ctx context.Context, request AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
 			if request.Prompt == "fail" {
 				<-blocked
 				return nil, errRunner
@@ -848,7 +848,7 @@ func TestRunCancellationAndInfrastructureErrors(t *testing.T) {
 			}
 
 			return nil
-		})
+		}, discardAgentProgress)
 		if !errors.Is(err, errRunner) || errors.Is(err, errCanceledTerminal) {
 			t.Fatalf("Run() error = %v, want original runner failure without canceled terminal context", err)
 		}
@@ -873,7 +873,7 @@ func TestRunCancellationAndInfrastructureErrors(t *testing.T) {
 		cancel()
 
 		_, err := Run(ctx, engineDefinition(t, `def main(args):
-    while True: pass`), RunRequest{RunID: "cancel-pure"}, inertAgent, discardProgress)
+    while True: pass`), RunRequest{RunID: "cancel-pure"}, inertAgent, discardProgress, discardAgentProgress)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("Run() error = %v, want context canceled", err)
 		}
@@ -885,12 +885,12 @@ func TestRunCancellationAndInfrastructureErrors(t *testing.T) {
 		done := make(chan error, 1)
 
 		go func() {
-			_, err := Run(ctx, engineDefinition(t, `def main(args): return agent("wait")`), RunRequest{RunID: "cancel-runner"}, func(ctx context.Context, _ AgentRequest) (json.RawMessage, error) {
+			_, err := Run(ctx, engineDefinition(t, `def main(args): return agent("wait")`), RunRequest{RunID: "cancel-runner"}, func(ctx context.Context, _ AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
 				close(started)
 				<-ctx.Done()
 
 				return nil, context.Cause(ctx)
-			}, discardProgress)
+			}, discardProgress, discardAgentProgress)
 			done <- err
 		}()
 
@@ -905,7 +905,7 @@ func TestRunCancellationAndInfrastructureErrors(t *testing.T) {
 	t.Run("shared step budget", func(t *testing.T) {
 		_, err := Run(t.Context(), engineDefinition(t, `def spin():
     while True: pass
-def main(args): return parallel([spin, spin])`), RunRequest{RunID: "steps"}, inertAgent, discardProgress)
+def main(args): return parallel([spin, spin])`), RunRequest{RunID: "steps"}, inertAgent, discardProgress, discardAgentProgress)
 		if err == nil || !strings.Contains(err.Error(), "step") {
 			t.Fatalf("Run() error = %v, want shared step exhaustion", err)
 		}
@@ -931,7 +931,7 @@ def main(args): return parallel([spin, spin])`), RunRequest{RunID: "steps"}, ine
 
 		calls := 0
 
-		_, err := Run(t.Context(), engineDefinition(t, `def main(args): return parallel([lambda: agent("a"), lambda: agent("b")])`), RunRequest{RunID: "progress-failure"}, func(ctx context.Context, _ AgentRequest) (json.RawMessage, error) {
+		_, err := Run(t.Context(), engineDefinition(t, `def main(args): return parallel([lambda: agent("a"), lambda: agent("b")])`), RunRequest{RunID: "progress-failure"}, func(ctx context.Context, _ AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
 			select {
 			case blocked <- struct{}{}:
 			case <-ctx.Done():
@@ -953,7 +953,7 @@ def main(args): return parallel([spin, spin])`), RunRequest{RunID: "steps"}, ine
 			}
 
 			return nil
-		})
+		}, discardAgentProgress)
 		if err == nil || !strings.Contains(err.Error(), "progress broke") {
 			t.Fatalf("Run() error = %v, want progress failure", err)
 		}
@@ -964,6 +964,197 @@ def main(args): return parallel([spin, spin])`), RunRequest{RunID: "steps"}, ine
 			t.Fatal("progress failure did not cancel runners")
 		}
 	})
+}
+
+func TestAgentActivityLifecycle(t *testing.T) {
+	for _, tt := range []struct {
+		name, label, workerName, wantLabel string
+	}{
+		{name: "explicit label", label: "failure-trace", workerName: "trace-investigator", wantLabel: "failure-trace"},
+		{name: "worker fallback", workerName: "trace-investigator", wantLabel: "trace-investigator"},
+		{name: "phase call fallback", wantLabel: "investigate call 1"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			workerDeclaration, workerArgument := "", ""
+			if tt.workerName != "" {
+				workerDeclaration = fmt.Sprintf("w = worker(name=%q, instructions=\"work\")\n", tt.workerName)
+				workerArgument = ", worker=w"
+			}
+
+			labelArgument := ""
+			if tt.label != "" {
+				labelArgument = fmt.Sprintf(", label=%q", tt.label)
+			}
+
+			definition := engineDefinitionWithPhases(t, []string{"investigate"}, workerDeclaration+`def main(args):
+	return phase("investigate", lambda: agent("prompt"`+workerArgument+labelArgument+`))`)
+
+			var updates []AgentUpdate
+
+			result, err := Run(t.Context(), definition, RunRequest{RunID: "run"}, func(ctx context.Context, _ AgentRequest, thinking AgentThinkingFunc) (json.RawMessage, error) {
+				if err := thinking(ctx, "read: prompt.md"); err != nil {
+					return nil, err
+				}
+
+				if err := thinking(ctx, "grep: turn limit"); err != nil {
+					return nil, err
+				}
+
+				return json.RawMessage(`"result"`), nil
+			}, discardProgress, func(_ context.Context, update AgentUpdate) error {
+				updates = append(updates, update)
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+
+			if result.Text != "result" {
+				t.Fatalf("Run().Text = %q, want result", result.Text)
+			}
+
+			want := []AgentUpdate{
+				{CallID: "run/agent/000000", Label: tt.wantLabel, Status: PhaseInProgress},
+				{CallID: "run/agent/000000", Label: tt.wantLabel, Activity: "read: prompt.md", Status: PhaseInProgress},
+				{CallID: "run/agent/000000", Label: tt.wantLabel, Activity: "grep: turn limit", Status: PhaseInProgress},
+				{CallID: "run/agent/000000", Label: tt.wantLabel, Activity: "grep: turn limit", Status: PhaseComplete},
+			}
+			if !slices.Equal(updates, want) {
+				t.Fatalf("agent updates = %+v, want %+v", updates, want)
+			}
+		})
+	}
+}
+
+func TestAgentActivityParallel(t *testing.T) {
+	definition := engineDefinition(t, `
+def main(args):
+    return parallel([
+        lambda: agent("first", label="alpha"),
+        lambda: agent("second", label="beta"),
+    ])
+`)
+
+	var updates []AgentUpdate
+
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+
+	go func() {
+		<-started
+		<-started
+		close(release)
+	}()
+
+	completedAgents := 0
+
+	_, err := Run(t.Context(), definition, RunRequest{RunID: "run"}, func(ctx context.Context, request AgentRequest, thinking AgentThinkingFunc) (json.RawMessage, error) {
+		started <- struct{}{}
+
+		<-release
+
+		if err := thinking(ctx, "working "+request.Prompt); err != nil {
+			return nil, err
+		}
+
+		return json.RawMessage(fmt.Sprintf("%q", request.Prompt)), nil
+	}, func(_ context.Context, update PhaseUpdate) error {
+		if update.Complete > completedAgents {
+			return fmt.Errorf("phase completed %d calls after only %d agent completions", update.Complete, completedAgents)
+		}
+
+		return nil
+	}, func(_ context.Context, update AgentUpdate) error {
+		updates = append(updates, update)
+		if update.Status == PhaseComplete {
+			completedAgents++
+		}
+
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	latest := make(map[string]AgentUpdate)
+	for _, update := range updates {
+		latest[update.Label] = update
+	}
+
+	if got := latest["alpha"]; got.Activity != "working first" || got.Status != PhaseComplete {
+		t.Fatalf("alpha update = %+v, want completed first worker", got)
+	}
+
+	if got := latest["beta"]; got.Activity != "working second" || got.Status != PhaseComplete {
+		t.Fatalf("beta update = %+v, want completed second worker", got)
+	}
+
+	ids := []string{latest["alpha"].CallID, latest["beta"].CallID}
+	slices.Sort(ids)
+
+	if !slices.Equal(ids, []string{"run/agent/000000", "run/agent/000001"}) {
+		t.Fatalf("parallel call IDs = %q, want stable run IDs", ids)
+	}
+}
+
+func TestAgentActivityProgressFailure(t *testing.T) {
+	errActivity := errors.New("activity unavailable")
+	runnerCalled := false
+
+	_, err := Run(t.Context(), engineDefinition(t, `def main(args): return agent("prompt")`), RunRequest{RunID: "run"}, func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
+		runnerCalled = true
+		return json.RawMessage(`"result"`), nil
+	}, discardProgress, func(context.Context, AgentUpdate) error {
+		return errActivity
+	})
+	if !errors.Is(err, errActivity) {
+		t.Fatalf("Run() error = %v, want activity failure", err)
+	}
+
+	if runnerCalled {
+		t.Fatal("agent runner started after initial activity publication failed")
+	}
+}
+
+func TestAgentActivityValidationFailure(t *testing.T) {
+	definition := engineDefinitionWithPhases(t, []string{"verify"}, `
+def main(args):
+    return phase("verify", lambda: agent("prompt", label="validator", schema={"type": "object", "properties": {"count": {"type": "integer"}}, "required": ["count"]}))
+`)
+
+	var (
+		agentUpdates []AgentUpdate
+		phaseUpdates []PhaseUpdate
+	)
+
+	_, err := Run(t.Context(), definition, RunRequest{RunID: "run"}, func(ctx context.Context, _ AgentRequest, thinking AgentThinkingFunc) (json.RawMessage, error) {
+		if err := thinking(ctx, "checking result"); err != nil {
+			return nil, err
+		}
+
+		return json.RawMessage(`{"count":"invalid"}`), nil
+	}, func(_ context.Context, update PhaseUpdate) error {
+		phaseUpdates = append(phaseUpdates, update)
+		return nil
+	}, func(_ context.Context, update AgentUpdate) error {
+		agentUpdates = append(agentUpdates, update)
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "validate agent result") {
+		t.Fatalf("Run() error = %v, want validation failure", err)
+	}
+
+	if len(agentUpdates) == 0 || agentUpdates[len(agentUpdates)-1].Status != PhaseError || agentUpdates[len(agentUpdates)-1].Activity != "checking result" {
+		t.Fatalf("agent updates = %+v, want latest activity with error status", agentUpdates)
+	}
+
+	if slices.Contains(agentUpdates, (AgentUpdate{CallID: "run/agent/000000", Label: "validator", Activity: "checking result", Status: PhaseComplete})) {
+		t.Fatalf("agent updates = %+v, must not complete before validation", agentUpdates)
+	}
+
+	if len(phaseUpdates) == 0 || phaseUpdates[len(phaseUpdates)-1].Status != PhaseError || phaseUpdates[len(phaseUpdates)-1].Complete != 0 {
+		t.Fatalf("phase updates = %+v, want error with zero complete", phaseUpdates)
+	}
 }
 
 func engineDefinition(t *testing.T, body string) *Definition {
@@ -995,11 +1186,15 @@ func engineDefinitionWithPhases(t *testing.T, phases []string, body string) *Def
 	return definition
 }
 
-func inertAgent(context.Context, AgentRequest) (json.RawMessage, error) {
+func inertAgent(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
 	return json.RawMessage(`""`), nil
 }
 
 func discardProgress(context.Context, PhaseUpdate) error {
+	return nil
+}
+
+func discardAgentProgress(context.Context, AgentUpdate) error {
 	return nil
 }
 

@@ -143,7 +143,7 @@ func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logge
 		return nil, nil, fmt.Errorf("create workflow shell output parent dir: %w", err)
 	}
 
-	run := func(ctx context.Context, request workflow.AgentRequest) (result json.RawMessage, err error) {
+	run := func(ctx context.Context, request workflow.AgentRequest, thinkingProgress workflow.AgentThinkingFunc) (result json.RawMessage, err error) {
 		callAgents := rocketcode.Agents{Items: maps.Clone(agents.Items)}
 
 		active := callAgents.Items[agent]
@@ -175,7 +175,7 @@ func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logge
 			}
 		}()
 
-		runtimeConfig := rocketcode.Config{AutoApproverModel: cfg.AutoApproverModel, ShellOutputDir: filepath.Join(cfg.Workspace, filepath.FromSlash(shellOutputRel)), ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}}
+		runtimeConfig := rocketcode.Config{AutoApproverModel: cfg.AutoApproverModel, ShellOutputDir: filepath.Join(cfg.Workspace, filepath.FromSlash(shellOutputRel)), Diagnostics: true, ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}}
 
 		runtime, err := rocketcode.NewWithProviders(providers, &runtimeConfig, root, callAgents, skills, agent, io.Discard)
 		if err != nil {
@@ -212,13 +212,31 @@ func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logge
 
 		close(input)
 
+		runCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
 		var group errgroup.Group
-		group.Go(func() error { return runtime.Loop(ctx, input, memory.in(), memory.out, make(chan os.Signal, 1)) })
+		group.Go(func() error { return runtime.Loop(runCtx, input, memory.in(), memory.out, make(chan os.Signal, 1)) })
+
+		var errProgress error
 
 		last := ""
 
 		for item := range output {
-			if item.Kind == rocketcode.ChatResponseAssistantMessage {
+			if errProgress != nil {
+				continue
+			}
+
+			switch item.Kind {
+			case rocketcode.ChatResponseAssistantCommentary, rocketcode.ChatResponseAssistantTool, rocketcode.ChatResponseReasoningSummary:
+				if thinking := rocketcodeThinkingText(item); thinking != "" {
+					if err := thinkingProgress(runCtx, thinking); err != nil {
+						errProgress = fmt.Errorf("publish workflow agent thinking: %w", err)
+
+						cancel()
+					}
+				}
+			case rocketcode.ChatResponseAssistantMessage:
 				if request.Schema != nil {
 					last = item.Text
 				} else {
@@ -227,8 +245,14 @@ func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logge
 			}
 		}
 
-		if err := group.Wait(); err != nil {
-			return nil, fmt.Errorf("run workflow rocketcode turn: %w", err)
+		errRun := group.Wait()
+
+		if errProgress != nil {
+			return nil, errProgress
+		}
+
+		if errRun != nil {
+			return nil, fmt.Errorf("run workflow rocketcode turn: %w", errRun)
 		}
 
 		if request.Schema == nil {
