@@ -1132,7 +1132,13 @@ func slackWorkflowPhaseChunks(phases map[string]workflow.PhaseUpdate) []slack.St
 	for _, id := range slices.Sorted(maps.Keys(phases)) {
 		update := phases[id]
 
-		chunk := slack.NewTaskUpdateChunk(id, update.Name)
+		title := update.Name
+		if update.Scheduled > 1 {
+			title += fmt.Sprintf(" · %d/%d", update.Complete, update.Scheduled)
+		}
+
+		chunk := slack.NewTaskUpdateChunk(id, title)
+
 		switch update.Status {
 		case workflow.PhasePending:
 			chunk.Status = slack.TaskCardStatusPending
@@ -1144,12 +1150,6 @@ func slackWorkflowPhaseChunks(phases map[string]workflow.PhaseUpdate) []slack.St
 			chunk.Status = slack.TaskCardStatusError
 		}
 
-		chunk.Details = fmt.Sprintf("complete %d, running %d, scheduled %d", update.Complete, update.Running, update.Scheduled)
-		if update.Details != "" {
-			chunk.Details += "; " + update.Details
-		}
-
-		chunk.Details = string([]rune(chunk.Details)[:min(len([]rune(chunk.Details)), 256)])
 		chunks = append(chunks, chunk)
 	}
 

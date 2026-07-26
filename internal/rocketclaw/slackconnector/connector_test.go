@@ -5975,7 +5975,7 @@ func TestWorkflowPhaseUsesStableTaskUpdateAndTerminalPlan(t *testing.T) {
 	final := events.NewOutboundMessage(events.SourceSlack, "thread", "finished", events.OutputTargetSlack)
 	final.TurnID, final.SlackReply, final.Complete, final.WorkflowTerminal = "run-1", reply, true, workflow.TerminalComplete
 	require.NoError(t, connector.SendResponse(t.Context(), final))
-	assert.JSONEq(t, `[{"type":"task_update","id":"run-1/phase/audit","title":"audit","status":"in_progress","details":"complete 2, running 1, scheduled 3; checking"}]`, appended.Get("chunks"))
+	assert.JSONEq(t, `[{"type":"task_update","id":"run-1/phase/audit","title":"audit · 2/3","status":"in_progress"}]`, appended.Get("chunks"))
 	assert.JSONEq(t, `[{"type":"plan_update","title":"Workflow complete"}]`, stopped.Get("chunks"))
 }
 
@@ -5989,20 +5989,44 @@ func TestWorkflowPhaseChunksPreserveOrder(t *testing.T) {
 			"run/phase/000001/audit":    {PhaseID: "run/phase/000001/audit", Name: "audit", Status: workflow.PhaseComplete, Details: "not run"},
 			"run/phase/000002/verify":   {PhaseID: "run/phase/000002/verify", Name: "verify", Status: workflow.PhaseComplete, Details: "not run"},
 		}, want: `[
-			{"type":"task_update","id":"run/phase/000000/discover","title":"discover","status":"complete","details":"complete 0, running 0, scheduled 0; not run"},
-			{"type":"task_update","id":"run/phase/000001/audit","title":"audit","status":"complete","details":"complete 0, running 0, scheduled 0; not run"},
-			{"type":"task_update","id":"run/phase/000002/verify","title":"verify","status":"complete","details":"complete 0, running 0, scheduled 0; not run"}
+			{"type":"task_update","id":"run/phase/000000/discover","title":"discover","status":"complete"},
+			{"type":"task_update","id":"run/phase/000001/audit","title":"audit","status":"complete"},
+			{"type":"task_update","id":"run/phase/000002/verify","title":"verify","status":"complete"}
 		]`},
 		{name: "dynamic", phases: map[string]workflow.PhaseUpdate{
 			"run/phase/000000/verify": {PhaseID: "run/phase/000000/verify", Name: "verify", Status: workflow.PhaseComplete},
 			"run/phase/000001/audit":  {PhaseID: "run/phase/000001/audit", Name: "audit", Status: workflow.PhaseComplete},
 		}, want: `[
-			{"type":"task_update","id":"run/phase/000000/verify","title":"verify","status":"complete","details":"complete 0, running 0, scheduled 0"},
-			{"type":"task_update","id":"run/phase/000001/audit","title":"audit","status":"complete","details":"complete 0, running 0, scheduled 0"}
+			{"type":"task_update","id":"run/phase/000000/verify","title":"verify","status":"complete"},
+			{"type":"task_update","id":"run/phase/000001/audit","title":"audit","status":"complete"}
+		]`},
+		{name: "one call", phases: map[string]workflow.PhaseUpdate{
+			"run/phase/000000/find": {PhaseID: "run/phase/000000/find", Name: "find", Status: workflow.PhaseComplete, Scheduled: 1, Complete: 1},
+		}, want: `[
+			{"type":"task_update","id":"run/phase/000000/find","title":"find","status":"complete"}
 		]`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			encoded, err := json.Marshal(slackWorkflowPhaseChunks(tt.phases))
+			require.NoError(t, err)
+			assert.JSONEq(t, tt.want, string(encoded))
+		})
+	}
+}
+
+func TestWorkflowPhaseTitlesReplaceProgress(t *testing.T) {
+	const phaseID = "run/phase/000000/summarize"
+
+	for _, tt := range []struct {
+		name  string
+		phase workflow.PhaseUpdate
+		want  string
+	}{
+		{name: "pending", phase: workflow.PhaseUpdate{PhaseID: phaseID, Name: "summarize", Status: workflow.PhasePending, Scheduled: 8}, want: `[{"type":"task_update","id":"run/phase/000000/summarize","title":"summarize · 0/8","status":"pending"}]`},
+		{name: "in progress", phase: workflow.PhaseUpdate{PhaseID: phaseID, Name: "summarize", Status: workflow.PhaseInProgress, Scheduled: 8, Running: 5, Complete: 3}, want: `[{"type":"task_update","id":"run/phase/000000/summarize","title":"summarize · 3/8","status":"in_progress"}]`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := json.Marshal(slackWorkflowPhaseChunks(map[string]workflow.PhaseUpdate{phaseID: tt.phase}))
 			require.NoError(t, err)
 			assert.JSONEq(t, tt.want, string(encoded))
 		})
