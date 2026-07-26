@@ -128,6 +128,7 @@ type slackThinkingState struct {
 	Timer                         *time.Timer
 	thinkingStream                bool
 	thinkingTaskID                string
+	tasks                         []slack.TaskUpdateChunk
 	activities                    []string
 	phases                        map[string]workflow.PhaseUpdate
 	activitySequence              int
@@ -732,79 +733,107 @@ func (c *Connector) finishCompleteResponse(ctx context.Context, msg *events.Outb
 			return nil
 		}
 
-		thinkingText := slackThinkingMessage(pending.Placeholder, pending.Text)
+		title := "Complete"
+
+		switch msg.WorkflowTerminal {
+		case workflow.TerminalComplete:
+			title = "Workflow complete"
+		case workflow.TerminalFailed:
+			title = "Workflow failed"
+		case workflow.TerminalStopped:
+			title = "Workflow stopped"
+		}
 
 		var err error
 
-		if slots.thinkingStream {
+		c.mu.Lock()
+
+		pending = c.thinking[msg.TurnID]
+
+		pending.closing = true
+		if pending.Timer != nil {
+			pending.Timer.Stop()
+		}
+
+		pending.Timer = nil
+		c.thinking[msg.TurnID] = pending
+		done := pending.flushDone
+		c.mu.Unlock()
+
+		if done != nil {
+			select {
+			case <-done:
+			case <-ctx.Done():
+				err = fmt.Errorf("wait for Slack thinking flush: %w", ctx.Err())
+			}
+		}
+
+		if err == nil {
 			c.mu.Lock()
-
 			pending = c.thinking[msg.TurnID]
-
-			pending.closing = true
-			if pending.Timer != nil {
-				pending.Timer.Stop()
-			}
-
-			pending.Timer = nil
-			c.thinking[msg.TurnID] = pending
-			done := pending.flushDone
+			pending.activities = slices.Clone(pending.activities)
+			pending.phases = maps.Clone(pending.phases)
+			pending.tasks = slices.Clone(pending.tasks)
+			slots.thinkingStream = pending.thinkingStream
 			c.mu.Unlock()
+		}
 
-			if done != nil {
-				select {
-				case <-done:
-				case <-ctx.Done():
-					err = fmt.Errorf("wait for Slack thinking flush: %w", ctx.Err())
-				}
+		if err == nil {
+			thinkingText := slackThinkingMessage(pending.Placeholder, pending.Text)
+
+			var (
+				activities []string
+				phases     map[string]workflow.PhaseUpdate
+				chunks     []slack.StreamChunk
+			)
+
+			if pending.thinkingTaskID != "" {
+				activities = pending.activities
+				phases = pending.phases
+				chunks = slackThinkingActivityChunks(&pending, activities)
+				chunks = append(chunks, slackWorkflowPhaseChunks(phases)...)
+				pending.tasks = slackMergeThinkingTasks(pending.tasks, chunks)
+
+				c.mu.Lock()
+				current := c.thinking[msg.TurnID]
+				current.tasks = pending.tasks
+				c.thinking[msg.TurnID] = current
+				c.mu.Unlock()
 			}
 
-			if err == nil {
-				c.mu.Lock()
-
-				pending = c.thinking[msg.TurnID]
-				activities := slices.Clone(pending.activities)
-				phases := maps.Clone(pending.phases)
-				c.mu.Unlock()
-
-				chunks := slackThinkingActivityChunks(&pending, activities)
-				chunks = append(chunks, slackWorkflowPhaseChunks(phases)...)
-				title := "Complete"
-
-				switch msg.WorkflowTerminal {
-				case workflow.TerminalComplete:
-					title = "Workflow complete"
-				case workflow.TerminalFailed:
-					title = "Workflow failed"
-				case workflow.TerminalStopped:
-					title = "Workflow stopped"
-				}
-
+			switch {
+			case slots.thinkingStream:
 				chunks = append(chunks, slack.NewPlanUpdateChunk(title))
 
 				_, _, err = c.api.StopStreamContext(ctx, slots.ChannelID, slots.ThinkingTS, slack.MsgOptionChunks(chunks...))
-				if err == nil {
+				if slackStreamEnded(err) {
 					c.mu.Lock()
-
-					current := c.thinking[msg.TurnID]
-					current.activities = current.activities[len(activities):]
-
-					current.activitySequence += len(activities)
-					for id, update := range phases {
-						if current.phases[id] == update {
-							delete(current.phases, id)
-						}
-					}
-
-					c.thinking[msg.TurnID] = current
+					pending = c.thinking[msg.TurnID]
+					pending.thinkingStream = false
+					c.thinking[msg.TurnID] = pending
+					storedSlots := c.replies[msg.TurnID]
+					storedSlots.thinkingStream = false
+					c.replies[msg.TurnID] = storedSlots
 					c.mu.Unlock()
+
+					_, _, _, err = c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.ThinkingTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(slackThinkingPlanBlock(title, pending.tasks)))
 				}
+			case pending.thinkingTaskID != "":
+				_, _, _, err = c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.ThinkingTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(slackThinkingPlanBlock(title, pending.tasks)))
+			default:
+				_, _, _, err = c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.ThinkingTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(slackThinkingBlocks(msg.TurnID, &pending, slack.TaskCardStatusComplete)...))
 			}
 
-			slots.thinkingStream = false
-		} else {
-			_, _, _, err = c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.ThinkingTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(slackThinkingBlocks(msg.TurnID, &pending, slack.TaskCardStatusComplete)...))
+			if err == nil && pending.thinkingTaskID != "" {
+				c.mu.Lock()
+				current := c.thinking[msg.TurnID]
+				slackConsumeThinkingSnapshots(&current, activities, phases)
+				c.thinking[msg.TurnID] = current
+				c.mu.Unlock()
+			}
 		}
+
+		slots.thinkingStream = false
 
 		slots.ThinkingTS = ""
 
@@ -927,8 +956,12 @@ func (c *Connector) bufferProgressText(turnID string, slots *slackReplySlots, pl
 		c.thinking = map[string]slackThinkingState{}
 	}
 
-	pending := c.thinking[turnID]
-	if slots.thinkingStream {
+	pending, exists := c.thinking[turnID]
+	if !exists {
+		pending.thinkingStream = slots.thinkingStream
+	}
+
+	if slots.thinkingTaskID != "" {
 		activity := text[len(pending.Text):]
 		if pending.Text != "" {
 			activity = strings.TrimPrefix(activity, "\n")
@@ -944,7 +977,6 @@ func (c *Connector) bufferProgressText(turnID string, slots *slackReplySlots, pl
 	pending.ExternalConversationID = msg.ExternalConversationID
 	pending.Agent = msg.Agent
 	pending.State = slackReplyState{ChannelID: slots.ChannelID, MessageTS: slots.ThinkingTS}
-	pending.thinkingStream = slots.thinkingStream
 	pending.thinkingTaskID = slots.thinkingTaskID
 
 	if pending.Timer != nil {
@@ -964,7 +996,11 @@ func (c *Connector) bufferWorkflowPhase(turnID string, slots *slackReplySlots, u
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	pending := c.thinking[turnID]
+	pending, exists := c.thinking[turnID]
+	if !exists {
+		pending.thinkingStream = slots.thinkingStream
+	}
+
 	if pending.phases == nil {
 		pending.phases = make(map[string]workflow.PhaseUpdate)
 	}
@@ -972,7 +1008,7 @@ func (c *Connector) bufferWorkflowPhase(turnID string, slots *slackReplySlots, u
 	pending.phases[update.PhaseID] = *update
 	pending.State = slackReplyState{ChannelID: slots.ChannelID, MessageTS: slots.ThinkingTS}
 
-	pending.thinkingStream, pending.thinkingTaskID = slots.thinkingStream, slots.thinkingTaskID
+	pending.thinkingTaskID = slots.thinkingTaskID
 	if pending.Timer == nil {
 		pending.Timer = time.AfterFunc(slackThinkingFlushInterval, func() {
 			if err := c.flushProgressText(context.Background(), turnID); err != nil {
@@ -1011,14 +1047,14 @@ func (c *Connector) flushProgressText(ctx context.Context, turnID string) error 
 		}
 
 		pending.Timer = nil
-		if pending.thinkingStream && pending.closing {
+		if pending.closing {
 			c.thinking[turnID] = pending
 			c.mu.Unlock()
 
 			return nil
 		}
 
-		if pending.thinkingStream && pending.flushDone != nil {
+		if pending.flushDone != nil {
 			done := pending.flushDone
 			c.thinking[turnID] = pending
 			c.mu.Unlock()
@@ -1043,11 +1079,11 @@ func (c *Connector) flushProgressText(ctx context.Context, turnID string) error 
 			done := pending.flushDone
 			activities := slices.Clone(pending.activities)
 			phases := maps.Clone(pending.phases)
-			c.thinking[turnID] = pending
-			c.mu.Unlock()
-
 			chunks := slackThinkingActivityChunks(&pending, activities)
 			chunks = append(chunks, slackWorkflowPhaseChunks(phases)...)
+			pending.tasks = slackMergeThinkingTasks(pending.tasks, chunks)
+			c.thinking[turnID] = pending
+			c.mu.Unlock()
 
 			_, _, err := c.api.AppendStreamContext(ctx, pending.State.ChannelID, pending.State.MessageTS, slack.MsgOptionChunks(chunks...))
 
@@ -1055,23 +1091,51 @@ func (c *Connector) flushProgressText(ctx context.Context, turnID string) error 
 
 			current, ok := c.thinking[turnID]
 			if ok {
-				current.flushDone = nil
-				if err == nil {
-					current.activities = current.activities[len(activities):]
-
-					current.activitySequence += len(activities)
-					for id, update := range phases {
-						if current.phases[id] == update {
-							delete(current.phases, id)
-						}
+				if slackStreamEnded(err) {
+					current.thinkingStream = false
+					slots := c.replies[turnID]
+					slots.thinkingStream = false
+					c.replies[turnID] = slots
+				} else {
+					current.flushDone = nil
+					if err == nil {
+						slackConsumeThinkingSnapshots(&current, activities, phases)
 					}
 				}
 
 				c.thinking[turnID] = current
 			}
 
-			close(done)
+			if !slackStreamEnded(err) {
+				close(done)
+			}
 			c.mu.Unlock()
+
+			if err != nil && slackStreamEnded(err) {
+				thinkingText := slackThinkingMessage(current.Placeholder, current.Text)
+
+				title := strings.TrimSuffix(strings.TrimPrefix(current.Placeholder, "_"), "_")
+				_, _, _, err = c.api.UpdateMessageContext(ctx, current.State.ChannelID, current.State.MessageTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(slackThinkingPlanBlock(title, current.tasks)))
+
+				c.mu.Lock()
+				current = c.thinking[turnID]
+
+				current.flushDone = nil
+				if err == nil {
+					slackConsumeThinkingSnapshots(&current, activities, phases)
+				}
+
+				c.thinking[turnID] = current
+
+				close(done)
+				c.mu.Unlock()
+
+				if err != nil {
+					return fmt.Errorf("update Slack thinking message len=%d: %w", len([]rune(thinkingText)), err)
+				}
+
+				return nil
+			}
 
 			if err != nil {
 				return fmt.Errorf("append Slack thinking update: %w", err)
@@ -1080,20 +1144,106 @@ func (c *Connector) flushProgressText(ctx context.Context, turnID string) error 
 			return nil
 		}
 
-		c.thinking[turnID] = pending
-		c.mu.Unlock()
+		var (
+			activities []string
+			phases     map[string]workflow.PhaseUpdate
+		)
+
+		if pending.thinkingTaskID != "" {
+			activities = slices.Clone(pending.activities)
+			phases = maps.Clone(pending.phases)
+			chunks := slackThinkingActivityChunks(&pending, activities)
+			chunks = append(chunks, slackWorkflowPhaseChunks(phases)...)
+			pending.tasks = slackMergeThinkingTasks(pending.tasks, chunks)
+		}
 
 		thinkingText := slackThinkingMessage(pending.Placeholder, pending.Text)
-		if thinkingText == "" {
+		if thinkingText == "" && pending.thinkingTaskID == "" {
+			c.thinking[turnID] = pending
+			c.mu.Unlock()
+
 			return nil
 		}
 
-		if _, _, _, err := c.api.UpdateMessageContext(ctx, pending.State.ChannelID, pending.State.MessageTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(slackThinkingBlocks(turnID, &pending, slack.TaskCardStatusInProgress)...)); err != nil {
+		pending.flushDone = make(chan struct{})
+		done := pending.flushDone
+		c.thinking[turnID] = pending
+		c.mu.Unlock()
+
+		blocks := slackThinkingBlocks(turnID, &pending, slack.TaskCardStatusInProgress)
+		if pending.thinkingTaskID != "" {
+			title := strings.TrimSuffix(strings.TrimPrefix(pending.Placeholder, "_"), "_")
+			blocks = []slack.Block{slackThinkingPlanBlock(title, pending.tasks)}
+		}
+
+		_, _, _, err := c.api.UpdateMessageContext(ctx, pending.State.ChannelID, pending.State.MessageTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(blocks...))
+
+		c.mu.Lock()
+		current := c.thinking[turnID]
+
+		current.flushDone = nil
+		if err == nil && pending.thinkingTaskID != "" {
+			slackConsumeThinkingSnapshots(&current, activities, phases)
+		}
+
+		c.thinking[turnID] = current
+
+		close(done)
+		c.mu.Unlock()
+
+		if err != nil {
 			return fmt.Errorf("update Slack thinking message len=%d: %w", len([]rune(thinkingText)), err)
 		}
 
 		return nil
 	}
+}
+
+func slackStreamEnded(err error) bool {
+	errSlack, ok := errors.AsType[slack.SlackErrorResponse](err)
+	return ok && (errSlack.Err == "message_not_in_streaming_state" || errSlack.Err == "stopped_by_user")
+}
+
+func slackConsumeThinkingSnapshots(current *slackThinkingState, activities []string, phases map[string]workflow.PhaseUpdate) {
+	current.activities = current.activities[len(activities):]
+
+	current.activitySequence += len(activities)
+	for id, update := range phases {
+		if current.phases[id] == update {
+			delete(current.phases, id)
+		}
+	}
+}
+
+func slackMergeThinkingTasks(tasks []slack.TaskUpdateChunk, chunks []slack.StreamChunk) []slack.TaskUpdateChunk {
+	for _, chunk := range chunks {
+		task, ok := chunk.(slack.TaskUpdateChunk)
+		if !ok {
+			continue
+		}
+
+		if i := slices.IndexFunc(tasks, func(existing slack.TaskUpdateChunk) bool { return existing.ID == task.ID }); i >= 0 {
+			tasks[i] = task
+		} else {
+			tasks = append(tasks, task)
+		}
+	}
+
+	return tasks
+}
+
+func slackThinkingPlanBlock(title string, tasks []slack.TaskUpdateChunk) *slack.PlanBlock {
+	planTasks := make([]*slack.TaskCardBlock, len(tasks))
+	for i := range tasks {
+		task := slack.NewTaskCardBlock(tasks[i].ID, tasks[i].Title).WithStatus(tasks[i].Status)
+		if len(tasks[i].Sources) > 0 {
+			task.WithSources(tasks[i].Sources...)
+		}
+
+		planTasks[i] = task
+	}
+
+	return slack.NewPlanBlock(title).WithTasks(planTasks...)
 }
 
 func slackThinkingActivityChunks(pending *slackThinkingState, activities []string) []slack.StreamChunk {

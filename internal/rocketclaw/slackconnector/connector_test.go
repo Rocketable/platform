@@ -2922,6 +2922,175 @@ func TestFlushProgressRetainsStreamStateAfterAppendFailure(t *testing.T) {
 	assert.Equal(t, []slack.TaskUpdateChunk{{Type: slack.StreamChunkTaskUpdate, ID: "111.222-activity-1-1", Title: progress.ProgressText, Status: slack.TaskCardStatusComplete}}, chunks)
 }
 
+func TestFlushProgressFallsBackToPlanUpdateWhenStreamEnded(t *testing.T) {
+	for _, slackError := range []string{"message_not_in_streaming_state", "stopped_by_user"} {
+		t.Run(slackError, func(t *testing.T) {
+			var requests []struct {
+				path string
+				form url.Values
+			}
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !assert.NoError(t, r.ParseForm()) {
+					return
+				}
+
+				requests = append(requests, struct {
+					path string
+					form url.Values
+				}{r.URL.Path, cloneValues(r.PostForm)})
+				if r.URL.Path == "/chat.appendStream" {
+					writeJSON(t, w, map[string]any{"ok": false, "error": slackError})
+					return
+				}
+
+				writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+			}))
+			t.Cleanup(server.Close)
+
+			connector := newTestConnector(server.URL)
+			connector.replies["run"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", thinkingStream: true, thinkingTaskID: "222.333"}
+			connector.thinking["run"] = slackThinkingState{Placeholder: slackImmediatePlaceholder, State: slackReplyState{ChannelID: "C123", MessageTS: "555.1"}, thinkingStream: true, thinkingTaskID: "222.333"}
+			phase := workflow.PhaseUpdate{PhaseID: "run/phase/000000/audit", Name: "audit", Status: workflow.PhaseInProgress, Scheduled: 3, Running: 1, Complete: 2}
+			slots, _ := connector.replyState("run")
+			connector.bufferWorkflowPhase("run", &slots, &phase)
+			require.NoError(t, connector.flushProgressText(t.Context(), "run"))
+
+			require.Len(t, requests, 2)
+			assert.Equal(t, "/chat.appendStream", requests[0].path)
+			assert.Equal(t, "/chat.update", requests[1].path)
+			assert.Equal(t, "C123", requests[1].form.Get("channel"))
+			assert.Equal(t, "555.1", requests[1].form.Get("ts"))
+			assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress"}]}]`, requests[1].form.Get("blocks"))
+
+			phase.Status, phase.Running, phase.Complete = workflow.PhaseComplete, 0, 3
+			slots, _ = connector.replyState("run")
+			connector.bufferWorkflowPhase("run", &slots, &phase)
+			require.NoError(t, connector.flushProgressText(t.Context(), "run"))
+
+			require.Len(t, requests, 3)
+			assert.Equal(t, "/chat.update", requests[2].path)
+			assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 3/3","status":"complete"}]}]`, requests[2].form.Get("blocks"))
+		})
+	}
+}
+
+func TestFlushProgressRetriesFailedFallbackThroughUpdate(t *testing.T) {
+	var operations []string
+
+	updates := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		operations = append(operations, r.URL.Path)
+		switch r.URL.Path {
+		case "/chat.appendStream":
+			writeJSON(t, w, map[string]any{"ok": false, "error": "message_not_in_streaming_state"})
+		case "/chat.update":
+			updates++
+			if updates == 1 {
+				writeJSON(t, w, map[string]any{"ok": false, "error": "ratelimited"})
+				return
+			}
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+		default:
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	connector.replies["run"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", thinkingStream: true, thinkingTaskID: "222.333"}
+	connector.thinking["run"] = slackThinkingState{Placeholder: slackImmediatePlaceholder, State: slackReplyState{ChannelID: "C123", MessageTS: "555.1"}, thinkingStream: true, thinkingTaskID: "222.333"}
+	phase := workflow.PhaseUpdate{PhaseID: "run/phase/000000/audit", Name: "audit", Status: workflow.PhaseInProgress}
+	slots, _ := connector.replyState("run")
+	connector.bufferWorkflowPhase("run", &slots, &phase)
+
+	require.ErrorContains(t, connector.flushProgressText(t.Context(), "run"), "ratelimited")
+	require.NoError(t, connector.flushProgressText(t.Context(), "run"))
+	assert.Equal(t, []string{"/chat.appendStream", "/chat.update", "/chat.update"}, operations)
+}
+
+func TestFlushProgressSerializesAfterAppendFallback(t *testing.T) {
+	appendStarted := make(chan struct{})
+	releaseAppend := make(chan struct{})
+	updateStarted := make(chan struct{})
+	releaseUpdate := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat.appendStream":
+			close(appendStarted)
+			<-releaseAppend
+			writeJSON(t, w, map[string]any{"ok": false, "error": "message_not_in_streaming_state"})
+		case "/chat.update":
+			close(updateStarted)
+			<-releaseUpdate
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+		default:
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	connector.replies["run"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", thinkingStream: true, thinkingTaskID: "222.333"}
+	connector.thinking["run"] = slackThinkingState{Placeholder: slackImmediatePlaceholder, State: slackReplyState{ChannelID: "C123", MessageTS: "555.1"}, thinkingStream: true, thinkingTaskID: "222.333"}
+	phase := workflow.PhaseUpdate{PhaseID: "run/phase/000000/audit", Name: "audit", Status: workflow.PhaseInProgress, Scheduled: 3, Complete: 2}
+	slots, _ := connector.replyState("run")
+	connector.bufferWorkflowPhase("run", &slots, &phase)
+
+	errFirst := make(chan error, 1)
+	go func() { errFirst <- connector.flushProgressText(t.Context(), "run") }()
+
+	<-appendStarted
+	close(releaseAppend)
+	<-updateStarted
+
+	phase.Status, phase.Complete = workflow.PhaseComplete, 3
+	slots, _ = connector.replyState("run")
+	connector.bufferWorkflowPhase("run", &slots, &phase)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	err := connector.flushProgressText(ctx, "run")
+
+	close(releaseUpdate)
+	require.NoError(t, <-errFirst)
+	require.ErrorContains(t, err, "wait for Slack thinking flush")
+}
+
+func TestBufferProgressDoesNotResurrectEndedStream(t *testing.T) {
+	for _, buffer := range []string{"activity", "phase"} {
+		t.Run(buffer, func(t *testing.T) {
+			var operations []string
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				operations = append(operations, r.URL.Path)
+
+				writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+			}))
+			t.Cleanup(server.Close)
+
+			connector := newTestConnector(server.URL)
+			connector.replies["run"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", thinkingTaskID: "222.333"}
+			connector.thinking["run"] = slackThinkingState{Placeholder: slackImmediatePlaceholder, State: slackReplyState{ChannelID: "C123", MessageTS: "555.1"}, thinkingTaskID: "222.333"}
+			staleSlots := slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", thinkingStream: true, thinkingTaskID: "222.333"}
+
+			if buffer == "activity" {
+				progress := events.NewOutboundMessage(events.SourceSlack, "thread", "", events.OutputTargetSlack)
+				progress.TurnID = "run"
+				connector.bufferProgressText("run", &staleSlots, slackImmediatePlaceholder, "late activity", progress)
+			} else {
+				phase := workflow.PhaseUpdate{PhaseID: "run/phase/audit", Name: "audit", Status: workflow.PhaseComplete}
+				connector.bufferWorkflowPhase("run", &staleSlots, &phase)
+			}
+
+			require.NoError(t, connector.flushProgressText(t.Context(), "run"))
+			assert.Equal(t, []string{"/chat.update"}, operations)
+		})
+	}
+}
+
 func TestFlushProgressSplitsActivityTitlesAtApprovedBoundaries(t *testing.T) {
 	var appended url.Values
 
@@ -5977,6 +6146,374 @@ func TestWorkflowPhaseUsesStableTaskUpdateAndTerminalPlan(t *testing.T) {
 	require.NoError(t, connector.SendResponse(t.Context(), final))
 	assert.JSONEq(t, `[{"type":"task_update","id":"run-1/phase/audit","title":"audit · 2/3","status":"in_progress"}]`, appended.Get("chunks"))
 	assert.JSONEq(t, `[{"type":"plan_update","title":"Workflow complete"}]`, stopped.Get("chunks"))
+}
+
+func TestSendResponseCompletesFallbackPlanAndPromotesQueuedReply(t *testing.T) {
+	var (
+		operations []string
+		updates    []url.Values
+		appends    int
+		starts     int
+		posts      int
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		operations = append(operations, r.URL.Path)
+		switch r.URL.Path {
+		case "/chat.appendStream":
+			appends++
+			if appends == 2 {
+				writeJSON(t, w, map[string]any{"ok": false, "error": "message_not_in_streaming_state"})
+				return
+			}
+		case "/chat.update":
+			updates = append(updates, cloneValues(r.PostForm))
+		case "/chat.startStream":
+			starts++
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": fmt.Sprintf("thinking-%d", starts)})
+
+			return
+		case "/chat.postMessage":
+			posts++
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": fmt.Sprintf("answer-%d", posts)})
+
+			return
+		case "/reactions.add", "/reactions.remove":
+		case "/chat.stopStream":
+			t.Fatal("fallback completion must not stop the ended stream")
+		default:
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+
+		writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": r.PostForm.Get("ts")})
+	}))
+	t.Cleanup(server.Close)
+
+	router := newThreadRouterStub()
+	router.submitHandled = true
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
+	connector.teamID = "T123"
+	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+	connector.replies["run"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", AnswerTS: "555.2", thinkingStream: true, thinkingTaskID: "222.333"}
+	slots, _ := connector.replyState("run")
+	progress := events.NewOutboundMessage(events.SourceSlack, "thread", "", events.OutputTargetSlack)
+	progress.TurnID, progress.SlackReply = "run", reply
+	progress.ProgressText = "diagnostic at <https://example.com/report|report>"
+	connector.bufferProgressText("run", &slots, slackImmediatePlaceholder, progress.ProgressText, progress)
+	require.NoError(t, connector.flushProgressText(t.Context(), "run"))
+
+	phase := workflow.PhaseUpdate{PhaseID: "run/phase/000000/audit", Name: "audit", Status: workflow.PhaseInProgress, Scheduled: 3, Running: 1, Complete: 2}
+	slots, _ = connector.replyState("run")
+	connector.bufferWorkflowPhase("run", &slots, &phase)
+	require.NoError(t, connector.flushProgressText(t.Context(), "run"))
+
+	key := slackThreadStackKey(reply)
+	queuedReply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "444.555", ThreadTS: "111.222"}
+	connector.stacks[key] = []slackBufferedMessage{{Text: "queued reply", recipientTeamID: "T123", recipientUserID: "U123", Content: events.InboundContent{Text: "queued reply"}, Reply: queuedReply}}
+	final := events.NewOutboundMessage(events.SourceSlack, "thread", "Final answer", events.OutputTargetSlack)
+	final.TurnID, final.SlackReply, final.Complete, final.WorkflowTerminal = "run", reply, true, workflow.TerminalComplete
+	require.NoError(t, connector.SendResponse(t.Context(), final))
+
+	assert.NotContains(t, operations, "/chat.stopStream")
+	require.Len(t, updates, 3)
+	assert.Equal(t, "555.2", updates[1].Get("ts"))
+	assert.Equal(t, "Final answer", updates[1].Get("text"))
+	assert.Equal(t, "555.1", updates[2].Get("ts"))
+	assert.JSONEq(t, `[{"type":"plan","title":"Workflow complete","tasks":[{"type":"task_card","task_id":"222.333-activity-1-1","title":"diagnostic at <https://example.com/report|report>","status":"complete","sources":[{"type":"url","url":"https://example.com/report","text":"report"}]},{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress"}]}]`, updates[2].Get("blocks"))
+
+	replies := router.repliesSnapshot()
+	require.Len(t, replies, 1)
+	assert.Equal(t, "queued reply", replies[0].inbound.Text)
+}
+
+func TestSendResponseFallsBackWhenStopReportsEndedStream(t *testing.T) {
+	var (
+		operations     []string
+		thinkingUpdate url.Values
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		operations = append(operations, r.URL.Path)
+		switch r.URL.Path {
+		case "/chat.stopStream":
+			writeJSON(t, w, map[string]any{"ok": false, "error": "stopped_by_user"})
+			return
+		case "/chat.update":
+			if r.PostForm.Get("ts") == "555.1" {
+				thinkingUpdate = cloneValues(r.PostForm)
+			}
+		case "/reactions.remove":
+		default:
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+
+		writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": r.PostForm.Get("ts")})
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+	connector.replies["run"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", AnswerTS: "555.2", thinkingStream: true, thinkingTaskID: "222.333"}
+	connector.thinking["run"] = slackThinkingState{Placeholder: slackImmediatePlaceholder, State: slackReplyState{ChannelID: "C123", MessageTS: "555.1"}, thinkingStream: true, thinkingTaskID: "222.333", tasks: []slack.TaskUpdateChunk{{Type: slack.StreamChunkTaskUpdate, ID: "run/phase/audit", Title: "audit", Status: slack.TaskCardStatusComplete}}}
+	final := events.NewOutboundMessage(events.SourceSlack, "thread", "Final answer", events.OutputTargetSlack)
+	final.TurnID, final.SlackReply, final.Complete, final.WorkflowTerminal = "run", reply, true, workflow.TerminalComplete
+	require.NoError(t, connector.SendResponse(t.Context(), final))
+
+	assert.Equal(t, []string{"/chat.update", "/chat.stopStream", "/chat.update", "/reactions.remove"}, operations)
+	assert.Equal(t, "555.1", thinkingUpdate.Get("ts"))
+	assert.JSONEq(t, `[{"type":"plan","title":"Workflow complete","tasks":[{"type":"task_card","task_id":"run/phase/audit","title":"audit","status":"complete"}]}]`, thinkingUpdate.Get("blocks"))
+}
+
+func TestSendResponseSerializesCompletionAfterAppendFallback(t *testing.T) {
+	appendStarted := make(chan struct{})
+	releaseAppend := make(chan struct{})
+	progressUpdateStarted := make(chan struct{})
+	releaseProgressUpdate := make(chan struct{})
+
+	var (
+		mu              sync.Mutex
+		operations      []string
+		completedTitles []string
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		mu.Lock()
+
+		operations = append(operations, r.URL.Path)
+		mu.Unlock()
+
+		switch r.URL.Path {
+		case "/chat.appendStream":
+			close(appendStarted)
+			<-releaseAppend
+			writeJSON(t, w, map[string]any{"ok": false, "error": "message_not_in_streaming_state"})
+
+			return
+		case "/chat.stopStream":
+			writeJSON(t, w, map[string]any{"ok": false, "error": "message_not_in_streaming_state"})
+			return
+		case "/chat.update":
+			blocks := r.PostForm.Get("blocks")
+
+			title := ""
+			if strings.Contains(blocks, `"title":"Thinking..."`) {
+				title = "Thinking..."
+
+				close(progressUpdateStarted)
+				<-releaseProgressUpdate
+			} else if strings.Contains(blocks, `"title":"Workflow complete"`) {
+				title = "Workflow complete"
+			}
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": r.PostForm.Get("ts")})
+
+			if title != "" {
+				mu.Lock()
+
+				completedTitles = append(completedTitles, title)
+				mu.Unlock()
+			}
+
+			return
+		case "/reactions.remove":
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+	connector.replies["run"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", AnswerTS: "555.2", thinkingStream: true, thinkingTaskID: "222.333"}
+	connector.thinking["run"] = slackThinkingState{Text: "diagnostic", Placeholder: slackImmediatePlaceholder, State: slackReplyState{ChannelID: "C123", MessageTS: "555.1"}, thinkingStream: true, thinkingTaskID: "222.333", activities: []string{"diagnostic"}}
+
+	errFlush := make(chan error, 1)
+	go func() { errFlush <- connector.flushProgressText(t.Context(), "run") }()
+
+	<-appendStarted
+
+	final := events.NewOutboundMessage(events.SourceSlack, "thread", "Final answer", events.OutputTargetSlack)
+	final.TurnID, final.SlackReply, final.Complete, final.WorkflowTerminal = "run", reply, true, workflow.TerminalComplete
+
+	errComplete := make(chan error, 1)
+	go func() { errComplete <- connector.SendResponse(t.Context(), final) }()
+
+	require.Eventually(t, func() bool {
+		connector.mu.Lock()
+		defer connector.mu.Unlock()
+
+		return connector.thinking["run"].closing
+	}, time.Second, time.Millisecond)
+	close(releaseAppend)
+	<-progressUpdateStarted
+	close(releaseProgressUpdate)
+	require.NoError(t, <-errFlush)
+	require.NoError(t, <-errComplete)
+
+	mu.Lock()
+	gotOperations := slices.Clone(operations)
+	gotTitles := slices.Clone(completedTitles)
+	mu.Unlock()
+	assert.NotContains(t, gotOperations, "/chat.stopStream")
+	assert.Equal(t, []string{"Thinking...", "Workflow complete"}, gotTitles)
+}
+
+func TestSendResponseSerializesCompletionAfterUpdateProgress(t *testing.T) {
+	progressUpdateStarted := make(chan struct{})
+	releaseProgressUpdate := make(chan struct{})
+
+	var (
+		mu              sync.Mutex
+		completedTitles []string
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		title := ""
+
+		if r.URL.Path == "/chat.update" {
+			blocks := r.PostForm.Get("blocks")
+			if strings.Contains(blocks, `"title":"Thinking..."`) {
+				title = "Thinking..."
+
+				close(progressUpdateStarted)
+				<-releaseProgressUpdate
+			} else if strings.Contains(blocks, `"title":"Workflow complete"`) {
+				title = "Workflow complete"
+			}
+		} else if r.URL.Path != "/reactions.remove" {
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+
+		writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": r.PostForm.Get("ts")})
+
+		if title != "" {
+			mu.Lock()
+
+			completedTitles = append(completedTitles, title)
+			mu.Unlock()
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+	connector.replies["run"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", AnswerTS: "555.2", thinkingTaskID: "222.333"}
+	connector.thinking["run"] = slackThinkingState{Text: "diagnostic", Placeholder: slackImmediatePlaceholder, State: slackReplyState{ChannelID: "C123", MessageTS: "555.1"}, thinkingTaskID: "222.333", activities: []string{"diagnostic"}}
+
+	errFlush := make(chan error, 1)
+	go func() { errFlush <- connector.flushProgressText(t.Context(), "run") }()
+
+	<-progressUpdateStarted
+
+	final := events.NewOutboundMessage(events.SourceSlack, "thread", "Final answer", events.OutputTargetSlack)
+	final.TurnID, final.SlackReply, final.Complete, final.WorkflowTerminal = "run", reply, true, workflow.TerminalComplete
+
+	errComplete := make(chan error, 1)
+	go func() { errComplete <- connector.SendResponse(t.Context(), final) }()
+
+	assert.Eventually(t, func() bool {
+		connector.mu.Lock()
+		defer connector.mu.Unlock()
+
+		return connector.thinking["run"].closing
+	}, time.Second, time.Millisecond)
+
+	close(releaseProgressUpdate)
+	require.NoError(t, <-errFlush)
+	require.NoError(t, <-errComplete)
+	mu.Lock()
+	gotTitles := slices.Clone(completedTitles)
+	mu.Unlock()
+	assert.Equal(t, []string{"Thinking...", "Workflow complete"}, gotTitles)
+}
+
+func TestSendResponseTerminalIncludesProgressBufferedWhileWaiting(t *testing.T) {
+	progressUpdateStarted := make(chan struct{})
+	releaseProgressUpdate := make(chan struct{})
+
+	var terminalUpdate url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		if r.URL.Path == "/chat.update" {
+			blocks := r.PostForm.Get("blocks")
+			if strings.Contains(blocks, `"title":"Thinking..."`) {
+				close(progressUpdateStarted)
+				<-releaseProgressUpdate
+			} else if strings.Contains(blocks, `"title":"Workflow complete"`) {
+				terminalUpdate = cloneValues(r.PostForm)
+			}
+		} else if r.URL.Path != "/reactions.remove" {
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+
+		writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": r.PostForm.Get("ts")})
+	}))
+	t.Cleanup(server.Close)
+
+	const phaseID = "run/phase/audit"
+
+	connector := newTestConnector(server.URL)
+	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+	connector.replies["run"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", AnswerTS: "555.2", thinkingTaskID: "222.333"}
+	connector.thinking["run"] = slackThinkingState{
+		Text: "diagnostic", Placeholder: slackImmediatePlaceholder,
+		State: slackReplyState{ChannelID: "C123", MessageTS: "555.1"}, thinkingTaskID: "222.333",
+		activities: []string{"diagnostic"},
+		phases:     map[string]workflow.PhaseUpdate{phaseID: {PhaseID: phaseID, Name: "audit", Status: workflow.PhaseInProgress, Scheduled: 3, Complete: 2}},
+	}
+
+	errFlush := make(chan error, 1)
+	go func() { errFlush <- connector.flushProgressText(t.Context(), "run") }()
+
+	<-progressUpdateStarted
+
+	final := events.NewOutboundMessage(events.SourceSlack, "thread", "Final answer", events.OutputTargetSlack)
+	final.TurnID, final.SlackReply, final.Complete, final.WorkflowTerminal = "run", reply, true, workflow.TerminalComplete
+
+	errComplete := make(chan error, 1)
+	go func() { errComplete <- connector.SendResponse(t.Context(), final) }()
+
+	require.Eventually(t, func() bool {
+		connector.mu.Lock()
+		defer connector.mu.Unlock()
+
+		return connector.thinking["run"].closing
+	}, time.Second, time.Millisecond)
+
+	slots, _ := connector.replyState("run")
+	progress := events.NewOutboundMessage(events.SourceSlack, "thread", "", events.OutputTargetSlack)
+	progress.TurnID = "run"
+	connector.bufferProgressText("run", &slots, slackImmediatePlaceholder, "diagnostic\nlate activity", progress)
+
+	phase := workflow.PhaseUpdate{PhaseID: phaseID, Name: "audit", Status: workflow.PhaseComplete, Scheduled: 3, Complete: 3}
+	connector.bufferWorkflowPhase("run", &slots, &phase)
+	close(releaseProgressUpdate)
+	require.NoError(t, <-errFlush)
+	require.NoError(t, <-errComplete)
+
+	assert.Contains(t, terminalUpdate.Get("text"), "late activity")
+	assert.JSONEq(t, `[{"type":"plan","title":"Workflow complete","tasks":[{"type":"task_card","task_id":"222.333-activity-1-1","title":"diagnostic","status":"complete"},{"type":"task_card","task_id":"run/phase/audit","title":"audit · 3/3","status":"complete"},{"type":"task_card","task_id":"222.333-activity-2-1","title":"late activity","status":"complete"}]}]`, terminalUpdate.Get("blocks"))
 }
 
 func TestWorkflowPhaseChunksPreserveOrder(t *testing.T) {
