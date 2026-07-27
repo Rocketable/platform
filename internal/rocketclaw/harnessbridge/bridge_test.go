@@ -1837,12 +1837,9 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) 
 		require.NoError(t, json.Unmarshal([]byte(payload), &summary))
 		assert.Equal(t, workflowTurnID, summary.RunID)
 		assert.JSONEq(t, fmt.Sprintf(`{"workflow":"audit","run_id":%q,"terminal":"complete","phases":[{"name":"work","status":"complete","scheduled":1,"complete":1},{"name":"later","status":"skipped","scheduled":0,"complete":0}]}`, workflowTurnID), payload)
-		require.Len(t, agentUpdates, 3)
+		require.Len(t, agentUpdates, 2)
 		assert.Equal(t, "worker", agentUpdates[0].Label)
-		assert.Equal(t, workflow.PhaseInProgress, agentUpdates[0].Status)
 		assert.Equal(t, "checking workflow", agentUpdates[1].Activity)
-		assert.Equal(t, workflow.PhaseComplete, agentUpdates[2].Status)
-		assert.Equal(t, "checking workflow", agentUpdates[2].Activity)
 
 		privateAcquired := false
 
@@ -4150,7 +4147,7 @@ func TestWorkflowProgressOutboundDoesNotLookupGoal(t *testing.T) {
 	assert.Equal(t, &phase, published.WorkflowPhase)
 	assert.Equal(t, inbound.SlackReply, published.SlackReply)
 
-	agent := workflow.AgentUpdate{CallID: "turn-1/agent/000000", Label: "failure-trace", Activity: "grep: turn limit", Status: workflow.PhaseInProgress}
+	agent := workflow.AgentUpdate{CallID: "turn-1/agent/000000", Label: "failure-trace", Activity: "grep: turn limit"}
 	outbound = bridge.newOutboundMessage(inbound, "turn-1", 2, "", "", false)
 	outbound.WorkflowAgent = &agent
 	require.NoError(t, bus.PublishOutbound(t.Context(), outbound))

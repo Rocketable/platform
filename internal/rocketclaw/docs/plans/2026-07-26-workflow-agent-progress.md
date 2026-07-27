@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Show one attributed, replaceable Slack activity task for each workflow `agent()` call while preserving aggregate phase progress and private worker results.
+**Goal:** Show each workflow worker's latest attributed activity inside its owning Slack phase task while preserving aggregate phase progress and private worker results.
 
-**Architecture:** Add a connector-neutral `AgentUpdate` beside `PhaseUpdate`. The workflow engine owns stable call identity, attribution, lifecycle status, and serialization; the isolated RocketCode runner forwards only ordinary observable thinking through the existing formatter; the bridge publishes updates; Slack replaces one task per call across both streaming and `chat.update` fallback transports.
+**Architecture:** Add a connector-neutral `AgentUpdate` beside `PhaseUpdate`. The workflow engine owns stable phase/call identity, attribution, and serialization; phase counters retain lifecycle status; the isolated RocketCode runner forwards only ordinary observable thinking through the existing formatter; the bridge publishes updates; Slack replaces the owning phase task's `details` across both streaming and `chat.update` fallback transports.
 
 **Tech Stack:** Go 1.26, Starlark workflows, RocketCode `ChatResponse`, RocketClaw outbound events, slack-go stream chunks and plan blocks, Testify, Go testing.
 
@@ -12,11 +12,11 @@
 
 - Show only the latest activity for each workflow agent call.
 - Attribute activity by explicit Starlark label, then worker name, then deterministic phase call label.
-- Keep worker activity tasks separate from aggregate phase cards.
-- Do not render future pending phases; for normal single-active-phase workflows, emit the active phase immediately before its worker tasks.
+- Keep aggregate phase cards and render worker activity in their `details`.
+- Retain declared pending phase cards.
 - Forward commentary, reasoning summaries, tool activity, and nested-agent activity through `rocketcodeThinkingText`.
 - Never publish `ChatResponseAssistantMessage`, worker prompts, schemas, structured values, or provider errors as activity.
-- Preserve task ID, title, status, order, and sources across `chat.appendStream` and fallback `chat.update`.
+- Preserve phase task ID, title, status, details, order, and sources across `chat.appendStream` and fallback `chat.update`.
 - Preserve existing terminal titles, final-answer separation, workflow summaries, managed-history privacy, fallback serialization, and queued-reply promotion.
 - Progress publication failures cancel and fail the workflow.
 - Do not add verbosity configuration, persistence, exported APIs outside existing internal packages, packages, retries, logging, goroutines, timers, or mutexes.
@@ -37,7 +37,7 @@
 - `AgentRunFunc`: `func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error)`.
 - `AgentThinkingFunc`: `func(context.Context, string) error` receives already formatted latest activity text.
 - `AgentProgressFunc`: `func(context.Context, AgentUpdate) error` receives serialized call lifecycle updates.
-- `AgentUpdate`: `{CallID, Label, Activity string; Status PhaseStatus}`.
+- `AgentUpdate`: `{CallID, PhaseID, Label, Activity string}`.
 - Consumed by: Task 2 bridge/runner plumbing and Task 3 Slack rendering.
 
 - [ ] **Step 1: Write failing lifecycle and attribution tests**
@@ -102,8 +102,7 @@ type AgentRunFunc func(context.Context, AgentRequest, AgentThinkingFunc) (json.R
 
 // AgentUpdate reports one workflow agent call's latest observable activity.
 type AgentUpdate struct {
-	CallID, Label, Activity string
-	Status                  PhaseStatus
+	CallID, PhaseID, Label, Activity string
 }
 
 // AgentProgressFunc receives serialized workflow agent activity updates.
@@ -127,9 +126,9 @@ if callLabel == "" {
 }
 ```
 
-After existing scheduled/running phase updates, emit the initial in-progress `AgentUpdate`. Pass a real `AgentThinkingFunc` to `e.agent` that replaces `latestActivity` and emits the same call ID/label with in-progress status.
+After existing scheduled/running phase updates, emit the initial `AgentUpdate`. Pass a real `AgentThinkingFunc` to `e.agent` that replaces `latestActivity` and emits the same call ID, phase ID, and label.
 
-On success, emit complete status retaining `latestActivity`, then advance aggregate phase completion. On agent failure, emit error status retaining `latestActivity`, join a publication error if present, cancel with the combined error, and return it. Do not put the agent error text in `Activity`.
+On success, advance aggregate phase completion; the latest activity remains retained by the connector. On agent failure, cancel and return the error without publishing provider text. Worker lifecycle is represented only by the owning phase counter and status, avoiding duplicate Slack updates.
 
 Serialize agent and phase publication with the existing engine mutex. Add a private method with a real body, parallel to `phaseCount`, that invokes `AgentProgressFunc`, cancels on publication failure, and returns the error.
 
@@ -253,7 +252,47 @@ go test ./internal/rocketclaw/harnessbridge ./internal/rocketclaw/events -count=
 
 Expected: PASS.
 
-### Task 3: Render Latest Worker Activity In Slack
+### Task 3: Render Latest Worker Activity In Phase Details
+
+**Files:**
+- Modify: `internal/rocketclaw/workflow/engine.go`
+- Modify: `internal/rocketclaw/slackconnector/connector.go`
+- Test: `internal/rocketclaw/workflow/engine_test.go`
+- Test: `internal/rocketclaw/slackconnector/connector_test.go`
+
+**Interfaces:**
+- Add `PhaseID` to `workflow.AgentUpdate`.
+- Retain latest worker state by call ID and latest phase state by phase ID.
+- Render one phase `task_update` whose `details` contains the latest labeled lines for workers with the matching phase ID.
+- Convert the same details to rich text in the fallback Plan block.
+
+- [ ] **Step 1: Write failing phase-ownership tests**
+
+Assert every agent lifecycle update carries its owning phase ID. Assert two parallel worker updates produce one phase chunk:
+
+```json
+[{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate · 0/2","status":"in_progress","details":"failure-trace: grep: turn limit\ncanonical-owner: read: prompt.md"}]
+```
+
+- [ ] **Step 2: Write failing fallback parity and in-flight tests**
+
+Require `chat.appendStream` details and fallback `chat.update` rich-text details to contain the same latest worker lines and sources. While append is blocked, send a newer update for one worker and assert compare-before-delete preserves it.
+
+- [ ] **Step 3: Implement the minimal phase-owned model**
+
+Add `PhaseID` to `AgentUpdate`. Keep persistent latest worker/phase maps separate from pending update maps. A worker update marks its owning phase dirty. Build phase chunks from dirty phase snapshots plus all retained workers for each phase.
+
+- [ ] **Step 4: Render stream and fallback details**
+
+Set `TaskUpdateChunk.Details` to the call-ID-ordered latest worker lines, truncated to Slack's 256-character limit. Aggregate sources from those lines. When converting retained chunks to a fallback `PlanBlock`, map the details string to a task card rich-text `details` object.
+
+- [ ] **Step 5: Verify GREEN**
+
+Run focused workflow and Slack tests, then the package race tests. Expected: pending phases remain visible, no worker task IDs are emitted, phase details replace in place, and both transports are exact.
+
+### Rejected Task 3 Approach: Separate Worker Tasks
+
+> **Do not execute this section.** It records the rejected positional approach. Slack's documented `task_update.details` and task-card rich-text `details` are the correct representation for activity under a phase.
 
 **Files:**
 - Modify: `internal/rocketclaw/slackconnector/connector.go:124-136`

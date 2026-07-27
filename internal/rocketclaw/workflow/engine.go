@@ -88,8 +88,7 @@ type PhaseUpdate struct {
 
 // AgentUpdate reports one workflow agent call's latest observable activity.
 type AgentUpdate struct {
-	CallID, Label, Activity string
-	Status                  PhaseStatus
+	CallID, PhaseID, Label, Activity string
 }
 
 // ProgressFunc receives serialized workflow progress updates and is never invoked concurrently.
@@ -568,9 +567,13 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 			callLabel = fmt.Sprintf("%s call %d", phase, callSequence+1)
 		}
 
+		e.mu.Lock()
+		phaseID := e.phases[phase].PhaseID
+		e.mu.Unlock()
+
 		callID := fmt.Sprintf("%s/agent/%06d", e.runID, callSequence)
 
-		update := AgentUpdate{CallID: callID, Label: callLabel, Status: PhaseInProgress}
+		update := AgentUpdate{CallID: callID, PhaseID: phaseID, Label: callLabel}
 		if err := e.agentActivity(ctx, update); err != nil {
 			return nil, err
 		}
@@ -580,10 +583,7 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 			return e.agentActivity(activityCtx, update)
 		})
 		if errAgent != nil {
-			update.Status = PhaseError
-
 			e.cancel(errAgent)
-			errAgent = errors.Join(errAgent, e.agentActivity(context.WithoutCancel(ctx), update))
 
 			return nil, errAgent
 		}
@@ -610,17 +610,9 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 		}
 
 		if errResult != nil {
-			update.Status = PhaseError
-
 			e.cancel(errResult)
-			errResult = errors.Join(errResult, e.agentActivity(context.WithoutCancel(ctx), update))
 
 			return nil, errResult
-		}
-
-		update.Status = PhaseComplete
-		if err := e.agentActivity(ctx, update); err != nil {
-			return nil, err
 		}
 
 		if err := e.phaseCount(ctx, phase, "", 0, -1, 1); err != nil {

@@ -8,25 +8,25 @@ The Slack plan should no longer remain at a silent state such as `investigate ·
 
 ## User Experience
 
-Each workflow agent call owns one stable activity task. Parallel calls update independently:
+Each workflow phase owns one stable Slack task. The task's details show the latest attributed activity from each worker in that phase:
 
 ```text
 ● investigate · 0/2
-● failure-trace: grep: turn limit
-● canonical-owner: read: prompt-improver.md
+  failure-trace: grep: turn limit
+  canonical-owner: read: prompt-improver.md
 ```
 
-Only the latest activity for each call is shown. A new activity replaces that call's previous title rather than adding another task.
+Only the latest activity for each call is shown. A new activity replaces that worker's line in the owning phase details rather than adding another task.
 
-When a worker completes, its latest activity remains visible and its task status changes to complete:
+When a worker completes, its latest activity remains visible while the phase counter advances:
 
 ```text
 ● investigate · 1/2
-✓ failure-trace: bash: Run focused tests
-● canonical-owner: read: prompt-improver.md
+  failure-trace: bash: Run focused tests
+  canonical-owner: read: prompt-improver.md
 ```
 
-The worker activity tasks and aggregate phase task remain separate. Activity answers what each worker is doing; the phase card reports scheduled and completed calls.
+The phase title and status report aggregate progress. Its details answer what each worker is doing.
 
 ## Attribution
 
@@ -44,7 +44,7 @@ The label is fixed for the lifetime of the call. Activity titles use:
 <label>: <latest activity>
 ```
 
-The stable call ID, not the title, controls replacement. Duplicate labels therefore remain independent tasks.
+The stable call ID controls replacement within the phase details. Duplicate labels therefore remain independent worker entries.
 
 ## Connector-Neutral Model
 
@@ -53,11 +53,11 @@ Workflow call activity is a separate connector-neutral progress concept. It must
 Each activity update carries:
 
 - the stable workflow run and call identity;
+- the owning stable phase ID;
 - the attribution label;
-- the latest formatted activity text;
-- in-progress, complete, or error status.
+- the latest formatted activity text.
 
-The workflow engine owns call identity and status. The isolated RocketCode runner owns the raw activity stream. The bridge publishes the connector-neutral update. Slack maps the update to a stable task.
+The workflow engine owns phase identity, call identity, and status. The isolated RocketCode runner owns the raw activity stream. The bridge publishes the connector-neutral update. Slack maps the update into the owning phase task's details.
 
 ## Progress Sources
 
@@ -89,7 +89,7 @@ RocketCode ChatResponse
 → workflow call progress callback
 → serialized connector-neutral activity update
 → outbound event
-→ Slack task replacement
+→ owning Slack phase task details replacement
 ```
 
 Parallel workers may produce activity concurrently. The workflow layer serializes activity publication so connector state never observes concurrent updates for the same turn.
@@ -98,39 +98,40 @@ Progress publication errors cancel and fail the workflow through the existing wo
 
 ## Slack Rendering
 
-Slack stores the latest activity update by stable call ID alongside the existing phase state. Future pending phases are not rendered. For normal workflows with one active phase, the phase is added when it becomes active, immediately before that phase's worker tasks, so the flat Slack task list visually groups worker activity under its owning phase. Slack does not provide nested task groups; concurrently active phases retain flat arrival order.
+Slack retains declared pending phase tasks. It stores the latest activity by stable call ID and groups those entries by the owning phase ID.
 
-For a healthy stream, Slack sends each activity through `chat.appendStream` as a stable `task_update`. For a stream that has permanently ended, Slack sends the same retained task through the existing `chat.update` plan-block fallback.
+For a healthy stream, Slack updates the owning phase through `chat.appendStream` using one stable `task_update`. The phase title and status keep their aggregate values; `details` contains one latest attributed line per worker, ordered by stable call ID.
 
-The task ID, title, status, order, and sources must be identical across transports. Switching transport must not duplicate the worker task or turn latest-only replacement into a chronological feed.
+For a stream that has permanently ended, Slack sends the same phase through the existing `chat.update` Plan-block fallback. The stream details string becomes the task card's rich-text `details` object.
+
+The phase task ID, title, status, details, order, and sources must be identical across transports. Switching transport must not create worker task cards or turn latest-only replacement into a chronological feed.
 
 Slack derives URL sources from the latest formatted activity using the existing activity-link extraction.
 
-Worker tasks remain in first-seen call order beneath their active phase. Existing terminal titles, final-answer separation, fallback serialization, and queued-reply promotion remain unchanged.
+Combined details are limited to Slack's 256-character task-update limit. Existing terminal titles, pending/skipped phase visibility, final-answer separation, fallback serialization, and queued-reply promotion remain unchanged.
 
 ## Completion Semantics
 
-The engine emits an in-progress worker activity task when the call begins. Its initial title is the attribution label alone; after the first diagnostic, the title uses `<label>: <latest activity>`.
+The engine emits an in-progress worker activity update when the call begins. Its initial text is the attribution label alone; after the first diagnostic, it uses `<label>: <latest activity>`.
 
-Each observable activity replaces that task's title. When the agent call returns successfully, the engine emits a complete update retaining the latest activity title. The aggregate phase `Complete` count then advances independently.
+Each observable activity replaces that worker's phase-detail line. Worker lifecycle status is represented by the owning phase counter and status, not by separate worker updates. When the agent call returns successfully, the aggregate phase `Complete` count advances while the latest activity remains retained.
 
-If the call fails, its latest activity remains visible with error status and the existing workflow failure path remains authoritative. No private provider error is added to the worker activity task; the workflow terminal response reports failure through the existing final-answer path.
+If the call fails, its latest activity remains in the phase details and the existing workflow failure path remains authoritative. No private provider error is added to phase details; the workflow terminal response reports failure through the existing final-answer path.
 
 ## Testing
 
 Tests must verify:
 
-- two parallel workers maintain separate stable tasks;
-- future pending phases produce no Slack tasks;
-- an active phase is emitted immediately before its worker tasks;
-- repeated activity from one worker replaces its title rather than accumulating tasks;
+- two parallel workers maintain separate latest lines in one phase task;
+- pending phase tasks remain visible without worker details;
+- repeated activity from one worker replaces its phase-detail line rather than accumulating lines;
 - explicit label, worker-name fallback, and deterministic fallback attribution;
 - commentary, reasoning summaries, tool activity, and nested-agent activity are forwarded through the existing formatter;
 - routine tool results and private assistant messages are absent;
-- completion retains the latest title and changes status to complete;
+- completion retains the latest activity while the phase counter advances;
 - worker completion and aggregate phase completion advance independently;
 - publication failure cancels the workflow;
-- `chat.appendStream` and fallback `chat.update` render identical worker tasks;
+- `chat.appendStream` and fallback `chat.update` render identical phase details;
 - concurrent worker updates are serialized and race-clean;
 - final answer delivery, terminal plan titles, and queued-turn promotion remain unchanged.
 

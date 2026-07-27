@@ -1014,10 +1014,9 @@ func TestAgentActivityLifecycle(t *testing.T) {
 			}
 
 			want := []AgentUpdate{
-				{CallID: "run/agent/000000", Label: tt.wantLabel, Status: PhaseInProgress},
-				{CallID: "run/agent/000000", Label: tt.wantLabel, Activity: "read: prompt.md", Status: PhaseInProgress},
-				{CallID: "run/agent/000000", Label: tt.wantLabel, Activity: "grep: turn limit", Status: PhaseInProgress},
-				{CallID: "run/agent/000000", Label: tt.wantLabel, Activity: "grep: turn limit", Status: PhaseComplete},
+				{CallID: "run/agent/000000", PhaseID: "run/phase/000000/investigate", Label: tt.wantLabel},
+				{CallID: "run/agent/000000", PhaseID: "run/phase/000000/investigate", Label: tt.wantLabel, Activity: "read: prompt.md"},
+				{CallID: "run/agent/000000", PhaseID: "run/phase/000000/investigate", Label: tt.wantLabel, Activity: "grep: turn limit"},
 			}
 			if !slices.Equal(updates, want) {
 				t.Fatalf("agent updates = %+v, want %+v", updates, want)
@@ -1046,6 +1045,8 @@ def main(args):
 		close(release)
 	}()
 
+	var completedMu sync.Mutex
+
 	completedAgents := 0
 
 	_, err := Run(t.Context(), definition, RunRequest{RunID: "run"}, func(ctx context.Context, request AgentRequest, thinking AgentThinkingFunc) (json.RawMessage, error) {
@@ -1057,8 +1058,15 @@ def main(args):
 			return nil, err
 		}
 
+		completedMu.Lock()
+		completedAgents++
+		completedMu.Unlock()
+
 		return json.RawMessage(fmt.Sprintf("%q", request.Prompt)), nil
 	}, func(_ context.Context, update PhaseUpdate) error {
+		completedMu.Lock()
+		defer completedMu.Unlock()
+
 		if update.Complete > completedAgents {
 			return fmt.Errorf("phase completed %d calls after only %d agent completions", update.Complete, completedAgents)
 		}
@@ -1066,10 +1074,6 @@ def main(args):
 		return nil
 	}, func(_ context.Context, update AgentUpdate) error {
 		updates = append(updates, update)
-		if update.Status == PhaseComplete {
-			completedAgents++
-		}
-
 		return nil
 	})
 	if err != nil {
@@ -1081,11 +1085,11 @@ def main(args):
 		latest[update.Label] = update
 	}
 
-	if got := latest["alpha"]; got.Activity != "working first" || got.Status != PhaseComplete {
+	if got := latest["alpha"]; got.Activity != "working first" || got.PhaseID != "run/phase/000000/run" {
 		t.Fatalf("alpha update = %+v, want completed first worker", got)
 	}
 
-	if got := latest["beta"]; got.Activity != "working second" || got.Status != PhaseComplete {
+	if got := latest["beta"]; got.Activity != "working second" || got.PhaseID != "run/phase/000000/run" {
 		t.Fatalf("beta update = %+v, want completed second worker", got)
 	}
 
@@ -1144,12 +1148,12 @@ def main(args):
 		t.Fatalf("Run() error = %v, want validation failure", err)
 	}
 
-	if len(agentUpdates) == 0 || agentUpdates[len(agentUpdates)-1].Status != PhaseError || agentUpdates[len(agentUpdates)-1].Activity != "checking result" {
-		t.Fatalf("agent updates = %+v, want latest activity with error status", agentUpdates)
+	wantAgentUpdates := []AgentUpdate{
+		{CallID: "run/agent/000000", PhaseID: "run/phase/000000/verify", Label: "validator"},
+		{CallID: "run/agent/000000", PhaseID: "run/phase/000000/verify", Label: "validator", Activity: "checking result"},
 	}
-
-	if slices.Contains(agentUpdates, (AgentUpdate{CallID: "run/agent/000000", Label: "validator", Activity: "checking result", Status: PhaseComplete})) {
-		t.Fatalf("agent updates = %+v, must not complete before validation", agentUpdates)
+	if !slices.Equal(agentUpdates, wantAgentUpdates) {
+		t.Fatalf("agent updates = %+v, want no post-validation lifecycle update", agentUpdates)
 	}
 
 	if len(phaseUpdates) == 0 || phaseUpdates[len(phaseUpdates)-1].Status != PhaseError || phaseUpdates[len(phaseUpdates)-1].Complete != 0 {
