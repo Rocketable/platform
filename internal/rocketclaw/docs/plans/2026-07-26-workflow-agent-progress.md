@@ -36,7 +36,7 @@
 - Produces: `workflow.AgentUpdate`, `workflow.AgentProgressFunc`, and the revised `workflow.AgentRunFunc` and `workflow.Run` signatures.
 - `AgentRunFunc`: `func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error)`.
 - `AgentThinkingFunc`: `func(context.Context, string) error` receives already formatted latest activity text.
-- `AgentProgressFunc`: `func(context.Context, AgentUpdate) error` receives serialized call lifecycle updates.
+- `AgentProgressFunc`: `func(context.Context, AgentUpdate) error` receives serialized observable call activity.
 - `AgentUpdate`: `{CallID, PhaseID, Label, Activity string}`.
 - Consumed by: Task 2 bridge/runner plumbing and Task 3 Slack rendering.
 
@@ -126,7 +126,7 @@ if callLabel == "" {
 }
 ```
 
-After existing scheduled/running phase updates, emit the initial `AgentUpdate`. Pass a real `AgentThinkingFunc` to `e.agent` that replaces `latestActivity` and emits the same call ID, phase ID, and label.
+After existing scheduled/running phase updates, pass a real `AgentThinkingFunc` to `e.agent`. Emit an `AgentUpdate` only for non-empty formatted activity, carrying the same call ID, phase ID, and label. Do not emit a label-only lifecycle update.
 
 On success, advance aggregate phase completion; the latest activity remains retained by the connector. On agent failure, cancel and return the error without publishing provider text. Worker lifecycle is represented only by the owning phase counter and status, avoiding duplicate Slack updates.
 
@@ -252,7 +252,7 @@ go test ./internal/rocketclaw/harnessbridge ./internal/rocketclaw/events -count=
 
 Expected: PASS.
 
-### Task 3: Render Latest Worker Activity In Phase Details
+### Task 3: Accumulate Ordered Worker Activity In Phase Details
 
 **Files:**
 - Modify: `internal/rocketclaw/workflow/engine.go`
@@ -262,33 +262,33 @@ Expected: PASS.
 
 **Interfaces:**
 - Add `PhaseID` to `workflow.AgentUpdate`.
-- Retain latest worker state by call ID and latest phase state by phase ID.
-- Render one phase `task_update` whose `details` contains the latest labeled lines for workers with the matching phase ID.
-- Convert the same details to rich text in the fallback Plan block.
+- Queue newly observed worker events in serialized callback order and retain successfully delivered phase history.
+- Render one phase `task_update` per event whose `details` contains only that attributed delta line.
+- Reconstruct complete ordered rich-text details in the fallback Plan block.
 
 - [ ] **Step 1: Write failing phase-ownership tests**
 
-Assert every agent lifecycle update carries its owning phase ID. Assert two parallel worker updates produce one phase chunk:
+Assert every agent update carries its owning phase ID. Assert two parallel worker updates produce ordered phase chunks containing one delta each:
 
 ```json
-[{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate · 0/2","status":"in_progress","details":"failure-trace: grep: turn limit\ncanonical-owner: read: prompt.md"}]
+[{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate · 0/2","status":"in_progress","details":"failure-trace: grep: turn limit"},{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate · 0/2","status":"in_progress","details":"\ncanonical-owner: read: prompt.md"}]
 ```
 
 - [ ] **Step 2: Write failing fallback parity and in-flight tests**
 
-Require `chat.appendStream` details and fallback `chat.update` rich-text details to contain the same latest worker lines and sources. While append is blocked, send a newer update for one worker and assert compare-before-delete preserves it.
+Require `chat.appendStream` to send only new delta lines and fallback `chat.update` rich-text details to reconstruct the same complete history. While append is blocked, send newer events and assert compare-before-delete preserves their order.
 
 - [ ] **Step 3: Implement the minimal phase-owned model**
 
-Add `PhaseID` to `AgentUpdate`. Keep persistent latest worker/phase maps separate from pending update maps. A worker update marks its owning phase dirty. Build phase chunks from dirty phase snapshots plus all retained workers for each phase.
+Add `PhaseID` to `AgentUpdate`. Keep an ordered pending event queue and retained delivered history per phase. Snapshot and consume only accepted queue entries; append delivered lines to retained history in the same order.
 
 - [ ] **Step 4: Render stream and fallback details**
 
-Set `TaskUpdateChunk.Details` to the call-ID-ordered latest worker lines, truncated to Slack's 256-character limit. Aggregate sources from those lines. When converting retained chunks to a fallback `PlanBlock`, map the details string to a task card rich-text `details` object.
+Normalize and truncate each attributed line to 255 characters before either transport stores it. Set each streamed `TaskUpdateChunk.Details` to one bounded line and prefix every line after the first delivered phase line with `\n`. When converting retained history to a fallback `PlanBlock`, map the same bounded lines to a task card rich-text `details` object.
 
 - [ ] **Step 5: Verify GREEN**
 
-Run focused workflow and Slack tests, then the package race tests. Expected: pending phases remain visible, no worker task IDs are emitted, phase details replace in place, and both transports are exact.
+Run focused workflow and Slack tests, then the package race tests. Expected: pending phases remain visible, no worker task IDs are emitted, details accumulate once in serialized order, and fallback history is equivalent.
 
 ### Rejected Task 3 Approach: Separate Worker Tasks
 

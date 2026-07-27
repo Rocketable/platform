@@ -1837,9 +1837,10 @@ func TestBridgeSuccessfulManagedWorkflowReleasesPairedReservation(t *testing.T) 
 		require.NoError(t, json.Unmarshal([]byte(payload), &summary))
 		assert.Equal(t, workflowTurnID, summary.RunID)
 		assert.JSONEq(t, fmt.Sprintf(`{"workflow":"audit","run_id":%q,"terminal":"complete","phases":[{"name":"work","status":"complete","scheduled":1,"complete":1},{"name":"later","status":"skipped","scheduled":0,"complete":0}]}`, workflowTurnID), payload)
-		require.Len(t, agentUpdates, 2)
+		require.Len(t, agentUpdates, 1)
 		assert.Equal(t, "worker", agentUpdates[0].Label)
-		assert.Equal(t, "checking workflow", agentUpdates[1].Activity)
+		assert.Contains(t, agentUpdates[0].PhaseID, "/phase/000000/work")
+		assert.Equal(t, "checking workflow", agentUpdates[0].Activity)
 
 		privateAcquired := false
 

@@ -2965,7 +2965,7 @@ func TestFlushProgressFallsBackToPlanUpdateWhenStreamEnded(t *testing.T) {
 			assert.Equal(t, "/chat.update", requests[1].path)
 			assert.Equal(t, "C123", requests[1].form.Get("channel"))
 			assert.Equal(t, "555.1", requests[1].form.Get("ts"))
-			assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress","details":"failure-trace: read: <https://example.com/report|report>\ncanonical-owner: grep: ownership","sources":[{"type":"url","url":"https://example.com/report","text":"report"}]}]`, requests[0].form.Get("chunks"))
+			assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress"},{"type":"task_update","id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress","details":"failure-trace: read: <https://example.com/report|report>","sources":[{"type":"url","url":"https://example.com/report","text":"report"}]},{"type":"task_update","id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress","details":"\ncanonical-owner: grep: ownership","sources":[{"type":"url","url":"https://example.com/report","text":"report"}]}]`, requests[0].form.Get("chunks"))
 			assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress","details":{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"failure-trace: read: "},{"type":"link","url":"https://example.com/report","text":"report"}]},{"type":"rich_text_section","elements":[{"type":"text","text":"canonical-owner: grep: ownership"}]}]},"sources":[{"type":"url","url":"https://example.com/report","text":"report"}]}]}]`, requests[1].form.Get("blocks"))
 
 			agent.Activity = "bash: verify"
@@ -2977,7 +2977,7 @@ func TestFlushProgressFallsBackToPlanUpdateWhenStreamEnded(t *testing.T) {
 
 			require.Len(t, requests, 3)
 			assert.Equal(t, "/chat.update", requests[2].path)
-			assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 3/3","status":"complete","details":{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"failure-trace: bash: verify"}]},{"type":"rich_text_section","elements":[{"type":"text","text":"canonical-owner: grep: ownership"}]}]}}]}]`, requests[2].form.Get("blocks"))
+			assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 3/3","status":"complete","details":{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"failure-trace: read: "},{"type":"link","url":"https://example.com/report","text":"report"}]},{"type":"rich_text_section","elements":[{"type":"text","text":"canonical-owner: grep: ownership"}]},{"type":"rich_text_section","elements":[{"type":"text","text":"failure-trace: bash: verify"}]}]},"sources":[{"type":"url","url":"https://example.com/report","text":"report"}]}]}]`, requests[2].form.Get("blocks"))
 		})
 	}
 }
@@ -6486,11 +6486,10 @@ func TestSendResponseTerminalIncludesProgressBufferedWhileWaiting(t *testing.T) 
 	connector.thinking["run"] = slackThinkingState{
 		Text: "diagnostic", Placeholder: slackImmediatePlaceholder,
 		State: slackReplyState{ChannelID: "C123", MessageTS: "555.1"}, thinkingTaskID: "222.333",
-		activities:          []string{"diagnostic"},
-		workflowAgents:      map[string]workflow.AgentUpdate{"run/agent/000000": {CallID: "run/agent/000000", PhaseID: phaseID, Label: "worker", Activity: "reading"}},
-		workflowAgentStates: map[string]workflow.AgentUpdate{"run/agent/000000": {CallID: "run/agent/000000", PhaseID: phaseID, Label: "worker", Activity: "reading"}},
-		workflowPhases:      map[string]workflow.PhaseUpdate{phaseID: {PhaseID: phaseID, Name: "audit", Status: workflow.PhaseInProgress, Scheduled: 3, Complete: 2}},
-		phases:              map[string]workflow.PhaseUpdate{phaseID: {PhaseID: phaseID, Name: "audit", Status: workflow.PhaseInProgress, Scheduled: 3, Complete: 2}},
+		activities:     []string{"diagnostic"},
+		workflowAgents: []workflow.AgentUpdate{{CallID: "run/agent/000000", PhaseID: phaseID, Label: "worker", Activity: "reading"}},
+		workflowPhases: map[string]workflow.PhaseUpdate{phaseID: {PhaseID: phaseID, Name: "audit", Status: workflow.PhaseInProgress, Scheduled: 3, Complete: 2}},
+		phases:         map[string]workflow.PhaseUpdate{phaseID: {PhaseID: phaseID, Name: "audit", Status: workflow.PhaseInProgress, Scheduled: 3, Complete: 2}},
 	}
 
 	errFlush := make(chan error, 1)
@@ -6526,28 +6525,32 @@ func TestSendResponseTerminalIncludesProgressBufferedWhileWaiting(t *testing.T) 
 	require.NoError(t, <-errComplete)
 
 	assert.Contains(t, terminalUpdate.Get("text"), "late activity")
-	assert.JSONEq(t, `[{"type":"plan","title":"Workflow complete","tasks":[{"type":"task_card","task_id":"222.333-activity-1-1","title":"diagnostic","status":"complete"},{"type":"task_card","task_id":"run/phase/audit","title":"audit · 3/3","status":"complete","details":{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"worker: verified"}]}]}},{"type":"task_card","task_id":"222.333-activity-2-1","title":"late activity","status":"complete"}]}]`, terminalUpdate.Get("blocks"))
+	assert.JSONEq(t, `[{"type":"plan","title":"Workflow complete","tasks":[{"type":"task_card","task_id":"222.333-activity-1-1","title":"diagnostic","status":"complete"},{"type":"task_card","task_id":"run/phase/audit","title":"audit · 3/3","status":"complete","details":{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"worker: reading"}]},{"type":"rich_text_section","elements":[{"type":"text","text":"worker: verified"}]}]}},{"type":"task_card","task_id":"222.333-activity-2-1","title":"late activity","status":"complete"}]}]`, terminalUpdate.Get("blocks"))
 }
 
-func TestWorkflowPhaseChunksRenderLatestAttributedWorkerDetails(t *testing.T) {
+func TestWorkflowAgentChunksRenderOrderedAttributedDeltas(t *testing.T) {
 	const phaseID = "run/phase/000001/investigate"
 
 	phases := map[string]workflow.PhaseUpdate{phaseID: {PhaseID: phaseID, Name: "investigate", Status: workflow.PhaseInProgress, Scheduled: 2}}
-	agents := map[string]workflow.AgentUpdate{
-		"run/agent/000000": {CallID: "run/agent/000000", PhaseID: phaseID, Label: "failure-trace", Activity: "read: <https://example.com/report|report>"},
-		"run/agent/000001": {CallID: "run/agent/000001", PhaseID: phaseID, Label: "canonical-owner", Activity: "bash: first line\nsecond line"},
-		"run/agent/000002": {CallID: "run/agent/000002", PhaseID: "run/phase/other", Label: "other", Activity: "hidden"},
+	agents := []workflow.AgentUpdate{
+		{CallID: "run/agent/000000", PhaseID: phaseID, Label: "failure-trace", Activity: "read: <https://example.com/report|report>"},
+		{CallID: "run/agent/000001", PhaseID: phaseID, Label: "canonical-owner", Activity: "bash: first line\nsecond line"},
 	}
 
-	encoded, err := json.Marshal(slackWorkflowPhaseChunks(phases, agents))
+	encoded, err := json.Marshal(slackWorkflowAgentChunks(agents, phases, nil))
 	require.NoError(t, err)
-	assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate · 0/2","status":"in_progress","details":"failure-trace: read: <https://example.com/report|report>\ncanonical-owner: bash: first line second line","sources":[{"type":"url","url":"https://example.com/report","text":"report"}]}]`, string(encoded))
+	assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate · 0/2","status":"in_progress","details":"failure-trace: read: <https://example.com/report|report>","sources":[{"type":"url","url":"https://example.com/report","text":"report"}]},{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate · 0/2","status":"in_progress","details":"\ncanonical-owner: bash: first line second line","sources":[{"type":"url","url":"https://example.com/report","text":"report"}]}]`, string(encoded))
 
 	long := workflow.AgentUpdate{CallID: "run/agent/000000", PhaseID: phaseID, Label: "worker", Activity: strings.Repeat("界", 300)}
-	chunks := slackWorkflowPhaseChunks(phases, map[string]workflow.AgentUpdate{long.CallID: long})
+	chunks := slackWorkflowAgentChunks([]workflow.AgentUpdate{long}, phases, nil)
 	require.Len(t, chunks, 1)
 	task := chunks[0].(slack.TaskUpdateChunk)
 	assert.LessOrEqual(t, len([]rune(task.Details)), 256)
+
+	historyChunks := slackWorkflowHistoryChunks(phases, nil, []workflow.AgentUpdate{long})
+	require.Len(t, historyChunks, 1)
+	historyTask := historyChunks[0].(slack.TaskUpdateChunk)
+	assert.Equal(t, task.Details, historyTask.Details)
 }
 
 func TestSlackTaskStatusMapsWorkflowStatuses(t *testing.T) {
@@ -6565,7 +6568,7 @@ func TestSlackTaskStatusMapsWorkflowStatuses(t *testing.T) {
 	}
 }
 
-func TestWorkflowAgentUpdatesReplacePhaseDetails(t *testing.T) {
+func TestWorkflowAgentUpdatesAccumulateOrderedPhaseDetails(t *testing.T) {
 	var appended []url.Values
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -6592,7 +6595,6 @@ func TestWorkflowAgentUpdatesReplacePhaseDetails(t *testing.T) {
 	require.NoError(t, connector.SendResponse(t.Context(), phase))
 
 	for _, update := range []workflow.AgentUpdate{
-		{CallID: "run/agent/000000", PhaseID: phaseID, Label: "failure-trace"},
 		{CallID: "run/agent/000000", PhaseID: phaseID, Label: "failure-trace", Activity: "read: prompt.md"},
 		{CallID: "run/agent/000000", PhaseID: phaseID, Label: "failure-trace", Activity: "grep: turn limit"},
 	} {
@@ -6606,11 +6608,10 @@ func TestWorkflowAgentUpdatesReplacePhaseDetails(t *testing.T) {
 	require.NoError(t, connector.SendResponse(t.Context(), phase))
 	require.NoError(t, connector.flushProgressText(t.Context(), "run"))
 
-	require.Len(t, appended, 4)
-	assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate","status":"in_progress","details":"failure-trace"}]`, appended[0].Get("chunks"))
-	assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate","status":"in_progress","details":"failure-trace: read: prompt.md"}]`, appended[1].Get("chunks"))
-	assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate","status":"in_progress","details":"failure-trace: grep: turn limit"}]`, appended[2].Get("chunks"))
-	assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate","status":"complete","details":"failure-trace: grep: turn limit"}]`, appended[3].Get("chunks"))
+	require.Len(t, appended, 3)
+	assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate","status":"in_progress"},{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate","status":"in_progress","details":"failure-trace: read: prompt.md"}]`, appended[0].Get("chunks"))
+	assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate","status":"in_progress","details":"\nfailure-trace: grep: turn limit"}]`, appended[1].Get("chunks"))
+	assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate","status":"complete"}]`, appended[2].Get("chunks"))
 
 	for _, request := range appended {
 		assert.NotContains(t, request.Get("chunks"), "-activity-")
@@ -6668,7 +6669,7 @@ func TestWorkflowAgentDetailsRenderUnderOwningPhase(t *testing.T) {
 	require.NoError(t, connector.flushProgressText(t.Context(), "run"))
 
 	require.Len(t, appended, 2)
-	assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate · 0/2","status":"in_progress","details":"failure-trace: grep: turn limit\ncanonical-owner: read: prompt.md"}]`, appended[1].Get("chunks"))
+	assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate · 0/2","status":"in_progress"},{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate · 0/2","status":"in_progress","details":"failure-trace: grep: turn limit"},{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate · 0/2","status":"in_progress","details":"\ncanonical-owner: read: prompt.md"}]`, appended[1].Get("chunks"))
 }
 
 func TestWorkflowPhaseChunksPreserveOrder(t *testing.T) {
@@ -6706,7 +6707,7 @@ func TestWorkflowPhaseChunksPreserveOrder(t *testing.T) {
 		]`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			encoded, err := json.Marshal(slackWorkflowPhaseChunks(tt.phases, nil))
+			encoded, err := json.Marshal(slackWorkflowPhaseChunks(tt.phases))
 			require.NoError(t, err)
 			assert.JSONEq(t, tt.want, string(encoded))
 		})
@@ -6717,7 +6718,7 @@ func TestWorkflowPhaseTitleReplacesProgress(t *testing.T) {
 	const phaseID = "run/phase/000000/summarize"
 
 	phase := workflow.PhaseUpdate{PhaseID: phaseID, Name: "summarize", Status: workflow.PhaseInProgress, Scheduled: 8, Running: 5, Complete: 3}
-	encoded, err := json.Marshal(slackWorkflowPhaseChunks(map[string]workflow.PhaseUpdate{phaseID: phase}, nil))
+	encoded, err := json.Marshal(slackWorkflowPhaseChunks(map[string]workflow.PhaseUpdate{phaseID: phase}))
 	require.NoError(t, err)
 	assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000000/summarize","title":"summarize · 3/8","status":"in_progress"}]`, string(encoded))
 }
@@ -7116,7 +7117,8 @@ func TestWorkflowUpdateArrivingDuringAppendIsPreserved(t *testing.T) {
 			}
 
 			if kind == "agent" {
-				assert.Equal(t, workflow.AgentUpdate{CallID: "run/agent/000000", PhaseID: "run/phase/audit", Label: "worker", Activity: "verified"}, connector.thinking["run"].workflowAgents[firstAgent.CallID])
+				require.NotEmpty(t, connector.thinking["run"].workflowAgents)
+				assert.Equal(t, workflow.AgentUpdate{CallID: "run/agent/000000", PhaseID: "run/phase/audit", Label: "worker", Activity: "verified"}, connector.thinking["run"].workflowAgents[0])
 			} else {
 				assert.Equal(t, workflow.PhaseComplete, connector.thinking["run"].phases[firstPhase.PhaseID].Status)
 			}
@@ -7125,7 +7127,7 @@ func TestWorkflowUpdateArrivingDuringAppendIsPreserved(t *testing.T) {
 			if kind == "agent" {
 				require.NoError(t, connector.flushProgressText(t.Context(), "run"))
 				require.Len(t, appended, 2)
-				assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/audit","title":"audit","status":"in_progress","details":"worker: verified"}]`, appended[1].Get("chunks"))
+				assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/audit","title":"audit","status":"in_progress","details":"\nworker: verified"}]`, appended[1].Get("chunks"))
 			}
 		})
 	}

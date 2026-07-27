@@ -573,14 +573,8 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 
 		callID := fmt.Sprintf("%s/agent/%06d", e.runID, callSequence)
 
-		update := AgentUpdate{CallID: callID, PhaseID: phaseID, Label: callLabel}
-		if err := e.agentActivity(ctx, update); err != nil {
-			return nil, err
-		}
-
 		raw, errAgent := e.agent(ctx, request, func(activityCtx context.Context, activity string) error {
-			update.Activity = activity
-			return e.agentActivity(activityCtx, update)
+			return e.agentActivity(activityCtx, AgentUpdate{CallID: callID, PhaseID: phaseID, Label: callLabel, Activity: activity})
 		})
 		if errAgent != nil {
 			e.cancel(errAgent)

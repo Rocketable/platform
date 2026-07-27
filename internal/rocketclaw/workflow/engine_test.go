@@ -1014,7 +1014,6 @@ func TestAgentActivityLifecycle(t *testing.T) {
 			}
 
 			want := []AgentUpdate{
-				{CallID: "run/agent/000000", PhaseID: "run/phase/000000/investigate", Label: tt.wantLabel},
 				{CallID: "run/agent/000000", PhaseID: "run/phase/000000/investigate", Label: tt.wantLabel, Activity: "read: prompt.md"},
 				{CallID: "run/agent/000000", PhaseID: "run/phase/000000/investigate", Label: tt.wantLabel, Activity: "grep: turn limit"},
 			}
@@ -1105,8 +1104,13 @@ func TestAgentActivityProgressFailure(t *testing.T) {
 	errActivity := errors.New("activity unavailable")
 	runnerCalled := false
 
-	_, err := Run(t.Context(), engineDefinition(t, `def main(args): return agent("prompt")`), RunRequest{RunID: "run"}, func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error) {
+	_, err := Run(t.Context(), engineDefinition(t, `def main(args): return agent("prompt")`), RunRequest{RunID: "run"}, func(ctx context.Context, _ AgentRequest, thinking AgentThinkingFunc) (json.RawMessage, error) {
 		runnerCalled = true
+
+		if err := thinking(ctx, "working"); err != nil {
+			return nil, err
+		}
+
 		return json.RawMessage(`"result"`), nil
 	}, discardProgress, func(context.Context, AgentUpdate) error {
 		return errActivity
@@ -1115,8 +1119,8 @@ func TestAgentActivityProgressFailure(t *testing.T) {
 		t.Fatalf("Run() error = %v, want activity failure", err)
 	}
 
-	if runnerCalled {
-		t.Fatal("agent runner started after initial activity publication failed")
+	if !runnerCalled {
+		t.Fatal("agent runner did not publish observable activity")
 	}
 }
 
@@ -1149,7 +1153,6 @@ def main(args):
 	}
 
 	wantAgentUpdates := []AgentUpdate{
-		{CallID: "run/agent/000000", PhaseID: "run/phase/000000/verify", Label: "validator"},
 		{CallID: "run/agent/000000", PhaseID: "run/phase/000000/verify", Label: "validator", Activity: "checking result"},
 	}
 	if !slices.Equal(agentUpdates, wantAgentUpdates) {
