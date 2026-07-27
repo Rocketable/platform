@@ -13,6 +13,7 @@
 - Show only the latest activity for each workflow agent call.
 - Attribute activity by explicit Starlark label, then worker name, then deterministic phase call label.
 - Keep worker activity tasks separate from aggregate phase cards.
+- Do not render future pending phases; for normal single-active-phase workflows, emit the active phase immediately before its worker tasks.
 - Forward commentary, reasoning summaries, tool activity, and nested-agent activity through `rocketcodeThinkingText`.
 - Never publish `ChatResponseAssistantMessage`, worker prompts, schemas, structured values, or provider errors as activity.
 - Preserve task ID, title, status, order, and sources across `chat.appendStream` and fallback `chat.update`.
@@ -288,7 +289,7 @@ Add a link case asserting sources are extracted from the latest activity. Add a 
 
 - [ ] **Step 2: Write failing latest-only stream integration test**
 
-Send initial, first-activity, second-activity, and complete `WorkflowAgent` messages for one call, plus one phase update. Flush after each snapshot. Assert every worker chunk uses the same ID and the titles replace in order; no generic `-activity-` IDs are created. Assert the phase task remains independent.
+Send declared pending phases and assert they produce no Slack task updates. Then send one active phase followed by initial, first-activity, second-activity, and complete `WorkflowAgent` messages. Assert the active phase is inserted immediately before its workers, every worker chunk uses the same ID, titles replace in order, and no generic `-activity-` IDs are created.
 
 Add two parallel calls and assert deterministic first-seen ordering and no cross-call replacement.
 
@@ -330,8 +331,8 @@ Where progress snapshots are cloned, add `maps.Clone(pending.workflowAgents)`. B
 
 ```go
 chunks := slackThinkingActivityChunks(&pending, activities)
-chunks = append(chunks, slackWorkflowAgentChunks(workflowAgents)...)
 chunks = append(chunks, slackWorkflowPhaseChunks(phases)...)
+chunks = append(chunks, slackWorkflowAgentChunks(workflowAgents)...)
 ```
 
 Use this order in streaming flush, established `chat.update` flush, permanent append fallback, and terminal completion. Merge chunks into the existing retained `tasks` slice so stable IDs replace in place across transports.

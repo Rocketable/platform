@@ -11,9 +11,9 @@ The Slack plan should no longer remain at a silent state such as `investigate ·
 Each workflow agent call owns one stable activity task. Parallel calls update independently:
 
 ```text
+● investigate · 0/2
 ● failure-trace: grep: turn limit
 ● canonical-owner: read: prompt-improver.md
-● investigate · 0/2
 ```
 
 Only the latest activity for each call is shown. A new activity replaces that call's previous title rather than adding another task.
@@ -21,9 +21,9 @@ Only the latest activity for each call is shown. A new activity replaces that ca
 When a worker completes, its latest activity remains visible and its task status changes to complete:
 
 ```text
+● investigate · 1/2
 ✓ failure-trace: bash: Run focused tests
 ● canonical-owner: read: prompt-improver.md
-● investigate · 1/2
 ```
 
 The worker activity tasks and aggregate phase task remain separate. Activity answers what each worker is doing; the phase card reports scheduled and completed calls.
@@ -98,7 +98,7 @@ Progress publication errors cancel and fail the workflow through the existing wo
 
 ## Slack Rendering
 
-Slack stores the latest activity update by stable call ID alongside the existing phase state.
+Slack stores the latest activity update by stable call ID alongside the existing phase state. Future pending phases are not rendered. For normal workflows with one active phase, the phase is added when it becomes active, immediately before that phase's worker tasks, so the flat Slack task list visually groups worker activity under its owning phase. Slack does not provide nested task groups; concurrently active phases retain flat arrival order.
 
 For a healthy stream, Slack sends each activity through `chat.appendStream` as a stable `task_update`. For a stream that has permanently ended, Slack sends the same retained task through the existing `chat.update` plan-block fallback.
 
@@ -106,7 +106,7 @@ The task ID, title, status, order, and sources must be identical across transpor
 
 Slack derives URL sources from the latest formatted activity using the existing activity-link extraction.
 
-Worker tasks remain in first-seen call order. Phase tasks retain their declared phase order. Existing terminal titles, final-answer separation, fallback serialization, and queued-reply promotion remain unchanged.
+Worker tasks remain in first-seen call order beneath their active phase. Existing terminal titles, final-answer separation, fallback serialization, and queued-reply promotion remain unchanged.
 
 ## Completion Semantics
 
@@ -121,6 +121,8 @@ If the call fails, its latest activity remains visible with error status and the
 Tests must verify:
 
 - two parallel workers maintain separate stable tasks;
+- future pending phases produce no Slack tasks;
+- an active phase is emitted immediately before its worker tasks;
 - repeated activity from one worker replaces its title rather than accumulating tasks;
 - explicit label, worker-name fallback, and deterministic fallback attribution;
 - commentary, reasoning summaries, tool activity, and nested-agent activity are forwarded through the existing formatter;

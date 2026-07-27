@@ -2965,8 +2965,8 @@ func TestFlushProgressFallsBackToPlanUpdateWhenStreamEnded(t *testing.T) {
 			assert.Equal(t, "/chat.update", requests[1].path)
 			assert.Equal(t, "C123", requests[1].form.Get("channel"))
 			assert.Equal(t, "555.1", requests[1].form.Get("ts"))
-			assert.JSONEq(t, `[{"type":"task_update","id":"run/agent/000000","title":"failure-trace: read: <https://example.com/report|report>","status":"in_progress","sources":[{"type":"url","url":"https://example.com/report","text":"report"}]},{"type":"task_update","id":"run/agent/000001","title":"canonical-owner: grep: ownership","status":"in_progress"},{"type":"task_update","id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress"}]`, requests[0].form.Get("chunks"))
-			assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"run/agent/000000","title":"failure-trace: read: <https://example.com/report|report>","status":"in_progress","sources":[{"type":"url","url":"https://example.com/report","text":"report"}]},{"type":"task_card","task_id":"run/agent/000001","title":"canonical-owner: grep: ownership","status":"in_progress"},{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress"}]}]`, requests[1].form.Get("blocks"))
+			assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress"},{"type":"task_update","id":"run/agent/000000","title":"failure-trace: read: <https://example.com/report|report>","status":"in_progress","sources":[{"type":"url","url":"https://example.com/report","text":"report"}]},{"type":"task_update","id":"run/agent/000001","title":"canonical-owner: grep: ownership","status":"in_progress"}]`, requests[0].form.Get("chunks"))
+			assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress"},{"type":"task_card","task_id":"run/agent/000000","title":"failure-trace: read: <https://example.com/report|report>","status":"in_progress","sources":[{"type":"url","url":"https://example.com/report","text":"report"}]},{"type":"task_card","task_id":"run/agent/000001","title":"canonical-owner: grep: ownership","status":"in_progress"}]}]`, requests[1].form.Get("blocks"))
 
 			agent.Activity, agent.Status = "bash: verify", workflow.PhaseComplete
 			phase.Status, phase.Running, phase.Complete = workflow.PhaseComplete, 0, 3
@@ -2977,7 +2977,7 @@ func TestFlushProgressFallsBackToPlanUpdateWhenStreamEnded(t *testing.T) {
 
 			require.Len(t, requests, 3)
 			assert.Equal(t, "/chat.update", requests[2].path)
-			assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"run/agent/000000","title":"failure-trace: bash: verify","status":"complete"},{"type":"task_card","task_id":"run/agent/000001","title":"canonical-owner: grep: ownership","status":"in_progress"},{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 3/3","status":"complete"}]}]`, requests[2].form.Get("blocks"))
+			assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 3/3","status":"complete"},{"type":"task_card","task_id":"run/agent/000000","title":"failure-trace: bash: verify","status":"complete"},{"type":"task_card","task_id":"run/agent/000001","title":"canonical-owner: grep: ownership","status":"in_progress"}]}]`, requests[2].form.Get("blocks"))
 		})
 	}
 }
@@ -6524,7 +6524,7 @@ func TestSendResponseTerminalIncludesProgressBufferedWhileWaiting(t *testing.T) 
 	require.NoError(t, <-errComplete)
 
 	assert.Contains(t, terminalUpdate.Get("text"), "late activity")
-	assert.JSONEq(t, `[{"type":"plan","title":"Workflow complete","tasks":[{"type":"task_card","task_id":"222.333-activity-1-1","title":"diagnostic","status":"complete"},{"type":"task_card","task_id":"run/agent/000000","title":"worker: verified","status":"complete"},{"type":"task_card","task_id":"run/phase/audit","title":"audit · 3/3","status":"complete"},{"type":"task_card","task_id":"222.333-activity-2-1","title":"late activity","status":"complete"}]}]`, terminalUpdate.Get("blocks"))
+	assert.JSONEq(t, `[{"type":"plan","title":"Workflow complete","tasks":[{"type":"task_card","task_id":"222.333-activity-1-1","title":"diagnostic","status":"complete"},{"type":"task_card","task_id":"run/phase/audit","title":"audit · 3/3","status":"complete"},{"type":"task_card","task_id":"run/agent/000000","title":"worker: verified","status":"complete"},{"type":"task_card","task_id":"222.333-activity-2-1","title":"late activity","status":"complete"}]}]`, terminalUpdate.Get("blocks"))
 }
 
 func TestWorkflowAgentChunksRenderLatestAttributedActivity(t *testing.T) {
@@ -6551,6 +6551,21 @@ func TestWorkflowAgentChunksRenderLatestAttributedActivity(t *testing.T) {
 	require.Len(t, chunks, 1)
 	task := chunks[0].(slack.TaskUpdateChunk)
 	assert.LessOrEqual(t, len([]rune(task.Title)), 256)
+}
+
+func TestSlackTaskStatusMapsWorkflowStatuses(t *testing.T) {
+	for _, tt := range []struct {
+		status workflow.PhaseStatus
+		want   slack.TaskCardStatus
+	}{
+		{status: workflow.PhasePending, want: slack.TaskCardStatusPending},
+		{status: workflow.PhaseInProgress, want: slack.TaskCardStatusInProgress},
+		{status: workflow.PhaseComplete, want: slack.TaskCardStatusComplete},
+		{status: workflow.PhaseError, want: slack.TaskCardStatusError},
+		{status: workflow.PhaseSkipped, want: slack.TaskCardStatusComplete},
+	} {
+		assert.Equal(t, tt.want, slackTaskStatus(tt.status))
+	}
 }
 
 func TestWorkflowAgentUpdatesReplaceStableTask(t *testing.T) {
@@ -6584,22 +6599,76 @@ func TestWorkflowAgentUpdatesReplaceStableTask(t *testing.T) {
 		require.NoError(t, connector.flushProgressText(t.Context(), "run"))
 	}
 
-	phase := events.NewOutboundMessage(events.SourceSlack, "thread", "", events.OutputTargetSlack)
-	phase.TurnID, phase.SlackReply = "run", reply
-	phase.WorkflowPhase = &workflow.PhaseUpdate{PhaseID: "run/phase/investigate", Name: "investigate", Status: workflow.PhaseInProgress, Scheduled: 2}
-	require.NoError(t, connector.SendResponse(t.Context(), phase))
-	require.NoError(t, connector.flushProgressText(t.Context(), "run"))
-
-	require.Len(t, appended, 5)
+	require.Len(t, appended, 4)
 	assert.JSONEq(t, `[{"type":"task_update","id":"run/agent/000000","title":"failure-trace","status":"in_progress"}]`, appended[0].Get("chunks"))
 	assert.JSONEq(t, `[{"type":"task_update","id":"run/agent/000000","title":"failure-trace: read: prompt.md","status":"in_progress"}]`, appended[1].Get("chunks"))
 	assert.JSONEq(t, `[{"type":"task_update","id":"run/agent/000000","title":"failure-trace: grep: turn limit","status":"in_progress"}]`, appended[2].Get("chunks"))
 	assert.JSONEq(t, `[{"type":"task_update","id":"run/agent/000000","title":"failure-trace: grep: turn limit","status":"complete"}]`, appended[3].Get("chunks"))
-	assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/investigate","title":"investigate · 0/2","status":"in_progress"}]`, appended[4].Get("chunks"))
 
 	for _, request := range appended {
 		assert.NotContains(t, request.Get("chunks"), "-activity-")
 	}
+}
+
+func TestWorkflowAgentTasksFollowActivePhase(t *testing.T) {
+	var appended []url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		assert.Equal(t, "/chat.appendStream", r.URL.Path)
+		appended = append(appended, cloneValues(r.PostForm))
+
+		writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	reply := &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+	connector.replies["run"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", AnswerTS: "555.2", thinkingStream: true, thinkingTaskID: "222.333"}
+
+	intake := events.NewOutboundMessage(events.SourceSlack, "thread", "", events.OutputTargetSlack)
+	intake.TurnID, intake.SlackReply = "run", reply
+	intake.WorkflowPhase = &workflow.PhaseUpdate{PhaseID: "run/phase/000000/intake", Name: "intake", Status: workflow.PhaseInProgress}
+	require.NoError(t, connector.SendResponse(t.Context(), intake))
+	require.NoError(t, connector.flushProgressText(t.Context(), "run"))
+	require.Len(t, appended, 1)
+	assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000000/intake","title":"intake","status":"in_progress"}]`, appended[0].Get("chunks"))
+
+	for i, name := range []string{"investigate", "design-tests"} {
+		msg := events.NewOutboundMessage(events.SourceSlack, "thread", "", events.OutputTargetSlack)
+		msg.TurnID, msg.SlackReply = "run", reply
+		msg.WorkflowPhase = &workflow.PhaseUpdate{PhaseID: fmt.Sprintf("run/phase/%06d/%s", i+1, name), Name: name, Status: workflow.PhasePending}
+		require.NoError(t, connector.SendResponse(t.Context(), msg))
+	}
+
+	require.NoError(t, connector.flushProgressText(t.Context(), "run"))
+	require.Len(t, appended, 1, "future pending phases must not occupy Slack task positions")
+
+	phase := events.NewOutboundMessage(events.SourceSlack, "thread", "", events.OutputTargetSlack)
+	phase.TurnID, phase.SlackReply = "run", reply
+	phase.WorkflowPhase = &workflow.PhaseUpdate{PhaseID: "run/phase/000001/investigate", Name: "investigate", Status: workflow.PhaseInProgress, Scheduled: 2, Running: 2}
+	require.NoError(t, connector.SendResponse(t.Context(), phase))
+
+	for _, update := range []workflow.AgentUpdate{
+		{CallID: "run/agent/000000", Label: "failure-trace", Activity: "grep: turn limit", Status: workflow.PhaseInProgress},
+		{CallID: "run/agent/000001", Label: "canonical-owner", Activity: "read: prompt.md", Status: workflow.PhaseInProgress},
+	} {
+		msg := events.NewOutboundMessage(events.SourceSlack, "thread", "", events.OutputTargetSlack)
+		msg.TurnID, msg.SlackReply, msg.WorkflowAgent = "run", reply, &update
+		require.NoError(t, connector.SendResponse(t.Context(), msg))
+	}
+
+	require.NoError(t, connector.flushProgressText(t.Context(), "run"))
+
+	require.Len(t, appended, 2)
+	assert.JSONEq(t, `[
+		{"type":"task_update","id":"run/phase/000001/investigate","title":"investigate · 0/2","status":"in_progress"},
+		{"type":"task_update","id":"run/agent/000000","title":"failure-trace: grep: turn limit","status":"in_progress"},
+		{"type":"task_update","id":"run/agent/000001","title":"canonical-owner: read: prompt.md","status":"in_progress"}
+	]`, appended[1].Get("chunks"))
 }
 
 func TestWorkflowPhaseChunksPreserveOrder(t *testing.T) {
@@ -6644,23 +6713,13 @@ func TestWorkflowPhaseChunksPreserveOrder(t *testing.T) {
 	}
 }
 
-func TestWorkflowPhaseTitlesReplaceProgress(t *testing.T) {
+func TestWorkflowPhaseTitleReplacesProgress(t *testing.T) {
 	const phaseID = "run/phase/000000/summarize"
 
-	for _, tt := range []struct {
-		name  string
-		phase workflow.PhaseUpdate
-		want  string
-	}{
-		{name: "pending", phase: workflow.PhaseUpdate{PhaseID: phaseID, Name: "summarize", Status: workflow.PhasePending, Scheduled: 8}, want: `[{"type":"task_update","id":"run/phase/000000/summarize","title":"summarize · 0/8","status":"pending"}]`},
-		{name: "in progress", phase: workflow.PhaseUpdate{PhaseID: phaseID, Name: "summarize", Status: workflow.PhaseInProgress, Scheduled: 8, Running: 5, Complete: 3}, want: `[{"type":"task_update","id":"run/phase/000000/summarize","title":"summarize · 3/8","status":"in_progress"}]`},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			encoded, err := json.Marshal(slackWorkflowPhaseChunks(map[string]workflow.PhaseUpdate{phaseID: tt.phase}))
-			require.NoError(t, err)
-			assert.JSONEq(t, tt.want, string(encoded))
-		})
-	}
+	phase := workflow.PhaseUpdate{PhaseID: phaseID, Name: "summarize", Status: workflow.PhaseInProgress, Scheduled: 8, Running: 5, Complete: 3}
+	encoded, err := json.Marshal(slackWorkflowPhaseChunks(map[string]workflow.PhaseUpdate{phaseID: phase}))
+	require.NoError(t, err)
+	assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000000/summarize","title":"summarize · 3/8","status":"in_progress"}]`, string(encoded))
 }
 
 func TestWorkflowPhaseContinuousUpdatesDoNotPostponeFlush(t *testing.T) {

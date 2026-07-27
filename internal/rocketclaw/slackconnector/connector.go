@@ -255,7 +255,12 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 	}
 
 	if msg.WorkflowPhase != nil {
+		if msg.WorkflowPhase.Status == workflow.PhasePending {
+			return nil
+		}
+
 		c.bufferWorkflowUpdate(msg.TurnID, &slots, nil, msg.WorkflowPhase)
+
 		return nil
 	}
 
@@ -801,8 +806,8 @@ func (c *Connector) finishCompleteResponse(ctx context.Context, msg *events.Outb
 				workflowAgents = pending.workflowAgents
 				phases = pending.phases
 				chunks = slackThinkingActivityChunks(&pending, activities)
-				chunks = append(chunks, slackWorkflowAgentChunks(workflowAgents)...)
 				chunks = append(chunks, slackWorkflowPhaseChunks(phases)...)
+				chunks = append(chunks, slackWorkflowAgentChunks(workflowAgents)...)
 				pending.tasks = slackMergeThinkingTasks(pending.tasks, chunks)
 
 				c.mu.Lock()
@@ -1103,8 +1108,8 @@ func (c *Connector) flushProgressText(ctx context.Context, turnID string) error 
 			workflowAgents := maps.Clone(pending.workflowAgents)
 			phases := maps.Clone(pending.phases)
 			chunks := slackThinkingActivityChunks(&pending, activities)
-			chunks = append(chunks, slackWorkflowAgentChunks(workflowAgents)...)
 			chunks = append(chunks, slackWorkflowPhaseChunks(phases)...)
+			chunks = append(chunks, slackWorkflowAgentChunks(workflowAgents)...)
 			pending.tasks = slackMergeThinkingTasks(pending.tasks, chunks)
 			c.thinking[turnID] = pending
 			c.mu.Unlock()
@@ -1179,8 +1184,8 @@ func (c *Connector) flushProgressText(ctx context.Context, turnID string) error 
 			workflowAgents = maps.Clone(pending.workflowAgents)
 			phases = maps.Clone(pending.phases)
 			chunks := slackThinkingActivityChunks(&pending, activities)
-			chunks = append(chunks, slackWorkflowAgentChunks(workflowAgents)...)
 			chunks = append(chunks, slackWorkflowPhaseChunks(phases)...)
+			chunks = append(chunks, slackWorkflowAgentChunks(workflowAgents)...)
 			pending.tasks = slackMergeThinkingTasks(pending.tasks, chunks)
 		}
 
