@@ -205,6 +205,46 @@ func NewWithProviders(
 	}
 
 	config := normalizeConfig(configInput)
+	if _, err := parseModelRef(config.Model); err != nil {
+		return nil, err
+	}
+
+	if config.AutoApproverModel != "" {
+		if _, err := parseModelRef(config.AutoApproverModel); err != nil {
+			return nil, fmt.Errorf("auto approver model: %w", err)
+		}
+	}
+
+	if err := validateAgentModels(agents); err != nil {
+		return nil, err
+	}
+
+	if err := requireProvider(providers); err != nil {
+		return nil, err
+	}
+
+	return NewWithModelResolver(openAIModelResolver{client: providers.OpenAI}, configInput, root, agents, skills, defaultAgent, diagnosticsWriter)
+}
+
+// NewWithModelResolver loads the supplied runtime dependencies and resolves the active agent model.
+func NewWithModelResolver(
+	resolver ModelResolver,
+	configInput *Config,
+	root *os.Root,
+	agents Agents,
+	skills Skills,
+	defaultAgent string,
+	diagnosticsWriter io.Writer,
+) (*Runtime, error) {
+	if resolver == nil {
+		return nil, errors.New("resolver is required")
+	}
+
+	if configInput == nil {
+		return nil, errors.New("config is required")
+	}
+
+	config := normalizeConfig(configInput)
 
 	if root == nil {
 		return nil, errors.New("root is required")
@@ -286,31 +326,9 @@ func NewWithProviders(
 	rootInstructions = strings.TrimSpace(rootInstructions) + "\n\n" + fmt.Sprintf("<current-workspace>\nWorkspace root: %s\n</current-workspace>", promptExpansion.hostDir)
 	systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + strings.TrimSpace(rootInstructions))
 
-	defaultModelRef, err := parseModelRef(config.Model)
-	if err != nil {
-		return nil, err
-	}
-
-	autoApproverModelRef := defaultModelRef
-	if config.AutoApproverModel != "" {
-		autoApproverModelRef, err = parseModelRef(config.AutoApproverModel)
-		if err != nil {
-			return nil, fmt.Errorf("auto approver model: %w", err)
-		}
-	}
-
-	if err := validateAgentModels(agents); err != nil {
-		return nil, err
-	}
-
-	modelRef, err := resolveAgentModelRef(activeAgent.Model)
+	client, origin, err := resolveModel(resolver, activeAgent.Model)
 	if err != nil {
 		return nil, fmt.Errorf("agent %q model: %w", activeAgent.Name, err)
-	}
-
-	providerClient, err := responsesAPIForModel(providers)
-	if err != nil {
-		return nil, err
 	}
 
 	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, string(config.ReasoningEffort)))
@@ -325,11 +343,9 @@ func NewWithProviders(
 
 	maps.Copy(baseTools, customTools)
 	factory := &toolFactory{
-		client:                     providerClient.client,
+		resolver:                   resolver,
 		systemPrompt:               systemPrompt,
-		defaultModelRef:            defaultModelRef,
-		autoApproverModelRef:       autoApproverModelRef,
-		modelRef:                   modelRef,
+		autoApproverModel:          cmp.Or(config.AutoApproverModel, config.Model),
 		reasoningEffort:            reasoningEffort,
 		compactThreshold:           config.CompactThreshold,
 		compactionSteering:         config.CompactionSteering,
@@ -352,11 +368,11 @@ func NewWithProviders(
 
 	looper := &looper{
 		agent:                  activeAgent,
-		modelRef:               modelRef,
-		Client:                 providerClient.client,
+		ProviderOrigin:         origin,
+		Client:                 responseServiceClient{service: &client.Responses},
 		SystemPrompt:           runtimeSystemPrompt,
-		Model:                  modelRef.apiModel,
-		DisplayModel:           modelRef.display(),
+		Model:                  origin.Model,
+		DisplayModel:           origin.displayModel(),
 		ReasoningEffort:        reasoningEffort,
 		Verbosity:              activeAgent.Verbosity,
 		CompactThreshold:       config.CompactThreshold,
@@ -504,18 +520,6 @@ func validateAgentModels(agents Agents) error {
 	}
 
 	return nil
-}
-
-type responsesAPISelection struct {
-	client responsesAPI
-}
-
-func responsesAPIForModel(providers Providers) (responsesAPISelection, error) {
-	if err := requireProvider(providers); err != nil {
-		return responsesAPISelection{}, err
-	}
-
-	return responsesAPISelection{client: responseServiceClient{service: &providers.OpenAI.Responses}}, nil
 }
 
 func printRuntimeDiagnostics(w io.Writer, activeAgent *Agent, tools map[string]looperTool, skills Skills, systemPrompt string) error {

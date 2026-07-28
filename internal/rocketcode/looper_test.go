@@ -1,10 +1,12 @@
 package rocketcode
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +23,102 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
+
+func testResolverForResponsesAPI(api responsesAPI) testModelResolverFunc {
+	middleware := func(req *http.Request, _ option.MiddlewareNext) (*http.Response, error) {
+		data, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, fmt.Errorf("read test SDK request: %w", err)
+		}
+
+		var params responses.ResponseNewParams
+		if err := json.Unmarshal(data, &params); err != nil {
+			return nil, fmt.Errorf("decode test SDK request: %w", err)
+		}
+
+		resp, err := api.New(req.Context(), &params)
+		if err != nil {
+			return nil, fmt.Errorf("invoke test responses API: %w", err)
+		}
+
+		data, err = json.Marshal(testSDKResponseBody(resp))
+		if err != nil {
+			return nil, fmt.Errorf("encode test SDK response: %w", err)
+		}
+
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(bytes.NewReader(data)), Request: req}, nil
+	}
+	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithMiddleware(middleware))
+
+	return testModelResolverFunc(func(model string) (*openai.Client, ProviderOrigin, error) {
+		ref, err := resolveAgentModelRef(model)
+		if err != nil {
+			return nil, ProviderOrigin{}, err
+		}
+
+		return &client, ProviderOrigin{Provider: "openai", Model: ref.apiModel}, nil
+	})
+}
+
+type testSDKResponse struct {
+	ID     string          `json:"id"`
+	Status string          `json:"status,omitempty"`
+	Output []testSDKOutput `json:"output"`
+}
+
+type testSDKOutput struct {
+	ID               string           `json:"id"`
+	Type             string           `json:"type"`
+	CallID           string           `json:"call_id,omitempty"`
+	Name             string           `json:"name,omitempty"`
+	Arguments        string           `json:"arguments,omitempty"`
+	Status           string           `json:"status,omitempty"`
+	Role             string           `json:"role,omitempty"`
+	Phase            string           `json:"phase,omitempty"`
+	EncryptedContent string           `json:"encrypted_content,omitempty"`
+	Content          []testSDKContent `json:"content,omitempty"`
+	Summary          []testSDKSummary `json:"summary,omitempty"`
+}
+
+type testSDKContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type testSDKSummary struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+func testSDKResponseBody(resp *responses.Response) testSDKResponse {
+	body := testSDKResponse{ID: resp.ID, Status: string(resp.Status), Output: make([]testSDKOutput, 0, len(resp.Output))}
+	for i := range resp.Output {
+		item := &resp.Output[i]
+
+		output := testSDKOutput{
+			ID:               item.ID,
+			Type:             item.Type,
+			CallID:           item.CallID,
+			Name:             item.Name,
+			Arguments:        item.Arguments.OfString,
+			Status:           item.Status,
+			Role:             item.Role,
+			Phase:            string(item.Phase),
+			EncryptedContent: item.EncryptedContent,
+		}
+		for j := range item.Content {
+			output.Content = append(output.Content, testSDKContent{Type: item.Content[j].Type, Text: item.Content[j].Text})
+		}
+
+		for j := range item.Summary {
+			output.Summary = append(output.Summary, testSDKSummary{Type: string(item.Summary[j].Type), Text: item.Summary[j].Text})
+		}
+
+		body.Output = append(body.Output, output)
+	}
+
+	return body
+}
 
 type mockResponsesAPI struct {
 	mu               sync.Mutex
@@ -190,7 +288,7 @@ func contextLengthExceededError() error {
 func testLooper(client responsesAPI) *looper {
 	var l looper
 
-	l.modelRef = defaultModelRef()
+	l.ProviderOrigin = ProviderOrigin{Provider: "openai", Model: openai.ChatModelGPT5}
 	l.Client = client
 	l.Model = openai.ChatModelGPT5
 	l.PermissionReviewer = inertPermissionReviewer{}
@@ -202,7 +300,7 @@ func testLooper(client responsesAPI) *looper {
 func emptyTestLooper() *looper {
 	var l looper
 
-	l.modelRef = defaultModelRef()
+	l.ProviderOrigin = ProviderOrigin{Provider: "openai", Model: openai.ChatModelGPT5}
 	l.PermissionReviewer = inertPermissionReviewer{}
 	l.CheckpointSink = InertCheckpointSink{}
 
@@ -284,6 +382,8 @@ func subagentDiagnosticResponse(diagnostic *SubagentDiagnostic) ChatResponse {
 func providerDiagnosticResponse(diagnostic *ProviderDiagnostic) ChatResponse {
 	var response ChatResponse
 
+	diagnostic.Provider = "openai"
+	diagnostic.Model = openai.ChatModelGPT5
 	response.Kind = ChatResponseAssistantTool
 	response.Provider = diagnostic
 
@@ -1650,19 +1750,16 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 }
 
 func TestPermissionReviewFailsClosedOnInvalidReviewerOutput(t *testing.T) {
-	modelRef, err := parseModelRef(openai.ChatModelGPT5)
-	require.NoError(t, err)
+	mock := mockResponses(responseWithMessage("review", "not json"))
 
 	factory := &toolFactory{
-		client:               mockResponses(responseWithMessage("review", "not json")),
-		defaultModelRef:      modelRef,
-		autoApproverModelRef: modelRef,
-		modelRef:             modelRef,
-		agents:               Agents{Items: map[string]Agent{}},
-		skills:               Skills{Items: map[string]Skill{}},
-		baseTools:            map[string]looperTool{},
-		shellOutput:          shellOutputConfig{},
-		childRunLogger:       DiscardChildRunLog,
+		resolver:          testResolverForResponsesAPI(mock),
+		autoApproverModel: openai.ChatModelGPT5,
+		agents:            Agents{Items: map[string]Agent{}},
+		skills:            Skills{Items: map[string]Skill{}},
+		baseTools:         map[string]looperTool{},
+		shellOutput:       shellOutputConfig{},
+		childRunLogger:    DiscardChildRunLog,
 	}
 
 	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, make(chan ChatResponse, 10))

@@ -78,7 +78,7 @@ type toolCallMetadata struct {
 // looper runs conversational turns against the configured model and tools.
 type looper struct {
 	agent                  Agent
-	modelRef               modelRef
+	ProviderOrigin         ProviderOrigin
 	Client                 responsesAPI
 	SystemPrompt           string
 	Model                  shared.ResponsesModel
@@ -238,6 +238,8 @@ type SubagentDiagnostic struct {
 
 // ProviderDiagnostic describes provider request diagnostics emitted when diagnostics are enabled.
 type ProviderDiagnostic struct {
+	Provider       string            `json:"provider"`
+	Model          string            `json:"model"`
 	Phase          string            `json:"phase"`
 	HTTPStatus     int               `json:"http_status,omitempty"`
 	ResponseStatus string            `json:"response_status,omitempty"`
@@ -1010,10 +1012,10 @@ func (l *looper) newProviderResponse(
 	output chan<- ChatResponse,
 	checkpointCompacted func([]responses.ResponseInputItemUnionParam) error,
 ) (resp *responses.Response, recoveredHistory []responses.ResponseInputItemUnionParam, err error) {
-	provider := "openai"
+	provider := l.ProviderOrigin.Provider
 
 	ctx, span := l.Observability.startSpan(ctx, "rocketcode.provider", semconv.SpanKindLLM,
-		attribute.String(semconv.LLMModelName, l.DisplayModel),
+		attribute.String(semconv.LLMModelName, l.ProviderOrigin.Model),
 		attribute.String(semconv.LLMProvider, provider),
 	)
 	defer func() {
@@ -1039,7 +1041,7 @@ func (l *looper) newProviderResponse(
 
 func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam) error) (*responses.Response, []responses.ResponseInputItemUnionParam, error) {
 	attempt := 0
-	provider := "openai"
+	provider := l.ProviderOrigin.Provider
 
 	for {
 		var raw *http.Response
@@ -1838,6 +1840,8 @@ func (l *looper) emitToolDiagnostic(output chan<- ChatResponse, diagnostic *Tool
 }
 
 func (l *looper) emitProviderDiagnostic(ctx context.Context, output chan<- ChatResponse, diagnostic *ProviderDiagnostic) {
+	diagnostic.Provider = l.ProviderOrigin.Provider
+	diagnostic.Model = l.ProviderOrigin.Model
 	recordProviderDiagnosticEvent(ctx, diagnostic)
 
 	if !l.Diagnostics {

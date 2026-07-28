@@ -38,24 +38,20 @@ func TestEmbeddedGuardianAgentUsesLowReasoningEffort(t *testing.T) {
 }
 
 func TestPermissionReviewLogsHiddenChildRunOutput(t *testing.T) {
-	modelRef, err := parseModelRef(openai.ChatModelGPT5)
-	require.NoError(t, err)
-
 	var childRunEvents []ChildRunEvent
 
+	mock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
+		testReasoningOutputItem("review-reasoning", "", "considering risk"),
+		testMessageOutputItem("review-commentary", "commentary", "checking authorization"),
+		testMessageOutputItem("review-final", "", `{"risk_level":"low","user_authorization":"medium","outcome":"allow","rationale":"Low-risk action."}`),
+	}))
 	factory := &toolFactory{
-		client: mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
-			testReasoningOutputItem("review-reasoning", "", "considering risk"),
-			testMessageOutputItem("review-commentary", "commentary", "checking authorization"),
-			testMessageOutputItem("review-final", "", `{"risk_level":"low","user_authorization":"medium","outcome":"allow","rationale":"Low-risk action."}`),
-		})),
-		defaultModelRef:      modelRef,
-		autoApproverModelRef: modelRef,
-		modelRef:             modelRef,
-		agents:               Agents{Items: map[string]Agent{}},
-		skills:               Skills{Items: map[string]Skill{}},
-		baseTools:            map[string]looperTool{},
-		shellOutput:          shellOutputConfig{},
+		resolver:          testResolverForResponsesAPI(mock),
+		autoApproverModel: openai.ChatModelGPT5,
+		agents:            Agents{Items: map[string]Agent{}},
+		skills:            Skills{Items: map[string]Skill{}},
+		baseTools:         map[string]looperTool{},
+		shellOutput:       shellOutputConfig{},
 		childRunLogger: func(event *ChildRunEvent) {
 			childRunEvents = append(childRunEvents, *event)
 		},
@@ -79,24 +75,17 @@ func TestPermissionReviewLogsHiddenChildRunOutput(t *testing.T) {
 }
 
 func TestPermissionReviewUsesConfiguredAutoApproverModel(t *testing.T) {
-	defaultModel, err := parseModelRef("gpt-5.5")
-	require.NoError(t, err)
-	autoApproverModel, err := parseModelRef("gpt-5.4-mini")
-	require.NoError(t, err)
-
 	mock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
 		testMessageOutputItem("review-final", "", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low-risk action."}`),
 	}))
 	factory := &toolFactory{
-		client:               mock,
-		defaultModelRef:      defaultModel,
-		autoApproverModelRef: autoApproverModel,
-		modelRef:             defaultModel,
-		agents:               Agents{Items: map[string]Agent{}},
-		skills:               Skills{Items: map[string]Skill{}},
-		baseTools:            map[string]looperTool{},
-		shellOutput:          shellOutputConfig{},
-		childRunLogger:       DiscardChildRunLog,
+		resolver:          testResolverForResponsesAPI(mock),
+		autoApproverModel: "gpt-5.4-mini",
+		agents:            Agents{Items: map[string]Agent{}},
+		skills:            Skills{Items: map[string]Skill{}},
+		baseTools:         map[string]looperTool{},
+		shellOutput:       shellOutputConfig{},
+		childRunLogger:    DiscardChildRunLog,
 	}
 
 	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, make(chan ChatResponse, 10))
@@ -104,6 +93,49 @@ func TestPermissionReviewUsesConfiguredAutoApproverModel(t *testing.T) {
 	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
 	require.Len(t, mock.calls, 1)
 	require.Equal(t, "gpt-5.4-mini", mock.calls[0].Model)
+}
+
+func TestPermissionReviewResolvesEmbeddedAutoApproverIndependently(t *testing.T) {
+	rootClient, rootRequests := testResolverClient(t, "wrong")
+	reviewClient, reviewRequests := testResolverClient(t, `{"risk_level":"low","user_authorization":"medium","outcome":"allow","rationale":"ok"}`)
+	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
+	factory.autoApproverModel = "gpt-review"
+	factory.resolver = testModelResolverFunc(func(model string) (*openai.Client, ProviderOrigin, error) {
+		if model == "gpt-review" {
+			return reviewClient, ProviderOrigin{Provider: "work", Model: "review-api"}, nil
+		}
+
+		return rootClient, ProviderOrigin{Provider: "openai", Model: model}, nil
+	})
+
+	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ReviewerEmbedded: true}, make(chan ChatResponse, 8))
+
+	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
+	require.Len(t, reviewRequests, 1)
+	require.Contains(t, <-reviewRequests, `"model":"review-api"`)
+	require.Empty(t, rootRequests)
+}
+
+func TestPermissionReviewResolvesCustomReviewerIndependently(t *testing.T) {
+	rootClient, rootRequests := testResolverClient(t, "wrong")
+	reviewClient, reviewRequests := testResolverClient(t, `{"risk_level":"low","user_authorization":"medium","outcome":"allow","rationale":"ok"}`)
+	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{
+		"release": {Name: "release", Model: "review/release"},
+	}})
+	factory.resolver = testModelResolverFunc(func(model string) (*openai.Client, ProviderOrigin, error) {
+		if model == "review/release" {
+			return reviewClient, ProviderOrigin{Provider: "review", Model: "release-api"}, nil
+		}
+
+		return rootClient, ProviderOrigin{Provider: "openai", Model: model}, nil
+	})
+
+	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{Reviewer: "release"}, make(chan ChatResponse, 8))
+
+	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
+	require.Len(t, reviewRequests, 1)
+	require.Contains(t, <-reviewRequests, `"model":"release-api"`)
+	require.Empty(t, rootRequests)
 }
 
 func TestPermissionReviewPromptIncludesReviewContextAndPlannedAction(t *testing.T) {

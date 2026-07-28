@@ -200,20 +200,18 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		childFactory.recursionRemaining = &remaining
 	}
 
-	modelRef, err := resolveAgentModelRef(agent.Model)
+	client, origin, err := resolveModel(f.resolver, agent.Model)
 	if err != nil {
 		return "", err
 	}
 
-	childFactory.modelRef = modelRef
-
 	child := &looper{
 		agent:                  agent,
-		modelRef:               modelRef,
-		Client:                 f.client,
+		ProviderOrigin:         origin,
+		Client:                 responseServiceClient{service: &client.Responses},
 		SystemPrompt:           systemPrompt,
-		Model:                  modelRef.apiModel,
-		DisplayModel:           modelRef.display(),
+		Model:                  origin.Model,
+		DisplayModel:           origin.displayModel(),
 		ReasoningEffort:        shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
 		Verbosity:              agent.Verbosity,
 		CompactThreshold:       f.compactThreshold,
@@ -336,22 +334,21 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 
 	responseFormat := guardrailResponseFormat()
 
-	modelRef, err := resolveAgentModelRef(agent.Model)
+	client, origin, err := resolveModel(f.resolver, agent.Model)
 	if err != nil {
 		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail model failed: " + err.Error()}
 	}
 
 	childFactory := *f
 	childFactory.inGuardrailRun = true
-	childFactory.modelRef = modelRef
 
 	child := &looper{
 		agent:                  agent,
-		modelRef:               modelRef,
-		Client:                 f.client,
+		ProviderOrigin:         origin,
+		Client:                 responseServiceClient{service: &client.Responses},
 		SystemPrompt:           composeSystemPromptWithSkills(agent.Prompt, f.skills, &agent),
-		Model:                  modelRef.apiModel,
-		DisplayModel:           modelRef.display(),
+		Model:                  origin.Model,
+		DisplayModel:           origin.displayModel(),
 		ReasoningEffort:        shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
 		Verbosity:              agent.Verbosity,
 		CompactThreshold:       f.compactThreshold,

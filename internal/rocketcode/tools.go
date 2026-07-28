@@ -19,11 +19,9 @@ import (
 )
 
 type toolFactory struct {
-	client                     responsesAPI
+	resolver                   ModelResolver
 	systemPrompt               string
-	defaultModelRef            modelRef
-	autoApproverModelRef       modelRef
-	modelRef                   modelRef
+	autoApproverModel          string
 	reasoningEffort            shared.ReasoningEffort
 	compactThreshold           int64
 	compactionSteering         string

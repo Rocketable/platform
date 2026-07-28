@@ -157,12 +157,9 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 		return Agent{}, fmt.Errorf("%s: model: %w", filePath, err)
 	}
 
-	parsedModel, err := resolveAgentModelRef(model)
-	if err != nil {
-		return Agent{}, fmt.Errorf("%s: model: %w", filePath, err)
+	if strings.TrimSpace(model) == "" {
+		return Agent{}, fmt.Errorf("%s: model: required non-empty string", filePath)
 	}
-
-	model = parsedModel.display()
 
 	return Agent{
 		Name:            name,

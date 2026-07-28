@@ -134,7 +134,7 @@ Strictly follow the rules.
 
 		require.Empty(t, result.Errors)
 		require.Equal(t, "Review code: security and performance", result.Agents.Items["review"].Description)
-		require.Equal(t, "gpt-5.4", result.Agents.Items["review"].Model)
+		require.Equal(t, "openai/gpt-5.4", result.Agents.Items["review"].Model)
 	})
 
 	t.Run("keeps prompt shell commands raw", func(t *testing.T) {

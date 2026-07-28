@@ -3,6 +3,7 @@ package rocketcode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,184 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/stretchr/testify/require"
 )
+
+type testModelResolverFunc func(string) (*openai.Client, ProviderOrigin, error)
+
+func (f testModelResolverFunc) Resolve(model string) (*openai.Client, ProviderOrigin, error) {
+	return f(model)
+}
+
+func testResolverClient(t *testing.T, output string) (client *openai.Client, requests <-chan string) {
+	t.Helper()
+
+	quotedOutput, err := json.Marshal(output)
+	require.NoError(t, err)
+
+	requestBodies := make(chan string, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request body: %v", err)
+			return
+		}
+
+		requestBodies <- string(data)
+
+		w.Header().Set("Content-Type", "application/json")
+
+		_, err = io.WriteString(w, `{"id":"resp-test","object":"response","created_at":1,"model":"test-model","output":[{"id":"msg-1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":`+string(quotedOutput)+`}]}],"parallel_tool_calls":true}`)
+		if err != nil {
+			t.Errorf("write response body: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	resolvedClient := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
+
+	return &resolvedClient, requestBodies
+}
+
+func TestNewWithModelResolverRequiresResolverBeforeInitialization(t *testing.T) {
+	_, err := NewWithModelResolver(nil, nil, nil, Agents{}, Skills{}, "", nil)
+
+	require.EqualError(t, err, "resolver is required")
+}
+
+func TestNewWithModelResolverRejectsEmptyRootModelWithoutResolving(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	for _, model := range []string{"", "   "} {
+		t.Run(model, func(t *testing.T) {
+			calls := 0
+			resolver := testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
+				calls++
+				client := openai.NewClient()
+
+				return &client, ProviderOrigin{Provider: "openai", Model: "gpt-5.5"}, nil
+			})
+
+			_, err := NewWithModelResolver(resolver, testConfig(dir), root, Agents{Items: map[string]Agent{
+				"main": {Name: "main", Model: model, Prompt: "prompt"},
+			}}, Skills{Items: map[string]Skill{}}, "main", nil)
+
+			require.ErrorContains(t, err, "required non-empty string")
+			require.Zero(t, calls)
+		})
+	}
+}
+
+func TestNewWithModelResolverResolvesRootAgent(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	defaultClient, defaultRequests := testResolverClient(t, "wrong")
+	workClient, workRequests := testResolverClient(t, "work answer")
+
+	var resolved []string
+
+	resolver := testModelResolverFunc(func(model string) (*openai.Client, ProviderOrigin, error) {
+		resolved = append(resolved, model)
+		if model == "work/gpt-5.5" {
+			return workClient, ProviderOrigin{Provider: "work", Model: "gpt-5.5"}, nil
+		}
+
+		return defaultClient, ProviderOrigin{Provider: "openai", Model: model}, nil
+	})
+	loop, err := NewWithModelResolver(resolver, testConfig(dir), root, Agents{Items: map[string]Agent{
+		"main":   {Name: "main", Model: "work/gpt-5.5", Prompt: "prompt"},
+		"unused": {Name: "unused", Model: "   ", Prompt: "unused"},
+	}}, Skills{Items: map[string]Skill{}}, "main", nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"work/gpt-5.5"}, resolved)
+
+	output := make(chan ChatResponse, 8)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "hello", output)
+
+	close(input)
+	require.NoError(t, loop.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1)))
+	require.Len(t, workRequests, 1)
+	require.Contains(t, <-workRequests, `"model":"gpt-5.5"`)
+	require.Empty(t, defaultRequests)
+}
+
+func TestNewWithModelResolverRejectsUnknownProvider(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	client := openai.NewClient()
+	tests := []struct {
+		name     string
+		resolve  testModelResolverFunc
+		wantText string
+	}{
+		{name: "resolver error", resolve: func(string) (*openai.Client, ProviderOrigin, error) {
+			return nil, ProviderOrigin{}, errors.New("unknown provider work")
+		}, wantText: "unknown provider work"},
+		{name: "nil client", resolve: func(string) (*openai.Client, ProviderOrigin, error) {
+			return nil, ProviderOrigin{Provider: "work", Model: "gpt-5.5"}, nil
+		}, wantText: "client is required"},
+		{name: "empty provider", resolve: func(string) (*openai.Client, ProviderOrigin, error) {
+			return &client, ProviderOrigin{Model: "gpt-5.5"}, nil
+		}, wantText: "provider is required"},
+		{name: "empty model", resolve: func(string) (*openai.Client, ProviderOrigin, error) {
+			return &client, ProviderOrigin{Provider: "work"}, nil
+		}, wantText: "model is required"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewWithModelResolver(tt.resolve, testConfig(dir), root, Agents{Items: map[string]Agent{
+				"main": {Name: "main", Model: "work/gpt-5.5", Prompt: "prompt"},
+			}}, Skills{Items: map[string]Skill{}}, "main", nil)
+
+			require.ErrorContains(t, err, tt.wantText)
+		})
+	}
+}
+
+func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	client, _ := testResolverClient(t, "answer")
+	resolver := testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
+		return client, ProviderOrigin{Provider: "work", Model: "gpt-5.5"}, nil
+	})
+	loop, err := NewWithModelResolver(resolver, testConfig(dir), root, Agents{Items: map[string]Agent{
+		"main": {Name: "main", Model: "work/template", Prompt: "prompt"},
+	}}, Skills{Items: map[string]Skill{}}, "main", nil)
+
+	require.NoError(t, err)
+	require.Equal(t, "gpt-5.5", loop.Model)
+	require.Equal(t, "work/gpt-5.5", loop.DisplayModel)
+	require.Equal(t, ProviderOrigin{Provider: "work", Model: "gpt-5.5"}, loop.ProviderOrigin)
+
+	output := make(chan ChatResponse, 8)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "hello", output)
+
+	close(input)
+
+	var saved SessionEntry
+
+	require.NoError(t, loop.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
+		saved = entry
+		return nil
+	}, make(chan os.Signal, 1)))
+	require.Equal(t, "work/gpt-5.5", saved.Model)
+}
 
 func TestParseModelRef(t *testing.T) {
 	for _, tc := range []struct{ name, model, apiModel, display string }{

@@ -3,13 +3,81 @@ package rocketcode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 
+	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
+
+func TestTaskRejectsEmptySubagentModelWithoutResolving(t *testing.T) {
+	for _, model := range []string{"", "   "} {
+		t.Run(model, func(t *testing.T) {
+			calls := 0
+			factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{
+				"child": {Name: "child", Model: model},
+			}})
+			factory.resolver = testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
+				calls++
+				return nil, ProviderOrigin{}, errors.New("resolver called")
+			})
+
+			_, err := factory.runTask(context.Background(), testTaskParams("Child", "do it", "child"), toolCallMetadata{}, testTaskOutput())
+
+			require.ErrorContains(t, err, "required non-empty string")
+			require.Zero(t, calls)
+		})
+	}
+}
+
+func TestTaskResolvesSubagentModelIndependently(t *testing.T) {
+	rootClient, rootRequests := testResolverClient(t, "wrong")
+	workClient, workRequests := testResolverClient(t, "child answer")
+	resolver := testModelResolverFunc(func(model string) (*openai.Client, ProviderOrigin, error) {
+		if model == "work/gpt-child" {
+			return workClient, ProviderOrigin{Provider: "work", Model: "api-child"}, nil
+		}
+
+		return rootClient, ProviderOrigin{Provider: "openai", Model: model}, nil
+	})
+	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{
+		"child": {Name: "child", Model: "work/gpt-child"},
+	}})
+	factory.resolver = resolver
+
+	got, err := factory.runTask(context.Background(), testTaskParams("Child", "do it", "child"), toolCallMetadata{}, testTaskOutput())
+
+	require.NoError(t, err)
+	require.Equal(t, "<task_result>\nchild answer\n</task_result>", got)
+	require.Len(t, workRequests, 1)
+	require.Contains(t, <-workRequests, `"model":"api-child"`)
+	require.Empty(t, rootRequests)
+}
+
+func TestTaskResolvesGuardrailModelIndependently(t *testing.T) {
+	rootClient, rootRequests := testResolverClient(t, "wrong")
+	guardClient, guardRequests := testResolverClient(t, `{"approved":false,"reason":"blocked"}`)
+	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
+	factory.resolver = testModelResolverFunc(func(model string) (*openai.Client, ProviderOrigin, error) {
+		if model == "safety/guard" {
+			return guardClient, ProviderOrigin{Provider: "safety", Model: "guard-api"}, nil
+		}
+
+		return rootClient, ProviderOrigin{Provider: "openai", Model: model}, nil
+	})
+	agent := Agent{Name: "guard", Model: "safety/guard"}
+
+	decision := factory.runGuardrail(context.Background(), &agent, ChildRunStageDelegation, "review", "child", toolCallMetadata{}, testTaskOutput())
+
+	require.False(t, decision.Approved)
+	require.Equal(t, "blocked", decision.Reason)
+	require.Len(t, guardRequests, 1)
+	require.Contains(t, <-guardRequests, `"model":"guard-api"`)
+	require.Empty(t, rootRequests)
+}
 
 func TestTaskTool(t *testing.T) {
 	t.Run("returns last final child text wrapped in task result", func(t *testing.T) {
@@ -576,8 +644,8 @@ func TestLooperTaskMaxRecursion(t *testing.T) {
 		err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
 
 		require.NoError(t, err)
-		require.Equal(t, []ChatResponse{assistantMessage("parent done")}, collectResponses(output))
 		require.Len(t, mock.calls, 5)
+		require.Equal(t, []ChatResponse{assistantMessage("parent done")}, collectResponses(output))
 		require.Contains(t, marshalJSON(t, mock.calls[3].Input.OfInputItemList), "grandchild done")
 	})
 
@@ -699,8 +767,8 @@ func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
 
 	var factory toolFactory
 
-	factory.client = client
-	factory.modelRef = defaultModelRef()
+	factory.resolver = testResolverForResponsesAPI(client)
+	factory.autoApproverModel = defaultModelRef().display()
 	factory.agents = agents
 	factory.skills = Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}
 	factory.baseTools = map[string]looperTool{

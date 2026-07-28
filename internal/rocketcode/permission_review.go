@@ -25,7 +25,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	}
 
 	agent := embeddedGuardianAgent()
-	agent.Model = f.autoApproverModelRef.display()
+	agent.Model = f.autoApproverModel
 
 	if !request.ReviewerEmbedded {
 		customAgent, ok := f.agents.Items[request.Reviewer]
@@ -39,22 +39,21 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	agent.Permission = f.shellOutput.effectivePermissions(agent.Permission)
 	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
 
-	modelRef, err := resolveAgentModelRef(agent.Model)
+	client, origin, err := resolveModel(f.resolver, agent.Model)
 	if err != nil {
 		return permissionReviewFailure("automatic permission reviewer model failed: " + err.Error())
 	}
 
 	childFactory := *f
 	childFactory.inPermissionReview = true
-	childFactory.modelRef = modelRef
 
 	child := &looper{
 		agent:                  agent,
-		modelRef:               modelRef,
-		Client:                 f.client,
+		ProviderOrigin:         origin,
+		Client:                 responseServiceClient{service: &client.Responses},
 		SystemPrompt:           composeSystemPromptWithSkills(agent.Prompt, f.skills, &agent),
-		Model:                  modelRef.apiModel,
-		DisplayModel:           modelRef.display(),
+		Model:                  origin.Model,
+		DisplayModel:           origin.displayModel(),
 		ReasoningEffort:        shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
 		Verbosity:              agent.Verbosity,
 		CompactThreshold:       f.compactThreshold,

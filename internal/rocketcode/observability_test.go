@@ -57,6 +57,39 @@ func TestObservabilityEmitsAgentProviderAndToolSpans(t *testing.T) {
 	require.Contains(t, spans[1].Attributes(), attribute.String(semconv.OutputValue, "file contents"))
 }
 
+func TestObservabilityUsesResolvedProviderAndModel(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	looper := testLooper(mockResponses(failedResponseWithCode("resp-failed", responses.ResponseErrorCodeInvalidPrompt, "bad prompt")))
+	looper.ProviderOrigin = ProviderOrigin{Provider: "work", Model: "api-model"}
+	looper.Model = "api-model"
+	looper.DisplayModel = "work/api-model"
+	looper.Diagnostics = true
+	looper.Observability = ObservabilityConfig{Enabled: true, Tracer: provider.Tracer("test")}
+	output := make(chan ChatResponse, 4)
+
+	record, rendered, interrupted, err := looper.runTurn(context.Background(), output, nil, nil, testPromptInput(PromptInputRoleUser, "question", nil))
+	require.Error(t, err)
+	require.Empty(t, record.ResponseID)
+	require.Empty(t, rendered)
+	require.False(t, interrupted)
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 2)
+	require.Contains(t, spans[0].Attributes(), attribute.String(semconv.LLMProvider, "work"))
+	require.Contains(t, spans[0].Attributes(), attribute.String(semconv.LLMModelName, "api-model"))
+	require.NotContains(t, spans[0].Attributes(), attribute.String(semconv.LLMModelName, "work/api-model"))
+
+	diagnostics := drainBufferedResponses(output)
+	require.Len(t, diagnostics, 1)
+	require.Equal(t, "work", diagnostics[0].Provider.Provider)
+	require.Equal(t, "api-model", diagnostics[0].Provider.Model)
+	encoded, err := json.Marshal(diagnostics[0].Provider)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "test-key")
+	require.NotContains(t, string(encoded), "token")
+}
+
 func TestObservabilityRedactionComesFromConfigObject(t *testing.T) {
 	t.Setenv(instrumentation.EnvHideInputs, "false")
 	t.Setenv(instrumentation.EnvHideOutputs, "false")
@@ -112,6 +145,8 @@ func TestObservabilityEmitsProviderDiagnosticSpanEvents(t *testing.T) {
 		require.Len(t, events, 1)
 		require.Equal(t, "rocketcode.provider.diagnostic", events[0].Name)
 		require.ElementsMatch(t, []attribute.KeyValue{
+			attribute.String("rocketcode.provider_diagnostic.provider", "openai"),
+			attribute.String("rocketcode.provider_diagnostic.model", "gpt-5"),
 			attribute.String("rocketcode.provider_diagnostic.phase", providerDiagnosticRetry),
 			attribute.Int("rocketcode.provider_diagnostic.http_status", http.StatusTooManyRequests),
 			attribute.String("rocketcode.provider_diagnostic.code", "too_many_requests"),
