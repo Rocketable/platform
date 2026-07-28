@@ -739,8 +739,12 @@ func TestSocketLoopRecreatesWhenStableEventChannelIsFull(t *testing.T) {
 	clients := make(chan *socketmode.Client, 2)
 	release := make(chan struct{})
 	sentEvent := make(chan struct{}, 1)
+	clientDone := make(chan struct{}, 2)
+	loopDone := make(chan struct{})
 	connector.newSocketClient = func(api *slack.Client) *socketmode.Client {
 		client := socketmode.New(api)
+
+		client.Events = make(chan socketmode.Event)
 		clients <- client
 
 		return client
@@ -748,6 +752,8 @@ func TestSocketLoopRecreatesWhenStableEventChannelIsFull(t *testing.T) {
 
 	errStale := errors.New("stale socket")
 	connector.runSocketClient = func(ctx context.Context, client *socketmode.Client) error {
+		defer func() { clientDone <- struct{}{} }()
+
 		select {
 		case client.Events <- socketmode.Event{Type: socketmode.EventTypeConnecting}:
 		case <-ctx.Done():
@@ -763,13 +769,17 @@ func TestSocketLoopRecreatesWhenStableEventChannelIsFull(t *testing.T) {
 		case <-release:
 			return errStale
 		case <-ctx.Done():
+			<-loopDone
 			return ctx.Err()
 		}
 	}
 
-	ctx := t.Context()
+	ctx, cancel := context.WithCancel(t.Context())
 
-	go connector.runSocketLoop(ctx)
+	go func() {
+		connector.runSocketLoop(ctx)
+		close(loopDone)
+	}()
 
 	firstClient := <-clients
 
@@ -777,11 +787,30 @@ func TestSocketLoopRecreatesWhenStableEventChannelIsFull(t *testing.T) {
 
 	release <- struct{}{}
 
+	var secondClient *socketmode.Client
 	select {
-	case secondClient := <-clients:
-		require.NotSame(t, firstClient, secondClient)
+	case secondClient = <-clients:
 	case <-time.After(time.Second):
 		t.Fatal("socket loop did not recreate client while stable event channel was full")
+	}
+
+	require.NotSame(t, firstClient, secondClient)
+
+	<-sentEvent
+	cancel()
+
+	select {
+	case <-loopDone:
+	case <-time.After(time.Second):
+		t.Fatal("socket loop did not stop after cancellation")
+	}
+
+	for range 2 {
+		select {
+		case <-clientDone:
+		case <-time.After(time.Second):
+			t.Fatal("socket client did not stop after cancellation")
+		}
 	}
 }
 

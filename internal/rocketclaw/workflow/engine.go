@@ -173,6 +173,10 @@ func Run(ctx context.Context, definition *Definition, request RunRequest, agent 
 	thread, stop := e.thread(ctx, "workflow "+definition.Name, "", false)
 	defer stop()
 
+	if errContext := context.Cause(ctx); errContext != nil {
+		return Result{}, fmt.Errorf("initialize workflow: %w", errContext)
+	}
+
 	globals, errInit := definition.program.Init(thread, e.builtins())
 	if errInit != nil {
 		if errContext := context.Cause(ctx); errContext != nil {

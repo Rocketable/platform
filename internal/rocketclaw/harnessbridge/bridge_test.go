@@ -1875,7 +1875,7 @@ func TestBridgeFailedManagedWorkflowPersistsRunSummary(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
 		require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
-		require.NoError(t, root.WriteFile(".rocketclaw/workflows/fail.star", []byte("meta = {\"name\": \"fail\", \"description\": \"Fail\", \"phases\": [\"work\", \"later\"]}\ndef main(args): return parallel([lambda: phase(\"work\", lambda: 1 // 0), lambda: phase(\"later\", lambda: 1 // 0)])\n"), 0o600))
+		require.NoError(t, root.WriteFile(".rocketclaw/workflows/fail.star", []byte("meta = {\"name\": \"fail\", \"description\": \"Fail\", \"phases\": [\"work\", \"later\"]}\ndef main(args): return phase(\"work\", lambda: 1 // 0)\n"), 0o600))
 		definitions, err := workflow.Load(root, ".rocketclaw")
 		require.NoError(t, err)
 		require.NoError(t, root.Close())
@@ -1915,8 +1915,8 @@ func TestBridgeFailedManagedWorkflowPersistsRunSummary(t *testing.T) {
 		assert.Equal(t, workflowRunEntryType, entries[0].Entry.Type)
 		summary := workflowSummaryFromEntry(t, &entries[0].Entry)
 		assert.Equal(t, workflow.TerminalFailed, summary.Terminal)
-		assert.Equal(t, []workflowRunPhaseSummary{{Name: "work", Status: workflow.PhaseError}, {Name: "later", Status: workflow.PhaseError}}, summary.Phases)
-		assert.Equal(t, "workflow execution failed", summary.Error)
+		assert.Equal(t, []workflowRunPhaseSummary{{Name: "work", Status: workflow.PhaseError}, {Name: "later", Status: workflow.PhaseSkipped}}, summary.Phases)
+		assert.Equal(t, `phase "work" failed`, summary.Error)
 	})
 }
 

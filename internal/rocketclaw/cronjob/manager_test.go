@@ -676,6 +676,7 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 	}
 
 	close(release)
+	m.wg.Wait()
 }
 
 func TestPreparePromptInstructionCases(t *testing.T) {

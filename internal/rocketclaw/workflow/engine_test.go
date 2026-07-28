@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -762,6 +763,21 @@ def main(args):
 }
 
 func TestRunCancellationAndInfrastructureErrors(t *testing.T) {
+	t.Run("rejects pre-canceled context before evaluation", func(t *testing.T) {
+		previousProcs := runtime.GOMAXPROCS(1)
+
+		t.Cleanup(func() { runtime.GOMAXPROCS(previousProcs) })
+
+		definition := engineDefinition(t, `def main(args): return "unexpected"`)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		_, err := Run(ctx, definition, RunRequest{RunID: "pre-canceled"}, inertAgent, discardProgress, discardAgentProgress)
+		if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "initialize workflow") {
+			t.Fatalf("Run() error = %v, want initialize workflow wrapping context canceled", err)
+		}
+	})
+
 	t.Run("initial progress failure skips every declared phase", func(t *testing.T) {
 		errProgress := errors.New("pending progress broke")
 		failed := false
@@ -865,17 +881,6 @@ func TestRunCancellationAndInfrastructureErrors(t *testing.T) {
 		case <-canceled:
 		default:
 			t.Fatal("runner failure did not cancel sibling")
-		}
-	})
-
-	t.Run("cancels pure Starlark", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		cancel()
-
-		_, err := Run(ctx, engineDefinition(t, `def main(args):
-    while True: pass`), RunRequest{RunID: "cancel-pure"}, inertAgent, discardProgress, discardAgentProgress)
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("Run() error = %v, want context canceled", err)
 		}
 	})
 

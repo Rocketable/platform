@@ -421,9 +421,11 @@ func hasAllow(permission rocketcode.PermissionSet, bucket string) bool {
 
 func taskEdges(infos map[string]*agentInfo) map[string][]string {
 	edges := map[string][]string{}
+	names := slices.Sorted(maps.Keys(infos))
 
-	for from, info := range infos {
-		for to := range infos {
+	for _, from := range names {
+		info := infos[from]
+		for _, to := range names {
 			if action, _ := info.agent.Permission.Evaluate("task", to); action == rocketcode.PermissionAllow {
 				edges[from] = append(edges[from], to)
 			}

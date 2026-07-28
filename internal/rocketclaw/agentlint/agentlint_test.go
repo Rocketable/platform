@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -234,6 +236,24 @@ hub
   "beta" -> "hub" [label="guardrail"];
 }
 `, dot)
+}
+
+func TestTaskEdgesSortsDestinations(t *testing.T) {
+	infos := map[string]*agentInfo{}
+	for _, name := range []string{"alpha", "beta", "delta", "epsilon", "gamma", "hub"} {
+		infos[name] = &agentInfo{agent: rocketcode.Agent{Permission: rocketcode.PermissionSet{Buckets: []rocketcode.PermissionBucket{{
+			Name:  "task",
+			Rules: []rocketcode.PermissionRule{{Pattern: "*", Action: rocketcode.PermissionAllow}},
+		}}}}}
+	}
+
+	for run := range 100 {
+		for from, destinations := range taskEdges(infos) {
+			if !slices.IsSorted(destinations) {
+				t.Fatalf("run %d: taskEdges(%q) = %v, want sorted destinations", run, from, destinations)
+			}
+		}
+	}
 }
 
 func TestLintResolvesModelTemplate(t *testing.T) {

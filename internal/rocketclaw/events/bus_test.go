@@ -20,3 +20,13 @@ func TestBusRoutesOutbound(t *testing.T) {
 		cancel()
 	}
 }
+
+func TestBusPublishOutboundCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	bus := New()
+	message := NewOutboundMessage(SourceSystem, "slack-thread:C1:1.2", "answer", OutputTargetSlack)
+	err := bus.PublishOutbound(ctx, message)
+	require.ErrorIs(t, err, context.Canceled, "PublishOutbound() error = %v, want context.Canceled", err)
+}
