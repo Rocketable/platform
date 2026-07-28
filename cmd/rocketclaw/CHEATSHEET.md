@@ -104,6 +104,16 @@ New `#ops` conversations use agent `main`. Authorized replies can select `factor
 
 Fresh RocketClaw runtime directories initialize the current SQLite schema directly with schema marker `user_version = 9`. Existing state and configuration must already use current formats; startup does not migrate historical formats.
 
+## Model Providers And Credentials
+
+`openai` is the default provider; named entries live under `providers`. An unqualified model uses `openai`, `openai/gpt-5.5` explicitly selects the default, and `work/gpt-5.5` selects `providers.work`. Root and child agents resolve their models independently, with no implicit provider failover. Provider credentials are isolated in the selected workspace and runtime directory.
+
+| Command | Purpose |
+| --- | --- |
+| `rocketclaw oai login [provider] [--headless]` | Acquire and save the selected provider's ChatGPT credential; omission selects `openai`. |
+| `rocketclaw oai list` | Show provider, default marker, configured auth mode, and local credential presence. |
+| `rocketclaw oai logout [provider]` | Remove only the selected local credential; it does not revoke a remote token. |
+
 ## RocketClaw Tools
 
 RocketClaw injects these tools into RocketCode turns. Most are auto-allowed by RocketClaw unless a per-agent permission rule explicitly denies them. `rocketclaw_restart` and `rocketclaw_start_new_thread` are default-deny and require an explicit per-agent `allow`.
@@ -238,7 +248,9 @@ Running `rocketclaw` without a subcommand starts the server when `femtoclaw.json
 | `rocketclaw doctor` | Validates the loaded configuration and RocketCode availability. |
 | `rocketclaw lint [next|current]` | Checks effective RocketCode agent-system safety. Defaults to `next`. |
 | `rocketclaw agent-graph [next|current]` | Prints the effective RocketCode task delegation and guardrail graph as Graphviz/DOT. Defaults to `next`. |
-| `rocketclaw oai login [--headless]` | Authenticates RocketClaw to ChatGPT for RocketCode model requests and writes the selected runtime `auth.json`. |
+| `rocketclaw oai login [provider] [--headless]` | Authenticates the selected provider and writes its credential to the selected runtime `auth.json`; omission selects `openai`. |
+| `rocketclaw oai list` | Lists configured provider auth modes and local credential presence without displaying credentials. |
+| `rocketclaw oai logout [provider]` | Removes only the selected provider's local credential; omission selects `openai`. |
 | `rocketclaw fc list [--since 24h|RFC3339] [--until RFC3339] [--limit N] [--no-message-preview]` | Lists stored RocketCode sessions. |
 | `rocketclaw fc observe [--follow|-f] <conversation-id>` | Prints one conversation's stored session entries as JSONL. The conversation ID is required. |
 | `rocketclaw fc delete <conversation-id>` | Deletes a stored session when the daemon does not own the state store. |

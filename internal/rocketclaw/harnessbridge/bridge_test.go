@@ -908,59 +908,73 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/responses" {
-			http.NotFound(w, r)
+	newServer := func(provider string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/responses" {
+				http.NotFound(w, r)
 
-			return
-		}
+				return
+			}
 
-		requests++
+			requests++
 
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Error(err)
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+				http.Error(w, err.Error(), http.StatusBadRequest)
 
-			return
-		}
+				return
+			}
 
-		w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Type", "application/json")
 
-		switch requests {
-		case 1:
-			assert.Equal(t, "main-model", body["model"])
-			writeRawRunFunctionCall(t, w, "resp_1", "call_1", "task", map[string]string{"description": "delegate", "prompt": "delegated prompt", "subagent_type": "helper"})
-		case 2:
-			assert.Equal(t, "guardrail-model", body["model"])
-			assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard delegated work")
-			assert.Contains(t, fmt.Sprint(body), "Current Action: delegation")
-			assert.Contains(t, fmt.Sprint(body), "The agent main wants to delegate to helper")
-			assert.Contains(t, fmt.Sprint(body), "delegated prompt")
-			assert.Contains(t, fmt.Sprint(body["text"]), "json_schema")
-			writeRawRunMessage(t, w, "resp_2", "msg_2", `{"approved":true,"reason":""}`)
-		case 3:
-			assert.Equal(t, "helper-model", body["model"])
-			assert.Contains(t, fmt.Sprint(body["instructions"]), "Helper prompt")
-			assert.Contains(t, fmt.Sprint(body), "delegated prompt")
-			writeRawRunMessage(t, w, "resp_3", "msg_3", "child response")
-		case 4:
-			assert.Equal(t, "guardrail-model", body["model"])
-			assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard delegated work")
-			assert.Contains(t, fmt.Sprint(body), "Current Action: response")
-			assert.Contains(t, fmt.Sprint(body), "And the response from helper to main")
-			assert.Contains(t, fmt.Sprint(body), "child response")
-			assert.Contains(t, fmt.Sprint(body["text"]), "json_schema")
-			writeRawRunMessage(t, w, "resp_4", "msg_4", `{"approved":true,"reason":""}`)
-		case 5:
-			assert.Equal(t, "main-model", body["model"])
-			assert.Contains(t, fmt.Sprint(body), "<task_result>\nchild response\n</task_result>")
-			writeRawRunMessage(t, w, "resp_5", "msg_5", "persistent done")
-		default:
-			t.Fatalf("unexpected response request %d", requests)
-		}
-	}))
+			switch requests {
+			case 1:
+				assert.Equal(t, "openai", provider)
+				assert.Equal(t, "main-model", body["model"])
+				writeRawRunFunctionCall(t, w, "resp_1", "call_1", "task", map[string]string{"description": "delegate", "prompt": "delegated prompt", "subagent_type": "helper"})
+			case 2:
+				assert.Equal(t, "guard", provider)
+				assert.Equal(t, "guardrail-model", body["model"])
+				assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard delegated work")
+				assert.Contains(t, fmt.Sprint(body), "Current Action: delegation")
+				assert.Contains(t, fmt.Sprint(body), "The agent main wants to delegate to helper")
+				assert.Contains(t, fmt.Sprint(body), "delegated prompt")
+				assert.Contains(t, fmt.Sprint(body["text"]), "json_schema")
+				writeRawRunMessage(t, w, "resp_2", "msg_2", `{"approved":true,"reason":""}`)
+			case 3:
+				assert.Equal(t, "child", provider)
+				assert.Equal(t, "helper-model", body["model"])
+				assert.Contains(t, fmt.Sprint(body["instructions"]), "Helper prompt")
+				assert.Contains(t, fmt.Sprint(body), "delegated prompt")
+				writeRawRunMessage(t, w, "resp_3", "msg_3", "child response")
+			case 4:
+				assert.Equal(t, "guard", provider)
+				assert.Equal(t, "guardrail-model", body["model"])
+				assert.Contains(t, fmt.Sprint(body["instructions"]), "Guard delegated work")
+				assert.Contains(t, fmt.Sprint(body), "Current Action: response")
+				assert.Contains(t, fmt.Sprint(body), "And the response from helper to main")
+				assert.Contains(t, fmt.Sprint(body), "child response")
+				assert.Contains(t, fmt.Sprint(body["text"]), "json_schema")
+				writeRawRunMessage(t, w, "resp_4", "msg_4", `{"approved":true,"reason":""}`)
+			case 5:
+				assert.Equal(t, "openai", provider)
+				assert.Equal(t, "main-model", body["model"])
+				assert.Contains(t, fmt.Sprint(body), "<task_result>\nchild response\n</task_result>")
+				writeRawRunMessage(t, w, "resp_5", "msg_5", "persistent done")
+			default:
+				t.Fatalf("unexpected response request %d", requests)
+			}
+		}))
+	}
+	server := newServer("openai")
 	t.Cleanup(server.Close)
+
+	childServer := newServer("child")
+	t.Cleanup(childServer.Close)
+
+	guardServer := newServer("guard")
+	t.Cleanup(guardServer.Close)
 
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)
@@ -970,7 +984,7 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	defer bus.Close()
 
 	conversationID := SlackThreadConversationID("C123", "111.222")
-	bridge := NewConversation(&config.Config{Workspace: workspace, Models: map[string]string{"main": "main-model", "helper": "helper-model", "guardrail": "guardrail-model"}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus, &Config{ConversationID: conversationID, Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(&config.Config{Workspace: workspace, Models: map[string]string{"main": "main-model", "helper": "child/helper-model", "guardrail": "guard/guardrail-model"}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, Providers: map[string]config.OpenAIConfig{"child": {APIBaseURL: childServer.URL}, "guard": {APIBaseURL: guardServer.URL}}}, bus, &Config{ConversationID: conversationID, Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
 	inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
 	inbound.ConversationID = conversationID
 
@@ -1482,7 +1496,7 @@ func TestCompactedOutputToReplayInputRejectsUnsupportedKind(t *testing.T) {
 	require.ErrorContains(t, err, `unsupported compacted output item kind "tool_search_call"`)
 }
 
-func TestRocketCodeProvidersConfiguresOpenAI(t *testing.T) {
+func TestModelResolverConfiguresOpenAI(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", `---
 description: Main
@@ -1498,15 +1512,15 @@ Prompt
 	agents, skills, err := loadRocketCodeDefinitions(root, workspace, toolModePersistent)
 	require.NoError(t, err)
 
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test-key", RocketCodeAuth: "api_key"}}, log: slog.New(slog.DiscardHandler)}
-
-	providers, err := bridge.rocketcodeProviders(agents)
+	resolver := newModelResolver(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test-key", RocketCodeAuth: "api_key"}}, slog.New(slog.DiscardHandler))
+	client, origin, err := resolver.Resolve("gpt-5.5")
 	require.NoError(t, err)
-	require.NotNil(t, providers.OpenAI)
+	require.NotNil(t, client)
+	require.Equal(t, rocketcode.ProviderOrigin{Provider: "openai", Model: "gpt-5.5"}, origin)
 
 	shellOutputDir := filepath.Join(workspace, "shell-output")
 	require.NoError(t, os.Mkdir(shellOutputDir, 0o755))
-	_, err = rocketcode.NewWithProviders(providers, &rocketcode.Config{ShellOutputDir: shellOutputDir, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}}, root, agents, skills, "main", io.Discard)
+	_, err = rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{ShellOutputDir: shellOutputDir, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}}, root, agents, skills, "main", io.Discard)
 	require.NoError(t, err)
 }
 
@@ -2767,14 +2781,13 @@ func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
 	cfg := new(config.Config)
 	cfg.OpenAI.APIBaseURL = server.URL
 
-	bridge := new(Bridge)
-	bridge.runtime = cfg
-	bridge.log = slog.New(slog.NewJSONHandler(&logs, nil))
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
 
 	var params responses.ResponseNewParams
 
-	bridge.log = bridge.log.With("conversation_id", "main", "turn_id", "turn-1", "agent", "main", "source", string(events.SourceSlack), "kind", string(events.InboundKindPrompt), "label", "goal", "human", true, "goal_turn", true, "publish", true, "attachment_count", 2, "web_session_id", "browser-session-1")
-	client, err := bridge.openAIClient()
+	logger = logger.With("conversation_id", "main", "turn_id", "turn-1", "agent", "main", "source", string(events.SourceSlack), "kind", string(events.InboundKindPrompt), "label", "goal", "human", true, "goal_turn", true, "publish", true, "attachment_count", 2, "web_session_id", "browser-session-1")
+	resolver := newModelResolver(cfg, logger)
+	client, _, err := resolver.Resolve("gpt-5.5")
 	require.NoError(t, err)
 
 	_, err = client.Responses.New(context.Background(), params)
@@ -2799,7 +2812,7 @@ func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
 	logs.Reset()
 
 	status = http.StatusOK
-	client, err = bridge.openAIClient()
+	client, _, err = resolver.Resolve("gpt-5.5")
 	require.NoError(t, err)
 
 	_, _ = client.Responses.New(context.Background(), params)
@@ -3335,7 +3348,7 @@ func TestRunTurnPreservesRecoveredExternalMCPReplayWithTransientMetadata(t *test
 	msg.ConversationID = conversationID
 	msg.Metadata = map[string]string{"later-key": "fresh"}
 
-	_, err = bridge.runTurn(context.Background(), msg, "turn-1", false, recoveredReplay)
+	_, err = bridge.runTurn(context.Background(), msg, "turn-1", false, rocketcode.ActiveTurnCheckpoint{DisplayModel: "gpt-5.5", ReplayInput: recoveredReplay})
 	require.NoError(t, err)
 	require.NoError(t, errRequest)
 
@@ -3516,6 +3529,144 @@ Request: $ARGUMENTS
 	assert.Contains(t, requestBody.Input[1].Content, "[Slack media=Text principal=Alice")
 	assert.NotContains(t, requestBody.Input[1].Content, "💡")
 	assert.NotContains(t, requestBody.Input[1].Content, "docs-helper write API docs")
+}
+
+func TestRunTurnProjectsDifferentProviderHistoryBeforeRequest(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: work/gpt\npermission: {}\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+	service, err := NewSessionService(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
+
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	_, err = service.AppendEntryID(t.Context(), conversationID, &rocketcode.SessionEntry{Version: 1, Type: "turn", Model: "openai/gpt", ResponseID: providerReplayPrivate, ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"portable-readable","id":"provider-private-sentinel"}`)}, OutputTrace: []json.RawMessage{json.RawMessage(`{"private":"provider-private-sentinel"}`)}})
+	require.NoError(t, err)
+
+	var requestBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if !assert.NoError(t, err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		requestBody = string(body)
+
+		w.Header().Set("Content-Type", "application/json")
+		writeRawRunMessage(t, w, "response", "message", "ok")
+	}))
+	t.Cleanup(server.Close)
+
+	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, log: slog.New(slog.DiscardHandler)}
+	msg := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
+	msg.ConversationID = conversationID
+	_, err = bridge.runTurn(t.Context(), msg, "turn-1", false)
+	require.NoError(t, err)
+	assert.Contains(t, requestBody, providerReplayReadable)
+	assert.NotContains(t, requestBody, providerReplayPrivate)
+
+	entries, err := service.ObserveEntries(t.Context(), conversationID, 0)
+	require.NoError(t, err)
+	assert.Contains(t, string(entries[0].Entry.ReplayInput[0]), providerReplayPrivate)
+}
+
+func TestRecoveredActiveTurnProjectsDifferentProviderReplayBeforeRequest(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: work/gpt\npermission: {}\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+	service, err := NewSessionService(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
+
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	checkpoint := rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: conversationID, Agent: "main", Model: "gpt", DisplayModel: "openai/gpt", ResponseID: providerReplayPrivate, ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"portable-readable","id":"provider-private-sentinel"}`)}, OutputTrace: []json.RawMessage{json.RawMessage(`{"private":"provider-private-sentinel"}`)}}
+	want, err := json.Marshal(checkpoint)
+	require.NoError(t, err)
+
+	var requestBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if !assert.NoError(t, err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		requestBody = string(body)
+
+		w.Header().Set("Content-Type", "application/json")
+		writeRawRunMessage(t, w, "response", "message", "recovered")
+	}))
+	t.Cleanup(server.Close)
+
+	bus := events.New()
+	t.Cleanup(bus.Close)
+	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}, config: Config{ConversationID: conversationID, Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}, bus: bus, log: slog.New(slog.DiscardHandler)}
+
+	errRecovered := make(chan error, 1)
+	go func() {
+		errRecovered <- bridge.handleRecoveredActiveTurn(t.Context(), &ActiveTurnState{Checkpoint: checkpoint})
+	}()
+
+	for {
+		outbound := readRocketCodeOutbound(t, bus)
+		outbound.MarkDelivered(nil)
+
+		if outbound.Complete {
+			break
+		}
+	}
+
+	require.NoError(t, <-errRecovered)
+	assert.Contains(t, requestBody, providerReplayReadable)
+	assert.NotContains(t, requestBody, providerReplayPrivate)
+
+	after, err := json.Marshal(checkpoint)
+	require.NoError(t, err)
+	assert.Equal(t, want, after)
+}
+
+func TestRunTurnPreservesNamedProviderRecoveryBytesForSameProvider(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: work/new-model\npermission: {}\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+	service, err := NewSessionService(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
+
+	var requestBody string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if !assert.NoError(t, err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		requestBody = string(body)
+
+		w.Header().Set("Content-Type", "application/json")
+		writeRawRunMessage(t, w, "response", "message", "recovered")
+	}))
+	t.Cleanup(server.Close)
+
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, log: slog.New(slog.DiscardHandler)}
+	checkpoint := rocketcode.ActiveTurnCheckpoint{DisplayModel: "work/old-model", ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","content":"native-readable"}`),
+		json.RawMessage(`{"type":"function_call","id":"provider-private-sentinel","call_id":"native-call","name":"read","arguments":"{}","status":"completed"}`),
+	}}
+	msg := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "restart_recovery", "continue", false)
+	msg.ConversationID = conversationID
+
+	_, err = bridge.runTurn(t.Context(), msg, "turn-1", false, checkpoint)
+	require.NoError(t, err)
+	assert.Contains(t, requestBody, "native-readable")
+	assert.Contains(t, requestBody, providerReplayPrivate)
 }
 
 func TestRunTurnWritesActiveTurnBeforeProviderAndClearsAfterSessionAppend(t *testing.T) {
@@ -3755,7 +3906,7 @@ func TestRecoveredActiveTurnIncludesPriorCompletedHistory(t *testing.T) {
 	msg.ConversationID = conversationID
 	msg.Metadata = map[string]string{events.InboundOriginMetadataKey: "System", events.InboundMediaMetadataKey: "Text", recoveredTurnMetadataKey: "true"}
 
-	_, err = bridge.runTurn(context.Background(), msg, "turn-1", false, recoveredReplay)
+	_, err = bridge.runTurn(context.Background(), msg, "turn-1", false, rocketcode.ActiveTurnCheckpoint{DisplayModel: "gpt-5.5", ReplayInput: recoveredReplay})
 	require.NoError(t, err)
 
 	priorQuestion := strings.Index(requestInput, "prior question")

@@ -33,12 +33,10 @@ import (
 	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
-	"github.com/Rocketable/platform/internal/rocketclaw/oai"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	openai "github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -656,11 +654,6 @@ func (b *Bridge) completeRequestTurnPairReservation(request bridgeRequest) {
 func (b *Bridge) handleRecoveredActiveTurn(ctx context.Context, turn *ActiveTurnState) error {
 	checkpoint := turn.Checkpoint
 
-	recoveredReplay, err := rocketcode.RecoveredReplayInput(&checkpoint)
-	if err != nil {
-		return fmt.Errorf("build recovered active turn replay: %w", err)
-	}
-
 	msg := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "restart_recovery", "Continue from the recovered restart handoff.", false)
 	msg.ConversationID = b.config.ConversationID
 
@@ -694,7 +687,7 @@ func (b *Bridge) handleRecoveredActiveTurn(ctx context.Context, turn *ActiveTurn
 
 	turnID := fmt.Sprintf("turn-%d", time.Now().UnixNano())
 
-	result, err := b.runTurn(ctx, msg, turnID, true, recoveredReplay)
+	result, err := b.runTurn(ctx, msg, turnID, true, checkpoint)
 	if err != nil {
 		if !activeTurnRecoveryPreserveError(err) {
 			checkpointTurnID := result.checkpointTurnID
@@ -1048,11 +1041,11 @@ func (b *Bridge) enqueueGoalContinuation(ctx context.Context, goal *GoalState, m
 }
 
 //nolint:gocyclo // Turn execution coordinates model, tools, progress, and goal accounting.
-func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID string, publish bool, recoveredReplays ...[]json.RawMessage) (result runResult, err error) {
-	var recoveredReplay []json.RawMessage
-	if len(recoveredReplays) > 0 {
-		recoveredReplay = recoveredReplays[0]
-	}
+func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID string, publish bool, recoveredCheckpoints ...rocketcode.ActiveTurnCheckpoint) (result runResult, err error) {
+	var (
+		recoveredReplay       []json.RawMessage
+		recoveredDisplayModel string
+	)
 
 	agentName := b.agentSnapshot()
 	ctx = instrumentation.WithSession(ctx, b.config.ConversationID)
@@ -1103,6 +1096,18 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 
 	appendOverlayPromptToAgent(agents, agentName, b.runtime)
 
+	if len(recoveredCheckpoints) > 0 {
+		checkpoint, err := activeTurnForProvider(&recoveredCheckpoints[0], providerForModel(agents.Items[agentName].Model))
+		if err != nil {
+			return runResult{}, fmt.Errorf("project recovered active turn replay: %w", err)
+		}
+
+		recoveredReplay, err = rocketcode.RecoveredReplayInput(&checkpoint)
+		if err != nil {
+			return runResult{}, fmt.Errorf("build recovered active turn replay: %w", err)
+		}
+	}
+
 	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(b.runtime.RuntimeDirName(), ".rocketcode", "shell-outputs")), 0o755); err != nil {
 		return runResult{}, fmt.Errorf("create rocketcode shell output dir: %w", err)
 	}
@@ -1124,7 +1129,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 				}
 			}
 
-			yield(rocketcode.SessionEntry{Version: 1, Type: "active_turn_recovery", Timestamp: time.Now().UTC(), ReplayInput: slices.Clone(recoveredReplay)}, nil)
+			yield(rocketcode.SessionEntry{Version: 1, Type: "active_turn_recovery", Timestamp: time.Now().UTC(), Model: recoveredDisplayModel, ReplayInput: slices.Clone(recoveredReplay)}, nil)
 		}
 	}
 
@@ -1227,12 +1232,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		providerLog = providerLog.With("label", msg.Label)
 	}
 
-	providerBridge := &Bridge{runtime: b.runtime, log: providerLog}
-
-	providers, err := providerBridge.rocketcodeProviders(agents)
-	if err != nil {
-		return runResult{}, fmt.Errorf("prepare RocketCode providers: %w", err)
-	}
+	resolver := newModelResolver(b.runtime, providerLog)
 
 	attachments := new(outboundAttachmentCollector)
 
@@ -1283,10 +1283,13 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 
 	rocketcodeConfig.CheckpointSink = activeTurnIDCheckpointSink{sink: rocketcodeConfig.CheckpointSink, turnID: &checkpointTurnID}
 
-	looper, err := rocketcode.NewWithProviders(providers, &rocketcodeConfig, root, agents, skills, agentName, io.Discard)
+	looper, err := rocketcode.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agentName, io.Discard)
 	if err != nil {
 		return runResult{}, fmt.Errorf("prepare rocketcode turn: %w", err)
 	}
+
+	recoveredDisplayModel = looper.DisplayModel
+	sessionIn = sessionEntriesForProvider(sessionIn, providerForModel(looper.DisplayModel))
 
 	input := make(chan rocketcode.PromptInput, 1)
 	output := make(chan rocketcode.ChatResponse, 128)
@@ -1663,61 +1666,6 @@ func visibleSubagentLabel(label string) string {
 	}
 }
 
-func (b *Bridge) openAIOptions(apiKey, baseURL string, useAPIKey bool) []option.RequestOption {
-	options := []option.RequestOption{}
-	if useAPIKey {
-		options = append(options, option.WithAPIKey(apiKey))
-	}
-
-	if b.log.Enabled(context.Background(), slog.LevelError) {
-		options = append(options, option.WithMiddleware(func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
-			startedAt := time.Now()
-			resp, err := next(req)
-
-			status := 0
-			if resp != nil {
-				status = resp.StatusCode
-			}
-
-			if status != http.StatusOK || err != nil {
-				errProvider := err
-				if errProvider == nil {
-					errProvider = fmt.Errorf("provider returned status %d", status)
-				}
-
-				b.log.Error("provider request failed", providerLogAttrs(req, resp, status, time.Since(startedAt), errProvider)...)
-			} else if time.Since(startedAt) > time.Minute {
-				b.log.Info("provider request completed", providerLogAttrs(req, resp, status, time.Since(startedAt), err)...)
-			}
-
-			return resp, err
-		}))
-	}
-
-	if useAPIKey && strings.TrimSpace(baseURL) != "" {
-		options = append(options, option.WithBaseURL(baseURL))
-	}
-
-	return options
-}
-
-func (b *Bridge) openAIClient() (*openai.Client, error) {
-	options := b.openAIOptions(b.runtime.OpenAI.APIKey, b.runtime.OpenAI.APIBaseURL, b.runtime.OpenAI.RocketCodeAuth != "chatgpt")
-
-	if b.runtime.OpenAI.RocketCodeAuth == "chatgpt" {
-		client, err := oai.NewChatGPTClientIn(b.runtime.Workspace, b.runtime.RuntimeDirName(), options...)
-		if err != nil {
-			return nil, fmt.Errorf("create ChatGPT OAuth OpenAI client: %w", err)
-		}
-
-		return client, nil
-	}
-
-	client := openai.NewClient(options...)
-
-	return &client, nil
-}
-
 func providerLogAttrs(req *http.Request, resp *http.Response, status int, duration time.Duration, err error) []any {
 	attrs := []any{"method", req.Method, "path", req.URL.Path, "status", status, "duration", duration, "error", err}
 	if resp == nil {
@@ -1749,15 +1697,6 @@ func providerLogAttrs(req *http.Request, resp *http.Response, status int, durati
 	}
 
 	return attrs
-}
-
-func (b *Bridge) rocketcodeProviders(_ rocketcode.Agents) (rocketcode.Providers, error) {
-	openAIClient, err := b.openAIClient()
-	if err != nil {
-		return rocketcode.Providers{}, err
-	}
-
-	return rocketcode.Providers{OpenAI: openAIClient}, nil
 }
 
 func (b *Bridge) rocketcodeConfig(shellOutputDir string, shellEnv, sourceMetadata map[string]string, customTools ...rocketcode.Tool) rocketcode.Config {

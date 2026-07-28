@@ -18,7 +18,7 @@ See [LICENSE](LICENSE) for the full license terms.
 - Keep agent work durable through SQLite-backed sessions, replay, active-turn checkpoints, connector routing, scheduled messages, restart recovery, and conversation-local goal loops.
 - Connect agents to team workflows through Slack, cron jobs, scheduled prompts, and an external MCP HTTP endpoint.
 - Run checked-in Starlark workflows as foreground managed turns with isolated custom workers and Slack phase and worker activity progress.
-- Route model requests through first-party OpenAI Responses while preserving one local agent/tool model.
+- Route model requests through independently configured default and named OpenAI-compatible providers while preserving one local agent/tool model.
 - Run `openresponsesd` as a separate local OpenResponses-shaped API daemon that can route to OpenAI Responses, OpenAI-compatible Chat Completions, or Anthropic Messages upstreams.
 - Expose optional OpenTelemetry/OpenInference-compatible tracing for agent runs.
 
@@ -104,6 +104,18 @@ model: '{{ model "coding-high" }}'
 ```json
 "models": {"coding-high": "software-development-sol"}
 ```
+
+The top-level `openai` object is the default provider. Add named providers under `providers`; `openai/gpt-5.5` explicitly selects the default and `work/gpt-5.5` selects the named provider. Unqualified root models use `openai`, while a child agent resolves its own model independently. RocketClaw never fails over implicitly between providers.
+
+```json
+{
+  "openai": {"rocketcode_auth": "chatgpt"},
+  "providers": {"work": {"rocketcode_auth": "chatgpt"}},
+  "models": {"coding-high": "work/gpt-5.5"}
+}
+```
+
+Manage each provider's local credential separately with `rocketclaw oai login [provider] [--headless]`, `rocketclaw oai list`, and `rocketclaw oai logout [provider]`; omission means `openai`. Credentials are stored in the selected config's workspace under its selected runtime directory, normally `.rocketclaw/auth.json`.
 
 `openresponsesd` is configured with `openresponsesd.json` by default, or with `--config` / `OPENRESPONSESD_CONFIG`. Its documented credential environment variables are `OPENRESPONSESD_OPENAI_API_KEY` and `OPENRESPONSESD_ANTHROPIC_API_KEY`; bearer-token auth can be set in config or overridden locally with `--auth-token` / `OPENRESPONSESD_AUTH_TOKEN`.
 

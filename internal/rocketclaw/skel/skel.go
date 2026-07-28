@@ -696,6 +696,7 @@ func resetRuntimeDirectory(target string, logger *slog.Logger, preserveOverlays 
 	preserved := map[string]struct{}{
 		".rocketcode":        {},
 		"auth.json":          {},
+		"auth.json.lock":     {},
 		"state.sqlite3":      {},
 		"state.sqlite3-shm":  {},
 		"state.sqlite3-wal":  {},
@@ -725,6 +726,11 @@ func resetRuntimeDirectory(target string, logger *slog.Logger, preserveOverlays 
 
 	for _, entry := range entries {
 		if _, ok := preserved[entry.Name()]; ok {
+			logger.Debug("preserved rocketclaw target entry", "path", filepath.Join(target, entry.Name()))
+			continue
+		}
+
+		if strings.HasPrefix(entry.Name(), ".auth.json-") {
 			logger.Debug("preserved rocketclaw target entry", "path", filepath.Join(target, entry.Name()))
 			continue
 		}

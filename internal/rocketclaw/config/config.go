@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,17 +15,18 @@ import (
 
 // Config is the top-level rocketclaw runtime configuration.
 type Config struct {
-	Workspace         string                `json:"workspace"`
-	WorkDir           string                `json:"-"`
-	Overlays          []string              `json:"overlays,omitempty"`
-	Models            map[string]string     `json:"models,omitempty"`
-	Environment       []string              `json:"environment,omitempty"`
-	Logging           LoggingConfig         `json:"logging"`
-	MCPExternal       MCPExternalConfig     `json:"mcp_external"`
-	Slack             SlackConfig           `json:"slack"`
-	OpenAI            OpenAIConfig          `json:"openai"`
-	AutoApproverModel string                `json:"auto_approver_model"`
-	Instrumentation   InstrumentationConfig `json:"instrumentation"`
+	Workspace         string                  `json:"workspace"`
+	WorkDir           string                  `json:"-"`
+	Overlays          []string                `json:"overlays,omitempty"`
+	Models            map[string]string       `json:"models,omitempty"`
+	Environment       []string                `json:"environment,omitempty"`
+	Logging           LoggingConfig           `json:"logging"`
+	MCPExternal       MCPExternalConfig       `json:"mcp_external"`
+	Slack             SlackConfig             `json:"slack"`
+	OpenAI            OpenAIConfig            `json:"openai"`
+	Providers         map[string]OpenAIConfig `json:"providers,omitempty"`
+	AutoApproverModel string                  `json:"auto_approver_model"`
+	Instrumentation   InstrumentationConfig   `json:"instrumentation"`
 }
 
 // DefaultRuntimeDir is the generated runtime directory for rocketclaw configs.
@@ -69,6 +71,17 @@ type OpenAIConfig struct {
 	APIKey         string `json:"api_key"`
 	APIBaseURL     string `json:"api_base_url"`
 	RocketCodeAuth string `json:"rocketcode_auth"`
+}
+
+// Provider returns the default or named provider configuration.
+func (c *Config) Provider(name string) (OpenAIConfig, bool) {
+	if name == "openai" {
+		return c.OpenAI, true
+	}
+
+	provider, ok := c.Providers[name]
+
+	return provider, ok
 }
 
 // InstrumentationConfig configures OpenTelemetry/OpenInference tracing.
@@ -191,8 +204,21 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if err := c.normalizeRocketCodeAuth(); err != nil {
+	if err := normalizeOpenAIConfig("openai", &c.OpenAI); err != nil {
 		return err
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(c.Providers)) {
+		if name == "" || name != strings.TrimSpace(name) || strings.Contains(name, "/") || name == "openai" {
+			return fmt.Errorf("providers[%q] name must be non-empty, trimmed, not contain /, and not be openai", name)
+		}
+
+		provider := c.Providers[name]
+		if err := normalizeOpenAIConfig(fmt.Sprintf("providers[%q]", name), &provider); err != nil {
+			return err
+		}
+
+		c.Providers[name] = provider
 	}
 
 	var err error
@@ -200,10 +226,6 @@ func (c *Config) Validate() error {
 	c.AutoApproverModel, err = normalizeOpenAIModel("auto_approver_model", c.AutoApproverModel)
 	if err != nil {
 		return err
-	}
-
-	if c.OpenAI.RocketCodeAuth == "api_key" && strings.TrimSpace(c.OpenAI.APIKey) == "" {
-		return errors.New("openai.api_key is required when openai.rocketcode_auth is api_key")
 	}
 
 	c.Instrumentation.CollectorEndpoint = strings.TrimSpace(c.Instrumentation.CollectorEndpoint)
@@ -264,28 +286,35 @@ func (c *Config) RenderAgentModel(model string) (string, error) {
 
 func normalizeOpenAIModel(field, model string) (string, error) {
 	model = strings.TrimSpace(model)
-	if after, ok := strings.CutPrefix(model, "openai/"); ok {
-		if after == "" || strings.Contains(after, "/") {
-			return "", fmt.Errorf("%s: invalid model %q: expected openai/model", field, model)
-		}
 
-		return after, nil
+	provider, apiModel, qualified := strings.Cut(model, "/")
+	if !qualified {
+		return model, nil
 	}
 
-	if strings.Contains(model, "/") {
-		return "", fmt.Errorf("%s: invalid model %q: expected unprefixed OpenAI model ID", field, model)
+	if provider == "" || apiModel == "" || strings.Contains(apiModel, "/") {
+		return "", fmt.Errorf("%s: invalid model %q: expected model or provider/model", field, model)
+	}
+
+	if provider == "openai" {
+		return apiModel, nil
 	}
 
 	return model, nil
 }
 
-func (c *Config) normalizeRocketCodeAuth() error {
-	switch strings.TrimSpace(c.OpenAI.RocketCodeAuth) {
+func normalizeOpenAIConfig(field string, cfg *OpenAIConfig) error {
+	switch strings.TrimSpace(cfg.RocketCodeAuth) {
 	case "", "api_key":
-		c.OpenAI.RocketCodeAuth = "api_key"
+		cfg.RocketCodeAuth = "api_key"
 	case "chatgpt":
+		cfg.RocketCodeAuth = "chatgpt"
 	default:
-		return errors.New("openai.rocketcode_auth must be api_key or chatgpt")
+		return fmt.Errorf("%s.rocketcode_auth must be api_key or chatgpt", field)
+	}
+
+	if cfg.RocketCodeAuth == "api_key" && strings.TrimSpace(cfg.APIKey) == "" {
+		return fmt.Errorf("%s.api_key is required when %s.rocketcode_auth is api_key", field, field)
 	}
 
 	return nil

@@ -68,6 +68,7 @@ func TestSyncResetsTargetPreservingState(t *testing.T) {
 	root := filepath.Join(tmp, targetRoot)
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "trashdir"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "auth.json"), []byte("token"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "auth.json.lock"), []byte("lock"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "state.sqlite3"), []byte("state"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "state.sqlite3-shm"), []byte("shm"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "state.sqlite3-wal"), []byte("wal"), 0o644))
@@ -105,6 +106,9 @@ func TestSyncResetsTargetPreservingState(t *testing.T) {
 	data, err = os.ReadFile(filepath.Join(root, "auth.json"))
 	require.NoError(t, err)
 	assert.Equal(t, "token", string(data))
+	data, err = os.ReadFile(filepath.Join(root, "auth.json.lock"))
+	require.NoError(t, err)
+	assert.Equal(t, "lock", string(data))
 	assert.DirExists(t, filepath.Join(root, "overlays"))
 	_, err = os.Stat(filepath.Join(root, "overlays", "keep.txt"))
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -156,6 +160,22 @@ func TestResetTargetRejectsFile(t *testing.T) {
 
 	err := resetRuntimeDirectory(path, testLogger(), true)
 	require.ErrorContains(t, err, "rocketclaw target path is not a directory")
+}
+
+func TestResetRuntimeDirectoryPreservesAuthTemporaryFiles(t *testing.T) {
+	target := filepath.Join(t.TempDir(), targetRoot)
+	require.NoError(t, os.MkdirAll(target, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(target, ".auth.json-in-flight"), []byte("token"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(target, "remove-me"), []byte("trash"), 0o600))
+
+	require.NoError(t, resetRuntimeDirectory(target, testLogger(), false))
+
+	data, err := os.ReadFile(filepath.Join(target, ".auth.json-in-flight"))
+	require.NoError(t, err)
+	assert.Equal(t, "token", string(data))
+
+	_, err = os.Stat(filepath.Join(target, "remove-me"))
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestSyncPreservesExistingWorkspaceSetupFiles(t *testing.T) {
@@ -699,7 +719,7 @@ func TestSyncWritesEmbeddedSetupFiles(t *testing.T) {
 
 	data, err := os.ReadFile(filepath.Join(tmp, targetRoot, ".gitignore"))
 	require.NoError(t, err)
-	assert.Equal(t, "auth.json\n", string(data))
+	assert.Equal(t, "auth.json\nauth.json.lock\n", string(data))
 }
 
 func TestListSetupFiles(t *testing.T) {

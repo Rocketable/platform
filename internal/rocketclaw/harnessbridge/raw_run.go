@@ -132,7 +132,7 @@ func newInertRawRunProgress() *RawRunProgress {
 }
 
 func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logger) (workflow.AgentRunFunc, func() error, error) {
-	root, agents, skills, providers, err := prepareRocketCode(cfg, agent, logger, toolModeWorkflow)
+	root, agents, skills, resolver, err := prepareRocketCode(cfg, agent, logger, toolModeWorkflow)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -177,7 +177,7 @@ func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logge
 
 		runtimeConfig := rocketcode.Config{AutoApproverModel: cfg.AutoApproverModel, ShellOutputDir: filepath.Join(cfg.Workspace, filepath.FromSlash(shellOutputRel)), Diagnostics: true, ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}}
 
-		runtime, err := rocketcode.NewWithProviders(providers, &runtimeConfig, root, callAgents, skills, agent, io.Discard)
+		runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, callAgents, skills, agent, io.Discard)
 		if err != nil {
 			return nil, fmt.Errorf("prepare workflow rocketcode run: %w", err)
 		}
@@ -269,35 +269,27 @@ func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logge
 	return run, root.Close, nil
 }
 
-func prepareRocketCode(cfg *config.Config, agent string, logger *slog.Logger, mode toolMode) (*os.Root, rocketcode.Agents, rocketcode.Skills, rocketcode.Providers, error) {
+func prepareRocketCode(cfg *config.Config, agent string, logger *slog.Logger, mode toolMode) (*os.Root, rocketcode.Agents, rocketcode.Skills, *modelResolver, error) {
 	root, err := os.OpenRoot(cfg.Workspace)
 	if err != nil {
-		return nil, rocketcode.Agents{}, rocketcode.Skills{}, rocketcode.Providers{}, fmt.Errorf("open workspace root: %w", err)
+		return nil, rocketcode.Agents{}, rocketcode.Skills{}, nil, fmt.Errorf("open workspace root: %w", err)
 	}
 
 	agents, skills, err := loadRocketCodeDefinitionsIn(root, cfg, cfg.RuntimeDirName(), mode)
 	if err != nil {
 		_ = root.Close()
-		return nil, rocketcode.Agents{}, rocketcode.Skills{}, rocketcode.Providers{}, fmt.Errorf("open workspace agent and skills: %w", err)
+		return nil, rocketcode.Agents{}, rocketcode.Skills{}, nil, fmt.Errorf("open workspace agent and skills: %w", err)
 	}
 
 	appendOverlayPromptToAgent(agents, agent, cfg)
 
-	b := &Bridge{log: logger, config: Config{Agent: agent}, runtime: cfg}
-
-	providers, err := b.rocketcodeProviders(agents)
-	if err != nil {
-		_ = root.Close()
-		return nil, rocketcode.Agents{}, rocketcode.Skills{}, rocketcode.Providers{}, fmt.Errorf("prepare RocketCode providers: %w", err)
-	}
-
-	return root, agents, skills, providers, nil
+	return root, agents, skills, newModelResolver(cfg, logger), nil
 }
 
 func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string, logger *slog.Logger, sessionIn iter.Seq2[rocketcode.SessionEntry, error], sessionOut func(rocketcode.SessionEntry) error, decision *rawRunDecision, attachments *outboundAttachmentCollector, progress *RawRunProgress, diagnostics bool) (string, error) {
 	last := ""
 
-	root, agents, skills, providers, err := prepareRocketCode(cfg, agent, logger, toolModeCron)
+	root, agents, skills, resolver, err := prepareRocketCode(cfg, agent, logger, toolModeCron)
 	if err != nil {
 		return "", err
 	}
@@ -337,10 +329,12 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 
 	rocketcodeConfig := rocketcode.Config{Model: "", AutoApproverModel: cfg.AutoApproverModel, ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: diagnostics, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: true}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CheckpointSink: rocketcode.InertCheckpointSink{}, CustomTools: customTools}
 
-	looper, err := rocketcode.NewWithProviders(providers, &rocketcodeConfig, root, agents, skills, agent, io.Discard)
+	looper, err := rocketcode.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agent, io.Discard)
 	if err != nil {
 		return "", fmt.Errorf("prepare raw rocketcode run: %w", err)
 	}
+
+	sessionIn = sessionEntriesForProvider(sessionIn, providerForModel(looper.DisplayModel))
 
 	input := make(chan rocketcode.PromptInput, 1)
 	output := make(chan rocketcode.ChatResponse, 128)

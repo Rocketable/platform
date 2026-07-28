@@ -706,48 +706,108 @@ func TestRunRawAlwaysEnablesAutoApprovePermissions(t *testing.T) {
 		request int
 	)
 
+	newServer := func(provider string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/responses" {
+				http.NotFound(w, r)
+
+				return
+			}
+
+			mu.Lock()
+			request++
+			current := request
+			mu.Unlock()
+
+			data, err := io.ReadAll(r.Body)
+			if !assert.NoError(t, err) {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+
+			switch current {
+			case 1:
+				assert.Equal(t, "root", provider)
+				assert.Contains(t, string(data), `"model":"software-development-sol"`)
+				writeRawRunFunctionCall(t, w, "resp_1", "call_1", "bash", map[string]string{"command": "printf ok", "description": "print ok"})
+			case 2:
+				assert.Equal(t, "review", provider)
+				assert.Contains(t, string(data), `"model":"gpt-5.4-mini"`)
+				writeRawRunMessage(t, w, "resp_2", "msg_2", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low-risk action."}`)
+			case 3:
+				assert.Equal(t, "root", provider)
+				writeRawRunFunctionCall(t, w, "resp_3", "call_3", rawRunToolName, map[string]string{"payload": "done"})
+			case 4:
+				assert.Equal(t, "root", provider)
+				writeRawRunMessage(t, w, "resp_4", "msg_4", "assistant text")
+			default:
+				t.Fatalf("unexpected raw run request %d", current)
+			}
+		}))
+	}
+	rootServer := newServer("root")
+	t.Cleanup(rootServer.Close)
+
+	reviewServer := newServer("review")
+	t.Cleanup(reviewServer.Close)
+
+	result, err := RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace, Models: map[string]string{"coding-high": "root/software-development-sol"}, OpenAI: config.OpenAIConfig{APIBaseURL: rootServer.URL}, Providers: map[string]config.OpenAIConfig{"root": {APIBaseURL: rootServer.URL}, "review": {APIBaseURL: reviewServer.URL}}, AutoApproverModel: "review/gpt-5.4-mini"}, "main", "prompt", slog.New(slog.DiscardHandler), newInertRawRunProgress())
+
+	require.NoError(t, err)
+	require.Equal(t, RawRunResult{Text: "assistant text", VerbatimMessage: "done"}, result)
+}
+
+func TestRunRawWithProgressProjectsDifferentProviderStoredHistory(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: work/gpt\npermission: {}\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+	service, err := NewSessionService(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
+
+	conversationID := "cron:provider-replay"
+	_, err = service.AppendEntryID(t.Context(), conversationID, &rocketcode.SessionEntry{Version: 1, Type: "turn", Model: "openai/gpt", ResponseID: providerReplayPrivate, ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"portable-readable","id":"provider-private-sentinel"}`)}})
+	require.NoError(t, err)
+
+	var requestBody string
+
+	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/responses" {
-			http.NotFound(w, r)
+		requests++
 
-			return
-		}
-
-		mu.Lock()
-		request++
-		current := request
-		mu.Unlock()
-
-		data, err := io.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
 		if !assert.NoError(t, err) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 
 			return
 		}
 
+		if requests == 1 {
+			requestBody = string(body)
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 
-		switch current {
-		case 1:
-			assert.Contains(t, string(data), `"model":"software-development-sol"`)
-			writeRawRunFunctionCall(t, w, "resp_1", "call_1", "bash", map[string]string{"command": "printf ok", "description": "print ok"})
-		case 2:
-			assert.Contains(t, string(data), `"model":"gpt-5.4-mini"`)
-			writeRawRunMessage(t, w, "resp_2", "msg_2", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low-risk action."}`)
-		case 3:
-			writeRawRunFunctionCall(t, w, "resp_3", "call_3", rawRunToolName, map[string]string{"payload": "done"})
-		case 4:
-			writeRawRunMessage(t, w, "resp_4", "msg_4", "assistant text")
-		default:
-			t.Fatalf("unexpected raw run request %d", current)
+		if requests == 1 {
+			writeRawRunFunctionCall(t, w, "resp-1", "call-1", rawRunToolName, map[string]string{"payload": "done"})
+			return
 		}
+
+		writeRawRunMessage(t, w, "resp-2", "message", "ok")
 	}))
 	t.Cleanup(server.Close)
 
-	result, err := RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace, Models: map[string]string{"coding-high": "software-development-sol"}, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "gpt-5.4-mini"}, "main", "prompt", slog.New(slog.DiscardHandler), newInertRawRunProgress())
+	progress := newInertRawRunProgress()
+	progress.SessionService = service
+	progress.ConversationID = conversationID
 
+	_, err = RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}, "main", "prompt", slog.New(slog.DiscardHandler), progress)
 	require.NoError(t, err)
-	require.Equal(t, RawRunResult{Text: "assistant text", VerbatimMessage: "done"}, result)
+	assert.Contains(t, requestBody, providerReplayReadable)
+	assert.NotContains(t, requestBody, providerReplayPrivate)
 }
 
 func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
@@ -853,6 +913,60 @@ func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 	require.NotContains(t, fmt.Sprint(second["input"])+" "+fmt.Sprint(second["previous_response_id"]), "first")
 	require.Empty(t, noTools["tools"])
 	assert.NotEmpty(t, recorder.Ended(), "workflow run should emit configured tracing spans")
+}
+
+func TestWorkflowAgentRunnerResolvesNamedProviderModel(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	defaultRequests := make(chan struct{}, 1)
+
+	defaultServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		defaultRequests <- struct{}{}
+	}))
+	t.Cleanup(defaultServer.Close)
+
+	models := make(chan string, 1)
+	workServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&body)) {
+			http.Error(w, "decode request", http.StatusBadRequest)
+
+			return
+		}
+
+		models <- body.Model
+
+		w.Header().Set("Content-Type", "application/json")
+		writeRawRunMessage(t, w, "response", "message", "done")
+	}))
+	t.Cleanup(workServer.Close)
+
+	cfg := &config.Config{
+		Workspace: workspace,
+		Models:    map[string]string{"worker": "work/worker-api-model"},
+		OpenAI:    config.OpenAIConfig{APIBaseURL: defaultServer.URL},
+		Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: workServer.URL}},
+	}
+	run, cleanup, err := newWorkflowAgentRunner(cfg, "main", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cleanup()) })
+
+	cfg.Providers["work"] = config.OpenAIConfig{APIBaseURL: "http://127.0.0.1:1"}
+
+	result, err := run(t.Context(), workflow.AgentRequest{Prompt: "run", Worker: workflow.Worker{Name: "worker", Model: "worker"}}, discardWorkflowThinking)
+	require.NoError(t, err)
+	require.JSONEq(t, `"done"`, string(result))
+	assert.Equal(t, "worker-api-model", <-models)
+
+	select {
+	case <-defaultRequests:
+		t.Fatal("workflow worker used the default provider")
+	default:
+	}
 }
 
 func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {

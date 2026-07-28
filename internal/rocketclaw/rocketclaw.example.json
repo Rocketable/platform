@@ -40,6 +40,13 @@
     "api_base_url": "https://api.openai.com/v1",
     "rocketcode_auth": "api_key"
   },
+  "providers": {
+    "work": {
+      "api_key": "set-me",
+      "api_base_url": "https://work.example/v1",
+      "rocketcode_auth": "api_key"
+    }
+  },
   "auto_approver_model": "",
   "instrumentation": {
     "enabled": false,
