@@ -23,6 +23,8 @@ type ActiveTurnCheckpoint struct {
 	Agent                    string                     `json:"agent"`
 	Model                    string                     `json:"model"`
 	DisplayModel             string                     `json:"display_model"`
+	Origin                   *ProviderOrigin            `json:"origin,omitempty"`
+	LegacyReplay             LegacyReplayDisposition    `json:"legacy_replay,omitempty"`
 	ReplayInput              []json.RawMessage          `json:"replay_input,omitempty"`
 	OutputTrace              []json.RawMessage          `json:"output_trace,omitempty"`
 	TokenUsage               *TokenUsage                `json:"token_usage,omitempty"`

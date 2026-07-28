@@ -14,6 +14,7 @@ func TestActiveTurnCheckpointJSONRoundTrip(t *testing.T) {
 		Agent:           "main",
 		Model:           "gpt-5.4",
 		DisplayModel:    "GPT-5.4",
+		LegacyReplay:    legacyReplayPortable,
 		ReplayInput:     []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"hello"}`)},
 		OutputTrace:     []json.RawMessage{json.RawMessage(`{"type":"unknown_provider_item"}`)},
 		TokenUsage:      &TokenUsage{PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15},
@@ -41,6 +42,7 @@ func TestActiveTurnCheckpointJSONRoundTrip(t *testing.T) {
 	require.Equal(t, checkpoint.Agent, got.Agent)
 	require.Equal(t, checkpoint.Model, got.Model)
 	require.Equal(t, checkpoint.DisplayModel, got.DisplayModel)
+	require.Equal(t, checkpoint.LegacyReplay, got.LegacyReplay)
 	require.Equal(t, checkpoint.ResponseID, got.ResponseID)
 	require.Equal(t, checkpoint.TokenUsage, got.TokenUsage)
 	require.JSONEq(t, string(checkpoint.ReplayInput[0]), string(got.ReplayInput[0]))

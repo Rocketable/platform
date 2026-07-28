@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -49,45 +50,119 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	assert.True(t, filepath.IsAbs(cfg.Workspace))
 }
 
-func TestLoadPreservesModelConfig(t *testing.T) {
+func TestLoadPreservesNamedProviders(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",
-	  "models": {"coding-high": "software-development-sol", "review-fast": "gpt-5.6-luna"},
+	  "models": {"coding-high": "work/software-development-sol", "review-fast": "gpt-5.6-luna"},
 	  "auto_approver_model": " openai/gpt-5.5 ",
 	  "openai": {"api_key": "test-key"},
+	  "providers": {
+	    "work": {"api_base_url": " https://work.example/v1/ ", "rocketcode_auth": "chatgpt"}
+	  },
 	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
 	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
 	}`)
 
-	assert.Equal(t, "gpt-5.5", cfg.AutoApproverModel)
-	assert.Equal(t, map[string]string{"coding-high": "software-development-sol", "review-fast": "gpt-5.6-luna"}, cfg.Models)
+	assert.Equal(t, "openai/gpt-5.5", cfg.AutoApproverModel)
+	assert.Equal(t, map[string]string{"coding-high": "work/software-development-sol", "review-fast": "gpt-5.6-luna"}, cfg.Models)
+	provider, ok := cfg.Provider("work")
+	require.True(t, ok)
+	assert.Equal(t, OpenAIConfig{APIBaseURL: "https://work.example/v1", RocketCodeAuth: "chatgpt"}, provider)
+	provider, ok = cfg.Provider("openai")
+	require.True(t, ok)
+	assert.Equal(t, cfg.OpenAI, provider)
 }
 
-func TestValidateRejectsInvalidModels(t *testing.T) {
-	for _, tt := range []struct {
-		name   string
-		models map[string]string
-	}{
-		{name: "empty name", models: map[string]string{" ": "gpt-5.5"}},
-		{name: "empty model", models: map[string]string{"coding-high": " "}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
+func TestValidateRejectsInvalidProviderNames(t *testing.T) {
+	for _, name := range []string{"", " work", "work ", "openai", ".", "../work", "team/work"} {
+		t.Run(name, func(t *testing.T) {
 			cfg := validConfig()
-			cfg.Models = tt.models
+			cfg.Providers = map[string]OpenAIConfig{name: {APIKey: "key"}}
 
 			err := cfg.Validate()
-			require.ErrorContains(t, err, "models")
+			require.ErrorContains(t, err, "provider")
 		})
 	}
 }
 
-func TestRenderAgentModel(t *testing.T) {
+func TestValidateRejectsUnknownOrMalformedModelReferences(t *testing.T) {
+	for _, tt := range []struct {
+		name, wantErr string
+		update        func(*Config)
+	}{
+		{name: "empty alias", update: func(c *Config) { c.Models = map[string]string{" ": "gpt-5.5"} }, wantErr: "models"},
+		{name: "empty alias model", update: func(c *Config) { c.Models = map[string]string{"coding-high": " "} }, wantErr: "models"},
+		{name: "unknown alias provider", update: func(c *Config) { c.Models = map[string]string{"coding-high": "missing/gpt-5.5"} }, wantErr: `models["coding-high"]`},
+		{name: "empty alias qualified model", update: func(c *Config) { c.Models = map[string]string{"coding-high": "work/"} }, wantErr: `models["coding-high"]`},
+		{name: "missing alias provider", update: func(c *Config) { c.Models = map[string]string{"coding-high": "/gpt-5.5"} }, wantErr: `models["coding-high"]`},
+		{name: "unknown auto approver provider", update: func(c *Config) { c.AutoApproverModel = "missing/gpt-5.5" }, wantErr: "auto_approver_model"},
+		{name: "empty auto approver qualified model", update: func(c *Config) { c.AutoApproverModel = "work/" }, wantErr: "auto_approver_model"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Providers = map[string]OpenAIConfig{"work": {APIKey: "key"}}
+			tt.update(cfg)
+
+			err := cfg.Validate()
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+func TestValidateNormalizesProviderBaseURLs(t *testing.T) {
 	cfg := validConfig()
+	cfg.OpenAI.APIBaseURL = " https://api.openai.com/v1/// "
+	cfg.Providers = map[string]OpenAIConfig{
+		"work":  {APIKey: " work-key ", APIBaseURL: " https://work.example/v1/// "},
+		"oauth": {APIBaseURL: " ", RocketCodeAuth: " chatgpt "},
+	}
+
+	require.NoError(t, cfg.Validate())
+	assert.Equal(t, "https://api.openai.com/v1", cfg.OpenAI.APIBaseURL)
+	assert.Equal(t, "https://work.example/v1", cfg.Providers["work"].APIBaseURL)
+	assert.Empty(t, cfg.Providers["oauth"].APIBaseURL)
+	assert.Equal(t, "chatgpt", cfg.Providers["oauth"].RocketCodeAuth)
+}
+
+func TestValidateRejectsUnsafeProviderBaseURLs(t *testing.T) {
+	for _, rawURL := range []string{
+		"api.example.test/v1",
+		"/v1",
+		"ftp://api.example.test/v1",
+		"https://api.example.test/v1?token=secret",
+		"https://api.example.test/v1#private",
+		"https://user:password@api.example.test/v1",
+		"https:///v1",
+	} {
+		t.Run(rawURL, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.OpenAI.APIBaseURL = rawURL
+
+			err := cfg.Validate()
+			require.ErrorContains(t, err, "openai.api_base_url")
+		})
+	}
+}
+
+func TestValidateAcceptsAbsoluteHTTPProviderBaseURLs(t *testing.T) {
+	for _, rawURL := range []string{"http://localhost:8080/v1/", "https://api.example.test/openresponses///", " "} {
+		t.Run(rawURL, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.OpenAI.APIBaseURL = rawURL
+
+			require.NoError(t, cfg.Validate())
+			require.Equal(t, strings.TrimRight(strings.TrimSpace(rawURL), "/"), cfg.OpenAI.APIBaseURL)
+		})
+	}
+}
+
+func TestRenderAgentModelResolvesNamedProviderAlias(t *testing.T) {
+	cfg := validConfig()
+	cfg.Providers = map[string]OpenAIConfig{"work": {APIKey: "key"}}
 	cfg.Models = map[string]string{
-		"coding-high":        "software-development-sol",
+		"coding-high":        "work/software-development-sol",
 		`quoted"placeholder`: "gpt-5.6-luna",
 		"nested":             `{{ model "coding-high" }}`,
-		"invalid":            "anthropic/claude",
 	}
 	require.NoError(t, cfg.Validate())
 
@@ -98,13 +173,14 @@ func TestRenderAgentModel(t *testing.T) {
 		wantErr string
 	}{
 		{name: "concrete", model: "gpt-5.5", want: "gpt-5.5"},
-		{name: "placeholder", model: `{{ model "coding-high" }}`, want: "software-development-sol"},
+		{name: "explicit openai", model: "openai/gpt-5.5", want: "openai/gpt-5.5"},
+		{name: "placeholder", model: `{{ model "coding-high" }}`, want: "work/software-development-sol"},
 		{name: "arbitrary quoted name", model: `{{ model "quoted\"placeholder" }}`, want: "gpt-5.6-luna"},
 		{name: "missing", model: `{{ model "missing" }}`, wantErr: `model "missing" is not configured`},
 		{name: "invalid template", model: `{{ model "coding-high" }`, wantErr: "parse model template"},
 		{name: "empty result", model: `{{ "" }}`, wantErr: "model template returned an empty model"},
 		{name: "nested", model: `{{ model "nested" }}`, wantErr: "model template returned another template"},
-		{name: "provider validation is separate", model: `{{ model "invalid" }}`, want: "anthropic/claude"},
+		{name: "unknown provider", model: "missing/gpt-5.5", wantErr: "missing/gpt-5.5"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := cfg.RenderAgentModel(tt.model)
@@ -197,7 +273,12 @@ func TestValidateRejectsMissingRequiredConfig(t *testing.T) {
 	}{
 		{name: "workspace", update: func(c *Config) { c.Workspace = "" }, wantErr: "workspace is required"},
 		{name: "rocketcode auth", update: func(c *Config) { c.OpenAI.RocketCodeAuth = "browser" }, wantErr: "openai.rocketcode_auth must be api_key or chatgpt"},
-		{name: "auto approver model", update: func(c *Config) { c.AutoApproverModel = "anthropic/claude" }, wantErr: `auto_approver_model: invalid model "anthropic/claude": expected unprefixed OpenAI model ID`},
+		{name: "provider rocketcode auth", update: func(c *Config) {
+			c.Providers = map[string]OpenAIConfig{"work": {RocketCodeAuth: "browser"}}
+		}, wantErr: `providers["work"].rocketcode_auth must be api_key or chatgpt`},
+		{name: "provider API key", update: func(c *Config) {
+			c.Providers = map[string]OpenAIConfig{"work": {}}
+		}, wantErr: `providers["work"].api_key is required when providers["work"].rocketcode_auth is api_key`},
 		{name: "mcp external listen addr", update: func(c *Config) { c.MCPExternal.Enabled = true }, wantErr: "mcp_external.listen_addr is required when mcp_external is enabled"},
 		{name: "slack bot token", update: func(c *Config) { c.Slack.BotToken = "" }, wantErr: "slack.bot_token is required"},
 		{name: "slack app token", update: func(c *Config) { c.Slack.AppToken = "" }, wantErr: "slack.app_token is required"},

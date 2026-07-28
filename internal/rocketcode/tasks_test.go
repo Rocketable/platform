@@ -310,6 +310,40 @@ func TestTaskTool(t *testing.T) {
 	})
 }
 
+func TestTaskRoutesSubagentByModelProvider(t *testing.T) {
+	openAIMock := mockResponses()
+	workMock := mockResponses(responseWithMessage("child", "done"))
+	factory := testTaskFactory(openAIMock, Agents{Items: map[string]Agent{
+		"review": {Name: "review", Model: "work/reviewer", Prompt: "review"},
+	}})
+	factory.providers["work"] = Provider{client: workMock, route: "responses:https://work.example/v1", authenticationEpoch: "epoch-work"}
+
+	_, err := factory.runTask(t.Context(), testTaskParams("Review", "check", "review"), toolCallMetadata{}, testTaskOutput())
+
+	require.NoError(t, err)
+	require.Empty(t, openAIMock.calls)
+	require.Len(t, workMock.calls, 1)
+	require.Equal(t, "reviewer", workMock.calls[0].Model)
+}
+
+func TestTaskRoutesGuardrailByModelProvider(t *testing.T) {
+	openAIMock := mockResponses()
+	guardMock := mockResponses(testResponse("guard", []responses.ResponseOutputItemUnion{
+		testMessageOutputItem("guard-final", "", `{"approved":true,"reason":"ok"}`),
+	}))
+	factory := testTaskFactory(openAIMock, Agents{Items: map[string]Agent{
+		"guard": {Name: "guard", Model: "guardrail/checker", Prompt: "guard"},
+	}})
+	factory.providers["guardrail"] = Provider{client: guardMock, route: "responses:https://guard.example/v1", authenticationEpoch: "epoch-guard"}
+
+	decision := factory.runGuardrail(t.Context(), new(factory.agents.Items["guard"]), ChildRunStageDelegation, "check", "worker", toolCallMetadata{}, testTaskOutput())
+
+	require.True(t, decision.Approved)
+	require.Empty(t, openAIMock.calls)
+	require.Len(t, guardMock.calls, 1)
+	require.Equal(t, "checker", guardMock.calls[0].Model)
+}
+
 func TestTaskToolPermissionDefaults(t *testing.T) {
 	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
 
@@ -699,7 +733,7 @@ func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
 
 	var factory toolFactory
 
-	factory.client = client
+	factory.providers = Providers{"openai": {client: client, route: "responses:https://api.openai.com/v1", authenticationEpoch: "epoch-openai"}}
 	factory.modelRef = defaultModelRef()
 	factory.agents = agents
 	factory.skills = Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}

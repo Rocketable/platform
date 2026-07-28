@@ -285,7 +285,7 @@ func prepareRocketCode(cfg *config.Config, agent string, logger *slog.Logger, mo
 
 	b := &Bridge{log: logger, config: Config{Agent: agent}, runtime: cfg}
 
-	providers, err := b.rocketcodeProviders(agents)
+	providers, err := b.rocketcodeProviders()
 	if err != nil {
 		_ = root.Close()
 		return nil, rocketcode.Agents{}, rocketcode.Skills{}, rocketcode.Providers{}, fmt.Errorf("prepare RocketCode providers: %w", err)

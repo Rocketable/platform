@@ -6,11 +6,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
 	harness "github.com/Rocketable/platform/internal/rocketcode"
 )
+
+const activeTurnOriginMetadataKey = "rocketcode.provider_origin"
+const activeTurnLegacyReplayMetadataKey = "rocketcode.legacy_replay"
 
 type stateDAO struct {
 	db stateStoreDB
@@ -319,8 +323,38 @@ func (d stateDAO) upsertActiveTurnWithSourceMetadata(ctx context.Context, checkp
 
 func (d stateDAO) upsertActiveTurnState(ctx context.Context, turn *ActiveTurnState) error {
 	checkpointState := turn.Checkpoint
+	switch checkpointState.LegacyReplay {
+	case "", "opaque_bound", "portable":
+	default:
+		return fmt.Errorf("invalid active turn legacy replay disposition %q", checkpointState.LegacyReplay)
+	}
 
-	metadata, err := marshalActiveTurnJSON(turn.SourceMetadata)
+	sourceMetadata := maps.Clone(turn.SourceMetadata)
+	delete(sourceMetadata, activeTurnOriginMetadataKey)
+	delete(sourceMetadata, activeTurnLegacyReplayMetadataKey)
+
+	if checkpointState.Origin != nil {
+		if sourceMetadata == nil {
+			sourceMetadata = map[string]string{}
+		}
+
+		origin, err := marshalActiveTurnJSON(checkpointState.Origin)
+		if err != nil {
+			return fmt.Errorf("marshal active turn provider origin: %w", err)
+		}
+
+		sourceMetadata[activeTurnOriginMetadataKey] = origin
+	}
+
+	if checkpointState.LegacyReplay != "" {
+		if sourceMetadata == nil {
+			sourceMetadata = map[string]string{}
+		}
+
+		sourceMetadata[activeTurnLegacyReplayMetadataKey] = string(checkpointState.LegacyReplay)
+	}
+
+	metadata, err := marshalActiveTurnJSON(sourceMetadata)
 	if err != nil {
 		return fmt.Errorf("marshal active turn source metadata: %w", err)
 	}
@@ -593,6 +627,32 @@ func scanActiveTurn(scanner rowScanner) (ActiveTurnState, error) {
 
 	if turn.SourceMetadata == nil {
 		turn.SourceMetadata = map[string]string{}
+	}
+
+	origin := strings.TrimSpace(turn.SourceMetadata[activeTurnOriginMetadataKey])
+	delete(turn.SourceMetadata, activeTurnOriginMetadataKey)
+	legacyReplay := strings.TrimSpace(turn.SourceMetadata[activeTurnLegacyReplayMetadataKey])
+	delete(turn.SourceMetadata, activeTurnLegacyReplayMetadataKey)
+
+	if origin != "" {
+		var providerOrigin harness.ProviderOrigin
+		if err := json.Unmarshal([]byte(origin), &providerOrigin); err != nil {
+			return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "provider origin", err: err}
+		}
+
+		if strings.TrimSpace(providerOrigin.ProviderID) == "" || strings.TrimSpace(providerOrigin.Route) == "" || strings.TrimSpace(providerOrigin.ModelID) == "" || strings.TrimSpace(providerOrigin.AuthenticationEpoch) == "" {
+			return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "provider origin", err: errors.New("missing required fields")}
+		}
+
+		turn.Checkpoint.Origin = new(providerOrigin)
+	}
+
+	switch legacyReplay {
+	case "":
+	case "opaque_bound", "portable":
+		turn.Checkpoint.LegacyReplay = harness.LegacyReplayDisposition(legacyReplay)
+	default:
+		return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "legacy replay disposition", err: fmt.Errorf("unknown value %q", legacyReplay)}
 	}
 
 	if strings.TrimSpace(restartNotice) != "" {

@@ -25,6 +25,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
+	"github.com/Rocketable/platform/internal/rocketclaw/oai"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	openai "github.com/openai/openai-go/v3"
@@ -34,6 +35,237 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
+
+func TestRecoveredActiveTurnExactOriginReplaysOpaqueState(t *testing.T) {
+	bridge, origin, requestBody := recoveredReplayTestBridge(t)
+	replay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		{OfReasoning: &responses.ResponseReasoningItemParam{ID: "reasoning-provider-id", Summary: []responses.ResponseReasoningItemSummaryParam{{Text: "readable reasoning"}}, EncryptedContent: openai.String("sealed-reasoning"), Type: "reasoning"}},
+	})
+	require.NoError(t, err)
+
+	checkpoint := &rocketcode.ActiveTurnCheckpoint{Origin: &origin, ReplayInput: replay}
+	msg := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "restart_recovery", "continue", false)
+	msg.ConversationID = bridge.config.ConversationID
+
+	_, err = bridge.runTurn(t.Context(), msg, "turn-exact", false, checkpoint)
+	require.NoError(t, err)
+	assert.Contains(t, *requestBody, "sealed-reasoning")
+	assert.Contains(t, *requestBody, "reasoning-provider-id")
+}
+
+func TestRecoveredActiveTurnPortableDispositionDoesNotRepeatOpaqueAttempt(t *testing.T) {
+	bridge, _, requestBody := recoveredReplayTestBridge(t)
+	replay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		{OfReasoning: &responses.ResponseReasoningItemParam{ID: "reasoning-provider-id", Summary: []responses.ResponseReasoningItemSummaryParam{{Text: "readable reasoning"}}, EncryptedContent: openai.String("sealed-reasoning"), Type: "reasoning"}},
+	})
+	require.NoError(t, err)
+
+	checkpoint := &rocketcode.ActiveTurnCheckpoint{LegacyReplay: rocketcode.LegacyReplayDisposition("portable"), ReplayInput: replay}
+	msg := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "restart_recovery", "continue", false)
+	msg.ConversationID = bridge.config.ConversationID
+
+	_, err = bridge.runTurn(t.Context(), msg, "turn-portable", false, checkpoint)
+	require.NoError(t, err)
+	assert.Contains(t, *requestBody, "readable reasoning")
+	assert.NotContains(t, *requestBody, "sealed-reasoning")
+	assert.NotContains(t, *requestBody, "reasoning-provider-id")
+}
+
+func TestRecoveredActiveTurnOriginMismatchUsesPortableCheckpoint(t *testing.T) {
+	bridge, origin, requestBody := recoveredReplayTestBridge(t)
+
+	var logs bytes.Buffer
+
+	bridge.log = slog.New(slog.NewJSONHandler(&logs, nil))
+	mismatch := origin
+	mismatch.ModelID = "other-model"
+	items, err := rocketcode.ReplayInputToParams([]json.RawMessage{
+		json.RawMessage(`{"type":"reasoning","id":"reasoning-provider-id","encrypted_content":"sealed-reasoning","summary":[{"type":"summary_text","text":"readable reasoning"}]}`),
+		json.RawMessage(`{"type":"function_call","id":"call-provider-id","call_id":"call-1","name":"read","arguments":"{}"}`),
+		json.RawMessage(`{"type":"function_call_output","id":"output-provider-id","call_id":"call-1","output":"contents"}`),
+		json.RawMessage(`{"type":"web_search_call","id":"web-provider-id","status":"completed","action":{"type":"search","query":"private"}}`),
+		json.RawMessage(`{"type":"file_search_call","id":"extension-provider-id","status":"completed","queries":["private"]}`),
+		json.RawMessage(`{"type":"compaction","id":"compaction-provider-id","encrypted_content":"sealed-compaction","content":"portable checkpoint"}`),
+		json.RawMessage(`{"type":"message","role":"assistant","phase":"final_answer","content":"portable tail"}`),
+	})
+	require.NoError(t, err)
+	replay, err := rocketcode.ReplayInputFromParams(items)
+	require.NoError(t, err)
+
+	checkpoint := &rocketcode.ActiveTurnCheckpoint{Origin: &mismatch, ReplayInput: replay}
+	msg := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "restart_recovery", "continue", false)
+	msg.ConversationID = bridge.config.ConversationID
+
+	_, err = bridge.runTurn(t.Context(), msg, "turn-mismatch", false, checkpoint)
+	require.NoError(t, err)
+	assert.NotContains(t, *requestBody, "readable reasoning")
+	assert.Contains(t, *requestBody, "portable checkpoint")
+	assert.Contains(t, *requestBody, "portable tail")
+	assert.Contains(t, *requestBody, `"phase":"final_answer"`)
+	assert.NotContains(t, *requestBody, `"call_id":"call-1"`)
+	assert.NotContains(t, *requestBody, "sealed-")
+	assert.NotContains(t, *requestBody, "provider-id")
+	assert.NotContains(t, *requestBody, "web_search_call")
+	assert.NotContains(t, *requestBody, "file_search_call")
+	assert.Contains(t, logs.String(), "rocketcode provider handoff")
+	assert.Contains(t, logs.String(), `"provider_id":"openai"`)
+	assert.Contains(t, logs.String(), `"model_id":"gpt-5.5"`)
+	assert.NotContains(t, logs.String(), "AuthenticationEpoch")
+}
+
+func TestRecoveredActiveTurnMismatchedOpaqueBoundStaysPortableAcrossRestart(t *testing.T) {
+	bridge, destination, requestBody := recoveredReplayTestBridge(t)
+	oldReplay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		{OfReasoning: &responses.ResponseReasoningItemParam{ID: "old-provider-id", Summary: []responses.ResponseReasoningItemSummaryParam{{Text: "old readable"}}, EncryptedContent: openai.String("old-ciphertext"), Type: "reasoning"}},
+	})
+	require.NoError(t, err)
+	_, err = bridge.config.SessionService.AppendEntryID(t.Context(), bridge.config.ConversationID, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: oldReplay})
+	require.NoError(t, err)
+
+	source := destination
+	source.AuthenticationEpoch = "source-epoch"
+	checkpoint := &rocketcode.ActiveTurnCheckpoint{Origin: &source, LegacyReplay: rocketcode.LegacyReplayDisposition("opaque_bound"), ReplayInput: oldReplay}
+	msg := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "restart_recovery", "continue", false)
+	msg.ConversationID = bridge.config.ConversationID
+
+	_, err = bridge.runTurn(t.Context(), msg, "turn-portable-mismatch", false, checkpoint)
+	require.NoError(t, err)
+	assert.Contains(t, *requestBody, "old readable")
+	assert.NotContains(t, *requestBody, "old-ciphertext")
+	assert.NotContains(t, *requestBody, "old-provider-id")
+
+	entries, err := bridge.config.SessionService.ObserveEntries(t.Context(), bridge.config.ConversationID, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	require.Equal(t, rocketcode.LegacyReplayDisposition("portable"), entries[1].Entry.LegacyReplay)
+	require.Equal(t, &destination, entries[1].Entry.Origin)
+
+	*requestBody = ""
+	next := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "restart_recovery", "continue again", false)
+	next.ConversationID = bridge.config.ConversationID
+	_, err = bridge.runTurn(t.Context(), next, "turn-after-portable-mismatch", false)
+	require.NoError(t, err)
+	assert.NotContains(t, *requestBody, "old-ciphertext")
+	assert.NotContains(t, *requestBody, "old-provider-id")
+}
+
+func TestRecoveredActiveTurnMismatchReportsMissingReadableCompaction(t *testing.T) {
+	bridge, origin, _ := recoveredReplayTestBridge(t)
+	mismatch := origin
+	mismatch.AuthenticationEpoch = "other-epoch"
+	replay := []json.RawMessage{json.RawMessage(`{"type":"compaction","id":"compaction-provider-id","encrypted_content":"sealed-compaction"}`)}
+	checkpoint := &rocketcode.ActiveTurnCheckpoint{Origin: &mismatch, ReplayInput: replay}
+	msg := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "restart_recovery", "continue", false)
+	msg.ConversationID = bridge.config.ConversationID
+
+	_, err := bridge.runTurn(t.Context(), msg, "turn-missing", false, checkpoint)
+
+	var missing *rocketcode.MissingPortableContextError
+	require.ErrorAs(t, err, &missing)
+	assert.Equal(t, "compaction-provider-id", missing.CompactionID)
+}
+
+func TestRecoveredActiveTurnSecondRestartPreservesOriginSafety(t *testing.T) {
+	destination := rocketcode.ProviderOrigin{ProviderID: "destination", Route: "destination-route", ModelID: "destination-model", AuthenticationEpoch: "destination-epoch"}
+	source := rocketcode.ProviderOrigin{ProviderID: "source", Route: "source-route", ModelID: "source-model", AuthenticationEpoch: "source-epoch"}
+	replay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		{OfReasoning: &responses.ResponseReasoningItemParam{ID: "reasoning-provider-id", Summary: []responses.ResponseReasoningItemSummaryParam{{Text: "readable reasoning"}}, EncryptedContent: openai.String("sealed-reasoning"), Type: "reasoning"}},
+		{OfFunctionCall: &responses.ResponseFunctionToolCallParam{Arguments: `{}`, CallID: "call-1", Name: "read", ID: openai.String("call-provider-id"), Type: "function_call"}},
+	})
+	require.NoError(t, err)
+	currentReplay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		{OfReasoning: &responses.ResponseReasoningItemParam{ID: "destination-provider-id", Summary: []responses.ResponseReasoningItemSummaryParam{{Text: "current reasoning"}}, EncryptedContent: openai.String("sealed-current"), Type: "reasoning"}},
+	})
+	require.NoError(t, err)
+
+	t.Run("nonlegacy mismatch remains portable", func(t *testing.T) {
+		first, err := rocketcode.RecoveredReplayInput(&rocketcode.ActiveTurnCheckpoint{Origin: &source, ReplayInput: replay, OpenFunctionCalls: []rocketcode.FunctionCallCheckpoint{{CallID: "call-1", Name: "read"}}}, destination)
+		require.NoError(t, err)
+
+		sink := new(captureCheckpointSink)
+		wrapper := recoveredActiveTurnCheckpointSink{sink: sink, recoveredReplay: first, recoveredOrigin: new(destination)}
+		require.NoError(t, wrapper.RecordProviderResponse(t.Context(), &rocketcode.ActiveTurnCheckpoint{Origin: &destination, ReplayInput: currentReplay}))
+		require.Equal(t, &destination, sink.checkpoints[0].Origin)
+
+		second, err := rocketcode.RecoveredReplayInput(sink.checkpoints[0], destination)
+		require.NoError(t, err)
+		serializedJSON, err := json.Marshal(second)
+		require.NoError(t, err)
+
+		serialized := string(serializedJSON)
+		assert.NotContains(t, serialized, "sealed-reasoning")
+		assert.NotContains(t, serialized, "reasoning-provider-id")
+		assert.NotContains(t, serialized, "call-provider-id")
+		assert.Contains(t, serialized, "sealed-current")
+		assert.Contains(t, serialized, "destination-provider-id")
+		assert.Equal(t, 1, strings.Count(serialized, "tool call aborted"))
+		assert.Equal(t, 1, strings.Count(serialized, "previous runtime was interrupted"))
+	})
+
+	t.Run("legacy promotes after provider response and projects for next destination", func(t *testing.T) {
+		first, err := rocketcode.RecoveredReplayInput(&rocketcode.ActiveTurnCheckpoint{ReplayInput: replay, OpenFunctionCalls: []rocketcode.FunctionCallCheckpoint{{CallID: "call-1", Name: "read"}}}, destination)
+		require.NoError(t, err)
+
+		sink := new(captureCheckpointSink)
+		wrapper := recoveredActiveTurnCheckpointSink{sink: sink, recoveredReplay: first}
+		require.NoError(t, wrapper.StartActiveTurn(t.Context(), &rocketcode.ActiveTurnCheckpoint{Origin: &destination}))
+		require.Nil(t, sink.checkpoints[0].Origin)
+		require.NoError(t, wrapper.RecordProviderResponse(t.Context(), &rocketcode.ActiveTurnCheckpoint{Origin: &destination, ResponseID: "response-a", ReplayInput: currentReplay}))
+		require.Equal(t, &destination, sink.checkpoints[1].Origin)
+
+		destinationB := destination
+		destinationB.ProviderID = "destination-b"
+		second, err := rocketcode.RecoveredReplayInput(sink.checkpoints[1], destinationB)
+		require.NoError(t, err)
+		serializedJSON, err := json.Marshal(second)
+		require.NoError(t, err)
+
+		serialized := string(serializedJSON)
+		assert.NotContains(t, serialized, "sealed-reasoning")
+		assert.NotContains(t, serialized, "reasoning-provider-id")
+		assert.NotContains(t, serialized, "sealed-current")
+		assert.NotContains(t, serialized, "destination-provider-id")
+		assert.Contains(t, serialized, "readable reasoning")
+		assert.Contains(t, serialized, "current reasoning")
+		assert.Equal(t, 1, strings.Count(serialized, "tool call aborted"))
+		assert.Equal(t, 1, strings.Count(serialized, "previous runtime was interrupted"))
+	})
+}
+
+func recoveredReplayTestBridge(t *testing.T) (*Bridge, rocketcode.ProviderOrigin, *string) {
+	t.Helper()
+
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+	service, err := NewSessionService(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
+
+	requestBody := new(string)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		*requestBody = string(body)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"recovered","annotations":[]}]}]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	epoch, err := oai.AuthenticationEpochIn(workspace, config.DefaultRuntimeDir, "openai", "api_key", "")
+	require.NoError(t, err)
+
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, log: slog.New(slog.DiscardHandler)}
+	origin := rocketcode.ProviderOrigin{ProviderID: "openai", Route: "responses:" + server.URL, ModelID: "gpt-5.5", AuthenticationEpoch: epoch}
+
+	return bridge, origin, requestBody
+}
 
 func TestRestartToolScopesDescriptionToRuntimeConfig(t *testing.T) {
 	tool := restartTool(testNoopRestart, testNoopRestartRecorder)
@@ -462,7 +694,7 @@ func TestActiveTurnCheckpointSinkMapsLifecycleToSessionService(t *testing.T) {
 func TestRecoveredActiveTurnCheckpointSinkPreservesRecoveredReplay(t *testing.T) {
 	recoveredReplay := []json.RawMessage{json.RawMessage(`{"type":"message","role":"developer","content":"interrupted transcript"}`)}
 	sink := &captureCheckpointSink{}
-	wrapper := recoveredActiveTurnCheckpointSink{sink: sink, recoveredReplay: recoveredReplay}
+	wrapper := recoveredActiveTurnCheckpointSink{sink: sink, recoveredReplay: recoveredReplay, recoveredLegacyReplay: rocketcode.LegacyReplayDisposition("portable")}
 
 	checkpoint := &rocketcode.ActiveTurnCheckpoint{
 		TurnID:      "turn-2",
@@ -474,6 +706,7 @@ func TestRecoveredActiveTurnCheckpointSinkPreservesRecoveredReplay(t *testing.T)
 	assert.JSONEq(t, `{"type":"message","role":"developer","content":"interrupted transcript"}`, string(sink.checkpoints[0].ReplayInput[0]))
 	assert.JSONEq(t, `{"type":"message","role":"user","content":"continue"}`, string(sink.checkpoints[0].ReplayInput[1]))
 	assert.JSONEq(t, `{"type":"message","role":"user","content":"continue"}`, string(checkpoint.ReplayInput[0]))
+	assert.Equal(t, rocketcode.LegacyReplayDisposition("portable"), sink.checkpoints[0].LegacyReplay)
 
 	require.NoError(t, wrapper.RecordCompletedToolOutput(context.Background(), sink.checkpoints[0]))
 	require.Len(t, sink.checkpoints, 2)
@@ -1500,9 +1733,9 @@ Prompt
 
 	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIKey: "test-key", RocketCodeAuth: "api_key"}}, log: slog.New(slog.DiscardHandler)}
 
-	providers, err := bridge.rocketcodeProviders(agents)
+	providers, err := bridge.rocketcodeProviders()
 	require.NoError(t, err)
-	require.NotNil(t, providers.OpenAI)
+	require.Contains(t, providers, "openai")
 
 	shellOutputDir := filepath.Join(workspace, "shell-output")
 	require.NoError(t, os.Mkdir(shellOutputDir, 0o755))
@@ -1875,7 +2108,7 @@ func TestBridgeFailedManagedWorkflowPersistsRunSummary(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
 		require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
-		require.NoError(t, root.WriteFile(".rocketclaw/workflows/fail.star", []byte("meta = {\"name\": \"fail\", \"description\": \"Fail\", \"phases\": [\"work\", \"later\"]}\ndef main(args): return parallel([lambda: phase(\"work\", lambda: 1 // 0), lambda: phase(\"later\", lambda: 1 // 0)])\n"), 0o600))
+		require.NoError(t, root.WriteFile(".rocketclaw/workflows/fail.star", []byte("meta = {\"name\": \"fail\", \"description\": \"Fail\", \"phases\": [\"work\", \"later\"]}\ndef main(args): return phase(\"later\", lambda: 1 // 0)\n"), 0o600))
 		definitions, err := workflow.Load(root, ".rocketclaw")
 		require.NoError(t, err)
 		require.NoError(t, root.Close())
@@ -1915,8 +2148,8 @@ func TestBridgeFailedManagedWorkflowPersistsRunSummary(t *testing.T) {
 		assert.Equal(t, workflowRunEntryType, entries[0].Entry.Type)
 		summary := workflowSummaryFromEntry(t, &entries[0].Entry)
 		assert.Equal(t, workflow.TerminalFailed, summary.Terminal)
-		assert.Equal(t, []workflowRunPhaseSummary{{Name: "work", Status: workflow.PhaseError}, {Name: "later", Status: workflow.PhaseError}}, summary.Phases)
-		assert.Equal(t, "workflow execution failed", summary.Error)
+		assert.Equal(t, []workflowRunPhaseSummary{{Name: "work", Status: workflow.PhaseSkipped}, {Name: "later", Status: workflow.PhaseError}}, summary.Phases)
+		assert.Equal(t, `phase "later" failed`, summary.Error)
 	})
 }
 
@@ -2747,6 +2980,8 @@ func TestBridgeRearmsScheduledMessagesAfterRecoveredTurnFailure(t *testing.T) {
 }
 
 func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
+	const sentinel = "https://user:token@example.test/private/account-123?api_key=digest-secret"
+
 	status := http.StatusTooManyRequests
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if status == http.StatusOK {
@@ -2758,7 +2993,7 @@ func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
 
 		w.Header().Set("Retry-After", "2")
 		w.Header().Set("X-Request-ID", "req-rate")
-		http.Error(w, `{"error":{"message":"blocked"}}`, status)
+		http.Error(w, `{"error":{"message":"`+sentinel+`"}}`, status)
 	}))
 	t.Cleanup(server.Close)
 
@@ -2774,15 +3009,15 @@ func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
 	var params responses.ResponseNewParams
 
 	bridge.log = bridge.log.With("conversation_id", "main", "turn_id", "turn-1", "agent", "main", "source", string(events.SourceSlack), "kind", string(events.InboundKindPrompt), "label", "goal", "human", true, "goal_turn", true, "publish", true, "attachment_count", 2, "web_session_id", "browser-session-1")
-	client, err := bridge.openAIClient()
+	client, err := bridge.openAIClient("openai", cfg.OpenAI)
 	require.NoError(t, err)
 
 	_, err = client.Responses.New(context.Background(), params)
 	require.Error(t, err)
 	assert.Contains(t, logs.String(), "provider request failed")
-	assert.Contains(t, logs.String(), `"path":"/responses"`)
 	assert.Contains(t, logs.String(), `"status":429`)
-	assert.Contains(t, logs.String(), `"error":"provider returned status 429"`)
+	assert.NotContains(t, logs.String(), sentinel)
+	assert.NotContains(t, logs.String(), `"path"`)
 	assert.Contains(t, logs.String(), `"conversation_id":"main"`)
 	assert.Contains(t, logs.String(), `"turn_id":"turn-1"`)
 	assert.Contains(t, logs.String(), `"agent":"main"`)
@@ -2795,11 +3030,12 @@ func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {
 	assert.Contains(t, logs.String(), `"attachment_count":2`)
 	assert.Contains(t, logs.String(), `"web_session_id":"browser-session-1"`)
 	assert.Contains(t, logs.String(), `"provider_request_id":"req-rate"`)
+	assert.Contains(t, logs.String(), `"provider_id":"openai"`)
 	assert.Contains(t, logs.String(), `"retry_after":"2"`)
 	logs.Reset()
 
 	status = http.StatusOK
-	client, err = bridge.openAIClient()
+	client, err = bridge.openAIClient("openai", cfg.OpenAI)
 	require.NoError(t, err)
 
 	_, _ = client.Responses.New(context.Background(), params)
@@ -3335,7 +3571,7 @@ func TestRunTurnPreservesRecoveredExternalMCPReplayWithTransientMetadata(t *test
 	msg.ConversationID = conversationID
 	msg.Metadata = map[string]string{"later-key": "fresh"}
 
-	_, err = bridge.runTurn(context.Background(), msg, "turn-1", false, recoveredReplay)
+	_, err = bridge.runTurn(context.Background(), msg, "turn-1", false, &rocketcode.ActiveTurnCheckpoint{ReplayInput: recoveredReplay})
 	require.NoError(t, err)
 	require.NoError(t, errRequest)
 
@@ -3755,7 +3991,7 @@ func TestRecoveredActiveTurnIncludesPriorCompletedHistory(t *testing.T) {
 	msg.ConversationID = conversationID
 	msg.Metadata = map[string]string{events.InboundOriginMetadataKey: "System", events.InboundMediaMetadataKey: "Text", recoveredTurnMetadataKey: "true"}
 
-	_, err = bridge.runTurn(context.Background(), msg, "turn-1", false, recoveredReplay)
+	_, err = bridge.runTurn(context.Background(), msg, "turn-1", false, &rocketcode.ActiveTurnCheckpoint{ReplayInput: recoveredReplay})
 	require.NoError(t, err)
 
 	priorQuestion := strings.Index(requestInput, "prior question")

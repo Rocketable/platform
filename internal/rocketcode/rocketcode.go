@@ -83,9 +83,27 @@ type ObservabilityConfig struct {
 	TraceConfig instrumentation.TraceConfig
 }
 
-// Providers contains model provider clients supplied by embedding applications.
-type Providers struct {
-	OpenAI *openai.Client
+// ProviderOrigin identifies the provider state used for one model call.
+type ProviderOrigin struct {
+	ProviderID          string `json:"provider_id"`
+	Route               string `json:"route"`
+	ModelID             string `json:"model_id"`
+	AuthenticationEpoch string `json:"authentication_epoch"`
+}
+
+// Provider contains one Responses API route and its authentication epoch.
+type Provider struct {
+	client              responsesAPI
+	route               string
+	authenticationEpoch string
+}
+
+// Providers contains model providers keyed by provider ID.
+type Providers map[string]Provider
+
+// NewOpenAIProvider adapts an OpenAI client into a RocketCode provider.
+func NewOpenAIProvider(client *openai.Client, route, authenticationEpoch string) Provider {
+	return Provider{client: responseServiceClient{service: &client.Responses}, route: route, authenticationEpoch: authenticationEpoch}
 }
 
 // PromptShellCommandExpansion controls which prompt sources expand !`command` snippets.
@@ -187,7 +205,7 @@ func New(
 		return nil, errors.New("client is required")
 	}
 
-	return NewWithProviders(Providers{OpenAI: client}, configInput, root, agents, skills, defaultAgent, diagnosticsWriter)
+	return NewWithProviders(Providers{"openai": NewOpenAIProvider(client, "responses:https://api.openai.com/v1", "embedded-openai")}, configInput, root, agents, skills, defaultAgent, diagnosticsWriter)
 }
 
 // NewWithProviders loads the supplied runtime dependencies and returns a configured looper.
@@ -308,7 +326,7 @@ func NewWithProviders(
 		return nil, fmt.Errorf("agent %q model: %w", activeAgent.Name, err)
 	}
 
-	providerClient, err := responsesAPIForModel(providers)
+	selection, err := responsesAPIForModel(providers, modelRef)
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +343,7 @@ func NewWithProviders(
 
 	maps.Copy(baseTools, customTools)
 	factory := &toolFactory{
-		client:                     providerClient.client,
+		providers:                  providers,
 		systemPrompt:               systemPrompt,
 		defaultModelRef:            defaultModelRef,
 		autoApproverModelRef:       autoApproverModelRef,
@@ -353,7 +371,8 @@ func NewWithProviders(
 	looper := &looper{
 		agent:                  activeAgent,
 		modelRef:               modelRef,
-		Client:                 providerClient.client,
+		Client:                 selection.client,
+		Origin:                 selection.origin,
 		SystemPrompt:           runtimeSystemPrompt,
 		Model:                  modelRef.apiModel,
 		DisplayModel:           modelRef.display(),
@@ -483,14 +502,6 @@ func normalizeConfig(configInput *Config) Config {
 	return config
 }
 
-func requireProvider(providers Providers) error {
-	if providers.OpenAI == nil {
-		return errors.New("openai provider is required")
-	}
-
-	return nil
-}
-
 func validateAgentModels(agents Agents) error {
 	for name := range agents.Items {
 		agent := agents.Items[name]
@@ -508,14 +519,28 @@ func validateAgentModels(agents Agents) error {
 
 type responsesAPISelection struct {
 	client responsesAPI
+	origin ProviderOrigin
 }
 
-func responsesAPIForModel(providers Providers) (responsesAPISelection, error) {
-	if err := requireProvider(providers); err != nil {
-		return responsesAPISelection{}, err
+func responsesAPIForModel(providers Providers, model modelRef) (responsesAPISelection, error) {
+	provider, ok := providers[model.providerID]
+	if !ok {
+		return responsesAPISelection{}, fmt.Errorf("provider %q is required", model.providerID)
 	}
 
-	return responsesAPISelection{client: responseServiceClient{service: &providers.OpenAI.Responses}}, nil
+	if provider.client == nil {
+		return responsesAPISelection{}, fmt.Errorf("provider %q client is required", model.providerID)
+	}
+
+	if provider.route == "" {
+		return responsesAPISelection{}, fmt.Errorf("provider %q route is required", model.providerID)
+	}
+
+	if provider.authenticationEpoch == "" {
+		return responsesAPISelection{}, fmt.Errorf("provider %q authentication epoch is required", model.providerID)
+	}
+
+	return responsesAPISelection{client: provider.client, origin: ProviderOrigin{ProviderID: model.providerID, Route: provider.route, ModelID: model.apiModel, AuthenticationEpoch: provider.authenticationEpoch}}, nil
 }
 
 func printRuntimeDiagnostics(w io.Writer, activeAgent *Agent, tools map[string]looperTool, skills Skills, systemPrompt string) error {

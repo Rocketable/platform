@@ -16,6 +16,103 @@ const genericAbortedToolOutputText = "tool call aborted because the runtime stop
 
 const taskAbortedToolOutputText = "subagent task aborted because the runtime stopped before the child result was delivered. The subagent may have partially completed work or spawned nested work. Inspect the environment and conversation state before deciding whether to retry, continue, or summarize uncertainty."
 
+// MissingPortableContextError reports provider-native compaction without a readable checkpoint.
+type MissingPortableContextError struct {
+	CompactionID string
+}
+
+func (e *MissingPortableContextError) Error() string {
+	return fmt.Sprintf("compaction %q has no readable context checkpoint", e.CompactionID)
+}
+
+func projectPortableReplay(items []responses.ResponseInputItemUnionParam) ([]responses.ResponseInputItemUnionParam, error) {
+	projected := make([]responses.ResponseInputItemUnionParam, 0, len(items))
+
+	var errPortable error
+
+	for i := range items {
+		item := &items[i]
+		switch {
+		case item.OfMessage != nil, item.OfInputMessage != nil:
+			projected = append(projected, *item)
+		case item.OfOutputMessage != nil:
+			message := item.OfOutputMessage
+
+			parts := make([]string, 0, len(message.Content))
+			for j := range message.Content {
+				switch content := message.Content[j]; {
+				case content.OfOutputText != nil:
+					parts = append(parts, content.OfOutputText.Text)
+				case content.OfRefusal != nil:
+					parts = append(parts, content.OfRefusal.Refusal)
+				}
+			}
+
+			portable := inputMessageParam(responses.EasyInputMessageRoleAssistant, easyInputStringContent(strings.Join(parts, "")))
+			portable.OfMessage.Phase = responses.EasyInputMessagePhase(message.Phase)
+			projected = append(projected, portable)
+		case item.OfFunctionCall != nil:
+			call := item.OfFunctionCall
+			projected = append(projected, responses.ResponseInputItemUnionParam{OfFunctionCall: &responses.ResponseFunctionToolCallParam{
+				Arguments: call.Arguments,
+				CallID:    call.CallID,
+				Name:      call.Name,
+				Type:      "function_call",
+			}})
+		case item.OfFunctionCallOutput != nil:
+			output := item.OfFunctionCallOutput
+			projected = append(projected, responses.ResponseInputItemUnionParam{OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
+				CallID: output.CallID,
+				Output: output.Output,
+				Type:   "function_call_output",
+			}})
+		case item.OfReasoning != nil:
+			for j := range item.OfReasoning.Summary {
+				if summary := strings.TrimSpace(item.OfReasoning.Summary[j].Text); summary != "" {
+					projected = append(projected, inputMessageParam(responses.EasyInputMessageRoleAssistant, easyInputStringContent(summary)))
+				}
+			}
+		case item.OfCompaction != nil:
+			stored := compactionReplayFields(item.OfCompaction)
+			if compactionReadableText(&stored) == "" {
+				if errPortable == nil {
+					errPortable = &MissingPortableContextError{CompactionID: item.OfCompaction.ID.Value}
+				}
+
+				continue
+			}
+
+			projected = projected[:0]
+			errPortable = nil
+
+			projected = append(projected, inputMessageParam(responses.EasyInputMessageRoleAssistant, easyInputStringContent(CompactionCheckpointText(item.OfCompaction))))
+		}
+	}
+
+	return projected, errPortable
+}
+
+func hasOpaqueReplay(items []responses.ResponseInputItemUnionParam) bool {
+	return slices.ContainsFunc(items, func(item responses.ResponseInputItemUnionParam) bool {
+		switch {
+		case item.OfReasoning != nil:
+			return item.OfReasoning.ID != "" || item.OfReasoning.EncryptedContent.Value != ""
+		case item.OfCompaction != nil:
+			return item.OfCompaction.ID.Value != "" || item.OfCompaction.EncryptedContent != ""
+		case item.OfFunctionCall != nil:
+			return item.OfFunctionCall.ID.Value != ""
+		case item.OfFunctionCallOutput != nil:
+			return item.OfFunctionCallOutput.ID.Value != ""
+		case item.OfOutputMessage != nil:
+			return item.OfOutputMessage.ID != ""
+		case item.OfMessage != nil, item.OfInputMessage != nil:
+			return false
+		default:
+			return true
+		}
+	})
+}
+
 func projectReplayForOpenAI(items []responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam {
 	projected := make([]responses.ResponseInputItemUnionParam, 0, len(items))
 	for i := range items {
@@ -36,8 +133,36 @@ func projectReplayForOpenAI(items []responses.ResponseInputItemUnionParam) []res
 	return projected
 }
 
+func setReadableCompactionBackup(items []responses.ResponseInputItemUnionParam, content string) bool {
+	found := false
+
+	for i := range items {
+		compaction := items[i].OfCompaction
+		if compaction == nil {
+			continue
+		}
+
+		stored := compactionReplayFields(compaction)
+
+		extra := map[string]any{"content": content}
+		if stored.Summary != nil {
+			extra["summary"] = stored.Summary
+		}
+
+		if stored.Recent != nil {
+			extra["recent"] = stored.Recent
+		}
+
+		compaction.SetExtraFields(extra)
+
+		found = true
+	}
+
+	return found
+}
+
 // RecoveredReplayInput converts an interrupted active-turn checkpoint into replay input for a recovered model turn.
-func RecoveredReplayInput(checkpoint *ActiveTurnCheckpoint) ([]json.RawMessage, error) {
+func RecoveredReplayInput(checkpoint *ActiveTurnCheckpoint, destination ProviderOrigin) ([]json.RawMessage, error) {
 	items, err := ReplayInputToParams(checkpoint.ReplayInput)
 	if err != nil {
 		return nil, err
@@ -63,6 +188,13 @@ func RecoveredReplayInput(checkpoint *ActiveTurnCheckpoint) ([]json.RawMessage, 
 	items = append(items, abortedFunctionCallOutputs(items, checkpoint.OpenFunctionCalls)...)
 	if !hasRecoveryReplayMessage(items) {
 		items = appendRecoveryReplayMessage(items)
+	}
+
+	if checkpoint.LegacyReplay == legacyReplayPortable || checkpoint.Origin != nil && *checkpoint.Origin != destination {
+		items, err = projectPortableReplay(items)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return ReplayInputFromParams(items)

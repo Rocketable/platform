@@ -4,9 +4,11 @@ package oai
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +25,7 @@ import (
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -38,6 +41,18 @@ type Token struct {
 	Access    string `json:"access"`
 	Expires   int64  `json:"expires"`
 	AccountID string `json:"account_id,omitempty"`
+}
+
+type authStore struct {
+	DigestKey string                  `json:"digest_key"`
+	Providers map[string]providerAuth `json:"providers"`
+}
+
+type providerAuth struct {
+	Mode         string `json:"mode"`
+	Epoch        string `json:"epoch"`
+	APIKeyDigest string `json:"api_key_digest,omitempty"`
+	Token        *Token `json:"token,omitempty"`
 }
 
 type pkceCodes struct {
@@ -80,64 +95,295 @@ func AuthFilePathIn(workspace, runtimeDir string) (string, error) {
 	return filepath.Join(workspace, runtimeDir, "auth.json"), nil
 }
 
-// LoadTokenIn reads the persisted ChatGPT OAuth token from runtimeDir.
-func LoadTokenIn(workspace, runtimeDir string) (Token, error) {
+// LoadTokenIn reads a provider's persisted ChatGPT OAuth token and authentication epoch.
+func LoadTokenIn(workspace, runtimeDir, provider string) (Token, string, error) {
 	path, err := AuthFilePathIn(workspace, runtimeDir)
 	if err != nil {
-		return Token{}, err
+		return Token{}, "", err
 	}
 
-	data, err := os.ReadFile(path)
+	store, legacy, err := loadAuthFile(path)
 	if err != nil {
-		return Token{}, fmt.Errorf("read OpenAI OAuth token: %w", err)
+		return Token{}, "", err
 	}
 
-	var token Token
-	if err := json.Unmarshal(data, &token); err != nil {
-		return Token{}, fmt.Errorf("parse OpenAI OAuth token: %w", err)
+	if legacy != nil {
+		if provider != "openai" {
+			return Token{}, "", fmt.Errorf("OpenAI OAuth token for provider %q is not configured", provider)
+		}
+
+		return *legacy, "", nil
 	}
 
-	if strings.TrimSpace(token.Refresh) == "" {
-		return Token{}, errors.New("OpenAI OAuth token is missing refresh token")
+	auth, ok := store.Providers[provider]
+	if !ok || auth.Token == nil {
+		return Token{}, "", fmt.Errorf("OpenAI OAuth token for provider %q is not configured", provider)
 	}
 
-	return token, nil
+	return *auth.Token, auth.Epoch, nil
 }
 
-// SaveTokenIn writes the ChatGPT OAuth token to runtimeDir with owner-only permissions.
-func SaveTokenIn(workspace, runtimeDir string, token Token) error {
+// ReplaceTokenIn replaces a provider's ChatGPT OAuth token and rotates its authentication epoch.
+func ReplaceTokenIn(workspace, runtimeDir, provider string, token Token) (string, error) {
+	epoch := rand.Text()
+	err := mutateAuthStoreIn(workspace, runtimeDir, func(store *authStore, _ bool) bool {
+		auth := store.Providers[provider]
+		auth.Mode, auth.Epoch, auth.APIKeyDigest, auth.Token = "chatgpt", epoch, "", new(token)
+		store.Providers[provider] = auth
+
+		return true
+	}, syncAuthStoreDir)
+
+	return epoch, err
+}
+
+// RemoveTokenIn removes a provider's ChatGPT OAuth token and rotates its authentication epoch.
+func RemoveTokenIn(workspace, runtimeDir, provider string) error {
+	return mutateAuthStoreIn(workspace, runtimeDir, func(store *authStore, _ bool) bool {
+		auth := store.Providers[provider]
+		auth.Token = nil
+		auth.Epoch = rand.Text()
+		store.Providers[provider] = auth
+
+		return true
+	}, syncAuthStoreDir)
+}
+
+// HasTokenIn reports whether a provider has a persisted ChatGPT OAuth token.
+func HasTokenIn(workspace, runtimeDir, provider string) (bool, error) {
+	path, err := AuthFilePathIn(workspace, runtimeDir)
+	if err != nil {
+		return false, err
+	}
+
+	store, legacy, err := loadAuthFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, err
+	}
+
+	if legacy != nil {
+		return provider == "openai", nil
+	}
+
+	auth, ok := store.Providers[provider]
+
+	return ok && auth.Token != nil, nil
+}
+
+// AuthenticationEpochIn returns the stable epoch for a provider's selected authentication.
+func AuthenticationEpochIn(workspace, runtimeDir, provider, mode, apiKey string) (string, error) {
+	var epoch string
+
+	err := mutateAuthStoreIn(workspace, runtimeDir, func(store *authStore, legacy bool) bool {
+		auth := store.Providers[provider]
+		digest := ""
+
+		if mode == "api_key" {
+			mac := hmac.New(sha256.New, []byte(store.DigestKey))
+			_, _ = io.WriteString(mac, provider+"\x00"+mode+"\x00"+apiKey)
+			digest = hex.EncodeToString(mac.Sum(nil))
+		}
+
+		changed := legacy || auth.Mode != mode || auth.APIKeyDigest != digest
+		if changed {
+			auth.Mode, auth.Epoch, auth.APIKeyDigest = mode, rand.Text(), digest
+			store.Providers[provider] = auth
+		}
+
+		epoch = auth.Epoch
+
+		return changed
+	}, syncAuthStoreDir)
+
+	return epoch, err
+}
+
+func loadAuthFile(path string) (authStore, *Token, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return authStore{}, nil, fmt.Errorf("read OpenAI OAuth token: %w", err)
+	}
+
+	var store authStore
+	if err := json.Unmarshal(data, &store); err != nil {
+		return authStore{}, nil, fmt.Errorf("parse OpenAI OAuth token: %w", err)
+	}
+
+	if store.DigestKey != "" || store.Providers != nil {
+		if store.DigestKey == "" || store.Providers == nil {
+			return authStore{}, nil, errors.New("parse OpenAI OAuth token: malformed auth store")
+		}
+
+		for _, auth := range store.Providers {
+			if auth.Token != nil && strings.TrimSpace(auth.Token.Refresh) == "" {
+				return authStore{}, nil, errors.New("OpenAI OAuth token is missing refresh token")
+			}
+		}
+
+		return store, nil, nil
+	}
+
+	var legacy Token
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return authStore{}, nil, fmt.Errorf("parse OpenAI OAuth token: %w", err)
+	}
+
+	if strings.TrimSpace(legacy.Refresh) == "" {
+		return authStore{}, nil, errors.New("OpenAI OAuth token is missing refresh token")
+	}
+
+	return authStore{}, &legacy, nil
+}
+
+func mutateAuthStoreIn(workspace, runtimeDir string, mutate func(*authStore, bool) bool, syncDir func(string) error) error {
 	path, err := AuthFilePathIn(workspace, runtimeDir)
 	if err != nil {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create OpenAI OAuth token dir: %w", err)
 	}
 
-	data, err := json.MarshalIndent(token, "", "  ")
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("open OpenAI OAuth token lock: %w", err)
+	}
+
+	defer func() { _ = lock.Close() }()
+
+	if err := lock.Chmod(0o600); err != nil {
+		return fmt.Errorf("set OpenAI OAuth token lock permissions: %w", err)
+	}
+
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
+		return fmt.Errorf("lock OpenAI OAuth token: %w", err)
+	}
+
+	defer func() { _ = unix.Flock(int(lock.Fd()), unix.LOCK_UN) }()
+
+	store, legacy, err := loadAuthFile(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		store = authStore{DigestKey: rand.Text(), Providers: map[string]providerAuth{}}
+	case err != nil:
+		return err
+	case legacy != nil:
+		store = authStore{DigestKey: rand.Text(), Providers: map[string]providerAuth{
+			"openai": {Mode: "chatgpt", Epoch: rand.Text(), Token: legacy},
+		}}
+	}
+
+	if !mutate(&store, legacy != nil) {
+		return nil
+	}
+
+	original, errRead := os.ReadFile(path)
+
+	hadFile := errRead == nil
+	if errRead != nil && !errors.Is(errRead, os.ErrNotExist) {
+		return fmt.Errorf("read OpenAI OAuth token for rollback: %w", errRead)
+	}
+
+	data, err := json.MarshalIndent(store, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal OpenAI OAuth token: %w", err)
 	}
 
 	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("write OpenAI OAuth token: %w", err)
+
+	committed, err := writeAuthStore(path, data, syncDir)
+	if err == nil || !committed {
+		return err
+	}
+
+	if hadFile {
+		_, errRestore := writeAuthStore(path, original, syncDir)
+		return errors.Join(err, errRestore)
+	}
+
+	errRemove := os.Remove(path)
+	if errRemove == nil {
+		errRemove = syncDir(filepath.Dir(path))
+	}
+
+	return errors.Join(err, errRemove)
+}
+
+func writeAuthStore(path string, data []byte, syncDir func(string) error) (bool, error) {
+	dir := filepath.Dir(path)
+
+	temp, err := os.CreateTemp(dir, ".auth.json.tmp-*")
+	if err != nil {
+		return false, fmt.Errorf("create OpenAI OAuth token temporary file: %w", err)
+	}
+
+	tempPath := temp.Name()
+	defer func() { _ = os.Remove(tempPath) }()
+
+	if err := temp.Chmod(0o600); err != nil {
+		_ = temp.Close()
+		return false, fmt.Errorf("set OpenAI OAuth token permissions: %w", err)
+	}
+
+	if _, err := temp.Write(data); err != nil {
+		_ = temp.Close()
+		return false, fmt.Errorf("write OpenAI OAuth token: %w", err)
+	}
+
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return false, fmt.Errorf("sync OpenAI OAuth token: %w", err)
+	}
+
+	if err := temp.Close(); err != nil {
+		return false, fmt.Errorf("close OpenAI OAuth token: %w", err)
+	}
+
+	if err := os.Rename(tempPath, path); err != nil {
+		return false, fmt.Errorf("replace OpenAI OAuth token: %w", err)
+	}
+
+	if err := syncDir(dir); err != nil {
+		return true, err
+	}
+
+	return true, nil
+}
+
+func syncAuthStoreDir(dir string) error {
+	directory, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open OpenAI OAuth token dir: %w", err)
+	}
+
+	if err := directory.Sync(); err != nil {
+		_ = directory.Close()
+		return fmt.Errorf("sync OpenAI OAuth token dir: %w", err)
+	}
+
+	if err := directory.Close(); err != nil {
+		return fmt.Errorf("close OpenAI OAuth token dir: %w", err)
 	}
 
 	return nil
 }
 
-// LoginBrowserIn completes the local browser OAuth flow and saves the resulting token in runtimeDir.
-func LoginBrowserIn(ctx context.Context, workspace, runtimeDir string, out io.Writer) (string, error) {
+// LoginBrowser completes the local browser OAuth flow.
+func LoginBrowser(ctx context.Context, out io.Writer) (Token, error) {
 	pkce, err := generatePKCE()
 	if err != nil {
-		return "", err
+		return Token{}, err
 	}
 
 	state, err := randomString(32)
 	if err != nil {
-		return "", err
+		return Token{}, err
 	}
 
 	codeCh := make(chan string, 1)
@@ -206,30 +452,30 @@ func LoginBrowserIn(ctx context.Context, workspace, runtimeDir string, out io.Wr
 	var code string
 	select {
 	case <-ctx.Done():
-		return "", fmt.Errorf("wait for OAuth callback: %w", ctx.Err())
+		return Token{}, fmt.Errorf("wait for OAuth callback: %w", ctx.Err())
 	case err := <-errCh:
-		return "", fmt.Errorf("OAuth callback: %w", err)
+		return Token{}, fmt.Errorf("OAuth callback: %w", err)
 	case code = <-codeCh:
 	}
 
 	response, err := exchangeCode(ctx, code, redirectURI, pkce.verifier)
 	if err != nil {
-		return "", err
+		return Token{}, err
 	}
 
-	return saveTokenResponseIn(workspace, runtimeDir, response)
+	return tokenFromResponse(response), nil
 }
 
-// LoginDeviceIn completes the headless device OAuth flow and saves the resulting token in runtimeDir.
-func LoginDeviceIn(ctx context.Context, workspace, runtimeDir string, out io.Writer) (string, error) {
+// LoginDevice completes the headless device OAuth flow.
+func LoginDevice(ctx context.Context, out io.Writer) (Token, error) {
 	body, err := json.Marshal(map[string]string{"client_id": clientID})
 	if err != nil {
-		return "", fmt.Errorf("marshal device authorization request: %w", err)
+		return Token{}, fmt.Errorf("marshal device authorization request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, issuer+"/api/accounts/deviceauth/usercode", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("create device authorization request: %w", err)
+		return Token{}, fmt.Errorf("create device authorization request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -237,14 +483,14 @@ func LoginDeviceIn(ctx context.Context, workspace, runtimeDir string, out io.Wri
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("send device authorization request: %w", err)
+		return Token{}, fmt.Errorf("send device authorization request: %w", err)
 	}
 
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		data, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("device authorization failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return Token{}, fmt.Errorf("device authorization failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}
 
 	var device struct {
@@ -253,7 +499,7 @@ func LoginDeviceIn(ctx context.Context, workspace, runtimeDir string, out io.Wri
 		Interval     string `json:"interval"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&device); err != nil {
-		return "", fmt.Errorf("decode device authorization response: %w", err)
+		return Token{}, fmt.Errorf("decode device authorization response: %w", err)
 	}
 
 	if out != nil {
@@ -268,24 +514,24 @@ func LoginDeviceIn(ctx context.Context, workspace, runtimeDir string, out io.Wri
 	for {
 		select {
 		case <-ctx.Done():
-			return "", fmt.Errorf("wait for device authorization: %w", ctx.Err())
+			return Token{}, fmt.Errorf("wait for device authorization: %w", ctx.Err())
 		case <-time.After(interval + 3*time.Second):
 		}
 
-		path, done, err := pollDeviceIn(ctx, workspace, runtimeDir, device.DeviceAuthID, device.UserCode)
+		token, done, err := pollDevice(ctx, device.DeviceAuthID, device.UserCode)
 		if err != nil {
-			return "", err
+			return Token{}, err
 		}
 
 		if done {
-			return path, nil
+			return token, nil
 		}
 	}
 }
 
 // NewChatGPTClientIn creates an OpenAI client that sends Responses API requests to ChatGPT Codex using runtimeDir auth.
-func NewChatGPTClientIn(workspace, runtimeDir string, opts ...option.RequestOption) (*openai.Client, error) {
-	if _, err := LoadTokenIn(workspace, runtimeDir); err != nil {
+func NewChatGPTClientIn(workspace, runtimeDir, provider string, opts ...option.RequestOption) (*openai.Client, error) {
+	if _, _, err := LoadTokenIn(workspace, runtimeDir, provider); err != nil {
 		return nil, err
 	}
 
@@ -294,7 +540,7 @@ func NewChatGPTClientIn(workspace, runtimeDir string, opts ...option.RequestOpti
 	client := openai.NewClient(append([]option.RequestOption{
 		option.WithAPIKey(dummyAPIKey),
 		option.WithBaseURL(codexBaseURL),
-		option.WithHTTPClient(&http.Client{Transport: &transport{base: http.DefaultTransport, workspace: workspace, runtimeDir: runtimeDir, sessionID: sessionID}}),
+		option.WithHTTPClient(&http.Client{Transport: &transport{base: http.DefaultTransport, workspace: workspace, runtimeDir: runtimeDir, provider: provider, sessionID: sessionID}}),
 		option.WithHeader("originator", originator),
 		option.WithHeader("User-Agent", codexUserAgent),
 	}, opts...)...)
@@ -303,9 +549,9 @@ func NewChatGPTClientIn(workspace, runtimeDir string, opts ...option.RequestOpti
 }
 
 type transport struct {
-	base                             http.RoundTripper
-	workspace, runtimeDir, sessionID string
-	mu                               sync.Mutex
+	base                                       http.RoundTripper
+	workspace, runtimeDir, provider, sessionID string
+	mu                                         sync.Mutex
 }
 
 type codexRequestMetadata struct {
@@ -414,7 +660,12 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
 
-			return nil, errors.New("ChatGPT OAuth authorization failed after Codex 401 recovery; run `rocketclaw oai login`")
+			command := "rocketclaw oai login"
+			if t.provider != "openai" {
+				command += " " + t.provider
+			}
+
+			return nil, fmt.Errorf("ChatGPT OAuth authorization failed after Codex 401 recovery; run `%s`", command)
 		}
 	}
 
@@ -479,7 +730,7 @@ func (t *transport) token(ctx context.Context) (Token, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	token, err := LoadTokenIn(t.workspace, t.runtimeDir)
+	token, epoch, err := LoadTokenIn(t.workspace, t.runtimeDir, t.provider)
 	if err != nil {
 		return Token{}, err
 	}
@@ -495,7 +746,8 @@ func (t *transport) token(ctx context.Context) (Token, error) {
 
 	next := tokenFromRefreshResponse(response, token)
 
-	if err := SaveTokenIn(t.workspace, t.runtimeDir, next); err != nil {
+	next, err = updateTokenIn(t.workspace, t.runtimeDir, t.provider, epoch, token, next)
+	if err != nil {
 		return Token{}, err
 	}
 
@@ -506,7 +758,7 @@ func (t *transport) recoveryToken(ctx context.Context, failed Token) (Token, err
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	token, err := LoadTokenIn(t.workspace, t.runtimeDir)
+	token, epoch, err := LoadTokenIn(t.workspace, t.runtimeDir, t.provider)
 	if err != nil {
 		return Token{}, err
 	}
@@ -517,15 +769,53 @@ func (t *transport) recoveryToken(ctx context.Context, failed Token) (Token, err
 
 	response, err := refreshToken(ctx, token.Refresh)
 	if err != nil {
-		return Token{}, fmt.Errorf("refresh ChatGPT OAuth token after Codex 401; run `rocketclaw oai login`: %w", err)
+		command := "rocketclaw oai login"
+		if t.provider != "openai" {
+			command += " " + t.provider
+		}
+
+		return Token{}, fmt.Errorf("refresh ChatGPT OAuth token after Codex 401; run `%s`: %w", command, err)
 	}
 
 	next := tokenFromRefreshResponse(response, token)
-	if err := SaveTokenIn(t.workspace, t.runtimeDir, next); err != nil {
+
+	next, err = updateTokenIn(t.workspace, t.runtimeDir, t.provider, epoch, token, next)
+	if err != nil {
 		return Token{}, err
 	}
 
 	return next, nil
+}
+
+func updateTokenIn(workspace, runtimeDir, provider, expectedEpoch string, expected, token Token) (Token, error) {
+	current := token
+	missing := false
+
+	err := mutateAuthStoreIn(workspace, runtimeDir, func(store *authStore, legacy bool) bool {
+		auth := store.Providers[provider]
+		if auth.Token == nil || *auth.Token != expected || auth.Epoch != expectedEpoch && (!legacy || expectedEpoch != "") {
+			missing = auth.Token == nil
+			if auth.Token != nil {
+				current = *auth.Token
+			}
+
+			return false
+		}
+
+		auth.Token = new(token)
+		store.Providers[provider] = auth
+
+		return true
+	}, syncAuthStoreDir)
+	if err != nil {
+		return Token{}, err
+	}
+
+	if missing {
+		return Token{}, fmt.Errorf("OpenAI OAuth token for provider %q is not configured", provider)
+	}
+
+	return current, nil
 }
 
 func cleanCodexRequest(req *http.Request, streaming bool) (codexRequestMetadata, error) {
@@ -1193,15 +1483,15 @@ func postToken(ctx context.Context, form url.Values) (tokenResponse, error) {
 	return response, nil
 }
 
-func pollDeviceIn(ctx context.Context, workspace, runtimeDir, deviceAuthID, userCode string) (path string, done bool, err error) {
+func pollDevice(ctx context.Context, deviceAuthID, userCode string) (Token, bool, error) {
 	body, err := json.Marshal(map[string]string{"device_auth_id": deviceAuthID, "user_code": userCode})
 	if err != nil {
-		return "", false, fmt.Errorf("marshal device token request: %w", err)
+		return Token{}, false, fmt.Errorf("marshal device token request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, issuer+"/api/accounts/deviceauth/token", bytes.NewReader(body))
 	if err != nil {
-		return "", false, fmt.Errorf("create device token request: %w", err)
+		return Token{}, false, fmt.Errorf("create device token request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -1209,18 +1499,18 @@ func pollDeviceIn(ctx context.Context, workspace, runtimeDir, deviceAuthID, user
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", false, fmt.Errorf("send device token request: %w", err)
+		return Token{}, false, fmt.Errorf("send device token request: %w", err)
 	}
 
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
-		return "", false, nil
+		return Token{}, false, nil
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		data, _ := io.ReadAll(resp.Body)
-		return "", false, fmt.Errorf("device token request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(data)))
+		return Token{}, false, fmt.Errorf("device token request failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}
 
 	var device struct {
@@ -1228,34 +1518,15 @@ func pollDeviceIn(ctx context.Context, workspace, runtimeDir, deviceAuthID, user
 		CodeVerifier      string `json:"code_verifier"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&device); err != nil {
-		return "", false, fmt.Errorf("decode device token response: %w", err)
+		return Token{}, false, fmt.Errorf("decode device token response: %w", err)
 	}
 
 	response, err := exchangeCode(ctx, device.AuthorizationCode, issuer+"/deviceauth/callback", device.CodeVerifier)
 	if err != nil {
-		return "", false, err
+		return Token{}, false, err
 	}
 
-	path, err = saveTokenResponseIn(workspace, runtimeDir, response)
-	if err != nil {
-		return "", false, err
-	}
-
-	return path, true, nil
-}
-
-func saveTokenResponseIn(workspace, runtimeDir string, response tokenResponse) (string, error) {
-	token := tokenFromResponse(response)
-	if err := SaveTokenIn(workspace, runtimeDir, token); err != nil {
-		return "", err
-	}
-
-	path, err := AuthFilePathIn(workspace, runtimeDir)
-	if err != nil {
-		return "", err
-	}
-
-	return path, nil
+	return tokenFromResponse(response), true, nil
 }
 
 func tokenFromResponse(response tokenResponse) Token {

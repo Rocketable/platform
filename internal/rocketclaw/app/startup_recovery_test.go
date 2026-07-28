@@ -134,7 +134,7 @@ func TestRecoverStartupActiveTurnsDeletesInvalidRows(t *testing.T) {
 	require.Equal(t, []string{"turn-invalid"}, store.deleted)
 }
 
-func TestRecoverStartupActiveTurnsHandsOffRecoveredReplay(t *testing.T) {
+func TestRecoverStartupActiveTurnsHandsOffRawCheckpoint(t *testing.T) {
 	replay := startupRecoveryOpenCallReplayInput(t, "call-1", "task")
 	store := &fakeStartupRecoveryStore{turns: []harnessbridge.ActiveTurnState{startupRecoveryTurn("turn-1", "conversation-1", replay)}}
 	store.turns[0].Checkpoint.OpenFunctionCalls = []rocketcode.FunctionCallCheckpoint{{CallID: "call-1", Name: "task"}}
@@ -150,14 +150,8 @@ func TestRecoverStartupActiveTurnsHandsOffRecoveredReplay(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, store.deleted)
 
-	items, err := rocketcode.ReplayInputToParams(handed.Checkpoint.ReplayInput)
-	require.NoError(t, err)
-	require.Len(t, items, 4)
-	require.Equal(t, "function_call_output", *items[2].GetType())
-	require.Equal(t, "call-1", *items[2].GetCallID())
-	require.Contains(t, startupRecoveryReplayJSON(t, items[2]), "subagent task aborted")
-	require.Equal(t, "developer", *items[3].GetRole())
-	require.Contains(t, startupRecoveryReplayJSON(t, items[3]), "previous runtime was interrupted")
+	require.Equal(t, replay, handed.Checkpoint.ReplayInput)
+	require.Equal(t, []rocketcode.FunctionCallCheckpoint{{CallID: "call-1", Name: "task"}}, handed.Checkpoint.OpenFunctionCalls)
 }
 
 func TestRecoverStartupActiveTurnsDeletesPermanentHandoffFailures(t *testing.T) {
@@ -265,13 +259,4 @@ func startupRecoveryOpenCallReplayInput(t *testing.T, callID, name string) []jso
 	require.NoError(t, err)
 
 	return replay
-}
-
-func startupRecoveryReplayJSON(t *testing.T, value any) string {
-	t.Helper()
-
-	data, err := json.Marshal(value)
-	require.NoError(t, err)
-
-	return string(data)
 }

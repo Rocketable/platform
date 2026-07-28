@@ -205,12 +205,18 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		return "", err
 	}
 
+	selection, err := responsesAPIForModel(f.providers, modelRef)
+	if err != nil {
+		return "", err
+	}
+
 	childFactory.modelRef = modelRef
 
 	child := &looper{
 		agent:                  agent,
 		modelRef:               modelRef,
-		Client:                 f.client,
+		Client:                 selection.client,
+		Origin:                 selection.origin,
 		SystemPrompt:           systemPrompt,
 		Model:                  modelRef.apiModel,
 		DisplayModel:           modelRef.display(),
@@ -341,6 +347,11 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail model failed: " + err.Error()}
 	}
 
+	selection, err := responsesAPIForModel(f.providers, modelRef)
+	if err != nil {
+		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail model failed: " + err.Error()}
+	}
+
 	childFactory := *f
 	childFactory.inGuardrailRun = true
 	childFactory.modelRef = modelRef
@@ -348,7 +359,8 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 	child := &looper{
 		agent:                  agent,
 		modelRef:               modelRef,
-		Client:                 f.client,
+		Client:                 selection.client,
+		Origin:                 selection.origin,
 		SystemPrompt:           composeSystemPromptWithSkills(agent.Prompt, f.skills, &agent),
 		Model:                  modelRef.apiModel,
 		DisplayModel:           modelRef.display(),

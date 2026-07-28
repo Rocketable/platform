@@ -43,7 +43,10 @@ func recordSpanError(span observabilitySpan, err error) {
 }
 
 func recordProviderDiagnosticEvent(ctx context.Context, diagnostic *ProviderDiagnostic) {
-	attrs := []attribute.KeyValue{attribute.String("rocketcode.provider_diagnostic.phase", diagnostic.Phase)}
+	attrs := []attribute.KeyValue{
+		attribute.String("rocketcode.provider_diagnostic.provider_id", diagnostic.ProviderID),
+		attribute.String("rocketcode.provider_diagnostic.phase", diagnostic.Phase),
+	}
 
 	if diagnostic.HTTPStatus != 0 {
 		attrs = append(attrs, attribute.Int("rocketcode.provider_diagnostic.http_status", diagnostic.HTTPStatus))
@@ -59,10 +62,6 @@ func recordProviderDiagnosticEvent(ctx context.Context, diagnostic *ProviderDiag
 
 	if diagnostic.Type != "" {
 		attrs = append(attrs, attribute.String("rocketcode.provider_diagnostic.type", diagnostic.Type))
-	}
-
-	if diagnostic.Message != "" {
-		attrs = append(attrs, attribute.String("rocketcode.provider_diagnostic.message", diagnostic.Message))
 	}
 
 	if diagnostic.Attempt != 0 {

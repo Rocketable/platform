@@ -1,1 +1,3 @@
 auth.json
+auth.json.lock
+.auth.json.tmp-*

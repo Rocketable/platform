@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,17 +17,29 @@ import (
 
 // Config is the top-level rocketclaw runtime configuration.
 type Config struct {
-	Workspace         string                `json:"workspace"`
-	WorkDir           string                `json:"-"`
-	Overlays          []string              `json:"overlays,omitempty"`
-	Models            map[string]string     `json:"models,omitempty"`
-	Environment       []string              `json:"environment,omitempty"`
-	Logging           LoggingConfig         `json:"logging"`
-	MCPExternal       MCPExternalConfig     `json:"mcp_external"`
-	Slack             SlackConfig           `json:"slack"`
-	OpenAI            OpenAIConfig          `json:"openai"`
-	AutoApproverModel string                `json:"auto_approver_model"`
-	Instrumentation   InstrumentationConfig `json:"instrumentation"`
+	Workspace         string                  `json:"workspace"`
+	WorkDir           string                  `json:"-"`
+	Overlays          []string                `json:"overlays,omitempty"`
+	Models            map[string]string       `json:"models,omitempty"`
+	Environment       []string                `json:"environment,omitempty"`
+	Logging           LoggingConfig           `json:"logging"`
+	MCPExternal       MCPExternalConfig       `json:"mcp_external"`
+	Slack             SlackConfig             `json:"slack"`
+	OpenAI            OpenAIConfig            `json:"openai"`
+	Providers         map[string]OpenAIConfig `json:"providers,omitempty"`
+	AutoApproverModel string                  `json:"auto_approver_model"`
+	Instrumentation   InstrumentationConfig   `json:"instrumentation"`
+}
+
+// Provider returns the configuration for name.
+func (c *Config) Provider(name string) (OpenAIConfig, bool) {
+	if name == "openai" {
+		return c.OpenAI, true
+	}
+
+	provider, ok := c.Providers[name]
+
+	return provider, ok
 }
 
 // DefaultRuntimeDir is the generated runtime directory for rocketclaw configs.
@@ -189,21 +204,21 @@ func (c *Config) Validate() error {
 		if strings.TrimSpace(name) == "" || strings.TrimSpace(model) == "" {
 			return errors.New("models keys and values must not be empty")
 		}
+
+		if !strings.Contains(model, "{{") && !strings.Contains(model, "}}") {
+			if err := c.validateModelRef(fmt.Sprintf("models[%q]", name), model); err != nil {
+				return err
+			}
+		}
 	}
 
 	if err := c.normalizeRocketCodeAuth(); err != nil {
 		return err
 	}
 
-	var err error
-
-	c.AutoApproverModel, err = normalizeOpenAIModel("auto_approver_model", c.AutoApproverModel)
-	if err != nil {
+	c.AutoApproverModel = strings.TrimSpace(c.AutoApproverModel)
+	if err := c.validateModelRef("auto_approver_model", c.AutoApproverModel); err != nil {
 		return err
-	}
-
-	if c.OpenAI.RocketCodeAuth == "api_key" && strings.TrimSpace(c.OpenAI.APIKey) == "" {
-		return errors.New("openai.api_key is required when openai.rocketcode_auth is api_key")
 	}
 
 	c.Instrumentation.CollectorEndpoint = strings.TrimSpace(c.Instrumentation.CollectorEndpoint)
@@ -228,6 +243,10 @@ func (c *Config) Validate() error {
 // RenderAgentModel renders an agent model with the mappings from the loaded config.
 func (c *Config) RenderAgentModel(model string) (string, error) {
 	if literal := strings.TrimSpace(model); literal != "" && !strings.Contains(model, "{{") && !strings.Contains(model, "}}") {
+		if err := c.validateModelRef("model", literal); err != nil {
+			return "", err
+		}
+
 		return literal, nil
 	}
 
@@ -259,33 +278,83 @@ func (c *Config) RenderAgentModel(model string) (string, error) {
 		return "", errors.New("model template returned another template")
 	}
 
+	if err := c.validateModelRef("model", resolved); err != nil {
+		return "", err
+	}
+
 	return resolved, nil
 }
 
-func normalizeOpenAIModel(field, model string) (string, error) {
+func (c *Config) validateModelRef(field, model string) error {
 	model = strings.TrimSpace(model)
-	if after, ok := strings.CutPrefix(model, "openai/"); ok {
-		if after == "" || strings.Contains(after, "/") {
-			return "", fmt.Errorf("%s: invalid model %q: expected openai/model", field, model)
-		}
-
-		return after, nil
+	if model == "" {
+		return nil
 	}
 
-	if strings.Contains(model, "/") {
-		return "", fmt.Errorf("%s: invalid model %q: expected unprefixed OpenAI model ID", field, model)
+	providerID, apiModel, qualified := strings.Cut(model, "/")
+	if !qualified {
+		return nil
 	}
 
-	return model, nil
+	if providerID == "" {
+		return fmt.Errorf("%s: invalid model %q: provider is required", field, model)
+	}
+
+	if apiModel == "" {
+		return fmt.Errorf("%s: invalid model %q: model is required", field, model)
+	}
+
+	if _, ok := c.Provider(providerID); !ok {
+		return fmt.Errorf("%s: invalid model %q: provider %q is not configured", field, model, providerID)
+	}
+
+	return nil
 }
 
 func (c *Config) normalizeRocketCodeAuth() error {
-	switch strings.TrimSpace(c.OpenAI.RocketCodeAuth) {
-	case "", "api_key":
-		c.OpenAI.RocketCodeAuth = "api_key"
-	case "chatgpt":
-	default:
-		return errors.New("openai.rocketcode_auth must be api_key or chatgpt")
+	for name := range c.Providers {
+		if name == "" || name != strings.TrimSpace(name) || name == "openai" || name == "." || !fs.ValidPath(name) || strings.Contains(name, "/") {
+			return fmt.Errorf("provider name %q is invalid", name)
+		}
+	}
+
+	providers := map[string]OpenAIConfig{"openai": c.OpenAI}
+	maps.Copy(providers, c.Providers)
+
+	for name, provider := range providers {
+		field := "openai"
+		if name != "openai" {
+			field = fmt.Sprintf("providers[%q]", name)
+		}
+
+		switch strings.TrimSpace(provider.RocketCodeAuth) {
+		case "", "api_key":
+			provider.RocketCodeAuth = "api_key"
+		case "chatgpt":
+			provider.RocketCodeAuth = "chatgpt"
+		default:
+			return fmt.Errorf("%s.rocketcode_auth must be api_key or chatgpt", field)
+		}
+
+		if provider.RocketCodeAuth == "api_key" && strings.TrimSpace(provider.APIKey) == "" {
+			return fmt.Errorf("%s.api_key is required when %s.rocketcode_auth is api_key", field, field)
+		}
+
+		provider.APIBaseURL = strings.TrimSpace(provider.APIBaseURL)
+		if provider.APIBaseURL != "" {
+			baseURL, err := url.Parse(provider.APIBaseURL)
+			if err != nil || baseURL.Host == "" || baseURL.Scheme != "http" && baseURL.Scheme != "https" || baseURL.User != nil || baseURL.RawQuery != "" || baseURL.Fragment != "" {
+				return fmt.Errorf("%s.api_base_url must be an absolute HTTP(S) URL without userinfo, query, or fragment", field)
+			}
+
+			provider.APIBaseURL = strings.TrimRight(provider.APIBaseURL, "/")
+		}
+
+		if name == "openai" {
+			c.OpenAI = provider
+		} else {
+			c.Providers[name] = provider
+		}
 	}
 
 	return nil

@@ -110,7 +110,7 @@ func StandaloneConfigFromEnv() (Config, error) {
 // StandaloneProvidersFromEnv returns model provider clients for RocketCode commands.
 func StandaloneProvidersFromEnv() (Providers, error) {
 	openAIClient := openai.NewClient()
-	return Providers{OpenAI: &openAIClient}, nil
+	return Providers{"openai": NewOpenAIProvider(&openAIClient, "responses:https://api.openai.com/v1", "embedded-openai")}, nil
 }
 
 func standaloneDefaultConfig() Config {

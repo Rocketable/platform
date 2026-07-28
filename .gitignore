@@ -3,3 +3,4 @@
 bin/
 testsandbox/
 .rocketclaw/*.local.yaml
+.rocketclaw-config.tmp-*

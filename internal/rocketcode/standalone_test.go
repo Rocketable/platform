@@ -31,7 +31,7 @@ func TestStandaloneProvidersFromEnvConfiguresOpenAI(t *testing.T) {
 	providers, err := StandaloneProvidersFromEnv()
 
 	require.NoError(t, err)
-	require.NotNil(t, providers.OpenAI)
+	require.Contains(t, providers, "openai")
 }
 
 func TestLoadWorkspaceDefinitionsReportsAgentLoadErrors(t *testing.T) {

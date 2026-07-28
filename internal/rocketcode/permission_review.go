@@ -44,6 +44,11 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 		return permissionReviewFailure("automatic permission reviewer model failed: " + err.Error())
 	}
 
+	selection, err := responsesAPIForModel(f.providers, modelRef)
+	if err != nil {
+		return permissionReviewFailure("automatic permission reviewer model failed: " + err.Error())
+	}
+
 	childFactory := *f
 	childFactory.inPermissionReview = true
 	childFactory.modelRef = modelRef
@@ -51,7 +56,8 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	child := &looper{
 		agent:                  agent,
 		modelRef:               modelRef,
-		Client:                 f.client,
+		Client:                 selection.client,
+		Origin:                 selection.origin,
 		SystemPrompt:           composeSystemPromptWithSkills(agent.Prompt, f.skills, &agent),
 		Model:                  modelRef.apiModel,
 		DisplayModel:           modelRef.display(),

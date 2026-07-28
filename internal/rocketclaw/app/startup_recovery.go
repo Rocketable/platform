@@ -78,7 +78,7 @@ func recoverStartupActiveTurns(ctx context.Context, store startupRecoveryStore, 
 			continue
 		}
 
-		recoveredReplay, err := rocketcode.RecoveredReplayInput(&turn.Checkpoint)
+		_, err := rocketcode.ReplayInputToParams(turn.Checkpoint.ReplayInput)
 		if err != nil {
 			if errClear := store.ClearActiveTurn(ctx, turn.Checkpoint.TurnID); errClear != nil {
 				return fmt.Errorf("delete unrecoverable startup active turn: %w", errClear)
@@ -91,7 +91,6 @@ func recoverStartupActiveTurns(ctx context.Context, store startupRecoveryStore, 
 
 		seen[conversationID] = true
 
-		turn.Checkpoint.ReplayInput = recoveredReplay
 		if err := handoff(ctx, turn); err != nil {
 			if isStartupRecoveryShutdownError(err) {
 				return fmt.Errorf("handoff startup active turn recovery: %w", err)

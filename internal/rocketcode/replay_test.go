@@ -2,6 +2,7 @@ package rocketcode
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -9,6 +10,131 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 )
+
+func TestProjectPortableReplayKeepsMessagesPhasesToolsAndAttachments(t *testing.T) {
+	raw := []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","content":[{"type":"input_text","text":"inspect"},{"type":"input_image","image_url":"data:image/png;base64,aW1hZ2U="},{"type":"input_file","filename":"note.txt","file_data":"data:text/plain;base64,bm90ZQ=="}]}`),
+		json.RawMessage(`{"type":"message","role":"assistant","phase":"commentary","content":"working"}`),
+		json.RawMessage(`{"type":"function_call","id":"provider-call","call_id":"call-1","name":"read","arguments":"{\"filePath\":\"README.md\"}"}`),
+		json.RawMessage(`{"type":"function_call_output","id":"provider-output","call_id":"call-1","output":"contents"}`),
+	}
+	items, err := ReplayInputToParams(raw)
+	require.NoError(t, err)
+
+	got, err := projectPortableReplay(items)
+	require.NoError(t, err)
+	require.Len(t, got, 4)
+	require.JSONEq(t, string(raw[0]), marshalReplayJSON(t, got[0]))
+	require.JSONEq(t, string(raw[1]), marshalReplayJSON(t, got[1]))
+	require.JSONEq(t, `{"type":"function_call","call_id":"call-1","name":"read","arguments":"{\"filePath\":\"README.md\"}"}`, marshalReplayJSON(t, got[2]))
+	require.JSONEq(t, `{"type":"function_call_output","call_id":"call-1","output":"contents"}`, marshalReplayJSON(t, got[3]))
+}
+
+func TestProjectPortableReplayRebuildsOutputMessageWithoutProviderFields(t *testing.T) {
+	var message responses.ResponseOutputMessageParam
+
+	err := json.Unmarshal([]byte(`{"type":"message","id":"provider-message","status":"completed","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"first","annotations":[]},{"type":"refusal","refusal":"cannot disclose"},{"type":"output_text","text":"last","annotations":[]}]}`), &message)
+	require.NoError(t, err)
+
+	items := []responses.ResponseInputItemUnionParam{{OfOutputMessage: &message}}
+	require.True(t, hasOpaqueReplay(items))
+
+	got, err := projectPortableReplay(items)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.NotNil(t, got[0].OfMessage)
+	require.JSONEq(t, `{"type":"message","role":"assistant","phase":"commentary","content":"firstcannot discloselast"}`, marshalReplayJSON(t, got[0]))
+}
+
+func TestProjectPortableReplayLowersReasoningSummaryToAssistantMessage(t *testing.T) {
+	items := []responses.ResponseInputItemUnionParam{
+		testInputMessage(responses.EasyInputMessageRoleUser, "before", ""),
+		testInputReasoning("reasoning-1", "readable thought", "sealed"),
+		testInputReasoning("reasoning-2", "", "sealed-only"),
+		testInputMessage(responses.EasyInputMessageRoleAssistant, "after", "final_answer"),
+	}
+
+	got, err := projectPortableReplay(items)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	require.JSONEq(t, `{"content":"readable thought","role":"assistant","type":"message"}`, marshalReplayJSON(t, got[1]))
+	require.JSONEq(t, `{"content":"after","phase":"final_answer","role":"assistant","type":"message"}`, marshalReplayJSON(t, got[2]))
+}
+
+func TestProjectPortableReplayUsesReadableCompactionCheckpointAndTail(t *testing.T) {
+	items := []responses.ResponseInputItemUnionParam{
+		testInputMessage(responses.EasyInputMessageRoleUser, "old prefix must disappear", ""),
+		compactionReplayInput("compaction-1", "sealed", "portable summary"),
+		testInputMessage(responses.EasyInputMessageRoleUser, "post-compaction tail one", ""),
+		testInputMessage(responses.EasyInputMessageRoleAssistant, "post-compaction tail two", "final_answer"),
+	}
+
+	got, err := projectPortableReplay(items)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	require.JSONEq(t, `{"content":`+strconv.Quote(CompactionCheckpointText(items[1].OfCompaction))+`,"role":"assistant","type":"message"}`, marshalReplayJSON(t, got[0]))
+	require.JSONEq(t, `{"content":"post-compaction tail one","role":"user","type":"message"}`, marshalReplayJSON(t, got[1]))
+	require.JSONEq(t, `{"content":"post-compaction tail two","phase":"final_answer","role":"assistant","type":"message"}`, marshalReplayJSON(t, got[2]))
+	serialized := marshalReplayJSON(t, got)
+	require.NotContains(t, serialized, "old prefix must disappear")
+	require.Equal(t, 1, strings.Count(serialized, "portable summary"))
+}
+
+func TestProjectPortableReplayReadableCompactionSupersedesEncryptedOnlyCompaction(t *testing.T) {
+	items := []responses.ResponseInputItemUnionParam{
+		compactionReplayInput("encrypted-only", "sealed-old", ""),
+		compactionReplayInput("readable", "sealed-new", "checkpoint with retained recent context"),
+		testInputMessage(responses.EasyInputMessageRoleAssistant, "post-compaction tail", "final_answer"),
+	}
+
+	got, err := projectPortableReplay(items)
+	require.NoError(t, err)
+	serialized := marshalReplayJSON(t, got)
+	require.NotContains(t, serialized, "encrypted-only")
+	require.Equal(t, 1, strings.Count(serialized, "checkpoint with retained recent context"))
+	require.Equal(t, 1, strings.Count(serialized, "post-compaction tail"))
+	require.Less(t, strings.Index(serialized, "checkpoint with retained recent context"), strings.Index(serialized, "post-compaction tail"))
+}
+
+func TestProjectPortableReplayRejectsEncryptedOnlyCompaction(t *testing.T) {
+	items := []responses.ResponseInputItemUnionParam{compactionReplayInput("compaction-1", "sealed", "")}
+
+	_, err := projectPortableReplay(items)
+
+	var missing *MissingPortableContextError
+	require.ErrorAs(t, err, &missing)
+	require.Equal(t, "compaction-1", missing.CompactionID)
+	require.EqualError(t, err, `compaction "compaction-1" has no readable context checkpoint`)
+}
+
+func TestProjectPortableReplayCollectsItemsAroundUnreadableCompaction(t *testing.T) {
+	items := []responses.ResponseInputItemUnionParam{
+		testInputMessage(responses.EasyInputMessageRoleUser, "before", ""),
+		compactionReplayInput("compaction-1", "sealed", ""),
+		testInputMessage(responses.EasyInputMessageRoleAssistant, "tail", "final_answer"),
+	}
+
+	got, err := projectPortableReplay(items)
+
+	var missing *MissingPortableContextError
+	require.ErrorAs(t, err, &missing)
+	require.Len(t, got, 2)
+	require.JSONEq(t, `{"content":"before","role":"user","type":"message"}`, marshalReplayJSON(t, got[0]))
+	require.JSONEq(t, `{"content":"tail","phase":"final_answer","role":"assistant","type":"message"}`, marshalReplayJSON(t, got[1]))
+}
+
+func TestProjectPortableReplayDropsProviderExtensions(t *testing.T) {
+	items, err := ReplayInputToParams([]json.RawMessage{
+		json.RawMessage(`{"type":"web_search_call","id":"web-1","status":"completed","action":{"type":"search","query":"golang"}}`),
+		json.RawMessage(`{"type":"file_search_call","id":"extension-1","status":"completed","queries":["private"]}`),
+	})
+	require.NoError(t, err)
+	require.True(t, hasOpaqueReplay(items))
+
+	got, err := projectPortableReplay(items)
+	require.NoError(t, err)
+	require.Empty(t, got)
+}
 
 func TestReplayInputPreservesCompactionPayload(t *testing.T) {
 	raw := []json.RawMessage{json.RawMessage(`{"content":"summary","summary":{"text":"summary"},"recent":[{"id":"msg-1"}],"encrypted_content":"encrypted","id":"cmp-1","type":"compaction"}`)}
@@ -20,6 +146,18 @@ func TestReplayInputPreservesCompactionPayload(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	require.JSONEq(t, string(raw[0]), string(got[0]))
+}
+
+func TestSetReadableCompactionBackupUpdatesEveryCompactionAndPreservesExtras(t *testing.T) {
+	items, err := ReplayInputToParams([]json.RawMessage{
+		json.RawMessage(`{"content":"provider content","summary":{"text":"provider summary"},"recent":[{"id":"msg-1"}],"encrypted_content":"encrypted-1","id":"cmp-1","type":"compaction"}`),
+		json.RawMessage(`{"content":"other content","encrypted_content":"encrypted-2","id":"cmp-2","type":"compaction"}`),
+	})
+	require.NoError(t, err)
+
+	require.True(t, setReadableCompactionBackup(items, "generated backup"))
+	require.JSONEq(t, `{"content":"generated backup","summary":{"text":"provider summary"},"recent":[{"id":"msg-1"}],"encrypted_content":"encrypted-1","id":"cmp-1","type":"compaction"}`, marshalReplayJSON(t, items[0]))
+	require.JSONEq(t, `{"content":"generated backup","encrypted_content":"encrypted-2","id":"cmp-2","type":"compaction"}`, marshalReplayJSON(t, items[1]))
 }
 
 func TestAbortedFunctionCallOutputsUsesGenericText(t *testing.T) {
@@ -80,7 +218,7 @@ func TestRecoveredReplayInputDecodes(t *testing.T) {
 		ReplayInput:       raw,
 		OpenFunctionCalls: []FunctionCallCheckpoint{{CallID: "call-1", Name: "read"}},
 	}
-	recovered, err := RecoveredReplayInput(&checkpoint)
+	recovered, err := RecoveredReplayInput(&checkpoint, ProviderOrigin{})
 	require.NoError(t, err)
 
 	items, err := ReplayInputToParams(recovered)
@@ -113,7 +251,7 @@ func TestRecoveredReplayInputPreservesCompletedToolOutputs(t *testing.T) {
 			{CallID: "call-2", Name: "task"},
 		},
 	}
-	recovered, err := RecoveredReplayInput(&checkpoint)
+	recovered, err := RecoveredReplayInput(&checkpoint, ProviderOrigin{})
 	require.NoError(t, err)
 
 	items, err := ReplayInputToParams(recovered)
@@ -151,7 +289,7 @@ func TestRecoveredReplayInputIncludesCheckpointCompletedOutputs(t *testing.T) {
 		},
 		CompletedFunctionOutputs: []FunctionOutputCheckpoint{{CallID: "call-1", Name: "read", ReplayInput: completed}},
 	}
-	recovered, err := RecoveredReplayInput(&checkpoint)
+	recovered, err := RecoveredReplayInput(&checkpoint, ProviderOrigin{})
 	require.NoError(t, err)
 
 	items, err := ReplayInputToParams(recovered)
@@ -185,7 +323,7 @@ func TestRecoveredReplayInputDoesNotDuplicateCompletedCheckpointOutputs(t *testi
 		OpenFunctionCalls:        []FunctionCallCheckpoint{{CallID: "call-1", Name: "read"}},
 		CompletedFunctionOutputs: []FunctionOutputCheckpoint{{CallID: "call-1", Name: "read", ReplayInput: completed}},
 	}
-	recovered, err := RecoveredReplayInput(&checkpoint)
+	recovered, err := RecoveredReplayInput(&checkpoint, ProviderOrigin{})
 	require.NoError(t, err)
 
 	items, err := ReplayInputToParams(recovered)
@@ -210,11 +348,11 @@ func TestRecoveredReplayInputDoesNotDuplicateRecoveryMessage(t *testing.T) {
 	require.NoError(t, err)
 
 	checkpoint := ActiveTurnCheckpoint{ReplayInput: raw, OpenFunctionCalls: []FunctionCallCheckpoint{{CallID: "call-1", Name: "read"}}}
-	first, err := RecoveredReplayInput(&checkpoint)
+	first, err := RecoveredReplayInput(&checkpoint, ProviderOrigin{})
 	require.NoError(t, err)
 
 	checkpoint.ReplayInput = first
-	second, err := RecoveredReplayInput(&checkpoint)
+	second, err := RecoveredReplayInput(&checkpoint, ProviderOrigin{})
 	require.NoError(t, err)
 
 	items, err := ReplayInputToParams(second)
@@ -242,7 +380,7 @@ func TestRecoveredReplayInputBuildsProviderParams(t *testing.T) {
 		ReplayInput:       saved,
 		OpenFunctionCalls: []FunctionCallCheckpoint{{CallID: "call-1", Name: "read"}},
 	}
-	recovered, err := RecoveredReplayInput(&checkpoint)
+	recovered, err := RecoveredReplayInput(&checkpoint, ProviderOrigin{})
 	require.NoError(t, err)
 
 	items, err := ReplayInputToParams(recovered)
@@ -256,6 +394,46 @@ func TestRecoveredReplayInputBuildsProviderParams(t *testing.T) {
 	require.Len(t, params.Input.OfInputItemList, 4)
 	require.Equal(t, "function_call_output", *params.Input.OfInputItemList[2].GetType())
 	require.Equal(t, "developer", *params.Input.OfInputItemList[3].GetRole())
+}
+
+func TestRecoveredReplayInputProjectsNonlegacyOriginMismatch(t *testing.T) {
+	source := ProviderOrigin{ProviderID: "source", Route: "source-route", ModelID: "source-model", AuthenticationEpoch: "source-epoch"}
+	destination := ProviderOrigin{ProviderID: "destination", Route: "destination-route", ModelID: "destination-model", AuthenticationEpoch: "destination-epoch"}
+	replay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		testInputReasoning("reasoning-provider-id", "readable reasoning", "sealed-reasoning"),
+		functionCallReplayInput("call-provider-id", "call-1", "read", `{}`),
+	})
+	require.NoError(t, err)
+
+	checkpoint := ActiveTurnCheckpoint{Origin: &source, ReplayInput: replay, OpenFunctionCalls: []FunctionCallCheckpoint{{CallID: "call-1", Name: "read"}}}
+
+	got, err := RecoveredReplayInput(&checkpoint, destination)
+	require.NoError(t, err)
+	serializedJSON, err := json.Marshal(got)
+	require.NoError(t, err)
+
+	serialized := string(serializedJSON)
+	require.NotContains(t, serialized, "sealed-reasoning")
+	require.NotContains(t, serialized, "provider-id")
+	require.Contains(t, serialized, "readable reasoning")
+	require.Equal(t, 1, strings.Count(serialized, genericAbortedToolOutputText))
+	require.Equal(t, 1, strings.Count(serialized, recoveryReplayMessageText))
+}
+
+func TestRecoveredReplayInputPreservesLegacyOpaqueReplay(t *testing.T) {
+	replay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputReasoning("reasoning-provider-id", "readable reasoning", "sealed-reasoning")})
+	require.NoError(t, err)
+
+	checkpoint := ActiveTurnCheckpoint{ReplayInput: replay}
+
+	got, err := RecoveredReplayInput(&checkpoint, ProviderOrigin{ProviderID: "destination"})
+	require.NoError(t, err)
+	serializedJSON, err := json.Marshal(got)
+	require.NoError(t, err)
+
+	serialized := string(serializedJSON)
+	require.Contains(t, serialized, "sealed-reasoning")
+	require.Contains(t, serialized, "reasoning-provider-id")
 }
 
 func marshalReplayJSON(t *testing.T, value any) string {

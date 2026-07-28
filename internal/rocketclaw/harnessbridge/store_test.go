@@ -405,6 +405,107 @@ func TestSessionServiceActiveTurnLifecycle(t *testing.T) {
 	assert.Empty(t, turns)
 }
 
+func TestSessionServiceActiveTurnRoundTripsOrigin(t *testing.T) {
+	store := newTestSessionService(t)
+	origin := &harness.ProviderOrigin{ProviderID: "work", Route: "responses:https://work.example/v1", ModelID: "worker", AuthenticationEpoch: "epoch-work"}
+	checkpoint := &harness.ActiveTurnCheckpoint{TurnID: "turn-origin", ConversationKey: "conversation-origin", Agent: "planner", Model: "worker", DisplayModel: "work/worker", Origin: origin}
+	metadata := map[string]string{"source": "slack"}
+
+	require.NoError(t, store.UpsertActiveTurn(t.Context(), checkpoint, metadata))
+	turns, err := store.RecoverableActiveTurns(t.Context())
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	require.Equal(t, origin, turns[0].Checkpoint.Origin)
+	require.Equal(t, metadata, turns[0].SourceMetadata)
+}
+
+func TestActiveTurnStoreRoundTripsLegacyDisposition(t *testing.T) {
+	store := newTestSessionService(t)
+	checkpoint := &harness.ActiveTurnCheckpoint{
+		TurnID:          "turn-legacy",
+		ConversationKey: "conversation-legacy",
+		Agent:           "planner",
+		Model:           "worker",
+		DisplayModel:    "work/worker",
+		LegacyReplay:    "portable",
+	}
+	metadata := map[string]string{"source": "slack", activeTurnLegacyReplayMetadataKey: "opaque_bound"}
+
+	require.NoError(t, store.UpsertActiveTurn(t.Context(), checkpoint, metadata))
+	turns, err := store.RecoverableActiveTurns(t.Context())
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	require.Equal(t, harness.LegacyReplayDisposition("portable"), turns[0].Checkpoint.LegacyReplay)
+	require.Equal(t, map[string]string{"source": "slack"}, turns[0].SourceMetadata)
+	require.Contains(t, metadata, activeTurnLegacyReplayMetadataKey)
+}
+
+func TestActiveTurnStoreDeletesUnknownLegacyDisposition(t *testing.T) {
+	store := newTestSessionService(t)
+	metadata, err := json.Marshal(map[string]string{activeTurnLegacyReplayMetadataKey: "unknown"})
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(t.Context(), `INSERT INTO active_turns (id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "turn-legacy-corrupt", "conversation-legacy-corrupt", "planner", "model", "model", `null`, `null`, `null`, "", `null`, `null`, "", string(metadata), int64(1), int64(1))
+	require.NoError(t, err)
+
+	turns, err := store.RecoverableActiveTurns(t.Context())
+	require.NoError(t, err)
+	require.Empty(t, turns)
+}
+
+func TestActiveTurnStoreRejectsUnknownLegacyDispositionOnWrite(t *testing.T) {
+	store := newTestSessionService(t)
+	checkpoint := &harness.ActiveTurnCheckpoint{TurnID: "turn-invalid-legacy", ConversationKey: "conversation-invalid-legacy", Agent: "planner", Model: "model", DisplayModel: "model", LegacyReplay: "unknown"}
+
+	err := store.UpsertActiveTurn(t.Context(), checkpoint, nil)
+	require.ErrorContains(t, err, "legacy replay disposition")
+
+	turns, err := store.RecoverableActiveTurns(t.Context())
+	require.NoError(t, err)
+	require.Empty(t, turns)
+}
+
+func TestSessionServiceActiveTurnIgnoresCallerProviderOriginMetadata(t *testing.T) {
+	store := newTestSessionService(t)
+	checkpoint := &harness.ActiveTurnCheckpoint{TurnID: "turn-collision", ConversationKey: "conversation-collision", Agent: "planner", Model: "worker", DisplayModel: "worker"}
+	metadata := map[string]string{"source": "slack", activeTurnOriginMetadataKey: `{"provider_id":"caller","route":"caller","model_id":"caller","authentication_epoch":"caller"}`}
+
+	require.NoError(t, store.UpsertActiveTurn(t.Context(), checkpoint, metadata))
+	turns, err := store.RecoverableActiveTurns(t.Context())
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	require.Nil(t, turns[0].Checkpoint.Origin)
+	require.Equal(t, map[string]string{"source": "slack"}, turns[0].SourceMetadata)
+	require.Contains(t, metadata, activeTurnOriginMetadataKey)
+}
+
+func TestSessionServiceRecoverableActiveTurnsDeletesInvalidProviderOrigins(t *testing.T) {
+	store := newTestSessionService(t)
+	invalid := map[string]string{
+		"malformed":        `{`,
+		"null":             `null`,
+		"empty":            `{}`,
+		"missing-provider": `{"route":"route","model_id":"model","authentication_epoch":"epoch"}`,
+		"missing-route":    `{"provider_id":"work","model_id":"model","authentication_epoch":"epoch"}`,
+		"missing-model":    `{"provider_id":"work","route":"route","authentication_epoch":"epoch"}`,
+		"missing-epoch":    `{"provider_id":"work","route":"route","model_id":"model"}`,
+	}
+
+	for name, origin := range invalid {
+		metadata, err := json.Marshal(map[string]string{activeTurnOriginMetadataKey: origin})
+		require.NoError(t, err)
+		_, err = store.db.ExecContext(t.Context(), `INSERT INTO active_turns (id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, "turn-"+name, "conversation-"+name, "planner", "model", "model", `null`, `null`, `null`, "", `null`, `null`, "", string(metadata), int64(1), int64(1))
+		require.NoError(t, err)
+	}
+
+	turns, err := store.RecoverableActiveTurns(t.Context())
+	require.NoError(t, err)
+	require.Empty(t, turns)
+
+	var count int
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM active_turns`).Scan(&count))
+	require.Zero(t, count)
+}
+
 func TestSessionServiceActiveTurnPersistsThroughCentralizedOpener(t *testing.T) {
 	workspace := t.TempDir()
 	store, err := NewSessionService(workspace)

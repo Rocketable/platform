@@ -68,6 +68,7 @@ func TestSyncResetsTargetPreservingState(t *testing.T) {
 	root := filepath.Join(tmp, targetRoot)
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "trashdir"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "auth.json"), []byte("token"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "auth.json.lock"), []byte("auth lock"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "state.sqlite3"), []byte("state"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "state.sqlite3-shm"), []byte("shm"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(root, "state.sqlite3-wal"), []byte("wal"), 0o644))
@@ -105,6 +106,9 @@ func TestSyncResetsTargetPreservingState(t *testing.T) {
 	data, err = os.ReadFile(filepath.Join(root, "auth.json"))
 	require.NoError(t, err)
 	assert.Equal(t, "token", string(data))
+	data, err = os.ReadFile(filepath.Join(root, "auth.json.lock"))
+	require.NoError(t, err)
+	assert.Equal(t, "auth lock", string(data))
 	assert.DirExists(t, filepath.Join(root, "overlays"))
 	_, err = os.Stat(filepath.Join(root, "overlays", "keep.txt"))
 	require.ErrorIs(t, err, os.ErrNotExist)
@@ -699,7 +703,7 @@ func TestSyncWritesEmbeddedSetupFiles(t *testing.T) {
 
 	data, err := os.ReadFile(filepath.Join(tmp, targetRoot, ".gitignore"))
 	require.NoError(t, err)
-	assert.Equal(t, "auth.json\n", string(data))
+	assert.Equal(t, "auth.json\nauth.json.lock\n.auth.json.tmp-*\n", string(data))
 }
 
 func TestListSetupFiles(t *testing.T) {

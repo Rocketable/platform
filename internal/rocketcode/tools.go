@@ -19,7 +19,7 @@ import (
 )
 
 type toolFactory struct {
-	client                     responsesAPI
+	providers                  Providers
 	systemPrompt               string
 	defaultModelRef            modelRef
 	autoApproverModelRef       modelRef

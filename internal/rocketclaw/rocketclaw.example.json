@@ -9,7 +9,7 @@
     "git@github.com:Rocketable/overlay3.git"
   ],
   "models": {
-    "coding-high": "gpt-5.5",
+    "coding-high": "work/gpt-5.5",
     "review-fast": "software-development-sol"
   },
   "logging": {
@@ -39,6 +39,13 @@
     "api_key": "sk-...",
     "api_base_url": "https://api.openai.com/v1",
     "rocketcode_auth": "api_key"
+  },
+  "providers": {
+    "work": {
+      "api_key": "",
+      "api_base_url": "https://api.openai.com/v1",
+      "rocketcode_auth": "chatgpt"
+    }
   },
   "auto_approver_model": "",
   "instrumentation": {

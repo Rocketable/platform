@@ -59,7 +59,7 @@ func loadProviderConfig(path string, models []modelSelector) (rocketcode.Provide
 		return rocketcode.Providers{}, fmt.Errorf("quickbench.json references missing environment variables: %s", strings.Join(missing, ", "))
 	}
 
-	var providers rocketcode.Providers
+	providers := make(rocketcode.Providers)
 	if selected["openai"] {
 		provider, ok := cfg.Providers["openai"]
 		if !ok {
@@ -72,12 +72,15 @@ func loadProviderConfig(path string, models []modelSelector) (rocketcode.Provide
 		}
 
 		options := []option.RequestOption{option.WithAPIKey(apiKey)}
-		if baseURL := strings.TrimSpace(provider.BaseURL); baseURL != "" {
+		baseURL := strings.TrimRight(strings.TrimSpace(provider.BaseURL), "/")
+		if baseURL != "" {
 			options = append(options, option.WithBaseURL(baseURL))
+		} else {
+			baseURL = "https://api.openai.com/v1"
 		}
 
 		client := openai.NewClient(options...)
-		providers.OpenAI = &client
+		providers["openai"] = rocketcode.NewOpenAIProvider(&client, "responses:"+baseURL, "quickbench")
 	}
 
 	return providers, nil

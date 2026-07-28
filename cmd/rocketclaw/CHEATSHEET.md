@@ -100,6 +100,15 @@ Return the human-visible value directly from `main`: strings render directly, ot
 
 New `#ops` conversations use agent `main`. Authorized replies can select `factory` with `$agent factory`, its `🎛 factory` alias, or the native selector.
 
+## Model Providers And Replay
+
+- Top-level `openai` is the default provider. Additional instances go under top-level `providers` and use the same fields.
+- `model` uses the default provider, `openai/model` explicitly selects the default, and `provider/model` selects a named provider.
+- Root agents, subagents, guardrails, workflow workers, and `auto(agent-name)` reviewers route independently from their own model setting. There is no implicit provider failover.
+- `rocketclaw oai login [provider] [--headless]`, `rocketclaw oai list`, and `rocketclaw oai logout [provider]` manage provider credentials. Login rewrites the selected authentication mode and may require restart.
+- Provider credentials use the selected runtime directory: `.rocketclaw/auth.json` and `.rocketclaw/auth.json.lock` for `rocketclaw.json`, or `.femtoclaw/auth.json` and `.femtoclaw/auth.json.lock` for legacy `femtoclaw.json`. Config updates use the sibling `rocketclaw.json.lock` or `femtoclaw.json.lock`. Explicit login or API-key changes create a new authentication identity, while refresh does not.
+- Provider-native encrypted replay requires an exact origin match. Origin mismatch uses readable history automatically. Originless legacy history gets one encrypted attempt, then falls back only for a recognized encrypted-content rejection when readable context is complete. Missing readable compacted context is an explicit error.
+
 ## Current State Schema
 
 Fresh RocketClaw runtime directories initialize the current SQLite schema directly with schema marker `user_version = 9`. Existing state and configuration must already use current formats; startup does not migrate historical formats.
@@ -238,7 +247,9 @@ Running `rocketclaw` without a subcommand starts the server when `femtoclaw.json
 | `rocketclaw doctor` | Validates the loaded configuration and RocketCode availability. |
 | `rocketclaw lint [next|current]` | Checks effective RocketCode agent-system safety. Defaults to `next`. |
 | `rocketclaw agent-graph [next|current]` | Prints the effective RocketCode task delegation and guardrail graph as Graphviz/DOT. Defaults to `next`. |
-| `rocketclaw oai login [--headless]` | Authenticates RocketClaw to ChatGPT for RocketCode model requests and writes the selected runtime `auth.json`. |
+| `rocketclaw oai login [provider] [--headless]` | Authenticates the default or named provider to ChatGPT, rewrites its selected authentication mode, and may require restart. |
+| `rocketclaw oai list` | Lists configured providers, authentication modes, and local credential presence. |
+| `rocketclaw oai logout [provider]` | Removes the default or named provider's local ChatGPT credential. |
 | `rocketclaw fc list [--since 24h|RFC3339] [--until RFC3339] [--limit N] [--no-message-preview]` | Lists stored RocketCode sessions. |
 | `rocketclaw fc observe [--follow|-f] <conversation-id>` | Prints one conversation's stored session entries as JSONL. The conversation ID is required. |
 | `rocketclaw fc delete <conversation-id>` | Deletes a stored session when the daemon does not own the state store. |

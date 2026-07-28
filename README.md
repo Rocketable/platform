@@ -90,6 +90,7 @@ RocketClaw is configured with `rocketclaw.json` in the working directory. Runtim
 - `.rocketclaw/overlays/`: configured git overlay clones for runtime assets.
 - `.rocketclaw/.rocketcode/`: RocketCode shell output and transient artifacts.
 - `.rocketclaw/workflows/`: effective saved Starlark workflows assembled from embedded, overlay, and workspace `workflows/` assets.
+- Provider credentials live under the selected runtime directory: `.rocketclaw/auth.json` with `.rocketclaw/auth.json.lock` for `rocketclaw.json`, or `.femtoclaw/auth.json` with `.femtoclaw/auth.json.lock` for legacy `femtoclaw.json`. Login config updates use the sibling `rocketclaw.json.lock` or `femtoclaw.json.lock`.
 
 Generated runtime state should not be treated as source code.
 
@@ -106,6 +107,14 @@ model: '{{ model "coding-high" }}'
 ```
 
 `openresponsesd` is configured with `openresponsesd.json` by default, or with `--config` / `OPENRESPONSESD_CONFIG`. Its documented credential environment variables are `OPENRESPONSESD_OPENAI_API_KEY` and `OPENRESPONSESD_ANTHROPIC_API_KEY`; bearer-token auth can be set in config or overridden locally with `--auth-token` / `OPENRESPONSESD_AUTH_TOKEN`.
+
+### RocketClaw Model Providers
+
+The top-level `openai` object remains the default provider. Configure additional named instances under top-level `providers`; each provider uses the same fields as `openai`. An unqualified model uses the default provider, `openai/model` selects it explicitly, and `provider/model` selects a named provider. Root agents, subagents, guardrails, workflow workers, and automatic approval reviewers resolve their own configured models independently. RocketClaw never implicitly fails over to another provider.
+
+Manage ChatGPT credentials with `rocketclaw oai login [provider] [--headless]`, `rocketclaw oai list`, and `rocketclaw oai logout [provider]`. Login rewrites the selected provider's authentication mode and may require a restart. An explicit login or API-key change creates a new authentication identity; routine token refresh does not.
+
+Encrypted replay is reused only for the exact provider origin that created it. On an origin mismatch, RocketCode automatically uses saved readable history. Legacy sessions without an origin try their old encrypted state once and fall back only when the provider returns a recognized encrypted-content rejection and complete readable context exists. Missing readable compacted context is reported explicitly rather than discarded.
 
 `funneld` is configured with `funneld.json` by default, or with `--config` / `FUNNELD_CONFIG`. Its config declares a certificate `host`, an optional `cert_cache`, and routes from public mount paths to target base URLs.
 

@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
@@ -88,8 +90,9 @@ type checkpointCall struct {
 }
 
 type mockCheckpointSink struct {
-	mu    sync.Mutex
-	calls []checkpointCall
+	mu          sync.Mutex
+	calls       []checkpointCall
+	providerErr error
 }
 
 func (m *mockCheckpointSink) StartActiveTurn(_ context.Context, checkpoint *ActiveTurnCheckpoint) error {
@@ -107,7 +110,7 @@ func (m *mockCheckpointSink) RecordProviderResponse(_ context.Context, checkpoin
 
 	m.calls = append(m.calls, checkpointCall{name: "provider", checkpoint: *checkpoint})
 
-	return nil
+	return m.providerErr
 }
 
 func (m *mockCheckpointSink) RecordCompletedToolOutput(_ context.Context, checkpoint *ActiveTurnCheckpoint) error {
@@ -192,6 +195,7 @@ func testLooper(client responsesAPI) *looper {
 
 	l.modelRef = defaultModelRef()
 	l.Client = client
+	l.Origin = ProviderOrigin{ProviderID: "openai", Route: "responses:https://api.openai.com/v1", ModelID: openai.ChatModelGPT5, AuthenticationEpoch: "epoch-openai"}
 	l.Model = openai.ChatModelGPT5
 	l.PermissionReviewer = inertPermissionReviewer{}
 	l.CheckpointSink = InertCheckpointSink{}
@@ -282,6 +286,10 @@ func subagentDiagnosticResponse(diagnostic *SubagentDiagnostic) ChatResponse {
 }
 
 func providerDiagnosticResponse(diagnostic *ProviderDiagnostic) ChatResponse {
+	if diagnostic.ProviderID == "" {
+		diagnostic.ProviderID = "openai"
+	}
+
 	var response ChatResponse
 
 	response.Kind = ChatResponseAssistantTool
@@ -391,7 +399,7 @@ func (m *mockSessionStore) appendEntry(entry *SessionEntry) error {
 
 	m.entries = append(m.entries, *entry)
 
-	_, turns, err := loadSession(sessionEntries(m.entries))
+	_, turns, err := loadSession(sessionEntries(m.entries), ProviderOrigin{})
 	if err != nil {
 		return fmt.Errorf("reload session: %w", err)
 	}
@@ -415,6 +423,573 @@ func sessionEntries(entries []SessionEntry) func(func(SessionEntry, error) bool)
 			}
 		}
 	}
+}
+
+func TestLoadSessionPreservesOpaqueForExactOrigin(t *testing.T) {
+	origin := ProviderOrigin{ProviderID: "openai", Route: "responses:https://api.openai.com/v1", ModelID: "gpt-5.5", AuthenticationEpoch: "epoch-1"}
+	replay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputReasoning("reasoning-1", "summary", "sealed")})
+	require.NoError(t, err)
+
+	history, turns, err := loadSession(sessionEntries([]SessionEntry{{Origin: &origin, ReplayInput: replay}}), origin)
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	require.JSONEq(t, string(replay[0]), marshalJSON(t, history.replay[0]))
+	require.JSONEq(t, `{"content":"summary","role":"assistant","type":"message"}`, marshalJSON(t, history.portable[0]))
+	require.False(t, history.legacyOpaque)
+	require.NoError(t, history.portableError)
+}
+
+func TestLoadSessionProjectsPortableForProviderMismatch(t *testing.T) {
+	origin := ProviderOrigin{ProviderID: "openai", Route: "responses:https://api.openai.com/v1", ModelID: "gpt-5.5", AuthenticationEpoch: "epoch-1"}
+	destination := origin
+	destination.ProviderID = "other"
+	replay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		testInputReasoning("reasoning-1", "summary", "sealed"),
+		functionCallReplayInput("provider-call", "call-1", "read", `{}`),
+	})
+	require.NoError(t, err)
+
+	history, _, err := loadSession(sessionEntries([]SessionEntry{{Origin: &origin, ReplayInput: replay}}), destination)
+	require.NoError(t, err)
+	require.NotContains(t, marshalJSON(t, history.replay), "sealed")
+	require.NotContains(t, marshalJSON(t, history.replay), "provider-call")
+	require.Contains(t, marshalJSON(t, history.replay), "summary")
+	require.Contains(t, marshalJSON(t, history.replay), `"call_id":"call-1"`)
+}
+
+func TestLoadSessionProjectsPortableForRouteModelAndEpochMismatch(t *testing.T) {
+	origin := ProviderOrigin{ProviderID: "openai", Route: "responses:https://api.openai.com/v1", ModelID: "gpt-5.5", AuthenticationEpoch: "epoch-1"}
+	replay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputReasoning("reasoning-1", "summary", "sealed")})
+	require.NoError(t, err)
+
+	for _, destination := range []ProviderOrigin{
+		{ProviderID: origin.ProviderID, Route: "responses:https://other.example/v1", ModelID: origin.ModelID, AuthenticationEpoch: origin.AuthenticationEpoch},
+		{ProviderID: origin.ProviderID, Route: origin.Route, ModelID: "gpt-5.6", AuthenticationEpoch: origin.AuthenticationEpoch},
+		{ProviderID: origin.ProviderID, Route: origin.Route, ModelID: origin.ModelID, AuthenticationEpoch: "epoch-2"},
+	} {
+		history, _, err := loadSession(sessionEntries([]SessionEntry{{Origin: &origin, ReplayInput: replay}}), destination)
+		require.NoError(t, err)
+		require.NotContains(t, marshalJSON(t, history.replay), "sealed")
+	}
+}
+
+func TestLoadSessionMarksOnlyOpaqueOriginlessEntriesLegacy(t *testing.T) {
+	portable, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleUser, "portable", "")})
+	require.NoError(t, err)
+	opaque, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputReasoning("reasoning-1", "summary", "sealed")})
+	require.NoError(t, err)
+
+	destination := ProviderOrigin{ProviderID: "openai", Route: "route", ModelID: "model", AuthenticationEpoch: "epoch"}
+
+	history, _, err := loadSession(sessionEntries([]SessionEntry{{ReplayInput: portable}, {ReplayInput: opaque}}), destination)
+	require.NoError(t, err)
+	require.True(t, history.legacyOpaque)
+	require.Len(t, history.replay, 2)
+	require.Len(t, history.portable, 2)
+	require.NotContains(t, marshalJSON(t, history.portable), "sealed")
+}
+
+func TestLoadSessionRetainsLegacyEncryptedCompactionForFirstAttempt(t *testing.T) {
+	replay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{compactionReplayInput("compaction-1", "sealed", "")})
+	require.NoError(t, err)
+
+	history, _, err := loadSession(sessionEntries([]SessionEntry{{ReplayInput: replay}}), ProviderOrigin{})
+	require.NoError(t, err)
+	require.True(t, history.legacyOpaque)
+	require.Contains(t, marshalJSON(t, history.replay), "sealed")
+
+	var missing *MissingPortableContextError
+	require.ErrorAs(t, history.portableError, &missing)
+}
+
+func TestLooperLegacyOpaqueSuccessBindsOrigin(t *testing.T) {
+	origin := ProviderOrigin{ProviderID: "work", Route: "responses:https://work.example/v1", ModelID: "worker", AuthenticationEpoch: "epoch-work"}
+	legacyReplay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputReasoning("reasoning-legacy", "readable legacy context", "sealed-legacy")})
+	require.NoError(t, err)
+
+	mock := mockResponses(responseWithMessage("resp-bound", "done"))
+	loop := testLooper(mock)
+	loop.Origin = origin
+	checkpointSink := new(mockCheckpointSink)
+	loop.CheckpointSink = checkpointSink
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "current prompt", make(chan ChatResponse, 1))
+
+	close(input)
+
+	var saved SessionEntry
+
+	require.NoError(t, loop.Loop(t.Context(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", ReplayInput: legacyReplay}}), func(entry SessionEntry) error {
+		saved = entry
+		return nil
+	}, make(chan os.Signal, 1)))
+	require.Len(t, mock.calls, 1)
+	require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), "sealed-legacy")
+	require.Equal(t, legacyReplayOpaqueBound, saved.LegacyReplay)
+	require.Equal(t, &origin, saved.Origin)
+
+	checkpointCalls := checkpointSink.snapshot()
+	for _, call := range checkpointCalls {
+		if call.name == "provider" {
+			require.Equal(t, legacyReplayOpaqueBound, call.checkpoint.LegacyReplay)
+		}
+	}
+}
+
+func TestLooperLegacyOpaqueTooManyRequestsIsOneShot(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		legacyReplay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputReasoning("reasoning-legacy", "readable", "sealed")})
+		require.NoError(t, err)
+
+		mock := mockResponseError(openAIError("too_many_requests", "slow down", nil))
+		loop := testLooper(mock)
+
+		input := make(chan PromptInput, 1)
+		input <- testPromptInput(PromptInputRoleUser, "current", make(chan ChatResponse, 1))
+
+		close(input)
+
+		require.Error(t, loop.Loop(t.Context(), input, sessionEntries([]SessionEntry{{ReplayInput: legacyReplay}}), discardSession, make(chan os.Signal, 1)))
+		require.Len(t, mock.calls, 1)
+	})
+}
+
+func TestLooperLegacyMigrationDisablesSDKRetries(t *testing.T) {
+	var (
+		mu       sync.Mutex
+		requests int
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After-Ms", "0")
+		w.WriteHeader(http.StatusTooManyRequests)
+
+		_, err := io.WriteString(w, `{"error":{"message":"slow down","type":"too_many_requests","param":null,"code":"too_many_requests"}}`)
+		if err != nil {
+			t.Errorf("write retryable response: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
+	loop := testOpenAILoop(t, &client)
+	legacyReplay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputReasoning("reasoning-legacy", "readable", "sealed")})
+	require.NoError(t, err)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "current", make(chan ChatResponse, 1))
+
+	close(input)
+
+	require.Error(t, loop.Loop(t.Context(), input, sessionEntries([]SessionEntry{{ReplayInput: legacyReplay}}), discardSession, make(chan os.Signal, 1)))
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Equal(t, 1, requests)
+}
+
+func TestLooperLegacyOpaqueContextLengthIsOneShot(t *testing.T) {
+	legacyReplay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputReasoning("reasoning-legacy", "readable", "sealed")})
+	require.NoError(t, err)
+
+	mock := mockResponseError(contextLengthExceededError())
+	loop := testLooper(mock)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "current", make(chan ChatResponse, 1))
+
+	close(input)
+
+	require.Error(t, loop.Loop(t.Context(), input, sessionEntries([]SessionEntry{{ReplayInput: legacyReplay}}), discardSession, make(chan os.Signal, 1)))
+	require.Len(t, mock.calls, 1)
+	require.Empty(t, mock.compactCalls)
+}
+
+func TestLooperLegacyPortableFallbackTooManyRequestsIsOneShot(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		legacyReplay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputReasoning("reasoning-legacy", "readable", "sealed")})
+		require.NoError(t, err)
+
+		calls := 0
+		mock := mockResponseFunc(func(context.Context, *responses.ResponseNewParams) (*responses.Response, error) {
+			calls++
+			if calls == 1 {
+				return nil, &openai.Error{StatusCode: http.StatusBadRequest, Message: "invalid encrypted content"}
+			}
+
+			return nil, openAIError("too_many_requests", "slow down", nil)
+		})
+		loop := testLooper(mock)
+
+		input := make(chan PromptInput, 1)
+		input <- testPromptInput(PromptInputRoleUser, "current", make(chan ChatResponse, 1))
+
+		close(input)
+
+		require.Error(t, loop.Loop(t.Context(), input, sessionEntries([]SessionEntry{{ReplayInput: legacyReplay}}), discardSession, make(chan os.Signal, 1)))
+		require.Equal(t, 2, calls)
+	})
+}
+
+func TestLooperLegacyFailedResponsesAreOneShot(t *testing.T) {
+	for _, phase := range []string{"opaque", "portable"} {
+		for _, code := range []responses.ResponseErrorCode{responses.ResponseErrorCodeRateLimitExceeded, responses.ResponseErrorCode("context_length_exceeded")} {
+			t.Run(phase+"/"+string(code), func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					legacyReplay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputReasoning("reasoning-legacy", "readable", "sealed")})
+					require.NoError(t, err)
+
+					failed := failedResponseWithCode("resp-failed", code, "failed")
+					calls := 0
+					mock := mockResponseFunc(func(context.Context, *responses.ResponseNewParams) (*responses.Response, error) {
+						calls++
+						if phase == "portable" && calls == 1 {
+							return nil, &openai.Error{StatusCode: http.StatusBadRequest, Message: "invalid encrypted content"}
+						}
+
+						return failed, nil
+					})
+					loop := testLooper(mock)
+
+					input := make(chan PromptInput, 1)
+					input <- testPromptInput(PromptInputRoleUser, "current", make(chan ChatResponse, 1))
+
+					close(input)
+
+					require.Error(t, loop.Loop(t.Context(), input, sessionEntries([]SessionEntry{{ReplayInput: legacyReplay}}), discardSession, make(chan os.Signal, 1)))
+
+					if phase == "opaque" {
+						require.Equal(t, 1, calls)
+					} else {
+						require.Equal(t, 2, calls)
+					}
+
+					require.Empty(t, mock.compactCalls)
+				})
+			})
+		}
+	}
+}
+
+func TestLooperLegacyOpaqueRejectionRetriesPortableOnce(t *testing.T) {
+	origin := ProviderOrigin{ProviderID: "work", Route: "responses:https://work.example/v1", ModelID: "worker", AuthenticationEpoch: "epoch-work"}
+	legacyReplay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputReasoning("reasoning-legacy", "readable legacy context", "sealed-legacy")})
+	require.NoError(t, err)
+
+	calls := 0
+	mock := mockResponseFunc(func(context.Context, *responses.ResponseNewParams) (*responses.Response, error) {
+		calls++
+		if calls == 1 {
+			return nil, &openai.Error{StatusCode: http.StatusBadRequest, Message: "invalid encrypted content"}
+		}
+
+		if calls == 2 {
+			return responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "read", `{}`)}), nil
+		}
+
+		return responseWithMessage("resp-portable", "done"), nil
+	})
+	loop := testLooper(mock)
+	loop.Origin = origin
+	loop.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
+	tool := testLooperTool("read")
+	tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		return TextToolResult("read result"), nil
+	}
+	loop.Tools = map[string]looperTool{"read": tool}
+	checkpointSink := new(mockCheckpointSink)
+	loop.CheckpointSink = checkpointSink
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "current prompt", make(chan ChatResponse, 1))
+
+	close(input)
+
+	var saved SessionEntry
+
+	require.NoError(t, loop.Loop(t.Context(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", ReplayInput: legacyReplay}}), func(entry SessionEntry) error {
+		saved = entry
+		return nil
+	}, make(chan os.Signal, 1)))
+	require.Len(t, mock.calls, 3)
+	first := marshalJSON(t, mock.calls[0].Input.OfInputItemList)
+	second := marshalJSON(t, mock.calls[1].Input.OfInputItemList)
+	third := marshalJSON(t, mock.calls[2].Input.OfInputItemList)
+	require.Contains(t, first, "sealed-legacy")
+	require.NotContains(t, second, "sealed-legacy")
+	require.NotContains(t, second, "reasoning-legacy")
+	require.Contains(t, second, "readable legacy context")
+	require.Equal(t, 1, strings.Count(second, "current prompt"))
+	require.NotContains(t, third, "sealed-legacy")
+	require.NotContains(t, third, "reasoning-legacy")
+	require.Equal(t, 1, strings.Count(third, "current prompt"))
+	require.Equal(t, legacyReplayPortable, saved.LegacyReplay)
+	require.Equal(t, &origin, saved.Origin)
+
+	checkpointCalls := checkpointSink.snapshot()
+	require.Equal(t, legacyReplayPortable, checkpointCalls[1].checkpoint.LegacyReplay)
+	require.Equal(t, legacyReplayPortable, checkpointCalls[len(checkpointCalls)-2].checkpoint.LegacyReplay)
+}
+
+func TestLooperLegacyOpaqueRejectionDoesNotRetryTwice(t *testing.T) {
+	legacyReplay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputReasoning("reasoning-legacy", "readable", "sealed")})
+	require.NoError(t, err)
+
+	calls := 0
+	mock := mockResponseFunc(func(context.Context, *responses.ResponseNewParams) (*responses.Response, error) {
+		calls++
+		return nil, &openai.Error{StatusCode: http.StatusBadRequest, Message: "invalid encrypted content"}
+	})
+	loop := testLooper(mock)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "current", make(chan ChatResponse, 1))
+
+	close(input)
+
+	err = loop.Loop(t.Context(), input, sessionEntries([]SessionEntry{{ReplayInput: legacyReplay}}), discardSession, make(chan os.Signal, 1))
+	require.Error(t, err)
+	require.Equal(t, 2, calls)
+}
+
+func testLooperLegacyOpaqueDoesNotRetry(t *testing.T, errProvider error) {
+	t.Helper()
+
+	legacyReplay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputReasoning("reasoning-legacy", "readable", "sealed")})
+	require.NoError(t, err)
+
+	mock := mockResponseError(errProvider)
+	loop := testLooper(mock)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "current", make(chan ChatResponse, 1))
+
+	close(input)
+
+	require.Error(t, loop.Loop(t.Context(), input, sessionEntries([]SessionEntry{{ReplayInput: legacyReplay}}), discardSession, make(chan os.Signal, 1)))
+	require.Len(t, mock.calls, 1)
+}
+
+func TestLooperLegacyGenericInvalidRequestDoesNotRetryPortable(t *testing.T) {
+	testLooperLegacyOpaqueDoesNotRetry(t, &openai.Error{StatusCode: http.StatusBadRequest, Type: "invalid_request_error", Message: "encrypted input was invalid"})
+}
+
+func TestLooperLegacyRateLimitDoesNotRetryPortable(t *testing.T) {
+	testLooperLegacyOpaqueDoesNotRetry(t, &openai.Error{StatusCode: http.StatusTooManyRequests, Code: "rate_limit_exceeded", Message: "slow down"})
+}
+
+func TestLooperLegacyAuthenticationFailureDoesNotRetryPortable(t *testing.T) {
+	testLooperLegacyOpaqueDoesNotRetry(t, &openai.Error{StatusCode: http.StatusUnauthorized, Message: "unauthorized"})
+}
+
+func TestLooperLegacyServerFailureDoesNotRetryPortable(t *testing.T) {
+	testLooperLegacyOpaqueDoesNotRetry(t, &openai.Error{StatusCode: http.StatusInternalServerError, Message: "server failure"})
+}
+
+func TestLooperLegacyOpaqueRejectionRequiresPortableContext(t *testing.T) {
+	legacyReplay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{compactionReplayInput("compaction-legacy", "sealed", "")})
+	require.NoError(t, err)
+
+	mock := mockResponseError(&openai.Error{StatusCode: http.StatusBadRequest, Param: "input.encrypted_content"})
+	loop := testLooper(mock)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "current", make(chan ChatResponse, 1))
+
+	close(input)
+
+	err = loop.Loop(t.Context(), input, sessionEntries([]SessionEntry{{ReplayInput: legacyReplay}}), discardSession, make(chan os.Signal, 1))
+
+	var missing *MissingPortableContextError
+	require.ErrorAs(t, err, &missing)
+	require.Len(t, mock.calls, 1)
+}
+
+func TestLoadSessionKeepsPortableEntriesAfterFirstPortableError(t *testing.T) {
+	origin := ProviderOrigin{ProviderID: "openai", Route: "route", ModelID: "model", AuthenticationEpoch: "epoch"}
+	bad, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{compactionReplayInput("compaction-1", "sealed", "")})
+	require.NoError(t, err)
+	good, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleUser, "after error", "")})
+	require.NoError(t, err)
+
+	history, _, err := loadSession(sessionEntries([]SessionEntry{{Origin: &origin, ReplayInput: bad}, {Origin: &origin, ReplayInput: good}}), origin)
+	require.NoError(t, err)
+	require.Error(t, history.portableError)
+	require.Len(t, history.portable, 1)
+	require.JSONEq(t, `{"content":"after error","role":"user","type":"message"}`, marshalJSON(t, history.portable[0]))
+}
+
+func TestLoadSessionReadableCompactionReplacesCrossEntryPortablePrefix(t *testing.T) {
+	source := ProviderOrigin{ProviderID: "source", Route: "source-route", ModelID: "source-model", AuthenticationEpoch: "source-epoch"}
+	destination := ProviderOrigin{ProviderID: "destination", Route: "destination-route", ModelID: "destination-model", AuthenticationEpoch: "destination-epoch"}
+	oldPrefix, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleUser, "old prefix", "")})
+	require.NoError(t, err)
+	checkpoint, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{compactionReplayInput("compaction-1", "sealed", "checkpoint with retained recent context")})
+	require.NoError(t, err)
+	tail, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleAssistant, "post-compaction tail", "final_answer")})
+	require.NoError(t, err)
+
+	history, _, err := loadSession(sessionEntries([]SessionEntry{
+		{Origin: &source, ReplayInput: oldPrefix},
+		{Origin: &source, ReplayInput: checkpoint},
+		{Origin: &source, ReplayInput: tail},
+	}), destination)
+	require.NoError(t, err)
+
+	portableJSON := marshalJSON(t, history.portable)
+
+	replayJSON := marshalJSON(t, history.replay)
+	for _, serialized := range []string{portableJSON, replayJSON} {
+		require.NotContains(t, serialized, "old prefix")
+		require.Equal(t, 1, strings.Count(serialized, "checkpoint with retained recent context"))
+		require.Less(t, strings.Index(serialized, "checkpoint with retained recent context"), strings.Index(serialized, "post-compaction tail"))
+	}
+
+	exact, _, err := loadSession(sessionEntries([]SessionEntry{
+		{Origin: &source, ReplayInput: oldPrefix},
+		{Origin: &source, ReplayInput: checkpoint},
+		{Origin: &source, ReplayInput: tail},
+	}), source)
+	require.NoError(t, err)
+	require.Contains(t, marshalJSON(t, exact.replay), "old prefix")
+	require.Contains(t, marshalJSON(t, exact.replay), "sealed")
+}
+
+func TestLoadSessionReadableCompactionSupersedesOlderMissingContext(t *testing.T) {
+	source := ProviderOrigin{ProviderID: "source", Route: "source-route", ModelID: "source-model", AuthenticationEpoch: "source-epoch"}
+	destination := ProviderOrigin{ProviderID: "destination", Route: "destination-route", ModelID: "destination-model", AuthenticationEpoch: "destination-epoch"}
+	oldPrefix, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleUser, "old prefix", "")})
+	require.NoError(t, err)
+	encryptedOnly, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{compactionReplayInput("encrypted-only", "sealed-old", "")})
+	require.NoError(t, err)
+	checkpoint, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{compactionReplayInput("readable", "sealed-new", "checkpoint with retained recent context")})
+	require.NoError(t, err)
+	tail, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleAssistant, "post-compaction tail", "final_answer")})
+	require.NoError(t, err)
+
+	history, _, err := loadSession(sessionEntries([]SessionEntry{
+		{Origin: &source, ReplayInput: oldPrefix},
+		{Origin: &source, ReplayInput: encryptedOnly},
+		{Origin: &source, ReplayInput: checkpoint},
+		{Origin: &source, ReplayInput: tail},
+	}), destination)
+	require.NoError(t, err)
+	serialized := marshalJSON(t, history.replay)
+	require.NotContains(t, serialized, "old prefix")
+	require.NotContains(t, serialized, "encrypted-only")
+	require.Equal(t, 1, strings.Count(serialized, "checkpoint with retained recent context"))
+	require.Equal(t, 1, strings.Count(serialized, "post-compaction tail"))
+	require.Less(t, strings.Index(serialized, "checkpoint with retained recent context"), strings.Index(serialized, "post-compaction tail"))
+}
+
+func TestLoadSessionRejectsUnsupersededLatestMissingContext(t *testing.T) {
+	source := ProviderOrigin{ProviderID: "source", Route: "source-route", ModelID: "source-model", AuthenticationEpoch: "source-epoch"}
+	destination := ProviderOrigin{ProviderID: "destination", Route: "destination-route", ModelID: "destination-model", AuthenticationEpoch: "destination-epoch"}
+	replay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{compactionReplayInput("latest-encrypted-only", "sealed", "")})
+	require.NoError(t, err)
+
+	_, _, err = loadSession(sessionEntries([]SessionEntry{{Origin: &source, ReplayInput: replay}}), destination)
+
+	var missing *MissingPortableContextError
+	require.ErrorAs(t, err, &missing)
+	require.Equal(t, "latest-encrypted-only", missing.CompactionID)
+	require.ErrorContains(t, err, "project session entry 1 portable replay")
+}
+
+func TestLoadSessionUsesBoundLegacyOpaqueOnlyForExactOrigin(t *testing.T) {
+	origin := ProviderOrigin{ProviderID: "work", Route: "route", ModelID: "model", AuthenticationEpoch: "epoch"}
+	legacyReplay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputReasoning("reasoning-legacy", "readable", "sealed")})
+	require.NoError(t, err)
+	dispositionReplay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleAssistant, "migration complete", "final_answer")})
+	require.NoError(t, err)
+
+	entries := []SessionEntry{
+		{ReplayInput: legacyReplay},
+		{Origin: &origin, LegacyReplay: legacyReplayOpaqueBound, ReplayInput: dispositionReplay},
+	}
+
+	history, _, err := loadSession(sessionEntries(entries), origin)
+	require.NoError(t, err)
+	require.Contains(t, marshalJSON(t, history.replay), "sealed")
+	require.False(t, history.legacyOpaque)
+
+	destination := origin
+	destination.AuthenticationEpoch = "other-epoch"
+	history, _, err = loadSession(sessionEntries(entries), destination)
+	require.NoError(t, err)
+	require.NotContains(t, marshalJSON(t, history.replay), "sealed")
+	require.Contains(t, marshalJSON(t, history.replay), "readable")
+	require.False(t, history.legacyOpaque)
+}
+
+func TestLoadSessionUsesDurablePortableLegacyDisposition(t *testing.T) {
+	origin := ProviderOrigin{ProviderID: "work", Route: "route", ModelID: "model", AuthenticationEpoch: "epoch"}
+	legacyReplay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputReasoning("reasoning-legacy", "readable", "sealed")})
+	require.NoError(t, err)
+
+	history, _, err := loadSession(sessionEntries([]SessionEntry{
+		{ReplayInput: legacyReplay},
+		{Origin: &origin, LegacyReplay: legacyReplayPortable},
+	}), origin)
+	require.NoError(t, err)
+	require.NotContains(t, marshalJSON(t, history.replay), "sealed")
+	require.Contains(t, marshalJSON(t, history.replay), "readable")
+	require.False(t, history.legacyOpaque)
+}
+
+func TestLoadSessionRejectsUnknownLegacyReplayDisposition(t *testing.T) {
+	_, _, err := loadSession(sessionEntries([]SessionEntry{{LegacyReplay: "unknown"}}), ProviderOrigin{})
+	require.ErrorContains(t, err, "legacy replay disposition")
+}
+
+func TestLoadSessionLaterOriginlessOpaqueEntryStartsNewMigration(t *testing.T) {
+	origin := ProviderOrigin{ProviderID: "work", Route: "route", ModelID: "model", AuthenticationEpoch: "epoch"}
+	earlier, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputReasoning("reasoning-earlier", "earlier readable", "earlier-sealed")})
+	require.NoError(t, err)
+	later, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{testInputReasoning("reasoning-later", "later readable", "later-sealed")})
+	require.NoError(t, err)
+
+	history, _, err := loadSession(sessionEntries([]SessionEntry{
+		{ReplayInput: earlier},
+		{Origin: &origin, LegacyReplay: legacyReplayPortable},
+		{ReplayInput: later},
+	}), origin)
+	require.NoError(t, err)
+	require.True(t, history.legacyOpaque)
+	require.NotContains(t, marshalJSON(t, history.replay), "earlier-sealed")
+	require.Contains(t, marshalJSON(t, history.replay), "later-sealed")
+}
+
+func TestLoadSessionKeepsPartialPortableEntryAroundCompactionError(t *testing.T) {
+	origin := ProviderOrigin{ProviderID: "openai", Route: "route", ModelID: "model", AuthenticationEpoch: "epoch"}
+	replay, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		testInputMessage(responses.EasyInputMessageRoleUser, "before", ""),
+		compactionReplayInput("compaction-1", "sealed", ""),
+		testInputMessage(responses.EasyInputMessageRoleAssistant, "tail", "final_answer"),
+	})
+	require.NoError(t, err)
+
+	history, _, err := loadSession(sessionEntries([]SessionEntry{{Origin: &origin, ReplayInput: replay}}), origin)
+	require.NoError(t, err)
+	require.Error(t, history.portableError)
+	require.Len(t, history.portable, 2)
+	require.Contains(t, marshalJSON(t, history.portable), "before")
+	require.Contains(t, marshalJSON(t, history.portable), "tail")
+}
+
+func TestSessionHistoryKeepsCurrentTurnsAfterFirstPortableError(t *testing.T) {
+	var history sessionHistory
+	history.appendPortable(nil, errors.New("first error"))
+	history.appendPortable([]responses.ResponseInputItemUnionParam{testInputMessage(responses.EasyInputMessageRoleAssistant, "later turn", "final_answer")}, nil)
+
+	require.EqualError(t, history.portableError, "first error")
+	require.Len(t, history.portable, 1)
+	require.JSONEq(t, `{"content":"later turn","phase":"final_answer","role":"assistant","type":"message"}`, marshalJSON(t, history.portable[0]))
 }
 
 func discardSession(SessionEntry) error { return nil }
@@ -482,7 +1057,7 @@ func TestLooperReloadsSessionWithCurrentRuntimeConfig(t *testing.T) {
 	require.Contains(t, marshalJSON(t, items[3]), `"content":"next question"`)
 	require.Contains(t, marshalJSON(t, items[3]), `"role":"user"`)
 
-	_, savedTurns, err := loadSession(sessionEntries(saved))
+	_, savedTurns, err := loadSession(sessionEntries(saved), looper.Origin)
 	require.NoError(t, err)
 	require.Len(t, savedTurns, 1)
 	require.Equal(t, "turn", savedTurns[0].Type)
@@ -515,9 +1090,9 @@ func TestLooperSendsAndReplaysDeveloperPromptInput(t *testing.T) {
 	require.Len(t, saved, 1)
 	require.JSONEq(t, `{"content":"keep this rule","role":"developer","type":"message"}`, string(saved[0].ReplayInput[0]))
 
-	history, _, err := loadSession(sessionEntries(saved))
+	history, _, err := loadSession(sessionEntries(saved), looper.Origin)
 	require.NoError(t, err)
-	require.JSONEq(t, `{"content":"keep this rule","role":"developer","type":"message"}`, marshalJSON(t, history[0]))
+	require.JSONEq(t, `{"content":"keep this rule","role":"developer","type":"message"}`, marshalJSON(t, history.replay[0]))
 }
 
 func TestLooperPromptInputShellCommandExpansion(t *testing.T) {
@@ -534,7 +1109,7 @@ func TestLooperPromptInputShellCommandExpansion(t *testing.T) {
 			looper.expandInputPrompts = tc.enabled
 			looper.promptExpansion = testPromptExpansionEnvironment(t)
 			output := make(chan ChatResponse, 10)
-			turn, _, interrupted, err := looper.runTurn(context.Background(), output, nil, nil, testPromptInput(PromptInputRoleUser, "before !`printf hello` after", nil))
+			turn, _, interrupted, err := looper.runTurn(context.Background(), output, nil, nil, nil, false, nil, false, false, testPromptInput(PromptInputRoleUser, "before !`printf hello` after", nil))
 
 			require.NoError(t, err)
 			require.False(t, interrupted)
@@ -592,6 +1167,43 @@ func TestLooperAppendsOneSessionEntryPerCompletedTurn(t *testing.T) {
 	require.Len(t, store.saves, 2)
 	require.Len(t, store.saves[0], 1)
 	require.Len(t, store.saves[1], 2)
+}
+
+func TestSessionEntryRecordsResolvedOrigin(t *testing.T) {
+	loop := testLooper(mockResponses(responseWithMessage("resp", "done")))
+	loop.Origin = ProviderOrigin{ProviderID: "work", Route: "responses:https://work.example/v1", ModelID: "worker", AuthenticationEpoch: "epoch-work"}
+	output := make(chan ChatResponse, 1)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "question", output)
+
+	close(input)
+
+	var entry SessionEntry
+
+	require.NoError(t, loop.Loop(t.Context(), input, emptySession(), func(got SessionEntry) error { entry = got; return nil }, make(chan os.Signal, 1)))
+	require.Equal(t, &loop.Origin, entry.Origin)
+	require.NotSame(t, &loop.Origin, entry.Origin)
+}
+
+func TestActiveTurnCheckpointRecordsResolvedOrigin(t *testing.T) {
+	sink := new(mockCheckpointSink)
+	loop := testLooper(mockResponses(responseWithMessage("resp", "done")))
+	loop.Origin = ProviderOrigin{ProviderID: "work", Route: "responses:https://work.example/v1", ModelID: "worker", AuthenticationEpoch: "epoch-work"}
+	loop.CheckpointSink = sink
+	output := make(chan ChatResponse, 1)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "question", output)
+
+	close(input)
+
+	require.NoError(t, loop.Loop(t.Context(), input, emptySession(), discardSession, make(chan os.Signal, 1)))
+
+	calls := sink.snapshot()
+	require.NotEmpty(t, calls)
+	require.Equal(t, &loop.Origin, calls[0].checkpoint.Origin)
+	require.NotSame(t, &loop.Origin, calls[0].checkpoint.Origin)
 }
 
 func TestLoopClosesPromptResponsesWhenSessionLoadFails(t *testing.T) {
@@ -667,7 +1279,10 @@ func TestLooperBuildParamsIncludesConfiguredVerbosity(t *testing.T) {
 }
 
 func TestLooperPersistsAndReplaysCompactionItems(t *testing.T) {
-	mock := mockResponses(responseWithCompactionAndMessage("resp-compact", "encrypted-compact", "answer"))
+	mock := mockResponses(
+		responseWithCompactionAndMessage("resp-compact", "encrypted-compact", "answer"),
+		completedBackupResponse("generated readable backup"),
+	)
 	looper := testLooper(mock)
 	output := make(chan ChatResponse, 10)
 
@@ -688,23 +1303,41 @@ func TestLooperPersistsAndReplaysCompactionItems(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
 
-	history, turns, err := loadSession(sessionEntries(saved))
+	history, turns, err := loadSession(sessionEntries(saved), looper.Origin)
 	require.NoError(t, err)
 	require.Len(t, turns, 1)
 	require.Len(t, turns[0].ReplayInput, 3)
-	require.Len(t, history, 3)
-	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, history[1]))
+	require.Len(t, history.replay, 3)
+	require.JSONEq(t, `{"content":"generated readable backup","encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, history.replay[1]))
 }
 
-func TestLooperContinuesAfterCompactionOnlyResponse(t *testing.T) {
+func TestLooperPersistsReadableBackupBeforeAutomaticCompactionPrune(t *testing.T) {
+	sink := &mockCheckpointSink{}
 	compaction := testCompactionOutputItem("resp-compact-compaction", "encrypted-compact")
 	compaction.Summary = []responses.ResponseReasoningItemSummary{testReasoningSummary("summary of prior context")}
 
-	mock := mockResponses(
-		testResponse("resp-compact", []responses.ResponseOutputItemUnion{compaction}),
-		responseWithMessage("resp-final", "answer"),
-	)
+	mock := mockResponses()
+	mock.newFunc = func(_ context.Context, params *responses.ResponseNewParams) (*responses.Response, error) {
+		switch len(mock.calls) {
+		case 1:
+			return testResponse("resp-compact", []responses.ResponseOutputItemUnion{compaction}), nil
+		case 2:
+			return completedBackupResponse("generated readable backup"), nil
+		case 3:
+			calls := sink.snapshot()
+			require.Len(t, calls, 2)
+			require.Equal(t, "provider", calls[1].name)
+			require.Contains(t, string(calls[1].checkpoint.ReplayInput[1]), `"encrypted_content":"encrypted-compact"`)
+			require.Contains(t, string(calls[1].checkpoint.ReplayInput[1]), `"content":"generated readable backup"`)
+			require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, params.Input.OfInputItemList[0]))
+
+			return responseWithMessage("resp-final", "answer"), nil
+		default:
+			return nil, fmt.Errorf("unexpected response call %d", len(mock.calls))
+		}
+	}
 	looper := testLooper(mock)
+	looper.CheckpointSink = sink
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
@@ -722,11 +1355,167 @@ func TestLooperContinuesAfterCompactionOnlyResponse(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
-	require.Len(t, mock.calls, 2)
-	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, mock.calls[1].Input.OfInputItemList[0]))
+	require.Len(t, mock.calls, 3)
 	require.Len(t, saved, 1)
 	require.Len(t, saved[0].ReplayInput, 3)
-	require.JSONEq(t, `{"content":"summary of prior context","encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, string(saved[0].ReplayInput[1]))
+	require.JSONEq(t, `{"content":"generated readable backup","encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, string(saved[0].ReplayInput[1]))
+}
+
+func TestLooperReadableBackupFailureRetainsPortableHistory(t *testing.T) {
+	sink := &mockCheckpointSink{}
+	mock := mockResponses()
+	errContext := contextLengthExceededError()
+	mock.newFunc = func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
+		if len(mock.calls) == 1 {
+			return nil, errContext
+		}
+
+		return nil, errors.New("summary unavailable")
+	}
+	mock.compactResponses = []*responses.CompactedResponse{compactedResponse("cmp-old", "encrypted-old")}
+	looper := testLooper(mock)
+	looper.CheckpointSink = sink
+	output := make(chan ChatResponse, 10)
+	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		testInputMessage(responses.EasyInputMessageRoleUser, "durable prompt", ""),
+	})
+	require.NoError(t, err)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "current prompt", output)
+
+	close(input)
+
+	var saved []SessionEntry
+
+	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), func(entry SessionEntry) error {
+		saved = append(saved, entry)
+
+		return nil
+	}, make(chan os.Signal, 1))
+
+	require.NotContains(t, err.Error(), "summary unavailable")
+	require.ErrorContains(t, err, `provider "openai" request failed`)
+	require.Empty(t, collectResponses(output))
+	require.Len(t, mock.calls, 2)
+	require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), "durable prompt")
+	require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), "current prompt")
+	require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), "durable prompt")
+	require.Len(t, mock.compactCalls, 1)
+	require.Empty(t, saved)
+	require.Len(t, sink.snapshot(), 1)
+}
+
+func TestReadableCompactionBackupUsesPortableNoToolsRequest(t *testing.T) {
+	mock := mockResponses(completedBackupResponse("first"))
+	mock.responses[0].Output = append(mock.responses[0].Output,
+		testMessageOutputItem("resp-backup-second", "", " second"),
+		testReasoningOutputItem("resp-backup-reasoning", "sealed-result", "ignored"),
+	)
+	looper := testLooper(mock)
+	looper.ReasoningEffort = shared.ReasoningEffortHigh
+	looper.ResponseFormat = responses.ResponseFormatTextConfigParamOfJSONSchema("result", map[string]any{"type": "object"})
+	looper.Tools = map[string]looperTool{"read": testLooperTool("read")}
+	history := []responses.ResponseInputItemUnionParam{
+		testInputMessage(responses.EasyInputMessageRoleUser, "question", ""),
+		testInputReasoning("reasoning-1", "portable reasoning", "sealed-input"),
+	}
+
+	backup, err := looper.readableCompactionBackup(context.Background(), history)
+
+	require.NoError(t, err)
+	require.Equal(t, "first second", backup)
+	require.Len(t, mock.calls, 1)
+	call := mock.calls[0]
+	require.Equal(t, looper.Model, call.Model)
+	require.False(t, call.Store.Value)
+	require.Equal(t, readableCompactionBackupInstruction, call.Instructions.Value)
+	require.Empty(t, call.Tools)
+	require.Empty(t, call.ContextManagement)
+	require.Empty(t, call.Include)
+	require.Equal(t, shared.ReasoningParam{}, call.Reasoning)
+	require.Equal(t, responses.ResponseTextConfigParam{}, call.Text)
+	requestJSON := marshalJSON(t, call)
+	require.NotContains(t, requestJSON, "sealed-input")
+	require.Contains(t, requestJSON, "portable reasoning")
+}
+
+func TestReadableCompactionBackupRejectsInvalidResponse(t *testing.T) {
+	tests := []struct {
+		name     string
+		response *responses.Response
+		want     string
+	}{
+		{
+			name: "incomplete",
+			response: func() *responses.Response {
+				response := responseWithMessage("resp-backup", "partial")
+				response.Status = responses.ResponseStatusIncomplete
+
+				return response
+			}(),
+			want: `readable compaction backup response status "incomplete"`,
+		},
+		{
+			name:     "no assistant output text",
+			response: testResponse("resp-backup", []responses.ResponseOutputItemUnion{testReasoningOutputItem("reasoning", "sealed", "summary")}),
+			want:     "readable compaction backup response has no assistant output text",
+		},
+	}
+	tests[1].response.Status = responses.ResponseStatusCompleted
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			looper := testLooper(mockResponses(tt.response))
+
+			_, err := looper.readableCompactionBackup(t.Context(), []responses.ResponseInputItemUnionParam{
+				testInputMessage(responses.EasyInputMessageRoleUser, "question", ""),
+			})
+
+			require.EqualError(t, err, tt.want)
+		})
+	}
+}
+
+func TestLooperAutomaticCompactionKindsReceiveReadableBackup(t *testing.T) {
+	compactionSummary := testCompactionOutputItem("cmp-summary", "encrypted-summary")
+	compactionSummary.Type = "compaction_summary"
+
+	tests := []struct {
+		name   string
+		output []responses.ResponseOutputItemUnion
+	}{
+		{name: "compaction summary", output: []responses.ResponseOutputItemUnion{compactionSummary}},
+		{name: "multiple compactions", output: []responses.ResponseOutputItemUnion{
+			testCompactionOutputItem("cmp-1", "encrypted-1"),
+			testCompactionOutputItem("cmp-2", "encrypted-2"),
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := mockResponses(completedBackupResponse("generated readable backup"))
+			looper := testLooper(mock)
+
+			var (
+				record SessionEntry
+				replay []responses.ResponseInputItemUnionParam
+			)
+
+			compactionOnly, err := looper.appendProviderReplay(t.Context(), []responses.ResponseInputItemUnionParam{
+				testInputMessage(responses.EasyInputMessageRoleUser, "question", ""),
+			}, &record, &replay, testResponse("resp-compact", tt.output))
+
+			require.NoError(t, err)
+			require.True(t, compactionOnly)
+			require.Len(t, mock.calls, 1)
+			require.Len(t, replay, len(tt.output))
+
+			for i := range replay {
+				require.Contains(t, marshalJSON(t, replay[i]), `"content":"generated readable backup"`)
+			}
+		})
+	}
 }
 
 func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
@@ -741,8 +1530,11 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 	mock.compactResponses = []*responses.CompactedResponse{compactedResponse("cmp-old", "encrypted-old")}
 	contextErr := contextLengthExceededError()
 	mock.newFunc = func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
-		if len(mock.calls) == 1 {
+		switch len(mock.calls) {
+		case 1:
 			return nil, contextErr
+		case 2:
+			return completedBackupResponse("generated readable backup"), nil
 		}
 
 		return responseWithMessage("resp-final", "answer"), nil
@@ -757,7 +1549,7 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 
 	var saved []SessionEntry
 
-	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), func(entry SessionEntry) error {
+	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Origin: new(looper.Origin), ReplayInput: replayInput}}), func(entry SessionEntry) error {
 		saved = append(saved, entry)
 
 		return nil
@@ -770,8 +1562,8 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 	require.Contains(t, compactInput, "sealed-prior")
 	require.NotContains(t, compactInput, "private-content-value")
 	require.NotContains(t, compactInput, "new question")
-	require.Len(t, mock.calls, 2)
-	retryInput := marshalJSON(t, mock.calls[1].Input.OfInputItemList)
+	require.Len(t, mock.calls, 3)
+	retryInput := marshalJSON(t, mock.calls[2].Input.OfInputItemList)
 	require.Contains(t, retryInput, `"type":"compaction"`)
 	require.Contains(t, retryInput, "new question")
 	require.Len(t, saved, 1)
@@ -796,8 +1588,11 @@ func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {
 	}
 	contextErr := contextLengthExceededError()
 	mock.newFunc = func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
-		if len(mock.calls) < 3 {
+		switch len(mock.calls) {
+		case 1, 3:
 			return nil, contextErr
+		case 2, 4:
+			return completedBackupResponse("generated readable backup"), nil
 		}
 
 		return responseWithMessage("resp-final", "answer"), nil
@@ -810,7 +1605,7 @@ func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {
 
 	close(input)
 
-	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
+	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Origin: new(looper.Origin), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
@@ -833,8 +1628,11 @@ func TestLooperDoesNotCompactUnansweredToolCall(t *testing.T) {
 	mock.compactResponses = []*responses.CompactedResponse{compactedResponse("cmp-old", "encrypted-old")}
 	contextErr := contextLengthExceededError()
 	mock.newFunc = func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
-		if len(mock.calls) == 1 {
+		switch len(mock.calls) {
+		case 1:
 			return nil, contextErr
+		case 2:
+			return completedBackupResponse("generated readable backup"), nil
 		}
 
 		return responseWithMessage("resp-final", "answer"), nil
@@ -847,7 +1645,7 @@ func TestLooperDoesNotCompactUnansweredToolCall(t *testing.T) {
 
 	close(input)
 
-	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
+	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Origin: new(looper.Origin), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
@@ -952,6 +1750,7 @@ func TestWebSearchOutputWithEmptyActionTypeIsTraceOnly(t *testing.T) {
 func TestLooperInjectsCompactionSteering(t *testing.T) {
 	mock := mockResponses(
 		responseWithCompactionAndMessage("resp-compact", "encrypted-compact", "answer"),
+		completedBackupResponse("generated readable backup"),
 		responseWithMessage("resp-next", "next answer"),
 	)
 	looper := testLooper(mock)
@@ -982,8 +1781,8 @@ func TestLooperInjectsCompactionSteering(t *testing.T) {
 	require.Len(t, saved[0].ReplayInput, 4)
 	require.JSONEq(t, `{"content":"Use the compacted context carefully.","role":"developer","type":"message"}`, string(saved[0].ReplayInput[3]))
 
-	require.Len(t, mock.calls, 2)
-	items := mock.calls[1].Input.OfInputItemList
+	require.Len(t, mock.calls, 3)
+	items := mock.calls[2].Input.OfInputItemList
 	require.Len(t, items, 4)
 	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, items[0]))
 	require.Contains(t, marshalJSON(t, items[1]), `"role":"assistant"`)
@@ -1068,24 +1867,32 @@ func TestCheckpointProviderResponseOpenCallsBeforeToolDispatch(t *testing.T) {
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
 }
 
-func TestCheckpointAfterCompactionRecoveryBeforeProviderRetry(t *testing.T) {
+func TestLooperPersistsReadableBackupBeforeContextLengthRetry(t *testing.T) {
 	sink := &mockCheckpointSink{}
 	providerCalls := 0
-	mock := mockResponseFunc(func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
+	mock := mockResponseFunc(func(_ context.Context, params *responses.ResponseNewParams) (*responses.Response, error) {
 		providerCalls++
-		if providerCalls == 1 {
+		switch providerCalls {
+		case 1:
 			return nil, contextLengthExceededError()
+		case 2:
+			return completedBackupResponse("generated readable backup"), nil
+		case 3:
+			calls := sink.snapshot()
+			require.Len(t, calls, 2)
+			compacted := calls[1]
+			require.Equal(t, "provider", compacted.name)
+			require.Len(t, compacted.checkpoint.ReplayInput, 2)
+			require.Contains(t, string(compacted.checkpoint.ReplayInput[0]), `"type":"compaction"`)
+			require.Contains(t, string(compacted.checkpoint.ReplayInput[0]), `"encrypted_content":"encrypted-old"`)
+			require.Contains(t, string(compacted.checkpoint.ReplayInput[0]), `"content":"generated readable backup"`)
+			require.Contains(t, string(compacted.checkpoint.ReplayInput[1]), `"content":"new prompt"`)
+			require.NotContains(t, marshalJSON(t, params.Input.OfInputItemList), "generated readable backup")
+
+			return responseWithMessage("resp-final", "done"), nil
+		default:
+			return nil, fmt.Errorf("unexpected response call %d", providerCalls)
 		}
-
-		calls := sink.snapshot()
-		require.GreaterOrEqual(t, len(calls), 2)
-		compacted := calls[1]
-		require.Equal(t, "provider", compacted.name)
-		require.Len(t, compacted.checkpoint.ReplayInput, 2)
-		require.Contains(t, string(compacted.checkpoint.ReplayInput[0]), `"type":"compaction"`)
-		require.Contains(t, string(compacted.checkpoint.ReplayInput[1]), `"content":"new prompt"`)
-
-		return responseWithMessage("resp-final", "done"), nil
 	})
 	mock.compactResponses = []*responses.CompactedResponse{compactedResponse("cmp-old", "encrypted-old")}
 	looper := testLooper(mock)
@@ -1104,7 +1911,107 @@ func TestCheckpointAfterCompactionRecoveryBeforeProviderRetry(t *testing.T) {
 	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
-	require.Equal(t, 2, providerCalls)
+	require.Equal(t, 3, providerCalls)
+}
+
+func TestLooperAutomaticBackupAfterContextRecoveryUsesRecoveredHistory(t *testing.T) {
+	mock := mockResponses()
+	mock.compactResponses = []*responses.CompactedResponse{compactedResponse("cmp-old", "encrypted-old")}
+	mock.newFunc = func(_ context.Context, params *responses.ResponseNewParams) (*responses.Response, error) {
+		switch len(mock.calls) {
+		case 1:
+			return nil, contextLengthExceededError()
+		case 2:
+			return completedBackupResponse("manual readable backup"), nil
+		case 3:
+			return responseWithCompactionAndMessage("resp-auto", "encrypted-auto", "answer"), nil
+		case 4:
+			input := marshalJSON(t, params.Input.OfInputItemList)
+			require.Contains(t, input, "manual readable backup")
+			require.Contains(t, input, "new prompt")
+			require.NotContains(t, input, "oversized old prompt")
+
+			return completedBackupResponse("automatic readable backup"), nil
+		default:
+			return nil, fmt.Errorf("unexpected response call %d", len(mock.calls))
+		}
+	}
+	looper := testLooper(mock)
+	output := make(chan ChatResponse, 10)
+	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		testInputMessage(responses.EasyInputMessageRoleUser, "oversized old prompt", ""),
+	})
+	require.NoError(t, err)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "new prompt", output)
+
+	close(input)
+
+	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
+	require.Len(t, mock.calls, 4)
+}
+
+func TestLooperCompactionCheckpointFailureStopsContinuation(t *testing.T) {
+	errCheckpoint := errors.New("checkpoint unavailable")
+
+	t.Run("automatic continuation", func(t *testing.T) {
+		mock := mockResponses(
+			testResponse("resp-compact", []responses.ResponseOutputItemUnion{testCompactionOutputItem("cmp-auto", "encrypted-auto")}),
+			completedBackupResponse("automatic readable backup"),
+		)
+		looper := testLooper(mock)
+		looper.CheckpointSink = &mockCheckpointSink{providerErr: errCheckpoint}
+		output := make(chan ChatResponse, 10)
+
+		input := make(chan PromptInput, 1)
+		input <- testPromptInput(PromptInputRoleUser, "question", output)
+
+		close(input)
+
+		err := looper.Loop(t.Context(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+
+		require.ErrorIs(t, err, errCheckpoint)
+		require.Len(t, mock.calls, 2)
+		require.Empty(t, collectResponses(output))
+	})
+
+	t.Run("context recovery retry", func(t *testing.T) {
+		mock := mockResponses()
+		mock.compactResponses = []*responses.CompactedResponse{compactedResponse("cmp-old", "encrypted-old")}
+		mock.newFunc = func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
+			switch len(mock.calls) {
+			case 1:
+				return nil, contextLengthExceededError()
+			case 2:
+				return completedBackupResponse("manual readable backup"), nil
+			default:
+				return nil, fmt.Errorf("unexpected compacted retry call %d", len(mock.calls))
+			}
+		}
+		looper := testLooper(mock)
+		looper.CheckpointSink = &mockCheckpointSink{providerErr: errCheckpoint}
+		output := make(chan ChatResponse, 10)
+		replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+			testInputMessage(responses.EasyInputMessageRoleUser, "old prompt", ""),
+		})
+		require.NoError(t, err)
+
+		input := make(chan PromptInput, 1)
+		input <- testPromptInput(PromptInputRoleUser, "new prompt", output)
+
+		close(input)
+
+		err = looper.Loop(t.Context(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
+
+		require.ErrorIs(t, err, errCheckpoint)
+		require.Len(t, mock.calls, 2)
+		require.Len(t, mock.compactCalls, 1)
+		require.Empty(t, collectResponses(output))
+	})
 }
 
 func TestLooperDispatchesToolCalls(t *testing.T) {
@@ -1186,15 +2093,15 @@ func TestLooperDispatchesToolCalls(t *testing.T) {
 	require.Equal(t, "developer", *second[5].GetRole())
 	require.Contains(t, marshalJSON(t, second[5]), "first instructions")
 
-	history, _, err := loadSession(sessionEntries(saved))
+	history, _, err := loadSession(sessionEntries(saved), looper.Origin)
 	require.NoError(t, err)
-	require.Len(t, history, 7)
-	require.Equal(t, "function_call", *history[1].GetType())
-	require.Equal(t, "function_call", *history[2].GetType())
-	require.Equal(t, "function_call_output", *history[3].GetType())
-	require.Equal(t, "function_call_output", *history[4].GetType())
-	require.Equal(t, "message", *history[5].GetType())
-	require.Equal(t, "message", *history[6].GetType())
+	require.Len(t, history.replay, 7)
+	require.Equal(t, "function_call", *history.replay[1].GetType())
+	require.Equal(t, "function_call", *history.replay[2].GetType())
+	require.Equal(t, "function_call_output", *history.replay[3].GetType())
+	require.Equal(t, "function_call_output", *history.replay[4].GetType())
+	require.Equal(t, "message", *history.replay[5].GetType())
+	require.Equal(t, "message", *history.replay[6].GetType())
 }
 
 func TestLooperCheckpointsCompletedToolOutputBeforeContinuation(t *testing.T) {
@@ -1423,9 +2330,9 @@ func TestLooperSendsAndReplaysUserAttachments(t *testing.T) {
 	require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), `"type":"input_image"`)
 	require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), `"type":"input_file"`)
 
-	history, _, err := loadSession(sessionEntries(saved))
+	history, _, err := loadSession(sessionEntries(saved), looper.Origin)
 	require.NoError(t, err)
-	serialized := marshalJSON(t, history)
+	serialized := marshalJSON(t, history.replay)
 	require.Contains(t, serialized, `"image_url":"data:image/png;base64,aW1hZ2U="`)
 	require.Contains(t, serialized, `"file_data":"data:application/pdf;base64,cGRm"`)
 }
@@ -1454,9 +2361,9 @@ func TestLooperSendsAndReplaysDeveloperAttachments(t *testing.T) {
 	require.Contains(t, serialized, `"role":"developer"`)
 	require.Contains(t, serialized, `"type":"input_image"`)
 
-	history, _, err := loadSession(sessionEntries(saved))
+	history, _, err := loadSession(sessionEntries(saved), looper.Origin)
 	require.NoError(t, err)
-	serialized = marshalJSON(t, history)
+	serialized = marshalJSON(t, history.replay)
 	require.Contains(t, serialized, `"role":"developer"`)
 	require.Contains(t, serialized, `"image_url":"data:image/png;base64,aW1hZ2U="`)
 }
@@ -1654,7 +2561,7 @@ func TestPermissionReviewFailsClosedOnInvalidReviewerOutput(t *testing.T) {
 	require.NoError(t, err)
 
 	factory := &toolFactory{
-		client:               mockResponses(responseWithMessage("review", "not json")),
+		providers:            Providers{"openai": {client: mockResponses(responseWithMessage("review", "not json")), route: "route", authenticationEpoch: "epoch"}},
 		defaultModelRef:      modelRef,
 		autoApproverModelRef: modelRef,
 		modelRef:             modelRef,
@@ -2118,7 +3025,7 @@ func TestLooperOmitsInterruptedTurnsFromSession(t *testing.T) {
 	require.NoError(t, group.Wait())
 	require.Equal(t, []ChatResponse{assistantCommentary("(interrupted)")}, collectResponses(output))
 
-	_, turns, err := loadSession(sessionEntries(saved))
+	_, turns, err := loadSession(sessionEntries(saved), looper.Origin)
 	require.NoError(t, err)
 	require.Empty(t, turns)
 
@@ -2249,7 +3156,7 @@ func TestLooperRetriesRateLimitExceededFailedResponse(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, mock.calls, 2)
 
-		diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: 0, ResponseStatus: string(responses.ResponseStatusFailed), Code: string(responses.ResponseErrorCodeRateLimitExceeded), Message: "too many requests", Attempt: 1, RetryAfter: "1s", ResponseID: "resp-rate"}
+		diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: 0, ResponseStatus: string(responses.ResponseStatusFailed), Code: string(responses.ResponseErrorCodeRateLimitExceeded), Attempt: 1, RetryAfter: "1s", ResponseID: "resp-rate"}
 		require.Equal(t, []ChatResponse{
 			providerDiagnosticResponse(diagnostic),
 			assistantMessage("done"),
@@ -2272,9 +3179,9 @@ func TestLooperReportsFailedResponsesInDiagnostics(t *testing.T) {
 
 	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
 
-	require.EqualError(t, err, "run turn: request response: response failed: invalid_prompt: bad prompt")
+	require.EqualError(t, err, "run turn: request response: response failed: invalid_prompt")
 
-	diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: string(responses.ResponseStatusFailed), Code: string(responses.ResponseErrorCodeInvalidPrompt), Message: "bad prompt", Attempt: 0, RetryAfter: "", ResponseID: "resp-invalid"}
+	diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: string(responses.ResponseStatusFailed), Code: string(responses.ResponseErrorCodeInvalidPrompt), Attempt: 0, RetryAfter: "", ResponseID: "resp-invalid"}
 	require.Equal(t, []ChatResponse{providerDiagnosticResponse(diagnostic)}, collectResponses(output))
 }
 
@@ -2291,13 +3198,13 @@ func TestLooperReportsOpenAIRequestErrorsInDiagnostics(t *testing.T) {
 
 	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
 
-	require.EqualError(t, err, "run turn: request response: new response: provider retry limit: status 429")
+	require.EqualError(t, err, `run turn: request response: new response: provider "openai" retry limit: status 429`)
 	require.Len(t, mock.calls, 1)
 
 	_, ok := errors.AsType[*providerRetryLimitError](err)
 	require.True(t, ok)
 
-	diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: http.StatusTooManyRequests, ResponseStatus: "", Code: string(responses.ResponseErrorCodeRateLimitExceeded), Message: "slow down", Attempt: 0, RetryAfter: "", ResponseID: ""}
+	diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: http.StatusTooManyRequests, ResponseStatus: "", Code: string(responses.ResponseErrorCodeRateLimitExceeded), Attempt: 0, RetryAfter: "", ResponseID: ""}
 	require.Equal(t, []ChatResponse{providerDiagnosticResponse(diagnostic)}, collectResponses(output))
 }
 
@@ -2365,7 +3272,7 @@ func TestLooperRetriesTooManyRequestsRequestError(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, mock.calls, 2)
 
-		diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: http.StatusTooManyRequests, Code: "too_many_requests", Message: "Too Many Requests", Attempt: 1, RetryAfter: "2s", Headers: map[string]string{"retry-after-ms": "2000", "x-request-id": "req-rate"}}
+		diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: http.StatusTooManyRequests, Code: "too_many_requests", Attempt: 1, RetryAfter: "2s", Headers: map[string]string{"retry-after-ms": "2000", "x-request-id": "req-rate"}}
 		require.Equal(t, []ChatResponse{
 			providerDiagnosticResponse(diagnostic),
 			assistantMessage("done"),
@@ -2386,9 +3293,9 @@ func TestLooperReportsRequestErrorsInDiagnostics(t *testing.T) {
 
 	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
 
-	require.EqualError(t, err, "run turn: request response: new response: network exploded")
+	require.EqualError(t, err, `run turn: request response: new response: provider "openai" request failed`)
 
-	diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: "network exploded", Attempt: 0, RetryAfter: "", ResponseID: ""}
+	diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Attempt: 0, RetryAfter: "", ResponseID: ""}
 	require.Equal(t, []ChatResponse{providerDiagnosticResponse(diagnostic)}, collectResponses(output))
 }
 
@@ -2422,6 +3329,13 @@ func TestLooperLoopRequiresPromptResponseChannel(t *testing.T) {
 
 func responseWithMessage(id, text string) *responses.Response {
 	return testResponse(id, []responses.ResponseOutputItemUnion{testMessageOutputItem(id+"-msg", "", text)})
+}
+
+func completedBackupResponse(text string) *responses.Response {
+	response := responseWithMessage("resp-backup", text)
+	response.Status = responses.ResponseStatusCompleted
+
+	return response
 }
 
 func responseWithUsage(resp *responses.Response, usageJSON string) *responses.Response {

@@ -855,6 +855,41 @@ func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 	assert.NotEmpty(t, recorder.Ended(), "workflow run should emit configured tracing spans")
 }
 
+func TestWorkflowAgentRunnerRoutesNamedProviderModel(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: openai/root\npermission: {}\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	openAIRequests := 0
+	openAIServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { openAIRequests++ }))
+	t.Cleanup(openAIServer.Close)
+
+	workRequests := 0
+	workServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		workRequests++
+
+		w.Header().Set("Content-Type", "application/json")
+		writeRawRunMessage(t, w, "response", "message", "work result")
+	}))
+	t.Cleanup(workServer.Close)
+	cfg := &config.Config{
+		Workspace: workspace,
+		Models:    map[string]string{"work": "work/worker"},
+		OpenAI:    config.OpenAIConfig{APIKey: "openai-key", APIBaseURL: openAIServer.URL},
+		Providers: map[string]config.OpenAIConfig{"work": {APIKey: "work-key", APIBaseURL: workServer.URL}},
+	}
+	run, cleanup, err := newWorkflowAgentRunner(cfg, "main", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cleanup()) })
+
+	result, err := run(t.Context(), workflow.AgentRequest{Prompt: "run", Worker: workflow.Worker{Model: "work", Tools: []string{}}}, discardWorkflowThinking)
+
+	require.NoError(t, err)
+	require.JSONEq(t, `"work result"`, string(result))
+	require.Zero(t, openAIRequests)
+	require.Equal(t, 1, workRequests)
+}
+
 func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  bash:\n    \"printf ok\": auto\n---\nMain prompt\n")

@@ -30,7 +30,9 @@ func TestRunWithoutDefaultConfigShowsHelp(t *testing.T) {
 	assert.Contains(t, output, "rocketclaw setup\n")
 	assert.Contains(t, output, "rocketclaw setup files list\n")
 	assert.Contains(t, output, "rocketclaw setup files get <path>\n")
-	assert.Contains(t, output, "rocketclaw oai login [--headless]")
+	assert.Contains(t, output, "rocketclaw oai login [provider] [--headless]")
+	assert.Contains(t, output, "rocketclaw oai list")
+	assert.Contains(t, output, "rocketclaw oai logout [provider]")
 	assert.NotContains(t, output, "rocketclaw setup [flags]")
 }
 

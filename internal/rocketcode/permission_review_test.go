@@ -44,11 +44,11 @@ func TestPermissionReviewLogsHiddenChildRunOutput(t *testing.T) {
 	var childRunEvents []ChildRunEvent
 
 	factory := &toolFactory{
-		client: mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
+		providers: Providers{"openai": {client: mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
 			testReasoningOutputItem("review-reasoning", "", "considering risk"),
 			testMessageOutputItem("review-commentary", "commentary", "checking authorization"),
 			testMessageOutputItem("review-final", "", `{"risk_level":"low","user_authorization":"medium","outcome":"allow","rationale":"Low-risk action."}`),
-		})),
+		})), route: "route", authenticationEpoch: "epoch"}},
 		defaultModelRef:      modelRef,
 		autoApproverModelRef: modelRef,
 		modelRef:             modelRef,
@@ -88,7 +88,7 @@ func TestPermissionReviewUsesConfiguredAutoApproverModel(t *testing.T) {
 		testMessageOutputItem("review-final", "", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low-risk action."}`),
 	}))
 	factory := &toolFactory{
-		client:               mock,
+		providers:            Providers{"openai": {client: mock, route: "route", authenticationEpoch: "epoch"}},
 		defaultModelRef:      defaultModel,
 		autoApproverModelRef: autoApproverModel,
 		modelRef:             defaultModel,
@@ -104,6 +104,28 @@ func TestPermissionReviewUsesConfiguredAutoApproverModel(t *testing.T) {
 	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
 	require.Len(t, mock.calls, 1)
 	require.Equal(t, "gpt-5.4-mini", mock.calls[0].Model)
+}
+
+func TestPermissionReviewRoutesAutoApproverByModelProvider(t *testing.T) {
+	openAIMock := mockResponses()
+	reviewerMock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
+		testMessageOutputItem("review-final", "", `{"risk_level":"low","user_authorization":"medium","outcome":"allow","rationale":"ok"}`),
+	}))
+	factory := &toolFactory{
+		providers:            Providers{"openai": {client: openAIMock, route: "openai-route", authenticationEpoch: "openai-epoch"}, "review": {client: reviewerMock, route: "review-route", authenticationEpoch: "review-epoch"}},
+		autoApproverModelRef: modelRef{providerID: "review", apiModel: "reviewer"},
+		agents:               Agents{Items: map[string]Agent{}},
+		skills:               Skills{Items: map[string]Skill{}},
+		baseTools:            map[string]looperTool{},
+		childRunLogger:       DiscardChildRunLog,
+	}
+
+	decision := factory.reviewPermission(t.Context(), &permissionReviewRequest{ReviewerEmbedded: true}, make(chan ChatResponse, 10))
+
+	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
+	require.Empty(t, openAIMock.calls)
+	require.Len(t, reviewerMock.calls, 1)
+	require.Equal(t, "reviewer", reviewerMock.calls[0].Model)
 }
 
 func TestPermissionReviewPromptIncludesReviewContextAndPlannedAction(t *testing.T) {

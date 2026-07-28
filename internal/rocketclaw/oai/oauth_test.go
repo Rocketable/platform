@@ -13,13 +13,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"testing/iotest"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	openai "github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 )
@@ -39,36 +38,392 @@ func (w loginOutput) Write(p []byte) (int, error) {
 }
 
 type loginBrowserResult struct {
-	path string
-	err  error
+	token Token
+	err   error
 }
 
-func AuthFilePath(workspace string) (string, error) {
-	return AuthFilePathIn(workspace, config.DefaultRuntimeDir)
+func TestAuthStoreIsolatesProviderTokens(t *testing.T) {
+	workspace := t.TempDir()
+	openAI := Token{Refresh: "openai-refresh", Access: "openai-access"}
+	other := Token{Refresh: "other-refresh", Access: "other-access"}
+
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", openAI)
+	require.NoError(t, err)
+	_, err = ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "other", other)
+	require.NoError(t, err)
+
+	gotOpenAI, openAIEpoch, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
+	require.NoError(t, err)
+	gotOther, otherEpoch, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "other")
+	require.NoError(t, err)
+	require.Equal(t, openAI, gotOpenAI)
+	require.Equal(t, other, gotOther)
+	require.NotEmpty(t, openAIEpoch)
+	require.NotEmpty(t, otherEpoch)
+	require.NotEqual(t, openAIEpoch, otherEpoch)
 }
 
-func LoadToken(workspace string) (Token, error) {
-	return LoadTokenIn(workspace, config.DefaultRuntimeDir)
+func TestAuthStoreImportsLegacyDefaultToken(t *testing.T) {
+	workspace := t.TempDir()
+	path, err := AuthFilePathIn(workspace, config.DefaultRuntimeDir)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+
+	legacy := Token{Refresh: "legacy-refresh", Access: "legacy-access"}
+	data, err := json.Marshal(legacy)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+
+	got, epoch, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
+	require.NoError(t, err)
+	require.Equal(t, legacy, got)
+	require.Empty(t, epoch)
+
+	_, err = ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "other", Token{Refresh: "other-refresh"})
+	require.NoError(t, err)
+	got, epoch, err = LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
+	require.NoError(t, err)
+	require.Equal(t, legacy, got)
+	require.NotEmpty(t, epoch)
 }
 
-func SaveToken(workspace string, token Token) error {
-	return SaveTokenIn(workspace, config.DefaultRuntimeDir, token)
+func TestAuthStoreRejectsMalformedLegacyTokenDuringMigration(t *testing.T) {
+	workspace := t.TempDir()
+	path, err := AuthFilePathIn(workspace, config.DefaultRuntimeDir)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte(`{"access":"missing-refresh"}`), 0o600))
+
+	_, err = ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "other", Token{Refresh: "other"})
+	require.ErrorContains(t, err, "missing refresh token")
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"access":"missing-refresh"}`, string(data))
 }
 
-func LoginBrowser(ctx context.Context, workspace string, out io.Writer) (string, error) {
-	return LoginBrowserIn(ctx, workspace, config.DefaultRuntimeDir, out)
+func TestReplaceTokenChangesAuthenticationEpoch(t *testing.T) {
+	workspace := t.TempDir()
+	token := Token{Refresh: "refresh", Access: "access"}
+
+	first, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", token)
+	require.NoError(t, err)
+	second, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", token)
+	require.NoError(t, err)
+	require.NotEqual(t, first, second)
 }
 
-func LoginDevice(ctx context.Context, workspace string, out io.Writer) (string, error) {
-	return LoginDeviceIn(ctx, workspace, config.DefaultRuntimeDir, out)
+func TestAuthStorePostRenameFailureRestoresPriorCredential(t *testing.T) {
+	workspace := t.TempDir()
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "old-refresh"})
+	require.NoError(t, err)
+
+	calls := 0
+	err = mutateAuthStoreIn(workspace, config.DefaultRuntimeDir, func(store *authStore, _ bool) bool {
+		auth := store.Providers["openai"]
+		auth.Epoch = "new-epoch"
+		auth.Token = new(Token{Refresh: "new-refresh"})
+		store.Providers["openai"] = auth
+
+		return true
+	}, func(dir string) error {
+		calls++
+		if calls == 1 {
+			return errors.New("injected post-rename sync failure")
+		}
+
+		return syncAuthStoreDir(dir)
+	})
+	require.ErrorContains(t, err, "injected post-rename sync failure")
+
+	token, _, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
+	require.NoError(t, err)
+	require.Equal(t, "old-refresh", token.Refresh)
 }
 
-func NewChatGPTClient(workspace string, opts ...option.RequestOption) (*openai.Client, error) {
-	return NewChatGPTClientIn(workspace, config.DefaultRuntimeDir, opts...)
+func TestAuthStorePostRenameFailureRemovesFirstWrite(t *testing.T) {
+	workspace := t.TempDir()
+	calls := 0
+	err := mutateAuthStoreIn(workspace, config.DefaultRuntimeDir, func(store *authStore, _ bool) bool {
+		store.Providers["openai"] = providerAuth{Mode: "chatgpt", Epoch: "new-epoch", Token: new(Token{Refresh: "new-refresh"})}
+		return true
+	}, func(dir string) error {
+		calls++
+		if calls == 1 {
+			return errors.New("injected post-rename sync failure")
+		}
+
+		return syncAuthStoreDir(dir)
+	})
+	require.ErrorContains(t, err, "injected post-rename sync failure")
+
+	_, _, err = LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
-func saveTokenResponse(workspace string, response tokenResponse) (string, error) {
-	return saveTokenResponseIn(workspace, config.DefaultRuntimeDir, response)
+func TestRefreshPreservesAuthenticationEpoch(t *testing.T) {
+	workspace := t.TempDir()
+	epoch, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(-time.Minute).UnixMilli()})
+	require.NoError(t, err)
+
+	base := http.DefaultClient.Transport
+	http.DefaultClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"new","expires_in":3600}`)), Header: make(http.Header)}, nil
+	})
+
+	t.Cleanup(func() { http.DefaultClient.Transport = base })
+
+	tr := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai"}
+	_, err = tr.token(context.Background())
+	require.NoError(t, err)
+	_, gotEpoch, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
+	require.NoError(t, err)
+	require.Equal(t, epoch, gotEpoch)
+}
+
+func TestExpiredLegacyTokenRefreshesIntoAuthStore(t *testing.T) {
+	workspace := t.TempDir()
+	path, err := AuthFilePathIn(workspace, config.DefaultRuntimeDir)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+
+	legacy := Token{Refresh: "legacy-refresh", Access: "legacy-access", Expires: time.Now().Add(-time.Minute).UnixMilli(), AccountID: "account"}
+	data, err := json.Marshal(legacy)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+
+	base := http.DefaultClient.Transport
+	http.DefaultClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"refreshed-access","expires_in":3600}`)), Header: make(http.Header)}, nil
+	})
+
+	t.Cleanup(func() { http.DefaultClient.Transport = base })
+
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		require.Equal(t, "Bearer refreshed-access", req.Header.Get("Authorization"))
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[]}`)), Header: make(http.Header)}, nil
+	})}
+	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/models", `{}`))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
+
+	stored, epoch, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
+	require.NoError(t, err)
+	require.Equal(t, "refreshed-access", stored.Access)
+	require.Equal(t, legacy.Refresh, stored.Refresh)
+	require.Equal(t, legacy.AccountID, stored.AccountID)
+	require.NotEmpty(t, epoch)
+
+	data, err = os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"providers"`)
+}
+
+func TestRefreshDoesNotOverwriteExplicitLogin(t *testing.T) {
+	workspace := t.TempDir()
+	old := Token{Refresh: "old-refresh", Access: "old-access", Expires: time.Now().Add(-time.Minute).UnixMilli(), AccountID: "same-account"}
+	path, err := AuthFilePathIn(workspace, config.DefaultRuntimeDir)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+
+	data, err := json.Marshal(old)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	base := http.DefaultClient.Transport
+	http.DefaultClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		close(started)
+		<-release
+
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"stale-refresh","expires_in":3600}`)), Header: make(http.Header)}, nil
+	})
+
+	t.Cleanup(func() { http.DefaultClient.Transport = base })
+
+	result := make(chan Token, 1)
+	errs := make(chan error, 1)
+
+	go func() {
+		token, err := (&transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai"}).token(context.Background())
+		result <- token
+
+		errs <- err
+	}()
+
+	<-started
+
+	loggedIn := old
+	newEpoch, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", loggedIn)
+	require.NoError(t, err)
+	close(release)
+
+	require.NoError(t, <-errs)
+	require.Equal(t, loggedIn, <-result)
+
+	stored, epoch, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
+	require.NoError(t, err)
+	require.Equal(t, loggedIn, stored)
+	require.Equal(t, newEpoch, epoch)
+}
+
+func TestConcurrentRecoveryRefreshesKeepFirstStoredToken(t *testing.T) {
+	workspace := t.TempDir()
+	old := Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "account"}
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", old)
+	require.NoError(t, err)
+
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+
+	var mu sync.Mutex
+
+	refreshes := 0
+	base := http.DefaultClient.Transport
+	http.DefaultClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		mu.Lock()
+		refreshes++
+		access := fmt.Sprintf("refreshed-%d", refreshes)
+		mu.Unlock()
+
+		started <- struct{}{}
+
+		<-release
+
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"access_token":%q,"expires_in":3600}`, access))), Header: make(http.Header)}, nil
+	})
+
+	t.Cleanup(func() { http.DefaultClient.Transport = base })
+
+	results := make(chan Token, 2)
+	errs := make(chan error, 2)
+
+	for range 2 {
+		go func() {
+			token, err := (&transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai"}).recoveryToken(context.Background(), old)
+			results <- token
+
+			errs <- err
+		}()
+	}
+
+	<-started
+	<-started
+	close(release)
+
+	require.NoError(t, <-errs)
+	require.NoError(t, <-errs)
+
+	first, second := <-results, <-results
+	require.Equal(t, first, second)
+
+	stored, _, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
+	require.NoError(t, err)
+	require.Equal(t, first, stored)
+}
+
+func TestRemoveTokenChangesEpochAndLeavesOtherProviders(t *testing.T) {
+	workspace := t.TempDir()
+	openAIEpoch, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "openai"})
+	require.NoError(t, err)
+
+	otherToken := Token{Refresh: "other"}
+	otherEpoch, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "other", otherToken)
+	require.NoError(t, err)
+
+	require.NoError(t, RemoveTokenIn(workspace, config.DefaultRuntimeDir, "openai"))
+	has, err := HasTokenIn(workspace, config.DefaultRuntimeDir, "openai")
+	require.NoError(t, err)
+	require.False(t, has)
+
+	removedEpoch, err := AuthenticationEpochIn(workspace, config.DefaultRuntimeDir, "openai", "chatgpt", "")
+	require.NoError(t, err)
+	require.NotEqual(t, openAIEpoch, removedEpoch)
+
+	gotOther, gotOtherEpoch, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "other")
+	require.NoError(t, err)
+	require.Equal(t, otherToken, gotOther)
+	require.Equal(t, otherEpoch, gotOtherEpoch)
+}
+
+func TestAPIKeyReplacementChangesAuthenticationEpoch(t *testing.T) {
+	workspace := t.TempDir()
+	first, err := AuthenticationEpochIn(workspace, config.DefaultRuntimeDir, "openai", "api_key", "first-secret")
+	require.NoError(t, err)
+	second, err := AuthenticationEpochIn(workspace, config.DefaultRuntimeDir, "openai", "api_key", "second-secret")
+	require.NoError(t, err)
+	require.NotEqual(t, first, second)
+
+	data, err := os.ReadFile(filepath.Join(workspace, config.DefaultRuntimeDir, "auth.json"))
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "first-secret")
+	require.NotContains(t, string(data), "second-secret")
+}
+
+func TestUnchangedAPIKeyPreservesAuthenticationEpochAcrossReload(t *testing.T) {
+	workspace := t.TempDir()
+	first, err := AuthenticationEpochIn(workspace, config.DefaultRuntimeDir, "openai", "api_key", "secret")
+	require.NoError(t, err)
+	second, err := AuthenticationEpochIn(workspace, config.DefaultRuntimeDir, "openai", "api_key", "secret")
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+}
+
+func TestUnchangedAuthenticationEpochLookupDoesNotRewriteStore(t *testing.T) {
+	workspace := t.TempDir()
+	_, err := AuthenticationEpochIn(workspace, config.DefaultRuntimeDir, "openai", "api_key", "secret")
+	require.NoError(t, err)
+
+	path := filepath.Join(workspace, config.DefaultRuntimeDir, "auth.json")
+	before, err := os.Stat(path)
+	require.NoError(t, err)
+	time.Sleep(10 * time.Millisecond)
+
+	_, err = AuthenticationEpochIn(workspace, config.DefaultRuntimeDir, "openai", "api_key", "secret")
+	require.NoError(t, err)
+	after, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, before.ModTime(), after.ModTime())
+}
+
+func TestAuthenticationModeChangeChangesEpoch(t *testing.T) {
+	workspace := t.TempDir()
+	first, err := AuthenticationEpochIn(workspace, config.DefaultRuntimeDir, "openai", "api_key", "secret")
+	require.NoError(t, err)
+	second, err := AuthenticationEpochIn(workspace, config.DefaultRuntimeDir, "openai", "chatgpt", "")
+	require.NoError(t, err)
+	require.NotEqual(t, first, second)
+}
+
+func TestConcurrentProviderTokenWritesDoNotOverwriteEachOther(t *testing.T) {
+	workspace := t.TempDir()
+	providers := map[string]Token{
+		"openai": {Refresh: "openai"},
+		"other":  {Refresh: "other"},
+	}
+
+	var group sync.WaitGroup
+
+	errs := make(chan error, len(providers))
+	for provider, token := range providers {
+		group.Go(func() {
+			_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, provider, token)
+			errs <- err
+		})
+	}
+
+	group.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	for provider, want := range providers {
+		got, _, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, provider)
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
 }
 
 func TestTokenRoundTripUsesWorkspaceAuthFile(t *testing.T) {
@@ -76,15 +431,26 @@ func TestTokenRoundTripUsesWorkspaceAuthFile(t *testing.T) {
 	testAuthPath(t, workspace)
 
 	token := Token{Refresh: "refresh", Access: "access", Expires: time.Now().UnixMilli(), AccountID: "acc-123"}
-	require.NoError(t, SaveToken(workspace, token))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", token)
+	require.NoError(t, err)
+	path, err := AuthFilePathIn(workspace, config.DefaultRuntimeDir)
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(path, 0o644))
 
-	got, err := LoadToken(workspace)
+	_, err = ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", token)
+	require.NoError(t, err)
+
+	got, _, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
 	require.NoError(t, err)
 	require.Equal(t, token, got)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
 
 func TestAuthFilePathDefaultsToCurrentDirectory(t *testing.T) {
-	got, err := AuthFilePath("")
+	got, err := AuthFilePathIn("", config.DefaultRuntimeDir)
 	require.NoError(t, err)
 	require.True(t, filepath.IsAbs(got))
 	require.True(t, strings.HasSuffix(got, filepath.Join(".rocketclaw", "auth.json")))
@@ -98,25 +464,28 @@ func TestLoadTokenRejectsInvalidTokenFiles(t *testing.T) {
 	}{
 		{name: "invalid json", data: `{not-json`, want: "parse OpenAI OAuth token"},
 		{name: "missing refresh", data: `{"access":"access"}`, want: "missing refresh token"},
+		{name: "stored token missing refresh", data: `{"digest_key":"digest","providers":{"openai":{"mode":"chatgpt","epoch":"epoch","token":{"access":"access"}}}}`, want: "missing refresh token"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			workspace := t.TempDir()
 			testAuthPath(t, workspace)
-			path, err := AuthFilePath(workspace)
+			path, err := AuthFilePathIn(workspace, config.DefaultRuntimeDir)
 			require.NoError(t, err)
 			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
 			require.NoError(t, os.WriteFile(path, []byte(tt.data), 0o600))
 
-			_, err = LoadToken(workspace)
+			_, _, err = LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
+			require.ErrorContains(t, err, tt.want)
+			_, err = HasTokenIn(workspace, config.DefaultRuntimeDir, "openai")
 			require.ErrorContains(t, err, tt.want)
 		})
 	}
 }
 
 func TestLoadTokenReportsMissingAuthFile(t *testing.T) {
-	_, err := LoadToken(t.TempDir())
+	_, _, err := LoadTokenIn(t.TempDir(), config.DefaultRuntimeDir, "openai")
 	require.ErrorContains(t, err, "read OpenAI OAuth token")
 }
 
@@ -193,10 +562,8 @@ func TestExchangeCodePostsAuthorizationCodeForm(t *testing.T) {
 	require.Equal(t, int64(60), response.ExpiresIn)
 }
 
-func TestLoginBrowserCompletesCallbackAndSavesToken(t *testing.T) {
+func TestLoginBrowserCompletesCallbackAndReturnsToken(t *testing.T) {
 	requireLoginBrowserPortAvailable(t)
-
-	workspace := t.TempDir()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -228,17 +595,16 @@ func TestLoginBrowserCompletesCallbackAndSavesToken(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	state, done := startLoginBrowser(ctx, t, workspace)
+	state, done := startLoginBrowser(ctx, t)
 	body := sendLoginBrowserCallback(ctx, t, done, url.Values{"state": {state}, "code": {"code-123"}})
 	require.Equal(t, "Authorization successful. You can close this window.", body)
 
 	select {
 	case got := <-done:
 		require.NoError(t, got.err)
-
-		wantPath, err := AuthFilePath(workspace)
-		require.NoError(t, err)
-		require.Equal(t, wantPath, got.path)
+		require.Equal(t, "refresh-browser", got.token.Refresh)
+		require.Equal(t, access, got.token.Access)
+		require.Equal(t, "acc-browser", got.token.AccountID)
 	case <-ctx.Done():
 		t.Fatalf("wait for LoginBrowser completion: %v", ctx.Err())
 	}
@@ -253,12 +619,6 @@ func TestLoginBrowserCompletesCallbackAndSavesToken(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatalf("wait for token request: %v", ctx.Err())
 	}
-
-	token, err := LoadToken(workspace)
-	require.NoError(t, err)
-	require.Equal(t, "refresh-browser", token.Refresh)
-	require.Equal(t, access, token.Access)
-	require.Equal(t, "acc-browser", token.AccountID)
 }
 
 func TestLoginBrowserReportsCallbackErrors(t *testing.T) {
@@ -306,18 +666,16 @@ func TestLoginBrowserReportsCallbackErrors(t *testing.T) {
 				return nil, fmt.Errorf("unexpected token request to %s", req.URL)
 			})
 
-			workspace := t.TempDir()
-
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			state, done := startLoginBrowser(ctx, t, workspace)
+			state, done := startLoginBrowser(ctx, t)
 			body := sendLoginBrowserCallback(ctx, t, done, tt.query(state))
 			require.Equal(t, tt.body, body)
 
 			select {
 			case got := <-done:
-				require.Empty(t, got.path)
+				require.Equal(t, Token{}, got.token)
 				require.ErrorContains(t, got.err, tt.want)
 			case <-ctx.Done():
 				t.Fatalf("wait for LoginBrowser callback error: %v", ctx.Err())
@@ -411,7 +769,6 @@ func TestPostTokenReportsUnknownErrorsWithoutTerminalGuidance(t *testing.T) {
 }
 
 func TestPollDevicePendingAndCompletes(t *testing.T) {
-	workspace := t.TempDir()
 	access := testJWT(map[string]any{"chatgpt_account_id": "acc-123"})
 	phase := "pending"
 
@@ -450,22 +807,15 @@ func TestPollDevicePendingAndCompletes(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	path, done, err := pollDeviceIn(context.Background(), workspace, config.DefaultRuntimeDir, "dev-123", "user-456")
+	token, done, err := pollDevice(context.Background(), "dev-123", "user-456")
 	require.NoError(t, err)
 	require.False(t, done)
-	require.Empty(t, path)
+	require.Equal(t, Token{}, token)
 
 	phase = "complete"
-	path, done, err = pollDeviceIn(context.Background(), workspace, config.DefaultRuntimeDir, "dev-123", "user-456")
+	token, done, err = pollDevice(context.Background(), "dev-123", "user-456")
 	require.NoError(t, err)
 	require.True(t, done)
-
-	wantPath, err := AuthFilePath(workspace)
-	require.NoError(t, err)
-	require.Equal(t, wantPath, path)
-
-	token, err := LoadToken(workspace)
-	require.NoError(t, err)
 	require.Equal(t, "refresh-next", token.Refresh)
 	require.Equal(t, access, token.Access)
 	require.Equal(t, "acc-123", token.AccountID)
@@ -481,8 +831,8 @@ func TestPollDeviceReportsUnexpectedStatus(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	path, done, err := pollDeviceIn(context.Background(), t.TempDir(), config.DefaultRuntimeDir, "dev-123", "user-456")
-	require.Empty(t, path)
+	token, done, err := pollDevice(context.Background(), "dev-123", "user-456")
+	require.Equal(t, Token{}, token)
 	require.False(t, done)
 	require.ErrorContains(t, err, "device token request failed (500): server unavailable")
 }
@@ -514,8 +864,8 @@ func TestPollDeviceReportsTransportAndDecodeErrors(t *testing.T) {
 				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(tt.body)), Header: make(http.Header)}, nil
 			})
 
-			path, done, err := pollDeviceIn(context.Background(), t.TempDir(), config.DefaultRuntimeDir, "dev-123", "user-456")
-			require.Empty(t, path)
+			token, done, err := pollDevice(context.Background(), "dev-123", "user-456")
+			require.Equal(t, Token{}, token)
 			require.False(t, done)
 			require.ErrorContains(t, err, tt.want)
 		})
@@ -544,8 +894,8 @@ func TestLoginDevicePrintsCodeAndStopsOnContextCancel(t *testing.T) {
 
 	var out strings.Builder
 
-	path, err := LoginDevice(ctx, t.TempDir(), &out)
-	require.Empty(t, path)
+	token, err := LoginDevice(ctx, &out)
+	require.Equal(t, Token{}, token)
 	require.ErrorIs(t, err, context.Canceled)
 	require.ErrorContains(t, err, "wait for device authorization")
 	require.Equal(t, "Open "+issuer+"/codex/device and enter code: CODE-456\n", out.String())
@@ -563,8 +913,8 @@ func TestLoginDeviceFallsBackToDefaultInterval(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	path, err := LoginDevice(ctx, t.TempDir(), io.Discard)
-	require.Empty(t, path)
+	token, err := LoginDevice(ctx, io.Discard)
+	require.Equal(t, Token{}, token)
 	require.ErrorIs(t, err, context.Canceled)
 	require.ErrorContains(t, err, "wait for device authorization")
 }
@@ -592,29 +942,20 @@ func TestLoginDeviceReportsAuthorizationResponseErrors(t *testing.T) {
 				return &http.Response{StatusCode: tt.status, Body: io.NopCloser(strings.NewReader(tt.body)), Header: make(http.Header)}, nil
 			})
 
-			_, err := LoginDevice(context.Background(), t.TempDir(), io.Discard)
+			_, err := LoginDevice(context.Background(), io.Discard)
 			require.ErrorContains(t, err, tt.want)
 		})
 	}
 }
 
-func TestSaveTokenResponsePropagatesWriteError(t *testing.T) {
-	workspace := filepath.Join(t.TempDir(), "workspace")
-	require.NoError(t, os.WriteFile(workspace, []byte("file"), 0o600))
-
-	path, err := saveTokenResponse(workspace, tokenResponse{AccessToken: "access", RefreshToken: "refresh"})
-	require.Empty(t, path)
-	require.ErrorContains(t, err, "create OpenAI OAuth token dir")
-}
-
-func TestSaveTokenReportsWriteError(t *testing.T) {
+func TestReplaceTokenReportsWriteError(t *testing.T) {
 	workspace := t.TempDir()
-	path, err := AuthFilePath(workspace)
+	path, err := AuthFilePathIn(workspace, config.DefaultRuntimeDir)
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(path, 0o755))
 
-	err = SaveToken(workspace, Token{Access: "access", Refresh: "refresh"})
-	require.ErrorContains(t, err, "write OpenAI OAuth token")
+	_, err = ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Access: "access", Refresh: "refresh"})
+	require.Error(t, err)
 }
 
 func TestGeneratePKCEProducesVerifierAndChallenge(t *testing.T) {
@@ -705,12 +1046,13 @@ func TestNewChatGPTClientRequiresSavedToken(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
 
-	client, err := NewChatGPTClient(workspace)
+	client, err := NewChatGPTClientIn(workspace, config.DefaultRuntimeDir, "openai")
 	require.Nil(t, client)
 	require.Error(t, err)
 
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()}))
-	client, err = NewChatGPTClient(workspace)
+	_, err = ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()})
+	require.NoError(t, err)
+	client, err = NewChatGPTClientIn(workspace, config.DefaultRuntimeDir, "openai")
 	require.NoError(t, err)
 	require.NotNil(t, client)
 }
@@ -844,9 +1186,10 @@ func TestStripInputIDsKeepsIDsWhenStoreTrue(t *testing.T) {
 func TestTransportAddsOAuthHeadersAndStripsBodyIDs(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"})
+	require.NoError(t, err)
 
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "Bearer access", req.Header.Get("Authorization"))
 		require.Equal(t, "acc-123", req.Header.Get("Chatgpt-Account-Id"))
 		require.Equal(t, originator, req.Header.Get("Originator"))
@@ -880,7 +1223,8 @@ func TestTransportAddsOAuthHeadersAndStripsBodyIDs(t *testing.T) {
 func TestTransportUsesDefaultTransportWhenBaseNil(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()})
+	require.NoError(t, err)
 
 	base := http.DefaultTransport
 	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -892,7 +1236,7 @@ func TestTransportUsesDefaultTransportWhenBaseNil(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultTransport = base })
 
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir}
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai"}
 	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/models", `{}`))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
@@ -904,7 +1248,7 @@ func TestTransportUsesDefaultTransportWhenBaseNil(t *testing.T) {
 
 func TestTransportReportsTokenAndBaseErrors(t *testing.T) {
 	t.Run("token error", func(t *testing.T) {
-		transport := &transport{workspace: t.TempDir(), runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		transport := &transport{workspace: t.TempDir(), runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			t.Fatal("base transport should not be called without a token")
 
 			return nil, nil
@@ -922,10 +1266,11 @@ func TestTransportReportsTokenAndBaseErrors(t *testing.T) {
 	t.Run("base error", func(t *testing.T) {
 		workspace := t.TempDir()
 		testAuthPath(t, workspace)
-		require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()}))
+		_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()})
+		require.NoError(t, err)
 
 		errSend := errors.New("offline")
-		transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 			return nil, errSend
 		})}
 
@@ -956,11 +1301,12 @@ func TestTransportPrefixesCompactionWhenUsageExceedsThreshold(t *testing.T) {
 func TestTransportRetriesContextOverflowAfterCompaction(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"})
+	require.NoError(t, err)
 
 	responseCalls := 0
 	compactCalls := 0
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
 			compactCalls++
 			data, errRead := io.ReadAll(req.Body)
@@ -1008,10 +1354,11 @@ func TestTransportRetriesContextOverflowAfterCompaction(t *testing.T) {
 func TestTransportDoesNotRetryNonContextStreamFailure(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()})
+	require.NoError(t, err)
 
 	responseCalls := 0
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
 			t.Fatal("compact transport should not be called")
 		}
@@ -1037,11 +1384,12 @@ func TestTransportDoesNotRetryNonContextStreamFailure(t *testing.T) {
 func TestTransportKeepsOriginalContextErrorWhenCompactReturnsNoItem(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()})
+	require.NoError(t, err)
 
 	responseCalls := 0
 	compactCalls := 0
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
 			compactCalls++
 
@@ -1304,19 +1652,24 @@ func TestCodexCompactionHandlesErrorAndFallbackBranches(t *testing.T) {
 func TestTransportRefreshesExpiredOAuthToken(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(-time.Minute).UnixMilli(), AccountID: "acc-old"}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(-time.Minute).UnixMilli(), AccountID: "acc-old"})
+	require.NoError(t, err)
+	_, err = ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "other", Token{Refresh: "wrong-refresh", Access: "wrong-access", Expires: time.Now().Add(time.Hour).UnixMilli()})
+	require.NoError(t, err)
 
 	access := testJWT(map[string]any{"organizations": []map[string]string{{"id": "acc-new"}}})
 	base := http.DefaultClient.Transport
 	http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, issuer+"/oauth/token", req.URL.String())
+		require.NoError(t, req.ParseForm())
+		require.Equal(t, "refresh", req.Form.Get("refresh_token"))
 
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"` + access + `","refresh_token":"next-refresh","expires_in":3600}`)), Header: make(http.Header)}, nil
 	})
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "Bearer "+access, req.Header.Get("Authorization"))
 		require.Equal(t, "acc-new", req.Header.Get("Chatgpt-Account-Id"))
 
@@ -1327,7 +1680,7 @@ func TestTransportRefreshesExpiredOAuthToken(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
 
-	token, err := LoadToken(workspace)
+	token, _, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
 	require.NoError(t, err)
 	require.Equal(t, "next-refresh", token.Refresh)
 	require.Equal(t, "acc-new", token.AccountID)
@@ -1336,7 +1689,8 @@ func TestTransportRefreshesExpiredOAuthToken(t *testing.T) {
 func TestTransportRefreshesOAuthTokenInsideSkew(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(refreshSkew / 2).UnixMilli(), AccountID: "acc-old"}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(refreshSkew / 2).UnixMilli(), AccountID: "acc-old"})
+	require.NoError(t, err)
 
 	base := http.DefaultClient.Transport
 	http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -1347,7 +1701,7 @@ func TestTransportRefreshesOAuthTokenInsideSkew(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "Bearer next-access", req.Header.Get("Authorization"))
 
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[]}`)), Header: make(http.Header)}, nil
@@ -1357,7 +1711,7 @@ func TestTransportRefreshesOAuthTokenInsideSkew(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
 
-	token, err := LoadToken(workspace)
+	token, _, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
 	require.NoError(t, err)
 	require.Equal(t, "next-refresh", token.Refresh)
 }
@@ -1365,7 +1719,8 @@ func TestTransportRefreshesOAuthTokenInsideSkew(t *testing.T) {
 func TestTransportRefreshPreservesStoredAccountID(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(-time.Minute).UnixMilli(), AccountID: "acc-old"}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(-time.Minute).UnixMilli(), AccountID: "acc-old"})
+	require.NoError(t, err)
 
 	base := http.DefaultClient.Transport
 	http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -1376,7 +1731,7 @@ func TestTransportRefreshPreservesStoredAccountID(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "Bearer next-access", req.Header.Get("Authorization"))
 		require.Equal(t, "acc-old", req.Header.Get("Chatgpt-Account-Id"))
 
@@ -1387,7 +1742,7 @@ func TestTransportRefreshPreservesStoredAccountID(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
 
-	token, err := LoadToken(workspace)
+	token, _, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
 	require.NoError(t, err)
 	require.Equal(t, "next-refresh", token.Refresh)
 	require.Equal(t, "acc-old", token.AccountID)
@@ -1396,7 +1751,8 @@ func TestTransportRefreshPreservesStoredAccountID(t *testing.T) {
 func TestTransportReportsRefreshError(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(-time.Minute).UnixMilli()}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(-time.Minute).UnixMilli()})
+	require.NoError(t, err)
 
 	errRefresh := errors.New("offline")
 	base := http.DefaultClient.Transport
@@ -1408,7 +1764,7 @@ func TestTransportReportsRefreshError(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		t.Fatal("base transport should not be called when refresh fails")
 
 		return nil, nil
@@ -1427,7 +1783,10 @@ func TestTransportReportsRefreshError(t *testing.T) {
 func TestTransportRetriesCodexUnauthorizedWithReloadedStoredToken(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"})
+	require.NoError(t, err)
+	_, err = ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "other", Token{Refresh: "wrong-refresh", Access: "wrong-access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "wrong-account"})
+	require.NoError(t, err)
 
 	base := http.DefaultClient.Transport
 	http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -1437,14 +1796,16 @@ func TestTransportRetriesCodexUnauthorizedWithReloadedStoredToken(t *testing.T) 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
 	calls := 0
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		calls++
 
 		switch calls {
 		case 1:
 			require.Equal(t, "Bearer old", req.Header.Get("Authorization"))
 			require.Equal(t, "acc-123", req.Header.Get("Chatgpt-Account-Id"))
-			require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "new", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"}))
+
+			_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "new", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"})
+			require.NoError(t, err)
 
 			return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader("unauthorized")), Header: make(http.Header)}, nil
 		case 2:
@@ -1469,7 +1830,8 @@ func TestTransportRetriesCodexUnauthorizedWithReloadedStoredToken(t *testing.T) 
 func TestTransportForceRefreshesAndRetriesCodexUnauthorized(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-old"}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-old"})
+	require.NoError(t, err)
 
 	base := http.DefaultClient.Transport
 	http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -1484,7 +1846,7 @@ func TestTransportForceRefreshesAndRetriesCodexUnauthorized(t *testing.T) {
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
 	calls := 0
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		calls++
 
 		switch calls {
@@ -1510,7 +1872,7 @@ func TestTransportForceRefreshesAndRetriesCodexUnauthorized(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Equal(t, 2, calls)
 
-	token, err := LoadToken(workspace)
+	token, _, err := LoadTokenIn(workspace, config.DefaultRuntimeDir, "openai")
 	require.NoError(t, err)
 	require.Equal(t, "refresh", token.Refresh)
 	require.Equal(t, "next-access", token.Access)
@@ -1520,7 +1882,8 @@ func TestTransportForceRefreshesAndRetriesCodexUnauthorized(t *testing.T) {
 func TestTransportUsesRecoveredTokenForCompaction(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-old"}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-old"})
+	require.NoError(t, err)
 
 	base := http.DefaultClient.Transport
 	http.DefaultClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -1531,7 +1894,7 @@ func TestTransportUsesRecoveredTokenForCompaction(t *testing.T) {
 
 	responseCalls := 0
 	compactCalls := 0
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if strings.HasSuffix(req.URL.Path, "/responses/compact") {
 			compactCalls++
 
@@ -1573,7 +1936,8 @@ func TestTransportUsesRecoveredTokenForCompaction(t *testing.T) {
 func TestTransportDoesNotRetryCodexUnauthorizedTwice(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "team", Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"})
+	require.NoError(t, err)
 
 	base := http.DefaultClient.Transport
 	http.DefaultClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -1583,7 +1947,7 @@ func TestTransportDoesNotRetryCodexUnauthorizedTwice(t *testing.T) {
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
 	calls := 0
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "team", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		calls++
 
 		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(fmt.Sprintf("unauthorized %d", calls))), Header: make(http.Header)}, nil
@@ -1596,13 +1960,15 @@ func TestTransportDoesNotRetryCodexUnauthorizedTwice(t *testing.T) {
 
 	require.Nil(t, resp)
 	require.Equal(t, 2, calls)
-	require.ErrorContains(t, err, "rocketclaw oai login")
+	require.ErrorContains(t, err, "rocketclaw oai login team")
+	require.NotContains(t, err.Error(), "--provider")
 }
 
 func TestTransportReturnsOriginalUnauthorizedForNonReplayableRequest(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli()}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli()})
+	require.NoError(t, err)
 
 	base := http.DefaultClient.Transport
 	http.DefaultClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
@@ -1612,7 +1978,7 @@ func TestTransportReturnsOriginalUnauthorizedForNonReplayableRequest(t *testing.
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
 	calls := 0
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		calls++
 
 		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader("original unauthorized")), Header: make(http.Header)}, nil
@@ -1635,7 +2001,8 @@ func TestTransportReturnsOriginalUnauthorizedForNonReplayableRequest(t *testing.
 func TestTransportReportsCodexUnauthorizedRefreshErrorWithReloginGuidance(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli()}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "team", Token{Refresh: "refresh", Access: "old", Expires: time.Now().Add(time.Hour).UnixMilli()})
+	require.NoError(t, err)
 
 	base := http.DefaultClient.Transport
 	http.DefaultClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -1645,7 +2012,7 @@ func TestTransportReportsCodexUnauthorizedRefreshErrorWithReloginGuidance(t *tes
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
 	calls := 0
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "team", base: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		calls++
 
 		return &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader("unauthorized")), Header: make(http.Header)}, nil
@@ -1658,16 +2025,18 @@ func TestTransportReportsCodexUnauthorizedRefreshErrorWithReloginGuidance(t *tes
 
 	require.Nil(t, resp)
 	require.Equal(t, 1, calls)
-	require.ErrorContains(t, err, "rocketclaw oai login")
+	require.ErrorContains(t, err, "rocketclaw oai login team")
+	require.NotContains(t, err.Error(), "--provider")
 	require.ErrorContains(t, err, "token request failed (400): refresh denied")
 }
 
 func TestTransportTreatsTrailingSlashResponsesPathAsStreaming(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()})
+	require.NoError(t, err)
 
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		data, err := io.ReadAll(req.Body)
 		require.NoError(t, err)
 		require.Contains(t, string(data), `"stream":true`)
@@ -1688,9 +2057,10 @@ func TestTransportTreatsTrailingSlashResponsesPathAsStreaming(t *testing.T) {
 func TestTransportLeavesCompactRequestsAsJSON(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"})
+	require.NoError(t, err)
 
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "/backend-api/codex/responses/compact", req.URL.Path)
 		require.Equal(t, "Bearer access", req.Header.Get("Authorization"))
 		require.Equal(t, "acc-123", req.Header.Get("Chatgpt-Account-Id"))
@@ -1721,9 +2091,10 @@ func TestTransportLeavesCompactRequestsAsJSON(t *testing.T) {
 func TestTransportLeavesNonResponseRequestsAsJSON(t *testing.T) {
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()})
+	require.NoError(t, err)
 
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "/backend-api/codex/models", req.URL.Path)
 		require.Equal(t, "Bearer access", req.Header.Get("Authorization"))
 
@@ -1792,9 +2163,10 @@ func runAutoCompactTransportTest(t *testing.T, requestBody, streamBody, compactB
 
 	workspace := t.TempDir()
 	testAuthPath(t, workspace)
-	require.NoError(t, SaveToken(workspace, Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"}))
+	_, err := ReplaceTokenIn(workspace, config.DefaultRuntimeDir, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli(), AccountID: "acc-123"})
+	require.NoError(t, err)
 
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		require.Equal(t, "Bearer access", req.Header.Get("Authorization"))
 		require.Equal(t, "acc-123", req.Header.Get("Chatgpt-Account-Id"))
 
@@ -1872,15 +2244,15 @@ func requestWithPathAndBody(path, body string) *http.Request {
 	return req
 }
 
-func startLoginBrowser(ctx context.Context, t *testing.T, workspace string) (state string, done <-chan loginBrowserResult) {
+func startLoginBrowser(ctx context.Context, t *testing.T) (state string, done <-chan loginBrowserResult) {
 	t.Helper()
 
 	output := make(loginOutput, 8)
 	doneCh := make(chan loginBrowserResult, 1)
 
 	go func() {
-		path, err := LoginBrowser(ctx, workspace, output)
-		doneCh <- loginBrowserResult{path: path, err: err}
+		token, err := LoginBrowser(ctx, output)
+		doneCh <- loginBrowserResult{token: token, err: err}
 	}()
 
 	var text strings.Builder
@@ -1901,7 +2273,7 @@ func startLoginBrowser(ctx context.Context, t *testing.T, workspace string) (sta
 				return state, doneCh
 			}
 		case got := <-doneCh:
-			t.Fatalf("LoginBrowser() returned before printing auth URL: path=%q err=%v", got.path, got.err)
+			t.Fatalf("LoginBrowser() returned before printing auth URL: token=%+v err=%v", got.token, got.err)
 		case <-ctx.Done():
 			t.Fatalf("wait for LoginBrowser auth URL: %v", ctx.Err())
 		}
@@ -1917,7 +2289,7 @@ func sendLoginBrowserCallback(ctx context.Context, t *testing.T, done <-chan log
 	for {
 		select {
 		case got := <-done:
-			t.Fatalf("LoginBrowser() returned before OAuth callback completed: path=%q err=%v", got.path, got.err)
+			t.Fatalf("LoginBrowser() returned before OAuth callback completed: token=%+v err=%v", got.token, got.err)
 		default:
 		}
 
@@ -1938,7 +2310,7 @@ func sendLoginBrowserCallback(ctx context.Context, t *testing.T, done <-chan log
 
 		select {
 		case got := <-done:
-			t.Fatalf("LoginBrowser() returned before OAuth callback completed: path=%q err=%v", got.path, got.err)
+			t.Fatalf("LoginBrowser() returned before OAuth callback completed: token=%+v err=%v", got.token, got.err)
 		case <-ctx.Done():
 			t.Fatalf("send OAuth callback: %v; last error: %v", ctx.Err(), err)
 		case <-time.After(10 * time.Millisecond):
@@ -1970,7 +2342,7 @@ func testJWT(payload map[string]any) string {
 func testAuthPath(t *testing.T, workspace string) {
 	t.Helper()
 
-	path, err := AuthFilePath(workspace)
+	path, err := AuthFilePathIn(workspace, config.DefaultRuntimeDir)
 	require.NoError(t, err)
 	require.Equal(t, filepath.Join(workspace, ".rocketclaw", "auth.json"), path)
 }

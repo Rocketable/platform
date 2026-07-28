@@ -51,8 +51,8 @@ func TestLoadProviderConfigInterpolatesEnv(t *testing.T) {
 		t.Fatalf("loadProviderConfig returned error: %v", err)
 	}
 
-	if providers.OpenAI == nil {
-		t.Fatalf("OpenAI provider is nil")
+	if _, ok := providers["openai"]; !ok {
+		t.Fatalf("OpenAI provider is missing")
 	}
 }
 
@@ -82,8 +82,8 @@ func TestLoadProviderConfigIgnoresUnselectedProviderEnv(t *testing.T) {
 		t.Fatalf("loadProviderConfig returned error: %v", err)
 	}
 
-	if providers.OpenAI == nil {
-		t.Fatalf("OpenAI provider is nil")
+	if _, ok := providers["openai"]; !ok {
+		t.Fatalf("OpenAI provider is missing")
 	}
 }
 
