@@ -55,7 +55,8 @@ Built-in permission buckets:
 - `bash`: shell command call expressions parsed out of the command
 - `edit`: root-relative file paths touched by `apply_patch`
 - `skill`: skill names for `find_skills` and `skill`
-- `task`: subagent names for the `task` tool
+- `task`: subagent names for the `task` tool only
+- `workflow`: workflow stems for `rocketclaw_dynamic_workflow`
 
 For edit-only agents, an `edit` allow also permits reading the same path unless a `read` rule matched first. Do not add a top-level deny that would block this fallback.
 
@@ -114,6 +115,8 @@ permission:
   task:
     "reviewer": allow
     "test-*": allow
+  workflow:
+    "audit-routes": allow
 ```
 
 If the agent needs no tools, omit the `permission` block.

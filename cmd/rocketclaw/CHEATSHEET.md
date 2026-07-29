@@ -116,10 +116,11 @@ Fresh RocketClaw runtime directories initialize the current SQLite schema direct
 
 ## RocketClaw Tools
 
-RocketClaw injects these tools into RocketCode turns. Most are auto-allowed by RocketClaw unless a per-agent permission rule explicitly denies them. `rocketclaw_restart` and `rocketclaw_start_new_thread` are default-deny and require an explicit per-agent `allow`.
+RocketClaw injects these tools into RocketCode turns. Most are auto-allowed by RocketClaw unless a per-agent permission rule explicitly denies them. `rocketclaw_restart` and `rocketclaw_start_new_thread` are default-deny and require an explicit per-agent `allow`. `rocketclaw_dynamic_workflow` is not RocketClaw auto-allowed; it is gated by `permission.workflow.<stem>`, not by `task`.
 
 | Tool | Available In | Permission Default | What It Does |
 | --- | --- | --- | --- |
+| `rocketclaw_dynamic_workflow` | Persistent parent managed turns when at least one loaded workflow stem is `workflow`-allowed. Never on workflow workers, and not via the RocketClaw auto-allow list. | Gated by `permission.workflow.<stem>`. Not gated by `task`. Not RocketClaw auto-allowed. | Runs a saved Starlark workflow as a nested tool call inside the current turn, streams phase/agent progress into thinking, and returns the final workflow text as the tool result. Not a second managed turn; no human `$workflow` session summary entry. |
 | `rocketclaw_restart` | Persistent bridge turns and raw/cron runs. | Default-deny. Requires explicit per-agent `allow`; generated `main` agents include that allow. | Records the restart requester and cancels RocketClaw for supervisor restart after approved runtime config or overlay-list changes. |
 | `rocketclaw_schedule_message` | Persistent bridge turns and raw/cron runs. | Auto-allow unless explicitly denied. | Schedules a one-shot or recurring prompt in the current conversation. Recurring schedules persist until reset and do not replay missed intervals. |
 | `rocketclaw_reset_scheduled_messages` | Persistent bridge turns and raw/cron runs. | Treat as part of the schedule-message permission family. Deny `rocketclaw_schedule_message` to block schedule reset behavior. | Clears scheduled messages for the current conversation. |
@@ -173,10 +174,14 @@ permission:
     "main-*": allow
   task:
     "reviewer": allow
+  workflow:
+    "audit-routes": allow
 ---
 
 Agent instructions go here.
 ```
+
+Agents that previously used `task` grants to launch workflows must add `workflow:` allows. That is a clean break: `task` no longer enables `rocketclaw_dynamic_workflow`.
 
 Known frontmatter fields:
 
@@ -230,7 +235,8 @@ Permission buckets:
 | `edit` | Workspace-relative file paths touched by `apply_patch`. |
 | `bash` | Parsed shell command call expressions. Multi-command scripts need every parsed call allowed. |
 | `skill` | Skill names visible to `find_skills` and loadable by `skill`. |
-| `task` | Subagent names visible and callable through `task`. `maxRecursion` can still hide `task` when the delegation budget is exhausted. |
+| `task` | Subagent names visible and callable through `task` only. `maxRecursion` can still hide `task` when the delegation budget is exhausted; it does not gate the nested workflow tool. |
+| `workflow` | Workflow stems for `rocketclaw_dynamic_workflow`. |
 
 Run `rocketclaw lint` after agent, skill, or script edits. It checks write-to-execute risk, read-plus-execute leakage, task delegation cycles, delegation-chain escalation, external-content contamination, plural `permissions`, missing guardrails, and excessive `reasoningEffort`.
 

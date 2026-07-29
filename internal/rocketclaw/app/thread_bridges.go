@@ -387,12 +387,7 @@ func (m *threadBridgeManager) WorkflowDescriptions() ([]workflow.Description, er
 		return nil, err
 	}
 
-	descriptions := make([]workflow.Description, 0, len(definitions))
-	for _, name := range slices.Sorted(maps.Keys(definitions)) {
-		descriptions = append(descriptions, workflow.Description{Name: name, Description: definitions[name].Description})
-	}
-
-	return descriptions, nil
+	return workflow.Descriptions(definitions), nil
 }
 
 func (m *threadBridgeManager) StartWorkflowInThread(ctx context.Context, agent, name, args string, target events.TextConversationTarget, inbound *events.InboundMessage) error {

@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -29,6 +31,16 @@ type Definition struct {
 	Phases       []string
 	WorkerModels []string
 	program      *starlark.Program
+}
+
+// Descriptions returns sorted name/description pairs for loaded definitions.
+func Descriptions(definitions map[string]*Definition) []Description {
+	out := make([]Description, 0, len(definitions))
+	for _, name := range slices.Sorted(maps.Keys(definitions)) {
+		out = append(out, Description{Name: name, Description: definitions[name].Description})
+	}
+
+	return out
 }
 
 // Load loads top-level workflow definitions from runtimeDir.

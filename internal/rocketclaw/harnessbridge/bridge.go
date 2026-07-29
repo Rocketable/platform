@@ -933,7 +933,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, msg *events.InboundMessage, tu
 	if terminal == workflow.TerminalComplete {
 		assistant := workflowResult.Text
 		if workflowResult.Silent {
-			assistant = "Workflow completed silently."
+			assistant = nestedWorkflowSilentCompleteText
 		}
 
 		userReplay, err := replayInputForMessage("user", msg.Text)
@@ -1264,6 +1264,10 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		customTools = append(customTools, restartTool(b.config.RequestRestart, func(ctx context.Context) error {
 			return b.config.SessionService.MarkRestartRequester(ctx, b.config.ConversationID)
 		}))
+	}
+
+	if tool, ok := b.maybeDynamicWorkflowTool(root, &agent, agentName, turnID); ok {
+		customTools = append(customTools, tool)
 	}
 
 	if nativeQuestionTurn(msg) {
