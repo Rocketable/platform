@@ -108,7 +108,10 @@ func StartSessionPromptServer(ctx context.Context, logger *slog.Logger, listenAd
 		return &mcp.CallToolResult{Content: content}, reply, nil
 	})
 
-	httpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpServer }, nil)
+	httpHandler := mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return mcpServer },
+		&mcp.StreamableHTTPOptions{Stateless: true, PropagateRequestCancellation: true},
+	)
 
 	mux := http.NewServeMux()
 	mux.Handle(ExternalMCPPath, withBasicAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { httpHandler.ServeHTTP(w, r) }), users))

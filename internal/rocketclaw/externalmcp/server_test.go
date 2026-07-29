@@ -241,6 +241,46 @@ func TestStartSessionPromptServerExposesMetadataSchema(t *testing.T) {
 	assert.ElementsMatch(t, []any{"external_conversation_id", "agent", "answer"}, required)
 }
 
+func TestStartSessionPromptServerUsesStatelessProtocol(t *testing.T) {
+	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(_ context.Context, _, externalConversationID, agent, input string, _ map[string]string, _ []SessionPromptAttachment, slackChannel string) (SessionResult, error) {
+		assert.Equal(t, "external-1", externalConversationID)
+		assert.Equal(t, "main", agent)
+		assert.Equal(t, "hello", input)
+		assert.Equal(t, "#ops", slackChannel)
+
+		return SessionResult{ExternalConversationID: externalConversationID, Agent: agent, Answer: "reply"}, nil
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
+	transport := &mcp.StreamableClientTransport{Endpoint: server.url, DisableStandaloneSSE: true}
+	session, err := client.Connect(t.Context(), transport, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, session.Close()) })
+
+	require.NotNil(t, session.InitializeResult())
+	assert.Equal(t, "2026-07-28", session.InitializeResult().ProtocolVersion)
+	assert.Empty(t, session.ID())
+
+	tools, err := session.ListTools(t.Context(), nil)
+	require.NoError(t, err)
+	require.Len(t, tools.Tools, 1)
+	assert.Equal(t, SessionPromptToolName, tools.Tools[0].Name)
+
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: SessionPromptToolName, Arguments: map[string]any{
+		"external_conversation_id": "external-1",
+		"agent":                    "main",
+		"input":                    "hello",
+		"slack_channel":            "#ops",
+	}})
+	require.NoError(t, err)
+	require.NotEmpty(t, result.Content)
+	content, ok := result.Content[0].(*mcp.TextContent)
+	require.True(t, ok)
+	assert.Equal(t, "reply", content.Text)
+}
+
 func TestStartSessionPromptServerRejectsMissingSlackChannel(t *testing.T) {
 	server, err := StartSessionPromptServer(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", nil, func(context.Context, string, string, string, string, map[string]string, []SessionPromptAttachment, string) (SessionResult, error) {
 		t.Fatal("handler called without required Slack channel")
