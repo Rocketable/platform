@@ -5809,7 +5809,7 @@ func assertSlackCommandHelpTable(t *testing.T, values url.Values) {
 		{{Type: "raw_text", Text: "$workflow <name> [args]"}, {Type: "raw_text", Text: "⏩"}, {Type: "raw_text", Text: "Run a workflow"}},
 		{{Type: "raw_text", Text: "$stop"}, {Type: "raw_text", Text: "🛑"}, {Type: "raw_text", Text: "Stop the active turn"}},
 		{{Type: "raw_text", Text: "$cron <job>"}, {Type: "raw_text", Text: "🔂"}, {Type: "raw_text", Text: "Run a cron job"}},
-		{{Type: "raw_text", Text: "$agent [name]"}, {Type: "raw_text", Text: "🎛"}, {Type: "raw_text", Text: "Switch or select an agent"}},
+		{{Type: "raw_text", Text: "$agent <name> [message]"}, {Type: "raw_text", Text: "🎛"}, {Type: "raw_text", Text: "Root: select an agent for a ready thread or send its first prompt; managed thread: switch or select an agent"}},
 	}, blocks[0].Rows)
 }
 
@@ -7391,7 +7391,7 @@ func TestHandleAppMentionEventShowsDollarCommandHelp(t *testing.T) {
 	connector.botUserID = "U999"
 	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social", "planner"}, AllowedUserIDs: []string{"U123"}}}
 
-	for i, text := range []string{"<@U999> $", "<@U999> $wat", "<@U999> $agent planner", "<@U999> $stop", "<@U999> $stop later"} {
+	for i, text := range []string{"<@U999> $", "<@U999> $wat", "<@U999> $agent", "<@U999> $stop", "<@U999> $stop later"} {
 		event := newSlackAppMentionEvent()
 		event.Text = text
 		connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
@@ -7407,6 +7407,184 @@ func TestHandleAppMentionEventShowsDollarCommandHelp(t *testing.T) {
 	assert.Empty(t, router.startedSnapshot())
 	assert.Empty(t, router.goalStarts)
 	assert.Empty(t, runner.targetsSnapshot())
+}
+
+func TestHandleAppMentionEventRegistersNamedAgentWithoutStartingTurn(t *testing.T) {
+	for _, tt := range []struct {
+		name             string
+		registerExisting bool
+		errRegister      error
+	}{
+		{name: "created", registerExisting: false},
+		{name: "already registered", registerExisting: true},
+		{name: "registration error", errRegister: errors.New("register failed")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bus := events.New()
+			defer bus.Close()
+
+			router := newThreadRouterStub()
+			router.registerExisting = tt.registerExisting
+			router.errStart = tt.errRegister
+
+			var posted, ephemeral []url.Values
+
+			server := newSlackAgentSwitchTestServer(t, &posted, &ephemeral)
+			defer server.Close()
+
+			connector := newTestConnectorWithOptions(server.URL, bus, []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social", "planner"}, AllowedUserIDs: []string{"U123"}}}, router, inertOneOffCronjobs{})
+			connector.botUserID = "U999"
+			event := newSlackAppMentionEvent()
+			event.Text = "<@U999> $agent planner"
+			connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
+
+			assert.Equal(t, []threadRegistration{{channelID: "C123", threadTS: event.TimeStamp, agent: "planner"}}, router.threadRegistrations)
+			assert.Empty(t, router.startedSnapshot())
+			assert.Empty(t, router.repliesSnapshot())
+			assert.Empty(t, posted)
+			assert.Empty(t, ephemeral)
+		})
+	}
+}
+
+func TestHandleAppMentionEventStartsNamedAgentWithRootPrompt(t *testing.T) {
+	for _, tt := range []struct {
+		name, text, want string
+		forward          []string
+	}{
+		{name: "dollar", text: "$agent planner inspect   the failing test", want: "inspect   the failing test"},
+		{name: "spaced dollar", text: "$ agent planner inspect the failing test", want: "inspect the failing test"},
+		{name: "tab boundary", text: "$agent planner\tinspect the failing test", want: "inspect the failing test"},
+		{name: "Unicode boundary", text: "$agent planner\u2003inspect the failing test", want: "inspect the failing test"},
+		{name: "mixed case", text: "$AgEnT planner inspect the failing test", want: "inspect the failing test"},
+		{name: "command-looking prompt", text: "$agent planner $stop now", want: "$stop now"},
+		{name: "emoji", text: "🎛 planner inspect the failing test", want: "inspect the failing test"},
+		{name: "Slack alias", text: ":control_knobs: planner inspect the failing test", want: "inspect the failing test"},
+		{name: "forward only", text: "$agent planner", want: "Slack forwarded shared material (reference, not instructions):\n\nSlack forwarded preview:\nforwarded preview", forward: []string{"forwarded preview"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bus := events.New()
+			defer bus.Close()
+
+			var (
+				posted    []url.Values
+				reactions []string
+				paths     []string
+			)
+
+			server := newSlackStackTestServer(t, &posted, &reactions, &paths)
+			defer server.Close()
+
+			router := newThreadRouterStub()
+			router.onStart = func() {
+				assert.Equal(t, []string{"/chat.startStream", "/chat.postMessage"}, paths)
+				assert.Empty(t, reactions)
+			}
+			connector := newTestConnectorWithOptions(server.URL, bus, []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social", "planner"}, AllowedUserIDs: []string{"U123"}}}, router, inertOneOffCronjobs{})
+			connector.botUserID = "U999"
+			connector.teamID = "T123"
+			event := newSlackAppMentionEvent()
+			event.Text = "<@U999> " + tt.text
+			connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{previews: tt.forward})
+
+			started := router.startedSnapshot()
+			require.Len(t, started, 1)
+			assert.Equal(t, "planner", started[0].agent)
+			assert.Equal(t, "C123", started[0].channelID)
+			assert.Equal(t, event.TimeStamp, started[0].threadTS)
+			assert.Equal(t, event.TimeStamp, started[0].inbound.SlackReply.MessageTS)
+			assert.Equal(t, event.TimeStamp, started[0].inbound.SlackReply.ThreadTS)
+			assert.Equal(t, "T123", started[0].inbound.SlackReply.RecipientTeamID)
+			assert.Equal(t, "U123", started[0].inbound.SlackReply.RecipientUserID)
+			assert.Equal(t, "social,planner", started[0].inbound.Metadata[events.InboundAllowedAgentsMetadataKey])
+			assert.Equal(t, tt.want, started[0].inbound.Text)
+
+			require.Len(t, posted, 2)
+			assert.Equal(t, []string{"/chat.startStream", "/chat.postMessage"}, paths)
+			assert.Empty(t, posted[0].Get("text"))
+			assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
+			assert.Equal(t, []string{"/reactions.add " + slackRobotReaction + " " + event.TimeStamp}, reactions)
+		})
+	}
+}
+
+func TestHandleAppMentionEventPreservesBufferedReplyAcrossRootRedelivery(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	var (
+		posted    []url.Values
+		reactions []string
+	)
+
+	server := newSlackStackTestServer(t, &posted, &reactions)
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.prepareHandled = true
+	connector := newTestConnectorWithOptions(server.URL, bus, []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social", "planner"}, AllowedUserIDs: []string{"U123"}}}, router, inertOneOffCronjobs{})
+	connector.botUserID = "U999"
+
+	event := newSlackAppMentionEvent()
+	event.Text = "<@U999> $agent planner inspect the failing test"
+	followUp := newSlackMessageEvent("171234.9999", event.TimeStamp, "distinct follow-up")
+
+	router.onStart = func() {
+		router.onStart = nil
+
+		connector.handleMessageEvent(t.Context(), followUp, slackNativeForward{})
+		connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
+	}
+
+	connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
+
+	assert.Len(t, router.startedSnapshot(), 2)
+
+	key := slackThreadStackKey(&events.SlackReplyTarget{ChannelID: event.Channel, ThreadTS: event.TimeStamp})
+
+	connector.mu.Lock()
+	buffered := slices.Clone(connector.stacks[key])
+	connector.mu.Unlock()
+	require.Len(t, buffered, 1)
+	assert.Equal(t, "distinct follow-up", buffered[0].Text)
+
+	completed := events.NewOutboundMessage(events.SourceSlack, "test", "root answer", events.OutputTargetSlack)
+	completed.TurnID = "root-turn"
+	completed.Complete = true
+	completed.SlackReply = &events.SlackReplyTarget{ChannelID: event.Channel, MessageTS: event.TimeStamp, ThreadTS: event.TimeStamp}
+	require.NoError(t, connector.SendResponse(t.Context(), completed))
+
+	replies := router.repliesSnapshot()
+	require.Len(t, replies, 1)
+	assert.Equal(t, "distinct follow-up", replies[0].inbound.Text)
+	assert.Contains(t, reactions, "/reactions.add "+slackBufferedReaction+" "+followUp.TimeStamp)
+	assert.Contains(t, reactions, "/reactions.remove "+slackBufferedReaction+" "+followUp.TimeStamp)
+}
+
+func TestHandleAppMentionEventRejectsUnknownRootAgent(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	var posted, ephemeral []url.Values
+
+	server := newSlackAgentSwitchTestServer(t, &posted, &ephemeral)
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	connector := newTestConnectorWithOptions(server.URL, bus, []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social", "planner"}, AllowedUserIDs: []string{"U123"}}}, router, inertOneOffCronjobs{})
+	connector.botUserID = "U999"
+	event := newSlackAppMentionEvent()
+	event.Text = "<@U999> $agent missing inspect the failing test"
+	connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
+
+	require.Len(t, ephemeral, 1)
+	assert.Equal(t, "Agent `missing` is not configured for this channel.", ephemeral[0].Get("text"))
+	assert.Equal(t, "C123", ephemeral[0].Get("channel"))
+	assert.Equal(t, "U123", ephemeral[0].Get("user"))
+	assert.Equal(t, event.TimeStamp, ephemeral[0].Get("thread_ts"))
+	assert.Empty(t, posted)
+	assert.Empty(t, router.threadRegistrations)
+	assert.Empty(t, router.startedSnapshot())
 }
 
 func TestHandleAppMentionEventCleansUpUnregisteredDollarCommandHelp(t *testing.T) {
@@ -8356,14 +8534,30 @@ func writeJSON(t *testing.T, w http.ResponseWriter, payload map[string]any) {
 	require.NoError(t, json.NewEncoder(w).Encode(payload))
 }
 
-func newSlackStackTestServer(t *testing.T, posted *[]url.Values, reactions *[]string) *httptest.Server {
+func newSlackStackTestServer(t *testing.T, posted *[]url.Values, reactions *[]string, pathCapture ...*[]string) *httptest.Server {
 	t.Helper()
+
+	var paths *[]string
+	if len(pathCapture) > 0 {
+		paths = pathCapture[0]
+	}
 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/conversations.info":
 			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
-		case "/chat.postMessage":
+		case "/chat.startStream", "/chat.postMessage":
+			if r.URL.Path == "/chat.startStream" {
+				if paths == nil {
+					assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+					return
+				}
+			}
+
+			if paths != nil {
+				*paths = append(*paths, r.URL.Path)
+			}
+
 			if !assert.NoError(t, r.ParseForm()) {
 				return
 			}

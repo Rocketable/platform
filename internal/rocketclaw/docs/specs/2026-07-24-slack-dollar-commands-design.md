@@ -15,7 +15,7 @@ The canonical commands are:
 | `$goal <objective>` | `🏁`, `🔁` | Start a goal using the existing goal parameter grammar. |
 | `$stop` | `🛑`, `⏹️` | Stop the active managed-thread turn. |
 | `$cron <job>` | `🔂` | Run an existing one-off cron request. |
-| `$agent [name]` | `🎛` | Switch agents or open the existing selector in an eligible managed thread. |
+| `$agent [name]` | `🎛` | Select the initial agent for a root thread, switch agents, or open the existing selector in an eligible managed thread. |
 
 ## Canonicalization And Routing
 
@@ -29,11 +29,11 @@ Slack emoji or colon alias -> canonical dollar text -> command parser -> context
 
 Dollar commands never translate back into emoji syntax. Goal grammar receives the canonical goal arguments, not an emoji-prefixed string. Emoji and dollar forms produce identical stored objective text, queue behavior, placeholders, routing, and feedback.
 
-Managed threads allow all four commands. Root app mentions allow goal and cron; stop and agent produce ephemeral command help because those commands require a managed thread. Dollar commands are consumed before placeholders, buffering, or ordinary prompt submission, so command syntax is never sent to RocketCode.
+Managed threads allow all four commands. Root app mentions allow goal and cron plus `$agent <name>` selection. A named root agent without a message registers a ready thread; a named root agent with a message starts the selected agent with the remainder as its first user-authored prompt. Bare root `$agent`, stop, and other unavailable commands use the existing help behavior. Dollar commands are consumed before placeholders, buffering, or ordinary prompt submission, so command syntax is never sent to RocketCode.
 
 ## Help And Errors
 
-Bare `$`, unknown command names, commands unavailable in the current Slack context, and `$stop` with arguments post the Block Kit help table permanently and perform no agent turn. In a root app mention, the mention remains the root, the help table is the first thread reply, and RocketClaw registers the thread with the channel's first configured agent without adding either message to agentic context. The next human reply is the first agentic turn.
+Bare `$`, bare root `$agent`, unknown command names, commands unavailable in the current Slack context, and `$stop` with arguments post the Block Kit help table permanently and perform no agent turn. In a root app mention, the mention remains the root, the help table is the first thread reply, and RocketClaw registers the thread with the channel's first configured agent without adding either message to agentic context. The next human reply is the first agentic turn.
 
 | Command | Emoji Alias | Action |
 | --- | --- | --- |
@@ -71,4 +71,4 @@ Test the canonical direction directly:
 
 ## Documentation
 
-Update `cmd/rocketclaw/CHEATSHEET.md` to describe dollar commands as canonical and emojis as aliases. Update the existing implementation plan to remove the old dollar-to-emoji adapter. The repository README remains high-level and does not need an update.
+Update `cmd/rocketclaw/CHEATSHEET.md` to describe dollar commands as canonical and emojis as aliases, and update the README's root initiation description for named-agent selection. Update the existing implementation plan to remove the old dollar-to-emoji adapter.
