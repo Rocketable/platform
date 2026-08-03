@@ -140,7 +140,7 @@ If the human gives only a simple agent name, convert it into a safe markdown fil
 - avoid spaces and punctuation
 - add the `.md` suffix
 
-Do not create nested agent paths. Current rocketcode loads only top-level markdown files directly under `.rocketclaw/agents`.
+This skill is for individual top-level agents, which current RocketCode loads directly under `.rocketclaw/agents`. For a current flat council pattern, use `main-create-or-update-council` to coordinate the prefixed coordinator and member files.
 
 The simple default write target is:
 
@@ -202,7 +202,7 @@ The body must also end with an extra instruction that explicitly tells the agent
 4. Summarize the agent change you are about to make.
 5. Create or update the overlay file in `agents/`.
 6. If this is a rename and an old overlay file exists at the previous path, remove that old overlay file.
-7. If you changed one or more `agents/` overlay files or relevant `scripts/` files, finish all requested edits first, run `rocketclaw lint`, resolve or explicitly suppress findings approved by the human, then optionally tell the human you are applying them now and call `rocketclaw_restart` exactly once.
+7. If you changed one or more `agents/` overlay files or relevant `scripts/` files, finish all requested edits first, run `rocketclaw lint`, resolve or explicitly suppress findings approved by the human, then optionally tell the human you are applying them now and call `rocketclaw_reload` exactly once. Use `rocketclaw_restart` only when runtime configuration or overlay-list entries changed.
 
 ## Important
 
@@ -210,8 +210,8 @@ The body must also end with an extra instruction that explicitly tells the agent
 - Always copy existing agent content from `.rocketclaw` into `agents/` before editing it.
 - RocketCode denies unmatched permissions by default. Do not write top-level or per-bucket default deny rules.
 - Do not write broad `edit: allow` or `bash: allow`; prefer exact `edit` or exact `bash` opt-ins, not both.
-- Run `rocketclaw lint` after requested agent or relevant script edits and before `rocketclaw_restart`.
+- Run `rocketclaw lint` after requested agent or relevant script edits and before `rocketclaw_reload` or `rocketclaw_restart`.
 - Always end the agent instructions with an explicit instruction to use `MEMORY.md`.
-- Make all requested agent-definition edits before calling `rocketclaw_restart`; do not call it between intermediate edits.
+- Make all requested agent-definition edits before calling `rocketclaw_reload` or `rocketclaw_restart`; do not call either between intermediate edits.
 - Be truthful about overlay limitations when a rename cannot remove an old embedded source path.
 - If no agent-definition file changed, do not call `rocketclaw_restart`.

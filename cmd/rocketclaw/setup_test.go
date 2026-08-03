@@ -165,6 +165,7 @@ func TestRunSetupFilesListShowsKnownFiles(t *testing.T) {
 	require.NotContains(t, output, "main-split-markdown-files.sh\n")
 	require.Contains(t, output, "agents/main.md\n")
 	require.Contains(t, output, ".rocketclaw/skills/main-create-or-update-agent/SKILL.md\n")
+	require.Contains(t, output, ".rocketclaw/skills/main-create-or-update-council/SKILL.md\n")
 }
 
 func TestRunSetupFilesGetReturnsEmbeddedContent(t *testing.T) {

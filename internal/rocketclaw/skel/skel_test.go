@@ -711,6 +711,7 @@ func TestSyncWritesEmbeddedSetupFiles(t *testing.T) {
 		filepath.Join("cron", "HEARTBEAT.example.md"),
 		filepath.Join(targetRoot, ".gitignore"),
 		filepath.Join(targetRoot, "skills", "main-create-or-update-agent", "SKILL.md"),
+		filepath.Join(targetRoot, "skills", "main-create-or-update-council", "SKILL.md"),
 	} {
 		data, err := os.ReadFile(filepath.Join(tmp, name))
 		require.NoError(t, err)
@@ -756,6 +757,10 @@ func TestReadSetupFileRejectsUnknown(t *testing.T) {
 }
 
 func TestEmbeddedCreateOrUpdateSkillsMentionLint(t *testing.T) {
+	mainAgent, err := payload.ReadFile("agents/main.md")
+	require.NoError(t, err)
+	assert.Contains(t, string(mainAgent), "main-create-or-update-council")
+
 	agentSkill, err := payload.ReadFile(".rocketclaw/skills/main-create-or-update-agent/SKILL.md")
 	require.NoError(t, err)
 	assert.Contains(t, string(agentSkill), "rocketclaw lint")
@@ -770,6 +775,14 @@ func TestEmbeddedCreateOrUpdateSkillsMentionLint(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(skillSkill), "rocketclaw lint")
 	assert.Contains(t, string(skillSkill), "behavior, permission guidance, task delegation, or scripts")
+
+	councilSkill, err := payload.ReadFile(".rocketclaw/skills/main-create-or-update-council/SKILL.md")
+	require.NoError(t, err)
+	assert.Contains(t, string(councilSkill), "top-level `agents/*.md`")
+	assert.Contains(t, string(councilSkill), "Coordinator to members")
+	assert.Contains(t, string(councilSkill), "scope-council-spec-auditor")
+	assert.Contains(t, string(councilSkill), "rocketclaw lint")
+	assert.Contains(t, string(councilSkill), "rocketclaw_reload")
 }
 
 func TestEmbeddedWorkflowAuthoringSkillDocumentsContract(t *testing.T) {
