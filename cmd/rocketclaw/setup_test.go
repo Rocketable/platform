@@ -160,24 +160,20 @@ func TestRunSetupPreservesExistingRootSetupFiles(t *testing.T) {
 func TestRunSetupFilesListShowsKnownFiles(t *testing.T) {
 	output := captureStdout(t, func() error { return runSetup([]string{"files", "list"}) })
 
-	require.Contains(t, output, "AGENTS.md\n")
 	require.Contains(t, output, "main-update-cortex.sh\n")
 	require.NotContains(t, output, "main-split-markdown-files.sh\n")
-	require.Contains(t, output, "agents/main.md\n")
-	require.Contains(t, output, ".rocketclaw/skills/main-create-or-update-agent/SKILL.md\n")
-	require.Contains(t, output, ".rocketclaw/skills/main-create-or-update-council/SKILL.md\n")
 }
 
 func TestRunSetupFilesGetReturnsEmbeddedContent(t *testing.T) {
-	output := captureStdout(t, func() error { return runSetup([]string{"files", "get", "AGENTS.md"}) })
+	output := captureStdout(t, func() error { return runSetup([]string{"files", "get", "main-update-cortex.sh"}) })
 
-	require.Contains(t, output, "# Behavioral Risk Management")
-	require.Contains(t, output, "# Cortex")
+	require.Contains(t, output, "#!/usr/bin/env bash")
+	require.Contains(t, output, "set -euo pipefail")
 }
 
 func TestRunSetupFilesGetReportsUnknownFile(t *testing.T) {
-	err := runSetup([]string{"files", "get", "missing.md"})
-	require.ErrorContains(t, err, "read embedded setup file missing.md")
+	err := runSetup([]string{"files", "get", "missing.sh"})
+	require.ErrorContains(t, err, "read embedded setup file missing.sh")
 	require.ErrorContains(t, err, "unknown embedded setup file")
 }
 

@@ -196,7 +196,7 @@ func TestPrintStdoutReportsWriteError(t *testing.T) {
 
 func TestRunDispatchesSetupAndFCHelp(t *testing.T) {
 	output := captureStdout(t, func() error { return run([]string{"setup", "files", "list"}) })
-	assert.Contains(t, output, "AGENTS.md")
+	assert.Contains(t, output, "main-update-cortex.sh")
 
 	output = captureStdout(t, func() error { return run([]string{"fc"}) })
 	assert.Contains(t, output, "rocketclaw fc list")

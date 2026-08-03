@@ -2,8 +2,6 @@ package skel
 
 import (
 	"errors"
-	"fmt"
-	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -16,13 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestWorkflowExamplesFormatFanoutTupleAsOneArgument(t *testing.T) {
-	data, err := fs.ReadFile(payload, ".rocketclaw/skills/main-create-or-update-workflow/SKILL.md")
-	require.NoError(t, err)
-	assert.Contains(t, string(data), "% (audits,)")
-	assert.NotContains(t, string(data), "% audits")
-}
 
 func TestSyncFSOverwritesEmbeddedFiles(t *testing.T) {
 	tmp := t.TempDir()
@@ -697,7 +688,7 @@ func repoGit(t *testing.T, dir string, args ...string) {
 	require.NoError(t, err, "git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(output)))
 }
 
-func TestSyncWritesEmbeddedSetupFiles(t *testing.T) {
+func TestSyncCreatesEmbeddedRuntimeSupport(t *testing.T) {
 	tmp := t.TempDir()
 	require.NoError(t, SyncInWithOverlays(tmp, targetRoot, nil, testLogger()))
 
@@ -706,12 +697,7 @@ func TestSyncWritesEmbeddedSetupFiles(t *testing.T) {
 	assert.True(t, info.IsDir())
 
 	for _, name := range []string{
-		"AGENTS.md",
-		filepath.Join("agents", "main.md"),
-		filepath.Join("cron", "HEARTBEAT.example.md"),
 		filepath.Join(targetRoot, ".gitignore"),
-		filepath.Join(targetRoot, "skills", "main-create-or-update-agent", "SKILL.md"),
-		filepath.Join(targetRoot, "skills", "main-create-or-update-council", "SKILL.md"),
 	} {
 		data, err := os.ReadFile(filepath.Join(tmp, name))
 		require.NoError(t, err)
@@ -723,17 +709,14 @@ func TestSyncWritesEmbeddedSetupFiles(t *testing.T) {
 	assert.Equal(t, "auth.json\nauth.json.lock\n", string(data))
 }
 
-func TestListSetupFiles(t *testing.T) {
+func TestListSetupFilesIncludesRuntimeSupport(t *testing.T) {
 	names, err := ListSetupFiles()
 	require.NoError(t, err)
 
 	assert.True(t, slices.IsSorted(names), "ListSetupFiles() = %v; want sorted names", names)
 
 	for _, name := range []string{
-		"AGENTS.md",
 		".rocketclaw/.gitignore",
-		"agents/main.md",
-		"cron/HEARTBEAT.example.md",
 	} {
 		assert.Contains(t, names, name)
 	}
@@ -746,145 +729,14 @@ func TestListSetupFiles(t *testing.T) {
 }
 
 func TestReadSetupFile(t *testing.T) {
-	data, err := ReadSetupFile("AGENTS.md")
+	data, err := ReadSetupFile("main-update-cortex.sh")
 	require.NoError(t, err)
-	assert.NotEmpty(t, data)
+	assert.Contains(t, string(data), "#!/usr/bin/env bash")
 }
 
 func TestReadSetupFileRejectsUnknown(t *testing.T) {
-	_, err := ReadSetupFile("../AGENTS.md")
+	_, err := ReadSetupFile("../main-update-cortex.sh")
 	require.ErrorIs(t, err, errUnknownSetupFile)
-}
-
-func TestEmbeddedCreateOrUpdateSkillsMentionLint(t *testing.T) {
-	mainAgent, err := payload.ReadFile("agents/main.md")
-	require.NoError(t, err)
-	assert.Contains(t, string(mainAgent), "main-create-or-update-council")
-
-	agentSkill, err := payload.ReadFile(".rocketclaw/skills/main-create-or-update-agent/SKILL.md")
-	require.NoError(t, err)
-	assert.Contains(t, string(agentSkill), "rocketclaw lint")
-	assert.Contains(t, string(agentSkill), "Write XOR execute")
-	assert.Contains(t, string(agentSkill), "auto(<agent-name>)")
-	assert.Contains(t, string(agentSkill), "guardian")
-	assert.Contains(t, string(agentSkill), "model` value is required")
-	assert.Contains(t, string(agentSkill), "reasoningEffort: low")
-	assert.Contains(t, string(agentSkill), "90 seconds")
-
-	skillSkill, err := payload.ReadFile(".rocketclaw/skills/main-create-or-update-skill/SKILL.md")
-	require.NoError(t, err)
-	assert.Contains(t, string(skillSkill), "rocketclaw lint")
-	assert.Contains(t, string(skillSkill), "behavior, permission guidance, task delegation, or scripts")
-
-	councilSkill, err := payload.ReadFile(".rocketclaw/skills/main-create-or-update-council/SKILL.md")
-	require.NoError(t, err)
-	assert.Contains(t, string(councilSkill), "top-level `agents/*.md`")
-	assert.Contains(t, string(councilSkill), "Coordinator to members")
-	assert.Contains(t, string(councilSkill), "scope-council-spec-auditor")
-	assert.Contains(t, string(councilSkill), "rocketclaw lint")
-	assert.Contains(t, string(councilSkill), "rocketclaw_reload")
-}
-
-func TestEmbeddedWorkflowAuthoringSkillDocumentsContract(t *testing.T) {
-	skill, err := payload.ReadFile(".rocketclaw/skills/main-create-or-update-workflow/SKILL.md")
-	require.NoError(t, err)
-
-	content := string(skill)
-	for _, phrase := range []string{
-		"workflows/<name>.star",
-		".rocketclaw/workflows/<name>.star",
-		"def main(args)",
-		"worker(name, instructions, model=None, tools=None)",
-		"agent(prompt, worker=None, label=\"\", schema=None)",
-		"parallel(callables)",
-		"pipeline(items, fn)",
-		"phase(name, fn)",
-		"nested fan-out",
-		"disjoint file ownership",
-		"rocketclaw_reload",
-		"exactly once",
-		"$stop",
-	} {
-		assert.Contains(t, content, phrase)
-	}
-
-	assert.NotContains(t, content, "rocketclaw_restart")
-}
-
-func TestEmbeddedWorkflowAuthoringSkillDefinesSharedFileRecipe(t *testing.T) {
-	skill, err := payload.ReadFile(".rocketclaw/skills/main-create-or-update-workflow/SKILL.md")
-	require.NoError(t, err)
-
-	content := string(skill)
-	for _, phrase := range []string{
-		"parallel_batches",
-		"shared_files",
-		"After all parallel workers finish",
-		"exactly one sequential worker",
-		"exclusive ownership",
-		"BLOCKED",
-	} {
-		assert.Contains(t, content, phrase)
-	}
-}
-
-func TestEmbeddedCronExamplesUseQuotedConfiguredChannels(t *testing.T) {
-	examples, err := fs.Glob(payload, "cron/*.example.md")
-	require.NoError(t, err)
-	require.NotEmpty(t, examples)
-
-	for _, example := range examples {
-		data, err := payload.ReadFile(example)
-		require.NoError(t, err)
-		assert.Contains(t, string(data), "channel: \"#ops\"", example)
-	}
-}
-
-func TestEmbeddedConfigurationSkillsRequireConfiguredChannels(t *testing.T) {
-	cronSkill, err := payload.ReadFile(".rocketclaw/skills/main-update-cron-or-heartbeat/SKILL.md")
-	require.NoError(t, err)
-	assert.Contains(t, string(cronSkill), "Every active cron definition must set `channel:`")
-	assert.Contains(t, string(cronSkill), "channel listed in `slack.channels`")
-
-	configSkill, err := payload.ReadFile(".rocketclaw/skills/main-update-rocketclaw-json/SKILL.md")
-	require.NoError(t, err)
-	assert.Contains(t, string(configSkill), "External MCP `session_prompt` calls and active cron definitions each require one of these configured channels")
-}
-
-func TestEmbeddedCurrentDocumentationOmitsDeletedConceptInstructions(t *testing.T) {
-	removed := []string{
-		"`thread_agents`",
-		"`pre_seed`",
-		"`context_messages`",
-		"`seed_compaction_model`",
-		"social-mode",
-		"social mode",
-		"Defaults to main",
-		"summarizes a managed conversation back to main",
-		"inherits source conversation context",
-		"response-rooted",
-	}
-
-	require.NoError(t, fs.WalkDir(payload, ".", func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return fmt.Errorf("walk embedded documentation %s: %w", path, err)
-		}
-
-		if entry.IsDir() || filepath.Ext(path) != ".md" {
-			return nil
-		}
-
-		data, err := payload.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("read embedded documentation %s: %w", path, err)
-		}
-
-		for _, phrase := range removed {
-			assert.NotContains(t, string(data), phrase, path)
-		}
-
-		return nil
-	}))
 }
 
 func TestSyncEffectiveRuntimeAssetsDoesNotMutateRuntimeOrScriptSymlinks(t *testing.T) {
