@@ -46,7 +46,7 @@ const (
 		"$workflow <name> [args] - ⏩ Run a workflow\n" +
 		"$stop - 🛑 Stop the active turn\n" +
 		"$cron <job> - 🔂 Run a cron job\n" +
-		"$agent [name] - 🎛 Switch or select an agent"
+		"$agent <name> [message] - 🎛 Root: select an agent for a ready thread or send its first prompt; managed thread: switch or select an agent"
 )
 
 var errSlackDownloadLimitExceeded = errors.New("slack file download exceeded size limit")
@@ -1638,7 +1638,13 @@ func slackThreadStackKey(replyTarget *events.SlackReplyTarget) string {
 	return "thread\x00" + channelID + "\x00" + threadTS
 }
 
-func (c *Connector) beginSlackStack(key string) { c.mu.Lock(); c.stacks[key] = nil; c.mu.Unlock() }
+func (c *Connector) beginSlackStack(key string) {
+	c.mu.Lock()
+	if _, ok := c.stacks[key]; !ok {
+		c.stacks[key] = nil
+	}
+	c.mu.Unlock()
+}
 
 func (c *Connector) bufferSlackStack(ctx context.Context, key, text string, content *events.InboundContent, replyTarget *events.SlackReplyTarget, principal, recipientTeamID, recipientUserID string, allowedAgents []string) bool {
 	c.mu.Lock()
@@ -2373,6 +2379,19 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 	if command, args, ok := parseCanonicalSlackCommand(text); ok {
 		switch command {
+		case "agent":
+			if args == "" {
+				c.handleRootDollarCommandHelp(ctx, ev.Channel, threadTS, agent)
+				return
+			}
+
+			selectedAgent, prompt, done := c.handleRootAgentCommand(ctx, ev, forward, channel, threadTS, args)
+			if done {
+				return
+			}
+
+			agent = selectedAgent
+			text = prompt
 		case "cron":
 			c.handleOnDemandCronRequest(ctx, args, replyTarget)
 			return
@@ -2387,24 +2406,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 			return
 		default:
-			help, err := c.postSlackDollarCommandHelp(ctx, ev.Channel, threadTS)
-			if err != nil {
-				c.log.Warn("post Slack dollar command help", "error", err, "channel", ev.Channel, "thread_ts", threadTS)
-				return
-			}
-
-			created, err := c.threadRouter.RegisterThread(events.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS}, agent)
-			if err != nil {
-				c.deleteSlackMessage(ctx, help, "delete Slack command help after thread registration failure")
-				c.log.Error("register Slack command help thread", "error", err, "channel", ev.Channel, "thread_ts", threadTS, "agent", agent)
-
-				return
-			}
-
-			if !created {
-				c.deleteSlackMessage(ctx, help, "delete duplicate Slack command help")
-			}
-
+			c.handleRootDollarCommandHelp(ctx, ev.Channel, threadTS, agent)
 			return
 		}
 	}
@@ -2469,6 +2471,63 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 	c.addRobotReaction(ctx, replyTarget)
 	c.log.Info("accepted Slack social mention", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent, "text_len", len(text), "attachment_count", len(content.Attachments))
+}
+
+func (c *Connector) handleRootAgentCommand(ctx context.Context, ev *slackevents.AppMentionEvent, forward slackNativeForward, socialChannel, threadTS, args string) (agent, prompt string, done bool) {
+	agent, prompt = splitSlackCommandArgs(args)
+
+	if !c.validateSlackAgent(ctx, ev.Channel, threadTS, ev.User, socialChannel, agent) {
+		return "", "", true
+	}
+
+	if prompt == "" && len(ev.Files) == 0 && len(forward.previews) == 0 {
+		if _, err := c.threadRouter.RegisterThread(events.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS}, agent); err != nil {
+			c.log.Error("register Slack named agent thread", "error", err, "channel", ev.Channel, "thread_ts", threadTS, "agent", agent)
+		}
+
+		return "", "", true
+	}
+
+	return agent, prompt, false
+}
+
+func splitSlackCommandArgs(args string) (name, remainder string) {
+	name = args
+	if index := strings.IndexFunc(args, unicode.IsSpace); index >= 0 {
+		name, remainder = args[:index], strings.TrimSpace(args[index:])
+	}
+
+	return name, remainder
+}
+
+func (c *Connector) validateSlackAgent(ctx context.Context, channelID, threadTS, userID, socialChannel, agent string) bool {
+	if slices.Contains(c.socialModeAgents(socialChannel), agent) {
+		return true
+	}
+
+	c.postSlackEphemeral(ctx, channelID, threadTS, userID, "Agent `"+agent+"` is not configured for this channel.")
+
+	return false
+}
+
+func (c *Connector) handleRootDollarCommandHelp(ctx context.Context, channelID, threadTS, agent string) {
+	help, err := c.postSlackDollarCommandHelp(ctx, channelID, threadTS)
+	if err != nil {
+		c.log.Warn("post Slack dollar command help", "error", err, "channel", channelID, "thread_ts", threadTS)
+		return
+	}
+
+	created, err := c.threadRouter.RegisterThread(events.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS}, agent)
+	if err != nil {
+		c.deleteSlackMessage(ctx, help, "delete Slack command help after thread registration failure")
+		c.log.Error("register Slack command help thread", "error", err, "channel", channelID, "thread_ts", threadTS, "agent", agent)
+
+		return
+	}
+
+	if !created {
+		c.deleteSlackMessage(ctx, help, "delete duplicate Slack command help")
+	}
 }
 
 func (c *Connector) socialModeChannel(ctx context.Context, channelID string) (channelName, agent string, ok bool) {
@@ -2549,8 +2608,7 @@ func (c *Connector) handleSlackSocialAgentSwitch(ctx context.Context, channelID,
 		return
 	}
 
-	if !slices.Contains(agents, agent) {
-		c.postSlackEphemeral(ctx, channelID, threadTS, userID, "Agent `"+agent+"` is not configured for this channel.")
+	if !c.validateSlackAgent(ctx, channelID, threadTS, userID, socialChannel, agent) {
 		return
 	}
 
@@ -2611,8 +2669,7 @@ func (c *Connector) handleSlackAgentSwitchSelection(ctx context.Context, userID 
 	}
 
 	agent := strings.TrimSpace(action.SelectedOption.Value)
-	if !slices.Contains(c.socialModeAgents(metadata.SocialChannel), agent) {
-		c.postSlackEphemeral(ctx, metadata.ChannelID, metadata.ThreadTS, userID, "Agent `"+agent+"` is not configured for this channel.")
+	if !c.validateSlackAgent(ctx, metadata.ChannelID, metadata.ThreadTS, userID, metadata.SocialChannel, agent) {
 		return
 	}
 
@@ -2640,7 +2697,7 @@ func slackDollarCommandHelpTable() *slack.TableBlock {
 		AddRow(slack.NewTableRawTextCell("$workflow <name> [args]"), slack.NewTableRawTextCell("⏩"), slack.NewTableRawTextCell("Run a workflow")).
 		AddRow(slack.NewTableRawTextCell("$stop"), slack.NewTableRawTextCell("🛑"), slack.NewTableRawTextCell("Stop the active turn")).
 		AddRow(slack.NewTableRawTextCell("$cron <job>"), slack.NewTableRawTextCell("🔂"), slack.NewTableRawTextCell("Run a cron job")).
-		AddRow(slack.NewTableRawTextCell("$agent [name]"), slack.NewTableRawTextCell("🎛"), slack.NewTableRawTextCell("Switch or select an agent"))
+		AddRow(slack.NewTableRawTextCell("$agent <name> [message]"), slack.NewTableRawTextCell("🎛"), slack.NewTableRawTextCell("Root: select an agent for a ready thread or send its first prompt; managed thread: switch or select an agent"))
 }
 
 func (c *Connector) postSlackDollarCommandHelp(ctx context.Context, channelID, threadTS string) (slackReplyState, error) {
@@ -2706,10 +2763,7 @@ func (c *Connector) handleWorkflowRequest(ctx context.Context, key, agent, args,
 		return
 	}
 
-	name, workflowArgs := args, ""
-	if index := strings.IndexFunc(args, unicode.IsSpace); index >= 0 {
-		name, workflowArgs = args[:index], strings.TrimSpace(args[index:])
-	}
+	name, workflowArgs := splitSlackCommandArgs(args)
 
 	c.createReplyPlaceholdersOrWarn(ctx, replyTarget, "Workflow: "+name, replyTarget.RecipientTeamID, replyTarget.RecipientUserID, "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS)
 	c.addRobotReaction(ctx, replyTarget)
