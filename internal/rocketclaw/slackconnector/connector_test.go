@@ -5887,7 +5887,7 @@ func assertSlackCommandHelpTable(t *testing.T, values url.Values) {
 		{{Type: "raw_text", Text: "$workflow <name> [args]"}, {Type: "raw_text", Text: "⏩"}, {Type: "raw_text", Text: "Run a workflow"}},
 		{{Type: "raw_text", Text: "$stop"}, {Type: "raw_text", Text: "🛑"}, {Type: "raw_text", Text: "Stop the active turn"}},
 		{{Type: "raw_text", Text: "$cron <job>"}, {Type: "raw_text", Text: "🔂"}, {Type: "raw_text", Text: "Run a cron job"}},
-		{{Type: "raw_text", Text: "$agent <name> [message]"}, {Type: "raw_text", Text: "🎛"}, {Type: "raw_text", Text: "Root: select an agent for a ready thread or send its first prompt; managed thread: switch or select an agent"}},
+		{{Type: "raw_text", Text: "$agent [name]"}, {Type: "raw_text", Text: "🎛"}, {Type: "raw_text", Text: "Select or switch an agent; bare opens the selector"}},
 	}, blocks[0].Rows)
 }
 
@@ -7469,7 +7469,7 @@ func TestHandleAppMentionEventShowsDollarCommandHelp(t *testing.T) {
 	connector.botUserID = "U999"
 	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social", "planner"}, AllowedUserIDs: []string{"U123"}}}
 
-	for i, text := range []string{"<@U999> $", "<@U999> $wat", "<@U999> $agent", "<@U999> $stop", "<@U999> $stop later"} {
+	for i, text := range []string{"<@U999> $", "<@U999> $wat", "<@U999> $stop", "<@U999> $stop later"} {
 		event := newSlackAppMentionEvent()
 		event.Text = text
 		connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
@@ -7485,6 +7485,73 @@ func TestHandleAppMentionEventShowsDollarCommandHelp(t *testing.T) {
 	assert.Empty(t, router.startedSnapshot())
 	assert.Empty(t, router.goalStarts)
 	assert.Empty(t, runner.targetsSnapshot())
+}
+
+func TestHandleAppMentionEventShowsRootAgentSelector(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	var (
+		posted    []url.Values
+		ephemeral []url.Values
+	)
+
+	server := newSlackAgentSwitchTestServer(t, &posted, &ephemeral)
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+	connector.botUserID = "U999"
+	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social", "planner", "reviewer"}, AllowedUserIDs: []string{"U123"}}}
+
+	event := newSlackAppMentionEvent()
+	event.Text = "<@U999> $agent"
+	connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
+
+	assert.Equal(t, []threadRegistration{{channelID: "C123", threadTS: event.TimeStamp, agent: "social"}}, router.threadRegistrations)
+	assert.Empty(t, router.startedSnapshot())
+	assert.Empty(t, router.repliesSnapshot())
+	assert.Empty(t, ephemeral)
+
+	require.Len(t, posted, 1)
+	assert.Equal(t, "Select the agent for this thread.", posted[0].Get("text"))
+	assert.Equal(t, event.TimeStamp, posted[0].Get("thread_ts"))
+	assert.Contains(t, posted[0].Get("blocks"), slackAgentSwitchSelectActionID)
+	assert.Contains(t, posted[0].Get("blocks"), "social")
+	assert.Contains(t, posted[0].Get("blocks"), "planner")
+	assert.Contains(t, posted[0].Get("blocks"), "reviewer")
+
+	var blocks []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(posted[0].Get("blocks")), &blocks))
+	require.Len(t, blocks, 2)
+	blockID, ok := blocks[1]["block_id"].(string)
+	require.True(t, ok)
+
+	var metadata slackAgentSwitchMetadata
+	require.NoError(t, json.Unmarshal([]byte(blockID), &metadata))
+	assert.Equal(t, slackAgentSwitchMetadata{ChannelID: "C123", ThreadTS: event.TimeStamp, UserID: "U123", SocialChannel: "#social"}, metadata)
+}
+
+func TestHandleAppMentionEventSkipsRootAgentSelectorWhenRegistrationFails(t *testing.T) {
+	bus := events.New()
+	defer bus.Close()
+
+	var posted, ephemeral []url.Values
+
+	server := newSlackAgentSwitchTestServer(t, &posted, &ephemeral)
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.errStart = errors.New("register failed")
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+	connector.botUserID = "U999"
+	event := newSlackAppMentionEvent()
+	event.Text = "<@U999> $agent"
+	connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
+
+	assert.Equal(t, []threadRegistration{{channelID: "C123", threadTS: event.TimeStamp, agent: "social"}}, router.threadRegistrations)
+	assert.Empty(t, posted)
+	assert.Empty(t, ephemeral)
 }
 
 func TestHandleAppMentionEventRegistersNamedAgentWithoutStartingTurn(t *testing.T) {

@@ -29,11 +29,11 @@ Slack emoji or colon alias -> canonical dollar text -> command parser -> context
 
 Dollar commands never translate back into emoji syntax. Goal grammar receives the canonical goal arguments, not an emoji-prefixed string. Emoji and dollar forms produce identical stored objective text, queue behavior, placeholders, routing, and feedback.
 
-Managed threads allow all four commands. Root app mentions allow goal and cron plus `$agent <name>` selection. A named root agent without a message registers a ready thread; a named root agent with a message starts the selected agent with the remainder as its first user-authored prompt. Bare root `$agent`, stop, and other unavailable commands use the existing help behavior. Dollar commands are consumed before placeholders, buffering, or ordinary prompt submission, so command syntax is never sent to RocketCode.
+Managed threads allow all four commands. Root app mentions allow goal and cron plus `$agent` selection. Bare root `$agent` registers a ready thread with the channel's first configured agent and opens the existing selector; selecting an option switches the persisted agent. A named root agent without a message registers a ready thread; a named root agent with a message starts the selected agent with the remainder as its first user-authored prompt. Stop and other unavailable root commands use the existing help behavior. Dollar commands are consumed before placeholders, buffering, or ordinary prompt submission, so command syntax is never sent to RocketCode.
 
 ## Help And Errors
 
-Bare `$`, bare root `$agent`, unknown command names, commands unavailable in the current Slack context, and `$stop` with arguments post the Block Kit help table permanently and perform no agent turn. In a root app mention, the mention remains the root, the help table is the first thread reply, and RocketClaw registers the thread with the channel's first configured agent without adding either message to agentic context. The next human reply is the first agentic turn.
+Bare `$`, unknown command names, commands unavailable in the current Slack context, and `$stop` with arguments post the Block Kit help table permanently and perform no agent turn. Bare root `$agent` instead keeps the mention as the root, registers the thread with the channel's first configured agent, and posts the existing agent selector as the first thread reply. Selecting an agent switches the persisted thread agent; the next human reply is the first agentic turn.
 
 | Command | Emoji Alias | Action |
 | --- | --- | --- |

@@ -46,7 +46,7 @@ const (
 		"$workflow <name> [args] - ⏩ Run a workflow\n" +
 		"$stop - 🛑 Stop the active turn\n" +
 		"$cron <job> - 🔂 Run a cron job\n" +
-		"$agent <name> [message] - 🎛 Root: select an agent for a ready thread or send its first prompt; managed thread: switch or select an agent"
+		"$agent [name] - 🎛 Select or switch an agent; bare opens the selector"
 )
 
 var errSlackDownloadLimitExceeded = errors.New("slack file download exceeded size limit")
@@ -2468,12 +2468,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 	if command, args, ok := parseCanonicalSlackCommand(text); ok {
 		switch command {
 		case "agent":
-			if args == "" {
-				c.handleRootDollarCommandHelp(ctx, ev.Channel, threadTS, agent)
-				return
-			}
-
-			selectedAgent, prompt, done := c.handleRootAgentCommand(ctx, ev, forward, channel, threadTS, args)
+			selectedAgent, prompt, done := c.handleRootAgentCommand(ctx, ev, forward, channel, agent, threadTS, args)
 			if done {
 				return
 			}
@@ -2561,7 +2556,18 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 	c.log.Info("accepted Slack social mention", "user", ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent, "text_len", len(text), "attachment_count", len(content.Attachments))
 }
 
-func (c *Connector) handleRootAgentCommand(ctx context.Context, ev *slackevents.AppMentionEvent, forward slackNativeForward, socialChannel, threadTS, args string) (agent, prompt string, done bool) {
+func (c *Connector) handleRootAgentCommand(ctx context.Context, ev *slackevents.AppMentionEvent, forward slackNativeForward, socialChannel, defaultAgent, threadTS, args string) (agent, prompt string, done bool) {
+	if args == "" {
+		if _, err := c.threadRouter.RegisterThread(events.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS}, defaultAgent); err != nil {
+			c.log.Error("register Slack root agent selector thread", "error", err, "channel", ev.Channel, "thread_ts", threadTS, "agent", defaultAgent)
+			return "", "", true
+		}
+
+		c.postSlackAgentSwitchSelector(ctx, ev.Channel, threadTS, ev.User, socialChannel, c.socialModeAgents(socialChannel))
+
+		return "", "", true
+	}
+
 	agent, prompt = splitSlackCommandArgs(args)
 
 	if !c.validateSlackAgent(ctx, ev.Channel, threadTS, ev.User, socialChannel, agent) {
@@ -2785,7 +2791,7 @@ func slackDollarCommandHelpTable() *slack.TableBlock {
 		AddRow(slack.NewTableRawTextCell("$workflow <name> [args]"), slack.NewTableRawTextCell("⏩"), slack.NewTableRawTextCell("Run a workflow")).
 		AddRow(slack.NewTableRawTextCell("$stop"), slack.NewTableRawTextCell("🛑"), slack.NewTableRawTextCell("Stop the active turn")).
 		AddRow(slack.NewTableRawTextCell("$cron <job>"), slack.NewTableRawTextCell("🔂"), slack.NewTableRawTextCell("Run a cron job")).
-		AddRow(slack.NewTableRawTextCell("$agent <name> [message]"), slack.NewTableRawTextCell("🎛"), slack.NewTableRawTextCell("Root: select an agent for a ready thread or send its first prompt; managed thread: switch or select an agent"))
+		AddRow(slack.NewTableRawTextCell("$agent [name]"), slack.NewTableRawTextCell("🎛"), slack.NewTableRawTextCell("Select or switch an agent; bare opens the selector"))
 }
 
 func (c *Connector) postSlackDollarCommandHelp(ctx context.Context, channelID, threadTS string) (slackReplyState, error) {
