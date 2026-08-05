@@ -85,6 +85,11 @@ type OutboundAttachment struct {
 	Data           []byte
 }
 
+// CronjobMessage identifies a human-visible cronjob result.
+type CronjobMessage struct {
+	RelativePath, Agent, RanAt string
+}
+
 // ExternalMCPRelay carries one MCP request to its Slack surface.
 type ExternalMCPRelay struct {
 	ConversationID, ExternalConversationID, Agent, Text string
@@ -167,6 +172,7 @@ type OutboundMessage struct {
 	ConversationID, TurnID       string
 	ExternalConversationID       string
 	Agent                        string
+	Cronjob                      *CronjobMessage
 	Sequence                     int
 	PostProgressText, Complete   bool
 	SlackReply                   *SlackReplyTarget

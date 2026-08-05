@@ -237,17 +237,10 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 
 	setMCPAttachmentOnlyResponseText(msg)
 
-	slots, ok := c.replyState(msg.TurnID)
-	if !ok && strings.TrimSpace(msg.TurnID) != "" {
-		slots, ok = c.claimPendingState(msg.SlackReply)
-		if ok {
-			if msg.ExternalConversationID != "" {
-				slots.ConversationID = msg.ConversationID
-			}
+	slots, ok := c.responseSlots(msg)
 
-			c.setReplyState(msg.TurnID, &slots)
-			c.log.Info("claimed Slack placeholder", "turn_id", msg.TurnID, "channel", slots.ChannelID, "thinking_ts", slots.ThinkingTS, "answer_ts", slots.AnswerTS, "reply_channel", msg.SlackReply.ChannelID, "reply_message_ts", msg.SlackReply.MessageTS, "reply_thread_ts", msg.SlackReply.ThreadTS)
-		}
+	if msg.Complete && msg.Cronjob != nil {
+		return c.sendCronjobResponse(ctx, msg, &slots, ok)
 	}
 
 	thinkingText := strings.TrimSpace(msg.ProgressText)
@@ -449,13 +442,12 @@ func (c *Connector) CleanupExternalMCPRelay(ctx context.Context, replyTarget *ev
 	}
 }
 
-// SendCronjobChannelThread posts one scheduled cronjob result in a new Slack channel thread.
-func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, relativePath, agent, ranAt, text string, attachments []events.OutboundAttachment) error {
-	header := slackTruncatedText("🔁 "+path.Base(relativePath)+" | "+agent+" | "+ranAt, 150, "...")
+func cronjobMessageLayout(metadata events.CronjobMessage, text string) (fallbackText string, blocks []slack.Block, overflow []string) {
+	header := slackTruncatedText("🔁 "+path.Base(metadata.RelativePath)+" | "+metadata.Agent+" | "+metadata.RanAt, 150, "...")
 	bodyChunks := splitSlackText(text, slackBlockTextLimit, slackBlockTextLimit)
 	rootBodyCount := min(len(bodyChunks), 48)
 
-	blocks := make([]slack.Block, 0, rootBodyCount+2)
+	blocks = make([]slack.Block, 0, rootBodyCount+2)
 
 	blocks = append(blocks,
 		slack.NewHeaderBlock(slack.NewTextBlockObject(slack.PlainTextType, header, false, false)),
@@ -465,7 +457,15 @@ func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, rel
 		blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, chunk, false, false), nil, nil))
 	}
 
-	fallbackText := "Cronjob `" + relativePath + "` ran at `" + ranAt + "` with agent `" + agent + "`."
+	fallbackText = "Cronjob `" + metadata.RelativePath + "` ran at `" + metadata.RanAt + "` with agent `" + metadata.Agent + "`."
+	overflow = bodyChunks[rootBodyCount:]
+
+	return fallbackText, blocks, overflow
+}
+
+// SendCronjobChannelThread posts one scheduled cronjob result in a new Slack channel thread.
+func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, relativePath, agent, ranAt, text string, attachments []events.OutboundAttachment) error {
+	fallbackText, blocks, overflow := cronjobMessageLayout(events.CronjobMessage{RelativePath: relativePath, Agent: agent, RanAt: ranAt}, text)
 
 	channelID, err := c.resolveConfiguredChannelID(ctx, channelID)
 	if err != nil {
@@ -491,8 +491,8 @@ func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, rel
 		c.deleteSlackMessage(cleanupCtx, slackReplyState{ChannelID: root.ChannelID, MessageTS: root.MessageID}, "delete failed Slack cronjob thread root")
 	}()
 
-	if len(bodyChunks) > rootBodyCount {
-		if _, err := c.postResponseChunks(ctx, root.ChannelID, root.ThreadID, bodyChunks[rootBodyCount:], nil); err != nil {
+	if len(overflow) > 0 {
+		if _, err := c.postResponseChunks(ctx, root.ChannelID, root.ThreadID, overflow, nil); err != nil {
 			return fmt.Errorf("send Slack cronjob thread reply: %w", err)
 		}
 	}
@@ -699,6 +699,90 @@ func (c *Connector) SendExternalMCPRelay(ctx context.Context, channelID, threadT
 	return replyTarget, nil
 }
 
+func (c *Connector) responseSlots(msg *events.OutboundMessage) (slackReplySlots, bool) {
+	slots, ok := c.replyState(msg.TurnID)
+	if !ok && strings.TrimSpace(msg.TurnID) != "" {
+		slots, ok = c.claimPendingState(msg.SlackReply)
+		if ok {
+			if msg.ExternalConversationID != "" {
+				slots.ConversationID = msg.ConversationID
+			}
+
+			c.setReplyState(msg.TurnID, &slots)
+			c.log.Info("claimed Slack placeholder", "turn_id", msg.TurnID, "channel", slots.ChannelID, "thinking_ts", slots.ThinkingTS, "answer_ts", slots.AnswerTS, "reply_channel", msg.SlackReply.ChannelID, "reply_message_ts", msg.SlackReply.MessageTS, "reply_thread_ts", msg.SlackReply.ThreadTS)
+		}
+	}
+
+	return slots, ok
+}
+
+func (c *Connector) sendCronjobResponse(ctx context.Context, msg *events.OutboundMessage, slots *slackReplySlots, hasSlots bool) error {
+	fallbackText, blocks, overflow := cronjobMessageLayout(*msg.Cronjob, msg.Text)
+	channelID, threadTS := slackReplyDestination(msg.SlackReply)
+
+	rootState := slackReplyState{}
+
+	delivered := false
+	defer func() {
+		if delivered || rootState.MessageTS == "" {
+			return
+		}
+
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		c.deleteSlackMessage(cleanupCtx, rootState, "delete failed Slack cronjob response")
+	}()
+
+	if hasSlots && slots.AnswerTS != "" {
+		if _, _, _, err := c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.AnswerTS, slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...)); err != nil {
+			return fmt.Errorf("update Slack cronjob response: %w", err)
+		}
+
+		channelID = slots.ChannelID
+		if threadTS == "" {
+			threadTS = slots.AnswerTS
+		}
+	} else {
+		options := []slack.MsgOption{slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...)}
+		if threadTS != "" {
+			options = append(options, slack.MsgOptionTS(threadTS))
+		}
+
+		postedChannelID, postedTS, err := c.api.PostMessageContext(ctx, channelID, options...)
+		if err != nil {
+			return fmt.Errorf("send Slack cronjob response: %w", err)
+		}
+
+		channelID = postedChannelID
+		rootState = slackReplyState{ChannelID: postedChannelID, MessageTS: postedTS}
+
+		if threadTS == "" {
+			threadTS = postedTS
+		}
+	}
+
+	if len(overflow) > 0 {
+		if _, err := c.postResponseChunks(ctx, channelID, threadTS, overflow, nil); err != nil {
+			return fmt.Errorf("send Slack cronjob response continuation: %w", err)
+		}
+	}
+
+	if len(msg.Attachments) > 0 {
+		if err := c.uploadResponseAttachments(ctx, channelID, threadTS, msg.Attachments); err != nil {
+			c.log.Warn("upload Slack cronjob response attachments", "error", err)
+		}
+	}
+
+	if err := c.finishThinkingResponse(ctx, msg, slots, hasSlots, false); err != nil {
+		return err
+	}
+
+	delivered = true
+
+	return nil
+}
+
 func (c *Connector) postThreadRoot(ctx context.Context, channelID, text, errPrefix string) (events.TextConversationTarget, error) {
 	channelID, err := c.resolveConfiguredChannelID(ctx, channelID)
 	if err != nil {
@@ -731,6 +815,10 @@ func (c *Connector) finishCompleteResponse(ctx context.Context, msg *events.Outb
 		}
 	}
 
+	return c.finishThinkingResponse(ctx, msg, slots, hasSlots, strings.TrimSpace(msg.Text) == "")
+}
+
+func (c *Connector) finishThinkingResponse(ctx context.Context, msg *events.OutboundMessage, slots *slackReplySlots, hasSlots, deleteAnswer bool) error {
 	if hasSlots {
 		c.mu.Lock()
 		pending := c.thinking[msg.TurnID]
@@ -738,7 +826,7 @@ func (c *Connector) finishCompleteResponse(ctx context.Context, msg *events.Outb
 		c.mu.Unlock()
 
 		if strings.TrimSpace(pending.Text) == "" && len(pending.workflowPhases) == 0 && msg.WorkflowTerminal == "" {
-			c.finishResponse(ctx, msg, slots, hasSlots, strings.TrimSpace(msg.Text) == "")
+			c.finishResponse(ctx, msg, slots, hasSlots, deleteAnswer)
 			return nil
 		}
 
@@ -866,7 +954,7 @@ func (c *Connector) finishCompleteResponse(ctx context.Context, msg *events.Outb
 		}
 	}
 
-	c.finishResponse(ctx, msg, slots, hasSlots, strings.TrimSpace(msg.Text) == "")
+	c.finishResponse(ctx, msg, slots, hasSlots, deleteAnswer)
 
 	return nil
 }
@@ -3100,14 +3188,19 @@ func (c *Connector) handleOnDemandCronRequest(ctx context.Context, target string
 }
 
 func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCronjob, replyTarget *events.SlackReplyTarget, turnID string) {
-	publish := func(ctx context.Context, text, thinkingText string, complete, postText bool, attachments []events.OutboundAttachment) error {
+	ranAt := time.Now().Format(time.RFC3339)
+	publish := func(ctx context.Context, text, thinkingText string, complete, postText bool, layout *events.CronjobMessage, attachments []events.OutboundAttachment) error {
 		outbound := events.NewOutboundMessage(events.SourceSystem, harnessbridge.SlackThreadConversationID(replyTarget.ChannelID, replyTarget.ThreadTS), text, events.OutputTargetSlack)
 		outbound.ProgressText = thinkingText
 		outbound.PostProgressText = postText
 		outbound.TurnID = turnID
 		outbound.Complete = complete
 		outbound.SlackReply = cloneSlackReplyTarget(replyTarget)
+
 		outbound.Attachments = events.CloneOutboundAttachments(attachments)
+		if layout != nil {
+			outbound.Cronjob = layout
+		}
 
 		if err := c.bus.PublishOutbound(ctx, outbound); err != nil {
 			return fmt.Errorf("publish Slack on-demand cron output: %w", err)
@@ -3136,7 +3229,7 @@ func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCr
 
 			thinking += text
 
-			return publish(ctx, "", thinking, false, false, nil)
+			return publish(ctx, "", thinking, false, false, nil, nil)
 		},
 		Message: func(ctx context.Context, text string) error {
 			text = strings.TrimSpace(text)
@@ -3144,13 +3237,13 @@ func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCr
 				return nil
 			}
 
-			return publish(ctx, text, "", false, true, nil)
+			return publish(ctx, text, "", false, true, nil, nil)
 		},
 	}
 
 	c.oneOffCronjobs.RunOneOffCronjob(ctx, loaded, progress, func(ctx context.Context, result cronjob.RunResult, err error) {
 		if err != nil {
-			if errPublish := publish(ctx, "I couldn't run that on-demand cron right now.", "", true, false, nil); errPublish != nil {
+			if errPublish := publish(ctx, "I couldn't run that on-demand cron right now.", "", true, false, nil, nil); errPublish != nil {
 				c.log.Warn("publish Slack on-demand cron result", "error", errPublish)
 			}
 
@@ -3162,7 +3255,8 @@ func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCr
 			payload = "Cronjob completed and decided to emit no human-visible output."
 		}
 
-		if errPublish := publish(ctx, payload, "", true, false, result.Attachments); errPublish != nil {
+		layout := &events.CronjobMessage{RelativePath: loaded.RelativePath, Agent: loaded.Agent, RanAt: ranAt}
+		if errPublish := publish(ctx, payload, "", true, false, layout, result.Attachments); errPublish != nil {
 			c.log.Warn("publish Slack on-demand cron result", "error", errPublish)
 			return
 		}

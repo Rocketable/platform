@@ -1851,6 +1851,38 @@ func TestSendCronjobChannelThreadPostsBodyInRoot(t *testing.T) {
 	assert.Equal(t, cronThreadRegistration{channelID: "#triage", threadTS: "111.222", agent: "planner"}, registrations[0])
 }
 
+func TestSendResponseCronjobUsesRecurringLayout(t *testing.T) {
+	var posted []url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/chat.postMessage", r.URL.Path)
+
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		posted = append(posted, cloneValues(r.PostForm))
+
+		writeJSON(t, w, map[string]any{"ok": true, "channel": "#triage", "ts": "111.222"})
+	}))
+	defer server.Close()
+
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, newThreadRouterStub(), nil)
+	require.NoError(t, connector.SendCronjobChannelThread(context.Background(), "#triage", "cron/daily.md", "planner", "2000-01-02T03:04:05Z", "final payload", nil))
+
+	oneOff := events.NewOutboundMessage(events.SourceSystem, "thread", "final payload", events.OutputTargetSlack)
+	oneOff.Complete = true
+	oneOff.Cronjob = &events.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"}
+	oneOff.SlackReply = &events.SlackReplyTarget{ChannelID: "#triage", ThreadTS: "999.111"}
+	require.NoError(t, connector.SendResponse(context.Background(), oneOff))
+
+	require.Len(t, posted, 2)
+	assert.Equal(t, posted[0].Get("text"), posted[1].Get("text"))
+	assert.Equal(t, posted[0].Get("blocks"), posted[1].Get("blocks"))
+	assert.Empty(t, posted[0].Get("thread_ts"))
+	assert.Equal(t, "999.111", posted[1].Get("thread_ts"))
+}
+
 func TestSendCronjobChannelThreadPostsAttachmentOnlyInRootThread(t *testing.T) {
 	var (
 		posted, uploadURL, completed url.Values
@@ -4602,6 +4634,52 @@ func TestSendResponseDoesNotFailWhenAttachmentUploadFails(t *testing.T) {
 	require.Len(t, posted, 1)
 	assert.Equal(t, "final payload", posted[0].Get("text"))
 	assert.Equal(t, "111.222", posted[0].Get("thread_ts"))
+}
+
+func TestSendResponseCronjobKeepsRenderedTextWhenAttachmentUploadFails(t *testing.T) {
+	var updated, deleted []url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat.update":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			updated = append(updated, cloneValues(r.PostForm))
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": "answer-1", "text": updated[len(updated)-1].Get("text")})
+		case "/files.getUploadURLExternal":
+			writeJSON(t, w, map[string]any{"ok": false, "error": "missing_scope"})
+		case "/chat.delete":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			deleted = append(deleted, cloneValues(r.PostForm))
+
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	connector := newTestConnector(server.URL)
+	connector.replies["turn-1"] = slackReplySlots{ChannelID: "D123", ThinkingTS: "thinking-1", AnswerTS: "answer-1"}
+
+	msg := events.NewOutboundMessage(events.SourceSystem, "test", "final payload", events.OutputTargetSlack)
+	msg.Complete = true
+	msg.TurnID = "turn-1"
+	msg.Cronjob = &events.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"}
+	msg.SlackReply = &events.SlackReplyTarget{ChannelID: "D123", ThreadTS: "111.222"}
+	msg.Attachments = []events.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}
+	require.NoError(t, connector.SendResponse(context.Background(), msg))
+
+	require.Len(t, updated, 1)
+	assert.Equal(t, "Cronjob `cron/daily.md` ran at `2000-01-02T03:04:05Z` with agent `planner`.", updated[0].Get("text"))
+	assert.Contains(t, updated[0].Get("blocks"), "final payload")
+	require.Len(t, deleted, 1)
+	assert.Equal(t, "thinking-1", deleted[0].Get("ts"))
 }
 
 func TestHandleEventsAPIIncludesNativeForwardedPublicThread(t *testing.T) {
@@ -7857,7 +7935,20 @@ func TestHandleMessageEventRunsOnDemandCronInSlackThread(t *testing.T) {
 	require.Len(t, posted, 4)
 	assert.Empty(t, deleted)
 	require.Len(t, updated, 3)
-	assert.Equal(t, "final payload", updated[1].Get("text"))
+	assert.Regexp(t, `^Cronjob \x60cron/daily\.md\x60 ran at \x60.+\x60 with agent \x60cron\x60\.$`, updated[1].Get("text"))
+
+	var blocks []struct {
+		Type string `json:"type"`
+		Text struct {
+			Text string `json:"text"`
+		} `json:"text"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(updated[1].Get("blocks")), &blocks))
+	require.Len(t, blocks, 3)
+	assert.Equal(t, "header", blocks[0].Type)
+	assert.True(t, strings.HasPrefix(blocks[0].Text.Text, "🔁 daily.md | cron | "))
+	assert.Equal(t, "divider", blocks[1].Type)
+	assert.Equal(t, "final payload", blocks[2].Text.Text)
 	assert.Contains(t, updated[2].Get("blocks"), `"status":"complete"`)
 
 	assert.Empty(t, router.startedSnapshot())
