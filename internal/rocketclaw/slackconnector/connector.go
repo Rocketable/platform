@@ -735,8 +735,8 @@ func (c *Connector) sendCronjobResponse(ctx context.Context, msg *events.Outboun
 	}()
 
 	if hasSlots && slots.AnswerTS != "" {
-		if _, _, _, err := c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.AnswerTS, slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...)); err != nil {
-			return fmt.Errorf("update Slack cronjob response: %w", err)
+		if err := c.updateCronjobResponse(ctx, slots, *msg.Cronjob, msg.Text); err != nil {
+			return err
 		}
 
 		channelID = slots.ChannelID
@@ -779,6 +779,15 @@ func (c *Connector) sendCronjobResponse(ctx context.Context, msg *events.Outboun
 	}
 
 	delivered = true
+
+	return nil
+}
+
+func (c *Connector) updateCronjobResponse(ctx context.Context, slots *slackReplySlots, metadata events.CronjobMessage, text string) error {
+	fallbackText, blocks, _ := cronjobMessageLayout(metadata, text)
+	if _, _, _, err := c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.AnswerTS, slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...)); err != nil {
+		return fmt.Errorf("update Slack cronjob response: %w", err)
+	}
 
 	return nil
 }
@@ -3168,16 +3177,11 @@ func parseCanonicalSlackCommand(text string) (command, args string, ok bool) {
 func (c *Connector) handleOnDemandCronRequest(ctx context.Context, target string, replyTarget *events.SlackReplyTarget) {
 	loaded, err := c.oneOffCronjobs.LoadOneOffCronjob(target)
 	if err != nil {
-		if errPost := c.publishOnDemandCronReply(ctx, replyTarget, "I couldn't find that cronjob. Use a top-level cron filename like `daily` or `daily.md`.", true); errPost != nil {
+		if errPost := c.publishOnDemandCronReply(ctx, replyTarget, "I couldn't find that cronjob. Use a top-level cron filename like `daily` or `daily.md`."); errPost != nil {
 			c.log.Warn("publish Slack on-demand cron rejection", "error", errPost, "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS, "thread_ts", replyTarget.ThreadTS)
 		}
 
 		return
-	}
-
-	preview := "One-off cronjob starting.\n\nFile: `" + loaded.RelativePath + "`\nAgent: `" + strings.TrimSpace(loaded.Agent) + "`"
-	if err := c.publishOnDemandCronReply(ctx, replyTarget, preview, false); err != nil {
-		c.log.Warn("publish Slack on-demand cron preview", "error", err, "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS, "thread_ts", replyTarget.ThreadTS, "cron", loaded.RelativePath)
 	}
 
 	c.addRobotReaction(ctx, replyTarget)
@@ -3195,6 +3199,14 @@ func (c *Connector) handleOnDemandCronRequest(ctx context.Context, target string
 
 func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCronjob, replyTarget *events.SlackReplyTarget, turnID string) {
 	ranAt := time.Now().Format(time.RFC3339)
+
+	metadata := events.CronjobMessage{RelativePath: loaded.RelativePath, Agent: loaded.Agent, RanAt: ranAt}
+	if slots, ok := c.replyState(turnID); ok && slots.AnswerTS != "" {
+		if err := c.updateCronjobResponse(ctx, &slots, metadata, "running..."); err != nil {
+			c.log.Warn("update Slack on-demand cron running status", "error", err)
+		}
+	}
+
 	publish := func(ctx context.Context, text, thinkingText string, complete, postText bool, layout *events.CronjobMessage, attachments []events.OutboundAttachment) error {
 		outbound := events.NewOutboundMessage(events.SourceSystem, harnessbridge.SlackThreadConversationID(replyTarget.ChannelID, replyTarget.ThreadTS), text, events.OutputTargetSlack)
 		outbound.ProgressText = thinkingText
@@ -3261,8 +3273,7 @@ func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCr
 			payload = "Cronjob completed and decided to emit no human-visible output."
 		}
 
-		layout := &events.CronjobMessage{RelativePath: loaded.RelativePath, Agent: loaded.Agent, RanAt: ranAt}
-		if errPublish := publish(ctx, payload, "", true, false, layout, result.Attachments); errPublish != nil {
+		if errPublish := publish(ctx, payload, "", true, false, &metadata, result.Attachments); errPublish != nil {
 			c.log.Warn("publish Slack on-demand cron result", "error", errPublish)
 			return
 		}
@@ -3273,15 +3284,14 @@ func (c *Connector) runOnDemandCron(ctx context.Context, loaded cronjob.OneOffCr
 	})
 }
 
-func (c *Connector) publishOnDemandCronReply(ctx context.Context, replyTarget *events.SlackReplyTarget, text string, complete bool) error {
+func (c *Connector) publishOnDemandCronReply(ctx context.Context, replyTarget *events.SlackReplyTarget, text string) error {
 	text = strings.TrimSpace(text)
 	if text == "" || replyTarget == nil {
 		return nil
 	}
 
 	outbound := events.NewOutboundMessage(events.SourceSystem, harnessbridge.SlackThreadConversationID(replyTarget.ChannelID, replyTarget.ThreadTS), text, events.OutputTargetSlack)
-	outbound.Complete = complete
-	outbound.PostProgressText = !complete
+	outbound.Complete = true
 	outbound.SlackReply = cloneSlackReplyTarget(replyTarget)
 
 	if err := c.bus.PublishOutbound(ctx, outbound); err != nil {

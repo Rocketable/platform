@@ -4450,26 +4450,26 @@ func TestRecipientlessThinkingKeepsTaskCard(t *testing.T) {
 	assert.Contains(t, updated.Get("blocks"), `"status":"in_progress"`)
 }
 
-func TestPublishOnDemandCronReplyPublishesPostTextAndReportsBusErrors(t *testing.T) {
+func TestPublishOnDemandCronReplyPublishesAndReportsBusErrors(t *testing.T) {
 	bus := events.New()
 	connector := newTestConnectorWithOptions("http://slack.test", bus, nil, nil, nil)
 	replyTarget := &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "333.444", RecipientTeamID: "T123", RecipientUserID: "U456"}
 
-	require.NoError(t, connector.publishOnDemandCronReply(context.Background(), nil, "ignored", false))
-	require.NoError(t, connector.publishOnDemandCronReply(context.Background(), replyTarget, " ", false))
+	require.NoError(t, connector.publishOnDemandCronReply(context.Background(), nil, "ignored"))
+	require.NoError(t, connector.publishOnDemandCronReply(context.Background(), replyTarget, " "))
 	assert.Nil(t, cloneSlackReplyTarget(nil))
 
-	require.NoError(t, connector.publishOnDemandCronReply(context.Background(), replyTarget, " preview ", false))
+	require.NoError(t, connector.publishOnDemandCronReply(context.Background(), replyTarget, " preview "))
 	outbound := readOneOutbound(t, bus)
 	assert.Equal(t, "preview", outbound.Text)
-	assert.False(t, outbound.Complete)
-	assert.True(t, outbound.PostProgressText)
+	assert.True(t, outbound.Complete)
+	assert.False(t, outbound.PostProgressText)
 	require.NotNil(t, outbound.SlackReply)
 	assert.Equal(t, replyTarget, outbound.SlackReply)
 
 	bus.Close()
 
-	err := connector.publishOnDemandCronReply(context.Background(), replyTarget, "final", true)
+	err := connector.publishOnDemandCronReply(context.Background(), replyTarget, "final")
 	require.ErrorContains(t, err, "publish Slack on-demand cron reply")
 }
 
@@ -7356,6 +7356,8 @@ func TestHandleAppMentionEventRunsOnDemandCronInRootThread(t *testing.T) {
 					writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
 				case "/chat.postMessage":
 					writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
+				case "/chat.update":
+					writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
 				case "/reactions.add":
 					writeJSON(t, w, map[string]any{"ok": true})
 				default:
@@ -7372,10 +7374,9 @@ func TestHandleAppMentionEventRunsOnDemandCronInRootThread(t *testing.T) {
 
 			require.Equal(t, []string{"main-cronjob"}, runner.targetsSnapshot())
 			assert.Empty(t, router.startedSnapshot())
-			preview := readOneOutbound(t, bus)
-			require.NotNil(t, preview.SlackReply)
-			assert.Equal(t, event.TimeStamp, preview.SlackReply.ThreadTS)
 			final := readOneOutbound(t, bus)
+			require.NotNil(t, final.SlackReply)
+			assert.Equal(t, event.TimeStamp, final.SlackReply.ThreadTS)
 			final.MarkDelivered(nil)
 
 			wantRegistration := []cronThreadRegistration{{channelID: "C123", threadTS: event.TimeStamp, agent: "cron"}}
@@ -7809,6 +7810,8 @@ func TestHandleMessageEventRunsHyphenOnDemandCronInManagedThread(t *testing.T) {
 			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
 		case "/chat.postMessage":
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
+		case "/chat.update":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
 		case "/reactions.add":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
@@ -7826,10 +7829,9 @@ func TestHandleMessageEventRunsHyphenOnDemandCronInManagedThread(t *testing.T) {
 	reads := append([]threadAgentReadCall(nil), router.threadAgentReads...)
 	router.mu.Unlock()
 	assert.Equal(t, []threadAgentReadCall{{channelID: "C123", threadTS: event.ThreadTimeStamp}}, reads)
-	preview := readOneOutbound(t, bus)
-	require.NotNil(t, preview.SlackReply)
-	assert.Equal(t, event.ThreadTimeStamp, preview.SlackReply.ThreadTS)
 	final := readOneOutbound(t, bus)
+	require.NotNil(t, final.SlackReply)
+	assert.Equal(t, event.ThreadTimeStamp, final.SlackReply.ThreadTS)
 	final.MarkDelivered(nil)
 
 	wantRegistration := []cronThreadRegistration{{channelID: "C123", threadTS: event.ThreadTimeStamp, agent: "cron"}}
@@ -7947,26 +7949,16 @@ func TestHandleMessageEventRunsOnDemandCronInSlackThread(t *testing.T) {
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Equal(t, 1, reactionCalls)
-	preview := readOneOutbound(t, bus)
-	assert.Contains(t, preview.Text, "File: `cron/daily.md`")
-	assert.Contains(t, preview.Text, "Agent: `cron`")
-	assert.NotContains(t, preview.Text, "daily prompt")
-	assert.False(t, preview.Complete)
-	assert.True(t, preview.PostProgressText)
-	require.NotNil(t, preview.SlackReply)
-	assert.Equal(t, "171234.5678", preview.SlackReply.ThreadTS)
-	require.NoError(t, connector.SendResponse(context.Background(), preview))
-	require.Len(t, posted, 3)
-	assert.Equal(t, preview.Text, posted[2].Get("text"))
-	assert.Equal(t, "171234.5678", posted[2].Get("thread_ts"))
-
 	thinking := readOneOutbound(t, bus)
+	require.Len(t, updated, 1)
+	assert.Regexp(t, `^Cronjob \x60cron/daily\.md\x60 ran at \x60.+\x60 with agent \x60cron\x60\.$`, updated[0].Get("text"))
+	assert.Contains(t, updated[0].Get("blocks"), `"text":"running..."`)
 	assert.Equal(t, "thinking one", thinking.ProgressText)
 	assert.False(t, thinking.Complete)
 	require.NotNil(t, thinking.SlackReply)
 	assert.Equal(t, "171234.5678", thinking.SlackReply.ThreadTS)
 	require.NoError(t, connector.SendResponse(context.Background(), thinking))
-	require.Len(t, posted, 3)
+	require.Len(t, posted, 2)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, "171234.5678", posted[0].Get("thread_ts"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
@@ -7975,11 +7967,11 @@ func TestHandleMessageEventRunsOnDemandCronInSlackThread(t *testing.T) {
 	thinking = readOneOutbound(t, bus)
 	assert.Equal(t, "thinking one\nthinking two", thinking.ProgressText)
 	require.NoError(t, connector.SendResponse(context.Background(), thinking))
-	require.Len(t, posted, 3)
+	require.Len(t, posted, 2)
 	require.NoError(t, connector.flushProgressText(context.Background(), thinking.TurnID))
-	require.Len(t, updated, 1)
-	assert.Contains(t, updated[0].Get("text"), "thinking one")
-	assert.Contains(t, updated[0].Get("text"), "thinking two")
+	require.Len(t, updated, 2)
+	assert.Contains(t, updated[1].Get("text"), "thinking one")
+	assert.Contains(t, updated[1].Get("text"), "thinking two")
 
 	message := readOneOutbound(t, bus)
 	assert.Equal(t, "assistant message", message.Text)
@@ -7988,9 +7980,9 @@ func TestHandleMessageEventRunsOnDemandCronInSlackThread(t *testing.T) {
 	require.NotNil(t, message.SlackReply)
 	assert.Equal(t, "171234.5678", message.SlackReply.ThreadTS)
 	require.NoError(t, connector.SendResponse(context.Background(), message))
-	require.Len(t, posted, 4)
-	assert.Equal(t, "assistant message", posted[3].Get("text"))
-	assert.Equal(t, "171234.5678", posted[3].Get("thread_ts"))
+	require.Len(t, posted, 3)
+	assert.Equal(t, "assistant message", posted[2].Get("text"))
+	assert.Equal(t, "171234.5678", posted[2].Get("thread_ts"))
 
 	final := readOneOutbound(t, bus)
 	assert.Equal(t, "final payload", final.Text)
@@ -7999,10 +7991,10 @@ func TestHandleMessageEventRunsOnDemandCronInSlackThread(t *testing.T) {
 	assert.Equal(t, "171234.5678", final.SlackReply.ThreadTS)
 	require.NoError(t, connector.SendResponse(context.Background(), final))
 	final.MarkDelivered(nil)
-	require.Len(t, posted, 4)
+	require.Len(t, posted, 3)
 	assert.Empty(t, deleted)
-	require.Len(t, updated, 3)
-	assert.Regexp(t, `^Cronjob \x60cron/daily\.md\x60 ran at \x60.+\x60 with agent \x60cron\x60\.$`, updated[1].Get("text"))
+	require.Len(t, updated, 4)
+	assert.Regexp(t, `^Cronjob \x60cron/daily\.md\x60 ran at \x60.+\x60 with agent \x60cron\x60\.$`, updated[2].Get("text"))
 
 	var blocks []struct {
 		Type string `json:"type"`
@@ -8010,13 +8002,13 @@ func TestHandleMessageEventRunsOnDemandCronInSlackThread(t *testing.T) {
 			Text string `json:"text"`
 		} `json:"text"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(updated[1].Get("blocks")), &blocks))
+	require.NoError(t, json.Unmarshal([]byte(updated[2].Get("blocks")), &blocks))
 	require.Len(t, blocks, 3)
 	assert.Equal(t, "header", blocks[0].Type)
 	assert.True(t, strings.HasPrefix(blocks[0].Text.Text, "🔁 daily.md | cron | "))
 	assert.Equal(t, "divider", blocks[1].Type)
 	assert.Equal(t, "final payload", blocks[2].Text.Text)
-	assert.Contains(t, updated[2].Get("blocks"), `"status":"complete"`)
+	assert.Contains(t, updated[3].Get("blocks"), `"status":"complete"`)
 
 	assert.Empty(t, router.startedSnapshot())
 	assert.Equal(t, []cronjob.OneOffCronjob{{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", TextChannel: "#ops"}}, runner.runsSnapshot())
@@ -8053,9 +8045,6 @@ func TestHandleMessageEventRunsOnDemandCronWhenSlackFeedbackFails(t *testing.T) 
 	event.Channel = "C123"
 	connector.handleMessageEvent(context.Background(), event, slackNativeForward{})
 
-	preview := readOneOutbound(t, bus)
-	assert.Contains(t, preview.Text, "File: `cron/daily.md`")
-	assert.False(t, preview.Complete)
 	final := readOneOutbound(t, bus)
 	assert.Equal(t, "done", final.Text)
 	assert.True(t, final.Complete)
@@ -8217,22 +8206,16 @@ func TestHandleMessageEventReportsOnDemandCronRunFailure(t *testing.T) {
 	require.Len(t, posted, 2)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
-	preview := readOneOutbound(t, bus)
-	assert.Contains(t, preview.Text, "File: `cron/daily.md`")
-	require.NoError(t, connector.SendResponse(context.Background(), preview))
-	require.Len(t, posted, 3)
-	assert.Equal(t, preview.Text, posted[2].Get("text"))
-	assert.Equal(t, "171234.5678", posted[2].Get("thread_ts"))
-
 	failure := readOneOutbound(t, bus)
 	assert.Equal(t, "I couldn't run that on-demand cron right now.", failure.Text)
 	require.NotNil(t, failure.SlackReply)
 	assert.Equal(t, "171234.5678", failure.SlackReply.ThreadTS)
 	require.NoError(t, connector.SendResponse(context.Background(), failure))
 	failure.MarkDelivered(nil)
-	require.Len(t, posted, 3)
-	require.Len(t, updated, 1)
-	assert.Equal(t, failure.Text, updated[0].Get("text"))
+	require.Len(t, posted, 2)
+	require.Len(t, updated, 2)
+	assert.Contains(t, updated[0].Get("blocks"), `"text":"running..."`)
+	assert.Equal(t, failure.Text, updated[1].Get("text"))
 	assert.Empty(t, router.startedSnapshot())
 	assert.Empty(t, router.cronRegistrationsSnapshot())
 }
