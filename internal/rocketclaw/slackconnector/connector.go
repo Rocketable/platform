@@ -80,11 +80,10 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 type Connector struct {
 	log    *slog.Logger
 	config config.SlackConfig
-	bus    *events.Bus
+	bus    events.OutboundPublisher
 
 	threadRouter   harnessbridge.PrimaryTextRouter
 	oneOffCronjobs oneOffCronjobRunner
-	answerQuestion func(context.Context, string, events.AskUserQuestionAnswer) bool
 
 	api          *slack.Client
 	botUserID    string
@@ -98,9 +97,16 @@ type Connector struct {
 	reconnectDelay  time.Duration
 
 	mu               sync.Mutex
+	responseMu       sync.Mutex
 	replies, pending map[string]slackReplySlots
 	thinking         map[string]slackThinkingState
 	stacks           map[string][]slackBufferedMessage
+	questions        map[string]*slackPendingQuestion
+}
+
+type slackPendingQuestion struct {
+	target events.TextConversationTarget
+	ch     chan events.AskUserQuestionAnswer
 }
 
 type oneOffCronjobRunner interface {
@@ -168,14 +174,13 @@ type rawSlackEventsPayload struct {
 }
 
 // New constructs a Slack connector.
-func New(cfg *config.SlackConfig, bus *events.Bus, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs oneOffCronjobRunner, answerQuestion func(context.Context, string, events.AskUserQuestionAnswer) bool, logger *slog.Logger) *Connector {
+func New(cfg *config.SlackConfig, publisher events.OutboundPublisher, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs oneOffCronjobRunner, logger *slog.Logger) *Connector {
 	api := slack.New(cfg.BotToken, slack.OptionAppLevelToken(cfg.AppToken), slack.OptionRetry(3))
 
 	return &Connector{
-		log: logger.With("component", "slack"), config: *cfg, bus: bus,
+		log: logger.With("component", "slack"), config: *cfg, bus: publisher,
 		threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs,
-		answerQuestion: answerQuestion,
-		api:            api, socketEvents: make(chan slackSocketEvent, 50),
+		api: api, socketEvents: make(chan slackSocketEvent, 50), questions: map[string]*slackPendingQuestion{},
 		newSocketClient: func(api *slack.Client) *socketmode.Client {
 			return socketmode.New(api)
 		},
@@ -227,6 +232,9 @@ func (c *Connector) Stop(context.Context) error {
 
 // SendResponse posts or updates a streamed response message in Slack.
 func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessage) error {
+	c.responseMu.Lock()
+	defer c.responseMu.Unlock()
+
 	if msg == nil {
 		return nil
 	}
@@ -327,6 +335,72 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 	}
 
 	return nil
+}
+
+// HandleBroadcast delivers live output and connector-specific relays to Slack.
+func (c *Connector) HandleBroadcast(ctx context.Context, broadcast *events.Broadcast) events.BroadcastAcknowledgement {
+	if broadcast.RelayCleanup != nil {
+		c.CleanupExternalMCPRelay(ctx, broadcast.RelayCleanup.SlackReply)
+
+		if broadcast.RelayResponse != nil {
+			broadcast.RelayResponse <- events.BroadcastReply{}
+		}
+
+		return events.BroadcastAcknowledgement{Status: events.BroadcastHandled}
+	}
+
+	if broadcast.Relay != nil {
+		channelID, threadTS := broadcast.RelayChannel, ""
+		if broadcast.RelayReply != nil && broadcast.RelayReply.SlackReply != nil {
+			channelID, threadTS = broadcast.RelayReply.SlackReply.ChannelID, broadcast.RelayReply.SlackReply.ThreadTS
+		}
+
+		target, err := c.SendExternalMCPRelay(ctx, channelID, threadTS, broadcast.Relay)
+		if broadcast.RelayResponse != nil {
+			var reply *events.InboundMessage
+			if target != nil {
+				reply = &events.InboundMessage{SlackReply: target}
+			}
+
+			broadcast.RelayResponse <- events.BroadcastReply{Message: reply, Err: err}
+		}
+
+		if err != nil {
+			return events.BroadcastAcknowledgement{Status: events.BroadcastFailed, Err: err}
+		}
+
+		return events.BroadcastAcknowledgement{Status: events.BroadcastHandled}
+	}
+
+	if broadcast.Message == nil {
+		return events.BroadcastAcknowledgement{Status: events.BroadcastDropped}
+	}
+
+	if broadcast.Message.Cronjob != nil && broadcast.Message.Complete && broadcast.Message.TurnID == "" {
+		err := c.SendCronjobChannelThread(ctx, broadcast.Message.SlackReply.ChannelID, broadcast.Message.Cronjob.RelativePath, broadcast.Message.Cronjob.Agent, broadcast.Message.Cronjob.RanAt, broadcast.Message.Text, broadcast.Message.Attachments)
+		broadcast.Delivery.MarkDelivered(err)
+
+		if err != nil {
+			return events.BroadcastAcknowledgement{Status: events.BroadcastFailed, Err: err}
+		}
+
+		return events.BroadcastAcknowledgement{Status: events.BroadcastHandled}
+	}
+
+	err := c.SendResponse(ctx, broadcast.Message)
+	if broadcast.Message.Complete {
+		if err != nil && ctx.Err() == nil {
+			c.AbortResponse(broadcast.Message)
+		}
+
+		broadcast.Delivery.MarkDelivered(err)
+	}
+
+	if err != nil {
+		return events.BroadcastAcknowledgement{Status: events.BroadcastFailed, Err: err}
+	}
+
+	return events.BroadcastAcknowledgement{Status: events.BroadcastHandled}
 }
 
 func setMCPAttachmentOnlyResponseText(msg *events.OutboundMessage) {
@@ -529,8 +603,8 @@ func (c *Connector) StartNewThreadRoot(ctx context.Context, req *events.StartNew
 	return events.StartNewThreadRootResult{Target: root, URL: strings.TrimSpace(url)}, nil
 }
 
-// AskUserQuestion posts one in-message Slack question.
-func (c *Connector) AskUserQuestion(ctx context.Context, req *events.AskUserQuestionRequest) (events.TextConversationTarget, error) {
+// AskUserQuestion posts one in-message Slack question and waits for the human answer.
+func (c *Connector) AskUserQuestion(ctx context.Context, req *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error) {
 	text := strings.TrimSpace(req.Question)
 	if details := strings.TrimSpace(req.Details); details != "" {
 		text += "\n\n" + details
@@ -558,19 +632,32 @@ func (c *Connector) AskUserQuestion(ctx context.Context, req *events.AskUserQues
 
 	postedChannelID, ts, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(text, false), slack.MsgOptionTS(threadTS), slack.MsgOptionBlocks(blocks...))
 	if err != nil {
-		return events.TextConversationTarget{}, fmt.Errorf("post Slack question: %w", err)
+		return events.AskUserQuestionAnswer{}, fmt.Errorf("post Slack question: %w", err)
 	}
 
-	return events.TextConversationTarget{ChannelID: postedChannelID, MessageID: ts, ThreadID: threadTS}, nil
-}
-
-// DeleteUserQuestion deletes one Slack question message.
-func (c *Connector) DeleteUserQuestion(ctx context.Context, target events.TextConversationTarget) error {
-	if _, _, err := c.api.DeleteMessageContext(ctx, target.ChannelID, target.MessageID); err != nil {
-		return fmt.Errorf("delete Slack question: %w", err)
+	p := &slackPendingQuestion{
+		target: events.TextConversationTarget{ChannelID: postedChannelID, MessageID: ts, ThreadID: threadTS},
+		ch:     make(chan events.AskUserQuestionAnswer, 1),
 	}
 
-	return nil
+	c.mu.Lock()
+	c.questions[req.ID] = p
+	c.mu.Unlock()
+
+	select {
+	case answer, ok := <-p.ch:
+		if !ok {
+			return events.AskUserQuestionAnswer{}, errors.New("ask_user_question canceled")
+		}
+
+		return answer, nil
+	case <-ctx.Done():
+		if pending := c.takeQuestion(req.ID); pending != nil {
+			c.deleteQuestionMessage(context.WithoutCancel(ctx), pending.target)
+		}
+
+		return events.AskUserQuestionAnswer{}, fmt.Errorf("wait for human answer: %w", ctx.Err())
+	}
 }
 
 // SendExternalMCPRelay mirrors one external MCP request into a Slack root or thread.
@@ -697,6 +784,34 @@ func (c *Connector) SendExternalMCPRelay(ctx context.Context, channelID, threadT
 	relayReady = true
 
 	return replyTarget, nil
+}
+
+func (c *Connector) completeQuestion(ctx context.Context, id string, answer events.AskUserQuestionAnswer) bool {
+	p := c.takeQuestion(id)
+	if p == nil {
+		return false
+	}
+
+	c.deleteQuestionMessage(ctx, p.target)
+
+	p.ch <- answer
+
+	return true
+}
+
+func (c *Connector) takeQuestion(id string) *slackPendingQuestion {
+	c.mu.Lock()
+	p := c.questions[id]
+	delete(c.questions, id)
+	c.mu.Unlock()
+
+	return p
+}
+
+func (c *Connector) deleteQuestionMessage(ctx context.Context, target events.TextConversationTarget) {
+	if _, _, err := c.api.DeleteMessageContext(ctx, target.ChannelID, target.MessageID); err != nil {
+		c.log.Warn("delete Slack question", "channel", target.ChannelID, "message_ts", target.MessageID, "error", err)
+	}
 }
 
 func (c *Connector) responseSlots(msg *events.OutboundMessage) (slackReplySlots, bool) {
@@ -2030,7 +2145,7 @@ func (c *Connector) handleInteractive(ctx context.Context, event socketmode.Even
 	if callback.Type == slack.InteractionTypeViewSubmission && callback.View.CallbackID == slackQuestionCustomViewCallbackID {
 		custom := strings.TrimSpace(callback.View.State.Values[slackQuestionCustomBlockID][slackQuestionCustomInputActionID].Value)
 
-		c.answerQuestion(ctx, metadata.ID, events.AskUserQuestionAnswer{Custom: custom, Source: events.SourceSlack})
+		c.completeQuestion(ctx, metadata.ID, events.AskUserQuestionAnswer{Custom: custom, Source: events.SourceSlack})
 
 		return
 	}
@@ -2091,7 +2206,7 @@ func (c *Connector) handleInteractive(ctx context.Context, event socketmode.Even
 			}
 		}
 
-		if c.answerQuestion(ctx, action.BlockID, events.AskUserQuestionAnswer{Selected: selected, Source: events.SourceSlack}) {
+		if c.completeQuestion(ctx, action.BlockID, events.AskUserQuestionAnswer{Selected: selected, Source: events.SourceSlack}) {
 			return
 		}
 	}

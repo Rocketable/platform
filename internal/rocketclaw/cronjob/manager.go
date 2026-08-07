@@ -112,13 +112,12 @@ type RunFunc func(context.Context, string, string, *slog.Logger, *harnessbridge.
 type Manager struct {
 	workspace, runtimeDir string
 	channels              []string
-	bus                   *events.Bus
+	broadcasts            chan<- events.Broadcast
 	store                 cronScheduleStore
 	run                   RunFunc
 	log                   *slog.Logger
 	now                   func() time.Time
 	tickerInterval        time.Duration
-	SendTextChannel       func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error
 
 	mu            sync.Mutex
 	stop          context.CancelFunc
@@ -152,7 +151,7 @@ const (
 )
 
 // New constructs a cronjob manager using runtimeDir for effective runtime cron definitions.
-func New(workspace, runtimeDir string, channels []string, bus *events.Bus, store cronScheduleStore, run RunFunc, logger *slog.Logger) *Manager {
+func New(workspace, runtimeDir string, channels []string, broadcasts chan<- events.Broadcast, store cronScheduleStore, run RunFunc, logger *slog.Logger) *Manager {
 	channels = slices.Clone(channels)
 	for i := range channels {
 		channels[i] = strings.TrimSpace(channels[i])
@@ -161,9 +160,7 @@ func New(workspace, runtimeDir string, channels []string, bus *events.Bus, store
 	slices.Sort(channels)
 	channels = slices.Compact(channels)
 
-	return &Manager{workspace: workspace, channels: channels, bus: bus, store: store, run: run, log: logger.With("component", "cronjob"), now: time.Now, tickerInterval: time.Minute, SendTextChannel: func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
-		return nil
-	}, runtimeDir: runtimeDir}
+	return &Manager{workspace: workspace, channels: channels, broadcasts: broadcasts, store: store, run: run, log: logger.With("component", "cronjob"), now: time.Now, tickerInterval: time.Minute, runtimeDir: runtimeDir}
 }
 
 // ValidateRuntimeDefinitions loads cron definitions from runtimeDir without mutating scheduler state.
@@ -367,7 +364,7 @@ func (m *Manager) runOneOffTimer(ctx context.Context, definition *definition, in
 		return
 	}
 
-	m.executeJob(context.WithoutCancel(ctx), definition)
+	m.executeJob(ctx, definition)
 	m.deleteOneOffCronjob(definition)
 }
 
@@ -519,7 +516,7 @@ func (m *Manager) runScheduled(ctx context.Context, run harnessbridge.CronSchedu
 		}
 	}()
 
-	m.executeJob(context.WithoutCancel(ctx), definition)
+	m.executeJob(ctx, definition)
 }
 
 func (m *Manager) scheduledStates(definitions []definition, now time.Time) []harnessbridge.CronScheduleState {
@@ -558,7 +555,7 @@ func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 	}, Message: func(context.Context, string) error { return nil }}
 	progress.ConversationID = cronTraceConversationID(cronTracePrefix, definition.relativePath, startedAt)
 
-	result, err := m.run(ctx, definition.agent, prompt, log, progress)
+	result, err := m.run(context.WithoutCancel(ctx), definition.agent, prompt, log, progress)
 	if err != nil {
 		if ctx.Err() == nil {
 			log.Error("cronjob failed", "human_visible", false, "error", err)
@@ -571,8 +568,19 @@ func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 	log.Info("completed cronjob", "text", result.Text, "verbatim_message", result.VerbatimMessage, "human_visible", visiblePayload)
 
 	if visiblePayload {
-		if err := m.SendTextChannel(ctx, definition.textChannel, definition.relativePath, definition.agent, ranAt, strings.TrimSpace(result.VerbatimMessage), result.Attachments); err != nil {
-			log.Warn("send cronjob text delivery", "channel", definition.textChannel, "error", err)
+		message := events.NewOutboundMessage(events.SourceSystem, "", strings.TrimSpace(result.VerbatimMessage))
+		message.Complete = true
+		message.Cronjob = &events.CronjobMessage{RelativePath: definition.relativePath, Agent: definition.agent, RanAt: ranAt}
+		message.SlackReply = &events.SlackReplyTarget{ChannelID: definition.textChannel}
+
+		message.Attachments = result.Attachments
+		select {
+		case m.broadcasts <- events.Broadcast{Message: message, Delivery: message}:
+			if err := message.WaitDelivered(ctx); err != nil {
+				log.Warn("cronjob broadcast delivery failed", "channel", definition.textChannel, "error", err)
+			}
+		case <-ctx.Done():
+			log.Warn("send cronjob broadcast", "channel", definition.textChannel, "error", ctx.Err())
 		}
 	}
 }

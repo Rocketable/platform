@@ -64,8 +64,8 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		}
 	}()
 
-	bus := events.New()
-	defer bus.Close()
+	connectorChannels := events.NewChannels()
+	clockwork := newClockwork(connectorChannels)
 
 	var (
 		shutdownOnce     sync.Once
@@ -197,8 +197,6 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		return err
 	}
 
-	questionBroker := newAskUserQuestionBroker(logger)
-
 	var externalMCPUsers map[string]string
 	if cfg.MCPExternal.Enabled {
 		externalMCPUsers, err = config.LoadExternalMCPUsers(configPath)
@@ -274,10 +272,36 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	}
 
 	startNewThread := func(startCtx context.Context, req *events.StartNewThreadRequest) (events.StartNewThreadResult, error) {
-		return threadBridges.StartNewThread(startCtx, req, startThreadRoot)
+		createRoot := startThreadRoot
+
+		if req.Response != nil {
+			rootCh := make(chan events.StartNewThreadRootResult, 1)
+
+			errCh := make(chan error, 1)
+			select {
+			case req.Response <- events.Response{Payload: events.StartNewThreadResponse{Request: req, Root: rootCh, Err: errCh}}:
+			case <-startCtx.Done():
+				return events.StartNewThreadResult{}, startCtx.Err()
+			}
+
+			var root events.StartNewThreadRootResult
+			select {
+			case root = <-rootCh:
+			case err := <-errCh:
+				return events.StartNewThreadResult{}, err
+			case <-startCtx.Done():
+				return events.StartNewThreadResult{}, startCtx.Err()
+			}
+
+			createRoot = func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadRootResult, error) {
+				return root, nil
+			}
+		}
+
+		return threadBridges.StartNewThread(startCtx, req, createRoot)
 	}
 
-	cronjobs = cronjob.New(cfg.Workspace, cfg.RuntimeDirName(), channels, bus, rocketcodeSessions, func(jobCtx context.Context, agent, prompt string, log *slog.Logger, progress *harnessbridge.RawRunProgress) (cronjob.RunResult, error) {
+	cronjobs = cronjob.New(cfg.Workspace, cfg.RuntimeDirName(), channels, connectorChannels.Broadcasts, rocketcodeSessions, func(jobCtx context.Context, agent, prompt string, log *slog.Logger, progress *harnessbridge.RawRunProgress) (cronjob.RunResult, error) {
 		progress.SessionService = rocketcodeSessions
 		progress.RequestRestart = requestRestart
 		progress.RequestReload = requestReload
@@ -318,14 +342,21 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		}
 	}
 
+	// Starts as No; set to Slack after the connector exists. Factory reads the current value per bridge.
+	slackUserQuestionAsker := events.NoUserQuestionAsker()
+
 	threadBridges = newThreadBridgeManager(cfg, rocketcodeSessions, logger, func(bridgeConfig harnessbridge.Config) directBridge {
 		bridgeConfig.RequestRestart = requestRestart
 		bridgeConfig.RequestReload = requestReload
-		bridgeConfig.AskUserQuestion = questionBroker.ask
+		// ensureStartedThread defaults to NoUserQuestionAsker; Slack-origin overrides with current slack asker.
+		if bridgeConfig.ExternalConversationID == "" && !bridgeConfig.RecoveringActiveTurn {
+			bridgeConfig.UserQuestionAsker = slackUserQuestionAsker
+		}
+
 		bridgeConfig.StartNewThread = startNewThread
 		bridgeConfig.SessionService = rocketcodeSessions
 
-		return harnessbridge.NewConversation(cfg, bus, &bridgeConfig, logger)
+		return harnessbridge.NewConversation(cfg, events.BroadcastPublisher(connectorChannels.Broadcasts), &bridgeConfig, logger)
 	})
 	if err := threadBridges.StartPendingScheduledMessages(recoveringConversations); err != nil {
 		return err
@@ -364,6 +395,14 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		logger.Info("startup active turn recovery enqueued", "conversation_id", conversationID, "turn_id", turn.Checkpoint.TurnID)
 	}
 
+	go func() {
+		if err := clockwork.run(runCtx, func(ctx context.Context, request events.Request) {
+			dispatchClockworkRequest(ctx, threadBridges, request)
+		}); err != nil {
+			logger.Error("connector clockwork stopped", "error", err)
+		}
+	}()
+
 	defer func() {
 		logger.Info("shutting down rocketclaw runtime")
 		startShutdown("runtime cleanup", false)
@@ -382,11 +421,20 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	logger.Info("starting Slack connector")
 
-	slackSink = slackconnector.New(&cfg.Slack, bus, threadBridges, cronjobs, questionBroker.answer, logger)
-	questionBroker.post, questionBroker.delete = slackSink.AskUserQuestion, slackSink.DeleteUserQuestion
+	slackRouter := newRequestTextRouter(connectorChannels.Requests)
+	slackSink = slackconnector.New(&cfg.Slack, events.BroadcastPublisher(connectorChannels.Broadcasts), slackRouter, cronjobs, logger)
+	slackRouter.output = slackSink.SendResponse
+	slackRouter.abort = slackSink.AbortResponse
+	slackRouter.root = slackSink.StartNewThreadRoot
+	slackUserQuestionAsker = events.InteractiveUserQuestionAsker(slackSink.AskUserQuestion)
 	startThreadRoot = slackSink.StartNewThreadRoot
 
-	cronjobs.SendTextChannel = slackSink.SendCronjobChannelThread
+	removeSlackBridge, err := clockwork.registerBridge(events.BridgeSlack, slackSink)
+	if err != nil {
+		return fmt.Errorf("register Slack bridge: %w", err)
+	}
+	defer removeSlackBridge()
+
 	if err := slackSink.Start(runCtx); err != nil {
 		return fmt.Errorf("start Slack connector: %w", err)
 	}
@@ -394,21 +442,56 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	stops = append(stops, namedStopper{name: "slack", stop: slackSink.Stop})
 
 	textRelay := func(relayCtx context.Context, relay *events.ExternalMCPRelay, reply *events.InboundMessage, channelName string) (*events.InboundMessage, error) {
-		channelID, threadTS := channelName, ""
-		if reply != nil && reply.SlackReply != nil {
-			channelID, threadTS = reply.SlackReply.ChannelID, reply.SlackReply.ThreadTS
+		response := make(chan events.BroadcastReply, 1)
+		select {
+		case connectorChannels.Broadcasts <- events.Broadcast{Sender: events.BridgeExternalMCP, Relay: relay, RelayReply: reply, RelayChannel: channelName, RelayResponse: response}:
+		case <-relayCtx.Done():
+			return nil, relayCtx.Err()
 		}
 
-		target, err := slackSink.SendExternalMCPRelay(relayCtx, channelID, threadTS, relay)
-		if err != nil {
-			return nil, fmt.Errorf("send Slack external MCP relay: %w", err)
+		select {
+		case result := <-response:
+			return result.Message, result.Err
+		case <-relayCtx.Done():
+			return nil, relayCtx.Err()
 		}
-
-		return &events.InboundMessage{SlackReply: target}, nil
 	}
 	cleanupTextRelay := func(cleanupCtx context.Context, reply *events.InboundMessage) {
-		if reply != nil {
-			slackSink.CleanupExternalMCPRelay(cleanupCtx, reply.SlackReply)
+		if reply == nil {
+			return
+		}
+
+		response := make(chan events.BroadcastReply, 1)
+		select {
+		case connectorChannels.Broadcasts <- events.Broadcast{Sender: events.BridgeExternalMCP, RelayCleanup: reply, RelayResponse: response}:
+		case <-cleanupCtx.Done():
+			return
+		}
+
+		select {
+		case <-response:
+		case <-cleanupCtx.Done():
+		}
+	}
+	submitExternalMCP := func(submitCtx context.Context, agent, conversationID string, inbound *events.InboundMessage, activation harnessbridge.ActivationHook) error {
+		if err := activation(submitCtx, inbound); err != nil {
+			return err
+		}
+
+		response := make(chan events.Response, 1)
+
+		request := events.Request{Sender: events.BridgeExternalMCP, Operation: &events.TextRequest{Kind: events.RequestTextSubmitExternalMCP, Agent: agent, ConversationID: conversationID, Inbound: inbound}, Response: response}
+		select {
+		case connectorChannels.Requests <- request:
+		case <-submitCtx.Done():
+			return submitCtx.Err()
+		}
+
+		select {
+		case result := <-response:
+			return result.Err
+		case <-submitCtx.Done():
+			return submitCtx.Err()
 		}
 	}
 
@@ -417,6 +500,12 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	}
 
 	if cfg.MCPExternal.Enabled {
+		removeExternalMCPBridge, err := clockwork.registerBridge(events.BridgeExternalMCP, dropBroadcastBridge{})
+		if err != nil {
+			return fmt.Errorf("register External MCP bridge: %w", err)
+		}
+		defer removeExternalMCPBridge()
+
 		var (
 			externalMCPAgentsMu sync.Mutex
 			externalMCPAgents   = []string{}
@@ -446,15 +535,13 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 			return slices.Contains(externalMCPAgents, agent)
 		}
 
-		externalMCP, err := startExternalMCPServer(runCtx, cfg, textRelay, cleanupTextRelay, externalMCPUsers, externalMCPAgentExposed, rocketcodeSessions, threadBridges.SubmitExternalMCP, logger)
+		externalMCP, err := startExternalMCPServer(runCtx, cfg, textRelay, cleanupTextRelay, externalMCPUsers, externalMCPAgentExposed, rocketcodeSessions, submitExternalMCP, logger)
 		if err != nil {
 			return err
 		}
 
 		stops = append(stops, namedStopper{name: "external_mcp", stop: externalMCP.Close})
 	}
-
-	logger.Info("outbound routing loop started")
 
 	go func() {
 		select {
@@ -464,7 +551,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		}
 	}()
 
-	err = outboundLoop(runCtx, bus, slackSink.SendResponse, slackSink.AbortResponse, logger)
+	<-clockwork.done
 
 	select {
 	case <-restartRequested:
@@ -472,7 +559,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	default:
 	}
 
-	return err
+	return nil
 }
 
 func validateWorkflowDefinitions(cfg *config.Config, runtimeDir string) (err error) {
@@ -830,112 +917,4 @@ func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Contex
 
 		return externalmcp.SessionResult{ExternalConversationID: externalConversationID, Agent: usedAgent, Answer: result.Text, Attachments: attachments}, true, nil
 	}
-}
-
-func outboundLoop(
-	ctx context.Context,
-	bus *events.Bus,
-	slackSend func(context.Context, *events.OutboundMessage) error,
-	slackAbort func(*events.OutboundMessage),
-	logger *slog.Logger,
-) error {
-	type outboundTargetDelivery struct {
-		msg    *events.OutboundMessage
-		notify func(error)
-	}
-
-	startWorker := func(target string, deliver func(context.Context, *events.OutboundMessage) error) chan outboundTargetDelivery {
-		queue := make(chan outboundTargetDelivery, 128)
-
-		go func() {
-			for delivery := range queue {
-				started := time.Now()
-				attrs := make([]any, 0, 26)
-				attrs = append(attrs, "target", target, "source", delivery.msg.Source, "conversation_id", delivery.msg.ConversationID, "turn_id", delivery.msg.TurnID, "sequence", delivery.msg.Sequence, "complete", delivery.msg.Complete, "post_progress_text", delivery.msg.PostProgressText, "text_len", len(delivery.msg.Text), "text_rune_len", len([]rune(delivery.msg.Text)), "progress_text_len", len([]rune(delivery.msg.ProgressText)))
-				logger.Info("starting outbound target delivery", attrs...)
-
-				err := deliver(ctx, delivery.msg)
-
-				attrs = append(attrs, "duration", time.Since(started), "error", err)
-				if err != nil {
-					logger.Error("finished outbound target delivery", attrs...)
-				} else {
-					logger.Info("finished outbound target delivery", attrs...)
-				}
-
-				delivery.notify(err)
-			}
-		}()
-
-		return queue
-	}
-
-	slackDeliver := func(sendCtx context.Context, msg *events.OutboundMessage) error {
-		err := slackSend(sendCtx, msg)
-		if err != nil && msg.Complete && sendCtx.Err() == nil {
-			slackAbort(msg)
-		}
-
-		return err
-	}
-
-	slackQueue := startWorker("slack_main", slackDeliver)
-
-	defer func() {
-		close(slackQueue)
-	}()
-
-	dispatch := func(queue chan outboundTargetDelivery, msg *events.OutboundMessage, notify func(error)) {
-		select {
-		case <-ctx.Done():
-			notify(ctx.Err())
-		case queue <- outboundTargetDelivery{msg: msg, notify: notify}:
-		}
-	}
-
-	for msg := range bus.Outbound(ctx) {
-		if msg == nil {
-			continue
-		}
-
-		pending := 0
-		results := make(chan error, len(msg.Targets))
-		notify := func(err error) {
-			results <- err
-		}
-
-		if slices.Contains(msg.Targets, events.OutputTargetSlack) {
-			pending++
-
-			dispatch(slackQueue, msg, notify)
-		}
-
-		if pending == 0 {
-			msg.MarkDelivered(nil)
-			continue
-		}
-
-		go func(msg *events.OutboundMessage, pending int, results <-chan error) {
-			var errRoute error
-			for range pending {
-				errRoute = errors.Join(errRoute, <-results)
-			}
-
-			if errRoute != nil && ctx.Err() == nil {
-				logger.Error("route outbound assistant response", "error", errRoute)
-			}
-
-			msg.MarkDelivered(errRoute)
-		}(msg, pending, results)
-	}
-
-	if errors.Is(ctx.Err(), context.Canceled) {
-		return nil
-	}
-
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("outbound loop canceled: %w", err)
-	}
-
-	return nil
 }

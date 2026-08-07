@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"mime"
 	"path/filepath"
@@ -99,6 +100,7 @@ type ExternalMCPRelay struct {
 // InboundMessage is a message headed into its conversation prompt queue.
 type InboundMessage struct {
 	Source                                                  Source
+	Bridge                                                  BridgeID
 	Label, Text                                             string
 	VerbatimMessage                                         string
 	VerbatimAttachments                                     []OutboundAttachment
@@ -110,6 +112,7 @@ type InboundMessage struct {
 	ConversationID                                          string
 	Metadata                                                map[string]string
 	Workflow                                                *workflow.RunRequest
+	Response                                                chan Response
 
 	responseInit, responseOnce sync.Once
 	responseCh                 chan InboundResponse
@@ -130,6 +133,7 @@ type AskUserQuestionOption struct{ Label, Value, Description string }
 // AskUserQuestionRequest asks the originating text connector human for input.
 type AskUserQuestionRequest struct {
 	Source                Source
+	Bridge                BridgeID
 	ID, Question, Details string
 	ConversationID        string
 	Options               []AskUserQuestionOption
@@ -144,12 +148,41 @@ type AskUserQuestionAnswer struct {
 	Source   Source   `json:"source"`
 }
 
+// UserQuestionAsker is the origin-owned ask_user_question capability for one turn path.
+// The zero value is inert (ExposeTool is false).
+type UserQuestionAsker struct {
+	expose bool
+	ask    func(context.Context, *AskUserQuestionRequest) (AskUserQuestionAnswer, error)
+}
+
+// NoUserQuestionAsker returns the inert asker that omits the tool from the model list.
+func NoUserQuestionAsker() UserQuestionAsker { return UserQuestionAsker{} }
+
+// InteractiveUserQuestionAsker returns an asker that exposes the tool and delegates to ask.
+func InteractiveUserQuestionAsker(ask func(context.Context, *AskUserQuestionRequest) (AskUserQuestionAnswer, error)) UserQuestionAsker {
+	return UserQuestionAsker{expose: true, ask: ask}
+}
+
+// ExposeTool reports whether ask_user_question belongs in the model tool list.
+func (a UserQuestionAsker) ExposeTool() bool { return a.expose }
+
+// AskUserQuestion runs the origin ask path, or rejects when the tool is not exposed.
+func (a UserQuestionAsker) AskUserQuestion(ctx context.Context, req *AskUserQuestionRequest) (AskUserQuestionAnswer, error) {
+	if !a.expose {
+		return AskUserQuestionAnswer{}, errors.New("ask_user_question is not available")
+	}
+
+	return a.ask(ctx, req)
+}
+
 // StartNewThreadRequest asks RocketClaw to create a new managed conversation from the current turn.
 type StartNewThreadRequest struct {
 	Source                                                   Source
+	Bridge                                                   BridgeID
 	SourceConversationID, CurrentAgent, Agent, Title, Prompt string
 	AllowedAgents                                            []string
 	SlackReply                                               *SlackReplyTarget
+	Response                                                 chan Response
 }
 
 // StartNewThreadResult reports the created conversation and openable surface.
@@ -168,6 +201,7 @@ type StartNewThreadRootResult struct {
 type OutboundMessage struct {
 	Text, ProgressText           string
 	Source                       Source
+	Bridge                       BridgeID
 	Targets                      []OutputTarget
 	ConversationID, TurnID       string
 	ExternalConversationID       string
@@ -182,6 +216,7 @@ type OutboundMessage struct {
 	WorkflowAgent                *workflow.AgentUpdate
 	WorkflowPhase                *workflow.PhaseUpdate
 	WorkflowTerminal             workflow.Terminal
+	Response                     chan Response
 
 	deliveryInit, deliveredOnce sync.Once
 	delivered                   chan struct{}

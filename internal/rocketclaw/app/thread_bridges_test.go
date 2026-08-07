@@ -170,8 +170,8 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 	require.NoError(t, manager.StartPendingScheduledMessages(map[string]bool{}))
 	require.Len(t, created, 2)
 	assert.ElementsMatch(t, []bridgeConfig{
-		{ConversationID: harnessbridge.SlackThreadConversationID("D123", "111.222"), Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}},
-		{ConversationID: harnessbridge.SlackThreadConversationID("D123", "333.444"), Agent: "helper", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}},
+		{ConversationID: harnessbridge.SlackThreadConversationID("D123", "111.222"), Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, UserQuestionAsker: events.NoUserQuestionAsker()},
+		{ConversationID: harnessbridge.SlackThreadConversationID("D123", "333.444"), Agent: "helper", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, UserQuestionAsker: events.NoUserQuestionAsker()},
 	}, created)
 }
 
@@ -264,7 +264,7 @@ func TestThreadBridgeManagerStartsGoalInExistingThreadWithPersistedAgent(t *test
 
 	bridge := new(fakeDirectBridge)
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
-		assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}}, cfg)
+		assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, UserQuestionAsker: events.NoUserQuestionAsker()}, cfg)
 
 		return bridge
 	})
@@ -292,7 +292,7 @@ func TestThreadBridgeManagerStartsActiveGoalAfterRestart(t *testing.T) {
 
 	bridge := new(fakeDirectBridge)
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
-		assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}}, cfg)
+		assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, UserQuestionAsker: events.NoUserQuestionAsker()}, cfg)
 
 		return bridge
 	})
@@ -385,7 +385,7 @@ func TestThreadBridgeManagerRegistersCronThreadWithoutSubmitting(t *testing.T) {
 	require.NoError(t, manager.RegisterCronThread(t.Context(), slackTarget("C123", "111.222"), "planner"))
 
 	conversationID := harnessbridge.SlackThreadConversationID("C123", "111.222")
-	assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}}, created)
+	assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, UserQuestionAsker: events.NoUserQuestionAsker()}, created)
 	assert.Empty(t, bridge.submits)
 
 	thread, ok, err := store.Thread(conversationID)
@@ -524,7 +524,7 @@ func TestThreadBridgeManagerStartNewThreadUsesFreshThreadLocalConversation(t *te
 
 	assert.Equal(t, 1, rootCalls)
 	assert.Equal(t, events.StartNewThreadResult{ConversationID: conversationID, URL: "https://example.invalid/thread"}, result)
-	assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}}, created)
+	assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, UserQuestionAsker: events.NoUserQuestionAsker()}, created)
 	require.Len(t, bridge.submits, 1)
 	assert.Equal(t, []string{"submit: literal $(date) "}, bridge.ops)
 	assert.Equal(t, " literal $(date) ", bridge.submits[0].Text)
@@ -598,9 +598,9 @@ func TestThreadBridgeManagerExternalMCPAndSlackUsePairedSeparateBridges(t *testi
 	bridges := map[string]*fakeDirectBridge{}
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
 		if cfg.ConversationID == privateConversationID {
-			assert.Equal(t, bridgeConfig{ConversationID: privateConversationID, Agent: "customer", ManagedConversationID: managedConversationID, ExternalConversationID: "public-1", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}}, cfg)
+			assert.Equal(t, bridgeConfig{ConversationID: privateConversationID, Agent: "customer", ManagedConversationID: managedConversationID, ExternalConversationID: "public-1", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, UserQuestionAsker: events.NoUserQuestionAsker()}, cfg)
 		} else {
-			assert.Equal(t, bridgeConfig{ConversationID: managedConversationID, Agent: "alpha", ManagedConversationID: managedConversationID, OutputTargets: []events.OutputTarget{events.OutputTargetSlack}}, cfg)
+			assert.Equal(t, bridgeConfig{ConversationID: managedConversationID, Agent: "alpha", ManagedConversationID: managedConversationID, OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, UserQuestionAsker: events.NoUserQuestionAsker()}, cfg)
 		}
 
 		bridge := new(fakeDirectBridge)
@@ -647,7 +647,7 @@ func TestThreadBridgeManagerSubmitsSameExternalMCPConversationToOneBridge(t *tes
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
 		created++
 
-		assert.Equal(t, bridgeConfig{ConversationID: privateConversationID, Agent: "planner", ManagedConversationID: managedConversationID, ExternalConversationID: "public-1", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}}, cfg)
+		assert.Equal(t, bridgeConfig{ConversationID: privateConversationID, Agent: "planner", ManagedConversationID: managedConversationID, ExternalConversationID: "public-1", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, UserQuestionAsker: events.NoUserQuestionAsker()}, cfg)
 
 		return bridge
 	})
@@ -701,7 +701,7 @@ func TestThreadBridgeManagerRecoversActiveTurnInThreadLocalConversation(t *testi
 	conversationID := harnessbridge.SlackThreadConversationID("D123", "111.222")
 	bridge := new(fakeDirectBridge)
 	manager := newThreadBridgeManager(nil, newTestSessionService(t, t.TempDir()), slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
-		assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, RecoveringActiveTurn: true}, cfg)
+		assert.Equal(t, bridgeConfig{ConversationID: conversationID, Agent: "planner", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, RecoveringActiveTurn: true, UserQuestionAsker: events.NoUserQuestionAsker()}, cfg)
 		return bridge
 	})
 	turn := &harnessbridge.ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{ConversationKey: conversationID, TurnID: "turn-1", Agent: "planner"}}
@@ -719,7 +719,7 @@ func TestThreadBridgeManagerRecoversPrivateExternalMCPTurn(t *testing.T) {
 
 	bridge := new(fakeDirectBridge)
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
-		assert.Equal(t, bridgeConfig{ConversationID: privateConversationID, Agent: "planner", ManagedConversationID: managedConversationID, ExternalConversationID: "public-1", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, RecoveringActiveTurn: true}, cfg)
+		assert.Equal(t, bridgeConfig{ConversationID: privateConversationID, Agent: "planner", ManagedConversationID: managedConversationID, ExternalConversationID: "public-1", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, RecoveringActiveTurn: true, UserQuestionAsker: events.NoUserQuestionAsker()}, cfg)
 		return bridge
 	})
 	turn := &harnessbridge.ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{ConversationKey: privateConversationID, TurnID: "turn-mcp", Agent: "planner"}}
@@ -739,7 +739,7 @@ func TestThreadBridgeManagerRestoresManagedAgentAfterRecovery(t *testing.T) {
 	require.True(t, updated)
 
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg bridgeConfig) directBridge {
-		assert.Equal(t, bridgeConfig{ConversationID: managedConversationID, Agent: "alpha", AgentAfterRecovery: "supercow", ManagedConversationID: managedConversationID, OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, RecoveringActiveTurn: true}, cfg)
+		assert.Equal(t, bridgeConfig{ConversationID: managedConversationID, Agent: "alpha", AgentAfterRecovery: "supercow", ManagedConversationID: managedConversationID, OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, RecoveringActiveTurn: true, UserQuestionAsker: events.NoUserQuestionAsker()}, cfg)
 		return new(fakeDirectBridge)
 	})
 	turn := &harnessbridge.ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{ConversationKey: managedConversationID, TurnID: "turn-managed", Agent: "alpha"}}

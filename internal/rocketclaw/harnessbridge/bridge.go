@@ -110,7 +110,7 @@ type Config struct {
 	RecoveringActiveTurn                                                                     bool
 	RequestRestart                                                                           func(context.Context, string) (string, error)
 	RequestReload                                                                            func(context.Context, string) (string, error)
-	AskUserQuestion                                                                          func(context.Context, *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error)
+	UserQuestionAsker                                                                        events.UserQuestionAsker
 	StartNewThread                                                                           func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadResult, error)
 	SessionService                                                                           *SessionService
 }
@@ -120,7 +120,7 @@ type Bridge struct {
 	log       *slog.Logger
 	config    Config
 	runtime   *config.Config
-	bus       *events.Bus
+	bus       events.OutboundPublisher
 	requestCh chan bridgeRequest
 	stopCh    chan struct{}
 
@@ -346,8 +346,8 @@ func (s activeTurnIDCheckpointSink) record(checkpoint *rocketcode.ActiveTurnChec
 }
 
 // NewConversation constructs a rocketcode bridge for one conversation.
-func NewConversation(cfg *config.Config, bus *events.Bus, bridgeConfig *Config, logger *slog.Logger) *Bridge {
-	b := &Bridge{log: nil, config: normalizeConfig(bridgeConfig), runtime: cfg, bus: bus, requestCh: nil, stopCh: nil, mu: sync.Mutex{}, handling: false}
+func NewConversation(cfg *config.Config, publisher events.OutboundPublisher, bridgeConfig *Config, logger *slog.Logger) *Bridge {
+	b := &Bridge{log: nil, config: normalizeConfig(bridgeConfig), runtime: cfg, bus: publisher, requestCh: nil, stopCh: nil, mu: sync.Mutex{}, handling: false}
 	b.log = logger.With("component", "rocketcode")
 
 	return b
@@ -360,6 +360,7 @@ func normalizeConfig(cfg *Config) Config {
 	normalized.AgentAfterRecovery = strings.TrimSpace(normalized.AgentAfterRecovery)
 	normalized.ManagedConversationID = strings.TrimSpace(normalized.ManagedConversationID)
 	normalized.ExternalConversationID = strings.TrimSpace(normalized.ExternalConversationID)
+
 	normalized.OutputTargets = append([]events.OutputTarget(nil), normalized.OutputTargets...)
 
 	return normalized
@@ -1270,12 +1271,12 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		customTools = append(customTools, tool)
 	}
 
-	if nativeQuestionTurn(msg) {
-		customTools = append(customTools, askUserQuestionTool(b.config.AskUserQuestion, msg))
+	if b.config.UserQuestionAsker.ExposeTool() && nativeQuestionTurn(msg) {
+		customTools = append(customTools, askUserQuestionTool(b.config.UserQuestionAsker, msg))
+	}
 
-		if startNewThreadNativeTurn(msg) && agentExplicitlyAllowsRocketClawTool(&agent, startNewThreadToolName) {
-			customTools = append(customTools, startNewThreadTool(b.config.StartNewThread, msg, agentName))
-		}
+	if startNewThreadNativeTurn(msg) && agentExplicitlyAllowsRocketClawTool(&agent, startNewThreadToolName) {
+		customTools = append(customTools, startNewThreadTool(b.config.StartNewThread, msg, agentName))
 	}
 
 	checkpointTurnID := ""
@@ -2167,7 +2168,7 @@ func resetScheduledMessagesTool(reset func() error) rocketcode.Tool {
 	}}
 }
 
-func askUserQuestionTool(ask func(context.Context, *events.AskUserQuestionRequest) (events.AskUserQuestionAnswer, error), msg *events.InboundMessage) rocketcode.Tool {
+func askUserQuestionTool(asker events.UserQuestionAsker, msg *events.InboundMessage) rocketcode.Tool {
 	return rocketcode.Tool{Name: askUserQuestionToolName, Description: "Ask the human partner a native Slack question and wait for their answer. The options array is only for concrete predefined choices to show as buttons/selects; do not include catch-all choices like Custom, Other, or Free text.", Permission: "rocketclaw", VisibilitySubjects: []string{askUserQuestionToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{askUserQuestionToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"question": map[string]any{"type": "string"}, "details": map[string]any{"type": "string"}, "options": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{"label": map[string]any{"type": "string"}, "value": map[string]any{"type": "string"}, "description": map[string]any{"type": "string"}}, "required": []string{"label", "value", "description"}}}, "multiple": map[string]any{"type": "boolean"}}, "required": []string{"question", "details", "options", "multiple"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		var req events.AskUserQuestionRequest
 		if err := json.Unmarshal(raw, &req); err != nil {
@@ -2183,13 +2184,15 @@ func askUserQuestionTool(ask func(context.Context, *events.AskUserQuestionReques
 		})
 
 		req.ID, req.Source, req.ConversationID = rand.Text(), msg.Source, msg.ConversationID
+
+		req.Bridge = msg.Bridge
 		if msg.SlackReply != nil {
 			req.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS, RecipientTeamID: msg.SlackReply.RecipientTeamID, RecipientUserID: msg.SlackReply.RecipientUserID}
 		}
 
-		answer, err := ask(ctx, &req)
+		answer, err := asker.AskUserQuestion(ctx, &req)
 		if err != nil {
-			return rocketcode.ToolResult{}, err
+			return rocketcode.ToolResult{}, fmt.Errorf("ask user question: %w", err)
 		}
 
 		data, err := json.Marshal(answer)
@@ -2240,6 +2243,9 @@ func startNewThreadTool(start func(context.Context, *events.StartNewThreadReques
 			allowedAgents := strings.FieldsFunc(msg.Metadata[events.InboundAllowedAgentsMetadataKey], func(r rune) bool { return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' ' })
 
 			req := events.StartNewThreadRequest{Source: msg.Source, SourceConversationID: msg.ConversationID, CurrentAgent: currentAgent, Agent: strings.TrimSpace(input.Agent), Title: title, Prompt: prompt, AllowedAgents: allowedAgents}
+			req.Bridge = msg.Bridge
+
+			req.Response = msg.Response
 			if msg.SlackReply != nil {
 				req.SlackReply = &events.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS, RecipientTeamID: msg.SlackReply.RecipientTeamID, RecipientUserID: msg.SlackReply.RecipientUserID}
 			}
@@ -2438,6 +2444,10 @@ func (b *Bridge) newOutboundMessage(msg *events.InboundMessage, turnID string, s
 	outbound.Sequence = sequence
 
 	outbound.Complete = complete
+	if msg != nil {
+		outbound.Response = msg.Response
+		outbound.Bridge = msg.Bridge
+	}
 
 	if msg != nil {
 		if msg.Workflow == nil {

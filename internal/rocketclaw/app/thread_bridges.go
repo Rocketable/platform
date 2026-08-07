@@ -312,6 +312,7 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *events.St
 
 	inbound := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "rocketclaw_start_new_thread", req.Prompt, false)
 	inbound.ConversationID = conversationID
+	inbound.Response = req.Response
 	m.text.setContinuationReply(inbound, events.TextConversationTarget{ChannelID: strings.TrimSpace(rootTarget.ChannelID), MessageID: strings.TrimSpace(rootTarget.MessageID), ThreadID: strings.TrimSpace(rootTarget.ThreadID)})
 
 	inbound.Metadata = map[string]string{events.InboundOriginMetadataKey: "System", events.InboundMediaMetadataKey: "Text"}
@@ -583,7 +584,13 @@ func (m *threadBridgeManager) ensureThreadBridge(conversationID string, thread h
 		return existing, false, nil
 	}
 
-	bridgeCfg := harnessbridge.Config{ConversationID: conversationID, Agent: strings.TrimSpace(thread.Agent), OutputTargets: outputTargets, RecoveringActiveTurn: recoveringActiveTurn}
+	bridgeCfg := harnessbridge.Config{
+		ConversationID:       conversationID,
+		Agent:                strings.TrimSpace(thread.Agent),
+		OutputTargets:        outputTargets,
+		RecoveringActiveTurn: recoveringActiveTurn,
+		UserQuestionAsker:    events.NoUserQuestionAsker(),
+	}
 
 	externalConversationID, externalSession, external, err := m.store.ExternalMCPSessionByConversationID(conversationID)
 	if err != nil {

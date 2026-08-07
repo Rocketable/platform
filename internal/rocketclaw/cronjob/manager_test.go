@@ -35,21 +35,6 @@ func newCronScheduleStore(t *testing.T) *harnessbridge.SessionService {
 	return store
 }
 
-func TestNewInstallsTextChannelNoop(t *testing.T) {
-	bus := events.New()
-	defer bus.Close()
-
-	m := New(t.TempDir(), ".", nil, bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
-		t.Fatal("cronjob manager ran during construction")
-
-		return RunResult{}, nil
-	}, slog.New(slog.DiscardHandler))
-
-	if err := m.SendTextChannel(t.Context(), "C123", "cron/daily.md", "main", "now", "done", nil); err != nil {
-		t.Fatalf("SendTextChannel() = %v; want nil", err)
-	}
-}
-
 func TestLoadDefinitionsLoadsMarkdownAndSkipsTemplates(t *testing.T) {
 	workspace := t.TempDir()
 
@@ -148,10 +133,9 @@ func TestLoadOneOffCronjobUsesEffectiveRuntimeCron(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
-	m := New(workspace, ".rocketclaw", nil, bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".rocketclaw", nil, broadcasts, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		t.Fatal("cronjob manager ran during load test")
 
 		return RunResult{}, nil
@@ -168,10 +152,9 @@ func TestLoadOneOffCronjobUsesEffectiveRuntimeCron(t *testing.T) {
 }
 
 func TestRunOneOffCronjobSetsTraceConversationID(t *testing.T) {
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
-	m := New(t.TempDir(), ".", nil, bus, newCronScheduleStore(t), func(_ context.Context, _, _ string, _ *slog.Logger, progress *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", nil, broadcasts, newCronScheduleStore(t), func(_ context.Context, _, _ string, _ *slog.Logger, progress *harnessbridge.RawRunProgress) (RunResult, error) {
 		if !strings.HasPrefix(progress.ConversationID, "one-off-cron:cron/daily.md:20000102T030405.000000006Z:") {
 			t.Fatalf("ConversationID = %q; want one-off trace ID", progress.ConversationID)
 		}
@@ -184,10 +167,9 @@ func TestRunOneOffCronjobSetsTraceConversationID(t *testing.T) {
 }
 
 func TestRunOneOffCronjobRejectsStoppedManager(t *testing.T) {
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
-	m := New(t.TempDir(), ".", nil, bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", nil, broadcasts, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		t.Fatal("stopped cronjob manager ran one-off cronjob")
 
 		return RunResult{}, nil
@@ -215,10 +197,9 @@ func TestRunOneOffCronjobRejectsStoppedManager(t *testing.T) {
 }
 
 func TestExecuteJobSetsTraceConversationID(t *testing.T) {
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
-	m := New(t.TempDir(), ".", nil, bus, newCronScheduleStore(t), func(_ context.Context, _, _ string, _ *slog.Logger, progress *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", nil, broadcasts, newCronScheduleStore(t), func(_ context.Context, _, _ string, _ *slog.Logger, progress *harnessbridge.RawRunProgress) (RunResult, error) {
 		if !strings.HasPrefix(progress.ConversationID, "cron:cron/daily.md:20000102T030405.000000006Z:") {
 			t.Fatalf("ConversationID = %q; want scheduled trace ID", progress.ConversationID)
 		}
@@ -231,10 +212,9 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 }
 
 func TestExecuteJobDeliversVisibleOutputToRequiredChannel(t *testing.T) {
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
-	m := New(t.TempDir(), ".", nil, bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", nil, broadcasts, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{
 			VerbatimMessage: "visible answer",
 			Attachments:     []events.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}},
@@ -242,23 +222,22 @@ func TestExecuteJobDeliversVisibleOutputToRequiredChannel(t *testing.T) {
 	}, slog.New(slog.DiscardHandler))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC) }
 
-	var gotText string
+	done := make(chan struct{})
 
-	m.SendTextChannel = func(_ context.Context, channel, path, agent, ranAt, text string, attachments []events.OutboundAttachment) error {
-		if channel != "#ops" || path != "cron/daily.md" || agent != "helper" || ranAt != "2000-01-02T03:04:05Z" || len(attachments) != 1 {
-			t.Fatalf("text delivery = (%q, %q, %q, %q, %#v); want required channel delivery", channel, path, agent, ranAt, attachments)
-		}
+	go func() {
+		m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", textChannel: "#ops", body: "Body"})
+		close(done)
+	}()
 
-		gotText = text
-
-		return nil
-	}
-
-	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", textChannel: "#ops", body: "Body"})
-
-	if gotText != "visible answer" {
-		t.Fatalf("text thread output = %q; want visible answer", gotText)
-	}
+	broadcast := <-broadcasts
+	broadcast.Delivery.MarkDelivered(nil)
+	<-done
+	require.Equal(t, "#ops", broadcast.Message.SlackReply.ChannelID)
+	require.Equal(t, "cron/daily.md", broadcast.Message.Cronjob.RelativePath)
+	require.Equal(t, "helper", broadcast.Message.Cronjob.Agent)
+	require.Equal(t, "2000-01-02T03:04:05Z", broadcast.Message.Cronjob.RanAt)
+	require.Equal(t, "visible answer", broadcast.Message.Text)
+	require.Len(t, broadcast.Message.Attachments, 1)
 }
 
 func TestLoadDefinitionsWithoutCronDirectory(t *testing.T) {
@@ -304,10 +283,9 @@ func TestStartStopLoadsCronjobsWithoutRunningFutureDuration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
-	m := New(workspace, ".", []string{"#ops"}, bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", []string{"#ops"}, broadcasts, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		t.Fatal("future duration cronjob ran during start/stop test")
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
@@ -336,10 +314,9 @@ func TestStartRejectsAlreadyStartedManager(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
-	m := New(workspace, ".", []string{"#ops"}, bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", []string{"#ops"}, broadcasts, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		t.Fatal("future duration cronjob ran during duplicate start test")
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
@@ -386,11 +363,10 @@ func TestOneOffCronjobRunsImmediatelyAndDeletesFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
 	runDone := make(chan struct{})
-	m := New(workspace, ".", []string{"#ops", "#triage"}, bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", []string{"#ops", "#triage"}, broadcasts, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		close(runDone)
 
 		return RunResult{}, nil
@@ -432,11 +408,10 @@ func TestOneOffCronjobRunsAfterFutureDueTime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
 	runDone := make(chan struct{})
-	m := New(workspace, ".", []string{"#ops", "#triage"}, bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", []string{"#ops", "#triage"}, broadcasts, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		close(runDone)
 
 		return RunResult{}, nil
@@ -476,11 +451,10 @@ func TestOneOffCronjobDeletesFileAfterRunError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
 	runDone := make(chan struct{})
-	m := New(workspace, ".", []string{"#ops", "#triage"}, bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", []string{"#ops", "#triage"}, broadcasts, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		close(runDone)
 
 		return RunResult{}, errors.New("boom")
@@ -531,12 +505,11 @@ func TestScanScheduledUsesLatestDefinitionAndPersistsState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
 	store := newCronScheduleStore(t)
 	runPrompt := make(chan string, 1)
-	m := New(workspace, ".", []string{"#ops"}, bus, store, func(_ context.Context, _ string, prompt string, _ *slog.Logger, _ *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", []string{"#ops"}, broadcasts, store, func(_ context.Context, _ string, prompt string, _ *slog.Logger, _ *harnessbridge.RawRunProgress) (RunResult, error) {
 		runPrompt <- prompt
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
@@ -580,12 +553,11 @@ func TestScanScheduledInvalidLiveChannelRunsNothingUntilRepaired(t *testing.T) {
 	cronPath := filepath.Join(cronDir, "daily.md")
 	require.NoError(t, os.WriteFile(cronPath, []byte("---\nschedule: 1s\nchannel: '#ops'\n---\nbody"), 0o644))
 
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
 	store := newCronScheduleStore(t)
 	runs := make(chan struct{}, 1)
-	m := New(workspace, ".", []string{"#ops"}, bus, store, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", []string{"#ops"}, broadcasts, store, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		runs <- struct{}{}
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
@@ -628,13 +600,12 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
 	store := newCronScheduleStore(t)
 	runStarted := make(chan struct{}, 2)
 	release := make(chan struct{})
-	m := New(workspace, ".", []string{"#ops"}, bus, store, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", []string{"#ops"}, broadcasts, store, func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		runStarted <- struct{}{}
 
 		<-release
@@ -680,10 +651,9 @@ func TestScanScheduledCoalescesSameFileAndNoBacklog(t *testing.T) {
 }
 
 func TestPreparePromptInstructionCases(t *testing.T) {
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
-	m := New(t.TempDir(), ".", nil, bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", nil, broadcasts, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
 
@@ -759,51 +729,44 @@ func TestLoadDefinitionDefaultsBlankAgent(t *testing.T) {
 }
 
 func TestExecuteJobWithTextChannelSendsThreadOnlyFinalPayload(t *testing.T) {
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
-	m := New(t.TempDir(), ".", nil, bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", nil, broadcasts, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{Text: "internal note", VerbatimMessage: " final payload ", Attachments: []events.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}}, nil
 	}, slog.New(slog.DiscardHandler))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC) }
 
-	var (
-		gotChannel, gotPath, gotAgent, gotRanAt, gotText string
-		gotAttachments                                   []events.OutboundAttachment
-	)
+	done := make(chan struct{})
 
-	m.SendTextChannel = func(_ context.Context, channel, path, agent, ranAt, text string, attachments []events.OutboundAttachment) error {
-		gotChannel, gotPath, gotAgent, gotRanAt, gotText = channel, path, agent, ranAt, text
-		gotAttachments = attachments
+	go func() {
+		m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", textChannel: "#triage", body: "Body"})
+		close(done)
+	}()
 
-		return nil
-	}
-
-	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", textChannel: "#triage", body: "Body"})
-
-	if gotChannel != "#triage" || gotPath != "cron/daily.md" || gotAgent != "helper" || gotRanAt != "2000-01-02T03:04:05Z" || gotText != "final payload" {
-		t.Fatalf("text delivery = (%q, %q, %q, %q, %q); want channel/path/agent/time/final payload", gotChannel, gotPath, gotAgent, gotRanAt, gotText)
-	}
-
-	if len(gotAttachments) != 1 || gotAttachments[0].Name != "report.txt" || gotAttachments[0].MIMEType != "text/plain" || string(gotAttachments[0].Data) != "report" {
-		t.Fatalf("text attachments = %#v; want report.txt text/plain report", gotAttachments)
-	}
+	broadcast := <-broadcasts
+	broadcast.Delivery.MarkDelivered(nil)
+	<-done
+	require.Equal(t, "#triage", broadcast.Message.SlackReply.ChannelID)
+	require.Equal(t, "final payload", broadcast.Message.Text)
+	require.Len(t, broadcast.Message.Attachments, 1)
+	require.Equal(t, "report.txt", broadcast.Message.Attachments[0].Name)
 }
 
 func TestExecuteJobWithTextChannelSkipsEmptyFinalPayload(t *testing.T) {
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
-	m := New(t.TempDir(), ".", nil, bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(t.TempDir(), ".", nil, broadcasts, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{Text: "internal note"}, nil
 	}, slog.New(slog.DiscardHandler))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC) }
-	m.SendTextChannel = func(context.Context, string, string, string, string, string, []events.OutboundAttachment) error {
-		t.Fatal("text delivery called for empty final payload")
-		return nil
-	}
 
 	m.executeJob(t.Context(), &definition{relativePath: "cron/daily.md", agent: "helper", textChannel: "#triage", body: "Body"})
+
+	select {
+	case <-broadcasts:
+		t.Fatal("broadcast sent for empty final payload")
+	default:
+	}
 }
 
 func TestLoadOneOffCronjobValidatesTargetsAndPreparesPrompt(t *testing.T) {
@@ -818,10 +781,9 @@ func TestLoadOneOffCronjobValidatesTargetsAndPreparesPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
-	m := New(workspace, ".", []string{"#ops", "#triage"}, bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", []string{"#ops", "#triage"}, broadcasts, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
 
@@ -857,10 +819,9 @@ func TestLoadOneOffCronjobReportsReadAndDefinitionErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
-	m := New(workspace, ".", []string{"#ops", "#triage"}, bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", []string{"#ops", "#triage"}, broadcasts, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
 
@@ -879,10 +840,9 @@ func TestLoadOneOffCronjobReportsWorkspaceOpenError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bus := events.New()
-	defer bus.Close()
+	broadcasts := make(chan events.Broadcast, 1)
 
-	m := New(workspace, ".", []string{"#ops", "#triage"}, bus, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
+	m := New(workspace, ".", []string{"#ops", "#triage"}, broadcasts, newCronScheduleStore(t), func(context.Context, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (RunResult, error) {
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
 
