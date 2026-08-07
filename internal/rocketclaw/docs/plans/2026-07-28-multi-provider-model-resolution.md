@@ -145,7 +145,7 @@ Store `ProviderOrigin` on `looper`. Replace hard-coded OpenAI provider attribute
 
 ```sh
 gofmt -w internal/rocketcode/*.go
-TMPDIR="$PWD/.tmp" go test ./internal/rocketcode ./cmd/rocketcode ./cmd/rocketloop
+TMPDIR="$PWD/.tmp" go test ./internal/rocketcode ./cmd/rocketcode
 TMPDIR="$PWD/.tmp" go test ./internal/quickbench
 TMPDIR="$PWD/.tmp" make -C internal/rocketcode cloc
 ```

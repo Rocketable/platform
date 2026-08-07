@@ -19,7 +19,6 @@ See [LICENSE](LICENSE) for the full license terms.
 - Connect agents to team workflows through Slack, cron jobs, scheduled prompts, and an external MCP HTTP endpoint.
 - Run checked-in Starlark workflows as foreground managed turns with isolated custom workers and Slack phase and worker activity progress.
 - Route model requests through independently configured default and named OpenAI-compatible providers while preserving one local agent/tool model.
-- Run `openresponsesd` as a separate local OpenResponses-shaped API daemon that can route to OpenAI Responses, OpenAI-compatible Chat Completions, or Anthropic Messages upstreams.
 - Expose optional OpenTelemetry/OpenInference-compatible tracing for agent runs.
 
 ## Main Components
@@ -31,7 +30,6 @@ See [LICENSE](LICENSE) for the full license terms.
 Runnable entry points:
 
 - `cmd/rocketcode`: interactive CLI for testing RocketCode in the current workspace.
-- `cmd/rocketloop`: non-interactive autonomous loop for a goal supplied by arguments or stdin.
 
 ### RocketClaw
 
@@ -49,11 +47,9 @@ Every active `cron/*.md` definition declares a quoted `channel` that matches a c
 
 ### Supporting Tools
 
-- `cmd/openresponsesd`: serves `/healthz`, `/v1/responses`, and `/v1/responses/compact` with optional bearer auth and provider routing configured by `openresponsesd.json`.
 - `cmd/funneld`: serves a small HTTPS reverse-proxy funnel from public mount paths to target base URLs configured by `funneld.json`.
 - `cmd/quickbench`: runs YAML benchmarks through RocketCode with CLI-selected models. See [cmd/quickbench/README.md](cmd/quickbench/README.md).
 - `cmd/quickweb`: serves trusted internal static applets with one persistent JSON document per page. See [cmd/quickweb/README.md](cmd/quickweb/README.md).
-- `cmd/interviewd`: serves a temporary local HTML form for structured interview questions and prints submitted answers as Markdown.
 
 ## Runtime Flow
 
@@ -67,18 +63,16 @@ Every active `cron/*.md` definition declares a quoted `channel` that matches a c
 
 Saved workflows run only as foreground managed turns. Each workflow launches fresh isolated custom workers, keeps intermediate values out of managed history, and persists a compact terminal summary of completed, failed, stopped, and skipped phases so later turns can explain what happened. Successful runs also record and deliver the final value. Slack shows phase progress and each worker's latest attributed activity with plan/task cards. Fan-out workers share one checkout, so parallel writers must own disjoint files. SQLite does not persist resumable workflow progress: `$stop` ends the run, and daemon restart requires a new `$workflow` invocation.
 
-For local CLI experimentation, `rocketcode` and `rocketloop` run RocketCode directly in the current working directory.
+For local CLI experimentation, `rocketcode` runs RocketCode directly in the current working directory.
 
 ## Repository Layout
 
 - `cmd/`: runnable binaries.
 - `internal/rocketcode/`: core workspace agent runtime.
 - `internal/rocketclaw/`: connector service runtime around RocketCode.
-- `internal/openresponsesd/`: OpenResponses-shaped daemon, config loading, HTTP/WebSocket handling, and provider adapters.
 - `internal/funneld/`: HTTPS funnel proxy daemon and JSON route config loading.
 - `internal/quickbench/`: benchmark runner implementation.
 - `internal/quickweb/`: lightweight static applet server.
-- `internal/interviewd/`: structured interview form server.
 - `internal/netutil/`: shared networking helpers.
 - `vendor/`: vendored Go dependencies.
 
@@ -116,8 +110,6 @@ The top-level `openai` object is the default provider. Add named providers under
 ```
 
 Manage each provider's local credential separately with `rocketclaw oai login [provider] [--headless]`, `rocketclaw oai list`, and `rocketclaw oai logout [provider]`; omission means `openai`. Credentials are stored in the selected config's workspace under its selected runtime directory, normally `.rocketclaw/auth.json`.
-
-`openresponsesd` is configured with `openresponsesd.json` by default, or with `--config` / `OPENRESPONSESD_CONFIG`. Its documented credential environment variables are `OPENRESPONSESD_OPENAI_API_KEY` and `OPENRESPONSESD_ANTHROPIC_API_KEY`; bearer-token auth can be set in config or overridden locally with `--auth-token` / `OPENRESPONSESD_AUTH_TOKEN`.
 
 `funneld` is configured with `funneld.json` by default, or with `--config` / `FUNNELD_CONFIG`. Its config declares a certificate `host`, an optional `cert_cache`, and routes from public mount paths to target base URLs.
 
