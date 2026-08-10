@@ -68,6 +68,8 @@ type looperTool struct {
 	Permission         string
 	Subjects           func(json.RawMessage) ([]string, error)
 	VisibilitySubjects []string
+	// codeModeOnly tools are available only inside execute (not model-facing).
+	codeModeOnly bool
 }
 
 type toolCallMetadata struct {
@@ -77,20 +79,23 @@ type toolCallMetadata struct {
 
 // looper runs conversational turns against the configured model and tools.
 type looper struct {
-	agent                  Agent
-	ProviderOrigin         ProviderOrigin
-	Client                 responsesAPI
-	SystemPrompt           string
-	Model                  shared.ResponsesModel
-	DisplayModel           string
-	ReasoningEffort        shared.ReasoningEffort
-	Verbosity              string
-	CompactThreshold       int64
-	CompactionSteering     string
-	ParallelToolCalls      int
-	ResponseFormat         responses.ResponseFormatTextConfigUnionParam
-	Permissions            PermissionSet
-	Tools                  map[string]looperTool
+	agent              Agent
+	ProviderOrigin     ProviderOrigin
+	Client             responsesAPI
+	SystemPrompt       string
+	Model              shared.ResponsesModel
+	DisplayModel       string
+	ReasoningEffort    shared.ReasoningEffort
+	Verbosity          string
+	CompactThreshold   int64
+	CompactionSteering string
+	ParallelToolCalls  int
+	ResponseFormat     responses.ResponseFormatTextConfigUnionParam
+	Permissions        PermissionSet
+	Tools              map[string]looperTool
+	// CodeModeHosts are tools available only inside execute (not model-facing):
+	// sandbox host tools plus embedder custom tools (e.g. rocketclaw_*).
+	CodeModeHosts          map[string]looperTool
 	permissionReviewInput  []responses.ResponseInputItemUnionParam
 	RewriteHistory         func([]responses.ResponseInputItemUnionParam) []responses.ResponseInputItemUnionParam
 	Diagnostics            bool
@@ -761,7 +766,8 @@ func (l *looper) runTurn(
 		}
 
 		l.emitHostedToolDiagnostics(output, resp.Output)
-		rendered = append(rendered, responseChatResponses(resp.Output)...)
+		// Stream reasoning/commentary live; defer final assistant messages to turn end.
+		rendered = appendLiveTurnResponses(output, rendered, responseChatResponses(resp.Output))
 
 		if err := l.appendProviderReplay(&record, &turnItems, resp); err != nil {
 			return emptyRecord, nil, false, err
@@ -1507,6 +1513,21 @@ func emitDiagnosticChatResponse(output chan<- ChatResponse, item ChatResponse) {
 	}
 }
 
+// appendLiveTurnResponses streams non-final responses immediately and keeps final
+// assistant messages for Loop to emit after the turn completes.
+func appendLiveTurnResponses(output chan<- ChatResponse, rendered, items []ChatResponse) []ChatResponse {
+	for _, item := range items {
+		if item.Kind == ChatResponseAssistantMessage {
+			rendered = append(rendered, item)
+			continue
+		}
+
+		emitChatResponse(output, item)
+	}
+
+	return rendered
+}
+
 func responseChatResponses(items []responses.ResponseOutputItemUnion) []ChatResponse {
 	result := []ChatResponse{}
 
@@ -1784,6 +1805,7 @@ func (l *looper) dispatchToolCalls(
 
 			metadata := toolCallMetadata{subagentIndex: call.subagentIndex, subagentTotal: call.subagentTotal}
 			callCtx, span := l.Observability.startToolSpan(groupCtx, call.name, call.callID, call.tool.Permission, call.args, metadata)
+			callCtx = withToolCallContext(callCtx, l, output)
 
 			if call.tool.CallReplay != nil {
 				result, replayInput, err = call.tool.CallReplay(callCtx, call.args, output, metadata)

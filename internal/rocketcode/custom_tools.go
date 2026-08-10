@@ -30,9 +30,10 @@ func customLooperTools(customTools []Tool, reserved map[string]looperTool) (map[
 	tools := make(map[string]looperTool, len(customTools))
 
 	reservedNames := map[string]struct{}{
-		"find_skills": {},
-		"skill":       {},
-		"task":        {},
+		"find_skills":   {},
+		"skill":         {},
+		"task":          {},
+		executeToolName: {},
 	}
 	for name := range reserved {
 		reservedNames[name] = struct{}{}
@@ -105,7 +106,7 @@ func customLooperTool(tool *Tool) (looperTool, error) {
 	definition.Parameters = parameters
 	definition.Strict = openai.Bool(true)
 
-	return looperTool{Definition: definition, Call: call, Permission: permission, Subjects: subjects, VisibilitySubjects: visibilitySubjects}, nil
+	return looperTool{Definition: definition, Call: call, Permission: permission, Subjects: subjects, VisibilitySubjects: visibilitySubjects, codeModeOnly: true}, nil
 }
 
 func customToolParameters(parameters map[string]any) (map[string]any, error) {

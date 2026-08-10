@@ -374,7 +374,8 @@ func TestTaskTool(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Len(t, mock.calls, 1)
-		require.Contains(t, marshalJSON(t, mock.calls[0].Tools), `"name":"read"`)
+		require.Contains(t, marshalJSON(t, mock.calls[0].Tools), `"name":"execute"`)
+		require.NotContains(t, marshalJSON(t, mock.calls[0].Tools), `"name":"read"`)
 	})
 }
 
@@ -400,11 +401,13 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 		agent := testAgentWithPermission(permissionSetForActions(map[string]PermissionAction{"read": permissionAllow, "task": permissionAllow}))
 		agent.Name = "reader"
 
-		tools := factory.toolsFor(agent)
+		tools, hosts := factory.assembleTools(agent)
 
-		require.Contains(t, tools, "read")
+		require.Contains(t, tools, "execute")
 		require.Contains(t, tools, "task")
+		require.NotContains(t, tools, "read")
 		require.NotContains(t, tools, "bash")
+		require.Contains(t, hosts, "read")
 	})
 
 	t.Run("recursion budget hides task", func(t *testing.T) {
@@ -429,14 +432,17 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 		require.NotContains(t, tools, "read")
 	})
 
-	t.Run("startup agent exposes read for edit allow", func(t *testing.T) {
+	t.Run("startup agent exposes execute for edit allow", func(t *testing.T) {
 		agent := testAgentWithPermission(permissionSetForActions(map[string]PermissionAction{"edit": permissionAllow}))
 		agent.Name = "main"
 
-		tools := factory.toolsFor(agent)
+		tools, hosts := factory.assembleTools(agent)
 
-		require.Contains(t, tools, "read")
+		require.Contains(t, tools, "execute")
+		require.NotContains(t, tools, "read")
 		require.NotContains(t, tools, "bash")
+		// edit allow makes read permission actionable (inheritance).
+		require.Contains(t, hosts, "read")
 	})
 
 	t.Run("startup agent can allow hosted websearch", func(t *testing.T) {
@@ -482,9 +488,12 @@ func TestBashPermissionGrantsOnlyShellOutputRead(t *testing.T) {
 
 	agent := testAgentWithPermission(permissionSetForActions(map[string]PermissionAction{"bash": permissionAllow}))
 	agent.Name = "main"
-	tools := factory.toolsFor(agent)
-	require.Contains(t, tools, "bash")
-	require.Contains(t, tools, "read")
+	tools, hosts := factory.assembleTools(agent)
+	require.Contains(t, tools, "execute")
+	require.NotContains(t, tools, "bash")
+	require.NotContains(t, tools, "read")
+	require.Contains(t, hosts, "bash")
+	require.Contains(t, hosts, "read")
 
 	permissions := shellOutput.effectivePermissions(agent.Permission)
 	loop := emptyTestLooper()

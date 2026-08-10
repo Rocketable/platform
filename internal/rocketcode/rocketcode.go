@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
+	"github.com/Rocketable/platform/internal/rocketcode/mcpclient"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/shared"
 	"go.opentelemetry.io/otel/trace"
@@ -38,6 +39,8 @@ type Config struct {
 	CheckpointSink             CheckpointSink
 	CustomTools                []Tool
 	ShellEnv                   map[string]string
+	MCPServers                 map[string]mcpclient.ServerConfig
+	MCPWorkspace               string
 }
 
 // ChildRunKind identifies a hidden child-run category.
@@ -342,6 +345,12 @@ func NewWithModelResolver(
 	}
 
 	maps.Copy(baseTools, customTools)
+
+	mcpRegistry, err := newMCPRegistry(config.MCPWorkspace, config.MCPServers)
+	if err != nil {
+		return nil, err
+	}
+
 	factory := &toolFactory{
 		resolver:                   resolver,
 		systemPrompt:               systemPrompt,
@@ -363,9 +372,19 @@ func NewWithModelResolver(
 		autoApprovePermissions:     config.AutoApprovePermissions,
 		observability:              config.Observability,
 		childRunLogger:             config.ChildRunLogger,
+		mcpRegistry:                mcpRegistry,
 	}
-	runtimeSystemPrompt := composeSystemPromptWithSkills(systemPrompt, skills, agentForTools)
+	modelTools, codeHosts := factory.assembleTools(agentForTools)
 
+	var mcpServers []string
+	if factory.mcpRegistry != nil && agentForTools != nil {
+		mcpServers = visibleMCPServers(agentForTools.Permission, factory.mcpRegistry.Names())
+	}
+
+	runtimeSystemPrompt := withCodeModeSystemPrompt(
+		composeSystemPromptWithSkills(systemPrompt, skills, agentForTools),
+		modelTools, codeHosts, mcpServers,
+	)
 	looper := &looper{
 		agent:                  activeAgent,
 		ProviderOrigin:         origin,
@@ -379,7 +398,8 @@ func NewWithModelResolver(
 		CompactionSteering:     config.CompactionSteering,
 		ParallelToolCalls:      config.ParallelToolCalls,
 		Permissions:            activeAgent.Permission,
-		Tools:                  factory.toolsFor(agentForTools),
+		Tools:                  modelTools,
+		CodeModeHosts:          codeHosts,
 		Diagnostics:            config.Diagnostics,
 		AutoApprovePermissions: config.AutoApprovePermissions,
 		PermissionReviewer:     factory,

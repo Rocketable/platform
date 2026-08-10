@@ -47,6 +47,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	childFactory := *f
 	childFactory.inPermissionReview = true
 
+	modelTools, codeHosts := childFactory.assembleTools(&agent)
 	child := &looper{
 		agent:                  agent,
 		ProviderOrigin:         origin,
@@ -61,7 +62,8 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 		ParallelToolCalls:      f.parallelToolCalls,
 		ResponseFormat:         permissionReviewResponseFormat(),
 		Permissions:            agent.Permission,
-		Tools:                  childFactory.toolsFor(&agent),
+		Tools:                  modelTools,
+		CodeModeHosts:          codeHosts,
 		Diagnostics:            f.diagnostics,
 		AutoApprovePermissions: f.autoApprovePermissions,
 		PermissionReviewer:     &childFactory,

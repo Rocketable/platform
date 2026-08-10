@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Rocketable/platform/internal/rocketcode/mcpclient"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
@@ -44,6 +45,8 @@ type toolFactory struct {
 	// When false, task calls apply target-agent guardrails. When true, nested task calls skip guardrail checks.
 	inGuardrailRun     bool
 	inPermissionReview bool
+
+	mcpRegistry *mcpclient.Registry
 }
 
 type readToolParams struct {
@@ -81,8 +84,31 @@ func newSandboxedTools(root *os.Root, shellOutput shellOutputConfig, shellEnv []
 	return makeSandboxedTools(sfs, sss)
 }
 
+// CodeModeOnlyHostTool reports whether name is a sandbox host tool available
+// only inside execute (not as a top-level model tool).
+func CodeModeOnlyHostTool(name string) bool {
+	switch name {
+	case "read", "apply_patch", "glob", "grep", "webfetch", "bash":
+		return true
+	default:
+		return false
+	}
+}
+
+func codeModeOnlyTool(name string, tool *looperTool) bool {
+	return tool.codeModeOnly || CodeModeOnlyHostTool(name)
+}
+
+// toolsFor returns model-facing tools (no code-mode-only host tools).
 func (f *toolFactory) toolsFor(agent *Agent) map[string]looperTool {
-	tools := make(map[string]looperTool, len(f.baseTools))
+	model, _ := f.assembleTools(agent)
+
+	return model
+}
+
+// assembleTools builds model-facing tools and the internal code-mode host registry.
+func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]looperTool) {
+	tools := make(map[string]looperTool, len(f.baseTools)+4)
 	maps.Copy(tools, f.baseTools)
 
 	if agent != nil {
@@ -101,7 +127,33 @@ func (f *toolFactory) toolsFor(agent *Agent) map[string]looperTool {
 		delete(tools, "task")
 	}
 
+	codeHosts = make(map[string]looperTool, 6)
+
 	for name := range tools {
+		tool := tools[name]
+		if !codeModeOnlyTool(name, &tool) || !toolVisible(agent, name, &tool) {
+			continue
+		}
+
+		codeHosts[name] = tool
+	}
+
+	maps.Copy(tools, scoped.mcpToolsFor(agent, codeHosts))
+
+	for name := range tools {
+		if name == executeToolName {
+			// Code-mode tools gate inclusion themselves; nested calls enforce real permissions.
+			continue
+		}
+
+		// Sandbox host tools are execute-only. Embedder custom tools (rocketclaw_*,
+		// ask_user_question, …) stay model-facing when visible and are also bound into execute.
+		if CodeModeOnlyHostTool(name) {
+			delete(tools, name)
+
+			continue
+		}
+
 		tool := tools[name]
 		if !toolVisible(agent, name, &tool) {
 			delete(tools, name)
@@ -112,7 +164,7 @@ func (f *toolFactory) toolsFor(agent *Agent) map[string]looperTool {
 		delete(tools, "find_skills")
 	}
 
-	return tools
+	return tools, codeHosts
 }
 
 func toolVisible(agent *Agent, name string, tool *looperTool) bool {

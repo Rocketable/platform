@@ -192,7 +192,6 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 
 	agent.Permission = f.shellOutput.effectivePermissions(agent.Permission)
 	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
-	systemPrompt := composeSystemPromptWithSkills(strings.TrimSpace(f.systemPrompt+"\n\n"+agent.Prompt), f.skills, &agent)
 
 	childFactory := *f
 	if f.recursionRemaining != nil {
@@ -205,6 +204,17 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		return "", err
 	}
 
+	modelTools, codeHosts := childFactory.assembleTools(&agent)
+
+	var mcpServers []string
+	if childFactory.mcpRegistry != nil {
+		mcpServers = visibleMCPServers(agent.Permission, childFactory.mcpRegistry.Names())
+	}
+
+	systemPrompt := withCodeModeSystemPrompt(
+		composeSystemPromptWithSkills(strings.TrimSpace(f.systemPrompt+"\n\n"+agent.Prompt), f.skills, &agent),
+		modelTools, codeHosts, mcpServers,
+	)
 	child := &looper{
 		agent:                  agent,
 		ProviderOrigin:         origin,
@@ -218,7 +228,8 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		CompactionSteering:     f.compactionSteering,
 		ParallelToolCalls:      f.parallelToolCalls,
 		Permissions:            agent.Permission,
-		Tools:                  childFactory.toolsFor(&agent),
+		Tools:                  modelTools,
+		CodeModeHosts:          codeHosts,
 		Diagnostics:            f.diagnostics,
 		AutoApprovePermissions: f.autoApprovePermissions,
 		PermissionReviewer:     &childFactory,
@@ -342,6 +353,7 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 	childFactory := *f
 	childFactory.inGuardrailRun = true
 
+	modelTools, codeHosts := childFactory.assembleTools(&agent)
 	child := &looper{
 		agent:                  agent,
 		ProviderOrigin:         origin,
@@ -356,7 +368,8 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 		ParallelToolCalls:      f.parallelToolCalls,
 		ResponseFormat:         responseFormat,
 		Permissions:            agent.Permission,
-		Tools:                  childFactory.toolsFor(&agent),
+		Tools:                  modelTools,
+		CodeModeHosts:          codeHosts,
 		Diagnostics:            f.diagnostics,
 		AutoApprovePermissions: f.autoApprovePermissions,
 		PermissionReviewer:     &childFactory,

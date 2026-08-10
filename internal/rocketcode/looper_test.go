@@ -2154,6 +2154,36 @@ func TestLooperPrintsReasoningSummary(t *testing.T) {
 	require.Equal(t, []ChatResponse{reasoningSummary("think briefly"), assistantMessage("final answer")}, collectResponses(output))
 }
 
+func TestLooperStreamsReasoningBeforeToolCalls(t *testing.T) {
+	first := testResponse("resp-tool", []responses.ResponseOutputItemUnion{
+		testReasoningOutputItem("resp-tool-reasoning", "encrypted", "**Planning tool use**"),
+		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "skill", `{"name":"current-time"}`)}).Output[0],
+	})
+	mock := mockResponses(first, responseWithMessage("resp-final", "done"))
+	looper := testLooper(mock)
+	looper.Diagnostics = true
+	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "skill", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
+	skillTool := testLooperTool("skill")
+	skillTool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		return TextToolResult("loaded"), nil
+	}
+	looper.Tools = map[string]looperTool{"skill": skillTool}
+
+	output := make(chan ChatResponse, 10)
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "what time?", output)
+	close(input)
+
+	require.NoError(t, looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1)))
+
+	got := collectResponses(output)
+	require.GreaterOrEqual(t, len(got), 3)
+	require.Equal(t, reasoningSummary("**Planning tool use**"), got[0])
+	require.Equal(t, toolDiagnosticPhaseCall, got[1].Tool.Phase)
+	require.Equal(t, "skill", got[1].Tool.Name)
+	require.Equal(t, assistantMessage("done"), got[len(got)-1])
+}
+
 func TestLooperUpdatesSessionStoreAfterCompletedTurn(t *testing.T) {
 	mock := mockResponses(responseWithUsage(responseWithMessage("resp-save", "saved answer"), `{"input_tokens":12,"input_tokens_details":{"cached_tokens":3},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":2},"total_tokens":17}`))
 	store := testSessionStore()

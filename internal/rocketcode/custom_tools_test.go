@@ -170,17 +170,20 @@ func TestCustomToolPermissionVisibilitySupportsWildcards(t *testing.T) {
 		{Pattern: "github_delete_repo", Action: permissionDeny},
 	}}}})
 
-	visible := factory.toolsFor(agent)
-
-	if _, ok := visible["github_create_issue"]; !ok {
-		t.Fatalf("github_create_issue is hidden; want visible")
+	model, hosts := factory.assembleTools(agent)
+	if _, ok := model["github_create_issue"]; !ok {
+		t.Fatalf("github_create_issue is hidden from model; want top-level and execute")
 	}
 
-	if _, ok := visible["github_delete_repo"]; ok {
+	if _, ok := hosts["github_create_issue"]; !ok {
+		t.Fatalf("github_create_issue is hidden; want visible inside execute")
+	}
+
+	if _, ok := hosts["github_delete_repo"]; ok {
 		t.Fatalf("github_delete_repo is visible; want hidden")
 	}
 
-	if _, ok := visible["linear_create_issue"]; ok {
+	if _, ok := hosts["linear_create_issue"]; ok {
 		t.Fatalf("linear_create_issue is visible; want hidden")
 	}
 }
@@ -190,18 +193,24 @@ func TestCustomToolPermissionVisibilityScalarAllowDeny(t *testing.T) {
 	factory := testToolFactoryWithBaseTools(tools)
 
 	defaultAgent := testAgentWithPermission(PermissionSet{Buckets: nil})
-	if _, ok := factory.toolsFor(defaultAgent)["github_create_issue"]; ok {
+	if _, hosts := factory.assembleTools(defaultAgent); hosts["github_create_issue"].Call != nil {
 		t.Fatalf("github_create_issue is visible without an allow rule; want hidden")
 	}
 
 	deniedAgent := testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "tools", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}}}}})
-	if _, ok := factory.toolsFor(deniedAgent)["github_create_issue"]; ok {
+	if _, hosts := factory.assembleTools(deniedAgent); hosts["github_create_issue"].Call != nil {
 		t.Fatalf("github_create_issue is visible with tools deny; want hidden")
 	}
 
 	allowedAgent := testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "tools", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}})
-	if _, ok := factory.toolsFor(allowedAgent)["github_create_issue"]; !ok {
-		t.Fatalf("github_create_issue is hidden with tools allow; want visible")
+
+	model, hosts := factory.assembleTools(allowedAgent)
+	if _, ok := model["github_create_issue"]; !ok {
+		t.Fatalf("github_create_issue is hidden from model with tools allow; want top-level and execute")
+	}
+
+	if hosts["github_create_issue"].Call == nil {
+		t.Fatalf("github_create_issue is hidden with tools allow; want visible inside execute")
 	}
 }
 

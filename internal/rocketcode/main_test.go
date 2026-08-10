@@ -176,7 +176,10 @@ func TestNewCopiesShellEnv(t *testing.T) {
 
 	env["ROCKETCLAW_CONVERSATION_ID"] = "second"
 
-	result, err := loop.Tools["bash"].Call(context.Background(), json.RawMessage(`{"command":"printf %s \"$ROCKETCLAW_CONVERSATION_ID\"","timeout":0,"workdir":"","description":"env mutation"}`), nil, toolCallMetadata{subagentIndex: 0, subagentTotal: 0})
+	bash, ok := loop.CodeModeHosts["bash"]
+	require.True(t, ok)
+
+	result, err := bash.Call(context.Background(), json.RawMessage(`{"command":"printf %s \"$ROCKETCLAW_CONVERSATION_ID\"","timeout":0,"workdir":"","description":"env mutation"}`), nil, toolCallMetadata{subagentIndex: 0, subagentTotal: 0})
 
 	require.NoError(t, err)
 	require.Equal(t, "first", result.Output)
@@ -221,7 +224,10 @@ func TestNewSandboxedBashConfigAppliesToBashTool(t *testing.T) {
 
 	t.Setenv("PATH", "")
 
-	result, err := loop.Tools["bash"].Call(context.Background(), json.RawMessage(`{"command":"true","timeout":0,"workdir":"","description":"sandbox"}`), nil, toolCallMetadata{subagentIndex: 0, subagentTotal: 0})
+	bash, ok := loop.CodeModeHosts["bash"]
+	require.True(t, ok)
+
+	result, err := bash.Call(context.Background(), json.RawMessage(`{"command":"true","timeout":0,"workdir":"","description":"sandbox"}`), nil, toolCallMetadata{subagentIndex: 0, subagentTotal: 0})
 
 	require.NoError(t, err)
 	require.Contains(t, result.Output, "sandboxed bash:")
@@ -305,15 +311,17 @@ read:
 		require.Equal(t, PermissionAuto, action)
 	}
 
-	require.Contains(t, loop.Tools, "read")
+	require.Contains(t, loop.Tools, "execute")
 	require.Contains(t, loop.Tools, "skill")
+	require.NotContains(t, loop.Tools, "read")
 	require.NotContains(t, loop.Tools, "edit")
 	require.NotContains(t, loop.Tools, "bash")
 	require.NotContains(t, loop.Tools, "glob")
 	require.NotContains(t, loop.Tools, "grep")
+	require.Contains(t, loop.CodeModeHosts, "read")
 	require.NotContains(t, loop.SystemPrompt, "skills/parent/asset.txt")
 
-	readTool := loop.Tools["read"]
+	readTool := loop.CodeModeHosts["read"]
 	readArgs := json.RawMessage(`{"filePath":"skills/parent/asset.txt"}`)
 	decision, err := loop.permissionDecision("read", &readTool, readArgs)
 	require.NoError(t, err)
