@@ -68,6 +68,7 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	assert.NotContains(t, model, "bash")
 	assert.Contains(t, hosts, "read")
 	assert.Contains(t, hosts, "bash")
+
 	execDesc := model[executeToolName].Definition.Description.Value
 	assert.Contains(t, execDesc, "search(")
 	assert.Contains(t, execDesc, "gather(")
@@ -75,11 +76,13 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	assert.Contains(t, execDesc, "No import/from")
 	assert.Contains(t, execDesc, "not varargs")
 	assert.Contains(t, execDesc, `gather([lambda: read(filePath="a")`)
+
 	props, _ := model[executeToolName].Definition.Parameters["properties"].(map[string]any)
 	codeProp, _ := props["code"].(map[string]any)
 	codeDesc, _ := codeProp["description"].(string)
 	assert.Contains(t, codeDesc, "Starlark source")
 	assert.Contains(t, codeDesc, "not varargs")
+
 	prompt := withCodeModeSystemPrompt("base", model, hosts, nil)
 	assert.Contains(t, prompt, "## Code Mode")
 	assert.Contains(t, prompt, "read(")
@@ -89,6 +92,7 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	assert.Contains(t, prompt, "race_first([lambda:")
 	assert.Contains(t, prompt, `gather([lambda: read(filePath="a")`)
 	assert.Contains(t, prompt, "Default concurrency 16")
+
 	entries := concurrencySearchEntries()
 	require.NotEmpty(t, entries)
 	assert.Contains(t, entries[0].item.Signature, "gather([lambda:")

@@ -101,6 +101,21 @@ Return the human-visible value directly from `main`: strings render directly, ot
 
 New `#ops` conversations use agent `main`. Authorized replies can select `factory` with `$agent factory`, its `🎛 factory` alias, or the native selector.
 
+## Outbound MCP Servers
+
+`mcp_servers` is distinct from inbound `mcp_external`. Server names use the same character set as MCP tool names in the official Go SDK: non-empty, at most 128 characters, and only letters, digits, `_`, `-`, and `.` (for example `sequential-thinking`, `my_server.v2`). Each entry is either stdio (`command` plus optional `args`, `env`, `cwd`) or streamable HTTP (`url` plus optional static `headers`). Set exactly one of `command` or `url`. Static headers and env are fine; OAuth is not supported. Changing `mcp_servers` requires restart. RocketClaw connects for each `execute` call and closes afterward. Starlark builtins sanitize `-`/`.` in server and tool names to `_` (for example `sequential-thinking.foo-bar` → `sequential_thinking_foo_bar`).
+
+```json
+"mcp_servers": {
+  "demo": { "command": "my-mcp", "args": [], "env": {} },
+  "acme": { "url": "http://127.0.0.1:9090/mcp", "headers": { "Authorization": "Bearer …" } }
+}
+```
+
+Agents use filesystem, shell, fetch, patch, and outbound MCP through the Code Mode `execute` tool (not as separate top-level tools). After the right permission grants, call `execute` with a short Starlark script (`def main()`). Inside the script: host builtins `read(...)`, `apply_patch(...)`, `glob(...)`, `grep(...)`, `webfetch(...)`, `bash(command="…")` with their normal permission buckets and subjects (including multi-subject `bash`); RocketClaw platform tools such as `ask_user_question(...)`, `rocketclaw_reload(...)`, `rocketclaw_update_goal(...)` (also still available top-level when eligible); MCP as `server_toolname(...)` after `permission.mcp` (permission subjects use raw `server.tool`). Discover tools with in-script `search(query="", namespace="", offset=0, limit=10)` (JSON items with path/description/signature/callable). A short Code Mode catalog is also in the system prompt. Skills, `task`, hosted `websearch`, and RocketClaw platform tools stay top-level when eligible.
+
+Concurrent tool calls inside one script use `gather`, `map`, `race`, and `race_first` (default `concurrency=16`, max 64). Example: `gather([lambda: read(filePath="a"), lambda: read(filePath="b")])` runs both reads together and returns ordered results; one failure cancels siblings. `map(paths, lambda p: read(filePath=p), concurrency=8)` maps over items. `race` keeps the first success; `race_first` keeps the first finish (success or error). Nested fan-out is allowed. These names also appear in the system-prompt Code Mode section and in `search`.
+
 ## Current State Schema
 
 Fresh RocketClaw runtime directories initialize the current SQLite schema directly with schema marker `user_version = 9`. Existing state and configuration must already use current formats; startup does not migrate historical formats.
@@ -117,7 +132,7 @@ Fresh RocketClaw runtime directories initialize the current SQLite schema direct
 
 ## RocketClaw Tools
 
-RocketClaw injects these tools into RocketCode turns. Most are auto-allowed by RocketClaw unless a per-agent permission rule explicitly denies them. `rocketclaw_restart` and `rocketclaw_start_new_thread` are default-deny and require an explicit per-agent `allow`. `rocketclaw_dynamic_workflow` is not RocketClaw auto-allowed; it is gated by `permission.workflow.<stem>`, not by `task`.
+RocketClaw injects these tools into RocketCode turns as **top-level tools and Code Mode builtins inside `execute`**. Call them directly or from Starlark by name, e.g. `ask_user_question(question="…")` or `rocketclaw_update_goal(status="progress", note="…")`. Most are auto-allowed by RocketClaw unless a per-agent permission rule explicitly denies them. `rocketclaw_restart` and `rocketclaw_start_new_thread` are default-deny and require an explicit per-agent `allow`. `rocketclaw_dynamic_workflow` is not RocketClaw auto-allowed; it is gated by `permission.workflow.<stem>`, not by `task`. Workflow workers still do not receive these platform tools.
 
 | Tool | Available In | Permission Default | What It Does |
 | --- | --- | --- | --- |
@@ -130,8 +145,9 @@ RocketClaw injects these tools into RocketCode turns. Most are auto-allowed by R
 | `rocketclaw_start_new_thread` | Qualifying human-originated managed Slack turns. | Default-deny. Requires explicit per-agent `allow`; missing, `auto`, or `deny` keeps it unavailable. | Creates a fresh managed conversation in the same configured channel and submits the literal tool prompt as its first turn. It is never exposed for cron, MCP, scheduled/system/automation, or automatic goal continuation turns. |
 | `rocketclaw_i_want_human_partner_to_see_this` | Raw/cron runs only. | Auto-allow in raw/cron tool mode unless explicitly denied by the cron agent. | Required raw-run completion tool. Its argument is the exact human-visible output, or an empty string for silence. |
 | `ask_user_question` | Qualifying human-originated Slack turns with a native answer path. | Auto-allow unless explicitly denied, but hidden when the turn has no answer path. | Asks the originating human through native UI, blocks until answered or canceled, and returns selected options and/or custom text. Not exposed for cron/raw, MCP, scheduled/system/automation, automatic goal continuations, or restart recovery continuations. |
+| `execute` | Shown when the agent has MCP grants, code-mode host grants (`read`/`edit`/`bash`/…), and/or RocketClaw platform-tool grants. The only model entry for FS/shell/fetch/patch/MCP; platform tools remain top-level too. | Entry gate uses mcp subjects when present, otherwise a matching host or platform-tool permission subject. Nested calls re-check real buckets (read/edit/bash/mcp/rocketclaw/…). Not RocketClaw auto-allowed. | Code Mode: runs a short Starlark script with required `code`. Define `def main()`; call host tools as `read(filePath="…")` / `bash(command="…")`, platform tools as `ask_user_question(question="…")` / `rocketclaw_reload(reason="…")`, MCP as `server_toolname(**kwargs)`, concurrency via `gather`/`map`/`race`/`race_first` (default concurrency 16, max 64), and `search(query="", namespace="", offset=0, limit=10)` to discover tools and concurrency builtins. Example: `def main():\n  return gather([lambda: read(filePath="a"), lambda: read(filePath="b")])`. Connects MCP per call, then closes. |
 
-For general `permission` syntax, action values, guardrails, and approval reviewers, see Agent Frontmatter And Permissions below. RocketCode is deny-by-default and later matching rules win. RocketClaw's default tool allows are injected after agent permissions unless an explicit deny already matched, so use `deny` rather than `auto` when the intent is to block or force review of a RocketClaw auto-allowed tool. For default-deny tools such as `rocketclaw_restart` and `rocketclaw_start_new_thread`, `auto` is not enough; use explicit `allow`.
+For general `permission` syntax, action values, guardrails, and approval reviewers, see Agent Frontmatter And Permissions below. RocketCode is deny-by-default and later matching rules win. RocketClaw's default tool allows are injected after agent permissions unless an explicit deny already matched, so use `deny` rather than `auto` when the intent is to block or force review of a RocketClaw auto-allowed tool. For default-deny tools such as `rocketclaw_restart` and `rocketclaw_start_new_thread`, `auto` is not enough; use explicit `allow`. Outbound MCP tools are never RocketClaw auto-allowed; grant `permission.mcp` explicitly.
 
 ## Emoji Translation Table
 
@@ -177,12 +193,17 @@ permission:
     "reviewer": allow
   workflow:
     "audit-routes": allow
+  mcp:
+    "demo.*": allow
+    "demo.danger": deny
 ---
 
 Agent instructions go here.
 ```
 
 Agents that previously used `task` grants to launch workflows must add `workflow:` allows. That is a clean break: `task` no longer enables `rocketclaw_dynamic_workflow`.
+
+Outbound MCP is deny-by-default and omitted from the model tool list until `permission.mcp` grants a configured `mcp_servers` name. Prefer least-privilege `server.tool` subjects; wildcards such as `demo.*` or `*` grant the full current and future tool catalog for matching names. Later denies subtract dangerous tools.
 
 Known frontmatter fields:
 
@@ -228,16 +249,17 @@ Permission buckets:
 
 | Bucket | Subject |
 | --- | --- |
-| `read` | Workspace-relative file paths for `read`. An `edit` allow also permits reading the same path unless a `read` rule matched first. |
-| `glob` | Requested glob patterns for `glob`. |
-| `grep` | Requested search patterns for `grep`. |
-| `webfetch` | Requested URLs for `webfetch`. |
-| `websearch` | Coarse hosted web search toggle, usually `websearch: allow`, `deny`, or `auto`. |
-| `edit` | Workspace-relative file paths touched by `apply_patch`. |
-| `bash` | Parsed shell command call expressions. Multi-command scripts need every parsed call allowed. |
+| `read` | Workspace-relative paths for nested `read` inside `execute` (not a top-level tool). An `edit` allow also permits reading the same path unless a `read` rule matched first. |
+| `glob` | Glob patterns for nested `glob` inside `execute`. |
+| `grep` | Search patterns for nested `grep` inside `execute`. |
+| `webfetch` | URLs for nested `webfetch` inside `execute`. |
+| `websearch` | Coarse hosted web search toggle (still a top-level hosted tool), usually `websearch: allow`, `deny`, or `auto`. |
+| `edit` | Workspace-relative paths for nested `apply_patch` inside `execute`. |
+| `bash` | Parsed shell call expressions for nested `bash` inside `execute`. Multi-command scripts need every parsed call allowed. |
 | `skill` | Skill names visible to `find_skills` and loadable by `skill`. |
 | `task` | Subagent names visible and callable through `task` only. `maxRecursion` can still hide `task` when the delegation budget is exhausted; it does not gate the nested workflow tool. |
 | `workflow` | Workflow stems for `rocketclaw_dynamic_workflow`. |
+| `mcp` | Outbound MCP as `server.tool` or wildcards such as `demo.*`. Gates nested MCP builtins inside `execute`. Host grants alone can still surface `execute` without mcp. |
 
 Run `rocketclaw lint` after agent, skill, or script edits. It checks write-to-execute risk, read-plus-execute leakage, task delegation cycles, delegation-chain escalation, external-content contamination, plural `permissions`, missing guardrails, and excessive `reasoningEffort`.
 

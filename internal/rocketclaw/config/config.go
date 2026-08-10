@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,18 +16,19 @@ import (
 
 // Config is the top-level rocketclaw runtime configuration.
 type Config struct {
-	Workspace         string                  `json:"workspace"`
-	WorkDir           string                  `json:"-"`
-	Overlays          []string                `json:"overlays,omitempty"`
-	Models            map[string]string       `json:"models,omitempty"`
-	Environment       []string                `json:"environment,omitempty"`
-	Logging           LoggingConfig           `json:"logging"`
-	MCPExternal       MCPExternalConfig       `json:"mcp_external"`
-	Slack             SlackConfig             `json:"slack"`
-	OpenAI            OpenAIConfig            `json:"openai"`
-	Providers         map[string]OpenAIConfig `json:"providers,omitempty"`
-	AutoApproverModel string                  `json:"auto_approver_model"`
-	Instrumentation   InstrumentationConfig   `json:"instrumentation"`
+	Workspace         string                     `json:"workspace"`
+	WorkDir           string                     `json:"-"`
+	Overlays          []string                   `json:"overlays,omitempty"`
+	Models            map[string]string          `json:"models,omitempty"`
+	Environment       []string                   `json:"environment,omitempty"`
+	Logging           LoggingConfig              `json:"logging"`
+	MCPExternal       MCPExternalConfig          `json:"mcp_external"`
+	MCPServers        map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
+	Slack             SlackConfig                `json:"slack"`
+	OpenAI            OpenAIConfig               `json:"openai"`
+	Providers         map[string]OpenAIConfig    `json:"providers,omitempty"`
+	AutoApproverModel string                     `json:"auto_approver_model"`
+	Instrumentation   InstrumentationConfig      `json:"instrumentation"`
 }
 
 // DefaultRuntimeDir is the generated runtime directory for rocketclaw configs.
@@ -51,6 +53,20 @@ type MCPExternalConfig struct {
 	Enabled    bool   `json:"enabled"`
 	ListenAddr string `json:"listen_addr"`
 }
+
+// MCPServerConfig configures one outbound MCP server for code mode.
+type MCPServerConfig struct {
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	Cwd     string            `json:"cwd,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// MCP server names follow the same character rules as MCP tool names in the
+// official Go SDK (modelcontextprotocol/go-sdk validateToolName): non-empty,
+// max 128 runes, and only [A-Za-z0-9_.-].
 
 // SlackConfig configures Slack channel conversations.
 type SlackConfig struct {
@@ -240,6 +256,10 @@ func (c *Config) Validate() error {
 		return errors.New("mcp_external.listen_addr is required when mcp_external is enabled")
 	}
 
+	if err := c.validateMCPServers(); err != nil {
+		return err
+	}
+
 	if err := c.validateSlack(); err != nil {
 		return err
 	}
@@ -354,6 +374,76 @@ func (c *Config) validateSlack() error {
 	}
 
 	return nil
+}
+
+func (c *Config) validateMCPServers() error {
+	for _, name := range slices.Sorted(maps.Keys(c.MCPServers)) {
+		if err := validateMCPServerName(name); err != nil {
+			return fmt.Errorf("mcp_servers[%q]: %w", name, err)
+		}
+
+		server := c.MCPServers[name]
+		server.Command = strings.TrimSpace(server.Command)
+		server.URL = strings.TrimSpace(server.URL)
+		server.Cwd = strings.TrimSpace(server.Cwd)
+
+		hasCommand := server.Command != ""
+
+		hasURL := server.URL != ""
+		switch {
+		case hasCommand == hasURL:
+			return fmt.Errorf("mcp_servers[%q]: set exactly one of command or url", name)
+		case hasURL:
+			parsed, err := url.Parse(server.URL)
+			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+				return fmt.Errorf("mcp_servers[%q]: url must be an http or https URL", name)
+			}
+		}
+
+		c.MCPServers[name] = server
+	}
+
+	return nil
+}
+
+// validateMCPServerName mirrors modelcontextprotocol/go-sdk mcp.validateToolName
+// character rules so config keys are no stricter than MCP protocol names.
+func validateMCPServerName(name string) error {
+	if name == "" {
+		return errors.New("name cannot be empty")
+	}
+
+	if len(name) > 128 {
+		return fmt.Errorf("name exceeds maximum length of 128 characters (current: %d)", len(name))
+	}
+
+	var invalid []string
+
+	seen := make(map[rune]bool)
+
+	for _, r := range name {
+		if validMCPNameRune(r) {
+			continue
+		}
+
+		if !seen[r] {
+			invalid = append(invalid, fmt.Sprintf("%q", string(r)))
+			seen[r] = true
+		}
+	}
+
+	if len(invalid) > 0 {
+		return fmt.Errorf("name contains invalid characters: %s", strings.Join(invalid, ", "))
+	}
+
+	return nil
+}
+
+func validMCPNameRune(r rune) bool {
+	return r >= 'a' && r <= 'z' ||
+		r >= 'A' && r <= 'Z' ||
+		r >= '0' && r <= '9' ||
+		r == '_' || r == '-' || r == '.'
 }
 
 func normalizeSlackChannels(channels []SlackChannelConfig) []SlackChannelConfig {

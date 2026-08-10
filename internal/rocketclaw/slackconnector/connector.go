@@ -1100,12 +1100,11 @@ func (c *Connector) finishThinkingResponse(ctx context.Context, msg *events.Outb
 					c.replies[msg.TurnID] = storedSlots
 					c.mu.Unlock()
 
-					_, _, _, err = c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.ThinkingTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(slackThinkingPlanBlock(title, pending.tasks)))
+					_, _, _, err = c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.ThinkingTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(slackThinkingProgressBlocks(msg.TurnID, &pending, slack.TaskCardStatusComplete, title)...))
 				}
-			case pending.thinkingTaskID != "":
-				_, _, _, err = c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.ThinkingTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(slackThinkingPlanBlock(title, pending.tasks)))
 			default:
-				_, _, _, err = c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.ThinkingTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(slackThinkingBlocks(msg.TurnID, &pending, slack.TaskCardStatusComplete)...))
+				// Non-stream uses the same plan/tasks card shape as stream.
+				_, _, _, err = c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.ThinkingTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(slackThinkingProgressBlocks(msg.TurnID, &pending, slack.TaskCardStatusComplete, title)...))
 			}
 
 			if err == nil && pending.thinkingTaskID != "" {
@@ -1251,9 +1250,7 @@ func (c *Connector) bufferProgressText(turnID string, slots *slackReplySlots, pl
 			activity = strings.TrimPrefix(activity, "\n")
 		}
 
-		if activity != "" {
-			pending.activities = append(pending.activities, activity)
-		}
+		pending.activities = append(pending.activities, slackThinkingActivityLines(activity)...)
 	}
 
 	pending.Text = text
@@ -1416,8 +1413,7 @@ func (c *Connector) flushProgressText(ctx context.Context, turnID string) error 
 			if err != nil && slackStreamEnded(err) {
 				thinkingText := slackThinkingMessage(current.Placeholder, current.Text)
 
-				title := strings.TrimSuffix(strings.TrimPrefix(current.Placeholder, "_"), "_")
-				_, _, _, err = c.api.UpdateMessageContext(ctx, current.State.ChannelID, current.State.MessageTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(slackThinkingPlanBlock(title, current.tasks)))
+				_, _, _, err = c.api.UpdateMessageContext(ctx, current.State.ChannelID, current.State.MessageTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(slackThinkingProgressBlocks(turnID, &current, slack.TaskCardStatusInProgress, "")...))
 
 				c.mu.Lock()
 				current = c.thinking[turnID]
@@ -1476,11 +1472,7 @@ func (c *Connector) flushProgressText(ctx context.Context, turnID string) error 
 		c.thinking[turnID] = pending
 		c.mu.Unlock()
 
-		blocks := slackThinkingBlocks(turnID, &pending, slack.TaskCardStatusInProgress)
-		if pending.thinkingTaskID != "" {
-			title := strings.TrimSuffix(strings.TrimPrefix(pending.Placeholder, "_"), "_")
-			blocks = []slack.Block{slackThinkingPlanBlock(title, pending.tasks)}
-		}
+		blocks := slackThinkingProgressBlocks(turnID, &pending, slack.TaskCardStatusInProgress, "")
 
 		_, _, _, err := c.api.UpdateMessageContext(ctx, pending.State.ChannelID, pending.State.MessageTS, slack.MsgOptionText(thinkingText, false), slack.MsgOptionBlocks(blocks...))
 
@@ -1586,22 +1578,268 @@ func slackThinkingPlanBlock(title string, tasks []slack.TaskUpdateChunk) *slack.
 	return slack.NewPlanBlock(title).WithTasks(planTasks...)
 }
 
+// Thinking lines for code-mode nesting (harnessbridge formatToolDiagnostic).
+const (
+	slackExecuteActivityTitle  = "Execute"
+	slackExecuteFailedTitle    = "Execute failed"
+	slackExecuteNestedPrefix   = "Execute → "
+	slackThinkingActivityTitle = "Thinking"
+)
+
+// slackThinkingActivityLines splits a progress delta into activity records.
+// New root activities stay separate; continuation lines (e.g. multi-line subagent
+// results) stay attached so they render as task details instead of sibling cards.
+func slackThinkingActivityLines(delta string) []string {
+	var out []string
+
+	for line := range strings.SplitSeq(delta, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		if len(out) > 0 && !slackLooksLikeNewThinkingActivity(line) {
+			out[len(out)-1] += "\n" + line
+			continue
+		}
+
+		out = append(out, line)
+	}
+
+	return out
+}
+
+func slackLooksLikeNewThinkingActivity(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return false
+	}
+
+	// List / prose continuations under a prior activity (especially subagent results).
+	switch {
+	case strings.HasPrefix(line, "-"), strings.HasPrefix(line, "—"), strings.HasPrefix(line, "•"), strings.HasPrefix(line, "* "):
+		return false
+	case strings.HasPrefix(line, "**"):
+		return true
+	case strings.HasPrefix(line, "subagent("):
+		return true
+	case line == "Execute" || strings.HasPrefix(line, "Execute ") || strings.HasPrefix(line, "Execute\t") || strings.HasPrefix(line, "Execute →") || line == "Execute failed" || strings.HasPrefix(line, "Execute failed"):
+		return true
+	case line == "Thinking" || strings.HasPrefix(line, "Thinking "):
+		return true
+	case strings.HasPrefix(line, "Task:") || strings.HasPrefix(line, "task:"):
+		return true
+	case strings.HasPrefix(line, "Auto-approver") || strings.HasPrefix(line, "auto-approver"):
+		return true
+	}
+
+	for _, prefix := range []string{
+		"Bash", "Read", "Glob", "Grep", "Webfetch", "Apply Patch", "Websearch", "Find Skills", "Skill",
+		"Ask User Question", "Rocketclaw ",
+		// legacy lowercase / underscore forms while older traces may still appear
+		"bash:", "bash ", "read:", "read ", "glob:", "glob ", "grep:", "grep ",
+		"webfetch:", "webfetch ", "apply_patch", "websearch", "find_skills", "skill:", "skill ",
+		"ask_user_question", "rocketclaw_",
+	} {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+
+	if strings.HasSuffix(line, " failed") || strings.Contains(line, " failed\n") || strings.Contains(line, " failed:") {
+		return true
+	}
+
+	return false
+}
+
 func slackThinkingActivityChunks(pending *slackThinkingState, activities []string) []slack.StreamChunk {
-	chunks := make([]slack.StreamChunk, 0, len(activities))
+	// Clump related lines under parent cards:
+	// - execute started: nested tools/failures in details
+	// - thinking: consecutive reasoning traces (**…**) in details until another step kind
+	byID := make(map[string]slack.TaskUpdateChunk, len(activities))
+	order := make([]string, 0, len(activities))
+
+	put := func(chunk slack.TaskUpdateChunk) {
+		if _, exists := byID[chunk.ID]; !exists {
+			order = append(order, chunk.ID)
+		}
+
+		byID[chunk.ID] = chunk
+	}
+
+	execID, execDetails := "", ""
+	thinkID, thinkDetails := "", ""
+
+	if parent, ok := slackOpenClumpTask(pending.tasks, slackExecuteActivityTitle); ok {
+		execID = parent.ID
+		execDetails = strings.TrimSpace(parent.Details)
+	} else if parent, ok := slackOpenClumpTask(pending.tasks, slackThinkingActivityTitle); ok {
+		thinkID = parent.ID
+		thinkDetails = strings.TrimSpace(parent.Details)
+	}
+
+	closeThinking := func() {
+		thinkID, thinkDetails = "", ""
+	}
+	closeExecute := func() {
+		execID, execDetails = "", ""
+	}
+
 	for i, activity := range activities {
-		for j, title := range slackThinkingActivityTitles(activity) {
+		if nested, ok := strings.CutPrefix(activity, slackExecuteNestedPrefix); ok {
+			closeThinking()
+
+			nested = slackTruncatedText(strings.TrimSpace(nested), 255, "...")
+			if nested == "" {
+				nested = "tool"
+			}
+
+			if execID == "" {
+				execID = fmt.Sprintf("%s-activity-%d-1", pending.thinkingTaskID, pending.activitySequence+i+1)
+				execDetails = ""
+			}
+
+			if execDetails == "" {
+				execDetails = nested
+			} else {
+				execDetails += "\n" + nested
+			}
+
+			put(slackClumpTaskChunk(execID, slackExecuteActivityTitle, execDetails))
+
+			continue
+		}
+
+		if activity == slackExecuteActivityTitle {
+			closeThinking()
+
+			execID = fmt.Sprintf("%s-activity-%d-1", pending.thinkingTaskID, pending.activitySequence+i+1)
+			execDetails = ""
+			put(slackClumpTaskChunk(execID, slackExecuteActivityTitle, execDetails))
+
+			continue
+		}
+
+		// Failures rename the open execute card to "Execute failed"; status stays complete.
+		if rest, ok := strings.CutPrefix(activity, slackExecuteFailedTitle); ok && execID != "" {
+			detail := strings.TrimSpace(strings.TrimPrefix(rest, "\n"))
+
+			detail = strings.TrimSpace(strings.TrimPrefix(detail, ":"))
+			if detail != "" {
+				if execDetails == "" {
+					execDetails = detail
+				} else {
+					execDetails += "\n" + detail
+				}
+			}
+
+			put(slackClumpTaskChunk(execID, slackExecuteFailedTitle, execDetails))
+			closeExecute()
+
+			continue
+		}
+
+		if slackIsReasoningTrace(activity) {
+			closeExecute()
+
+			line := slackReasoningDetailLine(activity)
+
+			if thinkID == "" {
+				thinkID = fmt.Sprintf("%s-activity-%d-1", pending.thinkingTaskID, pending.activitySequence+i+1)
+				thinkDetails = ""
+			}
+
+			if thinkDetails == "" {
+				thinkDetails = line
+			} else {
+				thinkDetails += "\n" + line
+			}
+
+			put(slackClumpTaskChunk(thinkID, slackThinkingActivityTitle, thinkDetails))
+
+			continue
+		}
+
+		closeExecute()
+		closeThinking()
+
+		titleLine, detailLines, hasDetails := strings.Cut(activity, "\n")
+		for j, title := range slackThinkingActivityTitles(titleLine) {
 			chunk := slack.NewTaskUpdateChunk(fmt.Sprintf("%s-activity-%d-%d", pending.thinkingTaskID, pending.activitySequence+i+1, j+1), title)
 
 			chunk.Status = slack.TaskCardStatusComplete
 			if j == 0 {
 				chunk.Sources = slackTaskSources(activity)
+				if hasDetails {
+					chunk.Details = detailLines
+				}
 			}
 
-			chunks = append(chunks, chunk)
+			put(chunk)
 		}
 	}
 
+	chunks := make([]slack.StreamChunk, 0, len(order))
+	for _, id := range order {
+		chunks = append(chunks, byID[id])
+	}
+
 	return chunks
+}
+
+func slackClumpTaskChunk(id, title, details string) slack.TaskUpdateChunk {
+	chunk := slack.NewTaskUpdateChunk(id, title)
+
+	chunk.Status = slack.TaskCardStatusComplete
+	if strings.TrimSpace(details) != "" {
+		chunk.Details = details
+	}
+
+	chunk.Sources = slackTaskSources(details)
+
+	return chunk
+}
+
+func slackIsReasoningTrace(activity string) bool {
+	line := strings.TrimSpace(activity)
+	if line == "" {
+		return false
+	}
+
+	// Top-level model reasoning summaries are emitted as **Title Case…**.
+	if strings.HasPrefix(line, "**") {
+		return true
+	}
+
+	// Do not clump subagent-prefixed reasoning; those stay on the subagent breadcrumb cards.
+	return false
+}
+
+func slackReasoningDetailLine(activity string) string {
+	line := strings.TrimSpace(activity)
+	if strings.HasPrefix(line, "**") && strings.HasSuffix(line, "**") && len(line) > 4 {
+		inner := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "**"), "**"))
+		if inner != "" {
+			return slackTruncatedText(inner, 255, "...")
+		}
+	}
+
+	return slackTruncatedText(line, 255, "...")
+}
+
+// slackOpenClumpTask returns the newest parent card of title when it is still the tail task.
+func slackOpenClumpTask(tasks []slack.TaskUpdateChunk, title string) (slack.TaskUpdateChunk, bool) {
+	if len(tasks) == 0 {
+		return slack.TaskUpdateChunk{}, false
+	}
+
+	last := tasks[len(tasks)-1]
+	if last.Title != title {
+		return slack.TaskUpdateChunk{}, false
+	}
+
+	return last, true
 }
 
 func slackTaskSources(text string) []slack.TaskCardSource {
@@ -1755,12 +1993,40 @@ func slackThinkingActivityTitles(activity string) []string {
 	return append(titles, string(runes))
 }
 
-func slackThinkingBlocks(turnID string, pending *slackThinkingState, status slack.TaskCardStatus) []slack.Block {
+// slackThinkingProgressBlocks builds the thinking card body shared by stream fallback
+// and non-stream updates: a plan of task cards (with execute nested fold) plus optional MCP chrome.
+// completeTitle is used when status is complete (e.g. "Workflow complete"); empty means "Complete".
+func slackThinkingProgressBlocks(turnID string, pending *slackThinkingState, status slack.TaskCardStatus, completeTitle string) []slack.Block {
+	var blocks []slack.Block
+	if pending.ExternalConversationID != "" {
+		blocks = slackMCPBlocks("MCP response", pending.ExternalConversationID, pending.Agent, "", slack.MarkdownType, false)
+	}
+
+	if pending.thinkingTaskID != "" {
+		title := strings.TrimSuffix(strings.TrimPrefix(pending.Placeholder, "_"), "_")
+		if status == slack.TaskCardStatusComplete {
+			title = "Complete"
+			if strings.TrimSpace(completeTitle) != "" {
+				title = strings.TrimSpace(completeTitle)
+			}
+		}
+
+		return append(blocks, slackThinkingPlanBlock(title, pending.tasks))
+	}
+
+	// Legacy single-card path only when no task ID was reserved.
+	return append(blocks, slackThinkingBlocks(turnID, pending, status, completeTitle)...)
+}
+
+func slackThinkingBlocks(turnID string, pending *slackThinkingState, status slack.TaskCardStatus, completeTitle string) []slack.Block {
 	lines := strings.Split(strings.TrimSpace(pending.Text), "\n")
 	title := pending.Placeholder
 
 	if status == slack.TaskCardStatusComplete {
 		title = "Complete"
+		if strings.TrimSpace(completeTitle) != "" {
+			title = strings.TrimSpace(completeTitle)
+		}
 	}
 
 	card := slack.NewTaskCardBlock(turnID, title).WithStatus(status)
@@ -1778,12 +2044,7 @@ func slackThinkingBlocks(turnID string, pending *slackThinkingState, status slac
 		card.WithDetails(slack.NewRichTextBlock("", details...))
 	}
 
-	var blocks []slack.Block
-	if pending.ExternalConversationID != "" {
-		blocks = slackMCPBlocks("MCP response", pending.ExternalConversationID, pending.Agent, "", slack.MarkdownType, false)
-	}
-
-	return append(blocks, card)
+	return []slack.Block{card}
 }
 
 func slackRichTextElements(text string) []slack.RichTextSectionElement {
@@ -3504,13 +3765,14 @@ func (c *Connector) createReplyPlaceholders(ctx context.Context, replyTarget *ev
 	}
 
 	slots := slackReplySlots{
-		ChannelID:  placeholderChannelID,
-		ThinkingTS: thinkingTS,
-		AnswerTS:   answerTS,
+		ChannelID:      placeholderChannelID,
+		ThinkingTS:     thinkingTS,
+		AnswerTS:       answerTS,
+		thinkingTaskID: replyTarget.MessageTS,
 	}
+	// Stream when Slack can address a recipient; otherwise chat.update the same plan/tasks shape.
 	if recipientTeamID != "" && recipientUserID != "" {
 		slots.thinkingStream = true
-		slots.thinkingTaskID = replyTarget.MessageTS
 	}
 
 	c.mu.Lock()
@@ -3554,7 +3816,7 @@ func (c *Connector) postReplyPlaceholderPair(ctx context.Context, channelID, thr
 			return "", "", "", fmt.Errorf("post Slack thinking placeholder: %w", err)
 		}
 	} else {
-		blocks := slackThinkingBlocks("thinking", &slackThinkingState{Placeholder: placeholder}, slack.TaskCardStatusInProgress)
+		blocks := slackThinkingBlocks("thinking", &slackThinkingState{Placeholder: placeholder}, slack.TaskCardStatusInProgress, "")
 		options = append(options, slack.MsgOptionText(placeholder, false), slack.MsgOptionBlocks(blocks...))
 
 		placeholderChannelID, thinkingTS, err = c.api.PostMessageContext(ctx, channelID, options...)

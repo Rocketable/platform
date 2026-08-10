@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -157,9 +158,9 @@ func TestRunRawCronCanEditRestartAndCompleteDecision(t *testing.T) {
 
 		switch request {
 		case 1:
-			writeRawRunFunctionCall(t, w, "resp_1", "call_1", "apply_patch", map[string]string{"patchText": "*** Begin Patch\n*** Update File: cron/HEARTBEAT.md\n@@\n-old heartbeat\n+new heartbeat\n*** End Patch"})
+			writeRawRunFunctionCall(t, w, "resp_1", "call_1", "execute", executeApplyPatchScript("*** Begin Patch\n*** Update File: cron/HEARTBEAT.md\n@@\n-old heartbeat\n+new heartbeat\n*** End Patch"))
 		case 2:
-			writeRawRunFunctionCall(t, w, "resp_2", "call_2", "apply_patch", map[string]string{"patchText": "*** Begin Patch\n*** Update File: rocketclaw.json\n@@\n-{\"name\":\"old\"}\n+{\"name\":\"new\"}\n*** End Patch"})
+			writeRawRunFunctionCall(t, w, "resp_2", "call_2", "execute", executeApplyPatchScript("*** Begin Patch\n*** Update File: rocketclaw.json\n@@\n-{\"name\":\"old\"}\n+{\"name\":\"new\"}\n*** End Patch"))
 		case 3:
 			writeRawRunFunctionCall(t, w, "resp_3", "call_3", restartToolName, map[string]string{"reason": "rocketclaw.json changed and runtime config must reload"})
 		case 4:
@@ -685,7 +686,7 @@ func TestRunRawReturnsProgressThinkingError(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		writeRawRunFunctionCall(t, w, "resp_1", "call_1", "bash", map[string]string{"command": "printf ok", "description": "run command"})
+		writeRawRunFunctionCall(t, w, "resp_1", "call_1", "execute", executeBashScript("printf ok"))
 	}))
 	t.Cleanup(server.Close)
 
@@ -732,17 +733,18 @@ func TestRunRawAlwaysEnablesAutoApprovePermissions(t *testing.T) {
 			case 1:
 				assert.Equal(t, "root", provider)
 				assert.Contains(t, string(data), `"model":"software-development-sol"`)
-				writeRawRunFunctionCall(t, w, "resp_1", "call_1", "bash", map[string]string{"command": "printf ok", "description": "print ok"})
-			case 2:
+				writeRawRunFunctionCall(t, w, "resp_1", "call_1", "execute", executeBashScript("printf ok"))
+			case 2, 3:
+				// Entry gate + nested bash both hit auto review under execute.
 				assert.Equal(t, "review", provider)
 				assert.Contains(t, string(data), `"model":"gpt-5.4-mini"`)
-				writeRawRunMessage(t, w, "resp_2", "msg_2", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low-risk action."}`)
-			case 3:
-				assert.Equal(t, "root", provider)
-				writeRawRunFunctionCall(t, w, "resp_3", "call_3", rawRunToolName, map[string]string{"payload": "done"})
+				writeRawRunMessage(t, w, fmt.Sprintf("resp_%d", current), fmt.Sprintf("msg_%d", current), `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low-risk action."}`)
 			case 4:
 				assert.Equal(t, "root", provider)
-				writeRawRunMessage(t, w, "resp_4", "msg_4", "assistant text")
+				writeRawRunFunctionCall(t, w, "resp_4", "call_4", rawRunToolName, map[string]string{"payload": "done"})
+			case 5:
+				assert.Equal(t, "root", provider)
+				writeRawRunMessage(t, w, "resp_5", "msg_5", "assistant text")
 			default:
 				t.Fatalf("unexpected raw run request %d", current)
 			}
@@ -898,7 +900,8 @@ func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 	require.Contains(t, fmt.Sprint(first), "literal !`printf unsafe`")
 	require.NotContains(t, fmt.Sprint(first["tools"]), `"name":"task"`)
 	require.NotContains(t, fmt.Sprint(first["tools"]), "rocketclaw_")
-	require.Contains(t, fmt.Sprint(first["tools"]), `name:read`)
+	require.Contains(t, fmt.Sprint(first["tools"]), `name:execute`)
+	require.NotContains(t, fmt.Sprint(first["tools"]), `name:read`)
 
 	require.Equal(t, "fast-model", structured["model"])
 	require.Contains(t, fmt.Sprint(structured["instructions"]), "Worker !`printf unsafe`")
@@ -906,6 +909,7 @@ func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 	require.Contains(t, fmt.Sprint(structured["tools"]), `name:skill`)
 	require.Contains(t, fmt.Sprint(structured["tools"]), `name:find_skills`)
 	require.NotContains(t, fmt.Sprint(structured["tools"]), `name:read`)
+	require.NotContains(t, fmt.Sprint(structured["tools"]), `name:execute`)
 	require.Contains(t, fmt.Sprint(structured["text"]), "json_schema")
 	require.Contains(t, fmt.Sprint(structured["text"]), "additionalProperties:false")
 	require.NotContains(t, fmt.Sprint(structured["text"]), "strict:true")
@@ -989,11 +993,11 @@ func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {
 
 		switch len(models) {
 		case 1:
-			writeRawRunFunctionCall(t, w, "resp_1", "call_1", "bash", map[string]string{"command": "printf ok", "description": "print ok"})
-		case 2:
-			writeRawRunMessage(t, w, "resp_2", "msg_2", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low risk."}`)
-		case 3:
-			writeRawRunMessage(t, w, "resp_3", "msg_3", "done")
+			writeRawRunFunctionCall(t, w, "resp_1", "call_1", "execute", executeBashScript("printf ok"))
+		case 2, 3:
+			writeRawRunMessage(t, w, fmt.Sprintf("resp_%d", len(models)), fmt.Sprintf("msg_%d", len(models)), `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low risk."}`)
+		case 4:
+			writeRawRunMessage(t, w, "resp_4", "msg_4", "done")
 		default:
 			t.Fatalf("unexpected request %d", len(models))
 		}
@@ -1003,10 +1007,10 @@ func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {
 	run, cleanup, err := newWorkflowAgentRunner(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}, AutoApproverModel: "review-model"}, "main", slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, cleanup()) })
-	result, err := run(t.Context(), workflow.AgentRequest{Prompt: "run", Worker: workflow.Worker{Name: "worker", Instructions: "work", Tools: []string{"bash"}}}, discardWorkflowThinking)
+	result, err := run(t.Context(), workflow.AgentRequest{Prompt: "run", Worker: workflow.Worker{Name: "worker", Instructions: "work", Tools: []string{"execute"}}}, discardWorkflowThinking)
 	require.NoError(t, err)
 	require.JSONEq(t, `"done"`, string(result))
-	require.Equal(t, []string{"gpt-5.5", "review-model", "gpt-5.5"}, models)
+	require.Equal(t, []string{"gpt-5.5", "review-model", "review-model", "gpt-5.5"}, models)
 }
 
 func TestWorkflowAgentRunnerStructuredOutputUsesFinalAssistantMessage(t *testing.T) {
@@ -1023,7 +1027,7 @@ func TestWorkflowAgentRunnerStructuredOutputUsesFinalAssistantMessage(t *testing
 
 		switch requests {
 		case 1:
-			_, err := w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"rsn_1","type":"reasoning","summary":[{"type":"summary_text","text":"checking context"}]},{"id":"msg_1","type":"message","status":"completed","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"checking the fixture","annotations":[]}]},{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"read","arguments":"{\"filePath\":\"README.md\",\"offset\":1}"}]}`))
+			_, err := w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"rsn_1","type":"reasoning","summary":[{"type":"summary_text","text":"checking context"}]},{"id":"msg_1","type":"message","status":"completed","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"checking the fixture","annotations":[]}]},{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"execute","arguments":"{\"code\":\"def main():\\n    return read(filePath=\\\"README.md\\\")\\n\"}"}]}`))
 			assert.NoError(t, err)
 		case 2:
 			writeRawRunMessage(t, w, "resp_2", "msg_2", `{"ok":true,"private":"PRIVATE WORKER RESULT"}`)
@@ -1058,7 +1062,7 @@ func TestWorkflowAgentRunnerStructuredOutputUsesFinalAssistantMessage(t *testing
 	require.NoError(t, err)
 	require.JSONEq(t, `{"ok":true,"private":"PRIVATE WORKER RESULT"}`, string(result))
 	require.Equal(t, 2, requests)
-	assert.Equal(t, []string{"read: README.md", "checking context", "checking the fixture"}, thinking)
+	assert.Equal(t, []string{"checking context", "checking the fixture", "Execute", "Execute → Read: README.md"}, thinking)
 
 	for _, private := range []string{"PRIVATE TOOL RESULT", "PRIVATE WORKER RESULT", "PRIVATE WORKER PROMPT", "PRIVATE SCHEMA"} {
 		assert.NotContains(t, strings.Join(thinking, "\n"), private)
@@ -1073,10 +1077,7 @@ func TestWorkflowAgentRunnerCancelsOnThinkingFailure(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		writeRawRunFunctionCall(t, w, "resp_1", "call_1", "read", struct {
-			FilePath string `json:"filePath"`
-			Offset   int    `json:"offset"`
-		}{FilePath: "README.md", Offset: 1})
+		writeRawRunFunctionCall(t, w, "resp_1", "call_1", "execute", executeBashScript("true"))
 	}))
 	t.Cleanup(server.Close)
 
@@ -1309,6 +1310,14 @@ func TestWorkflowAgentRunnerReturnsShellDirectoryCleanupError(t *testing.T) {
 }
 
 func discardWorkflowThinking(context.Context, string) error { return nil }
+
+func executeBashScript(command string) map[string]string {
+	return map[string]string{"code": "def main():\n    return bash(command=" + strconv.Quote(command) + ")\n"}
+}
+
+func executeApplyPatchScript(patch string) map[string]string {
+	return map[string]string{"code": "def main():\n    return apply_patch(patchText=" + strconv.Quote(patch) + ")\n"}
+}
 
 func writeRawRunFunctionCall(t *testing.T, w http.ResponseWriter, responseID, callID, name string, args any) {
 	t.Helper()

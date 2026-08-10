@@ -2170,8 +2170,10 @@ func TestLooperStreamsReasoningBeforeToolCalls(t *testing.T) {
 	looper.Tools = map[string]looperTool{"skill": skillTool}
 
 	output := make(chan ChatResponse, 10)
+
 	input := make(chan PromptInput, 1)
 	input <- testPromptInput(PromptInputRoleUser, "what time?", output)
+
 	close(input)
 
 	require.NoError(t, looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1)))

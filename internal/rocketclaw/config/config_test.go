@@ -263,6 +263,142 @@ func TestValidateRejectsEnabledInstrumentationWithoutEndpoint(t *testing.T) {
 	require.ErrorContains(t, err, "instrumentation.collector_endpoint is required")
 }
 
+func TestValidateMCPServers(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		servers map[string]MCPServerConfig
+		want    map[string]MCPServerConfig
+		wantErr string
+	}{
+		{
+			name: "both command and url",
+			servers: map[string]MCPServerConfig{
+				"github": {Command: "npx", URL: "https://example.com/mcp"},
+			},
+			wantErr: `mcp_servers["github"]: set exactly one of command or url`,
+		},
+		{
+			name: "neither command nor url",
+			servers: map[string]MCPServerConfig{
+				"github": {},
+			},
+			wantErr: `mcp_servers["github"]: set exactly one of command or url`,
+		},
+		{
+			name: "empty command",
+			servers: map[string]MCPServerConfig{
+				"github": {Command: "  "},
+			},
+			wantErr: `mcp_servers["github"]: set exactly one of command or url`,
+		},
+		{
+			name: "empty name",
+			servers: map[string]MCPServerConfig{
+				"": {Command: "npx"},
+			},
+			wantErr: `mcp_servers[""]: name cannot be empty`,
+		},
+		{
+			name: "invalid characters",
+			servers: map[string]MCPServerConfig{
+				"git hub": {Command: "npx"},
+			},
+			wantErr: `mcp_servers["git hub"]: name contains invalid characters`,
+		},
+		{
+			name: "dash and underscore names (MCP charset)",
+			servers: map[string]MCPServerConfig{
+				"git-hub":             {Command: "npx"},
+				"sequentialthinking":  {Command: "npx"},
+				"Sequential-Thinking": {URL: "https://example.com/mcp"},
+				"my_server.v2":        {Command: "npx"},
+			},
+			want: map[string]MCPServerConfig{
+				"git-hub":             {Command: "npx"},
+				"sequentialthinking":  {Command: "npx"},
+				"Sequential-Thinking": {URL: "https://example.com/mcp"},
+				"my_server.v2":        {Command: "npx"},
+			},
+		},
+		{
+			name: "bad url scheme",
+			servers: map[string]MCPServerConfig{
+				"remote": {URL: "ftp://example.com/mcp"},
+			},
+			wantErr: `mcp_servers["remote"]: url must be an http or https URL`,
+		},
+		{
+			name: "stdio with args env cwd",
+			servers: map[string]MCPServerConfig{
+				"filesystem": {
+					Command: " npx ",
+					Args:    []string{"-y", "@modelcontextprotocol/server-filesystem", "/tmp"},
+					Env:     map[string]string{"NODE_ENV": "production"},
+					Cwd:     " work ",
+				},
+			},
+			want: map[string]MCPServerConfig{
+				"filesystem": {
+					Command: "npx",
+					Args:    []string{"-y", "@modelcontextprotocol/server-filesystem", "/tmp"},
+					Env:     map[string]string{"NODE_ENV": "production"},
+					Cwd:     "work",
+				},
+			},
+		},
+		{
+			name: "http with headers",
+			servers: map[string]MCPServerConfig{
+				"remote": {
+					URL:     " https://mcp.example.com/mcp ",
+					Headers: map[string]string{"Authorization": "Bearer set-me"},
+				},
+			},
+			want: map[string]MCPServerConfig{
+				"remote": {
+					URL:     "https://mcp.example.com/mcp",
+					Headers: map[string]string{"Authorization": "Bearer set-me"},
+				},
+			},
+		},
+		{
+			name:    "omitted",
+			servers: nil,
+		},
+		{
+			name:    "empty map",
+			servers: map[string]MCPServerConfig{},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.MCPServers = tt.servers
+
+			err := cfg.Validate()
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+
+			if tt.want != nil {
+				assert.Equal(t, tt.want, cfg.MCPServers)
+			}
+		})
+	}
+}
+
+func TestLoadOmitsMCPServers(t *testing.T) {
+	cfg := loadTestConfig(t, `{
+	  "workspace": ".",
+	  "openai": {"api_key": "test-key"},
+	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}
+	}`)
+
+	assert.Nil(t, cfg.MCPServers)
+}
+
 func TestLoadNormalizesOverlays(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",

@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
@@ -36,6 +37,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/Rocketable/platform/internal/rocketcode/mcpclient"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"go.opentelemetry.io/otel"
@@ -348,6 +350,7 @@ func (s activeTurnIDCheckpointSink) record(checkpoint *rocketcode.ActiveTurnChec
 // NewConversation constructs a rocketcode bridge for one conversation.
 func NewConversation(cfg *config.Config, publisher events.OutboundPublisher, bridgeConfig *Config, logger *slog.Logger) *Bridge {
 	b := &Bridge{log: nil, config: normalizeConfig(bridgeConfig), runtime: cfg, bus: publisher, requestCh: nil, stopCh: nil, mu: sync.Mutex{}, handling: false}
+
 	b.log = logger.With("component", "rocketcode")
 
 	return b
@@ -1494,23 +1497,211 @@ func formatToolDiagnostic(diagnostic *rocketcode.ToolDiagnostic) string {
 	switch strings.TrimSpace(diagnostic.Phase) {
 	case "call":
 		details := formatToolCallDetails(diagnostic)
+		// Nested code-mode tools: Name "execute → read" → thinking "Execute → read".
+		// Slack folds these under an "Execute" parent with nested lines as details.
+		if nested, ok := strings.CutPrefix(name, "execute → "); ok {
+			nested = strings.TrimSpace(nested)
+			if nested == "" {
+				nested = "tool"
+			}
+
+			tool, arg, hasArg := strings.Cut(nested, ": ")
+
+			tool = thinkingStepTitle(tool)
+			if hasArg {
+				nested = tool + ": " + strings.TrimSpace(arg)
+			} else {
+				nested = tool
+			}
+
+			if details == "" {
+				return "Execute → " + nested
+			}
+
+			return "Execute → " + nested + ": " + details
+		}
+
+		// Step titles are bare Title Case names. Optional non-default status only.
+		title := thinkingStepTitle(name)
+		if status := strings.TrimSpace(diagnostic.Status); status != "" && status != "started" {
+			title = title + " " + status
+		}
+
+		// Keep arguments/search terms out of the title; Slack renders them as details.
 		if details == "" {
-			return name + " started"
+			return title
 		}
 
-		if strings.TrimSpace(diagnostic.Status) == "" {
-			return name + ": " + details
-		}
-
-		return details
+		return title + "\n" + details
 	case "result":
-		if strings.Contains(diagnostic.Result, "tool call denied:") {
-			return diagnostic.Result
+		result := strings.TrimSpace(diagnostic.Result)
+		// Prefix-only: body text from successful tools must never become thinking.
+		if strings.HasPrefix(result, "tool call denied:") {
+			return result
+		}
+
+		if text, ok := toolFailureThinking(name, result); ok {
+			return text
 		}
 
 		return ""
 	default:
+		return thinkingStepTitle(name)
+	}
+}
+
+// thinkingStepTitle is Title Case for plan step names:
+// execute → Execute, find_skills → Find Skills, ask_user_question → Ask User Question.
+func thinkingStepTitle(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
 		return name
+	}
+
+	name = strings.ReplaceAll(name, "_", " ")
+
+	words := strings.Fields(name)
+	for i, word := range words {
+		r, size := utf8.DecodeRuneInString(word)
+		if r == utf8.RuneError && size == 0 {
+			continue
+		}
+
+		words[i] = string(unicode.ToUpper(r)) + strings.ToLower(word[size:])
+	}
+
+	return strings.Join(words, " ")
+}
+
+// toolFailureThinking surfaces failed tool results that would otherwise leave a bare
+// "Execute" step with no nested children (e.g. Starlark parse errors before any builtin runs).
+func toolFailureThinking(name, result string) (string, bool) {
+	result = strings.TrimSpace(result)
+	// Prefix-only so successful tool payloads that merely mention the phrase are ignored.
+	if !strings.HasPrefix(result, "tool call failed:") {
+		return "", false
+	}
+
+	msg := strings.TrimSpace(strings.TrimPrefix(result, "tool call failed:"))
+	msg = strings.TrimSpace(strings.TrimSuffix(msg, "Choose a different action."))
+	msg = strings.TrimSpace(strings.TrimSuffix(msg, "."))
+	msg = toolFailureThinkingDetail(msg)
+
+	var step string
+
+	switch {
+	case name == "execute" || strings.HasPrefix(name, "execute → "):
+		step = "Execute failed"
+	case name == "" || name == "tool":
+		step = "Tool failed"
+	default:
+		step = thinkingStepTitle(name) + " failed"
+	}
+
+	if msg == "" {
+		return step, true
+	}
+
+	return step + "\n" + msg, true
+}
+
+// toolFailureThinkingDetail shortens a tool-failure chain for plan details.
+// MCP connect/list errors keep the server name so traces are not bare "EOF".
+func toolFailureThinkingDetail(msg string) string {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return msg
+	}
+
+	if server, cause, ok := mcpFailureThinkingParts(msg); ok {
+		if cause == "" {
+			return strconv.Quote(server) + " errored"
+		}
+
+		return strconv.Quote(server) + " errored: " + strconv.Quote(cause)
+	}
+
+	// Prefer the deepest useful fragment for scanability.
+	if i := strings.LastIndex(msg, ": "); i >= 0 {
+		tail := strings.TrimSpace(msg[i+2:])
+		if tail != "" && len([]rune(tail)) <= 160 && !uselessErrorTail(tail) {
+			return tail
+		}
+	}
+
+	return msg
+}
+
+// mcpFailureThinkingParts extracts server + short cause from MCP connect/list chains.
+func mcpFailureThinkingParts(msg string) (server, cause string, ok bool) {
+	const marker = `connect mcp server "`
+
+	if _, after, found := strings.Cut(msg, marker); found {
+		name, rest, cutOK := strings.Cut(after, `"`)
+
+		name = strings.TrimSpace(name)
+		if cutOK && name != "" {
+			return name, shortenMCPFailureCause(strings.TrimSpace(strings.TrimPrefix(rest, ":"))), true
+		}
+	}
+
+	// list mcp tools: server memory: …
+	if _, after, found := strings.Cut(msg, "list mcp tools: "); found {
+		// Multiple servers are joined with "; "; keep the first note's server when present.
+		note, _, _ := strings.Cut(after, "; ")
+
+		note = strings.TrimSpace(note)
+		if name, rest, cutOK := strings.Cut(strings.TrimPrefix(note, "server "), ": "); cutOK {
+			name = strings.TrimSpace(name)
+			if name != "" && !strings.ContainsAny(name, " \t") {
+				if s2, c2, ok2 := mcpFailureThinkingParts(rest); ok2 {
+					return s2, c2, true
+				}
+
+				return name, shortenMCPFailureCause(rest), true
+			}
+		}
+	}
+
+	return "", "", false
+}
+
+func shortenMCPFailureCause(cause string) string {
+	cause = strings.TrimSpace(cause)
+	if cause == "" {
+		return cause
+	}
+
+	parts := strings.Split(cause, ": ")
+	if len(parts) >= 2 {
+		tail := strings.TrimSpace(parts[len(parts)-1])
+
+		prev := strings.TrimSpace(parts[len(parts)-2])
+		if uselessErrorTail(tail) && prev != "" {
+			joined := prev + ": " + tail
+			if len([]rune(joined)) <= 160 {
+				return joined
+			}
+		}
+
+		if tail != "" && len([]rune(tail)) <= 160 && !uselessErrorTail(tail) {
+			return tail
+		}
+	}
+
+	if len([]rune(cause)) <= 160 {
+		return cause
+	}
+
+	return string([]rune(cause)[:157]) + "..."
+}
+
+func uselessErrorTail(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "eof", "error", "failed", "true", "false":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -1526,8 +1717,8 @@ func rocketcodeThinkingText(item rocketcode.ChatResponse) string {
 	return strings.TrimSpace(item.Text)
 }
 
+// formatToolCallDetails returns only argument/action detail text (never a title).
 func formatToolCallDetails(diagnostic *rocketcode.ToolDiagnostic) string {
-	status := strings.TrimSpace(diagnostic.Status)
 	detail := ""
 
 	for _, raw := range []json.RawMessage{diagnostic.Action, diagnostic.Arguments} {
@@ -1570,20 +1761,7 @@ func formatToolCallDetails(diagnostic *rocketcode.ToolDiagnostic) string {
 		}
 	}
 
-	if status == "" {
-		return detail
-	}
-
-	name := strings.TrimSpace(diagnostic.Name)
-	if name == "" {
-		name = "tool"
-	}
-
-	if detail == "" {
-		return name + " " + status
-	}
-
-	return name + " " + status + ": " + detail
+	return detail
 }
 
 func formatSubagentDiagnostic(diagnostic *rocketcode.SubagentDiagnostic) string {
@@ -1714,7 +1892,27 @@ func (b *Bridge) rocketcodeConfig(shellOutputDir string, shellEnv, sourceMetadat
 
 	tools = append(tools, customTools...)
 
-	return rocketcode.Config{Model: "", AutoApproverModel: b.runtime.AutoApproverModel, ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CheckpointSink: activeTurnCheckpointSink{store: b.config.SessionService, conversationID: b.config.ConversationID, sourceMetadata: sourceMetadata}, CustomTools: tools, ShellEnv: shellEnv}
+	return rocketcode.Config{Model: "", AutoApproverModel: b.runtime.AutoApproverModel, ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CheckpointSink: activeTurnCheckpointSink{store: b.config.SessionService, conversationID: b.config.ConversationID, sourceMetadata: sourceMetadata}, CustomTools: tools, ShellEnv: shellEnv, MCPServers: toMCPClientServers(b.runtime.MCPServers), MCPWorkspace: b.runtime.Workspace}
+}
+
+func toMCPClientServers(servers map[string]config.MCPServerConfig) map[string]mcpclient.ServerConfig {
+	if len(servers) == 0 {
+		return nil
+	}
+
+	out := make(map[string]mcpclient.ServerConfig, len(servers))
+	for name, server := range servers {
+		out[name] = mcpclient.ServerConfig{
+			Command: server.Command,
+			Args:    slices.Clone(server.Args),
+			Env:     maps.Clone(server.Env),
+			Cwd:     server.Cwd,
+			URL:     server.URL,
+			Headers: maps.Clone(server.Headers),
+		}
+	}
+
+	return out
 }
 
 func (b *Bridge) activeTurnSourceMetadata(msg *events.InboundMessage) map[string]string {

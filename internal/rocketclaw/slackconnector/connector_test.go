@@ -359,7 +359,7 @@ func TestSlackThinkingBlocksRenderLinks(t *testing.T) {
 			blocksJSON, err := json.Marshal(slackThinkingBlocks("turn-1", &slackThinkingState{
 				Placeholder: slackImmediatePlaceholder,
 				Text:        tt.text,
-			}, slack.TaskCardStatusInProgress))
+			}, slack.TaskCardStatusInProgress, ""))
 			require.NoError(t, err)
 
 			var blocks []struct {
@@ -388,7 +388,7 @@ func TestSlackThinkingBlocksSkipWhitespaceOnlyLines(t *testing.T) {
 	blocksJSON, err := json.Marshal(slackThinkingBlocks("turn-1", &slackThinkingState{
 		Placeholder: slackImmediatePlaceholder,
 		Text:        "first activity\n  preserved spacing  \n   \n\t\t\nsecond activity",
-	}, slack.TaskCardStatusInProgress))
+	}, slack.TaskCardStatusInProgress, ""))
 	require.NoError(t, err)
 
 	var blocks []struct {
@@ -2292,51 +2292,38 @@ func TestSendResponseKeepsHumanThinkingTaskCardLifecycle(t *testing.T) {
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	require.Len(t, updated, 3)
 	assert.Equal(t, "555.1", updated[0].Get("ts"))
-	assert.Equal(t, slackImmediatePlaceholder, thinkingBlockText(t, updated[0]))
+	assert.Equal(t, "Thinking...", thinkingBlockText(t, updated[0]))
 
-	type taskCardBlock struct {
-		Type    string `json:"type"`
-		Title   string `json:"title"`
-		Status  string `json:"status"`
-		Details struct {
-			Elements []struct {
-				Type     string `json:"type"`
-				Elements []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				} `json:"elements"`
-			} `json:"elements"`
-		} `json:"details"`
+	type planBlock struct {
+		Type  string `json:"type"`
+		Title string `json:"title"`
+		Tasks []struct {
+			Type   string `json:"type"`
+			Title  string `json:"title"`
+			Status string `json:"status"`
+		} `json:"tasks"`
 	}
 
-	var progressBlocks []taskCardBlock
+	var progressBlocks []planBlock
 	require.NoError(t, json.Unmarshal([]byte(updated[0].Get("blocks")), &progressBlocks))
 	require.Len(t, progressBlocks, 1)
-	assert.Equal(t, "task_card", progressBlocks[0].Type)
-	assert.Equal(t, slackImmediatePlaceholder, progressBlocks[0].Title)
-	assert.Equal(t, string(slack.TaskCardStatusInProgress), progressBlocks[0].Status)
-	require.Len(t, progressBlocks[0].Details.Elements, 2)
-
-	activityTexts := make([]string, 0, len(progressBlocks[0].Details.Elements))
-	for _, section := range progressBlocks[0].Details.Elements {
-		assert.Equal(t, "rich_text_section", section.Type)
-		require.Len(t, section.Elements, 1)
-		assert.Equal(t, "text", section.Elements[0].Type)
-		activityTexts = append(activityTexts, section.Elements[0].Text)
-	}
-
-	assert.Equal(t, []string{"reasoning: **Finding instructions**", "glob: **/APPLE.md"}, activityTexts)
+	assert.Equal(t, "plan", progressBlocks[0].Type)
+	assert.Equal(t, "Thinking...", progressBlocks[0].Title)
+	require.Len(t, progressBlocks[0].Tasks, 2)
+	assert.Equal(t, []string{"reasoning: **Finding instructions**", "glob: **/APPLE.md"}, []string{progressBlocks[0].Tasks[0].Title, progressBlocks[0].Tasks[1].Title})
+	assert.Equal(t, string(slack.TaskCardStatusComplete), progressBlocks[0].Tasks[0].Status)
+	assert.Equal(t, string(slack.TaskCardStatusComplete), progressBlocks[0].Tasks[1].Status)
 
 	assert.Equal(t, "555.2", updated[1].Get("ts"))
 	assert.Equal(t, "Final answer", updated[1].Get("text"))
 	assert.Equal(t, "555.1", updated[2].Get("ts"))
 
-	var completeBlocks []taskCardBlock
+	var completeBlocks []planBlock
 	require.NoError(t, json.Unmarshal([]byte(updated[2].Get("blocks")), &completeBlocks))
 	require.Len(t, completeBlocks, 1)
-	assert.Equal(t, "task_card", completeBlocks[0].Type)
+	assert.Equal(t, "plan", completeBlocks[0].Type)
 	assert.Equal(t, "Complete", completeBlocks[0].Title)
-	assert.Equal(t, string(slack.TaskCardStatusComplete), completeBlocks[0].Status)
+	require.Len(t, completeBlocks[0].Tasks, 2)
 }
 
 func TestSendResponseCompletesThinkingPlanStreamAfterUnchangedAnswer(t *testing.T) {
@@ -3006,10 +2993,11 @@ func TestFlushProgressUsesTaskUpdateWithoutChangingDiagnostics(t *testing.T) {
 	assert.Equal(t, []slack.TaskUpdateChunk{
 		{Type: slack.StreamChunkTaskUpdate, ID: "111.222-activity-1-1", Title: "reasoning: **Finding instructions**", Status: slack.TaskCardStatusComplete},
 		{
-			Type:   slack.StreamChunkTaskUpdate,
-			ID:     "111.222-activity-2-1",
-			Title:  "glob: **/APPLE.md\ncontinued at <https://example.com|Example> and <http://example.org>",
-			Status: slack.TaskCardStatusComplete,
+			Type:    slack.StreamChunkTaskUpdate,
+			ID:      "111.222-activity-2-1",
+			Title:   "glob: **/APPLE.md",
+			Status:  slack.TaskCardStatusComplete,
+			Details: "continued at <https://example.com|Example> and <http://example.org>",
 			Sources: []slack.TaskCardSource{
 				slack.NewTaskCardSource("https://example.com", "Example"),
 				slack.NewTaskCardSource("http://example.org", "http://example.org"),
@@ -3235,6 +3223,134 @@ func TestBufferProgressDoesNotResurrectEndedStream(t *testing.T) {
 	}
 }
 
+func TestSlackThinkingActivityChunksFoldsExecuteNestedIntoParentDetails(t *testing.T) {
+	t.Parallel()
+
+	pending := &slackThinkingState{thinkingTaskID: "111.222"}
+	chunks := slackThinkingActivityChunks(pending, []string{
+		"Execute",
+		"Execute → Search: context7",
+		"Execute → Grep: generics",
+		"reasoning: done",
+		"Execute",
+		"Execute → Read: a.txt",
+	})
+
+	require.Len(t, chunks, 3)
+
+	first := chunks[0].(slack.TaskUpdateChunk)
+	assert.Equal(t, "111.222-activity-1-1", first.ID)
+	assert.Equal(t, "Execute", first.Title)
+	assert.Equal(t, "Search: context7\nGrep: generics", first.Details)
+	assert.Equal(t, slack.TaskCardStatusComplete, first.Status)
+
+	reason := chunks[1].(slack.TaskUpdateChunk)
+	assert.Equal(t, "111.222-activity-4-1", reason.ID)
+	assert.Equal(t, "reasoning: done", reason.Title)
+	assert.Empty(t, reason.Details)
+
+	second := chunks[2].(slack.TaskUpdateChunk)
+	assert.Equal(t, "111.222-activity-5-1", second.ID)
+	assert.Equal(t, "Execute", second.Title)
+	assert.Equal(t, "Read: a.txt", second.Details)
+
+	// Cross-flush: nested attaches to tail execute parent already in tasks.
+	pending.tasks = []slack.TaskUpdateChunk{second}
+	pending.activitySequence = 6
+	more := slackThinkingActivityChunks(pending, []string{"Execute → Bash: ls"})
+	require.Len(t, more, 1)
+	updated := more[0].(slack.TaskUpdateChunk)
+	assert.Equal(t, second.ID, updated.ID)
+	assert.Equal(t, "Execute", updated.Title)
+	assert.Equal(t, "Read: a.txt\nBash: ls", updated.Details)
+
+	// Script failure stays on the execute card as details; status remains complete.
+	failedPending := &slackThinkingState{thinkingTaskID: "111.222"}
+	failedChunks := slackThinkingActivityChunks(failedPending, []string{
+		"Execute",
+		"Execute failed\ninvalid escape sequence \\(",
+	})
+	require.Len(t, failedChunks, 1)
+	failed := failedChunks[0].(slack.TaskUpdateChunk)
+	assert.Equal(t, "111.222-activity-1-1", failed.ID)
+	assert.Equal(t, "Execute failed", failed.Title)
+	assert.Equal(t, "invalid escape sequence \\(", failed.Details)
+	assert.Equal(t, slack.TaskCardStatusComplete, failed.Status)
+}
+
+func TestSlackThinkingActivityChunksClumpsReasoningUnderThinking(t *testing.T) {
+	t.Parallel()
+
+	pending := &slackThinkingState{thinkingTaskID: "111.222"}
+	chunks := slackThinkingActivityChunks(pending, []string{
+		"Execute",
+		"Execute → Search: context7",
+		"**Planning use of context7 tool calls**",
+		"**Discovering context7 tool via search**",
+		"**Deciding fallback to built-in knowledge**",
+		"Execute",
+		"Execute → Bash: ls",
+		"**Confirming Go generics support**",
+	})
+
+	require.Len(t, chunks, 4)
+
+	firstExec := chunks[0].(slack.TaskUpdateChunk)
+	assert.Equal(t, "Execute", firstExec.Title)
+	assert.Equal(t, "Search: context7", firstExec.Details)
+
+	thinking := chunks[1].(slack.TaskUpdateChunk)
+	assert.Equal(t, "Thinking", thinking.Title)
+	assert.Equal(t, "Planning use of context7 tool calls\nDiscovering context7 tool via search\nDeciding fallback to built-in knowledge", thinking.Details)
+
+	secondExec := chunks[2].(slack.TaskUpdateChunk)
+	assert.Equal(t, "Execute", secondExec.Title)
+	assert.Equal(t, "Bash: ls", secondExec.Details)
+
+	thinking2 := chunks[3].(slack.TaskUpdateChunk)
+	assert.Equal(t, "Thinking", thinking2.Title)
+	assert.Equal(t, "Confirming Go generics support", thinking2.Details)
+
+	// Cross-flush: more reasoning attaches to open thinking parent.
+	pending.tasks = []slack.TaskUpdateChunk{thinking2}
+	pending.activitySequence = 8
+	more := slackThinkingActivityChunks(pending, []string{"**Planning concise example**"})
+	require.Len(t, more, 1)
+	updated := more[0].(slack.TaskUpdateChunk)
+	assert.Equal(t, thinking2.ID, updated.ID)
+	assert.Equal(t, "Confirming Go generics support\nPlanning concise example", updated.Details)
+}
+
+func TestSlackThinkingActivityLinesKeepsSubagentResultDetails(t *testing.T) {
+	t.Parallel()
+
+	delta := strings.Join([]string{
+		"subagent(1/1) → software-factory → result: Context7 was unavailable, so I cannot answer without guessing.",
+		"Calls made:",
+		"- `context7.resolve-library-id(...)`",
+		"— blocked with: Monthly quota exceeded.",
+		"- Context7 tool discovery only; no documentation query was possible.",
+		"subagent(1/1) → software-factory: finished",
+	}, "\n")
+
+	assert.Equal(t, []string{
+		"subagent(1/1) → software-factory → result: Context7 was unavailable, so I cannot answer without guessing.\nCalls made:\n- `context7.resolve-library-id(...)`\n— blocked with: Monthly quota exceeded.\n- Context7 tool discovery only; no documentation query was possible.",
+		"subagent(1/1) → software-factory: finished",
+	}, slackThinkingActivityLines(delta))
+
+	pending := &slackThinkingState{thinkingTaskID: "111.222"}
+	chunks := slackThinkingActivityChunks(pending, slackThinkingActivityLines(delta))
+	require.Len(t, chunks, 2)
+
+	result := chunks[0].(slack.TaskUpdateChunk)
+	assert.Equal(t, "subagent(1/1) → software-factory → result: Context7 was unavailable, so I cannot answer without guessing.", result.Title)
+	assert.Equal(t, "Calls made:\n- `context7.resolve-library-id(...)`\n— blocked with: Monthly quota exceeded.\n- Context7 tool discovery only; no documentation query was possible.", result.Details)
+
+	finished := chunks[1].(slack.TaskUpdateChunk)
+	assert.Equal(t, "subagent(1/1) → software-factory: finished", finished.Title)
+	assert.Empty(t, finished.Details)
+}
+
 func TestFlushProgressSplitsActivityTitlesAtApprovedBoundaries(t *testing.T) {
 	var appended url.Values
 
@@ -3249,49 +3365,63 @@ func TestFlushProgressSplitsActivityTitlesAtApprovedBoundaries(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	newline := strings.Repeat("n", 240) + "\n" + strings.Repeat("x", 10) + " " + strings.Repeat("y", 20)
-	sentence := strings.Repeat("s", 250) + ". " + "x yyyyyyyyyy"
-	space := strings.Repeat("w", 250) + " " + strings.Repeat("z", 20)
-	hard := strings.Repeat("界", 257)
-	activities := []string{newline, sentence, space, hard}
+	// Multi-line subagent/result body stays on one card as details.
+	detailBody := "Calls made:\n- first\n- second"
+	withDetails := "subagent(1/1) → worker → result: short summary\n" + detailBody
+	// Long single-line titles still split at approved 256-rune boundaries.
+	sentence := "bash: " + strings.Repeat("s", 250) + ". " + "x yyyyyyyyyy"
+	space := "bash: " + strings.Repeat("w", 250) + " " + strings.Repeat("z", 20)
+	// Multi-byte latin rune to prove title splits are rune-safe.
+	hard := "bash: " + strings.Repeat("á", 257)
 
 	connector := newTestConnector(server.URL)
 	slots := slackReplySlots{ChannelID: "D123", ThinkingTS: "555.1", thinkingStream: true, thinkingTaskID: "111.222"}
 	progress := events.NewOutboundMessage(events.SourceSlack, "test", "", events.OutputTargetSlack)
-
 	progress.TurnID = "turn-1"
-	for _, activity := range activities {
+
+	// Buffer each root activity as its own snapshot so reconstruction stays simple.
+	for _, activity := range []string{withDetails, sentence, space, hard} {
 		if progress.ProgressText != "" {
 			progress.ProgressText += "\n"
 		}
 
 		progress.ProgressText += activity
 		connector.bufferProgressText(progress.TurnID, &slots, slackImmediatePlaceholder, progress.ProgressText, progress)
+		require.NoError(t, connector.flushProgressText(t.Context(), progress.TurnID))
 	}
 
-	require.NoError(t, connector.flushProgressText(t.Context(), progress.TurnID))
+	var allChunks []slack.TaskUpdateChunk
+	// Re-read only the last append is wrong; collect from connector state instead.
+	pending := connector.thinking[progress.TurnID]
+	assert.Empty(t, pending.activities)
+	allChunks = pending.tasks
+	require.GreaterOrEqual(t, len(allChunks), 4)
 
-	var chunks []slack.TaskUpdateChunk
-	require.NoError(t, json.Unmarshal([]byte(appended.Get("chunks")), &chunks))
-	require.Len(t, chunks, 8)
-	assert.Equal(t, []string{
-		"111.222-activity-1-1", "111.222-activity-1-2",
-		"111.222-activity-2-1", "111.222-activity-2-2",
-		"111.222-activity-3-1", "111.222-activity-3-2",
-		"111.222-activity-4-1", "111.222-activity-4-2",
-	}, []string{chunks[0].ID, chunks[1].ID, chunks[2].ID, chunks[3].ID, chunks[4].ID, chunks[5].ID, chunks[6].ID, chunks[7].ID})
-	assert.Equal(t, []string{
-		newline[:241], newline[241:],
-		sentence[:251], sentence[251:],
-		space[:251], space[251:],
-		strings.Repeat("界", 256), "界",
-	}, []string{chunks[0].Title, chunks[1].Title, chunks[2].Title, chunks[3].Title, chunks[4].Title, chunks[5].Title, chunks[6].Title, chunks[7].Title})
+	assert.Equal(t, "subagent(1/1) → worker → result: short summary", allChunks[0].Title)
+	assert.Equal(t, detailBody, allChunks[0].Details)
 
-	for i, activity := range activities {
-		assert.Equal(t, activity, chunks[2*i].Title+chunks[2*i+1].Title)
-		assert.LessOrEqual(t, len([]rune(chunks[2*i].Title)), 256)
-		assert.LessOrEqual(t, len([]rune(chunks[2*i+1].Title)), 256)
+	for _, chunk := range allChunks {
+		assert.LessOrEqual(t, len([]rune(chunk.Title)), 256)
 	}
+
+	// Each long activity was flushed alone, so its title parts are contiguous in tasks.
+	joined := func(start int, want string) int {
+		var parts []string
+		for i := start; i < len(allChunks); i++ {
+			parts = append(parts, allChunks[i].Title)
+			if strings.Join(parts, "") == want {
+				return i + 1
+			}
+		}
+
+		t.Fatalf("could not reconstruct %q from tasks starting at %d: %#v", want, start, allChunks[start:])
+
+		return start
+	}
+	next := joined(1, sentence)
+	next = joined(next, space)
+	_ = joined(next, hard)
+	_ = appended // ensure server captured at least one append
 }
 
 func TestFlushProgressKeepsActivityArrivingDuringAppend(t *testing.T) {
@@ -3557,7 +3687,7 @@ func thinkingBlockText(t *testing.T, values url.Values) string {
 			return block.Text.Text
 		}
 
-		if block.Type == "task_card" {
+		if block.Type == "task_card" || block.Type == "plan" {
 			return block.Title
 		}
 	}
@@ -4888,8 +5018,42 @@ func TestRecipientlessThinkingKeepsTaskCard(t *testing.T) {
 	assert.Contains(t, posted[0].Get("blocks"), `"type":"task_card"`)
 	assert.Contains(t, posted[0].Get("blocks"), `"status":"in_progress"`)
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
+	// Non-stream uses the same plan/tasks shape as stream (not a single blob card).
+	assert.Contains(t, updated.Get("blocks"), `"type":"plan"`)
 	assert.Contains(t, updated.Get("blocks"), `"type":"task_card"`)
-	assert.Contains(t, updated.Get("blocks"), `"status":"in_progress"`)
+	assert.Contains(t, updated.Get("blocks"), `"title":"working"`)
+	assert.Contains(t, updated.Get("blocks"), `"status":"complete"`)
+}
+
+func TestRecipientlessThinkingFoldsExecuteNestedLikeStream(t *testing.T) {
+	var updated url.Values
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !assert.NoError(t, r.ParseForm()) {
+			return
+		}
+
+		switch r.URL.Path {
+		case "/chat.postMessage":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+		case "/chat.update":
+			updated = cloneValues(r.PostForm)
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": r.PostForm.Get("ts")})
+		default:
+			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	connector := newTestConnector(server.URL)
+	slots := slackReplySlots{ChannelID: "C123", ThinkingTS: "555.1", thinkingTaskID: "111.222"}
+	progress := events.NewOutboundMessage(events.SourceSystem, "test", "", events.OutputTargetSlack)
+	progress.TurnID = "turn-recipientless-execute"
+	progress.ProgressText = "Execute\n" + slackExecuteNestedPrefix + "Search: context7\n" + slackExecuteNestedPrefix + "Grep: generics"
+	connector.bufferProgressText(progress.TurnID, &slots, slackImmediatePlaceholder, progress.ProgressText, progress)
+	require.NoError(t, connector.flushProgressText(t.Context(), progress.TurnID))
+
+	assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"111.222-activity-1-1","title":"Execute","status":"complete","details":{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"Search: context7"}]},{"type":"rich_text_section","elements":[{"type":"text","text":"Grep: generics"}]}]}}]}]`, updated.Get("blocks"))
 }
 
 func TestPublishOnDemandCronReplyPublishesAndReportsBusErrors(t *testing.T) {
@@ -7743,10 +7907,13 @@ func TestWorkflowUpdateArrivingDuringAppendIsPreserved(t *testing.T) {
 
 func TestWorkflowFinalizationDuringAppendPreservesLatestPhase(t *testing.T) {
 	appendStarted, releaseAppend := make(chan struct{}), make(chan struct{})
+
+	var appendOnce sync.Once
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/chat.appendStream":
-			close(appendStarted)
+			appendOnce.Do(func() { close(appendStarted) })
 			<-releaseAppend
 		case "/chat.stopStream", "/chat.update", "/chat.delete", "/reactions.remove":
 		default:

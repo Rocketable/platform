@@ -2891,21 +2891,55 @@ func TestRocketCodeThinkingTextHandlesStructuredToolDiagnostics(t *testing.T) {
 	result.Name = "bash"
 	result.Result = "file contents"
 
-	assert.Equal(t, "bash: Read the file", rocketcodeThinkingText(toolResponse(&call)))
-	assert.Equal(t, "bash started", rocketcodeThinkingText(toolResponse(&status)))
-	assert.Equal(t, "websearch started: Google DeepMind blog", rocketcodeThinkingText(toolResponse(&hosted)))
-	assert.Equal(t, "websearch started: OpenAI news, Google AI blog", rocketcodeThinkingText(toolResponse(&hostedQueries)))
-	assert.Equal(t, "custom started: plain text", rocketcodeThinkingText(toolResponse(&raw)))
+	assert.Equal(t, "Bash\nRead the file", rocketcodeThinkingText(toolResponse(&call)))
+	assert.Equal(t, "Bash", rocketcodeThinkingText(toolResponse(&status)))
+	assert.Equal(t, "Websearch\nGoogle DeepMind blog", rocketcodeThinkingText(toolResponse(&hosted)))
+	assert.Equal(t, "Websearch\nOpenAI news, Google AI blog", rocketcodeThinkingText(toolResponse(&hostedQueries)))
+	assert.Equal(t, "Custom\nplain text", rocketcodeThinkingText(toolResponse(&raw)))
 	assert.Empty(t, rocketcodeThinkingText(toolResponse(&result)))
+
+	nested := rocketcode.ToolDiagnostic{Phase: "call", Name: "execute → read", Arguments: []byte(`{"filePath":"README.md"}`)}
+	assert.Equal(t, "Execute → Read: README.md", rocketcodeThinkingText(toolResponse(&nested)))
+
+	nestedBare := rocketcode.ToolDiagnostic{Phase: "call", Name: "execute → bash"}
+	assert.Equal(t, "Execute → Bash", rocketcodeThinkingText(toolResponse(&nestedBare)))
+
+	nestedSearch := rocketcode.ToolDiagnostic{Phase: "call", Name: "execute → search", Arguments: []byte(`{"query":"context7"}`)}
+	assert.Equal(t, "Execute → Search: context7", rocketcodeThinkingText(toolResponse(&nestedSearch)))
+
+	findSkills := rocketcode.ToolDiagnostic{Phase: "call", Name: "find_skills", Arguments: []byte(`{"query":"context7"}`)}
+	assert.Equal(t, "Find Skills\ncontext7", rocketcodeThinkingText(toolResponse(&findSkills)))
 
 	result.Result = `tool call denied: permission "bash" has no matching allow rule for subject "pwd". Choose a different action.`
 	assert.Equal(t, result.Result, rocketcodeThinkingText(toolResponse(&result)))
+
+	failed := rocketcode.ToolDiagnostic{
+		Phase:  "result",
+		Name:   "execute",
+		Result: `tool call failed: execute: run code mode: execute codemode: codemode.star:2:25: invalid escape sequence \(. Choose a different action.`,
+	}
+	assert.Equal(t, "Execute failed\ninvalid escape sequence \\(", rocketcodeThinkingText(toolResponse(&failed)))
+
+	mcpEOF := rocketcode.ToolDiagnostic{
+		Phase:  "result",
+		Name:   "execute",
+		Result: `tool call failed: execute: list mcp tools: server memory: connect mcp server "memory": connection closed: calling "initialize": client is closing: EOF. Choose a different action.`,
+	}
+	assert.Equal(t, "Execute failed\n\"memory\" errored: \"client is closing: EOF\"", rocketcodeThinkingText(toolResponse(&mcpEOF)))
+
+	// Successful tool bodies must not leak into thinking even if they mention denial/failure phrases.
+	leaky := rocketcode.ToolDiagnostic{
+		Phase:  "result",
+		Name:   "execute",
+		Result: `["<path>agents/cron.md</path>\ncontent mentions tool call denied: and tool call failed: in docs\n"]`,
+	}
+	assert.Empty(t, rocketcodeThinkingText(toolResponse(&leaky)))
 }
 
 func TestRocketCodeThinkingTextHandlesToolDiagnosticFallbacks(t *testing.T) {
-	assert.Equal(t, "tool started", rocketcodeThinkingText(toolResponse(&rocketcode.ToolDiagnostic{Phase: "call"})))
-	assert.Equal(t, "custom", rocketcodeThinkingText(toolResponse(&rocketcode.ToolDiagnostic{Phase: "unknown", Name: " custom "})))
-	assert.Equal(t, "tool queued", rocketcodeThinkingText(toolResponse(&rocketcode.ToolDiagnostic{Phase: "call", Status: "queued"})))
+	assert.Equal(t, "Tool", rocketcodeThinkingText(toolResponse(&rocketcode.ToolDiagnostic{Phase: "call"})))
+	assert.Equal(t, "Custom", rocketcodeThinkingText(toolResponse(&rocketcode.ToolDiagnostic{Phase: "unknown", Name: " custom "})))
+	assert.Equal(t, "Tool queued", rocketcodeThinkingText(toolResponse(&rocketcode.ToolDiagnostic{Phase: "call", Status: "queued"})))
 	assert.Equal(t, "plain thought", rocketcodeThinkingText(rocketcode.ChatResponse{Text: " plain thought "}))
 }
 
@@ -2913,7 +2947,7 @@ func TestRocketCodeThinkingTextHandlesSubagentToolDiagnostics(t *testing.T) {
 	call := rocketcode.ToolDiagnostic{Phase: "call", Name: "bash", Arguments: []byte(`{"command":"cat /tmp/file","description":"Read the file"}`)}
 	result := rocketcode.ToolDiagnostic{Phase: "result", Name: "bash", Result: "file contents"}
 
-	assert.Equal(t, "subagent(1/20) → hally-google-workspace → tool: bash: Read the file", rocketcodeThinkingText(subagentToolResponse(&call)))
+	assert.Equal(t, "subagent(1/20) → hally-google-workspace → tool: Bash\nRead the file", rocketcodeThinkingText(subagentToolResponse(&call)))
 	assert.Empty(t, rocketcodeThinkingText(subagentToolResponse(&result)))
 }
 
@@ -3110,7 +3144,7 @@ func TestProcessResponsePublishesStructuredToolDiagnosticsAsThinking(t *testing.
 	require.NoError(t, bridge.processResponse(context.Background(), inbound, &result, toolResponse(&diagnostic)))
 
 	outbound := readRocketCodeOutbound(t, bus)
-	assert.Equal(t, "bash: Read the file", outbound.ProgressText)
+	assert.Equal(t, "Bash\nRead the file", outbound.ProgressText)
 	assert.Equal(t, "turn-1", outbound.TurnID)
 }
 
@@ -3277,7 +3311,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 
 		if requests == 2 || requests == 5 {
-			_, _ = w.Write([]byte(`{"id":"resp_2","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"call_1","type":"function_call","status":"completed","call_id":"call_1","name":"bash","arguments":"{\"command\":\"printf '%s|%s|%s' \\\"$ROCKETCLAW_METADATA_A\\\" \\\"$ROCKETCLAW_METADATA_LATER_KEY\\\" \\\"$ROCKETCLAW_METADATA_Z\\\"\",\"description\":\"check env\"}"}]}`))
+			writeRawRunFunctionCall(t, w, "resp_2", "call_1", "execute", executeBashScript(`printf '%s|%s|%s' "$ROCKETCLAW_METADATA_A" "$ROCKETCLAW_METADATA_LATER_KEY" "$ROCKETCLAW_METADATA_Z"`))
 
 			return
 		}
@@ -3499,7 +3533,7 @@ func TestRecoveredExternalMCPActiveTurnUsesStoredSourceMetadata(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 
 		if requests == 1 {
-			_, _ = w.Write([]byte(`{"id":"resp_2","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"call_1","type":"function_call","status":"completed","call_id":"call_1","name":"bash","arguments":"{\"command\":\"printf '%s|%s' \\\"$ROCKETCLAW_METADATA_A\\\" \\\"$ROCKETCLAW_METADATA_LATER_KEY\\\"\",\"description\":\"check env\"}"}]}`))
+			writeRawRunFunctionCall(t, w, "resp_2", "call_1", "execute", executeBashScript(`printf '%s|%s' "$ROCKETCLAW_METADATA_A" "$ROCKETCLAW_METADATA_LATER_KEY"`))
 
 			return
 		}

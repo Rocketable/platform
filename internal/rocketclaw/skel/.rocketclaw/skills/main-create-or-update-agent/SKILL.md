@@ -57,6 +57,8 @@ Built-in permission buckets:
 - `skill`: skill names for `find_skills` and `skill`
 - `task`: subagent names for the `task` tool only
 - `workflow`: workflow stems for `rocketclaw_dynamic_workflow`
+- `read` / `edit` / `glob` / `grep` / `webfetch` / `bash`: same subjects as before; unlock nested builtins inside Code Mode `execute` (not separate top-level tools)
+- `mcp`: outbound MCP as `server.tool` or wildcards such as `demo.*`; unlocks Code Mode `execute` MCP builtins when a matching configured `mcp_servers` name is granted
 
 For edit-only agents, an `edit` allow also permits reading the same path unless a `read` rule matched first. Do not add a top-level deny that would block this fallback.
 
@@ -117,9 +119,12 @@ permission:
     "test-*": allow
   workflow:
     "audit-routes": allow
+  mcp:
+    "demo.*": allow
+    "demo.danger": deny
 ```
 
-If the agent needs no tools, omit the `permission` block.
+If the agent needs no tools, omit the `permission` block. Outbound MCP tools stay omitted until `permission.mcp` grants a configured server.
 
 ## Runtime and tool behavior
 

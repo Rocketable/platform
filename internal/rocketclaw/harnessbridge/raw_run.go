@@ -184,8 +184,14 @@ func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logge
 
 		tools := slices.Clone(request.Worker.Tools)
 		if tools == nil {
-			tools = slices.DeleteFunc(slices.Collect(maps.Keys(runtime.Tools)), func(name string) bool { return name == "task" })
+			tools = slices.Collect(maps.Keys(runtime.Tools))
 		}
+
+		// Workflows call agents; agents use execute for FS/shell. Keep execute.
+		// Strip task and any direct host tools if a caller allowlist still names them.
+		tools = slices.DeleteFunc(tools, func(name string) bool {
+			return name == "task" || rocketcode.CodeModeOnlyHostTool(name)
+		})
 
 		if _, available := runtime.Tools["find_skills"]; available && slices.Contains(tools, "skill") && !slices.Contains(tools, "find_skills") {
 			tools = append(tools, "find_skills")
@@ -327,7 +333,7 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 		customTools = append(customTools, restartTool(requestRestart, recordRestartRequester))
 	}
 
-	rocketcodeConfig := rocketcode.Config{Model: "", AutoApproverModel: cfg.AutoApproverModel, ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: diagnostics, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: true}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CheckpointSink: rocketcode.InertCheckpointSink{}, CustomTools: customTools}
+	rocketcodeConfig := rocketcode.Config{Model: "", AutoApproverModel: cfg.AutoApproverModel, ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: diagnostics, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: true}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CheckpointSink: rocketcode.InertCheckpointSink{}, CustomTools: customTools, MCPServers: toMCPClientServers(cfg.MCPServers), MCPWorkspace: cfg.Workspace}
 
 	looper, err := rocketcode.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agent, io.Discard)
 	if err != nil {
