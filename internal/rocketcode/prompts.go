@@ -16,13 +16,14 @@ import (
 var promptShellPattern = regexp.MustCompile("!`([^`]+)`")
 
 type promptExpansionEnvironment struct {
-	root        *os.Root
-	hostDir     string
-	shellOutput shellOutputConfig
-	env         []string
+	root         *os.Root
+	hostDir      string
+	shellOutput  shellOutputConfig
+	env          []string
+	shellCommand ShellCommandFunc
 }
 
-func newPromptExpansionEnvironment(root *os.Root, shellOutput shellOutputConfig, env []string) (promptExpansionEnvironment, error) {
+func newPromptExpansionEnvironment(root *os.Root, shellOutput shellOutputConfig, env []string, shellCommand ShellCommandFunc) (promptExpansionEnvironment, error) {
 	var zero promptExpansionEnvironment
 
 	if root == nil {
@@ -43,7 +44,7 @@ func newPromptExpansionEnvironment(root *os.Root, shellOutput shellOutputConfig,
 		return zero, fmt.Errorf("resolve prompt expansion root: %w", err)
 	}
 
-	return promptExpansionEnvironment{root: root, hostDir: hostDir, shellOutput: shellOutput, env: slices.Clone(env)}, nil
+	return promptExpansionEnvironment{root: root, hostDir: hostDir, shellOutput: shellOutput, env: slices.Clone(env), shellCommand: shellCommand}, nil
 }
 
 func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, prompt string) string {
@@ -52,7 +53,7 @@ func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, pr
 			return ""
 		}
 
-		shell, args := shellCommand(command)
+		shell, args := e.shellCommand(command)
 		cmd := exec.CommandContext(context.WithoutCancel(ctx), shell, args...)
 		cmd.Dir = e.hostDir
 		cmd.Env = append(os.Environ(), e.env...)
@@ -104,6 +105,12 @@ func expandAgentPrompt(ctx context.Context, agent *Agent, enabled bool, env *pro
 	}
 
 	agent.Prompt = env.expandShellCommands(ctx, agent.Prompt)
+}
+
+// DefaultShellCommand picks sh, bash, or zsh from $SHELL (basename must be one
+// of those names) and falls back to /bin/sh. bash/zsh use -lc; sh uses -c.
+func DefaultShellCommand(command string) (path string, args []string) {
+	return shellCommand(command)
 }
 
 func shellCommand(command string) (path string, args []string) {

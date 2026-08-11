@@ -44,7 +44,7 @@ Every active `cron/*.md` definition declares a quoted `channel` that matches a c
 ### Supporting Tools
 
 - `cmd/funneld`: serves a small HTTPS reverse-proxy funnel from public mount paths to target base URLs configured by `funneld.json`.
-- `cmd/quickbench`: runs YAML benchmarks through RocketCode with CLI-selected models. See [cmd/quickbench/README.md](cmd/quickbench/README.md).
+- `cmd/quickbench`: BAR benchmarks (pack/unpack/dump/capture/run + ELO) through RocketCode. See [cmd/quickbench/README.md](cmd/quickbench/README.md).
 - `cmd/quickweb`: serves trusted internal static applets with one persistent JSON document per page. See [cmd/quickweb/README.md](cmd/quickweb/README.md).
 
 ## Runtime Flow
@@ -65,7 +65,7 @@ Saved workflows run only as foreground managed turns. Each workflow launches fre
 - `internal/rocketcode/`: core workspace agent runtime.
 - `internal/rocketclaw/`: connector service runtime around RocketCode.
 - `internal/funneld/`: HTTPS funnel proxy daemon and JSON route config loading.
-- `internal/quickbench/`: benchmark runner implementation.
+- `internal/quickbench/`: BAR format, capture, run matrix, and ELO ranking.
 - `internal/quickweb/`: lightweight static applet server.
 - `internal/netutil/`: shared networking helpers.
 - `vendor/`: vendored Go dependencies.

@@ -121,6 +121,7 @@ func standaloneDefaultConfig() Config {
 		ShellOutputDir:   filepath.Join(".tmp", "shell-outputs"),
 		ChildRunLogger:   DiscardChildRunLog,
 		CheckpointSink:   InertCheckpointSink{},
+		ShellCommand:     DefaultShellCommand,
 		CustomTools: []Tool{{
 			Name:        "current_time",
 			Description: "Tell the current time anywhere in the world.",

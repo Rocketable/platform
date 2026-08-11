@@ -20,6 +20,11 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// ShellCommandFunc selects the process used to run a bash tool command string.
+// The returned path and args are passed to exec.Command (for example
+// "/bin/bash", []string{"-lc", command}).
+type ShellCommandFunc func(command string) (path string, args []string)
+
 // Config contains runtime settings supplied by the embedding application.
 type Config struct {
 	Model                      shared.ResponsesModel
@@ -39,8 +44,11 @@ type Config struct {
 	CheckpointSink             CheckpointSink
 	CustomTools                []Tool
 	ShellEnv                   map[string]string
-	MCPServers                 map[string]mcpclient.ServerConfig
-	MCPWorkspace               string
+	// ShellCommand builds the executable used for bash tool (and prompt !`…`)
+	// commands. Required; pass DefaultShellCommand for normal host shell behavior.
+	ShellCommand ShellCommandFunc
+	MCPServers   map[string]mcpclient.ServerConfig
+	MCPWorkspace string
 }
 
 // ChildRunKind identifies a hidden child-run category.
@@ -297,7 +305,7 @@ func NewWithModelResolver(
 
 	agents = skills.withReadPermissions(root, agents)
 
-	promptExpansion, err := newPromptExpansionEnvironment(root, shellOutput, shellEnv)
+	promptExpansion, err := newPromptExpansionEnvironment(root, shellOutput, shellEnv, config.ShellCommand)
 	if err != nil {
 		return nil, fmt.Errorf("initialize prompt expansion: %w", err)
 	}
@@ -337,7 +345,7 @@ func NewWithModelResolver(
 	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, string(config.ReasoningEffort)))
 	agentForTools := &activeAgent
 	activeAgent.Permission = shellOutput.effectivePermissions(activeAgent.Permission)
-	baseTools := newSandboxedTools(root, shellOutput, shellEnv, config.SandboxedBash)
+	baseTools := newSandboxedTools(root, shellOutput, shellEnv, config.SandboxedBash, config.ShellCommand)
 
 	customTools, err := customLooperTools(config.CustomTools, baseTools)
 	if err != nil {

@@ -1,0 +1,4 @@
+name: hello
+description: minimal BAR sample
+tags: sample
+root: main

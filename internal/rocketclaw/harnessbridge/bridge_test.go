@@ -1567,7 +1567,7 @@ Prompt
 
 	shellOutputDir := filepath.Join(workspace, "shell-output")
 	require.NoError(t, os.Mkdir(shellOutputDir, 0o755))
-	_, err = rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{ShellOutputDir: shellOutputDir, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}}, root, agents, skills, "main", io.Discard)
+	_, err = rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{ShellOutputDir: shellOutputDir, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand}, root, agents, skills, "main", io.Discard)
 	require.NoError(t, err)
 }
 

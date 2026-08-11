@@ -327,7 +327,7 @@ func TestRocketCodeReadsAllowedSkillFilesFromConfiguredRuntimeDirectory(t *testi
 			require.NoError(t, err)
 
 			client := openai.NewClient()
-			runtime, err := rocketcode.New(&client, &rocketcode.Config{ShellOutputDir: workspace, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}}, root, agents, skills, "main", nil)
+			runtime, err := rocketcode.New(&client, &rocketcode.Config{ShellOutputDir: workspace, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand}, root, agents, skills, "main", nil)
 			require.NoError(t, err)
 
 			action, _ := runtime.Permissions.Evaluate("read", filepath.ToSlash(filepath.Join(skillDir, "asset.txt")))

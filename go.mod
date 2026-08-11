@@ -26,6 +26,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.45.0
 	go.starlark.net v0.0.0-20260708150628-5395d018f003
 	golang.org/x/text v0.40.0
+	golang.org/x/tools v0.48.0
 )
 
 require (

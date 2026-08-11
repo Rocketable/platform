@@ -1,6 +1,7 @@
 package quickbench
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -17,7 +18,7 @@ type modelSelector struct {
 func parseModelSelector(input string) (modelSelector, error) {
 	input = strings.TrimSpace(input)
 	if input == "" {
-		return modelSelector{}, fmt.Errorf("empty selector")
+		return modelSelector{}, errors.New("empty selector")
 	}
 
 	model, rawQuery, _ := strings.Cut(input, "?")
@@ -26,6 +27,7 @@ func parseModelSelector(input string) (modelSelector, error) {
 	}
 
 	selector := modelSelector{Raw: input, Provider: "openai", Model: model}
+
 	query, err := url.ParseQuery(rawQuery)
 	if err != nil {
 		return modelSelector{}, fmt.Errorf("parse query: %w", err)
@@ -39,13 +41,13 @@ func parseModelSelector(input string) (modelSelector, error) {
 		switch key {
 		case "reasoningEffort":
 			if values[0] != "minimal" && values[0] != "low" && values[0] != "medium" && values[0] != "high" {
-				return modelSelector{}, fmt.Errorf("reasoningEffort must be minimal, low, medium, or high")
+				return modelSelector{}, errors.New("reasoningEffort must be minimal, low, medium, or high")
 			}
 
 			selector.ReasoningEffort = values[0]
 		case "verbosity":
 			if values[0] != "low" && values[0] != "medium" && values[0] != "high" {
-				return modelSelector{}, fmt.Errorf("verbosity must be low, medium, or high")
+				return modelSelector{}, errors.New("verbosity must be low, medium, or high")
 			}
 
 			selector.Verbosity = values[0]
@@ -55,8 +57,4 @@ func parseModelSelector(input string) (modelSelector, error) {
 	}
 
 	return selector, nil
-}
-
-func (m modelSelector) rocketCodeModel() string {
-	return m.Model
 }

@@ -82,6 +82,7 @@ func TestWorkflowPrepareOmitsMCPTools(t *testing.T) {
 		Diagnostics:    true,
 		ChildRunLogger: rocketcode.DiscardChildRunLog,
 		CheckpointSink: rocketcode.InertCheckpointSink{},
+		ShellCommand:   rocketcode.DefaultShellCommand,
 	}, root, agents, skills, "main", io.Discard)
 	require.NoError(t, err)
 

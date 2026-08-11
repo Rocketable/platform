@@ -55,7 +55,7 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	outputDir := filepath.Join(dir, ".tmp", "shell-outputs")
 	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-outputs", "tmp"), 0o700))
 	shellOutput := testShellOutputConfig(t, root, outputDir)
-	sss := newSandboxedShellSystem(root, &shellOutput, nil, false)
+	sss := newSandboxedShellSystem(root, &shellOutput, nil, false, DefaultShellCommand)
 	factory := &toolFactory{
 		baseTools:   makeSandboxedTools(sfs, sss),
 		shellOutput: shellOutput,
@@ -227,7 +227,7 @@ func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {
 	require.NoError(t, permissions.Deny("bash", "rm *"))
 
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
-	sss := newSandboxedShellSystem(root, &shellOutput, nil, false)
+	sss := newSandboxedShellSystem(root, &shellOutput, nil, false, DefaultShellCommand)
 	factory := &toolFactory{
 		baseTools:   makeSandboxedTools(sfs, sss),
 		shellOutput: shellOutput,

@@ -45,6 +45,7 @@ func loadProviderConfig(path string, models []modelSelector) (rocketcode.Provide
 	}
 
 	missing := []string{}
+
 	for name, provider := range cfg.Providers {
 		if !selected[name] {
 			continue
@@ -60,6 +61,7 @@ func loadProviderConfig(path string, models []modelSelector) (rocketcode.Provide
 	}
 
 	var providers rocketcode.Providers
+
 	if selected["openai"] {
 		provider, ok := cfg.Providers["openai"]
 		if !ok {
@@ -86,6 +88,7 @@ func loadProviderConfig(path string, models []modelSelector) (rocketcode.Provide
 func interpolateEnv(input string, missing *[]string) string {
 	return envTemplatePattern.ReplaceAllStringFunc(input, func(match string) string {
 		name := envTemplatePattern.FindStringSubmatch(match)[1]
+
 		value, ok := os.LookupEnv(name)
 		if !ok {
 			*missing = append(*missing, name)

@@ -52,24 +52,26 @@ type temporaryFile string
 type creationTime time.Time
 
 type sandboxedShellSystem struct {
-	mu          sync.Mutex
-	root        *os.Root
-	shellOutput shellOutputConfig
-	env         []string
-	tempFiles   map[temporaryFile]creationTime
-	bash        sandboxedBash
-	useSandbox  bool
+	mu           sync.Mutex
+	root         *os.Root
+	shellOutput  shellOutputConfig
+	env          []string
+	tempFiles    map[temporaryFile]creationTime
+	bash         sandboxedBash
+	useSandbox   bool
+	shellCommand ShellCommandFunc
 }
 
-func newSandboxedShellSystem(root *os.Root, shellOutput *shellOutputConfig, env []string, useSandbox bool) *sandboxedShellSystem {
+func newSandboxedShellSystem(root *os.Root, shellOutput *shellOutputConfig, env []string, useSandbox bool, shellCommand ShellCommandFunc) *sandboxedShellSystem {
 	return &sandboxedShellSystem{
-		mu:          sync.Mutex{},
-		root:        root,
-		shellOutput: *shellOutput,
-		env:         slices.Clone(env),
-		tempFiles:   map[temporaryFile]creationTime{},
-		bash:        newSandboxedBash(root, *shellOutput, env),
-		useSandbox:  useSandbox,
+		mu:           sync.Mutex{},
+		root:         root,
+		shellOutput:  *shellOutput,
+		env:          slices.Clone(env),
+		tempFiles:    map[temporaryFile]creationTime{},
+		bash:         newSandboxedBash(root, *shellOutput, env),
+		useSandbox:   useSandbox,
+		shellCommand: shellCommand,
 	}
 }
 
@@ -89,7 +91,7 @@ func RunBash(ctx context.Context, root *os.Root, shellOutputDir string, shellEnv
 		return BashResult{}, err
 	}
 
-	sss := newSandboxedShellSystem(root, &shellOutput, env, useSandbox)
+	sss := newSandboxedShellSystem(root, &shellOutput, env, useSandbox, DefaultShellCommand)
 	output, success := sss.runBash(ctx, bashParams(command))
 
 	return BashResult{Output: output, Success: success}, nil
@@ -199,7 +201,11 @@ func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams)
 	defer cancel()
 
 	timedOut := false
-	shell, args := shellCommand(params.Command)
+
+	shell, args := sss.shellCommand(params.Command)
+	if strings.TrimSpace(shell) == "" {
+		return "shell command path is required", false
+	}
 
 	var cmd *exec.Cmd
 

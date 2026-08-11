@@ -614,5 +614,5 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 }
 
 func testConfig(shellOutputDir string) *Config {
-	return &Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 0, ShellOutputDir: shellOutputDir, SandboxedBash: false, AutoApprovePermissions: false, Observability: ObservabilityConfig{}, ChildRunLogger: DiscardChildRunLog, CheckpointSink: InertCheckpointSink{}, CustomTools: nil, ShellEnv: nil}
+	return &Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 0, ShellOutputDir: shellOutputDir, SandboxedBash: false, AutoApprovePermissions: false, Observability: ObservabilityConfig{}, ChildRunLogger: DiscardChildRunLog, CheckpointSink: InertCheckpointSink{}, CustomTools: nil, ShellEnv: nil, ShellCommand: DefaultShellCommand}
 }

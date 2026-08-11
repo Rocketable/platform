@@ -22,7 +22,22 @@ A human Slack message accepted while a Managed Slack Thread has an active turn a
 
 A Buffered Follow-Up remains associated with its thread until promotion submits it or an explicit failure path consumes it.
 
+## Quickbench
+
+### BAR (Benchmark Archive)
+
+A portable benchmark unit for quickbench. On disk it is a `.bar` file (txtar) or an equivalent unpacked directory. A BAR holds the full RocketCode agent tree (each agent’s model and prompt), root conversation turns, static host-tool mocks, optional per-agent variation overlays, and an ELO scorer so multi-agent runs can be reconstructed and ranked. Subagent `task` calls re-execute live against the BAR agents rather than frozen child traces.
+
+### ELO Scorer
+
+The only v1 scoring definition inside a BAR: a crisp criteria prompt plus a judge model and variant. Pairwise comparisons of subject-model outputs produce an ELO ranking; better/worse is defined only by that criteria prompt.
+
+### Quickbench
+
+The single CLI/product surface that packs, unpacks, dumps, runs, and ELO-ranks BARs, and pairs with a RocketClaw skill/subagent that captures Slack sessions into BARs.
+
 ## Relationships
 
 - A Root Slack Mention creates or targets a Managed Slack Thread.
 - A Buffered Follow-Up belongs to one active Managed Slack Thread and is promoted after the active turn completes.
+- A BAR is authored, packed, run, and ranked by Quickbench; an ELO Scorer belongs to one BAR.

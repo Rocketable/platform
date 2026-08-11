@@ -163,7 +163,7 @@ func TestTaskTool(t *testing.T) {
 
 		require.NoError(t, root.WriteFile("MEMORY.md", []byte("carefully"), 0o644))
 		shellOutput := testPromptShellOutputConfig(t, root, dir)
-		env, err := newPromptExpansionEnvironment(root, shellOutput, nil)
+		env, err := newPromptExpansionEnvironment(root, shellOutput, nil, DefaultShellCommand)
 		require.NoError(t, err)
 
 		mock := mockResponses(responseWithTaskMessages())
