@@ -6,7 +6,7 @@ Dollar commands are canonical. RocketClaw translates the listed emoji and Slack 
 
 | Emoji | Dollar Command | Aliases | Surface | What It Does | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `🔁`, `🏁` | `$goal`, `$ goal` | Slack `:repeat:`, `:checkered_flag:` | Slack | Starts a text goal loop. | Dollar command names are case-insensitive; goal arguments use the existing grammar. |
+| `🔁`, `🏁` | `$goal`, `$ goal` | Slack `:repeat:`, `:checkered_flag:` | Slack | Starts a text goal loop. | Dollar command names are case-insensitive; goal arguments use the existing grammar. Bare `$goal` posts ephemeral parameter help and examples. |
 | `🛑`, `⏹️` | `$stop`, `$ stop` | Slack reactions `:octagonal_sign:`, `:stop_button:` | Slack managed threads | Stops the active managed-conversation turn. | Emoji controls work as an exact message or reaction. Stop feedback is marker-only: RocketClaw adds `❗` and sends no stop text. Dollar stop takes no arguments. |
 | `❗` |  | Slack `:exclamation:` | Slack | Interruption or rejection marker. | Added by RocketClaw after stop/interruption and for duplicate active-goal rejection. Humans generally do not use this as a command. |
 | `✅` |  | Slack `:white_check_mark:` | Slack | Completion marker. | Added when a goal reaches `complete`. Not added for `blocked`, `stopped`, or `budget_exhausted`. |

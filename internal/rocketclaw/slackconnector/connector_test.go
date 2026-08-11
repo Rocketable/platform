@@ -5636,6 +5636,65 @@ func TestHandleMessageEventStartsGoalInExistingManagedThread(t *testing.T) {
 	}
 }
 
+func TestHandleMessageEventPostsEphemeralGoalHelp(t *testing.T) {
+	bus := newTestBus()
+	defer bus.Close()
+
+	var (
+		ephemeral []url.Values
+		posted    []url.Values
+		reactions []string
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/conversations.info":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
+		case "/chat.postEphemeral":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			ephemeral = append(ephemeral, cloneValues(r.PostForm))
+
+			writeJSON(t, w, map[string]any{"ok": true, "message_ts": "222.333"})
+		case "/chat.postMessage", "/chat.update", "/reactions.add", "/reactions.remove", "/chat.delete":
+			if r.URL.Path == "/reactions.add" || r.URL.Path == "/reactions.remove" {
+				if assert.NoError(t, r.ParseForm()) {
+					reactions = append(reactions, r.URL.Path+" "+r.PostForm.Get("name")+" "+r.PostForm.Get("timestamp"))
+				}
+			}
+
+			if r.URL.Path == "/chat.postMessage" || r.URL.Path == "/chat.update" {
+				if assert.NoError(t, r.ParseForm()) {
+					posted = append(posted, cloneValues(r.PostForm))
+				}
+			}
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.1"})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.prepareHandled = true
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+
+	event := newSlackMessageEvent("222.333", "111.222", "$goal")
+	event.Channel = "C123"
+	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
+
+	assert.Empty(t, router.goalStarts)
+	assert.Empty(t, posted)
+	assert.Empty(t, reactions)
+	require.Len(t, ephemeral, 1)
+	assert.Equal(t, harnessbridge.GoalCommandHelp, ephemeral[0].Get("text"))
+	assert.Equal(t, "U123", ephemeral[0].Get("user"))
+	assert.Equal(t, "111.222", ephemeral[0].Get("thread_ts"))
+}
+
 func TestHandleMessageEventBuffersCanonicalGoalObjective(t *testing.T) {
 	for _, tt := range []struct {
 		name, text string

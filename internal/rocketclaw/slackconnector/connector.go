@@ -2361,10 +2361,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 			case "goal":
 				goal, rejection := harnessbridge.ParseGoalRequest(args)
 				if rejection != "" {
-					if err := c.postSlackThreadReply(ctx, ev.Channel, threadTS, rejection); err != nil {
-						c.log.Warn("post Slack thread goal rejection", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
-					}
-
+					c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, rejection)
 					return
 				}
 
@@ -2619,10 +2616,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 	}
 
 	if isGoal && rejection != "" {
-		if err := c.postSlackThreadReply(ctx, ev.Channel, threadTS, rejection); err != nil {
-			c.log.Warn("post Slack social goal rejection", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
-		}
-
+		c.postSlackEphemeral(ctx, ev.Channel, threadTS, ev.User, rejection)
 		return
 	}
 

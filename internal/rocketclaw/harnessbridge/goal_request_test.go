@@ -73,7 +73,11 @@ func TestParseGoalRequestAttachedParameters(t *testing.T) {
 
 func TestParseGoalRequestUsesCanonicalExamples(t *testing.T) {
 	_, rejection := ParseGoalRequest("")
-	assert.Contains(t, rejection, "`$goal`")
+	assert.Equal(t, GoalCommandHelp, rejection)
+	assert.Contains(t, rejection, "maxTurns:")
+	assert.Contains(t, rejection, "checkScript:")
+	assert.Contains(t, rejection, "$goal maxTurns: 10 ship the release")
+	assert.Contains(t, rejection, `$goal checkScript:"./scripts/check.sh --full" ship the release`)
 
 	_, rejection = ParseGoalRequest("maxTurns: 5")
 	assert.Contains(t, rejection, "`$goal maxTurns: 5 update the docs`")

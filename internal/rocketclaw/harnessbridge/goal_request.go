@@ -14,6 +14,22 @@ type GoalRequest struct {
 	MaxTurns               int
 }
 
+// GoalCommandHelp is the bare `$goal` usage text (parameters and examples).
+const GoalCommandHelp = `$goal <objective>
+
+Parameters:
+maxTurns: omitted (default 5); positive integer; 0, -1, or infinite
+checkScript: workspace-local simple command (quote when it has spaces)
+
+Examples:
+$goal ship the release
+$goal maxTurns: 10 ship the release
+$goal maxTurns:10 ship the release
+$goal maxTurns: infinite ship the release
+$goal checkScript: ./scripts/check.sh ship the release
+$goal checkScript:"./scripts/check.sh --full" ship the release
+$goal maxTurns: 10 checkScript: ./scripts/check.sh ship the release`
+
 // ParseGoalRequest parses canonical $goal arguments.
 func ParseGoalRequest(text string) (goal GoalRequest, rejection string) {
 	text = strings.TrimSpace(text)
@@ -21,7 +37,7 @@ func ParseGoalRequest(text string) (goal GoalRequest, rejection string) {
 	checkScript := ""
 
 	if text == "" {
-		return GoalRequest{}, "Tell me the goal after `$goal`, for example `$goal maxTurns: 5 update the docs`."
+		return GoalRequest{}, GoalCommandHelp
 	}
 
 	for {
