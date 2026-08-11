@@ -3554,7 +3554,8 @@ func (c *Connector) postReplyPlaceholderPair(ctx context.Context, channelID, thr
 			return "", "", "", fmt.Errorf("post Slack thinking placeholder: %w", err)
 		}
 	} else {
-		options = append(options, slack.MsgOptionText(placeholder, false))
+		blocks := slackThinkingBlocks("thinking", &slackThinkingState{Placeholder: placeholder}, slack.TaskCardStatusInProgress)
+		options = append(options, slack.MsgOptionText(placeholder, false), slack.MsgOptionBlocks(blocks...))
 
 		placeholderChannelID, thinkingTS, err = c.api.PostMessageContext(ctx, channelID, options...)
 		if err != nil {
