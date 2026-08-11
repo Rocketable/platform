@@ -14,6 +14,18 @@ func slackGoalProgressText(turnNumber, maxTurns int) string {
 	return "_Pursuing Goal..._"
 }
 
+func slackGoalHeaderText(turnNumber, maxTurns int, complete bool) string {
+	if complete {
+		return "✅ Goal complete"
+	}
+
+	if maxTurns > 0 && turnNumber > 0 {
+		return fmt.Sprintf("🏁 Pursuing Goal (%d/%d)...", turnNumber, maxTurns)
+	}
+
+	return "🏁 Pursuing Goal..."
+}
+
 func splitSlackText(text string, preferredLimit, hardLimit int) []string {
 	runes := []rune(text)
 	if len(runes) == 0 {

@@ -269,13 +269,14 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 	}
 
 	switch {
+	case msg.Text != "" && msg.GoalTurn && (msg.Complete || msg.PostProgressText):
+		if err := c.sendGoalTurnResponse(ctx, msg, &slots, ok); err != nil {
+			return err
+		}
+
 	case msg.Text != "" && (msg.Complete || msg.PostProgressText):
 		chunks := splitSlackText(msg.Text, slackPreferredChunkSize, slackTextLimit)
-
-		var (
-			posted []slackReplyState
-			err    error
-		)
+		updatedAnswer := false
 
 		if msg.Complete && ok {
 			if len(chunks) == 1 && slots.AnswerTS != "" {
@@ -288,25 +289,17 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 					return fmt.Errorf("update Slack answer placeholder len=%d: %w", len([]rune(chunks[0])), errUpdate)
 				}
 
-				posted = []slackReplyState{{ChannelID: slots.ChannelID, MessageTS: slots.AnswerTS}}
+				updatedAnswer = true
 			} else if slots.AnswerTS != "" {
 				c.deleteSlackMessage(ctx, slackReplyState{ChannelID: slots.ChannelID, MessageTS: slots.AnswerTS}, "delete Slack answer placeholder")
 			}
 		}
 
-		if posted == nil {
+		if !updatedAnswer {
 			channelID, threadTS := slackReplyDestination(msg.SlackReply)
-			posted, err = c.postResponseChunks(ctx, channelID, threadTS, chunks, msg)
-		}
-
-		if err != nil {
-			return err
-		}
-
-		channelID, threadTS := slackReplyDestination(msg.SlackReply)
-
-		if msg.Complete && msg.GoalComplete {
-			c.addGoalCompleteReactions(ctx, channelID, threadTS, posted)
+			if err := c.postResponseChunks(ctx, channelID, threadTS, chunks, msg); err != nil {
+				return err
+			}
 		}
 
 	case thinkingText != "":
@@ -516,8 +509,8 @@ func (c *Connector) CleanupExternalMCPRelay(ctx context.Context, replyTarget *ev
 	}
 }
 
-func cronjobMessageLayout(metadata events.CronjobMessage, text string) (fallbackText string, blocks []slack.Block, overflow []string) {
-	header := slackTruncatedText("🔁 "+path.Base(metadata.RelativePath)+" | "+metadata.Agent+" | "+metadata.RanAt, 150, "...")
+func titledMessageLayout(header, fallback, text string) (fallbackText string, blocks []slack.Block, overflow []string) {
+	header = slackTruncatedText(header, 150, "...")
 	bodyChunks := splitSlackText(text, slackBlockTextLimit, slackBlockTextLimit)
 	rootBodyCount := min(len(bodyChunks), 48)
 
@@ -531,10 +524,20 @@ func cronjobMessageLayout(metadata events.CronjobMessage, text string) (fallback
 		blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, chunk, false, false), nil, nil))
 	}
 
-	fallbackText = "Cronjob `" + metadata.RelativePath + "` ran at `" + metadata.RanAt + "` with agent `" + metadata.Agent + "`."
-	overflow = bodyChunks[rootBodyCount:]
+	return fallback, blocks, bodyChunks[rootBodyCount:]
+}
 
-	return fallbackText, blocks, overflow
+func cronjobMessageLayout(metadata events.CronjobMessage, text string) (fallbackText string, blocks []slack.Block, overflow []string) {
+	header := "🔁 " + path.Base(metadata.RelativePath) + " | " + metadata.Agent + " | " + metadata.RanAt
+	fallbackText = "Cronjob `" + metadata.RelativePath + "` ran at `" + metadata.RanAt + "` with agent `" + metadata.Agent + "`."
+
+	return titledMessageLayout(header, fallbackText, text)
+}
+
+func goalMessageLayout(turnNumber, maxTurns int, complete bool, text string) (fallbackText string, blocks []slack.Block, overflow []string) {
+	header := slackGoalHeaderText(turnNumber, maxTurns, complete)
+
+	return titledMessageLayout(header, header, text)
 }
 
 // SendCronjobChannelThread posts one scheduled cronjob result in a new Slack channel thread.
@@ -566,7 +569,7 @@ func (c *Connector) SendCronjobChannelThread(ctx context.Context, channelID, rel
 	}()
 
 	if len(overflow) > 0 {
-		if _, err := c.postResponseChunks(ctx, root.ChannelID, root.ThreadID, overflow, nil); err != nil {
+		if err := c.postResponseChunks(ctx, root.ChannelID, root.ThreadID, overflow, nil); err != nil {
 			return fmt.Errorf("send Slack cronjob thread reply: %w", err)
 		}
 	}
@@ -831,6 +834,55 @@ func (c *Connector) responseSlots(msg *events.OutboundMessage) (slackReplySlots,
 	return slots, ok
 }
 
+func (c *Connector) sendGoalTurnResponse(ctx context.Context, msg *events.OutboundMessage, slots *slackReplySlots, hasSlots bool) error {
+	fallbackText, blocks, overflow := goalMessageLayout(msg.GoalTurnNumber, msg.GoalMaxTurns, msg.GoalComplete, msg.Text)
+	channelID, threadTS := slackReplyDestination(msg.SlackReply)
+
+	var posted []slackReplyState
+
+	if hasSlots && slots.AnswerTS != "" {
+		if _, _, _, err := c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.AnswerTS, slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...)); err != nil {
+			return fmt.Errorf("update Slack goal response: %w", err)
+		}
+
+		posted = []slackReplyState{{ChannelID: slots.ChannelID, MessageTS: slots.AnswerTS}}
+
+		channelID = slots.ChannelID
+		if threadTS == "" {
+			threadTS = slots.AnswerTS
+		}
+	} else {
+		options := []slack.MsgOption{slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...)}
+		if threadTS != "" {
+			options = append(options, slack.MsgOptionTS(threadTS))
+		}
+
+		postedChannelID, postedTS, err := c.api.PostMessageContext(ctx, channelID, options...)
+		if err != nil {
+			return fmt.Errorf("send Slack goal response: %w", err)
+		}
+
+		posted = []slackReplyState{{ChannelID: postedChannelID, MessageTS: postedTS}}
+		channelID = postedChannelID
+
+		if threadTS == "" {
+			threadTS = postedTS
+		}
+	}
+
+	if len(overflow) > 0 {
+		if err := c.postResponseChunks(ctx, channelID, threadTS, overflow, nil); err != nil {
+			return fmt.Errorf("send Slack goal response continuation: %w", err)
+		}
+	}
+
+	if msg.Complete && msg.GoalComplete {
+		c.addGoalCompleteReactions(ctx, channelID, threadTS, posted)
+	}
+
+	return nil
+}
+
 func (c *Connector) sendCronjobResponse(ctx context.Context, msg *events.OutboundMessage, slots *slackReplySlots, hasSlots bool) error {
 	fallbackText, blocks, overflow := cronjobMessageLayout(*msg.Cronjob, msg.Text)
 	channelID, threadTS := slackReplyDestination(msg.SlackReply)
@@ -878,7 +930,7 @@ func (c *Connector) sendCronjobResponse(ctx context.Context, msg *events.Outboun
 	}
 
 	if len(overflow) > 0 {
-		if _, err := c.postResponseChunks(ctx, channelID, threadTS, overflow, nil); err != nil {
+		if err := c.postResponseChunks(ctx, channelID, threadTS, overflow, nil); err != nil {
 			return fmt.Errorf("send Slack cronjob response continuation: %w", err)
 		}
 	}
@@ -1951,7 +2003,7 @@ func combineSlackBufferedMessages(buffered []slackBufferedMessage) (string, even
 	return content.Text, content
 }
 
-func (c *Connector) postResponseChunks(ctx context.Context, channelID, threadTS string, chunks []string, msg *events.OutboundMessage) ([]slackReplyState, error) {
+func (c *Connector) postResponseChunks(ctx context.Context, channelID, threadTS string, chunks []string, msg *events.OutboundMessage) error {
 	posted := make([]slackReplyState, 0, len(chunks))
 	for i := range chunks {
 		options := []slack.MsgOption{slack.MsgOptionText(chunks[i], false)}
@@ -1971,13 +2023,13 @@ func (c *Connector) postResponseChunks(ctx context.Context, channelID, threadTS 
 				}
 			}
 
-			return nil, fmt.Errorf("send Slack response chunk %d/%d len=%d: %w", i+1, len(chunks), len([]rune(chunks[i])), err)
+			return fmt.Errorf("send Slack response chunk %d/%d len=%d: %w", i+1, len(chunks), len([]rune(chunks[i])), err)
 		}
 
 		posted = append(posted, slackReplyState{ChannelID: postedChannelID, MessageTS: postedTS})
 	}
 
-	return posted, nil
+	return nil
 }
 
 type slackMCPBlockMessage struct {

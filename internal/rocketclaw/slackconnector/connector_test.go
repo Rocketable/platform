@@ -292,10 +292,38 @@ func TestProgressTextMessageQuotesAndBoundsText(t *testing.T) {
 	assert.Equal(t, slackImmediatePlaceholder+"\n\nalpha\nbeta", slackThinkingMessage(slackImmediatePlaceholder, " alpha\nbeta "))
 	assert.Equal(t, slackGoalProgressText(0, 0)+"\n\nalpha\nbeta", slackThinkingMessage(slackGoalProgressText(0, 0), " alpha\nbeta "))
 	assert.Equal(t, "_Pursuing Goal (2/5)..._", slackGoalProgressText(2, 5))
+	assert.Equal(t, "🏁 Pursuing Goal (2/5)...", slackGoalHeaderText(2, 5, false))
+	assert.Equal(t, "🏁 Pursuing Goal...", slackGoalHeaderText(0, 0, false))
+	assert.Equal(t, "✅ Goal complete", slackGoalHeaderText(2, 5, true))
 
 	got := slackThinkingMessage(slackImmediatePlaceholder, strings.Repeat("x", slackBlockTextLimit+20))
 	assert.True(t, strings.HasPrefix(got, slackImmediatePlaceholder+"\n\n"))
 	assert.Less(t, len([]rune(got)), slackBlockTextLimit)
+}
+
+func TestGoalMessageLayoutMatchesCronStyle(t *testing.T) {
+	body := "Progress summary: I counted 1. Current state: 1 of 10. Next concrete step: count 2 on the next turn."
+	fallback, blocks, overflow := goalMessageLayout(1, 10, false, body)
+	assert.Equal(t, "🏁 Pursuing Goal (1/10)...", fallback)
+	assert.Empty(t, overflow)
+	require.Len(t, blocks, 3)
+
+	header, ok := blocks[0].(*slack.HeaderBlock)
+	require.True(t, ok)
+	assert.Equal(t, "🏁 Pursuing Goal (1/10)...", header.Text.Text)
+	assert.IsType(t, new(slack.DividerBlock), blocks[1])
+
+	section, ok := blocks[2].(*slack.SectionBlock)
+	require.True(t, ok)
+	assert.Equal(t, body, section.Text.Text)
+
+	fallback, blocks, overflow = goalMessageLayout(3, 5, true, "done")
+	assert.Equal(t, "✅ Goal complete", fallback)
+	assert.Empty(t, overflow)
+
+	header, ok = blocks[0].(*slack.HeaderBlock)
+	require.True(t, ok)
+	assert.Equal(t, "✅ Goal complete", header.Text.Text)
 }
 
 func TestSlackThinkingBlocksRenderLinks(t *testing.T) {
@@ -3424,6 +3452,88 @@ func TestSendResponseUsesGoalPlaceholderForGoalProgress(t *testing.T) {
 	assert.Equal(t, slackGoalProgressText(2, 5), thinkingBlockText(t, updated[0]))
 }
 
+func TestSendResponseUsesGoalBlocksForGoalAnswers(t *testing.T) {
+	var (
+		updated   []url.Values
+		reactions []string
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat.update":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			updated = append(updated, cloneValues(r.PostForm))
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "D123", "ts": r.PostForm.Get("ts")})
+		case "/chat.delete", "/reactions.remove":
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/reactions.add":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			reactions = append(reactions, r.PostForm.Get("name")+" "+r.PostForm.Get("timestamp"))
+
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	connector := newTestConnector(server.URL)
+	turnID := "goal-turn-1"
+	connector.setReplyState(turnID, &slackReplySlots{ChannelID: "D123", ThinkingTS: "t.1", AnswerTS: "a.1", Key: "pending"})
+
+	body := "Progress summary: I counted 1. Current state: 1 of 10. Next concrete step: count 2 on the next turn."
+	msg := events.NewOutboundMessage(events.SourceSlack, "test", body, events.OutputTargetSlack)
+	msg.TurnID = turnID
+	msg.Complete = true
+	msg.GoalTurn = true
+	msg.GoalTurnNumber = 1
+	msg.GoalMaxTurns = 10
+	msg.SlackReply = &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
+	require.NoError(t, connector.SendResponse(context.Background(), msg))
+
+	require.Len(t, updated, 1)
+	assert.Equal(t, "🏁 Pursuing Goal (1/10)...", updated[0].Get("text"))
+
+	var blocks []struct {
+		Type string `json:"type"`
+		Text struct {
+			Text string `json:"text"`
+		} `json:"text"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(updated[0].Get("blocks")), &blocks))
+	require.Len(t, blocks, 3)
+	assert.Equal(t, "header", blocks[0].Type)
+	assert.Equal(t, "🏁 Pursuing Goal (1/10)...", blocks[0].Text.Text)
+	assert.Equal(t, "divider", blocks[1].Type)
+	assert.Equal(t, "section", blocks[2].Type)
+	assert.Equal(t, body, blocks[2].Text.Text)
+	assert.Empty(t, reactions)
+
+	connector.setReplyState(turnID, &slackReplySlots{ChannelID: "D123", ThinkingTS: "t.2", AnswerTS: "a.2", Key: "pending"})
+
+	done := events.NewOutboundMessage(events.SourceSlack, "test", "shipped", events.OutputTargetSlack)
+	done.TurnID = turnID
+	done.Complete = true
+	done.GoalTurn = true
+	done.GoalComplete = true
+	done.GoalTurnNumber = 3
+	done.GoalMaxTurns = 5
+	done.SlackReply = &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
+	require.NoError(t, connector.SendResponse(context.Background(), done))
+
+	require.Len(t, updated, 2)
+	assert.Equal(t, "✅ Goal complete", updated[1].Get("text"))
+	require.NoError(t, json.Unmarshal([]byte(updated[1].Get("blocks")), &blocks))
+	assert.Equal(t, "✅ Goal complete", blocks[0].Text.Text)
+	assert.Contains(t, reactions, slackGoalCompleteReaction+" a.2")
+}
+
 func thinkingBlockText(t *testing.T, values url.Values) string {
 	t.Helper()
 
@@ -4115,7 +4225,7 @@ func TestPostResponseChunksDeletesPostedChunksOnFailure(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	_, err := connector.postResponseChunks(context.Background(), "D123", "111.222", []string{"one", "two", "three"}, nil)
+	err := connector.postResponseChunks(context.Background(), "D123", "111.222", []string{"one", "two", "three"}, nil)
 	require.ErrorContains(t, err, "send Slack response chunk 3/3")
 
 	require.Len(t, posted, 3)
