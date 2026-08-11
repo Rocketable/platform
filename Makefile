@@ -10,7 +10,6 @@ lint:
 
 build:
 	cd internal/rocketclaw; $(MAKE) build
-	cd internal/rocketcode; $(MAKE) build
 	cd internal/funneld; $(MAKE) build
 
 cloc:

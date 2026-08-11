@@ -25,11 +25,7 @@ See [LICENSE](LICENSE) for the full license terms.
 
 ### RocketCode
 
-`internal/rocketcode` is the core reasoning runtime. It builds model requests from workspace context, runs the tool loop, enforces permissions, handles supported image and PDF attachments, and records replayable session entries.
-
-Runnable entry points:
-
-- `cmd/rocketcode`: interactive CLI for testing RocketCode in the current workspace.
+`internal/rocketcode` is the core reasoning runtime. It builds model requests from workspace context, runs the tool loop, enforces permissions, handles supported image and PDF attachments, and records replayable session entries. Hosts embed it through `New` / `NewWithProviders` and drive turns with `Loop`.
 
 ### RocketClaw
 
@@ -62,8 +58,6 @@ Every active `cron/*.md` definition declares a quoted `channel` that matches a c
 7. Conversation state, active-turn handoffs, scheduled work, and routing metadata are persisted so restart recovery can refire interrupted turns as model-guided continuations from uncertain state.
 
 Saved workflows run only as foreground managed turns. Each workflow launches fresh isolated custom workers, keeps intermediate values out of managed history, and persists a compact terminal summary of completed, failed, stopped, and skipped phases so later turns can explain what happened. Successful runs also record and deliver the final value. Slack shows phase progress and each worker's latest attributed activity with plan/task cards. Fan-out workers share one checkout, so parallel writers must own disjoint files. SQLite does not persist resumable workflow progress: `$stop` ends the run, and daemon restart requires a new `$workflow` invocation.
-
-For local CLI experimentation, `rocketcode` runs RocketCode directly in the current working directory.
 
 ## Repository Layout
 

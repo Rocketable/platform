@@ -1,15 +1,12 @@
 GO_SOURCE_CLOC_BUDGET ?= 10500
 GO_SOURCE_CLOC_HAZARD_ZONE ?= 500
 
-build:
-	go build -o ../../bin/rocketcode ../../cmd/rocketcode
-
 cloc:
-	@printf "Go cloc (cmd/rocketcode and internal/rocketcode)\n"
+	@printf "Go cloc (internal/rocketcode)\n"
 	@set -eu; \
-	go_source_cloc=$$(cloc --json --include-lang=Go --fullpath --not-match-f='(_test\.go)$$' ../../cmd/rocketcode . | jq -r '.SUM.code'); \
-	go_test_cloc=$$(cloc --json --include-lang=Go --fullpath --match-f='(_test\.go)$$' ../../cmd/rocketcode . | jq -r '.SUM.code'); \
-	go_total_cloc=$$(cloc --json --include-lang=Go --fullpath ../../cmd/rocketcode . | jq -r '.SUM.code'); \
+	go_source_cloc=$$(cloc --json --include-lang=Go --fullpath --not-match-f='(_test\.go)$$' . | jq -r '.SUM.code'); \
+	go_test_cloc=$$(cloc --json --include-lang=Go --fullpath --match-f='(_test\.go)$$' . | jq -r '.SUM.code'); \
+	go_total_cloc=$$(cloc --json --include-lang=Go --fullpath . | jq -r '.SUM.code'); \
 	limit=$(GO_SOURCE_CLOC_BUDGET); \
 	hazard_zone=$(GO_SOURCE_CLOC_HAZARD_ZONE); \
 	hazard_cloc=$$((limit - hazard_zone)); \
@@ -21,12 +18,11 @@ cloc:
 
 test: lint
 	go test -race -count 1 ./...
-	go test -race -count 1 ../../cmd/rocketcode/...
 	$(MAKE) check-cloc-budget
 
 check-cloc-budget:
 	@set -eu; \
-	go_source_cloc=$$(cloc --json --include-lang=Go --fullpath --not-match-f='(_test\.go)$$' ../../cmd/rocketcode . | jq -r '.SUM.code'); \
+	go_source_cloc=$$(cloc --json --include-lang=Go --fullpath --not-match-f='(_test\.go)$$' . | jq -r '.SUM.code'); \
 	[ -n "$$go_source_cloc" ] || { printf "source cloc budget failed: unable to read source cloc\n"; exit 1; }; \
 	limit=$(GO_SOURCE_CLOC_BUDGET); \
 	hazard_zone=$(GO_SOURCE_CLOC_HAZARD_ZONE); \
@@ -36,7 +32,6 @@ check-cloc-budget:
 
 lint:
 	go run -mod=readonly github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --fix ./...
-	go run -mod=readonly github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --fix ../../cmd/rocketcode/...
 
 sync-opencode-testdata:
 	bash ./scripts/sync-opencode-testdata.sh
