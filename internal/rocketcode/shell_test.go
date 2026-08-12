@@ -29,7 +29,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	require.NoError(t, root.WriteFile(".env.example", []byte("SECRET=example\n"), 0o644))
 
 	shellTemp := testShellTempConfig(t, root, outputDir)
-	sss := newSandboxedShellSystem(root, &shellTemp, nil, false, DefaultShellCommand)
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, DefaultShellCommand)
 
 	t.Run("basic success", func(t *testing.T) {
 		got := sss.Bash(context.Background(), bashParams{Command: "echo test", Timeout: 0, Workdir: "", Description: "Echo test"}).String()
@@ -112,7 +112,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	})
 
 	t.Run("applies configured env", func(t *testing.T) {
-		sss := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=configured"}, false, DefaultShellCommand)
+		sss := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=configured"}, DefaultShellCommand)
 
 		got := sss.Bash(context.Background(), bashParams{Command: `printf %s "$ROCKETCLAW_CONVERSATION_ID"`, Timeout: 0, Workdir: "", Description: "configured env"})
 
@@ -122,7 +122,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	t.Run("configured env overrides process env", func(t *testing.T) {
 		t.Setenv("ROCKETCLAW_CONVERSATION_ID", "old")
 
-		sss := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new"}, false, DefaultShellCommand)
+		sss := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new"}, DefaultShellCommand)
 
 		got := sss.Bash(context.Background(), bashParams{Command: `printf %s "$ROCKETCLAW_CONVERSATION_ID"`, Timeout: 0, Workdir: "", Description: "override env"})
 
@@ -130,7 +130,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	})
 
 	t.Run("tmpdir overrides configured env", func(t *testing.T) {
-		sss := newSandboxedShellSystem(root, &shellTemp, []string{"TMPDIR=/not/rocketcode"}, false, DefaultShellCommand)
+		sss := newSandboxedShellSystem(root, &shellTemp, []string{"TMPDIR=/not/rocketcode"}, DefaultShellCommand)
 
 		got := sss.Bash(context.Background(), bashParams{Command: `printf %s "$TMPDIR"`, Timeout: 0, Workdir: "", Description: "tmpdir precedence"})
 
@@ -161,68 +161,6 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	})
 }
 
-func TestSandboxedShellSystemSandboxedBashMissingPlatformTool(t *testing.T) {
-	dir := t.TempDir()
-
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
-	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o755))
-
-	shellTemp := testShellTempConfig(t, root, outputDir)
-	sss := newSandboxedShellSystem(root, &shellTemp, nil, true, DefaultShellCommand)
-
-	t.Setenv("PATH", "")
-
-	got := sss.Bash(context.Background(), bashParams{Command: "true", Timeout: 0, Workdir: "", Description: "sandbox missing tool"})
-
-	require.Contains(t, got.String(), "sandboxed bash:")
-	require.Contains(t, got.String(), "not found")
-	require.Equal(t, "error", got.ErrorCode)
-}
-
-func TestSandboxedBashResolvePathsUsesRoot(t *testing.T) {
-	dir := t.TempDir()
-
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
-	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o700))
-	require.NoError(t, root.MkdirAll("nested", 0o755))
-
-	bash := newSandboxedBash(root, testShellTempConfig(t, root, outputDir), nil)
-
-	paths, err := bash.resolvePaths("nested")
-	require.NoError(t, err)
-	require.Equal(t, filepath.Clean(dir), filepath.Clean(paths.workspace))
-	require.Equal(t, filepath.Join(dir, "nested"), filepath.Clean(paths.workdir))
-	require.Equal(t, outputDir, paths.tmp)
-	require.Equal(t, "/work/nested", paths.sandboxWorkdir)
-	require.Equal(t, "/work/.tmp/shell-tmp", paths.sandboxTmp)
-
-	_, err = bash.resolvePaths("../outside")
-	require.ErrorContains(t, err, "resolve sandboxed bash workdir")
-}
-
-func TestSandboxedBashEnv(t *testing.T) {
-	t.Setenv("TERM", "xterm-256color")
-
-	got := sandboxedBashEnv("/work", "/work/nested", "/work/.tmp/shell-tmp", []string{"PATH=/custom/bin", "FOO=bar"}, "/usr/bin:/bin")
-
-	require.Equal(t, []string{
-		"PATH=/custom/bin",
-		"HOME=/work",
-		"PWD=/work/nested",
-		"TMPDIR=/work/.tmp/shell-tmp",
-		"TERM=xterm-256color",
-		"FOO=bar",
-	}, got)
-}
-
 func testShellTempConfig(t *testing.T, root *os.Root, outputDir string) shellTempConfig {
 	t.Helper()
 
@@ -244,7 +182,7 @@ func TestShellCommandOverride(t *testing.T) {
 
 	var saw string
 
-	sss := newSandboxedShellSystem(root, &shellTemp, nil, false, func(command string) (string, []string) {
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, func(command string) (string, []string) {
 		saw = command
 		return "/bin/sh", []string{"-c", "printf mocked"}
 	})

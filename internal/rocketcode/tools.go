@@ -77,9 +77,9 @@ type webFetchToolParams struct {
 	Timeout int    `json:"timeout"`
 }
 
-func newSandboxedTools(root *os.Root, shellTemp shellTempConfig, shellEnv []string, useSandbox bool, shellCommand ShellCommandFunc) map[string]looperTool {
+func newSandboxedTools(root *os.Root, shellTemp shellTempConfig, shellEnv []string, shellCommand ShellCommandFunc) map[string]looperTool {
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
-	sss := newSandboxedShellSystem(root, &shellTemp, shellEnv, useSandbox, shellCommand)
+	sss := newSandboxedShellSystem(root, &shellTemp, shellEnv, shellCommand)
 
 	return makeSandboxedTools(sfs, sss)
 }

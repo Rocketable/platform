@@ -65,25 +65,21 @@ type sandboxedShellSystem struct {
 	root         *os.Root
 	shellTemp    shellTempConfig
 	env          []string
-	bash         sandboxedBash
-	useSandbox   bool
 	shellCommand ShellCommandFunc
 }
 
-func newSandboxedShellSystem(root *os.Root, shellTemp *shellTempConfig, env []string, useSandbox bool, shellCommand ShellCommandFunc) *sandboxedShellSystem {
+func newSandboxedShellSystem(root *os.Root, shellTemp *shellTempConfig, env []string, shellCommand ShellCommandFunc) *sandboxedShellSystem {
 	return &sandboxedShellSystem{
 		mu:           sync.Mutex{},
 		root:         root,
 		shellTemp:    *shellTemp,
 		env:          slices.Clone(env),
-		bash:         newSandboxedBash(root, *shellTemp, env),
-		useSandbox:   useSandbox,
 		shellCommand: shellCommand,
 	}
 }
 
 // RunBash runs command through the same implementation used by RocketCode's bash tool.
-func RunBash(ctx context.Context, root *os.Root, shellTempDir string, shellEnv map[string]string, useSandbox bool, command BashCommand) (BashResult, error) {
+func RunBash(ctx context.Context, root *os.Root, shellTempDir string, shellEnv map[string]string, command BashCommand) (BashResult, error) {
 	if root == nil {
 		return BashResult{}, errors.New("root is required")
 	}
@@ -98,7 +94,7 @@ func RunBash(ctx context.Context, root *os.Root, shellTempDir string, shellEnv m
 		return BashResult{}, err
 	}
 
-	sss := newSandboxedShellSystem(root, &shellTemp, env, useSandbox, DefaultShellCommand)
+	sss := newSandboxedShellSystem(root, &shellTemp, env, DefaultShellCommand)
 
 	return sss.runBash(ctx, bashParams(command)), nil
 }
@@ -203,22 +199,11 @@ func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams)
 		return bashFailure("shell command path is required")
 	}
 
-	var cmd *exec.Cmd
+	cmd := exec.CommandContext(commandCtx, shell, args...)
+	cmd.Dir = hostDir
 
-	if sss.useSandbox {
-		var err error
-
-		cmd, err = sss.bash.command(commandCtx, sandboxedBashCommand{shell: shell, args: args, workdir: params.Workdir})
-		if err != nil {
-			return bashFailure(err.Error())
-		}
-	} else {
-		cmd = exec.CommandContext(commandCtx, shell, args...)
-		cmd.Dir = hostDir
-
-		cmd.Env = append(os.Environ(), sss.env...)
-		cmd.Env = append(cmd.Env, "TMPDIR="+sss.shellTemp.tmpDir)
-	}
+	cmd.Env = append(os.Environ(), sss.env...)
+	cmd.Env = append(cmd.Env, "TMPDIR="+sss.shellTemp.tmpDir)
 
 	cmd.Stdout = &bytes.Buffer{}
 	cmd.Stderr = cmd.Stdout

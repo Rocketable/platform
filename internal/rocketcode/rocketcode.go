@@ -39,7 +39,6 @@ type Config struct {
 	// ShellTempDir is the workspace-relative or absolute directory used as TMPDIR
 	// for bash and prompt !`…` commands. Required; must exist inside the workspace.
 	ShellTempDir           string
-	SandboxedBash          bool
 	AutoApprovePermissions bool
 	Observability          ObservabilityConfig
 	ChildRunLogger         ChildRunLogger
@@ -342,7 +341,7 @@ func NewWithModelResolver(
 	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, string(config.ReasoningEffort)))
 	agentForTools := &activeAgent
 	activeAgent.Permission = shellTemp.effectivePermissions(activeAgent.Permission)
-	baseTools := newSandboxedTools(root, shellTemp, shellEnv, config.SandboxedBash, config.ShellCommand)
+	baseTools := newSandboxedTools(root, shellTemp, shellEnv, config.ShellCommand)
 
 	customTools, err := customLooperTools(config.CustomTools, baseTools)
 	if err != nil {

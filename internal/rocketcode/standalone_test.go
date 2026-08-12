@@ -35,7 +35,6 @@ func TestStandaloneConfigFromEnvDefaults(t *testing.T) {
 	require.Equal(t, int64(200000), config.CompactThreshold)
 	require.Empty(t, config.CompactionSteering)
 	require.Equal(t, filepath.Join(".tmp", "shell-tmp"), config.ShellTempDir)
-	require.False(t, config.SandboxedBash)
 	require.Len(t, config.CustomTools, 1)
 	require.Equal(t, "current_time", config.CustomTools[0].Name)
 

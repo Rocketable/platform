@@ -207,33 +207,6 @@ func TestNewShellEnvAppliesToPromptExpansion(t *testing.T) {
 	require.Contains(t, diagnostics.String(), "env prompt tmp "+filepath.Join(dir, ".tmp", "shell-tmp"))
 }
 
-func TestNewSandboxedBashConfigAppliesToBashTool(t *testing.T) {
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
-	client := openai.NewClient()
-	config := testWorkspaceConfig(t, dir)
-	config.SandboxedBash = true
-
-	loop, err := New(&client, config, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "prompt", Location: "", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}, Frontmatter: nil, FileMode: 0},
-	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", nil)
-	require.NoError(t, err)
-
-	t.Setenv("PATH", "")
-
-	bash, ok := loop.CodeModeHosts["bash"]
-	require.True(t, ok)
-
-	result, err := bash.Call(context.Background(), json.RawMessage(`{"command":"true","timeout":0,"workdir":"","description":"sandbox"}`), nil, toolCallMetadata{subagentIndex: 0, subagentTotal: 0})
-
-	require.NoError(t, err)
-	require.Contains(t, result.Output, "sandboxed bash:")
-	require.Contains(t, result.Output, "not found")
-}
-
 func TestNewAllowsReadingFilesFromAllowedSkills(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
@@ -614,7 +587,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 }
 
 func testConfig(shellTempDir string) *Config {
-	return &Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 0, ShellTempDir: shellTempDir, SandboxedBash: false, AutoApprovePermissions: false, Observability: ObservabilityConfig{}, ChildRunLogger: DiscardChildRunLog, CheckpointSink: InertCheckpointSink{}, CustomTools: nil, ShellEnv: nil, ShellCommand: DefaultShellCommand}
+	return &Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 0, ShellTempDir: shellTempDir, AutoApprovePermissions: false, Observability: ObservabilityConfig{}, ChildRunLogger: DiscardChildRunLog, CheckpointSink: InertCheckpointSink{}, CustomTools: nil, ShellEnv: nil, ShellCommand: DefaultShellCommand}
 }
 
 func testWorkspaceConfig(t *testing.T, workspace string) *Config {
