@@ -84,7 +84,7 @@ func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 
 	var diagnostics bytes.Buffer
 
-	config := testConfig(dir)
+	config := testWorkspaceConfig(t, dir)
 	config.Diagnostics = true
 	config.ExpandPromptShellCommands.PrimaryPrompts = true
 	looper, err := New(&client, config, root, Agents{Items: map[string]Agent{
@@ -96,7 +96,7 @@ func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 	require.Contains(t, diagnostics.String(), "remember workspace memory\n\n<current-workspace>\nWorkspace root: "+dir+"\n</current-workspace>")
 }
 
-func TestNewRequiresShellOutputDir(t *testing.T) {
+func TestNewRequiresShellTempDir(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
 	require.NoError(t, err)
@@ -105,10 +105,10 @@ func TestNewRequiresShellOutputDir(t *testing.T) {
 	client := openai.NewClient()
 	_, err = New(&client, testConfig(""), root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
 
-	require.EqualError(t, err, "shell output dir is required")
+	require.EqualError(t, err, "shell temp dir is required")
 }
 
-func TestNewRejectsInvalidShellOutputDir(t *testing.T) {
+func TestNewRejectsInvalidShellTempDir(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
 	require.NoError(t, err)
@@ -120,15 +120,15 @@ func TestNewRejectsInvalidShellOutputDir(t *testing.T) {
 
 	client := openai.NewClient()
 	_, err = New(&client, testConfig(filepath.Join(dir, "missing")), root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
-	require.ErrorContains(t, err, "resolve shell output dir")
+	require.ErrorContains(t, err, "resolve shell temp dir")
 	require.ErrorContains(t, err, "missing")
 
 	_, err = New(&client, testConfig(filePath), root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
-	require.EqualError(t, err, "resolve shell output dir \""+filePath+"\": not a directory")
+	require.EqualError(t, err, "resolve shell temp dir \""+filePath+"\": not a directory")
 
 	outsideDir := t.TempDir()
 	_, err = New(&client, testConfig(outsideDir), root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
-	require.EqualError(t, err, "resolve shell output dir \""+outsideDir+"\": must be inside workspace root")
+	require.EqualError(t, err, "resolve shell temp dir \""+outsideDir+"\": must be inside workspace root")
 }
 
 func TestNewRejectsInvalidShellEnv(t *testing.T) {
@@ -150,7 +150,7 @@ func TestNewRejectsInvalidShellEnv(t *testing.T) {
 		{name: "value contains nul", env: map[string]string{"BAD_KEY": "bad\x00value"}, wantErr: `shell env "BAD_KEY" must not contain NUL`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			config := testConfig(dir)
+			config := testWorkspaceConfig(t, dir)
 			config.ShellEnv = tc.env
 			_, err := New(&client, config, root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
 
@@ -167,7 +167,7 @@ func TestNewCopiesShellEnv(t *testing.T) {
 
 	client := openai.NewClient()
 	env := map[string]string{"ROCKETCLAW_CONVERSATION_ID": "first"}
-	config := testConfig(dir)
+	config := testWorkspaceConfig(t, dir)
 	config.ShellEnv = env
 	loop, err := New(&client, config, root, Agents{Items: map[string]Agent{
 		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "prompt", Location: "", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}, Frontmatter: nil, FileMode: 0},
@@ -195,7 +195,7 @@ func TestNewShellEnvAppliesToPromptExpansion(t *testing.T) {
 
 	var diagnostics bytes.Buffer
 
-	config := testConfig(dir)
+	config := testWorkspaceConfig(t, dir)
 	config.Diagnostics = true
 	config.ExpandPromptShellCommands.PrimaryPrompts = true
 	config.ShellEnv = map[string]string{"ROCKETCLAW_CONVERSATION_ID": "prompt", "TMPDIR": "/ignored"}
@@ -204,7 +204,7 @@ func TestNewShellEnvAppliesToPromptExpansion(t *testing.T) {
 	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", &diagnostics)
 
 	require.NoError(t, err)
-	require.Contains(t, diagnostics.String(), "env prompt tmp "+filepath.Join(dir, "tmp"))
+	require.Contains(t, diagnostics.String(), "env prompt tmp "+filepath.Join(dir, ".tmp", "shell-tmp"))
 }
 
 func TestNewSandboxedBashConfigAppliesToBashTool(t *testing.T) {
@@ -214,7 +214,7 @@ func TestNewSandboxedBashConfigAppliesToBashTool(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	client := openai.NewClient()
-	config := testConfig(dir)
+	config := testWorkspaceConfig(t, dir)
 	config.SandboxedBash = true
 
 	loop, err := New(&client, config, root, Agents{Items: map[string]Agent{
@@ -280,7 +280,7 @@ read:
 	}}
 	client := openai.NewClient()
 
-	loop, err := New(&client, testConfig(dir), root, agents, skills, "main", nil)
+	loop, err := New(&client, testWorkspaceConfig(t, dir), root, agents, skills, "main", nil)
 	require.NoError(t, err)
 
 	for _, tt := range []struct {
@@ -367,7 +367,7 @@ func TestRuntimeRestrictTools(t *testing.T) {
 	newRuntime := func(t *testing.T) *Runtime {
 		t.Helper()
 
-		runtime, err := New(&client, testConfig(dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+		runtime, err := New(&client, testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
 		require.NoError(t, err)
 
 		return runtime
@@ -419,7 +419,7 @@ func TestNewDoesNotAllowReadingFilesFromVirtualSkills(t *testing.T) {
 	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {virtual: allow}`)}
 	client := openai.NewClient()
 
-	loop, err := New(&client, testConfig(dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+	loop, err := New(&client, testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
 	require.NoError(t, err)
 	require.NotContains(t, loop.Tools, "read")
 }
@@ -441,7 +441,7 @@ func TestNewDoesNotTrustVirtualSkillsWithWorkspaceDisplayPath(t *testing.T) {
 	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {virtual: allow}`)}
 	client := openai.NewClient()
 
-	loop, err := New(&client, testConfig(dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+	loop, err := New(&client, testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
 	require.NoError(t, err)
 	require.NotContains(t, loop.Tools, "read")
 }
@@ -464,7 +464,7 @@ func TestNewDoesNotTrustExternalSkillDirectoryWithLinkedMarker(t *testing.T) {
 	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {external: allow}`)}
 	client := openai.NewClient()
 
-	loop, err := New(&client, testConfig(dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+	loop, err := New(&client, testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
 	require.NoError(t, err)
 	require.NotContains(t, loop.Tools, "read")
 }
@@ -484,7 +484,7 @@ func TestNewDoesNotAllowReadingFilesFromExternalSkills(t *testing.T) {
 	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {external: allow}`)}
 	client := openai.NewClient()
 
-	loop, err := New(&client, testConfig(dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+	loop, err := New(&client, testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
 	require.NoError(t, err)
 	require.NotContains(t, loop.Tools, "read")
 }
@@ -508,7 +508,7 @@ func TestNewDoesNotAllowReadingFilesThroughSymlinkedSkillRoot(t *testing.T) {
 	agent := Agent{Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {linked: allow}`)}
 	client := openai.NewClient()
 
-	loop, err := New(&client, testConfig(dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
+	loop, err := New(&client, testWorkspaceConfig(t, dir), root, Agents{Items: map[string]Agent{"main": agent}}, skills, "main", nil)
 	require.NoError(t, err)
 	require.NotContains(t, loop.Tools, "read")
 }
@@ -520,7 +520,7 @@ func TestNewRequiresParsedAgentsAndSkills(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	client := openai.NewClient()
-	config := testConfig(dir)
+	config := testWorkspaceConfig(t, dir)
 
 	_, err = New(&client, config, root, Agents{Items: nil}, Skills{Root: "", Items: nil, Dirs: nil, fsys: nil}, "", nil)
 	require.EqualError(t, err, "agents are required")
@@ -542,7 +542,7 @@ func TestNewRejectsMissingGuardrailAgent(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	client := openai.NewClient()
-	config := testConfig(dir)
+	config := testWorkspaceConfig(t, dir)
 	agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Guardrail: "safety"}}}
 	skills := Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}
 
@@ -561,7 +561,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 	skills := Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}
 
 	t.Run("disabled allows guardian agent", func(t *testing.T) {
-		config := testConfig(dir)
+		config := testWorkspaceConfig(t, dir)
 		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4"}, "guardian": {Name: "guardian", Model: "gpt-5.4"}}}
 
 		_, err := New(&client, config, root, agents, skills, "main", nil)
@@ -570,7 +570,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 	})
 
 	t.Run("enabled rejects guardian agent", func(t *testing.T) {
-		config := testConfig(dir)
+		config := testWorkspaceConfig(t, dir)
 		config.AutoApprovePermissions = true
 		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4"}, "guardian": {Name: "guardian", Model: "gpt-5.4"}}}
 
@@ -580,7 +580,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 	})
 
 	t.Run("enabled rejects missing custom reviewer", func(t *testing.T) {
-		config := testConfig(dir)
+		config := testWorkspaceConfig(t, dir)
 		config.AutoApprovePermissions = true
 		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(release-guardian)}`)}}}
 
@@ -590,7 +590,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 	})
 
 	t.Run("enabled rejects explicit guardian reviewer", func(t *testing.T) {
-		config := testConfig(dir)
+		config := testWorkspaceConfig(t, dir)
 		config.AutoApprovePermissions = true
 		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(guardian)}`)}}}
 
@@ -600,7 +600,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 	})
 
 	t.Run("enabled accepts custom reviewer", func(t *testing.T) {
-		config := testConfig(dir)
+		config := testWorkspaceConfig(t, dir)
 		config.AutoApprovePermissions = true
 		agents := Agents{Items: map[string]Agent{
 			"main":             {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(release-guardian)}`)},
@@ -613,6 +613,15 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 	})
 }
 
-func testConfig(shellOutputDir string) *Config {
-	return &Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 0, ShellOutputDir: shellOutputDir, SandboxedBash: false, AutoApprovePermissions: false, Observability: ObservabilityConfig{}, ChildRunLogger: DiscardChildRunLog, CheckpointSink: InertCheckpointSink{}, CustomTools: nil, ShellEnv: nil, ShellCommand: DefaultShellCommand}
+func testConfig(shellTempDir string) *Config {
+	return &Config{Model: "", ReasoningEffort: "", Diagnostics: false, ExperimentalStrongerSkills: false, ExpandPromptShellCommands: PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 0, ShellTempDir: shellTempDir, SandboxedBash: false, AutoApprovePermissions: false, Observability: ObservabilityConfig{}, ChildRunLogger: DiscardChildRunLog, CheckpointSink: InertCheckpointSink{}, CustomTools: nil, ShellEnv: nil, ShellCommand: DefaultShellCommand}
+}
+
+func testWorkspaceConfig(t *testing.T, workspace string) *Config {
+	t.Helper()
+
+	tempDir := filepath.Join(workspace, ".tmp", "shell-tmp")
+	require.NoError(t, os.MkdirAll(tempDir, 0o755))
+
+	return testConfig(tempDir)
 }

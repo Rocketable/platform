@@ -1300,7 +1300,7 @@ func TestWorkflowAgentRunnerReturnsShellDirectoryCleanupError(t *testing.T) {
 			require.Len(t, dirs, 1)
 			require.NoError(t, root.RemoveAll(dirs[0]))
 
-			require.ErrorContains(t, err, "remove workflow shell output dir")
+			require.ErrorContains(t, err, "remove workflow shell temp dir")
 
 			if tc.runFailure {
 				require.ErrorContains(t, err, "run workflow rocketcode turn")

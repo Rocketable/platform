@@ -51,7 +51,6 @@ func TestPermissionReviewLogsHiddenChildRunOutput(t *testing.T) {
 		agents:            Agents{Items: map[string]Agent{}},
 		skills:            Skills{Items: map[string]Skill{}},
 		baseTools:         map[string]looperTool{},
-		shellOutput:       shellOutputConfig{},
 		childRunLogger: func(event *ChildRunEvent) {
 			childRunEvents = append(childRunEvents, *event)
 		},
@@ -84,7 +83,6 @@ func TestPermissionReviewUsesConfiguredAutoApproverModel(t *testing.T) {
 		agents:            Agents{Items: map[string]Agent{}},
 		skills:            Skills{Items: map[string]Skill{}},
 		baseTools:         map[string]looperTool{},
-		shellOutput:       shellOutputConfig{},
 		childRunLogger:    DiscardChildRunLog,
 	}
 

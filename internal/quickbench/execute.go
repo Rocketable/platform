@@ -215,9 +215,9 @@ func runCell(ctx context.Context, providers rocketcode.Providers, bar *BAR, vari
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }()
 
-	shellOutputDir := filepath.Join(tmpDir, "shell-outputs")
-	if err := os.Mkdir(shellOutputDir, 0o700); err != nil {
-		return finishCell(result, startedAt, "create shell output dir: %v", err)
+	shellTempDir := filepath.Join(tmpDir, "shell-tmp")
+	if err := os.Mkdir(shellTempDir, 0o700); err != nil {
+		return finishCell(result, startedAt, "create shell temp dir: %v", err)
 	}
 
 	root, err := os.OpenRoot(tmpDir)
@@ -235,7 +235,7 @@ func runCell(ctx context.Context, providers rocketcode.Providers, bar *BAR, vari
 		ReasoningEffort:        shared.ReasoningEffort(rootAgent.ReasoningEffort),
 		Diagnostics:            true,
 		ParallelToolCalls:      16,
-		ShellOutputDir:         shellOutputDir,
+		ShellTempDir:           shellTempDir,
 		ChildRunLogger:         rocketcode.DiscardChildRunLog,
 		CheckpointSink:         rocketcode.InertCheckpointSink{},
 		CustomTools:            tools,

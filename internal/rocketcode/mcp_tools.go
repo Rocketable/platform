@@ -12,6 +12,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketcode/codemode"
 	"github.com/Rocketable/platform/internal/rocketcode/mcpclient"
 	"github.com/openai/openai-go/v3/responses"
+	"go.starlark.net/starlark"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -694,17 +695,17 @@ func buildCodeModeSearchIndex(hosts map[string]looperTool, mcp []codemode.ToolDe
 	}
 
 	for _, tool := range mcp {
-		starlark := codemode.StarlarkName(tool.Server, tool.Name)
+		callable := codemode.StarlarkName(tool.Server, tool.Name)
 		path := tool.Server + "." + tool.Name
-		sig := hostToolSignature(starlark, tool.InputSchema)
+		sig := hostToolSignature(callable, tool.InputSchema)
 		entries = append(entries, codeModeSearchEntry{
 			item: codeModeSearchItem{
 				Path:        path,
 				Description: tool.Description,
 				Signature:   sig,
-				Callable:    starlark,
+				Callable:    callable,
 			},
-			searchText: strings.ToLower(strings.Join([]string{path, starlark, tool.Name, tool.Description, schemaSearchText(tool.InputSchema)}, "\n")),
+			searchText: strings.ToLower(strings.Join([]string{path, callable, tool.Name, tool.Description, schemaSearchText(tool.InputSchema)}, "\n")),
 		})
 	}
 
@@ -874,31 +875,51 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 		toolCopy := tool
 		output := tc.output
 
-		host = append(host, codemode.HostTool{
+		callTool := func(ctx context.Context, args map[string]any) (ToolResult, error) {
+			raw, err := json.Marshal(args)
+			if err != nil {
+				return ToolResult{}, fmt.Errorf("marshal %s args: %w", toolName, err)
+			}
+
+			if len(raw) == 0 {
+				raw = json.RawMessage(`{}`)
+			}
+
+			if err := CheckNestedToolCall(ctx, toolName, &toolCopy, raw); err != nil {
+				return ToolResult{}, err
+			}
+
+			return toolCopy.Call(ctx, raw, output, toolCallMetadata{})
+		}
+
+		bound := codemode.HostTool{
 			Name:        toolName,
 			InputSchema: schema,
 			Call: func(ctx context.Context, args map[string]any) (string, error) {
-				raw, err := json.Marshal(args)
-				if err != nil {
-					return "", fmt.Errorf("marshal %s args: %w", toolName, err)
-				}
-
-				if len(raw) == 0 {
-					raw = json.RawMessage(`{}`)
-				}
-
-				if err := CheckNestedToolCall(ctx, toolName, &toolCopy, raw); err != nil {
-					return "", err
-				}
-
-				result, errCall := toolCopy.Call(ctx, raw, output, toolCallMetadata{})
+				result, errCall := callTool(ctx, args)
 				if errCall != nil {
 					return "", errCall
 				}
 
 				return attachmentOutputMessage(result), nil
 			},
-		})
+		}
+		if toolName == "bash" {
+			bound.CallValue = func(ctx context.Context, args map[string]any) (starlark.Value, error) {
+				result, errCall := callTool(ctx, args)
+				if errCall != nil {
+					return nil, errCall
+				}
+
+				if bashResult, ok := result.Data.(BashResult); ok {
+					return newBashStarlarkResult(bashResult), nil
+				}
+
+				return starlark.String(attachmentOutputMessage(result)), nil
+			}
+		}
+
+		host = append(host, bound)
 	}
 
 	return host, hosts
@@ -906,15 +927,21 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 
 // withNestedExecuteDiagnostic reports the Starlark builtin call into thinking traces.
 func withNestedExecuteDiagnostic(tool codemode.HostTool) codemode.HostTool {
-	if tool.Call == nil {
-		return tool
+	name := tool.Name
+	if tool.CallValue != nil {
+		callValue := tool.CallValue
+		tool.CallValue = func(ctx context.Context, args map[string]any) (starlark.Value, error) {
+			emitNestedExecuteToolDiagnostic(ctx, name, args)
+			return callValue(ctx, args)
+		}
 	}
 
-	name := tool.Name
-	call := tool.Call
-	tool.Call = func(ctx context.Context, args map[string]any) (string, error) {
-		emitNestedExecuteToolDiagnostic(ctx, name, args)
-		return call(ctx, args)
+	if tool.Call != nil {
+		call := tool.Call
+		tool.Call = func(ctx context.Context, args map[string]any) (string, error) {
+			emitNestedExecuteToolDiagnostic(ctx, name, args)
+			return call(ctx, args)
+		}
 	}
 
 	return tool

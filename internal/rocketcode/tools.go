@@ -36,7 +36,7 @@ type toolFactory struct {
 	agents                     Agents
 	skills                     Skills
 	baseTools                  map[string]looperTool
-	shellOutput                shellOutputConfig
+	shellTemp                  shellTempConfig
 	autoApprovePermissions     bool
 	observability              ObservabilityConfig
 	childRunLogger             ChildRunLogger
@@ -77,9 +77,9 @@ type webFetchToolParams struct {
 	Timeout int    `json:"timeout"`
 }
 
-func newSandboxedTools(root *os.Root, shellOutput shellOutputConfig, shellEnv []string, useSandbox bool, shellCommand ShellCommandFunc) map[string]looperTool {
+func newSandboxedTools(root *os.Root, shellTemp shellTempConfig, shellEnv []string, useSandbox bool, shellCommand ShellCommandFunc) map[string]looperTool {
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
-	sss := newSandboxedShellSystem(root, &shellOutput, shellEnv, useSandbox, shellCommand)
+	sss := newSandboxedShellSystem(root, &shellTemp, shellEnv, useSandbox, shellCommand)
 
 	return makeSandboxedTools(sfs, sss)
 }
@@ -113,7 +113,7 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 
 	if agent != nil {
 		scopedAgent := *agent
-		scopedAgent.Permission = f.shellOutput.effectivePermissions(scopedAgent.Permission)
+		scopedAgent.Permission = f.shellTemp.effectivePermissions(scopedAgent.Permission)
 		agent = &scopedAgent
 	}
 
@@ -265,7 +265,12 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 					return nil, err
 				}
 
-				return []string{params.Pattern}, nil
+				searchPath := params.Path
+				if searchPath == "" {
+					searchPath = "."
+				}
+
+				return []string{sfs.readPermissionSubject(searchPath)}, nil
 			},
 			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 				var params globToolParams
@@ -346,7 +351,9 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 					return ToolResult{}, err
 				}
 
-				return TextToolResult(sss.Bash(ctx, params)), nil
+				result := sss.Bash(ctx, params)
+
+				return ToolResult{Output: result.String(), Data: result}, nil
 			},
 		},
 	}

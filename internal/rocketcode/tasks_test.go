@@ -162,8 +162,8 @@ func TestTaskTool(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 		require.NoError(t, root.WriteFile("MEMORY.md", []byte("carefully"), 0o644))
-		shellOutput := testPromptShellOutputConfig(t, root, dir)
-		env, err := newPromptExpansionEnvironment(root, shellOutput, nil, DefaultShellCommand)
+		shellTemp := testPromptShellTempConfig(t, root, dir)
+		env, err := newPromptExpansionEnvironment(root, shellTemp, nil, DefaultShellCommand)
 		require.NoError(t, err)
 
 		mock := mockResponses(responseWithTaskMessages())
@@ -481,23 +481,13 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 	})
 }
 
-func TestBashPermissionGrantsOnlyShellOutputRead(t *testing.T) {
-	shellOutput := testShellOutputConfigForRead(".tmp/shell-outputs/rocketcode-bash-*")
-	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
-	factory.shellOutput = shellOutput
-
+func TestBashPermissionGrantsSessionShellTempReadAndGlob(t *testing.T) {
+	shellTemp := shellTempConfig{tmpRelDir: ".rocketclaw/.rocketcode/tmp/session-a", tmpDir: ""}
 	agent := testAgentWithPermission(permissionSetForActions(map[string]PermissionAction{"bash": permissionAllow}))
-	agent.Name = "main"
-	tools, hosts := factory.assembleTools(agent)
-	require.Contains(t, tools, "execute")
-	require.NotContains(t, tools, "bash")
-	require.NotContains(t, tools, "read")
-	require.Contains(t, hosts, "bash")
-	require.Contains(t, hosts, "read")
-
-	permissions := shellOutput.effectivePermissions(agent.Permission)
+	permissions := shellTemp.effectivePermissions(agent.Permission)
 	loop := emptyTestLooper()
 	loop.Permissions = permissions
+
 	readTool := testPermissionReadTool(func(raw json.RawMessage) ([]string, error) {
 		var params readToolParams
 		if err := decodeToolParams(raw, &params); err != nil {
@@ -506,39 +496,36 @@ func TestBashPermissionGrantsOnlyShellOutputRead(t *testing.T) {
 
 		return []string{rootedPathSubject(readToolPath(params))}, nil
 	})
-
-	decision, err := loop.permissionDecision("read", &readTool, json.RawMessage(`{"filePath":".tmp/shell-outputs/rocketcode-bash-123"}`))
-	require.NoError(t, err)
-	require.False(t, decision.denied, "saved bash output should be readable: %#v", decision)
-
-	decision, err = loop.permissionDecision("read", &readTool, json.RawMessage(`{"filePath":".tmp/shell-outputs/tmp/script-temp"}`))
-	require.NoError(t, err)
-	require.True(t, decision.denied)
-	require.Contains(t, decision.message, `permission "read"`)
-	require.Contains(t, decision.message, `subject ".tmp/shell-outputs/tmp/script-temp"`)
-}
-
-func TestExplicitReadDenyOverridesBashOutputReadGrant(t *testing.T) {
-	shellOutput := testShellOutputConfigForRead(".tmp/shell-outputs/rocketcode-bash-*")
-	permissions := shellOutput.effectivePermissions(PermissionSet{Buckets: []PermissionBucket{
-		{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
-		{Name: "read", Rules: []PermissionRule{{Pattern: ".tmp/shell-outputs/rocketcode-bash-*", Action: permissionDeny}}},
-	}})
-	loop := emptyTestLooper()
-	loop.Permissions = permissions
-	readTool := testPermissionReadTool(func(raw json.RawMessage) ([]string, error) {
-		var params readToolParams
+	globTool := testPermissionReadTool(func(raw json.RawMessage) ([]string, error) {
+		var params globToolParams
 		if err := decodeToolParams(raw, &params); err != nil {
 			return nil, err
 		}
 
-		return []string{rootedPathSubject(readToolPath(params))}, nil
-	})
+		path := params.Path
+		if path == "" {
+			path = "."
+		}
 
-	decision, err := loop.permissionDecision("read", &readTool, json.RawMessage(`{"filePath":".tmp/shell-outputs/rocketcode-bash-123"}`))
+		return []string{rootedPathSubject(path)}, nil
+	})
+	globTool.Permission = "glob"
+
+	decision, err := loop.permissionDecision("read", &readTool, json.RawMessage(`{"filePath":".rocketclaw/.rocketcode/tmp/session-a/out.txt"}`))
+	require.NoError(t, err)
+	require.False(t, decision.denied)
+
+	decision, err = loop.permissionDecision("glob", &globTool, json.RawMessage(`{"pattern":"*","path":".rocketclaw/.rocketcode/tmp/session-a"}`))
+	require.NoError(t, err)
+	require.False(t, decision.denied)
+
+	decision, err = loop.permissionDecision("read", &readTool, json.RawMessage(`{"filePath":".rocketclaw/.rocketcode/tmp/session-b/out.txt"}`))
 	require.NoError(t, err)
 	require.True(t, decision.denied)
-	require.Contains(t, decision.message, `=> deny`)
+
+	decision, err = loop.permissionDecision("glob", &globTool, json.RawMessage(`{"pattern":"*","path":".rocketclaw/.rocketcode/tmp/session-b"}`))
+	require.NoError(t, err)
+	require.True(t, decision.denied)
 }
 
 func TestTaskToolDescriptionFiltersDeniedSubagents(t *testing.T) {
@@ -846,10 +833,6 @@ func testGuardrailResultDiagnostic(stage ChildRunStage, text string) *SubagentDi
 
 func testPromptExpansion(primary, subagent, skill bool) PromptShellCommandExpansion {
 	return PromptShellCommandExpansion{PrimaryPrompts: primary, SubagentPrompts: subagent, SkillPrompts: skill, InputPrompts: false}
-}
-
-func testShellOutputConfigForRead(readPattern string) shellOutputConfig {
-	return shellOutputConfig{outputRelDir: "", tmpDir: "", readPattern: readPattern}
 }
 
 func testPermissionReadTool(subjects func(json.RawMessage) ([]string, error)) looperTool {

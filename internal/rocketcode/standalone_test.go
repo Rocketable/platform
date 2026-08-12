@@ -34,7 +34,7 @@ func TestStandaloneConfigFromEnvDefaults(t *testing.T) {
 	require.Equal(t, PromptShellCommandExpansion{PrimaryPrompts: false, SubagentPrompts: false, SkillPrompts: false, InputPrompts: false}, config.ExpandPromptShellCommands)
 	require.Equal(t, int64(200000), config.CompactThreshold)
 	require.Empty(t, config.CompactionSteering)
-	require.Equal(t, filepath.Join(".tmp", "shell-outputs"), config.ShellOutputDir)
+	require.Equal(t, filepath.Join(".tmp", "shell-tmp"), config.ShellTempDir)
 	require.False(t, config.SandboxedBash)
 	require.Len(t, config.CustomTools, 1)
 	require.Equal(t, "current_time", config.CustomTools[0].Name)
@@ -67,7 +67,7 @@ func TestStandaloneConfigFromEnvReadsOverrides(t *testing.T) {
 	require.Equal(t, PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: false, SkillPrompts: true, InputPrompts: false}, config.ExpandPromptShellCommands)
 	require.Equal(t, int64(12345), config.CompactThreshold)
 	require.Equal(t, "fresh compaction instructions", config.CompactionSteering)
-	require.Equal(t, filepath.Join(".tmp", "shell-outputs"), config.ShellOutputDir)
+	require.Equal(t, filepath.Join(".tmp", "shell-tmp"), config.ShellTempDir)
 }
 
 func TestStandaloneConfigFromEnvParsesPromptShellCommandExpansion(t *testing.T) {

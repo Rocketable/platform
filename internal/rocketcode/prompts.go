@@ -18,12 +18,12 @@ var promptShellPattern = regexp.MustCompile("!`([^`]+)`")
 type promptExpansionEnvironment struct {
 	root         *os.Root
 	hostDir      string
-	shellOutput  shellOutputConfig
+	shellTemp    shellTempConfig
 	env          []string
 	shellCommand ShellCommandFunc
 }
 
-func newPromptExpansionEnvironment(root *os.Root, shellOutput shellOutputConfig, env []string, shellCommand ShellCommandFunc) (promptExpansionEnvironment, error) {
+func newPromptExpansionEnvironment(root *os.Root, shellTemp shellTempConfig, env []string, shellCommand ShellCommandFunc) (promptExpansionEnvironment, error) {
 	var zero promptExpansionEnvironment
 
 	if root == nil {
@@ -44,12 +44,12 @@ func newPromptExpansionEnvironment(root *os.Root, shellOutput shellOutputConfig,
 		return zero, fmt.Errorf("resolve prompt expansion root: %w", err)
 	}
 
-	return promptExpansionEnvironment{root: root, hostDir: hostDir, shellOutput: shellOutput, env: slices.Clone(env), shellCommand: shellCommand}, nil
+	return promptExpansionEnvironment{root: root, hostDir: hostDir, shellTemp: shellTemp, env: slices.Clone(env), shellCommand: shellCommand}, nil
 }
 
 func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, prompt string) string {
 	return expandPromptShellCommands(prompt, func(command string) string {
-		if err := e.shellOutput.ensureTempDir(e.root); err != nil {
+		if err := e.shellTemp.ensureTempDir(e.root); err != nil {
 			return ""
 		}
 
@@ -57,7 +57,7 @@ func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, pr
 		cmd := exec.CommandContext(context.WithoutCancel(ctx), shell, args...)
 		cmd.Dir = e.hostDir
 		cmd.Env = append(os.Environ(), e.env...)
-		cmd.Env = append(cmd.Env, "TMPDIR="+e.shellOutput.tmpDir)
+		cmd.Env = append(cmd.Env, "TMPDIR="+e.shellTemp.tmpDir)
 
 		var stdout bytes.Buffer
 

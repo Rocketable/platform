@@ -52,13 +52,12 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	require.NoError(t, permissions.Allow("bash", "echo *"))
 
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
-	outputDir := filepath.Join(dir, ".tmp", "shell-outputs")
-	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-outputs", "tmp"), 0o700))
-	shellOutput := testShellOutputConfig(t, root, outputDir)
-	sss := newSandboxedShellSystem(root, &shellOutput, nil, false, DefaultShellCommand)
+	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
+	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o700))
+	shellTemp := testShellTempConfig(t, root, outputDir)
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, false, DefaultShellCommand)
 	factory := &toolFactory{
-		baseTools:   makeSandboxedTools(sfs, sss),
-		shellOutput: shellOutput,
+		baseTools: makeSandboxedTools(sfs, sss),
 	}
 	agent := &Agent{Permission: permissions}
 
@@ -112,8 +111,7 @@ func TestExecuteAvailableWithHostToolsOnly(t *testing.T) {
 
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
 	factory := &toolFactory{
-		baseTools:   makeSandboxedTools(sfs, nil),
-		shellOutput: shellOutputConfig{},
+		baseTools: makeSandboxedTools(sfs, nil),
 	}
 	agent := &Agent{Permission: permissions}
 	model, hosts := factory.assembleTools(agent)
@@ -179,7 +177,7 @@ func TestCustomToolsAreCodeModeOnlyInsideExecute(t *testing.T) {
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
 	base := makeSandboxedTools(sfs, nil)
 	maps.Copy(base, custom)
-	factory := &toolFactory{baseTools: base, shellOutput: shellOutputConfig{}}
+	factory := &toolFactory{baseTools: base}
 	agent := &Agent{Permission: permissions}
 	model, hosts := factory.assembleTools(agent)
 
@@ -218,19 +216,18 @@ func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = root.Close() })
 
-	outputDir := filepath.Join(dir, ".tmp", "shell-outputs")
-	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-outputs", "tmp"), 0o700))
-	shellOutput := testShellOutputConfig(t, root, outputDir)
+	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
+	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o700))
+	shellTemp := testShellTempConfig(t, root, outputDir)
 
 	var permissions PermissionSet
 	require.NoError(t, permissions.Allow("bash", "echo *"))
 	require.NoError(t, permissions.Deny("bash", "rm *"))
 
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
-	sss := newSandboxedShellSystem(root, &shellOutput, nil, false, DefaultShellCommand)
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, false, DefaultShellCommand)
 	factory := &toolFactory{
-		baseTools:   makeSandboxedTools(sfs, sss),
-		shellOutput: shellOutput,
+		baseTools: makeSandboxedTools(sfs, sss),
 	}
 	agent := &Agent{Permission: permissions}
 

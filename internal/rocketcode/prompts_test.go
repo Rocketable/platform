@@ -79,8 +79,8 @@ func TestExpandAgentPrompt(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 		require.NoError(t, root.WriteFile("MEMORY.md", []byte("workspace memory"), 0o644))
-		shellOutput := testPromptShellOutputConfig(t, root, dir)
-		env, err := newPromptExpansionEnvironment(root, shellOutput, nil, DefaultShellCommand)
+		shellTemp := testPromptShellTempConfig(t, root, dir)
+		env, err := newPromptExpansionEnvironment(root, shellTemp, nil, DefaultShellCommand)
 		require.NoError(t, err)
 
 		original := Agent{Name: "review", Description: "", Model: "", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "review !`cat MEMORY.md`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0}
@@ -100,8 +100,8 @@ func TestPromptExpansionEnvironmentRunsCommandsInRoot(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	require.NoError(t, root.WriteFile("MEMORY.md", []byte("expanded"), 0o644))
-	shellOutput := testPromptShellOutputConfig(t, root, dir)
-	env, err := newPromptExpansionEnvironment(root, shellOutput, nil, DefaultShellCommand)
+	shellTemp := testPromptShellTempConfig(t, root, dir)
+	env, err := newPromptExpansionEnvironment(root, shellTemp, nil, DefaultShellCommand)
 	require.NoError(t, err)
 
 	got := env.expandShellCommands(context.Background(), "!`cat MEMORY.md`")
@@ -115,10 +115,10 @@ func TestPromptExpansionEnvironmentAppliesShellEnv(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-	shellOutput := testPromptShellOutputConfig(t, root, dir)
+	shellTemp := testPromptShellTempConfig(t, root, dir)
 	t.Setenv("ROCKETCLAW_CONVERSATION_ID", "old")
 
-	env, err := newPromptExpansionEnvironment(root, shellOutput, []string{"ROCKETCLAW_CONVERSATION_ID=new"}, DefaultShellCommand)
+	env, err := newPromptExpansionEnvironment(root, shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=new"}, DefaultShellCommand)
 	require.NoError(t, err)
 
 	got := env.expandShellCommands(context.Background(), "!`printf %s \"$ROCKETCLAW_CONVERSATION_ID\"`")
@@ -132,22 +132,22 @@ func TestPromptExpansionEnvironmentForcesTMPDIR(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-	shellOutput := testPromptShellOutputConfig(t, root, dir)
+	shellTemp := testPromptShellTempConfig(t, root, dir)
 	t.Setenv("TMPDIR", "/process/tmp")
 
-	env, err := newPromptExpansionEnvironment(root, shellOutput, nil, DefaultShellCommand)
+	env, err := newPromptExpansionEnvironment(root, shellTemp, nil, DefaultShellCommand)
 	require.NoError(t, err)
 
 	got := env.expandShellCommands(context.Background(), "!`printf %s \"$TMPDIR\"`")
 
-	require.Equal(t, filepath.Join(dir, ".tmp", "shell-outputs", "tmp"), got)
+	require.Equal(t, filepath.Join(dir, ".tmp", "shell-tmp"), got)
 }
 
 func TestNewPromptExpansionEnvironmentRejectsInvalidSetup(t *testing.T) {
 	t.Run("nil root", func(t *testing.T) {
-		var shellOutput shellOutputConfig
+		var shellTemp shellTempConfig
 
-		_, err := newPromptExpansionEnvironment(nil, shellOutput, nil, DefaultShellCommand)
+		_, err := newPromptExpansionEnvironment(nil, shellTemp, nil, DefaultShellCommand)
 
 		require.EqualError(t, err, "prompt expansion root is required")
 	})
@@ -158,9 +158,9 @@ func TestNewPromptExpansionEnvironmentRejectsInvalidSetup(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, root.Close())
 
-		var shellOutput shellOutputConfig
+		var shellTemp shellTempConfig
 
-		_, err = newPromptExpansionEnvironment(root, shellOutput, nil, DefaultShellCommand)
+		_, err = newPromptExpansionEnvironment(root, shellTemp, nil, DefaultShellCommand)
 
 		require.ErrorContains(t, err, "stat prompt expansion root")
 	})
@@ -174,18 +174,18 @@ func testPromptExpansionEnvironment(t *testing.T) promptExpansionEnvironment {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-	shellOutput := testPromptShellOutputConfig(t, root, dir)
-	env, err := newPromptExpansionEnvironment(root, shellOutput, nil, DefaultShellCommand)
+	shellTemp := testPromptShellTempConfig(t, root, dir)
+	env, err := newPromptExpansionEnvironment(root, shellTemp, nil, DefaultShellCommand)
 	require.NoError(t, err)
 
 	return env
 }
 
-func testPromptShellOutputConfig(t *testing.T, root *os.Root, dir string) shellOutputConfig {
+func testPromptShellTempConfig(t *testing.T, root *os.Root, dir string) shellTempConfig {
 	t.Helper()
 
-	outputDir := filepath.Join(dir, ".tmp", "shell-outputs")
-	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-outputs"), 0o755))
+	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
+	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o755))
 
-	return testShellOutputConfig(t, root, outputDir)
+	return testShellTempConfig(t, root, outputDir)
 }

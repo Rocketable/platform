@@ -1565,9 +1565,9 @@ Prompt
 	require.NotNil(t, client)
 	require.Equal(t, rocketcode.ProviderOrigin{Provider: "openai", Model: "gpt-5.5"}, origin)
 
-	shellOutputDir := filepath.Join(workspace, "shell-output")
-	require.NoError(t, os.Mkdir(shellOutputDir, 0o755))
-	_, err = rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{ShellOutputDir: shellOutputDir, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand}, root, agents, skills, "main", io.Discard)
+	shellTempDir := filepath.Join(workspace, "shell-tmp")
+	require.NoError(t, os.Mkdir(shellTempDir, 0o755))
+	_, err = rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{ShellTempDir: shellTempDir, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand}, root, agents, skills, "main", io.Discard)
 	require.NoError(t, err)
 }
 
@@ -4438,4 +4438,10 @@ func readRocketCodeOutbound(t *testing.T, bus *testBus) *events.OutboundMessage 
 	t.Fatal("timed out waiting for outbound message")
 
 	return nil
+}
+
+func TestRocketcodeShellTempRel(t *testing.T) {
+	assert.Equal(t, ".rocketclaw/.rocketcode/tmp/anonymous", rocketcodeShellTempRel(".rocketclaw", ""))
+	assert.Equal(t, ".rocketclaw/.rocketcode/tmp/slack-thread_C123_111.222", rocketcodeShellTempRel(".rocketclaw", "slack-thread:C123:111.222"))
+	assert.Equal(t, "runtime/.rocketcode/tmp/cron_job", rocketcodeShellTempRel("runtime", "cron:job"))
 }

@@ -76,7 +76,7 @@ RocketClaw is configured with `rocketclaw.json` in the working directory. Runtim
 
 - `.rocketclaw/state.sqlite3`: private MCP and managed Slack sessions, active-turn restart handoffs, managed Slack routing, External MCP bindings to both sessions, scheduled messages, cron execution state, restart notifications, and goal-loop state.
 - `.rocketclaw/overlays/`: configured git overlay clones for runtime assets.
-- `.rocketclaw/.rocketcode/`: RocketCode shell output and transient artifacts.
+- `.rocketclaw/.rocketcode/tmp/<session-id>/`: per-conversation shell TMPDIR (not shared across sessions).
 - `.rocketclaw/workflows/`: effective saved Starlark workflows assembled from embedded, overlay, and workspace `workflows/` assets.
 
 Generated runtime state should not be treated as source code.

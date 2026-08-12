@@ -29,6 +29,7 @@ func TestQuickbenchSkelGenerated(t *testing.T) {
 		require.NoError(t, err, p.src)
 		got, err := os.ReadFile(p.dst)
 		require.NoError(t, err, p.dst)
+
 		if !bytes.Equal(want, got) {
 			t.Fatalf("skel out of date for %s\nrun: go generate ./internal/rocketclaw/skel", filepath.Base(p.dst))
 		}

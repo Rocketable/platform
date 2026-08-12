@@ -252,7 +252,7 @@ Permission buckets:
 | Bucket | Subject |
 | --- | --- |
 | `read` | Workspace-relative paths for nested `read` inside `execute` (not a top-level tool). An `edit` allow also permits reading the same path unless a `read` rule matched first. |
-| `glob` | Glob patterns for nested `glob` inside `execute`. |
+| `glob` | Workspace-relative search paths for nested `glob` inside `execute` (`path`, or `.` when omitted). |
 | `grep` | Search patterns for nested `grep` inside `execute`. |
 | `webfetch` | URLs for nested `webfetch` inside `execute`. |
 | `websearch` | Coarse hosted web search toggle (still a top-level hosted tool), usually `websearch: allow`, `deny`, or `auto`. |

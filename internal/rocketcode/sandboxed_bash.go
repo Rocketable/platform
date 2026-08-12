@@ -10,9 +10,9 @@ import (
 )
 
 type sandboxedBash struct {
-	root        *os.Root
-	shellOutput shellOutputConfig
-	env         []string
+	root      *os.Root
+	shellTemp shellTempConfig
+	env       []string
 }
 
 type sandboxedBashCommand struct {
@@ -29,8 +29,8 @@ type sandboxedBashPaths struct {
 	sandboxTmp     string
 }
 
-func newSandboxedBash(root *os.Root, shellOutput shellOutputConfig, env []string) sandboxedBash {
-	return sandboxedBash{root: root, shellOutput: shellOutput, env: slices.Clone(env)}
+func newSandboxedBash(root *os.Root, shellTemp shellTempConfig, env []string) sandboxedBash {
+	return sandboxedBash{root: root, shellTemp: shellTemp, env: slices.Clone(env)}
 }
 
 func (b *sandboxedBash) resolvePaths(workdir string) (sandboxedBashPaths, error) {
@@ -54,11 +54,7 @@ func (b *sandboxedBash) resolvePaths(workdir string) (sandboxedBashPaths, error)
 		return sandboxedBashPaths{}, fmt.Errorf("resolve sandboxed bash workdir %q: %w", workdir, err)
 	}
 
-	tmpRel, err := normalizeRootName(b.root, b.shellOutput.tmpDir)
-	if err != nil {
-		return sandboxedBashPaths{}, fmt.Errorf("resolve sandboxed bash temp dir: %w", err)
-	}
-
+	tmpRel := b.shellTemp.tmpRelDir
 	if _, err := b.root.Stat(tmpRel); err != nil {
 		return sandboxedBashPaths{}, fmt.Errorf("stat sandboxed bash temp dir %q: %w", tmpRel, err)
 	}
@@ -66,7 +62,7 @@ func (b *sandboxedBash) resolvePaths(workdir string) (sandboxedBashPaths, error)
 	return sandboxedBashPaths{
 		workspace:      workspace,
 		workdir:        hostWorkdir,
-		tmp:            b.shellOutput.tmpDir,
+		tmp:            b.shellTemp.tmpDir,
 		sandboxWorkdir: sandboxedBashPath("/work", workdir),
 		sandboxTmp:     sandboxedBashPath("/work", tmpRel),
 	}, nil

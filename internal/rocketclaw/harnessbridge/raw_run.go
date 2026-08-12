@@ -140,7 +140,7 @@ func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logge
 	parent := filepath.ToSlash(filepath.Join(cfg.RuntimeDirName(), ".rocketcode"))
 	if err := root.MkdirAll(parent, 0o755); err != nil {
 		_ = root.Close()
-		return nil, nil, fmt.Errorf("create workflow shell output parent dir: %w", err)
+		return nil, nil, fmt.Errorf("create workflow shell temp parent dir: %w", err)
 	}
 
 	run := func(ctx context.Context, request workflow.AgentRequest, thinkingProgress workflow.AgentThinkingFunc) (result json.RawMessage, err error) {
@@ -165,17 +165,17 @@ func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logge
 
 		callAgents.Items[agent] = active
 
-		shellOutputRel := filepath.ToSlash(filepath.Join(parent, "workflow-"+rand.Text()))
-		if err := root.Mkdir(shellOutputRel, 0o700); err != nil {
-			return nil, fmt.Errorf("create workflow shell output dir: %w", err)
+		shellTempRel := filepath.ToSlash(filepath.Join(parent, "workflow-"+rand.Text()))
+		if err := root.Mkdir(shellTempRel, 0o700); err != nil {
+			return nil, fmt.Errorf("create workflow shell temp dir: %w", err)
 		}
 		defer func() {
-			if errRemove := root.RemoveAll(shellOutputRel); errRemove != nil {
-				err = errors.Join(err, fmt.Errorf("remove workflow shell output dir: %w", errRemove))
+			if errRemove := root.RemoveAll(shellTempRel); errRemove != nil {
+				err = errors.Join(err, fmt.Errorf("remove workflow shell temp dir: %w", errRemove))
 			}
 		}()
 
-		runtimeConfig := rocketcode.Config{AutoApproverModel: cfg.AutoApproverModel, ShellOutputDir: filepath.Join(cfg.Workspace, filepath.FromSlash(shellOutputRel)), Diagnostics: true, ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand}
+		runtimeConfig := rocketcode.Config{AutoApproverModel: cfg.AutoApproverModel, ShellTempDir: filepath.Join(cfg.Workspace, filepath.FromSlash(shellTempRel)), Diagnostics: true, ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand}
 
 		runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, callAgents, skills, agent, io.Discard)
 		if err != nil {
@@ -302,17 +302,17 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 	defer func() { _ = root.Close() }()
 
 	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(cfg.RuntimeDirName(), ".rocketcode")), 0o755); err != nil {
-		return "", fmt.Errorf("create rocketcode cron shell output parent dir: %w", err)
+		return "", fmt.Errorf("create rocketcode cron shell temp parent dir: %w", err)
 	}
 
-	shellOutputRel := filepath.ToSlash(filepath.Join(cfg.RuntimeDirName(), ".rocketcode", "cron-"+rand.Text()))
-	if err := root.Mkdir(shellOutputRel, 0o700); err != nil {
-		return "", fmt.Errorf("create rocketcode cron shell output dir: %w", err)
+	shellTempRel := filepath.ToSlash(filepath.Join(cfg.RuntimeDirName(), ".rocketcode", "cron-"+rand.Text()))
+	if err := root.Mkdir(shellTempRel, 0o700); err != nil {
+		return "", fmt.Errorf("create rocketcode cron shell temp dir: %w", err)
 	}
 
-	shellOutputDir := filepath.Join(cfg.Workspace, filepath.FromSlash(shellOutputRel))
+	shellTempDir := filepath.Join(cfg.Workspace, filepath.FromSlash(shellTempRel))
 
-	defer func() { _ = root.RemoveAll(shellOutputRel) }()
+	defer func() { _ = root.RemoveAll(shellTempRel) }()
 
 	requestRestart := progress.RequestRestart
 	requestReload := progress.RequestReload
@@ -333,7 +333,7 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 		customTools = append(customTools, restartTool(requestRestart, recordRestartRequester))
 	}
 
-	rocketcodeConfig := rocketcode.Config{Model: "", AutoApproverModel: cfg.AutoApproverModel, ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: diagnostics, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: true}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CheckpointSink: rocketcode.InertCheckpointSink{}, CustomTools: customTools, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(cfg.MCPServers), MCPWorkspace: cfg.Workspace}
+	rocketcodeConfig := rocketcode.Config{Model: "", AutoApproverModel: cfg.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, Diagnostics: diagnostics, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: true}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CheckpointSink: rocketcode.InertCheckpointSink{}, CustomTools: customTools, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(cfg.MCPServers), MCPWorkspace: cfg.Workspace}
 
 	looper, err := rocketcode.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agent, io.Discard)
 	if err != nil {

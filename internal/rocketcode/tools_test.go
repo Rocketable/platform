@@ -9,20 +9,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGlobGrepPermissionSubjectsMatchOpenCode(t *testing.T) {
+func TestGlobGrepPermissionSubjects(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-	outputDir := filepath.Join(dir, ".tmp", "shell-outputs")
-	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-outputs"), 0o755))
+	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
+	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o755))
 
-	tools := newSandboxedTools(root, testShellOutputConfig(t, root, outputDir), nil, false, DefaultShellCommand)
+	tools := newSandboxedTools(root, testShellTempConfig(t, root, outputDir), nil, false, DefaultShellCommand)
 
 	globSubjects, err := tools["glob"].Subjects(json.RawMessage(`{"pattern":"**/*.go","path":"src"}`))
 	require.NoError(t, err)
-	require.Equal(t, []string{"**/*.go"}, globSubjects)
+	require.Equal(t, []string{"src"}, globSubjects)
+
+	globRootSubjects, err := tools["glob"].Subjects(json.RawMessage(`{"pattern":"**/*.go"}`))
+	require.NoError(t, err)
+	require.Equal(t, []string{"."}, globRootSubjects)
 
 	grepSubjects, err := tools["grep"].Subjects(json.RawMessage(`{"pattern":"func Test","path":"src","include":"*_test.go"}`))
 	require.NoError(t, err)
@@ -35,10 +39,10 @@ func TestWebFetchPermissionSubjectsMatchOpenCode(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-	outputDir := filepath.Join(dir, ".tmp", "shell-outputs")
-	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-outputs"), 0o755))
+	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
+	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o755))
 
-	tools := newSandboxedTools(root, testShellOutputConfig(t, root, outputDir), nil, false, DefaultShellCommand)
+	tools := newSandboxedTools(root, testShellTempConfig(t, root, outputDir), nil, false, DefaultShellCommand)
 
 	subjects, err := tools["webfetch"].Subjects(json.RawMessage(`{"url":"https://docs.example/path?q=1","format":"markdown"}`))
 
@@ -52,10 +56,10 @@ func TestWebSearchPermissionIsCoarse(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-	outputDir := filepath.Join(dir, ".tmp", "shell-outputs")
-	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-outputs"), 0o755))
+	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
+	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o755))
 
-	tools := newSandboxedTools(root, testShellOutputConfig(t, root, outputDir), nil, false, DefaultShellCommand)
+	tools := newSandboxedTools(root, testShellTempConfig(t, root, outputDir), nil, false, DefaultShellCommand)
 
 	loop := &looper{Permissions: PermissionSet{Buckets: []PermissionBucket{{Name: "websearch", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}}}}}}
 	tool := tools["websearch"]
@@ -73,10 +77,10 @@ func TestFunctionToolStrictSchemasRequireAllProperties(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-	outputDir := filepath.Join(dir, ".tmp", "shell-outputs")
-	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-outputs"), 0o755))
+	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
+	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o755))
 
-	tools := newSandboxedTools(root, testShellOutputConfig(t, root, outputDir), nil, false, DefaultShellCommand)
+	tools := newSandboxedTools(root, testShellTempConfig(t, root, outputDir), nil, false, DefaultShellCommand)
 
 	requireToolRequiredProperties(t, tools["glob"].Definition.Parameters, []string{"path", "pattern"})
 	requireToolRequiredProperties(t, tools["grep"].Definition.Parameters, []string{"include", "path", "pattern"})

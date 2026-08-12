@@ -36,14 +36,16 @@ type Config struct {
 	CompactThreshold           int64
 	CompactionSteering         string
 	ParallelToolCalls          int
-	ShellOutputDir             string
-	SandboxedBash              bool
-	AutoApprovePermissions     bool
-	Observability              ObservabilityConfig
-	ChildRunLogger             ChildRunLogger
-	CheckpointSink             CheckpointSink
-	CustomTools                []Tool
-	ShellEnv                   map[string]string
+	// ShellTempDir is the workspace-relative or absolute directory used as TMPDIR
+	// for bash and prompt !`…` commands. Required; must exist inside the workspace.
+	ShellTempDir           string
+	SandboxedBash          bool
+	AutoApprovePermissions bool
+	Observability          ObservabilityConfig
+	ChildRunLogger         ChildRunLogger
+	CheckpointSink         CheckpointSink
+	CustomTools            []Tool
+	ShellEnv               map[string]string
 	// ShellCommand builds the executable used for bash tool (and prompt !`…`)
 	// commands. Required; pass DefaultShellCommand for normal host shell behavior.
 	ShellCommand ShellCommandFunc
@@ -107,81 +109,76 @@ type PromptShellCommandExpansion struct {
 	InputPrompts    bool
 }
 
-type shellOutputConfig struct {
-	outputRelDir string
-	tmpDir       string
-	readPattern  string
+type shellTempConfig struct {
+	tmpRelDir string
+	tmpDir    string
 }
 
-func newShellOutputConfig(root *os.Root, outputDir string) (shellOutputConfig, error) {
-	info, err := os.Stat(outputDir)
+func newShellTempConfig(root *os.Root, tempDir string) (shellTempConfig, error) {
+	info, err := os.Stat(tempDir)
 	if err != nil {
-		return shellOutputConfig{}, fmt.Errorf("resolve shell output dir %q: %w", outputDir, err)
+		return shellTempConfig{}, fmt.Errorf("resolve shell temp dir %q: %w", tempDir, err)
 	}
 
 	if !info.IsDir() {
-		return shellOutputConfig{}, fmt.Errorf("resolve shell output dir %q: not a directory", outputDir)
+		return shellTempConfig{}, fmt.Errorf("resolve shell temp dir %q: not a directory", tempDir)
 	}
 
 	rootAbs, err := filepath.Abs(root.Name())
 	if err != nil {
-		return shellOutputConfig{}, fmt.Errorf("resolve workspace root %q: %w", root.Name(), err)
+		return shellTempConfig{}, fmt.Errorf("resolve workspace root %q: %w", root.Name(), err)
 	}
 
-	outputAbs, err := filepath.Abs(outputDir)
+	tempAbs, err := filepath.Abs(tempDir)
 	if err != nil {
-		return shellOutputConfig{}, fmt.Errorf("resolve shell output dir %q: %w", outputDir, err)
+		return shellTempConfig{}, fmt.Errorf("resolve shell temp dir %q: %w", tempDir, err)
 	}
 
-	rel, err := filepath.Rel(rootAbs, outputAbs)
+	rel, err := filepath.Rel(rootAbs, tempAbs)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return shellOutputConfig{}, fmt.Errorf("resolve shell output dir %q: must be inside workspace root", outputDir)
+		return shellTempConfig{}, fmt.Errorf("resolve shell temp dir %q: must be inside workspace root", tempDir)
 	}
 
 	if _, err := root.Stat(rel); err != nil {
-		return shellOutputConfig{}, fmt.Errorf("resolve shell output dir %q: %w", outputDir, err)
+		return shellTempConfig{}, fmt.Errorf("resolve shell temp dir %q: %w", tempDir, err)
 	}
 
-	rel = filepath.ToSlash(filepath.Clean(rel))
-
-	if rel == "." {
-		return shellOutputConfig{
-			outputRelDir: rel,
-			tmpDir:       filepath.Join(outputAbs, "tmp"),
-			readPattern:  "rocketcode-bash-*",
-		}, nil
-	}
-
-	return shellOutputConfig{
-		outputRelDir: rel,
-		tmpDir:       filepath.Join(outputAbs, "tmp"),
-		readPattern:  rel + "/rocketcode-bash-*",
+	return shellTempConfig{
+		tmpRelDir: filepath.ToSlash(filepath.Clean(rel)),
+		tmpDir:    tempAbs,
 	}, nil
 }
 
-func (c *shellOutputConfig) effectivePermissions(permissions PermissionSet) PermissionSet {
-	if c.readPattern == "" || !permissions.hasAllowRuleForPermission("bash") {
-		return permissions
-	}
-
-	buckets := make([]PermissionBucket, 0, len(permissions.Buckets)+1)
-	buckets = append(buckets, PermissionBucket{Name: "read", Rules: []PermissionRule{{Pattern: c.readPattern, Action: permissionAllow}}})
-	buckets = append(buckets, permissions.Buckets...)
-
-	return PermissionSet{Buckets: buckets, skillRead: permissions.skillRead}
-}
-
-func (c shellOutputConfig) ensureTempDir(root *os.Root) error {
-	tmpRelDir := filepath.ToSlash(filepath.Join(c.outputRelDir, "tmp"))
-	if err := root.MkdirAll(tmpRelDir, 0o700); err != nil {
+func (c shellTempConfig) ensureTempDir(root *os.Root) error {
+	if err := root.MkdirAll(c.tmpRelDir, 0o700); err != nil {
 		return fmt.Errorf("create shell temp dir: %w", err)
 	}
 
-	if err := root.Chmod(tmpRelDir, 0o700); err != nil {
+	if err := root.Chmod(c.tmpRelDir, 0o700); err != nil {
 		return fmt.Errorf("secure shell temp dir: %w", err)
 	}
 
 	return nil
+}
+
+// effectivePermissions grants read/glob on this session shell temp tree when bash is allowed.
+func (c *shellTempConfig) effectivePermissions(permissions PermissionSet) PermissionSet {
+	if c.tmpRelDir == "" || c.tmpRelDir == "." || !permissions.hasAllowRuleForPermission("bash") {
+		return permissions
+	}
+
+	rules := []PermissionRule{
+		{Pattern: c.tmpRelDir, Action: permissionAllow},
+		{Pattern: c.tmpRelDir + "/*", Action: permissionAllow},
+	}
+	buckets := make([]PermissionBucket, 0, len(permissions.Buckets)+2)
+	buckets = append(buckets,
+		PermissionBucket{Name: "read", Rules: slices.Clone(rules)},
+		PermissionBucket{Name: "glob", Rules: slices.Clone(rules)},
+	)
+	buckets = append(buckets, permissions.Buckets...)
+
+	return PermissionSet{Buckets: buckets, skillRead: permissions.skillRead}
 }
 
 // New loads the supplied runtime dependencies and returns a configured looper.
@@ -261,8 +258,8 @@ func NewWithModelResolver(
 		return nil, errors.New("root is required")
 	}
 
-	if config.ShellOutputDir == "" {
-		return nil, errors.New("shell output dir is required")
+	if config.ShellTempDir == "" {
+		return nil, errors.New("shell temp dir is required")
 	}
 
 	shellEnv, err := shellEnvList(config.ShellEnv)
@@ -270,7 +267,7 @@ func NewWithModelResolver(
 		return nil, err
 	}
 
-	shellOutput, err := newShellOutputConfig(root, config.ShellOutputDir)
+	shellTemp, err := newShellTempConfig(root, config.ShellTempDir)
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +302,7 @@ func NewWithModelResolver(
 
 	agents = skills.withReadPermissions(root, agents)
 
-	promptExpansion, err := newPromptExpansionEnvironment(root, shellOutput, shellEnv, config.ShellCommand)
+	promptExpansion, err := newPromptExpansionEnvironment(root, shellTemp, shellEnv, config.ShellCommand)
 	if err != nil {
 		return nil, fmt.Errorf("initialize prompt expansion: %w", err)
 	}
@@ -344,8 +341,8 @@ func NewWithModelResolver(
 
 	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, string(config.ReasoningEffort)))
 	agentForTools := &activeAgent
-	activeAgent.Permission = shellOutput.effectivePermissions(activeAgent.Permission)
-	baseTools := newSandboxedTools(root, shellOutput, shellEnv, config.SandboxedBash, config.ShellCommand)
+	activeAgent.Permission = shellTemp.effectivePermissions(activeAgent.Permission)
+	baseTools := newSandboxedTools(root, shellTemp, shellEnv, config.SandboxedBash, config.ShellCommand)
 
 	customTools, err := customLooperTools(config.CustomTools, baseTools)
 	if err != nil {
@@ -376,7 +373,7 @@ func NewWithModelResolver(
 		agents:                     agents,
 		skills:                     skills,
 		baseTools:                  baseTools,
-		shellOutput:                shellOutput,
+		shellTemp:                  shellTemp,
 		autoApprovePermissions:     config.AutoApprovePermissions,
 		observability:              config.Observability,
 		childRunLogger:             config.ChildRunLogger,

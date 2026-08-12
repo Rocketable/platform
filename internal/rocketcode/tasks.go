@@ -190,7 +190,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		}
 	}
 
-	agent.Permission = f.shellOutput.effectivePermissions(agent.Permission)
+	agent.Permission = f.shellTemp.effectivePermissions(agent.Permission)
 	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
 
 	childFactory := *f
@@ -340,7 +340,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 
 func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage ChildRunStage, message, guardedAgent string, metadata toolCallMetadata, parentOutput chan<- ChatResponse) guardrailDecision {
 	agent := *guardrail
-	agent.Permission = f.shellOutput.effectivePermissions(agent.Permission)
+	agent.Permission = f.shellTemp.effectivePermissions(agent.Permission)
 	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
 
 	responseFormat := guardrailResponseFormat()

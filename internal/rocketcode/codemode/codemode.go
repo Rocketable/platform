@@ -34,7 +34,10 @@ type DecideFunc func(ctx context.Context, subject string, args map[string]any) e
 type HostTool struct {
 	Name        string
 	InputSchema map[string]any
-	Call        func(ctx context.Context, args map[string]any) (string, error)
+	// Call returns a string result. Used when CallValue is nil.
+	Call func(ctx context.Context, args map[string]any) (string, error)
+	// CallValue returns a Starlark value. When set, it is preferred over Call.
+	CallValue func(ctx context.Context, args map[string]any) (starlark.Value, error)
 }
 
 // StarlarkName returns sanitizedserver_sanitizedtool for a tool.
@@ -171,6 +174,10 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 		return text, nil
 	}
 
+	if value.Type() == "bash_result" {
+		return value.String(), nil
+	}
+
 	encoded, errEncode := starlark.Call(thread, starjson.Module.Members["encode"], starlark.Tuple{value}, nil)
 	if errEncode != nil {
 		return "", fmt.Errorf("encode main result: %w", errEncode)
@@ -190,10 +197,36 @@ func newMCPToolBuiltin(tool ToolDesc, decide DecideFunc, call CallFunc) *starlar
 }
 
 func newHostToolBuiltin(tool HostTool) *starlark.Builtin {
-	return newKwargsBuiltin(tool.Name, tool.InputSchema, tool.Call)
+	return newKwargsValueBuiltin(tool.Name, tool.InputSchema, func(ctx context.Context, args map[string]any) (starlark.Value, error) {
+		if tool.CallValue != nil {
+			return tool.CallValue(ctx, args)
+		}
+
+		if tool.Call == nil {
+			return nil, fmt.Errorf("%s: call is not configured", tool.Name)
+		}
+
+		result, err := tool.Call(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+
+		return starlark.String(result), nil
+	})
 }
 
 func newKwargsBuiltin(name string, schema map[string]any, call func(context.Context, map[string]any) (string, error)) *starlark.Builtin {
+	return newKwargsValueBuiltin(name, schema, func(ctx context.Context, args map[string]any) (starlark.Value, error) {
+		result, err := call(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+
+		return starlark.String(result), nil
+	})
+}
+
+func newKwargsValueBuiltin(name string, schema map[string]any, call func(context.Context, map[string]any) (starlark.Value, error)) *starlark.Builtin {
 	return starlark.NewBuiltin(name, func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 		if len(args) != 0 {
 			return nil, fmt.Errorf("%s: only keyword arguments are allowed", b.Name())
@@ -213,12 +246,7 @@ func newKwargsBuiltin(name string, schema map[string]any, call func(context.Cont
 			return nil, errCtx
 		}
 
-		result, errCall := call(ctx, callArgs)
-		if errCall != nil {
-			return nil, errCall
-		}
-
-		return starlark.String(result), nil
+		return call(ctx, callArgs)
 	})
 }
 

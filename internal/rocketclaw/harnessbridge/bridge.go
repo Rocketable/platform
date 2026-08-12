@@ -1112,11 +1112,12 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		}
 	}
 
-	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(b.runtime.RuntimeDirName(), ".rocketcode", "shell-outputs")), 0o755); err != nil {
-		return runResult{}, fmt.Errorf("create rocketcode shell output dir: %w", err)
+	shellTempRel := rocketcodeShellTempRel(b.runtime.RuntimeDirName(), b.config.ConversationID)
+	if err := root.MkdirAll(shellTempRel, 0o700); err != nil {
+		return runResult{}, fmt.Errorf("create rocketcode shell temp dir: %w", err)
 	}
 
-	shellOutputDir, store := filepath.Join(b.runtime.Workspace, b.runtime.RuntimeDirName(), ".rocketcode", "shell-outputs"), newSessionStore(b.config.ConversationID, b.config.SessionService)
+	shellTempDir, store := filepath.Join(b.runtime.Workspace, filepath.FromSlash(shellTempRel)), newSessionStore(b.config.ConversationID, b.config.SessionService)
 	if b.config.ManagedConversationID != b.config.ConversationID {
 		store.managedConversationID = b.config.ManagedConversationID
 	}
@@ -1284,7 +1285,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 
 	checkpointTurnID := ""
 
-	rocketcodeConfig := b.rocketcodeConfig(shellOutputDir, shellEnv, b.activeTurnSourceMetadata(msg), customTools...)
+	rocketcodeConfig := b.rocketcodeConfig(shellTempDir, shellEnv, b.activeTurnSourceMetadata(msg), customTools...)
 	if len(recoveredReplay) > 0 {
 		rocketcodeConfig.CheckpointSink = recoveredActiveTurnCheckpointSink{sink: rocketcodeConfig.CheckpointSink, recoveredReplay: recoveredReplay}
 	}
@@ -1882,7 +1883,35 @@ func providerLogAttrs(req *http.Request, resp *http.Response, status int, durati
 	return attrs
 }
 
-func (b *Bridge) rocketcodeConfig(shellOutputDir string, shellEnv, sourceMetadata map[string]string, customTools ...rocketcode.Tool) rocketcode.Config {
+// rocketcodeShellTempRel returns the workspace-relative shell temp directory for a conversation.
+// Layout: <runtimeDir>/.rocketcode/tmp/<sanitized-conversation-id>.
+func rocketcodeShellTempRel(runtimeDir, conversationID string) string {
+	return filepath.ToSlash(filepath.Join(runtimeDir, ".rocketcode", "tmp", sanitizeShellTempSegment(conversationID)))
+}
+
+func sanitizeShellTempSegment(conversationID string) string {
+	id := strings.TrimSpace(conversationID)
+	if id == "" {
+		return "anonymous"
+	}
+
+	var b strings.Builder
+
+	b.Grow(len(id))
+
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+
+	return b.String()
+}
+
+func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv, sourceMetadata map[string]string, customTools ...rocketcode.Tool) rocketcode.Config {
 	tools := make([]rocketcode.Tool, 0, 3+len(customTools))
 
 	tools = append(tools, reloadTool(b.config.RequestReload), scheduleMessageTool(b.ScheduleMessage, b.log), resetScheduledMessagesTool(b.ResetScheduledMessages))
@@ -1892,7 +1921,7 @@ func (b *Bridge) rocketcodeConfig(shellOutputDir string, shellEnv, sourceMetadat
 
 	tools = append(tools, customTools...)
 
-	return rocketcode.Config{Model: "", AutoApproverModel: b.runtime.AutoApproverModel, ReasoningEffort: "", ShellOutputDir: shellOutputDir, Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CheckpointSink: activeTurnCheckpointSink{store: b.config.SessionService, conversationID: b.config.ConversationID, sourceMetadata: sourceMetadata}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(b.runtime.MCPServers), MCPWorkspace: b.runtime.Workspace}
+	return rocketcode.Config{Model: "", AutoApproverModel: b.runtime.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CheckpointSink: activeTurnCheckpointSink{store: b.config.SessionService, conversationID: b.config.ConversationID, sourceMetadata: sourceMetadata}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(b.runtime.MCPServers), MCPWorkspace: b.runtime.Workspace}
 }
 
 func toMCPClientServers(servers map[string]config.MCPServerConfig) map[string]mcpclient.ServerConfig {
@@ -2557,20 +2586,21 @@ func (b *Bridge) runGoalCheck(ctx context.Context, script string) (string, bool)
 		return "goal check failed before execution: " + err.Error(), false
 	}
 
-	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(b.runtime.RuntimeDirName(), ".rocketcode", "shell-outputs")), 0o755); err != nil {
+	shellTempRel := rocketcodeShellTempRel(b.runtime.RuntimeDirName(), b.config.ConversationID)
+	if err := root.MkdirAll(shellTempRel, 0o700); err != nil {
 		return "goal check failed before execution: " + err.Error(), false
 	}
 
-	result, err := rocketcode.RunBash(ctx, root, filepath.Join(b.runtime.Workspace, b.runtime.RuntimeDirName(), ".rocketcode", "shell-outputs"), nil, false, rocketcode.BashCommand{Command: check.command, Timeout: goalCheckTimeout, Workdir: "", Description: "Run goal completion check"})
+	result, err := rocketcode.RunBash(ctx, root, filepath.Join(b.runtime.Workspace, filepath.FromSlash(shellTempRel)), nil, false, rocketcode.BashCommand{Command: check.command, Timeout: goalCheckTimeout, Workdir: "", Description: "Run goal completion check"})
 	if err != nil {
 		return "goal check failed before execution: " + err.Error(), false
 	}
 
 	if result.Success {
-		return result.Output, true
+		return result.String(), true
 	}
 
-	return "goal check did not pass. Continue working from this output:\n\n" + result.Output, false
+	return "goal check did not pass. Continue working from this output:\n\n" + result.String(), false
 }
 
 func (b *Bridge) armScheduledMessage(id string, message *ScheduledMessageState) {

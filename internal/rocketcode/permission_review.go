@@ -36,7 +36,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 		agent = customAgent
 	}
 
-	agent.Permission = f.shellOutput.effectivePermissions(agent.Permission)
+	agent.Permission = f.shellTemp.effectivePermissions(agent.Permission)
 	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
 
 	client, origin, err := resolveModel(f.resolver, agent.Model)

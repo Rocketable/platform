@@ -118,7 +118,7 @@ func standaloneDefaultConfig() Config {
 		Model:            defaultOpenAIModel,
 		ReasoningEffort:  shared.ReasoningEffort("high"),
 		CompactThreshold: 200000,
-		ShellOutputDir:   filepath.Join(".tmp", "shell-outputs"),
+		ShellTempDir:     filepath.Join(".tmp", "shell-tmp"),
 		ChildRunLogger:   DiscardChildRunLog,
 		CheckpointSink:   InertCheckpointSink{},
 		ShellCommand:     DefaultShellCommand,

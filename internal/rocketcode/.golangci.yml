@@ -69,6 +69,13 @@ linters:
               desc: avoid unsafe in project code
     gocritic:
       enable-all: true
+    ireturn:
+      allow:
+        - anon
+        - error
+        - empty
+        - stdlib
+        - go.starlark.net/starlark.Value
     godox:
       keywords:
         - TODO

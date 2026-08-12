@@ -209,7 +209,7 @@ def main(args):
 	require.NoError(t, root.Mkdir(shellRel, 0o700))
 
 	runtime, err := rocketcode.NewWithModelResolver(resolver, &rocketcode.Config{
-		ShellOutputDir: filepath.Join(cfg.Workspace, filepath.FromSlash(shellRel)),
+		ShellTempDir:   filepath.Join(cfg.Workspace, filepath.FromSlash(shellRel)),
 		Diagnostics:    true,
 		ChildRunLogger: rocketcode.DiscardChildRunLog,
 		CheckpointSink: rocketcode.InertCheckpointSink{},

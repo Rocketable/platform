@@ -1,6 +1,7 @@
 package rocketcode
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,8 +22,7 @@ import (
 
 const (
 	defaultShellTimeout   = 2 * 60 * 1000
-	shellMaxLines         = 2000
-	shellTempFileTTL      = 6 * time.Hour
+	shellHeadMaxLines     = 2000
 	shellTimeoutGrace     = 100 * time.Millisecond
 	shellForceKillTimeout = 3 * time.Second
 )
@@ -43,45 +44,51 @@ type BashCommand struct {
 
 // BashResult is the result of running a workspace bash command.
 type BashResult struct {
-	Output  string
-	Success bool
+	HeadOutput string
+	FullOutput string
+	ErrorCode  string
+	Success    bool
 }
 
-type temporaryFile string
+// String returns HeadOutput so printable forms show the truncated head.
+func (r BashResult) String() string {
+	return r.HeadOutput
+}
 
-type creationTime time.Time
+// Output is the printable form (HeadOutput), kept for existing callers.
+func (r BashResult) Output() string {
+	return r.HeadOutput
+}
 
 type sandboxedShellSystem struct {
 	mu           sync.Mutex
 	root         *os.Root
-	shellOutput  shellOutputConfig
+	shellTemp    shellTempConfig
 	env          []string
-	tempFiles    map[temporaryFile]creationTime
 	bash         sandboxedBash
 	useSandbox   bool
 	shellCommand ShellCommandFunc
 }
 
-func newSandboxedShellSystem(root *os.Root, shellOutput *shellOutputConfig, env []string, useSandbox bool, shellCommand ShellCommandFunc) *sandboxedShellSystem {
+func newSandboxedShellSystem(root *os.Root, shellTemp *shellTempConfig, env []string, useSandbox bool, shellCommand ShellCommandFunc) *sandboxedShellSystem {
 	return &sandboxedShellSystem{
 		mu:           sync.Mutex{},
 		root:         root,
-		shellOutput:  *shellOutput,
+		shellTemp:    *shellTemp,
 		env:          slices.Clone(env),
-		tempFiles:    map[temporaryFile]creationTime{},
-		bash:         newSandboxedBash(root, *shellOutput, env),
+		bash:         newSandboxedBash(root, *shellTemp, env),
 		useSandbox:   useSandbox,
 		shellCommand: shellCommand,
 	}
 }
 
 // RunBash runs command through the same implementation used by RocketCode's bash tool.
-func RunBash(ctx context.Context, root *os.Root, shellOutputDir string, shellEnv map[string]string, useSandbox bool, command BashCommand) (BashResult, error) {
+func RunBash(ctx context.Context, root *os.Root, shellTempDir string, shellEnv map[string]string, useSandbox bool, command BashCommand) (BashResult, error) {
 	if root == nil {
 		return BashResult{}, errors.New("root is required")
 	}
 
-	shellOutput, err := newShellOutputConfig(root, shellOutputDir)
+	shellTemp, err := newShellTempConfig(root, shellTempDir)
 	if err != nil {
 		return BashResult{}, err
 	}
@@ -91,10 +98,9 @@ func RunBash(ctx context.Context, root *os.Root, shellOutputDir string, shellEnv
 		return BashResult{}, err
 	}
 
-	sss := newSandboxedShellSystem(root, &shellOutput, env, useSandbox, DefaultShellCommand)
-	output, success := sss.runBash(ctx, bashParams(command))
+	sss := newSandboxedShellSystem(root, &shellTemp, env, useSandbox, DefaultShellCommand)
 
-	return BashResult{Output: output, Success: success}, nil
+	return sss.runBash(ctx, bashParams(command)), nil
 }
 
 func shellEnvList(shellEnv map[string]string) ([]string, error) {
@@ -125,30 +131,20 @@ func shellEnvList(shellEnv map[string]string) ([]string, error) {
 	return env, nil
 }
 
-func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) string {
-	output, _ := sss.runBash(ctx, params)
-	return output
+func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) BashResult {
+	return sss.runBash(ctx, params)
 }
 
-func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams) (string, bool) {
+func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams) BashResult {
 	sss.mu.Lock()
 	defer sss.mu.Unlock()
 
 	if strings.TrimSpace(params.Command) == "" {
-		return "command is required", false
+		return bashFailure("command is required")
 	}
 
 	if params.Timeout < 0 {
-		return fmt.Sprintf("Invalid timeout value: %d. Timeout must be a positive number.", params.Timeout), false
-	}
-
-	for file, created := range sss.tempFiles {
-		if time.Since(time.Time(created)) <= shellTempFileTTL {
-			continue
-		}
-
-		_ = sss.root.Remove(string(file))
-		delete(sss.tempFiles, file)
+		return bashFailure(fmt.Sprintf("Invalid timeout value: %d. Timeout must be a positive number.", params.Timeout))
 	}
 
 	timeout := params.Timeout
@@ -166,21 +162,21 @@ func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams)
 
 		params.Workdir, err = normalizeRootName(sss.root, workdir)
 		if err != nil {
-			return fmt.Errorf("resolve workdir %q: %w", workdir, err).Error(), false
+			return bashFailure(fmt.Errorf("resolve workdir %q: %w", workdir, err).Error())
 		}
 
 		info, err := sss.root.Stat(params.Workdir)
 		if err != nil {
-			return fmt.Errorf("resolve workdir %q: %w", params.Workdir, err).Error(), false
+			return bashFailure(fmt.Errorf("resolve workdir %q: %w", params.Workdir, err).Error())
 		}
 
 		if !info.IsDir() {
-			return fmt.Errorf("resolve workdir %q: not a directory", params.Workdir).Error(), false
+			return bashFailure(fmt.Errorf("resolve workdir %q: not a directory", params.Workdir).Error())
 		}
 
 		root, err := sss.root.OpenRoot(params.Workdir)
 		if err != nil {
-			return fmt.Errorf("resolve workdir %q: %w", params.Workdir, err).Error(), false
+			return bashFailure(fmt.Errorf("resolve workdir %q: %w", params.Workdir, err).Error())
 		}
 
 		hostDir = root.Name()
@@ -190,11 +186,11 @@ func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams)
 	defer cleanup()
 
 	if denied := sss.deniedBashPath(params.Command, hostDir); denied != "" {
-		return denied, false
+		return bashFailure(denied)
 	}
 
-	if err := sss.shellOutput.ensureTempDir(sss.root); err != nil {
-		return err.Error(), false
+	if err := sss.shellTemp.ensureTempDir(sss.root); err != nil {
+		return bashFailure(err.Error())
 	}
 
 	commandCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(timeout)*time.Millisecond+shellTimeoutGrace)
@@ -204,7 +200,7 @@ func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams)
 
 	shell, args := sss.shellCommand(params.Command)
 	if strings.TrimSpace(shell) == "" {
-		return "shell command path is required", false
+		return bashFailure("shell command path is required")
 	}
 
 	var cmd *exec.Cmd
@@ -214,14 +210,14 @@ func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams)
 
 		cmd, err = sss.bash.command(commandCtx, sandboxedBashCommand{shell: shell, args: args, workdir: params.Workdir})
 		if err != nil {
-			return err.Error(), false
+			return bashFailure(err.Error())
 		}
 	} else {
 		cmd = exec.CommandContext(commandCtx, shell, args...)
 		cmd.Dir = hostDir
 
 		cmd.Env = append(os.Environ(), sss.env...)
-		cmd.Env = append(cmd.Env, "TMPDIR="+sss.shellOutput.tmpDir)
+		cmd.Env = append(cmd.Env, "TMPDIR="+sss.shellTemp.tmpDir)
 	}
 
 	cmd.Stdout = &bytes.Buffer{}
@@ -249,85 +245,70 @@ func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams)
 
 	stdoutBuf, _ := cmd.Stdout.(*bytes.Buffer)
 	err := cmd.Run()
-	output := stdoutBuf.String()
-	visible, truncated, tempPath := sss.visibleShellOutput(output)
 
-	metadata := []string{}
-
-	if errStatus, ok := errors.AsType[*exec.ExitError](err); ok && errStatus.ExitCode() > 0 {
-		exitCode := errStatus.ExitCode()
-		metadata = append(metadata, fmt.Sprintf("Command exited with code %d", exitCode))
+	full := stdoutBuf.String()
+	if full == "" {
+		full = "(no output)"
 	}
 
+	errorCode := ""
 	if timedOut {
-		metadata = append(metadata, fmt.Sprintf("bash tool terminated command after exceeding timeout %d ms. If this command is expected to take longer and is not waiting for interactive input, retry with a larger timeout value in milliseconds.", timeout))
+		errorCode = "timeout"
+	} else if errStatus, ok := errors.AsType[*exec.ExitError](err); ok && errStatus.ExitCode() > 0 {
+		errorCode = strconv.Itoa(errStatus.ExitCode())
+	} else if err != nil {
+		errorCode = "error"
 	}
 
-	if visible == "" {
-		visible = "(no output)"
+	head, truncated := firstLines(full, shellHeadMaxLines)
+	if truncated {
+		head = strings.TrimRight(head, "\n") + "\n\n...output truncated...\n\nFull output is on this result's full_output field (e.g. result.full_output), not a file.\n"
 	}
 
-	if truncated && tempPath != "" {
-		visible = "...output truncated...\n\nFull output saved to: " + filepath.ToSlash(tempPath) + "\n\n" + visible
+	return BashResult{
+		HeadOutput: head,
+		FullOutput: full,
+		ErrorCode:  errorCode,
+		Success:    err == nil && !timedOut,
 	}
-
-	if len(metadata) > 0 {
-		visible += "\n\n<bash_metadata>\n" + strings.Join(metadata, "\n") + "\n</bash_metadata>"
-	}
-
-	return visible, err == nil && !timedOut
 }
 
-func (sss *sandboxedShellSystem) visibleShellOutput(output string) (visible string, truncated bool, tempPath string) {
-	lines := strings.Split(output, "\n")
-	if len(lines) <= shellMaxLines && len([]byte(output)) <= maxBytes {
-		return output, false, ""
+func bashFailure(message string) BashResult {
+	if message == "" {
+		message = "(no output)"
 	}
 
-	out := make([]string, 0, min(len(lines), shellMaxLines))
-	bytesUsed := 0
+	return BashResult{
+		HeadOutput: message,
+		FullOutput: message,
+		ErrorCode:  "error",
+		Success:    false,
+	}
+}
 
-	for i := len(lines) - 1; i >= 0 && len(out) < shellMaxLines; i-- {
-		line := lines[i]
-
-		size := len([]byte(line))
-		if len(out) > 0 {
-			size++
-		}
-
-		if bytesUsed+size > maxBytes {
-			if len(out) == 0 {
-				buf := []byte(line)
-
-				start := max(len(buf)-maxBytes, 0)
-				for start < len(buf) && (buf[start]&0xc0) == 0x80 {
-					start++
-				}
-
-				out = append([]string{string(buf[start:])}, out...)
-			}
-
-			break
-		}
-
-		out = append([]string{line}, out...)
-		bytesUsed += size
+func firstLines(text string, maxLines int) (string, bool) {
+	if maxLines <= 0 || text == "" {
+		return text, false
 	}
 
-	visible = strings.Join(out, "\n")
+	var out strings.Builder
 
-	tempPath = filepath.ToSlash(filepath.Join(sss.shellOutput.outputRelDir, fmt.Sprintf("rocketcode-bash-%d", time.Now().UnixNano())))
-	if err := sss.root.WriteFile(tempPath, []byte(output), 0o600); err != nil {
-		if visible == "" {
-			visible = output
+	reader := bufio.NewReader(strings.NewReader(text))
+	for range maxLines {
+		line, err := reader.ReadString('\n')
+		out.WriteString(line)
+
+		if err != nil {
+			return out.String(), false
 		}
-
-		return visible, false, ""
 	}
 
-	sss.tempFiles[temporaryFile(tempPath)] = creationTime(time.Now())
+	// More content remains after the head window.
+	if _, err := reader.ReadByte(); err == nil {
+		return out.String(), true
+	}
 
-	return visible, true, tempPath
+	return out.String(), false
 }
 
 func (sss *sandboxedShellSystem) deniedBashPath(command, hostDir string) string {
