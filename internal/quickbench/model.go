@@ -40,11 +40,12 @@ func parseModelSelector(input string) (modelSelector, error) {
 
 		switch key {
 		case "reasoningEffort":
-			if values[0] != "minimal" && values[0] != "low" && values[0] != "medium" && values[0] != "high" {
-				return modelSelector{}, errors.New("reasoningEffort must be minimal, low, medium, or high")
+			switch values[0] {
+			case "none", "minimal", "low", "medium", "high", "xhigh", "max":
+				selector.ReasoningEffort = values[0]
+			default:
+				return modelSelector{}, errors.New("reasoningEffort must be none, minimal, low, medium, high, xhigh, or max")
 			}
-
-			selector.ReasoningEffort = values[0]
 		case "verbosity":
 			if values[0] != "low" && values[0] != "medium" && values[0] != "high" {
 				return modelSelector{}, errors.New("verbosity must be low, medium, or high")

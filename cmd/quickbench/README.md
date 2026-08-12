@@ -6,26 +6,77 @@ BAR-based RocketCode benchmarks: pack/unpack, dump, capture from Slack/session s
 
 A BAR is a `.bar` txtar file or an equivalent directory:
 
+Pack/dump order puts principal-edit files first:
+
 ```text
-meta.txt                         # name, root, ...
-agents/<name>.md                 # full RocketCode agent tree (required)
+bench.yaml                       # name, root, elo.model / reasoningEffort / criteria
+mocks/tools.json                 # static host-tool mocks (task is never mocked)
+mocks/bash.json                  # shell doubles (gh, etc.) via ShellCommand on run
 variations/<id>/transcript.json  # root conversation; final message is user
 variations/<id>/agents/<name>/model.txt   # optional per-agent model overlay
 variations/<id>/agents/<name>/system.txt  # optional per-agent prompt overlay
-mocks/tools.json                 # static host-tool mocks (task is never mocked)
-mocks/bash.json                  # shell doubles (gh, etc.) via ShellCommand on run
-elo/criteria.txt                 # required judge criteria
-elo/judge.txt                    # required judge model selector
+agents/<name>.md                 # full RocketCode agent tree (required)
 ```
+
+### `bench.yaml` and the subject matrix
+
+Cells = every `variations/<id>` × every `matrix` row. Omit `matrix` for a single `default` cell that keeps `agents/*.md` as written.
+
+Under each matrix row, `agents.<name>` may set **`model`**, **`system`**, or **both**. Unset fields keep the BAR agent (or variation overlay) value.
+
+```yaml
+name: hello
+description: minimal BAR sample
+root: main
+matrix:
+  # Baseline: no overrides.
+  - id: default
+
+  # Model only (optional query flags: reasoningEffort, verbosity).
+  - id: mini-root
+    agents:
+      main:
+        model: gpt-5.4-mini
+  - id: luna-max
+    agents:
+      main:
+        model: gpt-5.6-luna?reasoningEffort=max
+
+  # System prompt only (replaces that agent's markdown body / prompt).
+  - id: warmer-prompt
+    agents:
+      main:
+        system: |
+          Greet the user warmly in one short sentence. Be friendly.
+
+  # Model + system together on the same agent.
+  - id: mini-and-warmer
+    agents:
+      main:
+        model: gpt-5.4-mini
+        system: |
+          Greet the user warmly in one short sentence. Be friendly.
+
+  # Multi-agent: override root and a subagent independently.
+  - id: cheap-worker
+    agents:
+      main:
+        model: gpt-5.6-luna?reasoningEffort=max
+      worker:
+        model: gpt-5.4-mini
+        system: |
+          Stay terse. Return only the delegated result.
+
+elo:
+  model: gpt-5.6-luna
+  reasoningEffort: max          # judge; capture default is max
+  criteria: |
+    Prefer a warm, natural greeting. Penalize verbosity.
+```
+
+`system` is the agent **prompt body** (what normally sits under the agent frontmatter), not the transcript. Variation file overlays under `variations/<id>/agents/<name>/` still apply first; matrix overrides apply on top for that cell.
 
 `agents/*.md` are normal RocketCode agent files (frontmatter `model`, permissions, body prompt). Capture copies the workspace agent tree so subagents re-run live via `task` with their own models.
-
-Per-variation overlays change one agent without rewriting the whole tree. CLI can also pin agents for a run:
-
-```bash
-go run github.com/Rocketable/platform/cmd/quickbench@main run ./bench --model gpt-5.4
-go run github.com/Rocketable/platform/cmd/quickbench@main run ./bench --model worker=gpt-5.4-mini
-```
 
 `transcript.json` is a JSON array of `{role, text}` with roles `user` or `assistant` only.
 
@@ -59,9 +110,8 @@ go run github.com/Rocketable/platform/cmd/quickbench@main dump ./cmd/quickbench/
 go run github.com/Rocketable/platform/cmd/quickbench@main dump hello.bar --names
 
 # providers from ./quickbench.json (see quickbench.json.example)
-go run github.com/Rocketable/platform/cmd/quickbench@main run ./cmd/quickbench/examples/hello \
-  --model gpt-5.4 \
-  --model gpt-5.4-mini
+# matrix comes from bench.yaml
+go run github.com/Rocketable/platform/cmd/quickbench@main run ./cmd/quickbench/examples/hello
 
 go run github.com/Rocketable/platform/cmd/quickbench@main capture \
   --conversation slack-thread:C0123:1710000000.000100 \
@@ -71,7 +121,7 @@ go run github.com/Rocketable/platform/cmd/quickbench@main capture \
   -o ./captured
 ```
 
-Default capture DB path is `./.rocketclaw/state.sqlite3`; default agents dir is `./agents`. Capture copies the full agent tree, freezes non-`task` tool outputs as mocks, and writes stub `elo/*` files — edit criteria before ranking is meaningful. Runs skip ELO when criteria still contain the capture TODO marker.
+Default capture DB path is `./.rocketclaw/state.sqlite3`; default agents dir is `./agents`. Capture copies the full agent tree, freezes non-`task` tool outputs as mocks, and writes stub `bench.yaml` (`elo.model: gpt-5.6-luna`, `reasoningEffort: max`, TODO criteria) — edit `elo.criteria` before ranking is meaningful. Runs skip ELO when criteria still contain the capture TODO marker.
 
 **Fidelity notes**
 
@@ -83,8 +133,9 @@ Default capture DB path is `./.rocketclaw/state.sqlite3`; default agents dir is 
 
 1. Resolve the Slack thread to a conversation id (`slack-thread:CHANNEL:THREAD_TS`) or use a raw session id.
 2. `go run github.com/Rocketable/platform/cmd/quickbench@main capture --conversation … -o ./bench`
-3. Edit `elo/criteria.txt` (and variations if desired).
-4. `go run github.com/Rocketable/platform/cmd/quickbench@main run ./bench --model …`
+3. Edit `bench.yaml` (`elo.criteria`, optional `elo.model` / `reasoningEffort`).
+4. Edit `bench.yaml` `matrix` if comparing models/agents.
+5. `go run github.com/Rocketable/platform/cmd/quickbench@main run ./bench`
 
 ## RocketClaw shipping
 

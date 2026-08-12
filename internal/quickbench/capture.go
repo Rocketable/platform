@@ -25,7 +25,7 @@ type CaptureOptions struct {
 
 const (
 	stubCriteria = "TODO: replace with ranking criteria before meaningful ELO.\n"
-	stubJudge    = "gpt-5.4\n"
+	stubJudge    = "gpt-5.6-luna?reasoningEffort=max"
 )
 
 // Capture builds a BAR from RocketClaw session entries.
@@ -82,7 +82,7 @@ func Capture(ctx context.Context, opt CaptureOptions) error {
 		return fmt.Errorf("captured transcript: %w", err)
 	}
 	// Validate task targets against copied agents before write.
-	if _, _, err := buildAgents(&BAR{Meta: Meta{Root: root}, Agents: agents}, Variation{}, nil, nil); err != nil {
+	if _, _, err := buildAgents(&BAR{Meta: Meta{Root: root}, Agents: agents}, Variation{}, nil); err != nil {
 		return err
 	}
 

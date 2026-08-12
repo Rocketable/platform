@@ -43,14 +43,28 @@ go run github.com/Rocketable/platform/cmd/quickbench@main capture \
 go run github.com/Rocketable/platform/cmd/quickbench@main dump <out-dir>
 ```
 
+- `bench.yaml` is first in dump order (stub `elo.criteria` + `elo.model: gpt-5.6-luna` / `reasoningEffort: max`)
 - `agents/*.md` includes the full tree used by the workspace
 - at least one variation with final user message
-- stub `elo/criteria.txt` present
 - non-`task` tool mocks present when the session used tools
 - `mocks/bash.json` seeded when the session ran bash/execute
 
-5. Tell the principal to edit `elo/criteria.txt` before ranked `run`.
-6. To A/B one agent only, add overlays under `variations/<id>/agents/<name>/` or run with `--model <name>=SEL`.
+5. Tell the principal to edit `bench.yaml` before ranked `run`:
+   - `elo.criteria` (required for ranking)
+   - `matrix` rows to A/B subjects, e.g.
+
+```yaml
+matrix:
+  - id: baseline
+  - id: alt
+    agents:
+      main:
+        model: gpt-5.4-mini
+        system: |
+          Alternate system prompt for this cell.
+```
+
+6. Variation file overlays under `variations/<id>/agents/<name>/` still work; matrix overrides apply on top per cell.
 
 Use skill `main-archive-benchmarks` for pack/run/ELO authoring details.
 

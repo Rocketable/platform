@@ -20,8 +20,8 @@ type AgentOverlay struct {
 	System string // optional prompt body (markdown body after frontmatter)
 }
 
-// buildAgents materializes BAR agents with variation and run overrides into rocketcode.Agents.
-func buildAgents(bar *BAR, variation Variation, rootModel *modelSelector, named map[string]modelSelector) (rocketcode.Agents, string, error) {
+// buildAgents materializes BAR agents with variation and matrix overrides into rocketcode.Agents.
+func buildAgents(bar *BAR, variation Variation, matrixAgents map[string]MatrixAgent) (rocketcode.Agents, string, error) {
 	if len(bar.Agents) == 0 {
 		return rocketcode.Agents{}, "", errors.New("BAR has no agents/")
 	}
@@ -73,37 +73,28 @@ func buildAgents(bar *BAR, variation Variation, rootModel *modelSelector, named 
 		}
 	}
 
-	for name, sel := range named {
+	for name, ov := range matrixAgents {
 		agent, ok := items[name]
 		if !ok {
-			return rocketcode.Agents{}, "", fmt.Errorf("unknown agent %q in --model", name)
+			return rocketcode.Agents{}, "", fmt.Errorf("unknown agent %q in matrix", name)
 		}
 
-		agent.Model = sel.Model
-		if sel.ReasoningEffort != "" {
-			agent.ReasoningEffort = sel.ReasoningEffort
+		if ov.Model.Raw != "" {
+			agent.Model = ov.Model.Model
+			if ov.Model.ReasoningEffort != "" {
+				agent.ReasoningEffort = ov.Model.ReasoningEffort
+			}
+
+			if ov.Model.Verbosity != "" {
+				agent.Verbosity = ov.Model.Verbosity
+			}
 		}
 
-		if sel.Verbosity != "" {
-			agent.Verbosity = sel.Verbosity
+		if s := strings.TrimSpace(ov.System); s != "" {
+			agent.Prompt = s
 		}
 
 		items[name] = agent
-	}
-
-	if rootModel != nil {
-		agent := items[root]
-
-		agent.Model = rootModel.Model
-		if rootModel.ReasoningEffort != "" {
-			agent.ReasoningEffort = rootModel.ReasoningEffort
-		}
-
-		if rootModel.Verbosity != "" {
-			agent.Verbosity = rootModel.Verbosity
-		}
-
-		items[root] = agent
 	}
 
 	built := rocketcode.Agents{Items: items}

@@ -8,7 +8,6 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -20,14 +19,8 @@ import (
 )
 
 type runOptions struct {
-	// rootModels are unlabeled --model values; matrix over root agent when non-empty.
-	rootModels []modelSelector
-	// namedModels are --model name=SEL fixed for every cell.
-	namedModels map[string]modelSelector
-	judge       *modelSelector
-	json        bool
-	timeout     time.Duration
-	timeoutOK   bool
+	json    bool
+	timeout time.Duration // 0 = none
 }
 
 // Report is the run + ELO output.
@@ -40,11 +33,12 @@ type Report struct {
 	Skipped string       `json:"eloSkipped,omitempty"`
 }
 
-// CellResult is one variation×model run.
+// CellResult is one variation×matrix run.
 type CellResult struct {
 	Label         string             `json:"label"`
 	Variation     string             `json:"variation"`
-	Model         string             `json:"model"`
+	Matrix        string             `json:"matrix"`
+	Model         string             `json:"model"` // same as Matrix; kept for report compatibility
 	Text          string             `json:"text,omitempty"`
 	ToolCalls     []observedToolCall `json:"toolCalls,omitempty"`
 	Error         string             `json:"error,omitempty"`
@@ -83,59 +77,39 @@ func (r *toolRecorder) snapshot() []observedToolCall {
 }
 
 // cellRunner runs one matrix cell. Tests inject a stub.
-type cellRunner func(ctx context.Context, providers rocketcode.Providers, bar *BAR, variation Variation, rootModel *modelSelector, named map[string]modelSelector, timeout time.Duration) CellResult
+type cellRunner func(ctx context.Context, providers rocketcode.Providers, bar *BAR, variation Variation, entry MatrixEntry, timeout time.Duration) CellResult
 
 func runBAR(ctx context.Context, providers rocketcode.Providers, bar *BAR, opt runOptions) (Report, error) {
 	return runBARWith(ctx, providers, bar, opt, runCell, nil)
 }
 
 func runBARWith(ctx context.Context, providers rocketcode.Providers, bar *BAR, opt runOptions, run cellRunner, judge judgePairFunc) (Report, error) {
-	timeout := time.Duration(0)
-	if opt.timeoutOK {
-		timeout = opt.timeout
-	}
+	timeout := opt.timeout
 
-	rootModels := opt.rootModels
-	if len(rootModels) == 0 {
-		rootModels = []modelSelector{nilSelector}
+	matrix := bar.Matrix
+	if len(matrix) == 0 {
+		matrix = []MatrixEntry{{ID: "default"}}
 	}
 
 	report := Report{Path: bar.Path, Name: bar.Meta.Name}
 	for _, variation := range bar.Variations {
-		for _, rootModel := range rootModels {
-			var rootPtr *modelSelector
-
-			if rootModel.Raw != "" || rootModel.Model != "" {
-				m := rootModel
-				rootPtr = &m
-			}
-
-			cell := run(ctx, providers, bar, variation, rootPtr, opt.namedModels, timeout)
+		for _, entry := range matrix {
+			cell := run(ctx, providers, bar, variation, entry, timeout)
 			report.Cells = append(report.Cells, cell)
 		}
 	}
 
-	judgeSel := opt.judge
-
-	var parsed modelSelector
-
-	if judgeSel == nil {
-		var err error
-
-		parsed, err = parseModelSelector(bar.Judge)
-		if err != nil {
-			return report, fmt.Errorf("elo/judge.txt: %w", err)
-		}
-
-		judgeSel = &parsed
-	}
-
 	if strings.TrimSpace(bar.Criteria) == "" || isStubCriteria(bar.Criteria) {
-		report.Skipped = "elo criteria is empty or capture stub; edit elo/criteria.txt before ranking"
+		report.Skipped = "elo criteria is empty or capture stub; edit bench.yaml elo.criteria before ranking"
 		return report, nil
 	}
 
-	ladder, pairs, err := rankCells(ctx, providers, *judgeSel, bar.Criteria, report.Cells, judge)
+	judgeSel, err := parseModelSelector(bar.Judge)
+	if err != nil {
+		return report, fmt.Errorf("bench.yaml elo.model: %w", err)
+	}
+
+	ladder, pairs, err := rankCells(ctx, providers, judgeSel, bar.Criteria, report.Cells, judge)
 	if err != nil {
 		// Keep cell outputs; principal still needs the matrix when ELO cannot run (e.g. single cell).
 		report.Skipped = err.Error()
@@ -148,22 +122,13 @@ func runBARWith(ctx context.Context, providers rocketcode.Providers, bar *BAR, o
 	return report, nil
 }
 
-// nilSelector marks "use BAR agent models as-is" for the root matrix slot.
-var nilSelector modelSelector
-
 func isStubCriteria(criteria string) bool {
 	return strings.Contains(criteria, "TODO: replace with ranking criteria")
 }
 
-func runCell(ctx context.Context, providers rocketcode.Providers, bar *BAR, variation Variation, rootModel *modelSelector, named map[string]modelSelector, timeout time.Duration) CellResult {
-	label := cellLabel(variation.ID, rootModel, named)
-
-	modelLabel := label
-	if rootModel != nil {
-		modelLabel = rootModel.Raw
-	}
-
-	result := CellResult{Label: label, Variation: variation.ID, Model: modelLabel}
+func runCell(ctx context.Context, providers rocketcode.Providers, bar *BAR, variation Variation, entry MatrixEntry, timeout time.Duration) CellResult {
+	label := cellLabel(variation.ID, entry.ID)
+	result := CellResult{Label: label, Variation: variation.ID, Matrix: entry.ID, Model: entry.ID}
 	startedAt := time.Now()
 
 	if timeout > 0 {
@@ -178,7 +143,7 @@ func runCell(ctx context.Context, providers rocketcode.Providers, bar *BAR, vari
 		return finishCell(result, startedAt, "%s", err.Error())
 	}
 
-	agents, rootName, err := buildAgents(bar, variation, rootModel, named)
+	agents, rootName, err := buildAgents(bar, variation, entry.Agents)
 	if err != nil {
 		return finishCell(result, startedAt, "%s", err.Error())
 	}
@@ -293,24 +258,12 @@ func finishCell(result CellResult, startedAt time.Time, format string, args ...a
 	return result
 }
 
-func cellLabel(variationID string, rootModel *modelSelector, named map[string]modelSelector) string {
-	parts := []string{variationID}
-	if rootModel != nil && rootModel.Raw != "" {
-		parts = append(parts, rootModel.Raw)
+func cellLabel(variationID, matrixID string) string {
+	if strings.TrimSpace(matrixID) == "" {
+		return variationID
 	}
 
-	names := make([]string, 0, len(named))
-	for name := range named {
-		names = append(names, name)
-	}
-
-	slices.Sort(names)
-
-	for _, name := range names {
-		parts = append(parts, name+"="+named[name].Raw)
-	}
-
-	return strings.Join(parts, "@")
+	return variationID + "@" + matrixID
 }
 
 func conversationParts(v Variation) (prior []Message, final string, err error) {

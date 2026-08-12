@@ -47,30 +47,61 @@ go run github.com/Rocketable/platform/cmd/quickbench@main capture \
 
 Default DB is `./.rocketclaw/state.sqlite3`; default agents dir is `./agents`.
 
-3. Edit `bench/elo/criteria.txt` before meaningful ELO. Adjust `elo/judge.txt`, `mocks/bash.json`, and variations if needed.
+3. Edit `bench/bench.yaml` first: `elo.criteria`, optional `elo.model` / `reasoningEffort`, and `matrix` rows. Adjust `mocks/bash.json` and variations if needed.
 4. Run:
 
 ```bash
-go run github.com/Rocketable/platform/cmd/quickbench@main run ./bench \
-  --model gpt-5.4 \
-  --model gpt-5.4-mini
+go run github.com/Rocketable/platform/cmd/quickbench@main run ./bench
 ```
 
-Pin one agent for every cell with `--model worker=gpt-5.4-mini`.
+## Matrix (model and/or system prompt)
+
+Each matrix row is one subject config. Per agent you may set `model`, `system`, or both:
+
+```yaml
+matrix:
+  - id: default
+  - id: model-only
+    agents:
+      main:
+        model: gpt-5.4-mini
+  - id: system-only
+    agents:
+      main:
+        system: |
+          Be warmer. One short sentence.
+  - id: model-and-system
+    agents:
+      main:
+        model: gpt-5.6-luna?reasoningEffort=max
+        system: |
+          Be warmer. One short sentence.
+  - id: multi-agent
+    agents:
+      main:
+        model: gpt-5.6-luna?reasoningEffort=max
+      worker:
+        model: gpt-5.4-mini
+        system: |
+          Stay terse. Return only the delegated result.
+```
+
+- `model` — OpenAI model id, optional `?reasoningEffort=…` / `?verbosity=…`
+- `system` — replaces that agent’s prompt body for the cell
+- omit a field to keep the BAR agent (after variation overlays)
+- cells = every `variations/<id>` × every matrix row
 
 ## BAR members
 
 | Path | Role |
 |------|------|
-| `meta.txt` | `name`, `description`, `tags`, `root` |
-| `agents/<name>.md` | full RocketCode agent tree (models, prompts, permissions) |
+| `bench.yaml` | name, root, `matrix` (model/system), `elo.*` (edit first) |
+| `mocks/tools.json` | static host-tool mocks (`task` is never mocked) |
+| `mocks/bash.json` | shell doubles (exact command or `prefix*`); unmocked bash fails closed |
 | `variations/<id>/transcript.json` | root turns + final **user** message |
 | `variations/<id>/agents/<name>/model.txt` | optional model overlay |
 | `variations/<id>/agents/<name>/system.txt` | optional prompt overlay |
-| `mocks/tools.json` | static host-tool mocks (`task` is never mocked) |
-| `mocks/bash.json` | shell doubles (exact command or `prefix*`); unmocked bash fails closed |
-| `elo/criteria.txt` | pairwise judge criteria |
-| `elo/judge.txt` | judge model selector |
+| `agents/<name>.md` | full RocketCode agent tree (models, prompts, permissions) |
 
 Fidelity: capture copies workspace `agents/*.md` and portable `session_entries`. Subagent internals are not in sqlite; re-run re-executes `task` against the BAR agent tree. Live host CLIs are not used on re-run — only bash doubles.
 

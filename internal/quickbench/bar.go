@@ -2,24 +2,25 @@ package quickbench
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 
 	"golang.org/x/tools/txtar"
+	"gopkg.in/yaml.v3"
 )
 
 const (
-	metaMember     = "meta.txt"
+	benchMember    = "bench.yaml"
 	mocksMember    = "mocks/tools.json"
-	criteriaMember = "elo/criteria.txt"
-	judgeMember    = "elo/judge.txt"
 	variationsRoot = "variations"
 	systemName     = "system.txt"
 	transcriptName = "transcript.json"
@@ -30,6 +31,7 @@ const (
 type BAR struct {
 	Path        string
 	Meta        Meta
+	Matrix      []MatrixEntry     // subject runs from bench.yaml; empty means one "default" cell
 	Agents      map[string][]byte // agent name → full .md bytes (verbatim)
 	Variations  []Variation
 	Tools       []ToolMock
@@ -40,12 +42,24 @@ type BAR struct {
 	members map[string][]byte
 }
 
-// Meta is BAR metadata from meta.txt.
+// Meta is BAR metadata from bench.yaml.
 type Meta struct {
 	Name        string
 	Description string
 	Tags        []string
 	Root        string // default agent name; empty means "main"
+}
+
+// MatrixEntry is one subject configuration in the run matrix (variation × matrix).
+type MatrixEntry struct {
+	ID     string
+	Agents map[string]MatrixAgent // agent name → optional model/system overrides
+}
+
+// MatrixAgent overrides one agent for a matrix row. Zero fields keep the BAR agent value.
+type MatrixAgent struct {
+	Model  modelSelector // empty Raw means no model override
+	System string        // empty means no system/prompt override
 }
 
 // Variation is one prompt variant under variations/<id>/.
@@ -182,14 +196,7 @@ func WriteDir(dir string, bar *BAR) error {
 
 // Dump writes BAR contents (or names only) to w.
 func Dump(w io.Writer, bar *BAR, namesOnly bool) error {
-	names := make([]string, 0, len(bar.members))
-	for name := range bar.members {
-		names = append(names, name)
-	}
-
-	slices.Sort(names)
-
-	for _, name := range names {
+	for _, name := range orderedMemberNames(bar.members) {
 		if _, err := fmt.Fprintln(w, name); err != nil {
 			return err
 		}
@@ -256,7 +263,7 @@ func readDirMembers(dir string) (map[string][]byte, error) {
 
 		name := filepath.ToSlash(rel)
 		if d.IsDir() {
-			if name == variationsRoot || name == "mocks" || name == "elo" || name == agentsRoot ||
+			if name == variationsRoot || name == "mocks" || name == agentsRoot ||
 				strings.HasPrefix(name, variationsRoot+"/") || strings.HasPrefix(name, agentsRoot+"/") {
 				return nil
 			}
@@ -287,7 +294,7 @@ func readDirMembers(dir string) (map[string][]byte, error) {
 func validMember(name string) bool {
 	name = filepath.ToSlash(name)
 	switch {
-	case name == metaMember, name == mocksMember, name == bashDoublesMember, name == criteriaMember, name == judgeMember:
+	case name == benchMember, name == mocksMember, name == bashDoublesMember:
 		return true
 	case strings.HasPrefix(name, agentsRoot+"/"):
 		rest := strings.TrimPrefix(name, agentsRoot+"/")
@@ -315,19 +322,9 @@ func barFromMembers(members map[string][]byte) (*BAR, error) {
 		return nil, errors.New("empty BAR")
 	}
 
-	meta, err := parseMeta(members[metaMember])
+	meta, matrix, criteria, judge, err := parseBenchYAML(members[benchMember])
 	if err != nil {
 		return nil, err
-	}
-
-	criteria := string(members[criteriaMember])
-	if strings.TrimSpace(criteria) == "" {
-		return nil, errors.New("missing elo/criteria.txt")
-	}
-
-	judge := strings.TrimSpace(string(members[judgeMember]))
-	if judge == "" {
-		return nil, errors.New("missing elo/judge.txt")
 	}
 
 	var tools []ToolMock
@@ -460,8 +457,17 @@ func barFromMembers(members map[string][]byte) (*BAR, error) {
 		})
 	}
 
+	for _, entry := range matrix {
+		for agentName := range entry.Agents {
+			if _, ok := agents[agentName]; !ok {
+				return nil, fmt.Errorf("bench.yaml: matrix %q references unknown agent %q", entry.ID, agentName)
+			}
+		}
+	}
+
 	return &BAR{
 		Meta:        meta,
+		Matrix:      matrix,
 		Agents:      agents,
 		Variations:  variations,
 		Tools:       tools,
@@ -495,60 +501,161 @@ func validateTranscript(messages []Message) error {
 	return nil
 }
 
-func parseMeta(data []byte) (Meta, error) {
-	meta := Meta{}
-	if len(bytes.TrimSpace(data)) == 0 {
-		return meta, nil
-	}
-
-	for i, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		key, value, ok := strings.Cut(line, ":")
-		if !ok {
-			return Meta{}, fmt.Errorf("meta.txt line %d: expected key: value", i+1)
-		}
-
-		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
-
-		switch key {
-		case "name":
-			meta.Name = value
-		case "description":
-			meta.Description = value
-		case "tags":
-			for tag := range strings.SplitSeq(value, ",") {
-				tag = strings.TrimSpace(tag)
-				if tag != "" {
-					meta.Tags = append(meta.Tags, tag)
-				}
-			}
-		case "root":
-			meta.Root = value
-		default:
-			return Meta{}, fmt.Errorf("meta.txt unknown key %q", key)
-		}
-	}
-
-	return meta, nil
+// benchYAML is the single editable BAR config (metadata + matrix + ELO).
+type benchYAML struct {
+	Name        string            `yaml:"name,omitempty"`
+	Description string            `yaml:"description,omitempty"`
+	Tags        []string          `yaml:"tags,omitempty"`
+	Root        string            `yaml:"root,omitempty"`
+	Matrix      []benchMatrixYAML `yaml:"matrix,omitempty"`
+	ELO         benchELOYAML      `yaml:"elo"`
 }
 
-func formatMeta(meta Meta) []byte {
-	var b strings.Builder
-	if meta.Name != "" {
-		fmt.Fprintf(&b, "name: %s\n", meta.Name)
+type benchMatrixYAML struct {
+	ID     string                          `yaml:"id"`
+	Agents map[string]benchMatrixAgentYAML `yaml:"agents,omitempty"`
+}
+
+type benchMatrixAgentYAML struct {
+	Model  string `yaml:"model,omitempty"`
+	System string `yaml:"system,omitempty"`
+}
+
+type benchELOYAML struct {
+	Model           string `yaml:"model"`
+	ReasoningEffort string `yaml:"reasoningEffort,omitempty"`
+	Verbosity       string `yaml:"verbosity,omitempty"`
+	Criteria        string `yaml:"criteria"`
+}
+
+func parseBenchYAML(data []byte) (Meta, []MatrixEntry, string, string, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return Meta{}, nil, "", "", errors.New("missing bench.yaml")
 	}
 
-	if meta.Description != "" {
-		fmt.Fprintf(&b, "description: %s\n", meta.Description)
+	var cfg benchYAML
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return Meta{}, nil, "", "", fmt.Errorf("bench.yaml: %w", err)
 	}
 
-	if len(meta.Tags) > 0 {
-		fmt.Fprintf(&b, "tags: %s\n", strings.Join(meta.Tags, ", "))
+	criteria := cfg.ELO.Criteria
+	if strings.TrimSpace(criteria) == "" {
+		return Meta{}, nil, "", "", errors.New("bench.yaml: elo.criteria is required")
+	}
+
+	judge, err := composeJudgeSelector(cfg.ELO)
+	if err != nil {
+		return Meta{}, nil, "", "", err
+	}
+
+	matrix, err := parseMatrixYAML(cfg.Matrix)
+	if err != nil {
+		return Meta{}, nil, "", "", err
+	}
+
+	meta := Meta{
+		Name:        strings.TrimSpace(cfg.Name),
+		Description: strings.TrimSpace(cfg.Description),
+		Tags:        slices.Clone(cfg.Tags),
+		Root:        strings.TrimSpace(cfg.Root),
+	}
+
+	return meta, matrix, criteria, judge, nil
+}
+
+func parseMatrixYAML(rows []benchMatrixYAML) ([]MatrixEntry, error) {
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	seen := map[string]struct{}{}
+	out := make([]MatrixEntry, 0, len(rows))
+	for i, row := range rows {
+		id := strings.TrimSpace(row.ID)
+		if id == "" {
+			return nil, fmt.Errorf("bench.yaml: matrix[%d]: id is required", i)
+		}
+
+		if _, ok := seen[id]; ok {
+			return nil, fmt.Errorf("bench.yaml: matrix id %q duplicated", id)
+		}
+
+		seen[id] = struct{}{}
+
+		agents := map[string]MatrixAgent{}
+		names := make([]string, 0, len(row.Agents))
+		for name := range row.Agents {
+			names = append(names, name)
+		}
+
+		slices.Sort(names)
+
+		for _, name := range names {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				return nil, fmt.Errorf("bench.yaml: matrix %q: empty agent name", id)
+			}
+
+			spec := row.Agents[name]
+			override := MatrixAgent{System: spec.System}
+			if m := strings.TrimSpace(spec.Model); m != "" {
+				sel, err := parseModelSelector(m)
+				if err != nil {
+					return nil, fmt.Errorf("bench.yaml: matrix %q agents.%s.model: %w", id, name, err)
+				}
+
+				override.Model = sel
+			}
+
+			if override.Model.Raw == "" && strings.TrimSpace(override.System) == "" {
+				return nil, fmt.Errorf("bench.yaml: matrix %q agents.%s: set model and/or system", id, name)
+			}
+
+			agents[name] = override
+		}
+
+		out = append(out, MatrixEntry{ID: id, Agents: agents})
+	}
+
+	return out, nil
+}
+
+func composeJudgeSelector(elo benchELOYAML) (string, error) {
+	model := strings.TrimSpace(elo.Model)
+	if model == "" {
+		return "", errors.New("bench.yaml: elo.model is required")
+	}
+
+	raw := model
+	query := url.Values{}
+	if v := strings.TrimSpace(elo.ReasoningEffort); v != "" {
+		query.Set("reasoningEffort", v)
+	}
+
+	if v := strings.TrimSpace(elo.Verbosity); v != "" {
+		query.Set("verbosity", v)
+	}
+
+	if encoded := query.Encode(); encoded != "" {
+		raw = model + "?" + encoded
+	}
+
+	if _, err := parseModelSelector(raw); err != nil {
+		return "", fmt.Errorf("bench.yaml: elo model: %w", err)
+	}
+
+	return raw, nil
+}
+
+func formatBenchYAML(meta Meta, matrix []MatrixEntry, criteria, judge string) ([]byte, error) {
+	elo := benchELOYAML{Criteria: criteria}
+	sel, err := parseModelSelector(strings.TrimSpace(judge))
+	if err != nil {
+		elo.Model = strings.TrimSpace(judge)
+	} else {
+		elo.Model = sel.Model
+		elo.ReasoningEffort = sel.ReasoningEffort
+		elo.Verbosity = sel.Verbosity
 	}
 
 	root := strings.TrimSpace(meta.Root)
@@ -556,9 +663,45 @@ func formatMeta(meta Meta) []byte {
 		root = "main"
 	}
 
-	fmt.Fprintf(&b, "root: %s\n", root)
+	var matrixYAML []benchMatrixYAML
+	for _, entry := range matrix {
+		row := benchMatrixYAML{ID: entry.ID}
+		if len(entry.Agents) > 0 {
+			row.Agents = map[string]benchMatrixAgentYAML{}
+			names := make([]string, 0, len(entry.Agents))
+			for name := range entry.Agents {
+				names = append(names, name)
+			}
 
-	return []byte(b.String())
+			slices.Sort(names)
+
+			for _, name := range names {
+				ov := entry.Agents[name]
+				row.Agents[name] = benchMatrixAgentYAML{
+					Model:  ov.Model.Raw,
+					System: ov.System,
+				}
+			}
+		}
+
+		matrixYAML = append(matrixYAML, row)
+	}
+
+	cfg := benchYAML{
+		Name:        meta.Name,
+		Description: meta.Description,
+		Tags:        meta.Tags,
+		Root:        root,
+		Matrix:      matrixYAML,
+		ELO:         elo,
+	}
+
+	data, err := yaml.Marshal(&cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return ensureTrailingNewline(data), nil
 }
 
 func membersFromBAR(bar *BAR) (map[string][]byte, error) {
@@ -566,10 +709,13 @@ func membersFromBAR(bar *BAR) (map[string][]byte, error) {
 		return nil, errors.New("at least one agent is required")
 	}
 
+	benchData, err := formatBenchYAML(bar.Meta, bar.Matrix, bar.Criteria, bar.Judge)
+	if err != nil {
+		return nil, err
+	}
+
 	members := map[string][]byte{
-		metaMember:     formatMeta(bar.Meta),
-		criteriaMember: []byte(bar.Criteria),
-		judgeMember:    []byte(strings.TrimSpace(bar.Judge) + "\n"),
+		benchMember: benchData,
 	}
 	for name, data := range bar.Agents {
 		members[agentsRoot+"/"+name+".md"] = ensureTrailingNewline(data)
@@ -621,19 +767,48 @@ func membersFromBAR(bar *BAR) (map[string][]byte, error) {
 }
 
 func membersToFiles(members map[string][]byte) []txtar.File {
-	names := make([]string, 0, len(members))
-	for name := range members {
-		names = append(names, name)
-	}
-
-	slices.Sort(names)
-
+	names := orderedMemberNames(members)
 	files := make([]txtar.File, 0, len(names))
 	for _, name := range names {
 		files = append(files, txtar.File{Name: name, Data: members[name]})
 	}
 
 	return files
+}
+
+// orderedMemberNames puts principal-edit files first: bench.yaml, mocks, variations, then agents.
+func orderedMemberNames(members map[string][]byte) []string {
+	names := make([]string, 0, len(members))
+	for name := range members {
+		names = append(names, name)
+	}
+
+	slices.SortFunc(names, func(a, b string) int {
+		if ra, rb := memberRank(a), memberRank(b); ra != rb {
+			return cmp.Compare(ra, rb)
+		}
+
+		return cmp.Compare(a, b)
+	})
+
+	return names
+}
+
+func memberRank(name string) int {
+	switch {
+	case name == benchMember:
+		return 0
+	case name == mocksMember:
+		return 1
+	case name == bashDoublesMember:
+		return 2
+	case strings.HasPrefix(name, variationsRoot+"/"):
+		return 3
+	case strings.HasPrefix(name, agentsRoot+"/"):
+		return 4
+	default:
+		return 5
+	}
 }
 
 func writeMembers(dir string, members map[string][]byte) error {

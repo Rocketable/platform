@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,13 +48,11 @@ func TestOpenBarAndDir(t *testing.T) {
 
 func TestOpenRejectsMissingCriteriaAndYAML(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "meta.txt"), []byte("name: x\nroot: main\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bench.yaml"), []byte("name: x\nroot: main\nelo:\n  model: gpt-5.6-luna\n"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "agents"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "agents", "main.md"), defaultMainAgentMarkdown("gpt-5.4", "x"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "variations", "a"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "variations", "a", "transcript.json"), []byte(`[{"role":"user","text":"hi"}]`), 0o644))
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "elo"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "elo", "judge.txt"), []byte("gpt-5.4\n"), 0o644))
 
 	_, err := Open(dir)
 	require.Error(t, err)
@@ -68,12 +67,9 @@ func TestOpenRejectsMissingCriteriaAndYAML(t *testing.T) {
 
 func TestOpenRejectsZeroVariations(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "meta.txt"), []byte("name: x\nroot: main\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bench.yaml"), []byte(fixtureBenchYAML("x", "prefer short")), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "agents"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "agents", "main.md"), defaultMainAgentMarkdown("gpt-5.4", "x"), 0o644))
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "elo"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "elo", "criteria.txt"), []byte("prefer short\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "elo", "judge.txt"), []byte("gpt-5.4\n"), 0o644))
 	_, err := Open(dir)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "variation")
@@ -88,13 +84,16 @@ func TestDumpIncludesVariationAndJudge(t *testing.T) {
 	require.NoError(t, Dump(&buf, bar, false))
 	out := buf.String()
 	assert.Contains(t, out, "variations/alpha/transcript.json")
-	assert.Contains(t, out, "elo/judge.txt")
-	assert.Contains(t, out, "gpt-5.4")
+	assert.Contains(t, out, "bench.yaml")
+	assert.Contains(t, out, "gpt-5.6-luna")
+	// Principal-edit files before agents bulk.
+	assert.Less(t, strings.Index(out, "bench.yaml"), strings.Index(out, "agents/main.md"))
+	assert.Less(t, strings.Index(out, "mocks/tools.json"), strings.Index(out, "agents/main.md"))
 
 	buf.Reset()
 	require.NoError(t, Dump(&buf, bar, true))
 	names := buf.String()
-	assert.Contains(t, names, "meta.txt")
+	assert.Contains(t, names, "bench.yaml")
 	assert.NotContains(t, names, "prefer concise")
 }
 
@@ -152,13 +151,30 @@ func TestEloTie(t *testing.T) {
 
 func TestRunMatrixDimensions(t *testing.T) {
 	dir := writeFixtureBAR(t)
+	// two matrix rows × two variations = 4 cells
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bench.yaml"), []byte(`
+name: fixture
+root: main
+matrix:
+  - id: m1
+    agents:
+      main:
+        model: gpt-5.4
+  - id: m2
+    agents:
+      main:
+        model: gpt-5.4-mini
+elo:
+  model: gpt-5.6-luna
+  reasoningEffort: max
+  criteria: |
+    prefer concise answers
+`), 0o644))
 	bar, err := Open(dir)
 	require.NoError(t, err)
 
-	models := []modelSelector{{Raw: "m1", Model: "m1"}, {Raw: "m2", Model: "m2"}}
-	run := func(_ context.Context, _ rocketcode.Providers, _ *BAR, v Variation, root *modelSelector, _ map[string]modelSelector, _ time.Duration) CellResult {
-		raw := root.Raw
-		return CellResult{Label: v.ID + "@" + raw, Variation: v.ID, Model: raw, Text: v.ID + raw}
+	run := func(_ context.Context, _ rocketcode.Providers, _ *BAR, v Variation, entry MatrixEntry, _ time.Duration) CellResult {
+		return CellResult{Label: v.ID + "@" + entry.ID, Variation: v.ID, Matrix: entry.ID, Model: entry.ID, Text: v.ID + entry.ID}
 	}
 	judge := func(_ context.Context, _, _, aText, _, bText string) (string, string, error) {
 		if aText < bText {
@@ -171,7 +187,7 @@ func TestRunMatrixDimensions(t *testing.T) {
 
 		return "TIE", "WINNER: TIE", nil
 	}
-	report, err := runBARWith(t.Context(), rocketcode.Providers{}, bar, runOptions{rootModels: models}, run, judge)
+	report, err := runBARWith(t.Context(), rocketcode.Providers{}, bar, runOptions{}, run, judge)
 	require.NoError(t, err)
 	assert.Len(t, report.Cells, 4)
 	assert.Len(t, report.Ladder, 4)
@@ -179,15 +195,15 @@ func TestRunMatrixDimensions(t *testing.T) {
 
 func TestRunSingleCellSkipsELO(t *testing.T) {
 	dir := writeFixtureBAR(t)
-	// one variation only
+	// one variation only, default matrix (one cell)
 	require.NoError(t, os.RemoveAll(filepath.Join(dir, "variations", "beta")))
 	bar, err := Open(dir)
 	require.NoError(t, err)
 
-	run := func(_ context.Context, _ rocketcode.Providers, _ *BAR, v Variation, root *modelSelector, _ map[string]modelSelector, _ time.Duration) CellResult {
-		return CellResult{Label: v.ID + "@" + root.Raw, Variation: v.ID, Model: root.Raw, Text: "only"}
+	run := func(_ context.Context, _ rocketcode.Providers, _ *BAR, v Variation, entry MatrixEntry, _ time.Duration) CellResult {
+		return CellResult{Label: cellLabel(v.ID, entry.ID), Variation: v.ID, Matrix: entry.ID, Model: entry.ID, Text: "only"}
 	}
-	report, err := runBARWith(t.Context(), rocketcode.Providers{}, bar, runOptions{rootModels: []modelSelector{{Raw: "m", Model: "m"}}}, run, nil)
+	report, err := runBARWith(t.Context(), rocketcode.Providers{}, bar, runOptions{}, run, nil)
 	require.NoError(t, err)
 	require.Len(t, report.Cells, 1)
 	assert.NotEmpty(t, report.Skipped)
@@ -196,7 +212,8 @@ func TestRunSingleCellSkipsELO(t *testing.T) {
 
 func TestPackRejectsTxtarHeaderInBody(t *testing.T) {
 	dir := writeFixtureBAR(t)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "elo", "criteria.txt"), []byte("prefer short\n-- before --\nmore\n"), 0o644))
+	// Header must appear as a full line in a member body (not YAML-indented).
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "agents", "main.md"), []byte("---\ndescription: x\nmodel: gpt-5.4\n---\n\nok\n-- before --\nmore\n"), 0o644))
 	err := Pack(dir, filepath.Join(t.TempDir(), "x.bar"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "txtar header")
@@ -204,10 +221,10 @@ func TestPackRejectsTxtarHeaderInBody(t *testing.T) {
 
 func TestOpenRejectsMissingJudge(t *testing.T) {
 	dir := writeFixtureBAR(t)
-	require.NoError(t, os.Remove(filepath.Join(dir, "elo", "judge.txt")))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bench.yaml"), []byte("name: x\nroot: main\nelo:\n  criteria: |\n    prefer short\n"), 0o644))
 	_, err := Open(dir)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "judge")
+	assert.Contains(t, err.Error(), "elo.model")
 }
 
 func TestValidateTranscriptRejects(t *testing.T) {
@@ -245,17 +262,15 @@ func TestTimeoutPassedToRunner(t *testing.T) {
 
 	var saw time.Duration
 
-	run := func(_ context.Context, _ rocketcode.Providers, _ *BAR, v Variation, root *modelSelector, _ map[string]modelSelector, timeout time.Duration) CellResult {
+	run := func(_ context.Context, _ rocketcode.Providers, _ *BAR, v Variation, entry MatrixEntry, timeout time.Duration) CellResult {
 		saw = timeout
-		return CellResult{Label: v.ID + "@" + root.Raw, Variation: v.ID, Model: root.Raw, Text: "t"}
+		return CellResult{Label: cellLabel(v.ID, entry.ID), Variation: v.ID, Matrix: entry.ID, Model: entry.ID, Text: "t"}
 	}
 	judge := func(_ context.Context, _, _, _, _, _ string) (string, string, error) {
 		return "TIE", "WINNER: TIE", nil
 	}
 	_, err = runBARWith(t.Context(), rocketcode.Providers{}, bar, runOptions{
-		rootModels: []modelSelector{{Raw: "m", Model: "m"}},
-		timeout:    3 * time.Second,
-		timeoutOK:  true,
+		timeout: 3 * time.Second,
 	}, run, judge)
 	require.NoError(t, err)
 	assert.Equal(t, 3*time.Second, saw)
@@ -288,14 +303,14 @@ func TestRoundTripPreservesToolsAndSystem(t *testing.T) {
 
 func TestRunSkipsStubCriteria(t *testing.T) {
 	dir := writeFixtureBAR(t)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "elo", "criteria.txt"), []byte(stubCriteria), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bench.yaml"), []byte(fixtureBenchYAML("fixture", stubCriteria)), 0o644))
 	bar, err := Open(dir)
 	require.NoError(t, err)
 
-	run := func(_ context.Context, _ rocketcode.Providers, _ *BAR, v Variation, root *modelSelector, _ map[string]modelSelector, _ time.Duration) CellResult {
-		return CellResult{Label: v.ID + "@" + root.Raw, Variation: v.ID, Model: root.Raw, Text: "x"}
+	run := func(_ context.Context, _ rocketcode.Providers, _ *BAR, v Variation, entry MatrixEntry, _ time.Duration) CellResult {
+		return CellResult{Label: cellLabel(v.ID, entry.ID), Variation: v.ID, Matrix: entry.ID, Model: entry.ID, Text: "x"}
 	}
-	report, err := runBARWith(t.Context(), rocketcode.Providers{}, bar, runOptions{rootModels: []modelSelector{{Raw: "m", Model: "m"}}}, run, nil)
+	report, err := runBARWith(t.Context(), rocketcode.Providers{}, bar, runOptions{}, run, nil)
 	require.NoError(t, err)
 	assert.NotEmpty(t, report.Skipped)
 	assert.Empty(t, report.Ladder)
@@ -312,12 +327,24 @@ func TestBuildAgentsOverlays(t *testing.T) {
 
 	bar, err := Open(dir)
 	require.NoError(t, err)
-	agents, root, err := buildAgents(bar, bar.Variations[0], nil, nil)
+	agents, root, err := buildAgents(bar, bar.Variations[0], nil)
 	require.NoError(t, err)
 	assert.Equal(t, "main", root)
 	assert.Equal(t, "gpt-worker-v2", agents.Items["worker"].Model)
 	assert.Equal(t, "overlay prompt", agents.Items["worker"].Prompt)
 	assert.Equal(t, "gpt-5.4", agents.Items["main"].Model)
+
+	// Matrix can override model and/or system after variation overlays.
+	sel, err := parseModelSelector("gpt-matrix")
+	require.NoError(t, err)
+	agents, _, err = buildAgents(bar, bar.Variations[0], map[string]MatrixAgent{
+		"main":   {System: "matrix system"},
+		"worker": {Model: sel},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "matrix system", agents.Items["main"].Prompt)
+	assert.Equal(t, "gpt-matrix", agents.Items["worker"].Model)
+	assert.Equal(t, "overlay prompt", agents.Items["worker"].Prompt) // variation system kept
 }
 
 func TestConversationParts(t *testing.T) {
@@ -331,10 +358,22 @@ func TestConversationParts(t *testing.T) {
 	assert.Equal(t, []Message{{Role: "user", Text: "u1"}, {Role: "assistant", Text: "a1"}}, prior)
 }
 
+func fixtureBenchYAML(name, criteria string) string {
+	return "name: " + name + "\n" +
+		"description: test\n" +
+		"tags:\n  - a\n  - b\n" +
+		"root: main\n" +
+		"elo:\n" +
+		"  model: gpt-5.6-luna\n" +
+		"  reasoningEffort: max\n" +
+		"  criteria: |\n" +
+		"    " + strings.TrimSpace(criteria) + "\n"
+}
+
 func writeFixtureBAR(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "meta.txt"), []byte("name: fixture\ndescription: test\ntags: a, b\nroot: main\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bench.yaml"), []byte(fixtureBenchYAML("fixture", "prefer concise answers")), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "agents"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "agents", "main.md"), defaultMainAgentMarkdown("gpt-5.4", "fixture root"), 0o644))
 
@@ -345,9 +384,6 @@ func writeFixtureBAR(t *testing.T) string {
 		require.NoError(t, os.WriteFile(filepath.Join(base, "transcript.json"), []byte(`[{"role":"user","text":"hello `+id+`"}]`+"\n"), 0o644))
 	}
 
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "elo"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "elo", "criteria.txt"), []byte("prefer concise answers\n"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "elo", "judge.txt"), []byte("gpt-5.4\n"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "mocks"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "mocks", "tools.json"), []byte(`[{"name":"echo","description":"echo","parameters":{"type":"object"},"response":"pong"}]`+"\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("ignore\n"), 0o644))
