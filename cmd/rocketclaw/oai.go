@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"path/filepath"
@@ -48,14 +50,14 @@ func runOAI(args []string) error {
 }
 
 func runOAILogin(args []string) error {
-	provider, headless, help, err := parseOAILogin(args)
+	provider, headless, secretsARN, help, err := parseOAILogin(args)
 	if err != nil {
 		return err
 	}
 	if help {
 		return printStdout(oaiHelpText, "oai help")
 	}
-	selected, cfg, err := loadRuntimeConfig()
+	selected, cfg, err := loadRuntimeConfig(secretsARN)
 	if err != nil {
 		return fmt.Errorf("load runtime config: %w", err)
 	}
@@ -82,32 +84,52 @@ func runOAILogin(args []string) error {
 	return printStdout(result, "oai login result")
 }
 
-func parseOAILogin(args []string) (string, bool, bool, error) {
-	provider, headless := "", false
-	for _, arg := range args {
+func parseOAILogin(args []string) (string, bool, string, bool, error) {
+	provider, headless, secretsARN := "", false, ""
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		switch {
 		case arg == "--headless" && headless:
-			return "", false, false, errors.New("duplicate --headless")
+			return "", false, "", false, errors.New("duplicate --headless")
 		case arg == "--headless":
 			headless = true
 		case arg == "-h" || arg == "--help":
-			return cmp.Or(provider, "openai"), headless, true, nil
+			return cmp.Or(provider, "openai"), headless, secretsARN, true, nil
+		case arg == "--aws-secrets-manager-arn" && secretsARN != "":
+			return "", false, "", false, errors.New("duplicate --aws-secrets-manager-arn")
+		case arg == "--aws-secrets-manager-arn":
+			if i+1 >= len(args) {
+				return "", false, "", false, errors.New("flag needs an argument: -aws-secrets-manager-arn")
+			}
+			i++
+			secretsARN = args[i]
+		case strings.HasPrefix(arg, "--aws-secrets-manager-arn="):
+			if secretsARN != "" {
+				return "", false, "", false, errors.New("duplicate --aws-secrets-manager-arn")
+			}
+			secretsARN = strings.TrimPrefix(arg, "--aws-secrets-manager-arn=")
 		case strings.HasPrefix(arg, "-"):
-			return "", false, false, fmt.Errorf("unknown flag %q", arg)
+			return "", false, "", false, fmt.Errorf("unknown flag %q", arg)
 		case provider != "":
-			return "", false, false, errors.New("oai login accepts no more than one provider")
+			return "", false, "", false, errors.New("oai login accepts no more than one provider")
 		default:
 			provider = arg
 		}
 	}
-	return cmp.Or(provider, "openai"), headless, false, nil
+	return cmp.Or(provider, "openai"), headless, secretsARN, false, nil
 }
 
 func runOAIList(args []string) error {
-	if len(args) != 0 {
+	flagSet := flag.NewFlagSet("oai list", flag.ContinueOnError)
+	flagSet.SetOutput(io.Discard)
+	secretsARN := flagSet.String(secretsARNFlag, "", secretsARNUsage)
+	if err := flagSet.Parse(args); err != nil {
+		return fmt.Errorf("parse oai list flags: %w", err)
+	}
+	if len(flagSet.Args()) != 0 {
 		return errors.New("oai list takes no arguments")
 	}
-	_, cfg, err := loadRuntimeConfig()
+	_, cfg, err := loadRuntimeConfig(*secretsARN)
 	if err != nil {
 		return fmt.Errorf("load runtime config: %w", err)
 	}
@@ -127,14 +149,18 @@ func runOAIList(args []string) error {
 }
 
 func runOAILogout(args []string) error {
-	if len(args) > 1 {
+	flagSet := flag.NewFlagSet("oai logout", flag.ContinueOnError)
+	flagSet.SetOutput(io.Discard)
+	secretsARN := flagSet.String(secretsARNFlag, "", secretsARNUsage)
+	if err := flagSet.Parse(args); err != nil {
+		return fmt.Errorf("parse oai logout flags: %w", err)
+	}
+	rest := flagSet.Args()
+	if len(rest) > 1 {
 		return errors.New("oai logout accepts no more than one provider")
 	}
-	if len(args) == 1 && strings.HasPrefix(args[0], "-") {
-		return fmt.Errorf("unknown flag %q", args[0])
-	}
-	provider := cmp.Or(strings.Join(args, ""), "openai")
-	_, cfg, err := loadRuntimeConfig()
+	provider := cmp.Or(strings.Join(rest, ""), "openai")
+	_, cfg, err := loadRuntimeConfig(*secretsARN)
 	if err != nil {
 		return fmt.Errorf("load runtime config: %w", err)
 	}

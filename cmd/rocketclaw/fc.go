@@ -36,7 +36,24 @@ func runFC(args []string) error {
 		return printStdout(fcHelpText, "rocketcode help")
 	}
 
-	_, cfg, err := loadRuntimeConfig()
+	var secretsARN string
+	switch args[0] {
+	case "list", "observe", "delete", "check":
+		var err error
+		secretsARN, err = parseFCSecretsARN(args[1:])
+		if err != nil {
+			return err
+		}
+	case "help", "-h", "--help":
+		if _, _, err := loadRuntimeConfig(""); err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+		return printStdout(fcHelpText, "rocketcode help")
+	default:
+		return fmt.Errorf("unknown rocketcode command %q", args[0])
+	}
+
+	_, cfg, err := loadRuntimeConfig(secretsARN)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -48,17 +65,30 @@ func runFC(args []string) error {
 		return runFCObserveIn(cfg.Workspace, cfg.RuntimeDirName(), args[1:], os.Stdout)
 	case "delete":
 		return runFCDeleteIn(cfg.Workspace, cfg.RuntimeDirName(), args[1:], os.Stdout)
-	case "check":
-		return runFCCheckIn(cfg.Workspace, cfg.RuntimeDirName(), args[1:], os.Stdout)
-	case "help", "-h", "--help":
-		return printStdout(fcHelpText, "rocketcode help")
 	default:
-		return fmt.Errorf("unknown rocketcode command %q", args[0])
+		return runFCCheckIn(cfg.Workspace, cfg.RuntimeDirName(), args[1:], os.Stdout)
 	}
+}
+
+func parseFCSecretsARN(args []string) (string, error) {
+	flagSet := flag.NewFlagSet("rocketclaw fc", flag.ContinueOnError)
+	flagSet.SetOutput(io.Discard)
+	secretsARN := flagSet.String(secretsARNFlag, "", secretsARNUsage)
+	flagSet.String("since", "", "")
+	flagSet.String("until", "", "")
+	flagSet.Int("limit", 0, "")
+	flagSet.Bool("no-message-preview", false, "")
+	flagSet.Bool("follow", false, "")
+	flagSet.Bool("f", false, "")
+	if err := flagSet.Parse(args); err != nil {
+		return "", fmt.Errorf("parse rocketclaw fc flags: %w", err)
+	}
+	return *secretsARN, nil
 }
 
 func runFCCheckIn(workspace, runtimeDir string, args []string, out io.Writer) error {
 	flagSet := flag.NewFlagSet("rocketclaw fc check", flag.ContinueOnError)
+	flagSet.String(secretsARNFlag, "", secretsARNUsage)
 
 	if err := flagSet.Parse(args); err != nil {
 		return fmt.Errorf("parse rocketcode check flags: %w", err)
@@ -96,6 +126,7 @@ func runFCCheckIn(workspace, runtimeDir string, args []string, out io.Writer) er
 
 func runFCDeleteIn(workspace, runtimeDir string, args []string, out io.Writer) error {
 	flagSet := flag.NewFlagSet("rocketclaw fc delete", flag.ContinueOnError)
+	flagSet.String(secretsARNFlag, "", secretsARNUsage)
 
 	if err := flagSet.Parse(args); err != nil {
 		return fmt.Errorf("parse rocketcode delete flags: %w", err)
@@ -142,6 +173,7 @@ func acquireFCMutationLock(workspace, runtimeDir, command string) (*harnessbridg
 
 func runFCListIn(workspace, runtimeDir string, args []string, out io.Writer) error {
 	flagSet := flag.NewFlagSet("rocketclaw fc list", flag.ContinueOnError)
+	flagSet.String(secretsARNFlag, "", secretsARNUsage)
 	sinceText := flagSet.String("since", "", "show sessions updated since duration or RFC3339 time")
 	untilText := flagSet.String("until", "", "show sessions updated before RFC3339 time")
 	limit := flagSet.Int("limit", 0, "maximum sessions to list")
@@ -236,6 +268,7 @@ func writeFCListInOptions(ctx context.Context, workspace, runtimeDir string, opt
 
 func runFCObserveIn(workspace, runtimeDir string, args []string, out io.Writer) error {
 	flagSet := flag.NewFlagSet("rocketclaw fc observe", flag.ContinueOnError)
+	flagSet.String(secretsARNFlag, "", secretsARNUsage)
 	follow := flagSet.Bool("follow", false, "follow session entries")
 	flagSet.BoolVar(follow, "f", false, "follow session entries")
 

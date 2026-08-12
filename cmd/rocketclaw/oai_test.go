@@ -220,7 +220,7 @@ func TestSaveOAILoginDoesNotRollbackCommittedToken(t *testing.T) {
 
 func TestRunOAILoginSerializesDifferentProviderConfigChanges(t *testing.T) {
 	workspace := prepareOAIConfig(t)
-	selected, cfg, err := loadRuntimeConfig()
+	selected, cfg, err := loadRuntimeConfig("")
 	require.NoError(t, err)
 	lock, err := os.OpenFile(selected.Path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
 	require.NoError(t, err)
@@ -333,7 +333,7 @@ func TestRunOAIRejectsInvalidArguments(t *testing.T) {
 		{args: []string{"login", "--bad"}, want: `unknown flag "--bad"`},
 		{args: []string{"login", "openai", "work"}, want: "more than one provider"},
 		{args: []string{"list", "extra"}, want: "oai list takes no arguments"},
-		{args: []string{"logout", "--bad"}, want: `unknown flag "--bad"`},
+		{args: []string{"logout", "--bad"}, want: "parse oai logout flags"},
 		{args: []string{"logout", "openai", "work"}, want: "more than one provider"},
 	} {
 		err := runOAI(tt.args)

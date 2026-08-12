@@ -111,7 +111,7 @@ type InstrumentationConfig struct {
 }
 
 // Load reads, normalizes, and validates the rocketclaw configuration file.
-func Load(configPath string) (*Config, error) {
+func Load(configPath, secretsARN string, fetcher SecretFetcher) (*Config, error) {
 	absPath, err := filepath.Abs(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve config path: %w", err)
@@ -122,10 +122,39 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 
-	return loadConfigData(absPath, data)
+	return loadConfigData(absPath, data, secretsARN, fetcher)
 }
 
-func loadConfigData(absPath string, data []byte) (*Config, error) {
+func loadConfigData(absPath string, data []byte, secretsARN string, fetcher SecretFetcher) (*Config, error) {
+	root, err := decodeObject(data, "config")
+	if err != nil {
+		return nil, err
+	}
+
+	if secretsARN != "" {
+		body, err := fetcher.SecretString(secretsARN)
+		if err != nil {
+			return nil, fmt.Errorf("load secret: %w", err)
+		}
+
+		secret, err := decodeObject([]byte(body), "secret")
+		if err != nil {
+			return nil, err
+		}
+
+		root = mergeJSON(root, secret).(map[string]any)
+	}
+
+	resolved, err := resolveAWS(root, fetcher)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err = json.Marshal(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("encode resolved config: %w", err)
+	}
+
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config JSON: %w", err)

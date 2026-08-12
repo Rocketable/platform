@@ -138,6 +138,7 @@ func runExecIn(ctx context.Context, args []string, out io.Writer, run execRunner
 	flagSet.SetOutput(io.Discard)
 
 	timeout := flagSet.Duration("timeout", 0, "maximum run duration; zero means no timeout")
+	secretsARN := flagSet.String(secretsARNFlag, "", secretsARNUsage)
 
 	if err := flagSet.Parse(args); err != nil {
 		return fmt.Errorf("parse exec flags: %w", err)
@@ -162,7 +163,7 @@ func runExecIn(ctx context.Context, args []string, out io.Writer, run execRunner
 		return errors.New("exec timeout must be non-negative")
 	}
 
-	_, cfg, err := loadRuntimeConfig()
+	_, cfg, err := loadRuntimeConfig(*secretsARN)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}

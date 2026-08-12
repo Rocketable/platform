@@ -9,11 +9,12 @@ import (
 
 func runDoctor(args []string) error {
 	flagSet := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	secretsARN := flagSet.String(secretsARNFlag, "", secretsARNUsage)
 	if err := flagSet.Parse(args); err != nil {
 		return fmt.Errorf("parse doctor flags: %w", err)
 	}
 
-	selected, cfg, err := loadRuntimeConfig()
+	selected, cfg, err := loadRuntimeConfig(*secretsARN)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}

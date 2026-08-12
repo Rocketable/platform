@@ -420,19 +420,19 @@ func TestLoadDefaultsWorkspaceToConfigDirectory(t *testing.T) {
 	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
 	}`), 0o600))
 
-	cfg, err := Load(path)
+	cfg, err := Load(path, "", AWSFetcher{})
 	require.NoError(t, err)
 	assert.Equal(t, dir, cfg.Workspace)
 }
 
 func TestLoadRejectsUnreadableOrInvalidConfig(t *testing.T) {
-	_, err := Load(filepath.Join(t.TempDir(), "missing.json"))
+	_, err := Load(filepath.Join(t.TempDir(), "missing.json"), "", AWSFetcher{})
 	require.ErrorContains(t, err, "read config")
 
 	path := filepath.Join(t.TempDir(), "rocketclaw.json")
 	require.NoError(t, os.WriteFile(path, []byte(`{`), 0o600))
 
-	_, err = Load(path)
+	_, err = Load(path, "", AWSFetcher{})
 	require.ErrorContains(t, err, "parse config JSON")
 }
 
@@ -605,7 +605,7 @@ func loadTestConfig(t *testing.T, content string) *Config {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "rocketclaw.json")
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644), "write config")
-	cfg, err := Load(path)
+	cfg, err := Load(path, "", AWSFetcher{})
 	require.NoError(t, err)
 
 	return cfg

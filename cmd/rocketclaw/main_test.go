@@ -101,7 +101,7 @@ func TestLoadRuntimeConfigKeepsLegacyConfigReadOnly(t *testing.T) {
 	legacy := []byte(`{"workspace":".","slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","social_mode":{"channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}},"openai":{"api_key":"test"}}`)
 	require.NoError(t, os.WriteFile(defaultConfigPath, legacy, 0o600))
 
-	_, _, err := loadRuntimeConfig()
+	_, _, err := loadRuntimeConfig("")
 	require.ErrorContains(t, err, "slack.channels is required")
 
 	data, err := os.ReadFile(defaultConfigPath)

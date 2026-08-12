@@ -17,6 +17,7 @@ import (
 
 func runServe(args []string) error {
 	flagSet := flag.NewFlagSet("rocketclaw", flag.ContinueOnError)
+	secretsARN := flagSet.String(secretsARNFlag, "", secretsARNUsage)
 	if err := flagSet.Parse(args); err != nil {
 		return fmt.Errorf("parse serve flags: %w", err)
 	}
@@ -29,7 +30,7 @@ func runServe(args []string) error {
 		return fmt.Errorf("load config: %w", os.ErrNotExist)
 	}
 
-	cfg, err := config.Load(selected.Path)
+	cfg, err := config.Load(selected.Path, *secretsARN, secretFetcher)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}

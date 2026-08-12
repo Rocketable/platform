@@ -16,6 +16,8 @@ const (
 	defaultConfigPath = "rocketclaw.json"
 	legacyConfigPath  = "femtoclaw.json"
 	legacyWorkDir     = ".femtoclaw"
+	secretsARNFlag    = "aws-secrets-manager-arn"
+	secretsARNUsage   = "Secrets Manager ARN of a JSON secret to merge last"
 )
 
 type runtimeConfigFile struct {
@@ -77,7 +79,10 @@ func run(args []string) error {
 	}
 	return runServe(args)
 }
-func loadRuntimeConfig() (runtimeConfigFile, *config.Config, error) {
+
+var secretFetcher config.SecretFetcher = config.AWSFetcher{}
+
+func loadRuntimeConfig(secretsARN string) (runtimeConfigFile, *config.Config, error) {
 	selected, err := selectRuntimeConfigFile()
 	if err != nil {
 		return runtimeConfigFile{}, nil, err
@@ -86,7 +91,7 @@ func loadRuntimeConfig() (runtimeConfigFile, *config.Config, error) {
 		return runtimeConfigFile{}, nil, os.ErrNotExist
 	}
 
-	cfg, err := config.Load(selected.Path)
+	cfg, err := config.Load(selected.Path, secretsARN, secretFetcher)
 	if err != nil {
 		return runtimeConfigFile{}, nil, err
 	}

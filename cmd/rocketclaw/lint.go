@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,15 +15,22 @@ import (
 )
 
 func runLint(args []string) error {
-	target := "next"
-	if len(args) > 0 {
-		target = args[0]
+	flagSet := flag.NewFlagSet("rocketclaw lint", flag.ContinueOnError)
+	flagSet.SetOutput(io.Discard)
+	secretsARN := flagSet.String(secretsARNFlag, "", secretsARNUsage)
+	if err := flagSet.Parse(args); err != nil {
+		return fmt.Errorf("parse lint flags: %w", err)
 	}
-	if len(args) > 1 || (target != "next" && target != "current") {
+	rest := flagSet.Args()
+	target := "next"
+	if len(rest) > 0 {
+		target = rest[0]
+	}
+	if len(rest) > 1 || (target != "next" && target != "current") {
 		return fmt.Errorf("usage: rocketclaw lint [next|current]")
 	}
 
-	runtimeRoot, cfg, cleanup, err := runtimeRootForInspectionTarget(target, "rocketclaw-lint-*", "lint")
+	runtimeRoot, cfg, cleanup, err := runtimeRootForInspectionTarget(target, "rocketclaw-lint-*", "lint", *secretsARN)
 	if err != nil {
 		return err
 	}
@@ -48,11 +56,11 @@ func runLint(args []string) error {
 	return exitCodeError(1)
 }
 
-func runtimeRootForInspectionTarget(target, tempPattern, buildName string) (string, *config.Config, func(), error) {
+func runtimeRootForInspectionTarget(target, tempPattern, buildName, secretsARN string) (string, *config.Config, func(), error) {
 	cleanup := func() {
 	}
 
-	_, cfg, err := loadRuntimeConfig()
+	_, cfg, err := loadRuntimeConfig(secretsARN)
 	if err != nil {
 		return "", nil, cleanup, fmt.Errorf("load config: %w", err)
 	}
