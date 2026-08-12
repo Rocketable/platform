@@ -88,7 +88,7 @@ func TestDumpIncludesVariationAndJudge(t *testing.T) {
 	assert.Contains(t, out, "gpt-5.6-luna")
 	// Principal-edit files before agents bulk.
 	assert.Less(t, strings.Index(out, "bench.yaml"), strings.Index(out, "agents/main.md"))
-	assert.Less(t, strings.Index(out, "mocks/tools.json"), strings.Index(out, "agents/main.md"))
+	assert.Less(t, strings.Index(out, "variations/alpha/mocks/tools.json"), strings.Index(out, "agents/main.md"))
 
 	buf.Reset()
 	require.NoError(t, Dump(&buf, bar, true))
@@ -295,9 +295,9 @@ func TestRoundTripPreservesToolsAndSystem(t *testing.T) {
 	require.NoError(t, Pack(dir, outBar))
 	again, err := Open(outBar)
 	require.NoError(t, err)
-	require.Len(t, again.Tools, 1)
-	assert.Equal(t, "echo", again.Tools[0].Name)
-	assert.Equal(t, "pong", again.Tools[0].Response)
+	require.Len(t, again.Variations[0].Tools, 1)
+	assert.Equal(t, "echo", again.Variations[0].Tools[0].Name)
+	assert.Equal(t, "pong", again.Variations[0].Tools[0].Response)
 	require.NotEmpty(t, again.Variations[0].System)
 }
 
@@ -356,6 +356,14 @@ func TestConversationParts(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "u2", final)
 	assert.Equal(t, []Message{{Role: "user", Text: "u1"}, {Role: "assistant", Text: "a1"}}, prior)
+
+	prior, final, err = conversationParts(Variation{Transcript: []Message{
+		{Role: "user", Text: "ask"},
+		{Role: "assistant", Text: "answer"},
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, "ask", final)
+	assert.Empty(t, prior)
 }
 
 func fixtureBenchYAML(name, criteria string) string {
@@ -382,10 +390,9 @@ func writeFixtureBAR(t *testing.T) string {
 		require.NoError(t, os.MkdirAll(base, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(base, "system.txt"), []byte("sys-"+id+"\n"), 0o644))
 		require.NoError(t, os.WriteFile(filepath.Join(base, "transcript.json"), []byte(`[{"role":"user","text":"hello `+id+`"}]`+"\n"), 0o644))
+		require.NoError(t, os.MkdirAll(filepath.Join(base, "mocks"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(base, "mocks", "tools.json"), []byte(`[{"name":"echo","description":"echo","parameters":{"type":"object"},"response":"pong"}]`+"\n"), 0o644))
 	}
-
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "mocks"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "mocks", "tools.json"), []byte(`[{"name":"echo","description":"echo","parameters":{"type":"object"},"response":"pong"}]`+"\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("ignore\n"), 0o644))
 
 	return dir

@@ -96,9 +96,9 @@ matrix:
 | Path | Role |
 |------|------|
 | `bench.yaml` | name, root, `matrix` (model/system), `elo.*` (edit first) |
-| `mocks/tools.json` | static host-tool mocks (`task` is never mocked) |
-| `mocks/bash.json` | shell doubles (exact command or `prefix*`); unmocked bash fails closed |
-| `variations/<id>/transcript.json` | root turns + final **user** message |
+| `variations/<id>/transcript.json` | full captured user/assistant/tool turns; run uses last user |
+| `variations/<id>/mocks/tools.json` | static host-tool mocks (`task` is never mocked) |
+| `variations/<id>/mocks/bash.json` | shell doubles (exact command or `prefix*`); unmocked bash fails closed |
 | `variations/<id>/agents/<name>/model.txt` | optional model overlay |
 | `variations/<id>/agents/<name>/system.txt` | optional prompt overlay |
 | `agents/<name>.md` | full RocketCode agent tree (models, prompts, permissions) |

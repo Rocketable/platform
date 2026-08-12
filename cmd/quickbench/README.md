@@ -9,10 +9,10 @@ A BAR is a `.bar` txtar file or an equivalent directory:
 Pack/dump order puts principal-edit files first:
 
 ```text
-bench.yaml                       # name, root, elo.model / reasoningEffort / criteria
-mocks/tools.json                 # static host-tool mocks (task is never mocked)
-mocks/bash.json                  # shell doubles (gh, etc.) via ShellCommand on run
-variations/<id>/transcript.json  # root conversation; final message is user
+bench.yaml                       # name, root, matrix, elo.model / criteria
+variations/<id>/transcript.json  # full captured turns; run uses the last user
+variations/<id>/mocks/tools.json # static host-tool mocks (task is never mocked)
+variations/<id>/mocks/bash.json  # shell doubles via ShellCommand
 variations/<id>/agents/<name>/model.txt   # optional per-agent model overlay
 variations/<id>/agents/<name>/system.txt  # optional per-agent prompt overlay
 agents/<name>.md                 # full RocketCode agent tree (required)

@@ -20,7 +20,6 @@ import (
 
 const (
 	benchMember    = "bench.yaml"
-	mocksMember    = "mocks/tools.json"
 	variationsRoot = "variations"
 	systemName     = "system.txt"
 	transcriptName = "transcript.json"
@@ -29,15 +28,13 @@ const (
 
 // BAR is a loaded benchmark archive (directory or .bar).
 type BAR struct {
-	Path        string
-	Meta        Meta
-	Matrix      []MatrixEntry     // subject runs from bench.yaml; empty means one "default" cell
-	Agents      map[string][]byte // agent name → full .md bytes (verbatim)
-	Variations  []Variation
-	Tools       []ToolMock
-	BashDoubles []BashDouble
-	Criteria    string
-	Judge       string
+	Path       string
+	Meta       Meta
+	Matrix     []MatrixEntry     // subject runs from bench.yaml; empty means one "default" cell
+	Agents     map[string][]byte // agent name → full .md bytes (verbatim)
+	Variations []Variation
+	Criteria   string
+	Judge      string
 	// members holds canonical path → content for pack/dump fidelity.
 	members map[string][]byte
 }
@@ -68,6 +65,8 @@ type Variation struct {
 	System        string // legacy: root prompt overlay when AgentOverlays[root].System empty
 	Transcript    []Message
 	AgentOverlays map[string]AgentOverlay
+	Tools         []ToolMock
+	BashDoubles   []BashDouble
 }
 
 // Message is a user or assistant turn in a variation transcript.
@@ -294,7 +293,7 @@ func readDirMembers(dir string) (map[string][]byte, error) {
 func validMember(name string) bool {
 	name = filepath.ToSlash(name)
 	switch {
-	case name == benchMember, name == mocksMember, name == bashDoublesMember:
+	case name == benchMember:
 		return true
 	case strings.HasPrefix(name, agentsRoot+"/"):
 		rest := strings.TrimPrefix(name, agentsRoot+"/")
@@ -306,6 +305,8 @@ func validMember(name string) bool {
 		switch len(parts) {
 		case 2:
 			return parts[0] != "" && (parts[1] == systemName || parts[1] == transcriptName)
+		case 3:
+			return parts[0] != "" && parts[1] == "mocks" && (parts[2] == "tools.json" || parts[2] == "bash.json")
 		case 4:
 			// variations/<id>/agents/<name>/model.txt|system.txt
 			return parts[0] != "" && parts[1] == agentsRoot && parts[2] != "" && (parts[3] == modelName || parts[3] == systemName)
@@ -325,24 +326,6 @@ func barFromMembers(members map[string][]byte) (*BAR, error) {
 	meta, matrix, criteria, judge, err := parseBenchYAML(members[benchMember])
 	if err != nil {
 		return nil, err
-	}
-
-	var tools []ToolMock
-	if data, ok := members[mocksMember]; ok {
-		if err := json.Unmarshal(data, &tools); err != nil {
-			return nil, fmt.Errorf("mocks/tools.json: %w", err)
-		}
-	}
-
-	var bashDoubles []BashDouble
-
-	if data, ok := members[bashDoublesMember]; ok {
-		var err error
-
-		bashDoubles, err = parseBashDoubles(data)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	agents := map[string][]byte{}
@@ -449,11 +432,30 @@ func barFromMembers(members map[string][]byte) (*BAR, error) {
 			}
 		}
 
+		var tools []ToolMock
+		if data, ok := members[base+"mocks/tools.json"]; ok {
+			if err := json.Unmarshal(data, &tools); err != nil {
+				return nil, fmt.Errorf("variation %q mocks/tools.json: %w", id, err)
+			}
+		}
+
+		var bashDoubles []BashDouble
+		if data, ok := members[base+"mocks/bash.json"]; ok {
+			var err error
+
+			bashDoubles, err = parseBashDoubles(data)
+			if err != nil {
+				return nil, fmt.Errorf("variation %q: %w", id, err)
+			}
+		}
+
 		variations = append(variations, Variation{
 			ID:            id,
 			System:        string(members[base+systemName]),
 			Transcript:    transcript,
 			AgentOverlays: overlays,
+			Tools:         tools,
+			BashDoubles:   bashDoubles,
 		})
 	}
 
@@ -466,15 +468,13 @@ func barFromMembers(members map[string][]byte) (*BAR, error) {
 	}
 
 	return &BAR{
-		Meta:        meta,
-		Matrix:      matrix,
-		Agents:      agents,
-		Variations:  variations,
-		Tools:       tools,
-		BashDoubles: bashDoubles,
-		Criteria:    criteria,
-		Judge:       judge,
-		members:     members,
+		Meta:       meta,
+		Matrix:     matrix,
+		Agents:     agents,
+		Variations: variations,
+		Criteria:   criteria,
+		Judge:      judge,
+		members:    members,
 	}, nil
 }
 
@@ -494,8 +494,16 @@ func validateTranscript(messages []Message) error {
 		}
 	}
 
-	if messages[len(messages)-1].Role != "user" {
-		return errors.New("final transcript message must be user")
+	hasUser := false
+	for _, m := range messages {
+		if m.Role == "user" {
+			hasUser = true
+			break
+		}
+	}
+
+	if !hasUser {
+		return errors.New("transcript has no user message")
 	}
 
 	return nil
@@ -721,24 +729,6 @@ func membersFromBAR(bar *BAR) (map[string][]byte, error) {
 		members[agentsRoot+"/"+name+".md"] = ensureTrailingNewline(data)
 	}
 
-	if len(bar.Tools) > 0 {
-		data, err := json.MarshalIndent(bar.Tools, "", "  ")
-		if err != nil {
-			return nil, err
-		}
-
-		members[mocksMember] = append(data, '\n')
-	}
-
-	if len(bar.BashDoubles) > 0 {
-		data, err := json.MarshalIndent(bar.BashDoubles, "", "  ")
-		if err != nil {
-			return nil, err
-		}
-
-		members[bashDoublesMember] = append(data, '\n')
-	}
-
 	for _, v := range bar.Variations {
 		base := variationsRoot + "/" + v.ID + "/"
 		if strings.TrimSpace(v.System) != "" {
@@ -751,6 +741,24 @@ func membersFromBAR(bar *BAR) (map[string][]byte, error) {
 		}
 
 		members[base+transcriptName] = append(data, '\n')
+		if len(v.Tools) > 0 {
+			toolData, err := json.MarshalIndent(v.Tools, "", "  ")
+			if err != nil {
+				return nil, err
+			}
+
+			members[base+"mocks/tools.json"] = append(toolData, '\n')
+		}
+
+		if len(v.BashDoubles) > 0 {
+			bashData, err := json.MarshalIndent(v.BashDoubles, "", "  ")
+			if err != nil {
+				return nil, err
+			}
+
+			members[base+"mocks/bash.json"] = append(bashData, '\n')
+		}
+
 		for agentName, overlay := range v.AgentOverlays {
 			prefix := base + agentsRoot + "/" + agentName + "/"
 			if m := strings.TrimSpace(overlay.Model); m != "" {
@@ -798,16 +806,12 @@ func memberRank(name string) int {
 	switch {
 	case name == benchMember:
 		return 0
-	case name == mocksMember:
-		return 1
-	case name == bashDoublesMember:
-		return 2
 	case strings.HasPrefix(name, variationsRoot+"/"):
-		return 3
+		return 1
 	case strings.HasPrefix(name, agentsRoot+"/"):
-		return 4
+		return 2
 	default:
-		return 5
+		return 3
 	}
 }
 

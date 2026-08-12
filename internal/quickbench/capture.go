@@ -94,13 +94,13 @@ func Capture(ctx context.Context, opt CaptureOptions) error {
 		},
 		Agents: agents,
 		Variations: []Variation{{
-			ID:         variation,
-			Transcript: transcript,
+			ID:          variation,
+			Transcript:  transcript,
+			Tools:       tools,
+			BashDoubles: bashDoubles,
 		}},
-		Tools:       tools,
-		BashDoubles: bashDoubles,
-		Criteria:    stubCriteria,
-		Judge:       strings.TrimSpace(stubJudge),
+		Criteria: stubCriteria,
+		Judge:    strings.TrimSpace(stubJudge),
 	}
 
 	out := opt.Out
@@ -192,25 +192,18 @@ func extractFromEntries(entries []harnessbridge.ObservedSessionEntry) ([]Message
 					name = "tool"
 				}
 
-				if name == "task" {
-					// Keep live task delegation on re-run; do not freeze child results.
-					continue
-				}
-
 				if cmds := pendingBash[callID]; len(cmds) > 0 {
-					// Pair each extracted command with this tool output (best-effort double seed).
 					for _, cmd := range cmds {
 						bashObs = append(bashObs, observedBash{command: cmd, output: output})
+						messages = append(messages, Message{Role: "assistant", Text: "[" + name + "] " + cmd + "\n" + output})
 					}
 
 					delete(pendingBash, callID)
-
-					if name == "bash" || name == "execute" {
-						continue
-					}
+				} else {
+					messages = append(messages, Message{Role: "assistant", Text: "[" + name + "]\n" + output})
 				}
 
-				if name == "bash" || name == "execute" {
+				if name == "task" || name == "bash" || name == "execute" {
 					continue
 				}
 
@@ -221,23 +214,6 @@ func extractFromEntries(entries []harnessbridge.ObservedSessionEntry) ([]Message
 
 	if len(messages) == 0 {
 		return nil, nil, nil, errors.New("no user/assistant messages in session")
-	}
-
-	if messages[len(messages)-1].Role != "user" {
-		lastUser := -1
-
-		for i, v := range slices.Backward(messages) {
-			if v.Role == "user" {
-				lastUser = i
-				break
-			}
-		}
-
-		if lastUser < 0 {
-			return nil, nil, nil, errors.New("session has no user messages")
-		}
-		// Drop trailing assistant turns so the re-run final prompt is the last user message.
-		messages = messages[:lastUser+1]
 	}
 
 	var tools []ToolMock

@@ -150,8 +150,8 @@ func runCell(ctx context.Context, providers rocketcode.Providers, bar *BAR, vari
 
 	recorder := &toolRecorder{}
 
-	tools := make([]rocketcode.Tool, 0, len(bar.Tools))
-	for _, tool := range bar.Tools {
+	tools := make([]rocketcode.Tool, 0, len(variation.Tools))
+	for _, tool := range variation.Tools {
 		if tool.Name == "task" {
 			// Live task tool must spawn BAR agents; never mock delegation.
 			continue
@@ -205,7 +205,7 @@ func runCell(ctx context.Context, providers rocketcode.Providers, bar *BAR, vari
 		CheckpointSink:         rocketcode.InertCheckpointSink{},
 		CustomTools:            tools,
 		AutoApprovePermissions: true,
-		ShellCommand:           shellCommandFromBashDoubles(bar.BashDoubles),
+		ShellCommand:           shellCommandFromBashDoubles(variation.BashDoubles),
 	}
 
 	runtime, err := rocketcode.NewWithProviders(providers, &config, root, agents, rocketcode.Skills{Items: map[string]rocketcode.Skill{}}, rootName, io.Discard)
@@ -271,9 +271,16 @@ func conversationParts(v Variation) (prior []Message, final string, err error) {
 		return nil, "", err
 	}
 
-	prior = append([]Message(nil), v.Transcript[:len(v.Transcript)-1]...)
+	lastUser := -1
+	for i, msg := range v.Transcript {
+		if msg.Role == "user" {
+			lastUser = i
+		}
+	}
 
-	return prior, v.Transcript[len(v.Transcript)-1].Text, nil
+	prior = append([]Message(nil), v.Transcript[:lastUser]...)
+
+	return prior, v.Transcript[lastUser].Text, nil
 }
 
 func replayEntry(prior []Message) (func(func(rocketcode.SessionEntry, error) bool), error) {
