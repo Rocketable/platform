@@ -1,6 +1,8 @@
 // Package skel seeds the embedded rocketclaw skeleton into workspaces.
 package skel
 
+//go:generate go run generate_quickbench.go
+
 import (
 	"embed"
 	"errors"

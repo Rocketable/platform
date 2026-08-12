@@ -717,6 +717,9 @@ func TestListSetupFilesIncludesRuntimeSupport(t *testing.T) {
 
 	for _, name := range []string{
 		".rocketclaw/.gitignore",
+		".rocketclaw/skills/main-archive-benchmarks/SKILL.md",
+		"agents/main.md",
+		"agents/slack-to-benchmark.md",
 	} {
 		assert.Contains(t, names, name)
 	}
@@ -726,6 +729,24 @@ func TestListSetupFilesIncludesRuntimeSupport(t *testing.T) {
 	assert.NotContains(t, names, "cron")
 	assert.NotContains(t, names, "workflows")
 	assert.NotContains(t, names, "workflows/.gitkeep")
+}
+
+func TestSyncShipsQuickbenchSkillAndAgent(t *testing.T) {
+	tmp := t.TempDir()
+	require.NoError(t, SyncInWithOverlays(tmp, targetRoot, nil, testLogger()))
+
+	skill, err := os.ReadFile(filepath.Join(tmp, targetRoot, "skills", "main-archive-benchmarks", "SKILL.md"))
+	require.NoError(t, err)
+	assert.Contains(t, string(skill), "go run github.com/Rocketable/platform/cmd/quickbench@main")
+
+	agent, err := os.ReadFile(filepath.Join(tmp, targetRoot, "agents", "slack-to-benchmark.md"))
+	require.NoError(t, err)
+	assert.Contains(t, string(agent), "go run github.com/Rocketable/platform/cmd/quickbench@main")
+
+	mainAgent, err := os.ReadFile(filepath.Join(tmp, targetRoot, "agents", "main.md"))
+	require.NoError(t, err)
+	assert.Contains(t, string(mainAgent), "main-archive-benchmarks")
+	assert.Contains(t, string(mainAgent), "slack-to-benchmark")
 }
 
 func TestReadSetupFile(t *testing.T) {

@@ -13,6 +13,7 @@ vendor: .FORCE
 
 generate: vendor
 	go generate ./emoji
+	go generate ./skel
 
 lint: vendor
 	go run -mod=readonly github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --fix ./...
