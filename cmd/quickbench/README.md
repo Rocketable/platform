@@ -144,6 +144,8 @@ Default capture DB path is `./.rocketclaw/state.sqlite3`; default agents dir is 
 4. Edit `bench.yaml` `matrix` if comparing models/agents.
 5. `go run github.com/Rocketable/platform/cmd/quickbench@main run ./bench`
 
+ELO ranks the **new run’s final assistant text**, plus a trace-metrics line (turns, tool calls, permission allow/deny after any auto review, tokens in/out/reasoning/cache). It does not re-read the captured `turns.yaml`.
+
 ## RocketClaw shipping
 
 Source of truth (edit these):

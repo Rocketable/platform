@@ -2,17 +2,13 @@ package quickbench
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"math/rand/v2"
-	"os"
 	"slices"
 	"strings"
-
-	"github.com/Rocketable/platform/internal/rocketcode"
-	"github.com/openai/openai-go/v3/shared"
 )
 
 const (
@@ -35,9 +31,9 @@ type PairResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
-type judgePairFunc func(ctx context.Context, criteria, aLabel, aText, bLabel, bText string) (winner string, raw string, err error)
+type judgePairFunc func(ctx context.Context, criteria string, a, b CellResult) (winner string, raw string, err error)
 
-func rankCells(ctx context.Context, providers rocketcode.Providers, judge modelSelector, criteria string, cells []CellResult, inject judgePairFunc) ([]EloRating, []PairResult, error) {
+func rankCells(ctx context.Context, criteria string, cells []CellResult, judge judgePairFunc) ([]EloRating, []PairResult, error) {
 	if strings.TrimSpace(criteria) == "" {
 		return nil, nil, errors.New("missing elo criteria")
 	}
@@ -51,12 +47,6 @@ func rankCells(ctx context.Context, providers rocketcode.Providers, judge modelS
 
 	if len(playable) < 2 {
 		return nil, nil, errors.New("need at least two successful cells for ELO")
-	}
-
-	if inject == nil {
-		inject = func(ctx context.Context, criteria, aLabel, aText, bLabel, bText string) (string, string, error) {
-			return defaultJudge(ctx, providers, judge, criteria, aLabel, aText, bLabel, bText)
-		}
 	}
 
 	ratings := map[string]float64{}
@@ -75,7 +65,7 @@ func rankCells(ctx context.Context, providers rocketcode.Providers, judge modelS
 				left, right = b, a
 			}
 
-			winner, raw, err := inject(ctx, criteria, left.Label, left.Text, right.Label, right.Text)
+			winner, raw, err := judge(ctx, criteria, left, right)
 
 			pair := PairResult{A: left.Label, B: right.Label, Raw: raw}
 			if err != nil {
@@ -97,7 +87,24 @@ func rankCells(ctx context.Context, providers rocketcode.Providers, judge modelS
 			}
 
 			pairs = append(pairs, pair)
-			applyElo(ratings, left.Label, right.Label, pair.Winner)
+
+			ra, rb := ratings[left.Label], ratings[right.Label]
+			ea := 1.0 / (1.0 + math.Pow(10, (rb-ra)/400.0))
+			eb := 1.0 - ea
+
+			var sa, sb float64
+
+			switch pair.Winner {
+			case "A":
+				sa, sb = 1, 0
+			case "B":
+				sa, sb = 0, 1
+			default:
+				sa, sb = 0.5, 0.5
+			}
+
+			ratings[left.Label] = ra + eloK*(sa-ea)
+			ratings[right.Label] = rb + eloK*(sb-eb)
 		}
 	}
 
@@ -121,130 +128,22 @@ func rankCells(ctx context.Context, providers rocketcode.Providers, judge modelS
 	return ladder, pairs, nil
 }
 
-func applyElo(ratings map[string]float64, a, b, winner string) {
-	ra, rb := ratings[a], ratings[b]
-	ea := 1.0 / (1.0 + math.Pow(10, (rb-ra)/400.0))
-	eb := 1.0 - ea
+type eloJudgeDecision struct {
+	Winner    string `json:"winner"`
+	Rationale string `json:"rationale"`
+}
 
-	var sa, sb float64
+func parseJudgeDecision(raw string) (string, error) {
+	var decision eloJudgeDecision
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &decision); err != nil {
+		return "", fmt.Errorf("parse judge JSON: %w", err)
+	}
 
+	winner := strings.ToUpper(strings.TrimSpace(decision.Winner))
 	switch winner {
-	case "A":
-		sa, sb = 1, 0
-	case "B":
-		sa, sb = 0, 1
+	case "A", "B", "TIE":
+		return winner, nil
 	default:
-		sa, sb = 0.5, 0.5
+		return "", fmt.Errorf("invalid winner %q", decision.Winner)
 	}
-
-	ratings[a] = ra + eloK*(sa-ea)
-	ratings[b] = rb + eloK*(sb-eb)
-}
-
-func defaultJudge(ctx context.Context, providers rocketcode.Providers, judge modelSelector, criteria, aLabel, aText, bLabel, bText string) (string, string, error) {
-	prompt := fmt.Sprintf(`You are ranking two model outputs.
-
-Criteria:
-%s
-
-Output A (%s):
-%s
-
-Output B (%s):
-%s
-
-Reply with exactly one first line:
-WINNER: A
-or
-WINNER: B
-or
-WINNER: TIE
-Then a short reason.
-`, criteria, aLabel, aText, bLabel, bText)
-
-	tmpDir, err := scratchDir("judge-*")
-	if err != nil {
-		return "", "", err
-	}
-	defer func() { _ = os.RemoveAll(tmpDir) }()
-
-	root, err := os.OpenRoot(tmpDir)
-	if err != nil {
-		return "", "", err
-	}
-	defer func() { _ = root.Close() }()
-
-	agentModel := shared.ResponsesModel(judge.Model)
-	permission := rocketcode.PermissionSet{}
-	agent := rocketcode.Agent{Name: "judge", Model: agentModel, Prompt: "You are a strict pairwise judge.", Verbosity: judge.Verbosity, Permission: permission}
-	config := rocketcode.Config{
-		Model:           agentModel,
-		ReasoningEffort: shared.ReasoningEffort(judge.ReasoningEffort),
-		Diagnostics:     true,
-		ChildRunLogger:  rocketcode.DiscardChildRunLog,
-		CheckpointSink:  rocketcode.InertCheckpointSink{},
-		ShellCommand:    rocketcode.DefaultShellCommand,
-	}
-
-	runtime, err := rocketcode.NewWithProviders(providers, &config, root, rocketcode.Agents{Items: map[string]rocketcode.Agent{"judge": agent}}, rocketcode.Skills{Items: map[string]rocketcode.Skill{}}, "judge", io.Discard)
-	if err != nil {
-		return "", "", err
-	}
-
-	input := make(chan rocketcode.PromptInput, 1)
-
-	output := make(chan rocketcode.ChatResponse, 64)
-	input <- rocketcode.PromptInput{Text: prompt, Responses: output}
-
-	close(input)
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- runtime.Loop(ctx, input, func(func(rocketcode.SessionEntry, error) bool) {}, func(rocketcode.SessionEntry) error { return nil }, make(chan os.Signal, 1))
-	}()
-
-	var text strings.Builder
-
-	for item := range output {
-		if item.Kind == rocketcode.ChatResponseAssistantMessage {
-			text.WriteString(item.Text)
-		}
-	}
-
-	if err := <-errCh; err != nil {
-		return "", text.String(), err
-	}
-
-	raw := text.String()
-	winner, err := parseWinner(raw)
-
-	return winner, raw, err
-}
-
-func parseWinner(raw string) (string, error) {
-	for line := range strings.SplitSeq(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		upper := strings.ToUpper(line)
-		if after, ok := strings.CutPrefix(upper, "WINNER:"); ok {
-			switch strings.TrimSpace(after) {
-			case "A", "B", "TIE":
-				return strings.TrimSpace(after), nil
-			}
-
-			return "", fmt.Errorf("invalid WINNER line %q", line)
-		}
-
-		switch upper {
-		case "A", "B", "TIE":
-			return upper, nil
-		}
-
-		break
-	}
-
-	return "", errors.New("no WINNER line in judge output")
 }

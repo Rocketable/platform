@@ -96,15 +96,15 @@ func TestDumpIncludesVariationAndJudge(t *testing.T) {
 	assert.NotContains(t, names, "prefer concise")
 }
 
-func TestParseWinner(t *testing.T) {
-	w, err := parseWinner("WINNER: A\nbecause")
+func TestParseJudgeDecision(t *testing.T) {
+	w, err := parseJudgeDecision(`{"winner":"A","rationale":"crisper"}`)
 	require.NoError(t, err)
 	assert.Equal(t, "A", w)
-	w, err = parseWinner("winner: tie\n")
+	w, err = parseJudgeDecision(`{"winner":"tie","rationale":"same"}`)
 	require.NoError(t, err)
 	assert.Equal(t, "TIE", w)
 
-	_, err = parseWinner("nope")
+	_, err = parseJudgeDecision("WINNER: A")
 	require.Error(t, err)
 }
 
@@ -115,18 +115,18 @@ func TestEloRankingDeterministic(t *testing.T) {
 		{Label: "c@m", Text: "worst"},
 	}
 	score := map[string]int{"best": 3, "mid": 2, "worst": 1}
-	judge := func(_ context.Context, _, _, aText, _, bText string) (string, string, error) {
-		if score[aText] > score[bText] {
+	judge := func(_ context.Context, _ string, a, b CellResult) (string, string, error) {
+		if score[a.Text] > score[b.Text] {
 			return "A", "WINNER: A", nil
 		}
 
-		if score[aText] < score[bText] {
+		if score[a.Text] < score[b.Text] {
 			return "B", "WINNER: B", nil
 		}
 
 		return "TIE", "WINNER: TIE", nil
 	}
-	ladder, pairs, err := rankCells(t.Context(), rocketcode.Providers{}, modelSelector{Raw: "gpt", Model: "gpt"}, "criteria", cells, judge)
+	ladder, pairs, err := rankCells(t.Context(), "criteria", cells, judge)
 	require.NoError(t, err)
 	require.Len(t, pairs, 3)
 	require.Len(t, ladder, 3)
@@ -138,10 +138,10 @@ func TestEloRankingDeterministic(t *testing.T) {
 
 func TestEloTie(t *testing.T) {
 	cells := []CellResult{{Label: "x@m", Text: "same"}, {Label: "y@m", Text: "same"}}
-	judge := func(_ context.Context, _, _, _, _, _ string) (string, string, error) {
+	judge := func(_ context.Context, _ string, _, _ CellResult) (string, string, error) {
 		return "TIE", "WINNER: TIE", nil
 	}
-	ladder, _, err := rankCells(t.Context(), rocketcode.Providers{}, modelSelector{Raw: "g", Model: "g"}, "c", cells, judge)
+	ladder, _, err := rankCells(t.Context(), "c", cells, judge)
 	require.NoError(t, err)
 	require.Len(t, ladder, 2)
 	assert.InDelta(t, ladder[0].Rating, ladder[1].Rating, 0.001)
@@ -175,12 +175,12 @@ elo:
 	run := func(_ context.Context, _ rocketcode.Providers, _ *BAR, v Variation, entry MatrixEntry, _ time.Duration) CellResult {
 		return CellResult{Label: v.ID + "@" + entry.ID, Variation: v.ID, Matrix: entry.ID, Model: entry.ID, Text: v.ID + entry.ID}
 	}
-	judge := func(_ context.Context, _, _, aText, _, bText string) (string, string, error) {
-		if aText < bText {
+	judge := func(_ context.Context, _ string, a, b CellResult) (string, string, error) {
+		if a.Text < b.Text {
 			return "A", "WINNER: A", nil
 		}
 
-		if aText > bText {
+		if a.Text > b.Text {
 			return "B", "WINNER: B", nil
 		}
 
@@ -202,7 +202,10 @@ func TestRunSingleCellSkipsELO(t *testing.T) {
 	run := func(_ context.Context, _ rocketcode.Providers, _ *BAR, v Variation, entry MatrixEntry, _ time.Duration) CellResult {
 		return CellResult{Label: cellLabel(v.ID, entry.ID), Variation: v.ID, Matrix: entry.ID, Model: entry.ID, Text: "only"}
 	}
-	report, err := runBARWith(t.Context(), rocketcode.Providers{}, bar, runOptions{}, run, nil)
+	report, err := runBARWith(t.Context(), rocketcode.Providers{}, bar, runOptions{}, run, func(context.Context, string, CellResult, CellResult) (string, string, error) {
+		t.Fatal("pair judge should not run")
+		return "", "", nil
+	})
 	require.NoError(t, err)
 	require.Len(t, report.Cells, 1)
 	assert.NotEmpty(t, report.Skipped)
@@ -240,14 +243,14 @@ func TestEloSkipsFailedCells(t *testing.T) {
 		{Label: "ok2@m", Text: "high"},
 	}
 	score := map[string]int{"high": 2, "low": 1}
-	judge := func(_ context.Context, _, _, aText, _, bText string) (string, string, error) {
-		if score[aText] > score[bText] {
+	judge := func(_ context.Context, _ string, a, b CellResult) (string, string, error) {
+		if score[a.Text] > score[b.Text] {
 			return "A", "WINNER: A", nil
 		}
 
 		return "B", "WINNER: B", nil
 	}
-	ladder, pairs, err := rankCells(t.Context(), rocketcode.Providers{}, modelSelector{Raw: "g", Model: "g"}, "c", cells, judge)
+	ladder, pairs, err := rankCells(t.Context(), "c", cells, judge)
 	require.NoError(t, err)
 	require.Len(t, ladder, 2)
 	require.Len(t, pairs, 1)
@@ -265,7 +268,7 @@ func TestTimeoutPassedToRunner(t *testing.T) {
 		saw = timeout
 		return CellResult{Label: cellLabel(v.ID, entry.ID), Variation: v.ID, Matrix: entry.ID, Model: entry.ID, Text: "t"}
 	}
-	judge := func(_ context.Context, _, _, _, _, _ string) (string, string, error) {
+	judge := func(_ context.Context, _ string, _, _ CellResult) (string, string, error) {
 		return "TIE", "WINNER: TIE", nil
 	}
 	_, err = runBARWith(t.Context(), rocketcode.Providers{}, bar, runOptions{
