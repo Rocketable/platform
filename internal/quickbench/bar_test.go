@@ -52,7 +52,7 @@ func TestOpenRejectsMissingCriteriaAndYAML(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "agents"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "agents", "main.md"), defaultMainAgentMarkdown("gpt-5.4", "x"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "variations", "a"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "variations", "a", "transcript.json"), []byte(`[{"role":"user","text":"hi"}]`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "variations", "a", "turns.yaml"), []byte("turns:\n  - role: user\n    text: hi\n"), 0o644))
 
 	_, err := Open(dir)
 	require.Error(t, err)
@@ -83,12 +83,11 @@ func TestDumpIncludesVariationAndJudge(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, Dump(&buf, bar, false))
 	out := buf.String()
-	assert.Contains(t, out, "variations/alpha/transcript.json")
+	assert.Contains(t, out, "variations/alpha/turns.yaml")
 	assert.Contains(t, out, "bench.yaml")
 	assert.Contains(t, out, "gpt-5.6-luna")
-	// Principal-edit files before agents bulk.
 	assert.Less(t, strings.Index(out, "bench.yaml"), strings.Index(out, "agents/main.md"))
-	assert.Less(t, strings.Index(out, "variations/alpha/mocks/tools.json"), strings.Index(out, "agents/main.md"))
+	assert.Less(t, strings.Index(out, "variations/alpha/turns.yaml"), strings.Index(out, "agents/main.md"))
 
 	buf.Reset()
 	require.NoError(t, Dump(&buf, bar, true))
@@ -389,9 +388,7 @@ func writeFixtureBAR(t *testing.T) string {
 		base := filepath.Join(dir, "variations", id)
 		require.NoError(t, os.MkdirAll(base, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(base, "system.txt"), []byte("sys-"+id+"\n"), 0o644))
-		require.NoError(t, os.WriteFile(filepath.Join(base, "transcript.json"), []byte(`[{"role":"user","text":"hello `+id+`"}]`+"\n"), 0o644))
-		require.NoError(t, os.MkdirAll(filepath.Join(base, "mocks"), 0o755))
-		require.NoError(t, os.WriteFile(filepath.Join(base, "mocks", "tools.json"), []byte(`[{"name":"echo","description":"echo","parameters":{"type":"object"},"response":"pong"}]`+"\n"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(base, "turns.yaml"), []byte("turns:\n  - role: user\n    text: hello "+id+"\ntools:\n  - name: echo\n    description: echo\n    parameters:\n      type: object\n    response: pong\n"), 0o644))
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("ignore\n"), 0o644))
 

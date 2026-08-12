@@ -74,9 +74,7 @@ Subcommands:
 
 BAR layout (pack/dump order — edit bench.yaml first):
   bench.yaml                       (name, root, matrix, elo.model/criteria)
-  variations/<id>/transcript.json  (full captured turns; run uses last user)
-  variations/<id>/mocks/tools.json (static tools; task is never mocked)
-  variations/<id>/mocks/bash.json  (shell command doubles)
+  variations/<id>/turns.yaml       (turns + bash doubles + tool mocks)
   variations/<id>/agents/<name>/model.txt|system.txt  (optional overlays)
   agents/<name>.md                 (full RocketCode agent tree; required)
 

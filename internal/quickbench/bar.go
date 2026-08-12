@@ -3,7 +3,6 @@ package quickbench
 import (
 	"bytes"
 	"cmp"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,7 +21,7 @@ const (
 	benchMember    = "bench.yaml"
 	variationsRoot = "variations"
 	systemName     = "system.txt"
-	transcriptName = "transcript.json"
+	turnsName      = "turns.yaml"
 	modelName      = "model.txt"
 )
 
@@ -304,9 +303,7 @@ func validMember(name string) bool {
 		parts := strings.Split(rest, "/")
 		switch len(parts) {
 		case 2:
-			return parts[0] != "" && (parts[1] == systemName || parts[1] == transcriptName)
-		case 3:
-			return parts[0] != "" && parts[1] == "mocks" && (parts[2] == "tools.json" || parts[2] == "bash.json")
+			return parts[0] != "" && (parts[1] == systemName || parts[1] == turnsName)
 		case 4:
 			// variations/<id>/agents/<name>/model.txt|system.txt
 			return parts[0] != "" && parts[1] == agentsRoot && parts[2] != "" && (parts[3] == modelName || parts[3] == systemName)
@@ -384,14 +381,14 @@ func barFromMembers(members map[string][]byte) (*BAR, error) {
 	for _, id := range ids {
 		base := variationsRoot + "/" + id + "/"
 
-		transcriptData, ok := members[base+transcriptName]
+		turnsData, ok := members[base+turnsName]
 		if !ok {
-			return nil, fmt.Errorf("variation %q missing transcript.json", id)
+			return nil, fmt.Errorf("variation %q missing turns.yaml", id)
 		}
 
-		var transcript []Message
-		if err := json.Unmarshal(transcriptData, &transcript); err != nil {
-			return nil, fmt.Errorf("variation %q transcript.json: %w", id, err)
+		transcript, tools, bashDoubles, err := parseTurnsYAML(turnsData)
+		if err != nil {
+			return nil, fmt.Errorf("variation %q: %w", id, err)
 		}
 
 		if err := validateTranscript(transcript); err != nil {
@@ -429,23 +426,6 @@ func barFromMembers(members map[string][]byte) (*BAR, error) {
 		for agentName := range overlays {
 			if _, ok := agents[agentName]; !ok {
 				return nil, fmt.Errorf("variation %q overlays unknown agent %q", id, agentName)
-			}
-		}
-
-		var tools []ToolMock
-		if data, ok := members[base+"mocks/tools.json"]; ok {
-			if err := json.Unmarshal(data, &tools); err != nil {
-				return nil, fmt.Errorf("variation %q mocks/tools.json: %w", id, err)
-			}
-		}
-
-		var bashDoubles []BashDouble
-		if data, ok := members[base+"mocks/bash.json"]; ok {
-			var err error
-
-			bashDoubles, err = parseBashDoubles(data)
-			if err != nil {
-				return nil, fmt.Errorf("variation %q: %w", id, err)
 			}
 		}
 
@@ -628,6 +608,40 @@ func parseMatrixYAML(rows []benchMatrixYAML) ([]MatrixEntry, error) {
 	return out, nil
 }
 
+type variationTurnsYAML struct {
+	Turns []Message    `yaml:"turns"`
+	Tools []ToolMock   `yaml:"tools,omitempty"`
+	Bash  []BashDouble `yaml:"bash,omitempty"`
+}
+
+func parseTurnsYAML(data []byte) ([]Message, []ToolMock, []BashDouble, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, nil, nil, errors.New("missing turns.yaml")
+	}
+
+	var cfg variationTurnsYAML
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, nil, nil, fmt.Errorf("turns.yaml: %w", err)
+	}
+
+	for i, double := range cfg.Bash {
+		if strings.TrimSpace(double.Command) == "" && strings.TrimSpace(double.Pattern) == "" {
+			return nil, nil, nil, fmt.Errorf("turns.yaml bash[%d]: command or pattern required", i)
+		}
+	}
+
+	return cfg.Turns, cfg.Tools, cfg.Bash, nil
+}
+
+func formatTurnsYAML(turns []Message, tools []ToolMock, bash []BashDouble) ([]byte, error) {
+	data, err := yaml.Marshal(&variationTurnsYAML{Turns: turns, Tools: tools, Bash: bash})
+	if err != nil {
+		return nil, err
+	}
+
+	return ensureTrailingNewline(data), nil
+}
+
 func composeJudgeSelector(elo benchELOYAML) (string, error) {
 	model := strings.TrimSpace(elo.Model)
 	if model == "" {
@@ -735,30 +749,12 @@ func membersFromBAR(bar *BAR) (map[string][]byte, error) {
 			members[base+systemName] = ensureTrailingNewline([]byte(v.System))
 		}
 
-		data, err := json.MarshalIndent(v.Transcript, "", "  ")
+		turnsData, err := formatTurnsYAML(v.Transcript, v.Tools, v.BashDoubles)
 		if err != nil {
 			return nil, err
 		}
 
-		members[base+transcriptName] = append(data, '\n')
-		if len(v.Tools) > 0 {
-			toolData, err := json.MarshalIndent(v.Tools, "", "  ")
-			if err != nil {
-				return nil, err
-			}
-
-			members[base+"mocks/tools.json"] = append(toolData, '\n')
-		}
-
-		if len(v.BashDoubles) > 0 {
-			bashData, err := json.MarshalIndent(v.BashDoubles, "", "  ")
-			if err != nil {
-				return nil, err
-			}
-
-			members[base+"mocks/bash.json"] = append(bashData, '\n')
-		}
-
+		members[base+turnsName] = turnsData
 		for agentName, overlay := range v.AgentOverlays {
 			prefix := base + agentsRoot + "/" + agentName + "/"
 			if m := strings.TrimSpace(overlay.Model); m != "" {

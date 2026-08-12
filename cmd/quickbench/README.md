@@ -10,9 +10,7 @@ Pack/dump order puts principal-edit files first:
 
 ```text
 bench.yaml                       # name, root, matrix, elo.model / criteria
-variations/<id>/transcript.json  # full captured turns; run uses the last user
-variations/<id>/mocks/tools.json # static host-tool mocks (task is never mocked)
-variations/<id>/mocks/bash.json  # shell doubles via ShellCommand
+variations/<id>/turns.yaml       # turns + bash doubles + tool mocks
 variations/<id>/agents/<name>/model.txt   # optional per-agent model overlay
 variations/<id>/agents/<name>/system.txt  # optional per-agent prompt overlay
 agents/<name>.md                 # full RocketCode agent tree (required)
@@ -78,20 +76,29 @@ elo:
 
 `agents/*.md` are normal RocketCode agent files (frontmatter `model`, permissions, body prompt). Capture copies the workspace agent tree so subagents re-run live via `task` with their own models.
 
-`transcript.json` is a JSON array of `{role, text}` with roles `user` or `assistant` only.
+`variations/<id>/turns.yaml` holds the captured conversation and that variation's doubles:
 
-Static tools (not `task`):
-
-```json
-[
-  {
-    "name": "echo",
-    "description": "echo",
-    "parameters": { "type": "object" },
-    "response": "pong"
-  }
-]
+```yaml
+turns:
+  - role: user
+    text: Say hello in one short sentence.
+  - role: assistant
+    text: |
+      [execute] rg --files -g '*.py'
+      scripts/foo.py
+bash:
+  - command: rg --files -g '*.py'
+    output: |
+      scripts/foo.py
+tools:
+  - name: echo
+    description: echo
+    parameters:
+      type: object
+    response: pong
 ```
+
+Roles are `user` or `assistant`. Run uses the last user turn as the prompt. `task` is never mocked.
 
 ## CLI
 
@@ -127,7 +134,7 @@ Default capture DB path is `./.rocketclaw/state.sqlite3`; default agents dir is 
 
 - Agent markdown is copied **verbatim** from the workspace (permissions included). If `task` allows a named subagent, that agent file must be present.
 - Nested subagent *internal* turns are not in sqlite. Re-run re-executes `task` live against BAR agents.
-- Live CLIs like `gh` are not reproducible in bench. Capture seeds `mocks/bash.json` from observed bash/execute calls. Run injects `rocketcode.Config.ShellCommand` so matching is done in Go against the full command string (exact / `prefix*`); emission is a tiny `/bin/sh -c`. Principal can edit doubles. Unmocked commands fail with `quickbench: unmocked bash command`.
+- Live CLIs like `gh` are not reproducible in bench. Capture seeds `turns.yaml` `bash:` from observed bash/execute calls. Run injects `rocketcode.Config.ShellCommand` so matching is done in Go against the full command string (exact / `prefix*`); emission is a tiny `/bin/sh -c`. Principal can edit doubles. Unmocked commands fail with `quickbench: unmocked bash command`.
 
 ## Capture → edit → run
 

@@ -28,12 +28,12 @@ func parseBashDoubles(data []byte) ([]BashDouble, error) {
 
 	var doubles []BashDouble
 	if err := json.Unmarshal(data, &doubles); err != nil {
-		return nil, fmt.Errorf("mocks/bash.json: %w", err)
+		return nil, fmt.Errorf("bash doubles: %w", err)
 	}
 
 	for i, d := range doubles {
 		if strings.TrimSpace(d.Command) == "" && strings.TrimSpace(d.Pattern) == "" {
-			return nil, fmt.Errorf("mocks/bash.json[%d]: command or pattern required", i)
+			return nil, fmt.Errorf("bash doubles[%d]: command or pattern required", i)
 		}
 	}
 

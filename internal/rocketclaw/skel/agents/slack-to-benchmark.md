@@ -47,7 +47,7 @@ go run github.com/Rocketable/platform/cmd/quickbench@main dump <out-dir>
 - `agents/*.md` includes the full tree used by the workspace
 - at least one variation with final user message
 - non-`task` tool mocks present when the session used tools
-- `mocks/bash.json` seeded when the session ran bash/execute
+- `variations/<id>/turns.yaml` has the full transcript plus seeded `bash:` doubles when the session ran bash/execute
 
 5. Tell the principal to edit `bench.yaml` before ranked `run`:
    - `elo.criteria` (required for ranking)

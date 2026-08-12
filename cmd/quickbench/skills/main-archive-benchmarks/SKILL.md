@@ -47,7 +47,7 @@ go run github.com/Rocketable/platform/cmd/quickbench@main capture \
 
 Default DB is `./.rocketclaw/state.sqlite3`; default agents dir is `./agents`.
 
-3. Edit `bench/bench.yaml` first: `elo.criteria`, optional `elo.model` / `reasoningEffort`, and `matrix` rows. Adjust `mocks/bash.json` and variations if needed.
+3. Edit `bench/bench.yaml` first: `elo.criteria`, optional `elo.model` / `reasoningEffort`, and `matrix` rows. Adjust `variations/*/turns.yaml` (`turns`, `bash`, `tools`) if needed.
 4. Run:
 
 ```bash
@@ -96,9 +96,7 @@ matrix:
 | Path | Role |
 |------|------|
 | `bench.yaml` | name, root, `matrix` (model/system), `elo.*` (edit first) |
-| `variations/<id>/transcript.json` | full captured user/assistant/tool turns; run uses last user |
-| `variations/<id>/mocks/tools.json` | static host-tool mocks (`task` is never mocked) |
-| `variations/<id>/mocks/bash.json` | shell doubles (exact command or `prefix*`); unmocked bash fails closed |
+| `variations/<id>/turns.yaml` | `turns` + `bash` doubles + `tools` mocks; run uses last user |
 | `variations/<id>/agents/<name>/model.txt` | optional model overlay |
 | `variations/<id>/agents/<name>/system.txt` | optional prompt overlay |
 | `agents/<name>.md` | full RocketCode agent tree (models, prompts, permissions) |
