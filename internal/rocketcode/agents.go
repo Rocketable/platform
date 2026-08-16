@@ -1,6 +1,7 @@
 package rocketcode
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,6 +28,7 @@ type Agent struct {
 	Prompt          string
 	Location        string
 	Permission      PermissionSet
+	OutputSchema    map[string]any
 	Frontmatter     map[string]any
 	FileMode        fs.FileMode
 }
@@ -161,6 +164,11 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 		return Agent{}, fmt.Errorf("%s: model: required non-empty string", filePath)
 	}
 
+	outputSchema, err := parseAgentOutputSchema(frontmatterField(frontmatterNode, "schema"))
+	if err != nil {
+		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
+	}
+
 	return Agent{
 		Name:            name,
 		Description:     frontmatterString(frontmatter, "description"),
@@ -172,6 +180,7 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 		Prompt:          strings.TrimSpace(prompt),
 		Location:        filePath,
 		Permission:      permission,
+		OutputSchema:    outputSchema,
 		Frontmatter:     frontmatter,
 		FileMode:        info.Mode(),
 	}, nil
@@ -265,6 +274,51 @@ func sanitizeAgentFrontmatter(frontmatterText string) string {
 	}
 
 	return strings.Join(result, "\n")
+}
+
+func parseAgentOutputSchema(schema *yaml.Node) (map[string]any, error) {
+	if schema == nil {
+		return nil, nil
+	}
+
+	if schema.Kind != yaml.MappingNode {
+		return nil, errors.New("schema: must be a mapping")
+	}
+
+	output := frontmatterField(schema, "output")
+	if output == nil || output.ShortTag() == "!!null" {
+		return nil, nil
+	}
+
+	if output.Kind != yaml.MappingNode {
+		return nil, errors.New("schema.output: must be a mapping")
+	}
+
+	var decoded any
+	if err := output.Decode(&decoded); err != nil {
+		return nil, fmt.Errorf("schema.output: %w", err)
+	}
+
+	raw, err := json.Marshal(decoded)
+	if err != nil {
+		return nil, fmt.Errorf("schema.output: %w", err)
+	}
+
+	var definition jsonschema.Schema
+	if err := json.Unmarshal(raw, &definition); err != nil {
+		return nil, fmt.Errorf("schema.output: %w", err)
+	}
+
+	if _, err := definition.Resolve(nil); err != nil {
+		return nil, fmt.Errorf("schema.output: %w", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("schema.output: %w", err)
+	}
+
+	return result, nil
 }
 
 func frontmatterString(frontmatter map[string]any, key string) string {

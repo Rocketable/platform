@@ -191,6 +191,8 @@ The optional `maxRecursion` frontmatter field controls task subdelegation depth 
 - a positive integer caps delegation to that many task levels
 - invalid values fail agent loading
 
+The optional `schema.output` frontmatter field is a YAML JSON Schema for that agent's own final response. When present, RocketCode requests OpenAI structured output. Do not put it on guardrail or permission-reviewer agents; those runs keep fixed decision schemas. Invalid schemas fail agent loading.
+
 Preserve any other valid frontmatter keys unless the human asked to change them.
 
 The body of the file should contain the agent's purpose and operating instructions based on what the human asked for.

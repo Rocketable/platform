@@ -80,6 +80,27 @@ func TestTaskResolvesGuardrailModelIndependently(t *testing.T) {
 }
 
 func TestTaskTool(t *testing.T) {
+	t.Run("applies child output schema", func(t *testing.T) {
+		mock := mockResponses(responseWithTaskMessages())
+		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+			"review": {Name: "review", Model: "gpt-5.4", Prompt: "review carefully", OutputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"answer": map[string]any{"type": "string"}},
+				"required":   []any{"answer"},
+			}},
+		}})
+
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{}, testTaskOutput())
+
+		require.NoError(t, err)
+		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
+		require.Len(t, mock.calls, 1)
+		require.NotNil(t, mock.calls[0].Text.Format.OfJSONSchema)
+		require.Equal(t, "agent_output", mock.calls[0].Text.Format.OfJSONSchema.Name)
+		require.True(t, mock.calls[0].Text.Format.OfJSONSchema.Strict.Value)
+		require.Equal(t, false, mock.calls[0].Text.Format.OfJSONSchema.Schema["additionalProperties"])
+	})
+
 	t.Run("returns last final child text wrapped in task result", func(t *testing.T) {
 		mock := mockResponses(responseWithTaskMessages())
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
@@ -260,7 +281,7 @@ func TestTaskTool(t *testing.T) {
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
 			"main":      testAgent("main"),
 			"review":    {Name: "review", Model: "gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
-			"safety":    {Name: "safety", Model: "gpt-5.4", Guardrail: "recursive", Prompt: "guard carefully"},
+			"safety":    {Name: "safety", Model: "gpt-5.4", Guardrail: "recursive", Prompt: "guard carefully", OutputSchema: map[string]any{"type": "string"}},
 			"recursive": testAgentWithPrompt("recursive", "recursive guard"),
 		}})
 		mainAgent := factory.agents.Items["main"]
@@ -287,6 +308,7 @@ func TestTaskTool(t *testing.T) {
 		require.Len(t, mock.calls, 3)
 		require.Equal(t, "guard carefully", mock.calls[0].Instructions.Value)
 		require.NotNil(t, mock.calls[0].Text.Format.OfJSONSchema)
+		require.Equal(t, "guardrail_decision", mock.calls[0].Text.Format.OfJSONSchema.Name)
 		require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), "Current Action: delegation")
 		require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), "The agent main wants to delegate to review:")
 		require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), "check this")

@@ -182,6 +182,14 @@ verbosity: medium
 maxRecursion: 2
 guardrail: safety-agent
 additionalInstructions: Reply in plain text suitable for Slack.
+schema:
+  output:
+    type: object
+    properties:
+      answer:
+        type: string
+    required:
+      - answer
 permission:
   read:
     "README.md": allow
@@ -220,6 +228,7 @@ Known frontmatter fields:
 | `maxRecursion` | Optional task delegation depth for inferences started with this agent. Omitted or `-1` is unlimited, `0` disables `task`, and positive integers allow that many levels. |
 | `guardrail` | Optional loaded agent name that gates task delegations to this agent before the child runs and after its response. The guardrail must approve or reject with strict JSON containing `approved` and `reason`; it does not transform the delegated prompt or child response. |
 | `additionalInstructions` | Optional RocketClaw normal-reply prompt-header override for this selected agent. Use it for response-format guidance, such as telling an agent to avoid Markdown for Slack, prefer Markdown for technical answers, keep answers terse, or follow another surface-specific style. When omitted, RocketClaw uses `Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.` It does not affect internal notes or raw cron runs. |
+| `schema.output` | Optional JSON Schema mapping. When set, that agent's own turns (including `task` children) use OpenAI structured output. Guardrail and permission-review child runs keep their fixed decision schemas. Workflow `agent(..., schema=...)` still overrides for that call. Object schemas are sent with `additionalProperties: false`; list every property in `required`. |
 | `permission` | Optional singular permission map. Omit it when the agent needs no tools. Do not use plural `permissions`; RocketCode ignores it and `rocketclaw lint` reports it. |
 
 Deployment-specific model names can be kept out of shared agents:

@@ -83,6 +83,31 @@ func TestNewWithModelResolverRejectsEmptyRootModelWithoutResolving(t *testing.T)
 	}
 }
 
+func TestNewAppliesAgentOutputSchema(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	client := openai.NewClient()
+	loop, err := NewWithModelResolver(testModelResolverFunc(func(model string) (*openai.Client, ProviderOrigin, error) {
+		return &client, ProviderOrigin{Provider: "openai", Model: model}, nil
+	}), testConfig(dir), root, Agents{Items: map[string]Agent{
+		"main": {Name: "main", Model: "gpt-5.5", Prompt: "prompt", OutputSchema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"answer": map[string]any{"type": "string"}},
+			"required":   []any{"answer"},
+		}},
+	}}, Skills{Items: map[string]Skill{}}, "main", nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, loop.ResponseFormat.OfJSONSchema)
+	require.Equal(t, "agent_output", loop.ResponseFormat.OfJSONSchema.Name)
+	require.True(t, loop.ResponseFormat.OfJSONSchema.Strict.Value)
+	require.Equal(t, "object", loop.ResponseFormat.OfJSONSchema.Schema["type"])
+	require.Equal(t, false, loop.ResponseFormat.OfJSONSchema.Schema["additionalProperties"])
+}
+
 func TestNewWithModelResolverResolvesRootAgent(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)

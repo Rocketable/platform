@@ -227,6 +227,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		CompactThreshold:       f.compactThreshold,
 		CompactionSteering:     f.compactionSteering,
 		ParallelToolCalls:      f.parallelToolCalls,
+		ResponseFormat:         agentOutputResponseFormat(agent.OutputSchema),
 		Permissions:            agent.Permission,
 		Tools:                  modelTools,
 		CodeModeHosts:          codeHosts,

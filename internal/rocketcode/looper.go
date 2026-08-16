@@ -2243,3 +2243,20 @@ func webSearchOutputActionJSON(action *responses.ResponseOutputItemUnionAction) 
 
 	return string(data)
 }
+
+func agentOutputResponseFormat(schema map[string]any) responses.ResponseFormatTextConfigUnionParam {
+	if schema == nil {
+		return responses.ResponseFormatTextConfigUnionParam{}
+	}
+
+	schema = maps.Clone(schema)
+	if schema["type"] == "object" {
+		schema["additionalProperties"] = false
+	}
+
+	var format responses.ResponseFormatTextConfigUnionParam
+
+	format.OfJSONSchema = &responses.ResponseFormatTextJSONSchemaConfigParam{Name: "agent_output", Strict: openai.Bool(true), Schema: schema}
+
+	return format
+}

@@ -77,6 +77,65 @@ ignored
 		require.NotContains(t, result.Agents.Items, "child")
 	})
 
+	t.Run("loads schema output", func(t *testing.T) {
+		result := LoadAgents(fstest.MapFS{
+			"review.md": testMapFile(`---
+description: Structured
+model: gpt-5.4
+schema:
+  output:
+    type: object
+    properties:
+      answer:
+        type: string
+    required:
+      - answer
+---
+Prompt
+`),
+		}, passThroughAgentModel)
+
+		require.Empty(t, result.Errors)
+		require.Equal(t, map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"answer": map[string]any{"type": "string"}},
+			"required":   []any{"answer"},
+		}, result.Agents.Items["review"].OutputSchema)
+	})
+
+	t.Run("ignores schema without output", func(t *testing.T) {
+		result := LoadAgents(fstest.MapFS{
+			"main.md": testMapFile("---\ndescription: Main\nmodel: gpt-5.4\nschema:\n  input:\n    type: object\n---\nPrompt\n"),
+		}, passThroughAgentModel)
+
+		require.Empty(t, result.Errors)
+		require.Nil(t, result.Agents.Items["main"].OutputSchema)
+	})
+
+	t.Run("rejects invalid schema output", func(t *testing.T) {
+		tests := []struct {
+			name  string
+			value string
+			want  string
+		}{
+			{name: "schema list", value: "schema: []", want: "main.md: schema: must be a mapping"},
+			{name: "output string", value: "schema:\n  output: nope", want: "main.md: schema.output: must be a mapping"},
+			{name: "invalid json schema", value: "schema:\n  output:\n    pattern: \"[\"", want: "main.md: schema.output:"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				result := LoadAgents(fstest.MapFS{
+					"main.md": testMapFile("---\ndescription: Main\nmodel: gpt-5.4\n" + tt.value + "\n---\nPrompt\n"),
+				}, passThroughAgentModel)
+
+				require.Empty(t, result.Agents.Items)
+				require.Len(t, result.Errors, 1)
+				require.Contains(t, result.Errors[0].Error(), tt.want)
+			})
+		}
+	})
+
 	t.Run("loads max recursion values", func(t *testing.T) {
 		result := LoadAgents(fstest.MapFS{
 			"unlimited.md": testMapFile("---\ndescription: Unlimited\nmodel: gpt-5.4\nmaxRecursion: -1\n---\nPrompt\n"),

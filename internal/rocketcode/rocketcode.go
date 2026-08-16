@@ -398,6 +398,7 @@ func NewWithModelResolver(
 		DisplayModel:           origin.displayModel(),
 		ReasoningEffort:        reasoningEffort,
 		Verbosity:              activeAgent.Verbosity,
+		ResponseFormat:         agentOutputResponseFormat(activeAgent.OutputSchema),
 		CompactThreshold:       config.CompactThreshold,
 		CompactionSteering:     config.CompactionSteering,
 		ParallelToolCalls:      config.ParallelToolCalls,
