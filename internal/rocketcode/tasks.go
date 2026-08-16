@@ -218,7 +218,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	child := &looper{
 		agent:                  agent,
 		ProviderOrigin:         origin,
-		Client:                 responseServiceClient{service: &client.Responses},
+		Client:                 newResponsesAPI(client),
 		SystemPrompt:           systemPrompt,
 		Model:                  origin.Model,
 		DisplayModel:           origin.displayModel(),
@@ -357,7 +357,7 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 	child := &looper{
 		agent:                  agent,
 		ProviderOrigin:         origin,
-		Client:                 responseServiceClient{service: &client.Responses},
+		Client:                 newResponsesAPI(client),
 		SystemPrompt:           composeSystemPromptWithSkills(agent.Prompt, f.skills, &agent),
 		Model:                  origin.Model,
 		DisplayModel:           origin.displayModel(),

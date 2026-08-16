@@ -51,7 +51,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	child := &looper{
 		agent:                  agent,
 		ProviderOrigin:         origin,
-		Client:                 responseServiceClient{service: &client.Responses},
+		Client:                 newResponsesAPI(client),
 		SystemPrompt:           composeSystemPromptWithSkills(agent.Prompt, f.skills, &agent),
 		Model:                  origin.Model,
 		DisplayModel:           origin.displayModel(),

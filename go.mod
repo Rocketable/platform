@@ -3,7 +3,7 @@ module github.com/Rocketable/platform
 go 1.26.5
 
 require (
-	github.com/gorilla/websocket v1.5.3 // indirect
+	github.com/gorilla/websocket v1.5.3
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/openai/openai-go/v3 v3.51.0
 	github.com/robfig/cron/v3 v3.0.1

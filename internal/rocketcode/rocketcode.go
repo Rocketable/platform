@@ -392,7 +392,7 @@ func NewWithModelResolver(
 	looper := &looper{
 		agent:                  activeAgent,
 		ProviderOrigin:         origin,
-		Client:                 responseServiceClient{service: &client.Responses},
+		Client:                 newResponsesAPI(client),
 		SystemPrompt:           runtimeSystemPrompt,
 		Model:                  origin.Model,
 		DisplayModel:           origin.displayModel(),
