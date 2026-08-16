@@ -9,12 +9,15 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 )
 
 // CaptureOptions configures Capture.
 type CaptureOptions struct {
-	DBPath         string
+	Workspace      string
+	RuntimeDir     string
+	DatabaseURL    string
 	ConversationID string
 	AgentsDir      string // workspace agents/ directory (required for full tree)
 	Root           string // root agent name; default main
@@ -35,9 +38,9 @@ func Capture(ctx context.Context, opt CaptureOptions) error {
 		return errors.New("conversation ID is required")
 	}
 
-	dbPath := strings.TrimSpace(opt.DBPath)
-	if dbPath == "" {
-		return errors.New("db path is required")
+	databaseURL := strings.TrimSpace(opt.DatabaseURL)
+	if databaseURL == "" {
+		return errors.New("database_url is required")
 	}
 
 	variation := strings.TrimSpace(opt.Variation)
@@ -64,7 +67,11 @@ func Capture(ctx context.Context, opt CaptureOptions) error {
 		return fmt.Errorf("root agent %q not found in %s", root, agentsDir)
 	}
 
-	entries, err := harnessbridge.ObserveSessionEntries(ctx, dbPath, conversationID, 0)
+	runtimeDir := strings.TrimSpace(opt.RuntimeDir)
+	if runtimeDir == "" {
+		runtimeDir = config.DefaultRuntimeDir
+	}
+	entries, err := harnessbridge.ObserveSessionEntries(ctx, opt.Workspace, runtimeDir, databaseURL, conversationID, 0)
 	if err != nil {
 		return err
 	}

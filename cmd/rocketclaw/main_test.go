@@ -27,6 +27,7 @@ func TestRunWithoutDefaultConfigShowsHelp(t *testing.T) {
 	assert.Contains(t, output, "Usage:")
 	assert.Contains(t, output, "rocketclaw fc list")
 	assert.Contains(t, output, "rocketclaw fc observe [--follow|-f] <conversation-id>")
+	assert.Contains(t, output, "rocketclaw fc migrate")
 	assert.Contains(t, output, "rocketclaw setup\n")
 	assert.Contains(t, output, "rocketclaw setup files list\n")
 	assert.Contains(t, output, "rocketclaw setup files get <path>\n")
@@ -84,7 +85,7 @@ func TestRunWithLegacyConfigAttemptsServe(t *testing.T) {
 func TestRunServeKeepsLegacyConfigReadOnly(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
-	legacy := []byte(`{"workspace":".","slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","human_user_id":"U123","room":"D123","social_mode":{"channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}},"openai":{"api_key":"test"}}`)
+	legacy := []byte(`{"workspace":".","database_url":"postgres://localhost/rocketclaw_test?sslmode=disable","slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","human_user_id":"U123","room":"D123","social_mode":{"channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}},"openai":{"api_key":"test"}}`)
 	require.NoError(t, os.WriteFile(defaultConfigPath, legacy, 0o600))
 
 	err := runServe(nil)
@@ -98,7 +99,7 @@ func TestRunServeKeepsLegacyConfigReadOnly(t *testing.T) {
 func TestLoadRuntimeConfigKeepsLegacyConfigReadOnly(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
-	legacy := []byte(`{"workspace":".","slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","social_mode":{"channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}},"openai":{"api_key":"test"}}`)
+	legacy := []byte(`{"workspace":".","database_url":"postgres://localhost/rocketclaw_test?sslmode=disable","slack":{"enabled":true,"bot_token":"xoxb","app_token":"xapp","social_mode":{"channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}},"openai":{"api_key":"test"}}`)
 	require.NoError(t, os.WriteFile(defaultConfigPath, legacy, 0o600))
 
 	_, _, err := loadRuntimeConfig("")

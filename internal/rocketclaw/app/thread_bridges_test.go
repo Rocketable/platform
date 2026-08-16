@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"log/slog"
 	"os"
@@ -13,6 +12,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
+	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/Rocketable/platform/internal/rocketcode"
@@ -22,30 +22,15 @@ import (
 
 type bridgeConfig = harnessbridge.Config
 
-func TestRunReportsPendingRestartNotificationStartupErrors(t *testing.T) {
-	workspace := shortTempDir(t)
-	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, slog.New(slog.DiscardHandler))
-	require.NoError(t, err)
-	require.NoError(t, service.MarkRestartRequester(context.Background(), "main"))
-	require.NoError(t, service.Stop(context.Background()))
-
-	db, err := sql.Open("sqlite", filepath.Join(workspace, config.DefaultRuntimeDir, "state.sqlite3"))
-	require.NoError(t, err)
-	_, err = db.ExecContext(context.Background(), `CREATE TRIGGER fail_session_entries_insert BEFORE INSERT ON session_entries BEGIN SELECT RAISE(FAIL, 'no append'); END`)
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
-
-	err = Run(context.Background(), &config.Config{Workspace: workspace}, "", slog.New(slog.DiscardHandler))
-	require.ErrorContains(t, err, "apply pending restart notifications")
-}
-
 func TestRunRejectsUnresolvedAgentModelAtStartup(t *testing.T) {
 	workspace := shortTempDir(t)
 	agentsRoot := filepath.Join(workspace, "agents")
 	require.NoError(t, os.MkdirAll(agentsRoot, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(agentsRoot, "main.md"), []byte("---\ndescription: Main\nmodel: '{{ model \"missing\" }}'\n---\nPrompt\n"), 0o600))
 
-	err := Run(t.Context(), &config.Config{Workspace: workspace}, "", slog.New(slog.DiscardHandler))
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler))
 	require.ErrorContains(t, err, "validate rocketcode definitions")
 	require.ErrorContains(t, err, `model "missing" is not configured`)
 }
@@ -63,7 +48,9 @@ func TestRunRejectsInvalidWorkflowAtStartup(t *testing.T) {
 			require.NoError(t, root.WriteFile("workflows/bad.star", []byte(tt.source), 0o600))
 			t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-			err = Run(t.Context(), &config.Config{Workspace: workspace}, "", slog.New(slog.DiscardHandler))
+			dsn, errDSN := harnessbridgetest.IsolatedTestDatabaseURL()
+			require.NoError(t, errDSN)
+			err = Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn}, "", slog.New(slog.DiscardHandler))
 			require.ErrorContains(t, err, tt.want)
 		})
 	}
@@ -196,7 +183,9 @@ func TestThreadBridgeManagerSkipsScheduledMessageBridgeDuringActiveTurnRecovery(
 }
 
 func TestThreadBridgeManagerDoesNotStartThreadWhenStoreIsUnavailable(t *testing.T) {
-	store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, slog.New(slog.DiscardHandler))
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, dsn, testLogger())
 	require.NoError(t, err)
 	require.NoError(t, store.Stop(context.Background()))
 
@@ -838,7 +827,9 @@ func slackTarget(channelID, threadTS string) events.TextConversationTarget {
 func newTestSessionService(t *testing.T, workspace string) *harnessbridge.SessionService {
 	t.Helper()
 
-	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, slog.New(slog.DiscardHandler))
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, dsn, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
 

@@ -24,13 +24,12 @@ go run github.com/Rocketable/platform/cmd/quickbench@main <subcommand> ...
 ## Steps
 
 1. Resolve conversation id (`slack-thread:CHANNEL:TS` or raw id).
-2. Locate `state.sqlite3` (workspace `.rocketclaw/state.sqlite3` unless told otherwise).
+2. Use the workspace RocketClaw config `database_url`.
 3. Run:
 
 ```bash
 go run github.com/Rocketable/platform/cmd/quickbench@main capture \
   --conversation <ID> \
-  --db <path-to-state.sqlite3> \
   --agents <workspace>/agents \
   --root main \
   -o <out-dir> \

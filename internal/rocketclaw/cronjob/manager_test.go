@@ -12,13 +12,19 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
+	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge/harnessbridgetest"
 	"github.com/stretchr/testify/require"
 )
 
 func newCronScheduleStore(t *testing.T) *harnessbridge.SessionService {
 	t.Helper()
 
-	store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), ".", slog.New(slog.DiscardHandler))
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), ".", dsn, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

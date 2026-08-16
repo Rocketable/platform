@@ -99,7 +99,7 @@ func TestHelpMentionsLint(t *testing.T) {
 
 func writeLintConfig(t *testing.T, workspace string, models ...map[string]string) {
 	t.Helper()
-	data := config.Config{Workspace: workspace, Slack: config.SlackConfig{BotToken: "xoxb", AppToken: "xapp", Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U123"}}}}, OpenAI: config.OpenAIConfig{APIKey: "test"}}
+	data := config.Config{Workspace: workspace, DatabaseURL: "postgres://localhost/rocketclaw_test?sslmode=disable", Slack: config.SlackConfig{BotToken: "xoxb", AppToken: "xapp", Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U123"}}}}, OpenAI: config.OpenAIConfig{APIKey: "test"}}
 	if len(models) > 0 {
 		data.Models = models[0]
 	}

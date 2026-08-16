@@ -7,6 +7,7 @@ import (
 	"testing/synctest"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge/harnessbridgetest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,7 +35,7 @@ func TestDoctorAndServeResolveTheSameSecret(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(`{
-		"workspace": ".",
+		"workspace": ".", "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
 		"openai": {"api_key": "test-key"},
 		"slack": {"bot_token":"xoxb-local","app_token":"xapp-test","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}
 	}`), 0o600))
@@ -65,7 +66,9 @@ func TestCommandsAcceptSecretsARNFlag(t *testing.T) {
 	t.Run("fc", func(t *testing.T) {
 		workspace := t.TempDir()
 		t.Chdir(workspace)
-		require.NoError(t, os.WriteFile(defaultConfigPath, []byte(fcTestConfigJSON()), 0o600))
+		dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(defaultConfigPath, []byte(fcTestConfigJSONWithDSN(dsn)), 0o600))
 		require.NoError(t, runFC([]string{"list", "--aws-secrets-manager-arn", testSecretsARN}))
 	})
 	t.Run("agent-graph", func(t *testing.T) {
@@ -100,6 +103,7 @@ func TestOAILoginWriteKeepsAWSObject(t *testing.T) {
 	prepareOAIConfig(t)
 	patched := []byte(`{
   "workspace": "../runtime",
+  "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
   "openai": {"rocketcode_auth":"api_key","api_key":"openai-key"},
   "providers": {
     "work": {"rocketcode_auth":"api_key","api_key":"work-key"}
@@ -128,7 +132,7 @@ func TestDoctorOutputOmitsResolvedSecret(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(`{
-		"workspace": ".",
+		"workspace": ".", "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
 		"openai": {"api_key": "test-key"},
 		"slack": {
 		  "bot_token": {"aws":{"arn":"`+testSecretsARN+`","key":"token"}},
@@ -149,7 +153,7 @@ func TestServeErrorOmitsResolvedSecret(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(`{
-		"workspace": ".",
+		"workspace": ".", "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
 		"openai": {"api_key": "test-key"},
 		"slack": {
 		  "bot_token": {"aws":{"arn":"`+testSecretsARN+`","key":"token"}},

@@ -194,7 +194,7 @@ func TestRunRawCronCanEditRestartAndCompleteDecision(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, RawRunResult{Text: "assistant complete", VerbatimMessage: "cron done"}, result)
 	assert.Equal(t, 1, restarts)
-	entries, err := ObserveSessionEntries(t.Context(), sessionDBPath(workspace), progress.ConversationID, 0)
+	entries, err := ObserveSessionEntries(t.Context(), workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), progress.ConversationID, 0)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	items, err := rocketcode.ReplayInputToParams(entries[0].Entry.ReplayInput)

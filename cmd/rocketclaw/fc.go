@@ -23,12 +23,14 @@ Usage:
   rocketclaw fc observe [--follow|-f] <conversation-id>
   rocketclaw fc delete <conversation-id>
   rocketclaw fc check
+  rocketclaw fc migrate
 
 Commands:
   list     List stored rocketcode sessions.
   observe  Print one conversation's stored rocketcode session entries as JSONL.
   delete   Delete one rocketcode session.
-  check    Check and recover the rocketclaw state store.
+  check    Check the rocketclaw state store.
+  migrate  Copy missing sqlite rows into the PostgreSQL store.
 `
 
 func runFC(args []string) error {
@@ -38,7 +40,7 @@ func runFC(args []string) error {
 
 	var secretsARN string
 	switch args[0] {
-	case "list", "observe", "delete", "check":
+	case "list", "observe", "delete", "check", "migrate":
 		var err error
 		secretsARN, err = parseFCSecretsARN(args[1:])
 		if err != nil {
@@ -60,13 +62,15 @@ func runFC(args []string) error {
 
 	switch args[0] {
 	case "list":
-		return runFCListIn(cfg.Workspace, cfg.RuntimeDirName(), args[1:], os.Stdout)
+		return runFCListIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, args[1:], os.Stdout)
 	case "observe":
-		return runFCObserveIn(cfg.Workspace, cfg.RuntimeDirName(), args[1:], os.Stdout)
+		return runFCObserveIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, args[1:], os.Stdout)
 	case "delete":
-		return runFCDeleteIn(cfg.Workspace, cfg.RuntimeDirName(), args[1:], os.Stdout)
+		return runFCDeleteIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, args[1:], os.Stdout)
+	case "migrate":
+		return runFCMigrateIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, args[1:], os.Stdout)
 	default:
-		return runFCCheckIn(cfg.Workspace, cfg.RuntimeDirName(), args[1:], os.Stdout)
+		return runFCCheckIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, args[1:], os.Stdout)
 	}
 }
 
@@ -86,7 +90,36 @@ func parseFCSecretsARN(args []string) (string, error) {
 	return *secretsARN, nil
 }
 
-func runFCCheckIn(workspace, runtimeDir string, args []string, out io.Writer) error {
+var (
+	errFCMigrateArgs       = errors.New("migrate does not accept arguments")
+	errParseFCMigrateFlags = errors.New("parse rocketcode migrate flags")
+)
+
+func runFCMigrateIn(workspace, runtimeDir, databaseURL string, args []string, out io.Writer) error {
+	flagSet := flag.NewFlagSet("rocketclaw fc migrate", flag.ContinueOnError)
+	flagSet.String(secretsARNFlag, "", secretsARNUsage)
+
+	if err := flagSet.Parse(args); err != nil {
+		return fmt.Errorf("%w: %w", errParseFCMigrateFlags, err)
+	}
+
+	if len(flagSet.Args()) != 0 {
+		return errFCMigrateArgs
+	}
+
+	inserted, err := harnessbridge.MigrateSQLite(context.Background(), workspace, runtimeDir, databaseURL, slog.New(slog.DiscardHandler), out)
+	if err != nil {
+		return fmt.Errorf("migrate sqlite store: %w", err)
+	}
+
+	if _, err := fmt.Fprintf(out, "inserted %d rows\n", inserted); err != nil {
+		return fmt.Errorf("write rocketcode migrate result: %w", err)
+	}
+
+	return nil
+}
+
+func runFCCheckIn(workspace, runtimeDir, databaseURL string, args []string, out io.Writer) error {
 	flagSet := flag.NewFlagSet("rocketclaw fc check", flag.ContinueOnError)
 	flagSet.String(secretsARNFlag, "", secretsARNUsage)
 
@@ -105,26 +138,18 @@ func runFCCheckIn(workspace, runtimeDir string, args []string, out io.Writer) er
 
 	defer func() { _ = lock.Close() }()
 
-	result, err := harnessbridge.CheckAndRecoverSessionDB(context.Background(), workspace, runtimeDir, slog.New(slog.DiscardHandler))
-	if err != nil {
+	if err := harnessbridge.CheckAndRecoverSessionDB(context.Background(), databaseURL, slog.New(slog.DiscardHandler)); err != nil {
 		return fmt.Errorf("check rocketclaw state store: %w", err)
 	}
 
-	message := "state store ok"
-	if !result.DBExists {
-		message = "state store does not exist"
-	} else if result.Recovered {
-		message = "state store recovered"
-	}
-
-	if _, err := fmt.Fprintln(out, message); err != nil {
+	if _, err := fmt.Fprintln(out, "state store ok"); err != nil {
 		return fmt.Errorf("write rocketcode check result: %w", err)
 	}
 
 	return nil
 }
 
-func runFCDeleteIn(workspace, runtimeDir string, args []string, out io.Writer) error {
+func runFCDeleteIn(workspace, runtimeDir, databaseURL string, args []string, out io.Writer) error {
 	flagSet := flag.NewFlagSet("rocketclaw fc delete", flag.ContinueOnError)
 	flagSet.String(secretsARNFlag, "", secretsARNUsage)
 
@@ -146,7 +171,7 @@ func runFCDeleteIn(workspace, runtimeDir string, args []string, out io.Writer) e
 
 	defer func() { _ = lock.Close() }()
 
-	deleted, err := harnessbridge.DeleteSessionIn(context.Background(), workspace, runtimeDir, conversationID)
+	deleted, err := harnessbridge.DeleteSessionIn(context.Background(), workspace, runtimeDir, databaseURL, conversationID)
 	if err != nil {
 		return fmt.Errorf("delete rocketcode session: %w", err)
 	}
@@ -171,7 +196,7 @@ func acquireFCMutationLock(workspace, runtimeDir, command string) (*harnessbridg
 	return lock, nil
 }
 
-func runFCListIn(workspace, runtimeDir string, args []string, out io.Writer) error {
+func runFCListIn(workspace, runtimeDir, databaseURL string, args []string, out io.Writer) error {
 	flagSet := flag.NewFlagSet("rocketclaw fc list", flag.ContinueOnError)
 	flagSet.String(secretsARNFlag, "", secretsARNUsage)
 	sinceText := flagSet.String("since", "", "show sessions updated since duration or RFC3339 time")
@@ -218,11 +243,11 @@ func runFCListIn(workspace, runtimeDir string, args []string, out io.Writer) err
 		options.Until = until
 	}
 
-	return writeFCListInOptions(context.Background(), workspace, runtimeDir, options, !*noMessagePreview, out)
+	return writeFCListInOptions(context.Background(), workspace, runtimeDir, databaseURL, options, !*noMessagePreview, out)
 }
 
-func writeFCListInOptions(ctx context.Context, workspace, runtimeDir string, options harnessbridge.SessionListOptions, includeMessagePreview bool, out io.Writer) error {
-	summaries, err := harnessbridge.ListSessionsInOptions(ctx, workspace, runtimeDir, options)
+func writeFCListInOptions(ctx context.Context, workspace, runtimeDir, databaseURL string, options harnessbridge.SessionListOptions, includeMessagePreview bool, out io.Writer) error {
+	summaries, err := harnessbridge.ListSessionsInOptions(ctx, workspace, runtimeDir, databaseURL, options)
 	if err != nil {
 		return fmt.Errorf("list rocketcode sessions: %w", err)
 	}
@@ -266,7 +291,7 @@ func writeFCListInOptions(ctx context.Context, workspace, runtimeDir string, opt
 	return nil
 }
 
-func runFCObserveIn(workspace, runtimeDir string, args []string, out io.Writer) error {
+func runFCObserveIn(workspace, runtimeDir, databaseURL string, args []string, out io.Writer) error {
 	flagSet := flag.NewFlagSet("rocketclaw fc observe", flag.ContinueOnError)
 	flagSet.String(secretsARNFlag, "", secretsARNUsage)
 	follow := flagSet.Bool("follow", false, "follow session entries")
@@ -283,17 +308,23 @@ func runFCObserveIn(workspace, runtimeDir string, args []string, out io.Writer) 
 
 	conversationID := strings.TrimSpace(remaining[0])
 
-	return writeFCObserveIn(context.Background(), workspace, runtimeDir, conversationID, *follow, time.Second, out)
+	return writeFCObserveIn(context.Background(), workspace, runtimeDir, databaseURL, conversationID, *follow, time.Second, out)
 }
 
-func writeFCObserveIn(ctx context.Context, workspace, runtimeDir, conversationID string, follow bool, pollInterval time.Duration, out io.Writer) error {
+func writeFCObserveIn(ctx context.Context, workspace, runtimeDir, databaseURL, conversationID string, follow bool, pollInterval time.Duration, out io.Writer) error {
 	if strings.TrimSpace(conversationID) == "" {
 		return errors.New("conversation ID is required")
 	}
 
+	service, err := harnessbridge.NewSessionServiceIn(workspace, runtimeDir, databaseURL, slog.New(slog.DiscardHandler))
+	if err != nil {
+		return fmt.Errorf("observe rocketcode session entries: %w", err)
+	}
+	defer func() { _ = service.Stop(ctx) }()
+
 	var lastID int64
 	for {
-		entries, err := harnessbridge.ObserveSessionEntries(ctx, harnessbridge.SessionDBPathIn(workspace, runtimeDir), conversationID, lastID)
+		entries, err := service.ObserveEntries(ctx, conversationID, lastID)
 		if err != nil {
 			return fmt.Errorf("observe rocketcode session entries: %w", err)
 		}

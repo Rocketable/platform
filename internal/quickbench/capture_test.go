@@ -3,6 +3,7 @@ package quickbench
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
+	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,7 +21,9 @@ import (
 
 func TestCaptureFromSession(t *testing.T) {
 	workspace := t.TempDir()
-	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, slog.New(slog.DiscardHandler))
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, dsn, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = service.Stop(context.Background()) })
 
@@ -38,7 +42,6 @@ func TestCaptureFromSession(t *testing.T) {
 	_, err = service.AppendEntryID(context.Background(), conversationID, entry)
 	require.NoError(t, err)
 
-	dbPath := filepath.Join(workspace, config.DefaultRuntimeDir, "state.sqlite3")
 	out := filepath.Join(t.TempDir(), "cap")
 	agentsDir := filepath.Join(t.TempDir(), "agents")
 	require.NoError(t, os.MkdirAll(agentsDir, 0o755))
@@ -46,7 +49,9 @@ func TestCaptureFromSession(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "worker.md"), []byte("---\ndescription: w\nmodel: gpt-5.4-mini\n---\n\nworker\n"), 0o644))
 
 	require.NoError(t, Capture(context.Background(), CaptureOptions{
-		DBPath:         dbPath,
+		Workspace:      workspace,
+		RuntimeDir:     config.DefaultRuntimeDir,
+		DatabaseURL:    dsn,
 		ConversationID: conversationID,
 		AgentsDir:      agentsDir,
 		Out:            out,
@@ -70,7 +75,9 @@ func TestCaptureFromSession(t *testing.T) {
 
 func TestCaptureUnknownConversation(t *testing.T) {
 	workspace := t.TempDir()
-	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, slog.New(slog.DiscardHandler))
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, dsn, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = service.Stop(context.Background()) })
 
@@ -78,15 +85,57 @@ func TestCaptureUnknownConversation(t *testing.T) {
 	require.NoError(t, os.MkdirAll(agentsDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "main.md"), defaultMainAgentMarkdown("gpt-5.4", "root"), 0o644))
 
-	dbPath := filepath.Join(workspace, config.DefaultRuntimeDir, "state.sqlite3")
 	err = Capture(context.Background(), CaptureOptions{
-		DBPath:         dbPath,
+		Workspace:      workspace,
+		RuntimeDir:     config.DefaultRuntimeDir,
+		DatabaseURL:    dsn,
 		ConversationID: "missing",
 		AgentsDir:      agentsDir,
 		Out:            filepath.Join(t.TempDir(), "out"),
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no session entries")
+}
+
+func TestRunCapturePrefersFemtoclawConfig(t *testing.T) {
+	workspace := t.TempDir()
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	service, err := harnessbridge.NewSessionServiceIn(workspace, ".femtoclaw", dsn, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = service.Stop(context.Background()) })
+
+	conversationID := "slack-thread:C9:9.9"
+	_, err = service.AppendEntryID(context.Background(), conversationID, &rocketcode.SessionEntry{
+		Version:     1,
+		Type:        "turn",
+		Timestamp:   time.Unix(1, 0).UTC(),
+		ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"hi"}`), json.RawMessage(`{"type":"message","role":"assistant","content":"ok"}`)},
+	})
+	require.NoError(t, err)
+
+	writeCaptureConfig := func(name, databaseURL string) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(filepath.Join(workspace, name), []byte(fmt.Sprintf(`{
+  "workspace": %q,
+  "database_url": %q,
+  "openai": {"api_key": "shared-key"},
+  "slack": {"bot_token": "xoxb-test", "app_token": "xapp-test", "channels": [{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}
+}`, workspace, databaseURL)), 0o600))
+	}
+	writeCaptureConfig("rocketclaw.json", "postgres://127.0.0.1:1/wrong")
+	writeCaptureConfig("femtoclaw.json", dsn)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "agents"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "agents", "main.md"), defaultMainAgentMarkdown("gpt-5.4", "root"), 0o644))
+
+	t.Chdir(workspace)
+	out := filepath.Join(workspace, "cap")
+	require.NoError(t, runCapture(context.Background(), []string{"-conversation", conversationID, "-o", out}))
+
+	bar, err := Open(out)
+	require.NoError(t, err)
+	require.NotEmpty(t, bar.Variations)
 }
 
 func TestExtractTranscriptAndMocks(t *testing.T) {

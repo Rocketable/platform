@@ -108,7 +108,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	stateLogger.Info("starting rocketclaw state store", "workspace", cfg.Workspace, "runtime_dir", cfg.RuntimeDirName())
 
-	rocketcodeSessions, err := harnessbridge.NewSessionServiceIn(cfg.Workspace, cfg.RuntimeDirName(), stateLogger)
+	rocketcodeSessions, err := harnessbridge.NewSessionServiceIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, stateLogger)
 	if err != nil {
 		return fmt.Errorf("start rocketcode session service: %w", err)
 	}
@@ -129,48 +129,6 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	} else if stats.Threads+stats.ExternalMCPSessions > 0 || stats.SessionRows > 0 {
 		logger.Info("pruned stale rocketclaw state", "threads", stats.Threads, "external_mcp_sessions", stats.ExternalMCPSessions, "session_rows", stats.SessionRows)
 	}
-
-	if stats, err := rocketcodeSessions.CheckpointWAL(runCtx); err != nil {
-		logger.Warn("checkpoint rocketclaw state WAL", "error", err)
-	} else if stats.Busy > 0 {
-		logger.Warn("checkpoint rocketclaw state WAL busy", "busy", stats.Busy, "log_frames", stats.LogFrames, "checkpointed_frames", stats.CheckpointedFrames)
-	} else {
-		logger.Info("checkpointed rocketclaw state WAL", "busy", stats.Busy, "log_frames", stats.LogFrames, "checkpointed_frames", stats.CheckpointedFrames)
-	}
-
-	vacuumCtx, stopVacuum := context.WithCancel(context.Background())
-	vacuumDone := make(chan struct{})
-
-	go func() {
-		defer close(vacuumDone)
-
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-
-		for {
-			stats, err := rocketcodeSessions.Vacuum(vacuumCtx)
-			if err != nil {
-				if vacuumCtx.Err() != nil {
-					return
-				}
-
-				logger.Warn("incremental vacuum rocketclaw state", "error", err)
-			} else if stats.BeforePageCount != stats.AfterPageCount || stats.BeforeFreePages != stats.AfterFreePages {
-				logger.Info("incremental vacuumed rocketclaw state", "before_pages", stats.BeforePageCount, "before_free_pages", stats.BeforeFreePages, "after_pages", stats.AfterPageCount, "after_free_pages", stats.AfterFreePages)
-			}
-
-			select {
-			case <-vacuumCtx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-
-	defer func() {
-		stopVacuum()
-		<-vacuumDone
-	}()
 
 	if err := rocketcodeSessions.ApplyPendingRestartNotifications(runCtx); err != nil {
 		return fmt.Errorf("apply pending restart notifications: %w", err)

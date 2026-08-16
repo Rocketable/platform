@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 )
 
 // Run is the quickbench CLI entrypoint.
@@ -70,7 +72,7 @@ Subcommands:
   unpack FILE.bar [-o DIR]       Unpack a .bar into a directory
   dump PATH [-names]             Print BAR members (or names only)
   run PATH                       Run variation×matrix cells and ELO rank
-  capture -conversation ID ...   Build a BAR from state.sqlite3
+  capture -conversation ID ...   Build a BAR from the workspace database_url
 
 BAR layout (pack/dump order — edit bench.yaml first):
   bench.yaml                       (name, root, matrix, elo.model/criteria)
@@ -249,7 +251,7 @@ func runRun(ctx context.Context, args []string) error {
 func runCapture(ctx context.Context, args []string) error {
 	fs := newFlagSet("capture")
 	conversation := fs.String("conversation", "", "conversation id")
-	dbPath := fs.String("db", "", "state.sqlite3 path")
+
 	agentsDir := fs.String("agents", "", "workspace agents directory")
 	root := fs.String("root", "", "root agent name")
 	out := fs.String("o", "", "output path")
@@ -265,16 +267,21 @@ func runCapture(ctx context.Context, args []string) error {
 	}
 
 	if strings.TrimSpace(*conversation) == "" {
-		return errors.New("usage: capture -conversation ID [-agents DIR] [-root NAME] [-db PATH] [-o OUT] [-name VAR] [-pack]")
+		return errors.New("usage: capture -conversation ID [-agents DIR] [-root NAME] [-o OUT] [-name VAR] [-pack]")
 	}
 
-	if *dbPath == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
+	configPath := "rocketclaw.json"
+	if _, errStat := os.Stat("femtoclaw.json"); errStat == nil {
+		configPath = "femtoclaw.json"
+	}
 
-		*dbPath = filepath.Join(cwd, ".rocketclaw", "state.sqlite3")
+	cfg, err := config.Load(configPath, "", config.AWSFetcher{})
+	if err != nil {
+		return fmt.Errorf("load rocketclaw config: %w", err)
+	}
+
+	if configPath == "femtoclaw.json" {
+		cfg.WorkDir = ".femtoclaw"
 	}
 
 	if *agentsDir == "" {
@@ -295,7 +302,9 @@ func runCapture(ctx context.Context, args []string) error {
 	}
 
 	return Capture(ctx, CaptureOptions{
-		DBPath:         *dbPath,
+		Workspace:      cfg.Workspace,
+		RuntimeDir:     cfg.RuntimeDirName(),
+		DatabaseURL:    cfg.DatabaseURL,
 		ConversationID: *conversation,
 		AgentsDir:      *agentsDir,
 		Root:           *root,

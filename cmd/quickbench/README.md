@@ -122,18 +122,17 @@ go run github.com/Rocketable/platform/cmd/quickbench@main run ./cmd/quickbench/e
 
 go run github.com/Rocketable/platform/cmd/quickbench@main capture \
   --conversation slack-thread:C0123:1710000000.000100 \
-  --db /path/to/workspace/.rocketclaw/state.sqlite3 \
   --agents /path/to/workspace/agents \
   --root main \
   -o ./captured
 ```
 
-Default capture DB path is `./.rocketclaw/state.sqlite3`; default agents dir is `./agents`. Capture copies the full agent tree, freezes non-`task` tool outputs as mocks, and writes stub `bench.yaml` (`elo.model: gpt-5.6-luna`, `reasoningEffort: max`, TODO criteria) — edit `elo.criteria` before ranking is meaningful. Runs skip ELO when criteria still contain the capture TODO marker.
+Capture reads `database_url` from the selected workspace RocketClaw config. Default agents dir is `./agents`. Capture copies the full agent tree, freezes non-`task` tool outputs as mocks, and writes stub `bench.yaml` (`elo.model: gpt-5.6-luna`, `reasoningEffort: max`, TODO criteria) — edit `elo.criteria` before ranking is meaningful. Runs skip ELO when criteria still contain the capture TODO marker.
 
 **Fidelity notes**
 
 - Agent markdown is copied **verbatim** from the workspace (permissions included). If `task` allows a named subagent, that agent file must be present.
-- Nested subagent *internal* turns are not in sqlite. Re-run re-executes `task` live against BAR agents.
+- Nested subagent *internal* turns are not in the state store. Re-run re-executes `task` live against BAR agents.
 - Live CLIs like `gh` are not reproducible in bench. Capture seeds `turns.yaml` `bash:` from observed bash/execute calls. Run injects `rocketcode.Config.ShellCommand` so matching is done in Go against the full command string (exact / `prefix*`); emission is a tiny `/bin/sh -c`. Principal can edit doubles. Unmocked commands fail with `quickbench: unmocked bash command`.
 
 ## Capture → edit → run

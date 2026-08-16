@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -51,6 +52,11 @@ func slackJSON(botToken string) string {
 
 func loadSecretConfig(t *testing.T, local, arn string, fetcher SecretFetcher) *Config {
 	t.Helper()
+
+	if !strings.Contains(local, `"database_url"`) {
+		local = strings.Replace(local, "{", `{"database_url":"postgres://localhost/rocketclaw_test?sslmode=disable",`, 1)
+	}
+
 	path := filepath.Join(t.TempDir(), "rocketclaw.json")
 	require.NoError(t, os.WriteFile(path, []byte(local), 0o600))
 	cfg, err := Load(path, arn, fetcher)

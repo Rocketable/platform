@@ -13,7 +13,7 @@ func TestRunDoctorReportsRuntime(t *testing.T) {
 	t.Chdir(workspace)
 
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, defaultConfigPath), []byte(`{
-		"workspace": ".",
+		"workspace": ".", "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
 		"openai": {"api_key": "test-key"},
 		"slack": {"bot_token": "xoxb-test", "app_token": "xapp-test", "channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
 		"mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
@@ -33,13 +33,13 @@ func TestRunDoctorReportsLegacyConfigAndWorkDir(t *testing.T) {
 	t.Chdir(workspace)
 
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, defaultConfigPath), []byte(`{
-		"workspace": ".",
+		"workspace": ".", "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
 		"openai": {"api_key": "rocket-key"},
 		"slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
 		"mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
 	}`), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, legacyConfigPath), []byte(`{
-		"workspace": ".",
+		"workspace": ".", "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
 		"openai": {"api_key": "legacy-key"},
 		"slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
 		"mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
@@ -65,7 +65,7 @@ func TestRunDoctorReportsOutputWriteError(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, defaultConfigPath), []byte(`{
-		"workspace": ".",
+		"workspace": ".", "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
 		"openai": {"api_key": "test-key"},
 		"slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
 		"mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}

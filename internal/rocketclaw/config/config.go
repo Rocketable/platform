@@ -17,6 +17,7 @@ import (
 // Config is the top-level rocketclaw runtime configuration.
 type Config struct {
 	Workspace         string                     `json:"workspace"`
+	DatabaseURL       string                     `json:"database_url"`
 	WorkDir           string                     `json:"-"`
 	Overlays          []string                   `json:"overlays,omitempty"`
 	Models            map[string]string          `json:"models,omitempty"`
@@ -235,6 +236,11 @@ func LoadExternalMCPUsers(configPath string) (map[string]string, error) {
 func (c *Config) Validate() error {
 	if c.Workspace == "" {
 		return errors.New("workspace is required")
+	}
+
+	c.DatabaseURL = strings.TrimSpace(c.DatabaseURL)
+	if c.DatabaseURL == "" {
+		return errors.New("database_url is required")
 	}
 
 	if err := validateEnvironment(c.Environment); err != nil {

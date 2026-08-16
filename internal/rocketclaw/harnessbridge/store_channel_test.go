@@ -1,66 +1,14 @@
 package harnessbridge
 
 import (
-	"database/sql"
-	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestFreshSchemaHasNoSeedState(t *testing.T) {
-	store, err := NewSessionServiceIn(t.TempDir(), ".rocketclaw", slog.New(slog.DiscardHandler))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
-
-	rows, err := store.db.QueryContext(t.Context(), `SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
-	require.NoError(t, err)
-
-	var tables []string
-
-	for rows.Next() {
-		var name string
-		require.NoError(t, rows.Scan(&name))
-		tables = append(tables, name)
-	}
-
-	require.NoError(t, rows.Close())
-	require.NoError(t, rows.Err())
-	assert.Equal(t, []string{"active_turns", "conversation_goals", "cron_schedule_runs", "cron_schedules", "external_mcp_sessions", "managed_conversations", "pending_restart_notifications", "scheduled_messages", "session_entries"}, tables)
-
-	var version int
-	require.NoError(t, store.db.QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
-	assert.Equal(t, sessionDBSchemaVersion, version)
-
-	rows, err = store.db.QueryContext(t.Context(), `PRAGMA table_info(external_mcp_sessions)`)
-
-	require.NoError(t, err)
-	defer func() { require.NoError(t, rows.Close()) }()
-
-	var columns []string
-
-	for rows.Next() {
-		var (
-			cid, notNull, primaryKey int
-			name, columnType         string
-			defaultValue             sql.NullString
-		)
-		require.NoError(t, rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey))
-		columns = append(columns, name)
-	}
-
-	require.NoError(t, rows.Err())
-	assert.Equal(t, []string{"external_conversation_id", "private_conversation_id", "managed_conversation_id", "agent", "slack_channel"}, columns)
-
-	_, err = store.db.ExecContext(t.Context(), `INSERT INTO external_mcp_sessions VALUES ('blank-private', '', 'managed', 'agent', '#ops')`)
-	require.Error(t, err)
-	_, err = store.db.ExecContext(t.Context(), `INSERT INTO external_mcp_sessions VALUES ('blank-managed', 'private', '', 'agent', '#ops')`)
-	require.Error(t, err)
-}
-
 func TestSessionStoreRequiresConversationID(t *testing.T) {
-	store, err := NewSessionServiceIn(t.TempDir(), ".rocketclaw", slog.New(slog.DiscardHandler))
+	store, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
 
@@ -69,7 +17,7 @@ func TestSessionStoreRequiresConversationID(t *testing.T) {
 }
 
 func TestExternalMCPBindingPersistsPrivateAndManagedConversations(t *testing.T) {
-	store, err := NewSessionServiceIn(t.TempDir(), ".rocketclaw", slog.New(slog.DiscardHandler))
+	store, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
 
@@ -91,7 +39,7 @@ func TestExternalMCPBindingPersistsPrivateAndManagedConversations(t *testing.T) 
 }
 
 func TestExternalMCPConversationRegistrationIsAtomic(t *testing.T) {
-	store, err := NewSessionServiceIn(t.TempDir(), ".rocketclaw", slog.New(slog.DiscardHandler))
+	store, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
 
@@ -110,7 +58,7 @@ func TestExternalMCPConversationRegistrationIsAtomic(t *testing.T) {
 }
 
 func TestExternalMCPConversationCleanupRemovesOnlyBoundSessions(t *testing.T) {
-	store, err := NewSessionServiceIn(t.TempDir(), ".rocketclaw", slog.New(slog.DiscardHandler))
+	store, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
 

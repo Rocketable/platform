@@ -22,7 +22,7 @@ func (d stateDAO) upsertThread(ctx context.Context, conversationID string, threa
 		return errors.New("thread conversation ID is required")
 	}
 
-	_, err := d.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES (?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET agent = excluded.agent, created_by = CASE WHEN excluded.created_by = '' THEN managed_conversations.created_by ELSE excluded.created_by END`, conversationID, strings.TrimSpace(thread.Agent), strings.TrimSpace(string(thread.CreatedBy)))
+	_, err := d.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, $2, $3) ON CONFLICT(conversation_id) DO UPDATE SET agent = excluded.agent, created_by = CASE WHEN excluded.created_by = '' THEN managed_conversations.created_by ELSE excluded.created_by END`, conversationID, strings.TrimSpace(thread.Agent), strings.TrimSpace(string(thread.CreatedBy)))
 	if err != nil {
 		return fmt.Errorf("upsert managed conversation: %w", err)
 	}
@@ -36,7 +36,7 @@ func (d stateDAO) thread(ctx context.Context, conversationID string) (ThreadStat
 		createdBy string
 	)
 
-	err := d.db.QueryRowContext(ctx, `SELECT agent, created_by FROM managed_conversations WHERE conversation_id = ?`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &createdBy)
+	err := d.db.QueryRowContext(ctx, `SELECT agent, created_by FROM managed_conversations WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &createdBy)
 	if err == sql.ErrNoRows {
 		return ThreadState{}, false, nil
 	}
@@ -51,7 +51,7 @@ func (d stateDAO) thread(ctx context.Context, conversationID string) (ThreadStat
 }
 
 func (d stateDAO) setThreadAgent(ctx context.Context, conversationID, agent string) (bool, error) {
-	result, err := d.db.ExecContext(ctx, `UPDATE managed_conversations SET agent = ? WHERE conversation_id = ?`, strings.TrimSpace(agent), strings.TrimSpace(conversationID))
+	result, err := d.db.ExecContext(ctx, `UPDATE managed_conversations SET agent = $1 WHERE conversation_id = $2`, strings.TrimSpace(agent), strings.TrimSpace(conversationID))
 	if err != nil {
 		return false, fmt.Errorf("update managed conversation agent: %w", err)
 	}
@@ -70,7 +70,7 @@ func (d stateDAO) upsertExternalMCPSession(ctx context.Context, externalConversa
 		privateConversationID = privateID
 	}
 
-	_, err := d.db.ExecContext(ctx, `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES (?, ?, ?, ?, ?) ON CONFLICT(external_conversation_id) DO UPDATE SET private_conversation_id = excluded.private_conversation_id, managed_conversation_id = excluded.managed_conversation_id, agent = excluded.agent, slack_channel = excluded.slack_channel`, strings.TrimSpace(externalConversationID), privateConversationID, strings.TrimSpace(session.ManagedConversationID), strings.TrimSpace(session.Agent), strings.TrimSpace(session.SlackChannel))
+	_, err := d.db.ExecContext(ctx, `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES ($1, $2, $3, $4, $5) ON CONFLICT(external_conversation_id) DO UPDATE SET private_conversation_id = excluded.private_conversation_id, managed_conversation_id = excluded.managed_conversation_id, agent = excluded.agent, slack_channel = excluded.slack_channel`, strings.TrimSpace(externalConversationID), privateConversationID, strings.TrimSpace(session.ManagedConversationID), strings.TrimSpace(session.Agent), strings.TrimSpace(session.SlackChannel))
 	if err != nil {
 		return fmt.Errorf("upsert external MCP session: %w", err)
 	}
@@ -79,7 +79,7 @@ func (d stateDAO) upsertExternalMCPSession(ctx context.Context, externalConversa
 }
 
 func (d stateDAO) externalMCPSession(ctx context.Context, externalConversationID string) (ExternalMCPSessionState, bool, error) {
-	_, session, err := scanExternalMCPSession(d.db.QueryRowContext(ctx, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel FROM external_mcp_sessions WHERE external_conversation_id = ?`, strings.TrimSpace(externalConversationID)))
+	_, session, err := scanExternalMCPSession(d.db.QueryRowContext(ctx, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel FROM external_mcp_sessions WHERE external_conversation_id = $1`, strings.TrimSpace(externalConversationID)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return ExternalMCPSessionState{}, false, nil
 	}
@@ -92,7 +92,7 @@ func (d stateDAO) externalMCPSession(ctx context.Context, externalConversationID
 }
 
 func (d stateDAO) externalMCPSessionByConversationID(ctx context.Context, conversationID string) (externalConversationID string, session ExternalMCPSessionState, found bool, err error) {
-	externalConversationID, session, err = scanExternalMCPSession(d.db.QueryRowContext(ctx, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel FROM external_mcp_sessions WHERE private_conversation_id = ? OR managed_conversation_id = ?`, strings.TrimSpace(conversationID), strings.TrimSpace(conversationID)))
+	externalConversationID, session, err = scanExternalMCPSession(d.db.QueryRowContext(ctx, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel FROM external_mcp_sessions WHERE private_conversation_id = $1 OR managed_conversation_id = $2`, strings.TrimSpace(conversationID), strings.TrimSpace(conversationID)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ExternalMCPSessionState{}, false, nil
 	}
@@ -120,7 +120,7 @@ func scanExternalMCPSession(scanner rowScanner) (string, ExternalMCPSessionState
 }
 
 func (d stateDAO) beginGoal(ctx context.Context, conversationID string, goal *GoalState) (bool, error) {
-	result, err := d.db.ExecContext(ctx, `INSERT INTO conversation_goals (conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET objective = excluded.objective, check_script = excluded.check_script, max_turns = excluded.max_turns, turns_used = excluded.turns_used, status = excluded.status, note = excluded.note, slack_recipient_team_id = excluded.slack_recipient_team_id, slack_recipient_user_id = excluded.slack_recipient_user_id, created_at_unix_ns = excluded.created_at_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns WHERE conversation_goals.status NOT IN ('', ?)`, strings.TrimSpace(conversationID), strings.TrimSpace(goal.Objective), strings.TrimSpace(goal.CheckScript), goal.MaxTurns, goal.TurnsUsed, strings.TrimSpace(goal.Status), strings.TrimSpace(goal.Note), strings.TrimSpace(goal.SlackRecipientTeamID), strings.TrimSpace(goal.SlackRecipientUserID), timeUnixNano(goal.CreatedAt), timeUnixNano(goal.UpdatedAt), GoalStatusActive)
+	result, err := d.db.ExecContext(ctx, `INSERT INTO conversation_goals (conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT(conversation_id) DO UPDATE SET objective = excluded.objective, check_script = excluded.check_script, max_turns = excluded.max_turns, turns_used = excluded.turns_used, status = excluded.status, note = excluded.note, slack_recipient_team_id = excluded.slack_recipient_team_id, slack_recipient_user_id = excluded.slack_recipient_user_id, created_at_unix_ns = excluded.created_at_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns WHERE conversation_goals.status NOT IN ('', $12)`, strings.TrimSpace(conversationID), strings.TrimSpace(goal.Objective), strings.TrimSpace(goal.CheckScript), goal.MaxTurns, goal.TurnsUsed, strings.TrimSpace(goal.Status), strings.TrimSpace(goal.Note), strings.TrimSpace(goal.SlackRecipientTeamID), strings.TrimSpace(goal.SlackRecipientUserID), timeUnixNano(goal.CreatedAt), timeUnixNano(goal.UpdatedAt), GoalStatusActive)
 	if err != nil {
 		return false, fmt.Errorf("begin goal: %w", err)
 	}
@@ -134,7 +134,7 @@ func (d stateDAO) beginGoal(ctx context.Context, conversationID string, goal *Go
 }
 
 func (d stateDAO) accountGoalTurn(ctx context.Context, conversationID string, now time.Time) (bool, error) {
-	result, err := d.db.ExecContext(ctx, `UPDATE conversation_goals SET turns_used = turns_used + 1, status = CASE WHEN max_turns > 0 AND turns_used + 1 >= max_turns THEN ? ELSE ? END, updated_at_unix_ns = ? WHERE conversation_id = ? AND (status = '' OR status = ?)`, GoalStatusBudgetExhausted, GoalStatusActive, timeUnixNano(now), strings.TrimSpace(conversationID), GoalStatusActive)
+	result, err := d.db.ExecContext(ctx, `UPDATE conversation_goals SET turns_used = turns_used + 1, status = CASE WHEN max_turns > 0 AND turns_used + 1 >= max_turns THEN $1 ELSE $2 END, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $5)`, GoalStatusBudgetExhausted, GoalStatusActive, timeUnixNano(now), strings.TrimSpace(conversationID), GoalStatusActive)
 	if err != nil {
 		return false, fmt.Errorf("account goal turn: %w", err)
 	}
@@ -148,7 +148,7 @@ func (d stateDAO) accountGoalTurn(ctx context.Context, conversationID string, no
 }
 
 func (d stateDAO) setActiveGoalStatus(ctx context.Context, conversationID, status, note string, now time.Time) (bool, error) {
-	result, err := d.db.ExecContext(ctx, `UPDATE conversation_goals SET status = ?, note = ?, updated_at_unix_ns = ? WHERE conversation_id = ? AND (status = '' OR status = ?)`, strings.TrimSpace(status), strings.TrimSpace(note), timeUnixNano(now), strings.TrimSpace(conversationID), GoalStatusActive)
+	result, err := d.db.ExecContext(ctx, `UPDATE conversation_goals SET status = $1, note = $2, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $5)`, strings.TrimSpace(status), strings.TrimSpace(note), timeUnixNano(now), strings.TrimSpace(conversationID), GoalStatusActive)
 	if err != nil {
 		return false, fmt.Errorf("set active goal status: %w", err)
 	}
@@ -167,7 +167,7 @@ func (d stateDAO) goal(ctx context.Context, conversationID string) (GoalState, b
 		createdAt, updatedAt int64
 	)
 
-	err := d.db.QueryRowContext(ctx, `SELECT objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns FROM conversation_goals WHERE conversation_id = ?`, strings.TrimSpace(conversationID)).Scan(&goal.Objective, &goal.CheckScript, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &goal.SlackRecipientTeamID, &goal.SlackRecipientUserID, &createdAt, &updatedAt)
+	err := d.db.QueryRowContext(ctx, `SELECT objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns FROM conversation_goals WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&goal.Objective, &goal.CheckScript, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &goal.SlackRecipientTeamID, &goal.SlackRecipientUserID, &createdAt, &updatedAt)
 	if err == sql.ErrNoRows {
 		return GoalState{}, false, nil
 	}
@@ -187,7 +187,7 @@ func (d stateDAO) goal(ctx context.Context, conversationID string) (GoalState, b
 }
 
 func (d stateDAO) activeGoals(ctx context.Context) (map[string]GoalState, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns FROM conversation_goals WHERE status = '' OR status = ? ORDER BY conversation_id`, GoalStatusActive)
+	rows, err := d.db.QueryContext(ctx, `SELECT conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns FROM conversation_goals WHERE status = '' OR status = $1 ORDER BY conversation_id`, GoalStatusActive)
 	if err != nil {
 		return nil, fmt.Errorf("query active goals: %w", err)
 	}
@@ -227,7 +227,7 @@ func (d stateDAO) activeGoals(ctx context.Context) (map[string]GoalState, error)
 }
 
 func (d stateDAO) putScheduledMessage(ctx context.Context, id string, message *ScheduledMessageState) error {
-	_, err := d.db.ExecContext(ctx, `INSERT INTO scheduled_messages (scheduled_message_id, conversation_id, agent, message, due_at_unix_ns, recurring, interval_ns) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(scheduled_message_id) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent, message = excluded.message, due_at_unix_ns = excluded.due_at_unix_ns, recurring = excluded.recurring, interval_ns = excluded.interval_ns`, strings.TrimSpace(id), strings.TrimSpace(message.ConversationID), strings.TrimSpace(message.Agent), message.Message, timeUnixNano(message.DueAt), boolInt(message.Recurring), int64(message.Interval))
+	_, err := d.db.ExecContext(ctx, `INSERT INTO scheduled_messages (scheduled_message_id, conversation_id, agent, message, due_at_unix_ns, recurring, interval_ns) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT(scheduled_message_id) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent, message = excluded.message, due_at_unix_ns = excluded.due_at_unix_ns, recurring = excluded.recurring, interval_ns = excluded.interval_ns`, strings.TrimSpace(id), strings.TrimSpace(message.ConversationID), strings.TrimSpace(message.Agent), message.Message, timeUnixNano(message.DueAt), boolInt(message.Recurring), int64(message.Interval))
 	if err != nil {
 		return fmt.Errorf("put scheduled message: %w", err)
 	}
@@ -240,7 +240,7 @@ func (d stateDAO) scheduledMessages(ctx context.Context, conversationID string) 
 	args := []any{}
 
 	if strings.TrimSpace(conversationID) != "" {
-		query = `SELECT scheduled_message_id, conversation_id, agent, message, due_at_unix_ns, recurring, interval_ns FROM scheduled_messages WHERE conversation_id = ? ORDER BY scheduled_message_id`
+		query = `SELECT scheduled_message_id, conversation_id, agent, message, due_at_unix_ns, recurring, interval_ns FROM scheduled_messages WHERE conversation_id = $1 ORDER BY scheduled_message_id`
 
 		args = append(args, strings.TrimSpace(conversationID))
 	}
@@ -274,7 +274,7 @@ func (d stateDAO) scheduledMessages(ctx context.Context, conversationID string) 
 }
 
 func (d stateDAO) deleteScheduledMessage(ctx context.Context, id string) error {
-	if _, err := d.db.ExecContext(ctx, `DELETE FROM scheduled_messages WHERE scheduled_message_id = ?`, strings.TrimSpace(id)); err != nil {
+	if _, err := d.db.ExecContext(ctx, `DELETE FROM scheduled_messages WHERE scheduled_message_id = $1`, strings.TrimSpace(id)); err != nil {
 		return fmt.Errorf("delete scheduled message: %w", err)
 	}
 
@@ -282,7 +282,7 @@ func (d stateDAO) deleteScheduledMessage(ctx context.Context, id string) error {
 }
 
 func (d stateDAO) resetScheduledMessages(ctx context.Context, conversationID string) error {
-	if _, err := d.db.ExecContext(ctx, `DELETE FROM scheduled_messages WHERE conversation_id = ?`, strings.TrimSpace(conversationID)); err != nil {
+	if _, err := d.db.ExecContext(ctx, `DELETE FROM scheduled_messages WHERE conversation_id = $1`, strings.TrimSpace(conversationID)); err != nil {
 		return fmt.Errorf("reset scheduled messages: %w", err)
 	}
 
@@ -290,7 +290,7 @@ func (d stateDAO) resetScheduledMessages(ctx context.Context, conversationID str
 }
 
 func (d stateDAO) markRestartRequester(ctx context.Context, conversationID string) error {
-	if _, err := d.db.ExecContext(ctx, `INSERT INTO pending_restart_notifications (conversation_id) VALUES (?) ON CONFLICT(conversation_id) DO NOTHING`, strings.TrimSpace(conversationID)); err != nil {
+	if _, err := d.db.ExecContext(ctx, `INSERT INTO pending_restart_notifications (conversation_id) VALUES ($1) ON CONFLICT(conversation_id) DO NOTHING`, strings.TrimSpace(conversationID)); err != nil {
 		return fmt.Errorf("mark restart requester: %w", err)
 	}
 
@@ -350,7 +350,7 @@ func (d stateDAO) upsertActiveTurnState(ctx context.Context, turn *ActiveTurnSta
 		return fmt.Errorf("marshal active turn completed function outputs: %w", err)
 	}
 
-	_, err = d.db.ExecContext(ctx, `INSERT INTO active_turns (id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent, model = excluded.model, display_model = excluded.display_model, replay_input_json = excluded.replay_input_json, output_trace_json = excluded.output_trace_json, token_usage_json = excluded.token_usage_json, response_id = excluded.response_id, open_function_calls_json = excluded.open_function_calls_json, completed_function_outputs_json = excluded.completed_function_outputs_json, restart_notice_json = excluded.restart_notice_json, source_metadata_json = excluded.source_metadata_json, updated_at_unix_ns = excluded.updated_at_unix_ns`, checkpointState.TurnID, checkpointState.ConversationKey, checkpointState.Agent, checkpointState.Model, checkpointState.DisplayModel, replayInput, outputTrace, tokenUsage, checkpointState.ResponseID, openCalls, completedOutputs, "", metadata, timeUnixNano(turn.CreatedAt), timeUnixNano(turn.UpdatedAt))
+	_, err = d.db.ExecContext(ctx, `INSERT INTO active_turns (id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) ON CONFLICT(id) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent, model = excluded.model, display_model = excluded.display_model, replay_input_json = excluded.replay_input_json, output_trace_json = excluded.output_trace_json, token_usage_json = excluded.token_usage_json, response_id = excluded.response_id, open_function_calls_json = excluded.open_function_calls_json, completed_function_outputs_json = excluded.completed_function_outputs_json, restart_notice_json = excluded.restart_notice_json, source_metadata_json = excluded.source_metadata_json, updated_at_unix_ns = excluded.updated_at_unix_ns`, checkpointState.TurnID, checkpointState.ConversationKey, checkpointState.Agent, checkpointState.Model, checkpointState.DisplayModel, replayInput, outputTrace, tokenUsage, checkpointState.ResponseID, openCalls, completedOutputs, "", metadata, timeUnixNano(turn.CreatedAt), timeUnixNano(turn.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("upsert active turn: %w", err)
 	}
@@ -364,7 +364,7 @@ func (d stateDAO) clearActiveTurn(ctx context.Context, turnID string) error {
 		return errors.New("active turn ID is required")
 	}
 
-	if _, err := d.db.ExecContext(ctx, `DELETE FROM active_turns WHERE id = ?`, turnID); err != nil {
+	if _, err := d.db.ExecContext(ctx, `DELETE FROM active_turns WHERE id = $1`, turnID); err != nil {
 		return fmt.Errorf("clear active turn: %w", err)
 	}
 
@@ -407,7 +407,7 @@ func (d stateDAO) recoverableActiveTurns(ctx context.Context) ([]ActiveTurnState
 	}
 
 	for _, errCorrupt := range corrupts {
-		_, err := d.db.ExecContext(ctx, `DELETE FROM active_turns WHERE id = ?`, errCorrupt.turnID)
+		_, err := d.db.ExecContext(ctx, `DELETE FROM active_turns WHERE id = $1`, errCorrupt.turnID)
 		if err != nil {
 			return nil, fmt.Errorf("delete corrupt active turn: %w", err)
 		}
@@ -417,7 +417,7 @@ func (d stateDAO) recoverableActiveTurns(ctx context.Context) ([]ActiveTurnState
 }
 
 func (d stateDAO) activeTurn(ctx context.Context, turnID string) (ActiveTurnState, bool, error) {
-	row := d.db.QueryRowContext(ctx, `SELECT id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns FROM active_turns WHERE id = ?`, strings.TrimSpace(turnID))
+	row := d.db.QueryRowContext(ctx, `SELECT id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns FROM active_turns WHERE id = $1`, strings.TrimSpace(turnID))
 
 	turn, err := scanActiveTurn(row)
 	if errors.Is(err, sql.ErrNoRows) {

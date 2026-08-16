@@ -13,6 +13,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/externalmcp"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
+	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge/harnessbridgetest"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -155,7 +156,9 @@ func TestExternalMCPInboundContentProvidesRelayAttachments(t *testing.T) {
 }
 
 func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
-	store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, testLogger())
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, dsn, testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
 
@@ -240,7 +243,9 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
 }
 
 func TestLegacyExternalMCPFollowupUsesExistingSharedConversation(t *testing.T) {
-	store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, testLogger())
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, dsn, testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
 
@@ -303,7 +308,9 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 		{name: "caller cancellation after acceptance", cancelAfterSubmit: true, wantBinding: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, testLogger())
+			dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+			require.NoError(t, err)
+			store, err := harnessbridge.NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, dsn, testLogger())
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
 

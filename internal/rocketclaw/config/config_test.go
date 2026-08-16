@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -415,6 +416,7 @@ func TestLoadDefaultsWorkspaceToConfigDirectory(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rocketclaw.json")
 	require.NoError(t, os.WriteFile(path, []byte(`{
+	  "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
 	  "openai": {"api_key": "test-key"},
 	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
 	  "mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
@@ -443,6 +445,7 @@ func TestValidateRejectsMissingRequiredConfig(t *testing.T) {
 		wantErr string
 	}{
 		{name: "workspace", update: func(c *Config) { c.Workspace = "" }, wantErr: "workspace is required"},
+		{name: "database url", update: func(c *Config) { c.DatabaseURL = "" }, wantErr: "database_url is required"},
 		{name: "rocketcode auth", update: func(c *Config) { c.OpenAI.RocketCodeAuth = "browser" }, wantErr: "openai.rocketcode_auth must be api_key or chatgpt"},
 		{name: "missing provider", update: func(c *Config) { c.AutoApproverModel = "/model" }, wantErr: `auto_approver_model: invalid model "/model": expected model or provider/model`},
 		{name: "missing model", update: func(c *Config) { c.AutoApproverModel = "work/" }, wantErr: `auto_approver_model: invalid model "work/": expected model or provider/model`},
@@ -641,6 +644,11 @@ func TestValidateRejectsAPIKeyAuthWithoutAPIKey(t *testing.T) {
 
 func loadTestConfig(t *testing.T, content string) *Config {
 	t.Helper()
+
+	if !strings.Contains(content, `"database_url"`) {
+		content = strings.Replace(content, "{", `{"database_url":"postgres://localhost/rocketclaw_test?sslmode=disable",`, 1)
+	}
+
 	path := filepath.Join(t.TempDir(), "rocketclaw.json")
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644), "write config")
 	cfg, err := Load(path, "", AWSFetcher{})
@@ -652,6 +660,7 @@ func loadTestConfig(t *testing.T, content string) *Config {
 func validConfig() *Config {
 	cfg := new(Config)
 	cfg.Workspace = "/tmp/project"
+	cfg.DatabaseURL = "postgres://localhost/rocketclaw_test?sslmode=disable"
 	cfg.Slack.BotToken = "xoxb-test"
 	cfg.Slack.AppToken = "xapp-test"
 	cfg.Slack.Channels = []SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U123"}}}

@@ -2101,69 +2101,6 @@ func TestBridgeStoppedManagedWorkflowPersistsRunSummary(t *testing.T) {
 	assert.Equal(t, "workflow stopped by user", summary.Error)
 }
 
-func TestBridgeStoppedWorkflowReportsSummaryStorageFailure(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")
-	root, err := os.OpenRoot(workspace)
-	require.NoError(t, err)
-	require.NoError(t, root.MkdirAll(".rocketclaw/skills", 0o755))
-	require.NoError(t, root.MkdirAll(".rocketclaw/workflows", 0o755))
-	require.NoError(t, root.WriteFile(".rocketclaw/workflows/stop-store.star", []byte("meta = {\"name\": \"stop-store\", \"description\": \"Stop store\", \"phases\": [\"work\", \"later\"]}\ndef spin():\n    while True:\n        pass\ndef main(args): return phase(\"work\", spin)\n"), 0o600))
-	definitions, err := workflow.Load(root, ".rocketclaw")
-	require.NoError(t, err)
-	require.NoError(t, root.Close())
-
-	service := newTestSessionServiceAt(t, workspace)
-	_, err = service.db.ExecContext(t.Context(), `CREATE TRIGGER reject_workflow_summary BEFORE INSERT ON session_entries BEGIN SELECT RAISE(ABORT, 'summary rejected'); END`)
-	require.NoError(t, err)
-
-	conversationID := SlackThreadConversationID("C123", "111.222")
-	bus := newTestBus()
-	t.Cleanup(bus.Close)
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: &config.Config{Workspace: workspace}, bus: bus, config: Config{ConversationID: conversationID, Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}}
-	require.NoError(t, bridge.Start(t.Context()))
-	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
-
-	type completion struct {
-		text     string
-		terminal workflow.Terminal
-	}
-
-	completed := make(chan completion, 1)
-
-	go func() {
-		interrupted := false
-		for outbound := range bus.Outbound(t.Context()) {
-			if !interrupted && outbound.WorkflowPhase != nil && outbound.WorkflowPhase.Status == workflow.PhaseInProgress {
-				interrupted = true
-
-				bridge.InterruptActiveTurn()
-			}
-
-			outbound.MarkDelivered(nil)
-
-			if outbound.Complete {
-				completed <- completion{text: outbound.Text, terminal: outbound.WorkflowTerminal}
-				return
-			}
-		}
-	}()
-
-	inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "workflow", "$workflow stop-store", true)
-	inbound.Workflow = &workflow.RunRequest{Definition: definitions["stop-store"]}
-	response := inbound.EnableResponseWait()
-	require.NoError(t, bridge.Submit(t.Context(), inbound))
-	require.NoError(t, (<-response).Err)
-
-	result := <-completed
-	assert.Contains(t, result.text, "store workflow run")
-	assert.Contains(t, result.text, "context canceled")
-	assert.Equal(t, workflow.TerminalFailed, result.terminal)
-	entries, err := service.ObserveEntries(t.Context(), conversationID, 0)
-	require.NoError(t, err)
-	assert.Empty(t, entries)
-}
-
 func TestWorkflowRunSummaryIsVisibleWithoutIntermediateOutput(t *testing.T) {
 	const intermediate = "PRIVATE_INTERMEDIATE_WORKFLOW_OUTPUT"
 

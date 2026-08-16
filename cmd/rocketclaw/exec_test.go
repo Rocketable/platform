@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
+	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge/harnessbridgetest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -117,7 +119,9 @@ func TestRunExecInPrintsHelpInAnyArgumentPosition(t *testing.T) {
 func TestRunExecInPassesPromptVerbatim(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
-	writeLintConfig(t, workspace)
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(fmt.Sprintf(`{"workspace":%q,"database_url":%q,"slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"openai":{"api_key":"test"}}`, workspace, dsn)), 0o600))
 	writeLintAgent(t, filepath.Join(workspace, config.DefaultRuntimeDir), "main.md", "---\n---\nMain agent.\n")
 
 	var out bytes.Buffer
@@ -161,7 +165,9 @@ func TestExecuteExecRunStreamsEventsInOrder(t *testing.T) {
 		return harnessbridge.RawRunResult{Text: "found it", VerbatimMessage: "found it"}, nil
 	}
 
-	cfg := &config.Config{Workspace: workspace}
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn}
 	require.NoError(t, executeExecRun(t.Context(), cfg, "triage", "check logs", 0, slog.New(slog.DiscardHandler), &out, run))
 
 	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
@@ -184,10 +190,12 @@ func TestExecuteExecRunPersistsSession(t *testing.T) {
 		return harnessbridge.RawRunResult{Text: "found it"}, err
 	}
 
-	cfg := &config.Config{Workspace: workspace}
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn}
 	require.NoError(t, executeExecRun(t.Context(), cfg, "triage", "check logs", 0, slog.New(slog.DiscardHandler), &out, run))
 
-	summaries, err := harnessbridge.ListSessionsInOptions(t.Context(), workspace, config.DefaultRuntimeDir, harnessbridge.SessionListOptions{})
+	summaries, err := harnessbridge.ListSessionsInOptions(t.Context(), workspace, config.DefaultRuntimeDir, cfg.DatabaseURL, harnessbridge.SessionListOptions{})
 	require.NoError(t, err)
 	require.Len(t, summaries, 1)
 	assert.True(t, strings.HasPrefix(summaries[0].ConversationID, "exec-"))
@@ -202,8 +210,10 @@ func TestExecuteExecRunEmitsSingleErrorLineOnFailure(t *testing.T) {
 		return harnessbridge.RawRunResult{}, errors.New("model unavailable")
 	}
 
-	cfg := &config.Config{Workspace: workspace}
-	err := executeExecRun(t.Context(), cfg, "triage", "check logs", 0, slog.New(slog.DiscardHandler), &out, run)
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn}
+	err = executeExecRun(t.Context(), cfg, "triage", "check logs", 0, slog.New(slog.DiscardHandler), &out, run)
 
 	var coded exitCodeError
 
@@ -233,8 +243,10 @@ func TestExecuteExecRunCancelledDuringRunEmitsStartThenSingleError(t *testing.T)
 		return harnessbridge.RawRunResult{}, fmt.Errorf("run cancelled: %w", ctx.Err())
 	}
 
-	cfg := &config.Config{Workspace: workspace}
-	err := executeExecRun(runCtx, cfg, "triage", "check logs", time.Minute, slog.New(slog.DiscardHandler), &out, run)
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn}
+	err = executeExecRun(runCtx, cfg, "triage", "check logs", time.Minute, slog.New(slog.DiscardHandler), &out, run)
 
 	require.Error(t, err)
 
@@ -258,8 +270,10 @@ func TestExecuteExecRunCancelledBeforeStartEmitsOnlyError(t *testing.T) {
 		return harnessbridge.RawRunResult{}, nil
 	}
 
-	cfg := &config.Config{Workspace: workspace}
-	err := executeExecRun(runCtx, cfg, "triage", "check logs", time.Minute, slog.New(slog.DiscardHandler), &out, run)
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn}
+	err = executeExecRun(runCtx, cfg, "triage", "check logs", time.Minute, slog.New(slog.DiscardHandler), &out, run)
 
 	var coded exitCodeError
 

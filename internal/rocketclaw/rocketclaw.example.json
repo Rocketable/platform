@@ -1,5 +1,6 @@
 {
   "workspace": "/Users/you/Projects/rocketclaw",
+  "database_url": "postgres://localhost/rocketclaw?sslmode=disable",
   "environment": [
     "EXAMPLE_API_TOKEN=set-me"
   ],

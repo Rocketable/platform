@@ -1,18 +1,15 @@
 package harnessbridge
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"iter"
 	"log/slog"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -21,14 +18,11 @@ import (
 	"time"
 
 	harness "github.com/Rocketable/platform/internal/rocketcode"
-
-	// Register the pure-Go SQLite database/sql driver used by this package.
-	_ "modernc.org/sqlite"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 )
 
 const restartNotificationDeveloperMessage = "The rocketclaw server has been restarted."
-
-var errStateStoreCorrupt = errors.New("rocketclaw state store is corrupt")
 
 // ErrGoalAlreadyActive reports that a conversation already has an active goal.
 var ErrGoalAlreadyActive = errors.New("goal already active")
@@ -115,7 +109,7 @@ type sqliteSessionStore struct {
 	service                               *SessionService
 }
 
-// SessionService owns runtime SQLite session and state access inside one rocketclaw process.
+// SessionService owns runtime PostgreSQL session and state access inside one rocketclaw process.
 type SessionService struct {
 	db *sql.DB
 
@@ -143,35 +137,16 @@ type SessionListOptions struct {
 	Limit        int
 }
 
-// ObservedSessionEntry is one stored rocketcode entry with its SQLite row ID.
+// ObservedSessionEntry is one stored rocketcode entry with its row ID.
 type ObservedSessionEntry struct {
 	ID    int64
 	Entry harness.SessionEntry
-}
-
-// VacuumStats reports SQLite page counts before and after vacuuming.
-type VacuumStats struct {
-	DBExists                         bool
-	BeforePageCount, BeforeFreePages int64
-	AfterPageCount, AfterFreePages   int64
-}
-
-// WALCheckpointStats reports the outcome of a SQLite WAL checkpoint.
-type WALCheckpointStats struct {
-	Busy, LogFrames, CheckpointedFrames int64
 }
 
 // PruneStateStats reports how much stale persisted state was removed.
 type PruneStateStats struct {
 	Threads, ExternalMCPSessions int
 	SessionRows                  int64
-}
-
-// CheckAndRecoverSessionDBResult reports the manual state-store check outcome.
-type CheckAndRecoverSessionDBResult struct {
-	DBExists  bool
-	Healthy   bool
-	Recovered bool
 }
 
 type stateStoreDB interface {
@@ -184,9 +159,9 @@ func newSessionStore(conversationID string, service *SessionService) sqliteSessi
 	return sqliteSessionStore{conversationID: strings.TrimSpace(conversationID), service: service}
 }
 
-// NewSessionServiceIn starts a runtime-owned SQLite session service in runtimeDir.
-func NewSessionServiceIn(workspace, runtimeDir string, logger *slog.Logger) (*SessionService, error) {
-	db, err := openWorkspaceSessionDB(context.Background(), workspace, runtimeDir, logger)
+// NewSessionServiceIn starts a runtime-owned PostgreSQL session service.
+func NewSessionServiceIn(_, _, databaseURL string, logger *slog.Logger) (*SessionService, error) {
+	db, err := openSessionDB(context.Background(), databaseURL, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -342,11 +317,11 @@ func (s *SessionService) RegisterExternalMCPConversation(externalConversationID,
 		}
 	}()
 
-	if _, err := tx.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES (?, ?, '')`, session.ManagedConversationID, managedAgent); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, $2, '')`, session.ManagedConversationID, managedAgent); err != nil {
 		return fmt.Errorf("register external MCP managed conversation: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES (?, ?, ?, ?, ?)`, externalConversationID, session.PrivateConversationID, session.ManagedConversationID, session.Agent, session.SlackChannel); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES ($1, $2, $3, $4, $5)`, externalConversationID, session.PrivateConversationID, session.ManagedConversationID, session.Agent, session.SlackChannel); err != nil {
 		return fmt.Errorf("register external MCP binding: %w", err)
 	}
 
@@ -379,7 +354,7 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 		return nil
 	}
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM external_mcp_sessions WHERE external_conversation_id = ? AND managed_conversation_id = ?`, strings.TrimSpace(externalConversationID), session.ManagedConversationID); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM external_mcp_sessions WHERE external_conversation_id = $1 AND managed_conversation_id = $2`, strings.TrimSpace(externalConversationID), session.ManagedConversationID); err != nil {
 		return fmt.Errorf("clean failed external MCP binding: %w", err)
 	}
 
@@ -389,11 +364,11 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 		}
 
 		for _, statement := range []string{
-			`DELETE FROM session_entries WHERE conversation_id = ?`,
-			`DELETE FROM active_turns WHERE conversation_id = ?`,
-			`DELETE FROM scheduled_messages WHERE conversation_id = ?`,
-			`DELETE FROM pending_restart_notifications WHERE conversation_id = ?`,
-			`DELETE FROM conversation_goals WHERE conversation_id = ?`,
+			`DELETE FROM session_entries WHERE conversation_id = $1`,
+			`DELETE FROM active_turns WHERE conversation_id = $1`,
+			`DELETE FROM scheduled_messages WHERE conversation_id = $1`,
+			`DELETE FROM pending_restart_notifications WHERE conversation_id = $1`,
+			`DELETE FROM conversation_goals WHERE conversation_id = $1`,
 		} {
 			if _, err := tx.ExecContext(ctx, statement, conversationID); err != nil {
 				return fmt.Errorf("clean failed external MCP conversation: %w", err)
@@ -401,7 +376,7 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM managed_conversations WHERE conversation_id = ?`, session.ManagedConversationID); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM managed_conversations WHERE conversation_id = $1`, session.ManagedConversationID); err != nil {
 		return fmt.Errorf("clean failed external MCP managed conversation: %w", err)
 	}
 
@@ -539,7 +514,7 @@ func (s *SessionService) ClaimScheduledMessage(id, conversationID string, dueAt,
 
 	defer func() { _ = tx.Rollback() }()
 
-	row := tx.QueryRowContext(context.Background(), `SELECT scheduled_message_id, conversation_id, agent, message, due_at_unix_ns, recurring, interval_ns FROM scheduled_messages WHERE scheduled_message_id = ?`, strings.TrimSpace(id))
+	row := tx.QueryRowContext(context.Background(), `SELECT scheduled_message_id, conversation_id, agent, message, due_at_unix_ns, recurring, interval_ns FROM scheduled_messages WHERE scheduled_message_id = $1`, strings.TrimSpace(id))
 
 	_, message, err := scanScheduledMessage(row)
 	if err != nil {
@@ -586,12 +561,12 @@ func (s *SessionService) SyncCronSchedules(schedules []CronScheduleState, now ti
 		schedule.RelativePath = strings.TrimSpace(schedule.RelativePath)
 		seen[schedule.ScheduleID] = struct{}{}
 
-		_, err := tx.ExecContext(ctx, `INSERT INTO cron_schedules (schedule_id, relative_path, next_due_unix_ns, updated_at_unix_ns) VALUES (?, ?, ?, ?) ON CONFLICT(schedule_id) DO UPDATE SET relative_path = excluded.relative_path, updated_at_unix_ns = excluded.updated_at_unix_ns`, schedule.ScheduleID, schedule.RelativePath, timeUnixNano(schedule.NextDue), timeUnixNano(now))
+		_, err := tx.ExecContext(ctx, `INSERT INTO cron_schedules (schedule_id, relative_path, next_due_unix_ns, updated_at_unix_ns) VALUES ($1, $2, $3, $4) ON CONFLICT(schedule_id) DO UPDATE SET relative_path = excluded.relative_path, updated_at_unix_ns = excluded.updated_at_unix_ns`, schedule.ScheduleID, schedule.RelativePath, timeUnixNano(schedule.NextDue), timeUnixNano(now))
 		if err != nil {
 			return fmt.Errorf("upsert cron schedule: %w", err)
 		}
 
-		_, err = tx.ExecContext(ctx, `INSERT INTO cron_schedule_runs (relative_path, running, running_since_unix_ns, updated_at_unix_ns) VALUES (?, 0, 0, ?) ON CONFLICT(relative_path) DO NOTHING`, schedule.RelativePath, timeUnixNano(now))
+		_, err = tx.ExecContext(ctx, `INSERT INTO cron_schedule_runs (relative_path, running, running_since_unix_ns, updated_at_unix_ns) VALUES ($1, 0, 0, $2) ON CONFLICT(relative_path) DO NOTHING`, schedule.RelativePath, timeUnixNano(now))
 		if err != nil {
 			return fmt.Errorf("ensure cron run state: %w", err)
 		}
@@ -625,7 +600,7 @@ func (s *SessionService) SyncCronSchedules(schedules []CronScheduleState, now ti
 	}
 
 	for _, scheduleID := range stale {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM cron_schedules WHERE schedule_id = ?`, scheduleID); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM cron_schedules WHERE schedule_id = $1`, scheduleID); err != nil {
 			return fmt.Errorf("delete stale cron schedule: %w", err)
 		}
 	}
@@ -669,10 +644,20 @@ func (s *SessionService) ResetCronSchedules() error {
 
 // DueCronSchedules returns observed scheduled cron definitions due at now.
 func (s *SessionService) DueCronSchedules(now time.Time, limit int) ([]CronScheduleState, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT schedule_id, relative_path, next_due_unix_ns FROM cron_schedules WHERE next_due_unix_ns <= ? ORDER BY next_due_unix_ns, schedule_id LIMIT CASE WHEN ? > 0 THEN ? ELSE -1 END`, timeUnixNano(now), limit, limit)
+	query := `SELECT schedule_id, relative_path, next_due_unix_ns FROM cron_schedules WHERE next_due_unix_ns <= $1 ORDER BY next_due_unix_ns, schedule_id`
+	args := []any{timeUnixNano(now)}
+
+	if limit > 0 {
+		query += ` LIMIT $2`
+
+		args = append(args, limit)
+	}
+
+	rows, err := s.db.QueryContext(context.Background(), query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query due cron schedules: %w", err)
 	}
+
 	defer func() { _ = rows.Close() }()
 
 	var schedules []CronScheduleState
@@ -704,7 +689,7 @@ func (s *SessionService) ClaimCronSchedule(due CronScheduleState, nextDue, now t
 
 	defer func() { _ = tx.Rollback() }()
 
-	schedule, err := scanCronSchedule(tx.QueryRowContext(ctx, `SELECT schedule_id, relative_path, next_due_unix_ns FROM cron_schedules WHERE schedule_id = ?`, strings.TrimSpace(due.ScheduleID)))
+	schedule, err := scanCronSchedule(tx.QueryRowContext(ctx, `SELECT schedule_id, relative_path, next_due_unix_ns FROM cron_schedules WHERE schedule_id = $1`, strings.TrimSpace(due.ScheduleID)))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return CronScheduleRun{}, false, nil
@@ -717,18 +702,18 @@ func (s *SessionService) ClaimCronSchedule(due CronScheduleState, nextDue, now t
 		return CronScheduleRun{}, false, nil
 	}
 
-	var running int
+	var running bool
 
-	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM cron_schedule_runs WHERE relative_path = ? AND running != 0)`, schedule.RelativePath).Scan(&running)
+	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM cron_schedule_runs WHERE relative_path = $1 AND running != 0)`, schedule.RelativePath).Scan(&running)
 	if err != nil {
 		return CronScheduleRun{}, false, fmt.Errorf("check cron run state: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `UPDATE cron_schedules SET next_due_unix_ns = ?, updated_at_unix_ns = ? WHERE schedule_id = ?`, timeUnixNano(nextDue), timeUnixNano(now), schedule.ScheduleID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE cron_schedules SET next_due_unix_ns = $1, updated_at_unix_ns = $2 WHERE schedule_id = $3`, timeUnixNano(nextDue), timeUnixNano(now), schedule.ScheduleID); err != nil {
 		return CronScheduleRun{}, false, fmt.Errorf("advance cron schedule: %w", err)
 	}
 
-	if running != 0 {
+	if running {
 		if err := tx.Commit(); err != nil {
 			return CronScheduleRun{}, false, fmt.Errorf("commit overlapped cron schedule claim: %w", err)
 		}
@@ -736,7 +721,7 @@ func (s *SessionService) ClaimCronSchedule(due CronScheduleState, nextDue, now t
 		return CronScheduleRun{}, false, nil
 	}
 
-	_, err = tx.ExecContext(ctx, `INSERT INTO cron_schedule_runs (relative_path, running, running_since_unix_ns, updated_at_unix_ns) VALUES (?, 1, ?, ?) ON CONFLICT(relative_path) DO UPDATE SET running = 1, running_since_unix_ns = excluded.running_since_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns`, schedule.RelativePath, timeUnixNano(now), timeUnixNano(now))
+	_, err = tx.ExecContext(ctx, `INSERT INTO cron_schedule_runs (relative_path, running, running_since_unix_ns, updated_at_unix_ns) VALUES ($1, 1, $2, $3) ON CONFLICT(relative_path) DO UPDATE SET running = 1, running_since_unix_ns = excluded.running_since_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns`, schedule.RelativePath, timeUnixNano(now), timeUnixNano(now))
 	if err != nil {
 		return CronScheduleRun{}, false, fmt.Errorf("claim cron run state: %w", err)
 	}
@@ -750,7 +735,7 @@ func (s *SessionService) ClaimCronSchedule(due CronScheduleState, nextDue, now t
 
 // CompleteCronRun clears per-file scheduled cron running state.
 func (s *SessionService) CompleteCronRun(relativePath string, now time.Time) error {
-	_, err := s.db.ExecContext(context.Background(), `UPDATE cron_schedule_runs SET running = 0, running_since_unix_ns = 0, updated_at_unix_ns = ? WHERE relative_path = ?`, timeUnixNano(now), strings.TrimSpace(relativePath))
+	_, err := s.db.ExecContext(context.Background(), `UPDATE cron_schedule_runs SET running = 0, running_since_unix_ns = 0, updated_at_unix_ns = $1 WHERE relative_path = $2`, timeUnixNano(now), strings.TrimSpace(relativePath))
 	if err != nil {
 		return fmt.Errorf("complete cron run: %w", err)
 	}
@@ -760,7 +745,7 @@ func (s *SessionService) CompleteCronRun(relativePath string, now time.Time) err
 
 // ActiveGoalThreads returns managed thread state for conversations with active goals.
 func (s *SessionService) ActiveGoalThreads() (map[string]ThreadState, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT g.conversation_id, m.agent, m.created_by FROM conversation_goals g JOIN managed_conversations m ON m.conversation_id = g.conversation_id WHERE g.status = '' OR g.status = ? ORDER BY g.conversation_id`, GoalStatusActive)
+	rows, err := s.db.QueryContext(context.Background(), `SELECT g.conversation_id, m.agent, m.created_by FROM conversation_goals g JOIN managed_conversations m ON m.conversation_id = g.conversation_id WHERE g.status = '' OR g.status = $1 ORDER BY g.conversation_id`, GoalStatusActive)
 	if err != nil {
 		return nil, fmt.Errorf("query active goal threads: %w", err)
 	}
@@ -905,7 +890,7 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 		}
 
 		if prune {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_goals WHERE conversation_id = ?`, conversationID); err != nil {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_goals WHERE conversation_id = $1`, conversationID); err != nil {
 				return PruneStateStats{}, fmt.Errorf("delete stale goal: %w", err)
 			}
 		}
@@ -934,19 +919,19 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 	}
 
 	for conversationID := range deleteConversations {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM active_turns WHERE conversation_id = ?`, conversationID); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM active_turns WHERE conversation_id = $1`, conversationID); err != nil {
 			return PruneStateStats{}, fmt.Errorf("delete stale active turn: %w", err)
 		}
 
-		if _, err := tx.ExecContext(ctx, `DELETE FROM pending_restart_notifications WHERE conversation_id = ?`, conversationID); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM pending_restart_notifications WHERE conversation_id = $1`, conversationID); err != nil {
 			return PruneStateStats{}, fmt.Errorf("delete stale pending restart notification: %w", err)
 		}
 
-		if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_goals WHERE conversation_id = ?`, conversationID); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_goals WHERE conversation_id = $1`, conversationID); err != nil {
 			return PruneStateStats{}, fmt.Errorf("delete stale conversation goal: %w", err)
 		}
 
-		if _, err := tx.ExecContext(ctx, `DELETE FROM managed_conversations WHERE conversation_id = ?`, conversationID); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM managed_conversations WHERE conversation_id = $1`, conversationID); err != nil {
 			return PruneStateStats{}, fmt.Errorf("delete stale managed conversation: %w", err)
 		}
 	}
@@ -980,47 +965,13 @@ func (s *SessionService) AppendEntryID(ctx context.Context, conversationID strin
 	return appendSessionEntryDB(ctx, s.db, conversationID, entry)
 }
 
-// Stop closes the runtime service and its SQLite handle.
+// Stop closes the runtime service and its database handle.
 func (s *SessionService) Stop(context.Context) error {
 	if err := s.db.Close(); err != nil {
 		return fmt.Errorf("close rocketcode session db: %w", err)
 	}
 
 	return nil
-}
-
-// Vacuum runs incremental SQLite vacuum through the runtime service handle.
-func (s *SessionService) Vacuum(ctx context.Context) (VacuumStats, error) {
-	beforePages, err := queryPragmaInt(ctx, s.db, "page_count")
-	if err != nil {
-		return VacuumStats{}, err
-	}
-
-	beforeFree, err := queryPragmaInt(ctx, s.db, "freelist_count")
-	if err != nil {
-		return VacuumStats{}, err
-	}
-
-	if _, err := s.db.ExecContext(ctx, `PRAGMA incremental_vacuum`); err != nil {
-		return VacuumStats{}, fmt.Errorf("incremental vacuum rocketcode session db: %w", err)
-	}
-
-	afterPages, err := queryPragmaInt(ctx, s.db, "page_count")
-	if err != nil {
-		return VacuumStats{}, err
-	}
-
-	afterFree, err := queryPragmaInt(ctx, s.db, "freelist_count")
-	if err != nil {
-		return VacuumStats{}, err
-	}
-
-	return VacuumStats{DBExists: true, BeforePageCount: beforePages, BeforeFreePages: beforeFree, AfterPageCount: afterPages, AfterFreePages: afterFree}, nil
-}
-
-// CheckpointWAL checkpoints and truncates the SQLite WAL through the runtime service handle.
-func (s *SessionService) CheckpointWAL(ctx context.Context) (WALCheckpointStats, error) {
-	return checkpointWALDB(ctx, s.db)
 }
 
 // ReserveWorkflowTurn reserves paired turn ownership for a managed workflow.
@@ -1187,7 +1138,7 @@ func (s *SessionService) externalMCPMetadataEntry(ctx context.Context, conversat
 		raw   string
 	)
 
-	err := s.db.QueryRowContext(ctx, `SELECT id, entry_json FROM session_entries WHERE conversation_id = ? AND json_extract(entry_json, '$.type') = ? ORDER BY id DESC LIMIT 1`, strings.TrimSpace(conversationID), externalMCPMetadataEntryType).Scan(&entry.ID, &raw)
+	err := s.db.QueryRowContext(ctx, `SELECT id, entry_json FROM session_entries WHERE conversation_id = $1 AND entry_json::jsonb->>'type' = $2 ORDER BY id DESC LIMIT 1`, strings.TrimSpace(conversationID), externalMCPMetadataEntryType).Scan(&entry.ID, &raw)
 	if err == sql.ErrNoRows {
 		return ObservedSessionEntry{}, false, nil
 	}
@@ -1255,9 +1206,7 @@ func prepareSessionDBPathIn(workspace, runtimeDir string) error {
 		return fmt.Errorf("create rocketcode session db dir: %w", err)
 	}
 
-	_, err = rootPathExistsNoSymlink(root, filepath.ToSlash(filepath.Join(runtimeDir, "state.sqlite3")), "rocketcode session db")
-
-	return err
+	return rootPathExistsNoSymlink(root, filepath.ToSlash(filepath.Join(runtimeDir, "state.sqlite3")), "rocketcode session db")
 }
 
 func (s sqliteSessionStore) in() iter.Seq2[harness.SessionEntry, error] {
@@ -1293,31 +1242,23 @@ func (s sqliteSessionStore) outID(entry harness.SessionEntry) (int64, error) {
 }
 
 // ObserveSessionEntries returns replay entries and their row IDs after lastID.
-func ObserveSessionEntries(ctx context.Context, dbPath, conversationID string, lastID int64) ([]ObservedSessionEntry, error) {
+func ObserveSessionEntries(ctx context.Context, workspace, runtimeDir, databaseURL, conversationID string, lastID int64) ([]ObservedSessionEntry, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
 		return nil, errors.New("conversation ID is required")
 	}
 
-	workspace := filepath.Dir(filepath.Dir(dbPath))
-	runtimeDir := filepath.Base(filepath.Dir(dbPath))
-
-	db, ok, err := openExistingSessionDBReadOnly(ctx, workspace, runtimeDir)
+	service, err := NewSessionServiceIn(workspace, runtimeDir, databaseURL, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = service.Stop(ctx) }()
 
-	if !ok {
-		return nil, nil
-	}
-
-	defer func() { _ = db.Close() }()
-
-	return observeSessionEntriesDB(ctx, db, conversationID, lastID)
+	return service.ObserveEntries(ctx, conversationID, lastID)
 }
 
 func observeSessionEntriesDB(ctx context.Context, db *sql.DB, conversationID string, lastID int64) ([]ObservedSessionEntry, error) {
-	rows, err := db.QueryContext(ctx, `SELECT id, entry_json FROM session_entries WHERE conversation_id = ? AND id > ? ORDER BY id`, conversationID, lastID)
+	rows, err := db.QueryContext(ctx, `SELECT id, entry_json FROM session_entries WHERE conversation_id = $1 AND id > $2 ORDER BY id`, conversationID, lastID)
 	if err != nil {
 		return nil, fmt.Errorf("query rocketcode session entries: %w", err)
 	}
@@ -1357,14 +1298,9 @@ func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID s
 		return 0, fmt.Errorf("marshal rocketcode session entry: %w", err)
 	}
 
-	result, err := db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES (?, ?, ?)`, conversationID, string(data), entry.Timestamp.UTC().Format(time.RFC3339Nano))
-	if err != nil {
+	var id int64
+	if err := db.QueryRowContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, $2, $3) RETURNING id`, conversationID, string(data), entry.Timestamp.UTC().Format(time.RFC3339Nano)).Scan(&id); err != nil {
 		return 0, fmt.Errorf("append rocketcode session entry: %w", err)
-	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("read appended rocketcode session entry id: %w", err)
 	}
 
 	return id, nil
@@ -1391,24 +1327,21 @@ func externalMCPManagedEntry(entry *harness.SessionEntry, replayPrefix []json.Ra
 }
 
 // DeleteSessionIn removes all entries for one conversation ID in runtimeDir and returns deleted rows.
-func DeleteSessionIn(ctx context.Context, workspace, runtimeDir, conversationID string) (int64, error) {
+func DeleteSessionIn(ctx context.Context, workspace, runtimeDir, databaseURL, conversationID string) (int64, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
 		return 0, errors.New("conversation ID is required")
 	}
 
-	db, ok, err := openExistingSessionDB(ctx, workspace, runtimeDir)
+	service, err := NewSessionServiceIn(workspace, runtimeDir, databaseURL, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return 0, err
 	}
+	defer func() { _ = service.Stop(ctx) }()
 
-	if !ok {
-		return 0, nil
-	}
+	db := service.db
 
-	defer func() { _ = db.Close() }()
-
-	result, err := db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = ?`, conversationID)
+	result, err := db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = $1`, conversationID)
 	if err != nil {
 		return 0, fmt.Errorf("delete rocketcode session: %w", err)
 	}
@@ -1421,417 +1354,65 @@ func DeleteSessionIn(ctx context.Context, workspace, runtimeDir, conversationID 
 	return rows, nil
 }
 
-func checkpointWALDB(ctx context.Context, db *sql.DB) (WALCheckpointStats, error) {
-	var stats WALCheckpointStats
-	if err := db.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&stats.Busy, &stats.LogFrames, &stats.CheckpointedFrames); err != nil {
-		return WALCheckpointStats{}, fmt.Errorf("checkpoint rocketcode session db WAL: %w", err)
-	}
-
-	return stats, nil
-}
-
-func openExistingSessionDB(ctx context.Context, workspace, runtimeDir string) (*sql.DB, bool, error) {
-	if err := prepareSessionDBPathIn(workspace, runtimeDir); err != nil {
-		return nil, false, err
-	}
-
-	root, err := os.OpenRoot(workspace)
+// CheckAndRecoverSessionDB pings PostgreSQL and confirms the store schema exists.
+func CheckAndRecoverSessionDB(ctx context.Context, databaseURL string, logger *slog.Logger) error {
+	db, err := openSessionDB(ctx, databaseURL, logger)
 	if err != nil {
-		return nil, false, fmt.Errorf("open workspace root: %w", err)
+		return err
 	}
 
-	defer func() { _ = root.Close() }()
-
-	ok, err := rootPathExistsNoSymlink(root, filepath.ToSlash(filepath.Join(runtimeDir, "state.sqlite3")), "rocketcode session db")
-	if err != nil || !ok {
-		return nil, false, err
-	}
-
-	db, err := openSessionDB(ctx, sessionDBPathIn(workspace, runtimeDir), slog.New(slog.DiscardHandler))
-
-	return db, err == nil, err
-}
-
-// CheckAndRecoverSessionDB checks and recovers the state DB for the fc check command.
-func CheckAndRecoverSessionDB(ctx context.Context, workspace, runtimeDir string, logger *slog.Logger) (CheckAndRecoverSessionDBResult, error) {
-	db, ok, err := openExistingSessionDBReadOnly(ctx, workspace, runtimeDir)
-	result := CheckAndRecoverSessionDBResult{DBExists: ok}
-
-	switch {
-	case err != nil:
-		if !isSQLiteCorruptionError(err) {
-			return CheckAndRecoverSessionDBResult{}, err
-		}
-
-		result.DBExists = true
-	case !ok:
-		return result, nil
-	default:
-		startedAt := time.Now()
-
-		logger.Info("quick-checking rocketclaw state store")
-
-		err = quickCheckSessionDB(ctx, db)
-		_ = db.Close()
-
-		if err != nil {
-			logger.Info("quick-checked rocketclaw state store", "elapsed", time.Since(startedAt), "error", err)
-		} else {
-			logger.Info("quick-checked rocketclaw state store", "elapsed", time.Since(startedAt))
-		}
-
-		if err == nil {
-			result.Healthy = true
-
-			return result, nil
-		}
-
-		if !errors.Is(err, errStateStoreCorrupt) {
-			return CheckAndRecoverSessionDBResult{}, err
-		}
-	}
-
-	if _, err := exec.LookPath("sqlite3"); err != nil {
-		return CheckAndRecoverSessionDBResult{}, fmt.Errorf("recover corrupt rocketcode session db: sqlite3 command not found: %w", err)
-	}
-
-	recoveryRel, err := snapshotSessionDBForRecovery(workspace, runtimeDir)
-	if err != nil {
-		return CheckAndRecoverSessionDBResult{}, err
-	}
-
-	if err := recoverSessionDBSnapshot(ctx, workspace, recoveryRel); err != nil {
-		return CheckAndRecoverSessionDBResult{}, err
-	}
-
-	if err := swapRecoveredSessionDB(workspace, runtimeDir, recoveryRel); err != nil {
-		return CheckAndRecoverSessionDBResult{}, err
-	}
-
-	result.Healthy = true
-	result.Recovered = true
-
-	return result, nil
-}
-
-func quickCheckSessionDB(ctx context.Context, db *sql.DB) error {
-	rows, err := db.QueryContext(ctx, `PRAGMA quick_check`)
-	if err != nil {
-		if isSQLiteCorruptionError(err) {
-			return fmt.Errorf("%w: %w", errStateStoreCorrupt, err)
-		}
-
-		return fmt.Errorf("quick-check rocketcode session db: %w", err)
-	}
-
-	defer func() { _ = rows.Close() }()
-
-	messages := []string{}
-
-	for rows.Next() {
-		var message string
-		if err := rows.Scan(&message); err != nil {
-			if isSQLiteCorruptionError(err) {
-				return fmt.Errorf("%w: %w", errStateStoreCorrupt, err)
-			}
-
-			return fmt.Errorf("scan rocketcode session db quick-check: %w", err)
-		}
-
-		if strings.TrimSpace(message) != "ok" {
-			messages = append(messages, message)
-		}
-	}
-
-	if err := rows.Err(); err != nil {
-		if isSQLiteCorruptionError(err) {
-			return fmt.Errorf("%w: %w", errStateStoreCorrupt, err)
-		}
-
-		return fmt.Errorf("read rocketcode session db quick-check: %w", err)
-	}
-
-	if len(messages) > 0 {
-		return fmt.Errorf("%w: quick_check failed: %s", errStateStoreCorrupt, strings.Join(messages, "; "))
-	}
+	_ = db.Close()
 
 	return nil
 }
 
-func isSQLiteCorruptionError(err error) bool {
-	text := strings.ToLower(err.Error())
-
-	return strings.Contains(text, "database disk image is malformed") || strings.Contains(text, "sqlite_corrupt") || strings.Contains(text, "file is not a database") || strings.Contains(text, "malformed")
-}
-
-func snapshotSessionDBForRecovery(workspace, runtimeDir string) (string, error) {
-	root, err := os.OpenRoot(workspace)
-	if err != nil {
-		return "", fmt.Errorf("open workspace root: %w", err)
-	}
-
-	defer func() { _ = root.Close() }()
-
-	recoveryRel := filepath.ToSlash(filepath.Join(runtimeDir, "tmp", "sqlite-recovery-"+strconv.FormatInt(time.Now().UTC().UnixNano(), 10)))
-	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(runtimeDir, "tmp")), 0o755); err != nil {
-		return "", fmt.Errorf("create rocketcode session db recovery parent: %w", err)
-	}
-
-	if err := root.Mkdir(recoveryRel, 0o700); err != nil {
-		return "", fmt.Errorf("create rocketcode session db recovery dir: %w", err)
-	}
-
-	for _, name := range []string{"state.sqlite3", "state.sqlite3-wal", "state.sqlite3-shm"} {
-		required := name == "state.sqlite3"
-		if err := copyRecoveryFile(root, filepath.ToSlash(filepath.Join(runtimeDir, name)), filepath.ToSlash(filepath.Join(recoveryRel, name)), required); err != nil {
-			return "", err
-		}
-	}
-
-	return recoveryRel, nil
-}
-
-func copyRecoveryFile(root *os.Root, src, dst string, required bool) error {
-	ok, err := rootPathExistsNoSymlink(root, src, "rocketcode session db recovery source")
-	if err != nil || !ok {
-		if !required && !ok {
-			return nil
-		}
-
-		return err
-	}
-
-	in, err := root.Open(src)
-	if err != nil {
-		return fmt.Errorf("open rocketcode session db recovery source: %w", err)
-	}
-
-	defer func() { _ = in.Close() }()
-
-	out, err := root.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("create rocketcode session db recovery copy: %w", err)
-	}
-
-	_, errCopy := io.Copy(out, in)
-	errClose := out.Close()
-
-	if errCopy != nil {
-		return fmt.Errorf("copy rocketcode session db recovery source: %w", errCopy)
-	}
-
-	if errClose != nil {
-		return fmt.Errorf("close rocketcode session db recovery copy: %w", errClose)
-	}
-
-	return nil
-}
-
-func recoverSessionDBSnapshot(ctx context.Context, workspace, recoveryRel string) error {
-	snapshotPath := filepath.Join(workspace, filepath.FromSlash(recoveryRel), "state.sqlite3")
-	recoveredPath := filepath.Join(workspace, filepath.FromSlash(recoveryRel), "state.recovered.sqlite3")
-	sqlPath := filepath.Join(workspace, filepath.FromSlash(recoveryRel), "recover.sql")
-
-	sqlFile, err := os.OpenFile(sqlPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return fmt.Errorf("create rocketcode session db recovery sql: %w", err)
-	}
-
-	var stderr bytes.Buffer
-
-	cmd := exec.CommandContext(ctx, "sqlite3", snapshotPath, ".recover")
-	cmd.Stdout = sqlFile
-	cmd.Stderr = &stderr
-	errRun := cmd.Run()
-	errClose := sqlFile.Close()
-
-	if errRun != nil {
-		return fmt.Errorf("recover corrupt rocketcode session db with sqlite3: %w: %s", errRun, strings.TrimSpace(stderr.String()))
-	}
-
-	if errClose != nil {
-		return fmt.Errorf("close rocketcode session db recovery sql: %w", errClose)
-	}
-
-	sqlInput, err := os.Open(sqlPath)
-	if err != nil {
-		return fmt.Errorf("open rocketcode session db recovery sql: %w", err)
-	}
-
-	stderr.Reset()
-
-	cmd = exec.CommandContext(ctx, "sqlite3", recoveredPath)
-	cmd.Stdin = sqlInput
-	cmd.Stderr = &stderr
-	errRun = cmd.Run()
-	errClose = sqlInput.Close()
-
-	if errRun != nil {
-		return fmt.Errorf("build recovered rocketcode session db with sqlite3: %w: %s", errRun, strings.TrimSpace(stderr.String()))
-	}
-
-	if errClose != nil {
-		return fmt.Errorf("close rocketcode session db recovery sql input: %w", errClose)
-	}
-
-	if err := validateRecoveredSessionDB(ctx, recoveredPath); err != nil {
-		return err
-	}
-
-	db, err := openSessionDB(ctx, recoveredPath, slog.New(slog.DiscardHandler))
-	if err != nil {
-		return err
-	}
-
-	if err := quickCheckSessionDB(ctx, db); err != nil {
-		_ = db.Close()
-		return err
-	}
-
-	if _, err := db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
-		_ = db.Close()
-		return fmt.Errorf("checkpoint recovered rocketcode session db: %w", err)
-	}
-
-	if err := db.Close(); err != nil {
-		return fmt.Errorf("close recovered rocketcode session db: %w", err)
-	}
-
-	return nil
-}
-
-func validateRecoveredSessionDB(ctx context.Context, recoveredPath string) error {
-	db, err := openSessionDBReadOnly(ctx, recoveredPath)
-	if err != nil {
-		return err
-	}
-
-	defer func() { _ = db.Close() }()
-
-	if err := quickCheckSessionDB(ctx, db); err != nil {
-		return err
-	}
-
-	var count int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'session_entries'`).Scan(&count); err != nil {
-		return fmt.Errorf("check recovered rocketcode session entries table: %w", err)
-	}
-
-	if count == 0 {
-		return errors.New("recovered rocketcode session db is missing session_entries")
-	}
-
-	rows, err := db.QueryContext(ctx, `SELECT id, conversation_id, entry_json, entry_timestamp FROM session_entries LIMIT 1`)
-	if err != nil {
-		return fmt.Errorf("validate recovered rocketcode session entries schema: %w", err)
-	}
-
-	defer func() { _ = rows.Close() }()
-
-	return nil
-}
-
-func swapRecoveredSessionDB(workspace, runtimeDir, recoveryRel string) error {
-	root, err := os.OpenRoot(workspace)
-	if err != nil {
-		return fmt.Errorf("open workspace root: %w", err)
-	}
-
-	defer func() { _ = root.Close() }()
-
-	for _, name := range []string{"state.sqlite3", "state.sqlite3-wal", "state.sqlite3-shm"} {
-		src := filepath.ToSlash(filepath.Join(runtimeDir, name))
-
-		ok, err := rootPathExistsNoSymlink(root, src, "rocketcode session db")
-		if err != nil {
-			return err
-		}
-
-		if !ok {
-			continue
-		}
-
-		if err := root.Rename(src, filepath.ToSlash(filepath.Join(recoveryRel, "corrupt-"+name))); err != nil {
-			return fmt.Errorf("move corrupt rocketcode session db aside: %w", err)
-		}
-	}
-
-	if err := root.Rename(filepath.ToSlash(filepath.Join(recoveryRel, "state.recovered.sqlite3")), filepath.ToSlash(filepath.Join(runtimeDir, "state.sqlite3"))); err != nil {
-		return fmt.Errorf("install recovered rocketcode session db: %w", err)
-	}
-
-	return nil
-}
-
-func openExistingSessionDBReadOnly(ctx context.Context, workspace, runtimeDir string) (*sql.DB, bool, error) {
-	root, err := os.OpenRoot(workspace)
-	if err != nil {
-		return nil, false, fmt.Errorf("open workspace root: %w", err)
-	}
-
-	defer func() { _ = root.Close() }()
-
-	ok, err := rootPathExistsNoSymlink(root, filepath.ToSlash(filepath.Join(runtimeDir, "state.sqlite3")), "rocketcode session db")
-	if err != nil || !ok {
-		return nil, false, err
-	}
-
-	db, err := openSessionDBReadOnly(ctx, sessionDBPathIn(workspace, runtimeDir))
-
-	return db, err == nil, err
-}
-
-func queryPragmaInt(ctx context.Context, db *sql.DB, name string) (int64, error) {
-	var value int64
-	if err := db.QueryRowContext(ctx, "PRAGMA "+name).Scan(&value); err != nil {
-		return 0, fmt.Errorf("query sqlite pragma %s: %w", name, err)
-	}
-
-	return value, nil
-}
-
-// ListSessionsInOptions returns summaries for stored rocketcode sessions in runtimeDir.
-func ListSessionsInOptions(ctx context.Context, workspace, runtimeDir string, options SessionListOptions) ([]SessionSummary, error) {
-	db, ok, err := openExistingSessionDBReadOnly(ctx, workspace, runtimeDir)
+// ListSessionsInOptions returns summaries for stored rocketcode sessions.
+func ListSessionsInOptions(ctx context.Context, workspace, runtimeDir, databaseURL string, options SessionListOptions) ([]SessionSummary, error) {
+	service, err := NewSessionServiceIn(workspace, runtimeDir, databaseURL, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = service.Stop(ctx) }()
 
-	if !ok {
-		return nil, nil
-	}
-
-	defer func() { _ = db.Close() }()
+	db := service.db
 
 	query := `SELECT conversation_id, entry_json, entry_timestamp FROM session_entries ORDER BY conversation_id, id`
 
 	var args []any
 
 	if !options.Since.IsZero() || !options.Until.IsZero() || options.Limit > 0 {
-		since := ""
+		var since any
 		if !options.Since.IsZero() {
-			since = options.Since.UTC().Format(time.RFC3339Nano)
+			since = options.Since.UTC()
 		}
 
-		until := ""
+		var until any
 		if !options.Until.IsZero() {
-			until = options.Until.UTC().Format(time.RFC3339Nano)
+			until = options.Until.UTC()
 		}
 
 		query = `WITH candidates AS (
-	SELECT conversation_id, MAX(julianday(entry_timestamp)) AS last_updated
+	SELECT conversation_id, MAX(entry_timestamp::timestamptz) AS last_updated
 	FROM session_entries
 	GROUP BY conversation_id
-	HAVING (? = '' OR MAX(julianday(entry_timestamp)) >= julianday(?))
-		AND (? = '' OR MAX(julianday(entry_timestamp)) < julianday(?))
-	ORDER BY last_updated DESC, conversation_id
-	LIMIT CASE WHEN ? > 0 THEN ? ELSE -1 END
+	HAVING ($1::timestamptz IS NULL OR MAX(entry_timestamp::timestamptz) >= $2::timestamptz)
+		AND ($3::timestamptz IS NULL OR MAX(entry_timestamp::timestamptz) < $4::timestamptz)
+	ORDER BY last_updated DESC, conversation_id`
+		args = []any{since, since, until, until}
+
+		if options.Limit > 0 {
+			query += `
+	LIMIT $5`
+
+			args = append(args, options.Limit)
+		}
+
+		query += `
 )
 SELECT se.conversation_id, se.entry_json, se.entry_timestamp
 FROM session_entries se
 JOIN candidates c ON c.conversation_id = se.conversation_id
 ORDER BY c.last_updated DESC, c.conversation_id, se.id`
-		args = []any{since, since, until, until, options.Limit, options.Limit}
 	}
 
 	rows, err := db.QueryContext(ctx, query, args...)
@@ -1899,11 +1480,6 @@ func SlackThreadConversationID(channelID, threadTS string) string {
 	return textPairKey("slack-thread:", channelID, threadTS)
 }
 
-// SessionDBPathIn returns the SQLite database path for rocketcode session inspection in runtimeDir.
-func SessionDBPathIn(workspace, runtimeDir string) string {
-	return sessionDBPathIn(workspace, runtimeDir)
-}
-
 // SlackThreadTarget returns the Slack channel and thread timestamp for a Slack thread conversation ID.
 func SlackThreadTarget(conversationID string) (channelID, threadTS string, ok bool) {
 	rest, ok := strings.CutPrefix(strings.TrimSpace(conversationID), "slack-thread:")
@@ -1926,21 +1502,21 @@ func textPairKey(prefix, channelID, ts string) string {
 	return prefix + channelID + ":" + ts
 }
 
-func rootPathExistsNoSymlink(root *os.Root, path, label string) (bool, error) {
+func rootPathExistsNoSymlink(root *os.Root, path, label string) error {
 	info, err := root.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
+		return nil
 	}
 
 	if err != nil {
-		return false, fmt.Errorf("stat %s: %w", label, err)
+		return fmt.Errorf("stat %s: %w", label, err)
 	}
 
 	if info.Mode()&os.ModeSymlink != 0 {
-		return false, fmt.Errorf("%s must not be a symlink", label)
+		return fmt.Errorf("%s must not be a symlink", label)
 	}
 
-	return true, nil
+	return nil
 }
 
 func slackStateKeyTime(key, prefix string) (time.Time, bool) {
@@ -1989,7 +1565,7 @@ func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, convers
 func sessionLatestBefore(ctx context.Context, db stateStoreDB, conversationID string, fallback, cutoff time.Time) (bool, error) {
 	var before bool
 
-	err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(julianday(entry_timestamp)), julianday(?)) < julianday(?) FROM session_entries WHERE conversation_id = ?`, fallback.Format(time.RFC3339Nano), cutoff.Format(time.RFC3339Nano), conversationID).Scan(&before)
+	err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(entry_timestamp), $1) < $2 FROM session_entries WHERE conversation_id = $3`, fallback.UTC().Format(time.RFC3339Nano), cutoff.UTC().Format(time.RFC3339Nano), conversationID).Scan(&before)
 	if err != nil {
 		return false, fmt.Errorf("read latest session entry timestamp: %w", err)
 	}
@@ -2057,7 +1633,7 @@ func queryStrings(ctx context.Context, db stateStoreDB, query, label string) ([]
 
 func conversationExists(ctx context.Context, db stateStoreDB, table, column, conversationID string) (bool, error) {
 	var exists bool
-	if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM `+table+` WHERE `+column+` = ?)`, conversationID).Scan(&exists); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM `+table+` WHERE `+column+` = $1)`, conversationID).Scan(&exists); err != nil {
 		return false, fmt.Errorf("check conversation reference in %s: %w", table, err)
 	}
 
@@ -2093,7 +1669,7 @@ func pruneExternalMCPSessions(ctx context.Context, tx *sql.Tx, cutoff time.Time,
 			deleteConversations[privateConversationID] = struct{}{}
 		}
 
-		if _, err := tx.ExecContext(ctx, `DELETE FROM external_mcp_sessions WHERE external_conversation_id = ?`, externalConversationID); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM external_mcp_sessions WHERE external_conversation_id = $1`, externalConversationID); err != nil {
 			return PruneStateStats{}, fmt.Errorf("delete stale external MCP session: %w", err)
 		}
 
@@ -2109,14 +1685,14 @@ func pruneExternalMCPSessions(ctx context.Context, tx *sql.Tx, cutoff time.Time,
 }
 
 func stalePrivateConversationIDs(ctx context.Context, db *sql.Tx, cutoff time.Time) ([]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT conversation_id FROM session_entries WHERE conversation_id LIKE 'slack-thread:%' OR conversation_id LIKE 'external_mcp:%' OR conversation_id LIKE 'cron:%' OR conversation_id LIKE 'one-off-cron:%' GROUP BY conversation_id HAVING MAX(julianday(entry_timestamp)) < julianday(?)`, cutoff.Format(time.RFC3339Nano))
+	rows, err := db.QueryContext(ctx, `SELECT conversation_id FROM session_entries WHERE conversation_id LIKE 'slack-thread:%' OR conversation_id LIKE 'external_mcp:%' OR conversation_id LIKE 'cron:%' OR conversation_id LIKE 'one-off-cron:%' GROUP BY conversation_id HAVING MAX(entry_timestamp) < $1`, cutoff.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, fmt.Errorf("query stale private session conversations: %w", err)
 	}
 
 	defer func() { _ = rows.Close() }()
 
-	stale := []string{}
+	var candidates []string
 
 	for rows.Next() {
 		var conversationID string
@@ -2124,6 +1700,20 @@ func stalePrivateConversationIDs(ctx context.Context, db *sql.Tx, cutoff time.Ti
 			return nil, fmt.Errorf("scan stale private session conversation: %w", err)
 		}
 
+		candidates = append(candidates, conversationID)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read stale private session conversations: %w", err)
+	}
+
+	if err := rows.Close(); err != nil {
+		return nil, fmt.Errorf("close stale private session conversations: %w", err)
+	}
+
+	var stale []string
+
+	for _, conversationID := range candidates {
 		if ok, err := conversationExists(ctx, db, `managed_conversations`, `conversation_id`, conversationID); err != nil {
 			return nil, err
 		} else if ok {
@@ -2139,10 +1729,6 @@ func stalePrivateConversationIDs(ctx context.Context, db *sql.Tx, cutoff time.Ti
 		stale = append(stale, conversationID)
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read stale private session conversations: %w", err)
-	}
-
 	return stale, nil
 }
 
@@ -2150,7 +1736,7 @@ func deleteSessionEntries(ctx context.Context, db stateStoreDB, conversationIDs 
 	var deleted int64
 
 	for conversationID := range conversationIDs {
-		result, err := db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = ?`, conversationID)
+		result, err := db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = $1`, conversationID)
 		if err != nil {
 			return 0, fmt.Errorf("delete stale session entries: %w", err)
 		}
@@ -2166,46 +1752,39 @@ func deleteSessionEntries(ctx context.Context, db stateStoreDB, conversationIDs 
 	return deleted, nil
 }
 
-func openSessionDB(ctx context.Context, dbPath string, logger *slog.Logger) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", dbPath)
+func openSessionDB(ctx context.Context, databaseURL string, logger *slog.Logger) (*sql.DB, error) {
+	cfg, err := pgx.ParseConfig(databaseURL)
 	if err != nil {
-		return nil, fmt.Errorf("open rocketcode session db: %w", err)
+		return nil, hideDSN(err, databaseURL, "open rocketclaw state store")
 	}
 
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	db := stdlib.OpenDB(*cfg)
+	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, hideDSN(err, databaseURL, "ping rocketclaw state store")
+	}
 
 	if err := initializeSessionDB(ctx, db, logger); err != nil {
 		_ = db.Close()
-		return nil, err
+		return nil, hideDSN(err, databaseURL, "initialize rocketclaw state store")
 	}
 
 	return db, nil
 }
 
-func openSessionDBReadOnly(ctx context.Context, dbPath string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", (&url.URL{Scheme: "file", Path: dbPath, RawQuery: "mode=ro"}).String())
-	if err != nil {
-		return nil, fmt.Errorf("open rocketcode session db read-only: %w", err)
+func hideDSN(err error, databaseURL, op string) error {
+	msg := err.Error()
+	if databaseURL != "" {
+		msg = strings.ReplaceAll(msg, databaseURL, "postgres")
 	}
 
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-
-	if _, err := db.ExecContext(ctx, `PRAGMA busy_timeout = 30000`); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("initialize rocketcode session db read-only: %w", err)
+	if u, errParse := url.Parse(databaseURL); errParse == nil && u.User != nil {
+		if password, ok := u.User.Password(); ok && password != "" {
+			msg = strings.ReplaceAll(msg, password, "redacted")
+		}
 	}
 
-	return db, nil
-}
-
-func openWorkspaceSessionDB(ctx context.Context, workspace, runtimeDir string, logger *slog.Logger) (*sql.DB, error) {
-	if err := prepareSessionDBPathIn(workspace, runtimeDir); err != nil {
-		return nil, err
-	}
-
-	return openSessionDB(ctx, sessionDBPathIn(workspace, runtimeDir), logger)
+	return fmt.Errorf("%s: %s", op, msg)
 }
 
 type memoryStore struct{ entries []harness.SessionEntry }

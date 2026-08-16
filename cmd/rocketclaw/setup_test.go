@@ -90,9 +90,9 @@ func TestRunSetupPromptReadErrors(t *testing.T) {
 	}{
 		{name: "external mcp enablement", wantErr: "prompt external MCP enablement"},
 		{name: "common fields", input: "n\n", wantErr: "read prompt input"},
-		{name: "slack fields", input: strings.Join([]string{"n", "sk-test", "", "Ulderico", "Maschine"}, "\n") + "\n", wantErr: "read prompt input"},
-		{name: "external mcp listen address", input: strings.Join([]string{"y", "sk-test", "", "Ulderico", "Maschine", "xoxb-test", "xapp-test", "ops", "U123"}, "\n") + "\n", wantErr: "read prompt input"},
-		{name: "external mcp users file", input: strings.Join([]string{"y", "sk-test", "", "Ulderico", "Maschine", "xoxb-test", "xapp-test", "ops", "U123", "127.0.0.1:8765"}, "\n") + "\n", wantErr: "prompt external MCP users file creation"},
+		{name: "slack fields", input: strings.Join([]string{"n", "postgres://localhost/rocketclaw", "sk-test", "", "Ulderico", "Maschine"}, "\n") + "\n", wantErr: "read prompt input"},
+		{name: "external mcp listen address", input: strings.Join([]string{"y", "postgres://localhost/rocketclaw", "sk-test", "", "Ulderico", "Maschine", "xoxb-test", "xapp-test", "ops", "U123"}, "\n") + "\n", wantErr: "read prompt input"},
+		{name: "external mcp users file", input: strings.Join([]string{"y", "postgres://localhost/rocketclaw", "sk-test", "", "Ulderico", "Maschine", "xoxb-test", "xapp-test", "ops", "U123", "127.0.0.1:8765"}, "\n") + "\n", wantErr: "prompt external MCP users file creation"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -241,6 +241,7 @@ func runSetupWithInputOutput(t *testing.T, input string, prepare func(string)) (
 func slackSetupInput(apiBase string) string {
 	return strings.Join([]string{
 		"n",
+		"postgres://localhost/rocketclaw",
 		"sk-test",
 		apiBase,
 		"Ulderico",
@@ -255,6 +256,7 @@ func slackSetupInput(apiBase string) string {
 func slackMCPSetupInput(listenAddr, createExternalMCPUsers string) string {
 	return strings.Join([]string{
 		"y",
+		"postgres://localhost/rocketclaw",
 		"sk-test",
 		"",
 		"Ulderico",

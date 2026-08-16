@@ -29,7 +29,7 @@ func AcquireStateStoreLock(workspace, runtimeDir string) (*StateStoreLock, error
 	defer func() { _ = root.Close() }()
 
 	path := filepath.ToSlash(filepath.Join(runtimeDir, "state.sqlite3.lock"))
-	if _, err := rootPathExistsNoSymlink(root, path, "rocketcode session db lock"); err != nil {
+	if err := rootPathExistsNoSymlink(root, path, "rocketcode session db lock"); err != nil {
 		return nil, err
 	}
 

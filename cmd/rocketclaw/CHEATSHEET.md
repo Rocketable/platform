@@ -81,7 +81,7 @@ Fan-out is flat: nested `parallel` or `pipeline` calls are rejected. A run allow
 
 Prompt shell expansion is disabled for workflow worker instructions, input prompts, and loaded skill bodies, so syntax such as `` !`command` `` remains literal. This is intentional to preserve the workflow permission boundary.
 
-Return the human-visible value directly from `main`: strings render directly, other JSON-compatible values render as JSON, and only `None` or `""` is silent. Parallel workers share one checkout; assign disjoint file ownership and integrate shared files sequentially. Workflow progress uses Slack plan/task cards, but intermediate values do not enter managed history. `$stop` is terminal, SQLite stores no workflow progress, and daemon restart requires reinvocation.
+Return the human-visible value directly from `main`: strings render directly, other JSON-compatible values render as JSON, and only `None` or `""` is silent. Parallel workers share one checkout; assign disjoint file ownership and integrate shared files sequentially. Workflow progress uses Slack plan/task cards, but intermediate values do not enter managed history. `$stop` is terminal, the state store records no resumable workflow progress, and daemon restart requires reinvocation.
 
 `workflow_button` belongs to Slack Workflow Builder. RocketClaw saved workflows do not use it.
 
@@ -122,7 +122,7 @@ Concurrent tool calls inside one script use `gather`, `map`, `race`, and `race_f
 
 ## Current State Schema
 
-Fresh RocketClaw runtime directories initialize the current SQLite schema directly with schema marker `user_version = 9`. Existing state and configuration must already use current formats; startup does not migrate historical formats.
+Set `database_url` on the selected config file. Fresh stores apply embedded SQL migrations. `run` ignores `state.sqlite3`. `fc migrate` copies missing v9 rows. `fc check` pings PostgreSQL. Isolation is one DSN per workspace.
 
 ## Model Providers And Credentials
 
@@ -296,6 +296,7 @@ Running `rocketclaw` without a subcommand starts the server when `femtoclaw.json
 | `rocketclaw fc list [--since 24h|RFC3339] [--until RFC3339] [--limit N] [--no-message-preview]` | Lists stored RocketCode sessions. |
 | `rocketclaw fc observe [--follow|-f] <conversation-id>` | Prints one conversation's stored session entries as JSONL. The conversation ID is required. |
 | `rocketclaw fc delete <conversation-id>` | Deletes a stored session when the daemon does not own the state store. |
+| `rocketclaw fc migrate` | Copies missing v9 `state.sqlite3` rows into the selected PostgreSQL store. |
 | `rocketclaw help`, `rocketclaw -h`, `rocketclaw --help` | Prints top-level help. |
 
 For `lint` and `agent-graph`, `next` builds a temporary startup-equivalent runtime view from embedded assets, overlays, and workspace files. `current` inspects the selected generated runtime directory as it exists now.

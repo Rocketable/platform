@@ -194,7 +194,7 @@ func executeExecRun(ctx context.Context, cfg *config.Config, agent, prompt strin
 		runCtx = timedCtx
 	}
 
-	sessions, err := harnessbridge.NewSessionServiceIn(cfg.Workspace, cfg.RuntimeDirName(), logger)
+	sessions, err := harnessbridge.NewSessionServiceIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, logger)
 	if err != nil {
 		return fmt.Errorf("start rocketcode session service: %w", err)
 	}

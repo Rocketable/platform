@@ -22,7 +22,7 @@ func TestRunServeReportsAppStartupError(t *testing.T) {
 	workspaceFile := filepath.Join(workspace, "workspace-file")
 	require.NoError(t, os.WriteFile(workspaceFile, []byte("not a directory"), 0o600))
 	configData := fmt.Sprintf(
-		`{"workspace":%q,"slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"mcp_external":{"enabled":true,"listen_addr":"127.0.0.1:0"},"openai":{"api_key":"sk-test"}}`,
+		`{"workspace":%q,"database_url":"postgres://localhost/rocketclaw_test?sslmode=disable","slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"mcp_external":{"enabled":true,"listen_addr":"127.0.0.1:0"},"openai":{"api_key":"sk-test"}}`,
 		workspaceFile,
 	)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(configData), 0o600))
@@ -36,7 +36,7 @@ func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	configData := fmt.Sprintf(
-		`{"workspace":%q,"slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"openai":{"api_key":"sk-test"}}`,
+		`{"workspace":%q,"database_url":"postgres://localhost/rocketclaw_test?sslmode=disable","slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"openai":{"api_key":"sk-test"}}`,
 		workspace,
 	)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(configData), 0o600))

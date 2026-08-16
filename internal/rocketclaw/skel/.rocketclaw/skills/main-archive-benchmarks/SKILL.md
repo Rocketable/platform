@@ -39,13 +39,12 @@ go run github.com/Rocketable/platform/cmd/quickbench@main --help
 ```bash
 go run github.com/Rocketable/platform/cmd/quickbench@main capture \
   --conversation slack-thread:C012:1710000000.000100 \
-  --db "$WORKSPACE/.rocketclaw/state.sqlite3" \
   --agents "$WORKSPACE/agents" \
   --root main \
   -o ./bench
 ```
 
-Default DB is `./.rocketclaw/state.sqlite3`; default agents dir is `./agents`.
+Capture reads `database_url` from the workspace RocketClaw config. Default agents dir is `./agents`.
 
 3. Edit `bench/bench.yaml` first: `elo.criteria`, optional `elo.model` / `reasoningEffort`, and `matrix` rows. Adjust `variations/*/turns.yaml` (`turns`, `bash`, `tools`) if needed.
 4. Run:

@@ -46,6 +46,20 @@ The only v1 scoring definition inside a BAR: a crisp criteria prompt plus a judg
 
 The single CLI/product surface that packs, unpacks, dumps, runs, and ELO-ranks BARs, and pairs with a RocketClaw skill/subagent that captures Slack sessions into BARs.
 
+## Durable State
+
+### State Store
+
+RocketClaw's durable database for sessions, Managed Slack Thread routing, goals, cron, scheduled messages, External MCP bindings, and restart handoffs.
+
+The State Store is PostgreSQL. `run` ignores `state.sqlite3`.
+
+### Operator SQLite Migrator
+
+`fc migrate` copies missing v9 `state.sqlite3` rows into the selected PostgreSQL store. The operator runs it; start does not.
+
+After every workspace has moved, SQLite support is deleted. It is not a historical-format migrator.
+
 ## Relationships
 
 - A Root Slack Mention creates or targets a Managed Slack Thread.
@@ -53,3 +67,5 @@ The single CLI/product surface that packs, unpacks, dumps, runs, and ELO-ranks B
 - A Root Slack Mention in an unmapped joined channel is an Adhoc Callout when an `@` Channel Entry exists.
 - A Buffered Follow-Up belongs to one active Managed Slack Thread and is promoted after the active turn completes.
 - A BAR is authored, packed, run, and ranked by Quickbench; an ELO Scorer belongs to one BAR.
+- A Managed Slack Thread, Buffered Follow-Up, and External MCP binding persist in the State Store.
+- An Operator SQLite Migrator copies missing `state.sqlite3` rows into the State Store.

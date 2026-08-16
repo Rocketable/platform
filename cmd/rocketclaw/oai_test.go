@@ -127,6 +127,7 @@ func TestRunOAILoginUpdatesOnlySelectedProvider(t *testing.T) {
 	assert.JSONEq(t, `{"rocketcode_auth":"api_key","api_key":"alpha-key"}`, providerJSON(t, raw, "alpha"))
 	assert.JSONEq(t, `{"enabled":true}`, string(raw["future_root_field"]))
 	assert.Contains(t, string(data), `"workspace": "../runtime"`)
+	assert.Contains(t, string(data), `"database_url": "postgres://localhost/rocketclaw_test?sslmode=disable"`)
 	assert.Contains(t, string(data), `"future_large": 9007199254740993`)
 
 	authPath, err := oai.AuthFilePathIn(workspace, config.DefaultRuntimeDir)
@@ -350,7 +351,7 @@ func prepareOAIConfig(t *testing.T) string {
 	require.NoError(t, os.Mkdir(workspace, 0o700))
 	t.Chdir(configDir)
 	data := `{
-  "workspace": "../runtime",
+  "workspace": "../runtime", "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
   "openai": {"rocketcode_auth":"api_key","api_key":"openai-key"},
   "providers": {
     "work": {"rocketcode_auth":"api_key","api_key":"work-key","future_provider_field":true},

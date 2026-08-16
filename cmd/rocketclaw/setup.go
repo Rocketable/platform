@@ -153,6 +153,7 @@ func interviewSetup(cfg *config.Config) (setupNames, error) {
 	cfg.MCPExternal.Enabled = externalMCPEnabled
 
 	if err := promptFields(reader,
+		promptField{prompt: "PostgreSQL database URL: ", required: true, value: &cfg.DatabaseURL},
 		promptField{prompt: "OpenAI API key: ", required: true, value: &cfg.OpenAI.APIKey},
 		promptField{prompt: "OpenAI API base URL (leave blank for default): ", value: &cfg.OpenAI.APIBaseURL},
 		promptField{prompt: "Human partner name: ", required: true, value: &names.humanPartnerName},
