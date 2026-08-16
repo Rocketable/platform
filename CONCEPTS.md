@@ -16,6 +16,16 @@ An authorized Slack app mention that creates or targets the root message of a Ma
 
 A Root Slack Mention can begin the first turn immediately or establish a ready thread for a later human reply, depending on its command form.
 
+### Adhoc Callout
+
+An authorized Slack app mention that starts or takes over a Managed Slack Thread in a public channel, private channel, or group DM the bot has already joined.
+
+Unmapped conversations use the `@` channel entry. Mapped channels keep that room's agents and allowlist. 1:1 DMs are not Adhoc Callouts.
+
+### `@` Channel Entry
+
+A slack.channels row named `@`. It is not a Slack channel. It supplies agents and an allowlist for Adhoc Callouts in unmapped joined channels.
+
 ### Buffered Follow-Up
 
 A human Slack message accepted while a Managed Slack Thread has an active turn and held for submission after that turn completes.
@@ -39,5 +49,7 @@ The single CLI/product surface that packs, unpacks, dumps, runs, and ELO-ranks B
 ## Relationships
 
 - A Root Slack Mention creates or targets a Managed Slack Thread.
+- An Adhoc Callout creates or takes over a Managed Slack Thread.
+- A Root Slack Mention in an unmapped joined channel is an Adhoc Callout when an `@` Channel Entry exists.
 - A Buffered Follow-Up belongs to one active Managed Slack Thread and is promoted after the active turn completes.
 - A BAR is authored, packed, run, and ranked by Quickbench; an ELO Scorer belongs to one BAR.

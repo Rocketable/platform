@@ -35,6 +35,7 @@ const (
 	slackFileDownloadTimeout                                                                                                     = 30 * time.Second
 	maxSlackImageDownloadBytes                                                                                                   = 16 << 20
 	slackTextLimit, slackBlockTextLimit, slackPreferredChunkSize                                                                 = 3800, 3000, 3200
+	slackAdoptHistoryLimit                                                                                                       = 50
 	slackRobotReaction                                                                                                           = "robot_face"
 	slackExternalMCPRelayReaction                                                                                                = "satellite_antenna"
 	slackBufferedReaction, slackGoalStopSignReaction, slackGoalStopButtonReaction, slackGoalCompleteReaction                     = "hourglass_flowing_sand", "octagonal_sign", "stop_button", "white_check_mark"
@@ -2613,7 +2614,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		return
 	}
 
-	if text == "" && fileCount == 0 && len(forward.previews) == 0 {
+	if text == "" && fileCount == 0 && len(forward.previews) == 0 && !c.slackMessageMentionsBot(rawText) {
 		c.log.Debug("ignored Slack message event", "reason", "empty_text_and_no_files", "user", ev.User, "channel", ev.Channel, "channel_type", ev.ChannelType, "thread_ts_present", threadTS != "")
 
 		return
@@ -2640,6 +2641,12 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		}
 
 		if !handled {
+			if !c.slackMessageMentionsBot(rawText) {
+				return
+			}
+
+			c.startAdhocSocialThread(ctx, ev, forward, socialChannelName, text, replyTarget, recipientTeamID)
+
 			return
 		}
 
@@ -2902,13 +2909,15 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 	if command, args, ok := parseCanonicalSlackCommand(text); ok {
 		switch command {
 		case "agent":
-			selectedAgent, prompt, done := c.handleRootAgentCommand(ctx, ev, forward, channel, agent, threadTS, args)
-			if done {
-				return
-			}
+			if channel != "@" {
+				selectedAgent, prompt, done := c.handleRootAgentCommand(ctx, ev, forward, channel, agent, threadTS, args)
+				if done {
+					return
+				}
 
-			agent = selectedAgent
-			text = prompt
+				agent = selectedAgent
+				text = prompt
+			}
 		case "cron":
 			c.handleOnDemandCronRequest(ctx, args, replyTarget)
 			return
@@ -3066,14 +3075,22 @@ func (c *Connector) socialModeChannel(ctx context.Context, channelID string) (ch
 	}
 
 	name := "#" + strings.TrimSpace(channel.Name)
-	if name == "#" {
-		return "", "", false
+	if name != "#" {
+		for _, configured := range c.config.Channels {
+			if configured.Channel == name && len(configured.Agents) > 0 {
+				return name, configured.Agents[0], true
+			}
+		}
 	}
 
 	for _, configured := range c.config.Channels {
-		if configured.Channel == name && len(configured.Agents) > 0 {
-			return name, configured.Agents[0], true
+		if configured.Channel == "@" && len(configured.Agents) > 0 {
+			return "@", configured.Agents[0], true
 		}
+	}
+
+	if name == "#" {
+		return "", "", false
 	}
 
 	return name, "", false
@@ -3110,6 +3127,104 @@ func (c *Connector) socialModeAgents(channel string) []string {
 	}
 
 	return nil
+}
+
+func (c *Connector) slackMessageMentionsBot(text string) bool {
+	botUserID := strings.TrimSpace(c.botUserID)
+	return botUserID != "" && strings.Contains(text, "<@"+botUserID)
+}
+
+func (c *Connector) startAdhocSocialThread(ctx context.Context, ev *slackevents.MessageEvent, forward slackNativeForward, socialChannel, text string, replyTarget *events.SlackReplyTarget, recipientTeamID string) {
+	agents := c.socialModeAgents(socialChannel)
+	if len(agents) == 0 {
+		return
+	}
+
+	agent := agents[0]
+	key := slackThreadStackKey(replyTarget)
+	c.beginSlackStack(key)
+	c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackImmediatePlaceholder, recipientTeamID, ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)
+
+	content := c.inboundContentForMessageEvent(ctx, ev, forward)
+
+	content.Text = text
+	if history := c.slackAdoptHistory(ctx, ev.Channel, replyTarget.ThreadTS, ev.TimeStamp); history != "" {
+		content.TextAttachments = append(content.TextAttachments, history)
+	}
+
+	inbound := newSlackInboundMessage(content.Text, &content, replyTarget, c.slackPrincipal(ev.User))
+	events.SetInboundAllowedAgents(inbound, agents)
+
+	if err := c.threadRouter.StartThread(ctx, agent, events.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, inbound); err != nil {
+		c.log.Error("start Slack adhoc thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent)
+		c.finishSlackStack(key)
+		c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't start that managed thread: "+err.Error(), "consume Slack adhoc thread start rejection placeholder")
+
+		return
+	}
+
+	c.addRobotReaction(ctx, replyTarget)
+}
+
+func (c *Connector) slackAdoptHistory(ctx context.Context, channelID, threadTS, hailTS string) string {
+	var (
+		messages []slack.Message
+		cursor   string
+		seen     = map[string]bool{}
+	)
+	for {
+		page, hasMore, nextCursor, errReplies := c.api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{ChannelID: channelID, Timestamp: threadTS, Cursor: cursor, Limit: 200})
+		if errReplies != nil {
+			return ""
+		}
+
+		for i := range page {
+			if seen[page[i].Timestamp] {
+				continue
+			}
+
+			seen[page[i].Timestamp] = true
+			messages = append(messages, page[i])
+		}
+
+		if !hasMore {
+			break
+		}
+
+		if nextCursor == "" {
+			return ""
+		}
+
+		cursor = nextCursor
+	}
+
+	slices.SortFunc(messages, func(a, b slack.Message) int { return strings.Compare(a.Timestamp, b.Timestamp) })
+
+	var texts []string
+
+	for i := range messages {
+		if strings.TrimSpace(messages[i].Timestamp) == hailTS {
+			continue
+		}
+
+		text := strings.TrimSpace(messages[i].Text)
+		if text == "" {
+			continue
+		}
+
+		texts = append(texts, text)
+	}
+
+	if len(texts) > slackAdoptHistoryLimit {
+		texts = texts[len(texts)-slackAdoptHistoryLimit:]
+	}
+
+	packed := strings.Join(texts, "\n")
+	if len(packed) > events.MaxInboundTextAttachmentBytes {
+		packed = packed[len(packed)-events.MaxInboundTextAttachmentBytes:]
+	}
+
+	return packed
 }
 
 func (c *Connector) handleSlackSocialAgentSwitch(ctx context.Context, channelID, threadTS, userID, socialChannel, agent string) {

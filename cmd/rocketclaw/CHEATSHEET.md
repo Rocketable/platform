@@ -25,6 +25,8 @@ Agent controls are consumed by RocketClaw and do not route to RocketCode as prom
 | Scenario | How To Trigger | Notes |
 | --- | --- | --- |
 | Start a conversation | Mention the RocketClaw bot/app in a configured channel. | Starts a fresh managed thread using the first agent in that channel's ordered `agents` list. The mention is the first turn. |
+| Hail outside a listed room | Mention the bot in a joined public channel, private channel, or group DM. | Needs an `@` row in `slack.channels`. Uses that row's first agent and allowlist. 1:1 DMs stay ignored. |
+| Take over a thread | Mention the bot inside an existing unmanaged thread. | Adopts that thread. Bare `@bot` is enough. Includes the newest 50 prior texts. |
 | Start with a selected agent | Mention the RocketClaw bot/app with `$agent agent-name` or `$agent agent-name message`. | The no-message form creates a ready thread for the configured agent; the message form starts that agent with only the remainder as its first user-authored prompt. |
 | Continue a conversation | Reply in a known managed thread. | Uses only that thread's persisted history. |
 | Message with another human mention | Mention RocketClaw too when the message also pings another person, bot, broadcast target, or user group. | Managed-thread replies that ping someone else are suppressed unless RocketClaw is also mentioned. Raw unresolved `@word` text is not treated as a Slack ping. |

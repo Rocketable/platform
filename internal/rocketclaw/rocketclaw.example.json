@@ -48,6 +48,15 @@
         "allowed_user_ids": [
           "U0987654321"
         ]
+      },
+      {
+        "channel": "@",
+        "agents": [
+          "main"
+        ],
+        "allowed_user_ids": [
+          "U0987654321"
+        ]
       }
     ]
   },

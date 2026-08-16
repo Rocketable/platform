@@ -477,6 +477,38 @@ func TestValidateSlackChannelsLegacyCoverage(t *testing.T) {
 	}, cfg.Slack.Channels)
 }
 
+func TestValidateSlackKeepsAtChannel(t *testing.T) {
+	cfg := validConfig()
+	cfg.Slack.Channels = []SlackChannelConfig{
+		{Channel: " @ ", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}},
+	}
+
+	require.NoError(t, cfg.Validate())
+	assert.Equal(t, []SlackChannelConfig{
+		{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}},
+	}, cfg.Slack.Channels)
+}
+
+func TestValidateSlackLeavesHashAtUnchanged(t *testing.T) {
+	cfg := validConfig()
+	cfg.Slack.Channels = []SlackChannelConfig{
+		{Channel: "#@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}},
+	}
+
+	require.NoError(t, cfg.Validate())
+	assert.Equal(t, "#@", cfg.Slack.Channels[0].Channel)
+}
+
+func TestValidateSlackRejectsSecondAtChannel(t *testing.T) {
+	cfg := validConfig()
+	cfg.Slack.Channels = []SlackChannelConfig{
+		{Channel: "@", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}},
+		{Channel: "@", Agents: []string{"other"}, AllowedUserIDs: []string{"U2"}},
+	}
+
+	require.ErrorContains(t, cfg.Validate(), "slack.channels may include only one @ entry")
+}
+
 func TestValidateSlackChannelsRejectsInvalidConfig(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
@@ -488,6 +520,12 @@ func TestValidateSlackChannelsRejectsInvalidConfig(t *testing.T) {
 		}, wantErr: "slack.channels[].agents is required"},
 		{name: "missing channel allowlist", update: func(channels *[]SlackChannelConfig) {
 			*channels = []SlackChannelConfig{{Channel: "#triage", Agents: []string{"triage"}}}
+		}, wantErr: "slack.channels[].allowed_user_ids is required"},
+		{name: "missing at agents", update: func(channels *[]SlackChannelConfig) {
+			*channels = []SlackChannelConfig{{Channel: "@", AllowedUserIDs: []string{"U1"}}}
+		}, wantErr: "slack.channels[].agents is required"},
+		{name: "missing at allowlist", update: func(channels *[]SlackChannelConfig) {
+			*channels = []SlackChannelConfig{{Channel: "@", Agents: []string{"main"}}}
 		}, wantErr: "slack.channels[].allowed_user_ids is required"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

@@ -186,6 +186,10 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	channels := make([]string, 0, len(cfg.Slack.Channels))
 	for _, channel := range cfg.Slack.Channels {
+		if channel.Channel == "@" {
+			continue
+		}
+
 		channels = append(channels, channel.Channel)
 	}
 
@@ -624,7 +628,9 @@ func startExternalMCPServer(
 			return externalmcp.SessionResult{}, errors.New("external MCP agent is required")
 		}
 
-		channelIndex := slices.IndexFunc(cfg.Slack.Channels, func(channel config.SlackChannelConfig) bool { return channel.Channel == slackChannel })
+		channelIndex := slices.IndexFunc(cfg.Slack.Channels, func(channel config.SlackChannelConfig) bool {
+			return channel.Channel != "@" && channel.Channel == slackChannel
+		})
 		if channelIndex < 0 {
 			return externalmcp.SessionResult{}, fmt.Errorf("slack channel %q is not configured", slackChannel)
 		}

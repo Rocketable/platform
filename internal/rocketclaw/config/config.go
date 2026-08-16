@@ -392,7 +392,17 @@ func (c *Config) validateSlack() error {
 		return errors.New("slack.channels is required")
 	}
 
+	seenAt := false
+
 	for _, channel := range c.Slack.Channels {
+		if channel.Channel == "@" {
+			if seenAt {
+				return errors.New("slack.channels may include only one @ entry")
+			}
+
+			seenAt = true
+		}
+
 		if len(channel.Agents) == 0 {
 			return errors.New("slack.channels[].agents is required")
 		}
@@ -494,11 +504,11 @@ func normalizeSlackChannels(channels []SlackChannelConfig) []SlackChannelConfig 
 
 func normalizeSlackChannel(channel string) string {
 	channel = strings.TrimSpace(channel)
-	if channel != "" && !strings.HasPrefix(channel, "#") {
-		channel = "#" + channel
+	if channel == "" || channel == "@" || strings.HasPrefix(channel, "#") {
+		return channel
 	}
 
-	return channel
+	return "#" + channel
 }
 
 func validateEnvironment(environment []string) error {
