@@ -9,10 +9,13 @@ import (
 
 func allowAll(context.Context, string, map[string]any) error { return nil }
 
+func noToolCallObserver(context.Context, []string, string, map[string]any) {
+}
+
 func TestRunMainReturnsString(t *testing.T) {
 	got, err := Run(t.Context(), `def main():
     return "hello"
-`, nil, allowAll, nilCall, nil)
+`, nil, allowAll, nilCall, noToolCallObserver, nil)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -25,7 +28,7 @@ func TestRunMainReturnsString(t *testing.T) {
 func TestRunMainReturnsDictJSON(t *testing.T) {
 	got, err := Run(t.Context(), `def main():
     return {"a": 1, "b": True}
-`, nil, allowAll, nilCall, nil)
+`, nil, allowAll, nilCall, noToolCallObserver, nil)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -38,7 +41,7 @@ func TestRunMainReturnsDictJSON(t *testing.T) {
 func TestRunMainReturnsNoneError(t *testing.T) {
 	_, err := Run(t.Context(), `def main():
     return None
-`, nil, allowAll, nilCall, nil)
+`, nil, allowAll, nilCall, noToolCallObserver, nil)
 	if err == nil || !strings.Contains(err.Error(), "None") {
 		t.Fatalf("Run() error = %v, want None error", err)
 	}
@@ -62,7 +65,7 @@ func TestRunDecideDenyDoesNotCall(t *testing.T) {
 	}, func(context.Context, string, string, map[string]any) (string, error) {
 		called = true
 		return "", nil
-	}, nil)
+	}, noToolCallObserver, nil)
 	if err == nil || !strings.Contains(err.Error(), "denied") {
 		t.Fatalf("Run() error = %v, want denied", err)
 	}
@@ -90,7 +93,7 @@ func TestRunInvalidSchemaArgsDoesNotCall(t *testing.T) {
 `, tools, allowAll, func(context.Context, string, string, map[string]any) (string, error) {
 		called = true
 		return "", nil
-	}, nil)
+	}, noToolCallObserver, nil)
 	if err == nil {
 		t.Fatal("Run() error = nil, want schema error")
 	}
@@ -132,7 +135,7 @@ func TestRunCancelledContextStops(t *testing.T) {
     while True:
         pass
     return "done"
-`, nil, allowAll, nilCall, nil)
+`, nil, allowAll, nilCall, noToolCallObserver, nil)
 	if err == nil {
 		t.Fatal("Run() error = nil, want canceled")
 	}
@@ -169,7 +172,7 @@ func TestRunCallsTool(t *testing.T) {
 		}
 
 		return "echoed", nil
-	}, nil)
+	}, noToolCallObserver, nil)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -186,7 +189,7 @@ func nilCall(context.Context, string, string, map[string]any) (string, error) {
 func TestRunHostTool(t *testing.T) {
 	got, err := Run(t.Context(), `def main():
     return read(filePath="a.txt")
-`, nil, allowAll, nilCall, []HostTool{{
+`, nil, allowAll, nilCall, noToolCallObserver, []HostTool{{
 		Name: "read",
 		InputSchema: map[string]any{
 			"type":       "object",

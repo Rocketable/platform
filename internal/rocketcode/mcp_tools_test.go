@@ -335,6 +335,47 @@ func TestExecuteNestedToolEmitsThinkingDiagnostic(t *testing.T) {
 	assert.True(t, sawNested, "expected nested execute → read diagnostic")
 }
 
+func TestExecuteNestedConcurrencyPrefixesThinkingDiagnostic(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = root.Close() })
+	require.NoError(t, root.WriteFile("a.txt", []byte("a"), 0o600))
+	require.NoError(t, root.WriteFile("b.txt", []byte("b"), 0o600))
+
+	var permissions PermissionSet
+	require.NoError(t, permissions.Allow("read", "*"))
+
+	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
+	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, nil)}
+	model, hosts := factory.assembleTools(&Agent{Permission: permissions})
+	output := make(chan ChatResponse, 8)
+	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts, Diagnostics: true}
+	ctx := withToolCallContext(t.Context(), looper, output)
+
+	run := model[executeToolName]
+	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return gather([lambda: read(filePath=\"a.txt\"), lambda: read(filePath=\"b.txt\")])\n"}`), output, emptyToolCallMetadata())
+	require.NoError(t, err)
+	assert.Contains(t, result.Output, "a")
+	assert.Contains(t, result.Output, "b")
+	close(output)
+
+	var names []string
+
+	for item := range output {
+		if item.Tool != nil && item.Tool.Phase == toolDiagnosticPhaseCall {
+			names = append(names, item.Tool.Name)
+		}
+	}
+
+	assert.ElementsMatch(t, []string{
+		executeNestedToolPrefix + "gather → read",
+		executeNestedToolPrefix + "gather → read",
+	}, names)
+}
+
 func TestExecuteNestedSearchEmitsThinkingDiagnostic(t *testing.T) {
 	t.Parallel()
 

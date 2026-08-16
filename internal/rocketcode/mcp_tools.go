@@ -468,23 +468,13 @@ func callExecute(ctx context.Context, registry *mcpclient.Registry, permissions 
 	host, hostMap := codeModeHostToolsFromContext(ctx)
 
 	host = append(host, codeModeSearchTool(buildCodeModeSearchIndex(hostMap, mcpTools)))
-	for i := range host {
-		host[i] = withNestedExecuteDiagnostic(host[i])
-	}
 
 	out, errRun := codemode.Run(ctx, params.Code, mcpTools,
 		func(ctx context.Context, subject string, args map[string]any) error {
-			// Emit before permission so denied MCP attempts still show in thinking.
-			server, toolName, ok := strings.Cut(subject, ".")
-			if ok {
-				emitNestedExecuteToolDiagnostic(ctx, codemode.StarlarkName(server, toolName), args)
-			} else {
-				emitNestedExecuteToolDiagnostic(ctx, subject, args)
-			}
-
 			return CheckNestedPermission(ctx, executeToolName, mcpPermissionBucket, subject, args)
 		},
 		mcpCall,
+		emitNestedExecuteToolDiagnostic,
 		host,
 	)
 	if errRun != nil {
@@ -852,8 +842,6 @@ func argInt(args map[string]any, key string, fallback int) int {
 }
 
 // codeModeHostToolsFromContext binds host tools from looper.CodeModeHosts.
-// Nested thinking diagnostics are applied later via withNestedExecuteDiagnostic so
-// search and every other code-mode builtin share one emit path.
 func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool, hosts map[string]looperTool) {
 	tc, ok := toolCallContextFrom(ctx)
 	if !ok {
@@ -925,32 +913,10 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 	return host, hosts
 }
 
-// withNestedExecuteDiagnostic reports the Starlark builtin call into thinking traces.
-func withNestedExecuteDiagnostic(tool codemode.HostTool) codemode.HostTool {
-	name := tool.Name
-	if tool.CallValue != nil {
-		callValue := tool.CallValue
-		tool.CallValue = func(ctx context.Context, args map[string]any) (starlark.Value, error) {
-			emitNestedExecuteToolDiagnostic(ctx, name, args)
-			return callValue(ctx, args)
-		}
-	}
-
-	if tool.Call != nil {
-		call := tool.Call
-		tool.Call = func(ctx context.Context, args map[string]any) (string, error) {
-			emitNestedExecuteToolDiagnostic(ctx, name, args)
-			return call(ctx, args)
-		}
-	}
-
-	return tool
-}
-
 // emitNestedExecuteToolDiagnostic reports a nested code-mode tool call into thinking traces.
 // Uses emitChatResponse (blocking fallback) so nested steps are not dropped when the output
 // buffer is full — unlike emitDiagnosticChatResponse, which drops under backpressure.
-func emitNestedExecuteToolDiagnostic(ctx context.Context, nestedName string, args map[string]any) {
+func emitNestedExecuteToolDiagnostic(ctx context.Context, path []string, nestedName string, args map[string]any) {
 	tc, ok := toolCallContextFrom(ctx)
 	if !ok || tc.looper == nil || !tc.looper.Diagnostics || tc.output == nil {
 		return
@@ -960,6 +926,9 @@ func emitNestedExecuteToolDiagnostic(ctx context.Context, nestedName string, arg
 	if err != nil || len(raw) == 0 {
 		raw = json.RawMessage(`{}`)
 	}
+
+	namePath := append(slices.Clone(path), nestedName)
+	nestedName = strings.Join(namePath, " → ")
 
 	emitChatResponse(tc.output, ChatResponse{
 		Kind: ChatResponseAssistantTool,

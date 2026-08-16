@@ -1498,7 +1498,7 @@ func formatToolDiagnostic(diagnostic *rocketcode.ToolDiagnostic) string {
 	switch strings.TrimSpace(diagnostic.Phase) {
 	case "call":
 		details := formatToolCallDetails(diagnostic)
-		// Nested code-mode tools: Name "execute → read" → thinking "Execute → read".
+		// Nested code-mode tools use a breadcrumb, such as "execute → gather → read".
 		// Slack folds these under an "Execute" parent with nested lines as details.
 		if nested, ok := strings.CutPrefix(name, "execute → "); ok {
 			nested = strings.TrimSpace(nested)

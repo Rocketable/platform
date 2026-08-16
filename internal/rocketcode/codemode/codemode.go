@@ -30,6 +30,9 @@ type CallFunc func(ctx context.Context, server, name string, args map[string]any
 // Return nil to allow; error to deny/fail the Starlark builtin.
 type DecideFunc func(ctx context.Context, subject string, args map[string]any) error
 
+// ToolCallObserver observes a tool call and its Code Mode concurrency path.
+type ToolCallObserver func(ctx context.Context, path []string, name string, args map[string]any)
+
 // HostTool is a non-MCP builtin (e.g. read, glob). Call includes permission enforcement.
 type HostTool struct {
 	Name        string
@@ -85,8 +88,9 @@ func BuildCatalog(tools []ToolDesc) (map[string]ToolDesc, error) {
 
 // Run executes Starlark source requiring def main() returning a value.
 // mcp tools use decide+call; host tools use HostTool.Call (caller enforces permissions).
+// observe receives each validated tool call before permission and execution.
 // Returns string result (string as-is; other values JSON; None is error).
-func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc, call CallFunc, host []HostTool) (string, error) {
+func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc, call CallFunc, observe ToolCallObserver, host []HostTool) (string, error) {
 	catalog, errCatalog := BuildCatalog(tools)
 	if errCatalog != nil {
 		return "", errCatalog
@@ -100,7 +104,7 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 			return "", fmt.Errorf("builtin name collision %q", name)
 		}
 
-		predeclared[name] = newMCPToolBuiltin(tool, decide, call)
+		predeclared[name] = newMCPToolBuiltin(tool, decide, call, observe)
 	}
 
 	for _, tool := range host {
@@ -112,7 +116,7 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 			return "", fmt.Errorf("builtin name collision %q", tool.Name)
 		}
 
-		predeclared[tool.Name] = newHostToolBuiltin(tool)
+		predeclared[tool.Name] = newHostToolBuiltin(tool, observe)
 	}
 
 	for name, builtin := range concurrency {
@@ -186,8 +190,8 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 	return string(encoded.(starlark.String)), nil
 }
 
-func newMCPToolBuiltin(tool ToolDesc, decide DecideFunc, call CallFunc) *starlark.Builtin {
-	return newKwargsBuiltin(StarlarkName(tool.Server, tool.Name), tool.InputSchema, func(ctx context.Context, callArgs map[string]any) (string, error) {
+func newMCPToolBuiltin(tool ToolDesc, decide DecideFunc, call CallFunc, observe ToolCallObserver) *starlark.Builtin {
+	return newKwargsBuiltin(StarlarkName(tool.Server, tool.Name), tool.InputSchema, observe, func(ctx context.Context, callArgs map[string]any) (string, error) {
 		if err := decide(ctx, tool.Server+"."+tool.Name, callArgs); err != nil {
 			return "", err
 		}
@@ -196,8 +200,8 @@ func newMCPToolBuiltin(tool ToolDesc, decide DecideFunc, call CallFunc) *starlar
 	})
 }
 
-func newHostToolBuiltin(tool HostTool) *starlark.Builtin {
-	return newKwargsValueBuiltin(tool.Name, tool.InputSchema, func(ctx context.Context, args map[string]any) (starlark.Value, error) {
+func newHostToolBuiltin(tool HostTool, observe ToolCallObserver) *starlark.Builtin {
+	return newKwargsValueBuiltin(tool.Name, tool.InputSchema, observe, func(ctx context.Context, args map[string]any) (starlark.Value, error) {
 		if tool.CallValue != nil {
 			return tool.CallValue(ctx, args)
 		}
@@ -215,8 +219,8 @@ func newHostToolBuiltin(tool HostTool) *starlark.Builtin {
 	})
 }
 
-func newKwargsBuiltin(name string, schema map[string]any, call func(context.Context, map[string]any) (string, error)) *starlark.Builtin {
-	return newKwargsValueBuiltin(name, schema, func(ctx context.Context, args map[string]any) (starlark.Value, error) {
+func newKwargsBuiltin(name string, schema map[string]any, observe ToolCallObserver, call func(context.Context, map[string]any) (string, error)) *starlark.Builtin {
+	return newKwargsValueBuiltin(name, schema, observe, func(ctx context.Context, args map[string]any) (starlark.Value, error) {
 		result, err := call(ctx, args)
 		if err != nil {
 			return nil, err
@@ -226,7 +230,7 @@ func newKwargsBuiltin(name string, schema map[string]any, call func(context.Cont
 	})
 }
 
-func newKwargsValueBuiltin(name string, schema map[string]any, call func(context.Context, map[string]any) (starlark.Value, error)) *starlark.Builtin {
+func newKwargsValueBuiltin(name string, schema map[string]any, observe ToolCallObserver, call func(context.Context, map[string]any) (starlark.Value, error)) *starlark.Builtin {
 	return starlark.NewBuiltin(name, func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 		if len(args) != 0 {
 			return nil, fmt.Errorf("%s: only keyword arguments are allowed", b.Name())
@@ -245,6 +249,8 @@ func newKwargsValueBuiltin(name string, schema map[string]any, call func(context
 		if errCtx != nil {
 			return nil, errCtx
 		}
+
+		observe(ctx, threadPath(thread), name, callArgs)
 
 		return call(ctx, callArgs)
 	})

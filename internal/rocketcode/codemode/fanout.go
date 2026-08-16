@@ -20,6 +20,7 @@ const (
 	childStepBudget = 100_000
 
 	localCtx      = "ctx"
+	localPath     = "path"
 	localSlotHold = "slotHold"
 )
 
@@ -125,7 +126,12 @@ func makeRace(slots *semaphore.Weighted, firstDone bool) func(*starlark.Thread, 
 			return nil, err
 		}
 
-		out := runRace(thread, slots, concurrency, callables, firstDone)
+		op := concurrencyOpRace
+		if firstDone {
+			op = concurrencyOpRaceFirst
+		}
+
+		out := runRace(thread, slots, op, concurrency, callables, firstDone)
 
 		return out.value, out.err
 	}
@@ -195,6 +201,12 @@ func threadContext(thread *starlark.Thread) (context.Context, error) {
 	return ctx, nil
 }
 
+func threadPath(thread *starlark.Thread) []string {
+	path, _ := thread.Local(localPath).([]string)
+
+	return slices.Clone(path)
+}
+
 // releaseParentSlot frees the caller's global token for the duration of a nested
 // fan-out so children can acquire without deadlocking at MaxConcurrency.
 // Restore uses a non-canceled context so cancel mid-nest does not leak the permit.
@@ -213,8 +225,10 @@ func releaseParentSlot(parent *starlark.Thread) func() {
 }
 
 const (
-	concurrencyOpGather = "gather"
-	concurrencyOpMap    = "map"
+	concurrencyOpGather    = "gather"
+	concurrencyOpMap       = "map"
+	concurrencyOpRace      = "race"
+	concurrencyOpRaceFirst = "race_first"
 )
 
 func runGather(parent *starlark.Thread, slots *semaphore.Weighted, op string, concurrency int, values []starlark.Value, mapFn starlark.Callable) branchOutcome {
@@ -233,6 +247,8 @@ func runGather(parent *starlark.Thread, slots *semaphore.Weighted, op string, co
 	group, groupCtx := errgroup.WithContext(parentCtx)
 	group.SetLimit(concurrency)
 
+	branchPath := append(threadPath(parent), op)
+
 	for i, value := range values {
 		group.Go(func() error {
 			hold := &slotHold{slots: slots}
@@ -243,9 +259,9 @@ func runGather(parent *starlark.Thread, slots *semaphore.Weighted, op string, co
 
 			var out branchOutcome
 			if mapFn != nil {
-				out = callBranch(groupCtx, fmt.Sprintf("map-%d", i), mapFn, starlark.Tuple{value}, hold)
+				out = callBranch(groupCtx, fmt.Sprintf("map-%d", i), mapFn, starlark.Tuple{value}, hold, branchPath)
 			} else {
-				out = callBranch(groupCtx, fmt.Sprintf("gather-%d", i), value, nil, hold)
+				out = callBranch(groupCtx, fmt.Sprintf("gather-%d", i), value, nil, hold, branchPath)
 			}
 
 			if out.err != nil {
@@ -265,7 +281,7 @@ func runGather(parent *starlark.Thread, slots *semaphore.Weighted, op string, co
 	return branchOutcome{value: starlark.NewList(results)}
 }
 
-func runRace(parent *starlark.Thread, slots *semaphore.Weighted, concurrency int, callables []starlark.Value, firstDone bool) branchOutcome {
+func runRace(parent *starlark.Thread, slots *semaphore.Weighted, op string, concurrency int, callables []starlark.Value, firstDone bool) branchOutcome {
 	if len(callables) == 0 {
 		return branchOutcome{err: errors.New("race requires at least one callable")}
 	}
@@ -322,6 +338,8 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, concurrency int
 	group, groupCtx := errgroup.WithContext(raceCtx)
 	group.SetLimit(concurrency)
 
+	branchPath := append(threadPath(parent), op)
+
 	for i, callable := range callables {
 		if raceCtx.Err() != nil {
 			break
@@ -344,7 +362,7 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, concurrency int
 			}
 			defer hold.release()
 
-			finish(callBranch(groupCtx, fmt.Sprintf("race-%d", i), callable, nil, hold))
+			finish(callBranch(groupCtx, fmt.Sprintf("race-%d", i), callable, nil, hold, branchPath))
 
 			return nil
 		})
@@ -362,7 +380,7 @@ func runRace(parent *starlark.Thread, slots *semaphore.Weighted, concurrency int
 	return branchOutcome{value: winner}
 }
 
-func callBranch(ctx context.Context, name string, callable starlark.Value, args starlark.Tuple, hold *slotHold) branchOutcome {
+func callBranch(ctx context.Context, name string, callable starlark.Value, args starlark.Tuple, hold *slotHold, path []string) branchOutcome {
 	if err := context.Cause(ctx); err != nil {
 		return branchOutcome{err: fmt.Errorf("branch context: %w", err)}
 	}
@@ -371,6 +389,7 @@ func callBranch(ctx context.Context, name string, callable starlark.Value, args 
 	defer stop()
 
 	thread.SetLocal(localSlotHold, hold)
+	thread.SetLocal(localPath, slices.Clone(path))
 
 	value, err := starlark.Call(thread, callable, args, nil)
 	if err != nil {

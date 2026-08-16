@@ -2901,6 +2901,9 @@ func TestRocketCodeThinkingTextHandlesStructuredToolDiagnostics(t *testing.T) {
 	nested := rocketcode.ToolDiagnostic{Phase: "call", Name: "execute → read", Arguments: []byte(`{"filePath":"README.md"}`)}
 	assert.Equal(t, "Execute → Read: README.md", rocketcodeThinkingText(toolResponse(&nested)))
 
+	nestedGather := rocketcode.ToolDiagnostic{Phase: "call", Name: "execute → gather → read", Arguments: []byte(`{"filePath":"README.md"}`)}
+	assert.Equal(t, "Execute → Gather → Read: README.md", rocketcodeThinkingText(toolResponse(&nestedGather)))
+
 	nestedBare := rocketcode.ToolDiagnostic{Phase: "call", Name: "execute → bash"}
 	assert.Equal(t, "Execute → Bash", rocketcodeThinkingText(toolResponse(&nestedBare)))
 
