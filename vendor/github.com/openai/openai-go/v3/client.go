@@ -1,4 +1,4 @@
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+// File generated from our OpenAPI spec by Castiron. See CONTRIBUTING.md for details.
 
 package openai
 
@@ -57,7 +57,9 @@ type Client struct {
 	Conversations conversations.ConversationService
 	Containers    ContainerService
 	Skills        SkillService
-	Videos        VideoService
+	// Deprecated: The Sora API is scheduled to permanently shut down on September 24,
+	// 2026.
+	Videos VideoService
 }
 
 // DefaultClientOptions read from the environment (OPENAI_API_KEY,

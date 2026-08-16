@@ -1,4 +1,4 @@
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+// File generated from our OpenAPI spec by Castiron. See CONTRIBUTING.md for details.
 
 package openai
 
@@ -186,12 +186,12 @@ func (u TranscriptionUsageUnion) AsAny() anyTranscriptionUsage {
 }
 
 func (u TranscriptionUsageUnion) AsTokens() (v TranscriptionUsageTokens) {
-	apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
 	return
 }
 
 func (u TranscriptionUsageUnion) AsDuration() (v TranscriptionUsageDuration) {
-	apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
 	return
 }
 
@@ -425,17 +425,17 @@ func (u TranscriptionStreamEventUnion) AsAny() anyTranscriptionStreamEvent {
 }
 
 func (u TranscriptionStreamEventUnion) AsTranscriptTextSegment() (v TranscriptionTextSegmentEvent) {
-	apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
 	return
 }
 
 func (u TranscriptionStreamEventUnion) AsTranscriptTextDelta() (v TranscriptionTextDeltaEvent) {
-	apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
 	return
 }
 
 func (u TranscriptionStreamEventUnion) AsTranscriptTextDone() (v TranscriptionTextDoneEvent) {
-	apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
 	return
 }
 
@@ -789,12 +789,12 @@ type AudioTranscriptionNewResponseUnion struct {
 }
 
 func (u AudioTranscriptionNewResponseUnion) AsTranscription() (v Transcription) {
-	apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
 	return
 }
 
 func (u AudioTranscriptionNewResponseUnion) AsTranscriptionVerbose() (v TranscriptionVerbose) {
-	apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
 	return
 }
 
@@ -839,7 +839,9 @@ func (r *AudioTranscriptionNewResponseUnionUsage) UnmarshalJSON(data []byte) err
 
 type AudioTranscriptionNewParams struct {
 	// The audio file object (not file name) to transcribe, in one of these formats:
-	// flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, or webm.
+	// flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, or webm. The request must include
+	// enough format metadata for the file to be identified. We recommend an
+	// extension-bearing filename and an appropriate content type.
 	File io.Reader `json:"file,omitzero" api:"required" format:"binary"`
 	// ID of the model to use. The options are `gpt-transcribe`, `gpt-4o-transcribe`,
 	// `gpt-4o-mini-transcribe`, `gpt-4o-mini-transcribe-2025-12-15`, `whisper-1`
@@ -921,7 +923,7 @@ func (r AudioTranscriptionNewParams) MarshalMultipart() (data []byte, contentTyp
 		err = apiform.WriteExtras(writer, r.ExtraFields())
 	}
 	if err != nil {
-		writer.Close()
+		_ = writer.Close()
 		return nil, "", err
 	}
 	err = writer.Close()

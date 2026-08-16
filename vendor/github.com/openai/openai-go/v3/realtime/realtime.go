@@ -1,4 +1,4 @@
-// File generated from our OpenAPI spec by Stainless. See CONTRIBUTING.md for details.
+// File generated from our OpenAPI spec by Castiron. See CONTRIBUTING.md for details.
 
 package realtime
 
@@ -405,17 +405,17 @@ func (u RealtimeAudioFormatsUnion) AsAny() anyRealtimeAudioFormats {
 }
 
 func (u RealtimeAudioFormatsUnion) AsAudioPCM() (v RealtimeAudioFormatsAudioPCM) {
-	apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
 	return
 }
 
 func (u RealtimeAudioFormatsUnion) AsAudioPCMU() (v RealtimeAudioFormatsAudioPCMU) {
-	apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
 	return
 }
 
 func (u RealtimeAudioFormatsUnion) AsAudioPCMA() (v RealtimeAudioFormatsAudioPCMA) {
-	apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
 	return
 }
 
@@ -1946,12 +1946,12 @@ type RealtimeTruncationUnion struct {
 }
 
 func (u RealtimeTruncationUnion) AsRealtimeTruncationStrategy() (v string) {
-	apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
 	return
 }
 
 func (u RealtimeTruncationUnion) AsRetentionRatioTruncation() (v RealtimeTruncationRetentionRatio) {
-	apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
 	return
 }
 
