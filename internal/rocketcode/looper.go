@@ -43,7 +43,7 @@ type responseServiceClient struct {
 }
 
 func (c responseServiceClient) New(ctx context.Context, params *responses.ResponseNewParams, opts ...option.RequestOption) (*responses.Response, error) {
-	resp, err := c.service.New(ctx, *params, append(slices.Clone(opts), option.WithHTTPClient(c.doer))...)
+	resp, err := c.service.New(ctx, *params, append(slices.Clone(opts), option.WithMiddleware(c.doer.middleware))...)
 	if err != nil {
 		return nil, fmt.Errorf("create response: %w", err)
 	}
@@ -52,7 +52,7 @@ func (c responseServiceClient) New(ctx context.Context, params *responses.Respon
 }
 
 func (c responseServiceClient) Compact(ctx context.Context, params *responses.ResponseCompactParams, opts ...option.RequestOption) (*responses.CompactedResponse, error) {
-	resp, err := c.service.Compact(ctx, *params, append(slices.Clone(opts), option.WithHTTPClient(c.doer))...)
+	resp, err := c.service.Compact(ctx, *params, append(slices.Clone(opts), option.WithMiddleware(c.doer.middleware))...)
 	if err != nil {
 		return nil, fmt.Errorf("compact response: %w", err)
 	}

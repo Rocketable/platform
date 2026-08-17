@@ -3,6 +3,7 @@ package rocketcode
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -67,6 +68,34 @@ func TestNewResponsesAPIUsesWebsocketWhenURLIsWebsocket(t *testing.T) {
 	require.NoError(t, json.Unmarshal(create, &event))
 	require.Equal(t, "response.create", event["type"])
 	require.Equal(t, "gpt-5.5", event["model"])
+}
+
+func TestNewResponsesAPIUsesClientHTTPClientWhenURLIsHTTP(t *testing.T) {
+	transport := &authRewriteTransport{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer real-token" {
+			t.Errorf("Authorization = %q; want Bearer real-token", got)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if _, err := w.Write([]byte(`{"id":"resp_auth","status":"completed","output":[]}`)); err != nil {
+			t.Errorf("write response body: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := openai.NewClient(
+		option.WithAPIKey("dummy-key"),
+		option.WithBaseURL(server.URL+"/v1"),
+		option.WithHTTPClient(&http.Client{Transport: transport}),
+	)
+	api := newResponsesAPI(&client)
+	resp, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-5.5"})
+	require.NoError(t, err)
+	require.Equal(t, "resp_auth", resp.ID)
+	require.True(t, transport.used)
 }
 
 func TestNewResponsesAPIKeepsHTTPWhenURLIsNotWebsocket(t *testing.T) {
@@ -183,6 +212,23 @@ func TestNewResponsesAPIMapsWebsocketError(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, http.StatusTooManyRequests, errAPI.StatusCode)
 	require.Equal(t, "too_many_requests", errAPI.Code)
+}
+
+type authRewriteTransport struct {
+	used bool
+}
+
+func (t *authRewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.used = true
+	cloned := req.Clone(req.Context())
+	cloned.Header.Set("Authorization", "Bearer real-token")
+
+	resp, errRound := http.DefaultTransport.RoundTrip(cloned)
+	if errRound != nil {
+		return nil, fmt.Errorf("round trip rewritten auth request: %w", errRound)
+	}
+
+	return resp, nil
 }
 
 func testWebsocketUpgrader() websocket.Upgrader {

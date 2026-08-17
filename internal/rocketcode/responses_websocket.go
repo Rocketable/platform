@@ -13,26 +13,21 @@ import (
 
 	"github.com/gorilla/websocket"
 	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 )
 
 type responsesWebsocketDoer struct {
-	http *http.Client
 	mu   sync.Mutex
 	conn *websocket.Conn
 }
 
 func newResponsesAPI(client *openai.Client) responseServiceClient {
-	return responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{http: http.DefaultClient}}
+	return responseServiceClient{service: &client.Responses, doer: &responsesWebsocketDoer{}}
 }
 
-func (d *responsesWebsocketDoer) Do(req *http.Request) (*http.Response, error) {
+func (d *responsesWebsocketDoer) middleware(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
 	if req.URL.Scheme != "ws" && req.URL.Scheme != "wss" {
-		resp, errDo := d.http.Do(req)
-		if errDo != nil {
-			return nil, fmt.Errorf("do responses http request: %w", errDo)
-		}
-
-		return resp, nil
+		return next(req)
 	}
 
 	if strings.Contains(req.URL.Path, "/compact") {
@@ -43,12 +38,7 @@ func (d *responsesWebsocketDoer) Do(req *http.Request) (*http.Response, error) {
 			httpReq.URL.Scheme = "http"
 		}
 
-		resp, errDo := d.http.Do(httpReq)
-		if errDo != nil {
-			return nil, fmt.Errorf("do responses compact request: %w", errDo)
-		}
-
-		return resp, nil
+		return next(httpReq)
 	}
 
 	d.mu.Lock()
