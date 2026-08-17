@@ -275,32 +275,15 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 			return err
 		}
 
-	case msg.Text != "" && (msg.Complete || msg.PostProgressText):
-		chunks := splitSlackText(msg.Text, slackPreferredChunkSize, slackTextLimit)
-		updatedAnswer := false
-
-		if msg.Complete && ok {
-			if len(chunks) == 1 && slots.AnswerTS != "" {
-				var blocks []slack.Block
-				if msg.ExternalConversationID != "" {
-					blocks = slackMCPBlocks("MCP response", msg.ExternalConversationID, msg.Agent, chunks[0], slack.MarkdownType, false)
-				}
-
-				if _, _, _, errUpdate := c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.AnswerTS, slack.MsgOptionText(chunks[0], false), slack.MsgOptionBlocks(blocks...)); errUpdate != nil {
-					return fmt.Errorf("update Slack answer placeholder len=%d: %w", len([]rune(chunks[0])), errUpdate)
-				}
-
-				updatedAnswer = true
-			} else if slots.AnswerTS != "" {
-				c.deleteSlackMessage(ctx, slackReplyState{ChannelID: slots.ChannelID, MessageTS: slots.AnswerTS}, "delete Slack answer placeholder")
-			}
+	case msg.Text != "" && msg.ExternalConversationID != "" && (msg.Complete || msg.PostProgressText):
+		if err := c.sendMCPResponse(ctx, msg, &slots, ok); err != nil {
+			return err
 		}
 
-		if !updatedAnswer {
-			channelID, threadTS := slackReplyDestination(msg.SlackReply)
-			if err := c.postResponseChunks(ctx, channelID, threadTS, chunks, msg); err != nil {
-				return err
-			}
+	case msg.Text != "" && (msg.Complete || msg.PostProgressText):
+		fallbackText, blocks, overflow := titledMessageLayout("💬", slackTruncatedText(msg.Text, slackTextLimit, "..."), msg.Text)
+		if _, _, _, err := c.sendTitledResponse(ctx, msg, &slots, ok && msg.Complete, fallbackText, blocks, overflow, "reply"); err != nil {
+			return err
 		}
 
 	case thinkingText != "":
@@ -835,15 +818,53 @@ func (c *Connector) responseSlots(msg *events.OutboundMessage) (slackReplySlots,
 	return slots, ok
 }
 
-func (c *Connector) sendGoalTurnResponse(ctx context.Context, msg *events.OutboundMessage, slots *slackReplySlots, hasSlots bool) error {
-	fallbackText, blocks, overflow := goalMessageLayout(msg.GoalTurnNumber, msg.GoalMaxTurns, msg.GoalComplete, msg.Text)
+func (c *Connector) sendMCPResponse(ctx context.Context, msg *events.OutboundMessage, slots *slackReplySlots, hasSlots bool) error {
+	chunks := splitSlackText(msg.Text, slackPreferredChunkSize, slackTextLimit)
+	updatedAnswer := false
+
+	if msg.Complete && hasSlots {
+		if len(chunks) == 1 && slots.AnswerTS != "" {
+			blocks := slackMCPBlocks("MCP response", msg.ExternalConversationID, msg.Agent, chunks[0], slack.MarkdownType, false)
+			if _, _, _, errUpdate := c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.AnswerTS, slack.MsgOptionText(chunks[0], false), slack.MsgOptionBlocks(blocks...)); errUpdate != nil {
+				return fmt.Errorf("update Slack answer placeholder len=%d: %w", len([]rune(chunks[0])), errUpdate)
+			}
+
+			updatedAnswer = true
+		} else if slots.AnswerTS != "" {
+			c.deleteSlackMessage(ctx, slackReplyState{ChannelID: slots.ChannelID, MessageTS: slots.AnswerTS}, "delete Slack answer placeholder")
+		}
+	}
+
+	if updatedAnswer {
+		return nil
+	}
+
 	channelID, threadTS := slackReplyDestination(msg.SlackReply)
 
-	var posted []slackReplyState
+	return c.postResponseChunks(ctx, channelID, threadTS, chunks, msg)
+}
+
+func (c *Connector) sendGoalTurnResponse(ctx context.Context, msg *events.OutboundMessage, slots *slackReplySlots, hasSlots bool) error {
+	fallbackText, blocks, overflow := goalMessageLayout(msg.GoalTurnNumber, msg.GoalMaxTurns, msg.GoalComplete, msg.Text)
+
+	channelID, threadTS, posted, err := c.sendTitledResponse(ctx, msg, slots, hasSlots, fallbackText, blocks, overflow, "goal")
+	if err != nil {
+		return err
+	}
+
+	if msg.Complete && msg.GoalComplete {
+		c.addGoalCompleteReactions(ctx, channelID, threadTS, posted)
+	}
+
+	return nil
+}
+
+func (c *Connector) sendTitledResponse(ctx context.Context, msg *events.OutboundMessage, slots *slackReplySlots, hasSlots bool, fallbackText string, blocks []slack.Block, overflow []string, op string) (channelID, threadTS string, posted []slackReplyState, err error) {
+	channelID, threadTS = slackReplyDestination(msg.SlackReply)
 
 	if hasSlots && slots.AnswerTS != "" {
-		if _, _, _, err := c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.AnswerTS, slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...)); err != nil {
-			return fmt.Errorf("update Slack goal response: %w", err)
+		if _, _, _, err = c.api.UpdateMessageContext(ctx, slots.ChannelID, slots.AnswerTS, slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...)); err != nil {
+			return "", "", nil, fmt.Errorf("update Slack %s response: %w", op, err)
 		}
 
 		posted = []slackReplyState{{ChannelID: slots.ChannelID, MessageTS: slots.AnswerTS}}
@@ -858,30 +879,26 @@ func (c *Connector) sendGoalTurnResponse(ctx context.Context, msg *events.Outbou
 			options = append(options, slack.MsgOptionTS(threadTS))
 		}
 
-		postedChannelID, postedTS, err := c.api.PostMessageContext(ctx, channelID, options...)
+		var postedTS string
+
+		channelID, postedTS, err = c.api.PostMessageContext(ctx, channelID, options...)
 		if err != nil {
-			return fmt.Errorf("send Slack goal response: %w", err)
+			return "", "", nil, fmt.Errorf("send Slack %s response: %w", op, err)
 		}
 
-		posted = []slackReplyState{{ChannelID: postedChannelID, MessageTS: postedTS}}
-		channelID = postedChannelID
-
+		posted = []slackReplyState{{ChannelID: channelID, MessageTS: postedTS}}
 		if threadTS == "" {
 			threadTS = postedTS
 		}
 	}
 
 	if len(overflow) > 0 {
-		if err := c.postResponseChunks(ctx, channelID, threadTS, overflow, nil); err != nil {
-			return fmt.Errorf("send Slack goal response continuation: %w", err)
+		if err = c.postResponseChunks(ctx, channelID, threadTS, overflow, nil); err != nil {
+			return "", "", nil, fmt.Errorf("send Slack %s response continuation: %w", op, err)
 		}
 	}
 
-	if msg.Complete && msg.GoalComplete {
-		c.addGoalCompleteReactions(ctx, channelID, threadTS, posted)
-	}
-
-	return nil
+	return channelID, threadTS, posted, nil
 }
 
 func (c *Connector) sendCronjobResponse(ctx context.Context, msg *events.OutboundMessage, slots *slackReplySlots, hasSlots bool) error {

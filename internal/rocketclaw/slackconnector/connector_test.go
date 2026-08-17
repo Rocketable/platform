@@ -2398,7 +2398,7 @@ func TestSendResponseCompletesThinkingPlanStreamAfterUnchangedAnswer(t *testing.
 		"/reactions.remove",
 	}, operations)
 	assert.Equal(t, url.Values{
-		"blocks":  {"[]"},
+		"blocks":  {`[{"type":"header","text":{"type":"plain_text","text":"💬","emoji":false}},{"type":"divider"},{"type":"section","text":{"type":"mrkdwn","text":"Final answer"}}]`},
 		"channel": {"D123"},
 		"text":    {"Final answer"},
 		"token":   {"xoxb-test"},
@@ -4295,27 +4295,29 @@ func TestSendResponseSplitsLongFinalAnswerIntoThreadMessages(t *testing.T) {
 	msg.SlackReply = replyTarget
 	require.NoError(t, connector.SendResponse(context.Background(), msg))
 
-	require.Len(t, deleted, 2)
+	require.Len(t, deleted, 1)
 	assert.Equal(t, "555.666", deleted[0].Get("ts"))
-	assert.Equal(t, "555.666", deleted[1].Get("ts"))
-	assert.Empty(t, updated)
-	require.Greater(t, len(posted), 3)
+	require.Len(t, posted, 2)
+	require.Len(t, updated, 1)
+	assert.Equal(t, slackTruncatedText(longText, slackTextLimit, "..."), updated[0].Get("text"))
 
-	chunks := posted[2:]
+	var blocks []struct {
+		Type string `json:"type"`
+		Text struct {
+			Text string `json:"text"`
+		} `json:"text"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(updated[0].Get("blocks")), &blocks))
+	require.GreaterOrEqual(t, len(blocks), 3)
+	assert.Equal(t, "header", blocks[0].Type)
+	assert.Equal(t, "💬", blocks[0].Text.Text)
+	assert.Equal(t, "divider", blocks[1].Type)
 
 	var rebuilt strings.Builder
 
-	for i := range chunks {
-		assert.Equal(t, "111.222", chunks[i].Get("thread_ts"))
-		assert.Less(t, len([]rune(chunks[i].Get("text"))), slackTextLimit)
-
-		if i < len(chunks)-1 {
-			text := chunks[i].Get("text")
-			last := []rune(text)[len([]rune(text))-1]
-			assert.True(t, last == '\n' || last == ' ' || last == '\t')
-		}
-
-		rebuilt.WriteString(chunks[i].Get("text"))
+	for _, block := range blocks[2:] {
+		assert.Equal(t, "section", block.Type)
+		rebuilt.WriteString(block.Text.Text)
 	}
 
 	assert.Equal(t, longText, rebuilt.String())
@@ -4420,6 +4422,20 @@ func TestSendResponseUpdatesTailAnswerPlaceholder(t *testing.T) {
 	assert.Equal(t, "111.222", posted[1].Get("thread_ts"))
 	require.Len(t, updated, 1)
 	assert.Equal(t, "thread answer", updated[0].Get("text"))
+
+	var blocks []struct {
+		Type string `json:"type"`
+		Text struct {
+			Text string `json:"text"`
+		} `json:"text"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(updated[0].Get("blocks")), &blocks))
+	require.Len(t, blocks, 3)
+	assert.Equal(t, "header", blocks[0].Type)
+	assert.Equal(t, "💬", blocks[0].Text.Text)
+	assert.Equal(t, "divider", blocks[1].Type)
+	assert.Equal(t, "section", blocks[2].Type)
+	assert.Equal(t, "thread answer", blocks[2].Text.Text)
 }
 
 func TestSendResponseUpdatesNonTailAnswerPlaceholder(t *testing.T) {
