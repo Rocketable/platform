@@ -2386,6 +2386,7 @@ func TestSendResponseCompletesThinkingPlanStreamAfterUnchangedAnswer(t *testing.
 	answer := events.NewOutboundMessage(events.SourceSlack, "test", "Final answer", events.OutputTargetSlack)
 	answer.TurnID = progress.TurnID
 	answer.Complete = true
+	answer.Agent = "main"
 	answer.SlackReply = reply
 	require.NoError(t, connector.SendResponse(t.Context(), answer))
 
@@ -2398,7 +2399,7 @@ func TestSendResponseCompletesThinkingPlanStreamAfterUnchangedAnswer(t *testing.
 		"/reactions.remove",
 	}, operations)
 	assert.Equal(t, url.Values{
-		"blocks":  {`[{"type":"header","text":{"type":"plain_text","text":"💬","emoji":false}},{"type":"divider"},{"type":"section","text":{"type":"mrkdwn","text":"Final answer"}}]`},
+		"blocks":  {`[{"type":"header","text":{"type":"plain_text","text":"💬 main","emoji":false}},{"type":"divider"},{"type":"section","text":{"type":"mrkdwn","text":"Final answer"}}]`},
 		"channel": {"D123"},
 		"text":    {"Final answer"},
 		"token":   {"xoxb-test"},
@@ -4292,6 +4293,7 @@ func TestSendResponseSplitsLongFinalAnswerIntoThreadMessages(t *testing.T) {
 	msg := events.NewOutboundMessage(events.SourceSlack, "test", longText, events.OutputTargetSlack)
 	msg.TurnID = "turn-thread"
 	msg.Complete = true
+	msg.Agent = "main"
 	msg.SlackReply = replyTarget
 	require.NoError(t, connector.SendResponse(context.Background(), msg))
 
@@ -4310,7 +4312,7 @@ func TestSendResponseSplitsLongFinalAnswerIntoThreadMessages(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(updated[0].Get("blocks")), &blocks))
 	require.GreaterOrEqual(t, len(blocks), 3)
 	assert.Equal(t, "header", blocks[0].Type)
-	assert.Equal(t, "💬", blocks[0].Text.Text)
+	assert.Equal(t, "💬 main", blocks[0].Text.Text)
 	assert.Equal(t, "divider", blocks[1].Type)
 
 	var rebuilt strings.Builder
@@ -4411,6 +4413,7 @@ func TestSendResponseUpdatesTailAnswerPlaceholder(t *testing.T) {
 	msg := events.NewOutboundMessage(events.SourceSlack, "test", "thread answer", events.OutputTargetSlack)
 	msg.TurnID = "turn-thread"
 	msg.Complete = true
+	msg.Agent = "main"
 	msg.SlackReply = replyTarget
 	require.NoError(t, connector.SendResponse(context.Background(), msg))
 
@@ -4432,7 +4435,7 @@ func TestSendResponseUpdatesTailAnswerPlaceholder(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(updated[0].Get("blocks")), &blocks))
 	require.Len(t, blocks, 3)
 	assert.Equal(t, "header", blocks[0].Type)
-	assert.Equal(t, "💬", blocks[0].Text.Text)
+	assert.Equal(t, "💬 main", blocks[0].Text.Text)
 	assert.Equal(t, "divider", blocks[1].Type)
 	assert.Equal(t, "section", blocks[2].Type)
 	assert.Equal(t, "thread answer", blocks[2].Text.Text)

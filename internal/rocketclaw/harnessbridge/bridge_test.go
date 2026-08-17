@@ -4370,6 +4370,7 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 
 	outbound := bridge.newOutboundMessage(inbound, "turn-2", 1, "reply", "", false)
 	assert.True(t, outbound.GoalTurn)
+	assert.Equal(t, "main", outbound.Agent)
 	assert.Equal(t, inbound.SlackReply, outbound.SlackReply)
 	assert.Equal(t, 1, outbound.GoalTurnNumber)
 	assert.Equal(t, 3, outbound.GoalMaxTurns)

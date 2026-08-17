@@ -281,7 +281,7 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 		}
 
 	case msg.Text != "" && (msg.Complete || msg.PostProgressText):
-		fallbackText, blocks, overflow := titledMessageLayout("💬", slackTruncatedText(msg.Text, slackTextLimit, "..."), msg.Text)
+		fallbackText, blocks, overflow := titledMessageLayout("💬 "+msg.Agent, slackTruncatedText(msg.Text, slackTextLimit, "..."), msg.Text)
 		if _, _, _, err := c.sendTitledResponse(ctx, msg, &slots, ok && msg.Complete, fallbackText, blocks, overflow, "reply"); err != nil {
 			return err
 		}

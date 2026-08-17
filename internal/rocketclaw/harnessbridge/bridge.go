@@ -2664,9 +2664,7 @@ func (b *Bridge) newOutboundMessage(msg *events.InboundMessage, turnID string, s
 		outbound.ExternalConversationID = strings.TrimSpace(msg.Metadata["external_conversation_id"])
 	}
 
-	if outbound.ExternalConversationID != "" {
-		outbound.Agent = b.config.Agent
-	}
+	outbound.Agent = b.config.Agent
 
 	outbound.TurnID = turnID
 	outbound.Sequence = sequence
