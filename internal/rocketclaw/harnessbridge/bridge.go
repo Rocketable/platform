@@ -2997,8 +2997,8 @@ func provenanceHeader(provenance promptProvenance) string {
 	}
 
 	header := "[" + origin + " media=" + media
-	if principal := provenanceToken(provenance.principal); principal != "" {
-		header += " principal=" + principal
+	if principal := strings.TrimSpace(provenance.principal); principal != "" {
+		header += " principal=" + strconv.Quote(principal)
 	}
 
 	if provenance.additionalInstructions != "" {

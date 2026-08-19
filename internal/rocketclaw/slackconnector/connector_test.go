@@ -4758,6 +4758,8 @@ func TestCreateReplyPlaceholdersStartsThinkingPlanStreamBeforeUnchangedAnswer(t 
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.2"})
 		case "/reactions.add":
 			writeJSON(t, w, map[string]any{"ok": true})
+		case "/users.info":
+			writeJSON(t, w, map[string]any{"ok": true})
 		default:
 			t.Fatalf("unexpected Slack API path %q", r.URL.Path)
 		}
@@ -5337,6 +5339,8 @@ func TestHandleEventsAPIIncludesNativeForwardedPublicThread(t *testing.T) {
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
 		case "/reactions.add":
 			writeJSON(t, w, map[string]any{"ok": true})
+		case "/users.info":
+			writeJSON(t, w, map[string]any{"ok": true})
 		default:
 			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
 		}
@@ -5378,6 +5382,8 @@ func TestPreviewOnlyNativeForwardRoutesAuthorizedAppMention(t *testing.T) {
 		case "/chat.postMessage":
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
 		case "/reactions.add":
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/users.info":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
 			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
@@ -5654,6 +5660,8 @@ func TestHandleMessageEventFinishesStackWhenThreadReplySubmitFails(t *testing.T)
 		case "/chat.delete", "/reactions.remove":
 			writeJSON(t, w, map[string]any{"ok": true})
 		case "/reactions.add":
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/users.info":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
 			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
@@ -6163,6 +6171,8 @@ func TestHandleAppMentionEventUsesConfiguredChannelAgentAndReaction(t *testing.T
 			reactionNames = append(reactionNames, r.PostForm.Get("name"))
 
 			writeJSON(t, w, map[string]any{"ok": true})
+		case "/users.info":
+			writeJSON(t, w, map[string]any{"ok": true})
 		default:
 			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
 		}
@@ -6239,6 +6249,8 @@ func TestHandleAppMentionEventClearsSlackStackWhenThreadStartFails(t *testing.T)
 
 			reactionNames = append(reactionNames, r.PostForm.Get("name"))
 
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/users.info":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
 			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
@@ -6333,6 +6345,8 @@ func TestHandleAppMentionEventUsesPerChannelAllowlist(t *testing.T) {
 		case "/chat.postMessage":
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666"})
 		case "/reactions.add":
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/users.info":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
 			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
@@ -6775,6 +6789,8 @@ func TestThreadedSocialMentionHandledOnceAndStripped(t *testing.T) {
 			posted = append(posted, cloneValues(r.PostForm))
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666", "text": posted[len(posted)-1].Get("text")})
 		case "/reactions.add":
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/users.info":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
 			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
@@ -9232,6 +9248,59 @@ func newTestReactionAddedEvent(user, reaction, timestamp string) *slackevents.Re
 	}
 }
 
+func TestSlackPrincipal(t *testing.T) {
+	const userID = "U0ADDPB7P4K"
+
+	for _, tc := range []struct {
+		name    string
+		userID  string
+		ok      bool
+		display string
+		real    string
+		want    string
+	}{
+		{name: "display name", userID: userID, ok: true, display: "Ulderico", real: "Other", want: "Ulderico (U0ADDPB7P4K)"},
+		{name: "real name when display empty", userID: userID, ok: true, real: "Ulderico Cirello", want: "Ulderico Cirello (U0ADDPB7P4K)"},
+		{name: "users.info error", userID: userID, want: userID},
+		{name: "empty user ID", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			connector := newTestConnector("http://slack.test")
+
+			if tc.userID != "" {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path != "/users.info" {
+						assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+						return
+					}
+
+					if !tc.ok {
+						writeJSON(t, w, map[string]any{"ok": false, "error": "user_not_found"})
+						return
+					}
+
+					writeJSON(t, w, map[string]any{
+						"ok": true,
+						"user": map[string]any{
+							"id":        tc.userID,
+							"name":      "forbidden-username",
+							"real_name": tc.real,
+							"profile": map[string]any{
+								"display_name": tc.display,
+								"real_name":    "forbidden-profile-real-name",
+							},
+						},
+					})
+				}))
+				t.Cleanup(server.Close)
+				connector = newTestConnector(server.URL)
+			}
+
+			assert.Equal(t, tc.want, connector.slackPrincipal(t.Context(), tc.userID))
+		})
+	}
+}
+
 func newTestConnector(apiURL string) *Connector {
 	return newTestConnectorWithOptions(apiURL, nil, nil, nil, nil)
 }
@@ -9448,6 +9517,8 @@ func newSlackStackTestServer(t *testing.T, posted *[]url.Values, reactions *[]st
 
 			*reactions = append(*reactions, r.URL.Path+" "+r.PostForm.Get("name")+" "+r.PostForm.Get("timestamp"))
 
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/users.info":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
 			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)

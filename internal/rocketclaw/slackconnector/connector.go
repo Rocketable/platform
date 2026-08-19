@@ -2677,7 +2677,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 				return
 			case "workflow":
 				content := events.InboundContent{Text: text}
-				inbound := newSlackInboundMessage(text, &content, replyTarget, c.slackPrincipal(ev.User))
+				inbound := newSlackInboundMessage(text, &content, replyTarget, c.slackPrincipal(ctx, ev.User))
 				c.handleWorkflowRequest(ctx, slackThreadStackKey(replyTarget), "", args, ev.User, replyTarget, inbound)
 
 				return
@@ -2712,14 +2712,15 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 					allowedAgents = c.socialModeAgents(socialChannelName)
 				}
 
-				if c.bufferSlackStack(ctx, key, content.Text, &content, replyTarget, c.slackPrincipal(ev.User), recipientTeamID, ev.User, allowedAgents) {
+				principal := c.slackPrincipal(ctx, ev.User)
+				if c.bufferSlackStack(ctx, key, content.Text, &content, replyTarget, principal, recipientTeamID, ev.User, allowedAgents) {
 					return
 				}
 
 				c.beginSlackStack(key)
 				c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackGoalProgressText(1, goal.MaxTurns), recipientTeamID, ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
 
-				inbound := newSlackInboundMessage(goal.Objective, &content, replyTarget, c.slackPrincipal(ev.User))
+				inbound := newSlackInboundMessage(goal.Objective, &content, replyTarget, principal)
 				if socialThreadReply {
 					events.SetInboundAllowedAgents(inbound, c.socialModeAgents(socialChannelName))
 				}
@@ -2748,7 +2749,8 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 			allowedAgents = c.socialModeAgents(socialChannelName)
 		}
 
-		if c.bufferSlackStack(ctx, key, content.Text, &content, replyTarget, c.slackPrincipal(ev.User), recipientTeamID, ev.User, allowedAgents) {
+		principal := c.slackPrincipal(ctx, ev.User)
+		if c.bufferSlackStack(ctx, key, content.Text, &content, replyTarget, principal, recipientTeamID, ev.User, allowedAgents) {
 			return
 		}
 
@@ -2756,7 +2758,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 
 		c.createReplyPlaceholdersOrWarn(ctx, replyTarget, slackImmediatePlaceholder, recipientTeamID, ev.User, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS)
 
-		inbound := newSlackInboundMessage(content.Text, &content, replyTarget, c.slackPrincipal(ev.User))
+		inbound := newSlackInboundMessage(content.Text, &content, replyTarget, principal)
 		if socialThreadReply {
 			events.SetInboundAllowedAgents(inbound, c.socialModeAgents(socialChannelName))
 		}
@@ -2943,7 +2945,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 			isGoal = true
 		case "workflow":
 			content := events.InboundContent{Text: text}
-			inbound := newSlackInboundMessage(text, &content, replyTarget, c.slackPrincipal(ev.User))
+			inbound := newSlackInboundMessage(text, &content, replyTarget, c.slackPrincipal(ctx, ev.User))
 			events.SetInboundAllowedAgents(inbound, c.socialModeAgents(channel))
 			c.handleWorkflowRequest(ctx, slackThreadStackKey(replyTarget), agent, args, ev.User, replyTarget, inbound)
 
@@ -2985,7 +2987,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 	content.Text = promptText
 
 	if isGoal {
-		inbound := newSlackInboundMessage(promptText, &content, replyTarget, c.slackPrincipal(ev.User))
+		inbound := newSlackInboundMessage(promptText, &content, replyTarget, c.slackPrincipal(ctx, ev.User))
 		events.SetInboundAllowedAgents(inbound, c.socialModeAgents(channel))
 
 		if !c.startSlackGoal(ctx, key, replyTarget, agent, goal, inbound) {
@@ -2997,7 +2999,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 
 	c.log.Info("handing Slack social thread to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent, "pending_placeholder", c.hasPendingState(replyTarget))
 
-	inbound := newSlackInboundMessage(promptText, &content, replyTarget, c.slackPrincipal(ev.User))
+	inbound := newSlackInboundMessage(promptText, &content, replyTarget, c.slackPrincipal(ctx, ev.User))
 	events.SetInboundAllowedAgents(inbound, c.socialModeAgents(channel))
 
 	if err := c.threadRouter.StartThread(ctx, agent, events.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, inbound); err != nil {
@@ -3169,7 +3171,7 @@ func (c *Connector) startAdhocSocialThread(ctx context.Context, ev *slackevents.
 		content.TextAttachments = append(content.TextAttachments, history)
 	}
 
-	inbound := newSlackInboundMessage(content.Text, &content, replyTarget, c.slackPrincipal(ev.User))
+	inbound := newSlackInboundMessage(content.Text, &content, replyTarget, c.slackPrincipal(ctx, ev.User))
 	events.SetInboundAllowedAgents(inbound, agents)
 
 	if err := c.threadRouter.StartThread(ctx, agent, events.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, inbound); err != nil {
@@ -3623,8 +3625,27 @@ func newSlackInboundMessage(text string, content *events.InboundContent, replyTa
 	return inbound
 }
 
-func (c *Connector) slackPrincipal(userID string) string {
-	return strings.TrimSpace(userID)
+func (c *Connector) slackPrincipal(ctx context.Context, userID string) string {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return ""
+	}
+
+	user, err := c.api.GetUserInfoContext(ctx, userID)
+	if err != nil {
+		return userID
+	}
+
+	name := strings.TrimSpace(user.Profile.DisplayName)
+	if name == "" {
+		name = strings.TrimSpace(user.RealName)
+	}
+
+	if name == "" {
+		return userID
+	}
+
+	return name + " (" + userID + ")"
 }
 
 func slackPendingKey(replyTarget *events.SlackReplyTarget) string {

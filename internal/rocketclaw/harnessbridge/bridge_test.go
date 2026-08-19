@@ -1616,7 +1616,7 @@ func TestReplayInputRawKindReportsInvalidJSON(t *testing.T) {
 }
 
 func TestBuildPromptCoversAttachments(t *testing.T) {
-	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello\n\nAttachment notes:\n- skipped image", buildPrompt(&events.InboundMessage{Source: events.SourceSlack, Human: true, Text: "  hello  ", AttachmentWarnings: []string{" skipped image ", " "}, Metadata: map[string]string{events.InboundPrincipalMetadataKey: "Alice"}}, nil))
+	assert.Equal(t, "[Slack media=Text principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello\n\nAttachment notes:\n- skipped image", buildPrompt(&events.InboundMessage{Source: events.SourceSlack, Human: true, Text: "  hello  ", AttachmentWarnings: []string{" skipped image ", " "}, Metadata: map[string]string{events.InboundPrincipalMetadataKey: "Alice"}}, nil))
 
 	assert.Equal(t, "[System media=Text additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nAttachment notes:\n- unsupported PDF", buildPrompt(&events.InboundMessage{AttachmentWarnings: []string{" unsupported PDF "}}, nil))
 }
@@ -1624,9 +1624,9 @@ func TestBuildPromptCoversAttachments(t *testing.T) {
 func TestBuildPromptAdditionalInstructionsFrontmatter(t *testing.T) {
 	msg := &events.InboundMessage{Source: events.SourceSlack, Human: true, Text: "hello", Metadata: map[string]string{events.InboundPrincipalMetadataKey: "Alice"}}
 
-	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in one sentence.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": "Reply in one sentence."}))
-	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": " "}))
-	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": 7}))
+	assert.Equal(t, "[Slack media=Text principal=\"Alice\" additional_instructions=\"Reply in one sentence.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": "Reply in one sentence."}))
+	assert.Equal(t, "[Slack media=Text principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": " "}))
+	assert.Equal(t, "[Slack media=Text principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": 7}))
 	assert.Equal(t, "[System media=Text additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n task \n", buildPrompt(&events.InboundMessage{Source: events.SourceSystem, Label: startNewThreadToolName, Text: " task \n", Metadata: map[string]string{events.InboundOriginMetadataKey: "System", events.InboundMediaMetadataKey: "Text"}}, nil))
 }
 
@@ -1647,7 +1647,10 @@ func TestParseSlackDirectSkillTrigger(t *testing.T) {
 }
 
 func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
-	assert.Equal(t, "[ExternalMCP media=Text principal=Alice_(ops)-lead additional_instructions=\"line \\\"one\\\"\\nnext\"]", provenanceHeader(promptProvenance{origin: "ExternalMCP", media: "Text", principal: " Alice [ops]=lead ", additionalInstructions: "line \"one\"\nnext"}))
+	assert.Equal(t, "[ExternalMCP media=Text principal=\"Alice [ops]=lead\" additional_instructions=\"line \\\"one\\\"\\nnext\"]", provenanceHeader(promptProvenance{origin: "ExternalMCP", media: "Text", principal: " Alice [ops]=lead ", additionalInstructions: "line \"one\"\nnext"}))
+	assert.Equal(t, `[Slack media=Text principal="a\"b\\c"]`, provenanceHeader(promptProvenance{origin: "Slack", media: "Text", principal: "a\"b\\c"}))
+	assert.Equal(t, "[Slack media=Text]", provenanceHeader(promptProvenance{origin: "Slack", media: "Text", principal: "   "}))
+	assert.Equal(t, "[External_(MCP)-x media=Voice_(note)-clip]", provenanceHeader(promptProvenance{origin: "External [MCP]=x", media: "Voice [note]=clip"}))
 	assert.Equal(t, promptProvenance{origin: "System", media: "Text"}, provenanceFromInbound(&events.InboundMessage{Source: events.SourceSystem, Metadata: map[string]string{events.InboundOriginMetadataKey: "Mallory", events.InboundMediaMetadataKey: "Dance"}}))
 }
 
@@ -3578,7 +3581,7 @@ Request: $ARGUMENTS
 	assert.Contains(t, requestBody.Input[0].Content, "Use this skill for docs.")
 	assert.Contains(t, requestBody.Input[0].Content, "Request: write API docs")
 	assert.Equal(t, "user", requestBody.Input[1].Role)
-	assert.Contains(t, requestBody.Input[1].Content, "[Slack media=Text principal=Alice")
+	assert.Contains(t, requestBody.Input[1].Content, "[Slack media=Text principal=\"Alice\"")
 	assert.NotContains(t, requestBody.Input[1].Content, "💡")
 	assert.NotContains(t, requestBody.Input[1].Content, "docs-helper write API docs")
 }
@@ -4108,7 +4111,7 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 		}
 	}
 
-	assert.Equal(t, "[Slack media=Text principal=Alice additional_instructions=\"Reply in one sentence.\"]\n\nhello", userContent)
+	assert.Equal(t, "[Slack media=Text principal=\"Alice\" additional_instructions=\"Reply in one sentence.\"]\n\nhello", userContent)
 }
 
 func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {

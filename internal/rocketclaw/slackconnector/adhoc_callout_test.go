@@ -162,6 +162,8 @@ func TestHandleMessageEventAdoptHistoryFetchFailureStillStarts(t *testing.T) {
 			writeJSON(t, w, map[string]any{"ok": false, "error": "internal_error"})
 		case "/chat.startStream", "/chat.postMessage", "/chat.update", "/chat.delete", "/reactions.add", "/reactions.remove", "/conversations.history":
 			writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "555.666", "messages": []map[string]any{}})
+		case "/users.info":
+			writeJSON(t, w, map[string]any{"ok": true})
 		default:
 			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
 		}
@@ -266,6 +268,8 @@ func newAdhocSlackServer(t *testing.T, channelName string, replies []map[string]
 		case "/chat.delete":
 			writeJSON(t, w, map[string]any{"ok": true})
 		case "/reactions.add", "/reactions.remove":
+			writeJSON(t, w, map[string]any{"ok": true})
+		case "/users.info":
 			writeJSON(t, w, map[string]any{"ok": true})
 		default:
 			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)

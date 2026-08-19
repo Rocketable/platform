@@ -46,6 +46,14 @@ The only v1 scoring definition inside a BAR: a crisp criteria prompt plus a judg
 
 The single CLI/product surface that packs, unpacks, dumps, runs, and ELO-ranks BARs, and pairs with a RocketClaw skill/subagent that captures Slack sessions into BARs.
 
+## Prompt Provenance
+
+### Principal
+
+The human actor a connector attributes to a human-originated prompt.
+
+Each connector chooses the string. Clockwork prints it in the model header. Principal is model-visible only. Authorization uses connector identity, not this string.
+
 ## Durable State
 
 ### State Store
