@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -74,10 +75,8 @@ func cleanStaticPath(raw string) (name string, hadTrailingSlash bool, err error)
 
 	hadTrailingSlash = strings.HasSuffix(decoded, "/")
 	parts := strings.Split(strings.TrimPrefix(decoded, "/"), "/")
-	for _, part := range parts {
-		if part == ".." {
-			return "", false, errors.New("static path traversal")
-		}
+	if slices.Contains(parts, "..") {
+		return "", false, errors.New("static path traversal")
 	}
 
 	cleaned := path.Clean("/" + strings.TrimLeft(decoded, "/"))
@@ -93,7 +92,7 @@ func isBlockedStaticPath(name string) bool {
 		return false
 	}
 
-	for _, segment := range strings.Split(name, "/") {
+	for segment := range strings.SplitSeq(name, "/") {
 		if segment == "" {
 			continue
 		}

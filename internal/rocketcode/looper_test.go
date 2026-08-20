@@ -1003,11 +1003,11 @@ func TestLooperPersistsAndReplaysWebSearchCalls(t *testing.T) {
 	require.Equal(t, []ChatResponse{assistantMessage("next answer")}, collectResponses(nextOutput))
 	require.Len(t, saved, 2)
 	require.Len(t, saved[0].ReplayInput, 3)
-	require.JSONEq(t, `{"action":{"queries":["golang release"],"query":"golang release","type":"search"},"id":"resp-search-web","status":"completed","type":"web_search_call"}`, string(saved[0].ReplayInput[1]))
+	require.JSONEq(t, `{"action":{"queries":["golang release"],"type":"search"},"id":"resp-search-web","status":"completed","type":"web_search_call"}`, string(saved[0].ReplayInput[1]))
 
 	require.Len(t, mock.calls, 2)
 	require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), `"type":"web_search_call"`)
-	require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), `"query":"golang release"`)
+	require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), `"queries":["golang release"]`)
 }
 
 func TestWebSearchOutputWithEmptyActionTypeIsTraceOnly(t *testing.T) {

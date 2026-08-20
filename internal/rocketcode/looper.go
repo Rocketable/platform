@@ -567,8 +567,7 @@ func (l *looper) Loop(
 
 		turn, rendered, interrupted, err := l.runTurn(ctx, turnOutput, interrupts, history, line)
 		if err != nil {
-			var errDirectSkill directSkillInputError
-			if errors.As(err, &errDirectSkill) {
+			if errDirectSkill, ok := errors.AsType[directSkillInputError](err); ok {
 				emitChatResponse(turnOutput, ChatResponse{Kind: ChatResponseAssistantMessage, Text: errDirectSkill.Error()})
 				close(turnOutput)
 
@@ -2211,7 +2210,7 @@ func webSearchReplayInput(id, status string, action responses.ResponseFunctionWe
 func webSearchOutputActionParam(action *responses.ResponseOutputItemUnionAction) (responses.ResponseFunctionWebSearchActionUnionParam, bool) {
 	switch action.Type {
 	case "search":
-		return responses.ResponseFunctionWebSearchActionUnionParam{OfSearch: &responses.ResponseFunctionWebSearchActionSearchParam{Query: param.NewOpt(action.Query), Queries: action.Queries}}, true
+		return responses.ResponseFunctionWebSearchActionUnionParam{OfSearch: &responses.ResponseFunctionWebSearchActionSearchParam{Queries: action.Queries}}, true
 	case "open_page":
 		return responses.ResponseFunctionWebSearchActionUnionParam{OfOpenPage: &responses.ResponseFunctionWebSearchActionOpenPageParam{URL: openai.String(action.URL)}}, true
 	case "find_in_page":

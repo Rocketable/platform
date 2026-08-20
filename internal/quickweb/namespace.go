@@ -55,7 +55,7 @@ func normalizeNamespace(raw string, root *osRoot) (string, error) {
 
 func escapesRoot(name string) bool {
 	depth := 0
-	for _, part := range strings.Split(name, "/") {
+	for part := range strings.SplitSeq(name, "/") {
 		switch part {
 		case "", ".":
 			continue

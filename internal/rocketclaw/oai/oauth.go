@@ -806,13 +806,13 @@ func codexCompactionThreshold(raw json.RawMessage) (float64, bool) {
 	return 0, false
 }
 
-func cleanCodexInput(raw json.RawMessage, stripIDs bool) (json.RawMessage, bool, error) {
+func cleanCodexInput(raw json.RawMessage, stripIDs bool) (cleaned json.RawMessage, changed bool, err error) {
 	var items []json.RawMessage
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return nil, false, nil
 	}
 
-	changed := false
+	changed = false
 
 	for i := range items {
 		item, ok, err := cleanCodexInputItem(items[i], stripIDs)
@@ -838,7 +838,7 @@ func cleanCodexInput(raw json.RawMessage, stripIDs bool) (json.RawMessage, bool,
 	return data, true, nil
 }
 
-func cleanCodexInputItem(raw json.RawMessage, stripIDs bool) (json.RawMessage, bool, error) {
+func cleanCodexInputItem(raw json.RawMessage, stripIDs bool) (cleaned json.RawMessage, changed bool, err error) {
 	var item struct {
 		Type string `json:"type"`
 	}
@@ -1029,7 +1029,7 @@ func (t *transport) retryCodexAfterCompaction(ctx context.Context, req *http.Req
 	return resp, true, nil
 }
 
-func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (json.RawMessage, bool, error) {
+func (t *transport) codexCompactItem(ctx context.Context, req *http.Request) (item json.RawMessage, ok bool, err error) {
 	requestBody, err := req.GetBody()
 	if err != nil {
 		return nil, false, fmt.Errorf("read Codex compact source request: %w", err)
