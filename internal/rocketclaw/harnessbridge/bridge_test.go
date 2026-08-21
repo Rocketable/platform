@@ -815,6 +815,30 @@ func TestPublishFinalCarriesMainResponseAttachments(t *testing.T) {
 	require.NoError(t, group.Wait())
 }
 
+func TestPublishFinalStampsSessionEntryID(t *testing.T) {
+	bus := newTestBus()
+	defer bus.Close()
+
+	bridge := new(Bridge)
+	bridge.bus = bus
+	bridge.log = slog.New(slog.DiscardHandler)
+	bridge.config = Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, RequestRestart: testNoopRestart}
+	inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
+	inbound.ConversationID = bridge.config.ConversationID
+	inbound.Workflow = new(workflow.RunRequest)
+	result := runResult{turnID: "turn-1", text: "Final answer", sequence: 1, sessionEntryID: 42}
+
+	var group errgroup.Group
+	group.Go(func() error { return bridge.publishFinal(context.Background(), inbound, result, true) })
+
+	outbound := readRocketCodeOutbound(t, bus)
+	assert.True(t, outbound.Complete)
+	assert.NotZero(t, outbound.SessionEntryID)
+	assert.Equal(t, int64(42), outbound.SessionEntryID)
+	outbound.MarkDelivered(nil)
+	require.NoError(t, group.Wait())
+}
+
 func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 	workspace := t.TempDir()
 	root, err := os.OpenRoot(workspace)

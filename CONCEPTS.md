@@ -32,6 +32,12 @@ A human Slack message accepted while a Managed Slack Thread has an active turn a
 
 A Buffered Follow-Up remains associated with its thread until promotion submits it or an explicit failure path consumes it.
 
+### Slack Side Ask
+
+A private, modal-only one-question ask of a channel agent, opened from the 💭 footer button on a completed 💬 answer card in a Managed Slack Thread.
+
+A Slack Side Ask uses thread history up to the clicked card, never posts to the thread, and does not take the thread's active-turn slot. Dismissing the modal aborts only that Side Ask.
+
 ## Quickbench
 
 ### BAR (Benchmark Archive)
@@ -74,6 +80,7 @@ After every workspace has moved, SQLite support is deleted. It is not a historic
 - An Adhoc Callout creates or takes over a Managed Slack Thread.
 - A Root Slack Mention in an unmapped joined channel is an Adhoc Callout when an `@` Channel Entry exists.
 - A Buffered Follow-Up belongs to one active Managed Slack Thread and is promoted after the active turn completes.
+- A Slack Side Ask is opened from a completed 💬 answer card in a Managed Slack Thread and does not become that thread's turn.
 - A BAR is authored, packed, run, and ranked by Quickbench; an ELO Scorer belongs to one BAR.
 - A Managed Slack Thread, Buffered Follow-Up, and External MCP binding persist in the State Store.
 - An Operator SQLite Migrator copies missing `state.sqlite3` rows into the State Store.

@@ -485,7 +485,7 @@ func TestNewConnectorUsesInjectedRuntimeDependencies(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
 
-	c := New(&config.SlackConfig{BotToken: "xoxb-test", AppToken: "xapp-test"}, bus, inertThreadRouter{}, inertOneOffCronjobs{}, testLogger())
+	c := New(&config.SlackConfig{BotToken: "xoxb-test", AppToken: "xapp-test"}, bus, inertThreadRouter{}, inertOneOffCronjobs{}, inertSideAskHost{}, testLogger())
 
 	target := events.TextConversationTarget{ChannelID: "D123", MessageID: "111.222", ThreadID: "111.222"}
 	_, handled, err := c.threadRouter.ThreadAgent(target)
@@ -503,12 +503,16 @@ func TestNewConnectorUsesInjectedRuntimeDependencies(t *testing.T) {
 
 	c.oneOffCronjobs.RunOneOffCronjob(t.Context(), cronjob.OneOffCronjob{}, nil, func(_ context.Context, _ cronjob.RunResult, err error) { finished <- err })
 	require.Error(t, <-finished)
+	require.NoError(t, c.sideAskHost.Run(t.Context(), harnessbridge.SideAskRequest{
+		Thinking: func(context.Context, string) error { return nil },
+		Message:  func(context.Context, string) error { return nil },
+	}))
 }
 
 func TestDirectMessagesHaveNoEffect(t *testing.T) {
 	connector := New(
 		&config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}}},
-		newTestBus(), inertThreadRouter{}, inertOneOffCronjobs{},
+		newTestBus(), inertThreadRouter{}, inertOneOffCronjobs{}, inertSideAskHost{},
 		testLogger(),
 	)
 
@@ -962,7 +966,7 @@ func TestSocketLoopAcksEventsAPIBeforeEnqueue(t *testing.T) {
 		return errStale
 	}
 
-	connector.ackSocketEvent = func(_ *socketmode.Client, req socketmode.Request) error {
+	connector.ackSocketEvent = func(_ *socketmode.Client, req socketmode.Request, _ ...any) error {
 		acked <- req.EnvelopeID
 
 		close(ackSeen)
@@ -1008,7 +1012,7 @@ func TestSocketLoopEnqueuesEventsAPIWhenAckFails(t *testing.T) {
 	}
 
 	errAck := errors.New("ack failed")
-	connector.ackSocketEvent = func(_ *socketmode.Client, _ socketmode.Request) error {
+	connector.ackSocketEvent = func(_ *socketmode.Client, _ socketmode.Request, _ ...any) error {
 		return errAck
 	}
 
@@ -4439,6 +4443,553 @@ func TestSendResponseUpdatesTailAnswerPlaceholder(t *testing.T) {
 	assert.Equal(t, "divider", blocks[1].Type)
 	assert.Equal(t, "section", blocks[2].Type)
 	assert.Equal(t, "thread answer", blocks[2].Text.Text)
+	assert.NotContains(t, updated[0].Get("blocks"), "💭")
+}
+
+func TestCompletedChatCardAppendsSideAskFooter(t *testing.T) {
+	updated := recordSlackMessageUpdates(t)
+
+	connector := newTestConnector(updated.URL)
+	connector.setReplyState("turn-side-ask", &slackReplySlots{ChannelID: "C123", ThinkingTS: "t.1", AnswerTS: "a.1"})
+
+	msg := events.NewOutboundMessage(events.SourceSlack, "slack-thread:C123:111.222", "Final answer", events.OutputTargetSlack)
+	msg.TurnID = "turn-side-ask"
+	msg.Complete = true
+	msg.Agent = "main"
+	msg.SessionEntryID = 42
+	msg.SlackReply = &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}
+	require.NoError(t, connector.SendResponse(t.Context(), msg))
+
+	require.Len(t, updated.blocks, 1)
+	blocks := updated.blocks[0]
+	require.GreaterOrEqual(t, len(blocks), 4)
+	assert.Equal(t, "header", blocks[0].Type)
+	assert.Equal(t, "💬 main", blocks[0].Text.Text)
+	assert.Equal(t, "divider", blocks[1].Type)
+	assert.Equal(t, "section", blocks[2].Type)
+	assert.Equal(t, "Final answer", blocks[2].Text.Text)
+	last := blocks[len(blocks)-1]
+	assert.Equal(t, "actions", last.Type)
+	require.Len(t, last.Elements, 1)
+	assert.Equal(t, "💭", last.Elements[0].Text.Text)
+	assert.Equal(t, "Side Ask", last.Elements[0].AccessibilityLabel)
+
+	var stamp struct {
+		ConversationID string `json:"c"`
+		SessionEntryID int64  `json:"e"`
+		ChannelID      string `json:"ch"`
+		ThreadTS       string `json:"t"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(last.Elements[0].Value), &stamp))
+	assert.Equal(t, "slack-thread:C123:111.222", stamp.ConversationID)
+	assert.Equal(t, int64(42), stamp.SessionEntryID)
+	assert.Equal(t, "C123", stamp.ChannelID)
+	assert.Equal(t, "111.222", stamp.ThreadTS)
+}
+
+func TestGoalCronAndMCPCardsOmitSideAskFooter(t *testing.T) {
+	t.Run("goal", func(t *testing.T) {
+		updated := recordSlackMessageUpdates(t)
+		connector := newTestConnector(updated.URL)
+		connector.setReplyState("goal-turn", &slackReplySlots{ChannelID: "C123", ThinkingTS: "t.1", AnswerTS: "a.1"})
+
+		msg := events.NewOutboundMessage(events.SourceSlack, "slack-thread:C123:111.222", "goal body", events.OutputTargetSlack)
+		msg.TurnID = "goal-turn"
+		msg.Complete = true
+		msg.GoalTurn = true
+		msg.GoalTurnNumber = 1
+		msg.GoalMaxTurns = 3
+		msg.SessionEntryID = 7
+		msg.SlackReply = &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}
+		require.NoError(t, connector.SendResponse(t.Context(), msg))
+		require.Len(t, updated.blocks, 1)
+		assert.NotEqual(t, "actions", updated.blocks[0][len(updated.blocks[0])-1].Type)
+		assert.NotContains(t, updated.raw[0], "💭")
+	})
+
+	t.Run("cron", func(t *testing.T) {
+		updated := recordSlackMessageUpdates(t)
+		connector := newTestConnector(updated.URL)
+		msg := events.NewOutboundMessage(events.SourceSlack, "cron:daily", "cron body", events.OutputTargetSlack)
+		msg.Complete = true
+		msg.Cronjob = &events.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"}
+		msg.SessionEntryID = 7
+		msg.SlackReply = &events.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.222"}
+		require.NoError(t, connector.SendResponse(t.Context(), msg))
+		require.NotEmpty(t, updated.raw)
+		assert.NotContains(t, updated.raw[0], "💭")
+	})
+
+	t.Run("mcp", func(t *testing.T) {
+		updated := recordSlackMessageUpdates(t)
+		connector := newTestConnector(updated.URL)
+		connector.setReplyState("mcp-turn", &slackReplySlots{ChannelID: "C123", ThinkingTS: "t.1", AnswerTS: "a.1"})
+
+		msg := events.NewOutboundMessage(events.SourceSlack, "external_mcp:private-agent:private", "mcp body", events.OutputTargetSlack)
+		msg.TurnID = "mcp-turn"
+		msg.Complete = true
+		msg.Agent = "private-agent"
+		msg.ExternalConversationID = "public-conversation"
+		msg.SessionEntryID = 7
+		msg.SlackReply = &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}
+		require.NoError(t, connector.SendResponse(t.Context(), msg))
+		require.NotEmpty(t, updated.raw)
+		assert.NotContains(t, updated.raw[0], "💭")
+	})
+}
+
+func TestLongChatBodyKeepsSideAskFooterWithinBlockLimit(t *testing.T) {
+	updated := recordSlackMessageUpdates(t)
+	connector := newTestConnector(updated.URL)
+	connector.setReplyState("turn-long", &slackReplySlots{ChannelID: "C123", ThinkingTS: "t.1", AnswerTS: "a.1"})
+
+	msg := events.NewOutboundMessage(events.SourceSlack, "slack-thread:C123:111.222", strings.Repeat("x", slackBlockTextLimit*48), events.OutputTargetSlack)
+	msg.TurnID = "turn-long"
+	msg.Complete = true
+	msg.Agent = "main"
+	msg.SessionEntryID = 9
+	msg.SlackReply = &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}
+	require.NoError(t, connector.SendResponse(t.Context(), msg))
+
+	require.NotEmpty(t, updated.blocks)
+	assert.LessOrEqual(t, len(updated.blocks[0]), 50)
+	last := updated.blocks[0][len(updated.blocks[0])-1]
+	require.Equal(t, "actions", last.Type)
+	require.NotEmpty(t, last.Elements)
+	assert.Equal(t, "💭", last.Elements[0].Text.Text)
+}
+
+func TestDMRepliesOmitSideAskFooter(t *testing.T) {
+	updated := recordSlackMessageUpdates(t)
+	connector := newTestConnector(updated.URL)
+	connector.setReplyState("turn-dm", &slackReplySlots{ChannelID: "D123", ThinkingTS: "t.1", AnswerTS: "a.1"})
+
+	msg := events.NewOutboundMessage(events.SourceSlack, "slack-thread:D123:111.222", "dm answer", events.OutputTargetSlack)
+	msg.TurnID = "turn-dm"
+	msg.Complete = true
+	msg.Agent = "main"
+	msg.SessionEntryID = 42
+	msg.SlackReply = &events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
+	require.NoError(t, connector.SendResponse(t.Context(), msg))
+
+	require.Len(t, updated.blocks, 1)
+	last := updated.blocks[0][len(updated.blocks[0])-1]
+	assert.Equal(t, "section", last.Type)
+	assert.NotContains(t, updated.raw[0], "💭")
+}
+
+func TestSideAskButtonOpensModalWithStampMetadata(t *testing.T) {
+	opened, ephemeral := newSideAskInteractiveRecorder(t)
+	connector := newTestConnector(opened.URL)
+
+	connector.handleInteractive(t.Context(), newSideAskButtonEvent("U123", "trigger-side-ask", sideAskStampValue(t, 42)))
+
+	require.Equal(t, 1, opened.count())
+	assert.Equal(t, "trigger-side-ask", opened.last().TriggerID)
+	assert.Equal(t, slackSideAskViewCallbackID, opened.last().View.CallbackID)
+	assert.True(t, opened.last().View.NotifyOnClose)
+	assert.Equal(t, "Submit", opened.last().View.Submit.Text)
+	assert.Equal(t, "Dismiss", opened.last().View.Close.Text)
+	assert.Empty(t, ephemeral.texts)
+
+	var stamp sideAskStamp
+	require.NoError(t, json.Unmarshal([]byte(opened.last().View.PrivateMetadata), &stamp))
+	assert.Equal(t, "slack-thread:C123:111.222", stamp.ConversationID)
+	assert.Equal(t, int64(42), stamp.SessionEntryID)
+}
+
+func TestSideAskChooserListsChannelAgentsAndPreselectsThreadAgent(t *testing.T) {
+	opened, _ := newSideAskInteractiveRecorder(t)
+	router := newThreadRouterStub()
+	router.threadAgent = "planner"
+	router.threadAgentHandled = true
+	connector := newTestConnectorWithOptions(opened.URL, nil, []config.SlackChannelConfig{{
+		Channel: "#social", Agents: []string{"social", "planner"}, AllowedUserIDs: []string{"U123"},
+	}}, router, nil)
+
+	connector.handleInteractive(t.Context(), newSideAskButtonEvent("U123", "trigger-chooser", sideAskStampValue(t, 7)))
+
+	require.Equal(t, 1, opened.count())
+	agentBlock := opened.agentBlock()
+	require.Equal(t, "static_select", agentBlock.Element.Type)
+
+	values := make([]string, 0, len(agentBlock.Element.Options))
+	for _, option := range agentBlock.Element.Options {
+		values = append(values, option.Value)
+	}
+
+	assert.Equal(t, []string{"social", "planner"}, values)
+	assert.Equal(t, "planner", agentBlock.Element.InitialOption.Value)
+}
+
+func TestSideAskReactionDoesNotOpenModal(t *testing.T) {
+	opened, ephemeral := newSideAskInteractiveRecorder(t)
+	connector := newTestConnector(opened.URL)
+
+	connector.handleReactionAddedEvent(t.Context(), newTestReactionAddedEvent("U123", "thought_balloon", "171234.5678"))
+	connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(&slackevents.ReactionAddedEvent{
+		User:     "U123",
+		Reaction: "thought_balloon",
+		Item:     slackevents.Item{Type: "message", Channel: "C123", Timestamp: "171234.5678"},
+	}))
+
+	assert.Equal(t, 0, opened.count())
+	assert.Empty(t, ephemeral.texts)
+}
+
+func TestSideAskUnauthorizedClickIsInvisible(t *testing.T) {
+	opened, ephemeral := newSideAskInteractiveRecorder(t)
+	connector := newTestConnector(opened.URL)
+
+	connector.handleInteractive(t.Context(), newSideAskButtonEvent("U999", "trigger-denied", sideAskStampValue(t, 42)))
+
+	assert.Equal(t, 0, opened.count())
+	assert.Empty(t, ephemeral.texts)
+}
+
+func TestSideAskDismissBeforeSubmitStartsNoRunner(t *testing.T) {
+	opened, _ := newSideAskInteractiveRecorder(t)
+	runner := &recordingSideAskRunner{}
+	connector := newTestConnector(opened.URL)
+	connector.sideAsk = runner
+
+	connector.handleInteractive(t.Context(), newSideAskButtonEvent("U123", "trigger-dismiss", sideAskStampValue(t, 42)))
+	require.Equal(t, 1, opened.count())
+
+	connector.handleInteractive(t.Context(), socketmode.Event{Data: slack.InteractionCallback{
+		Type: slack.InteractionTypeViewClosed,
+		User: slack.User{ID: "U123"},
+		View: slack.View{CallbackID: slackSideAskViewCallbackID, PrivateMetadata: opened.last().View.PrivateMetadata},
+	}})
+
+	assert.Empty(t, runner.snapshot())
+}
+
+func TestSideAskUnstampedCardPostsEphemeralRefusal(t *testing.T) {
+	opened, ephemeral := newSideAskInteractiveRecorder(t)
+	connector := newTestConnector(opened.URL)
+
+	connector.handleInteractive(t.Context(), newSideAskButtonEvent("U123", "trigger-unstamped", sideAskStampValue(t, 0)))
+
+	assert.Equal(t, 0, opened.count())
+	require.Len(t, ephemeral.texts, 1)
+	assert.NotEmpty(t, ephemeral.texts[0])
+	assert.Equal(t, "C123", ephemeral.channels[0])
+	assert.Equal(t, "U123", ephemeral.users[0])
+}
+
+func TestSideAskSecondClickWhileLiveIsIgnored(t *testing.T) {
+	opened, ephemeral := newSideAskInteractiveRecorder(t)
+	connector := newTestConnector(opened.URL)
+
+	connector.handleInteractive(t.Context(), newSideAskButtonEvent("U123", "trigger-first", sideAskStampValue(t, 42)))
+	connector.handleInteractive(t.Context(), newSideAskButtonEvent("U123", "trigger-second", sideAskStampValue(t, 43)))
+
+	assert.Equal(t, 1, opened.count())
+	assert.Equal(t, "trigger-first", opened.last().TriggerID)
+	assert.Empty(t, ephemeral.texts)
+}
+
+func TestSideAskViewSubmissionAcksRunningViewAndStartsRunner(t *testing.T) {
+	opened, _ := newSideAskInteractiveRecorder(t)
+	runner := &recordingSideAskRunner{}
+	connector := newTestConnector(opened.URL)
+	connector.sideAsk = runner
+	connector.reconnectDelay = 0
+	require.True(t, connector.reserveSideAsk("U123"))
+
+	metadata := sideAskStampValue(t, 42)
+	acked := make(chan []any, 1)
+	sent := false
+	connector.runSocketClient = func(ctx context.Context, client *socketmode.Client) error {
+		if sent {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+
+		sent = true
+
+		client.Events <- socketmode.Event{
+			Type:    socketmode.EventTypeInteractive,
+			Request: &socketmode.Request{EnvelopeID: "side-ask-submit"},
+			Data:    newSideAskSubmitCallback(metadata, "social", "What broke?"),
+		}
+
+		<-ctx.Done()
+
+		return ctx.Err()
+	}
+	connector.ackSocketEvent = func(_ *socketmode.Client, req socketmode.Request, payload ...any) error {
+		if req.EnvelopeID == "side-ask-submit" {
+			acked <- payload
+		}
+
+		return nil
+	}
+
+	go connector.runSocketLoop(t.Context())
+
+	var payload []any
+	select {
+	case payload = <-acked:
+	case <-time.After(time.Second):
+		t.Fatal("socket loop did not ack Side Ask view_submission")
+	}
+
+	require.Len(t, payload, 1)
+	resp, ok := payload[0].(*slack.ViewSubmissionResponse)
+	require.True(t, ok)
+	require.NotNil(t, resp)
+	assert.Equal(t, slack.RAUpdate, resp.ResponseAction)
+	require.NotNil(t, resp.View)
+	assert.Equal(t, slackSideAskViewCallbackID, resp.View.CallbackID)
+	assert.Nil(t, resp.View.Submit)
+	assert.True(t, resp.View.NotifyOnClose)
+
+	select {
+	case socketEvent := <-connector.socketEvents:
+		connector.handleInteractive(t.Context(), socketEvent.event)
+	case <-time.After(time.Second):
+		t.Fatal("socket loop did not enqueue Side Ask view_submission")
+	}
+
+	require.Eventually(t, func() bool { return len(runner.snapshot()) == 1 }, time.Second, 10*time.Millisecond)
+
+	got := runner.snapshot()[0]
+	assert.Equal(t, "slack-thread:C123:111.222", got.stamp.ConversationID)
+	assert.Equal(t, int64(42), got.stamp.SessionEntryID)
+	assert.Equal(t, "social", got.Agent)
+	assert.Equal(t, "What broke?", got.Question)
+	assert.Equal(t, "V-side-ask", got.ViewID)
+}
+
+type recordingSideAskRunner struct {
+	mu    sync.Mutex
+	calls []sideAskRequest
+}
+
+func (r *recordingSideAskRunner) RunSideAsk(_ context.Context, req *sideAskRequest) {
+	r.mu.Lock()
+	r.calls = append(r.calls, *req)
+	r.mu.Unlock()
+}
+
+func (r *recordingSideAskRunner) snapshot() []sideAskRequest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return append([]sideAskRequest(nil), r.calls...)
+}
+
+type sideAskOpenedView struct {
+	TriggerID string `json:"trigger_id"`
+	View      struct {
+		CallbackID      string `json:"callback_id"`
+		PrivateMetadata string `json:"private_metadata"`
+		NotifyOnClose   bool   `json:"notify_on_close"`
+		Submit          struct {
+			Text string `json:"text"`
+		} `json:"submit"`
+		Close struct {
+			Text string `json:"text"`
+		} `json:"close"`
+		Blocks []sideAskOpenedBlock `json:"blocks"`
+	} `json:"view"`
+}
+
+type sideAskOpenedBlock struct {
+	Type    string `json:"type"`
+	BlockID string `json:"block_id"`
+	Element struct {
+		Type      string `json:"type"`
+		ActionID  string `json:"action_id"`
+		Multiline bool   `json:"multiline"`
+		MinLength int    `json:"min_length"`
+		Options   []struct {
+			Value string `json:"value"`
+		} `json:"options"`
+		InitialOption struct {
+			Value string `json:"value"`
+		} `json:"initial_option"`
+	} `json:"element"`
+}
+
+type sideAskInteractiveRecorder struct {
+	URL      string
+	mu       sync.Mutex
+	opened   []sideAskOpenedView
+	texts    []string
+	channels []string
+	users    []string
+}
+
+func (r *sideAskInteractiveRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return len(r.opened)
+}
+
+func (r *sideAskInteractiveRecorder) last() sideAskOpenedView {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.opened[len(r.opened)-1]
+}
+
+func (r *sideAskInteractiveRecorder) agentBlock() sideAskOpenedBlock {
+	opened := r.last()
+	for _, block := range opened.View.Blocks {
+		if block.Element.Type == "static_select" {
+			return block
+		}
+	}
+
+	return sideAskOpenedBlock{}
+}
+
+func newSideAskInteractiveRecorder(t *testing.T) (opened, ephemeral *sideAskInteractiveRecorder) {
+	t.Helper()
+
+	opened = &sideAskInteractiveRecorder{}
+	ephemeral = opened
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/conversations.info":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
+		case "/views.open":
+			var view sideAskOpenedView
+			if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&view)) {
+				return
+			}
+
+			opened.mu.Lock()
+			opened.opened = append(opened.opened, view)
+			opened.mu.Unlock()
+			writeJSON(t, w, map[string]any{"ok": true, "view": map[string]any{"id": "V-side-ask"}})
+		case "/chat.postEphemeral":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			opened.mu.Lock()
+			opened.texts = append(opened.texts, r.PostForm.Get("text"))
+			opened.channels = append(opened.channels, r.PostForm.Get("channel"))
+			opened.users = append(opened.users, r.PostForm.Get("user"))
+			opened.mu.Unlock()
+			writeJSON(t, w, map[string]any{"ok": true, "message_ts": "222.333"})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	opened.URL = server.URL
+
+	return opened, ephemeral
+}
+
+func sideAskStampValue(t *testing.T, entryID int64) string {
+	t.Helper()
+
+	encoded, err := json.Marshal(sideAskStamp{
+		ConversationID: "slack-thread:C123:111.222",
+		SessionEntryID: entryID,
+		ChannelID:      "C123",
+		ThreadTS:       "111.222",
+	})
+	require.NoError(t, err)
+
+	return string(encoded)
+}
+
+func newSideAskButtonEvent(userID, triggerID, value string) socketmode.Event {
+	return socketmode.Event{Data: slack.InteractionCallback{
+		Type:      slack.InteractionTypeBlockActions,
+		User:      slack.User{ID: userID},
+		TriggerID: triggerID,
+		Channel:   slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}},
+		Container: slack.Container{ChannelID: "C123", MessageTs: "111.222"},
+		ActionCallback: slack.ActionCallbacks{BlockActions: []*slack.BlockAction{{
+			ActionID: slackSideAskActionID,
+			Value:    value,
+		}}},
+	}}
+}
+
+func newSideAskSubmitCallback(metadata, agent, question string) slack.InteractionCallback {
+	return slack.InteractionCallback{
+		Type: slack.InteractionTypeViewSubmission,
+		User: slack.User{ID: "U123"},
+		View: slack.View{
+			ID:              "V-side-ask",
+			Hash:            "H-side-ask",
+			CallbackID:      slackSideAskViewCallbackID,
+			PrivateMetadata: metadata,
+			State: &slack.ViewState{Values: map[string]map[string]slack.BlockAction{
+				slackSideAskAgentBlockID: {
+					slackSideAskAgentActionID: {SelectedOption: slack.OptionBlockObject{Value: agent}},
+				},
+				slackSideAskQuestionBlockID: {
+					slackSideAskQuestionActionID: {Value: question},
+				},
+			}},
+		},
+	}
+}
+
+type recordedSlackBlocks struct {
+	URL    string
+	raw    []string
+	blocks [][]slackPostedBlock
+}
+
+type slackPostedBlock struct {
+	Type string `json:"type"`
+	Text struct {
+		Text string `json:"text"`
+	} `json:"text"`
+	Elements []struct {
+		Type               string `json:"type"`
+		ActionID           string `json:"action_id"`
+		Value              string `json:"value"`
+		AccessibilityLabel string `json:"accessibility_label"`
+		Text               struct {
+			Text string `json:"text"`
+		} `json:"text"`
+	} `json:"elements"`
+}
+
+func recordSlackMessageUpdates(t *testing.T) *recordedSlackBlocks {
+	t.Helper()
+
+	recorded := new(recordedSlackBlocks)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/chat.update", "/chat.postMessage":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			if raw := r.PostForm.Get("blocks"); raw != "" {
+				recorded.raw = append(recorded.raw, raw)
+
+				var blocks []slackPostedBlock
+				if json.Unmarshal([]byte(raw), &blocks) == nil {
+					recorded.blocks = append(recorded.blocks, blocks)
+				}
+			}
+
+			writeJSON(t, w, map[string]any{"ok": true, "channel": r.PostForm.Get("channel"), "ts": "a.1"})
+		case "/chat.delete", "/reactions.remove":
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	recorded.URL = server.URL
+
+	return recorded
 }
 
 func TestSendResponseUpdatesNonTailAnswerPlaceholder(t *testing.T) {
@@ -9444,7 +9995,10 @@ func newTestConnectorWithOptions(apiURL string, bus *testBus, channels []config.
 	connector.bus = bus
 	connector.threadRouter = router
 	connector.oneOffCronjobs = runner
+	connector.sideAsk = inertSideAskRunner{}
+	connector.sideAskHost = inertSideAskHost{}
 	connector.questions = map[string]*slackPendingQuestion{}
+	connector.sideAsks = map[string]liveSideAsk{}
 	connector.api = slack.New("xoxb-test", slack.OptionAPIURL(apiURL+"/"))
 	connector.socketEvents = make(chan slackSocketEvent, 50)
 	connector.newSocketClient = func(api *slack.Client) *socketmode.Client {
@@ -9453,8 +10007,8 @@ func newTestConnectorWithOptions(apiURL string, bus *testBus, channels []config.
 	connector.runSocketClient = func(ctx context.Context, client *socketmode.Client) error {
 		return client.RunContext(ctx)
 	}
-	connector.ackSocketEvent = func(client *socketmode.Client, req socketmode.Request) error {
-		return client.Ack(req)
+	connector.ackSocketEvent = func(client *socketmode.Client, req socketmode.Request, payload ...any) error {
+		return client.Ack(req, payload...)
 	}
 	connector.reconnectDelay = time.Second
 	connector.replies = map[string]slackReplySlots{}

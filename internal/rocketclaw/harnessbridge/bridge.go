@@ -983,6 +983,7 @@ func (b *Bridge) publishFinal(ctx context.Context, msg *events.InboundMessage, r
 	}
 
 	outbound := b.newOutboundMessage(msg, result.turnID, result.sequence+1, result.text, "", true)
+	outbound.SessionEntryID = result.sessionEntryID
 	outbound.WorkflowTerminal = result.workflowTerminal
 
 	outbound.Attachments = events.CloneOutboundAttachments(result.attachments)

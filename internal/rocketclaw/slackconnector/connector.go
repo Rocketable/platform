@@ -34,7 +34,7 @@ import (
 const (
 	slackFileDownloadTimeout                                                                                                     = 30 * time.Second
 	maxSlackImageDownloadBytes                                                                                                   = 16 << 20
-	slackTextLimit, slackBlockTextLimit, slackPreferredChunkSize                                                                 = 3800, 3000, 3200
+	slackTextLimit, slackBlockTextLimit, slackPreferredChunkSize, slackModalBlockLimit                                           = 3800, 3000, 3200, 100
 	slackAdoptHistoryLimit                                                                                                       = 50
 	slackRobotReaction                                                                                                           = "robot_face"
 	slackExternalMCPRelayReaction                                                                                                = "satellite_antenna"
@@ -43,6 +43,10 @@ const (
 	slackThinkingFlushInterval                                                                                                   = 2 * time.Second
 	slackQuestionCustomActionID, slackQuestionCustomViewCallbackID, slackQuestionCustomBlockID, slackQuestionCustomInputActionID = "custom_answer", "ask_user_question_custom", "custom_answer", "answer"
 	slackAgentSwitchSelectActionID                                                                                               = "agent_switch_select"
+	slackSideAskActionID                                                                                                         = "side_ask"
+	slackSideAskViewCallbackID                                                                                                   = "side_ask"
+	slackSideAskAgentBlockID, slackSideAskAgentActionID                                                                          = "side_ask_agent", "side_ask_agent"
+	slackSideAskQuestionBlockID, slackSideAskQuestionActionID                                                                    = "side_ask_question", "side_ask_question"
 	slackDollarCommandHelp                                                                                                       = "$goal <objective> - 🏁 Start a goal\n" +
 		"$workflow <name> [args] - ⏩ Run a workflow\n" +
 		"$stop - 🛑 Stop the active turn\n" +
@@ -85,6 +89,8 @@ type Connector struct {
 
 	threadRouter   harnessbridge.PrimaryTextRouter
 	oneOffCronjobs oneOffCronjobRunner
+	sideAsk        sideAskRunner
+	sideAskHost    sideAskHost
 
 	api          *slack.Client
 	botUserID    string
@@ -94,7 +100,7 @@ type Connector struct {
 
 	newSocketClient func(*slack.Client) *socketmode.Client
 	runSocketClient func(context.Context, *socketmode.Client) error
-	ackSocketEvent  func(*socketmode.Client, socketmode.Request) error
+	ackSocketEvent  func(*socketmode.Client, socketmode.Request, ...any) error
 	reconnectDelay  time.Duration
 
 	mu               sync.Mutex
@@ -103,6 +109,12 @@ type Connector struct {
 	thinking         map[string]slackThinkingState
 	stacks           map[string][]slackBufferedMessage
 	questions        map[string]*slackPendingQuestion
+	sideAsks         map[string]liveSideAsk
+}
+
+type liveSideAsk struct {
+	cancel context.CancelFunc
+	viewID string
 }
 
 type slackPendingQuestion struct {
@@ -113,6 +125,74 @@ type slackPendingQuestion struct {
 type oneOffCronjobRunner interface {
 	LoadOneOffCronjob(string) (cronjob.OneOffCronjob, error)
 	RunOneOffCronjob(context.Context, cronjob.OneOffCronjob, *harnessbridge.RawRunProgress, func(context.Context, cronjob.RunResult, error))
+}
+
+type sideAskRunner interface {
+	RunSideAsk(context.Context, *sideAskRequest)
+}
+
+type sideAskHost interface {
+	Run(context.Context, harnessbridge.SideAskRequest) error
+}
+
+type sideAskRequest struct {
+	stamp                   sideAskStamp
+	Agent, Question, ViewID string
+}
+
+type inertSideAskRunner struct{}
+
+func (inertSideAskRunner) RunSideAsk(context.Context, *sideAskRequest) {}
+
+type inertSideAskHost struct{}
+
+func (inertSideAskHost) Run(context.Context, harnessbridge.SideAskRequest) error { return nil }
+
+type sideAskAdapter struct{ c *Connector }
+
+func (a sideAskAdapter) RunSideAsk(ctx context.Context, req *sideAskRequest) {
+	var thinking, publishedThinking, publishedAnswer string
+
+	err := a.c.sideAskHost.Run(ctx, harnessbridge.SideAskRequest{
+		ConversationID: req.stamp.ConversationID,
+		SessionEntryID: req.stamp.SessionEntryID,
+		Agent:          req.Agent,
+		Question:       req.Question,
+		Thinking: func(ctx context.Context, text string) error {
+			if thinking != "" {
+				thinking += "\n" + text
+			} else {
+				thinking = text
+			}
+
+			if thinking == publishedThinking {
+				return nil
+			}
+
+			publishedThinking = thinking
+			view := sideAskProgressView(req.stamp, req.Agent, req.Question, thinking, publishedAnswer)
+
+			return a.c.updateSideAskView(ctx, req.ViewID, &view)
+		},
+		Message: func(ctx context.Context, text string) error {
+			if text == publishedAnswer && thinking == publishedThinking {
+				return nil
+			}
+
+			publishedAnswer = text
+			view := sideAskProgressView(req.stamp, req.Agent, req.Question, thinking, text)
+
+			return a.c.updateSideAskView(ctx, req.ViewID, &view)
+		},
+	})
+	if err == nil || ctx.Err() != nil {
+		return
+	}
+
+	errView := sideAskErrorView(req.stamp, err.Error())
+	if errUpdate := a.c.updateSideAskView(ctx, req.ViewID, &errView); errUpdate != nil {
+		a.c.log.Warn("update Slack Side Ask error view", "error", errUpdate)
+	}
 }
 
 type slackReplyState struct{ ChannelID, MessageTS string }
@@ -175,25 +255,29 @@ type rawSlackEventsPayload struct {
 }
 
 // New constructs a Slack connector.
-func New(cfg *config.SlackConfig, publisher events.OutboundPublisher, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs oneOffCronjobRunner, logger *slog.Logger) *Connector {
+func New(cfg *config.SlackConfig, publisher events.OutboundPublisher, threadRouter harnessbridge.PrimaryTextRouter, oneOffCronjobs oneOffCronjobRunner, sideAsk sideAskHost, logger *slog.Logger) *Connector {
 	api := slack.New(cfg.BotToken, slack.OptionAppLevelToken(cfg.AppToken), slack.OptionRetry(3))
 
-	return &Connector{
+	c := &Connector{
 		log: logger.With("component", "slack"), config: *cfg, bus: publisher,
-		threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs,
+		threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs, sideAskHost: sideAsk,
 		api: api, socketEvents: make(chan slackSocketEvent, 50), questions: map[string]*slackPendingQuestion{},
+		sideAsks: map[string]liveSideAsk{},
 		newSocketClient: func(api *slack.Client) *socketmode.Client {
 			return socketmode.New(api)
 		},
 		runSocketClient: func(ctx context.Context, client *socketmode.Client) error {
 			return client.RunContext(ctx)
 		},
-		ackSocketEvent: func(client *socketmode.Client, req socketmode.Request) error {
-			return client.Ack(req)
+		ackSocketEvent: func(client *socketmode.Client, req socketmode.Request, payload ...any) error {
+			return client.Ack(req, payload...)
 		},
 		reconnectDelay: time.Second,
 		replies:        map[string]slackReplySlots{}, pending: map[string]slackReplySlots{}, thinking: map[string]slackThinkingState{}, stacks: map[string][]slackBufferedMessage{},
 	}
+	c.sideAsk = sideAskAdapter{c: c}
+
+	return c
 }
 
 // Start authenticates with Slack and begins consuming events.
@@ -222,10 +306,23 @@ func (c *Connector) Start(ctx context.Context) error {
 // Stop stops Slack socket intake while leaving response delivery usable.
 func (c *Connector) Stop(context.Context) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if c.inboundStop != nil {
 		c.inboundStop()
+	}
+
+	cancels := make([]context.CancelFunc, 0, len(c.sideAsks))
+	for userID, live := range c.sideAsks {
+		cancels = append(cancels, live.cancel)
+
+		delete(c.sideAsks, userID)
+	}
+
+	c.mu.Unlock()
+
+	for _, cancel := range cancels {
+		if cancel != nil {
+			cancel()
+		}
 	}
 
 	return nil
@@ -282,6 +379,10 @@ func (c *Connector) SendResponse(ctx context.Context, msg *events.OutboundMessag
 
 	case msg.Text != "" && (msg.Complete || msg.PostProgressText):
 		fallbackText, blocks, overflow := titledMessageLayout("💬 "+msg.Agent, slackTruncatedText(msg.Text, slackTextLimit, "..."), msg.Text)
+		if msg.Complete && !strings.HasPrefix(msg.SlackReply.ChannelID, "D") {
+			blocks, overflow = appendSideAskFooter(blocks, overflow, msg)
+		}
+
 		if _, _, _, err := c.sendTitledResponse(ctx, msg, &slots, ok && msg.Complete, fallbackText, blocks, overflow, "reply"); err != nil {
 			return err
 		}
@@ -491,6 +592,52 @@ func (c *Connector) CleanupExternalMCPRelay(ctx context.Context, replyTarget *ev
 	if replyTarget != nil {
 		c.deleteSlackMessage(ctx, slackReplyState{ChannelID: replyTarget.ChannelID, MessageTS: replyTarget.MessageTS}, "delete failed external MCP relay")
 	}
+}
+
+type sideAskStamp struct {
+	ConversationID string `json:"c"`
+	SessionEntryID int64  `json:"e"`
+	ChannelID      string `json:"ch"`
+	ThreadTS       string `json:"t"`
+}
+
+type sideAskButton struct {
+	Type               slack.MessageElementType `json:"type"`
+	Text               *slack.TextBlockObject   `json:"text"`
+	ActionID           string                   `json:"action_id,omitempty"`
+	Value              string                   `json:"value,omitempty"`
+	AccessibilityLabel string                   `json:"accessibility_label,omitempty"`
+}
+
+func (sideAskButton) ElementType() slack.MessageElementType { return slack.METButton }
+
+func appendSideAskFooter(blocks []slack.Block, overflow []string, msg *events.OutboundMessage) (next []slack.Block, rest []string) {
+	const slackMessageBlockLimit = 50
+	if extra := len(blocks) + 1 - slackMessageBlockLimit; extra > 0 {
+		dropped := make([]string, 0, extra)
+		for _, block := range blocks[len(blocks)-extra:] {
+			dropped = append(dropped, block.(*slack.SectionBlock).Text.Text)
+		}
+
+		overflow = append(dropped, overflow...)
+		blocks = blocks[:len(blocks)-extra]
+	}
+
+	encoded, _ := json.Marshal(sideAskStamp{
+		ConversationID: msg.ConversationID,
+		SessionEntryID: msg.SessionEntryID,
+		ChannelID:      msg.SlackReply.ChannelID,
+		ThreadTS:       msg.SlackReply.ThreadTS,
+	})
+	button := sideAskButton{
+		Type:               slack.METButton,
+		Text:               slack.NewTextBlockObject(slack.PlainTextType, "💭", false, false),
+		ActionID:           slackSideAskActionID,
+		Value:              string(encoded),
+		AccessibilityLabel: "Side Ask",
+	}
+
+	return append(blocks, slack.NewActionBlock(slackSideAskActionID, button)), overflow
 }
 
 func titledMessageLayout(header, fallback, text string) (fallbackText string, blocks []slack.Block, overflow []string) {
@@ -2409,7 +2556,12 @@ func (c *Connector) runSocketLoop(ctx context.Context) {
 				}
 
 				if (event.Type == socketmode.EventTypeEventsAPI || event.Type == socketmode.EventTypeInteractive) && event.Request != nil {
-					if err := c.ackSocketEvent(client, *event.Request); err != nil {
+					var payload []any
+					if ack := c.sideAskSubmissionAck(ctx, event); ack != nil {
+						payload = []any{ack}
+					}
+
+					if err := c.ackSocketEvent(client, *event.Request, payload...); err != nil {
 						c.log.Warn("ack Slack socket event", "error", err)
 					}
 				}
@@ -2447,6 +2599,10 @@ func (c *Connector) runSocketLoop(ctx context.Context) {
 func (c *Connector) handleInteractive(ctx context.Context, event socketmode.Event) {
 	callback, ok := event.Data.(slack.InteractionCallback)
 	if !ok {
+		return
+	}
+
+	if c.handleSideAskInteractive(ctx, &callback) {
 		return
 	}
 
@@ -2545,6 +2701,315 @@ func (c *Connector) handleInteractive(ctx context.Context, event socketmode.Even
 			return
 		}
 	}
+}
+
+func (c *Connector) handleSideAskInteractive(ctx context.Context, callback *slack.InteractionCallback) bool {
+	if callback.Type == slack.InteractionTypeViewSubmission {
+		if callback.View.CallbackID != slackSideAskViewCallbackID {
+			return false
+		}
+
+		c.handleSideAskSubmit(ctx, callback)
+
+		return true
+	}
+
+	if callback.Type == slack.InteractionTypeViewClosed {
+		if callback.View.CallbackID != slackSideAskViewCallbackID {
+			return false
+		}
+
+		c.cancelSideAskView(callback.User.ID, callback.View.ID)
+
+		return true
+	}
+
+	if callback.Type != slack.InteractionTypeBlockActions {
+		return false
+	}
+
+	for _, action := range callback.ActionCallback.BlockActions {
+		if action.ActionID == slackSideAskActionID {
+			c.handleSideAskOpen(ctx, callback, action)
+			return true
+		}
+	}
+
+	return false
+}
+
+func parseSideAskStamp(raw string) (sideAskStamp, error) {
+	var stamp sideAskStamp
+	if err := json.Unmarshal([]byte(raw), &stamp); err != nil {
+		return sideAskStamp{}, fmt.Errorf("parse side ask stamp: %w", err)
+	}
+
+	return stamp, nil
+}
+
+func (c *Connector) sideAskAllowedChannel(ctx context.Context, channelID, userID string) (string, bool) {
+	channel, _, ok := c.socialModeChannel(ctx, channelID)
+	if !ok || !c.socialModeAllowsUser(channel, userID) {
+		return "", false
+	}
+
+	return channel, true
+}
+
+func (c *Connector) handleSideAskOpen(ctx context.Context, callback *slack.InteractionCallback, action *slack.BlockAction) {
+	stamp, errParse := parseSideAskStamp(action.Value)
+
+	channelID := stamp.ChannelID
+	if channelID == "" {
+		channelID = callback.Channel.ID
+		if channelID == "" {
+			channelID = strings.TrimSpace(callback.Container.ChannelID)
+		}
+	}
+
+	channel, allowed := c.sideAskAllowedChannel(ctx, channelID, callback.User.ID)
+	if !allowed {
+		return
+	}
+
+	if errParse != nil || stamp.SessionEntryID == 0 {
+		c.postSlackEphemeral(ctx, channelID, stamp.ThreadTS, callback.User.ID, "This reply can't be used for Side Ask.")
+		return
+	}
+
+	if callback.TriggerID == "" || !c.reserveSideAsk(callback.User.ID) {
+		return
+	}
+
+	_, errOpen := c.api.OpenViewContext(ctx, callback.TriggerID, c.sideAskInputView(stamp, channel))
+	if errOpen != nil {
+		c.cancelSideAskView(callback.User.ID, "")
+		c.log.Warn("open Slack Side Ask view", "error", errOpen)
+	}
+}
+
+func (c *Connector) handleSideAskSubmit(ctx context.Context, callback *slack.InteractionCallback) {
+	stamp, agent, question, ok := c.sideAskReadySubmission(ctx, callback)
+	if !ok {
+		return
+	}
+
+	if !c.sideAskIsLive(callback.User.ID) {
+		return
+	}
+
+	go c.sideAsk.RunSideAsk(c.sideAskRunContext(callback.User.ID, callback.View.ID), &sideAskRequest{
+		stamp:    stamp,
+		Agent:    agent,
+		Question: question,
+		ViewID:   callback.View.ID,
+	})
+}
+
+func (c *Connector) sideAskSubmissionAck(_ context.Context, event socketmode.Event) *slack.ViewSubmissionResponse {
+	callback, ok := event.Data.(slack.InteractionCallback)
+	if !ok || callback.Type != slack.InteractionTypeViewSubmission || callback.View.CallbackID != slackSideAskViewCallbackID {
+		return nil
+	}
+
+	stamp, errParse := parseSideAskStamp(callback.View.PrivateMetadata)
+	if errParse != nil || stamp.SessionEntryID == 0 {
+		return nil
+	}
+
+	agent, question := sideAskSubmittedValues(&callback)
+	if agent == "" || question == "" || !c.sideAskIsLive(callback.User.ID) {
+		return nil
+	}
+
+	view := sideAskProgressView(stamp, agent, question, "", "")
+
+	return slack.NewUpdateViewSubmissionResponse(&view)
+}
+
+func (c *Connector) sideAskReadySubmission(ctx context.Context, callback *slack.InteractionCallback) (stamp sideAskStamp, agent, question string, ok bool) {
+	stamp, errParse := parseSideAskStamp(callback.View.PrivateMetadata)
+
+	channel, allowed := c.sideAskAllowedChannel(ctx, stamp.ChannelID, callback.User.ID)
+	if !allowed || errParse != nil || stamp.SessionEntryID == 0 {
+		return sideAskStamp{}, "", "", false
+	}
+
+	agent, question = sideAskSubmittedValues(callback)
+	if agent == "" || question == "" || !slices.Contains(c.socialModeAgents(channel), agent) {
+		return sideAskStamp{}, "", "", false
+	}
+
+	return stamp, agent, question, true
+}
+
+func sideAskSubmittedValues(callback *slack.InteractionCallback) (agent, question string) {
+	if callback.View.State == nil {
+		return "", ""
+	}
+
+	values := callback.View.State.Values
+	if action, ok := values[slackSideAskAgentBlockID][slackSideAskAgentActionID]; ok {
+		agent = action.SelectedOption.Value
+		if agent == "" {
+			agent = action.Value
+		}
+	}
+
+	if action, ok := values[slackSideAskQuestionBlockID][slackSideAskQuestionActionID]; ok {
+		question = strings.TrimSpace(action.Value)
+	}
+
+	return agent, question
+}
+
+func (c *Connector) sideAskInputView(stamp sideAskStamp, channel string) slack.ModalViewRequest {
+	agents := c.socialModeAgents(channel)
+	options := make([]*slack.OptionBlockObject, 0, len(agents))
+	threadAgent, handled, _ := c.threadRouter.ThreadAgent(events.TextConversationTarget{ChannelID: stamp.ChannelID, ThreadID: stamp.ThreadTS})
+
+	var initial *slack.OptionBlockObject
+
+	for _, agent := range agents {
+		option := slack.NewOptionBlockObject(agent, slack.NewTextBlockObject(slack.PlainTextType, agent, false, false), nil)
+
+		options = append(options, option)
+		if handled && agent == threadAgent {
+			initial = option
+		}
+	}
+
+	selectElement := slack.NewOptionsSelectBlockElement(slack.OptTypeStatic, slack.NewTextBlockObject(slack.PlainTextType, "Select agent", false, false), slackSideAskAgentActionID, options...)
+	if initial != nil {
+		selectElement = selectElement.WithInitialOption(initial)
+	}
+
+	question := slack.NewPlainTextInputBlockElement(slack.NewTextBlockObject(slack.PlainTextType, "Ask one question", false, false), slackSideAskQuestionActionID).WithMultiline(true).WithMinLength(1).WithMaxLength(slackBlockTextLimit - len("*Question*\n"))
+	metadata, _ := json.Marshal(stamp)
+
+	return slack.ModalViewRequest{
+		Type:            slack.VTModal,
+		Title:           slack.NewTextBlockObject(slack.PlainTextType, "Side Ask", false, false),
+		Submit:          slack.NewTextBlockObject(slack.PlainTextType, "Submit", false, false),
+		Close:           slack.NewTextBlockObject(slack.PlainTextType, "Dismiss", false, false),
+		CallbackID:      slackSideAskViewCallbackID,
+		PrivateMetadata: string(metadata),
+		NotifyOnClose:   true,
+		Blocks: slack.Blocks{BlockSet: []slack.Block{
+			slack.NewInputBlock(slackSideAskAgentBlockID, slack.NewTextBlockObject(slack.PlainTextType, "Agent", false, false), nil, selectElement),
+			slack.NewInputBlock(slackSideAskQuestionBlockID, slack.NewTextBlockObject(slack.PlainTextType, "Question", false, false), nil, question),
+		}},
+	}
+}
+
+func sideAskCloseView(stamp sideAskStamp, blocks []slack.Block) slack.ModalViewRequest {
+	metadata, _ := json.Marshal(stamp)
+
+	return slack.ModalViewRequest{
+		Type:            slack.VTModal,
+		Title:           slack.NewTextBlockObject(slack.PlainTextType, "Side Ask", false, false),
+		Close:           slack.NewTextBlockObject(slack.PlainTextType, "Close", false, false),
+		CallbackID:      slackSideAskViewCallbackID,
+		PrivateMetadata: string(metadata),
+		NotifyOnClose:   true,
+		Blocks:          slack.Blocks{BlockSet: blocks},
+	}
+}
+
+func sideAskProgressView(stamp sideAskStamp, agent, question, thinking, answer string) slack.ModalViewRequest {
+	blocks := []slack.Block{
+		slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, "*Agent*\n"+agent, false, false), nil, nil),
+		slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, "*Question*\n"+slackTruncatedText(question, slackBlockTextLimit-len("*Question*\n"), "..."), false, false), nil, nil),
+	}
+	if quoted := slackThinkingMessage(slackImmediatePlaceholder, thinking); quoted != "" {
+		blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, quoted, false, false), nil, nil))
+	}
+
+	remaining := slackModalBlockLimit - len(blocks)
+	for _, chunk := range splitSlackText(answer, slackBlockTextLimit, slackBlockTextLimit) {
+		if remaining == 0 {
+			break
+		}
+
+		blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, chunk, false, false), nil, nil))
+		remaining--
+	}
+
+	return sideAskCloseView(stamp, blocks)
+}
+
+func sideAskErrorView(stamp sideAskStamp, message string) slack.ModalViewRequest {
+	return sideAskCloseView(stamp, []slack.Block{
+		slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, message, false, false), nil, nil),
+	})
+}
+
+func (c *Connector) updateSideAskView(ctx context.Context, viewID string, view *slack.ModalViewRequest) error {
+	_, err := c.api.UpdateViewContext(ctx, *view, "", "", viewID)
+	if err == nil || sideAskViewGone(err) {
+		return nil
+	}
+
+	return fmt.Errorf("update Slack Side Ask view: %w", err)
+}
+
+func sideAskViewGone(err error) bool {
+	errSlack, ok := errors.AsType[slack.SlackErrorResponse](err)
+	return ok && errSlack.Err == "not_found"
+}
+
+func (c *Connector) reserveSideAsk(userID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if _, exists := c.sideAsks[userID]; exists {
+		return false
+	}
+
+	c.sideAsks[userID] = liveSideAsk{cancel: func() {}}
+
+	return true
+}
+
+func (c *Connector) sideAskIsLive(userID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	_, live := c.sideAsks[userID]
+
+	return live
+}
+
+func (c *Connector) cancelSideAskView(userID, viewID string) {
+	c.mu.Lock()
+
+	live, exists := c.sideAsks[userID]
+	if exists && live.viewID != "" && viewID != "" && live.viewID != viewID {
+		c.mu.Unlock()
+		return
+	}
+
+	delete(c.sideAsks, userID)
+	c.mu.Unlock()
+
+	if live.cancel != nil {
+		live.cancel()
+	}
+}
+
+func (c *Connector) sideAskRunContext(userID, viewID string) context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	c.mu.Lock()
+	prev := c.sideAsks[userID]
+	c.sideAsks[userID] = liveSideAsk{cancel: cancel, viewID: viewID}
+	c.mu.Unlock()
+
+	if prev.cancel != nil {
+		prev.cancel()
+	}
+
+	return ctx
 }
 
 func (c *Connector) handleEventsAPI(ctx context.Context, event socketmode.Event) {

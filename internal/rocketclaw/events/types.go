@@ -204,6 +204,7 @@ type OutboundMessage struct {
 	Bridge                             BridgeID
 	Targets                            []OutputTarget
 	ConversationID, TurnID             string
+	SessionEntryID                     int64
 	ExternalConversationID             string
 	Agent                              string
 	Cronjob                            *CronjobMessage

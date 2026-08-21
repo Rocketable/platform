@@ -16,6 +16,7 @@ Dollar commands are canonical. RocketClaw translates the listed emoji and Slack 
 | `🤖` |  | Slack `:robot_face:` | Slack | Processing/accepted marker. | Added when RocketClaw accepts a Slack-originated or relayed turn; removed after final response delivery. |
 | `⏳` |  | Slack `:hourglass_flowing_sand:` | Slack | Buffered or in-progress marker. | Marks stacked or buffered Slack messages. Removed when processing advances. |
 | `📡` |  | Slack `:satellite_antenna:` | Slack | External MCP relay marker. | Added to Slack relay messages created from External MCP prompts. |
+| `💭` |  |  | Slack managed thread 💬 footer | Opens a private Side Ask modal for one question of a channel agent. | Footer button, not a dollar command or reaction. Modal-only; does not take the thread turn; unauthorized clicks are silent. |
 
 Bare `$` and unknown or unavailable dollar commands post the command table permanently. A root help mention keeps the mention as the thread root and posts help as the first reply without starting an agent turn. Bare root `$agent` is not help: it posts the native agent selector as the first reply.
 Agent controls are consumed by RocketClaw and do not route to RocketCode as prompts.

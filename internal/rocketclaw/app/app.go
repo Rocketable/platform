@@ -384,7 +384,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	logger.Info("starting Slack connector")
 
 	slackRouter := newRequestTextRouter(connectorChannels.Requests)
-	slackSink = slackconnector.New(&cfg.Slack, events.BroadcastPublisher(connectorChannels.Broadcasts), slackRouter, cronjobs, logger)
+	slackSink = slackconnector.New(&cfg.Slack, events.BroadcastPublisher(connectorChannels.Broadcasts), slackRouter, cronjobs, &harnessbridge.SideAskRunner{Config: cfg, Sessions: rocketcodeSessions, Logger: logger}, logger)
 	slackRouter.output = slackSink.SendResponse
 	slackRouter.abort = slackSink.AbortResponse
 	slackRouter.root = slackSink.StartNewThreadRoot

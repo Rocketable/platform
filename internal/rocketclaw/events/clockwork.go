@@ -254,6 +254,7 @@ func CloneOutboundMessage(message *OutboundMessage) *OutboundMessage {
 		Targets:                slices.Clone(message.Targets),
 		ConversationID:         message.ConversationID,
 		TurnID:                 message.TurnID,
+		SessionEntryID:         message.SessionEntryID,
 		ExternalConversationID: message.ExternalConversationID,
 		Agent:                  message.Agent,
 		Sequence:               message.Sequence,
