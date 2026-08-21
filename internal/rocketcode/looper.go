@@ -773,7 +773,7 @@ func (l *looper) runTurn(
 			return emptyRecord, nil, false, err
 		}
 
-		reviewContext := append(append([]responses.ResponseInputItemUnionParam{}, baseHistory...), turnItems...)
+		reviewContext := pruneHistoryBeforeLatestCompaction(append(append([]responses.ResponseInputItemUnionParam{}, baseHistory...), turnItems...))
 
 		checkpoint = l.activeTurnCheckpoint(&record, openFunctionCallCheckpoints(resp.Output), checkpoint.CompletedFunctionOutputs)
 		if err := l.CheckpointSink.RecordProviderResponse(turnCtx, &checkpoint); err != nil {

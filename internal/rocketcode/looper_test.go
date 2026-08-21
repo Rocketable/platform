@@ -1107,6 +1107,49 @@ func TestPruneHistoryBeforeLatestCompaction(t *testing.T) {
 	require.Contains(t, marshalJSON(t, pruned[1]), `"content":"new"`)
 }
 
+func TestLooperPermissionReviewUsesPrunedHistory(t *testing.T) {
+	replayInput, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		testInputMessage(responses.EasyInputMessageRoleUser, "pre-compaction secret", ""),
+		responses.ResponseInputItemParamOfCompaction("cmp-latest"),
+		testInputMessage(responses.EasyInputMessageRoleUser, "post-compaction question", ""),
+	})
+	require.NoError(t, err)
+
+	reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{RiskLevel: permissionReviewRiskLevelLow, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeAllow, Rationale: "Low-risk action."}}
+	mock := mockResponses(
+		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "webfetch", `{"url":"https://allowed.example/page"}`)}),
+		responseWithMessage("resp-final", "done"),
+	)
+	looper := testLooper(mock)
+	looper.AutoApprovePermissions = true
+	looper.PermissionReviewer = reviewer
+	looper.agent = Agent{Name: "main"}
+	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "webfetch", Rules: []PermissionRule{{Pattern: "https://allowed.example/*", Action: permissionAuto}}}}}
+	tool := testLooperTool("webfetch")
+	tool.Permission = "webfetch"
+	tool.Subjects = func(json.RawMessage) ([]string, error) { return []string{"https://allowed.example/page"}, nil }
+	tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		return TextToolResult("fetched"), nil
+	}
+	looper.Tools = map[string]looperTool{"webfetch": tool}
+
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "fetch the allowed page", output)
+
+	close(input)
+
+	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	require.Len(t, reviewer.requests, 1)
+	got := marshalJSON(t, reviewer.requests[0].ReviewContext)
+	require.NotContains(t, got, "pre-compaction secret")
+	require.Contains(t, got, "cmp-latest")
+	require.Contains(t, got, "post-compaction question")
+}
+
 func TestCheckpointBeforeFirstProviderCall(t *testing.T) {
 	sink := &mockCheckpointSink{}
 	mock := mockResponseFunc(func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
