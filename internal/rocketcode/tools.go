@@ -72,9 +72,9 @@ type grepToolParams struct {
 }
 
 type webFetchToolParams struct {
-	URL     string `json:"url"`
-	Format  string `json:"format"`
-	Timeout int    `json:"timeout"`
+	URL           string `json:"url"`
+	Format        string `json:"format"`
+	TimeoutSecond int    `json:"timeout_s"`
 }
 
 func newSandboxedTools(root *os.Root, shellTemp shellTempConfig, shellEnv []string, shellCommand ShellCommandFunc) map[string]looperTool {
@@ -307,9 +307,9 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 		},
 		"webfetch": {
 			Definition: *functionTool("webfetch", webFetchDescription(), map[string]any{
-				"url":     map[string]any{"type": "string"},
-				"format":  map[string]any{"type": "string", "enum": []string{"text", "markdown", "html"}},
-				"timeout": map[string]any{"type": "integer"},
+				"url":       map[string]any{"type": "string"},
+				"format":    map[string]any{"type": "string", "enum": []string{"text", "markdown", "html"}},
+				"timeout_s": map[string]any{"type": "integer"},
 			}),
 			Permission: "webfetch",
 			Subjects: func(raw json.RawMessage) ([]string, error) {
@@ -332,7 +332,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 		"bash": {
 			Definition: *functionTool("bash", "Run a shell command in the workspace", map[string]any{
 				"command":     map[string]any{"type": "string"},
-				"timeout":     map[string]any{"type": "integer"},
+				"timeout_ms":  map[string]any{"type": "integer"},
 				"workdir":     map[string]any{"type": "string"},
 				"description": map[string]any{"type": "string"},
 			}),

@@ -50,8 +50,8 @@ func webFetch(ctx context.Context, params webFetchToolParams) (ToolResult, error
 	}
 
 	timeout := defaultWebFetchTimeout
-	if params.Timeout > 0 {
-		timeout = time.Duration(params.Timeout) * time.Second
+	if params.TimeoutSecond > 0 {
+		timeout = time.Duration(params.TimeoutSecond) * time.Second
 	}
 
 	if timeout > maxWebFetchTimeout {

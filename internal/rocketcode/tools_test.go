@@ -85,8 +85,8 @@ func TestFunctionToolStrictSchemasRequireAllProperties(t *testing.T) {
 	requireToolRequiredProperties(t, tools["glob"].Definition.Parameters, []string{"path", "pattern"})
 	requireToolRequiredProperties(t, tools["grep"].Definition.Parameters, []string{"include", "path", "pattern"})
 	requireToolRequiredProperties(t, tools["read"].Definition.Parameters, []string{"filePath", "offset"})
-	requireToolRequiredProperties(t, tools["webfetch"].Definition.Parameters, []string{"format", "timeout", "url"})
-	requireToolRequiredProperties(t, tools["bash"].Definition.Parameters, []string{"command", "description", "timeout", "workdir"})
+	requireToolRequiredProperties(t, tools["webfetch"].Definition.Parameters, []string{"format", "timeout_s", "url"})
+	requireToolRequiredProperties(t, tools["bash"].Definition.Parameters, []string{"command", "description", "timeout_ms", "workdir"})
 }
 
 func requireToolRequiredProperties(t *testing.T, parameters map[string]any, required []string) {

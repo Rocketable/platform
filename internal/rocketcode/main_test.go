@@ -179,7 +179,7 @@ func TestNewCopiesShellEnv(t *testing.T) {
 	bash, ok := loop.CodeModeHosts["bash"]
 	require.True(t, ok)
 
-	result, err := bash.Call(context.Background(), json.RawMessage(`{"command":"printf %s \"$ROCKETCLAW_CONVERSATION_ID\"","timeout":0,"workdir":"","description":"env mutation"}`), nil, toolCallMetadata{subagentIndex: 0, subagentTotal: 0})
+	result, err := bash.Call(context.Background(), json.RawMessage(`{"command":"printf %s \"$ROCKETCLAW_CONVERSATION_ID\"","timeout_ms":0,"workdir":"","description":"env mutation"}`), nil, toolCallMetadata{subagentIndex: 0, subagentTotal: 0})
 
 	require.NoError(t, err)
 	require.Equal(t, "first", result.Output)

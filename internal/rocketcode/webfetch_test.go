@@ -66,5 +66,5 @@ func TestWebFetchRejectsInvalidURL(t *testing.T) {
 }
 
 func testWebFetchParams(url, format string) webFetchToolParams {
-	return webFetchToolParams{URL: url, Format: format, Timeout: 0}
+	return webFetchToolParams{URL: url, Format: format, TimeoutSecond: 0}
 }

@@ -28,18 +28,18 @@ const (
 )
 
 type bashParams struct {
-	Command     string
-	Timeout     int
-	Workdir     string
-	Description string
+	Command            string `json:"command"`
+	TimeoutMillisecond int    `json:"timeout_ms"`
+	Workdir            string `json:"workdir"`
+	Description        string `json:"description"`
 }
 
 // BashCommand is the public shape of the workspace bash tool input.
 type BashCommand struct {
-	Command     string
-	Timeout     int
-	Workdir     string
-	Description string
+	Command            string
+	TimeoutMillisecond int
+	Workdir            string
+	Description        string
 }
 
 // BashResult is the result of running a workspace bash command.
@@ -139,13 +139,13 @@ func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams)
 		return bashFailure("command is required")
 	}
 
-	if params.Timeout < 0 {
-		return bashFailure(fmt.Sprintf("Invalid timeout value: %d. Timeout must be a positive number.", params.Timeout))
+	if params.TimeoutMillisecond < 0 {
+		return bashFailure(fmt.Sprintf("Invalid timeout_ms value: %d. timeout_ms must be a positive number.", params.TimeoutMillisecond))
 	}
 
-	timeout := params.Timeout
-	if timeout == 0 {
-		timeout = defaultShellTimeout
+	timeoutMillisecond := params.TimeoutMillisecond
+	if timeoutMillisecond == 0 {
+		timeoutMillisecond = defaultShellTimeout
 	}
 
 	hostDir := sss.root.Name()
@@ -189,7 +189,7 @@ func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams)
 		return bashFailure(err.Error())
 	}
 
-	commandCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(timeout)*time.Millisecond+shellTimeoutGrace)
+	commandCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(timeoutMillisecond)*time.Millisecond+shellTimeoutGrace)
 	defer cancel()
 
 	timedOut := false
