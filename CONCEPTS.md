@@ -60,6 +60,38 @@ The human actor a connector attributes to a human-originated prompt.
 
 Each connector chooses the string. Clockwork prints it in the model header. Principal is model-visible only. Authorization uses connector identity, not this string.
 
+## Development MCP
+
+### Development MCP
+
+A separate inbound MCP door for a coding agent to try overlay deltas against the live RocketClaw without writing those files onto the server.
+
+It is off until enabled, uses its own credential, and is not External MCP. After the operator publishes through git, reload or restart picks up the published tree.
+
+### Request-Carried Context
+
+The overlay snapshot a Development MCP lint or run_turn call sends: an optional named base overlay plus file deltas for this call only.
+
+The server does not remember it after the call returns. Conversation ID carries chat history only. A follow-up turn must send context again.
+
+### Overlay Clone
+
+The live checkout of one configured git overlay that reload last installed.
+
+Try paths read or copy this tree. They do not fetch git and must not write it.
+
+### Reload
+
+Hot-load of published overlay files the live daemon can apply without a process restart.
+
+Reload rebuilds the live overlay clones. It is not interchangeable with Restart.
+
+### Restart
+
+A process restart required when the overlay list or runtime config changed.
+
+Restart is not a substitute for Reload when only overlay file contents changed.
+
 ## Durable State
 
 ### State Store
@@ -84,3 +116,4 @@ After every workspace has moved, SQLite support is deleted. It is not a historic
 - A BAR is authored, packed, run, and ranked by Quickbench; an ELO Scorer belongs to one BAR.
 - A Managed Slack Thread, Buffered Follow-Up, and External MCP binding persist in the State Store.
 - An Operator SQLite Migrator copies missing `state.sqlite3` rows into the State Store.
+- Development MCP lint and run_turn consume Request-Carried Context and read Overlay Clones; Reload replaces those clones.

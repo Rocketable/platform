@@ -144,6 +144,110 @@ func SyncEffectiveRuntimeAssets(workspace, target string, overlays []string, log
 	return nil
 }
 
+// StageLiveRuntime copies the live embedded, git overlay, and workspace stack into a
+// new temporary directory under workspace. When baseOverlay names a configured overlay,
+// files replace that live clone layer before later overlays apply. When baseOverlay is
+// empty, files are written as a final extra layer after the live stack. A non-empty
+// unknown baseOverlay is rejected. It does not write the live runtime or live clones.
+// The caller must remove the returned directory.
+func StageLiveRuntime(workspace, runtimeDir string, overlays []string, baseOverlay string, files []OverlayFile, logger *slog.Logger) (string, error) {
+	baseOverlay = strings.TrimSpace(baseOverlay)
+	if baseOverlay != "" && slices.IndexFunc(OverlayInfos(workspace, runtimeDir, overlays), func(info OverlayInfo) bool {
+		return info.Spec == baseOverlay
+	}) < 0 {
+		return "", fmt.Errorf("unknown overlay spec %q", baseOverlay)
+	}
+
+	stage, err := os.MkdirTemp(workspace, ".rocketclaw-devmcp-*")
+	if err != nil {
+		return "", fmt.Errorf("create rocketclaw development stage: %w", err)
+	}
+
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.RemoveAll(stage)
+		}
+	}()
+
+	if err := syncFSFiltered(payload, payloadRoot, stage, "syncing embedded rocketclaw skeleton", logger, true, false, nil); err != nil {
+		return "", fmt.Errorf("sync embedded rocketclaw skeleton: %w", err)
+	}
+
+	for _, root := range [...]string{agentsRoot, workspaceCron} {
+		if err := syncFSFiltered(payload, root, filepath.Join(stage, root), "syncing embedded rocketclaw runtime assets", logger, true, false, nil); err != nil {
+			return "", fmt.Errorf("sync embedded rocketclaw runtime assets %s: %w", root, err)
+		}
+	}
+
+	replaced := false
+
+	for _, overlay := range OverlayInfos(workspace, runtimeDir, overlays) {
+		for _, root := range [...]string{agentsRoot, skillsRoot, workspaceCron, scriptsRoot, workflowsRoot} {
+			if _, err := os.Stat(filepath.Join(overlay.ClonePath, root)); err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+
+				return "", fmt.Errorf("stat overlay directory %s: %w", root, err)
+			}
+
+			if err := syncFSFiltered(os.DirFS(overlay.ClonePath), root, filepath.Join(stage, root), "applying configured rocketclaw overlay", logger, true, true, nil); err != nil {
+				return "", fmt.Errorf("apply configured rocketclaw overlay %q: %w", overlay.Spec, err)
+			}
+		}
+
+		if replaced || overlay.Spec != baseOverlay {
+			continue
+		}
+
+		if err := writeStagedOverlayFiles(stage, files); err != nil {
+			return "", err
+		}
+
+		replaced = true
+	}
+
+	if err := overlayWorkspaceIn(workspace, stage, logger); err != nil {
+		return "", fmt.Errorf("apply rocketclaw overlay: %w", err)
+	}
+
+	if baseOverlay == "" {
+		if err := writeStagedOverlayFiles(stage, files); err != nil {
+			return "", err
+		}
+	}
+
+	ok = true
+
+	return stage, nil
+}
+
+func writeStagedOverlayFiles(stage string, files []OverlayFile) error {
+	for _, file := range files {
+		rel := filepath.FromSlash(file.Path)
+		if !filepath.IsLocal(rel) {
+			return fmt.Errorf("staged overlay path %q escapes stage", file.Path)
+		}
+
+		dst := filepath.Join(stage, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return fmt.Errorf("create staged overlay file directory %s: %w", filepath.Dir(dst), err)
+		}
+
+		mode := embeddedFileMode(dst)
+		if err := os.WriteFile(dst, []byte(file.Content), mode); err != nil {
+			return fmt.Errorf("write staged overlay file %s: %w", dst, err)
+		}
+
+		if err := os.Chmod(dst, mode); err != nil {
+			return fmt.Errorf("chmod staged overlay file %s: %w", dst, err)
+		}
+	}
+
+	return nil
+}
+
 // ReplaceRuntimeAssetsAfterValidation rebuilds runtime assets in a stage and replaces live assets only after validate accepts the staged work dir.
 func ReplaceRuntimeAssetsAfterValidation(workspace, runtimeDir string, overlays []string, logger *slog.Logger, validate func(string) error) error {
 	stage, err := os.MkdirTemp(workspace, ".rocketclaw-reload-*")
@@ -500,6 +604,79 @@ func isRuntimeScriptSymlink(workspace, path string) bool {
 // OverlayInfos returns normalized configured overlay clone metadata in config order.
 func OverlayInfos(workspace, runtimeDir string, overlays []string) []OverlayInfo {
 	return overlayInfosIn(filepath.Join(workspace, runtimeDir), overlays)
+}
+
+// OverlaySpecs returns configured overlay spec strings in config order.
+func OverlaySpecs(overlays []string) []string {
+	infos := overlayInfosIn("", overlays)
+
+	specs := make([]string, len(infos))
+	for i, info := range infos {
+		specs[i] = info.Spec
+	}
+
+	return specs
+}
+
+// OverlayFile is one file from a live overlay clone.
+type OverlayFile struct {
+	Path, Content string
+}
+
+// OverlayContext is one live clone as a named base overlay plus its files.
+type OverlayContext struct {
+	BaseOverlay string
+	Files       []OverlayFile
+}
+
+// ReadOverlayContext returns the live clone files for spec. It does not fetch or write.
+func ReadOverlayContext(workspace, runtimeDir string, overlays []string, spec string) (OverlayContext, error) {
+	spec = strings.TrimSpace(spec)
+	infos := OverlayInfos(workspace, runtimeDir, overlays)
+
+	i := slices.IndexFunc(infos, func(info OverlayInfo) bool { return info.Spec == spec })
+	if i < 0 {
+		return OverlayContext{}, fmt.Errorf("unknown overlay spec %q", spec)
+	}
+
+	clone := infos[i].ClonePath
+	src := os.DirFS(clone)
+
+	var files []OverlayFile
+
+	for _, name := range [...]string{agentsRoot, skillsRoot, workspaceCron, scriptsRoot, workflowsRoot} {
+		_, err := os.Stat(filepath.Join(clone, name))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+
+			return OverlayContext{}, fmt.Errorf("stat overlay root %s: %w", name, err)
+		}
+
+		if err := fs.WalkDir(src, name, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+
+			if d.IsDir() {
+				return nil
+			}
+
+			data, errRead := fs.ReadFile(src, path)
+			if errRead != nil {
+				return fmt.Errorf("read overlay file %s: %w", path, errRead)
+			}
+
+			files = append(files, OverlayFile{Path: path, Content: string(data)})
+
+			return nil
+		}); err != nil {
+			return OverlayContext{}, fmt.Errorf("walk overlay root %s: %w", name, err)
+		}
+	}
+
+	return OverlayContext{BaseOverlay: spec, Files: files}, nil
 }
 
 func overlayInfosIn(target string, overlays []string) []OverlayInfo {

@@ -39,6 +39,8 @@ Slack configuration uses direct `slack.channels` mappings. Each mapping names a 
 
 External MCP exposes `session_prompt`. Every call supplies an external conversation ID, agent, and configured Slack channel. A new ID creates one private MCP session and one managed Slack session on the same Slack thread. The MCP agent remains fixed; the managed agent starts from the channel configuration and can be switched from Slack. MCP history is copied into managed history, but Slack history is never copied back. Later calls keep the same channel and Slack thread. Slack Blocks label MCP requests and responses with their conversation ID and agent.
 
+Development MCP is a separate inbound door, off until `mcp_development` is enabled in `femtoclaw.json` or `rocketclaw.json`. It uses its own Basic Auth file `rocketclaw.development.users.json` (mode 0600, next to the config), not `rocketclaw.users.json`. See `internal/rocketclaw/rocketclaw.development.users.example.json`. A coding agent can list overlays, read one as context, lint or run a turn against request-carried file deltas, then reload or restart after the operator pushes.
+
 Every active `cron/*.md` definition declares a quoted `channel` that matches a configured Slack channel. Empty completion output is silent; non-empty output starts a fresh managed thread in that channel.
 
 ### Supporting Tools

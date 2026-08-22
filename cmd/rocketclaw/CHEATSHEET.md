@@ -36,6 +36,10 @@ Agent controls are consumed by RocketClaw and do not route to RocketCode as prom
 | Saved workflow | `$workflow audit-routes src/routes`. | Works in an existing managed thread or in an authorized root app mention that creates one. Bare `$workflow` lists available workflows. If a turn is active, wait and retry. `$stop` terminates the run. |
 | External MCP conversation | Call `session_prompt` with an external conversation ID, agent, and configured channel. | The ID owns one private MCP session and one managed Slack session on the same thread. The MCP agent stays fixed. MCP history copies into managed history; Slack history does not copy back. |
 
+## Development MCP
+
+A separate inbound door from External MCP. Off until `mcp_development.enabled` is true. Own users file: `rocketclaw.development.users.json` (copy `internal/rocketclaw/rocketclaw.development.users.example.json`, mode 0600). Not `rocketclaw.users.json`. Tools: `rocketclaw_development_list_overlay`, `rocketclaw_development_read_context_from_overlay`, `rocketclaw_development_lint`, `rocketclaw_development_run_turn`, `rocketclaw_development_reload`, `rocketclaw_development_restart`. `lint` and `run_turn` take a request `context` (optional `base_overlay` plus file deltas). Chat stays on this door.
+
 ## Goal Examples
 
 | Example | Meaning |

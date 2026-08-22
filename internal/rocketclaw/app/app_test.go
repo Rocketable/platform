@@ -3,8 +3,11 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -421,6 +424,133 @@ func TestKeyedConversationLocksAllowIndependentIDs(t *testing.T) {
 	}
 
 	unlockFirst()
+}
+
+func TestStartDevelopmentMCPEnabledStarts(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "rocketclaw.json")
+	require.NoError(t, os.WriteFile(configPath, []byte(`{}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "rocketclaw.development.users.json"), []byte(`{"dev":"token"}`), 0o600))
+
+	cfg := &config.Config{Workspace: dir, MCPDevelopment: config.MCPDevelopmentConfig{Enabled: true, ListenAddr: "127.0.0.1:0"}}
+	server, err := startDevelopmentMCP(t.Context(), cfg, configPath, new(sync.Mutex), inertDevelopmentReason, inertDevelopmentReason, testLogger())
+	require.NoError(t, err)
+	require.NotNil(t, server)
+	assert.NotEmpty(t, server.URL())
+
+	session := developmentMCPSession(t, server.URL())
+	_, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "rocketclaw_development_lint", Arguments: map[string]any{"context": map[string]any{"files": []map[string]any{}}}})
+	require.NoError(t, err)
+	_, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "rocketclaw_development_run_turn", Arguments: map[string]any{"context": map[string]any{"files": []map[string]any{}}, "agent": "main", "prompt": "hi", "conversation_id": "devmcp-lock"}})
+	require.NoError(t, err)
+
+	require.NoError(t, server.Close(context.Background()))
+}
+
+func TestStartDevelopmentMCPDisabledDoesNotListen(t *testing.T) {
+	cfg := &config.Config{MCPDevelopment: config.MCPDevelopmentConfig{Enabled: false, ListenAddr: "bad listen address"}}
+	server, err := startDevelopmentMCP(t.Context(), cfg, "", new(sync.Mutex), inertDevelopmentReason, inertDevelopmentReason, testLogger())
+	require.NoError(t, err)
+	assert.Nil(t, server)
+}
+
+func TestStartDevelopmentMCPReadWaitsForOverlayLock(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "rocketclaw.json")
+	require.NoError(t, os.WriteFile(configPath, []byte(`{}`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "rocketclaw.development.users.json"), []byte(`{"dev":"token"}`), 0o600))
+
+	overlayMu := new(sync.Mutex)
+	cfg := &config.Config{Workspace: dir, MCPDevelopment: config.MCPDevelopmentConfig{Enabled: true, ListenAddr: "127.0.0.1:0"}}
+	server, err := startDevelopmentMCP(t.Context(), cfg, configPath, overlayMu, inertDevelopmentReason, inertDevelopmentReason, testLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+	overlayMu.Lock()
+
+	started := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
+
+		session, errConnect := client.Connect(t.Context(), &mcp.StreamableClientTransport{
+			Endpoint:             server.URL(),
+			HTTPClient:           &http.Client{Transport: developmentMCPAuthTransport{base: http.DefaultTransport}},
+			DisableStandaloneSSE: true,
+		}, nil)
+		if errConnect != nil {
+			close(started)
+			close(done)
+
+			return
+		}
+
+		defer func() { _ = session.Close() }()
+
+		close(started)
+
+		_, _ = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "rocketclaw_development_read_context_from_overlay", Arguments: map[string]any{"overlay": "github.com/rocketable/overlay"}})
+
+		close(done)
+	}()
+
+	<-started
+
+	select {
+	case <-done:
+		t.Fatal("read overlay proceeded while overlay lock was held")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	overlayMu.Unlock()
+	<-done
+}
+
+func TestStartDevelopmentMCPEnabledMissingUsers(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "rocketclaw.json")
+	require.NoError(t, os.WriteFile(configPath, []byte(`{}`), 0o600))
+
+	cfg := &config.Config{Workspace: dir, MCPDevelopment: config.MCPDevelopmentConfig{Enabled: true, ListenAddr: "127.0.0.1:0"}}
+	server, err := startDevelopmentMCP(t.Context(), cfg, configPath, new(sync.Mutex), inertDevelopmentReason, inertDevelopmentReason, testLogger())
+	require.ErrorContains(t, err, "development MCP users are required")
+	assert.Nil(t, server)
+}
+
+func developmentMCPSession(t *testing.T, url string) *mcp.ClientSession {
+	t.Helper()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
+	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{
+		Endpoint:             url,
+		HTTPClient:           &http.Client{Transport: developmentMCPAuthTransport{base: http.DefaultTransport}},
+		DisableStandaloneSSE: true,
+	}, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = session.Close() })
+
+	return session
+}
+
+type developmentMCPAuthTransport struct {
+	base http.RoundTripper
+}
+
+func (t developmentMCPAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.SetBasicAuth("dev", "token")
+
+	resp, err := t.base.RoundTrip(clone)
+	if err != nil {
+		return nil, fmt.Errorf("send development MCP request: %w", err)
+	}
+
+	return resp, nil
+}
+
+func inertDevelopmentReason(string) (string, error) {
+	return "", nil
 }
 
 func testLogger() *slog.Logger {

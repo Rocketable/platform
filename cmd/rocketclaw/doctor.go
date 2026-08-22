@@ -19,12 +19,18 @@ func runDoctor(args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	devMCP := fmt.Sprintf("Development MCP: %t", cfg.MCPDevelopment.Enabled)
+	if addr := strings.TrimSpace(cfg.MCPDevelopment.ListenAddr); addr != "" {
+		devMCP += " " + addr
+	}
+
 	lines := []string{
 		fmt.Sprintf("Configuration: OK (%s)", selected.Path),
 		"Workspace: " + cfg.Workspace,
 		"Work directory: " + cfg.RuntimeDirName(),
 		"Slack: active",
 		fmt.Sprintf("External MCP: %t", cfg.MCPExternal.Enabled),
+		devMCP,
 		"RocketCode: OK (library)",
 	}
 

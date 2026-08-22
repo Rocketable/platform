@@ -18,8 +18,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/agentlint"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/cronjob"
+	"github.com/Rocketable/platform/internal/rocketclaw/developmentmcp"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/externalmcp"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
@@ -505,6 +507,19 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		stops = append(stops, namedStopper{name: "external_mcp", stop: externalMCP.Close})
 	}
 
+	developmentMCP, err := startDevelopmentMCP(runCtx, cfg, configPath, &reloadMu, func(reason string) (string, error) {
+		return requestReload(runCtx, reason)
+	}, func(reason string) (string, error) {
+		return requestRestart(runCtx, reason)
+	}, logger)
+	if err != nil {
+		return err
+	}
+
+	if developmentMCP != nil {
+		stops = append(stops, namedStopper{name: "development_mcp", stop: developmentMCP.Close})
+	}
+
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -706,6 +721,61 @@ func startExternalMCPServer(
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start external MCP HTTP server: %w", err)
+	}
+
+	return server, nil
+}
+
+func startDevelopmentMCP(ctx context.Context, cfg *config.Config, configPath string, overlayMu *sync.Mutex, reload, restart func(reason string) (string, error), logger *slog.Logger) (*developmentmcp.Server, error) {
+	if !cfg.MCPDevelopment.Enabled {
+		return nil, nil
+	}
+
+	users, err := config.LoadDevelopmentMCPUsers(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("load development MCP auth users: %w", err)
+	}
+
+	if len(users) == 0 {
+		return nil, errors.New("development MCP users are required")
+	}
+
+	var (
+		chatsMu sync.Mutex
+		chats   = map[string]*harnessbridge.DevelopmentChat{}
+		locks   = newKeyedConversationLocks()
+	)
+
+	server, err := developmentmcp.Start(ctx, logger, cfg.MCPDevelopment.ListenAddr, users, skel.OverlaySpecs(cfg.Overlays), func(spec string) (skel.OverlayContext, error) {
+		overlayMu.Lock()
+		defer overlayMu.Unlock()
+
+		return skel.ReadOverlayContext(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, spec)
+	}, func(baseOverlay string, files []skel.OverlayFile) (agentlint.Result, error) {
+		overlayMu.Lock()
+		defer overlayMu.Unlock()
+
+		return developmentmcp.LintTry(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, baseOverlay, files, cfg, logger)
+	}, func(turnCtx context.Context, baseOverlay string, files []skel.OverlayFile, agent, prompt, conversationID string) (string, string, error) {
+		overlayMu.Lock()
+		defer overlayMu.Unlock()
+
+		unlock := locks.lock(conversationID)
+		defer unlock()
+
+		chatsMu.Lock()
+		chat, ok := chats[conversationID]
+
+		if !ok {
+			chat = new(harnessbridge.DevelopmentChat)
+			chats[conversationID] = chat
+		}
+		chatsMu.Unlock()
+
+		return developmentmcp.RunTryTurn(turnCtx, cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, cfg, logger, chat, baseOverlay, files, agent, prompt)
+	}, reload, restart)
+	if err != nil {
+		return nil, fmt.Errorf("start development MCP HTTP server: %w", err)
 	}
 
 	return server, nil
