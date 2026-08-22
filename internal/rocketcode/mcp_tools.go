@@ -22,6 +22,7 @@ const (
 	mcpPermissionBucket = "mcp"
 	// executeNestedToolPrefix marks nested code-mode tool diagnostics for thinking UI.
 	executeNestedToolPrefix = executeToolName + " → "
+	codeModeRawStringRule   = `Use raw strings (r"..." or r'''...''') for shell, regex, and paths. Ordinary "..." rejects unknown escapes such as \( \. \$.`
 )
 
 func newMCPRegistry(workspace string, servers map[string]mcpclient.ServerConfig) (*mcpclient.Registry, error) {
@@ -147,6 +148,7 @@ func executeDescription() string {
 		"Run Starlark in Code Mode to orchestrate tool calls and compose their results.",
 		"Define def main() that returns a string (or JSON-encodable value). Only keyword arguments are allowed on tool calls.",
 		"No import/from, threads, concurrent.futures, or stdlib. Use only the builtins listed here and in search.",
+		codeModeRawStringRule,
 		"Call host tools by name (read, bash, …), platform/custom tools by name, and MCP as server_toolname(**kwargs).",
 		fmt.Sprintf("Concurrency only via gather/map/race/race_first (default concurrency=%d, max %d). callables is one list of zero-arg lambdas, not varargs.", defN, maxN),
 		fmt.Sprintf("Example: gather([lambda: read(filePath=\"a\"), lambda: read(filePath=\"b\")], concurrency=%d)", defN),
@@ -166,6 +168,7 @@ func codeModeSystemPrompt(hosts map[string]looperTool, servers []string) string 
 		"",
 		"Use the execute tool with a short Starlark script (def main() returning a string).",
 		"No import/from, threads, concurrent.futures, or stdlib.",
+		codeModeRawStringRule,
 		"Inside the script, call tools with keyword arguments only.",
 		"Discover tools with search(query=\"\", namespace=\"\", offset=0, limit=10).",
 		"search returns JSON: {items:[{path,description,signature}], remaining, next}.",
@@ -254,7 +257,7 @@ func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool)
 			Definition: *functionTool(executeToolName, executeDescription(), map[string]any{
 				"code": map[string]any{
 					"type":        "string",
-					"description": fmt.Sprintf("Starlark source defining def main() that returns a string (or JSON-encodable value). Concurrency: gather([lambda: …], concurrency=%d) — one list of zero-arg lambdas, not varargs.", codemode.DefaultConcurrency),
+					"description": fmt.Sprintf("Starlark source defining def main() that returns a string (or JSON-encodable value). %s Concurrency: gather([lambda: …], concurrency=%d) — one list of zero-arg lambdas, not varargs.", codeModeRawStringRule, codemode.DefaultConcurrency),
 				},
 			}),
 			Permission:         entryPermission,

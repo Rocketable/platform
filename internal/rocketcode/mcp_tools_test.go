@@ -73,6 +73,7 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	assert.Contains(t, execDesc, "gather(")
 	assert.Contains(t, execDesc, "gather/map/race/race_first")
 	assert.Contains(t, execDesc, "No import/from")
+	assert.Contains(t, execDesc, `r"..."`)
 	assert.Contains(t, execDesc, "not varargs")
 	assert.Contains(t, execDesc, `gather([lambda: read(filePath="a")`)
 
@@ -80,12 +81,14 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	codeProp, _ := props["code"].(map[string]any)
 	codeDesc, _ := codeProp["description"].(string)
 	assert.Contains(t, codeDesc, "Starlark source")
+	assert.Contains(t, codeDesc, `r"..."`)
 	assert.Contains(t, codeDesc, "not varargs")
 
 	prompt := withCodeModeSystemPrompt("base", model, hosts, nil)
 	assert.Contains(t, prompt, "## Code Mode")
 	assert.Contains(t, prompt, "read(")
 	assert.Contains(t, prompt, "No import/from")
+	assert.Contains(t, prompt, `r"..."`)
 	assert.Contains(t, prompt, "Concurrency (callables is one list")
 	assert.Contains(t, prompt, "gather([lambda:")
 	assert.Contains(t, prompt, "race_first([lambda:")

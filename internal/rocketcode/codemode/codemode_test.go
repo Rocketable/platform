@@ -25,6 +25,28 @@ func TestRunMainReturnsString(t *testing.T) {
 	}
 }
 
+func TestRunRawStringKeepsUnknownEscapes(t *testing.T) {
+	got, err := Run(t.Context(), `def main():
+    return r"find . \( -name '*.go' \)"
+`, nil, allowAll, nilCall, noToolCallObserver, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if got != `find . \( -name '*.go' \)` {
+		t.Fatalf("Run() = %q, want raw find expression", got)
+	}
+}
+
+func TestRunQuotedUnknownEscapeFails(t *testing.T) {
+	_, err := Run(t.Context(), `def main():
+    return "\("
+`, nil, allowAll, nilCall, noToolCallObserver, nil)
+	if err == nil || !strings.Contains(err.Error(), "invalid escape sequence") {
+		t.Fatalf("Run() error = %v, want invalid escape sequence", err)
+	}
+}
+
 func TestRunMainReturnsDictJSON(t *testing.T) {
 	got, err := Run(t.Context(), `def main():
     return {"a": 1, "b": True}
