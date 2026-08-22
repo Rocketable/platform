@@ -2678,15 +2678,20 @@ func (b *Bridge) newOutboundMessage(msg *events.InboundMessage, turnID string, s
 	if msg != nil {
 		if msg.Workflow == nil {
 			goal, goalOK, err := b.config.SessionService.Goal(b.config.ConversationID)
-			if msg.Label == goalKickoffLabel || msg.Label == goalContinuationLabel || msg.GoalTurn {
-				outbound.GoalTurn = true
-			} else if err == nil && goalOK && strings.TrimSpace(goal.Status) == GoalStatusActive {
+			accounted := msg.Label == goalKickoffLabel || msg.Label == goalContinuationLabel
+			statusActive := err == nil && goalOK && strings.TrimSpace(goal.Status) == GoalStatusActive
+
+			if accounted || msg.GoalTurn || statusActive {
 				outbound.GoalTurn = true
 			}
 
 			if outbound.GoalTurn && err == nil && goalOK && goal.MaxTurns > 0 {
 				outbound.GoalTurnNumber = goal.TurnsUsed + 1
 				outbound.GoalMaxTurns = goal.MaxTurns
+			}
+
+			if outbound.GoalTurn && statusActive && (!accounted || goal.MaxTurns <= 0 || goal.TurnsUsed+1 < goal.MaxTurns) {
+				outbound.GoalActive = true
 			}
 		}
 

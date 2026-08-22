@@ -1194,6 +1194,10 @@ func (c *Connector) finishResponse(ctx context.Context, msg *events.OutboundMess
 
 				return nil
 			})
+
+			if msg.GoalActive {
+				c.beginSlackStack(threadKey)
+			}
 		}
 	}
 }

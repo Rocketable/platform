@@ -261,6 +261,7 @@ func CloneOutboundMessage(message *OutboundMessage) *OutboundMessage {
 		Complete:               message.Complete,
 		GoalTurn:               message.GoalTurn,
 		GoalComplete:           message.GoalComplete,
+		GoalActive:             message.GoalActive,
 		GoalTurnNumber:         message.GoalTurnNumber,
 		GoalMaxTurns:           message.GoalMaxTurns,
 		WorkflowTerminal:       message.WorkflowTerminal,

@@ -6044,6 +6044,73 @@ func TestHandleMessageEventBuffersCanonicalGoalObjective(t *testing.T) {
 	}
 }
 
+func TestHandleMessageEventBuffersSteerAfterActiveGoalTurnCompletes(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		goalActive bool
+		wantBuffer bool
+	}{
+		{name: "active goal keeps buffering", goalActive: true, wantBuffer: true},
+		{name: "ended goal accepts a new turn", goalActive: false, wantBuffer: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bus := newTestBus()
+			defer bus.Close()
+
+			var (
+				posted    []url.Values
+				reactions []string
+			)
+
+			server := newSlackStackTestServer(t, &posted, &reactions)
+			defer server.Close()
+
+			router := newThreadRouterStub()
+			router.prepareHandled = true
+			router.submitHandled = true
+			connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+
+			goal := newSlackMessageEvent("222.333", "111.222", "$goal ship the release")
+			connector.handleMessageEvent(t.Context(), goal, slackNativeForward{})
+			require.Len(t, router.goalStarts, 1)
+
+			done := events.NewOutboundMessage(events.SourceSlack, "test", "Progress summary: started.", events.OutputTargetSlack)
+			done.TurnID = "goal-turn-1"
+			done.Complete = true
+			done.GoalTurn = true
+			done.GoalActive = tt.goalActive
+			done.GoalTurnNumber = 1
+			done.GoalMaxTurns = 5
+			done.SlackReply = &events.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.333", ThreadTS: "111.222"}
+			require.NoError(t, connector.SendResponse(t.Context(), done))
+
+			steer := newSlackMessageEvent("333.444", "111.222", "don't touch the database")
+			connector.handleMessageEvent(t.Context(), steer, slackNativeForward{})
+
+			key := slackThreadStackKey(&events.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.222"})
+
+			if tt.wantBuffer {
+				assert.Empty(t, router.repliesSnapshot())
+				require.Len(t, connector.stacks[key], 1)
+				assert.Equal(t, "don't touch the database", connector.stacks[key][0].Text)
+				assert.Contains(t, reactions, "/reactions.add "+slackBufferedReaction+" 333.444")
+				assert.NotContains(t, reactions, "/reactions.add "+slackRobotReaction+" 333.444")
+
+				return
+			}
+
+			require.Len(t, router.repliesSnapshot(), 1)
+			assert.Equal(t, "don't touch the database", router.repliesSnapshot()[0].inbound.Text)
+
+			_, stacked := connector.stacks[key]
+			assert.True(t, stacked)
+			assert.Empty(t, connector.stacks[key])
+			assert.Contains(t, reactions, "/reactions.add "+slackRobotReaction+" 333.444")
+			assert.NotContains(t, reactions, "/reactions.add "+slackBufferedReaction+" 333.444")
+		})
+	}
+}
+
 func TestHandleMessageEventRejectsDuplicateActiveGoal(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()

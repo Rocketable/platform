@@ -199,24 +199,24 @@ type StartNewThreadRootResult struct {
 
 // OutboundMessage is a text message headed to enabled connectors.
 type OutboundMessage struct {
-	Text, ProgressText           string
-	Source                       Source
-	Bridge                       BridgeID
-	Targets                      []OutputTarget
-	ConversationID, TurnID       string
-	ExternalConversationID       string
-	Agent                        string
-	Cronjob                      *CronjobMessage
-	Sequence                     int
-	PostProgressText, Complete   bool
-	SlackReply                   *SlackReplyTarget
-	Attachments                  []OutboundAttachment
-	GoalTurn, GoalComplete       bool
-	GoalTurnNumber, GoalMaxTurns int
-	WorkflowAgent                *workflow.AgentUpdate
-	WorkflowPhase                *workflow.PhaseUpdate
-	WorkflowTerminal             workflow.Terminal
-	Response                     chan Response
+	Text, ProgressText                 string
+	Source                             Source
+	Bridge                             BridgeID
+	Targets                            []OutputTarget
+	ConversationID, TurnID             string
+	ExternalConversationID             string
+	Agent                              string
+	Cronjob                            *CronjobMessage
+	Sequence                           int
+	PostProgressText, Complete         bool
+	SlackReply                         *SlackReplyTarget
+	Attachments                        []OutboundAttachment
+	GoalTurn, GoalComplete, GoalActive bool
+	GoalTurnNumber, GoalMaxTurns       int
+	WorkflowAgent                      *workflow.AgentUpdate
+	WorkflowPhase                      *workflow.PhaseUpdate
+	WorkflowTerminal                   workflow.Terminal
+	Response                           chan Response
 
 	deliveryInit, deliveredOnce sync.Once
 	delivered                   chan struct{}

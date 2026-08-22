@@ -4309,6 +4309,7 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 
 	outbound := bridge.newOutboundMessage(inbound, "turn-2", 1, "reply", "", false)
 	assert.True(t, outbound.GoalTurn)
+	assert.True(t, outbound.GoalActive)
 	assert.Equal(t, "main", outbound.Agent)
 	assert.Equal(t, inbound.SlackReply, outbound.SlackReply)
 	assert.Equal(t, 1, outbound.GoalTurnNumber)
@@ -4320,22 +4321,41 @@ func TestNewOutboundMessageMarksGoalTurns(t *testing.T) {
 
 	outbound = bridge.newOutboundMessage(inbound, "turn-3", 1, "reply", "", false)
 	assert.True(t, outbound.GoalTurn)
+	assert.True(t, outbound.GoalActive)
 	assert.Equal(t, 2, outbound.GoalTurnNumber)
 	assert.Equal(t, 3, outbound.GoalMaxTurns)
 
 	inbound.Label = ""
 	outbound = bridge.newOutboundMessage(inbound, "turn-4", 1, "reply", "", false)
 	assert.True(t, outbound.GoalTurn)
+	assert.True(t, outbound.GoalActive)
 	assert.Equal(t, 2, outbound.GoalTurnNumber)
 	assert.Equal(t, 3, outbound.GoalMaxTurns)
+
+	inbound.Label = goalContinuationLabel
+	_, _, err = store.AccountGoalTurn("thread-1")
+	require.NoError(t, err)
+
+	outbound = bridge.newOutboundMessage(inbound, "turn-4b", 1, "reply", "", false)
+	assert.True(t, outbound.GoalTurn)
+	assert.False(t, outbound.GoalActive)
+	assert.Equal(t, 3, outbound.GoalTurnNumber)
 
 	require.NoError(t, store.BeginGoal("thread-2", "ship it forever", "", 0, "", ""))
 
 	bridge.config.ConversationID = "thread-2"
 	outbound = bridge.newOutboundMessage(inbound, "turn-5", 1, "reply", "", false)
 	assert.True(t, outbound.GoalTurn)
+	assert.True(t, outbound.GoalActive)
 	assert.Zero(t, outbound.GoalTurnNumber)
 	assert.Zero(t, outbound.GoalMaxTurns)
+
+	_, err = store.UpdateGoalStatus("thread-2", GoalStatusBlocked, "need credentials")
+	require.NoError(t, err)
+
+	outbound = bridge.newOutboundMessage(inbound, "turn-6", 1, "reply", "", false)
+	assert.True(t, outbound.GoalTurn)
+	assert.False(t, outbound.GoalActive)
 }
 
 func TestWorkflowProgressOutboundDoesNotLookupGoal(t *testing.T) {
