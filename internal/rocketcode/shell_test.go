@@ -145,17 +145,14 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 		require.NotContains(t, rel, "..")
 	})
 
-	t.Run("returns head and full multi-line output", func(t *testing.T) {
+	t.Run("returns full multi-line output", func(t *testing.T) {
 		cmd := "i=1; while [ $i -le 2100 ]; do echo $i; i=$((i+1)); done"
 		got := sss.Bash(context.Background(), bashParams{Command: cmd, TimeoutMillisecond: 0, Workdir: "", Description: "many lines"})
-		require.Equal(t, got.HeadOutput, got.String())
-		require.Contains(t, got.HeadOutput, "1\n2\n3")
-		require.Contains(t, got.HeadOutput, "...output truncated...")
-		require.Contains(t, got.HeadOutput, "result.full_output")
-		require.NotContains(t, got.HeadOutput, "2100\n")
-		require.Contains(t, got.FullOutput, "1\n2\n3")
-		require.Contains(t, got.FullOutput, "2099\n2100")
-		require.NotContains(t, got.FullOutput, "...output truncated...")
+		require.Equal(t, got.Output, got.String())
+		require.Contains(t, got.Output, "1\n2\n3")
+		require.Contains(t, got.Output, "2099\n2100")
+		require.NotContains(t, got.Output, "...output truncated...")
+		require.NotContains(t, got.Output, "full_output")
 		require.Empty(t, got.ErrorCode)
 		require.True(t, got.Success)
 	})

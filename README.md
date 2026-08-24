@@ -79,6 +79,7 @@ RocketClaw is configured with `rocketclaw.json` in the working directory. Runtim
 - `database_url` in `rocketclaw.json` or `femtoclaw.json`: PostgreSQL store for private MCP and managed Slack sessions, active-turn restart handoffs, managed Slack routing, External MCP bindings to both sessions, scheduled messages, cron execution state, restart notifications, and goal-loop state. One DSN is one store. `run` ignores `.rocketclaw/state.sqlite3`. `fc migrate` copies missing v9 rows into that store.
 - `.rocketclaw/overlays/`: configured git overlay clones for runtime assets.
 - `.rocketclaw/.rocketcode/tmp/<session-id>/`: per-conversation shell TMPDIR (not shared across sessions).
+- `.rocketclaw/.rocketcode/spill/<turn-id>/`: oversized execute output for the current turn (deleted when the turn ends).
 - `.rocketclaw/workflows/`: effective saved Starlark workflows assembled from embedded, overlay, and workspace `workflows/` assets.
 
 Generated runtime state should not be treated as source code.

@@ -1,7 +1,6 @@
 package rocketcode
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -22,7 +21,6 @@ import (
 
 const (
 	defaultShellTimeout   = 2 * 60 * 1000
-	shellHeadMaxLines     = 2000
 	shellTimeoutGrace     = 100 * time.Millisecond
 	shellForceKillTimeout = 3 * time.Second
 )
@@ -44,20 +42,13 @@ type BashCommand struct {
 
 // BashResult is the result of running a workspace bash command.
 type BashResult struct {
-	HeadOutput string
-	FullOutput string
-	ErrorCode  string
-	Success    bool
+	Output    string
+	ErrorCode string
+	Success   bool
 }
 
-// String returns HeadOutput so printable forms show the truncated head.
 func (r BashResult) String() string {
-	return r.HeadOutput
-}
-
-// Output is the printable form (HeadOutput), kept for existing callers.
-func (r BashResult) Output() string {
-	return r.HeadOutput
+	return r.Output
 }
 
 type sandboxedShellSystem struct {
@@ -245,16 +236,10 @@ func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams)
 		errorCode = "error"
 	}
 
-	head, truncated := firstLines(full, shellHeadMaxLines)
-	if truncated {
-		head = strings.TrimRight(head, "\n") + "\n\n...output truncated...\n\nFull output is on this result's full_output field (e.g. result.full_output), not a file.\n"
-	}
-
 	return BashResult{
-		HeadOutput: head,
-		FullOutput: full,
-		ErrorCode:  errorCode,
-		Success:    err == nil && !timedOut,
+		Output:    full,
+		ErrorCode: errorCode,
+		Success:   err == nil && !timedOut,
 	}
 }
 
@@ -264,36 +249,10 @@ func bashFailure(message string) BashResult {
 	}
 
 	return BashResult{
-		HeadOutput: message,
-		FullOutput: message,
-		ErrorCode:  "error",
-		Success:    false,
+		Output:    message,
+		ErrorCode: "error",
+		Success:   false,
 	}
-}
-
-func firstLines(text string, maxLines int) (string, bool) {
-	if maxLines <= 0 || text == "" {
-		return text, false
-	}
-
-	var out strings.Builder
-
-	reader := bufio.NewReader(strings.NewReader(text))
-	for range maxLines {
-		line, err := reader.ReadString('\n')
-		out.WriteString(line)
-
-		if err != nil {
-			return out.String(), false
-		}
-	}
-
-	// More content remains after the head window.
-	if _, err := reader.ReadByte(); err == nil {
-		return out.String(), true
-	}
-
-	return out.String(), false
 }
 
 func (sss *sandboxedShellSystem) deniedBashPath(command, hostDir string) string {

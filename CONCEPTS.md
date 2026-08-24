@@ -106,6 +106,34 @@ The token count at which a turn asks its Provider to compact conversation histor
 
 Each Provider can set its own Autocompaction Threshold. Unset means the runtime default. A child turn uses a different threshold only when it resolves a different Provider.
 
+## RocketCode
+
+### Code Mode
+
+The RocketCode agent style that asks the model to write a short Starlark script and run it through Execute instead of calling host tools as top-level model tools.
+
+### Execute
+
+The model-facing tool that runs a Code Mode script and returns one string to the model.
+
+Host tools inside the script return full strings to the script. Only the string Execute sends back to the model is clipped when it is oversized.
+
+### Host Tool
+
+A sandbox capability the Code Mode script can call directly, as opposed to a model-facing tool such as Execute. Host tools include filesystem, shell, fetch, and embedder-custom tools.
+
+### Spill
+
+A turn-scoped file that holds the full Execute result when that result is too large to send to the model.
+
+A Spill is granted as an exact-file read for the rest of that RocketCode Turn and is deleted when the turn ends. Re-reading a Spill must reuse the file this turn already booked, not infer a path from the spill directory.
+
+### RocketCode Turn
+
+One model loop in RocketCode. It owns that loop's Spills.
+
+A RocketCode Turn is not the active-turn slot on a Managed Slack Thread. Slack occupancy often drives one RocketCode Turn, but the two lifetimes are not the same object.
+
 ## Durable State
 
 ### State Store
@@ -132,3 +160,8 @@ After every workspace has moved, SQLite support is deleted. It is not a historic
 - An Operator SQLite Migrator copies missing `state.sqlite3` rows into the State Store.
 - Development MCP lint and run_turn consume Request-Carried Context and read Overlay Clones; Reload replaces those clones.
 - A turn uses the Autocompaction Threshold of the Provider that serves its model.
+- Code Mode exposes Execute and Host Tools; an oversized Execute result becomes a Spill owned by that RocketCode Turn.
+
+## Flagged ambiguities
+
+- "'turn' had been used for both a Slack conversation occupancy slot and a RocketCode model loop — these are distinct."

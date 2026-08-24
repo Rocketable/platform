@@ -255,8 +255,25 @@ func TestTSandboxedFileSystem(t *testing.T) {
 		file := sfs.ReadResult("many-lines.txt", 1).Output
 		require.Contains(t, file, "1: line1")
 		require.Contains(t, file, "2000: line2000")
-		require.Contains(t, file, "(Showing lines 1-2000 of 2100. Use offset=2001 to continue.)")
-		require.NotContains(t, file, "2001: line2001")
+		require.Contains(t, file, "2100: line2100")
+		require.Contains(t, file, "(End of file - total 2100 lines)")
+		require.NotContains(t, file, "Use offset=")
+	}
+
+	{
+		file := sfs.ReadResult("many-lines.txt", 2001).Output
+		require.Contains(t, file, "2001: line2001")
+		require.Contains(t, file, "2100: line2100")
+		require.Contains(t, file, "(End of file - total 2100 lines)")
+	}
+
+	{
+		longLine := strings.Repeat("x", 80*1024)
+		require.NoError(t, root.WriteFile("long-line.txt", []byte(longLine+"\n"), 0o644))
+
+		file := sfs.ReadResult("long-line.txt", 1).Output
+		require.True(t, strings.HasPrefix(file, "<path>long-line.txt</path>\n<type>file</type>\n<content>\n1: "+longLine), file[:min(120, len(file))])
+		require.NotContains(t, file, "line truncated")
 	}
 
 	{
@@ -400,7 +417,7 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 		require.Equal(t, filepath.Join(dir, "glob", ".env.example"), got)
 	})
 
-	t.Run("truncates after 100 results", func(t *testing.T) {
+	t.Run("lists all matches", func(t *testing.T) {
 		require.NoError(t, root.MkdirAll("many", 0o755))
 
 		base := time.Unix(1_800_000_000, 0)
@@ -414,12 +431,10 @@ func TestSandboxedFileSystemGlob(t *testing.T) {
 
 		got := sfs.Glob(context.Background(), "*.txt", "many")
 		lines := strings.Split(got, "\n")
-		require.Len(t, lines, 102)
+		require.Len(t, lines, 101)
 		require.Equal(t, filepath.Join(dir, "many", "file-100.txt"), lines[0])
-		require.Equal(t, filepath.Join(dir, "many", "file-001.txt"), lines[99])
-		require.Empty(t, lines[100])
-		require.Equal(t, "(Results are truncated: showing first 100 results. Consider using a more specific path or pattern.)", lines[101])
-		require.NotContains(t, got, filepath.Join(dir, "many", "file-000.txt"))
+		require.Equal(t, filepath.Join(dir, "many", "file-000.txt"), lines[100])
+		require.NotContains(t, got, "Results are truncated")
 	})
 }
 
@@ -508,7 +523,7 @@ func TestSandboxedFileSystemGrep(t *testing.T) {
 		}, "\n"), got)
 	})
 
-	t.Run("truncates after one hundred matches", func(t *testing.T) {
+	t.Run("lists all matches", func(t *testing.T) {
 		require.NoError(t, root.MkdirAll("grep/many", 0o755))
 
 		base := time.Unix(1_800_100_000, 0)
@@ -523,27 +538,22 @@ func TestSandboxedFileSystemGrep(t *testing.T) {
 		}
 
 		got := sfs.Grep(context.Background(), "needle", "grep/many", "*.txt")
-		lines := strings.Split(got, "\n")
-		require.Len(t, lines, 302)
-		require.Equal(t, "Found 101 matches (showing first 100)", lines[0])
-		require.Equal(t, filepath.Join(dir, "grep", "many", "file-100.txt")+":", lines[1])
-		require.Equal(t, "  Line 1: needle 100", lines[2])
-		require.Equal(t, filepath.Join(dir, "grep", "many", "file-001.txt")+":", lines[298])
-		require.Equal(t, "  Line 1: needle 001", lines[299])
-		require.Empty(t, lines[300])
-		require.Equal(t, "(Results truncated: showing 100 of 101 matches (1 hidden). Consider using a more specific path or pattern.)", lines[301])
-		require.NotContains(t, got, filepath.Join(dir, "grep", "many", "file-000.txt"))
+		require.Contains(t, got, "Found 101 matches")
+		require.Contains(t, got, filepath.Join(dir, "grep", "many", "file-100.txt")+":")
+		require.Contains(t, got, filepath.Join(dir, "grep", "many", "file-000.txt")+":")
+		require.NotContains(t, got, "showing first")
+		require.NotContains(t, got, "Results truncated")
 	})
 
-	t.Run("truncates long matching lines", func(t *testing.T) {
-		longLine := strings.Repeat("a", maxLineLength+5)
+	t.Run("keeps long matching lines", func(t *testing.T) {
+		longLine := strings.Repeat("a", 2005)
 		require.NoError(t, root.WriteFile("grep/long.txt", []byte(longLine), 0o644))
 
 		mtime := inside.Add(2 * time.Hour)
 		require.NoError(t, root.Chtimes("grep/long.txt", mtime, mtime))
 
 		got := sfs.Grep(context.Background(), "a+", "grep/long.txt", "")
-		require.Contains(t, got, "  Line 1: "+strings.Repeat("a", maxLineLength)+"...")
+		require.Contains(t, got, "  Line 1: "+longLine)
 	})
 
 	t.Run("reports invalid regex", func(t *testing.T) {

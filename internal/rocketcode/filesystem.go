@@ -18,14 +18,6 @@ import (
 	"unicode/utf8"
 )
 
-const (
-	defaultReadLimit = 2000
-	maxLineLength    = 2000
-	maxBytes         = 50 * 1024
-	maxBytesLabel    = "50 KB"
-	maxLineSuffix    = "... (line truncated to 2000 chars)"
-)
-
 type sandboxedFileSystem struct {
 	mu   sync.Mutex
 	root *os.Root
@@ -34,8 +26,6 @@ type sandboxedFileSystem struct {
 type readResult struct {
 	raw   []string
 	count int
-	cut   bool
-	more  bool
 }
 
 type patchHunk struct {
@@ -133,7 +123,7 @@ func (sfs *sandboxedFileSystem) ReadResult(filename string, offset int) ToolResu
 		return ToolResult{Output: message, Attachments: []Attachment{attachment}}
 	}
 
-	result, errScan := readLines(content, offset, defaultReadLimit)
+	result, errScan := readLines(content, offset)
 	if errScan != nil {
 		return TextToolResult("failed to read file: " + filename)
 	}
@@ -155,33 +145,22 @@ func (sfs *sandboxedFileSystem) ReadResult(filename string, offset int) ToolResu
 		fmt.Fprintf(&output, "%d: %s", offset+i, line)
 	}
 
-	last := offset + len(result.raw) - 1
-	next := last + 1
-
-	switch {
-	case result.cut:
-		fmt.Fprintf(&output, "\n\n(Output capped at %s. Showing lines %d-%d. Use offset=%d to continue.)", maxBytesLabel, offset, last, next)
-	case result.more:
-		fmt.Fprintf(&output, "\n\n(Showing lines %d-%d of %d. Use offset=%d to continue.)", offset, last, result.count, next)
-	default:
-		fmt.Fprintf(&output, "\n\n(End of file - total %d lines)", result.count)
-	}
+	fmt.Fprintf(&output, "\n\n(End of file - total %d lines)", result.count)
 
 	output.WriteString("\n</content>")
 
 	return TextToolResult(output.String())
 }
 
-func readLines(content []byte, offset, limit int) (readResult, error) {
+func readLines(content []byte, offset int) (readResult, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(content))
-	scanner.Buffer(make([]byte, 0, 64*1024), max(len(content), 64*1024))
+	scanner.Buffer(make([]byte, 0, 64*1024), max(len(content)+2, 64*1024))
 
 	start := offset - 1
-	raw := []string{}
-	bytesRead := 0
+
+	var raw []string
+
 	count := 0
-	cut := false
-	more := false
 
 	for scanner.Scan() {
 		count++
@@ -189,37 +168,14 @@ func readLines(content []byte, offset, limit int) (readResult, error) {
 			continue
 		}
 
-		if len(raw) >= limit {
-			more = true
-			continue
-		}
-
-		line := scanner.Text()
-		if len(line) > maxLineLength {
-			line = line[:maxLineLength] + maxLineSuffix
-		}
-
-		size := len([]byte(line))
-		if len(raw) > 0 {
-			size++
-		}
-
-		if bytesRead+size > maxBytes {
-			cut = true
-			more = true
-
-			break
-		}
-
-		raw = append(raw, line)
-		bytesRead += size
+		raw = append(raw, scanner.Text())
 	}
 
 	if err := scanner.Err(); err != nil {
 		return readResult{}, fmt.Errorf("scan file lines: %w", err)
 	}
 
-	return readResult{raw: raw, count: count, cut: cut, more: more}, nil
+	return readResult{raw: raw, count: count}, nil
 }
 
 func (sfs *sandboxedFileSystem) ApplyPatch(patchText string) string {
@@ -790,8 +746,6 @@ func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) 
 	sfs.mu.Lock()
 	defer sfs.mu.Unlock()
 
-	const limit = 100
-
 	type globMatch struct {
 		path  string
 		mtime int64
@@ -887,19 +841,9 @@ func (sfs *sandboxedFileSystem) Glob(ctx context.Context, pattern, path string) 
 		return results[i].mtime > results[j].mtime
 	})
 
-	truncated := false
-	if len(results) > limit {
-		truncated = true
-		results = results[:limit]
-	}
-
-	output := make([]string, 0, len(results)+2)
+	output := make([]string, 0, len(results))
 	for _, result := range results {
 		output = append(output, result.path)
-	}
-
-	if truncated {
-		output = append(output, "", "(Results are truncated: showing first 100 results. Consider using a more specific path or pattern.)")
 	}
 
 	return strings.Join(output, "\n")
@@ -1195,10 +1139,6 @@ func parseGrepMatches(stdout []byte, searchRoot *os.Root, hostRoot string) ([]gr
 		}
 
 		text := strings.TrimRight(item.Data.Lines.Text, "\r\n")
-		if len(text) > maxLineLength {
-			text = text[:maxLineLength] + "..."
-		}
-
 		matches = append(matches, grepMatch{path: filepath.Join(hostRoot, item.Data.Path.Text), line: item.Data.LineNumber, text: text, mtime: info.ModTime().UnixMilli()})
 	}
 
@@ -1210,8 +1150,6 @@ func parseGrepMatches(stdout []byte, searchRoot *os.Root, hostRoot string) ([]gr
 }
 
 func formatGrepOutput(matches []grepMatch, partial bool) string {
-	const limit = 100
-
 	sort.Slice(matches, func(i, j int) bool {
 		if matches[i].mtime == matches[j].mtime {
 			if matches[i].path == matches[j].path {
@@ -1223,17 +1161,8 @@ func formatGrepOutput(matches []grepMatch, partial bool) string {
 
 		return matches[i].mtime > matches[j].mtime
 	})
-	total := len(matches)
 
-	truncated := total > limit
-	if truncated {
-		matches = matches[:limit]
-	}
-
-	output := []string{fmt.Sprintf("Found %d matches", total)}
-	if truncated {
-		output[0] = fmt.Sprintf("Found %d matches (showing first %d)", total, limit)
-	}
+	output := []string{fmt.Sprintf("Found %d matches", len(matches))}
 
 	current := ""
 	for _, match := range matches {
@@ -1247,10 +1176,6 @@ func formatGrepOutput(matches []grepMatch, partial bool) string {
 		}
 
 		output = append(output, fmt.Sprintf("  Line %d: %s", match.line, match.text))
-	}
-
-	if truncated {
-		output = append(output, "", fmt.Sprintf("(Results truncated: showing %d of %d matches (%d hidden). Consider using a more specific path or pattern.)", limit, total, total-limit))
 	}
 
 	if partial {

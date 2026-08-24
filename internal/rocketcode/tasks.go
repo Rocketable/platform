@@ -237,6 +237,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		Observability:          f.observability,
 		CheckpointSink:         InertCheckpointSink{},
 	}
+	childFactory.configureSpill(child)
 
 	output := make(chan ChatResponse)
 
@@ -378,6 +379,7 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 		Observability:          f.observability,
 		CheckpointSink:         InertCheckpointSink{},
 	}
+	childFactory.configureSpill(child)
 
 	output := make(chan ChatResponse)
 
