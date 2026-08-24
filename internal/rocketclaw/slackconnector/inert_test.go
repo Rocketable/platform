@@ -50,6 +50,33 @@ func (inertThreadRouter) ThreadAgent(_ events.TextConversationTarget) (agent str
 func (inertThreadRouter) SubmitThreadReply(_ context.Context, _ events.TextConversationTarget, _ *events.InboundMessage) (bool, error) {
 	return false, nil
 }
+func (inertThreadRouter) SubmitWhenActive(_ context.Context, _ events.TextConversationTarget, _ *events.InboundMessage, _ harnessbridge.ActivationHook) (bool, error) {
+	return false, nil
+}
+func (inertThreadRouter) StashThreadQueueItem(context.Context, events.TextConversationTarget, *harnessbridge.ThreadQueueItem) error {
+	return errors.New("slack thread routing is not configured")
+}
+func (inertThreadRouter) ThreadQueueItems(context.Context, events.TextConversationTarget) ([]harnessbridge.ThreadQueueItem, error) {
+	return nil, errors.New("slack thread routing is not configured")
+}
+func (inertThreadRouter) ReorderThreadQueue(context.Context, events.TextConversationTarget, []string) error {
+	return errors.New("slack thread routing is not configured")
+}
+func (inertThreadRouter) DeleteThreadQueueItem(context.Context, events.TextConversationTarget, string) error {
+	return errors.New("slack thread routing is not configured")
+}
+func (inertThreadRouter) ScheduledMessages(context.Context, events.TextConversationTarget) (map[string]harnessbridge.ScheduledMessageState, error) {
+	return nil, errors.New("slack thread routing is not configured")
+}
+func (inertThreadRouter) DeleteScheduledMessage(context.Context, events.TextConversationTarget, string) error {
+	return errors.New("slack thread routing is not configured")
+}
+func (inertThreadRouter) ResetScheduledMessages(context.Context, events.TextConversationTarget) error {
+	return errors.New("slack thread routing is not configured")
+}
+func (inertThreadRouter) TurnPhase(events.TextConversationTarget) harnessbridge.ThreadTurnPhase {
+	return harnessbridge.ThreadTurnUnclassified
+}
 
 type inertOneOffCronjobs struct{}
 

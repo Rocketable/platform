@@ -289,6 +289,73 @@ func (d stateDAO) resetScheduledMessages(ctx context.Context, conversationID str
 	return nil
 }
 
+func (d stateDAO) putThreadQueueItem(ctx context.Context, id string, item *ThreadQueueItem) error {
+	_, err := d.db.ExecContext(ctx, `INSERT INTO thread_queue (queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, slack_channel, slack_ts) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT(queue_item_id) DO UPDATE SET conversation_id = excluded.conversation_id, message = excluded.message, principal = excluded.principal, stash_at_unix_ns = excluded.stash_at_unix_ns, position = excluded.position, slack_channel = excluded.slack_channel, slack_ts = excluded.slack_ts`, strings.TrimSpace(id), strings.TrimSpace(item.ConversationID), item.Message, item.Principal, timeUnixNano(item.StashAt), item.Position, item.SlackChannel, item.SlackTS)
+	if err != nil {
+		return fmt.Errorf("put thread queue item: %w", err)
+	}
+
+	return nil
+}
+
+func (d stateDAO) threadQueueForConversation(ctx context.Context, conversationID string) ([]ThreadQueueItem, error) {
+	rows, err := d.db.QueryContext(ctx, `SELECT queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, slack_channel, slack_ts FROM thread_queue WHERE conversation_id = $1 ORDER BY position, stash_at_unix_ns`, strings.TrimSpace(conversationID))
+	if err != nil {
+		return nil, fmt.Errorf("query thread queue: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var items []ThreadQueueItem
+
+	for rows.Next() {
+		item, err := scanThreadQueueItem(rows)
+		if err != nil {
+			return nil, err
+		}
+
+		items = append(items, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read thread queue: %w", err)
+	}
+
+	return items, nil
+}
+
+func (d stateDAO) deleteThreadQueueItem(ctx context.Context, id string) error {
+	if _, err := d.db.ExecContext(ctx, `DELETE FROM thread_queue WHERE queue_item_id = $1`, strings.TrimSpace(id)); err != nil {
+		return fmt.Errorf("delete thread queue item: %w", err)
+	}
+
+	return nil
+}
+
+func (d stateDAO) reorderThreadQueue(ctx context.Context, conversationID string, ids []string) error {
+	for i, id := range ids {
+		if _, err := d.db.ExecContext(ctx, `UPDATE thread_queue SET position = $1 WHERE queue_item_id = $2 AND conversation_id = $3`, i, strings.TrimSpace(id), strings.TrimSpace(conversationID)); err != nil {
+			return fmt.Errorf("reorder thread queue: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func scanThreadQueueItem(scanner rowScanner) (ThreadQueueItem, error) {
+	var (
+		item    ThreadQueueItem
+		stashAt int64
+	)
+
+	if err := scanner.Scan(&item.ID, &item.ConversationID, &item.Message, &item.Principal, &stashAt, &item.Position, &item.SlackChannel, &item.SlackTS); err != nil {
+		return ThreadQueueItem{}, fmt.Errorf("scan thread queue item: %w", err)
+	}
+
+	item.StashAt = timeFromUnixNano(stashAt)
+
+	return item, nil
+}
+
 func (d stateDAO) markRestartRequester(ctx context.Context, conversationID string) error {
 	if _, err := d.db.ExecContext(ctx, `INSERT INTO pending_restart_notifications (conversation_id) VALUES ($1) ON CONFLICT(conversation_id) DO NOTHING`, strings.TrimSpace(conversationID)); err != nil {
 		return fmt.Errorf("mark restart requester: %w", err)
@@ -372,7 +439,7 @@ func (d stateDAO) clearActiveTurn(ctx context.Context, turnID string) error {
 }
 
 func (d stateDAO) recoverableActiveTurns(ctx context.Context) ([]ActiveTurnState, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns FROM active_turns ORDER BY conversation_id, updated_at_unix_ns DESC, id`)
+	rows, err := d.db.QueryContext(ctx, `SELECT id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns, pending_steers_json FROM active_turns ORDER BY conversation_id, updated_at_unix_ns DESC, id`)
 	if err != nil {
 		return nil, fmt.Errorf("query recoverable active turns: %w", err)
 	}
@@ -417,7 +484,7 @@ func (d stateDAO) recoverableActiveTurns(ctx context.Context) ([]ActiveTurnState
 }
 
 func (d stateDAO) activeTurn(ctx context.Context, turnID string) (ActiveTurnState, bool, error) {
-	row := d.db.QueryRowContext(ctx, `SELECT id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns FROM active_turns WHERE id = $1`, strings.TrimSpace(turnID))
+	row := d.db.QueryRowContext(ctx, `SELECT id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns, pending_steers_json FROM active_turns WHERE id = $1`, strings.TrimSpace(turnID))
 
 	turn, err := scanActiveTurn(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -542,6 +609,28 @@ func scanCronSchedule(scanner rowScanner) (CronScheduleState, error) {
 	return schedule, nil
 }
 
+func (d stateDAO) setPendingSteers(ctx context.Context, conversationID string, steers []PendingSteer) error {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return errors.New("pending steers conversation ID is required")
+	}
+
+	if steers == nil {
+		steers = []PendingSteer{}
+	}
+
+	payload, err := marshalActiveTurnJSON(steers)
+	if err != nil {
+		return fmt.Errorf("marshal pending steers: %w", err)
+	}
+
+	if _, err := d.db.ExecContext(ctx, `UPDATE active_turns SET pending_steers_json = $1 WHERE conversation_id = $2`, payload, conversationID); err != nil {
+		return fmt.Errorf("persist pending steers: %w", err)
+	}
+
+	return nil
+}
+
 func scanActiveTurn(scanner rowScanner) (ActiveTurnState, error) {
 	var (
 		turn              ActiveTurnState
@@ -554,9 +643,10 @@ func scanActiveTurn(scanner rowScanner) (ActiveTurnState, error) {
 		sourceMetadata    string
 		createdAtUnixNano int64
 		updatedAtUnixNano int64
+		pendingSteers     string
 	)
 
-	if err := scanner.Scan(&turn.Checkpoint.TurnID, &turn.Checkpoint.ConversationKey, &turn.Checkpoint.Agent, &turn.Checkpoint.Model, &turn.Checkpoint.DisplayModel, &replayInput, &outputTrace, &tokenUsage, &turn.Checkpoint.ResponseID, &openCalls, &completedOutputs, &restartNotice, &sourceMetadata, &createdAtUnixNano, &updatedAtUnixNano); err != nil {
+	if err := scanner.Scan(&turn.Checkpoint.TurnID, &turn.Checkpoint.ConversationKey, &turn.Checkpoint.Agent, &turn.Checkpoint.Model, &turn.Checkpoint.DisplayModel, &replayInput, &outputTrace, &tokenUsage, &turn.Checkpoint.ResponseID, &openCalls, &completedOutputs, &restartNotice, &sourceMetadata, &createdAtUnixNano, &updatedAtUnixNano, &pendingSteers); err != nil {
 		return ActiveTurnState{}, fmt.Errorf("scan active turn: %w", err)
 	}
 
@@ -597,6 +687,14 @@ func scanActiveTurn(scanner rowScanner) (ActiveTurnState, error) {
 
 	if strings.TrimSpace(restartNotice) != "" {
 		turn.SourceMetadata["restart_notice_json"] = restartNotice
+	}
+
+	if strings.TrimSpace(pendingSteers) == "" {
+		pendingSteers = "[]"
+	}
+
+	if err := json.Unmarshal([]byte(pendingSteers), &turn.PendingSteers); err != nil {
+		return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "pending steers", err: err}
 	}
 
 	return turn, nil

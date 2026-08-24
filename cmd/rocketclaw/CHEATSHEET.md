@@ -14,7 +14,10 @@ Dollar commands are canonical. RocketClaw translates the listed emoji and Slack 
 | `⏩` | `$workflow <name> [args]` | Slack `:fast_forward_button:` | Slack configured channels | Runs a saved Starlark workflow as the foreground managed turn. | Bare `$workflow` lists names and descriptions. Retry after the active turn finishes. `$stop` ends a running workflow. |
 | `🎛` | `$agent`, `$ agent` | `:control_knobs:` | Slack root mentions and managed conversations | Selects the initial root agent or switches the persisted managed-thread agent. | Bare root `$agent` or managed-thread `$agent` opens the selector. Root `$agent name` registers a ready thread; `$agent name message` starts the selected agent with `message` as its first turn. In a managed thread, `🎛 agent-name` or `$agent name` switches. Only the user who sent the control message can use its selector. |
 | `🤖` |  | Slack `:robot_face:` | Slack | Processing/accepted marker. | Added when RocketClaw accepts a Slack-originated or relayed turn; removed after final response delivery. |
-| `⏳` |  | Slack `:hourglass_flowing_sand:` | Slack | Buffered or in-progress marker. | Marks stacked or buffered Slack messages. Removed when processing advances. |
+| `⏳` |  | Slack `:hourglass_flowing_sand:` | Slack | Steer waiting to inject. | Marks a mid-turn Slack Steer. Removed on injection. |
+| `✉️` | `$enqueue <message>` | Slack `:envelope:` | Slack managed threads | Stash a later turn. | During an active turn, stashes without placeholders. While idle, posts 📨 then starts that turn now. |
+| `📨` |  | Slack `:incoming_envelope:` | Slack | Enqueued message is starting. | Posted as the consume-card header before placeholders. |
+|  | `$queue` |  | Slack managed threads | Show and manage later work. | Two sections: enqueue stack and scheduled messages. Anyone allowed in the thread can reorder, remove, cancel, or reset. |
 | `📡` |  | Slack `:satellite_antenna:` | Slack | External MCP relay marker. | Added to Slack relay messages created from External MCP prompts. |
 | `💭` |  |  | Slack managed thread 💬 footer | Opens a private Side Ask modal for one question of a channel agent. | Footer button, not a dollar command or reaction. Modal-only; does not take the thread turn; unauthorized clicks are silent. |
 
@@ -33,7 +36,9 @@ Agent controls are consumed by RocketClaw and do not route to RocketCode as prom
 | Message with another human mention | Mention RocketClaw too when the message also pings another person, bot, broadcast target, or user group. | Managed-thread replies that ping someone else are suppressed unless RocketClaw is also mentioned. Raw unresolved `@word` text is not treated as a Slack ping. |
 | Agent selection or switch | Root `$agent [agent-name] [message]`, or `$agent [agent-name]` in a managed thread. | Bare `$agent` opens a Slack-native selector in either context. Root named selection uses a configured single-token agent name; the optional message starts its first turn. In a managed thread, the named form switches the persisted agent. `🎛` is an alias. |
 | One-off cron | `$cron daily` or `$cron daily.md`. | Any top-level cronjob can be started from any configured Slack channel. `🔂` is an alias. |
-| Saved workflow | `$workflow audit-routes src/routes`. | Works in an existing managed thread or in an authorized root app mention that creates one. Bare `$workflow` lists available workflows. If a turn is active, wait and retry. `$stop` terminates the run. |
+| Saved workflow | `$workflow audit-routes src/routes`. | Works in an existing managed thread or in an authorized root app mention that creates one. Bare `$workflow` lists available workflows. If a turn is active, wait and retry. A nonempty later-work queue is not busy. `$stop` terminates the run. |
+| Stash later work | `$enqueue write the changelog`. | During an active turn, marks ✉️ and stashes a separate later turn. While idle, posts 📨 then starts that message now even if the stack is already nonempty. Bare `$enqueue` posts command help. |
+| Review later work | `$queue`. | Posts enqueue and scheduled sections. Reorder or remove enqueue rows; cancel one scheduled message or reset all. Does not start a turn. |
 | External MCP conversation | Call `session_prompt` with an external conversation ID, agent, and configured channel. | The ID owns one private MCP session and one managed Slack session on the same thread. The MCP agent stays fixed. MCP history copies into managed history; Slack history does not copy back. |
 
 ## Development MCP
@@ -171,7 +176,9 @@ For general `permission` syntax, action values, guardrails, and approval reviewe
 | `🔂` | `:repeat_one:` | Cron one-off request prefix. |
 | `🎛` | `:control_knobs:` | Managed conversation agent switch command. |
 | `🤖` | `:robot_face:`, `robot_face` | Slack processing/accepted marker. |
-| `⏳` | `:hourglass_flowing_sand:`, `hourglass_flowing_sand` | Slack buffered or in-progress marker. |
+| `⏳` | `:hourglass_flowing_sand:`, `hourglass_flowing_sand` | Slack Steer waiting to inject. |
+| `✉️` | `:envelope:`, `envelope` | Waiting Enqueued Slack Message. |
+| `📨` | `:incoming_envelope:` | Enqueued Slack Message consume card. |
 | `📡` | `:satellite_antenna:`, `satellite_antenna` | Slack External MCP relay marker. |
 
 ## Agent Frontmatter And Permissions

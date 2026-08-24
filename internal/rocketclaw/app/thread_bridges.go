@@ -24,7 +24,9 @@ type directBridge interface {
 	SubmitWhenActive(ctx context.Context, msg *events.InboundMessage, activation harnessbridge.ActivationHook) error
 	RecoverActiveTurn(ctx context.Context, turn *harnessbridge.ActiveTurnState) error
 	InterruptActiveTurn() *events.InboundMessage
+	TurnPhase() harnessbridge.ThreadTurnPhase
 	SwitchAgent(agent string)
+	PickLaterWork(ctx context.Context) error
 }
 
 type managedThreadBridge struct {
@@ -158,6 +160,10 @@ func (m *threadBridgeManager) StartActiveGoals(recovering map[string]bool) error
 }
 
 func (m *threadBridgeManager) SubmitThreadReply(ctx context.Context, target events.TextConversationTarget, inbound *events.InboundMessage) (bool, error) {
+	return m.SubmitWhenActive(ctx, target, inbound, harnessbridge.NoopActivationHook)
+}
+
+func (m *threadBridgeManager) SubmitWhenActive(ctx context.Context, target events.TextConversationTarget, inbound *events.InboundMessage, activation harnessbridge.ActivationHook) (bool, error) {
 	conversationID := m.text.conversationID(target)
 	if conversationID == "" {
 		return false, nil
@@ -172,9 +178,7 @@ func (m *threadBridgeManager) SubmitThreadReply(ctx context.Context, target even
 		return false, nil
 	}
 
-	cronCreated := thread.CreatedBy == harnessbridge.ThreadCreatedByCron
-
-	if cronCreated {
+	if thread.CreatedBy == harnessbridge.ThreadCreatedByCron {
 		disableStartNewThread(inbound)
 	}
 
@@ -187,11 +191,103 @@ func (m *threadBridgeManager) SubmitThreadReply(ctx context.Context, target even
 
 	inbound.ConversationID = conversationID
 
-	if err := managed.bridge.Submit(ctx, inbound); err != nil {
+	if err := managed.bridge.SubmitWhenActive(ctx, inbound, activation); err != nil {
 		return true, fmt.Errorf("submit %s thread reply: %w", m.text.label, err)
 	}
 
 	return true, nil
+}
+
+func (m *threadBridgeManager) StashThreadQueueItem(_ context.Context, target events.TextConversationTarget, item *harnessbridge.ThreadQueueItem) error {
+	conversationID := m.text.conversationID(target)
+	item.ConversationID = conversationID
+
+	existing, err := m.store.ThreadQueueForConversation(conversationID)
+	if err != nil {
+		return fmt.Errorf("list thread queue: %w", err)
+	}
+
+	item.Position = len(existing)
+
+	if err := m.store.PutThreadQueueItem(item.ID, item); err != nil {
+		return fmt.Errorf("stash thread queue item: %w", err)
+	}
+
+	return nil
+}
+
+func (m *threadBridgeManager) ThreadQueueItems(_ context.Context, target events.TextConversationTarget) ([]harnessbridge.ThreadQueueItem, error) {
+	items, err := m.store.ThreadQueueForConversation(m.text.conversationID(target))
+	if err != nil {
+		return nil, fmt.Errorf("list thread queue: %w", err)
+	}
+
+	return items, nil
+}
+
+func (m *threadBridgeManager) ReorderThreadQueue(_ context.Context, target events.TextConversationTarget, ids []string) error {
+	if err := m.store.ReorderThreadQueue(m.text.conversationID(target), ids); err != nil {
+		return fmt.Errorf("reorder thread queue: %w", err)
+	}
+
+	return nil
+}
+
+func (m *threadBridgeManager) DeleteThreadQueueItem(_ context.Context, target events.TextConversationTarget, id string) error {
+	conversationID := m.text.conversationID(target)
+
+	items, err := m.store.ThreadQueueForConversation(conversationID)
+	if err != nil {
+		return fmt.Errorf("list thread queue: %w", err)
+	}
+
+	for i := range items {
+		if items[i].ID == id {
+			if err := m.store.DeleteThreadQueueItem(id); err != nil {
+				return fmt.Errorf("delete thread queue item: %w", err)
+			}
+
+			return nil
+		}
+	}
+
+	return nil
+}
+
+func (m *threadBridgeManager) ScheduledMessages(_ context.Context, target events.TextConversationTarget) (map[string]harnessbridge.ScheduledMessageState, error) {
+	messages, err := m.store.ScheduledMessagesForConversation(m.text.conversationID(target))
+	if err != nil {
+		return nil, fmt.Errorf("list scheduled messages: %w", err)
+	}
+
+	return messages, nil
+}
+
+func (m *threadBridgeManager) DeleteScheduledMessage(_ context.Context, target events.TextConversationTarget, id string) error {
+	conversationID := m.text.conversationID(target)
+
+	messages, err := m.store.ScheduledMessagesForConversation(conversationID)
+	if err != nil {
+		return fmt.Errorf("list scheduled messages: %w", err)
+	}
+
+	if _, ok := messages[id]; !ok {
+		return nil
+	}
+
+	if err := m.store.DeleteScheduledMessage(id); err != nil {
+		return fmt.Errorf("delete scheduled message: %w", err)
+	}
+
+	return nil
+}
+
+func (m *threadBridgeManager) ResetScheduledMessages(_ context.Context, target events.TextConversationTarget) error {
+	if err := m.store.ResetScheduledMessages(m.text.conversationID(target)); err != nil {
+		return fmt.Errorf("reset scheduled messages: %w", err)
+	}
+
+	return nil
 }
 
 func (m *threadBridgeManager) SwitchThreadAgent(target events.TextConversationTarget, agent string) (bool, error) {
@@ -450,6 +546,33 @@ func (m *threadBridgeManager) InterruptThread(target events.TextConversationTarg
 	return managed.bridge.InterruptActiveTurn(), nil
 }
 
+func (m *threadBridgeManager) PickLaterWork(ctx context.Context, conversationID string) error {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return nil
+	}
+
+	thread, ok, err := m.store.Thread(conversationID)
+	if err != nil {
+		return fmt.Errorf("load later-work thread: %w", err)
+	}
+
+	if !ok {
+		return nil
+	}
+
+	managed, _, err := m.ensureThreadBridge(conversationID, thread, m.text.outputTargets, false)
+	if err != nil {
+		return err
+	}
+
+	if err := managed.bridge.PickLaterWork(ctx); err != nil {
+		return fmt.Errorf("pick later work: %w", err)
+	}
+
+	return nil
+}
+
 func (m *threadBridgeManager) InterruptConversation(conversationID string) *events.InboundMessage {
 	m.mu.Lock()
 	managed := m.bridges[conversationID]
@@ -460,6 +583,19 @@ func (m *threadBridgeManager) InterruptConversation(conversationID string) *even
 	}
 
 	return managed.bridge.InterruptActiveTurn()
+}
+
+func (m *threadBridgeManager) TurnPhase(target events.TextConversationTarget) harnessbridge.ThreadTurnPhase {
+	conversationID := m.text.conversationID(target)
+	m.mu.Lock()
+	managed := m.bridges[conversationID]
+	m.mu.Unlock()
+
+	if managed == nil {
+		return harnessbridge.ThreadTurnUnclassified
+	}
+
+	return managed.bridge.TurnPhase()
 }
 
 func (m *threadBridgeManager) RegisterCronThread(_ context.Context, target events.TextConversationTarget, agent string) error {

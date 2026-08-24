@@ -17,8 +17,11 @@ import (
 )
 
 type fakeStartupRecoveryStore struct {
-	turns   []harnessbridge.ActiveTurnState
-	deleted []string
+	turns    []harnessbridge.ActiveTurnState
+	deleted  []string
+	stopped  []string
+	errClear error
+	errStop  error
 }
 
 func (f *fakeStartupRecoveryStore) RecoverableActiveTurns(context.Context) ([]harnessbridge.ActiveTurnState, error) {
@@ -26,7 +29,21 @@ func (f *fakeStartupRecoveryStore) RecoverableActiveTurns(context.Context) ([]ha
 }
 
 func (f *fakeStartupRecoveryStore) ClearActiveTurn(_ context.Context, turnID string) error {
+	if f.errClear != nil {
+		return f.errClear
+	}
+
 	f.deleted = append(f.deleted, turnID)
+
+	return nil
+}
+
+func (f *fakeStartupRecoveryStore) StopGoal(conversationID string) error {
+	if f.errStop != nil {
+		return f.errStop
+	}
+
+	f.stopped = append(f.stopped, conversationID)
 
 	return nil
 }
@@ -57,7 +74,7 @@ func TestRecoverStartupActiveTurnsSelectsAtMostOnePerConversation(t *testing.T) 
 		handed = append(handed, *turn)
 
 		return nil
-	}, slog.New(slog.DiscardHandler))
+	}, func(string, []harnessbridge.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"turn-old"}, store.deleted)
@@ -75,7 +92,7 @@ func TestRecoverStartupActiveTurnsAcceptsPrivateExternalMCPConversation(t *testi
 	require.NoError(t, recoverStartupActiveTurns(t.Context(), store, func(_ context.Context, turn *harnessbridge.ActiveTurnState) error {
 		handed = append(handed, *turn)
 		return nil
-	}, slog.New(slog.DiscardHandler)))
+	}, func(string, []harnessbridge.PendingSteer) {}, slog.New(slog.DiscardHandler)))
 
 	require.Len(t, handed, 1)
 	assert.Equal(t, "external_mcp:planner:private", handed[0].Checkpoint.ConversationKey)
@@ -94,7 +111,7 @@ func TestRecoverStartupActiveTurnsDeletesCompetingRowsAfterCorruptSelectedRow(t 
 		handoffCalled = true
 
 		return nil
-	}, slog.New(slog.DiscardHandler))
+	}, func(string, []harnessbridge.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, err)
 	require.True(t, handoffCalled)
@@ -111,7 +128,7 @@ func TestRecoverStartupActiveTurnsDeletesCorruptRows(t *testing.T) {
 		handoffCalled = true
 
 		return nil
-	}, slog.New(slog.DiscardHandler))
+	}, func(string, []harnessbridge.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, err)
 	require.False(t, handoffCalled)
@@ -127,7 +144,7 @@ func TestRecoverStartupActiveTurnsDeletesInvalidRows(t *testing.T) {
 		handoffCalled = true
 
 		return nil
-	}, slog.New(slog.DiscardHandler))
+	}, func(string, []harnessbridge.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, err)
 	require.False(t, handoffCalled)
@@ -145,7 +162,7 @@ func TestRecoverStartupActiveTurnsHandsOffRecoveredReplay(t *testing.T) {
 		handed = *turn
 
 		return nil
-	}, slog.New(slog.DiscardHandler))
+	}, func(string, []harnessbridge.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, err)
 	require.Empty(t, store.deleted)
@@ -167,10 +184,72 @@ func TestRecoverStartupActiveTurnsDeletesPermanentHandoffFailures(t *testing.T) 
 
 	err := recoverStartupActiveTurns(context.Background(), store, func(context.Context, *harnessbridge.ActiveTurnState) error {
 		return errHandoff
-	}, slog.New(slog.DiscardHandler))
+	}, func(string, []harnessbridge.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"turn-1"}, store.deleted)
+	require.Equal(t, []string{"conversation-1"}, store.stopped)
+}
+
+type fakeSteerSurface struct {
+	restored  []string
+	discarded []int
+}
+
+func (f *fakeSteerSurface) RestorePendingSteers(conversationID string, _ []harnessbridge.PendingSteer) {
+	f.restored = append(f.restored, conversationID)
+}
+
+func (f *fakeSteerSurface) DiscardPendingSteers(context.Context, []harnessbridge.PendingSteer) {
+	f.discarded = append(f.discarded, 1)
+}
+
+func TestApplyStartupSteerRecoveryRestoresThenPicks(t *testing.T) {
+	slack := &fakeSteerSurface{}
+	var picked []string
+	err := applyStartupSteerRecovery(t.Context(), slack, func(_ context.Context, conversationID string) error {
+		picked = append(picked, conversationID)
+		return nil
+	}, []harnessbridge.ActiveTurnState{startupRecoveryTurn("turn-1", "conversation-1", nil)}, []cannotResumeItem{{conversationID: "conversation-2", steers: []harnessbridge.PendingSteer{{Text: "later"}}}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"conversation-1"}, slack.restored)
+	assert.Equal(t, []int{1}, slack.discarded)
+	assert.Equal(t, []string{"conversation-2"}, picked)
+	err = applyStartupSteerRecovery(t.Context(), slack, func(context.Context, string) error {
+		return errors.New("pick failed")
+	}, nil, []cannotResumeItem{{conversationID: "conversation-2"}})
+	require.ErrorContains(t, err, "pick later work after unresumable turn")
+}
+
+func TestCannotResumeActiveTurnWrapsStoreErrors(t *testing.T) {
+	turn := startupRecoveryTurn("turn-1", "conversation-1", nil)
+	err := cannotResumeActiveTurn(t.Context(), &fakeStartupRecoveryStore{errClear: errors.New("clear failed")}, &turn, func(string, []harnessbridge.PendingSteer) {})
+	require.ErrorContains(t, err, "clear unresumable active turn")
+	err = cannotResumeActiveTurn(t.Context(), &fakeStartupRecoveryStore{errStop: errors.New("stop failed")}, &turn, func(string, []harnessbridge.PendingSteer) {})
+	require.ErrorContains(t, err, "stop goal after unresumable turn")
+}
+
+func TestRecoverStartupActiveTurnsCannotResumeStopsGoalAndReportsSteers(t *testing.T) {
+	store := &fakeStartupRecoveryStore{turns: []harnessbridge.ActiveTurnState{startupRecoveryTurn("turn-1", "conversation-1", []json.RawMessage{json.RawMessage(`{`)})}}
+	store.turns[0].PendingSteers = []harnessbridge.PendingSteer{{Text: "don't touch the database", SlackChannel: "C123", SlackTS: "222.333", SlackThreadTS: "111.222"}}
+
+	var (
+		gotID     string
+		gotSteers []harnessbridge.PendingSteer
+	)
+
+	err := recoverStartupActiveTurns(context.Background(), store, func(context.Context, *harnessbridge.ActiveTurnState) error {
+		t.Fatal("handoff should not run")
+		return nil
+	}, func(conversationID string, steers []harnessbridge.PendingSteer) {
+		gotID = conversationID
+		gotSteers = steers
+	}, slog.New(slog.DiscardHandler))
+
+	require.NoError(t, err)
+	assert.Equal(t, "conversation-1", gotID)
+	assert.Equal(t, store.turns[0].PendingSteers, gotSteers)
+	assert.Equal(t, []string{"conversation-1"}, store.stopped)
 }
 
 func TestRecoverStartupActiveTurnsLeavesRowsOnCanceledHandoff(t *testing.T) {
@@ -181,7 +260,7 @@ func TestRecoverStartupActiveTurnsLeavesRowsOnCanceledHandoff(t *testing.T) {
 
 		err := recoverStartupActiveTurns(context.Background(), store, func(context.Context, *harnessbridge.ActiveTurnState) error {
 			return errHandoff
-		}, slog.New(slog.DiscardHandler))
+		}, func(string, []harnessbridge.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
 		require.ErrorIs(t, err, errHandoff)
 		require.Empty(t, store.deleted)
@@ -198,7 +277,7 @@ func TestRecoverStartupActiveTurnsLeavesRowsWhenBridgeStopped(t *testing.T) {
 
 	err := recoverStartupActiveTurns(context.Background(), store, func(ctx context.Context, turn *harnessbridge.ActiveTurnState) error {
 		return bridge.RecoverActiveTurn(ctx, turn)
-	}, slog.New(slog.DiscardHandler))
+	}, func(string, []harnessbridge.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
 	require.Error(t, err)
 	require.True(t, harnessbridge.IsBridgeStopped(err))
@@ -219,7 +298,7 @@ func TestRecoverStartupActiveTurnsDeletesRawCronRows(t *testing.T) {
 		handed = append(handed, *turn)
 
 		return nil
-	}, slog.New(slog.DiscardHandler))
+	}, func(string, []harnessbridge.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"turn-cron", "turn-one-off"}, store.deleted)

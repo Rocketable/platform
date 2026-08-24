@@ -174,9 +174,9 @@ func TestRequestTextRouterRoutesOperations(t *testing.T) {
 				result.Created = true
 			case events.RequestTextThreadAgent:
 				result.Agent, result.Handled = "main", true
-			case events.RequestTextSwitchThreadAgent, events.RequestTextSubmitThreadReply:
+			case events.RequestTextSwitchThreadAgent, events.RequestTextSubmitThreadReply, events.RequestTextSubmitWhenActive:
 				result.Handled = true
-			case events.RequestTextStartThread, events.RequestTextStartGoal, events.RequestTextStartWorkflow, events.RequestTextRegisterCronThread, events.RequestTextSubmitExternalMCP:
+			case events.RequestTextStartThread, events.RequestTextStartGoal, events.RequestTextStartWorkflow, events.RequestTextRegisterCronThread, events.RequestTextSubmitExternalMCP, events.RequestTextStashThreadQueue, events.RequestTextListThreadQueue, events.RequestTextReorderThreadQueue, events.RequestTextDeleteThreadQueueItem, events.RequestTextListScheduledMessages, events.RequestTextDeleteScheduledMessage, events.RequestTextResetScheduledMessages:
 			}
 
 			request.Response <- events.Response{Payload: result}
@@ -217,6 +217,19 @@ func TestRequestTextRouterRoutesOperations(t *testing.T) {
 		handled, err = router.SubmitThreadReply(t.Context(), target, nil)
 		require.NoError(t, err)
 		require.True(t, handled)
+		handled, err = router.SubmitWhenActive(t.Context(), target, nil, harnessbridge.NoopActivationHook)
+		require.NoError(t, err)
+		require.True(t, handled)
+		require.NoError(t, router.StashThreadQueueItem(t.Context(), target, &harnessbridge.ThreadQueueItem{ID: "q1", Message: "later"}))
+		_, err = router.ThreadQueueItems(t.Context(), target)
+		require.NoError(t, err)
+		require.NoError(t, router.ReorderThreadQueue(t.Context(), target, []string{"q1"}))
+		require.NoError(t, router.DeleteThreadQueueItem(t.Context(), target, "q1"))
+		_, err = router.ScheduledMessages(t.Context(), target)
+		require.NoError(t, err)
+		require.NoError(t, router.DeleteScheduledMessage(t.Context(), target, "s1"))
+		require.NoError(t, router.ResetScheduledMessages(t.Context(), target))
+		require.Equal(t, harnessbridge.ThreadTurnUnclassified, router.TurnPhase(target))
 
 		cancel()
 		synctest.Wait()

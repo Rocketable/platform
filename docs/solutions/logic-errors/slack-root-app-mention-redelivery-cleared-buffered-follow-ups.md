@@ -16,6 +16,7 @@ tags:
   - app-mention
   - redelivery
   - buffered-follow-up
+  - slack-steer
   - message-loss
   - stack-state
 ---
@@ -24,18 +25,18 @@ tags:
 
 ## Problem
 
-RocketClaw could lose a Slack follow-up when Slack redelivered the root app mention while its first turn was still active. The root handler begins the thread stack before starting the root turn, and a follow-up arriving during that turn is supposed to remain buffered until completion (`internal/rocketclaw/slackconnector/connector.go:2422-2470`, `internal/rocketclaw/slackconnector/connector.go:2195-2219`).
+RocketClaw could lose a mid-turn Slack message when Slack redelivered the root app mention while its first turn was still active. The root handler begins the thread stack before starting the root turn, and a follow-up arriving during that turn is supposed to remain on the stack (`internal/rocketclaw/slackconnector/connector.go:2449-2472`). Mid-turn plains are now Slack Steers (hourglass, same turn), not next-turn Buffered Follow-Ups.
 
 ## Symptoms
 
-- A follow-up could be accepted and marked as buffered, then silently disappear after the root app mention was delivered again.
-- The root response could complete normally while no buffered follow-up was submitted because redelivery had replaced the stack contents with an empty slice (`internal/rocketclaw/slackconnector/connector.go:1665-1683`).
+- A follow-up could be accepted onto the stack, then silently disappear after the root app mention was delivered again.
+- The root response could complete normally while the stack had been replaced with an empty slice.
 
 ## What Didn't Work
 
-The original stack initialization unconditionally assigned `nil` to `c.stacks[key]`. That treated every root delivery as a new stack, even when the key already represented an active turn with buffered messages.
+The original stack initialization unconditionally assigned `nil` to `c.stacks[key]`. That treated every root delivery as a new stack, even when the key already represented an active turn with pending messages.
 
-Relying on later promotion could not recover the message. Promotion reads the current slice; after the reset makes it empty, it deletes the stack and returns without submitting anything (`internal/rocketclaw/slackconnector/connector.go:1665-1683`).
+Relying on later promotion could not recover the message. After the reset makes the slice empty, there is nothing left to inject or enqueue.
 
 ## Solution
 
@@ -51,25 +52,23 @@ func (c *Connector) beginSlackStack(key string) {
 }
 ```
 
-The regression test `TestHandleAppMentionEventPreservesBufferedReplyAcrossRootRedelivery` buffers a distinct follow-up, redelivers the same root event from the router start callback, verifies that the stack still contains the follow-up, then sends a completed root response and verifies that the follow-up is promoted (`internal/rocketclaw/slackconnector/connector_test.go:7511-7562`).
+The regression test `TestHandleAppMentionEventPreservesBufferedReplyAcrossRootRedelivery` buffers a distinct follow-up, redelivers the same root event from the router start callback, and verifies that the stack still contains that text and that turn completion does not wipe it or concatenate it into a next-turn submit (`internal/rocketclaw/slackconnector/connector_test.go:9575-9628`).
 
 ## Why This Works
 
-The stack map uses two related states: an absent key means no active stack, while a present key means an active turn; the slice value contains follow-ups received during that turn. `bufferSlackStack` relies on key presence as the active-state check and appends to the existing slice (`internal/rocketclaw/slackconnector/connector.go:1649-1663`).
+The stack map uses two related states: an absent key means no active stack, while a present key means an active turn; the slice value contains Slack Steers received during that turn. `bufferSlackStack` relies on key presence as the active-state check and appends to the existing slice (`internal/rocketclaw/slackconnector/connector.go:2457-2472`).
 
-Preserving an existing key therefore preserves the buffered messages without introducing a second redelivery mechanism. On the normal completion path, after progress cleanup succeeds and the turn has a non-empty ID and thread key, `finishResponse` calls `promoteSlackStack` for the same thread key. Promotion removes buffered reactions, combines buffered messages, and submits the resulting inbound message (`internal/rocketclaw/slackconnector/connector.go:875-915`, `internal/rocketclaw/slackconnector/connector.go:1685-1703`).
-
-The fix and regression were merged in [PR #1](https://github.com/Rocketable/platform/pull/1).
+Preserving an existing key therefore preserves pending steers without introducing a second redelivery mechanism. `promoteSlackStack` no longer concatenates stack text into a next turn. It only deletes an empty sentinel (`internal/rocketclaw/slackconnector/connector.go:2474-2486`). Later work lives on the Thread Queue. Live steers inject after the current tool batch, or become Enqueued Slack Messages if the turn is already writing the final answer.
 
 ## Prevention
 
-- Treat stack initialization as an idempotent state transition: create a missing key, but never overwrite an active key's buffered slice.
-- Preserve the distinction between stack activity and stack contents; key presence is the active sentinel, and slice entries are queued messages (`internal/rocketclaw/slackconnector/connector.go:1649-1655`).
+- Treat stack initialization as an idempotent state transition: create a missing key, but never overwrite an active key's pending-steer slice.
+- Preserve the distinction between stack activity and stack contents; key presence is the active sentinel, and slice entries are pending Slack Steers (`internal/rocketclaw/slackconnector/connector.go:2457-2463`).
 - Treat redelivery as at-least-once delivery of the existing logical turn, not as permission to create a fresh lifecycle state.
-- Keep the lifecycle states distinct: an absent key is inactive, a present empty slice is active with no follow-up, a present non-empty slice is active with buffered work, and deletion is the terminal handoff.
+- Keep the lifecycle states distinct: an absent key is inactive, a present empty slice is active with no pending steer, a present non-empty slice is active with pending steers, and deletion is the terminal handoff.
 - Keep stack existence, buffering, preservation, and removal under the connector's mutex so the lifecycle transition remains atomic.
-- Keep a regression sequence that exercises buffering, root redelivery, completion, and promotion in that order. Extend it when the buffering contract changes to cover multiple follow-ups and ordering.
-- Assert the exact follow-up text and both buffered-reaction operations, not only that the root turn completed.
+- Keep a regression sequence that exercises buffering, root redelivery, and completion in that order. Do not reintroduce concat-on-promote assertions.
+- Assert the exact follow-up text and the hourglass reaction, not only that the root turn completed.
 
 ## Related Issues
 

@@ -14,6 +14,8 @@ The canonical commands are:
 | --- | --- | --- |
 | `$goal <objective>` | `🏁`, `🔁` | Start a goal using the existing goal parameter grammar. |
 | `$stop` | `🛑`, `⏹️` | Stop the active managed-thread turn. |
+| `$enqueue <message>` |  | Stash a later turn. During an active turn this only stashes. While idle it starts that message now. Bare `$enqueue` posts missing-arg help. |
+| `$queue` |  | Show the enqueue stack and scheduled messages. Does not start a turn. |
 | `$cron <job>` | `🔂` | Run an existing one-off cron request. |
 | `$agent [name]` | `🎛` | Select the initial agent for a root thread, switch agents, or open the existing selector in an eligible managed thread. |
 
@@ -29,7 +31,7 @@ Slack emoji or colon alias -> canonical dollar text -> command parser -> context
 
 Dollar commands never translate back into emoji syntax. Goal grammar receives the canonical goal arguments, not an emoji-prefixed string. Emoji and dollar forms produce identical stored objective text, queue behavior, placeholders, routing, and feedback.
 
-Managed threads allow all four commands. Root app mentions allow goal and cron plus `$agent` selection. Bare root `$agent` registers a ready thread with the channel's first configured agent and opens the existing selector; selecting an option switches the persisted agent. A named root agent without a message registers a ready thread; a named root agent with a message starts the selected agent with the remainder as its first user-authored prompt. Stop and other unavailable root commands use the existing help behavior. Dollar commands are consumed before placeholders, buffering, or ordinary prompt submission, so command syntax is never sent to RocketCode.
+Managed threads allow every listed command. Root app mentions allow goal, cron, `$enqueue`, `$queue`, and `$agent` selection. Bare root `$agent` registers a ready thread with the channel's first configured agent and opens the existing selector; selecting an option switches the persisted agent. A named root agent without a message registers a ready thread; a named root agent with a message starts the selected agent with the remainder as its first user-authored prompt. Stop and other unavailable root commands use the existing help behavior. Dollar commands are consumed before placeholders, steer, enqueue, or ordinary prompt submission, so command syntax is never sent to RocketCode.
 
 ## Help And Errors
 
@@ -39,6 +41,8 @@ Bare `$`, unknown command names, commands unavailable in the current Slack conte
 | --- | --- | --- |
 | `$goal <objective>` | `🏁` | Start a goal |
 | `$stop` | `🛑` | Stop the active turn |
+| `$enqueue <message>` | `✉️` | Stash a later turn |
+| `$queue` |  | Show later work and scheduled messages |
 | `$cron <job>` | `🔂` | Run a cron job |
 | `$agent [name]` | `🎛` | Switch or select an agent |
 

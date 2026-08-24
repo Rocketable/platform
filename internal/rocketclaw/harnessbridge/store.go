@@ -61,8 +61,29 @@ type ExternalMCPSessionState struct {
 type ActiveTurnState struct {
 	Checkpoint     harness.ActiveTurnCheckpoint `json:"checkpoint"`
 	SourceMetadata map[string]string            `json:"source_metadata,omitempty"`
+	PendingSteers  []PendingSteer               `json:"pending_steers,omitempty"`
 	CreatedAt      time.Time                    `json:"created_at,omitzero"`
 	UpdatedAt      time.Time                    `json:"updated_at,omitzero"`
+}
+
+// PendingSteer is one uninjected Slack Steer copied onto the active-turn row.
+type PendingSteer struct {
+	Text, Principal, SlackChannel, SlackTS, SlackThreadTS string
+}
+
+// PendingSteersSink copies pending Slack Steers onto the active-turn row.
+// The zero value is inert.
+type PendingSteersSink struct {
+	Set func(conversationID string, steers []PendingSteer) error
+}
+
+// Persist copies steers onto the active-turn row, or does nothing when unset.
+func (s PendingSteersSink) Persist(conversationID string, steers []PendingSteer) {
+	if s.Set == nil {
+		return
+	}
+
+	_ = s.Set(conversationID, steers)
 }
 
 // ScheduledMessageState records one pending delayed system prompt.
@@ -73,6 +94,18 @@ type ScheduledMessageState struct {
 	DueAt          time.Time     `json:"due_at,omitzero"`
 	Recurring      bool          `json:"recurring,omitempty"`
 	Interval       time.Duration `json:"interval,omitempty"`
+}
+
+// ThreadQueueItem is one persisted Enqueued Slack Message.
+type ThreadQueueItem struct {
+	ID             string
+	ConversationID string
+	Message        string
+	Principal      string
+	StashAt        time.Time
+	Position       int
+	SlackChannel   string
+	SlackTS        string
 }
 
 // CronScheduleState records one observed scheduled cron trigger.
@@ -367,6 +400,7 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 			`DELETE FROM session_entries WHERE conversation_id = $1`,
 			`DELETE FROM active_turns WHERE conversation_id = $1`,
 			`DELETE FROM scheduled_messages WHERE conversation_id = $1`,
+			`DELETE FROM thread_queue WHERE conversation_id = $1`,
 			`DELETE FROM pending_restart_notifications WHERE conversation_id = $1`,
 			`DELETE FROM conversation_goals WHERE conversation_id = $1`,
 		} {
@@ -422,6 +456,11 @@ func (s *SessionService) ClearCompletedActiveTurn(ctx context.Context, turnID st
 // ClearActiveTurn removes an active root-turn checkpoint.
 func (s *SessionService) ClearActiveTurn(ctx context.Context, turnID string) error {
 	return stateDAO{db: s.db}.clearActiveTurn(ctx, turnID)
+}
+
+// SetPendingSteers copies uninjected Slack Steers onto the conversation's active-turn row.
+func (s *SessionService) SetPendingSteers(conversationID string, steers []PendingSteer) error {
+	return stateDAO{db: s.db}.setPendingSteers(context.Background(), conversationID, steers)
 }
 
 // RecoverableActiveTurns returns remaining active-turn handoff rows for startup recovery.
@@ -503,6 +542,26 @@ func (s *SessionService) DeleteScheduledMessage(id string) error {
 // ResetScheduledMessages deletes pending scheduled messages for one conversation.
 func (s *SessionService) ResetScheduledMessages(conversationID string) error {
 	return stateDAO{db: s.db}.resetScheduledMessages(context.Background(), conversationID)
+}
+
+// PutThreadQueueItem persists one Enqueued Slack Message.
+func (s *SessionService) PutThreadQueueItem(id string, item *ThreadQueueItem) error {
+	return stateDAO{db: s.db}.putThreadQueueItem(context.Background(), id, item)
+}
+
+// ThreadQueueForConversation returns Enqueued Slack Messages in stack order.
+func (s *SessionService) ThreadQueueForConversation(conversationID string) ([]ThreadQueueItem, error) {
+	return stateDAO{db: s.db}.threadQueueForConversation(context.Background(), conversationID)
+}
+
+// DeleteThreadQueueItem deletes one Enqueued Slack Message.
+func (s *SessionService) DeleteThreadQueueItem(id string) error {
+	return stateDAO{db: s.db}.deleteThreadQueueItem(context.Background(), id)
+}
+
+// ReorderThreadQueue sets stack positions from the given ids, first to last.
+func (s *SessionService) ReorderThreadQueue(conversationID string, ids []string) error {
+	return stateDAO{db: s.db}.reorderThreadQueue(context.Background(), conversationID, ids)
 }
 
 // ClaimScheduledMessage verifies one due scheduled message and advances recurring messages atomically.
@@ -929,6 +988,10 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 
 		if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_goals WHERE conversation_id = $1`, conversationID); err != nil {
 			return PruneStateStats{}, fmt.Errorf("delete stale conversation goal: %w", err)
+		}
+
+		if _, err := tx.ExecContext(ctx, `DELETE FROM thread_queue WHERE conversation_id = $1`, conversationID); err != nil {
+			return PruneStateStats{}, fmt.Errorf("delete stale thread queue: %w", err)
 		}
 
 		if _, err := tx.ExecContext(ctx, `DELETE FROM managed_conversations WHERE conversation_id = $1`, conversationID); err != nil {

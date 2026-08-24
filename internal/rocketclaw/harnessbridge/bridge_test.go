@@ -271,6 +271,10 @@ func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
 	assert.Equal(t, 2, goal.TurnsUsed)
 }
 
+func TestBridgeTurnPhaseUnclassifiedWithoutLooper(t *testing.T) {
+	assert.Equal(t, ThreadTurnUnclassified, (&Bridge{}).TurnPhase())
+}
+
 func TestFinishGoalTurnHumanResteeringDoesNotConsumeBudget(t *testing.T) {
 	bridge := newGoalAccountingTestBridge(t)
 	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "ship it", "", 3, "starter-team", "starter-user"))
@@ -456,6 +460,166 @@ func TestInterruptActiveTurnSignalsAndClearsQueue(t *testing.T) {
 	assert.Empty(t, bridge.requestCh)
 	assert.True(t, bridge.activeTurnInterrupted)
 	assert.Equal(t, os.Interrupt, <-interrupts)
+}
+
+func TestInterruptActiveTurnDoesNotDeleteThreadQueueOrScheduled(t *testing.T) {
+	store := newTestSessionService(t)
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	require.NoError(t, store.PutThreadQueueItem("q1", &ThreadQueueItem{ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0}))
+	require.NoError(t, store.PutScheduledMessage("s1", &ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "due later", DueAt: time.Date(2000, 1, 1, 4, 0, 0, 0, time.UTC)}))
+
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+
+	queued := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "live", false)
+	bridge.requestCh <- bridgeRequest{inbound: queued, activation: NoopActivationHook}
+
+	bridge.InterruptActiveTurn()
+
+	assert.Empty(t, bridge.requestCh)
+
+	items, err := store.ThreadQueueForConversation(conversationID)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "changelog", items[0].Message)
+
+	messages, err := store.ScheduledMessagesForConversation(conversationID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "due later", messages["s1"].Message)
+}
+
+func TestPickLaterWorkPrefersEarlierStashOverLaterDue(t *testing.T) {
+	store := newTestSessionService(t)
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	stashAt := time.Date(2000, 1, 1, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, store.PutThreadQueueItem("q1", &ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "A", Principal: "U1", StashAt: stashAt, Position: 0, SlackChannel: "C123", SlackTS: "111.222"}))
+	require.NoError(t, store.PutScheduledMessage("s1", &ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "scheduled", DueAt: time.Date(2000, 1, 1, 12, 5, 0, 0, time.UTC)}))
+
+	var popped []string
+
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store, EnqueueActivation: EnqueueActivation{Fn: func(_ context.Context, item *ThreadQueueItem, _ *events.InboundMessage) error {
+		popped = append(popped, item.Message)
+		return nil
+	}}}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+
+	require.NoError(t, bridge.PickLaterWork(t.Context()))
+	require.Len(t, bridge.requestCh, 1)
+	request := <-bridge.requestCh
+	require.NotNil(t, request.inbound)
+	assert.Equal(t, "A", request.inbound.Text)
+	assert.Equal(t, "q1", request.queueItemID)
+	require.NoError(t, request.activation(t.Context(), request.inbound))
+	assert.Equal(t, []string{"A"}, popped)
+
+	messages, err := store.ScheduledMessagesForConversation(conversationID)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+}
+
+func TestPickLaterWorkPrefersEarlierDueScheduleOverLaterStash(t *testing.T) {
+	store := newTestSessionService(t)
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	require.NoError(t, store.PutThreadQueueItem("q1", &ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0}))
+	require.NoError(t, store.PutScheduledMessage("s1", &ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "scheduled", DueAt: time.Date(2000, 1, 1, 2, 58, 0, 0, time.UTC)}))
+
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+
+	require.NoError(t, bridge.PickLaterWork(t.Context()))
+	require.Len(t, bridge.requestCh, 1)
+	request := <-bridge.requestCh
+	require.NotNil(t, request.inbound)
+	assert.Equal(t, "scheduled", request.inbound.Text)
+	assert.Equal(t, "s1", request.scheduledMessageID)
+
+	items, err := store.ThreadQueueForConversation(conversationID)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "changelog", items[0].Message)
+}
+
+func TestPickLaterWorkSkipsWhenGoalStillActive(t *testing.T) {
+	store := newTestSessionService(t)
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 3, "", ""))
+	require.NoError(t, store.PutThreadQueueItem("q1", &ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0}))
+
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+
+	require.NoError(t, bridge.PickLaterWork(t.Context()))
+	assert.Empty(t, bridge.requestCh)
+
+	items, err := store.ThreadQueueForConversation(conversationID)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+}
+
+func TestPickLaterWorkAfterStopGoalStartsLaterWork(t *testing.T) {
+	store := newTestSessionService(t)
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 3, "", ""))
+	require.NoError(t, store.PutThreadQueueItem("q1", &ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, SlackChannel: "C123", SlackTS: "111.222"}))
+	require.NoError(t, store.StopGoal(conversationID))
+
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+
+	require.NoError(t, bridge.PickLaterWork(t.Context()))
+	require.Len(t, bridge.requestCh, 1)
+	assert.Equal(t, "changelog", (<-bridge.requestCh).inbound.Text)
+}
+
+func TestEnqueueActivationZeroValueIsInert(t *testing.T) {
+	require.NoError(t, (EnqueueActivation{}).Activate(t.Context(), &ThreadQueueItem{}, nil))
+	(PendingSteersSink{}).Persist("slack-thread:C123:111.222", nil)
+}
+
+func TestPickLaterWorkClaimsDueRecurringSchedule(t *testing.T) {
+	store := newTestSessionService(t)
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	dueAt := time.Now().UTC().Add(-time.Second)
+	require.NoError(t, store.PutScheduledMessage("repeat", &ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "again", DueAt: dueAt, Recurring: true, Interval: time.Minute}))
+
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+	require.NoError(t, bridge.PickLaterWork(t.Context()))
+	require.Len(t, bridge.requestCh, 1)
+	request := <-bridge.requestCh
+	assert.Equal(t, "again", request.inbound.Text)
+	assert.True(t, request.scheduledMessageRecurring)
+	messages, err := store.ScheduledMessagesForConversation(conversationID)
+	require.NoError(t, err)
+	assert.True(t, messages["repeat"].DueAt.After(dueAt))
+}
+
+func TestPickLaterWorkDoesNothingWhenIdleAndEmpty(t *testing.T) {
+	store := newTestSessionService(t)
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+	require.NoError(t, bridge.PickLaterWork(t.Context()))
+	assert.Empty(t, bridge.requestCh)
+	bridge.requestCh <- bridgeRequest{inbound: events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "queued", false), activation: NoopActivationHook}
+	require.NoError(t, bridge.PickLaterWork(t.Context()))
+	assert.Len(t, bridge.requestCh, 1)
+	close(bridge.stopCh)
+	bridge.stopped = true
+	require.ErrorIs(t, bridge.PickLaterWork(t.Context()), errBridgeStopped)
+}
+
+func TestPickLaterWorkDoesNotClaimScheduledWhenTurnBusy(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := newTestSessionService(t)
+		conversationID := SlackThreadConversationID("C123", "111.222")
+		due := ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "now", DueAt: time.Now().UTC().Add(-time.Second), Recurring: true, Interval: time.Minute}
+		require.NoError(t, store.PutScheduledMessage("due", &due))
+
+		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{}), handling: true}
+		bridge.armScheduledMessage("due", &due)
+		synctest.Wait()
+
+		assert.Empty(t, bridge.requestCh)
+
+		messages, err := store.ScheduledMessagesForConversation(conversationID)
+		require.NoError(t, err)
+		assert.Equal(t, due.DueAt, messages["due"].DueAt)
+	})
 }
 
 func TestBridgeStopDoesNotClassifyOrdinaryTurnAsInterrupted(t *testing.T) {
@@ -2406,7 +2570,41 @@ func TestBridgeDeletesScheduledMessageAfterSuccessfulHandling(t *testing.T) {
 	}, time.Second, time.Millisecond)
 }
 
-func TestBridgeKeepsScheduledMessageAfterHandlingError(t *testing.T) {
+func TestBridgeDeletesEnqueueItemWhenTurnStarts(t *testing.T) {
+	workspace := t.TempDir()
+	service := newTestSessionServiceAt(t, workspace)
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	require.NoError(t, service.PutThreadQueueItem("q1", &ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Now().UTC(), Position: 0}))
+
+	bus := newTestBus()
+	bus.Close()
+
+	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: conversationID, Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
+	bridge.requestCh = make(chan bridgeRequest, 1)
+	bridge.stopCh = make(chan struct{})
+	go bridge.loop(t.Context())
+
+	inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "enqueued_message", "changelog", false)
+	inbound.ConversationID = conversationID
+	inbound.HadNonImageAttachments = true
+	responseCh := inbound.EnableResponseWait()
+	require.NoError(t, bridge.enqueue(context.Background(), bridgeRequest{inbound: inbound, queueItemID: "q1", activation: NoopActivationHook}, "submit enqueued message"))
+
+	select {
+	case response := <-responseCh:
+		require.Error(t, response.Err)
+	case <-time.After(time.Second):
+		t.Fatal("enqueued message response was not completed")
+	}
+
+	require.Eventually(t, func() bool {
+		items, err := service.ThreadQueueForConversation(conversationID)
+		require.NoError(t, err)
+		return len(items) == 0
+	}, time.Second, time.Millisecond)
+}
+
+func TestBridgeDeletesScheduledMessageWhenTurnStarts(t *testing.T) {
 	workspace := t.TempDir()
 	service := newTestSessionServiceAt(t, workspace)
 	conversationID := SlackThreadConversationID("C123", "111.222")
@@ -2438,7 +2636,7 @@ func TestBridgeKeepsScheduledMessageAfterHandlingError(t *testing.T) {
 		messages, err := service.ScheduledMessages()
 		require.NoError(t, err)
 
-		return len(messages) == 1
+		return len(messages) == 0
 	}, time.Second, time.Millisecond)
 }
 
@@ -2541,7 +2739,6 @@ func TestBridgeResetScheduledMessagesDeletesPersistedAndCancelsArmed(t *testing.
 		assert.Equal(t, "keep", messages["other"].Message)
 		assert.Contains(t, logs.String(), "scheduled message persisted")
 		assert.Contains(t, logs.String(), "scheduled messages reset")
-		assert.Contains(t, logs.String(), "scheduled message missing or stale at due time")
 	})
 }
 

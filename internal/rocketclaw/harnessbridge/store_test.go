@@ -313,6 +313,48 @@ func TestSessionServiceScheduledMessages(t *testing.T) {
 	assert.Equal(t, map[string]ScheduledMessageState{"schedule-1": {ConversationID: "slack-thread:D123:111.222", Agent: "helper", Message: "later", DueAt: dueAt}}, messages)
 }
 
+func TestSessionServiceThreadQueuePersistsOrderAndSurvivesReorder(t *testing.T) {
+	store := newTestSessionService(t)
+	firstStash := time.Date(2000, 1, 2, 3, 0, 0, 0, time.UTC)
+	secondStash := time.Date(2000, 1, 2, 4, 0, 0, 0, time.UTC)
+	conversationID := "slack-thread:D123:111.222"
+
+	require.NoError(t, store.PutThreadQueueItem("q1", &ThreadQueueItem{ConversationID: conversationID, Message: "write tests", Principal: "U1", StashAt: firstStash, Position: 0}))
+	require.NoError(t, store.PutThreadQueueItem("q2", &ThreadQueueItem{ConversationID: conversationID, Message: "write changelog", Principal: "U1", StashAt: secondStash, Position: 1}))
+	require.NoError(t, store.PutThreadQueueItem("other", &ThreadQueueItem{ConversationID: "other", Message: "keep", Principal: "U2", StashAt: firstStash, Position: 0}))
+
+	items, err := store.ThreadQueueForConversation(conversationID)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	assert.Equal(t, "q1", items[0].ID)
+	assert.Equal(t, "write tests", items[0].Message)
+	assert.Equal(t, firstStash, items[0].StashAt)
+
+	require.NoError(t, store.ReorderThreadQueue(conversationID, []string{"q2", "q1"}))
+
+	items, err = store.ThreadQueueForConversation(conversationID)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	assert.Equal(t, "q2", items[0].ID)
+	assert.Equal(t, secondStash, items[0].StashAt)
+	assert.Equal(t, "q1", items[1].ID)
+	assert.Equal(t, firstStash, items[1].StashAt)
+
+	require.NoError(t, store.DeleteScheduledMessage("missing"))
+	require.NoError(t, store.ResetScheduledMessages(conversationID))
+
+	items, err = store.ThreadQueueForConversation(conversationID)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+
+	require.NoError(t, store.DeleteThreadQueueItem("q2"))
+
+	items, err = store.ThreadQueueForConversation(conversationID)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "q1", items[0].ID)
+}
+
 func TestSessionServiceInitializesCronScheduleSchema(t *testing.T) {
 	store := newTestSessionService(t)
 
@@ -382,13 +424,13 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 1, n)
+	assert.Equal(t, 3, n)
 
 	second, err := NewSessionServiceIn(workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop(context.Background())) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 1, n)
+	assert.Equal(t, 3, n)
 }
 
 func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
@@ -401,7 +443,7 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 1, n)
+	assert.Equal(t, 3, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 
@@ -1154,6 +1196,27 @@ func TestSessionServicePersistsActiveTurnSourceMetadata(t *testing.T) {
 	turns, err = store.RecoverableActiveTurns(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, turns)
+}
+
+func TestSessionServicePersistsPendingSteersOnActiveTurn(t *testing.T) {
+	store := newTestSessionService(t)
+	checkpoint := &harness.ActiveTurnCheckpoint{TurnID: "turn-1", ConversationKey: "slack-thread:C123:111.222", Agent: "main", Model: "gpt-5.5", DisplayModel: "gpt-5.5"}
+	require.NoError(t, store.UpsertActiveTurn(context.Background(), checkpoint, map[string]string{"source": "slack"}))
+
+	steers := []PendingSteer{{Text: "don't touch the database", Principal: "U1", SlackChannel: "C123", SlackTS: "222.333", SlackThreadTS: "111.222"}}
+	require.NoError(t, store.SetPendingSteers("slack-thread:C123:111.222", steers))
+
+	turns, err := store.RecoverableActiveTurns(context.Background())
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	assert.Equal(t, steers, turns[0].PendingSteers)
+	assert.Equal(t, "slack", turns[0].SourceMetadata["source"])
+
+	require.NoError(t, store.ClearActiveTurn(context.Background(), "turn-1"))
+	turns, err = store.RecoverableActiveTurns(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, turns)
+	require.ErrorContains(t, store.SetPendingSteers(" ", nil), "conversation ID is required")
 }
 
 func TestSessionServiceRejectsBlankKeys(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 )
@@ -24,19 +25,27 @@ type RequestKind string
 
 // Text request operation kinds.
 const (
-	RequestTextStartThread           RequestKind = "text_start_thread"
-	RequestTextStartGoal             RequestKind = "text_start_goal"
-	RequestTextStartWorkflow         RequestKind = "text_start_workflow"
-	RequestTextReserveWorkflowTurn   RequestKind = "text_reserve_workflow_turn"
-	RequestTextWorkflowDescriptions  RequestKind = "text_workflow_descriptions"
-	RequestTextInterruptConversation RequestKind = "text_interrupt_conversation"
-	RequestTextInterruptThread       RequestKind = "text_interrupt_thread"
-	RequestTextRegisterThread        RequestKind = "text_register_thread"
-	RequestTextRegisterCronThread    RequestKind = "text_register_cron_thread"
-	RequestTextThreadAgent           RequestKind = "text_thread_agent"
-	RequestTextSwitchThreadAgent     RequestKind = "text_switch_thread_agent"
-	RequestTextSubmitThreadReply     RequestKind = "text_submit_thread_reply"
-	RequestTextSubmitExternalMCP     RequestKind = "text_submit_external_mcp"
+	RequestTextStartThread            RequestKind = "text_start_thread"
+	RequestTextStartGoal              RequestKind = "text_start_goal"
+	RequestTextStartWorkflow          RequestKind = "text_start_workflow"
+	RequestTextReserveWorkflowTurn    RequestKind = "text_reserve_workflow_turn"
+	RequestTextWorkflowDescriptions   RequestKind = "text_workflow_descriptions"
+	RequestTextInterruptConversation  RequestKind = "text_interrupt_conversation"
+	RequestTextInterruptThread        RequestKind = "text_interrupt_thread"
+	RequestTextRegisterThread         RequestKind = "text_register_thread"
+	RequestTextRegisterCronThread     RequestKind = "text_register_cron_thread"
+	RequestTextThreadAgent            RequestKind = "text_thread_agent"
+	RequestTextSwitchThreadAgent      RequestKind = "text_switch_thread_agent"
+	RequestTextSubmitThreadReply      RequestKind = "text_submit_thread_reply"
+	RequestTextSubmitExternalMCP      RequestKind = "text_submit_external_mcp"
+	RequestTextSubmitWhenActive       RequestKind = "text_submit_when_active"
+	RequestTextStashThreadQueue       RequestKind = "text_stash_thread_queue"
+	RequestTextListThreadQueue        RequestKind = "text_list_thread_queue"
+	RequestTextReorderThreadQueue     RequestKind = "text_reorder_thread_queue"
+	RequestTextDeleteThreadQueueItem  RequestKind = "text_delete_thread_queue_item"
+	RequestTextListScheduledMessages  RequestKind = "text_list_scheduled_messages"
+	RequestTextDeleteScheduledMessage RequestKind = "text_delete_scheduled_message"
+	RequestTextResetScheduledMessages RequestKind = "text_reset_scheduled_messages"
 )
 
 // TextRequest carries one operation formerly sent through the primary text router.
@@ -47,6 +56,25 @@ type TextRequest struct {
 	ConversationID                            string
 	MaxTurns                                  int
 	Inbound                                   *InboundMessage
+	QueueItem                                 ThreadQueueRecord
+	QueueIDs                                  []string
+	QueueItemID                               string
+	Activation                                func(context.Context, *InboundMessage) error
+}
+
+// ThreadQueueRecord is one Enqueued Slack Message on a text request.
+type ThreadQueueRecord struct {
+	ID, Message, Principal, SlackChannel, SlackTS string
+	StashAt                                       time.Time
+	Position                                      int
+}
+
+// ScheduledMessageRecord is one scheduled message on a text request.
+type ScheduledMessageRecord struct {
+	ID, ConversationID, Agent, Message string
+	DueAt                              time.Time
+	Recurring                          bool
+	Interval                           time.Duration
 }
 
 // RequestKind identifies the TextRequest operation.
@@ -84,15 +112,17 @@ type ResponsePayload interface {
 
 // TextResponse carries the result of one TextRequest operation.
 type TextResponse struct {
-	Kind         ResponseKind
-	Message      *OutboundMessage
-	Handled      bool
-	Created      bool
-	Reserved     bool
-	Agent        string
-	Descriptions []workflow.Description
-	Inbound      *InboundMessage
-	Release      chan struct{}
+	Kind              ResponseKind
+	Message           *OutboundMessage
+	Handled           bool
+	Created           bool
+	Reserved          bool
+	Agent             string
+	Descriptions      []workflow.Description
+	Inbound           *InboundMessage
+	Release           chan struct{}
+	QueueItems        []ThreadQueueRecord
+	ScheduledMessages map[string]ScheduledMessageRecord
 }
 
 // ResponseKind identifies the TextResponse result.
