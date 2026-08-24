@@ -3807,6 +3807,63 @@ func TestRunTurnWritesActiveTurnBeforeProviderAndClearsAfterSessionAppend(t *tes
 	assert.Empty(t, turns)
 }
 
+func TestInterruptActiveTurnClearsRecoverableCheckpoint(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	service := newTestSessionServiceAt(t, workspace)
+
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	requestArrived, releaseRequest := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		close(requestArrived)
+
+		select {
+		case <-request.Context().Done():
+		case <-releaseRequest:
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	bus := newTestBus()
+	t.Cleanup(bus.Close)
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, bus: bus, config: Config{ConversationID: conversationID, Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, SessionService: service}}
+	require.NoError(t, bridge.Start(t.Context()))
+	t.Cleanup(func() { require.NoError(t, bridge.Stop()) })
+
+	delivered := make(chan struct{})
+
+	go func() {
+		for outbound := range bus.Outbound(t.Context()) {
+			outbound.MarkDelivered(nil)
+
+			if outbound.Complete {
+				close(delivered)
+				return
+			}
+		}
+	}()
+
+	inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "hello", true)
+	response := inbound.EnableResponseWait()
+	require.NoError(t, bridge.Submit(t.Context(), inbound))
+	<-requestArrived
+
+	turns, err := service.RecoverableActiveTurns(t.Context())
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+
+	bridge.InterruptActiveTurn()
+	close(releaseRequest)
+	require.NoError(t, (<-response).Err)
+	<-delivered
+
+	turns, err = service.RecoverableActiveTurns(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, turns)
+}
+
 func TestRecoveredActiveTurnPersistsDurableSessionEntry(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
