@@ -92,6 +92,20 @@ A process restart required when the overlay list or runtime config changed.
 
 Restart is not a substitute for Reload when only overlay file contents changed.
 
+## Model Providers
+
+### Provider
+
+A named OpenAI-compatible credential and endpoint used to serve model requests. The default Provider is `openai`; other Providers live under `providers` and are selected by a `provider/model` qualifier.
+
+Root and child agents resolve their Provider independently. There is no implicit failover from one Provider to another.
+
+### Autocompaction Threshold
+
+The token count at which a turn asks its Provider to compact conversation history.
+
+Each Provider can set its own Autocompaction Threshold. Unset means the runtime default. A child turn uses a different threshold only when it resolves a different Provider.
+
 ## Durable State
 
 ### State Store
@@ -117,3 +131,4 @@ After every workspace has moved, SQLite support is deleted. It is not a historic
 - A Managed Slack Thread, Buffered Follow-Up, and External MCP binding persist in the State Store.
 - An Operator SQLite Migrator copies missing `state.sqlite3` rows into the State Store.
 - Development MCP lint and run_turn consume Request-Carried Context and read Overlay Clones; Reload replaces those clones.
+- A turn uses the Autocompaction Threshold of the Provider that serves its model.

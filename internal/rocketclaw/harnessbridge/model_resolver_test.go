@@ -60,6 +60,21 @@ func TestModelResolverSelectsUnqualifiedExplicitAndNamedProviders(t *testing.T) 
 	}
 }
 
+func TestModelResolverUsesProviderAutocompactionThreshold(t *testing.T) {
+	resolver := newModelResolver(&config.Config{
+		OpenAI:    config.OpenAIConfig{APIKey: "openai-key", AutocompactionThreshold: 150000},
+		Providers: map[string]config.OpenAIConfig{"work": {APIKey: "work-key", AutocompactionThreshold: 80000}},
+	}, slog.New(slog.DiscardHandler))
+
+	_, origin, err := resolver.Resolve("gpt-5.5")
+	require.NoError(t, err)
+	assert.Equal(t, int64(150000), origin.CompactThreshold)
+
+	_, origin, err = resolver.Resolve("work/gpt-5.5")
+	require.NoError(t, err)
+	assert.Equal(t, int64(80000), origin.CompactThreshold)
+}
+
 func TestModelResolverRejectsUnknownProviderWithoutRequest(t *testing.T) {
 	requests := make(chan struct{}, 1)
 

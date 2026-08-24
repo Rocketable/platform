@@ -69,7 +69,7 @@ func (r *modelResolver) Resolve(model string) (*openai.Client, rocketcode.Provid
 		return nil, rocketcode.ProviderOrigin{}, fmt.Errorf("unknown provider %q", provider)
 	}
 
-	origin := rocketcode.ProviderOrigin{Provider: provider, Model: apiModel}
+	origin := rocketcode.ProviderOrigin{Provider: provider, Model: apiModel, CompactThreshold: providerConfig.AutocompactionThreshold}
 
 	options := r.options(origin)
 	if providerConfig.RocketCodeAuth == "chatgpt" {
