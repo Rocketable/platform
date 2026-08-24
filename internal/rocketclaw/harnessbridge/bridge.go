@@ -1429,6 +1429,12 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 	b.mu.Unlock()
 
 	if interrupted {
+		if checkpointTurnID != "" {
+			if errClear := b.config.SessionService.ClearActiveTurn(ctx, checkpointTurnID); errClear != nil {
+				return result, errors.Join(errTurnInterrupted, fmt.Errorf("clear interrupted active turn: %w", errClear))
+			}
+		}
+
 		return result, errTurnInterrupted
 	}
 
