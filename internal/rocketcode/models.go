@@ -15,8 +15,9 @@ type modelRef struct{ apiModel string }
 
 // ProviderOrigin identifies the provider and API model selected by a resolver.
 type ProviderOrigin struct {
-	Provider string
-	Model    string
+	Provider         string
+	Model            string
+	CompactThreshold int64
 }
 
 // ModelResolver selects an SDK client and API model for a model selector.

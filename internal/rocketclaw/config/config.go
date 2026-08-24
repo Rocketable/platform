@@ -92,9 +92,10 @@ type SlackChannelConfig struct {
 
 // OpenAIConfig configures the OpenAI client used by RocketCode.
 type OpenAIConfig struct {
-	APIKey         string `json:"api_key"`
-	APIBaseURL     string `json:"api_base_url"`
-	RocketCodeAuth string `json:"rocketcode_auth"`
+	APIKey                  string `json:"api_key"`
+	APIBaseURL              string `json:"api_base_url"`
+	RocketCodeAuth          string `json:"rocketcode_auth"`
+	AutocompactionThreshold int64  `json:"autocompaction_threshold,omitempty"`
 }
 
 // Provider returns the default or named provider configuration.
@@ -390,6 +391,10 @@ func normalizeOpenAIConfig(field string, cfg *OpenAIConfig) error {
 
 	if cfg.RocketCodeAuth == "api_key" && strings.TrimSpace(cfg.APIKey) == "" {
 		return fmt.Errorf("%s.api_key is required when %s.rocketcode_auth is api_key", field, field)
+	}
+
+	if cfg.AutocompactionThreshold < 0 {
+		return fmt.Errorf("%s.autocompaction_threshold must be a positive integer", field)
 	}
 
 	return nil

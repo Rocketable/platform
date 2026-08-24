@@ -399,7 +399,7 @@ func NewWithModelResolver(
 		ReasoningEffort:        reasoningEffort,
 		Verbosity:              activeAgent.Verbosity,
 		ResponseFormat:         agentOutputResponseFormat(activeAgent.OutputSchema),
-		CompactThreshold:       config.CompactThreshold,
+		CompactThreshold:       cmp.Or(origin.CompactThreshold, config.CompactThreshold),
 		CompactionSteering:     config.CompactionSteering,
 		ParallelToolCalls:      config.ParallelToolCalls,
 		Permissions:            activeAgent.Permission,

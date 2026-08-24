@@ -131,7 +131,7 @@ Set `database_url` on the selected config file. Fresh stores apply embedded SQL 
 
 ## Model Providers And Credentials
 
-`openai` is the default provider; named entries live under `providers`. An unqualified model uses `openai`, `openai/gpt-5.5` explicitly selects the default, and `work/gpt-5.5` selects `providers.work`. Root and child agents resolve their models independently, with no implicit provider failover. Provider credentials are isolated in the selected workspace and runtime directory.
+`openai` is the default provider; named entries live under `providers`. An unqualified model uses `openai`, `openai/gpt-5.5` explicitly selects the default, and `work/gpt-5.5` selects `providers.work`. Root and child agents resolve their models independently, with no implicit provider failover. Provider credentials are isolated in the selected workspace and runtime directory. Optional `autocompaction_threshold` on `openai` or a named provider overrides that provider's compaction token threshold; omit it to keep the 200000 default.
 
 | Command | Purpose |
 | --- | --- |

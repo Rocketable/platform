@@ -57,7 +57,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 		DisplayModel:           origin.displayModel(),
 		ReasoningEffort:        shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
 		Verbosity:              agent.Verbosity,
-		CompactThreshold:       f.compactThreshold,
+		CompactThreshold:       cmp.Or(origin.CompactThreshold, f.compactThreshold),
 		CompactionSteering:     f.compactionSteering,
 		ParallelToolCalls:      f.parallelToolCalls,
 		ResponseFormat:         permissionReviewResponseFormat(),

@@ -183,6 +183,44 @@ func TestNewWithModelResolverRejectsUnknownProvider(t *testing.T) {
 	}
 }
 
+func TestNewUsesResolverCompactThreshold(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	client := openai.NewClient()
+	cfg := testConfig(dir)
+	cfg.CompactThreshold = 11111
+	loop, err := NewWithModelResolver(testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
+		return &client, ProviderOrigin{Provider: "work", Model: "gpt-5.5", CompactThreshold: 80000}, nil
+	}), cfg, root, Agents{Items: map[string]Agent{
+		"main": {Name: "main", Model: "work/gpt-5.5", Prompt: "prompt"},
+	}}, Skills{Items: map[string]Skill{}}, "main", nil)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(80000), loop.CompactThreshold)
+}
+
+func TestNewUsesConfigCompactThresholdWhenResolverOmitsIt(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	client := openai.NewClient()
+	cfg := testConfig(dir)
+	cfg.CompactThreshold = 11111
+	loop, err := NewWithModelResolver(testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
+		return &client, ProviderOrigin{Provider: "openai", Model: "gpt-5.5"}, nil
+	}), cfg, root, Agents{Items: map[string]Agent{
+		"main": {Name: "main", Model: "gpt-5.5", Prompt: "prompt"},
+	}}, Skills{Items: map[string]Skill{}}, "main", nil)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(11111), loop.CompactThreshold)
+}
+
 func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)

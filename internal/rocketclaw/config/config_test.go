@@ -101,12 +101,32 @@ func TestLoadPreservesNamedProviders(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, OpenAIConfig{APIKey: "work-key", APIBaseURL: "https://work.example/v1", RocketCodeAuth: "api_key"}, provider)
 
+	assert.Zero(t, cfg.OpenAI.AutocompactionThreshold)
+	assert.Zero(t, provider.AutocompactionThreshold)
+
 	provider, ok = cfg.Provider("chat")
 	require.True(t, ok)
 	assert.Equal(t, "chatgpt", provider.RocketCodeAuth)
 
 	_, ok = cfg.Provider("missing")
 	assert.False(t, ok)
+}
+
+func TestLoadPreservesAutocompactionThreshold(t *testing.T) {
+	cfg := loadTestConfig(t, `{
+	  "workspace": ".",
+	  "openai": {"api_key": "default-key", "autocompaction_threshold": 150000},
+	  "providers": {
+	    "work": {"api_key": "work-key", "autocompaction_threshold": 80000}
+	  },
+	  "slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}
+	}`)
+
+	assert.Equal(t, int64(150000), cfg.OpenAI.AutocompactionThreshold)
+
+	provider, ok := cfg.Provider("work")
+	require.True(t, ok)
+	assert.Equal(t, int64(80000), provider.AutocompactionThreshold)
 }
 
 func TestValidateRejectsInvalidProviderNames(t *testing.T) {
@@ -139,6 +159,11 @@ func TestValidateReportsNamedProviderFieldErrors(t *testing.T) {
 			name:      "API key",
 			providers: map[string]OpenAIConfig{"work": {}},
 			wantErr:   `providers["work"].api_key is required when providers["work"].rocketcode_auth is api_key`,
+		},
+		{
+			name:      "autocompaction threshold",
+			providers: map[string]OpenAIConfig{"work": {APIKey: "work-key", AutocompactionThreshold: -1}},
+			wantErr:   `providers["work"].autocompaction_threshold must be a positive integer`,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -459,6 +484,7 @@ func TestValidateRejectsMissingRequiredConfig(t *testing.T) {
 		{name: "workspace", update: func(c *Config) { c.Workspace = "" }, wantErr: "workspace is required"},
 		{name: "database url", update: func(c *Config) { c.DatabaseURL = "" }, wantErr: "database_url is required"},
 		{name: "rocketcode auth", update: func(c *Config) { c.OpenAI.RocketCodeAuth = "browser" }, wantErr: "openai.rocketcode_auth must be api_key or chatgpt"},
+		{name: "autocompaction threshold", update: func(c *Config) { c.OpenAI.AutocompactionThreshold = -1 }, wantErr: "openai.autocompaction_threshold must be a positive integer"},
 		{name: "missing provider", update: func(c *Config) { c.AutoApproverModel = "/model" }, wantErr: `auto_approver_model: invalid model "/model": expected model or provider/model`},
 		{name: "missing model", update: func(c *Config) { c.AutoApproverModel = "work/" }, wantErr: `auto_approver_model: invalid model "work/": expected model or provider/model`},
 		{name: "extra empty part", update: func(c *Config) { c.AutoApproverModel = "work//model" }, wantErr: `auto_approver_model: invalid model "work//model": expected model or provider/model`},
