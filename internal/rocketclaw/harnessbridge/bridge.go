@@ -115,6 +115,8 @@ type Config struct {
 	UserQuestionAsker                                                                        events.UserQuestionAsker
 	StartNewThread                                                                           func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadResult, error)
 	SessionService                                                                           *SessionService
+	SteerDrain                                                                               rocketcode.SteerDrain
+	EnqueueActivation                                                                        EnqueueActivation
 }
 
 // Bridge forwards rocketclaw messages into one turn-lived rocketcode run per turn.
@@ -129,6 +131,7 @@ type Bridge struct {
 	mu                    sync.Mutex
 	handling, stopped     bool
 	activeReply           *events.InboundMessage
+	activeLooper          *rocketcode.Runtime
 	activeTurnInterrupts  chan os.Signal
 	activeTurnCancel      context.CancelFunc
 	waitingTurnCancel     context.CancelFunc
@@ -140,6 +143,7 @@ type bridgeRequest struct {
 	activeTurn                *ActiveTurnState
 	scheduledMessageID        string
 	scheduledMessageRecurring bool
+	queueItemID               string
 	activation                ActivationHook
 }
 
@@ -149,6 +153,21 @@ type ActivationHook func(context.Context, *events.InboundMessage) error
 // NoopActivationHook leaves queued request activation unchanged.
 func NoopActivationHook(_ context.Context, _ *events.InboundMessage) error {
 	return nil
+}
+
+// EnqueueActivation posts the consume card for a popped Enqueued Slack Message.
+// The zero value is inert.
+type EnqueueActivation struct {
+	Fn func(context.Context, *ThreadQueueItem, *events.InboundMessage) error
+}
+
+// Activate runs the consume-card hook, or does nothing when the hook is unset.
+func (a EnqueueActivation) Activate(ctx context.Context, item *ThreadQueueItem, inbound *events.InboundMessage) error {
+	if a.Fn == nil {
+		return nil
+	}
+
+	return a.Fn(ctx, item, inbound)
 }
 
 type runResult struct {
@@ -468,6 +487,19 @@ func (b *Bridge) SubmitWhenActive(ctx context.Context, msg *events.InboundMessag
 	return b.enqueue(ctx, bridgeRequest{inbound: msg, activation: activation}, "submit inbound message")
 }
 
+// TurnPhase reports whether the live turn is still in the tool loop.
+func (b *Bridge) TurnPhase() ThreadTurnPhase {
+	b.mu.Lock()
+	looper := b.activeLooper
+	b.mu.Unlock()
+
+	if looper == nil {
+		return ThreadTurnUnclassified
+	}
+
+	return ThreadTurnPhaseFrom(looper.Phase())
+}
+
 // InterruptActiveTurn interrupts current work and clears queued work for this bridge.
 func (b *Bridge) InterruptActiveTurn() *events.InboundMessage {
 	b.mu.Lock()
@@ -499,6 +531,11 @@ func (b *Bridge) InterruptActiveTurn() *events.InboundMessage {
 			return reply
 		}
 	}
+}
+
+// PickLaterWork submits the R16 winner after a turn ends, or when a due timer fires on an idle thread.
+func (b *Bridge) PickLaterWork(ctx context.Context) error {
+	return b.pickLaterWork(ctx, false)
 }
 
 func (b *Bridge) armPendingScheduledMessages() error {
@@ -595,6 +632,7 @@ func (b *Bridge) loop(ctx context.Context) {
 				case request.inbound != nil:
 					errHandle := request.activation(ctx, request.inbound)
 					if errHandle == nil {
+						b.forgetStartedLaterWork(request)
 						errHandle = b.handleInbound(ctx, request.inbound)
 					} else {
 						request.inbound.CompleteResponse("", errHandle)
@@ -608,11 +646,9 @@ func (b *Bridge) loop(ctx context.Context) {
 						b.completeRequestTurnPairReservation(request)
 					}
 
-					if errHandle == nil && request.scheduledMessageID != "" && !request.scheduledMessageRecurring {
-						if errDelete := b.config.SessionService.DeleteScheduledMessage(request.scheduledMessageID); errDelete != nil {
-							b.log.Error("delete handled scheduled message", "error", errDelete)
-						} else {
-							b.log.Info("scheduled message deleted after successful handling", "scheduled_message_id", request.scheduledMessageID, "conversation_id", b.config.ConversationID)
+					if !activeTurnRecoveryPreserveError(errHandle) {
+						if errPick := b.PickLaterWork(ctx); errPick != nil {
+							b.log.Error("pick later work", "error", errPick)
 						}
 					}
 				case request.activeTurn != nil:
@@ -634,6 +670,12 @@ func (b *Bridge) loop(ctx context.Context) {
 							b.SwitchAgent(b.config.AgentAfterRecovery)
 						}
 					}
+
+					if !activeTurnRecoveryPreserveError(errHandle) {
+						if errPick := b.PickLaterWork(ctx); errPick != nil {
+							b.log.Error("pick later work", "error", errPick)
+						}
+					}
 				}
 			}()
 
@@ -646,6 +688,155 @@ func (b *Bridge) loop(ctx context.Context) {
 }
 
 func (b *Bridge) setHandling(handling bool) { b.mu.Lock(); b.handling = handling; b.mu.Unlock() }
+
+func (b *Bridge) forgetStartedLaterWork(request bridgeRequest) {
+	if request.queueItemID != "" {
+		if errDelete := b.config.SessionService.DeleteThreadQueueItem(request.queueItemID); errDelete != nil {
+			b.log.Error("delete started enqueue item", "error", errDelete)
+		}
+	}
+
+	if request.scheduledMessageID != "" && !request.scheduledMessageRecurring {
+		if errDelete := b.config.SessionService.DeleteScheduledMessage(request.scheduledMessageID); errDelete != nil {
+			b.log.Error("delete started scheduled message", "error", errDelete)
+		} else {
+			b.log.Info("scheduled message deleted after turn started", "scheduled_message_id", request.scheduledMessageID, "conversation_id", b.config.ConversationID)
+		}
+	}
+}
+
+func (b *Bridge) pickLaterWork(ctx context.Context, fromTimer bool) error {
+	b.mu.Lock()
+	stopped, handling := b.stopped, b.handling
+	b.mu.Unlock()
+
+	if stopped {
+		return fmt.Errorf("pick later work: %w", errBridgeStopped)
+	}
+
+	if fromTimer && (handling || len(b.requestCh) > 0) {
+		return nil
+	}
+
+	if !fromTimer && len(b.requestCh) > 0 {
+		return nil
+	}
+
+	goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID)
+	if err != nil {
+		return fmt.Errorf("load goal for later work: %w", err)
+	}
+
+	if ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
+		return nil
+	}
+
+	queue, err := b.config.SessionService.ThreadQueueForConversation(b.config.ConversationID)
+	if err != nil {
+		return fmt.Errorf("load thread queue for later work: %w", err)
+	}
+
+	scheduled, err := b.config.SessionService.ScheduledMessagesForConversation(b.config.ConversationID)
+	if err != nil {
+		return fmt.Errorf("load scheduled messages for later work: %w", err)
+	}
+
+	now := time.Now().UTC()
+
+	var (
+		dueID      string
+		dueMessage ScheduledMessageState
+		haveDue    bool
+	)
+
+	for id, message := range scheduled {
+		if message.DueAt.After(now) {
+			continue
+		}
+
+		if !haveDue || message.DueAt.Before(dueMessage.DueAt) || (message.DueAt.Equal(dueMessage.DueAt) && id < dueID) {
+			dueID, dueMessage, haveDue = id, message, true
+		}
+	}
+
+	if len(queue) == 0 && !haveDue {
+		return nil
+	}
+
+	if len(queue) > 0 && (!haveDue || !dueMessage.DueAt.Before(queue[0].StashAt)) {
+		return b.submitEnqueuedItem(ctx, &queue[0])
+	}
+
+	return b.submitDueScheduled(ctx, dueID, &dueMessage, now)
+}
+
+func (b *Bridge) submitEnqueuedItem(ctx context.Context, item *ThreadQueueItem) error {
+	inbound := events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "enqueued_message", item.Message, false)
+
+	inbound.ConversationID = b.config.ConversationID
+	if principal := strings.TrimSpace(item.Principal); principal != "" {
+		inbound.Metadata = map[string]string{events.InboundPrincipalMetadataKey: principal}
+	}
+
+	channelID, threadTS, ok := SlackThreadTarget(b.config.ConversationID)
+	if item.SlackChannel != "" {
+		channelID = item.SlackChannel
+		ok = true
+	}
+
+	if ok {
+		messageTS := item.SlackTS
+		if messageTS == "" {
+			messageTS = threadTS
+		}
+
+		inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: messageTS, ThreadTS: threadTS}
+	}
+
+	activation := func(ctx context.Context, inbound *events.InboundMessage) error {
+		return b.config.EnqueueActivation.Activate(ctx, item, inbound)
+	}
+
+	return b.enqueue(ctx, bridgeRequest{inbound: inbound, queueItemID: item.ID, activation: activation}, "submit enqueued message")
+}
+
+func (b *Bridge) submitDueScheduled(ctx context.Context, id string, armed *ScheduledMessageState, now time.Time) error {
+	stored, ready, err := b.config.SessionService.ClaimScheduledMessage(id, armed.ConversationID, armed.DueAt, now)
+	if err != nil {
+		return fmt.Errorf("claim scheduled message: %w", err)
+	}
+
+	if !ready {
+		b.log.Warn("scheduled message missing or stale at due time", "scheduled_message_id", id, "conversation_id", armed.ConversationID)
+		return nil
+	}
+
+	inbound := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "scheduled_message", armed.Message, false)
+
+	replyConversationID := armed.ConversationID
+	if b.config.ManagedConversationID != "" {
+		replyConversationID = b.config.ManagedConversationID
+	}
+
+	if rest, ok := strings.CutPrefix(replyConversationID, "slack-thread:"); ok {
+		if channelID, threadTS, ok := strings.Cut(rest, ":"); ok {
+			inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
+		}
+	}
+
+	inbound.ConversationID = b.config.ConversationID
+	if err := b.enqueue(ctx, bridgeRequest{inbound: inbound, scheduledMessageID: id, scheduledMessageRecurring: stored.Recurring, activation: NoopActivationHook}, "submit scheduled message"); err != nil {
+		return err
+	}
+
+	if stored.Recurring {
+		b.armScheduledMessage(id, &stored)
+	}
+
+	b.log.Info("scheduled message enqueued", "scheduled_message_id", id, "conversation_id", armed.ConversationID, "recurring", stored.Recurring, "queue_len", len(b.requestCh))
+
+	return nil
+}
 
 func (b *Bridge) completeRequestTurnPairReservation(request bridgeRequest) {
 	if b.config.ManagedConversationID == "" || (b.config.ConversationID == b.config.ManagedConversationID && (request.inbound == nil || request.inbound.Workflow == nil)) {
@@ -703,6 +894,10 @@ func (b *Bridge) handleRecoveredActiveTurn(ctx context.Context, turn *ActiveTurn
 
 			if errClear := b.config.SessionService.ClearActiveTurn(ctx, checkpoint.TurnID); errClear != nil {
 				return errors.Join(err, fmt.Errorf("clear failed original recovered active turn %q: %w", checkpoint.TurnID, errClear))
+			}
+
+			if errStop := b.config.SessionService.StopGoal(b.config.ConversationID); errStop != nil {
+				return errors.Join(err, fmt.Errorf("stop goal after unresumable recovered turn: %w", errStop))
 			}
 		}
 
@@ -1298,6 +1493,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 		return runResult{}, fmt.Errorf("prepare rocketcode turn: %w", err)
 	}
 
+	looper.SteerDrain = b.config.SteerDrain
 	recoveredDisplayModel = looper.DisplayModel
 	sessionIn = sessionEntriesForProvider(sessionIn, providerForModel(looper.DisplayModel))
 
@@ -1314,6 +1510,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 
 	b.mu.Lock()
 	b.activeReply = activeReply
+	b.activeLooper = looper
 	b.activeTurnInterrupts = interrupts
 	b.activeTurnCancel = cancelTurn
 	b.activeTurnInterrupted = false
@@ -1322,6 +1519,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *events.InboundMessage, turnID
 	defer func() {
 		b.mu.Lock()
 		b.activeReply = nil
+		b.activeLooper = nil
 		b.activeTurnInterrupts = nil
 		b.activeTurnCancel = nil
 		b.activeTurnInterrupted = false
@@ -2628,46 +2826,9 @@ func (b *Bridge) runGoalCheck(ctx context.Context, script string) (string, bool)
 func (b *Bridge) armScheduledMessage(id string, message *ScheduledMessageState) {
 	armed := *message
 	time.AfterFunc(max(time.Until(armed.DueAt), 0), func() {
-		var (
-			stored ScheduledMessageState
-			ready  bool
-		)
-
-		stored, ready, err := b.config.SessionService.ClaimScheduledMessage(id, armed.ConversationID, armed.DueAt, time.Now().UTC())
-		if err != nil {
-			b.log.Error("prepare scheduled message", "scheduled_message_id", id, "conversation_id", armed.ConversationID, "error", err)
-			return
-		}
-
-		if !ready {
-			b.log.Warn("scheduled message missing or stale at due time", "scheduled_message_id", id, "conversation_id", armed.ConversationID)
-			return
-		}
-
-		inbound := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "scheduled_message", armed.Message, false)
-
-		replyConversationID := armed.ConversationID
-		if b.config.ManagedConversationID != "" {
-			replyConversationID = b.config.ManagedConversationID
-		}
-
-		if rest, ok := strings.CutPrefix(replyConversationID, "slack-thread:"); ok {
-			if channelID, threadTS, ok := strings.Cut(rest, ":"); ok {
-				inbound.SlackReply = &events.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
-			}
-		}
-
-		inbound.ConversationID = b.config.ConversationID
-		if err := b.enqueue(context.Background(), bridgeRequest{inbound: inbound, scheduledMessageID: id, scheduledMessageRecurring: stored.Recurring, activation: NoopActivationHook}, "submit scheduled message"); err != nil {
+		if err := b.pickLaterWork(context.Background(), true); err != nil {
 			b.log.Error("scheduled message enqueue failed", "scheduled_message_id", id, "conversation_id", armed.ConversationID, "error", err)
-			return
 		}
-
-		if stored.Recurring {
-			b.armScheduledMessage(id, &stored)
-		}
-
-		b.log.Info("scheduled message enqueued", "scheduled_message_id", id, "conversation_id", armed.ConversationID, "recurring", stored.Recurring, "queue_len", len(b.requestCh))
 	})
 }
 

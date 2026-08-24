@@ -338,6 +338,20 @@ func TestThreadBridgeManagerAllowsGoalAfterCompletedGoal(t *testing.T) {
 	assert.Equal(t, harnessbridge.GoalStatusActive, goal.Status)
 }
 
+func TestThreadBridgeManagerPickLaterWorkUsesLiveBridge(t *testing.T) {
+	store := newTestSessionService(t, t.TempDir())
+	conversationID := harnessbridge.SlackThreadConversationID("D123", "111.222")
+	require.NoError(t, store.UpsertThread(conversationID, harnessbridge.ThreadState{Agent: "main"}))
+
+	bridge := new(fakeDirectBridge)
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return bridge })
+	require.NoError(t, manager.PickLaterWork(t.Context(), conversationID))
+	assert.Equal(t, []string{"pick"}, bridge.ops)
+	require.NoError(t, manager.PickLaterWork(t.Context(), ""))
+	require.NoError(t, manager.PickLaterWork(t.Context(), harnessbridge.SlackThreadConversationID("D999", "9.9")))
+	assert.Equal(t, []string{"pick"}, bridge.ops)
+}
+
 func TestThreadBridgeManagerInterruptSlackThreadInterruptsActiveTurn(t *testing.T) {
 	store := newTestSessionService(t, t.TempDir())
 	conversationID := harnessbridge.SlackThreadConversationID("D123", "111.222")
@@ -418,6 +432,41 @@ func TestThreadBridgeManagerRegistersThreadWithoutSubmitting(t *testing.T) {
 	require.True(t, handled)
 	require.Len(t, bridge.submits, 1)
 	assert.Equal(t, inbound, bridge.submits[0])
+}
+
+func TestThreadBridgeManagerStashListReorderAndDeleteQueue(t *testing.T) {
+	store := newTestSessionService(t, t.TempDir())
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(bridgeConfig) directBridge { return new(fakeDirectBridge) })
+	target := slackTarget("C123", "111.222")
+	other := slackTarget("C123", "333.444")
+
+	require.NoError(t, manager.StashThreadQueueItem(t.Context(), target, &harnessbridge.ThreadQueueItem{ID: "q1", Message: "first", Principal: "U1", StashAt: time.Date(2026, 8, 24, 13, 0, 0, 0, time.UTC), SlackChannel: "C123", SlackTS: "1"}))
+	require.NoError(t, manager.StashThreadQueueItem(t.Context(), target, &harnessbridge.ThreadQueueItem{ID: "q2", Message: "second", Principal: "U1", StashAt: time.Date(2026, 8, 24, 14, 0, 0, 0, time.UTC), SlackChannel: "C123", SlackTS: "2"}))
+	require.NoError(t, manager.StashThreadQueueItem(t.Context(), other, &harnessbridge.ThreadQueueItem{ID: "other", Message: "keep", Principal: "U2", StashAt: time.Date(2026, 8, 24, 13, 0, 0, 0, time.UTC)}))
+
+	items, err := manager.ThreadQueueItems(t.Context(), target)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	assert.Equal(t, []string{"q1", "q2"}, []string{items[0].ID, items[1].ID})
+
+	require.NoError(t, manager.ReorderThreadQueue(t.Context(), target, []string{"q2", "q1"}))
+	items, err = manager.ThreadQueueItems(t.Context(), target)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	assert.Equal(t, "q2", items[0].ID)
+	assert.Equal(t, time.Date(2026, 8, 24, 14, 0, 0, 0, time.UTC), items[0].StashAt)
+
+	require.NoError(t, manager.DeleteThreadQueueItem(t.Context(), target, "other"))
+	require.NoError(t, manager.DeleteThreadQueueItem(t.Context(), target, "q2"))
+	items, err = manager.ThreadQueueItems(t.Context(), target)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "q1", items[0].ID)
+
+	otherItems, err := manager.ThreadQueueItems(t.Context(), other)
+	require.NoError(t, err)
+	require.Len(t, otherItems, 1)
+	assert.Equal(t, "other", otherItems[0].ID)
 }
 
 func TestThreadBridgeManagerRejectsMissingSlackThreadTarget(t *testing.T) {
@@ -809,8 +858,18 @@ func (f *fakeDirectBridge) InterruptActiveTurn() *events.InboundMessage {
 	return f.interruptResult
 }
 
+func (f *fakeDirectBridge) TurnPhase() harnessbridge.ThreadTurnPhase {
+	return harnessbridge.ThreadTurnUnclassified
+}
+
 func (f *fakeDirectBridge) SwitchAgent(agent string) {
 	f.ops = append(f.ops, "switch:"+agent)
+}
+
+func (f *fakeDirectBridge) PickLaterWork(context.Context) error {
+	f.ops = append(f.ops, "pick")
+
+	return nil
 }
 
 func newThreadInboundMessage(text, messageTS, threadTS string) *events.InboundMessage {

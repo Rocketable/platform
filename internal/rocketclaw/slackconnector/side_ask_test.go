@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -167,18 +166,16 @@ func TestSideAskEndDoesNotPromoteBufferedFollowUp(t *testing.T) {
 	require.Len(t, buffered, 1)
 	assert.Equal(t, "thread follow-up", buffered[0].Text)
 
-	connector.promoteSlackStack(t.Context(), key, func(_ context.Context, inbound *events.InboundMessage) error {
-		_, err := connector.threadRouter.SubmitThreadReply(t.Context(), events.TextConversationTarget{ChannelID: "C123", ThreadID: "111.222"}, inbound)
-		if err != nil {
-			return fmt.Errorf("submit buffered follow-up: %w", err)
-		}
-
-		return nil
+	connector.promoteSlackStack(t.Context(), key, func(context.Context, *events.InboundMessage) error {
+		return errors.New("unexpected submit")
 	})
 
-	replies := router.repliesSnapshot()
-	require.Len(t, replies, 1)
-	assert.Equal(t, "thread follow-up", replies[0].inbound.Text)
+	assert.Empty(t, router.repliesSnapshot())
+	connector.mu.Lock()
+	buffered = slices.Clone(connector.stacks[key])
+	connector.mu.Unlock()
+	require.Len(t, buffered, 1)
+	assert.Equal(t, "thread follow-up", buffered[0].Text)
 }
 
 func TestSideAskUsesChosenAgentWithoutChangingThreadOwner(t *testing.T) {

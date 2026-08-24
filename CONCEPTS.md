@@ -8,7 +8,7 @@ Shared domain vocabulary for this project — entities, named processes, and sta
 
 A Slack thread that RocketClaw persists as a conversation owned by a selected agent and continues across human replies.
 
-A Managed Slack Thread has one active turn at a time. Follow-ups received during that turn are buffered and submitted after the turn completes.
+A Managed Slack Thread has one active turn at a time. A plain human message received during that turn is a Slack Steer when the agent is still in the tool loop, and an Enqueued Slack Message when it is too late to steer.
 
 ### Root Slack Mention
 
@@ -26,11 +26,29 @@ Unmapped conversations use the `@` channel entry. Mapped channels keep that room
 
 A slack.channels row named `@`. It is not a Slack channel. It supplies agents and an allowlist for Adhoc Callouts in unmapped joined channels.
 
+### Slack Steer
+
+A human Slack message accepted while a Managed Slack Thread has an active turn still in the tool loop, and injected into that same turn after the current parallel tool batch completes.
+
+A Slack Steer is marked with hourglass until injection. It does not create thinking or answer placeholders.
+
+### Enqueued Slack Message
+
+A later-turn prompt stashed on a Managed Slack Thread, usually via `$enqueue`, or via a too-late plain send.
+
+An Enqueued Slack Message is marked with envelope until it is popped. Pop posts an incoming-envelope Slack Blocks card, then reserves thinking and answer placeholders. Enqueued Slack Messages persist across restart and run as separate turns.
+
+### Thread Queue
+
+The durable, conversation-local stack of Enqueued Slack Messages, shown and managed by `$queue` next to that conversation's scheduled messages.
+
+`$queue` cannot interleave the two sections. After a turn ends, a still-continuing goal wins the next slot. Otherwise the next item is the earlier of the stack-head stash time and the next scheduled due time. Reorder changes stack order only, not stash times.
+
 ### Buffered Follow-Up
 
-A human Slack message accepted while a Managed Slack Thread has an active turn and held for submission after that turn completes.
+Historical name for a mid-turn Slack message held until the active turn completed, then submitted as the next turn.
 
-A Buffered Follow-Up remains associated with its thread until promotion submits it or an explicit failure path consumes it.
+Replaced by Slack Steer and Enqueued Slack Message.
 
 ### Slack Side Ask
 
@@ -138,7 +156,7 @@ A RocketCode Turn is not the active-turn slot on a Managed Slack Thread. Slack o
 
 ### State Store
 
-RocketClaw's durable database for sessions, Managed Slack Thread routing, goals, cron, scheduled messages, External MCP bindings, and restart handoffs.
+RocketClaw's durable database for sessions, Managed Slack Thread routing, goals, cron, scheduled messages, the Thread Queue, External MCP bindings, and restart handoffs.
 
 The State Store is PostgreSQL. `run` ignores `state.sqlite3`.
 
@@ -153,10 +171,11 @@ After every workspace has moved, SQLite support is deleted. It is not a historic
 - A Root Slack Mention creates or targets a Managed Slack Thread.
 - An Adhoc Callout creates or takes over a Managed Slack Thread.
 - A Root Slack Mention in an unmapped joined channel is an Adhoc Callout when an `@` Channel Entry exists.
-- A Buffered Follow-Up belongs to one active Managed Slack Thread and is promoted after the active turn completes.
+- A Slack Steer belongs to one active Managed Slack Thread and is injected into that turn after the current parallel tool batch completes.
+- An Enqueued Slack Message belongs to one Managed Slack Thread's Thread Queue until it is popped, removed, or consumed by an explicit failure path.
 - A Slack Side Ask is opened from a completed 💬 answer card in a Managed Slack Thread and does not become that thread's turn.
 - A BAR is authored, packed, run, and ranked by Quickbench; an ELO Scorer belongs to one BAR.
-- A Managed Slack Thread, Buffered Follow-Up, and External MCP binding persist in the State Store.
+- A Managed Slack Thread, Thread Queue, and External MCP binding persist in the State Store.
 - An Operator SQLite Migrator copies missing `state.sqlite3` rows into the State Store.
 - Development MCP lint and run_turn consume Request-Carried Context and read Overlay Clones; Reload replaces those clones.
 - A turn uses the Autocompaction Threshold of the Provider that serves its model.

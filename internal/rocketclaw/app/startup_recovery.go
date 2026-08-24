@@ -14,13 +14,21 @@ import (
 type startupRecoveryStore interface {
 	RecoverableActiveTurns(context.Context) ([]harnessbridge.ActiveTurnState, error)
 	ClearActiveTurn(context.Context, string) error
+	StopGoal(string) error
 	Thread(string) (harnessbridge.ThreadState, bool, error)
 	ExternalMCPSessionByConversationID(string) (string, harnessbridge.ExternalMCPSessionState, bool, error)
 }
 
 type startupRecoveryHandoff func(context.Context, *harnessbridge.ActiveTurnState) error
 
-func recoverStartupActiveTurns(ctx context.Context, store startupRecoveryStore, handoff startupRecoveryHandoff, log *slog.Logger) error {
+type cannotResumeFunc func(conversationID string, steers []harnessbridge.PendingSteer)
+
+type cannotResumeItem struct {
+	conversationID string
+	steers         []harnessbridge.PendingSteer
+}
+
+func recoverStartupActiveTurns(ctx context.Context, store startupRecoveryStore, handoff startupRecoveryHandoff, cannotResume cannotResumeFunc, log *slog.Logger) error {
 	turns, err := store.RecoverableActiveTurns(ctx)
 	if err != nil {
 		return fmt.Errorf("load startup active-turn recovery rows: %w", err)
@@ -80,7 +88,7 @@ func recoverStartupActiveTurns(ctx context.Context, store startupRecoveryStore, 
 
 		recoveredReplay, err := rocketcode.RecoveredReplayInput(&turn.Checkpoint)
 		if err != nil {
-			if errClear := store.ClearActiveTurn(ctx, turn.Checkpoint.TurnID); errClear != nil {
+			if errClear := cannotResumeActiveTurn(ctx, store, turn, cannotResume); errClear != nil {
 				return fmt.Errorf("delete unrecoverable startup active turn: %w", errClear)
 			}
 
@@ -97,7 +105,7 @@ func recoverStartupActiveTurns(ctx context.Context, store startupRecoveryStore, 
 				return fmt.Errorf("handoff startup active turn recovery: %w", err)
 			}
 
-			if errClear := store.ClearActiveTurn(ctx, turn.Checkpoint.TurnID); errClear != nil {
+			if errClear := cannotResumeActiveTurn(ctx, store, turn, cannotResume); errClear != nil {
 				return fmt.Errorf("delete failed startup active turn handoff: %w", errClear)
 			}
 
@@ -106,6 +114,40 @@ func recoverStartupActiveTurns(ctx context.Context, store startupRecoveryStore, 
 			continue
 		}
 	}
+
+	return nil
+}
+
+type startupSteerSurface interface {
+	RestorePendingSteers(string, []harnessbridge.PendingSteer)
+	DiscardPendingSteers(context.Context, []harnessbridge.PendingSteer)
+}
+
+func applyStartupSteerRecovery(ctx context.Context, slack startupSteerSurface, pick func(context.Context, string) error, recovered []harnessbridge.ActiveTurnState, cannotResume []cannotResumeItem) error {
+	for i := range recovered {
+		slack.RestorePendingSteers(recovered[i].Checkpoint.ConversationKey, recovered[i].PendingSteers)
+	}
+
+	for i := range cannotResume {
+		slack.DiscardPendingSteers(ctx, cannotResume[i].steers)
+		if err := pick(ctx, cannotResume[i].conversationID); err != nil {
+			return fmt.Errorf("pick later work after unresumable turn: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func cannotResumeActiveTurn(ctx context.Context, store startupRecoveryStore, turn *harnessbridge.ActiveTurnState, cannotResume cannotResumeFunc) error {
+	if err := store.ClearActiveTurn(ctx, turn.Checkpoint.TurnID); err != nil {
+		return fmt.Errorf("clear unresumable active turn: %w", err)
+	}
+
+	if err := store.StopGoal(turn.Checkpoint.ConversationKey); err != nil {
+		return fmt.Errorf("stop goal after unresumable turn: %w", err)
+	}
+
+	cannotResume(turn.Checkpoint.ConversationKey, turn.PendingSteers)
 
 	return nil
 }

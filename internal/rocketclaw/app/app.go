@@ -28,6 +28,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/Rocketable/platform/internal/rocketclaw/slackconnector"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
+	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
 // ErrRestartRequested indicates rocketclaw should exit so a supervisor can restart it.
@@ -286,7 +287,10 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	recoveringConversations := map[string]bool{}
 
-	var recoveredTurns []harnessbridge.ActiveTurnState
+	var (
+		recoveredTurns []harnessbridge.ActiveTurnState
+		cannotResume   []cannotResumeItem
+	)
 
 	if err := recoverStartupActiveTurns(runCtx, rocketcodeSessions, func(_ context.Context, turn *harnessbridge.ActiveTurnState) error {
 		conversationID := strings.TrimSpace(turn.Checkpoint.ConversationKey)
@@ -296,6 +300,8 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		logger.Info("startup active turn selected for recovery", "conversation_id", turn.Checkpoint.ConversationKey, "turn_id", turn.Checkpoint.TurnID, "agent", turn.Checkpoint.Agent)
 
 		return nil
+	}, func(conversationID string, steers []harnessbridge.PendingSteer) {
+		cannotResume = append(cannotResume, cannotResumeItem{conversationID: conversationID, steers: steers})
 	}, logger); err != nil {
 		return err
 	}
@@ -308,6 +314,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	// Starts as No; set to Slack after the connector exists. Factory reads the current value per bridge.
 	slackUserQuestionAsker := events.NoUserQuestionAsker()
+	drainSlack := func(context.Context, string, rocketcode.TurnPhase) []string { return nil }
 
 	threadBridges = newThreadBridgeManager(cfg, rocketcodeSessions, logger, func(bridgeConfig harnessbridge.Config) directBridge {
 		bridgeConfig.RequestRestart = requestRestart
@@ -317,6 +324,17 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 			bridgeConfig.UserQuestionAsker = slackUserQuestionAsker
 		}
 
+		conversationID := bridgeConfig.ConversationID
+		bridgeConfig.SteerDrain = rocketcode.SteerDrain{Fn: func(ctx context.Context, phase rocketcode.TurnPhase) []string {
+			return drainSlack(ctx, conversationID, phase)
+		}}
+		bridgeConfig.EnqueueActivation = harnessbridge.EnqueueActivation{Fn: func(ctx context.Context, item *harnessbridge.ThreadQueueItem, inbound *events.InboundMessage) error {
+			if slackSink == nil {
+				return nil
+			}
+
+			return slackSink.ActivateEnqueue(ctx, item, inbound)
+		}}
 		bridgeConfig.StartNewThread = startNewThread
 		bridgeConfig.SessionService = rocketcodeSessions
 
@@ -328,35 +346,6 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	if err := threadBridges.StartActiveGoals(recoveringConversations); err != nil {
 		return err
-	}
-
-	for i := range recoveredTurns {
-		turn := &recoveredTurns[i]
-
-		conversationID := strings.TrimSpace(turn.Checkpoint.ConversationKey)
-
-		err = threadBridges.RecoverActiveTurn(runCtx, turn)
-		if err != nil {
-			if isStartupRecoveryShutdownError(err) {
-				return err
-			}
-
-			if errRelease := rocketcodeSessions.ReleaseExternalMCPRecovery(conversationID); errRelease != nil {
-				return fmt.Errorf("release failed paired startup recovery: %w", errRelease)
-			}
-
-			reason := fmt.Sprintf("enqueue startup active turn recovery: %v", err)
-
-			if errClear := rocketcodeSessions.ClearActiveTurn(runCtx, turn.Checkpoint.TurnID); errClear != nil {
-				return fmt.Errorf("delete failed startup active turn enqueue: %w", errClear)
-			}
-
-			logger.Warn("deleted failed startup active turn after enqueue error", "conversation_id", conversationID, "turn_id", turn.Checkpoint.TurnID, "error", err, "reason", reason)
-
-			continue
-		}
-
-		logger.Info("startup active turn recovery enqueued", "conversation_id", conversationID, "turn_id", turn.Checkpoint.TurnID)
 	}
 
 	go func() {
@@ -390,7 +379,11 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	slackRouter.output = slackSink.SendResponse
 	slackRouter.abort = slackSink.AbortResponse
 	slackRouter.root = slackSink.StartNewThreadRoot
+	slackRouter.turnPhase = threadBridges.TurnPhase
 	slackUserQuestionAsker = events.InteractiveUserQuestionAsker(slackSink.AskUserQuestion)
+	drainSlack = func(ctx context.Context, conversationID string, phase rocketcode.TurnPhase) []string {
+		return slackSink.DrainSteers(ctx, conversationID, harnessbridge.ThreadTurnPhaseFrom(phase))
+	}
 	startThreadRoot = slackSink.StartNewThreadRoot
 
 	removeSlackBridge, err := clockwork.registerBridge(events.BridgeSlack, slackSink)
@@ -404,6 +397,43 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	}
 
 	stops = append(stops, namedStopper{name: "slack", stop: slackSink.Stop})
+	slackSink.SetPendingSteersSink(harnessbridge.PendingSteersSink{Set: rocketcodeSessions.SetPendingSteers})
+	if err := applyStartupSteerRecovery(runCtx, slackSink, threadBridges.PickLaterWork, recoveredTurns, cannotResume); err != nil {
+		return err
+	}
+
+	for i := range recoveredTurns {
+		turn := &recoveredTurns[i]
+
+		conversationID := strings.TrimSpace(turn.Checkpoint.ConversationKey)
+
+		err = threadBridges.RecoverActiveTurn(runCtx, turn)
+		if err != nil {
+			if isStartupRecoveryShutdownError(err) {
+				return err
+			}
+
+			if errRelease := rocketcodeSessions.ReleaseExternalMCPRecovery(conversationID); errRelease != nil {
+				return fmt.Errorf("release failed paired startup recovery: %w", errRelease)
+			}
+
+			reason := fmt.Sprintf("enqueue startup active turn recovery: %v", err)
+
+			if errClear := cannotResumeActiveTurn(runCtx, rocketcodeSessions, turn, func(string, []harnessbridge.PendingSteer) {}); errClear != nil {
+				return fmt.Errorf("delete failed startup active turn enqueue: %w", errClear)
+			}
+
+			if errPick := applyStartupSteerRecovery(runCtx, slackSink, threadBridges.PickLaterWork, nil, []cannotResumeItem{{conversationID: conversationID, steers: turn.PendingSteers}}); errPick != nil {
+				logger.Error("pick later work after failed startup active turn enqueue", "conversation_id", conversationID, "error", errPick)
+			}
+
+			logger.Warn("deleted failed startup active turn after enqueue error", "conversation_id", conversationID, "turn_id", turn.Checkpoint.TurnID, "error", err, "reason", reason)
+
+			continue
+		}
+
+		logger.Info("startup active turn recovery enqueued", "conversation_id", conversationID, "turn_id", turn.Checkpoint.TurnID)
+	}
 
 	textRelay := func(relayCtx context.Context, relay *events.ExternalMCPRelay, reply *events.InboundMessage, channelName string) (*events.InboundMessage, error) {
 		response := make(chan events.BroadcastReply, 1)

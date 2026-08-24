@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
@@ -2589,6 +2590,149 @@ func TestLooperLoopRequiresPromptResponseChannel(t *testing.T) {
 	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
 
 	require.EqualError(t, err, "prompt response channel is required")
+}
+
+func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
+	mock := mockResponses(
+		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "lookup", `{}`)}),
+		responseWithMessage("resp-final", "done"),
+	)
+	looper := testLooper(mock)
+	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "lookup", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
+	tool := testLooperTool("lookup")
+	tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		return TextToolResult("looked-up"), nil
+	}
+	looper.Tools = map[string]looperTool{"lookup": tool}
+	looper.SteerDrain = SteerDrain{Fn: func(context.Context, TurnPhase) []string {
+		return []string{"don't touch the database"}
+	}}
+	output := make(chan ChatResponse, 10)
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "look something up", output)
+	close(input)
+
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
+	require.Len(t, mock.calls, 2)
+	require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), `"role":"user"`)
+	require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), `"content":"don't touch the database"`)
+	require.Equal(t, TurnPhaseFinalAnswer, looper.Phase())
+}
+
+func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
+	mock := mockResponses(
+		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "lookup", `{}`)}),
+		responseWithMessage("resp-final", "done"),
+	)
+	looper := testLooper(mock)
+	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "lookup", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
+	tool := testLooperTool("lookup")
+	tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		return TextToolResult("looked-up"), nil
+	}
+	looper.Tools = map[string]looperTool{"lookup": tool}
+	looper.SteerDrain = SteerDrain{Fn: func(context.Context, TurnPhase) []string {
+		return []string{"use the other file", "and skip tests"}
+	}}
+	output := make(chan ChatResponse, 10)
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "look something up", output)
+	close(input)
+
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	items := mock.calls[1].Input.OfInputItemList
+	require.GreaterOrEqual(t, len(items), 2)
+	require.JSONEq(t, `{"content":"use the other file","role":"user","type":"message"}`, marshalJSON(t, items[len(items)-2]))
+	require.JSONEq(t, `{"content":"and skip tests","role":"user","type":"message"}`, marshalJSON(t, items[len(items)-1]))
+}
+
+func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
+	var (
+		mu     sync.Mutex
+		phases []TurnPhase
+	)
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	mock := mockResponses(
+		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{
+			testFunctionCall("tool-1", "call-1", "first", `{}`),
+			testFunctionCall("tool-2", "call-2", "second", `{}`),
+		}),
+		responseWithMessage("resp-final", "done"),
+	)
+	looper := testLooper(mock)
+	looper.ParallelToolCalls = 2
+	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{
+		{Name: "first", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
+		{Name: "second", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
+	}}
+	block := func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		started <- struct{}{}
+		<-release
+
+		return TextToolResult("ok"), nil
+	}
+	looper.Tools = map[string]looperTool{"first": {Definition: testFunctionToolParam("first"), Call: block}, "second": {Definition: testFunctionToolParam("second"), Call: block}}
+	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []string {
+		mu.Lock()
+		phases = append(phases, phase)
+		mu.Unlock()
+		if phase == TurnPhaseToolLoop {
+			return []string{"steer after batch"}
+		}
+
+		return nil
+	}}
+	output := make(chan ChatResponse, 10)
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "run both", output)
+	close(input)
+
+	var group errgroup.Group
+	group.Go(func() error {
+		return looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	})
+	<-started
+	<-started
+	mu.Lock()
+	require.Empty(t, phases)
+	require.Equal(t, TurnPhaseToolLoop, looper.Phase())
+	mu.Unlock()
+	close(release)
+	require.NoError(t, group.Wait())
+	mu.Lock()
+	require.Equal(t, []TurnPhase{TurnPhaseToolLoop, TurnPhaseFinalAnswer}, phases)
+	mu.Unlock()
+	require.Equal(t, 1, strings.Count(marshalJSON(t, mock.calls[1].Input.OfInputItemList), `"content":"steer after batch"`))
+}
+
+func TestLooperDoesNotInjectSteersWhenNoTools(t *testing.T) {
+	var phases []TurnPhase
+	mock := mockResponses(responseWithMessage("resp-final", "unchanged answer"))
+	looper := testLooper(mock)
+	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []string {
+		phases = append(phases, phase)
+
+		return []string{"also add a test"}
+	}}
+	output := make(chan ChatResponse, 10)
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "write it", output)
+	close(input)
+
+	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+
+	require.NoError(t, err)
+	require.Equal(t, []ChatResponse{assistantMessage("unchanged answer")}, collectResponses(output))
+	require.Len(t, mock.calls, 1)
+	require.NotContains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), "also add a test")
+	require.Equal(t, []TurnPhase{TurnPhaseFinalAnswer}, phases)
+	require.Equal(t, TurnPhaseFinalAnswer, looper.Phase())
 }
 
 func responseWithMessage(id, text string) *responses.Response {

@@ -33,6 +33,33 @@ const providerRetryBackoffMaxDelay = time.Minute
 
 var errTurnInterrupted = errors.New("turn interrupted")
 
+// TurnPhase is whether the live turn is still in the tool loop.
+type TurnPhase int
+
+const (
+	// TurnPhaseUnclassified means no provider response has classified the turn yet.
+	TurnPhaseUnclassified TurnPhase = iota
+	// TurnPhaseToolLoop means the last provider response requested tools.
+	TurnPhaseToolLoop
+	// TurnPhaseFinalAnswer means the last provider response had no tools.
+	TurnPhaseFinalAnswer
+)
+
+// SteerDrain collects waiting Slack Steers after a tool batch, or converts them when the final answer starts.
+// The zero value is inert.
+type SteerDrain struct {
+	Fn func(context.Context, TurnPhase) []string
+}
+
+// Drain returns waiting Slack Steer texts for phase. The zero value returns nil.
+func (d SteerDrain) Drain(ctx context.Context, phase TurnPhase) []string {
+	if d.Fn == nil {
+		return nil
+	}
+
+	return d.Fn(ctx, phase)
+}
+
 type responsesAPI interface {
 	New(context.Context, *responses.ResponseNewParams, ...option.RequestOption) (*responses.Response, error)
 	Compact(context.Context, *responses.ResponseCompactParams, ...option.RequestOption) (*responses.CompactedResponse, error)
@@ -106,6 +133,7 @@ type looper struct {
 	InPermissionReview     bool
 	Observability          ObservabilityConfig
 	CheckpointSink         CheckpointSink
+	SteerDrain             SteerDrain
 	expandInputPrompts     bool
 	promptExpansion        promptExpansionEnvironment
 	spillRel               string
@@ -114,6 +142,15 @@ type looper struct {
 	spillTurnID            string
 	spillSeq               int
 	spillPaths             []string
+	phaseMu                sync.Mutex
+	turnPhase              TurnPhase
+}
+
+func (l *looper) Phase() TurnPhase {
+	l.phaseMu.Lock()
+	defer l.phaseMu.Unlock()
+
+	return l.turnPhase
 }
 
 type permissionReviewer interface {
@@ -623,6 +660,14 @@ func (l *looper) Loop(
 	return nil
 }
 
+func (l *looper) setPhase(phase TurnPhase) {
+	l.phaseMu.Lock()
+	if l.turnPhase != phase {
+		l.turnPhase = phase
+	}
+	l.phaseMu.Unlock()
+}
+
 func (l *looper) runTurn(
 	ctx context.Context,
 	output chan<- ChatResponse,
@@ -791,33 +836,21 @@ func (l *looper) runTurn(
 			return emptyRecord, nil, false, fmt.Errorf("record provider response checkpoint: %w", err)
 		}
 
-		previousReviewInput := l.permissionReviewInput
-		l.permissionReviewInput = reviewContext
-		toolOutputs, hadToolCalls, err := l.dispatchToolCalls(turnCtx, resp, &doomLoop, output)
-		l.permissionReviewInput = previousReviewInput
-
+		hadToolCalls, compactionOnly, toolOutputs, interrupted, err := l.dispatchProviderTools(turnCtx, resp, reviewContext, &doomLoop, output, markInterrupted)
 		if err != nil {
-			if errors.Is(context.Cause(turnCtx), errTurnInterrupted) {
-				if err := markInterrupted(); err != nil {
-					return emptyRecord, nil, false, err
-				}
+			return emptyRecord, nil, false, err
+		}
 
-				return emptyRecord, nil, true, nil
-			}
-
-			if turnCtx.Err() != nil {
-				if err := markInterrupted(); err != nil {
-					return emptyRecord, nil, false, err
-				}
-			}
-
-			return emptyRecord, nil, false, fmt.Errorf("dispatch tool calls: %w", err)
+		if interrupted {
+			return emptyRecord, nil, true, nil
 		}
 
 		if !hadToolCalls {
-			if len(resp.Output) > 0 && !slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type != "compaction" }) {
+			if compactionOnly {
 				continue
 			}
+
+			l.SteerDrain.Drain(turnCtx, TurnPhaseFinalAnswer)
 
 			return record, rendered, false, nil
 		}
@@ -825,7 +858,59 @@ func (l *looper) runTurn(
 		if err := l.appendToolOutputReplay(turnCtx, &record, &turnItems, &checkpoint, toolOutputs); err != nil {
 			return emptyRecord, nil, false, err
 		}
+
+		if err := l.appendSteers(turnCtx, &record, &turnItems); err != nil {
+			return emptyRecord, nil, false, err
+		}
 	}
+}
+
+func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Response, reviewContext []responses.ResponseInputItemUnionParam, doomLoop *doomLoopTrap, output chan<- ChatResponse, markInterrupted func() error) (hadToolCalls, compactionOnly bool, toolOutputs []dispatchedToolOutput, interrupted bool, err error) {
+	hadToolCalls = slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type == "function_call" })
+	compactionOnly = len(resp.Output) > 0 && !slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type != "compaction" })
+	if hadToolCalls {
+		l.setPhase(TurnPhaseToolLoop)
+	} else if !compactionOnly {
+		l.setPhase(TurnPhaseFinalAnswer)
+	}
+
+	previousReviewInput := l.permissionReviewInput
+	l.permissionReviewInput = reviewContext
+	toolOutputs, _, err = l.dispatchToolCalls(ctx, resp, doomLoop, output)
+	l.permissionReviewInput = previousReviewInput
+
+	if err == nil {
+		return hadToolCalls, compactionOnly, toolOutputs, false, nil
+	}
+
+	if errors.Is(context.Cause(ctx), errTurnInterrupted) {
+		if err := markInterrupted(); err != nil {
+			return false, false, nil, false, err
+		}
+
+		return false, false, nil, true, nil
+	}
+
+	if ctx.Err() != nil {
+		if err := markInterrupted(); err != nil {
+			return false, false, nil, false, err
+		}
+	}
+
+	return false, false, nil, false, fmt.Errorf("dispatch tool calls: %w", err)
+}
+
+func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam) error {
+	for _, text := range l.SteerDrain.Drain(ctx, TurnPhaseToolLoop) {
+		steer := inputMessageParam(responses.EasyInputMessageRoleUser, easyInputStringContent(text))
+		if err := appendReplayInput(record, &steer); err != nil {
+			return err
+		}
+
+		*turnItems = append(*turnItems, steer)
+	}
+
+	return nil
 }
 
 func activeTurnID(record *SessionEntry) string {
