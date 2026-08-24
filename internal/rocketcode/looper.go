@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
@@ -107,6 +108,12 @@ type looper struct {
 	CheckpointSink         CheckpointSink
 	expandInputPrompts     bool
 	promptExpansion        promptExpansionEnvironment
+	spillRel               string
+	sandboxRead            looperTool
+	spillMu                sync.Mutex
+	spillTurnID            string
+	spillSeq               int
+	spillPaths             []string
 }
 
 type permissionReviewer interface {
@@ -642,6 +649,10 @@ func (l *looper) runTurn(
 		Model:       l.DisplayModel,
 		ReplayInput: replayInput,
 	}
+	turnID := activeTurnID(&record)
+
+	l.beginTurnSpills(turnID)
+	defer l.endTurnSpills()
 
 	checkpoint := l.activeTurnCheckpoint(&record, nil, nil)
 	if err := l.CheckpointSink.StartActiveTurn(ctx, &checkpoint); err != nil {

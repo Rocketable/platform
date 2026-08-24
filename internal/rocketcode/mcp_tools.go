@@ -492,6 +492,15 @@ func callExecute(ctx context.Context, registry *mcpclient.Registry, permissions 
 		out += "\n\nPartial MCP list failures:\n- " + strings.Join(notes, "\n- ")
 	}
 
+	if tc, ok := toolCallContextFrom(ctx); ok && tc.looper != nil {
+		clipped, errSpill := tc.looper.spillExecuteOutput(out)
+		if errSpill != nil {
+			return ToolResult{}, errSpill
+		}
+
+		out = clipped
+	}
+
 	return TextToolResult(out), nil
 }
 

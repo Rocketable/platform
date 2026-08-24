@@ -38,7 +38,10 @@ type Config struct {
 	ParallelToolCalls          int
 	// ShellTempDir is the workspace-relative or absolute directory used as TMPDIR
 	// for bash and prompt !`…` commands. Required; must exist inside the workspace.
-	ShellTempDir           string
+	ShellTempDir string
+	// SpillDir is the workspace-relative or absolute directory for oversized
+	// execute output. Empty uses <workspace>/.rocketcode/spill.
+	SpillDir               string
 	AutoApprovePermissions bool
 	Observability          ObservabilityConfig
 	ChildRunLogger         ChildRunLogger
@@ -271,6 +274,11 @@ func NewWithModelResolver(
 		return nil, err
 	}
 
+	spillRel, err := resolveSpillRel(root, config.SpillDir)
+	if err != nil {
+		return nil, err
+	}
+
 	if agents.Items == nil {
 		return nil, errors.New("agents are required")
 	}
@@ -373,6 +381,7 @@ func NewWithModelResolver(
 		skills:                     skills,
 		baseTools:                  baseTools,
 		shellTemp:                  shellTemp,
+		spillRel:                   spillRel,
 		autoApprovePermissions:     config.AutoApprovePermissions,
 		observability:              config.Observability,
 		childRunLogger:             config.ChildRunLogger,
@@ -412,6 +421,8 @@ func NewWithModelResolver(
 		CheckpointSink:         config.CheckpointSink,
 		expandInputPrompts:     config.ExpandPromptShellCommands.InputPrompts,
 		promptExpansion:        promptExpansion,
+		spillRel:               spillRel,
+		sandboxRead:            baseTools["read"],
 	}
 
 	if config.Diagnostics {

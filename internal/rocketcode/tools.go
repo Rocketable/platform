@@ -37,6 +37,7 @@ type toolFactory struct {
 	skills                     Skills
 	baseTools                  map[string]looperTool
 	shellTemp                  shellTempConfig
+	spillRel                   string
 	autoApprovePermissions     bool
 	observability              ObservabilityConfig
 	childRunLogger             ChildRunLogger
@@ -165,6 +166,12 @@ func (f *toolFactory) assembleTools(agent *Agent) (model, codeHosts map[string]l
 	}
 
 	return tools, codeHosts
+}
+
+func (f *toolFactory) configureSpill(loop *looper) {
+	loop.spillRel = f.spillRel
+	loop.sandboxRead = f.baseTools["read"]
+	loop.promptExpansion = f.promptExpansion
 }
 
 func toolVisible(agent *Agent, name string, tool *looperTool) bool {

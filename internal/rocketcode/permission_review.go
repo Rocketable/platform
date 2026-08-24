@@ -71,6 +71,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 		Observability:          f.observability,
 		CheckpointSink:         InertCheckpointSink{},
 	}
+	childFactory.configureSpill(child)
 
 	payload, err := json.MarshalIndent(request, "", "  ")
 	if err != nil {
