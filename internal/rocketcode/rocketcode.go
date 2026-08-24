@@ -60,6 +60,8 @@ const (
 	ChildRunKindGuardrail ChildRunKind = "guardrail"
 	// ChildRunKindPermissionReview identifies an automatic permission reviewer child run.
 	ChildRunKindPermissionReview ChildRunKind = "permission_review"
+	// ChildRunKindModelRouter identifies a model-router child run.
+	ChildRunKindModelRouter ChildRunKind = "model_router"
 )
 
 // ChildRunStage identifies the operation being reviewed by a hidden child run.
@@ -72,6 +74,8 @@ const (
 	ChildRunStageResponse ChildRunStage = "response"
 	// ChildRunStageToolPermission identifies automatic tool permission review.
 	ChildRunStageToolPermission ChildRunStage = "tool_permission"
+	// ChildRunStageModelRoute identifies model routing before a turn.
+	ChildRunStageModelRoute ChildRunStage = "model_route"
 )
 
 // ChildRunEvent contains server/operator-only hidden child-run output.
@@ -311,15 +315,8 @@ func NewWithModelResolver(
 		return nil, fmt.Errorf("missing required default agent %q", defaultAgent)
 	}
 
-	for name := range agents.Items {
-		agent := agents.Items[name]
-		if agent.Guardrail == "" {
-			continue
-		}
-
-		if _, ok := agents.Items[agent.Guardrail]; !ok {
-			return nil, fmt.Errorf("agent %q references missing guardrail agent %q", name, agent.Guardrail)
-		}
+	if err := validateAgentGraph(agents); err != nil {
+		return nil, err
 	}
 
 	expandAgentPrompt(context.Background(), &activeAgent, config.ExpandPromptShellCommands.PrimaryPrompts, &promptExpansion)
@@ -333,12 +330,11 @@ func NewWithModelResolver(
 	rootInstructions = strings.TrimSpace(rootInstructions) + "\n\n" + fmt.Sprintf("<current-workspace>\nWorkspace root: %s\n</current-workspace>", promptExpansion.hostDir)
 	systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + strings.TrimSpace(rootInstructions))
 
-	client, origin, err := resolveModel(resolver, activeAgent.Model)
+	client, origin, reasoningEffort, displayModel, err := resolveActiveAgentModel(resolver, &activeAgent, &config)
 	if err != nil {
-		return nil, fmt.Errorf("agent %q model: %w", activeAgent.Name, err)
+		return nil, err
 	}
 
-	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, string(config.ReasoningEffort)))
 	agentForTools := &activeAgent
 	activeAgent.Permission = shellTemp.effectivePermissions(activeAgent.Permission)
 	baseTools := newSandboxedTools(root, shellTemp, shellEnv, config.ShellCommand)
@@ -389,13 +385,20 @@ func NewWithModelResolver(
 		composeSystemPromptWithSkills(systemPrompt, skills, agentForTools),
 		modelTools, codeHosts, mcpServers,
 	)
+
+	var responsesClient responsesAPI
+	if client != nil {
+		responsesClient = newResponsesAPI(client)
+	}
+
 	looper := &looper{
 		agent:                  activeAgent,
+		factory:                factory,
 		ProviderOrigin:         origin,
-		Client:                 newResponsesAPI(client),
+		Client:                 responsesClient,
 		SystemPrompt:           runtimeSystemPrompt,
 		Model:                  origin.Model,
-		DisplayModel:           origin.displayModel(),
+		DisplayModel:           displayModel,
 		ReasoningEffort:        reasoningEffort,
 		Verbosity:              activeAgent.Verbosity,
 		ResponseFormat:         agentOutputResponseFormat(activeAgent.OutputSchema),
@@ -532,15 +535,92 @@ func requireProvider(providers Providers) error {
 	return nil
 }
 
+func validateAgentGraph(agents Agents) error {
+	for name := range agents.Items {
+		agent := agents.Items[name]
+		if agent.Guardrail == "" {
+			continue
+		}
+
+		guardrail, ok := agents.Items[agent.Guardrail]
+		if !ok {
+			return fmt.Errorf("agent %q references missing guardrail agent %q", name, agent.Guardrail)
+		}
+
+		if guardrail.ModelRouter != "" {
+			return fmt.Errorf("agent %q guardrail %q cannot use a model router", name, agent.Guardrail)
+		}
+	}
+
+	return validateModelRouters(agents)
+}
+
+func resolveActiveAgentModel(resolver ModelResolver, agent *Agent, config *Config) (*openai.Client, ProviderOrigin, shared.ReasoningEffort, string, error) {
+	if agent.ModelRouter != "" {
+		origin := ProviderOrigin{Provider: modelProvider(agent.ModelOptions[0].Model)}
+		return nil, origin, config.ReasoningEffort, agent.ModelOptions[0].Model, nil
+	}
+
+	client, origin, err := resolveModel(resolver, agent.Model)
+	if err != nil {
+		return nil, ProviderOrigin{}, "", "", fmt.Errorf("agent %q model: %w", agent.Name, err)
+	}
+
+	return client, origin, shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(config.ReasoningEffort))), origin.displayModel(), nil
+}
+
 func validateAgentModels(agents Agents) error {
 	for name := range agents.Items {
 		agent := agents.Items[name]
+		if agent.ModelRouter != "" {
+			continue
+		}
+
 		if strings.TrimSpace(agent.Model) == "" {
 			return fmt.Errorf("agent %q model: required non-empty string", name)
 		}
 
 		if _, err := parseModelRef(agent.Model); err != nil {
 			return fmt.Errorf("agent %q model: %w", name, err)
+		}
+	}
+
+	return nil
+}
+
+func validateModelRouters(agents Agents) error {
+	for name := range agents.Items {
+		agent := agents.Items[name]
+		if agent.ModelRouter == "" {
+			continue
+		}
+
+		target, ok := agents.Items[agent.ModelRouter]
+		if !ok {
+			return fmt.Errorf("agent %q references missing model router agent %q", name, agent.ModelRouter)
+		}
+
+		if target.ModelRouter != "" {
+			return fmt.Errorf("agent %q model router %q cannot itself use a model router", name, agent.ModelRouter)
+		}
+
+		if err := validateModelOptionProviders(agent.ModelOptions); err != nil {
+			return fmt.Errorf("agent %q: %w", name, err)
+		}
+	}
+
+	return nil
+}
+
+func validateModelOptionProviders(options []ModelOption) error {
+	if len(options) == 0 {
+		return errors.New("modelOptions: required non-empty list")
+	}
+
+	provider := modelProvider(options[0].Model)
+	for _, option := range options[1:] {
+		if modelProvider(option.Model) != provider {
+			return errors.New("modelOptions: all models must share one provider")
 		}
 	}
 

@@ -19,7 +19,7 @@ import (
 const (
 	rc000, rc001, rc002, rc003 = "RC000", "RC001", "RC002", "RC003"
 	rc004, rc005, rc006, rc007 = "RC004", "RC005", "RC006", "RC007"
-	rc008                      = "RC008"
+	rc008, rc009               = "RC008", "RC009"
 )
 
 // Finding is one lint result line.
@@ -74,6 +74,7 @@ func Lint(runtimeRoot string, cfg *config.Config) (Result, error) {
 	findings = append(findings, lintTaskCycles(infos)...)
 	findings = append(findings, lintDelegationEscalation(infos)...)
 	findings = append(findings, lintGuardrailReferences(infos)...)
+	findings = append(findings, lintModelRouters(infos)...)
 	findings = append(findings, lintReasoningEffort(infos)...)
 	findings = filterSuppressed(findings, infos)
 	slices.SortFunc(findings, func(a, b Finding) int {
@@ -371,12 +372,42 @@ func lintGuardrailReferences(infos map[string]*agentInfo) []Finding {
 	return findings
 }
 
+func lintModelRouters(infos map[string]*agentInfo) []Finding {
+	findings := []Finding{}
+
+	for name, info := range infos {
+		router := info.agent.ModelRouter
+		if router == "" {
+			continue
+		}
+
+		target, ok := infos[router]
+		if !ok {
+			findings = append(findings, Finding{Code: rc009, Severity: "error", Path: info.filePath, Message: fmt.Sprintf("%s references missing model router agent %s", name, router), keys: []string{"modelRouter"}})
+			continue
+		}
+
+		if target.agent.ModelRouter != "" {
+			findings = append(findings, Finding{Code: rc009, Severity: "error", Path: info.filePath, Message: fmt.Sprintf("%s model router %s cannot itself use a model router", name, router), keys: []string{"modelRouter"}})
+		}
+	}
+
+	return findings
+}
+
 func lintReasoningEffort(infos map[string]*agentInfo) []Finding {
 	findings := []Finding{}
 
 	for name, info := range infos {
 		if info.agent.ReasoningEffort == "xhigh" {
 			findings = append(findings, Finding{Code: rc008, Severity: "error", Path: info.filePath, Message: name + " uses reasoningEffort xhigh, which may be excessive", keys: []string{"reasoningEffort"}})
+		}
+
+		for _, option := range info.agent.ModelOptions {
+			if option.ReasoningEffort == "xhigh" {
+				findings = append(findings, Finding{Code: rc008, Severity: "error", Path: info.filePath, Message: name + " uses reasoningEffort xhigh, which may be excessive", keys: []string{"modelOptions", "reasoningEffort"}})
+				break
+			}
 		}
 	}
 

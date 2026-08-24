@@ -227,9 +227,11 @@ Known frontmatter fields:
 | Field | Meaning |
 | --- | --- |
 | `description` | Required short purpose shown when selecting agents. |
-| `model` | Required concrete model or `{{ model "name" }}` placeholder configured in `models`. |
-| `reasoningEffort` | Optional model reasoning effort. Avoid `xhigh`; `rocketclaw lint` reports it. |
-| `verbosity` | Optional model verbosity. |
+| `model` | Required concrete model or `{{ model "name" }}` placeholder configured in `models`, unless `modelRouter` is set. |
+| `reasoningEffort` | Optional model reasoning effort. Omit when `modelRouter` is set. Avoid `xhigh`; `rocketclaw lint` reports it. |
+| `verbosity` | Optional model verbosity. Omit when `modelRouter` is set. |
+| `modelRouter` | Optional loaded agent name. Before each turn, that agent sees the incoming message and `modelOptions` and returns one allowed `model`, `reasoningEffort`, and `verbosity`. A router agent cannot itself set `modelRouter`. |
+| `modelOptions` | Required when `modelRouter` is set. List of allowed `{model, reasoningEffort, verbosity}` triples. All `model` values must share one provider. The router pick must match one entry or the turn fails. |
 | `maxRecursion` | Optional task delegation depth for inferences started with this agent. Omitted or `-1` is unlimited, `0` disables `task`, and positive integers allow that many levels. |
 | `guardrail` | Optional loaded agent name that gates task delegations to this agent before the child runs and after its response. The guardrail must approve or reject with strict JSON containing `approved` and `reason`; it does not transform the delegated prompt or child response. |
 | `additionalInstructions` | Optional RocketClaw normal-reply prompt-header override for this selected agent. Use it for response-format guidance, such as telling an agent to avoid Markdown for Slack, prefer Markdown for technical answers, keep answers terse, or follow another surface-specific style. When omitted, RocketClaw uses `Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.` It does not affect internal notes or raw cron runs. |

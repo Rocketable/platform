@@ -106,6 +106,26 @@ The State Store is PostgreSQL. `run` ignores `state.sqlite3`.
 
 After every workspace has moved, SQLite support is deleted. It is not a historical-format migrator.
 
+## Agents
+
+### Routed Agent
+
+A loaded agent that sets `modelRouter` and Model Options instead of a static `model`.
+
+It omits `model`, `reasoningEffort`, and `verbosity`. Each of its turns uses one Model Options entry chosen by its Model Router.
+
+### Model Router
+
+A loaded agent named by another agent's `modelRouter` frontmatter.
+
+Before the Routed Agent runs, the Model Router receives that turn's incoming message and the Routed Agent's Model Options and returns one allowed model, reasoning effort, and verbosity. A Model Router cannot itself have a Model Router.
+
+### Model Options
+
+The declared list of allowed model / reasoning effort / verbosity triples on an agent that uses a Model Router.
+
+The Model Router's returned triple must match one entry. There is no fallback outside this list.
+
 ## Relationships
 
 - A Root Slack Mention creates or targets a Managed Slack Thread.
@@ -117,3 +137,4 @@ After every workspace has moved, SQLite support is deleted. It is not a historic
 - A Managed Slack Thread, Buffered Follow-Up, and External MCP binding persist in the State Store.
 - An Operator SQLite Migrator copies missing `state.sqlite3` rows into the State Store.
 - Development MCP lint and run_turn consume Request-Carried Context and read Overlay Clones; Reload replaces those clones.
+- A Model Router chooses one entry from a Routed Agent's Model Options for that turn.

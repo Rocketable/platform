@@ -320,6 +320,70 @@ ignored
 		require.Empty(t, result.Agents.Items)
 	})
 
+	t.Run("loads model router without host model", func(t *testing.T) {
+		result := LoadAgents(fstest.MapFS{
+			"main.md": testMapFile(`---
+description: Main
+modelRouter: costEffectiveRouter
+modelOptions:
+  - model: gpt-5.4
+    reasoningEffort: low
+    verbosity: low
+  - model: gpt-5.5
+    reasoningEffort: high
+    verbosity: medium
+---
+Main prompt
+`),
+			"costEffectiveRouter.md": testMapFile(`---
+description: Router
+model: gpt-5.4
+reasoningEffort: low
+---
+Pick a model
+`),
+		}, passThroughAgentModel)
+
+		require.Empty(t, result.Errors)
+		main := result.Agents.Items["main"]
+		require.Equal(t, "costEffectiveRouter", main.ModelRouter)
+		require.Empty(t, main.Model)
+		require.Equal(t, []ModelOption{
+			{Model: "gpt-5.4", ReasoningEffort: "low", Verbosity: "low"},
+			{Model: "gpt-5.5", ReasoningEffort: "high", Verbosity: "medium"},
+		}, main.ModelOptions)
+	})
+
+	t.Run("rejects host model with model router", func(t *testing.T) {
+		result := LoadAgents(fstest.MapFS{
+			"main.md": testMapFile(`---
+model: gpt-5.5
+modelRouter: costEffectiveRouter
+modelOptions:
+  - model: gpt-5.4
+---
+Prompt
+`),
+		}, passThroughAgentModel)
+
+		require.Empty(t, result.Agents.Items)
+		require.EqualError(t, result.Errors[0], "main.md: model: must be omitted when modelRouter is set")
+	})
+
+	t.Run("rejects empty model options", func(t *testing.T) {
+		result := LoadAgents(fstest.MapFS{
+			"main.md": testMapFile(`---
+modelRouter: costEffectiveRouter
+modelOptions: []
+---
+Prompt
+`),
+		}, passThroughAgentModel)
+
+		require.Empty(t, result.Agents.Items)
+		require.EqualError(t, result.Errors[0], "main.md: modelOptions: required non-empty list")
+	})
+
 	t.Run("reports read dir failure", func(t *testing.T) {
 		result := LoadAgents(failingFS{}, passThroughAgentModel)
 

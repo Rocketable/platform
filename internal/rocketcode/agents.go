@@ -23,6 +23,8 @@ type Agent struct {
 	Model           string
 	ReasoningEffort string
 	Verbosity       string
+	ModelRouter     string
+	ModelOptions    []ModelOption
 	MaxRecursion    *int
 	Guardrail       string
 	Prompt          string
@@ -31,6 +33,13 @@ type Agent struct {
 	OutputSchema    map[string]any
 	Frontmatter     map[string]any
 	FileMode        fs.FileMode
+}
+
+// ModelOption is one allowed model / reasoning effort / verbosity triple.
+type ModelOption struct {
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"reasoningEffort"`
+	Verbosity       string `json:"verbosity"`
 }
 
 // Agents contains all discovered agents keyed by name.
@@ -150,18 +159,46 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 		return Agent{}, fmt.Errorf("%s: empty agent name", filePath)
 	}
 
+	modelRouter := strings.TrimSpace(frontmatterString(frontmatter, "modelRouter"))
 	modelField := frontmatterField(frontmatterNode, "model")
-	if modelField == nil || modelField.Kind != yaml.ScalarNode || modelField.ShortTag() != "!!str" || strings.TrimSpace(modelField.Value) == "" {
-		return Agent{}, fmt.Errorf("%s: model: required non-empty string", filePath)
-	}
+	reasoningEffort := frontmatterString(frontmatter, "reasoningEffort")
+	verbosity := frontmatterString(frontmatter, "verbosity")
 
-	model, err := resolveModel(modelField.Value)
-	if err != nil {
-		return Agent{}, fmt.Errorf("%s: model: %w", filePath, err)
-	}
+	var (
+		model        string
+		modelOptions []ModelOption
+	)
 
-	if strings.TrimSpace(model) == "" {
-		return Agent{}, fmt.Errorf("%s: model: required non-empty string", filePath)
+	if modelRouter != "" {
+		if modelField != nil {
+			return Agent{}, fmt.Errorf("%s: model: must be omitted when modelRouter is set", filePath)
+		}
+
+		if strings.TrimSpace(reasoningEffort) != "" || strings.TrimSpace(verbosity) != "" {
+			return Agent{}, fmt.Errorf("%s: reasoningEffort and verbosity: must be omitted when modelRouter is set", filePath)
+		}
+
+		var err error
+
+		modelOptions, err = parseModelOptions(frontmatterField(frontmatterNode, "modelOptions"), resolveModel)
+		if err != nil {
+			return Agent{}, fmt.Errorf("%s: %w", filePath, err)
+		}
+	} else {
+		if modelField == nil || modelField.Kind != yaml.ScalarNode || modelField.ShortTag() != "!!str" || strings.TrimSpace(modelField.Value) == "" {
+			return Agent{}, fmt.Errorf("%s: model: required non-empty string", filePath)
+		}
+
+		var err error
+
+		model, err = resolveModel(modelField.Value)
+		if err != nil {
+			return Agent{}, fmt.Errorf("%s: model: %w", filePath, err)
+		}
+
+		if strings.TrimSpace(model) == "" {
+			return Agent{}, fmt.Errorf("%s: model: required non-empty string", filePath)
+		}
 	}
 
 	outputSchema, err := parseAgentOutputSchema(frontmatterField(frontmatterNode, "schema"))
@@ -173,8 +210,10 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 		Name:            name,
 		Description:     frontmatterString(frontmatter, "description"),
 		Model:           model,
-		ReasoningEffort: frontmatterString(frontmatter, "reasoningEffort"),
-		Verbosity:       frontmatterString(frontmatter, "verbosity"),
+		ReasoningEffort: reasoningEffort,
+		Verbosity:       verbosity,
+		ModelRouter:     modelRouter,
+		ModelOptions:    modelOptions,
 		MaxRecursion:    maxRecursion,
 		Guardrail:       frontmatterString(frontmatter, "guardrail"),
 		Prompt:          strings.TrimSpace(prompt),
@@ -188,6 +227,50 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 
 func passThroughAgentModel(model string) (string, error) {
 	return model, nil
+}
+
+func parseModelOptions(node *yaml.Node, resolveModel func(string) (string, error)) ([]ModelOption, error) {
+	if node == nil || node.Kind != yaml.SequenceNode || len(node.Content) == 0 {
+		return nil, errors.New("modelOptions: required non-empty list")
+	}
+
+	options := make([]ModelOption, 0, len(node.Content))
+	for i, item := range node.Content {
+		if item.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("modelOptions[%d]: must be a mapping", i)
+		}
+
+		modelField := frontmatterField(item, "model")
+		if modelField == nil || modelField.Kind != yaml.ScalarNode || modelField.ShortTag() != "!!str" || strings.TrimSpace(modelField.Value) == "" {
+			return nil, fmt.Errorf("modelOptions[%d]: model: required non-empty string", i)
+		}
+
+		model, err := resolveModel(modelField.Value)
+		if err != nil {
+			return nil, fmt.Errorf("modelOptions[%d]: model: %w", i, err)
+		}
+
+		if strings.TrimSpace(model) == "" {
+			return nil, fmt.Errorf("modelOptions[%d]: model: required non-empty string", i)
+		}
+
+		options = append(options, ModelOption{
+			Model:           model,
+			ReasoningEffort: yamlMappingString(item, "reasoningEffort"),
+			Verbosity:       yamlMappingString(item, "verbosity"),
+		})
+	}
+
+	return options, nil
+}
+
+func yamlMappingString(node *yaml.Node, key string) string {
+	field := frontmatterField(node, key)
+	if field == nil || field.Kind != yaml.ScalarNode {
+		return ""
+	}
+
+	return field.Value
 }
 
 func parseAgentFrontmatter(content string) (frontmatter map[string]any, frontmatterNode *yaml.Node, prompt string, err error) {

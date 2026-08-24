@@ -132,6 +132,60 @@ expensive
 	}
 }
 
+func TestLintMissingModelRouter(t *testing.T) {
+	runtimeRoot := t.TempDir()
+	writeRoutedAgent(t, runtimeRoot, "main.md", `---
+description: main
+modelRouter: missing
+modelOptions:
+  - model: gpt-5.4
+    reasoningEffort: low
+    verbosity: low
+---
+main
+`)
+
+	result, err := Lint(runtimeRoot, new(config.Config))
+	require.NoError(t, err)
+	require.Len(t, result.Findings, 1)
+	assert.Equal(t, rc009, result.Findings[0].Code)
+}
+
+func TestLintNestedModelRouter(t *testing.T) {
+	runtimeRoot := t.TempDir()
+	writeRoutedAgent(t, runtimeRoot, "main.md", `---
+description: main
+modelRouter: router
+modelOptions:
+  - model: gpt-5.4
+    reasoningEffort: low
+    verbosity: low
+---
+main
+`)
+	writeRoutedAgent(t, runtimeRoot, "router.md", `---
+description: router
+modelRouter: other
+modelOptions:
+  - model: gpt-5.4
+    reasoningEffort: low
+    verbosity: low
+---
+router
+`)
+	writeAgent(t, runtimeRoot, "other.md", `---
+description: other
+---
+other
+`)
+
+	result, err := Lint(runtimeRoot, new(config.Config))
+	require.NoError(t, err)
+	require.True(t, slices.ContainsFunc(result.Findings, func(finding Finding) bool {
+		return finding.Code == rc009
+	}))
+}
+
 func TestLintReasoningEffortXHighError(t *testing.T) {
 	runtimeRoot := t.TempDir()
 	writeAgent(t, runtimeRoot, "expensive.md", `---
@@ -265,6 +319,14 @@ func TestLintResolvesModelTemplate(t *testing.T) {
 
 	_, err = Lint(runtimeRoot, new(config.Config))
 	require.ErrorContains(t, err, `model "coding-high" is not configured`)
+}
+
+func writeRoutedAgent(t *testing.T, runtimeRoot, name, content string) {
+	t.Helper()
+
+	agentsRoot := filepath.Join(runtimeRoot, "agents")
+	require.NoError(t, os.MkdirAll(agentsRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(agentsRoot, name), []byte(content), 0o644))
 }
 
 func writeAgent(t *testing.T, runtimeRoot, name, content string, models ...string) {

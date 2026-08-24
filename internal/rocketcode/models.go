@@ -70,6 +70,15 @@ func (o ProviderOrigin) displayModel() string {
 	return o.Provider + "/" + o.Model
 }
 
+func modelProvider(model string) string {
+	model = strings.TrimSpace(model)
+	if provider, _, ok := strings.Cut(model, "/"); ok && provider != "" {
+		return provider
+	}
+
+	return "openai"
+}
+
 func defaultModelRef() modelRef {
 	return modelRef{apiModel: defaultOpenAIModel}
 }

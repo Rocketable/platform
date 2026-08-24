@@ -81,6 +81,7 @@ type toolCallMetadata struct {
 // looper runs conversational turns against the configured model and tools.
 type looper struct {
 	agent              Agent
+	factory            *toolFactory
 	ProviderOrigin     ProviderOrigin
 	Client             responsesAPI
 	SystemPrompt       string
@@ -625,7 +626,7 @@ func (l *looper) runTurn(
 ) (record SessionEntry, rendered []ChatResponse, interrupted bool, err error) {
 	var emptyRecord SessionEntry
 
-	input, turnItems, err := l.promptTurnItems(ctx, input)
+	input, turnItems, err := l.prepareTurn(ctx, input, output)
 	if err != nil {
 		return emptyRecord, nil, false, err
 	}

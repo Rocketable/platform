@@ -524,6 +524,42 @@ func TestNewRejectsMissingGuardrailAgent(t *testing.T) {
 	require.EqualError(t, err, `agent "main" references missing guardrail agent "safety"`)
 }
 
+func TestNewRejectsMissingModelRouterAgent(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	client := openai.NewClient()
+	config := testWorkspaceConfig(t, dir)
+	agents := Agents{Items: map[string]Agent{"main": {Name: "main", ModelRouter: "costEffectiveRouter", ModelOptions: []ModelOption{{Model: "gpt-5.4"}}}}}
+	skills := Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}
+
+	_, err = New(&client, config, root, agents, skills, "main", nil)
+
+	require.EqualError(t, err, `agent "main" references missing model router agent "costEffectiveRouter"`)
+}
+
+func TestNewRejectsNestedModelRouter(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	client := openai.NewClient()
+	config := testWorkspaceConfig(t, dir)
+	agents := Agents{Items: map[string]Agent{
+		"main":                {Name: "main", ModelRouter: "costEffectiveRouter", ModelOptions: []ModelOption{{Model: "gpt-5.4"}}},
+		"costEffectiveRouter": {Name: "costEffectiveRouter", ModelRouter: "other", ModelOptions: []ModelOption{{Model: "gpt-5.4"}}},
+		"other":               {Name: "other", Model: "gpt-5.4"},
+	}}
+	skills := Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}
+
+	_, err = New(&client, config, root, agents, skills, "main", nil)
+
+	require.EqualError(t, err, `agent "main" model router "costEffectiveRouter" cannot itself use a model router`)
+}
+
 func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)

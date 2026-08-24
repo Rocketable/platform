@@ -199,9 +199,20 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		childFactory.recursionRemaining = &remaining
 	}
 
-	client, origin, err := resolveModel(f.resolver, agent.Model)
-	if err != nil {
-		return "", err
+	var (
+		client *openai.Client
+		origin ProviderOrigin
+	)
+
+	if agent.ModelRouter == "" {
+		var err error
+
+		client, origin, err = resolveModel(f.resolver, agent.Model)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		origin = ProviderOrigin{Provider: modelProvider(agent.ModelOptions[0].Model)}
 	}
 
 	modelTools, codeHosts := childFactory.assembleTools(&agent)
@@ -215,13 +226,25 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		composeSystemPromptWithSkills(strings.TrimSpace(f.systemPrompt+"\n\n"+agent.Prompt), f.skills, &agent),
 		modelTools, codeHosts, mcpServers,
 	)
+
+	var responsesClient responsesAPI
+	if client != nil {
+		responsesClient = newResponsesAPI(client)
+	}
+
+	displayModel := origin.displayModel()
+	if agent.ModelRouter != "" {
+		displayModel = agent.ModelOptions[0].Model
+	}
+
 	child := &looper{
 		agent:                  agent,
+		factory:                &childFactory,
 		ProviderOrigin:         origin,
-		Client:                 newResponsesAPI(client),
+		Client:                 responsesClient,
 		SystemPrompt:           systemPrompt,
 		Model:                  origin.Model,
-		DisplayModel:           origin.displayModel(),
+		DisplayModel:           displayModel,
 		ReasoningEffort:        shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
 		Verbosity:              agent.Verbosity,
 		CompactThreshold:       f.compactThreshold,
@@ -282,7 +305,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	})
 
 	interrupts := make(chan os.Signal, 1)
-	err = child.Loop(ctx, input, func(func(SessionEntry, error) bool) {}, func(SessionEntry) error { return nil }, interrupts)
+	err := child.Loop(ctx, input, func(func(SessionEntry, error) bool) {}, func(SessionEntry) error { return nil }, interrupts)
 
 	if errWait := group.Wait(); errWait != nil {
 		return "", fmt.Errorf("collect task output: %w", errWait)

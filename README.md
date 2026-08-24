@@ -87,7 +87,7 @@ Fresh RocketClaw stores apply embedded SQL migrations on first open. Startup doe
 
 Store tests run against the last three supported PostgreSQL majors from https://www.postgresql.org/versions.json. Local `make test` in `internal/rocketclaw` uses Docker for the newest of those, or `ROCKETCLAW_TEST_DATABASE_URL` if set. GitHub Actions runs all three.
 
-Agent files must declare `model` frontmatter. Use a concrete model such as `gpt-5.5`, or map a deployment-specific name in `rocketclaw.json` or `femtoclaw.json`:
+Agent files must declare `model` frontmatter, unless they set `modelRouter` and `modelOptions`. Use a concrete model such as `gpt-5.5`, or map a deployment-specific name in `rocketclaw.json` or `femtoclaw.json`:
 
 ```yaml
 model: '{{ model "coding-high" }}'

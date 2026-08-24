@@ -13,6 +13,49 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+func TestTaskRoutesOnTaskPrompt(t *testing.T) {
+	pick := `{"model":"gpt-5.4","reasoningEffort":"low","verbosity":"low"}`
+	routerClient, routerRequests := testResolverClient(t, pick)
+	workClient, workRequests := testResolverClient(t, "child answer")
+	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{
+		"review": {Name: "review", ModelRouter: "router", ModelOptions: []ModelOption{{Model: "gpt-5.4", ReasoningEffort: "low", Verbosity: "low"}}, Prompt: "review carefully"},
+		"router": {Name: "router", Model: "gpt-5.4", Prompt: "route"},
+	}})
+	calls := 0
+	factory.resolver = testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
+		calls++
+		if calls == 1 {
+			return routerClient, ProviderOrigin{Provider: "openai", Model: "gpt-5.4"}, nil
+		}
+
+		return workClient, ProviderOrigin{Provider: "openai", Model: "gpt-5.4"}, nil
+	})
+
+	got, err := factory.runTask(context.Background(), testTaskParams("Review", "review this diff", "review"), toolCallMetadata{}, testTaskOutput())
+
+	require.NoError(t, err)
+	require.Equal(t, "<task_result>\nchild answer\n</task_result>", got)
+	require.Len(t, routerRequests, 1)
+	require.Contains(t, <-routerRequests, "review this diff")
+	require.Len(t, workRequests, 1)
+}
+
+func TestTaskModelRouterRejectsUnknownChoice(t *testing.T) {
+	pick := `{"model":"gpt-9","reasoningEffort":"low","verbosity":"low"}`
+	routerClient, _ := testResolverClient(t, pick)
+	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{
+		"review": {Name: "review", ModelRouter: "router", ModelOptions: []ModelOption{{Model: "gpt-5.4", ReasoningEffort: "low", Verbosity: "low"}}},
+		"router": {Name: "router", Model: "gpt-5.4"},
+	}})
+	factory.resolver = testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
+		return routerClient, ProviderOrigin{Provider: "openai", Model: "gpt-5.4"}, nil
+	})
+
+	_, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{}, testTaskOutput())
+
+	require.ErrorContains(t, err, "not in modelOptions")
+}
+
 func TestTaskRejectsEmptySubagentModelWithoutResolving(t *testing.T) {
 	for _, model := range []string{"", "   "} {
 		t.Run(model, func(t *testing.T) {

@@ -218,6 +218,27 @@ func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
 	require.Equal(t, "work/gpt-5.5", saved.Model)
 }
 
+func TestNewWithModelResolverAcceptsRoutedDefaultAgent(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	client, _ := testResolverClient(t, "answer")
+	resolver := testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
+		return client, ProviderOrigin{Provider: "openai", Model: "gpt-5.4"}, nil
+	})
+	loop, err := NewWithModelResolver(resolver, testConfig(dir), root, Agents{Items: map[string]Agent{
+		"main":   {Name: "main", ModelRouter: "router", ModelOptions: []ModelOption{{Model: "gpt-5.4", ReasoningEffort: "low", Verbosity: "low"}}, Prompt: "prompt"},
+		"router": {Name: "router", Model: "gpt-5.4", Prompt: "route"},
+	}}, Skills{Items: map[string]Skill{}}, "main", nil)
+
+	require.NoError(t, err)
+	require.Empty(t, loop.Model)
+	require.Equal(t, "gpt-5.4", loop.DisplayModel)
+	require.Equal(t, "openai", loop.ProviderOrigin.Provider)
+}
+
 func TestParseModelRef(t *testing.T) {
 	for _, tc := range []struct{ name, model, apiModel, display string }{
 		{name: "empty", model: "", apiModel: "gpt-5.5", display: "gpt-5.5"},
