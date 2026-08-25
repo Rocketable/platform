@@ -929,32 +929,22 @@ def main(args): return parallel([spin, spin])`), RunRequest{RunID: "steps"}, ine
 	})
 
 	t.Run("progress failure cancels siblings", func(t *testing.T) {
-		blocked := make(chan struct{})
 		canceled := make(chan struct{})
-
-		var mu sync.Mutex
-
-		calls := 0
+		var once sync.Once
+		sawRunning := false
 
 		_, err := Run(t.Context(), engineDefinition(t, `def main(args): return parallel([lambda: agent("a"), lambda: agent("b")])`), RunRequest{RunID: "progress-failure"}, func(ctx context.Context, _ AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
-			select {
-			case blocked <- struct{}{}:
-			case <-ctx.Done():
-				close(canceled)
-				return nil, context.Cause(ctx)
-			}
-
 			<-ctx.Done()
-			close(canceled)
+			once.Do(func() { close(canceled) })
 
 			return nil, context.Cause(ctx)
-		}, func(context.Context, PhaseUpdate) error {
-			mu.Lock()
-			defer mu.Unlock()
-
-			calls++
-			if calls >= 3 {
+		}, func(_ context.Context, update PhaseUpdate) error {
+			if sawRunning {
 				return errors.New("progress broke")
+			}
+
+			if update.Running > 0 {
+				sawRunning = true
 			}
 
 			return nil
