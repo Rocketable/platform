@@ -34,7 +34,7 @@ import (
 const (
 	slackFileDownloadTimeout                                                                                                     = 30 * time.Second
 	maxSlackImageDownloadBytes                                                                                                   = 16 << 20
-	slackTextLimit, slackBlockTextLimit, slackPreferredChunkSize, slackModalBlockLimit                                           = 3800, 3000, 3200, 100
+	slackTextLimit, slackBlockTextLimit, slackPreferredChunkSize, slackModalBlockLimit, slackPlanTaskLimit                       = 3800, 3000, 3200, 100, 50
 	slackAdoptHistoryLimit                                                                                                       = 50
 	slackRobotReaction                                                                                                           = "robot_face"
 	slackExternalMCPRelayReaction                                                                                                = "satellite_antenna"
@@ -1723,18 +1723,28 @@ func slackMergeThinkingTasks(tasks []slack.TaskUpdateChunk, chunks []slack.Strea
 }
 
 func slackThinkingPlanBlock(title string, tasks []slack.TaskUpdateChunk) *slack.PlanBlock {
+	if len(tasks) > slackPlanTaskLimit {
+		tasks = tasks[len(tasks)-slackPlanTaskLimit:]
+	}
+
 	planTasks := make([]*slack.TaskCardBlock, len(tasks))
 	for i := range tasks {
 		task := slack.NewTaskCardBlock(tasks[i].ID, tasks[i].Title).WithStatus(tasks[i].Status)
 		if tasks[i].Details != "" {
 			lines := strings.Split(tasks[i].Details, "\n")
 
-			details := make([]slack.RichTextElement, 0, len(lines))
+			items := make([]slack.RichTextElement, 0, len(lines))
 			for _, line := range lines {
-				details = append(details, slack.NewRichTextSection(slackRichTextElements(line)...))
+				if strings.TrimSpace(line) == "" {
+					continue
+				}
+
+				items = append(items, slack.NewRichTextSection(slackRichTextElements(line)...))
 			}
 
-			task.WithDetails(slack.NewRichTextBlock("", details...))
+			if len(items) > 0 {
+				task.WithDetails(slack.NewRichTextBlock("", slack.NewRichTextList(slack.RTEListBullet, 0, items...)))
+			}
 		}
 
 		if len(tasks[i].Sources) > 0 {
@@ -1822,8 +1832,103 @@ func slackLooksLikeNewThinkingActivity(line string) bool {
 	return false
 }
 
+func slackSubagentClump(activity string) (title, detail string, ok bool) {
+	titleLine, extra, _ := strings.Cut(activity, "\n")
+	titleLine = strings.TrimSpace(titleLine)
+
+	rest, ok := strings.CutPrefix(titleLine, "subagent(")
+	if !ok {
+		return "", "", false
+	}
+
+	closeIdx := strings.IndexByte(rest, ')')
+	if closeIdx < 0 {
+		return "", "", false
+	}
+
+	prefix := "subagent(" + rest[:closeIdx+1]
+	after := strings.TrimSpace(rest[closeIdx+1:])
+
+	after, ok = strings.CutPrefix(after, "→ ")
+	if !ok {
+		after, ok = strings.CutPrefix(after, "-> ")
+	}
+
+	if !ok {
+		return "", "", false
+	}
+
+	name, detail, found := strings.Cut(after, " → ")
+	if !found {
+		name, detail, _ = strings.Cut(after, ": ")
+	}
+
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", "", false
+	}
+
+	title = prefix + " → " + name
+
+	detail = strings.TrimSpace(detail)
+	if extra != "" {
+		if detail != "" {
+			detail += "\n" + extra
+		} else {
+			detail = extra
+		}
+	}
+
+	return title, detail, true
+}
+
+func slackSubagentTaskChunk(pending *slackThinkingState, byID map[string]slack.TaskUpdateChunk, i int, activity string) (slack.TaskUpdateChunk, bool) {
+	title, detail, ok := slackSubagentClump(activity)
+	if !ok {
+		return slack.TaskUpdateChunk{}, false
+	}
+
+	id, details := "", ""
+
+	for _, existing := range byID {
+		if existing.Title == title {
+			id, details = existing.ID, existing.Details
+			break
+		}
+	}
+
+	if id == "" {
+		for _, existing := range slices.Backward(pending.tasks) {
+			if existing.Title == title {
+				id, details = existing.ID, existing.Details
+				break
+			}
+		}
+	}
+
+	if id == "" {
+		id = fmt.Sprintf("%s-activity-%d-1", pending.thinkingTaskID, pending.activitySequence+i+1)
+	}
+
+	for line := range strings.SplitSeq(detail, "\n") {
+		line = slackTruncatedText(strings.TrimSpace(line), 255, "...")
+		if line == "" {
+			continue
+		}
+
+		if details == "" {
+			details = line
+		} else {
+			details += "\n" + line
+		}
+	}
+
+	return slackClumpTaskChunk(id, title, details), true
+}
+
 func slackThinkingActivityChunks(pending *slackThinkingState, activities []string) []slack.StreamChunk {
 	// Clump related lines under parent cards:
+	// - subagent(N/M) → name: nested tool/reasoning/result lines in details
 	// - execute started: nested tools/failures in details
 	// - thinking: consecutive reasoning traces (**…**) in details until another step kind
 	byID := make(map[string]slack.TaskUpdateChunk, len(activities))
@@ -1856,6 +1961,14 @@ func slackThinkingActivityChunks(pending *slackThinkingState, activities []strin
 	}
 
 	for i, activity := range activities {
+		if chunk, ok := slackSubagentTaskChunk(pending, byID, i, activity); ok {
+			closeThinking()
+			closeExecute()
+			put(chunk)
+
+			continue
+		}
+
 		if nested, ok := strings.CutPrefix(activity, slackExecuteNestedPrefix); ok {
 			closeThinking()
 
