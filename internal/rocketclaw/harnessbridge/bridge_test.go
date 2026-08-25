@@ -2876,6 +2876,12 @@ func TestRocketCodeThinkingTextHandlesStructuredToolDiagnostics(t *testing.T) {
 	findSkills := rocketcode.ToolDiagnostic{Phase: "call", Name: "find_skills", Arguments: []byte(`{"query":"context7"}`)}
 	assert.Equal(t, "Find Skills\ncontext7", rocketcodeThinkingText(toolResponse(&findSkills)))
 
+	task := rocketcode.ToolDiagnostic{Phase: "call", Name: "task", Arguments: []byte(`{"description":"Run the heartbeat sweep","prompt":"do it","subagent_type":"hally-google-workspace"}`)}
+	assert.Equal(t, "Task hally-google-workspace\nRun the heartbeat sweep", rocketcodeThinkingText(toolResponse(&task)))
+
+	taskAgentOnly := rocketcode.ToolDiagnostic{Phase: "call", Name: "task", Arguments: []byte(`{"subagent_type":"helper"}`)}
+	assert.Equal(t, "Task helper", rocketcodeThinkingText(toolResponse(&taskAgentOnly)))
+
 	result.Result = `tool call denied: permission "bash" has no matching allow rule for subject "pwd". Choose a different action.`
 	assert.Equal(t, result.Result, rocketcodeThinkingText(toolResponse(&result)))
 
