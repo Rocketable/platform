@@ -1529,8 +1529,21 @@ func formatToolDiagnostic(diagnostic *rocketcode.ToolDiagnostic) string {
 			return "Execute → " + nested + ": " + details
 		}
 
-		// Step titles are bare Title Case names. Optional non-default status only.
 		title := thinkingStepTitle(name)
+		if name == "task" {
+			var args struct {
+				SubagentType string `json:"subagent_type"`
+			}
+
+			_ = json.Unmarshal(diagnostic.Arguments, &args)
+			if agent := strings.TrimSpace(args.SubagentType); agent != "" {
+				title = title + " " + agent
+				if details == agent {
+					details = ""
+				}
+			}
+		}
+
 		if status := strings.TrimSpace(diagnostic.Status); status != "" && status != "started" {
 			title = title + " " + status
 		}
