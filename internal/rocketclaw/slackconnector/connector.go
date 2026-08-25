@@ -385,6 +385,7 @@ func (c *Connector) DrainSteers(ctx context.Context, conversationID string, phas
 	key := slackThreadStackKey(&events.SlackReplyTarget{ChannelID: channelID, ThreadTS: threadTS})
 
 	c.mu.Lock()
+
 	pending, active := c.stacks[key]
 	if active {
 		c.stacks[key] = nil
@@ -4023,7 +4024,7 @@ func slackDollarCommandHelpTable() *slack.TableBlock {
 		AddRow(slack.NewTableRawTextCell("$workflow <name> [args]"), slack.NewTableRawTextCell("⏩"), slack.NewTableRawTextCell("Run a workflow")).
 		AddRow(slack.NewTableRawTextCell("$stop"), slack.NewTableRawTextCell("🛑"), slack.NewTableRawTextCell("Stop the active turn")).
 		AddRow(slack.NewTableRawTextCell("$enqueue <message>"), slack.NewTableRawTextCell("✉️"), slack.NewTableRawTextCell("Stash a later turn")).
-		AddRow(slack.NewTableRawTextCell("$queue"), slack.NewTableRawTextCell(""), slack.NewTableRawTextCell("Show later work and scheduled messages")).
+		AddRow(slack.NewTableRawTextCell("$queue"), slack.NewTableRawTextCell("—"), slack.NewTableRawTextCell("Show later work and scheduled messages")).
 		AddRow(slack.NewTableRawTextCell("$cron <job>"), slack.NewTableRawTextCell("🔂"), slack.NewTableRawTextCell("Run a cron job")).
 		AddRow(slack.NewTableRawTextCell("$agent [name]"), slack.NewTableRawTextCell("🎛"), slack.NewTableRawTextCell("Select or switch an agent; bare opens the selector"))
 }

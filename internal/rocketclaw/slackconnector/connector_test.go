@@ -6577,6 +6577,7 @@ func TestActivateEnqueuePostsConsumeCardThenPlaceholders(t *testing.T) {
 		posted    []url.Values
 		reactions []string
 	)
+
 	server := newSlackStackTestServer(t, &posted, &reactions)
 	defer server.Close()
 
@@ -6594,6 +6595,7 @@ func TestActivateEnqueuePostsConsumeCardThenPlaceholders(t *testing.T) {
 
 func TestDiscardPendingSteersAddsInterruption(t *testing.T) {
 	var reactions []string
+
 	server := newSlackStackTestServer(t, new([]url.Values), &reactions)
 	defer server.Close()
 
@@ -7850,10 +7852,16 @@ func assertSlackCommandHelpTable(t *testing.T, values url.Values) {
 		{{Type: "raw_text", Text: "$workflow <name> [args]"}, {Type: "raw_text", Text: "⏩"}, {Type: "raw_text", Text: "Run a workflow"}},
 		{{Type: "raw_text", Text: "$stop"}, {Type: "raw_text", Text: "🛑"}, {Type: "raw_text", Text: "Stop the active turn"}},
 		{{Type: "raw_text", Text: "$enqueue <message>"}, {Type: "raw_text", Text: "✉️"}, {Type: "raw_text", Text: "Stash a later turn"}},
-		{{Type: "raw_text", Text: "$queue"}, {Type: "raw_text", Text: ""}, {Type: "raw_text", Text: "Show later work and scheduled messages"}},
+		{{Type: "raw_text", Text: "$queue"}, {Type: "raw_text", Text: "—"}, {Type: "raw_text", Text: "Show later work and scheduled messages"}},
 		{{Type: "raw_text", Text: "$cron <job>"}, {Type: "raw_text", Text: "🔂"}, {Type: "raw_text", Text: "Run a cron job"}},
 		{{Type: "raw_text", Text: "$agent [name]"}, {Type: "raw_text", Text: "🎛"}, {Type: "raw_text", Text: "Select or switch an agent; bare opens the selector"}},
 	}, blocks[0].Rows)
+
+	for _, row := range blocks[0].Rows {
+		for _, cell := range row {
+			assert.NotEmpty(t, cell.Text, "Slack rejects empty table cells with invalid_blocks")
+		}
+	}
 }
 
 func TestHandleInteractiveSlackAgentSelectorRequiresRequester(t *testing.T) {
