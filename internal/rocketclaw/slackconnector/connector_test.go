@@ -406,6 +406,34 @@ func TestSlackThinkingBlocksSkipWhitespaceOnlyLines(t *testing.T) {
 	assert.Equal(t, []richTextElement{{Type: "text", Text: "second activity"}}, blocks[0].Details.Elements[2].Elements)
 }
 
+func TestSlackThinkingPlanBlockCapsAtSlackLimit(t *testing.T) {
+	tasks := make([]slack.TaskUpdateChunk, slackPlanTaskLimit+1)
+	for i := range tasks {
+		tasks[i] = slack.NewTaskUpdateChunk(fmt.Sprintf("id-%d", i), fmt.Sprintf("task-%d", i))
+		tasks[i].Status = slack.TaskCardStatusComplete
+	}
+
+	block := slackThinkingPlanBlock("Thinking...", tasks)
+	require.Len(t, block.Tasks, slackPlanTaskLimit)
+	assert.Equal(t, "id-1", block.Tasks[0].TaskID)
+	assert.Equal(t, fmt.Sprintf("id-%d", slackPlanTaskLimit), block.Tasks[len(block.Tasks)-1].TaskID)
+}
+
+func TestSlackThinkingPlanBlockSkipsEmptyDetailLines(t *testing.T) {
+	chunk := slack.NewTaskUpdateChunk("id-1", "Execute")
+	chunk.Status = slack.TaskCardStatusComplete
+	chunk.Details = "kept\n  \n\nsecond"
+
+	block := slackThinkingPlanBlock("Thinking...", []slack.TaskUpdateChunk{chunk})
+	require.Len(t, block.Tasks, 1)
+	require.NotNil(t, block.Tasks[0].Details)
+	require.Len(t, block.Tasks[0].Details.Elements, 1)
+	list, ok := block.Tasks[0].Details.Elements[0].(*slack.RichTextList)
+	require.True(t, ok)
+	assert.Equal(t, slack.RTEListBullet, list.Style)
+	require.Len(t, list.Elements, 2)
+}
+
 func TestCanonicalSlackCommand(t *testing.T) {
 	for _, tt := range []struct {
 		name, text, want string
@@ -3096,7 +3124,7 @@ func TestFlushProgressFallsBackToPlanUpdateWhenStreamEnded(t *testing.T) {
 			assert.Equal(t, "C123", requests[1].form.Get("channel"))
 			assert.Equal(t, "555.1", requests[1].form.Get("ts"))
 			assert.JSONEq(t, `[{"type":"task_update","id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress"},{"type":"task_update","id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress","details":"failure-trace: read: <https://example.com/report|report>","sources":[{"type":"url","url":"https://example.com/report","text":"report"}]},{"type":"task_update","id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress","details":"\ncanonical-owner: grep: ownership","sources":[{"type":"url","url":"https://example.com/report","text":"report"}]}]`, requests[0].form.Get("chunks"))
-			assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress","details":{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"failure-trace: read: "},{"type":"link","url":"https://example.com/report","text":"report"}]},{"type":"rich_text_section","elements":[{"type":"text","text":"canonical-owner: grep: ownership"}]}]},"sources":[{"type":"url","url":"https://example.com/report","text":"report"}]}]}]`, requests[1].form.Get("blocks"))
+			assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 2/3","status":"in_progress","details":{"type":"rich_text","elements":[{"type":"rich_text_list","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"failure-trace: read: "},{"type":"link","url":"https://example.com/report","text":"report"}]},{"type":"rich_text_section","elements":[{"type":"text","text":"canonical-owner: grep: ownership"}]}],"style":"bullet","indent":0,"border":0,"offset":0}]},"sources":[{"type":"url","url":"https://example.com/report","text":"report"}]}]}]`, requests[1].form.Get("blocks"))
 
 			agent.Activity = "bash: verify"
 			phase.Status, phase.Running, phase.Complete = workflow.PhaseComplete, 0, 3
@@ -3107,7 +3135,7 @@ func TestFlushProgressFallsBackToPlanUpdateWhenStreamEnded(t *testing.T) {
 
 			require.Len(t, requests, 3)
 			assert.Equal(t, "/chat.update", requests[2].path)
-			assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 3/3","status":"complete","details":{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"failure-trace: read: "},{"type":"link","url":"https://example.com/report","text":"report"}]},{"type":"rich_text_section","elements":[{"type":"text","text":"canonical-owner: grep: ownership"}]},{"type":"rich_text_section","elements":[{"type":"text","text":"failure-trace: bash: verify"}]}]},"sources":[{"type":"url","url":"https://example.com/report","text":"report"}]}]}]`, requests[2].form.Get("blocks"))
+			assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"run/phase/000000/audit","title":"audit · 3/3","status":"complete","details":{"type":"rich_text","elements":[{"type":"rich_text_list","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"failure-trace: read: "},{"type":"link","url":"https://example.com/report","text":"report"}]},{"type":"rich_text_section","elements":[{"type":"text","text":"canonical-owner: grep: ownership"}]},{"type":"rich_text_section","elements":[{"type":"text","text":"failure-trace: bash: verify"}]}],"style":"bullet","indent":0,"border":0,"offset":0}]},"sources":[{"type":"url","url":"https://example.com/report","text":"report"}]}]}]`, requests[2].form.Get("blocks"))
 		})
 	}
 }
@@ -3326,6 +3354,39 @@ func TestSlackThinkingActivityChunksClumpsReasoningUnderThinking(t *testing.T) {
 	assert.Equal(t, "Confirming Go generics support\nPlanning concise example", updated.Details)
 }
 
+func TestSlackThinkingActivityChunksClumpsSubagentUnderParent(t *testing.T) {
+	t.Parallel()
+
+	pending := &slackThinkingState{thinkingTaskID: "111.222"}
+	chunks := slackThinkingActivityChunks(pending, []string{
+		"subagent(1/3) → hally-google-workspace → tool: Execute",
+		"subagent(3/3) → dream → reasoning: **Classifying internal response mode**",
+		"subagent(1/3) → hally-google-workspace → tool: Execute → Bash: List calendars",
+		"subagent(3/3) → dream → tool: Execute → Read: MEMORY.md",
+		"subagent(1/3) → hally-google-workspace: finished",
+	})
+
+	require.Len(t, chunks, 2)
+
+	workspace := chunks[0].(slack.TaskUpdateChunk)
+	assert.Equal(t, "111.222-activity-1-1", workspace.ID)
+	assert.Equal(t, "subagent(1/3) → hally-google-workspace", workspace.Title)
+	assert.Equal(t, "tool: Execute\ntool: Execute → Bash: List calendars\nfinished", workspace.Details)
+
+	dream := chunks[1].(slack.TaskUpdateChunk)
+	assert.Equal(t, "111.222-activity-2-1", dream.ID)
+	assert.Equal(t, "subagent(3/3) → dream", dream.Title)
+	assert.Equal(t, "reasoning: **Classifying internal response mode**\ntool: Execute → Read: MEMORY.md", dream.Details)
+
+	pending.tasks = []slack.TaskUpdateChunk{workspace, dream}
+	pending.activitySequence = 5
+	more := slackThinkingActivityChunks(pending, []string{"subagent(3/3) → dream → tool: Execute → Read: TODO.md"})
+	require.Len(t, more, 1)
+	updated := more[0].(slack.TaskUpdateChunk)
+	assert.Equal(t, dream.ID, updated.ID)
+	assert.Equal(t, "reasoning: **Classifying internal response mode**\ntool: Execute → Read: MEMORY.md\ntool: Execute → Read: TODO.md", updated.Details)
+}
+
 func TestSlackThinkingActivityLinesKeepsSubagentResultDetails(t *testing.T) {
 	t.Parallel()
 
@@ -3345,15 +3406,11 @@ func TestSlackThinkingActivityLinesKeepsSubagentResultDetails(t *testing.T) {
 
 	pending := &slackThinkingState{thinkingTaskID: "111.222"}
 	chunks := slackThinkingActivityChunks(pending, slackThinkingActivityLines(delta))
-	require.Len(t, chunks, 2)
+	require.Len(t, chunks, 1)
 
 	result := chunks[0].(slack.TaskUpdateChunk)
-	assert.Equal(t, "subagent(1/1) → software-factory → result: Context7 was unavailable, so I cannot answer without guessing.", result.Title)
-	assert.Equal(t, "Calls made:\n- `context7.resolve-library-id(...)`\n— blocked with: Monthly quota exceeded.\n- Context7 tool discovery only; no documentation query was possible.", result.Details)
-
-	finished := chunks[1].(slack.TaskUpdateChunk)
-	assert.Equal(t, "subagent(1/1) → software-factory: finished", finished.Title)
-	assert.Empty(t, finished.Details)
+	assert.Equal(t, "subagent(1/1) → software-factory", result.Title)
+	assert.Equal(t, "result: Context7 was unavailable, so I cannot answer without guessing.\nCalls made:\n- `context7.resolve-library-id(...)`\n— blocked with: Monthly quota exceeded.\n- Context7 tool discovery only; no documentation query was possible.\nfinished", result.Details)
 }
 
 func TestFlushProgressSplitsActivityTitlesAtApprovedBoundaries(t *testing.T) {
@@ -3402,8 +3459,8 @@ func TestFlushProgressSplitsActivityTitlesAtApprovedBoundaries(t *testing.T) {
 	allChunks = pending.tasks
 	require.GreaterOrEqual(t, len(allChunks), 4)
 
-	assert.Equal(t, "subagent(1/1) → worker → result: short summary", allChunks[0].Title)
-	assert.Equal(t, detailBody, allChunks[0].Details)
+	assert.Equal(t, "subagent(1/1) → worker", allChunks[0].Title)
+	assert.Equal(t, "result: short summary\n"+detailBody, allChunks[0].Details)
 
 	for _, chunk := range allChunks {
 		assert.LessOrEqual(t, len([]rune(chunk.Title)), 256)
@@ -5625,7 +5682,7 @@ func TestRecipientlessThinkingFoldsExecuteNestedLikeStream(t *testing.T) {
 	connector.bufferProgressText(progress.TurnID, &slots, slackImmediatePlaceholder, progress.ProgressText, progress)
 	require.NoError(t, connector.flushProgressText(t.Context(), progress.TurnID))
 
-	assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"111.222-activity-1-1","title":"Execute","status":"complete","details":{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"Search: context7"}]},{"type":"rich_text_section","elements":[{"type":"text","text":"Grep: generics"}]}]}}]}]`, updated.Get("blocks"))
+	assert.JSONEq(t, `[{"type":"plan","title":"Thinking...","tasks":[{"type":"task_card","task_id":"111.222-activity-1-1","title":"Execute","status":"complete","details":{"type":"rich_text","elements":[{"type":"rich_text_list","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"Search: context7"}]},{"type":"rich_text_section","elements":[{"type":"text","text":"Grep: generics"}]}],"style":"bullet","indent":0,"border":0,"offset":0}]}}]}]`, updated.Get("blocks"))
 }
 
 func TestPublishOnDemandCronReplyPublishesAndReportsBusErrors(t *testing.T) {
@@ -7950,7 +8007,7 @@ func TestSendResponseTerminalIncludesProgressBufferedWhileWaiting(t *testing.T) 
 	require.NoError(t, <-errComplete)
 
 	assert.Contains(t, terminalUpdate.Get("text"), "late activity")
-	assert.JSONEq(t, `[{"type":"plan","title":"Workflow complete","tasks":[{"type":"task_card","task_id":"222.333-activity-1-1","title":"diagnostic","status":"complete"},{"type":"task_card","task_id":"run/phase/audit","title":"audit · 3/3","status":"complete","details":{"type":"rich_text","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"worker: reading"}]},{"type":"rich_text_section","elements":[{"type":"text","text":"worker: verified"}]}]}},{"type":"task_card","task_id":"222.333-activity-2-1","title":"late activity","status":"complete"}]}]`, terminalUpdate.Get("blocks"))
+	assert.JSONEq(t, `[{"type":"plan","title":"Workflow complete","tasks":[{"type":"task_card","task_id":"222.333-activity-1-1","title":"diagnostic","status":"complete"},{"type":"task_card","task_id":"run/phase/audit","title":"audit · 3/3","status":"complete","details":{"type":"rich_text","elements":[{"type":"rich_text_list","elements":[{"type":"rich_text_section","elements":[{"type":"text","text":"worker: reading"}]},{"type":"rich_text_section","elements":[{"type":"text","text":"worker: verified"}]}],"style":"bullet","indent":0,"border":0,"offset":0}]}},{"type":"task_card","task_id":"222.333-activity-2-1","title":"late activity","status":"complete"}]}]`, terminalUpdate.Get("blocks"))
 }
 
 func TestWorkflowAgentChunksRenderOrderedAttributedDeltas(t *testing.T) {
