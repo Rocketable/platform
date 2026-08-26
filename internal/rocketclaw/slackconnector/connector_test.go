@@ -1780,12 +1780,12 @@ func TestCleanupPendingReplyPlaceholderDeletesUnclaimedExternalMCPThinking(t *te
 	connector := newTestConnector(server.URL)
 	replyTarget, err := connector.SendExternalMCPRelay(context.Background(), "D123", "", testExternalMCPRelay("hello", nil))
 	require.NoError(t, err)
-	require.True(t, connector.hasPendingState(replyTarget))
+	require.True(t, connector.hasLiveSlackMessage(replyTarget))
 
 	connector.CleanupPendingReplyPlaceholder(context.Background(), replyTarget)
 	connector.CleanupPendingReplyPlaceholder(context.Background(), replyTarget)
 
-	assert.False(t, connector.hasPendingState(replyTarget))
+	assert.False(t, connector.hasLiveSlackMessage(replyTarget))
 	require.Len(t, deleted, 2)
 	assert.Equal(t, "555.3", deleted[0].Get("ts"))
 	assert.Equal(t, "555.2", deleted[1].Get("ts"))
@@ -1798,11 +1798,11 @@ func TestReplyStateTracksPendingSlots(t *testing.T) {
 	connector := &Connector{pending: map[string]slackReplySlots{key: slots}}
 
 	assert.Equal(t, "D123\x00111.222\x00333.444", key)
-	assert.False(t, connector.hasPendingState(nil))
-	assert.True(t, connector.hasPendingState(replyTarget))
+	assert.False(t, connector.hasLiveSlackMessage(nil))
+	assert.True(t, connector.hasLiveSlackMessage(replyTarget))
 
 	connector.setReplyState("turn-1", &slots)
-	assert.False(t, connector.hasPendingState(replyTarget))
+	assert.True(t, connector.hasLiveSlackMessage(replyTarget))
 
 	got, ok := connector.replyState("turn-1")
 	require.True(t, ok)
@@ -2744,7 +2744,7 @@ func TestCleanupStopsTaskStreamBeforeDeleting(t *testing.T) {
 		"/chat.delete answer-1",
 		"/chat.delete thinking-1",
 	}, operations)
-	assert.False(t, connector.hasPendingState(reply))
+	assert.False(t, connector.hasLiveSlackMessage(reply))
 }
 
 func TestAbortResponseStopsTaskStreamBeforeDeleting(t *testing.T) {
@@ -5329,7 +5329,7 @@ func TestCreateReplyPlaceholdersCreatesThinkingAndAnswerPlaceholders(t *testing.
 	assert.Contains(t, posted[0].Get("blocks"), `"status":"in_progress"`)
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Equal(t, "111.222", posted[1].Get("thread_ts"))
-	assert.True(t, connector.hasPendingState(&events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}))
+	assert.True(t, connector.hasLiveSlackMessage(&events.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}))
 }
 
 func TestCreateReplyPlaceholdersStartsThinkingPlanStreamBeforeUnchangedAnswer(t *testing.T) {
@@ -5538,7 +5538,7 @@ func TestCreateReplyPlaceholdersDeletesThinkingWhenAnswerPlaceholderFails(t *tes
 	require.Len(t, posted, 2)
 	require.Len(t, deleted, 1)
 	assert.Equal(t, "555.1", deleted[0].Get("ts"))
-	assert.False(t, connector.hasPendingState(replyTarget))
+	assert.False(t, connector.hasLiveSlackMessage(replyTarget))
 }
 
 func TestCreateReplyPlaceholdersCleansTaskStreamAfterAnswerFailure(t *testing.T) {
@@ -5585,7 +5585,7 @@ func TestCreateReplyPlaceholdersCleansTaskStreamAfterAnswerFailure(t *testing.T)
 	assert.Equal(t, "555.1", stopped.Get("ts"))
 	assert.Equal(t, "C123", deleted.Get("channel"))
 	assert.Equal(t, "555.1", deleted.Get("ts"))
-	assert.False(t, connector.hasPendingState(replyTarget))
+	assert.False(t, connector.hasLiveSlackMessage(replyTarget))
 }
 
 func TestRecipientlessThinkingKeepsTaskCard(t *testing.T) {
@@ -5751,7 +5751,7 @@ func TestSendResponseWithBlankTurnIDDoesNotClaimPendingPlaceholder(t *testing.T)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Equal(t, "metadata", posted[2].Get("text"))
-	assert.True(t, connector.hasPendingState(replyTarget))
+	assert.True(t, connector.hasLiveSlackMessage(replyTarget))
 }
 
 func TestSendResponseUploadsAttachmentOnlyMCPResponseToSlackThread(t *testing.T) {
@@ -6448,6 +6448,28 @@ func TestHandleMessageEventIgnoresThreadParentRedelivery(t *testing.T) {
 	assert.NotContains(t, reactions, "/reactions.add "+slackBufferedReaction+" "+mention.TimeStamp)
 }
 
+func TestHandleMessageEventIgnoresReplyRedelivery(t *testing.T) {
+	var reactions []string
+
+	server := newSlackStackTestServer(t, new([]url.Values), &reactions)
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.submitHandled = true
+	router.turnPhase = harnessbridge.ThreadTurnFinalAnswer
+	connector := newTestConnectorWithOptions(server.URL, newTestBus(), nil, router, nil)
+
+	first := newSlackMessageEvent("111.1", "111.0", "wait 4s and say ciao")
+	connector.handleMessageEvent(t.Context(), first, slackNativeForward{})
+	require.Len(t, router.repliesSnapshot(), 1)
+
+	connector.handleMessageEvent(t.Context(), first, slackNativeForward{})
+
+	assert.Empty(t, router.queueSnapshot())
+	assert.Len(t, router.repliesSnapshot(), 1)
+	assert.NotContains(t, reactions, "/reactions.add "+slackEnvelopeReaction+" 111.1")
+}
+
 func TestHandleMessageEventFinalAnswerPhaseEnqueues(t *testing.T) {
 	var (
 		posted    []url.Values
@@ -6821,6 +6843,8 @@ func TestHandleMessageEventQueueShowsEnqueueAndScheduledControls(t *testing.T) {
 	assert.Contains(t, blocks, "first item")
 	assert.Contains(t, blocks, "second item")
 	assert.Contains(t, blocks, "later prompt")
+	assert.Contains(t, blocks, `"type":"table"`)
+	assert.NotContains(t, blocks, "later prompt · ")
 	assert.Contains(t, blocks, slackQueueDownActionID)
 	assert.Contains(t, blocks, slackQueueUpActionID)
 	assert.Contains(t, blocks, slackQueueRemoveActionID)
@@ -6848,7 +6872,7 @@ func TestHandleInteractiveQueueParkAfterScheduled(t *testing.T) {
 	event := newSlackMessageEvent("111.2", "111.0", "$queue")
 	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
 
-	callback := slackQueueCallback("555.1", "U123", slackQueueDownActionID, "q1")
+	callback := slackQueueCallback(server.URL+"/chat.update", "555.1", "U123", slackQueueDownActionID, "q1")
 	connector.handleInteractive(t.Context(), socketmode.Event{Data: callback})
 
 	items := router.queueSnapshot()
@@ -6875,7 +6899,7 @@ func TestHandleInteractiveQueueRemoveByAnotherAllowedUser(t *testing.T) {
 	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
 	require.Len(t, posted, 1)
 
-	callback := slackQueueCallback("555.1", "U456", slackQueueRemoveActionID, "q1")
+	callback := slackQueueCallback(server.URL+"/chat.update", "555.1", "U456", slackQueueRemoveActionID, "q1")
 	connector.handleInteractive(t.Context(), socketmode.Event{Data: callback})
 
 	assert.Empty(t, router.queueSnapshot())
@@ -6900,7 +6924,7 @@ func TestHandleInteractiveQueueCancelScheduled(t *testing.T) {
 	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
 	require.Len(t, posted, 1)
 
-	callback := slackQueueCallback("555.1", "U123", slackQueueCancelScheduledActionID, "s1")
+	callback := slackQueueCallback(server.URL+"/chat.update", "555.1", "U123", slackQueueCancelScheduledActionID, "s1")
 	connector.handleInteractive(t.Context(), socketmode.Event{Data: callback})
 
 	assert.Empty(t, router.scheduled)
@@ -6925,7 +6949,7 @@ func TestHandleInteractiveQueueResetScheduledLeavesEnqueue(t *testing.T) {
 	event := newSlackMessageEvent("111.2", "111.0", "$queue")
 	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
 
-	callback := slackQueueCallback("555.1", "U123", slackQueueResetScheduledActionID, "")
+	callback := slackQueueCallback(server.URL+"/chat.update", "555.1", "U123", slackQueueResetScheduledActionID, "")
 	connector.handleInteractive(t.Context(), socketmode.Event{Data: callback})
 
 	assert.Empty(t, router.scheduled)
@@ -6951,7 +6975,7 @@ func TestHandleInteractiveQueueClickUnauthorizedIsIgnored(t *testing.T) {
 
 	postedBefore := len(posted)
 
-	callback := slackQueueCallback(posted[0].Get("ts"), "U999", slackQueueRemoveActionID, "q1")
+	callback := slackQueueCallback(server.URL+"/chat.update", posted[0].Get("ts"), "U999", slackQueueRemoveActionID, "q1")
 	connector.handleInteractive(t.Context(), socketmode.Event{Data: callback})
 
 	require.Len(t, router.queueSnapshot(), 1)
@@ -6972,7 +6996,7 @@ func TestHandleInteractiveQueueStaleRowRefreshesCard(t *testing.T) {
 	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
 	require.Len(t, posted, 1)
 
-	callback := slackQueueCallback("555.1", "U123", slackQueueRemoveActionID, "gone")
+	callback := slackQueueCallback(server.URL+"/chat.update", "555.1", "U123", slackQueueRemoveActionID, "gone")
 	connector.handleInteractive(t.Context(), socketmode.Event{Data: callback})
 
 	require.GreaterOrEqual(t, len(posted), 2)
@@ -7024,13 +7048,14 @@ func TestHandleAppMentionEventRedeliveryPreservesPendingSteersAndQueue(t *testin
 	assert.Contains(t, reactions, "/reactions.add "+slackEnvelopeReaction+" "+enqueue.TimeStamp)
 }
 
-func slackQueueCallback(messageTS, userID, actionID, itemID string) slack.InteractionCallback {
+func slackQueueCallback(responseURL, messageTS, userID, actionID, itemID string) slack.InteractionCallback {
 	metadata, _ := json.Marshal(slackQueueAction{ChannelID: "C123", ThreadTS: "111.0", ItemID: itemID})
 	callback := slack.InteractionCallback{
-		Type:      slack.InteractionTypeBlockActions,
-		Container: slack.Container{ChannelID: "C123", ThreadTs: "111.0", MessageTs: messageTS},
-		Message:   slack.Message{Msg: slack.Msg{Timestamp: messageTS, ThreadTimestamp: "111.0"}},
-		User:      slack.User{ID: userID},
+		Type:        slack.InteractionTypeBlockActions,
+		ResponseURL: responseURL,
+		Container:   slack.Container{ChannelID: "C123", ThreadTs: "111.0", MessageTs: messageTS},
+		Message:     slack.Message{Msg: slack.Msg{Timestamp: messageTS, ThreadTimestamp: "111.0"}},
+		User:        slack.User{ID: userID},
 		ActionCallback: slack.ActionCallbacks{BlockActions: []*slack.BlockAction{{
 			ActionID: actionID,
 			BlockID:  string(metadata),
@@ -7155,7 +7180,7 @@ func TestHandleMessageEventConsumesGoalStartRejectionPlaceholder(t *testing.T) {
 	assert.Equal(t, "_Pursuing Goal (1/5)..._", posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Contains(t, posted[2].Get("text"), "couldn't start that goal")
-	assert.False(t, connector.hasPendingState(&events.SlackReplyTarget{ChannelID: "C123", MessageTS: "171234.5678", ThreadTS: "171234.1111"}))
+	assert.False(t, connector.hasLiveSlackMessage(&events.SlackReplyTarget{ChannelID: "C123", MessageTS: "171234.5678", ThreadTS: "171234.1111"}))
 }
 
 func TestHandleMessageEventStartsGoalInExistingManagedThread(t *testing.T) {
@@ -8960,7 +8985,7 @@ func TestWorkflowRequestListsLaunchesAndRejectsActiveStack(t *testing.T) {
 	_, active := connector.stacks[key]
 	connector.mu.Unlock()
 	assert.False(t, active)
-	assert.False(t, connector.hasPendingState(reply))
+	assert.False(t, connector.hasLiveSlackMessage(reply))
 }
 
 func TestWorkflowRequestParsesUnicodeWhitespace(t *testing.T) {
@@ -9005,7 +9030,7 @@ func TestWorkflowRequestRejectsBusyPairedTurnBeforeReservation(t *testing.T) {
 	require.Len(t, ephemeral, 1)
 	assert.Equal(t, "Wait for the active turn to finish, then run $workflow again.", ephemeral[0].Get("text"))
 	assert.Empty(t, router.workflowStarts)
-	assert.False(t, connector.hasPendingState(reply))
+	assert.False(t, connector.hasLiveSlackMessage(reply))
 }
 
 func TestWorkflowRequestLogsReservationFailure(t *testing.T) {
@@ -10823,6 +10848,13 @@ func newSlackStackTestServer(t *testing.T, posted *[]url.Values, reactions *[]st
 		switch r.URL.Path {
 		case "/conversations.info":
 			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
+		case "/chat.postEphemeral":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			*posted = append(*posted, cloneValues(r.PostForm))
+			writeJSON(t, w, map[string]any{"ok": true, "message_ts": "555." + strconv.Itoa(len(*posted))})
 		case "/chat.startStream", "/chat.postMessage":
 			if r.URL.Path == "/chat.startStream" {
 				if paths == nil {
@@ -10844,12 +10876,30 @@ func newSlackStackTestServer(t *testing.T, posted *[]url.Values, reactions *[]st
 		case "/chat.delete":
 			writeJSON(t, w, map[string]any{"ok": true})
 		case "/chat.update":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
+			vals := url.Values{}
+
+			switch {
+			case strings.Contains(r.Header.Get("Content-Type"), "json"):
+				var payload struct {
+					Text   string          `json:"text"`
+					Blocks json.RawMessage `json:"blocks"`
+				}
+				if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&payload)) {
+					return
+				}
+
+				vals.Set("text", payload.Text)
+				vals.Set("blocks", string(payload.Blocks))
+			default:
+				if !assert.NoError(t, r.ParseForm()) {
+					return
+				}
+
+				vals = cloneValues(r.PostForm)
 			}
 
-			*posted = append(*posted, cloneValues(r.PostForm))
-			writeJSON(t, w, map[string]any{"ok": true, "channel": r.PostForm.Get("channel"), "ts": r.PostForm.Get("ts"), "text": r.PostForm.Get("text")})
+			*posted = append(*posted, vals)
+			writeJSON(t, w, map[string]any{"ok": true, "channel": vals.Get("channel"), "ts": vals.Get("ts"), "text": vals.Get("text")})
 		case "/reactions.add", "/reactions.remove":
 			if !assert.NoError(t, r.ParseForm()) {
 				return
