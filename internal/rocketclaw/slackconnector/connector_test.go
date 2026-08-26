@@ -6423,6 +6423,31 @@ func TestHandleMessageEventSteerReceiptHasNoPlaceholders(t *testing.T) {
 	assert.Empty(t, router.queueSnapshot())
 }
 
+func TestHandleMessageEventIgnoresThreadParentRedelivery(t *testing.T) {
+	var reactions []string
+
+	server := newSlackStackTestServer(t, new([]url.Values), &reactions)
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.submitHandled = true
+	router.turnPhase = harnessbridge.ThreadTurnFinalAnswer
+	connector := newTestConnectorWithOptions(server.URL, newTestBus(), nil, router, nil)
+	connector.botUserID = "U999"
+
+	mention := newSlackAppMentionEvent()
+	connector.handleAppMentionEvent(t.Context(), mention, slackNativeForward{})
+	require.Len(t, router.startedSnapshot(), 1)
+
+	parent := newSlackMessageEvent(mention.TimeStamp, mention.TimeStamp, "please check this")
+	connector.handleMessageEvent(t.Context(), parent, slackNativeForward{})
+
+	assert.Empty(t, router.queueSnapshot())
+	assert.Empty(t, router.repliesSnapshot())
+	assert.NotContains(t, reactions, "/reactions.add "+slackEnvelopeReaction+" "+mention.TimeStamp)
+	assert.NotContains(t, reactions, "/reactions.add "+slackBufferedReaction+" "+mention.TimeStamp)
+}
+
 func TestHandleMessageEventFinalAnswerPhaseEnqueues(t *testing.T) {
 	var (
 		posted    []url.Values
