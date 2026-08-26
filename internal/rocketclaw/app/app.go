@@ -270,6 +270,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		progress.SessionService = rocketcodeSessions
 		progress.RequestRestart = requestRestart
 		progress.RequestReload = requestReload
+		progress.StartNewThread = startNewThread
 
 		result, err := harnessbridge.RunRawWithProgress(jobCtx, cfg, agent, prompt, log, progress)
 		if err != nil {

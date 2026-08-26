@@ -388,6 +388,12 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *events.St
 	)
 
 	switch req.Source {
+	case events.SourceSystem:
+		if req.SlackReply == nil || strings.TrimSpace(req.SlackReply.ChannelID) == "" {
+			return events.StartNewThreadResult{}, fmt.Errorf("rocketclaw_start_new_thread is not available for %s turns", req.Source)
+		}
+
+		fallthrough
 	case events.SourceSlack:
 		root, err := createRoot(ctx, req)
 		if err != nil {
@@ -397,7 +403,7 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *events.St
 		rootTarget = root.Target
 		conversationID, url = m.text.conversationID(rootTarget), root.URL
 		outputTargets, label = m.text.outputTargets, m.text.label
-	case events.SourceExternalMCP, events.SourceSystem:
+	case events.SourceExternalMCP:
 		return events.StartNewThreadResult{}, fmt.Errorf("rocketclaw_start_new_thread is not available for %s turns", req.Source)
 	}
 

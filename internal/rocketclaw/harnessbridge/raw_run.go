@@ -43,6 +43,8 @@ type RawRunProgress struct {
 	Thinking, Message func(context.Context, string) error
 	RequestRestart    func(context.Context, string) (string, error)
 	RequestReload     func(context.Context, string) (string, error)
+	StartNewThread    func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadResult, error)
+	TextChannel       string
 }
 
 const rawRunMissingToolPrompt = "You did not call the mandatory " + rawRunToolName + " tool. Normal assistant replies do not count and this background run cannot finish until you call that exact tool. Before this turn ends, call " + rawRunToolName + "(\"full exact message to show the human, or empty string if the human should see nothing\"). If the human partner should see a final message from this background turn, the full final message must be the tool argument. Do not send a summary, paraphrase, or reduced view."
@@ -128,6 +130,9 @@ func newInertRawRunProgress() *RawRunProgress {
 		Message:        func(context.Context, string) error { return nil },
 		RequestRestart: func(context.Context, string) (string, error) { return "", nil },
 		RequestReload:  func(context.Context, string) (string, error) { return "rocketclaw runtime assets reloaded", nil },
+		StartNewThread: func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadResult, error) {
+			return events.StartNewThreadResult{}, errors.New("start new thread is inert")
+		},
 	}
 }
 
@@ -331,6 +336,13 @@ func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string
 	activeAgent := agents.Items[agent]
 	if agentExplicitlyAllowsRocketClawTool(&activeAgent, restartToolName) {
 		customTools = append(customTools, restartTool(requestRestart, recordRestartRequester))
+	}
+
+	if strings.TrimSpace(progress.TextChannel) != "" && agentExplicitlyAllowsRocketClawTool(&activeAgent, startNewThreadToolName) {
+		inbound := events.NewInboundMessage(events.SourceSystem, events.InboundKindPrompt, "", "", false)
+		inbound.SlackReply = &events.SlackReplyTarget{ChannelID: strings.TrimSpace(progress.TextChannel)}
+		events.SetInboundAllowedAgents(inbound, []string{agent})
+		customTools = append(customTools, startNewThreadTool(progress.StartNewThread, inbound, agent))
 	}
 
 	rocketcodeConfig := rocketcode.Config{Model: "", AutoApproverModel: cfg.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, Diagnostics: diagnostics, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: true}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CheckpointSink: rocketcode.InertCheckpointSink{}, CustomTools: customTools, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(cfg.MCPServers), MCPWorkspace: cfg.Workspace}

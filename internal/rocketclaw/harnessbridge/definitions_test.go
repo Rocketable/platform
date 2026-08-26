@@ -108,6 +108,7 @@ Prompt
 	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, resetScheduledMessagesToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, attachFilesToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, agents.Items["main"].Permission, updateGoalToolName, rocketcode.PermissionAllow)
+	requireNoRocketClawPermissionMatch(t, agents.Items["main"].Permission, startNewThreadToolName)
 }
 
 func TestLoadRocketCodeDefinitionsPreservesGuardrailReference(t *testing.T) {
