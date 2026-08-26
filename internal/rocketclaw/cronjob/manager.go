@@ -324,6 +324,7 @@ func (m *Manager) RunOneOffCronjob(ctx context.Context, job OneOffCronjob, progr
 	}
 
 	progress.ConversationID = cronTraceConversationID(oneOffCronTracePrefix, job.RelativePath, m.now())
+	progress.TextChannel = job.TextChannel
 
 	m.mu.Lock()
 	if m.closed {
@@ -554,6 +555,7 @@ func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 		return nil
 	}, Message: func(context.Context, string) error { return nil }}
 	progress.ConversationID = cronTraceConversationID(cronTracePrefix, definition.relativePath, startedAt)
+	progress.TextChannel = definition.textChannel
 
 	result, err := m.run(context.WithoutCancel(ctx), definition.agent, prompt, log, progress)
 	if err != nil {

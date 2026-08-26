@@ -164,12 +164,15 @@ func TestRunOneOffCronjobSetsTraceConversationID(t *testing.T) {
 		if !strings.HasPrefix(progress.ConversationID, "one-off-cron:cron/daily.md:20000102T030405.000000006Z:") {
 			t.Fatalf("ConversationID = %q; want one-off trace ID", progress.ConversationID)
 		}
+		if progress.TextChannel != "#ops" {
+			t.Fatalf("TextChannel = %q; want #ops", progress.TextChannel)
+		}
 
 		return RunResult{}, nil
 	}, slog.New(slog.DiscardHandler))
 	m.now = func() time.Time { return time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC) }
 
-	m.RunOneOffCronjob(t.Context(), OneOffCronjob{Agent: "helper", Prompt: "Body", RelativePath: "cron/daily.md"}, nil, func(context.Context, RunResult, error) {})
+	m.RunOneOffCronjob(t.Context(), OneOffCronjob{Agent: "helper", Prompt: "Body", RelativePath: "cron/daily.md", TextChannel: "#ops"}, nil, func(context.Context, RunResult, error) {})
 }
 
 func TestRunOneOffCronjobRejectsStoppedManager(t *testing.T) {
@@ -208,6 +211,9 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 	m := New(t.TempDir(), ".", nil, broadcasts, newCronScheduleStore(t), func(_ context.Context, _, _ string, _ *slog.Logger, progress *harnessbridge.RawRunProgress) (RunResult, error) {
 		if !strings.HasPrefix(progress.ConversationID, "cron:cron/daily.md:20000102T030405.000000006Z:") {
 			t.Fatalf("ConversationID = %q; want scheduled trace ID", progress.ConversationID)
+		}
+		if progress.TextChannel != "#ops" {
+			t.Fatalf("TextChannel = %q; want #ops", progress.TextChannel)
 		}
 
 		return RunResult{}, nil

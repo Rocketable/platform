@@ -258,6 +258,7 @@ func TestRunRawHidesRestartWithoutExplicitAllow(t *testing.T) {
 			assert.Contains(t, toolNames, reloadToolName)
 			assert.NotContains(t, toolNames, scheduleMessageToolName)
 			assert.NotContains(t, toolNames, resetScheduledMessagesToolName)
+			assert.NotContains(t, toolNames, startNewThreadToolName)
 			assert.Contains(t, toolNames, rawRunToolName)
 		}
 
@@ -282,6 +283,102 @@ func TestRunRawHidesRestartWithoutExplicitAllow(t *testing.T) {
 	requestMu.Lock()
 	assert.Equal(t, 2, requests)
 	requestMu.Unlock()
+}
+
+func TestRunRawStartNewThreadAvailability(t *testing.T) {
+	tests := []struct {
+		name, permission, channel string
+		want                      bool
+	}{
+		{name: "allow with channel", permission: "    rocketclaw_start_new_thread: allow\n", channel: "#ops", want: true},
+		{name: "missing allow", permission: "", channel: "#ops", want: false},
+		{name: "auto", permission: "    rocketclaw_start_new_thread: auto\n", channel: "#ops", want: false},
+		{name: "deny", permission: "    rocketclaw_start_new_thread: deny\n", channel: "#ops", want: false},
+		{name: "no channel", permission: "    rocketclaw_start_new_thread: allow\n", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+
+			permission := "permission: {}\n"
+			if tt.permission != "" {
+				permission = "permission:\n  rocketclaw:\n" + tt.permission
+			}
+
+			writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\n"+permission+"---\nPrompt\n")
+			require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+			progress := newInertRawRunProgress()
+			progress.TextChannel = tt.channel
+
+			toolNames := rawRunToolNames(t, workspace, progress)
+			if tt.want {
+				assert.Contains(t, toolNames, startNewThreadToolName)
+			} else {
+				assert.NotContains(t, toolNames, startNewThreadToolName)
+			}
+
+			assert.NotContains(t, toolNames, scheduleMessageToolName)
+		})
+	}
+}
+
+func TestRunRawStartNewThreadLocksChannelAndAgent(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  rocketclaw:\n    rocketclaw_start_new_thread: allow\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	var captured *events.StartNewThreadRequest
+
+	progress := newInertRawRunProgress()
+	progress.TextChannel = "#ops"
+	progress.StartNewThread = func(_ context.Context, req *events.StartNewThreadRequest) (events.StartNewThreadResult, error) {
+		captured = req
+		return events.StartNewThreadResult{ConversationID: "slack-thread:C1:2"}, nil
+	}
+
+	var (
+		requestMu sync.Mutex
+		requests  int
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.NotFound(w, r)
+			return
+		}
+
+		requestMu.Lock()
+		requests++
+		request := requests
+		requestMu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+
+		switch request {
+		case 1:
+			writeRawRunFunctionCall(t, w, "resp_1", "call_1", startNewThreadToolName, map[string]string{"title": "Nightly", "prompt": "run suite", "agent": "other"})
+		case 2:
+			writeRawRunFunctionCall(t, w, "resp_2", "call_2", rawRunToolName, map[string]string{"payload": ""})
+		case 3:
+			writeRawRunMessage(t, w, "resp_3", "msg_1", "assistant complete")
+		default:
+			t.Fatalf("unexpected response request %d", request)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, "main", "prompt", slog.New(slog.DiscardHandler), progress)
+	require.NoError(t, err)
+	require.NotNil(t, captured)
+	assert.Equal(t, events.SourceSystem, captured.Source)
+	require.NotNil(t, captured.SlackReply)
+	assert.Equal(t, "#ops", captured.SlackReply.ChannelID)
+	assert.Equal(t, "main", captured.CurrentAgent)
+	assert.Equal(t, []string{"main"}, captured.AllowedAgents)
+	assert.Equal(t, "other", captured.Agent)
+	assert.Nil(t, captured.Response)
 }
 
 func TestRunRawOptsOutOfActiveTurnRecoveryWithConversationKey(t *testing.T) {
@@ -1317,6 +1414,69 @@ func executeBashScript(command string) map[string]string {
 
 func executeApplyPatchScript(patch string) map[string]string {
 	return map[string]string{"code": "def main():\n    return apply_patch(patchText=" + strconv.Quote(patch) + ")\n"}
+}
+
+func rawRunToolNames(t *testing.T, workspace string, progress *RawRunProgress) []string {
+	t.Helper()
+
+	var (
+		requestMu sync.Mutex
+		requests  int
+		toolNames []string
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			http.NotFound(w, r)
+			return
+		}
+
+		requestMu.Lock()
+		requests++
+		request := requests
+		requestMu.Unlock()
+
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		if request == 1 {
+			var tools []struct {
+				Name string `json:"name"`
+			}
+
+			data, err := json.Marshal(body["tools"])
+			if !assert.NoError(t, err) || !assert.NoError(t, json.Unmarshal(data, &tools)) {
+				http.Error(w, "decode tools", http.StatusInternalServerError)
+				return
+			}
+
+			for _, tool := range tools {
+				toolNames = append(toolNames, tool.Name)
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		switch request {
+		case 1:
+			writeRawRunFunctionCall(t, w, "resp_1", "call_1", rawRunToolName, map[string]string{"payload": ""})
+		case 2:
+			writeRawRunMessage(t, w, "resp_2", "msg_1", "assistant complete")
+		default:
+			t.Fatalf("unexpected response request %d", request)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := RunRawWithProgress(t.Context(), &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, "main", "prompt", slog.New(slog.DiscardHandler), progress)
+	require.NoError(t, err)
+
+	return toolNames
 }
 
 func writeRawRunFunctionCall(t *testing.T, w http.ResponseWriter, responseID, callID, name string, args any) {
