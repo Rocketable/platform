@@ -12,12 +12,10 @@ import (
 func TestNewChannelsAreUnbuffered(t *testing.T) {
 	channels := NewChannels()
 
-	require.Equal(t, 0, cap(channels.Requests))
 	require.Equal(t, 0, cap(channels.Broadcasts))
 }
 
 func TestRequestAndResponseKinds(t *testing.T) {
-	require.Equal(t, RequestTextStartThread, (&TextRequest{Kind: RequestTextStartThread}).RequestKind())
 	require.Equal(t, ResponseResult, (&TextResponse{Kind: ResponseResult}).ResponseKind())
 	require.Equal(t, ResponseInteraction, (StartNewThreadResponse{}).ResponseKind())
 	require.Contains(t, StartNewThreadRootText("Title", "Do work"), "Title")

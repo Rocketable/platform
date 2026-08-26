@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	harness "github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -149,6 +150,8 @@ type SessionService struct {
 
 	turnGatesMu sync.Mutex
 	turnGates   map[string]*sessionTurnGate
+	waitersMu   sync.Mutex
+	waiters     map[string]*events.InboundMessage
 }
 
 type sessionTurnGate struct {
@@ -200,7 +203,7 @@ func NewSessionServiceIn(_, _, databaseURL string, logger *slog.Logger) (*Sessio
 		return nil, err
 	}
 
-	return &SessionService{db: db, turnGates: map[string]*sessionTurnGate{}}, nil
+	return &SessionService{db: db, turnGates: map[string]*sessionTurnGate{}, waiters: map[string]*events.InboundMessage{}}, nil
 }
 
 // UpsertThread records or updates a text-thread bridge entry.
@@ -439,19 +442,9 @@ func (s *SessionService) StartActiveTurn(ctx context.Context, checkpoint *harnes
 	return stateDAO{db: s.db}.upsertActiveTurn(ctx, checkpoint, time.Now().UTC())
 }
 
-// RecordActiveTurnCheckpoint upserts an in-progress active root-turn checkpoint.
-func (s *SessionService) RecordActiveTurnCheckpoint(ctx context.Context, checkpoint *harness.ActiveTurnCheckpoint) error {
-	return stateDAO{db: s.db}.upsertActiveTurn(ctx, checkpoint, time.Now().UTC())
-}
-
 // UpsertActiveTurn records a RocketCode active-turn restart handoff checkpoint with source metadata.
 func (s *SessionService) UpsertActiveTurn(ctx context.Context, checkpoint *harness.ActiveTurnCheckpoint, sourceMetadata map[string]string) error {
 	return stateDAO{db: s.db}.upsertActiveTurnWithSourceMetadata(ctx, checkpoint, sourceMetadata, time.Now().UTC())
-}
-
-// ClearCompletedActiveTurn deletes the restart handoff after the completed session entry is durable.
-func (s *SessionService) ClearCompletedActiveTurn(ctx context.Context, turnID string) error {
-	return stateDAO{db: s.db}.clearActiveTurn(ctx, turnID)
 }
 
 // ClearActiveTurn removes an active root-turn checkpoint.
@@ -558,11 +551,6 @@ func (s *SessionService) ThreadQueueForConversation(conversationID string) ([]Th
 // DeleteThreadQueueItem deletes one Enqueued Slack Message.
 func (s *SessionService) DeleteThreadQueueItem(id string) error {
 	return stateDAO{db: s.db}.deleteThreadQueueItem(context.Background(), id)
-}
-
-// ReorderThreadQueue sets stack positions from the given ids, first to last.
-func (s *SessionService) ReorderThreadQueue(conversationID string, ids []string) error {
-	return stateDAO{db: s.db}.reorderThreadQueue(context.Background(), conversationID, ids)
 }
 
 // ClaimScheduledMessage verifies one due scheduled message and advances recurring messages atomically.
@@ -1076,6 +1064,52 @@ func (s *SessionService) ReserveWorkflowTurn(conversationID string) (release fun
 }
 
 func inertTurnRelease() {}
+
+// PutMCPWaiter records an MCP turn waiting on a later-work queue row.
+func (s *SessionService) PutMCPWaiter(id string, inbound *events.InboundMessage) {
+	s.waitersMu.Lock()
+	if s.waiters == nil {
+		s.waiters = map[string]*events.InboundMessage{}
+	}
+
+	s.waiters[id] = inbound
+	s.waitersMu.Unlock()
+}
+
+// TakeMCPWaiter removes and returns the MCP waiter for a queue row.
+func (s *SessionService) TakeMCPWaiter(id string) *events.InboundMessage {
+	s.waitersMu.Lock()
+	defer s.waitersMu.Unlock()
+
+	if s.waiters == nil {
+		return nil
+	}
+
+	inbound := s.waiters[id]
+	delete(s.waiters, id)
+
+	return inbound
+}
+
+// PairBusy reports whether the named conversation pair currently holds a turn.
+func (s *SessionService) PairBusy(pairID string) bool { return s.PairBusyFor(pairID, "") }
+
+// PairBusyFor reports whether pairID is busy for a caller other than conversationID.
+func (s *SessionService) PairBusyFor(pairID, conversationID string) bool {
+	s.turnGatesMu.Lock()
+	defer s.turnGatesMu.Unlock()
+
+	gate := s.turnGates[strings.TrimSpace(pairID)]
+	if gate == nil {
+		return false
+	}
+
+	if gate.reservedFor != "" && gate.reservedFor != strings.TrimSpace(conversationID) {
+		return true
+	}
+
+	return len(gate.token) == 0
+}
 
 func (s *SessionService) appendExternalMCPEntry(ctx context.Context, privateConversationID, managedConversationID string, entry *harness.SessionEntry, managedReplayPrefix []json.RawMessage) (int64, error) {
 	managedEntry, err := externalMCPManagedEntry(entry, managedReplayPrefix)

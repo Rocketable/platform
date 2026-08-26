@@ -5,9 +5,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"time"
-
-	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 )
 
 // BridgeID identifies a connector participating in RocketClaw communication.
@@ -19,79 +16,6 @@ const (
 	// BridgeExternalMCP identifies the External MCP connector.
 	BridgeExternalMCP BridgeID = "external_mcp"
 )
-
-// RequestKind identifies the operation carried by a Request.
-type RequestKind string
-
-// Text request operation kinds.
-const (
-	RequestTextStartThread            RequestKind = "text_start_thread"
-	RequestTextStartGoal              RequestKind = "text_start_goal"
-	RequestTextStartWorkflow          RequestKind = "text_start_workflow"
-	RequestTextReserveWorkflowTurn    RequestKind = "text_reserve_workflow_turn"
-	RequestTextWorkflowDescriptions   RequestKind = "text_workflow_descriptions"
-	RequestTextInterruptConversation  RequestKind = "text_interrupt_conversation"
-	RequestTextInterruptThread        RequestKind = "text_interrupt_thread"
-	RequestTextRegisterThread         RequestKind = "text_register_thread"
-	RequestTextRegisterCronThread     RequestKind = "text_register_cron_thread"
-	RequestTextThreadAgent            RequestKind = "text_thread_agent"
-	RequestTextSwitchThreadAgent      RequestKind = "text_switch_thread_agent"
-	RequestTextSubmitThreadReply      RequestKind = "text_submit_thread_reply"
-	RequestTextSubmitExternalMCP      RequestKind = "text_submit_external_mcp"
-	RequestTextSubmitWhenActive       RequestKind = "text_submit_when_active"
-	RequestTextStashThreadQueue       RequestKind = "text_stash_thread_queue"
-	RequestTextListThreadQueue        RequestKind = "text_list_thread_queue"
-	RequestTextReorderThreadQueue     RequestKind = "text_reorder_thread_queue"
-	RequestTextDeleteThreadQueueItem  RequestKind = "text_delete_thread_queue_item"
-	RequestTextListScheduledMessages  RequestKind = "text_list_scheduled_messages"
-	RequestTextDeleteScheduledMessage RequestKind = "text_delete_scheduled_message"
-	RequestTextResetScheduledMessages RequestKind = "text_reset_scheduled_messages"
-)
-
-// TextRequest carries one operation formerly sent through the primary text router.
-type TextRequest struct {
-	Kind                                      RequestKind
-	Target                                    TextConversationTarget
-	Agent, Objective, CheckScript, Name, Args string
-	ConversationID                            string
-	MaxTurns                                  int
-	Inbound                                   *InboundMessage
-	QueueItem                                 ThreadQueueRecord
-	QueueIDs                                  []string
-	QueueItemID                               string
-	Activation                                func(context.Context, *InboundMessage) error
-}
-
-// ThreadQueueRecord is one Enqueued Slack Message on a text request.
-type ThreadQueueRecord struct {
-	ID, Message, Principal, SlackChannel, SlackTS, ParkAfter string
-	StashAt                                                  time.Time
-	Position                                                 int
-}
-
-// ScheduledMessageRecord is one scheduled message on a text request.
-type ScheduledMessageRecord struct {
-	ID, ConversationID, Agent, Message string
-	DueAt                              time.Time
-	Recurring                          bool
-	Interval                           time.Duration
-}
-
-// RequestKind identifies the TextRequest operation.
-func (r *TextRequest) RequestKind() RequestKind { return r.Kind }
-
-// RequestOperation is the typed operation payload carried by a Request.
-// Concrete operation values are defined alongside the shared event data they use.
-type RequestOperation interface {
-	RequestKind() RequestKind
-}
-
-// Request carries one connector operation into RocketClaw.
-type Request struct {
-	Sender    BridgeID
-	Operation RequestOperation
-	Response  chan Response
-}
 
 // ResponseKind identifies the kind of value carried by a Response.
 type ResponseKind string
@@ -110,19 +34,10 @@ type ResponsePayload interface {
 	ResponseKind() ResponseKind
 }
 
-// TextResponse carries the result of one TextRequest operation.
+// TextResponse carries originator output for one inbound.
 type TextResponse struct {
-	Kind              ResponseKind
-	Message           *OutboundMessage
-	Handled           bool
-	Created           bool
-	Reserved          bool
-	Agent             string
-	Descriptions      []workflow.Description
-	Inbound           *InboundMessage
-	Release           chan struct{}
-	QueueItems        []ThreadQueueRecord
-	ScheduledMessages map[string]ScheduledMessageRecord
+	Kind    ResponseKind
+	Message *OutboundMessage
 }
 
 // ResponseKind identifies the TextResponse result.
@@ -181,9 +96,8 @@ type Broadcast struct {
 	Acknowledgement chan BroadcastAcknowledgement
 }
 
-// Channels are the two unbuffered channels used for connector communication.
+// Channels are the unbuffered channels used for connector communication.
 type Channels struct {
-	Requests   chan Request
 	Broadcasts chan Broadcast
 }
 
@@ -238,7 +152,6 @@ func (p BroadcastPublisher) PublishOutbound(ctx context.Context, message *Outbou
 // NewChannels constructs the unbuffered connector channels.
 func NewChannels() Channels {
 	return Channels{
-		Requests:   make(chan Request),
 		Broadcasts: make(chan Broadcast),
 	}
 }
@@ -250,11 +163,16 @@ func (b *Broadcast) Clone() Broadcast {
 		message = CloneOutboundMessage(b.Message)
 	}
 
+	relay := clonePtr(b.Relay)
+	if relay != nil {
+		relay.Attachments = CloneOutboundAttachments(b.Relay.Attachments)
+	}
+
 	return Broadcast{
 		Sender:          b.Sender,
 		Message:         message,
 		Delivery:        b.Delivery,
-		Relay:           cloneExternalMCPRelay(b.Relay),
+		Relay:           relay,
 		RelayReply:      b.RelayReply,
 		RelayChannel:    b.RelayChannel,
 		RelayCleanup:    b.RelayCleanup,
@@ -263,61 +181,26 @@ func (b *Broadcast) Clone() Broadcast {
 	}
 }
 
-func cloneExternalMCPRelay(relay *ExternalMCPRelay) *ExternalMCPRelay {
-	if relay == nil {
+func clonePtr[T any](p *T) *T {
+	if p == nil {
 		return nil
 	}
 
-	clone := *relay
-	clone.Attachments = CloneOutboundAttachments(relay.Attachments)
+	clone := *p
 
 	return &clone
 }
 
 // CloneOutboundMessage returns a deep copy suitable for an independent connector delivery.
 func CloneOutboundMessage(message *OutboundMessage) *OutboundMessage {
-	clone := &OutboundMessage{
-		Text:                   message.Text,
-		ProgressText:           message.ProgressText,
-		Source:                 message.Source,
-		Bridge:                 message.Bridge,
-		Targets:                slices.Clone(message.Targets),
-		ConversationID:         message.ConversationID,
-		TurnID:                 message.TurnID,
-		SessionEntryID:         message.SessionEntryID,
-		ExternalConversationID: message.ExternalConversationID,
-		Agent:                  message.Agent,
-		Sequence:               message.Sequence,
-		PostProgressText:       message.PostProgressText,
-		Complete:               message.Complete,
-		GoalTurn:               message.GoalTurn,
-		GoalComplete:           message.GoalComplete,
-		GoalActive:             message.GoalActive,
-		GoalTurnNumber:         message.GoalTurnNumber,
-		GoalMaxTurns:           message.GoalMaxTurns,
-		WorkflowTerminal:       message.WorkflowTerminal,
-		Attachments:            CloneOutboundAttachments(message.Attachments),
+	return &OutboundMessage{
+		Text: message.Text, ProgressText: message.ProgressText, Source: message.Source, Bridge: message.Bridge,
+		Targets: slices.Clone(message.Targets), ConversationID: message.ConversationID, TurnID: message.TurnID,
+		SessionEntryID: message.SessionEntryID, ExternalConversationID: message.ExternalConversationID, Agent: message.Agent,
+		Sequence: message.Sequence, PostProgressText: message.PostProgressText, Complete: message.Complete,
+		SlackReply: clonePtr(message.SlackReply), Attachments: CloneOutboundAttachments(message.Attachments),
+		GoalTurn: message.GoalTurn, GoalComplete: message.GoalComplete, GoalActive: message.GoalActive,
+		GoalTurnNumber: message.GoalTurnNumber, GoalMaxTurns: message.GoalMaxTurns, WorkflowTerminal: message.WorkflowTerminal,
+		Cronjob: clonePtr(message.Cronjob), WorkflowAgent: clonePtr(message.WorkflowAgent), WorkflowPhase: clonePtr(message.WorkflowPhase),
 	}
-
-	if message.SlackReply != nil {
-		reply := *message.SlackReply
-		clone.SlackReply = &reply
-	}
-
-	if message.Cronjob != nil {
-		cronjob := *message.Cronjob
-		clone.Cronjob = &cronjob
-	}
-
-	if message.WorkflowAgent != nil {
-		workflowAgent := *message.WorkflowAgent
-		clone.WorkflowAgent = &workflowAgent
-	}
-
-	if message.WorkflowPhase != nil {
-		workflowPhase := *message.WorkflowPhase
-		clone.WorkflowPhase = &workflowPhase
-	}
-
-	return clone
 }

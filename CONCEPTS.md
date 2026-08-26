@@ -8,7 +8,7 @@ Shared domain vocabulary for this project — entities, named processes, and sta
 
 A Slack thread that RocketClaw persists as a conversation owned by a selected agent and continues across human replies.
 
-A Managed Slack Thread has one active turn at a time. A distinct human reply received during that turn is a Slack Steer when the agent is still in the tool loop, and an Enqueued Slack Message when it is too late to steer. A second Slack delivery of the same root message is not a new send.
+A Managed Slack Thread has one active turn at a time. A distinct human reply received during that turn is a Slack Steer. An explicit `$enqueue` is an Enqueued Slack Message. A second Slack delivery of the same root message is not a new send.
 
 ### Root Slack Mention
 
@@ -28,21 +28,21 @@ A slack.channels row named `@`. It is not a Slack channel. It supplies agents an
 
 ### Slack Steer
 
-A human Slack message accepted while a Managed Slack Thread has an active turn still in the tool loop, and injected into that same turn after the current parallel tool batch completes.
+A human Slack message accepted while a Managed Slack Thread has an active turn, and injected into that same turn after the current parallel tool batch completes, or when the model answers without tools. Every waiting steer injects in one drain.
 
-A Slack Steer is marked with hourglass until injection. It does not create thinking or answer placeholders.
+A Slack Steer is marked with hourglass until injection. It does not create thinking or answer placeholders. Adding ⏫ to a live queued envelope during an active turn converts that Enqueued Slack Message into a Slack Steer. Adding 🛑 to a waiting hourglass message drops that steer and does not stop the turn.
 
 ### Enqueued Slack Message
 
-A later-turn prompt stashed on a Managed Slack Thread, usually via `$enqueue`, or via a too-late plain send.
+A later-turn prompt stashed on a Managed Slack Thread via `$enqueue`, or via External MCP `session_prompt` while that paired thread has an active turn.
 
-An Enqueued Slack Message is marked with envelope until it is popped. Pop posts an incoming-envelope Slack Blocks card, then reserves thinking and answer placeholders. Enqueued Slack Messages persist across restart and run as separate turns.
+A Slack `$enqueue` is marked with envelope until it is popped. An External MCP stash has no in-thread envelope; it is visible in `$queue` until pop. Pop posts an incoming-envelope Slack Blocks card, then reserves thinking and answer placeholders. Enqueued Slack Messages persist across restart and run as separate turns.
 
 ### Thread Queue
 
-The durable, conversation-local stack of Enqueued Slack Messages, shown and managed by `$queue` together with that conversation's scheduled messages.
+The durable, conversation-local stack of Enqueued Slack Messages, shown and managed by `$queue` together with that conversation's scheduled messages. Rows stashed from External MCP on the paired thread appear on the same list.
 
-`$queue` shows one list in later-work order. Scheduled rows stay in due-time order and can only be cancelled. Enqueued rows can be moved before or after scheduled rows. After a turn ends, a still-continuing goal wins the next slot. Otherwise the next item is the first remaining row that is ready: an Enqueued Slack Message is ready in its list position; a scheduled message is ready at its due time. A not-yet-due scheduled row blocks later rows until it runs or is cancelled. Reorder of Enqueued Slack Messages changes list position, not stash times.
+`$queue` is an ephemeral jump index of pending Slack Steers (at the top) and that later-work list. Opening it dismisses the previous card. Hide closes it. A pending-steer row jumps to the hourglass message and then hides the card. A Slack `$enqueue` row jumps to the envelope message and then hides the card. Adding 🛑 to a waiting hourglass message drops that steer and does not stop the turn. Adding 🛑 to a queued envelope removes the item and does not stop the turn. Adding 🛑 to thinking or answer still stops the turn. Adding ⏫ to a live queued envelope during an active turn converts it to a Slack Steer. Scheduled and External MCP rows list with no jump and cannot be cancelled from Slack. There is no Up / Down / Remove / Steer on the card and no later-work reorder. After a turn ends, a still-continuing goal wins the next slot. Otherwise the next item is the first remaining row that is ready: an Enqueued Slack Message is ready in its list position; a scheduled message is ready at its due time. A not-yet-due scheduled row blocks later rows until it runs or is cancelled.
 
 ### Buffered Follow-Up
 

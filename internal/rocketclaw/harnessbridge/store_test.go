@@ -132,8 +132,10 @@ func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
 func TestSessionServiceTurnPairAllowsOnlyOneActiveTurn(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
+		assert.False(t, service.PairBusy("slack-thread:C1:1.1"))
 		unlockFirst, err := service.lockTurnPair(t.Context(), "slack-thread:C1:1.1", "external_mcp:private")
 		require.NoError(t, err)
+		assert.True(t, service.PairBusy("slack-thread:C1:1.1"))
 
 		secondAcquired := false
 
@@ -159,6 +161,7 @@ func TestSessionServiceTurnPairAllowsOnlyOneActiveTurn(t *testing.T) {
 		synctest.Wait()
 		require.NoError(t, errSecond)
 		assert.True(t, secondAcquired)
+		assert.False(t, service.PairBusy("slack-thread:C1:1.1"))
 	})
 }
 
@@ -313,15 +316,17 @@ func TestSessionServiceScheduledMessages(t *testing.T) {
 	assert.Equal(t, map[string]ScheduledMessageState{"schedule-1": {ConversationID: "slack-thread:D123:111.222", Agent: "helper", Message: "later", DueAt: dueAt}}, messages)
 }
 
-func TestSessionServiceThreadQueuePersistsOrderAndSurvivesReorder(t *testing.T) {
+func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 	store := newTestSessionService(t)
 	firstStash := time.Date(2000, 1, 2, 3, 0, 0, 0, time.UTC)
 	secondStash := time.Date(2000, 1, 2, 4, 0, 0, 0, time.UTC)
 	conversationID := "slack-thread:D123:111.222"
+	dueAt := time.Date(2000, 1, 2, 16, 0, 0, 0, time.UTC)
 
-	require.NoError(t, store.PutThreadQueueItem("q1", &ThreadQueueItem{ConversationID: conversationID, Message: "write tests", Principal: "U1", StashAt: firstStash, Position: 0}))
-	require.NoError(t, store.PutThreadQueueItem("q2", &ThreadQueueItem{ConversationID: conversationID, Message: "write changelog", Principal: "U1", StashAt: secondStash, Position: 1}))
+	require.NoError(t, store.PutThreadQueueItem("q1", &ThreadQueueItem{ConversationID: conversationID, Message: "write tests", Principal: "U1", StashAt: firstStash, Position: 0, ParkAfter: "s1"}))
+	require.NoError(t, store.PutThreadQueueItem("q2", &ThreadQueueItem{ConversationID: conversationID, Message: "write changelog", Principal: "U1", StashAt: secondStash, Position: 1, ParkAfter: "s1"}))
 	require.NoError(t, store.PutThreadQueueItem("other", &ThreadQueueItem{ConversationID: "other", Message: "keep", Principal: "U2", StashAt: firstStash, Position: 0}))
+	require.NoError(t, store.PutScheduledMessage("s1", &ScheduledMessageState{ConversationID: conversationID, Agent: "helper", Message: "later", DueAt: dueAt}))
 
 	items, err := store.ThreadQueueForConversation(conversationID)
 	require.NoError(t, err)
@@ -329,28 +334,10 @@ func TestSessionServiceThreadQueuePersistsOrderAndSurvivesReorder(t *testing.T) 
 	assert.Equal(t, "q1", items[0].ID)
 	assert.Equal(t, "write tests", items[0].Message)
 	assert.Equal(t, firstStash, items[0].StashAt)
-
-	require.NoError(t, store.ReorderThreadQueue(conversationID, []string{"q2", "q1"}))
-
-	items, err = store.ThreadQueueForConversation(conversationID)
-	require.NoError(t, err)
-	require.Len(t, items, 2)
-	assert.Equal(t, "q2", items[0].ID)
-	assert.Equal(t, secondStash, items[0].StashAt)
-	assert.Empty(t, items[0].ParkAfter)
-	assert.Equal(t, "q1", items[1].ID)
-	assert.Equal(t, firstStash, items[1].StashAt)
-
-	dueAt := time.Date(2000, 1, 2, 16, 0, 0, 0, time.UTC)
-	require.NoError(t, store.PutScheduledMessage("s1", &ScheduledMessageState{ConversationID: conversationID, Agent: "helper", Message: "later", DueAt: dueAt}))
-	require.NoError(t, store.ReorderThreadQueue(conversationID, []string{"s1", "q1", "q2"}))
-	items, err = store.ThreadQueueForConversation(conversationID)
-	require.NoError(t, err)
-	require.Len(t, items, 2)
-	byID := map[string]ThreadQueueItem{items[0].ID: items[0], items[1].ID: items[1]}
-	assert.Equal(t, "s1", byID["q1"].ParkAfter)
-	assert.Equal(t, secondStash, byID["q2"].StashAt)
-	assert.Equal(t, "s1", byID["q2"].ParkAfter)
+	assert.Equal(t, "s1", items[0].ParkAfter)
+	assert.Equal(t, "q2", items[1].ID)
+	assert.Equal(t, secondStash, items[1].StashAt)
+	assert.Equal(t, "s1", items[1].ParkAfter)
 
 	rows := MixedLaterWork(items, map[string]ScheduledMessageState{"s1": {DueAt: dueAt}})
 	require.Len(t, rows, 3)
@@ -489,7 +476,7 @@ func TestSessionServiceActiveTurnLifecycle(t *testing.T) {
 	checkpoint.ResponseID = "resp-2"
 	checkpoint.OpenFunctionCalls = nil
 	checkpoint.CompletedFunctionOutputs = []harness.FunctionOutputCheckpoint{{CallID: "call-1", Name: "read", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"function_call_output"}`)}}}
-	require.NoError(t, store.RecordActiveTurnCheckpoint(context.Background(), checkpoint))
+	require.NoError(t, store.StartActiveTurn(context.Background(), checkpoint))
 
 	turns, err := store.RecoverableActiveTurns(context.Background())
 	require.NoError(t, err)
@@ -503,7 +490,7 @@ func TestSessionServiceActiveTurnLifecycle(t *testing.T) {
 	assert.Equal(t, checkpoint.ReplayInput, turns[0].Checkpoint.ReplayInput)
 	assert.Equal(t, checkpoint.CompletedFunctionOutputs, turns[0].Checkpoint.CompletedFunctionOutputs)
 
-	require.NoError(t, store.ClearCompletedActiveTurn(context.Background(), " turn-1 "))
+	require.NoError(t, store.ClearActiveTurn(context.Background(), " turn-1 "))
 	turns, err = store.RecoverableActiveTurns(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, turns)
@@ -1210,7 +1197,7 @@ func TestSessionServicePersistsActiveTurnSourceMetadata(t *testing.T) {
 	assert.Equal(t, "public-1", state.SourceMetadata["external_conversation_id"])
 	assert.Equal(t, "external_mcp", state.SourceMetadata["source"])
 
-	require.NoError(t, store.ClearCompletedActiveTurn(context.Background(), "turn-1"))
+	require.NoError(t, store.ClearActiveTurn(context.Background(), "turn-1"))
 	turns, err = store.RecoverableActiveTurns(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, turns)
@@ -1252,7 +1239,7 @@ func TestSessionServiceRejectsBlankKeys(t *testing.T) {
 
 	_, err = store.UpdateGoalStatus("thread-1", "nope", "")
 	require.EqualError(t, err, `unsupported goal status "nope"`)
-	require.EqualError(t, store.ClearCompletedActiveTurn(t.Context(), " "), "active turn ID is required")
+	require.EqualError(t, store.ClearActiveTurn(t.Context(), " "), "active turn ID is required")
 	require.EqualError(t, store.StartActiveTurn(t.Context(), nil), "active turn checkpoint is required")
 	require.EqualError(t, store.StartActiveTurn(t.Context(), &harness.ActiveTurnCheckpoint{}), "active turn ID is required")
 	require.EqualError(t, store.StartActiveTurn(t.Context(), &harness.ActiveTurnCheckpoint{TurnID: "turn-1"}), "active turn conversation ID is required")

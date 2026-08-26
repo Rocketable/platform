@@ -114,7 +114,7 @@ func StartSessionPromptServer(ctx context.Context, logger *slog.Logger, listenAd
 	)
 
 	mux := http.NewServeMux()
-	mux.Handle(ExternalMCPPath, withBasicAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { httpHandler.ServeHTTP(w, r) }), users))
+	mux.Handle(ExternalMCPPath, withBasicAuth(httpHandler, users))
 
 	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {

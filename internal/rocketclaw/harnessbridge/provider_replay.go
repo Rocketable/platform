@@ -252,39 +252,47 @@ func portableFunctionCall(raw json.RawMessage) (responses.ResponseInputItemUnion
 	return call, nil
 }
 
+func decodePortablePayload(raw json.RawMessage, missing, expected, decodeString, decodeArray string) (text string, content []portableContent, err error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return "", nil, errors.New(missing)
+	}
+
+	switch raw[0] {
+	case '"':
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return "", nil, fmt.Errorf("%s: %w", decodeString, err)
+		}
+
+		return text, nil, nil
+	case '[':
+		if err := json.Unmarshal(raw, &content); err != nil {
+			return "", nil, fmt.Errorf("%s: %w", decodeArray, err)
+		}
+
+		return "", portableContentParts(content), nil
+	default:
+		return "", nil, errors.New(expected)
+	}
+}
+
 func portableMessage(role, phase string, raw json.RawMessage) (responses.ResponseInputItemUnionParam, bool, error) {
 	if strings.TrimSpace(role) == "" {
 		return responses.ResponseInputItemUnionParam{}, false, errors.New("role: required")
 	}
 
-	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 {
-		return responses.ResponseInputItemUnionParam{}, false, errors.New("content: missing")
+	text, content, err := decodePortablePayload(raw, "content: missing", "content: expected string or content array", "content: decode string", "content: decode array")
+	if err != nil {
+		return responses.ResponseInputItemUnionParam{}, false, err
 	}
 
-	if raw[0] == '"' {
-		var text string
-		if err := json.Unmarshal(raw, &text); err != nil {
-			return responses.ResponseInputItemUnionParam{}, false, fmt.Errorf("content: decode string: %w", err)
-		}
-
+	if text != "" || content == nil {
 		message := responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRole(role))
 		message.OfMessage.Phase = responses.EasyInputMessagePhase(phase)
 		message.OfMessage.Type = "message"
 
 		return message, true, nil
 	}
-
-	if raw[0] != '[' {
-		return responses.ResponseInputItemUnionParam{}, false, errors.New("content: expected string or content array")
-	}
-
-	var content []portableContent
-	if err := json.Unmarshal(raw, &content); err != nil {
-		return responses.ResponseInputItemUnionParam{}, false, fmt.Errorf("content: decode array: %w", err)
-	}
-
-	content = portableContentParts(content)
 
 	parts := make(responses.ResponseInputMessageContentListParam, 0, len(content))
 	for _, part := range content {
@@ -314,33 +322,17 @@ func portableFunctionOutput(callID string, raw json.RawMessage) (responses.Respo
 		return responses.ResponseInputItemUnionParam{}, false, errors.New("call_id: required")
 	}
 
-	raw = bytes.TrimSpace(raw)
-	if len(raw) == 0 {
-		return responses.ResponseInputItemUnionParam{}, false, errors.New("missing output")
+	text, content, err := decodePortablePayload(raw, "missing output", "expected string or content array", "decode string", "decode function output content")
+	if err != nil {
+		return responses.ResponseInputItemUnionParam{}, false, err
 	}
 
-	if raw[0] == '"' {
-		var text string
-		if err := json.Unmarshal(raw, &text); err != nil {
-			return responses.ResponseInputItemUnionParam{}, false, fmt.Errorf("decode string: %w", err)
-		}
-
+	if text != "" || content == nil {
 		output := responses.ResponseInputItemParamOfFunctionCallOutput(callID, text)
 		output.OfFunctionCallOutput.Type = "function_call_output"
 
 		return output, true, nil
 	}
-
-	if raw[0] != '[' {
-		return responses.ResponseInputItemUnionParam{}, false, errors.New("expected string or content array")
-	}
-
-	var content []portableContent
-	if err := json.Unmarshal(raw, &content); err != nil {
-		return responses.ResponseInputItemUnionParam{}, false, fmt.Errorf("decode function output content: %w", err)
-	}
-
-	content = portableContentParts(content)
 
 	parts := make(responses.ResponseFunctionCallOutputItemListParam, 0, len(content))
 	for _, part := range content {

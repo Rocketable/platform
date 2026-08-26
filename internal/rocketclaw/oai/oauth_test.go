@@ -60,6 +60,30 @@ type loginBrowserResult struct {
 	err  error
 }
 
+func persistOAuthToken(workspace, runtimeDir, provider string, token Token, err error) (string, error) {
+	if err != nil {
+		return "", err
+	}
+
+	if err := SaveTokenIn(workspace, runtimeDir, provider, token); err != nil {
+		return "", err
+	}
+
+	return AuthFilePathIn(workspace, runtimeDir)
+}
+
+func loginDeviceIn(ctx context.Context, workspace, runtimeDir, provider string, out io.Writer) (string, error) {
+	token, err := AcquireDeviceToken(ctx, out)
+
+	return persistOAuthToken(workspace, runtimeDir, provider, token, err)
+}
+
+func loginBrowserIn(ctx context.Context, workspace, runtimeDir, provider string, out io.Writer) (string, error) {
+	token, err := AcquireBrowserToken(ctx, out)
+
+	return persistOAuthToken(workspace, runtimeDir, provider, token, err)
+}
+
 func AuthFilePath(workspace string) (string, error) {
 	return AuthFilePathIn(workspace, config.DefaultRuntimeDir)
 }
@@ -818,7 +842,7 @@ func TestLoginDevicePrintsCodeAndStopsOnContextCancel(t *testing.T) {
 
 	var out strings.Builder
 
-	path, err := LoginDeviceIn(ctx, t.TempDir(), config.DefaultRuntimeDir, "openai", &out)
+	path, err := loginDeviceIn(ctx, t.TempDir(), config.DefaultRuntimeDir, "openai", &out)
 	require.Empty(t, path)
 	require.ErrorIs(t, err, context.Canceled)
 	require.ErrorContains(t, err, "wait for device authorization")
@@ -837,7 +861,7 @@ func TestLoginDeviceFallsBackToDefaultInterval(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	path, err := LoginDeviceIn(ctx, t.TempDir(), config.DefaultRuntimeDir, "openai", io.Discard)
+	path, err := loginDeviceIn(ctx, t.TempDir(), config.DefaultRuntimeDir, "openai", io.Discard)
 	require.Empty(t, path)
 	require.ErrorIs(t, err, context.Canceled)
 	require.ErrorContains(t, err, "wait for device authorization")
@@ -866,7 +890,7 @@ func TestLoginDeviceReportsAuthorizationResponseErrors(t *testing.T) {
 				return &http.Response{StatusCode: tt.status, Body: io.NopCloser(strings.NewReader(tt.body)), Header: make(http.Header)}, nil
 			})
 
-			_, err := LoginDeviceIn(context.Background(), t.TempDir(), config.DefaultRuntimeDir, "openai", io.Discard)
+			_, err := loginDeviceIn(context.Background(), t.TempDir(), config.DefaultRuntimeDir, "openai", io.Discard)
 			require.ErrorContains(t, err, tt.want)
 			require.NotContains(t, err.Error(), "access-token-secret")
 			require.NotContains(t, err.Error(), "refresh-token-secret")
@@ -2183,7 +2207,7 @@ func startLoginBrowser(ctx context.Context, t *testing.T, workspace string) (sta
 	doneCh := make(chan loginBrowserResult, 1)
 
 	go func() {
-		path, err := LoginBrowserIn(ctx, workspace, config.DefaultRuntimeDir, "openai", output)
+		path, err := loginBrowserIn(ctx, workspace, config.DefaultRuntimeDir, "openai", output)
 		doneCh <- loginBrowserResult{path: path, err: err}
 	}()
 

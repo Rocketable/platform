@@ -271,10 +271,6 @@ func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
 	assert.Equal(t, 2, goal.TurnsUsed)
 }
 
-func TestBridgeTurnPhaseUnclassifiedWithoutLooper(t *testing.T) {
-	assert.Equal(t, ThreadTurnUnclassified, (&Bridge{}).TurnPhase())
-}
-
 func TestFinishGoalTurnHumanResteeringDoesNotConsumeBudget(t *testing.T) {
 	bridge := newGoalAccountingTestBridge(t)
 	require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "ship it", "", 3, "starter-team", "starter-user"))
@@ -680,20 +676,18 @@ func TestActiveTurnCheckpointSinkMapsLifecycleToSessionService(t *testing.T) {
 func TestRecoveredActiveTurnCheckpointSinkPreservesRecoveredReplay(t *testing.T) {
 	recoveredReplay := []json.RawMessage{json.RawMessage(`{"type":"message","role":"developer","content":"interrupted transcript"}`)}
 	sink := &captureCheckpointSink{}
-	wrapper := recoveredActiveTurnCheckpointSink{sink: sink, recoveredReplay: recoveredReplay}
-
 	checkpoint := &rocketcode.ActiveTurnCheckpoint{
 		TurnID:      "turn-2",
 		ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"continue"}`)},
 	}
-	require.NoError(t, wrapper.RecordProviderResponse(context.Background(), checkpoint))
+	require.NoError(t, sink.RecordProviderResponse(context.Background(), withRecoveredReplay(checkpoint, recoveredReplay)))
 
 	require.Len(t, sink.checkpoints, 1)
 	assert.JSONEq(t, `{"type":"message","role":"developer","content":"interrupted transcript"}`, string(sink.checkpoints[0].ReplayInput[0]))
 	assert.JSONEq(t, `{"type":"message","role":"user","content":"continue"}`, string(sink.checkpoints[0].ReplayInput[1]))
 	assert.JSONEq(t, `{"type":"message","role":"user","content":"continue"}`, string(checkpoint.ReplayInput[0]))
 
-	require.NoError(t, wrapper.RecordCompletedToolOutput(context.Background(), sink.checkpoints[0]))
+	require.NoError(t, sink.RecordCompletedToolOutput(context.Background(), withRecoveredReplay(sink.checkpoints[0], recoveredReplay)))
 	require.Len(t, sink.checkpoints, 2)
 	assert.Len(t, sink.checkpoints[1].ReplayInput, 2)
 }
@@ -2576,6 +2570,26 @@ func TestBridgeDeletesScheduledMessageAfterSuccessfulHandling(t *testing.T) {
 
 		return len(messages) == 0
 	}, time.Second, time.Millisecond)
+}
+
+func TestSubmitEnqueuedItemUsesSystemSource(t *testing.T) {
+	bridge := &Bridge{
+		requestCh: make(chan bridgeRequest, 1),
+		stopCh:    make(chan struct{}),
+		config:    Config{ConversationID: SlackThreadConversationID("C123", "111.0"), SessionService: newTestSessionService(t)},
+	}
+
+	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &ThreadQueueItem{ID: "q1", Message: "wait 4s and say alpha", Principal: "U1", SlackChannel: "C123", SlackTS: "111.2"}))
+
+	req := <-bridge.requestCh
+	require.NotNil(t, req.inbound)
+	assert.Equal(t, events.SourceSystem, req.inbound.Source)
+	assert.Equal(t, "enqueued_message", req.inbound.Label)
+	assert.Equal(t, "wait 4s and say alpha", req.inbound.Text)
+	require.NotNil(t, req.inbound.SlackReply)
+	assert.Equal(t, "C123", req.inbound.SlackReply.ChannelID)
+	assert.Equal(t, "111.2", req.inbound.SlackReply.MessageTS)
+	assert.Equal(t, "111.0", req.inbound.SlackReply.ThreadTS)
 }
 
 func TestBridgeDeletesEnqueueItemWhenTurnStarts(t *testing.T) {
@@ -4701,4 +4715,77 @@ func TestRocketcodeShellTempRel(t *testing.T) {
 	assert.Equal(t, ".rocketclaw/.rocketcode/tmp/anonymous", rocketcodeShellTempRel(".rocketclaw", ""))
 	assert.Equal(t, ".rocketclaw/.rocketcode/tmp/slack-thread_C123_111.222", rocketcodeShellTempRel(".rocketclaw", "slack-thread:C123:111.222"))
 	assert.Equal(t, "runtime/.rocketcode/tmp/cron_job", rocketcodeShellTempRel("runtime", "cron:job"))
+}
+
+func seedReplayText(items []responses.ResponseInputItemUnionParam) string {
+	parts := make([]string, 0, len(items))
+	for i := range items {
+		item := items[i]
+		switch {
+		case item.OfMessage != nil:
+			var text string
+			if item.OfMessage.Content.OfString.Valid() {
+				text = item.OfMessage.Content.OfString.Value
+			} else {
+				texts := make([]string, 0, len(item.OfMessage.Content.OfInputItemContentList))
+
+				for j := range item.OfMessage.Content.OfInputItemContentList {
+					if item.OfMessage.Content.OfInputItemContentList[j].OfInputText != nil {
+						texts = append(texts, item.OfMessage.Content.OfInputItemContentList[j].OfInputText.Text)
+					}
+				}
+
+				text = strings.Join(texts, "\n")
+			}
+
+			parts = append(parts, strings.TrimSpace(string(item.OfMessage.Role))+": "+strings.TrimSpace(text))
+		case item.OfInputMessage != nil:
+			texts := make([]string, 0, len(item.OfInputMessage.Content))
+
+			for j := range item.OfInputMessage.Content {
+				if text := item.OfInputMessage.Content[j].GetText(); text != nil {
+					texts = append(texts, *text)
+				}
+			}
+
+			parts = append(parts, strings.TrimSpace(item.OfInputMessage.Role)+": "+strings.TrimSpace(strings.Join(texts, "\n")))
+		case item.OfCompaction != nil:
+			parts = append(parts, rocketcode.CompactionCheckpointText(item.OfCompaction))
+		case item.OfFunctionCall != nil:
+			parts = append(parts, "assistant tool call "+item.OfFunctionCall.Name+": "+item.OfFunctionCall.Arguments)
+		case item.OfFunctionCallOutput != nil:
+			parts = append(parts, "tool result "+item.OfFunctionCallOutput.CallID+": "+seedFunctionCallOutputText(item.OfFunctionCallOutput))
+		case item.OfWebSearchCall != nil:
+			data, err := json.Marshal(item.OfWebSearchCall.Action)
+			if err == nil {
+				parts = append(parts, "web search "+string(item.OfWebSearchCall.Status)+": "+string(data))
+			}
+		}
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+func seedFunctionCallOutputText(output *responses.ResponseInputItemFunctionCallOutputParam) string {
+	if output.Output.OfString.Valid() {
+		return output.Output.OfString.Value
+	}
+
+	parts := make([]string, 0, len(output.Output.OfResponseFunctionCallOutputItemArray))
+	attachments := 0
+
+	for i := range output.Output.OfResponseFunctionCallOutputItemArray {
+		item := output.Output.OfResponseFunctionCallOutputItemArray[i]
+		if item.OfInputText != nil {
+			parts = append(parts, item.OfInputText.Text)
+		} else {
+			attachments++
+		}
+	}
+
+	if attachments > 0 {
+		parts = append(parts, "[tool result attachments omitted from seed summary input]")
+	}
+
+	return strings.Join(parts, "\n")
 }

@@ -206,9 +206,8 @@ func TestCrossProviderRepeatedRecoveryCheckpointKeepsProjectedBytes(t *testing.T
 	require.NoError(t, err)
 
 	sink := new(captureCheckpointSink)
-	wrapper := recoveredActiveTurnCheckpointSink{sink: sink, recoveredReplay: recovered}
 	recheckpoint := &rocketcode.ActiveTurnCheckpoint{DisplayModel: "work/gpt", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"continue"}`)}}
-	require.NoError(t, wrapper.RecordRecoveredReplay(t.Context(), recheckpoint))
+	require.NoError(t, sink.RecordRecoveredReplay(t.Context(), withRecoveredReplay(recheckpoint, recovered)))
 	require.Len(t, sink.checkpoints, 1)
 	want := slices.Clone(sink.checkpoints[0].ReplayInput)
 

@@ -36,22 +36,6 @@ func parseDynamicWorkflowParams(raw json.RawMessage) (dynamicWorkflowParams, err
 	return params, nil
 }
 
-func hasWorkflowAllowRule(permissions rocketcode.PermissionSet) bool {
-	for _, bucket := range permissions.Buckets {
-		if bucket.Name != "workflow" {
-			continue
-		}
-
-		for _, rule := range bucket.Rules {
-			if rule.Action == rocketcode.PermissionAllow {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
 func allowedWorkflowDescriptions(permissions rocketcode.PermissionSet, descriptions []workflow.Description) []workflow.Description {
 	allowed := make([]workflow.Description, 0, len(descriptions))
 	for _, description := range descriptions {
@@ -148,7 +132,21 @@ func emitNestedWorkflowProgress(output chan<- rocketcode.ChatResponse, text stri
 }
 
 func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *rocketcode.Agent, agentName, turnID string) (rocketcode.Tool, bool) {
-	if !hasWorkflowAllowRule(agent.Permission) {
+	allowed := false
+
+	for _, bucket := range agent.Permission.Buckets {
+		if bucket.Name != "workflow" {
+			continue
+		}
+
+		for _, rule := range bucket.Rules {
+			if rule.Action == rocketcode.PermissionAllow {
+				allowed = true
+			}
+		}
+	}
+
+	if !allowed {
 		return rocketcode.Tool{}, false
 	}
 

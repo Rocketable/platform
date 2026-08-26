@@ -39,24 +39,18 @@ func splitSlackText(text string, preferredLimit, hardLimit int) []string {
 			break
 		}
 
-		end := slackChunkEnd(runes, preferredLimit, hardLimit)
+		end := min(len(runes), hardLimit)
+		if bound := slackBoundary(runes[:min(len(runes), preferredLimit)]); bound > 0 {
+			end = bound
+		} else if bound := slackBoundary(runes[:min(len(runes), hardLimit)]); bound > 0 {
+			end = bound
+		}
+
 		chunks = append(chunks, string(runes[:end]))
 		runes = runes[end:]
 	}
 
 	return chunks
-}
-
-func slackChunkEnd(runes []rune, preferredLimit, hardLimit int) int {
-	if end := slackBoundary(runes[:min(len(runes), preferredLimit)]); end > 0 {
-		return end
-	}
-
-	if end := slackBoundary(runes[:min(len(runes), hardLimit)]); end > 0 {
-		return end
-	}
-
-	return min(len(runes), hardLimit)
 }
 
 func slackBoundary(runes []rune) int {

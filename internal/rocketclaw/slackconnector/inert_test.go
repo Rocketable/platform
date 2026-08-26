@@ -59,23 +59,14 @@ func (inertThreadRouter) StashThreadQueueItem(context.Context, events.TextConver
 func (inertThreadRouter) ThreadQueueItems(context.Context, events.TextConversationTarget) ([]harnessbridge.ThreadQueueItem, error) {
 	return nil, errors.New("slack thread routing is not configured")
 }
-func (inertThreadRouter) ReorderThreadQueue(context.Context, events.TextConversationTarget, []string) error {
-	return errors.New("slack thread routing is not configured")
-}
 func (inertThreadRouter) DeleteThreadQueueItem(context.Context, events.TextConversationTarget, string) error {
 	return errors.New("slack thread routing is not configured")
 }
 func (inertThreadRouter) ScheduledMessages(context.Context, events.TextConversationTarget) (map[string]harnessbridge.ScheduledMessageState, error) {
 	return nil, errors.New("slack thread routing is not configured")
 }
-func (inertThreadRouter) DeleteScheduledMessage(context.Context, events.TextConversationTarget, string) error {
-	return errors.New("slack thread routing is not configured")
-}
-func (inertThreadRouter) ResetScheduledMessages(context.Context, events.TextConversationTarget) error {
-	return errors.New("slack thread routing is not configured")
-}
-func (inertThreadRouter) TurnPhase(events.TextConversationTarget) harnessbridge.ThreadTurnPhase {
-	return harnessbridge.ThreadTurnUnclassified
+func (inertThreadRouter) ThreadBusy(events.TextConversationTarget) bool {
+	return false
 }
 
 type inertOneOffCronjobs struct{}
@@ -87,3 +78,11 @@ func (inertOneOffCronjobs) LoadOneOffCronjob(string) (cronjob.OneOffCronjob, err
 func (inertOneOffCronjobs) RunOneOffCronjob(ctx context.Context, _ cronjob.OneOffCronjob, _ *harnessbridge.RawRunProgress, finish func(context.Context, cronjob.RunResult, error)) {
 	finish(ctx, cronjob.RunResult{}, errors.New("on-demand cronjobs are not configured"))
 }
+
+type inertSideAskRunner struct{}
+
+func (inertSideAskRunner) RunSideAsk(context.Context, *sideAskRequest) {}
+
+type inertSideAskHost struct{}
+
+func (inertSideAskHost) Run(context.Context, harnessbridge.SideAskRequest) error { return nil }

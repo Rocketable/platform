@@ -164,6 +164,7 @@ func TestRunOneOffCronjobSetsTraceConversationID(t *testing.T) {
 		if !strings.HasPrefix(progress.ConversationID, "one-off-cron:cron/daily.md:20000102T030405.000000006Z:") {
 			t.Fatalf("ConversationID = %q; want one-off trace ID", progress.ConversationID)
 		}
+
 		if progress.TextChannel != "#ops" {
 			t.Fatalf("TextChannel = %q; want #ops", progress.TextChannel)
 		}
@@ -212,6 +213,7 @@ func TestExecuteJobSetsTraceConversationID(t *testing.T) {
 		if !strings.HasPrefix(progress.ConversationID, "cron:cron/daily.md:20000102T030405.000000006Z:") {
 			t.Fatalf("ConversationID = %q; want scheduled trace ID", progress.ConversationID)
 		}
+
 		if progress.TextChannel != "#ops" {
 			t.Fatalf("TextChannel = %q; want #ops", progress.TextChannel)
 		}

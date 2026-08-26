@@ -350,9 +350,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	}
 
 	go func() {
-		if err := clockwork.run(runCtx, func(ctx context.Context, request events.Request) {
-			dispatchClockworkRequest(ctx, threadBridges, request)
-		}); err != nil {
+		if err := clockwork.run(runCtx); err != nil {
 			logger.Error("connector clockwork stopped", "error", err)
 		}
 	}()
@@ -375,15 +373,13 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	logger.Info("starting Slack connector")
 
-	slackRouter := newRequestTextRouter(connectorChannels.Requests)
-	slackSink = slackconnector.New(&cfg.Slack, events.BroadcastPublisher(connectorChannels.Broadcasts), slackRouter, cronjobs, &harnessbridge.SideAskRunner{Config: cfg, Sessions: rocketcodeSessions, Logger: logger}, logger)
-	slackRouter.output = slackSink.SendResponse
-	slackRouter.abort = slackSink.AbortResponse
-	slackRouter.root = slackSink.StartNewThreadRoot
-	slackRouter.turnPhase = threadBridges.TurnPhase
+	slackSink = slackconnector.New(&cfg.Slack, events.BroadcastPublisher(connectorChannels.Broadcasts), threadBridges, cronjobs, &harnessbridge.SideAskRunner{Config: cfg, Sessions: rocketcodeSessions, Logger: logger}, logger)
+	threadBridges.output = slackSink.SendResponse
+	threadBridges.abort = slackSink.AbortResponse
+	threadBridges.root = slackSink.StartNewThreadRoot
 	slackUserQuestionAsker = events.InteractiveUserQuestionAsker(slackSink.AskUserQuestion)
-	drainSlack = func(ctx context.Context, conversationID string, phase rocketcode.TurnPhase) []string {
-		return slackSink.DrainSteers(ctx, conversationID, harnessbridge.ThreadTurnPhaseFrom(phase))
+	drainSlack = func(ctx context.Context, conversationID string, _ rocketcode.TurnPhase) []string {
+		return slackSink.DrainSteers(ctx, conversationID)
 	}
 	startThreadRoot = slackSink.StartNewThreadRoot
 
@@ -399,6 +395,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	stops = append(stops, namedStopper{name: "slack", stop: slackSink.Stop})
 	slackSink.SetPendingSteersSink(harnessbridge.PendingSteersSink{Set: rocketcodeSessions.SetPendingSteers})
+
 	if err := applyStartupSteerRecovery(runCtx, slackSink, threadBridges.PickLaterWork, recoveredTurns, cannotResume); err != nil {
 		return err
 	}
@@ -473,21 +470,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 			return err
 		}
 
-		response := make(chan events.Response, 1)
-
-		request := events.Request{Sender: events.BridgeExternalMCP, Operation: &events.TextRequest{Kind: events.RequestTextSubmitExternalMCP, Agent: agent, ConversationID: conversationID, Inbound: inbound}, Response: response}
-		select {
-		case connectorChannels.Requests <- request:
-		case <-submitCtx.Done():
-			return submitCtx.Err()
-		}
-
-		select {
-		case result := <-response:
-			return result.Err
-		case <-submitCtx.Done():
-			return submitCtx.Err()
-		}
+		return threadBridges.SubmitExternalMCP(submitCtx, agent, conversationID, inbound, harnessbridge.NoopActivationHook)
 	}
 
 	if err := cronjobs.Start(runCtx); err != nil {
@@ -697,6 +680,12 @@ func startExternalMCPServer(
 			conversationID := session.PrivateConversationID
 			if conversationID == "" {
 				conversationID = session.ManagedConversationID
+			}
+
+			if store.PairBusyFor(session.ManagedConversationID, conversationID) {
+				result, _, err := submitExternalMCPInput(callCtx, submitAgent, usedAgent, conversationID, &inboundContent, metadata, strings.TrimSpace(username), nil, externalConversationID, harnessbridge.NoopActivationHook)
+
+				return result, err
 			}
 
 			activation := func(activeCtx context.Context, inbound *events.InboundMessage) error {

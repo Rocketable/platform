@@ -356,16 +356,6 @@ func AcquireBrowserToken(ctx context.Context, out io.Writer) (Token, error) {
 	return tokenFromResponse(response), nil
 }
 
-// LoginBrowserIn completes the local browser OAuth flow and saves the resulting token in runtimeDir.
-func LoginBrowserIn(ctx context.Context, workspace, runtimeDir, provider string, out io.Writer) (string, error) {
-	token, err := AcquireBrowserToken(ctx, out)
-	if err != nil {
-		return "", err
-	}
-
-	return saveTokenIn(workspace, runtimeDir, provider, token)
-}
-
 // AcquireDeviceToken completes the headless device OAuth flow without persisting the token.
 func AcquireDeviceToken(ctx context.Context, out io.Writer) (Token, error) {
 	body, err := json.Marshal(map[string]string{"client_id": clientID})
@@ -426,16 +416,6 @@ func AcquireDeviceToken(ctx context.Context, out io.Writer) (Token, error) {
 			return token, nil
 		}
 	}
-}
-
-// LoginDeviceIn completes the headless device OAuth flow and saves the resulting token in runtimeDir.
-func LoginDeviceIn(ctx context.Context, workspace, runtimeDir, provider string, out io.Writer) (string, error) {
-	token, err := AcquireDeviceToken(ctx, out)
-	if err != nil {
-		return "", err
-	}
-
-	return saveTokenIn(workspace, runtimeDir, provider, token)
 }
 
 // NewChatGPTClientIn creates an OpenAI client that sends Responses API requests to ChatGPT Codex using runtimeDir auth.
@@ -1413,14 +1393,6 @@ func oauthHTTPError(operation string, status int, body io.Reader) error {
 	}
 
 	return fmt.Errorf("%s failed (%d)", operation, status)
-}
-
-func saveTokenIn(workspace, runtimeDir, provider string, token Token) (string, error) {
-	if err := SaveTokenIn(workspace, runtimeDir, provider, token); err != nil {
-		return "", err
-	}
-
-	return AuthFilePathIn(workspace, runtimeDir)
 }
 
 func tokenFromResponse(response tokenResponse) Token {
