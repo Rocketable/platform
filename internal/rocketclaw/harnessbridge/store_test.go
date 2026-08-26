@@ -337,8 +337,26 @@ func TestSessionServiceThreadQueuePersistsOrderAndSurvivesReorder(t *testing.T) 
 	require.Len(t, items, 2)
 	assert.Equal(t, "q2", items[0].ID)
 	assert.Equal(t, secondStash, items[0].StashAt)
+	assert.Empty(t, items[0].ParkAfter)
 	assert.Equal(t, "q1", items[1].ID)
 	assert.Equal(t, firstStash, items[1].StashAt)
+
+	dueAt := time.Date(2000, 1, 2, 16, 0, 0, 0, time.UTC)
+	require.NoError(t, store.PutScheduledMessage("s1", &ScheduledMessageState{ConversationID: conversationID, Agent: "helper", Message: "later", DueAt: dueAt}))
+	require.NoError(t, store.ReorderThreadQueue(conversationID, []string{"s1", "q1", "q2"}))
+	items, err = store.ThreadQueueForConversation(conversationID)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	byID := map[string]ThreadQueueItem{items[0].ID: items[0], items[1].ID: items[1]}
+	assert.Equal(t, "s1", byID["q1"].ParkAfter)
+	assert.Equal(t, secondStash, byID["q2"].StashAt)
+	assert.Equal(t, "s1", byID["q2"].ParkAfter)
+
+	rows := MixedLaterWork(items, map[string]ScheduledMessageState{"s1": {DueAt: dueAt}})
+	require.Len(t, rows, 3)
+	assert.Equal(t, LaterWorkScheduled, rows[0].Kind)
+	assert.Equal(t, "q1", rows[1].Queue.ID)
+	assert.Equal(t, "q2", rows[2].Queue.ID)
 
 	require.NoError(t, store.DeleteScheduledMessage("missing"))
 	require.NoError(t, store.ResetScheduledMessages(conversationID))
@@ -424,13 +442,13 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 3, n)
+	assert.Equal(t, 4, n)
 
 	second, err := NewSessionServiceIn(workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop(context.Background())) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 3, n)
+	assert.Equal(t, 4, n)
 }
 
 func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
@@ -443,7 +461,7 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 3, n)
+	assert.Equal(t, 4, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 

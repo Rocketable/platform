@@ -6748,7 +6748,7 @@ func TestHandleMessageEventWorkflowAllowedWhenQueueExistsWithoutLiveTurn(t *test
 	assert.Empty(t, ephemeral)
 }
 
-func TestHandleMessageEventQueuePostsTwoSectionsWhenVacant(t *testing.T) {
+func TestHandleMessageEventQueuePostsNoneWhenVacant(t *testing.T) {
 	var posted []url.Values
 
 	server := newSlackStackTestServer(t, &posted, new([]string))
@@ -6762,9 +6762,9 @@ func TestHandleMessageEventQueuePostsTwoSectionsWhenVacant(t *testing.T) {
 	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
 
 	require.Len(t, posted, 1)
-	assert.Contains(t, posted[0].Get("blocks"), "Enqueue")
-	assert.Contains(t, posted[0].Get("blocks"), "Scheduled")
-	assert.Equal(t, 2, strings.Count(posted[0].Get("blocks"), `"text":"None"`))
+	assert.NotContains(t, posted[0].Get("blocks"), "Enqueue")
+	assert.NotContains(t, posted[0].Get("blocks"), "Scheduled")
+	assert.Equal(t, 1, strings.Count(posted[0].Get("blocks"), `"text":"None"`))
 	assert.Contains(t, posted[0].Get("blocks"), slackQueueResetScheduledActionID)
 	assert.NotContains(t, posted[0].Get("blocks"), slackQueueUpActionID)
 	assert.NotContains(t, posted[0].Get("blocks"), slackQueueRemoveActionID)
@@ -6802,6 +6802,34 @@ func TestHandleMessageEventQueueShowsEnqueueAndScheduledControls(t *testing.T) {
 	assert.Contains(t, blocks, slackQueueCancelScheduledActionID)
 	assert.Contains(t, blocks, slackQueueResetScheduledActionID)
 	assert.NotContains(t, blocks, "q1"+`","`+slackQueueUpActionID)
+	assert.Contains(t, blocks, "↓")
+	assert.Contains(t, blocks, "✕")
+}
+
+func TestHandleInteractiveQueueParkAfterScheduled(t *testing.T) {
+	var posted []url.Values
+
+	server := newSlackStackTestServer(t, &posted, new([]string))
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.prepareHandled = true
+	router.queue = []harnessbridge.ThreadQueueItem{{ID: "q1", Message: "Ship README", Position: 0}}
+	router.scheduled = map[string]harnessbridge.ScheduledMessageState{
+		"s1": {Message: "Ping legal", DueAt: time.Date(2026, 8, 24, 16, 0, 0, 0, time.UTC)},
+	}
+	connector := newTestConnectorWithOptions(server.URL, newTestBus(), nil, router, nil)
+
+	event := newSlackMessageEvent("111.2", "111.0", "$queue")
+	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
+
+	callback := slackQueueCallback("555.1", "U123", slackQueueDownActionID, "q1")
+	connector.handleInteractive(t.Context(), socketmode.Event{Data: callback})
+
+	items := router.queueSnapshot()
+	require.Len(t, items, 1)
+	assert.Equal(t, "s1", items[0].ParkAfter)
+	require.GreaterOrEqual(t, len(posted), 2)
 }
 
 func TestHandleInteractiveQueueRemoveByAnotherAllowedUser(t *testing.T) {
@@ -6923,7 +6951,8 @@ func TestHandleInteractiveQueueStaleRowRefreshesCard(t *testing.T) {
 	connector.handleInteractive(t.Context(), socketmode.Event{Data: callback})
 
 	require.GreaterOrEqual(t, len(posted), 2)
-	assert.Contains(t, posted[len(posted)-1].Get("blocks"), "Enqueue")
+	assert.Contains(t, posted[len(posted)-1].Get("blocks"), "None")
+	assert.NotContains(t, posted[len(posted)-1].Get("blocks"), "Enqueue")
 }
 
 func TestHandleAppMentionEventRedeliveryPreservesPendingSteersAndQueue(t *testing.T) {
@@ -7852,7 +7881,7 @@ func assertSlackCommandHelpTable(t *testing.T, values url.Values) {
 		{{Type: "raw_text", Text: "$workflow <name> [args]"}, {Type: "raw_text", Text: "⏩"}, {Type: "raw_text", Text: "Run a workflow"}},
 		{{Type: "raw_text", Text: "$stop"}, {Type: "raw_text", Text: "🛑"}, {Type: "raw_text", Text: "Stop the active turn"}},
 		{{Type: "raw_text", Text: "$enqueue <message>"}, {Type: "raw_text", Text: "✉️"}, {Type: "raw_text", Text: "Stash a later turn"}},
-		{{Type: "raw_text", Text: "$queue"}, {Type: "raw_text", Text: "—"}, {Type: "raw_text", Text: "Show later work and scheduled messages"}},
+		{{Type: "raw_text", Text: "$queue"}, {Type: "raw_text", Text: "—"}, {Type: "raw_text", Text: "Show later work"}},
 		{{Type: "raw_text", Text: "$cron <job>"}, {Type: "raw_text", Text: "🔂"}, {Type: "raw_text", Text: "Run a cron job"}},
 		{{Type: "raw_text", Text: "$agent [name]"}, {Type: "raw_text", Text: "🎛"}, {Type: "raw_text", Text: "Select or switch an agent; bare opens the selector"}},
 	}, blocks[0].Rows)
@@ -11093,11 +11122,23 @@ func (s *threadRouterStub) ReorderThreadQueue(_ context.Context, _ events.TextCo
 		byID[s.queue[i].ID] = s.queue[i]
 	}
 
-	reordered := make([]harnessbridge.ThreadQueueItem, 0, len(ids))
-	for i, id := range ids {
-		item := byID[id]
-		item.Position = i
+	lastPeg := ""
+	pos := 0
+	reordered := make([]harnessbridge.ThreadQueueItem, 0, len(s.queue))
+
+	for _, id := range ids {
+		item, ok := byID[id]
+		if !ok {
+			lastPeg = id
+			pos = 0
+
+			continue
+		}
+
+		item.Position = pos
+		item.ParkAfter = lastPeg
 		reordered = append(reordered, item)
+		pos++
 	}
 
 	s.queue = reordered

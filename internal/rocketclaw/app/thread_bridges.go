@@ -207,7 +207,16 @@ func (m *threadBridgeManager) StashThreadQueueItem(_ context.Context, target eve
 		return fmt.Errorf("list thread queue: %w", err)
 	}
 
-	item.Position = len(existing)
+	empty := 0
+
+	for i := range existing {
+		if strings.TrimSpace(existing[i].ParkAfter) == "" {
+			empty++
+		}
+	}
+
+	item.Position = empty
+	item.ParkAfter = ""
 
 	if err := m.store.PutThreadQueueItem(item.ID, item); err != nil {
 		return fmt.Errorf("stash thread queue item: %w", err)
@@ -225,15 +234,16 @@ func (m *threadBridgeManager) ThreadQueueItems(_ context.Context, target events.
 	return items, nil
 }
 
-func (m *threadBridgeManager) ReorderThreadQueue(_ context.Context, target events.TextConversationTarget, ids []string) error {
-	if err := m.store.ReorderThreadQueue(m.text.conversationID(target), ids); err != nil {
+func (m *threadBridgeManager) ReorderThreadQueue(ctx context.Context, target events.TextConversationTarget, ids []string) error {
+	conversationID := m.text.conversationID(target)
+	if err := m.store.ReorderThreadQueue(conversationID, ids); err != nil {
 		return fmt.Errorf("reorder thread queue: %w", err)
 	}
 
-	return nil
+	return m.PickLaterWork(ctx, conversationID)
 }
 
-func (m *threadBridgeManager) DeleteThreadQueueItem(_ context.Context, target events.TextConversationTarget, id string) error {
+func (m *threadBridgeManager) DeleteThreadQueueItem(ctx context.Context, target events.TextConversationTarget, id string) error {
 	conversationID := m.text.conversationID(target)
 
 	items, err := m.store.ThreadQueueForConversation(conversationID)
@@ -247,7 +257,7 @@ func (m *threadBridgeManager) DeleteThreadQueueItem(_ context.Context, target ev
 				return fmt.Errorf("delete thread queue item: %w", err)
 			}
 
-			return nil
+			return m.PickLaterWork(ctx, conversationID)
 		}
 	}
 
@@ -263,7 +273,7 @@ func (m *threadBridgeManager) ScheduledMessages(_ context.Context, target events
 	return messages, nil
 }
 
-func (m *threadBridgeManager) DeleteScheduledMessage(_ context.Context, target events.TextConversationTarget, id string) error {
+func (m *threadBridgeManager) DeleteScheduledMessage(ctx context.Context, target events.TextConversationTarget, id string) error {
 	conversationID := m.text.conversationID(target)
 
 	messages, err := m.store.ScheduledMessagesForConversation(conversationID)
@@ -279,15 +289,16 @@ func (m *threadBridgeManager) DeleteScheduledMessage(_ context.Context, target e
 		return fmt.Errorf("delete scheduled message: %w", err)
 	}
 
-	return nil
+	return m.PickLaterWork(ctx, conversationID)
 }
 
-func (m *threadBridgeManager) ResetScheduledMessages(_ context.Context, target events.TextConversationTarget) error {
-	if err := m.store.ResetScheduledMessages(m.text.conversationID(target)); err != nil {
+func (m *threadBridgeManager) ResetScheduledMessages(ctx context.Context, target events.TextConversationTarget) error {
+	conversationID := m.text.conversationID(target)
+	if err := m.store.ResetScheduledMessages(conversationID); err != nil {
 		return fmt.Errorf("reset scheduled messages: %w", err)
 	}
 
-	return nil
+	return m.PickLaterWork(ctx, conversationID)
 }
 
 func (m *threadBridgeManager) SwitchThreadAgent(target events.TextConversationTarget, agent string) (bool, error) {

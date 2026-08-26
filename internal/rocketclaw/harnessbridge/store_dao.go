@@ -273,8 +273,21 @@ func (d stateDAO) scheduledMessages(ctx context.Context, conversationID string) 
 	return messages, nil
 }
 
+func (d stateDAO) clearParkAfter(ctx context.Context, scheduledID string) error {
+	if _, err := d.db.ExecContext(ctx, `UPDATE thread_queue SET park_after = '' WHERE park_after = $1`, strings.TrimSpace(scheduledID)); err != nil {
+		return fmt.Errorf("clear thread queue park: %w", err)
+	}
+
+	return nil
+}
+
 func (d stateDAO) deleteScheduledMessage(ctx context.Context, id string) error {
-	if _, err := d.db.ExecContext(ctx, `DELETE FROM scheduled_messages WHERE scheduled_message_id = $1`, strings.TrimSpace(id)); err != nil {
+	id = strings.TrimSpace(id)
+	if err := d.clearParkAfter(ctx, id); err != nil {
+		return err
+	}
+
+	if _, err := d.db.ExecContext(ctx, `DELETE FROM scheduled_messages WHERE scheduled_message_id = $1`, id); err != nil {
 		return fmt.Errorf("delete scheduled message: %w", err)
 	}
 
@@ -282,7 +295,12 @@ func (d stateDAO) deleteScheduledMessage(ctx context.Context, id string) error {
 }
 
 func (d stateDAO) resetScheduledMessages(ctx context.Context, conversationID string) error {
-	if _, err := d.db.ExecContext(ctx, `DELETE FROM scheduled_messages WHERE conversation_id = $1`, strings.TrimSpace(conversationID)); err != nil {
+	conversationID = strings.TrimSpace(conversationID)
+	if _, err := d.db.ExecContext(ctx, `UPDATE thread_queue SET park_after = '' WHERE conversation_id = $1`, conversationID); err != nil {
+		return fmt.Errorf("clear thread queue parks: %w", err)
+	}
+
+	if _, err := d.db.ExecContext(ctx, `DELETE FROM scheduled_messages WHERE conversation_id = $1`, conversationID); err != nil {
 		return fmt.Errorf("reset scheduled messages: %w", err)
 	}
 
@@ -290,7 +308,7 @@ func (d stateDAO) resetScheduledMessages(ctx context.Context, conversationID str
 }
 
 func (d stateDAO) putThreadQueueItem(ctx context.Context, id string, item *ThreadQueueItem) error {
-	_, err := d.db.ExecContext(ctx, `INSERT INTO thread_queue (queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, slack_channel, slack_ts) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT(queue_item_id) DO UPDATE SET conversation_id = excluded.conversation_id, message = excluded.message, principal = excluded.principal, stash_at_unix_ns = excluded.stash_at_unix_ns, position = excluded.position, slack_channel = excluded.slack_channel, slack_ts = excluded.slack_ts`, strings.TrimSpace(id), strings.TrimSpace(item.ConversationID), item.Message, item.Principal, timeUnixNano(item.StashAt), item.Position, item.SlackChannel, item.SlackTS)
+	_, err := d.db.ExecContext(ctx, `INSERT INTO thread_queue (queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT(queue_item_id) DO UPDATE SET conversation_id = excluded.conversation_id, message = excluded.message, principal = excluded.principal, stash_at_unix_ns = excluded.stash_at_unix_ns, position = excluded.position, park_after = excluded.park_after, slack_channel = excluded.slack_channel, slack_ts = excluded.slack_ts`, strings.TrimSpace(id), strings.TrimSpace(item.ConversationID), item.Message, item.Principal, timeUnixNano(item.StashAt), item.Position, strings.TrimSpace(item.ParkAfter), item.SlackChannel, item.SlackTS)
 	if err != nil {
 		return fmt.Errorf("put thread queue item: %w", err)
 	}
@@ -299,7 +317,7 @@ func (d stateDAO) putThreadQueueItem(ctx context.Context, id string, item *Threa
 }
 
 func (d stateDAO) threadQueueForConversation(ctx context.Context, conversationID string) ([]ThreadQueueItem, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, slack_channel, slack_ts FROM thread_queue WHERE conversation_id = $1 ORDER BY position, stash_at_unix_ns`, strings.TrimSpace(conversationID))
+	rows, err := d.db.QueryContext(ctx, `SELECT queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts FROM thread_queue WHERE conversation_id = $1 ORDER BY position, stash_at_unix_ns`, strings.TrimSpace(conversationID))
 	if err != nil {
 		return nil, fmt.Errorf("query thread queue: %w", err)
 	}
@@ -332,10 +350,35 @@ func (d stateDAO) deleteThreadQueueItem(ctx context.Context, id string) error {
 }
 
 func (d stateDAO) reorderThreadQueue(ctx context.Context, conversationID string, ids []string) error {
-	for i, id := range ids {
-		if _, err := d.db.ExecContext(ctx, `UPDATE thread_queue SET position = $1 WHERE queue_item_id = $2 AND conversation_id = $3`, i, strings.TrimSpace(id), strings.TrimSpace(conversationID)); err != nil {
+	conversationID = strings.TrimSpace(conversationID)
+
+	existing, err := d.threadQueueForConversation(ctx, conversationID)
+	if err != nil {
+		return err
+	}
+
+	known := make(map[string]struct{}, len(existing))
+	for i := range existing {
+		known[existing[i].ID] = struct{}{}
+	}
+
+	lastPeg := ""
+	pos := 0
+
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if _, ok := known[id]; !ok {
+			lastPeg = id
+			pos = 0
+
+			continue
+		}
+
+		if _, err := d.db.ExecContext(ctx, `UPDATE thread_queue SET position = $1, park_after = $2 WHERE queue_item_id = $3 AND conversation_id = $4`, pos, lastPeg, id, conversationID); err != nil {
 			return fmt.Errorf("reorder thread queue: %w", err)
 		}
+
+		pos++
 	}
 
 	return nil
@@ -347,7 +390,7 @@ func scanThreadQueueItem(scanner rowScanner) (ThreadQueueItem, error) {
 		stashAt int64
 	)
 
-	if err := scanner.Scan(&item.ID, &item.ConversationID, &item.Message, &item.Principal, &stashAt, &item.Position, &item.SlackChannel, &item.SlackTS); err != nil {
+	if err := scanner.Scan(&item.ID, &item.ConversationID, &item.Message, &item.Principal, &stashAt, &item.Position, &item.ParkAfter, &item.SlackChannel, &item.SlackTS); err != nil {
 		return ThreadQueueItem{}, fmt.Errorf("scan thread queue item: %w", err)
 	}
 

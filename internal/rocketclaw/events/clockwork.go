@@ -64,9 +64,9 @@ type TextRequest struct {
 
 // ThreadQueueRecord is one Enqueued Slack Message on a text request.
 type ThreadQueueRecord struct {
-	ID, Message, Principal, SlackChannel, SlackTS string
-	StashAt                                       time.Time
-	Position                                      int
+	ID, Message, Principal, SlackChannel, SlackTS, ParkAfter string
+	StashAt                                                  time.Time
+	Position                                                 int
 }
 
 // ScheduledMessageRecord is one scheduled message on a text request.

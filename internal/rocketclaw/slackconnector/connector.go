@@ -58,7 +58,7 @@ const (
 		"$workflow <name> [args] - ⏩ Run a workflow\n" +
 		"$stop - 🛑 Stop the active turn\n" +
 		"$enqueue <message> - ✉️ Stash a later turn\n" +
-		"$queue - Show later work and scheduled messages\n" +
+		"$queue - Show later work\n" +
 		"$cron <job> - 🔂 Run a cron job\n" +
 		"$agent [name] - 🎛 Select or switch an agent; bare opens the selector"
 )
@@ -4024,7 +4024,7 @@ func slackDollarCommandHelpTable() *slack.TableBlock {
 		AddRow(slack.NewTableRawTextCell("$workflow <name> [args]"), slack.NewTableRawTextCell("⏩"), slack.NewTableRawTextCell("Run a workflow")).
 		AddRow(slack.NewTableRawTextCell("$stop"), slack.NewTableRawTextCell("🛑"), slack.NewTableRawTextCell("Stop the active turn")).
 		AddRow(slack.NewTableRawTextCell("$enqueue <message>"), slack.NewTableRawTextCell("✉️"), slack.NewTableRawTextCell("Stash a later turn")).
-		AddRow(slack.NewTableRawTextCell("$queue"), slack.NewTableRawTextCell("—"), slack.NewTableRawTextCell("Show later work and scheduled messages")).
+		AddRow(slack.NewTableRawTextCell("$queue"), slack.NewTableRawTextCell("—"), slack.NewTableRawTextCell("Show later work")).
 		AddRow(slack.NewTableRawTextCell("$cron <job>"), slack.NewTableRawTextCell("🔂"), slack.NewTableRawTextCell("Run a cron job")).
 		AddRow(slack.NewTableRawTextCell("$agent [name]"), slack.NewTableRawTextCell("🎛"), slack.NewTableRawTextCell("Select or switch an agent; bare opens the selector"))
 }
@@ -4266,7 +4266,16 @@ func (c *Connector) moveQueueItem(ctx context.Context, target events.TextConvers
 		return
 	}
 
-	index := slices.IndexFunc(items, func(item harnessbridge.ThreadQueueItem) bool { return item.ID == id })
+	scheduled, errScheduled := c.threadRouter.ScheduledMessages(ctx, target)
+	if errScheduled != nil {
+		c.log.Error("list Slack scheduled for reorder", "error", errScheduled, "channel", target.ChannelID, "thread_ts", target.ThreadID)
+	}
+
+	rows := harnessbridge.MixedLaterWork(items, scheduled)
+
+	index := slices.IndexFunc(rows, func(row harnessbridge.LaterWorkRow) bool {
+		return row.Kind == harnessbridge.LaterWorkQueued && row.Queue.ID == id
+	})
 	if index < 0 {
 		return
 	}
@@ -4276,15 +4285,20 @@ func (c *Connector) moveQueueItem(ctx context.Context, target events.TextConvers
 		swap = index - 1
 	}
 
-	if swap < 0 || swap >= len(items) {
+	if swap < 0 || swap >= len(rows) {
 		return
 	}
 
-	items[index], items[swap] = items[swap], items[index]
+	rows[index], rows[swap] = rows[swap], rows[index]
 
-	ids := make([]string, len(items))
-	for i := range items {
-		ids[i] = items[i].ID
+	ids := make([]string, len(rows))
+	for i := range rows {
+		if rows[i].Kind == harnessbridge.LaterWorkQueued {
+			ids[i] = rows[i].Queue.ID
+			continue
+		}
+
+		ids[i] = rows[i].ScheduledID
 	}
 
 	if err := c.threadRouter.ReorderThreadQueue(ctx, target, ids); err != nil {
@@ -4357,64 +4371,60 @@ func (c *Connector) queueCard(ctx context.Context, channelID, threadTS string) (
 	return slackQueueCard(channelID, threadTS, items, scheduled)
 }
 
+func slackQueueWhen(due, now time.Time) string {
+	due = due.UTC()
+
+	now = now.UTC()
+	if due.Year() == now.Year() && due.YearDay() == now.YearDay() {
+		return due.Format("15:04 UTC")
+	}
+
+	return due.Format("2006-01-02 15:04 UTC")
+}
+
 func slackQueueCard(channelID, threadTS string, items []harnessbridge.ThreadQueueItem, scheduled map[string]harnessbridge.ScheduledMessageState) (string, []slack.Block) {
-	blocks := []slack.Block{slack.NewHeaderBlock(slack.NewTextBlockObject(slack.PlainTextType, "Enqueue", false, false))}
-	if len(items) == 0 {
+	rows := harnessbridge.MixedLaterWork(items, scheduled)
+
+	var blocks []slack.Block
+	if len(rows) == 0 {
 		blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.PlainTextType, "None", false, false), nil, nil))
 	}
 
-	for i := range items {
-		item := &items[i]
-		body := slackTruncatedText(fmt.Sprintf("%d. %s", i+1, item.Message), slackBlockTextLimit, "...")
+	now := time.Now().UTC()
+
+	for i := range rows {
+		row := rows[i]
+		if row.Kind == harnessbridge.LaterWorkQueued {
+			body := slackTruncatedText(row.Queue.Message, slackBlockTextLimit, "...")
+			blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.PlainTextType, body, false, false), nil, nil))
+
+			var buttons []slack.BlockElement
+
+			meta, _ := json.Marshal(slackQueueAction{ChannelID: channelID, ThreadTS: threadTS, ItemID: row.Queue.ID})
+			if i > 0 {
+				buttons = append(buttons, slack.NewButtonBlockElement(slackQueueUpActionID, row.Queue.ID, slack.NewTextBlockObject(slack.PlainTextType, "↑", false, false)))
+			}
+
+			if i < len(rows)-1 {
+				buttons = append(buttons, slack.NewButtonBlockElement(slackQueueDownActionID, row.Queue.ID, slack.NewTextBlockObject(slack.PlainTextType, "↓", false, false)))
+			}
+
+			buttons = append(buttons, slack.NewButtonBlockElement(slackQueueRemoveActionID, row.Queue.ID, slack.NewTextBlockObject(slack.PlainTextType, "✕", false, false)))
+			blocks = append(blocks, slack.NewActionBlock(string(meta), buttons...))
+
+			continue
+		}
+
+		body := slackTruncatedText(row.Scheduled.Message+" · "+slackQueueWhen(row.Scheduled.DueAt, now), slackBlockTextLimit, "...")
 		blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.PlainTextType, body, false, false), nil, nil))
-
-		var buttons []slack.BlockElement
-
-		meta, _ := json.Marshal(slackQueueAction{ChannelID: channelID, ThreadTS: threadTS, ItemID: item.ID})
-		if i > 0 {
-			buttons = append(buttons, slack.NewButtonBlockElement(slackQueueUpActionID, item.ID, slack.NewTextBlockObject(slack.PlainTextType, "Up", false, false)))
-		}
-
-		if i < len(items)-1 {
-			buttons = append(buttons, slack.NewButtonBlockElement(slackQueueDownActionID, item.ID, slack.NewTextBlockObject(slack.PlainTextType, "Down", false, false)))
-		}
-
-		buttons = append(buttons, slack.NewButtonBlockElement(slackQueueRemoveActionID, item.ID, slack.NewTextBlockObject(slack.PlainTextType, "Remove", false, false)))
-		action := slack.NewActionBlock(string(meta), buttons...)
-		blocks = append(blocks, action)
-	}
-
-	blocks = append(blocks, slack.NewHeaderBlock(slack.NewTextBlockObject(slack.PlainTextType, "Scheduled", false, false)))
-
-	ids := make([]string, 0, len(scheduled))
-	for id := range scheduled {
-		ids = append(ids, id)
-	}
-
-	slices.SortFunc(ids, func(a, b string) int {
-		if cmp := scheduled[a].DueAt.Compare(scheduled[b].DueAt); cmp != 0 {
-			return cmp
-		}
-
-		return strings.Compare(a, b)
-	})
-
-	if len(ids) == 0 {
-		blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.PlainTextType, "None", false, false), nil, nil))
-	}
-
-	for _, id := range ids {
-		message := scheduled[id]
-		body := slackTruncatedText(message.Message+" · "+message.DueAt.UTC().Format(time.RFC3339), slackBlockTextLimit, "...")
-		blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.PlainTextType, body, false, false), nil, nil))
-		meta, _ := json.Marshal(slackQueueAction{ChannelID: channelID, ThreadTS: threadTS, ItemID: id})
-		blocks = append(blocks, slack.NewActionBlock(string(meta), slack.NewButtonBlockElement(slackQueueCancelScheduledActionID, id, slack.NewTextBlockObject(slack.PlainTextType, "Cancel", false, false))))
+		meta, _ := json.Marshal(slackQueueAction{ChannelID: channelID, ThreadTS: threadTS, ItemID: row.ScheduledID})
+		blocks = append(blocks, slack.NewActionBlock(string(meta), slack.NewButtonBlockElement(slackQueueCancelScheduledActionID, row.ScheduledID, slack.NewTextBlockObject(slack.PlainTextType, "✕", false, false))))
 	}
 
 	resetMeta, _ := json.Marshal(slackQueueAction{ChannelID: channelID, ThreadTS: threadTS})
 	blocks = append(blocks, slack.NewActionBlock(string(resetMeta), slack.NewButtonBlockElement(slackQueueResetScheduledActionID, "", slack.NewTextBlockObject(slack.PlainTextType, "Reset all", false, false))))
 
-	return "Enqueue and scheduled messages", blocks
+	return "Later work", blocks
 }
 
 func (c *Connector) handleWorkflowRequest(ctx context.Context, key, agent, args, userID string, replyTarget *events.SlackReplyTarget, inbound *events.InboundMessage) {
