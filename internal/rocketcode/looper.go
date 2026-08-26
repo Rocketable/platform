@@ -45,7 +45,7 @@ const (
 	TurnPhaseFinalAnswer
 )
 
-// SteerDrain collects waiting Slack Steers after a tool batch, or converts them when the final answer starts.
+// SteerDrain collects waiting Slack Steers after a tool batch, or when a no-tool answer would otherwise end the turn.
 // The zero value is inert.
 type SteerDrain struct {
 	Fn func(context.Context, TurnPhase) []string
@@ -850,7 +850,14 @@ func (l *looper) runTurn(
 				continue
 			}
 
-			l.SteerDrain.Drain(turnCtx, TurnPhaseFinalAnswer)
+			injected, errSteers := l.appendSteers(turnCtx, &record, &turnItems, TurnPhaseFinalAnswer)
+			if errSteers != nil {
+				return emptyRecord, nil, false, errSteers
+			}
+
+			if injected {
+				continue
+			}
 
 			return record, rendered, false, nil
 		}
@@ -859,7 +866,7 @@ func (l *looper) runTurn(
 			return emptyRecord, nil, false, err
 		}
 
-		if err := l.appendSteers(turnCtx, &record, &turnItems); err != nil {
+		if _, err := l.appendSteers(turnCtx, &record, &turnItems, TurnPhaseToolLoop); err != nil {
 			return emptyRecord, nil, false, err
 		}
 	}
@@ -867,6 +874,7 @@ func (l *looper) runTurn(
 
 func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Response, reviewContext []responses.ResponseInputItemUnionParam, doomLoop *doomLoopTrap, output chan<- ChatResponse, markInterrupted func() error) (hadToolCalls, compactionOnly bool, toolOutputs []dispatchedToolOutput, interrupted bool, err error) {
 	hadToolCalls = slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type == "function_call" })
+
 	compactionOnly = len(resp.Output) > 0 && !slices.ContainsFunc(resp.Output, func(item responses.ResponseOutputItemUnion) bool { return item.Type != "compaction" })
 	if hadToolCalls {
 		l.setPhase(TurnPhaseToolLoop)
@@ -900,17 +908,18 @@ func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Resp
 	return false, false, nil, false, fmt.Errorf("dispatch tool calls: %w", err)
 }
 
-func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam) error {
-	for _, text := range l.SteerDrain.Drain(ctx, TurnPhaseToolLoop) {
+func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, phase TurnPhase) (bool, error) {
+	texts := l.SteerDrain.Drain(ctx, phase)
+	for _, text := range texts {
 		steer := inputMessageParam(responses.EasyInputMessageRoleUser, easyInputStringContent(text))
 		if err := appendReplayInput(record, &steer); err != nil {
-			return err
+			return false, err
 		}
 
 		*turnItems = append(*turnItems, steer)
 	}
 
-	return nil
+	return len(texts) > 0, nil
 }
 
 func activeTurnID(record *SessionEntry) string {

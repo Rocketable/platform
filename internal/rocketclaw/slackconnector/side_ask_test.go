@@ -166,9 +166,7 @@ func TestSideAskEndDoesNotPromoteBufferedFollowUp(t *testing.T) {
 	require.Len(t, buffered, 1)
 	assert.Equal(t, "thread follow-up", buffered[0].Text)
 
-	connector.promoteSlackStack(t.Context(), key, func(context.Context, *events.InboundMessage) error {
-		return errors.New("unexpected submit")
-	})
+	connector.promoteSlackStack(key)
 
 	assert.Empty(t, router.repliesSnapshot())
 	connector.mu.Lock()

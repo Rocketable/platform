@@ -1,7 +1,9 @@
 package app
 
 import (
+	"cmp"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -10,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
@@ -24,7 +27,6 @@ type directBridge interface {
 	SubmitWhenActive(ctx context.Context, msg *events.InboundMessage, activation harnessbridge.ActivationHook) error
 	RecoverActiveTurn(ctx context.Context, turn *harnessbridge.ActiveTurnState) error
 	InterruptActiveTurn() *events.InboundMessage
-	TurnPhase() harnessbridge.ThreadTurnPhase
 	SwitchAgent(agent string)
 	PickLaterWork(ctx context.Context) error
 }
@@ -52,13 +54,28 @@ type threadBridgeManager struct {
 	store   *harnessbridge.SessionService
 	factory func(harnessbridge.Config) directBridge
 	text    primaryTextBinding
+	output  func(context.Context, *events.OutboundMessage) error
+	abort   func(*events.OutboundMessage)
+	root    func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadRootResult, error)
 
 	mu      sync.Mutex
 	bridges map[string]*managedThreadBridge
 }
 
+var _ harnessbridge.PrimaryTextRouter = (*threadBridgeManager)(nil)
+
 func newThreadBridgeManager(runtime *config.Config, store *harnessbridge.SessionService, logger *slog.Logger, factory func(harnessbridge.Config) directBridge) *threadBridgeManager {
-	return &threadBridgeManager{log: logger.With("component", "thread_bridges"), runtime: runtime, store: store, factory: factory, text: primaryTextBinding{label: "Slack", outputTargets: []events.OutputTarget{events.OutputTargetSlack}}, mu: sync.Mutex{}, bridges: map[string]*managedThreadBridge{}}
+	return &threadBridgeManager{
+		log: logger.With("component", "thread_bridges"), runtime: runtime, store: store, factory: factory,
+		text:   primaryTextBinding{label: "Slack", outputTargets: []events.OutputTarget{events.OutputTargetSlack}},
+		output: func(context.Context, *events.OutboundMessage) error { return nil },
+		abort:  func(*events.OutboundMessage) {},
+		root: func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadRootResult, error) {
+			return events.StartNewThreadRootResult{}, errors.New("thread bridge is not ready")
+		},
+		mu:      sync.Mutex{},
+		bridges: map[string]*managedThreadBridge{},
+	}
 }
 
 func (b primaryTextBinding) conversationID(target events.TextConversationTarget) string {
@@ -69,12 +86,6 @@ func (b primaryTextBinding) targetForConversationID(conversationID string) (even
 	channelID, threadTS, ok := harnessbridge.SlackThreadTarget(conversationID)
 
 	return events.TextConversationTarget{ChannelID: channelID, MessageID: threadTS, ThreadID: threadTS}, ok
-}
-
-func (b primaryTextBinding) setReplyThread(inbound *events.InboundMessage, target events.TextConversationTarget) {
-	if inbound.SlackReply != nil {
-		inbound.SlackReply.ThreadTS = strings.TrimSpace(target.ThreadID)
-	}
 }
 
 func (b primaryTextBinding) setContinuationReply(inbound *events.InboundMessage, target events.TextConversationTarget) {
@@ -182,7 +193,9 @@ func (m *threadBridgeManager) SubmitWhenActive(ctx context.Context, target event
 		disableStartNewThread(inbound)
 	}
 
-	m.text.setReplyThread(inbound, target)
+	if inbound.SlackReply != nil {
+		inbound.SlackReply.ThreadTS = strings.TrimSpace(target.ThreadID)
+	}
 
 	managed, _, err := m.ensureThreadBridge(conversationID, thread, m.text.outputTargets, false)
 	if err != nil {
@@ -190,6 +203,7 @@ func (m *threadBridgeManager) SubmitWhenActive(ctx context.Context, target event
 	}
 
 	inbound.ConversationID = conversationID
+	m.prepareOriginator(ctx, inbound)
 
 	if err := managed.bridge.SubmitWhenActive(ctx, inbound, activation); err != nil {
 		return true, fmt.Errorf("submit %s thread reply: %w", m.text.label, err)
@@ -234,15 +248,6 @@ func (m *threadBridgeManager) ThreadQueueItems(_ context.Context, target events.
 	return items, nil
 }
 
-func (m *threadBridgeManager) ReorderThreadQueue(ctx context.Context, target events.TextConversationTarget, ids []string) error {
-	conversationID := m.text.conversationID(target)
-	if err := m.store.ReorderThreadQueue(conversationID, ids); err != nil {
-		return fmt.Errorf("reorder thread queue: %w", err)
-	}
-
-	return m.PickLaterWork(ctx, conversationID)
-}
-
 func (m *threadBridgeManager) DeleteThreadQueueItem(ctx context.Context, target events.TextConversationTarget, id string) error {
 	conversationID := m.text.conversationID(target)
 
@@ -253,6 +258,10 @@ func (m *threadBridgeManager) DeleteThreadQueueItem(ctx context.Context, target 
 
 	for i := range items {
 		if items[i].ID == id {
+			if waiter := m.store.TakeMCPWaiter(id); waiter != nil {
+				waiter.CompleteResponse("", errors.New("queue row removed"))
+			}
+
 			if err := m.store.DeleteThreadQueueItem(id); err != nil {
 				return fmt.Errorf("delete thread queue item: %w", err)
 			}
@@ -271,34 +280,6 @@ func (m *threadBridgeManager) ScheduledMessages(_ context.Context, target events
 	}
 
 	return messages, nil
-}
-
-func (m *threadBridgeManager) DeleteScheduledMessage(ctx context.Context, target events.TextConversationTarget, id string) error {
-	conversationID := m.text.conversationID(target)
-
-	messages, err := m.store.ScheduledMessagesForConversation(conversationID)
-	if err != nil {
-		return fmt.Errorf("list scheduled messages: %w", err)
-	}
-
-	if _, ok := messages[id]; !ok {
-		return nil
-	}
-
-	if err := m.store.DeleteScheduledMessage(id); err != nil {
-		return fmt.Errorf("delete scheduled message: %w", err)
-	}
-
-	return m.PickLaterWork(ctx, conversationID)
-}
-
-func (m *threadBridgeManager) ResetScheduledMessages(ctx context.Context, target events.TextConversationTarget) error {
-	conversationID := m.text.conversationID(target)
-	if err := m.store.ResetScheduledMessages(conversationID); err != nil {
-		return fmt.Errorf("reset scheduled messages: %w", err)
-	}
-
-	return m.PickLaterWork(ctx, conversationID)
 }
 
 func (m *threadBridgeManager) SwitchThreadAgent(target events.TextConversationTarget, agent string) (bool, error) {
@@ -370,15 +351,12 @@ func (m *threadBridgeManager) StartThread(ctx context.Context, agent string, tar
 	}
 
 	inbound.ConversationID = conversationID
-	if err := managed.bridge.Submit(ctx, inbound); err != nil {
-		return fmt.Errorf("submit %s thread start: %w", m.text.label, err)
-	}
 
-	return nil
+	return m.submitInbound(ctx, managed.bridge, inbound, m.text.label+" thread start")
 }
 
 func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *events.StartNewThreadRequest, createRoot func(context.Context, *events.StartNewThreadRequest) (events.StartNewThreadRootResult, error)) (events.StartNewThreadResult, error) {
-	targetAgent := startNewThreadTargetAgent(req)
+	targetAgent := cmp.Or(strings.TrimSpace(req.Agent), strings.TrimSpace(req.CurrentAgent), "main")
 	if len(req.AllowedAgents) > 0 && !slices.Contains(req.AllowedAgents, targetAgent) {
 		return events.StartNewThreadResult{}, fmt.Errorf("agent %q is not allowed on this source surface", targetAgent)
 	}
@@ -436,19 +414,6 @@ func (m *threadBridgeManager) StartNewThread(ctx context.Context, req *events.St
 	return events.StartNewThreadResult{ConversationID: conversationID, URL: url}, nil
 }
 
-func startNewThreadTargetAgent(req *events.StartNewThreadRequest) string {
-	targetAgent := strings.TrimSpace(req.Agent)
-	if targetAgent == "" {
-		targetAgent = strings.TrimSpace(req.CurrentAgent)
-	}
-
-	if targetAgent == "" {
-		return "main"
-	}
-
-	return targetAgent
-}
-
 func (m *threadBridgeManager) StartGoalInThread(ctx context.Context, agent, objective, checkScript string, maxTurns int, target events.TextConversationTarget, inbound *events.InboundMessage) error {
 	conversationID := m.text.conversationID(target)
 	if conversationID == "" {
@@ -486,13 +451,9 @@ func (m *threadBridgeManager) StartGoalInThread(ctx context.Context, agent, obje
 	}
 
 	inbound.Label = "goal"
-
 	inbound.ConversationID = conversationID
-	if err := managed.bridge.Submit(ctx, inbound); err != nil {
-		return fmt.Errorf("submit goal thread start: %w", err)
-	}
 
-	return nil
+	return m.submitInbound(ctx, managed.bridge, inbound, "goal thread start")
 }
 
 func (m *threadBridgeManager) WorkflowDescriptions() ([]workflow.Description, error) {
@@ -535,11 +496,8 @@ func (m *threadBridgeManager) StartWorkflowInThread(ctx context.Context, agent, 
 	inbound.Text = strings.TrimSpace("$workflow " + name + " " + args)
 
 	inbound.Workflow = &workflow.RunRequest{Args: args, Definition: definition}
-	if err := managed.bridge.Submit(ctx, inbound); err != nil {
-		return fmt.Errorf("submit workflow thread start: %w", err)
-	}
 
-	return nil
+	return m.submitInbound(ctx, managed.bridge, inbound, "workflow thread start")
 }
 
 func (m *threadBridgeManager) InterruptThread(target events.TextConversationTarget) (*events.InboundMessage, error) {
@@ -552,15 +510,7 @@ func (m *threadBridgeManager) InterruptThread(target events.TextConversationTarg
 		return nil, fmt.Errorf("stop goal thread: %w", err)
 	}
 
-	m.mu.Lock()
-	managed := m.bridges[conversationID]
-	m.mu.Unlock()
-
-	if managed == nil {
-		return nil, nil
-	}
-
-	return managed.bridge.InterruptActiveTurn(), nil
+	return m.InterruptConversation(conversationID), nil
 }
 
 func (m *threadBridgeManager) PickLaterWork(ctx context.Context, conversationID string) error {
@@ -602,17 +552,8 @@ func (m *threadBridgeManager) InterruptConversation(conversationID string) *even
 	return managed.bridge.InterruptActiveTurn()
 }
 
-func (m *threadBridgeManager) TurnPhase(target events.TextConversationTarget) harnessbridge.ThreadTurnPhase {
-	conversationID := m.text.conversationID(target)
-	m.mu.Lock()
-	managed := m.bridges[conversationID]
-	m.mu.Unlock()
-
-	if managed == nil {
-		return harnessbridge.ThreadTurnUnclassified
-	}
-
-	return managed.bridge.TurnPhase()
+func (m *threadBridgeManager) ThreadBusy(target events.TextConversationTarget) bool {
+	return m.store.PairBusy(m.text.conversationID(target))
 }
 
 func (m *threadBridgeManager) RegisterCronThread(_ context.Context, target events.TextConversationTarget, agent string) error {
@@ -644,12 +585,29 @@ func (m *threadBridgeManager) RegisterThread(target events.TextConversationTarge
 }
 
 func (m *threadBridgeManager) SubmitExternalMCP(ctx context.Context, agent, conversationID string, inbound *events.InboundMessage, activation harnessbridge.ActivationHook) error {
+	managedID := strings.TrimSpace(conversationID)
+
+	_, session, ok, errSession := m.store.ExternalMCPSessionByConversationID(conversationID)
+	if errSession != nil {
+		return fmt.Errorf("load external MCP session: %w", errSession)
+	}
+
+	if ok && strings.TrimSpace(session.ManagedConversationID) != "" {
+		managedID = session.ManagedConversationID
+	}
+
+	if m.store.PairBusyFor(managedID, conversationID) {
+		return m.stashBusyExternalMCP(ctx, inbound, managedID)
+	}
+
 	managed, _, err := m.ensureThreadBridge(conversationID, harnessbridge.ThreadState{Agent: agent}, m.text.outputTargets, false)
 	if err != nil {
 		return err
 	}
 
 	managed.bridge.SwitchAgent(agent)
+
+	inbound.Bridge = events.BridgeExternalMCP
 
 	if err := managed.bridge.SubmitWhenActive(ctx, inbound, activation); err != nil {
 		return fmt.Errorf("submit external MCP agent prompt: %w", err)
@@ -670,6 +628,117 @@ func (m *threadBridgeManager) RecoverActiveTurn(ctx context.Context, turn *harne
 
 	if err := managed.bridge.RecoverActiveTurn(ctx, turn); err != nil {
 		return fmt.Errorf("submit recovered active turn: %w", err)
+	}
+
+	return nil
+}
+
+func (m *threadBridgeManager) stashBusyExternalMCP(ctx context.Context, inbound *events.InboundMessage, managedID string) error {
+	target, ok := m.text.targetForConversationID(managedID)
+	if !ok {
+		return fmt.Errorf("managed conversation %q is not a Slack thread", managedID)
+	}
+
+	principal := ""
+	if inbound.Metadata != nil {
+		principal = inbound.Metadata[events.InboundPrincipalMetadataKey]
+	}
+
+	item := &harnessbridge.ThreadQueueItem{ID: rand.Text(), Message: inbound.Text, Principal: principal, StashAt: time.Now().UTC()}
+	if err := m.StashThreadQueueItem(ctx, target, item); err != nil {
+		return err
+	}
+
+	m.store.PutMCPWaiter(item.ID, inbound)
+
+	return nil
+}
+
+func (m *threadBridgeManager) prepareOriginator(ctx context.Context, inbound *events.InboundMessage) {
+	if inbound.Bridge == "" {
+		switch inbound.Source {
+		case events.SourceSlack:
+			inbound.Bridge = events.BridgeSlack
+		case events.SourceExternalMCP:
+			inbound.Bridge = events.BridgeExternalMCP
+		case events.SourceSystem:
+			// System turns keep any caller-set bridge.
+		}
+	}
+
+	if inbound.Bridge != events.BridgeSlack || inbound.Response != nil {
+		return
+	}
+
+	inbound.Response = make(chan events.Response, 8)
+	go m.consumeOutput(ctx, inbound.Response)
+}
+
+func (m *threadBridgeManager) consumeOutput(ctx context.Context, responses <-chan events.Response) {
+	for {
+		select {
+		case result := <-responses:
+			handled, err := m.handleInteraction(ctx, result.Payload)
+			if err != nil {
+				return
+			}
+
+			if handled {
+				continue
+			}
+
+			payload, ok := result.Payload.(*events.TextResponse)
+			if !ok || payload.Message == nil {
+				return
+			}
+
+			if err := m.output(ctx, payload.Message); err != nil {
+				if payload.Message.Complete {
+					m.abort(payload.Message)
+					payload.Message.MarkDelivered(err)
+
+					return
+				}
+
+				m.abort(payload.Message)
+
+				continue
+			}
+
+			if payload.Message.Complete {
+				payload.Message.MarkDelivered(nil)
+
+				return
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (m *threadBridgeManager) handleInteraction(ctx context.Context, payload events.ResponsePayload) (bool, error) {
+	switch interaction := payload.(type) {
+	case events.StartNewThreadResponse:
+		root, err := m.root(ctx, interaction.Request)
+		if err != nil {
+			interaction.Err <- err
+
+			return true, err
+		}
+
+		interaction.Root <- root
+
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+func (m *threadBridgeManager) submitInbound(ctx context.Context, managed directBridge, inbound *events.InboundMessage, wrap string) error {
+	m.prepareOriginator(ctx, inbound)
+
+	if err := managed.Submit(ctx, inbound); err != nil {
+		return fmt.Errorf("submit %s: %w", wrap, err)
 	}
 
 	return nil

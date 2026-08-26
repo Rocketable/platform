@@ -206,7 +206,9 @@ func (f *fakeSteerSurface) DiscardPendingSteers(context.Context, []harnessbridge
 
 func TestApplyStartupSteerRecoveryRestoresThenPicks(t *testing.T) {
 	slack := &fakeSteerSurface{}
+
 	var picked []string
+
 	err := applyStartupSteerRecovery(t.Context(), slack, func(_ context.Context, conversationID string) error {
 		picked = append(picked, conversationID)
 		return nil

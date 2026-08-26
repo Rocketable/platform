@@ -349,41 +349,6 @@ func (d stateDAO) deleteThreadQueueItem(ctx context.Context, id string) error {
 	return nil
 }
 
-func (d stateDAO) reorderThreadQueue(ctx context.Context, conversationID string, ids []string) error {
-	conversationID = strings.TrimSpace(conversationID)
-
-	existing, err := d.threadQueueForConversation(ctx, conversationID)
-	if err != nil {
-		return err
-	}
-
-	known := make(map[string]struct{}, len(existing))
-	for i := range existing {
-		known[existing[i].ID] = struct{}{}
-	}
-
-	lastPeg := ""
-	pos := 0
-
-	for _, id := range ids {
-		id = strings.TrimSpace(id)
-		if _, ok := known[id]; !ok {
-			lastPeg = id
-			pos = 0
-
-			continue
-		}
-
-		if _, err := d.db.ExecContext(ctx, `UPDATE thread_queue SET position = $1, park_after = $2 WHERE queue_item_id = $3 AND conversation_id = $4`, pos, lastPeg, id, conversationID); err != nil {
-			return fmt.Errorf("reorder thread queue: %w", err)
-		}
-
-		pos++
-	}
-
-	return nil
-}
-
 func scanThreadQueueItem(scanner rowScanner) (ThreadQueueItem, error) {
 	var (
 		item    ThreadQueueItem

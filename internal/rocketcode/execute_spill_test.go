@@ -97,6 +97,7 @@ func TestSpillExecuteOutput(t *testing.T) {
 		".rocketcode/spill/turn-1/output-1.txt",
 		".rocketcode/spill/turn-1/output-2.txt",
 	}, loop.spillPaths)
+
 	_, err = root.Stat(".rocketcode/spill/turn-1/output-3.txt")
 	require.ErrorIs(t, err, os.ErrNotExist)
 

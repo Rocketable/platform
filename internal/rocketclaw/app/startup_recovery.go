@@ -130,6 +130,7 @@ func applyStartupSteerRecovery(ctx context.Context, slack startupSteerSurface, p
 
 	for i := range cannotResume {
 		slack.DiscardPendingSteers(ctx, cannotResume[i].steers)
+
 		if err := pick(ctx, cannotResume[i].conversationID); err != nil {
 			return fmt.Errorf("pick later work after unresumable turn: %w", err)
 		}

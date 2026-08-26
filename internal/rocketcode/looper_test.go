@@ -2604,12 +2604,18 @@ func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
 		return TextToolResult("looked-up"), nil
 	}
 	looper.Tools = map[string]looperTool{"lookup": tool}
-	looper.SteerDrain = SteerDrain{Fn: func(context.Context, TurnPhase) []string {
+	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []string {
+		if phase != TurnPhaseToolLoop {
+			return nil
+		}
+
 		return []string{"don't touch the database"}
 	}}
 	output := make(chan ChatResponse, 10)
+
 	input := make(chan PromptInput, 1)
 	input <- testPromptInput(PromptInputRoleUser, "look something up", output)
+
 	close(input)
 
 	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
@@ -2634,17 +2640,24 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 		return TextToolResult("looked-up"), nil
 	}
 	looper.Tools = map[string]looperTool{"lookup": tool}
-	looper.SteerDrain = SteerDrain{Fn: func(context.Context, TurnPhase) []string {
+	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []string {
+		if phase != TurnPhaseToolLoop {
+			return nil
+		}
+
 		return []string{"use the other file", "and skip tests"}
 	}}
 	output := make(chan ChatResponse, 10)
+
 	input := make(chan PromptInput, 1)
 	input <- testPromptInput(PromptInputRoleUser, "look something up", output)
+
 	close(input)
 
 	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
+
 	items := mock.calls[1].Input.OfInputItemList
 	require.GreaterOrEqual(t, len(items), 2)
 	require.JSONEq(t, `{"content":"use the other file","role":"user","type":"message"}`, marshalJSON(t, items[len(items)-2]))
@@ -2656,6 +2669,7 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 		mu     sync.Mutex
 		phases []TurnPhase
 	)
+
 	started := make(chan struct{}, 2)
 	release := make(chan struct{})
 	mock := mockResponses(
@@ -2673,6 +2687,7 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 	}}
 	block := func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
 		started <- struct{}{}
+
 		<-release
 
 		return TextToolResult("ok"), nil
@@ -2680,8 +2695,10 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 	looper.Tools = map[string]looperTool{"first": {Definition: testFunctionToolParam("first"), Call: block}, "second": {Definition: testFunctionToolParam("second"), Call: block}}
 	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []string {
 		mu.Lock()
+
 		phases = append(phases, phase)
 		mu.Unlock()
+
 		if phase == TurnPhaseToolLoop {
 			return []string{"steer after batch"}
 		}
@@ -2689,8 +2706,10 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 		return nil
 	}}
 	output := make(chan ChatResponse, 10)
+
 	input := make(chan PromptInput, 1)
 	input <- testPromptInput(PromptInputRoleUser, "run both", output)
+
 	close(input)
 
 	var group errgroup.Group
@@ -2711,27 +2730,37 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 	require.Equal(t, 1, strings.Count(marshalJSON(t, mock.calls[1].Input.OfInputItemList), `"content":"steer after batch"`))
 }
 
-func TestLooperDoesNotInjectSteersWhenNoTools(t *testing.T) {
+func TestLooperInjectsSteersWhenNoTools(t *testing.T) {
 	var phases []TurnPhase
-	mock := mockResponses(responseWithMessage("resp-final", "unchanged answer"))
+
+	mock := mockResponses(responseWithMessage("resp-first", "4"), responseWithMessage("resp-final", "done"))
 	looper := testLooper(mock)
 	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []string {
 		phases = append(phases, phase)
+		if phase != TurnPhaseFinalAnswer || len(phases) > 1 {
+			return nil
+		}
 
-		return []string{"also add a test"}
+		return []string{"also add a test", "and skip lint"}
 	}}
 	output := make(chan ChatResponse, 10)
+
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "write it", output)
+	input <- testPromptInput(PromptInputRoleUser, "what's 2+2?", output)
+
 	close(input)
 
 	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
-	require.Equal(t, []ChatResponse{assistantMessage("unchanged answer")}, collectResponses(output))
-	require.Len(t, mock.calls, 1)
+	require.Equal(t, []ChatResponse{assistantMessage("4"), assistantMessage("done")}, collectResponses(output))
+	require.Len(t, mock.calls, 2)
 	require.NotContains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), "also add a test")
-	require.Equal(t, []TurnPhase{TurnPhaseFinalAnswer}, phases)
+	items := mock.calls[1].Input.OfInputItemList
+	require.GreaterOrEqual(t, len(items), 2)
+	require.JSONEq(t, `{"content":"also add a test","role":"user","type":"message"}`, marshalJSON(t, items[len(items)-2]))
+	require.JSONEq(t, `{"content":"and skip lint","role":"user","type":"message"}`, marshalJSON(t, items[len(items)-1]))
+	require.Equal(t, []TurnPhase{TurnPhaseFinalAnswer, TurnPhaseFinalAnswer}, phases)
 	require.Equal(t, TurnPhaseFinalAnswer, looper.Phase())
 }
 
