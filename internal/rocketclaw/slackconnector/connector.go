@@ -3429,11 +3429,11 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		}
 
 		// Log reading guide: correlate by channel/message_ts/thread_ts. A pre-turn stuck placeholder is proven by a created placeholder, this handoff with pending_placeholder=true, then a submission failure before bridge/rocketcode logs and no later claimed-placeholder log.
-		c.log.Info("handing Slack thread reply to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "pending_placeholder", c.hasPendingState(replyTarget))
+		c.log.Info("handing Slack thread reply to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "pending_placeholder", c.hasLiveSlackMessage(replyTarget))
 
 		handled, err = c.threadRouter.SubmitThreadReply(ctx, events.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS}, inbound)
 		if err != nil {
-			c.log.Error("submit Slack thread reply", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "pending_placeholder", c.hasPendingState(replyTarget))
+			c.log.Error("submit Slack thread reply", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "pending_placeholder", c.hasLiveSlackMessage(replyTarget))
 			c.finishSlackStack(key)
 
 			c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't submit that Slack thread reply: "+err.Error(), "consume Slack thread reply error placeholder")
@@ -3442,7 +3442,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		}
 
 		if !handled {
-			c.log.Warn("Slack thread reply was not handled after placeholder", "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "pending_placeholder", c.hasPendingState(replyTarget))
+			c.log.Warn("Slack thread reply was not handled after placeholder", "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "pending_placeholder", c.hasLiveSlackMessage(replyTarget))
 			c.finishSlackStack(key)
 
 			c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't find an active managed thread for that reply.", "consume unhandled Slack thread reply placeholder")
@@ -3665,13 +3665,13 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 		return
 	}
 
-	c.log.Info("handing Slack social thread to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent, "pending_placeholder", c.hasPendingState(replyTarget))
+	c.log.Info("handing Slack social thread to router", "channel", ev.Channel, "message_ts", ev.TimeStamp, "thread_ts", threadTS, "agent", agent, "pending_placeholder", c.hasLiveSlackMessage(replyTarget))
 
 	inbound := newSlackInboundMessage(promptText, &content, replyTarget, c.slackPrincipal(ctx, ev.User))
 	events.SetInboundAllowedAgents(inbound, c.socialModeAgents(channel))
 
 	if err := c.threadRouter.StartThread(ctx, agent, events.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, inbound); err != nil {
-		c.log.Error("start Slack social thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent, "pending_placeholder", c.hasPendingState(replyTarget))
+		c.log.Error("start Slack social thread", "error", err, "channel", ev.Channel, "message_ts", ev.TimeStamp, "agent", agent, "pending_placeholder", c.hasLiveSlackMessage(replyTarget))
 		c.finishSlackStack(key)
 
 		c.warnConsumeReservedPlaceholder(ctx, replyTarget, "I couldn't start that managed thread: "+err.Error(), "consume Slack social thread start rejection placeholder")
@@ -4047,7 +4047,7 @@ func (c *Connector) handleMidTurnPlainSend(ctx context.Context, key, text string
 		return false
 	}
 
-	if strings.TrimSpace(replyTarget.MessageTS) == strings.TrimSpace(replyTarget.ThreadTS) {
+	if c.hasLiveSlackMessage(replyTarget) {
 		return true
 	}
 
@@ -4183,7 +4183,7 @@ func (c *Connector) handleRootEnqueueOrQueue(ctx context.Context, ev *slackevent
 
 func (c *Connector) handleQueueCommand(ctx context.Context, replyTarget *events.SlackReplyTarget) {
 	fallback, blocks := c.queueCard(ctx, replyTarget.ChannelID, replyTarget.ThreadTS)
-	if _, _, err := c.api.PostMessageContext(ctx, replyTarget.ChannelID, slack.MsgOptionText(fallback, false), slack.MsgOptionTS(replyTarget.ThreadTS), slack.MsgOptionBlocks(blocks...)); err != nil {
+	if _, err := c.api.PostEphemeralContext(ctx, replyTarget.ChannelID, replyTarget.RecipientUserID, slack.MsgOptionText(fallback, false), slack.MsgOptionBlocks(blocks...), slack.MsgOptionTS(replyTarget.ThreadTS)); err != nil {
 		c.log.Warn("post Slack queue card", "error", err, "channel", replyTarget.ChannelID, "thread_ts", replyTarget.ThreadTS)
 	}
 }
@@ -4247,16 +4247,9 @@ func (c *Connector) handleQueueInteractive(ctx context.Context, callback *slack.
 		}
 	}
 
-	messageTS := strings.TrimSpace(callback.Container.MessageTs)
-	if messageTS == "" {
-		messageTS = strings.TrimSpace(callback.Message.Timestamp)
-	}
-
-	if messageTS != "" {
-		fallback, blocks := c.queueCard(ctx, channelID, threadTS)
-		if _, _, _, err := c.api.UpdateMessageContext(ctx, channelID, messageTS, slack.MsgOptionText(fallback, false), slack.MsgOptionBlocks(blocks...)); err != nil {
-			c.log.Warn("update Slack queue card", "error", err, "channel", channelID, "message_ts", messageTS)
-		}
+	fallback, blocks := c.queueCard(ctx, channelID, threadTS)
+	if _, _, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(fallback, false), slack.MsgOptionBlocks(blocks...), slack.MsgOptionReplaceOriginal(callback.ResponseURL)); err != nil {
+		c.log.Warn("update Slack queue card", "error", err, "channel", channelID)
 	}
 
 	return true
@@ -4386,12 +4379,21 @@ func slackQueueWhen(due, now time.Time) string {
 	return due.Format("2006-01-02 15:04 UTC")
 }
 
+func slackQueueRow(message, when string) *slack.TableBlock {
+	if when == "" {
+		when = "—"
+	}
+
+	return slack.NewTableBlock("").
+		AddRow(slack.NewTableRawTextCell(slackTruncatedText(message, slackBlockTextLimit, "...")), slack.NewTableRawTextCell(when))
+}
+
 func slackQueueCard(channelID, threadTS string, items []harnessbridge.ThreadQueueItem, scheduled map[string]harnessbridge.ScheduledMessageState) (string, []slack.Block) {
 	rows := harnessbridge.MixedLaterWork(items, scheduled)
 
 	var blocks []slack.Block
 	if len(rows) == 0 {
-		blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.PlainTextType, "None", false, false), nil, nil))
+		blocks = append(blocks, slackQueueRow("None", ""))
 	}
 
 	now := time.Now().UTC()
@@ -4399,8 +4401,7 @@ func slackQueueCard(channelID, threadTS string, items []harnessbridge.ThreadQueu
 	for i := range rows {
 		row := rows[i]
 		if row.Kind == harnessbridge.LaterWorkQueued {
-			body := slackTruncatedText(row.Queue.Message, slackBlockTextLimit, "...")
-			blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.PlainTextType, body, false, false), nil, nil))
+			blocks = append(blocks, slackQueueRow(row.Queue.Message, ""))
 
 			var buttons []slack.BlockElement
 
@@ -4419,8 +4420,7 @@ func slackQueueCard(channelID, threadTS string, items []harnessbridge.ThreadQueu
 			continue
 		}
 
-		body := slackTruncatedText(row.Scheduled.Message+" · "+slackQueueWhen(row.Scheduled.DueAt, now), slackBlockTextLimit, "...")
-		blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.PlainTextType, body, false, false), nil, nil))
+		blocks = append(blocks, slackQueueRow(row.Scheduled.Message, slackQueueWhen(row.Scheduled.DueAt, now)))
 		meta, _ := json.Marshal(slackQueueAction{ChannelID: channelID, ThreadTS: threadTS, ItemID: row.ScheduledID})
 		blocks = append(blocks, slack.NewActionBlock(string(meta), slack.NewButtonBlockElement(slackQueueCancelScheduledActionID, row.ScheduledID, slack.NewTextBlockObject(slack.PlainTextType, "✕", false, false))))
 	}
@@ -4637,18 +4637,23 @@ func (c *Connector) claimPendingState(replyTarget *events.SlackReplyTarget) (sla
 	return state, true
 }
 
-func (c *Connector) hasPendingState(replyTarget *events.SlackReplyTarget) bool {
+func (c *Connector) hasLiveSlackMessage(replyTarget *events.SlackReplyTarget) bool {
 	key := slackPendingKey(replyTarget)
-	if key == "" {
-		return false
-	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	_, ok := c.pending[key]
+	if _, ok := c.pending[key]; ok {
+		return true
+	}
 
-	return ok
+	for id := range c.replies {
+		if c.replies[id].Key == key {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (c *Connector) clearReplyState(turnID string) {

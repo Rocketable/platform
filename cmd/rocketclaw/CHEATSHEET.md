@@ -17,7 +17,7 @@ Dollar commands are canonical. RocketClaw translates the listed emoji and Slack 
 | `⏳` |  | Slack `:hourglass_flowing_sand:` | Slack | Steer waiting to inject. | Marks a mid-turn Slack Steer. Removed on injection. |
 | `✉️` | `$enqueue <message>` | Slack `:envelope:` | Slack managed threads | Stash a later turn. | During an active turn, stashes without placeholders. While idle, posts 📨 then starts that turn now. |
 | `📨` |  | Slack `:incoming_envelope:` | Slack | Enqueued message is starting. | Posted as the consume-card header before placeholders. |
-|  | `$queue` |  | Slack managed threads | Show and manage later work. | One list in later-work order. Glyphs move or remove queued rows; scheduled rows stay in due-time order and can only be cancelled. Anyone allowed in the thread can act. |
+|  | `$queue` |  | Slack managed threads | Show and manage later work. | Ephemeral table: message and when, then glyph controls. Queued when is empty. Scheduled rows stay in due-time order and can only be cancelled. Anyone allowed in the thread can act. |
 | `📡` |  | Slack `:satellite_antenna:` | Slack | External MCP relay marker. | Added to Slack relay messages created from External MCP prompts. |
 | `💭` |  |  | Slack managed thread 💬 footer | Opens a private Side Ask modal for one question of a channel agent. | Footer button, not a dollar command or reaction. Modal-only; does not take the thread turn; unauthorized clicks are silent. |
 
@@ -38,7 +38,7 @@ Agent controls are consumed by RocketClaw and do not route to RocketCode as prom
 | One-off cron | `$cron daily` or `$cron daily.md`. | Any top-level cronjob can be started from any configured Slack channel. `🔂` is an alias. |
 | Saved workflow | `$workflow audit-routes src/routes`. | Works in an existing managed thread or in an authorized root app mention that creates one. Bare `$workflow` lists available workflows. If a turn is active, wait and retry. A nonempty later-work queue is not busy. `$stop` terminates the run. |
 | Stash later work | `$enqueue write the changelog`. | During an active turn, marks ✉️ and stashes a separate later turn. While idle, posts 📨 then starts that message now even if the stack is already nonempty. Bare `$enqueue` posts command help. |
-| Review later work | `$queue`. | Posts one later-work list. Reorder or remove queued rows; cancel one scheduled message or reset all. Does not start a turn. |
+| Review later work | `$queue`. | Posts an ephemeral table of later work. Reorder or remove queued rows; cancel one scheduled message or reset all. Does not start a turn or stay in the thread. |
 | External MCP conversation | Call `session_prompt` with an external conversation ID, agent, and configured channel. | The ID owns one private MCP session and one managed Slack session on the same thread. The MCP agent stays fixed. MCP history copies into managed history; Slack history does not copy back. |
 
 ## Development MCP
