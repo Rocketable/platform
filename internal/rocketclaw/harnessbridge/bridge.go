@@ -743,31 +743,21 @@ func (b *Bridge) pickLaterWork(ctx context.Context, fromTimer bool) error {
 
 	now := time.Now().UTC()
 
-	var (
-		dueID      string
-		dueMessage ScheduledMessageState
-		haveDue    bool
-	)
-
-	for id, message := range scheduled {
-		if message.DueAt.After(now) {
-			continue
-		}
-
-		if !haveDue || message.DueAt.Before(dueMessage.DueAt) || (message.DueAt.Equal(dueMessage.DueAt) && id < dueID) {
-			dueID, dueMessage, haveDue = id, message, true
-		}
-	}
-
-	if len(queue) == 0 && !haveDue {
+	rows := MixedLaterWork(queue, scheduled)
+	if len(rows) == 0 {
 		return nil
 	}
 
-	if len(queue) > 0 && (!haveDue || !dueMessage.DueAt.Before(queue[0].StashAt)) {
-		return b.submitEnqueuedItem(ctx, &queue[0])
+	head := rows[0]
+	if head.Kind == LaterWorkQueued {
+		return b.submitEnqueuedItem(ctx, &head.Queue)
 	}
 
-	return b.submitDueScheduled(ctx, dueID, &dueMessage, now)
+	if head.Scheduled.DueAt.After(now) {
+		return nil
+	}
+
+	return b.submitDueScheduled(ctx, head.ScheduledID, &head.Scheduled, now)
 }
 
 func (b *Bridge) submitEnqueuedItem(ctx context.Context, item *ThreadQueueItem) error {

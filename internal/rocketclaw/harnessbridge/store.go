@@ -104,6 +104,7 @@ type ThreadQueueItem struct {
 	Principal      string
 	StashAt        time.Time
 	Position       int
+	ParkAfter      string
 	SlackChannel   string
 	SlackTS        string
 }
@@ -589,6 +590,10 @@ func (s *SessionService) ClaimScheduledMessage(id, conversationID string, dueAt,
 	}
 
 	if message.Recurring {
+		if err := (stateDAO{db: tx}).clearParkAfter(context.Background(), id); err != nil {
+			return ScheduledMessageState{}, false, err
+		}
+
 		message.DueAt = now.UTC().Add(message.Interval)
 		if err := (stateDAO{db: tx}).putScheduledMessage(context.Background(), id, &message); err != nil {
 			return ScheduledMessageState{}, false, err

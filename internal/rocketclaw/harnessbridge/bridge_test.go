@@ -516,25 +516,30 @@ func TestPickLaterWorkPrefersEarlierStashOverLaterDue(t *testing.T) {
 	require.Len(t, messages, 1)
 }
 
-func TestPickLaterWorkPrefersEarlierDueScheduleOverLaterStash(t *testing.T) {
+func TestPickLaterWorkWaitsWhenParkedAfterFutureScheduled(t *testing.T) {
 	store := newTestSessionService(t)
 	conversationID := SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, store.PutThreadQueueItem("q1", &ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "changelog", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0}))
-	require.NoError(t, store.PutScheduledMessage("s1", &ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "scheduled", DueAt: time.Date(2000, 1, 1, 2, 58, 0, 0, time.UTC)}))
+	require.NoError(t, store.PutThreadQueueItem("q1", &ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "Ship README", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, ParkAfter: "s1"}))
+	require.NoError(t, store.PutScheduledMessage("s1", &ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "scheduled", DueAt: time.Now().UTC().Add(time.Hour)}))
+
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+
+	require.NoError(t, bridge.PickLaterWork(t.Context()))
+	assert.Empty(t, bridge.requestCh)
+}
+
+func TestPickLaterWorkStartsParkedQueueAfterScheduledCancel(t *testing.T) {
+	store := newTestSessionService(t)
+	conversationID := SlackThreadConversationID("C123", "111.222")
+	require.NoError(t, store.PutThreadQueueItem("q1", &ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "Ship README", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, ParkAfter: "s1", SlackChannel: "C123", SlackTS: "111.222"}))
+	require.NoError(t, store.PutScheduledMessage("s1", &ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "scheduled", DueAt: time.Now().UTC().Add(time.Hour)}))
+	require.NoError(t, store.DeleteScheduledMessage("s1"))
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 
 	require.NoError(t, bridge.PickLaterWork(t.Context()))
 	require.Len(t, bridge.requestCh, 1)
-	request := <-bridge.requestCh
-	require.NotNil(t, request.inbound)
-	assert.Equal(t, "scheduled", request.inbound.Text)
-	assert.Equal(t, "s1", request.scheduledMessageID)
-
-	items, err := store.ThreadQueueForConversation(conversationID)
-	require.NoError(t, err)
-	require.Len(t, items, 1)
-	assert.Equal(t, "changelog", items[0].Message)
+	assert.Equal(t, "Ship README", (<-bridge.requestCh).inbound.Text)
 }
 
 func TestPickLaterWorkSkipsWhenGoalStillActive(t *testing.T) {
@@ -584,6 +589,7 @@ func TestPickLaterWorkClaimsDueRecurringSchedule(t *testing.T) {
 	request := <-bridge.requestCh
 	assert.Equal(t, "again", request.inbound.Text)
 	assert.True(t, request.scheduledMessageRecurring)
+
 	messages, err := store.ScheduledMessagesForConversation(conversationID)
 	require.NoError(t, err)
 	assert.True(t, messages["repeat"].DueAt.After(dueAt))
@@ -595,7 +601,9 @@ func TestPickLaterWorkDoesNothingWhenIdleAndEmpty(t *testing.T) {
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 	require.NoError(t, bridge.PickLaterWork(t.Context()))
 	assert.Empty(t, bridge.requestCh)
+
 	bridge.requestCh <- bridgeRequest{inbound: events.NewInboundMessage(events.SourceSlack, events.InboundKindPrompt, "", "queued", false), activation: NoopActivationHook}
+
 	require.NoError(t, bridge.PickLaterWork(t.Context()))
 	assert.Len(t, bridge.requestCh, 1)
 	close(bridge.stopCh)
@@ -2581,6 +2589,7 @@ func TestBridgeDeletesEnqueueItemWhenTurnStarts(t *testing.T) {
 
 	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: conversationID, Agent: "main", OutputTargets: []events.OutputTarget{events.OutputTargetSlack}, RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
 	bridge.requestCh = make(chan bridgeRequest, 1)
+
 	bridge.stopCh = make(chan struct{})
 	go bridge.loop(t.Context())
 
@@ -2600,6 +2609,7 @@ func TestBridgeDeletesEnqueueItemWhenTurnStarts(t *testing.T) {
 	require.Eventually(t, func() bool {
 		items, err := service.ThreadQueueForConversation(conversationID)
 		require.NoError(t, err)
+
 		return len(items) == 0
 	}, time.Second, time.Millisecond)
 }

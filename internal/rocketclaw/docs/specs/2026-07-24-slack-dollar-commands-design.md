@@ -15,7 +15,7 @@ The canonical commands are:
 | `$goal <objective>` | `🏁`, `🔁` | Start a goal using the existing goal parameter grammar. |
 | `$stop` | `🛑`, `⏹️` | Stop the active managed-thread turn. |
 | `$enqueue <message>` |  | Stash a later turn. During an active turn this only stashes. While idle it starts that message now. Bare `$enqueue` posts missing-arg help. |
-| `$queue` |  | Show the enqueue stack and scheduled messages. Does not start a turn. |
+| `$queue` |  | Show later work in one list. Does not start a turn. |
 | `$cron <job>` | `🔂` | Run an existing one-off cron request. |
 | `$agent [name]` | `🎛` | Select the initial agent for a root thread, switch agents, or open the existing selector in an eligible managed thread. |
 
@@ -42,7 +42,7 @@ Bare `$`, unknown command names, commands unavailable in the current Slack conte
 | `$goal <objective>` | `🏁` | Start a goal |
 | `$stop` | `🛑` | Stop the active turn |
 | `$enqueue <message>` | `✉️` | Stash a later turn |
-| `$queue` |  | Show later work and scheduled messages |
+| `$queue` |  | Show later work |
 | `$cron <job>` | `🔂` | Run a cron job |
 | `$agent [name]` | `🎛` | Switch or select an agent |
 

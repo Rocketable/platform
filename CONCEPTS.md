@@ -40,9 +40,9 @@ An Enqueued Slack Message is marked with envelope until it is popped. Pop posts 
 
 ### Thread Queue
 
-The durable, conversation-local stack of Enqueued Slack Messages, shown and managed by `$queue` next to that conversation's scheduled messages.
+The durable, conversation-local stack of Enqueued Slack Messages, shown and managed by `$queue` together with that conversation's scheduled messages.
 
-`$queue` cannot interleave the two sections. After a turn ends, a still-continuing goal wins the next slot. Otherwise the next item is the earlier of the stack-head stash time and the next scheduled due time. Reorder changes stack order only, not stash times.
+`$queue` shows one list in later-work order. Scheduled rows stay in due-time order and can only be cancelled. Enqueued rows can be moved before or after scheduled rows. After a turn ends, a still-continuing goal wins the next slot. Otherwise the next item is the first remaining row that is ready: an Enqueued Slack Message is ready in its list position; a scheduled message is ready at its due time. A not-yet-due scheduled row blocks later rows until it runs or is cancelled. Reorder of Enqueued Slack Messages changes list position, not stash times.
 
 ### Buffered Follow-Up
 

@@ -177,13 +177,13 @@ func (r *requestTextRouter) TurnPhase(target events.TextConversationTarget) harn
 }
 
 func threadQueueRecord(item *harnessbridge.ThreadQueueItem) events.ThreadQueueRecord {
-	return events.ThreadQueueRecord{ID: item.ID, Message: item.Message, Principal: item.Principal, SlackChannel: item.SlackChannel, SlackTS: item.SlackTS, StashAt: item.StashAt, Position: item.Position}
+	return events.ThreadQueueRecord{ID: item.ID, Message: item.Message, Principal: item.Principal, SlackChannel: item.SlackChannel, SlackTS: item.SlackTS, ParkAfter: item.ParkAfter, StashAt: item.StashAt, Position: item.Position}
 }
 
 func threadQueueItems(records []events.ThreadQueueRecord) []harnessbridge.ThreadQueueItem {
 	items := make([]harnessbridge.ThreadQueueItem, len(records))
-	for i, record := range records {
-		items[i] = harnessbridge.ThreadQueueItem{ID: record.ID, Message: record.Message, Principal: record.Principal, SlackChannel: record.SlackChannel, SlackTS: record.SlackTS, StashAt: record.StashAt, Position: record.Position}
+	for i := range records {
+		items[i] = harnessbridge.ThreadQueueItem{ID: records[i].ID, Message: records[i].Message, Principal: records[i].Principal, SlackChannel: records[i].SlackChannel, SlackTS: records[i].SlackTS, ParkAfter: records[i].ParkAfter, StashAt: records[i].StashAt, Position: records[i].Position}
 	}
 
 	return items
