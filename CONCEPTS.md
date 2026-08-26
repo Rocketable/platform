@@ -8,7 +8,7 @@ Shared domain vocabulary for this project — entities, named processes, and sta
 
 A Slack thread that RocketClaw persists as a conversation owned by a selected agent and continues across human replies.
 
-A Managed Slack Thread has one active turn at a time. A plain human message received during that turn is a Slack Steer when the agent is still in the tool loop, and an Enqueued Slack Message when it is too late to steer.
+A Managed Slack Thread has one active turn at a time. A distinct human reply received during that turn is a Slack Steer when the agent is still in the tool loop, and an Enqueued Slack Message when it is too late to steer. A second Slack delivery of the same root message is not a new send.
 
 ### Root Slack Mention
 
