@@ -4047,6 +4047,10 @@ func (c *Connector) handleMidTurnPlainSend(ctx context.Context, key, text string
 		return false
 	}
 
+	if strings.TrimSpace(replyTarget.MessageTS) == strings.TrimSpace(replyTarget.ThreadTS) {
+		return true
+	}
+
 	if c.threadRouter.TurnPhase(events.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}) == harnessbridge.ThreadTurnFinalAnswer {
 		c.stashEnqueuedMessage(ctx, replyTarget, text, principal)
 
