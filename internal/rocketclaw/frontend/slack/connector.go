@@ -38,11 +38,12 @@ const (
 	slackThinkingFlushInterval                                                                                                   = 2 * time.Second
 	slackQuestionCustomActionID, slackQuestionCustomViewCallbackID, slackQuestionCustomBlockID, slackQuestionCustomInputActionID = "custom_answer", "ask_user_question_custom", "custom_answer", "answer"
 	slackAgentSwitchSelectActionID                                                                                               = "agent_switch_select"
-	slackSideAskActionID                                                                                                         = "side_ask"
 	slackSideAskViewCallbackID                                                                                                   = "side_ask"
 	slackSideAskAgentBlockID, slackSideAskAgentActionID                                                                          = "side_ask_agent", "side_ask_agent"
 	slackSideAskQuestionBlockID, slackSideAskQuestionActionID                                                                    = "side_ask_question", "side_ask_question"
 	slackQueueJumpActionID, slackQueueHideActionID                                                                               = "thread_queue_jump", "thread_queue_hide"
+	slackMessageShortcutCallbackID                                                                                               = "rocketclaw_actions"
+	slackMessageActionInterrupt, slackMessageActionCancel, slackMessageActionSteer, slackMessageActionSideAsk                    = "rocketclaw_actions_interrupt", "rocketclaw_actions_cancel", "rocketclaw_actions_steer", "rocketclaw_actions_side_ask"
 	slackDollarCommandHelp                                                                                                       = "$goal <objective> - 🏁 Start a goal\n" +
 		"$workflow <name> [args] - ⏩ Run a workflow\n" +
 		"$stop - 🛑 Stop the active turn\n" +
@@ -472,7 +473,7 @@ func (c *Connector) SendResponse(ctx context.Context, msg *protocol.OutboundMess
 	case msg.Text != "" && (msg.Complete || msg.PostProgressText):
 		fallbackText, blocks, overflow := titledMessageLayout("💬 "+msg.Agent, slackTruncatedText(msg.Text, slackTextLimit, "..."), msg.Text)
 		if msg.Complete && !strings.HasPrefix(msg.SlackReply.ChannelID, "D") {
-			blocks, overflow = appendSideAskFooter(blocks, overflow, msg)
+			stampSideAsk(blocks, msg)
 		}
 
 		if _, _, _, err := c.sendTitledResponse(ctx, msg, &slots, ok && msg.Complete, fallbackText, blocks, overflow, "reply"); err != nil {
@@ -693,43 +694,22 @@ type sideAskStamp struct {
 	ThreadTS       string `json:"t"`
 }
 
-type sideAskButton struct {
-	Type               slack.MessageElementType `json:"type"`
-	Text               *slack.TextBlockObject   `json:"text"`
-	ActionID           string                   `json:"action_id,omitempty"`
-	Value              string                   `json:"value,omitempty"`
-	AccessibilityLabel string                   `json:"accessibility_label,omitempty"`
-}
-
-func (sideAskButton) ElementType() slack.MessageElementType { return slack.METButton }
-
-func appendSideAskFooter(blocks []slack.Block, overflow []string, msg *protocol.OutboundMessage) (next []slack.Block, rest []string) {
-	const slackMessageBlockLimit = 50
-	if extra := len(blocks) + 1 - slackMessageBlockLimit; extra > 0 {
-		dropped := make([]string, 0, extra)
-		for _, block := range blocks[len(blocks)-extra:] {
-			dropped = append(dropped, block.(*slack.SectionBlock).Text.Text)
-		}
-
-		overflow = append(dropped, overflow...)
-		blocks = blocks[:len(blocks)-extra]
-	}
-
+// stampSideAsk hides the Side Ask stamp in the answer card's divider block_id so
+// the message-menu dialog can offer Ask Side Question without a visible button.
+func stampSideAsk(blocks []slack.Block, msg *protocol.OutboundMessage) {
 	encoded, _ := json.Marshal(sideAskStamp{
 		ConversationID: msg.ConversationID,
 		SessionEntryID: msg.SessionEntryID,
 		ChannelID:      msg.SlackReply.ChannelID,
 		ThreadTS:       msg.SlackReply.ThreadTS,
 	})
-	button := sideAskButton{
-		Type:               slack.METButton,
-		Text:               slack.NewTextBlockObject(slack.PlainTextType, "💭", false, false),
-		ActionID:           slackSideAskActionID,
-		Value:              string(encoded),
-		AccessibilityLabel: "Side Ask",
-	}
 
-	return append(blocks, slack.NewActionBlock(slackSideAskActionID, button)), overflow
+	for _, block := range blocks {
+		if divider, ok := block.(*slack.DividerBlock); ok {
+			divider.BlockID = string(encoded)
+			return
+		}
+	}
 }
 
 func titledMessageLayout(header, fallback, text string) (fallbackText string, blocks []slack.Block, overflow []string) {
@@ -2660,6 +2640,15 @@ func (c *Connector) handleInteractive(ctx context.Context, event socketmode.Even
 		return
 	}
 
+	if callback.Type == slack.InteractionTypeMessageAction {
+		c.handleMessageShortcut(ctx, &callback)
+		return
+	}
+
+	if c.handleRocketclawActionsInteractive(ctx, &callback) {
+		return
+	}
+
 	if c.handleSideAskInteractive(ctx, &callback) {
 		return
 	}
@@ -2771,17 +2760,6 @@ func (c *Connector) handleSideAskInteractive(ctx context.Context, callback *slac
 		return true
 	}
 
-	if callback.Type != slack.InteractionTypeBlockActions {
-		return false
-	}
-
-	for _, action := range callback.ActionCallback.BlockActions {
-		if action.ActionID == slackSideAskActionID {
-			c.handleSideAskOpen(ctx, callback, action)
-			return true
-		}
-	}
-
 	return false
 }
 
@@ -2801,38 +2779,6 @@ func (c *Connector) sideAskAllowedChannel(ctx context.Context, channelID, userID
 	}
 
 	return channel, true
-}
-
-func (c *Connector) handleSideAskOpen(ctx context.Context, callback *slack.InteractionCallback, action *slack.BlockAction) {
-	stamp, errParse := parseSideAskStamp(action.Value)
-
-	channelID := stamp.ChannelID
-	if channelID == "" {
-		channelID = callback.Channel.ID
-		if channelID == "" {
-			channelID = strings.TrimSpace(callback.Container.ChannelID)
-		}
-	}
-
-	channel, allowed := c.sideAskAllowedChannel(ctx, channelID, callback.User.ID)
-	if !allowed {
-		return
-	}
-
-	if errParse != nil || stamp.SessionEntryID == 0 {
-		c.postSlackEphemeral(ctx, channelID, stamp.ThreadTS, callback.User.ID, "This reply can't be used for Side Ask.")
-		return
-	}
-
-	if callback.TriggerID == "" || !c.reserveSideAsk(callback.User.ID) {
-		return
-	}
-
-	_, errOpen := c.api.OpenViewContext(ctx, callback.TriggerID, c.sideAskInputView(stamp, channel))
-	if errOpen != nil {
-		c.cancelSideAskView(callback.User.ID, "")
-		c.log.Warn("open Slack Side Ask view", "error", errOpen)
-	}
 }
 
 func (c *Connector) handleSideAskSubmit(ctx context.Context, callback *slack.InteractionCallback) {
@@ -3318,6 +3264,220 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		return
 	}
 }
+
+type rocketclawActionsMetadata struct {
+	ChannelID, MessageTS, ThreadTS string
+	Stamp                          sideAskStamp
+}
+
+func (c *Connector) handleMessageShortcut(ctx context.Context, callback *slack.InteractionCallback) {
+	if callback.CallbackID != slackMessageShortcutCallbackID {
+		return
+	}
+
+	channelID := strings.TrimSpace(callback.Channel.ID)
+	if strings.HasPrefix(channelID, "D") {
+		return
+	}
+
+	messageTS := strings.TrimSpace(callback.Message.Timestamp)
+	if channelID == "" || messageTS == "" || callback.TriggerID == "" {
+		return
+	}
+
+	if !c.socialModeCouldAllowUser(callback.User.ID) {
+		return
+	}
+
+	channel, _, ok := c.socialModeChannel(ctx, channelID)
+	if !ok || !c.socialModeAllowsUser(channel, callback.User.ID) {
+		return
+	}
+
+	threadTS := cmp.Or(strings.TrimSpace(callback.Message.ThreadTimestamp), messageTS)
+
+	_, handled, err := c.threadRouter.ThreadAgent(protocol.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS})
+	if err != nil {
+		c.log.Error("resolve Slack message actions thread", "error", err, "channel", channelID, "thread_ts", threadTS)
+	}
+
+	text := "This message isn't part of a RocketClaw conversation."
+
+	var buttons []slack.BlockElement
+
+	var stamp sideAskStamp
+
+	if handled {
+		text = "No RocketClaw actions on this message."
+
+		buttons, stamp = c.rocketclawMessageActionButtons(ctx, channelID, threadTS, messageTS, &callback.Message)
+		if len(buttons) > 0 {
+			text = ""
+		}
+	}
+
+	metadata, _ := json.Marshal(rocketclawActionsMetadata{ChannelID: channelID, MessageTS: messageTS, ThreadTS: threadTS, Stamp: stamp})
+	if _, errOpen := c.api.OpenViewContext(ctx, callback.TriggerID, rocketclawActionsModal(text, buttons, string(metadata))); errOpen != nil {
+		c.log.Warn("open Slack message actions view", "error", errOpen)
+	}
+}
+
+func (c *Connector) rocketclawMessageActionButtons(ctx context.Context, channelID, threadTS, messageTS string, message *slack.Message) (buttons []slack.BlockElement, stamp sideAskStamp) {
+	if _, ok := c.slackPlaceholderSlots(channelID, messageTS); ok {
+		buttons = append(buttons, slack.NewButtonBlockElement(slackMessageActionInterrupt, "", slack.NewTextBlockObject(slack.PlainTextType, "Interrupt Turn", false, false)))
+	}
+
+	cancel := slack.NewButtonBlockElement(slackMessageActionCancel, "", slack.NewTextBlockObject(slack.PlainTextType, "Cancel", false, false))
+	if c.hasWaitingSteer(channelID, threadTS, messageTS) {
+		buttons = append(buttons, cancel)
+	} else if target, _, found := c.findQueuedEnvelope(ctx, channelID, messageTS, threadTS); found {
+		buttons = append(buttons, cancel)
+		key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: target.ChannelID, ThreadTS: target.ThreadID})
+
+		c.mu.Lock()
+		_, active := c.stacks[key]
+		c.mu.Unlock()
+
+		if active {
+			buttons = append(buttons, slack.NewButtonBlockElement(slackMessageActionSteer, "", slack.NewTextBlockObject(slack.PlainTextType, "Convert to Steer", false, false)))
+		}
+	}
+
+	if parsed, ok := sideAskStampFromMessage(message); ok {
+		buttons = append(buttons, slack.NewButtonBlockElement(slackMessageActionSideAsk, "", slack.NewTextBlockObject(slack.PlainTextType, "Ask Side Question", false, false)))
+		stamp = parsed
+	}
+
+	return buttons, stamp
+}
+
+func rocketclawActionsModal(text string, buttons []slack.BlockElement, metadata string) slack.ModalViewRequest {
+	var blocks []slack.Block
+	if text != "" {
+		blocks = append(blocks, slack.NewSectionBlock(slack.NewTextBlockObject(slack.PlainTextType, text, false, false), nil, nil))
+	}
+
+	if len(buttons) > 0 {
+		blocks = append(blocks, slack.NewActionBlock(slackMessageShortcutCallbackID, buttons...))
+	}
+
+	return slack.ModalViewRequest{
+		Type:            slack.VTModal,
+		Title:           slack.NewTextBlockObject(slack.PlainTextType, "RocketClaw Actions", false, false),
+		Close:           slack.NewTextBlockObject(slack.PlainTextType, "Close", false, false),
+		CallbackID:      slackMessageShortcutCallbackID,
+		PrivateMetadata: metadata,
+		Blocks:          slack.Blocks{BlockSet: blocks},
+	}
+}
+
+func (c *Connector) handleRocketclawActionsInteractive(ctx context.Context, callback *slack.InteractionCallback) bool {
+	if callback.Type != slack.InteractionTypeBlockActions || callback.View.CallbackID != slackMessageShortcutCallbackID {
+		return false
+	}
+
+	var metadata rocketclawActionsMetadata
+	if err := json.Unmarshal([]byte(callback.View.PrivateMetadata), &metadata); err != nil {
+		c.log.Warn("parse Slack message actions metadata", "error", err)
+		return true
+	}
+
+	if len(callback.ActionCallback.BlockActions) == 0 {
+		return true
+	}
+
+	done := "No RocketClaw actions on this message."
+
+	switch callback.ActionCallback.BlockActions[0].ActionID {
+	case slackMessageActionInterrupt:
+		if c.interruptSlackTurnIfPlaceholder(ctx, metadata.ChannelID, metadata.MessageTS, metadata.ThreadTS) {
+			done = "Interrupted the turn."
+		}
+	case slackMessageActionCancel:
+		if c.dropWaitingSteer(ctx, metadata.ChannelID, metadata.MessageTS) {
+			done = "Cancelled."
+			break
+		}
+
+		if target, item, found := c.findQueuedEnvelope(ctx, metadata.ChannelID, metadata.MessageTS, metadata.ThreadTS); found {
+			c.deleteQueuedEnvelope(ctx, target, &item)
+
+			done = "Cancelled."
+		}
+	case slackMessageActionSteer:
+		c.convertQueuedEnvelopeIfActive(ctx, metadata.ChannelID, metadata.MessageTS, metadata.ThreadTS)
+
+		done = "Converted to a steer."
+	case slackMessageActionSideAsk:
+		c.openSideAskFromActions(ctx, callback, &metadata)
+		return true
+	}
+
+	c.updateRocketclawActionsView(ctx, callback.View.ID, done, callback.View.PrivateMetadata)
+
+	return true
+}
+
+func (c *Connector) openSideAskFromActions(ctx context.Context, callback *slack.InteractionCallback, metadata *rocketclawActionsMetadata) {
+	channel, allowed := c.sideAskAllowedChannel(ctx, metadata.ChannelID, callback.User.ID)
+	if !allowed {
+		return
+	}
+
+	if metadata.Stamp.SessionEntryID == 0 {
+		c.updateRocketclawActionsView(ctx, callback.View.ID, "No RocketClaw actions on this message.", callback.View.PrivateMetadata)
+		return
+	}
+
+	if !c.reserveSideAsk(callback.User.ID) {
+		c.updateRocketclawActionsView(ctx, callback.View.ID, "No RocketClaw actions on this message.", callback.View.PrivateMetadata)
+		return
+	}
+
+	view := c.sideAskInputView(metadata.Stamp, channel)
+	if errUpdate := c.updateSideAskView(ctx, callback.View.ID, &view); errUpdate != nil {
+		c.cancelSideAskView(callback.User.ID, "")
+		c.log.Warn("update Slack Side Ask view from message actions", "error", errUpdate)
+	}
+}
+
+func (c *Connector) updateRocketclawActionsView(ctx context.Context, viewID, text, metadata string) {
+	view := rocketclawActionsModal(text, nil, metadata)
+	if _, err := c.api.UpdateViewContext(ctx, view, "", "", viewID); err != nil {
+		if errSlack, ok := errors.AsType[slack.SlackErrorResponse](err); ok && errSlack.Err == "not_found" {
+			return
+		}
+
+		c.log.Warn("update Slack message actions view", "error", err)
+	}
+}
+
+func (c *Connector) hasWaitingSteer(channelID, threadTS, messageTS string) bool {
+	key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: channelID, ThreadTS: threadTS})
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for i := range c.stacks[key] {
+		if c.stacks[key][i].Reply != nil && c.stacks[key][i].Reply.ChannelID == channelID && c.stacks[key][i].Reply.MessageTS == messageTS {
+			return true
+		}
+	}
+
+	return false
+}
+
+func sideAskStampFromMessage(message *slack.Message) (sideAskStamp, bool) {
+	for _, block := range message.Blocks.BlockSet {
+		stamp, err := parseSideAskStamp(block.ID())
+		if err == nil && stamp.SessionEntryID != 0 {
+			return stamp, true
+		}
+	}
+
+	return sideAskStamp{}, false
+}
+
 func (c *Connector) handleReactionAddedEvent(ctx context.Context, ev *slackevents.ReactionAddedEvent) {
 	if ev == nil {
 		return
@@ -3354,7 +3514,7 @@ func (c *Connector) handleReactionAddedEvent(ctx context.Context, ev *slackevent
 		return
 	}
 
-	if stop && c.interruptSlackTurnIfPlaceholder(ctx, channelID, messageTS) {
+	if stop && c.interruptSlackTurnIfPlaceholder(ctx, channelID, messageTS, "") {
 		return
 	}
 
@@ -3362,85 +3522,115 @@ func (c *Connector) handleReactionAddedEvent(ctx context.Context, ev *slackevent
 		return
 	}
 
-	threadTS, handled, err := c.resolveManagedThreadTS(ctx, channelID, messageTS)
-	if err != nil {
-		c.log.Error("resolve Slack thread summary target", "error", err, "channel", channelID, "message_ts", messageTS)
-		return
-	}
-
-	if !handled {
-		return
-	}
-
-	target := protocol.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS}
 	if convert {
-		key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: channelID, ThreadTS: threadTS})
-
-		c.mu.Lock()
-		_, active := c.stacks[key]
-		c.mu.Unlock()
-
-		if !active {
-			return
-		}
-	}
-
-	items, errQueue := c.visibleQueueItems(ctx, target)
-	if errQueue != nil {
-		c.log.Error("list Slack queue for reaction", "error", errQueue, "channel", channelID, "thread_ts", threadTS)
+		c.convertQueuedEnvelopeIfActive(ctx, channelID, messageTS, "")
 		return
 	}
 
-	for i := range items {
-		if items[i].SlackChannel != channelID || items[i].SlackTS != messageTS {
-			continue
-		}
-
-		if convert {
-			c.convertQueuedEnvelopeToSteer(ctx, target, &items[i])
-			return
-		}
-
-		if err := c.threadRouter.DeleteThreadQueueItem(ctx, target, items[i].ID); err != nil {
-			c.log.Error("delete Slack enqueue by envelope stop", "error", err, "channel", channelID, "thread_ts", threadTS)
-			return
-		}
-
-		c.removeReaction(ctx, &protocol.SlackReplyTarget{ChannelID: items[i].SlackChannel, MessageTS: items[i].SlackTS}, slackEnvelopeReaction, "remove Slack enqueue envelope")
-
+	target, item, found := c.findQueuedEnvelope(ctx, channelID, messageTS, "")
+	if found {
+		c.deleteQueuedEnvelope(ctx, target, &item)
 		return
 	}
 
-	if convert {
+	if target.ThreadID == "" {
 		return
 	}
 
-	if err := c.stopSlackThread(ctx, channelID, threadTS); err != nil {
-		c.log.Error("stop Slack goal thread by reaction", "error", err, "channel", channelID, "thread_ts", threadTS, "message_ts", messageTS)
-		return
+	if err := c.stopSlackThread(ctx, channelID, target.ThreadID); err != nil {
+		c.log.Error("stop Slack goal thread by reaction", "error", err, "channel", channelID, "thread_ts", target.ThreadID, "message_ts", messageTS)
 	}
 }
 
-func (c *Connector) interruptSlackTurnIfPlaceholder(ctx context.Context, channelID, messageTS string) bool {
+func (c *Connector) findQueuedEnvelope(ctx context.Context, channelID, messageTS, threadTS string) (target protocol.TextConversationTarget, item protocol.ThreadQueueItem, ok bool) {
+	if threadTS == "" {
+		resolved, handled, err := c.resolveManagedThreadTS(ctx, channelID, messageTS)
+		if err != nil {
+			c.log.Error("resolve Slack managed thread", "error", err, "channel", channelID, "message_ts", messageTS)
+			return protocol.TextConversationTarget{}, item, false
+		}
+
+		if !handled {
+			return protocol.TextConversationTarget{}, item, false
+		}
+
+		threadTS = resolved
+	}
+
+	target = protocol.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS}
+
+	items, errQueue := c.visibleQueueItems(ctx, target)
+	if errQueue != nil {
+		c.log.Error("list Slack queue", "error", errQueue, "channel", channelID, "thread_ts", threadTS)
+		return protocol.TextConversationTarget{}, item, false
+	}
+
+	for i := range items {
+		if items[i].SlackChannel == channelID && items[i].SlackTS == messageTS {
+			return target, items[i], true
+		}
+	}
+
+	return target, item, false
+}
+
+func (c *Connector) deleteQueuedEnvelope(ctx context.Context, target protocol.TextConversationTarget, item *protocol.ThreadQueueItem) {
+	if err := c.threadRouter.DeleteThreadQueueItem(ctx, target, item.ID); err != nil {
+		c.log.Error("delete Slack enqueue by envelope stop", "error", err, "channel", target.ChannelID, "thread_ts", target.ThreadID)
+		return
+	}
+
+	c.removeReaction(ctx, &protocol.SlackReplyTarget{ChannelID: item.SlackChannel, MessageTS: item.SlackTS}, slackEnvelopeReaction, "remove Slack enqueue envelope")
+}
+
+func (c *Connector) convertQueuedEnvelopeIfActive(ctx context.Context, channelID, messageTS, threadTS string) {
+	target, item, found := c.findQueuedEnvelope(ctx, channelID, messageTS, threadTS)
+	if !found {
+		return
+	}
+
+	key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: target.ChannelID, ThreadTS: target.ThreadID})
+
 	c.mu.Lock()
-	conversationID := ""
+	_, active := c.stacks[key]
+	c.mu.Unlock()
+
+	if !active {
+		return
+	}
+
+	c.convertQueuedEnvelopeToSteer(ctx, target, &item)
+}
+
+func (c *Connector) slackPlaceholderSlots(channelID, messageTS string) (slackReplySlots, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	for turnID := range c.replies {
 		if c.replies[turnID].ChannelID == channelID && (c.replies[turnID].ThinkingTS == messageTS || c.replies[turnID].AnswerTS == messageTS) {
-			conversationID = c.replies[turnID].ConversationID
-			break
+			return c.replies[turnID], true
 		}
 	}
 
-	if conversationID == "" {
-		for key := range c.pending {
-			if c.pending[key].ChannelID == channelID && (c.pending[key].ThinkingTS == messageTS || c.pending[key].AnswerTS == messageTS) {
-				conversationID = c.pending[key].ConversationID
-				break
-			}
+	for key := range c.pending {
+		if c.pending[key].ChannelID == channelID && (c.pending[key].ThinkingTS == messageTS || c.pending[key].AnswerTS == messageTS) {
+			return c.pending[key], true
 		}
 	}
-	c.mu.Unlock()
+
+	return slackReplySlots{}, false
+}
+
+func (c *Connector) interruptSlackTurnIfPlaceholder(ctx context.Context, channelID, messageTS, threadTS string) bool {
+	slots, ok := c.slackPlaceholderSlots(channelID, messageTS)
+	if !ok {
+		return false
+	}
+
+	conversationID := slots.ConversationID
+	if conversationID == "" {
+		conversationID = protocol.SlackThreadConversationID(channelID, threadTS)
+	}
 
 	if conversationID == "" {
 		return false

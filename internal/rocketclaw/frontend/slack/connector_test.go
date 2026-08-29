@@ -4494,10 +4494,9 @@ func TestSendResponseUpdatesTailAnswerPlaceholder(t *testing.T) {
 	assert.Equal(t, "divider", blocks[1].Type)
 	assert.Equal(t, "section", blocks[2].Type)
 	assert.Equal(t, "thread answer", blocks[2].Text.Text)
-	assert.NotContains(t, updated[0].Get("blocks"), "💭")
 }
 
-func TestCompletedChatCardAppendsSideAskFooter(t *testing.T) {
+func TestCompletedChatCardCarriesSideAskStamp(t *testing.T) {
 	updated := recordSlackMessageUpdates(t)
 
 	connector := newTestConnector(updated.URL)
@@ -4513,32 +4512,22 @@ func TestCompletedChatCardAppendsSideAskFooter(t *testing.T) {
 
 	require.Len(t, updated.blocks, 1)
 	blocks := updated.blocks[0]
-	require.GreaterOrEqual(t, len(blocks), 4)
+	require.Len(t, blocks, 3)
 	assert.Equal(t, "header", blocks[0].Type)
 	assert.Equal(t, "💬 main", blocks[0].Text.Text)
 	assert.Equal(t, "divider", blocks[1].Type)
 	assert.Equal(t, "section", blocks[2].Type)
 	assert.Equal(t, "Final answer", blocks[2].Text.Text)
-	last := blocks[len(blocks)-1]
-	assert.Equal(t, "actions", last.Type)
-	require.Len(t, last.Elements, 1)
-	assert.Equal(t, "💭", last.Elements[0].Text.Text)
-	assert.Equal(t, "Side Ask", last.Elements[0].AccessibilityLabel)
 
-	var stamp struct {
-		ConversationID string `json:"c"`
-		SessionEntryID int64  `json:"e"`
-		ChannelID      string `json:"ch"`
-		ThreadTS       string `json:"t"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(last.Elements[0].Value), &stamp))
+	var stamp sideAskStamp
+	require.NoError(t, json.Unmarshal([]byte(blocks[1].BlockID), &stamp))
 	assert.Equal(t, "slack-thread:C123:111.222", stamp.ConversationID)
 	assert.Equal(t, int64(42), stamp.SessionEntryID)
 	assert.Equal(t, "C123", stamp.ChannelID)
 	assert.Equal(t, "111.222", stamp.ThreadTS)
 }
 
-func TestGoalCronAndMCPCardsOmitSideAskFooter(t *testing.T) {
+func TestGoalCronAndMCPCardsOmitSideAskStamp(t *testing.T) {
 	t.Run("goal", func(t *testing.T) {
 		updated := recordSlackMessageUpdates(t)
 		connector := newTestConnector(updated.URL)
@@ -4554,8 +4543,7 @@ func TestGoalCronAndMCPCardsOmitSideAskFooter(t *testing.T) {
 		msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}
 		require.NoError(t, connector.SendResponse(t.Context(), msg))
 		require.Len(t, updated.blocks, 1)
-		assert.NotEqual(t, "actions", updated.blocks[0][len(updated.blocks[0])-1].Type)
-		assert.NotContains(t, updated.raw[0], "💭")
+		assert.Empty(t, updated.blocks[0][1].BlockID)
 	})
 
 	t.Run("cron", func(t *testing.T) {
@@ -4568,7 +4556,6 @@ func TestGoalCronAndMCPCardsOmitSideAskFooter(t *testing.T) {
 		msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.222"}
 		require.NoError(t, connector.SendResponse(t.Context(), msg))
 		require.NotEmpty(t, updated.raw)
-		assert.NotContains(t, updated.raw[0], "💭")
 	})
 
 	t.Run("mcp", func(t *testing.T) {
@@ -4585,11 +4572,10 @@ func TestGoalCronAndMCPCardsOmitSideAskFooter(t *testing.T) {
 		msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}
 		require.NoError(t, connector.SendResponse(t.Context(), msg))
 		require.NotEmpty(t, updated.raw)
-		assert.NotContains(t, updated.raw[0], "💭")
 	})
 }
 
-func TestLongChatBodyKeepsSideAskFooterWithinBlockLimit(t *testing.T) {
+func TestLongChatBodyKeepsSideAskStampWithinBlockLimit(t *testing.T) {
 	updated := recordSlackMessageUpdates(t)
 	connector := newTestConnector(updated.URL)
 	connector.setReplyState("turn-long", &slackReplySlots{ChannelID: "C123", ThinkingTS: "t.1", AnswerTS: "a.1"})
@@ -4603,14 +4589,16 @@ func TestLongChatBodyKeepsSideAskFooterWithinBlockLimit(t *testing.T) {
 	require.NoError(t, connector.SendResponse(t.Context(), msg))
 
 	require.NotEmpty(t, updated.blocks)
-	assert.LessOrEqual(t, len(updated.blocks[0]), 50)
+	assert.Len(t, updated.blocks[0], 50)
 	last := updated.blocks[0][len(updated.blocks[0])-1]
-	require.Equal(t, "actions", last.Type)
-	require.NotEmpty(t, last.Elements)
-	assert.Equal(t, "💭", last.Elements[0].Text.Text)
+	assert.Equal(t, "section", last.Type)
+
+	var stamp sideAskStamp
+	require.NoError(t, json.Unmarshal([]byte(updated.blocks[0][1].BlockID), &stamp))
+	assert.Equal(t, int64(9), stamp.SessionEntryID)
 }
 
-func TestDMRepliesOmitSideAskFooter(t *testing.T) {
+func TestDMRepliesOmitSideAskStamp(t *testing.T) {
 	updated := recordSlackMessageUpdates(t)
 	connector := newTestConnector(updated.URL)
 	connector.setReplyState("turn-dm", &slackReplySlots{ChannelID: "D123", ThinkingTS: "t.1", AnswerTS: "a.1"})
@@ -4624,53 +4612,7 @@ func TestDMRepliesOmitSideAskFooter(t *testing.T) {
 	require.NoError(t, connector.SendResponse(t.Context(), msg))
 
 	require.Len(t, updated.blocks, 1)
-	last := updated.blocks[0][len(updated.blocks[0])-1]
-	assert.Equal(t, "section", last.Type)
-	assert.NotContains(t, updated.raw[0], "💭")
-}
-
-func TestSideAskButtonOpensModalWithStampMetadata(t *testing.T) {
-	opened, ephemeral := newSideAskInteractiveRecorder(t)
-	connector := newTestConnector(opened.URL)
-
-	connector.handleInteractive(t.Context(), newSideAskButtonEvent("U123", "trigger-side-ask", sideAskStampValue(t, 42)))
-
-	require.Equal(t, 1, opened.count())
-	assert.Equal(t, "trigger-side-ask", opened.last().TriggerID)
-	assert.Equal(t, slackSideAskViewCallbackID, opened.last().View.CallbackID)
-	assert.True(t, opened.last().View.NotifyOnClose)
-	assert.Equal(t, "Submit", opened.last().View.Submit.Text)
-	assert.Equal(t, "Dismiss", opened.last().View.Close.Text)
-	assert.Empty(t, ephemeral.texts)
-
-	var stamp sideAskStamp
-	require.NoError(t, json.Unmarshal([]byte(opened.last().View.PrivateMetadata), &stamp))
-	assert.Equal(t, "slack-thread:C123:111.222", stamp.ConversationID)
-	assert.Equal(t, int64(42), stamp.SessionEntryID)
-}
-
-func TestSideAskChooserListsChannelAgentsAndPreselectsThreadAgent(t *testing.T) {
-	opened, _ := newSideAskInteractiveRecorder(t)
-	router := newThreadRouterStub()
-	router.threadAgent = "planner"
-	router.threadAgentHandled = true
-	connector := newTestConnectorWithOptions(opened.URL, nil, []config.SlackChannelConfig{{
-		Channel: "#social", Agents: []string{"social", "planner"}, AllowedUserIDs: []string{"U123"},
-	}}, router, nil)
-
-	connector.handleInteractive(t.Context(), newSideAskButtonEvent("U123", "trigger-chooser", sideAskStampValue(t, 7)))
-
-	require.Equal(t, 1, opened.count())
-	agentBlock := opened.agentBlock()
-	require.Equal(t, "static_select", agentBlock.Element.Type)
-
-	values := make([]string, 0, len(agentBlock.Element.Options))
-	for _, option := range agentBlock.Element.Options {
-		values = append(values, option.Value)
-	}
-
-	assert.Equal(t, []string{"social", "planner"}, values)
-	assert.Equal(t, "planner", agentBlock.Element.InitialOption.Value)
+	assert.Empty(t, updated.blocks[0][1].BlockID)
 }
 
 func TestSideAskReactionDoesNotOpenModal(t *testing.T) {
@@ -4685,59 +4627,6 @@ func TestSideAskReactionDoesNotOpenModal(t *testing.T) {
 	}))
 
 	assert.Equal(t, 0, opened.count())
-	assert.Empty(t, ephemeral.texts)
-}
-
-func TestSideAskUnauthorizedClickIsInvisible(t *testing.T) {
-	opened, ephemeral := newSideAskInteractiveRecorder(t)
-	connector := newTestConnector(opened.URL)
-
-	connector.handleInteractive(t.Context(), newSideAskButtonEvent("U999", "trigger-denied", sideAskStampValue(t, 42)))
-
-	assert.Equal(t, 0, opened.count())
-	assert.Empty(t, ephemeral.texts)
-}
-
-func TestSideAskDismissBeforeSubmitStartsNoRunner(t *testing.T) {
-	opened, _ := newSideAskInteractiveRecorder(t)
-	runner := &recordingSideAskRunner{}
-	connector := newTestConnector(opened.URL)
-	connector.sideAsk = runner
-
-	connector.handleInteractive(t.Context(), newSideAskButtonEvent("U123", "trigger-dismiss", sideAskStampValue(t, 42)))
-	require.Equal(t, 1, opened.count())
-
-	connector.handleInteractive(t.Context(), socketmode.Event{Data: slack.InteractionCallback{
-		Type: slack.InteractionTypeViewClosed,
-		User: slack.User{ID: "U123"},
-		View: slack.View{CallbackID: slackSideAskViewCallbackID, PrivateMetadata: opened.last().View.PrivateMetadata},
-	}})
-
-	assert.Empty(t, runner.snapshot())
-}
-
-func TestSideAskUnstampedCardPostsEphemeralRefusal(t *testing.T) {
-	opened, ephemeral := newSideAskInteractiveRecorder(t)
-	connector := newTestConnector(opened.URL)
-
-	connector.handleInteractive(t.Context(), newSideAskButtonEvent("U123", "trigger-unstamped", sideAskStampValue(t, 0)))
-
-	assert.Equal(t, 0, opened.count())
-	require.Len(t, ephemeral.texts, 1)
-	assert.NotEmpty(t, ephemeral.texts[0])
-	assert.Equal(t, "C123", ephemeral.channels[0])
-	assert.Equal(t, "U123", ephemeral.users[0])
-}
-
-func TestSideAskSecondClickWhileLiveIsIgnored(t *testing.T) {
-	opened, ephemeral := newSideAskInteractiveRecorder(t)
-	connector := newTestConnector(opened.URL)
-
-	connector.handleInteractive(t.Context(), newSideAskButtonEvent("U123", "trigger-first", sideAskStampValue(t, 42)))
-	connector.handleInteractive(t.Context(), newSideAskButtonEvent("U123", "trigger-second", sideAskStampValue(t, 43)))
-
-	assert.Equal(t, 1, opened.count())
-	assert.Equal(t, "trigger-first", opened.last().TriggerID)
 	assert.Empty(t, ephemeral.texts)
 }
 
@@ -4881,24 +4770,6 @@ func (r *sideAskInteractiveRecorder) count() int {
 	return len(r.opened)
 }
 
-func (r *sideAskInteractiveRecorder) last() sideAskOpenedView {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	return r.opened[len(r.opened)-1]
-}
-
-func (r *sideAskInteractiveRecorder) agentBlock() sideAskOpenedBlock {
-	opened := r.last()
-	for _, block := range opened.View.Blocks {
-		if block.Element.Type == "static_select" {
-			return block
-		}
-	}
-
-	return sideAskOpenedBlock{}
-}
-
 func newSideAskInteractiveRecorder(t *testing.T) (opened, ephemeral *sideAskInteractiveRecorder) {
 	t.Helper()
 
@@ -4953,20 +4824,6 @@ func sideAskStampValue(t *testing.T, entryID int64) string {
 	return string(encoded)
 }
 
-func newSideAskButtonEvent(userID, triggerID, value string) socketmode.Event {
-	return socketmode.Event{Data: slack.InteractionCallback{
-		Type:      slack.InteractionTypeBlockActions,
-		User:      slack.User{ID: userID},
-		TriggerID: triggerID,
-		Channel:   slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}},
-		Container: slack.Container{ChannelID: "C123", MessageTs: "111.222"},
-		ActionCallback: slack.ActionCallbacks{BlockActions: []*slack.BlockAction{{
-			ActionID: slackSideAskActionID,
-			Value:    value,
-		}}},
-	}}
-}
-
 func newSideAskSubmitCallback(metadata, agent, question string) slack.InteractionCallback {
 	return slack.InteractionCallback{
 		Type: slack.InteractionTypeViewSubmission,
@@ -4995,8 +4852,9 @@ type recordedSlackBlocks struct {
 }
 
 type slackPostedBlock struct {
-	Type string `json:"type"`
-	Text struct {
+	Type    string `json:"type"`
+	BlockID string `json:"block_id"`
+	Text    struct {
 		Text string `json:"text"`
 	} `json:"text"`
 	Elements []struct {

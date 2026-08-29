@@ -20,10 +20,24 @@ Dollar commands are canonical. RocketClaw translates the listed emoji and Slack 
 | `📨` |  | Slack `:incoming_envelope:` | Slack | Enqueued message is starting. | Posted as the consume-card header before placeholders. |
 |  | `$queue` |  | Slack managed threads | Show pending steers, then later work. | Ephemeral jump index. Hide closes it; opening `$queue` again dismisses the previous card. Pending-steer rows jump to the hourglass then hide. A Slack `$enqueue` row jumps to the envelope then hides. Envelope 🛑 cancels that enqueue and does not stop the turn. Scheduled and External MCP rows list with no jump and cannot be cancelled from Slack. |
 | `📡` |  | Slack `:satellite_antenna:` | Slack | External MCP relay marker. | Added to Slack relay messages created from External MCP prompts. |
-| `💭` |  |  | Slack managed thread 💬 footer | Opens a private Side Ask modal for one question of a channel agent. | Footer button, not a dollar command or reaction. Modal-only; does not take the thread turn; unauthorized clicks are silent. |
 
 Bare `$` and unknown or unavailable dollar commands post the command table permanently. A root help mention keeps the mention as the thread root and posts help as the first reply without starting an agent turn. Bare root `$agent` is not help: it posts the native agent selector as the first reply.
 Agent controls are consumed by RocketClaw and do not route to RocketCode as prompts.
+
+## Slack Message Menu
+
+Register one **On messages** shortcut named `RocketClaw Actions` with callback ID `rocketclaw_actions`. The app needs the `commands` scope; reinstall after adding it. Emoji reactions stay as they are.
+
+Slack shows that shortcut on every message. Choosing it opens a modal whose buttons are computed for that message:
+
+| Button | Applies to | Same as |
+| --- | --- | --- |
+| Interrupt Turn | thinking or answer placeholder | 🛑 on that placeholder |
+| Cancel | waiting ⏳ steer or ✉️ envelope | 🛑 on that message |
+| Convert to Steer | ✉️ envelope during an active turn | ⏫ on that envelope |
+| Ask Side Question | 💬 answer card | opens the Side Ask form |
+
+Unauthorized clicks are silent. If the message is not in a RocketClaw conversation, the modal says so. If the thread is managed but this message has no live control, the modal says there are no actions on this message.
 
 ## Slack Channel Scenarios
 
