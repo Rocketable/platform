@@ -8,9 +8,6 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-// aliased to make [param.APIUnion] private when embedding
-type paramUnion = param.APIUnion
-
 // aliased to make [param.APIObject] private when embedding
 type paramObj = param.APIObject
 
@@ -402,6 +399,12 @@ type ComparisonFilterValueArrayItemUnionParam = shared.ComparisonFilterValueArra
 // This is an alias to an internal type.
 type CompoundFilter = shared.CompoundFilter
 
+// A filter used to compare a specified attribute key to a given value using a
+// defined comparison operation.
+//
+// This is an alias to an internal type.
+type CompoundFilterFilterUnion = shared.CompoundFilterFilterUnion
+
 // Type of operation: `and` or `or`.
 //
 // This is an alias to an internal type.
@@ -417,6 +420,12 @@ const CompoundFilterTypeOr = shared.CompoundFilterTypeOr
 //
 // This is an alias to an internal type.
 type CompoundFilterParam = shared.CompoundFilterParam
+
+// A filter used to compare a specified attribute key to a given value using a
+// defined comparison operation.
+//
+// This is an alias to an internal type.
+type CompoundFilterFilterUnionParam = shared.CompoundFilterFilterUnionParam
 
 // The input format for the custom tool. Default is unconstrained text.
 //

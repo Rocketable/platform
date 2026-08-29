@@ -976,7 +976,7 @@ func (l *looper) appendToolOutputReplay(ctx context.Context, record *SessionEntr
 			return err
 		}
 
-		completed := FunctionOutputCheckpoint{CallID: toolInput.OfFunctionCallOutput.CallID, Name: toolOutputs[i].Name, ReplayInput: raw}
+		completed := FunctionOutputCheckpoint{CallID: toolInput.OfFunctionCallOutput.CallID.Or(""), Name: toolOutputs[i].Name, ReplayInput: raw}
 		checkpoint.CompletedFunctionOutputs = append(checkpoint.CompletedFunctionOutputs, completed)
 		checkpoint.OpenFunctionCalls = slices.DeleteFunc(checkpoint.OpenFunctionCalls, func(call FunctionCallCheckpoint) bool {
 			return call.CallID == completed.CallID
@@ -1377,7 +1377,7 @@ func compactionBlocks(items []responses.ResponseInputItemUnionParam) []compactio
 			}
 
 			if output := items[j].OfFunctionCallOutput; output != nil {
-				delete(pending, output.CallID)
+				delete(pending, output.CallID.Or(""))
 			}
 
 			if j > i && len(pending) == 0 {
@@ -2003,7 +2003,7 @@ func toolCallOutput(callID string, result ToolResult) responses.ResponseInputIte
 
 	var outputParam responses.ResponseInputItemFunctionCallOutputParam
 
-	outputParam.CallID = callID
+	outputParam.CallID = openai.String(callID)
 	outputParam.Output = output
 	outputParam.Type = "function_call_output"
 

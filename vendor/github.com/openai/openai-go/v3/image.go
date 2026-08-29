@@ -38,7 +38,7 @@ type ImageService struct {
 // is one), and before any request-specific options.
 func NewImageService(opts ...option.RequestOption) (r ImageService) {
 	r = ImageService{}
-	r.Options = opts
+	r.Options = requestconfig.InheritedOptions(opts...)
 	return
 }
 
@@ -993,18 +993,13 @@ type ImageEditParams struct {
 	// and detect abuse.
 	// [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids).
 	User param.Opt[string] `json:"user,omitzero"`
-	// Allows to set transparency for the background of the generated image(s). This
-	// parameter is only supported for GPT image models that support transparent
-	// backgrounds. Must be one of `transparent`, `opaque`, or `auto` (default value).
-	// When `auto` is used, the model will automatically determine the best background
-	// for the image.
+	// Allows to set transparency for the background of the generated image(s). Must be
+	// one of `transparent`, `opaque`, or `auto` (default value). When `auto` is used,
+	// the model will automatically determine the best background for the image.
 	//
-	// `gpt-image-2` and `gpt-image-2-2026-04-21` do not support transparent
-	// backgrounds. Requests with `background` set to `transparent` will return an
-	// error for these models; use `opaque` or `auto` instead.
-	//
-	// If `transparent`, the output format needs to support transparency, so it should
-	// be set to either `png` (default value) or `webp`.
+	// Transparent backgrounds are available for supported GPT Image models. For
+	// `gpt-image-2` and `gpt-image-2-2026-04-21`, this support is in preview. When
+	// using `transparent`, set the output format to `png` or `webp`.
 	//
 	// Any of "transparent", "opaque", "auto".
 	Background ImageEditParamsBackground `json:"background,omitzero"`
@@ -1092,27 +1087,13 @@ func (u *ImageEditParamsImageUnion) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, u)
 }
 
-func (u *ImageEditParamsImageUnion) asAny() any {
-	if !param.IsOmitted(u.OfFile) {
-		return &u.OfFile
-	} else if !param.IsOmitted(u.OfFileArray) {
-		return &u.OfFileArray
-	}
-	return nil
-}
-
-// Allows to set transparency for the background of the generated image(s). This
-// parameter is only supported for GPT image models that support transparent
-// backgrounds. Must be one of `transparent`, `opaque`, or `auto` (default value).
-// When `auto` is used, the model will automatically determine the best background
-// for the image.
+// Allows to set transparency for the background of the generated image(s). Must be
+// one of `transparent`, `opaque`, or `auto` (default value). When `auto` is used,
+// the model will automatically determine the best background for the image.
 //
-// `gpt-image-2` and `gpt-image-2-2026-04-21` do not support transparent
-// backgrounds. Requests with `background` set to `transparent` will return an
-// error for these models; use `opaque` or `auto` instead.
-//
-// If `transparent`, the output format needs to support transparency, so it should
-// be set to either `png` (default value) or `webp`.
+// Transparent backgrounds are available for supported GPT Image models. For
+// `gpt-image-2` and `gpt-image-2-2026-04-21`, this support is in preview. When
+// using `transparent`, set the output format to `png` or `webp`.
 type ImageEditParamsBackground string
 
 const (
@@ -1211,18 +1192,13 @@ type ImageGenerateParams struct {
 	// and detect abuse.
 	// [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#end-user-ids).
 	User param.Opt[string] `json:"user,omitzero"`
-	// Allows to set transparency for the background of the generated image(s). This
-	// parameter is only supported for GPT image models that support transparent
-	// backgrounds. Must be one of `transparent`, `opaque`, or `auto` (default value).
-	// When `auto` is used, the model will automatically determine the best background
-	// for the image.
+	// Allows to set transparency for the background of the generated image(s). Must be
+	// one of `transparent`, `opaque`, or `auto` (default value). When `auto` is used,
+	// the model will automatically determine the best background for the image.
 	//
-	// `gpt-image-2` and `gpt-image-2-2026-04-21` do not support transparent
-	// backgrounds. Requests with `background` set to `transparent` will return an
-	// error for these models; use `opaque` or `auto` instead.
-	//
-	// If `transparent`, the output format needs to support transparency, so it should
-	// be set to either `png` (default value) or `webp`.
+	// Transparent backgrounds are available for supported GPT Image models. For
+	// `gpt-image-2` and `gpt-image-2-2026-04-21`, this support is in preview. When
+	// using `transparent`, set the output format to `png` or `webp`.
 	//
 	// Any of "transparent", "opaque", "auto".
 	Background ImageGenerateParamsBackground `json:"background,omitzero"`
@@ -1289,18 +1265,13 @@ func (r *ImageGenerateParams) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
-// Allows to set transparency for the background of the generated image(s). This
-// parameter is only supported for GPT image models that support transparent
-// backgrounds. Must be one of `transparent`, `opaque`, or `auto` (default value).
-// When `auto` is used, the model will automatically determine the best background
-// for the image.
+// Allows to set transparency for the background of the generated image(s). Must be
+// one of `transparent`, `opaque`, or `auto` (default value). When `auto` is used,
+// the model will automatically determine the best background for the image.
 //
-// `gpt-image-2` and `gpt-image-2-2026-04-21` do not support transparent
-// backgrounds. Requests with `background` set to `transparent` will return an
-// error for these models; use `opaque` or `auto` instead.
-//
-// If `transparent`, the output format needs to support transparency, so it should
-// be set to either `png` (default value) or `webp`.
+// Transparent backgrounds are available for supported GPT Image models. For
+// `gpt-image-2` and `gpt-image-2-2026-04-21`, this support is in preview. When
+// using `transparent`, set the output format to `png` or `webp`.
 type ImageGenerateParamsBackground string
 
 const (

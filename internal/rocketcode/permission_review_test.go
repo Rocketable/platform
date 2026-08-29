@@ -195,7 +195,7 @@ func TestPermissionReviewTranscriptOmitsEncryptedReplayPayloads(t *testing.T) {
 }
 
 func TestPermissionReviewTranscriptMarksAttachmentOnlyMessages(t *testing.T) {
-	toolResult := responses.ResponseInputItemFunctionCallOutputParam{CallID: "call-1", Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfResponseFunctionCallOutputItemArray: responses.ResponseFunctionCallOutputItemListParam{
+	toolResult := responses.ResponseInputItemFunctionCallOutputParam{CallID: openai.String("call-1"), Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfResponseFunctionCallOutputItemArray: responses.ResponseFunctionCallOutputItemListParam{
 		{OfInputFile: &responses.ResponseInputFileContentParam{Filename: openai.String("doc.pdf"), FileData: openai.String("data:application/pdf;base64,SECRET_FILE")}},
 	}}}
 	request := &permissionReviewRequest{

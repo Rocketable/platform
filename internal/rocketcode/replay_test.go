@@ -49,7 +49,7 @@ func TestAbortedFunctionCallOutputsUsesTaskText(t *testing.T) {
 
 func TestAbortedFunctionCallOutputsPreservesCompletedOutputs(t *testing.T) {
 	completed := responses.ResponseInputItemFunctionCallOutputParam{
-		CallID: "call-1",
+		CallID: openai.String("call-1"),
 		Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.String("done")},
 		Type:   "function_call_output",
 	}
@@ -94,7 +94,7 @@ func TestRecoveredReplayInputDecodes(t *testing.T) {
 
 func TestRecoveredReplayInputPreservesCompletedToolOutputs(t *testing.T) {
 	completed := responses.ResponseInputItemFunctionCallOutputParam{
-		CallID: "call-1",
+		CallID: openai.String("call-1"),
 		Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.String("completed before restart")},
 		Type:   "function_call_output",
 	}
@@ -137,7 +137,7 @@ func TestRecoveredReplayInputIncludesCheckpointCompletedOutputs(t *testing.T) {
 	require.NoError(t, err)
 
 	completed, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
-		CallID: "call-1",
+		CallID: openai.String("call-1"),
 		Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.String("read result")},
 		Type:   "function_call_output",
 	}}})
@@ -166,7 +166,7 @@ func TestRecoveredReplayInputIncludesCheckpointCompletedOutputs(t *testing.T) {
 
 func TestRecoveredReplayInputDoesNotDuplicateCompletedCheckpointOutputs(t *testing.T) {
 	completed, err := ReplayInputFromParams([]responses.ResponseInputItemUnionParam{{OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
-		CallID: "call-1",
+		CallID: openai.String("call-1"),
 		Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.String("read result")},
 		Type:   "function_call_output",
 	}}})
@@ -194,7 +194,7 @@ func TestRecoveredReplayInputDoesNotDuplicateCompletedCheckpointOutputs(t *testi
 	outputs := 0
 
 	for i := range items {
-		if items[i].OfFunctionCallOutput != nil && items[i].OfFunctionCallOutput.CallID == "call-1" {
+		if items[i].OfFunctionCallOutput != nil && items[i].OfFunctionCallOutput.CallID.Or("") == "call-1" {
 			outputs++
 		}
 	}

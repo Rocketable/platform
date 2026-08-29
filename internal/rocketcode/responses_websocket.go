@@ -31,20 +31,31 @@ func (d *responsesWebsocketDoer) middleware(req *http.Request, next option.Middl
 	}
 
 	if strings.Contains(req.URL.Path, "/compact") {
-		httpReq := req.Clone(req.Context())
-		if req.URL.Scheme == "wss" {
-			httpReq.URL.Scheme = "https"
-		} else {
-			httpReq.URL.Scheme = "http"
-		}
-
-		return next(httpReq)
+		// openai-go origin checks reject scheme rewrites against a ws base URL, so
+		// compact must leave the middleware chain and dial HTTP itself.
+		return d.doCompactHTTP(req)
 	}
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	return d.doCreate(req)
+}
+
+func (d *responsesWebsocketDoer) doCompactHTTP(req *http.Request) (*http.Response, error) {
+	httpReq := req.Clone(req.Context())
+	if req.URL.Scheme == "wss" {
+		httpReq.URL.Scheme = "https"
+	} else {
+		httpReq.URL.Scheme = "http"
+	}
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("compact responses over http: %w", err)
+	}
+
+	return resp, nil
 }
 
 func (d *responsesWebsocketDoer) doCreate(req *http.Request) (*http.Response, error) {

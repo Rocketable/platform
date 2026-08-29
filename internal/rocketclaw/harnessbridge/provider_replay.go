@@ -328,7 +328,8 @@ func portableFunctionOutput(callID string, raw json.RawMessage) (responses.Respo
 	}
 
 	if text != "" || content == nil {
-		output := responses.ResponseInputItemParamOfFunctionCallOutput(callID, text)
+		output := responses.ResponseInputItemParamOfFunctionCallOutput(text)
+		output.OfFunctionCallOutput.CallID = openai.String(callID)
 		output.OfFunctionCallOutput.Type = "function_call_output"
 
 		return output, true, nil
@@ -350,7 +351,8 @@ func portableFunctionOutput(callID string, raw json.RawMessage) (responses.Respo
 		return responses.ResponseInputItemUnionParam{}, false, nil
 	}
 
-	output := responses.ResponseInputItemParamOfFunctionCallOutput(callID, parts)
+	output := responses.ResponseInputItemParamOfFunctionCallOutput(parts)
+	output.OfFunctionCallOutput.CallID = openai.String(callID)
 	output.OfFunctionCallOutput.Type = "function_call_output"
 
 	return output, true, nil

@@ -622,6 +622,11 @@ Response Types:
 - <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#BetaResponseReasoningTextDoneEvent">BetaResponseReasoningTextDoneEvent</a>
 - <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#BetaResponseRefusalDeltaEvent">BetaResponseRefusalDeltaEvent</a>
 - <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#BetaResponseRefusalDoneEvent">BetaResponseRefusalDoneEvent</a>
+- <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#BetaResponseShellCallCommandAddedEvent">BetaResponseShellCallCommandAddedEvent</a>
+- <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#BetaResponseShellCallCommandDeltaEvent">BetaResponseShellCallCommandDeltaEvent</a>
+- <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#BetaResponseShellCallCommandDoneEvent">BetaResponseShellCallCommandDoneEvent</a>
+- <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#BetaResponseShellCallOutputContentDeltaEvent">BetaResponseShellCallOutputContentDeltaEvent</a>
+- <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#BetaResponseShellCallOutputContentDoneEvent">BetaResponseShellCallOutputContentDoneEvent</a>
 - <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#BetaResponseStatus">BetaResponseStatus</a>
 - <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#BetaResponseStreamEventUnion">BetaResponseStreamEventUnion</a>
 - <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#BetaResponseTextConfig">BetaResponseTextConfig</a>
@@ -943,6 +948,7 @@ Methods:
 
 Response Types:
 
+- <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#CostQuantityUnit">CostQuantityUnit</a>
 - <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#AdminOrganizationUsageAudioSpeechesResponse">AdminOrganizationUsageAudioSpeechesResponse</a>
 - <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#AdminOrganizationUsageAudioTranscriptionsResponse">AdminOrganizationUsageAudioTranscriptionsResponse</a>
 - <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#AdminOrganizationUsageCodeInterpreterSessionsResponse">AdminOrganizationUsageCodeInterpreterSessionsResponse</a>
@@ -1137,9 +1143,14 @@ Methods:
 
 ### Projects
 
+Params Types:
+
+- <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#ProjectResidency">ProjectResidency</a>
+
 Response Types:
 
 - <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#Project">Project</a>
+- <a href="https://pkg.go.dev/github.com/openai/openai-go/v3">openai</a>.<a href="https://pkg.go.dev/github.com/openai/openai-go/v3#ProjectResidency">ProjectResidency</a>
 
 Methods:
 

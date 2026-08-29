@@ -11,9 +11,6 @@ import (
 	"github.com/openai/openai-go/v3/packages/respjson"
 )
 
-// aliased to make [param.APIUnion] private when embedding
-type paramUnion = param.APIUnion
-
 // aliased to make [param.APIObject] private when embedding
 type paramObj = param.APIObject
 
@@ -128,9 +125,6 @@ func (r *CursorPage[T]) GetNextPage() (res *CursorPage[T], err error) {
 		return nil, nil
 	}
 	items := r.Data
-	if items == nil || len(items) == 0 {
-		return nil, nil
-	}
 	cfg := r.cfg.Clone(r.cfg.Context)
 	value := reflect.ValueOf(items[len(items)-1])
 	field := value.FieldByName("ID")

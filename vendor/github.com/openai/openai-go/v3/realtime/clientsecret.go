@@ -32,7 +32,7 @@ type ClientSecretService struct {
 // there is one), and before any request-specific options.
 func NewClientSecretService(opts ...option.RequestOption) (r ClientSecretService) {
 	r = ClientSecretService{}
-	r.Options = opts
+	r.Options = requestconfig.InheritedOptions(opts...)
 	return
 }
 
@@ -1469,15 +1469,6 @@ func (u ClientSecretNewParamsSessionUnion) MarshalJSON() ([]byte, error) {
 }
 func (u *ClientSecretNewParamsSessionUnion) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, u)
-}
-
-func (u *ClientSecretNewParamsSessionUnion) asAny() any {
-	if !param.IsOmitted(u.OfRealtime) {
-		return u.OfRealtime
-	} else if !param.IsOmitted(u.OfTranscription) {
-		return u.OfTranscription
-	}
-	return nil
 }
 
 // Returns a pointer to the underlying variant's property, if present.

@@ -47,7 +47,7 @@ func RecoveredReplayInput(checkpoint *ActiveTurnCheckpoint) ([]json.RawMessage, 
 		if slices.ContainsFunc(items, func(item responses.ResponseInputItemUnionParam) bool {
 			output := item.OfFunctionCallOutput
 
-			return output != nil && output.CallID == checkpoint.CompletedFunctionOutputs[i].CallID
+			return output != nil && output.CallID.Or("") == checkpoint.CompletedFunctionOutputs[i].CallID
 		}) {
 			continue
 		}
@@ -77,7 +77,7 @@ func abortedFunctionCallOutputs(items []responses.ResponseInputItemUnionParam, o
 			continue
 		}
 
-		completed[output.CallID] = true
+		completed[output.CallID.Or("")] = true
 	}
 
 	outputs := make([]responses.ResponseInputItemUnionParam, 0, len(openCalls))
@@ -92,7 +92,7 @@ func abortedFunctionCallOutputs(items []responses.ResponseInputItemUnionParam, o
 		}
 
 		outputs = append(outputs, responses.ResponseInputItemUnionParam{OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
-			CallID: call.CallID,
+			CallID: openai.String(call.CallID),
 			Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.String(outputText)},
 			Type:   "function_call_output",
 		}})

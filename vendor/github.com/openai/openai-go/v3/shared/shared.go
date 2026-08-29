@@ -13,6 +13,8 @@ import (
 
 // aliased to make [param.APIUnion] private when embedding
 type paramUnion = param.APIUnion
+
+// aliased to make [param.APIObject] private when embedding
 type paramObj = param.APIObject
 
 // AllModels also accepts any [string] or [ChatModel]
@@ -42,9 +44,6 @@ const (
 )
 
 type ChatModel = string
-type ResponsesModel = string
-
-// aliased to make [param.APIObject] private when embedding
 
 const (
 	ChatModelGPT5_6Sol                        ChatModel = "gpt-5.6-sol"
@@ -345,19 +344,6 @@ func (u *ComparisonFilterValueUnionParam) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, u)
 }
 
-func (u *ComparisonFilterValueUnionParam) asAny() any {
-	if !param.IsOmitted(u.OfString) {
-		return &u.OfString.Value
-	} else if !param.IsOmitted(u.OfFloat) {
-		return &u.OfFloat.Value
-	} else if !param.IsOmitted(u.OfBool) {
-		return &u.OfBool.Value
-	} else if !param.IsOmitted(u.OfComparisonFilterValueArray) {
-		return &u.OfComparisonFilterValueArray
-	}
-	return nil
-}
-
 // Only one field can be non-zero.
 //
 // Use [param.IsOmitted] to confirm if a field is set.
@@ -374,20 +360,11 @@ func (u *ComparisonFilterValueArrayItemUnionParam) UnmarshalJSON(data []byte) er
 	return apijson.UnmarshalRoot(data, u)
 }
 
-func (u *ComparisonFilterValueArrayItemUnionParam) asAny() any {
-	if !param.IsOmitted(u.OfString) {
-		return &u.OfString.Value
-	} else if !param.IsOmitted(u.OfFloat) {
-		return &u.OfFloat.Value
-	}
-	return nil
-}
-
 // Combine multiple filters using `and` or `or`.
 type CompoundFilter struct {
 	// Array of filters to combine. Items can be `ComparisonFilter` or
 	// `CompoundFilter`.
-	Filters []ComparisonFilter `json:"filters" api:"required"`
+	Filters []CompoundFilterFilterUnion `json:"filters" api:"required"`
 	// Type of operation: `and` or `or`.
 	//
 	// Any of "and", "or".
@@ -416,6 +393,44 @@ func (r CompoundFilter) ToParam() CompoundFilterParam {
 	return param.Override[CompoundFilterParam](json.RawMessage(r.RawJSON()))
 }
 
+// CompoundFilterFilterUnion contains all possible properties and values from
+// [ComparisonFilter], [CompoundFilter].
+//
+// Use the methods beginning with 'As' to cast the union to one of its variants.
+type CompoundFilterFilterUnion struct {
+	// This field is from variant [ComparisonFilter].
+	Key string `json:"key"`
+	// This field is from variant [ComparisonFilter].
+	Type ComparisonFilterType `json:"type"`
+	// This field is from variant [ComparisonFilter].
+	Value            ComparisonFilterValueUnion `json:"value"`
+	OfCompoundFilter CompoundFilter             `json:",inline"`
+	JSON             struct {
+		Key              respjson.Field
+		Type             respjson.Field
+		Value            respjson.Field
+		OfCompoundFilter respjson.Field
+		raw              string
+	} `json:"-"`
+}
+
+func (u CompoundFilterFilterUnion) AsComparisonFilter() (v ComparisonFilter) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u CompoundFilterFilterUnion) AsCompoundFilter() (v CompoundFilter) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+// Returns the unmodified JSON received from the API
+func (u CompoundFilterFilterUnion) RawJSON() string { return u.JSON.raw }
+
+func (r *CompoundFilterFilterUnion) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
 // Type of operation: `and` or `or`.
 type CompoundFilterType string
 
@@ -430,7 +445,7 @@ const (
 type CompoundFilterParam struct {
 	// Array of filters to combine. Items can be `ComparisonFilter` or
 	// `CompoundFilter`.
-	Filters []ComparisonFilterParam `json:"filters,omitzero" api:"required"`
+	Filters []CompoundFilterFilterUnionParam `json:"filters,omitzero" api:"required"`
 	// Type of operation: `and` or `or`.
 	//
 	// Any of "and", "or".
@@ -444,6 +459,72 @@ func (r CompoundFilterParam) MarshalJSON() (data []byte, err error) {
 }
 func (r *CompoundFilterParam) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
+}
+
+// Only one field can be non-zero.
+//
+// Use [param.IsOmitted] to confirm if a field is set.
+type CompoundFilterFilterUnionParam struct {
+	OfComparison *ComparisonFilterParam `json:",omitzero,inline"`
+	OfFilter     *CompoundFilterParam   `json:",omitzero,inline"`
+	paramUnion
+}
+
+func (u CompoundFilterFilterUnionParam) MarshalJSON() ([]byte, error) {
+	return param.MarshalUnion(u, u.OfComparison, u.OfFilter)
+}
+func (u *CompoundFilterFilterUnionParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, u)
+}
+
+// Returns a pointer to the underlying variant's property, if present.
+func (u CompoundFilterFilterUnionParam) GetKey() *string {
+	if vt := u.OfComparison; vt != nil {
+		return &vt.Key
+	}
+	return nil
+}
+
+// Returns a pointer to the underlying variant's property, if present.
+func (u CompoundFilterFilterUnionParam) GetValue() *ComparisonFilterValueUnionParam {
+	if vt := u.OfComparison; vt != nil {
+		return &vt.Value
+	}
+	return nil
+}
+
+// Returns a pointer to the underlying variant's property, if present.
+func (u CompoundFilterFilterUnionParam) GetFilters() []CompoundFilterFilterUnionParam {
+	if vt := u.OfFilter; vt != nil {
+		return vt.Filters
+	}
+	return nil
+}
+
+// Returns a pointer to the underlying variant's property, if present.
+func (u CompoundFilterFilterUnionParam) GetType() *string {
+	if vt := u.OfComparison; vt != nil {
+		return (*string)(&vt.Type)
+	} else if vt := u.OfFilter; vt != nil {
+		return (*string)(&vt.Type)
+	}
+	return nil
+}
+
+func init() {
+	apijson.RegisterUnion[CompoundFilterFilterUnionParam](
+		"type",
+		apijson.Discriminator[ComparisonFilterParam]("eq"),
+		apijson.Discriminator[ComparisonFilterParam]("ne"),
+		apijson.Discriminator[ComparisonFilterParam]("gt"),
+		apijson.Discriminator[ComparisonFilterParam]("gte"),
+		apijson.Discriminator[ComparisonFilterParam]("lt"),
+		apijson.Discriminator[ComparisonFilterParam]("lte"),
+		apijson.Discriminator[ComparisonFilterParam]("in"),
+		apijson.Discriminator[ComparisonFilterParam]("nin"),
+		apijson.Discriminator[CompoundFilterParam]("and"),
+		apijson.Discriminator[CompoundFilterParam]("or"),
+	)
 }
 
 // CustomToolInputFormatUnion contains all possible properties and values from
@@ -588,15 +669,6 @@ func (u CustomToolInputFormatUnionParam) MarshalJSON() ([]byte, error) {
 }
 func (u *CustomToolInputFormatUnionParam) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, u)
-}
-
-func (u *CustomToolInputFormatUnionParam) asAny() any {
-	if !param.IsOmitted(u.OfText) {
-		return u.OfText
-	} else if !param.IsOmitted(u.OfGrammar) {
-		return u.OfGrammar
-	}
-	return nil
 }
 
 // Returns a pointer to the underlying variant's property, if present.
@@ -1232,6 +1304,7 @@ func (r *ResponseFormatTextParam) UnmarshalJSON(data []byte) error {
 }
 
 // ResponsesModel also accepts any [string] or [ChatModel]
+type ResponsesModel = string
 
 const (
 	ResponsesModelO1Pro                        ResponsesModel = "o1-pro"

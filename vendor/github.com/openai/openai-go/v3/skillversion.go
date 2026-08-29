@@ -39,7 +39,7 @@ type SkillVersionService struct {
 // there is one), and before any request-specific options.
 func NewSkillVersionService(opts ...option.RequestOption) (r SkillVersionService) {
 	r = SkillVersionService{}
-	r.Options = opts
+	r.Options = requestconfig.InheritedOptions(opts...)
 	r.Content = NewSkillVersionContentService(opts...)
 	return
 }
@@ -246,15 +246,6 @@ func (u SkillVersionNewParamsFilesUnion) MarshalJSON() ([]byte, error) {
 }
 func (u *SkillVersionNewParamsFilesUnion) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, u)
-}
-
-func (u *SkillVersionNewParamsFilesUnion) asAny() any {
-	if !param.IsOmitted(u.OfFileArray) {
-		return &u.OfFileArray
-	} else if !param.IsOmitted(u.OfFile) {
-		return &u.OfFile
-	}
-	return nil
 }
 
 type SkillVersionListParams struct {

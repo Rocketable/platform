@@ -38,7 +38,7 @@ type AudioTranscriptionService struct {
 // options (if there is one), and before any request-specific options.
 func NewAudioTranscriptionService(opts ...option.RequestOption) (r AudioTranscriptionService) {
 	r = AudioTranscriptionService{}
-	r.Options = opts
+	r.Options = requestconfig.InheritedOptions(opts...)
 	return
 }
 
@@ -948,15 +948,6 @@ func (u AudioTranscriptionNewParamsChunkingStrategyUnion) MarshalJSON() ([]byte,
 }
 func (u *AudioTranscriptionNewParamsChunkingStrategyUnion) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, u)
-}
-
-func (u *AudioTranscriptionNewParamsChunkingStrategyUnion) asAny() any {
-	if !param.IsOmitted(u.OfAuto) {
-		return &u.OfAuto
-	} else if !param.IsOmitted(u.OfAudioTranscriptionNewsChunkingStrategyVadConfig) {
-		return u.OfAudioTranscriptionNewsChunkingStrategyVadConfig
-	}
-	return nil
 }
 
 // The property Type is required.

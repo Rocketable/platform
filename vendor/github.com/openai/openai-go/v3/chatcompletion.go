@@ -43,7 +43,7 @@ type ChatCompletionService struct {
 // there is one), and before any request-specific options.
 func NewChatCompletionService(opts ...option.RequestOption) (r ChatCompletionService) {
 	r = ChatCompletionService{}
-	r.Options = opts
+	r.Options = requestconfig.InheritedOptions(opts...)
 	r.Messages = NewChatCompletionMessageService(opts...)
 	return
 }
@@ -192,6 +192,13 @@ type ChatCompletion struct {
 	Model string `json:"model" api:"required"`
 	// The object type, which is always `chat.completion`.
 	Object constant.ChatCompletion `json:"object" default:"chat.completion"`
+	// Set of 16 key-value pairs that can be attached to an object. This can be useful
+	// for storing additional information about the object in a structured format, and
+	// querying for objects via API or the dashboard.
+	//
+	// Keys are strings with a maximum length of 64 characters. Values are strings with
+	// a maximum length of 512 characters.
+	Metadata shared.Metadata `json:"metadata" api:"nullable"`
 	// Moderation results for the request input and generated output, if moderated
 	// completions were requested.
 	Moderation ChatCompletionModeration `json:"moderation" api:"nullable"`
@@ -234,6 +241,7 @@ type ChatCompletion struct {
 		Created           respjson.Field
 		Model             respjson.Field
 		Object            respjson.Field
+		Metadata          respjson.Field
 		Moderation        respjson.Field
 		ServiceTier       respjson.Field
 		SystemFingerprint respjson.Field
@@ -788,15 +796,6 @@ func (u *ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion) Unma
 	return apijson.UnmarshalRoot(data, u)
 }
 
-func (u *ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion) asAny() any {
-	if !param.IsOmitted(u.OfText) {
-		return u.OfText
-	} else if !param.IsOmitted(u.OfRefusal) {
-		return u.OfRefusal
-	}
-	return nil
-}
-
 // Returns a pointer to the underlying variant's property, if present.
 func (u ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion) GetText() *string {
 	if vt := u.OfText; vt != nil {
@@ -954,17 +953,6 @@ func (u *ChatCompletionAudioParamVoiceUnion) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, u)
 }
 
-func (u *ChatCompletionAudioParamVoiceUnion) asAny() any {
-	if !param.IsOmitted(u.OfString) {
-		return &u.OfString.Value
-	} else if !param.IsOmitted(u.OfChatCompletionAudioVoiceString2) {
-		return &u.OfChatCompletionAudioVoiceString2
-	} else if !param.IsOmitted(u.OfChatCompletionAudioVoiceID) {
-		return u.OfChatCompletionAudioVoiceID
-	}
-	return nil
-}
-
 type ChatCompletionAudioParamVoiceString2 string
 
 const (
@@ -1017,6 +1005,10 @@ type ChatCompletionChunk struct {
 	// Moderation results for the request input and generated output. Present on the
 	// moderation chunk when moderated completions are requested.
 	Moderation ChatCompletionChunkModeration `json:"moderation" api:"nullable"`
+	// An obfuscation string added to normalize the size of streamed chunks as a
+	// mitigation to certain side-channel attacks. The field is included by default and
+	// omitted when `stream_options.include_obfuscation` is `false`.
+	Obfuscation string `json:"obfuscation"`
 	// Specifies the processing type used for serving the request.
 	//
 	//   - If set to 'auto', then the request will be processed with the service tier
@@ -1062,6 +1054,7 @@ type ChatCompletionChunk struct {
 		Model             respjson.Field
 		Object            respjson.Field
 		Moderation        respjson.Field
+		Obfuscation       respjson.Field
 		ServiceTier       respjson.Field
 		SystemFingerprint respjson.Field
 		Usage             respjson.Field
@@ -1659,19 +1652,6 @@ func (u *ChatCompletionContentPartUnionParam) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, u)
 }
 
-func (u *ChatCompletionContentPartUnionParam) asAny() any {
-	if !param.IsOmitted(u.OfText) {
-		return u.OfText
-	} else if !param.IsOmitted(u.OfImageURL) {
-		return u.OfImageURL
-	} else if !param.IsOmitted(u.OfInputAudio) {
-		return u.OfInputAudio
-	} else if !param.IsOmitted(u.OfFile) {
-		return u.OfFile
-	}
-	return nil
-}
-
 // Returns a pointer to the underlying variant's property, if present.
 func (u ChatCompletionContentPartUnionParam) GetText() *string {
 	if vt := u.OfText; vt != nil {
@@ -2263,15 +2243,6 @@ func (u *ChatCompletionCustomToolCustomFormatUnionParam) UnmarshalJSON(data []by
 	return apijson.UnmarshalRoot(data, u)
 }
 
-func (u *ChatCompletionCustomToolCustomFormatUnionParam) asAny() any {
-	if !param.IsOmitted(u.OfText) {
-		return u.OfText
-	} else if !param.IsOmitted(u.OfGrammar) {
-		return u.OfGrammar
-	}
-	return nil
-}
-
 // Returns a pointer to the underlying variant's property, if present.
 func (u ChatCompletionCustomToolCustomFormatUnionParam) GetGrammar() *ChatCompletionCustomToolCustomFormatGrammarGrammarParam {
 	if vt := u.OfGrammar; vt != nil {
@@ -2553,51 +2524,7 @@ func (r ChatCompletionMessage) ToParam() ChatCompletionMessageParamUnion {
 }
 
 func (r ChatCompletionMessage) ToAssistantMessageParam() ChatCompletionAssistantMessageParam {
-	var p ChatCompletionAssistantMessageParam
-
-	// It is important to not rely on the JSON metadata property
-	// here, it may be unset if the receiver was generated via a
-	// [ChatCompletionAccumulator].
-	//
-	// Explicit null is intentionally elided from the response.
-	if r.Content != "" {
-		p.Content.OfString = String(r.Content)
-	}
-	if r.Refusal != "" {
-		p.Refusal = String(r.Refusal)
-	}
-
-	p.Audio.ID = r.Audio.ID
-	p.Role = r.Role
-	p.FunctionCall.Arguments = r.FunctionCall.Arguments
-	p.FunctionCall.Name = r.FunctionCall.Name
-
-	if len(r.ToolCalls) > 0 {
-		for _, v := range r.ToolCalls {
-			u := ChatCompletionMessageToolCallUnionParam{}
-			switch v.AsAny().(type) {
-			case ChatCompletionMessageFunctionToolCall:
-				u.OfFunction = &ChatCompletionMessageFunctionToolCallParam{
-					ID: v.ID,
-					Function: ChatCompletionMessageFunctionToolCallFunctionParam{
-						Arguments: v.Function.Arguments,
-						Name:      v.Function.Name,
-					},
-				}
-			case ChatCompletionMessageCustomToolCall:
-				u.OfCustom = &ChatCompletionMessageCustomToolCallParam{
-					ID: v.ID,
-					Custom: ChatCompletionMessageCustomToolCallCustomParam{
-						Input: v.Custom.Input,
-						Name:  v.Custom.Name,
-					},
-				}
-			}
-
-			p.ToolCalls = append(p.ToolCalls, u)
-		}
-	}
-	return p
+	return chatCompletionMessageToAssistantParam(r)
 }
 
 // A URL citation when using web search.
@@ -2876,14 +2803,7 @@ func (r *ChatCompletionMessageFunctionToolCallFunctionParam) UnmarshalJSON(data 
 }
 
 func AssistantMessage[T string | []ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion](content T) ChatCompletionMessageParamUnion {
-	var assistant ChatCompletionAssistantMessageParam
-	switch v := any(content).(type) {
-	case string:
-		assistant.Content.OfString = param.NewOpt(v)
-	case []ChatCompletionAssistantMessageParamContentArrayOfContentPartUnion:
-		assistant.Content.OfArrayOfContentParts = v
-	}
-	return ChatCompletionMessageParamUnion{OfAssistant: &assistant}
+	return ChatCompletionMessageParamOfAssistant(content)
 }
 
 func DeveloperMessage[T string | []ChatCompletionContentPartTextParam](content T) ChatCompletionMessageParamUnion {
@@ -2974,23 +2894,6 @@ func (u ChatCompletionMessageParamUnion) MarshalJSON() ([]byte, error) {
 }
 func (u *ChatCompletionMessageParamUnion) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, u)
-}
-
-func (u *ChatCompletionMessageParamUnion) asAny() any {
-	if !param.IsOmitted(u.OfDeveloper) {
-		return u.OfDeveloper
-	} else if !param.IsOmitted(u.OfSystem) {
-		return u.OfSystem
-	} else if !param.IsOmitted(u.OfUser) {
-		return u.OfUser
-	} else if !param.IsOmitted(u.OfAssistant) {
-		return u.OfAssistant
-	} else if !param.IsOmitted(u.OfTool) {
-		return u.OfTool
-	} else if !param.IsOmitted(u.OfFunction) {
-		return u.OfFunction
-	}
-	return nil
 }
 
 // Returns a pointer to the underlying variant's property, if present.
@@ -3212,15 +3115,6 @@ func (u *ChatCompletionMessageToolCallUnionParam) UnmarshalJSON(data []byte) err
 	return apijson.UnmarshalRoot(data, u)
 }
 
-func (u *ChatCompletionMessageToolCallUnionParam) asAny() any {
-	if !param.IsOmitted(u.OfFunction) {
-		return u.OfFunction
-	} else if !param.IsOmitted(u.OfCustom) {
-		return u.OfCustom
-	}
-	return nil
-}
-
 // Returns a pointer to the underlying variant's property, if present.
 func (u ChatCompletionMessageToolCallUnionParam) GetFunction() *ChatCompletionMessageFunctionToolCallFunctionParam {
 	if vt := u.OfFunction; vt != nil {
@@ -3376,15 +3270,6 @@ func (u ChatCompletionPredictionContentContentUnionParam) MarshalJSON() ([]byte,
 }
 func (u *ChatCompletionPredictionContentContentUnionParam) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, u)
-}
-
-func (u *ChatCompletionPredictionContentContentUnionParam) asAny() any {
-	if !param.IsOmitted(u.OfString) {
-		return &u.OfString.Value
-	} else if !param.IsOmitted(u.OfArrayOfContentParts) {
-		return &u.OfArrayOfContentParts
-	}
-	return nil
 }
 
 // A chat completion message generated by the model.
@@ -3636,15 +3521,6 @@ func (u *ChatCompletionToolUnionParam) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, u)
 }
 
-func (u *ChatCompletionToolUnionParam) asAny() any {
-	if !param.IsOmitted(u.OfFunction) {
-		return u.OfFunction
-	} else if !param.IsOmitted(u.OfCustom) {
-		return u.OfCustom
-	}
-	return nil
-}
-
 // Returns a pointer to the underlying variant's property, if present.
 func (u ChatCompletionToolUnionParam) GetFunction() *shared.FunctionDefinitionParam {
 	if vt := u.OfFunction; vt != nil {
@@ -3714,19 +3590,6 @@ func (u ChatCompletionToolChoiceOptionUnionParam) MarshalJSON() ([]byte, error) 
 }
 func (u *ChatCompletionToolChoiceOptionUnionParam) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, u)
-}
-
-func (u *ChatCompletionToolChoiceOptionUnionParam) asAny() any {
-	if !param.IsOmitted(u.OfAuto) {
-		return &u.OfAuto
-	} else if !param.IsOmitted(u.OfAllowedTools) {
-		return u.OfAllowedTools
-	} else if !param.IsOmitted(u.OfFunctionToolChoice) {
-		return u.OfFunctionToolChoice
-	} else if !param.IsOmitted(u.OfCustomToolChoice) {
-		return u.OfCustomToolChoice
-	}
-	return nil
 }
 
 // Returns a pointer to the underlying variant's property, if present.
@@ -4203,15 +4066,6 @@ func (u *ChatCompletionNewParamsFunctionCallUnion) UnmarshalJSON(data []byte) er
 	return apijson.UnmarshalRoot(data, u)
 }
 
-func (u *ChatCompletionNewParamsFunctionCallUnion) asAny() any {
-	if !param.IsOmitted(u.OfFunctionCallMode) {
-		return &u.OfFunctionCallMode
-	} else if !param.IsOmitted(u.OfFunctionCallOption) {
-		return u.OfFunctionCallOption
-	}
-	return nil
-}
-
 // `none` means the model will not call a function and instead generates a message.
 // `auto` means the model can pick between generating a message or calling a
 // function.
@@ -4420,17 +4274,6 @@ func (u *ChatCompletionNewParamsResponseFormatUnion) UnmarshalJSON(data []byte) 
 	return apijson.UnmarshalRoot(data, u)
 }
 
-func (u *ChatCompletionNewParamsResponseFormatUnion) asAny() any {
-	if !param.IsOmitted(u.OfText) {
-		return u.OfText
-	} else if !param.IsOmitted(u.OfJSONSchema) {
-		return u.OfJSONSchema
-	} else if !param.IsOmitted(u.OfJSONObject) {
-		return u.OfJSONObject
-	}
-	return nil
-}
-
 // Returns a pointer to the underlying variant's property, if present.
 func (u ChatCompletionNewParamsResponseFormatUnion) GetJSONSchema() *shared.ResponseFormatJSONSchemaJSONSchemaParam {
 	if vt := u.OfJSONSchema; vt != nil {
@@ -4505,15 +4348,6 @@ func (u ChatCompletionNewParamsStopUnion) MarshalJSON() ([]byte, error) {
 }
 func (u *ChatCompletionNewParamsStopUnion) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, u)
-}
-
-func (u *ChatCompletionNewParamsStopUnion) asAny() any {
-	if !param.IsOmitted(u.OfString) {
-		return &u.OfString.Value
-	} else if !param.IsOmitted(u.OfStringArray) {
-		return &u.OfStringArray
-	}
-	return nil
 }
 
 // Constrains the verbosity of the model's response. Lower values will result in

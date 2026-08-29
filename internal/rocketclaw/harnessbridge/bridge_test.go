@@ -4754,7 +4754,7 @@ func seedReplayText(items []responses.ResponseInputItemUnionParam) string {
 		case item.OfFunctionCall != nil:
 			parts = append(parts, "assistant tool call "+item.OfFunctionCall.Name+": "+item.OfFunctionCall.Arguments)
 		case item.OfFunctionCallOutput != nil:
-			parts = append(parts, "tool result "+item.OfFunctionCallOutput.CallID+": "+seedFunctionCallOutputText(item.OfFunctionCallOutput))
+			parts = append(parts, "tool result "+item.OfFunctionCallOutput.CallID.Or("")+": "+seedFunctionCallOutputText(item.OfFunctionCallOutput))
 		case item.OfWebSearchCall != nil:
 			data, err := json.Marshal(item.OfWebSearchCall.Action)
 			if err == nil {
