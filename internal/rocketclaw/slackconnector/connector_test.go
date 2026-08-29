@@ -460,6 +460,7 @@ func TestCanonicalSlackCommand(t *testing.T) {
 		{name: "agent alias", text: ":control_knobs: planner", want: "$agent planner", ok: true},
 		{name: "bare agent alias", text: ":control_knobs:", want: "$agent", ok: true},
 		{name: "agent without boundary", text: "🎛planner"},
+		{name: "unknown alias", text: ":custom: finish"},
 		{name: "ordinary", text: "ship it"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
