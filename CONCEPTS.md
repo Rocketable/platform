@@ -52,9 +52,13 @@ Replaced by Slack Steer and Enqueued Slack Message.
 
 ### Slack Side Ask
 
-A private, modal-only one-question ask of a channel agent, opened from the 💭 footer button on a completed 💬 answer card in a Managed Slack Thread.
+A private, modal-only one-question ask of a channel agent, opened from the RocketClaw Actions message menu on a completed 💬 answer card in a Managed Slack Thread.
 
 A Slack Side Ask uses thread history up to the clicked card, never posts to the thread, and does not take the thread's active-turn slot. Dismissing the modal aborts only that Side Ask.
+
+### Slack Message Menu
+
+A single Slack `...` menu shortcut, RocketClaw Actions, that opens a modal whose buttons match the live controls for that message (the same work as emoji reactions, plus opening Side Ask). Unauthorized clicks are silent. A message outside a RocketClaw conversation, or a managed-thread message with no live control, gets a short close-only explanation.
 
 ## Quickbench
 
