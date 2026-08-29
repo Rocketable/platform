@@ -2277,9 +2277,24 @@ func sendLoginBrowserCallback(ctx context.Context, t *testing.T, done <-chan log
 func requireLoginBrowserPortAvailable(t *testing.T) {
 	t.Helper()
 
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", defaultLoginPort))
+	addr := fmt.Sprintf("127.0.0.1:%d", defaultLoginPort)
+	deadline := time.Now().Add(time.Second)
+
+	var err error
+
+	for time.Now().Before(deadline) {
+		var listener net.Listener
+
+		listener, err = net.Listen("tcp", addr)
+		if err == nil {
+			require.NoError(t, listener.Close())
+			return
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
 	require.NoError(t, err)
-	require.NoError(t, listener.Close())
 }
 
 func testJWT(payload map[string]any) string {
