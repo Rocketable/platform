@@ -139,10 +139,17 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 		return "", fmt.Errorf("codemode context: %w", err)
 	}
 
+	_, prog, errSource := starlark.SourceProgramOptions(options, "codemode.star", source, predeclared.Has)
+	if errSource != nil {
+		return "", wrapParseError(errSource)
+	}
+
 	thread, stopCancel := newCancellableThread(ctx, "codemode", stepBudget)
 	defer stopCancel()
 
-	globals, errExec := starlark.ExecFileOptions(options, thread, "codemode.star", source, predeclared)
+	globals, errExec := prog.Init(thread, predeclared)
+	globals.Freeze()
+
 	if errExec != nil {
 		if errCtx := context.Cause(ctx); errCtx != nil {
 			return "", fmt.Errorf("codemode context: %w", errCtx)
@@ -315,4 +322,96 @@ func validateArgs(schemaMap, args map[string]any) error {
 	}
 
 	return nil
+}
+
+type parseCategory string
+
+const (
+	parseCategoryUnexpectedNewline   parseCategory = "unexpected_newline"
+	parseCategoryUnterminatedString  parseCategory = "unterminated_string"
+	parseCategoryInvalidEscape       parseCategory = "invalid_escape"
+	parseCategoryUnexpectedCharacter parseCategory = "unexpected_character"
+	parseCategorySyntax              parseCategory = "syntax"
+)
+
+type parseDiagnostic struct {
+	Phase            string `json:"phase"`
+	Category         string `json:"category"`
+	Message          string `json:"message"`
+	Line             int    `json:"line"`
+	Column           int    `json:"column"`
+	ExecutionStarted bool   `json:"execution_started"`
+	LikelyCause      string `json:"likely_cause"`
+	RecommendedFix   string `json:"recommended_fix"`
+}
+
+type parseError struct {
+	category       parseCategory
+	message        string
+	line, column   int
+	likelyCause    string
+	recommendedFix string
+	err            error
+}
+
+func wrapParseError(err error) error {
+	syn, ok := errors.AsType[syntax.Error](err)
+	if !ok {
+		return fmt.Errorf("execute codemode: %w", err)
+	}
+
+	out := parseError{
+		category:       parseCategorySyntax,
+		message:        syn.Msg,
+		line:           int(syn.Pos.Line),
+		column:         int(syn.Pos.Col),
+		likelyCause:    "Starlark rejected the wrapper source",
+		recommendedFix: "Fix the Starlark syntax, then rerun. Failed wrapper output is not evidence.",
+		err:            syn,
+	}
+
+	classifiers := []struct {
+		needle   string
+		category parseCategory
+		cause    string
+		fix      string
+	}{
+		{"unexpected newline", parseCategoryUnexpectedNewline, "A single-line string contains a literal newline", "Use a raw triple-quoted string (r'''...''') or a workspace-local helper"},
+		{"unexpected EOF in string", parseCategoryUnterminatedString, "A string was not closed before the end of the program", "Close the string, or use r'''...''' for multiline source"},
+		{"invalid escape", parseCategoryInvalidEscape, `Ordinary "..." treats backslash as a Starlark escape`, `Use a raw string (r"...") or r'''...'''`},
+		{"unexpected input character", parseCategoryUnexpectedCharacter, "A quote closed too early, so a character such as $ was seen as Starlark", "Keep the character inside a correctly delimited string (r'''...''' for multiline)"},
+		{"want ','", parseCategorySyntax, "Missing comma or a quote closed too early", "Fix the Starlark syntax around that token, then rerun"},
+	}
+
+	for _, classifier := range classifiers {
+		if strings.Contains(syn.Msg, classifier.needle) {
+			out.category = classifier.category
+			out.likelyCause = classifier.cause
+			out.recommendedFix = classifier.fix
+
+			break
+		}
+	}
+
+	return &out
+}
+
+func (e *parseError) Unwrap() error { return e.err }
+
+func (e *parseError) Error() string {
+	raw, errMarshal := json.Marshal(parseDiagnostic{
+		Phase:            "codemode_parse",
+		Category:         string(e.category),
+		Message:          e.message,
+		Line:             e.line,
+		Column:           e.column,
+		ExecutionStarted: false,
+		LikelyCause:      e.likelyCause,
+		RecommendedFix:   e.recommendedFix,
+	})
+	if errMarshal != nil {
+		return e.message
+	}
+
+	return string(raw)
 }

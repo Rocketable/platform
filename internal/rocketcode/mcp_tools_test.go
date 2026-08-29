@@ -74,6 +74,10 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	assert.Contains(t, execDesc, "gather/map/race/race_first")
 	assert.Contains(t, execDesc, "No import/from")
 	assert.Contains(t, execDesc, `r"..."`)
+	assert.Contains(t, execDesc, `r'''`)
+	assert.Contains(t, execDesc, "single-line")
+	assert.Contains(t, execDesc, "nothing ran")
+	assert.Contains(t, execDesc, "str(result)")
 	assert.Contains(t, execDesc, "not varargs")
 	assert.Contains(t, execDesc, `gather([lambda: read(filePath="a")`)
 
@@ -82,6 +86,8 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	codeDesc, _ := codeProp["description"].(string)
 	assert.Contains(t, codeDesc, "Starlark source")
 	assert.Contains(t, codeDesc, `r"..."`)
+	assert.Contains(t, codeDesc, `r'''`)
+	assert.Contains(t, codeDesc, "single-line")
 	assert.Contains(t, codeDesc, "not varargs")
 
 	prompt := withCodeModeSystemPrompt("base", model, hosts, nil)
@@ -89,6 +95,9 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	assert.Contains(t, prompt, "read(")
 	assert.Contains(t, prompt, "No import/from")
 	assert.Contains(t, prompt, `r"..."`)
+	assert.Contains(t, prompt, `r'''`)
+	assert.Contains(t, prompt, "single-line")
+	assert.Contains(t, prompt, "str(result)")
 	assert.Contains(t, prompt, "Concurrency (callables is one list")
 	assert.Contains(t, prompt, "gather([lambda:")
 	assert.Contains(t, prompt, "race_first([lambda:")
@@ -296,6 +305,32 @@ func TestCodeModeHostsSurviveModelWithoutHosts(t *testing.T) {
 	result, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return read(filePath=\"a.txt\")\n"}`), nil, emptyToolCallMetadata())
 	require.NoError(t, err)
 	assert.Contains(t, result.Output, "hello")
+}
+
+func TestExecuteParseFailureDoesNotRunHost(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = root.Close() })
+
+	var permissions PermissionSet
+	require.NoError(t, permissions.Allow("read", "*"))
+
+	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
+	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, nil)}
+	agent := &Agent{Permission: permissions}
+	model, hosts := factory.assembleTools(agent)
+	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts}
+	ctx := withToolCallContext(t.Context(), looper, nil)
+
+	run := model[executeToolName]
+	_, err = run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return bash(command=r\"python3 - <<'PY'\nprint(\"hello\")\nPY\")\n"}`), nil, emptyToolCallMetadata())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"phase":"codemode_parse"`)
+	assert.Contains(t, err.Error(), `"execution_started":false`)
+	assert.Contains(t, err.Error(), "unexpected newline")
 }
 
 func TestExecuteNestedToolEmitsThinkingDiagnostic(t *testing.T) {

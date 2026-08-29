@@ -2,6 +2,7 @@ package codemode
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -38,12 +39,111 @@ func TestRunRawStringKeepsUnknownEscapes(t *testing.T) {
 	}
 }
 
-func TestRunQuotedUnknownEscapeFails(t *testing.T) {
-	_, err := Run(t.Context(), `def main():
-    return "\("
+func TestRunParseFailureDoesNotCallHost(t *testing.T) {
+	cases := []struct {
+		name, source, message string
+		category              parseCategory
+	}{
+		{
+			name:     "raw single-line newline",
+			source:   "def main():\n    return bash(command=r\"python3 - <<'PY'\nprint(\"hello\")\nPY\")\n",
+			category: parseCategoryUnexpectedNewline,
+			message:  "unexpected newline in string",
+		},
+		{
+			name:     "unterminated string",
+			source:   "def main():\n    return \"hello",
+			category: parseCategoryUnterminatedString,
+			message:  "unexpected EOF in string",
+		},
+		{
+			name:     "invalid escape",
+			source:   "def main():\n    return \"\\(\"\n",
+			category: parseCategoryInvalidEscape,
+			message:  "invalid escape sequence",
+		},
+		{
+			name:     "exposed dollar",
+			source:   "def main():\n    return \"foo\" $bar\n",
+			category: parseCategoryUnexpectedCharacter,
+			message:  "unexpected input character '$'",
+		},
+		{
+			name:     "missing comma",
+			source:   "def main():\n    return bash(command=\"a\" command=\"b\")\n",
+			category: parseCategorySyntax,
+			message:  "want ','",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+
+			_, err := Run(t.Context(), tc.source, nil, allowAll, nilCall, noToolCallObserver, []HostTool{{
+				Name: "bash",
+				Call: func(context.Context, map[string]any) (string, error) {
+					called = true
+					return "dispatched", nil
+				},
+			}})
+			if err == nil {
+				t.Fatal("Run() error = nil, want parse diagnostic")
+			}
+
+			if called {
+				t.Fatal("host tool dispatched on parse failure")
+			}
+
+			var got parseDiagnostic
+			if errUnmarshal := json.Unmarshal([]byte(err.Error()), &got); errUnmarshal != nil {
+				t.Fatalf("Run() error %q is not parse JSON: %v", err, errUnmarshal)
+			}
+
+			if got.Phase != "codemode_parse" || got.ExecutionStarted || got.Category != string(tc.category) {
+				t.Fatalf("diagnostic %+v, want phase=codemode_parse execution_started=false category=%s", got, tc.category)
+			}
+
+			if !strings.Contains(got.Message, tc.message) || got.Line < 1 || got.Column < 1 || got.LikelyCause == "" || got.RecommendedFix == "" {
+				t.Fatalf("diagnostic %+v, want message containing %q with line/column/cause/fix", got, tc.message)
+			}
+		})
+	}
+}
+
+func TestRunRawTripleQuotedMultiline(t *testing.T) {
+	var got string
+
+	out, err := Run(t.Context(), `def main():
+    return bash(command=r'''python3 - <<'PY'
+print("hello")
+PY''')
+`, nil, allowAll, nilCall, noToolCallObserver, []HostTool{{
+		Name: "bash",
+		Call: func(_ context.Context, args map[string]any) (string, error) {
+			got, _ = args["command"].(string)
+			return "ok", nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if out != "ok" || !strings.Contains(got, "print(\"hello\")") || !strings.Contains(got, "\n") {
+		t.Fatalf("command = %q, result = %q", got, out)
+	}
+}
+
+func TestRunDollarInsideRawString(t *testing.T) {
+	got, err := Run(t.Context(), `def main():
+    return r'''rg -F -- "$pattern" file.txt'''
 `, nil, allowAll, nilCall, noToolCallObserver, nil)
-	if err == nil || !strings.Contains(err.Error(), "invalid escape sequence") {
-		t.Fatalf("Run() error = %v, want invalid escape sequence", err)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	if got != `rg -F -- "$pattern" file.txt` {
+		t.Fatalf("Run() = %q", got)
 	}
 }
 
