@@ -22,7 +22,9 @@ const (
 	mcpPermissionBucket = "mcp"
 	// executeNestedToolPrefix marks nested code-mode tool diagnostics for thinking UI.
 	executeNestedToolPrefix = executeToolName + " → "
-	codeModeRawStringRule   = `Use raw strings (r"..." or r'''...''') for shell, regex, and paths. Ordinary "..." rejects unknown escapes such as \( \. \$.`
+	codeModeRawStringRule   = `Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. r"..." and r'...' are raw single-line strings — the r prefix does not allow newlines. Multiline, heredocs, or nested quotes: r'''...'''. Example: bash(command=r'''python3 - <<'PY'
+print("hi")
+PY''') — not r"..." with a real newline. $ is valid inside a closed string, not Starlark interpolation. Ordinary "..." rejects unknown escapes such as \( \. \$. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun.`
 )
 
 func newMCPRegistry(workspace string, servers map[string]mcpclient.ServerConfig) (*mcpclient.Registry, error) {
