@@ -27,7 +27,6 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/cronjob"
-	"github.com/Rocketable/platform/internal/rocketclaw/emoji"
 	"github.com/Rocketable/platform/internal/rocketclaw/events"
 	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
@@ -38,10 +37,7 @@ const (
 	maxSlackImageDownloadBytes                                                                                                   = 16 << 20
 	slackTextLimit, slackBlockTextLimit, slackPreferredChunkSize, slackModalBlockLimit, slackPlanTaskLimit                       = 3800, 3000, 3200, 100, 50
 	slackAdoptHistoryLimit                                                                                                       = 50
-	slackRobotReaction                                                                                                           = "robot_face"
-	slackExternalMCPRelayReaction                                                                                                = "satellite_antenna"
-	slackBufferedReaction, slackGoalStopSignReaction, slackGoalStopButtonReaction, slackGoalCompleteReaction                     = "hourglass_flowing_sand", "octagonal_sign", "stop_button", "white_check_mark"
-	slackInterruptionReaction, slackImmediatePlaceholder, slackAnswerPlaceholder                                                 = "exclamation", "_Thinking..._", "\u200B"
+	slackImmediatePlaceholder, slackAnswerPlaceholder                                                                            = "_Thinking..._", "\u200B"
 	slackThinkingFlushInterval                                                                                                   = 2 * time.Second
 	slackQuestionCustomActionID, slackQuestionCustomViewCallbackID, slackQuestionCustomBlockID, slackQuestionCustomInputActionID = "custom_answer", "ask_user_question_custom", "custom_answer", "answer"
 	slackAgentSwitchSelectActionID                                                                                               = "agent_switch_select"
@@ -49,8 +45,6 @@ const (
 	slackSideAskViewCallbackID                                                                                                   = "side_ask"
 	slackSideAskAgentBlockID, slackSideAskAgentActionID                                                                          = "side_ask_agent", "side_ask_agent"
 	slackSideAskQuestionBlockID, slackSideAskQuestionActionID                                                                    = "side_ask_question", "side_ask_question"
-	slackEnvelopeReaction                                                                                                        = "envelope"
-	slackFastUpButtonReaction, slackBlackUpPointingDoubleTriangleReaction, slackArrowDoubleUpReaction                            = "fast_up_button", "black_up_pointing_double_triangle", "arrow_double_up"
 	slackQueueJumpActionID, slackQueueHideActionID                                                                               = "thread_queue_jump", "thread_queue_hide"
 	slackDollarCommandHelp                                                                                                       = "$goal <objective> - 🏁 Start a goal\n" +
 		"$workflow <name> [args] - ⏩ Run a workflow\n" +
@@ -4650,7 +4644,7 @@ func canonicalSlackCommand(text string) (string, bool) {
 		return strings.TrimSpace("$cron " + strings.TrimSpace(after)), true
 	}
 
-	canonicalEmoji := emoji.CanonicalizeLeadingAlias(text)
+	canonicalEmoji := canonicalizeLeadingSlackEmoji(text)
 	if after, ok := strings.CutPrefix(canonicalEmoji, "🔁"); ok {
 		return "$goal " + strings.TrimSpace(after), true
 	}
