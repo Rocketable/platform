@@ -22,15 +22,11 @@ Usage:
   rocketclaw fc list [--since 24h|RFC3339] [--until RFC3339] [--limit N] [--no-message-preview]
   rocketclaw fc observe [--follow|-f] <conversation-id>
   rocketclaw fc delete <conversation-id>
-  rocketclaw fc check
-  rocketclaw fc migrate
 
 Commands:
   list     List stored rocketcode sessions.
   observe  Print one conversation's stored rocketcode session entries as JSONL.
   delete   Delete one rocketcode session.
-  check    Check the rocketclaw state store.
-  migrate  Copy missing sqlite rows into the PostgreSQL store.
 `
 
 func runFC(args []string) error {
@@ -40,7 +36,7 @@ func runFC(args []string) error {
 
 	var secretsARN string
 	switch args[0] {
-	case "list", "observe", "delete", "check", "migrate":
+	case "list", "observe", "delete":
 		var err error
 		secretsARN, err = parseFCSecretsARN(args[1:])
 		if err != nil {
@@ -65,12 +61,8 @@ func runFC(args []string) error {
 		return runFCListIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, args[1:], os.Stdout)
 	case "observe":
 		return runFCObserveIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, args[1:], os.Stdout)
-	case "delete":
-		return runFCDeleteIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, args[1:], os.Stdout)
-	case "migrate":
-		return runFCMigrateIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, args[1:], os.Stdout)
 	default:
-		return runFCCheckIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, args[1:], os.Stdout)
+		return runFCDeleteIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, args[1:], os.Stdout)
 	}
 }
 
@@ -90,65 +82,6 @@ func parseFCSecretsARN(args []string) (string, error) {
 	return *secretsARN, nil
 }
 
-var (
-	errFCMigrateArgs       = errors.New("migrate does not accept arguments")
-	errParseFCMigrateFlags = errors.New("parse rocketcode migrate flags")
-)
-
-func runFCMigrateIn(workspace, runtimeDir, databaseURL string, args []string, out io.Writer) error {
-	flagSet := flag.NewFlagSet("rocketclaw fc migrate", flag.ContinueOnError)
-	flagSet.String(secretsARNFlag, "", secretsARNUsage)
-
-	if err := flagSet.Parse(args); err != nil {
-		return fmt.Errorf("%w: %w", errParseFCMigrateFlags, err)
-	}
-
-	if len(flagSet.Args()) != 0 {
-		return errFCMigrateArgs
-	}
-
-	inserted, err := backend.MigrateSQLite(context.Background(), workspace, runtimeDir, databaseURL, slog.New(slog.DiscardHandler), out)
-	if err != nil {
-		return fmt.Errorf("migrate sqlite store: %w", err)
-	}
-
-	if _, err := fmt.Fprintf(out, "inserted %d rows\n", inserted); err != nil {
-		return fmt.Errorf("write rocketcode migrate result: %w", err)
-	}
-
-	return nil
-}
-
-func runFCCheckIn(workspace, runtimeDir, databaseURL string, args []string, out io.Writer) error {
-	flagSet := flag.NewFlagSet("rocketclaw fc check", flag.ContinueOnError)
-	flagSet.String(secretsARNFlag, "", secretsARNUsage)
-
-	if err := flagSet.Parse(args); err != nil {
-		return fmt.Errorf("parse rocketcode check flags: %w", err)
-	}
-
-	if len(flagSet.Args()) != 0 {
-		return errors.New("check does not accept arguments")
-	}
-
-	lock, err := acquireFCMutationLock(workspace, runtimeDir, "check")
-	if err != nil {
-		return fmt.Errorf("check rocketclaw state store: %w", err)
-	}
-
-	defer func() { _ = lock.Close() }()
-
-	if err := backend.CheckAndRecoverSessionDB(context.Background(), databaseURL, slog.New(slog.DiscardHandler)); err != nil {
-		return fmt.Errorf("check rocketclaw state store: %w", err)
-	}
-
-	if _, err := fmt.Fprintln(out, "state store ok"); err != nil {
-		return fmt.Errorf("write rocketcode check result: %w", err)
-	}
-
-	return nil
-}
-
 func runFCDeleteIn(workspace, runtimeDir, databaseURL string, args []string, out io.Writer) error {
 	flagSet := flag.NewFlagSet("rocketclaw fc delete", flag.ContinueOnError)
 	flagSet.String(secretsARNFlag, "", secretsARNUsage)
@@ -164,13 +97,6 @@ func runFCDeleteIn(workspace, runtimeDir, databaseURL string, args []string, out
 
 	conversationID := strings.TrimSpace(remaining[0])
 
-	lock, err := acquireFCMutationLock(workspace, runtimeDir, "delete")
-	if err != nil {
-		return fmt.Errorf("delete rocketcode session: %w", err)
-	}
-
-	defer func() { _ = lock.Close() }()
-
 	deleted, err := backend.DeleteSessionIn(context.Background(), workspace, runtimeDir, databaseURL, conversationID)
 	if err != nil {
 		return fmt.Errorf("delete rocketcode session: %w", err)
@@ -181,19 +107,6 @@ func runFCDeleteIn(workspace, runtimeDir, databaseURL string, args []string, out
 	}
 
 	return nil
-}
-
-func acquireFCMutationLock(workspace, runtimeDir, command string) (*backend.StateStoreLock, error) {
-	lock, err := backend.AcquireStateStoreLock(workspace, runtimeDir)
-	if errors.Is(err, backend.ErrStateStoreLocked) {
-		return nil, fmt.Errorf("rocketclaw daemon is running; stop it before running fc %s: %w", command, err)
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("lock rocketcode session db for fc %s: %w", command, err)
-	}
-
-	return lock, nil
 }
 
 func runFCListIn(workspace, runtimeDir, databaseURL string, args []string, out io.Writer) error {

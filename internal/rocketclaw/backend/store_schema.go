@@ -12,8 +12,6 @@ import (
 	migrate "github.com/rubenv/sql-migrate"
 )
 
-const sessionDBSchemaVersion = 9
-
 var errApplySchemaMigrations = errors.New("apply rocketclaw state schema migrations")
 
 //go:embed migrations/*.sql

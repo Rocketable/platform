@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,8 +13,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	_ "modernc.org/sqlite"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
@@ -229,9 +226,6 @@ func TestRunFCDispatchesConfigBackedCommands(t *testing.T) {
 
 	output = captureStdout(t, func() error { return runFC([]string{"delete", "main"}) })
 	assert.Contains(t, output, "deleted 1 turns")
-
-	output = captureStdout(t, func() error { return runFC([]string{"check"}) })
-	assert.Equal(t, "state store ok\n", output)
 }
 
 func TestRunFCNoArgsPrintsHelpWithoutConfig(t *testing.T) {
@@ -245,8 +239,6 @@ func TestRunFCNoArgsPrintsHelpWithoutConfig(t *testing.T) {
 	assert.Contains(t, output, "rocketclaw fc list")
 	assert.Contains(t, output, "rocketclaw fc observe")
 	assert.Contains(t, output, "rocketclaw fc delete")
-	assert.Contains(t, output, "rocketclaw fc check")
-	assert.Contains(t, output, "rocketclaw fc migrate")
 }
 
 func TestRunFCHelpAliasesLoadConfigAndPrintHelp(t *testing.T) {
@@ -263,9 +255,19 @@ func TestRunFCHelpAliasesLoadConfigAndPrintHelp(t *testing.T) {
 		assert.Contains(t, output, "rocketclaw fc list")
 		assert.Contains(t, output, "rocketclaw fc observe")
 		assert.Contains(t, output, "rocketclaw fc delete")
-		assert.Contains(t, output, "rocketclaw fc check")
-		assert.Contains(t, output, "rocketclaw fc migrate")
 	}
+}
+
+func TestRunFCRequiresConfig(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	err := runFC([]string{"list"})
+	require.ErrorContains(t, err, "load config")
+}
+
+func TestRunFCRejectsBadFlag(t *testing.T) {
+	err := runFC([]string{"list", "--bogus"})
+	require.ErrorContains(t, err, "parse rocketclaw fc flags")
 }
 
 func TestRunFCUnknownCommand(t *testing.T) {
@@ -334,146 +336,6 @@ func TestRunFCDeleteMissingDBReportsZero(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, runFCDeleteIn(t.TempDir(), config.DefaultRuntimeDir, dsn, []string{"main"}, &out))
 	assert.Contains(t, out.String(), "deleted 0 turns")
-}
-
-func TestRunFCDeleteRefusesWhileStateStoreLocked(t *testing.T) {
-	workspace := t.TempDir()
-	lock, err := backend.AcquireStateStoreLock(workspace, ".rocketclaw")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, lock.Close()) })
-
-	err = runFCDeleteIn(workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), []string{"main"}, io.Discard)
-	require.ErrorContains(t, err, "rocketclaw daemon is running; stop it before running fc delete")
-	require.ErrorIs(t, err, backend.ErrStateStoreLocked)
-}
-
-func TestRunFCCheck(t *testing.T) {
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, err)
-	var out bytes.Buffer
-	require.NoError(t, runFCCheckIn(t.TempDir(), config.DefaultRuntimeDir, dsn, nil, &out))
-	assert.Equal(t, "state store ok\n", out.String())
-}
-
-func TestRunFCCheckReportsStoreError(t *testing.T) {
-	err := runFCCheckIn(t.TempDir(), config.DefaultRuntimeDir, "postgres://127.0.0.1:1/none?sslmode=disable", nil, io.Discard)
-	require.Error(t, err)
-
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, err)
-	err = runFCCheckIn(t.TempDir(), config.DefaultRuntimeDir, dsn, nil, failingWriter{})
-	require.ErrorIs(t, err, errFailingWrite)
-}
-
-func TestRunFCCheckRejectsArguments(t *testing.T) {
-	var out bytes.Buffer
-	err := runFCCheckIn(t.TempDir(), config.DefaultRuntimeDir, "", []string{"extra"}, &out)
-	require.ErrorContains(t, err, "check does not accept arguments")
-}
-
-func TestRunFCCheckRefusesWhileStateStoreLocked(t *testing.T) {
-	workspace := t.TempDir()
-	lock, err := backend.AcquireStateStoreLock(workspace, ".rocketclaw")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, lock.Close()) })
-
-	err = runFCCheckIn(workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), nil, io.Discard)
-	require.ErrorContains(t, err, "rocketclaw daemon is running; stop it before running fc check")
-	require.ErrorIs(t, err, backend.ErrStateStoreLocked)
-}
-
-func TestRunFCMigrateCopiesThenInsertsZero(t *testing.T) {
-	workspace := t.TempDir()
-	t.Chdir(workspace)
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, err)
-	writeFCSQLite(t, workspace)
-	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(fcTestConfigJSONWithDSN(dsn)), 0o600))
-
-	output := captureStdout(t, func() error { return runFC([]string{"migrate"}) })
-	assert.Equal(t, migrateProgressOutput(2), output)
-
-	output = captureStdout(t, func() error { return runFC([]string{"migrate"}) })
-	assert.Equal(t, migrateProgressOutput(0), output)
-}
-
-func TestRunFCMigrateRejectsArguments(t *testing.T) {
-	err := runFCMigrateIn(t.TempDir(), config.DefaultRuntimeDir, "", []string{"extra"}, io.Discard)
-	require.ErrorIs(t, err, errFCMigrateArgs)
-}
-
-func TestRunFCMigrateRejectsBadFlag(t *testing.T) {
-	err := runFCMigrateIn(t.TempDir(), config.DefaultRuntimeDir, "", []string{"--bad"}, io.Discard)
-	require.ErrorIs(t, err, errParseFCMigrateFlags)
-}
-
-func TestRunFCMigrateReportsWriterError(t *testing.T) {
-	workspace := t.TempDir()
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, err)
-	writeFCSQLite(t, workspace)
-	err = runFCMigrateIn(workspace, config.DefaultRuntimeDir, dsn, nil, failingWriter{})
-	require.ErrorIs(t, err, errFailingWrite)
-}
-
-func TestRunFCMigrateRequiresSQLiteFile(t *testing.T) {
-	workspace := t.TempDir()
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, err)
-	_, err = fcAppendSessionEntryID(t.Context(), workspace, "main", fcTestEntry("keep", "me"))
-	require.NoError(t, err)
-	dsn = fcTestDSN(workspace)
-
-	var out bytes.Buffer
-	err = runFCMigrateIn(workspace, config.DefaultRuntimeDir, dsn, nil, &out)
-	require.ErrorIs(t, err, os.ErrNotExist)
-	assert.Empty(t, out.String())
-
-	summaries, err := backend.ListSessionsInOptions(t.Context(), workspace, config.DefaultRuntimeDir, dsn, backend.SessionListOptions{})
-	require.NoError(t, err)
-	require.Len(t, summaries, 1)
-}
-
-func TestRunFCMigrateRequiresConfig(t *testing.T) {
-	workspace := t.TempDir()
-	t.Chdir(workspace)
-	writeFCSQLite(t, workspace)
-
-	err := runFC([]string{"migrate"})
-	require.ErrorIs(t, err, os.ErrNotExist)
-}
-
-func migrateProgressOutput(inserted int64) string {
-	return fmt.Sprintf(`managed_conversations: 1
-conversation_goals: 0
-external_mcp_sessions: 0
-scheduled_messages: 0
-cron_schedules: 0
-cron_schedule_runs: 0
-pending_restart_notifications: 0
-active_turns: 0
-session_entries: 1
-inserted %d rows
-`, inserted)
-}
-
-func writeFCSQLite(t *testing.T, workspace string) {
-	t.Helper()
-	sqlitePath := filepath.Join(workspace, config.DefaultRuntimeDir, "state.sqlite3")
-	require.NoError(t, os.MkdirAll(filepath.Dir(sqlitePath), 0o755))
-	src, err := sql.Open("sqlite", sqlitePath)
-	require.NoError(t, err)
-	_, err = src.Exec(`CREATE TABLE session_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT NOT NULL, entry_json TEXT NOT NULL, entry_timestamp TEXT NOT NULL)`)
-	require.NoError(t, err)
-	_, err = src.Exec(`CREATE TABLE managed_conversations (conversation_id TEXT PRIMARY KEY, agent TEXT NOT NULL, created_by TEXT NOT NULL)`)
-	require.NoError(t, err)
-	_, err = src.Exec(`INSERT INTO managed_conversations VALUES ('main', 'planner', 'human')`)
-	require.NoError(t, err)
-	_, err = src.Exec(`INSERT INTO session_entries (id, conversation_id, entry_json, entry_timestamp) VALUES (7, 'main', '{"version":1}', ?)`, time.Unix(1, 0).UTC().Format(time.RFC3339Nano))
-	require.NoError(t, err)
-	_, err = src.Exec(`PRAGMA user_version = 9`)
-	require.NoError(t, err)
-	require.NoError(t, src.Close())
 }
 
 func TestWriteFCListReportsFlushError(t *testing.T) {

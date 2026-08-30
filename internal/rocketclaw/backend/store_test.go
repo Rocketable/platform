@@ -430,13 +430,14 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 4, n)
+	assert.Equal(t, 5, n)
+	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
 	second, err := NewSessionServiceIn(workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop(context.Background())) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 4, n)
+	assert.Equal(t, 5, n)
 }
 
 func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
@@ -449,7 +450,7 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 4, n)
+	assert.Equal(t, 5, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 
@@ -821,9 +822,6 @@ func TestNewSessionServiceReportsInvalidDatabaseURL(t *testing.T) {
 	_, err = NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, "postgres://u:s3cret@127.0.0.1:1/none?sslmode=disable", logger)
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "s3cret")
-
-	err = CheckAndRecoverSessionDB(t.Context(), "postgres://127.0.0.1:1/none?sslmode=disable", logger)
-	require.Error(t, err)
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)

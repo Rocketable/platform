@@ -172,13 +172,7 @@ The shared language frontends and backend import. A frontend drops protocol mess
 
 RocketClaw's durable database for sessions, Managed Slack Thread routing, goals, cron, scheduled messages, the Thread Queue, External MCP bindings, and restart handoffs.
 
-The State Store is PostgreSQL. `run` ignores `state.sqlite3`.
-
-### Operator SQLite Migrator
-
-`fc migrate` copies missing v9 `state.sqlite3` rows into the selected PostgreSQL store. The operator runs it; start does not.
-
-After every workspace has moved, SQLite support is deleted. It is not a historical-format migrator.
+The State Store is PostgreSQL.
 
 ## Relationships
 
@@ -190,7 +184,6 @@ After every workspace has moved, SQLite support is deleted. It is not a historic
 - A Slack Side Ask is opened from a completed 💬 answer card in a Managed Slack Thread and does not become that thread's turn.
 - A BAR is authored, packed, run, and ranked by Quickbench; an ELO Scorer belongs to one BAR.
 - A Managed Slack Thread, Thread Queue, and External MCP binding persist in the State Store.
-- An Operator SQLite Migrator copies missing `state.sqlite3` rows into the State Store.
 - Development MCP lint and run_turn consume Request-Carried Context and read Overlay Clones; Reload replaces those clones.
 - Frontends and the backend import Protocol. Frontends do not import the backend.
 - The process assembler constructs the backend and the frontends.

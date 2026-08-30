@@ -133,7 +133,7 @@ Concurrent tool calls inside one script use `gather`, `map`, `race`, and `race_f
 
 ## Current State Schema
 
-Set `database_url` on the selected config file. Fresh stores apply embedded SQL migrations. `run` ignores `state.sqlite3`. `fc migrate` copies missing v9 rows. `fc check` pings PostgreSQL. Isolation is one DSN per workspace.
+Set `database_url` on the selected config file. Fresh stores apply embedded SQL migrations. Isolation is one DSN per workspace.
 
 ## Model Providers And Credentials
 
@@ -308,8 +308,7 @@ Running `rocketclaw` without a subcommand starts the server when `femtoclaw.json
 | `rocketclaw oai logout [provider]` | Removes only the selected provider's local credential; omission selects `openai`. |
 | `rocketclaw fc list [--since 24h|RFC3339] [--until RFC3339] [--limit N] [--no-message-preview]` | Lists stored RocketCode sessions. |
 | `rocketclaw fc observe [--follow|-f] <conversation-id>` | Prints one conversation's stored session entries as JSONL. The conversation ID is required. |
-| `rocketclaw fc delete <conversation-id>` | Deletes a stored session when the daemon does not own the state store. |
-| `rocketclaw fc migrate` | Copies missing v9 `state.sqlite3` rows into the selected PostgreSQL store. |
+| `rocketclaw fc delete <conversation-id>` | Deletes a stored session. |
 | `rocketclaw help`, `rocketclaw -h`, `rocketclaw --help` | Prints top-level help. |
 
 For `lint` and `agent-graph`, `next` builds a temporary startup-equivalent runtime view from embedded assets, overlays, and workspace files. `current` inspects the selected generated runtime directory as it exists now.
