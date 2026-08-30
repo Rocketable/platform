@@ -76,13 +76,13 @@ The single CLI/product surface that packs, unpacks, dumps, runs, and ELO-ranks B
 
 The human actor a connector attributes to a human-originated prompt.
 
-Each connector chooses the string. Clockwork prints it in the model header. Principal is model-visible only. Authorization uses connector identity, not this string.
+Each connector chooses the string. The backend prints it in the model header. Principal is model-visible only. Authorization uses connector identity, not this string.
 
 ## Development MCP
 
 ### Development MCP
 
-A separate inbound MCP door for a coding agent to try overlay deltas against the live RocketClaw without writing those files onto the server.
+A separate inbound MCP frontend for a coding agent to try overlay deltas against the live RocketClaw without writing those files onto the server.
 
 It is off until enabled, uses its own credential, and is not External MCP. After the operator publishes through git, reload or restart picks up the published tree.
 
@@ -152,6 +152,20 @@ One model loop in RocketCode. It owns that loop's Spills.
 
 A RocketCode Turn is not the active-turn slot on a Managed Slack Thread. Slack occupancy often drives one RocketCode Turn, but the two lifetimes are not the same object.
 
+## Process layout
+
+### Backend
+
+The one RocketClaw engine: conversation execution, later-work, cron, skills, agent definitions, overlay clones, try-turn, Reload, and Restart.
+
+### Frontend
+
+A surface the process assembler constructs: Slack, External MCP, or Development MCP. Frontends never import the backend.
+
+### Protocol
+
+The shared language frontends and backend import. A frontend drops protocol messages it does not handle.
+
 ## Durable State
 
 ### State Store
@@ -178,6 +192,8 @@ After every workspace has moved, SQLite support is deleted. It is not a historic
 - A Managed Slack Thread, Thread Queue, and External MCP binding persist in the State Store.
 - An Operator SQLite Migrator copies missing `state.sqlite3` rows into the State Store.
 - Development MCP lint and run_turn consume Request-Carried Context and read Overlay Clones; Reload replaces those clones.
+- Frontends and the backend import Protocol. Frontends do not import the backend.
+- The process assembler constructs the backend and the frontends.
 - A turn uses the Autocompaction Threshold of the Provider that serves its model.
 - Code Mode exposes Execute and Host Tools; an oversized Execute result becomes a Spill owned by that RocketCode Turn.
 

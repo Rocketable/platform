@@ -11,7 +11,7 @@ import (
 	"runtime/debug"
 	"syscall"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/app"
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 )
 
@@ -55,8 +55,8 @@ func runServe(args []string) error {
 
 	logger.Info("starting rocketclaw", "version", buildInfoMainVersion())
 
-	if err := app.Run(ctx, cfg, configPath, logger); err != nil {
-		if errors.Is(err, app.ErrRestartRequested) {
+	if err := backend.Run(ctx, cfg, configPath, logger, assembleFrontends); err != nil {
+		if errors.Is(err, backend.ErrRestartRequested) {
 			logger.Info("rocketclaw restart requested; exiting with code 255 for supervisor restart")
 			return serveRunError(err)
 		}
@@ -76,7 +76,7 @@ func runServe(args []string) error {
 }
 
 func serveRunError(err error) error {
-	if errors.Is(err, app.ErrRestartRequested) {
+	if errors.Is(err, backend.ErrRestartRequested) {
 		return exitCodeError(255)
 	}
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/google/jsonschema-go/jsonschema"
 	starjson "go.starlark.net/lib/json"
 	"go.starlark.net/starlark"
@@ -33,21 +34,6 @@ type RunRequest struct {
 	Definition  *Definition
 }
 
-// Description identifies one available workflow.
-type Description struct{ Name, Description string }
-
-// Terminal identifies how a workflow run ended.
-type Terminal string
-
-const (
-	// TerminalComplete reports a successful workflow.
-	TerminalComplete Terminal = "complete"
-	// TerminalFailed reports a workflow infrastructure failure.
-	TerminalFailed Terminal = "failed"
-	// TerminalStopped reports a human interruption.
-	TerminalStopped Terminal = "stopped"
-)
-
 // AgentRequest describes one isolated agent call.
 type AgentRequest struct {
 	Worker Worker
@@ -62,46 +48,17 @@ type AgentThinkingFunc func(context.Context, string) error
 // AgentRunFunc runs one isolated agent call.
 type AgentRunFunc func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error)
 
-// PhaseStatus identifies one workflow phase state.
-type PhaseStatus string
-
-const (
-	// PhasePending has not started.
-	PhasePending PhaseStatus = "pending"
-	// PhaseInProgress is executing.
-	PhaseInProgress PhaseStatus = "in-progress"
-	// PhaseComplete finished successfully.
-	PhaseComplete PhaseStatus = "complete"
-	// PhaseError failed.
-	PhaseError PhaseStatus = "error"
-	// PhaseSkipped was not entered before the workflow terminated.
-	PhaseSkipped PhaseStatus = "skipped"
-)
-
-// PhaseUpdate reports connector-neutral workflow progress.
-type PhaseUpdate struct {
-	PhaseID, Name                string
-	Status                       PhaseStatus
-	Scheduled, Running, Complete int
-	Details                      string
-}
-
-// AgentUpdate reports one workflow agent call's latest observable activity.
-type AgentUpdate struct {
-	CallID, PhaseID, Label, Activity string
-}
-
 // ProgressFunc receives serialized workflow progress updates and is never invoked concurrently.
-type ProgressFunc func(context.Context, PhaseUpdate) error
+type ProgressFunc func(context.Context, protocol.PhaseUpdate) error
 
 // AgentProgressFunc receives serialized workflow agent activity updates and is never invoked concurrently.
-type AgentProgressFunc func(context.Context, AgentUpdate) error
+type AgentProgressFunc func(context.Context, protocol.AgentUpdate) error
 
 // Result is the rendered workflow result.
 type Result struct {
 	Text   string
 	Silent bool
-	Phases []PhaseUpdate
+	Phases []protocol.PhaseUpdate
 }
 
 type workerValue Worker
@@ -121,7 +78,7 @@ type engine struct {
 	strict        bool
 
 	mu                sync.Mutex
-	phases            map[string]*PhaseUpdate
+	phases            map[string]*protocol.PhaseUpdate
 	phaseSequence     int
 	active            map[*starlark.Thread]uint64
 	callbacks, agents int
@@ -133,7 +90,7 @@ func Run(ctx context.Context, definition *Definition, request RunRequest, agent 
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
-	e := &engine{agent: agent, progress: progress, agentProgress: agentProgress, cancel: cancel, runID: request.RunID, phases: make(map[string]*PhaseUpdate), phaseSequence: len(definition.Phases), strict: len(definition.Phases) > 0, active: make(map[*starlark.Thread]uint64), remaining: 10_000_000}
+	e := &engine{agent: agent, progress: progress, agentProgress: agentProgress, cancel: cancel, runID: request.RunID, phases: make(map[string]*protocol.PhaseUpdate), phaseSequence: len(definition.Phases), strict: len(definition.Phases) > 0, active: make(map[*starlark.Thread]uint64), remaining: 10_000_000}
 	defer func() {
 		err = e.finishPhase(context.WithoutCancel(ctx), "run", err)
 
@@ -142,8 +99,8 @@ func Run(ctx context.Context, definition *Definition, request RunRequest, agent 
 
 		for _, name := range definition.Phases {
 			state := e.phases[name]
-			if state.Status == PhasePending {
-				state.Status = PhaseSkipped
+			if state.Status == protocol.PhasePending {
+				state.Status = protocol.PhaseSkipped
 				if errPhase := e.progress(context.WithoutCancel(ctx), *state); errProgress == nil {
 					errProgress = errPhase
 				}
@@ -152,16 +109,16 @@ func Run(ctx context.Context, definition *Definition, request RunRequest, agent 
 
 		err = errors.Join(err, errProgress)
 
-		result.Phases = make([]PhaseUpdate, 0, len(e.phases))
+		result.Phases = make([]protocol.PhaseUpdate, 0, len(e.phases))
 		for _, state := range e.phases {
 			result.Phases = append(result.Phases, *state)
 		}
 
-		slices.SortFunc(result.Phases, func(a, b PhaseUpdate) int { return cmp.Compare(a.PhaseID, b.PhaseID) })
+		slices.SortFunc(result.Phases, func(a, b protocol.PhaseUpdate) int { return cmp.Compare(a.PhaseID, b.PhaseID) })
 	}()
 
 	for i, name := range definition.Phases {
-		e.phases[name] = &PhaseUpdate{PhaseID: fmt.Sprintf("%s/phase/%06d/%s", request.RunID, i, name), Name: name, Status: PhasePending}
+		e.phases[name] = &protocol.PhaseUpdate{PhaseID: fmt.Sprintf("%s/phase/%06d/%s", request.RunID, i, name), Name: name, Status: protocol.PhasePending}
 	}
 
 	for _, name := range definition.Phases {
@@ -332,17 +289,17 @@ func (e *engine) builtins() starlark.StringDict {
 				return nil, errors.New("workflow may have at most 100 phases")
 			}
 
-			state = &PhaseUpdate{PhaseID: fmt.Sprintf("%s/phase/%06d/%s", e.runID, e.phaseSequence, name), Name: name, Status: PhasePending}
+			state = &protocol.PhaseUpdate{PhaseID: fmt.Sprintf("%s/phase/%06d/%s", e.runID, e.phaseSequence, name), Name: name, Status: protocol.PhasePending}
 			e.phaseSequence++
 			e.phases[name] = state
 		}
 
-		if state.Status != PhasePending {
+		if state.Status != protocol.PhasePending {
 			e.mu.Unlock()
 			return nil, fmt.Errorf("phase %q may execute only once", name)
 		}
 
-		state.Status = PhaseInProgress
+		state.Status = protocol.PhaseInProgress
 		ctx := thread.Local(localContext).(context.Context)
 		errProgress := e.progress(ctx, *state)
 		e.mu.Unlock()
@@ -578,7 +535,7 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 		callID := fmt.Sprintf("%s/agent/%06d", e.runID, callSequence)
 
 		raw, errAgent := e.agent(ctx, request, func(activityCtx context.Context, activity string) error {
-			return e.agentActivity(activityCtx, AgentUpdate{CallID: callID, PhaseID: phaseID, Label: callLabel, Activity: activity})
+			return e.agentActivity(activityCtx, protocol.AgentUpdate{CallID: callID, PhaseID: phaseID, Label: callLabel, Activity: activity})
 		})
 		if errAgent != nil {
 			e.cancel(errAgent)
@@ -626,7 +583,7 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 	})
 }
 
-func (e *engine) agentActivity(ctx context.Context, update AgentUpdate) error {
+func (e *engine) agentActivity(ctx context.Context, update protocol.AgentUpdate) error {
 	e.mu.Lock()
 	err := e.agentProgress(ctx, update)
 	e.mu.Unlock()
@@ -648,13 +605,13 @@ func (e *engine) phaseCount(ctx context.Context, name, label string, scheduled, 
 			return errors.New("workflow may have at most 100 phases")
 		}
 
-		state = &PhaseUpdate{PhaseID: fmt.Sprintf("%s/phase/%06d/%s", e.runID, e.phaseSequence, name), Name: name, Status: PhaseInProgress}
+		state = &protocol.PhaseUpdate{PhaseID: fmt.Sprintf("%s/phase/%06d/%s", e.runID, e.phaseSequence, name), Name: name, Status: protocol.PhaseInProgress}
 		e.phaseSequence++
 		e.phases[name] = state
 	}
 
-	if state.Status == PhasePending {
-		state.Status = PhaseInProgress
+	if state.Status == protocol.PhasePending {
+		state.Status = protocol.PhaseInProgress
 	}
 
 	if scheduled != 0 && label != "" {
@@ -678,16 +635,16 @@ func (e *engine) finishPhase(ctx context.Context, name string, errRun error) err
 	e.mu.Lock()
 
 	state := e.phases[name]
-	if state == nil || state.Status != PhaseInProgress {
+	if state == nil || state.Status != protocol.PhaseInProgress {
 		e.mu.Unlock()
 		return errRun
 	}
 
 	state.Running = 0
 
-	state.Status = PhaseComplete
+	state.Status = protocol.PhaseComplete
 	if errRun != nil {
-		state.Status, state.Details = PhaseError, errRun.Error()
+		state.Status, state.Details = protocol.PhaseError, errRun.Error()
 	}
 
 	errProgress := e.progress(ctx, *state)

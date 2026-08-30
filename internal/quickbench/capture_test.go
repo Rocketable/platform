@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
-	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,7 +23,7 @@ func TestCaptureFromSession(t *testing.T) {
 	workspace := t.TempDir()
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, dsn, slog.New(slog.DiscardHandler))
+	service, err := backend.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, dsn, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = service.Stop(context.Background()) })
 
@@ -77,7 +77,7 @@ func TestCaptureUnknownConversation(t *testing.T) {
 	workspace := t.TempDir()
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, dsn, slog.New(slog.DiscardHandler))
+	service, err := backend.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, dsn, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = service.Stop(context.Background()) })
 
@@ -101,7 +101,7 @@ func TestRunCapturePrefersFemtoclawConfig(t *testing.T) {
 	workspace := t.TempDir()
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	service, err := harnessbridge.NewSessionServiceIn(workspace, ".femtoclaw", dsn, slog.New(slog.DiscardHandler))
+	service, err := backend.NewSessionServiceIn(workspace, ".femtoclaw", dsn, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = service.Stop(context.Background()) })
 
@@ -139,7 +139,7 @@ func TestRunCapturePrefersFemtoclawConfig(t *testing.T) {
 }
 
 func TestExtractTranscriptAndMocks(t *testing.T) {
-	entries := []harnessbridge.ObservedSessionEntry{{
+	entries := []backend.ObservedSessionEntry{{
 		Entry: rocketcode.SessionEntry{ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"message","role":"user","content":"hi"}`),
 			json.RawMessage(`{"type":"function_call","call_id":"c1","name":"echo","arguments":"{}"}`),

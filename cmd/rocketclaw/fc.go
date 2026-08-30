@@ -13,7 +13,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 )
 
 const fcHelpText = `rocketclaw fc
@@ -107,7 +107,7 @@ func runFCMigrateIn(workspace, runtimeDir, databaseURL string, args []string, ou
 		return errFCMigrateArgs
 	}
 
-	inserted, err := harnessbridge.MigrateSQLite(context.Background(), workspace, runtimeDir, databaseURL, slog.New(slog.DiscardHandler), out)
+	inserted, err := backend.MigrateSQLite(context.Background(), workspace, runtimeDir, databaseURL, slog.New(slog.DiscardHandler), out)
 	if err != nil {
 		return fmt.Errorf("migrate sqlite store: %w", err)
 	}
@@ -138,7 +138,7 @@ func runFCCheckIn(workspace, runtimeDir, databaseURL string, args []string, out 
 
 	defer func() { _ = lock.Close() }()
 
-	if err := harnessbridge.CheckAndRecoverSessionDB(context.Background(), databaseURL, slog.New(slog.DiscardHandler)); err != nil {
+	if err := backend.CheckAndRecoverSessionDB(context.Background(), databaseURL, slog.New(slog.DiscardHandler)); err != nil {
 		return fmt.Errorf("check rocketclaw state store: %w", err)
 	}
 
@@ -171,7 +171,7 @@ func runFCDeleteIn(workspace, runtimeDir, databaseURL string, args []string, out
 
 	defer func() { _ = lock.Close() }()
 
-	deleted, err := harnessbridge.DeleteSessionIn(context.Background(), workspace, runtimeDir, databaseURL, conversationID)
+	deleted, err := backend.DeleteSessionIn(context.Background(), workspace, runtimeDir, databaseURL, conversationID)
 	if err != nil {
 		return fmt.Errorf("delete rocketcode session: %w", err)
 	}
@@ -183,9 +183,9 @@ func runFCDeleteIn(workspace, runtimeDir, databaseURL string, args []string, out
 	return nil
 }
 
-func acquireFCMutationLock(workspace, runtimeDir, command string) (*harnessbridge.StateStoreLock, error) {
-	lock, err := harnessbridge.AcquireStateStoreLock(workspace, runtimeDir)
-	if errors.Is(err, harnessbridge.ErrStateStoreLocked) {
+func acquireFCMutationLock(workspace, runtimeDir, command string) (*backend.StateStoreLock, error) {
+	lock, err := backend.AcquireStateStoreLock(workspace, runtimeDir)
+	if errors.Is(err, backend.ErrStateStoreLocked) {
 		return nil, fmt.Errorf("rocketclaw daemon is running; stop it before running fc %s: %w", command, err)
 	}
 
@@ -216,7 +216,7 @@ func runFCListIn(workspace, runtimeDir, databaseURL string, args []string, out i
 		return errors.New("list limit must be non-negative")
 	}
 
-	var options harnessbridge.SessionListOptions
+	var options backend.SessionListOptions
 	options.Limit = *limit
 
 	if strings.TrimSpace(*sinceText) != "" {
@@ -246,8 +246,8 @@ func runFCListIn(workspace, runtimeDir, databaseURL string, args []string, out i
 	return writeFCListInOptions(context.Background(), workspace, runtimeDir, databaseURL, options, !*noMessagePreview, out)
 }
 
-func writeFCListInOptions(ctx context.Context, workspace, runtimeDir, databaseURL string, options harnessbridge.SessionListOptions, includeMessagePreview bool, out io.Writer) error {
-	summaries, err := harnessbridge.ListSessionsInOptions(ctx, workspace, runtimeDir, databaseURL, options)
+func writeFCListInOptions(ctx context.Context, workspace, runtimeDir, databaseURL string, options backend.SessionListOptions, includeMessagePreview bool, out io.Writer) error {
+	summaries, err := backend.ListSessionsInOptions(ctx, workspace, runtimeDir, databaseURL, options)
 	if err != nil {
 		return fmt.Errorf("list rocketcode sessions: %w", err)
 	}
@@ -316,7 +316,7 @@ func writeFCObserveIn(ctx context.Context, workspace, runtimeDir, databaseURL, c
 		return errors.New("conversation ID is required")
 	}
 
-	service, err := harnessbridge.NewSessionServiceIn(workspace, runtimeDir, databaseURL, slog.New(slog.DiscardHandler))
+	service, err := backend.NewSessionServiceIn(workspace, runtimeDir, databaseURL, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return fmt.Errorf("observe rocketcode session entries: %w", err)
 	}
