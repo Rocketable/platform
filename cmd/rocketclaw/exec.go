@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 )
 
 // execEvent is one JSONL line emitted by rocketclaw exec.
@@ -49,7 +49,7 @@ func (w execEventWriter) write(event execEvent) error {
 	return nil
 }
 
-func writeExecOutcome(writer execEventWriter, result harnessbridge.RawRunResult, errRun error) error {
+func writeExecOutcome(writer execEventWriter, result backend.RawRunResult, errRun error) error {
 	if errRun != nil {
 		if err := writer.write(execEvent{Type: "error", Message: errRun.Error()}); err != nil {
 			return err
@@ -93,10 +93,10 @@ Events:
   error     Emitted once on failure, always last, and replaces result. Field: message.
 
   Tool activity is reported as thinking prose. There are no structured tool
-  call or tool result events.
+  call or tool result protocol.
 
   result.text is everything the agent said in its final attempt; the full stream
-  across retries is carried by the message events. result.final is the human-facing
+  across retries is carried by the message protocol. result.final is the human-facing
   answer, omitted when the agent chose to say nothing. result.attachments lists
   outbound attachment filenames; the files themselves are not written.
 
@@ -168,7 +168,7 @@ func runExecIn(ctx context.Context, args []string, out io.Writer, run execRunner
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	agents, _, err := harnessbridge.LoadRuntimeDefinitions(cfg, cfg.RuntimeDirName())
+	agents, _, err := backend.LoadRuntimeDefinitions(cfg, cfg.RuntimeDirName())
 	if err != nil {
 		return fmt.Errorf("load runtime agents: %w", err)
 	}
@@ -181,7 +181,7 @@ func runExecIn(ctx context.Context, args []string, out io.Writer, run execRunner
 }
 
 // execRunner runs one raw rocketcode turn.
-type execRunner func(ctx context.Context, cfg *config.Config, agent, prompt string, logger *slog.Logger, progress *harnessbridge.RawRunProgress) (harnessbridge.RawRunResult, error)
+type execRunner func(ctx context.Context, cfg *config.Config, agent, prompt string, logger *slog.Logger, progress *backend.RawRunProgress) (backend.RawRunResult, error)
 
 func executeExecRun(ctx context.Context, cfg *config.Config, agent, prompt string, timeout time.Duration, logger *slog.Logger, out io.Writer, run execRunner) error {
 	runCtx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -194,7 +194,7 @@ func executeExecRun(ctx context.Context, cfg *config.Config, agent, prompt strin
 		runCtx = timedCtx
 	}
 
-	sessions, err := harnessbridge.NewSessionServiceIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, logger)
+	sessions, err := backend.NewSessionServiceIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, logger)
 	if err != nil {
 		return fmt.Errorf("start rocketcode session service: %w", err)
 	}
@@ -209,7 +209,7 @@ func executeExecRun(ctx context.Context, cfg *config.Config, agent, prompt strin
 	}()
 
 	if errCtx := runCtx.Err(); errCtx != nil {
-		return writeExecOutcome(execEventWriter{out: out}, harnessbridge.RawRunResult{}, fmt.Errorf("exec cancelled before start: %w", errCtx))
+		return writeExecOutcome(execEventWriter{out: out}, backend.RawRunResult{}, fmt.Errorf("exec cancelled before start: %w", errCtx))
 	}
 
 	conversationID := "exec-" + rand.Text()
@@ -219,7 +219,7 @@ func executeExecRun(ctx context.Context, cfg *config.Config, agent, prompt strin
 		return err
 	}
 
-	progress := &harnessbridge.RawRunProgress{
+	progress := &backend.RawRunProgress{
 		SessionService: sessions,
 		ConversationID: conversationID,
 		Thinking: func(_ context.Context, text string) error {

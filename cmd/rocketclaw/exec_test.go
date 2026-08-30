@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketclaw/events"
-	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
-	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge/harnessbridgetest"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,17 +23,17 @@ import (
 func TestWriteExecOutcomeSuccess(t *testing.T) {
 	for _, testCase := range []struct {
 		name   string
-		result harnessbridge.RawRunResult
+		result backend.RawRunResult
 		want   string
 	}{
 		{
 			name:   "text only",
-			result: harnessbridge.RawRunResult{Text: "all done"},
+			result: backend.RawRunResult{Text: "all done"},
 			want:   "{\"type\":\"result\",\"text\":\"all done\",\"ok\":true}\n",
 		},
 		{
 			name:   "with attachments",
-			result: harnessbridge.RawRunResult{Text: "all done", Attachments: []events.OutboundAttachment{{Name: "report.md"}, {Name: "log.txt"}}},
+			result: backend.RawRunResult{Text: "all done", Attachments: []protocol.OutboundAttachment{{Name: "report.md"}, {Name: "log.txt"}}},
 			want:   "{\"type\":\"result\",\"text\":\"all done\",\"attachments\":[\"report.md\",\"log.txt\"],\"ok\":true}\n",
 		},
 	} {
@@ -50,10 +50,10 @@ func TestWriteExecOutcomeSuccess(t *testing.T) {
 func execRunnerNotCalled(t *testing.T) execRunner {
 	t.Helper()
 
-	return func(context.Context, *config.Config, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (harnessbridge.RawRunResult, error) {
+	return func(context.Context, *config.Config, string, string, *slog.Logger, *backend.RawRunProgress) (backend.RawRunResult, error) {
 		t.Fatal("exec run must not start")
 
-		return harnessbridge.RawRunResult{}, nil
+		return backend.RawRunResult{}, nil
 	}
 }
 
@@ -127,10 +127,10 @@ func TestRunExecInPassesPromptVerbatim(t *testing.T) {
 	var out bytes.Buffer
 
 	seen := ""
-	run := func(_ context.Context, _ *config.Config, _, prompt string, _ *slog.Logger, _ *harnessbridge.RawRunProgress) (harnessbridge.RawRunResult, error) {
+	run := func(_ context.Context, _ *config.Config, _, prompt string, _ *slog.Logger, _ *backend.RawRunProgress) (backend.RawRunResult, error) {
 		seen = prompt
 
-		return harnessbridge.RawRunResult{Text: "done"}, nil
+		return backend.RawRunResult{Text: "done"}, nil
 	}
 
 	require.NoError(t, runExecIn(t.Context(), []string{"main", "  keep  my spacing  "}, &out, run))
@@ -148,7 +148,7 @@ func TestExecuteExecRunStreamsEventsInOrder(t *testing.T) {
 	var out bytes.Buffer
 
 	session := ""
-	run := func(ctx context.Context, _ *config.Config, agent, prompt string, _ *slog.Logger, progress *harnessbridge.RawRunProgress) (harnessbridge.RawRunResult, error) {
+	run := func(ctx context.Context, _ *config.Config, agent, prompt string, _ *slog.Logger, progress *backend.RawRunProgress) (backend.RawRunResult, error) {
 		session = progress.ConversationID
 
 		assert.Equal(t, "triage", agent)
@@ -162,7 +162,7 @@ func TestExecuteExecRunStreamsEventsInOrder(t *testing.T) {
 		_, err = progress.RequestReload(ctx, "")
 		assert.ErrorContains(t, err, "unavailable in rocketclaw exec")
 
-		return harnessbridge.RawRunResult{Text: "found it", VerbatimMessage: "found it"}, nil
+		return backend.RawRunResult{Text: "found it", VerbatimMessage: "found it"}, nil
 	}
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
@@ -184,10 +184,10 @@ func TestExecuteExecRunPersistsSession(t *testing.T) {
 
 	var out bytes.Buffer
 
-	run := func(ctx context.Context, _ *config.Config, _, _ string, _ *slog.Logger, progress *harnessbridge.RawRunProgress) (harnessbridge.RawRunResult, error) {
+	run := func(ctx context.Context, _ *config.Config, _, _ string, _ *slog.Logger, progress *backend.RawRunProgress) (backend.RawRunResult, error) {
 		_, err := progress.SessionService.AppendEntryID(ctx, progress.ConversationID, fcTestEntry("check logs", "found it"))
 
-		return harnessbridge.RawRunResult{Text: "found it"}, err
+		return backend.RawRunResult{Text: "found it"}, err
 	}
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
@@ -195,7 +195,7 @@ func TestExecuteExecRunPersistsSession(t *testing.T) {
 	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn}
 	require.NoError(t, executeExecRun(t.Context(), cfg, "triage", "check logs", 0, slog.New(slog.DiscardHandler), &out, run))
 
-	summaries, err := harnessbridge.ListSessionsInOptions(t.Context(), workspace, config.DefaultRuntimeDir, cfg.DatabaseURL, harnessbridge.SessionListOptions{})
+	summaries, err := backend.ListSessionsInOptions(t.Context(), workspace, config.DefaultRuntimeDir, cfg.DatabaseURL, backend.SessionListOptions{})
 	require.NoError(t, err)
 	require.Len(t, summaries, 1)
 	assert.True(t, strings.HasPrefix(summaries[0].ConversationID, "exec-"))
@@ -206,8 +206,8 @@ func TestExecuteExecRunEmitsSingleErrorLineOnFailure(t *testing.T) {
 
 	var out bytes.Buffer
 
-	run := func(context.Context, *config.Config, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (harnessbridge.RawRunResult, error) {
-		return harnessbridge.RawRunResult{}, errors.New("model unavailable")
+	run := func(context.Context, *config.Config, string, string, *slog.Logger, *backend.RawRunProgress) (backend.RawRunResult, error) {
+		return backend.RawRunResult{}, errors.New("model unavailable")
 	}
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
@@ -234,13 +234,13 @@ func TestExecuteExecRunCancelledDuringRunEmitsStartThenSingleError(t *testing.T)
 	defer cancel()
 
 	session := ""
-	run := func(ctx context.Context, _ *config.Config, _, _ string, _ *slog.Logger, progress *harnessbridge.RawRunProgress) (harnessbridge.RawRunResult, error) {
+	run := func(ctx context.Context, _ *config.Config, _, _ string, _ *slog.Logger, progress *backend.RawRunProgress) (backend.RawRunResult, error) {
 		session = progress.ConversationID
 
 		cancel()
 		<-ctx.Done()
 
-		return harnessbridge.RawRunResult{}, fmt.Errorf("run cancelled: %w", ctx.Err())
+		return backend.RawRunResult{}, fmt.Errorf("run cancelled: %w", ctx.Err())
 	}
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
@@ -264,10 +264,10 @@ func TestExecuteExecRunCancelledBeforeStartEmitsOnlyError(t *testing.T) {
 	runCtx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	run := func(context.Context, *config.Config, string, string, *slog.Logger, *harnessbridge.RawRunProgress) (harnessbridge.RawRunResult, error) {
+	run := func(context.Context, *config.Config, string, string, *slog.Logger, *backend.RawRunProgress) (backend.RawRunResult, error) {
 		t.Fatal("run must not start once the context is already done")
 
-		return harnessbridge.RawRunResult{}, nil
+		return backend.RawRunResult{}, nil
 	}
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()

@@ -14,6 +14,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+
 	"github.com/google/jsonschema-go/jsonschema"
 	starjson "go.starlark.net/lib/json"
 	"go.starlark.net/starlark"
@@ -34,10 +36,10 @@ type Definition struct {
 }
 
 // Descriptions returns sorted name/description pairs for loaded definitions.
-func Descriptions(definitions map[string]*Definition) []Description {
-	out := make([]Description, 0, len(definitions))
+func Descriptions(definitions map[string]*Definition) []protocol.WorkflowDescription {
+	out := make([]protocol.WorkflowDescription, 0, len(definitions))
 	for _, name := range slices.Sorted(maps.Keys(definitions)) {
-		out = append(out, Description{Name: name, Description: definitions[name].Description})
+		out = append(out, protocol.WorkflowDescription{Name: name, Description: definitions[name].Description})
 	}
 
 	return out

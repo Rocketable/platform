@@ -8,8 +8,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 )
 
 const (
@@ -55,7 +55,7 @@ func run(args []string) error {
 		case "run":
 			return runServe(args[1:])
 		case "exec":
-			return runExecIn(context.Background(), args[1:], os.Stdout, harnessbridge.RunRawWithProgress)
+			return runExecIn(context.Background(), args[1:], os.Stdout, backend.RunRawWithProgress)
 		case "setup":
 			return runSetup(args[1:])
 		case "doctor":

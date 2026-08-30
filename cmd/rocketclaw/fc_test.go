@@ -17,9 +17,9 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
-	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
@@ -39,7 +39,7 @@ func fcAppendSessionEntryID(ctx context.Context, workspace, conversationID strin
 		}
 		fcDSNs.Store(workspace, dsn)
 	}
-	service, err := harnessbridge.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, dsn, slog.New(slog.DiscardHandler))
+	service, err := backend.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, dsn, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return 0, err
 	}
@@ -61,7 +61,7 @@ func TestWriteFCListIncludesLastMessages(t *testing.T) {
 	require.NoError(t, err)
 
 	var out bytes.Buffer
-	require.NoError(t, writeFCListInOptions(t.Context(), workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), harnessbridge.SessionListOptions{}, true, &out))
+	require.NoError(t, writeFCListInOptions(t.Context(), workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), backend.SessionListOptions{}, true, &out))
 
 	text := out.String()
 	assert.Contains(t, text, "CONVERSATION_ID")
@@ -319,11 +319,11 @@ func TestRunFCDeleteDeletesOnlyTarget(t *testing.T) {
 	require.NoError(t, runFCDeleteIn(workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), []string{"main"}, &out))
 	assert.Contains(t, out.String(), "deleted 1 turns")
 
-	mainEntries, err := harnessbridge.ObserveSessionEntries(t.Context(), workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), "main", 0)
+	mainEntries, err := backend.ObserveSessionEntries(t.Context(), workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), "main", 0)
 	require.NoError(t, err)
 	assert.Empty(t, mainEntries)
 
-	threadEntries, err := harnessbridge.ObserveSessionEntries(t.Context(), workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), "thread", 0)
+	threadEntries, err := backend.ObserveSessionEntries(t.Context(), workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), "thread", 0)
 	require.NoError(t, err)
 	assert.Len(t, threadEntries, 1)
 }
@@ -338,13 +338,13 @@ func TestRunFCDeleteMissingDBReportsZero(t *testing.T) {
 
 func TestRunFCDeleteRefusesWhileStateStoreLocked(t *testing.T) {
 	workspace := t.TempDir()
-	lock, err := harnessbridge.AcquireStateStoreLock(workspace, ".rocketclaw")
+	lock, err := backend.AcquireStateStoreLock(workspace, ".rocketclaw")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, lock.Close()) })
 
 	err = runFCDeleteIn(workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), []string{"main"}, io.Discard)
 	require.ErrorContains(t, err, "rocketclaw daemon is running; stop it before running fc delete")
-	require.ErrorIs(t, err, harnessbridge.ErrStateStoreLocked)
+	require.ErrorIs(t, err, backend.ErrStateStoreLocked)
 }
 
 func TestRunFCCheck(t *testing.T) {
@@ -373,13 +373,13 @@ func TestRunFCCheckRejectsArguments(t *testing.T) {
 
 func TestRunFCCheckRefusesWhileStateStoreLocked(t *testing.T) {
 	workspace := t.TempDir()
-	lock, err := harnessbridge.AcquireStateStoreLock(workspace, ".rocketclaw")
+	lock, err := backend.AcquireStateStoreLock(workspace, ".rocketclaw")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, lock.Close()) })
 
 	err = runFCCheckIn(workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), nil, io.Discard)
 	require.ErrorContains(t, err, "rocketclaw daemon is running; stop it before running fc check")
-	require.ErrorIs(t, err, harnessbridge.ErrStateStoreLocked)
+	require.ErrorIs(t, err, backend.ErrStateStoreLocked)
 }
 
 func TestRunFCMigrateCopiesThenInsertsZero(t *testing.T) {
@@ -429,7 +429,7 @@ func TestRunFCMigrateRequiresSQLiteFile(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 	assert.Empty(t, out.String())
 
-	summaries, err := harnessbridge.ListSessionsInOptions(t.Context(), workspace, config.DefaultRuntimeDir, dsn, harnessbridge.SessionListOptions{})
+	summaries, err := backend.ListSessionsInOptions(t.Context(), workspace, config.DefaultRuntimeDir, dsn, backend.SessionListOptions{})
 	require.NoError(t, err)
 	require.Len(t, summaries, 1)
 }
@@ -479,7 +479,7 @@ func writeFCSQLite(t *testing.T, workspace string) {
 func TestWriteFCListReportsFlushError(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	err = writeFCListInOptions(t.Context(), t.TempDir(), config.DefaultRuntimeDir, dsn, harnessbridge.SessionListOptions{}, true, failingWriter{})
+	err = writeFCListInOptions(t.Context(), t.TempDir(), config.DefaultRuntimeDir, dsn, backend.SessionListOptions{}, true, failingWriter{})
 	require.ErrorContains(t, err, "flush rocketcode session list")
 	require.ErrorIs(t, err, errFailingWrite)
 }

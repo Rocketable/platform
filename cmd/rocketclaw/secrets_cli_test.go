@@ -6,8 +6,8 @@ import (
 	"testing"
 	"testing/synctest"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge/harnessbridgetest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

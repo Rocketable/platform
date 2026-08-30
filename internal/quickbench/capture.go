@@ -9,8 +9,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketclaw/harnessbridge"
 )
 
 // CaptureOptions configures Capture.
@@ -71,7 +71,7 @@ func Capture(ctx context.Context, opt CaptureOptions) error {
 	if runtimeDir == "" {
 		runtimeDir = config.DefaultRuntimeDir
 	}
-	entries, err := harnessbridge.ObserveSessionEntries(ctx, opt.Workspace, runtimeDir, databaseURL, conversationID, 0)
+	entries, err := backend.ObserveSessionEntries(ctx, opt.Workspace, runtimeDir, databaseURL, conversationID, 0)
 	if err != nil {
 		return err
 	}
@@ -136,7 +136,7 @@ func Capture(ctx context.Context, opt CaptureOptions) error {
 	return WriteDir(out, bar)
 }
 
-func extractFromEntries(entries []harnessbridge.ObservedSessionEntry) ([]Message, []ToolMock, []BashDouble, error) {
+func extractFromEntries(entries []backend.ObservedSessionEntry) ([]Message, []ToolMock, []BashDouble, error) {
 	var messages []Message
 
 	toolOut := map[string]string{}
