@@ -27,7 +27,6 @@ func TestRunWithoutDefaultConfigShowsHelp(t *testing.T) {
 	assert.Contains(t, output, "Usage:")
 	assert.Contains(t, output, "rocketclaw fc list")
 	assert.Contains(t, output, "rocketclaw fc observe [--follow|-f] <conversation-id>")
-	assert.Contains(t, output, "rocketclaw fc migrate")
 	assert.Contains(t, output, "rocketclaw setup\n")
 	assert.Contains(t, output, "rocketclaw setup files list\n")
 	assert.Contains(t, output, "rocketclaw setup files get <path>\n")

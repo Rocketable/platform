@@ -9,8 +9,6 @@ import (
 	"iter"
 	"log/slog"
 	"net/url"
-	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -1246,25 +1244,6 @@ func (s *SessionService) beginStateTx(ctx context.Context, label string) (*sql.T
 	return tx, nil
 }
 
-func sessionDBPathIn(workspace, runtimeDir string) string {
-	return filepath.Join(workspace, runtimeDir, "state.sqlite3")
-}
-
-func prepareSessionDBPathIn(workspace, runtimeDir string) error {
-	root, err := os.OpenRoot(workspace)
-	if err != nil {
-		return fmt.Errorf("open workspace root: %w", err)
-	}
-
-	defer func() { _ = root.Close() }()
-
-	if err := root.MkdirAll(runtimeDir, 0o755); err != nil {
-		return fmt.Errorf("create rocketcode session db dir: %w", err)
-	}
-
-	return rootPathExistsNoSymlink(root, filepath.ToSlash(filepath.Join(runtimeDir, "state.sqlite3")), "rocketcode session db")
-}
-
 func (s sqliteSessionStore) in() iter.Seq2[harness.SessionEntry, error] {
 	return func(yield func(harness.SessionEntry, error) bool) {
 		var (
@@ -1410,18 +1389,6 @@ func DeleteSessionIn(ctx context.Context, workspace, runtimeDir, databaseURL, co
 	return rows, nil
 }
 
-// CheckAndRecoverSessionDB pings PostgreSQL and confirms the store schema exists.
-func CheckAndRecoverSessionDB(ctx context.Context, databaseURL string, logger *slog.Logger) error {
-	db, err := openSessionDB(ctx, databaseURL, logger)
-	if err != nil {
-		return err
-	}
-
-	_ = db.Close()
-
-	return nil
-}
-
 // ListSessionsInOptions returns summaries for stored rocketcode sessions.
 func ListSessionsInOptions(ctx context.Context, workspace, runtimeDir, databaseURL string, options SessionListOptions) ([]SessionSummary, error) {
 	service, err := NewSessionServiceIn(workspace, runtimeDir, databaseURL, slog.New(slog.DiscardHandler))
@@ -1529,23 +1496,6 @@ ORDER BY c.last_updated DESC, c.conversation_id, se.id`
 	}
 
 	return summaries, nil
-}
-
-func rootPathExistsNoSymlink(root *os.Root, path, label string) error {
-	info, err := root.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-
-	if err != nil {
-		return fmt.Errorf("stat %s: %w", label, err)
-	}
-
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%s must not be a symlink", label)
-	}
-
-	return nil
 }
 
 func slackStateKeyTime(key, prefix string) (time.Time, bool) {

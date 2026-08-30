@@ -76,7 +76,7 @@ Saved workflows run only as foreground managed turns. Each workflow launches fre
 
 RocketClaw is configured with `rocketclaw.json` in the working directory. Runtime state is local to the selected workspace:
 
-- `database_url` in `rocketclaw.json` or `femtoclaw.json`: PostgreSQL store for private MCP and managed Slack sessions, active-turn restart handoffs, managed Slack routing, External MCP bindings to both sessions, scheduled messages, cron execution state, restart notifications, and goal-loop state. One DSN is one store. `run` ignores `.rocketclaw/state.sqlite3`. `fc migrate` copies missing v9 rows into that store.
+- `database_url` in `rocketclaw.json` or `femtoclaw.json`: PostgreSQL store for private MCP and managed Slack sessions, active-turn restart handoffs, managed Slack routing, External MCP bindings to both sessions, scheduled messages, cron execution state, restart notifications, and goal-loop state. One DSN is one store.
 - `.rocketclaw/overlays/`: configured git overlay clones for runtime assets.
 - `.rocketclaw/.rocketcode/tmp/<session-id>/`: per-conversation shell TMPDIR (not shared across sessions).
 - `.rocketclaw/.rocketcode/spill/<turn-id>/`: oversized execute output for the current turn (deleted when the turn ends).
@@ -84,7 +84,7 @@ RocketClaw is configured with `rocketclaw.json` in the working directory. Runtim
 
 Generated runtime state should not be treated as source code.
 
-Fresh RocketClaw stores apply embedded SQL migrations on first open. Startup does not import SQLite and does not migrate historical SQLite formats. `fc migrate` copies missing v9 rows. `fc check` pings PostgreSQL and does not repair a file.
+Fresh RocketClaw stores apply embedded SQL migrations on first open. Startup does not import SQLite and does not migrate historical SQLite formats.
 
 Store tests run against the last three supported PostgreSQL majors from https://www.postgresql.org/versions.json. Local `make test` in `internal/rocketclaw` uses Docker for the newest of those, or `ROCKETCLAW_TEST_DATABASE_URL` if set. GitHub Actions runs all three.
 

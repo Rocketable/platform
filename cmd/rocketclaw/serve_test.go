@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
@@ -12,24 +11,16 @@ import (
 
 func TestRunServeReportsAppStartupError(t *testing.T) {
 	workspace := t.TempDir()
-	cwd, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(workspace))
-	t.Cleanup(func() {
-		require.NoError(t, os.Chdir(cwd))
-	})
-
-	workspaceFile := filepath.Join(workspace, "workspace-file")
-	require.NoError(t, os.WriteFile(workspaceFile, []byte("not a directory"), 0o600))
+	t.Chdir(workspace)
 	configData := fmt.Sprintf(
-		`{"workspace":%q,"database_url":"postgres://localhost/rocketclaw_test?sslmode=disable","slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"mcp_external":{"enabled":true,"listen_addr":"127.0.0.1:0"},"openai":{"api_key":"sk-test"}}`,
-		workspaceFile,
+		`{"workspace":%q,"database_url":"postgres://127.0.0.1:1/none?sslmode=disable","slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"mcp_external":{"enabled":true,"listen_addr":"127.0.0.1:0"},"openai":{"api_key":"sk-test"}}`,
+		workspace,
 	)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(configData), 0o600))
 
-	err = runServe(nil)
+	err := runServe(nil)
 	require.ErrorContains(t, err, "run rocketclaw")
-	require.ErrorContains(t, err, "lock rocketcode session db")
+	require.ErrorContains(t, err, "start rocketcode session service")
 }
 
 func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {

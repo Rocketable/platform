@@ -873,13 +873,9 @@ func runGit(dir string, args ...string) error {
 
 func resetRuntimeDirectory(target string, logger *slog.Logger, preserveOverlays bool) error {
 	preserved := map[string]struct{}{
-		".rocketcode":        {},
-		"auth.json":          {},
-		"auth.json.lock":     {},
-		"state.sqlite3":      {},
-		"state.sqlite3-shm":  {},
-		"state.sqlite3-wal":  {},
-		"state.sqlite3.lock": {},
+		".rocketcode":    {},
+		"auth.json":      {},
+		"auth.json.lock": {},
 	}
 	if preserveOverlays {
 		preserved[overlaysRoot] = struct{}{}

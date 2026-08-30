@@ -75,27 +75,6 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	startedAt := time.Now()
 
-	stateLogger.Info("acquiring rocketclaw state store lock", "workspace", cfg.Workspace, "runtime_dir", cfg.RuntimeDirName())
-
-	stateStoreLock, err := AcquireStateStoreLock(cfg.Workspace, cfg.RuntimeDirName())
-	if err != nil {
-		if errors.Is(err, ErrStateStoreLocked) {
-			return fmt.Errorf("rocketclaw daemon already owns state store: %w", err)
-		}
-
-		return fmt.Errorf("lock rocketcode session db: %w", err)
-	}
-
-	stateLogger.Info("acquired rocketclaw state store lock", "elapsed", time.Since(startedAt))
-
-	defer func() {
-		if err := stateStoreLock.Close(); err != nil {
-			logger.Warn("release rocketcode session db lock", "error", err)
-		}
-	}()
-
-	startedAt = time.Now()
-
 	stateLogger.Info("starting rocketclaw state store", "workspace", cfg.Workspace, "runtime_dir", cfg.RuntimeDirName())
 
 	rocketcodeSessions, err := NewSessionServiceIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, stateLogger)
