@@ -90,7 +90,7 @@ type GoalState struct {
 	UpdatedAt            time.Time `json:"updated_at,omitzero"`
 }
 
-type sqliteSessionStore struct {
+type sessionStore struct {
 	conversationID, managedConversationID string
 	managedReplayPrefix                   []json.RawMessage
 	service                               *SessionService
@@ -144,12 +144,12 @@ type stateStoreDB interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func newSessionStore(conversationID string, service *SessionService) sqliteSessionStore {
-	return sqliteSessionStore{conversationID: strings.TrimSpace(conversationID), service: service}
+func newSessionStore(conversationID string, service *SessionService) sessionStore {
+	return sessionStore{conversationID: strings.TrimSpace(conversationID), service: service}
 }
 
 // NewSessionServiceIn starts a runtime-owned PostgreSQL session service.
-func NewSessionServiceIn(_, _, databaseURL string, logger *slog.Logger) (*SessionService, error) {
+func NewSessionServiceIn(databaseURL string, logger *slog.Logger) (*SessionService, error) {
 	db, err := openSessionDB(context.Background(), databaseURL, logger)
 	if err != nil {
 		return nil, err
@@ -1244,7 +1244,7 @@ func (s *SessionService) beginStateTx(ctx context.Context, label string) (*sql.T
 	return tx, nil
 }
 
-func (s sqliteSessionStore) in() iter.Seq2[harness.SessionEntry, error] {
+func (s sessionStore) in() iter.Seq2[harness.SessionEntry, error] {
 	return func(yield func(harness.SessionEntry, error) bool) {
 		var (
 			observed []ObservedSessionEntry
@@ -1268,7 +1268,7 @@ func (s sqliteSessionStore) in() iter.Seq2[harness.SessionEntry, error] {
 }
 
 //nolint:gocritic // rocketcode requires value-shaped session entries at this boundary.
-func (s sqliteSessionStore) outID(entry harness.SessionEntry) (int64, error) {
+func (s sessionStore) outID(entry harness.SessionEntry) (int64, error) {
 	if s.managedConversationID != "" {
 		return s.service.appendExternalMCPEntry(context.Background(), s.conversationID, s.managedConversationID, &entry, s.managedReplayPrefix)
 	}
@@ -1277,13 +1277,13 @@ func (s sqliteSessionStore) outID(entry harness.SessionEntry) (int64, error) {
 }
 
 // ObserveSessionEntries returns replay entries and their row IDs after lastID.
-func ObserveSessionEntries(ctx context.Context, workspace, runtimeDir, databaseURL, conversationID string, lastID int64) ([]ObservedSessionEntry, error) {
+func ObserveSessionEntries(ctx context.Context, databaseURL, conversationID string, lastID int64) ([]ObservedSessionEntry, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
 		return nil, errors.New("conversation ID is required")
 	}
 
-	service, err := NewSessionServiceIn(workspace, runtimeDir, databaseURL, slog.New(slog.DiscardHandler))
+	service, err := NewSessionServiceIn(databaseURL, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return nil, err
 	}
@@ -1361,14 +1361,14 @@ func externalMCPManagedEntry(entry *harness.SessionEntry, replayPrefix []json.Ra
 	return managed, nil
 }
 
-// DeleteSessionIn removes all entries for one conversation ID in runtimeDir and returns deleted rows.
-func DeleteSessionIn(ctx context.Context, workspace, runtimeDir, databaseURL, conversationID string) (int64, error) {
+// DeleteSessionIn removes all entries for one conversation ID and returns deleted rows.
+func DeleteSessionIn(ctx context.Context, databaseURL, conversationID string) (int64, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
 		return 0, errors.New("conversation ID is required")
 	}
 
-	service, err := NewSessionServiceIn(workspace, runtimeDir, databaseURL, slog.New(slog.DiscardHandler))
+	service, err := NewSessionServiceIn(databaseURL, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return 0, err
 	}
@@ -1390,8 +1390,8 @@ func DeleteSessionIn(ctx context.Context, workspace, runtimeDir, databaseURL, co
 }
 
 // ListSessionsInOptions returns summaries for stored rocketcode sessions.
-func ListSessionsInOptions(ctx context.Context, workspace, runtimeDir, databaseURL string, options SessionListOptions) ([]SessionSummary, error) {
-	service, err := NewSessionServiceIn(workspace, runtimeDir, databaseURL, slog.New(slog.DiscardHandler))
+func ListSessionsInOptions(ctx context.Context, databaseURL string, options SessionListOptions) ([]SessionSummary, error) {
+	service, err := NewSessionServiceIn(databaseURL, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return nil, err
 	}

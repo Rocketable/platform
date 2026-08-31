@@ -195,7 +195,7 @@ func TestExecuteExecRunPersistsSession(t *testing.T) {
 	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn}
 	require.NoError(t, executeExecRun(t.Context(), cfg, "triage", "check logs", 0, slog.New(slog.DiscardHandler), &out, run))
 
-	summaries, err := backend.ListSessionsInOptions(t.Context(), workspace, config.DefaultRuntimeDir, cfg.DatabaseURL, backend.SessionListOptions{})
+	summaries, err := backend.ListSessionsInOptions(t.Context(), cfg.DatabaseURL, backend.SessionListOptions{})
 	require.NoError(t, err)
 	require.Len(t, summaries, 1)
 	assert.True(t, strings.HasPrefix(summaries[0].ConversationID, "exec-"))

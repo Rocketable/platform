@@ -16,7 +16,6 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
@@ -36,7 +35,7 @@ func fcAppendSessionEntryID(ctx context.Context, workspace, conversationID strin
 		}
 		fcDSNs.Store(workspace, dsn)
 	}
-	service, err := backend.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, dsn, slog.New(slog.DiscardHandler))
+	service, err := backend.NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return 0, err
 	}
@@ -58,7 +57,7 @@ func TestWriteFCListIncludesLastMessages(t *testing.T) {
 	require.NoError(t, err)
 
 	var out bytes.Buffer
-	require.NoError(t, writeFCListInOptions(t.Context(), workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), backend.SessionListOptions{}, true, &out))
+	require.NoError(t, writeFCListInOptions(t.Context(), fcTestDSN(workspace), backend.SessionListOptions{}, true, &out))
 
 	text := out.String()
 	assert.Contains(t, text, "CONVERSATION_ID")
@@ -75,7 +74,7 @@ func TestWriteFCObserveRequiresConversationID(t *testing.T) {
 	require.NoError(t, err)
 
 	var out bytes.Buffer
-	require.EqualError(t, writeFCObserveIn(t.Context(), workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), "", false, time.Millisecond, &out), "conversation ID is required")
+	require.EqualError(t, writeFCObserveIn(t.Context(), fcTestDSN(workspace), "", false, time.Millisecond, &out), "conversation ID is required")
 	assert.Empty(t, out.String())
 }
 
@@ -87,7 +86,7 @@ func TestWriteFCObserveFollowEmitsLaterRows(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	writer := &cancelingWriter{cancel: cancel, ch: make(chan string, 1)}
 
-	require.ErrorIs(t, writeFCObserveIn(ctx, workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), "main", true, 10*time.Millisecond, writer), context.Canceled)
+	require.ErrorIs(t, writeFCObserveIn(ctx, fcTestDSN(workspace), "main", true, 10*time.Millisecond, writer), context.Canceled)
 	line := <-writer.ch
 	assert.Contains(t, line, "later user")
 }
@@ -100,7 +99,7 @@ func TestRunFCObserveSelectsConversation(t *testing.T) {
 	require.NoError(t, err)
 
 	var out bytes.Buffer
-	require.NoError(t, runFCObserveIn(workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), []string{"thread"}, &out))
+	require.NoError(t, runFCObserveIn(fcTestDSN(workspace), []string{"thread"}, &out))
 
 	assert.Contains(t, out.String(), "thread user")
 	assert.NotContains(t, out.String(), "main user")
@@ -109,14 +108,14 @@ func TestRunFCObserveSelectsConversation(t *testing.T) {
 func TestRunFCObserveRejectsExtraArguments(t *testing.T) {
 	var out bytes.Buffer
 
-	err := runFCObserveIn(t.TempDir(), config.DefaultRuntimeDir, "", []string{"one", "two"}, &out)
+	err := runFCObserveIn("", []string{"one", "two"}, &out)
 	require.ErrorContains(t, err, "requires exactly one conversation-id")
 }
 
 func TestRunFCObserveRejectsBadFlag(t *testing.T) {
 	var out bytes.Buffer
 
-	err := runFCObserveIn(t.TempDir(), config.DefaultRuntimeDir, "", []string{"--bad"}, &out)
+	err := runFCObserveIn("", []string{"--bad"}, &out)
 	require.ErrorContains(t, err, "parse rocketcode observe flags")
 }
 
@@ -144,7 +143,7 @@ func TestRunFCListFiltersSinceDuration(t *testing.T) {
 	require.NoError(t, err)
 
 	var out bytes.Buffer
-	require.NoError(t, runFCListIn(workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), []string{"--since", "24h"}, &out))
+	require.NoError(t, runFCListIn(fcTestDSN(workspace), []string{"--since", "24h"}, &out))
 	assert.Contains(t, out.String(), "recent")
 	assert.NotContains(t, out.String(), "old")
 }
@@ -161,7 +160,7 @@ func TestRunFCListFiltersRFC3339Range(t *testing.T) {
 	require.NoError(t, err)
 
 	var out bytes.Buffer
-	require.NoError(t, runFCListIn(workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), []string{"--since", since.Format(time.RFC3339), "--until", until.Format(time.RFC3339)}, &out))
+	require.NoError(t, runFCListIn(fcTestDSN(workspace), []string{"--since", since.Format(time.RFC3339), "--until", until.Format(time.RFC3339)}, &out))
 	assert.Contains(t, out.String(), "inside")
 	assert.NotContains(t, out.String(), "before")
 	assert.NotContains(t, out.String(), "until")
@@ -176,7 +175,7 @@ func TestRunFCListLimitUsesMostRecent(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	require.NoError(t, runFCListIn(workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), []string{"--limit", "1"}, &out))
+	require.NoError(t, runFCListIn(fcTestDSN(workspace), []string{"--limit", "1"}, &out))
 	assert.Contains(t, out.String(), "new")
 	assert.NotContains(t, out.String(), "middle")
 	assert.NotContains(t, out.String(), "old")
@@ -188,7 +187,7 @@ func TestRunFCListNoMessagePreviewOmitsPreviewColumns(t *testing.T) {
 	require.NoError(t, err)
 
 	var out bytes.Buffer
-	require.NoError(t, runFCListIn(workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), []string{"--no-message-preview"}, &out))
+	require.NoError(t, runFCListIn(fcTestDSN(workspace), []string{"--no-message-preview"}, &out))
 	assert.Contains(t, out.String(), "CONVERSATION_ID")
 	assert.NotContains(t, out.String(), "LAST_USER_MESSAGE")
 	assert.NotContains(t, out.String(), "hidden user")
@@ -208,7 +207,7 @@ func TestRunFCListRejectsBadValues(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var out bytes.Buffer
-			err := runFCListIn(t.TempDir(), config.DefaultRuntimeDir, "", tt.args, &out)
+			err := runFCListIn("", tt.args, &out)
 			require.ErrorContains(t, err, tt.want)
 		})
 	}
@@ -285,20 +284,17 @@ func TestRunFCUnknownCommand(t *testing.T) {
 func TestRunFCDeleteRequiresConversationID(t *testing.T) {
 	var out bytes.Buffer
 
-	err := runFCDeleteIn(t.TempDir(), config.DefaultRuntimeDir, "", nil, &out)
+	err := runFCDeleteIn("", nil, &out)
 	require.ErrorContains(t, err, "conversation-id")
 }
 
 func TestRunFCDeleteReportsDeleteAndWriteErrors(t *testing.T) {
-	workspaceFile := filepath.Join(t.TempDir(), "workspace")
-	require.NoError(t, os.WriteFile(workspaceFile, []byte("not a directory"), 0o600))
-
-	err := runFCDeleteIn(workspaceFile, config.DefaultRuntimeDir, "", []string{"main"}, io.Discard)
+	err := runFCDeleteIn("", []string{"main"}, io.Discard)
 	require.ErrorContains(t, err, "delete rocketcode session")
 
 	dsn, errDSN := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, errDSN)
-	err = runFCDeleteIn(t.TempDir(), config.DefaultRuntimeDir, dsn, []string{"main"}, failingWriter{})
+	err = runFCDeleteIn(dsn, []string{"main"}, failingWriter{})
 	require.ErrorContains(t, err, "write rocketcode delete result")
 	require.ErrorIs(t, err, errFailingWrite)
 }
@@ -306,7 +302,7 @@ func TestRunFCDeleteReportsDeleteAndWriteErrors(t *testing.T) {
 func TestRunFCDeleteRejectsBadFlag(t *testing.T) {
 	var out bytes.Buffer
 
-	err := runFCDeleteIn(t.TempDir(), config.DefaultRuntimeDir, "", []string{"--bad"}, &out)
+	err := runFCDeleteIn("", []string{"--bad"}, &out)
 	require.ErrorContains(t, err, "parse rocketcode delete flags")
 }
 
@@ -318,14 +314,14 @@ func TestRunFCDeleteDeletesOnlyTarget(t *testing.T) {
 	require.NoError(t, err)
 
 	var out bytes.Buffer
-	require.NoError(t, runFCDeleteIn(workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), []string{"main"}, &out))
+	require.NoError(t, runFCDeleteIn(fcTestDSN(workspace), []string{"main"}, &out))
 	assert.Contains(t, out.String(), "deleted 1 turns")
 
-	mainEntries, err := backend.ObserveSessionEntries(t.Context(), workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), "main", 0)
+	mainEntries, err := backend.ObserveSessionEntries(t.Context(), fcTestDSN(workspace), "main", 0)
 	require.NoError(t, err)
 	assert.Empty(t, mainEntries)
 
-	threadEntries, err := backend.ObserveSessionEntries(t.Context(), workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), "thread", 0)
+	threadEntries, err := backend.ObserveSessionEntries(t.Context(), fcTestDSN(workspace), "thread", 0)
 	require.NoError(t, err)
 	assert.Len(t, threadEntries, 1)
 }
@@ -334,14 +330,14 @@ func TestRunFCDeleteMissingDBReportsZero(t *testing.T) {
 	var out bytes.Buffer
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	require.NoError(t, runFCDeleteIn(t.TempDir(), config.DefaultRuntimeDir, dsn, []string{"main"}, &out))
+	require.NoError(t, runFCDeleteIn(dsn, []string{"main"}, &out))
 	assert.Contains(t, out.String(), "deleted 0 turns")
 }
 
 func TestWriteFCListReportsFlushError(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	err = writeFCListInOptions(t.Context(), t.TempDir(), config.DefaultRuntimeDir, dsn, backend.SessionListOptions{}, true, failingWriter{})
+	err = writeFCListInOptions(t.Context(), dsn, backend.SessionListOptions{}, true, failingWriter{})
 	require.ErrorContains(t, err, "flush rocketcode session list")
 	require.ErrorIs(t, err, errFailingWrite)
 }
@@ -351,7 +347,7 @@ func TestWriteFCObserveReportsWriterErrors(t *testing.T) {
 	_, err := fcAppendSessionEntryID(t.Context(), workspace, "main", fcTestEntry("hello", "hi"))
 	require.NoError(t, err)
 
-	err = writeFCObserveIn(t.Context(), workspace, config.DefaultRuntimeDir, fcTestDSN(workspace), "main", false, time.Millisecond, failingWriter{})
+	err = writeFCObserveIn(t.Context(), fcTestDSN(workspace), "main", false, time.Millisecond, failingWriter{})
 	require.ErrorContains(t, err, "write rocketcode session entry")
 	require.ErrorIs(t, err, errFailingWrite)
 }

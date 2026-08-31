@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	harness "github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
@@ -31,7 +30,7 @@ func testDSNFile(workspace string) string {
 
 func NewSessionService(workspace string) (*SessionService, error) {
 	if data, err := os.ReadFile(testDSNFile(workspace)); err == nil {
-		return NewSessionServiceIn(workspace, config.DefaultRuntimeDir, strings.TrimSpace(string(data)), slog.New(slog.DiscardHandler))
+		return NewSessionServiceIn(strings.TrimSpace(string(data)), slog.New(slog.DiscardHandler))
 	}
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
@@ -43,7 +42,7 @@ func NewSessionService(workspace string) (*SessionService, error) {
 		return nil, fmt.Errorf("remember test database url: %w", err)
 	}
 
-	return NewSessionServiceIn(workspace, config.DefaultRuntimeDir, dsn, slog.New(slog.DiscardHandler))
+	return NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
 }
 
 func testStoreDSN(workspace string) string {
@@ -79,7 +78,7 @@ func AppendSessionEntryID(ctx context.Context, workspace, conversationID string,
 		}
 	}
 
-	service, err := NewSessionServiceIn(workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), slog.New(slog.DiscardHandler))
+	service, err := NewSessionServiceIn(testStoreDSN(workspace), slog.New(slog.DiscardHandler))
 	if err != nil {
 		return 0, err
 	}
@@ -90,10 +89,10 @@ func AppendSessionEntryID(ctx context.Context, workspace, conversationID string,
 }
 
 func DeleteSession(ctx context.Context, workspace, conversationID string) (int64, error) {
-	return DeleteSessionIn(ctx, workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), conversationID)
+	return DeleteSessionIn(ctx, testStoreDSN(workspace), conversationID)
 }
 
-func TestSQLiteSessionStoreAppendAndLoad(t *testing.T) {
+func TestSessionStoreAppendAndLoad(t *testing.T) {
 	service := newTestSessionService(t)
 	store := newSessionStore("slack-thread:C123:111.222", service)
 	entry := testSessionEntry("hello", "hi")
@@ -433,7 +432,7 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 	assert.Equal(t, 5, n)
 	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
-	second, err := NewSessionServiceIn(workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), slog.New(slog.DiscardHandler))
+	second, err := NewSessionServiceIn(testStoreDSN(workspace), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop(context.Background())) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
@@ -794,7 +793,7 @@ func TestSessionServiceAppliesPendingRestartNotificationsOnce(t *testing.T) {
 	require.Len(t, entries, 1)
 }
 
-func TestSQLiteSessionStoreLoadsLargeImageTurn(t *testing.T) {
+func TestSessionStoreLoadsLargeImageTurn(t *testing.T) {
 	service := newTestSessionService(t)
 	store := newSessionStore("main", service)
 	entry := harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ResponseID: "", Model: "gpt-5.5", ReplayInput: testReplayInput(replayInputMessage{role: "user", text: strings.Repeat("x", 128*1024)})}
@@ -816,10 +815,10 @@ func TestAppendSessionEntryDBReportsWriteFailures(t *testing.T) {
 
 func TestNewSessionServiceReportsInvalidDatabaseURL(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	_, err := NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, "not-a-dsn", logger)
+	_, err := NewSessionServiceIn("not-a-dsn", logger)
 	require.Error(t, err)
 
-	_, err = NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, "postgres://u:s3cret@127.0.0.1:1/none?sslmode=disable", logger)
+	_, err = NewSessionServiceIn("postgres://u:s3cret@127.0.0.1:1/none?sslmode=disable", logger)
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "s3cret")
 
@@ -832,17 +831,18 @@ func TestNewSessionServiceReportsInvalidDatabaseURL(t *testing.T) {
 	_, err = db.ExecContext(t.Context(), `CREATE TABLE pg_migrations (id int)`)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
-	_, err = NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, dsn, logger)
+
+	_, err = NewSessionServiceIn(dsn, logger)
 	require.Error(t, err)
 }
 
-func TestSQLiteSessionStoreMissingIsEmpty(t *testing.T) {
+func TestSessionStoreMissingIsEmpty(t *testing.T) {
 	service := newTestSessionService(t)
 	store := newSessionStore("main", service)
 	require.Empty(t, collectEntries(t, store.in()))
 }
 
-func TestSQLiteSessionStoreReportsObserveError(t *testing.T) {
+func TestSessionStoreReportsObserveError(t *testing.T) {
 	service, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
 	require.NoError(t, service.Stop(context.Background()))
@@ -875,7 +875,7 @@ func TestMemoryStoreAppendAndLoad(t *testing.T) {
 	}
 }
 
-func TestSQLiteSessionStoreRejectsNilEntry(t *testing.T) {
+func TestSessionStoreRejectsNilEntry(t *testing.T) {
 	_, err := AppendSessionEntryID(context.Background(), t.TempDir(), "main", nil)
 	require.ErrorContains(t, err, "rocketcode session entry is required")
 }
@@ -891,11 +891,11 @@ func TestAppendSessionEntryIDRejectsBlankConversationID(t *testing.T) {
 func TestSessionInspectionMissingDBDoesNotCreateRuntimeDir(t *testing.T) {
 	workspace := t.TempDir()
 
-	summaries, err := ListSessionsInOptions(context.Background(), workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), SessionListOptions{})
+	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{})
 	require.NoError(t, err)
 	assert.Empty(t, summaries)
 
-	entries, err := ObserveSessionEntries(context.Background(), workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), "main", 0)
+	entries, err := ObserveSessionEntries(context.Background(), testStoreDSN(workspace), "main", 0)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 	assert.NoDirExists(t, filepath.Join(workspace, ".rocketclaw"))
@@ -911,7 +911,7 @@ func TestListSessionsIncludesLastMessages(t *testing.T) {
 	_, err = AppendSessionEntryID(context.Background(), workspace, "slack-thread:D123:111.222", testSessionEntry("thread user", "thread assistant"))
 	require.NoError(t, err)
 
-	summaries, err := ListSessionsInOptions(context.Background(), workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), SessionListOptions{})
+	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{})
 	require.NoError(t, err)
 	require.Len(t, summaries, 2)
 
@@ -933,18 +933,18 @@ func TestListSessionsOptionsBoundsByLatestUpdate(t *testing.T) {
 	_, err = AppendSessionEntryID(context.Background(), workspace, "until", testSessionEntryAt(until, "until"))
 	require.NoError(t, err)
 
-	summaries, err := ListSessionsInOptions(context.Background(), workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), SessionListOptions{Since: since, Until: until})
+	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{Since: since, Until: until})
 	require.NoError(t, err)
 	require.Len(t, summaries, 2)
 	assert.Equal(t, "inside", summaries[0].ConversationID)
 	assert.Equal(t, "boundary", summaries[1].ConversationID)
 
-	summaries, err = ListSessionsInOptions(context.Background(), workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), SessionListOptions{Since: since})
+	summaries, err = ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{Since: since})
 	require.NoError(t, err)
 	require.Len(t, summaries, 3)
 	assert.Equal(t, "until", summaries[0].ConversationID)
 
-	summaries, err = ListSessionsInOptions(context.Background(), workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), SessionListOptions{Until: until})
+	summaries, err = ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{Until: until})
 	require.NoError(t, err)
 	require.Len(t, summaries, 3)
 	assert.Equal(t, "inside", summaries[0].ConversationID)
@@ -959,7 +959,7 @@ func TestListSessionsOptionsLimitUsesMostRecent(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	summaries, err := ListSessionsInOptions(context.Background(), workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), SessionListOptions{Limit: 2})
+	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{Limit: 2})
 	require.NoError(t, err)
 	require.Len(t, summaries, 2)
 	assert.Equal(t, "new", summaries[0].ConversationID)
@@ -967,13 +967,13 @@ func TestListSessionsOptionsLimitUsesMostRecent(t *testing.T) {
 }
 
 func TestListSessionsMissingDBIsEmpty(t *testing.T) {
-	summaries, err := ListSessionsInOptions(context.Background(), t.TempDir(), config.DefaultRuntimeDir, testStoreDSN(t.TempDir()), SessionListOptions{})
+	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(t.TempDir()), SessionListOptions{})
 	require.NoError(t, err)
 	assert.Empty(t, summaries)
 }
 
 func TestListSessionsOptionsMissingDBIsEmpty(t *testing.T) {
-	summaries, err := ListSessionsInOptions(context.Background(), t.TempDir(), config.DefaultRuntimeDir, testStoreDSN(t.TempDir()), SessionListOptions{Limit: 1})
+	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(t.TempDir()), SessionListOptions{Limit: 1})
 	require.NoError(t, err)
 	assert.Empty(t, summaries)
 }
@@ -1136,11 +1136,11 @@ func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, deleted)
 
-	mainEntries, err := ObserveSessionEntries(context.Background(), workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), "main", 0)
+	mainEntries, err := ObserveSessionEntries(context.Background(), testStoreDSN(workspace), "main", 0)
 	require.NoError(t, err)
 	assert.Empty(t, mainEntries)
 
-	threadEntries, err := ObserveSessionEntries(context.Background(), workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), "thread", 0)
+	threadEntries, err := ObserveSessionEntries(context.Background(), testStoreDSN(workspace), "thread", 0)
 	require.NoError(t, err)
 	assert.Len(t, threadEntries, 1)
 }
@@ -1242,7 +1242,7 @@ func TestSessionServiceRejectsBlankKeys(t *testing.T) {
 	require.EqualError(t, store.StartActiveTurn(t.Context(), nil), "active turn checkpoint is required")
 	require.EqualError(t, store.StartActiveTurn(t.Context(), &harness.ActiveTurnCheckpoint{}), "active turn ID is required")
 	require.EqualError(t, store.StartActiveTurn(t.Context(), &harness.ActiveTurnCheckpoint{TurnID: "turn-1"}), "active turn conversation ID is required")
-	_, err = ObserveSessionEntries(t.Context(), t.TempDir(), config.DefaultRuntimeDir, testStoreDSN(t.TempDir()), " ", 0)
+	_, err = ObserveSessionEntries(t.Context(), testStoreDSN(t.TempDir()), " ", 0)
 	require.EqualError(t, err, "conversation ID is required")
 }
 
@@ -1316,13 +1316,13 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	assert.Contains(t, restartNotifications, activeOldThread)
 
 	for _, conversationID := range []string{oldThread, "external_mcp:cron:orphan", "cron:daily:old", "one-off-cron:daily:old", "slack-thread:DORPHAN:1.000"} {
-		entries, err := ObserveSessionEntries(context.Background(), workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), conversationID, 0)
+		entries, err := ObserveSessionEntries(context.Background(), testStoreDSN(workspace), conversationID, 0)
 		require.NoError(t, err)
 		assert.Empty(t, entries, conversationID)
 	}
 
 	for _, conversationID := range []string{activeOldThread, "slack-thread:D123:not-a-time", "cron:daily:new"} {
-		entries, err := ObserveSessionEntries(context.Background(), workspace, config.DefaultRuntimeDir, testStoreDSN(workspace), conversationID, 0)
+		entries, err := ObserveSessionEntries(context.Background(), testStoreDSN(workspace), conversationID, 0)
 		require.NoError(t, err)
 		assert.Len(t, entries, 1, conversationID)
 	}

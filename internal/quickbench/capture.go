@@ -10,13 +10,10 @@ import (
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
 )
 
 // CaptureOptions configures Capture.
 type CaptureOptions struct {
-	Workspace      string
-	RuntimeDir     string
 	DatabaseURL    string
 	ConversationID string
 	AgentsDir      string // workspace agents/ directory (required for full tree)
@@ -67,11 +64,7 @@ func Capture(ctx context.Context, opt CaptureOptions) error {
 		return fmt.Errorf("root agent %q not found in %s", root, agentsDir)
 	}
 
-	runtimeDir := strings.TrimSpace(opt.RuntimeDir)
-	if runtimeDir == "" {
-		runtimeDir = config.DefaultRuntimeDir
-	}
-	entries, err := backend.ObserveSessionEntries(ctx, opt.Workspace, runtimeDir, databaseURL, conversationID, 0)
+	entries, err := backend.ObserveSessionEntries(ctx, databaseURL, conversationID, 0)
 	if err != nil {
 		return err
 	}
