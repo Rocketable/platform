@@ -172,12 +172,12 @@ func extractFromEntries(entries []backend.ObservedSessionEntry) ([]Message, []To
 				}
 
 				switch name {
-				case "bash":
-					if cmd := parseBashCommandFromToolArgs(args); cmd != "" {
+				case "shell":
+					if cmd := parseShellCommandFromToolArgs(args); cmd != "" {
 						pendingBash[callID] = []string{cmd}
 					}
 				case "execute":
-					if cmds := parseBashCommandsFromExecuteArgs(args); len(cmds) > 0 {
+					if cmds := parseShellCommandsFromExecuteArgs(args); len(cmds) > 0 {
 						pendingBash[callID] = cmds
 					}
 				}
@@ -203,7 +203,7 @@ func extractFromEntries(entries []backend.ObservedSessionEntry) ([]Message, []To
 					messages = append(messages, Message{Role: "assistant", Text: "[" + name + "]\n" + output})
 				}
 
-				if name == "task" || name == "bash" || name == "execute" {
+				if name == "task" || name == "shell" || name == "execute" {
 					continue
 				}
 

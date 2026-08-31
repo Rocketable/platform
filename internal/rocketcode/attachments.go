@@ -57,7 +57,7 @@ type Attachment struct {
 type ToolResult struct {
 	Output      string
 	Attachments []Attachment
-	// Data is an optional structured payload for code-mode bindings (e.g. BashResult).
+	// Data is an optional structured payload for code-mode bindings (e.g. ShellResult).
 	Data any
 }
 

@@ -146,7 +146,7 @@ func defaultMainAgentMarkdown(model, prompt string) []byte {
 		prompt = "You are a helpful assistant."
 	}
 
-	return fmt.Appendf(nil, "---\ndescription: quickbench sample root agent\nmodel: %s\npermission:\n  task:\n    \"*\": allow\n  bash:\n    \"*\": allow\n  tools:\n    \"*\": allow\n---\n\n%s\n", model, strings.TrimSpace(prompt))
+	return fmt.Appendf(nil, "---\ndescription: quickbench sample root agent\nmodel: %s\npermission:\n  task:\n    \"*\": allow\n  shell:\n    \"*\": allow\n  tools:\n    \"*\": allow\n---\n\n%s\n", model, strings.TrimSpace(prompt))
 }
 
 // validateAgentTaskTargets ensures exact task allow targets exist in the BAR tree.

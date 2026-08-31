@@ -16,7 +16,7 @@ func TestValidateGoalCheckScriptAcceptsSafeSimpleCommand(t *testing.T) {
 	defer func() { require.NoError(t, root.Close()) }()
 
 	permission := rocketcode.PermissionSet{}
-	require.NoError(t, permission.Allow("bash", "./scripts/check.sh --linter-mode"))
+	require.NoError(t, permission.Allow("shell", "./scripts/check.sh --linter-mode"))
 
 	check, err := validateGoalCheckScript(root, workspace, `./scripts/check.sh --linter-mode`, permission)
 	require.NoError(t, err)
@@ -30,7 +30,7 @@ func TestValidateGoalCheckScriptRejectsUnsafeShapes(t *testing.T) {
 	defer func() { require.NoError(t, root.Close()) }()
 
 	permission := rocketcode.PermissionSet{}
-	require.NoError(t, permission.Allow("bash", "*"))
+	require.NoError(t, permission.Allow("shell", "*"))
 
 	for _, script := range []string{
 		`./scripts/check.sh && ./banana.sh`,
@@ -61,7 +61,7 @@ func TestValidateGoalCheckScriptRequiresWorkspaceExecutable(t *testing.T) {
 	require.NoError(t, root.WriteFile("scripts/not-executable.sh", []byte("#!/bin/sh\n"), 0o644))
 
 	permission := rocketcode.PermissionSet{}
-	require.NoError(t, permission.Allow("bash", "*"))
+	require.NoError(t, permission.Allow("shell", "*"))
 
 	for _, script := range []string{
 		`/bin/echo ok`,
@@ -81,7 +81,7 @@ func TestValidateGoalCheckScriptChecksFullBashPermissionSubject(t *testing.T) {
 	defer func() { require.NoError(t, root.Close()) }()
 
 	permission := rocketcode.PermissionSet{}
-	require.NoError(t, permission.Allow("bash", "./scripts/check.sh --safe"))
+	require.NoError(t, permission.Allow("shell", "./scripts/check.sh --safe"))
 
 	_, err := validateGoalCheckScript(root, workspace, `./scripts/check.sh --safe`, permission)
 	require.NoError(t, err)
@@ -89,8 +89,8 @@ func TestValidateGoalCheckScriptChecksFullBashPermissionSubject(t *testing.T) {
 	_, err = validateGoalCheckScript(root, workspace, `./scripts/check.sh --dangerous`, permission)
 	require.Error(t, err)
 
-	require.NoError(t, permission.Allow("bash", "*"))
-	require.NoError(t, permission.Deny("bash", "./scripts/check.sh --dangerous"))
+	require.NoError(t, permission.Allow("shell", "*"))
+	require.NoError(t, permission.Deny("shell", "./scripts/check.sh --dangerous"))
 
 	_, err = validateGoalCheckScript(root, workspace, `./scripts/check.sh --dangerous`, permission)
 	require.Error(t, err)

@@ -51,9 +51,9 @@ func validateGoalCheckScript(root *os.Root, workspace, script string, permission
 		return goalCheckCommand{}, err
 	}
 
-	action, matched := permission.Evaluate("bash", subject)
+	action, matched := permission.Evaluate("shell", subject)
 	if !matched || action != rocketcode.PermissionAllow {
-		return goalCheckCommand{}, fmt.Errorf("goal check script is not allowed by agent bash permission: %s", subject)
+		return goalCheckCommand{}, fmt.Errorf("goal check script is not allowed by agent shell permission: %s", subject)
 	}
 
 	return goalCheckCommand{command: command.text, subject: subject}, nil
@@ -120,7 +120,7 @@ func parseGoalCheckCommand(script string) (parsedGoalCheckCommand, string, error
 		return parsedGoalCheckCommand{}, "", fmt.Errorf("render goal check script: %w", err)
 	}
 
-	subjects := rocketcode.BashPermissionSubjects(buf.String())
+	subjects := rocketcode.ShellPermissionSubjects(buf.String())
 	if len(subjects) != 1 {
 		return parsedGoalCheckCommand{}, "", errors.New("goal check script must render one bash permission subject")
 	}

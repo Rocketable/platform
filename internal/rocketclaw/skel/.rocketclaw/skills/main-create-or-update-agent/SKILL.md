@@ -52,17 +52,17 @@ Built-in permission buckets:
 - `grep`: requested search patterns for the `grep` tool
 - `webfetch`: requested URLs for the `webfetch` tool
 - `websearch`: coarse hosted web search toggle only
-- `bash`: shell command call expressions parsed out of the command
+- `shell`: shell command call expressions parsed out of the command. `bash` is a migration alias for `shell` (same rules, same subjects). If both keys are present, `shell` wins and `bash` is ignored. Always write `shell` on new agents. On every edit, rename `permission.bash` to `permission.shell` and keep the existing rule map; do not leave a `bash` key in the overlay.
 - `edit`: root-relative file paths touched by `apply_patch`
 - `skill`: skill names for `find_skills` and `skill`
 - `task`: subagent names for the `task` tool only
 - `workflow`: workflow stems for `rocketclaw_dynamic_workflow`
-- `read` / `edit` / `glob` / `grep` / `webfetch` / `bash`: same subjects as before; unlock nested builtins inside Code Mode `execute` (not separate top-level tools)
+- `read` / `edit` / `glob` / `grep` / `webfetch` / `shell`: same subjects as before; unlock nested builtins inside Code Mode `execute` (not separate top-level tools)
 - `mcp`: outbound MCP as `server.tool` or wildcards such as `demo.*`; unlocks Code Mode `execute` MCP builtins when a matching configured `mcp_servers` name is granted
 
 For edit-only agents, an `edit` allow also permits reading the same path unless a `read` rule matched first. Do not add a top-level deny that would block this fallback.
 
-For bash agents, rocketcode checks permissions against each parsed shell call. Multi-command scripts need every parsed call allowed.
+For shell agents, rocketcode checks permissions against each parsed shell call. Multi-command scripts need every parsed call allowed.
 
 Automatic permission review rules use `auto` or `auto(<agent-name>)`. Bare `auto` uses RocketCode's embedded `guardian` reviewer. `auto(<agent-name>)` uses that loaded custom reviewer agent. RocketClaw always enables RocketCode automatic review; failed review, invalid reviewer output, recursive review, timeout, or rejection denies the tool call. Do not create or rename an agent to `guardian`, because that name is reserved for the embedded reviewer. Custom reviewer agents should normally set `reasoningEffort: low` because each automatic permission review has 90 seconds to return a valid decision.
 
@@ -70,14 +70,14 @@ Prefer exact `allow` for low-risk deterministic opt-ins. Use `auto` only for ope
 
 ```yaml
 permission:
-  bash:
+  shell:
     "tmux *": allow
     "systemctl restart *": auto
     "kubectl apply *": auto(release-reviewer)
 ```
 
 Safety rules enforced by `rocketclaw lint`:
-- Write XOR execute: do not give one agent `edit` access to files that can influence its own `bash` calls.
+- Write XOR execute: do not give one agent `edit` access to files that can influence its own `shell` calls.
 - Read plus constrained execute can leak script internals into creative shell use; avoid letting an agent read scripts it can execute unless the human explicitly accepts the risk.
 - Delegation chains can escalate access; do not let a writer agent delegate to another agent that can execute the written script.
 - Web-capable agents using `websearch` or `webfetch` must not write files that internal/private agents read unless the human explicitly accepts external-content contamination risk.
@@ -87,7 +87,7 @@ Later matching rules override earlier matching rules, so allow broad access firs
 
 ```yaml
 permission:
-  bash:
+  shell:
     "*": allow
     "rm *": deny
     "sudo *": deny
@@ -109,7 +109,7 @@ permission:
   websearch: allow
   edit:
     "owned/path/**": allow
-  bash:
+  shell:
     "exact command *": allow
   skill:
     "docs-helper": allow
@@ -207,16 +207,16 @@ The body must also end with an extra instruction that explicitly tells the agent
 2. Gather only the missing required inputs.
 3. For an existing agent, read the current effective file from `.rocketclaw`.
 4. Summarize the agent change you are about to make.
-5. Create or update the overlay file in `agents/`.
+5. Create or update the overlay file in `agents/`. If the source still has `permission.bash`, write `permission.shell` with the same rules and omit `bash`.
 6. If this is a rename and an old overlay file exists at the previous path, remove that old overlay file.
 7. If you changed one or more `agents/` overlay files or relevant `scripts/` files, finish all requested edits first, run `rocketclaw lint`, resolve or explicitly suppress findings approved by the human, then optionally tell the human you are applying them now and call `rocketclaw_reload` exactly once. Use `rocketclaw_restart` only when runtime configuration or overlay-list entries changed.
 
 ## Important
 
 - Do not write the file into `.rocketclaw`; write it into `agents/`.
-- Always copy existing agent content from `.rocketclaw` into `agents/` before editing it.
+- Always copy existing agent content from `.rocketclaw` into `agents/` before editing it. Rename `permission.bash` to `permission.shell` in that overlay (same rules); do not keep both keys.
 - RocketCode denies unmatched permissions by default. Do not write top-level or per-bucket default deny rules.
-- Do not write broad `edit: allow` or `bash: allow`; prefer exact `edit` or exact `bash` opt-ins, not both.
+- Do not write broad `edit: allow` or `shell: allow`; prefer exact `edit` or exact `shell` opt-ins, not both.
 - Run `rocketclaw lint` after requested agent or relevant script edits and before `rocketclaw_reload` or `rocketclaw_restart`.
 - Always end the agent instructions with an explicit instruction to use `MEMORY.md`.
 - Make all requested agent-definition edits before calling `rocketclaw_reload` or `rocketclaw_restart`; do not call either between intermediate edits.

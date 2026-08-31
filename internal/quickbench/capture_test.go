@@ -139,7 +139,7 @@ func TestExtractTranscriptAndMocks(t *testing.T) {
 			json.RawMessage(`{"type":"function_call_output","call_id":"c1","output":"pong"}`),
 			json.RawMessage(`{"type":"function_call","call_id":"c2","name":"task","arguments":"{\"subagent_type\":\"worker\"}"}`),
 			json.RawMessage(`{"type":"function_call_output","call_id":"c2","output":"<task_result>nope</task_result>"}`),
-			json.RawMessage(`{"type":"function_call","call_id":"c3","name":"bash","arguments":"{\"command\":\"gh pr view 1\"}"}`),
+			json.RawMessage(`{"type":"function_call","call_id":"c3","name":"shell","arguments":"{\"command\":\"gh pr view 1\"}"}`),
 			json.RawMessage(`{"type":"function_call_output","call_id":"c3","output":"PR title"}`),
 			json.RawMessage(`{"type":"message","role":"assistant","content":"ok"}`),
 		}},

@@ -54,7 +54,7 @@ func TestRunLintDefaultUsesNext(t *testing.T) {
 	writeLintAgent(t, workspace, "lint-bad.md", `---
 description: bad
 permissions:
-  bash:
+  shell:
     "echo ok": allow
 ---
 bad

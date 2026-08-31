@@ -49,7 +49,7 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 
 	var permissions PermissionSet
 	require.NoError(t, permissions.Allow("read", "*"))
-	require.NoError(t, permissions.Allow("bash", "echo *"))
+	require.NoError(t, permissions.Allow("shell", "echo *"))
 
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
 	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
@@ -64,9 +64,11 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	model, hosts := factory.assembleTools(agent)
 	require.Contains(t, model, executeToolName)
 	assert.NotContains(t, model, "read")
-	assert.NotContains(t, model, "bash")
+	assert.NotContains(t, model, "shell")
+	assert.NotContains(t, model, "python3")
 	assert.Contains(t, hosts, "read")
-	assert.Contains(t, hosts, "bash")
+	assert.Contains(t, hosts, "shell")
+	assert.Contains(t, hosts, "python3")
 
 	execDesc := model[executeToolName].Definition.Description.Value
 	assert.Contains(t, execDesc, "search(")
@@ -93,6 +95,7 @@ func TestAssembleToolsHidesHostFromModel(t *testing.T) {
 	prompt := withCodeModeSystemPrompt("base", model, hosts, nil)
 	assert.Contains(t, prompt, "## Code Mode")
 	assert.Contains(t, prompt, "read(")
+	assert.Contains(t, prompt, "python3(")
 	assert.Contains(t, prompt, "No import/from")
 	assert.Contains(t, prompt, `r"..."`)
 	assert.Contains(t, prompt, `r'''`)
@@ -132,7 +135,8 @@ func TestExecuteAvailableWithHostToolsOnly(t *testing.T) {
 	// websearch may appear if base has it and hasActionableRule - websearch needs grant
 	assert.NotContains(t, model, "read")
 	assert.Contains(t, hosts, "read")
-	assert.NotContains(t, hosts, "bash")
+	assert.NotContains(t, hosts, "shell")
+	assert.NotContains(t, hosts, "python3")
 }
 
 func TestCustomToolsAreCodeModeOnlyInsideExecute(t *testing.T) {
@@ -220,7 +224,7 @@ func TestCustomToolsAreCodeModeOnlyInsideExecute(t *testing.T) {
 	assert.True(t, sawNested, "expected nested ask_user_question diagnostic")
 }
 
-func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {
+func TestCodeModeHostToolsIncludesShellWhenAllowed(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -233,8 +237,8 @@ func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {
 	shellTemp := testShellTempConfig(t, root, outputDir)
 
 	var permissions PermissionSet
-	require.NoError(t, permissions.Allow("bash", "echo *"))
-	require.NoError(t, permissions.Deny("bash", "rm *"))
+	require.NoError(t, permissions.Allow("shell", "echo *"))
+	require.NoError(t, permissions.Deny("shell", "rm *"))
 
 	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
 	sss := newSandboxedShellSystem(root, &shellTemp, nil, DefaultShellCommand)
@@ -244,8 +248,10 @@ func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {
 	agent := &Agent{Permission: permissions}
 
 	model, hosts := factory.assembleTools(agent)
-	assert.NotContains(t, model, "bash")
-	assert.Contains(t, hosts, "bash")
+	assert.NotContains(t, model, "shell")
+	assert.NotContains(t, model, "python3")
+	assert.Contains(t, hosts, "shell")
+	assert.Contains(t, hosts, "python3")
 
 	looper := &looper{
 		Permissions:            permissions,
@@ -261,7 +267,7 @@ func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {
 	}
 
 	for i := range bound {
-		if bound[i].Name == "bash" {
+		if bound[i].Name == "shell" {
 			bashTool = &struct {
 				Call func(context.Context, map[string]any) (string, error)
 			}{Call: bound[i].Call}
@@ -279,6 +285,76 @@ func TestCodeModeHostToolsIncludesBashWhenAllowed(t *testing.T) {
 	_, err = bashTool.Call(ctx, map[string]any{"command": "rm -rf /tmp/x"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "denied")
+}
+
+func TestExecuteShellWorkdirAndEnv(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = root.Close() })
+	require.NoError(t, root.MkdirAll("nested", 0o755))
+
+	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
+	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o700))
+	shellTemp := testShellTempConfig(t, root, outputDir)
+
+	var permissions PermissionSet
+	require.NoError(t, permissions.Allow("shell", "*"))
+
+	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
+	sss := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=from-env"}, DefaultShellCommand)
+	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, sss)}
+	model, hosts := factory.assembleTools(&Agent{Permission: permissions})
+	looper := &looper{Permissions: permissions, AutoApprovePermissions: true, Tools: model, CodeModeHosts: hosts}
+	ctx := withToolCallContext(t.Context(), looper, nil)
+	run := model[executeToolName]
+
+	workdir, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return str(shell(command=\"pwd\", workdir=\"nested\"))\n"}`), nil, emptyToolCallMetadata())
+	require.NoError(t, err)
+	assert.Contains(t, workdir.Output, filepath.Join(dir, "nested"))
+
+	env, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return str(shell(command=r'''printf %s \"$ROCKETCLAW_CONVERSATION_ID\"'''))\n"}`), nil, emptyToolCallMetadata())
+	require.NoError(t, err)
+	assert.Equal(t, "from-env", env.Output)
+}
+
+func TestExecutePython3(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = root.Close() })
+	require.NoError(t, root.MkdirAll("nested", 0o755))
+
+	outputDir := filepath.Join(dir, ".tmp", "shell-tmp")
+	require.NoError(t, root.MkdirAll(filepath.Join(".tmp", "shell-tmp"), 0o700))
+	shellTemp := testShellTempConfig(t, root, outputDir)
+
+	var permissions PermissionSet
+	require.NoError(t, permissions.Allow("shell", "*"))
+
+	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
+	sss := newSandboxedShellSystem(root, &shellTemp, []string{"ROCKETCLAW_CONVERSATION_ID=from-env"}, DefaultShellCommand)
+	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, sss)}
+	model, hosts := factory.assembleTools(&Agent{Permission: permissions})
+	looper := &looper{Permissions: permissions, AutoApprovePermissions: true, Tools: model, CodeModeHosts: hosts}
+	ctx := withToolCallContext(t.Context(), looper, nil)
+	run := model[executeToolName]
+
+	out, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return str(python3(command=r'''print(1)\nprint(2)'''))\n"}`), nil, emptyToolCallMetadata())
+	require.NoError(t, err)
+	assert.Equal(t, "1\n2\n", out.Output)
+
+	cwd, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return str(python3(command=\"import os; print(os.getcwd())\", workdir=\"nested\"))\n"}`), nil, emptyToolCallMetadata())
+	require.NoError(t, err)
+	assert.Contains(t, cwd.Output, filepath.Join(dir, "nested"))
+
+	code, err := run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return python3(command=\"raise SystemExit(7)\").error_code\n"}`), nil, emptyToolCallMetadata())
+	require.NoError(t, err)
+	assert.Equal(t, "7", code.Output)
 }
 
 func TestCodeModeHostsSurviveModelWithoutHosts(t *testing.T) {
@@ -326,7 +402,7 @@ func TestExecuteParseFailureDoesNotRunHost(t *testing.T) {
 	ctx := withToolCallContext(t.Context(), looper, nil)
 
 	run := model[executeToolName]
-	_, err = run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return bash(command=r\"python3 - <<'PY'\nprint(\"hello\")\nPY\")\n"}`), nil, emptyToolCallMetadata())
+	_, err = run.Call(ctx, json.RawMessage(`{"code":"def main():\n    return shell(command=r\"python3 - <<'PY'\nprint(\"hello\")\nPY\")\n"}`), nil, emptyToolCallMetadata())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `"phase":"codemode_parse"`)
 	assert.Contains(t, err.Error(), `"execution_started":false`)
@@ -598,7 +674,7 @@ func TestCodeModeSearchOpenCodeShape(t *testing.T) {
 		"read": {Definition: *functionTool("read", "Read a file", map[string]any{
 			"filePath": map[string]any{"type": "string"},
 		})},
-		"bash": {Definition: *functionTool("bash", "Run shell", map[string]any{
+		"shell": {Definition: *functionTool("shell", "Run shell", map[string]any{
 			"command": map[string]any{"type": "string"},
 		})},
 	}
@@ -622,7 +698,7 @@ func TestCodeModeSearchOpenCodeShape(t *testing.T) {
 	out = codeModeSearch(index, map[string]any{"query": "", "limit": 1, "offset": 0})
 	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
 	require.Len(t, parsed.Items, 1)
-	assert.Equal(t, 6, parsed.Remaining) // 4 concurrency + bash, read, demo.echo → 7 total
+	assert.Equal(t, 6, parsed.Remaining) // 4 concurrency + shell, read, demo.echo → 7 total
 	require.NotNil(t, parsed.Next)
 	assert.Equal(t, 1, parsed.Next.Offset)
 

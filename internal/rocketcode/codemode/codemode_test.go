@@ -46,7 +46,7 @@ func TestRunParseFailureDoesNotCallHost(t *testing.T) {
 	}{
 		{
 			name:     "raw single-line newline",
-			source:   "def main():\n    return bash(command=r\"python3 - <<'PY'\nprint(\"hello\")\nPY\")\n",
+			source:   "def main():\n    return shell(command=r\"python3 - <<'PY'\nprint(\"hello\")\nPY\")\n",
 			category: parseCategoryUnexpectedNewline,
 			message:  "unexpected newline in string",
 		},
@@ -70,7 +70,7 @@ func TestRunParseFailureDoesNotCallHost(t *testing.T) {
 		},
 		{
 			name:     "missing comma",
-			source:   "def main():\n    return bash(command=\"a\" command=\"b\")\n",
+			source:   "def main():\n    return shell(command=\"a\" command=\"b\")\n",
 			category: parseCategorySyntax,
 			message:  "want ','",
 		},
@@ -81,7 +81,7 @@ func TestRunParseFailureDoesNotCallHost(t *testing.T) {
 			called := false
 
 			_, err := Run(t.Context(), tc.source, nil, allowAll, nilCall, noToolCallObserver, []HostTool{{
-				Name: "bash",
+				Name: "shell",
 				Call: func(context.Context, map[string]any) (string, error) {
 					called = true
 					return "dispatched", nil
@@ -115,11 +115,11 @@ func TestRunRawTripleQuotedMultiline(t *testing.T) {
 	var got string
 
 	out, err := Run(t.Context(), `def main():
-    return bash(command=r'''python3 - <<'PY'
+    return shell(command=r'''python3 - <<'PY'
 print("hello")
 PY''')
 `, nil, allowAll, nilCall, noToolCallObserver, []HostTool{{
-		Name: "bash",
+		Name: "shell",
 		Call: func(_ context.Context, args map[string]any) (string, error) {
 			got, _ = args["command"].(string)
 			return "ok", nil

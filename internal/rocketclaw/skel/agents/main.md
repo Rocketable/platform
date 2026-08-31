@@ -3,7 +3,7 @@ description: Primary AI personal assistant for rocketclaw conversations
 model: gpt-5.5
 reasoningEffort: high
 permission:
-  bash:
+  shell:
     "gh *": "allow"
     "go run github.com/Rocketable/platform/cmd/quickbench@main *": "allow"
   skill:

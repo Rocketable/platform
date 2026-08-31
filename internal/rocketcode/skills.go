@@ -404,7 +404,7 @@ func permissionRuleLines(bucketName string, rules []PermissionRule) []string {
 		}
 
 		lines := []string{"- Everything is allowed except:"}
-		if bucketName == "bash" {
+		if bucketName == "shell" {
 			lines[0] = "- All commands are allowed except:"
 		}
 

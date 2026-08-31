@@ -7,14 +7,14 @@ import (
 	"go.starlark.net/starlark"
 )
 
-func TestBashStarlarkResult(t *testing.T) {
-	value := newBashStarlarkResult(BashResult{
+func TestShellStarlarkResult(t *testing.T) {
+	value := newHostCommandStarlarkResult("shell_result", ShellResult{
 		Output:    "full",
 		ErrorCode: "7",
 		Success:   false,
 	})
 
-	require.Equal(t, "bash_result", value.Type())
+	require.Equal(t, "shell_result", value.Type())
 	require.Equal(t, "full", value.String())
 	require.Equal(t, starlark.False, value.Truth())
 

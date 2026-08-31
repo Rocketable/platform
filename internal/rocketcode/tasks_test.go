@@ -428,7 +428,7 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 		require.Contains(t, tools, "execute")
 		require.Contains(t, tools, "task")
 		require.NotContains(t, tools, "read")
-		require.NotContains(t, tools, "bash")
+		require.NotContains(t, tools, "shell")
 		require.Contains(t, hosts, "read")
 	})
 
@@ -445,12 +445,12 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 	})
 
 	t.Run("startup agent can deny individual tools", func(t *testing.T) {
-		agent := testAgentWithPermission(permissionSetForActions(map[string]PermissionAction{"bash": permissionDeny}))
+		agent := testAgentWithPermission(permissionSetForActions(map[string]PermissionAction{"shell": permissionDeny}))
 		agent.Name = "main"
 
 		tools := factory.toolsFor(agent)
 
-		require.NotContains(t, tools, "bash")
+		require.NotContains(t, tools, "shell")
 		require.NotContains(t, tools, "read")
 	})
 
@@ -462,7 +462,7 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 
 		require.Contains(t, tools, "execute")
 		require.NotContains(t, tools, "read")
-		require.NotContains(t, tools, "bash")
+		require.NotContains(t, tools, "shell")
 		// edit allow makes read permission actionable (inheritance).
 		require.Contains(t, hosts, "read")
 	})
@@ -503,9 +503,9 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 	})
 }
 
-func TestBashPermissionGrantsSessionShellTempReadAndGlob(t *testing.T) {
+func TestShellPermissionGrantsSessionShellTempReadAndGlob(t *testing.T) {
 	shellTemp := shellTempConfig{tmpRelDir: ".rocketclaw/.rocketcode/tmp/session-a", tmpDir: ""}
-	agent := testAgentWithPermission(permissionSetForActions(map[string]PermissionAction{"bash": permissionAllow}))
+	agent := testAgentWithPermission(permissionSetForActions(map[string]PermissionAction{"shell": permissionAllow}))
 	permissions := shellTemp.effectivePermissions(agent.Permission)
 	loop := emptyTestLooper()
 	loop.Permissions = permissions
@@ -777,7 +777,7 @@ func TestLooperNumbersSiblingTaskDiagnostics(t *testing.T) {
 func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
 	var bashTool looperTool
 
-	bashTool.Permission = "bash"
+	bashTool.Permission = "shell"
 
 	var readTool looperTool
 
@@ -790,8 +790,8 @@ func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
 	factory.agents = agents
 	factory.skills = Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}
 	factory.baseTools = map[string]looperTool{
-		"bash": bashTool,
-		"read": readTool,
+		"shell": bashTool,
+		"read":  readTool,
 	}
 	factory.childRunLogger = DiscardChildRunLog
 

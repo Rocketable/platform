@@ -747,15 +747,15 @@ func TestLooperBuildParamsSortsToolsByName(t *testing.T) {
 	looper.Tools = map[string]looperTool{
 		"read":        testLooperTool("read"),
 		"apply_patch": testLooperTool("apply_patch"),
-		"bash":        testLooperTool("bash"),
+		"shell":       testLooperTool("shell"),
 	}
 
 	params := looper.buildParams(nil)
 
 	require.Len(t, params.Tools, 3)
 	require.Equal(t, "apply_patch", params.Tools[0].OfFunction.Name)
-	require.Equal(t, "bash", params.Tools[1].OfFunction.Name)
-	require.Equal(t, "read", params.Tools[2].OfFunction.Name)
+	require.Equal(t, "read", params.Tools[1].OfFunction.Name)
+	require.Equal(t, "shell", params.Tools[2].OfFunction.Name)
 }
 
 func TestLooperBuildParamsIncludesConfiguredVerbosity(t *testing.T) {
@@ -1634,21 +1634,21 @@ func TestLooperSendsToolOutputAttachments(t *testing.T) {
 
 func TestLooperDeniesToolCallsInBand(t *testing.T) {
 	mock := mockResponses(
-		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{"command":"rm -rf tmp","description":"remove tmp"}`)}),
+		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "shell", `{"command":"rm -rf tmp","description":"remove tmp"}`)}),
 		responseWithMessage("resp-final", "recovered"),
 	)
 	looper := testLooper(mock)
-	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{
+	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "shell", Rules: []PermissionRule{
 		{Pattern: "*", Action: permissionDeny},
 		{Pattern: "git status *", Action: permissionAllow},
 	}}}}
-	bashTool := testLooperTool("bash")
-	bashTool.Permission = "bash"
+	bashTool := testLooperTool("shell")
+	bashTool.Permission = "shell"
 	bashTool.Subjects = func(raw json.RawMessage) ([]string, error) {
-		var params bashParams
+		var params ShellParams
 		require.NoError(t, json.Unmarshal(raw, &params))
 
-		return BashPermissionSubjects(params.Command), nil
+		return ShellPermissionSubjects(params.Command), nil
 	}
 	bashTool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
 		t.Error("denied tool should not execute")
@@ -1657,7 +1657,7 @@ func TestLooperDeniesToolCallsInBand(t *testing.T) {
 
 		return result, nil
 	}
-	looper.Tools = map[string]looperTool{"bash": bashTool}
+	looper.Tools = map[string]looperTool{"shell": bashTool}
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
@@ -1676,17 +1676,17 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 	t.Run("disabled denies without executing", func(t *testing.T) {
 		called := false
 		looper := testLooper(mockResponses())
-		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "deploy *", Action: permissionAuto}}}}}
-		tool := testLooperTool("bash")
-		tool.Permission = "bash"
+		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "shell", Rules: []PermissionRule{{Pattern: "deploy *", Action: permissionAuto}}}}}
+		tool := testLooperTool("shell")
+		tool.Permission = "shell"
 		tool.Subjects = func(json.RawMessage) ([]string, error) { return []string{"deploy prod"}, nil }
 		tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
 			called = true
 			return TextToolResult("called"), nil
 		}
-		looper.Tools = map[string]looperTool{"bash": tool}
+		looper.Tools = map[string]looperTool{"shell": tool}
 
-		outputs, hadToolCalls, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil)
+		outputs, hadToolCalls, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "shell", `{}`)}), nil, nil)
 
 		require.NoError(t, err)
 		require.True(t, hadToolCalls)
@@ -1761,13 +1761,13 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		looper := testLooper(mockResponses())
 		looper.AutoApprovePermissions = true
 		looper.PermissionReviewer = reviewer
-		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "deploy *", Action: permissionAuto}, {Pattern: "rm -rf *", Action: permissionDeny}}}}}
-		tool := testLooperTool("bash")
-		tool.Permission = "bash"
+		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "shell", Rules: []PermissionRule{{Pattern: "deploy *", Action: permissionAuto}, {Pattern: "rm -rf *", Action: permissionDeny}}}}}
+		tool := testLooperTool("shell")
+		tool.Permission = "shell"
 		tool.Subjects = func(json.RawMessage) ([]string, error) { return []string{"deploy prod", "rm -rf prod"}, nil }
-		looper.Tools = map[string]looperTool{"bash": tool}
+		looper.Tools = map[string]looperTool{"shell": tool}
 
-		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil)
+		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "shell", `{}`)}), nil, nil)
 
 		require.NoError(t, err)
 		require.Contains(t, outputs[0].Result.Output, `=> deny`)
@@ -1779,13 +1779,13 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		looper := testLooper(mockResponses())
 		looper.AutoApprovePermissions = true
 		looper.PermissionReviewer = reviewer
-		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "deploy *", Action: permissionAuto}, {Pattern: "release *", Action: permissionAuto, Reviewer: "release-guardian"}}}}}
-		tool := testLooperTool("bash")
-		tool.Permission = "bash"
+		looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "shell", Rules: []PermissionRule{{Pattern: "deploy *", Action: permissionAuto}, {Pattern: "release *", Action: permissionAuto, Reviewer: "release-guardian"}}}}}
+		tool := testLooperTool("shell")
+		tool.Permission = "shell"
 		tool.Subjects = func(json.RawMessage) ([]string, error) { return []string{"deploy prod", "release prod"}, nil }
-		looper.Tools = map[string]looperTool{"bash": tool}
+		looper.Tools = map[string]looperTool{"shell": tool}
 
-		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "bash", `{}`)}), nil, nil)
+		outputs, _, err := looper.dispatchToolCalls(context.Background(), responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "shell", `{}`)}), nil, nil)
 
 		require.NoError(t, err)
 		require.Contains(t, outputs[0].Result.Output, `matched multiple automatic reviewers`)
@@ -1805,7 +1805,7 @@ func TestPermissionReviewFailsClosedOnInvalidReviewerOutput(t *testing.T) {
 		childRunLogger:    DiscardChildRunLog,
 	}
 
-	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, make(chan ChatResponse, 10))
+	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ToolName: "shell", Permission: "shell", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, make(chan ChatResponse, 10))
 
 	require.Equal(t, permissionReviewRiskLevelHigh, decision.RiskLevel)
 	require.Equal(t, permissionReviewUserAuthorizationUnknown, decision.UserAuthorization)

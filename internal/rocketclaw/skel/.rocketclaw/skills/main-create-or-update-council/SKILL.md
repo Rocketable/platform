@@ -44,7 +44,7 @@ Start each agent with an explicit permission set and add only required capabilit
        "scope-council-minority-reporter": allow
    ```
 
-3. **Member capabilities:** Give each member its own `model`, instructions, and tools. Use `read`/`glob`/`grep` for analysts, narrow `edit` paths for editors, exact `bash` commands for test runners, and named `task` targets for further delegation.
+3. **Member capabilities:** Give each member its own `model`, instructions, and tools. Use `read`/`glob`/`grep` for analysts, narrow `edit` paths for editors, exact `shell` commands for test runners, and named `task` targets for further delegation. `bash` is a `shell` alias (same rules); if both keys exist, `shell` wins. On every member create or edit, rename `permission.bash` to `permission.shell` and omit `bash`.
 
 Exact task rules keep the graph auditable. Wildcard rules widen the graph to every matching loaded agent. Follow `main-create-or-update-agent` for permission buckets, write/execute separation, web-content trust, guardrails, and lint.
 

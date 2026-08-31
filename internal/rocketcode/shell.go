@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -25,29 +26,24 @@ const (
 	shellForceKillTimeout = 3 * time.Second
 )
 
-type bashParams struct {
+// ShellParams is the workspace shell and python3 host-tool input.
+type ShellParams struct {
 	Command            string `json:"command"`
 	TimeoutMillisecond int    `json:"timeout_ms"`
-	Workdir            string `json:"workdir"`
-	Description        string `json:"description"`
+	// Workdir matches OpenCode v2 ShellTool.Input.workdir
+	// (packages/core/src/tool/plugin/shell.ts). Env is inherited, not a param.
+	Workdir     string `json:"workdir"`
+	Description string `json:"description"`
 }
 
-// BashCommand is the public shape of the workspace bash tool input.
-type BashCommand struct {
-	Command            string
-	TimeoutMillisecond int
-	Workdir            string
-	Description        string
-}
-
-// BashResult is the result of running a workspace bash command.
-type BashResult struct {
+// ShellResult is the result of running a workspace shell command.
+type ShellResult struct {
 	Output    string
 	ErrorCode string
 	Success   bool
 }
 
-func (r BashResult) String() string {
+func (r ShellResult) String() string {
 	return r.Output
 }
 
@@ -69,25 +65,25 @@ func newSandboxedShellSystem(root *os.Root, shellTemp *shellTempConfig, env []st
 	}
 }
 
-// RunBash runs command through the same implementation used by RocketCode's bash tool.
-func RunBash(ctx context.Context, root *os.Root, shellTempDir string, shellEnv map[string]string, command BashCommand) (BashResult, error) {
+// RunShell runs command through the same implementation used by RocketCode's shell tool.
+func RunShell(ctx context.Context, root *os.Root, shellTempDir string, shellEnv map[string]string, command ShellParams) (ShellResult, error) {
 	if root == nil {
-		return BashResult{}, errors.New("root is required")
+		return ShellResult{}, errors.New("root is required")
 	}
 
 	shellTemp, err := newShellTempConfig(root, shellTempDir)
 	if err != nil {
-		return BashResult{}, err
+		return ShellResult{}, err
 	}
 
 	env, err := shellEnvList(shellEnv)
 	if err != nil {
-		return BashResult{}, err
+		return ShellResult{}, err
 	}
 
 	sss := newSandboxedShellSystem(root, &shellTemp, env, DefaultShellCommand)
 
-	return sss.runBash(ctx, bashParams(command)), nil
+	return sss.shell(ctx, command), nil
 }
 
 func shellEnvList(shellEnv map[string]string) ([]string, error) {
@@ -118,20 +114,28 @@ func shellEnvList(shellEnv map[string]string) ([]string, error) {
 	return env, nil
 }
 
-func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) BashResult {
-	return sss.runBash(ctx, params)
+func (sss *sandboxedShellSystem) shell(ctx context.Context, params ShellParams) ShellResult {
+	program, args := sss.shellCommand(params.Command)
+
+	return sss.run(ctx, params, program, args, nil, true)
 }
 
-func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams) BashResult {
+func (sss *sandboxedShellSystem) python3(ctx context.Context, params ShellParams) ShellResult {
+	stdin := strings.NewReader(params.Command)
+
+	return sss.run(ctx, params, "python3", []string{"-"}, stdin, false)
+}
+
+func (sss *sandboxedShellSystem) run(ctx context.Context, params ShellParams, program string, args []string, stdin io.Reader, scanPaths bool) ShellResult {
 	sss.mu.Lock()
 	defer sss.mu.Unlock()
 
 	if strings.TrimSpace(params.Command) == "" {
-		return bashFailure("command is required")
+		return shellFailure("command is required")
 	}
 
 	if params.TimeoutMillisecond < 0 {
-		return bashFailure(fmt.Sprintf("Invalid timeout_ms value: %d. timeout_ms must be a positive number.", params.TimeoutMillisecond))
+		return shellFailure(fmt.Sprintf("Invalid timeout_ms value: %d. timeout_ms must be a positive number.", params.TimeoutMillisecond))
 	}
 
 	timeoutMillisecond := params.TimeoutMillisecond
@@ -149,21 +153,21 @@ func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams)
 
 		params.Workdir, err = normalizeRootName(sss.root, workdir)
 		if err != nil {
-			return bashFailure(fmt.Errorf("resolve workdir %q: %w", workdir, err).Error())
+			return shellFailure(fmt.Errorf("resolve workdir %q: %w", workdir, err).Error())
 		}
 
 		info, err := sss.root.Stat(params.Workdir)
 		if err != nil {
-			return bashFailure(fmt.Errorf("resolve workdir %q: %w", params.Workdir, err).Error())
+			return shellFailure(fmt.Errorf("resolve workdir %q: %w", params.Workdir, err).Error())
 		}
 
 		if !info.IsDir() {
-			return bashFailure(fmt.Errorf("resolve workdir %q: not a directory", params.Workdir).Error())
+			return shellFailure(fmt.Errorf("resolve workdir %q: not a directory", params.Workdir).Error())
 		}
 
 		root, err := sss.root.OpenRoot(params.Workdir)
 		if err != nil {
-			return bashFailure(fmt.Errorf("resolve workdir %q: %w", params.Workdir, err).Error())
+			return shellFailure(fmt.Errorf("resolve workdir %q: %w", params.Workdir, err).Error())
 		}
 
 		hostDir = root.Name()
@@ -172,12 +176,14 @@ func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams)
 
 	defer cleanup()
 
-	if denied := sss.deniedBashPath(params.Command, hostDir); denied != "" {
-		return bashFailure(denied)
+	if scanPaths {
+		if denied := sss.deniedShellPath(params.Command, hostDir); denied != "" {
+			return shellFailure(denied)
+		}
 	}
 
 	if err := sss.shellTemp.ensureTempDir(sss.root); err != nil {
-		return bashFailure(err.Error())
+		return shellFailure(err.Error())
 	}
 
 	commandCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(timeoutMillisecond)*time.Millisecond+shellTimeoutGrace)
@@ -185,13 +191,13 @@ func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams)
 
 	timedOut := false
 
-	shell, args := sss.shellCommand(params.Command)
-	if strings.TrimSpace(shell) == "" {
-		return bashFailure("shell command path is required")
+	if strings.TrimSpace(program) == "" {
+		return shellFailure("shell command path is required")
 	}
 
-	cmd := exec.CommandContext(commandCtx, shell, args...)
+	cmd := exec.CommandContext(commandCtx, program, args...)
 	cmd.Dir = hostDir
+	cmd.Stdin = stdin
 
 	cmd.Env = append(os.Environ(), sss.env...)
 	cmd.Env = append(cmd.Env, "TMPDIR="+sss.shellTemp.tmpDir)
@@ -236,26 +242,26 @@ func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams)
 		errorCode = "error"
 	}
 
-	return BashResult{
+	return ShellResult{
 		Output:    full,
 		ErrorCode: errorCode,
 		Success:   err == nil && !timedOut,
 	}
 }
 
-func bashFailure(message string) BashResult {
+func shellFailure(message string) ShellResult {
 	if message == "" {
 		message = "(no output)"
 	}
 
-	return BashResult{
+	return ShellResult{
 		Output:    message,
 		ErrorCode: "error",
 		Success:   false,
 	}
 }
 
-func (sss *sandboxedShellSystem) deniedBashPath(command, hostDir string) string {
+func (sss *sandboxedShellSystem) deniedShellPath(command, hostDir string) string {
 	parser := syntax.NewParser()
 
 	file, err := parser.Parse(strings.NewReader(command), "")
@@ -288,24 +294,24 @@ func (sss *sandboxedShellSystem) deniedBashPath(command, hostDir string) string 
 		}
 
 		name := filepath.Base(unquoteShellArg(args[0]))
-		if !isBashFileCommand(name) {
+		if !isShellFileCommand(name) {
 			return true
 		}
 
 		for _, arg := range args[1:] {
-			pathArg, ok := staticBashPathArg(name, arg)
+			pathArg, ok := staticShellPathArg(name, arg)
 			if !ok {
 				continue
 			}
 
-			resolved := resolveBashPath(hostDir, pathArg)
+			resolved := resolveShellPath(hostDir, pathArg)
 			if isDeniedEnvPath(resolved) {
-				denied = "bash command denied: " + deniedEnvAccessMessage(pathArg)
+				denied = "shell command denied: " + deniedEnvAccessMessage(pathArg)
 				return false
 			}
 
 			if !pathWithinRoot(rootName, resolved) {
-				denied = "bash command denied: external path access is blocked: " + pathArg
+				denied = "shell command denied: external path access is blocked: " + pathArg
 				return false
 			}
 		}
@@ -316,7 +322,7 @@ func (sss *sandboxedShellSystem) deniedBashPath(command, hostDir string) string 
 	return denied
 }
 
-func isBashFileCommand(name string) bool {
+func isShellFileCommand(name string) bool {
 	switch name {
 	case "cat", "cd", "chmod", "chown", "cp", "grep", "head", "less", "ln", "mkdir", "more", "mv", "pushd", "rm", "tail", "touch":
 		return true
@@ -325,7 +331,7 @@ func isBashFileCommand(name string) bool {
 	}
 }
 
-func staticBashPathArg(command, arg string) (string, bool) {
+func staticShellPathArg(command, arg string) (string, bool) {
 	arg = unquoteShellArg(arg)
 	if arg == "" || arg == "--" {
 		return "", false
@@ -357,7 +363,7 @@ func unquoteShellArg(arg string) string {
 	return arg
 }
 
-func resolveBashPath(hostDir, arg string) string {
+func resolveShellPath(hostDir, arg string) string {
 	if strings.HasPrefix(arg, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
 			return filepath.Clean(filepath.Join(home, arg[2:]))

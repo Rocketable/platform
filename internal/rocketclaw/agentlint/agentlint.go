@@ -281,7 +281,7 @@ func lintCapabilities(infos map[string]*agentInfo) []Finding {
 	findings := []Finding{}
 	writes := capabilities(infos, "edit")
 	reads := append(capabilities(infos, "read"), writes...)
-	executes := capabilities(infos, "bash")
+	executes := capabilities(infos, "shell")
 
 	for _, write := range writes {
 		for _, execute := range executes {
@@ -338,7 +338,7 @@ func lintTaskCycles(infos map[string]*agentInfo) []Finding {
 func lintDelegationEscalation(infos map[string]*agentInfo) []Finding {
 	edges := taskEdges(infos)
 	writes := capabilities(infos, "edit")
-	executes := capabilities(infos, "bash")
+	executes := capabilities(infos, "shell")
 	findings := []Finding{}
 
 	for _, write := range writes {

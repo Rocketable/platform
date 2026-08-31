@@ -20,7 +20,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// ShellCommandFunc selects the process used to run a bash tool command string.
+// ShellCommandFunc selects the process used to run a shell tool command string.
 // The returned path and args are passed to exec.Command (for example
 // "/bin/bash", []string{"-lc", command}).
 type ShellCommandFunc func(command string) (path string, args []string)
@@ -37,7 +37,7 @@ type Config struct {
 	CompactionSteering         string
 	ParallelToolCalls          int
 	// ShellTempDir is the workspace-relative or absolute directory used as TMPDIR
-	// for bash and prompt !`…` commands. Required; must exist inside the workspace.
+	// for shell and prompt !`…` commands. Required; must exist inside the workspace.
 	ShellTempDir string
 	// SpillDir is the workspace-relative or absolute directory for oversized
 	// execute output. Empty uses <workspace>/.rocketcode/spill.
@@ -48,7 +48,7 @@ type Config struct {
 	CheckpointSink         CheckpointSink
 	CustomTools            []Tool
 	ShellEnv               map[string]string
-	// ShellCommand builds the executable used for bash tool (and prompt !`…`)
+	// ShellCommand builds the executable used for shell tool (and prompt !`…`)
 	// commands. Required; pass DefaultShellCommand for normal host shell behavior.
 	ShellCommand ShellCommandFunc
 	MCPServers   map[string]mcpclient.ServerConfig
@@ -163,9 +163,9 @@ func (c shellTempConfig) ensureTempDir(root *os.Root) error {
 	return nil
 }
 
-// effectivePermissions grants read/glob on this session shell temp tree when bash is allowed.
+// effectivePermissions grants read/glob on this session shell temp tree when shell is allowed.
 func (c *shellTempConfig) effectivePermissions(permissions PermissionSet) PermissionSet {
-	if c.tmpRelDir == "" || c.tmpRelDir == "." || !permissions.hasAllowRuleForPermission("bash") {
+	if c.tmpRelDir == "" || c.tmpRelDir == "." || !permissions.hasAllowRuleForPermission("shell") {
 		return permissions
 	}
 

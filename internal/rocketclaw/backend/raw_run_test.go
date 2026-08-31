@@ -772,7 +772,7 @@ func TestRunRawReturnsProgressMessageError(t *testing.T) {
 
 func TestRunRawReturnsProgressThinkingError(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  bash:\n    \"*\": allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  shell:\n    \"*\": allow\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -796,7 +796,7 @@ func TestRunRawReturnsProgressThinkingError(t *testing.T) {
 
 func TestRunRawAlwaysEnablesAutoApprovePermissions(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: '{{ model \"coding-high\" }}'\npermission:\n  bash:\n    \"printf ok\": auto\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: '{{ model \"coding-high\" }}'\npermission:\n  shell:\n    \"printf ok\": auto\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var (
@@ -911,7 +911,7 @@ func TestRunRawWithProgressProjectsDifferentProviderStoredHistory(t *testing.T) 
 
 func TestWorkflowAgentRunnerUsesPreparedIsolatedRuntime(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: '{{ model \"active\" }}'\npermission:\n  read: {\"*\": allow}\n  edit: allow\n  glob: allow\n  grep: allow\n  bash: {\"*\": allow}\n  webfetch: {\"*\": allow}\n  websearch: allow\n  skill: {\"demo\": allow}\n  task: {\"*\": allow}\n  rocketclaw: {\"rocketclaw_reload\": allow}\n---\nMain prompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: '{{ model \"active\" }}'\npermission:\n  read: {\"*\": allow}\n  edit: allow\n  glob: allow\n  grep: allow\n  shell: {\"*\": allow}\n  webfetch: {\"*\": allow}\n  websearch: allow\n  skill: {\"demo\": allow}\n  task: {\"*\": allow}\n  rocketclaw: {\"rocketclaw_reload\": allow}\n---\nMain prompt\n")
 	root, err := os.OpenRoot(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
@@ -1072,7 +1072,7 @@ func TestWorkflowAgentRunnerResolvesNamedProviderModel(t *testing.T) {
 
 func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  bash:\n    \"printf ok\": auto\n---\nMain prompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  shell:\n    \"printf ok\": auto\n---\nMain prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var models []string
@@ -1409,7 +1409,7 @@ func TestWorkflowAgentRunnerReturnsShellDirectoryCleanupError(t *testing.T) {
 func discardWorkflowThinking(context.Context, string) error { return nil }
 
 func executeBashScript(command string) map[string]string {
-	return map[string]string{"code": "def main():\n    return bash(command=" + strconv.Quote(command) + ")\n"}
+	return map[string]string{"code": "def main():\n    return shell(command=" + strconv.Quote(command) + ")\n"}
 }
 
 func executeApplyPatchScript(patch string) map[string]string {

@@ -28,11 +28,43 @@ func TestParsePermissionNode(t *testing.T) {
 		require.Equal(t, PermissionSet{Buckets: nil}, parsePermissionYAML(t, `allow`))
 	})
 
+	t.Run("aliases bash to shell", func(t *testing.T) {
+		require.Equal(t, PermissionSet{Buckets: []PermissionBucket{
+			{Name: "shell", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
+		}}, parsePermissionYAML(t, `
+bash:
+  "*": allow
+`))
+	})
+
+	t.Run("shell bucket wins over bash", func(t *testing.T) {
+		require.Equal(t, PermissionSet{Buckets: []PermissionBucket{
+			{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
+			{Name: "shell", Rules: []PermissionRule{{Pattern: "echo *", Action: permissionAllow}}},
+		}}, parsePermissionYAML(t, `
+bash:
+  "*": allow
+read: allow
+shell:
+  "echo *": allow
+`))
+		require.Equal(t, PermissionSet{Buckets: []PermissionBucket{
+			{Name: "shell", Rules: []PermissionRule{{Pattern: "echo *", Action: permissionAllow}}},
+			{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
+		}}, parsePermissionYAML(t, `
+shell:
+  "echo *": allow
+bash:
+  "*": allow
+read: allow
+`))
+	})
+
 	t.Run("normalizes nested permissions and edit aliases", func(t *testing.T) {
 		require.Equal(t, PermissionSet{Buckets: []PermissionBucket{
 			{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
 			{Name: "edit", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}, {Pattern: "docs/*.md", Action: permissionAllow}}},
-			{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}, {Pattern: "git status *", Action: permissionAllow}}},
+			{Name: "shell", Rules: []PermissionRule{{Pattern: "*", Action: permissionDeny}, {Pattern: "git status *", Action: permissionAllow}}},
 			{Name: "webfetch", Rules: []PermissionRule{{Pattern: "https://docs.example/*", Action: permissionAllow}}},
 			{Name: "websearch", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
 		}}, parsePermissionYAML(t, `
@@ -40,7 +72,7 @@ read: allow
 apply_patch:
   "*": deny
   "docs/*.md": allow
-bash:
+shell:
   "*": deny
   "git status *": allow
 webfetch:
@@ -61,15 +93,15 @@ websearch: allow
 }
 
 func TestParsePermissionAuto(t *testing.T) {
-	require.Equal(t, PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{
+	require.Equal(t, PermissionSet{Buckets: []PermissionBucket{{Name: "shell", Rules: []PermissionRule{
 		{Pattern: "deploy *", Action: permissionAuto},
 		{Pattern: "release *", Action: permissionAuto, Reviewer: "release-guardian"},
-	}}}}, parsePermissionYAML(t, `bash: {"deploy *": auto, "release *": auto(release-guardian)}`))
+	}}}}, parsePermissionYAML(t, `shell: {"deploy *": auto, "release *": auto(release-guardian)}`))
 
 	for _, input := range []string{
-		`bash: {"*": auto()}`,
-		`bash: {"*": auto(foo}`,
-		`bash: {"*": auto(foo))}`,
+		`shell: {"*": auto()}`,
+		`shell: {"*": auto(foo}`,
+		`shell: {"*": auto(foo))}`,
 	} {
 		_, err := parsePermissionNode(parseYAMLNode(t, input))
 		require.ErrorContains(t, err, "malformed permission action")
@@ -90,6 +122,9 @@ func TestPermissionSetHelpers(t *testing.T) {
 	permissions = PermissionSet{Buckets: nil}
 	require.NoError(t, permissions.Allow("apply_patch", "*.go"))
 	require.Equal(t, "edit", permissions.Buckets[0].Name)
+	permissions = PermissionSet{Buckets: nil}
+	require.NoError(t, permissions.Allow("bash", "echo *"))
+	require.Equal(t, "shell", permissions.Buckets[0].Name)
 	require.EqualError(t, permissions.Allow("external_directory", "*"), `permission "external_directory" is not supported`)
 	require.EqualError(t, permissions.Set("read", "*", PermissionAction("ask")), `permission action "ask" is not supported`)
 }
@@ -105,10 +140,12 @@ func TestPermissionSetEvaluate(t *testing.T) {
 		{name: "wildcard match", yaml: `rocketclaw: {restart_*: allow}`, permission: "rocketclaw", subject: "restart_tool", action: PermissionAllow, matched: true},
 		{name: "last match wins", yaml: `tools: {"*": allow, restart: deny}`, permission: "tools", subject: "restart", action: PermissionDeny, matched: true},
 		{name: "read inherits edit allow", yaml: `edit: {docs/*.md: allow}`, permission: "read", subject: "docs/guide.md", action: PermissionAllow, matched: true},
-		{name: "global bucket is ignored", yaml: `"*": {"*": allow}`, permission: "bash", subject: "git status", action: PermissionDeny, matched: false},
-		{name: "scalar allow is ignored", yaml: `allow`, permission: "bash", subject: "git status", action: PermissionDeny, matched: false},
-		{name: "explicit bash allow remains effective", yaml: `bash: {"*": allow}`, permission: "bash", subject: "git status", action: PermissionAllow, matched: true},
-		{name: "explicit auto remains effective", yaml: `bash: {"*": allow, "deploy *": auto}`, permission: "bash", subject: "deploy prod", action: PermissionAuto, matched: true},
+		{name: "global bucket is ignored", yaml: `"*": {"*": allow}`, permission: "shell", subject: "git status", action: PermissionDeny, matched: false},
+		{name: "scalar allow is ignored", yaml: `allow`, permission: "shell", subject: "git status", action: PermissionDeny, matched: false},
+		{name: "bash alias allows shell", yaml: `bash: {"*": allow}`, permission: "shell", subject: "git status", action: PermissionAllow, matched: true},
+		{name: "shell wins over bash", yaml: "bash: {\"*\": allow}\nshell: {\"echo *\": allow}", permission: "shell", subject: "git status", action: PermissionDeny, matched: false},
+		{name: "explicit shell allow remains effective", yaml: `shell: {"*": allow}`, permission: "shell", subject: "git status", action: PermissionAllow, matched: true},
+		{name: "explicit auto remains effective", yaml: `shell: {"*": allow, "deploy *": auto}`, permission: "shell", subject: "deploy prod", action: PermissionAuto, matched: true},
 	}
 
 	for _, tt := range tests {
@@ -174,9 +211,9 @@ edit: {"public.md": allow}`, subject: "public.md", action: permissionAllow, matc
 	}
 }
 
-func TestBashPermissionSubjects(t *testing.T) {
-	require.Equal(t, []string{"git status", "git diff --stat"}, BashPermissionSubjects("git status && git diff --stat"))
-	require.Equal(t, []string{"echo $(date)", "date"}, BashPermissionSubjects("echo $(date)"))
+func TestShellPermissionSubjects(t *testing.T) {
+	require.Equal(t, []string{"git status", "git diff --stat"}, ShellPermissionSubjects("git status && git diff --stat"))
+	require.Equal(t, []string{"echo $(date)", "date"}, ShellPermissionSubjects("echo $(date)"))
 }
 
 func parsePermissionYAML(t *testing.T, text string) PermissionSet {

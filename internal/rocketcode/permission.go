@@ -81,6 +81,7 @@ func parsePermissionNode(node *yaml.Node) (PermissionSet, error) {
 		return PermissionSet{Buckets: nil}, nil
 	case yaml.MappingNode:
 		buckets := []PermissionBucket{}
+		keys := make([]string, 0, len(node.Content)/2)
 
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			key := node.Content[i].Value
@@ -100,6 +101,20 @@ func parsePermissionNode(node *yaml.Node) (PermissionSet, error) {
 			}
 
 			buckets = append(buckets, PermissionBucket{Name: bucketName, Rules: rules})
+			keys = append(keys, key)
+		}
+
+		if slices.Contains(keys, "shell") {
+			kept := buckets[:0]
+			for i, bucket := range buckets {
+				if keys[i] == "bash" {
+					continue
+				}
+
+				kept = append(kept, bucket)
+			}
+
+			buckets = kept
 		}
 
 		return PermissionSet{Buckets: buckets}, nil
@@ -167,6 +182,8 @@ func normalizePermissionName(name string) (string, error) {
 	switch name {
 	case "apply_patch", "write", "patch":
 		return "edit", nil
+	case "bash":
+		return "shell", nil
 	case "external_directory", "doom_loop":
 		return "", fmt.Errorf("permission %q is not supported", name)
 	default:
@@ -389,8 +406,8 @@ func canonicalToolArguments(raw json.RawMessage) string {
 	return string(buf)
 }
 
-// BashPermissionSubjects returns the subjects checked by the bash tool for command.
-func BashPermissionSubjects(command string) []string {
+// ShellPermissionSubjects returns the subjects checked by the shell tool for command.
+func ShellPermissionSubjects(command string) []string {
 	command = strings.TrimSpace(command)
 	if command == "" {
 		return nil

@@ -170,13 +170,13 @@ func TestNewCopiesShellEnv(t *testing.T) {
 	config := testWorkspaceConfig(t, dir)
 	config.ShellEnv = env
 	loop, err := New(&client, config, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "prompt", Location: "", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}, Frontmatter: nil, FileMode: 0},
+		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "prompt", Location: "", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "shell", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}, Frontmatter: nil, FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", nil)
 	require.NoError(t, err)
 
 	env["ROCKETCLAW_CONVERSATION_ID"] = "second"
 
-	bash, ok := loop.CodeModeHosts["bash"]
+	bash, ok := loop.CodeModeHosts["shell"]
 	require.True(t, ok)
 
 	result, err := bash.Call(context.Background(), json.RawMessage(`{"command":"printf %s \"$ROCKETCLAW_CONVERSATION_ID\"","timeout_ms":0,"workdir":"","description":"env mutation"}`), nil, toolCallMetadata{subagentIndex: 0, subagentTotal: 0})
@@ -288,7 +288,8 @@ read:
 	require.Contains(t, loop.Tools, "skill")
 	require.NotContains(t, loop.Tools, "read")
 	require.NotContains(t, loop.Tools, "edit")
-	require.NotContains(t, loop.Tools, "bash")
+	require.NotContains(t, loop.Tools, "shell")
+	require.NotContains(t, loop.Tools, "python3")
 	require.NotContains(t, loop.Tools, "glob")
 	require.NotContains(t, loop.Tools, "grep")
 	require.Contains(t, loop.CodeModeHosts, "read")
@@ -555,7 +556,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 	t.Run("enabled rejects missing custom reviewer", func(t *testing.T) {
 		config := testWorkspaceConfig(t, dir)
 		config.AutoApprovePermissions = true
-		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(release-guardian)}`)}}}
+		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `shell: {"deploy *": auto(release-guardian)}`)}}}
 
 		_, err := New(&client, config, root, agents, skills, "main", nil)
 
@@ -565,7 +566,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 	t.Run("enabled rejects explicit guardian reviewer", func(t *testing.T) {
 		config := testWorkspaceConfig(t, dir)
 		config.AutoApprovePermissions = true
-		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(guardian)}`)}}}
+		agents := Agents{Items: map[string]Agent{"main": {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `shell: {"deploy *": auto(guardian)}`)}}}
 
 		_, err := New(&client, config, root, agents, skills, "main", nil)
 
@@ -576,7 +577,7 @@ func TestNewValidatesAutoPermissionReviewers(t *testing.T) {
 		config := testWorkspaceConfig(t, dir)
 		config.AutoApprovePermissions = true
 		agents := Agents{Items: map[string]Agent{
-			"main":             {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `bash: {"deploy *": auto(release-guardian)}`)},
+			"main":             {Name: "main", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `shell: {"deploy *": auto(release-guardian)}`)},
 			"release-guardian": {Name: "release-guardian", Model: "gpt-5.4"},
 		}}
 

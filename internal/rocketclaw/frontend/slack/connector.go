@@ -1830,10 +1830,10 @@ func slackLooksLikeNewThinkingActivity(line string) bool {
 	}
 
 	for _, prefix := range []string{
-		"Bash", "Read", "Glob", "Grep", "Webfetch", "Apply Patch", "Websearch", "Find Skills", "Skill",
+		"Shell", "Bash", "Read", "Glob", "Grep", "Webfetch", "Apply Patch", "Websearch", "Find Skills", "Skill",
 		"Ask User Question", "Rocketclaw ",
 		// legacy lowercase / underscore forms while older traces may still appear
-		"bash:", "bash ", "read:", "read ", "glob:", "glob ", "grep:", "grep ",
+		"shell:", "shell ", "bash:", "bash ", "read:", "read ", "glob:", "glob ", "grep:", "grep ",
 		"webfetch:", "webfetch ", "apply_patch", "websearch", "find_skills", "skill:", "skill ",
 		"ask_user_question", "rocketclaw_",
 	} {

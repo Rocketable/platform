@@ -22,9 +22,9 @@ const (
 	mcpPermissionBucket = "mcp"
 	// executeNestedToolPrefix marks nested code-mode tool diagnostics for thinking UI.
 	executeNestedToolPrefix = executeToolName + " → "
-	codeModeRawStringRule   = `Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. r"..." and r'...' are raw single-line strings — the r prefix does not allow newlines. Multiline, heredocs, or nested quotes: r'''...'''. Example: bash(command=r'''python3 - <<'PY'
+	codeModeRawStringRule   = `Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. r"..." and r'...' are raw single-line strings — the r prefix does not allow newlines. Multiline, heredocs, or nested quotes: r'''...'''. Example: shell(command=r'''python3 - <<'PY'
 print("hi")
-PY''') — not r"..." with a real newline. $ is valid inside a closed string, not Starlark interpolation. Ordinary "..." rejects unknown escapes such as \( \. \$. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun.`
+PY''') — not r"..." with a real newline. $ is valid inside a closed string, not Starlark interpolation. Ordinary "..." rejects unknown escapes such as \( \. \$. shell(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun.`
 )
 
 func newMCPRegistry(workspace string, servers map[string]mcpclient.ServerConfig) (*mcpclient.Registry, error) {
@@ -151,7 +151,7 @@ func executeDescription() string {
 		"Define def main() that returns a string (or JSON-encodable value). Only keyword arguments are allowed on tool calls.",
 		"No import/from, threads, concurrent.futures, or stdlib. Use only the builtins listed here and in search.",
 		codeModeRawStringRule,
-		"Call host tools by name (read, bash, …), platform/custom tools by name, and MCP as server_toolname(**kwargs).",
+		"Call host tools by name (read, shell, python3, …), platform/custom tools by name, and MCP as server_toolname(**kwargs).",
 		fmt.Sprintf("Concurrency only via gather/map/race/race_first (default concurrency=%d, max %d). callables is one list of zero-arg lambdas, not varargs.", defN, maxN),
 		fmt.Sprintf("Example: gather([lambda: read(filePath=\"a\"), lambda: read(filePath=\"b\")], concurrency=%d)", defN),
 		"Use search(query=\"\", namespace=\"\", offset=0, limit=10) inside the script to discover tools and concurrency builtins (path, description, signature).",
@@ -278,7 +278,7 @@ func codeModeRunEntryGate(agent *Agent, mcpSubjects []string, codeHosts map[stri
 	}
 
 	// Prefer sandbox host buckets so skill/task auto rules do not gate execute entry.
-	hostBuckets := []string{"read", "edit", "bash", "glob", "grep", "webfetch"}
+	hostBuckets := []string{"read", "edit", "shell", "glob", "grep", "webfetch"}
 	for _, want := range hostBuckets {
 		if subj, ok := firstRuleSubject(agent.Permission, want, PermissionAllow); ok {
 			return want, []string{subj}
@@ -906,15 +906,20 @@ func codeModeHostToolsFromContext(ctx context.Context) (host []codemode.HostTool
 				return attachmentOutputMessage(result), nil
 			},
 		}
-		if toolName == "bash" {
+		if toolName == "shell" || toolName == "python3" {
 			bound.CallValue = func(ctx context.Context, args map[string]any) (starlark.Value, error) {
 				result, errCall := callTool(ctx, args)
 				if errCall != nil {
 					return nil, errCall
 				}
 
-				if bashResult, ok := result.Data.(BashResult); ok {
-					return newBashStarlarkResult(bashResult), nil
+				if cmdResult, ok := result.Data.(ShellResult); ok {
+					kind := "shell_result"
+					if toolName == "python3" {
+						kind = "python3_result"
+					}
+
+					return newHostCommandStarlarkResult(kind, cmdResult), nil
 				}
 
 				return starlark.String(attachmentOutputMessage(result)), nil
@@ -978,7 +983,7 @@ func codeModeHostInputSchema(name string, def *responses.FunctionToolParam) map[
 
 func codeModeHostRequiredFields(name string, params map[string]any) []string {
 	switch name {
-	case "bash":
+	case "shell", "python3":
 		return []string{"command"}
 	case "apply_patch":
 		return []string{"patchText"}

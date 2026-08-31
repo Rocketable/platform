@@ -26,7 +26,7 @@ type ToolDesc struct {
 // CallFunc invokes MCP CallTool. server and name are raw MCP names.
 type CallFunc func(ctx context.Context, server, name string, args map[string]any) (string, error)
 
-// DecideFunc is per-call permission like bash. subject is "server.tool" (raw MCP tool name).
+// DecideFunc is per-call permission like shell. subject is "server.tool" (raw MCP tool name).
 // Return nil to allow; error to deny/fail the Starlark builtin.
 type DecideFunc func(ctx context.Context, subject string, args map[string]any) error
 
@@ -185,7 +185,7 @@ func Run(ctx context.Context, source string, tools []ToolDesc, decide DecideFunc
 		return text, nil
 	}
 
-	if value.Type() == "bash_result" {
+	if value.Type() == "shell_result" || value.Type() == "python3_result" {
 		return value.String(), nil
 	}
 

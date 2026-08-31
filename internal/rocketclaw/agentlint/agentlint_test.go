@@ -29,7 +29,7 @@ writer
 	writeAgent(t, runtimeRoot, "executor.md", `---
 description: executor
 permission:
-  bash:
+  shell:
     "scripts/helper.sh *": allow
 ---
 executor
@@ -62,7 +62,7 @@ loop
 	writeAgent(t, runtimeRoot, "plural.md", `---
 description: plural
 permissions:
-  bash:
+  shell:
     "echo ok": allow
 ---
 plural
@@ -74,7 +74,7 @@ permission:
     "scripts/call.sh": allow
   edit:
     "scripts/call.sh": allow
-  bash:
+  shell:
     "scripts/call.sh subcommand *": allow
 ---
 same
@@ -104,7 +104,7 @@ description: same
 permission:
   edit:
     "scripts/call.sh": allow
-  bash:
+  shell:
     "scripts/call.sh *": allow #nolint RC001: sandboxed
 ---
 same
@@ -156,7 +156,7 @@ permission:
   edit:
     "scripts/allowed-risk.sh": allow
     "scripts/open-risk.sh": allow
-  bash:
+  shell:
     "scripts/allowed-risk.sh *": allow #nolint RC001: sandboxed
     "scripts/open-risk.sh *": allow
 ---

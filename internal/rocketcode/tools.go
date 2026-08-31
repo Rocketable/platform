@@ -89,7 +89,7 @@ func newSandboxedTools(root *os.Root, shellTemp shellTempConfig, shellEnv []stri
 // only inside execute (not as a top-level model tool).
 func CodeModeOnlyHostTool(name string) bool {
 	switch name {
-	case "read", "apply_patch", "glob", "grep", "webfetch", "bash":
+	case "read", "apply_patch", "glob", "grep", "webfetch", "shell", "python3":
 		return true
 	default:
 		return false
@@ -336,32 +336,44 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 				return webFetch(ctx, params)
 			},
 		},
-		"bash": {
-			Definition: *functionTool("bash", "Run a shell command in the workspace", map[string]any{
-				"command":     map[string]any{"type": "string"},
-				"timeout_ms":  map[string]any{"type": "integer"},
-				"workdir":     map[string]any{"type": "string"},
-				"description": map[string]any{"type": "string"},
-			}),
-			Permission: "bash",
-			Subjects: func(raw json.RawMessage) ([]string, error) {
-				var params bashParams
-				if err := decodeToolParams(raw, &params); err != nil {
-					return nil, err
-				}
+		"shell": commandHostTool("shell", "Run a shell command in the workspace", ShellPermissionSubjects, sss.shell),
+		"python3": commandHostTool("python3", "Run Python 3 source in the workspace", func(command string) []string {
+			command = strings.TrimSpace(command)
+			if command == "" {
+				return nil
+			}
 
-				return BashPermissionSubjects(params.Command), nil
-			},
-			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
-				var params bashParams
-				if err := decodeToolParams(raw, &params); err != nil {
-					return ToolResult{}, err
-				}
+			return []string{command}
+		}, sss.python3),
+	}
+}
 
-				result := sss.Bash(ctx, params)
+func commandHostTool(name, description string, subjects func(string) []string, run func(context.Context, ShellParams) ShellResult) looperTool {
+	return looperTool{
+		Definition: *functionTool(name, description, map[string]any{
+			"command":     map[string]any{"type": "string"},
+			"timeout_ms":  map[string]any{"type": "integer"},
+			"workdir":     map[string]any{"type": "string"},
+			"description": map[string]any{"type": "string"},
+		}),
+		Permission: "shell",
+		Subjects: func(raw json.RawMessage) ([]string, error) {
+			var params ShellParams
+			if err := decodeToolParams(raw, &params); err != nil {
+				return nil, err
+			}
 
-				return ToolResult{Output: result.String(), Data: result}, nil
-			},
+			return subjects(params.Command), nil
+		},
+		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+			var params ShellParams
+			if err := decodeToolParams(raw, &params); err != nil {
+				return ToolResult{}, err
+			}
+
+			result := run(ctx, params)
+
+			return ToolResult{Output: result.String(), Data: result}, nil
 		},
 	}
 }

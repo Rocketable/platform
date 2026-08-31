@@ -156,7 +156,7 @@ type observedBash struct {
 	exitCode int
 }
 
-func parseBashCommandFromToolArgs(raw string) string {
+func parseShellCommandFromToolArgs(raw string) string {
 	var params struct {
 		Command string `json:"command"`
 	}
@@ -167,7 +167,7 @@ func parseBashCommandFromToolArgs(raw string) string {
 	return strings.TrimSpace(params.Command)
 }
 
-func parseBashCommandsFromExecuteArgs(raw string) []string {
+func parseShellCommandsFromExecuteArgs(raw string) []string {
 	var params struct {
 		Code string `json:"code"`
 	}
@@ -183,7 +183,7 @@ func parseBashCommandsFromExecuteArgs(raw string) []string {
 	var cmds []string
 
 	for _, quote := range []byte{'"', '\''} {
-		marker := "bash(command=" + string(quote)
+		marker := "shell(command=" + string(quote)
 
 		rest := code
 		for {

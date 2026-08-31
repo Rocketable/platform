@@ -58,7 +58,7 @@ func TestPermissionReviewLogsHiddenChildRunOutput(t *testing.T) {
 	}
 	output := make(chan ChatResponse, 10)
 
-	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, output)
+	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "shell", Permission: "shell", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, output)
 
 	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
 	require.Equal(t, []ChatResponse{
@@ -86,7 +86,7 @@ func TestPermissionReviewUsesConfiguredAutoApproverModel(t *testing.T) {
 		childRunLogger:    DiscardChildRunLog,
 	}
 
-	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, make(chan ChatResponse, 10))
+	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "shell", Permission: "shell", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, make(chan ChatResponse, 10))
 
 	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
 	require.Len(t, mock.calls, 1)
@@ -140,8 +140,8 @@ func TestPermissionReviewPromptIncludesReviewContextAndPlannedAction(t *testing.
 	toolResult := toolCallOutput("call-1", TextToolResult("lookup result"))
 	request := &permissionReviewRequest{
 		ActiveAgent:  "main",
-		ToolName:     "bash",
-		Permission:   "bash",
+		ToolName:     "shell",
+		Permission:   "shell",
 		RawArguments: `{"command":"deploy prod","description":"deploy"}`,
 		Subjects:     []string{"deploy prod"},
 		AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}},
@@ -169,7 +169,7 @@ func TestPermissionReviewPromptIncludesReviewContextAndPlannedAction(t *testing.
 	require.Contains(t, prompt, "lookup result")
 	require.Contains(t, prompt, "high risk allows only when user_authorization is at least medium")
 	require.Contains(t, prompt, ">>> APPROVAL REQUEST START")
-	require.Contains(t, prompt, `"tool_name": "bash"`)
+	require.Contains(t, prompt, `"tool_name": "shell"`)
 	require.Contains(t, prompt, `"raw_arguments": "{\"command\":\"deploy prod\",\"description\":\"deploy\"}"`)
 	require.Contains(t, prompt, ">>> APPROVAL REQUEST END")
 }

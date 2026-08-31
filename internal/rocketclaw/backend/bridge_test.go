@@ -136,7 +136,7 @@ func TestUpdateGoalToolRunsSuccessfulCheckBeforeComplete(t *testing.T) {
 description: Main
 model: gpt-5.4
 permission:
-  bash:
+  shell:
     "./scripts/check.sh": allow
 ---
 Prompt
@@ -183,7 +183,7 @@ func TestUpdateGoalToolKeepsGoalActiveWhenCheckFails(t *testing.T) {
 description: Main
 model: gpt-5.4
 permission:
-  bash:
+  shell:
     "./scripts/check.sh": allow
 ---
 Prompt
@@ -206,7 +206,7 @@ func TestUpdateGoalToolKeepsGoalActiveWhenCheckPermissionDenied(t *testing.T) {
 description: Main
 model: gpt-5.4
 permission:
-  bash:
+  shell:
     "./scripts/check.sh --safe": allow
 ---
 Prompt
@@ -215,7 +215,7 @@ Prompt
 
 	result, err := updateGoalTool(bridge).Call(t.Context(), []byte(`{"status":"complete"}`), nil)
 	require.NoError(t, err)
-	assert.Contains(t, result.Output, "not allowed by agent bash permission")
+	assert.Contains(t, result.Output, "not allowed by agent shell permission")
 
 	goal, ok, err := bridge.config.SessionService.Goal("thread-1")
 	require.NoError(t, err)
@@ -228,7 +228,7 @@ func TestUpdateGoalToolDoesNotRunCheckForBlocked(t *testing.T) {
 description: Main
 model: gpt-5.4
 permission:
-  bash:
+  shell:
     "./scripts/check.sh": allow
 ---
 Prompt
@@ -896,7 +896,7 @@ func TestProcessResponseSkipsRecoveredProgress(t *testing.T) {
 	inbound.Metadata = map[string]string{recoveredTurnMetadataKey: "true"}
 	result := runResult{turnID: "turn-1"}
 
-	reply := rocketcode.ChatResponse{Kind: rocketcode.ChatResponseAssistantTool, Tool: &rocketcode.ToolDiagnostic{Phase: "call", Name: "bash", Status: "started", Arguments: json.RawMessage(`{"description":"old progress"}`)}}
+	reply := rocketcode.ChatResponse{Kind: rocketcode.ChatResponseAssistantTool, Tool: &rocketcode.ToolDiagnostic{Phase: "call", Name: "shell", Status: "started", Arguments: json.RawMessage(`{"description":"old progress"}`)}}
 	require.NoError(t, bridge.processResponse(context.Background(), inbound, &result, reply))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -3055,10 +3055,10 @@ func TestRocketCodeThinkingTextHandlesStructuredToolDiagnostics(t *testing.T) {
 	var call, status, hosted, hostedQueries, raw, result rocketcode.ToolDiagnostic
 
 	call.Phase = "call"
-	call.Name = "bash"
+	call.Name = "shell"
 	call.Arguments = []byte(`{"command":"cat /tmp/file","description":"Read the file"}`)
 	status.Phase = "call"
-	status.Name = "bash"
+	status.Name = "shell"
 	hosted.Phase = "call"
 	hosted.Name = "websearch"
 	hosted.Status = "started"
@@ -3072,11 +3072,11 @@ func TestRocketCodeThinkingTextHandlesStructuredToolDiagnostics(t *testing.T) {
 	raw.Status = "started"
 	raw.Arguments = []byte(`plain text`)
 	result.Phase = "result"
-	result.Name = "bash"
+	result.Name = "shell"
 	result.Result = "file contents"
 
-	assert.Equal(t, "Bash\nRead the file", rocketcodeThinkingText(toolResponse(&call)))
-	assert.Equal(t, "Bash", rocketcodeThinkingText(toolResponse(&status)))
+	assert.Equal(t, "Shell\nRead the file", rocketcodeThinkingText(toolResponse(&call)))
+	assert.Equal(t, "Shell", rocketcodeThinkingText(toolResponse(&status)))
 	assert.Equal(t, "Websearch\nGoogle DeepMind blog", rocketcodeThinkingText(toolResponse(&hosted)))
 	assert.Equal(t, "Websearch\nOpenAI news, Google AI blog", rocketcodeThinkingText(toolResponse(&hostedQueries)))
 	assert.Equal(t, "Custom\nplain text", rocketcodeThinkingText(toolResponse(&raw)))
@@ -3103,7 +3103,7 @@ func TestRocketCodeThinkingTextHandlesStructuredToolDiagnostics(t *testing.T) {
 	taskAgentOnly := rocketcode.ToolDiagnostic{Phase: "call", Name: "task", Arguments: []byte(`{"subagent_type":"helper"}`)}
 	assert.Equal(t, "Task helper", rocketcodeThinkingText(toolResponse(&taskAgentOnly)))
 
-	result.Result = `tool call denied: permission "bash" has no matching allow rule for subject "pwd". Choose a different action.`
+	result.Result = `tool call denied: permission "shell" has no matching allow rule for subject "pwd". Choose a different action.`
 	assert.Equal(t, result.Result, rocketcodeThinkingText(toolResponse(&result)))
 
 	failed := rocketcode.ToolDiagnostic{
@@ -3137,10 +3137,10 @@ func TestRocketCodeThinkingTextHandlesToolDiagnosticFallbacks(t *testing.T) {
 }
 
 func TestRocketCodeThinkingTextHandlesSubagentToolDiagnostics(t *testing.T) {
-	call := rocketcode.ToolDiagnostic{Phase: "call", Name: "bash", Arguments: []byte(`{"command":"cat /tmp/file","description":"Read the file"}`)}
-	result := rocketcode.ToolDiagnostic{Phase: "result", Name: "bash", Result: "file contents"}
+	call := rocketcode.ToolDiagnostic{Phase: "call", Name: "shell", Arguments: []byte(`{"command":"cat /tmp/file","description":"Read the file"}`)}
+	result := rocketcode.ToolDiagnostic{Phase: "result", Name: "shell", Result: "file contents"}
 
-	assert.Equal(t, "subagent(1/20) → hally-google-workspace → tool: Bash\nRead the file", rocketcodeThinkingText(subagentToolResponse(&call)))
+	assert.Equal(t, "subagent(1/20) → hally-google-workspace → tool: Shell\nRead the file", rocketcodeThinkingText(subagentToolResponse(&call)))
 	assert.Empty(t, rocketcodeThinkingText(subagentToolResponse(&result)))
 }
 
@@ -3153,7 +3153,7 @@ func TestRocketCodeThinkingTextSuppressesEmptyNestedSubagentDiagnostics(t *testi
 			Subagent: &rocketcode.SubagentDiagnostic{
 				Name:  "alitu-scenario-manager",
 				Label: "assistant tool",
-				Tool:  &rocketcode.ToolDiagnostic{Phase: "result", Name: "bash", Result: "file contents"},
+				Tool:  &rocketcode.ToolDiagnostic{Phase: "result", Name: "shell", Result: "file contents"},
 			},
 		},
 	}
@@ -3331,13 +3331,13 @@ func TestProcessResponsePublishesStructuredToolDiagnosticsAsThinking(t *testing.
 	var diagnostic rocketcode.ToolDiagnostic
 
 	diagnostic.Phase = "call"
-	diagnostic.Name = "bash"
+	diagnostic.Name = "shell"
 	diagnostic.Arguments = []byte(`{"command":"cat /tmp/file","description":"Read the file"}`)
 
 	require.NoError(t, bridge.processResponse(context.Background(), inbound, &result, toolResponse(&diagnostic)))
 
 	outbound := readRocketCodeOutbound(t, bus)
-	assert.Equal(t, "Bash\nRead the file", outbound.ProgressText)
+	assert.Equal(t, "Shell\nRead the file", outbound.ProgressText)
 	assert.Equal(t, "turn-1", outbound.TurnID)
 }
 
@@ -3468,7 +3468,7 @@ func TestProcessResponseSuppressesProviderOnlySubagentDiagnostics(t *testing.T) 
 
 func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-5.5\npermission:\n  bash:\n    \"*\": allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-5.5\npermission:\n  shell:\n    \"*\": allow\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var (
@@ -3677,7 +3677,7 @@ func TestRunTurnPreservesRecoveredExternalMCPReplayWithTransientMetadata(t *test
 
 func TestRecoveredExternalMCPActiveTurnUsesStoredSourceMetadata(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-5.5\npermission:\n  bash:\n    \"*\": allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-5.5\npermission:\n  shell:\n    \"*\": allow\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	service, err := NewSessionService(workspace)

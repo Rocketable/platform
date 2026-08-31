@@ -22,7 +22,7 @@ func loadRocketCodeDefinitions(root *os.Root, workspace string, mode toolMode, m
 
 func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "assistant", "---\ndescription: Main\nmodel: gpt-5.4\nreasoningEffort: high\nverbosity: low\npermission:\n  bash:\n    \"gh *\": allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "assistant", "---\ndescription: Main\nmodel: gpt-5.4\nreasoningEffort: high\nverbosity: low\npermission:\n  shell:\n    \"gh *\": allow\n---\nPrompt\n")
 	writeAgent(t, workspace, "restricted", "---\ndescription: Restricted\nmodel: gpt-5.4\npermission:\n  task:\n    \"go-reviewer\": allow\n---\nPrompt\n")
 	writeAgent(t, workspace, "helper", "---\ndescription: Helper\nmodel: gpt-5.5\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
@@ -41,7 +41,7 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 
 	require.Equal(t, "gpt-5.4", primary.Model)
 	require.Equal(t, "gpt-5.5", helper.Model)
-	require.True(t, permissionSetAllows(primary.Permission, "bash", "gh *"))
+	require.True(t, permissionSetAllows(primary.Permission, "shell", "gh *"))
 	require.False(t, permissionSetAllows(primary.Permission, "task", "*"))
 	require.False(t, permissionSetAllows(helper.Permission, "task", "*"))
 	require.True(t, permissionSetAllows(restricted.Permission, "task", "go-reviewer"))

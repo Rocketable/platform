@@ -2,7 +2,7 @@
 description: Capture a Slack/RocketClaw session into a quickbench BAR directory for edit and re-run
 model: gpt-5.5
 permission:
-  bash:
+  shell:
     "go run github.com/Rocketable/platform/cmd/quickbench@main *": "allow"
   skill:
     "*": "deny"

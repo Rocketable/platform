@@ -119,11 +119,11 @@ If the cron monitor needs an agent that does not exist or lacks necessary permis
 
 Use the `main-create-or-update-agent` skill for all `agents/` edits.
 
-The cron agent should have narrow, concrete permissions only. Typical permissions are:
+The cron agent should have narrow, concrete permissions only. Use `shell` for command grants. `bash` is a `shell` alias (same rules); if both keys exist, `shell` wins. When creating or updating the cron agent, rename `permission.bash` to `permission.shell` with the same rules and omit `bash`. Typical permissions are:
 
 ```yaml
 permission:
-  bash:
+  shell:
     "tmux *": allow
     "date *": allow
     "command -v tmux": allow
@@ -133,7 +133,7 @@ permission:
     "LONG_RUNNING_PROCESSES.md": allow
 ```
 
-Add process-specific `bash`, `read`, `edit`, `grep`, or `glob` permissions only when the monitor actually needs them. Do not write broad `bash: allow`, broad `edit: allow`, or catch-all permission grants.
+Add process-specific `shell`, `read`, `edit`, `grep`, or `glob` permissions only when the monitor actually needs them. Do not write broad `shell: allow`, broad `edit: allow`, or catch-all permission grants.
 
 Prefer exact `allow` rules for routine monitor commands. If the human wants reviewer-gated access for riskier operational commands, use `auto` and document why deterministic `allow` is not appropriate.
 
@@ -188,7 +188,7 @@ If the cron agent is missing:
 If the cron agent lacks permissions:
 
 - identify the exact denied operation
-- update the agent with the narrowest matching `bash`, `read`, `edit`, `grep`, or `glob` permission
+- update the agent with the narrowest matching `shell`, `read`, `edit`, `grep`, or `glob` permission
 - do not broaden unrelated permissions
 
 If the monitor cannot update the ledger:
@@ -214,5 +214,5 @@ Before calling the work complete, verify:
 - the cron monitor uses `tmux` and updates the ledger
 - the cron monitor stays silent when there is nothing actionable
 - the cron agent exists when needed
-- the cron agent has exact needed permissions for `bash`, `read`, `edit`, and any required `grep` or `glob`
+- the cron agent has exact needed permissions for `shell`, `read`, `edit`, and any required `grep` or `glob`
 - no subagent task is being used as a long-running process supervisor
