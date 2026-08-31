@@ -77,7 +77,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	stateLogger.Info("starting rocketclaw state store", "workspace", cfg.Workspace, "runtime_dir", cfg.RuntimeDirName())
 
-	rocketcodeSessions, err := NewSessionServiceIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, stateLogger)
+	rocketcodeSessions, err := NewSessionServiceIn(cfg.DatabaseURL, stateLogger)
 	if err != nil {
 		return fmt.Errorf("start rocketcode session service: %w", err)
 	}

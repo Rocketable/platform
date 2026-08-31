@@ -302,8 +302,6 @@ func runCapture(ctx context.Context, args []string) error {
 	}
 
 	return Capture(ctx, CaptureOptions{
-		Workspace:      cfg.Workspace,
-		RuntimeDir:     cfg.RuntimeDirName(),
 		DatabaseURL:    cfg.DatabaseURL,
 		ConversationID: *conversation,
 		AgentsDir:      *agentsDir,

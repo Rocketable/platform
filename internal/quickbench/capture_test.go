@@ -13,17 +13,15 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCaptureFromSession(t *testing.T) {
-	workspace := t.TempDir()
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	service, err := backend.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, dsn, slog.New(slog.DiscardHandler))
+	service, err := backend.NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = service.Stop(context.Background()) })
 
@@ -49,8 +47,6 @@ func TestCaptureFromSession(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "worker.md"), []byte("---\ndescription: w\nmodel: gpt-5.4-mini\n---\n\nworker\n"), 0o644))
 
 	require.NoError(t, Capture(context.Background(), CaptureOptions{
-		Workspace:      workspace,
-		RuntimeDir:     config.DefaultRuntimeDir,
 		DatabaseURL:    dsn,
 		ConversationID: conversationID,
 		AgentsDir:      agentsDir,
@@ -74,10 +70,9 @@ func TestCaptureFromSession(t *testing.T) {
 }
 
 func TestCaptureUnknownConversation(t *testing.T) {
-	workspace := t.TempDir()
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	service, err := backend.NewSessionServiceIn(workspace, config.DefaultRuntimeDir, dsn, slog.New(slog.DiscardHandler))
+	service, err := backend.NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = service.Stop(context.Background()) })
 
@@ -86,8 +81,6 @@ func TestCaptureUnknownConversation(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "main.md"), defaultMainAgentMarkdown("gpt-5.4", "root"), 0o644))
 
 	err = Capture(context.Background(), CaptureOptions{
-		Workspace:      workspace,
-		RuntimeDir:     config.DefaultRuntimeDir,
 		DatabaseURL:    dsn,
 		ConversationID: "missing",
 		AgentsDir:      agentsDir,
@@ -101,7 +94,7 @@ func TestRunCapturePrefersFemtoclawConfig(t *testing.T) {
 	workspace := t.TempDir()
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	service, err := backend.NewSessionServiceIn(workspace, ".femtoclaw", dsn, slog.New(slog.DiscardHandler))
+	service, err := backend.NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = service.Stop(context.Background()) })
 

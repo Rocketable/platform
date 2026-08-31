@@ -161,7 +161,7 @@ func TestExternalMCPInboundContentProvidesRelayAttachments(t *testing.T) {
 func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	store, err := backend.NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, dsn, testLogger())
+	store, err := backend.NewSessionServiceIn(dsn, testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
 
@@ -248,7 +248,7 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
 func TestLegacyExternalMCPFollowupUsesExistingSharedConversation(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	store, err := backend.NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, dsn, testLogger())
+	store, err := backend.NewSessionServiceIn(dsn, testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
 
@@ -313,7 +313,7 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 			require.NoError(t, err)
-			store, err := backend.NewSessionServiceIn(t.TempDir(), config.DefaultRuntimeDir, dsn, testLogger())
+			store, err := backend.NewSessionServiceIn(dsn, testLogger())
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
 

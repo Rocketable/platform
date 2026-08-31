@@ -23,7 +23,7 @@ func newCronScheduleStore(t *testing.T) *SessionService {
 		t.Fatal(err)
 	}
 
-	store, err := NewSessionServiceIn(t.TempDir(), ".", dsn, slog.New(slog.DiscardHandler))
+	store, err := NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

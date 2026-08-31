@@ -58,11 +58,11 @@ func runFC(args []string) error {
 
 	switch args[0] {
 	case "list":
-		return runFCListIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, args[1:], os.Stdout)
+		return runFCListIn(cfg.DatabaseURL, args[1:], os.Stdout)
 	case "observe":
-		return runFCObserveIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, args[1:], os.Stdout)
+		return runFCObserveIn(cfg.DatabaseURL, args[1:], os.Stdout)
 	default:
-		return runFCDeleteIn(cfg.Workspace, cfg.RuntimeDirName(), cfg.DatabaseURL, args[1:], os.Stdout)
+		return runFCDeleteIn(cfg.DatabaseURL, args[1:], os.Stdout)
 	}
 }
 
@@ -82,7 +82,7 @@ func parseFCSecretsARN(args []string) (string, error) {
 	return *secretsARN, nil
 }
 
-func runFCDeleteIn(workspace, runtimeDir, databaseURL string, args []string, out io.Writer) error {
+func runFCDeleteIn(databaseURL string, args []string, out io.Writer) error {
 	flagSet := flag.NewFlagSet("rocketclaw fc delete", flag.ContinueOnError)
 	flagSet.String(secretsARNFlag, "", secretsARNUsage)
 
@@ -97,7 +97,7 @@ func runFCDeleteIn(workspace, runtimeDir, databaseURL string, args []string, out
 
 	conversationID := strings.TrimSpace(remaining[0])
 
-	deleted, err := backend.DeleteSessionIn(context.Background(), workspace, runtimeDir, databaseURL, conversationID)
+	deleted, err := backend.DeleteSessionIn(context.Background(), databaseURL, conversationID)
 	if err != nil {
 		return fmt.Errorf("delete rocketcode session: %w", err)
 	}
@@ -109,7 +109,7 @@ func runFCDeleteIn(workspace, runtimeDir, databaseURL string, args []string, out
 	return nil
 }
 
-func runFCListIn(workspace, runtimeDir, databaseURL string, args []string, out io.Writer) error {
+func runFCListIn(databaseURL string, args []string, out io.Writer) error {
 	flagSet := flag.NewFlagSet("rocketclaw fc list", flag.ContinueOnError)
 	flagSet.String(secretsARNFlag, "", secretsARNUsage)
 	sinceText := flagSet.String("since", "", "show sessions updated since duration or RFC3339 time")
@@ -156,11 +156,11 @@ func runFCListIn(workspace, runtimeDir, databaseURL string, args []string, out i
 		options.Until = until
 	}
 
-	return writeFCListInOptions(context.Background(), workspace, runtimeDir, databaseURL, options, !*noMessagePreview, out)
+	return writeFCListInOptions(context.Background(), databaseURL, options, !*noMessagePreview, out)
 }
 
-func writeFCListInOptions(ctx context.Context, workspace, runtimeDir, databaseURL string, options backend.SessionListOptions, includeMessagePreview bool, out io.Writer) error {
-	summaries, err := backend.ListSessionsInOptions(ctx, workspace, runtimeDir, databaseURL, options)
+func writeFCListInOptions(ctx context.Context, databaseURL string, options backend.SessionListOptions, includeMessagePreview bool, out io.Writer) error {
+	summaries, err := backend.ListSessionsInOptions(ctx, databaseURL, options)
 	if err != nil {
 		return fmt.Errorf("list rocketcode sessions: %w", err)
 	}
@@ -204,7 +204,7 @@ func writeFCListInOptions(ctx context.Context, workspace, runtimeDir, databaseUR
 	return nil
 }
 
-func runFCObserveIn(workspace, runtimeDir, databaseURL string, args []string, out io.Writer) error {
+func runFCObserveIn(databaseURL string, args []string, out io.Writer) error {
 	flagSet := flag.NewFlagSet("rocketclaw fc observe", flag.ContinueOnError)
 	flagSet.String(secretsARNFlag, "", secretsARNUsage)
 	follow := flagSet.Bool("follow", false, "follow session entries")
@@ -221,15 +221,15 @@ func runFCObserveIn(workspace, runtimeDir, databaseURL string, args []string, ou
 
 	conversationID := strings.TrimSpace(remaining[0])
 
-	return writeFCObserveIn(context.Background(), workspace, runtimeDir, databaseURL, conversationID, *follow, time.Second, out)
+	return writeFCObserveIn(context.Background(), databaseURL, conversationID, *follow, time.Second, out)
 }
 
-func writeFCObserveIn(ctx context.Context, workspace, runtimeDir, databaseURL, conversationID string, follow bool, pollInterval time.Duration, out io.Writer) error {
+func writeFCObserveIn(ctx context.Context, databaseURL, conversationID string, follow bool, pollInterval time.Duration, out io.Writer) error {
 	if strings.TrimSpace(conversationID) == "" {
 		return errors.New("conversation ID is required")
 	}
 
-	service, err := backend.NewSessionServiceIn(workspace, runtimeDir, databaseURL, slog.New(slog.DiscardHandler))
+	service, err := backend.NewSessionServiceIn(databaseURL, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return fmt.Errorf("observe rocketcode session entries: %w", err)
 	}
