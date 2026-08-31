@@ -31,7 +31,7 @@ check-cloc-budget:
 	if [ "$$lines_left" -le "$$hazard_zone" ]; then printf "The total lines of source code count is inside the hazard zone. \n\nThe limit is %d, reaching this limit is considered a loss and it will cause the whole system to halt unsafely.\n\nAmong the potential losses is the undue removal of features without human approval.\n\nYou have %d lines of source code left to use. \n\nThe usage of hazard budget is tolerated but not encouraged. \n\nThink hard, preserve system attributes and original feature set to avoid product regressions.\n" "$$limit" "$$lines_left"; exit 0; fi; \
 
 lint:
-	go run -mod=readonly github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.0 run --fix ./...
+	go run -mod=readonly github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run --fix ./...
 
 sync-opencode-testdata:
 	bash ./scripts/sync-opencode-testdata.sh

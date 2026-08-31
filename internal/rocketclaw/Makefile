@@ -15,7 +15,7 @@ generate: vendor
 	go generate ./skel
 
 lint: vendor
-	go run -mod=readonly github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.0 run --fix ./...
+	go run -mod=readonly github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run --fix ./...
 
 build: generate lint
 	go build -o ../../bin/rocketclaw ../../cmd/rocketclaw
