@@ -52,6 +52,7 @@ func (r SideAskRunner) Run(ctx context.Context, req protocol.SideAskRequest) err
 	rocketcodeConfig := rocketcode.Config{
 		AutoApproverModel:          r.Config.AutoApproverModel,
 		ShellTempDir:               filepath.Join(r.Config.Workspace, filepath.FromSlash(shellTempRel)),
+		SpillDir:                   rocketcodeSpillDir(r.Config),
 		Diagnostics:                true,
 		ExperimentalStrongerSkills: true,
 		ExpandPromptShellCommands:  rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true},
