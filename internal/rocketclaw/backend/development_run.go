@@ -60,6 +60,7 @@ func RunDevelopmentTurn(ctx context.Context, cfg *config.Config, runtimeDir, age
 	rocketcodeConfig := rocketcode.Config{
 		AutoApproverModel:          copied.AutoApproverModel,
 		ShellTempDir:               filepath.Join(copied.Workspace, filepath.FromSlash(shellTempRel)),
+		SpillDir:                   rocketcodeSpillDir(&copied),
 		Diagnostics:                true,
 		ExperimentalStrongerSkills: true,
 		ExpandPromptShellCommands:  rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true},

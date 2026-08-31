@@ -285,6 +285,16 @@ func TestRunRawHidesRestartWithoutExplicitAllow(t *testing.T) {
 	requestMu.Unlock()
 }
 
+func TestRunRawSpillsUnderRuntimeDir(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	_ = rawRunToolNames(t, workspace, nil)
+	require.NoDirExists(t, filepath.Join(workspace, ".rocketcode", "spill"))
+	require.DirExists(t, filepath.Join(workspace, ".rocketclaw", ".rocketcode", "spill"))
+}
+
 func TestRunRawStartNewThreadAvailability(t *testing.T) {
 	tests := []struct {
 		name, permission, channel string
