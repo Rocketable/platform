@@ -6035,7 +6035,7 @@ func TestNativeForwardRequiresAllMarkersAndAgreeingSource(t *testing.T) {
 
 func TestRenderNativeForwardBoundsSharedMaterial(t *testing.T) {
 	forward := slackNativeForward{previews: []string{strings.Repeat("p", protocol.MaxInboundTextAttachmentBytes)}, channelID: "C1", threadTS: "1.1"}
-	got := renderSlackForward(forward, []slack.Message{{Msg: slack.Msg{User: "U1", Text: "must not fit"}}}, nil)
+	got := renderSlackForward(forward, []slack.Message{{User: "U1", Text: "must not fit"}}, nil)
 	require.LessOrEqual(t, len(got), protocol.MaxInboundTextAttachmentBytes)
 	require.Contains(t, got, "[Slack forwarded preview truncated]")
 	require.NotContains(t, got, "must not fit")
@@ -6063,7 +6063,7 @@ func TestRenderNativeForwardReservesImageReferenceBeforeTranscriptTruncation(t *
 	const imageNote = "Forwarded image reference: photo.png"
 
 	forward := slackNativeForward{previews: []string{"preview"}}
-	messages := []slack.Message{{Msg: slack.Msg{User: "U1", Text: strings.Repeat("x", protocol.MaxInboundTextAttachmentBytes)}}}
+	messages := []slack.Message{{User: "U1", Text: strings.Repeat("x", protocol.MaxInboundTextAttachmentBytes)}}
 
 	got := renderSlackForward(forward, messages, []string{imageNote})
 	require.LessOrEqual(t, len(got), protocol.MaxInboundTextAttachmentBytes)
