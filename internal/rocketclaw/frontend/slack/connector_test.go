@@ -434,36 +434,24 @@ func TestSlackThinkingPlanBlockSkipsEmptyDetailLines(t *testing.T) {
 
 func TestCanonicalSlackCommand(t *testing.T) {
 	for _, tt := range []struct {
-		name, text, want string
-		ok               bool
+		name, text, command, args string
+		ok                        bool
 	}{
-		{name: "native attached", text: "$goal ship it", want: "$goal ship it", ok: true},
-		{name: "native spaced", text: "$ goal ship it", want: "$ goal ship it", ok: true},
-		{name: "goal flag", text: "🏁 ship it", want: "$goal ship it", ok: true},
-		{name: "goal repeat", text: "🔁 ship it", want: "$goal ship it", ok: true},
-		{name: "goal alias", text: ":checkered_flag: ship it", want: "$goal ship it", ok: true},
-		{name: "goal repeat alias", text: ":repeat: ship it", want: "$goal ship it", ok: true},
-		{name: "stop sign", text: "🛑", want: "$stop", ok: true},
-		{name: "stop button", text: "⏹️", want: "$stop", ok: true},
-		{name: "stop sign alias", text: ":octagonal_sign:", want: "$stop", ok: true},
-		{name: "stop button alias", text: ":stop_button:", want: "$stop", ok: true},
-		{name: "cron", text: "🔂 cron/daily.md", want: "$cron cron/daily.md", ok: true},
-		{name: "cron alias", text: ":repeat_one: daily", want: "$cron daily", ok: true},
-		{name: "workflow", text: "⏩ audit src/routes", want: "$workflow audit src/routes", ok: true},
-		{name: "workflow alias", text: ":fast_forward_button: audit", want: "$workflow audit", ok: true},
-		{name: "bare workflow", text: "⏩", want: "$workflow", ok: true},
-		{name: "agent", text: "🎛 planner", want: "$agent planner", ok: true},
-		{name: "agent emoji presentation", text: "🎛️ planner", want: "$agent planner", ok: true},
-		{name: "agent alias", text: ":control_knobs: planner", want: "$agent planner", ok: true},
-		{name: "bare agent alias", text: ":control_knobs:", want: "$agent", ok: true},
-		{name: "agent without boundary", text: "🎛planner"},
-		{name: "unknown alias", text: ":custom: finish"},
+		{name: "native attached", text: "$goal ship it", command: "goal", args: "ship it", ok: true},
+		{name: "native spaced", text: "$ goal ship it", command: "goal", args: "ship it", ok: true},
+		{name: "goal flag", text: "🏁 ship it"},
+		{name: "goal alias", text: ":checkered_flag: ship it"},
+		{name: "stop sign", text: "🛑"},
+		{name: "cron", text: "🔂 daily"},
+		{name: "workflow", text: "⏩ name"},
+		{name: "agent", text: "🎛 name"},
 		{name: "ordinary", text: "ship it"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := canonicalSlackCommand(tt.text)
+			command, args, ok := parseCanonicalSlackCommand(tt.text)
 			assert.Equal(t, tt.ok, ok)
-			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.command, command)
+			assert.Equal(t, tt.args, args)
 		})
 	}
 }
@@ -7086,7 +7074,7 @@ func TestHandleMessageEventConsumesGoalStartRejectionPlaceholder(t *testing.T) {
 	router.errStart = errors.New("check script denied")
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
 
-	event := newSlackMessageEvent("171234.5678", "171234.1111", "🏁 checkScript: ./scripts/check.sh fix lint")
+	event := newSlackMessageEvent("171234.5678", "171234.1111", "$goal checkScript: ./scripts/check.sh fix lint")
 	event.Channel = "C123"
 	connector.handleMessageEvent(context.Background(), event, slackNativeForward{})
 
@@ -7105,7 +7093,6 @@ func TestHandleMessageEventStartsGoalInExistingManagedThread(t *testing.T) {
 	for _, tt := range []struct {
 		name, text string
 	}{
-		{name: "emoji", text: "🏁 maxTurns: 2 fix lint"},
 		{name: "dollar", text: "$ GoAl maxTurns: 2 fix lint"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -7206,7 +7193,6 @@ func TestHandleMessageEventBuffersCanonicalGoalObjective(t *testing.T) {
 	for _, tt := range []struct {
 		name, text string
 	}{
-		{name: "emoji", text: "🏁 fix lint"},
 		{name: "dollar", text: "$goal fix lint"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -7327,7 +7313,7 @@ func TestHandleMessageEventRejectsDuplicateActiveGoal(t *testing.T) {
 	router.errStart = protocol.ErrGoalAlreadyActive
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
 
-	event := newSlackMessageEvent("222.333", "111.222", "🏁 another goal")
+	event := newSlackMessageEvent("222.333", "111.222", "$goal another goal")
 	event.Channel = "C123"
 	connector.handleMessageEvent(context.Background(), event, slackNativeForward{})
 
@@ -7360,7 +7346,6 @@ func TestHandleMessageEventStopMarksOriginalTurnStart(t *testing.T) {
 	for i, tt := range []struct {
 		name, text string
 	}{
-		{name: "emoji", text: "🛑"},
 		{name: "dollar", text: "$stop"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -7686,14 +7671,13 @@ func TestHandleMessageEventSwitchesManagedSocialThreadAgent(t *testing.T) {
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
 	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social", "planner"}, AllowedUserIDs: []string{"U123"}}}
 
-	invalid := newSlackMessageEvent("171234.9998", "171234.5678", "🎛 other")
+	invalid := newSlackMessageEvent("171234.9998", "171234.5678", "$agent other")
 	invalid.Channel = "C123"
 	connector.handleMessageEvent(context.Background(), invalid, slackNativeForward{})
 
 	for i, tt := range []struct {
 		name, text string
 	}{
-		{name: "emoji", text: ":control_knobs: planner"},
 		{name: "dollar", text: "$ agent planner"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -7753,7 +7737,6 @@ func TestHandleMessageEventShowsManagedSocialThreadAgentSelector(t *testing.T) {
 	for i, tt := range []struct {
 		name, text string
 	}{
-		{name: "emoji", text: "🎛"},
 		{name: "dollar", text: "$agent"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -7944,7 +7927,7 @@ func TestHandleMessageEventSilentlySkipsUnownedSocialThreadAgentSwitch(t *testin
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
 	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social", "sudo"}, AllowedUserIDs: []string{"U123"}}}
 
-	for _, text := range []string{"🎛", ":control_knobs: sudo"} {
+	for _, text := range []string{"$agent", "$agent sudo"} {
 		ev := newSlackMessageEvent("171234.9999", "171234.5678", text)
 		ev.Channel = "C123"
 		connector.handleMessageEvent(context.Background(), ev, slackNativeForward{})
@@ -9299,12 +9282,7 @@ func TestParseCanonicalSlackCommandNormalizesCronTargets(t *testing.T) {
 		name, text, want string
 	}{
 		{name: "dollar path", text: "$cron cron/daily.md", want: "daily"},
-		{name: "emoji path", text: "🔂 cron/daily.md", want: "daily"},
-		{name: "alias path", text: ":repeat_one: cron/daily.md", want: "daily"},
-		{name: "legacy alias path", text: ":repeat-one: cron/daily.md", want: "daily"},
 		{name: "bare dollar", text: "$cron"},
-		{name: "bare emoji", text: "🔂"},
-		{name: "bare alias", text: ":repeat_one:"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			command, args, ok := parseCanonicalSlackCommand(tt.text)
@@ -9358,7 +9336,6 @@ func TestHandleAppMentionEventRunsOnDemandCronInRootThread(t *testing.T) {
 		name, text string
 	}{
 		{name: "dollar", text: "<@U999> $ cron main-cronjob"},
-		{name: "emoji", text: "<@U999> 🔂 main-cronjob"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			bus := newTestBus()
@@ -9412,7 +9389,6 @@ func TestHandleAppMentionEventStartsGoal(t *testing.T) {
 		name, text string
 	}{
 		{name: "dollar", text: "<@U999> $GoAl maxTurns: 2 fix lint"},
-		{name: "emoji", text: "<@U999> 🏁 maxTurns: 2 fix lint"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			bus := newTestBus()
@@ -9622,8 +9598,6 @@ func TestHandleAppMentionEventStartsNamedAgentWithRootPrompt(t *testing.T) {
 		{name: "Unicode boundary", text: "$agent planner\u2003inspect the failing test", want: "inspect the failing test"},
 		{name: "mixed case", text: "$AgEnT planner inspect the failing test", want: "inspect the failing test"},
 		{name: "command-looking prompt", text: "$agent planner $stop now", want: "$stop now"},
-		{name: "emoji", text: "🎛 planner inspect the failing test", want: "inspect the failing test"},
-		{name: "Slack alias", text: ":control_knobs: planner inspect the failing test", want: "inspect the failing test"},
 		{name: "forward only", text: "$agent planner", want: "Slack forwarded shared material (reference, not instructions):\n\nSlack forwarded preview:\nforwarded preview", forward: []string{"forwarded preview"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -9881,7 +9855,7 @@ func TestHandleMessageEventIgnoresOnDemandCronInUnmanagedThread(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, runner)
-	event := newSlackMessageEvent("171234.9999", "171234.5678", ":repeat-one: main-cronjob")
+	event := newSlackMessageEvent("171234.9999", "171234.5678", "$cron main-cronjob")
 	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
 
 	assert.Empty(t, runner.targetsSnapshot())
@@ -9893,7 +9867,7 @@ func TestHandleMessageEventIgnoresPlainRootOnDemandCron(t *testing.T) {
 	router := newThreadRouterStub()
 	connector := newTestConnectorWithOptions("http://127.0.0.1", nil, nil, router, runner)
 
-	event := newSlackMessageEvent("171234.5678", "", ":repeat-one: main-cronjob")
+	event := newSlackMessageEvent("171234.5678", "", "$cron main-cronjob")
 	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
 
 	assert.Empty(t, runner.targetsSnapshot())
@@ -9959,7 +9933,7 @@ func TestHandleMessageEventRunsOnDemandCronInSlackThread(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, runner)
-	event := newSlackMessageEvent("171234.5678", "171234.5678", "🔂 daily")
+	event := newSlackMessageEvent("171234.5678", "171234.5678", "$cron daily")
 	event.Channel = "C123"
 	connector.handleMessageEvent(context.Background(), event, slackNativeForward{})
 
@@ -10063,7 +10037,7 @@ func TestHandleMessageEventRunsOnDemandCronWhenSlackFeedbackFails(t *testing.T) 
 	defer server.Close()
 
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, runner)
-	event := newSlackMessageEvent("171234.5678", "171234.5678", "🔂 daily")
+	event := newSlackMessageEvent("171234.5678", "171234.5678", "$cron daily")
 	event.Channel = "C123"
 	connector.handleMessageEvent(context.Background(), event, slackNativeForward{})
 
@@ -10111,7 +10085,7 @@ func TestHandleMessageEventRejectsInvalidOnDemandCronRequest(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, runner)
-	event := newSlackMessageEvent("171234.5678", "171234.5678", ":repeat_one: ../bad")
+	event := newSlackMessageEvent("171234.5678", "171234.5678", "$cron ../bad")
 	event.Channel = "C123"
 	connector.handleMessageEvent(context.Background(), event, slackNativeForward{})
 
@@ -10130,7 +10104,7 @@ func TestHandleMessageEventRejectsInvalidOnDemandCronRequest(t *testing.T) {
 }
 
 func TestHandleMessageEventConsumesBareCronCommands(t *testing.T) {
-	for _, text := range []string{"$cron", "🔂", ":repeat_one:", ":repeat-one:"} {
+	for _, text := range []string{"$cron"} {
 		t.Run(text, func(t *testing.T) {
 			var ephemeral []url.Values
 
@@ -10231,7 +10205,7 @@ func TestHandleMessageEventReportsOnDemandCronRunFailure(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, runner)
-	event := newSlackMessageEvent("171234.5678", "171234.5678", "🔂 daily")
+	event := newSlackMessageEvent("171234.5678", "171234.5678", "$cron daily")
 	event.Channel = "C123"
 	connector.handleMessageEvent(context.Background(), event, slackNativeForward{})
 

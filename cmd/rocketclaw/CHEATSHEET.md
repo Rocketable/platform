@@ -2,17 +2,17 @@
 
 ## Slack Text Controls
 
-Dollar commands are canonical. RocketClaw translates the listed emoji and Slack aliases into the corresponding dollar command before dispatch.
+Type dollar commands. Emoji in this table are reactions RocketClaw listens to, or markers it posts. They are not typed command prefixes.
 
 | Emoji | Dollar Command | Aliases | Surface | What It Does | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `🔁`, `🏁` | `$goal`, `$ goal` | Slack `:repeat:`, `:checkered_flag:` | Slack | Starts a text goal loop. | Dollar command names are case-insensitive; goal arguments use the existing grammar. Bare `$goal` posts ephemeral parameter help and examples. |
-| `🛑`, `⏹️` | `$stop`, `$ stop` | Slack reactions `:octagonal_sign:`, `:stop_button:` | Slack managed threads | Stops the active managed-conversation turn. | Emoji controls work as an exact message or reaction. Stop feedback is marker-only: RocketClaw adds `❗` and sends no stop text. Dollar stop takes no arguments. |
+|  | `$goal`, `$ goal` |  | Slack | Starts a text goal loop. | Dollar command names are case-insensitive; goal arguments use the existing grammar. Bare `$goal` posts ephemeral parameter help and examples. |
+| `🛑`, `⏹️` | `$stop`, `$ stop` | Slack reactions `:octagonal_sign:`, `:stop_button:` | Slack managed threads | Stops the active managed-conversation turn. | React with 🛑 or ⏹️. Typing those glyphs as a message is not a command. Stop feedback is marker-only: RocketClaw adds `❗` and sends no stop text. Dollar stop takes no arguments. |
 | `❗` |  | Slack `:exclamation:` | Slack | Interruption or rejection marker. | Added by RocketClaw after stop/interruption and for duplicate active-goal rejection. Humans generally do not use this as a command. |
 | `✅` |  | Slack `:white_check_mark:` | Slack | Completion marker. | Added when a goal reaches `complete`. Not added for `blocked`, `stopped`, or `budget_exhausted`. |
-| `🔂` | `$cron`, `$ cron` | `:repeat_one:` | Slack | Runs a one-off cron request by text prefix. Bare `$cron` lists jobs that target the current channel. | Example: `$cron daily`. |
-| `⏩` | `$workflow <name> [args]` | Slack `:fast_forward_button:` | Slack configured channels | Runs a saved Starlark workflow as the foreground managed turn. | Bare `$workflow` lists names and descriptions. Retry after the active turn finishes. `$stop` ends a running workflow. |
-| `🎛` | `$agent`, `$ agent` | `:control_knobs:` | Slack root mentions and managed conversations | Selects the initial root agent or switches the persisted managed-thread agent. | Bare root `$agent` or managed-thread `$agent` opens the selector. Root `$agent name` registers a ready thread; `$agent name message` starts the selected agent with `message` as its first turn. In a managed thread, `🎛 agent-name` or `$agent name` switches. Only the user who sent the control message can use its selector. |
+|  | `$cron`, `$ cron` |  | Slack | Runs a one-off cron request. Bare `$cron` lists jobs that target the current channel. | Example: `$cron daily`. |
+|  | `$workflow <name> [args]` |  | Slack configured channels | Runs a saved Starlark workflow as the foreground managed turn. | Bare `$workflow` lists names and descriptions. Retry after the active turn finishes. `$stop` ends a running workflow. |
+|  | `$agent`, `$ agent` |  | Slack root mentions and managed conversations | Selects the initial root agent or switches the persisted managed-thread agent. | Bare root `$agent` or managed-thread `$agent` opens the selector. Root `$agent name` registers a ready thread; `$agent name message` starts the selected agent with `message` as its first turn. In a managed thread, `$agent name` switches. Only the user who sent the control message can use its selector. |
 | `🤖` |  | Slack `:robot_face:` | Slack | Processing/accepted marker. | Added when RocketClaw accepts a Slack-originated or relayed turn; removed after final response delivery. |
 | `⏳` |  | Slack `:hourglass_flowing_sand:` | Slack | Steer waiting to inject. | Marks a mid-turn Slack Steer. Removed on injection after a tool batch or a no-tool answer. Multiple waiting steers inject together. 🛑 on that hourglass drops the steer and does not stop the turn. |
 | `⏫` |  | Slack reactions `:arrow_double_up:`, `:fast_up_button:`, `:black_up_pointing_double_triangle:` | Slack managed threads | Convert a queued envelope into a Slack Steer. | During an active turn only. Idle or non-envelope ⏫ is ignored. |
@@ -49,8 +49,8 @@ Unauthorized clicks are silent. If the message is not in a RocketClaw conversati
 | Start with a selected agent | Mention the RocketClaw bot/app with `$agent agent-name` or `$agent agent-name message`. | The no-message form creates a ready thread for the configured agent; the message form starts that agent with only the remainder as its first user-authored prompt. |
 | Continue a conversation | Reply in a known managed thread. | Uses only that thread's persisted history. |
 | Message with another human mention | Mention RocketClaw too when the message also pings another person, bot, broadcast target, or user group. | Managed-thread replies that ping someone else are suppressed unless RocketClaw is also mentioned. Raw unresolved `@word` text is not treated as a Slack ping. |
-| Agent selection or switch | Root `$agent [agent-name] [message]`, or `$agent [agent-name]` in a managed thread. | Bare `$agent` opens a Slack-native selector in either context. Root named selection uses a configured single-token agent name; the optional message starts its first turn. In a managed thread, the named form switches the persisted agent. `🎛` is an alias. |
-| One-off cron | `$cron daily` or `$cron daily.md`. | Any top-level cronjob can be started from any configured Slack channel. Bare `$cron` lists jobs that target the current channel. `🔂` is an alias. |
+| Agent selection or switch | Root `$agent [agent-name] [message]`, or `$agent [agent-name]` in a managed thread. | Bare `$agent` opens a Slack-native selector in either context. Root named selection uses a configured single-token agent name; the optional message starts its first turn. In a managed thread, the named form switches the persisted agent. |
+| One-off cron | `$cron daily` or `$cron daily.md`. | Any top-level cronjob can be started from any configured Slack channel. Bare `$cron` lists jobs that target the current channel. |
 | Saved workflow | `$workflow audit-routes src/routes`. | Works in an existing managed thread or in an authorized root app mention that creates one. Bare `$workflow` lists available workflows. If a turn is active, wait and retry. A nonempty later-work queue is not busy. `$stop` terminates the run. |
 | Stash later work | `$enqueue write the changelog`. | During an active turn, marks ✉️ and stashes a separate later turn. While idle, posts 📨 then starts that message now even if the stack is already nonempty. Bare `$enqueue` posts command help. |
 | Review later work | `$queue`. | Posts pending steers, then later work. Hide closes it. Jump to a pending steer or Slack enqueue. ⏫ on an envelope during a turn converts it to a steer. 🛑 on a waiting hourglass drops that steer. Envelope 🛑 drops that enqueue. |
@@ -71,8 +71,7 @@ A separate inbound door from External MCP. Off until `mcp_development.enabled` i
 | `$goal checkScript:./scripts/check.sh ship the release` | Same as above; `checkScript:` values may attach directly after `:`. |
 | `$goal checkScript: "./scripts/check.sh --full" ship the release` | Uses a quoted simple command for the check script. |
 | `$goal checkScript:"./scripts/check.sh --full" ship the release` | Same as above with the quoted command attached directly after `:`. |
-| `🏁 ship the release` or `🔁 ship the release` | Emoji aliases for `$goal ship the release`. |
-| `$stop`, `🛑`, or `⏹️` | Stops the active managed-conversation turn. If an active goal is present, it becomes `stopped`. |
+| `$stop` | Stops the active managed-conversation turn. If an active goal is present, it becomes `stopped`. Reacting with 🛑 or ⏹️ on thinking does the same. |
 | `✅` | Marker RocketClaw adds when a goal reaches `complete`. Humans generally do not send it as a command. |
 
 | Goal Parameter | Accepted Values | Meaning |
@@ -126,7 +125,7 @@ Return the human-visible value directly from `main`: strings render directly, ot
 }
 ```
 
-New `#ops` conversations use agent `main`. Authorized replies can select another listed agent with `$agent factory`, its `🎛 factory` alias, or the native selector.
+New `#ops` conversations use agent `main`. Authorized replies can select another listed agent with `$agent factory` or the native selector.
 
 To expose the shipped quickbench capture agent, include `slack-to-benchmark` in that channel's `agents` list (skel ships the agent file; channel membership is required). Example: `$agent slack-to-benchmark capture this thread into a BAR`. Restart after editing `rocketclaw.json`. See `cmd/quickbench/README.md`.
 
@@ -178,23 +177,22 @@ RocketClaw injects these tools into RocketCode turns as **top-level tools and Co
 
 For general `permission` syntax, action values, guardrails, and approval reviewers, see Agent Frontmatter And Permissions below. RocketCode is deny-by-default and later matching rules win. RocketClaw's default tool allows are injected after agent permissions unless an explicit deny already matched, so use `deny` rather than `auto` when the intent is to block or force review of a RocketClaw auto-allowed tool. For default-deny tools such as `rocketclaw_restart` and `rocketclaw_start_new_thread`, `auto` is not enough; use explicit `allow`. Outbound MCP tools are never RocketClaw auto-allowed; grant `permission.mcp` explicitly.
 
-## Emoji Translation Table
+## Slack Reactions And Markers
 
-| Emoji | Alias or Reaction Name | Meaning |
+| Emoji | Reaction Name | Meaning |
 | --- | --- | --- |
-| `🔁` | `:repeat:` | Goal loop prefix. |
-| `🏁` | `:checkered_flag:` | Goal loop prefix. |
-| `🛑` | `:octagonal_sign:`, `octagonal_sign` | Stop command or reaction. |
-| `⏹️` | `:stop_button:`, `stop_button` | Stop command or reaction. |
-| `❗` | `:exclamation:`, `exclamation` | Interruption or rejection marker. |
-| `✅` | `:white_check_mark:`, `white_check_mark` | Completion marker. |
-| `🔂` | `:repeat_one:` | Cron one-off request prefix. |
-| `🎛` | `:control_knobs:` | Managed conversation agent switch command. |
-| `🤖` | `:robot_face:`, `robot_face` | Slack processing/accepted marker. |
-| `⏳` | `:hourglass_flowing_sand:`, `hourglass_flowing_sand` | Slack Steer waiting to inject. |
-| `✉️` | `:envelope:`, `envelope` | Waiting Enqueued Slack Message. |
-| `📨` | `:incoming_envelope:` | Enqueued Slack Message consume card. |
-| `📡` | `:satellite_antenna:`, `satellite_antenna` | Slack External MCP relay marker. |
+| `🛑` | `octagonal_sign` | Stop reaction on thinking, a waiting hourglass, or a queued envelope. |
+| `⏹️` | `stop_button` | Same as 🛑. |
+| `❗` | `exclamation` | Interruption or rejection marker. |
+| `✅` | `white_check_mark` | Completion marker. |
+| `🏁` |  | Goal header RocketClaw posts while a goal is running. |
+| `🔁` |  | Cron result header RocketClaw posts. |
+| `🤖` | `robot_face` | Slack processing/accepted marker. |
+| `⏳` | `hourglass_flowing_sand` | Slack Steer waiting to inject. |
+| `✉️` | `envelope` | Waiting Enqueued Slack Message. |
+| `📨` |  | Enqueued Slack Message consume card. |
+| `📡` | `satellite_antenna` | Slack External MCP relay marker. |
+| `⏫` | `arrow_double_up`, `fast_up_button`, `black_up_pointing_double_triangle` | Convert a queued envelope into a Slack Steer. |
 
 ## Agent Frontmatter And Permissions
 

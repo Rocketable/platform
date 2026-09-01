@@ -4832,66 +4832,12 @@ func slackDollarCommand(text string) (command, args string, ok bool) {
 	return strings.ToLower(after[:separator]), strings.TrimSpace(after[separator:]), true
 }
 
-func canonicalSlackCommand(text string) (string, bool) {
-	text = strings.TrimSpace(text)
-	if _, _, ok := slackDollarCommand(text); ok {
-		return text, true
-	}
-
-	if after, ok := strings.CutPrefix(text, ":repeat-one:"); ok {
-		return strings.TrimSpace("$cron " + strings.TrimSpace(after)), true
-	}
-
-	canonicalEmoji := canonicalizeLeadingSlackEmoji(text)
-	if after, ok := strings.CutPrefix(canonicalEmoji, "🔁"); ok {
-		return "$goal " + strings.TrimSpace(after), true
-	}
-
-	if after, ok := strings.CutPrefix(canonicalEmoji, "🏁"); ok {
-		return "$goal " + strings.TrimSpace(after), true
-	}
-
-	if after, ok := strings.CutPrefix(canonicalEmoji, "🔂"); ok {
-		return strings.TrimSpace("$cron " + strings.TrimSpace(after)), true
-	}
-
-	if after, ok := strings.CutPrefix(canonicalEmoji, "⏩"); ok {
-		return strings.TrimSpace("$workflow " + strings.TrimSpace(after)), true
-	}
-
-	after, isAgent := strings.CutPrefix(canonicalEmoji, "🎛️")
-	if !isAgent {
-		after, isAgent = strings.CutPrefix(canonicalEmoji, "🎛")
-	}
-
-	if isAgent {
-		if after != "" {
-			r, size := utf8.DecodeRuneInString(after)
-			if !unicode.IsSpace(r) {
-				return "", false
-			}
-
-			after = after[size:]
-		}
-
-		return strings.TrimSpace("$agent " + strings.TrimSpace(after)), true
-	}
-
-	switch canonicalEmoji {
-	case "🛑", "⏹️":
-		return "$stop", true
-	}
-
-	return "", false
-}
-
 func parseCanonicalSlackCommand(text string) (command, args string, ok bool) {
-	canonical, ok := canonicalSlackCommand(text)
+	command, args, ok = slackDollarCommand(text)
 	if !ok {
 		return "", "", false
 	}
 
-	command, args, _ = slackDollarCommand(canonical)
 	if command == "cron" {
 		if target, ok := protocol.OnDemandCronTarget(args); ok {
 			args = target
