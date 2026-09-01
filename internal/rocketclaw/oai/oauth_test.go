@@ -232,7 +232,7 @@ func TestTransportRefreshUpdatesOnlySelectedProvider(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	got, err := (&transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "work"}).token(context.Background())
+	got, err := (&transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "work"}).token(context.Background(), tokenLoadFresh, Token{})
 	require.NoError(t, err)
 	require.Equal(t, "work-next", got.Access)
 
@@ -261,7 +261,7 @@ func TestConcurrentRefreshAndLoginDoesNotOverwriteNewLogin(t *testing.T) {
 	refreshDone := make(chan error, 1)
 
 	go func() {
-		_, err := (&transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai"}).token(context.Background())
+		_, err := (&transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai"}).token(context.Background(), tokenLoadFresh, Token{})
 		refreshDone <- err
 	}()
 
@@ -1742,7 +1742,7 @@ func TestNamedProviderSessionEndingRefreshUsesProviderGuidance(t *testing.T) {
 
 	t.Cleanup(func() { http.DefaultClient.Transport = base })
 
-	_, err := (&transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "work"}).token(context.Background())
+	_, err := (&transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "work"}).token(context.Background(), tokenLoadFresh, Token{})
 	require.ErrorContains(t, err, "refresh_token_reused")
 	require.ErrorContains(t, err, "`rocketclaw oai login work`")
 	require.NotContains(t, err.Error(), "run `rocketclaw oai login`")

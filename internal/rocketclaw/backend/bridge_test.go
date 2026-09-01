@@ -81,6 +81,12 @@ func (b *testBus) Outbound(ctx context.Context) iter.Seq[*protocol.OutboundMessa
 
 func (b *testBus) Close() { b.once.Do(func() { close(b.closed) }) }
 
+func TestBridgeSwitchAgentTrimsAndStoresAgent(t *testing.T) {
+	bridge := &Bridge{config: Config{Agent: "old"}}
+	bridge.SwitchAgent("  next  ")
+	assert.Equal(t, "next", bridge.agentSnapshot())
+}
+
 func TestRestartToolScopesDescriptionToRuntimeConfig(t *testing.T) {
 	tool := restartTool(testNoopRestart, testNoopRestartRecorder)
 

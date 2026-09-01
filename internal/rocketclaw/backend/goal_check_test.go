@@ -5,10 +5,22 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestValidateGoalCheckScriptStartRejectsUnknownAgent(t *testing.T) {
+	workspace := t.TempDir()
+	runtimeDir := config.DefaultRuntimeDir
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, runtimeDir, "agents"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, runtimeDir, "skills"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, runtimeDir, "agents", "main.md"), []byte("---\ndescription: main\nmodel: gpt-5.5\n---\nmain\n"), 0o644))
+
+	err := ValidateGoalCheckScriptStart(&config.Config{Workspace: workspace}, "missing", `./scripts/check.sh`)
+	require.ErrorContains(t, err, `goal check script agent "missing" is not configured`)
+}
 
 func TestValidateGoalCheckScriptAcceptsSafeSimpleCommand(t *testing.T) {
 	root, workspace := testGoalCheckWorkspace(t)
