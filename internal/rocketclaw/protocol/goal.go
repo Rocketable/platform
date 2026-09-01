@@ -96,7 +96,7 @@ func consumeGoalCheckScriptValue(text string) (value, rest string, err error) {
 			return "", "", errors.New("`checkScript:` has malformed shell quoting")
 		}
 
-		value, err := staticGoalCheckWord(word)
+		value, err := StaticGoalCheckWord(word)
 		if err != nil {
 			return "", "", err
 		}
@@ -111,7 +111,8 @@ func consumeGoalCheckScriptValue(text string) (value, rest string, err error) {
 	return "", "", errors.New("`checkScript:` needs a non-empty value")
 }
 
-func staticGoalCheckWord(word *syntax.Word) (string, error) {
+// StaticGoalCheckWord returns the literal text of a shell word with no expansions.
+func StaticGoalCheckWord(word *syntax.Word) (string, error) {
 	var value strings.Builder
 
 	for _, part := range word.Parts {
