@@ -9,11 +9,9 @@ import (
 	"os"
 	"path/filepath"
 
-	instrumentation "github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketcode"
-	"go.opentelemetry.io/otel"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -49,23 +47,7 @@ func (r SideAskRunner) Run(ctx context.Context, req protocol.SideAskRequest) err
 	defer func() { _ = root.RemoveAll(shellTempRel) }()
 
 	attachments := new(outboundAttachmentCollector)
-	rocketcodeConfig := rocketcode.Config{
-		AutoApproverModel:          r.Config.AutoApproverModel,
-		ShellTempDir:               filepath.Join(r.Config.Workspace, filepath.FromSlash(shellTempRel)),
-		SpillDir:                   rocketcodeSpillDir(r.Config),
-		Diagnostics:                true,
-		ExperimentalStrongerSkills: true,
-		ExpandPromptShellCommands:  rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true},
-		ParallelToolCalls:          16,
-		AutoApprovePermissions:     true,
-		Observability:              rocketcode.ObservabilityConfig{Enabled: r.Config.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: r.Config.Instrumentation.HideInputs, HideOutputs: r.Config.Instrumentation.HideOutputs}},
-		ChildRunLogger:             rocketcode.DiscardChildRunLog,
-		CheckpointSink:             rocketcode.InertCheckpointSink{},
-		CustomTools:                []rocketcode.Tool{attachments.Tool(root), reloadTool(func(context.Context, string) (string, error) { return "rocketclaw runtime assets reloaded", nil })},
-		ShellCommand:               rocketcode.DefaultShellCommand,
-		MCPServers:                 toMCPClientServers(r.Config.MCPServers),
-		MCPWorkspace:               r.Config.Workspace,
-	}
+	rocketcodeConfig := isolatedRocketCodeConfig(r.Config, filepath.Join(r.Config.Workspace, filepath.FromSlash(shellTempRel)), []rocketcode.Tool{attachments.Tool(root), reloadTool(func(context.Context, string) (string, error) { return "rocketclaw runtime assets reloaded", nil })})
 
 	looper, err := rocketcode.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, req.Agent, io.Discard)
 	if err != nil {

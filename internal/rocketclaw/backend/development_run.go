@@ -9,10 +9,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketcode"
-	"go.opentelemetry.io/otel"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -57,28 +55,12 @@ func RunDevelopmentTurn(ctx context.Context, cfg *config.Config, runtimeDir, age
 	}
 	defer func() { _ = root.RemoveAll(shellTempRel) }()
 
-	rocketcodeConfig := rocketcode.Config{
-		AutoApproverModel:          copied.AutoApproverModel,
-		ShellTempDir:               filepath.Join(copied.Workspace, filepath.FromSlash(shellTempRel)),
-		SpillDir:                   rocketcodeSpillDir(&copied),
-		Diagnostics:                true,
-		ExperimentalStrongerSkills: true,
-		ExpandPromptShellCommands:  rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true},
-		ParallelToolCalls:          16,
-		AutoApprovePermissions:     true,
-		Observability:              rocketcode.ObservabilityConfig{Enabled: copied.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: copied.Instrumentation.HideInputs, HideOutputs: copied.Instrumentation.HideOutputs}},
-		ChildRunLogger:             rocketcode.DiscardChildRunLog,
-		CheckpointSink:             rocketcode.InertCheckpointSink{},
-		CustomTools: []rocketcode.Tool{
-			reloadTool(func(context.Context, string) (string, error) { return "rocketclaw runtime assets reloaded", nil }),
-			restartTool(func(context.Context, string) (string, error) {
-				return "restart requested; runtime cancellation started", nil
-			}, func(context.Context) error { return nil }),
-		},
-		ShellCommand: rocketcode.DefaultShellCommand,
-		MCPServers:   toMCPClientServers(copied.MCPServers),
-		MCPWorkspace: copied.Workspace,
-	}
+	rocketcodeConfig := isolatedRocketCodeConfig(&copied, filepath.Join(copied.Workspace, filepath.FromSlash(shellTempRel)), []rocketcode.Tool{
+		reloadTool(func(context.Context, string) (string, error) { return "rocketclaw runtime assets reloaded", nil }),
+		restartTool(func(context.Context, string) (string, error) {
+			return "restart requested; runtime cancellation started", nil
+		}, func(context.Context) error { return nil }),
+	})
 
 	looper, err := rocketcode.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agent, io.Discard)
 	if err != nil {
