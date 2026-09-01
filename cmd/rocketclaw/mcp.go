@@ -223,7 +223,7 @@ func startDevelopmentMCP(ctx context.Context, cfg *config.Config, configPath str
 			return protocol.OverlayContext{}, fmt.Errorf("read overlay context: %w", err)
 		}
 
-		return backend.OverlayContextFromSkel(got), nil
+		return got, nil
 	}, func(baseOverlay string, files []protocol.OverlayFile) (protocol.LintResult, error) {
 		overlayMu.Lock()
 		defer overlayMu.Unlock()
@@ -252,12 +252,7 @@ func startDevelopmentMCP(ctx context.Context, cfg *config.Config, configPath str
 			return protocol.ListSessionsResult{}, fmt.Errorf("list sessions: %w", err)
 		}
 
-		out := make([]protocol.SessionSummary, len(summaries))
-		for i, summary := range summaries {
-			out[i] = protocol.SessionSummary(summary)
-		}
-
-		return protocol.ListSessionsResult{Sessions: out}, nil
+		return protocol.ListSessionsResult{Sessions: summaries}, nil
 	}, func(observeCtx context.Context, req protocol.ObserveSessionRequest) (protocol.ObserveSessionResult, error) {
 		entries, err := sessions.ObserveEntries(observeCtx, req.ConversationID, 0)
 		if err != nil {

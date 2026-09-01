@@ -915,8 +915,8 @@ func TestListSessionsIncludesLastMessages(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, summaries, 2)
 
-	assert.Equal(t, SessionSummary{ConversationID: "main", Turns: 2, LastUpdated: summaries[0].LastUpdated, LastUserMessage: "second\nuser", LastAssistantMessage: "second assistant"}, summaries[0])
-	assert.Equal(t, SessionSummary{ConversationID: "slack-thread:D123:111.222", Turns: 1, LastUpdated: summaries[1].LastUpdated, LastUserMessage: "thread user", LastAssistantMessage: "thread assistant"}, summaries[1])
+	assert.Equal(t, protocol.SessionSummary{ConversationID: "main", Turns: 2, LastUpdated: summaries[0].LastUpdated, LastUserMessage: "second\nuser", LastAssistantMessage: "second assistant"}, summaries[0])
+	assert.Equal(t, protocol.SessionSummary{ConversationID: "slack-thread:D123:111.222", Turns: 1, LastUpdated: summaries[1].LastUpdated, LastUserMessage: "thread user", LastAssistantMessage: "thread assistant"}, summaries[1])
 }
 
 func TestListSessionsOptionsBoundsByLatestUpdate(t *testing.T) {

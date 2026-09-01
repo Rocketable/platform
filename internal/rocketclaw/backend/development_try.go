@@ -13,25 +13,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 )
 
-func overlayFiles(files []protocol.OverlayFile) []skel.OverlayFile {
-	out := make([]skel.OverlayFile, len(files))
-	for i := range files {
-		out[i] = skel.OverlayFile{Path: files[i].Path, Content: files[i].Content}
-	}
-
-	return out
-}
-
-// OverlayContextFromSkel copies a live overlay clone into protocol form.
-func OverlayContextFromSkel(got skel.OverlayContext) protocol.OverlayContext {
-	out := protocol.OverlayContext{BaseOverlay: got.BaseOverlay, Files: make([]protocol.OverlayFile, len(got.Files))}
-	for i := range got.Files {
-		out.Files[i] = protocol.OverlayFile{Path: got.Files[i].Path, Content: got.Files[i].Content}
-	}
-
-	return out
-}
-
 func lintResultFromAgentlint(result agentlint.Result) protocol.LintResult {
 	out := protocol.LintResult{Findings: make([]protocol.LintFinding, len(result.Findings))}
 	for i := range result.Findings {
@@ -43,7 +24,7 @@ func lintResultFromAgentlint(result agentlint.Result) protocol.LintResult {
 
 // LintTry stages a try tree and lints it.
 func LintTry(workspace, runtimeDir string, overlays []string, baseOverlay string, files []protocol.OverlayFile, cfg *config.Config, logger *slog.Logger) (protocol.LintResult, error) {
-	stage, err := skel.StageLiveRuntime(workspace, runtimeDir, overlays, baseOverlay, overlayFiles(files), logger)
+	stage, err := skel.StageLiveRuntime(workspace, runtimeDir, overlays, baseOverlay, files, logger)
 	if err != nil {
 		return protocol.LintResult{}, fmt.Errorf("stage live runtime: %w", err)
 	}
@@ -102,7 +83,7 @@ func (l *KeyedConversationLocks) Lock(key string) func() {
 
 // RunTryTurn stages a try tree and runs one Development MCP chat turn.
 func RunTryTurn(ctx context.Context, workspace, runtimeDir string, overlays []string, cfg *config.Config, logger *slog.Logger, chat *DevelopmentChat, baseOverlay string, files []protocol.OverlayFile, agent, prompt string) (thinking, answer string, err error) {
-	stage, err := skel.StageLiveRuntime(workspace, runtimeDir, overlays, baseOverlay, overlayFiles(files), logger)
+	stage, err := skel.StageLiveRuntime(workspace, runtimeDir, overlays, baseOverlay, files, logger)
 	if err != nil {
 		return "", "", fmt.Errorf("stage live runtime: %w", err)
 	}
