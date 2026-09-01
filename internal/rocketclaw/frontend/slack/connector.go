@@ -114,6 +114,7 @@ type Connector struct {
 	stacks           map[string][]slackBufferedMessage
 	poppedQueue      map[string]struct{}
 	queueCards       map[string]string
+	oneOffThreads    map[string]struct{}
 	questions        map[string]*slackPendingQuestion
 	sideAsks         map[string]liveSideAsk
 	pendingSteers    protocol.PendingSteersSink
@@ -275,7 +276,7 @@ func New(cfg *config.SlackConfig, publisher protocol.OutboundPublisher, threadRo
 			return client.Ack(req, payload...)
 		},
 		reconnectDelay: time.Second,
-		replies:        map[string]slackReplySlots{}, pending: map[string]slackReplySlots{}, thinking: map[string]slackThinkingState{}, stacks: map[string][]slackBufferedMessage{}, poppedQueue: map[string]struct{}{}, queueCards: map[string]string{},
+		replies:        map[string]slackReplySlots{}, pending: map[string]slackReplySlots{}, thinking: map[string]slackThinkingState{}, stacks: map[string][]slackBufferedMessage{}, poppedQueue: map[string]struct{}{}, queueCards: map[string]string{}, oneOffThreads: map[string]struct{}{},
 	}
 	c.sideAsk = sideAskAdapter{c: c}
 
@@ -1261,7 +1262,7 @@ func (c *Connector) finishThinkingResponse(ctx context.Context, msg *protocol.Ou
 		}
 
 		if err == nil {
-			thinkingText := slackThinkingMessage(pending.Placeholder, pending.Text)
+			thinkingText := slackThinkingMessage(title, pending.Text)
 
 			var (
 				activities   []string
@@ -3224,6 +3225,15 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		}
 
 		principal := c.slackPrincipal(ctx, ev.User)
+		c.mu.Lock()
+		_, oneOff := c.oneOffThreads[key]
+		c.mu.Unlock()
+
+		if oneOff {
+			c.stashEnqueuedMessage(ctx, replyTarget, content.Text, principal)
+			return
+		}
+
 		if c.handleMidTurnPlainSend(ctx, key, content.Text, &content, replyTarget, principal, recipientTeamID, ev.User, allowedAgents) {
 			return
 		}
@@ -4935,10 +4945,30 @@ func (c *Connector) handleOnDemandCronRequest(ctx context.Context, target string
 		c.setReplyState(turnID, &slots)
 	}
 
+	if err := c.threadRouter.RegisterCronThread(ctx, protocol.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, loaded.Agent); err != nil {
+		c.log.Warn("register Slack one-off cron thread", "error", err, "channel", replyTarget.ChannelID, "thread_ts", replyTarget.ThreadTS, "cron", loaded.RelativePath)
+	}
+
+	c.mu.Lock()
+	c.oneOffThreads[slackThreadStackKey(replyTarget)] = struct{}{}
+	c.mu.Unlock()
+
 	go c.runOnDemandCron(ctx, loaded, replyTarget, turnID)
 }
 
 func (c *Connector) runOnDemandCron(ctx context.Context, loaded protocol.OneOffCronjob, replyTarget *protocol.SlackReplyTarget, turnID string) {
+	defer func() {
+		key := slackThreadStackKey(replyTarget)
+
+		c.mu.Lock()
+		delete(c.oneOffThreads, key)
+		c.mu.Unlock()
+
+		if errPick := c.threadRouter.PickQueuedWork(ctx, protocol.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}); errPick != nil {
+			c.log.Warn("pick Slack one-off cron queued work", "error", errPick, "channel", replyTarget.ChannelID, "thread_ts", replyTarget.ThreadTS, "cron", loaded.RelativePath)
+		}
+	}()
+
 	ranAt := time.Now().Format(time.RFC3339)
 
 	metadata := protocol.CronjobMessage{RelativePath: loaded.RelativePath, Agent: loaded.Agent, RanAt: ranAt}
@@ -5018,10 +5048,6 @@ func (c *Connector) runOnDemandCron(ctx context.Context, loaded protocol.OneOffC
 		if errPublish := publish(ctx, payload, "", true, false, &metadata, result.Attachments); errPublish != nil {
 			c.log.Warn("publish Slack on-demand cron result", "error", errPublish)
 			return
-		}
-
-		if errRegister := c.threadRouter.RegisterCronThread(ctx, protocol.TextConversationTarget{ChannelID: replyTarget.ChannelID, ThreadID: replyTarget.ThreadTS}, loaded.Agent); errRegister != nil {
-			c.log.Warn("register Slack one-off cron thread", "error", errRegister, "channel", replyTarget.ChannelID, "thread_ts", replyTarget.ThreadTS, "cron", loaded.RelativePath)
 		}
 	})
 }

@@ -512,6 +512,10 @@ func (m *threadBridgeManager) InterruptThread(target protocol.TextConversationTa
 	return m.InterruptConversation(conversationID), nil
 }
 
+func (m *threadBridgeManager) PickQueuedWork(ctx context.Context, target protocol.TextConversationTarget) error {
+	return m.PickLaterWork(ctx, m.text.conversationID(target))
+}
+
 func (m *threadBridgeManager) PickLaterWork(ctx context.Context, conversationID string) error {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {

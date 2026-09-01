@@ -83,4 +83,5 @@ type PrimaryTextRouter interface {
 	DeleteThreadQueueItem(ctx context.Context, target TextConversationTarget, id string) error
 	ScheduledMessages(ctx context.Context, target TextConversationTarget) (map[string]ScheduledMessageState, error)
 	ThreadBusy(target TextConversationTarget) bool
+	PickQueuedWork(ctx context.Context, target TextConversationTarget) error
 }
