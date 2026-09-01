@@ -65,6 +65,9 @@ func (inertThreadRouter) ScheduledMessages(context.Context, protocol.TextConvers
 func (inertThreadRouter) ThreadBusy(protocol.TextConversationTarget) bool {
 	return false
 }
+func (inertThreadRouter) PickQueuedWork(context.Context, protocol.TextConversationTarget) error {
+	return nil
+}
 
 type inertOneOffCronjobs struct{}
 

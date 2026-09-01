@@ -34,7 +34,7 @@ A Slack Steer is marked with hourglass until injection. It does not create think
 
 ### Enqueued Slack Message
 
-A later-turn prompt stashed on a Managed Slack Thread via `$enqueue`, or via External MCP `session_prompt` while that paired thread has an active turn.
+A later-turn prompt stashed on a Managed Slack Thread via `$enqueue`, via External MCP `session_prompt` while that paired thread has an active turn, or via a human reply while an on-demand `$cron` is still running on that thread. A `$cron` follow-up is not a Slack Steer and does not start a turn until the one-off finishes.
 
 A Slack `$enqueue` is marked with envelope until it is popped. An External MCP stash has no in-thread envelope; it is visible in `$queue` until pop. Pop posts an incoming-envelope Slack Blocks card, then reserves thinking and answer placeholders. Enqueued Slack Messages persist across restart and run as separate turns.
 
