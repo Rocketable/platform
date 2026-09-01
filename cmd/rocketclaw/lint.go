@@ -15,22 +15,12 @@ import (
 )
 
 func runLint(args []string) error {
-	flagSet := flag.NewFlagSet("rocketclaw lint", flag.ContinueOnError)
-	flagSet.SetOutput(io.Discard)
-	secretsARN := flagSet.String(secretsARNFlag, "", secretsARNUsage)
-	if err := flagSet.Parse(args); err != nil {
-		return fmt.Errorf("parse lint flags: %w", err)
-	}
-	rest := flagSet.Args()
-	target := "next"
-	if len(rest) > 0 {
-		target = rest[0]
-	}
-	if len(rest) > 1 || (target != "next" && target != "current") {
-		return fmt.Errorf("usage: rocketclaw lint [next|current]")
+	target, secretsARN, err := parseInspectionCommand("lint", args)
+	if err != nil {
+		return err
 	}
 
-	runtimeRoot, cfg, cleanup, err := runtimeRootForInspectionTarget(target, "rocketclaw-lint-*", "lint", *secretsARN)
+	runtimeRoot, cfg, cleanup, err := runtimeRootForInspectionTarget(target, "rocketclaw-lint-*", "lint", secretsARN)
 	if err != nil {
 		return err
 	}
@@ -54,6 +44,25 @@ func runLint(args []string) error {
 	}
 
 	return exitCodeError(1)
+}
+
+func parseInspectionCommand(name string, args []string) (string, string, error) {
+	flagSet := flag.NewFlagSet("rocketclaw "+name, flag.ContinueOnError)
+	flagSet.SetOutput(io.Discard)
+	arn := flagSet.String(secretsARNFlag, "", secretsARNUsage)
+	if err := flagSet.Parse(args); err != nil {
+		return "", "", fmt.Errorf("parse %s flags: %w", name, err)
+	}
+	rest := flagSet.Args()
+	target := "next"
+	if len(rest) > 0 {
+		target = rest[0]
+	}
+	if len(rest) > 1 || (target != "next" && target != "current") {
+		return "", "", fmt.Errorf("usage: rocketclaw %s [next|current]", name)
+	}
+
+	return target, *arn, nil
 }
 
 func runtimeRootForInspectionTarget(target, tempPattern, buildName, secretsARN string) (string, *config.Config, func(), error) {

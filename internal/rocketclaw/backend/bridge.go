@@ -2457,12 +2457,7 @@ func outboundAttachment(root *os.Root, input *outboundAttachmentInput) (protocol
 		mimeType = http.DetectContentType(data)
 	}
 
-	mediaType, _, err := mime.ParseMediaType(mimeType)
-	if err == nil {
-		mimeType = mediaType
-	}
-
-	return protocol.OutboundAttachment{Name: name, MIMEType: strings.ToLower(strings.TrimSpace(mimeType)), Data: append([]byte(nil), data...)}, nil
+	return protocol.OutboundAttachment{Name: name, MIMEType: protocol.NormalizeMIMEType(mimeType), Data: append([]byte(nil), data...)}, nil
 }
 
 func resetScheduledMessagesTool(reset func() error) rocketcode.Tool {
@@ -3136,26 +3131,18 @@ func normalizeInboundAttachments(msg *protocol.InboundMessage) {
 
 func modelAttachmentMIMEType(data []byte, declaredMIMEType, name string) string {
 	if len(data) > 0 {
-		return normalizeMIMEType(http.DetectContentType(data))
+		return protocol.NormalizeMIMEType(http.DetectContentType(data))
 	}
 
-	if mimeType := normalizeMIMEType(declaredMIMEType); mimeType != "" {
+	if mimeType := protocol.NormalizeMIMEType(declaredMIMEType); mimeType != "" {
 		return mimeType
 	}
 
-	return normalizeMIMEType(mime.TypeByExtension(filepath.Ext(name)))
-}
-
-func normalizeMIMEType(mimeType string) string {
-	if mediaType, _, err := mime.ParseMediaType(mimeType); err == nil {
-		mimeType = mediaType
-	}
-
-	return strings.ToLower(strings.TrimSpace(mimeType))
+	return protocol.NormalizeMIMEType(mime.TypeByExtension(filepath.Ext(name)))
 }
 
 func isSupportedInboundAttachmentMIME(mimeType string) bool {
-	switch normalizeMIMEType(mimeType) {
+	switch protocol.NormalizeMIMEType(mimeType) {
 	case "image/jpeg", "image/jpg", "image/png", "image/webp":
 		return true
 	default:
@@ -3164,7 +3151,7 @@ func isSupportedInboundAttachmentMIME(mimeType string) bool {
 }
 
 func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (transformedData []byte, transformedMIMEType string, changed bool, err error) {
-	mimeType = normalizeMIMEType(mimeType)
+	mimeType = protocol.NormalizeMIMEType(mimeType)
 	if len(data) <= targetLimit {
 		return data, mimeType, false, nil
 	}
@@ -3394,7 +3381,7 @@ func inboundAttachmentReductionFailureReason(err error, targetLimit int) string 
 func attachmentsFromInbound(inbound []protocol.InboundAttachment) []rocketcode.Attachment {
 	attachments := make([]rocketcode.Attachment, 0, len(inbound))
 	for i := range inbound {
-		mimeType := normalizeMIMEType(inbound[i].MIMEType)
+		mimeType := protocol.NormalizeMIMEType(inbound[i].MIMEType)
 		attachments = append(attachments, rocketcode.Attachment{MIME: mimeType, Filename: inbound[i].Name, URL: "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(inbound[i].Data)})
 	}
 
