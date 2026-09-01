@@ -231,6 +231,28 @@ func (m *Manager) LoadOneOffCronjob(target string) (protocol.OneOffCronjob, erro
 	return protocol.OneOffCronjob{Agent: definition.agent, Prompt: m.preparePrompt(definition.body), RelativePath: relativePath, TextChannel: definition.textChannel}, nil
 }
 
+// ListCronjobs returns top-level cron stems whose configured channel matches channel.
+func (m *Manager) ListCronjobs(channel string) ([]string, error) {
+	channel = strings.TrimSpace(channel)
+
+	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir)
+	if err != nil {
+		return nil, err
+	}
+
+	names := make([]string, 0)
+
+	for _, definition := range definitions {
+		if definition.textChannel != channel {
+			continue
+		}
+
+		names = append(names, strings.TrimSuffix(strings.TrimPrefix(definition.relativePath, "cron/"), ".md"))
+	}
+
+	return names, nil
+}
+
 // RunOneOffCronjob executes a loaded cronjob once with optional progress delivery.
 func (m *Manager) RunOneOffCronjob(ctx context.Context, job protocol.OneOffCronjob, progress *protocol.CronProgress, finish func(context.Context, protocol.CronRunResult, error)) {
 	log := m.log.With("file", job.RelativePath, "agent", job.Agent, "one_off", true)

@@ -7850,7 +7850,7 @@ func assertSlackCommandHelpTable(t *testing.T, values url.Values) {
 		{{Type: "raw_text", Text: "$stop"}, {Type: "raw_text", Text: "🛑"}, {Type: "raw_text", Text: "Stop the active turn"}},
 		{{Type: "raw_text", Text: "$enqueue <message>"}, {Type: "raw_text", Text: "✉️"}, {Type: "raw_text", Text: "Stash a later turn"}},
 		{{Type: "raw_text", Text: "$queue"}, {Type: "raw_text", Text: "—"}, {Type: "raw_text", Text: "Show later work"}},
-		{{Type: "raw_text", Text: "$cron <job>"}, {Type: "raw_text", Text: "🔂"}, {Type: "raw_text", Text: "Run a cron job"}},
+		{{Type: "raw_text", Text: "$cron [job]"}, {Type: "raw_text", Text: "🔂"}, {Type: "raw_text", Text: "Run a cron job; bare lists this channel"}},
 		{{Type: "raw_text", Text: "$agent [name]"}, {Type: "raw_text", Text: "🎛"}, {Type: "raw_text", Text: "Select or switch an agent; bare opens the selector"}},
 	}, blocks[0].Rows)
 
@@ -9313,6 +9313,44 @@ func TestParseCanonicalSlackCommandNormalizesCronTargets(t *testing.T) {
 	}
 }
 
+func TestHandleAppMentionEventListsChannelCronjobs(t *testing.T) {
+	var ephemeral []url.Values
+
+	runner := newOneOffCronjobLoaderStub()
+	runner.listed = []string{"daily", "weekly"}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/conversations.info":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
+		case "/chat.postEphemeral":
+			if !assert.NoError(t, r.ParseForm()) {
+				return
+			}
+
+			ephemeral = append(ephemeral, cloneValues(r.PostForm))
+
+			writeJSON(t, w, map[string]any{"ok": true})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, nil, runner)
+	connector.botUserID = "U999"
+	event := newSlackAppMentionEvent()
+	event.Text = "<@U999> $cron"
+	connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
+
+	assert.Empty(t, runner.targetsSnapshot())
+	assert.Equal(t, []string{"#social"}, runner.listChannelsSnapshot())
+	require.Len(t, ephemeral, 1)
+	assert.Equal(t, "daily\nweekly", ephemeral[0].Get("text"))
+	assert.Equal(t, "U123", ephemeral[0].Get("user"))
+	assert.Equal(t, event.TimeStamp, ephemeral[0].Get("thread_ts"))
+}
+
 func TestHandleAppMentionEventRunsOnDemandCronInRootThread(t *testing.T) {
 	for _, tt := range []struct {
 		name, text string
@@ -10090,33 +10128,43 @@ func TestHandleMessageEventRejectsInvalidOnDemandCronRequest(t *testing.T) {
 func TestHandleMessageEventConsumesBareCronCommands(t *testing.T) {
 	for _, text := range []string{"$cron", "🔂", ":repeat_one:", ":repeat-one:"} {
 		t.Run(text, func(t *testing.T) {
-			bus := newTestBus()
-			defer bus.Close()
+			var ephemeral []url.Values
 
 			router := newThreadRouterStub()
 			router.prepareHandled = true
 			runner := newOneOffCronjobLoaderStub()
-			runner.errLoad = assert.AnError
+			runner.listed = []string{"daily", "weekly"}
 
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/conversations.info":
 					writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
+				case "/chat.postEphemeral":
+					if !assert.NoError(t, r.ParseForm()) {
+						return
+					}
+
+					ephemeral = append(ephemeral, cloneValues(r.PostForm))
+
+					writeJSON(t, w, map[string]any{"ok": true})
 				default:
 					assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
 				}
 			}))
 			defer server.Close()
 
-			connector := newTestConnectorWithOptions(server.URL, bus, nil, router, runner)
+			connector := newTestConnectorWithOptions(server.URL, nil, nil, router, runner)
 			event := newSlackMessageEvent("171234.5678", "171234.5678", text)
 			event.Channel = "C123"
 			connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
 
-			assert.Equal(t, []string{""}, runner.targetsSnapshot())
+			assert.Empty(t, runner.targetsSnapshot())
+			assert.Equal(t, []string{"#social"}, runner.listChannelsSnapshot())
 			assert.Empty(t, router.repliesSnapshot())
-			outbound := readOneOutbound(t, bus)
-			assert.Contains(t, outbound.Text, "couldn't find that cronjob")
+			require.Len(t, ephemeral, 1)
+			assert.Equal(t, "daily\nweekly", ephemeral[0].Get("text"))
+			assert.Equal(t, "U123", ephemeral[0].Get("user"))
+			assert.Equal(t, "171234.5678", ephemeral[0].Get("thread_ts"))
 		})
 	}
 }
@@ -11411,14 +11459,17 @@ func (s *threadRouterStub) cronRegistrationsSnapshot() []cronThreadRegistration 
 }
 
 type oneOffCronjobLoaderStub struct {
-	mu        sync.Mutex
-	targets   []string
-	loaded    protocol.OneOffCronjob
-	errLoad   error
-	runs      []protocol.OneOffCronjob
-	runResult protocol.CronRunResult
-	errRun    error
-	onRun     func(context.Context, *protocol.CronProgress)
+	mu           sync.Mutex
+	targets      []string
+	listChannels []string
+	listed       []string
+	loaded       protocol.OneOffCronjob
+	errLoad      error
+	errList      error
+	runs         []protocol.OneOffCronjob
+	runResult    protocol.CronRunResult
+	errRun       error
+	onRun        func(context.Context, *protocol.CronProgress)
 }
 
 func newOneOffCronjobLoaderStub() *oneOffCronjobLoaderStub {
@@ -11445,6 +11496,17 @@ func (s *oneOffCronjobLoaderStub) LoadOneOffCronjob(target string) (protocol.One
 	return loaded, err
 }
 
+func (s *oneOffCronjobLoaderStub) ListCronjobs(channel string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.listChannels = append(s.listChannels, channel)
+	listed := append([]string(nil), s.listed...)
+	err := s.errList
+
+	return listed, err
+}
+
 func (s *oneOffCronjobLoaderStub) RunOneOffCronjob(ctx context.Context, loaded protocol.OneOffCronjob, progress *protocol.CronProgress, finish func(context.Context, protocol.CronRunResult, error)) {
 	s.mu.Lock()
 	s.runs = append(s.runs, loaded)
@@ -11465,6 +11527,13 @@ func (s *oneOffCronjobLoaderStub) targetsSnapshot() []string {
 	defer s.mu.Unlock()
 
 	return append([]string(nil), s.targets...)
+}
+
+func (s *oneOffCronjobLoaderStub) listChannelsSnapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]string(nil), s.listChannels...)
 }
 
 func (s *oneOffCronjobLoaderStub) runsSnapshot() []protocol.OneOffCronjob {

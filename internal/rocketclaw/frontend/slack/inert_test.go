@@ -72,6 +72,10 @@ func (inertOneOffCronjobs) LoadOneOffCronjob(string) (protocol.OneOffCronjob, er
 	return protocol.OneOffCronjob{}, errors.New("on-demand cronjobs are not configured")
 }
 
+func (inertOneOffCronjobs) ListCronjobs(string) ([]string, error) {
+	return nil, errors.New("on-demand cronjobs are not configured")
+}
+
 func (inertOneOffCronjobs) RunOneOffCronjob(ctx context.Context, _ protocol.OneOffCronjob, _ *protocol.CronProgress, finish func(context.Context, protocol.CronRunResult, error)) {
 	finish(ctx, protocol.CronRunResult{}, errors.New("on-demand cronjobs are not configured"))
 }
