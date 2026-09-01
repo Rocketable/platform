@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
 	"sync"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -112,13 +114,7 @@ func (c *clockwork) run(ctx context.Context) error {
 
 	c.started = true
 	c.pendingEnabled = len(c.bridges) == 0
-
-	bridgeCount := len(c.bridges)
-
-	bridges := make([]*registeredBridge, 0, bridgeCount)
-	for _, bridge := range c.bridges {
-		bridges = append(bridges, bridge)
-	}
+	bridges := slices.Collect(maps.Values(c.bridges))
 	c.mu.Unlock()
 
 	group, groupCtx := errgroup.WithContext(ctx)
@@ -165,7 +161,7 @@ func (c *clockwork) run(ctx context.Context) error {
 	c.closeBridges()
 	close(c.done)
 
-	return errors.Join(err)
+	return err
 }
 
 func (c *clockwork) dispatch(broadcast *protocol.Broadcast) {
@@ -204,11 +200,7 @@ func (c *clockwork) closeBridges() {
 	c.mu.Lock()
 	pending := c.pending
 	c.pending = nil
-
-	bridges := make([]*registeredBridge, 0, len(c.bridges))
-	for _, bridge := range c.bridges {
-		bridges = append(bridges, bridge)
-	}
+	bridges := slices.Collect(maps.Values(c.bridges))
 	c.mu.Unlock()
 
 	for _, bridge := range bridges {

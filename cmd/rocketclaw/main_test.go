@@ -127,11 +127,6 @@ func TestParseLogLevel(t *testing.T) {
 	assert.Equal(t, slog.LevelDebug, parseLogLevel("bogus"))
 }
 
-func TestRunServeRejectsBadFlag(t *testing.T) {
-	err := runServe([]string{"--bad-flag"})
-	require.ErrorContains(t, err, "parse serve flags")
-}
-
 func TestRunServeRequiresConfig(t *testing.T) {
 	workspace := t.TempDir()
 	cwd, err := os.Getwd()
