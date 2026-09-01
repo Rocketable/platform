@@ -69,7 +69,7 @@ func run(args []string) error {
 		case "fc":
 			return runFC(args[1:])
 		case "help", "-h", "--help":
-			return printHelp()
+			return printStdout(helpText, "help")
 		}
 	}
 	selected, err := selectRuntimeConfigFile()
@@ -77,7 +77,7 @@ func run(args []string) error {
 		return fmt.Errorf("stat config path: %w", err)
 	}
 	if !selected.Found {
-		return printHelp()
+		return printStdout(helpText, "help")
 	}
 	return runServe(args)
 }
@@ -127,7 +127,6 @@ func missingFile(path string) (bool, error) {
 	}
 	return false, fmt.Errorf("stat %s: %w", path, err)
 }
-func printHelp() error { return printStdout(helpText, "help") }
 func printStdout(text, name string) error {
 	_, err := fmt.Fprint(os.Stdout, text)
 	if err != nil {

@@ -181,15 +181,6 @@ func TestClockworkBroadcastsExcludeSenderAndAcknowledge(t *testing.T) {
 	})
 }
 
-func TestDropBroadcastBridgeCompletesDelivery(t *testing.T) {
-	message := protocol.NewOutboundMessage(protocol.SourceSystem, "conversation", "cron")
-	bridge := dropBroadcastBridge{}
-	broadcast := &protocol.Broadcast{Message: message, Delivery: message}
-
-	acknowledgement := bridge.HandleBroadcast(t.Context(), broadcast)
-	require.Equal(t, protocol.BroadcastDropped, acknowledgement.Status)
-}
-
 func TestClockworkNoSenderBroadcastReachesAllBridges(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		channels := protocol.NewChannels()

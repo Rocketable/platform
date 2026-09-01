@@ -32,12 +32,9 @@ const (
 )
 
 // Run starts rocketclaw and blocks until the context is canceled or a fatal error occurs.
-func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, assemble func(*Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error)) error {
-	return run(ctx, cfg, configPath, logger, assemble)
-}
-
+//
 //nolint:gocyclo // Runtime wiring is kept in one place so startup order remains explicit.
-func run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, assemble func(*Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error)) error {
+func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, assemble func(*Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error)) error {
 	runCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -107,10 +104,6 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		return fmt.Errorf("sync rocketclaw skeleton: %w", err)
 	}
 
-	if _, _, err := LoadRuntimeDefinitions(cfg, cfg.RuntimeDirName()); err != nil {
-		return fmt.Errorf("validate rocketcode definitions: %w", err)
-	}
-
 	channels := make([]string, 0, len(cfg.Slack.Channels))
 	for _, channel := range cfg.Slack.Channels {
 		if channel.Channel == "@" {
@@ -120,11 +113,7 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		channels = append(channels, channel.Channel)
 	}
 
-	if err := ValidateRuntimeDefinitions(cfg.Workspace, cfg.RuntimeDirName(), channels); err != nil {
-		return fmt.Errorf("validate cron definitions: %w", err)
-	}
-
-	if err := validateWorkflowDefinitions(cfg, cfg.RuntimeDirName()); err != nil {
+	if err := validateRuntimeAssets(cfg, cfg.RuntimeDirName(), channels); err != nil {
 		return err
 	}
 
@@ -175,23 +164,9 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 		logger.Info("reload requested", "reason", reason)
 
-		validate := func(runtimeDir string) error {
-			if _, _, err := LoadRuntimeDefinitions(cfg, runtimeDir); err != nil {
-				return fmt.Errorf("validate rocketcode definitions: %w", err)
-			}
-
-			if err := ValidateRuntimeDefinitions(cfg.Workspace, runtimeDir, channels); err != nil {
-				return fmt.Errorf("validate cron definitions: %w", err)
-			}
-
-			if err := validateWorkflowDefinitions(cfg, runtimeDir); err != nil {
-				return err
-			}
-
-			return nil
-		}
-
-		if err := skel.ReplaceRuntimeAssetsAfterValidation(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, logger, validate); err != nil {
+		if err := skel.ReplaceRuntimeAssetsAfterValidation(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, logger, func(runtimeDir string) error {
+			return validateRuntimeAssets(cfg, runtimeDir, channels)
+		}); err != nil {
 			return "", fmt.Errorf("reload runtime assets: %w", err)
 		}
 
@@ -339,28 +314,19 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		startThreadRoot: &startThreadRoot, slackAsker: &slackUserQuestionAsker, drainSlack: &drainSlack,
 	}
 
-	var copyDone <-chan struct{}
+	slack, copyDone, extraStops, err := assemble(rt)
+	if err != nil {
+		return err
+	}
 
-	if assemble != nil {
-		var (
-			extraStops []func(context.Context) error
-			slack      SlackFrontend
-		)
+	for _, stop := range extraStops {
+		stops = append(stops, namedStopper{name: "frontend", stop: stop})
+	}
 
-		slack, copyDone, extraStops, err = assemble(rt)
-		if err != nil {
-			return err
-		}
-
-		for _, stop := range extraStops {
-			stops = append(stops, namedStopper{name: "frontend", stop: stop})
-		}
-
-		if slack != nil {
-			slackSink = slack
-			rt.AttachSlack(slack)
-			slack.SetPendingSteersSink(protocol.PendingSteersSink{Set: rocketcodeSessions.SetPendingSteers})
-		}
+	if slack != nil {
+		slackSink = slack
+		rt.AttachSlack(slack)
+		slack.SetPendingSteersSink(protocol.PendingSteersSink{Set: rocketcodeSessions.SetPendingSteers})
 	}
 
 	if slackSink != nil {
@@ -425,6 +391,18 @@ func run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	}
 
 	return nil
+}
+
+func validateRuntimeAssets(cfg *config.Config, runtimeDir string, channels []string) error {
+	if _, _, err := LoadRuntimeDefinitions(cfg, runtimeDir); err != nil {
+		return fmt.Errorf("validate rocketcode definitions: %w", err)
+	}
+
+	if err := ValidateRuntimeDefinitions(cfg.Workspace, runtimeDir, channels); err != nil {
+		return fmt.Errorf("validate cron definitions: %w", err)
+	}
+
+	return validateWorkflowDefinitions(cfg, runtimeDir)
 }
 
 func validateWorkflowDefinitions(cfg *config.Config, runtimeDir string) (err error) {
