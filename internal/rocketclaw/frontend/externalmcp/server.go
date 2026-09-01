@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -15,6 +14,8 @@ import (
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
 // SessionPromptToolName and ExternalMCPPath define the public external MCP surface.
@@ -82,12 +83,7 @@ func StartSessionPromptServer(ctx context.Context, logger *slog.Logger, listenAd
 				return nil, SessionResult{}, fmt.Errorf("decode session result attachment %d: %w", i+1, err)
 			}
 
-			mimeType := strings.TrimSpace(attachment.MIMEType)
-			if parsed, _, err := mime.ParseMediaType(mimeType); err == nil {
-				mimeType = parsed
-			}
-
-			mimeType = strings.ToLower(mimeType)
+			mimeType := protocol.NormalizeMIMEType(attachment.MIMEType)
 
 			if strings.HasPrefix(mimeType, "image/") {
 				content = append(content, &mcp.ImageContent{Data: data, MIMEType: mimeType})

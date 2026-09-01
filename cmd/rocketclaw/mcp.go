@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"mime"
 	"slices"
 	"strings"
 	"sync"
@@ -297,12 +296,7 @@ func externalMCPInboundContent(attachments []externalmcp.SessionAttachment) (pro
 				descriptor = "attachment"
 			}
 
-			descriptorMIMEType := mimeType
-			if mediaType, _, err := mime.ParseMediaType(descriptorMIMEType); err == nil {
-				descriptorMIMEType = mediaType
-			}
-
-			if descriptorMIMEType = strings.ToLower(strings.TrimSpace(descriptorMIMEType)); descriptorMIMEType != "" {
+			if descriptorMIMEType := protocol.NormalizeMIMEType(mimeType); descriptorMIMEType != "" {
 				descriptor += " (" + descriptorMIMEType + ")"
 			}
 

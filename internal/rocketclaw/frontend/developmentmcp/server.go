@@ -53,12 +53,7 @@ type runTurnOutput struct {
 	Answer         string `json:"answer"`
 }
 
-type reloadInput struct {
-	Reason  string          `json:"reason"`
-	Context json.RawMessage `json:"context,omitempty"`
-}
-
-type restartInput struct {
+type reasonInput struct {
 	Reason  string          `json:"reason"`
 	Context json.RawMessage `json:"context,omitempty"`
 }
@@ -148,24 +143,8 @@ func Start(ctx context.Context, logger *slog.Logger, listenAddr string, users ma
 
 		return nil, runTurnOutput{ConversationID: conversationID, Thinking: thinking, Answer: answer}, nil
 	})
-	mcp.AddTool(mcpServer, &mcp.Tool{Name: reloadToolName, Description: "Reload published overlay files the live daemon can hot-load.", InputSchema: reasonOnlyToolSchema}, func(_ context.Context, _ *mcp.CallToolRequest, input reloadInput) (*mcp.CallToolResult, string, error) {
-		if len(input.Context) > 0 {
-			return nil, "", errors.New("reload does not take context")
-		}
-
-		out, err := reload(input.Reason)
-
-		return nil, out, err
-	})
-	mcp.AddTool(mcpServer, &mcp.Tool{Name: restartToolName, Description: "Restart for overlay-list or runtime-config changes. Not interchangeable with reload.", InputSchema: reasonOnlyToolSchema}, func(_ context.Context, _ *mcp.CallToolRequest, input restartInput) (*mcp.CallToolResult, string, error) {
-		if len(input.Context) > 0 {
-			return nil, "", errors.New("restart does not take context")
-		}
-
-		out, err := restart(input.Reason)
-
-		return nil, out, err
-	})
+	mcp.AddTool(mcpServer, &mcp.Tool{Name: reloadToolName, Description: "Reload published overlay files the live daemon can hot-load.", InputSchema: reasonOnlyToolSchema}, reasonToolHandler("reload", reload))
+	mcp.AddTool(mcpServer, &mcp.Tool{Name: restartToolName, Description: "Restart for overlay-list or runtime-config changes. Not interchangeable with reload.", InputSchema: reasonOnlyToolSchema}, reasonToolHandler("restart", restart))
 
 	httpHandler := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return mcpServer },
@@ -207,6 +186,18 @@ func (s *Server) Close(ctx context.Context) error {
 	})
 
 	return err
+}
+
+func reasonToolHandler(name string, run func(string) (string, error)) func(context.Context, *mcp.CallToolRequest, reasonInput) (*mcp.CallToolResult, string, error) {
+	return func(_ context.Context, _ *mcp.CallToolRequest, input reasonInput) (*mcp.CallToolResult, string, error) {
+		if len(input.Context) > 0 {
+			return nil, "", fmt.Errorf("%s does not take context", name)
+		}
+
+		out, err := run(input.Reason)
+
+		return nil, out, err
+	}
 }
 
 func withBasicAuth(next http.Handler, users map[string]string) http.Handler {

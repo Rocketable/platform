@@ -274,14 +274,18 @@ func NewInboundMessageFromContent(source Source, kind InboundKind, label string,
 	return inbound
 }
 
-// IsTextAttachment reports whether an attachment should be included as literal prompt text.
-func IsTextAttachment(name, mimeType string) bool {
-	mediaType := mimeType
-	if parsed, _, err := mime.ParseMediaType(mediaType); err == nil {
-		mediaType = parsed
+// NormalizeMIMEType returns a lowercase media type, or the trimmed lowercase input if parsing fails.
+func NormalizeMIMEType(mimeType string) string {
+	if mediaType, _, err := mime.ParseMediaType(mimeType); err == nil {
+		mimeType = mediaType
 	}
 
-	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	return strings.ToLower(strings.TrimSpace(mimeType))
+}
+
+// IsTextAttachment reports whether an attachment should be included as literal prompt text.
+func IsTextAttachment(name, mimeType string) bool {
+	mediaType := NormalizeMIMEType(mimeType)
 
 	return strings.HasPrefix(mediaType, "text/") || slices.Contains([]string{"application/json", "application/jsonl", "application/ld+json", "application/xml", "application/yaml", "application/x-yaml", "application/toml", "application/x-toml", "application/csv", "application/x-ndjson"}, mediaType) || slices.Contains([]string{".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".jsonl", ".ndjson", ".yaml", ".yml", ".toml", ".xml", ".ini", ".log"}, strings.ToLower(filepath.Ext(strings.TrimSpace(name))))
 }

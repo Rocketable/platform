@@ -103,8 +103,8 @@ func TestSlackImageHelpers(t *testing.T) {
 	assert.True(t, protocol.IsTextAttachment("report", "text/csv; charset=utf-8"))
 	assert.False(t, protocol.IsTextAttachment("archive.zip", "application/zip"))
 	data := mustPNG(t, 2, 2)
-	assert.Equal(t, "image/png", normalizedSlackMIMEType(http.DetectContentType(data)))
-	assert.Equal(t, "text/plain", normalizedSlackMIMEType(http.DetectContentType(nil)))
+	assert.Equal(t, "image/png", protocol.NormalizeMIMEType(http.DetectContentType(data)))
+	assert.Equal(t, "text/plain", protocol.NormalizeMIMEType(http.DetectContentType(nil)))
 }
 
 func TestSlackMCPBlocksStayWithinSlackLimit(t *testing.T) {
