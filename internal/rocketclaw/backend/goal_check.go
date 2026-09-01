@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -101,9 +102,9 @@ func parseGoalCheckCommand(script string) (parsedGoalCheckCommand, string, error
 
 	argv := make([]string, 0, len(call.Args))
 	for _, arg := range call.Args {
-		value, err := staticGoalCheckWord(arg)
+		value, err := protocol.StaticGoalCheckWord(arg)
 		if err != nil {
-			return parsedGoalCheckCommand{}, "", err
+			return parsedGoalCheckCommand{}, "", fmt.Errorf("%w", err)
 		}
 
 		argv = append(argv, value)
@@ -126,40 +127,6 @@ func parseGoalCheckCommand(script string) (parsedGoalCheckCommand, string, error
 	}
 
 	return parsedGoalCheckCommand{text: strings.TrimSpace(buf.String()), argv: argv}, subjects[0], nil
-}
-
-func staticGoalCheckWord(word *syntax.Word) (string, error) {
-	var value strings.Builder
-
-	for _, part := range word.Parts {
-		switch part := part.(type) {
-		case *syntax.Lit:
-			value.WriteString(part.Value)
-		case *syntax.SglQuoted:
-			if part.Dollar {
-				return "", errors.New("goal check script arguments must be static literal strings")
-			}
-
-			value.WriteString(part.Value)
-		case *syntax.DblQuoted:
-			if part.Dollar {
-				return "", errors.New("goal check script arguments must be static literal strings")
-			}
-
-			for _, quoted := range part.Parts {
-				lit, ok := quoted.(*syntax.Lit)
-				if !ok {
-					return "", errors.New("goal check script arguments must be static literal strings")
-				}
-
-				value.WriteString(lit.Value)
-			}
-		default:
-			return "", errors.New("goal check script arguments must be static literal strings")
-		}
-	}
-
-	return value.String(), nil
 }
 
 func requireWorkspaceExecutable(root *os.Root, workspace, name string) error {
