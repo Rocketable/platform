@@ -15,6 +15,8 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
 const (
@@ -150,7 +152,7 @@ func SyncEffectiveRuntimeAssets(workspace, target string, overlays []string, log
 // empty, files are written as a final extra layer after the live stack. A non-empty
 // unknown baseOverlay is rejected. It does not write the live runtime or live clones.
 // The caller must remove the returned directory.
-func StageLiveRuntime(workspace, runtimeDir string, overlays []string, baseOverlay string, files []OverlayFile, logger *slog.Logger) (string, error) {
+func StageLiveRuntime(workspace, runtimeDir string, overlays []string, baseOverlay string, files []protocol.OverlayFile, logger *slog.Logger) (string, error) {
 	baseOverlay = strings.TrimSpace(baseOverlay)
 	if baseOverlay != "" && slices.IndexFunc(OverlayInfos(workspace, runtimeDir, overlays), func(info OverlayInfo) bool {
 		return info.Spec == baseOverlay
@@ -223,7 +225,7 @@ func StageLiveRuntime(workspace, runtimeDir string, overlays []string, baseOverl
 	return stage, nil
 }
 
-func writeStagedOverlayFiles(stage string, files []OverlayFile) error {
+func writeStagedOverlayFiles(stage string, files []protocol.OverlayFile) error {
 	for _, file := range files {
 		rel := filepath.FromSlash(file.Path)
 		if !filepath.IsLocal(rel) {
@@ -618,31 +620,20 @@ func OverlaySpecs(overlays []string) []string {
 	return specs
 }
 
-// OverlayFile is one file from a live overlay clone.
-type OverlayFile struct {
-	Path, Content string
-}
-
-// OverlayContext is one live clone as a named base overlay plus its files.
-type OverlayContext struct {
-	BaseOverlay string
-	Files       []OverlayFile
-}
-
 // ReadOverlayContext returns the live clone files for spec. It does not fetch or write.
-func ReadOverlayContext(workspace, runtimeDir string, overlays []string, spec string) (OverlayContext, error) {
+func ReadOverlayContext(workspace, runtimeDir string, overlays []string, spec string) (protocol.OverlayContext, error) {
 	spec = strings.TrimSpace(spec)
 	infos := OverlayInfos(workspace, runtimeDir, overlays)
 
 	i := slices.IndexFunc(infos, func(info OverlayInfo) bool { return info.Spec == spec })
 	if i < 0 {
-		return OverlayContext{}, fmt.Errorf("unknown overlay spec %q", spec)
+		return protocol.OverlayContext{}, fmt.Errorf("unknown overlay spec %q", spec)
 	}
 
 	clone := infos[i].ClonePath
 	src := os.DirFS(clone)
 
-	var files []OverlayFile
+	var files []protocol.OverlayFile
 
 	for _, name := range [...]string{agentsRoot, skillsRoot, workspaceCron, scriptsRoot, workflowsRoot} {
 		_, err := os.Stat(filepath.Join(clone, name))
@@ -651,7 +642,7 @@ func ReadOverlayContext(workspace, runtimeDir string, overlays []string, spec st
 				continue
 			}
 
-			return OverlayContext{}, fmt.Errorf("stat overlay root %s: %w", name, err)
+			return protocol.OverlayContext{}, fmt.Errorf("stat overlay root %s: %w", name, err)
 		}
 
 		if err := fs.WalkDir(src, name, func(path string, d fs.DirEntry, err error) error {
@@ -668,15 +659,15 @@ func ReadOverlayContext(workspace, runtimeDir string, overlays []string, spec st
 				return fmt.Errorf("read overlay file %s: %w", path, errRead)
 			}
 
-			files = append(files, OverlayFile{Path: path, Content: string(data)})
+			files = append(files, protocol.OverlayFile{Path: path, Content: string(data)})
 
 			return nil
 		}); err != nil {
-			return OverlayContext{}, fmt.Errorf("walk overlay root %s: %w", name, err)
+			return protocol.OverlayContext{}, fmt.Errorf("walk overlay root %s: %w", name, err)
 		}
 	}
 
-	return OverlayContext{BaseOverlay: spec, Files: files}, nil
+	return protocol.OverlayContext{BaseOverlay: spec, Files: files}, nil
 }
 
 func overlayInfosIn(target string, overlays []string) []OverlayInfo {

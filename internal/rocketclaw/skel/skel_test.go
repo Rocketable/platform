@@ -12,6 +12,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -682,7 +683,7 @@ func TestReadOverlayContextKnownSpec(t *testing.T) {
 	got, err := ReadOverlayContext(workspace, targetRoot, overlays, spec)
 	require.NoError(t, err)
 	assert.Equal(t, spec, got.BaseOverlay)
-	assert.Equal(t, []OverlayFile{
+	assert.Equal(t, []protocol.OverlayFile{
 		{Path: "agents/a.md", Content: "agent"},
 		{Path: "skills/pack/SKILL.md", Content: "skill"},
 	}, got.Files)
@@ -746,12 +747,12 @@ func TestStageLiveRuntimeCopiesLiveMergeWithoutTouchingLiveTree(t *testing.T) {
 	for _, tt := range []struct {
 		name       string
 		base       string
-		files      []OverlayFile
+		files      []protocol.OverlayFile
 		checkMerge bool
 	}{
 		{name: "empty base", checkMerge: true},
-		{name: "named base", base: spec, files: []OverlayFile{{Path: "agents/from-overlay.md", Content: "tried"}}},
-		{name: "extra top layer", files: []OverlayFile{{Path: "agents/try-only.md", Content: "try"}}},
+		{name: "named base", base: spec, files: []protocol.OverlayFile{{Path: "agents/from-overlay.md", Content: "tried"}}},
+		{name: "extra top layer", files: []protocol.OverlayFile{{Path: "agents/try-only.md", Content: "try"}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			stage, err := StageLiveRuntime(workspace, targetRoot, overlays, tt.base, tt.files, testLogger())
@@ -800,7 +801,7 @@ func TestStageLiveRuntimeReplacesNamedLayerKeepsOmittedCloneFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(clone, agentsRoot, "a.md"), []byte("old-a"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(clone, agentsRoot, "b.md"), []byte("old-b"), 0o644))
 
-	stage, err := StageLiveRuntime(workspace, targetRoot, overlays, spec, []OverlayFile{{Path: "agents/a.md", Content: "new-a"}}, testLogger())
+	stage, err := StageLiveRuntime(workspace, targetRoot, overlays, spec, []protocol.OverlayFile{{Path: "agents/a.md", Content: "new-a"}}, testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(stage)) })
 
@@ -830,7 +831,7 @@ func TestStageLiveRuntimeReplacingFirstLayerStillAppliesLaterOverlay(t *testing.
 	require.NoError(t, os.WriteFile(filepath.Join(infos[1].ClonePath, agentsRoot, "a.md"), []byte("second-a"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(infos[1].ClonePath, agentsRoot, "c.md"), []byte("second-c"), 0o644))
 
-	stage, err := StageLiveRuntime(workspace, targetRoot, overlays, first, []OverlayFile{{Path: "agents/a.md", Content: "new-a"}}, testLogger())
+	stage, err := StageLiveRuntime(workspace, targetRoot, overlays, first, []protocol.OverlayFile{{Path: "agents/a.md", Content: "new-a"}}, testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(stage)) })
 
@@ -855,7 +856,7 @@ func TestStageLiveRuntimeUnsetBaseAddsExtraLayerWithoutCloneFiles(t *testing.T) 
 	require.NoError(t, os.MkdirAll(filepath.Join(clone, agentsRoot), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(clone, agentsRoot, "b.md"), []byte("live-b"), 0o644))
 
-	stage, err := StageLiveRuntime(workspace, targetRoot, overlays, "", []OverlayFile{{Path: "agents/a.md", Content: "new-a"}}, testLogger())
+	stage, err := StageLiveRuntime(workspace, targetRoot, overlays, "", []protocol.OverlayFile{{Path: "agents/a.md", Content: "new-a"}}, testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(stage)) })
 
@@ -880,7 +881,7 @@ func TestStageLiveRuntimeUnsetBaseExtraLayerWinsOverWorkspace(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, agentsRoot), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "a.md"), []byte("workspace-a"), 0o644))
 
-	stage, err := StageLiveRuntime(workspace, targetRoot, nil, " \t", []OverlayFile{{Path: "agents/a.md", Content: "new-a"}}, testLogger())
+	stage, err := StageLiveRuntime(workspace, targetRoot, nil, " \t", []protocol.OverlayFile{{Path: "agents/a.md", Content: "new-a"}}, testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(stage)) })
 
@@ -902,7 +903,7 @@ func TestStageLiveRuntimeUnknownBaseOverlay(t *testing.T) {
 
 	before := snapshotLiveTree(t, liveRuntime)
 
-	_, err := StageLiveRuntime(workspace, targetRoot, overlays, "github.com/other/overlay", []OverlayFile{{Path: "agents/a.md", Content: "tried"}}, testLogger())
+	_, err := StageLiveRuntime(workspace, targetRoot, overlays, "github.com/other/overlay", []protocol.OverlayFile{{Path: "agents/a.md", Content: "tried"}}, testLogger())
 	require.ErrorContains(t, err, `unknown overlay spec "github.com/other/overlay"`)
 
 	assert.Equal(t, before, snapshotLiveTree(t, liveRuntime))
@@ -916,7 +917,7 @@ func TestStageLiveRuntimeRejectsEscapingRequestPath(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(clone, agentsRoot), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(clone, agentsRoot, "a.md"), []byte("old-a"), 0o644))
 
-	_, err := StageLiveRuntime(workspace, targetRoot, overlays, spec, []OverlayFile{{Path: "../agents/a.md", Content: "escaped"}}, testLogger())
+	_, err := StageLiveRuntime(workspace, targetRoot, overlays, spec, []protocol.OverlayFile{{Path: "../agents/a.md", Content: "escaped"}}, testLogger())
 	require.ErrorContains(t, err, "escapes stage")
 }
 

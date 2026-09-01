@@ -113,13 +113,6 @@ type sessionTurnGate struct {
 	refs        int
 }
 
-// SessionSummary is the compact observable state of one rocketcode session.
-type SessionSummary struct {
-	ConversationID, LastUserMessage, LastAssistantMessage string
-	Turns                                                 int
-	LastUpdated                                           time.Time
-}
-
 // SessionListOptions bounds read-only session summary inspection.
 type SessionListOptions struct {
 	Since, Until time.Time
@@ -994,7 +987,7 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 }
 
 // ListSessions returns summaries for stored rocketcode sessions.
-func (s *SessionService) ListSessions(ctx context.Context, options SessionListOptions) ([]SessionSummary, error) {
+func (s *SessionService) ListSessions(ctx context.Context, options SessionListOptions) ([]protocol.SessionSummary, error) {
 	return listSessionsDB(ctx, s.db, options)
 }
 
@@ -1397,7 +1390,7 @@ func DeleteSessionIn(ctx context.Context, databaseURL, conversationID string) (i
 	return service.DeleteSession(ctx, conversationID)
 }
 
-func listSessionsDB(ctx context.Context, db *sql.DB, options SessionListOptions) ([]SessionSummary, error) {
+func listSessionsDB(ctx context.Context, db *sql.DB, options SessionListOptions) ([]protocol.SessionSummary, error) {
 	query := `SELECT conversation_id, entry_json, entry_timestamp FROM session_entries ORDER BY conversation_id, id`
 
 	var args []any
@@ -1444,7 +1437,7 @@ ORDER BY c.last_updated DESC, c.conversation_id, se.id`
 
 	defer func() { _ = rows.Close() }()
 
-	summaryByID := map[string]*SessionSummary{}
+	summaryByID := map[string]*protocol.SessionSummary{}
 	order := []string{}
 
 	for rows.Next() {
@@ -1455,7 +1448,7 @@ ORDER BY c.last_updated DESC, c.conversation_id, se.id`
 
 		summary := summaryByID[conversationID]
 		if summary == nil {
-			summary = &SessionSummary{ConversationID: conversationID}
+			summary = &protocol.SessionSummary{ConversationID: conversationID}
 			summaryByID[conversationID] = summary
 			order = append(order, conversationID)
 		}
@@ -1489,7 +1482,7 @@ ORDER BY c.last_updated DESC, c.conversation_id, se.id`
 		return nil, fmt.Errorf("read rocketcode session summaries: %w", err)
 	}
 
-	summaries := make([]SessionSummary, 0, len(order))
+	summaries := make([]protocol.SessionSummary, 0, len(order))
 	for _, conversationID := range order {
 		summaries = append(summaries, *summaryByID[conversationID])
 	}
@@ -1498,7 +1491,7 @@ ORDER BY c.last_updated DESC, c.conversation_id, se.id`
 }
 
 // ListSessionsInOptions returns summaries for stored rocketcode sessions.
-func ListSessionsInOptions(ctx context.Context, databaseURL string, options SessionListOptions) ([]SessionSummary, error) {
+func ListSessionsInOptions(ctx context.Context, databaseURL string, options SessionListOptions) ([]protocol.SessionSummary, error) {
 	service, err := NewSessionServiceIn(databaseURL, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return nil, err
