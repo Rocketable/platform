@@ -49,7 +49,7 @@ const (
 		"$stop - 🛑 Stop the active turn\n" +
 		"$enqueue <message> - ✉️ Stash a later turn\n" +
 		"$queue - Show later work\n" +
-		"$cron <job> - 🔂 Run a cron job\n" +
+		"$cron [job] - 🔂 Run a cron job; bare lists this channel\n" +
 		"$agent [name] - 🎛 Select or switch an agent; bare opens the selector"
 )
 
@@ -131,6 +131,7 @@ type slackPendingQuestion struct {
 
 type oneOffCronjobRunner interface {
 	LoadOneOffCronjob(string) (protocol.OneOffCronjob, error)
+	ListCronjobs(string) ([]string, error)
 	RunOneOffCronjob(context.Context, protocol.OneOffCronjob, *protocol.CronProgress, func(context.Context, protocol.CronRunResult, error))
 }
 
@@ -4183,7 +4184,7 @@ func slackDollarCommandHelpTable() *slack.TableBlock {
 		AddRow(slack.NewTableRawTextCell("$stop"), slack.NewTableRawTextCell("🛑"), slack.NewTableRawTextCell("Stop the active turn")).
 		AddRow(slack.NewTableRawTextCell("$enqueue <message>"), slack.NewTableRawTextCell("✉️"), slack.NewTableRawTextCell("Stash a later turn")).
 		AddRow(slack.NewTableRawTextCell("$queue"), slack.NewTableRawTextCell("—"), slack.NewTableRawTextCell("Show later work")).
-		AddRow(slack.NewTableRawTextCell("$cron <job>"), slack.NewTableRawTextCell("🔂"), slack.NewTableRawTextCell("Run a cron job")).
+		AddRow(slack.NewTableRawTextCell("$cron [job]"), slack.NewTableRawTextCell("🔂"), slack.NewTableRawTextCell("Run a cron job; bare lists this channel")).
 		AddRow(slack.NewTableRawTextCell("$agent [name]"), slack.NewTableRawTextCell("🎛"), slack.NewTableRawTextCell("Select or switch an agent; bare opens the selector"))
 }
 
@@ -4891,6 +4892,30 @@ func parseCanonicalSlackCommand(text string) (command, args string, ok bool) {
 }
 
 func (c *Connector) handleOnDemandCronRequest(ctx context.Context, target string, replyTarget *protocol.SlackReplyTarget) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		channel, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: replyTarget.ChannelID})
+		if err != nil {
+			c.postSlackEphemeral(ctx, replyTarget.ChannelID, replyTarget.ThreadTS, replyTarget.RecipientUserID, "I couldn't list cronjobs for this channel.")
+			return
+		}
+
+		jobs, err := c.oneOffCronjobs.ListCronjobs("#" + strings.TrimSpace(channel.Name))
+		if err != nil {
+			c.postSlackEphemeral(ctx, replyTarget.ChannelID, replyTarget.ThreadTS, replyTarget.RecipientUserID, "I couldn't list cronjobs: "+err.Error())
+			return
+		}
+
+		if len(jobs) == 0 {
+			c.postSlackEphemeral(ctx, replyTarget.ChannelID, replyTarget.ThreadTS, replyTarget.RecipientUserID, "No cronjobs target this channel.")
+			return
+		}
+
+		c.postSlackEphemeral(ctx, replyTarget.ChannelID, replyTarget.ThreadTS, replyTarget.RecipientUserID, strings.Join(jobs, "\n"))
+
+		return
+	}
+
 	loaded, err := c.oneOffCronjobs.LoadOneOffCronjob(target)
 	if err != nil {
 		if errPost := c.publishOnDemandCronReply(ctx, replyTarget, "I couldn't find that cronjob. Use a top-level cron filename like `daily` or `daily.md`."); errPost != nil {
