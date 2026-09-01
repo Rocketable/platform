@@ -35,7 +35,7 @@ type clockwork struct {
 
 type bridgeRegistrationRequest struct {
 	bridge *registeredBridge
-	ready  chan error
+	ready  chan struct{}
 }
 
 type registeredBridge struct {
@@ -57,7 +57,7 @@ func newClockwork(channels protocol.Channels) *clockwork {
 	}
 }
 
-func (c *clockwork) registerBridge(id protocol.BridgeID, handler clockworkBridge) (func(), error) {
+func (c *clockwork) registerBridge(id protocol.BridgeID, handler clockworkBridge) (func(context.Context) error, error) {
 	bridge := &registeredBridge{id: id, handler: handler}
 	bridge.cond = sync.NewCond(&bridge.mu)
 
@@ -73,15 +73,10 @@ func (c *clockwork) registerBridge(id protocol.BridgeID, handler clockworkBridge
 	c.mu.Unlock()
 
 	if started {
-		request := bridgeRegistrationRequest{bridge: bridge, ready: make(chan error, 1)}
+		request := bridgeRegistrationRequest{bridge: bridge, ready: make(chan struct{}, 1)}
 		select {
 		case c.registerCh <- request:
-			if err := <-request.ready; err != nil {
-				c.removeBridge(bridge)
-				bridge.close()
-
-				return nil, err
-			}
+			<-request.ready
 		case <-done:
 			c.removeBridge(bridge)
 			bridge.close()
@@ -90,9 +85,10 @@ func (c *clockwork) registerBridge(id protocol.BridgeID, handler clockworkBridge
 		}
 	}
 
-	return func() {
+	return func(context.Context) error {
 		c.removeBridge(bridge)
 		bridge.close()
+		return nil
 	}, nil
 }
 
@@ -106,12 +102,6 @@ func (c *clockwork) removeBridge(bridge *registeredBridge) {
 
 func (c *clockwork) run(ctx context.Context) error {
 	c.mu.Lock()
-	if c.started {
-		c.mu.Unlock()
-
-		return errors.New("clockwork already running")
-	}
-
 	c.started = true
 	c.pendingEnabled = len(c.bridges) == 0
 	bridges := slices.Collect(maps.Values(c.bridges))
@@ -151,7 +141,7 @@ func (c *clockwork) run(ctx context.Context) error {
 					c.dispatch(&pending[i])
 				}
 
-				registration.ready <- nil
+				close(registration.ready)
 			}
 		}
 	})

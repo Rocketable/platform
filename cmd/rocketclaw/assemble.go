@@ -28,11 +28,7 @@ func assembleFrontends(rt *backend.Runtime) (backend.SlackFrontend, <-chan struc
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("register Slack bridge: %w", err)
 	}
-
-	stops = append(stops, func(context.Context) error {
-		removeSlack()
-		return nil
-	})
+	stops = append(stops, removeSlack)
 
 	if err := slack.Start(rt.RunCtx); err != nil {
 		return nil, nil, nil, fmt.Errorf("start Slack connector: %w", err)
@@ -45,11 +41,7 @@ func assembleFrontends(rt *backend.Runtime) (backend.SlackFrontend, <-chan struc
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("register External MCP bridge: %w", err)
 		}
-
-		stops = append(stops, func(context.Context) error {
-			removeExternal()
-			return nil
-		})
+		stops = append(stops, removeExternal)
 
 		var (
 			externalMCPAgentsMu sync.Mutex
