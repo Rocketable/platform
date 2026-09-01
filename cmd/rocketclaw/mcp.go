@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -193,7 +194,7 @@ func startExternalMCPServer(
 	return server, nil
 }
 
-func startDevelopmentMCP(ctx context.Context, cfg *config.Config, configPath string, overlayMu *sync.Mutex, reload, restart func(reason string) (string, error), logger *slog.Logger) (*developmentmcp.Server, error) {
+func startDevelopmentMCP(ctx context.Context, cfg *config.Config, configPath string, overlayMu *sync.Mutex, reload, restart func(reason string) (string, error), logger *slog.Logger, sessions *backend.SessionService) (*developmentmcp.Server, error) {
 	if !cfg.MCPDevelopment.Enabled {
 		return nil, nil
 	}
@@ -245,7 +246,43 @@ func startDevelopmentMCP(ctx context.Context, cfg *config.Config, configPath str
 		chatsMu.Unlock()
 
 		return backend.RunTryTurn(turnCtx, cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, cfg, logger, chat, baseOverlay, files, agent, prompt)
-	}, reload, restart)
+	}, reload, restart, func(listCtx context.Context, req protocol.ListSessionsRequest) (protocol.ListSessionsResult, error) {
+		summaries, err := sessions.ListSessions(listCtx, backend.SessionListOptions{Since: req.Since, Until: req.Until, Limit: req.Limit})
+		if err != nil {
+			return protocol.ListSessionsResult{}, fmt.Errorf("list sessions: %w", err)
+		}
+
+		out := make([]protocol.SessionSummary, len(summaries))
+		for i, summary := range summaries {
+			out[i] = protocol.SessionSummary(summary)
+		}
+
+		return protocol.ListSessionsResult{Sessions: out}, nil
+	}, func(observeCtx context.Context, req protocol.ObserveSessionRequest) (protocol.ObserveSessionResult, error) {
+		entries, err := sessions.ObserveEntries(observeCtx, req.ConversationID, 0)
+		if err != nil {
+			return protocol.ObserveSessionResult{}, fmt.Errorf("observe session: %w", err)
+		}
+
+		out := make([]json.RawMessage, len(entries))
+		for i := range entries {
+			data, errMarshal := json.Marshal(entries[i].Entry)
+			if errMarshal != nil {
+				return protocol.ObserveSessionResult{}, fmt.Errorf("marshal session entry: %w", errMarshal)
+			}
+
+			out[i] = data
+		}
+
+		return protocol.ObserveSessionResult{Entries: out}, nil
+	}, func(deleteCtx context.Context, req protocol.DeleteSessionRequest) (protocol.DeleteSessionResult, error) {
+		deleted, err := sessions.DeleteSession(deleteCtx, req.ConversationID)
+		if err != nil {
+			return protocol.DeleteSessionResult{}, fmt.Errorf("delete session: %w", err)
+		}
+
+		return protocol.DeleteSessionResult{Deleted: deleted}, nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("start development MCP HTTP server: %w", err)
 	}

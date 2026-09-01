@@ -973,6 +973,31 @@ func (s *SessionService) AppendEntryID(ctx context.Context, conversationID strin
 	return appendSessionEntryDB(ctx, s.db, conversationID, entry)
 }
 
+// DeleteSession removes all entries for one conversation ID and returns deleted rows.
+func (s *SessionService) DeleteSession(ctx context.Context, conversationID string) (int64, error) {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		return 0, errors.New("conversation ID is required")
+	}
+
+	result, err := s.db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = $1`, conversationID)
+	if err != nil {
+		return 0, fmt.Errorf("delete rocketcode session: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("count deleted rocketcode session rows: %w", err)
+	}
+
+	return rows, nil
+}
+
+// ListSessions returns summaries for stored rocketcode sessions.
+func (s *SessionService) ListSessions(ctx context.Context, options SessionListOptions) ([]SessionSummary, error) {
+	return listSessionsDB(ctx, s.db, options)
+}
+
 // Stop closes the runtime service and its database handle.
 func (s *SessionService) Stop(context.Context) error {
 	if err := s.db.Close(); err != nil {
@@ -1363,42 +1388,16 @@ func externalMCPManagedEntry(entry *harness.SessionEntry, replayPrefix []json.Ra
 
 // DeleteSessionIn removes all entries for one conversation ID and returns deleted rows.
 func DeleteSessionIn(ctx context.Context, databaseURL, conversationID string) (int64, error) {
-	conversationID = strings.TrimSpace(conversationID)
-	if conversationID == "" {
-		return 0, errors.New("conversation ID is required")
-	}
-
 	service, err := NewSessionServiceIn(databaseURL, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = service.Stop(ctx) }()
 
-	db := service.db
-
-	result, err := db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = $1`, conversationID)
-	if err != nil {
-		return 0, fmt.Errorf("delete rocketcode session: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("count deleted rocketcode session rows: %w", err)
-	}
-
-	return rows, nil
+	return service.DeleteSession(ctx, conversationID)
 }
 
-// ListSessionsInOptions returns summaries for stored rocketcode sessions.
-func ListSessionsInOptions(ctx context.Context, databaseURL string, options SessionListOptions) ([]SessionSummary, error) {
-	service, err := NewSessionServiceIn(databaseURL, slog.New(slog.DiscardHandler))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = service.Stop(ctx) }()
-
-	db := service.db
-
+func listSessionsDB(ctx context.Context, db *sql.DB, options SessionListOptions) ([]SessionSummary, error) {
 	query := `SELECT conversation_id, entry_json, entry_timestamp FROM session_entries ORDER BY conversation_id, id`
 
 	var args []any
@@ -1496,6 +1495,17 @@ ORDER BY c.last_updated DESC, c.conversation_id, se.id`
 	}
 
 	return summaries, nil
+}
+
+// ListSessionsInOptions returns summaries for stored rocketcode sessions.
+func ListSessionsInOptions(ctx context.Context, databaseURL string, options SessionListOptions) ([]SessionSummary, error) {
+	service, err := NewSessionServiceIn(databaseURL, slog.New(slog.DiscardHandler))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = service.Stop(ctx) }()
+
+	return service.ListSessions(ctx, options)
 }
 
 func slackStateKeyTime(key, prefix string) (time.Time, bool) {

@@ -106,7 +106,8 @@ Exit codes:
 
 Sessions:
   Each run is persisted under a fresh conversation ID reported by the start
-  event, and can be replayed later with rocketclaw fc observe <conversation-id>.
+  event, and can be replayed later with rocketclaw_development_observe_session
+  when Development MCP is enabled.
   Runs work while the rocketclaw daemon is running.
 
 Example:

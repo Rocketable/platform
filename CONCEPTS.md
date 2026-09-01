@@ -90,6 +90,8 @@ A separate inbound MCP frontend for a coding agent to try overlay deltas against
 
 It is off until enabled, uses its own credential, and is not External MCP. After the operator publishes through git, reload or restart picks up the published tree.
 
+The same door also lists, observes, and deletes durable stored conversations (Slack, exec, External MCP). That inspect/delete path is a second job of Development MCP, not External MCP, and does not include in-memory try-turn chats.
+
 ### Request-Carried Context
 
 The overlay snapshot a Development MCP lint or run_turn call sends: an optional named base overlay plus file deltas for this call only.

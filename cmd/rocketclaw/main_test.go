@@ -25,8 +25,6 @@ func TestRunWithoutDefaultConfigShowsHelp(t *testing.T) {
 		return run(nil)
 	})
 	assert.Contains(t, output, "Usage:")
-	assert.Contains(t, output, "rocketclaw fc list")
-	assert.Contains(t, output, "rocketclaw fc observe [--follow|-f] <conversation-id>")
 	assert.Contains(t, output, "rocketclaw setup\n")
 	assert.Contains(t, output, "rocketclaw setup files list\n")
 	assert.Contains(t, output, "rocketclaw setup files get <path>\n")
@@ -194,12 +192,9 @@ func TestPrintStdoutReportsWriteError(t *testing.T) {
 	require.ErrorContains(t, err, "print greeting")
 }
 
-func TestRunDispatchesSetupAndFCHelp(t *testing.T) {
+func TestRunDispatchesSetupHelp(t *testing.T) {
 	output := captureStdout(t, func() error { return run([]string{"setup", "files", "list"}) })
 	assert.Contains(t, output, "main-update-cortex.sh")
-
-	output = captureStdout(t, func() error { return run([]string{"fc"}) })
-	assert.Contains(t, output, "rocketclaw fc list")
 }
 
 func captureStdout(t *testing.T, fn func() error) string {
