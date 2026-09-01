@@ -8,7 +8,7 @@ component: assistant
 severity: medium
 resolution_type: code_fix
 applies_when:
-  - Handling Slack $cron or 🔂 with no job name
+  - Handling Slack $cron with no job name
   - Listing live top-level cron stems for the Slack channel of the call
   - Matching cron frontmatter channel to Slack #name rather than the @ routing row
   - Choosing an ephemeral list reply instead of loading or starting an on-demand cron run
@@ -28,7 +28,7 @@ tags:
 
 ## Context
 
-Bare `$cron` (and `🔂`) used to treat an empty target as a missing job. `LoadOneOffCronjob` rejects a blank stem (`internal/rocketclaw/backend/manager.go:187-189`). Slack then posted that it could not find the cronjob (`internal/rocketclaw/frontend/slack/connector.go:4919-4921`).
+Bare `$cron` used to treat an empty target as a missing job. `LoadOneOffCronjob` rejects a blank stem (`internal/rocketclaw/backend/manager.go:187-189`). Slack then posted that it could not find the cronjob (`internal/rocketclaw/frontend/slack/connector.go:4919-4921`).
 
 Operators need the jobs that *post into this room*, not a failed run. `$workflow` already lists on empty args (`internal/rocketclaw/frontend/slack/connector.go:4517-4534`). Cron is different: every live `cron/*.md` names a Slack channel, and any top-level job can still be *run* from any configured room.
 

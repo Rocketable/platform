@@ -188,7 +188,7 @@ RocketClaw only starts agents listed on a channel. After setup/sync ships the sk
 - In `#ops`, start a capture thread with:
   - `@bot $agent slack-to-benchmark capture this thread into a BAR`
   - or `@bot $agent slack-to-benchmark`, then send the capture request in the thread
-  - or open `🎛` / bare `$agent` and pick `slack-to-benchmark`
+  - or open bare `$agent` and pick `slack-to-benchmark`
 - From `main` in the same channel, you can also task `slack-to-benchmark` or use skill `main-archive-benchmarks` without switching root agent.
 - Conversation id for CLI capture is `slack-thread:CHANNEL_ID:THREAD_TS` (channel id like `C…`, not the `#name`).
 
