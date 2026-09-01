@@ -58,7 +58,7 @@ Unauthorized clicks are silent. If the message is not in a RocketClaw conversati
 
 ## Development MCP
 
-A separate inbound door from External MCP. Off until `mcp_development.enabled` is true. Own users file: `rocketclaw.development.users.json` (copy `internal/rocketclaw/rocketclaw.development.users.example.json`, mode 0600). Not `rocketclaw.users.json`. Tools: `rocketclaw_development_list_overlay`, `rocketclaw_development_read_context_from_overlay`, `rocketclaw_development_lint`, `rocketclaw_development_run_turn`, `rocketclaw_development_reload`, `rocketclaw_development_restart`. `lint` and `run_turn` take a request `context` (optional `base_overlay` plus file deltas). Chat stays on this door.
+A separate inbound door from External MCP. Off until `mcp_development.enabled` is true. Own users file: `rocketclaw.development.users.json` (copy `internal/rocketclaw/rocketclaw.development.users.example.json`, mode 0600). Not `rocketclaw.users.json`. Tools: `rocketclaw_development_list_overlay`, `rocketclaw_development_read_context_from_overlay`, `rocketclaw_development_lint`, `rocketclaw_development_run_turn`, `rocketclaw_development_reload`, `rocketclaw_development_restart`, `rocketclaw_development_list_session`, `rocketclaw_development_observe_session`, `rocketclaw_development_delete_session`. `lint` and `run_turn` take a request `context` (optional `base_overlay` plus file deltas). Chat stays on this door. `list_session`, `observe_session`, and `delete_session` inspect or delete durable Slack/exec/External MCP stored turns, not try-turn chats, and take no overlay context. Observe is a snapshot and may be large. Delete removes stored turns only, with no confirm. When this door is off, those calls do not exist.
 
 ## Goal Examples
 
@@ -318,9 +318,6 @@ Running `rocketclaw` without a subcommand starts the server when `femtoclaw.json
 | `rocketclaw oai login [provider] [--headless]` | Authenticates the selected provider and writes its credential to the selected runtime `auth.json`; omission selects `openai`. |
 | `rocketclaw oai list` | Lists configured provider auth modes and local credential presence without displaying credentials. |
 | `rocketclaw oai logout [provider]` | Removes only the selected provider's local credential; omission selects `openai`. |
-| `rocketclaw fc list [--since 24h|RFC3339] [--until RFC3339] [--limit N] [--no-message-preview]` | Lists stored RocketCode sessions. |
-| `rocketclaw fc observe [--follow|-f] <conversation-id>` | Prints one conversation's stored session entries as JSONL. The conversation ID is required. |
-| `rocketclaw fc delete <conversation-id>` | Deletes a stored session. |
 | `rocketclaw help`, `rocketclaw -h`, `rocketclaw --help` | Prints top-level help. |
 
 For `lint` and `agent-graph`, `next` builds a temporary startup-equivalent runtime view from embedded assets, overlays, and workspace files. `current` inspects the selected generated runtime directory as it exists now.

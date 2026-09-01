@@ -6,7 +6,6 @@ import (
 	"testing"
 	"testing/synctest"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,14 +61,6 @@ func TestCommandsAcceptSecretsARNFlag(t *testing.T) {
 		writeLintConfig(t, workspace)
 		writeLintAgent(t, filepath.Join(workspace, ".rocketclaw"), "main.md", "---\ndescription: main\n---\nmain\n")
 		require.NoError(t, runLint([]string{"--aws-secrets-manager-arn", testSecretsARN, "current"}))
-	})
-	t.Run("fc", func(t *testing.T) {
-		workspace := t.TempDir()
-		t.Chdir(workspace)
-		dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(defaultConfigPath, []byte(fcTestConfigJSONWithDSN(dsn)), 0o600))
-		require.NoError(t, runFC([]string{"list", "--aws-secrets-manager-arn", testSecretsARN}))
 	})
 	t.Run("agent-graph", func(t *testing.T) {
 		workspace := t.TempDir()

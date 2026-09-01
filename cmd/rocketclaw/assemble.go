@@ -129,7 +129,7 @@ func assembleFrontends(rt *backend.Runtime) (backend.SlackFrontend, <-chan struc
 		return rt.Reload(rt.RunCtx, reason)
 	}, func(reason string) (string, error) {
 		return rt.Restart(rt.RunCtx, reason)
-	}, rt.Log)
+	}, rt.Log, rt.Sessions)
 	if err != nil {
 		return nil, nil, nil, err
 	}

@@ -1126,23 +1126,42 @@ func TestSessionServiceThreadAgentUpdatePreservesCreator(t *testing.T) {
 }
 
 func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {
-	workspace := t.TempDir()
-	_, err := AppendSessionEntryID(context.Background(), workspace, "main", testSessionEntry("main", "assistant"))
+	service := newTestSessionService(t)
+	_, err := service.AppendEntryID(context.Background(), "main", testSessionEntry("main", "assistant"))
 	require.NoError(t, err)
-	_, err = AppendSessionEntryID(context.Background(), workspace, "thread", testSessionEntry("thread", "assistant"))
+	_, err = service.AppendEntryID(context.Background(), "thread", testSessionEntry("thread", "assistant"))
 	require.NoError(t, err)
+	require.NoError(t, service.UpsertThread("main", ThreadState{Agent: "ops"}))
+	require.NoError(t, service.BeginGoal("main", "ship it", "", 5, "", ""))
 
-	deleted, err := DeleteSession(context.Background(), workspace, "main")
+	deleted, err := service.DeleteSession(context.Background(), "main")
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, deleted)
 
-	mainEntries, err := ObserveSessionEntries(context.Background(), testStoreDSN(workspace), "main", 0)
+	mainEntries, err := service.ObserveEntries(context.Background(), "main", 0)
 	require.NoError(t, err)
 	assert.Empty(t, mainEntries)
 
-	threadEntries, err := ObserveSessionEntries(context.Background(), testStoreDSN(workspace), "thread", 0)
+	threadEntries, err := service.ObserveEntries(context.Background(), "thread", 0)
 	require.NoError(t, err)
 	assert.Len(t, threadEntries, 1)
+
+	thread, ok, err := service.Thread("main")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, ThreadState{Agent: "ops"}, thread)
+
+	goal, ok, err := service.Goal("main")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "ship it", goal.Objective)
+}
+
+func TestDeleteSessionMissingIDReturnsZero(t *testing.T) {
+	service := newTestSessionService(t)
+	deleted, err := service.DeleteSession(context.Background(), "missing")
+	require.NoError(t, err)
+	assert.Zero(t, deleted)
 }
 
 func TestDeleteSessionMissingDBReturnsZero(t *testing.T) {

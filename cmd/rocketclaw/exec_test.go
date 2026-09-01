@@ -16,6 +16,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -185,7 +186,7 @@ func TestExecuteExecRunPersistsSession(t *testing.T) {
 	var out bytes.Buffer
 
 	run := func(ctx context.Context, _ *config.Config, _, _ string, _ *slog.Logger, progress *backend.RawRunProgress) (backend.RawRunResult, error) {
-		_, err := progress.SessionService.AppendEntryID(ctx, progress.ConversationID, fcTestEntry("check logs", "found it"))
+		_, err := progress.SessionService.AppendEntryID(ctx, progress.ConversationID, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC()})
 
 		return backend.RawRunResult{Text: "found it"}, err
 	}

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -19,7 +20,7 @@ import (
 )
 
 func TestStartRequiresBasicAuth(t *testing.T) {
-	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart)
+	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -39,18 +40,18 @@ func TestStartRequiresBasicAuth(t *testing.T) {
 
 func TestStartRejectsEmptyUsers(t *testing.T) {
 	for _, users := range []map[string]string{nil, {}} {
-		_, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", users, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart)
+		_, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", users, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 		require.ErrorContains(t, err, "development MCP users are required")
 	}
 }
 
 func TestStartRejectsInvalidListenAddr(t *testing.T) {
-	_, err := Start(t.Context(), slog.New(slog.DiscardHandler), "bad listen address", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart)
+	_, err := Start(t.Context(), slog.New(slog.DiscardHandler), "bad listen address", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 	require.ErrorContains(t, err, "listen for development MCP HTTP server")
 }
 
 func TestServerCloseIsIdempotent(t *testing.T) {
-	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart)
+	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 	require.NoError(t, err)
 	assert.NotEmpty(t, server.URL())
 	require.NoError(t, server.Close(context.Background()))
@@ -98,7 +99,7 @@ func TestListOverlayReturnsConfiguredSpecsInOrder(t *testing.T) {
 		{name: "none configured", specs: []string{}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, tt.specs, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart)
+			server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, tt.specs, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -119,7 +120,7 @@ func TestReadContextFromOverlayKnownSpec(t *testing.T) {
 				{Path: "skills/pack/SKILL.md", Content: "skill"},
 			},
 		}, nil
-	}, unusedLint, unusedRunTurn, unusedReload, unusedRestart)
+	}, unusedLint, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -144,7 +145,7 @@ func TestReadContextFromOverlayUnknownSpec(t *testing.T) {
 	spec := "github.com/other/overlay"
 	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, func(got string) (protocol.OverlayContext, error) {
 		return protocol.OverlayContext{}, fmt.Errorf("unknown overlay spec %q", got)
-	}, unusedLint, unusedRunTurn, unusedReload, unusedRestart)
+	}, unusedLint, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -176,8 +177,20 @@ func unusedRestart(string) (string, error) {
 	return "", errors.New("restart unused")
 }
 
+func unusedListSessions(context.Context, protocol.ListSessionsRequest) (protocol.ListSessionsResult, error) {
+	return protocol.ListSessionsResult{}, errors.New("list sessions unused")
+}
+
+func unusedObserveSession(context.Context, protocol.ObserveSessionRequest) (protocol.ObserveSessionResult, error) {
+	return protocol.ObserveSessionResult{}, errors.New("observe session unused")
+}
+
+func unusedDeleteSession(context.Context, protocol.DeleteSessionRequest) (protocol.DeleteSessionResult, error) {
+	return protocol.DeleteSessionResult{}, errors.New("delete session unused")
+}
+
 func TestLintRequiresContext(t *testing.T) {
-	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart)
+	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -199,7 +212,7 @@ func TestLintAE1NamedBaseOverlay(t *testing.T) {
 		gotBase, gotFiles = baseOverlay, files
 
 		return protocol.LintResult{Findings: []protocol.LintFinding{{Code: "RC003", Severity: "error", Path: "agents/a.md", Message: "cycle"}}}, nil
-	}, unusedRunTurn, unusedReload, unusedRestart)
+	}, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -225,7 +238,7 @@ func TestLintAE2NoBaseOverlay(t *testing.T) {
 		gotBase, gotFiles = baseOverlay, files
 
 		return protocol.LintResult{}, nil
-	}, unusedRunTurn, unusedReload, unusedRestart)
+	}, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -250,7 +263,7 @@ func TestLintDoesNotRememberContext(t *testing.T) {
 		gotBase, gotFiles = baseOverlay, files
 
 		return protocol.LintResult{}, nil
-	}, unusedRunTurn, unusedReload, unusedRestart)
+	}, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -279,7 +292,7 @@ func TestReloadAE4CallsInjectedClosureWithReason(t *testing.T) {
 		gotReason = reason
 
 		return "reloaded published overlay", nil
-	}, unusedRestart)
+	}, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -302,7 +315,7 @@ func TestRestartCallsInjectedClosureWithReason(t *testing.T) {
 		gotReason = reason
 
 		return "restarted for overlay-list change", nil
-	})
+	}, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -331,7 +344,7 @@ func TestRunTurnEmptyConversationID(t *testing.T) {
 		gotBase, gotFiles, gotAgent, gotPrompt, gotConversationID = baseOverlay, files, agent, prompt, conversationID
 
 		return "stub thinking", "stub answer", nil
-	}, unusedReload, unusedRestart)
+	}, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -369,7 +382,7 @@ func TestRunTurnAE3FollowUpUsesThisCallContext(t *testing.T) {
 		calls = append(calls, runTurnCall{base: baseOverlay, files: files, conversationID: conversationID})
 
 		return "thinking", "answer", nil
-	}, unusedReload, unusedRestart)
+	}, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -410,7 +423,7 @@ func TestRunTurnAE5FollowUpEmptyFilesUsesThisCallContext(t *testing.T) {
 		calls = append(calls, runTurnCall{base: baseOverlay, files: files, conversationID: conversationID})
 
 		return "thinking", "answer", nil
-	}, unusedReload, unusedRestart)
+	}, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -461,7 +474,7 @@ func decodeRunTurn(t *testing.T, result *mcp.CallToolResult) runTurnOutput {
 }
 
 func TestRunTurnRequiresContext(t *testing.T) {
-	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart)
+	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -478,7 +491,7 @@ func TestRunTurnRequiresContext(t *testing.T) {
 }
 
 func TestReloadAndRestartRejectContext(t *testing.T) {
-	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart)
+	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -489,12 +502,17 @@ func TestReloadAndRestartRejectContext(t *testing.T) {
 	}{
 		{name: "reload", tool: reloadToolName, wantErr: "reload does not take context"},
 		{name: "restart", tool: restartToolName, wantErr: "restart does not take context"},
+		{name: "list", tool: listSessionToolName, wantErr: "list session does not take overlay context"},
+		{name: "observe", tool: observeSessionToolName, wantErr: "observe session does not take overlay context"},
+		{name: "delete", tool: deleteSessionToolName, wantErr: "delete session does not take overlay context"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			result := callTool(t, server.URL(), "dev", "token", tt.tool, map[string]any{
-				"reason":  "should not run",
-				"context": map[string]any{"files": []map[string]any{{"path": "agents/a.md", "content": "a"}}},
-			})
+			args := map[string]any{
+				"reason":          "should not run",
+				"conversation_id": "main",
+				"context":         map[string]any{"files": []map[string]any{{"path": "agents/a.md", "content": "a"}}},
+			}
+			result := callTool(t, server.URL(), "dev", "token", tt.tool, args)
 			require.True(t, result.IsError)
 			require.NotEmpty(t, result.Content)
 			text, ok := result.Content[0].(*mcp.TextContent)
@@ -502,6 +520,160 @@ func TestReloadAndRestartRejectContext(t *testing.T) {
 			assert.Contains(t, text.Text, tt.wantErr)
 		})
 	}
+}
+
+func TestListSessionMapsFilters(t *testing.T) {
+	until := time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC)
+
+	var got protocol.ListSessionsRequest
+
+	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart, func(_ context.Context, req protocol.ListSessionsRequest) (protocol.ListSessionsResult, error) {
+		got = req
+
+		return protocol.ListSessionsResult{Sessions: []protocol.SessionSummary{{
+			ConversationID: "main", Turns: 2, LastUpdated: until,
+			LastUserMessage: "user", LastAssistantMessage: "assistant",
+		}}}, nil
+	}, unusedObserveSession, unusedDeleteSession)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+	before := time.Now().UTC()
+	result := callTool(t, server.URL(), "dev", "token", listSessionToolName, map[string]any{
+		"since": "24h",
+		"until": until.Format(time.RFC3339),
+		"limit": 2,
+	})
+	after := time.Now().UTC()
+
+	require.False(t, result.IsError)
+	assert.Equal(t, 2, got.Limit)
+	assert.False(t, got.OmitPreview)
+	assert.Equal(t, until, got.Until)
+	assert.False(t, got.Since.IsZero())
+	assert.False(t, got.Since.Before(before.Add(-24*time.Hour-time.Second)))
+	assert.False(t, got.Since.After(after.Add(-24*time.Hour+time.Second)))
+
+	summaries := decodeListSessions(t, result)
+	require.Len(t, summaries, 1)
+	assert.Equal(t, "user", summaries[0].LastUserMessage)
+	assert.Equal(t, "assistant", summaries[0].LastAssistantMessage)
+
+	previewOff := false
+	result = callTool(t, server.URL(), "dev", "token", listSessionToolName, map[string]any{
+		"include_message_preview": previewOff,
+	})
+	require.False(t, result.IsError)
+	assert.True(t, got.OmitPreview)
+	summaries = decodeListSessions(t, result)
+	require.Len(t, summaries, 1)
+	assert.Empty(t, summaries[0].LastUserMessage)
+	assert.Empty(t, summaries[0].LastAssistantMessage)
+}
+
+func TestObserveSessionReturnsSnapshot(t *testing.T) {
+	entry := json.RawMessage(`{"type":"turn"}`)
+
+	var calls int
+
+	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, func(_ context.Context, req protocol.ObserveSessionRequest) (protocol.ObserveSessionResult, error) {
+		calls++
+
+		assert.Equal(t, "main", req.ConversationID)
+
+		return protocol.ObserveSessionResult{Entries: []json.RawMessage{entry}}, nil
+	}, unusedDeleteSession)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+	first := decodeObserveSessions(t, callTool(t, server.URL(), "dev", "token", observeSessionToolName, map[string]any{"conversation_id": "main"}))
+	second := decodeObserveSessions(t, callTool(t, server.URL(), "dev", "token", observeSessionToolName, map[string]any{"conversation_id": "main"}))
+	assert.Equal(t, 2, calls)
+	assert.Equal(t, []json.RawMessage{entry}, first)
+	assert.Equal(t, first, second)
+}
+
+func TestObserveAndDeleteMissingAndTryTurn(t *testing.T) {
+	var (
+		observed []string
+		deleted  []string
+	)
+
+	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart, func(context.Context, protocol.ListSessionsRequest) (protocol.ListSessionsResult, error) {
+		return protocol.ListSessionsResult{Sessions: []protocol.SessionSummary{{ConversationID: "main", Turns: 1}}}, nil
+	}, func(_ context.Context, req protocol.ObserveSessionRequest) (protocol.ObserveSessionResult, error) {
+		observed = append(observed, req.ConversationID)
+		return protocol.ObserveSessionResult{}, nil
+	}, func(_ context.Context, req protocol.DeleteSessionRequest) (protocol.DeleteSessionResult, error) {
+		deleted = append(deleted, req.ConversationID)
+		return protocol.DeleteSessionResult{}, nil
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+	summaries := decodeListSessions(t, callTool(t, server.URL(), "dev", "token", listSessionToolName, map[string]any{}))
+	require.Len(t, summaries, 1)
+	assert.Equal(t, "main", summaries[0].ConversationID)
+
+	assert.Empty(t, decodeObserveSessions(t, callTool(t, server.URL(), "dev", "token", observeSessionToolName, map[string]any{"conversation_id": "missing"})))
+	assert.Empty(t, decodeObserveSessions(t, callTool(t, server.URL(), "dev", "token", observeSessionToolName, map[string]any{"conversation_id": "devmcp-try"})))
+	assert.Empty(t, decodeObserveSessions(t, callTool(t, server.URL(), "dev", "token", observeSessionToolName, map[string]any{})))
+	assert.Equal(t, []string{"missing", "devmcp-try"}, observed)
+
+	assert.Equal(t, int64(0), decodeDeleteSession(t, callTool(t, server.URL(), "dev", "token", deleteSessionToolName, map[string]any{"conversation_id": "missing"})))
+	assert.Equal(t, int64(0), decodeDeleteSession(t, callTool(t, server.URL(), "dev", "token", deleteSessionToolName, map[string]any{"conversation_id": "devmcp-try"})))
+	assert.Equal(t, int64(0), decodeDeleteSession(t, callTool(t, server.URL(), "dev", "token", deleteSessionToolName, map[string]any{})))
+	assert.Equal(t, []string{"missing", "devmcp-try"}, deleted)
+}
+
+func TestDeleteSessionReturnsDeletedCount(t *testing.T) {
+	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, func(_ context.Context, req protocol.DeleteSessionRequest) (protocol.DeleteSessionResult, error) {
+		assert.Equal(t, "main", req.ConversationID)
+		return protocol.DeleteSessionResult{Deleted: 3}, nil
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+	assert.Equal(t, int64(3), decodeDeleteSession(t, callTool(t, server.URL(), "dev", "token", deleteSessionToolName, map[string]any{"conversation_id": "main"})))
+}
+
+func decodeListSessions(t *testing.T, result *mcp.CallToolResult) []listSessionSummary {
+	t.Helper()
+	require.False(t, result.IsError)
+
+	data, err := json.Marshal(result.StructuredContent)
+	require.NoError(t, err)
+
+	var summaries []listSessionSummary
+	require.NoError(t, json.Unmarshal(data, &summaries))
+
+	return summaries
+}
+
+func decodeObserveSessions(t *testing.T, result *mcp.CallToolResult) []json.RawMessage {
+	t.Helper()
+	require.False(t, result.IsError)
+
+	data, err := json.Marshal(result.StructuredContent)
+	require.NoError(t, err)
+
+	var entries []json.RawMessage
+	require.NoError(t, json.Unmarshal(data, &entries))
+
+	return entries
+}
+
+func decodeDeleteSession(t *testing.T, result *mcp.CallToolResult) int64 {
+	t.Helper()
+	require.False(t, result.IsError)
+
+	data, err := json.Marshal(result.StructuredContent)
+	require.NoError(t, err)
+
+	var out deleteSessionOutput
+	require.NoError(t, json.Unmarshal(data, &out))
+
+	return out.Deleted
 }
 
 func decodeLintFindings(t *testing.T, result *mcp.CallToolResult) []lintFinding {
