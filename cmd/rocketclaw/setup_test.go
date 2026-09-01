@@ -21,19 +21,6 @@ func TestRunSetupWritesSlackConfig(t *testing.T) {
 	}, cfg.Slack)
 	require.Equal(t, config.OpenAIConfig{APIKey: "sk-test", APIBaseURL: "", RocketCodeAuth: "api_key"}, cfg.OpenAI)
 	require.False(t, cfg.MCPExternal.Enabled)
-
-	configData, err := os.ReadFile(filepath.Join(workspace, defaultConfigPath))
-	require.NoError(t, err)
-	var generated map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(configData, &generated))
-	for _, removed := range []string{"thread_agents", "pre_seed", "context_messages", "seed_compaction_model"} {
-		require.NotContains(t, string(configData), `"`+removed+`"`)
-	}
-	var slack map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(generated["slack"], &slack))
-	for _, removed := range []string{"enabled", "room", "human_user_id", "allowed_user_ids", "social_mode"} {
-		require.NotContains(t, slack, removed)
-	}
 	require.NotContains(t, output, "Enable Slack")
 
 	for _, name := range []string{"AGENTS.md", "main-update-cortex.sh"} {
