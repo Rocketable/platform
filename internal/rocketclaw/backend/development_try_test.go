@@ -13,7 +13,26 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 )
+
+func TestOverlayContextFromSkelCopiesBaseAndFiles(t *testing.T) {
+	got := OverlayContextFromSkel(skel.OverlayContext{
+		BaseOverlay: "next",
+		Files: []skel.OverlayFile{
+			{Path: "agents/main.md", Content: "hello"},
+			{Path: "AGENTS.md", Content: "root"},
+		},
+	})
+
+	assert.Equal(t, protocol.OverlayContext{
+		BaseOverlay: "next",
+		Files: []protocol.OverlayFile{
+			{Path: "agents/main.md", Content: "hello"},
+			{Path: "AGENTS.md", Content: "root"},
+		},
+	}, got)
+}
 
 func TestLintTryCleanTreeHasNoRC003(t *testing.T) {
 	result, err := LintTry(t.TempDir(), config.DefaultRuntimeDir, nil, "", []protocol.OverlayFile{

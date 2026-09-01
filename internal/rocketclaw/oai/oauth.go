@@ -444,6 +444,13 @@ type transport struct {
 	sessionID                       string
 }
 
+type tokenLoad int
+
+const (
+	tokenLoadFresh tokenLoad = iota
+	tokenLoadAfterUnauthorized
+)
+
 type codexRequestMetadata struct {
 	compactThreshold float64
 	hasCompact       bool
@@ -471,7 +478,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		t.base = http.DefaultTransport
 	}
 
-	token, err := t.token(req.Context())
+	token, err := t.token(req.Context(), tokenLoadFresh, Token{})
 	if err != nil {
 		return nil, err
 	}
@@ -526,7 +533,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 
-		token, err = t.recoveryToken(req.Context(), token)
+		token, err = t.token(req.Context(), tokenLoadAfterUnauthorized, token)
 		if err != nil {
 			if retryBody != nil {
 				_ = retryBody.Close()
@@ -611,7 +618,7 @@ func (t *transport) codexSessionID() (string, error) {
 	return t.sessionID, nil
 }
 
-func (t *transport) token(ctx context.Context) (Token, error) {
+func (t *transport) token(ctx context.Context, load tokenLoad, failed Token) (Token, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -623,48 +630,26 @@ func (t *transport) token(ctx context.Context) (Token, error) {
 			return false, fmt.Errorf("OpenAI OAuth token for provider %q is missing refresh token", t.provider)
 		}
 
-		if token.Access != "" && token.Expires > time.Now().Add(refreshSkew).UnixMilli() {
+		var reuse bool
+		switch load {
+		case tokenLoadAfterUnauthorized:
+			reuse = token.Access != "" && token.Access != failed.Access && token.AccountID == failed.AccountID
+		case tokenLoadFresh:
+			reuse = token.Access != "" && token.Expires > time.Now().Add(refreshSkew).UnixMilli()
+		}
+
+		if reuse {
 			selected = token
 			return false, nil
 		}
 
 		response, err := refreshToken(ctx, token.Refresh)
 		if err != nil {
+			if load == tokenLoadAfterUnauthorized {
+				return false, fmt.Errorf("refresh ChatGPT OAuth token after Codex 401 for provider %q; run `%s`: %w", t.provider, loginCommand(t.provider), err)
+			}
+
 			return false, fmt.Errorf("refresh ChatGPT OAuth token for provider %q; run `%s`: %w", t.provider, loginCommand(t.provider), err)
-		}
-
-		selected = tokenFromRefreshResponse(response, token)
-		file.Providers[t.provider] = selected
-
-		return true, nil
-	})
-	if err != nil {
-		return Token{}, err
-	}
-
-	return selected, nil
-}
-
-func (t *transport) recoveryToken(ctx context.Context, failed Token) (Token, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	var selected Token
-
-	_, err := updateAuthFileIn(t.workspace, t.runtimeDir, false, func(file *authFile) (bool, error) {
-		token := file.Providers[t.provider]
-		if strings.TrimSpace(token.Refresh) == "" {
-			return false, fmt.Errorf("OpenAI OAuth token for provider %q is missing refresh token", t.provider)
-		}
-
-		if token.Access != "" && token.Access != failed.Access && token.AccountID == failed.AccountID {
-			selected = token
-			return false, nil
-		}
-
-		response, err := refreshToken(ctx, token.Refresh)
-		if err != nil {
-			return false, fmt.Errorf("refresh ChatGPT OAuth token after Codex 401 for provider %q; run `%s`: %w", t.provider, loginCommand(t.provider), err)
 		}
 
 		selected = tokenFromRefreshResponse(response, token)
