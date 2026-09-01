@@ -378,7 +378,7 @@ func wrapParseError(err error) error {
 	}{
 		{"unexpected newline", parseCategoryUnexpectedNewline, "A single-line string contains a literal newline", "Use a raw triple-quoted string (r'''...''') or a workspace-local helper"},
 		{"unexpected EOF in string", parseCategoryUnterminatedString, "A string was not closed before the end of the program", "Close the string, or use r'''...''' for multiline source"},
-		{"invalid escape", parseCategoryInvalidEscape, `Ordinary "..." treats backslash as a Starlark escape`, `Use a raw string (r"...") or r'''...'''`},
+		{"invalid escape", parseCategoryInvalidEscape, `Ordinary "..." treats backslash as a Starlark escape`, `Use r'''...'''`},
 		{"unexpected input character", parseCategoryUnexpectedCharacter, "A quote closed too early, so a character such as $ was seen as Starlark", "Keep the character inside a correctly delimited string (r'''...''' for multiline)"},
 		{"want ','", parseCategorySyntax, "Missing comma or a quote closed too early", "Fix the Starlark syntax around that token, then rerun"},
 	}

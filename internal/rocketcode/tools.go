@@ -337,7 +337,7 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 			},
 		},
 		"bash": {
-			Definition: *functionTool("bash", "Run a shell command in the workspace", map[string]any{
+			Definition: *functionTool("bash", "Run a shell command in the workspace. Inside execute JSON code, bash(command=...) takes r'''...''' only.\nExample: {\"code\":\"def main():\\n    return bash(command=r'''grep -n architecture\\\\|loop FILE''')\\n\"}", map[string]any{
 				"command":     map[string]any{"type": "string"},
 				"timeout_ms":  map[string]any{"type": "integer"},
 				"workdir":     map[string]any{"type": "string"},
