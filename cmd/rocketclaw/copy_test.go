@@ -65,7 +65,31 @@ func TestClockworkRegisterBridgeDuplicate(t *testing.T) {
 	require.NoError(t, err)
 	_, err = clockwork.registerBridge(protocol.BridgeSlack, bridge)
 	require.Error(t, err)
-	require.NoError(t, unregister(t.Context()))
+	unregister()
+}
+
+func TestClockworkRunRejectsSecondStart(t *testing.T) {
+	channels := protocol.NewChannels()
+	clockwork := newClockwork(channels)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- clockwork.run(ctx) }()
+	for {
+		clockwork.mu.Lock()
+		started := clockwork.started
+		clockwork.mu.Unlock()
+
+		if started {
+			break
+		}
+	}
+
+	require.Error(t, clockwork.run(ctx))
+	cancel()
+	require.NoError(t, <-errCh)
 }
 
 func TestDropBroadcastBridge(t *testing.T) {
@@ -148,9 +172,9 @@ func TestClockworkBroadcastsExcludeSenderAndAcknowledge(t *testing.T) {
 		require.NoError(t, acknowledgement.Err)
 		require.Equal(t, protocol.BroadcastFailed, (<-failedBroadcast.Acknowledgement).Status)
 
-		require.NoError(t, unregisterSlack(t.Context()))
-		require.NoError(t, unregisterMCP(t.Context()))
-		require.NoError(t, unregisterFailed(t.Context()))
+		unregisterSlack()
+		unregisterMCP()
+		unregisterFailed()
 		cancel()
 		synctest.Wait()
 	})
@@ -181,8 +205,8 @@ func TestClockworkNoSenderBroadcastReachesAllBridges(t *testing.T) {
 		require.Equal(t, protocol.BroadcastHandled, (<-slackBroadcast.Acknowledgement).Status)
 		require.Equal(t, protocol.BroadcastDropped, (<-mcpBroadcast.Acknowledgement).Status)
 
-		require.NoError(t, unregisterSlack(t.Context()))
-		require.NoError(t, unregisterMCP(t.Context()))
+		unregisterSlack()
+		unregisterMCP()
 		cancel()
 		synctest.Wait()
 	})
@@ -218,8 +242,8 @@ func TestClockworkSlowBridgeDoesNotBlockAnotherBridge(t *testing.T) {
 		<-slow.received
 		synctest.Wait()
 
-		require.NoError(t, unregisterSlow(t.Context()))
-		require.NoError(t, unregisterFast(t.Context()))
+		unregisterSlow()
+		unregisterFast()
 		cancel()
 		synctest.Wait()
 	})
@@ -237,7 +261,7 @@ func TestClockworkReconnectReceivesOnlyLaterBroadcasts(t *testing.T) {
 		runClockwork(ctx, t, clockwork)
 		synctest.Wait()
 
-		require.NoError(t, unregister(t.Context()))
+		unregister()
 
 		channels.Broadcasts <- protocol.Broadcast{Message: protocol.NewOutboundMessage(protocol.SourceSystem, "conversation", "missed")}
 
@@ -260,7 +284,7 @@ func TestClockworkReconnectReceivesOnlyLaterBroadcasts(t *testing.T) {
 		got := <-reconnected.received
 		require.Equal(t, "later", got.Message.Text)
 
-		require.NoError(t, unregister(t.Context()))
+		unregister()
 		cancel()
 		synctest.Wait()
 	})

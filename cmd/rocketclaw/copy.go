@@ -57,7 +57,7 @@ func newClockwork(channels protocol.Channels) *clockwork {
 	}
 }
 
-func (c *clockwork) registerBridge(id protocol.BridgeID, handler clockworkBridge) (func(context.Context) error, error) {
+func (c *clockwork) registerBridge(id protocol.BridgeID, handler clockworkBridge) (func(), error) {
 	bridge := &registeredBridge{id: id, handler: handler}
 	bridge.cond = sync.NewCond(&bridge.mu)
 
@@ -85,10 +85,9 @@ func (c *clockwork) registerBridge(id protocol.BridgeID, handler clockworkBridge
 		}
 	}
 
-	return func(context.Context) error {
+	return func() {
 		c.removeBridge(bridge)
 		bridge.close()
-		return nil
 	}, nil
 }
 
@@ -102,6 +101,12 @@ func (c *clockwork) removeBridge(bridge *registeredBridge) {
 
 func (c *clockwork) run(ctx context.Context) error {
 	c.mu.Lock()
+	if c.started {
+		c.mu.Unlock()
+
+		return errors.New("clockwork already running")
+	}
+
 	c.started = true
 	c.pendingEnabled = len(c.bridges) == 0
 	bridges := slices.Collect(maps.Values(c.bridges))
