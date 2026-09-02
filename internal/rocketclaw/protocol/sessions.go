@@ -41,5 +41,5 @@ type DeleteSessionRequest struct {
 
 // DeleteSessionResult is the number of stored turns removed.
 type DeleteSessionResult struct {
-	Deleted int64
+	Deleted int64 `json:"deleted"`
 }

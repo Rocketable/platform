@@ -129,16 +129,13 @@ func TestReadContextFromOverlayKnownSpec(t *testing.T) {
 
 	data, err := json.Marshal(result.StructuredContent)
 	require.NoError(t, err)
-
-	var got overlayContext
-	require.NoError(t, json.Unmarshal(data, &got))
-	assert.Equal(t, overlayContext{
-		BaseOverlay: spec,
-		Files: []overlayFile{
-			{Path: "agents/a.md", Content: "agent"},
-			{Path: "skills/pack/SKILL.md", Content: "skill"},
-		},
-	}, got)
+	require.JSONEq(t, `{
+		"base_overlay": "github.com/rocketable/overlay@main",
+		"files": [
+			{"path": "agents/a.md", "content": "agent"},
+			{"path": "skills/pack/SKILL.md", "content": "skill"}
+		]
+	}`, string(data))
 }
 
 func TestReadContextFromOverlayUnknownSpec(t *testing.T) {
@@ -151,10 +148,25 @@ func TestReadContextFromOverlayUnknownSpec(t *testing.T) {
 
 	result := callTool(t, server.URL(), "dev", "token", readContextFromOverlayToolName, map[string]any{"overlay": spec})
 	require.True(t, result.IsError)
+	assert.Nil(t, result.StructuredContent)
 	require.NotEmpty(t, result.Content)
 	text, ok := result.Content[0].(*mcp.TextContent)
 	require.True(t, ok)
 	assert.Contains(t, text.Text, `unknown overlay spec "github.com/other/overlay"`)
+}
+
+func TestReadContextFromOverlayEmptyFiles(t *testing.T) {
+	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, func(string) (protocol.OverlayContext, error) {
+		return protocol.OverlayContext{}, nil
+	}, unusedLint, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+	result := callTool(t, server.URL(), "dev", "token", readContextFromOverlayToolName, map[string]any{"overlay": "empty"})
+	require.False(t, result.IsError)
+	data, err := json.Marshal(result.StructuredContent)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"files":[]}`, string(data))
 }
 
 func unusedReadOverlayContext(string) (protocol.OverlayContext, error) {
@@ -225,7 +237,10 @@ func TestLintAE1NamedBaseOverlay(t *testing.T) {
 	require.False(t, result.IsError)
 	assert.Equal(t, "skills", gotBase)
 	assert.Equal(t, []protocol.OverlayFile{{Path: "agents/a.md", Content: "new a"}}, gotFiles)
-	assert.Equal(t, []lintFinding{{Code: "RC003", Severity: "error", Path: "agents/a.md", Message: "cycle"}}, decodeLintFindings(t, result))
+
+	data, err := json.Marshal(result.StructuredContent)
+	require.NoError(t, err)
+	require.JSONEq(t, `[{"code":"RC003","severity":"error","path":"agents/a.md","message":"cycle"}]`, string(data))
 }
 
 func TestLintAE2NoBaseOverlay(t *testing.T) {
@@ -250,7 +265,28 @@ func TestLintAE2NoBaseOverlay(t *testing.T) {
 	require.False(t, result.IsError)
 	assert.Empty(t, gotBase)
 	assert.Equal(t, []protocol.OverlayFile{{Path: "agents/a.md", Content: "only a"}}, gotFiles)
-	assert.Empty(t, decodeLintFindings(t, result))
+
+	data, err := json.Marshal(result.StructuredContent)
+	require.NoError(t, err)
+	require.JSONEq(t, `[]`, string(data))
+}
+
+func TestLintNullFiles(t *testing.T) {
+	var gotFiles []protocol.OverlayFile
+
+	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, func(_ string, files []protocol.OverlayFile) (protocol.LintResult, error) {
+		gotFiles = files
+		return protocol.LintResult{}, nil
+	}, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+	result := callTool(t, server.URL(), "dev", "token", lintToolName, map[string]any{
+		"context": map[string]any{"files": nil},
+	})
+	require.False(t, result.IsError)
+	assert.Empty(t, gotFiles)
+	assert.NotNil(t, gotFiles)
 }
 
 func TestLintDoesNotRememberContext(t *testing.T) {
@@ -362,17 +398,18 @@ func TestRunTurnEmptyConversationID(t *testing.T) {
 	data, err := json.Marshal(result.StructuredContent)
 	require.NoError(t, err)
 
-	var got runTurnOutput
-	require.NoError(t, json.Unmarshal(data, &got))
-	assert.True(t, strings.HasPrefix(got.ConversationID, "devmcp-"))
-	assert.NotEmpty(t, strings.TrimPrefix(got.ConversationID, "devmcp-"))
-	assert.Equal(t, "stub thinking", got.Thinking)
-	assert.Equal(t, "stub answer", got.Answer)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	conversationID, _ := raw["conversation_id"].(string)
+	assert.True(t, strings.HasPrefix(conversationID, "devmcp-"))
+	assert.NotEmpty(t, strings.TrimPrefix(conversationID, "devmcp-"))
+	assert.Equal(t, "stub thinking", raw["thinking"])
+	assert.Equal(t, "stub answer", raw["answer"])
 	assert.Equal(t, "skills", gotBase)
 	assert.Equal(t, []protocol.OverlayFile{{Path: "agents/a.md", Content: "new a"}}, gotFiles)
 	assert.Equal(t, "main", gotAgent)
 	assert.Equal(t, "try this overlay", gotPrompt)
-	assert.Equal(t, got.ConversationID, gotConversationID)
+	assert.Equal(t, conversationID, gotConversationID)
 }
 
 func TestRunTurnAE3FollowUpUsesThisCallContext(t *testing.T) {
@@ -460,14 +497,14 @@ type runTurnCall struct {
 	conversationID string
 }
 
-func decodeRunTurn(t *testing.T, result *mcp.CallToolResult) runTurnOutput {
+func decodeRunTurn(t *testing.T, result *mcp.CallToolResult) protocol.TryTurnResult {
 	t.Helper()
 	require.False(t, result.IsError)
 
 	data, err := json.Marshal(result.StructuredContent)
 	require.NoError(t, err)
 
-	var got runTurnOutput
+	var got protocol.TryTurnResult
 	require.NoError(t, json.Unmarshal(data, &got))
 
 	return got
@@ -634,7 +671,11 @@ func TestDeleteSessionReturnsDeletedCount(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
-	assert.Equal(t, int64(3), decodeDeleteSession(t, callTool(t, server.URL(), "dev", "token", deleteSessionToolName, map[string]any{"conversation_id": "main"})))
+	result := callTool(t, server.URL(), "dev", "token", deleteSessionToolName, map[string]any{"conversation_id": "main"})
+	require.False(t, result.IsError)
+	data, err := json.Marshal(result.StructuredContent)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"deleted":3}`, string(data))
 }
 
 func decodeListSessions(t *testing.T, result *mcp.CallToolResult) []listSessionSummary {
@@ -670,22 +711,44 @@ func decodeDeleteSession(t *testing.T, result *mcp.CallToolResult) int64 {
 	data, err := json.Marshal(result.StructuredContent)
 	require.NoError(t, err)
 
-	var out deleteSessionOutput
+	var out protocol.DeleteSessionResult
 	require.NoError(t, json.Unmarshal(data, &out))
 
 	return out.Deleted
 }
 
-func decodeLintFindings(t *testing.T, result *mcp.CallToolResult) []lintFinding {
-	t.Helper()
-
-	data, err := json.Marshal(result.StructuredContent)
+func TestInferredToolSchemas(t *testing.T) {
+	server, err := Start(t.Context(), slog.New(slog.DiscardHandler), "127.0.0.1:0", map[string]string{"dev": "token"}, nil, unusedReadOverlayContext, unusedLint, unusedRunTurn, unusedReload, unusedRestart, unusedListSessions, unusedObserveSession, unusedDeleteSession)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
-	var findings []lintFinding
-	require.NoError(t, json.Unmarshal(data, &findings))
+	tools := listTools(t, server.URL(), "dev", "token")
 
-	return findings
+	byName := map[string]*mcp.Tool{}
+	for i := range tools {
+		byName[tools[i].Name] = tools[i]
+	}
+
+	lintIn := schemaObject(t, byName[lintToolName].InputSchema)
+	assert.Equal(t, []any{"context"}, lintIn["required"])
+	lintContext := schemaObject(t, schemaObject(t, lintIn["properties"])["context"])
+	assert.Equal(t, []any{"files"}, lintContext["required"])
+	assert.Contains(t, schemaObject(t, lintContext["properties"]), "base_overlay")
+	assert.Contains(t, schemaObject(t, lintContext["properties"]), "files")
+
+	runIn := schemaObject(t, byName[runTurnToolName].InputSchema)
+	assert.Equal(t, []any{"context", "agent", "prompt", "conversation_id"}, runIn["required"])
+
+	overlayOut := schemaObject(t, byName[readContextFromOverlayToolName].OutputSchema)
+	assert.Equal(t, []any{"files"}, overlayOut["required"])
+	assert.Contains(t, schemaObject(t, overlayOut["properties"]), "base_overlay")
+	assert.Contains(t, schemaObject(t, overlayOut["properties"]), "files")
+
+	tryOut := schemaObject(t, byName[runTurnToolName].OutputSchema)
+	assert.Equal(t, []any{"conversation_id", "thinking", "answer"}, tryOut["required"])
+
+	deleteOut := schemaObject(t, byName[deleteSessionToolName].OutputSchema)
+	assert.Equal(t, []any{"deleted"}, deleteOut["required"])
 }
 
 func listOverlay(t *testing.T, endpoint, username, password string) []string {
@@ -698,6 +761,36 @@ func listOverlay(t *testing.T, endpoint, username, password string) []string {
 	require.NoError(t, json.Unmarshal(data, &specs))
 
 	return specs
+}
+
+func schemaObject(t *testing.T, schema any) map[string]any {
+	t.Helper()
+
+	data, err := json.Marshal(schema)
+	require.NoError(t, err)
+
+	var out map[string]any
+	require.NoError(t, json.Unmarshal(data, &out))
+
+	return out
+}
+
+func listTools(t *testing.T, endpoint, username, password string) []*mcp.Tool {
+	t.Helper()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
+	transport := &mcp.StreamableClientTransport{
+		Endpoint:             endpoint,
+		HTTPClient:           &http.Client{Transport: basicAuthRoundTripper{base: http.DefaultTransport, username: username, password: password}},
+		DisableStandaloneSSE: true,
+	}
+	session, err := client.Connect(t.Context(), transport, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, session.Close()) })
+	listed, err := session.ListTools(t.Context(), nil)
+	require.NoError(t, err)
+
+	return listed.Tools
 }
 
 func callTool(t *testing.T, endpoint, username, password, name string, args map[string]any) *mcp.CallToolResult {
