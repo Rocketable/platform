@@ -88,11 +88,7 @@ func runSetup(args []string) error {
 		report += fmt.Sprintf("Wrote %s\n", externalMCPUsersFilename)
 	}
 
-	if _, err := fmt.Fprint(os.Stdout, report); err != nil {
-		return fmt.Errorf("report setup result: %w", err)
-	}
-
-	return nil
+	return printStdout(report, "setup result")
 }
 
 func runSetupFiles(args []string) error {
@@ -111,11 +107,7 @@ func runSetupFiles(args []string) error {
 			return fmt.Errorf("list embedded setup files: %w", err)
 		}
 
-		if _, err := fmt.Fprintln(os.Stdout, strings.Join(files, "\n")); err != nil {
-			return fmt.Errorf("print embedded setup file list: %w", err)
-		}
-
-		return nil
+		return printStdout(strings.Join(files, "\n")+"\n", "embedded setup file list")
 	case "get":
 		if len(args) != 2 {
 			return errors.New("setup files get accepts exactly one filename")

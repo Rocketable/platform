@@ -3,6 +3,7 @@ module github.com/Rocketable/platform
 go 1.27.1
 
 require (
+	cirello.io/pglock v1.16.2
 	github.com/Arize-ai/openinference/go/openinference-instrumentation v0.1.1
 	github.com/Arize-ai/openinference/go/openinference-semantic-conventions v0.1.4
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
@@ -61,6 +62,7 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/lib/pq v1.12.3 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect

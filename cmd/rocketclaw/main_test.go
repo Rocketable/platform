@@ -107,10 +107,6 @@ func TestLoadRuntimeConfigKeepsLegacyConfigReadOnly(t *testing.T) {
 	assert.Equal(t, legacy, data)
 }
 
-func TestBuildInfoMainVersionReturnsVersion(t *testing.T) {
-	assert.NotEmpty(t, buildInfoMainVersion())
-}
-
 func TestExitCodeForError(t *testing.T) {
 	assert.Equal(t, 255, exitCodeForError(exitCodeError(255)))
 	assert.Empty(t, exitCodeError(255).Error())

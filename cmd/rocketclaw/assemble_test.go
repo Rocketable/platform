@@ -23,7 +23,7 @@ func TestAssembleFrontendsReportsSlackStartError(t *testing.T) {
 		Channels:                 protocol.NewChannels(),
 		RefreshExternalMCPAgents: &refresh,
 	}
-	_, _, _, err := assembleFrontends(rt)
+	_, _, _, err := processAssembler{}.Assemble(rt)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "start Slack connector")
 }

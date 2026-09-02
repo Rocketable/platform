@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"os"
 	"strings"
 )
 
@@ -34,9 +33,5 @@ func runDoctor(args []string) error {
 		"RocketCode: OK (library)",
 	}
 
-	if _, err := fmt.Fprint(os.Stdout, strings.Join(lines, "\n")+"\n"); err != nil {
-		return fmt.Errorf("write doctor output: %w", err)
-	}
-
-	return nil
+	return printStdout(strings.Join(lines, "\n")+"\n", "doctor output")
 }

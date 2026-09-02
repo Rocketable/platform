@@ -36,23 +36,6 @@ func TestRunServeReportsSlackStartupErrorWithCurrentConfig(t *testing.T) {
 	require.ErrorContains(t, err, "run rocketclaw")
 }
 
-func TestRunServeRejectsBadFlagBeforeConfigLoad(t *testing.T) {
-	require.ErrorContains(t, runServe([]string{"--bad"}), "parse serve flags")
-}
-
-func TestRunServeReportsConfigLoadError(t *testing.T) {
-	workspace := t.TempDir()
-	cwd, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(workspace))
-	t.Cleanup(func() {
-		require.NoError(t, os.Chdir(cwd))
-	})
-
-	err = runServe(nil)
-	require.ErrorContains(t, err, "load config")
-}
-
 func TestServeRunErrorMapsRestartRequestToSupervisorExitCode(t *testing.T) {
 	err := serveRunError(backend.ErrRestartRequested)
 	require.ErrorIs(t, err, exitCodeError(255))

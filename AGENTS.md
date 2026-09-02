@@ -84,7 +84,10 @@ On start, you must always read:
 ## Injected Behavior Dependencies
 
 - For injected behavior dependencies, do not use `nil` to mean disabled, optional, or not configured.
-- Injected behavior dependencies include function callbacks, interfaces, service clients, senders, publishers, loggers, schedulers, runners, routers, bridges, and lifecycle hooks.
+- Injected behavior dependencies include interfaces, service clients, senders, publishers, loggers, schedulers, runners, routers, bridges, and lifecycle hooks.
+- Do not inject function callbacks for behavior. Use a small interface and a named implementation (or an explicit inert type). Do not wrap a method in `func(...) { return x.Method(...) }` to satisfy a `func` parameter; change the parameter to the interface.
+- Library APIs that require a callback (for example `pglock.Client.Do`) are the exception. Pass them a value that already implements the work. Do not add a second callback, channel, or goroutine around that library call.
+- When a test needs a mock of an interface, generate it with mockery v3 (`github.com/vektra/mockery/v3`, https://pkg.go.dev/github.com/vektra/mockery/v3). Do not use mockery v1/v2, hand-written testify/mock stubs, ad hoc fake structs that only exist to satisfy the interface in tests, or a parallel callback type to avoid mocking.
 - Pass either the real dependency or an explicit inert implementation at the call site.
 - Constructors should assign what they are given, not silently manufacture fallback defaults, unless the API is external/public and already documents nil as valid.
 - Unavailable behavior belongs in a clear inert implementation, such as a private `inertX` type or inert callback, not in `if dep == nil` / `if callback != nil` branches.
@@ -106,6 +109,7 @@ On start, you must always read:
 - Mandatory Go work lifecycle: before touching Go code, during edits, before tests, and before final response, explicitly apply these standards to the actual touched files and changed hunks. Do not rely on memory or intent. If any item fails, fix it before continuing.
 - Before editing Go code, convert the bootstrap materials into active constraints for the current task: Effective Go and CodeReviewComments for style/API shape, gofix/Go 1.26 materials for modern standard-library idioms, testing-time/synctest for concurrency and timing tests, osroot for filesystem safety, cleanups/weak only when truly needed, iter for sequence APIs, mutex-hat guidance for synchronization layout, and context-and-structs for context lifetimes.
 - During Go edits, enforce simplicity continuously: no speculative features, no one-use helpers unless they materially clarify dense code, no new abstractions/types/fields/callbacks/packages unless existing concepts cannot express the change, no defensive guards for impossible internal states, no unnecessary exported symbols, no context stored in structs, no extra goroutine or timer machinery unless the behavior requires it, and no multiple-mutex design unless the lifecycle genuinely demands it.
+- Do not start a goroutine to hold a lock, wait on `Done`, convert a callback into work, or paper over an API that should be a blocking call or an interface method. A goroutine is allowed only when concurrent work is the actual requirement (for example a connector loop or `errgroup`). If you added channels named `started`, `acquired`, or `errLock` to coordinate with that goroutine, the design is wrong; delete them and call the work directly.
 - If a helper is only called once, inline it by default. Only extract it when it is reused or materially clarifies a dense block.
 - Single-use single-line functions are always violations and must be inlined.
 - New or touched one-line delegating wrappers that only delegate to another function, pass default arguments, rename a call, or preserve an old call shape are violations even when used more than once; call the target directly or give the function a real body that owns behavior.
