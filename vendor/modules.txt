@@ -208,7 +208,7 @@ github.com/modelcontextprotocol/go-sdk/oauthex
 # github.com/ncruces/go-strftime v1.0.0
 ## explicit; go 1.17
 github.com/ncruces/go-strftime
-# github.com/openai/openai-go/v3 v3.54.0
+# github.com/openai/openai-go/v3 v3.55.0
 ## explicit; go 1.25.0
 github.com/openai/openai-go/v3
 github.com/openai/openai-go/v3/auth
@@ -542,7 +542,7 @@ google.golang.org/protobuf/types/known/wrapperspb
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
-# modernc.org/libc v1.75.6
+# modernc.org/libc v1.75.7
 ## explicit; go 1.25.0
 modernc.org/libc
 modernc.org/libc/errno
@@ -576,7 +576,7 @@ modernc.org/mathutil
 # modernc.org/memory v1.12.1
 ## explicit; go 1.23.0
 modernc.org/memory
-# modernc.org/sqlite v1.57.0
+# modernc.org/sqlite v1.58.0
 ## explicit; go 1.25.0
 modernc.org/sqlite
 modernc.org/sqlite/lib

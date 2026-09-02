@@ -13,7 +13,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
-	github.com/openai/openai-go/v3 v3.54.0
+	github.com/openai/openai-go/v3 v3.55.0
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/rubenv/sql-migrate v1.8.1
 	github.com/slack-go/slack v0.29.0
@@ -31,7 +31,7 @@ require (
 	golang.org/x/text v0.41.0
 	golang.org/x/tools v0.49.0
 	gopkg.in/yaml.v3 v3.0.1
-	modernc.org/sqlite v1.57.0
+	modernc.org/sqlite v1.58.0
 	mvdan.cc/sh/v3 v3.14.0
 	sigs.k8s.io/yaml v1.6.0
 )
@@ -83,7 +83,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260831171406-18b4a7587f8a // indirect
 	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
-	modernc.org/libc v1.75.6 // indirect
+	modernc.org/libc v1.75.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
