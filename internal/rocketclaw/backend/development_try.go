@@ -13,15 +13,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 )
 
-func lintResultFromAgentlint(result agentlint.Result) protocol.LintResult {
-	out := protocol.LintResult{Findings: make([]protocol.LintFinding, len(result.Findings))}
-	for i := range result.Findings {
-		out.Findings[i] = protocol.LintFinding{Code: result.Findings[i].Code, Severity: result.Findings[i].Severity, Path: result.Findings[i].Path, Message: result.Findings[i].Message}
-	}
-
-	return out
-}
-
 // LintTry stages a try tree and lints it.
 func LintTry(workspace, runtimeDir string, overlays []string, baseOverlay string, files []protocol.OverlayFile, cfg *config.Config, logger *slog.Logger) (protocol.LintResult, error) {
 	stage, err := skel.StageLiveRuntime(workspace, runtimeDir, overlays, baseOverlay, files, logger)
@@ -35,7 +26,12 @@ func LintTry(workspace, runtimeDir string, overlays []string, baseOverlay string
 		return protocol.LintResult{}, fmt.Errorf("lint staged runtime: %w", err)
 	}
 
-	return lintResultFromAgentlint(result), nil
+	out := protocol.LintResult{Findings: make([]protocol.LintFinding, len(result.Findings))}
+	for i := range result.Findings {
+		out.Findings[i] = protocol.LintFinding{Code: result.Findings[i].Code, Severity: result.Findings[i].Severity, Path: result.Findings[i].Path, Message: result.Findings[i].Message}
+	}
+
+	return out, nil
 }
 
 // KeyedConversationLocks serializes work per conversation id.

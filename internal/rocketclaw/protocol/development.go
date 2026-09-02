@@ -12,11 +12,6 @@ type OverlayContext struct {
 	Files       []OverlayFile `json:"files"`
 }
 
-// OverlaySpec is one configured overlay name.
-type OverlaySpec struct {
-	Spec string
-}
-
 // LintFinding is one overlay lint finding.
 type LintFinding struct {
 	Code     string `json:"code"`
@@ -48,14 +43,4 @@ type TryTurnResult struct {
 	ConversationID string `json:"conversation_id"`
 	Thinking       string `json:"thinking"`
 	Answer         string `json:"answer"`
-}
-
-// ReloadRequest is one Reload protocol message.
-type ReloadRequest struct {
-	Reason string
-}
-
-// RestartRequest is one Restart protocol message.
-type RestartRequest struct {
-	Reason string
 }

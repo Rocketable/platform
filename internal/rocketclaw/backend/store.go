@@ -1061,9 +1061,6 @@ func (s *SessionService) TakeMCPWaiter(id string) *protocol.InboundMessage {
 	return inbound
 }
 
-// PairBusy reports whether the named conversation pair currently holds a turn.
-func (s *SessionService) PairBusy(pairID string) bool { return s.PairBusyFor(pairID, "") }
-
 // PairBusyFor reports whether pairID is busy for a caller other than conversationID.
 func (s *SessionService) PairBusyFor(pairID, conversationID string) bool {
 	s.turnGatesMu.Lock()

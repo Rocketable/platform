@@ -132,10 +132,10 @@ func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
 func TestSessionServiceTurnPairAllowsOnlyOneActiveTurn(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
-		assert.False(t, service.PairBusy("slack-thread:C1:1.1"))
+		assert.False(t, service.PairBusyFor("slack-thread:C1:1.1", ""))
 		unlockFirst, err := service.lockTurnPair(t.Context(), "slack-thread:C1:1.1", "external_mcp:private")
 		require.NoError(t, err)
-		assert.True(t, service.PairBusy("slack-thread:C1:1.1"))
+		assert.True(t, service.PairBusyFor("slack-thread:C1:1.1", ""))
 
 		secondAcquired := false
 
@@ -161,7 +161,7 @@ func TestSessionServiceTurnPairAllowsOnlyOneActiveTurn(t *testing.T) {
 		synctest.Wait()
 		require.NoError(t, errSecond)
 		assert.True(t, secondAcquired)
-		assert.False(t, service.PairBusy("slack-thread:C1:1.1"))
+		assert.False(t, service.PairBusyFor("slack-thread:C1:1.1", ""))
 	})
 }
 

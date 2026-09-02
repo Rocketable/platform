@@ -556,7 +556,7 @@ func (m *threadBridgeManager) InterruptConversation(conversationID string) *prot
 }
 
 func (m *threadBridgeManager) ThreadBusy(target protocol.TextConversationTarget) bool {
-	return m.store.PairBusy(m.text.conversationID(target))
+	return m.store.PairBusyFor(m.text.conversationID(target), "")
 }
 
 func (m *threadBridgeManager) RegisterCronThread(_ context.Context, target protocol.TextConversationTarget, agent string) error {
