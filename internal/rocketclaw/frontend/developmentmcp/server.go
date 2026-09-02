@@ -36,43 +36,9 @@ type readContextFromOverlayInput struct {
 	Overlay string `json:"overlay"`
 }
 
-type overlayContext struct {
-	BaseOverlay string        `json:"base_overlay,omitempty"`
-	Files       []overlayFile `json:"files"`
-}
-
-type lintInput struct {
-	Context overlayContext `json:"context"`
-}
-
-type runTurnInput struct {
-	Context        overlayContext `json:"context"`
-	Agent          string         `json:"agent"`
-	Prompt         string         `json:"prompt"`
-	ConversationID string         `json:"conversation_id"`
-}
-
-type runTurnOutput struct {
-	ConversationID string `json:"conversation_id"`
-	Thinking       string `json:"thinking"`
-	Answer         string `json:"answer"`
-}
-
 type reasonInput struct {
 	Reason  string          `json:"reason"`
 	Context json.RawMessage `json:"context,omitempty"`
-}
-
-type lintFinding struct {
-	Code     string `json:"code"`
-	Severity string `json:"severity"`
-	Path     string `json:"path"`
-	Message  string `json:"message"`
-}
-
-type overlayFile struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
 }
 
 type listSessionInput struct {
@@ -94,10 +60,6 @@ type listSessionSummary struct {
 type conversationIDInput struct {
 	ConversationID string          `json:"conversation_id"`
 	Context        json.RawMessage `json:"context,omitempty"`
-}
-
-type deleteSessionOutput struct {
-	Deleted int64 `json:"deleted"`
 }
 
 // Server is an HTTP MCP server.
@@ -139,54 +101,36 @@ func Start(ctx context.Context, logger *slog.Logger, listenAddr string, users ma
 	mcp.AddTool(mcpServer, &mcp.Tool{Name: listOverlayToolName, Description: "List configured git overlay spec strings in config order."}, func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, []string, error) {
 		return nil, overlaySpecs, nil
 	})
-	mcp.AddTool(mcpServer, &mcp.Tool{Name: readContextFromOverlayToolName, Description: "Return a context printout for one configured overlay spec."}, func(_ context.Context, _ *mcp.CallToolRequest, input readContextFromOverlayInput) (*mcp.CallToolResult, overlayContext, error) {
+	mcp.AddTool(mcpServer, &mcp.Tool{Name: readContextFromOverlayToolName, Description: "Return a context printout for one configured overlay spec."}, func(_ context.Context, _ *mcp.CallToolRequest, input readContextFromOverlayInput) (*mcp.CallToolResult, protocol.OverlayContext, error) {
 		got, err := readOverlayContext(input.Overlay)
 		if err != nil {
-			return nil, overlayContext{}, err
+			return nil, protocol.OverlayContext{}, err
 		}
 
-		out := overlayContext{BaseOverlay: got.BaseOverlay, Files: make([]overlayFile, len(got.Files))}
-		for i, file := range got.Files {
-			out.Files[i] = overlayFile{Path: file.Path, Content: file.Content}
-		}
+		got.Files = append([]protocol.OverlayFile{}, got.Files...)
 
-		return nil, out, nil
+		return nil, got, nil
 	})
-	mcp.AddTool(mcpServer, &mcp.Tool{Name: lintToolName, Description: "Lint the overlay represented by the given context."}, func(_ context.Context, _ *mcp.CallToolRequest, input lintInput) (*mcp.CallToolResult, []lintFinding, error) {
-		files := make([]protocol.OverlayFile, len(input.Context.Files))
-		for i, file := range input.Context.Files {
-			files[i] = protocol.OverlayFile{Path: file.Path, Content: file.Content}
-		}
-
-		result, err := lint(input.Context.BaseOverlay, files)
+	mcp.AddTool(mcpServer, &mcp.Tool{Name: lintToolName, Description: "Lint the overlay represented by the given context."}, func(_ context.Context, _ *mcp.CallToolRequest, input protocol.LintRequest) (*mcp.CallToolResult, []protocol.LintFinding, error) {
+		result, err := lint(input.Context.BaseOverlay, append([]protocol.OverlayFile{}, input.Context.Files...))
 		if err != nil {
 			return nil, nil, err
 		}
 
-		findings := make([]lintFinding, len(result.Findings))
-		for i, finding := range result.Findings {
-			findings[i] = lintFinding{Code: finding.Code, Severity: finding.Severity, Path: finding.Path, Message: finding.Message}
-		}
-
-		return nil, findings, nil
+		return nil, append([]protocol.LintFinding{}, result.Findings...), nil
 	})
-	mcp.AddTool(mcpServer, &mcp.Tool{Name: runTurnToolName, Description: "Run one chat turn against the overlay represented by the given context."}, func(ctx context.Context, _ *mcp.CallToolRequest, input runTurnInput) (*mcp.CallToolResult, runTurnOutput, error) {
+	mcp.AddTool(mcpServer, &mcp.Tool{Name: runTurnToolName, Description: "Run one chat turn against the overlay represented by the given context."}, func(ctx context.Context, _ *mcp.CallToolRequest, input protocol.TryTurnRequest) (*mcp.CallToolResult, protocol.TryTurnResult, error) {
 		conversationID := input.ConversationID
 		if conversationID == "" {
 			conversationID = "devmcp-" + rand.Text()
 		}
 
-		files := make([]protocol.OverlayFile, len(input.Context.Files))
-		for i, file := range input.Context.Files {
-			files[i] = protocol.OverlayFile{Path: file.Path, Content: file.Content}
-		}
-
-		thinking, answer, err := runTurn(ctx, input.Context.BaseOverlay, files, input.Agent, input.Prompt, conversationID)
+		thinking, answer, err := runTurn(ctx, input.Context.BaseOverlay, append([]protocol.OverlayFile{}, input.Context.Files...), input.Agent, input.Prompt, conversationID)
 		if err != nil {
-			return nil, runTurnOutput{}, err
+			return nil, protocol.TryTurnResult{}, err
 		}
 
-		return nil, runTurnOutput{ConversationID: conversationID, Thinking: thinking, Answer: answer}, nil
+		return nil, protocol.TryTurnResult{ConversationID: conversationID, Thinking: thinking, Answer: answer}, nil
 	})
 	mcp.AddTool(mcpServer, &mcp.Tool{Name: reloadToolName, Description: "Reload published overlay files the live daemon can hot-load.", InputSchema: reasonOnlyToolSchema}, reasonToolHandler("reload", reload))
 	mcp.AddTool(mcpServer, &mcp.Tool{Name: restartToolName, Description: "Restart for overlay-list or runtime-config changes. Not interchangeable with reload.", InputSchema: reasonOnlyToolSchema}, reasonToolHandler("restart", restart))
@@ -247,22 +191,22 @@ func Start(ctx context.Context, logger *slog.Logger, listenAddr string, users ma
 
 		return nil, out, nil
 	})
-	mcp.AddTool(mcpServer, &mcp.Tool{Name: deleteSessionToolName, Description: "Delete one durable conversation's stored turns only. Does not remove thread, goal, or routing rows. No confirmation. Missing or try-turn ids return deleted 0. Does not take overlay context.", InputSchema: conversationIDToolSchema}, func(ctx context.Context, _ *mcp.CallToolRequest, input conversationIDInput) (*mcp.CallToolResult, deleteSessionOutput, error) {
+	mcp.AddTool(mcpServer, &mcp.Tool{Name: deleteSessionToolName, Description: "Delete one durable conversation's stored turns only. Does not remove thread, goal, or routing rows. No confirmation. Missing or try-turn ids return deleted 0. Does not take overlay context.", InputSchema: conversationIDToolSchema}, func(ctx context.Context, _ *mcp.CallToolRequest, input conversationIDInput) (*mcp.CallToolResult, protocol.DeleteSessionResult, error) {
 		if len(input.Context) > 0 {
-			return nil, deleteSessionOutput{}, errors.New("delete session does not take overlay context")
+			return nil, protocol.DeleteSessionResult{}, errors.New("delete session does not take overlay context")
 		}
 
 		conversationID := strings.TrimSpace(input.ConversationID)
 		if conversationID == "" {
-			return nil, deleteSessionOutput{}, nil
+			return nil, protocol.DeleteSessionResult{}, nil
 		}
 
 		result, err := deleteSession(ctx, protocol.DeleteSessionRequest{ConversationID: conversationID})
 		if err != nil {
-			return nil, deleteSessionOutput{}, err
+			return nil, protocol.DeleteSessionResult{}, err
 		}
 
-		return nil, deleteSessionOutput{Deleted: result.Deleted}, nil
+		return nil, result, nil
 	})
 
 	httpHandler := mcp.NewStreamableHTTPHandler(
