@@ -631,6 +631,7 @@ func (t *transport) token(ctx context.Context, load tokenLoad, failed Token) (To
 		}
 
 		var reuse bool
+
 		switch load {
 		case tokenLoadAfterUnauthorized:
 			reuse = token.Access != "" && token.Access != failed.Access && token.AccountID == failed.AccountID

@@ -143,7 +143,7 @@ func runOAIList(args []string) error {
 		}
 		marker := map[string]string{"openai": " (default)"}[name]
 		credentials := map[bool]string{false: "missing", true: "present"}[present]
-		output.WriteString(fmt.Sprintf("%s%s\t%s\t%s\n", name, marker, providers[name].RocketCodeAuth, credentials))
+		fmt.Fprintf(&output, "%s%s\t%s\t%s\n", name, marker, providers[name].RocketCodeAuth, credentials)
 	}
 	return printStdout(output.String(), "oai list")
 }

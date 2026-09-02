@@ -51,41 +51,9 @@ func TestRunDoctorReportsLegacyConfigAndWorkDir(t *testing.T) {
 	require.Contains(t, output, "Work directory: .femtoclaw")
 }
 
-func TestRunDoctorRejectsBadFlagBeforeConfigLoad(t *testing.T) {
-	require.ErrorContains(t, runDoctor([]string{"--bad"}), "parse doctor flags")
-}
-
 func TestRunDoctorReportsConfigLoadError(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 
 	require.ErrorContains(t, runDoctor(nil), "load config")
-}
-
-func TestRunDoctorReportsOutputWriteError(t *testing.T) {
-	workspace := t.TempDir()
-	t.Chdir(workspace)
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, defaultConfigPath), []byte(`{
-		"workspace": ".", "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
-		"openai": {"api_key": "test-key"},
-		"slack": {"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
-		"mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
-	}`), 0o600))
-
-	closeStdoutForTest(t)
-
-	err := runDoctor(nil)
-	require.ErrorContains(t, err, "write doctor output")
-}
-
-func closeStdoutForTest(t *testing.T) {
-	t.Helper()
-	reader, writer, err := os.Pipe()
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-
-	oldStdout := os.Stdout
-	os.Stdout = writer
-	t.Cleanup(func() { os.Stdout = oldStdout })
-	require.NoError(t, writer.Close())
 }

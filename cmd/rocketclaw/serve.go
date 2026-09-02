@@ -42,9 +42,13 @@ func runServe(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	logger.Info("starting rocketclaw", "version", buildInfoMainVersion())
+	version := "(unknown)"
+	if info, ok := debug.ReadBuildInfo(); ok {
+		version = info.Main.Version
+	}
+	logger.Info("starting rocketclaw", "version", version)
 
-	if err := backend.Run(ctx, cfg, configPath, logger, assembleFrontends); err != nil {
+	if err := backend.Run(ctx, cfg, configPath, logger, processAssembler{}); err != nil {
 		if errors.Is(err, backend.ErrRestartRequested) {
 			logger.Info("rocketclaw restart requested; exiting with code 255 for supervisor restart")
 			return serveRunError(err)
@@ -70,13 +74,4 @@ func serveRunError(err error) error {
 	}
 
 	return fmt.Errorf("run rocketclaw: %w", err)
-}
-
-func buildInfoMainVersion() string {
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return "(unknown)"
-	}
-
-	return info.Main.Version
 }

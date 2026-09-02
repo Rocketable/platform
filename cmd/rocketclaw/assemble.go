@@ -11,7 +11,9 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-func assembleFrontends(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+type processAssembler struct{}
+
+func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
 	copyLoop := newClockwork(rt.Channels)
 	var stops []func(context.Context) error
 

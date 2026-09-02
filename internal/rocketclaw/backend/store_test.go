@@ -17,6 +17,8 @@ import (
 	"testing/synctest"
 	"time"
 
+	"cirello.io/pglock"
+
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	harness "github.com/Rocketable/platform/internal/rocketcode"
@@ -834,6 +836,32 @@ func TestNewSessionServiceReportsInvalidDatabaseURL(t *testing.T) {
 
 	_, err = NewSessionServiceIn(dsn, logger)
 	require.Error(t, err)
+}
+
+func TestHoldRunLockRejectsSecondHolder(t *testing.T) {
+	service := newTestSessionService(t)
+	client, err := newRunLockClient(service.db)
+	require.NoError(t, err)
+	lock, err := client.Acquire(runLockName, pglock.FailIfLocked())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, lock.Close()) })
+
+	err = holdRunLock(t.Context(), service.db, &lockedRun{})
+	require.ErrorIs(t, err, errRunLocked)
+}
+
+func TestHoldRunLockAllowsSessionServiceWhileHeld(t *testing.T) {
+	workspace := t.TempDir()
+	service := newTestSessionServiceAt(t, workspace)
+	client, err := newRunLockClient(service.db)
+	require.NoError(t, err)
+	lock, err := client.Acquire(runLockName, pglock.FailIfLocked())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, lock.Close()) })
+
+	second, err := NewSessionServiceIn(testStoreDSN(workspace), slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	require.NoError(t, second.Stop(t.Context()))
 }
 
 func TestSessionStoreMissingIsEmpty(t *testing.T) {

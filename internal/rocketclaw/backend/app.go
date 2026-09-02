@@ -31,11 +31,23 @@ const (
 	stateRetention = 30 * 24 * time.Hour
 )
 
+// FrontendAssembler constructs Slack and MCP frontends for a running backend.
+type FrontendAssembler interface {
+	Assemble(*Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error)
+}
+
+type lockedRun struct {
+	cancel     context.CancelFunc
+	cfg        *config.Config
+	configPath string
+	logger     *slog.Logger
+	assemble   FrontendAssembler
+	sessions   *SessionService
+}
+
 // Run starts rocketclaw and blocks until the context is canceled or a fatal error occurs.
-//
-//nolint:gocyclo // Runtime wiring is kept in one place so startup order remains explicit.
-func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, assemble func(*Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error)) error {
-	runCtx, cancel := context.WithCancel(context.Background())
+func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slog.Logger, assemble FrontendAssembler) error {
+	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	stopInstrumentation, err := configureInstrumentation(runCtx, cfg.Instrumentation)
@@ -51,22 +63,6 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 			logger.Warn("stop instrumentation", "error", err)
 		}
 	}()
-
-	connectorChannels := protocol.NewChannels()
-
-	var (
-		shutdownOnce     sync.Once
-		restartRequested = make(chan struct{})
-		threadBridges    *threadBridgeManager
-		cronjobs         *Manager
-		slackSink        SlackFrontend
-		stops            []namedStopper
-		startThreadRoot  func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error)
-	)
-
-	startThreadRoot = func(_ context.Context, req *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error) {
-		return protocol.StartNewThreadRootResult{}, fmt.Errorf("text root is not available for %s turns", req.Source)
-	}
 
 	stateLogger := logger.With("component", "state_store")
 
@@ -89,6 +85,34 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 			logger.Warn("stop rocketcode session service", "error", err)
 		}
 	}()
+
+	return holdRunLock(runCtx, rocketcodeSessions.db, &lockedRun{
+		cancel:     cancel,
+		cfg:        cfg,
+		configPath: configPath,
+		logger:     logger,
+		assemble:   assemble,
+		sessions:   rocketcodeSessions,
+	})
+}
+
+func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same runtime wiring as Run, held under pglock.Do.
+	cancel, cfg, configPath, logger, rocketcodeSessions := s.cancel, s.cfg, s.configPath, s.logger, s.sessions
+	connectorChannels := protocol.NewChannels()
+
+	var (
+		shutdownOnce     sync.Once
+		restartRequested = make(chan struct{})
+		threadBridges    *threadBridgeManager
+		cronjobs         *Manager
+		slackSink        SlackFrontend
+		stops            []namedStopper
+		startThreadRoot  func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error)
+	)
+
+	startThreadRoot = func(_ context.Context, req *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error) {
+		return protocol.StartNewThreadRootResult{}, fmt.Errorf("text root is not available for %s turns", req.Source)
+	}
 
 	if stats, err := rocketcodeSessions.PruneStateBefore(runCtx, time.Now().Add(-stateRetention)); err != nil {
 		logger.Warn("prune stale rocketclaw state", "error", err)
@@ -118,7 +142,10 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	}
 
 	var externalMCPUsers map[string]string
+
 	if cfg.MCPExternal.Enabled {
+		var err error
+
 		externalMCPUsers, err = config.LoadExternalMCPUsers(configPath)
 		if err != nil {
 			return fmt.Errorf("load external MCP auth users: %w", err)
@@ -314,9 +341,9 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 		startThreadRoot: &startThreadRoot, slackAsker: &slackUserQuestionAsker, drainSlack: &drainSlack,
 	}
 
-	slack, copyDone, extraStops, err := assemble(rt)
+	slack, copyDone, extraStops, err := s.assemble.Assemble(rt)
 	if err != nil {
-		return err
+		return fmt.Errorf("assemble frontends: %w", err)
 	}
 
 	for _, stop := range extraStops {
@@ -373,11 +400,8 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	}
 
 	go func() {
-		select {
-		case <-ctx.Done():
-			startShutdown("runtime context canceled", false)
-		case <-runCtx.Done():
-		}
+		<-runCtx.Done()
+		startShutdown("runtime context canceled", false)
 	}()
 
 	if copyDone != nil {

@@ -15,13 +15,21 @@ import (
 	"sync"
 	"time"
 
+	"cirello.io/pglock"
+
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	harness "github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 )
 
-const restartNotificationDeveloperMessage = "The rocketclaw server has been restarted."
+const (
+	restartNotificationDeveloperMessage = "The rocketclaw server has been restarted."
+	runLockName                         = "rocketclaw-run"
+	runLockTable                        = "rocketclaw_locks"
+)
+
+var errRunLocked = errors.New("rocketclaw is already running against this database")
 
 // GoalStatusActive and related constants are persisted goal-loop statuses.
 const (
@@ -1729,6 +1737,48 @@ func deleteSessionEntries(ctx context.Context, db stateStoreDB, conversationIDs 
 	}
 
 	return deleted, nil
+}
+
+type runLockWork interface {
+	Run(context.Context) error
+}
+
+func newRunLockClient(db *sql.DB) (*pglock.Client, error) {
+	client, err := pglock.UnsafeNew(
+		db,
+		pglock.WithCustomTable(runLockTable),
+		pglock.WithLeaseDuration(pglock.DefaultLeaseDuration),
+		pglock.WithHeartbeatFrequency(pglock.DefaultHeartbeatFrequency),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("acquire rocketclaw run lock: %w", err)
+	}
+
+	if err := client.TryCreateTable(); err != nil {
+		return nil, fmt.Errorf("acquire rocketclaw run lock: %w", err)
+	}
+
+	return client, nil
+}
+
+func holdRunLock(ctx context.Context, db *sql.DB, work runLockWork) error {
+	client, err := newRunLockClient(db)
+	if err != nil {
+		return err
+	}
+
+	err = client.Do(ctx, runLockName, func(lockCtx context.Context, _ *pglock.Lock) error {
+		return work.Run(lockCtx)
+	}, pglock.FailIfLocked())
+	if errors.Is(err, pglock.ErrNotAcquired) {
+		return errRunLocked
+	}
+
+	if err != nil {
+		return fmt.Errorf("%w", err)
+	}
+
+	return nil
 }
 
 func openSessionDB(ctx context.Context, databaseURL string, logger *slog.Logger) (*sql.DB, error) {
