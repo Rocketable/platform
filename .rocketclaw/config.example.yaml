@@ -72,7 +72,13 @@
 # elevation.
 
 # plan_model: fable              # model alias for the plan-authoring step (no default)
+# plan_harness: opencode2        # optional harness for that step (opencode2 only; not opencode)
 # brainstorm_model: fable        # model alias for approach generation (no default)
+# brainstorm_harness: opencode2  # optional harness for that step (opencode2 only; not opencode)
+#
+# `opencode2` is a distinct harness from `opencode`. It is not backward compatible.
+# When plan_harness or brainstorm_harness is `opencode2`, the matching model key is
+# `provider/modelname#variant` as documented by `opencode2 run --help`.
 
 # --- PR concept teaching (ce-commit-push-pr) ---
 # When a PR introduces a concept new to the codebase, the generated PR
@@ -126,7 +132,7 @@
 # the peer cannot honor skips the pass with a stated reason -- never substituted.
 
 # cross_model_review_mode: off   # auto | off (default: auto)
-# cross_model_peer: codex          # codex | claude | grok | cursor | composer
+# cross_model_peer: codex          # codex | claude | grok | cursor | composer | opencode | opencode2
 # cross_model_model: fable         # model alias or full id for the resolved peer target (no default)
 # cross_model_effort: xhigh        # reasoning effort for the resolved peer target (no default)
 
@@ -137,11 +143,14 @@
 # `prefer` tries candidates in order, then falls back natively with disclosure.
 # `require` keeps the requested external identity fixed while viable, then also
 # falls back natively with disclosure if the route is unavailable. Harnesses:
-# codex | claude | grok | cursor. Omit model to use that harness's configured
+# codex | claude | grok | cursor | opencode | opencode2. Omit model to use that harness's configured
 # default. Composer is a model
 # family through Cursor: { harness: cursor, model: composer }. Do not put CLI flags
 # or commands here. A candidate equivalent to the current host/default is skipped;
 # a different explicit model in the same harness remains eligible.
+# `opencode2` is not `opencode`: it uses the `opencode2` binary and `opencode2 run`
+# flags (`--standalone`, `--auto`, `--model provider/model#variant`; no `--dir`
+# or `--variant`).
 
 # work_engine_mode: prefer        # off | prefer | require (default: off)
 # work_engine_preferences:
@@ -150,6 +159,8 @@
 #   - harness: codex
 #     model: "gpt-5.6"
 #   - harness: claude             # configured default model
+#   - harness: opencode2
+#     model: "openai/gpt-5#high"
 
 # --- ce-promote ---
 # Written automatically when you decline the Spiral setup offer in /ce-promote.
