@@ -1,0 +1,13 @@
+{
+  "name": "opencode-goal",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./tui": "./tui.tsx",
+    "./rpc": "./rpc.ts"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "beta"
+  }
+}
