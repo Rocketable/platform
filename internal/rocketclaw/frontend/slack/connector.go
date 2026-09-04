@@ -1093,14 +1093,7 @@ func (c *Connector) consumeBroadcasts(ctx context.Context) {
 				return
 			}
 
-			if broadcast.Interaction != nil || broadcast.Relay != nil || broadcast.RelayCleanup != nil {
-				c.HandleBroadcast(ctx, &broadcast)
-				continue
-			}
-
-			if broadcast.Delivery != nil && broadcast.Message != nil && broadcast.Message.Complete {
-				broadcast.Delivery.MarkDelivered(nil)
-			}
+			c.HandleBroadcast(ctx, &broadcast)
 		}
 	}
 }

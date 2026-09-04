@@ -10464,6 +10464,37 @@ func TestHandleBroadcastSendResponseSuccess(t *testing.T) {
 	require.NoError(t, message.WaitDelivered(t.Context()))
 }
 
+func TestConsumeBroadcastsPostsCompleteSlackReply(t *testing.T) {
+	posted := make(chan string, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posted <- r.URL.Path
+		writeJSON(t, w, map[string]any{"ok": true, "channel": "C123", "ts": "1.2"})
+	}))
+	t.Cleanup(server.Close)
+
+	broadcasts := make(chan protocol.Broadcast, 1)
+	connector := newTestConnector(server.URL)
+	connector.broadcasts = broadcasts
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	go connector.consumeBroadcasts(ctx)
+
+	message := protocol.NewOutboundMessage(protocol.SourceSlack, "slack-thread:C123:1.1", "hello", protocol.OutputTargetSlack)
+	message.Complete = true
+	message.TurnID = "turn-1"
+	message.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "1.1", ThreadTS: "1.1"}
+	broadcasts <- protocol.Broadcast{Message: message, Delivery: message}
+	require.NoError(t, message.WaitDelivered(t.Context()))
+
+	select {
+	case op := <-posted:
+		assert.NotEmpty(t, op)
+	default:
+		t.Fatal("complete Slack broadcast was acknowledged without posting")
+	}
+}
+
 func newTestConnectorWithOptions(apiURL string, bus *testBus, channels []config.SlackChannelConfig, router *threadRouterStub, runner oneOffCronjobRunner) *Connector {
 	logger := testLogger()
 	testConfig := new(config.Config)
