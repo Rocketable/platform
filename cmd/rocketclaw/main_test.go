@@ -25,13 +25,9 @@ func TestRunWithoutDefaultConfigShowsHelp(t *testing.T) {
 		return run(nil)
 	})
 	assert.Contains(t, output, "Usage:")
-	assert.Contains(t, output, "rocketclaw setup\n")
-	assert.Contains(t, output, "rocketclaw setup files list\n")
-	assert.Contains(t, output, "rocketclaw setup files get <path>\n")
 	assert.Contains(t, output, "rocketclaw oai login [provider] [--headless]")
 	assert.Contains(t, output, "rocketclaw oai list")
 	assert.Contains(t, output, "rocketclaw oai logout [provider]")
-	assert.NotContains(t, output, "rocketclaw setup [flags]")
 }
 
 func TestMainWithoutDefaultConfigShowsHelp(t *testing.T) {
@@ -151,7 +147,6 @@ func TestRunDispatchesSubcommandErrorsBeforeDefaultConfig(t *testing.T) {
 		want string
 	}{
 		{name: "serve", args: []string{"run", "--bad-flag"}, want: "parse serve flags"},
-		{name: "doctor", args: []string{"doctor", "--bad"}, want: "parse doctor flags"},
 		{name: "oai", args: []string{"oai", "bogus"}, want: `unknown oai command "bogus"`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -181,11 +176,6 @@ func TestPrintStdoutReportsWriteError(t *testing.T) {
 
 	err = printStdout("hello", "greeting")
 	require.ErrorContains(t, err, "print greeting")
-}
-
-func TestRunDispatchesSetupHelp(t *testing.T) {
-	output := captureStdout(t, func() error { return run([]string{"setup", "files", "list"}) })
-	assert.Contains(t, output, "main-update-cortex.sh")
 }
 
 func captureStdout(t *testing.T, fn func() error) string {

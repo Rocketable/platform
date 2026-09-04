@@ -33,8 +33,12 @@ type InboundKind string
 const (
 	// InboundKindPrompt is a normal conversational prompt.
 	InboundKindPrompt InboundKind = "prompt"
-	// InboundKindInternalize is a note the session should absorb without replying.
-	InboundKindInternalize InboundKind = "internalize"
+	// InboundKindSteer joins an open human turn or runs next after input closes.
+	InboundKindSteer InboundKind = "steer"
+	// InboundKindEnqueue waits for its own turn.
+	InboundKindEnqueue InboundKind = "enqueue"
+	// InboundKindCancel interrupts the active conversation owner.
+	InboundKindCancel InboundKind = "cancel"
 )
 
 // Source identifies where an inbound or outbound message originated.
@@ -43,6 +47,7 @@ type Source string
 // Known inbound and outbound message source labels.
 const (
 	SourceSlack       Source = "slack"
+	SourceWeb         Source = "web"
 	SourceExternalMCP Source = "external_mcp"
 	SourceSystem      Source = "system"
 )
@@ -53,14 +58,6 @@ type InboundResponse struct {
 	Attachments []OutboundAttachment
 	Err         error
 }
-
-// OutputTarget identifies which connector should receive an outbound message.
-type OutputTarget string
-
-const (
-	// OutputTargetSlack delivers a response to its explicit Slack thread.
-	OutputTargetSlack OutputTarget = "slack"
-)
 
 // InboundAttachment carries an inline attachment into a conversation prompt.
 type InboundAttachment struct {
@@ -98,10 +95,7 @@ type ExternalMCPRelay struct {
 // InboundMessage is a message headed into its conversation prompt queue.
 type InboundMessage struct {
 	Source                                                  Source
-	Bridge                                                  BridgeID
 	Label, Text                                             string
-	VerbatimMessage                                         string
-	VerbatimAttachments                                     []OutboundAttachment
 	Attachments                                             []InboundAttachment
 	SlackReply                                              *SlackReplyTarget
 	HadAttachments, HadNonImageAttachments, Human, GoalTurn bool
@@ -110,7 +104,9 @@ type InboundMessage struct {
 	ConversationID                                          string
 	Metadata                                                map[string]string
 	Workflow                                                *WorkflowInvocation
-	Response                                                chan Response
+	SyncDestination                                         string
+	RequireOutputDecision                                   bool
+	Cronjob                                                 *CronjobMessage
 
 	responseInit, responseOnce sync.Once
 	responseCh                 chan InboundResponse
@@ -131,7 +127,6 @@ type AskUserQuestionOption struct{ Label, Value, Description string }
 // AskUserQuestionRequest asks the originating text connector human for input.
 type AskUserQuestionRequest struct {
 	Source                Source
-	Bridge                BridgeID
 	ID, Question, Details string
 	ConversationID        string
 	Options               []AskUserQuestionOption
@@ -175,12 +170,10 @@ func (a UserQuestionAsker) AskUserQuestion(ctx context.Context, req *AskUserQues
 
 // StartNewThreadRequest asks RocketClaw to create a new managed conversation from the current turn.
 type StartNewThreadRequest struct {
-	Source                                                   Source
-	Bridge                                                   BridgeID
-	SourceConversationID, CurrentAgent, Agent, Title, Prompt string
-	AllowedAgents                                            []string
-	SlackReply                                               *SlackReplyTarget
-	Response                                                 chan Response
+	Source                             Source
+	CurrentAgent, Agent, Title, Prompt string
+	AllowedAgents                      []string
+	SlackReply                         *SlackReplyTarget
 }
 
 // StartNewThreadResult reports the created conversation and openable surface.
@@ -198,16 +191,11 @@ type StartNewThreadRootResult struct {
 // OutboundMessage is a text message headed to enabled connectors.
 type OutboundMessage struct {
 	Text, ProgressText                 string
-	Source                             Source
-	Bridge                             BridgeID
-	Targets                            []OutputTarget
 	ConversationID, TurnID             string
-	SessionEntryID                     int64
 	ExternalConversationID             string
 	Agent                              string
 	Cronjob                            *CronjobMessage
-	Sequence                           int
-	PostProgressText, Complete         bool
+	Complete                           bool
 	SlackReply                         *SlackReplyTarget
 	Attachments                        []OutboundAttachment
 	GoalTurn, GoalComplete, GoalActive bool
@@ -215,7 +203,6 @@ type OutboundMessage struct {
 	WorkflowAgent                      *AgentUpdate
 	WorkflowPhase                      *PhaseUpdate
 	WorkflowTerminal                   Terminal
-	Response                           chan Response
 
 	deliveryInit, deliveredOnce sync.Once
 	delivered                   chan struct{}
@@ -293,16 +280,6 @@ func IsTextAttachment(name, mimeType string) bool {
 // EnableResponseWait returns a channel that receives the final result for this inbound turn.
 func (m *InboundMessage) EnableResponseWait() <-chan InboundResponse { return m.responseChannel() }
 
-// CompleteResponse marks this inbound turn result ready.
-func (m *InboundMessage) CompleteResponse(text string, err error) {
-	ch := m.responseChannel()
-	m.responseOnce.Do(func() {
-		ch <- InboundResponse{Text: text, Err: err}
-
-		close(ch)
-	})
-}
-
 // CompleteResponseWithAttachments marks this inbound turn result ready with response attachments.
 func (m *InboundMessage) CompleteResponseWithAttachments(text string, attachments []OutboundAttachment, err error) {
 	ch := m.responseChannel()
@@ -314,8 +291,8 @@ func (m *InboundMessage) CompleteResponseWithAttachments(text string, attachment
 }
 
 // NewOutboundMessage constructs an outbound message for one explicit conversation.
-func NewOutboundMessage(source Source, conversationID, text string, targets ...OutputTarget) *OutboundMessage {
-	return &OutboundMessage{Text: text, Source: source, Targets: append([]OutputTarget(nil), targets...), ConversationID: strings.TrimSpace(conversationID)}
+func NewOutboundMessage(conversationID, text string) *OutboundMessage {
+	return &OutboundMessage{Text: text, ConversationID: strings.TrimSpace(conversationID)}
 }
 
 // CloneOutboundAttachments returns a deep copy of attachments.

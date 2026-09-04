@@ -89,8 +89,8 @@ func TestPermissionReviewUsesConfiguredAutoApproverModel(t *testing.T) {
 	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, make(chan ChatResponse, 10))
 
 	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
-	require.Len(t, mock.calls, 1)
-	require.Equal(t, "gpt-5.4-mini", mock.calls[0].Model)
+	require.Len(t, newParams(mock), 1)
+	require.Equal(t, "gpt-5.4-mini", newParams(mock)[0].Model)
 }
 
 func TestPermissionReviewResolvesEmbeddedAutoApproverIndependently(t *testing.T) {

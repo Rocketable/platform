@@ -26,11 +26,15 @@ type ScheduledMessageState struct {
 	Interval       time.Duration `json:"interval,omitempty"`
 }
 
-// ThreadQueueItem is one persisted Enqueued Slack Message.
+// ThreadQueueItem is one persisted waiting message. A zero Kind means enqueue.
 type ThreadQueueItem struct {
+	Kind           InboundKind
 	ID             string
 	ConversationID string
 	Message        string
+	Content        InboundContent
+	Source         Source
+	SlackReply     *SlackReplyTarget
 	Principal      string
 	StashAt        time.Time
 	Position       int

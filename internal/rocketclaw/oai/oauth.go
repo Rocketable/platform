@@ -474,10 +474,6 @@ func (e *codexStreamError) Error() string {
 }
 
 func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if t.base == nil {
-		t.base = http.DefaultTransport
-	}
-
 	token, err := t.token(req.Context(), tokenLoadFresh, Token{})
 	if err != nil {
 		return nil, err

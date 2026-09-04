@@ -30,7 +30,7 @@ func useTestSecrets(t *testing.T, secrets testSecrets) {
 	t.Cleanup(func() { secretFetcher = previous })
 }
 
-func TestDoctorAndServeResolveTheSameSecret(t *testing.T) {
+func TestRuntimeAndServeResolveTheSameSecret(t *testing.T) {
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(`{
@@ -40,12 +40,12 @@ func TestDoctorAndServeResolveTheSameSecret(t *testing.T) {
 	}`), 0o600))
 	useTestSecrets(t, testSecrets{testSecretsARN: `{"slack":{"bot_token":"xoxb-secret"}}`})
 
-	_, doctorCfg, err := loadRuntimeConfig(testSecretsARN)
+	_, runtimeCfg, err := loadRuntimeConfig(testSecretsARN)
 	require.NoError(t, err)
 	serveCfg, err := config.Load(defaultConfigPath, testSecretsARN, secretFetcher)
 	require.NoError(t, err)
-	assert.Equal(t, doctorCfg.Slack.BotToken, serveCfg.Slack.BotToken)
-	assert.Equal(t, "xoxb-secret", doctorCfg.Slack.BotToken)
+	assert.Equal(t, runtimeCfg.Slack.BotToken, serveCfg.Slack.BotToken)
+	assert.Equal(t, "xoxb-secret", runtimeCfg.Slack.BotToken)
 }
 
 func TestCommandsAcceptSecretsARNFlag(t *testing.T) {
@@ -80,14 +80,6 @@ func TestCommandsAcceptSecretsARNFlag(t *testing.T) {
 			require.NoError(t, runOAILogin([]string{"--aws-secrets-manager-arn", testSecretsARN, "work", "--headless"}))
 		})
 	})
-	t.Run("exec", func(t *testing.T) {
-		workspace := t.TempDir()
-		t.Chdir(workspace)
-		writeLintConfig(t, workspace)
-		writeLintAgent(t, filepath.Join(workspace, config.DefaultRuntimeDir), "main.md", "---\n---\nMain agent.\n")
-		err := runExecIn(t.Context(), []string{"--aws-secrets-manager-arn", testSecretsARN, "missing", "do it"}, os.Stdout, execRunnerNotCalled(t))
-		require.ErrorContains(t, err, `unknown agent "missing"`)
-	})
 }
 
 func TestOAILoginWriteKeepsAWSObject(t *testing.T) {
@@ -117,27 +109,6 @@ func TestOAILoginWriteKeepsAWSObject(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(data), `"aws"`)
 	assert.NotContains(t, string(data), "LEAKED-SECRET-VALUE")
-}
-
-func TestDoctorOutputOmitsResolvedSecret(t *testing.T) {
-	workspace := t.TempDir()
-	t.Chdir(workspace)
-	require.NoError(t, os.WriteFile(defaultConfigPath, []byte(`{
-		"workspace": ".", "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
-		"openai": {"api_key": "test-key"},
-		"slack": {
-		  "bot_token": {"aws":{"arn":"`+testSecretsARN+`","key":"token"}},
-		  "app_token": "xapp-test",
-		  "channels": [{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]
-		}
-	}`), 0o600))
-	useTestSecrets(t, testSecrets{testSecretsARN: `{"token":"LEAKED-SECRET-VALUE"}`})
-
-	output := captureStdout(t, func() error {
-		return runDoctor([]string{"--aws-secrets-manager-arn", testSecretsARN})
-	})
-	assert.NotContains(t, output, "LEAKED-SECRET-VALUE")
-	assert.Contains(t, output, "Configuration: OK")
 }
 
 func TestServeErrorOmitsResolvedSecret(t *testing.T) {

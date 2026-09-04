@@ -74,7 +74,7 @@
 
 ### Task 6: Assets And Reload
 
-**Files:** modify `skel/skel.go`, `skel/setupfiles.go`, `skel_test.go`, `app/app.go`, and tests.
+**Files:** modify `skel/skel.go`, `skel_test.go`, `app/app.go`, and tests.
 
 **Produces:** effective workflow assets and atomic startup/reload validation.
 

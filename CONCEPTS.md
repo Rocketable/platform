@@ -50,29 +50,9 @@ Historical name for a mid-turn Slack message held until the active turn complete
 
 Replaced by Slack Steer and Enqueued Slack Message.
 
-### Slack Side Ask
-
-A private, modal-only one-question ask of a channel agent, opened from the RocketClaw Actions message menu on a completed 💬 answer card in a Managed Slack Thread.
-
-A Slack Side Ask uses thread history up to the clicked card, never posts to the thread, and does not take the thread's active-turn slot. Dismissing the modal aborts only that Side Ask.
-
 ### Slack Message Menu
 
-A single Slack `...` menu shortcut, RocketClaw Actions, that opens a modal whose buttons match the live controls for that message (the same work as emoji reactions, plus opening Side Ask). Unauthorized clicks are silent. A message outside a RocketClaw conversation, or a managed-thread message with no live control, gets a short close-only explanation.
-
-## Quickbench
-
-### BAR (Benchmark Archive)
-
-A portable benchmark unit for quickbench. On disk it is a `.bar` file (txtar) or an equivalent unpacked directory. A BAR holds a single `bench.yaml` (metadata + ELO model/criteria), the full RocketCode agent tree, root conversation turns, static host-tool mocks, bash doubles, and optional per-agent variation overlays so multi-agent runs can be reconstructed and ranked. Subagent `task` calls re-execute live against the BAR agents rather than frozen child traces.
-
-### ELO Scorer
-
-The only v1 scoring definition inside a BAR: a crisp criteria prompt plus a judge model and variant. Pairwise comparisons of subject-model outputs produce an ELO ranking; better/worse is defined only by that criteria prompt.
-
-### Quickbench
-
-The single CLI/product surface that packs, unpacks, dumps, runs, and ELO-ranks BARs, and pairs with a RocketClaw skill/subagent that captures Slack sessions into BARs.
+A single Slack `...` menu shortcut, RocketClaw Actions, that opens a modal whose buttons match the live controls for that message (the same work as emoji reactions). Unauthorized clicks are silent. A message outside a RocketClaw conversation, or a managed-thread message with no live control, gets a short close-only explanation.
 
 ## Prompt Provenance
 
@@ -82,27 +62,11 @@ The human actor a connector attributes to a human-originated prompt.
 
 Each connector chooses the string. The backend prints it in the model header. Principal is model-visible only. Authorization uses connector identity, not this string.
 
-## Development MCP
-
-### Development MCP
-
-A separate inbound MCP frontend for a coding agent to try overlay deltas against the live RocketClaw without writing those files onto the server.
-
-It is off until enabled, uses its own credential, and is not External MCP. After the operator publishes through git, reload or restart picks up the published tree.
-
-The same door also lists, observes, and deletes durable stored conversations (Slack, exec, External MCP). That inspect/delete path is a second job of Development MCP, not External MCP, and does not include in-memory try-turn chats.
-
-### Request-Carried Context
-
-The overlay snapshot a Development MCP lint or run_turn call sends: an optional named base overlay plus file deltas for this call only.
-
-The server does not remember it after the call returns. Conversation ID carries chat history only. A follow-up turn must send context again.
+## Runtime Assets
 
 ### Overlay Clone
 
 The live checkout of one configured git overlay that reload last installed.
-
-Try paths read or copy this tree. They do not fetch git and must not write it.
 
 ### Reload
 
@@ -162,11 +126,11 @@ A RocketCode Turn is not the active-turn slot on a Managed Slack Thread. Slack o
 
 ### Backend
 
-The one RocketClaw engine: conversation execution, later-work, cron, skills, agent definitions, overlay clones, try-turn, Reload, and Restart.
+The one RocketClaw engine: conversation execution, later-work, cron, skills, agent definitions, overlay clones, Reload, and Restart.
 
 ### Frontend
 
-A surface the process assembler constructs: Slack, External MCP, or Development MCP. Frontends never import the backend.
+A surface the process assembler constructs: Slack or External MCP. Frontends never import the backend.
 
 ### Protocol
 
@@ -187,10 +151,9 @@ The State Store is PostgreSQL.
 - A Root Slack Mention in an unmapped joined channel is an Adhoc Callout when an `@` Channel Entry exists.
 - A Slack Steer belongs to one active Managed Slack Thread and is injected into that turn after the current parallel tool batch completes.
 - An Enqueued Slack Message belongs to one Managed Slack Thread's Thread Queue until it is popped, removed, or consumed by an explicit failure path.
-- A Slack Side Ask is opened from a completed 💬 answer card in a Managed Slack Thread and does not become that thread's turn.
 - A BAR is authored, packed, run, and ranked by Quickbench; an ELO Scorer belongs to one BAR.
 - A Managed Slack Thread, Thread Queue, and External MCP binding persist in the State Store.
-- Development MCP lint and run_turn consume Request-Carried Context and read Overlay Clones; Reload replaces those clones.
+- Reload replaces Overlay Clones.
 - Frontends and the backend import Protocol. Frontends do not import the backend.
 - The process assembler constructs the backend and the frontends.
 - A turn uses the Autocompaction Threshold of the Provider that serves its model.

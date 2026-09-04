@@ -94,11 +94,11 @@ func TestTaskTool(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
-		require.Len(t, mock.calls, 1)
-		require.NotNil(t, mock.calls[0].Text.Format.OfJSONSchema)
-		require.Equal(t, "agent_output", mock.calls[0].Text.Format.OfJSONSchema.Name)
-		require.True(t, mock.calls[0].Text.Format.OfJSONSchema.Strict.Value)
-		require.Equal(t, false, mock.calls[0].Text.Format.OfJSONSchema.Schema["additionalProperties"])
+		require.Len(t, newParams(mock), 1)
+		require.NotNil(t, newParams(mock)[0].Text.Format.OfJSONSchema)
+		require.Equal(t, "agent_output", newParams(mock)[0].Text.Format.OfJSONSchema.Name)
+		require.True(t, newParams(mock)[0].Text.Format.OfJSONSchema.Strict.Value)
+		require.Equal(t, false, newParams(mock)[0].Text.Format.OfJSONSchema.Schema["additionalProperties"])
 	})
 
 	t.Run("returns last final child text wrapped in task result", func(t *testing.T) {
@@ -111,10 +111,10 @@ func TestTaskTool(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
-		require.Len(t, mock.calls, 1)
-		require.Equal(t, "review carefully", mock.calls[0].Instructions.Value)
-		require.Equal(t, responses.ResponseTextConfigVerbosityLow, mock.calls[0].Text.Verbosity)
-		require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), "check this")
+		require.Len(t, newParams(mock), 1)
+		require.Equal(t, "review carefully", newParams(mock)[0].Instructions.Value)
+		require.Equal(t, responses.ResponseTextConfigVerbosityLow, newParams(mock)[0].Text.Verbosity)
+		require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), "check this")
 	})
 
 	t.Run("returns empty task result when child has no final text", func(t *testing.T) {
@@ -172,7 +172,7 @@ func TestTaskTool(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
-		require.Equal(t, "base prompt\n\nreview !`printf carefully`", mock.calls[0].Instructions.Value)
+		require.Equal(t, "base prompt\n\nreview !`printf carefully`", newParams(mock)[0].Instructions.Value)
 		require.Equal(t, "review !`printf carefully`", factory.agents.Items["review"].Prompt)
 	})
 
@@ -199,7 +199,7 @@ func TestTaskTool(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
-		require.Equal(t, "base prompt\n\nreview carefully", mock.calls[0].Instructions.Value)
+		require.Equal(t, "base prompt\n\nreview carefully", newParams(mock)[0].Instructions.Value)
 		require.Equal(t, "review !`cat MEMORY.md`", factory.agents.Items["review"].Prompt)
 	})
 
@@ -215,7 +215,7 @@ func TestTaskTool(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
-		require.Equal(t, "base prompt\n\nreview !`printf carefully`", mock.calls[0].Instructions.Value)
+		require.Equal(t, "base prompt\n\nreview !`printf carefully`", newParams(mock)[0].Instructions.Value)
 	})
 
 	t.Run("parent context cancellation stops child", func(t *testing.T) {
@@ -305,17 +305,17 @@ func TestTaskTool(t *testing.T) {
 			subagentDiagnosticResponse(testReviewSubagentDiagnostic("assistant message", 1, 1, "second")),
 			subagentDiagnosticResponse(testReviewSubagentDiagnostic("delegation", 1, 1, "finished")),
 		}, drainBufferedResponses(output))
-		require.Len(t, mock.calls, 3)
-		require.Equal(t, "guard carefully", mock.calls[0].Instructions.Value)
-		require.NotNil(t, mock.calls[0].Text.Format.OfJSONSchema)
-		require.Equal(t, "guardrail_decision", mock.calls[0].Text.Format.OfJSONSchema.Name)
-		require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), "Current Action: delegation")
-		require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), "The agent main wants to delegate to review:")
-		require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), "check this")
-		require.Equal(t, "guard carefully", mock.calls[2].Instructions.Value)
-		require.Contains(t, marshalJSON(t, mock.calls[2].Input.OfInputItemList), "Current Action: response")
-		require.Contains(t, marshalJSON(t, mock.calls[2].Input.OfInputItemList), "And the response from review to main:")
-		require.Contains(t, marshalJSON(t, mock.calls[2].Input.OfInputItemList), "second")
+		require.Len(t, newParams(mock), 3)
+		require.Equal(t, "guard carefully", newParams(mock)[0].Instructions.Value)
+		require.NotNil(t, newParams(mock)[0].Text.Format.OfJSONSchema)
+		require.Equal(t, "guardrail_decision", newParams(mock)[0].Text.Format.OfJSONSchema.Name)
+		require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), "Current Action: delegation")
+		require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), "The agent main wants to delegate to review:")
+		require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), "check this")
+		require.Equal(t, "guard carefully", newParams(mock)[2].Instructions.Value)
+		require.Contains(t, marshalJSON(t, newParams(mock)[2].Input.OfInputItemList), "Current Action: response")
+		require.Contains(t, marshalJSON(t, newParams(mock)[2].Input.OfInputItemList), "And the response from review to main:")
+		require.Contains(t, marshalJSON(t, newParams(mock)[2].Input.OfInputItemList), "second")
 	})
 
 	t.Run("guardrail rejection skips child", func(t *testing.T) {
@@ -329,7 +329,7 @@ func TestTaskTool(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\ndelegation blocked: too risky\n</task_result>", got)
-		require.Len(t, mock.calls, 1)
+		require.Len(t, newParams(mock), 1)
 	})
 
 	t.Run("guardrail response rejection bubbles reason", func(t *testing.T) {
@@ -376,7 +376,7 @@ func TestTaskTool(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, "<task_result>\ndelegation blocked: inter-agent guardrail returned invalid JSON\n</task_result>", got)
-		require.Len(t, mock.calls, 1)
+		require.Len(t, newParams(mock), 1)
 	})
 
 	t.Run("guardrail tools follow its permissions", func(t *testing.T) {
@@ -395,9 +395,9 @@ func TestTaskTool(t *testing.T) {
 		_, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
 
 		require.NoError(t, err)
-		require.Len(t, mock.calls, 1)
-		require.Contains(t, marshalJSON(t, mock.calls[0].Tools), `"name":"execute"`)
-		require.NotContains(t, marshalJSON(t, mock.calls[0].Tools), `"name":"read"`)
+		require.Len(t, newParams(mock), 1)
+		require.Contains(t, marshalJSON(t, newParams(mock)[0].Tools), `"name":"execute"`)
+		require.NotContains(t, marshalJSON(t, newParams(mock)[0].Tools), `"name":"read"`)
 	})
 }
 
@@ -630,8 +630,8 @@ func TestLooperRunsTaskToolCall(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("parent done")}, collectResponses(output))
-	require.Len(t, mock.calls, 3)
-	encoded := marshalJSON(t, mock.calls[2].Input.OfInputItemList)
+	require.Len(t, newParams(mock), 3)
+	encoded := marshalJSON(t, newParams(mock)[2].Input.OfInputItemList)
 	require.Contains(t, encoded, "child answer")
 	require.Contains(t, encoded, `\u003ctask_result\u003e`)
 }
@@ -662,9 +662,9 @@ func TestLooperTaskMaxRecursion(t *testing.T) {
 		err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
 
 		require.NoError(t, err)
-		require.Len(t, mock.calls, 5)
+		require.Len(t, newParams(mock), 5)
 		require.Equal(t, []ChatResponse{assistantMessage("parent done")}, collectResponses(output))
-		require.Contains(t, marshalJSON(t, mock.calls[3].Input.OfInputItemList), "grandchild done")
+		require.Contains(t, marshalJSON(t, newParams(mock)[3].Input.OfInputItemList), "grandchild done")
 	})
 
 	t.Run("one level blocks grandchild delegation", func(t *testing.T) {
@@ -697,8 +697,8 @@ func TestLooperTaskMaxRecursion(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, []ChatResponse{assistantMessage("parent done")}, collectResponses(output))
-		require.Len(t, mock.calls, 4)
-		require.Contains(t, marshalJSON(t, mock.calls[2].Input.OfInputItemList), "tool not found")
+		require.Len(t, newParams(mock), 4)
+		require.Contains(t, marshalJSON(t, newParams(mock)[2].Input.OfInputItemList), "tool not found")
 	})
 
 	t.Run("siblings each receive remaining depth", func(t *testing.T) {
@@ -731,7 +731,7 @@ func TestLooperTaskMaxRecursion(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, []ChatResponse{assistantMessage("parent done")}, collectResponses(output))
-		require.Len(t, mock.calls, 4)
+		require.Len(t, newParams(mock), 4)
 	})
 }
 

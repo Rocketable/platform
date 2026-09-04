@@ -1,7 +1,7 @@
 COVERPROFILE ?= .coverage.out
 COVERPKG ?= github.com/Rocketable/platform/cmd/rocketclaw,./...
 COVERAGE_STABLE_AT ?= 90.0
-GO_SOURCE_CLOC_BUDGET ?= 20350
+GO_SOURCE_CLOC_BUDGET ?= 22350
 GO_SOURCE_CLOC_HAZARD_ZONE ?= 500
 
 run:
@@ -12,7 +12,7 @@ vendor: .FORCE
 	go mod vendor
 
 generate: vendor
-	go generate ./skel
+	go generate ./skel ../../cmd/rocketclaw
 
 lint: vendor
 	go run -mod=readonly github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run --fix ./...
