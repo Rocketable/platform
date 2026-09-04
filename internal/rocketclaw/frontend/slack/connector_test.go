@@ -500,7 +500,7 @@ func TestNewConnectorUsesInjectedRuntimeDependencies(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
 
-	c := New(&config.SlackConfig{BotToken: "xoxb-test", AppToken: "xapp-test"}, bus, inertThreadRouter{}, inertOneOffCronjobs{}, inertSideAskHost{}, testLogger())
+	c := New(&config.SlackConfig{BotToken: "xoxb-test", AppToken: "xapp-test"}, bus, inertThreadRouter{}, inertOneOffCronjobs{}, testLogger())
 
 	target := protocol.TextConversationTarget{ChannelID: "D123", MessageID: "111.222", ThreadID: "111.222"}
 	_, handled, err := c.threadRouter.ThreadAgent(target)
@@ -514,20 +514,14 @@ func TestNewConnectorUsesInjectedRuntimeDependencies(t *testing.T) {
 	_, err = c.oneOffCronjobs.LoadOneOffCronjob("daily")
 	require.Error(t, err)
 
-	finished := make(chan error, 1)
-
-	c.oneOffCronjobs.RunOneOffCronjob(t.Context(), protocol.OneOffCronjob{}, nil, func(_ context.Context, _ protocol.CronRunResult, err error) { finished <- err })
-	require.Error(t, <-finished)
-	require.NoError(t, c.sideAskHost.Run(t.Context(), protocol.SideAskRequest{
-		Thinking: func(context.Context, string) error { return nil },
-		Message:  func(context.Context, string) error { return nil },
-	}))
+	_, err = c.oneOffCronjobs.RunOneOffCronjob(t.Context(), &protocol.OneOffCronjob{})
+	require.Error(t, err)
 }
 
 func TestDirectMessagesHaveNoEffect(t *testing.T) {
 	connector := New(
 		&config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}}},
-		newTestBus(), inertThreadRouter{}, inertOneOffCronjobs{}, inertSideAskHost{},
+		newTestBus(), inertThreadRouter{}, inertOneOffCronjobs{},
 		testLogger(),
 	)
 
@@ -1419,6 +1413,24 @@ func TestSendExternalMCPRelayCanPostTopLevelChannelRelay(t *testing.T) {
 	assert.JSONEq(t, posted[0].Get("blocks"), updated.Get("blocks"))
 }
 
+func TestChannelAgentChoicesUsesCurrentPolicy(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/conversations.info", r.URL.Path)
+
+		_, err := io.WriteString(w, `{"ok":true,"channel":{"id":"C1","name":"triage"}}`)
+		assert.NoError(t, err)
+	}))
+	defer server.Close()
+
+	connector := newTestConnector(server.URL)
+	for _, names := range [][]string{{"main", "planner"}, {"main"}} {
+		connector.config.Channels = []config.SlackChannelConfig{{Channel: "#triage", Agents: names}}
+		choices, err := connector.ChannelAgentChoices(t.Context(), "C1")
+		require.NoError(t, err)
+		require.Equal(t, names, choices)
+	}
+}
+
 func TestSendExternalMCPRelayResolvesPrivateConfiguredChannelName(t *testing.T) {
 	var postedChannel string
 
@@ -1973,6 +1985,25 @@ func TestSendResponseCronjobUsesRecurringLayout(t *testing.T) {
 	assert.Equal(t, posted[0].Get("blocks"), posted[1].Get("blocks"))
 	assert.Empty(t, posted[0].Get("thread_ts"))
 	assert.Equal(t, "999.111", posted[1].Get("thread_ts"))
+	// Sync retains terminal events even when the producer failed or was silent.
+	for _, text := range []string{"producer run failed", ""} {
+		oneOff.Text = text
+		require.NoError(t, connector.SendResponse(t.Context(), oneOff))
+
+		last := posted[len(posted)-1]
+		assert.Equal(t, "#triage", last.Get("channel"))
+		assert.Equal(t, "999.111", last.Get("thread_ts"))
+		assert.Equal(t, posted[0].Get("text"), last.Get("text"))
+
+		if text != "" {
+			assert.Contains(t, last.Get("blocks"), `"text":"producer run failed"`)
+		} else {
+			assert.NotContains(t, last.Get("blocks"), "final payload")
+			assert.Contains(t, last.Get("blocks"), "🔁 daily.md | planner | 2000-01-02T03:04:05Z")
+		}
+	}
+
+	require.Len(t, posted, 4)
 }
 
 func TestSendCronjobChannelThreadPostsAttachmentOnlyInRootThread(t *testing.T) {
@@ -3777,6 +3808,44 @@ func TestStartNewThreadRootPostsMessageAndPermalink(t *testing.T) {
 	assert.Contains(t, posted.Get("text"), "Child")
 }
 
+func TestStartNewThreadRootResolvesHashChannel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/conversations.list":
+			writeJSON(t, w, map[string]any{"ok": true, "channels": []map[string]any{{"id": "C999", "name": "ops"}}, "response_metadata": map[string]any{"next_cursor": ""}})
+		case "/chat.postMessage":
+			writeJSON(t, w, map[string]any{"ok": true, "channel": "C999", "ts": "1.1"})
+		case "/chat.getPermalink":
+			writeJSON(t, w, map[string]any{"ok": false, "error": "channel_not_found"})
+		default:
+			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	connector := newTestConnectorWithOptions(server.URL, nil, []config.SlackChannelConfig{{Channel: "#ops"}}, nil, nil)
+	result, err := connector.StartNewThreadRoot(t.Context(), &protocol.StartNewThreadRequest{
+		Title: "Cron", Prompt: "run", SlackReply: &protocol.SlackReplyTarget{ChannelID: "#ops"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "C999", result.Target.ChannelID)
+}
+
+func TestUpdateRocketclawActionsViewIgnoresNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/views.update" {
+			writeJSON(t, w, map[string]any{"ok": false, "error": "not_found"})
+			return
+		}
+
+		assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
+	}))
+	defer server.Close()
+
+	connector := newTestConnector(server.URL)
+	connector.updateRocketclawActionsView(t.Context(), "V1", "done", "{}")
+}
+
 func TestAskUserQuestionUsesUniqueSlackButtonActionIDs(t *testing.T) {
 	var posted url.Values
 
@@ -4484,411 +4553,6 @@ func TestSendResponseUpdatesTailAnswerPlaceholder(t *testing.T) {
 	assert.Equal(t, "divider", blocks[1].Type)
 	assert.Equal(t, "section", blocks[2].Type)
 	assert.Equal(t, "thread answer", blocks[2].Text.Text)
-}
-
-func TestCompletedChatCardCarriesSideAskStamp(t *testing.T) {
-	updated := recordSlackMessageUpdates(t)
-
-	connector := newTestConnector(updated.URL)
-	connector.setReplyState("turn-side-ask", &slackReplySlots{ChannelID: "C123", ThinkingTS: "t.1", AnswerTS: "a.1"})
-
-	msg := protocol.NewOutboundMessage(protocol.SourceSlack, "slack-thread:C123:111.222", "Final answer", protocol.OutputTargetSlack)
-	msg.TurnID = "turn-side-ask"
-	msg.Complete = true
-	msg.Agent = "main"
-	msg.SessionEntryID = 42
-	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}
-	require.NoError(t, connector.SendResponse(t.Context(), msg))
-
-	require.Len(t, updated.blocks, 1)
-	blocks := updated.blocks[0]
-	require.Len(t, blocks, 3)
-	assert.Equal(t, "header", blocks[0].Type)
-	assert.Equal(t, "💬 main", blocks[0].Text.Text)
-	assert.Equal(t, "divider", blocks[1].Type)
-	assert.Equal(t, "section", blocks[2].Type)
-	assert.Equal(t, "Final answer", blocks[2].Text.Text)
-
-	var stamp sideAskStamp
-	require.NoError(t, json.Unmarshal([]byte(blocks[1].BlockID), &stamp))
-	assert.Equal(t, "slack-thread:C123:111.222", stamp.ConversationID)
-	assert.Equal(t, int64(42), stamp.SessionEntryID)
-	assert.Equal(t, "C123", stamp.ChannelID)
-	assert.Equal(t, "111.222", stamp.ThreadTS)
-}
-
-func TestGoalCronAndMCPCardsOmitSideAskStamp(t *testing.T) {
-	t.Run("goal", func(t *testing.T) {
-		updated := recordSlackMessageUpdates(t)
-		connector := newTestConnector(updated.URL)
-		connector.setReplyState("goal-turn", &slackReplySlots{ChannelID: "C123", ThinkingTS: "t.1", AnswerTS: "a.1"})
-
-		msg := protocol.NewOutboundMessage(protocol.SourceSlack, "slack-thread:C123:111.222", "goal body", protocol.OutputTargetSlack)
-		msg.TurnID = "goal-turn"
-		msg.Complete = true
-		msg.GoalTurn = true
-		msg.GoalTurnNumber = 1
-		msg.GoalMaxTurns = 3
-		msg.SessionEntryID = 7
-		msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}
-		require.NoError(t, connector.SendResponse(t.Context(), msg))
-		require.Len(t, updated.blocks, 1)
-		assert.Empty(t, updated.blocks[0][1].BlockID)
-	})
-
-	t.Run("cron", func(t *testing.T) {
-		updated := recordSlackMessageUpdates(t)
-		connector := newTestConnector(updated.URL)
-		msg := protocol.NewOutboundMessage(protocol.SourceSlack, "cron:daily", "cron body", protocol.OutputTargetSlack)
-		msg.Complete = true
-		msg.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"}
-		msg.SessionEntryID = 7
-		msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.222"}
-		require.NoError(t, connector.SendResponse(t.Context(), msg))
-		require.NotEmpty(t, updated.raw)
-	})
-
-	t.Run("mcp", func(t *testing.T) {
-		updated := recordSlackMessageUpdates(t)
-		connector := newTestConnector(updated.URL)
-		connector.setReplyState("mcp-turn", &slackReplySlots{ChannelID: "C123", ThinkingTS: "t.1", AnswerTS: "a.1"})
-
-		msg := protocol.NewOutboundMessage(protocol.SourceSlack, "external_mcp:private-agent:private", "mcp body", protocol.OutputTargetSlack)
-		msg.TurnID = "mcp-turn"
-		msg.Complete = true
-		msg.Agent = "private-agent"
-		msg.ExternalConversationID = "public-conversation"
-		msg.SessionEntryID = 7
-		msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}
-		require.NoError(t, connector.SendResponse(t.Context(), msg))
-		require.NotEmpty(t, updated.raw)
-	})
-}
-
-func TestLongChatBodyKeepsSideAskStampWithinBlockLimit(t *testing.T) {
-	updated := recordSlackMessageUpdates(t)
-	connector := newTestConnector(updated.URL)
-	connector.setReplyState("turn-long", &slackReplySlots{ChannelID: "C123", ThinkingTS: "t.1", AnswerTS: "a.1"})
-
-	msg := protocol.NewOutboundMessage(protocol.SourceSlack, "slack-thread:C123:111.222", strings.Repeat("x", slackBlockTextLimit*48), protocol.OutputTargetSlack)
-	msg.TurnID = "turn-long"
-	msg.Complete = true
-	msg.Agent = "main"
-	msg.SessionEntryID = 9
-	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}
-	require.NoError(t, connector.SendResponse(t.Context(), msg))
-
-	require.NotEmpty(t, updated.blocks)
-	assert.Len(t, updated.blocks[0], 50)
-	last := updated.blocks[0][len(updated.blocks[0])-1]
-	assert.Equal(t, "section", last.Type)
-
-	var stamp sideAskStamp
-	require.NoError(t, json.Unmarshal([]byte(updated.blocks[0][1].BlockID), &stamp))
-	assert.Equal(t, int64(9), stamp.SessionEntryID)
-}
-
-func TestDMRepliesOmitSideAskStamp(t *testing.T) {
-	updated := recordSlackMessageUpdates(t)
-	connector := newTestConnector(updated.URL)
-	connector.setReplyState("turn-dm", &slackReplySlots{ChannelID: "D123", ThinkingTS: "t.1", AnswerTS: "a.1"})
-
-	msg := protocol.NewOutboundMessage(protocol.SourceSlack, "slack-thread:D123:111.222", "dm answer", protocol.OutputTargetSlack)
-	msg.TurnID = "turn-dm"
-	msg.Complete = true
-	msg.Agent = "main"
-	msg.SessionEntryID = 42
-	msg.SlackReply = &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}
-	require.NoError(t, connector.SendResponse(t.Context(), msg))
-
-	require.Len(t, updated.blocks, 1)
-	assert.Empty(t, updated.blocks[0][1].BlockID)
-}
-
-func TestSideAskReactionDoesNotOpenModal(t *testing.T) {
-	opened, ephemeral := newSideAskInteractiveRecorder(t)
-	connector := newTestConnector(opened.URL)
-
-	connector.handleReactionAddedEvent(t.Context(), newTestReactionAddedEvent("U123", "thought_balloon", "171234.5678"))
-	connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(&slackevents.ReactionAddedEvent{
-		User:     "U123",
-		Reaction: "thought_balloon",
-		Item:     slackevents.Item{Type: "message", Channel: "C123", Timestamp: "171234.5678"},
-	}))
-
-	assert.Equal(t, 0, opened.count())
-	assert.Empty(t, ephemeral.texts)
-}
-
-func TestSideAskViewSubmissionAcksRunningViewAndStartsRunner(t *testing.T) {
-	opened, _ := newSideAskInteractiveRecorder(t)
-	runner := &recordingSideAskRunner{}
-	connector := newTestConnector(opened.URL)
-	connector.sideAsk = runner
-	connector.reconnectDelay = 0
-	require.True(t, connector.reserveSideAsk("U123"))
-
-	metadata := sideAskStampValue(t, 42)
-	acked := make(chan []any, 1)
-	sent := false
-	connector.runSocketClient = func(ctx context.Context, client *socketmode.Client) error {
-		if sent {
-			<-ctx.Done()
-			return ctx.Err()
-		}
-
-		sent = true
-
-		client.Events <- socketmode.Event{
-			Type:    socketmode.EventTypeInteractive,
-			Request: &socketmode.Request{EnvelopeID: "side-ask-submit"},
-			Data:    newSideAskSubmitCallback(metadata, "social", "What broke?"),
-		}
-
-		<-ctx.Done()
-
-		return ctx.Err()
-	}
-	connector.ackSocketEvent = func(_ *socketmode.Client, req socketmode.Request, payload ...any) error {
-		if req.EnvelopeID == "side-ask-submit" {
-			acked <- payload
-		}
-
-		return nil
-	}
-
-	go connector.runSocketLoop(t.Context())
-
-	var payload []any
-	select {
-	case payload = <-acked:
-	case <-time.After(time.Second):
-		t.Fatal("socket loop did not ack Side Ask view_submission")
-	}
-
-	require.Len(t, payload, 1)
-	resp, ok := payload[0].(*slack.ViewSubmissionResponse)
-	require.True(t, ok)
-	require.NotNil(t, resp)
-	assert.Equal(t, slack.RAUpdate, resp.ResponseAction)
-	require.NotNil(t, resp.View)
-	assert.Equal(t, slackSideAskViewCallbackID, resp.View.CallbackID)
-	assert.Nil(t, resp.View.Submit)
-	assert.True(t, resp.View.NotifyOnClose)
-
-	select {
-	case socketEvent := <-connector.socketEvents:
-		connector.handleInteractive(t.Context(), socketEvent.event)
-	case <-time.After(time.Second):
-		t.Fatal("socket loop did not enqueue Side Ask view_submission")
-	}
-
-	require.Eventually(t, func() bool { return len(runner.snapshot()) == 1 }, time.Second, 10*time.Millisecond)
-
-	got := runner.snapshot()[0]
-	assert.Equal(t, "slack-thread:C123:111.222", got.stamp.ConversationID)
-	assert.Equal(t, int64(42), got.stamp.SessionEntryID)
-	assert.Equal(t, "social", got.Agent)
-	assert.Equal(t, "What broke?", got.Question)
-	assert.Equal(t, "V-side-ask", got.ViewID)
-}
-
-type recordingSideAskRunner struct {
-	mu    sync.Mutex
-	calls []sideAskRequest
-}
-
-func (r *recordingSideAskRunner) RunSideAsk(_ context.Context, req *sideAskRequest) {
-	r.mu.Lock()
-	r.calls = append(r.calls, *req)
-	r.mu.Unlock()
-}
-
-func (r *recordingSideAskRunner) snapshot() []sideAskRequest {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	return append([]sideAskRequest(nil), r.calls...)
-}
-
-type sideAskOpenedView struct {
-	TriggerID string `json:"trigger_id"`
-	View      struct {
-		CallbackID      string `json:"callback_id"`
-		PrivateMetadata string `json:"private_metadata"`
-		NotifyOnClose   bool   `json:"notify_on_close"`
-		Submit          struct {
-			Text string `json:"text"`
-		} `json:"submit"`
-		Close struct {
-			Text string `json:"text"`
-		} `json:"close"`
-		Blocks []sideAskOpenedBlock `json:"blocks"`
-	} `json:"view"`
-}
-
-type sideAskOpenedBlock struct {
-	Type    string `json:"type"`
-	BlockID string `json:"block_id"`
-	Element struct {
-		Type      string `json:"type"`
-		ActionID  string `json:"action_id"`
-		Multiline bool   `json:"multiline"`
-		MinLength int    `json:"min_length"`
-		Options   []struct {
-			Value string `json:"value"`
-		} `json:"options"`
-		InitialOption struct {
-			Value string `json:"value"`
-		} `json:"initial_option"`
-	} `json:"element"`
-}
-
-type sideAskInteractiveRecorder struct {
-	URL      string
-	mu       sync.Mutex
-	opened   []sideAskOpenedView
-	texts    []string
-	channels []string
-	users    []string
-}
-
-func (r *sideAskInteractiveRecorder) count() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	return len(r.opened)
-}
-
-func newSideAskInteractiveRecorder(t *testing.T) (opened, ephemeral *sideAskInteractiveRecorder) {
-	t.Helper()
-
-	opened = &sideAskInteractiveRecorder{}
-	ephemeral = opened
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/conversations.info":
-			writeJSON(t, w, map[string]any{"ok": true, "channel": map[string]any{"id": "C123", "name": "social"}})
-		case "/views.open":
-			var view sideAskOpenedView
-			if !assert.NoError(t, json.NewDecoder(r.Body).Decode(&view)) {
-				return
-			}
-
-			opened.mu.Lock()
-			opened.opened = append(opened.opened, view)
-			opened.mu.Unlock()
-			writeJSON(t, w, map[string]any{"ok": true, "view": map[string]any{"id": "V-side-ask"}})
-		case "/chat.postEphemeral":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			opened.mu.Lock()
-			opened.texts = append(opened.texts, r.PostForm.Get("text"))
-			opened.channels = append(opened.channels, r.PostForm.Get("channel"))
-			opened.users = append(opened.users, r.PostForm.Get("user"))
-			opened.mu.Unlock()
-			writeJSON(t, w, map[string]any{"ok": true, "message_ts": "222.333"})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	t.Cleanup(server.Close)
-	opened.URL = server.URL
-
-	return opened, ephemeral
-}
-
-func sideAskStampValue(t *testing.T, entryID int64) string {
-	t.Helper()
-
-	encoded, err := json.Marshal(sideAskStamp{
-		ConversationID: "slack-thread:C123:111.222",
-		SessionEntryID: entryID,
-		ChannelID:      "C123",
-		ThreadTS:       "111.222",
-	})
-	require.NoError(t, err)
-
-	return string(encoded)
-}
-
-func newSideAskSubmitCallback(metadata, agent, question string) slack.InteractionCallback {
-	return slack.InteractionCallback{
-		Type: slack.InteractionTypeViewSubmission,
-		User: slack.User{ID: "U123"},
-		View: slack.View{
-			ID:              "V-side-ask",
-			Hash:            "H-side-ask",
-			CallbackID:      slackSideAskViewCallbackID,
-			PrivateMetadata: metadata,
-			State: &slack.ViewState{Values: map[string]map[string]slack.BlockAction{
-				slackSideAskAgentBlockID: {
-					slackSideAskAgentActionID: {SelectedOption: slack.OptionBlockObject{Value: agent}},
-				},
-				slackSideAskQuestionBlockID: {
-					slackSideAskQuestionActionID: {Value: question},
-				},
-			}},
-		},
-	}
-}
-
-type recordedSlackBlocks struct {
-	URL    string
-	raw    []string
-	blocks [][]slackPostedBlock
-}
-
-type slackPostedBlock struct {
-	Type    string `json:"type"`
-	BlockID string `json:"block_id"`
-	Text    struct {
-		Text string `json:"text"`
-	} `json:"text"`
-	Elements []struct {
-		Type               string `json:"type"`
-		ActionID           string `json:"action_id"`
-		Value              string `json:"value"`
-		AccessibilityLabel string `json:"accessibility_label"`
-		Text               struct {
-			Text string `json:"text"`
-		} `json:"text"`
-	} `json:"elements"`
-}
-
-func recordSlackMessageUpdates(t *testing.T) *recordedSlackBlocks {
-	t.Helper()
-
-	recorded := new(recordedSlackBlocks)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/chat.update", "/chat.postMessage":
-			if !assert.NoError(t, r.ParseForm()) {
-				return
-			}
-
-			if raw := r.PostForm.Get("blocks"); raw != "" {
-				recorded.raw = append(recorded.raw, raw)
-
-				var blocks []slackPostedBlock
-				if json.Unmarshal([]byte(raw), &blocks) == nil {
-					recorded.blocks = append(recorded.blocks, blocks)
-				}
-			}
-
-			writeJSON(t, w, map[string]any{"ok": true, "channel": r.PostForm.Get("channel"), "ts": "a.1"})
-		case "/chat.delete", "/reactions.remove":
-			writeJSON(t, w, map[string]any{"ok": true})
-		default:
-			assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
-		}
-	}))
-	t.Cleanup(server.Close)
-	recorded.URL = server.URL
-
-	return recorded
 }
 
 func TestSendResponseUpdatesNonTailAnswerPlaceholder(t *testing.T) {
@@ -6188,7 +5852,7 @@ func TestHandleMessageEventFinishesStackWhenThreadReplyUnhandled(t *testing.T) {
 	assert.Contains(t, reactions, "/reactions.remove "+slackRobotReaction+" 171235.9999")
 }
 
-func TestHandleMessageEventBuffersSlackMessagesWhileActive(t *testing.T) {
+func TestHandleMessageEventForwardsSteersInSendOrder(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
 
@@ -6202,63 +5866,99 @@ func TestHandleMessageEventBuffersSlackMessagesWhileActive(t *testing.T) {
 
 	router := newThreadRouterStub()
 	router.submitHandled = true
-	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, inertOneOffCronjobs{})
 
 	first := newSlackMessageEvent("111.1", "111.0", "first")
 	first.Channel = "C123"
-	connector.handleMessageEvent(context.Background(), first, slackNativeForward{})
+	connector.handleMessageEvent(t.Context(), first, slackNativeForward{})
 
 	second := newSlackMessageEvent("111.2", "111.0", "second")
 	second.Channel = "C123"
-	connector.handleMessageEvent(context.Background(), second, slackNativeForward{})
+	connector.handleMessageEvent(t.Context(), second, slackNativeForward{})
 
 	third := newSlackMessageEvent("111.3", "111.0", "third")
 	third.Channel = "C123"
-	connector.handleMessageEvent(context.Background(), third, slackNativeForward{})
+	connector.handleMessageEvent(t.Context(), third, slackNativeForward{})
 
 	final := protocol.NewOutboundMessage(protocol.SourceSlack, "test", "done", protocol.OutputTargetSlack)
 	final.TurnID = "turn-1"
 	final.Complete = true
 	final.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.1", ThreadTS: "111.0"}
-	require.NoError(t, connector.SendResponse(context.Background(), final))
+	require.NoError(t, connector.SendResponse(t.Context(), final))
 
 	replies := router.repliesSnapshot()
-	require.Len(t, replies, 1)
-	assert.Equal(t, "first", replies[0].inbound.Text)
+	require.Len(t, replies, 3)
+	// R11/R14/AE12: Backend decides admission; Slack preserves every send.
+	for i, text := range []string{"first", "second", "third"} {
+		inbound := replies[i].inbound
+		assert.Equal(t, protocol.InboundKindSteer, inbound.Kind)
+		assert.Equal(t, protocol.SourceSlack, inbound.Source)
+		assert.True(t, inbound.Human)
+		assert.Equal(t, text, inbound.Text)
+		assert.Equal(t, "U123", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+		require.NotNil(t, inbound.SlackReply)
+		assert.Equal(t, "C123", inbound.SlackReply.ChannelID)
+		assert.Equal(t, "111.0", inbound.SlackReply.ThreadTS)
+		assert.Equal(t, []string{"111.1", "111.2", "111.3"}[i], inbound.SlackReply.MessageTS)
+	}
+
 	require.Len(t, posted, 3)
 	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
 	assert.Equal(t, "done", posted[2].Get("text"))
+	assert.Equal(t, "C123", posted[2].Get("channel"))
+	assert.Equal(t, "555.2", posted[2].Get("ts"))
+	assert.Contains(t, reactions, "/reactions.add "+slackRobotReaction+" 111.1")
 
 	connector.mu.Lock()
 	pending := slices.Clone(connector.stacks[slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.0"})])
 	connector.mu.Unlock()
-	require.Len(t, pending, 2)
-	assert.Equal(t, "second", pending[0].Text)
-	assert.Equal(t, "third", pending[1].Text)
-
-	for _, want := range []string{slackRobotReaction + " 111.1", slackBufferedReaction + " 111.2", slackBufferedReaction + " 111.3"} {
-		assert.Contains(t, reactions, "/reactions.add "+want)
-	}
+	assert.Empty(t, pending)
+	assert.Empty(t, router.queueSnapshot())
 }
 
 func TestHandleMessageEventPairBusySteersWithoutSlackStack(t *testing.T) {
-	var reactions []string
+	var (
+		posted    []url.Values
+		reactions []string
+	)
 
-	server := newSlackStackTestServer(t, new([]url.Values), &reactions)
+	server := newSlackStackTestServer(t, &posted, &reactions)
 	defer server.Close()
 
 	router := newThreadRouterStub()
 	router.prepareHandled = true
+	router.submitHandled = true
 	router.busy = true
 	connector := newTestConnectorWithOptions(server.URL, newTestBus(), nil, router, nil)
 
+	files := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, err := w.Write([]byte("image"))
+		assert.NoError(t, err)
+	}))
+	defer files.Close()
+
 	steer := newSlackMessageEvent("111.2", "111.0", "don't touch the database")
+	steer.Message = &slack.Msg{Files: []slack.File{{Name: "image.png", Mimetype: "image/png", URLPrivateDownload: files.URL + "/image.png"}}}
 	connector.handleMessageEvent(t.Context(), steer, slackNativeForward{})
 
-	assert.Empty(t, router.repliesSnapshot())
+	// R14: producer occupancy is Backend's decision, not a Slack buffer.
+	replies := router.repliesSnapshot()
+	require.Len(t, replies, 1)
+	inbound := replies[0].inbound
+	assert.Equal(t, protocol.InboundKindSteer, inbound.Kind)
+	assert.Equal(t, protocol.SourceSlack, inbound.Source)
+	assert.True(t, inbound.Human)
+	assert.Equal(t, "don't touch the database", inbound.Text)
+	assert.Equal(t, "U123", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+	assert.Equal(t, []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("image")}}, inbound.Attachments)
+	assert.Equal(t, "C123", inbound.SlackReply.ChannelID)
+	assert.Equal(t, "111.0", inbound.SlackReply.ThreadTS)
+	assert.Equal(t, "111.2", inbound.SlackReply.MessageTS)
+	assert.Empty(t, connector.stacks[slackThreadStackKey(inbound.SlackReply)])
+	assert.Empty(t, posted, "producer-held reply must not create premature placeholders")
 	assert.Empty(t, router.queueSnapshot())
-	assert.Contains(t, reactions, "/reactions.add "+slackBufferedReaction+" 111.2")
+	assert.Contains(t, reactions, "/reactions.add "+slackRobotReaction+" 111.2")
 }
 
 func TestHandleMessageEventSteerReceiptHasNoPlaceholders(t *testing.T) {
@@ -6279,12 +5979,29 @@ func TestHandleMessageEventSteerReceiptHasNoPlaceholders(t *testing.T) {
 
 	postedBefore := len(posted)
 
+	files := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, err := w.Write([]byte("image"))
+		assert.NoError(t, err)
+	}))
+	defer files.Close()
+
 	steer := newSlackMessageEvent("111.2", "111.0", "don't touch the database")
+	steer.Message = &slack.Msg{Files: []slack.File{{Name: "image.png", Mimetype: "image/png", URLPrivateDownload: files.URL + "/image.png"}}}
 	connector.handleMessageEvent(t.Context(), steer, slackNativeForward{})
 
 	assert.Len(t, posted, postedBefore)
-	assert.Len(t, router.repliesSnapshot(), 1)
-	assert.Contains(t, reactions, "/reactions.add "+slackBufferedReaction+" 111.2")
+
+	replies := router.repliesSnapshot()
+	require.Len(t, replies, 2)
+	inbound := replies[1].inbound
+	assert.Equal(t, protocol.InboundKindSteer, inbound.Kind)
+	assert.Equal(t, "don't touch the database", inbound.Text)
+	assert.Equal(t, "U123", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+	assert.Equal(t, []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("image")}}, inbound.Attachments)
+	assert.Equal(t, "C123", inbound.SlackReply.ChannelID)
+	assert.Equal(t, "111.0", inbound.SlackReply.ThreadTS)
+	assert.Equal(t, "111.2", inbound.SlackReply.MessageTS)
+	assert.Empty(t, connector.DrainSteers(t.Context(), protocol.SlackThreadConversationID("C123", "111.0")))
 	assert.Empty(t, router.queueSnapshot())
 }
 
@@ -6354,62 +6071,25 @@ func TestHandleMessageEventFinalAnswerPhaseSteers(t *testing.T) {
 	late := newSlackMessageEvent("111.2", "111.0", "also add a test")
 	connector.handleMessageEvent(t.Context(), late, slackNativeForward{})
 
+	// R11/AE12: Slack must not decide the input cutoff; Backend receives both steers in order.
+	replies := router.repliesSnapshot()
+	require.Len(t, replies, 2)
+
+	for i, text := range []string{"first", "also add a test"} {
+		inbound := replies[i].inbound
+		assert.Equal(t, protocol.InboundKindSteer, inbound.Kind)
+		assert.Equal(t, protocol.SourceSlack, inbound.Source)
+		assert.True(t, inbound.Human)
+		assert.Equal(t, text, inbound.Text)
+		assert.Equal(t, "U123", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+		assert.Equal(t, "C123", inbound.SlackReply.ChannelID)
+		assert.Equal(t, "111.0", inbound.SlackReply.ThreadTS)
+		assert.Equal(t, []string{"111.1", "111.2"}[i], inbound.SlackReply.MessageTS)
+	}
+
+	assert.Empty(t, connector.stacks[slackThreadStackKey(replies[1].inbound.SlackReply)])
 	assert.Len(t, posted, postedBefore)
-	assert.Contains(t, reactions, "/reactions.add "+slackBufferedReaction+" 111.2")
-	assert.NotContains(t, reactions, "/reactions.add "+slackEnvelopeReaction+" 111.2")
-	assert.Empty(t, router.queueSnapshot())
-}
-
-func TestDrainSteersRemovesHourglassAndReturnsSendOrder(t *testing.T) {
-	var reactions []string
-
-	server := newSlackStackTestServer(t, new([]url.Values), &reactions)
-	defer server.Close()
-
-	router := newThreadRouterStub()
-	router.submitHandled = true
-	connector := newTestConnectorWithOptions(server.URL, newTestBus(), nil, router, nil)
-	first := newSlackMessageEvent("111.1", "111.0", "first")
-	connector.handleMessageEvent(t.Context(), first, slackNativeForward{})
-
-	second := newSlackMessageEvent("111.2", "111.0", "use the other file")
-	connector.handleMessageEvent(t.Context(), second, slackNativeForward{})
-
-	third := newSlackMessageEvent("111.3", "111.0", "and skip tests")
-	connector.handleMessageEvent(t.Context(), third, slackNativeForward{})
-
-	texts := connector.DrainSteers(t.Context(), protocol.SlackThreadConversationID("C123", "111.0"))
-
-	require.Equal(t, []string{"use the other file", "and skip tests"}, texts)
-	assert.Contains(t, reactions, "/reactions.remove "+slackBufferedReaction+" 111.2")
-	assert.Contains(t, reactions, "/reactions.remove "+slackBufferedReaction+" 111.3")
-	assert.Empty(t, router.queueSnapshot())
-	connector.mu.Lock()
-	pending, active := connector.stacks[slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.0"})]
-	connector.mu.Unlock()
-	assert.True(t, active)
-	assert.Empty(t, pending)
-}
-
-func TestDrainSteersFinalAnswerInjectsBufferedSteers(t *testing.T) {
-	var reactions []string
-
-	server := newSlackStackTestServer(t, new([]url.Values), &reactions)
-	defer server.Close()
-
-	router := newThreadRouterStub()
-	router.submitHandled = true
-	connector := newTestConnectorWithOptions(server.URL, newTestBus(), nil, router, nil)
-	first := newSlackMessageEvent("111.1", "111.0", "first")
-	connector.handleMessageEvent(t.Context(), first, slackNativeForward{})
-
-	late := newSlackMessageEvent("111.2", "111.0", "also add a test")
-	connector.handleMessageEvent(t.Context(), late, slackNativeForward{})
-
-	texts := connector.DrainSteers(t.Context(), protocol.SlackThreadConversationID("C123", "111.0"))
-
-	require.Equal(t, []string{"also add a test"}, texts)
-	assert.Contains(t, reactions, "/reactions.remove "+slackBufferedReaction+" 111.2")
+	assert.Contains(t, reactions, "/reactions.add "+slackRobotReaction+" 111.2")
 	assert.NotContains(t, reactions, "/reactions.add "+slackEnvelopeReaction+" 111.2")
 	assert.Empty(t, router.queueSnapshot())
 }
@@ -6432,33 +6112,6 @@ func TestRestorePendingSteersInjectsAtToolBoundary(t *testing.T) {
 	connector.RestorePendingSteers("not-a-slack-thread", []protocol.PendingSteer{{Text: "ignored"}})
 }
 
-func TestPendingSteersPersistOnBufferAndClearOnStop(t *testing.T) {
-	var persisted [][]protocol.PendingSteer
-
-	server := newSlackStackTestServer(t, new([]url.Values), new([]string))
-	defer server.Close()
-
-	router := newThreadRouterStub()
-	router.submitHandled = true
-	connector := newTestConnectorWithOptions(server.URL, newTestBus(), nil, router, nil)
-	connector.SetPendingSteersSink(protocol.PendingSteersSink{Set: func(_ string, steers []protocol.PendingSteer) error {
-		persisted = append(persisted, append([]protocol.PendingSteer(nil), steers...))
-		return nil
-	}})
-
-	first := newSlackMessageEvent("111.1", "111.0", "first")
-	connector.handleMessageEvent(t.Context(), first, slackNativeForward{})
-
-	steer := newSlackMessageEvent("111.2", "111.0", "don't touch the database")
-	connector.handleMessageEvent(t.Context(), steer, slackNativeForward{})
-	require.NotEmpty(t, persisted)
-	require.Len(t, persisted[len(persisted)-1], 1)
-	assert.Equal(t, "don't touch the database", persisted[len(persisted)-1][0].Text)
-
-	require.NoError(t, connector.stopSlackThread(t.Context(), "C123", "111.0"))
-	require.Empty(t, persisted[len(persisted)-1])
-}
-
 func TestActivateEnqueuePostsConsumeCardThenPlaceholders(t *testing.T) {
 	var (
 		posted    []url.Values
@@ -6478,6 +6131,19 @@ func TestActivateEnqueuePostsConsumeCardThenPlaceholders(t *testing.T) {
 	assert.Equal(t, slackImmediatePlaceholder, posted[1].Get("text"))
 	assert.Equal(t, slackAnswerPlaceholder, posted[2].Get("text"))
 	assert.Contains(t, reactions, "/reactions.remove "+slackEnvelopeReaction+" 111.2")
+	assert.Contains(t, reactions, "/reactions.add "+slackRobotReaction+" 111.2")
+}
+
+func TestActivateEnqueueWithoutSlackReplyIsNoop(t *testing.T) {
+	var posted []url.Values
+
+	server := newSlackStackTestServer(t, &posted, new([]string))
+	defer server.Close()
+
+	connector := newTestConnectorWithOptions(server.URL, newTestBus(), nil, newThreadRouterStub(), nil)
+	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindEnqueue, "Ulderico Cirello", "queued", true)
+	require.NoError(t, connector.ActivateEnqueue(t.Context(), &protocol.ThreadQueueItem{ID: "q1"}, inbound))
+	assert.Empty(t, posted)
 }
 
 func TestDiscardPendingSteersAddsInterruption(t *testing.T) {
@@ -6510,8 +6176,21 @@ func TestHandleMessageEventEnqueueDuringActiveTurnHasNoPlaceholders(t *testing.T
 
 	postedBefore := len(posted)
 
+	var downloads []string
+
+	files := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		downloads = append(downloads, r.URL.Path)
+		_, err := w.Write([]byte("acquired " + r.URL.Path))
+		assert.NoError(t, err)
+	}))
+	defer files.Close()
+
 	enqueue := newSlackMessageEvent("111.2", "111.0", "$enqueue write the changelog")
-	connector.handleMessageEvent(t.Context(), enqueue, slackNativeForward{})
+	enqueue.Message = &slack.Msg{Text: enqueue.Text, Files: []slack.File{
+		{Name: "image.png", Mimetype: "image/png", URLPrivateDownload: files.URL + "/image.png"},
+		{Name: "notes.txt", Mimetype: "text/plain", URLPrivateDownload: files.URL + "/notes.txt"},
+	}}
+	connector.handleMessageEvent(t.Context(), enqueue, slackNativeForward{previews: []string{"original forwarded text"}})
 
 	assert.Len(t, posted, postedBefore)
 	assert.Len(t, router.repliesSnapshot(), 1)
@@ -6522,9 +6201,17 @@ func TestHandleMessageEventEnqueueDuringActiveTurnHasNoPlaceholders(t *testing.T
 	assert.Equal(t, "write the changelog", queue[0].Message)
 	assert.Equal(t, "C123", queue[0].SlackChannel)
 	assert.Equal(t, "111.2", queue[0].SlackTS)
+	assert.Equal(t, []string{"/image.png", "/notes.txt"}, downloads)
+	assert.Equal(t, protocol.SourceSlack, queue[0].Source)
+	assert.Equal(t, "write the changelog", queue[0].Content.Text)
+	assert.Equal(t, []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("acquired /image.png")}}, queue[0].Content.Attachments)
+	require.Len(t, queue[0].Content.TextAttachments, 2)
+	assert.Contains(t, queue[0].Content.TextAttachments[0], "acquired /notes.txt")
+	assert.Contains(t, queue[0].Content.TextAttachments[1], "original forwarded text")
+	assert.Equal(t, &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.0", RecipientTeamID: connector.teamID, RecipientUserID: enqueue.User}, queue[0].SlackReply)
 }
 
-func TestHandleMessageEventIdleEnqueueStartsNow(t *testing.T) {
+func TestHandleMessageEventIdleEnqueueWaitsForBackendActivation(t *testing.T) {
 	var (
 		posted    []url.Values
 		reactions []string
@@ -6540,25 +6227,19 @@ func TestHandleMessageEventIdleEnqueueStartsNow(t *testing.T) {
 	enqueue := newSlackMessageEvent("111.2", "111.0", "$enqueue write the changelog")
 	connector.handleMessageEvent(t.Context(), enqueue, slackNativeForward{})
 
-	replies := router.repliesSnapshot()
-	require.Len(t, replies, 1)
-	assert.Equal(t, "write the changelog", replies[0].inbound.Text)
-	require.GreaterOrEqual(t, len(posted), 3)
-	assert.Contains(t, posted[0].Get("blocks"), "📨")
-	assert.Equal(t, slackImmediatePlaceholder, posted[1].Get("text"))
-	assert.Equal(t, slackAnswerPlaceholder, posted[2].Get("text"))
+	assert.Empty(t, router.repliesSnapshot(), "stash is the only admission path")
+	assert.Empty(t, posted, "only Backend activation may post consume cards and placeholders")
 	assert.Contains(t, reactions, "/reactions.add "+slackEnvelopeReaction+" 111.2")
-	assert.Contains(t, reactions, "/reactions.remove "+slackEnvelopeReaction+" 111.2")
 
 	queue := router.queueSnapshot()
 	require.Len(t, queue, 1)
 	assert.Equal(t, "write the changelog", queue[0].Message)
 
 	_, active := connector.stacks[slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.0"})]
-	assert.True(t, active)
+	assert.False(t, active)
 }
 
-func TestHandleMessageEventIdleEnqueueStartsEvenIfQueueNonempty(t *testing.T) {
+func TestHandleMessageEventIdleEnqueueLeavesEarlierQueueToBackend(t *testing.T) {
 	var posted []url.Values
 
 	server := newSlackStackTestServer(t, &posted, new([]string))
@@ -6572,8 +6253,11 @@ func TestHandleMessageEventIdleEnqueueStartsEvenIfQueueNonempty(t *testing.T) {
 	enqueue := newSlackMessageEvent("111.2", "111.0", "$enqueue write the changelog")
 	connector.handleMessageEvent(t.Context(), enqueue, slackNativeForward{})
 
-	require.Len(t, router.repliesSnapshot(), 1)
-	assert.Equal(t, "write the changelog", router.repliesSnapshot()[0].inbound.Text)
+	assert.Empty(t, router.repliesSnapshot())
+	queue := router.queueSnapshot()
+	require.Len(t, queue, 2)
+	assert.Equal(t, "older", queue[0].Message)
+	assert.Equal(t, "write the changelog", queue[1].Message)
 }
 
 func TestHandleMessageEventEnqueueIdenticalTextsRemainDistinct(t *testing.T) {
@@ -6711,15 +6395,9 @@ func TestHandleMessageEventQueueListsPendingSteersFirst(t *testing.T) {
 
 	router := newThreadRouterStub()
 	router.prepareHandled = true
-	router.queue = []protocol.ThreadQueueItem{{ID: "q1", Message: "later enqueue", SlackChannel: "C123", SlackTS: "111.2"}}
+	router.queue = []protocol.ThreadQueueItem{{ID: "q1", Message: "later enqueue", SlackChannel: "C123", SlackTS: "111.2"}, {ID: "backend-steer", Kind: protocol.InboundKindSteer, Message: "pending steer", Principal: "U123", SlackChannel: "C123", SlackTS: "222.2"}}
 	connector := newTestConnectorWithOptions(server.URL, newTestBus(), nil, router, nil)
 	connector.workspaceURL = "https://example.slack.com"
-	key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.0"})
-	connector.beginSlackStack(key)
-
-	content := protocol.InboundContent{Text: "pending steer"}
-	reply := &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.2", ThreadTS: "111.0"}
-	require.True(t, connector.bufferSlackStack(t.Context(), key, "pending steer", &content, reply, "U123", "", "", nil))
 
 	event := newSlackMessageEvent("111.3", "111.0", "$queue")
 	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
@@ -6733,7 +6411,7 @@ func TestHandleMessageEventQueueListsPendingSteersFirst(t *testing.T) {
 	require.GreaterOrEqual(t, enqueueAt, 0)
 	assert.Less(t, steerAt, enqueueAt)
 	assert.Contains(t, blocks, ":hourglass_flowing_sand: Steer")
-	assert.Contains(t, blocks, `\"ItemID\":\"222.2\"`)
+	assert.Contains(t, blocks, `\"ItemID\":\"backend-steer\"`)
 	assert.Contains(t, blocks, "https://example.slack.com/archives/C123/p2222?thread_ts=111.0")
 	assert.Contains(t, blocks, "https://example.slack.com/archives/C123/p1112?thread_ts=111.0")
 	assert.Equal(t, 2, strings.Count(blocks, slackQueueJumpActionID))
@@ -6754,14 +6432,9 @@ func TestHandleInteractiveQueueJumpOnSteerHidesAndLeavesSteer(t *testing.T) {
 
 	router := newThreadRouterStub()
 	router.prepareHandled = true
+	router.queue = []protocol.ThreadQueueItem{{ID: "backend-steer", Kind: protocol.InboundKindSteer, Message: "pending steer", Principal: "U123", SlackChannel: "C123", SlackTS: "222.2"}}
 	connector := newTestConnectorWithOptions(server.URL, newTestBus(), nil, router, nil)
 	connector.workspaceURL = "https://example.slack.com"
-	key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.0"})
-	connector.beginSlackStack(key)
-
-	content := protocol.InboundContent{Text: "pending steer"}
-	reply := &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.2", ThreadTS: "111.0"}
-	require.True(t, connector.bufferSlackStack(t.Context(), key, "pending steer", &content, reply, "U123", "", "", nil))
 
 	event := newSlackMessageEvent("111.3", "111.0", "$queue")
 	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
@@ -6773,11 +6446,8 @@ func TestHandleInteractiveQueueJumpOnSteerHidesAndLeavesSteer(t *testing.T) {
 
 	require.Len(t, posted, 2)
 	assert.Equal(t, "true", posted[1].Get("delete_original"))
-	connector.mu.Lock()
-	pending := connector.stacks[key]
-	connector.mu.Unlock()
-	require.Len(t, pending, 1)
-	assert.Equal(t, "pending steer", pending[0].Text)
+	assert.Equal(t, []protocol.ThreadQueueItem{{ID: "backend-steer", Kind: protocol.InboundKindSteer, Message: "pending steer", Principal: "U123", SlackChannel: "C123", SlackTS: "222.2"}}, router.queueSnapshot())
+	assert.Empty(t, connector.stacks)
 }
 
 func TestHandleMessageEventQueueSteerWithEmptyLaterWorkStillNone(t *testing.T) {
@@ -6788,13 +6458,8 @@ func TestHandleMessageEventQueueSteerWithEmptyLaterWorkStillNone(t *testing.T) {
 
 	router := newThreadRouterStub()
 	router.prepareHandled = true
+	router.queue = []protocol.ThreadQueueItem{{ID: "backend-steer", Kind: protocol.InboundKindSteer, Message: "pending steer", Principal: "U123", SlackChannel: "C123", SlackTS: "222.2"}}
 	connector := newTestConnectorWithOptions(server.URL, newTestBus(), nil, router, nil)
-	key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.0"})
-	connector.beginSlackStack(key)
-
-	content := protocol.InboundContent{Text: "pending steer"}
-	reply := &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "222.2", ThreadTS: "111.0"}
-	require.True(t, connector.bufferSlackStack(t.Context(), key, "pending steer", &content, reply, "U123", "", "", nil))
 
 	event := newSlackMessageEvent("111.3", "111.0", "$queue")
 	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
@@ -6902,7 +6567,7 @@ func TestHandleInteractiveQueueHideDeletesCard(t *testing.T) {
 }
 
 func TestSlackQueueCardOmitsJumpWithoutSlackTS(t *testing.T) {
-	_, blocks := slackQueueCard("https://example.slack.com", "C123", "111.0", []protocol.ThreadQueueItem{{ID: "mcp1", Message: "from mcp"}}, nil, nil)
+	_, blocks := slackQueueCard("https://example.slack.com", "C123", "111.0", []protocol.ThreadQueueItem{{ID: "mcp1", Message: "from mcp"}}, nil)
 	encoded, err := json.Marshal(blocks)
 	require.NoError(t, err)
 	assert.NotContains(t, string(encoded), slackQueueJumpActionID)
@@ -6921,6 +6586,7 @@ func TestHandleAppMentionEventRedeliveryPreservesPendingSteersAndQueue(t *testin
 
 	router := newThreadRouterStub()
 	router.prepareHandled = true
+	router.submitHandled = true
 	connector := newTestConnectorWithOptions(server.URL, newTestBus(), []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social", "planner"}, AllowedUserIDs: []string{"U123"}}}, router, inertOneOffCronjobs{})
 	connector.botUserID = "U999"
 
@@ -6939,18 +6605,18 @@ func TestHandleAppMentionEventRedeliveryPreservesPendingSteersAndQueue(t *testin
 
 	connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
 
-	key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: event.Channel, ThreadTS: event.TimeStamp})
-
-	connector.mu.Lock()
-	pending := slices.Clone(connector.stacks[key])
-	connector.mu.Unlock()
-	require.Len(t, pending, 1)
-	assert.Equal(t, "distinct follow-up", pending[0].Text)
+	require.Len(t, router.startedSnapshot(), 1, "redelivery must not start the root again")
+	replies := router.repliesSnapshot()
+	require.Len(t, replies, 1)
+	assert.Equal(t, protocol.InboundKindSteer, replies[0].inbound.Kind)
+	assert.Equal(t, "distinct follow-up", replies[0].inbound.Text)
+	assert.Equal(t, "U123", replies[0].inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+	assert.Equal(t, event.TimeStamp, replies[0].inbound.SlackReply.ThreadTS)
 
 	queue := router.queueSnapshot()
 	require.Len(t, queue, 1)
 	assert.Equal(t, "write the changelog", queue[0].Message)
-	assert.Contains(t, reactions, "/reactions.add "+slackBufferedReaction+" "+followUp.TimeStamp)
+	assert.Contains(t, reactions, "/reactions.add "+slackRobotReaction+" "+followUp.TimeStamp)
 	assert.Contains(t, reactions, "/reactions.add "+slackEnvelopeReaction+" "+enqueue.TimeStamp)
 }
 
@@ -7227,14 +6893,13 @@ func TestHandleMessageEventBuffersCanonicalGoalObjective(t *testing.T) {
 	}
 }
 
-func TestHandleMessageEventBuffersSteerAfterActiveGoalTurnCompletes(t *testing.T) {
+func TestHandleMessageEventHandsOffSteerAfterGoalTurnCompletes(t *testing.T) {
 	for _, tt := range []struct {
 		name       string
 		goalActive bool
-		wantBuffer bool
 	}{
-		{name: "active goal keeps buffering", goalActive: true, wantBuffer: true},
-		{name: "ended goal accepts a new turn", goalActive: false, wantBuffer: false},
+		{name: "active goal hands off steer", goalActive: true},
+		{name: "ended goal hands off steer", goalActive: false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			bus := newTestBus()
@@ -7268,24 +6933,33 @@ func TestHandleMessageEventBuffersSteerAfterActiveGoalTurnCompletes(t *testing.T
 			require.NoError(t, connector.SendResponse(t.Context(), done))
 
 			router.busy = tt.goalActive
+			postedBefore := len(posted)
 
 			steer := newSlackMessageEvent("333.444", "111.222", "don't touch the database")
 			connector.handleMessageEvent(t.Context(), steer, slackNativeForward{})
 
 			key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.222"})
 
-			if tt.wantBuffer {
-				assert.Empty(t, router.repliesSnapshot())
-				require.Len(t, connector.stacks[key], 1)
-				assert.Equal(t, "don't touch the database", connector.stacks[key][0].Text)
-				assert.Contains(t, reactions, "/reactions.add "+slackBufferedReaction+" 333.444")
-				assert.NotContains(t, reactions, "/reactions.add "+slackRobotReaction+" 333.444")
+			// R11: goal presentation does not choose admission or change the message kind.
+			replies := router.repliesSnapshot()
+			require.Len(t, replies, 1)
+			inbound := replies[0].inbound
+			assert.Equal(t, protocol.InboundKindSteer, inbound.Kind)
+			assert.Equal(t, protocol.SourceSlack, inbound.Source)
+			assert.True(t, inbound.Human)
+			assert.Equal(t, "don't touch the database", inbound.Text)
+			assert.Equal(t, "U123", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+			assert.Equal(t, "C123", inbound.SlackReply.ChannelID)
+			assert.Equal(t, "111.222", inbound.SlackReply.ThreadTS)
+			assert.Equal(t, "333.444", inbound.SlackReply.MessageTS)
 
-				return
+			if tt.goalActive {
+				assert.Len(t, posted, postedBefore, "continuing goal must not create another placeholder pair")
+			} else {
+				assert.Len(t, posted, postedBefore+2)
+				assert.Equal(t, slackImmediatePlaceholder, posted[postedBefore].Get("text"))
+				assert.Equal(t, slackAnswerPlaceholder, posted[postedBefore+1].Get("text"))
 			}
-
-			require.Len(t, router.repliesSnapshot(), 1)
-			assert.Equal(t, "don't touch the database", router.repliesSnapshot()[0].inbound.Text)
 
 			_, stacked := connector.stacks[key]
 			assert.True(t, stacked)
@@ -7785,7 +7459,7 @@ func TestHandleMessageEventShowsDollarCommandHelp(t *testing.T) {
 	server := newSlackAgentSwitchTestServer(t, &posted, &ephemeral)
 	defer server.Close()
 
-	runner := newOneOffCronjobLoaderStub()
+	runner := newOneOffCronjobsMock()
 	router := newThreadRouterStub()
 	router.prepareHandled = true
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, runner)
@@ -7807,7 +7481,7 @@ func TestHandleMessageEventShowsDollarCommandHelp(t *testing.T) {
 	assert.Empty(t, router.goalStarts)
 	assert.Empty(t, router.goalStops)
 	assert.Empty(t, router.switched)
-	assert.Empty(t, runner.targetsSnapshot())
+	assert.Empty(t, runner.LoadOneOffCronjobCalls())
 }
 
 func assertSlackCommandHelpTable(t *testing.T, values url.Values) {
@@ -9296,8 +8970,8 @@ func TestParseCanonicalSlackCommandNormalizesCronTargets(t *testing.T) {
 func TestHandleAppMentionEventListsChannelCronjobs(t *testing.T) {
 	var ephemeral []url.Values
 
-	runner := newOneOffCronjobLoaderStub()
-	runner.listed = []string{"daily", "weekly"}
+	runner := newOneOffCronjobsMock()
+	runner.ListCronjobsFunc = func(string) ([]string, error) { return []string{"daily", "weekly"}, nil }
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -9323,8 +8997,9 @@ func TestHandleAppMentionEventListsChannelCronjobs(t *testing.T) {
 	event.Text = "<@U999> $cron"
 	connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
 
-	assert.Empty(t, runner.targetsSnapshot())
-	assert.Equal(t, []string{"#social"}, runner.listChannelsSnapshot())
+	assert.Empty(t, runner.LoadOneOffCronjobCalls())
+	require.Len(t, runner.ListCronjobsCalls(), 1)
+	assert.Equal(t, "#social", runner.ListCronjobsCalls()[0].S)
 	require.Len(t, ephemeral, 1)
 	assert.Equal(t, "daily\nweekly", ephemeral[0].Get("text"))
 	assert.Equal(t, "U123", ephemeral[0].Get("user"))
@@ -9341,8 +9016,9 @@ func TestHandleAppMentionEventRunsOnDemandCronInRootThread(t *testing.T) {
 			bus := newTestBus()
 			defer bus.Close()
 
-			runner := newOneOffCronjobLoaderStub()
-			runner.loaded = protocol.OneOffCronjob{Agent: "cron", RelativePath: "cron/main-cronjob.md"}
+			runner := newOneOffCronjobsMock()
+			loaded := protocol.OneOffCronjob{Agent: "cron", RelativePath: "cron/main-cronjob.md"}
+			runner.LoadOneOffCronjobFunc = func(string) (protocol.OneOffCronjob, error) { return loaded, nil }
 			router := newThreadRouterStub()
 
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -9367,19 +9043,13 @@ func TestHandleAppMentionEventRunsOnDemandCronInRootThread(t *testing.T) {
 			event.Text = tt.text
 			connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
 
-			require.Equal(t, []string{"main-cronjob"}, runner.targetsSnapshot())
+			require.Len(t, runner.LoadOneOffCronjobCalls(), 1)
+			require.Equal(t, "main-cronjob", runner.LoadOneOffCronjobCalls()[0].S)
 			assert.Empty(t, router.startedSnapshot())
-			final := readOneOutbound(t, bus)
-			require.NotNil(t, final.SlackReply)
-			assert.Equal(t, event.TimeStamp, final.SlackReply.ThreadTS)
-			final.MarkDelivered(nil)
-
-			wantRegistration := []cronThreadRegistration{{channelID: "C123", threadTS: event.TimeStamp, agent: "cron"}}
-
 			require.Eventually(t, func() bool {
-				return slices.Equal(wantRegistration, router.cronRegistrationsSnapshot())
+				return len(runner.RunOneOffCronjobCalls()) == 1
 			}, time.Second, time.Millisecond)
-			assert.Equal(t, wantRegistration, router.cronRegistrationsSnapshot())
+			require.Equal(t, protocol.SlackThreadConversationID("C123", event.TimeStamp), runner.RunOneOffCronjobCalls()[0].OneOffCronjob.ConversationID)
 		})
 	}
 }
@@ -9421,6 +9091,81 @@ func TestHandleAppMentionEventStartsGoal(t *testing.T) {
 	}
 }
 
+func TestHandleAppMentionEventRootEnqueueAndQueue(t *testing.T) {
+	bus := newTestBus()
+	defer bus.Close()
+
+	var (
+		posted    []url.Values
+		reactions []string
+	)
+
+	server := newSlackStackTestServer(t, &posted, &reactions)
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+	connector.botUserID = "U999"
+	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social"}, AllowedUserIDs: []string{"U123"}}}
+
+	help := newSlackAppMentionEvent()
+	help.Text = "<@U999> $enqueue"
+	connector.handleAppMentionEvent(t.Context(), help, slackNativeForward{})
+	require.Empty(t, router.queueSnapshot())
+
+	enqueue := newSlackAppMentionEvent()
+	enqueue.Text = "<@U999> $enqueue write the changelog"
+	enqueue.TimeStamp = "171235.0001"
+	connector.handleAppMentionEvent(t.Context(), enqueue, slackNativeForward{})
+
+	queue := router.queueSnapshot()
+	require.Len(t, queue, 1)
+	assert.Equal(t, "write the changelog", queue[0].Message)
+	assert.Equal(t, "C123", queue[0].SlackChannel)
+	assert.Equal(t, "171235.0001", queue[0].SlackTS)
+	assert.Contains(t, reactions, "/reactions.add "+slackEnvelopeReaction+" 171235.0001")
+
+	card := newSlackAppMentionEvent()
+	card.Text = "<@U999> $queue"
+	card.TimeStamp = "171236.0002"
+	connector.handleAppMentionEvent(t.Context(), card, slackNativeForward{})
+	assert.NotEmpty(t, posted)
+}
+
+func TestHandleAppMentionEventStartsWorkflow(t *testing.T) {
+	bus := newTestBus()
+	defer bus.Close()
+
+	var (
+		posted    []url.Values
+		reactions []string
+	)
+
+	server := newSlackStackTestServer(t, &posted, &reactions)
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	router.workflows = []protocol.WorkflowDescription{{Name: "audit", Description: "Audit routes"}}
+	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, nil)
+	connector.botUserID = "U999"
+	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social"}, AllowedUserIDs: []string{"U123"}}}
+
+	list := newSlackAppMentionEvent()
+	list.Text = "<@U999> $workflow"
+	connector.handleAppMentionEvent(t.Context(), list, slackNativeForward{})
+	assert.Empty(t, router.workflowStarts)
+
+	event := newSlackAppMentionEvent()
+	event.Text = "<@U999> $workflow audit src/routes"
+	event.TimeStamp = "171237.0003"
+	connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
+	require.Len(t, router.workflowStarts, 1)
+	assert.Equal(t, "social", router.workflowStarts[0].agent)
+	assert.Equal(t, "audit", router.workflowStarts[0].name)
+	assert.Equal(t, "src/routes", router.workflowStarts[0].args)
+	assert.Contains(t, reactions, "/reactions.add "+slackRobotReaction+" 171237.0003")
+}
+
 func TestHandleAppMentionEventShowsDollarCommandHelp(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
@@ -9458,7 +9203,7 @@ func TestHandleAppMentionEventShowsDollarCommandHelp(t *testing.T) {
 	}))
 	defer server.Close()
 
-	runner := newOneOffCronjobLoaderStub()
+	runner := newOneOffCronjobsMock()
 	router := newThreadRouterStub()
 	connector := newTestConnectorWithOptions(server.URL, bus, nil, router, runner)
 	connector.botUserID = "U999"
@@ -9479,7 +9224,7 @@ func TestHandleAppMentionEventShowsDollarCommandHelp(t *testing.T) {
 	assert.Empty(t, ephemeral)
 	assert.Empty(t, router.startedSnapshot())
 	assert.Empty(t, router.goalStarts)
-	assert.Empty(t, runner.targetsSnapshot())
+	assert.Empty(t, runner.LoadOneOffCronjobCalls())
 }
 
 func TestHandleAppMentionEventShowsRootAgentSelector(t *testing.T) {
@@ -9660,6 +9405,7 @@ func TestHandleAppMentionEventPreservesBufferedReplyAcrossRootRedelivery(t *test
 
 	router := newThreadRouterStub()
 	router.prepareHandled = true
+	router.submitHandled = true
 	connector := newTestConnectorWithOptions(server.URL, bus, []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social", "planner"}, AllowedUserIDs: []string{"U123"}}}, router, inertOneOffCronjobs{})
 	connector.botUserID = "U999"
 
@@ -9676,15 +9422,10 @@ func TestHandleAppMentionEventPreservesBufferedReplyAcrossRootRedelivery(t *test
 
 	connector.handleAppMentionEvent(t.Context(), event, slackNativeForward{})
 
-	assert.Len(t, router.startedSnapshot(), 2)
-
-	key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: event.Channel, ThreadTS: event.TimeStamp})
-
-	connector.mu.Lock()
-	buffered := slices.Clone(connector.stacks[key])
-	connector.mu.Unlock()
-	require.Len(t, buffered, 1)
-	assert.Equal(t, "distinct follow-up", buffered[0].Text)
+	assert.Len(t, router.startedSnapshot(), 1)
+	replies := router.repliesSnapshot()
+	require.Len(t, replies, 1)
+	assert.Equal(t, "distinct follow-up", replies[0].inbound.Text)
 
 	completed := protocol.NewOutboundMessage(protocol.SourceSlack, "test", "root answer", protocol.OutputTargetSlack)
 	completed.TurnID = "root-turn"
@@ -9692,13 +9433,10 @@ func TestHandleAppMentionEventPreservesBufferedReplyAcrossRootRedelivery(t *test
 	completed.SlackReply = &protocol.SlackReplyTarget{ChannelID: event.Channel, MessageTS: event.TimeStamp, ThreadTS: event.TimeStamp}
 	require.NoError(t, connector.SendResponse(t.Context(), completed))
 
-	connector.mu.Lock()
-	buffered = slices.Clone(connector.stacks[key])
-	connector.mu.Unlock()
-	require.Len(t, buffered, 1)
-	assert.Equal(t, "distinct follow-up", buffered[0].Text)
-	assert.Empty(t, router.repliesSnapshot())
-	assert.Contains(t, reactions, "/reactions.add "+slackBufferedReaction+" "+followUp.TimeStamp)
+	replies = router.repliesSnapshot()
+	require.Len(t, replies, 1)
+	assert.Equal(t, "distinct follow-up", replies[0].inbound.Text)
+	assert.Contains(t, reactions, "/reactions.add "+slackRobotReaction+" "+followUp.TimeStamp)
 }
 
 func TestHandleAppMentionEventRejectsUnknownRootAgent(t *testing.T) {
@@ -9771,7 +9509,7 @@ func TestHandleAppMentionEventCleansUpUnregisteredDollarCommandHelp(t *testing.T
 			router := newThreadRouterStub()
 			router.errStart = tt.errStart
 			router.registerExisting = tt.existing
-			connector := newTestConnectorWithOptions(server.URL, bus, nil, router, newOneOffCronjobLoaderStub())
+			connector := newTestConnectorWithOptions(server.URL, bus, nil, router, newOneOffCronjobsMock())
 			connector.botUserID = "U999"
 			connector.config.Channels = []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"social"}, AllowedUserIDs: []string{"U123"}}}
 
@@ -9792,8 +9530,9 @@ func TestHandleMessageEventRunsHyphenOnDemandCronInManagedThread(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
 
-	runner := newOneOffCronjobLoaderStub()
-	runner.loaded = protocol.OneOffCronjob{Agent: "cron", RelativePath: "cron/main cronjob.md"}
+	runner := newOneOffCronjobsMock()
+	loaded := protocol.OneOffCronjob{Agent: "cron", RelativePath: "cron/main cronjob.md"}
+	runner.LoadOneOffCronjobFunc = func(string) (protocol.OneOffCronjob, error) { return loaded, nil }
 	router := newThreadRouterStub()
 	router.threadAgentHandled = true
 	router.submitHandled = true
@@ -9818,30 +9557,25 @@ func TestHandleMessageEventRunsHyphenOnDemandCronInManagedThread(t *testing.T) {
 	event := newSlackMessageEvent("171234.5678", "171234.1111", "$CrOn main cronjob")
 	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
 
-	require.Equal(t, []string{"main cronjob"}, runner.targetsSnapshot())
+	require.Len(t, runner.LoadOneOffCronjobCalls(), 1)
+	require.Equal(t, "main cronjob", runner.LoadOneOffCronjobCalls()[0].S)
 	router.mu.Lock()
 	reads := append([]threadAgentReadCall(nil), router.threadAgentReads...)
 	router.mu.Unlock()
 	assert.Equal(t, []threadAgentReadCall{{channelID: "C123", threadTS: event.ThreadTimeStamp}}, reads)
-	final := readOneOutbound(t, bus)
-	require.NotNil(t, final.SlackReply)
-	assert.Equal(t, event.ThreadTimeStamp, final.SlackReply.ThreadTS)
-	final.MarkDelivered(nil)
-
-	wantRegistration := []cronThreadRegistration{{channelID: "C123", threadTS: event.ThreadTimeStamp, agent: "cron"}}
-
 	require.Eventually(t, func() bool {
-		return slices.Equal(wantRegistration, router.cronRegistrationsSnapshot())
+		return len(runner.RunOneOffCronjobCalls()) == 1
 	}, time.Second, time.Millisecond)
-	assert.Equal(t, wantRegistration, router.cronRegistrationsSnapshot())
+	require.Equal(t, protocol.SlackThreadConversationID("C123", event.ThreadTimeStamp), runner.RunOneOffCronjobCalls()[0].OneOffCronjob.ConversationID)
 }
 
 func TestHandleMessageEventIgnoresOnDemandCronInUnmanagedThread(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
 
-	runner := newOneOffCronjobLoaderStub()
-	runner.loaded = protocol.OneOffCronjob{Agent: "cron", RelativePath: "cron/main-cronjob.md"}
+	runner := newOneOffCronjobsMock()
+	loaded := protocol.OneOffCronjob{Agent: "cron", RelativePath: "cron/main-cronjob.md"}
+	runner.LoadOneOffCronjobFunc = func(string) (protocol.OneOffCronjob, error) { return loaded, nil }
 	router := newThreadRouterStub()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -9858,19 +9592,19 @@ func TestHandleMessageEventIgnoresOnDemandCronInUnmanagedThread(t *testing.T) {
 	event := newSlackMessageEvent("171234.9999", "171234.5678", "$cron main-cronjob")
 	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
 
-	assert.Empty(t, runner.targetsSnapshot())
-	assert.Empty(t, runner.runsSnapshot())
+	assert.Empty(t, runner.LoadOneOffCronjobCalls())
+	assert.Empty(t, runner.RunOneOffCronjobCalls())
 }
 
 func TestHandleMessageEventIgnoresPlainRootOnDemandCron(t *testing.T) {
-	runner := newOneOffCronjobLoaderStub()
+	runner := newOneOffCronjobsMock()
 	router := newThreadRouterStub()
 	connector := newTestConnectorWithOptions("http://127.0.0.1", nil, nil, router, runner)
 
 	event := newSlackMessageEvent("171234.5678", "", "$cron main-cronjob")
 	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
 
-	assert.Empty(t, runner.targetsSnapshot())
+	assert.Empty(t, runner.LoadOneOffCronjobCalls())
 	assert.Empty(t, router.startedSnapshot())
 }
 
@@ -9883,14 +9617,9 @@ func TestHandleMessageEventRunsOnDemandCronInSlackThread(t *testing.T) {
 	reactionCalls, conversationInfoCalls := 0, 0
 	router := newThreadRouterStub()
 	router.submitHandled = true
-	runner := newOneOffCronjobLoaderStub()
-	runner.loaded = protocol.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", TextChannel: "#ops"}
-	runner.runResult = protocol.CronRunResult{Text: "normal text", VerbatimMessage: "final payload"}
-	runner.onRun = func(ctx context.Context, progress *protocol.CronProgress) {
-		require.NoError(t, progress.Thinking(ctx, "thinking one"))
-		require.NoError(t, progress.Thinking(ctx, "thinking two"))
-		require.NoError(t, progress.Message(ctx, "assistant message"))
-	}
+	runner := newOneOffCronjobsMock()
+	loaded := protocol.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", TextChannel: "#ops"}
+	runner.LoadOneOffCronjobFunc = func(string) (protocol.OneOffCronjob, error) { return loaded, nil }
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -9938,89 +9667,32 @@ func TestHandleMessageEventRunsOnDemandCronInSlackThread(t *testing.T) {
 	connector.handleMessageEvent(context.Background(), event, slackNativeForward{})
 
 	assert.Equal(t, 1, conversationInfoCalls)
-	assert.Equal(t, []string{"daily"}, runner.targetsSnapshot())
-	require.Len(t, posted, 2)
-	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
-	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
+	require.Len(t, runner.LoadOneOffCronjobCalls(), 1)
+	assert.Equal(t, "daily", runner.LoadOneOffCronjobCalls()[0].S)
+	require.Eventually(t, func() bool { return len(runner.RunOneOffCronjobCalls()) == 1 }, time.Second, time.Millisecond)
+
+	want := loaded
+	want.ConversationID = "slack-thread:C123:171234.5678"
+	assert.Equal(t, &want, runner.RunOneOffCronjobCalls()[0].OneOffCronjob)
 	assert.Equal(t, 1, reactionCalls)
-	thinking := readOneOutbound(t, bus)
-	require.Len(t, updated, 1)
-	assert.Regexp(t, `^Cronjob \x60cron/daily\.md\x60 ran at \x60.+\x60 with agent \x60cron\x60\.$`, updated[0].Get("text"))
-	assert.Contains(t, updated[0].Get("blocks"), `"text":"running..."`)
-	assert.Equal(t, "thinking one", thinking.ProgressText)
-	assert.False(t, thinking.Complete)
-	require.NotNil(t, thinking.SlackReply)
-	assert.Equal(t, "171234.5678", thinking.SlackReply.ThreadTS)
-	require.NoError(t, connector.SendResponse(context.Background(), thinking))
-	require.Len(t, posted, 2)
-	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
-	assert.Equal(t, "171234.5678", posted[0].Get("thread_ts"))
-	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
-	assert.Equal(t, "171234.5678", posted[1].Get("thread_ts"))
-
-	thinking = readOneOutbound(t, bus)
-	assert.Equal(t, "thinking one\nthinking two", thinking.ProgressText)
-	require.NoError(t, connector.SendResponse(context.Background(), thinking))
-	require.Len(t, posted, 2)
-	require.NoError(t, connector.flushProgressText(context.Background(), thinking.TurnID))
-	require.Len(t, updated, 2)
-	assert.Contains(t, updated[1].Get("text"), "thinking one")
-	assert.Contains(t, updated[1].Get("text"), "thinking two")
-
-	message := readOneOutbound(t, bus)
-	assert.Equal(t, "assistant message", message.Text)
-	assert.True(t, message.PostProgressText)
-	assert.False(t, message.Complete)
-	require.NotNil(t, message.SlackReply)
-	assert.Equal(t, "171234.5678", message.SlackReply.ThreadTS)
-	require.NoError(t, connector.SendResponse(context.Background(), message))
-	require.Len(t, posted, 3)
-	assert.Equal(t, "assistant message", posted[2].Get("text"))
-	assert.Equal(t, "171234.5678", posted[2].Get("thread_ts"))
-
-	final := readOneOutbound(t, bus)
-	assert.Equal(t, "final payload", final.Text)
-	assert.True(t, final.Complete)
-	require.NotNil(t, final.SlackReply)
-	assert.Equal(t, "171234.5678", final.SlackReply.ThreadTS)
-	require.NoError(t, connector.SendResponse(context.Background(), final))
-	final.MarkDelivered(nil)
-	require.Len(t, posted, 3)
+	// X output is private. Only Backend Sync events may render into Y.
+	assert.Empty(t, posted)
+	assert.Empty(t, updated)
 	assert.Empty(t, deleted)
-	require.Len(t, updated, 4)
-	assert.Regexp(t, `^Cronjob \x60cron/daily\.md\x60 ran at \x60.+\x60 with agent \x60cron\x60\.$`, updated[2].Get("text"))
-
-	var blocks []struct {
-		Type string `json:"type"`
-		Text struct {
-			Text string `json:"text"`
-		} `json:"text"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(updated[2].Get("blocks")), &blocks))
-	require.Len(t, blocks, 3)
-	assert.Equal(t, "header", blocks[0].Type)
-	assert.True(t, strings.HasPrefix(blocks[0].Text.Text, "🔁 daily.md | cron | "))
-	assert.Equal(t, "divider", blocks[1].Type)
-	assert.Equal(t, "final payload", blocks[2].Text.Text)
-	assert.Contains(t, updated[3].Get("blocks"), `"status":"complete"`)
-	assert.Contains(t, updated[3].Get("blocks"), `"title":"Complete"`)
-	assert.NotContains(t, updated[3].Get("text"), slackImmediatePlaceholder)
-
 	assert.Empty(t, router.startedSnapshot())
-	assert.Equal(t, []protocol.OneOffCronjob{{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", TextChannel: "#ops"}}, runner.runsSnapshot())
-	require.Eventually(t, func() bool {
-		return len(router.cronRegistrationsSnapshot()) == 1
-	}, time.Second, time.Millisecond)
-	assert.Equal(t, cronThreadRegistration{channelID: "C123", threadTS: "171234.5678", agent: "cron"}, router.cronRegistrationsSnapshot()[0])
+	assert.Empty(t, router.cronRegistrationsSnapshot())
 }
 
 func TestHandleMessageEventRunsOnDemandCronWhenSlackFeedbackFails(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
 
-	runner := newOneOffCronjobLoaderStub()
-	runner.loaded = protocol.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", TextChannel: "#ops"}
-	runner.runResult = protocol.CronRunResult{VerbatimMessage: "done"}
+	runner := newOneOffCronjobsMock()
+	loaded := protocol.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", TextChannel: "#ops"}
+	runner.LoadOneOffCronjobFunc = func(string) (protocol.OneOffCronjob, error) { return loaded, nil }
+	runner.RunOneOffCronjobFunc = func(context.Context, *protocol.OneOffCronjob) (protocol.CronRunResult, error) {
+		return protocol.CronRunResult{VerbatimMessage: "done"}, nil
+	}
 	router := newThreadRouterStub()
 	router.threadAgentHandled = true
 
@@ -10041,17 +9713,14 @@ func TestHandleMessageEventRunsOnDemandCronWhenSlackFeedbackFails(t *testing.T) 
 	event.Channel = "C123"
 	connector.handleMessageEvent(context.Background(), event, slackNativeForward{})
 
-	final := readOneOutbound(t, bus)
-	assert.Equal(t, "done", final.Text)
-	assert.True(t, final.Complete)
-	final.MarkDelivered(nil)
+	require.Len(t, runner.LoadOneOffCronjobCalls(), 1)
+	assert.Equal(t, "daily", runner.LoadOneOffCronjobCalls()[0].S)
+	require.Eventually(t, func() bool { return len(runner.RunOneOffCronjobCalls()) == 1 }, time.Second, time.Millisecond)
 
-	assert.Equal(t, []string{"daily"}, runner.targetsSnapshot())
-	assert.Equal(t, []protocol.OneOffCronjob{runner.loaded}, runner.runsSnapshot())
-	require.Eventually(t, func() bool {
-		return len(router.cronRegistrationsSnapshot()) == 1
-	}, time.Second, time.Millisecond)
-	assert.Equal(t, cronThreadRegistration{channelID: "C123", threadTS: "171234.5678", agent: "cron"}, router.cronRegistrationsSnapshot()[0])
+	want := loaded
+	want.ConversationID = "slack-thread:C123:171234.5678"
+	assert.Equal(t, &want, runner.RunOneOffCronjobCalls()[0].OneOffCronjob)
+	assert.Empty(t, router.cronRegistrationsSnapshot())
 }
 
 func TestHandleMessageEventRejectsInvalidOnDemandCronRequest(t *testing.T) {
@@ -10062,8 +9731,8 @@ func TestHandleMessageEventRejectsInvalidOnDemandCronRequest(t *testing.T) {
 
 	router := newThreadRouterStub()
 	router.prepareHandled = true
-	runner := newOneOffCronjobLoaderStub()
-	runner.errLoad = assert.AnError
+	runner := newOneOffCronjobsMock()
+	runner.LoadOneOffCronjobFunc = func(string) (protocol.OneOffCronjob, error) { return protocol.OneOffCronjob{}, assert.AnError }
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -10090,7 +9759,8 @@ func TestHandleMessageEventRejectsInvalidOnDemandCronRequest(t *testing.T) {
 	connector.handleMessageEvent(context.Background(), event, slackNativeForward{})
 
 	assert.Empty(t, posted)
-	assert.Equal(t, []string{"../bad"}, runner.targetsSnapshot())
+	require.Len(t, runner.LoadOneOffCronjobCalls(), 1)
+	assert.Equal(t, "../bad", runner.LoadOneOffCronjobCalls()[0].S)
 
 	outbound := readOneOutbound(t, bus)
 	assert.Equal(t, "I couldn't find that cronjob. Use a top-level cron filename like `daily` or `daily.md`.", outbound.Text)
@@ -10110,8 +9780,8 @@ func TestHandleMessageEventConsumesBareCronCommands(t *testing.T) {
 
 			router := newThreadRouterStub()
 			router.prepareHandled = true
-			runner := newOneOffCronjobLoaderStub()
-			runner.listed = []string{"daily", "weekly"}
+			runner := newOneOffCronjobsMock()
+			runner.ListCronjobsFunc = func(string) ([]string, error) { return []string{"daily", "weekly"}, nil }
 
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
@@ -10136,8 +9806,9 @@ func TestHandleMessageEventConsumesBareCronCommands(t *testing.T) {
 			event.Channel = "C123"
 			connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
 
-			assert.Empty(t, runner.targetsSnapshot())
-			assert.Equal(t, []string{"#social"}, runner.listChannelsSnapshot())
+			assert.Empty(t, runner.LoadOneOffCronjobCalls())
+			require.Len(t, runner.ListCronjobsCalls(), 1)
+			assert.Equal(t, "#social", runner.ListCronjobsCalls()[0].S)
 			assert.Empty(t, router.repliesSnapshot())
 			require.Len(t, ephemeral, 1)
 			assert.Equal(t, "daily\nweekly", ephemeral[0].Get("text"))
@@ -10151,18 +9822,19 @@ func TestHandleOnDemandCronRequestDoesNotRunMissingCronWhenReplyFails(t *testing
 	bus := newTestBus()
 	bus.Close()
 
-	runner := newOneOffCronjobLoaderStub()
-	runner.errLoad = assert.AnError
+	runner := newOneOffCronjobsMock()
+	runner.LoadOneOffCronjobFunc = func(string) (protocol.OneOffCronjob, error) { return protocol.OneOffCronjob{}, assert.AnError }
 	connector := newTestConnectorWithOptions("http://127.0.0.1", bus, nil, nil, runner)
 	replyTarget := &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "171234.5678", ThreadTS: "171234.5678"}
 
 	connector.handleOnDemandCronRequest(context.Background(), "missing", replyTarget)
 
-	assert.Equal(t, []string{"missing"}, runner.targetsSnapshot())
-	assert.Empty(t, runner.runsSnapshot())
+	require.Len(t, runner.LoadOneOffCronjobCalls(), 1)
+	assert.Equal(t, "missing", runner.LoadOneOffCronjobCalls()[0].S)
+	assert.Empty(t, runner.RunOneOffCronjobCalls())
 }
 
-func TestHandleMessageEventReportsOnDemandCronRunFailure(t *testing.T) {
+func TestHandleMessageEventDelegatesOnDemandCronRunFailure(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
 
@@ -10170,9 +9842,12 @@ func TestHandleMessageEventReportsOnDemandCronRunFailure(t *testing.T) {
 
 	router := newThreadRouterStub()
 	router.prepareHandled = true
-	runner := newOneOffCronjobLoaderStub()
-	runner.loaded = protocol.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", TextChannel: "#social"}
-	runner.errRun = assert.AnError
+	runner := newOneOffCronjobsMock()
+	loaded := protocol.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md", TextChannel: "#social"}
+	runner.LoadOneOffCronjobFunc = func(string) (protocol.OneOffCronjob, error) { return loaded, nil }
+	runner.RunOneOffCronjobFunc = func(context.Context, *protocol.OneOffCronjob) (protocol.CronRunResult, error) {
+		return protocol.CronRunResult{}, assert.AnError
+	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -10209,66 +9884,38 @@ func TestHandleMessageEventReportsOnDemandCronRunFailure(t *testing.T) {
 	event.Channel = "C123"
 	connector.handleMessageEvent(context.Background(), event, slackNativeForward{})
 
-	require.Len(t, posted, 2)
-	assert.Equal(t, slackImmediatePlaceholder, posted[0].Get("text"))
-	assert.Equal(t, slackAnswerPlaceholder, posted[1].Get("text"))
-	failure := readOneOutbound(t, bus)
-	assert.Equal(t, "I couldn't run that on-demand cron right now.", failure.Text)
-	require.NotNil(t, failure.SlackReply)
-	assert.Equal(t, "171234.5678", failure.SlackReply.ThreadTS)
-	require.NoError(t, connector.SendResponse(context.Background(), failure))
-	failure.MarkDelivered(nil)
-	require.Len(t, posted, 2)
-	require.Len(t, updated, 2)
-	assert.Contains(t, updated[0].Get("blocks"), `"text":"running..."`)
-	assert.Equal(t, failure.Text, updated[1].Get("text"))
+	require.Eventually(t, func() bool { return len(runner.RunOneOffCronjobCalls()) == 1 }, time.Second, time.Millisecond)
+
+	want := loaded
+	want.ConversationID = "slack-thread:C123:171234.5678"
+	assert.Equal(t, &want, runner.RunOneOffCronjobCalls()[0].OneOffCronjob)
+	assert.Empty(t, posted)
+	assert.Empty(t, updated)
 	assert.Empty(t, router.startedSnapshot())
-	assert.Equal(t, []cronThreadRegistration{{channelID: "C123", threadTS: "171234.5678", agent: "cron"}}, router.cronRegistrationsSnapshot())
+	assert.Empty(t, router.cronRegistrationsSnapshot())
 }
 
-func TestRunOnDemandCronIgnoresBlankProgressAndPublishesEmptyResultFallback(t *testing.T) {
+func TestRunOnDemandCronDoesNotDuplicateFrontendDelivery(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
 
-	runner := newOneOffCronjobLoaderStub()
-	runner.onRun = func(ctx context.Context, progress *protocol.CronProgress) {
-		require.NoError(t, progress.Thinking(ctx, " \t "))
-		require.NoError(t, progress.Message(ctx, " \n "))
-	}
+	runner := newOneOffCronjobsMock()
 
 	connector := newTestConnectorWithOptions("http://127.0.0.1", bus, nil, nil, runner)
 	loaded := protocol.OneOffCronjob{Agent: "cron", Prompt: "daily prompt", RelativePath: "cron/daily.md"}
-	replyTarget := &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "171234.5678", ThreadTS: "171234.5678"}
-
-	done := make(chan struct{})
-
-	go func() {
-		connector.runOnDemandCron(context.Background(), loaded, replyTarget, "turn-1")
-		close(done)
-	}()
-
-	outbound := readOneOutbound(t, bus)
-	assert.Equal(t, "Cronjob completed and decided to emit no human-visible output.", outbound.Text)
-	assert.True(t, outbound.Complete)
-	require.NotNil(t, outbound.SlackReply)
-	assert.Equal(t, replyTarget, outbound.SlackReply)
-	outbound.MarkDelivered(nil)
-	<-done
-	assert.Equal(t, []protocol.OneOffCronjob{loaded}, runner.runsSnapshot())
+	connector.runOnDemandCron(t.Context(), &loaded)
+	assert.Empty(t, bus.outbound)
+	require.Len(t, runner.RunOneOffCronjobCalls(), 1)
+	assert.Equal(t, &loaded, runner.RunOneOffCronjobCalls()[0].OneOffCronjob)
 }
 
-func TestHandleOnDemandCronRequestRegistersThreadBeforeRun(t *testing.T) {
+func TestHandleOnDemandCronRequestPassesDestinationBeforeRun(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
 
-	started := make(chan struct{})
-	release := make(chan struct{})
-	runner := newOneOffCronjobLoaderStub()
-	runner.loaded = protocol.OneOffCronjob{Agent: "cron", RelativePath: "cron/daily.md"}
-	runner.onRun = func(context.Context, *protocol.CronProgress) {
-		close(started)
-		<-release
-	}
+	runner := newOneOffCronjobsMock()
+	loaded := protocol.OneOffCronjob{Agent: "cron", RelativePath: "cron/daily.md"}
+	runner.LoadOneOffCronjobFunc = func(string) (protocol.OneOffCronjob, error) { return loaded, nil }
 	router := newThreadRouterStub()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -10289,28 +9936,21 @@ func TestHandleOnDemandCronRequestRegistersThreadBeforeRun(t *testing.T) {
 	replyTarget := &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "171234.5678", ThreadTS: "171234.5678"}
 	connector.handleOnDemandCronRequest(t.Context(), "daily", replyTarget)
 
-	want := []cronThreadRegistration{{channelID: "C123", threadTS: "171234.5678", agent: "cron"}}
-	require.Equal(t, want, router.cronRegistrationsSnapshot())
+	require.Eventually(t, func() bool { return len(runner.RunOneOffCronjobCalls()) == 1 }, time.Second, time.Millisecond)
 
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("one-off cron run did not start")
-	}
-
-	assert.Equal(t, want, router.cronRegistrationsSnapshot())
-	close(release)
-
-	outbound := readOneOutbound(t, bus)
-	outbound.MarkDelivered(nil)
+	want := loaded
+	want.ConversationID = "slack-thread:C123:171234.5678"
+	require.Equal(t, &want, runner.RunOneOffCronjobCalls()[0].OneOffCronjob)
+	assert.Empty(t, router.cronRegistrationsSnapshot())
 }
 
-func TestHandleOnDemandCronRequestRunsWhenRegisterFails(t *testing.T) {
+func TestHandleOnDemandCronRequestDoesNotUseLegacyRegistration(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
 
-	runner := newOneOffCronjobLoaderStub()
-	runner.loaded = protocol.OneOffCronjob{Agent: "cron", RelativePath: "cron/daily.md"}
+	runner := newOneOffCronjobsMock()
+	loaded := protocol.OneOffCronjob{Agent: "cron", RelativePath: "cron/daily.md"}
+	runner.LoadOneOffCronjobFunc = func(string) (protocol.OneOffCronjob, error) { return loaded, nil }
 	router := newThreadRouterStub()
 	router.errStart = assert.AnError
 
@@ -10332,24 +9972,25 @@ func TestHandleOnDemandCronRequestRunsWhenRegisterFails(t *testing.T) {
 	replyTarget := &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "171234.5678", ThreadTS: "171234.5678"}
 	connector.handleOnDemandCronRequest(t.Context(), "daily", replyTarget)
 
-	outbound := readOneOutbound(t, bus)
-	outbound.MarkDelivered(nil)
-	assert.Equal(t, []protocol.OneOffCronjob{runner.loaded}, runner.runsSnapshot())
+	require.Eventually(t, func() bool { return len(runner.RunOneOffCronjobCalls()) == 1 }, time.Second, time.Millisecond)
+
+	want := loaded
+	want.ConversationID = "slack-thread:C123:171234.5678"
+	assert.Equal(t, &want, runner.RunOneOffCronjobCalls()[0].OneOffCronjob)
+	assert.Empty(t, router.cronRegistrationsSnapshot())
 }
 
-func TestHandleMessageEventEnqueuesFollowUpDuringOnDemandCron(t *testing.T) {
+func TestHandleMessageEventSubmitsFollowUpToOnDemandCronDestination(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
 
-	started := make(chan struct{})
-	release := make(chan struct{})
-	runner := newOneOffCronjobLoaderStub()
-	runner.loaded = protocol.OneOffCronjob{Agent: "cron", RelativePath: "cron/loop-ce-fork.md"}
-	runner.onRun = func(context.Context, *protocol.CronProgress) {
-		close(started)
-		<-release
-	}
+	runner := newOneOffCronjobsMock()
+	loaded := protocol.OneOffCronjob{Agent: "cron", RelativePath: "cron/loop-ce-fork.md"}
+	runner.LoadOneOffCronjobFunc = func(string) (protocol.OneOffCronjob, error) { return loaded, nil }
 	router := newThreadRouterStub()
+	router.busy = true // Backend owns the producer reservation, not the connector.
+	router.threadAgent = "selected-human-agent"
+	router.submitHandled = true
 
 	var reactions []string
 
@@ -10381,34 +10022,22 @@ func TestHandleMessageEventEnqueuesFollowUpDuringOnDemandCron(t *testing.T) {
 	replyTarget := &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "171234.5678", ThreadTS: "171234.5678", RecipientUserID: "U123"}
 	connector.handleOnDemandCronRequest(t.Context(), "loop-ce-fork.md", replyTarget)
 
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("one-off cron run did not start")
-	}
+	require.Eventually(t, func() bool { return len(runner.RunOneOffCronjobCalls()) == 1 }, time.Second, time.Millisecond)
 
 	event := newSlackMessageEvent("171234.9999", "171234.5678", "Progress?")
 	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
 
-	assert.Empty(t, router.repliesSnapshot())
-	queue := router.queueSnapshot()
-	require.Len(t, queue, 1)
-	assert.Equal(t, "Progress?", queue[0].Message)
-	assert.Equal(t, "C123", queue[0].SlackChannel)
-	assert.Equal(t, "171234.9999", queue[0].SlackTS)
-	assert.Contains(t, reactions, "/reactions.add "+slackEnvelopeReaction+" 171234.9999")
-	assert.NotContains(t, reactions, "/reactions.add "+slackRobotReaction+" 171234.9999")
-
-	close(release)
-
-	outbound := readOneOutbound(t, bus)
-	outbound.MarkDelivered(nil)
-
-	require.Eventually(t, func() bool {
-		return len(router.queuedPicksSnapshot()) == 1
-	}, time.Second, time.Millisecond)
-	assert.Equal(t, []cronThreadRegistration{{channelID: "C123", threadTS: "171234.5678"}}, router.queuedPicksSnapshot())
-	assert.Empty(t, router.repliesSnapshot())
+	replies := router.repliesSnapshot()
+	require.Len(t, replies, 1)
+	assert.Equal(t, "C123", replies[0].channelID)
+	assert.Equal(t, "171234.5678", replies[0].threadTS)
+	assert.Equal(t, "Progress?", replies[0].inbound.Text)
+	assert.Equal(t, protocol.InboundKindSteer, replies[0].inbound.Kind)
+	assert.Equal(t, "U123", replies[0].inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+	assert.Equal(t, "171234.9999", replies[0].inbound.SlackReply.MessageTS)
+	assert.Empty(t, router.queueSnapshot())
+	assert.Empty(t, router.queuedPicksSnapshot())
+	assert.Contains(t, reactions, "/reactions.add "+slackRobotReaction+" 171234.9999")
 }
 
 func TestHandleMessageEventIgnoresUnknownThreadReplies(t *testing.T) {
@@ -10627,7 +10256,7 @@ func TestHandleReactionAddedEventStopsExternalMCPResponseConversation(t *testing
 }
 
 func TestHandleReactionAddedEventIgnoresCronReaction(t *testing.T) {
-	runner := newOneOffCronjobLoaderStub()
+	runner := newOneOffCronjobsMock()
 
 	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		assert.Failf(t, "unexpected Slack API path", "%q", r.URL.Path)
@@ -10637,7 +10266,7 @@ func TestHandleReactionAddedEventIgnoresCronReaction(t *testing.T) {
 	connector := newTestConnectorWithOptions(server.URL, nil, nil, nil, runner)
 	connector.handleReactionAddedEvent(context.Background(), newTestReactionAddedEvent("U123", "repeat_one", "171234.5678"))
 
-	assert.Empty(t, runner.targetsSnapshot())
+	assert.Empty(t, runner.LoadOneOffCronjobCalls())
 }
 
 func TestHandleReactionAddedEventIgnoresUnauthorizedStopReaction(t *testing.T) {
@@ -10650,7 +10279,7 @@ func TestHandleReactionAddedEventIgnoresUnauthorizedStopReaction(t *testing.T) {
 	connector.handleReactionAddedEvent(context.Background(), newTestReactionAddedEvent("U999", slackGoalStopSignReaction, "171234.5678"))
 }
 
-func TestHandleReactionAddedEventHourglassStopsDropsSteerWithoutStoppingTurn(t *testing.T) {
+func TestHandleReactionAddedEventDropsBackendSteerWithoutStoppingTurn(t *testing.T) {
 	var reactions []string
 
 	server := newSlackStackTestServer(t, new([]url.Values), &reactions)
@@ -10658,22 +10287,14 @@ func TestHandleReactionAddedEventHourglassStopsDropsSteerWithoutStoppingTurn(t *
 
 	router := newThreadRouterStub()
 	router.prepareHandled = true
+	router.queue = []protocol.ThreadQueueItem{{ID: "backend-steer", Kind: protocol.InboundKindSteer, Message: "pending steer", Principal: "U123", SlackChannel: "C123", SlackTS: "111.2"}}
 	connector := newTestConnectorWithOptions(server.URL, newTestBus(), nil, router, nil)
-	key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.2"})
-	connector.beginSlackStack(key)
-
-	content := protocol.InboundContent{Text: "pending steer"}
-	reply := &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.2"}
-	require.True(t, connector.bufferSlackStack(t.Context(), key, "pending steer", &content, reply, "U123", "", "", nil))
 
 	connector.handleReactionAddedEvent(t.Context(), newTestReactionAddedEvent("U123", slackGoalStopSignReaction, "111.2"))
 
-	connector.mu.Lock()
-	pending, active := connector.stacks[key]
-	connector.mu.Unlock()
-	assert.True(t, active)
-	assert.Empty(t, pending)
-	assert.Contains(t, reactions, "/reactions.remove "+slackBufferedReaction+" 111.2")
+	assert.Empty(t, router.queueSnapshot())
+	assert.Empty(t, connector.stacks)
+	assert.Contains(t, reactions, "/reactions.remove "+slackRobotReaction+" 111.2")
 	assert.Empty(t, router.conversationStops)
 	assert.Empty(t, router.goalStops)
 }
@@ -10784,10 +10405,9 @@ func TestHandleReactionAddedEventFastUpConvertsEnqueueToSteer(t *testing.T) {
 
 			router := newThreadRouterStub()
 			router.prepareHandled = true
+			router.busy = true
 			router.queue = []protocol.ThreadQueueItem{{ID: "q1", Message: "later", Principal: "U123", SlackChannel: "C123", SlackTS: "111.2"}}
 			connector := newTestConnectorWithOptions(server.URL, newTestBus(), nil, router, nil)
-			key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.2"})
-			connector.beginSlackStack(key)
 
 			event := newSlackMessageEvent("111.3", "111.0", "$queue")
 			connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
@@ -10796,18 +10416,20 @@ func TestHandleReactionAddedEventFastUpConvertsEnqueueToSteer(t *testing.T) {
 
 			connector.handleReactionAddedEvent(t.Context(), newTestReactionAddedEvent("U123", reaction, "111.2"))
 
-			assert.Empty(t, router.queueSnapshot())
+			assert.Equal(t, []protocol.ThreadQueueItem{{ID: "q1", Kind: protocol.InboundKindSteer, Message: "later", Principal: "U123", SlackChannel: "C123", SlackTS: "111.2"}}, router.queueSnapshot())
 			assert.Contains(t, reactions, "/reactions.remove "+slackEnvelopeReaction+" 111.2")
-			assert.Contains(t, reactions, "/reactions.add "+slackBufferedReaction+" 111.2")
+			assert.Contains(t, reactions, "/reactions.add "+slackRobotReaction+" 111.2")
 			assert.Empty(t, router.conversationStops)
 			assert.Empty(t, router.goalStops)
 			assert.Len(t, posted, postedBefore)
 
-			connector.mu.Lock()
-			pending := connector.stacks[key]
-			connector.mu.Unlock()
-			require.Len(t, pending, 1)
-			assert.Equal(t, "later", pending[0].Text)
+			assert.Empty(t, connector.stacks)
+
+			reactionsBefore := len(reactions)
+
+			connector.handleReactionAddedEvent(t.Context(), newTestReactionAddedEvent("U123", reaction, "111.2"))
+			assert.Len(t, reactions, reactionsBefore, "a repeated promotion must not claim success again")
+			assert.Len(t, router.queueSnapshot(), 1)
 		})
 	}
 }
@@ -10984,6 +10606,221 @@ func TestHandleBroadcastSendResponseSuccess(t *testing.T) {
 	require.NoError(t, message.WaitDelivered(t.Context()))
 }
 
+func TestHandleBroadcastCronjobSuccess(t *testing.T) {
+	var posted []url.Values
+
+	server := newSlackStackTestServer(t, &posted, nil)
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
+	delivery := protocol.NewOutboundMessage(protocol.SourceSystem, "conversation", "cron done")
+	delivery.Complete = true
+	delivery.Cronjob = &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "main", RanAt: "now"}
+	delivery.SlackReply = &protocol.SlackReplyTarget{ChannelID: "C123"}
+	ack := connector.HandleBroadcast(t.Context(), &protocol.Broadcast{Message: delivery, Delivery: delivery})
+	require.Equal(t, protocol.BroadcastHandled, ack.Status)
+	require.NoError(t, delivery.WaitDelivered(t.Context()))
+	require.NotEmpty(t, posted)
+}
+
+func TestHandleBroadcastRelayPostsMCPRequest(t *testing.T) {
+	var posted []url.Values
+
+	server := newSlackStackTestServer(t, &posted, nil)
+	defer server.Close()
+
+	connector := newTestConnector(server.URL)
+	reply := make(chan protocol.BroadcastReply, 1)
+	ack := connector.HandleBroadcast(t.Context(), &protocol.Broadcast{
+		Relay:         &protocol.ExternalMCPRelay{Text: "ask", ExternalConversationID: "public-1", Agent: "planner"},
+		RelayChannel:  "C123",
+		RelayResponse: reply,
+	})
+	require.Equal(t, protocol.BroadcastHandled, ack.Status)
+
+	got := <-reply
+	require.NoError(t, got.Err)
+	require.NotNil(t, got.Message)
+	require.NotNil(t, got.Message.SlackReply)
+}
+
+func TestHandleSlackSocialAgentSwitchCoversThreadErrors(t *testing.T) {
+	var posted []url.Values
+
+	server := newSlackStackTestServer(t, &posted, nil)
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	connector := newTestConnectorWithOptions(server.URL, nil, []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"main", "planner"}}}, router, nil)
+
+	router.errPrepare = errors.New("load failed")
+
+	connector.handleSlackSocialAgentSwitch(t.Context(), "C123", "1.1", "U123", "#social", "")
+
+	router.errPrepare = nil
+	router.prepareHandled = false
+
+	connector.handleSlackSocialAgentSwitch(t.Context(), "C123", "1.1", "U123", "#social", "")
+
+	router.prepareHandled = true
+
+	connector.handleSlackSocialAgentSwitch(t.Context(), "C123", "1.1", "U123", "#social", "")
+	require.NotEmpty(t, posted)
+
+	router.errSwitch = errors.New("switch failed")
+
+	connector.handleSlackSocialAgentSwitch(t.Context(), "C123", "1.1", "U123", "#social", "planner")
+
+	router.errSwitch = nil
+	router.switchHandled = false
+
+	connector.handleSlackSocialAgentSwitch(t.Context(), "C123", "1.1", "U123", "#social", "planner")
+
+	router.switchHandled = true
+
+	connector.handleSlackSocialAgentSwitch(t.Context(), "C123", "1.1", "U123", "#social", "planner")
+}
+
+func TestHandleSlackAgentSwitchSelectionCoversThreadErrors(t *testing.T) {
+	var posted []url.Values
+
+	server := newSlackStackTestServer(t, &posted, nil)
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	connector := newTestConnectorWithOptions(server.URL, nil, []config.SlackChannelConfig{{Channel: "#social", Agents: []string{"main", "planner"}}}, router, nil)
+	metadata, err := json.Marshal(slackAgentSwitchMetadata{ChannelID: "C123", ThreadTS: "1.1", UserID: "U123", SocialChannel: "#social"})
+	require.NoError(t, err)
+
+	action := &slack.BlockAction{BlockID: string(metadata), SelectedOption: slack.OptionBlockObject{Value: "planner"}}
+
+	connector.handleSlackAgentSwitchSelection(t.Context(), "U999", action)
+	connector.handleSlackAgentSwitchSelection(t.Context(), "U123", &slack.BlockAction{BlockID: "not-json"})
+
+	router.errSwitch = errors.New("switch failed")
+
+	connector.handleSlackAgentSwitchSelection(t.Context(), "U123", action)
+
+	router.errSwitch = nil
+	router.switchHandled = false
+
+	connector.handleSlackAgentSwitchSelection(t.Context(), "U123", action)
+
+	router.switchHandled = true
+
+	connector.handleSlackAgentSwitchSelection(t.Context(), "U123", action)
+}
+
+func TestSetPendingSteersSinkStoresSink(t *testing.T) {
+	connector := newTestConnector("http://slack.test")
+	sink := protocol.PendingSteersSink{Set: func(string, []protocol.PendingSteer) error { return nil }}
+	connector.SetPendingSteersSink(sink)
+	require.NotNil(t, connector.pendingSteers.Set)
+}
+
+func TestHandleEnqueueCommandLogsRegisterAndStashErrors(t *testing.T) {
+	var posted []url.Values
+
+	server := newSlackStackTestServer(t, &posted, nil)
+	defer server.Close()
+
+	router := newThreadRouterStub()
+	connector := newTestConnectorWithOptions(server.URL, nil, nil, router, nil)
+	reply := &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "2", ThreadTS: "1"}
+	content := &protocol.InboundContent{Text: "later"}
+
+	router.errStart = errors.New("register failed")
+
+	connector.handleEnqueueCommand(t.Context(), "main", content, "U123", reply)
+	require.Empty(t, router.queueSnapshot())
+
+	router.errStart = nil
+	router.errQueue = errors.New("stash failed")
+
+	connector.handleEnqueueCommand(t.Context(), "", content, "U123", reply)
+}
+
+func TestTruncateUTF8CutsAtRuneBoundary(t *testing.T) {
+	require.Empty(t, truncateUTF8("abc", 0))
+	require.Equal(t, "abc", truncateUTF8("abc", 8))
+	require.Equal(t, "é", truncateUTF8("éé", 2))
+}
+
+func TestCreateReplyPlaceholdersOrWarnLogsFailure(t *testing.T) {
+	connector := newTestConnector("http://slack.test")
+	connector.createReplyPlaceholdersOrWarn(t.Context(), &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "1", ThreadTS: "1"}, "thinking", "", "U123")
+}
+
+func TestPostDollarHelpOrWarnLogsFailure(t *testing.T) {
+	connector := newTestConnector("http://slack.test")
+	connector.postDollarHelpOrWarn(t.Context(), "C123", "1")
+}
+
+func TestSlackLooksLikeNewThinkingActivity(t *testing.T) {
+	for _, tc := range []struct {
+		line string
+		want bool
+	}{
+		{line: "", want: false},
+		{line: "- list", want: false},
+		{line: "— dash", want: false},
+		{line: "• bullet", want: false},
+		{line: "* star", want: false},
+		{line: "**bold**", want: true},
+		{line: "subagent(x)", want: true},
+		{line: "Execute", want: true},
+		{line: "Execute now", want: true},
+		{line: "Execute\there", want: true},
+		{line: "Execute →", want: true},
+		{line: "Execute failed", want: true},
+		{line: "Thinking", want: true},
+		{line: "Thinking hard", want: true},
+		{line: "Task: x", want: true},
+		{line: "task: x", want: true},
+		{line: "Auto-approver", want: true},
+		{line: "auto-approver", want: true},
+		{line: "Bash ls", want: true},
+		{line: "Read f", want: true},
+		{line: "bash: x", want: true},
+		{line: "something failed", want: true},
+		{line: "plain prose", want: false},
+	} {
+		t.Run(tc.line, func(t *testing.T) {
+			require.Equal(t, tc.want, slackLooksLikeNewThinkingActivity(tc.line))
+		})
+	}
+
+	_, _, ok := slackSubagentClump("nope")
+	require.False(t, ok)
+	_, _, ok = slackSubagentClump("subagent(missing")
+	require.False(t, ok)
+	_, _, ok = slackSubagentClump("subagent(x) noarrow")
+	require.False(t, ok)
+	_, _, ok = slackSubagentClump("subagent(x) → \nextra")
+	require.False(t, ok)
+	title, detail, ok := slackSubagentClump("subagent(x) → worker → details\nmore")
+	require.True(t, ok)
+	require.Equal(t, "subagent(x) → worker", title)
+	require.Equal(t, "details\nmore", detail)
+
+	_, _, ok = slackSubagentClump("subagent(x) -> worker: details")
+	require.True(t, ok)
+}
+
+func TestSlackReasoningAndOpenClumpHelpers(t *testing.T) {
+	require.Equal(t, "inner", slackReasoningDetailLine("** inner **"))
+	require.Equal(t, "plain", slackReasoningDetailLine("plain"))
+
+	_, ok := slackOpenClumpTask(nil, "x")
+	require.False(t, ok)
+	_, ok = slackOpenClumpTask([]slack.TaskUpdateChunk{{Title: "a"}}, "b")
+	require.False(t, ok)
+	got, ok := slackOpenClumpTask([]slack.TaskUpdateChunk{{Title: "a"}}, "a")
+	require.True(t, ok)
+	require.Equal(t, "a", got.Title)
+}
+
 func newTestConnectorWithOptions(apiURL string, bus *testBus, channels []config.SlackChannelConfig, router protocol.PrimaryTextRouter, runner oneOffCronjobRunner) *Connector {
 	logger := testLogger()
 	testConfig := new(config.Config)
@@ -11016,10 +10853,7 @@ func newTestConnectorWithOptions(apiURL string, bus *testBus, channels []config.
 	connector.bus = bus
 	connector.threadRouter = router
 	connector.oneOffCronjobs = runner
-	connector.sideAsk = inertSideAskRunner{}
-	connector.sideAskHost = inertSideAskHost{}
 	connector.questions = map[string]*slackPendingQuestion{}
-	connector.sideAsks = map[string]liveSideAsk{}
 	connector.api = slack.New("xoxb-test", slack.OptionAPIURL(apiURL+"/"))
 	connector.socketEvents = make(chan slackSocketEvent, 50)
 	connector.newSocketClient = func(api *slack.Client) *socketmode.Client {
@@ -11505,20 +11339,24 @@ func (s *threadRouterStub) ThreadQueueItems(context.Context, protocol.TextConver
 	return slices.Clone(s.queue), s.errQueue
 }
 
-func (s *threadRouterStub) DeleteThreadQueueItem(_ context.Context, _ protocol.TextConversationTarget, id string) error {
+func (s *threadRouterStub) DeleteThreadQueueItem(_ context.Context, _ protocol.TextConversationTarget, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	kept := s.queue[:0]
+	removed := false
+
 	for i := range s.queue {
 		if s.queue[i].ID != id {
 			kept = append(kept, s.queue[i])
+		} else {
+			removed = true
 		}
 	}
 
 	s.queue = kept
 
-	return s.errQueue
+	return removed, s.errQueue
 }
 
 func (s *threadRouterStub) ScheduledMessages(context.Context, protocol.TextConversationTarget) (map[string]protocol.ScheduledMessageState, error) {
@@ -11526,6 +11364,24 @@ func (s *threadRouterStub) ScheduledMessages(context.Context, protocol.TextConve
 	defer s.mu.Unlock()
 
 	return maps.Clone(s.scheduled), s.errQueue
+}
+
+func (s *threadRouterStub) PromoteThreadQueueItem(_ context.Context, _ protocol.TextConversationTarget, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.errQueue != nil {
+		return false, s.errQueue
+	}
+
+	for i := range s.queue {
+		if s.queue[i].ID == id && s.queue[i].Kind != protocol.InboundKindSteer {
+			s.queue[i].Kind = protocol.InboundKindSteer
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 func (s *threadRouterStub) ThreadBusy(protocol.TextConversationTarget) bool {
@@ -11579,87 +11435,16 @@ func (s *threadRouterStub) queuedPicksSnapshot() []cronThreadRegistration {
 	return append([]cronThreadRegistration(nil), s.queuedPicks...)
 }
 
-type oneOffCronjobLoaderStub struct {
-	mu           sync.Mutex
-	targets      []string
-	listChannels []string
-	listed       []string
-	loaded       protocol.OneOffCronjob
-	errLoad      error
-	errList      error
-	runs         []protocol.OneOffCronjob
-	runResult    protocol.CronRunResult
-	errRun       error
-	onRun        func(context.Context, *protocol.CronProgress)
-}
-
-func newOneOffCronjobLoaderStub() *oneOffCronjobLoaderStub {
-	return &oneOffCronjobLoaderStub{
-		mu:        sync.Mutex{},
-		targets:   nil,
-		loaded:    protocol.OneOffCronjob{Agent: "", Prompt: "", RelativePath: ""},
-		errLoad:   nil,
-		runs:      nil,
-		runResult: protocol.CronRunResult{Text: "", VerbatimMessage: ""},
-		errRun:    nil,
-		onRun:     nil,
+func newOneOffCronjobsMock() *oneOffCronjobsMock {
+	return &oneOffCronjobsMock{
+		LoadOneOffCronjobFunc: func(string) (protocol.OneOffCronjob, error) {
+			return protocol.OneOffCronjob{}, nil
+		},
+		ListCronjobsFunc: func(string) ([]string, error) {
+			return nil, nil
+		},
+		RunOneOffCronjobFunc: func(context.Context, *protocol.OneOffCronjob) (protocol.CronRunResult, error) {
+			return protocol.CronRunResult{}, nil
+		},
 	}
-}
-
-func (s *oneOffCronjobLoaderStub) LoadOneOffCronjob(target string) (protocol.OneOffCronjob, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.targets = append(s.targets, target)
-	loaded := s.loaded
-	err := s.errLoad
-
-	return loaded, err
-}
-
-func (s *oneOffCronjobLoaderStub) ListCronjobs(channel string) ([]string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.listChannels = append(s.listChannels, channel)
-	listed := append([]string(nil), s.listed...)
-	err := s.errList
-
-	return listed, err
-}
-
-func (s *oneOffCronjobLoaderStub) RunOneOffCronjob(ctx context.Context, loaded protocol.OneOffCronjob, progress *protocol.CronProgress, finish func(context.Context, protocol.CronRunResult, error)) {
-	s.mu.Lock()
-	s.runs = append(s.runs, loaded)
-	onRun := s.onRun
-	result := s.runResult
-	err := s.errRun
-	s.mu.Unlock()
-
-	if onRun != nil {
-		onRun(ctx, progress)
-	}
-
-	finish(ctx, result, err)
-}
-
-func (s *oneOffCronjobLoaderStub) targetsSnapshot() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return append([]string(nil), s.targets...)
-}
-
-func (s *oneOffCronjobLoaderStub) listChannelsSnapshot() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return append([]string(nil), s.listChannels...)
-}
-
-func (s *oneOffCronjobLoaderStub) runsSnapshot() []protocol.OneOffCronjob {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return append([]protocol.OneOffCronjob(nil), s.runs...)
 }

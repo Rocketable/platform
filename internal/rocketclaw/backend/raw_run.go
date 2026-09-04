@@ -37,8 +37,10 @@ type RawRunResult struct {
 
 // RawRunProgress controls raw rocketcode run persistence and receives observable output.
 type RawRunProgress struct {
-	SessionService *SessionService
-	ConversationID string
+	SessionService  *SessionService
+	ConversationID  string
+	SyncDestination string
+	Cronjob         *protocol.CronjobMessage
 
 	Thinking, Message func(context.Context, string) error
 	RequestRestart    func(context.Context, string) (string, error)
@@ -299,26 +301,6 @@ func prepareRocketCode(cfg *config.Config, agent string, logger *slog.Logger, mo
 
 func rocketcodeSpillDir(cfg *config.Config) string {
 	return filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), ".rocketcode", "spill")
-}
-
-func isolatedRocketCodeConfig(cfg *config.Config, shellTempDir string, tools []rocketcode.Tool) rocketcode.Config {
-	return rocketcode.Config{
-		AutoApproverModel:          cfg.AutoApproverModel,
-		ShellTempDir:               shellTempDir,
-		SpillDir:                   rocketcodeSpillDir(cfg),
-		Diagnostics:                true,
-		ExperimentalStrongerSkills: true,
-		ExpandPromptShellCommands:  rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true},
-		ParallelToolCalls:          16,
-		AutoApprovePermissions:     true,
-		Observability:              rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}},
-		ChildRunLogger:             rocketcode.DiscardChildRunLog,
-		CheckpointSink:             rocketcode.InertCheckpointSink{},
-		CustomTools:                tools,
-		ShellCommand:               rocketcode.DefaultShellCommand,
-		MCPServers:                 toMCPClientServers(cfg.MCPServers),
-		MCPWorkspace:               cfg.Workspace,
-	}
 }
 
 func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string, logger *slog.Logger, sessionIn iter.Seq2[rocketcode.SessionEntry, error], sessionOut func(rocketcode.SessionEntry) error, decision *rawRunDecision, attachments *outboundAttachmentCollector, progress *RawRunProgress, diagnostics bool) (string, error) {

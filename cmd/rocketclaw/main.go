@@ -2,13 +2,11 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 )
 
@@ -25,7 +23,7 @@ type runtimeConfigFile struct {
 	Found         bool
 }
 
-const helpText = "rocketclaw\n\nUsage:\n  rocketclaw run\n  rocketclaw exec [--timeout <duration>] <agent> <prompt>\n  rocketclaw setup\n  rocketclaw setup files list\n  rocketclaw setup files get <path>\n  rocketclaw doctor\n  rocketclaw lint [next|current]\n  rocketclaw agent-graph [next|current]\n  rocketclaw oai login [provider] [--headless]\n  rocketclaw oai list\n  rocketclaw oai logout [provider]\n  rocketclaw help\n\nCommands:\n  run          Start rocketclaw and fail if the configuration file is missing or invalid.\n  exec         Run one agent once and print the run as JSONL.\n  setup        Interactively create rocketclaw.json, prepare root setup files and workspace overlays, and prepare .rocketclaw.\n  doctor       Validate configuration.\n  lint         Check effective RocketCode agent-system safety.\n  agent-graph  Print the effective RocketCode task delegation graph as DOT.\n  oai          Manage provider-specific ChatGPT credentials for RocketCode model requests.\n  help         Show this help screen.\n\nRunning `rocketclaw` without a subcommand starts the server when femtoclaw.json or rocketclaw.json is present.\nIf both files are missing, this help screen is shown instead.\n"
+const helpText = "rocketclaw\n\nUsage:\n  rocketclaw run\n  rocketclaw lint [next|current]\n  rocketclaw agent-graph [next|current]\n  rocketclaw oai login [provider] [--headless]\n  rocketclaw oai list\n  rocketclaw oai logout [provider]\n  rocketclaw help\n\nCommands:\n  run          Start rocketclaw and fail if the configuration file is missing or invalid.\n  lint         Check effective RocketCode agent-system safety.\n  agent-graph  Print the effective RocketCode task delegation graph as DOT.\n  oai          Manage provider-specific ChatGPT credentials for RocketCode model requests.\n  help         Show this help screen.\n\nRunning `rocketclaw` without a subcommand starts the server when femtoclaw.json or rocketclaw.json is present.\nIf both files are missing, this help screen is shown instead.\n"
 
 type exitCoder interface {
 	Error() string
@@ -54,12 +52,6 @@ func run(args []string) error {
 		switch args[0] {
 		case "run":
 			return runServe(args[1:])
-		case "exec":
-			return runExecIn(context.Background(), args[1:], os.Stdout, backend.RunRawWithProgress)
-		case "setup":
-			return runSetup(args[1:])
-		case "doctor":
-			return runDoctor(args[1:])
 		case "lint":
 			return runLint(args[1:])
 		case "agent-graph":

@@ -48,11 +48,11 @@ const (
 // SteerDrain collects waiting Slack Steers after a tool batch, or when a no-tool answer would otherwise end the turn.
 // The zero value is inert.
 type SteerDrain struct {
-	Fn func(context.Context, TurnPhase) []string
+	Fn func(context.Context, TurnPhase) []PromptInput
 }
 
-// Drain returns waiting Slack Steer texts for phase. The zero value returns nil.
-func (d SteerDrain) Drain(ctx context.Context, phase TurnPhase) []string {
+// Drain returns waiting Slack Steer inputs for phase. The zero value returns nil.
+func (d SteerDrain) Drain(ctx context.Context, phase TurnPhase) []PromptInput {
 	if d.Fn == nil {
 		return nil
 	}
@@ -909,9 +909,9 @@ func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Resp
 }
 
 func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, phase TurnPhase) (bool, error) {
-	texts := l.SteerDrain.Drain(ctx, phase)
-	for _, text := range texts {
-		steer := inputMessageParam(responses.EasyInputMessageRoleUser, easyInputStringContent(text))
+	inputs := l.SteerDrain.Drain(ctx, phase)
+	for _, input := range inputs {
+		steer := promptInputMessage(input)
 		if err := appendReplayInput(record, &steer); err != nil {
 			return false, err
 		}
@@ -919,7 +919,7 @@ func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnIte
 		*turnItems = append(*turnItems, steer)
 	}
 
-	return len(texts) > 0, nil
+	return len(inputs) > 0, nil
 }
 
 func activeTurnID(record *SessionEntry) string {

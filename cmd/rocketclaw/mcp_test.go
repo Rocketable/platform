@@ -2,12 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -158,6 +157,33 @@ func TestExternalMCPInboundContentProvidesRelayAttachments(t *testing.T) {
 	assert.Equal(t, []protocol.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}, outbound)
 }
 
+func TestExternalMCPInboundContentCoversAttachmentWarnings(t *testing.T) {
+	_, _, err := externalMCPInboundContent([]externalmcp.SessionAttachment{{DataBase64: "not-base64"}})
+	require.ErrorContains(t, err, "decode external MCP attachment")
+
+	empty, outbound, err := externalMCPInboundContent(nil)
+	require.NoError(t, err)
+	require.Empty(t, empty.Attachments)
+	require.Nil(t, outbound)
+
+	huge := strings.Repeat("a", protocol.MaxInboundTextAttachmentBytes+1)
+	content, _, err := externalMCPInboundContent([]externalmcp.SessionAttachment{{Name: "", MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte(huge))}})
+	require.NoError(t, err)
+	require.NotEmpty(t, content.AttachmentWarnings)
+
+	content, _, err = externalMCPInboundContent([]externalmcp.SessionAttachment{{Name: "bin.txt", MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte{0})}})
+	require.NoError(t, err)
+	require.NotEmpty(t, content.AttachmentWarnings)
+
+	content, _, err = externalMCPInboundContent([]externalmcp.SessionAttachment{{Name: "blank.txt", MIMEType: "text/plain", DataBase64: base64.StdEncoding.EncodeToString([]byte("  "))}})
+	require.NoError(t, err)
+	require.NotEmpty(t, content.AttachmentWarnings)
+
+	content, _, err = externalMCPInboundContent([]externalmcp.SessionAttachment{{Name: "pic.png", MIMEType: "image/png", DataBase64: base64.StdEncoding.EncodeToString([]byte("png"))}})
+	require.NoError(t, err)
+	require.Len(t, content.Attachments, 1)
+}
+
 func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -245,35 +271,33 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
 	assert.Equal(t, "managed", thread.Agent)
 }
 
-func TestLegacyExternalMCPFollowupUsesExistingSharedConversation(t *testing.T) {
+func TestExternalMCPRepeatedIDKeepsLockedAgentAndRejectsChannelMismatch(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
 	store, err := backend.NewSessionServiceIn(dsn, testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
 
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	require.NoError(t, store.UpsertThread(conversationID, backend.ThreadState{Agent: "planner"}))
-	require.NoError(t, store.UpsertExternalMCPSession("existing-1", &backend.ExternalMCPSessionState{Agent: "planner", ManagedConversationID: conversationID, SlackChannel: "#ops"}))
+	var agents []string
 
-	relayCalls := 0
-	relayConversationID := ""
-	usedAgent := ""
-	usedConversationID := ""
-	errRelay := errors.New("post failed")
-	textRelay := func(_ context.Context, relay *protocol.ExternalMCPRelay, _ *protocol.InboundMessage, _ string) (*protocol.InboundMessage, error) {
-		relayCalls++
-		relayConversationID = relay.ConversationID
+	textRelay := func(_ context.Context, _ *protocol.ExternalMCPRelay, reply *protocol.InboundMessage, _ string) (*protocol.InboundMessage, error) {
+		if reply == nil {
+			return &protocol.InboundMessage{SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}}, nil
+		}
 
-		return nil, errRelay
+		return reply, nil
 	}
-	submit := func(ctx context.Context, agent, gotConversationID string, inbound *protocol.InboundMessage, activation protocol.ActivationHook) error {
-		usedAgent = agent
-		usedConversationID = gotConversationID
+	submit := func(ctx context.Context, agent string, _ string, inbound *protocol.InboundMessage, activation protocol.ActivationHook) error {
+		agents = append(agents, agent)
+		if err := activation(ctx, inbound); err != nil {
+			return err
+		}
 
-		return activation(ctx, inbound)
+		inbound.CompleteResponse("answer", nil)
+
+		return nil
 	}
-	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}}}}
+	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}, {Channel: "#triage", Agents: []string{"triage"}}}}}
 	server, err := startExternalMCPServer(t.Context(), cfg, textRelay, func(context.Context, *protocol.InboundMessage) {}, nil, func(string) bool { return true }, store, submit, testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
@@ -283,13 +307,75 @@ func TestLegacyExternalMCPFollowupUsesExistingSharedConversation(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = session.Close() })
 
-	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "existing-1", "agent": "other", "input": "follow up", "slack_channel": "#ops"}})
+	first, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "ticket-1", "agent": "planner", "input": "hello", "slack_channel": "#ops"}})
 	require.NoError(t, err)
-	require.True(t, result.IsError)
-	assert.Equal(t, 1, relayCalls)
-	assert.Equal(t, "planner", usedAgent)
-	assert.Equal(t, conversationID, usedConversationID)
-	assert.Equal(t, conversationID, relayConversationID)
+	require.False(t, first.IsError)
+
+	repeat, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "ticket-1", "agent": "other", "input": "again", "slack_channel": "#ops"}})
+	require.NoError(t, err)
+	require.False(t, repeat.IsError)
+	require.Equal(t, []string{"planner", "planner"}, agents)
+
+	stored, ok, err := store.ExternalMCPSession("ticket-1")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "planner", stored.Agent)
+	assert.Equal(t, "#ops", stored.SlackChannel)
+
+	mismatch, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "ticket-1", "agent": "planner", "input": "wrong channel", "slack_channel": "#triage"}})
+	require.NoError(t, err)
+	require.True(t, mismatch.IsError)
+	require.Contains(t, mismatch.Content[0].(*mcp.TextContent).Text, `bound to Slack channel "#ops"`)
+	require.Equal(t, []string{"planner", "planner"}, agents)
+}
+
+func TestSubmitExternalMCPInputReturnsAfterSubmitAgent(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	submit := func(_ context.Context, _ string, _ string, inbound *protocol.InboundMessage, activation protocol.ActivationHook) error {
+		if err := activation(context.Background(), inbound); err != nil {
+			return err
+		}
+
+		inbound.CompleteResponse("answer", nil)
+		close(started)
+		<-release
+
+		return nil
+	}
+
+	resultCh := make(chan externalmcp.SessionResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, _, err := submitExternalMCPInput(context.Background(), submit, "planner", "external_mcp:planner:x", &protocol.InboundContent{Text: "hello"}, nil, "", nil, "public-1", backend.NoopActivationHook)
+		if err != nil {
+			errCh <- err
+
+			return
+		}
+
+		resultCh <- result
+	}()
+
+	<-started
+	select {
+	case result := <-resultCh:
+		t.Fatalf("returned before submitAgent finished: %#v", result)
+	case err := <-errCh:
+		t.Fatalf("failed before submitAgent finished: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	close(release)
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case result := <-resultCh:
+		assert.Equal(t, externalmcp.SessionResult{ExternalConversationID: "public-1", Agent: "planner", Answer: "answer", Attachments: []externalmcp.SessionAttachment{}}, result)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for submitAgent result")
+	}
 }
 
 func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
@@ -372,180 +458,6 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 			assert.Equal(t, tt.wantCleanup, cleanupCalls == 1)
 		})
 	}
-}
-
-func TestStartDevelopmentMCPEnabledStarts(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "rocketclaw.json")
-	require.NoError(t, os.WriteFile(configPath, []byte(`{}`), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "rocketclaw.development.users.json"), []byte(`{"dev":"token"}`), 0o600))
-
-	cfg := &config.Config{Workspace: dir, MCPDevelopment: config.MCPDevelopmentConfig{Enabled: true, ListenAddr: "127.0.0.1:0"}}
-	server, err := startDevelopmentMCP(t.Context(), cfg, configPath, new(sync.Mutex), inertDevelopmentReason, inertDevelopmentReason, testLogger(), testDevelopmentSessions(t))
-	require.NoError(t, err)
-	require.NotNil(t, server)
-	assert.NotEmpty(t, server.URL())
-
-	session := developmentMCPSession(t, server.URL())
-	_, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "rocketclaw_development_lint", Arguments: map[string]any{"context": map[string]any{"files": []map[string]any{}}}})
-	require.NoError(t, err)
-	_, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "rocketclaw_development_run_turn", Arguments: map[string]any{"context": map[string]any{"files": []map[string]any{}}, "agent": "main", "prompt": "hi", "conversation_id": "devmcp-lock"}})
-	require.NoError(t, err)
-	_, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "rocketclaw_development_list_session", Arguments: map[string]any{}})
-	require.NoError(t, err)
-	_, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "rocketclaw_development_observe_session", Arguments: map[string]any{"conversation_id": "missing"}})
-	require.NoError(t, err)
-	_, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "rocketclaw_development_delete_session", Arguments: map[string]any{"conversation_id": "missing"}})
-	require.NoError(t, err)
-
-	require.NoError(t, server.Close(context.Background()))
-}
-
-func TestStartDevelopmentMCPDisabledDoesNotListen(t *testing.T) {
-	cfg := &config.Config{MCPDevelopment: config.MCPDevelopmentConfig{Enabled: false, ListenAddr: "bad listen address"}}
-	server, err := startDevelopmentMCP(t.Context(), cfg, "", new(sync.Mutex), inertDevelopmentReason, inertDevelopmentReason, testLogger(), new(backend.SessionService))
-	require.NoError(t, err)
-	assert.Nil(t, server)
-}
-
-func TestStartDevelopmentMCPReadWaitsForOverlayLock(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "rocketclaw.json")
-	require.NoError(t, os.WriteFile(configPath, []byte(`{}`), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "rocketclaw.development.users.json"), []byte(`{"dev":"token"}`), 0o600))
-
-	overlayMu := new(sync.Mutex)
-	cfg := &config.Config{Workspace: dir, MCPDevelopment: config.MCPDevelopmentConfig{Enabled: true, ListenAddr: "127.0.0.1:0"}}
-	server, err := startDevelopmentMCP(t.Context(), cfg, configPath, overlayMu, inertDevelopmentReason, inertDevelopmentReason, testLogger(), new(backend.SessionService))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
-
-	overlayMu.Lock()
-
-	started := make(chan struct{})
-	done := make(chan struct{})
-
-	go func() {
-		client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
-
-		session, errConnect := client.Connect(t.Context(), &mcp.StreamableClientTransport{
-			Endpoint:             server.URL(),
-			HTTPClient:           &http.Client{Transport: developmentMCPAuthTransport{base: http.DefaultTransport}},
-			DisableStandaloneSSE: true,
-		}, nil)
-		if errConnect != nil {
-			close(started)
-			close(done)
-
-			return
-		}
-
-		defer func() { _ = session.Close() }()
-
-		close(started)
-
-		_, _ = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "rocketclaw_development_read_context_from_overlay", Arguments: map[string]any{"overlay": "github.com/rocketable/overlay"}})
-
-		close(done)
-	}()
-
-	<-started
-
-	select {
-	case <-done:
-		t.Fatal("read overlay proceeded while overlay lock was held")
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	overlayMu.Unlock()
-	<-done
-}
-
-func TestStartDevelopmentMCPSessionToolsDoNotWaitForOverlayLock(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "rocketclaw.json")
-	require.NoError(t, os.WriteFile(configPath, []byte(`{}`), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "rocketclaw.development.users.json"), []byte(`{"dev":"token"}`), 0o600))
-
-	overlayMu := new(sync.Mutex)
-	cfg := &config.Config{Workspace: dir, MCPDevelopment: config.MCPDevelopmentConfig{Enabled: true, ListenAddr: "127.0.0.1:0"}}
-	server, err := startDevelopmentMCP(t.Context(), cfg, configPath, overlayMu, inertDevelopmentReason, inertDevelopmentReason, testLogger(), testDevelopmentSessions(t))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
-
-	overlayMu.Lock()
-	t.Cleanup(overlayMu.Unlock)
-
-	session := developmentMCPSession(t, server.URL())
-	done := make(chan struct{})
-	go func() {
-		_, _ = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "rocketclaw_development_list_session", Arguments: map[string]any{}})
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("list session waited on overlay lock")
-	}
-}
-
-func TestStartDevelopmentMCPEnabledMissingUsers(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "rocketclaw.json")
-	require.NoError(t, os.WriteFile(configPath, []byte(`{}`), 0o600))
-
-	cfg := &config.Config{Workspace: dir, MCPDevelopment: config.MCPDevelopmentConfig{Enabled: true, ListenAddr: "127.0.0.1:0"}}
-	server, err := startDevelopmentMCP(t.Context(), cfg, configPath, new(sync.Mutex), inertDevelopmentReason, inertDevelopmentReason, testLogger(), new(backend.SessionService))
-	require.ErrorContains(t, err, "development MCP users are required")
-	assert.Nil(t, server)
-}
-
-func testDevelopmentSessions(t *testing.T) *backend.SessionService {
-	t.Helper()
-
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, err)
-	service, err := backend.NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
-
-	return service
-}
-
-func developmentMCPSession(t *testing.T, url string) *mcp.ClientSession {
-	t.Helper()
-
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
-	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{
-		Endpoint:             url,
-		HTTPClient:           &http.Client{Transport: developmentMCPAuthTransport{base: http.DefaultTransport}},
-		DisableStandaloneSSE: true,
-	}, nil)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = session.Close() })
-
-	return session
-}
-
-type developmentMCPAuthTransport struct {
-	base http.RoundTripper
-}
-
-func (t developmentMCPAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	clone := req.Clone(req.Context())
-	clone.SetBasicAuth("dev", "token")
-
-	resp, err := t.base.RoundTrip(clone)
-	if err != nil {
-		return nil, fmt.Errorf("send development MCP request: %w", err)
-	}
-
-	return resp, nil
-}
-
-func inertDevelopmentReason(string) (string, error) {
-	return "", nil
 }
 
 func testLogger() *slog.Logger {

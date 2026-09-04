@@ -46,7 +46,7 @@ RocketClaw persists sessions, routing, goals, cron, and restart state in `state.
 
 **Store**
 
-- R1. RocketClaw durable state for `run`, `exec`, `fc`, and Quickbench capture uses the same PostgreSQL store.
+- R1. RocketClaw durable state for `run`, `fc`, and Quickbench capture uses the same PostgreSQL store.
 - R2. A new workspace with no `state.sqlite3` initializes the current schema in PostgreSQL and runs.
 - R3. After a successful copy, later startups open PostgreSQL only and do not write SQLite.
 
@@ -59,7 +59,7 @@ RocketClaw persists sessions, routing, goals, cron, and restart state in `state.
 
 ### Actors
 
-- A1. Operator running `rocketclaw run` / `exec` / `fc` on a workspace.
+- A1. Operator running `rocketclaw run` / `fc` on a workspace.
 - A2. Quickbench capture reading the same store.
 
 ### Key Flows
@@ -134,7 +134,7 @@ RocketClaw persists sessions, routing, goals, cron, and restart state in `state.
 
 ### Scope Boundaries
 
-- In scope: RocketClaw state store, `run` / `exec` / `fc`, Quickbench capture of that store, README and cheatsheet store docs. `fc check` becomes a PostgreSQL ping.
+- In scope: RocketClaw state store, `run` / `fc`, Quickbench capture of that store, README and cheatsheet store docs. `fc check` becomes a PostgreSQL ping.
 - Out of scope: Quickweb `quickweb.sqlite`. Provisioning PostgreSQL. Multi-tenant DSN namespacing. Historical SQLite formats older than v9.
 - Deferred to follow-up: Delete the bootstrap file and drop `modernc.org/sqlite` from RocketClaw once every workspace has moved.
 
@@ -165,13 +165,13 @@ RocketClaw persists sessions, routing, goals, cron, and restart state in `state.
 - KTD4. **Bootstrap is one file that only reads SQLite.** Production open never calls `sql.Open("sqlite")`. The copy runs in one transaction, inserts explicit ids, writes the marker, and `setval`s the identity sequence only when `max(id)` is not null. Fail closed unless SQLite `user_version` is 9. Chosen over a versioned migrator: current law is no historical format migration.
 - KTD5. **Observe and `fc` take the DSN, not a file path.** Path-derived workspace/runtimeDir cannot find PostgreSQL. Chosen over encoding the DSN as a fake path.
 - KTD6. **Stay under the existing source CLOC budget by replacement.** Do not edit `GO_SOURCE_CLOC_BUDGET`. Vendor pgx does not count. First-party dual-stack does.
-- KTD7. **Serialize bootstrap with a PostgreSQL advisory lock on a dedicated connection.** `exec` must not take the workspace file lock. The second opener waits through commit of copy-or-marker. It does not skip mid-copy. Chosen over locking `exec` on the file lock: `exec` is allowed beside `run`.
+- KTD7. **Serialize bootstrap with a PostgreSQL advisory lock on a dedicated connection.** The second opener waits through commit of copy-or-marker. It does not skip mid-copy.
 
 ### High-Level Technical Design
 
 ```mermaid
 flowchart TB
-  start[run or exec] --> validate{database_url set}
+  start[run] --> validate{database_url set}
   validate -->|no| failConfig[fail config validation]
   validate -->|yes| openPg[open PostgreSQL and create schema]
   openPg --> sqlite{state.sqlite3 exists and marker absent}
@@ -189,17 +189,13 @@ U1 first. U2 needs a working PostgreSQL schema. U3 needs the new open/observe si
 ### System-Wide Impact
 
 - `NewSessionServiceIn` and `ObserveSessionEntries` change shape. Every test helper that opens the store must pass a DSN, including `app`, `harnessbridge`, `cronjob`, `fc`, and Quickbench capture tests.
-- `setup` writes `rocketclaw.json`. It must prompt for `database_url` so a new config validates.
-- Fixture JSON such as `fcTestConfigJSON` must include `database_url` or doctor/fc tests fail validation.
 - `femtoclaw.json` uses the same `Config` type. The field is required there too.
-- `exec` stays unlocked at the file lock. Concurrent `run`/`exec` bootstrap is KTD7.
 - Quickbench `--db` is removed. Capture reads `database_url` from the selected workspace config.
 - Skel keep `state.sqlite3` / `-wal` / `-shm` on the preserve list until the follow-up that deletes bootstrap. Reset must not destroy the copy source.
 
 ### Risks
 
 - CLOC headroom is about 650 lines. Bootstrap plus dialect rewrite must delete WAL/vacuum/recover in the same change.
-- `exec` today relies on SQLite WAL to run beside the daemon. PostgreSQL pooling is the replacement. Do not keep a file lock as a substitute for connection pooling.
 - Shared DSN across workspaces mixes stores. Document that. Do not add a workspace schema prefix in this plan.
 - Bootstrap still needs the SQLite driver. Module-level `modernc.org/sqlite` stays until the follow-up deletion.
 - A failed copy that is not transactional leaves a half-imported store that later startups skip. Keep the copy and marker in one transaction per AE6.
@@ -217,18 +213,14 @@ U1 first. U2 needs a working PostgreSQL schema. U3 needs the new open/observe si
 - **Files:**
   - `internal/rocketclaw/config/config.go`
   - `internal/rocketclaw/config/config_test.go`
-  - `cmd/rocketclaw/setup.go`
-  - `cmd/rocketclaw/setup_test.go`
   - `internal/rocketclaw/harnessbridge/store.go`
   - `internal/rocketclaw/harnessbridge/store_schema.go`
   - `internal/rocketclaw/harnessbridge/store_dao.go`
   - `internal/rocketclaw/app/app.go`
-  - `cmd/rocketclaw/exec.go`
   - `internal/rocketclaw/harnessbridge/store_test.go`
   - `go.mod`
 - **Approach:**
   1. Add required `database_url` and validate it in `Config.Validate`.
-  2. Prompt for `database_url` in `setup` and write it into `rocketclaw.json`.
   3. Change `NewSessionServiceIn` to take the DSN. Open with the pgx stdlib driver. Wrap open and ping errors so the DSN and password never appear in returned errors or logs.
   4. Replace `createSessionSchema` with PostgreSQL types per KTD2. Keep the same tables and uniqueness.
   5. Delete PRAGMA startup, WAL checkpoint, vacuum loop, and `MaxOpenConns(1)`.
@@ -252,10 +244,9 @@ U1 first. U2 needs a working PostgreSQL schema. U3 needs the new open/observe si
   - `internal/rocketclaw/harnessbridge/store_bootstrap.go`
   - `internal/rocketclaw/harnessbridge/store_bootstrap_test.go`
   - `internal/rocketclaw/app/app.go`
-  - `cmd/rocketclaw/exec.go`
 - **Approach:**
   1. Put all SQLite-read code in `store_bootstrap.go` so a later delete removes the bootstrap copy.
-  2. Run the copy from every store opener after PostgreSQL schema init and before any session traffic, including `run`, `exec`, `fc`, observe, and Quickbench.
+   2. Run the copy from every store opener after PostgreSQL schema init and before any session traffic, including `run`, `fc`, observe, and Quickbench.
   3. Take `pg_advisory_lock` on a dedicated connection around the marker check and copy. The second opener waits through commit.
   4. Fail unless SQLite `user_version` is 9.
   5. Skip when the bootstrap marker is present.

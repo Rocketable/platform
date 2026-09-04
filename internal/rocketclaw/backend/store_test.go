@@ -319,20 +319,53 @@ func TestSessionServiceScheduledMessages(t *testing.T) {
 }
 
 func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
-	store := newTestSessionService(t)
+	workspace := t.TempDir()
+	store := newTestSessionServiceAt(t, workspace)
 	firstStash := time.Date(2000, 1, 2, 3, 0, 0, 0, time.UTC)
 	secondStash := time.Date(2000, 1, 2, 4, 0, 0, 0, time.UTC)
 	conversationID := "slack-thread:D123:111.222"
 	dueAt := time.Date(2000, 1, 2, 16, 0, 0, 0, time.UTC)
+	content := protocol.InboundContent{
+		Text:            "write tests",
+		TextAttachments: []string{"Slack text file attachment data.csv:\na,b", "Forwarded Slack thread:\noriginal author: original text"},
+		Attachments:     []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("acquired image")}},
+		HadAttachments:  true, HadNonImageAttachments: true,
+		AttachmentWarnings: []string{"original warning"},
+	}
+	reply := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.333", ThreadTS: "111.222", RecipientTeamID: "T1", RecipientUserID: "U1"}
 
-	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ConversationID: conversationID, Message: "write tests", Principal: "U1", StashAt: firstStash, Position: 0, ParkAfter: "s1"}))
-	require.NoError(t, store.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{ConversationID: conversationID, Message: "write changelog", Principal: "U1", StashAt: secondStash, Position: 1, ParkAfter: "s1"}))
+	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ConversationID: conversationID, Message: "write tests", Content: content, Source: protocol.SourceSlack, SlackReply: reply, Principal: "U1", StashAt: firstStash, Position: 0, ParkAfter: "s1", SlackChannel: reply.ChannelID, SlackTS: reply.MessageTS}))
+	require.NoError(t, store.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{Kind: "steer", ConversationID: conversationID, Message: "write changelog", Principal: "U2", StashAt: secondStash, Position: 1, ParkAfter: "s1", SlackChannel: "D123", SlackTS: "333.444"}))
 	require.NoError(t, store.PutThreadQueueItem("other", &protocol.ThreadQueueItem{ConversationID: "other", Message: "keep", Principal: "U2", StashAt: firstStash, Position: 0}))
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "helper", Message: "later", DueAt: dueAt}))
+	require.NoError(t, store.Stop(t.Context()))
+	store = newTestSessionServiceAt(t, workspace)
 
 	items, err := store.ThreadQueueForConversation(conversationID)
 	require.NoError(t, err)
 	require.Len(t, items, 2)
+	assert.Equal(t, content, items[0].Content)
+	assert.Equal(t, protocol.SourceSlack, items[0].Source)
+	assert.Equal(t, reply, items[0].SlackReply)
+
+	bridge := &Bridge{requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{}), config: Config{ConversationID: conversationID, SessionService: store}}
+	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &items[0]))
+	inbound := (<-bridge.requestCh).inbound
+	assert.Equal(t, "write tests\n\nSlack text file attachment data.csv:\na,b\n\nForwarded Slack thread:\noriginal author: original text", inbound.Text)
+	assert.Equal(t, content.Attachments, inbound.Attachments)
+	assert.Equal(t, content.AttachmentWarnings, inbound.AttachmentWarnings)
+	assert.True(t, inbound.HadAttachments)
+	assert.False(t, inbound.HadNonImageAttachments)
+	assert.Equal(t, protocol.SourceSlack, inbound.Source)
+	assert.Equal(t, reply, inbound.SlackReply)
+	assert.Equal(t, "U1", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+	assert.Equal(t, protocol.InboundKind("enqueue"), items[0].Kind)
+	assert.Equal(t, protocol.InboundKind("steer"), items[1].Kind)
+	assert.Equal(t, "U1", items[0].Principal)
+	assert.Equal(t, "U2", items[1].Principal)
+	assert.Equal(t, "write changelog", items[1].Message)
+	assert.Equal(t, "D123", items[1].SlackChannel)
+	assert.Equal(t, "333.444", items[1].SlackTS)
 	assert.Equal(t, "q1", items[0].ID)
 	assert.Equal(t, "write tests", items[0].Message)
 	assert.Equal(t, firstStash, items[0].StashAt)
@@ -341,7 +374,10 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 	assert.Equal(t, secondStash, items[1].StashAt)
 	assert.Equal(t, "s1", items[1].ParkAfter)
 
-	rows := protocol.MixedLaterWork(items, map[string]protocol.ScheduledMessageState{"s1": {DueAt: dueAt}})
+	scheduled, err := store.ScheduledMessagesForConversation(conversationID)
+	require.NoError(t, err)
+	assert.Equal(t, protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "helper", Message: "later", DueAt: dueAt}, scheduled["s1"])
+	rows := protocol.MixedLaterWork(items, scheduled)
 	require.Len(t, rows, 3)
 	assert.Equal(t, protocol.LaterWorkScheduled, rows[0].Kind)
 	assert.Equal(t, "q1", rows[1].Queue.ID)
@@ -360,6 +396,26 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	assert.Equal(t, "q1", items[0].ID)
+}
+
+func TestSessionServiceMigratesThreadQueueKind(t *testing.T) {
+	store := newTestSessionService(t)
+	// Recreate the pre-006 queue in this test's isolated database schema.
+	_, err := store.db.ExecContext(t.Context(), `ALTER TABLE thread_queue DROP COLUMN IF EXISTS kind; DELETE FROM pg_migrations WHERE id = '006_thread_queue_kind.sql'; INSERT INTO thread_queue (queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position) VALUES ('old', 'recorded', 'original content', 'original author', 1, 0)`)
+	require.NoError(t, err)
+	require.NoError(t, initializeSessionDB(t.Context(), store.db, slog.New(slog.DiscardHandler)))
+	items, err := store.ThreadQueueForConversation("recorded")
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, protocol.InboundKind("enqueue"), items[0].Kind)
+	assert.Equal(t, "original content", items[0].Message)
+	assert.Equal(t, "original author", items[0].Principal)
+	items[0].Kind = "steer"
+	require.NoError(t, store.PutThreadQueueItem("old", &items[0]))
+	items, err = store.ThreadQueueForConversation("recorded")
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, protocol.InboundKind("steer"), items[0].Kind)
 }
 
 func TestSessionServiceInitializesCronScheduleSchema(t *testing.T) {
@@ -431,14 +487,14 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 5, n)
+	assert.Equal(t, 8, n)
 	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
 	second, err := NewSessionServiceIn(testStoreDSN(workspace), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop(context.Background())) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 5, n)
+	assert.Equal(t, 8, n)
 }
 
 func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
@@ -451,8 +507,69 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 5, n)
+	assert.Equal(t, 8, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
+}
+
+func TestSessionServiceSettledPersistence(t *testing.T) {
+	workspace := t.TempDir()
+	store := newTestSessionServiceAt(t, workspace)
+	require.NoError(t, store.UpsertThread("opaque", ThreadState{Agent: "planner", CreatedBy: "alice"}))
+	require.NoError(t, store.UpsertThread("unrelated", ThreadState{Agent: "main"}))
+	_, err := store.db.ExecContext(t.Context(), `ALTER TABLE managed_conversations DROP COLUMN settled; DELETE FROM pg_migrations WHERE id = '008_managed_conversation_settled.sql'`)
+	require.NoError(t, err)
+	require.NoError(t, store.Stop(t.Context()))
+	store = newTestSessionServiceAt(t, workspace)
+	thread, found, err := store.Thread("opaque")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.False(t, thread.Settled)
+
+	entry := testSessionEntry("question", "answer")
+	_, err = store.AppendEntryID(t.Context(), "opaque", entry)
+	require.NoError(t, err)
+
+	checkpoint := &harness.ActiveTurnCheckpoint{TurnID: "active", ConversationKey: "opaque", Agent: "planner", Model: "gpt-5.5"}
+	require.NoError(t, store.StartActiveTurn(t.Context(), checkpoint))
+	activeBefore, _, err := store.ActiveTurn(t.Context(), "active")
+	require.NoError(t, err)
+	entriesBefore, err := store.ObserveEntries(t.Context(), "opaque", 0)
+	require.NoError(t, err)
+
+	for _, settled := range []bool{true, false} {
+		updated, err := store.SetConversationSettled(t.Context(), "opaque", settled)
+		require.NoError(t, err)
+		require.True(t, updated)
+		// Ordinary rebinding must not reset the explicit sidebar state.
+		require.NoError(t, store.UpsertThread("opaque", ThreadState{Agent: "planner"}))
+		require.NoError(t, store.Stop(t.Context()))
+		store = newTestSessionServiceAt(t, workspace)
+		thread, found, err := store.Thread("opaque")
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, ThreadState{Agent: "planner", CreatedBy: "alice", Settled: settled}, thread)
+		entries, err := store.ObserveEntries(t.Context(), "opaque", 0)
+		require.NoError(t, err)
+		require.Equal(t, entriesBefore, entries)
+		active, found, err := store.ActiveTurn(t.Context(), "active")
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, activeBefore, active)
+	}
+
+	other, found, err := store.Thread("unrelated")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, ThreadState{Agent: "main"}, other)
+	updated, err := store.SetConversationSettled(t.Context(), "missing", true)
+	require.NoError(t, err)
+	require.False(t, updated)
+
+	var count int
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM managed_conversations`).Scan(&count))
+	require.Equal(t, 2, count)
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations WHERE id = '008_managed_conversation_settled.sql'`).Scan(&count))
+	require.Equal(t, 1, count)
 }
 
 func TestSessionServiceActiveTurnLifecycle(t *testing.T) {
@@ -1220,6 +1337,31 @@ func TestSessionServicePersistsExternalMCPSessionMapping(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, ExternalMCPSessionState{Agent: "planner", PrivateConversationID: "external_mcp:planner:def", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops"}, session)
+	require.NoError(t, store.UpsertThread(session.ManagedConversationID, ThreadState{Agent: "selected"}))
+	privateEntryID, err := store.AppendEntryID(t.Context(), session.PrivateConversationID, testSessionEntry("private", "private answer"))
+	require.NoError(t, err)
+	managedEntryID, err := store.AppendEntryID(t.Context(), session.ManagedConversationID, testSessionEntry("human", "human answer"))
+	require.NoError(t, err)
+	require.NoError(t, store.Stop(t.Context()))
+	store = newTestSessionServiceAt(t, workspace)
+	reopened, ok, err := store.ExternalMCPSession("ticket-123")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, session, reopened)
+	thread, ok, err := store.Thread(session.ManagedConversationID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "selected", thread.Agent)
+	listed, err := managedConversationIDs(t.Context(), store.db)
+	require.NoError(t, err)
+	assert.Equal(t, []string{session.ManagedConversationID}, listed)
+
+	for conversationID, entryID := range map[string]int64{session.PrivateConversationID: privateEntryID, session.ManagedConversationID: managedEntryID} {
+		entries, err := store.ObserveEntries(t.Context(), conversationID, 0)
+		require.NoError(t, err)
+		require.Len(t, entries, 1)
+		assert.Equal(t, entryID, entries[0].ID)
+	}
 }
 
 func TestSessionServicePersistsActiveTurnSourceMetadata(t *testing.T) {
@@ -1317,6 +1459,9 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 		require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "planner"}))
 	}
 
+	require.NoError(t, store.UpsertThread("empty-recorded", ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
+	require.NoError(t, store.UpsertThread(activeOldThread, ThreadState{Agent: "selected", CreatedBy: ThreadCreatedByCron}))
+
 	for conversationID, ts := range map[string]time.Time{
 		oldThread:                      oldTime,
 		activeOldThread:                newTime,
@@ -1338,10 +1483,16 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	orphanGoal := protocol.SlackThreadConversationID("DGOAL", slackTestTS(oldTime))
 	require.NoError(t, store.BeginGoal(orphanGoal, "stale goal", "", 1, "", ""))
 	require.NoError(t, store.BeginGoal(activeOldThread, "keep", "", 1, "", ""))
+	listed, err := managedConversationIDs(t.Context(), store.db)
+	require.NoError(t, err)
+	assert.Contains(t, listed, activeOldThread)
+	assert.NotContains(t, listed, "cron:daily:new")
+	assert.NotContains(t, listed, "cron:daily:old")
+	assert.NotContains(t, listed, "one-off-cron:daily:old")
 
 	stats, err := store.PruneStateBefore(context.Background(), cutoff)
 	require.NoError(t, err)
-	assert.Equal(t, PruneStateStats{Threads: 1, SessionRows: 5}, stats)
+	assert.Equal(t, PruneStateStats{Threads: 2, SessionRows: 5}, stats)
 
 	_, ok, err := store.Goal(orphanGoal)
 	require.NoError(t, err)
@@ -1353,6 +1504,12 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	threadIDs, err := managedConversationIDs(context.Background(), store.db)
 	require.NoError(t, err)
 	assert.NotContains(t, threadIDs, oldThread)
+	assert.NotContains(t, threadIDs, "empty-recorded")
+
+	thread, ok, err := store.Thread(activeOldThread)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, ThreadState{Agent: "selected", CreatedBy: ThreadCreatedByCron}, thread)
 	assert.Contains(t, threadIDs, activeOldThread)
 	assert.Contains(t, threadIDs, newThread)
 	assert.Contains(t, threadIDs, boundaryThread)
@@ -1411,11 +1568,15 @@ func TestSessionServicePrunesExternalConversationOnlyWhenAllHistoriesAreStale(t 
 	for _, tt := range []struct {
 		name                                           string
 		paired, privateFresh, managedFresh, wantPruned bool
+		privateEmpty, managedEmpty                     bool
 	}{
 		{name: "paired both stale", paired: true, wantPruned: true},
 		{name: "paired private fresh", paired: true, privateFresh: true},
 		{name: "paired managed fresh", paired: true, managedFresh: true},
 		{name: "paired both fresh", paired: true, privateFresh: true, managedFresh: true},
+		{name: "paired private empty", paired: true, privateEmpty: true, managedFresh: true},
+		{name: "paired managed empty", paired: true, managedEmpty: true, privateFresh: true},
+		{name: "paired both empty", paired: true, privateEmpty: true, managedEmpty: true, wantPruned: true},
 		{name: "legacy stale", wantPruned: true},
 		{name: "legacy fresh", managedFresh: true},
 	} {
@@ -1427,24 +1588,37 @@ func TestSessionServicePrunesExternalConversationOnlyWhenAllHistoriesAreStale(t 
 			if tt.paired {
 				privateConversationID = "external_mcp:planner:private"
 				require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, SlackChannel: "#ops"}))
+				require.NoError(t, store.UpsertThread(privateConversationID, ThreadState{Agent: "planner"}))
 			} else {
 				require.NoError(t, store.UpsertThread(managedConversationID, ThreadState{Agent: "main"}))
 				require.NoError(t, store.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{Agent: "planner", ManagedConversationID: managedConversationID, SlackChannel: "#ops"}))
 			}
 
-			if privateConversationID != "" {
+			if privateConversationID != "" && !tt.privateEmpty {
 				_, err := store.AppendEntryID(t.Context(), privateConversationID, testSessionEntryAt(pruneTestTime(cutoff, tt.privateFresh), "private"))
 				require.NoError(t, err)
 			}
 
-			_, err := store.AppendEntryID(t.Context(), managedConversationID, testSessionEntryAt(pruneTestTime(cutoff, tt.managedFresh), "managed"))
-			require.NoError(t, err)
+			if !tt.managedEmpty {
+				_, err := store.AppendEntryID(t.Context(), managedConversationID, testSessionEntryAt(pruneTestTime(cutoff, tt.managedFresh), "managed"))
+				require.NoError(t, err)
+			}
 
-			_, err = store.PruneStateBefore(t.Context(), cutoff)
+			_, err := store.PruneStateBefore(t.Context(), cutoff)
 			require.NoError(t, err)
 			_, ok, err := store.ExternalMCPSession("public-1")
 			require.NoError(t, err)
 			assert.Equal(t, !tt.wantPruned, ok)
+
+			for _, conversationID := range []string{managedConversationID, privateConversationID} {
+				if conversationID == "" {
+					continue
+				}
+
+				_, ok, err := store.Thread(conversationID)
+				require.NoError(t, err)
+				assert.Equal(t, !tt.wantPruned, ok, conversationID)
+			}
 		})
 	}
 }

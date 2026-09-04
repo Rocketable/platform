@@ -2604,12 +2604,12 @@ func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
 		return TextToolResult("looked-up"), nil
 	}
 	looper.Tools = map[string]looperTool{"lookup": tool}
-	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []string {
+	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []PromptInput {
 		if phase != TurnPhaseToolLoop {
 			return nil
 		}
 
-		return []string{"don't touch the database"}
+		return []PromptInput{{Text: "don't touch the database"}}
 	}}
 	output := make(chan ChatResponse, 10)
 
@@ -2629,6 +2629,16 @@ func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
 }
 
 func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
+	steers := []PromptInput{
+		{Text: "use the other file", Attachments: []Attachment{{MIME: "image/png", Filename: "screen.png", URL: "data:image/png;base64,c2NyZWVu"}}},
+		{Attachments: []Attachment{{MIME: "image/jpeg", Filename: "photo.jpg", URL: "data:image/jpeg;base64,cGhvdG8="}}},
+		{Text: "and skip tests"},
+	}
+	want := []string{
+		`{"content":[{"type":"input_text","text":"use the other file"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,c2NyZWVu"}],"role":"user","type":"message"}`,
+		`{"content":[{"type":"input_image","detail":"auto","image_url":"data:image/jpeg;base64,cGhvdG8="}],"role":"user","type":"message"}`,
+		`{"content":"and skip tests","role":"user","type":"message"}`,
+	}
 	mock := mockResponses(
 		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "lookup", `{}`)}),
 		responseWithMessage("resp-final", "done"),
@@ -2640,12 +2650,12 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 		return TextToolResult("looked-up"), nil
 	}
 	looper.Tools = map[string]looperTool{"lookup": tool}
-	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []string {
+	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []PromptInput {
 		if phase != TurnPhaseToolLoop {
 			return nil
 		}
 
-		return []string{"use the other file", "and skip tests"}
+		return steers
 	}}
 	output := make(chan ChatResponse, 10)
 
@@ -2654,14 +2664,30 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 
 	close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	var saved []SessionEntry
+
+	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
+		saved = append(saved, entry)
+		return nil
+	}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
-
+	require.Len(t, mock.calls, 2)
 	items := mock.calls[1].Input.OfInputItemList
-	require.GreaterOrEqual(t, len(items), 2)
-	require.JSONEq(t, `{"content":"use the other file","role":"user","type":"message"}`, marshalJSON(t, items[len(items)-2]))
-	require.JSONEq(t, `{"content":"and skip tests","role":"user","type":"message"}`, marshalJSON(t, items[len(items)-1]))
+	require.Len(t, items, 6)
+	require.JSONEq(t, `{"call_id":"call-1","output":"looked-up","type":"function_call_output"}`, marshalJSON(t, items[2]))
+
+	history, turns, err := loadSession(sessionEntries(saved))
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	require.Len(t, turns[0].ReplayInput, 7)
+	require.Len(t, history, 7)
+
+	for i, expected := range want {
+		require.JSONEq(t, expected, marshalJSON(t, items[3+i]))
+		require.JSONEq(t, expected, string(turns[0].ReplayInput[3+i]))
+		require.JSONEq(t, expected, marshalJSON(t, history[3+i]))
+	}
 }
 
 func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
@@ -2693,14 +2719,14 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 		return TextToolResult("ok"), nil
 	}
 	looper.Tools = map[string]looperTool{"first": {Definition: testFunctionToolParam("first"), Call: block}, "second": {Definition: testFunctionToolParam("second"), Call: block}}
-	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []string {
+	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []PromptInput {
 		mu.Lock()
 
 		phases = append(phases, phase)
 		mu.Unlock()
 
 		if phase == TurnPhaseToolLoop {
-			return []string{"steer after batch"}
+			return []PromptInput{{Text: "steer after batch"}}
 		}
 
 		return nil
@@ -2733,15 +2759,26 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 func TestLooperInjectsSteersWhenNoTools(t *testing.T) {
 	var phases []TurnPhase
 
+	steers := []PromptInput{
+		{Text: "also add a test", Attachments: []Attachment{{MIME: "image/png", Filename: "test.png", URL: "data:image/png;base64,dGVzdA=="}}},
+		{Attachments: []Attachment{{MIME: "application/pdf", Filename: "spec.pdf", URL: "data:application/pdf;base64,c3BlYw=="}}},
+		{Text: "and skip lint"},
+	}
+	want := []string{
+		`{"content":[{"type":"input_text","text":"also add a test"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,dGVzdA=="}],"role":"user","type":"message"}`,
+		`{"content":[{"type":"input_file","filename":"spec.pdf","file_data":"data:application/pdf;base64,c3BlYw=="}],"role":"user","type":"message"}`,
+		`{"content":"and skip lint","role":"user","type":"message"}`,
+	}
+
 	mock := mockResponses(responseWithMessage("resp-first", "4"), responseWithMessage("resp-final", "done"))
 	looper := testLooper(mock)
-	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []string {
+	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []PromptInput {
 		phases = append(phases, phase)
 		if phase != TurnPhaseFinalAnswer || len(phases) > 1 {
 			return nil
 		}
 
-		return []string{"also add a test", "and skip lint"}
+		return steers
 	}}
 	output := make(chan ChatResponse, 10)
 
@@ -2750,16 +2787,32 @@ func TestLooperInjectsSteersWhenNoTools(t *testing.T) {
 
 	close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	var saved []SessionEntry
+
+	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
+		saved = append(saved, entry)
+		return nil
+	}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("4"), assistantMessage("done")}, collectResponses(output))
 	require.Len(t, mock.calls, 2)
 	require.NotContains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), "also add a test")
 	items := mock.calls[1].Input.OfInputItemList
-	require.GreaterOrEqual(t, len(items), 2)
-	require.JSONEq(t, `{"content":"also add a test","role":"user","type":"message"}`, marshalJSON(t, items[len(items)-2]))
-	require.JSONEq(t, `{"content":"and skip lint","role":"user","type":"message"}`, marshalJSON(t, items[len(items)-1]))
+	require.Len(t, items, 5)
+
+	history, turns, err := loadSession(sessionEntries(saved))
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	require.Len(t, turns[0].ReplayInput, 6)
+	require.Len(t, history, 6)
+
+	for i, expected := range want {
+		require.JSONEq(t, expected, marshalJSON(t, items[2+i]))
+		require.JSONEq(t, expected, string(turns[0].ReplayInput[2+i]))
+		require.JSONEq(t, expected, marshalJSON(t, history[2+i]))
+	}
+
 	require.Equal(t, []TurnPhase{TurnPhaseFinalAnswer, TurnPhaseFinalAnswer}, phases)
 	require.Equal(t, TurnPhaseFinalAnswer, looper.Phase())
 }

@@ -59,7 +59,7 @@ Write the coordinator body with the current member roster. Instruct it to:
 
 RocketClaw dispatches up to 16 same-turn tool calls concurrently in its bridge runs. The coordinator body owns council-specific instructions. The parent receives the member's final assistant message as its task result.
 
-Slack selectors use each channel's configured `agents` list. MCP and `rocketclaw exec` address loaded top-level agent names. Verify every configured surface name against `rocketclaw agent-graph next` before activation.
+Slack selectors use each channel's configured `agents` list. MCP addresses loaded top-level agent names. Verify every configured surface name against `rocketclaw agent-graph next` before activation.
 
 ## File And Activation Workflow
 

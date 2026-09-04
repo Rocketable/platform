@@ -20,10 +20,6 @@
     "enabled": true,
     "listen_addr": "127.0.0.1:8765"
   },
-  "mcp_development": {
-    "enabled": false,
-    "listen_addr": "127.0.0.1:8766"
-  },
   "mcp_servers": {
     "filesystem": {
       "command": "npx",

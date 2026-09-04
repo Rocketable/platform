@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,10 +22,10 @@ type Config struct {
 	WorkDir           string                     `json:"-"`
 	Overlays          []string                   `json:"overlays,omitempty"`
 	Models            map[string]string          `json:"models,omitempty"`
+	WebUsers          map[netip.Addr]string      `json:"web_users,omitempty"`
 	Environment       []string                   `json:"environment,omitempty"`
 	Logging           LoggingConfig              `json:"logging"`
 	MCPExternal       MCPExternalConfig          `json:"mcp_external"`
-	MCPDevelopment    MCPDevelopmentConfig       `json:"mcp_development"`
 	MCPServers        map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 	Slack             SlackConfig                `json:"slack"`
 	OpenAI            OpenAIConfig               `json:"openai"`
@@ -52,12 +53,6 @@ type LoggingConfig struct {
 
 // MCPExternalConfig configures the persistent external MCP HTTP server.
 type MCPExternalConfig struct {
-	Enabled    bool   `json:"enabled"`
-	ListenAddr string `json:"listen_addr"`
-}
-
-// MCPDevelopmentConfig configures the Development MCP HTTP server.
-type MCPDevelopmentConfig struct {
 	Enabled    bool   `json:"enabled"`
 	ListenAddr string `json:"listen_addr"`
 }
@@ -198,15 +193,6 @@ func loadConfigData(absPath string, data []byte, secretsARN string, fetcher Secr
 
 // LoadExternalMCPUsers reads the optional rocketclaw.users.json file next to configPath.
 func LoadExternalMCPUsers(configPath string) (map[string]string, error) {
-	return loadMCPUsersFile(configPath, "rocketclaw.users.json", "external MCP users file")
-}
-
-// LoadDevelopmentMCPUsers reads the optional rocketclaw.development.users.json file next to configPath.
-func LoadDevelopmentMCPUsers(configPath string) (map[string]string, error) {
-	return loadMCPUsersFile(configPath, "rocketclaw.development.users.json", "development MCP users file")
-}
-
-func loadMCPUsersFile(configPath, filename, label string) (map[string]string, error) {
 	configPath = strings.TrimSpace(configPath)
 	if configPath == "" {
 		return nil, errors.New("config path is required")
@@ -217,7 +203,7 @@ func loadMCPUsersFile(configPath, filename, label string) (map[string]string, er
 		return nil, fmt.Errorf("resolve config path: %w", err)
 	}
 
-	usersPath := filepath.Join(filepath.Dir(absPath), filename)
+	usersPath := filepath.Join(filepath.Dir(absPath), "rocketclaw.users.json")
 
 	info, err := os.Stat(usersPath)
 	if err != nil {
@@ -225,25 +211,25 @@ func loadMCPUsersFile(configPath, filename, label string) (map[string]string, er
 			return nil, nil
 		}
 
-		return nil, fmt.Errorf("stat %s %s: %w", label, usersPath, err)
+		return nil, fmt.Errorf("stat external MCP users file %s: %w", usersPath, err)
 	}
 
 	if info.Mode().Perm() != 0o600 {
-		return nil, fmt.Errorf("%s %s must have mode 0600", label, usersPath)
+		return nil, fmt.Errorf("external MCP users file %s must have mode 0600", usersPath)
 	}
 
 	data, err := os.ReadFile(usersPath)
 	if err != nil {
-		return nil, fmt.Errorf("read %s %s: %w", label, usersPath, err)
+		return nil, fmt.Errorf("read external MCP users file %s: %w", usersPath, err)
 	}
 
 	var users map[string]string
 	if err := json.Unmarshal(data, &users); err != nil {
-		return nil, fmt.Errorf("parse %s %s: %w", label, usersPath, err)
+		return nil, fmt.Errorf("parse external MCP users file %s: %w", usersPath, err)
 	}
 
 	if users == nil {
-		return nil, fmt.Errorf("parse %s %s: must be a JSON object", label, usersPath)
+		return nil, fmt.Errorf("parse external MCP users file %s: must be a JSON object", usersPath)
 	}
 
 	return users, nil
@@ -265,6 +251,12 @@ func (c *Config) Validate() error {
 	}
 
 	c.Overlays = normalizeStrings(c.Overlays)
+
+	for ip, username := range c.WebUsers {
+		if !ip.IsValid() || username == "" || username != strings.TrimSpace(username) {
+			return errors.New("web_users requires valid IP keys and non-empty, trimmed usernames")
+		}
+	}
 
 	for name, model := range c.Models {
 		if strings.TrimSpace(name) == "" || strings.TrimSpace(model) == "" {
@@ -306,10 +298,6 @@ func (c *Config) Validate() error {
 
 	if c.MCPExternal.Enabled && strings.TrimSpace(c.MCPExternal.ListenAddr) == "" {
 		return errors.New("mcp_external.listen_addr is required when mcp_external is enabled")
-	}
-
-	if c.MCPDevelopment.Enabled && strings.TrimSpace(c.MCPDevelopment.ListenAddr) == "" {
-		return errors.New("mcp_development.listen_addr is required when mcp_development is enabled")
 	}
 
 	if err := c.validateMCPServers(); err != nil {

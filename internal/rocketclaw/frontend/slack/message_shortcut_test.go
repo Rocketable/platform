@@ -2,6 +2,7 @@ package slackconnector
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
@@ -33,11 +33,10 @@ type messageActionsView struct {
 }
 
 type messageActionsRecorder struct {
-	URL        string
-	mu         sync.Mutex
-	opened     []messageActionsView
-	updated    []messageActionsView
-	updatedRaw []string
+	URL     string
+	mu      sync.Mutex
+	opened  []messageActionsView
+	updated []messageActionsView
 }
 
 func (r *messageActionsRecorder) lastOpened() messageActionsView {
@@ -71,7 +70,6 @@ func newMessageActionsRecorder(t *testing.T) *messageActionsRecorder {
 				rec.opened = append(rec.opened, view)
 			} else {
 				rec.updated = append(rec.updated, view)
-				rec.updatedRaw = append(rec.updatedRaw, string(body))
 			}
 			rec.mu.Unlock()
 			writeJSON(t, w, map[string]any{"ok": true, "view": map[string]any{"id": "V-actions"}})
@@ -94,14 +92,14 @@ func TestHandleMessageShortcutUnauthorizedIsSilent(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
-	connector.handleInteractive(t.Context(), newMessageShortcutEvent("U999", "111.2", nil))
+	connector.handleInteractive(t.Context(), newMessageShortcutEvent("U999", "111.2"))
 }
 
 func TestHandleMessageShortcutUnmanagedExplains(t *testing.T) {
 	rec := newMessageActionsRecorder(t)
 	connector := newTestConnector(rec.URL)
 
-	connector.handleInteractive(t.Context(), newMessageShortcutEvent("U123", "111.2", nil))
+	connector.handleInteractive(t.Context(), newMessageShortcutEvent("U123", "111.2"))
 
 	require.Len(t, rec.opened, 1)
 	assert.Equal(t, slackMessageShortcutCallbackID, rec.lastOpened().View.CallbackID)
@@ -115,7 +113,7 @@ func TestHandleMessageShortcutManagedWithoutControlsExplains(t *testing.T) {
 	router.prepareHandled = true
 	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
 
-	connector.handleInteractive(t.Context(), newMessageShortcutEvent("U123", "111.2", nil))
+	connector.handleInteractive(t.Context(), newMessageShortcutEvent("U123", "111.2"))
 
 	require.Len(t, rec.opened, 1)
 	assert.Equal(t, "No RocketClaw actions on this message.", rec.lastOpened().View.Blocks[0].Text.Text)
@@ -129,7 +127,7 @@ func TestHandleMessageShortcutThinkingOffersInterrupt(t *testing.T) {
 	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
 	connector.pending["k"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "999.1", AnswerTS: "999.2"}
 
-	connector.handleInteractive(t.Context(), newMessageShortcutEvent("U123", "999.1", nil))
+	connector.handleInteractive(t.Context(), newMessageShortcutEvent("U123", "999.1"))
 
 	require.Len(t, rec.opened, 1)
 	require.Len(t, rec.lastOpened().View.Blocks[0].Elements, 1)
@@ -154,157 +152,105 @@ func TestHandleMessageShortcutEnvelopeOffersCancelAndSteer(t *testing.T) {
 	rec := newMessageActionsRecorder(t)
 	router := newThreadRouterStub()
 	router.prepareHandled = true
+	router.busy = true
 	router.queue = []protocol.ThreadQueueItem{{ID: "q1", Message: "later", SlackChannel: "C123", SlackTS: "111.2"}}
 	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
-	connector.beginSlackStack(slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.2"}))
 
-	connector.handleInteractive(t.Context(), newMessageShortcutEvent("U123", "111.2", nil))
+	connector.handleInteractive(t.Context(), newMessageShortcutEvent("U123", "111.2"))
 
 	require.Len(t, rec.opened, 1)
 	ids := actionIDs(rec.lastOpened())
 	assert.Equal(t, []string{slackMessageActionCancel, slackMessageActionSteer}, ids)
 }
 
+func TestHandleMessageShortcutSteerClickConvertsEnqueue(t *testing.T) {
+	rec := newMessageActionsRecorder(t)
+	router := newThreadRouterStub()
+	router.prepareHandled = true
+	router.busy = true
+	router.queue = []protocol.ThreadQueueItem{{ID: "q1", Message: "later", SlackChannel: "C123", SlackTS: "111.2"}}
+	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
+	connector.handleInteractive(t.Context(), newMessageActionsButtonEvent(slackMessageActionSteer, &rocketclawActionsMetadata{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.2"}))
+	require.Len(t, rec.updated, 1)
+	assert.Equal(t, "Converted to a steer.", rec.updated[0].View.Blocks[0].Text.Text)
+	require.Equal(t, protocol.InboundKindSteer, router.queueSnapshot()[0].Kind)
+}
+
+func TestConvertQueuedEnvelopePromoteError(t *testing.T) {
+	rec := newMessageActionsRecorder(t)
+	router := newThreadRouterStub()
+	router.prepareHandled = true
+	router.busy = true
+	router.errQueue = errors.New("promote failed")
+	router.queue = []protocol.ThreadQueueItem{{ID: "q1", Message: "later", SlackChannel: "C123", SlackTS: "111.2"}}
+	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
+	connector.handleInteractive(t.Context(), newMessageActionsButtonEvent(slackMessageActionSteer, &rocketclawActionsMetadata{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.2"}))
+	require.Len(t, rec.updated, 1)
+	assert.Equal(t, "No RocketClaw actions on this message.", rec.updated[0].View.Blocks[0].Text.Text)
+}
+
+func TestFindQueuedEnvelopeResolvesMissingThreadTS(t *testing.T) {
+	router := newThreadRouterStub()
+	router.prepareHandled = true
+	router.queue = []protocol.ThreadQueueItem{{ID: "q1", SlackChannel: "C123", SlackTS: "111.2"}}
+	connector := newTestConnectorWithOptions("http://slack.test", nil, nil, router, nil)
+	target, item, ok := connector.findQueuedEnvelope(t.Context(), "C123", "111.2", "")
+	require.True(t, ok)
+	assert.Equal(t, "q1", item.ID)
+	assert.Equal(t, "C123", target.ChannelID)
+
+	router.errPrepare = errors.New("resolve failed")
+	_, _, ok = connector.findQueuedEnvelope(t.Context(), "C123", "111.2", "")
+	require.False(t, ok)
+
+	router.errPrepare = nil
+	router.prepareHandled = false
+	_, _, ok = connector.findQueuedEnvelope(t.Context(), "C123", "111.2", "")
+	require.False(t, ok)
+}
+
+func TestDeleteQueuedEnvelopeLogsError(t *testing.T) {
+	router := newThreadRouterStub()
+	router.errQueue = errors.New("delete failed")
+	connector := newTestConnectorWithOptions("http://slack.test", nil, nil, router, nil)
+	ok := connector.deleteQueuedEnvelope(t.Context(), protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.2"}, &protocol.ThreadQueueItem{ID: "q1", SlackChannel: "C123", SlackTS: "111.2"})
+	require.False(t, ok)
+}
+
+func TestHandleRocketclawActionsInteractiveRejectsInvalidPayloads(t *testing.T) {
+	rec := newMessageActionsRecorder(t)
+	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, newThreadRouterStub(), nil)
+	assert.False(t, connector.handleRocketclawActionsInteractive(t.Context(), &slack.InteractionCallback{}))
+	assert.True(t, connector.handleRocketclawActionsInteractive(t.Context(), &slack.InteractionCallback{
+		Type: slack.InteractionTypeBlockActions,
+		View: slack.View{CallbackID: slackMessageShortcutCallbackID, PrivateMetadata: "not-json"},
+	}))
+	assert.True(t, connector.handleRocketclawActionsInteractive(t.Context(), &slack.InteractionCallback{
+		Type: slack.InteractionTypeBlockActions,
+		View: slack.View{ID: "V-actions", CallbackID: slackMessageShortcutCallbackID, PrivateMetadata: "{}"},
+	}))
+}
+
 func TestHandleMessageShortcutCancelClickDropsSteer(t *testing.T) {
 	rec := newMessageActionsRecorder(t)
 	router := newThreadRouterStub()
 	router.prepareHandled = true
+	router.queue = []protocol.ThreadQueueItem{{ID: "backend-steer", Kind: protocol.InboundKindSteer, Message: "pending steer", Principal: "U123", SlackChannel: "C123", SlackTS: "111.2"}}
 	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
-	key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.2"})
-	connector.beginSlackStack(key)
-
-	content := protocol.InboundContent{Text: "pending steer"}
-	reply := &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.2"}
-	require.True(t, connector.bufferSlackStack(t.Context(), key, "pending steer", &content, reply, "U123", "", "", nil))
+	connector.handleInteractive(t.Context(), newMessageShortcutEvent("U123", "111.2"))
+	assert.Equal(t, []string{slackMessageActionCancel}, actionIDs(rec.lastOpened()))
 
 	connector.handleInteractive(t.Context(), newMessageActionsButtonEvent(slackMessageActionCancel, &rocketclawActionsMetadata{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.2"}))
 
-	connector.mu.Lock()
-	pending, active := connector.stacks[key]
-	connector.mu.Unlock()
-	assert.True(t, active)
-	assert.Empty(t, pending)
+	assert.Empty(t, router.queueSnapshot())
+	assert.Empty(t, connector.stacks)
 	assert.Empty(t, router.goalStops)
+	assert.Empty(t, router.conversationStops)
 	require.Len(t, rec.updated, 1)
 	assert.Equal(t, "Cancelled.", rec.updated[0].View.Blocks[0].Text.Text)
-}
-
-func TestHandleMessageShortcutAnswerOffersSideAsk(t *testing.T) {
-	rec := newMessageActionsRecorder(t)
-	router := newThreadRouterStub()
-	router.prepareHandled = true
-	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
-
-	divider := slack.NewDividerBlock()
-	divider.BlockID = sideAskStampValue(t, 42)
-
-	connector.handleInteractive(t.Context(), newMessageShortcutEvent("U123", "111.222", []slack.Block{divider}))
-
-	require.Len(t, rec.opened, 1)
-	assert.Equal(t, []string{slackMessageActionSideAsk}, actionIDs(rec.lastOpened()))
-}
-
-func TestHandleMessageShortcutSideAskClickUpdatesToForm(t *testing.T) {
-	rec := newMessageActionsRecorder(t)
-	router := newThreadRouterStub()
-	router.prepareHandled = true
-	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
-	stamp := sideAskStampValue(t, 42)
-
-	connector.handleInteractive(t.Context(), newMessageActionsButtonEvent(slackMessageActionSideAsk, &rocketclawActionsMetadata{
-		ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222", Stamp: parseTestSideAskStamp(t, stamp),
-	}))
-
-	require.Len(t, rec.updated, 1)
-	assert.Equal(t, slackSideAskViewCallbackID, rec.updated[0].View.CallbackID)
-}
-
-func TestHandleMessageShortcutSideAskChooserListsChannelAgentsAndPreselectsThreadAgent(t *testing.T) {
-	rec := newMessageActionsRecorder(t)
-	router := newThreadRouterStub()
-	router.threadAgent = "planner"
-	router.threadAgentHandled = true
-	connector := newTestConnectorWithOptions(rec.URL, nil, []config.SlackChannelConfig{{
-		Channel: "#social", Agents: []string{"social", "planner"}, AllowedUserIDs: []string{"U123"},
-	}}, router, nil)
-
-	connector.handleInteractive(t.Context(), newMessageActionsButtonEvent(slackMessageActionSideAsk, &rocketclawActionsMetadata{
-		ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222", Stamp: parseTestSideAskStamp(t, sideAskStampValue(t, 7)),
-	}))
-
-	require.Len(t, rec.updatedRaw, 1)
-
-	var view sideAskOpenedView
-	require.NoError(t, json.Unmarshal([]byte(rec.updatedRaw[0]), &view))
-	assert.Equal(t, slackSideAskViewCallbackID, view.View.CallbackID)
-
-	var agentBlock *sideAskOpenedBlock
-
-	for i := range view.View.Blocks {
-		if view.View.Blocks[i].Element.Type == "static_select" {
-			agentBlock = &view.View.Blocks[i]
-			break
-		}
-	}
-
-	require.NotNil(t, agentBlock)
-
-	values := make([]string, 0, len(agentBlock.Element.Options))
-	for _, option := range agentBlock.Element.Options {
-		values = append(values, option.Value)
-	}
-
-	assert.Equal(t, []string{"social", "planner"}, values)
-	assert.Equal(t, "planner", agentBlock.Element.InitialOption.Value)
-}
-
-func TestHandleMessageShortcutSecondSideAskWhileLiveIsRefused(t *testing.T) {
-	rec := newMessageActionsRecorder(t)
-	router := newThreadRouterStub()
-	router.prepareHandled = true
-	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
-
-	for _, entryID := range []int64{42, 43} {
-		connector.handleInteractive(t.Context(), newMessageActionsButtonEvent(slackMessageActionSideAsk, &rocketclawActionsMetadata{
-			ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222", Stamp: parseTestSideAskStamp(t, sideAskStampValue(t, entryID)),
-		}))
-	}
-
+	connector.handleInteractive(t.Context(), newMessageActionsButtonEvent(slackMessageActionCancel, &rocketclawActionsMetadata{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.2"}))
 	require.Len(t, rec.updated, 2)
-	assert.Equal(t, slackSideAskViewCallbackID, rec.updated[0].View.CallbackID)
 	assert.Equal(t, "No RocketClaw actions on this message.", rec.updated[1].View.Blocks[0].Text.Text)
-}
-
-func TestHandleMessageShortcutSideAskDismissStartsNoRunner(t *testing.T) {
-	rec := newMessageActionsRecorder(t)
-	runner := &recordingSideAskRunner{}
-	router := newThreadRouterStub()
-	router.prepareHandled = true
-	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
-	connector.sideAsk = runner
-	metadata := sideAskStampValue(t, 42)
-
-	connector.handleInteractive(t.Context(), newMessageActionsButtonEvent(slackMessageActionSideAsk, &rocketclawActionsMetadata{
-		ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222", Stamp: parseTestSideAskStamp(t, metadata),
-	}))
-	require.Len(t, rec.updated, 1)
-
-	connector.handleInteractive(t.Context(), socketmode.Event{Data: slack.InteractionCallback{
-		Type: slack.InteractionTypeViewClosed,
-		User: slack.User{ID: "U123"},
-		View: slack.View{CallbackID: slackSideAskViewCallbackID, PrivateMetadata: metadata},
-	}})
-
-	assert.Empty(t, runner.snapshot())
-}
-
-func parseTestSideAskStamp(t *testing.T, raw string) sideAskStamp {
-	t.Helper()
-
-	var stamp sideAskStamp
-	require.NoError(t, json.Unmarshal([]byte(raw), &stamp))
-
-	return stamp
 }
 
 func actionIDs(view messageActionsView) []string {
@@ -319,14 +265,14 @@ func actionIDs(view messageActionsView) []string {
 	return ids
 }
 
-func newMessageShortcutEvent(userID, messageTS string, blocks []slack.Block) socketmode.Event {
+func newMessageShortcutEvent(userID, messageTS string) socketmode.Event {
 	return socketmode.Event{Data: slack.InteractionCallback{
 		Type:       slack.InteractionTypeMessageAction,
 		CallbackID: slackMessageShortcutCallbackID,
 		User:       slack.User{ID: userID},
 		TriggerID:  "trigger-shortcut",
 		Channel:    slack.Channel{GroupConversation: slack.GroupConversation{Conversation: slack.Conversation{ID: "C123"}}},
-		Message:    slack.Message{Msg: slack.Msg{Timestamp: messageTS, ThreadTimestamp: messageTS, Blocks: slack.Blocks{BlockSet: blocks}}},
+		Message:    slack.Message{Msg: slack.Msg{Timestamp: messageTS, ThreadTimestamp: messageTS}},
 	}}
 }
 

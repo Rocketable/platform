@@ -5,23 +5,19 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketclaw/frontend/developmentmcp"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend/externalmcp"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 )
 
 func startExternalMCPServer(
@@ -126,15 +122,6 @@ func startExternalMCPServer(
 			reply = &protocol.InboundMessage{SlackReply: &protocol.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}}
 
 			conversationID := session.PrivateConversationID
-			if conversationID == "" {
-				conversationID = session.ManagedConversationID
-			}
-
-			if store.PairBusyFor(session.ManagedConversationID, conversationID) {
-				result, _, err := submitExternalMCPInput(callCtx, submitAgent, usedAgent, conversationID, &inboundContent, metadata, strings.TrimSpace(username), nil, externalConversationID, backend.NoopActivationHook)
-
-				return result, err
-			}
 
 			activation := func(activeCtx context.Context, inbound *protocol.InboundMessage) error {
 				relayed, err := textRelay(activeCtx, &protocol.ExternalMCPRelay{ConversationID: conversationID, ExternalConversationID: externalConversationID, Agent: usedAgent, Text: input, Attachments: outboundAttachments}, reply, "")
@@ -189,97 +176,6 @@ func startExternalMCPServer(
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start external MCP HTTP server: %w", err)
-	}
-
-	return server, nil
-}
-
-func startDevelopmentMCP(ctx context.Context, cfg *config.Config, configPath string, overlayMu *sync.Mutex, reload, restart func(reason string) (string, error), logger *slog.Logger, sessions *backend.SessionService) (*developmentmcp.Server, error) {
-	if !cfg.MCPDevelopment.Enabled {
-		return nil, nil
-	}
-
-	users, err := config.LoadDevelopmentMCPUsers(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("load development MCP auth users: %w", err)
-	}
-
-	if len(users) == 0 {
-		return nil, errors.New("development MCP users are required")
-	}
-
-	var (
-		chatsMu sync.Mutex
-		chats   = map[string]*backend.DevelopmentChat{}
-		locks   = backend.NewKeyedConversationLocks()
-	)
-
-	server, err := developmentmcp.Start(ctx, logger, cfg.MCPDevelopment.ListenAddr, users, skel.OverlaySpecs(cfg.Overlays), func(spec string) (protocol.OverlayContext, error) {
-		overlayMu.Lock()
-		defer overlayMu.Unlock()
-
-		got, err := skel.ReadOverlayContext(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, spec)
-		if err != nil {
-			return protocol.OverlayContext{}, fmt.Errorf("read overlay context: %w", err)
-		}
-
-		return got, nil
-	}, func(baseOverlay string, files []protocol.OverlayFile) (protocol.LintResult, error) {
-		overlayMu.Lock()
-		defer overlayMu.Unlock()
-
-		return backend.LintTry(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, baseOverlay, files, cfg, logger)
-	}, func(turnCtx context.Context, baseOverlay string, files []protocol.OverlayFile, agent, prompt, conversationID string) (string, string, error) {
-		overlayMu.Lock()
-		defer overlayMu.Unlock()
-
-		unlock := locks.Lock(conversationID)
-		defer unlock()
-
-		chatsMu.Lock()
-		chat, ok := chats[conversationID]
-
-		if !ok {
-			chat = new(backend.DevelopmentChat)
-			chats[conversationID] = chat
-		}
-		chatsMu.Unlock()
-
-		return backend.RunTryTurn(turnCtx, cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, cfg, logger, chat, baseOverlay, files, agent, prompt)
-	}, reload, restart, func(listCtx context.Context, req protocol.ListSessionsRequest) (protocol.ListSessionsResult, error) {
-		summaries, err := sessions.ListSessions(listCtx, backend.SessionListOptions{Since: req.Since, Until: req.Until, Limit: req.Limit})
-		if err != nil {
-			return protocol.ListSessionsResult{}, fmt.Errorf("list sessions: %w", err)
-		}
-
-		return protocol.ListSessionsResult{Sessions: summaries}, nil
-	}, func(observeCtx context.Context, req protocol.ObserveSessionRequest) (protocol.ObserveSessionResult, error) {
-		entries, err := sessions.ObserveEntries(observeCtx, req.ConversationID, 0)
-		if err != nil {
-			return protocol.ObserveSessionResult{}, fmt.Errorf("observe session: %w", err)
-		}
-
-		out := make([]json.RawMessage, len(entries))
-		for i := range entries {
-			data, errMarshal := json.Marshal(entries[i].Entry)
-			if errMarshal != nil {
-				return protocol.ObserveSessionResult{}, fmt.Errorf("marshal session entry: %w", errMarshal)
-			}
-
-			out[i] = data
-		}
-
-		return protocol.ObserveSessionResult{Entries: out}, nil
-	}, func(deleteCtx context.Context, req protocol.DeleteSessionRequest) (protocol.DeleteSessionResult, error) {
-		deleted, err := sessions.DeleteSession(deleteCtx, req.ConversationID)
-		if err != nil {
-			return protocol.DeleteSessionResult{}, fmt.Errorf("delete session: %w", err)
-		}
-
-		return protocol.DeleteSessionResult{Deleted: deleted}, nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("start development MCP HTTP server: %w", err)
 	}
 
 	return server, nil
@@ -378,7 +274,9 @@ func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Contex
 
 	if reply != nil {
 		inbound.SlackReply = reply.SlackReply
+		inbound.SyncDestination = protocol.SlackThreadConversationID(reply.SlackReply.ChannelID, reply.SlackReply.ThreadTS)
 	}
+	inbound.ConversationID = conversationID
 
 	resultCh := inbound.EnableResponseWait()
 

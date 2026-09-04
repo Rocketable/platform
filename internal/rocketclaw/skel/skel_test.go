@@ -1,18 +1,15 @@
 package skel
 
 import (
-	"cmp"
 	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -659,268 +656,6 @@ func TestOverlayInfos(t *testing.T) {
 	assert.Equal(t, filepath.Join(workspace, targetRoot, "overlays", "github.com-rocketable-overlay-main"), infos[0].ClonePath)
 }
 
-func TestOverlaySpecs(t *testing.T) {
-	assert.Empty(t, OverlaySpecs(nil))
-
-	first := "github.com/rocketable/overlay@main"
-	second := "github.com/rocketable/other"
-	assert.Equal(t, []string{first, second}, OverlaySpecs([]string{" " + first + " ", "", second}))
-}
-
-func TestReadOverlayContextKnownSpec(t *testing.T) {
-	workspace := t.TempDir()
-	spec := "github.com/rocketable/overlay@main"
-	overlays := []string{spec}
-	clone := OverlayInfos(workspace, targetRoot, overlays)[0].ClonePath
-	require.NoError(t, os.MkdirAll(filepath.Join(clone, agentsRoot), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(clone, skillsRoot, "pack"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(clone, agentsRoot, "a.md"), []byte("agent"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(clone, skillsRoot, "pack", "SKILL.md"), []byte("skill"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(clone, "README.md"), []byte("ignore"), 0o644))
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, agentsRoot), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "local.md"), []byte("workspace"), 0o644))
-
-	got, err := ReadOverlayContext(workspace, targetRoot, overlays, spec)
-	require.NoError(t, err)
-	assert.Equal(t, spec, got.BaseOverlay)
-	assert.Equal(t, []protocol.OverlayFile{
-		{Path: "agents/a.md", Content: "agent"},
-		{Path: "skills/pack/SKILL.md", Content: "skill"},
-	}, got.Files)
-}
-
-func TestReadOverlayContextUnknownSpec(t *testing.T) {
-	workspace := t.TempDir()
-	overlays := []string{"github.com/rocketable/overlay"}
-
-	_, err := ReadOverlayContext(workspace, targetRoot, overlays, "github.com/other/overlay")
-	require.ErrorContains(t, err, `unknown overlay spec "github.com/other/overlay"`)
-
-	_, err = ReadOverlayContext(workspace, targetRoot, overlays, "")
-	require.ErrorContains(t, err, `unknown overlay spec ""`)
-}
-
-func TestReadOverlayContextWalkError(t *testing.T) {
-	workspace := t.TempDir()
-	spec := "github.com/rocketable/overlay@main"
-	overlays := []string{spec}
-	clone := OverlayInfos(workspace, targetRoot, overlays)[0].ClonePath
-	require.NoError(t, os.MkdirAll(filepath.Join(clone, scriptsRoot), 0o755))
-	require.NoError(t, os.Symlink(filepath.Join(clone, "missing"), filepath.Join(clone, scriptsRoot, "aa-link")))
-	require.NoError(t, os.WriteFile(filepath.Join(clone, scriptsRoot, "zz.sh"), []byte("keep"), 0o644))
-
-	_, err := ReadOverlayContext(workspace, targetRoot, overlays, spec)
-	require.ErrorContains(t, err, "walk overlay root")
-}
-
-func TestReadOverlayContextMissingClone(t *testing.T) {
-	workspace := t.TempDir()
-	spec := "github.com/rocketable/overlay@main"
-
-	got, err := ReadOverlayContext(workspace, targetRoot, []string{spec}, spec)
-	require.NoError(t, err)
-	assert.Equal(t, spec, got.BaseOverlay)
-	assert.Empty(t, got.Files)
-}
-
-func TestStageLiveRuntimeCopiesLiveMergeWithoutTouchingLiveTree(t *testing.T) {
-	workspace := t.TempDir()
-	spec := "github.com/rocketable/overlay@main"
-	overlays := []string{spec}
-	clone := OverlayInfos(workspace, targetRoot, overlays)[0].ClonePath
-	liveRuntime := filepath.Join(workspace, targetRoot)
-	liveFile := filepath.Join(liveRuntime, agentsRoot, "live-only.md")
-	cloneFile := filepath.Join(clone, agentsRoot, "from-overlay.md")
-	cloneShared := filepath.Join(clone, agentsRoot, "shared.md")
-
-	require.NoError(t, os.MkdirAll(filepath.Join(liveRuntime, agentsRoot), 0o755))
-	require.NoError(t, os.WriteFile(liveFile, []byte("live"), 0o644))
-	require.NoError(t, os.MkdirAll(filepath.Join(clone, agentsRoot), 0o755))
-	require.NoError(t, os.WriteFile(cloneFile, []byte("overlay"), 0o644))
-	require.NoError(t, os.WriteFile(cloneShared, []byte("from-overlay"), 0o644))
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, agentsRoot), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "from-workspace.md"), []byte("workspace"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "shared.md"), []byte("from-workspace"), 0o644))
-
-	before := snapshotLiveTree(t, liveRuntime)
-
-	for _, tt := range []struct {
-		name       string
-		base       string
-		files      []protocol.OverlayFile
-		checkMerge bool
-	}{
-		{name: "empty base", checkMerge: true},
-		{name: "named base", base: spec, files: []protocol.OverlayFile{{Path: "agents/from-overlay.md", Content: "tried"}}},
-		{name: "extra top layer", files: []protocol.OverlayFile{{Path: "agents/try-only.md", Content: "try"}}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			stage, err := StageLiveRuntime(workspace, targetRoot, overlays, tt.base, tt.files, testLogger())
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, os.RemoveAll(stage)) })
-
-			if tt.checkMerge {
-				assert.Equal(t, workspace, filepath.Dir(stage))
-				assert.True(t, strings.HasPrefix(filepath.Base(stage), ".rocketclaw-devmcp-"))
-
-				data, err := os.ReadFile(filepath.Join(stage, ".gitignore"))
-				require.NoError(t, err)
-				assert.Equal(t, "auth.json\nauth.json.lock\n", string(data))
-
-				data, err = os.ReadFile(filepath.Join(stage, agentsRoot, "main.md"))
-				require.NoError(t, err)
-				assert.Contains(t, string(data), "main-archive-benchmarks")
-
-				data, err = os.ReadFile(filepath.Join(stage, agentsRoot, "from-overlay.md"))
-				require.NoError(t, err)
-				assert.Equal(t, "overlay", string(data))
-
-				data, err = os.ReadFile(filepath.Join(stage, agentsRoot, "from-workspace.md"))
-				require.NoError(t, err)
-				assert.Equal(t, "workspace", string(data))
-
-				data, err = os.ReadFile(filepath.Join(stage, agentsRoot, "shared.md"))
-				require.NoError(t, err)
-				assert.Equal(t, "from-workspace", string(data))
-
-				_, err = os.Stat(filepath.Join(stage, agentsRoot, "live-only.md"))
-				require.ErrorIs(t, err, os.ErrNotExist)
-			}
-
-			assert.Equal(t, before, snapshotLiveTree(t, liveRuntime))
-		})
-	}
-}
-
-func TestStageLiveRuntimeReplacesNamedLayerKeepsOmittedCloneFile(t *testing.T) {
-	workspace := t.TempDir()
-	spec := "github.com/rocketable/skills"
-	overlays := []string{spec}
-	clone := OverlayInfos(workspace, targetRoot, overlays)[0].ClonePath
-	require.NoError(t, os.MkdirAll(filepath.Join(clone, agentsRoot), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(clone, agentsRoot, "a.md"), []byte("old-a"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(clone, agentsRoot, "b.md"), []byte("old-b"), 0o644))
-
-	stage, err := StageLiveRuntime(workspace, targetRoot, overlays, spec, []protocol.OverlayFile{{Path: "agents/a.md", Content: "new-a"}}, testLogger())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(stage)) })
-
-	data, err := os.ReadFile(filepath.Join(stage, agentsRoot, "a.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "new-a", string(data))
-
-	data, err = os.ReadFile(filepath.Join(stage, agentsRoot, "b.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "old-b", string(data))
-
-	data, err = os.ReadFile(filepath.Join(clone, agentsRoot, "a.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "old-a", string(data))
-}
-
-func TestStageLiveRuntimeReplacingFirstLayerStillAppliesLaterOverlay(t *testing.T) {
-	workspace := t.TempDir()
-	first := "github.com/rocketable/first"
-	second := "github.com/rocketable/second"
-	overlays := []string{first, second}
-	infos := OverlayInfos(workspace, targetRoot, overlays)
-	require.NoError(t, os.MkdirAll(filepath.Join(infos[0].ClonePath, agentsRoot), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(infos[0].ClonePath, agentsRoot, "a.md"), []byte("first-a"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(infos[0].ClonePath, agentsRoot, "b.md"), []byte("first-b"), 0o644))
-	require.NoError(t, os.MkdirAll(filepath.Join(infos[1].ClonePath, agentsRoot), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(infos[1].ClonePath, agentsRoot, "a.md"), []byte("second-a"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(infos[1].ClonePath, agentsRoot, "c.md"), []byte("second-c"), 0o644))
-
-	stage, err := StageLiveRuntime(workspace, targetRoot, overlays, first, []protocol.OverlayFile{{Path: "agents/a.md", Content: "new-a"}}, testLogger())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(stage)) })
-
-	data, err := os.ReadFile(filepath.Join(stage, agentsRoot, "a.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "second-a", string(data))
-
-	data, err = os.ReadFile(filepath.Join(stage, agentsRoot, "b.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "first-b", string(data))
-
-	data, err = os.ReadFile(filepath.Join(stage, agentsRoot, "c.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "second-c", string(data))
-}
-
-func TestStageLiveRuntimeUnsetBaseAddsExtraLayerWithoutCloneFiles(t *testing.T) {
-	workspace := t.TempDir()
-	spec := "github.com/rocketable/overlay"
-	overlays := []string{spec}
-	clone := OverlayInfos(workspace, targetRoot, overlays)[0].ClonePath
-	require.NoError(t, os.MkdirAll(filepath.Join(clone, agentsRoot), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(clone, agentsRoot, "b.md"), []byte("live-b"), 0o644))
-
-	stage, err := StageLiveRuntime(workspace, targetRoot, overlays, "", []protocol.OverlayFile{{Path: "agents/a.md", Content: "new-a"}}, testLogger())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(stage)) })
-
-	data, err := os.ReadFile(filepath.Join(stage, agentsRoot, "a.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "new-a", string(data))
-
-	data, err = os.ReadFile(filepath.Join(stage, agentsRoot, "b.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "live-b", string(data))
-
-	data, err = os.ReadFile(filepath.Join(clone, agentsRoot, "b.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "live-b", string(data))
-
-	_, err = os.Stat(filepath.Join(clone, agentsRoot, "a.md"))
-	require.ErrorIs(t, err, os.ErrNotExist)
-}
-
-func TestStageLiveRuntimeUnsetBaseExtraLayerWinsOverWorkspace(t *testing.T) {
-	workspace := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, agentsRoot), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "a.md"), []byte("workspace-a"), 0o644))
-
-	stage, err := StageLiveRuntime(workspace, targetRoot, nil, " \t", []protocol.OverlayFile{{Path: "agents/a.md", Content: "new-a"}}, testLogger())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(stage)) })
-
-	data, err := os.ReadFile(filepath.Join(stage, agentsRoot, "a.md"))
-	require.NoError(t, err)
-	assert.Equal(t, "new-a", string(data))
-}
-
-func TestStageLiveRuntimeUnknownBaseOverlay(t *testing.T) {
-	workspace := t.TempDir()
-	spec := "github.com/rocketable/overlay"
-	overlays := []string{spec}
-	clone := OverlayInfos(workspace, targetRoot, overlays)[0].ClonePath
-	liveRuntime := filepath.Join(workspace, targetRoot)
-	require.NoError(t, os.MkdirAll(filepath.Join(clone, agentsRoot), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(clone, agentsRoot, "a.md"), []byte("overlay"), 0o644))
-	require.NoError(t, os.MkdirAll(filepath.Join(liveRuntime, agentsRoot), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(liveRuntime, agentsRoot, "live.md"), []byte("live"), 0o644))
-
-	before := snapshotLiveTree(t, liveRuntime)
-
-	_, err := StageLiveRuntime(workspace, targetRoot, overlays, "github.com/other/overlay", []protocol.OverlayFile{{Path: "agents/a.md", Content: "tried"}}, testLogger())
-	require.ErrorContains(t, err, `unknown overlay spec "github.com/other/overlay"`)
-
-	assert.Equal(t, before, snapshotLiveTree(t, liveRuntime))
-}
-
-func TestStageLiveRuntimeRejectsEscapingRequestPath(t *testing.T) {
-	workspace := t.TempDir()
-	spec := "github.com/rocketable/skills"
-	overlays := []string{spec}
-	clone := OverlayInfos(workspace, targetRoot, overlays)[0].ClonePath
-	require.NoError(t, os.MkdirAll(filepath.Join(clone, agentsRoot), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(clone, agentsRoot, "a.md"), []byte("old-a"), 0o644))
-
-	_, err := StageLiveRuntime(workspace, targetRoot, overlays, spec, []protocol.OverlayFile{{Path: "../agents/a.md", Content: "escaped"}}, testLogger())
-	require.ErrorContains(t, err, "escapes stage")
-}
-
 func repoGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 
@@ -956,28 +691,6 @@ func TestSyncCreatesEmbeddedRuntimeSupport(t *testing.T) {
 	assert.Equal(t, "auth.json\nauth.json.lock\n", string(data))
 }
 
-func TestListSetupFilesIncludesRuntimeSupport(t *testing.T) {
-	names, err := ListSetupFiles()
-	require.NoError(t, err)
-
-	assert.True(t, slices.IsSorted(names), "ListSetupFiles() = %v; want sorted names", names)
-
-	for _, name := range []string{
-		".rocketclaw/.gitignore",
-		".rocketclaw/skills/main-archive-benchmarks/SKILL.md",
-		"agents/main.md",
-		"agents/slack-to-benchmark.md",
-	} {
-		assert.Contains(t, names, name)
-	}
-
-	assert.NotContains(t, names, ".rocketclaw")
-	assert.NotContains(t, names, "agents")
-	assert.NotContains(t, names, "cron")
-	assert.NotContains(t, names, "workflows")
-	assert.NotContains(t, names, "workflows/.gitkeep")
-}
-
 func TestSyncShipsQuickbenchSkillAndAgent(t *testing.T) {
 	tmp := t.TempDir()
 	require.NoError(t, SyncInWithOverlays(tmp, targetRoot, nil, testLogger()))
@@ -994,17 +707,6 @@ func TestSyncShipsQuickbenchSkillAndAgent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(mainAgent), "main-archive-benchmarks")
 	assert.Contains(t, string(mainAgent), "slack-to-benchmark")
-}
-
-func TestReadSetupFile(t *testing.T) {
-	data, err := ReadSetupFile("main-update-cortex.sh")
-	require.NoError(t, err)
-	assert.Contains(t, string(data), "#!/usr/bin/env bash")
-}
-
-func TestReadSetupFileRejectsUnknown(t *testing.T) {
-	_, err := ReadSetupFile("../main-update-cortex.sh")
-	require.ErrorIs(t, err, errUnknownSetupFile)
 }
 
 func TestSyncEffectiveRuntimeAssetsDoesNotMutateRuntimeOrScriptSymlinks(t *testing.T) {
@@ -1120,69 +822,6 @@ func TestRelativePath(t *testing.T) {
 			assert.Equal(t, tt.want, relativePath(tt.root, tt.path))
 		})
 	}
-}
-
-func TestResolveSetupFilePath(t *testing.T) {
-	tests := []struct {
-		name    string
-		want    string
-		wantErr bool
-	}{
-		{name: "AGENTS.md", want: "AGENTS.md"},
-		{name: "../AGENTS.md", wantErr: true},
-		{name: ".", wantErr: true},
-		{name: "agents", wantErr: true},
-		{name: "missing.md", wantErr: true},
-	}
-
-	for _, tt := range tests {
-		got, err := resolveSetupFilePath(tt.name)
-		if tt.wantErr {
-			require.Error(t, err, tt.name)
-			continue
-		}
-
-		require.NoError(t, err, tt.name)
-		assert.Equal(t, tt.want, got)
-	}
-}
-
-type liveTreeFile struct {
-	path    string
-	mode    os.FileMode
-	modTime int64
-	content string
-}
-
-func snapshotLiveTree(t *testing.T, root string) []liveTreeFile {
-	t.Helper()
-
-	var files []liveTreeFile
-
-	require.NoError(t, filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		require.NoError(t, err)
-
-		if d.IsDir() {
-			return nil
-		}
-
-		rel, err := filepath.Rel(root, path)
-		require.NoError(t, err)
-
-		info, err := d.Info()
-		require.NoError(t, err)
-
-		data, err := os.ReadFile(path)
-		require.NoError(t, err)
-
-		files = append(files, liveTreeFile{path: rel, mode: info.Mode(), modTime: info.ModTime().UnixNano(), content: string(data)})
-
-		return nil
-	}))
-
-	slices.SortFunc(files, func(a, b liveTreeFile) int { return cmp.Compare(a.path, b.path) })
-
-	return files
 }
 
 func testLogger() *slog.Logger {

@@ -33,6 +33,16 @@ type InboundKind string
 const (
 	// InboundKindPrompt is a normal conversational prompt.
 	InboundKindPrompt InboundKind = "prompt"
+	// InboundKindSteer joins an open human turn or runs next after input closes.
+	InboundKindSteer InboundKind = "steer"
+	// InboundKindEnqueue waits for its own turn.
+	InboundKindEnqueue InboundKind = "enqueue"
+	// InboundKindCancel interrupts the active conversation owner.
+	InboundKindCancel InboundKind = "cancel"
+	// InboundKindGoal runs through terminal goal accounting.
+	InboundKindGoal InboundKind = "goal"
+	// InboundKindWorkflow runs a workflow to terminal handling.
+	InboundKindWorkflow InboundKind = "workflow"
 	// InboundKindInternalize is a note the session should absorb without replying.
 	InboundKindInternalize InboundKind = "internalize"
 )
@@ -43,6 +53,7 @@ type Source string
 // Known inbound and outbound message source labels.
 const (
 	SourceSlack       Source = "slack"
+	SourceWeb         Source = "web"
 	SourceExternalMCP Source = "external_mcp"
 	SourceSystem      Source = "system"
 )
@@ -110,6 +121,10 @@ type InboundMessage struct {
 	ConversationID                                          string
 	Metadata                                                map[string]string
 	Workflow                                                *WorkflowInvocation
+	Goal                                                    *GoalRequest
+	SyncDestination                                         string
+	RequireOutputDecision                                   bool
+	Cronjob                                                 *CronjobMessage
 	Response                                                chan Response
 
 	responseInit, responseOnce sync.Once
@@ -202,7 +217,6 @@ type OutboundMessage struct {
 	Bridge                             BridgeID
 	Targets                            []OutputTarget
 	ConversationID, TurnID             string
-	SessionEntryID                     int64
 	ExternalConversationID             string
 	Agent                              string
 	Cronjob                            *CronjobMessage

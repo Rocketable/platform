@@ -137,7 +137,7 @@ func (p BroadcastPublisher) PublishOutbound(ctx context.Context, message *Outbou
 			sender = BridgeSlack
 		case SourceExternalMCP:
 			sender = BridgeExternalMCP
-		case SourceSystem:
+		case SourceSystem, SourceWeb:
 		}
 	}
 
@@ -196,7 +196,7 @@ func CloneOutboundMessage(message *OutboundMessage) *OutboundMessage {
 	return &OutboundMessage{
 		Text: message.Text, ProgressText: message.ProgressText, Source: message.Source, Bridge: message.Bridge,
 		Targets: slices.Clone(message.Targets), ConversationID: message.ConversationID, TurnID: message.TurnID,
-		SessionEntryID: message.SessionEntryID, ExternalConversationID: message.ExternalConversationID, Agent: message.Agent,
+		ExternalConversationID: message.ExternalConversationID, Agent: message.Agent,
 		Sequence: message.Sequence, PostProgressText: message.PostProgressText, Complete: message.Complete,
 		SlackReply: clonePtr(message.SlackReply), Attachments: CloneOutboundAttachments(message.Attachments),
 		GoalTurn: message.GoalTurn, GoalComplete: message.GoalComplete, GoalActive: message.GoalActive,

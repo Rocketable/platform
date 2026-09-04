@@ -1,4 +1,5 @@
-package backend
+// Package cronfrontend schedules cron producers and their conversation Sync.
+package cronfrontend
 
 import (
 	"context"
@@ -16,13 +17,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/robfig/cron/v3"
 	"sigs.k8s.io/yaml"
 )
 
-// RunFunc executes one cronjob prompt and returns the cronjob result.
-type RunFunc func(context.Context, string, string, *slog.Logger, *RawRunProgress) (protocol.CronRunResult, error)
+// Runner executes a producer through terminal delivery.
+type Runner interface {
+	Run(context.Context, string, string, *slog.Logger, *backend.RawRunProgress) (protocol.CronRunResult, error)
+}
 
 // Manager loads and runs workspace cron definitions.
 type Manager struct {
@@ -30,7 +34,7 @@ type Manager struct {
 	channels              []string
 	broadcasts            chan<- protocol.Broadcast
 	store                 cronScheduleStore
-	run                   RunFunc
+	run                   Runner
 	log                   *slog.Logger
 	now                   func() time.Time
 	tickerInterval        time.Duration
@@ -43,15 +47,22 @@ type Manager struct {
 
 type cronScheduleStore interface {
 	ResetCronSchedules() error
-	SyncCronSchedules([]CronScheduleState, time.Time) error
-	DueCronSchedules(time.Time, int) ([]CronScheduleState, error)
-	ClaimCronSchedule(CronScheduleState, time.Time, time.Time) (CronScheduleRun, bool, error)
+	SyncCronSchedules([]backend.CronScheduleState, time.Time) error
+	DueCronSchedules(time.Time, int) ([]backend.CronScheduleState, error)
+	ClaimCronSchedule(backend.CronScheduleState, time.Time, time.Time) (backend.CronScheduleRun, bool, error)
 	CompleteCronRun(string, time.Time) error
 }
 
 type definition struct {
 	relativePath, agent, textChannel, body string
 	schedules                              []schedule
+}
+
+// Job is the read-only presentation of a loaded definition and its next triggers.
+type Job struct {
+	RelativePath, Agent, TextChannel, Body string
+	Schedules                              []string
+	Upcoming                               []time.Time
 }
 
 type schedule struct {
@@ -67,7 +78,7 @@ const (
 )
 
 // New constructs a cronjob manager using runtimeDir for effective runtime cron definitions.
-func New(workspace, runtimeDir string, channels []string, broadcasts chan<- protocol.Broadcast, store cronScheduleStore, run RunFunc, logger *slog.Logger) *Manager {
+func New(workspace, runtimeDir string, channels []string, broadcasts chan<- protocol.Broadcast, store cronScheduleStore, run Runner, logger *slog.Logger) *Manager {
 	channels = slices.Clone(channels)
 	for i := range channels {
 		channels[i] = strings.TrimSpace(channels[i])
@@ -231,6 +242,48 @@ func (m *Manager) LoadOneOffCronjob(target string) (protocol.OneOffCronjob, erro
 	return protocol.OneOffCronjob{Agent: definition.agent, Prompt: m.preparePrompt(definition.body), RelativePath: relativePath, TextChannel: definition.textChannel}, nil
 }
 
+// Jobs returns loaded definitions and their next triggers in the next day.
+// It neither refreshes scheduler state nor claims any work.
+func (m *Manager) Jobs() ([]Job, error) {
+	definitions, err := loadDefinitionsIn(m.workspace, m.runtimeDir)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := validateDefinitionChannels(definitions, m.channels); err != nil {
+		return nil, err
+	}
+
+	now := m.now()
+
+	triggers, err := m.store.DueCronSchedules(now.Add(24*time.Hour), 0)
+	if err != nil {
+		return nil, fmt.Errorf("read cron next triggers: %w", err)
+	}
+
+	jobs := make([]Job, 0, len(definitions))
+	for _, definition := range definitions {
+		job := Job{RelativePath: definition.relativePath, Agent: definition.agent, TextChannel: definition.textChannel, Body: definition.body}
+		for i, schedule := range definition.schedules {
+			job.Schedules = append(job.Schedules, schedule.raw)
+			if !schedule.dueAt.IsZero() && !schedule.dueAt.Before(now) && !schedule.dueAt.After(now.Add(24*time.Hour)) {
+				job.Upcoming = append(job.Upcoming, schedule.dueAt)
+			}
+
+			for _, trigger := range triggers {
+				if trigger.ScheduleID == scheduleID(definition.relativePath, i, schedule.raw) && !trigger.NextDue.Before(now) {
+					job.Upcoming = append(job.Upcoming, trigger.NextDue)
+				}
+			}
+		}
+
+		slices.SortFunc(job.Upcoming, time.Time.Compare)
+		jobs = append(jobs, job)
+	}
+
+	return jobs, nil
+}
+
 // ListCronjobs returns top-level cron stems whose configured channel matches channel.
 func (m *Manager) ListCronjobs(channel string) ([]string, error) {
 	channel = strings.TrimSpace(channel)
@@ -253,24 +306,21 @@ func (m *Manager) ListCronjobs(channel string) ([]string, error) {
 	return names, nil
 }
 
-// RunOneOffCronjob executes a loaded cronjob once with optional progress delivery.
-func (m *Manager) RunOneOffCronjob(ctx context.Context, job protocol.OneOffCronjob, progress *protocol.CronProgress, finish func(context.Context, protocol.CronRunResult, error)) {
+// RunOneOffCronjob waits for a loaded producer and its required Sync.
+func (m *Manager) RunOneOffCronjob(ctx context.Context, job *protocol.OneOffCronjob) (protocol.CronRunResult, error) {
 	log := m.log.With("file", job.RelativePath, "agent", job.Agent, "one_off", true)
 
-	raw := new(RawRunProgress)
-	if progress != nil {
-		raw.Thinking, raw.Message = progress.Thinking, progress.Message
-	}
+	raw := new(backend.RawRunProgress)
 
 	raw.ConversationID = cronTraceConversationID(oneOffCronTracePrefix, job.RelativePath, m.now())
+	raw.SyncDestination = job.ConversationID
+	raw.Cronjob = &protocol.CronjobMessage{RelativePath: job.RelativePath, Agent: job.Agent, RanAt: m.now().Format(time.RFC3339)}
 	raw.TextChannel = job.TextChannel
 
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
-		finish(ctx, protocol.CronRunResult{}, errors.New("cronjob manager is stopped"))
-
-		return
+		return protocol.CronRunResult{}, errors.New("cronjob manager is stopped")
 	}
 
 	m.wg.Add(1)
@@ -280,8 +330,12 @@ func (m *Manager) RunOneOffCronjob(ctx context.Context, job protocol.OneOffCronj
 
 	runCtx := context.WithoutCancel(ctx)
 
-	result, err := m.run(runCtx, job.Agent, job.Prompt, log, raw)
-	finish(runCtx, result, err)
+	result, err := m.run.Run(runCtx, job.Agent, job.Prompt, log, raw)
+	if err != nil {
+		return result, fmt.Errorf("run one-off cronjob: %w", err)
+	}
+
+	return result, nil
 }
 
 func (m *Manager) runOneOffTimer(ctx context.Context, definition *definition, interval time.Duration) {
@@ -448,7 +502,7 @@ func validateDefinitionChannels(definitions []definition, channels []string) err
 	return nil
 }
 
-func (m *Manager) runScheduled(ctx context.Context, run CronScheduleRun, definition *definition) {
+func (m *Manager) runScheduled(ctx context.Context, run backend.CronScheduleRun, definition *definition) {
 	defer m.wg.Done()
 	defer func() {
 		if err := m.store.CompleteCronRun(run.RelativePath, m.now()); err != nil {
@@ -459,8 +513,8 @@ func (m *Manager) runScheduled(ctx context.Context, run CronScheduleRun, definit
 	m.executeJob(ctx, definition)
 }
 
-func (m *Manager) scheduledStates(definitions []definition, now time.Time) []CronScheduleState {
-	var states []CronScheduleState
+func (m *Manager) scheduledStates(definitions []definition, now time.Time) []backend.CronScheduleState {
+	var states []backend.CronScheduleState
 
 	for i := range definitions {
 		definition := definitions[i]
@@ -469,7 +523,7 @@ func (m *Manager) scheduledStates(definitions []definition, now time.Time) []Cro
 				continue
 			}
 
-			states = append(states, CronScheduleState{
+			states = append(states, backend.CronScheduleState{
 				ScheduleID:   scheduleID(definition.relativePath, index, schedule.raw),
 				RelativePath: definition.relativePath,
 				NextDue:      schedule.next(now),
@@ -480,7 +534,7 @@ func (m *Manager) scheduledStates(definitions []definition, now time.Time) []Cro
 	return states
 }
 
-const humanVisibleEmptyCallInstruction = `When you are done YOU MUST CALL ` + RawRunExposedToolName + `("") (empty string)`
+const humanVisibleEmptyCallInstruction = `When you are done YOU MUST CALL ` + backend.RawRunExposedToolName + `("") (empty string)`
 
 func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 	startedAt := m.now()
@@ -489,14 +543,15 @@ func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 	log := m.log.With("file", definition.relativePath, "agent", definition.agent, "ran_at", ranAt)
 	log.Info("starting cronjob", "prompt_len", len(prompt))
 
-	progress := &RawRunProgress{Thinking: func(_ context.Context, text string) error {
+	progress := &backend.RawRunProgress{Thinking: func(_ context.Context, text string) error {
 		log.Debug("cronjob progress", "text", strings.TrimSpace(text))
 		return nil
 	}, Message: func(context.Context, string) error { return nil }}
 	progress.ConversationID = cronTraceConversationID(cronTracePrefix, definition.relativePath, startedAt)
 	progress.TextChannel = definition.textChannel
+	progress.Cronjob = &protocol.CronjobMessage{RelativePath: definition.relativePath, Agent: definition.agent, RanAt: ranAt}
 
-	result, err := m.run(context.WithoutCancel(ctx), definition.agent, prompt, log, progress)
+	result, err := m.run.Run(context.WithoutCancel(ctx), definition.agent, prompt, log, progress)
 	if err != nil {
 		if ctx.Err() == nil {
 			log.Error("cronjob failed", "human_visible", false, "error", err)
@@ -505,34 +560,16 @@ func (m *Manager) executeJob(ctx context.Context, definition *definition) {
 		return
 	}
 
-	visiblePayload := strings.TrimSpace(result.VerbatimMessage) != "" || len(result.Attachments) > 0
-	log.Info("completed cronjob", "text", result.Text, "verbatim_message", result.VerbatimMessage, "human_visible", visiblePayload)
-
-	if visiblePayload {
-		message := protocol.NewOutboundMessage(protocol.SourceSystem, "", strings.TrimSpace(result.VerbatimMessage))
-		message.Complete = true
-		message.Cronjob = &protocol.CronjobMessage{RelativePath: definition.relativePath, Agent: definition.agent, RanAt: ranAt}
-		message.SlackReply = &protocol.SlackReplyTarget{ChannelID: definition.textChannel}
-
-		message.Attachments = result.Attachments
-		select {
-		case m.broadcasts <- protocol.Broadcast{Message: message, Delivery: message}:
-			if err := message.WaitDelivered(ctx); err != nil {
-				log.Warn("cronjob broadcast delivery failed", "channel", definition.textChannel, "error", err)
-			}
-		case <-ctx.Done():
-			log.Warn("send cronjob broadcast", "channel", definition.textChannel, "error", ctx.Err())
-		}
-	}
+	log.Info("completed cronjob", "text", result.Text)
 }
 
 func cronTraceConversationID(prefix, relativePath string, ts time.Time) string {
-	return prefix + strings.ReplaceAll(relativePath, ":", "_") + ":" + ts.UTC().Format("20060102T150405.000000000Z") + ":" + rand.Text()
+	return prefix + relativePath + ":" + ts.UTC().Format("20060102T150405.000000000Z") + ":" + rand.Text()
 }
 
 func (m *Manager) preparePrompt(body string) string {
 	prompt := body
-	if strings.Contains(prompt, RawRunExposedToolName) {
+	if strings.Contains(prompt, backend.RawRunExposedToolName) {
 		return prompt
 	}
 

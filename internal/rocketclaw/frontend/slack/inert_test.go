@@ -56,8 +56,11 @@ func (inertThreadRouter) StashThreadQueueItem(context.Context, protocol.TextConv
 func (inertThreadRouter) ThreadQueueItems(context.Context, protocol.TextConversationTarget) ([]protocol.ThreadQueueItem, error) {
 	return nil, errors.New("slack thread routing is not configured")
 }
-func (inertThreadRouter) DeleteThreadQueueItem(context.Context, protocol.TextConversationTarget, string) error {
-	return errors.New("slack thread routing is not configured")
+func (inertThreadRouter) DeleteThreadQueueItem(context.Context, protocol.TextConversationTarget, string) (bool, error) {
+	return false, errors.New("slack thread routing is not configured")
+}
+func (inertThreadRouter) PromoteThreadQueueItem(context.Context, protocol.TextConversationTarget, string) (bool, error) {
+	return false, errors.New("slack thread routing is not configured")
 }
 func (inertThreadRouter) ScheduledMessages(context.Context, protocol.TextConversationTarget) (map[string]protocol.ScheduledMessageState, error) {
 	return nil, errors.New("slack thread routing is not configured")
@@ -79,14 +82,6 @@ func (inertOneOffCronjobs) ListCronjobs(string) ([]string, error) {
 	return nil, errors.New("on-demand cronjobs are not configured")
 }
 
-func (inertOneOffCronjobs) RunOneOffCronjob(ctx context.Context, _ protocol.OneOffCronjob, _ *protocol.CronProgress, finish func(context.Context, protocol.CronRunResult, error)) {
-	finish(ctx, protocol.CronRunResult{}, errors.New("on-demand cronjobs are not configured"))
+func (inertOneOffCronjobs) RunOneOffCronjob(context.Context, *protocol.OneOffCronjob) (protocol.CronRunResult, error) {
+	return protocol.CronRunResult{}, errors.New("on-demand cronjobs are not configured")
 }
-
-type inertSideAskRunner struct{}
-
-func (inertSideAskRunner) RunSideAsk(context.Context, *sideAskRequest) {}
-
-type inertSideAskHost struct{}
-
-func (inertSideAskHost) Run(context.Context, protocol.SideAskRequest) error { return nil }

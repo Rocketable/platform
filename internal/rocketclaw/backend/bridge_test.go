@@ -257,7 +257,7 @@ func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
 
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, goalKickoffLabel, "ship it", false)
 	msg.ConversationID = "thread-1"
-	require.NoError(t, bridge.finishGoalTurn(t.Context(), msg))
+	require.NoError(t, bridge.finishGoalTurn(t.Context(), &bridgeRequest{inbound: msg}))
 
 	goal, ok, err := bridge.config.SessionService.Goal("thread-1")
 	require.NoError(t, err)
@@ -270,7 +270,7 @@ func TestFinishGoalTurnAccountsKickoffAndContinuation(t *testing.T) {
 
 	msg = protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, goalContinuationLabel, "continue", false)
 	msg.ConversationID = "thread-1"
-	require.NoError(t, bridge.finishGoalTurn(t.Context(), msg))
+	require.NoError(t, bridge.finishGoalTurn(t.Context(), &bridgeRequest{inbound: msg}))
 	goal, ok, err = bridge.config.SessionService.Goal("thread-1")
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -284,7 +284,7 @@ func TestFinishGoalTurnHumanResteeringDoesNotConsumeBudget(t *testing.T) {
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "", "try this angle", false)
 	msg.ConversationID = "thread-1"
 	msg.SlackReply = &protocol.SlackReplyTarget{RecipientTeamID: "resteer-team", RecipientUserID: "resteer-user"}
-	require.NoError(t, bridge.finishGoalTurn(t.Context(), msg))
+	require.NoError(t, bridge.finishGoalTurn(t.Context(), &bridgeRequest{inbound: msg}))
 
 	goal, ok, err := bridge.config.SessionService.Goal("thread-1")
 	require.NoError(t, err)
@@ -336,7 +336,7 @@ func TestRecoveredGoalTurnPreservesAccountingSemantics(t *testing.T) {
 			require.NoError(t, bridge.config.SessionService.BeginGoal("thread-1", "ship it", "", 3, "", ""))
 
 			turn := ActiveTurnState{SourceMetadata: tt.metadata}
-			require.NoError(t, bridge.finishGoalTurn(t.Context(), recoveredGoalTurnMessage(&turn, nil)))
+			require.NoError(t, bridge.finishGoalTurn(t.Context(), &bridgeRequest{inbound: recoveredGoalTurnMessage(&turn, nil)}))
 
 			goal, ok, err := bridge.config.SessionService.Goal("thread-1")
 			require.NoError(t, err)
@@ -446,7 +446,7 @@ func TestGoalSteeringPromptRequiresProgressSummaryAndNote(t *testing.T) {
 	assert.Contains(t, prompt, "note")
 }
 
-func TestInterruptActiveTurnSignalsAndClearsQueue(t *testing.T) {
+func TestInterruptActiveTurnSignalsAndPreservesQueue(t *testing.T) {
 	interrupts := make(chan os.Signal, 1)
 	marker := &protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "222.333", ThreadTS: "111.222"}
 
@@ -459,7 +459,8 @@ func TestInterruptActiveTurnSignalsAndClearsQueue(t *testing.T) {
 	result := bridge.InterruptActiveTurn()
 
 	assert.Equal(t, marker, result.SlackReply)
-	assert.Empty(t, bridge.requestCh)
+	require.Len(t, bridge.requestCh, 1)
+	assert.Same(t, queued, (<-bridge.requestCh).inbound)
 	assert.True(t, bridge.activeTurnInterrupted)
 	assert.Equal(t, os.Interrupt, <-interrupts)
 }
@@ -477,7 +478,7 @@ func TestInterruptActiveTurnDoesNotDeleteThreadQueueOrScheduled(t *testing.T) {
 
 	bridge.InterruptActiveTurn()
 
-	assert.Empty(t, bridge.requestCh)
+	assert.Len(t, bridge.requestCh, 1)
 
 	items, err := store.ThreadQueueForConversation(conversationID)
 	require.NoError(t, err)
@@ -558,6 +559,29 @@ func TestPickLaterWorkSkipsWhenGoalStillActive(t *testing.T) {
 	items, err := store.ThreadQueueForConversation(conversationID)
 	require.NoError(t, err)
 	require.Len(t, items, 1)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		bridge.requestCh = make(chan bridgeRequest, 1)
+		bridge.stopCh = make(chan struct{})
+		require.NoError(t, bridge.submitEnqueuedItem(ctx, &items[0]))
+
+		var group errgroup.Group
+		group.Go(func() error {
+			bridge.loop(ctx)
+			return nil
+		})
+		synctest.Wait()
+		require.Empty(t, bridge.requestCh)
+
+		remaining, err := store.ThreadQueueForConversation(conversationID)
+		require.NoError(t, err)
+		require.Equal(t, items, remaining, "admitted enqueue stays persisted while the goal is active")
+		cancel()
+		require.NoError(t, group.Wait())
+	})
 }
 
 func TestPickLaterWorkAfterStopGoalStartsLaterWork(t *testing.T) {
@@ -968,47 +992,36 @@ func TestPublishFinalCarriesMainResponseAttachments(t *testing.T) {
 	bridge.bus = bus
 	bridge.log = slog.New(slog.DiscardHandler)
 	bridge.config = Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", OutputTargets: []protocol.OutputTarget{protocol.OutputTargetSlack}, RequestRestart: testNoopRestart, SessionService: newTestSessionService(t)}
-	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "", "hello", true)
-	inbound.ConversationID = bridge.config.ConversationID
-	resultCh := inbound.EnableResponseWait()
 	result := runResult{turnID: "turn-1", text: "", thinking: "", sequence: 0, sessionEntryID: 0, responseID: "", model: "", attachments: []protocol.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}}
 
-	var group errgroup.Group
-	group.Go(func() error { return bridge.publishFinal(context.Background(), inbound, result, true) })
+	for _, errDelivery := range []error{nil, errors.New("delivery failed")} {
+		synctest.Test(t, func(t *testing.T) {
+			inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "", "hello", true)
+			inbound.ConversationID = bridge.config.ConversationID
+			resultCh := inbound.EnableResponseWait()
 
-	outbound := readRocketCodeOutbound(t, bus)
-	assert.True(t, outbound.Complete)
-	assert.Empty(t, outbound.Text)
-	assert.Equal(t, []protocol.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}, outbound.Attachments)
+			var group errgroup.Group
 
-	response := <-resultCh
-	assert.Equal(t, []protocol.OutboundAttachment{{Name: "report.txt", MIMEType: "text/plain", Data: []byte("report")}}, response.Attachments)
-	outbound.MarkDelivered(nil)
-	require.NoError(t, group.Wait())
-}
+			bridge.inputOpen = true
 
-func TestPublishFinalStampsSessionEntryID(t *testing.T) {
-	bus := newTestBus()
-	defer bus.Close()
+			group.Go(func() error { return bridge.publishFinal(t.Context(), inbound, result, true) })
 
-	bridge := new(Bridge)
-	bridge.bus = bus
-	bridge.log = slog.New(slog.DiscardHandler)
-	bridge.config = Config{ConversationID: "slack-thread:C123:111.222", Agent: "main", OutputTargets: []protocol.OutputTarget{protocol.OutputTargetSlack}, RequestRestart: testNoopRestart}
-	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "", "hello", true)
-	inbound.ConversationID = bridge.config.ConversationID
-	inbound.Workflow = new(protocol.WorkflowInvocation)
-	result := runResult{turnID: "turn-1", text: "Final answer", sequence: 1, sessionEntryID: 42}
+			outbound := readRocketCodeOutbound(t, bus)
+			assert.True(t, outbound.Complete)
+			assert.Empty(t, outbound.Text)
+			assert.Equal(t, result.attachments, outbound.Attachments)
+			synctest.Wait()
+			assert.Empty(t, resultCh, "caller must wait for final delivery")
+			assert.False(t, bridge.inputOpen, "late steer must not join during final delivery")
 
-	var group errgroup.Group
-	group.Go(func() error { return bridge.publishFinal(context.Background(), inbound, result, true) })
+			outbound.MarkDelivered(errDelivery)
+			require.ErrorIs(t, group.Wait(), errDelivery)
 
-	outbound := readRocketCodeOutbound(t, bus)
-	assert.True(t, outbound.Complete)
-	assert.NotZero(t, outbound.SessionEntryID)
-	assert.Equal(t, int64(42), outbound.SessionEntryID)
-	outbound.MarkDelivered(nil)
-	require.NoError(t, group.Wait())
+			response := <-resultCh
+			require.ErrorIs(t, response.Err, errDelivery)
+			assert.Equal(t, result.attachments, response.Attachments)
+		})
+	}
 }
 
 func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
@@ -1034,14 +1047,14 @@ func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 	inbound.ConversationID = conversationID
 
 	var group errgroup.Group
-	group.Go(func() error { return bridge.handleInbound(context.Background(), inbound) })
+	group.Go(func() error { return bridge.handleInbound(context.Background(), &bridgeRequest{inbound: inbound}) })
 
 	outbound := readRocketCodeOutbound(t, bus)
 	assert.True(t, outbound.Complete)
 	assert.Contains(t, outbound.Text, internalErrorResponse)
 	assert.Contains(t, outbound.Text, `missing required default agent "main"`)
 	outbound.MarkDelivered(nil)
-	require.NoError(t, group.Wait())
+	require.ErrorContains(t, group.Wait(), `prepare rocketcode turn: missing required default agent "main"`)
 
 	response := <-inbound.EnableResponseWait()
 	assert.Equal(t, outbound.Text, response.Text)
@@ -1133,12 +1146,12 @@ func TestBridgeEnqueueReturnsContextOrStopErrors(t *testing.T) {
 	cancel()
 
 	bridge := &Bridge{requestCh: make(chan bridgeRequest), stopCh: make(chan struct{})}
-	err := bridge.enqueue(ctx, bridgeRequest{}, "submit test")
+	err := bridge.enqueue(ctx, &bridgeRequest{}, "submit test")
 	require.ErrorIs(t, err, context.Canceled)
 
 	bridge = &Bridge{requestCh: make(chan bridgeRequest), stopCh: make(chan struct{})}
 	close(bridge.stopCh)
-	err = bridge.enqueue(context.Background(), bridgeRequest{}, "submit test")
+	err = bridge.enqueue(context.Background(), &bridgeRequest{}, "submit test")
 	require.ErrorIs(t, err, errBridgeStopped)
 }
 
@@ -1231,7 +1244,7 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	inbound.ConversationID = conversationID
 
 	var group errgroup.Group
-	group.Go(func() error { return bridge.handleInbound(context.Background(), inbound) })
+	group.Go(func() error { return bridge.handleInbound(context.Background(), &bridgeRequest{inbound: inbound}) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -1767,19 +1780,50 @@ Prompt
 }
 
 func TestReplayInputMessageRoleTextCoversMessageShapes(t *testing.T) {
+	msg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindSteer, "web-test", "[literal]\n\nuser text", true)
+	msg.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: `alice "quoted" ]`}
+	framed := buildPrompt(msg, nil)
+
+	for _, tc := range []struct{ role, input, want string }{
+		{"user", framed, msg.Text},
+		{"assistant", framed, framed},
+		{"user", "[literal]\n\nuser text", "[literal]\n\nuser text"},
+		{"user", "[Web media=Text principal=alice]\n\nkeep", "[Web media=Text principal=alice]\n\nkeep"},
+		{"user", "prefix\n" + framed, "prefix\n" + framed},
+		{"user", strings.Replace(framed, "\n\n", "\n", 1), strings.Replace(framed, "\n\n", "\n", 1)},
+	} {
+		message := responses.ResponseInputItemUnionParam{OfMessage: &responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(tc.role), Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(tc.input)}, Type: "message"}}
+		role, text, ok, err := ReplayInputMessageRoleText(&message, nil)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, tc.role, role)
+		require.Equal(t, tc.want, text)
+		require.Equal(t, tc.input, message.OfMessage.Content.OfString.Value)
+	}
+
 	plain := responses.ResponseInputItemUnionParam{OfMessage: &responses.EasyInputMessageParam{Role: "assistant", Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String("plain")}, Type: "message"}}
-	role, text, ok := replayInputMessageRoleText(&plain)
+	role, text, ok, err := ReplayInputMessageRoleText(&plain, nil)
+	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "assistant", role)
 	assert.Equal(t, "plain", text)
 
 	withContent := responses.ResponseInputItemUnionParam{OfInputMessage: &responses.ResponseInputItemMessageParam{Role: "user", Content: responses.ResponseInputMessageContentListParam{responses.ResponseInputContentParamOfInputText("look")}, Type: "message"}}
-	role, text, ok = replayInputMessageRoleText(&withContent)
+	role, text, ok, err = ReplayInputMessageRoleText(&withContent, nil)
+	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "user", role)
 	assert.Equal(t, "look", text)
 
-	_, _, ok = replayInputMessageRoleText(&responses.ResponseInputItemUnionParam{})
+	output := responses.ResponseInputItemUnionParam{OfOutputMessage: &responses.ResponseOutputMessageParam{Content: []responses.ResponseOutputMessageContentUnionParam{{OfOutputText: &responses.ResponseOutputTextParam{Text: "answer"}}}}}
+	role, text, ok, err = ReplayInputMessageRoleText(&output, nil)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "assistant", role)
+	assert.Equal(t, "answer", text)
+
+	_, _, ok, err = ReplayInputMessageRoleText(&responses.ResponseInputItemUnionParam{}, nil)
+	require.NoError(t, err)
 	assert.False(t, ok)
 }
 
@@ -1812,7 +1856,17 @@ func TestReplayInputRawKindReportsInvalidJSON(t *testing.T) {
 }
 
 func TestBuildPromptCoversAttachments(t *testing.T) {
-	assert.Equal(t, "[Slack media=Text principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello\n\nAttachment notes:\n- skipped image", buildPrompt(&protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, Text: "  hello  ", AttachmentWarnings: []string{" skipped image ", " "}, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}}, nil))
+	for _, tc := range []struct {
+		source protocol.Source
+		origin string
+	}{
+		{protocol.SourceSlack, "Slack"},
+		{protocol.SourceWeb, "Web"},
+	} {
+		t.Run(tc.origin, func(t *testing.T) {
+			assert.Equal(t, "["+tc.origin+" media=Text principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello\n\nAttachment notes:\n- skipped image", buildPrompt(&protocol.InboundMessage{Source: tc.source, Human: true, Text: "  hello  ", AttachmentWarnings: []string{" skipped image ", " "}, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}}, nil))
+		})
+	}
 
 	assert.Equal(t, "[System media=Text additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nAttachment notes:\n- unsupported PDF", buildPrompt(&protocol.InboundMessage{AttachmentWarnings: []string{" unsupported PDF "}}, nil))
 }
@@ -1871,8 +1925,7 @@ func TestBridgeScheduleMessageSubmitsAfterDelay(t *testing.T) {
 			assert.NotEmpty(t, request.scheduledMessageID)
 			assert.Equal(t, "later", request.inbound.Text)
 			assert.Equal(t, bridge.config.ConversationID, request.inbound.ConversationID)
-			require.NotNil(t, request.inbound.SlackReply)
-			assert.Equal(t, protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}, *request.inbound.SlackReply)
+			assert.Nil(t, request.inbound.SlackReply)
 		case <-time.After(time.Nanosecond):
 			t.Fatal("scheduled message was not submitted")
 		}
@@ -1956,8 +2009,7 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 			require.NotNil(t, request.inbound)
 			assert.Equal(t, "later", request.inbound.Text)
 			assert.Equal(t, privateConversationID, request.inbound.ConversationID)
-			require.NotNil(t, request.inbound.SlackReply)
-			assert.Equal(t, protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}, *request.inbound.SlackReply)
+			assert.Nil(t, request.inbound.SlackReply)
 		case <-time.After(time.Nanosecond):
 			t.Fatal("scheduled external MCP message was not submitted")
 		}
@@ -2398,7 +2450,7 @@ func TestWorkflowRunSummaryIsVisibleWithoutIntermediateOutput(t *testing.T) {
 	assert.Equal(t, "turn", entries[1].Entry.Type)
 }
 
-func TestBridgeInterruptReleasesDrainedWorkflowReservation(t *testing.T) {
+func TestBridgeInterruptPreservesWaitingWorkflowReservation(t *testing.T) {
 	service := newTestSessionService(t)
 	pairID, privateID := protocol.SlackThreadConversationID("C123", "111.222"), "external_mcp:private"
 	require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{PrivateConversationID: privateID, ManagedConversationID: pairID}))
@@ -2417,7 +2469,8 @@ func TestBridgeInterruptReleasesDrainedWorkflowReservation(t *testing.T) {
 
 	releaseAgain, reserved, err := service.ReserveWorkflowTurn(pairID)
 	require.NoError(t, err)
-	assert.True(t, reserved)
+	assert.False(t, reserved)
+	assert.Len(t, bridge.requestCh, 1)
 	releaseAgain()
 }
 
@@ -2491,7 +2544,7 @@ func TestBridgeRequestReservationOwnershipPreservesManagedRecovery(t *testing.T)
 
 	service.reserveTurnPair(pairID, privateID)
 	private := &Bridge{config: Config{ConversationID: privateID, ManagedConversationID: pairID, SessionService: service}}
-	private.completeRequestTurnPairReservation(bridgeRequest{activeTurn: new(ActiveTurnState)})
+	private.completeRequestTurnPairReservation(&bridgeRequest{activeTurn: new(ActiveTurnState)})
 
 	unlocked, err := service.lockTurnPair(t.Context(), pairID, pairID)
 	require.NoError(t, err)
@@ -2504,7 +2557,7 @@ func TestBridgeRequestReservationOwnershipPreservesManagedRecovery(t *testing.T)
 	t.Cleanup(release)
 
 	managed := &Bridge{config: Config{ConversationID: pairID, ManagedConversationID: pairID, SessionService: service}}
-	managed.completeRequestTurnPairReservation(bridgeRequest{activeTurn: new(ActiveTurnState)})
+	managed.completeRequestTurnPairReservation(&bridgeRequest{activeTurn: new(ActiveTurnState)})
 
 	releaseAgain, reserved, err := service.ReserveWorkflowTurn(pairID)
 	require.NoError(t, err)
@@ -2530,8 +2583,7 @@ func TestBridgeScheduleMessageUsesOwningSlackThread(t *testing.T) {
 			require.NotNil(t, request.inbound)
 			assert.Equal(t, "later", request.inbound.Text)
 			assert.Equal(t, conversationID, request.inbound.ConversationID)
-			require.NotNil(t, request.inbound.SlackReply)
-			assert.Equal(t, protocol.SlackReplyTarget{ChannelID: "D456", MessageTS: "222.333", ThreadTS: "222.333"}, *request.inbound.SlackReply)
+			assert.Nil(t, request.inbound.SlackReply)
 		case <-time.After(time.Nanosecond):
 			t.Fatal("scheduled external MCP message was not submitted")
 		}
@@ -2557,7 +2609,7 @@ func TestBridgeDeletesScheduledMessageAfterSuccessfulHandling(t *testing.T) {
 	inbound.ConversationID = conversationID
 	inbound.HadNonImageAttachments = true
 	responseCh := inbound.EnableResponseWait()
-	require.NoError(t, bridge.enqueue(context.Background(), bridgeRequest{inbound: inbound, scheduledMessageID: "schedule-1", activation: NoopActivationHook}, "submit scheduled message"))
+	require.NoError(t, bridge.enqueue(context.Background(), &bridgeRequest{inbound: inbound, scheduledMessageID: "schedule-1", activation: NoopActivationHook}, "submit scheduled message"))
 
 	outbound := readRocketCodeOutbound(t, bus)
 	assert.Equal(t, unsupportedFileFallback, outbound.Text)
@@ -2578,24 +2630,71 @@ func TestBridgeDeletesScheduledMessageAfterSuccessfulHandling(t *testing.T) {
 	}, time.Second, time.Millisecond)
 }
 
-func TestSubmitEnqueuedItemUsesSystemSource(t *testing.T) {
+func TestSubmitEnqueuedItemPreservesSource(t *testing.T) {
 	bridge := &Bridge{
 		requestCh: make(chan bridgeRequest, 1),
 		stopCh:    make(chan struct{}),
 		config:    Config{ConversationID: protocol.SlackThreadConversationID("C123", "111.0"), SessionService: newTestSessionService(t)},
 	}
 
-	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &protocol.ThreadQueueItem{ID: "q1", Message: "wait 4s and say alpha", Principal: "U1", SlackChannel: "C123", SlackTS: "111.2"}))
+	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &protocol.ThreadQueueItem{ID: "q1", Source: protocol.SourceSlack, Message: "wait 4s and say alpha", Principal: "U1", SlackChannel: "C123", SlackTS: "111.2", SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.2", ThreadTS: "111.0"}}))
 
 	req := <-bridge.requestCh
 	require.NotNil(t, req.inbound)
-	assert.Equal(t, protocol.SourceSystem, req.inbound.Source)
+	assert.Equal(t, protocol.SourceSlack, req.inbound.Source)
 	assert.Equal(t, "enqueued_message", req.inbound.Label)
+	assert.Equal(t, protocol.InboundKindEnqueue, req.inbound.Kind)
 	assert.Equal(t, "wait 4s and say alpha", req.inbound.Text)
 	require.NotNil(t, req.inbound.SlackReply)
 	assert.Equal(t, "C123", req.inbound.SlackReply.ChannelID)
 	assert.Equal(t, "111.2", req.inbound.SlackReply.MessageTS)
 	assert.Equal(t, "111.0", req.inbound.SlackReply.ThreadTS)
+	assert.Equal(t, "U1", req.inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+
+	item := &protocol.ThreadQueueItem{ID: "q2", Kind: protocol.InboundKindSteer, Message: "keep this instruction", Principal: "U2"}
+	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), item))
+	req = <-bridge.requestCh
+	assert.Equal(t, item.Kind, req.inbound.Kind)
+	assert.Equal(t, item.Message, req.inbound.Text)
+	assert.Equal(t, item.Principal, req.inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+
+	waiting := protocol.NewInboundMessageFromContent(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "producer", &protocol.InboundContent{Text: "source text", Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("image")}}}, true)
+	waiting.Metadata = map[string]string{"external_conversation_id": "external-1", protocol.InboundPrincipalMetadataKey: "U3"}
+	bridge.config.SessionService.PutMCPWaiter("q3", waiting)
+	item = &protocol.ThreadQueueItem{ID: "q3", ConversationID: bridge.config.ConversationID, Message: "queue display", Principal: "U3"}
+	require.NoError(t, bridge.config.SessionService.PutThreadQueueItem(item.ID, item))
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	bridge.log = slog.New(slog.DiscardHandler)
+	activated := make(chan *protocol.InboundMessage, 1)
+	errActivation := errors.New("stop at activation")
+	bridge.config.EnqueueActivation = EnqueueActivation{Fn: func(_ context.Context, _ *protocol.ThreadQueueItem, inbound *protocol.InboundMessage) error {
+		activated <- inbound
+
+		cancel()
+
+		return errActivation
+	}}
+	response := waiting.EnableResponseWait()
+
+	require.NoError(t, bridge.submitEnqueuedItem(ctx, item))
+
+	var group errgroup.Group
+	group.Go(func() error {
+		bridge.loop(ctx)
+		return nil
+	})
+
+	inbound := <-activated
+	assert.Same(t, waiting, inbound)
+	assert.Equal(t, protocol.InboundKindPrompt, inbound.Kind)
+	assert.Equal(t, "source text", inbound.Text)
+	assert.Equal(t, "external-1", inbound.Metadata["external_conversation_id"])
+	assert.Equal(t, []byte("image"), inbound.Attachments[0].Data)
+	require.ErrorIs(t, (<-response).Err, errActivation)
+	require.NoError(t, group.Wait())
 }
 
 func TestBridgeDeletesEnqueueItemWhenTurnStarts(t *testing.T) {
@@ -2617,7 +2716,7 @@ func TestBridgeDeletesEnqueueItemWhenTurnStarts(t *testing.T) {
 	inbound.ConversationID = conversationID
 	inbound.HadNonImageAttachments = true
 	responseCh := inbound.EnableResponseWait()
-	require.NoError(t, bridge.enqueue(context.Background(), bridgeRequest{inbound: inbound, queueItemID: "q1", activation: NoopActivationHook}, "submit enqueued message"))
+	require.NoError(t, bridge.enqueue(context.Background(), &bridgeRequest{inbound: inbound, queueItemID: "q1", activation: NoopActivationHook}, "submit enqueued message"))
 
 	select {
 	case response := <-responseCh:
@@ -2653,7 +2752,7 @@ func TestBridgeDeletesScheduledMessageWhenTurnStarts(t *testing.T) {
 	inbound.ConversationID = conversationID
 	inbound.HadNonImageAttachments = true
 	responseCh := inbound.EnableResponseWait()
-	require.NoError(t, bridge.enqueue(context.Background(), bridgeRequest{inbound: inbound, scheduledMessageID: "schedule-1", activation: NoopActivationHook}, "submit scheduled message"))
+	require.NoError(t, bridge.enqueue(context.Background(), &bridgeRequest{inbound: inbound, scheduledMessageID: "schedule-1", activation: NoopActivationHook}, "submit scheduled message"))
 
 	select {
 	case response := <-responseCh:
@@ -2689,7 +2788,7 @@ func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.
 	inbound.ConversationID = conversationID
 	inbound.HadNonImageAttachments = true
 	responseCh := inbound.EnableResponseWait()
-	require.NoError(t, bridge.enqueue(context.Background(), bridgeRequest{inbound: inbound, scheduledMessageID: "schedule-1", scheduledMessageRecurring: true, activation: NoopActivationHook}, "submit scheduled message"))
+	require.NoError(t, bridge.enqueue(context.Background(), &bridgeRequest{inbound: inbound, scheduledMessageID: "schedule-1", scheduledMessageRecurring: true, activation: NoopActivationHook}, "submit scheduled message"))
 
 	outbound := readRocketCodeOutbound(t, bus)
 	assert.Equal(t, unsupportedFileFallback, outbound.Text)

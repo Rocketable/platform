@@ -39,9 +39,9 @@ The kept copy is `protocol.StaticGoalCheckWord` (`internal/rocketclaw/protocol/g
 			return parsedGoalCheckCommand{}, "", fmt.Errorf("%w", err)
 ```
 
-`fmt.Errorf("%w", err)` adds no prefix. `Error()` stays the same as the wrapped error; `errors.Is` / `errors.As` still work. wrapcheck fails on an unwrapped cross-package `return err`. The repo wrapping convention is `%w` (`internal/rocketclaw/docs/plans/2026-07-25-rocketclaw-exec-command.md:21`), not a wrapcheck check for the `%w` verb itself.
+`fmt.Errorf("%w", err)` adds no prefix. `Error()` stays the same as the wrapped error; `errors.Is` / `errors.As` still work. wrapcheck fails on an unwrapped cross-package `return err`. The repo wrapping convention is `%w`, not a wrapcheck check for the `%w` verb itself.
 
-wrapcheck is enabled for RocketClaw (`internal/rocketclaw/.golangci.yml:49`). Default wrapcheck does not report same-package returns. It does report errors returned from another package. Do not add `//nolint` or disable wrapcheck without human approval (`AGENTS.md`). The exec-command plan states the hard local rule: wrap every returned error from another package with `%w`.
+wrapcheck is enabled for RocketClaw (`internal/rocketclaw/.golangci.yml:49`). Default wrapcheck does not report same-package returns. It does report errors returned from another package. Do not add `//nolint` or disable wrapcheck without human approval (`AGENTS.md`).
 
 `runServe` calls `loadRuntimeConfig` (`cmd/rocketclaw/serve.go:23`), which already lives in package `main` (`cmd/rocketclaw/main.go:87`), and wraps with a real prefix: `fmt.Errorf("load config: %w", err)`.
 

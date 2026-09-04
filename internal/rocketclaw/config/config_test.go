@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,15 +32,6 @@ func TestExampleConfigUsesDirectSlackChannels(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw["slack"], &slack))
 	require.NotContains(t, slack, "enabled")
 	require.NotEmpty(t, cfg.Slack.Channels)
-	assert.False(t, cfg.MCPDevelopment.Enabled)
-
-	usersData, err := os.ReadFile("../rocketclaw.development.users.example.json")
-	require.NoError(t, err)
-
-	var developmentUsers map[string]string
-	require.NoError(t, json.Unmarshal(usersData, &developmentUsers))
-	assert.NotEmpty(t, developmentUsers)
-	assert.NotContains(t, developmentUsers, "admin")
 
 	assert.NotEmpty(t, cfg.Slack.Channels[0].Agents)
 	assert.NotEmpty(t, cfg.Slack.Channels[0].AllowedUserIDs)
@@ -62,9 +54,8 @@ func TestLoadAppliesDefaults(t *testing.T) {
 
 	assert.Equal(t, "api_key", cfg.OpenAI.RocketCodeAuth)
 	assert.Empty(t, cfg.AutoApproverModel)
+	assert.Empty(t, cfg.WebUsers)
 	assert.True(t, filepath.IsAbs(cfg.Workspace))
-	assert.False(t, cfg.MCPDevelopment.Enabled)
-	assert.Empty(t, cfg.MCPDevelopment.ListenAddr)
 }
 
 func TestLoadPreservesModelConfig(t *testing.T) {
@@ -79,6 +70,40 @@ func TestLoadPreservesModelConfig(t *testing.T) {
 
 	assert.Equal(t, "gpt-5.5", cfg.AutoApproverModel)
 	assert.Equal(t, map[string]string{"coding-high": "software-development-sol", "review-fast": "gpt-5.6-luna"}, cfg.Models)
+}
+
+func TestLoadWebUsers(t *testing.T) {
+	for _, tt := range []struct {
+		name, users, wantErr string
+	}{
+		{name: "mapped", users: `{"192.0.2.1":"alice","2001:db8::1":"bob"}`},
+		{name: "empty", users: `{}`},
+		{name: "invalid IP", users: `{"alice":"alice"}`, wantErr: "parse config JSON"},
+		{name: "empty IP", users: `{"":"alice"}`, wantErr: "web_users"},
+		{name: "empty username", users: `{"192.0.2.1":""}`, wantErr: "web_users"},
+		{name: "untrimmed username", users: `{"192.0.2.1":" alice "}`, wantErr: "web_users"},
+		{name: "nonstring username", users: `{"192.0.2.1":123}`, wantErr: "parse config JSON"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "rocketclaw.json")
+			content := fmt.Sprintf(`{"database_url":"postgres://localhost/rocketclaw_test", "openai":{"api_key":"test"}, "slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}, "web_users":%s}`, tt.users)
+			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+			cfg, err := Load(path, "", AWSFetcher{})
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+
+			if tt.name == "mapped" {
+				require.Equal(t, map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice", netip.MustParseAddr("2001:db8::1"): "bob"}, cfg.WebUsers)
+			} else {
+				require.Empty(t, cfg.WebUsers)
+			}
+		})
+	}
 }
 
 func TestLoadPreservesNamedProviders(t *testing.T) {
@@ -489,7 +514,6 @@ func TestValidateRejectsMissingRequiredConfig(t *testing.T) {
 		{name: "missing model", update: func(c *Config) { c.AutoApproverModel = "work/" }, wantErr: `auto_approver_model: invalid model "work/": expected model or provider/model`},
 		{name: "extra empty part", update: func(c *Config) { c.AutoApproverModel = "work//model" }, wantErr: `auto_approver_model: invalid model "work//model": expected model or provider/model`},
 		{name: "mcp external listen addr", update: func(c *Config) { c.MCPExternal.Enabled = true }, wantErr: "mcp_external.listen_addr is required when mcp_external is enabled"},
-		{name: "mcp development listen addr", update: func(c *Config) { c.MCPDevelopment.Enabled = true }, wantErr: "mcp_development.listen_addr is required when mcp_development is enabled"},
 		{name: "slack bot token", update: func(c *Config) { c.Slack.BotToken = "" }, wantErr: "slack.bot_token is required"},
 		{name: "slack app token", update: func(c *Config) { c.Slack.AppToken = "" }, wantErr: "slack.app_token is required"},
 		{name: "slack channels", update: func(c *Config) { c.Slack.Channels = nil }, wantErr: "slack.channels is required"},
@@ -661,28 +685,6 @@ func TestLoadExternalMCPUsersRejectsInvalidInputs(t *testing.T) {
 
 	_, err = LoadExternalMCPUsers(configPath)
 	require.ErrorContains(t, err, "read external MCP users file")
-}
-
-func TestLoadDevelopmentMCPUsers(t *testing.T) {
-	dir := t.TempDir()
-	configPath := filepath.Join(dir, "rocketclaw.json")
-	require.NoError(t, os.WriteFile(configPath, []byte(`{}`), 0o600))
-
-	users, err := LoadDevelopmentMCPUsers(configPath)
-	require.NoError(t, err)
-	assert.Nil(t, users)
-
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "rocketclaw.users.json"), []byte(`{"admin":"secret"}`), 0o600))
-
-	users, err = LoadDevelopmentMCPUsers(configPath)
-	require.NoError(t, err)
-	assert.Nil(t, users)
-
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "rocketclaw.development.users.json"), []byte(`{"dev":"token"}`), 0o600))
-
-	users, err = LoadDevelopmentMCPUsers(configPath)
-	require.NoError(t, err)
-	assert.Equal(t, map[string]string{"dev": "token"}, users)
 }
 
 func TestValidateAllowsChatGPTAuthWithoutAPIKey(t *testing.T) {

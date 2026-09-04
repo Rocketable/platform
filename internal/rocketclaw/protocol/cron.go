@@ -9,12 +9,14 @@ import (
 // CronRunResult captures the observable result of one cronjob run.
 type CronRunResult struct {
 	Text, VerbatimMessage string
+	ConversationID        string
 	Attachments           []OutboundAttachment
 }
 
 // OneOffCronjob captures a live one-off cronjob prompt loaded from disk.
 type OneOffCronjob struct {
 	Agent, Prompt, RelativePath, TextChannel string
+	ConversationID                           string
 }
 
 // CronProgress receives one-off cron thinking and message callbacks.
