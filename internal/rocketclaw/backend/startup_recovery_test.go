@@ -4,80 +4,80 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"log/slog"
 	"slices"
 	"testing"
 
-	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
-type fakeStartupRecoveryStore struct {
-	turns    []ActiveTurnState
-	deleted  []string
-	stopped  []string
-	errClear error
-	errStop  error
+func startupRecoveryStoreWith(turns []ActiveTurnState) *startupRecoveryStoreMock {
+	return &startupRecoveryStoreMock{
+		RecoverableActiveTurnsFunc: func(context.Context) ([]ActiveTurnState, error) {
+			return slices.Clone(turns), nil
+		},
+		ClearActiveTurnFunc: func(context.Context, string) error { return nil },
+		StopGoalFunc:        func(string) error { return nil },
+		ThreadFunc: func(conversationID string) (ThreadState, bool, error) {
+			return ThreadState{Agent: "main"}, conversationID != "unknown", nil
+		},
+		ExternalMCPSessionByConversationIDFunc: func(conversationID string) (string, ExternalMCPSessionState, bool, error) {
+			if conversationID == "external_mcp:planner:private" {
+				return "public-1", ExternalMCPSessionState{Agent: "planner", PrivateConversationID: conversationID, ManagedConversationID: "slack-thread:C1:1.1", SlackChannel: "#ops"}, true, nil
+			}
+
+			return "", ExternalMCPSessionState{}, false, nil
+		},
+	}
 }
 
-func (f *fakeStartupRecoveryStore) RecoverableActiveTurns(context.Context) ([]ActiveTurnState, error) {
-	return slices.Clone(f.turns), nil
-}
+func clearedTurnIDs(store *startupRecoveryStoreMock) []string {
+	calls := store.ClearActiveTurnCalls()
 
-func (f *fakeStartupRecoveryStore) ClearActiveTurn(_ context.Context, turnID string) error {
-	if f.errClear != nil {
-		return f.errClear
+	out := make([]string, len(calls))
+	for i, call := range calls {
+		out[i] = call.S
 	}
 
-	f.deleted = append(f.deleted, turnID)
-
-	return nil
+	return out
 }
 
-func (f *fakeStartupRecoveryStore) StopGoal(conversationID string) error {
-	if f.errStop != nil {
-		return f.errStop
+func stoppedConversationIDs(store *startupRecoveryStoreMock) []string {
+	calls := store.StopGoalCalls()
+
+	out := make([]string, len(calls))
+	for i, call := range calls {
+		out[i] = call.S
 	}
 
-	f.stopped = append(f.stopped, conversationID)
-
-	return nil
-}
-
-func (f *fakeStartupRecoveryStore) Thread(conversationID string) (ThreadState, bool, error) {
-	return ThreadState{Agent: "main"}, conversationID != "unknown", nil
-}
-
-func (f *fakeStartupRecoveryStore) ExternalMCPSessionByConversationID(conversationID string) (externalConversationID string, session ExternalMCPSessionState, ok bool, err error) {
-	if conversationID == "external_mcp:planner:private" {
-		return "public-1", ExternalMCPSessionState{Agent: "planner", PrivateConversationID: conversationID, ManagedConversationID: "slack-thread:C1:1.1", SlackChannel: "#ops"}, true, nil
-	}
-
-	return "", ExternalMCPSessionState{}, false, nil
+	return out
 }
 
 func TestRecoverStartupActiveTurnsSelectsAtMostOnePerConversation(t *testing.T) {
 	replay := startupRecoveryReplayInput(t)
-	store := &fakeStartupRecoveryStore{turns: []ActiveTurnState{
+	store := startupRecoveryStoreWith([]ActiveTurnState{
 		startupRecoveryTurn("turn-new", "conversation-1", replay),
 		startupRecoveryTurn("turn-old", "conversation-1", replay),
 		startupRecoveryTurn("turn-other", "conversation-2", replay),
-	}}
+	})
 
 	var handed []ActiveTurnState
 
-	err := recoverStartupActiveTurns(context.Background(), store, func(_ context.Context, turn *ActiveTurnState) error {
+	err := recoverStartupActiveTurns(context.Background(), store, func(turn *ActiveTurnState) error {
 		handed = append(handed, *turn)
 
 		return nil
 	}, func(string, []protocol.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, err)
-	require.Equal(t, []string{"turn-old"}, store.deleted)
+	require.Equal(t, []string{"turn-old"}, clearedTurnIDs(store))
 	require.Len(t, handed, 2)
 	require.Equal(t, "turn-new", handed[0].Checkpoint.TurnID)
 	require.Equal(t, "turn-other", handed[1].Checkpoint.TurnID)
@@ -85,29 +85,29 @@ func TestRecoverStartupActiveTurnsSelectsAtMostOnePerConversation(t *testing.T) 
 
 func TestRecoverStartupActiveTurnsAcceptsPrivateExternalMCPConversation(t *testing.T) {
 	replay := startupRecoveryReplayInput(t)
-	store := &fakeStartupRecoveryStore{turns: []ActiveTurnState{startupRecoveryTurn("turn-mcp", "external_mcp:planner:private", replay)}}
+	store := startupRecoveryStoreWith([]ActiveTurnState{startupRecoveryTurn("turn-mcp", "external_mcp:planner:private", replay)})
 
 	var handed []ActiveTurnState
 
-	require.NoError(t, recoverStartupActiveTurns(t.Context(), store, func(_ context.Context, turn *ActiveTurnState) error {
+	require.NoError(t, recoverStartupActiveTurns(t.Context(), store, func(turn *ActiveTurnState) error {
 		handed = append(handed, *turn)
 		return nil
 	}, func(string, []protocol.PendingSteer) {}, slog.New(slog.DiscardHandler)))
 
 	require.Len(t, handed, 1)
 	assert.Equal(t, "external_mcp:planner:private", handed[0].Checkpoint.ConversationKey)
-	assert.Empty(t, store.deleted)
+	assert.Empty(t, clearedTurnIDs(store))
 }
 
 func TestRecoverStartupActiveTurnsDeletesCompetingRowsAfterCorruptSelectedRow(t *testing.T) {
 	replay := startupRecoveryReplayInput(t)
-	store := &fakeStartupRecoveryStore{turns: []ActiveTurnState{
+	store := startupRecoveryStoreWith([]ActiveTurnState{
 		startupRecoveryTurn("turn-corrupt", "conversation-1", []json.RawMessage{json.RawMessage(`{`)}),
 		startupRecoveryTurn("turn-old", "conversation-1", replay),
-	}}
+	})
 
 	handoffCalled := false
-	err := recoverStartupActiveTurns(context.Background(), store, func(context.Context, *ActiveTurnState) error {
+	err := recoverStartupActiveTurns(context.Background(), store, func(*ActiveTurnState) error {
 		handoffCalled = true
 
 		return nil
@@ -115,16 +115,16 @@ func TestRecoverStartupActiveTurnsDeletesCompetingRowsAfterCorruptSelectedRow(t 
 
 	require.NoError(t, err)
 	require.True(t, handoffCalled)
-	require.Equal(t, []string{"turn-corrupt"}, store.deleted)
+	require.Equal(t, []string{"turn-corrupt"}, clearedTurnIDs(store))
 }
 
 func TestRecoverStartupActiveTurnsDeletesCorruptRows(t *testing.T) {
-	store := &fakeStartupRecoveryStore{turns: []ActiveTurnState{
+	store := startupRecoveryStoreWith([]ActiveTurnState{
 		startupRecoveryTurn("turn-corrupt", "conversation-1", []json.RawMessage{json.RawMessage(`{`)}),
-	}}
+	})
 
 	handoffCalled := false
-	err := recoverStartupActiveTurns(context.Background(), store, func(context.Context, *ActiveTurnState) error {
+	err := recoverStartupActiveTurns(context.Background(), store, func(*ActiveTurnState) error {
 		handoffCalled = true
 
 		return nil
@@ -132,15 +132,15 @@ func TestRecoverStartupActiveTurnsDeletesCorruptRows(t *testing.T) {
 
 	require.NoError(t, err)
 	require.False(t, handoffCalled)
-	require.Equal(t, []string{"turn-corrupt"}, store.deleted)
+	require.Equal(t, []string{"turn-corrupt"}, clearedTurnIDs(store))
 }
 
 func TestRecoverStartupActiveTurnsDeletesInvalidRows(t *testing.T) {
 	replay := startupRecoveryReplayInput(t)
-	store := &fakeStartupRecoveryStore{turns: []ActiveTurnState{startupRecoveryTurn("turn-invalid", " ", replay)}}
+	store := startupRecoveryStoreWith([]ActiveTurnState{startupRecoveryTurn("turn-invalid", " ", replay)})
 
 	handoffCalled := false
-	err := recoverStartupActiveTurns(context.Background(), store, func(context.Context, *ActiveTurnState) error {
+	err := recoverStartupActiveTurns(context.Background(), store, func(*ActiveTurnState) error {
 		handoffCalled = true
 
 		return nil
@@ -148,24 +148,25 @@ func TestRecoverStartupActiveTurnsDeletesInvalidRows(t *testing.T) {
 
 	require.NoError(t, err)
 	require.False(t, handoffCalled)
-	require.Equal(t, []string{"turn-invalid"}, store.deleted)
+	require.Equal(t, []string{"turn-invalid"}, clearedTurnIDs(store))
 }
 
 func TestRecoverStartupActiveTurnsHandsOffRecoveredReplay(t *testing.T) {
 	replay := startupRecoveryOpenCallReplayInput(t, "call-1", "task")
-	store := &fakeStartupRecoveryStore{turns: []ActiveTurnState{startupRecoveryTurn("turn-1", "conversation-1", replay)}}
-	store.turns[0].Checkpoint.OpenFunctionCalls = []rocketcode.FunctionCallCheckpoint{{CallID: "call-1", Name: "task"}}
+	turn := startupRecoveryTurn("turn-1", "conversation-1", replay)
+	turn.Checkpoint.OpenFunctionCalls = []rocketcode.FunctionCallCheckpoint{{CallID: "call-1", Name: "task"}}
+	store := startupRecoveryStoreWith([]ActiveTurnState{turn})
 
 	var handed ActiveTurnState
 
-	err := recoverStartupActiveTurns(context.Background(), store, func(_ context.Context, turn *ActiveTurnState) error {
+	err := recoverStartupActiveTurns(context.Background(), store, func(turn *ActiveTurnState) error {
 		handed = *turn
 
 		return nil
 	}, func(string, []protocol.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, err)
-	require.Empty(t, store.deleted)
+	require.Empty(t, clearedTurnIDs(store))
 
 	items, err := rocketcode.ReplayInputToParams(handed.Checkpoint.ReplayInput)
 	require.NoError(t, err)
@@ -180,32 +181,22 @@ func TestRecoverStartupActiveTurnsHandsOffRecoveredReplay(t *testing.T) {
 func TestRecoverStartupActiveTurnsDeletesPermanentHandoffFailures(t *testing.T) {
 	errHandoff := errors.New("enqueue failed")
 	replay := startupRecoveryReplayInput(t)
-	store := &fakeStartupRecoveryStore{turns: []ActiveTurnState{startupRecoveryTurn("turn-1", "conversation-1", replay)}}
+	store := startupRecoveryStoreWith([]ActiveTurnState{startupRecoveryTurn("turn-1", "conversation-1", replay)})
 
-	err := recoverStartupActiveTurns(context.Background(), store, func(context.Context, *ActiveTurnState) error {
+	err := recoverStartupActiveTurns(context.Background(), store, func(*ActiveTurnState) error {
 		return errHandoff
 	}, func(string, []protocol.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, err)
-	require.Equal(t, []string{"turn-1"}, store.deleted)
-	require.Equal(t, []string{"conversation-1"}, store.stopped)
-}
-
-type fakeSteerSurface struct {
-	restored  []string
-	discarded []int
-}
-
-func (f *fakeSteerSurface) RestorePendingSteers(conversationID string, _ []protocol.PendingSteer) {
-	f.restored = append(f.restored, conversationID)
-}
-
-func (f *fakeSteerSurface) DiscardPendingSteers(context.Context, []protocol.PendingSteer) {
-	f.discarded = append(f.discarded, 1)
+	require.Equal(t, []string{"turn-1"}, clearedTurnIDs(store))
+	require.Equal(t, []string{"conversation-1"}, stoppedConversationIDs(store))
 }
 
 func TestApplyStartupSteerRecoveryRestoresThenPicks(t *testing.T) {
-	slack := &fakeSteerSurface{}
+	slack := &startupSteerSurfaceMock{
+		RestorePendingSteersFunc: func(string, []protocol.PendingSteer) {},
+		DiscardPendingSteersFunc: func(context.Context, []protocol.PendingSteer) {},
+	}
 
 	var picked []string
 
@@ -214,8 +205,9 @@ func TestApplyStartupSteerRecoveryRestoresThenPicks(t *testing.T) {
 		return nil
 	}, []ActiveTurnState{startupRecoveryTurn("turn-1", "conversation-1", nil)}, []cannotResumeItem{{conversationID: "conversation-2", steers: []protocol.PendingSteer{{Text: "later"}}}})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"conversation-1"}, slack.restored)
-	assert.Equal(t, []int{1}, slack.discarded)
+	require.Len(t, slack.RestorePendingSteersCalls(), 1)
+	assert.Equal(t, "conversation-1", slack.RestorePendingSteersCalls()[0].S)
+	require.Len(t, slack.DiscardPendingSteersCalls(), 1)
 	assert.Equal(t, []string{"conversation-2"}, picked)
 	err = applyStartupSteerRecovery(t.Context(), slack, func(context.Context, string) error {
 		return errors.New("pick failed")
@@ -225,22 +217,28 @@ func TestApplyStartupSteerRecoveryRestoresThenPicks(t *testing.T) {
 
 func TestCannotResumeActiveTurnWrapsStoreErrors(t *testing.T) {
 	turn := startupRecoveryTurn("turn-1", "conversation-1", nil)
-	err := cannotResumeActiveTurn(t.Context(), &fakeStartupRecoveryStore{errClear: errors.New("clear failed")}, &turn, func(string, []protocol.PendingSteer) {})
+	clearing := startupRecoveryStoreWith(nil)
+	clearing.ClearActiveTurnFunc = func(context.Context, string) error { return errors.New("clear failed") }
+	err := cannotResumeActiveTurn(t.Context(), clearing, &turn, func(string, []protocol.PendingSteer) {})
 	require.ErrorContains(t, err, "clear unresumable active turn")
-	err = cannotResumeActiveTurn(t.Context(), &fakeStartupRecoveryStore{errStop: errors.New("stop failed")}, &turn, func(string, []protocol.PendingSteer) {})
+
+	stopping := startupRecoveryStoreWith(nil)
+	stopping.StopGoalFunc = func(string) error { return errors.New("stop failed") }
+	err = cannotResumeActiveTurn(t.Context(), stopping, &turn, func(string, []protocol.PendingSteer) {})
 	require.ErrorContains(t, err, "stop goal after unresumable turn")
 }
 
 func TestRecoverStartupActiveTurnsCannotResumeStopsGoalAndReportsSteers(t *testing.T) {
-	store := &fakeStartupRecoveryStore{turns: []ActiveTurnState{startupRecoveryTurn("turn-1", "conversation-1", []json.RawMessage{json.RawMessage(`{`)})}}
-	store.turns[0].PendingSteers = []protocol.PendingSteer{{Text: "don't touch the database", SlackChannel: "C123", SlackTS: "222.333", SlackThreadTS: "111.222"}}
+	turn := startupRecoveryTurn("turn-1", "conversation-1", []json.RawMessage{json.RawMessage(`{`)})
+	turn.PendingSteers = []protocol.PendingSteer{{Text: "don't touch the database", SlackChannel: "C123", SlackTS: "222.333", SlackThreadTS: "111.222"}}
+	store := startupRecoveryStoreWith([]ActiveTurnState{turn})
 
 	var (
 		gotID     string
 		gotSteers []protocol.PendingSteer
 	)
 
-	err := recoverStartupActiveTurns(context.Background(), store, func(context.Context, *ActiveTurnState) error {
+	err := recoverStartupActiveTurns(context.Background(), store, func(*ActiveTurnState) error {
 		t.Fatal("handoff should not run")
 		return nil
 	}, func(conversationID string, steers []protocol.PendingSteer) {
@@ -250,60 +248,60 @@ func TestRecoverStartupActiveTurnsCannotResumeStopsGoalAndReportsSteers(t *testi
 
 	require.NoError(t, err)
 	assert.Equal(t, "conversation-1", gotID)
-	assert.Equal(t, store.turns[0].PendingSteers, gotSteers)
-	assert.Equal(t, []string{"conversation-1"}, store.stopped)
+	assert.Equal(t, turn.PendingSteers, gotSteers)
+	assert.Equal(t, []string{"conversation-1"}, stoppedConversationIDs(store))
 }
 
 func TestRecoverStartupActiveTurnsLeavesRowsOnCanceledHandoff(t *testing.T) {
 	replay := startupRecoveryReplayInput(t)
 
 	for _, errHandoff := range []error{context.Canceled, context.DeadlineExceeded} {
-		store := &fakeStartupRecoveryStore{turns: []ActiveTurnState{startupRecoveryTurn("turn-1", "conversation-1", replay)}}
+		store := startupRecoveryStoreWith([]ActiveTurnState{startupRecoveryTurn("turn-1", "conversation-1", replay)})
 
-		err := recoverStartupActiveTurns(context.Background(), store, func(context.Context, *ActiveTurnState) error {
+		err := recoverStartupActiveTurns(context.Background(), store, func(*ActiveTurnState) error {
 			return errHandoff
 		}, func(string, []protocol.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
 		require.ErrorIs(t, err, errHandoff)
-		require.Empty(t, store.deleted)
+		require.Empty(t, clearedTurnIDs(store))
 	}
 }
 
 func TestRecoverStartupActiveTurnsLeavesRowsWhenBridgeStopped(t *testing.T) {
 	replay := startupRecoveryReplayInput(t)
-	store := &fakeStartupRecoveryStore{turns: []ActiveTurnState{startupRecoveryTurn("turn-1", "conversation-1", replay)}}
+	store := startupRecoveryStoreWith([]ActiveTurnState{startupRecoveryTurn("turn-1", "conversation-1", replay)})
 	bridge := NewConversation(nil, nil, &Config{ConversationID: "conversation-1", RecoveringActiveTurn: true}, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, bridge.Start(context.Background()))
 	require.NoError(t, bridge.Stop())
 
-	err := recoverStartupActiveTurns(context.Background(), store, func(ctx context.Context, turn *ActiveTurnState) error {
-		return bridge.RecoverActiveTurn(ctx, turn)
+	err := recoverStartupActiveTurns(context.Background(), store, func(turn *ActiveTurnState) error {
+		return bridge.RecoverActiveTurn(context.Background(), turn)
 	}, func(string, []protocol.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
 	require.Error(t, err)
 	require.True(t, IsBridgeStopped(err))
-	require.Empty(t, store.deleted)
+	require.Empty(t, clearedTurnIDs(store))
 }
 
 func TestRecoverStartupActiveTurnsDeletesRawCronRows(t *testing.T) {
 	replay := startupRecoveryReplayInput(t)
-	store := &fakeStartupRecoveryStore{turns: []ActiveTurnState{
+	store := startupRecoveryStoreWith([]ActiveTurnState{
 		startupRecoveryTurn("turn-cron", "cron:cron/daily.md:20000102T030405.000000006Z:abc", replay),
 		startupRecoveryTurn("turn-one-off", "one-off-cron:cron/daily.md:20000102T030405.000000006Z:def", replay),
 		startupRecoveryTurn("turn-external", "external_mcp:planner:private", replay),
-	}}
+	})
 
 	var handed []ActiveTurnState
 
-	err := recoverStartupActiveTurns(context.Background(), store, func(_ context.Context, turn *ActiveTurnState) error {
+	err := recoverStartupActiveTurns(context.Background(), store, func(turn *ActiveTurnState) error {
 		handed = append(handed, *turn)
 
 		return nil
 	}, func(string, []protocol.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, err)
-	require.Equal(t, []string{"turn-cron", "turn-one-off"}, store.deleted)
+	require.Equal(t, []string{"turn-cron", "turn-one-off"}, clearedTurnIDs(store))
 	require.Len(t, handed, 1)
 	require.Equal(t, "turn-external", handed[0].Checkpoint.TurnID)
 }

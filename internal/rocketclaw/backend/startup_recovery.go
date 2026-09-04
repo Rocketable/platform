@@ -18,7 +18,7 @@ type startupRecoveryStore interface {
 	ExternalMCPSessionByConversationID(string) (string, ExternalMCPSessionState, bool, error)
 }
 
-type startupRecoveryHandoff func(context.Context, *ActiveTurnState) error
+type startupRecoveryHandoff func(*ActiveTurnState) error
 
 type cannotResumeFunc func(conversationID string, steers []protocol.PendingSteer)
 
@@ -99,7 +99,7 @@ func recoverStartupActiveTurns(ctx context.Context, store startupRecoveryStore, 
 		seen[conversationID] = true
 
 		turn.Checkpoint.ReplayInput = recoveredReplay
-		if err := handoff(ctx, turn); err != nil {
+		if err := handoff(turn); err != nil {
 			if activeTurnRecoveryPreserveError(err) {
 				return fmt.Errorf("handoff startup active turn recovery: %w", err)
 			}

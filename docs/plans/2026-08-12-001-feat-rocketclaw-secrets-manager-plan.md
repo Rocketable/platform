@@ -17,7 +17,7 @@ execution: code
 - **Product authority:** Product Contract below is source of WHAT. Planning Contract is HOW.
 - **Product Contract preservation:** Product Contract unchanged from the reviewed requirements-only version.
 - **Open blockers:** None.
-- **Stop conditions:** AE1–AE9 have tests. `make lint` and `make test` pass. Do not persist or log resolved secret values.
+- **Stop conditions:** AE1–AE6 and AE8–AE9 have tests. `make lint` and `make test` pass. Do not persist or log resolved secret values.
 
 ---
 
@@ -35,14 +35,14 @@ The operator already keeps a complete `femtoclaw.json` in Secrets Manager and do
 
 - KD1. **Two doors** — flag merge plus in-file `aws` objects. (session-settled: user-directed — chosen over placeholders-only and flag-plus-extra-ARNs-only: the wrapper downloads a whole file and still needs a second secret) Governs R2, R6.
 - KD2. **Secret is the last merge** — local file first; flag secret last. (session-settled: user-directed — chosen over local-wins: leftover local credentials must not beat the vault) Governs R4, R5.
-- KD3. **Same flag on every loader** — `doctor` / `exec` / friends see what `run` sees. (session-settled: user-directed — chosen over run-only: otherwise behavior diverges) Governs R1.
+- KD3. **Same flag on every loader** — every loader sees what `run` sees. (session-settled: user-directed — chosen over run-only: otherwise behavior diverges) Governs R1.
 - KD4. **String beats a local aws object** — if the last merge set a string on a field, that field is not fetched. (session-settled: user-directed — chosen over running both: secret wins) Governs R5.
 - KD5. **String or aws object, not templates** — a field is a string or `{"aws":{"arn":"...","key":"..."}}`. (session-settled: user-directed — chosen over `{{ aws_secrets_manager }}`: JSON quote escaping) Governs R6.
 
 ### Actors
 
 - A1. **Operator** — starts rocketclaw, owns the local file and the wrapper to delete.
-- A2. **Rocketclaw CLI** — loads config for `run`, `doctor`, `exec`, and the other commands that already read the local file.
+- A2. **Rocketclaw CLI** — loads config for `run` and the other commands that already read the local file.
 - A3. **AWS Secrets Manager** — holds the last-merge JSON and any extra secret named by an `aws` object.
 
 ### Requirements
@@ -102,13 +102,6 @@ flowchart TB
   - **Outcome:** Field is filled or the command fails per R7.
   - **Covered by:** R6, R7
 
-- F4. Ops command matches run
-  - **Trigger:** A1 runs `doctor` or `exec` with the same flag used for `run`.
-  - **Actors:** A1, A2
-  - **Steps:** That command loads through the same merge and walk.
-  - **Outcome:** It sees the same resolved config `run` would see.
-  - **Covered by:** R1
-
 - F5. No flag, local aws objects still fetch
   - **Trigger:** A1 runs a command with no `--aws-secrets-manager-arn`. The local file has an `aws` object.
   - **Actors:** A1, A2, A3
@@ -154,12 +147,6 @@ flowchart TB
   - **When:** A1 starts.
   - **Then:** The command fails. The error names the ARN and key, not the secret body.
 
-- AE7. Doctor matches run
-  - **Covers R1.**
-  - **Given:** The same ARN is passed to `run` and to `doctor`.
-  - **When:** Both commands load config.
-  - **Then:** Both resolve the same merge and walk.
-
 - AE8. No flag still fetches local aws objects
   - **Covers R6.**
   - **Given:** No `--aws-secrets-manager-arn`. Local file has `GITHUB_TOKEN` as `{"aws":{"arn":"arn:other","key":"token"}}`.
@@ -201,7 +188,6 @@ flowchart TB
 - `docs/ideation/2026-08-12-rocketclaw-secrets-manager-ideation.html` — prior direction set; this plan supersedes the old local-wins merge card.
 - `internal/rocketclaw/config/config.go` — single-file load then `Validate()`.
 - `cmd/rocketclaw/main.go` — `femtoclaw.json` then `rocketclaw.json`.
-- `cmd/rocketclaw/serve.go` and `cmd/rocketclaw/doctor.go` — two load desks today.
 - `internal/gws/skills/main-configure-gws/SKILL.md` — existing `get-secret-value` wrapper pattern.
 
 ---
@@ -266,24 +252,21 @@ U1 fetcher → U2 merge and walk → U3 CLI flag → U4 leak tests on writers an
 ### U3. Flag on every loader
 
 - **Goal:** `--aws-secrets-manager-arn` works on every command that loads config.
-- **Files:** `cmd/rocketclaw/main.go`, `cmd/rocketclaw/serve.go`, `cmd/rocketclaw/doctor.go`, `cmd/rocketclaw/exec.go`, `cmd/rocketclaw/oai.go`, `cmd/rocketclaw/fc.go`, `cmd/rocketclaw/lint.go`, `cmd/rocketclaw/agent_graph.go`, matching `*_test.go`
+- **Files:** `cmd/rocketclaw/main.go`, `cmd/rocketclaw/serve.go`, `cmd/rocketclaw/oai.go`, `cmd/rocketclaw/fc.go`, `cmd/rocketclaw/lint.go`, `cmd/rocketclaw/agent_graph.go`, matching `*_test.go`
 - **Approach:** Peel `--aws-secrets-manager-arn` from args before each command Loads, then pass the ARN into `Load`. Do not give `run` a private path. Do not require a FlagSet on `oai list`, `lint`, or `fc`.
 - **Depends on:** U2
 - **Test scenarios:**
-  - AE7 `doctor` and `run` with the same ARN resolve the same config (fake fetcher).
-  - Unknown flag still fails before Load (`TestRunDoctorRejectsBadFlagBeforeConfigLoad` pattern).
-  - `exec` accepts the flag.
   - `oai list`, `lint`, and `fc` accept the flag.
 
 ### U4. Do not leak resolved values
 
-- **Goal:** Logs, doctor/oai output, and on-disk writes never persist resolved secrets.
-- **Files:** `cmd/rocketclaw/oai.go`, `cmd/rocketclaw/serve.go`, `cmd/rocketclaw/doctor.go`, existing tests that already assert present/missing
-- **Approach:** Writers use only the original local file. Do not write a merged tree. Setup never Loads secrets, so leave `setup.go` alone. Serve/doctor keep path and present/missing. Do not marshal a resolved `Config` back to disk.
+- **Goal:** Logs, oai output, and on-disk writes never persist resolved secrets.
+- **Files:** `cmd/rocketclaw/oai.go`, `cmd/rocketclaw/serve.go`, existing tests that already assert present/missing
+- **Approach:** Writers use only the original local file. Do not write a merged tree. Serve keeps path and present/missing. Do not marshal a resolved `Config` back to disk.
 - **Depends on:** U2
 - **Test scenarios:**
   - After Load with an aws object, an `oai` write still contains the aws object, not the fetched string.
-  - Serve/doctor log or print text does not contain the fetched string.
+  - Serve log or print text does not contain the fetched string.
 
 ---
 
@@ -302,9 +285,8 @@ Do not raise `SOURCE_CLOC_BUDGET`. Keep the first-party add small.
 
 ## Definition of Done
 
-- AE1–AE9 have tests and pass.
+- AE1–AE6 and AE8–AE9 have tests and pass.
 - Every loader accepts `--aws-secrets-manager-arn`.
 - `go.mod` includes AWS SDK v2 Secrets Manager; there is no `aws` CLI exec path.
-- No test or doctor/serve output contains a resolved secret fixture value.
+- No test or serve output contains a resolved secret fixture value.
 - `make lint` and `make test` pass.
-

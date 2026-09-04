@@ -30,10 +30,9 @@ func TestValidateGoalCheckScriptAcceptsSafeSimpleCommand(t *testing.T) {
 	permission := rocketcode.PermissionSet{}
 	require.NoError(t, permission.Allow("bash", "./scripts/check.sh --linter-mode"))
 
-	check, err := validateGoalCheckScript(root, workspace, `./scripts/check.sh --linter-mode`, permission)
+	command, err := validateGoalCheckScript(root, workspace, `./scripts/check.sh --linter-mode`, permission)
 	require.NoError(t, err)
-	assert.Equal(t, "./scripts/check.sh --linter-mode", check.command)
-	assert.Equal(t, "./scripts/check.sh --linter-mode", check.subject)
+	assert.Equal(t, "./scripts/check.sh --linter-mode", command)
 }
 
 func TestValidateGoalCheckScriptRejectsUnsafeShapes(t *testing.T) {

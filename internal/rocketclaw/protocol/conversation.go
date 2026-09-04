@@ -9,8 +9,12 @@ import (
 // ErrGoalAlreadyActive reports that a conversation already has an active goal.
 var ErrGoalAlreadyActive = errors.New("goal already active")
 
-// ActivationHook runs when a text connector activates an idle conversation.
-type ActivationHook func(context.Context, *InboundMessage) error
+// Conversation is an explicitly recorded conversation and its selected agent.
+// IDs are opaque to the Backend; frontends resolve presentation and policy.
+type Conversation struct {
+	ID, Agent, CreatedBy string
+	Settled              bool
+}
 
 // PendingSteer is one uninjected Slack Steer copied onto the active-turn row.
 type PendingSteer struct {
@@ -30,14 +34,6 @@ func (s PendingSteersSink) Persist(conversationID string, steers []PendingSteer)
 	}
 
 	_ = s.Set(conversationID, steers)
-}
-
-// SideAskRequest is one isolated Slack Side Ask turn.
-type SideAskRequest struct {
-	ConversationID    string
-	SessionEntryID    int64
-	Agent, Question   string
-	Thinking, Message func(context.Context, string) error
 }
 
 // SlackThreadConversationID returns the stable conversation ID for a Slack thread.
@@ -73,15 +69,13 @@ type PrimaryTextRouter interface {
 	InterruptConversation(conversationID string) *InboundMessage
 	InterruptThread(target TextConversationTarget) (*InboundMessage, error)
 	RegisterThread(target TextConversationTarget, agent string) (created bool, err error)
-	RegisterCronThread(ctx context.Context, target TextConversationTarget, agent string) error
 	ThreadAgent(target TextConversationTarget) (agent string, handled bool, err error)
 	SwitchThreadAgent(target TextConversationTarget, agent string) (bool, error)
 	SubmitThreadReply(ctx context.Context, target TextConversationTarget, inbound *InboundMessage) (bool, error)
-	SubmitWhenActive(ctx context.Context, target TextConversationTarget, inbound *InboundMessage, activation ActivationHook) (bool, error)
 	StashThreadQueueItem(ctx context.Context, target TextConversationTarget, item *ThreadQueueItem) error
-	ThreadQueueItems(ctx context.Context, target TextConversationTarget) ([]ThreadQueueItem, error)
-	DeleteThreadQueueItem(ctx context.Context, target TextConversationTarget, id string) error
-	ScheduledMessages(ctx context.Context, target TextConversationTarget) (map[string]ScheduledMessageState, error)
+	ThreadQueueItems(target TextConversationTarget) ([]ThreadQueueItem, error)
+	DeleteThreadQueueItem(ctx context.Context, target TextConversationTarget, id string) (bool, error)
+	PromoteThreadQueueItem(ctx context.Context, target TextConversationTarget, id string) (bool, error)
+	ScheduledMessages(target TextConversationTarget) (map[string]ScheduledMessageState, error)
 	ThreadBusy(target TextConversationTarget) bool
-	PickQueuedWork(ctx context.Context, target TextConversationTarget) error
 }

@@ -1,0 +1,70 @@
+# Generate with: go generate ./cmd/rocketclaw
+all: false
+dir: '{{.InterfaceDir}}'
+filename: '{{.InterfaceName | lower}}_mocks_test.go'
+force-file-write: true
+formatter: goimports
+pkgname: '{{.SrcPackageName}}'
+recursive: false
+template: matryer
+inpackage: true
+packages:
+  github.com/Rocketable/platform/cmd/rocketclaw:
+    interfaces:
+      cronRootSender:
+        config:
+          structname: cronRootSenderMock
+  github.com/Rocketable/platform/internal/rocketclaw/backend:
+    interfaces:
+      FrontendAssembler:
+        config:
+          structname: frontendAssemblerMock
+      SlackFrontend:
+        configs:
+          - structname: slackFrontendMock
+          - dir: '{{.ConfigDir}}/cmd/rocketclaw'
+            pkgname: main
+            structname: SlackFrontendMock
+            inpackage: false
+      startupRecoveryStore:
+        config:
+          structname: startupRecoveryStoreMock
+      startupSteerSurface:
+        config:
+          structname: startupSteerSurfaceMock
+      directBridge:
+        config:
+          structname: directBridgeMock
+  github.com/Rocketable/platform/internal/rocketclaw/frontend:
+    interfaces:
+      Backend:
+        configs:
+          - dir: '{{.ConfigDir}}/internal/rocketclaw/frontend/slack'
+            pkgname: slackconnector
+            structname: backendMock
+            inpackage: false
+          - dir: '{{.ConfigDir}}/cmd/rocketclaw'
+            pkgname: main
+            structname: BackendMock
+            inpackage: false
+  github.com/Rocketable/platform/internal/rocketclaw/frontend/cron:
+    interfaces:
+      Runner:
+        config:
+          structname: runnerMock
+  github.com/Rocketable/platform/internal/rocketclaw/frontend/slack:
+    interfaces:
+      oneOffCronjobRunner:
+        config:
+          structname: oneOffCronjobsMock
+  github.com/Rocketable/platform/internal/rocketcode:
+    interfaces:
+      CheckpointSink:
+        config:
+          structname: mockCheckpointSink
+      permissionReviewer:
+        config:
+          structname: mockPermissionReviewer
+      responsesAPI:
+        config:
+          structname: mockResponsesAPI

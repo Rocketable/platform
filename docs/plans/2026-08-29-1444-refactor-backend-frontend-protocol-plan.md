@@ -182,7 +182,6 @@ This plan owns the backend / frontend / protocol cut. The broader cleanup is cur
 - `docs/plans/2026-08-07-001-refactor-two-channel-clockwork-plan.md` — live broadcasts skip the sender; External MCP drops them.
 - CONCEPTS.md — Managed Slack Thread, Thread Queue, Development MCP, Request-Carried Context.
 - `internal/rocketclaw/Makefile` — `GO_SOURCE_CLOC_BUDGET` is 20350.
-- `docs/solutions/logic-errors/development-mcp-try-paths-raced-with-live-reload.md` — overlay mutex and try-turn locks stay with backend execution.
 - `docs/solutions/logic-errors/slack-thread-parent-message-redelivery-enqueued-second-turn.md` — parent-hail swallow stays in Slack.
 
 ---
@@ -351,7 +350,7 @@ Today `app` imports Slack; Slack imports `harnessbridge`. That is the cycle one-
 - **Approach:**
   1. Fold `app` leftovers, `harnessbridge`, and `cronjob` into `internal/rocketclaw/backend` (KTD1).
   2. Clockwork is not a public name and not in this package (R9).
-  3. Update `exec` / `fc` / quickbench import paths.
+   3. Update `fc` / quickbench import paths.
 - **Patterns to follow:** One-door KTD1 is reversed only after U2–U3. Do not wrap a third package around backend and frontends.
 - **Test scenarios:**
   - Happy: Busy External MCP stash and pick-next still use the managed conversation id.
@@ -407,7 +406,7 @@ Today `app` imports Slack; Slack imports `harnessbridge`. That is the cycle one-
 
 ## System-Wide Impact
 
-- `cmd/rocketclaw` `exec` and `fc` import the engine by name and must follow the backend path.
+- `cmd/rocketclaw` `fc` imports the engine by name and must follow the backend path.
 - `internal/quickbench` imports the engine and is outside this CLOC cap.
 - Coverage vs `@-` can drop on a large move until tests move with code.
 

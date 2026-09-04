@@ -65,19 +65,13 @@ func TestCheckNestedPermissionAutoWithReviewerAllow(t *testing.T) {
 	looper := &looper{
 		Permissions:            permissions,
 		AutoApprovePermissions: true,
-		PermissionReviewer: permissionReviewerFunc(func() permissionReviewDecision {
+		PermissionReviewer: &mockPermissionReviewer{reviewPermissionFunc: func(context.Context, *permissionReviewRequest, chan<- ChatResponse) permissionReviewDecision {
 			return permissionReviewDecision{Outcome: permissionReviewOutcomeAllow, Rationale: "ok"}
-		}),
+		}},
 		agent: Agent{Name: "main"},
 	}
 	ctx := withToolCallContext(t.Context(), looper, nil)
 
 	err := CheckNestedPermission(ctx, "execute", "mcp", "demo.echo", map[string]any{"message": "hi"})
 	require.NoError(t, err)
-}
-
-type permissionReviewerFunc func() permissionReviewDecision
-
-func (f permissionReviewerFunc) reviewPermission(context.Context, *permissionReviewRequest, chan<- ChatResponse) permissionReviewDecision {
-	return f()
 }

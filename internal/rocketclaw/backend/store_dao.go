@@ -23,7 +23,7 @@ func (d stateDAO) upsertThread(ctx context.Context, conversationID string, threa
 		return errors.New("thread conversation ID is required")
 	}
 
-	_, err := d.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, $2, $3) ON CONFLICT(conversation_id) DO UPDATE SET agent = excluded.agent, created_by = CASE WHEN excluded.created_by = '' THEN managed_conversations.created_by ELSE excluded.created_by END`, conversationID, strings.TrimSpace(thread.Agent), strings.TrimSpace(string(thread.CreatedBy)))
+	_, err := d.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by, settled) VALUES ($1, $2, $3, $4) ON CONFLICT(conversation_id) DO UPDATE SET agent = excluded.agent, created_by = CASE WHEN excluded.created_by = '' THEN managed_conversations.created_by ELSE excluded.created_by END`, conversationID, strings.TrimSpace(thread.Agent), strings.TrimSpace(string(thread.CreatedBy)), thread.Settled)
 	if err != nil {
 		return fmt.Errorf("upsert managed conversation: %w", err)
 	}
@@ -37,7 +37,7 @@ func (d stateDAO) thread(ctx context.Context, conversationID string) (ThreadStat
 		createdBy string
 	)
 
-	err := d.db.QueryRowContext(ctx, `SELECT agent, created_by FROM managed_conversations WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &createdBy)
+	err := d.db.QueryRowContext(ctx, `SELECT agent, created_by, settled FROM managed_conversations WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &createdBy, &thread.Settled)
 	if err == sql.ErrNoRows {
 		return ThreadState{}, false, nil
 	}
@@ -309,7 +309,22 @@ func (d stateDAO) resetScheduledMessages(ctx context.Context, conversationID str
 }
 
 func (d stateDAO) putThreadQueueItem(ctx context.Context, id string, item *protocol.ThreadQueueItem) error {
-	_, err := d.db.ExecContext(ctx, `INSERT INTO thread_queue (queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT(queue_item_id) DO UPDATE SET conversation_id = excluded.conversation_id, message = excluded.message, principal = excluded.principal, stash_at_unix_ns = excluded.stash_at_unix_ns, position = excluded.position, park_after = excluded.park_after, slack_channel = excluded.slack_channel, slack_ts = excluded.slack_ts`, strings.TrimSpace(id), strings.TrimSpace(item.ConversationID), item.Message, item.Principal, timeUnixNano(item.StashAt), item.Position, strings.TrimSpace(item.ParkAfter), item.SlackChannel, item.SlackTS)
+	kind := item.Kind
+	if kind == "" {
+		kind = "enqueue"
+	}
+
+	content, err := json.Marshal(item.Content)
+	if err != nil {
+		return fmt.Errorf("encode thread queue content: %w", err)
+	}
+
+	reply, err := json.Marshal(item.SlackReply)
+	if err != nil {
+		return fmt.Errorf("encode thread queue reply: %w", err)
+	}
+
+	_, err = d.db.ExecContext(ctx, `INSERT INTO thread_queue (queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT(queue_item_id) DO UPDATE SET conversation_id = excluded.conversation_id, message = excluded.message, principal = excluded.principal, stash_at_unix_ns = excluded.stash_at_unix_ns, position = excluded.position, park_after = excluded.park_after, slack_channel = excluded.slack_channel, slack_ts = excluded.slack_ts, kind = excluded.kind, content = excluded.content, source = excluded.source, slack_reply = excluded.slack_reply`, strings.TrimSpace(id), strings.TrimSpace(item.ConversationID), item.Message, item.Principal, timeUnixNano(item.StashAt), item.Position, strings.TrimSpace(item.ParkAfter), item.SlackChannel, item.SlackTS, kind, content, item.Source, reply)
 	if err != nil {
 		return fmt.Errorf("put thread queue item: %w", err)
 	}
@@ -318,7 +333,7 @@ func (d stateDAO) putThreadQueueItem(ctx context.Context, id string, item *proto
 }
 
 func (d stateDAO) threadQueueForConversation(ctx context.Context, conversationID string) ([]protocol.ThreadQueueItem, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts FROM thread_queue WHERE conversation_id = $1 ORDER BY position, stash_at_unix_ns`, strings.TrimSpace(conversationID))
+	rows, err := d.db.QueryContext(ctx, `SELECT queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply FROM thread_queue WHERE conversation_id = $1 ORDER BY position, stash_at_unix_ns`, strings.TrimSpace(conversationID))
 	if err != nil {
 		return nil, fmt.Errorf("query thread queue: %w", err)
 	}
@@ -350,14 +365,36 @@ func (d stateDAO) deleteThreadQueueItem(ctx context.Context, id string) error {
 	return nil
 }
 
+func (d stateDAO) claimThreadQueueItem(ctx context.Context, conversationID, id string) (protocol.ThreadQueueItem, bool, error) {
+	item, err := scanThreadQueueItem(d.db.QueryRowContext(ctx, `DELETE FROM thread_queue WHERE conversation_id = $1 AND queue_item_id = $2 RETURNING queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply`, conversationID, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return item, false, nil
+	}
+
+	if err != nil {
+		return item, false, fmt.Errorf("claim thread queue item: %w", err)
+	}
+
+	return item, true, nil
+}
+
 func scanThreadQueueItem(scanner rowScanner) (protocol.ThreadQueueItem, error) {
 	var (
-		item    protocol.ThreadQueueItem
-		stashAt int64
+		item           protocol.ThreadQueueItem
+		stashAt        int64
+		content, reply []byte
 	)
 
-	if err := scanner.Scan(&item.ID, &item.ConversationID, &item.Message, &item.Principal, &stashAt, &item.Position, &item.ParkAfter, &item.SlackChannel, &item.SlackTS); err != nil {
+	if err := scanner.Scan(&item.ID, &item.ConversationID, &item.Message, &item.Principal, &stashAt, &item.Position, &item.ParkAfter, &item.SlackChannel, &item.SlackTS, &item.Kind, &content, &item.Source, &reply); err != nil {
 		return protocol.ThreadQueueItem{}, fmt.Errorf("scan thread queue item: %w", err)
+	}
+
+	if err := json.Unmarshal(content, &item.Content); err != nil {
+		return item, fmt.Errorf("decode thread queue content: %w", err)
+	}
+
+	if err := json.Unmarshal(reply, &item.SlackReply); err != nil {
+		return item, fmt.Errorf("decode thread queue reply: %w", err)
 	}
 
 	item.StashAt = timeFromUnixNano(stashAt)
@@ -371,15 +408,6 @@ func (d stateDAO) markRestartRequester(ctx context.Context, conversationID strin
 	}
 
 	return nil
-}
-
-func (d stateDAO) upsertActiveTurn(ctx context.Context, checkpoint *harness.ActiveTurnCheckpoint, now time.Time) error {
-	turn, err := activeTurnStateFromCheckpoint(checkpoint, now)
-	if err != nil {
-		return err
-	}
-
-	return d.upsertActiveTurnState(ctx, &turn)
 }
 
 func (d stateDAO) upsertActiveTurnWithSourceMetadata(ctx context.Context, checkpoint *harness.ActiveTurnCheckpoint, sourceMetadata map[string]string, now time.Time) error {
@@ -490,21 +518,6 @@ func (d stateDAO) recoverableActiveTurns(ctx context.Context) ([]ActiveTurnState
 	}
 
 	return turns, nil
-}
-
-func (d stateDAO) activeTurn(ctx context.Context, turnID string) (ActiveTurnState, bool, error) {
-	row := d.db.QueryRowContext(ctx, `SELECT id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns, pending_steers_json FROM active_turns WHERE id = $1`, strings.TrimSpace(turnID))
-
-	turn, err := scanActiveTurn(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ActiveTurnState{}, false, nil
-	}
-
-	if err != nil {
-		return ActiveTurnState{}, false, fmt.Errorf("read active turn: %w", err)
-	}
-
-	return turn, true, nil
 }
 
 func activeTurnStateFromCheckpoint(checkpoint *harness.ActiveTurnCheckpoint, now time.Time) (ActiveTurnState, error) {

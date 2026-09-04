@@ -2,7 +2,7 @@ package protocol
 
 // WorkflowInvocation is one inbound workflow start without a compiled program.
 type WorkflowInvocation struct {
-	RunID, Name, Args string
+	Name, Args string
 }
 
 // WorkflowDescription identifies one available workflow.
@@ -41,10 +41,9 @@ type PhaseUpdate struct {
 	PhaseID, Name                string
 	Status                       PhaseStatus
 	Scheduled, Running, Complete int
-	Details                      string
 }
 
 // AgentUpdate reports one workflow agent call's latest observable activity.
 type AgentUpdate struct {
-	CallID, PhaseID, Label, Activity string
+	PhaseID, Label, Activity string
 }

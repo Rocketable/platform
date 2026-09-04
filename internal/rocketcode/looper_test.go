@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -121,162 +122,116 @@ func testSDKResponseBody(resp *responses.Response) testSDKResponse {
 	return body
 }
 
-type mockResponsesAPI struct {
-	mu               sync.Mutex
-	calls            []responses.ResponseNewParams
-	compactCalls     []responses.ResponseCompactParams
-	responses        []*responses.Response
-	compactResponses []*responses.CompactedResponse
-	err              error
-	compactErr       error
-	newFunc          func(context.Context, *responses.ResponseNewParams) (*responses.Response, error)
-}
-
-func (m *mockResponsesAPI) New(ctx context.Context, params *responses.ResponseNewParams, _ ...option.RequestOption) (*responses.Response, error) {
-	m.mu.Lock()
-	m.calls = append(m.calls, *params)
-	m.mu.Unlock()
-
-	if m.newFunc != nil {
-		return m.newFunc(ctx, params)
-	}
-
-	if m.err != nil {
-		return nil, m.err
-	}
-
-	if len(m.responses) == 0 {
-		return nil, errors.New("no mock response configured")
-	}
-
-	resp := m.responses[0]
-	m.responses = m.responses[1:]
-
-	return resp, nil
-}
-
-func (m *mockResponsesAPI) Compact(_ context.Context, params *responses.ResponseCompactParams, _ ...option.RequestOption) (*responses.CompactedResponse, error) {
-	m.mu.Lock()
-	m.compactCalls = append(m.compactCalls, *params)
-	m.mu.Unlock()
-
-	if m.compactErr != nil {
-		return nil, m.compactErr
-	}
-
-	if len(m.compactResponses) == 0 {
-		return nil, errors.New("no mock compact response configured")
-	}
-
-	resp := m.compactResponses[0]
-	m.compactResponses = m.compactResponses[1:]
-
-	return resp, nil
-}
-
-type mockSessionStore struct {
+type sessionEntryRecorder struct {
 	mu      sync.Mutex
 	saves   [][]SessionEntry
 	entries []SessionEntry
 }
 
-type checkpointCall struct {
-	name       string
-	checkpoint ActiveTurnCheckpoint
-	turnID     string
-}
-
-type mockCheckpointSink struct {
-	mu    sync.Mutex
-	calls []checkpointCall
-}
-
-func (m *mockCheckpointSink) StartActiveTurn(_ context.Context, checkpoint *ActiveTurnCheckpoint) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.calls = append(m.calls, checkpointCall{name: "start", checkpoint: *checkpoint})
-
-	return nil
-}
-
-func (m *mockCheckpointSink) RecordProviderResponse(_ context.Context, checkpoint *ActiveTurnCheckpoint) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.calls = append(m.calls, checkpointCall{name: "provider", checkpoint: *checkpoint})
-
-	return nil
-}
-
-func (m *mockCheckpointSink) RecordCompletedToolOutput(_ context.Context, checkpoint *ActiveTurnCheckpoint) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.calls = append(m.calls, checkpointCall{name: "tool", checkpoint: *checkpoint})
-
-	return nil
-}
-
-func (m *mockCheckpointSink) RecordRecoveredReplay(_ context.Context, checkpoint *ActiveTurnCheckpoint) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.calls = append(m.calls, checkpointCall{name: "recovered", checkpoint: *checkpoint})
-
-	return nil
-}
-
-func (m *mockCheckpointSink) ClearCompletedTurn(_ context.Context, turnID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.calls = append(m.calls, checkpointCall{name: "clear", turnID: turnID})
-
-	return nil
-}
-
-func (m *mockCheckpointSink) snapshot() []checkpointCall {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	return append([]checkpointCall{}, m.calls...)
-}
-
-type mockPermissionReviewer struct {
-	decision permissionReviewDecision
-	requests []permissionReviewRequest
-}
-
-func (m *mockPermissionReviewer) reviewPermission(_ context.Context, request *permissionReviewRequest, output chan<- ChatResponse) permissionReviewDecision {
-	m.requests = append(m.requests, *request)
-	emitPermissionReviewResult(output, "guardian", m.decision)
-
-	return m.decision
+func unusedCompact(_ context.Context, _ *responses.ResponseCompactParams, _ ...option.RequestOption) (*responses.CompactedResponse, error) {
+	return nil, errors.New("no mock compact response configured")
 }
 
 func mockResponses(responseItems ...*responses.Response) *mockResponsesAPI {
-	var mock mockResponsesAPI
+	remaining := slices.Clone(responseItems)
 
-	mock.responses = responseItems
+	return &mockResponsesAPI{
+		NewFunc: func(context.Context, *responses.ResponseNewParams, ...option.RequestOption) (*responses.Response, error) {
+			if len(remaining) == 0 {
+				return nil, errors.New("no mock response configured")
+			}
 
-	return &mock
+			resp := remaining[0]
+			remaining = remaining[1:]
+
+			return resp, nil
+		},
+		CompactFunc: unusedCompact,
+	}
 }
 
 func mockResponseError(err error) *mockResponsesAPI {
-	var mock mockResponsesAPI
-
-	mock.err = err
-
-	return &mock
+	return &mockResponsesAPI{
+		NewFunc: func(context.Context, *responses.ResponseNewParams, ...option.RequestOption) (*responses.Response, error) {
+			return nil, err
+		},
+		CompactFunc: unusedCompact,
+	}
 }
 
 func mockResponseFunc(newFunc func(context.Context, *responses.ResponseNewParams) (*responses.Response, error)) *mockResponsesAPI {
-	var mock mockResponsesAPI
+	return &mockResponsesAPI{
+		NewFunc: func(ctx context.Context, params *responses.ResponseNewParams, _ ...option.RequestOption) (*responses.Response, error) {
+			return newFunc(ctx, params)
+		},
+		CompactFunc: unusedCompact,
+	}
+}
 
-	mock.newFunc = newFunc
+func queueCompactResponses(mock *mockResponsesAPI, resps ...*responses.CompactedResponse) {
+	remaining := slices.Clone(resps)
+	mock.CompactFunc = func(context.Context, *responses.ResponseCompactParams, ...option.RequestOption) (*responses.CompactedResponse, error) {
+		if len(remaining) == 0 {
+			return nil, errors.New("no mock compact response configured")
+		}
 
-	return &mock
+		resp := remaining[0]
+		remaining = remaining[1:]
+
+		return resp, nil
+	}
+}
+
+func newParams(mock *mockResponsesAPI) []responses.ResponseNewParams {
+	calls := mock.NewCalls()
+
+	out := make([]responses.ResponseNewParams, len(calls))
+	for i, call := range calls {
+		out[i] = *call.ResponseNewParams
+	}
+
+	return out
+}
+
+func compactParams(mock *mockResponsesAPI) []responses.ResponseCompactParams {
+	calls := mock.CompactCalls()
+
+	out := make([]responses.ResponseCompactParams, len(calls))
+	for i, call := range calls {
+		out[i] = *call.ResponseCompactParams
+	}
+
+	return out
+}
+
+func recordingCheckpointSink() *mockCheckpointSink {
+	return &mockCheckpointSink{
+		ClearCompletedTurnFunc:        func(context.Context, string) error { return nil },
+		RecordCompletedToolOutputFunc: func(context.Context, *ActiveTurnCheckpoint) error { return nil },
+		RecordProviderResponseFunc:    func(context.Context, *ActiveTurnCheckpoint) error { return nil },
+		RecordRecoveredReplayFunc:     func(context.Context, *ActiveTurnCheckpoint) error { return nil },
+		StartActiveTurnFunc:           func(context.Context, *ActiveTurnCheckpoint) error { return nil },
+	}
+}
+
+func permissionReviewerWith(decision permissionReviewDecision) *mockPermissionReviewer {
+	return &mockPermissionReviewer{
+		reviewPermissionFunc: func(_ context.Context, _ *permissionReviewRequest, output chan<- ChatResponse) permissionReviewDecision {
+			emitPermissionReviewResult(output, "guardian", decision)
+			return decision
+		},
+	}
+}
+
+func reviewedRequests(reviewer *mockPermissionReviewer) []permissionReviewRequest {
+	calls := reviewer.reviewPermissionCalls()
+
+	out := make([]permissionReviewRequest, len(calls))
+	for i, call := range calls {
+		out[i] = *call.PermissionReviewRequestMoqParam
+	}
+
+	return out
 }
 
 func contextLengthExceededError() error {
@@ -308,8 +263,8 @@ func emptyTestLooper() *looper {
 	return &l
 }
 
-func testSessionStore() *mockSessionStore {
-	var store mockSessionStore
+func testSessionStore() *sessionEntryRecorder {
+	var store sessionEntryRecorder
 
 	return &store
 }
@@ -486,7 +441,7 @@ func testInputReasoning(id, summary, encryptedContent string) responses.Response
 	return item
 }
 
-func (m *mockSessionStore) appendEntry(entry *SessionEntry) error {
+func (m *sessionEntryRecorder) appendEntry(entry *SessionEntry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -561,9 +516,9 @@ func TestLooperReloadsSessionWithCurrentRuntimeConfig(t *testing.T) {
 	}, interrupts)
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("new answer")}, collectResponses(output))
-	require.Len(t, mock.calls, 1)
+	require.Len(t, newParams(mock), 1)
 
-	call := mock.calls[0]
+	call := newParams(mock)[0]
 	require.Equal(t, openai.ChatModelGPT5, call.Model)
 	require.Equal(t, "current system prompt", call.Instructions.Value)
 	require.False(t, call.Store.Value)
@@ -612,7 +567,7 @@ func TestLooperSendsAndReplaysDeveloperPromptInput(t *testing.T) {
 	}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
-	require.JSONEq(t, `{"content":"keep this rule","role":"developer","type":"message"}`, marshalJSON(t, mock.calls[0].Input.OfInputItemList[0]))
+	require.JSONEq(t, `{"content":"keep this rule","role":"developer","type":"message"}`, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList[0]))
 	require.Len(t, saved, 1)
 	require.JSONEq(t, `{"content":"keep this rule","role":"developer","type":"message"}`, string(saved[0].ReplayInput[0]))
 
@@ -641,7 +596,7 @@ func TestLooperPromptInputShellCommandExpansion(t *testing.T) {
 			require.False(t, interrupted)
 
 			wantJSON := fmt.Sprintf(`{"content":%q,"role":"user","type":"message"}`, tc.want)
-			require.JSONEq(t, wantJSON, marshalJSON(t, mock.calls[0].Input.OfInputItemList[0]))
+			require.JSONEq(t, wantJSON, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList[0]))
 			require.JSONEq(t, wantJSON, string(turn.ReplayInput[0]))
 		})
 	}
@@ -823,8 +778,8 @@ func TestLooperContinuesAfterCompactionOnlyResponse(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
-	require.Len(t, mock.calls, 2)
-	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, mock.calls[1].Input.OfInputItemList[0]))
+	require.Len(t, newParams(mock), 2)
+	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, newParams(mock)[1].Input.OfInputItemList[0]))
 	require.Len(t, saved, 1)
 	require.Len(t, saved[0].ReplayInput, 3)
 	require.JSONEq(t, `{"content":"summary of prior context","encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, string(saved[0].ReplayInput[1]))
@@ -839,10 +794,11 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 	require.NoError(t, err)
 
 	mock := mockResponses()
-	mock.compactResponses = []*responses.CompactedResponse{compactedResponse("cmp-old", "encrypted-old")}
+	queueCompactResponses(mock, compactedResponse("cmp-old", "encrypted-old"))
+
 	contextErr := contextLengthExceededError()
-	mock.newFunc = func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
-		if len(mock.calls) == 1 {
+	mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ ...option.RequestOption) (*responses.Response, error) {
+		if len(newParams(mock)) == 1 {
 			return nil, contextErr
 		}
 
@@ -866,13 +822,13 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
-	require.Len(t, mock.compactCalls, 1)
-	compactInput := marshalJSON(t, mock.compactCalls[0].Input.OfResponseInputItemArray)
+	require.Len(t, compactParams(mock), 1)
+	compactInput := marshalJSON(t, compactParams(mock)[0].Input.OfResponseInputItemArray)
 	require.Contains(t, compactInput, "sealed-prior")
 	require.NotContains(t, compactInput, "private-content-value")
 	require.NotContains(t, compactInput, "new question")
-	require.Len(t, mock.calls, 2)
-	retryInput := marshalJSON(t, mock.calls[1].Input.OfInputItemList)
+	require.Len(t, newParams(mock), 2)
+	retryInput := marshalJSON(t, newParams(mock)[1].Input.OfInputItemList)
 	require.Contains(t, retryInput, `"type":"compaction"`)
 	require.Contains(t, retryInput, "new question")
 	require.Len(t, saved, 1)
@@ -891,13 +847,11 @@ func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {
 	require.NoError(t, err)
 
 	mock := mockResponses()
-	mock.compactResponses = []*responses.CompactedResponse{
-		compactedResponse("cmp-one", "encrypted-one"),
-		compactedResponse("cmp-two", "encrypted-two"),
-	}
+	queueCompactResponses(mock, compactedResponse("cmp-one", "encrypted-one"), compactedResponse("cmp-two", "encrypted-two"))
+
 	contextErr := contextLengthExceededError()
-	mock.newFunc = func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
-		if len(mock.calls) < 3 {
+	mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ ...option.RequestOption) (*responses.Response, error) {
+		if len(newParams(mock)) < 3 {
 			return nil, contextErr
 		}
 
@@ -915,8 +869,8 @@ func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
-	require.Len(t, mock.compactCalls, 2)
-	secondCompactInput := marshalJSON(t, mock.compactCalls[1].Input.OfResponseInputItemArray)
+	require.Len(t, compactParams(mock), 2)
+	secondCompactInput := marshalJSON(t, compactParams(mock)[1].Input.OfResponseInputItemArray)
 	require.Contains(t, secondCompactInput, `"type":"function_call"`)
 	require.Contains(t, secondCompactInput, `"type":"function_call_output"`)
 	require.Contains(t, secondCompactInput, `"call_id":"call-1"`)
@@ -931,10 +885,11 @@ func TestLooperDoesNotCompactUnansweredToolCall(t *testing.T) {
 	require.NoError(t, err)
 
 	mock := mockResponses()
-	mock.compactResponses = []*responses.CompactedResponse{compactedResponse("cmp-old", "encrypted-old")}
+	queueCompactResponses(mock, compactedResponse("cmp-old", "encrypted-old"))
+
 	contextErr := contextLengthExceededError()
-	mock.newFunc = func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
-		if len(mock.calls) == 1 {
+	mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ ...option.RequestOption) (*responses.Response, error) {
+		if len(newParams(mock)) == 1 {
 			return nil, contextErr
 		}
 
@@ -952,8 +907,8 @@ func TestLooperDoesNotCompactUnansweredToolCall(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
-	require.Len(t, mock.compactCalls, 1)
-	compactInput := marshalJSON(t, mock.compactCalls[0].Input.OfResponseInputItemArray)
+	require.Len(t, compactParams(mock), 1)
+	compactInput := marshalJSON(t, compactParams(mock)[0].Input.OfResponseInputItemArray)
 	require.Contains(t, compactInput, "old question")
 	require.NotContains(t, compactInput, `"type":"function_call"`)
 }
@@ -971,7 +926,7 @@ func TestLooperDoesNotCompactOtherProviderErrors(t *testing.T) {
 	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
 
 	require.Error(t, err)
-	require.Empty(t, mock.compactCalls)
+	require.Empty(t, compactParams(mock))
 }
 
 func TestLooperPersistsAndReplaysWebSearchCalls(t *testing.T) {
@@ -1006,9 +961,9 @@ func TestLooperPersistsAndReplaysWebSearchCalls(t *testing.T) {
 	require.Len(t, saved[0].ReplayInput, 3)
 	require.JSONEq(t, `{"action":{"queries":["golang release"],"type":"search"},"id":"resp-search-web","status":"completed","type":"web_search_call"}`, string(saved[0].ReplayInput[1]))
 
-	require.Len(t, mock.calls, 2)
-	require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), `"type":"web_search_call"`)
-	require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), `"queries":["golang release"]`)
+	require.Len(t, newParams(mock), 2)
+	require.Contains(t, marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), `"type":"web_search_call"`)
+	require.Contains(t, marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), `"queries":["golang release"]`)
 }
 
 func TestWebSearchOutputWithEmptyActionTypeIsTraceOnly(t *testing.T) {
@@ -1083,8 +1038,8 @@ func TestLooperInjectsCompactionSteering(t *testing.T) {
 	require.Len(t, saved[0].ReplayInput, 4)
 	require.JSONEq(t, `{"content":"Use the compacted context carefully.","role":"developer","type":"message"}`, string(saved[0].ReplayInput[3]))
 
-	require.Len(t, mock.calls, 2)
-	items := mock.calls[1].Input.OfInputItemList
+	require.Len(t, newParams(mock), 2)
+	items := newParams(mock)[1].Input.OfInputItemList
 	require.Len(t, items, 4)
 	require.JSONEq(t, `{"encrypted_content":"encrypted-compact","id":"resp-compact-compaction","type":"compaction"}`, marshalJSON(t, items[0]))
 	require.Contains(t, marshalJSON(t, items[1]), `"role":"assistant"`)
@@ -1116,7 +1071,7 @@ func TestLooperPermissionReviewUsesPrunedHistory(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{RiskLevel: permissionReviewRiskLevelLow, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeAllow, Rationale: "Low-risk action."}}
+	reviewer := permissionReviewerWith(permissionReviewDecision{RiskLevel: permissionReviewRiskLevelLow, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeAllow, Rationale: "Low-risk action."})
 	mock := mockResponses(
 		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "webfetch", `{"url":"https://allowed.example/page"}`)}),
 		responseWithMessage("resp-final", "done"),
@@ -1144,21 +1099,20 @@ func TestLooperPermissionReviewUsesPrunedHistory(t *testing.T) {
 	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
-	require.Len(t, reviewer.requests, 1)
-	got := marshalJSON(t, reviewer.requests[0].ReviewContext)
+	require.Len(t, reviewedRequests(reviewer), 1)
+	got := marshalJSON(t, reviewedRequests(reviewer)[0].ReviewContext)
 	require.NotContains(t, got, "pre-compaction secret")
 	require.Contains(t, got, "cmp-latest")
 	require.Contains(t, got, "post-compaction question")
 }
 
 func TestCheckpointBeforeFirstProviderCall(t *testing.T) {
-	sink := &mockCheckpointSink{}
+	sink := recordingCheckpointSink()
 	mock := mockResponseFunc(func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
-		calls := sink.snapshot()
-		require.Len(t, calls, 1)
-		require.Equal(t, "start", calls[0].name)
-		require.NotEmpty(t, calls[0].checkpoint.TurnID)
-		require.JSONEq(t, `{"content":"hello","role":"user","type":"message"}`, string(calls[0].checkpoint.ReplayInput[0]))
+		starts := sink.StartActiveTurnCalls()
+		require.Len(t, starts, 1)
+		require.NotEmpty(t, starts[0].ActiveTurnCheckpoint.TurnID)
+		require.JSONEq(t, `{"content":"hello","role":"user","type":"message"}`, string(starts[0].ActiveTurnCheckpoint.ReplayInput[0]))
 
 		return responseWithMessage("resp-final", "done"), nil
 	})
@@ -1177,7 +1131,7 @@ func TestCheckpointBeforeFirstProviderCall(t *testing.T) {
 }
 
 func TestCheckpointProviderResponseOpenCallsBeforeToolDispatch(t *testing.T) {
-	sink := &mockCheckpointSink{}
+	sink := recordingCheckpointSink()
 	mock := mockResponses(
 		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "read", `{"filePath":"README.md"}`)}),
 		responseWithMessage("resp-final", "done"),
@@ -1187,15 +1141,14 @@ func TestCheckpointProviderResponseOpenCallsBeforeToolDispatch(t *testing.T) {
 	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
 	tool := testLooperTool("read")
 	tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
-		calls := sink.snapshot()
-		require.GreaterOrEqual(t, len(calls), 2)
-		provider := calls[1]
-		require.Equal(t, "provider", provider.name)
-		require.Equal(t, "resp-tool", provider.checkpoint.ResponseID)
-		require.Len(t, provider.checkpoint.OpenFunctionCalls, 1)
-		require.Equal(t, "call-1", provider.checkpoint.OpenFunctionCalls[0].CallID)
-		require.Equal(t, "read", provider.checkpoint.OpenFunctionCalls[0].Name)
-		require.JSONEq(t, `{"filePath":"README.md"}`, string(provider.checkpoint.OpenFunctionCalls[0].Arguments))
+		providers := sink.RecordProviderResponseCalls()
+		require.NotEmpty(t, providers)
+		provider := providers[0].ActiveTurnCheckpoint
+		require.Equal(t, "resp-tool", provider.ResponseID)
+		require.Len(t, provider.OpenFunctionCalls, 1)
+		require.Equal(t, "call-1", provider.OpenFunctionCalls[0].CallID)
+		require.Equal(t, "read", provider.OpenFunctionCalls[0].Name)
+		require.JSONEq(t, `{"filePath":"README.md"}`, string(provider.OpenFunctionCalls[0].Arguments))
 
 		return TextToolResult("contents"), nil
 	}
@@ -1213,7 +1166,7 @@ func TestCheckpointProviderResponseOpenCallsBeforeToolDispatch(t *testing.T) {
 }
 
 func TestCheckpointAfterCompactionRecoveryBeforeProviderRetry(t *testing.T) {
-	sink := &mockCheckpointSink{}
+	sink := recordingCheckpointSink()
 	providerCalls := 0
 	mock := mockResponseFunc(func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
 		providerCalls++
@@ -1221,17 +1174,16 @@ func TestCheckpointAfterCompactionRecoveryBeforeProviderRetry(t *testing.T) {
 			return nil, contextLengthExceededError()
 		}
 
-		calls := sink.snapshot()
-		require.GreaterOrEqual(t, len(calls), 2)
-		compacted := calls[1]
-		require.Equal(t, "provider", compacted.name)
-		require.Len(t, compacted.checkpoint.ReplayInput, 2)
-		require.Contains(t, string(compacted.checkpoint.ReplayInput[0]), `"type":"compaction"`)
-		require.Contains(t, string(compacted.checkpoint.ReplayInput[1]), `"content":"new prompt"`)
+		providers := sink.RecordProviderResponseCalls()
+		require.NotEmpty(t, providers)
+		compacted := providers[0].ActiveTurnCheckpoint
+		require.Len(t, compacted.ReplayInput, 2)
+		require.Contains(t, string(compacted.ReplayInput[0]), `"type":"compaction"`)
+		require.Contains(t, string(compacted.ReplayInput[1]), `"content":"new prompt"`)
 
 		return responseWithMessage("resp-final", "done"), nil
 	})
-	mock.compactResponses = []*responses.CompactedResponse{compactedResponse("cmp-old", "encrypted-old")}
+	queueCompactResponses(mock, compactedResponse("cmp-old", "encrypted-old"))
 	looper := testLooper(mock)
 	looper.CheckpointSink = sink
 	output := make(chan ChatResponse, 10)
@@ -1316,9 +1268,9 @@ func TestLooperDispatchesToolCalls(t *testing.T) {
 	gotCalls := append([]string{}, calls...)
 	callsMu.Unlock()
 	require.ElementsMatch(t, []string{"first:{\"step\":1}", "second:{\"step\":2}"}, gotCalls)
-	require.Len(t, mock.calls, 2)
+	require.Len(t, newParams(mock), 2)
 
-	second := mock.calls[1].Input.OfInputItemList
+	second := newParams(mock)[1].Input.OfInputItemList
 	require.Len(t, second, 6)
 	require.Equal(t, "function_call_output", *second[3].GetType())
 	require.Equal(t, "call-1", *second[3].GetCallID())
@@ -1342,22 +1294,14 @@ func TestLooperDispatchesToolCalls(t *testing.T) {
 }
 
 func TestLooperCheckpointsCompletedToolOutputBeforeContinuation(t *testing.T) {
-	sink := &mockCheckpointSink{}
+	sink := recordingCheckpointSink()
 	mock := mockResponses()
-	mock.newFunc = func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
-		if len(mock.calls) == 1 {
+	mock.NewFunc = func(_ context.Context, _ *responses.ResponseNewParams, _ ...option.RequestOption) (*responses.Response, error) {
+		if len(newParams(mock)) == 1 {
 			return responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "first", `{"step":1}`)}), nil
 		}
 
-		toolCheckpoints := 0
-
-		for _, call := range sink.snapshot() {
-			if call.name == "tool" {
-				toolCheckpoints++
-			}
-		}
-
-		require.Positive(t, toolCheckpoints, "tool output checkpoint should be durable before continuation request")
+		require.NotEmpty(t, sink.RecordCompletedToolOutputCalls(), "tool output checkpoint should be durable before continuation request")
 
 		return responseWithMessage("resp-final", "done"), nil
 	}
@@ -1380,16 +1324,9 @@ func TestLooperCheckpointsCompletedToolOutputBeforeContinuation(t *testing.T) {
 
 	require.NoError(t, err)
 
-	var toolCheckpoints []ActiveTurnCheckpoint
-
-	for _, call := range sink.snapshot() {
-		if call.name == "tool" {
-			toolCheckpoints = append(toolCheckpoints, call.checkpoint)
-		}
-	}
-
-	require.NotEmpty(t, toolCheckpoints)
-	last := toolCheckpoints[len(toolCheckpoints)-1]
+	toolCalls := sink.RecordCompletedToolOutputCalls()
+	require.NotEmpty(t, toolCalls)
+	last := *toolCalls[len(toolCalls)-1].ActiveTurnCheckpoint
 	require.Empty(t, last.OpenFunctionCalls)
 	require.Len(t, last.CompletedFunctionOutputs, 1)
 	require.Equal(t, "call-1", last.CompletedFunctionOutputs[0].CallID)
@@ -1398,7 +1335,7 @@ func TestLooperCheckpointsCompletedToolOutputBeforeContinuation(t *testing.T) {
 }
 
 func TestLooperClearsCheckpointAfterCompletedSessionEntry(t *testing.T) {
-	sink := &mockCheckpointSink{}
+	sink := recordingCheckpointSink()
 	mock := mockResponses(responseWithMessage("resp-final", "done"))
 	looper := testLooper(mock)
 	looper.CheckpointSink = sink
@@ -1412,9 +1349,7 @@ func TestLooperClearsCheckpointAfterCompletedSessionEntry(t *testing.T) {
 	var saved []SessionEntry
 
 	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-		for _, call := range sink.snapshot() {
-			require.NotEqual(t, "clear", call.name, "checkpoint should not clear before session entry is durable")
-		}
+		require.Empty(t, sink.ClearCompletedTurnCalls(), "checkpoint should not clear before session entry is durable")
 
 		saved = append(saved, entry)
 
@@ -1424,16 +1359,9 @@ func TestLooperClearsCheckpointAfterCompletedSessionEntry(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, saved, 1)
 
-	var cleared []string
-
-	for _, call := range sink.snapshot() {
-		if call.name == "clear" {
-			cleared = append(cleared, call.turnID)
-		}
-	}
-
+	cleared := sink.ClearCompletedTurnCalls()
 	require.Len(t, cleared, 1)
-	require.Equal(t, activeTurnID(&saved[0]), cleared[0])
+	require.Equal(t, activeTurnID(&saved[0]), cleared[0].S)
 }
 
 func TestLooperReportsToolErrorsInBand(t *testing.T) {
@@ -1457,8 +1385,8 @@ func TestLooperReportsToolErrorsInBand(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, []ChatResponse{assistantMessage("recovered")}, collectResponses(output))
-		require.Len(t, mock.calls, 2)
-		require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), want)
+		require.Len(t, newParams(mock), 2)
+		require.Contains(t, marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), want)
 	}
 
 	t.Run("tool call error", func(t *testing.T) {
@@ -1563,9 +1491,9 @@ func TestLooperSendsAndReplaysUserAttachments(t *testing.T) {
 	}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
-	require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), `"role":"user"`)
-	require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), `"type":"input_image"`)
-	require.Contains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), `"type":"input_file"`)
+	require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), `"role":"user"`)
+	require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), `"type":"input_image"`)
+	require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), `"type":"input_file"`)
 
 	history, _, err := loadSession(sessionEntries(saved))
 	require.NoError(t, err)
@@ -1594,7 +1522,7 @@ func TestLooperSendsAndReplaysDeveloperAttachments(t *testing.T) {
 	}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
-	serialized := marshalJSON(t, mock.calls[0].Input.OfInputItemList)
+	serialized := marshalJSON(t, newParams(mock)[0].Input.OfInputItemList)
 	require.Contains(t, serialized, `"role":"developer"`)
 	require.Contains(t, serialized, `"type":"input_image"`)
 
@@ -1627,7 +1555,7 @@ func TestLooperSendsToolOutputAttachments(t *testing.T) {
 	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
-	serialized := marshalJSON(t, mock.calls[1].Input.OfInputItemList)
+	serialized := marshalJSON(t, newParams(mock)[1].Input.OfInputItemList)
 	require.Contains(t, serialized, `"type":"input_text"`)
 	require.Contains(t, serialized, `"type":"input_image"`)
 }
@@ -1668,8 +1596,8 @@ func TestLooperDeniesToolCallsInBand(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("recovered")}, collectResponses(output))
-	require.Len(t, mock.calls, 2)
-	require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), "tool call denied")
+	require.Len(t, newParams(mock), 2)
+	require.Contains(t, marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), "tool call denied")
 }
 
 func TestLooperAutoPermissionReview(t *testing.T) {
@@ -1696,7 +1624,7 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 
 	t.Run("approval executes", func(t *testing.T) {
 		called := false
-		reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{RiskLevel: permissionReviewRiskLevelLow, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeAllow, Rationale: "Low-risk action."}}
+		reviewer := permissionReviewerWith(permissionReviewDecision{RiskLevel: permissionReviewRiskLevelLow, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeAllow, Rationale: "Low-risk action."})
 		looper := testLooper(mockResponses())
 		looper.AutoApprovePermissions = true
 		looper.PermissionReviewer = reviewer
@@ -1720,17 +1648,17 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		require.True(t, called)
 		require.Equal(t, "fetched", outputs[0].Result.Output)
 		require.Equal(t, []ChatResponse{subagentDiagnosticResponse(&SubagentDiagnostic{Name: "guardian", Label: "auto-approver", Text: "allow: Low-risk action.", Subagent: &SubagentDiagnostic{Label: "result"}})}, drainBufferedResponses(output))
-		require.Len(t, reviewer.requests, 1)
-		require.True(t, reviewer.requests[0].ReviewerEmbedded)
-		require.Equal(t, "main", reviewer.requests[0].ActiveAgent)
-		require.Equal(t, "webfetch", reviewer.requests[0].Permission)
-		require.Equal(t, []permissionReviewSubject{{Subject: "https://allowed.example/page", RulePattern: "https://allowed.example/*"}}, reviewer.requests[0].AutoSubjects)
-		require.Equal(t, reviewContext, reviewer.requests[0].ReviewContext)
+		require.Len(t, reviewedRequests(reviewer), 1)
+		require.True(t, reviewedRequests(reviewer)[0].ReviewerEmbedded)
+		require.Equal(t, "main", reviewedRequests(reviewer)[0].ActiveAgent)
+		require.Equal(t, "webfetch", reviewedRequests(reviewer)[0].Permission)
+		require.Equal(t, []permissionReviewSubject{{Subject: "https://allowed.example/page", RulePattern: "https://allowed.example/*"}}, reviewedRequests(reviewer)[0].AutoSubjects)
+		require.Equal(t, reviewContext, reviewedRequests(reviewer)[0].ReviewContext)
 	})
 
 	t.Run("denial does not execute custom reviewer", func(t *testing.T) {
 		called := false
-		reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{RiskLevel: permissionReviewRiskLevelHigh, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeDeny, Rationale: "Not authorized."}}
+		reviewer := permissionReviewerWith(permissionReviewDecision{RiskLevel: permissionReviewRiskLevelHigh, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeDeny, Rationale: "Not authorized."})
 		looper := testLooper(mockResponses())
 		looper.AutoApprovePermissions = true
 		looper.PermissionReviewer = reviewer
@@ -1751,13 +1679,13 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 		require.False(t, called)
 		require.Contains(t, outputs[0].Result.Output, "Not authorized")
 		require.Equal(t, []ChatResponse{subagentDiagnosticResponse(&SubagentDiagnostic{Name: "guardian", Label: "auto-approver", Text: "deny: Not authorized.", Subagent: &SubagentDiagnostic{Label: "result"}})}, drainBufferedResponses(output))
-		require.Len(t, reviewer.requests, 1)
-		require.False(t, reviewer.requests[0].ReviewerEmbedded)
-		require.Equal(t, "release-guardian", reviewer.requests[0].Reviewer)
+		require.Len(t, reviewedRequests(reviewer), 1)
+		require.False(t, reviewedRequests(reviewer)[0].ReviewerEmbedded)
+		require.Equal(t, "release-guardian", reviewedRequests(reviewer)[0].Reviewer)
 	})
 
 	t.Run("deny short circuits auto", func(t *testing.T) {
-		reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{RiskLevel: permissionReviewRiskLevelLow, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeAllow, Rationale: "Low-risk action."}}
+		reviewer := permissionReviewerWith(permissionReviewDecision{RiskLevel: permissionReviewRiskLevelLow, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeAllow, Rationale: "Low-risk action."})
 		looper := testLooper(mockResponses())
 		looper.AutoApprovePermissions = true
 		looper.PermissionReviewer = reviewer
@@ -1771,11 +1699,11 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Contains(t, outputs[0].Result.Output, `=> deny`)
-		require.Empty(t, reviewer.requests)
+		require.Empty(t, reviewedRequests(reviewer))
 	})
 
 	t.Run("mixed reviewers deny without review", func(t *testing.T) {
-		reviewer := &mockPermissionReviewer{decision: permissionReviewDecision{RiskLevel: permissionReviewRiskLevelLow, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeAllow, Rationale: "Low-risk action."}}
+		reviewer := permissionReviewerWith(permissionReviewDecision{RiskLevel: permissionReviewRiskLevelLow, UserAuthorization: permissionReviewUserAuthorizationUnknown, Outcome: permissionReviewOutcomeAllow, Rationale: "Low-risk action."})
 		looper := testLooper(mockResponses())
 		looper.AutoApprovePermissions = true
 		looper.PermissionReviewer = reviewer
@@ -1789,7 +1717,7 @@ func TestLooperAutoPermissionReview(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Contains(t, outputs[0].Result.Output, `matched multiple automatic reviewers`)
-		require.Empty(t, reviewer.requests)
+		require.Empty(t, reviewedRequests(reviewer))
 	})
 }
 
@@ -1850,7 +1778,7 @@ func TestLooperAppliesWebFetchURLPermissions(t *testing.T) {
 		err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
 
 		require.NoError(t, err)
-		serialized := marshalJSON(t, mock.calls[1].Input.OfInputItemList)
+		serialized := marshalJSON(t, newParams(mock)[1].Input.OfInputItemList)
 		require.Contains(t, serialized, `permission \"webfetch\" rejected subject \"https://blocked.example/page\"`)
 	})
 
@@ -1889,7 +1817,7 @@ func TestLooperAppliesWebFetchURLPermissions(t *testing.T) {
 
 		require.NoError(t, err)
 		require.True(t, called)
-		require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), "fetched")
+		require.Contains(t, marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), "fetched")
 	})
 }
 
@@ -1938,7 +1866,7 @@ func TestLooperGatesSkillByName(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"docs-helper"}, calls)
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
-	serialized := marshalJSON(t, mock.calls[1].Input.OfInputItemList)
+	serialized := marshalJSON(t, newParams(mock)[1].Input.OfInputItemList)
 	require.Contains(t, serialized, "tool call denied")
 	require.Contains(t, serialized, "loaded docs-helper")
 }
@@ -1970,8 +1898,8 @@ Use this skill for docs.
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
-	require.Len(t, mock.calls, 1)
-	serialized := marshalJSON(t, mock.calls[0].Input.OfInputItemList)
+	require.Len(t, newParams(mock), 1)
+	serialized := marshalJSON(t, newParams(mock)[0].Input.OfInputItemList)
 	require.Contains(t, serialized, `"role":"developer"`)
 	require.Contains(t, serialized, "Use this skill for docs.")
 	require.Contains(t, serialized, "write the API guide")
@@ -1998,7 +1926,7 @@ func TestLooperDirectSkillRejectsBeforeModelRequest(t *testing.T) {
 	}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
-	require.Empty(t, mock.calls)
+	require.Empty(t, newParams(mock))
 	require.Zero(t, saves)
 	require.Equal(t, []ChatResponse{assistantMessage("direct skill invocation requires a skill name")}, collectResponses(output))
 }
@@ -2034,7 +1962,7 @@ Use this skill for docs.
 		}, make(chan os.Signal, 1))
 
 		require.NoError(t, err)
-		require.Empty(t, mock.calls)
+		require.Empty(t, newParams(mock))
 		require.Zero(t, saves)
 
 		return collectResponses(output)
@@ -2178,7 +2106,7 @@ func TestLooperTrapsDoomLoopInBand(t *testing.T) {
 	callsMu.Unlock()
 	require.Equal(t, 2, gotCalls)
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
-	require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), "repeated identical")
+	require.Contains(t, marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), "repeated identical")
 }
 
 func TestLooperPrintsReasoningSummary(t *testing.T) {
@@ -2260,7 +2188,7 @@ func TestLooperOmitsInterruptedTurnsFromSession(t *testing.T) {
 		return nil, ctx.Err()
 	})
 	looper := testLooper(mock)
-	sink := &mockCheckpointSink{}
+	sink := recordingCheckpointSink()
 	looper.CheckpointSink = sink
 	interrupts := make(chan os.Signal, 1)
 
@@ -2294,12 +2222,11 @@ func TestLooperOmitsInterruptedTurnsFromSession(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, turns)
 
-	calls := sink.snapshot()
-	require.NotEmpty(t, calls)
-	interrupted := calls[len(calls)-1]
-	require.Equal(t, "recovered", interrupted.name)
-	require.Len(t, interrupted.checkpoint.ReplayInput, 2)
-	require.Contains(t, string(interrupted.checkpoint.ReplayInput[1]), recoveryReplayMessageText)
+	recovered := sink.RecordRecoveredReplayCalls()
+	require.NotEmpty(t, recovered)
+	interrupted := recovered[len(recovered)-1].ActiveTurnCheckpoint
+	require.Len(t, interrupted.ReplayInput, 2)
+	require.Contains(t, string(interrupted.ReplayInput[1]), recoveryReplayMessageText)
 }
 
 func TestLooperContextCancellationDuringProviderCallMarksInterruptedCheckpoint(t *testing.T) {
@@ -2312,7 +2239,7 @@ func TestLooperContextCancellationDuringProviderCallMarksInterruptedCheckpoint(t
 		return nil, ctx.Err()
 	})
 	looper := testLooper(mock)
-	sink := &mockCheckpointSink{}
+	sink := recordingCheckpointSink()
 	looper.CheckpointSink = sink
 	output := make(chan ChatResponse, 10)
 
@@ -2332,11 +2259,10 @@ func TestLooperContextCancellationDuringProviderCallMarksInterruptedCheckpoint(t
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "request response")
 
-	calls := sink.snapshot()
-	require.NotEmpty(t, calls)
-	interrupted := calls[len(calls)-1]
-	require.Equal(t, "recovered", interrupted.name)
-	require.Contains(t, marshalJSON(t, interrupted.checkpoint.ReplayInput), recoveryReplayMessageText)
+	recovered := sink.RecordRecoveredReplayCalls()
+	require.NotEmpty(t, recovered)
+	interrupted := recovered[len(recovered)-1].ActiveTurnCheckpoint
+	require.Contains(t, marshalJSON(t, interrupted.ReplayInput), recoveryReplayMessageText)
 }
 
 func TestLooperCancellationDuringToolDispatchMarksInterruptedCheckpoint(t *testing.T) {
@@ -2345,7 +2271,7 @@ func TestLooperCancellationDuringToolDispatchMarksInterruptedCheckpoint(t *testi
 
 	mock := mockResponses(responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "task", `{"description":"work"}`)}))
 	looper := testLooper(mock)
-	sink := &mockCheckpointSink{}
+	sink := recordingCheckpointSink()
 	looper.CheckpointSink = sink
 	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
 	tool := testLooperTool("task")
@@ -2374,14 +2300,13 @@ func TestLooperCancellationDuringToolDispatchMarksInterruptedCheckpoint(t *testi
 	require.Contains(t, err.Error(), "dispatch tool calls")
 	require.Empty(t, saved)
 
-	calls := sink.snapshot()
-	require.NotEmpty(t, calls)
-	interrupted := calls[len(calls)-1]
-	require.Equal(t, "recovered", interrupted.name)
-	require.Len(t, interrupted.checkpoint.OpenFunctionCalls, 1)
-	require.Equal(t, "call-1", interrupted.checkpoint.OpenFunctionCalls[0].CallID)
-	require.Contains(t, marshalJSON(t, interrupted.checkpoint.ReplayInput), taskAbortedToolOutputText)
-	require.Contains(t, marshalJSON(t, interrupted.checkpoint.ReplayInput), recoveryReplayMessageText)
+	recovered := sink.RecordRecoveredReplayCalls()
+	require.NotEmpty(t, recovered)
+	interrupted := recovered[len(recovered)-1].ActiveTurnCheckpoint
+	require.Len(t, interrupted.OpenFunctionCalls, 1)
+	require.Equal(t, "call-1", interrupted.OpenFunctionCalls[0].CallID)
+	require.Contains(t, marshalJSON(t, interrupted.ReplayInput), taskAbortedToolOutputText)
+	require.Contains(t, marshalJSON(t, interrupted.ReplayInput), recoveryReplayMessageText)
 }
 
 func TestLooperPrintsCommentaryResponses(t *testing.T) {
@@ -2419,7 +2344,7 @@ func TestLooperRetriesRateLimitExceededFailedResponse(t *testing.T) {
 		err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
 
 		require.NoError(t, err)
-		require.Len(t, mock.calls, 2)
+		require.Len(t, newParams(mock), 2)
 
 		diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: 0, ResponseStatus: string(responses.ResponseStatusFailed), Code: string(responses.ResponseErrorCodeRateLimitExceeded), Message: "too many requests", Attempt: 1, RetryAfter: "1s", ResponseID: "resp-rate"}
 		require.Equal(t, []ChatResponse{
@@ -2464,7 +2389,7 @@ func TestLooperReportsOpenAIRequestErrorsInDiagnostics(t *testing.T) {
 	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
 
 	require.EqualError(t, err, "run turn: request response: new response: provider retry limit: status 429")
-	require.Len(t, mock.calls, 1)
+	require.Len(t, newParams(mock), 1)
 
 	_, ok := errors.AsType[*providerRetryLimitError](err)
 	require.True(t, ok)
@@ -2506,7 +2431,7 @@ func TestLooperClassifiesTerminalTooManyRequestsErrors(t *testing.T) {
 
 			require.Error(t, err)
 			require.True(t, tc.want(err))
-			require.Len(t, mock.calls, 1)
+			require.Len(t, newParams(mock), 1)
 		})
 	}
 }
@@ -2535,7 +2460,7 @@ func TestLooperRetriesTooManyRequestsRequestError(t *testing.T) {
 		err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
 
 		require.NoError(t, err)
-		require.Len(t, mock.calls, 2)
+		require.Len(t, newParams(mock), 2)
 
 		diagnostic := &ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: http.StatusTooManyRequests, Code: "too_many_requests", Message: "Too Many Requests", Attempt: 1, RetryAfter: "2s", Headers: map[string]string{"retry-after-ms": "2000", "x-request-id": "req-rate"}}
 		require.Equal(t, []ChatResponse{
@@ -2604,12 +2529,12 @@ func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
 		return TextToolResult("looked-up"), nil
 	}
 	looper.Tools = map[string]looperTool{"lookup": tool}
-	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []string {
+	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []PromptInput {
 		if phase != TurnPhaseToolLoop {
 			return nil
 		}
 
-		return []string{"don't touch the database"}
+		return []PromptInput{{Text: "don't touch the database"}}
 	}}
 	output := make(chan ChatResponse, 10)
 
@@ -2622,13 +2547,23 @@ func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("done")}, collectResponses(output))
-	require.Len(t, mock.calls, 2)
-	require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), `"role":"user"`)
-	require.Contains(t, marshalJSON(t, mock.calls[1].Input.OfInputItemList), `"content":"don't touch the database"`)
+	require.Len(t, newParams(mock), 2)
+	require.Contains(t, marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), `"role":"user"`)
+	require.Contains(t, marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), `"content":"don't touch the database"`)
 	require.Equal(t, TurnPhaseFinalAnswer, looper.Phase())
 }
 
 func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
+	steers := []PromptInput{
+		{Text: "use the other file", Attachments: []Attachment{{MIME: "image/png", Filename: "screen.png", URL: "data:image/png;base64,c2NyZWVu"}}},
+		{Attachments: []Attachment{{MIME: "image/jpeg", Filename: "photo.jpg", URL: "data:image/jpeg;base64,cGhvdG8="}}},
+		{Text: "and skip tests"},
+	}
+	want := []string{
+		`{"content":[{"type":"input_text","text":"use the other file"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,c2NyZWVu"}],"role":"user","type":"message"}`,
+		`{"content":[{"type":"input_image","detail":"auto","image_url":"data:image/jpeg;base64,cGhvdG8="}],"role":"user","type":"message"}`,
+		`{"content":"and skip tests","role":"user","type":"message"}`,
+	}
 	mock := mockResponses(
 		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{testFunctionCall("tool-1", "call-1", "lookup", `{}`)}),
 		responseWithMessage("resp-final", "done"),
@@ -2640,12 +2575,12 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 		return TextToolResult("looked-up"), nil
 	}
 	looper.Tools = map[string]looperTool{"lookup": tool}
-	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []string {
+	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []PromptInput {
 		if phase != TurnPhaseToolLoop {
 			return nil
 		}
 
-		return []string{"use the other file", "and skip tests"}
+		return steers
 	}}
 	output := make(chan ChatResponse, 10)
 
@@ -2654,14 +2589,30 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 
 	close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	var saved []SessionEntry
+
+	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
+		saved = append(saved, entry)
+		return nil
+	}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
+	require.Len(t, newParams(mock), 2)
+	items := newParams(mock)[1].Input.OfInputItemList
+	require.Len(t, items, 6)
+	require.JSONEq(t, `{"call_id":"call-1","output":"looked-up","type":"function_call_output"}`, marshalJSON(t, items[2]))
 
-	items := mock.calls[1].Input.OfInputItemList
-	require.GreaterOrEqual(t, len(items), 2)
-	require.JSONEq(t, `{"content":"use the other file","role":"user","type":"message"}`, marshalJSON(t, items[len(items)-2]))
-	require.JSONEq(t, `{"content":"and skip tests","role":"user","type":"message"}`, marshalJSON(t, items[len(items)-1]))
+	history, turns, err := loadSession(sessionEntries(saved))
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	require.Len(t, turns[0].ReplayInput, 7)
+	require.Len(t, history, 7)
+
+	for i, expected := range want {
+		require.JSONEq(t, expected, marshalJSON(t, items[3+i]))
+		require.JSONEq(t, expected, string(turns[0].ReplayInput[3+i]))
+		require.JSONEq(t, expected, marshalJSON(t, history[3+i]))
+	}
 }
 
 func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
@@ -2693,14 +2644,14 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 		return TextToolResult("ok"), nil
 	}
 	looper.Tools = map[string]looperTool{"first": {Definition: testFunctionToolParam("first"), Call: block}, "second": {Definition: testFunctionToolParam("second"), Call: block}}
-	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []string {
+	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []PromptInput {
 		mu.Lock()
 
 		phases = append(phases, phase)
 		mu.Unlock()
 
 		if phase == TurnPhaseToolLoop {
-			return []string{"steer after batch"}
+			return []PromptInput{{Text: "steer after batch"}}
 		}
 
 		return nil
@@ -2727,21 +2678,32 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 	mu.Lock()
 	require.Equal(t, []TurnPhase{TurnPhaseToolLoop, TurnPhaseFinalAnswer}, phases)
 	mu.Unlock()
-	require.Equal(t, 1, strings.Count(marshalJSON(t, mock.calls[1].Input.OfInputItemList), `"content":"steer after batch"`))
+	require.Equal(t, 1, strings.Count(marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), `"content":"steer after batch"`))
 }
 
 func TestLooperInjectsSteersWhenNoTools(t *testing.T) {
 	var phases []TurnPhase
 
+	steers := []PromptInput{
+		{Text: "also add a test", Attachments: []Attachment{{MIME: "image/png", Filename: "test.png", URL: "data:image/png;base64,dGVzdA=="}}},
+		{Attachments: []Attachment{{MIME: "application/pdf", Filename: "spec.pdf", URL: "data:application/pdf;base64,c3BlYw=="}}},
+		{Text: "and skip lint"},
+	}
+	want := []string{
+		`{"content":[{"type":"input_text","text":"also add a test"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,dGVzdA=="}],"role":"user","type":"message"}`,
+		`{"content":[{"type":"input_file","filename":"spec.pdf","file_data":"data:application/pdf;base64,c3BlYw=="}],"role":"user","type":"message"}`,
+		`{"content":"and skip lint","role":"user","type":"message"}`,
+	}
+
 	mock := mockResponses(responseWithMessage("resp-first", "4"), responseWithMessage("resp-final", "done"))
 	looper := testLooper(mock)
-	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []string {
+	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []PromptInput {
 		phases = append(phases, phase)
 		if phase != TurnPhaseFinalAnswer || len(phases) > 1 {
 			return nil
 		}
 
-		return []string{"also add a test", "and skip lint"}
+		return steers
 	}}
 	output := make(chan ChatResponse, 10)
 
@@ -2750,16 +2712,32 @@ func TestLooperInjectsSteersWhenNoTools(t *testing.T) {
 
 	close(input)
 
-	err := looper.Loop(context.Background(), input, emptySession(), discardSession, make(chan os.Signal, 1))
+	var saved []SessionEntry
+
+	err := looper.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
+		saved = append(saved, entry)
+		return nil
+	}, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("4"), assistantMessage("done")}, collectResponses(output))
-	require.Len(t, mock.calls, 2)
-	require.NotContains(t, marshalJSON(t, mock.calls[0].Input.OfInputItemList), "also add a test")
-	items := mock.calls[1].Input.OfInputItemList
-	require.GreaterOrEqual(t, len(items), 2)
-	require.JSONEq(t, `{"content":"also add a test","role":"user","type":"message"}`, marshalJSON(t, items[len(items)-2]))
-	require.JSONEq(t, `{"content":"and skip lint","role":"user","type":"message"}`, marshalJSON(t, items[len(items)-1]))
+	require.Len(t, newParams(mock), 2)
+	require.NotContains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), "also add a test")
+	items := newParams(mock)[1].Input.OfInputItemList
+	require.Len(t, items, 5)
+
+	history, turns, err := loadSession(sessionEntries(saved))
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	require.Len(t, turns[0].ReplayInput, 6)
+	require.Len(t, history, 6)
+
+	for i, expected := range want {
+		require.JSONEq(t, expected, marshalJSON(t, items[2+i]))
+		require.JSONEq(t, expected, string(turns[0].ReplayInput[2+i]))
+		require.JSONEq(t, expected, marshalJSON(t, history[2+i]))
+	}
+
 	require.Equal(t, []TurnPhase{TurnPhaseFinalAnswer, TurnPhaseFinalAnswer}, phases)
 	require.Equal(t, TurnPhaseFinalAnswer, looper.Phase())
 }

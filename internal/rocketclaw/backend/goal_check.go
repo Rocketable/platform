@@ -16,8 +16,6 @@ import (
 
 const goalCheckTimeout = 2 * 60 * 1000
 
-type goalCheckCommand struct{ command, subject string }
-
 // ValidateGoalCheckScriptStart validates a goal check script before goal persistence.
 func ValidateGoalCheckScriptStart(cfg *config.Config, agentName, script string) error {
 	root, err := os.OpenRoot(cfg.Workspace)
@@ -42,22 +40,22 @@ func ValidateGoalCheckScriptStart(cfg *config.Config, agentName, script string) 
 	return err
 }
 
-func validateGoalCheckScript(root *os.Root, workspace, script string, permission rocketcode.PermissionSet) (goalCheckCommand, error) {
+func validateGoalCheckScript(root *os.Root, workspace, script string, permission rocketcode.PermissionSet) (string, error) {
 	command, subject, err := parseGoalCheckCommand(script)
 	if err != nil {
-		return goalCheckCommand{}, err
+		return "", err
 	}
 
 	if err := requireWorkspaceExecutable(root, workspace, command.argv[0]); err != nil {
-		return goalCheckCommand{}, err
+		return "", err
 	}
 
 	action, matched := permission.Evaluate("bash", subject)
 	if !matched || action != rocketcode.PermissionAllow {
-		return goalCheckCommand{}, fmt.Errorf("goal check script is not allowed by agent bash permission: %s", subject)
+		return "", fmt.Errorf("goal check script is not allowed by agent bash permission: %s", subject)
 	}
 
-	return goalCheckCommand{command: command.text, subject: subject}, nil
+	return command.text, nil
 }
 
 type parsedGoalCheckCommand struct {
