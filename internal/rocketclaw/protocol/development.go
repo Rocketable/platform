@@ -1,6 +1,6 @@
 package protocol
 
-// OverlayFile is one overlay file on the development-flow protocol.
+// OverlayFile is one overlay file used when staging a live runtime.
 type OverlayFile struct {
 	Path    string `json:"path"`
 	Content string `json:"content"`
@@ -28,19 +28,4 @@ type LintRequest struct {
 // LintResult is the overlay lint outcome.
 type LintResult struct {
 	Findings []LintFinding
-}
-
-// TryTurnRequest is one Development MCP try-turn.
-type TryTurnRequest struct {
-	Context        OverlayContext `json:"context"`
-	Agent          string         `json:"agent"`
-	Prompt         string         `json:"prompt"`
-	ConversationID string         `json:"conversation_id"`
-}
-
-// TryTurnResult is one Development MCP try-turn outcome.
-type TryTurnResult struct {
-	ConversationID string `json:"conversation_id"`
-	Thinking       string `json:"thinking"`
-	Answer         string `json:"answer"`
 }

@@ -27,10 +27,10 @@ func TestHandleAppMentionEventStartsUnmappedChannelWithAtFallback(t *testing.T) 
 	connector.botUserID = "U999"
 	connector.handleAppMentionEvent(context.Background(), newSlackAppMentionEvent(), slackNativeForward{})
 
-	started := router.startedSnapshot()
+	started := convTurns(connector)
 	require.Len(t, started, 1)
-	assert.Equal(t, "adhoc", started[0].agent)
-	assert.Equal(t, "please check this", started[0].inbound.Text)
+	assert.Equal(t, "adhoc", started[0].Agent)
+	assert.Equal(t, "please check this", started[0].Text)
 }
 
 func TestHandleAppMentionEventUnmappedRootAgentDoesNotSwitch(t *testing.T) {
@@ -47,10 +47,10 @@ func TestHandleAppMentionEventUnmappedRootAgentDoesNotSwitch(t *testing.T) {
 	ev.Text = "<@U999> $agent factory hello"
 	connector.handleAppMentionEvent(context.Background(), ev, slackNativeForward{})
 
-	started := router.startedSnapshot()
+	started := convTurns(connector)
 	require.Len(t, started, 1)
-	assert.Equal(t, "adhoc", started[0].agent)
-	assert.Equal(t, "$agent factory hello", started[0].inbound.Text)
+	assert.Equal(t, "adhoc", started[0].Agent)
+	assert.Equal(t, "$agent factory hello", started[0].Text)
 }
 
 func TestHandleAppMentionEventGroupDMUsesAtFallback(t *testing.T) {
@@ -67,9 +67,9 @@ func TestHandleAppMentionEventGroupDMUsesAtFallback(t *testing.T) {
 	ev.Channel = "G123"
 	connector.handleAppMentionEvent(context.Background(), ev, slackNativeForward{})
 
-	started := router.startedSnapshot()
+	started := convTurns(connector)
 	require.Len(t, started, 1)
-	assert.Equal(t, "adhoc", started[0].agent)
+	assert.Equal(t, "adhoc", started[0].Agent)
 }
 
 func TestHandleMessageEventAdoptsUnmanagedThreadWithHistory(t *testing.T) {
@@ -89,14 +89,15 @@ func TestHandleMessageEventAdoptsUnmanagedThreadWithHistory(t *testing.T) {
 	ev := newSlackMessageEvent("171234.9999", "171234.0001", "<@U999> jump in")
 	connector.handleMessageEvent(context.Background(), ev, slackNativeForward{})
 
-	started := router.startedSnapshot()
+	started := convTurns(connector)
 	require.Len(t, started, 1)
-	assert.Equal(t, "adhoc", started[0].agent)
-	assert.Equal(t, "171234.0001", started[0].threadTS)
-	assert.Contains(t, started[0].inbound.Text, "jump in")
-	assert.Contains(t, started[0].inbound.Text, "old")
-	assert.Contains(t, started[0].inbound.Text, "keep-1")
-	assert.Empty(t, router.repliesSnapshot())
+	assert.Equal(t, "adhoc", started[0].Agent)
+	_, threadTS, ok := protocol.SlackThreadTarget(started[0].ID)
+	require.True(t, ok)
+	assert.Equal(t, "171234.0001", threadTS)
+	assert.Contains(t, started[0].Text, "jump in")
+	assert.Contains(t, started[0].Text, "old")
+	assert.Contains(t, started[0].Text, "keep-1")
 }
 
 func TestHandleMessageEventAdoptsBareBotMention(t *testing.T) {
@@ -116,11 +117,11 @@ func TestHandleMessageEventAdoptsBareBotMention(t *testing.T) {
 	ev := newSlackMessageEvent("171234.9999", "171234.0001", "<@U999>")
 	connector.handleMessageEvent(context.Background(), ev, slackNativeForward{})
 
-	started := router.startedSnapshot()
+	started := convTurns(connector)
 	require.Len(t, started, 1)
-	assert.Equal(t, "triage", started[0].agent)
-	assert.Contains(t, started[0].inbound.Text, "parent")
-	assert.NotContains(t, started[0].inbound.Text, "<@U999>")
+	assert.Equal(t, "triage", started[0].Agent)
+	assert.Contains(t, started[0].Text, "parent")
+	assert.NotContains(t, started[0].Text, "<@U999>")
 }
 
 func TestHandleAppMentionEventIgnoresUnallowlistedAtHail(t *testing.T) {
@@ -135,7 +136,7 @@ func TestHandleAppMentionEventIgnoresUnallowlistedAtHail(t *testing.T) {
 	connector.botUserID = "U999"
 	connector.handleAppMentionEvent(context.Background(), newSlackAppMentionEvent(), slackNativeForward{})
 
-	assert.Empty(t, router.startedSnapshot())
+	assert.Empty(t, convTurns(connector))
 }
 
 func TestHandleAppMentionEventIgnoresDirectMessageWithAtRow(t *testing.T) {
@@ -148,7 +149,7 @@ func TestHandleAppMentionEventIgnoresDirectMessageWithAtRow(t *testing.T) {
 	ev.Channel = "D123"
 	connector.handleAppMentionEvent(context.Background(), ev, slackNativeForward{})
 
-	assert.Empty(t, router.startedSnapshot())
+	assert.Empty(t, convTurns(connector))
 }
 
 func TestHandleMessageEventAdoptHistoryFetchFailureStillStarts(t *testing.T) {
@@ -177,9 +178,9 @@ func TestHandleMessageEventAdoptHistoryFetchFailureStillStarts(t *testing.T) {
 	ev := newSlackMessageEvent("171234.9999", "171234.0001", "<@U999> jump in")
 	connector.handleMessageEvent(context.Background(), ev, slackNativeForward{})
 
-	started := router.startedSnapshot()
+	started := convTurns(connector)
 	require.Len(t, started, 1)
-	assert.Equal(t, "jump in", started[0].inbound.Text)
+	assert.Equal(t, "jump in", started[0].Text)
 }
 
 func TestHandleMessageEventAdoptHistoryKeepsNewestFifty(t *testing.T) {
@@ -204,15 +205,14 @@ func TestHandleMessageEventAdoptHistoryKeepsNewestFifty(t *testing.T) {
 	ev := newSlackMessageEvent("171234.9999", "171234.0000", "<@U999> jump in")
 	connector.handleMessageEvent(context.Background(), ev, slackNativeForward{})
 
-	started := router.startedSnapshot()
+	started := convTurns(connector)
 	require.Len(t, started, 1)
-	assert.NotContains(t, started[0].inbound.Text, "drop-me")
-	assert.Contains(t, started[0].inbound.Text, "keep")
+	assert.NotContains(t, started[0].Text, "drop-me")
+	assert.Contains(t, started[0].Text, "keep")
 }
 
 func TestHandleMessageEventAdoptStartErrorConsumesPlaceholder(t *testing.T) {
 	router := newThreadRouterStub()
-	router.errStart = assert.AnError
 
 	server := newAdhocSlackServer(t, "random", []map[string]any{{"ts": "171234.0001", "text": "parent"}})
 	defer server.Close()
@@ -220,11 +220,11 @@ func TestHandleMessageEventAdoptStartErrorConsumesPlaceholder(t *testing.T) {
 	connector := newTestConnectorWithOptions(server.URL, newTestBus(), []config.SlackChannelConfig{
 		{Channel: "@", Agents: []string{"adhoc"}, AllowedUserIDs: []string{"U123"}},
 	}, router, nil)
+	connector.conv = inertConversationBackend{}
 	connector.botUserID = "U999"
 	ev := newSlackMessageEvent("171234.9999", "171234.0001", "<@U999> jump in")
 	connector.handleMessageEvent(context.Background(), ev, slackNativeForward{})
 
-	require.Len(t, router.startedSnapshot(), 1)
 	connector.mu.Lock()
 	_, active := connector.stacks[slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "171234.0001"})]
 	connector.mu.Unlock()
@@ -245,7 +245,7 @@ func TestHandleAppMentionEventBareRootStillIgnored(t *testing.T) {
 	ev.Text = "<@U999>"
 	connector.handleAppMentionEvent(context.Background(), ev, slackNativeForward{})
 
-	assert.Empty(t, router.startedSnapshot())
+	assert.Empty(t, convTurns(connector))
 }
 
 func newAdhocSlackServer(t *testing.T, channelName string, replies []map[string]any) *httptest.Server {

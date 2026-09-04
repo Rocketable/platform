@@ -21,10 +21,10 @@ type Config struct {
 	WorkDir           string                     `json:"-"`
 	Overlays          []string                   `json:"overlays,omitempty"`
 	Models            map[string]string          `json:"models,omitempty"`
+	Users             map[string]string          `json:"users,omitempty"`
 	Environment       []string                   `json:"environment,omitempty"`
 	Logging           LoggingConfig              `json:"logging"`
 	MCPExternal       MCPExternalConfig          `json:"mcp_external"`
-	MCPDevelopment    MCPDevelopmentConfig       `json:"mcp_development"`
 	MCPServers        map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 	Slack             SlackConfig                `json:"slack"`
 	OpenAI            OpenAIConfig               `json:"openai"`
@@ -52,12 +52,6 @@ type LoggingConfig struct {
 
 // MCPExternalConfig configures the persistent external MCP HTTP server.
 type MCPExternalConfig struct {
-	Enabled    bool   `json:"enabled"`
-	ListenAddr string `json:"listen_addr"`
-}
-
-// MCPDevelopmentConfig configures the Development MCP HTTP server.
-type MCPDevelopmentConfig struct {
 	Enabled    bool   `json:"enabled"`
 	ListenAddr string `json:"listen_addr"`
 }
@@ -107,6 +101,18 @@ func (c *Config) Provider(name string) (OpenAIConfig, bool) {
 	provider, ok := c.Providers[name]
 
 	return provider, ok
+}
+
+// UsernameForIP reports the username bound to ip in Users. ok is false on a miss.
+func (c *Config) UsernameForIP(ip string) (string, bool) {
+	ip = strings.TrimPrefix(ip, "::ffff:")
+	for username, addr := range c.Users {
+		if strings.TrimPrefix(addr, "::ffff:") == ip {
+			return username, true
+		}
+	}
+
+	return "", false
 }
 
 // InstrumentationConfig configures OpenTelemetry/OpenInference tracing.
@@ -199,11 +205,6 @@ func loadConfigData(absPath string, data []byte, secretsARN string, fetcher Secr
 // LoadExternalMCPUsers reads the optional rocketclaw.users.json file next to configPath.
 func LoadExternalMCPUsers(configPath string) (map[string]string, error) {
 	return loadMCPUsersFile(configPath, "rocketclaw.users.json", "external MCP users file")
-}
-
-// LoadDevelopmentMCPUsers reads the optional rocketclaw.development.users.json file next to configPath.
-func LoadDevelopmentMCPUsers(configPath string) (map[string]string, error) {
-	return loadMCPUsersFile(configPath, "rocketclaw.development.users.json", "development MCP users file")
 }
 
 func loadMCPUsersFile(configPath, filename, label string) (map[string]string, error) {
@@ -306,10 +307,6 @@ func (c *Config) Validate() error {
 
 	if c.MCPExternal.Enabled && strings.TrimSpace(c.MCPExternal.ListenAddr) == "" {
 		return errors.New("mcp_external.listen_addr is required when mcp_external is enabled")
-	}
-
-	if c.MCPDevelopment.Enabled && strings.TrimSpace(c.MCPDevelopment.ListenAddr) == "" {
-		return errors.New("mcp_development.listen_addr is required when mcp_development is enabled")
 	}
 
 	if err := c.validateMCPServers(); err != nil {

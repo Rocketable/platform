@@ -15,15 +15,13 @@ import (
 func TestAssembleFrontendsReportsSlackStartError(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
-	refresh := func() error { return nil }
-	rt := &backend.Runtime{
-		Cfg:                      &config.Config{},
-		Log:                      slog.New(slog.DiscardHandler),
-		RunCtx:                   ctx,
-		Channels:                 protocol.NewChannels(),
-		RefreshExternalMCPAgents: &refresh,
-	}
-	_, _, _, err := processAssembler{}.Assemble(rt)
+
+	rt := backend.RuntimeFor()
+	rt.Cfg = &config.Config{}
+	rt.Log = slog.New(slog.DiscardHandler)
+	rt.RunCtx = ctx
+	rt.Channels = protocol.NewChannels()
+	_, err := processAssembler{}.Assemble(rt)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "start Slack connector")
 }

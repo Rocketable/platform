@@ -47,6 +47,15 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: Install cloc, jq, and ripgrep
-        run: sudo apt-get update && sudo apt-get install -y cloc jq ripgrep
+      - name: Install cloc, jq, ripgrep, and protoc
+        run: sudo apt-get update && sudo apt-get install -y cloc jq ripgrep protobuf-compiler
+      - name: Install protoc Go plugins
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+      - name: Install web dependencies
+        run: cd web && bun install
       - run: make test

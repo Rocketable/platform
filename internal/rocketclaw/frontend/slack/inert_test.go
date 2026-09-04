@@ -7,66 +7,61 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-type inertThreadRouter struct{}
+type inertConversationBackend struct{}
 
-func (inertThreadRouter) StartThread(_ context.Context, _ string, _ protocol.TextConversationTarget, _ *protocol.InboundMessage) error {
-	return errors.New("slack thread routing is not configured")
+func (inertConversationBackend) Subscribe(context.Context) <-chan protocol.ConversationEvent {
+	ch := make(chan protocol.ConversationEvent)
+	close(ch)
+
+	return ch
 }
-func (inertThreadRouter) StartGoalInThread(_ context.Context, _, _, _ string, _ int, _ protocol.TextConversationTarget, _ *protocol.InboundMessage) error {
-	return errors.New("slack thread routing is not configured")
+
+func (inertConversationBackend) CreateConversation(string, []string, []protocol.ConversationTag) error {
+	return protocol.ErrUnknownConversation
 }
-func (inertThreadRouter) StartWorkflowInThread(context.Context, string, string, string, protocol.TextConversationTarget, *protocol.InboundMessage) error {
-	return errors.New("slack thread routing is not configured")
+
+func (inertConversationBackend) RunTurn(context.Context, *protocol.TurnRequest) error {
+	return protocol.ErrUnknownConversation
 }
-func (inertThreadRouter) WorkflowDescriptions() ([]protocol.WorkflowDescription, error) {
-	return nil, errors.New("slack thread routing is not configured")
+
+func (inertConversationBackend) SyncConversation(context.Context, string, string) error {
+	return protocol.ErrUnknownConversation
 }
-func (inertThreadRouter) ReserveWorkflowTurn(protocol.TextConversationTarget) (release func(), reserved bool, err error) {
-	return func() {}, true, nil
-}
-func (inertThreadRouter) InterruptThread(target protocol.TextConversationTarget) (*protocol.InboundMessage, error) {
-	_ = target
+
+func (inertConversationBackend) ListConversations() ([]protocol.ConversationRecord, error) {
 	return nil, nil
 }
-func (inertThreadRouter) InterruptConversation(string) *protocol.InboundMessage {
-	return nil
-}
-func (inertThreadRouter) RegisterCronThread(_ context.Context, _ protocol.TextConversationTarget, _ string) error {
-	return nil
-}
-func (inertThreadRouter) RegisterThread(_ protocol.TextConversationTarget, _ string) (bool, error) {
-	return true, nil
+
+func (inertConversationBackend) ConversationAgent(string) (string, error) {
+	return "", protocol.ErrUnknownConversation
 }
 
-func (inertThreadRouter) SwitchThreadAgent(_ protocol.TextConversationTarget, _ string) (bool, error) {
-	return false, nil
+func (inertConversationBackend) SwitchAgent(string, string) error {
+	return protocol.ErrUnknownConversation
 }
-func (inertThreadRouter) ThreadAgent(_ protocol.TextConversationTarget) (agent string, handled bool, err error) {
-	return "", false, nil
+
+func (inertConversationBackend) ListLaterWork(context.Context, string) ([]protocol.ThreadQueueItem, error) {
+	return nil, nil
 }
-func (inertThreadRouter) SubmitThreadReply(_ context.Context, _ protocol.TextConversationTarget, _ *protocol.InboundMessage) (bool, error) {
-	return false, nil
+
+func (inertConversationBackend) DeleteLaterWork(context.Context, string, string) error {
+	return nil
 }
-func (inertThreadRouter) SubmitWhenActive(_ context.Context, _ protocol.TextConversationTarget, _ *protocol.InboundMessage, _ protocol.ActivationHook) (bool, error) {
-	return false, nil
+
+func (inertConversationBackend) ReorderLaterWork(context.Context, string, []string) error {
+	return nil
 }
-func (inertThreadRouter) StashThreadQueueItem(context.Context, protocol.TextConversationTarget, *protocol.ThreadQueueItem) error {
-	return errors.New("slack thread routing is not configured")
-}
-func (inertThreadRouter) ThreadQueueItems(context.Context, protocol.TextConversationTarget) ([]protocol.ThreadQueueItem, error) {
-	return nil, errors.New("slack thread routing is not configured")
-}
-func (inertThreadRouter) DeleteThreadQueueItem(context.Context, protocol.TextConversationTarget, string) error {
-	return errors.New("slack thread routing is not configured")
-}
-func (inertThreadRouter) ScheduledMessages(context.Context, protocol.TextConversationTarget) (map[string]protocol.ScheduledMessageState, error) {
-	return nil, errors.New("slack thread routing is not configured")
-}
-func (inertThreadRouter) ThreadBusy(protocol.TextConversationTarget) bool {
+
+func (inertConversationBackend) ConversationBusy(string) bool {
 	return false
 }
-func (inertThreadRouter) PickQueuedWork(context.Context, protocol.TextConversationTarget) error {
-	return nil
+
+func (inertConversationBackend) ScheduledMessages(string) (map[string]protocol.ScheduledMessageState, error) {
+	return nil, errors.New("scheduled messages are not configured")
+}
+
+func (inertConversationBackend) WorkflowDescriptions() ([]protocol.WorkflowDescription, error) {
+	return nil, errors.New("workflows are not configured")
 }
 
 type inertOneOffCronjobs struct{}
@@ -79,7 +74,7 @@ func (inertOneOffCronjobs) ListCronjobs(string) ([]string, error) {
 	return nil, errors.New("on-demand cronjobs are not configured")
 }
 
-func (inertOneOffCronjobs) RunOneOffCronjob(ctx context.Context, _ protocol.OneOffCronjob, _ *protocol.CronProgress, finish func(context.Context, protocol.CronRunResult, error)) {
+func (inertOneOffCronjobs) RunOneOffCronjob(ctx context.Context, _ *protocol.OneOffCronjob, _ *protocol.CronProgress, finish func(context.Context, protocol.CronRunResult, error)) {
 	finish(ctx, protocol.CronRunResult{}, errors.New("on-demand cronjobs are not configured"))
 }
 

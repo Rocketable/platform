@@ -119,14 +119,19 @@ type Config struct {
 	EnqueueActivation                                                                        EnqueueActivation
 }
 
+type scheduledArmer interface {
+	armScheduledOn(conversationID, id string, message *protocol.ScheduledMessageState) error
+}
+
 // Bridge forwards rocketclaw messages into one turn-lived rocketcode run per turn.
 type Bridge struct {
-	log       *slog.Logger
-	config    Config
-	runtime   *config.Config
-	bus       protocol.OutboundPublisher
-	requestCh chan bridgeRequest
-	stopCh    chan struct{}
+	log            *slog.Logger
+	config         Config
+	runtime        *config.Config
+	bus            protocol.OutboundPublisher
+	requestCh      chan bridgeRequest
+	stopCh         chan struct{}
+	scheduledArmer scheduledArmer
 
 	mu                    sync.Mutex
 	handling, stopped     bool
@@ -289,11 +294,12 @@ func (b *Bridge) SwitchAgent(agent string) {
 	b.mu.Unlock()
 }
 
-// ScheduleMessage schedules one delayed prompt for this conversation.
+// ScheduleMessage schedules one delayed prompt on the user-facing conversation.
 func (b *Bridge) ScheduleMessage(delay time.Duration, message string, recurring bool) error {
 	id := rand.Text()
+	target := b.userFacingConversationID()
 
-	scheduled := protocol.ScheduledMessageState{ConversationID: b.config.ConversationID, Agent: b.agentSnapshot(), Message: message, DueAt: time.Now().UTC().Add(delay), Recurring: recurring}
+	scheduled := protocol.ScheduledMessageState{ConversationID: target, Agent: b.agentSnapshot(), Message: message, DueAt: time.Now().UTC().Add(delay), Recurring: recurring}
 	if recurring {
 		scheduled.Interval = delay
 	}
@@ -304,14 +310,23 @@ func (b *Bridge) ScheduleMessage(delay time.Duration, message string, recurring 
 	}
 
 	b.log.Info("scheduled message persisted", "scheduled_message_id", id, "conversation_id", scheduled.ConversationID, "agent", scheduled.Agent, "due_at", scheduled.DueAt, "delay_ms", delay.Milliseconds(), "recurring", recurring, "interval_ms", scheduled.Interval.Milliseconds(), "message_len", len([]rune(message)))
-	b.armScheduledMessage(id, &scheduled)
+
+	if target == b.config.ConversationID {
+		b.armScheduledMessage(id, &scheduled)
+
+		return nil
+	}
+
+	if err := b.scheduledArmer.armScheduledOn(target, id, &scheduled); err != nil {
+		return fmt.Errorf("arm scheduled message: %w", err)
+	}
 
 	return nil
 }
 
 // ResetScheduledMessages deletes pending scheduled prompts for this conversation.
 func (b *Bridge) ResetScheduledMessages() error {
-	if err := b.config.SessionService.ResetScheduledMessages(b.config.ConversationID); err != nil {
+	if err := b.config.SessionService.ResetScheduledMessages(b.userFacingConversationID()); err != nil {
 		return fmt.Errorf("reset scheduled messages: %w", err)
 	}
 
@@ -400,6 +415,22 @@ func (b *Bridge) InterruptActiveTurn() *protocol.InboundMessage {
 // PickLaterWork submits the R16 winner after a turn ends, or when a due timer fires on an idle thread.
 func (b *Bridge) PickLaterWork(ctx context.Context) error {
 	return b.pickLaterWork(ctx, false)
+}
+
+// Handling reports whether this bridge is running a turn.
+func (b *Bridge) Handling() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.handling
+}
+
+func (b *Bridge) userFacingConversationID() string {
+	if id := strings.TrimSpace(b.config.ManagedConversationID); id != "" {
+		return id
+	}
+
+	return b.config.ConversationID
 }
 
 func (b *Bridge) armPendingScheduledMessages() error {
@@ -647,11 +678,9 @@ func (b *Bridge) submitEnqueuedItem(ctx context.Context, item *protocol.ThreadQu
 		inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: channelID, MessageTS: messageTS, ThreadTS: threadTS}
 	}
 
-	activation := func(ctx context.Context, inbound *protocol.InboundMessage) error {
+	return b.enqueue(ctx, bridgeRequest{inbound: inbound, queueItemID: item.ID, activation: func(ctx context.Context, inbound *protocol.InboundMessage) error {
 		return b.config.EnqueueActivation.Activate(ctx, item, inbound)
-	}
-
-	return b.enqueue(ctx, bridgeRequest{inbound: inbound, queueItemID: item.ID, activation: activation}, "submit enqueued message")
+	}}, "submit enqueued message")
 }
 
 func (b *Bridge) submitDueScheduled(ctx context.Context, id string, armed *protocol.ScheduledMessageState, now time.Time) error {
@@ -823,6 +852,14 @@ func (b *Bridge) handleInbound(ctx context.Context, msg *protocol.InboundMessage
 	normalizeInboundAttachments(msg)
 
 	b.log.Info("starting rocketcode turn", "conversation_id", b.config.ConversationID, "turn_id", turnID, "source", msg.Source, "kind", msg.Kind, "label", msg.Label, "text_len", len([]rune(msg.Text)), "attachment_count", len(msg.Attachments), "slack_channel", slackChannel, "slack_message_ts", slackMessageTS, "slack_thread_ts", slackThreadTS)
+
+	if msg.Kind != protocol.InboundKindInternalize {
+		if err := b.publishOriginator(ctx, msg.Text); err != nil {
+			msg.CompleteResponse("", err)
+
+			return err
+		}
+	}
 
 	defer func() {
 		b.log.Info("finished rocketcode turn", "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(started).Milliseconds(), "text_len", len([]rune(result.text)), "thinking_len", len([]rune(result.thinking)), "session_entry_id", result.sessionEntryID, "error", errLog)
@@ -1356,7 +1393,16 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		return runResult{}, fmt.Errorf("prepare rocketcode turn: %w", err)
 	}
 
-	looper.SteerDrain = b.config.SteerDrain
+	looper.SteerDrain = rocketcode.SteerDrain{Fn: func(ctx context.Context, phase rocketcode.TurnPhase) []string {
+		texts := b.config.SteerDrain.Drain(ctx, phase)
+		for _, text := range texts {
+			if err := b.publishOriginator(ctx, text); err != nil {
+				b.log.Error("publish steer originator", "error", err)
+			}
+		}
+
+		return texts
+	}}
 	recoveredDisplayModel = looper.DisplayModel
 	sessionIn = sessionEntriesForProvider(sessionIn, providerForModel(looper.DisplayModel))
 
@@ -2492,7 +2538,31 @@ func askUserQuestionTool(asker protocol.UserQuestionAsker, msg *protocol.Inbound
 			req.SlackReply = &protocol.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS, RecipientTeamID: msg.SlackReply.RecipientTeamID, RecipientUserID: msg.SlackReply.RecipientUserID}
 		}
 
-		answer, err := asker.AskUserQuestion(ctx, &req)
+		var (
+			answer protocol.AskUserQuestionAnswer
+			err    error
+		)
+
+		if msg.Response != nil {
+			answerCh := make(chan protocol.AskUserQuestionAnswer, 1)
+
+			errCh := make(chan error, 1)
+			select {
+			case msg.Response <- protocol.Response{Payload: protocol.AskUserQuestionResponse{Request: &req, Answer: answerCh, Err: errCh}}:
+			case <-ctx.Done():
+				return rocketcode.ToolResult{}, fmt.Errorf("ask user question: %w", ctx.Err())
+			}
+
+			select {
+			case answer = <-answerCh:
+			case err = <-errCh:
+			case <-ctx.Done():
+				return rocketcode.ToolResult{}, fmt.Errorf("ask user question: %w", ctx.Err())
+			}
+		} else {
+			answer, err = asker.AskUserQuestion(ctx, &req)
+		}
+
 		if err != nil {
 			return rocketcode.ToolResult{}, fmt.Errorf("ask user question: %w", err)
 		}
@@ -2670,6 +2740,22 @@ func (b *Bridge) armScheduledMessage(id string, message *protocol.ScheduledMessa
 			b.log.Error("scheduled message enqueue failed", "scheduled_message_id", id, "conversation_id", armed.ConversationID, "error", err)
 		}
 	})
+}
+
+func (b *Bridge) publishOriginator(ctx context.Context, text string) error {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+
+	outbound := protocol.NewOutboundMessage(protocol.SourceSystem, b.config.ConversationID, text, protocol.OutputTargetWeb)
+	outbound.Originator = true
+
+	if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
+		return fmt.Errorf("publish originator: %w", err)
+	}
+
+	return nil
 }
 
 func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID string, sequence int, text, thinking string, complete bool) *protocol.OutboundMessage {
@@ -2891,6 +2977,8 @@ func provenanceFromInbound(msg *protocol.InboundMessage) promptProvenance {
 	switch msg.Source {
 	case protocol.SourceSlack:
 		origin = "Slack"
+	case protocol.SourceWeb:
+		origin = "Web"
 	case protocol.SourceExternalMCP:
 		origin = "ExternalMCP"
 	case protocol.SourceSystem:
@@ -2898,7 +2986,7 @@ func provenanceFromInbound(msg *protocol.InboundMessage) promptProvenance {
 	}
 
 	provenance := promptProvenance{origin: origin, media: "Text"}
-	if origin := canonicalOverride(msg.Metadata[protocol.InboundOriginMetadataKey], "Slack", "Cron", "ExternalMCP", "System"); origin != "" {
+	if origin := canonicalOverride(msg.Metadata[protocol.InboundOriginMetadataKey], "Slack", "Cron", "ExternalMCP", "System", "Web"); origin != "" {
 		provenance.origin = origin
 	}
 

@@ -66,10 +66,22 @@ func TestBroadcastPublisherSkipsUnaddressedOutput(t *testing.T) {
 	}
 }
 
+func TestBroadcastPublisherSendsWebTargetedOutput(t *testing.T) {
+	broadcasts := make(chan Broadcast, 1)
+	message := NewOutboundMessage(SourceWeb, WebSessionConversationID("ops"), "reply", OutputTargetWeb)
+
+	require.NoError(t, BroadcastPublisher(broadcasts).PublishOutbound(t.Context(), message))
+
+	broadcast := <-broadcasts
+	require.Equal(t, BridgeWeb, broadcast.Sender)
+	require.Same(t, message, broadcast.Delivery)
+}
+
 func TestBroadcastCloneDeepCopiesDeliveryData(t *testing.T) {
 	workflowAgent := AgentUpdate{Activity: "working"}
 	workflowPhase := PhaseUpdate{Details: "phase details"}
 	message := NewOutboundMessage(SourceSlack, "conversation", "reply")
+	message.Originator = true
 	message.Targets = []OutputTarget{OutputTargetSlack}
 	message.SlackReply = &SlackReplyTarget{ChannelID: "C1", ThreadTS: "1.2"}
 	message.Cronjob = &CronjobMessage{RelativePath: "job.md"}
@@ -95,6 +107,7 @@ func TestBroadcastCloneDeepCopiesDeliveryData(t *testing.T) {
 	require.NotSame(t, original.Relay, clone.Relay)
 	require.NotSame(t, &original.Relay.Attachments[0].Data[0], &clone.Relay.Attachments[0].Data[0])
 	require.Equal(t, "#ops", clone.RelayChannel)
+	require.True(t, clone.Message.Originator)
 
 	clone.Message.Targets[0] = "changed"
 	clone.Message.SlackReply.ThreadTS = "changed"

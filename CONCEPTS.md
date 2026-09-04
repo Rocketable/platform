@@ -34,7 +34,7 @@ A Slack Steer is marked with hourglass until injection. It does not create think
 
 ### Enqueued Slack Message
 
-A later-turn prompt stashed on a Managed Slack Thread via `$enqueue`, via External MCP `session_prompt` while that paired thread has an active turn, or via a human reply while an on-demand `$cron` is still running on that thread. A `$cron` follow-up is not a Slack Steer and does not start a turn until the one-off finishes.
+A later-turn prompt stashed on a Managed Slack Thread via `$enqueue`, or via External MCP `session_prompt` while that paired thread has an active turn.
 
 A Slack `$enqueue` is marked with envelope until it is popped. An External MCP stash has no in-thread envelope; it is visible in `$queue` until pop. Pop posts an incoming-envelope Slack Blocks card, then reserves thinking and answer placeholders. Enqueued Slack Messages persist across restart and run as separate turns.
 
@@ -86,17 +86,13 @@ Each connector chooses the string. The backend prints it in the model header. Pr
 
 ### Development MCP
 
-A separate inbound MCP frontend for a coding agent to try overlay deltas against the live RocketClaw without writing those files onto the server.
-
-It is off until enabled, uses its own credential, and is not External MCP. After the operator publishes through git, reload or restart picks up the published tree.
-
-The same door also lists, observes, and deletes durable stored conversations (Slack, exec, External MCP). That inspect/delete path is a second job of Development MCP, not External MCP, and does not include in-memory try-turn chats.
+Removed from the served product. A later redesign may replace overlay try-turn. Reload and Restart remain model tools under existing permissioning, not a Development MCP door.
 
 ### Request-Carried Context
 
-The overlay snapshot a Development MCP lint or run_turn call sends: an optional named base overlay plus file deltas for this call only.
+An overlay snapshot scoped to one call: an optional named base overlay plus file deltas for that call only. The Development MCP lint/run_turn door is removed; this is not a live door.
 
-The server does not remember it after the call returns. Conversation ID carries chat history only. A follow-up turn must send context again.
+The server does not remember it after the call returns. Conversation ID carries chat history only.
 
 ### Overlay Clone
 
@@ -162,11 +158,19 @@ A RocketCode Turn is not the active-turn slot on a Managed Slack Thread. Slack o
 
 ### Backend
 
-The one RocketClaw engine: conversation execution, later-work, cron, skills, agent definitions, overlay clones, try-turn, Reload, and Restart.
+The one RocketClaw engine: conversations, turns, later-work, skills, and agent definitions. Frontends subscribe to its event bus, create conversations, run turns, sync history, and list conversations. It does not name Slack, Web, External MCP, or Cron.
 
 ### Frontend
 
-A surface the process assembler constructs: Slack, External MCP, or Development MCP. Frontends never import the backend.
+A surface the process assembler constructs: Slack, External MCP, Cron, or the web RPC door. Cron has no user-facing UI; it loads job files, runs the clock, and dispatches turns. Each `$cron` or scheduled fire mints a new pair; it does not occupy the invoking thread. Each Frontend reads the event bus and drops what it does not handle. The backend does not hold Slack.
+
+### Web Home
+
+The standalone TypeScript UI process. Browsers talk tRPC to it. It is not a Frontend. TypeScript does not read `femtoclaw.json`. Go RPC maps the browser IP through config `users` (`UsernameForIP`) and fails closed. Principal is the username Go resolved.
+
+### Web Session
+
+A durable conversation a human continues on Web Home. Conversation ids are Frontend-minted and shared. Occupancy, Slack Steer, and Enqueued Slack Message rules match a Managed Slack Thread when the conversation is tagged user-facing.
 
 ### Protocol
 
@@ -188,10 +192,11 @@ The State Store is PostgreSQL.
 - A Slack Steer belongs to one active Managed Slack Thread and is injected into that turn after the current parallel tool batch completes.
 - An Enqueued Slack Message belongs to one Managed Slack Thread's Thread Queue until it is popped, removed, or consumed by an explicit failure path.
 - A Slack Side Ask is opened from a completed 💬 answer card in a Managed Slack Thread and does not become that thread's turn.
+- The Web Home talks to the web RPC Frontend. Conversations tagged user-facing are rendered by Slack and Web.
 - A BAR is authored, packed, run, and ranked by Quickbench; an ELO Scorer belongs to one BAR.
-- A Managed Slack Thread, Thread Queue, and External MCP binding persist in the State Store.
-- Development MCP lint and run_turn consume Request-Carried Context and read Overlay Clones; Reload replaces those clones.
-- Frontends and the backend import Protocol. Frontends do not import the backend.
+- A Managed Slack Thread, Thread Queue, and External MCP pairing persist in the State Store.
+- Cron is a Frontend. It produces conversations other Frontends display. Each `$cron` or scheduled fire mints a new pair and does not occupy the invoking thread.
+- Frontends and the backend import Protocol. Slack does not import Runtime. The backend does not hold Slack.
 - The process assembler constructs the backend and the frontends.
 - A turn uses the Autocompaction Threshold of the Provider that serves its model.
 - Code Mode exposes Execute and Host Tools; an oversized Execute result becomes a Spill owned by that RocketCode Turn.

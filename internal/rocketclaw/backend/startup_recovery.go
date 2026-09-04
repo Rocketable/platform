@@ -123,6 +123,12 @@ type startupSteerSurface interface {
 	DiscardPendingSteers(context.Context, []protocol.PendingSteer)
 }
 
+type inertSteerSurface struct{}
+
+func (inertSteerSurface) RestorePendingSteers(string, []protocol.PendingSteer) {}
+
+func (inertSteerSurface) DiscardPendingSteers(context.Context, []protocol.PendingSteer) {}
+
 func applyStartupSteerRecovery(ctx context.Context, slack startupSteerSurface, pick func(context.Context, string) error, recovered []ActiveTurnState, cannotResume []cannotResumeItem) error {
 	for i := range recovered {
 		slack.RestorePendingSteers(recovered[i].Checkpoint.ConversationKey, recovered[i].PendingSteers)

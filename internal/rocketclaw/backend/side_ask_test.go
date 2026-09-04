@@ -2,252 +2,227 @@ package backend
 
 import (
 	"context"
-	"encoding/json"
-	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
-	"io"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 
-	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Rocketable/platform/internal/rocketclaw/frontend"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
-func TestSideAskHistoryStopsAtClickedCard(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPlanner prompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-	service := newTestSessionServiceAt(t, workspace)
-	conversationID := "slack-thread:C123:111.222"
-	id1, err := service.AppendEntryID(t.Context(), conversationID, testSessionEntry("card-one-user", "card-one-assistant"))
+func TestSideAskDoesNotTakeSourceOccupancy(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		yID := protocol.SlackThreadConversationID("C123", "111.222")
+		y := newBlockingTurnBridge()
+		rt := testSideAskRuntime(t, func(cfg Config) directBridge {
+			if cfg.ConversationID == yID {
+				return y
+			}
+
+			return new(completingTurnBridge)
+		})
+		require.NoError(t, rt.CreateConversation(yID, []string{"planner"}, nil))
+
+		yDone := make(chan error, 1)
+		go func() {
+			yDone <- rt.RunTurn(t.Context(), &protocol.TurnRequest{ID: yID, Kind: protocol.TurnPrompt, Text: "busy"})
+		}()
+
+		<-y.started
+		synctest.Wait()
+
+		require.NoError(t, (frontend.SideAsk{Backend: rt}).Run(t.Context(), protocol.SideAskRequest{
+			ConversationID: yID,
+			Agent:          "planner",
+			Question:       "What broke?",
+			Thinking:       sideAskNoop,
+			Message:        sideAskNoop,
+		}))
+
+		require.True(t, y.Handling())
+		require.False(t, rt.threads.conversationBusy(createdSideAskID(t, rt, yID)))
+
+		y.complete()
+		synctest.Wait()
+		require.NoError(t, <-yDone)
+	})
+}
+
+func TestSideAskCancelEndsSOnly(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		yID := protocol.SlackThreadConversationID("C123", "111.222")
+		y := newBlockingTurnBridge()
+
+		var mu sync.Mutex
+
+		bridges := map[string]*blockingTurnBridge{yID: y}
+		rt := testSideAskRuntime(t, func(cfg Config) directBridge {
+			mu.Lock()
+			defer mu.Unlock()
+
+			if b := bridges[cfg.ConversationID]; b != nil {
+				return b
+			}
+
+			b := newBlockingTurnBridge()
+			bridges[cfg.ConversationID] = b
+
+			return b
+		})
+		require.NoError(t, rt.CreateConversation(yID, []string{"planner"}, nil))
+
+		yDone := make(chan error, 1)
+		go func() {
+			yDone <- rt.RunTurn(t.Context(), &protocol.TurnRequest{ID: yID, Kind: protocol.TurnPrompt, Text: "busy"})
+		}()
+
+		<-y.started
+		synctest.Wait()
+
+		askCtx, askCancel := context.WithCancel(t.Context())
+
+		askDone := make(chan error, 1)
+		go func() {
+			askDone <- (frontend.SideAsk{Backend: rt}).Run(askCtx, protocol.SideAskRequest{
+				ConversationID: yID,
+				Agent:          "planner",
+				Question:       "What broke?",
+				Thinking:       sideAskNoop,
+				Message:        sideAskNoop,
+			})
+		}()
+
+		synctest.Wait()
+
+		sID := createdSideAskID(t, rt, yID)
+
+		mu.Lock()
+		sBridge := bridges[sID]
+		mu.Unlock()
+		require.NotNil(t, sBridge)
+		<-sBridge.started
+		synctest.Wait()
+
+		askCancel()
+		synctest.Wait()
+		require.ErrorIs(t, <-askDone, context.Canceled)
+		require.True(t, y.Handling())
+		require.False(t, sBridge.Handling())
+
+		y.complete()
+		synctest.Wait()
+		require.NoError(t, <-yDone)
+	})
+}
+
+func TestSideAskSyncCopiesFullHistory(t *testing.T) {
+	yID := protocol.SlackThreadConversationID("C123", "111.222")
+	rt := testSideAskRuntime(t, func(Config) directBridge { return new(completingTurnBridge) })
+	require.NoError(t, rt.CreateConversation(yID, []string{"planner"}, nil))
+	id1, err := rt.Sessions.AppendEntryID(t.Context(), yID, testSessionEntry("card-one-user", "card-one-assistant"))
 	require.NoError(t, err)
-	_, err = service.AppendEntryID(t.Context(), conversationID, testSessionEntry("card-two-user", "card-two-assistant"))
+	_, err = rt.Sessions.AppendEntryID(t.Context(), yID, testSessionEntry("card-two-user", "card-two-assistant"))
 	require.NoError(t, err)
-	before, err := service.ObserveEntries(t.Context(), conversationID, 0)
+	before, err := rt.Sessions.ObserveEntries(t.Context(), yID, 0)
 	require.NoError(t, err)
 
-	var requestBody string
-
-	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/responses" {
-			http.NotFound(w, r)
-			return
-		}
-
-		requests++
-
-		body, errRead := io.ReadAll(r.Body)
-		if !assert.NoError(t, errRead) {
-			http.Error(w, errRead.Error(), http.StatusBadRequest)
-			return
-		}
-
-		if requests == 1 {
-			requestBody = string(body)
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		writeRawRunMessage(t, w, "resp-1", "message", "private side ask answer")
-	}))
-	t.Cleanup(server.Close)
-
-	runner := &SideAskRunner{Config: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, Sessions: service, Logger: slog.New(slog.DiscardHandler)}
-	require.NoError(t, runner.Run(t.Context(), protocol.SideAskRequest{
-		ConversationID: conversationID,
+	require.NoError(t, (frontend.SideAsk{Backend: rt}).Run(t.Context(), protocol.SideAskRequest{
+		ConversationID: yID,
 		SessionEntryID: id1,
 		Agent:          "planner",
 		Question:       "What broke?",
-		Thinking:       func(context.Context, string) error { return nil },
-		Message:        func(context.Context, string) error { return nil },
+		Thinking:       sideAskNoop,
+		Message:        sideAskNoop,
 	}))
 
-	assert.Contains(t, requestBody, "card-one-user")
-	assert.Contains(t, requestBody, "card-one-assistant")
-	assert.NotContains(t, requestBody, "card-two-user")
-	assert.NotContains(t, requestBody, "card-two-assistant")
-	assert.Contains(t, requestBody, "What broke?")
-	after, err := service.ObserveEntries(t.Context(), conversationID, 0)
+	sID := createdSideAskID(t, rt, yID)
+	copied, err := rt.Sessions.ObserveEntries(t.Context(), sID, 0)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(copied), 2)
+	assert.Contains(t, sessionEntryTexts(copied), "card-one-user")
+	assert.Contains(t, sessionEntryTexts(copied), "card-two-user")
+
+	after, err := rt.Sessions.ObserveEntries(t.Context(), yID, 0)
 	require.NoError(t, err)
 	require.Len(t, after, len(before))
 
-	for i := range before {
-		assert.Equal(t, before[i].ID, after[i].ID)
-		assert.Equal(t, before[i].Entry.ReplayInput, after[i].Entry.ReplayInput)
+	listed, err := rt.ListConversations()
+	require.NoError(t, err)
+
+	for _, rec := range listed {
+		if rec.ID == sID {
+			assert.NotContains(t, rec.Tags, protocol.ConversationUserFacing)
+		}
 	}
-
-	turns, err := service.RecoverableActiveTurns(t.Context())
-	require.NoError(t, err)
-
-	for _, turn := range turns {
-		assert.False(t, strings.HasPrefix(turn.Checkpoint.ConversationKey, "slack-thread:"))
-	}
-}
-
-func TestSideAskStripsThreadMutatingToolsAndUsesOwnTemp(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  rocketclaw:\n    rocketclaw_restart: allow\n    rocketclaw_schedule_message: allow\n---\nPrompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-	service := newTestSessionServiceAt(t, workspace)
-	conversationID := "slack-thread:C123:111.222"
-	id, err := service.AppendEntryID(t.Context(), conversationID, testSessionEntry("prior-user", "prior-assistant"))
-	require.NoError(t, err)
-
-	var (
-		mu        sync.Mutex
-		toolNames []string
-	)
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/responses" {
-			http.NotFound(w, r)
-			return
-		}
-
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); !assert.NoError(t, err) {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		data, err := json.Marshal(body["tools"])
-		if !assert.NoError(t, err) {
-			http.Error(w, "encode tools", http.StatusInternalServerError)
-			return
-		}
-
-		var tools []struct {
-			Name string `json:"name"`
-		}
-		if !assert.NoError(t, json.Unmarshal(data, &tools)) {
-			http.Error(w, "decode tools", http.StatusInternalServerError)
-			return
-		}
-
-		mu.Lock()
-		for _, tool := range tools {
-			toolNames = append(toolNames, tool.Name)
-		}
-		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		writeRawRunMessage(t, w, "resp-1", "message", "ok")
-	}))
-	t.Cleanup(server.Close)
-
-	runner := &SideAskRunner{Config: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, Sessions: service, Logger: slog.New(slog.DiscardHandler)}
-	require.NoError(t, runner.Run(t.Context(), protocol.SideAskRequest{
-		ConversationID: conversationID,
-		SessionEntryID: id,
-		Agent:          "main",
-		Question:       "status?",
-		Thinking:       func(context.Context, string) error { return nil },
-		Message:        func(context.Context, string) error { return nil },
-	}))
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	assert.NotContains(t, toolNames, scheduleMessageToolName)
-	assert.NotContains(t, toolNames, resetScheduledMessagesToolName)
-	assert.NotContains(t, toolNames, updateGoalToolName)
-	assert.NotContains(t, toolNames, askUserQuestionToolName)
-	assert.NotContains(t, toolNames, startNewThreadToolName)
-	assert.NotContains(t, toolNames, restartToolName)
-	assert.NotContains(t, toolNames, rawRunToolName)
-	assert.NoDirExists(t, filepath.Join(workspace, rocketcodeShellTempRel(".rocketclaw", conversationID)))
-}
-
-func TestSideAskHonorsCancel(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPrompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-	service := newTestSessionServiceAt(t, workspace)
-	conversationID := "slack-thread:C123:111.222"
-	id, err := service.AppendEntryID(t.Context(), conversationID, testSessionEntry("prior-user", "prior-assistant"))
-	require.NoError(t, err)
-
-	started := make(chan struct{})
-	release := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/responses" {
-			http.NotFound(w, r)
-			return
-		}
-
-		close(started)
-		<-release
-		http.Error(w, "canceled", http.StatusInternalServerError)
-	}))
-	t.Cleanup(server.Close)
-
-	ctx, cancel := context.WithCancel(t.Context())
-	runner := &SideAskRunner{Config: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, Sessions: service, Logger: slog.New(slog.DiscardHandler)}
-
-	done := make(chan error, 1)
-	go func() {
-		done <- runner.Run(ctx, protocol.SideAskRequest{
-			ConversationID: conversationID,
-			SessionEntryID: id,
-			Agent:          "main",
-			Question:       "status?",
-			Thinking:       func(context.Context, string) error { return nil },
-			Message:        func(context.Context, string) error { return nil },
-		})
-	}()
-
-	<-started
-	cancel()
-	close(release)
-	require.ErrorIs(t, <-done, context.Canceled)
 }
 
 func TestSideAskUsesChosenAgentIdentity(t *testing.T) {
-	workspace := t.TempDir()
-	writeAgent(t, workspace, "social", "---\ndescription: Social\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nSocial prompt\n")
-	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-5.5\npermission: {}\n---\nPlanner prompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
-	service := newTestSessionServiceAt(t, workspace)
-	conversationID := "slack-thread:C123:111.222"
-	id, err := service.AppendEntryID(t.Context(), conversationID, testSessionEntry("prior-user", "prior-assistant"))
+	yID := protocol.SlackThreadConversationID("C123", "111.222")
+	rt := testSideAskRuntime(t, func(Config) directBridge { return new(completingTurnBridge) })
+	require.NoError(t, rt.CreateConversation(yID, []string{"social"}, nil))
+	_, err := rt.Sessions.AppendEntryID(t.Context(), yID, testSessionEntry("prior-user", "prior-assistant"))
 	require.NoError(t, err)
 
-	var prompt string
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/responses" {
-			http.NotFound(w, r)
-			return
-		}
-
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); !assert.NoError(t, err) {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		instructions, _ := body["instructions"].(string)
-		prompt = instructions
-
-		w.Header().Set("Content-Type", "application/json")
-		writeRawRunMessage(t, w, "resp-1", "message", "ok")
-	}))
-	t.Cleanup(server.Close)
-
-	runner := &SideAskRunner{Config: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, Sessions: service, Logger: slog.New(slog.DiscardHandler)}
-	require.NoError(t, runner.Run(t.Context(), protocol.SideAskRequest{
-		ConversationID: conversationID,
-		SessionEntryID: id,
+	require.NoError(t, (frontend.SideAsk{Backend: rt}).Run(t.Context(), protocol.SideAskRequest{
+		ConversationID: yID,
 		Agent:          "planner",
 		Question:       "status?",
-		Thinking:       func(context.Context, string) error { return nil },
-		Message:        func(context.Context, string) error { return nil },
+		Thinking:       sideAskNoop,
+		Message:        sideAskNoop,
 	}))
-	assert.Contains(t, prompt, "Planner prompt")
-	assert.NotContains(t, prompt, "Social prompt")
+
+	sID := createdSideAskID(t, rt, yID)
+	agent, err := rt.ConversationAgent(sID)
+	require.NoError(t, err)
+	assert.Equal(t, "planner", agent)
+
+	yAgent, err := rt.ConversationAgent(yID)
+	require.NoError(t, err)
+	assert.Equal(t, "social", yAgent)
 }
+
+func testSideAskRuntime(t *testing.T, factory func(Config) directBridge) *Runtime {
+	t.Helper()
+
+	store := newWorkspaceSessionService(t)
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), factory)
+
+	return &Runtime{Sessions: store, threads: manager, Channels: protocol.NewChannels()}
+}
+
+func createdSideAskID(t *testing.T, rt *Runtime, source string) string {
+	t.Helper()
+
+	listed, err := rt.ListConversations()
+	require.NoError(t, err)
+
+	for _, rec := range listed {
+		if rec.ID != source && strings.HasPrefix(rec.ID, "side-ask:") {
+			return rec.ID
+		}
+	}
+
+	t.Fatal("side ask conversation not listed")
+
+	return ""
+}
+
+func sessionEntryTexts(entries []ObservedSessionEntry) string {
+	var b strings.Builder
+
+	for i := range entries {
+		for _, raw := range entries[i].Entry.ReplayInput {
+			b.Write(raw)
+			b.WriteByte('\n')
+		}
+	}
+
+	return b.String()
+}
+
+func sideAskNoop(context.Context, string) error { return nil }

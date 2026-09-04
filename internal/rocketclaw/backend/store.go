@@ -43,15 +43,21 @@ const (
 
 // ThreadState is the persisted state for one text-thread bridge.
 type ThreadState struct {
-	Agent     string        `json:"agent,omitempty"`
-	CreatedBy ThreadCreator `json:"created_by,omitempty"`
+	Agent           string        `json:"agent,omitempty"`
+	CreatedBy       ThreadCreator `json:"created_by,omitempty"`
+	SettledOverride string        `json:"settled_override,omitempty"`
+	BumpedAt        time.Time     `json:"bumped_at,omitzero"`
 }
 
 // ThreadCreator records which subsystem created a managed text conversation.
 type ThreadCreator string
 
-// ThreadCreatedByCron marks managed conversations created for cron output.
-const ThreadCreatedByCron ThreadCreator = "cron"
+const (
+	// ThreadCreatedByCron marks managed conversations created for cron output.
+	ThreadCreatedByCron ThreadCreator = "cron"
+	// ThreadCreatedByUser marks managed conversations created as user-facing.
+	ThreadCreatedByUser ThreadCreator = "user"
+)
 
 // ExternalMCPSessionState binds an external MCP conversation ID to private and managed sessions.
 type ExternalMCPSessionState struct {
@@ -125,6 +131,7 @@ type sessionTurnGate struct {
 type SessionListOptions struct {
 	Since, Until time.Time
 	Limit        int
+	IDs          []string
 }
 
 // ObservedSessionEntry is one stored rocketcode entry with its row ID.
@@ -135,8 +142,8 @@ type ObservedSessionEntry struct {
 
 // PruneStateStats reports how much stale persisted state was removed.
 type PruneStateStats struct {
-	Threads, ExternalMCPSessions int
-	SessionRows                  int64
+	Threads, ExternalMCPSessions, EmptyManaged int
+	SessionRows                                int64
 }
 
 type stateStoreDB interface {
@@ -428,6 +435,11 @@ func (s *SessionService) Thread(conversationID string) (ThreadState, bool, error
 // SetThreadAgentIfExists updates a managed conversation agent without creating a thread.
 func (s *SessionService) SetThreadAgentIfExists(conversationID, agent string) (bool, error) {
 	return stateDAO{db: s.db}.setThreadAgent(context.Background(), conversationID, agent)
+}
+
+// SetThreadSettlement records a manual settle override. bump stamps inbox order without changing last-updated.
+func (s *SessionService) SetThreadSettlement(conversationID, override string, bump bool) error {
+	return stateDAO{db: s.db}.setThreadSettlement(context.Background(), conversationID, override, bump)
 }
 
 // ExternalMCPSession returns a persisted external MCP session mapping.
@@ -868,6 +880,19 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 			continue
 		}
 
+		empty, err := conversationHasNoSessionEntries(ctx, tx, conversationID)
+		if err != nil {
+			return PruneStateStats{}, err
+		}
+
+		if empty {
+			deleteConversations[conversationID] = struct{}{}
+			stats.EmptyManaged++
+			stats.Threads++
+
+			continue
+		}
+
 		prune, err := shouldPruneThreadConversation(ctx, tx, conversationID, cutoff)
 		if err != nil {
 			return PruneStateStats{}, err
@@ -995,8 +1020,13 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 }
 
 // ListSessions returns summaries for stored rocketcode sessions.
-func (s *SessionService) ListSessions(ctx context.Context, options SessionListOptions) ([]protocol.SessionSummary, error) {
+func (s *SessionService) ListSessions(ctx context.Context, options *SessionListOptions) ([]protocol.SessionSummary, error) {
 	return listSessionsDB(ctx, s.db, options)
+}
+
+// ManagedConversationIDs returns registered conversation IDs.
+func (s *SessionService) ManagedConversationIDs(ctx context.Context) ([]string, error) {
+	return managedConversationIDs(ctx, s.db)
 }
 
 // Stop closes the runtime service and its database handle.
@@ -1292,10 +1322,6 @@ func (s sessionStore) in() iter.Seq2[harness.SessionEntry, error] {
 
 //nolint:gocritic // rocketcode requires value-shaped session entries at this boundary.
 func (s sessionStore) outID(entry harness.SessionEntry) (int64, error) {
-	if s.managedConversationID != "" {
-		return s.service.appendExternalMCPEntry(context.Background(), s.conversationID, s.managedConversationID, &entry, s.managedReplayPrefix)
-	}
-
 	return s.service.AppendEntryID(context.Background(), s.conversationID, &entry)
 }
 
@@ -1395,12 +1421,15 @@ func DeleteSessionIn(ctx context.Context, databaseURL, conversationID string) (i
 	return service.DeleteSession(ctx, conversationID)
 }
 
-func listSessionsDB(ctx context.Context, db *sql.DB, options SessionListOptions) ([]protocol.SessionSummary, error) {
+func listSessionsDB(ctx context.Context, db *sql.DB, options *SessionListOptions) ([]protocol.SessionSummary, error) {
 	query := `SELECT conversation_id, entry_json, entry_timestamp FROM session_entries ORDER BY conversation_id, id`
 
 	var args []any
 
-	if !options.Since.IsZero() || !options.Until.IsZero() || options.Limit > 0 {
+	if len(options.IDs) > 0 {
+		query = `SELECT conversation_id, entry_json, entry_timestamp FROM session_entries WHERE conversation_id = ANY($1) ORDER BY conversation_id, id`
+		args = []any{options.IDs}
+	} else if !options.Since.IsZero() || !options.Until.IsZero() || options.Limit > 0 {
 		var since any
 		if !options.Since.IsZero() {
 			since = options.Since.UTC()
@@ -1496,7 +1525,7 @@ ORDER BY c.last_updated DESC, c.conversation_id, se.id`
 }
 
 // ListSessionsInOptions returns summaries for stored rocketcode sessions.
-func ListSessionsInOptions(ctx context.Context, databaseURL string, options SessionListOptions) ([]protocol.SessionSummary, error) {
+func ListSessionsInOptions(ctx context.Context, databaseURL string, options *SessionListOptions) ([]protocol.SessionSummary, error) {
 	service, err := NewSessionServiceIn(databaseURL, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return nil, err
@@ -1538,6 +1567,15 @@ func slackStateKeyTime(key, prefix string) (time.Time, bool) {
 	}
 
 	return time.Unix(seconds, nanos).UTC(), true
+}
+
+func conversationHasNoSessionEntries(ctx context.Context, db stateStoreDB, conversationID string) (bool, error) {
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM session_entries WHERE conversation_id = $1`, conversationID).Scan(&n); err != nil {
+		return false, fmt.Errorf("count session entries: %w", err)
+	}
+
+	return n == 0, nil
 }
 
 func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, conversationID string, cutoff time.Time) (bool, error) {
@@ -1633,6 +1671,15 @@ func pruneExternalMCPSessions(ctx context.Context, tx *sql.Tx, cutoff time.Time,
 	for externalConversationID, session := range sessions {
 		privateConversationID := strings.TrimSpace(session.PrivateConversationID)
 		managedConversationID := strings.TrimSpace(session.ManagedConversationID)
+
+		emptyManaged, err := conversationHasNoSessionEntries(ctx, tx, managedConversationID)
+		if err != nil {
+			return PruneStateStats{}, err
+		}
+
+		if emptyManaged {
+			continue
+		}
 
 		pruneManaged, err := shouldPruneThreadConversation(ctx, tx, managedConversationID, cutoff)
 		if err != nil {

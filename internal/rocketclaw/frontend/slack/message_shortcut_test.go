@@ -114,6 +114,7 @@ func TestHandleMessageShortcutManagedWithoutControlsExplains(t *testing.T) {
 	router := newThreadRouterStub()
 	router.prepareHandled = true
 	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
+	knownY(connector, "social")
 
 	connector.handleInteractive(t.Context(), newMessageShortcutEvent("U123", "111.2", nil))
 
@@ -127,6 +128,7 @@ func TestHandleMessageShortcutThinkingOffersInterrupt(t *testing.T) {
 	router := newThreadRouterStub()
 	router.prepareHandled = true
 	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
+	knownY(connector, "social")
 	connector.pending["k"] = slackReplySlots{ChannelID: "C123", ThinkingTS: "999.1", AnswerTS: "999.2"}
 
 	connector.handleInteractive(t.Context(), newMessageShortcutEvent("U123", "999.1", nil))
@@ -145,7 +147,8 @@ func TestHandleMessageShortcutInterruptClickStopsTurn(t *testing.T) {
 
 	connector.handleInteractive(t.Context(), newMessageActionsButtonEvent(slackMessageActionInterrupt, &rocketclawActionsMetadata{ChannelID: "C123", MessageTS: "999.1", ThreadTS: "111.0"}))
 
-	assert.Equal(t, []string{"slack-thread:C123:111.0"}, router.conversationStops)
+	turns := waitTurns(t, connector, 1)
+	assert.Equal(t, protocol.TurnCancel, turns[0].Kind)
 	require.Len(t, rec.updated, 1)
 	assert.Equal(t, "Interrupted the turn.", rec.updated[0].View.Blocks[0].Text.Text)
 }
@@ -154,8 +157,9 @@ func TestHandleMessageShortcutEnvelopeOffersCancelAndSteer(t *testing.T) {
 	rec := newMessageActionsRecorder(t)
 	router := newThreadRouterStub()
 	router.prepareHandled = true
-	router.queue = []protocol.ThreadQueueItem{{ID: "q1", Message: "later", SlackChannel: "C123", SlackTS: "111.2"}}
 	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
+	knownY(connector, "social")
+	setLaterWork(connector, []protocol.ThreadQueueItem{{ID: "q1", Message: "later", SlackChannel: "C123", SlackTS: "111.2"}})
 	connector.beginSlackStack(slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.2"}))
 
 	connector.handleInteractive(t.Context(), newMessageShortcutEvent("U123", "111.2", nil))
@@ -170,6 +174,8 @@ func TestHandleMessageShortcutCancelClickDropsSteer(t *testing.T) {
 	router := newThreadRouterStub()
 	router.prepareHandled = true
 	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
+	knownY(connector, "social")
+
 	key := slackThreadStackKey(&protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.2"})
 	connector.beginSlackStack(key)
 
@@ -194,6 +200,7 @@ func TestHandleMessageShortcutAnswerOffersSideAsk(t *testing.T) {
 	router := newThreadRouterStub()
 	router.prepareHandled = true
 	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
+	knownY(connector, "social")
 
 	divider := slack.NewDividerBlock()
 	divider.BlockID = sideAskStampValue(t, 42)
@@ -209,6 +216,8 @@ func TestHandleMessageShortcutSideAskClickUpdatesToForm(t *testing.T) {
 	router := newThreadRouterStub()
 	router.prepareHandled = true
 	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
+	knownY(connector, "social")
+
 	stamp := sideAskStampValue(t, 42)
 
 	connector.handleInteractive(t.Context(), newMessageActionsButtonEvent(slackMessageActionSideAsk, &rocketclawActionsMetadata{
@@ -227,6 +236,7 @@ func TestHandleMessageShortcutSideAskChooserListsChannelAgentsAndPreselectsThrea
 	connector := newTestConnectorWithOptions(rec.URL, nil, []config.SlackChannelConfig{{
 		Channel: "#social", Agents: []string{"social", "planner"}, AllowedUserIDs: []string{"U123"},
 	}}, router, nil)
+	knownY(connector, "planner")
 
 	connector.handleInteractive(t.Context(), newMessageActionsButtonEvent(slackMessageActionSideAsk, &rocketclawActionsMetadata{
 		ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222", Stamp: parseTestSideAskStamp(t, sideAskStampValue(t, 7)),
@@ -263,6 +273,7 @@ func TestHandleMessageShortcutSecondSideAskWhileLiveIsRefused(t *testing.T) {
 	router := newThreadRouterStub()
 	router.prepareHandled = true
 	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
+	knownY(connector, "social")
 
 	for _, entryID := range []int64{42, 43} {
 		connector.handleInteractive(t.Context(), newMessageActionsButtonEvent(slackMessageActionSideAsk, &rocketclawActionsMetadata{
@@ -281,6 +292,7 @@ func TestHandleMessageShortcutSideAskDismissStartsNoRunner(t *testing.T) {
 	router := newThreadRouterStub()
 	router.prepareHandled = true
 	connector := newTestConnectorWithOptions(rec.URL, newTestBus(), nil, router, nil)
+	knownY(connector, "social")
 	connector.sideAsk = runner
 	metadata := sideAskStampValue(t, 42)
 

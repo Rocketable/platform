@@ -190,7 +190,7 @@ func TestThreadBridgeManagerDoesNotStartThreadWhenStoreIsUnavailable(t *testing.
 	})
 
 	err = manager.StartThread(t.Context(), "main", slackTarget("D123", "111.222"), newThreadInboundMessage("first", "111.222", "111.222"))
-	require.ErrorContains(t, err, "load external MCP paired conversation")
+	require.ErrorContains(t, err, "load persisted Slack thread state")
 	assert.Zero(t, bridge.stops)
 	assert.Empty(t, bridge.submits)
 }
@@ -367,29 +367,6 @@ func TestThreadBridgeManagerInterruptSlackThreadInterruptsActiveTurn(t *testing.
 	assert.Equal(t, GoalStatusStopped, goal.Status)
 }
 
-func TestThreadBridgeManagerRegistersCronThreadWithoutSubmitting(t *testing.T) {
-	store := newWorkspaceSessionService(t)
-	bridge := new(fakeDirectBridge)
-
-	var created Config
-
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
-		created = cfg
-		return bridge
-	})
-
-	require.NoError(t, manager.RegisterCronThread(t.Context(), slackTarget("C123", "111.222"), "planner"))
-
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	assert.Equal(t, Config{ConversationID: conversationID, Agent: "planner", OutputTargets: []protocol.OutputTarget{protocol.OutputTargetSlack}, UserQuestionAsker: protocol.NoUserQuestionAsker()}, created)
-	assert.Empty(t, bridge.submits)
-
-	thread, ok, err := store.Thread(conversationID)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}, thread)
-}
-
 func TestThreadBridgeManagerRegistersThreadWithoutSubmitting(t *testing.T) {
 	store := newWorkspaceSessionService(t)
 	bridge := new(fakeDirectBridge)
@@ -441,6 +418,13 @@ func TestThreadBridgeManagerStashListAndDeleteQueue(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, items, 2)
 	assert.Equal(t, []string{"q1", "q2"}, []string{items[0].ID, items[1].ID})
+
+	require.NoError(t, manager.ReorderThreadQueueItems(t.Context(), target, []string{"q2", "q1"}))
+	items, err = manager.ThreadQueueItems(t.Context(), target)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"q2", "q1"}, []string{items[0].ID, items[1].ID})
+	require.ErrorContains(t, manager.ReorderThreadQueueItems(t.Context(), target, []string{"q1"}), "reorder thread queue")
+	require.ErrorContains(t, manager.ReorderThreadQueueItems(t.Context(), target, []string{"q1", "missing"}), "reorder thread queue")
 
 	require.NoError(t, manager.DeleteThreadQueueItem(t.Context(), target, "other"))
 	require.NoError(t, manager.DeleteThreadQueueItem(t.Context(), target, "q2"))
@@ -842,52 +826,6 @@ func TestThreadBridgeManagerStopStopsActiveBridges(t *testing.T) {
 	assert.Equal(t, 1, bridges[1].stops)
 }
 
-func TestThreadBridgeManagerConsumesSlackOriginatorOutput(t *testing.T) {
-	store := newWorkspaceSessionService(t)
-	require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID("C123", "111.222"), ThreadState{Agent: "main"}))
-
-	outputs := make(chan *protocol.OutboundMessage, 2)
-	bridge := new(fakeDirectBridge)
-	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
-	manager.output = func(_ context.Context, message *protocol.OutboundMessage) error {
-		outputs <- message
-
-		return nil
-	}
-
-	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "", "hello", true)
-	handled, err := manager.SubmitThreadReply(t.Context(), protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.222"}, inbound)
-	require.NoError(t, err)
-	require.True(t, handled)
-	require.Equal(t, protocol.BridgeSlack, inbound.Bridge)
-	require.NotNil(t, inbound.Response)
-
-	progress := protocol.NewOutboundMessage(protocol.SourceSlack, inbound.ConversationID, "progress")
-	final := protocol.NewOutboundMessage(protocol.SourceSlack, inbound.ConversationID, "final")
-	final.Complete = true
-
-	inbound.Response <- protocol.Response{Payload: &protocol.TextResponse{Kind: protocol.ResponseProgress, Message: progress}}
-
-	inbound.Response <- protocol.Response{Payload: &protocol.TextResponse{Kind: protocol.ResponseResult, Message: final}}
-
-	require.Equal(t, "progress", (<-outputs).Text)
-	require.Equal(t, "final", (<-outputs).Text)
-}
-
-func TestThreadBridgeManagerHandlesChildThreadInteraction(t *testing.T) {
-	manager := newThreadBridgeManager(nil, newWorkspaceSessionService(t), slog.New(slog.DiscardHandler), func(Config) directBridge { return new(fakeDirectBridge) })
-	want := protocol.StartNewThreadRootResult{Target: protocol.TextConversationTarget{ChannelID: "C1", MessageID: "1.2", ThreadID: "1.2"}, URL: "https://slack.example/thread"}
-	manager.root = func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error) {
-		return want, nil
-	}
-	root := make(chan protocol.StartNewThreadRootResult, 1)
-	errCh := make(chan error, 1)
-	handled, err := manager.handleInteraction(t.Context(), protocol.StartNewThreadResponse{Request: &protocol.StartNewThreadRequest{}, Root: root, Err: errCh})
-	require.NoError(t, err)
-	require.True(t, handled)
-	require.Equal(t, want, <-root)
-}
-
 func TestThreadBridgeManagerBusyExternalMCPStashesOnManagedQueue(t *testing.T) {
 	store := newWorkspaceSessionService(t)
 	managedID := protocol.SlackThreadConversationID("C123", "111.222")
@@ -926,6 +864,106 @@ func TestThreadBridgeManagerSubmitExternalMCPDoesNotAttachSlackResponse(t *testi
 	require.NoError(t, manager.SubmitExternalMCP(t.Context(), "main", conversationID, inbound, NoopActivationHook))
 	require.Equal(t, protocol.BridgeExternalMCP, inbound.Bridge)
 	require.Nil(t, inbound.Response)
+}
+
+func TestThreadBridgeManagerStartsWebSessionTurnWithWebOutput(t *testing.T) {
+	store := newWorkspaceSessionService(t)
+	conversationID := protocol.WebSessionConversationID("ops")
+
+	var started Config
+
+	bridge := new(fakeDirectBridge)
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
+		started = cfg
+		return bridge
+	})
+	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	require.NoError(t, store.SetThreadSettlement(conversationID, "settled", false))
+
+	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "", "hello", true)
+	require.NoError(t, manager.StartThread(t.Context(), "main", protocol.TextConversationTarget{ChannelID: conversationID}, inbound))
+	thread, ok, err := store.Thread(conversationID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Empty(t, thread.SettledOverride)
+	assert.Equal(t, conversationID, started.ConversationID)
+	assert.Equal(t, []protocol.OutputTarget{protocol.OutputTargetWeb}, started.OutputTargets)
+	require.Len(t, bridge.submits, 1)
+	assert.Equal(t, protocol.BridgeWeb, bridge.submits[0].Bridge)
+	assert.Nil(t, bridge.submits[0].Response)
+}
+
+func TestThreadBridgeManagerStartsActiveGoalForWebSession(t *testing.T) {
+	store := newWorkspaceSessionService(t)
+	conversationID := protocol.WebSessionConversationID("ops")
+	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "planner"}))
+	require.NoError(t, store.BeginGoal(conversationID, "ship it", "", 5, "", ""))
+
+	bridge := new(fakeDirectBridge)
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
+		assert.Equal(t, []protocol.OutputTarget{protocol.OutputTargetWeb}, cfg.OutputTargets)
+		return bridge
+	})
+
+	require.NoError(t, manager.StartActiveGoals(map[string]bool{}))
+	require.Len(t, bridge.submits, 1)
+	assert.Equal(t, "goal_continuation", bridge.submits[0].Label)
+	assert.Equal(t, conversationID, bridge.submits[0].ConversationID)
+	assert.Nil(t, bridge.submits[0].SlackReply)
+}
+
+func TestSubmitConversationBindsUserFacingForSchedule(t *testing.T) {
+	store := newWorkspaceSessionService(t)
+	require.NoError(t, store.UpsertThread("cronjob:x", ThreadState{Agent: "main"}))
+
+	var started Config
+
+	bridge := new(fakeDirectBridge)
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
+		started = cfg
+		return bridge
+	})
+
+	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", "run", true)
+	require.NoError(t, manager.submitConversation(t.Context(), "cronjob:x", inbound, "cronjob-user:y"))
+	assert.Equal(t, "cronjob-user:y", started.ManagedConversationID)
+	require.Len(t, bridge.submits, 1)
+	assert.Equal(t, "cronjob:x", bridge.submits[0].ConversationID)
+}
+
+func TestArmScheduledOnStartsUserFacingBridge(t *testing.T) {
+	store := newWorkspaceSessionService(t)
+	require.NoError(t, store.UpsertThread("cronjob-user:y", ThreadState{Agent: "main"}))
+
+	bridge := new(fakeDirectBridge)
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
+		assert.Equal(t, "cronjob-user:y", cfg.ConversationID)
+		return bridge
+	})
+
+	require.NoError(t, manager.armScheduledOn("cronjob-user:y", "sid-1", &protocol.ScheduledMessageState{ConversationID: "cronjob-user:y", Agent: "main", Message: "later"}))
+	assert.Equal(t, []string{"arm:sid-1"}, bridge.ops)
+}
+
+func TestEnsureThreadBridgeWiresScheduledArmer(t *testing.T) {
+	store := newWorkspaceSessionService(t)
+	require.NoError(t, store.UpsertThread("cronjob:x", ThreadState{Agent: "main"}))
+
+	workspace := t.TempDir()
+
+	var live *Bridge
+
+	manager := newThreadBridgeManager(&config.Config{Workspace: workspace}, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
+		cfg.SessionService = store
+		live = NewConversation(&config.Config{Workspace: workspace}, nil, &cfg, slog.New(slog.DiscardHandler))
+
+		return live
+	})
+
+	_, _, err := manager.ensureThreadBridge("cronjob:x", ThreadState{Agent: "main"}, nil, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, live.Stop()) })
+	require.NotNil(t, live.scheduledArmer)
 }
 
 type fakeDirectBridge struct {
@@ -976,6 +1014,8 @@ func (f *fakeDirectBridge) RecoverActiveTurn(ctx context.Context, turn *ActiveTu
 	return f.Submit(ctx, inbound)
 }
 
+func (f *fakeDirectBridge) Handling() bool { return false }
+
 func (f *fakeDirectBridge) InterruptActiveTurn() *protocol.InboundMessage {
 	f.interrupts++
 
@@ -990,6 +1030,10 @@ func (f *fakeDirectBridge) PickLaterWork(context.Context) error {
 	f.ops = append(f.ops, "pick")
 
 	return nil
+}
+
+func (f *fakeDirectBridge) armScheduledMessage(id string, _ *protocol.ScheduledMessageState) {
+	f.ops = append(f.ops, "arm:"+id)
 }
 
 func newThreadInboundMessage(text, messageTS, threadTS string) *protocol.InboundMessage {
