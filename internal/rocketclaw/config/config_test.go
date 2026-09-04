@@ -56,6 +56,30 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	assert.True(t, filepath.IsAbs(cfg.Workspace))
 }
 
+func TestUsernameForIP(t *testing.T) {
+	cfg := loadTestConfig(t, `{
+	  "workspace": ".",
+	  "users": {"alice": "100.64.0.1"},
+	  "openai": {"api_key": "test-key"},
+	  "slack": {
+	    "bot_token": "xoxb-test",
+	    "app_token": "xapp-test",
+	    "channels": [{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]
+	  }
+	}`)
+
+	name, ok := cfg.UsernameForIP("100.64.0.1")
+	require.True(t, ok)
+	require.Equal(t, "alice", name)
+
+	name, ok = cfg.UsernameForIP("::ffff:100.64.0.1")
+	require.True(t, ok)
+	require.Equal(t, "alice", name)
+
+	_, ok = cfg.UsernameForIP("8.8.8.8")
+	require.False(t, ok)
+}
+
 func TestLoadIgnoresFormerMCPDevelopment(t *testing.T) {
 	cfg := loadTestConfig(t, `{
 	  "workspace": ".",

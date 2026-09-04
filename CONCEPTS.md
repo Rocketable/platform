@@ -158,11 +158,19 @@ A RocketCode Turn is not the active-turn slot on a Managed Slack Thread. Slack o
 
 ### Backend
 
-The one RocketClaw engine: conversations, turns, later-work, skills, and agent definitions. Frontends subscribe to its event bus, create conversations, run turns, sync history, and list conversations. It does not name Slack, External MCP, or Cron.
+The one RocketClaw engine: conversations, turns, later-work, skills, and agent definitions. Frontends subscribe to its event bus, create conversations, run turns, sync history, and list conversations. It does not name Slack, Web, External MCP, or Cron.
 
 ### Frontend
 
-A surface the process assembler constructs: Slack, External MCP, or Cron. Cron has no user-facing UI; it loads job files, runs the clock, and dispatches turns. Each `$cron` or scheduled fire starts a new pair; it does not use the invoking thread. Each Frontend reads the event bus and drops what it does not handle. The backend does not hold Slack.
+A surface the process assembler constructs: Slack, External MCP, Cron, or the web RPC door. Cron has no user-facing UI; it loads job files, runs the clock, and dispatches turns. Each `$cron` or scheduled fire mints a new pair; it does not occupy the invoking thread. Each Frontend reads the event bus and drops what it does not handle. The backend does not hold Slack.
+
+### Web Home
+
+The standalone TypeScript UI process. Browsers talk tRPC to it. It is not a Frontend. TypeScript does not read `femtoclaw.json`. Go RPC maps the browser IP through config `users` (`UsernameForIP`) and fails closed. Principal is the username Go resolved.
+
+### Web Session
+
+A durable conversation a human continues on Web Home. Conversation ids are Frontend-minted and shared. Occupancy, Slack Steer, and Enqueued Slack Message rules match a Managed Slack Thread when the conversation is tagged user-facing.
 
 ### Protocol
 
@@ -184,10 +192,10 @@ The State Store is PostgreSQL.
 - A Slack Steer belongs to one active Managed Slack Thread and is injected into that turn after the current parallel tool batch completes.
 - An Enqueued Slack Message belongs to one Managed Slack Thread's Thread Queue until it is popped, removed, or consumed by an explicit failure path.
 - A Slack Side Ask is opened from a completed 💬 answer card in a Managed Slack Thread and does not become that thread's turn.
-- Conversations tagged user-facing are rendered by Slack.
+- The Web Home talks to the web RPC Frontend. Conversations tagged user-facing are rendered by Slack and Web.
 - A BAR is authored, packed, run, and ranked by Quickbench; an ELO Scorer belongs to one BAR.
 - A Managed Slack Thread, Thread Queue, and External MCP pairing persist in the State Store.
-- Cron is a Frontend. It produces conversations other Frontends display. Each `$cron` or scheduled fire starts a new pair and does not use the invoking thread.
+- Cron is a Frontend. It produces conversations other Frontends display. Each `$cron` or scheduled fire mints a new pair and does not occupy the invoking thread.
 - Frontends and the backend import Protocol. Slack does not import Runtime. The backend does not hold Slack.
 - The process assembler constructs the backend and the frontends.
 - A turn uses the Autocompaction Threshold of the Provider that serves its model.

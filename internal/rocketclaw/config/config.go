@@ -21,6 +21,7 @@ type Config struct {
 	WorkDir           string                     `json:"-"`
 	Overlays          []string                   `json:"overlays,omitempty"`
 	Models            map[string]string          `json:"models,omitempty"`
+	Users             map[string]string          `json:"users,omitempty"`
 	Environment       []string                   `json:"environment,omitempty"`
 	Logging           LoggingConfig              `json:"logging"`
 	MCPExternal       MCPExternalConfig          `json:"mcp_external"`
@@ -100,6 +101,18 @@ func (c *Config) Provider(name string) (OpenAIConfig, bool) {
 	provider, ok := c.Providers[name]
 
 	return provider, ok
+}
+
+// UsernameForIP reports the username bound to ip in Users. ok is false on a miss.
+func (c *Config) UsernameForIP(ip string) (string, bool) {
+	ip = strings.TrimPrefix(ip, "::ffff:")
+	for username, addr := range c.Users {
+		if strings.TrimPrefix(addr, "::ffff:") == ip {
+			return username, true
+		}
+	}
+
+	return "", false
 }
 
 // InstrumentationConfig configures OpenTelemetry/OpenInference tracing.

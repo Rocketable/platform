@@ -31,7 +31,7 @@ See [LICENSE](LICENSE) for the full license terms.
 
 `internal/rocketclaw` is the long-running service runtime around RocketCode. It provides thread-local conversations in configured Slack channels, saved Starlark workflows, external MCP, cron-defined background prompts, one-shot and recurring scheduled messages, inbound and outbound attachments, supervisor restart, and PostgreSQL state selected by `database_url`.
 
-The runnable entry point is `cmd/rocketclaw`. Run `rocketclaw help` for setup, validation, and operational commands.
+The runnable entry point is `cmd/rocketclaw`. Run `rocketclaw help` for setup, validation, and operational commands. Web RPC lists, loads, and deletes `session_entries`.
 
 Slack native forwarded-thread expansion requires the bot scopes `channels:read` and `channels:history`; reinstall the Slack app after adding scopes. Message `...` menu actions require the `commands` scope and one message shortcut (`rocketclaw_actions`); reinstall after adding it. See `cmd/rocketclaw/CHEATSHEET.md`. RocketClaw expands only source channels Slack confirms are public and that the bot can already read. It never auto-joins a channel. Private, inaccessible, malformed, or partially unreadable source threads retain only Slack's forwarded preview.
 
@@ -39,7 +39,7 @@ Slack configuration uses direct `slack.channels` mappings. Each mapping names a 
 
 External MCP exposes `session_prompt`. Every call supplies an external conversation ID, agent, and configured Slack channel. A new ID creates one private MCP session and one managed Slack session on the same Slack thread. The MCP agent remains fixed; the managed agent starts from the channel configuration and can be switched from Slack. MCP history is copied into managed history, but Slack history is never copied back. Later calls keep the same channel and Slack thread. Slack Blocks label MCP requests and responses with their conversation ID and agent.
 
-Every active `cron/*.md` definition declares a quoted `channel` that matches a configured Slack channel. Empty completion output is silent; non-empty output starts a fresh managed thread in that channel.
+Every active `cron/*.md` definition declares a quoted `channel`. `#ops` is a configured Slack channel and starts a fresh managed thread there. `ops` (no hash) names a web session; each Cron fire and `$cron` starts a new conversation there, and humans see the user-facing one after copy. Empty completion output is silent.
 
 ### Supporting Tools
 

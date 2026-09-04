@@ -3,14 +3,18 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 	"time"
+
+	"google.golang.org/grpc"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend"
 	clawcron "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
+	"github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc"
 	slackconnector "github.com/Rocketable/platform/internal/rocketclaw/frontend/slack"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
@@ -57,6 +61,24 @@ func (processAssembler) Assemble(rt *backend.Runtime) ([]func(context.Context) e
 	for i := range rt.RecoveredTurns {
 		slack.RestorePendingSteers(rt.RecoveredTurns[i].Checkpoint.ConversationKey, rt.RecoveredTurns[i].PendingSteers)
 	}
+
+	web := rpc.New(rt)
+	web.SetCron(cronFront)
+
+	grpcServer := grpc.NewServer()
+	rpc.RegisterWebServer(grpcServer, web)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:18790")
+	if err != nil {
+		return nil, fmt.Errorf("listen for web RPC: %w", err)
+	}
+
+	go grpcServer.Serve(listener)
+
+	stops = append(stops, func(context.Context) error {
+		grpcServer.GracefulStop()
+		return listener.Close()
+	})
 
 	if rt.Cfg.MCPExternal.Enabled {
 		if _, err := backend.ExternalMCPAgentsIn(rt.Cfg, rt.Cfg.RuntimeDirName()); err != nil {

@@ -2,7 +2,7 @@
 
 ## Slack Text Controls
 
-Type dollar commands. Emoji in this table are reactions RocketClaw listens to, or markers it posts. They are not typed command prefixes.
+Type dollar commands. The Web Home uses the same dollar grammar in the composer; emoji reactions stay Slack-only. Emoji in this table are reactions RocketClaw listens to, or markers it posts. They are not typed command prefixes.
 
 | Emoji | Dollar Command | Aliases | Surface | What It Does | Notes |
 | --- | --- | --- | --- | --- | --- |
