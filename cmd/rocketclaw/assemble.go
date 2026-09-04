@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"sync"
 
@@ -119,6 +120,15 @@ func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-
 		}
 
 		stops = append(stops, externalMCP.Close)
+	}
+
+	if os.Getenv("ROCKETCLAW_WEB_GRPC") != "" {
+		stopWeb, err := startWebRPC(rt, slack, cronjobs)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
+		stops = append(stops, stopWeb)
 	}
 
 	return slack, done, stops, nil
