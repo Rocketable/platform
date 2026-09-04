@@ -94,7 +94,17 @@ func (processAssembler) Assemble(rt *backend.Runtime) ([]func(context.Context) e
 			names, errAgents := backend.ExternalMCPAgentsIn(rt.Cfg, rt.Cfg.RuntimeDirName())
 			return errAgents == nil && slices.Contains(names, agent)
 		}
-		externalMCP, err := startExternalMCPServer(rt.RunCtx, rt.Cfg, slack.StartThread, users, agentExposed, rt.Sessions, rt, rt.Log)
+		externalMCP, err := startExternalMCPServer(rt.RunCtx, rt.Cfg, func(ctx context.Context, channel, externalID, agent, prompt string) (string, error) {
+			reply, errRelay := slack.SendExternalMCPRelay(ctx, channel, "", &protocol.ExternalMCPRelay{ExternalConversationID: externalID, Agent: agent, Text: prompt})
+			if errRelay != nil {
+				return "", errRelay
+			}
+			if reply == nil {
+				return "", fmt.Errorf("external MCP slack relay returned no target")
+			}
+
+			return protocol.SlackThreadConversationID(reply.ChannelID, reply.MessageTS), nil
+		}, users, agentExposed, rt.Sessions, rt, rt.Log)
 		if err != nil {
 			return nil, err
 		}

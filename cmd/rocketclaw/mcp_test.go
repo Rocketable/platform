@@ -45,7 +45,7 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
 		rootCount int
 	)
 
-	startThread := func(context.Context, string, string, string) (string, error) {
+	startThread := func(context.Context, string, string, string, string) (string, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		rootCount++
@@ -119,7 +119,7 @@ func TestLegacyExternalMCPFollowupUsesExistingSharedConversation(t *testing.T) {
 	require.NoError(t, store.UpsertExternalMCPSession("existing-1", &backend.ExternalMCPSessionState{Agent: "planner", ManagedConversationID: conversationID, SlackChannel: "#ops"}))
 
 	startThreadCalls := 0
-	startThread := func(context.Context, string, string, string) (string, error) {
+	startThread := func(context.Context, string, string, string, string) (string, error) {
 		startThreadCalls++
 		return "", errors.New("startThread should not run for a known pair")
 	}
@@ -157,7 +157,7 @@ func TestExternalMCPSlackChannelMismatchErrors(t *testing.T) {
 
 	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}, {Channel: "#other", Agents: []string{"managed"}}}}}
 	conv := newTestMCPBackend(t, store)
-	server, err := startExternalMCPServer(t.Context(), cfg, func(context.Context, string, string, string) (string, error) {
+	server, err := startExternalMCPServer(t.Context(), cfg, func(context.Context, string, string, string, string) (string, error) {
 		return "", errors.New("startThread should not run")
 	}, nil, func(string) bool { return true }, store, conv, testLogger())
 	require.NoError(t, err)
@@ -182,7 +182,7 @@ func TestExternalMCPAfterSyncYHasXEntriesLaterYPromptNotOnX(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
 
 	yID := protocol.SlackThreadConversationID("C123", "111.222")
-	startThread := func(context.Context, string, string, string) (string, error) {
+	startThread := func(context.Context, string, string, string, string) (string, error) {
 		return yID, nil
 	}
 	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}}}}
@@ -281,7 +281,7 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 				require.NoError(t, tt.prepare(store))
 			}
 
-			startThread := func(context.Context, string, string, string) (string, error) {
+			startThread := func(context.Context, string, string, string, string) (string, error) {
 				if tt.startThreadErr != nil {
 					return "", tt.startThreadErr
 				}

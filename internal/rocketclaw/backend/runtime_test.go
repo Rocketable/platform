@@ -117,6 +117,24 @@ func TestRuntimeRunTurnUnknownIDFails(t *testing.T) {
 	require.ErrorContains(t, err, "unknown conversation missing")
 }
 
+func TestRuntimeRunTurnExternalMCPStampsSlackReply(t *testing.T) {
+	bridge := new(completingTurnBridge)
+	rt := testConversationRuntime(t, bridge)
+	xID := "external_mcp:planner:private"
+	yID := protocol.SlackThreadConversationID("C1", "1.000")
+	require.NoError(t, rt.CreateConversation(xID, []string{"planner"}, nil))
+	require.NoError(t, rt.Sessions.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{
+		Agent: "planner", PrivateConversationID: xID, ManagedConversationID: yID, SlackChannel: "#ops",
+	}))
+	require.NoError(t, rt.RunTurn(t.Context(), &protocol.TurnRequest{ID: xID, Kind: protocol.TurnPrompt, Text: "hello", Agent: "planner"}))
+	require.Len(t, bridge.submits, 1)
+	require.Equal(t, protocol.SourceExternalMCP, bridge.submits[0].Source)
+	require.NotNil(t, bridge.submits[0].SlackReply)
+	require.Equal(t, "C1", bridge.submits[0].SlackReply.ChannelID)
+	require.Equal(t, "1.000", bridge.submits[0].SlackReply.ThreadTS)
+	require.Equal(t, "public-1", bridge.submits[0].Metadata["external_conversation_id"])
+}
+
 func TestRuntimeRunTurnsOnOneIDCompleteInOneOrder(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		bridge := new(recordingTurnBridge)

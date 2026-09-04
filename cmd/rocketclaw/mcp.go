@@ -22,7 +22,7 @@ import (
 func startExternalMCPServer(
 	ctx context.Context,
 	cfg *config.Config,
-	startThread func(context.Context, string, string, string) (string, error),
+	startThread func(context.Context, string, string, string, string) (string, error),
 	users map[string]string,
 	agentExposed func(string) bool,
 	store *backend.SessionService,
@@ -143,7 +143,7 @@ func startExternalMCPServer(
 
 		privateConversationID := "external_mcp:" + usedAgent + ":" + rand.Text()
 
-		managedConversationID, err := startThread(callCtx, slackChannel, externalConversationID, prompt)
+		managedConversationID, err := startThread(callCtx, slackChannel, externalConversationID, usedAgent, prompt)
 		if err != nil {
 			return externalmcp.SessionResult{}, err
 		}

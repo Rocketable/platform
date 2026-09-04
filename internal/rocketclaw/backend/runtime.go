@@ -248,6 +248,19 @@ func (r *Runtime) RunTurn(ctx context.Context, req *protocol.TurnRequest) error 
 	case protocol.TurnPrompt, protocol.TurnSteer, protocol.TurnEnqueue, protocol.TurnCancel:
 	}
 
+	externalID, session, paired, errPair := r.Sessions.ExternalMCPSessionByConversationID(id)
+	if errPair != nil {
+		return errPair
+	}
+	if paired {
+		inbound.Source = protocol.SourceExternalMCP
+		inbound.Bridge = protocol.BridgeExternalMCP
+		inbound.Metadata = map[string]string{"external_conversation_id": externalID}
+		if channelID, threadTS, ok := protocol.SlackThreadTarget(session.ManagedConversationID); ok {
+			inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}
+		}
+	}
+
 	wait := inbound.EnableResponseWait()
 	if err := r.threads.submitConversation(ctx, id, inbound, req.UserFacingID); err != nil {
 		return err
