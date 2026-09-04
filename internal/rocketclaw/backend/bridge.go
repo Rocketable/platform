@@ -775,7 +775,7 @@ func (b *Bridge) handleRecoveredActiveTurn(ctx context.Context, turn *ActiveTurn
 }
 
 func activeTurnRecoveryPreserveError(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errBridgeStopped)
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || IsBridgeStopped(err)
 }
 
 func recoveredGoalTurnMessage(turn *ActiveTurnState, slackReply *protocol.SlackReplyTarget) *protocol.InboundMessage {

@@ -106,12 +106,6 @@ func (c *clockwork) removeBridge(bridge *registeredBridge) {
 
 func (c *clockwork) run(ctx context.Context) error {
 	c.mu.Lock()
-	if c.started {
-		c.mu.Unlock()
-
-		return errors.New("clockwork already running")
-	}
-
 	c.started = true
 	c.pendingEnabled = len(c.bridges) == 0
 	bridges := slices.Collect(maps.Values(c.bridges))

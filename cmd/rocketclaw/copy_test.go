@@ -68,31 +68,6 @@ func TestClockworkRegisterBridgeDuplicate(t *testing.T) {
 	unregister()
 }
 
-func TestClockworkRunRejectsSecondStart(t *testing.T) {
-	channels := protocol.NewChannels()
-	clockwork := newClockwork(channels)
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- clockwork.run(ctx) }()
-	// wait until started
-	for {
-		clockwork.mu.Lock()
-		started := clockwork.started
-		clockwork.mu.Unlock()
-
-		if started {
-			break
-		}
-	}
-
-	require.Error(t, clockwork.run(ctx))
-	cancel()
-	require.NoError(t, <-errCh)
-}
-
 func TestDropBroadcastBridge(t *testing.T) {
 	ack := (dropBroadcastBridge{}).HandleBroadcast(t.Context(), &protocol.Broadcast{Message: protocol.NewOutboundMessage(protocol.SourceSystem, "c", "x")})
 	require.Equal(t, protocol.BroadcastDropped, ack.Status)

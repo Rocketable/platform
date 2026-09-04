@@ -2,12 +2,11 @@ package backend
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"log/slog"
 	"strings"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketcode"
 )
 
@@ -101,7 +100,7 @@ func recoverStartupActiveTurns(ctx context.Context, store startupRecoveryStore, 
 
 		turn.Checkpoint.ReplayInput = recoveredReplay
 		if err := handoff(ctx, turn); err != nil {
-			if isStartupRecoveryShutdownError(err) {
+			if activeTurnRecoveryPreserveError(err) {
 				return fmt.Errorf("handoff startup active turn recovery: %w", err)
 			}
 
@@ -151,8 +150,4 @@ func cannotResumeActiveTurn(ctx context.Context, store startupRecoveryStore, tur
 	cannotResume(turn.Checkpoint.ConversationKey, turn.PendingSteers)
 
 	return nil
-}
-
-func isStartupRecoveryShutdownError(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || IsBridgeStopped(err)
 }
