@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RocketClaw</title>
+    <script>
+      (() => {
+        const mode = localStorage.getItem("theme") || "system";
+        const dark = mode === "dark" || (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.classList.toggle("dark", dark);
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-Csn0LO94.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-C7ryvjPe.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
