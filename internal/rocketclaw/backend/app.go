@@ -368,7 +368,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 
 			err = threadBridges.RecoverActiveTurn(runCtx, turn)
 			if err != nil {
-				if isStartupRecoveryShutdownError(err) {
+				if activeTurnRecoveryPreserveError(err) {
 					return err
 				}
 
