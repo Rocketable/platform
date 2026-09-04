@@ -43,6 +43,7 @@ type Source string
 // Known inbound and outbound message source labels.
 const (
 	SourceSlack       Source = "slack"
+	SourceWeb         Source = "web"
 	SourceExternalMCP Source = "external_mcp"
 	SourceSystem      Source = "system"
 )
@@ -60,6 +61,8 @@ type OutputTarget string
 const (
 	// OutputTargetSlack delivers a response to its explicit Slack thread.
 	OutputTargetSlack OutputTarget = "slack"
+	// OutputTargetWeb delivers a response to its web session.
+	OutputTargetWeb OutputTarget = "web"
 )
 
 // InboundAttachment carries an inline attachment into a conversation prompt.
@@ -197,25 +200,25 @@ type StartNewThreadRootResult struct {
 
 // OutboundMessage is a text message headed to enabled connectors.
 type OutboundMessage struct {
-	Text, ProgressText                 string
-	Source                             Source
-	Bridge                             BridgeID
-	Targets                            []OutputTarget
-	ConversationID, TurnID             string
-	SessionEntryID                     int64
-	ExternalConversationID             string
-	Agent                              string
-	Cronjob                            *CronjobMessage
-	Sequence                           int
-	PostProgressText, Complete         bool
-	SlackReply                         *SlackReplyTarget
-	Attachments                        []OutboundAttachment
-	GoalTurn, GoalComplete, GoalActive bool
-	GoalTurnNumber, GoalMaxTurns       int
-	WorkflowAgent                      *AgentUpdate
-	WorkflowPhase                      *PhaseUpdate
-	WorkflowTerminal                   Terminal
-	Response                           chan Response
+	Text, ProgressText                     string
+	Source                                 Source
+	Bridge                                 BridgeID
+	Targets                                []OutputTarget
+	ConversationID, TurnID                 string
+	SessionEntryID                         int64
+	ExternalConversationID                 string
+	Agent                                  string
+	Cronjob                                *CronjobMessage
+	Sequence                               int
+	PostProgressText, Complete, Originator bool
+	SlackReply                             *SlackReplyTarget
+	Attachments                            []OutboundAttachment
+	GoalTurn, GoalComplete, GoalActive     bool
+	GoalTurnNumber, GoalMaxTurns           int
+	WorkflowAgent                          *AgentUpdate
+	WorkflowPhase                          *PhaseUpdate
+	WorkflowTerminal                       Terminal
+	Response                               chan Response
 
 	deliveryInit, deliveredOnce sync.Once
 	delivered                   chan struct{}

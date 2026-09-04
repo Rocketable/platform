@@ -648,6 +648,24 @@ func TestParseGitOverlaySpec(t *testing.T) {
 	}
 }
 
+func TestOriginOf(t *testing.T) {
+	workspace := t.TempDir()
+	spec := "github.com/rocketable/overlay@main"
+	overlays := []string{spec}
+	clone := OverlayInfos(workspace, targetRoot, overlays)[0].ClonePath
+
+	require.Equal(t, "embedded", OriginOf(workspace, targetRoot, agentsRoot, "main.md", nil))
+	require.Equal(t, "embedded", OriginOf(workspace, targetRoot, skillsRoot, "main-archive-benchmarks/SKILL.md", nil))
+
+	require.NoError(t, os.MkdirAll(filepath.Join(clone, agentsRoot), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(clone, agentsRoot, "main.md"), []byte("overlay"), 0o644))
+	require.Equal(t, spec, OriginOf(workspace, targetRoot, agentsRoot, "main.md", overlays))
+
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, agentsRoot), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, agentsRoot, "main.md"), []byte("root"), 0o644))
+	require.Equal(t, "root", OriginOf(workspace, targetRoot, agentsRoot, "main.md", overlays))
+}
+
 func TestOverlayInfos(t *testing.T) {
 	workspace := string(filepath.Separator) + "workspace"
 	infos := OverlayInfos(workspace, targetRoot, []string{" github.com/rocketable/overlay@main ", ""})

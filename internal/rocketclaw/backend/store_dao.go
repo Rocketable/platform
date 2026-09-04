@@ -37,7 +37,9 @@ func (d stateDAO) thread(ctx context.Context, conversationID string) (ThreadStat
 		createdBy string
 	)
 
-	err := d.db.QueryRowContext(ctx, `SELECT agent, created_by FROM managed_conversations WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &createdBy)
+	var bumped int64
+
+	err := d.db.QueryRowContext(ctx, `SELECT agent, created_by, settled_override, bumped_at_unix_ns FROM managed_conversations WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &createdBy, &thread.SettledOverride, &bumped)
 	if err == sql.ErrNoRows {
 		return ThreadState{}, false, nil
 	}
@@ -47,8 +49,23 @@ func (d stateDAO) thread(ctx context.Context, conversationID string) (ThreadStat
 	}
 
 	thread.CreatedBy = ThreadCreator(createdBy)
+	thread.BumpedAt = timeFromUnixNano(bumped)
 
 	return thread, true, nil
+}
+
+func (d stateDAO) setThreadSettlement(ctx context.Context, conversationID, override string, bump bool) error {
+	var bumped int64
+	if bump {
+		bumped = timeUnixNano(time.Now())
+	}
+
+	_, err := d.db.ExecContext(ctx, `UPDATE managed_conversations SET settled_override = $1, bumped_at_unix_ns = CASE WHEN $2::bigint = 0 THEN bumped_at_unix_ns ELSE $2::bigint END WHERE conversation_id = $3`, override, bumped, strings.TrimSpace(conversationID))
+	if err != nil {
+		return fmt.Errorf("update managed conversation settlement: %w", err)
+	}
+
+	return nil
 }
 
 func (d stateDAO) setThreadAgent(ctx context.Context, conversationID, agent string) (bool, error) {

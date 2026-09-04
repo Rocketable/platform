@@ -25,7 +25,6 @@ func TestRunDoctorReportsRuntime(t *testing.T) {
 	require.Contains(t, output, "Work directory: .rocketclaw")
 	require.Contains(t, output, "Slack: active")
 	require.Contains(t, output, "External MCP: true")
-	require.Contains(t, output, "Development MCP:")
 	require.Contains(t, output, "RocketCode: OK (library)")
 }
 

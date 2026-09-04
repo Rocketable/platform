@@ -1,7 +1,7 @@
 COVERPROFILE ?= .coverage.out
 COVERPKG ?= github.com/Rocketable/platform/cmd/rocketclaw,./...
 COVERAGE_STABLE_AT ?= 90.0
-GO_SOURCE_CLOC_BUDGET ?= 20350
+GO_SOURCE_CLOC_BUDGET ?= 21100
 GO_SOURCE_CLOC_HAZARD_ZONE ?= 500
 
 run:
@@ -12,7 +12,17 @@ vendor: .FORCE
 	go mod vendor
 
 generate: vendor
-	go generate ./skel
+	@command -v protoc >/dev/null && command -v protoc-gen-go >/dev/null && command -v protoc-gen-go-grpc >/dev/null || { \
+		printf '%s\n' 'protoc toolchain missing. Install:' \
+			'  brew install protobuf' \
+			'  go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12' \
+			'  go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2' \
+			'  export PATH="$$(go env GOPATH)/bin:$$PATH"'; \
+		exit 1; \
+	}
+	mkdir -p frontend/rpc/proto
+	cp ../../proto/web.proto frontend/rpc/proto/web.proto
+	go generate ./...
 
 lint: vendor
 	go run -mod=readonly github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run --fix ./...
@@ -23,7 +33,7 @@ build: generate lint
 cloc:
 	@printf "Go cloc (cmd/rocketclaw and internal/rocketclaw)\n"
 	@set -eu; \
-	go_source_cloc=$$(cloc --json --include-lang=Go --fullpath  --not-match-f='(_test\.go)$$' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
+	go_source_cloc=$$(cloc --json --include-lang=Go --fullpath  --not-match-f='(_test\.go|\.pb\.go)$$' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
 	go_test_cloc=$$(cloc --json --include-lang=Go --fullpath  --match-f='(_test\.go)$$' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
 	go_total_cloc=$$(cloc --json --include-lang=Go --fullpath  ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
 	limit=$(GO_SOURCE_CLOC_BUDGET); \
@@ -46,7 +56,7 @@ check-code-metrics:
 
 check-cloc-budget:
 	@set -eu; \
-	go_source_cloc=$$(cloc --json --include-lang=Go --fullpath  --not-match-f='(_test\.go)$$' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
+	go_source_cloc=$$(cloc --json --include-lang=Go --fullpath  --not-match-f='(_test\.go|\.pb\.go)$$' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
 	[ -n "$$go_source_cloc" ] || { printf "source cloc budget failed: unable to read source cloc\n"; exit 1; }; \
 	limit=$(GO_SOURCE_CLOC_BUDGET); \
 	hazard_zone=$(GO_SOURCE_CLOC_HAZARD_ZONE); \

@@ -56,10 +56,6 @@ Unauthorized clicks are silent. If the message is not in a RocketClaw conversati
 | Review later work | `$queue`. | Posts pending steers, then later work. Hide closes it. Jump to a pending steer or Slack enqueue. ⏫ on an envelope during a turn converts it to a steer. 🛑 on a waiting hourglass drops that steer. Envelope 🛑 drops that enqueue. |
 | External MCP conversation | Call `session_prompt` with an external conversation ID, agent, and configured channel. | The ID owns one private MCP session and one managed Slack session on the same thread. The MCP agent stays fixed. MCP history copies into managed history; Slack history does not copy back. |
 
-## Development MCP
-
-A separate inbound door from External MCP. Off until `mcp_development.enabled` is true. Own users file: `rocketclaw.development.users.json` (copy `internal/rocketclaw/rocketclaw.development.users.example.json`, mode 0600). Not `rocketclaw.users.json`. Tools: `rocketclaw_development_list_overlay`, `rocketclaw_development_read_context_from_overlay`, `rocketclaw_development_lint`, `rocketclaw_development_run_turn`, `rocketclaw_development_reload`, `rocketclaw_development_restart`, `rocketclaw_development_list_session`, `rocketclaw_development_observe_session`, `rocketclaw_development_delete_session`. `lint` and `run_turn` take a request `context` (optional `base_overlay` plus file deltas). Chat stays on this door. `list_session`, `observe_session`, and `delete_session` inspect or delete durable Slack/exec/External MCP stored turns, not try-turn chats, and take no overlay context. Observe is a snapshot and may be large. Delete removes stored turns only, with no confirm. When this door is off, those calls do not exist.
-
 ## Goal Examples
 
 | Example | Meaning |

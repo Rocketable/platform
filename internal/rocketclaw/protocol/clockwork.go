@@ -13,6 +13,8 @@ type BridgeID string
 const (
 	// BridgeSlack identifies the Slack connector.
 	BridgeSlack BridgeID = "slack"
+	// BridgeWeb identifies the web RPC connector.
+	BridgeWeb BridgeID = "rpc"
 	// BridgeExternalMCP identifies the External MCP connector.
 	BridgeExternalMCP BridgeID = "external_mcp"
 )
@@ -52,6 +54,53 @@ type StartNewThreadResponse struct {
 
 // ResponseKind identifies the child-thread interaction.
 func (StartNewThreadResponse) ResponseKind() ResponseKind { return ResponseInteraction }
+
+// AskUserQuestionResponse asks the originator frontend to collect a human answer.
+type AskUserQuestionResponse struct {
+	Request *AskUserQuestionRequest
+	Answer  chan AskUserQuestionAnswer
+	Err     chan error
+}
+
+// ResponseKind identifies the ask-user interaction.
+func (AskUserQuestionResponse) ResponseKind() ResponseKind { return ResponseInteraction }
+
+// DrainSteersRequest asks Slack to return and clear buffered steers.
+type DrainSteersRequest struct {
+	ConversationID string
+	Steers         chan []string
+}
+
+// ResponseKind identifies the drain-steers interaction.
+func (DrainSteersRequest) ResponseKind() ResponseKind { return ResponseInteraction }
+
+// ActivateEnqueueRequest asks Slack to post the consume card for popped later work.
+type ActivateEnqueueRequest struct {
+	Item    *ThreadQueueItem
+	Inbound *InboundMessage
+	Done    chan error
+}
+
+// ResponseKind identifies the enqueue-activation interaction.
+func (ActivateEnqueueRequest) ResponseKind() ResponseKind { return ResponseInteraction }
+
+// ChannelNameRequest asks Slack for a channel display name.
+type ChannelNameRequest struct {
+	ChannelID string
+	Name      chan string
+}
+
+// ResponseKind identifies the channel-name interaction.
+func (ChannelNameRequest) ResponseKind() ResponseKind { return ResponseInteraction }
+
+// PostWebUserRequest asks Slack to echo a web-originated user line.
+type PostWebUserRequest struct {
+	ConversationID, Text string
+	Done                 chan error
+}
+
+// ResponseKind identifies the web-echo interaction.
+func (PostWebUserRequest) ResponseKind() ResponseKind { return ResponseInteraction }
 
 // Response carries progress, interaction, result, or error information for a Request.
 type Response struct {
@@ -94,6 +143,7 @@ type Broadcast struct {
 	RelayCleanup    *InboundMessage
 	RelayResponse   chan BroadcastReply
 	Acknowledgement chan BroadcastAcknowledgement
+	Interaction     ResponsePayload
 }
 
 // Channels are the unbuffered channels used for connector communication.
@@ -111,7 +161,7 @@ type BroadcastPublisher chan<- Broadcast
 
 // PublishOutbound publishes one live output Broadcast.
 func (p BroadcastPublisher) PublishOutbound(ctx context.Context, message *OutboundMessage) error {
-	if message.Response == nil && message.Cronjob == nil && !slices.Contains(message.Targets, OutputTargetSlack) {
+	if message.Response == nil && message.Cronjob == nil && !slices.Contains(message.Targets, OutputTargetSlack) && !slices.Contains(message.Targets, OutputTargetWeb) {
 		message.MarkDelivered(nil)
 
 		return nil
@@ -135,6 +185,8 @@ func (p BroadcastPublisher) PublishOutbound(ctx context.Context, message *Outbou
 		switch message.Source {
 		case SourceSlack:
 			sender = BridgeSlack
+		case SourceWeb:
+			sender = BridgeWeb
 		case SourceExternalMCP:
 			sender = BridgeExternalMCP
 		case SourceSystem:
@@ -178,6 +230,7 @@ func (b *Broadcast) Clone() Broadcast {
 		RelayCleanup:    b.RelayCleanup,
 		RelayResponse:   b.RelayResponse,
 		Acknowledgement: make(chan BroadcastAcknowledgement, 1),
+		Interaction:     b.Interaction,
 	}
 }
 
@@ -197,7 +250,7 @@ func CloneOutboundMessage(message *OutboundMessage) *OutboundMessage {
 		Text: message.Text, ProgressText: message.ProgressText, Source: message.Source, Bridge: message.Bridge,
 		Targets: slices.Clone(message.Targets), ConversationID: message.ConversationID, TurnID: message.TurnID,
 		SessionEntryID: message.SessionEntryID, ExternalConversationID: message.ExternalConversationID, Agent: message.Agent,
-		Sequence: message.Sequence, PostProgressText: message.PostProgressText, Complete: message.Complete,
+		Sequence: message.Sequence, PostProgressText: message.PostProgressText, Complete: message.Complete, Originator: message.Originator,
 		SlackReply: clonePtr(message.SlackReply), Attachments: CloneOutboundAttachments(message.Attachments),
 		GoalTurn: message.GoalTurn, GoalComplete: message.GoalComplete, GoalActive: message.GoalActive,
 		GoalTurnNumber: message.GoalTurnNumber, GoalMaxTurns: message.GoalMaxTurns, WorkflowTerminal: message.WorkflowTerminal,

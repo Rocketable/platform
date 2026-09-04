@@ -1,4 +1,4 @@
-package backend
+package cron
 
 import (
 	"os"
@@ -31,8 +31,16 @@ func TestValidateRuntimeDefinitionsRequiresConfiguredChannel(t *testing.T) {
 	require.NoError(t, ValidateRuntimeDefinitions(workspace, ".", []string{"#ops"}))
 }
 
-func TestLoadDefinitionNormalizesConfiguredChannel(t *testing.T) {
+func TestLoadDefinitionKeepsWebSessionChannel(t *testing.T) {
 	definition, err := loadDefinition([]byte("---\nschedule: 1h\nchannel: ' ops '\n---\nBody"), "cron/test.md")
 	require.NoError(t, err)
-	assert.Equal(t, "#ops", definition.textChannel)
+	assert.Equal(t, "ops", definition.textChannel)
+}
+
+func TestValidateRuntimeDefinitionsAcceptsWebSessionChannel(t *testing.T) {
+	workspace := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(workspace, "cron"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "cron", "daily.md"), []byte("---\nschedule: 1h\nchannel: ops\n---\nBody"), 0o644))
+
+	require.NoError(t, ValidateRuntimeDefinitions(workspace, ".", []string{"#release"}))
 }

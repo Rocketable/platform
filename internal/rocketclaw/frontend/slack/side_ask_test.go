@@ -99,8 +99,8 @@ func TestSideAskThreadStopDoesNotCancelSideAsk(t *testing.T) {
 	event.Channel = "C123"
 	connector.handleMessageEvent(t.Context(), event, slackNativeForward{})
 
-	require.Len(t, router.goalStops, 1)
-	assert.Equal(t, goalThreadStopCall{channelID: "C123", threadTS: "111.222"}, router.goalStops[0])
+	turns := waitTurns(t, connector, 1)
+	assert.Equal(t, protocol.TurnCancel, turns[0].Kind)
 
 	select {
 	case err := <-runner.done:
@@ -192,9 +192,9 @@ func TestSideAskUsesChosenAgentWithoutChangingThreadOwner(t *testing.T) {
 
 	assert.Equal(t, "planner", runner.snapshot()[0].Agent)
 	assert.Empty(t, router.switched)
-	agent, handled, err := router.ThreadAgent(protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.222"})
+
+	agent, err := connector.conv.ConversationAgent(protocol.SlackThreadConversationID("C123", "111.222"))
 	require.NoError(t, err)
-	assert.True(t, handled)
 	assert.Equal(t, "social", agent)
 }
 

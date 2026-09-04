@@ -9,6 +9,57 @@ import (
 // ErrGoalAlreadyActive reports that a conversation already has an active goal.
 var ErrGoalAlreadyActive = errors.New("goal already active")
 
+// ErrUnknownConversation reports RunTurn or Sync on an id that was never created.
+var ErrUnknownConversation = errors.New("unknown conversation")
+
+// ConversationTag is an interpret-only conversation tag.
+type ConversationTag string
+
+const (
+	// ConversationUserFacing marks a conversation Slack and Web should render.
+	ConversationUserFacing ConversationTag = "user-facing"
+	// ConversationCron marks Cron presentation.
+	ConversationCron ConversationTag = "cron"
+)
+
+// TurnKind is one RunTurn request kind.
+type TurnKind string
+
+const (
+	// TurnPrompt is a normal conversational prompt.
+	TurnPrompt TurnKind = "prompt"
+	// TurnSteer injects follow-up text.
+	TurnSteer TurnKind = "steer"
+	// TurnEnqueue stashes later work and returns after that turn finishes.
+	TurnEnqueue TurnKind = "enqueue"
+	// TurnCancel ends the active turn on a conversation.
+	TurnCancel TurnKind = "cancel"
+	// TurnGoal starts a goal loop.
+	TurnGoal TurnKind = "goal"
+	// TurnWorkflow starts a workflow.
+	TurnWorkflow TurnKind = "workflow"
+)
+
+// TurnRequest is one blocking RunTurn.
+type TurnRequest struct {
+	ID, Text, Agent, Objective, CheckScript, Workflow, WorkflowArgs, UserFacingID string
+	Kind                                                                          TurnKind
+	MaxTurns                                                                      int
+}
+
+// ConversationRecord is one ListConversations row.
+type ConversationRecord struct {
+	ID     string
+	Agents []string
+	Tags   []ConversationTag
+}
+
+// ConversationEvent is one live Subscribe event. Missed events are not replayed.
+type ConversationEvent struct {
+	ConversationID, Text, Role string
+	Complete                   bool
+}
+
 // ActivationHook runs when a text connector activates an idle conversation.
 type ActivationHook func(context.Context, *InboundMessage) error
 
@@ -40,6 +91,24 @@ type SideAskRequest struct {
 	Thinking, Message func(context.Context, string) error
 }
 
+// WebSessionConversationID returns the stable conversation ID for a web session.
+func WebSessionConversationID(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+
+	return "web-session:" + name
+}
+
+// WebSessionName returns the web session name for a web session conversation ID.
+func WebSessionName(conversationID string) (name string, ok bool) {
+	name, ok = strings.CutPrefix(strings.TrimSpace(conversationID), "web-session:")
+	name = strings.TrimSpace(name)
+
+	return name, ok && name != ""
+}
+
 // SlackThreadConversationID returns the stable conversation ID for a Slack thread.
 func SlackThreadConversationID(channelID, threadTS string) string {
 	channelID, threadTS = strings.TrimSpace(channelID), strings.TrimSpace(threadTS)
@@ -61,27 +130,4 @@ func SlackThreadTarget(conversationID string) (channelID, threadTS string, ok bo
 	channelID, threadTS = strings.TrimSpace(channelID), strings.TrimSpace(threadTS)
 
 	return channelID, threadTS, ok && channelID != "" && threadTS != ""
-}
-
-// PrimaryTextRouter routes primary text connector conversations.
-type PrimaryTextRouter interface {
-	StartThread(ctx context.Context, agent string, target TextConversationTarget, inbound *InboundMessage) error
-	StartGoalInThread(ctx context.Context, agent, objective, checkScript string, maxTurns int, target TextConversationTarget, inbound *InboundMessage) error
-	StartWorkflowInThread(ctx context.Context, agent, name, args string, target TextConversationTarget, inbound *InboundMessage) error
-	ReserveWorkflowTurn(target TextConversationTarget) (release func(), reserved bool, err error)
-	WorkflowDescriptions() ([]WorkflowDescription, error)
-	InterruptConversation(conversationID string) *InboundMessage
-	InterruptThread(target TextConversationTarget) (*InboundMessage, error)
-	RegisterThread(target TextConversationTarget, agent string) (created bool, err error)
-	RegisterCronThread(ctx context.Context, target TextConversationTarget, agent string) error
-	ThreadAgent(target TextConversationTarget) (agent string, handled bool, err error)
-	SwitchThreadAgent(target TextConversationTarget, agent string) (bool, error)
-	SubmitThreadReply(ctx context.Context, target TextConversationTarget, inbound *InboundMessage) (bool, error)
-	SubmitWhenActive(ctx context.Context, target TextConversationTarget, inbound *InboundMessage, activation ActivationHook) (bool, error)
-	StashThreadQueueItem(ctx context.Context, target TextConversationTarget, item *ThreadQueueItem) error
-	ThreadQueueItems(ctx context.Context, target TextConversationTarget) ([]ThreadQueueItem, error)
-	DeleteThreadQueueItem(ctx context.Context, target TextConversationTarget, id string) error
-	ScheduledMessages(ctx context.Context, target TextConversationTarget) (map[string]ScheduledMessageState, error)
-	ThreadBusy(target TextConversationTarget) bool
-	PickQueuedWork(ctx context.Context, target TextConversationTarget) error
 }

@@ -431,14 +431,14 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 5, n)
+	assert.Equal(t, 6, n)
 	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
 	second, err := NewSessionServiceIn(testStoreDSN(workspace), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop(context.Background())) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 5, n)
+	assert.Equal(t, 6, n)
 }
 
 func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
@@ -451,7 +451,7 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 5, n)
+	assert.Equal(t, 6, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 
@@ -919,7 +919,7 @@ func TestAppendSessionEntryIDRejectsBlankConversationID(t *testing.T) {
 func TestSessionInspectionMissingDBDoesNotCreateRuntimeDir(t *testing.T) {
 	workspace := t.TempDir()
 
-	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{})
+	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(workspace), &SessionListOptions{})
 	require.NoError(t, err)
 	assert.Empty(t, summaries)
 
@@ -939,7 +939,7 @@ func TestListSessionsIncludesLastMessages(t *testing.T) {
 	_, err = AppendSessionEntryID(context.Background(), workspace, "slack-thread:D123:111.222", testSessionEntry("thread user", "thread assistant"))
 	require.NoError(t, err)
 
-	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{})
+	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(workspace), &SessionListOptions{})
 	require.NoError(t, err)
 	require.Len(t, summaries, 2)
 
@@ -961,18 +961,18 @@ func TestListSessionsOptionsBoundsByLatestUpdate(t *testing.T) {
 	_, err = AppendSessionEntryID(context.Background(), workspace, "until", testSessionEntryAt(until, "until"))
 	require.NoError(t, err)
 
-	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{Since: since, Until: until})
+	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(workspace), &SessionListOptions{Since: since, Until: until})
 	require.NoError(t, err)
 	require.Len(t, summaries, 2)
 	assert.Equal(t, "inside", summaries[0].ConversationID)
 	assert.Equal(t, "boundary", summaries[1].ConversationID)
 
-	summaries, err = ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{Since: since})
+	summaries, err = ListSessionsInOptions(context.Background(), testStoreDSN(workspace), &SessionListOptions{Since: since})
 	require.NoError(t, err)
 	require.Len(t, summaries, 3)
 	assert.Equal(t, "until", summaries[0].ConversationID)
 
-	summaries, err = ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{Until: until})
+	summaries, err = ListSessionsInOptions(context.Background(), testStoreDSN(workspace), &SessionListOptions{Until: until})
 	require.NoError(t, err)
 	require.Len(t, summaries, 3)
 	assert.Equal(t, "inside", summaries[0].ConversationID)
@@ -987,7 +987,7 @@ func TestListSessionsOptionsLimitUsesMostRecent(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{Limit: 2})
+	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(workspace), &SessionListOptions{Limit: 2})
 	require.NoError(t, err)
 	require.Len(t, summaries, 2)
 	assert.Equal(t, "new", summaries[0].ConversationID)
@@ -995,13 +995,13 @@ func TestListSessionsOptionsLimitUsesMostRecent(t *testing.T) {
 }
 
 func TestListSessionsMissingDBIsEmpty(t *testing.T) {
-	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(t.TempDir()), SessionListOptions{})
+	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(t.TempDir()), &SessionListOptions{})
 	require.NoError(t, err)
 	assert.Empty(t, summaries)
 }
 
 func TestListSessionsOptionsMissingDBIsEmpty(t *testing.T) {
-	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(t.TempDir()), SessionListOptions{Limit: 1})
+	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(t.TempDir()), &SessionListOptions{Limit: 1})
 	require.NoError(t, err)
 	assert.Empty(t, summaries)
 }
@@ -1151,6 +1151,29 @@ func TestSessionServiceThreadAgentUpdatePreservesCreator(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}, thread)
+}
+
+func TestSessionServiceThreadSettlement(t *testing.T) {
+	service := newTestSessionService(t)
+	require.NoError(t, service.UpsertThread("thread", ThreadState{Agent: "main"}))
+	require.NoError(t, service.SetThreadSettlement("thread", "settled", false))
+	thread, ok, err := service.Thread("thread")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "settled", thread.SettledOverride)
+	assert.True(t, thread.BumpedAt.IsZero())
+	require.NoError(t, service.SetThreadSettlement("thread", "active", true))
+	thread, ok, err = service.Thread("thread")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "active", thread.SettledOverride)
+	assert.False(t, thread.BumpedAt.IsZero())
+	require.NoError(t, service.SetThreadSettlement("thread", "", false))
+	thread, ok, err = service.Thread("thread")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Empty(t, thread.SettledOverride)
+	assert.False(t, thread.BumpedAt.IsZero())
 }
 
 func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {
@@ -1320,6 +1343,8 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	for conversationID, ts := range map[string]time.Time{
 		oldThread:                      oldTime,
 		activeOldThread:                newTime,
+		newThread:                      newTime,
+		boundaryThread:                 cutoff,
 		"slack-thread:D123:not-a-time": oldTime,
 		"external_mcp:cron:orphan":     oldTime,
 		"cron:daily:old":               oldTime,
@@ -1373,6 +1398,75 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, entries, 1, conversationID)
 	}
+}
+
+func TestSessionServiceKeepsWebSessionRowsWhenPruning(t *testing.T) {
+	workspace := t.TempDir()
+	store := newTestSessionServiceAt(t, workspace)
+	cutoff := time.Unix(1_700_000_000, 0).UTC()
+	web := protocol.WebSessionConversationID("ops")
+	require.NoError(t, store.UpsertThread(web, ThreadState{Agent: "planner"}))
+	_, err := store.AppendEntryID(t.Context(), web, testSessionEntryAt(cutoff.Add(-time.Hour), "web"))
+	require.NoError(t, err)
+
+	_, err = store.PruneStateBefore(t.Context(), cutoff)
+	require.NoError(t, err)
+
+	threadIDs, err := managedConversationIDs(t.Context(), store.db)
+	require.NoError(t, err)
+	assert.Contains(t, threadIDs, web)
+}
+
+func TestSessionServicePrunesEmptyManagedWithoutPair(t *testing.T) {
+	store := newTestSessionServiceAt(t, t.TempDir())
+	cutoff := time.Unix(1_700_000_000, 0).UTC()
+	empty := protocol.SlackThreadConversationID("DEMPTY", "1.000")
+	kept := protocol.SlackThreadConversationID("DKEPT", slackTestTS(cutoff.Add(time.Hour)))
+
+	require.NoError(t, store.UpsertThread(empty, ThreadState{Agent: "planner"}))
+	require.NoError(t, store.UpsertThread(kept, ThreadState{Agent: "planner"}))
+	_, err := store.AppendEntryID(t.Context(), kept, testSessionEntryAt(cutoff.Add(time.Hour), "kept"))
+	require.NoError(t, err)
+
+	stats, err := store.PruneStateBefore(t.Context(), cutoff)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.EmptyManaged)
+
+	threadIDs, err := managedConversationIDs(t.Context(), store.db)
+	require.NoError(t, err)
+	assert.NotContains(t, threadIDs, empty)
+	assert.Contains(t, threadIDs, kept)
+}
+
+func TestSessionServiceKeepsPairProtectedEmptyManaged(t *testing.T) {
+	store := newTestSessionServiceAt(t, t.TempDir())
+	managedConversationID := protocol.SlackThreadConversationID("C1", "1.000")
+	require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{
+		Agent: "planner", PrivateConversationID: "external_mcp:planner:private", ManagedConversationID: managedConversationID, SlackChannel: "#ops",
+	}))
+
+	_, err := store.PruneStateBefore(t.Context(), time.Unix(1_700_000_000, 0).UTC())
+	require.NoError(t, err)
+
+	threadIDs, err := managedConversationIDs(t.Context(), store.db)
+	require.NoError(t, err)
+	assert.Contains(t, threadIDs, managedConversationID)
+	ids, err := store.ManagedConversationIDs(t.Context())
+	require.NoError(t, err)
+	assert.NotContains(t, ids, "cron:daily:old")
+}
+
+func TestManagedConversationIDsOmitCronSessionEntries(t *testing.T) {
+	store := newTestSessionServiceAt(t, t.TempDir())
+	_, err := store.AppendEntryID(t.Context(), "cron:daily:old", testSessionEntryAt(time.Unix(1_700_000_000, 0).UTC(), "cron"))
+	require.NoError(t, err)
+
+	human := protocol.SlackThreadConversationID("C1", "1.000")
+	require.NoError(t, store.UpsertThread(human, ThreadState{Agent: "main", CreatedBy: ThreadCreatedByCron}))
+
+	ids, err := store.ManagedConversationIDs(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, []string{human}, ids)
 }
 
 func TestSessionServicePrunesStaleExternalConversationWithActiveTurn(t *testing.T) {

@@ -518,6 +518,17 @@ func TestPickLaterWorkPrefersEarlierStashOverLaterDue(t *testing.T) {
 	require.Len(t, messages, 1)
 }
 
+func TestPublishOriginatorSendsWebUserLine(t *testing.T) {
+	bus := newTestBus()
+	bridge := &Bridge{bus: bus, config: Config{ConversationID: "web-session:ops"}}
+	require.NoError(t, bridge.publishOriginator(t.Context(), "popped later"))
+
+	published := <-bus.outbound
+	assert.Equal(t, "popped later", published.Text)
+	assert.True(t, published.Originator)
+	assert.Equal(t, []protocol.OutputTarget{protocol.OutputTargetWeb}, published.Targets)
+}
+
 func TestPickLaterWorkWaitsWhenParkedAfterFutureScheduled(t *testing.T) {
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
@@ -1035,6 +1046,12 @@ func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 
 	var group errgroup.Group
 	group.Go(func() error { return bridge.handleInbound(context.Background(), inbound) })
+
+	origin := readRocketCodeOutbound(t, bus)
+	assert.True(t, origin.Originator)
+	assert.Equal(t, "hello", origin.Text)
+	assert.Equal(t, []protocol.OutputTarget{protocol.OutputTargetWeb}, origin.Targets)
+	origin.MarkDelivered(nil)
 
 	outbound := readRocketCodeOutbound(t, bus)
 	assert.True(t, outbound.Complete)
@@ -1848,6 +1865,17 @@ func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
 	assert.Equal(t, "[Slack media=Text]", provenanceHeader(promptProvenance{origin: "Slack", media: "Text", principal: "   "}))
 	assert.Equal(t, "[External_(MCP)-x media=Voice_(note)-clip]", provenanceHeader(promptProvenance{origin: "External [MCP]=x", media: "Voice [note]=clip"}))
 	assert.Equal(t, promptProvenance{origin: "System", media: "Text"}, provenanceFromInbound(&protocol.InboundMessage{Source: protocol.SourceSystem, Metadata: map[string]string{protocol.InboundOriginMetadataKey: "Mallory", protocol.InboundMediaMetadataKey: "Dance"}}))
+	assert.Equal(t, promptProvenance{origin: "Web", media: "Text", principal: "alice"}, provenanceFromInbound(&protocol.InboundMessage{Source: protocol.SourceWeb, Human: true, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "alice"}}))
+}
+
+type scheduleArmer struct {
+	dest *Bridge
+}
+
+func (a scheduleArmer) armScheduledOn(_, id string, message *protocol.ScheduledMessageState) error {
+	a.dest.armScheduledMessage(id, message)
+
+	return nil
 }
 
 func TestBridgeScheduleMessageSubmitsAfterDelay(t *testing.T) {
@@ -1945,17 +1973,32 @@ func TestBridgeScheduleMessageSubmitsExternalMCPInPersistedSlackThread(t *testin
 		require.NoError(t, service.UpsertThread(threadKey, ThreadState{Agent: "planner"}))
 		require.NoError(t, service.UpsertExternalMCPSession("public-1", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: threadKey, SlackChannel: "ops"}))
 
-		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: privateConversationID, Agent: "planner", ManagedConversationID: threadKey, ExternalConversationID: "public-1", SessionService: service}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+		userFacing := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: threadKey, Agent: "planner", SessionService: service}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+		bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: privateConversationID, Agent: "planner", ManagedConversationID: threadKey, ExternalConversationID: "public-1", SessionService: service}, scheduledArmer: scheduleArmer{userFacing}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 		require.NoError(t, bridge.ScheduleMessage(5*time.Second, "later", false))
+
+		messages, err := service.ScheduledMessagesForConversation(threadKey)
+		require.NoError(t, err)
+		require.Len(t, messages, 1)
+
+		privateMessages, err := service.ScheduledMessagesForConversation(privateConversationID)
+		require.NoError(t, err)
+		require.Empty(t, privateMessages)
 
 		time.Sleep(5 * time.Second)
 		synctest.Wait()
 
 		select {
-		case request := <-bridge.requestCh:
+		case <-bridge.requestCh:
+			t.Fatal("scheduled message submitted on producer conversation")
+		default:
+		}
+
+		select {
+		case request := <-userFacing.requestCh:
 			require.NotNil(t, request.inbound)
 			assert.Equal(t, "later", request.inbound.Text)
-			assert.Equal(t, privateConversationID, request.inbound.ConversationID)
+			assert.Equal(t, threadKey, request.inbound.ConversationID)
 			require.NotNil(t, request.inbound.SlackReply)
 			assert.Equal(t, protocol.SlackReplyTarget{ChannelID: "D123", MessageTS: "111.222", ThreadTS: "111.222"}, *request.inbound.SlackReply)
 		case <-time.After(time.Nanosecond):
@@ -2559,6 +2602,10 @@ func TestBridgeDeletesScheduledMessageAfterSuccessfulHandling(t *testing.T) {
 	responseCh := inbound.EnableResponseWait()
 	require.NoError(t, bridge.enqueue(context.Background(), bridgeRequest{inbound: inbound, scheduledMessageID: "schedule-1", activation: NoopActivationHook}, "submit scheduled message"))
 
+	origin := readRocketCodeOutbound(t, bus)
+	require.True(t, origin.Originator)
+	origin.MarkDelivered(nil)
+
 	outbound := readRocketCodeOutbound(t, bus)
 	assert.Equal(t, unsupportedFileFallback, outbound.Text)
 	outbound.MarkDelivered(nil)
@@ -2690,6 +2737,10 @@ func TestBridgeKeepsRecurringScheduledMessageAfterSuccessfulHandling(t *testing.
 	inbound.HadNonImageAttachments = true
 	responseCh := inbound.EnableResponseWait()
 	require.NoError(t, bridge.enqueue(context.Background(), bridgeRequest{inbound: inbound, scheduledMessageID: "schedule-1", scheduledMessageRecurring: true, activation: NoopActivationHook}, "submit scheduled message"))
+
+	origin := readRocketCodeOutbound(t, bus)
+	require.True(t, origin.Originator)
+	origin.MarkDelivered(nil)
 
 	outbound := readRocketCodeOutbound(t, bus)
 	assert.Equal(t, unsupportedFileFallback, outbound.Text)
@@ -3411,7 +3462,6 @@ func TestAskUserQuestionToolOmitsResponseChannel(t *testing.T) {
 		Human:          true,
 		ConversationID: "slack-thread:C1:1",
 		Bridge:         protocol.BridgeSlack,
-		Response:       make(chan protocol.Response, 1),
 		SlackReply:     &protocol.SlackReplyTarget{ChannelID: "C1", MessageTS: "1", ThreadTS: "1"},
 	})
 
@@ -3584,9 +3634,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 
 	managedEntries, err := service.ObserveEntries(context.Background(), managedConversationID, 0)
 	require.NoError(t, err)
-	require.Len(t, managedEntries, 4)
-	assert.Equal(t, externalMCPMetadataEntryType, managedEntries[0].Entry.Type)
-	assert.Contains(t, string(managedEntries[2].Entry.ReplayInput[0]), "ROCKETCLAW_METADATA_LATER_KEY")
+	require.Empty(t, managedEntries)
 
 	for i := range entries {
 		messages, err := replayInputMessages(entries[i].Entry.ReplayInput)
@@ -3603,7 +3651,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	_, err = managedBridge.runTurn(context.Background(), managedMsg, "turn-managed", false)
 	require.NoError(t, err)
 	require.NotEmpty(t, requestBody.Input)
-	assert.Equal(t, "first||last", requestBody.Input[len(requestBody.Input)-1].Output)
+	assert.Equal(t, "||", requestBody.Input[len(requestBody.Input)-1].Output)
 }
 
 func TestRunTurnPreservesRecoveredExternalMCPReplayWithTransientMetadata(t *testing.T) {

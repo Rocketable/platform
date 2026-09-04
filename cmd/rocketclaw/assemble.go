@@ -4,141 +4,131 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"sync"
+	"strings"
+	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/frontend"
+	clawcron "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
 	slackconnector "github.com/Rocketable/platform/internal/rocketclaw/frontend/slack"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
+var (
+	_ frontend.Backend    = (*backend.Runtime)(nil)
+	_ clawcron.ThreadRoot = (*slackconnector.Connector)(nil)
+)
+
 type processAssembler struct{}
 
-func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
-	copyLoop := newClockwork(rt.Channels)
+func (processAssembler) Assemble(rt *backend.Runtime) ([]func(context.Context) error, error) {
 	var stops []func(context.Context) error
-
-	go func() {
-		if err := copyLoop.run(rt.RunCtx); err != nil {
-			rt.Log.Error("connector copy loop stopped", "error", err)
-		}
-	}()
 
 	rt.Log.Info("starting Slack connector")
 
-	slack := slackconnector.New(&rt.Cfg.Slack, protocol.BroadcastPublisher(rt.Channels.Broadcasts), rt.TextRouter, rt.Cron, &backend.SideAskRunner{Config: rt.Cfg, Sessions: rt.Sessions, Logger: rt.Log}, rt.Log)
-	removeSlack, err := copyLoop.registerBridge(protocol.BridgeSlack, slack)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("register Slack bridge: %w", err)
+	channels := make([]string, 0, len(rt.Cfg.Slack.Channels))
+	agents := make(map[string][]string, len(rt.Cfg.Slack.Channels))
+	for _, channel := range rt.Cfg.Slack.Channels {
+		if channel.Channel == "@" {
+			continue
+		}
+
+		agents[channel.Channel] = channel.Agents
+		if strings.HasPrefix(channel.Channel, "#") {
+			channels = append(channels, channel.Channel)
+		}
 	}
 
-	stops = append(stops, func(context.Context) error {
-		removeSlack()
-		return nil
-	})
+	slack := slackconnector.New(&rt.Cfg.Slack, protocol.BroadcastPublisher(rt.Channels.Broadcasts), rt.Channels.Broadcasts, rt, frontend.SideAsk{Backend: rt}, rt.Log)
+	cronFront := clawcron.New(rt.Cfg.Workspace, rt.Cfg.RuntimeDirName(), channels, agents, rt, sessionScheduleStore{sessions: rt.Sessions}, slack, rt.Log)
+	slack.SetCron(cronFront)
 
 	if err := slack.Start(rt.RunCtx); err != nil {
-		return nil, nil, nil, fmt.Errorf("start Slack connector: %w", err)
+		return nil, fmt.Errorf("start Slack connector: %w", err)
 	}
 
 	stops = append(stops, slack.Stop)
 
+	if rt.Sessions != nil {
+		slack.SetPendingSteersSink(protocol.PendingSteersSink{Set: rt.Sessions.SetPendingSteers})
+	}
+
+	for i := range rt.RecoveredTurns {
+		slack.RestorePendingSteers(rt.RecoveredTurns[i].Checkpoint.ConversationKey, rt.RecoveredTurns[i].PendingSteers)
+	}
+
 	if rt.Cfg.MCPExternal.Enabled {
-		removeExternal, err := copyLoop.registerBridge(protocol.BridgeExternalMCP, dropBroadcastBridge{})
+		if _, err := backend.ExternalMCPAgentsIn(rt.Cfg, rt.Cfg.RuntimeDirName()); err != nil {
+			return nil, fmt.Errorf("load external MCP agents: %w", err)
+		}
+
+		users, errUsers := config.LoadExternalMCPUsers(rt.ConfigPath)
+		if errUsers != nil {
+			return nil, fmt.Errorf("load external MCP auth users: %w", errUsers)
+		}
+
+		agentExposed := func(agent string) bool {
+			names, errAgents := backend.ExternalMCPAgentsIn(rt.Cfg, rt.Cfg.RuntimeDirName())
+			return errAgents == nil && slices.Contains(names, agent)
+		}
+		externalMCP, err := startExternalMCPServer(rt.RunCtx, rt.Cfg, slack.StartThread, users, agentExposed, rt.Sessions, rt, rt.Log)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("register External MCP bridge: %w", err)
-		}
-
-		stops = append(stops, func(context.Context) error {
-			removeExternal()
-			return nil
-		})
-
-		var (
-			externalMCPAgentsMu sync.Mutex
-			externalMCPAgents   = []string{}
-		)
-
-		*rt.RefreshExternalMCPAgents = func() error {
-			agents, err := backend.ExternalMCPAgentsIn(rt.Cfg, rt.Cfg.RuntimeDirName())
-			if err != nil {
-				return fmt.Errorf("load external MCP agents: %w", err)
-			}
-
-			externalMCPAgentsMu.Lock()
-			externalMCPAgents = agents
-			externalMCPAgentsMu.Unlock()
-
-			return nil
-		}
-
-		if err := (*rt.RefreshExternalMCPAgents)(); err != nil {
-			return nil, nil, nil, err
-		}
-
-		textRelay := func(relayCtx context.Context, relay *protocol.ExternalMCPRelay, reply *protocol.InboundMessage, channelName string) (*protocol.InboundMessage, error) {
-			response := make(chan protocol.BroadcastReply, 1)
-			select {
-			case rt.Channels.Broadcasts <- protocol.Broadcast{Sender: protocol.BridgeExternalMCP, Relay: relay, RelayReply: reply, RelayChannel: channelName, RelayResponse: response}:
-			case <-relayCtx.Done():
-				return nil, relayCtx.Err()
-			}
-
-			select {
-			case result := <-response:
-				return result.Message, result.Err
-			case <-relayCtx.Done():
-				return nil, relayCtx.Err()
-			}
-		}
-		cleanupTextRelay := func(cleanupCtx context.Context, reply *protocol.InboundMessage) {
-			if reply == nil {
-				return
-			}
-
-			response := make(chan protocol.BroadcastReply, 1)
-			select {
-			case rt.Channels.Broadcasts <- protocol.Broadcast{Sender: protocol.BridgeExternalMCP, RelayCleanup: reply, RelayResponse: response}:
-			case <-cleanupCtx.Done():
-				return
-			}
-
-			select {
-			case <-response:
-			case <-cleanupCtx.Done():
-			}
-		}
-
-		externalMCP, err := startExternalMCPServer(rt.RunCtx, rt.Cfg, textRelay, cleanupTextRelay, rt.ExternalMCPUsers, func(agent string) bool {
-			externalMCPAgentsMu.Lock()
-			defer externalMCPAgentsMu.Unlock()
-
-			return slices.Contains(externalMCPAgents, agent)
-		}, rt.Sessions, func(submitCtx context.Context, agent, conversationID string, inbound *protocol.InboundMessage, activation protocol.ActivationHook) error {
-			if err := activation(submitCtx, inbound); err != nil {
-				return err
-			}
-
-			return rt.SubmitExternalMCP(submitCtx, agent, conversationID, inbound, backend.NoopActivationHook)
-		}, rt.Log)
-		if err != nil {
-			return nil, nil, nil, err
+			return nil, err
 		}
 
 		stops = append(stops, externalMCP.Close)
 	}
 
-	developmentMCP, err := startDevelopmentMCP(rt.RunCtx, rt.Cfg, rt.ConfigPath, rt.OverlayMu, func(reason string) (string, error) {
-		return rt.Reload(rt.RunCtx, reason)
-	}, func(reason string) (string, error) {
-		return rt.Restart(rt.RunCtx, reason)
-	}, rt.Log, rt.Sessions)
+	if err := cronFront.Start(rt.RunCtx); err != nil {
+		return nil, fmt.Errorf("start cronjobs: %w", err)
+	}
+
+	stops = append(stops, cronFront.Stop)
+
+	return stops, nil
+}
+
+type sessionScheduleStore struct {
+	sessions *backend.SessionService
+}
+
+func (s sessionScheduleStore) ResetSchedules() error {
+	return s.sessions.ResetCronSchedules()
+}
+
+func (s sessionScheduleStore) SyncSchedules(states []clawcron.ScheduleState, now time.Time) error {
+	converted := make([]backend.CronScheduleState, len(states))
+	for i, state := range states {
+		converted[i] = backend.CronScheduleState{ScheduleID: state.ScheduleID, RelativePath: state.RelativePath, NextDue: state.NextDue}
+	}
+
+	return s.sessions.SyncCronSchedules(converted, now)
+}
+
+func (s sessionScheduleStore) DueSchedules(now time.Time, limit int) ([]clawcron.ScheduleState, error) {
+	due, err := s.sessions.DueCronSchedules(now, limit)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 
-	if developmentMCP != nil {
-		stops = append(stops, developmentMCP.Close)
+	out := make([]clawcron.ScheduleState, len(due))
+	for i, state := range due {
+		out[i] = clawcron.ScheduleState{ScheduleID: state.ScheduleID, RelativePath: state.RelativePath, NextDue: state.NextDue}
 	}
 
-	return slack, copyLoop.done, stops, nil
+	return out, nil
+}
+
+func (s sessionScheduleStore) ClaimSchedule(due clawcron.ScheduleState, nextDue, now time.Time) (clawcron.ScheduleRun, bool, error) {
+	run, ok, err := s.sessions.ClaimCronSchedule(backend.CronScheduleState{ScheduleID: due.ScheduleID, RelativePath: due.RelativePath, NextDue: due.NextDue}, nextDue, now)
+	if err != nil {
+		return clawcron.ScheduleRun{}, false, err
+	}
+
+	return clawcron.ScheduleRun{ScheduleID: run.ScheduleID, RelativePath: run.RelativePath, DueAt: run.DueAt}, ok, nil
+}
+
+func (s sessionScheduleStore) CompleteRun(relativePath string, now time.Time) error {
+	return s.sessions.CompleteCronRun(relativePath, now)
 }

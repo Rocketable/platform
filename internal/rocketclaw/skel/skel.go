@@ -38,6 +38,39 @@ type OverlayInfo struct {
 	Spec, URL, Ref, ClonePath string
 }
 
+// OriginOf returns the last-wins source of a runtime asset: "embedded", a configured overlay spec, or "root".
+func OriginOf(workspace, runtimeDir, kind, rel string, overlays []string) string {
+	rel = filepath.ToSlash(strings.TrimSpace(rel))
+	joined := filepath.ToSlash(filepath.Join(kind, rel))
+
+	origin := ""
+	if embeddedFile(joined) || (kind == skillsRoot && embeddedFile(filepath.ToSlash(filepath.Join(payloadRoot, joined)))) {
+		origin = "embedded"
+	}
+
+	for _, overlay := range OverlayInfos(workspace, runtimeDir, overlays) {
+		if regularFile(filepath.Join(overlay.ClonePath, filepath.FromSlash(joined))) {
+			origin = overlay.Spec
+		}
+	}
+
+	if regularFile(filepath.Join(workspace, filepath.FromSlash(joined))) {
+		origin = "root"
+	}
+
+	return origin
+}
+
+func embeddedFile(name string) bool {
+	info, err := fs.Stat(payload, name)
+	return err == nil && !info.IsDir()
+}
+
+func regularFile(name string) bool {
+	info, err := os.Stat(name)
+	return err == nil && !info.IsDir()
+}
+
 //go:embed AGENTS.md main-update-cortex.sh all:.rocketclaw all:agents all:cron
 var payload embed.FS
 

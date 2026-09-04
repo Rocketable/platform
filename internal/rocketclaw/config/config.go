@@ -24,7 +24,6 @@ type Config struct {
 	Environment       []string                   `json:"environment,omitempty"`
 	Logging           LoggingConfig              `json:"logging"`
 	MCPExternal       MCPExternalConfig          `json:"mcp_external"`
-	MCPDevelopment    MCPDevelopmentConfig       `json:"mcp_development"`
 	MCPServers        map[string]MCPServerConfig `json:"mcp_servers,omitempty"`
 	Slack             SlackConfig                `json:"slack"`
 	OpenAI            OpenAIConfig               `json:"openai"`
@@ -52,12 +51,6 @@ type LoggingConfig struct {
 
 // MCPExternalConfig configures the persistent external MCP HTTP server.
 type MCPExternalConfig struct {
-	Enabled    bool   `json:"enabled"`
-	ListenAddr string `json:"listen_addr"`
-}
-
-// MCPDevelopmentConfig configures the Development MCP HTTP server.
-type MCPDevelopmentConfig struct {
 	Enabled    bool   `json:"enabled"`
 	ListenAddr string `json:"listen_addr"`
 }
@@ -201,11 +194,6 @@ func LoadExternalMCPUsers(configPath string) (map[string]string, error) {
 	return loadMCPUsersFile(configPath, "rocketclaw.users.json", "external MCP users file")
 }
 
-// LoadDevelopmentMCPUsers reads the optional rocketclaw.development.users.json file next to configPath.
-func LoadDevelopmentMCPUsers(configPath string) (map[string]string, error) {
-	return loadMCPUsersFile(configPath, "rocketclaw.development.users.json", "development MCP users file")
-}
-
 func loadMCPUsersFile(configPath, filename, label string) (map[string]string, error) {
 	configPath = strings.TrimSpace(configPath)
 	if configPath == "" {
@@ -306,10 +294,6 @@ func (c *Config) Validate() error {
 
 	if c.MCPExternal.Enabled && strings.TrimSpace(c.MCPExternal.ListenAddr) == "" {
 		return errors.New("mcp_external.listen_addr is required when mcp_external is enabled")
-	}
-
-	if c.MCPDevelopment.Enabled && strings.TrimSpace(c.MCPDevelopment.ListenAddr) == "" {
-		return errors.New("mcp_development.listen_addr is required when mcp_development is enabled")
 	}
 
 	if err := c.validateMCPServers(); err != nil {
