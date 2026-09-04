@@ -1,0 +1,248 @@
+syntax = "proto3";
+
+package rpc;
+
+option go_package = "github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc";
+
+message ListSessionsRequest {}
+
+message Session {
+  string id = 1;
+  string title = 2;
+  string preview = 3;
+  string updated_at = 4;
+  string agent = 5;
+  bool settled = 6;
+  repeated string allowed_agents = 7;
+}
+
+message HistoryRequest {
+  string id = 1;
+}
+
+message HistoryResponse {
+  repeated TranscriptEvent messages = 1;
+}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+}
+
+message CreateSessionRequest {
+  string name = 1;
+  string agent = 2;
+}
+
+message CreateSessionResponse {
+  string id = 1;
+}
+
+message JoinRequest {
+  string id = 1;
+}
+
+message TranscriptEvent {
+  string text = 1;
+  bool snapshot = 2;
+  string role = 3;
+  bool complete = 4;
+  string turn_id = 5;
+}
+
+enum PromptDelivery {
+  STEER = 0;
+  QUEUE = 1;
+}
+
+message PromptRequest {
+  string id = 1;
+  string text = 2;
+  PromptDelivery delivery = 3;
+}
+
+message PromptResponse {
+  string private_text = 1;
+}
+
+message CronJob {
+  string stem = 1;
+  string status = 2;
+  string last_run = 3;
+  string next_run = 4;
+  string schedule = 5;
+  string body = 6;
+  string agent = 7;
+  string channel = 8;
+  repeated string upcoming = 9;
+  string origin = 10;
+}
+
+message Agent {
+  string name = 1;
+  string model = 2;
+  string reasoning = 3;
+  string description = 4;
+  string verbosity = 5;
+  string prompt = 6;
+  string permissions = 7;
+  string origin = 8;
+}
+
+message ListAgentsRequest {}
+
+message ListAgentsResponse {
+  repeated Agent agents = 1;
+}
+
+message Skill {
+  string name = 1;
+  string description = 2;
+  string license = 3;
+  string compatibility = 4;
+  string content = 5;
+  string origin = 6;
+}
+
+message ListSkillsRequest {}
+
+message ListSkillsResponse {
+  repeated Skill skills = 1;
+}
+
+message ListCronJobsRequest {}
+
+message ListCronJobsResponse {
+  repeated CronJob jobs = 1;
+}
+
+message RunCronJobRequest {
+  string stem = 1;
+}
+
+message RunCronJobResponse {
+  string id = 1;
+}
+
+message AnswerQuestionRequest {
+  string ask_id = 1;
+  string answer = 2;
+  bool dismiss = 3;
+}
+
+message AnswerQuestionResponse {}
+
+message ConfigModel {
+  string name = 1;
+  string model = 2;
+}
+
+message ConfigChannel {
+  string channel = 1;
+  repeated string agents = 2;
+}
+
+message ConfigView {
+  string workspace = 1;
+  repeated string overlays = 2;
+  repeated ConfigModel models = 3;
+  repeated ConfigChannel slack_channels = 4;
+  repeated string mcp_servers = 5;
+  string logging_level = 6;
+  string auto_approver_model = 7;
+  bool instrumentation_enabled = 8;
+  bool mcp_external = 9;
+}
+
+message ListConfigRequest {}
+
+message ListConfigResponse {
+  ConfigView config = 1;
+}
+
+message SettleSessionRequest {
+  string id = 1;
+  bool settled = 2;
+}
+
+message SettleSessionResponse {}
+
+message ProtocolRequest {}
+
+message ProtocolResponse {
+  string proto_sha256 = 1;
+}
+
+message QueueItem {
+  string id = 1;
+  string text = 2;
+}
+
+message ListQueueRequest {
+  string id = 1;
+}
+
+message ListQueueResponse {
+  repeated QueueItem items = 1;
+}
+
+message QueueItemRequest {
+  string id = 1;
+  string item_id = 2;
+}
+
+message QueueItemResponse {}
+
+message ReorderQueueRequest {
+  string id = 1;
+  repeated string item_ids = 2;
+}
+
+message SessionEntriesRequest {
+  string id = 1;
+}
+
+message SessionEntryMeta {
+  int64 id = 1;
+  string type = 2;
+  string timestamp = 3;
+}
+
+message ListSessionEntriesResponse {
+  repeated SessionEntryMeta entries = 1;
+}
+
+message SessionEntryData {
+  int64 id = 1;
+  string json = 2;
+}
+
+message LoadSessionEntriesResponse {
+  repeated SessionEntryData entries = 1;
+}
+
+message DeleteSessionEntriesResponse {
+  int64 deleted = 1;
+}
+
+service Web {
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+  rpc Join(JoinRequest) returns (stream TranscriptEvent);
+  rpc Prompt(PromptRequest) returns (PromptResponse);
+  rpc ListCronJobs(ListCronJobsRequest) returns (ListCronJobsResponse);
+  rpc RunCronJob(RunCronJobRequest) returns (RunCronJobResponse);
+  rpc AnswerQuestion(AnswerQuestionRequest) returns (AnswerQuestionResponse);
+  rpc History(HistoryRequest) returns (HistoryResponse);
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
+  rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);
+  rpc ListConfig(ListConfigRequest) returns (ListConfigResponse);
+  rpc SettleSession(SettleSessionRequest) returns (SettleSessionResponse);
+  rpc Protocol(ProtocolRequest) returns (ProtocolResponse);
+  rpc ListQueue(ListQueueRequest) returns (ListQueueResponse);
+  rpc RemoveQueueItem(QueueItemRequest) returns (QueueItemResponse);
+  rpc SteerQueueItem(QueueItemRequest) returns (QueueItemResponse);
+  rpc ReorderQueue(ReorderQueueRequest) returns (QueueItemResponse);
+  rpc ListSessionEntries(SessionEntriesRequest) returns (ListSessionEntriesResponse);
+  rpc LoadSessionEntries(SessionEntriesRequest) returns (LoadSessionEntriesResponse);
+  rpc DeleteSessionEntries(SessionEntriesRequest) returns (DeleteSessionEntriesResponse);
+}
