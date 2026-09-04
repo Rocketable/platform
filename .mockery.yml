@@ -43,6 +43,10 @@ packages:
             pkgname: slackconnector
             structname: backendMock
             inpackage: false
+          - dir: '{{.ConfigDir}}/internal/rocketclaw/frontend/rpc'
+            pkgname: rpc
+            structname: mockBackend
+            inpackage: false
           - dir: '{{.ConfigDir}}/cmd/rocketclaw'
             pkgname: main
             structname: BackendMock
@@ -50,8 +54,28 @@ packages:
   github.com/Rocketable/platform/internal/rocketclaw/frontend/cron:
     interfaces:
       Runner:
-        config:
-          structname: runnerMock
+        configs:
+          - structname: runnerMock
+          - dir: '{{.ConfigDir}}/internal/rocketclaw/frontend/rpc'
+            pkgname: rpc
+            structname: mockCronRunner
+            inpackage: false
+  github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc:
+    interfaces:
+      ChannelAgentChoices:
+        configs:
+          - structname: mockChannels
+          - dir: '{{.ConfigDir}}/cmd/rocketclaw'
+            pkgname: main
+            structname: mockWebChannels
+            inpackage: false
+      CronJobs:
+        configs:
+          - structname: mockCronJobs
+          - dir: '{{.ConfigDir}}/cmd/rocketclaw'
+            pkgname: main
+            structname: mockWebCron
+            inpackage: false
   github.com/Rocketable/platform/internal/rocketclaw/frontend/slack:
     interfaces:
       oneOffCronjobRunner:
