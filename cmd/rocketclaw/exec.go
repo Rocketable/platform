@@ -114,20 +114,16 @@ Example:
   rocketclaw exec triage "summarize today's failures"
 `
 
-// execHelpRequested reports whether any argument asks for the exec help screen.
-func execHelpRequested(args []string) bool {
+func runExecIn(ctx context.Context, args []string, out io.Writer, run execRunner) error {
+	requestedHelp := len(args) == 0
 	for _, arg := range args {
 		switch arg {
 		case "help", "-h", "--help":
-			return true
+			requestedHelp = true
 		}
 	}
 
-	return false
-}
-
-func runExecIn(ctx context.Context, args []string, out io.Writer, run execRunner) error {
-	if len(args) == 0 || execHelpRequested(args) {
+	if requestedHelp {
 		if _, err := fmt.Fprint(out, execHelpText); err != nil {
 			return fmt.Errorf("print exec help: %w", err)
 		}

@@ -17,11 +17,7 @@ func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-
 	copyLoop := newClockwork(rt.Channels)
 	var stops []func(context.Context) error
 
-	go func() {
-		if err := copyLoop.run(rt.RunCtx); err != nil {
-			rt.Log.Error("connector copy loop stopped", "error", err)
-		}
-	}()
+	go copyLoop.run(rt.RunCtx)
 
 	rt.Log.Info("starting Slack connector")
 
@@ -76,36 +72,15 @@ func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-
 		}
 
 		textRelay := func(relayCtx context.Context, relay *protocol.ExternalMCPRelay, reply *protocol.InboundMessage, channelName string) (*protocol.InboundMessage, error) {
-			response := make(chan protocol.BroadcastReply, 1)
-			select {
-			case rt.Channels.Broadcasts <- protocol.Broadcast{Sender: protocol.BridgeExternalMCP, Relay: relay, RelayReply: reply, RelayChannel: channelName, RelayResponse: response}:
-			case <-relayCtx.Done():
-				return nil, relayCtx.Err()
-			}
-
-			select {
-			case result := <-response:
-				return result.Message, result.Err
-			case <-relayCtx.Done():
-				return nil, relayCtx.Err()
-			}
+			result, err := waitBroadcastReply(relayCtx, rt.Channels.Broadcasts, &protocol.Broadcast{Sender: protocol.BridgeExternalMCP, Relay: relay, RelayReply: reply, RelayChannel: channelName})
+			return result.Message, err
 		}
 		cleanupTextRelay := func(cleanupCtx context.Context, reply *protocol.InboundMessage) {
 			if reply == nil {
 				return
 			}
 
-			response := make(chan protocol.BroadcastReply, 1)
-			select {
-			case rt.Channels.Broadcasts <- protocol.Broadcast{Sender: protocol.BridgeExternalMCP, RelayCleanup: reply, RelayResponse: response}:
-			case <-cleanupCtx.Done():
-				return
-			}
-
-			select {
-			case <-response:
-			case <-cleanupCtx.Done():
-			}
+			_, _ = waitBroadcastReply(cleanupCtx, rt.Channels.Broadcasts, &protocol.Broadcast{Sender: protocol.BridgeExternalMCP, RelayCleanup: reply})
 		}
 
 		externalMCP, err := startExternalMCPServer(rt.RunCtx, rt.Cfg, textRelay, cleanupTextRelay, rt.ExternalMCPUsers, func(agent string) bool {
@@ -141,4 +116,23 @@ func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-
 	}
 
 	return slack, copyLoop.done, stops, nil
+}
+
+func waitBroadcastReply(ctx context.Context, ch chan<- protocol.Broadcast, broadcast *protocol.Broadcast) (protocol.BroadcastReply, error) {
+	response := make(chan protocol.BroadcastReply, 1)
+	sent := *broadcast
+	sent.RelayResponse = response
+
+	select {
+	case ch <- sent:
+	case <-ctx.Done():
+		return protocol.BroadcastReply{}, ctx.Err()
+	}
+
+	select {
+	case result := <-response:
+		return result, result.Err
+	case <-ctx.Done():
+		return protocol.BroadcastReply{}, ctx.Err()
+	}
 }
