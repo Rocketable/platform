@@ -1183,31 +1183,6 @@ func TestTransportAddsOAuthHeadersAndStripsBodyIDs(t *testing.T) {
 	require.JSONEq(t, `{"id":"resp","output":[{"id":"msg","type":"message"}]}`, string(data))
 }
 
-func TestTransportUsesDefaultTransportWhenBaseNil(t *testing.T) {
-	workspace := t.TempDir()
-	testAuthPath(t, workspace)
-	requireSaveToken(t, workspace, "openai", Token{Refresh: "refresh", Access: "access", Expires: time.Now().Add(time.Hour).UnixMilli()})
-
-	base := http.DefaultTransport
-	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		require.Equal(t, "/backend-api/codex/models", req.URL.Path)
-		require.Equal(t, "Bearer access", req.Header.Get("Authorization"))
-
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[]}`)), Header: make(http.Header)}, nil
-	})
-
-	t.Cleanup(func() { http.DefaultTransport = base })
-
-	transport := &transport{workspace: workspace, runtimeDir: config.DefaultRuntimeDir, provider: "openai"}
-	resp, err := transport.RoundTrip(requestWithPathAndBody("/backend-api/codex/models", `{}`))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, resp.Body.Close()) })
-
-	data, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	require.JSONEq(t, `{"data":[]}`, string(data))
-}
-
 func TestTransportReportsTokenAndBaseErrors(t *testing.T) {
 	t.Run("token error", func(t *testing.T) {
 		transport := &transport{workspace: t.TempDir(), runtimeDir: config.DefaultRuntimeDir, provider: "openai", base: roundTripFunc(func(*http.Request) (*http.Response, error) {

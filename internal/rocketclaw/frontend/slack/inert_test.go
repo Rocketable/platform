@@ -31,9 +31,6 @@ func (inertThreadRouter) InterruptThread(target protocol.TextConversationTarget)
 func (inertThreadRouter) InterruptConversation(string) *protocol.InboundMessage {
 	return nil
 }
-func (inertThreadRouter) RegisterCronThread(_ context.Context, _ protocol.TextConversationTarget, _ string) error {
-	return nil
-}
 func (inertThreadRouter) RegisterThread(_ protocol.TextConversationTarget, _ string) (bool, error) {
 	return true, nil
 }
@@ -47,13 +44,10 @@ func (inertThreadRouter) ThreadAgent(_ protocol.TextConversationTarget) (agent s
 func (inertThreadRouter) SubmitThreadReply(_ context.Context, _ protocol.TextConversationTarget, _ *protocol.InboundMessage) (bool, error) {
 	return false, nil
 }
-func (inertThreadRouter) SubmitWhenActive(_ context.Context, _ protocol.TextConversationTarget, _ *protocol.InboundMessage, _ protocol.ActivationHook) (bool, error) {
-	return false, nil
-}
 func (inertThreadRouter) StashThreadQueueItem(context.Context, protocol.TextConversationTarget, *protocol.ThreadQueueItem) error {
 	return errors.New("slack thread routing is not configured")
 }
-func (inertThreadRouter) ThreadQueueItems(context.Context, protocol.TextConversationTarget) ([]protocol.ThreadQueueItem, error) {
+func (inertThreadRouter) ThreadQueueItems(protocol.TextConversationTarget) ([]protocol.ThreadQueueItem, error) {
 	return nil, errors.New("slack thread routing is not configured")
 }
 func (inertThreadRouter) DeleteThreadQueueItem(context.Context, protocol.TextConversationTarget, string) (bool, error) {
@@ -62,14 +56,11 @@ func (inertThreadRouter) DeleteThreadQueueItem(context.Context, protocol.TextCon
 func (inertThreadRouter) PromoteThreadQueueItem(context.Context, protocol.TextConversationTarget, string) (bool, error) {
 	return false, errors.New("slack thread routing is not configured")
 }
-func (inertThreadRouter) ScheduledMessages(context.Context, protocol.TextConversationTarget) (map[string]protocol.ScheduledMessageState, error) {
+func (inertThreadRouter) ScheduledMessages(protocol.TextConversationTarget) (map[string]protocol.ScheduledMessageState, error) {
 	return nil, errors.New("slack thread routing is not configured")
 }
 func (inertThreadRouter) ThreadBusy(protocol.TextConversationTarget) bool {
 	return false
-}
-func (inertThreadRouter) PickQueuedWork(context.Context, protocol.TextConversationTarget) error {
-	return nil
 }
 
 type inertOneOffCronjobs struct{}

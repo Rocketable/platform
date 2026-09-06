@@ -6,7 +6,6 @@ import { cn } from "@/lib/utils";
 
 export const Sheet = Dialog.Root;
 export const SheetTrigger = Dialog.Trigger;
-export const SheetClose = Dialog.Close;
 
 export function SheetContent({ children, className }: { children: ReactNode; className?: string }) {
   return (

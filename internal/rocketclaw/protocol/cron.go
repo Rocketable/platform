@@ -1,16 +1,12 @@
 package protocol
 
 import (
-	"context"
-	"slices"
 	"strings"
 )
 
 // CronRunResult captures the observable result of one cronjob run.
 type CronRunResult struct {
-	Text, VerbatimMessage string
-	ConversationID        string
-	Attachments           []OutboundAttachment
+	ConversationID string
 }
 
 // OneOffCronjob captures a live one-off cronjob prompt loaded from disk.
@@ -19,28 +15,20 @@ type OneOffCronjob struct {
 	ConversationID                           string
 }
 
-// CronProgress receives one-off cron thinking and message callbacks.
-type CronProgress struct {
-	Thinking, Message func(context.Context, string) error
-}
-
 // OnDemandCronTarget extracts one deterministic top-level cron target from connector text.
-func OnDemandCronTarget(text string, prefixes ...string) (string, bool) {
+func OnDemandCronTarget(text string) (string, bool) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return "", false
 	}
 
-	candidates := []string{}
-	if target, ok := singleOnDemandCronTarget(text, prefixes); ok {
-		candidates = append(candidates, target)
-	}
+	var candidates []string
 
-	for _, prefix := range prefixes {
-		if after, ok := strings.CutPrefix(text, prefix); ok {
-			if target, ok := singleOnDemandCronTarget(after, prefixes); ok {
-				candidates = append(candidates, target)
-			}
+	if fields := strings.Fields(text); len(fields) == 1 {
+		if target, ok := onDemandCronPathTarget(fields[0]); ok {
+			candidates = append(candidates, target)
+		} else {
+			candidates = append(candidates, fields[0])
 		}
 	}
 
@@ -63,23 +51,6 @@ func OnDemandCronTarget(text string, prefixes ...string) (string, bool) {
 	}
 
 	return target, true
-}
-
-func singleOnDemandCronTarget(text string, prefixes []string) (string, bool) {
-	fields := strings.Fields(strings.TrimSpace(text))
-	if len(fields) != 1 {
-		return "", false
-	}
-
-	if slices.Contains(prefixes, fields[0]) {
-		return "", false
-	}
-
-	if target, ok := onDemandCronPathTarget(fields[0]); ok {
-		return target, true
-	}
-
-	return fields[0], true
 }
 
 func onDemandCronPathTarget(text string) (string, bool) {

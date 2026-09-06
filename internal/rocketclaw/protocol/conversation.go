@@ -16,9 +16,6 @@ type Conversation struct {
 	Settled              bool
 }
 
-// ActivationHook runs when a text connector activates an idle conversation.
-type ActivationHook func(context.Context, *InboundMessage) error
-
 // PendingSteer is one uninjected Slack Steer copied onto the active-turn row.
 type PendingSteer struct {
 	Text, Principal, SlackChannel, SlackTS, SlackThreadTS string
@@ -72,16 +69,13 @@ type PrimaryTextRouter interface {
 	InterruptConversation(conversationID string) *InboundMessage
 	InterruptThread(target TextConversationTarget) (*InboundMessage, error)
 	RegisterThread(target TextConversationTarget, agent string) (created bool, err error)
-	RegisterCronThread(ctx context.Context, target TextConversationTarget, agent string) error
 	ThreadAgent(target TextConversationTarget) (agent string, handled bool, err error)
 	SwitchThreadAgent(target TextConversationTarget, agent string) (bool, error)
 	SubmitThreadReply(ctx context.Context, target TextConversationTarget, inbound *InboundMessage) (bool, error)
-	SubmitWhenActive(ctx context.Context, target TextConversationTarget, inbound *InboundMessage, activation ActivationHook) (bool, error)
 	StashThreadQueueItem(ctx context.Context, target TextConversationTarget, item *ThreadQueueItem) error
-	ThreadQueueItems(ctx context.Context, target TextConversationTarget) ([]ThreadQueueItem, error)
+	ThreadQueueItems(target TextConversationTarget) ([]ThreadQueueItem, error)
 	DeleteThreadQueueItem(ctx context.Context, target TextConversationTarget, id string) (bool, error)
 	PromoteThreadQueueItem(ctx context.Context, target TextConversationTarget, id string) (bool, error)
-	ScheduledMessages(ctx context.Context, target TextConversationTarget) (map[string]ScheduledMessageState, error)
+	ScheduledMessages(target TextConversationTarget) (map[string]ScheduledMessageState, error)
 	ThreadBusy(target TextConversationTarget) bool
-	PickQueuedWork(ctx context.Context, target TextConversationTarget) error
 }

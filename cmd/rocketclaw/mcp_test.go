@@ -26,19 +26,18 @@ func TestSubmitExternalMCPInputPreservesPublicConversationMetadata(t *testing.T)
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 
-	submit := func(_ context.Context, agent, gotConversationID string, inbound *protocol.InboundMessage, activation protocol.ActivationHook) error {
+	submit := func(_ context.Context, agent, gotConversationID string, inbound *protocol.InboundMessage) error {
 		assert.Equal(t, "planner", agent)
 		assert.Equal(t, conversationID, gotConversationID)
 
 		captured = inbound
-		require.NoError(t, activation(context.Background(), inbound))
-		inbound.CompleteResponse("answer", nil)
+		inbound.CompleteResponseWithAttachments("answer", nil, nil)
 
 		return nil
 	}
 
 	content := &protocol.InboundContent{Text: "prompt"}
-	result, accepted, err := submitExternalMCPInput(context.Background(), submit, "planner", conversationID, content, map[string]string{"ticket": "123"}, "alice", nil, "public-1", backend.NoopActivationHook)
+	result, accepted, err := submitExternalMCPInput(context.Background(), submit, "planner", conversationID, content, map[string]string{"ticket": "123"}, "alice", nil, "public-1")
 
 	require.NoError(t, err)
 	assert.True(t, accepted)
@@ -52,49 +51,36 @@ func TestSubmitExternalMCPInputPreservesPublicConversationMetadata(t *testing.T)
 }
 
 func TestSubmitExternalMCPInputWaitsForOwnQueuedTurnResult(t *testing.T) {
-	type queuedTurn struct {
-		inbound    *protocol.InboundMessage
-		activation protocol.ActivationHook
-	}
-
-	queue := make(chan queuedTurn, 2)
+	queue := make(chan *protocol.InboundMessage, 2)
 	started := make(chan string, 2)
 	releaseRecovered := make(chan struct{})
-	relayed := make(chan struct{}, 1)
 
 	go func() {
-		for turn := range queue {
-			inbound := turn.inbound
-			if err := turn.activation(context.Background(), inbound); err != nil {
-				inbound.CompleteResponse("", err)
-
-				continue
-			}
-
+		for inbound := range queue {
 			started <- inbound.Text
 
 			if inbound.Text == "recovered" {
 				<-releaseRecovered
-				inbound.CompleteResponse("recovered answer", nil)
+				inbound.CompleteResponseWithAttachments("recovered answer", nil, nil)
 
 				continue
 			}
 
-			inbound.CompleteResponse("follow-up answer", nil)
+			inbound.CompleteResponseWithAttachments("follow-up answer", nil, nil)
 		}
 	}()
 
 	recovered := protocol.NewInboundMessage(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "", "recovered", false)
-	queue <- queuedTurn{inbound: recovered, activation: backend.NoopActivationHook}
+	queue <- recovered
 
 	require.Equal(t, "recovered", <-started)
 
 	resultCh := make(chan externalmcp.SessionResult, 1)
 	errCh := make(chan error, 1)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	submit := func(ctx context.Context, _ string, _ string, inbound *protocol.InboundMessage, activation protocol.ActivationHook) error {
+	submit := func(ctx context.Context, _ string, _ string, inbound *protocol.InboundMessage) error {
 		select {
-		case queue <- queuedTurn{inbound: inbound, activation: activation}:
+		case queue <- inbound:
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
@@ -102,14 +88,7 @@ func TestSubmitExternalMCPInputWaitsForOwnQueuedTurnResult(t *testing.T) {
 	}
 
 	go func() {
-		content := &protocol.InboundContent{Text: "follow-up"}
-		activation := func(context.Context, *protocol.InboundMessage) error {
-			relayed <- struct{}{}
-
-			return nil
-		}
-
-		result, _, err := submitExternalMCPInput(context.Background(), submit, "planner", conversationID, content, nil, "", nil, "public-1", activation)
+		result, _, err := submitExternalMCPInput(context.Background(), submit, "planner", conversationID, &protocol.InboundContent{Text: "follow-up"}, nil, "", nil, "public-1")
 		if err != nil {
 			errCh <- err
 
@@ -120,17 +99,16 @@ func TestSubmitExternalMCPInputWaitsForOwnQueuedTurnResult(t *testing.T) {
 	}()
 
 	select {
-	case <-relayed:
-		t.Fatal("follow-up relay posted before recovered turn released")
 	case result := <-resultCh:
 		t.Fatalf("follow-up completed before recovered turn released: %#v", result)
 	case err := <-errCh:
 		t.Fatalf("follow-up failed before recovered turn released: %v", err)
+	case <-started:
+		t.Fatal("follow-up started before recovered turn released")
 	case <-time.After(10 * time.Millisecond):
 	}
 
 	close(releaseRecovered)
-	require.Equal(t, struct{}{}, <-relayed)
 	require.Equal(t, "follow-up", <-started)
 
 	select {
@@ -189,7 +167,7 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
 	require.NoError(t, err)
 	store, err := backend.NewSessionServiceIn(dsn, testLogger())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
+	t.Cleanup(func() { require.NoError(t, store.Stop()) })
 
 	var (
 		mu        sync.Mutex
@@ -207,12 +185,8 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
 
 		return reply, nil
 	}
-	submit := func(ctx context.Context, _ string, _ string, inbound *protocol.InboundMessage, activation protocol.ActivationHook) error {
-		if err := activation(ctx, inbound); err != nil {
-			return err
-		}
-
-		inbound.CompleteResponse("answer", nil)
+	submit := func(_ context.Context, _ string, _ string, inbound *protocol.InboundMessage) error {
+		inbound.CompleteResponseWithAttachments("answer", nil, nil)
 
 		return nil
 	}
@@ -276,7 +250,7 @@ func TestExternalMCPRepeatedIDKeepsLockedAgentAndRejectsChannelMismatch(t *testi
 	require.NoError(t, err)
 	store, err := backend.NewSessionServiceIn(dsn, testLogger())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
+	t.Cleanup(func() { require.NoError(t, store.Stop()) })
 
 	var agents []string
 
@@ -287,13 +261,9 @@ func TestExternalMCPRepeatedIDKeepsLockedAgentAndRejectsChannelMismatch(t *testi
 
 		return reply, nil
 	}
-	submit := func(ctx context.Context, agent string, _ string, inbound *protocol.InboundMessage, activation protocol.ActivationHook) error {
+	submit := func(_ context.Context, agent string, _ string, inbound *protocol.InboundMessage) error {
 		agents = append(agents, agent)
-		if err := activation(ctx, inbound); err != nil {
-			return err
-		}
-
-		inbound.CompleteResponse("answer", nil)
+		inbound.CompleteResponseWithAttachments("answer", nil, nil)
 
 		return nil
 	}
@@ -332,12 +302,8 @@ func TestExternalMCPRepeatedIDKeepsLockedAgentAndRejectsChannelMismatch(t *testi
 func TestSubmitExternalMCPInputReturnsAfterSubmitAgent(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
-	submit := func(_ context.Context, _ string, _ string, inbound *protocol.InboundMessage, activation protocol.ActivationHook) error {
-		if err := activation(context.Background(), inbound); err != nil {
-			return err
-		}
-
-		inbound.CompleteResponse("answer", nil)
+	submit := func(_ context.Context, _ string, _ string, inbound *protocol.InboundMessage) error {
+		inbound.CompleteResponseWithAttachments("answer", nil, nil)
 		close(started)
 		<-release
 
@@ -347,7 +313,7 @@ func TestSubmitExternalMCPInputReturnsAfterSubmitAgent(t *testing.T) {
 	resultCh := make(chan externalmcp.SessionResult, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		result, _, err := submitExternalMCPInput(context.Background(), submit, "planner", "external_mcp:planner:x", &protocol.InboundContent{Text: "hello"}, nil, "", nil, "public-1", backend.NoopActivationHook)
+		result, _, err := submitExternalMCPInput(context.Background(), submit, "planner", "external_mcp:planner:x", &protocol.InboundContent{Text: "hello"}, nil, "", nil, "public-1")
 		if err != nil {
 			errCh <- err
 
@@ -401,7 +367,7 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 			require.NoError(t, err)
 			store, err := backend.NewSessionServiceIn(dsn, testLogger())
 			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
+			t.Cleanup(func() { require.NoError(t, store.Stop()) })
 
 			if tt.prepare != nil {
 				require.NoError(t, tt.prepare(store))
@@ -423,7 +389,7 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 			callCtx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
-			submit := func(_ context.Context, _ string, _ string, inbound *protocol.InboundMessage, _ protocol.ActivationHook) error {
+			submit := func(_ context.Context, _ string, _ string, inbound *protocol.InboundMessage) error {
 				if tt.submitErr != nil {
 					return tt.submitErr
 				}
@@ -432,9 +398,9 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 				case tt.cancelAfterSubmit:
 					cancel()
 				case tt.resultErr != nil:
-					inbound.CompleteResponse("", tt.resultErr)
+					inbound.CompleteResponseWithAttachments("", nil, tt.resultErr)
 				default:
-					inbound.CompleteResponse("answer", nil)
+					inbound.CompleteResponseWithAttachments("answer", nil, nil)
 				}
 
 				return nil

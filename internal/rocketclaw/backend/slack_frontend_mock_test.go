@@ -21,9 +21,6 @@ var _ SlackFrontend = &slackFrontendMock{}
 //
 //		// make and configure a mocked SlackFrontend
 //		mockedSlackFrontend := &slackFrontendMock{
-//			AbortResponseFunc: func(outboundMessage *protocol.OutboundMessage)  {
-//				panic("mock out the AbortResponse method")
-//			},
 //			ActivateEnqueueFunc: func(context1 context.Context, threadQueueItem *protocol.ThreadQueueItem, inboundMessage *protocol.InboundMessage) error {
 //				panic("mock out the ActivateEnqueue method")
 //			},
@@ -36,14 +33,8 @@ var _ SlackFrontend = &slackFrontendMock{}
 //			DrainSteersFunc: func(context1 context.Context, s string) []string {
 //				panic("mock out the DrainSteers method")
 //			},
-//			HandleBroadcastFunc: func(context1 context.Context, broadcast *protocol.Broadcast) protocol.BroadcastAcknowledgement {
-//				panic("mock out the HandleBroadcast method")
-//			},
 //			RestorePendingSteersFunc: func(s string, pendingSteers []protocol.PendingSteer)  {
 //				panic("mock out the RestorePendingSteers method")
-//			},
-//			SendResponseFunc: func(context1 context.Context, outboundMessage *protocol.OutboundMessage) error {
-//				panic("mock out the SendResponse method")
 //			},
 //			SetPendingSteersSinkFunc: func(pendingSteersSink protocol.PendingSteersSink)  {
 //				panic("mock out the SetPendingSteersSink method")
@@ -64,8 +55,6 @@ var _ SlackFrontend = &slackFrontendMock{}
 //
 //	}
 type slackFrontendMock struct {
-	// AbortResponseFunc mocks the AbortResponse method.
-	AbortResponseFunc func(outboundMessage *protocol.OutboundMessage)
 
 	// ActivateEnqueueFunc mocks the ActivateEnqueue method.
 	ActivateEnqueueFunc func(context1 context.Context, threadQueueItem *protocol.ThreadQueueItem, inboundMessage *protocol.InboundMessage) error
@@ -79,14 +68,8 @@ type slackFrontendMock struct {
 	// DrainSteersFunc mocks the DrainSteers method.
 	DrainSteersFunc func(context1 context.Context, s string) []string
 
-	// HandleBroadcastFunc mocks the HandleBroadcast method.
-	HandleBroadcastFunc func(context1 context.Context, broadcast *protocol.Broadcast) protocol.BroadcastAcknowledgement
-
 	// RestorePendingSteersFunc mocks the RestorePendingSteers method.
 	RestorePendingSteersFunc func(s string, pendingSteers []protocol.PendingSteer)
-
-	// SendResponseFunc mocks the SendResponse method.
-	SendResponseFunc func(context1 context.Context, outboundMessage *protocol.OutboundMessage) error
 
 	// SetPendingSteersSinkFunc mocks the SetPendingSteersSink method.
 	SetPendingSteersSinkFunc func(pendingSteersSink protocol.PendingSteersSink)
@@ -102,11 +85,6 @@ type slackFrontendMock struct {
 
 	// calls tracks calls to the methods.
 	calls struct {
-		// AbortResponse holds details about calls to the AbortResponse method.
-		AbortResponse []struct {
-			// OutboundMessage is the outboundMessage argument value.
-			OutboundMessage *protocol.OutboundMessage
-		}
 		// ActivateEnqueue holds details about calls to the ActivateEnqueue method.
 		ActivateEnqueue []struct {
 			// Context1 is the context1 argument value.
@@ -137,26 +115,12 @@ type slackFrontendMock struct {
 			// S is the s argument value.
 			S string
 		}
-		// HandleBroadcast holds details about calls to the HandleBroadcast method.
-		HandleBroadcast []struct {
-			// Context1 is the context1 argument value.
-			Context1 context.Context
-			// Broadcast is the broadcast argument value.
-			Broadcast *protocol.Broadcast
-		}
 		// RestorePendingSteers holds details about calls to the RestorePendingSteers method.
 		RestorePendingSteers []struct {
 			// S is the s argument value.
 			S string
 			// PendingSteers is the pendingSteers argument value.
 			PendingSteers []protocol.PendingSteer
-		}
-		// SendResponse holds details about calls to the SendResponse method.
-		SendResponse []struct {
-			// Context1 is the context1 argument value.
-			Context1 context.Context
-			// OutboundMessage is the outboundMessage argument value.
-			OutboundMessage *protocol.OutboundMessage
 		}
 		// SetPendingSteersSink holds details about calls to the SetPendingSteersSink method.
 		SetPendingSteersSink []struct {
@@ -181,50 +145,15 @@ type slackFrontendMock struct {
 			Context1 context.Context
 		}
 	}
-	lockAbortResponse        sync.RWMutex
 	lockActivateEnqueue      sync.RWMutex
 	lockAskUserQuestion      sync.RWMutex
 	lockDiscardPendingSteers sync.RWMutex
 	lockDrainSteers          sync.RWMutex
-	lockHandleBroadcast      sync.RWMutex
 	lockRestorePendingSteers sync.RWMutex
-	lockSendResponse         sync.RWMutex
 	lockSetPendingSteersSink sync.RWMutex
 	lockStart                sync.RWMutex
 	lockStartNewThreadRoot   sync.RWMutex
 	lockStop                 sync.RWMutex
-}
-
-// AbortResponse calls AbortResponseFunc.
-func (mock *slackFrontendMock) AbortResponse(outboundMessage *protocol.OutboundMessage) {
-	if mock.AbortResponseFunc == nil {
-		panic("slackFrontendMock.AbortResponseFunc: method is nil but SlackFrontend.AbortResponse was just called")
-	}
-	callInfo := struct {
-		OutboundMessage *protocol.OutboundMessage
-	}{
-		OutboundMessage: outboundMessage,
-	}
-	mock.lockAbortResponse.Lock()
-	mock.calls.AbortResponse = append(mock.calls.AbortResponse, callInfo)
-	mock.lockAbortResponse.Unlock()
-	mock.AbortResponseFunc(outboundMessage)
-}
-
-// AbortResponseCalls gets all the calls that were made to AbortResponse.
-// Check the length with:
-//
-//	len(mockedSlackFrontend.AbortResponseCalls())
-func (mock *slackFrontendMock) AbortResponseCalls() []struct {
-	OutboundMessage *protocol.OutboundMessage
-} {
-	var calls []struct {
-		OutboundMessage *protocol.OutboundMessage
-	}
-	mock.lockAbortResponse.RLock()
-	calls = mock.calls.AbortResponse
-	mock.lockAbortResponse.RUnlock()
-	return calls
 }
 
 // ActivateEnqueue calls ActivateEnqueueFunc.
@@ -375,42 +304,6 @@ func (mock *slackFrontendMock) DrainSteersCalls() []struct {
 	return calls
 }
 
-// HandleBroadcast calls HandleBroadcastFunc.
-func (mock *slackFrontendMock) HandleBroadcast(context1 context.Context, broadcast *protocol.Broadcast) protocol.BroadcastAcknowledgement {
-	if mock.HandleBroadcastFunc == nil {
-		panic("slackFrontendMock.HandleBroadcastFunc: method is nil but SlackFrontend.HandleBroadcast was just called")
-	}
-	callInfo := struct {
-		Context1  context.Context
-		Broadcast *protocol.Broadcast
-	}{
-		Context1:  context1,
-		Broadcast: broadcast,
-	}
-	mock.lockHandleBroadcast.Lock()
-	mock.calls.HandleBroadcast = append(mock.calls.HandleBroadcast, callInfo)
-	mock.lockHandleBroadcast.Unlock()
-	return mock.HandleBroadcastFunc(context1, broadcast)
-}
-
-// HandleBroadcastCalls gets all the calls that were made to HandleBroadcast.
-// Check the length with:
-//
-//	len(mockedSlackFrontend.HandleBroadcastCalls())
-func (mock *slackFrontendMock) HandleBroadcastCalls() []struct {
-	Context1  context.Context
-	Broadcast *protocol.Broadcast
-} {
-	var calls []struct {
-		Context1  context.Context
-		Broadcast *protocol.Broadcast
-	}
-	mock.lockHandleBroadcast.RLock()
-	calls = mock.calls.HandleBroadcast
-	mock.lockHandleBroadcast.RUnlock()
-	return calls
-}
-
 // RestorePendingSteers calls RestorePendingSteersFunc.
 func (mock *slackFrontendMock) RestorePendingSteers(s string, pendingSteers []protocol.PendingSteer) {
 	if mock.RestorePendingSteersFunc == nil {
@@ -444,42 +337,6 @@ func (mock *slackFrontendMock) RestorePendingSteersCalls() []struct {
 	mock.lockRestorePendingSteers.RLock()
 	calls = mock.calls.RestorePendingSteers
 	mock.lockRestorePendingSteers.RUnlock()
-	return calls
-}
-
-// SendResponse calls SendResponseFunc.
-func (mock *slackFrontendMock) SendResponse(context1 context.Context, outboundMessage *protocol.OutboundMessage) error {
-	if mock.SendResponseFunc == nil {
-		panic("slackFrontendMock.SendResponseFunc: method is nil but SlackFrontend.SendResponse was just called")
-	}
-	callInfo := struct {
-		Context1        context.Context
-		OutboundMessage *protocol.OutboundMessage
-	}{
-		Context1:        context1,
-		OutboundMessage: outboundMessage,
-	}
-	mock.lockSendResponse.Lock()
-	mock.calls.SendResponse = append(mock.calls.SendResponse, callInfo)
-	mock.lockSendResponse.Unlock()
-	return mock.SendResponseFunc(context1, outboundMessage)
-}
-
-// SendResponseCalls gets all the calls that were made to SendResponse.
-// Check the length with:
-//
-//	len(mockedSlackFrontend.SendResponseCalls())
-func (mock *slackFrontendMock) SendResponseCalls() []struct {
-	Context1        context.Context
-	OutboundMessage *protocol.OutboundMessage
-} {
-	var calls []struct {
-		Context1        context.Context
-		OutboundMessage *protocol.OutboundMessage
-	}
-	mock.lockSendResponse.RLock()
-	calls = mock.calls.SendResponse
-	mock.lockSendResponse.RUnlock()
 	return calls
 }
 

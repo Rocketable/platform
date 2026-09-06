@@ -37,12 +37,12 @@ func (r *Runtime) SyncConversation(ctx context.Context, source, destination stri
 			return fmt.Errorf("conversation %q is not recorded", id)
 		}
 
-		managed, _, err := r.threads.ensureThreadBridge(id, thread, nil, false)
+		managed, _, err := r.threads.ensureThreadBridge(id, thread, false)
 		if err != nil {
 			return err
 		}
 
-		bridges = append(bridges, managed.bridge.(*Bridge))
+		bridges = append(bridges, managed.(*Bridge))
 	}
 
 	r.Sessions.turnGatesMu.Lock()
@@ -70,7 +70,7 @@ func (r *Runtime) SyncConversation(ctx context.Context, source, destination stri
 func (b *Bridge) syncConversation(ctx context.Context, source *Bridge) error {
 	store := b.config.SessionService
 
-	entries, err := store.ObserveEntries(ctx, source.config.ConversationID, 0)
+	entries, err := store.ObserveEntries(ctx, source.config.ConversationID)
 	if err != nil {
 		return err
 	}
@@ -211,12 +211,12 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 		return fmt.Errorf("conversation %q is not recorded", conversationID)
 	}
 
-	managed, _, err := r.threads.ensureThreadBridge(conversationID, thread, []protocol.OutputTarget{protocol.OutputTargetSlack}, false)
+	managed, _, err := r.threads.ensureThreadBridge(conversationID, thread, false)
 	if err != nil {
 		return err
 	}
 
-	bridge := managed.bridge.(*Bridge)
+	bridge := managed.(*Bridge)
 
 	if inbound.Kind == protocol.InboundKindCancel {
 		if err := r.Sessions.StopGoal(conversationID); err != nil {
@@ -237,7 +237,7 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 			}
 		}
 
-		message := protocol.NewOutboundMessage(inbound.Source, conversationID, "", protocol.OutputTargetSlack)
+		message := protocol.NewOutboundMessage(conversationID, "")
 		message.Complete, message.SlackReply = true, inbound.SlackReply
 
 		return r.PublishOutbound(ctx, message)
@@ -245,7 +245,7 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 
 	completion := &turnCompletion{done: make(chan struct{})}
 
-	request := bridgeRequest{inbound: inbound, activation: NoopActivationHook, completion: completion}
+	request := bridgeRequest{inbound: inbound, completion: completion}
 	if inbound.SyncDestination != "" {
 		destination, recorded, err := r.Sessions.Thread(inbound.SyncDestination)
 		if err != nil {
@@ -256,13 +256,13 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 			return fmt.Errorf("conversation %q is not recorded", inbound.SyncDestination)
 		}
 
-		managed, _, err := r.threads.ensureThreadBridge(inbound.SyncDestination, destination, nil, false)
+		managed, _, err := r.threads.ensureThreadBridge(inbound.SyncDestination, destination, false)
 		if err != nil {
 			return err
 		}
 
 		request.producer = bridge
-		bridge = managed.bridge.(*Bridge)
+		bridge = managed.(*Bridge)
 	}
 
 	if err := bridge.enqueue(ctx, &request, "run turn"); err != nil {
@@ -278,7 +278,7 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 }
 
 // QueueItems returns persisted waiting work plus uninjected active steers.
-func (r *Runtime) QueueItems(_ context.Context, conversationID string) ([]protocol.ThreadQueueItem, error) {
+func (r *Runtime) QueueItems(conversationID string) ([]protocol.ThreadQueueItem, error) {
 	return r.threads.queueItems(conversationID)
 }
 
@@ -293,7 +293,7 @@ func (r *Runtime) DeleteQueueItem(ctx context.Context, conversationID, id string
 }
 
 // ReorderQueueItems writes persisted enqueue positions in the given ID order.
-func (r *Runtime) ReorderQueueItems(_ context.Context, conversationID string, ids []string) error {
+func (r *Runtime) ReorderQueueItems(conversationID string, ids []string) error {
 	return r.threads.reorderQueueItems(conversationID, ids)
 }
 

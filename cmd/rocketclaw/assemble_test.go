@@ -15,7 +15,6 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
 func TestValidateAssetsAcceptsWorkspaceWithoutCronjobs(t *testing.T) {
@@ -38,7 +37,6 @@ func TestAssembleFrontendsReportsSlackStartError(t *testing.T) {
 		Cfg:                      &config.Config{},
 		Log:                      slog.New(slog.DiscardHandler),
 		RunCtx:                   ctx,
-		Channels:                 protocol.NewChannels(),
 		RefreshExternalMCPAgents: &refresh,
 	}
 	_, _, _, err := processAssembler{}.Assemble(rt)
@@ -62,7 +60,7 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 	require.NoError(t, err)
 	sessions, err := backend.NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, sessions.Stop(context.Background())) })
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
@@ -78,7 +76,6 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 		},
 		Log:                      slog.New(slog.DiscardHandler),
 		RunCtx:                   ctx,
-		Channels:                 protocol.NewChannels(),
 		Sessions:                 sessions,
 		RefreshExternalMCPAgents: &refresh,
 		ExternalMCPUsers:         map[string]string{"alice": "secret"},
@@ -88,12 +85,6 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 	require.NotNil(t, front)
 	require.NotNil(t, done)
 	require.NotEmpty(t, stops)
-	published := make(chan struct{})
-	go func() {
-		rt.Channels.Broadcasts <- protocol.Broadcast{Message: protocol.NewOutboundMessage(protocol.SourceSystem, "c", "hi")}
-		close(published)
-	}()
-	<-published
 	cancel()
 	<-done
 	for _, stop := range stops {

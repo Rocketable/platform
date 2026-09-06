@@ -1,8 +1,0 @@
-{
-  "providers": {
-    "openai": {
-      "apiKey": "{{ env.OPENAI_API_KEY }}",
-      "baseURL": ""
-    }
-  }
-}

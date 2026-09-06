@@ -70,7 +70,7 @@ func TestRecoverStartupActiveTurnsSelectsAtMostOnePerConversation(t *testing.T) 
 
 	var handed []ActiveTurnState
 
-	err := recoverStartupActiveTurns(context.Background(), store, func(_ context.Context, turn *ActiveTurnState) error {
+	err := recoverStartupActiveTurns(context.Background(), store, func(turn *ActiveTurnState) error {
 		handed = append(handed, *turn)
 
 		return nil
@@ -89,7 +89,7 @@ func TestRecoverStartupActiveTurnsAcceptsPrivateExternalMCPConversation(t *testi
 
 	var handed []ActiveTurnState
 
-	require.NoError(t, recoverStartupActiveTurns(t.Context(), store, func(_ context.Context, turn *ActiveTurnState) error {
+	require.NoError(t, recoverStartupActiveTurns(t.Context(), store, func(turn *ActiveTurnState) error {
 		handed = append(handed, *turn)
 		return nil
 	}, func(string, []protocol.PendingSteer) {}, slog.New(slog.DiscardHandler)))
@@ -107,7 +107,7 @@ func TestRecoverStartupActiveTurnsDeletesCompetingRowsAfterCorruptSelectedRow(t 
 	}}
 
 	handoffCalled := false
-	err := recoverStartupActiveTurns(context.Background(), store, func(context.Context, *ActiveTurnState) error {
+	err := recoverStartupActiveTurns(context.Background(), store, func(*ActiveTurnState) error {
 		handoffCalled = true
 
 		return nil
@@ -124,7 +124,7 @@ func TestRecoverStartupActiveTurnsDeletesCorruptRows(t *testing.T) {
 	}}
 
 	handoffCalled := false
-	err := recoverStartupActiveTurns(context.Background(), store, func(context.Context, *ActiveTurnState) error {
+	err := recoverStartupActiveTurns(context.Background(), store, func(*ActiveTurnState) error {
 		handoffCalled = true
 
 		return nil
@@ -140,7 +140,7 @@ func TestRecoverStartupActiveTurnsDeletesInvalidRows(t *testing.T) {
 	store := &fakeStartupRecoveryStore{turns: []ActiveTurnState{startupRecoveryTurn("turn-invalid", " ", replay)}}
 
 	handoffCalled := false
-	err := recoverStartupActiveTurns(context.Background(), store, func(context.Context, *ActiveTurnState) error {
+	err := recoverStartupActiveTurns(context.Background(), store, func(*ActiveTurnState) error {
 		handoffCalled = true
 
 		return nil
@@ -158,7 +158,7 @@ func TestRecoverStartupActiveTurnsHandsOffRecoveredReplay(t *testing.T) {
 
 	var handed ActiveTurnState
 
-	err := recoverStartupActiveTurns(context.Background(), store, func(_ context.Context, turn *ActiveTurnState) error {
+	err := recoverStartupActiveTurns(context.Background(), store, func(turn *ActiveTurnState) error {
 		handed = *turn
 
 		return nil
@@ -182,7 +182,7 @@ func TestRecoverStartupActiveTurnsDeletesPermanentHandoffFailures(t *testing.T) 
 	replay := startupRecoveryReplayInput(t)
 	store := &fakeStartupRecoveryStore{turns: []ActiveTurnState{startupRecoveryTurn("turn-1", "conversation-1", replay)}}
 
-	err := recoverStartupActiveTurns(context.Background(), store, func(context.Context, *ActiveTurnState) error {
+	err := recoverStartupActiveTurns(context.Background(), store, func(*ActiveTurnState) error {
 		return errHandoff
 	}, func(string, []protocol.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
@@ -240,7 +240,7 @@ func TestRecoverStartupActiveTurnsCannotResumeStopsGoalAndReportsSteers(t *testi
 		gotSteers []protocol.PendingSteer
 	)
 
-	err := recoverStartupActiveTurns(context.Background(), store, func(context.Context, *ActiveTurnState) error {
+	err := recoverStartupActiveTurns(context.Background(), store, func(*ActiveTurnState) error {
 		t.Fatal("handoff should not run")
 		return nil
 	}, func(conversationID string, steers []protocol.PendingSteer) {
@@ -260,7 +260,7 @@ func TestRecoverStartupActiveTurnsLeavesRowsOnCanceledHandoff(t *testing.T) {
 	for _, errHandoff := range []error{context.Canceled, context.DeadlineExceeded} {
 		store := &fakeStartupRecoveryStore{turns: []ActiveTurnState{startupRecoveryTurn("turn-1", "conversation-1", replay)}}
 
-		err := recoverStartupActiveTurns(context.Background(), store, func(context.Context, *ActiveTurnState) error {
+		err := recoverStartupActiveTurns(context.Background(), store, func(*ActiveTurnState) error {
 			return errHandoff
 		}, func(string, []protocol.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
@@ -277,8 +277,8 @@ func TestRecoverStartupActiveTurnsLeavesRowsWhenBridgeStopped(t *testing.T) {
 	require.NoError(t, bridge.Start(context.Background()))
 	require.NoError(t, bridge.Stop())
 
-	err := recoverStartupActiveTurns(context.Background(), store, func(ctx context.Context, turn *ActiveTurnState) error {
-		return bridge.RecoverActiveTurn(ctx, turn)
+	err := recoverStartupActiveTurns(context.Background(), store, func(turn *ActiveTurnState) error {
+		return bridge.RecoverActiveTurn(context.Background(), turn)
 	}, func(string, []protocol.PendingSteer) {}, slog.New(slog.DiscardHandler))
 
 	require.Error(t, err)
@@ -296,7 +296,7 @@ func TestRecoverStartupActiveTurnsDeletesRawCronRows(t *testing.T) {
 
 	var handed []ActiveTurnState
 
-	err := recoverStartupActiveTurns(context.Background(), store, func(_ context.Context, turn *ActiveTurnState) error {
+	err := recoverStartupActiveTurns(context.Background(), store, func(turn *ActiveTurnState) error {
 		handed = append(handed, *turn)
 
 		return nil

@@ -78,13 +78,6 @@ type CronScheduleState struct {
 	NextDue      time.Time
 }
 
-// CronScheduleRun is a claimed scheduled cron run.
-type CronScheduleRun struct {
-	ScheduleID   string
-	RelativePath string
-	DueAt        time.Time
-}
-
 // GoalState records one active or terminal managed-thread goal loop.
 type GoalState struct {
 	Objective            string    `json:"objective,omitempty"`
@@ -120,12 +113,6 @@ type sessionTurnGate struct {
 	reserved    chan struct{}
 	reservedFor string
 	refs        int
-}
-
-// SessionListOptions bounds read-only session summary inspection.
-type SessionListOptions struct {
-	Since, Until time.Time
-	Limit        int
 }
 
 // ObservedSessionEntry is one stored rocketcode entry with its row ID.
@@ -393,11 +380,6 @@ func (s *SessionService) MarkRestartRequester(ctx context.Context, conversationI
 	return stateDAO{db: s.db}.markRestartRequester(ctx, conversationID)
 }
 
-// StartActiveTurn upserts a durable active root-turn checkpoint.
-func (s *SessionService) StartActiveTurn(ctx context.Context, checkpoint *harness.ActiveTurnCheckpoint) error {
-	return stateDAO{db: s.db}.upsertActiveTurn(ctx, checkpoint, time.Now().UTC())
-}
-
 // UpsertActiveTurn records a RocketCode active-turn restart handoff checkpoint with source metadata.
 func (s *SessionService) UpsertActiveTurn(ctx context.Context, checkpoint *harness.ActiveTurnCheckpoint, sourceMetadata map[string]string) error {
 	return stateDAO{db: s.db}.upsertActiveTurnWithSourceMetadata(ctx, checkpoint, sourceMetadata, time.Now().UTC())
@@ -416,11 +398,6 @@ func (s *SessionService) SetPendingSteers(conversationID string, steers []protoc
 // RecoverableActiveTurns returns remaining active-turn handoff rows for startup recovery.
 func (s *SessionService) RecoverableActiveTurns(ctx context.Context) ([]ActiveTurnState, error) {
 	return stateDAO{db: s.db}.recoverableActiveTurns(ctx)
-}
-
-// ActiveTurn returns a durable active-turn checkpoint.
-func (s *SessionService) ActiveTurn(ctx context.Context, turnID string) (ActiveTurnState, bool, error) {
-	return stateDAO{db: s.db}.activeTurn(ctx, turnID)
 }
 
 // Thread returns the persisted managed conversation state.
@@ -666,17 +643,8 @@ func (s *SessionService) ResetCronSchedules() error {
 }
 
 // DueCronSchedules returns observed scheduled cron definitions due at now.
-func (s *SessionService) DueCronSchedules(now time.Time, limit int) ([]CronScheduleState, error) {
-	query := `SELECT schedule_id, relative_path, next_due_unix_ns FROM cron_schedules WHERE next_due_unix_ns <= $1 ORDER BY next_due_unix_ns, schedule_id`
-	args := []any{timeUnixNano(now)}
-
-	if limit > 0 {
-		query += ` LIMIT $2`
-
-		args = append(args, limit)
-	}
-
-	rows, err := s.db.QueryContext(context.Background(), query, args...)
+func (s *SessionService) DueCronSchedules(now time.Time) ([]CronScheduleState, error) {
+	rows, err := s.db.QueryContext(context.Background(), `SELECT schedule_id, relative_path, next_due_unix_ns FROM cron_schedules WHERE next_due_unix_ns <= $1 ORDER BY next_due_unix_ns, schedule_id`, timeUnixNano(now))
 	if err != nil {
 		return nil, fmt.Errorf("query due cron schedules: %w", err)
 	}
@@ -702,12 +670,12 @@ func (s *SessionService) DueCronSchedules(now time.Time, limit int) ([]CronSched
 }
 
 // ClaimCronSchedule verifies one due scheduled cron trigger and records per-file running state.
-func (s *SessionService) ClaimCronSchedule(due CronScheduleState, nextDue, now time.Time) (CronScheduleRun, bool, error) {
+func (s *SessionService) ClaimCronSchedule(due CronScheduleState, nextDue, now time.Time) (relativePath string, claimed bool, err error) {
 	ctx := context.Background()
 
 	tx, err := s.beginStateTx(ctx, "cron schedule claim")
 	if err != nil {
-		return CronScheduleRun{}, false, err
+		return "", false, err
 	}
 
 	defer func() { _ = tx.Rollback() }()
@@ -715,45 +683,45 @@ func (s *SessionService) ClaimCronSchedule(due CronScheduleState, nextDue, now t
 	schedule, err := scanCronSchedule(tx.QueryRowContext(ctx, `SELECT schedule_id, relative_path, next_due_unix_ns FROM cron_schedules WHERE schedule_id = $1`, strings.TrimSpace(due.ScheduleID)))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return CronScheduleRun{}, false, nil
+			return "", false, nil
 		}
 
-		return CronScheduleRun{}, false, err
+		return "", false, err
 	}
 
 	if schedule.RelativePath != strings.TrimSpace(due.RelativePath) || !schedule.NextDue.Equal(due.NextDue) || schedule.NextDue.After(now) {
-		return CronScheduleRun{}, false, nil
+		return "", false, nil
 	}
 
 	var running bool
 
 	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM cron_schedule_runs WHERE relative_path = $1 AND running != 0)`, schedule.RelativePath).Scan(&running)
 	if err != nil {
-		return CronScheduleRun{}, false, fmt.Errorf("check cron run state: %w", err)
+		return "", false, fmt.Errorf("check cron run state: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx, `UPDATE cron_schedules SET next_due_unix_ns = $1, updated_at_unix_ns = $2 WHERE schedule_id = $3`, timeUnixNano(nextDue), timeUnixNano(now), schedule.ScheduleID); err != nil {
-		return CronScheduleRun{}, false, fmt.Errorf("advance cron schedule: %w", err)
+		return "", false, fmt.Errorf("advance cron schedule: %w", err)
 	}
 
 	if running {
 		if err := tx.Commit(); err != nil {
-			return CronScheduleRun{}, false, fmt.Errorf("commit overlapped cron schedule claim: %w", err)
+			return "", false, fmt.Errorf("commit overlapped cron schedule claim: %w", err)
 		}
 
-		return CronScheduleRun{}, false, nil
+		return "", false, nil
 	}
 
 	_, err = tx.ExecContext(ctx, `INSERT INTO cron_schedule_runs (relative_path, running, running_since_unix_ns, updated_at_unix_ns) VALUES ($1, 1, $2, $3) ON CONFLICT(relative_path) DO UPDATE SET running = 1, running_since_unix_ns = excluded.running_since_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns`, schedule.RelativePath, timeUnixNano(now), timeUnixNano(now))
 	if err != nil {
-		return CronScheduleRun{}, false, fmt.Errorf("claim cron run state: %w", err)
+		return "", false, fmt.Errorf("claim cron run state: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		return CronScheduleRun{}, false, fmt.Errorf("commit cron schedule claim: %w", err)
+		return "", false, fmt.Errorf("commit cron schedule claim: %w", err)
 	}
 
-	return CronScheduleRun{ScheduleID: schedule.ScheduleID, RelativePath: schedule.RelativePath, DueAt: schedule.NextDue}, true, nil
+	return schedule.RelativePath, true, nil
 }
 
 // CompleteCronRun clears per-file scheduled cron running state.
@@ -974,13 +942,13 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 }
 
 // ObserveEntries loads observed session entries through the runtime service.
-func (s *SessionService) ObserveEntries(ctx context.Context, conversationID string, lastID int64) ([]ObservedSessionEntry, error) {
+func (s *SessionService) ObserveEntries(ctx context.Context, conversationID string) ([]ObservedSessionEntry, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
 		return nil, errors.New("conversation ID is required")
 	}
 
-	return observeSessionEntriesDB(ctx, s.db, conversationID, lastID)
+	return observeSessionEntriesDB(ctx, s.db, conversationID)
 }
 
 // AppendEntryID appends one entry through the runtime service and returns its row ID.
@@ -1014,12 +982,12 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 }
 
 // ListSessions returns summaries for stored rocketcode sessions.
-func (s *SessionService) ListSessions(ctx context.Context, options SessionListOptions) ([]protocol.SessionSummary, error) {
-	return listSessionsDB(ctx, s.db, options)
+func (s *SessionService) ListSessions(ctx context.Context) ([]protocol.SessionSummary, error) {
+	return listSessionsDB(ctx, s.db)
 }
 
 // Stop closes the runtime service and its database handle.
-func (s *SessionService) Stop(context.Context) error {
+func (s *SessionService) Stop() error {
 	if err := s.db.Close(); err != nil {
 		return fmt.Errorf("close rocketcode session db: %w", err)
 	}
@@ -1065,10 +1033,6 @@ func inertTurnRelease() {}
 // PutMCPWaiter records an MCP turn waiting on a later-work queue row.
 func (s *SessionService) PutMCPWaiter(id string, inbound *protocol.InboundMessage) {
 	s.waitersMu.Lock()
-	if s.waiters == nil {
-		s.waiters = map[string]*protocol.InboundMessage{}
-	}
-
 	s.waiters[id] = inbound
 	s.waitersMu.Unlock()
 }
@@ -1078,18 +1042,14 @@ func (s *SessionService) TakeMCPWaiter(id string) *protocol.InboundMessage {
 	s.waitersMu.Lock()
 	defer s.waitersMu.Unlock()
 
-	if s.waiters == nil {
-		return nil
-	}
-
 	inbound := s.waiters[id]
 	delete(s.waiters, id)
 
 	return inbound
 }
 
-// PairBusyFor reports whether pairID is busy for a caller other than conversationID.
-func (s *SessionService) PairBusyFor(pairID, conversationID string) bool {
+// PairBusyFor reports whether pairID is reserved or holding a turn.
+func (s *SessionService) PairBusyFor(pairID string) bool {
 	s.turnGatesMu.Lock()
 	defer s.turnGatesMu.Unlock()
 
@@ -1098,11 +1058,7 @@ func (s *SessionService) PairBusyFor(pairID, conversationID string) bool {
 		return false
 	}
 
-	if gate.reservedFor != "" && gate.reservedFor != strings.TrimSpace(conversationID) {
-		return true
-	}
-
-	return len(gate.token) == 0
+	return gate.reservedFor != "" || len(gate.token) == 0
 }
 
 func (s *SessionService) appendExternalMCPEntry(ctx context.Context, privateConversationID, managedConversationID string, entry *harness.SessionEntry, managedReplayPrefix []json.RawMessage) (int64, error) {
@@ -1293,7 +1249,7 @@ func (s sessionStore) in() iter.Seq2[harness.SessionEntry, error] {
 			err      error
 		)
 
-		observed, err = s.service.ObserveEntries(context.Background(), s.conversationID, 0)
+		observed, err = s.service.ObserveEntries(context.Background(), s.conversationID)
 		if err != nil {
 			var entry harness.SessionEntry
 			yield(entry, err)
@@ -1318,27 +1274,11 @@ func (s sessionStore) outID(entry harness.SessionEntry) (int64, error) {
 	return s.service.AppendEntryID(context.Background(), s.conversationID, &entry)
 }
 
-// ObserveSessionEntries returns replay entries and their row IDs after lastID.
-func ObserveSessionEntries(ctx context.Context, databaseURL, conversationID string, lastID int64) ([]ObservedSessionEntry, error) {
-	conversationID = strings.TrimSpace(conversationID)
-	if conversationID == "" {
-		return nil, errors.New("conversation ID is required")
-	}
-
-	service, err := NewSessionServiceIn(databaseURL, slog.New(slog.DiscardHandler))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = service.Stop(ctx) }()
-
-	return service.ObserveEntries(ctx, conversationID, lastID)
-}
-
-func observeSessionEntriesDB(ctx context.Context, db *sql.DB, conversationID string, lastID int64) ([]ObservedSessionEntry, error) {
+func observeSessionEntriesDB(ctx context.Context, db *sql.DB, conversationID string) ([]ObservedSessionEntry, error) {
 	rows, err := db.QueryContext(ctx, `SELECT destination.id, destination.entry_json, COALESCE(source.conversation_id, '')
 FROM session_entries destination
 LEFT JOIN session_entries source ON source.id = (destination.entry_json::jsonb->>'sync_source_entry_id')::bigint
-WHERE destination.conversation_id = $1 AND destination.id > $2 ORDER BY destination.id`, conversationID, lastID)
+WHERE destination.conversation_id = $1 ORDER BY destination.id`, conversationID)
 	if err != nil {
 		return nil, fmt.Errorf("query rocketcode session entries: %w", err)
 	}
@@ -1407,58 +1347,8 @@ func externalMCPManagedEntry(entry *harness.SessionEntry, replayPrefix []json.Ra
 	return managed, nil
 }
 
-// DeleteSessionIn removes all entries for one conversation ID and returns deleted rows.
-func DeleteSessionIn(ctx context.Context, databaseURL, conversationID string) (int64, error) {
-	service, err := NewSessionServiceIn(databaseURL, slog.New(slog.DiscardHandler))
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = service.Stop(ctx) }()
-
-	return service.DeleteSession(ctx, conversationID)
-}
-
-func listSessionsDB(ctx context.Context, db *sql.DB, options SessionListOptions) ([]protocol.SessionSummary, error) {
-	query := `SELECT conversation_id, entry_json, entry_timestamp FROM session_entries ORDER BY conversation_id, id`
-
-	var args []any
-
-	if !options.Since.IsZero() || !options.Until.IsZero() || options.Limit > 0 {
-		var since any
-		if !options.Since.IsZero() {
-			since = options.Since.UTC()
-		}
-
-		var until any
-		if !options.Until.IsZero() {
-			until = options.Until.UTC()
-		}
-
-		query = `WITH candidates AS (
-	SELECT conversation_id, MAX(entry_timestamp::timestamptz) AS last_updated
-	FROM session_entries
-	GROUP BY conversation_id
-	HAVING ($1::timestamptz IS NULL OR MAX(entry_timestamp::timestamptz) >= $2::timestamptz)
-		AND ($3::timestamptz IS NULL OR MAX(entry_timestamp::timestamptz) < $4::timestamptz)
-	ORDER BY last_updated DESC, conversation_id`
-		args = []any{since, since, until, until}
-
-		if options.Limit > 0 {
-			query += `
-	LIMIT $5`
-
-			args = append(args, options.Limit)
-		}
-
-		query += `
-)
-SELECT se.conversation_id, se.entry_json, se.entry_timestamp
-FROM session_entries se
-JOIN candidates c ON c.conversation_id = se.conversation_id
-ORDER BY c.last_updated DESC, c.conversation_id, se.id`
-	}
-
-	rows, err := db.QueryContext(ctx, query, args...)
+func listSessionsDB(ctx context.Context, db *sql.DB) ([]protocol.SessionSummary, error) {
+	rows, err := db.QueryContext(ctx, `SELECT conversation_id, entry_json, entry_timestamp FROM session_entries ORDER BY conversation_id, id`)
 	if err != nil {
 		return nil, fmt.Errorf("query rocketcode session summaries: %w", err)
 	}
@@ -1486,7 +1376,6 @@ ORDER BY c.last_updated DESC, c.conversation_id, se.id`
 			return nil, fmt.Errorf("parse rocketcode session summary entry: %w", err)
 		}
 
-		summary.Turns++
 		if updated, err := time.Parse(time.RFC3339Nano, timestamp); err == nil {
 			summary.LastUpdated = updated
 		}
@@ -1497,11 +1386,8 @@ ORDER BY c.last_updated DESC, c.conversation_id, se.id`
 		}
 
 		for i := range messages {
-			switch messages[i].role {
-			case "user":
+			if messages[i].role == "user" {
 				summary.LastUserMessage = messages[i].text
-			case "assistant":
-				summary.LastAssistantMessage = messages[i].text
 			}
 		}
 	}
@@ -1518,18 +1404,9 @@ ORDER BY c.last_updated DESC, c.conversation_id, se.id`
 	return summaries, nil
 }
 
-// ListSessionsInOptions returns summaries for stored rocketcode sessions.
-func ListSessionsInOptions(ctx context.Context, databaseURL string, options SessionListOptions) ([]protocol.SessionSummary, error) {
-	service, err := NewSessionServiceIn(databaseURL, slog.New(slog.DiscardHandler))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = service.Stop(ctx) }()
+func slackStateKeyTime(key string) (time.Time, bool) {
+	const prefix = "slack-thread:"
 
-	return service.ListSessions(ctx, options)
-}
-
-func slackStateKeyTime(key, prefix string) (time.Time, bool) {
 	key = strings.TrimSpace(key)
 	if !strings.HasPrefix(key, prefix) {
 		return time.Time{}, false
@@ -1564,7 +1441,7 @@ func slackStateKeyTime(key, prefix string) (time.Time, bool) {
 }
 
 func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, conversationID string, cutoff time.Time) (bool, error) {
-	created, ok := slackStateKeyTime(conversationID, "slack-thread:")
+	created, ok := slackStateKeyTime(conversationID)
 	if !ok {
 		var emptyManaged bool
 		if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM managed_conversations WHERE conversation_id = $1) AND NOT EXISTS(SELECT 1 FROM session_entries WHERE conversation_id = $1)`, conversationID).Scan(&emptyManaged); err != nil {

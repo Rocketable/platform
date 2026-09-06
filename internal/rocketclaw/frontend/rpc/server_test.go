@@ -37,7 +37,7 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	sessions, err := backend.NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, sessions.Stop(context.Background())) })
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	configPath := filepath.Join(t.TempDir(), "rocketclaw.json")
 	require.NoError(t, os.WriteFile(configPath, []byte(`{"database_url":"postgres://localhost/rocketclaw_test", "openai":{"api_key":"test"}, "slack":{"bot_token":"xoxb","app_token":"xapp","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}, "web_users":{"192.0.2.1":"alice","127.0.0.1":"alice"}}`), 0o600))
 	cfg, err := config.Load(configPath, "", config.AWSFetcher{})
@@ -75,7 +75,7 @@ func TestSessionEntries(t *testing.T) {
 			return nil
 		},
 		SwitchConversationAgentFunc: sessions.SetThreadAgentIfExists,
-		QueueItemsFunc: func(_ context.Context, conversationID string) ([]protocol.ThreadQueueItem, error) {
+		QueueItemsFunc: func(conversationID string) ([]protocol.ThreadQueueItem, error) {
 			return sessions.ThreadQueueForConversation(conversationID)
 		},
 		PromoteQueueItemFunc: func(_ context.Context, conversationID, itemID string) (bool, error) {
@@ -106,7 +106,7 @@ func TestSessionEntries(t *testing.T) {
 
 			return false, nil
 		},
-		ReorderQueueItemsFunc: func(_ context.Context, conversationID string, ids []string) error {
+		ReorderQueueItemsFunc: func(conversationID string, ids []string) error {
 			items, err := sessions.ThreadQueueForConversation(conversationID)
 			if err != nil {
 				return fmt.Errorf("list queue: %w", err)
@@ -145,7 +145,7 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, "C1", channel)
 		return channelChoices, nil
 	}}
-	cronRunner := &mockCronRunner{RunFunc: func(_ context.Context, agent, prompt string, _ *slog.Logger, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	cronRunner := &mockCronRunner{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		require.Equal(t, "planner", agent)
 		require.Contains(t, prompt, "Cron body")
 		require.Equal(t, "#ops", progress.TextChannel)
@@ -154,7 +154,7 @@ func TestSessionEntries(t *testing.T) {
 
 		return protocol.CronRunResult{ConversationID: "slack-thread:C1:cron-y"}, nil
 	}}
-	cronjobs := cronfrontend.New(cfg.Workspace, cfg.RuntimeDirName(), []string{"#ops"}, make(chan protocol.Broadcast), sessions, cronRunner, slog.New(slog.DiscardHandler))
+	cronjobs := cronfrontend.New(cfg.Workspace, cfg.RuntimeDirName(), []string{"#ops"}, sessions, cronRunner, slog.New(slog.DiscardHandler))
 	require.NoError(t, cronjobs.Start(t.Context()))
 	t.Cleanup(func() { require.NoError(t, cronjobs.Stop(context.Background())) })
 
@@ -306,7 +306,7 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, codes.Unauthenticated, status.Code(err))
 	}
 
-	remaining, err := sessions.ObserveEntries(ctx, "unrelated", 0)
+	remaining, err := sessions.ObserveEntries(ctx, "unrelated")
 	require.NoError(t, err)
 	require.Len(t, remaining, 1)
 	require.Equal(t, unrelated, remaining[0].ID)
@@ -470,7 +470,7 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, "empty-web", listedSessions.Sessions[0].Id)
 	require.Equal(t, "human two", listedSessions.Sessions[0].Preview)
 
-	storedHistory, err := sessions.ObserveEntries(ctx, "empty-web", 0)
+	storedHistory, err := sessions.ObserveEntries(ctx, "empty-web")
 	require.NoError(t, err)
 	require.Len(t, storedHistory, 1)
 	require.Equal(t, historyEntry.ReplayInput, storedHistory[0].Entry.ReplayInput)
@@ -576,12 +576,12 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, "empty-web", listed.Sessions[0].Id)
 		require.Equal(t, tc.want, listed.Sessions[0].Preview)
 
-		stored, err := sessions.ObserveEntries(ctx, "empty-web", 0)
+		stored, err := sessions.ObserveEntries(ctx, "empty-web")
 		require.NoError(t, err)
 		require.Equal(t, replay, stored[len(stored)-1].Entry.ReplayInput)
 	}
 
-	remaining, err = sessions.ObserveEntries(ctx, id, 0)
+	remaining, err = sessions.ObserveEntries(ctx, id)
 	require.NoError(t, err)
 	require.Empty(t, remaining)
 
@@ -595,7 +595,7 @@ func TestSessionEntries(t *testing.T) {
 	require.True(t, exists)
 	require.Equal(t, goal, afterGoal)
 
-	remaining, err = sessions.ObserveEntries(ctx, "unrelated", 0)
+	remaining, err = sessions.ObserveEntries(ctx, "unrelated")
 	require.NoError(t, err)
 	require.Len(t, remaining, 1)
 
@@ -618,7 +618,7 @@ func TestSessionEntries(t *testing.T) {
 	_, err = invoke[CreateSessionResponse](ctx, connection, "CreateSession", &CreateSessionRequest{Agent: "missing"})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 
-	historyBefore, err := sessions.ObserveEntries(ctx, "empty-web", 0)
+	historyBefore, err := sessions.ObserveEntries(ctx, "empty-web")
 	require.NoError(t, err)
 
 	for _, selectedID := range []string{created.Id, "empty-web", id} {
@@ -664,7 +664,7 @@ func TestSessionEntries(t *testing.T) {
 		require.NotEqual(t, "private-X", session.Id)
 	}
 
-	historyAfter, err := sessions.ObserveEntries(ctx, "empty-web", 0)
+	historyAfter, err := sessions.ObserveEntries(ctx, "empty-web")
 	require.NoError(t, err)
 	require.Equal(t, historyBefore, historyAfter)
 
@@ -718,7 +718,7 @@ func TestSessionEntries(t *testing.T) {
 		}
 	}
 
-	observed, err := sessions.ObserveEntries(ctx, id, 0)
+	observed, err := sessions.ObserveEntries(ctx, id)
 	require.NoError(t, err)
 	require.Len(t, observed, 4)
 	require.Equal(t, sources[0], observed[0].SourceConversationID)
@@ -762,7 +762,7 @@ func TestSessionEntries(t *testing.T) {
 	require.Len(t, calls, 2)
 	require.NotEqual(t, calls[0].RawRunProgress.ConversationID, calls[1].RawRunProgress.ConversationID)
 
-	cronRunner.RunFunc = func(context.Context, string, string, *slog.Logger, *backend.RawRunProgress) (protocol.CronRunResult, error) {
+	cronRunner.RunFunc = func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		return protocol.CronRunResult{}, errors.New("cron execution failed")
 	}
 	failed, err := invoke[RunCronJobResponse](ctx, connection, "RunCronJob", &RunCronJobRequest{Stem: "alpha"})

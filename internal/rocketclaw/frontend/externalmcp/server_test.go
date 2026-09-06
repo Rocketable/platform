@@ -394,7 +394,6 @@ func TestWithBasicAuthAllowsNilUsers(t *testing.T) {
 	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", http.NoBody))
 
 	assert.True(t, called)
-	assert.Nil(t, withBasicAuth(nil, map[string]string{"alice": "secret"}))
 }
 
 func callSessionPromptWithExternalConversationID(t *testing.T, endpoint, externalConversationID, input string, metadata map[string]string) *mcp.CallToolResult {

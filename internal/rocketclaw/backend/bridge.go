@@ -100,6 +100,8 @@ var errInboundAttachmentReductionNotEnough = errors.New("inbound attachment imag
 // RawRunExposedToolName is the tool cron prompts use for human-visible output.
 const RawRunExposedToolName = rawRunToolName
 
+const rawRunMissingToolPrompt = "You did not call the mandatory " + rawRunToolName + " tool. Normal assistant replies do not count and this background run cannot finish until you call that exact tool. Before this turn ends, call " + rawRunToolName + "(\"full exact message to show the human, or empty string if the human should see nothing\"). If the human partner should see a final message from this background turn, the full final message must be the tool argument. Do not send a summary, paraphrase, or reduced view."
+
 type toolMode string
 
 const (
@@ -111,10 +113,9 @@ const (
 // Config controls one rocketcode bridge conversation.
 type Config struct {
 	ConversationID, Agent, AgentAfterRecovery, ManagedConversationID, ExternalConversationID string
-	OutputTargets                                                                            []protocol.OutputTarget
 	RecoveringActiveTurn                                                                     bool
-	RequestRestart                                                                           func(context.Context, string) (string, error)
-	RequestReload                                                                            func(context.Context, string) (string, error)
+	RequestRestart                                                                           func(string) (string, error)
+	RequestReload                                                                            func(string) (string, error)
 	UserQuestionAsker                                                                        protocol.UserQuestionAsker
 	StartNewThread                                                                           func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error)
 	SessionService                                                                           *SessionService
@@ -157,14 +158,10 @@ type bridgeRequest struct {
 	scheduledMessageID        string
 	scheduledMessageRecurring bool
 	queueItemID               string
-	activation                protocol.ActivationHook
 	completion                *turnCompletion
 	producer                  *Bridge
 	syncSource                string
 }
-
-// NoopActivationHook leaves queued request activation unchanged.
-func NoopActivationHook(_ context.Context, _ *protocol.InboundMessage) error { return nil }
 
 // EnqueueActivation posts the consume card for a popped Enqueued Slack Message.
 // The zero value is inert.
@@ -183,7 +180,6 @@ func (a EnqueueActivation) Activate(ctx context.Context, item *protocol.ThreadQu
 
 type runResult struct {
 	turnID, checkpointTurnID, text, thinking string
-	sequence                                 int
 	sessionEntryID                           int64
 	responseID, model                        string
 	attachments                              []protocol.OutboundAttachment
@@ -276,8 +272,6 @@ func normalizeConfig(cfg *Config) Config {
 	normalized.AgentAfterRecovery = strings.TrimSpace(normalized.AgentAfterRecovery)
 	normalized.ManagedConversationID = strings.TrimSpace(normalized.ManagedConversationID)
 	normalized.ExternalConversationID = strings.TrimSpace(normalized.ExternalConversationID)
-
-	normalized.OutputTargets = append([]protocol.OutputTarget(nil), normalized.OutputTargets...)
 
 	return normalized
 }
@@ -390,19 +384,12 @@ func (b *Bridge) Stop() error {
 func (b *Bridge) Submit(ctx context.Context, msg *protocol.InboundMessage) error {
 	msg.ConversationID = b.config.ConversationID
 
-	return b.enqueue(ctx, &bridgeRequest{inbound: msg, activation: NoopActivationHook}, "submit inbound message")
+	return b.enqueue(ctx, &bridgeRequest{inbound: msg}, "submit inbound message")
 }
 
 // RecoverActiveTurn enqueues a startup recovery continuation for this conversation.
 func (b *Bridge) RecoverActiveTurn(ctx context.Context, turn *ActiveTurnState) error {
-	return b.enqueue(ctx, &bridgeRequest{activeTurn: turn, activation: NoopActivationHook}, "submit recovered active turn")
-}
-
-// SubmitWhenActive enqueues one inbound message and runs activation after earlier requests finish.
-func (b *Bridge) SubmitWhenActive(ctx context.Context, msg *protocol.InboundMessage, activation protocol.ActivationHook) error {
-	msg.ConversationID = b.config.ConversationID
-
-	return b.enqueue(ctx, &bridgeRequest{inbound: msg, activation: activation}, "submit inbound message")
+	return b.enqueue(ctx, &bridgeRequest{activeTurn: turn}, "submit recovered active turn")
 }
 
 // InterruptActiveTurn interrupts current work without discarding waiting work.
@@ -529,7 +516,7 @@ func (b *Bridge) loop(ctx context.Context) {
 					b.completeRequestTurnPairReservation(&request)
 
 					if request.inbound != nil {
-						request.inbound.CompleteResponse("", errLock)
+						request.inbound.CompleteResponseWithAttachments("", nil, errLock)
 					}
 
 					b.mu.Lock()
@@ -572,7 +559,7 @@ func (b *Bridge) loop(ctx context.Context) {
 					if errHandle == nil {
 						errHandle = handler.handleInbound(ctx, &request)
 					} else {
-						request.inbound.CompleteResponse("", errHandle)
+						request.inbound.CompleteResponseWithAttachments("", nil, errHandle)
 					}
 
 					if errHandle != nil && !errors.Is(errHandle, context.Canceled) {
@@ -663,10 +650,10 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (a
 			request.inbound = inbound
 			inbound.ConversationID = b.config.ConversationID
 		}
-	}
 
-	if err := request.activation(ctx, request.inbound); err != nil {
-		return false, err
+		if err := b.config.EnqueueActivation.Activate(ctx, &queuedItem, request.inbound); err != nil {
+			return false, err
+		}
 	}
 
 	if request.scheduledMessageID != "" && !request.scheduledMessageRecurring {
@@ -758,11 +745,7 @@ func (b *Bridge) submitEnqueuedItem(ctx context.Context, item *protocol.ThreadQu
 		inbound.SlackReply = &reply
 	}
 
-	activation := func(ctx context.Context, inbound *protocol.InboundMessage) error {
-		return b.config.EnqueueActivation.Activate(ctx, item, inbound)
-	}
-
-	return b.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: item.ID, activation: activation}, "submit enqueued message")
+	return b.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: item.ID}, "submit enqueued message")
 }
 
 func (b *Bridge) submitDueScheduled(ctx context.Context, id string, armed *protocol.ScheduledMessageState, now time.Time) error {
@@ -779,7 +762,7 @@ func (b *Bridge) submitDueScheduled(ctx context.Context, id string, armed *proto
 	inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "scheduled_message", armed.Message, false)
 
 	inbound.ConversationID = b.config.ConversationID
-	if err := b.enqueue(ctx, &bridgeRequest{inbound: inbound, scheduledMessageID: id, scheduledMessageRecurring: stored.Recurring, activation: NoopActivationHook}, "submit scheduled message"); err != nil {
+	if err := b.enqueue(ctx, &bridgeRequest{inbound: inbound, scheduledMessageID: id, scheduledMessageRecurring: stored.Recurring}, "submit scheduled message"); err != nil {
 		return err
 	}
 
@@ -826,7 +809,7 @@ func (b *Bridge) handleRecoveredActiveTurn(ctx context.Context, turn *ActiveTurn
 
 	turnID := fmt.Sprintf("turn-%d", time.Now().UnixNano())
 
-	result, err := b.runTurn(ctx, msg, turnID, true, checkpoint)
+	result, err := b.runTurn(ctx, msg, turnID, checkpoint)
 	if err != nil {
 		if !activeTurnRecoveryPreserveError(err) {
 			checkpointTurnID := result.checkpointTurnID
@@ -853,7 +836,7 @@ func (b *Bridge) handleRecoveredActiveTurn(ctx context.Context, turn *ActiveTurn
 	}
 
 	result.turnID = turnID
-	if err := b.publishFinal(ctx, msg, result, true); err != nil {
+	if err := b.publishFinal(ctx, msg, result); err != nil {
 		return err
 	}
 
@@ -906,21 +889,6 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 		}
 	}()
 
-	if msg.Kind == protocol.InboundKindGoal {
-		goal := msg.Goal
-		if goal.CheckScript != "" {
-			if err := ValidateGoalCheckScriptStart(b.runtime, b.agentSnapshot(), goal.CheckScript); err != nil {
-				return err
-			}
-		}
-
-		if err := b.config.SessionService.BeginGoal(b.config.ConversationID, goal.Objective, goal.CheckScript, goal.MaxTurns, "", ""); err != nil {
-			return err
-		}
-
-		msg.Label = goalKickoffLabel
-	}
-
 	if msg.Label == goalContinuationLabel {
 		goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID)
 		if err != nil {
@@ -928,14 +896,14 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 		}
 
 		if !ok || strings.TrimSpace(goal.Status) != GoalStatusActive {
-			msg.CompleteResponse("", nil)
+			msg.CompleteResponseWithAttachments("", nil, nil)
 			return nil
 		}
 	}
 
 	turnID := fmt.Sprintf("turn-%d", time.Now().UnixNano())
 	started := time.Now()
-	result := runResult{turnID: turnID, text: "", thinking: "", sequence: 0, sessionEntryID: 0, responseID: "", model: ""}
+	result := runResult{turnID: turnID, text: "", thinking: "", sessionEntryID: 0, responseID: "", model: ""}
 
 	var errLog error
 
@@ -952,10 +920,9 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 		b.log.Info("finished rocketcode turn", "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(started).Milliseconds(), "text_len", len([]rune(result.text)), "thinking_len", len([]rune(result.thinking)), "session_entry_id", result.sessionEntryID, "error", errLog)
 	}()
 
-	publish := msg.Kind != protocol.InboundKindInternalize
 	if fallback := attachmentFallback(msg); fallback != "" {
 		result.text = fallback
-		errPublish := b.publishFinal(ctx, msg, result, publish)
+		errPublish := b.publishFinal(ctx, msg, result)
 		errLog = errPublish
 
 		return errPublish
@@ -965,17 +932,17 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 	if msg.Workflow != nil {
 		result, errTurn = b.runWorkflow(ctx, msg, turnID)
 	} else {
-		result, errTurn = b.runTurn(ctx, msg, turnID, publish)
+		result, errTurn = b.runTurn(ctx, msg, turnID)
 		for msg.RequireOutputDecision && errTurn == nil && !result.outputDecided {
 			msg.Text = rawRunMissingToolPrompt
-			result, errTurn = b.runTurn(ctx, msg, turnID, publish)
+			result, errTurn = b.runTurn(ctx, msg, turnID)
 		}
 	}
 
 	if errTurn != nil {
 		if errors.Is(errTurn, errTurnInterrupted) {
-			result = runResult{turnID: turnID, sequence: result.sequence, sessionEntryID: result.sessionEntryID, workflowTerminal: result.workflowTerminal}
-			errPublish := b.publishFinal(ctx, msg, result, publish)
+			result = runResult{turnID: turnID, sessionEntryID: result.sessionEntryID, workflowTerminal: result.workflowTerminal}
+			errPublish := b.publishFinal(ctx, msg, result)
 			errLog = errors.Join(errTurn, errPublish)
 
 			return errPublish
@@ -983,26 +950,19 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 
 		b.log.Error("run rocketcode turn", "error", errTurn)
 
-		if !publish {
-			msg.CompleteResponse("", errTurn)
-			errLog = errTurn
-
-			return errTurn
-		}
-
 		text := internalErrorResponse + "\n\n" + errTurn.Error()
-		result = runResult{turnID: turnID, text: text, sequence: result.sequence, sessionEntryID: result.sessionEntryID, workflowTerminal: result.workflowTerminal}
-		errPublish := b.publishFinal(ctx, msg, result, true)
+		result = runResult{turnID: turnID, text: text, sessionEntryID: result.sessionEntryID, workflowTerminal: result.workflowTerminal}
+		errPublish := b.publishFinal(ctx, msg, result)
 		errLog = errors.Join(errTurn, errPublish)
 
 		return errLog
 	}
 
 	result.turnID = turnID
-	errPublish := b.publishFinal(ctx, msg, result, publish)
+	errPublish := b.publishFinal(ctx, msg, result)
 
 	errLog = errPublish
-	if errPublish != nil || !publish {
+	if errPublish != nil {
 		return errPublish
 	}
 
@@ -1051,10 +1011,8 @@ func (b *Bridge) runWorkflow(ctx context.Context, msg *protocol.InboundMessage, 
 		cancel()
 	}()
 
-	sequence := 0
 	progress := func(ctx context.Context, update protocol.PhaseUpdate) error {
-		sequence++
-		outbound := b.newOutboundMessage(msg, turnID, sequence, "", "", false)
+		outbound := b.newOutboundMessage(msg, turnID, "", "", false)
 
 		outbound.WorkflowPhase = &update
 		if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
@@ -1064,8 +1022,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, msg *protocol.InboundMessage, 
 		return nil
 	}
 	agentProgress := func(ctx context.Context, update protocol.AgentUpdate) error {
-		sequence++
-		outbound := b.newOutboundMessage(msg, turnID, sequence, "", "", false)
+		outbound := b.newOutboundMessage(msg, turnID, "", "", false)
 
 		outbound.WorkflowAgent = &update
 		if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
@@ -1116,12 +1073,12 @@ func (b *Bridge) runWorkflow(ctx context.Context, msg *protocol.InboundMessage, 
 
 	payload, err := json.Marshal(summary)
 	if err != nil {
-		return runResult{turnID: turnID, sequence: sequence, workflowTerminal: protocol.TerminalFailed}, fmt.Errorf("encode workflow run summary: %w", err)
+		return runResult{turnID: turnID, workflowTerminal: protocol.TerminalFailed}, fmt.Errorf("encode workflow run summary: %w", err)
 	}
 
 	summaryReplay, err := replayInputForMessage("developer", workflowRunSummaryPrefix+string(payload))
 	if err != nil {
-		return runResult{turnID: turnID, sequence: sequence, workflowTerminal: protocol.TerminalFailed}, fmt.Errorf("encode workflow run replay: %w", err)
+		return runResult{turnID: turnID, workflowTerminal: protocol.TerminalFailed}, fmt.Errorf("encode workflow run replay: %w", err)
 	}
 
 	replay := summaryReplay
@@ -1134,12 +1091,12 @@ func (b *Bridge) runWorkflow(ctx context.Context, msg *protocol.InboundMessage, 
 
 		userReplay, err := replayInputForMessage("user", msg.Text)
 		if err != nil {
-			return runResult{turnID: turnID, sequence: sequence, workflowTerminal: protocol.TerminalFailed}, err
+			return runResult{turnID: turnID, workflowTerminal: protocol.TerminalFailed}, err
 		}
 
 		assistantReplay, err := replayInputForMessage("assistant", assistant)
 		if err != nil {
-			return runResult{turnID: turnID, sequence: sequence, workflowTerminal: protocol.TerminalFailed}, err
+			return runResult{turnID: turnID, workflowTerminal: protocol.TerminalFailed}, err
 		}
 
 		replay = slices.Concat(userReplay, assistantReplay, summaryReplay)
@@ -1148,7 +1105,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, msg *protocol.InboundMessage, 
 	store := newSessionStore(b.config.ConversationID, b.config.SessionService)
 	id, errStore := store.outID(rocketcode.SessionEntry{Version: 1, Type: workflowRunEntryType, Timestamp: time.Now().UTC(), ReplayInput: replay})
 
-	result = runResult{turnID: turnID, sequence: sequence, sessionEntryID: id, workflowTerminal: terminal}
+	result = runResult{turnID: turnID, sessionEntryID: id, workflowTerminal: terminal}
 	if errStore != nil {
 		result.workflowTerminal = protocol.TerminalFailed
 		return result, errors.Join(fmt.Errorf("store workflow run: %w", errStore), errRun)
@@ -1167,18 +1124,12 @@ func (b *Bridge) runWorkflow(ctx context.Context, msg *protocol.InboundMessage, 
 }
 
 //nolint:gocritic // runResult is kept by value to avoid nil handling in the hot publish path.
-func (b *Bridge) publishFinal(ctx context.Context, msg *protocol.InboundMessage, result runResult, publish bool) error {
+func (b *Bridge) publishFinal(ctx context.Context, msg *protocol.InboundMessage, result runResult) error {
 	b.mu.Lock()
 	b.inputOpen = false
 	b.mu.Unlock()
 
-	if !publish {
-		msg.CompleteResponse("", nil)
-
-		return nil
-	}
-
-	outbound := b.newOutboundMessage(msg, result.turnID, result.sequence+1, result.text, "", true)
+	outbound := b.newOutboundMessage(msg, result.turnID, result.text, "", true)
 	outbound.WorkflowTerminal = result.workflowTerminal
 
 	outbound.Attachments = protocol.CloneOutboundAttachments(result.attachments)
@@ -1194,7 +1145,7 @@ func (b *Bridge) publishFinal(ctx context.Context, msg *protocol.InboundMessage,
 	}
 
 	if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
-		msg.CompleteResponse("", err)
+		msg.CompleteResponseWithAttachments("", nil, err)
 		return fmt.Errorf("publish final outbound message: %w", err)
 	}
 
@@ -1240,7 +1191,7 @@ func (b *Bridge) finishGoalTurn(ctx context.Context, request *bridgeRequest) err
 		inbound.SlackReply.ChannelID, inbound.SlackReply.MessageTS, inbound.SlackReply.ThreadTS = msg.SlackReply.ChannelID, msg.SlackReply.MessageTS, msg.SlackReply.ThreadTS
 	}
 
-	if err := b.enqueue(ctx, &bridgeRequest{inbound: inbound, activation: NoopActivationHook, completion: request.completion}, "submit goal continuation"); err != nil {
+	if err := b.enqueue(ctx, &bridgeRequest{inbound: inbound, completion: request.completion}, "submit goal continuation"); err != nil {
 		return err
 	}
 
@@ -1250,7 +1201,7 @@ func (b *Bridge) finishGoalTurn(ctx context.Context, request *bridgeRequest) err
 }
 
 //nolint:gocyclo // Turn execution coordinates model, tools, progress, and goal accounting.
-func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turnID string, publish bool, recoveredCheckpoints ...rocketcode.ActiveTurnCheckpoint) (result runResult, err error) {
+func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turnID string, recoveredCheckpoints ...rocketcode.ActiveTurnCheckpoint) (result runResult, err error) {
 	var (
 		recoveredReplay       []json.RawMessage
 		recoveredDisplayModel string
@@ -1275,7 +1226,6 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		attribute.String("rocketclaw.source", string(msg.Source)),
 		attribute.String("rocketclaw.kind", string(msg.Kind)),
 		attribute.String("rocketclaw.label", msg.Label),
-		attribute.Bool("rocketclaw.publish", publish),
 		attribute.Int("rocketclaw.attachment_count", len(msg.Attachments)),
 		rocketclawInputValue(b.runtime, msg.Text),
 	)
@@ -1442,7 +1392,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		}
 	}
 
-	providerLog := b.log.With("conversation_id", b.config.ConversationID, "turn_id", turnID, "agent", agentName, "source", string(msg.Source), "kind", string(msg.Kind), "human", msg.Human, "goal_turn", msg.GoalTurn, "publish", publish, "attachment_count", len(msg.Attachments))
+	providerLog := b.log.With("conversation_id", b.config.ConversationID, "turn_id", turnID, "agent", agentName, "source", string(msg.Source), "kind", string(msg.Kind), "human", msg.Human, "goal_turn", msg.GoalTurn, "attachment_count", len(msg.Attachments))
 	if msg.Label != "" {
 		providerLog = providerLog.With("label", msg.Label)
 	}
@@ -1451,7 +1401,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	attachments := new(outboundAttachmentCollector)
 
-	observed, err := b.config.SessionService.ObserveEntries(ctx, b.config.ConversationID, 0)
+	observed, err := b.config.SessionService.ObserveEntries(ctx, b.config.ConversationID)
 	if err != nil {
 		return runResult{}, fmt.Errorf("load rocketcode session history metrics: %w", err)
 	}
@@ -1578,7 +1528,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	var group errgroup.Group
 
-	result = runResult{turnID: turnID, text: "", thinking: "", sequence: 0, sessionEntryID: 0, responseID: "", model: ""}
+	result = runResult{turnID: turnID, text: "", thinking: "", sessionEntryID: 0, responseID: "", model: ""}
 	defer func() {
 		if result.checkpointTurnID == "" {
 			result.checkpointTurnID = checkpointTurnID
@@ -1631,16 +1581,8 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			b.log.Info("received first rocketcode response item", "conversation_id", b.config.ConversationID, "turn_id", turnID, "kind", item.Kind, "elapsed_ms", time.Since(looperStarted).Milliseconds())
 		}
 
-		if publish {
-			if err := b.processResponse(ctx, msg, &result, item); err != nil {
-				return result, err
-			}
-
-			continue
-		}
-
-		if item.Kind == rocketcode.ChatResponseAssistantMessage {
-			result.text = appendText(result.text, item.Text)
+		if err := b.processResponse(ctx, msg, &result, item); err != nil {
+			return result, err
 		}
 	}
 
@@ -1707,8 +1649,7 @@ func (b *Bridge) processResponse(ctx context.Context, msg *protocol.InboundMessa
 
 		b.log.Debug("rocketcode thinking update", "kind", item.Kind, "text_len", len([]rune(thinking)), "text", thinking)
 		result.thinking = appendText(result.thinking, thinking)
-		result.sequence++
-		outbound := b.newOutboundMessage(msg, result.turnID, result.sequence, "", result.thinking, false)
+		outbound := b.newOutboundMessage(msg, result.turnID, "", result.thinking, false)
 
 		if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
 			return fmt.Errorf("publish rocketcode progress: %w", err)
@@ -1716,8 +1657,7 @@ func (b *Bridge) processResponse(ctx context.Context, msg *protocol.InboundMessa
 	case rocketcode.ChatResponseAssistantMessage:
 		result.text = appendText(result.text, item.Text)
 
-		result.sequence++
-		if err := b.bus.PublishOutbound(ctx, b.newOutboundMessage(msg, result.turnID, result.sequence, result.text, "", false)); err != nil {
+		if err := b.bus.PublishOutbound(ctx, b.newOutboundMessage(msg, result.turnID, result.text, "", false)); err != nil {
 			return fmt.Errorf("publish rocketcode answer snapshot: %w", err)
 		}
 	}
@@ -2425,7 +2365,7 @@ func parseReasonArg(raw json.RawMessage, op string) (string, error) {
 	return reason, nil
 }
 
-func restartTool(requestRestart func(context.Context, string) (string, error), recordRestartRequester func(context.Context) error) rocketcode.Tool {
+func restartTool(requestRestart func(string) (string, error), recordRestartRequester func(context.Context) error) rocketcode.Tool {
 	return rocketcode.Tool{Name: restartToolName, Description: "Restart rocketclaw only after completing an explicitly requested runtime configuration change that requires restart, such as changes to rocketclaw.json, femtoclaw.json, or configured overlay entries. Use rocketclaw_reload instead for agents/, skills/, cron/, scripts/, or already-configured overlay repository content changes. The reason field must explain why rocketclaw needs to restart. Do not call this after memory, ledger, audit, report, workspace, source-code, generated artifact, log, transcript, or data-file edits.", Permission: "rocketclaw", VisibilitySubjects: []string{restartToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{restartToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		reason, err := parseReasonArg(raw, "restart")
 		if err != nil {
@@ -2436,7 +2376,7 @@ func restartTool(requestRestart func(context.Context, string) (string, error), r
 			return rocketcode.ToolResult{}, err
 		}
 
-		output, err := requestRestart(ctx, reason)
+		output, err := requestRestart(reason)
 		if err != nil {
 			return rocketcode.ToolResult{}, err
 		}
@@ -2445,14 +2385,14 @@ func restartTool(requestRestart func(context.Context, string) (string, error), r
 	}}
 }
 
-func reloadTool(requestReload func(context.Context, string) (string, error)) rocketcode.Tool {
-	return rocketcode.Tool{Name: reloadToolName, Description: "Reload rocketclaw runtime assets after changing agents/, skills/, cron/, scripts/, or already-configured overlay repository content. The reason field must explain what runtime assets changed. This validates staged runtime assets before changing the live runtime. It does not reread rocketclaw.json or femtoclaw.json; adding, removing, or changing configured overlay entries requires rocketclaw_restart.", Permission: "rocketclaw", VisibilitySubjects: []string{reloadToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{reloadToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+func reloadTool(requestReload func(string) (string, error)) rocketcode.Tool {
+	return rocketcode.Tool{Name: reloadToolName, Description: "Reload rocketclaw runtime assets after changing agents/, skills/, cron/, scripts/, or already-configured overlay repository content. The reason field must explain what runtime assets changed. This validates staged runtime assets before changing the live runtime. It does not reread rocketclaw.json or femtoclaw.json; adding, removing, or changing configured overlay entries requires rocketclaw_restart.", Permission: "rocketclaw", VisibilitySubjects: []string{reloadToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{reloadToolName}, nil }, Parameters: map[string]any{"properties": map[string]any{"reason": map[string]any{"type": "string"}}, "required": []string{"reason"}}, Call: func(_ context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		reason, err := parseReasonArg(raw, "reload")
 		if err != nil {
 			return rocketcode.ToolResult{}, err
 		}
 
-		output, err := requestReload(ctx, reason)
+		output, err := requestReload(reason)
 		if err != nil {
 			return rocketcode.TextToolResult("rocketclaw_reload failed; live runtime assets were not changed:\n\n" + err.Error()), nil
 		}
@@ -2650,7 +2590,6 @@ func askUserQuestionTool(asker protocol.UserQuestionAsker, msg *protocol.Inbound
 
 		req.ID, req.Source, req.ConversationID = rand.Text(), msg.Source, msg.ConversationID
 
-		req.Bridge = msg.Bridge
 		if msg.SlackReply != nil {
 			req.SlackReply = &protocol.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS, RecipientTeamID: msg.SlackReply.RecipientTeamID, RecipientUserID: msg.SlackReply.RecipientUserID}
 		}
@@ -2707,10 +2646,8 @@ func startNewThreadTool(start func(context.Context, *protocol.StartNewThreadRequ
 
 			allowedAgents := strings.FieldsFunc(msg.Metadata[protocol.InboundAllowedAgentsMetadataKey], func(r rune) bool { return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' ' })
 
-			req := protocol.StartNewThreadRequest{Source: msg.Source, SourceConversationID: msg.ConversationID, CurrentAgent: currentAgent, Agent: strings.TrimSpace(input.Agent), Title: title, Prompt: prompt, AllowedAgents: allowedAgents}
-			req.Bridge = msg.Bridge
+			req := protocol.StartNewThreadRequest{Source: msg.Source, CurrentAgent: currentAgent, Agent: strings.TrimSpace(input.Agent), Title: title, Prompt: prompt, AllowedAgents: allowedAgents}
 
-			req.Response = msg.Response
 			if msg.SlackReply != nil {
 				req.SlackReply = &protocol.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS, RecipientTeamID: msg.SlackReply.RecipientTeamID, RecipientUserID: msg.SlackReply.RecipientUserID}
 			}
@@ -2804,7 +2741,7 @@ func (b *Bridge) runGoalCheck(ctx context.Context, script string) (string, bool)
 		return "goal check failed before execution: active agent " + agentName + " is not configured", false
 	}
 
-	check, err := validateGoalCheckScript(root, b.runtime.Workspace, script, agent.Permission)
+	command, err := validateGoalCheckScript(root, b.runtime.Workspace, script, agent.Permission)
 	if err != nil {
 		return "goal check failed before execution: " + err.Error(), false
 	}
@@ -2814,7 +2751,7 @@ func (b *Bridge) runGoalCheck(ctx context.Context, script string) (string, bool)
 		return "goal check failed before execution: " + err.Error(), false
 	}
 
-	result, err := rocketcode.RunBash(ctx, root, filepath.Join(b.runtime.Workspace, filepath.FromSlash(shellTempRel)), nil, rocketcode.BashCommand{Command: check.command, TimeoutMillisecond: goalCheckTimeout, Workdir: "", Description: "Run goal completion check"})
+	result, err := rocketcode.RunBash(ctx, root, filepath.Join(b.runtime.Workspace, filepath.FromSlash(shellTempRel)), nil, rocketcode.BashCommand{Command: command, TimeoutMillisecond: goalCheckTimeout, Workdir: "", Description: "Run goal completion check"})
 	if err != nil {
 		return "goal check failed before execution: " + err.Error(), false
 	}
@@ -2835,13 +2772,8 @@ func (b *Bridge) armScheduledMessage(id string, message *protocol.ScheduledMessa
 	})
 }
 
-func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID string, sequence int, text, thinking string, complete bool) *protocol.OutboundMessage {
-	source := protocol.SourceSystem
-	if msg != nil {
-		source = msg.Source
-	}
-
-	outbound := protocol.NewOutboundMessage(source, b.config.ConversationID, text, b.config.OutputTargets...)
+func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text, thinking string, complete bool) *protocol.OutboundMessage {
+	outbound := protocol.NewOutboundMessage(b.config.ConversationID, text)
 	outbound.ProgressText = thinking
 	outbound.ConversationID = b.config.ConversationID
 
@@ -2853,12 +2785,9 @@ func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID string,
 	outbound.Agent = b.config.Agent
 
 	outbound.TurnID = turnID
-	outbound.Sequence = sequence
 
 	outbound.Complete = complete
 	if msg != nil {
-		outbound.Response = msg.Response
-		outbound.Bridge = msg.Bridge
 		outbound.Cronjob = msg.Cronjob
 	}
 
@@ -3029,8 +2958,6 @@ func replayInputRawKind(raw json.RawMessage) string {
 
 const defaultReplyInstruction = "Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."
 
-const internalNoteInstruction = "Internalize the following note into the active conversation state exactly as written. Respect the content of the message and do not paraphrase, summarize, translate, or normalize whitespace. Do not reply or acknowledge it unless the human explicitly asks you to."
-
 func (b *Bridge) buildPrompt(msg *protocol.InboundMessage, agentFrontmatter map[string]any) (string, error) {
 	prompt := buildPrompt(msg, agentFrontmatter)
 
@@ -3054,9 +2981,6 @@ func buildPrompt(msg *protocol.InboundMessage, agentFrontmatter map[string]any) 
 
 	body := strings.TrimSpace(msg.Text)
 	if msg.Label == startNewThreadToolName {
-		body = msg.Text
-	} else if msg.Kind == protocol.InboundKindInternalize {
-		instruction = internalNoteInstruction
 		body = msg.Text
 	}
 

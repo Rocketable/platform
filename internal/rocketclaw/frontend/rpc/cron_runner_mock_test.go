@@ -6,7 +6,6 @@ package rpc
 
 import (
 	"context"
-	"log/slog"
 	"sync"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
@@ -24,7 +23,7 @@ var _ cronfrontend.Runner = &mockCronRunner{}
 //
 //		// make and configure a mocked cronfrontend.Runner
 //		mockedRunner := &mockCronRunner{
-//			RunFunc: func(context1 context.Context, s string, s1 string, logger *slog.Logger, rawRunProgress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+//			RunFunc: func(context1 context.Context, s string, s1 string, rawRunProgress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 //				panic("mock out the Run method")
 //			},
 //		}
@@ -35,7 +34,7 @@ var _ cronfrontend.Runner = &mockCronRunner{}
 //	}
 type mockCronRunner struct {
 	// RunFunc mocks the Run method.
-	RunFunc func(context1 context.Context, s string, s1 string, logger *slog.Logger, rawRunProgress *backend.RawRunProgress) (protocol.CronRunResult, error)
+	RunFunc func(context1 context.Context, s string, s1 string, rawRunProgress *backend.RawRunProgress) (protocol.CronRunResult, error)
 
 	// calls tracks calls to the methods.
 	calls struct {
@@ -47,8 +46,6 @@ type mockCronRunner struct {
 			S string
 			// S1 is the s1 argument value.
 			S1 string
-			// Logger is the logger argument value.
-			Logger *slog.Logger
 			// RawRunProgress is the rawRunProgress argument value.
 			RawRunProgress *backend.RawRunProgress
 		}
@@ -57,7 +54,7 @@ type mockCronRunner struct {
 }
 
 // Run calls RunFunc.
-func (mock *mockCronRunner) Run(context1 context.Context, s string, s1 string, logger *slog.Logger, rawRunProgress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+func (mock *mockCronRunner) Run(context1 context.Context, s string, s1 string, rawRunProgress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 	if mock.RunFunc == nil {
 		panic("mockCronRunner.RunFunc: method is nil but Runner.Run was just called")
 	}
@@ -65,19 +62,17 @@ func (mock *mockCronRunner) Run(context1 context.Context, s string, s1 string, l
 		Context1       context.Context
 		S              string
 		S1             string
-		Logger         *slog.Logger
 		RawRunProgress *backend.RawRunProgress
 	}{
 		Context1:       context1,
 		S:              s,
 		S1:             s1,
-		Logger:         logger,
 		RawRunProgress: rawRunProgress,
 	}
 	mock.lockRun.Lock()
 	mock.calls.Run = append(mock.calls.Run, callInfo)
 	mock.lockRun.Unlock()
-	return mock.RunFunc(context1, s, s1, logger, rawRunProgress)
+	return mock.RunFunc(context1, s, s1, rawRunProgress)
 }
 
 // RunCalls gets all the calls that were made to Run.
@@ -88,14 +83,12 @@ func (mock *mockCronRunner) RunCalls() []struct {
 	Context1       context.Context
 	S              string
 	S1             string
-	Logger         *slog.Logger
 	RawRunProgress *backend.RawRunProgress
 } {
 	var calls []struct {
 		Context1       context.Context
 		S              string
 		S1             string
-		Logger         *slog.Logger
 		RawRunProgress *backend.RawRunProgress
 	}
 	mock.lockRun.RLock()

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
@@ -15,7 +14,7 @@ import (
 
 func TestCronRunnerRejectsChannelWithoutAgents(t *testing.T) {
 	runner := &cronRunner{config: &config.Config{Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops"}}}}}
-	_, err := runner.Run(t.Context(), "job", "prompt", slog.New(slog.DiscardHandler), &backend.RawRunProgress{TextChannel: "#ops"})
+	_, err := runner.Run(t.Context(), "job", "prompt", &backend.RawRunProgress{TextChannel: "#ops"})
 	require.ErrorContains(t, err, "has no configured agents")
 }
 
@@ -67,7 +66,7 @@ func TestCronProducerAlwaysSyncsBeforeReturning(t *testing.T) {
 				if existing {
 					progress.SyncDestination = "slack-thread:C1:1.2"
 				}
-				result, err := runner.Run(ctx, "job-agent", "job prompt", slog.New(slog.DiscardHandler), progress)
+				result, err := runner.Run(ctx, "job-agent", "job prompt", progress)
 				require.Equal(t, "slack-thread:C1:1.2", result.ConversationID)
 				switch outcome {
 				case "run-error":

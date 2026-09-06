@@ -79,10 +79,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 	stateLogger.Info("started rocketclaw state store", "elapsed", time.Since(startedAt))
 
 	defer func() {
-		stopCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
-		defer stop()
-
-		if err := rocketcodeSessions.Stop(stopCtx); err != nil {
+		if err := rocketcodeSessions.Stop(); err != nil {
 			logger.Warn("stop rocketcode session service", "error", err)
 		}
 	}()
@@ -99,7 +96,6 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same runtime wiring as Run, held under pglock.Do.
 	cancel, cfg, configPath, logger, rocketcodeSessions := s.cancel, s.cfg, s.configPath, s.logger, s.sessions
-	connectorChannels := protocol.NewChannels()
 	rt := new(Runtime)
 
 	var (
@@ -174,7 +170,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		return started
 	}
 
-	requestRestart := func(_ context.Context, reason string) (string, error) { //nolint:unparam // Signature is shared with restart hooks that may fail.
+	requestRestart := func(reason string) (string, error) { //nolint:unparam // Config.RequestRestart requires error; restart cancellation never fails.
 		started := startShutdown(reason, true)
 
 		if !started {
@@ -190,7 +186,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		refreshExternalMCPAgents = func() error { return nil }
 	)
 
-	requestReload := func(_ context.Context, reason string) (string, error) {
+	requestReload := func(reason string) (string, error) {
 		reloadMu.Lock()
 		defer reloadMu.Unlock()
 
@@ -230,7 +226,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		cannotResume   []cannotResumeItem
 	)
 
-	if err := recoverStartupActiveTurns(runCtx, rocketcodeSessions, func(_ context.Context, turn *ActiveTurnState) error {
+	if err := recoverStartupActiveTurns(runCtx, rocketcodeSessions, func(turn *ActiveTurnState) error {
 		conversationID := strings.TrimSpace(turn.Checkpoint.ConversationKey)
 		recoveringConversations[conversationID] = true
 
@@ -252,7 +248,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 
 	// Starts as No; set to Slack after the connector exists. Factory reads the current value per bridge.
 	slackUserQuestionAsker := protocol.NoUserQuestionAsker()
-	drainSlack := func(context.Context, string, rocketcode.TurnPhase) []string { return nil }
+	drainSlack := func(context.Context, string) []string { return nil }
 
 	threadBridges = newThreadBridgeManager(cfg, rocketcodeSessions, logger, func(Config Config) directBridge {
 		Config.RequestRestart = requestRestart
@@ -263,8 +259,8 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		}
 
 		conversationID := Config.ConversationID
-		Config.SteerDrain = rocketcode.SteerDrain{Fn: func(ctx context.Context, phase rocketcode.TurnPhase) []rocketcode.PromptInput {
-			texts := drainSlack(ctx, conversationID, phase)
+		Config.SteerDrain = rocketcode.SteerDrain{Fn: func(ctx context.Context, _ rocketcode.TurnPhase) []rocketcode.PromptInput {
+			texts := drainSlack(ctx, conversationID)
 
 			inputs := make([]rocketcode.PromptInput, 0, len(texts))
 			for _, text := range texts {
@@ -303,9 +299,9 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 	}()
 
 	*rt = Runtime{
-		Cfg: cfg, Log: logger, RunCtx: runCtx, Channels: connectorChannels,
-		Sessions:       rocketcodeSessions,
-		RecoveredTurns: recoveredTurns, CannotResume: cannotResume, ExternalMCPUsers: externalMCPUsers,
+		Cfg: cfg, Log: logger, RunCtx: runCtx,
+		Sessions:                 rocketcodeSessions,
+		ExternalMCPUsers:         externalMCPUsers,
 		RefreshExternalMCPAgents: &refreshExternalMCPAgents, TextRouter: threadBridges, threads: threadBridges,
 		startThreadRoot: &startThreadRoot, slackAsker: &slackUserQuestionAsker, drainSlack: &drainSlack,
 	}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"log/slog"
 	"net/netip"
 	"os"
@@ -25,7 +24,7 @@ func TestWebRPC(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	sessions, err := backend.NewSessionServiceIn(dsn, logger)
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, sessions.Stop(context.Background())) })
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
 	rt := &backend.Runtime{Sessions: sessions, Cfg: &config.Config{WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}, Log: logger}
 

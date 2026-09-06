@@ -10,16 +10,16 @@ import (
 func TestSessionStoreRequiresConversationID(t *testing.T) {
 	store, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
+	t.Cleanup(func() { require.NoError(t, store.Stop()) })
 
-	_, err = store.ObserveEntries(t.Context(), " ", 0)
+	_, err = store.ObserveEntries(t.Context(), " ")
 	require.EqualError(t, err, "conversation ID is required")
 }
 
 func TestExternalMCPBindingPersistsPrivateAndManagedConversations(t *testing.T) {
 	store, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
+	t.Cleanup(func() { require.NoError(t, store.Stop()) })
 
 	binding := ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private", ManagedConversationID: "slack-thread:C1:2.2", SlackChannel: "#ops"}
 	require.NoError(t, store.UpsertExternalMCPSession("deploy-42", &binding))
@@ -41,7 +41,7 @@ func TestExternalMCPBindingPersistsPrivateAndManagedConversations(t *testing.T) 
 func TestExternalMCPConversationRegistrationIsAtomic(t *testing.T) {
 	store, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
+	t.Cleanup(func() { require.NoError(t, store.Stop()) })
 
 	require.NoError(t, store.RegisterExternalMCPConversation("existing", "managed-agent", &ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private-1", ManagedConversationID: "slack-thread:C1:1.1", SlackChannel: "#ops"}))
 	thread, ok, err := store.Thread("slack-thread:C1:1.1")
@@ -60,7 +60,7 @@ func TestExternalMCPConversationRegistrationIsAtomic(t *testing.T) {
 func TestExternalMCPConversationCleanupRemovesOnlyBoundSessions(t *testing.T) {
 	store, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Stop(t.Context())) })
+	t.Cleanup(func() { require.NoError(t, store.Stop()) })
 
 	session := ExternalMCPSessionState{Agent: "private-agent", PrivateConversationID: "external_mcp:private", ManagedConversationID: "slack-thread:C1:1.1", SlackChannel: "#ops"}
 	require.NoError(t, store.RegisterExternalMCPConversation("public", "managed-agent", &session))
@@ -82,12 +82,12 @@ func TestExternalMCPConversationCleanupRemovesOnlyBoundSessions(t *testing.T) {
 	assert.False(t, ok)
 
 	for _, conversationID := range []string{session.PrivateConversationID, session.ManagedConversationID} {
-		entries, err := store.ObserveEntries(t.Context(), conversationID, 0)
+		entries, err := store.ObserveEntries(t.Context(), conversationID)
 		require.NoError(t, err)
 		assert.Empty(t, entries)
 	}
 
-	entries, err := store.ObserveEntries(t.Context(), "unrelated", 0)
+	entries, err := store.ObserveEntries(t.Context(), "unrelated")
 	require.NoError(t, err)
 	assert.Len(t, entries, 1)
 

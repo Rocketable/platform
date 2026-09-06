@@ -691,24 +691,6 @@ func TestSyncCreatesEmbeddedRuntimeSupport(t *testing.T) {
 	assert.Equal(t, "auth.json\nauth.json.lock\n", string(data))
 }
 
-func TestSyncShipsQuickbenchSkillAndAgent(t *testing.T) {
-	tmp := t.TempDir()
-	require.NoError(t, SyncInWithOverlays(tmp, targetRoot, nil, testLogger()))
-
-	skill, err := os.ReadFile(filepath.Join(tmp, targetRoot, "skills", "main-archive-benchmarks", "SKILL.md"))
-	require.NoError(t, err)
-	assert.Contains(t, string(skill), "go run github.com/Rocketable/platform/cmd/quickbench@main")
-
-	agent, err := os.ReadFile(filepath.Join(tmp, targetRoot, "agents", "slack-to-benchmark.md"))
-	require.NoError(t, err)
-	assert.Contains(t, string(agent), "go run github.com/Rocketable/platform/cmd/quickbench@main")
-
-	mainAgent, err := os.ReadFile(filepath.Join(tmp, targetRoot, "agents", "main.md"))
-	require.NoError(t, err)
-	assert.Contains(t, string(mainAgent), "main-archive-benchmarks")
-	assert.Contains(t, string(mainAgent), "slack-to-benchmark")
-}
-
 func TestSyncEffectiveRuntimeAssetsDoesNotMutateRuntimeOrScriptSymlinks(t *testing.T) {
 	workspace := t.TempDir()
 	realRuntime := filepath.Join(workspace, targetRoot)

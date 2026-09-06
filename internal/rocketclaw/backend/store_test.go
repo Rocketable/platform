@@ -85,13 +85,29 @@ func AppendSessionEntryID(ctx context.Context, workspace, conversationID string,
 		return 0, err
 	}
 
-	defer func() { _ = service.Stop(ctx) }()
+	defer func() { _ = service.Stop() }()
 
 	return appendSessionEntryDB(ctx, service.db, conversationID, entry)
 }
 
 func DeleteSession(ctx context.Context, workspace, conversationID string) (int64, error) {
-	return DeleteSessionIn(ctx, testStoreDSN(workspace), conversationID)
+	service, err := NewSessionServiceIn(testStoreDSN(workspace), slog.New(slog.DiscardHandler))
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = service.Stop() }()
+
+	return service.DeleteSession(ctx, conversationID)
+}
+
+func listSessions(ctx context.Context, databaseURL string) ([]protocol.SessionSummary, error) {
+	service, err := NewSessionServiceIn(databaseURL, slog.New(slog.DiscardHandler))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = service.Stop() }()
+
+	return service.ListSessions(ctx)
 }
 
 func TestSessionStoreAppendAndLoad(t *testing.T) {
@@ -124,20 +140,22 @@ func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, id2, id1)
 
-	observed, err := service.ObserveEntries(context.Background(), "main", id1)
+	observed, err := service.ObserveEntries(context.Background(), "main")
 	require.NoError(t, err)
-	require.Len(t, observed, 1)
-	assert.Equal(t, id2, observed[0].ID)
-	assert.Equal(t, *second, observed[0].Entry)
+	require.Len(t, observed, 2)
+	assert.Equal(t, id1, observed[0].ID)
+	assert.Equal(t, *first, observed[0].Entry)
+	assert.Equal(t, id2, observed[1].ID)
+	assert.Equal(t, *second, observed[1].Entry)
 }
 
 func TestSessionServiceTurnPairAllowsOnlyOneActiveTurn(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		service := newTestSessionService(t)
-		assert.False(t, service.PairBusyFor("slack-thread:C1:1.1", ""))
+		assert.False(t, service.PairBusyFor("slack-thread:C1:1.1"))
 		unlockFirst, err := service.lockTurnPair(t.Context(), "slack-thread:C1:1.1", "external_mcp:private")
 		require.NoError(t, err)
-		assert.True(t, service.PairBusyFor("slack-thread:C1:1.1", ""))
+		assert.True(t, service.PairBusyFor("slack-thread:C1:1.1"))
 
 		secondAcquired := false
 
@@ -163,7 +181,7 @@ func TestSessionServiceTurnPairAllowsOnlyOneActiveTurn(t *testing.T) {
 		synctest.Wait()
 		require.NoError(t, errSecond)
 		assert.True(t, secondAcquired)
-		assert.False(t, service.PairBusyFor("slack-thread:C1:1.1", ""))
+		assert.False(t, service.PairBusyFor("slack-thread:C1:1.1"))
 	})
 }
 
@@ -338,7 +356,7 @@ func TestSessionServiceThreadQueuePersistsOrderAndParkAfter(t *testing.T) {
 	require.NoError(t, store.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{Kind: "steer", ConversationID: conversationID, Message: "write changelog", Principal: "U2", StashAt: secondStash, Position: 1, ParkAfter: "s1", SlackChannel: "D123", SlackTS: "333.444"}))
 	require.NoError(t, store.PutThreadQueueItem("other", &protocol.ThreadQueueItem{ConversationID: "other", Message: "keep", Principal: "U2", StashAt: firstStash, Position: 0}))
 	require.NoError(t, store.PutScheduledMessage("s1", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "helper", Message: "later", DueAt: dueAt}))
-	require.NoError(t, store.Stop(t.Context()))
+	require.NoError(t, store.Stop())
 	store = newTestSessionServiceAt(t, workspace)
 
 	items, err := store.ThreadQueueForConversation(conversationID)
@@ -492,7 +510,7 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	second, err := NewSessionServiceIn(testStoreDSN(workspace), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, second.Stop(context.Background())) })
+	t.Cleanup(func() { require.NoError(t, second.Stop()) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
 	assert.Equal(t, 8, n)
 }
@@ -518,7 +536,7 @@ func TestSessionServiceSettledPersistence(t *testing.T) {
 	require.NoError(t, store.UpsertThread("unrelated", ThreadState{Agent: "main"}))
 	_, err := store.db.ExecContext(t.Context(), `ALTER TABLE managed_conversations DROP COLUMN settled; DELETE FROM pg_migrations WHERE id = '008_managed_conversation_settled.sql'`)
 	require.NoError(t, err)
-	require.NoError(t, store.Stop(t.Context()))
+	require.NoError(t, store.Stop())
 	store = newTestSessionServiceAt(t, workspace)
 	thread, found, err := store.Thread("opaque")
 	require.NoError(t, err)
@@ -530,10 +548,12 @@ func TestSessionServiceSettledPersistence(t *testing.T) {
 	require.NoError(t, err)
 
 	checkpoint := &harness.ActiveTurnCheckpoint{TurnID: "active", ConversationKey: "opaque", Agent: "planner", Model: "gpt-5.5"}
-	require.NoError(t, store.StartActiveTurn(t.Context(), checkpoint))
-	activeBefore, _, err := store.ActiveTurn(t.Context(), "active")
+	require.NoError(t, store.UpsertActiveTurn(t.Context(), checkpoint, nil))
+	turnsBefore, err := store.RecoverableActiveTurns(t.Context())
 	require.NoError(t, err)
-	entriesBefore, err := store.ObserveEntries(t.Context(), "opaque", 0)
+	require.Len(t, turnsBefore, 1)
+	activeBefore := turnsBefore[0]
+	entriesBefore, err := store.ObserveEntries(t.Context(), "opaque")
 	require.NoError(t, err)
 
 	for _, settled := range []bool{true, false} {
@@ -542,19 +562,19 @@ func TestSessionServiceSettledPersistence(t *testing.T) {
 		require.True(t, updated)
 		// Ordinary rebinding must not reset the explicit sidebar state.
 		require.NoError(t, store.UpsertThread("opaque", ThreadState{Agent: "planner"}))
-		require.NoError(t, store.Stop(t.Context()))
+		require.NoError(t, store.Stop())
 		store = newTestSessionServiceAt(t, workspace)
 		thread, found, err := store.Thread("opaque")
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, ThreadState{Agent: "planner", CreatedBy: "alice", Settled: settled}, thread)
-		entries, err := store.ObserveEntries(t.Context(), "opaque", 0)
+		entries, err := store.ObserveEntries(t.Context(), "opaque")
 		require.NoError(t, err)
 		require.Equal(t, entriesBefore, entries)
-		active, found, err := store.ActiveTurn(t.Context(), "active")
+		turns, err := store.RecoverableActiveTurns(t.Context())
 		require.NoError(t, err)
-		require.True(t, found)
-		require.Equal(t, activeBefore, active)
+		require.Len(t, turns, 1)
+		require.Equal(t, activeBefore, turns[0])
 	}
 
 	other, found, err := store.Thread("unrelated")
@@ -591,12 +611,12 @@ func TestSessionServiceActiveTurnLifecycle(t *testing.T) {
 		}},
 	}
 
-	require.NoError(t, store.StartActiveTurn(context.Background(), checkpoint))
+	require.NoError(t, store.UpsertActiveTurn(context.Background(), checkpoint, nil))
 
 	checkpoint.ResponseID = "resp-2"
 	checkpoint.OpenFunctionCalls = nil
 	checkpoint.CompletedFunctionOutputs = []harness.FunctionOutputCheckpoint{{CallID: "call-1", Name: "read", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"function_call_output"}`)}}}
-	require.NoError(t, store.StartActiveTurn(context.Background(), checkpoint))
+	require.NoError(t, store.UpsertActiveTurn(context.Background(), checkpoint, nil))
 
 	turns, err := store.RecoverableActiveTurns(context.Background())
 	require.NoError(t, err)
@@ -630,8 +650,8 @@ func TestSessionServiceActiveTurnPersistsThroughCentralizedOpener(t *testing.T) 
 		ReplayInput:     []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"hello"}`)},
 	}
 
-	require.NoError(t, store.StartActiveTurn(context.Background(), checkpoint))
-	require.NoError(t, store.Stop(context.Background()))
+	require.NoError(t, store.UpsertActiveTurn(context.Background(), checkpoint, nil))
+	require.NoError(t, store.Stop())
 
 	reopened := newTestSessionServiceAt(t, workspace)
 	turns, err := reopened.RecoverableActiveTurns(context.Background())
@@ -646,7 +666,7 @@ func TestSessionServiceRecoverableActiveTurnsReturnsEveryRemainingRow(t *testing
 
 	for _, turnID := range []string{"turn-1", "turn-2", "turn-3"} {
 		checkpoint := &harness.ActiveTurnCheckpoint{TurnID: turnID, ConversationKey: "conversation-" + turnID, Agent: "planner", Model: "gpt-5.5", DisplayModel: "gpt-5.5"}
-		require.NoError(t, store.StartActiveTurn(context.Background(), checkpoint))
+		require.NoError(t, store.UpsertActiveTurn(context.Background(), checkpoint, nil))
 	}
 
 	turns, err := store.RecoverableActiveTurns(context.Background())
@@ -663,7 +683,7 @@ func TestSessionServiceRecoverableActiveTurnsReturnsEveryRemainingRow(t *testing
 func TestSessionServiceRecoverableActiveTurnsDeletesCorruptRows(t *testing.T) {
 	store := newTestSessionService(t)
 	valid := &harness.ActiveTurnCheckpoint{TurnID: "turn-valid", ConversationKey: "conversation-valid", Agent: "planner", Model: "gpt-5.5", DisplayModel: "gpt-5.5"}
-	require.NoError(t, store.StartActiveTurn(context.Background(), valid))
+	require.NoError(t, store.UpsertActiveTurn(context.Background(), valid, nil))
 	_, err := store.db.ExecContext(context.Background(), `INSERT INTO active_turns (id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`, "turn-notice", "conversation-notice", "planner", "gpt-5.5", "gpt-5.5", `null`, `null`, `null`, "", `null`, `null`, "restarted", "", int64(0), int64(0))
 	require.NoError(t, err)
 
@@ -679,13 +699,6 @@ func TestSessionServiceRecoverableActiveTurnsDeletesCorruptRows(t *testing.T) {
 	insertCorrupt("turn-open", `null`, `null`, `null`, `{`, `null`, `{}`)
 	insertCorrupt("turn-completed", `null`, `null`, `null`, `null`, `{`, `{}`)
 	insertCorrupt("turn-metadata", `null`, `null`, `null`, `null`, `null`, `{`)
-
-	_, _, err = store.ActiveTurn(context.Background(), "turn-corrupt")
-	got, ok := errors.AsType[activeTurnCorruptError](err)
-	require.True(t, ok)
-	assert.Equal(t, "turn-corrupt", got.turnID)
-	assert.Equal(t, "replay input", got.field)
-	require.ErrorIs(t, err, got.err)
 
 	turns, err := store.RecoverableActiveTurns(context.Background())
 	require.NoError(t, err)
@@ -707,7 +720,7 @@ func TestSessionServiceRecoverableActiveTurnsDeletesCorruptRows(t *testing.T) {
 
 func TestSessionServiceRecoverableActiveTurnsReportsDBFailures(t *testing.T) {
 	store := newTestSessionService(t)
-	require.NoError(t, store.Stop(context.Background()))
+	require.NoError(t, store.Stop())
 
 	_, err := store.RecoverableActiveTurns(context.Background())
 	require.ErrorContains(t, err, "query recoverable active turns")
@@ -751,12 +764,12 @@ func TestSessionServiceSyncCronSchedulesInsertsUpdatesAndDeletes(t *testing.T) {
 	require.NoError(t, store.db.QueryRowContext(context.Background(), `SELECT next_due_unix_ns FROM cron_schedules WHERE schedule_id = 'empty#0'`).Scan(&nextDue))
 	assert.Equal(t, int64(0), nextDue)
 
-	dueSchedules, err := store.DueCronSchedules(now, 10)
+	dueSchedules, err := store.DueCronSchedules(now)
 	require.NoError(t, err)
 	assert.Contains(t, dueSchedules, CronScheduleState{ScheduleID: "empty#0", RelativePath: "empty.md"})
 }
 
-func TestSessionServiceDueCronSchedulesHonorsDueTimeAndLimit(t *testing.T) {
+func TestSessionServiceDueCronSchedulesHonorsDueTime(t *testing.T) {
 	store := newTestSessionService(t)
 	now := time.Date(2026, 7, 4, 10, 0, 0, 0, time.UTC)
 
@@ -766,9 +779,12 @@ func TestSessionServiceDueCronSchedulesHonorsDueTimeAndLimit(t *testing.T) {
 		{ScheduleID: "later", RelativePath: "later.md", NextDue: now.Add(time.Minute)},
 	}, now))
 
-	due, err := store.DueCronSchedules(now, 1)
+	due, err := store.DueCronSchedules(now)
 	require.NoError(t, err)
-	assert.Equal(t, []CronScheduleState{{ScheduleID: "first", RelativePath: "first.md", NextDue: now.Add(-time.Minute)}}, due)
+	assert.Equal(t, []CronScheduleState{
+		{ScheduleID: "first", RelativePath: "first.md", NextDue: now.Add(-time.Minute)},
+		{ScheduleID: "second", RelativePath: "second.md", NextDue: now},
+	}, due)
 }
 
 func TestSessionServiceClaimCronScheduleSerializesSamePathAndCompletionClearsRunning(t *testing.T) {
@@ -786,14 +802,14 @@ func TestSessionServiceClaimCronScheduleSerializesSamePathAndCompletionClearsRun
 	run, ok, err := store.ClaimCronSchedule(dueDaily, next, now)
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, CronScheduleRun{ScheduleID: "daily#0", RelativePath: "daily.md", DueAt: now}, run)
+	assert.Equal(t, "daily.md", run)
 
 	run, ok, err = store.ClaimCronSchedule(dueDailySecond, next, now)
 	require.NoError(t, err)
 	assert.False(t, ok)
-	assert.Zero(t, run)
+	assert.Empty(t, run)
 
-	due, err := store.DueCronSchedules(now, 10)
+	due, err := store.DueCronSchedules(now)
 	require.NoError(t, err)
 	assert.Empty(t, due)
 
@@ -807,7 +823,7 @@ func TestSessionServiceClaimCronScheduleSerializesSamePathAndCompletionClearsRun
 	run, ok, err = store.ClaimCronSchedule(dueDaily, next.Add(time.Hour), next)
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, CronScheduleRun{ScheduleID: "daily#0", RelativePath: "daily.md", DueAt: next}, run)
+	assert.Equal(t, "daily.md", run)
 }
 
 func TestSessionServiceBeginGoalPersistsCheckScript(t *testing.T) {
@@ -899,7 +915,7 @@ func TestSessionServiceAppliesPendingRestartNotificationsOnce(t *testing.T) {
 	require.NoError(t, store.ApplyPendingRestartNotifications(context.Background()))
 
 	for _, conversationID := range requesters {
-		entries, err := store.ObserveEntries(context.Background(), conversationID, 0)
+		entries, err := store.ObserveEntries(context.Background(), conversationID)
 		require.NoError(t, err)
 		require.Len(t, entries, 2)
 		messages, err := replayInputMessages(entries[1].Entry.ReplayInput)
@@ -907,7 +923,7 @@ func TestSessionServiceAppliesPendingRestartNotificationsOnce(t *testing.T) {
 		assert.Equal(t, []replayInputMessage{{role: "developer", text: restartNotificationDeveloperMessage}}, messages)
 	}
 
-	entries, err := store.ObserveEntries(context.Background(), "unmarked", 0)
+	entries, err := store.ObserveEntries(context.Background(), "unmarked")
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 }
@@ -978,7 +994,7 @@ func TestHoldRunLockAllowsSessionServiceWhileHeld(t *testing.T) {
 
 	second, err := NewSessionServiceIn(testStoreDSN(workspace), slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
-	require.NoError(t, second.Stop(t.Context()))
+	require.NoError(t, second.Stop())
 }
 
 func TestSessionStoreMissingIsEmpty(t *testing.T) {
@@ -990,7 +1006,7 @@ func TestSessionStoreMissingIsEmpty(t *testing.T) {
 func TestSessionStoreReportsObserveError(t *testing.T) {
 	service, err := NewSessionService(t.TempDir())
 	require.NoError(t, err)
-	require.NoError(t, service.Stop(context.Background()))
+	require.NoError(t, service.Stop())
 
 	store := newSessionStore("main", service)
 
@@ -1036,11 +1052,15 @@ func TestAppendSessionEntryIDRejectsBlankConversationID(t *testing.T) {
 func TestSessionInspectionMissingDBDoesNotCreateRuntimeDir(t *testing.T) {
 	workspace := t.TempDir()
 
-	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{})
+	summaries, err := listSessions(context.Background(), testStoreDSN(workspace))
 	require.NoError(t, err)
 	assert.Empty(t, summaries)
 
-	entries, err := ObserveSessionEntries(context.Background(), testStoreDSN(workspace), "main", 0)
+	service, err := NewSessionServiceIn(testStoreDSN(workspace), slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, service.Stop()) })
+
+	entries, err := service.ObserveEntries(context.Background(), "main")
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 	assert.NoDirExists(t, filepath.Join(workspace, ".rocketclaw"))
@@ -1056,75 +1076,22 @@ func TestListSessionsIncludesLastMessages(t *testing.T) {
 	_, err = AppendSessionEntryID(context.Background(), workspace, "slack-thread:D123:111.222", testSessionEntry("thread user", "thread assistant"))
 	require.NoError(t, err)
 
-	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{})
+	summaries, err := listSessions(context.Background(), testStoreDSN(workspace))
 	require.NoError(t, err)
 	require.Len(t, summaries, 2)
 
-	assert.Equal(t, protocol.SessionSummary{ConversationID: "main", Turns: 2, LastUpdated: summaries[0].LastUpdated, LastUserMessage: "second\nuser", LastAssistantMessage: "second assistant"}, summaries[0])
-	assert.Equal(t, protocol.SessionSummary{ConversationID: "slack-thread:D123:111.222", Turns: 1, LastUpdated: summaries[1].LastUpdated, LastUserMessage: "thread user", LastAssistantMessage: "thread assistant"}, summaries[1])
-}
-
-func TestListSessionsOptionsBoundsByLatestUpdate(t *testing.T) {
-	workspace := t.TempDir()
-	since := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
-	until := since.Add(48 * time.Hour)
-
-	_, err := AppendSessionEntryID(context.Background(), workspace, "old", testSessionEntryAt(since.Add(-time.Second), "old"))
-	require.NoError(t, err)
-	_, err = AppendSessionEntryID(context.Background(), workspace, "inside", testSessionEntryAt(since.Add(time.Hour), "inside"))
-	require.NoError(t, err)
-	_, err = AppendSessionEntryID(context.Background(), workspace, "boundary", testSessionEntryAt(since, "boundary"))
-	require.NoError(t, err)
-	_, err = AppendSessionEntryID(context.Background(), workspace, "until", testSessionEntryAt(until, "until"))
-	require.NoError(t, err)
-
-	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{Since: since, Until: until})
-	require.NoError(t, err)
-	require.Len(t, summaries, 2)
-	assert.Equal(t, "inside", summaries[0].ConversationID)
-	assert.Equal(t, "boundary", summaries[1].ConversationID)
-
-	summaries, err = ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{Since: since})
-	require.NoError(t, err)
-	require.Len(t, summaries, 3)
-	assert.Equal(t, "until", summaries[0].ConversationID)
-
-	summaries, err = ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{Until: until})
-	require.NoError(t, err)
-	require.Len(t, summaries, 3)
-	assert.Equal(t, "inside", summaries[0].ConversationID)
-}
-
-func TestListSessionsOptionsLimitUsesMostRecent(t *testing.T) {
-	workspace := t.TempDir()
-	base := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
-
-	for i, conversationID := range []string{"old", "middle", "new"} {
-		_, err := AppendSessionEntryID(context.Background(), workspace, conversationID, testSessionEntryAt(base.Add(time.Duration(i)*time.Hour), conversationID))
-		require.NoError(t, err)
-	}
-
-	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(workspace), SessionListOptions{Limit: 2})
-	require.NoError(t, err)
-	require.Len(t, summaries, 2)
-	assert.Equal(t, "new", summaries[0].ConversationID)
-	assert.Equal(t, "middle", summaries[1].ConversationID)
+	assert.Equal(t, protocol.SessionSummary{ConversationID: "main", LastUpdated: summaries[0].LastUpdated, LastUserMessage: "second\nuser"}, summaries[0])
+	assert.Equal(t, protocol.SessionSummary{ConversationID: "slack-thread:D123:111.222", LastUpdated: summaries[1].LastUpdated, LastUserMessage: "thread user"}, summaries[1])
 }
 
 func TestListSessionsMissingDBIsEmpty(t *testing.T) {
-	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(t.TempDir()), SessionListOptions{})
-	require.NoError(t, err)
-	assert.Empty(t, summaries)
-}
-
-func TestListSessionsOptionsMissingDBIsEmpty(t *testing.T) {
-	summaries, err := ListSessionsInOptions(context.Background(), testStoreDSN(t.TempDir()), SessionListOptions{Limit: 1})
+	summaries, err := listSessions(context.Background(), testStoreDSN(t.TempDir()))
 	require.NoError(t, err)
 	assert.Empty(t, summaries)
 }
 
 func TestSlackStateKeyTimeParsesAndRejectsKeys(t *testing.T) {
-	got, ok := slackStateKeyTime("slack-thread:D123:1700000000.1234567899", "slack-thread:")
+	got, ok := slackStateKeyTime("slack-thread:D123:1700000000.1234567899")
 	require.True(t, ok)
 	assert.Equal(t, time.Unix(1700000000, 123456789).UTC(), got)
 
@@ -1135,7 +1102,7 @@ func TestSlackStateKeyTimeParsesAndRejectsKeys(t *testing.T) {
 		"slack-thread:D123:1700000000.not-nanos",
 	} {
 		t.Run(key, func(t *testing.T) {
-			got, ok := slackStateKeyTime(key, "slack-thread:")
+			got, ok := slackStateKeyTime(key)
 			assert.False(t, ok)
 			assert.True(t, got.IsZero())
 		})
@@ -1169,7 +1136,7 @@ func TestSessionServiceSerializesConcurrentAccess(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	entries, err := service.ObserveEntries(context.Background(), "main", 0)
+	entries, err := service.ObserveEntries(context.Background(), "main")
 	require.NoError(t, err)
 	assert.Len(t, entries, 25)
 
@@ -1283,11 +1250,11 @@ func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, deleted)
 
-	mainEntries, err := service.ObserveEntries(context.Background(), "main", 0)
+	mainEntries, err := service.ObserveEntries(context.Background(), "main")
 	require.NoError(t, err)
 	assert.Empty(t, mainEntries)
 
-	threadEntries, err := service.ObserveEntries(context.Background(), "thread", 0)
+	threadEntries, err := service.ObserveEntries(context.Background(), "thread")
 	require.NoError(t, err)
 	assert.Len(t, threadEntries, 1)
 
@@ -1342,7 +1309,7 @@ func TestSessionServicePersistsExternalMCPSessionMapping(t *testing.T) {
 	require.NoError(t, err)
 	managedEntryID, err := store.AppendEntryID(t.Context(), session.ManagedConversationID, testSessionEntry("human", "human answer"))
 	require.NoError(t, err)
-	require.NoError(t, store.Stop(t.Context()))
+	require.NoError(t, store.Stop())
 	store = newTestSessionServiceAt(t, workspace)
 	reopened, ok, err := store.ExternalMCPSession("ticket-123")
 	require.NoError(t, err)
@@ -1357,7 +1324,7 @@ func TestSessionServicePersistsExternalMCPSessionMapping(t *testing.T) {
 	assert.Equal(t, []string{session.ManagedConversationID}, listed)
 
 	for conversationID, entryID := range map[string]int64{session.PrivateConversationID: privateEntryID, session.ManagedConversationID: managedEntryID} {
-		entries, err := store.ObserveEntries(t.Context(), conversationID, 0)
+		entries, err := store.ObserveEntries(t.Context(), conversationID)
 		require.NoError(t, err)
 		require.Len(t, entries, 1)
 		assert.Equal(t, entryID, entries[0].ID)
@@ -1428,10 +1395,10 @@ func TestSessionServiceRejectsBlankKeys(t *testing.T) {
 	_, err = store.UpdateGoalStatus("thread-1", "nope", "")
 	require.EqualError(t, err, `unsupported goal status "nope"`)
 	require.EqualError(t, store.ClearActiveTurn(t.Context(), " "), "active turn ID is required")
-	require.EqualError(t, store.StartActiveTurn(t.Context(), nil), "active turn checkpoint is required")
-	require.EqualError(t, store.StartActiveTurn(t.Context(), &harness.ActiveTurnCheckpoint{}), "active turn ID is required")
-	require.EqualError(t, store.StartActiveTurn(t.Context(), &harness.ActiveTurnCheckpoint{TurnID: "turn-1"}), "active turn conversation ID is required")
-	_, err = ObserveSessionEntries(t.Context(), testStoreDSN(t.TempDir()), " ", 0)
+	require.EqualError(t, store.UpsertActiveTurn(t.Context(), nil, nil), "active turn checkpoint is required")
+	require.EqualError(t, store.UpsertActiveTurn(t.Context(), &harness.ActiveTurnCheckpoint{}, nil), "active turn ID is required")
+	require.EqualError(t, store.UpsertActiveTurn(t.Context(), &harness.ActiveTurnCheckpoint{TurnID: "turn-1"}, nil), "active turn conversation ID is required")
+	_, err = store.ObserveEntries(t.Context(), " ")
 	require.EqualError(t, err, "conversation ID is required")
 }
 
@@ -1520,13 +1487,13 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	assert.Contains(t, restartNotifications, activeOldThread)
 
 	for _, conversationID := range []string{oldThread, "external_mcp:cron:orphan", "cron:daily:old", "one-off-cron:daily:old", "slack-thread:DORPHAN:1.000"} {
-		entries, err := ObserveSessionEntries(context.Background(), testStoreDSN(workspace), conversationID, 0)
+		entries, err := store.ObserveEntries(context.Background(), conversationID)
 		require.NoError(t, err)
 		assert.Empty(t, entries, conversationID)
 	}
 
 	for _, conversationID := range []string{activeOldThread, "slack-thread:D123:not-a-time", "cron:daily:new"} {
-		entries, err := ObserveSessionEntries(context.Background(), testStoreDSN(workspace), conversationID, 0)
+		entries, err := store.ObserveEntries(context.Background(), conversationID)
 		require.NoError(t, err)
 		assert.Len(t, entries, 1, conversationID)
 	}
@@ -1557,9 +1524,9 @@ func TestSessionServicePrunesStaleExternalConversationWithActiveTurn(t *testing.
 	_, ok, err = store.Thread(managedConversationID)
 	require.NoError(t, err)
 	assert.False(t, ok)
-	_, ok, err = store.ActiveTurn(t.Context(), "active-mcp")
+	turns, err := store.RecoverableActiveTurns(t.Context())
 	require.NoError(t, err)
-	assert.False(t, ok)
+	assert.Empty(t, turns)
 }
 
 func TestSessionServicePrunesExternalConversationOnlyWhenAllHistoriesAreStale(t *testing.T) {
@@ -1716,7 +1683,7 @@ func newTestSessionServiceAt(t *testing.T, workspace string) *SessionService {
 
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, service.Stop(context.Background())) })
+	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
 	return service
 }

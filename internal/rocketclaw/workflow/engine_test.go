@@ -397,7 +397,7 @@ def main(args):
 					}
 				}
 
-				if last.Status != protocol.PhaseSkipped || last.Details != "" {
+				if last.Status != protocol.PhaseSkipped {
 					t.Fatalf("untouched phase %q = %+v, want skipped", name, last)
 				}
 			}
@@ -620,10 +620,6 @@ def main(args):
 		maximum := 0
 
 		for _, update := range updates {
-			if strings.Contains(update.Details, "private result") {
-				t.Fatalf("phase details exposed worker result: %+v", update)
-			}
-
 			if update.Scheduled > maximum {
 				scheduled = append(scheduled, update)
 				maximum = update.Scheduled
@@ -634,13 +630,9 @@ def main(args):
 			t.Fatalf("scheduled phase updates = %+v, want exact counts 1 then 2", scheduled)
 		}
 
-		if got := []string{scheduled[0].Details, scheduled[1].Details}; !slices.Equal(slices.Sorted(slices.Values(got)), []string{"alpha", "beta"}) {
-			t.Fatalf("scheduled phase details = %v, want alpha and beta", got)
-		}
-
 		terminal := updates[len(updates)-1]
-		if terminal.Status != protocol.PhaseComplete || terminal.Scheduled != 2 || terminal.Running != 0 || terminal.Complete != 2 || !slices.Contains([]string{"alpha", "beta"}, terminal.Details) {
-			t.Fatalf("terminal phase update = %+v, want complete 2/0/2 with latest label", terminal)
+		if terminal.Status != protocol.PhaseComplete || terminal.Scheduled != 2 || terminal.Running != 0 || terminal.Complete != 2 {
+			t.Fatalf("terminal phase update = %+v, want complete 2/0/2", terminal)
 		}
 	})
 
@@ -1021,8 +1013,8 @@ func TestAgentActivityLifecycle(t *testing.T) {
 			}
 
 			want := []protocol.AgentUpdate{
-				{CallID: "run/agent/000000", PhaseID: "run/phase/000000/investigate", Label: tt.wantLabel, Activity: "read: prompt.md"},
-				{CallID: "run/agent/000000", PhaseID: "run/phase/000000/investigate", Label: tt.wantLabel, Activity: "grep: turn limit"},
+				{PhaseID: "run/phase/000000/investigate", Label: tt.wantLabel, Activity: "read: prompt.md"},
+				{PhaseID: "run/phase/000000/investigate", Label: tt.wantLabel, Activity: "grep: turn limit"},
 			}
 			if !slices.Equal(updates, want) {
 				t.Fatalf("agent updates = %+v, want %+v", updates, want)
@@ -1098,13 +1090,6 @@ def main(args):
 	if got := latest["beta"]; got.Activity != "working second" || got.PhaseID != "run/phase/000000/run" {
 		t.Fatalf("beta update = %+v, want completed second worker", got)
 	}
-
-	ids := []string{latest["alpha"].CallID, latest["beta"].CallID}
-	slices.Sort(ids)
-
-	if !slices.Equal(ids, []string{"run/agent/000000", "run/agent/000001"}) {
-		t.Fatalf("parallel call IDs = %q, want stable run IDs", ids)
-	}
 }
 
 func TestAgentActivityProgressFailure(t *testing.T) {
@@ -1160,7 +1145,7 @@ def main(args):
 	}
 
 	wantAgentUpdates := []protocol.AgentUpdate{
-		{CallID: "run/agent/000000", PhaseID: "run/phase/000000/verify", Label: "validator", Activity: "checking result"},
+		{PhaseID: "run/phase/000000/verify", Label: "validator", Activity: "checking result"},
 	}
 	if !slices.Equal(agentUpdates, wantAgentUpdates) {
 		t.Fatalf("agent updates = %+v, want no post-validation lifecycle update", agentUpdates)

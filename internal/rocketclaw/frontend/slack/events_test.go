@@ -32,7 +32,6 @@ func TestStartEventsRoutesAndAcknowledgesSubscription(t *testing.T) {
 		{ConversationID: "web:private", Text: "not for Slack", Complete: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "CWRONG", MessageTS: "9.9"}},
 		{ConversationID: "slack-thread:C123:111.0", Agent: "main", Text: "first answer", Complete: true},
 		{ConversationID: "slack-thread:C456:222.0", Agent: "main", Text: "second answer", Complete: true, SlackReply: &protocol.SlackReplyTarget{ChannelID: "CWRONG", ThreadTS: "9.0", MessageTS: "222.1"}},
-		{SlackReply: &protocol.SlackReplyTarget{ChannelID: "C789", ThreadTS: "ignored"}, Text: "cron payload", Complete: true, Cronjob: &protocol.CronjobMessage{RelativePath: "cron/daily.md", Agent: "planner", RanAt: "2000-01-02T03:04:05Z"}},
 	}
 
 	events := make([]protocol.Event, len(messages))
@@ -53,7 +52,7 @@ func TestStartEventsRoutesAndAcknowledgesSubscription(t *testing.T) {
 		require.NoError(t, <-event.Acknowledgement)
 	}
 
-	require.Len(t, posted, 3, "non-Slack output must not be delivered")
+	require.Len(t, posted, 2, "non-Slack output must not be delivered")
 	assert.Equal(t, "C123", posted[0].Get("channel"))
 	assert.Equal(t, "111.0", posted[0].Get("thread_ts"))
 	assert.Contains(t, posted[0].Get("blocks"), `"text":"first answer"`)
@@ -62,10 +61,6 @@ func TestStartEventsRoutesAndAcknowledgesSubscription(t *testing.T) {
 	assert.Contains(t, posted[1].Get("blocks"), `"text":"second answer"`)
 	assert.Equal(t, &protocol.SlackReplyTarget{ChannelID: "C123", ThreadTS: "111.0", MessageTS: "111.0"}, messages[1].SlackReply)
 	assert.Equal(t, &protocol.SlackReplyTarget{ChannelID: "C456", ThreadTS: "222.0", MessageTS: "222.1"}, messages[2].SlackReply)
-	assert.Equal(t, "C789", posted[2].Get("channel"))
-	assert.Empty(t, posted[2].Get("thread_ts"), "turnless cron starts a new root")
-	assert.Equal(t, "Cronjob `cron/daily.md` ran at `2000-01-02T03:04:05Z` with agent `planner`.", posted[2].Get("text"))
-	assert.Contains(t, posted[2].Get("blocks"), `"text":"cron payload"`)
 }
 
 func TestStartEventsAcknowledgesDeliveryFailureAfterAborting(t *testing.T) {

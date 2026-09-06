@@ -127,7 +127,7 @@ func (s *Server) listSessions(ctx context.Context) (*ListSessionsResponse, error
 		return nil, fmt.Errorf("list web conversations: %w", err)
 	}
 
-	summaries, err := s.sessions.ListSessions(ctx, backend.SessionListOptions{})
+	summaries, err := s.sessions.ListSessions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list web summaries: %w", err)
 	}
@@ -274,7 +274,7 @@ func (s *Server) listCronJobs(ctx context.Context) (*ListCronJobsResponse, error
 			continue
 		}
 
-		entries, err := s.sessions.ObserveEntries(ctx, conversation.ID, 0)
+		entries, err := s.sessions.ObserveEntries(ctx, conversation.ID)
 		if err != nil {
 			return nil, fmt.Errorf("read cron history provenance: %w", err)
 		}
@@ -605,7 +605,7 @@ func (s *Server) listQueue(ctx context.Context, request *ListQueueRequest) (*Lis
 		return nil, err
 	}
 
-	items, err := s.backend.QueueItems(ctx, request.Id)
+	items, err := s.backend.QueueItems(request.Id)
 	if err != nil {
 		return nil, fmt.Errorf("list web queue: %w", err)
 	}
@@ -665,7 +665,7 @@ func (s *Server) reorderQueue(ctx context.Context, request *ReorderQueueRequest)
 		return nil, err
 	}
 
-	if err := s.backend.ReorderQueueItems(ctx, request.Id, request.ItemIds); err != nil {
+	if err := s.backend.ReorderQueueItems(request.Id, request.ItemIds); err != nil {
 		return nil, fmt.Errorf("reorder web queue: %w", err)
 	}
 
@@ -755,7 +755,7 @@ func (s *Server) entries(ctx context.Context, id string) ([]backend.ObservedSess
 		return nil, fmt.Errorf("web entries: %w", status.Error(codes.InvalidArgument, "conversation ID is required"))
 	}
 
-	entries, err := s.sessions.ObserveEntries(ctx, id, 0)
+	entries, err := s.sessions.ObserveEntries(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("web entries: %w", status.Error(codes.Internal, "load session entries"))
 	}

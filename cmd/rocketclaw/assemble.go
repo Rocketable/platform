@@ -19,19 +19,6 @@ type processAssembler struct{}
 func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
 	var stops []func(context.Context) error
 
-	go func() {
-		for {
-			select {
-			case <-rt.RunCtx.Done():
-				return
-			case broadcast := <-rt.Channels.Broadcasts:
-				if err := rt.PublishOutbound(rt.RunCtx, broadcast.Message); err != nil {
-					rt.Log.Error("publish conversation event", "error", err)
-				}
-			}
-		}
-	}()
-
 	rt.Log.Info("starting Slack connector")
 
 	channels := make([]string, 0, len(rt.Cfg.Slack.Channels))
@@ -41,7 +28,7 @@ func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-
 		}
 	}
 	runner := &cronRunner{backend: rt, config: rt.Cfg}
-	cronjobs := cronfrontend.New(rt.Cfg.Workspace, rt.Cfg.RuntimeDirName(), channels, rt.Channels.Broadcasts, rt.Sessions, runner, rt.Log)
+	cronjobs := cronfrontend.New(rt.Cfg.Workspace, rt.Cfg.RuntimeDirName(), channels, rt.Sessions, runner, rt.Log)
 	slack := slackconnector.New(&rt.Cfg.Slack, rt, rt.TextRouter, cronjobs, rt.Log)
 	runner.slack = slack
 
@@ -103,11 +90,8 @@ func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-
 			defer externalMCPAgentsMu.Unlock()
 
 			return slices.Contains(externalMCPAgents, agent)
-		}, rt.Sessions, func(submitCtx context.Context, agent, conversationID string, inbound *protocol.InboundMessage, activation protocol.ActivationHook) error {
+		}, rt.Sessions, func(submitCtx context.Context, agent, conversationID string, inbound *protocol.InboundMessage) error {
 			if err := rt.CreateConversation(submitCtx, protocol.Conversation{ID: conversationID, Agent: agent}); err != nil {
-				return err
-			}
-			if err := activation(submitCtx, inbound); err != nil {
 				return err
 			}
 

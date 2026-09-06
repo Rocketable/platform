@@ -113,7 +113,7 @@ Return the human-visible value directly from `main`: strings render directly, ot
   "channels": [
     {
       "channel": "#ops",
-      "agents": ["main", "factory", "slack-to-benchmark"],
+      "agents": ["main", "factory"],
       "allowed_user_ids": ["U0123456789"]
     }
   ]
@@ -121,8 +121,6 @@ Return the human-visible value directly from `main`: strings render directly, ot
 ```
 
 New `#ops` conversations use agent `main`. Authorized replies can select another listed agent with `$agent factory` or the native selector.
-
-To expose the shipped quickbench capture agent, include `slack-to-benchmark` in that channel's `agents` list (skel ships the agent file; channel membership is required). Example: `$agent slack-to-benchmark capture this thread into a BAR`. Restart after editing `rocketclaw.json`. See `cmd/quickbench/README.md`.
 
 ## Outbound MCP Servers
 

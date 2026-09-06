@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -26,7 +25,7 @@ type cronRunner struct {
 	slack   backend.SlackFrontend
 }
 
-func (r *cronRunner) Run(ctx context.Context, agent, prompt string, _ *slog.Logger, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
+func (r *cronRunner) Run(ctx context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 	selected := ""
 	for _, channel := range r.config.Slack.Channels {
 		if channel.Channel == progress.TextChannel && len(channel.Agents) > 0 {

@@ -22,10 +22,10 @@ import (
 func TestRuntimeSubscribeIsLiveAndWaitsForDelivery(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		rt := new(Runtime)
-		history := protocol.NewOutboundMessage(protocol.SourceSystem, "conversation", "old")
+		history := protocol.NewOutboundMessage("conversation", "old")
 		require.NoError(t, rt.PublishOutbound(t.Context(), history))
 		events := rt.Subscribe(t.Context())
-		message := protocol.NewOutboundMessage(protocol.SourceSystem, "conversation", "new")
+		message := protocol.NewOutboundMessage("conversation", "new")
 		message.Complete = true
 		finished := false
 
@@ -104,7 +104,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		producer.ConversationID, producer.SyncDestination = "X", "Y"
 		producer.HadAttachments, producer.HadNonImageAttachments = true, true
 		require.NoError(t, rt.RunTurn(ctx, producer))
-		source := rt.threads.bridges["X"].bridge.(*Bridge)
+		source := rt.threads.bridges["X"].(*Bridge)
 		source.mu.Lock()
 		source.activeReply = producer
 		source.mu.Unlock()
@@ -138,14 +138,14 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		synctest.Wait()
 		require.Len(t, delivered, 3)
 
-		entries, err := store.ObserveEntries(ctx, "Y", 0)
+		entries, err := store.ObserveEntries(ctx, "Y")
 		require.NoError(t, err)
 		require.Len(t, entries, 3)
 		messages, err := replayInputMessages(entries[0].Entry.ReplayInput)
 		require.NoError(t, err)
 		require.Equal(t, "Y history", messages[0].text)
 
-		entries, err = store.ObserveEntries(ctx, "X", 0)
+		entries, err = store.ObserveEntries(ctx, "X")
 		require.NoError(t, err)
 		require.Len(t, entries, 2)
 		sourceEntries := entries
@@ -169,7 +169,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		require.NoError(t, err)
 		_, err = store.AppendEntryID(ctx, "Y", &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay})
 		require.NoError(t, err)
-		destinationEntries, err := store.ObserveEntries(ctx, "Y", 0)
+		destinationEntries, err := store.ObserveEntries(ctx, "Y")
 		require.NoError(t, err)
 		require.Len(t, destinationEntries, 4)
 
@@ -180,10 +180,10 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		synctest.Wait()
 		require.Equal(t, []string{"X", "Y", "Y", "Y", "X"}, delivered)
 
-		entries, err = store.ObserveEntries(ctx, "X", 0)
+		entries, err = store.ObserveEntries(ctx, "X")
 		require.NoError(t, err)
 		require.Equal(t, sourceEntries, entries, "Y history and reply must stay off X")
-		entries, err = store.ObserveEntries(ctx, "Y", 0)
+		entries, err = store.ObserveEntries(ctx, "Y")
 		require.NoError(t, err)
 		require.Equal(t, destinationEntries, entries, "continuing X must not copy entries without another Sync")
 
@@ -195,10 +195,10 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		synctest.Wait()
 		require.Equal(t, []string{"X", "Y", "Y", "Y", "X", "Y"}, delivered)
 
-		entries, err = store.ObserveEntries(ctx, "X", 0)
+		entries, err = store.ObserveEntries(ctx, "X")
 		require.NoError(t, err)
 		require.Equal(t, sourceEntries, entries, "subsequent Sync must not copy Y history or reply back to X")
-		entries, err = store.ObserveEntries(ctx, "Y", 0)
+		entries, err = store.ObserveEntries(ctx, "Y")
 		require.NoError(t, err)
 		require.Equal(t, destinationEntries, entries, "subsequent Sync must not duplicate copied entries")
 
@@ -306,7 +306,7 @@ func TestRuntimePersistedEnqueueAndProducerArrivalOrder(t *testing.T) {
 				turnCtx, cancelTurn := context.WithCancel(ctx)
 				defer cancelTurn()
 
-				source := rt.threads.bridges["X"].bridge.(*Bridge)
+				source := rt.threads.bridges["X"].(*Bridge)
 				source.mu.Lock()
 				source.activeReply, source.activeTurnCancel = producer, cancelTurn
 				source.mu.Unlock()
@@ -438,7 +438,7 @@ func TestRuntimeSteersWaitForTheirTurnDelivery(t *testing.T) {
 			require.Equal(t, [4]bool{}, returned, "acceptance must not complete any call")
 
 			if i == 1 {
-				bridge := rt.threads.bridges["Y"].bridge.(*Bridge)
+				bridge := rt.threads.bridges["Y"].(*Bridge)
 				require.Len(t, bridge.steers, 1)
 				require.Empty(t, bridge.requestCh, "active steer must join, not queue a turn")
 				close(resume)
@@ -505,7 +505,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 	target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
 	conversationID := protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)
 	bridge := &Bridge{config: Config{ConversationID: conversationID, SessionService: store}, inputOpen: true, requestCh: make(chan bridgeRequest, 2)}
-	manager := &threadBridgeManager{store: store, bridges: map[string]*managedThreadBridge{conversationID: {bridge: bridge}}}
+	manager := &threadBridgeManager{store: store, bridges: map[string]directBridge{conversationID: bridge}}
 	active := &turnCompletion{done: make(chan struct{})}
 	bridge.activeCompletion = active
 
@@ -516,7 +516,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 		require.NoError(t, bridge.Submit(t.Context(), inbound))
 	}
 
-	items, err := manager.ThreadQueueItems(t.Context(), target)
+	items, err := manager.ThreadQueueItems(target)
 	require.NoError(t, err)
 	require.Len(t, items, 3)
 
@@ -555,7 +555,7 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 		require.Equal(t, []rocketcode.Attachment{{MIME: "image/png", Filename: "image.png", URL: "data:image/png;base64," + []string{"Zmlyc3Q=", "bGFzdA=="}[i]}}, inputs[i].Attachments)
 	}
 
-	itemsAfter, err := manager.ThreadQueueItems(t.Context(), target)
+	itemsAfter, err := manager.ThreadQueueItems(target)
 	require.NoError(t, err)
 	require.Empty(t, itemsAfter)
 
@@ -589,7 +589,8 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 
 	require.NoError(t, group.Wait())
 	require.NotEqual(t, promotions[0], promotions[1], "only one competing promotion may claim the enqueue")
-	itemsAfter, err = manager.ThreadQueueItems(t.Context(), target)
+
+	itemsAfter, err = manager.ThreadQueueItems(target)
 	require.NoError(t, err)
 	require.Len(t, itemsAfter, 1)
 	require.Equal(t, protocol.InboundKindSteer, itemsAfter[0].Kind)
@@ -633,15 +634,8 @@ func TestThreadBridgeManagerWaitingSteerControls(t *testing.T) {
 
 type stubSlack struct{}
 
-func (stubSlack) HandleBroadcast(context.Context, *protocol.Broadcast) protocol.BroadcastAcknowledgement {
-	return protocol.BroadcastAcknowledgement{Status: protocol.BroadcastDropped}
-}
 func (stubSlack) Start(context.Context) error { return nil }
 func (stubSlack) Stop(context.Context) error  { return nil }
-func (stubSlack) SendResponse(context.Context, *protocol.OutboundMessage) error {
-	return nil
-}
-func (stubSlack) AbortResponse(*protocol.OutboundMessage) {}
 func (stubSlack) StartNewThreadRoot(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error) {
 	return protocol.StartNewThreadRootResult{}, nil
 }
@@ -725,7 +719,7 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 
 	bridge := &Bridge{config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{})}
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
-	manager.bridges = map[string]*managedThreadBridge{conversationID: {bridge: bridge}}
+	manager.bridges = map[string]directBridge{conversationID: bridge}
 	rt := &Runtime{threads: manager, Sessions: store}
 
 	first := &protocol.ThreadQueueItem{ID: "q1", Message: "one", Source: protocol.SourceSlack, Principal: "U1", SlackChannel: target.ChannelID, SlackTS: "1", SlackReply: &protocol.SlackReplyTarget{ChannelID: target.ChannelID, MessageTS: "1", ThreadTS: target.ThreadID}}
@@ -734,12 +728,12 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 	require.NoError(t, rt.StashQueueItem(t.Context(), conversationID, first))
 	require.NoError(t, rt.StashQueueItem(t.Context(), conversationID, second))
 
-	items, err := rt.QueueItems(t.Context(), conversationID)
+	items, err := rt.QueueItems(conversationID)
 	require.NoError(t, err)
 	require.Equal(t, []string{"q1", "q2"}, []string{items[0].ID, items[1].ID})
 
-	require.NoError(t, rt.ReorderQueueItems(t.Context(), conversationID, []string{"q2", "q1", "missing"}))
-	items, err = rt.QueueItems(t.Context(), conversationID)
+	require.NoError(t, rt.ReorderQueueItems(conversationID, []string{"q2", "q1", "missing"}))
+	items, err = rt.QueueItems(conversationID)
 	require.NoError(t, err)
 	require.Equal(t, []string{"q2", "q1"}, []string{items[0].ID, items[1].ID})
 
@@ -752,8 +746,8 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 	require.True(t, promoted)
 
 	require.False(t, manager.ThreadBusy(target))
-	require.NoError(t, manager.PickQueuedWork(t.Context(), target))
-	scheduled, err := manager.ScheduledMessages(t.Context(), target)
+	require.NoError(t, manager.PickLaterWork(t.Context(), conversationID))
+	scheduled, err := manager.ScheduledMessages(target)
 	require.NoError(t, err)
 	require.Empty(t, scheduled)
 
@@ -761,25 +755,23 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, reserved)
 	release()
-
-	require.ErrorContains(t, rt.SubmitExternalMCP(t.Context(), "main", " ", newThreadInboundMessage("reply", "222.333", "111.222"), NoopActivationHook), "text thread conversation ID is required")
 }
 
-func TestAttachSlackAndSubmitExternalMCP(t *testing.T) {
+func TestAttachSlack(t *testing.T) {
 	manager := newThreadBridgeManager(new(config.Config), nil, slog.New(slog.DiscardHandler), func(Config) directBridge {
 		return nil
 	})
 
 	var (
 		asker protocol.UserQuestionAsker
-		drain func(context.Context, string, rocketcode.TurnPhase) []string
+		drain func(context.Context, string) []string
 		root  func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error)
 	)
 
 	rt := &Runtime{threads: manager, slackAsker: &asker, drainSlack: &drain, startThreadRoot: &root}
 	rt.AttachSlack(stubSlack{})
 	require.True(t, asker.ExposeTool())
-	require.Empty(t, drain(t.Context(), "c", 0))
+	require.Empty(t, drain(t.Context(), "c"))
 	got, err := root(t.Context(), &protocol.StartNewThreadRequest{})
 	require.NoError(t, err)
 	require.Equal(t, protocol.StartNewThreadRootResult{}, got)

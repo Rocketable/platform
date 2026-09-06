@@ -144,7 +144,7 @@ func (s *Server) Close(ctx context.Context) error {
 }
 
 func withBasicAuth(next http.Handler, users map[string]string) http.Handler {
-	if next == nil || users == nil {
+	if users == nil {
 		return next
 	}
 

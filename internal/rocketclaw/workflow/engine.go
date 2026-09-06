@@ -511,11 +511,11 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 		}
 
 		ctx := thread.Local(localContext).(context.Context)
-		if err := e.phaseCount(ctx, phase, label, 1, 0, 0); err != nil {
+		if err := e.phaseCount(ctx, phase, 1, 0, 0); err != nil {
 			return nil, err
 		}
 
-		if err := e.phaseCount(ctx, phase, "", 0, 1, 0); err != nil {
+		if err := e.phaseCount(ctx, phase, 0, 1, 0); err != nil {
 			return nil, err
 		}
 
@@ -532,10 +532,8 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 		phaseID := e.phases[phase].PhaseID
 		e.mu.Unlock()
 
-		callID := fmt.Sprintf("%s/agent/%06d", e.runID, callSequence)
-
 		raw, errAgent := e.agent(ctx, request, func(activityCtx context.Context, activity string) error {
-			return e.agentActivity(activityCtx, protocol.AgentUpdate{CallID: callID, PhaseID: phaseID, Label: callLabel, Activity: activity})
+			return e.agentActivity(activityCtx, protocol.AgentUpdate{PhaseID: phaseID, Label: callLabel, Activity: activity})
 		})
 		if errAgent != nil {
 			e.cancel(errAgent)
@@ -570,7 +568,7 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 			return nil, errResult
 		}
 
-		if err := e.phaseCount(ctx, phase, "", 0, -1, 1); err != nil {
+		if err := e.phaseCount(ctx, phase, 0, -1, 1); err != nil {
 			return nil, err
 		}
 
@@ -595,7 +593,7 @@ func (e *engine) agentActivity(ctx context.Context, update protocol.AgentUpdate)
 	return err
 }
 
-func (e *engine) phaseCount(ctx context.Context, name, label string, scheduled, running, complete int) error {
+func (e *engine) phaseCount(ctx context.Context, name string, scheduled, running, complete int) error {
 	e.mu.Lock()
 
 	state := e.phases[name]
@@ -612,10 +610,6 @@ func (e *engine) phaseCount(ctx context.Context, name, label string, scheduled, 
 
 	if state.Status == protocol.PhasePending {
 		state.Status = protocol.PhaseInProgress
-	}
-
-	if scheduled != 0 && label != "" {
-		state.Details = label
 	}
 
 	state.Scheduled += scheduled
@@ -644,7 +638,7 @@ func (e *engine) finishPhase(ctx context.Context, name string, errRun error) err
 
 	state.Status = protocol.PhaseComplete
 	if errRun != nil {
-		state.Status, state.Details = protocol.PhaseError, errRun.Error()
+		state.Status = protocol.PhaseError
 	}
 
 	errProgress := e.progress(ctx, *state)

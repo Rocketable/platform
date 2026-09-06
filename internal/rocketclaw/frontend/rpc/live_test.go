@@ -30,7 +30,7 @@ func TestPromptAndLiveTransport(t *testing.T) {
 	require.NoError(t, err)
 	sessions, err := backend.NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, sessions.Stop(context.Background())) })
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
 	rt := &backend.Runtime{Sessions: sessions}
 	entered := make(chan *protocol.InboundMessage)
@@ -162,7 +162,7 @@ func TestPromptAndLiveTransport(t *testing.T) {
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
 
 	// Subscribe is the real runtime's live-only, acknowledged event stream.
-	require.NoError(t, rt.PublishOutbound(ctx, protocol.NewOutboundMessage(protocol.SourceWeb, id, "old history")))
+	require.NoError(t, rt.PublishOutbound(ctx, protocol.NewOutboundMessage(id, "old history")))
 
 	liveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -174,10 +174,10 @@ func TestPromptAndLiveTransport(t *testing.T) {
 	<-subscribed
 
 	for _, other := range []string{"private-X", "web-only", "slack-thread:C2:2.2"} {
-		require.NoError(t, rt.PublishOutbound(ctx, protocol.NewOutboundMessage(protocol.SourceSystem, other, "not this conversation")))
+		require.NoError(t, rt.PublishOutbound(ctx, protocol.NewOutboundMessage(other, "not this conversation")))
 	}
 
-	message := protocol.NewOutboundMessage(protocol.SourceWeb, id, "answer")
+	message := protocol.NewOutboundMessage(id, "answer")
 	message.TurnID = "turn-one"
 	message.ProgressText = "thinking"
 	message.Complete = true
@@ -216,7 +216,7 @@ func TestPromptAndLiveTransport(t *testing.T) {
 	browser.Go(func() error {
 		<-subscribed
 
-		if err := rt.PublishOutbound(ctx, protocol.NewOutboundMessage(protocol.SourceWeb, id, "live browser answer")); err != nil {
+		if err := rt.PublishOutbound(ctx, protocol.NewOutboundMessage(id, "live browser answer")); err != nil {
 			return fmt.Errorf("publish browser event: %w", err)
 		}
 

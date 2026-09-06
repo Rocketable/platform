@@ -28,7 +28,7 @@ func startExternalMCPServer(
 	users map[string]string,
 	agentExposed func(string) bool,
 	store *backend.SessionService,
-	submitAgent func(context.Context, string, string, *protocol.InboundMessage, protocol.ActivationHook) error,
+	submitAgent func(context.Context, string, string, *protocol.InboundMessage) error,
 	logger *slog.Logger,
 ) (*externalmcp.Server, error) {
 	locks := backend.NewKeyedConversationLocks()
@@ -122,22 +122,15 @@ func startExternalMCPServer(
 			reply = &protocol.InboundMessage{SlackReply: &protocol.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}}
 
 			conversationID := session.PrivateConversationID
-
-			activation := func(activeCtx context.Context, inbound *protocol.InboundMessage) error {
-				relayed, err := textRelay(activeCtx, &protocol.ExternalMCPRelay{ConversationID: conversationID, ExternalConversationID: externalConversationID, Agent: usedAgent, Text: input, Attachments: outboundAttachments}, reply, "")
-				if err != nil {
-					return fmt.Errorf("send text connector external MCP thread relay: %w", err)
-				}
-
-				if relayed != nil {
-					reply = relayed
-					inbound.SlackReply = relayed.SlackReply
-				}
-
-				return nil
+			relayed, err := textRelay(callCtx, &protocol.ExternalMCPRelay{ConversationID: conversationID, ExternalConversationID: externalConversationID, Agent: usedAgent, Text: input, Attachments: outboundAttachments}, reply, "")
+			if err != nil {
+				return externalmcp.SessionResult{}, fmt.Errorf("send text connector external MCP thread relay: %w", err)
+			}
+			if relayed != nil {
+				reply = relayed
 			}
 
-			result, _, err := submitExternalMCPInput(callCtx, submitAgent, usedAgent, conversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, externalConversationID, activation)
+			result, _, err := submitExternalMCPInput(callCtx, submitAgent, usedAgent, conversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, externalConversationID)
 
 			return result, err
 		}
@@ -170,7 +163,7 @@ func startExternalMCPServer(
 
 		durableRegistration = true
 
-		result, promptAccepted, err = submitExternalMCPInput(callCtx, submitAgent, usedAgent, privateConversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, externalConversationID, backend.NoopActivationHook)
+		result, promptAccepted, err = submitExternalMCPInput(callCtx, submitAgent, usedAgent, privateConversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, externalConversationID)
 
 		return result, err
 	})
@@ -248,7 +241,7 @@ func externalMCPInboundContent(attachments []externalmcp.SessionAttachment) (pro
 	return content, outbound, nil
 }
 
-func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Context, string, string, *protocol.InboundMessage, protocol.ActivationHook) error, usedAgent, conversationID string, content *protocol.InboundContent, metadata map[string]string, principal string, reply *protocol.InboundMessage, externalConversationID string, activation protocol.ActivationHook) (externalmcp.SessionResult, bool, error) {
+func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Context, string, string, *protocol.InboundMessage) error, usedAgent, conversationID string, content *protocol.InboundContent, metadata map[string]string, principal string, reply *protocol.InboundMessage, externalConversationID string) (externalmcp.SessionResult, bool, error) {
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "", content, true)
 
 	inbound.Metadata = maps.Clone(metadata)
@@ -280,7 +273,7 @@ func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Contex
 
 	resultCh := inbound.EnableResponseWait()
 
-	if err := submitAgent(ctx, usedAgent, conversationID, inbound, activation); err != nil {
+	if err := submitAgent(ctx, usedAgent, conversationID, inbound); err != nil {
 		return externalmcp.SessionResult{}, false, fmt.Errorf("submit external MCP input to agent %q: %w", usedAgent, err)
 	}
 

@@ -410,15 +410,6 @@ func (d stateDAO) markRestartRequester(ctx context.Context, conversationID strin
 	return nil
 }
 
-func (d stateDAO) upsertActiveTurn(ctx context.Context, checkpoint *harness.ActiveTurnCheckpoint, now time.Time) error {
-	turn, err := activeTurnStateFromCheckpoint(checkpoint, now)
-	if err != nil {
-		return err
-	}
-
-	return d.upsertActiveTurnState(ctx, &turn)
-}
-
 func (d stateDAO) upsertActiveTurnWithSourceMetadata(ctx context.Context, checkpoint *harness.ActiveTurnCheckpoint, sourceMetadata map[string]string, now time.Time) error {
 	turn, err := activeTurnStateFromCheckpoint(checkpoint, now)
 	if err != nil {
@@ -527,21 +518,6 @@ func (d stateDAO) recoverableActiveTurns(ctx context.Context) ([]ActiveTurnState
 	}
 
 	return turns, nil
-}
-
-func (d stateDAO) activeTurn(ctx context.Context, turnID string) (ActiveTurnState, bool, error) {
-	row := d.db.QueryRowContext(ctx, `SELECT id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns, pending_steers_json FROM active_turns WHERE id = $1`, strings.TrimSpace(turnID))
-
-	turn, err := scanActiveTurn(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ActiveTurnState{}, false, nil
-	}
-
-	if err != nil {
-		return ActiveTurnState{}, false, fmt.Errorf("read active turn: %w", err)
-	}
-
-	return turn, true, nil
 }
 
 func activeTurnStateFromCheckpoint(checkpoint *harness.ActiveTurnCheckpoint, now time.Time) (ActiveTurnState, error) {

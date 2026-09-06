@@ -16,9 +16,9 @@ type Backend interface {
 	SwitchConversationAgent(string, string) (bool, error)
 	RunTurn(context.Context, *protocol.InboundMessage) error
 	SyncConversation(context.Context, string, string) error
-	QueueItems(context.Context, string) ([]protocol.ThreadQueueItem, error)
+	QueueItems(string) ([]protocol.ThreadQueueItem, error)
 	PromoteQueueItem(context.Context, string, string) (bool, error)
 	DeleteQueueItem(context.Context, string, string) (bool, error)
-	ReorderQueueItems(context.Context, string, []string) error
+	ReorderQueueItems(string, []string) error
 	StashQueueItem(context.Context, string, *protocol.ThreadQueueItem) error
 }

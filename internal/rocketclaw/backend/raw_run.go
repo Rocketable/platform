@@ -7,135 +7,29 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"iter"
 	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 
 	"github.com/Arize-ai/openinference/go/openinference-instrumentation"
-	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/openai/openai-go/v3/responses"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace/noop"
 	"golang.org/x/sync/errgroup"
 )
 
-// RawRunResult is the observable result of one non-publishing raw rocketcode turn.
-type RawRunResult struct {
-	Text, VerbatimMessage string
-	Attachments           []protocol.OutboundAttachment
-}
-
-// RawRunProgress controls raw rocketcode run persistence and receives observable output.
+// RawRunProgress carries the conversation and Slack destination for one cron run.
 type RawRunProgress struct {
-	SessionService  *SessionService
 	ConversationID  string
 	SyncDestination string
 	Cronjob         *protocol.CronjobMessage
-
-	Thinking, Message func(context.Context, string) error
-	RequestRestart    func(context.Context, string) (string, error)
-	RequestReload     func(context.Context, string) (string, error)
-	StartNewThread    func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error)
-	TextChannel       string
-}
-
-const rawRunMissingToolPrompt = "You did not call the mandatory " + rawRunToolName + " tool. Normal assistant replies do not count and this background run cannot finish until you call that exact tool. Before this turn ends, call " + rawRunToolName + "(\"full exact message to show the human, or empty string if the human should see nothing\"). If the human partner should see a final message from this background turn, the full final message must be the tool argument. Do not send a summary, paraphrase, or reduced view."
-
-// RunRawWithProgress executes a raw rocketcode turn and reports optional progress.
-func RunRawWithProgress(ctx context.Context, cfg *config.Config, agent, prompt string, logger *slog.Logger, progress *RawRunProgress) (result RawRunResult, err error) {
-	diagnostics := progress != nil
-
-	if progress == nil {
-		progress = newInertRawRunProgress()
-	}
-
-	agent = strings.TrimSpace(agent)
-	if agent == "" {
-		agent = "main"
-	}
-
-	ctx = instrumentation.WithSession(ctx, progress.ConversationID)
-
-	tracer := noop.NewTracerProvider().Tracer("rocketclaw")
-	if cfg.Instrumentation.Enabled {
-		tracer = otel.Tracer("rocketclaw")
-	}
-
-	ctx, span := tracer.Start(ctx, "rocketclaw.raw_run")
-	instrumentation.ApplyContextAttributes(ctx, span)
-	span.SetAttributes(attribute.String(semconv.OpenInferenceSpanKind, semconv.SpanKindAgent))
-	span.SetAttributes(
-		attribute.String(semconv.AgentName, agent),
-		attribute.String(semconv.SessionID, progress.ConversationID),
-		attribute.String("rocketclaw.conversation_id", progress.ConversationID),
-		rocketclawInputValue(cfg, prompt),
-	)
-
-	defer func() {
-		recordRocketClawSpanError(span, err)
-		span.SetAttributes(rocketclawOutputValue(cfg, result.Text))
-		span.End()
-	}()
-
-	memory := new(memoryStore)
-	sessionIn := memory.in()
-	sessionOut := memory.out
-
-	if strings.TrimSpace(progress.ConversationID) != "" {
-		store := newSessionStore(progress.ConversationID, progress.SessionService)
-		sessionIn = store.in()
-		sessionOut = func(entry rocketcode.SessionEntry) error {
-			_, err := store.outID(entry)
-
-			return err
-		}
-	}
-
-	decision := new(rawRunDecision)
-	attachments := new(outboundAttachmentCollector)
-
-	for {
-		text, err := runRawAttempt(ctx, cfg, agent, prompt, logger, sessionIn, sessionOut, decision, attachments, progress, diagnostics)
-		if err != nil {
-			return RawRunResult{}, err
-		}
-
-		if payload, ok := decision.Decision(); ok {
-			if strings.TrimSpace(payload) == "" {
-				return RawRunResult{Text: text}, nil
-			}
-
-			return RawRunResult{Text: text, VerbatimMessage: payload, Attachments: attachments.Attachments()}, nil
-		}
-
-		if err := ctx.Err(); err != nil {
-			return RawRunResult{}, fmt.Errorf("mandatory tool %s was not called before context ended: %w", rawRunToolName, err)
-		}
-
-		prompt = rawRunMissingToolPrompt
-	}
-}
-
-func newInertRawRunProgress() *RawRunProgress {
-	return &RawRunProgress{
-		Thinking:       func(context.Context, string) error { return nil },
-		Message:        func(context.Context, string) error { return nil },
-		RequestRestart: func(context.Context, string) (string, error) { return "", nil },
-		RequestReload:  func(context.Context, string) (string, error) { return "rocketclaw runtime assets reloaded", nil },
-		StartNewThread: func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadResult, error) {
-			return protocol.StartNewThreadResult{}, errors.New("start new thread is inert")
-		},
-	}
+	TextChannel     string
 }
 
 func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logger) (workflow.AgentRunFunc, func() error, error) {
@@ -301,121 +195,6 @@ func prepareRocketCode(cfg *config.Config, agent string, logger *slog.Logger, mo
 
 func rocketcodeSpillDir(cfg *config.Config) string {
 	return filepath.Join(cfg.Workspace, cfg.RuntimeDirName(), ".rocketcode", "spill")
-}
-
-func runRawAttempt(ctx context.Context, cfg *config.Config, agent, prompt string, logger *slog.Logger, sessionIn iter.Seq2[rocketcode.SessionEntry, error], sessionOut func(rocketcode.SessionEntry) error, decision *rawRunDecision, attachments *outboundAttachmentCollector, progress *RawRunProgress, diagnostics bool) (string, error) {
-	last := ""
-
-	root, agents, skills, resolver, err := prepareRocketCode(cfg, agent, logger, toolModeCron)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = root.Close() }()
-
-	if err := root.MkdirAll(filepath.ToSlash(filepath.Join(cfg.RuntimeDirName(), ".rocketcode")), 0o755); err != nil {
-		return "", fmt.Errorf("create rocketcode cron shell temp parent dir: %w", err)
-	}
-
-	shellTempRel := filepath.ToSlash(filepath.Join(cfg.RuntimeDirName(), ".rocketcode", "cron-"+rand.Text()))
-	if err := root.Mkdir(shellTempRel, 0o700); err != nil {
-		return "", fmt.Errorf("create rocketcode cron shell temp dir: %w", err)
-	}
-
-	shellTempDir := filepath.Join(cfg.Workspace, filepath.FromSlash(shellTempRel))
-
-	defer func() { _ = root.RemoveAll(shellTempRel) }()
-
-	requestRestart := progress.RequestRestart
-	requestReload := progress.RequestReload
-
-	recordRestartRequester := func(context.Context) error { return nil }
-	if strings.TrimSpace(progress.ConversationID) != "" {
-		recordRestartRequester = func(ctx context.Context) error {
-			return progress.SessionService.MarkRestartRequester(ctx, progress.ConversationID)
-		}
-	}
-
-	b := &Bridge{log: logger, config: Config{Agent: agent, RequestRestart: requestRestart, RequestReload: requestReload}, runtime: cfg, mu: sync.Mutex{}}
-
-	customTools := []rocketcode.Tool{decision.Tool(), attachments.Tool(root), reloadTool(requestReload)}
-
-	activeAgent := agents.Items[agent]
-	if agentExplicitlyAllowsRocketClawTool(&activeAgent, restartToolName) {
-		customTools = append(customTools, restartTool(requestRestart, recordRestartRequester))
-	}
-
-	if strings.TrimSpace(progress.TextChannel) != "" && agentExplicitlyAllowsRocketClawTool(&activeAgent, startNewThreadToolName) {
-		inbound := protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", "", false)
-		inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: strings.TrimSpace(progress.TextChannel)}
-		protocol.SetInboundAllowedAgents(inbound, []string{agent})
-		customTools = append(customTools, startNewThreadTool(progress.StartNewThread, inbound, agent))
-	}
-
-	rocketcodeConfig := rocketcode.Config{Model: "", AutoApproverModel: cfg.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(cfg), Diagnostics: diagnostics, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: true}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CheckpointSink: rocketcode.InertCheckpointSink{}, CustomTools: customTools, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(cfg.MCPServers), MCPWorkspace: cfg.Workspace}
-
-	looper, err := rocketcode.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agent, io.Discard)
-	if err != nil {
-		return "", fmt.Errorf("prepare raw rocketcode run: %w", err)
-	}
-
-	sessionIn = sessionEntriesForProvider(sessionIn, providerForModel(looper.DisplayModel))
-
-	input := make(chan rocketcode.PromptInput, 1)
-	output := make(chan rocketcode.ChatResponse, 128)
-	interrupts := make(chan os.Signal, 1)
-
-	attemptCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	input <- rocketcode.PromptInput{Role: "", Text: provenanceHeader(promptProvenance{origin: "Cron", media: "Text"}) + "\n\n" + prompt, Attachments: nil, Responses: output}
-
-	close(input)
-
-	var group errgroup.Group
-	group.Go(func() error {
-		return looper.Loop(attemptCtx, input, sessionIn, sessionOut, interrupts)
-	})
-
-	var errProgress error
-
-	for item := range output {
-		if errProgress != nil {
-			continue
-		}
-
-		if item.Kind == rocketcode.ChatResponseAssistantCommentary || item.Kind == rocketcode.ChatResponseAssistantTool || item.Kind == rocketcode.ChatResponseReasoningSummary {
-			if thinking := rocketcodeThinkingText(item); thinking != "" {
-				if err := progress.Thinking(attemptCtx, thinking); err != nil {
-					errProgress = fmt.Errorf("publish raw rocketcode thinking: %w", err)
-
-					cancel()
-
-					continue
-				}
-			}
-		}
-
-		if item.Kind == rocketcode.ChatResponseAssistantMessage {
-			last = appendText(last, item.Text)
-			if err := progress.Message(attemptCtx, item.Text); err != nil {
-				errProgress = fmt.Errorf("publish raw rocketcode message: %w", err)
-
-				cancel()
-			}
-		}
-	}
-
-	if errProgress != nil {
-		_ = group.Wait()
-
-		return last, errProgress
-	}
-
-	if errGroup := group.Wait(); errGroup != nil {
-		return last, fmt.Errorf("run raw rocketcode turn: %w", errGroup)
-	}
-
-	return last, nil
 }
 
 type rawRunDecision struct {

@@ -54,20 +54,6 @@ Replaced by Slack Steer and Enqueued Slack Message.
 
 A single Slack `...` menu shortcut, RocketClaw Actions, that opens a modal whose buttons match the live controls for that message (the same work as emoji reactions). Unauthorized clicks are silent. A message outside a RocketClaw conversation, or a managed-thread message with no live control, gets a short close-only explanation.
 
-## Quickbench
-
-### BAR (Benchmark Archive)
-
-A portable benchmark unit for quickbench. On disk it is a `.bar` file (txtar) or an equivalent unpacked directory. A BAR holds a single `bench.yaml` (metadata + ELO model/criteria), the full RocketCode agent tree, root conversation turns, static host-tool mocks, bash doubles, and optional per-agent variation overlays so multi-agent runs can be reconstructed and ranked. Subagent `task` calls re-execute live against the BAR agents rather than frozen child traces.
-
-### ELO Scorer
-
-The only v1 scoring definition inside a BAR: a crisp criteria prompt plus a judge model and variant. Pairwise comparisons of subject-model outputs produce an ELO ranking; better/worse is defined only by that criteria prompt.
-
-### Quickbench
-
-The single CLI/product surface that packs, unpacks, dumps, runs, and ELO-ranks BARs, and pairs with a RocketClaw skill/subagent that captures Slack sessions into BARs.
-
 ## Prompt Provenance
 
 ### Principal

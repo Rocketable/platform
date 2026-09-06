@@ -60,11 +60,11 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 
 	recoveryID := protocol.SlackThreadConversationID("C888", "888.0")
 	require.NoError(t, seed.UpsertThread(recoveryID, ThreadState{Agent: "main"}))
-	require.NoError(t, seed.StartActiveTurn(ctx, &rocketcode.ActiveTurnCheckpoint{TurnID: "recover-1", ConversationKey: recoveryID, Agent: "main", Model: "gpt-5.5", DisplayModel: "gpt-5.5", ReplayInput: startupRecoveryReplayInput(t)}))
-	require.NoError(t, seed.StartActiveTurn(ctx, &rocketcode.ActiveTurnCheckpoint{TurnID: "cron", ConversationKey: "cron:daily"}))
-	require.NoError(t, seed.StartActiveTurn(ctx, &rocketcode.ActiveTurnCheckpoint{TurnID: "oneoff", ConversationKey: "one-off-cron:job"}))
-	require.NoError(t, seed.StartActiveTurn(ctx, &rocketcode.ActiveTurnCheckpoint{TurnID: "unknown", ConversationKey: protocol.SlackThreadConversationID("C9", "9.9")}))
-	require.NoError(t, seed.Stop(ctx))
+	require.NoError(t, seed.UpsertActiveTurn(ctx, &rocketcode.ActiveTurnCheckpoint{TurnID: "recover-1", ConversationKey: recoveryID, Agent: "main", Model: "gpt-5.5", DisplayModel: "gpt-5.5", ReplayInput: startupRecoveryReplayInput(t)}, nil))
+	require.NoError(t, seed.UpsertActiveTurn(ctx, &rocketcode.ActiveTurnCheckpoint{TurnID: "cron", ConversationKey: "cron:daily"}, nil))
+	require.NoError(t, seed.UpsertActiveTurn(ctx, &rocketcode.ActiveTurnCheckpoint{TurnID: "oneoff", ConversationKey: "one-off-cron:job"}, nil))
+	require.NoError(t, seed.UpsertActiveTurn(ctx, &rocketcode.ActiveTurnCheckpoint{TurnID: "unknown", ConversationKey: protocol.SlackThreadConversationID("C9", "9.9")}, nil))
+	require.NoError(t, seed.Stop())
 
 	var (
 		order       []string
@@ -83,11 +83,11 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			require.NotNil(t, sink.Set)
 			require.NoError(t, ctx.Err())
 
-			bridge := assembledRT.threads.bridges[threadID].bridge.(*Bridge)
+			bridge := assembledRT.threads.bridges[threadID].(*Bridge)
 			inputs := bridge.config.SteerDrain.Drain(ctx, 0)
 			require.Equal(t, []rocketcode.PromptInput{{Text: "steer"}}, inputs)
 			require.NoError(t, bridge.config.EnqueueActivation.Activate(ctx, &protocol.ThreadQueueItem{ID: "q1"}, protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindEnqueue, "", "later", true)))
-			msg, err := bridge.config.RequestRestart(ctx, "test restart")
+			msg, err := bridge.config.RequestRestart("test restart")
 			require.NoError(t, err)
 			require.Equal(t, "restart requested; runtime cancellation started", msg)
 			cancel()
@@ -125,7 +125,6 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			require.NoError(t, rt.RunCtx.Err())
 			require.NoError(t, rt.Sessions.db.PingContext(rt.RunCtx))
 			require.Same(t, rt.threads, rt.TextRouter)
-			require.NotNil(t, rt.Channels.Broadcasts)
 			require.Equal(t, map[string]string{"alice": "secret"}, rt.ExternalMCPUsers)
 
 			target := protocol.TextConversationTarget{ChannelID: "C123", ThreadID: "111.0"}
@@ -133,8 +132,8 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, created)
 			require.False(t, rt.TextRouter.ThreadBusy(target))
-			require.NoError(t, rt.TextRouter.PickQueuedWork(rt.RunCtx, target))
-			scheduled, err := rt.TextRouter.ScheduledMessages(rt.RunCtx, target)
+			require.NoError(t, rt.threads.PickLaterWork(rt.RunCtx, protocol.SlackThreadConversationID(target.ChannelID, target.ThreadID)))
+			scheduled, err := rt.TextRouter.ScheduledMessages(target)
 			require.NoError(t, err)
 			require.Empty(t, scheduled)
 
@@ -143,8 +142,8 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 			require.True(t, reserved)
 			release()
 
-			bridge := rt.threads.bridges[threadID].bridge.(*Bridge)
-			reloaded, err := bridge.config.RequestReload(rt.RunCtx, "test reload")
+			bridge := rt.threads.bridges[threadID].(*Bridge)
+			reloaded, err := bridge.config.RequestReload("test reload")
 			require.NoError(t, err)
 			require.Equal(t, "rocketclaw runtime assets reloaded", reloaded)
 
