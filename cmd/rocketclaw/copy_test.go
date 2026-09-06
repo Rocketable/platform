@@ -26,16 +26,6 @@ type blockingClockworkTestBridge struct {
 	release  chan struct{}
 }
 
-func runClockwork(ctx context.Context, t *testing.T, clockwork *clockwork) {
-	t.Helper()
-
-	go func() {
-		if err := clockwork.run(ctx); err != nil {
-			t.Errorf("clockwork.run: %v", err)
-		}
-	}()
-}
-
 func (b *blockingClockworkTestBridge) HandleBroadcast(ctx context.Context, broadcast *protocol.Broadcast) protocol.BroadcastAcknowledgement {
 	b.received <- broadcast
 
@@ -126,7 +116,7 @@ func TestClockworkBroadcastsExcludeSenderAndAcknowledge(t *testing.T) {
 		require.NoError(t, err)
 
 		ctx, cancel := context.WithCancel(t.Context())
-		runClockwork(ctx, t, clockwork)
+		go clockwork.run(ctx)
 
 		channels.Broadcasts <- protocol.Broadcast{Sender: protocol.BridgeSlack, Message: protocol.NewOutboundMessage(protocol.SourceSlack, "conversation", "reply")}
 
@@ -168,7 +158,7 @@ func TestClockworkNoSenderBroadcastReachesAllBridges(t *testing.T) {
 		require.NoError(t, err)
 
 		ctx, cancel := context.WithCancel(t.Context())
-		runClockwork(ctx, t, clockwork)
+		go clockwork.run(ctx)
 
 		channels.Broadcasts <- protocol.Broadcast{Message: protocol.NewOutboundMessage(protocol.SourceSystem, "conversation", "cron")}
 
@@ -200,7 +190,7 @@ func TestClockworkSlowBridgeDoesNotBlockAnotherBridge(t *testing.T) {
 		require.NoError(t, err)
 
 		ctx, cancel := context.WithCancel(t.Context())
-		runClockwork(ctx, t, clockwork)
+		go clockwork.run(ctx)
 
 		channels.Broadcasts <- protocol.Broadcast{Message: protocol.NewOutboundMessage(protocol.SourceSystem, "conversation", "first")}
 
@@ -234,7 +224,8 @@ func TestClockworkReconnectReceivesOnlyLaterBroadcasts(t *testing.T) {
 		require.NoError(t, err)
 
 		ctx, cancel := context.WithCancel(t.Context())
-		runClockwork(ctx, t, clockwork)
+		go clockwork.run(ctx)
+
 		synctest.Wait()
 
 		unregister()
