@@ -4,7 +4,7 @@ cirello.io/pglock
 # github.com/Arize-ai/openinference/go/openinference-instrumentation v0.1.1
 ## explicit; go 1.25.0
 github.com/Arize-ai/openinference/go/openinference-instrumentation
-# github.com/Arize-ai/openinference/go/openinference-semantic-conventions v0.1.4
+# github.com/Arize-ai/openinference/go/openinference-semantic-conventions v0.1.5
 ## explicit; go 1.25
 github.com/Arize-ai/openinference/go/openinference-semantic-conventions
 # github.com/JohannesKaufmann/dom v0.3.1
@@ -21,7 +21,7 @@ github.com/JohannesKaufmann/html-to-markdown/v2/internal/textutils
 github.com/JohannesKaufmann/html-to-markdown/v2/marker
 github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base
 github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark
-# github.com/aws/aws-sdk-go-v2 v1.45.1
+# github.com/aws/aws-sdk-go-v2 v1.46.0
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/aws
 github.com/aws/aws-sdk-go-v2/aws/defaults
@@ -47,11 +47,11 @@ github.com/aws/aws-sdk-go-v2/internal/strings
 github.com/aws/aws-sdk-go-v2/internal/sync/singleflight
 github.com/aws/aws-sdk-go-v2/internal/timeconv
 github.com/aws/aws-sdk-go-v2/internal/timeouts
-# github.com/aws/aws-sdk-go-v2/config v1.33.2
+# github.com/aws/aws-sdk-go-v2/config v1.33.3
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/config
 github.com/aws/aws-sdk-go-v2/config/internal/ini
-# github.com/aws/aws-sdk-go-v2/credentials v1.20.2
+# github.com/aws/aws-sdk-go-v2/credentials v1.20.3
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/credentials
 github.com/aws/aws-sdk-go-v2/credentials/ec2rolecreds
@@ -61,17 +61,17 @@ github.com/aws/aws-sdk-go-v2/credentials/logincreds
 github.com/aws/aws-sdk-go-v2/credentials/processcreds
 github.com/aws/aws-sdk-go-v2/credentials/ssocreds
 github.com/aws/aws-sdk-go-v2/credentials/stscreds
-# github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.19.1
+# github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.19.2
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/feature/ec2/imds
 github.com/aws/aws-sdk-go-v2/feature/ec2/imds/internal/config
-# github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.1
+# github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.2
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/internal/configsources
-# github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.1
+# github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.2
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/internal/endpoints/v2
-# github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.1
+# github.com/aws/aws-sdk-go-v2/internal/v4a v1.5.2
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/internal/v4a
 github.com/aws/aws-sdk-go-v2/internal/v4a/internal/crypto
@@ -79,30 +79,30 @@ github.com/aws/aws-sdk-go-v2/internal/v4a/internal/v4
 # github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.19
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding
-# github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.1
+# github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.14.2
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/service/internal/presigned-url
-# github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.47.0
+# github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.48.0
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/service/secretsmanager
 github.com/aws/aws-sdk-go-v2/service/secretsmanager/internal/endpoints
 github.com/aws/aws-sdk-go-v2/service/secretsmanager/types
-# github.com/aws/aws-sdk-go-v2/service/signin v1.8.0
+# github.com/aws/aws-sdk-go-v2/service/signin v1.9.0
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/service/signin
 github.com/aws/aws-sdk-go-v2/service/signin/internal/endpoints
 github.com/aws/aws-sdk-go-v2/service/signin/types
-# github.com/aws/aws-sdk-go-v2/service/sso v1.36.0
+# github.com/aws/aws-sdk-go-v2/service/sso v1.37.0
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/service/sso
 github.com/aws/aws-sdk-go-v2/service/sso/internal/endpoints
 github.com/aws/aws-sdk-go-v2/service/sso/types
-# github.com/aws/aws-sdk-go-v2/service/ssooidc v1.41.0
+# github.com/aws/aws-sdk-go-v2/service/ssooidc v1.42.0
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/service/ssooidc
 github.com/aws/aws-sdk-go-v2/service/ssooidc/internal/endpoints
 github.com/aws/aws-sdk-go-v2/service/ssooidc/types
-# github.com/aws/aws-sdk-go-v2/service/sts v1.48.0
+# github.com/aws/aws-sdk-go-v2/service/sts v1.49.0
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/service/sts
 github.com/aws/aws-sdk-go-v2/service/sts/internal/endpoints
@@ -368,7 +368,7 @@ go.opentelemetry.io/proto/otlp/collector/trace/v1
 go.opentelemetry.io/proto/otlp/common/v1
 go.opentelemetry.io/proto/otlp/resource/v1
 go.opentelemetry.io/proto/otlp/trace/v1
-# go.starlark.net v0.0.0-20260828210309-6dd8f160a37f
+# go.starlark.net v0.0.0-20260904161901-6ecada49e42f
 ## explicit; go 1.25.0
 go.starlark.net/internal/compile
 go.starlark.net/internal/spell
@@ -442,10 +442,10 @@ golang.org/x/time/rate
 # golang.org/x/tools v0.49.0
 ## explicit; go 1.25.0
 golang.org/x/tools/txtar
-# google.golang.org/genproto/googleapis/api v0.0.0-20260831171406-18b4a7587f8a
+# google.golang.org/genproto/googleapis/api v0.0.0-20260904194346-d0f1323225a4
 ## explicit; go 1.25.0
 google.golang.org/genproto/googleapis/api/httpbody
-# google.golang.org/genproto/googleapis/rpc v0.0.0-20260831171406-18b4a7587f8a
+# google.golang.org/genproto/googleapis/rpc v0.0.0-20260904194346-d0f1323225a4
 ## explicit; go 1.25.0
 google.golang.org/genproto/googleapis/rpc/status
 # google.golang.org/grpc v1.83.2
