@@ -16,7 +16,8 @@ func TestRunDoctorReportsRuntime(t *testing.T) {
 		"workspace": ".", "database_url": "postgres://localhost/rocketclaw_test?sslmode=disable",
 		"openai": {"api_key": "test-key"},
 		"slack": {"bot_token": "xoxb-test", "app_token": "xapp-test", "channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},
-		"mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"}
+		"mcp_external": {"enabled": true, "listen_addr": "127.0.0.1:8765"},
+		"mcp_development": {"enabled": true, "listen_addr": "127.0.0.1:9876"}
 	}`), 0o600))
 
 	output := captureStdout(t, func() error { return runDoctor(nil) })
@@ -25,7 +26,7 @@ func TestRunDoctorReportsRuntime(t *testing.T) {
 	require.Contains(t, output, "Work directory: .rocketclaw")
 	require.Contains(t, output, "Slack: active")
 	require.Contains(t, output, "External MCP: true")
-	require.Contains(t, output, "Development MCP:")
+	require.Contains(t, output, "Development MCP: true 127.0.0.1:9876")
 	require.Contains(t, output, "RocketCode: OK (library)")
 }
 

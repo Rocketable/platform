@@ -4930,7 +4930,7 @@ func (c *Connector) runOnDemandCron(ctx context.Context, loaded protocol.OneOffC
 		outbound.PostProgressText = postText
 		outbound.TurnID = turnID
 		outbound.Complete = complete
-		outbound.SlackReply = cloneSlackReplyTarget(replyTarget)
+		outbound.SlackReply = protocol.ClonePtr(replyTarget)
 
 		outbound.Attachments = protocol.CloneOutboundAttachments(attachments)
 		if layout != nil {
@@ -5005,7 +5005,7 @@ func (c *Connector) publishOnDemandCronReply(ctx context.Context, replyTarget *p
 
 	outbound := protocol.NewOutboundMessage(protocol.SourceSystem, protocol.SlackThreadConversationID(replyTarget.ChannelID, replyTarget.ThreadTS), text, protocol.OutputTargetSlack)
 	outbound.Complete = true
-	outbound.SlackReply = cloneSlackReplyTarget(replyTarget)
+	outbound.SlackReply = protocol.ClonePtr(replyTarget)
 
 	if err := c.bus.PublishOutbound(ctx, outbound); err != nil {
 		return fmt.Errorf("publish Slack on-demand cron reply: %w", err)
@@ -5018,7 +5018,7 @@ func (c *Connector) consumeReservedPlaceholder(ctx context.Context, replyTarget 
 	msg := protocol.NewOutboundMessage(protocol.SourceSystem, protocol.SlackThreadConversationID(replyTarget.ChannelID, replyTarget.ThreadTS), strings.TrimSpace(text), protocol.OutputTargetSlack)
 	msg.TurnID = fmt.Sprintf("slack-abort-%d", time.Now().UnixNano())
 	msg.Complete = true
-	msg.SlackReply = cloneSlackReplyTarget(replyTarget)
+	msg.SlackReply = protocol.ClonePtr(replyTarget)
 
 	return c.SendResponse(ctx, msg)
 }
@@ -5030,14 +5030,6 @@ func (c *Connector) warnConsumeReservedPlaceholder(ctx context.Context, replyTar
 	}
 
 	return true
-}
-
-func cloneSlackReplyTarget(replyTarget *protocol.SlackReplyTarget) *protocol.SlackReplyTarget {
-	if replyTarget == nil {
-		return nil
-	}
-
-	return &protocol.SlackReplyTarget{ChannelID: replyTarget.ChannelID, MessageTS: replyTarget.MessageTS, ThreadTS: replyTarget.ThreadTS, RecipientTeamID: replyTarget.RecipientTeamID, RecipientUserID: replyTarget.RecipientUserID}
 }
 
 func (c *Connector) createReplyPlaceholders(ctx context.Context, replyTarget *protocol.SlackReplyTarget, placeholder, recipientTeamID, recipientUserID string) (slackReplySlots, error) {
