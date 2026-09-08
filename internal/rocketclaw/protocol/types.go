@@ -216,11 +216,6 @@ func NewInboundMessage(source Source, kind InboundKind, label, text string, huma
 	}
 }
 
-// StartNewThreadRootText returns the human-visible root text for tool-created text conversations.
-func StartNewThreadRootText(title, prompt string) string {
-	return "New thread: " + strings.TrimSpace(title) + "\n\nStarted by RocketClaw from this conversation.\n\nTask:\n" + prompt
-}
-
 // SetInboundAllowedAgents records surface-constrained agents on an inbound message.
 func SetInboundAllowedAgents(inbound *InboundMessage, agents []string) {
 	if inbound.Metadata == nil {

@@ -7,11 +7,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRequestAndResponseKinds(t *testing.T) {
-	require.Contains(t, StartNewThreadRootText("Title", "Do work"), "Title")
-	require.Contains(t, StartNewThreadRootText("Title", "Do work"), "Do work")
-}
-
 func TestNoUserQuestionAsker(t *testing.T) {
 	require.False(t, NoUserQuestionAsker().ExposeTool())
 	_, err := NoUserQuestionAsker().AskUserQuestion(t.Context(), &AskUserQuestionRequest{Question: "q"})

@@ -604,12 +604,8 @@ func (c *Connector) StartNewThreadRoot(ctx context.Context, req *protocol.StartN
 		return protocol.StartNewThreadRootResult{}, err
 	}
 
-	header := strings.TrimSpace(req.Title)
-	if header == "" {
-		header = "New thread"
-	}
-
-	fallbackText, blocks, overflow := titledMessageLayout(header, protocol.StartNewThreadRootText(req.Title, req.Prompt), "Started by RocketClaw from this conversation.\n\nTask:\n"+req.Prompt)
+	header := "🔀 " + strings.TrimSpace(req.Title)
+	fallbackText, blocks, overflow := titledMessageLayout(header, header+"\n\n"+req.Prompt, req.Prompt)
 
 	postedChannelID, threadTS, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(fallbackText, false), slack.MsgOptionBlocks(blocks...))
 	if err != nil {
@@ -2331,12 +2327,11 @@ type slackMCPBlockMessage struct {
 }
 
 func slackMCPBlocks(label, externalConversationID, agent, text string, bodyVerbatim bool) []slack.Block {
-	identity := "External conversation ID: " + externalConversationID + " | Private agent: " + agent
+	header := "📡 " + label + " | " + externalConversationID + " | " + agent
 	chunks := splitSlackText(text, slackBlockTextLimit, slackBlockTextLimit)
-	blocks := make([]slack.Block, 0, len(chunks)+3)
+	blocks := make([]slack.Block, 0, len(chunks)+2)
 	blocks = append(blocks,
-		slack.NewHeaderBlock(slack.NewTextBlockObject(slack.PlainTextType, label, false, false)),
-		slack.NewContextBlock("", slack.NewTextBlockObject(slack.PlainTextType, slackTruncatedText(identity, slackBlockTextLimit, " [MCP identity truncated]"), false, false)),
+		slack.NewHeaderBlock(slack.NewTextBlockObject(slack.PlainTextType, slackTruncatedText(header, 150, "..."), false, false)),
 		slack.NewDividerBlock(),
 	)
 
