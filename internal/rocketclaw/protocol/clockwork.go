@@ -163,7 +163,7 @@ func (b *Broadcast) Clone() Broadcast {
 		message = CloneOutboundMessage(b.Message)
 	}
 
-	relay := clonePtr(b.Relay)
+	relay := ClonePtr(b.Relay)
 	if relay != nil {
 		relay.Attachments = CloneOutboundAttachments(b.Relay.Attachments)
 	}
@@ -181,7 +181,8 @@ func (b *Broadcast) Clone() Broadcast {
 	}
 }
 
-func clonePtr[T any](p *T) *T {
+// ClonePtr returns a copy of p, or nil if p is nil.
+func ClonePtr[T any](p *T) *T {
 	if p == nil {
 		return nil
 	}
@@ -198,9 +199,9 @@ func CloneOutboundMessage(message *OutboundMessage) *OutboundMessage {
 		Targets: slices.Clone(message.Targets), ConversationID: message.ConversationID, TurnID: message.TurnID,
 		SessionEntryID: message.SessionEntryID, ExternalConversationID: message.ExternalConversationID, Agent: message.Agent,
 		Sequence: message.Sequence, PostProgressText: message.PostProgressText, Complete: message.Complete,
-		SlackReply: clonePtr(message.SlackReply), Attachments: CloneOutboundAttachments(message.Attachments),
+		SlackReply: ClonePtr(message.SlackReply), Attachments: CloneOutboundAttachments(message.Attachments),
 		GoalTurn: message.GoalTurn, GoalComplete: message.GoalComplete, GoalActive: message.GoalActive,
 		GoalTurnNumber: message.GoalTurnNumber, GoalMaxTurns: message.GoalMaxTurns, WorkflowTerminal: message.WorkflowTerminal,
-		Cronjob: clonePtr(message.Cronjob), WorkflowAgent: clonePtr(message.WorkflowAgent), WorkflowPhase: clonePtr(message.WorkflowPhase),
+		Cronjob: ClonePtr(message.Cronjob), WorkflowAgent: ClonePtr(message.WorkflowAgent), WorkflowPhase: ClonePtr(message.WorkflowPhase),
 	}
 }
