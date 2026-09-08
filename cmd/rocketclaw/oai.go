@@ -228,7 +228,7 @@ func saveOAILogin(configPath, workspace, runtimeDir, provider string, token oai.
 	if err != nil {
 		return "", "", fmt.Errorf("marshal config: %w", err)
 	}
-	committed, errConfig := replaceConfig(configPath, append(updated, '\n'), info.Mode(), syncDirectory)
+	committed, errConfig := replaceConfig(configPath, append(updated, '\n'), info.Mode())
 	if errConfig != nil {
 		errConfig = fmt.Errorf("commit config: %w", errConfig)
 	}
@@ -238,7 +238,7 @@ func saveOAILogin(configPath, workspace, runtimeDir, provider string, token oai.
 	errToken := oai.SaveTokenIn(workspace, runtimeDir, provider, token)
 	if errToken != nil {
 		if stored, _ := oai.LoadTokenIn(workspace, runtimeDir, provider); stored != token {
-			_, errRestore := replaceConfig(configPath, original, info.Mode(), syncDirectory)
+			_, errRestore := replaceConfig(configPath, original, info.Mode())
 			if errRestore != nil {
 				errRestore = fmt.Errorf("restore config: %w", errRestore)
 			}
@@ -248,7 +248,7 @@ func saveOAILogin(configPath, workspace, runtimeDir, provider string, token oai.
 	return previous, filepath.Join(workspace, runtimeDir, "auth.json"), errors.Join(errConfig, errToken)
 }
 
-func replaceConfig(path string, data []byte, mode os.FileMode, syncDir func(string) error) (bool, error) {
+func replaceConfig(path string, data []byte, mode os.FileMode) (bool, error) {
 	temp, err := os.CreateTemp(filepath.Dir(path), ".rocketclaw-config-*")
 	if err != nil {
 		return false, err
@@ -263,14 +263,10 @@ func replaceConfig(path string, data []byte, mode os.FileMode, syncDir func(stri
 	if err := os.Rename(tempPath, path); err != nil {
 		return false, err
 	}
-	return true, syncDir(filepath.Dir(path))
-}
-
-func syncDirectory(path string) error {
-	dir, err := os.Open(path)
+	dir, err := os.Open(filepath.Dir(path))
 	if err != nil {
-		return err
+		return true, err
 	}
 	defer func() { _ = dir.Close() }()
-	return dir.Sync()
+	return true, dir.Sync()
 }

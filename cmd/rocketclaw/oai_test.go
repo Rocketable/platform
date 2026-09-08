@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -183,22 +182,6 @@ func TestRunOAILoginRestoresConfigWhenCredentialWriteFails(t *testing.T) {
 	data, err := os.ReadFile(defaultConfigPath)
 	require.NoError(t, err)
 	assert.Equal(t, original, data)
-}
-
-func TestReplaceConfigReportsPostRenameFailuresAsCommitted(t *testing.T) {
-	for _, operation := range []string{"open directory", "sync directory"} {
-		t.Run(operation, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "config.json")
-			require.NoError(t, os.WriteFile(path, []byte("old"), 0o640))
-			errInjected := errors.New(operation)
-			committed, err := replaceConfig(path, []byte("new"), 0o640, func(string) error { return errInjected })
-			require.True(t, committed)
-			require.ErrorIs(t, err, errInjected)
-			data, err := os.ReadFile(path)
-			require.NoError(t, err)
-			assert.Equal(t, "new", string(data))
-		})
-	}
 }
 
 func TestSaveOAILoginDoesNotRollbackCommittedToken(t *testing.T) {

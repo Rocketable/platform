@@ -35,7 +35,7 @@ type clockwork struct {
 
 type bridgeRegistrationRequest struct {
 	bridge *registeredBridge
-	ready  chan error
+	ready  chan struct{}
 }
 
 type registeredBridge struct {
@@ -73,15 +73,10 @@ func (c *clockwork) registerBridge(id protocol.BridgeID, handler clockworkBridge
 	c.mu.Unlock()
 
 	if started {
-		request := bridgeRegistrationRequest{bridge: bridge, ready: make(chan error, 1)}
+		request := bridgeRegistrationRequest{bridge: bridge, ready: make(chan struct{})}
 		select {
 		case c.registerCh <- request:
-			if err := <-request.ready; err != nil {
-				c.removeBridge(bridge)
-				bridge.close()
-
-				return nil, err
-			}
+			<-request.ready
 		case <-done:
 			c.removeBridge(bridge)
 			bridge.close()
@@ -104,7 +99,7 @@ func (c *clockwork) removeBridge(bridge *registeredBridge) {
 	c.mu.Unlock()
 }
 
-func (c *clockwork) run(ctx context.Context) error {
+func (c *clockwork) run(ctx context.Context) {
 	c.mu.Lock()
 	c.started = true
 	c.pendingEnabled = len(c.bridges) == 0
@@ -145,17 +140,15 @@ func (c *clockwork) run(ctx context.Context) error {
 					c.dispatch(&pending[i])
 				}
 
-				registration.ready <- nil
+				close(registration.ready)
 			}
 		}
 	})
 
-	err := group.Wait()
+	_ = group.Wait()
 
 	c.closeBridges()
 	close(c.done)
-
-	return err
 }
 
 func (c *clockwork) dispatch(broadcast *protocol.Broadcast) {
