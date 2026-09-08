@@ -109,32 +109,26 @@ func TestSlackMCPBlocksStayWithinSlackLimit(t *testing.T) {
 
 	for _, message := range messages {
 		assert.LessOrEqual(t, len(message.blocks), 50)
+		assert.LessOrEqual(t, len([]rune(message.blocks[0].(*slack.HeaderBlock).Text.Text)), 150)
 	}
 }
 
-func TestSlackMCPBlocksUseDistinctFrame(t *testing.T) {
+func TestSlackMCPBlocksUseCronStyleFrame(t *testing.T) {
 	blocks := slackMCPBlocks("MCP request", "conversation-1", "private-agent", "body", true)
-	require.Len(t, blocks, 4)
+	require.Len(t, blocks, 3)
 
 	header, ok := blocks[0].(*slack.HeaderBlock)
 	require.True(t, ok)
-	assert.Equal(t, "MCP request", header.Text.Text)
-
-	contextBlock, ok := blocks[1].(*slack.ContextBlock)
-	require.True(t, ok)
-	require.Len(t, contextBlock.ContextElements.Elements, 1)
-	identity, ok := contextBlock.ContextElements.Elements[0].(*slack.TextBlockObject)
-	require.True(t, ok)
-	assert.Equal(t, "External conversation ID: conversation-1 | Private agent: private-agent", identity.Text)
-	assert.IsType(t, new(slack.DividerBlock), blocks[2])
-	assert.IsType(t, new(slack.SectionBlock), blocks[3])
+	assert.Equal(t, "📡 MCP request | conversation-1 | private-agent", header.Text.Text)
+	assert.IsType(t, new(slack.DividerBlock), blocks[1])
+	assert.IsType(t, new(slack.SectionBlock), blocks[2])
 }
 
 func TestSlackMCPResponseBlocksKeepAutomaticParsing(t *testing.T) {
 	blocks := slackMCPBlocks("MCP response", "conversation-1", "private-agent", "*answer* @here", false)
-	require.Len(t, blocks, 4)
+	require.Len(t, blocks, 3)
 
-	body, ok := blocks[3].(*slack.SectionBlock)
+	body, ok := blocks[2].(*slack.SectionBlock)
 	require.True(t, ok)
 	assert.False(t, body.Text.Verbatim)
 }
@@ -178,10 +172,10 @@ func TestSendExternalMCPRelayRendersMarkdownWithoutNotifications(t *testing.T) {
 		} `json:"text"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(posted[0].Get("blocks")), &blocks))
-	require.Len(t, blocks, 4)
-	assert.Equal(t, slack.MarkdownType, blocks[3].Text.Type)
-	assert.Equal(t, want, blocks[3].Text.Text)
-	assert.True(t, blocks[3].Text.Verbatim)
+	require.Len(t, blocks, 3)
+	assert.Equal(t, slack.MarkdownType, blocks[2].Text.Type)
+	assert.Equal(t, want, blocks[2].Text.Text)
+	assert.True(t, blocks[2].Text.Verbatim)
 }
 
 func TestSendExternalMCPRelayContinuesHugeRequestBeforePlaceholders(t *testing.T) {
@@ -225,7 +219,7 @@ func TestSendExternalMCPRelayContinuesHugeRequestBeforePlaceholders(t *testing.T
 	var rootBlocks, continuationBlocks []any
 	require.NoError(t, json.Unmarshal([]byte(posted[0].Get("blocks")), &rootBlocks))
 	require.NoError(t, json.Unmarshal([]byte(posted[1].Get("blocks")), &continuationBlocks))
-	assert.Len(t, rootBlocks, 50)
+	assert.Len(t, rootBlocks, 49)
 	assert.Greater(t, len(continuationBlocks), 1)
 	assert.Contains(t, posted[1].Get("text"), "_tail_ &lt;@U999> &lt;@W123> &lt;!here> <https://example.com/tail|Tail>")
 	assert.Contains(t, posted[1].Get("blocks"), `_tail_ \u0026lt;@U999\u003e \u0026lt;@W123\u003e \u0026lt;!here\u003e \u003chttps://example.com/tail|Tail\u003e`)
@@ -1186,8 +1180,7 @@ func TestSendExternalMCPThreadRelay(t *testing.T) {
 	assert.Equal(t, "follow up", posted[0].Get("text"))
 	assert.Equal(t, "123.456", posted[0].Get("thread_ts"))
 	assert.JSONEq(t, `[
-		{"type":"header","text":{"type":"plain_text","text":"MCP request","emoji":false}},
-		{"type":"context","elements":[{"type":"plain_text","text":"External conversation ID: public-conversation | Private agent: private-agent","emoji":false}]},
+		{"type":"header","text":{"type":"plain_text","text":"📡 MCP request | public-conversation | private-agent","emoji":false}},
 		{"type":"divider"},
 		{"type":"section","text":{"type":"mrkdwn","text":"follow up","verbatim":true}}
 	]`, posted[0].Get("blocks"))
@@ -1281,8 +1274,7 @@ func TestSendExternalMCPThreadRelayAttachesFilesToRelayMessage(t *testing.T) {
 	assert.Equal(t, "Attached files: report.txt.", posted[0].Get("text"))
 	assert.Equal(t, "123.456", posted[0].Get("thread_ts"))
 	assert.JSONEq(t, `[
-		{"type":"header","text":{"type":"plain_text","text":"MCP request","emoji":false}},
-		{"type":"context","elements":[{"type":"plain_text","text":"External conversation ID: public-conversation | Private agent: private-agent","emoji":false}]},
+		{"type":"header","text":{"type":"plain_text","text":"📡 MCP request | public-conversation | private-agent","emoji":false}},
 		{"type":"divider"},
 		{"type":"section","text":{"type":"mrkdwn","text":"Attached files: report.txt.","verbatim":true}}
 	]`, posted[0].Get("blocks"))
@@ -1385,8 +1377,7 @@ func TestSendExternalMCPRelayCanPostTopLevelChannelRelay(t *testing.T) {
 	assert.Empty(t, posted[0].Get("thread_ts"))
 	assert.Equal(t, "hello", posted[0].Get("text"))
 	assert.JSONEq(t, `[
-		{"type":"header","text":{"type":"plain_text","text":"MCP request","emoji":false}},
-		{"type":"context","elements":[{"type":"plain_text","text":"External conversation ID: public-conversation | Private agent: private-agent","emoji":false}]},
+		{"type":"header","text":{"type":"plain_text","text":"📡 MCP request | public-conversation | private-agent","emoji":false}},
 		{"type":"divider"},
 		{"type":"section","text":{"type":"mrkdwn","text":"hello","verbatim":true}}
 	]`, posted[0].Get("blocks"))
@@ -1480,8 +1471,7 @@ func TestExternalMCPRelayUsesAnswerPlaceholderForStackedReply(t *testing.T) {
 	assert.Equal(t, "555.3", (*updated)[0].Get("ts"))
 	assert.Equal(t, "first answer", (*updated)[0].Get("text"))
 	assert.JSONEq(t, `[
-		{"type":"header","text":{"type":"plain_text","text":"MCP response","emoji":false}},
-		{"type":"context","elements":[{"type":"plain_text","text":"External conversation ID: public-conversation | Private agent: private-agent","emoji":false}]},
+		{"type":"header","text":{"type":"plain_text","text":"📡 MCP response | public-conversation | private-agent","emoji":false}},
 		{"type":"divider"},
 		{"type":"section","text":{"type":"mrkdwn","text":"first answer"}}
 	]`, (*updated)[0].Get("blocks"))
@@ -1618,11 +1608,10 @@ func TestExternalMCPResponseBlocksSurviveChunking(t *testing.T) {
 			} `json:"text"`
 		}
 		require.NoError(t, json.Unmarshal([]byte(values.Get("blocks")), &blocks))
-		require.GreaterOrEqual(t, len(blocks), 4)
+		require.GreaterOrEqual(t, len(blocks), 3)
 		assert.Equal(t, "header", blocks[0].Type)
-		assert.Equal(t, "MCP response", blocks[0].Text.Text)
-		assert.Equal(t, "context", blocks[1].Type)
-		assert.Equal(t, "divider", blocks[2].Type)
+		assert.Equal(t, "📡 MCP response | public-conversation | private-agent", blocks[0].Text.Text)
+		assert.Equal(t, "divider", blocks[1].Type)
 
 		var blockBody strings.Builder
 
@@ -1630,7 +1619,7 @@ func TestExternalMCPResponseBlocksSurviveChunking(t *testing.T) {
 			assert.LessOrEqual(t, len([]rune(block.Text.Text)), slackBlockTextLimit)
 		}
 
-		for _, block := range blocks[3:] {
+		for _, block := range blocks[2:] {
 			blockBody.WriteString(block.Text.Text)
 		}
 
@@ -3423,7 +3412,7 @@ func TestStartNewThreadRootPostsMessageAndPermalink(t *testing.T) {
 	assert.Equal(t, protocol.TextConversationTarget{ChannelID: "C123", MessageID: "999.000", ThreadID: "999.000"}, result.Target)
 	assert.Equal(t, "https://slack.example/archives/C123/p999000", result.URL)
 	assert.Equal(t, "C123", posted.Get("channel"))
-	assert.Contains(t, posted.Get("text"), "Child")
+	assert.Equal(t, "🔀 Child\n\nDo the work", posted.Get("text"))
 
 	var blocks []struct {
 		Type string `json:"type"`
@@ -3434,10 +3423,10 @@ func TestStartNewThreadRootPostsMessageAndPermalink(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(posted.Get("blocks")), &blocks))
 	require.Len(t, blocks, 3)
 	assert.Equal(t, "header", blocks[0].Type)
-	assert.Equal(t, "Child", blocks[0].Text.Text)
+	assert.Equal(t, "🔀 Child", blocks[0].Text.Text)
 	assert.Equal(t, "divider", blocks[1].Type)
 	assert.Equal(t, "section", blocks[2].Type)
-	assert.Contains(t, blocks[2].Text.Text, "Do the work")
+	assert.Equal(t, "Do the work", blocks[2].Text.Text)
 }
 
 func TestSendCronjobRootUsesCronLayout(t *testing.T) {
