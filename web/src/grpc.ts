@@ -21,7 +21,7 @@ export type RocketclawApi = {
   readonly runCronJob: (principal: string, stem: string) => Effect.Effect<string, GrpcError>;
   readonly history: (principal: string, id: string) => Effect.Effect<TranscriptEvent[], GrpcError>;
   readonly listAgents: (principal: string) => Effect.Effect<Agent[], GrpcError>;
-  readonly listSkills: (principal: string) => Effect.Effect<Skill[], GrpcError>;
+  readonly listSkills: (principal: string, agent?: string) => Effect.Effect<Skill[], GrpcError>;
   readonly listConfig: (principal: string) => Effect.Effect<ConfigView, GrpcError>;
   readonly settleSession: (principal: string, id: string, settled: boolean) => Effect.Effect<void, GrpcError>;
   readonly protocol: (principal: string) => Effect.Effect<string, GrpcError>;
@@ -142,8 +142,8 @@ export const makeRocketclaw = (addr: string): RocketclawApi => {
       unary<{ agents?: Agent[] }>((cb) => client.ListAgents({}, metadata(principal), cb)).pipe(
         Effect.map((res) => res.agents ?? []),
       ),
-    listSkills: (principal) =>
-      unary<{ skills?: Skill[] }>((cb) => client.ListSkills({}, metadata(principal), cb)).pipe(
+    listSkills: (principal, agent) =>
+      unary<{ skills?: Skill[] }>((cb) => client.ListSkills({ agent }, metadata(principal), cb)).pipe(
         Effect.map((res) => res.skills ?? []),
       ),
     listConfig: (principal) =>

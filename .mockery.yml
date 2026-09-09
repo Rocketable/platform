@@ -81,6 +81,14 @@ packages:
       oneOffCronjobRunner:
         config:
           structname: oneOffCronjobsMock
+  github.com/Rocketable/platform/internal/rocketclaw/protocol:
+    interfaces:
+      PrimaryTextRouter:
+        config:
+          dir: '{{.ConfigDir}}/internal/rocketclaw/frontend/slack'
+          pkgname: slackconnector
+          structname: primaryTextRouterMock
+          inpackage: false
   github.com/Rocketable/platform/internal/rocketcode:
     interfaces:
       CheckpointSink:

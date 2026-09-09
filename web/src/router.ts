@@ -114,11 +114,11 @@ export function appRouter(layer: AppLayer) {
         }),
       ),
     ),
-    skills: identified.query(({ ctx }) =>
+    skills: identified.input(z.object({ agent: z.string().min(1).optional() }).optional()).query(({ ctx, input }) =>
       run(
         Effect.gen(function* () {
           const rc = yield* Rocketclaw;
-          return yield* rc.listSkills(ctx.principal);
+          return yield* rc.listSkills(ctx.principal, input?.agent);
         }),
       ),
     ),

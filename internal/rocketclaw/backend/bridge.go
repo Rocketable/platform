@@ -729,10 +729,6 @@ func (b *Bridge) submitEnqueuedItem(ctx context.Context, item *protocol.ThreadQu
 
 	inbound.ConversationID = b.config.ConversationID
 	if principal := strings.TrimSpace(item.Principal); principal != "" {
-		if inbound.Metadata == nil {
-			inbound.Metadata = map[string]string{}
-		}
-
 		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
 	}
 
@@ -1497,27 +1493,9 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		cancelTurn()
 	}()
 
-	promptMsg := protocol.InboundMessage{
-		Source:             msg.Source,
-		Label:              msg.Label,
-		Text:               msg.Text,
-		Attachments:        msg.Attachments,
-		AttachmentWarnings: msg.AttachmentWarnings,
-		Human:              msg.Human,
-		Kind:               msg.Kind,
-		Metadata:           msg.Metadata,
-	}
+	directSkill := inboundDirectSkill(msg)
 
-	var directSkill *rocketcode.PromptInputDirectSkill
-
-	if msg.Source == protocol.SourceSlack && msg.Kind == protocol.InboundKindPrompt {
-		if skill, ok := parseSlackDirectSkillTrigger(msg.Text); ok {
-			directSkill = &skill
-			promptMsg.Text = ""
-		}
-	}
-
-	prompt, err := b.buildPrompt(&promptMsg, agents.Items[agentName].Frontmatter)
+	prompt, err := b.buildPrompt(msg, agents.Items[agentName].Frontmatter)
 	if err != nil {
 		return runResult{}, err
 	}
@@ -3005,28 +2983,26 @@ func buildPrompt(msg *protocol.InboundMessage, agentFrontmatter map[string]any) 
 	return provenanceHeader(provenance) + "\n\n" + body
 }
 
-func parseSlackDirectSkillTrigger(text string) (rocketcode.PromptInputDirectSkill, bool) {
+func inboundDirectSkill(msg *protocol.InboundMessage) *rocketcode.PromptInputDirectSkill {
+	if !msg.Human || (msg.Source != protocol.SourceSlack && msg.Source != protocol.SourceWeb) ||
+		(msg.Kind != protocol.InboundKindPrompt && msg.Kind != protocol.InboundKindSteer && msg.Kind != protocol.InboundKindEnqueue) {
+		return nil
+	}
+
+	text, ok := msg.Metadata[protocol.InboundRawTextMetadataKey]
+	if !ok {
+		text = msg.Text
+	}
+
+	return parseDirectSkillTrigger(text)
+}
+
+func parseDirectSkillTrigger(text string) *rocketcode.PromptInputDirectSkill {
 	text = strings.TrimLeftFunc(text, unicode.IsSpace)
 
-	rest, ok := strings.CutPrefix(text, "💡")
+	rest, ok := strings.CutPrefix(text, "$")
 	if !ok {
-		for _, alias := range []string{":light_bulb:", ":electric_light_bulb:"} {
-			if after, found := strings.CutPrefix(text, alias); found {
-				rest = after
-				ok = true
-
-				break
-			}
-		}
-	}
-
-	if !ok {
-		return rocketcode.PromptInputDirectSkill{}, false
-	}
-
-	rest = strings.TrimLeftFunc(rest, unicode.IsSpace)
-	if rest == "" {
-		return rocketcode.PromptInputDirectSkill{}, true
+		return nil
 	}
 
 	name := rest
@@ -3037,7 +3013,17 @@ func parseSlackDirectSkillTrigger(text string) (rocketcode.PromptInputDirectSkil
 		arguments = strings.TrimLeftFunc(rest[i:], unicode.IsSpace)
 	}
 
-	return rocketcode.PromptInputDirectSkill{Name: name, Arguments: arguments}, true
+	switch strings.ToLower(name) {
+	case "", "agent", "cron", "workflow", "stop", "enqueue", "queue", "goal":
+		return nil
+	case "skill":
+		name, arguments = arguments, ""
+		if i := strings.IndexFunc(name, unicode.IsSpace); i >= 0 {
+			name, arguments = name[:i], strings.TrimLeftFunc(name[i:], unicode.IsSpace)
+		}
+	}
+
+	return &rocketcode.PromptInputDirectSkill{Name: name, Arguments: arguments}
 }
 
 type promptProvenance struct {

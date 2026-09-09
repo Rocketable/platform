@@ -59,6 +59,11 @@ func SlackThreadTarget(conversationID string) (channelID, threadTS string, ok bo
 	return channelID, threadTS, ok && channelID != "" && threadTS != ""
 }
 
+// SkillDescription describes an available skill for human discovery.
+type SkillDescription struct {
+	Name, Description string
+}
+
 // PrimaryTextRouter routes primary text connector conversations.
 type PrimaryTextRouter interface {
 	StartThread(ctx context.Context, agent string, target TextConversationTarget, inbound *InboundMessage) error
@@ -66,6 +71,7 @@ type PrimaryTextRouter interface {
 	StartWorkflowInThread(ctx context.Context, agent, name, args string, target TextConversationTarget, inbound *InboundMessage) error
 	ReserveWorkflowTurn(target TextConversationTarget) (release func(), reserved bool, err error)
 	WorkflowDescriptions() ([]WorkflowDescription, error)
+	SkillDescriptions(agent string) ([]SkillDescription, error)
 	InterruptConversation(conversationID string) *InboundMessage
 	InterruptThread(target TextConversationTarget) (*InboundMessage, error)
 	RegisterThread(target TextConversationTarget, agent string) (created bool, err error)

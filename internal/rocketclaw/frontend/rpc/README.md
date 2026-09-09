@@ -33,6 +33,14 @@ auto-approver model, and enabled flags. It never serializes credentials, databas
 URLs, environment values, MCP commands/headers, or browser/user mappings.
 `ListSkills` uses the existing rooted runtime-definition loader and returns loaded
 skill text and metadata; origin is the loader's relative definition location.
+With `ListSkills.agent`, it returns only skills allowed for that loaded agent,
+excluding denied and review-only permissions; an unavailable agent returns no
+skills. Omitting the filter retains the full skills-page catalog. The composer
+supplies its selected agent and lists commands before those skills. Choosing a
+skill inserts `$name `, or `$skill name ` for a built-in name collision, without
+sending. Outer `$enqueue` queues its inner text unchanged, including skill
+arguments, while `$stop` and `$agent` keep their built-in meanings. Normal Send
+during a turn queues; Cmd/Ctrl+Enter steers. Skills are loaded when consumed.
 
 `ListCronJobs` uses the same started Cron manager as scheduled/Slack execution.
 It exposes parsed definitions and each schedule's next trigger within 24 hours,

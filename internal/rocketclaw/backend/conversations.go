@@ -313,7 +313,8 @@ func (b *Bridge) drainSteers(ctx context.Context, phase rocketcode.TurnPhase) []
 	}
 
 	for _, request := range pending {
-		inputs = append(inputs, rocketcode.PromptInput{Text: buildPrompt(request.inbound, nil), Attachments: attachmentsFromInbound(request.inbound.Attachments)})
+		directSkill := inboundDirectSkill(request.inbound)
+		inputs = append(inputs, rocketcode.PromptInput{Text: buildPrompt(request.inbound, nil), Attachments: attachmentsFromInbound(request.inbound.Attachments), DirectSkill: directSkill})
 	}
 
 	b.steersRead = len(b.steers)

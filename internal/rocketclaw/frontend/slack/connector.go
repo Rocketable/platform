@@ -47,7 +47,8 @@ const (
 		"$enqueue <message> - ✉️ Stash a later turn\n" +
 		"$queue - Show later work\n" +
 		"$cron [job] - 🔂 Run a cron job; bare lists this channel\n" +
-		"$agent [name] - 🎛 Select or switch an agent; bare opens the selector"
+		"$agent [name] - 🎛 Select or switch an agent; bare opens the selector\n" +
+		"$skill <name> [args] - Invoke a skill, including a built-in name"
 )
 
 type slackQueueAction struct {
@@ -2582,8 +2583,8 @@ func (c *Connector) ignoreSlackMessage(ev *slackevents.MessageEvent, reason stri
 	c.log.Debug("ignored Slack message event", append(attrs, extra...)...)
 }
 
-func (c *Connector) postDollarHelpOrWarn(ctx context.Context, channelID, threadTS string) {
-	if _, err := c.postSlackDollarCommandHelp(ctx, channelID, threadTS); err != nil {
+func (c *Connector) postDollarHelpOrWarn(ctx context.Context, channelID, threadTS, agent string) {
+	if _, err := c.postSlackDollarCommandHelp(ctx, channelID, threadTS, agent); err != nil {
 		c.log.Warn("post Slack dollar command help", "error", err, "channel", channelID, "thread_ts", threadTS)
 	}
 }
@@ -2632,7 +2633,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 		}
 	}
 
-	rawText := strings.TrimSpace(slackMessageEventText(ev))
+	rawText := strings.TrimLeftFunc(slackMessageEventText(ev), unicode.IsSpace)
 
 	text := rawText
 	if socialThreadReply {
@@ -2665,7 +2666,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 	replyTarget := &protocol.SlackReplyTarget{ChannelID: ev.Channel, MessageTS: ev.TimeStamp, ThreadTS: threadTS, RecipientTeamID: recipientTeamID, RecipientUserID: ev.User}
 
 	if threadTS != "" {
-		_, handled, err := c.threadRouter.ThreadAgent(protocol.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS})
+		agent, handled, err := c.threadRouter.ThreadAgent(protocol.TextConversationTarget{ChannelID: ev.Channel, ThreadID: threadTS})
 		if err != nil {
 			c.log.Error("prepare Slack thread reply", "error", err, "channel", ev.Channel, "thread_ts", threadTS)
 			return
@@ -2697,7 +2698,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 				return
 			case "stop":
 				if args != "" {
-					c.postDollarHelpOrWarn(ctx, ev.Channel, threadTS)
+					c.postDollarHelpOrWarn(ctx, ev.Channel, threadTS, agent)
 
 					return
 				}
@@ -2709,7 +2710,7 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 				return
 			case "enqueue":
 				if args == "" {
-					c.postDollarHelpOrWarn(ctx, ev.Channel, threadTS)
+					c.postDollarHelpOrWarn(ctx, ev.Channel, threadTS, agent)
 
 					return
 				}
@@ -2753,8 +2754,8 @@ func (c *Connector) handleMessageEvent(ctx context.Context, ev *slackevents.Mess
 				}
 
 				return
-			default:
-				c.postDollarHelpOrWarn(ctx, ev.Channel, threadTS)
+			case "":
+				c.postDollarHelpOrWarn(ctx, ev.Channel, threadTS, agent)
 
 				return
 			}
@@ -3149,7 +3150,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 		return
 	}
 
-	text := strings.TrimSpace(c.stripSlackBotMention(ev.Text))
+	text := c.stripSlackBotMention(ev.Text)
 	if len(text)+len(ev.Files)+len(forward.previews) == 0 {
 		return
 	}
@@ -3205,7 +3206,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 		case "enqueue", "queue":
 			c.handleRootEnqueueOrQueue(ctx, ev, forward, replyTarget, agent, command, args)
 			return
-		default:
+		case "", "stop":
 			c.handleRootDollarCommandHelp(ctx, ev.Channel, threadTS, agent)
 			return
 		}
@@ -3247,9 +3248,7 @@ func (c *Connector) handleAppMentionEvent(ctx context.Context, ev *slackevents.A
 		inbound := newSlackInboundMessage(promptText, &content, replyTarget, c.slackPrincipal(ctx, ev.User))
 		protocol.SetInboundAllowedAgents(inbound, c.socialModeAgents(channel))
 
-		if !c.startSlackGoal(ctx, key, replyTarget, agent, goal, inbound) {
-			return
-		}
+		c.startSlackGoal(ctx, key, replyTarget, agent, goal, inbound)
 
 		return
 	}
@@ -3304,7 +3303,7 @@ func (c *Connector) handleRootAgentCommand(ctx context.Context, ev *slackevents.
 func splitSlackCommandArgs(args string) (name, remainder string) {
 	name = args
 	if index := strings.IndexFunc(args, unicode.IsSpace); index >= 0 {
-		name, remainder = args[:index], strings.TrimSpace(args[index:])
+		name, remainder = args[:index], strings.TrimLeftFunc(args[index:], unicode.IsSpace)
 	}
 
 	return name, remainder
@@ -3321,7 +3320,7 @@ func (c *Connector) validateSlackAgent(ctx context.Context, channelID, threadTS,
 }
 
 func (c *Connector) handleRootDollarCommandHelp(ctx context.Context, channelID, threadTS, agent string) {
-	help, err := c.postSlackDollarCommandHelp(ctx, channelID, threadTS)
+	help, err := c.postSlackDollarCommandHelp(ctx, channelID, threadTS, agent)
 	if err != nil {
 		c.log.Warn("post Slack dollar command help", "error", err, "channel", channelID, "thread_ts", threadTS)
 		return
@@ -3500,6 +3499,8 @@ func (c *Connector) slackAdoptHistory(ctx context.Context, channelID, threadTS, 
 }
 
 func (c *Connector) handleSlackSocialAgentSwitch(ctx context.Context, channelID, threadTS, userID, socialChannel, agent string) {
+	agent = strings.TrimSpace(agent)
+
 	agents := c.socialModeAgents(socialChannel)
 	if agent == "" {
 		_, handled, err := c.threadRouter.ThreadAgent(protocol.TextConversationTarget{ChannelID: channelID, ThreadID: threadTS})
@@ -3611,16 +3612,69 @@ func slackDollarCommandHelpTable() *slack.TableBlock {
 		AddRow(slack.NewTableRawTextCell("$enqueue <message>"), slack.NewTableRawTextCell("✉️"), slack.NewTableRawTextCell("Stash a later turn")).
 		AddRow(slack.NewTableRawTextCell("$queue"), slack.NewTableRawTextCell("—"), slack.NewTableRawTextCell("Show later work")).
 		AddRow(slack.NewTableRawTextCell("$cron [job]"), slack.NewTableRawTextCell("🔂"), slack.NewTableRawTextCell("Run a cron job; bare lists this channel")).
-		AddRow(slack.NewTableRawTextCell("$agent [name]"), slack.NewTableRawTextCell("🎛"), slack.NewTableRawTextCell("Select or switch an agent; bare opens the selector"))
+		AddRow(slack.NewTableRawTextCell("$agent [name]"), slack.NewTableRawTextCell("🎛"), slack.NewTableRawTextCell("Select or switch an agent; bare opens the selector")).
+		AddRow(slack.NewTableRawTextCell("$skill <name> [args]"), slack.NewTableRawTextCell("—"), slack.NewTableRawTextCell("Invoke a skill, including a built-in name"))
 }
 
-func (c *Connector) postSlackDollarCommandHelp(ctx context.Context, channelID, threadTS string) (slackReplyState, error) {
-	postedChannelID, messageTS, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(slackDollarCommandHelp, false), slack.MsgOptionTS(threadTS), slack.MsgOptionBlocks(slackDollarCommandHelpTable()))
+func (c *Connector) postSlackDollarCommandHelp(ctx context.Context, channelID, threadTS, agent string) (slackReplyState, error) {
+	skills, err := c.threadRouter.SkillDescriptions(agent)
 	if err != nil {
-		return slackReplyState{}, fmt.Errorf("post Slack dollar command help: %w", err)
+		return slackReplyState{}, fmt.Errorf("list Slack skills: %w", err)
 	}
 
-	return slackReplyState{ChannelID: postedChannelID, MessageTS: messageTS}, nil
+	lines := strings.Split(slackDollarCommandHelp, "\n")
+	table := slackDollarCommandHelpTable()
+
+	for _, skill := range skills {
+		prefix := "$" + skill.Name
+		switch strings.ToLower(skill.Name) {
+		case "goal", "workflow", "stop", "enqueue", "queue", "cron", "agent", "skill":
+			prefix = "$skill " + skill.Name
+		}
+
+		prefix += " [args]"
+		description := slackTruncatedText(skill.Description, 10000-utf8.RuneCountInString(prefix)-1, "...")
+		lines = append(lines, prefix+" - "+description)
+		table.AddRow(slack.NewTableRawTextCell(prefix), slack.NewTableRawTextCell("—"), slack.NewTableRawTextCell(description))
+	}
+
+	// Slack limits each message to 100 rows and 10,000 table-cell characters:
+	// https://docs.slack.dev/reference/block-kit/blocks/table-block/
+	rows := table.Rows
+
+	var reply slackReplyState
+
+	for start := 0; start < len(rows); {
+		end, characters := start, 0
+		for end < len(rows) && end-start < 100 {
+			rowCharacters := 0
+			for _, cell := range rows[end] {
+				rowCharacters += utf8.RuneCountInString(cell.(*slack.TableRawTextCell).Text)
+			}
+
+			if characters+rowCharacters > 10000 {
+				break
+			}
+
+			characters += rowCharacters
+			end++
+		}
+
+		table.Rows = rows[start:end]
+
+		postedChannelID, messageTS, err := c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText(strings.Join(lines[start:end], "\n"), false), slack.MsgOptionTS(threadTS), slack.MsgOptionBlocks(table))
+		if err != nil {
+			return reply, fmt.Errorf("post Slack dollar command help: %w", err)
+		}
+
+		if start == 0 {
+			reply = slackReplyState{ChannelID: postedChannelID, MessageTS: messageTS}
+		}
+
+		start = end
+	}
+
+	return reply, nil
 }
 
 func (c *Connector) persistPendingSteers(key string) {
@@ -3919,6 +3973,7 @@ func (c *Connector) handleWorkflowRequest(ctx context.Context, key, agent, args,
 	}
 
 	name, workflowArgs := splitSlackCommandArgs(args)
+	workflowArgs = strings.TrimSpace(workflowArgs)
 
 	c.createReplyPlaceholdersOrWarn(ctx, replyTarget, "Workflow: "+name, replyTarget.RecipientTeamID, replyTarget.RecipientUserID, "channel", replyTarget.ChannelID, "message_ts", replyTarget.MessageTS)
 	c.addReaction(ctx, replyTarget, slackRobotReaction, "add Slack robot reaction")
@@ -3951,7 +4006,7 @@ func (c *Connector) postSlackEphemeral(ctx context.Context, channelID, threadTS,
 }
 
 func (c *Connector) stripSlackBotMention(text string) string {
-	text = strings.TrimSpace(text)
+	text = strings.TrimLeftFunc(text, unicode.IsSpace)
 
 	botUserID := strings.TrimSpace(c.botUserID)
 	if botUserID == "" || text == "" {
@@ -3965,11 +4020,11 @@ func (c *Connector) stripSlackBotMention(text string) string {
 
 		if mention[len(mention)-1] == '|' {
 			if _, after, ok := strings.Cut(text, ">"); ok {
-				return strings.TrimSpace(after)
+				return strings.TrimLeftFunc(after, unicode.IsSpace)
 			}
 		}
 
-		return strings.TrimSpace(strings.TrimPrefix(text, mention))
+		return strings.TrimLeftFunc(strings.TrimPrefix(text, mention), unicode.IsSpace)
 	}
 
 	return text
@@ -4095,7 +4150,7 @@ func newSlackInboundMessage(text string, content *protocol.InboundContent, reply
 
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceSlack, protocol.InboundKindPrompt, "", &contentCopy, true)
 	if principal = strings.TrimSpace(principal); principal != "" {
-		inbound.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: principal}
+		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
 	}
 
 	if replyTarget != nil && strings.TrimSpace(replyTarget.ThreadTS) != "" {
@@ -4155,19 +4210,26 @@ func slackPendingKey(replyTarget *protocol.SlackReplyTarget) string {
 }
 
 func slackDollarCommand(text string) (command, args string, ok bool) {
-	after, ok := strings.CutPrefix(strings.TrimSpace(text), "$")
+	after, ok := strings.CutPrefix(strings.TrimLeftFunc(text, unicode.IsSpace), "$")
 	if !ok {
 		return "", "", false
 	}
 
-	after = strings.TrimSpace(after)
+	after = strings.TrimLeftFunc(after, unicode.IsSpace)
 
 	separator := strings.IndexFunc(after, unicode.IsSpace)
 	if separator < 0 {
 		return strings.ToLower(after), "", true
 	}
 
-	return strings.ToLower(after[:separator]), strings.TrimSpace(after[separator:]), true
+	command = strings.ToLower(after[:separator])
+
+	args = strings.TrimLeftFunc(after[separator:], unicode.IsSpace)
+	if command != "enqueue" && command != "agent" {
+		args = strings.TrimSpace(args)
+	}
+
+	return command, args, true
 }
 
 func parseCanonicalSlackCommand(text string) (command, args string, ok bool) {
@@ -4859,12 +4921,12 @@ func slackMessageEventText(ev *slackevents.MessageEvent) string {
 	}
 
 	if ev.Message != nil {
-		if text := strings.TrimSpace(ev.Message.Text); text != "" {
-			return text
+		if strings.TrimSpace(ev.Message.Text) != "" {
+			return ev.Message.Text
 		}
 	}
 
-	return strings.TrimSpace(ev.Text)
+	return ev.Text
 }
 
 func slackMessageEventFiles(ev *slackevents.MessageEvent) []slack.File {

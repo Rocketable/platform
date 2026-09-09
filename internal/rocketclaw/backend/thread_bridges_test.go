@@ -53,6 +53,37 @@ func TestRunRejectsInvalidWorkflowAtStartup(t *testing.T) {
 	}
 }
 
+func TestThreadBridgeManagerSkillDescriptions(t *testing.T) {
+	workspace := t.TempDir()
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(".rocketclaw/agents", 0o755))
+
+	for _, name := range []string{"review", "stop", "denied", "ask"} {
+		require.NoError(t, root.MkdirAll(".rocketclaw/skills/"+name, 0o755))
+		require.NoError(t, root.WriteFile(".rocketclaw/skills/"+name+"/SKILL.md", []byte("---\nname: "+name+"\ndescription: About "+name+"\n---\nInstructions\n"), 0o600))
+	}
+
+	require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", []byte("---\ndescription: Main\nmodel: test\npermission:\n  skill:\n    '*': allow\n    denied: deny\n    ask: auto(guardian)\n---\nPrompt\n"), 0o600))
+	require.NoError(t, root.WriteFile(".rocketclaw/agents/planner.md", []byte("---\ndescription: Planner\nmodel: test\npermission:\n  skill: deny\n---\nPrompt\n"), 0o600))
+
+	manager := &threadBridgeManager{runtime: &config.Config{Workspace: workspace}}
+	descriptions, err := manager.SkillDescriptions("main")
+	require.NoError(t, err)
+	assert.Equal(t, []protocol.SkillDescription{{Name: "review", Description: "About review"}, {Name: "stop", Description: "About stop"}}, descriptions)
+	descriptions, err = manager.SkillDescriptions("planner")
+	require.NoError(t, err)
+	assert.Empty(t, descriptions)
+
+	_, err = manager.SkillDescriptions("missing")
+	require.Error(t, err)
+	require.NoError(t, root.WriteFile(".rocketclaw/agents/main.md", []byte("---\npermission: [invalid\n---\n"), 0o600))
+
+	_, err = manager.SkillDescriptions("main")
+	require.Error(t, err)
+}
+
 func TestThreadBridgeManagerListsAndStartsWorkflowWithPersistedAgent(t *testing.T) {
 	workspace := t.TempDir()
 	root, err := os.OpenRoot(workspace)

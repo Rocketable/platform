@@ -41,6 +41,24 @@ External MCP exposes `session_prompt`. Every call supplies an external conversat
 
 Every active `cron/*.md` definition declares a quoted `channel` that matches a configured Slack channel. Empty completion output is silent; non-empty output starts a fresh managed thread in that channel.
 
+### Invoking Skills
+
+Send bare `$` in Slack, or type a leading `$` in the web composer, to discover built-in commands followed by skills allowed for the selected agent. Web suggestions update when you switch agents; selecting a suggestion inserts its prefix without sending.
+
+Use `$review arguments` to invoke a skill named `review`. Built-in names keep their meaning: `$stop` stops work, while `$skill stop inspect the logs` explicitly invokes a skill named `stop`. Skill names match their definitions. Missing or disallowed skills cannot execute.
+
+Skill arguments follow the documented OpenCode command convention:
+
+- `$ARGUMENTS` receives the full argument suffix, retaining internal whitespace and quotes.
+- Positions start at `$1`; single- and double-quoted phrases count as one argument, with grouping quotes removed. The highest position in the template receives that argument and all remaining arguments. Missing positions become empty; `$0` stays literal.
+- With no argument placeholders, nonempty direct-call arguments follow the skill body after a blank line.
+
+For example, template `Compare $1 against $2` with `"first area" second third` becomes `Compare first area against second third`. Template `$1 / $3 / $0` with `first` becomes `first /  / $0`.
+
+Arguments are substituted before shell blocks run, when the existing skill-shell expansion setting is enabled. Skill instructions load immediately before their associated request. An idle call starts a turn; during active work, Slack calls steer, web Send queues, and web Cmd/Ctrl+Enter steers. Use `$enqueue $review args` or `$enqueue $skill stop args` to explicitly queue a call.
+
+Queued calls retain their original invocation and attachments. Availability and shell blocks are evaluated only when consumed, using the executing agent. Promoting a queued call loads it as a steer once; removing it runs no skill shell blocks. See the [command cheatsheet](cmd/rocketclaw/CHEATSHEET.md) for queue controls.
+
 ### Supporting Tools
 
 - `cmd/funneld`: serves a small HTTPS reverse-proxy funnel from public mount paths to target base URLs configured by `funneld.json`.

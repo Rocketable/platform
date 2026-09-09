@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -171,9 +172,11 @@ func (s Skills) Find(query string) string {
 	return renderSkillMatches(ordered)
 }
 
-func availableSkills(items map[string]Skill, agent *Agent) []Skill {
-	list := make([]Skill, 0, len(items))
-	for _, skill := range items {
+// Available returns skills allowed for agent, sorted by name. Skills requiring
+// permission review are not available for direct invocation or discovery.
+func (s Skills) Available(agent *Agent) []Skill {
+	list := make([]Skill, 0, len(s.Items))
+	for _, skill := range s.Items {
 		if !skillAllowedForAgent(&skill, agent) {
 			continue
 		}
@@ -181,8 +184,8 @@ func availableSkills(items map[string]Skill, agent *Agent) []Skill {
 		list = append(list, skill)
 	}
 
-	sort.Slice(list, func(i, j int) bool {
-		return list[i].Name < list[j].Name
+	slices.SortFunc(list, func(a, b Skill) int {
+		return strings.Compare(a.Name, b.Name)
 	})
 
 	return list
@@ -201,7 +204,7 @@ func skillAllowedForAgent(skill *Skill, agent *Agent) bool {
 // FindAvailable returns visible skills matching query as user-facing text.
 func (s Skills) FindAvailable(query string, agent *Agent) string {
 	items := map[string]Skill{}
-	for _, skill := range availableSkills(s.Items, agent) {
+	for _, skill := range s.Available(agent) {
 		items[skill.Name] = skill
 	}
 
@@ -213,7 +216,7 @@ func (s Skills) withReadPermissions(root *os.Root, agents Agents) Agents {
 
 	for name := range agents.Items {
 		agent := agents.Items[name]
-		if len(availableSkills(s.Items, &agent)) > 0 {
+		if len(s.Available(&agent)) > 0 {
 			hasAllowedSkill = true
 			break
 		}
@@ -325,7 +328,7 @@ func formatAvailableSkills(skills []Skill) string {
 func composeSystemPromptWithSkills(base string, skills Skills, agent *Agent) string {
 	prompts := []string{strings.TrimSpace(base)}
 
-	if len(availableSkills(skills.Items, agent)) > 0 {
+	if len(skills.Available(agent)) > 0 {
 		prompts = append(prompts, "skills provide specialized instructions and workflows for specific tasks."+"\n"+"When a task may benefit from specialized instructions, call the find_skills tool to search all available skills, then call the skill tool to load the selected skill.")
 	}
 

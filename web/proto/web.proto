@@ -103,7 +103,7 @@ message Skill {
   string origin = 6;
 }
 
-message ListSkillsRequest {}
+message ListSkillsRequest { string agent = 1; }
 
 message ListSkillsResponse {
   repeated Skill skills = 1;

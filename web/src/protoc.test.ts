@@ -17,6 +17,28 @@ It ships with @grpc/proto-loader@0.8.1.
 `;
 
 describe("protoc toolchain", () => {
+  test("skill discovery carries the selected agent and preserves the unfiltered catalog", async () => {
+    const pkg = grpc.loadPackageDefinition(protoLoader.loadSync(path.resolve(import.meta.dir, "../proto/web.proto"))) as grpc.GrpcObject;
+    const Web = (pkg.rpc as grpc.GrpcObject).Web as grpc.ServiceClientConstructor;
+    const server = new grpc.Server();
+    const calls: { principal: string; agent?: string }[] = [];
+    server.addService(Web.service, {
+      ListSkills: (call: grpc.ServerUnaryCall<{ agent?: string }, unknown>, cb: grpc.sendUnaryData<unknown>) => {
+        calls.push({ principal: String(call.metadata.get("rocketclaw-principal")[0]), agent: call.request.agent });
+        cb(null, { skills: [] });
+      },
+    });
+    const port = await new Promise<number>((resolve, reject) => server.bindAsync("127.0.0.1:0", grpc.ServerCredentials.createInsecure(), (err, port) => err ? reject(err) : resolve(port)));
+    try {
+      const caller = appRouter(Layer.merge(RocketclawTest(makeRocketclaw(`127.0.0.1:${port}`)), WhoisTest(() => Effect.succeed("alice")))).createCaller({ ip: "100.64.0.1" });
+      await expect(caller.skills({ agent: "planner" })).resolves.toEqual([]);
+      await expect(caller.skills()).resolves.toEqual([]);
+      expect(calls).toEqual([{ principal: "alice", agent: "planner" }, { principal: "alice", agent: undefined }]);
+    } finally {
+      server.forceShutdown();
+    }
+  });
+
   test("entry RPCs preserve conversation IDs, principals, int64 results, empty results and failures", async () => {
     const pkg = grpc.loadPackageDefinition(protoLoader.loadSync(path.resolve(import.meta.dir, "../proto/web.proto"), { longs: String })) as grpc.GrpcObject;
     const Web = (pkg.rpc as grpc.GrpcObject).Web as grpc.ServiceClientConstructor;

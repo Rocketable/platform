@@ -543,6 +543,25 @@ func TestSessionEntries(t *testing.T) {
 		require.True(t, proto.Equal(want, skills.Skills[i]), "unexpected skill: %v", skills.Skills[i])
 	}
 
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md"), []byte("---\nmodel: gpt-5.5\npermission:\n  skill: {alpha: allow, zeta: auto}\n---\nHelp."), 0o600))
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "selected.md"), []byte("---\nmodel: gpt-5.5\npermission:\n  skill: {alpha: deny, zeta: allow}\n---\nHelp."), 0o600))
+
+	for _, tc := range []struct {
+		agent string
+		want  []string
+	}{{"planner", []string{"alpha"}}, {"selected", []string{"zeta"}}, {"main", nil}, {"missing", nil}} {
+		filtered, err := invoke[ListSkillsResponse](ctx, connection, "ListSkills", &ListSkillsRequest{Agent: tc.agent})
+		require.NoError(t, err)
+
+		var names []string
+
+		for _, skill := range filtered.Skills {
+			names = append(names, skill.Name)
+		}
+
+		require.Equal(t, tc.want, names, tc.agent)
+	}
+
 	_, err = sessions.AppendEntryID(ctx, id, &entry)
 	require.NoError(t, err)
 	proxy := exec.CommandContext(t.Context(), "bun", "test", "src/entry-transport.test.ts")
@@ -812,10 +831,8 @@ func invoke[Response any](ctx context.Context, connection *grpc.ClientConn, meth
 
 func testSocketPath(t *testing.T) string {
 	t.Helper()
-	// Keep Unix socket paths below macOS's limit and all artifacts in the repo.
-	require.NoError(t, os.MkdirAll("../../../../.tmp", 0o700))
-
-	dir, err := os.MkdirTemp("../../../../.tmp", "rpc-")
+	// TMPDIR is a short repository .tmp path, keeping sockets below macOS's limit.
+	dir, err := os.MkdirTemp(os.Getenv("TMPDIR"), "rpc-")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
 

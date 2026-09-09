@@ -86,7 +86,7 @@ func TestHandleMessageEventAdoptsUnmanagedThreadWithHistory(t *testing.T) {
 		{Channel: "@", Agents: []string{"adhoc"}, AllowedUserIDs: []string{"U123"}},
 	}, router, nil)
 	connector.botUserID = "U999"
-	ev := newSlackMessageEvent("171234.9999", "171234.0001", "<@U999> jump in")
+	ev := newSlackMessageEvent("171234.9999", "171234.0001", "<@U999> $review jump in")
 	connector.handleMessageEvent(context.Background(), ev, slackNativeForward{})
 
 	started := router.startedSnapshot()
@@ -96,6 +96,7 @@ func TestHandleMessageEventAdoptsUnmanagedThreadWithHistory(t *testing.T) {
 	assert.Contains(t, started[0].inbound.Text, "jump in")
 	assert.Contains(t, started[0].inbound.Text, "old")
 	assert.Contains(t, started[0].inbound.Text, "keep-1")
+	assert.Equal(t, "$review jump in", started[0].inbound.Metadata[protocol.InboundRawTextMetadataKey])
 	assert.Empty(t, router.repliesSnapshot())
 }
 

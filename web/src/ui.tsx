@@ -138,9 +138,10 @@ const dollarCommands = [
   { name: "agent", hint: "[name]", desc: "List or switch agent" },
   { name: "enqueue", hint: "<text>", desc: "Stash later work" },
   { name: "queue", hint: "", desc: "List pending steers and later work" },
+  { name: "skill", hint: "<name> [args]", desc: "Invoke a skill by name" },
 ];
 
-function dollarMatches(text: string) {
+function dollarMatches(text: string, skills: { name: string; description?: string }[]) {
   if (!text.startsWith("$") || text.includes("\n") || text.includes(" ")) {
     return [];
   }
@@ -148,7 +149,15 @@ function dollarMatches(text: string) {
   if (dollarCommands.some((cmd) => cmd.name === query && cmd.hint === "")) {
     return [];
   }
-  return dollarCommands.filter((cmd) => cmd.name.startsWith(query));
+  return [
+    ...dollarCommands.flatMap((cmd) => cmd.name.startsWith(query) ? [{ ...cmd, invocation: `$${cmd.name} ` }] : []),
+    ...skills.flatMap((skill) => skill.name.toLowerCase().startsWith(query) ? [{
+      name: skill.name,
+      hint: "[args]",
+      desc: skill.description ?? "",
+      invocation: dollarCommands.some((cmd) => cmd.name === skill.name.toLowerCase()) ? `$skill ${skill.name} ` : `$${skill.name} `,
+    }] : []),
+  ];
 }
 
 function isStopCommand(text: string) {
@@ -858,7 +867,7 @@ async function sendComposer(input: {
     return;
   }
   const followUp = input.delivery ?? (input.working ? "QUEUE" : "STEER");
-  const enqueue = followUp === "QUEUE" && !stopping;
+  const enqueue = (followUp === "QUEUE" || /^\s*\$enqueue(?:\s|$)/.test(input.text)) && !stopping;
   if (!input.busy && !enqueue) {
     input.setBusy(true);
   }
@@ -963,19 +972,20 @@ function SessionComposer({
   const [agent, setAgent] = useState("");
   const [agentOpen, setAgentOpen] = useState(false);
   const [dollarOff, setDollarOff] = useState(false);
-  const [dollarPick, setDollarPick] = useState(0);
+  const [dollarPick, setDollarPick] = useState("");
   const [sendError, setSendError] = useState("");
   const currentSession = sessions.data?.find((session) => session.id === route.id);
   const currentAgent = currentSession?.agent ?? "";
   const catalog = composerAgents(route.id, agents.data ?? [], currentSession?.allowedAgents ?? []);
   const selected = catalog.some((item) => item.name === agent) ? agent : currentAgent || catalog[0]?.name || "";
+  const skills = trpc.skills.useQuery({ agent: selected }, { enabled: selected !== "", placeholderData: undefined });
   useEffect(() => {
     setAgent(currentAgent);
   }, [id, currentAgent]);
-  const matches = dollarOff ? [] : dollarMatches(text);
-  const pick = matches.length === 0 ? 0 : dollarPick % matches.length;
-  const applyDollar = (name: string) => {
-    setText(`$${name} `);
+  const matches = dollarOff ? [] : dollarMatches(text, skills.data ?? []);
+  const pick = Math.max(0, matches.findIndex((item) => item.invocation === dollarPick));
+  const applyDollar = (invocation: string) => {
+    setText(invocation);
     setDollarOff(true);
     setAgentOpen(false);
   };
@@ -1074,16 +1084,16 @@ function Composer({
 }: {
   text: string;
   setText: (value: string) => void;
-  matches: typeof dollarCommands;
+  matches: ReturnType<typeof dollarMatches>;
   pick: number;
-  applyDollar: (name: string) => void;
+  applyDollar: (invocation: string) => void;
   catalog: { name: string; model?: string; reasoning?: string }[];
   selected: string;
   setAgent: (name: string) => void;
   agentOpen: boolean;
   setAgentOpen: (open: boolean | ((value: boolean) => boolean)) => void;
   setDollarOff: (off: boolean) => void;
-  setDollarPick: (pick: number) => void;
+  setDollarPick: (pick: string) => void;
   placeholder: string;
   busy: boolean;
   queued: { id: string; text: string }[];
@@ -1094,24 +1104,31 @@ function Composer({
   reorderQueued: (itemIds: string[]) => void;
 }) {
   const mac = typeof navigator === "object" && /(Mac|iPod|iPhone|iPad)/.test(navigator.platform);
+  const selectedButton = useRef<HTMLButtonElement>(null);
+  const pickerOpen = matches.length > 0;
+  const selectedInvocation = matches[pick]?.invocation;
+  useEffect(() => {
+    selectedButton.current?.scrollIntoView({ block: "nearest" });
+  }, [pickerOpen, selectedInvocation]);
   return (
     <div className="px-3 pb-4 sm:px-5">
       <div className="relative mx-auto w-full max-w-3xl">
         {matches.length > 0 ? (
-          <ul className="absolute inset-x-0 bottom-full z-10 mb-2 overflow-hidden rounded-2xl border bg-popover text-popover-foreground shadow-md">
+          <ul className="absolute inset-x-0 bottom-full z-10 mb-2 max-h-[50dvh] overflow-y-auto rounded-2xl border bg-popover text-popover-foreground shadow-md">
             {matches.map((cmd, index) => (
-              <li key={cmd.name}>
+              <li key={cmd.invocation}>
                 <button
+                  ref={index === pick ? selectedButton : null}
                   type="button"
                   className={cn("flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left text-sm", index === pick && "bg-accent")}
                   onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => applyDollar(cmd.name)}
+                  onClick={() => applyDollar(cmd.invocation)}
                 >
                   <span>
-                    <span className="font-medium">${cmd.name}</span>
+                    <span className="break-all font-medium">{cmd.invocation.trimEnd()}</span>
                     {cmd.hint ? <span className="text-muted-foreground"> {cmd.hint}</span> : null}
                   </span>
-                  <span className="text-xs text-muted-foreground">{cmd.desc}</span>
+                  <span className="break-words text-xs text-muted-foreground">{cmd.desc}</span>
                 </button>
               </li>
             ))}
@@ -1151,17 +1168,17 @@ function Composer({
               if (matches.length > 0) {
                 if (event.key === "ArrowDown") {
                   event.preventDefault();
-                  setDollarPick(pick + 1);
+                  setDollarPick(matches[(pick + 1) % matches.length].invocation);
                   return;
                 }
                 if (event.key === "ArrowUp") {
                   event.preventDefault();
-                  setDollarPick(pick + matches.length - 1);
+                  setDollarPick(matches[(pick + matches.length - 1) % matches.length].invocation);
                   return;
                 }
                 if (event.key === "Tab" || (event.key === "Enter" && !event.shiftKey)) {
                   event.preventDefault();
-                  applyDollar(matches[pick].name);
+                  applyDollar(matches[pick].invocation);
                   return;
                 }
                 if (event.key === "Escape") {

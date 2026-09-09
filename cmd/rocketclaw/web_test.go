@@ -32,11 +32,7 @@ func TestWebRPC(t *testing.T) {
 
 	_, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
 	require.ErrorContains(t, err, "must be unix:")
-	require.NoError(t, os.MkdirAll("../../.tmp", 0o700))
-
-	dir, err := os.MkdirTemp("../../.tmp", "web-")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
+	dir := t.TempDir()
 
 	socketPath, err := filepath.Abs(filepath.Join(dir, "web.sock"))
 	require.NoError(t, err)

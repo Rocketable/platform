@@ -10,6 +10,23 @@ const javascript = ts.transpileModule(`${functions}\nexport { nextLines, sendCom
 const { nextLines, sendComposer, composerAgents } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 type Line = { id: string; role: string; text: string; turnId?: string };
 
+test("explicit enqueue keeps the composer idle and preserves the inner call for RPC", async () => {
+  const text = "$enqueue $skill stop inspect  the logs\nnext  ";
+  let invalidated = false;
+  await sendComposer({
+    text, busy: false, working: false, sessionId: "opaque", selected: "main", currentAgent: "main",
+    prompt: { mutateAsync: async (request: { id: string; text: string; delivery: string }) => {
+      expect(request).toEqual({ id: "opaque", text, delivery: "STEER" });
+      return "";
+    } },
+    utils: { queue: { invalidate: async () => { invalidated = true; } } }, follow: { current: false },
+    setBusy: () => { throw new Error("enqueue must not start a busy turn"); },
+    setText: (value: string) => { expect(value).toBe(""); }, setAgentOpen: () => {},
+    setSendError: (error: string) => { expect(error).toBe(""); }, setLines: () => {},
+  });
+  expect(invalidated).toBe(true);
+});
+
 test("retained selector uses server choices and never re-adds a removed agent", () => {
   const catalog = [{ name: "main" }, { name: "planner" }];
   expect(composerAgents("", catalog, [])).toEqual(catalog);

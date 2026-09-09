@@ -21,8 +21,23 @@ Type dollar commands. Emoji in this table are reactions RocketClaw listens to, o
 |  | `$queue` |  | Slack managed threads | Show pending steers, then later work. | Ephemeral jump index. Hide closes it; opening `$queue` again dismisses the previous card. Pending-steer rows jump to the hourglass then hide. A Slack `$enqueue` row jumps to the envelope then hides. Envelope 🛑 cancels that enqueue and does not stop the turn. Scheduled and External MCP rows list with no jump and cannot be cancelled from Slack. |
 | `📡` |  | Slack `:satellite_antenna:` | Slack | External MCP relay marker. | Added to Slack relay messages created from External MCP prompts. |
 
-Bare `$` and unknown or unavailable dollar commands post the command table permanently. A root help mention keeps the mention as the thread root and posts help as the first reply without starting an agent turn. Bare root `$agent` is not help: it posts the native agent selector as the first reply.
+Bare `$` posts built-in commands followed by skills allowed for the selected agent. A root help mention keeps the mention as the thread root and posts help as the first reply without starting an agent turn. Bare root `$agent` is not help: it posts the native agent selector as the first reply. Other non-built-in dollar names are skill calls; missing or disallowed skills fail at execution.
 Agent controls are consumed by RocketClaw and do not route to RocketCode as prompts.
+
+## Skill Calls (Slack and Web)
+
+| Invocation | Meaning |
+| --- | --- |
+| `$review "first area" second third` | Invoke the allowed skill named `review`. |
+| `$skill stop inspect the logs` | Invoke a skill whose name collides with a built-in; `$stop` itself still stops work. |
+| `$enqueue $review args` | Queue the raw skill call as later work. |
+| `$enqueue $skill stop args` | Queue an explicit skill call. |
+
+The web dollar picker lists commands before the selected agent's allowed skills. Keyboard or mouse selection inserts a prefix without sending; switching agents updates the skill suggestions.
+
+Arguments use the documented OpenCode command convention: `$ARGUMENTS` retains the complete suffix's internal whitespace and quotes; `$1` and later positions remove single/double grouping quotes. The highest position consumes all remaining parsed arguments, missing positions become empty, and `$0` remains literal. Thus `Compare $1 against $2` with `"first area" second third` becomes `Compare first area against second third`; `$1 / $3 / $0` with `first` becomes `first /  / $0`. A body without placeholders gets nonempty direct arguments after a blank line. Substitution precedes enabled skill-shell expansion.
+
+While idle, sending starts a turn. During active work, a plain Slack call steers, web Send queues, and web Cmd/Ctrl+Enter steers. Queued skills are checked and loaded only when consumed. Promoting an envelope with ⏫ (or the web promotion control) injects the skill before its request once, without a later duplicate; deleting it executes no skill shell blocks. Attachments remain part of the request, not invocation arguments.
 
 ## Slack Message Menu
 
