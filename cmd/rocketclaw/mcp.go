@@ -249,20 +249,18 @@ func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Contex
 	delete(inbound.Metadata, protocol.InboundMediaMetadataKey)
 	delete(inbound.Metadata, protocol.InboundPrincipalMetadataKey)
 
-	if strings.TrimSpace(principal) != "" {
+	principal = strings.TrimSpace(principal)
+	externalConversationID = strings.TrimSpace(externalConversationID)
+	if principal != "" || externalConversationID != "" {
 		if inbound.Metadata == nil {
 			inbound.Metadata = map[string]string{}
 		}
-
-		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = strings.TrimSpace(principal)
-	}
-
-	if strings.TrimSpace(externalConversationID) != "" {
-		if inbound.Metadata == nil {
-			inbound.Metadata = map[string]string{}
+		if principal != "" {
+			inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
 		}
-
-		inbound.Metadata["external_conversation_id"] = strings.TrimSpace(externalConversationID)
+		if externalConversationID != "" {
+			inbound.Metadata["external_conversation_id"] = externalConversationID
+		}
 	}
 
 	if reply != nil {
