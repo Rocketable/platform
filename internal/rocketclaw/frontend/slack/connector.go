@@ -484,18 +484,7 @@ func slackThinkingMessage(placeholder, thinking string) string {
 		return placeholder
 	}
 
-	var quoted strings.Builder
-
-	lines := strings.Split(body, "\n")
-
-	quoted.WriteString(prefix)
-
-	for _, v := range lines {
-		quoted.WriteString(v)
-		quoted.WriteByte('\n')
-	}
-
-	return strings.TrimRight(quoted.String(), "\n")
+	return strings.TrimRight(prefix+body, "\n")
 }
 
 func slackReplyDestination(replyTarget *protocol.SlackReplyTarget) (channelID, threadTS string) {
