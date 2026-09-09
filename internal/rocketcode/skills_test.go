@@ -197,6 +197,25 @@ func TestSkillDescriptions(t *testing.T) {
 	})
 }
 
+func TestSkillsAvailable(t *testing.T) {
+	skills := Skills{Items: map[string]Skill{
+		"z-last":   {Name: "z-last"},
+		"a-first":  {Name: "a-first"},
+		"a-denied": {Name: "a-denied"},
+		"a-review": {Name: "a-review"},
+	}}
+	agent := agentWithSkillRules(
+		PermissionRule{Pattern: "*", Action: permissionDeny},
+		PermissionRule{Pattern: "?-*", Action: permissionAllow},
+		PermissionRule{Pattern: "*-denied", Action: permissionDeny},
+		PermissionRule{Pattern: "*-review", Action: permissionAuto},
+	)
+
+	require.Equal(t, []Skill{skills.Items["a-first"], skills.Items["z-last"]}, skills.Available(agent))
+	require.Equal(t, "## Matching skills\n- **a-first**: \n- **z-last**: ", skills.FindAvailable("", agent))
+	require.Empty(t, skills.Available(agentWithSkillRules(PermissionRule{Pattern: "*", Action: permissionDeny})))
+}
+
 func TestPermissionPrompt(t *testing.T) {
 	t.Run("renders full bash allow", func(t *testing.T) {
 		prompt := composeSystemPromptWithSkills("base prompt", emptySkills(), testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}))
@@ -506,8 +525,8 @@ Args: $ARGUMENTS
 	require.NoError(t, err)
 
 	require.Contains(t, result.Output, "Generated: secret-output")
-	require.Contains(t, result.Output, "Args: !`cat SECRET.md`")
-	require.Equal(t, 1, strings.Count(result.Output, "secret-output"))
+	require.Contains(t, result.Output, "Args: secret-output")
+	require.Equal(t, 2, strings.Count(result.Output, "secret-output"))
 
 	result, err = factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"arg-skill","arguments":"unused"}`), nil, emptyToolCallMetadata())
 	require.NoError(t, err)
@@ -521,18 +540,20 @@ Args: $ARGUMENTS
 func TestSkillsRenderDirectArgumentsAppendWhenUnused(t *testing.T) {
 	loaded := LoadSkills(fstest.MapFS{"arg-skill/SKILL.md": mapFile(`---
 name: arg-skill
-description: Uses arguments
+description: $ARGUMENTS and $1 are metadata
 ---
 
 No placeholder here.
-`)}, "/virtual/skills").Skills
+`), "arg-skill/$ARGUMENTS.txt": mapFile("resource")}, "/virtual/skills").Skills
 	factory := testSkillFactory(t, loaded, nil)
 
-	result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"arg-skill","arguments":"literal request","direct":true}`), nil, emptyToolCallMetadata())
+	_, output, err := factory.renderSkillToolOutput(t.Context(), json.RawMessage(`{"name":"arg-skill","arguments":"literal request","direct":true}`), true)
 	require.NoError(t, err)
-	require.True(t, strings.HasSuffix(result.Output, "\n\nliteral request"), result.Output)
+	require.Contains(t, output, "No placeholder here.\n\nliteral request\n\nBase directory")
+	require.Contains(t, output, "description: $ARGUMENTS and $1 are metadata")
+	require.Contains(t, output, "<file>/virtual/skills/arg-skill/$ARGUMENTS.txt</file>")
 
-	result, err = factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"arg-skill","arguments":"literal request"}`), nil, emptyToolCallMetadata())
+	result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"arg-skill","arguments":"literal request"}`), nil, emptyToolCallMetadata())
 	require.NoError(t, err)
 	require.NotContains(t, result.Output, "literal request")
 }
@@ -550,20 +571,23 @@ name: dynamic-skill
 description: Expands shell snippets
 ---
 
-Generated: !`+"`"+`cat MEMORY.md`+"`"+`
+Generated: !`+"`"+`cat '$1'; printf ran > EFFECT`+"`"+`
 `), 0o644))
 
 	loaded := LoadSkills(os.DirFS(dir), dir).Skills
-	require.Contains(t, loaded.Items["dynamic-skill"].Content, "!`cat MEMORY.md`")
+	require.Contains(t, loaded.Items["dynamic-skill"].Content, "!`cat '$1'; printf ran > EFFECT`")
 
 	t.Run("leaves shell commands literal by default", func(t *testing.T) {
 		factory := testSkillFactory(t, loaded, nil)
-		result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill"}`), nil, emptyToolCallMetadata())
+		result, err := factory.skillTool().Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill","arguments":"MEMORY.md"}`), nil, emptyToolCallMetadata())
 
 		require.NoError(t, err)
 
 		got := result.Output
-		require.Contains(t, got, "Generated: !`cat MEMORY.md`")
+		require.Contains(t, got, "Generated: !`cat 'MEMORY.md'; printf ran > EFFECT`")
+
+		_, err = root.Stat("EFFECT")
+		require.ErrorIs(t, err, fs.ErrNotExist)
 	})
 
 	t.Run("skill tool expands shell commands in runtime root", func(t *testing.T) {
@@ -575,11 +599,15 @@ Generated: !`+"`"+`cat MEMORY.md`+"`"+`
 		factory.promptExpansion = env
 		tool := factory.skillTool()
 
-		got, err := tool.Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill"}`), nil, emptyToolCallMetadata())
+		got, err := tool.Call(context.Background(), json.RawMessage(`{"name":"dynamic-skill","arguments":"MEMORY.md"}`), nil, emptyToolCallMetadata())
 
 		require.NoError(t, err)
 		require.Contains(t, got.Output, "Generated: dynamic-output")
-		require.NotContains(t, got.Output, "!`cat MEMORY.md`")
+		require.NotContains(t, got.Output, "!`cat 'MEMORY.md'; printf ran > EFFECT`")
+
+		effect, err := root.ReadFile("EFFECT")
+		require.NoError(t, err)
+		require.Equal(t, "ran", string(effect))
 	})
 }
 

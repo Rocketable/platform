@@ -1882,15 +1882,20 @@ Use this skill for docs.
 	agent := agentWithSkillPermission()
 	factory := testSkillFactory(t, loaded, agent)
 	factory.experimentalStrongerSkills = true
+	factory.expandPromptShellCommands.SkillPrompts = true
 
 	mock := mockResponses(responseWithMessage("resp-final", "done"))
 	looper := testLooper(mock)
 	looper.Permissions = agent.Permission
 	looper.Tools = map[string]looperTool{"skill": factory.skillTool()}
+	looper.expandInputPrompts = true
+	looper.promptExpansion = factory.promptExpansion
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- PromptInput{Text: "apply it", DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "write the API guide"}, Responses: output}
+	arguments := "write the API guide !`echo run >> calls`"
+
+	input <- PromptInput{Text: "$docs-helper " + arguments, DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: arguments}, Responses: output}
 
 	close(input)
 
@@ -1904,7 +1909,11 @@ Use this skill for docs.
 	require.Contains(t, serialized, "Use this skill for docs.")
 	require.Contains(t, serialized, "write the API guide")
 	require.Contains(t, serialized, `"role":"user"`)
-	require.Contains(t, serialized, "apply it")
+	require.JSONEq(t, `{"content":"$docs-helper write the API guide !`+"`"+`echo run >> calls`+"`"+`","role":"user","type":"message"}`, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList[1]))
+
+	calls, err := factory.promptExpansion.root.ReadFile("calls")
+	require.NoError(t, err)
+	require.Equal(t, "run\n", string(calls))
 }
 
 func TestLooperDirectSkillRejectsBeforeModelRequest(t *testing.T) {
@@ -1938,54 +1947,143 @@ description: Write docs
 ---
 
 Use this skill for docs.
-`)}, "/virtual/skills").Skills
+` + "!`touch executed`")}, "/virtual/skills").Skills
 
-	run := func(t *testing.T, agent *Agent, skillName string) []ChatResponse {
-		t.Helper()
+	for _, steer := range []bool{false, true} {
+		run := func(t *testing.T, agent *Agent, skillName string) string {
+			t.Helper()
 
-		mock := mockResponses(responseWithMessage("resp-final", "should not run"))
-		looper := testLooper(mock)
-		looper.Permissions = agent.Permission
-		looper.Tools = map[string]looperTool{"skill": testSkillFactory(t, loaded, agent).skillTool()}
-		output := make(chan ChatResponse, 10)
-		saves := 0
+			mock := mockResponses(responseWithMessage("resp-final", "should not run"))
+			looper := testLooper(mock)
+			looper.AutoApprovePermissions = true
+			looper.Permissions = agent.Permission
+			factory := testSkillFactory(t, loaded, agent)
+			factory.expandPromptShellCommands.SkillPrompts = true
+			looper.Tools = map[string]looperTool{"skill": factory.skillTool()}
+			looper.expandInputPrompts = true
+			looper.promptExpansion = factory.promptExpansion
+			output := make(chan ChatResponse, 10)
+			saves := 0
 
-		input := make(chan PromptInput, 1)
-		input <- PromptInput{DirectSkill: &PromptInputDirectSkill{Name: skillName}, Responses: output}
+			input := make(chan PromptInput, 1)
+			call := PromptInput{Text: "$" + skillName + " !`touch executed`", DirectSkill: &PromptInputDirectSkill{Name: skillName, Arguments: "!`touch executed`"}, Responses: output}
 
-		close(input)
+			if steer {
+				looper.SteerDrain = SteerDrain{Fn: func(context.Context, TurnPhase) []PromptInput {
+					return []PromptInput{call}
+				}}
 
-		err := looper.Loop(context.Background(), input, emptySession(), func(SessionEntry) error {
-			saves++
+				input <- testPromptInput(PromptInputRoleUser, "start", output)
+			} else {
+				input <- call
+			}
 
-			return nil
-		}, make(chan os.Signal, 1))
+			close(input)
 
-		require.NoError(t, err)
-		require.Empty(t, newParams(mock))
-		require.Zero(t, saves)
+			err := looper.Loop(context.Background(), input, emptySession(), func(SessionEntry) error {
+				saves++
 
-		return collectResponses(output)
+				return nil
+			}, make(chan os.Signal, 1))
+
+			got := collectResponses(output)
+
+			var message string
+
+			if steer {
+				require.Error(t, err)
+				require.Empty(t, got, "steer failures use the caller's turn-failure delivery")
+
+				message = err.Error()
+
+				require.Len(t, newParams(mock), 1, "failed steer must not reach a continuation request")
+			} else {
+				require.NoError(t, err)
+				require.Len(t, got, 1)
+				require.Equal(t, ChatResponseAssistantMessage, got[0].Kind)
+				message = got[0].Text
+
+				require.Empty(t, newParams(mock))
+			}
+
+			_, err = factory.promptExpansion.root.Stat("executed")
+			require.ErrorIs(t, err, os.ErrNotExist)
+			require.Zero(t, saves)
+
+			return message
+		}
+
+		t.Run("unknown skill", func(t *testing.T) {
+			got := run(t, agentWithSkillPermission(), "missing-skill")
+
+			require.Contains(t, got, `skill "missing-skill" not found`)
+			require.Contains(t, got, "Available skills: docs-helper")
+		})
+
+		t.Run("denied skill", func(t *testing.T) {
+			got := run(t, agentWithSkillRules(PermissionRule{Pattern: "docs-helper", Action: permissionDeny}), "docs-helper")
+
+			require.Contains(t, got, "tool call denied")
+			require.Contains(t, got, `permission "skill"`)
+			require.Contains(t, got, `subject "docs-helper"`)
+		})
+		t.Run("review-only skill", func(t *testing.T) {
+			got := run(t, agentWithSkillRules(PermissionRule{Pattern: "docs-helper", Action: permissionAuto}), "docs-helper")
+			require.Contains(t, got, "not visible")
+		})
 	}
+}
 
-	t.Run("unknown skill", func(t *testing.T) {
-		got := run(t, agentWithSkillPermission(), "missing-skill")
+func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
+	loaded := LoadSkills(fstest.MapFS{"docs-helper/SKILL.md": mapFile("---\nname: docs-helper\ndescription: Docs\n---\nInstructions !`echo $ARGUMENTS >> calls`")}, "/virtual/skills").Skills
+	factory := testSkillFactory(t, loaded, agentWithSkillPermission())
+	factory.expandPromptShellCommands.SkillPrompts = true
+	mock := mockResponses(responseWithMessage("resp-final", "original answer"))
+	looper := testLooper(mock)
+	looper.Permissions = agentWithSkillPermission().Permission
+	looper.Tools = map[string]looperTool{"skill": factory.skillTool()}
+	sink := recordingCheckpointSink()
+	looper.CheckpointSink = sink
+	steers := []PromptInput{
+		{Text: "$docs-helper first", DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "first"}},
+		{Text: "$missing-skill", DirectSkill: &PromptInputDirectSkill{Name: "missing-skill"}},
+		{Text: "plain neighboring request"},
+		{Text: "$docs-helper last", DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "last"}},
+	}
+	looper.SteerDrain = SteerDrain{Fn: func(context.Context, TurnPhase) []PromptInput {
+		batch := steers
+		steers = nil
 
-		require.Len(t, got, 1)
-		require.Equal(t, ChatResponseAssistantMessage, got[0].Kind)
-		require.Contains(t, got[0].Text, `skill "missing-skill" not found`)
-		require.Contains(t, got[0].Text, "Available skills: docs-helper")
-	})
+		return batch
+	}}
+	output := make(chan ChatResponse, 10)
 
-	t.Run("denied skill", func(t *testing.T) {
-		got := run(t, agentWithSkillRules(PermissionRule{Pattern: "docs-helper", Action: permissionDeny}), "docs-helper")
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "start", output)
 
-		require.Len(t, got, 1)
-		require.Equal(t, ChatResponseAssistantMessage, got[0].Kind)
-		require.Contains(t, got[0].Text, "tool call denied")
-		require.Contains(t, got[0].Text, `permission "skill"`)
-		require.Contains(t, got[0].Text, `subject "docs-helper"`)
-	})
+	close(input)
+
+	var saved []SessionEntry
+
+	err := looper.Loop(t.Context(), input, emptySession(), func(entry SessionEntry) error {
+		saved = append(saved, entry)
+		return nil
+	}, make(chan os.Signal, 1))
+	calls, errRead := factory.promptExpansion.root.ReadFile("calls")
+	require.NoError(t, errRead)
+	// The batch has already been accepted and drained. A preparation failure must
+	// reach the caller's turn-failure delivery, rather than acknowledge lost work.
+	require.ErrorContains(t, err, `skill "missing-skill" not found`)
+	require.Empty(t, steers)
+	require.Equal(t, "first\n", string(calls), "failure must not execute later skill shells")
+	require.Len(t, newParams(mock), 1, "failed batch must not reach a continuation request")
+	require.Empty(t, collectResponses(output), "caller owns turn-failure delivery")
+	require.Empty(t, saved, "failed turn must not be persisted as completed")
+	require.Empty(t, sink.ClearCompletedTurnCalls(), "failed turn must retain its checkpoint")
+	require.Empty(t, sink.RecordRecoveredReplayCalls())
+	checkpoints := sink.RecordProviderResponseCalls()
+	require.Len(t, checkpoints, 1)
+	require.JSONEq(t, `[{"content":"start","role":"user","type":"message"},{"content":"original answer","role":"assistant","type":"message"}]`, marshalJSON(t, checkpoints[0].ActiveTurnCheckpoint.ReplayInput))
 }
 
 func TestLooperEmitsToolDiagnosticsWhenEnabled(t *testing.T) {
@@ -2555,13 +2653,15 @@ func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
 
 func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 	steers := []PromptInput{
-		{Text: "use the other file", Attachments: []Attachment{{MIME: "image/png", Filename: "screen.png", URL: "data:image/png;base64,c2NyZWVu"}}},
+		{Text: "use the other file", DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "first"}, Attachments: []Attachment{{MIME: "image/png", Filename: "screen.png", URL: "data:image/png;base64,c2NyZWVu"}}},
 		{Attachments: []Attachment{{MIME: "image/jpeg", Filename: "photo.jpg", URL: "data:image/jpeg;base64,cGhvdG8="}}},
-		{Text: "and skip tests"},
+		{Text: "and skip tests", DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "last"}},
 	}
 	want := []string{
+		`{"content":"<skill_content name=\"docs-helper\">\n# skill: docs-helper\n\nInstructions first fresh\n\nBase directory for this skill: file:///virtual/skills/docs-helper\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n\n</skill_files>\n</skill_content>","role":"developer","type":"message"}`,
 		`{"content":[{"type":"input_text","text":"use the other file"},{"type":"input_image","detail":"auto","image_url":"data:image/png;base64,c2NyZWVu"}],"role":"user","type":"message"}`,
 		`{"content":[{"type":"input_image","detail":"auto","image_url":"data:image/jpeg;base64,cGhvdG8="}],"role":"user","type":"message"}`,
+		`{"content":"<skill_content name=\"docs-helper\">\n# skill: docs-helper\n\nInstructions last fresh\n\nBase directory for this skill: file:///virtual/skills/docs-helper\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n\n</skill_files>\n</skill_content>","role":"developer","type":"message"}`,
 		`{"content":"and skip tests","role":"user","type":"message"}`,
 	}
 	mock := mockResponses(
@@ -2569,12 +2669,22 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 		responseWithMessage("resp-final", "done"),
 	)
 	looper := testLooper(mock)
-	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "lookup", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
+	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "lookup", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}, {Name: "skill", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
+	loaded := LoadSkills(fstest.MapFS{"docs-helper/SKILL.md": mapFile("---\nname: docs-helper\ndescription: Docs\n---\nInstructions $ARGUMENTS !`echo run >> calls; cat state`")}, "/virtual/skills").Skills
+	factory := testSkillFactory(t, loaded, agentWithSkillPermission())
+	factory.expandPromptShellCommands.SkillPrompts = true
+	root := factory.promptExpansion.root
+	require.NoError(t, root.WriteFile("state", []byte("old"), 0o600))
+
 	tool := testLooperTool("lookup")
 	tool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		_, err := root.Stat("calls")
+		require.ErrorIs(t, err, os.ErrNotExist, "waiting steers must not execute shell blocks")
+		require.NoError(t, root.WriteFile("state", []byte("fresh"), 0o600))
+
 		return TextToolResult("looked-up"), nil
 	}
-	looper.Tools = map[string]looperTool{"lookup": tool}
+	looper.Tools = map[string]looperTool{"lookup": tool, "skill": factory.skillTool()}
 	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []PromptInput {
 		if phase != TurnPhaseToolLoop {
 			return nil
@@ -2599,20 +2709,34 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, newParams(mock), 2)
 	items := newParams(mock)[1].Input.OfInputItemList
-	require.Len(t, items, 6)
+	require.Len(t, items, 8)
 	require.JSONEq(t, `{"call_id":"call-1","output":"looked-up","type":"function_call_output"}`, marshalJSON(t, items[2]))
 
 	history, turns, err := loadSession(sessionEntries(saved))
 	require.NoError(t, err)
 	require.Len(t, turns, 1)
-	require.Len(t, turns[0].ReplayInput, 7)
-	require.Len(t, history, 7)
+	require.Len(t, turns[0].ReplayInput, 9)
+	require.Len(t, history, 9)
 
 	for i, expected := range want {
 		require.JSONEq(t, expected, marshalJSON(t, items[3+i]))
 		require.JSONEq(t, expected, string(turns[0].ReplayInput[3+i]))
 		require.JSONEq(t, expected, marshalJSON(t, history[3+i]))
 	}
+
+	looper.SteerDrain = SteerDrain{}
+
+	input = make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "continue", make(chan ChatResponse, 10))
+
+	close(input)
+
+	looper.Client = mockResponses(responseWithMessage("resp-replayed", "done"))
+	require.NoError(t, looper.Loop(t.Context(), input, sessionEntries(saved), discardSession, make(chan os.Signal, 1)))
+
+	calls, err := root.ReadFile("calls")
+	require.NoError(t, err)
+	require.Equal(t, strings.Repeat("run\n", 2), string(calls), "replay must not execute consumed skill shells again")
 }
 
 func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {

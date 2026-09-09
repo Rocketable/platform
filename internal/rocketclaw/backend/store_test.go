@@ -1018,8 +1018,10 @@ func TestNewSessionServiceReportsInvalidDatabaseURL(t *testing.T) {
 
 func TestHoldRunLockRejectsSecondHolder(t *testing.T) {
 	service := newTestSessionService(t)
-	client, err := newRunLockClient(service.db)
+	// This holder tests contention, not renewal; a heartbeat can race Close.
+	client, err := pglock.UnsafeNew(service.db, pglock.WithCustomTable(runLockTable), pglock.WithHeartbeatFrequency(0))
 	require.NoError(t, err)
+	require.NoError(t, client.TryCreateTable())
 	lock, err := client.Acquire(runLockName, pglock.FailIfLocked())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, lock.Close()) })
@@ -1031,8 +1033,10 @@ func TestHoldRunLockRejectsSecondHolder(t *testing.T) {
 func TestHoldRunLockAllowsSessionServiceWhileHeld(t *testing.T) {
 	workspace := t.TempDir()
 	service := newTestSessionServiceAt(t, workspace)
-	client, err := newRunLockClient(service.db)
+	// This holder tests service access, not renewal; a heartbeat can race Close.
+	client, err := pglock.UnsafeNew(service.db, pglock.WithCustomTable(runLockTable), pglock.WithHeartbeatFrequency(0))
 	require.NoError(t, err)
+	require.NoError(t, client.TryCreateTable())
 	lock, err := client.Acquire(runLockName, pglock.FailIfLocked())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, lock.Close()) })

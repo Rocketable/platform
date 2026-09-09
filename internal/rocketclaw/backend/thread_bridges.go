@@ -351,6 +351,25 @@ func (m *threadBridgeManager) StartGoalInThread(ctx context.Context, agent, obje
 	return m.submitInbound(ctx, managed, inbound, "goal thread start")
 }
 
+func (m *threadBridgeManager) SkillDescriptions(name string) ([]protocol.SkillDescription, error) {
+	agents, skills, err := LoadRuntimeDefinitions(m.runtime, m.runtime.RuntimeDirName())
+	if err != nil {
+		return nil, err
+	}
+
+	agent, ok := agents.Items[name]
+	if !ok {
+		return nil, fmt.Errorf("agent %q is not configured", name)
+	}
+
+	var descriptions []protocol.SkillDescription
+	for _, skill := range skills.Available(&agent) {
+		descriptions = append(descriptions, protocol.SkillDescription{Name: skill.Name, Description: skill.Description})
+	}
+
+	return descriptions, nil
+}
+
 func (m *threadBridgeManager) WorkflowDescriptions() ([]protocol.WorkflowDescription, error) {
 	definitions, err := m.loadWorkflowDefinitions()
 	if err != nil {
@@ -541,7 +560,7 @@ func (m *threadBridgeManager) promoteQueueItem(ctx context.Context, conversation
 		content := item.Content
 		content.Text = item.Message
 		inbound = protocol.NewInboundMessageFromContent(item.Source, cmp.Or(item.Kind, protocol.InboundKindEnqueue), item.Principal, &content, true)
-		inbound.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: item.Principal}
+		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = item.Principal
 
 		inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: item.SlackChannel, MessageTS: item.SlackTS, ThreadTS: cmp.Or(threadTS, item.SlackTS)}
 		if item.SlackReply != nil {

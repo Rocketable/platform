@@ -21,6 +21,9 @@ func (inertThreadRouter) StartWorkflowInThread(context.Context, string, string, 
 func (inertThreadRouter) WorkflowDescriptions() ([]protocol.WorkflowDescription, error) {
 	return nil, errors.New("slack thread routing is not configured")
 }
+func (inertThreadRouter) SkillDescriptions(string) ([]protocol.SkillDescription, error) {
+	return nil, errors.New("slack thread routing is not configured")
+}
 func (inertThreadRouter) ReserveWorkflowTurn(protocol.TextConversationTarget) (release func(), reserved bool, err error) {
 	return func() {}, true, nil
 }

@@ -113,7 +113,7 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 	case "ListConfig":
 		return s.listConfig(ctx)
 	case "ListSkills":
-		return s.listSkills(ctx)
+		return s.listSkills(ctx, request.(*ListSkillsRequest))
 	case "ListAgents":
 		return s.listAgents(ctx)
 	case "CreateSession":

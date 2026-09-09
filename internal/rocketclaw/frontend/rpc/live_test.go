@@ -118,6 +118,7 @@ func TestPromptAndLiveTransport(t *testing.T) {
 	require.Equal(t, "alice", inbound.Label)
 	require.Equal(t, "alice", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
 	require.Equal(t, "exact input", inbound.Text)
+	require.Equal(t, "exact input", inbound.Metadata[protocol.InboundRawTextMetadataKey])
 	require.True(t, inbound.Human)
 	require.Equal(t, protocol.InboundKindSteer, inbound.Kind)
 
@@ -141,6 +142,16 @@ func TestPromptAndLiveTransport(t *testing.T) {
 	require.Equal(t, "alice", item.Principal)
 	require.Equal(t, "queued input", item.Message)
 	require.Equal(t, protocol.InboundKindEnqueue, item.Kind)
+
+	for _, inner := range []string{"$review \"first area\"  second\tthird  ", "$skill stop inspect  the logs\nnext"} {
+		_, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "$enqueue \t" + inner, Delivery: PromptDelivery_STEER})
+		require.NoError(t, err)
+
+		item := <-stashed
+		require.Equal(t, inner, item.Message)
+		require.Equal(t, inner, item.Content.Text)
+		require.Equal(t, "alice", item.Principal)
+	}
 
 	var failure errgroup.Group
 	failure.Go(func() error {

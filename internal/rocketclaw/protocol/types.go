@@ -15,6 +15,8 @@ import (
 const MaxInboundTextAttachmentBytes = 256 << 10
 
 const (
+	// InboundRawTextMetadataKey retains typed text before attachment text is merged.
+	InboundRawTextMetadataKey = "rocketclaw_raw_text"
 	// InboundOriginMetadataKey overrides the trusted prompt provenance origin.
 	InboundOriginMetadataKey = "rocketclaw_origin"
 	// InboundMediaMetadataKey overrides the trusted prompt provenance media.
@@ -238,6 +240,8 @@ func NewInboundMessageFromContent(source Source, kind InboundKind, label string,
 	}
 
 	inbound := NewInboundMessage(source, kind, label, text, human)
+
+	inbound.Metadata = map[string]string{InboundRawTextMetadataKey: content.Text}
 	if len(content.Attachments) > 0 {
 		inbound.Attachments = make([]InboundAttachment, 0, len(content.Attachments))
 		for i := range content.Attachments {

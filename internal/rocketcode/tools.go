@@ -9,7 +9,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -404,7 +406,7 @@ func (f *toolFactory) availableSkillSubjects() []string {
 	}
 
 	subjects := make([]string, 0, len(f.skills.Items))
-	for _, skill := range availableSkills(f.skills.Items, f.agent) {
+	for _, skill := range f.skills.Available(f.agent) {
 		subjects = append(subjects, skill.Name)
 	}
 
@@ -501,7 +503,7 @@ func (f *toolFactory) renderSkillToolOutput(ctx context.Context, raw json.RawMes
 	}
 
 	lines = append(lines,
-		strings.TrimSpace(skill.Content),
+		renderSkillArguments(strings.TrimSpace(skill.Content), input.Arguments, input.Direct),
 		"",
 		"Base directory for this skill: "+fileURL(filepath.Join(f.skills.Root, filepath.FromSlash(dir))),
 		"Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.",
@@ -519,15 +521,62 @@ func (f *toolFactory) renderSkillToolOutput(ctx context.Context, raw json.RawMes
 		output = f.promptExpansion.expandShellCommands(ctx, output)
 	}
 
-	output = renderSkillArguments(output, input.Arguments, input.Direct)
-
 	return input, output, nil
 }
 
-func renderSkillArguments(output, arguments string, appendUnused bool) string {
-	hasPlaceholder := strings.Contains(output, "$ARGUMENTS")
+var (
+	skillArgumentPattern    = regexp.MustCompile(`"[^"]*"|'[^']*'|\S+`)
+	skillPlaceholderPattern = regexp.MustCompile(`\$(ARGUMENTS|[1-9]\d*)`)
+)
 
-	output = strings.ReplaceAll(output, "$ARGUMENTS", arguments)
+// renderSkillArguments follows OpenCode's V2 command convention:
+// packages/core/src/config/plugin/command.ts (command templates) and
+// https://opencode.ai/docs/commands/#arguments. Replace only original template
+// tokens so argument data is never interpreted as another placeholder.
+func renderSkillArguments(output, arguments string, appendUnused bool) string {
+	positions := skillArgumentPattern.FindAllString(arguments, -1)
+	for i, argument := range positions {
+		if len(argument) >= 2 && (argument[0] == '"' || argument[0] == '\'') && argument[len(argument)-1] == argument[0] {
+			positions[i] = argument[1 : len(argument)-1]
+		}
+	}
+
+	indices := map[string]int{}
+	highest := 0
+
+	for _, token := range skillPlaceholderPattern.FindAllString(output, -1) {
+		if token == "$ARGUMENTS" {
+			continue
+		}
+
+		index, err := strconv.Atoi(token[1:])
+		if err != nil {
+			// An overflowing position is necessarily missing.
+			index = len(positions) + 1
+		}
+
+		indices[token] = index
+		highest = max(highest, index)
+	}
+
+	hasPlaceholder := highest > 0 || strings.Contains(output, "$ARGUMENTS")
+
+	output = skillPlaceholderPattern.ReplaceAllStringFunc(output, func(token string) string {
+		if token == "$ARGUMENTS" {
+			return arguments
+		}
+
+		index := indices[token]
+		if index > len(positions) {
+			return ""
+		}
+
+		if index == highest {
+			return strings.Join(positions[index-1:], " ")
+		}
+
+		return positions[index-1]
+	})
 	if appendUnused && !hasPlaceholder && arguments != "" {
 		output += "\n\n" + arguments
 	}
@@ -541,7 +590,7 @@ func (f *toolFactory) availableSkillNames() []string {
 	}
 
 	names := []string{}
-	for _, skill := range availableSkills(f.skills.Items, f.agent) {
+	for _, skill := range f.skills.Available(f.agent) {
 		names = append(names, skill.Name)
 	}
 
@@ -549,7 +598,7 @@ func (f *toolFactory) availableSkillNames() []string {
 }
 
 func (f *toolFactory) skillDescription() string {
-	list := availableSkills(f.skills.Items, f.agent)
+	list := f.skills.Available(f.agent)
 	if len(list) == 0 {
 		return strings.Join([]string{
 			"Load a specialized skill when the task at hand matches one of the skills listed in the system prompt.",

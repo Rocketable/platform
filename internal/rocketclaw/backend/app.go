@@ -264,7 +264,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 
 			inputs := make([]rocketcode.PromptInput, 0, len(texts))
 			for _, text := range texts {
-				inputs = append(inputs, rocketcode.PromptInput{Text: text})
+				inputs = append(inputs, rocketcode.PromptInput{Text: text, DirectSkill: parseDirectSkillTrigger(text)})
 			}
 
 			return inputs

@@ -679,7 +679,7 @@ func (l *looper) runTurn(
 
 	input, turnItems, err := l.promptTurnItems(ctx, input)
 	if err != nil {
-		return emptyRecord, nil, false, err
+		return emptyRecord, nil, false, directSkillInputError{message: err.Error()}
 	}
 
 	replayInput, err := ReplayInputFromParams(turnItems)
@@ -911,6 +911,19 @@ func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Resp
 func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, phase TurnPhase) (bool, error) {
 	inputs := l.SteerDrain.Drain(ctx, phase)
 	for _, input := range inputs {
+		if input.DirectSkill != nil {
+			item, err := l.directSkillInput(ctx, input.DirectSkill)
+			if err != nil {
+				return false, err
+			}
+
+			if err := appendReplayInput(record, &item); err != nil {
+				return false, err
+			}
+
+			*turnItems = append(*turnItems, item)
+		}
+
 		steer := promptInputMessage(input)
 		if err := appendReplayInput(record, &steer); err != nil {
 			return false, err
@@ -1047,7 +1060,7 @@ func openFunctionCallCheckpoints(items []responses.ResponseOutputItemUnion) []Fu
 }
 
 func (l *looper) promptTurnItems(ctx context.Context, input PromptInput) (PromptInput, []responses.ResponseInputItemUnionParam, error) {
-	if l.expandInputPrompts {
+	if l.expandInputPrompts && input.DirectSkill == nil {
 		input.Text = l.promptExpansion.expandShellCommands(ctx, input.Text)
 	}
 
@@ -1068,12 +1081,12 @@ func (l *looper) promptTurnItems(ctx context.Context, input PromptInput) (Prompt
 func (l *looper) directSkillInput(ctx context.Context, input *PromptInputDirectSkill) (responses.ResponseInputItemUnionParam, error) {
 	name := strings.TrimSpace(input.Name)
 	if name == "" {
-		return responses.ResponseInputItemUnionParam{}, directSkillInputError{message: "direct skill invocation requires a skill name"}
+		return responses.ResponseInputItemUnionParam{}, errors.New("direct skill invocation requires a skill name")
 	}
 
 	tool, ok := l.Tools["skill"]
 	if !ok {
-		return responses.ResponseInputItemUnionParam{}, directSkillInputError{message: fmt.Sprintf("skill %q is not available to the active agent", name)}
+		return responses.ResponseInputItemUnionParam{}, fmt.Errorf("skill %q is not available to the active agent", name)
 	}
 
 	raw, err := json.Marshal(skillToolParams{Name: name, Arguments: input.Arguments, Direct: true})
@@ -1083,20 +1096,20 @@ func (l *looper) directSkillInput(ctx context.Context, input *PromptInputDirectS
 
 	decision, err := l.permissionDecision("skill", &tool, raw)
 	if err != nil {
-		return responses.ResponseInputItemUnionParam{}, directSkillInputError{message: err.Error()}
+		return responses.ResponseInputItemUnionParam{}, err
 	}
 
 	if decision.denied {
-		return responses.ResponseInputItemUnionParam{}, directSkillInputError{message: decision.message}
+		return responses.ResponseInputItemUnionParam{}, errors.New(decision.message)
 	}
 
 	if decision.review != nil {
-		return responses.ResponseInputItemUnionParam{}, directSkillInputError{message: fmt.Sprintf("skill %q is not visible to the active agent", name)}
+		return responses.ResponseInputItemUnionParam{}, fmt.Errorf("skill %q is not visible to the active agent", name)
 	}
 
 	result, replayInput, err := tool.CallReplay(ctx, raw, nil, toolCallMetadata{})
 	if err != nil {
-		return responses.ResponseInputItemUnionParam{}, directSkillInputError{message: err.Error()}
+		return responses.ResponseInputItemUnionParam{}, err
 	}
 
 	if len(replayInput) > 0 {

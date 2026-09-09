@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -410,21 +411,35 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 	return &ListConfigResponse{Config: view}, nil
 }
 
-func (s *Server) listSkills(ctx context.Context) (*ListSkillsResponse, error) {
+func (s *Server) listSkills(ctx context.Context, request *ListSkillsRequest) (*ListSkillsResponse, error) {
 	if _, err := s.principal(ctx); err != nil {
 		return nil, err
 	}
 
-	_, definitions, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.RuntimeDirName())
+	agents, definitions, err := backend.LoadRuntimeDefinitions(s.cfg, s.cfg.RuntimeDirName())
 	if err != nil {
 		return nil, fmt.Errorf("load web skills: %w", err)
 	}
 
 	response := &ListSkillsResponse{}
 
-	for _, name := range slices.Sorted(maps.Keys(definitions.Items)) {
-		skill := definitions.Items[name]
-		response.Skills = append(response.Skills, &Skill{Name: name, Description: skill.Description, License: skill.License, Compatibility: skill.Compatibility, Content: skill.Content, Origin: skill.Location})
+	var items []rocketcode.Skill
+
+	if request.Agent != "" {
+		agent, ok := agents.Items[request.Agent]
+		if !ok {
+			return response, nil
+		}
+
+		items = definitions.Available(&agent)
+	} else {
+		items = slices.SortedFunc(maps.Values(definitions.Items), func(a, b rocketcode.Skill) int {
+			return strings.Compare(a.Name, b.Name)
+		})
+	}
+
+	for _, skill := range items {
+		response.Skills = append(response.Skills, &Skill{Name: skill.Name, Description: skill.Description, License: skill.License, Compatibility: skill.Compatibility, Content: skill.Content, Origin: skill.Location})
 	}
 
 	return response, nil
@@ -567,9 +582,15 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return &PromptResponse{PrivateText: "Agent: " + words[1]}, nil
 	}
 
+	text, delivery := request.Text, request.Delivery
+	if len(words) > 0 && words[0] == "$enqueue" {
+		text = strings.TrimLeftFunc(strings.TrimPrefix(strings.TrimLeftFunc(text, unicode.IsSpace), "$enqueue"), unicode.IsSpace)
+		delivery = PromptDelivery_QUEUE
+	}
+
 	kind := protocol.InboundKindSteer
 
-	switch request.Delivery {
+	switch delivery {
 	case PromptDelivery_STEER:
 	case PromptDelivery_QUEUE:
 		kind = protocol.InboundKindEnqueue
@@ -579,8 +600,8 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 
 	if kind == protocol.InboundKindEnqueue {
 		item := &protocol.ThreadQueueItem{
-			ID: rand.Text(), Message: request.Text, Principal: principal, Source: protocol.SourceWeb,
-			Kind: protocol.InboundKindEnqueue, Content: protocol.InboundContent{Text: request.Text}, StashAt: time.Now().UTC(),
+			ID: rand.Text(), Message: text, Principal: principal, Source: protocol.SourceWeb,
+			Kind: protocol.InboundKindEnqueue, Content: protocol.InboundContent{Text: text}, StashAt: time.Now().UTC(),
 		}
 		if err := s.backend.StashQueueItem(ctx, request.Id, item); err != nil {
 			return nil, fmt.Errorf("web prompt: %w", err)
@@ -589,10 +610,10 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return &PromptResponse{}, nil
 	}
 
-	inbound := protocol.NewInboundMessage(protocol.SourceWeb, kind, principal, request.Text, true)
+	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, kind, principal, &protocol.InboundContent{Text: request.Text}, true)
 	inbound.ConversationID = request.Id
 
-	inbound.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: principal}
+	inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
 	if err := s.backend.RunTurn(ctx, inbound); err != nil {
 		return nil, fmt.Errorf("web prompt: %w", err)
 	}

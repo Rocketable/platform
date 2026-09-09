@@ -1863,20 +1863,42 @@ func TestBuildPromptAdditionalInstructionsFrontmatter(t *testing.T) {
 	assert.Equal(t, "[System media=Text additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n task \n", buildPrompt(&protocol.InboundMessage{Source: protocol.SourceSystem, Label: startNewThreadToolName, Text: " task \n", Metadata: map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text"}}, nil))
 }
 
-func TestParseSlackDirectSkillTrigger(t *testing.T) {
-	for _, text := range []string{"💡 docs-helper write docs", ":light_bulb: docs-helper write docs", ":electric_light_bulb: docs-helper write docs"} {
-		directSkill, ok := parseSlackDirectSkillTrigger(text)
+func TestParseDirectSkillTrigger(t *testing.T) {
+	for _, text := range []string{"$docs-helper write docs", "$skill docs-helper write docs"} {
+		directSkill := parseDirectSkillTrigger(text)
 
-		require.True(t, ok)
-		assert.Equal(t, rocketcode.PromptInputDirectSkill{Name: "docs-helper", Arguments: "write docs"}, directSkill)
+		require.NotNil(t, directSkill)
+		assert.Equal(t, &rocketcode.PromptInputDirectSkill{Name: "docs-helper", Arguments: "write docs"}, directSkill)
 	}
 
-	directSkill, ok := parseSlackDirectSkillTrigger("💡   ")
-	require.True(t, ok)
+	directSkill := parseDirectSkillTrigger("$skill   ")
+	require.NotNil(t, directSkill)
 	assert.Empty(t, directSkill.Name)
 
-	_, ok = parseSlackDirectSkillTrigger("hello 💡 docs-helper")
-	assert.False(t, ok)
+	assert.Nil(t, parseDirectSkillTrigger("hello $docs-helper"))
+
+	for _, name := range []string{"", "agent", "cron", "workflow", "stop", "enqueue", "queue", "goal"} {
+		assert.Nil(t, parseDirectSkillTrigger("$"+name))
+		assert.Equal(t, &rocketcode.PromptInputDirectSkill{Name: name, Arguments: ""}, parseDirectSkillTrigger("$skill "+name))
+	}
+
+	assert.Equal(t, &rocketcode.PromptInputDirectSkill{Name: "Docs", Arguments: "\"API guide\"  Next\tLast "}, parseDirectSkillTrigger("  $Docs \"API guide\"  Next\tLast "))
+
+	for _, source := range []protocol.Source{protocol.SourceSlack, protocol.SourceWeb, protocol.SourceSystem, protocol.SourceExternalMCP} {
+		for _, kind := range []protocol.InboundKind{protocol.InboundKindPrompt, protocol.InboundKindSteer, protocol.InboundKindEnqueue, protocol.InboundKindCancel} {
+			for _, text := range []string{"$docs-helper typed", ""} {
+				msg := protocol.NewInboundMessageFromContent(source, kind, "", &protocol.InboundContent{Text: text, TextAttachments: []string{"$docs-helper attachment"}}, true)
+				if text != "" && (source == protocol.SourceSlack || source == protocol.SourceWeb) && kind != protocol.InboundKindCancel {
+					assert.Equal(t, &rocketcode.PromptInputDirectSkill{Name: "docs-helper", Arguments: "typed"}, inboundDirectSkill(msg))
+				} else {
+					assert.Nil(t, inboundDirectSkill(msg))
+				}
+
+				msg.Human = false
+				assert.Nil(t, inboundDirectSkill(msg))
+			}
+		}
+	}
 }
 
 func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
@@ -2582,6 +2604,27 @@ func TestSubmitEnqueuedItemPreservesSource(t *testing.T) {
 	assert.Equal(t, item.Kind, req.inbound.Kind)
 	assert.Equal(t, item.Message, req.inbound.Text)
 	assert.Equal(t, item.Principal, req.inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+
+	for _, source := range []protocol.Source{protocol.SourceSlack, protocol.SourceWeb} {
+		for _, text := range []string{"$docs-helper \"typed args\"  Next", "$skill stop \"typed args\"  Next", ""} {
+			item := &protocol.ThreadQueueItem{ID: "raw-queue", ConversationID: bridge.config.ConversationID, Source: source, Message: text, Principal: "author", Content: protocol.InboundContent{Text: text, TextAttachments: []string{"$docs-helper attachment-only"}, AttachmentWarnings: []string{"warning"}}}
+			require.NoError(t, bridge.config.SessionService.PutThreadQueueItem(item.ID, item))
+			items, err := bridge.config.SessionService.ThreadQueueForConversation(bridge.config.ConversationID)
+			require.NoError(t, err)
+			require.Len(t, items, 1)
+			require.Equal(t, item.Content, items[0].Content)
+			require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &items[0]))
+			inbound := (<-bridge.requestCh).inbound
+			require.Equal(t, text, inbound.Metadata[protocol.InboundRawTextMetadataKey])
+			require.Equal(t, "author", inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+			require.Contains(t, inbound.Text, "$docs-helper attachment-only")
+			require.Equal(t, []string{"warning"}, inbound.AttachmentWarnings)
+			require.Equal(t, parseDirectSkillTrigger(text), inboundDirectSkill(inbound))
+			_, claimed, err := (stateDAO{db: bridge.config.SessionService.db}).claimThreadQueueItem(t.Context(), bridge.config.ConversationID, item.ID)
+			require.NoError(t, err)
+			require.True(t, claimed)
+		}
+	}
 
 	waiting := protocol.NewInboundMessageFromContent(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "producer", &protocol.InboundContent{Text: "source text", Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("image")}}}, true)
 	waiting.Metadata = map[string]string{"external_conversation_id": "external-1", protocol.InboundPrincipalMetadataKey: "U3"}
@@ -3796,24 +3839,28 @@ func TestRecoveredExternalMCPActiveTurnUsesStoredSourceMetadata(t *testing.T) {
 	assert.Equal(t, "first|fresh", requestBody.Input[len(requestBody.Input)-1].Output)
 }
 
-func TestRunTurnTranslatesSlackLightbulbToDirectSkill(t *testing.T) {
+func TestRunTurnTranslatesDollarToDirectSkill(t *testing.T) {
 	workspace := t.TempDir()
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\npermission:\n  skill:\n    docs-helper: allow\n---\nPrompt\n")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills", "docs-helper"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(workspace, ".rocketclaw", "skills", "docs-helper", "SKILL.md"), []byte(`---
+	writeAgent(t, workspace, "denied", "---\ndescription: Denied\nmode: primary\nmodel: gpt-5.5\npermission:\n  skill:\n    docs-helper: deny\n---\nPrompt\n")
+	require.NoError(t, root.MkdirAll(".rocketclaw/skills/docs-helper", 0o755))
+	require.NoError(t, root.WriteFile(".rocketclaw/skills/docs-helper/SKILL.md", []byte(`---
 name: docs-helper
 description: Write docs
 ---
 
 Use this skill for docs.
 Request: $ARGUMENTS
-`), 0o644))
+`+"State: !`cat state; echo run >> calls`"), 0o644))
 
 	var (
 		requestBody struct {
 			Input []struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
 			} `json:"input"`
 		}
 		errRequest error
@@ -3844,25 +3891,108 @@ Request: $ARGUMENTS
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
-	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
-	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "", "💡 docs-helper write API docs", true)
-	msg.ConversationID = conversationID
-	msg.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}
+	for _, source := range []protocol.Source{protocol.SourceSlack, protocol.SourceWeb} {
+		for _, kind := range []protocol.InboundKind{protocol.InboundKindPrompt, protocol.InboundKindSteer, protocol.InboundKindEnqueue} {
+			for _, invocation := range []string{"$docs-helper write API docs", "$skill docs-helper write API docs"} {
+				conversationID := fmt.Sprintf("dollar-%s-%s-%s", source, kind, invocation)
+				bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
+				msg := protocol.NewInboundMessageFromContent(source, kind, "", &protocol.InboundContent{Text: invocation, TextAttachments: []string{"attachment-only argument"}}, true)
+				msg.ConversationID = conversationID
+				msg.Metadata[protocol.InboundPrincipalMetadataKey] = "Alice"
 
-	result, err := bridge.runTurn(context.Background(), msg, "turn-1")
+				require.NoError(t, root.WriteFile("state", []byte("old"), 0o600))
+				require.NoError(t, root.WriteFile("calls", nil, 0o600))
 
-	require.NoError(t, err)
-	require.NoError(t, errRequest)
-	assert.Equal(t, "ok", result.text)
-	require.Len(t, requestBody.Input, 2)
-	assert.Equal(t, "developer", requestBody.Input[0].Role)
-	assert.Contains(t, requestBody.Input[0].Content, "Use this skill for docs.")
-	assert.Contains(t, requestBody.Input[0].Content, "Request: write API docs")
-	assert.Equal(t, "user", requestBody.Input[1].Role)
-	assert.Contains(t, requestBody.Input[1].Content, "[Slack media=Text principal=\"Alice\"")
-	assert.NotContains(t, requestBody.Input[1].Content, "💡")
-	assert.NotContains(t, requestBody.Input[1].Content, "docs-helper write API docs")
+				promote := kind == protocol.InboundKindEnqueue && strings.HasPrefix(invocation, "$skill ")
+				if kind == protocol.InboundKindEnqueue {
+					item := protocol.ThreadQueueItem{ID: "queued", ConversationID: conversationID, Source: source, Message: invocation, Principal: "Alice", Content: protocol.InboundContent{Text: invocation, TextAttachments: []string{"attachment-only argument"}}}
+					require.NoError(t, service.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+					manager := &threadBridgeManager{store: service, bridges: map[string]directBridge{conversationID: bridge}}
+					require.NoError(t, service.PutThreadQueueItem("removed", &item))
+					removed, err := manager.deleteQueueItem(t.Context(), conversationID, "removed")
+					require.NoError(t, err)
+					require.True(t, removed)
+					require.NoError(t, service.PutThreadQueueItem(item.ID, &item))
+
+					if promote {
+						bridge.inputOpen = true
+						promoted, err := manager.promoteQueueItem(t.Context(), conversationID, item.ID, "")
+						require.NoError(t, err)
+						require.True(t, promoted)
+
+						msg = protocol.NewInboundMessage(source, protocol.InboundKindPrompt, "", "start", true)
+					} else {
+						items, err := service.ThreadQueueForConversation(conversationID)
+						require.NoError(t, err)
+						require.Len(t, items, 1)
+
+						bridge.requestCh = make(chan bridgeRequest, 1)
+						require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &items[0]))
+						msg = (<-bridge.requestCh).inbound
+					}
+
+					calls, err := root.ReadFile("calls")
+					require.NoError(t, err)
+					require.Empty(t, calls, "enqueue, removal and promotion must not run skill shell blocks")
+				}
+
+				require.NoError(t, root.WriteFile("state", []byte("fresh"), 0o600))
+
+				result, err := bridge.runTurn(context.Background(), msg, "turn-1")
+
+				require.NoError(t, err)
+				require.NoError(t, errRequest)
+				assert.Contains(t, result.text, "ok")
+
+				calls, err := root.ReadFile("calls")
+				require.NoError(t, err)
+				require.Equal(t, "run\n", string(calls))
+
+				if promote {
+					items, err := service.ThreadQueueForConversation(conversationID)
+					require.NoError(t, err)
+					require.Empty(t, items, "promoted skill must not remain as later work")
+					require.Len(t, requestBody.Input, 4)
+					requestBody.Input = requestBody.Input[2:]
+				}
+
+				require.Len(t, requestBody.Input, 2)
+
+				var skillContent, requestContent string
+				require.NoError(t, json.Unmarshal(requestBody.Input[0].Content, &skillContent))
+				require.NoError(t, json.Unmarshal(requestBody.Input[1].Content, &requestContent))
+				assert.Equal(t, "developer", requestBody.Input[0].Role)
+				assert.Contains(t, skillContent, "Use this skill for docs.")
+				assert.Contains(t, skillContent, "Request: write API docs")
+				assert.Contains(t, skillContent, "State: fresh")
+				assert.NotContains(t, skillContent, "attachment-only argument")
+				assert.Equal(t, "user", requestBody.Input[1].Role)
+				assert.Contains(t, requestContent, "principal=\"Alice\"")
+				assert.Contains(t, requestContent, "attachment-only argument")
+				assert.Contains(t, requestContent, invocation)
+
+				if kind == protocol.InboundKindEnqueue {
+					item := protocol.ThreadQueueItem{ID: "denied", ConversationID: conversationID, Source: source, Message: invocation}
+					require.NoError(t, service.PutThreadQueueItem(item.ID, &item))
+
+					bridge.requestCh = make(chan bridgeRequest, 1)
+					require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &item))
+					bridge.config.Agent = "denied"
+					requestBody.Input = nil
+
+					require.NoError(t, root.WriteFile("calls", nil, 0o600))
+					result, err := bridge.runTurn(t.Context(), (<-bridge.requestCh).inbound, "denied-turn")
+					require.NoError(t, err)
+					require.Contains(t, result.text, "not available to the active agent")
+					require.Empty(t, requestBody.Input, "agent changed after enqueue must be checked before the provider")
+
+					calls, err := root.ReadFile("calls")
+					require.NoError(t, err)
+					require.Empty(t, calls)
+				}
+			}
+		}
+	}
 }
 
 func TestRunTurnProjectsDifferentProviderHistoryBeforeRequest(t *testing.T) {
