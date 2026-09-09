@@ -767,14 +767,12 @@ func TestAttachSlack(t *testing.T) {
 
 	var (
 		asker protocol.UserQuestionAsker
-		drain func(context.Context, string) []string
 		root  func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error)
 	)
 
-	rt := &Runtime{threads: manager, slackAsker: &asker, drainSlack: &drain, startThreadRoot: &root}
+	rt := &Runtime{threads: manager, slackAsker: &asker, startThreadRoot: &root}
 	rt.AttachSlack(stubSlack{})
 	require.True(t, asker.ExposeTool())
-	require.Empty(t, drain(t.Context(), "c"))
 	got, err := root(t.Context(), &protocol.StartNewThreadRequest{})
 	require.NoError(t, err)
 	require.Equal(t, protocol.StartNewThreadRootResult{}, got)

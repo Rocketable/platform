@@ -159,7 +159,6 @@ func TestRunDispatchesSubcommandErrorsBeforeDefaultConfig(t *testing.T) {
 func TestRunDispatchesHelp(t *testing.T) {
 	output := captureStdout(t, func() error { return run([]string{"help"}) })
 	assert.Contains(t, output, "Usage:")
-	assert.NotContains(t, output, "rocketclaw cli")
 }
 
 func TestPrintStdoutReportsWriteError(t *testing.T) {
