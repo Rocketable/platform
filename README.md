@@ -100,6 +100,7 @@ RocketClaw is configured with `rocketclaw.json` in the working directory. Runtim
 Generated runtime state should not be treated as source code.
 
 Fresh RocketClaw stores apply embedded SQL migrations on first open. Startup does not import SQLite and does not migrate historical SQLite formats.
+Concurrent startups serialize schema upgrades on one database connection. Cancellation stops migration work; each migration commits its schema changes and ledger entry together, so earlier successful migrations survive a later failure.
 
 Store tests run against the last three supported PostgreSQL majors from https://www.postgresql.org/versions.json. Local `make test` in `internal/rocketclaw` uses Docker for the newest of those, or `ROCKETCLAW_TEST_DATABASE_URL` if set. GitHub Actions runs all three.
 

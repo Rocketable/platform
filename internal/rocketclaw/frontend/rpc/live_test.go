@@ -28,7 +28,7 @@ import (
 func TestPromptAndLiveTransport(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	sessions, err := backend.NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
+	sessions, err := backend.NewSessionServiceIn(t.Context(), dsn, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 

@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import { Layer } from "effect";
 import http from "node:http";
 import path from "node:path";
+import { createTRPCClient, httpBatchStreamLink } from "@trpc/client";
+import type { AppRouter } from "./router";
 import { RocketclawLive, protoSHA256 } from "./grpc";
 import { createRPCHandler } from "./transport";
 import { WhoisLive } from "./whois";
@@ -32,9 +34,13 @@ test.skipIf(!process.env.ROCKETCLAW_ENTRY_TEST_ID)("entry panel HTTP proxy reach
   try {
     const protocol = await call("protocol");
     expect(protocol.body.result.data).toBe(protoSHA256());
-    const sessions = await call("sessions");
-    expect(sessions.status).toBe(200);
-    expect(sessions.body.result.data.map((session: { id: string }) => session.id)).toEqual(["empty-web", id]);
+    const client = createTRPCClient<AppRouter>({ links: [httpBatchStreamLink({ url: `http://127.0.0.1:${address.port}/trpc` })] });
+    const sessions = [];
+    for await (const batch of await client.sessions.query()) sessions.push(batch);
+    expect(sessions.flatMap((batch) => batch.sessions.map((session) => session.id))).toEqual(["empty-web", id]);
+    expect(sessions.at(-1)).toEqual({ sessions: [], owner: "alice", upstreamSuccess: true, summariesComplete: true });
+    expect((await call("identity")).body.result.data).toBe("alice");
+    expect((await call("protocol", false, "::1")).body.result.data).toBe(protoSHA256());
     const history = await call("history", false, "127.0.0.1", process.env.ROCKETCLAW_HISTORY_TEST_ID!);
     expect(history.status).toBe(200);
     expect(history.body.result.data.map(({ role, text }: { role: string; text: string }) => ({ role, text }))).toEqual([

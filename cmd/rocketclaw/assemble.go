@@ -29,7 +29,7 @@ func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-
 	}
 	runner := &cronRunner{backend: rt, config: rt.Cfg}
 	cronjobs := cronfrontend.New(rt.Cfg.Workspace, rt.Cfg.RuntimeDirName(), channels, rt.Sessions, runner, rt.Log)
-	slack := slackconnector.New(&rt.Cfg.Slack, rt, rt.TextRouter, cronjobs, rt.Log)
+	slack := slackconnector.New(&rt.Cfg.Slack, rt, rt.TextRouter, cronjobs, rt.Sessions, rt.Log)
 	runner.slack = slack
 
 	if err := slack.Start(rt.RunCtx); err != nil {

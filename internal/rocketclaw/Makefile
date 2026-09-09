@@ -101,6 +101,7 @@ check-coverage:
 		rmdir "$$base_dir"; \
 		jj --quiet workspace add --revision @- "$$base_dir"; \
 		(cd "$$base_dir" && go mod tidy && go mod vendor); \
+		(cd "$$base_dir/web" && bun install --frozen-lockfile); \
 		(cd "$$base_dir/internal/rocketclaw" && go test -race -count 1 -covermode=atomic -coverpkg=$(COVERPKG) -coverprofile=$(COVERPROFILE) github.com/Rocketable/platform/cmd/rocketclaw/... ./...); \
 		base=$$(cd "$$base_dir/internal/rocketclaw" && go tool cover -func="$(COVERPROFILE)" | awk '/^total:/ { gsub("%", "", $$3); print $$3 }'); \
 		printf '%s\n' "$$base" > "$$cache_file"; \

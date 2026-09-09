@@ -24,6 +24,7 @@ import (
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -112,6 +113,23 @@ type Connector struct {
 	queueCards       map[string]string
 	questions        map[string]*slackPendingQuestion
 	pendingSteers    protocol.PendingSteersSink
+	observations     map[string]channelObservation
+
+	facts       channelFactsStore
+	factsWake   chan struct{}
+	refreshWake chan struct{}
+	factsGroup  errgroup.Group
+}
+
+type channelObservation struct {
+	name string
+	at   time.Time
+}
+
+type channelFactsStore interface {
+	ChannelFact(ctx context.Context, workspaceID, channelID string) (string, bool, error)
+	RecordChannelFact(ctx context.Context, workspaceID, channelID, name string, observedAt time.Time) error
+	SlackChannelIDs(ctx context.Context) ([]string, error)
 }
 
 type slackPendingQuestion struct {
@@ -178,7 +196,7 @@ type rawSlackEventsPayload struct {
 }
 
 // New constructs a Slack connector.
-func New(cfg *config.SlackConfig, publisher protocol.OutboundPublisher, threadRouter protocol.PrimaryTextRouter, oneOffCronjobs oneOffCronjobRunner, logger *slog.Logger) *Connector {
+func New(cfg *config.SlackConfig, publisher protocol.OutboundPublisher, threadRouter protocol.PrimaryTextRouter, oneOffCronjobs oneOffCronjobRunner, facts channelFactsStore, logger *slog.Logger) *Connector {
 	opts := []slack.Option{slack.OptionAppLevelToken(cfg.AppToken), slack.OptionRetry(3)}
 	if endpoint := strings.TrimSpace(os.Getenv("ROCKETCLAW_SLACK_API_URL")); endpoint != "" {
 		opts = append(opts, slack.OptionAPIURL(endpoint))
@@ -189,6 +207,7 @@ func New(cfg *config.SlackConfig, publisher protocol.OutboundPublisher, threadRo
 	c := &Connector{
 		log: logger.With("component", "slack"), config: *cfg, bus: publisher,
 		threadRouter: threadRouter, oneOffCronjobs: oneOffCronjobs,
+		facts: facts, factsWake: make(chan struct{}, 1), refreshWake: make(chan struct{}, 1), observations: make(map[string]channelObservation),
 		api: api, socketEvents: make(chan socketmode.Event, 50), questions: map[string]*slackPendingQuestion{},
 		newSocketClient: func(api *slack.Client) *socketmode.Client {
 			return socketmode.New(api)
@@ -216,6 +235,25 @@ func (c *Connector) ChannelAgentChoices(ctx context.Context, channelID string) (
 	return slices.Clone(c.socialModeAgents(name)), nil
 }
 
+// SidebarChannelAgentChoices returns the stored name and display choices without contacting Slack.
+// Unknown channels return their stable ID and no choices.
+func (c *Connector) SidebarChannelAgentChoices(ctx context.Context, channelID string) (name string, choices []string, err error) {
+	name, ok, err := c.facts.ChannelFact(ctx, c.teamID, channelID)
+	if err != nil {
+		return "", nil, fmt.Errorf("resolve agent choices for Slack channel %q: %w", channelID, err)
+	}
+
+	if !ok {
+		return channelID, nil, nil
+	}
+
+	if agents := c.socialModeAgents("#" + name); len(agents) > 0 {
+		return name, slices.Clone(agents), nil
+	}
+
+	return name, slices.Clone(c.socialModeAgents("@")), nil
+}
+
 // Start authenticates with Slack and begins consuming protocol.
 func (c *Connector) Start(ctx context.Context) error {
 	inboundCtx, inboundStop := context.WithCancel(ctx)
@@ -236,6 +274,8 @@ func (c *Connector) Start(ctx context.Context) error {
 
 	go c.eventLoop(inboundCtx)
 	go c.runSocketLoop(inboundCtx)
+
+	c.factsGroup.Go(func() error { return c.refreshChannelFacts(inboundCtx) })
 
 	return nil
 }
@@ -343,6 +383,10 @@ func (c *Connector) Stop(context.Context) error {
 	}
 
 	c.mu.Unlock()
+
+	if err := c.factsGroup.Wait(); err != nil {
+		return fmt.Errorf("stop Slack channel facts: %w", err)
+	}
 
 	return nil
 }
@@ -817,6 +861,106 @@ func (c *Connector) SendExternalMCPRelay(ctx context.Context, channelID, threadT
 	return replyTarget, nil
 }
 
+func (c *Connector) recordChannelFact(ctx context.Context, channelID, name string, observedAt time.Time) {
+	name = strings.TrimSpace(name)
+	if channelID == "" || name == "" || name == "@" {
+		return
+	}
+
+	if err := c.facts.RecordChannelFact(ctx, c.teamID, channelID, name, observedAt); err != nil {
+		c.log.Warn("store Slack channel fact", "channel", channelID, "error", err)
+	}
+}
+
+func (c *Connector) requestChannelFacts() {
+	select {
+	case c.refreshWake <- struct{}{}:
+	default:
+	}
+}
+
+func (c *Connector) queueChannelFact(channelID, name string, observedAt time.Time) {
+	c.mu.Lock()
+	if previous, exists := c.observations[channelID]; !exists || previous.at.Before(observedAt) {
+		c.observations[channelID] = channelObservation{name: name, at: observedAt}
+	}
+	c.mu.Unlock()
+
+	select {
+	case c.factsWake <- struct{}{}:
+	default:
+	}
+}
+
+func (c *Connector) flushChannelFacts(ctx context.Context) {
+	c.mu.Lock()
+	observations := c.observations
+	c.observations = make(map[string]channelObservation)
+	c.mu.Unlock()
+
+	for id, observation := range observations {
+		c.recordChannelFact(ctx, id, observation.name, observation.at)
+	}
+}
+
+// refreshChannelFacts is the single lifecycle-owned lane for channel refreshes.
+func (c *Connector) refreshChannelFacts(ctx context.Context) error {
+	ticker := time.NewTicker(3 * time.Minute)
+	defer ticker.Stop()
+
+	for ctx.Err() == nil {
+		c.flushChannelFacts(ctx)
+
+		ids, err := c.facts.SlackChannelIDs(ctx)
+		if err != nil {
+			c.log.Warn("list Slack channel facts for refresh", "error", err)
+		}
+
+		for _, id := range ids {
+			for ctx.Err() == nil {
+				observedAt := time.Now()
+				channel, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: id})
+				c.flushChannelFacts(ctx)
+
+				if err == nil {
+					c.recordChannelFact(ctx, id, channel.Name, observedAt)
+					break
+				}
+
+				c.log.Warn("refresh Slack channel fact", "channel", id, "error", err)
+
+				if errRate, ok := errors.AsType[*slack.RateLimitedError](err); ok {
+					select {
+					case <-ctx.Done():
+						return nil
+					case <-time.After(errRate.RetryAfter):
+					}
+
+					continue
+				}
+
+				break
+			}
+		}
+
+	wait:
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-ticker.C:
+				break wait
+			case <-c.refreshWake:
+				break wait
+			case <-c.factsWake:
+				c.flushChannelFacts(ctx)
+			}
+		}
+	}
+
+	return nil
+}
+
 func (c *Connector) completeQuestion(ctx context.Context, id string, answer protocol.AskUserQuestionAnswer) bool {
 	p := c.takeQuestion(id)
 	if p == nil {
@@ -1218,10 +1362,17 @@ func (c *Connector) resolveConfiguredChannelID(ctx context.Context, channel stri
 	name := strings.TrimPrefix(channel, "#")
 
 	cursor := ""
+
 	for {
+		observedAt := time.Now()
+
 		channels, nextCursor, err := c.api.GetConversationsContext(ctx, &slack.GetConversationsParameters{Cursor: cursor, ExcludeArchived: true, Limit: 200, Types: []string{"public_channel", "private_channel"}})
 		if err != nil {
 			return "", fmt.Errorf("resolve configured Slack channel %q: %w", channel, err)
+		}
+
+		for i := range channels {
+			c.queueChannelFact(channels[i].ID, channels[i].Name, observedAt)
 		}
 
 		for i := range channels {
@@ -2376,6 +2527,10 @@ func (c *Connector) eventLoop(ctx context.Context) {
 				c.log.Debug("received Slack socket event", "event_type", event.Type)
 			}
 
+			if event.Type == socketmode.EventTypeConnected {
+				c.requestChannelFacts()
+			}
+
 			switch event.Type { //nolint:exhaustive // Only Slack app events and interactions are routed here.
 			case socketmode.EventTypeEventsAPI:
 				c.handleEventsAPI(ctx, event)
@@ -2558,6 +2713,16 @@ func (c *Connector) handleEventsAPI(ctx context.Context, event socketmode.Event)
 	}
 
 	forward, _ := nativeSlackForward(payload)
+
+	if ev, ok := eventsAPIEvent.InnerEvent.Data.(*slackevents.ChannelRenameEvent); ok {
+		c.queueChannelFact(ev.Channel.ID, ev.Channel.Name, time.Now())
+		return
+	}
+
+	if ev, ok := eventsAPIEvent.InnerEvent.Data.(*slackevents.GroupRenameEvent); ok {
+		c.queueChannelFact(ev.Channel.ID, ev.Channel.Name, time.Now())
+		return
+	}
 
 	if ev, ok := eventsAPIEvent.InnerEvent.Data.(*slackevents.MessageEvent); ok {
 		c.handleMessageEvent(ctx, ev, forward)
@@ -3344,10 +3509,14 @@ func (c *Connector) socialModeChannel(ctx context.Context, channelID string) (ch
 		return "", "", false
 	}
 
+	observedAt := time.Now()
+
 	channel, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: channelID})
 	if err != nil || channel == nil {
 		return "", "", false
 	}
+
+	c.queueChannelFact(channelID, channel.Name, observedAt)
 
 	name := "#" + strings.TrimSpace(channel.Name)
 	if name != "#" {
@@ -4250,11 +4419,15 @@ func parseCanonicalSlackCommand(text string) (command, args string, ok bool) {
 func (c *Connector) handleOnDemandCronRequest(ctx context.Context, target string, replyTarget *protocol.SlackReplyTarget) {
 	target = strings.TrimSpace(target)
 	if target == "" {
+		observedAt := time.Now()
+
 		channel, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: replyTarget.ChannelID})
 		if err != nil {
 			c.postSlackEphemeral(ctx, replyTarget.ChannelID, replyTarget.ThreadTS, replyTarget.RecipientUserID, "I couldn't list cronjobs for this channel.")
 			return
 		}
+
+		c.queueChannelFact(replyTarget.ChannelID, channel.Name, observedAt)
 
 		jobs, err := c.oneOffCronjobs.ListCronjobs("#" + strings.TrimSpace(channel.Name))
 		if err != nil {
@@ -4623,7 +4796,13 @@ func (c *Connector) addSlackForward(ctx context.Context, content *protocol.Inbou
 	seenMessages := make(map[string]bool)
 
 	if forward.channelID != "" {
+		observedAt := time.Now()
+
 		channel, errInfo := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{ChannelID: forward.channelID})
+		if errInfo == nil && channel != nil {
+			c.queueChannelFact(forward.channelID, channel.Name, observedAt)
+		}
+
 		if errInfo != nil || channel == nil || !channel.IsChannel || channel.IsPrivate || channel.IsIM || channel.IsMpIM {
 			content.TextAttachments = append(content.TextAttachments, renderSlackForward(forward, nil, nil))
 

@@ -5,7 +5,7 @@ import path from "node:path";
 import { GrpcError, Rocketclaw, RocketclawLive, protoSHA256 } from "./grpc";
 import { createRPCHandler } from "./transport";
 import { handleStream } from "./stream";
-import { Whois, WhoisLive } from "./whois";
+import { WhoisLive } from "./whois";
 
 const MainLive = Layer.merge(RocketclawLive, WhoisLive);
 
@@ -38,10 +38,8 @@ const program = Effect.gen(function* () {
       }),
   );
   const handshake = Effect.gen(function* () {
-    const whois = yield* Whois;
     const rc = yield* Rocketclaw;
-    const principal = yield* whois.lookup("127.0.0.1");
-    const remote = yield* rc.protocol(principal);
+    const remote = yield* rc.protocol();
     const local = protoSHA256();
     if (remote !== local) {
       return yield* Effect.fail(new GrpcError({ message: `proto hash mismatch local=${local} remote=${remote}` }));
