@@ -280,6 +280,12 @@ export default Plugin.define({
             const existing = await load(sessionID)
             if (existing && unfinished(existing.status)) await clear(sessionID)
             await create(sessionID, command.objective, maxTokenBudget)
+            await ctx.session.prompt({
+              sessionID,
+              text: `/goal ${input.prompt.text}`,
+              delivery: input.delivery,
+              resume: false,
+            })
             if (existing?.objective && existing.objective !== command.objective && running.has(sessionID)) {
               const goal = await load(sessionID)
               if (goal) await ctx.session.synthetic({ sessionID, text: objectiveUpdated(goal) })
