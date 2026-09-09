@@ -38,7 +38,6 @@ type Runtime struct {
 	threads         *threadBridgeManager
 	startThreadRoot *func(context.Context, *protocol.StartNewThreadRequest) (protocol.StartNewThreadRootResult, error)
 	slackAsker      *protocol.UserQuestionAsker
-	drainSlack      *func(context.Context, string) []string
 
 	eventsMu    sync.Mutex
 	subscribers map[chan protocol.Event]<-chan struct{}
@@ -119,8 +118,5 @@ func (r *Runtime) PublishOutbound(ctx context.Context, message *protocol.Outboun
 // AttachSlack hooks originator Slack methods into backend thread state.
 func (r *Runtime) AttachSlack(slack SlackFrontend) {
 	*r.slackAsker = protocol.InteractiveUserQuestionAsker(slack.AskUserQuestion)
-	*r.drainSlack = func(ctx context.Context, conversationID string) []string {
-		return slack.DrainSteers(ctx, conversationID)
-	}
 	*r.startThreadRoot = slack.StartNewThreadRoot
 }
