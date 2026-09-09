@@ -17,6 +17,8 @@ Loaded automatically from `.opencode/plugins/goal`.
 
 The command palette action **Edit session goal** updates the objective in place.
 
+Goal submissions appear as normal user-side transcript messages before automatic continuation. Viewing status does not start an agent turn.
+
 ## Tools
 
 The model gets `get_goal`, `create_goal`, and `update_goal`. `update_goal` can only mark a goal `complete` or `blocked`. Pause, resume, budget, and usage-limit changes stay user/system-controlled.
