@@ -96,13 +96,7 @@ func ValidateRuntimeDefinitions(workspace, runtimeDir string, channels []string)
 		return err
 	}
 
-	for _, definition := range definitions {
-		if !slices.Contains(channels, definition.textChannel) {
-			return fmt.Errorf("cronjob %s channel %q is not configured", definition.relativePath, definition.textChannel)
-		}
-	}
-
-	return nil
+	return validateDefinitionChannels(definitions, channels)
 }
 
 // Start loads cron definitions and starts scheduling them.
