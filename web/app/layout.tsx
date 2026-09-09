@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { SpaClient } from "./spa-client";
 import "./globals.css";
 
 export const metadata = { title: "RocketClaw" };
@@ -13,7 +14,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           }}
         />
       </head>
-      <body>{children}</body>
+      <body><SpaClient />{children}</body>
     </html>
   );
 }

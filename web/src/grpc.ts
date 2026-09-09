@@ -14,17 +14,18 @@ export type RocketclawApi = {
   readonly listSessionEntries: (principal: string, id: string) => Effect.Effect<SessionEntryMeta[], GrpcError>;
   readonly loadSessionEntries: (principal: string, id: string) => Effect.Effect<SessionEntryData[], GrpcError>;
   readonly deleteSessionEntries: (principal: string, id: string) => Effect.Effect<string, GrpcError>;
-  readonly listSessions: (principal: string) => Effect.Effect<Session[], GrpcError>;
+  readonly listSessions: (principal: string, signal?: AbortSignal) => AsyncIterable<SessionBatch>;
+  readonly identity: (principal: string) => Effect.Effect<string, GrpcError>;
   readonly createSession: (principal: string, name: string, agent: string) => Effect.Effect<string, GrpcError>;
   readonly prompt: (principal: string, id: string, text: string, delivery?: PromptDelivery) => Effect.Effect<string, GrpcError>;
   readonly listCronJobs: (principal: string) => Effect.Effect<CronJob[], GrpcError>;
   readonly runCronJob: (principal: string, stem: string) => Effect.Effect<string, GrpcError>;
   readonly history: (principal: string, id: string) => Effect.Effect<TranscriptEvent[], GrpcError>;
-  readonly listAgents: (principal: string) => Effect.Effect<Agent[], GrpcError>;
+  readonly listAgents: (principal: string, conversationId?: string) => Effect.Effect<AgentChoices, GrpcError>;
   readonly listSkills: (principal: string, agent?: string) => Effect.Effect<Skill[], GrpcError>;
   readonly listConfig: (principal: string) => Effect.Effect<ConfigView, GrpcError>;
   readonly settleSession: (principal: string, id: string, settled: boolean) => Effect.Effect<void, GrpcError>;
-  readonly protocol: (principal: string) => Effect.Effect<string, GrpcError>;
+  readonly protocol: () => Effect.Effect<string, GrpcError>;
   readonly listQueue: (principal: string, id: string) => Effect.Effect<QueueItem[], GrpcError>;
   readonly removeQueueItem: (principal: string, id: string, itemId: string) => Effect.Effect<void, GrpcError>;
   readonly steerQueueItem: (principal: string, id: string, itemId: string) => Effect.Effect<void, GrpcError>;
@@ -42,6 +43,8 @@ type SessionEntryMeta = { id: string; type?: string; timestamp?: string };
 type SessionEntryData = { id: string; json?: string };
 export type QueueItem = { id: string; text: string };
 export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; settled?: boolean; allowedAgents?: string[] };
+export type SessionBatch = { sessions: Session[]; owner: string; upstreamSuccess: boolean; summariesComplete: boolean };
+export type AgentChoices = { agents: Agent[]; currentAgent: string };
 export type CronJob = {
   stem: string;
   status: string;
@@ -120,10 +123,25 @@ export const makeRocketclaw = (addr: string): RocketclawApi => {
       unary<{ deleted?: string }>((cb) => client.DeleteSessionEntries({ id }, metadata(principal), cb)).pipe(
         Effect.map((res) => res.deleted ?? "0"),
       ),
-    listSessions: (principal) =>
-      unary<{ sessions?: Session[] }>((cb) => client.ListSessions({}, metadata(principal), cb)).pipe(
-        Effect.map((res) => res.sessions ?? []),
-      ),
+    listSessions: async function* (principal, signal) {
+      const stream = client.ListSessions({}, metadata(principal)) as grpc.ClientReadableStream<Partial<SessionBatch>>;
+      const cancel = () => { stream.cancel(); };
+      signal?.addEventListener("abort", cancel, { once: true });
+      if (signal?.aborted) cancel();
+      try {
+        for await (const response of stream) {
+          yield { sessions: response.sessions ?? [], owner: response.owner ?? "", upstreamSuccess: !!response.upstreamSuccess, summariesComplete: !!response.summariesComplete };
+        }
+      } catch (err) {
+        const failure = err as grpc.ServiceError;
+        throw new GrpcError({ message: failure.message, code: failure.code });
+      } finally {
+        signal?.removeEventListener("abort", cancel);
+        stream.cancel();
+      }
+    },
+    identity: (principal) =>
+      unary<{ username: string }>((cb) => client.Identity({}, metadata(principal), cb)).pipe(Effect.map((res) => res.username)),
     createSession: (principal, name, agent) =>
       unary<{ id: string }>((cb) => client.CreateSession({ name, agent }, metadata(principal), cb)).pipe(Effect.map((res) => res.id)),
     prompt: (principal, id, text, delivery) =>
@@ -138,9 +156,9 @@ export const makeRocketclaw = (addr: string): RocketclawApi => {
       unary<{ messages?: TranscriptEvent[] }>((cb) => client.History({ id }, metadata(principal), cb)).pipe(
         Effect.map((res) => res.messages ?? []),
       ),
-    listAgents: (principal) =>
-      unary<{ agents?: Agent[] }>((cb) => client.ListAgents({}, metadata(principal), cb)).pipe(
-        Effect.map((res) => res.agents ?? []),
+    listAgents: (principal, conversationId) =>
+      unary<Partial<AgentChoices>>((cb) => client.ListAgents({ conversationId }, metadata(principal), cb)).pipe(
+        Effect.map((res) => ({ agents: res.agents ?? [], currentAgent: res.currentAgent ?? "" })),
       ),
     listSkills: (principal, agent) =>
       unary<{ skills?: Skill[] }>((cb) => client.ListSkills({ agent }, metadata(principal), cb)).pipe(
@@ -152,8 +170,8 @@ export const makeRocketclaw = (addr: string): RocketclawApi => {
       ),
     settleSession: (principal, id, settled) =>
       unary<unknown>((cb) => client.SettleSession({ id, settled }, metadata(principal), cb)).pipe(Effect.asVoid),
-    protocol: (principal) =>
-      unary<{ protoSha256?: string }>((cb) => client.Protocol({}, metadata(principal), cb)).pipe(
+    protocol: () =>
+      unary<{ protoSha256?: string }>((cb) => client.Protocol({}, cb)).pipe(
         Effect.map((res) => res.protoSha256 ?? ""),
       ),
     listQueue: (principal, id) =>

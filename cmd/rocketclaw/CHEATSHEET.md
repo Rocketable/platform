@@ -53,6 +53,10 @@ Slack shows that shortcut on every message. Choosing it opens a modal whose butt
 
 Unauthorized clicks are silent. If the message is not in a RocketClaw conversation, the modal says so. If the thread is managed but this message has no live control, the modal says there are no actions on this message.
 
+## Slack Channel Rename Subscriptions
+
+In the Slack app's **Event Subscriptions**, subscribe to the bot events [`channel_rename`](https://docs.slack.dev/reference/events/channel_rename) and [`group_rename`](https://docs.slack.dev/reference/events/group_rename). They require the bot scopes `channels:read` and `groups:read`, respectively. Reinstall the app after adding scopes. Private-channel rename events are available only for channels the bot belongs to.
+
 ## Slack Channel Scenarios
 
 | Scenario | How To Trigger | Notes |

@@ -22,7 +22,7 @@ func TestWebRPC(t *testing.T) {
 	require.NoError(t, err)
 
 	logger := slog.New(slog.DiscardHandler)
-	sessions, err := backend.NewSessionServiceIn(dsn, logger)
+	sessions, err := backend.NewSessionServiceIn(t.Context(), dsn, logger)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 

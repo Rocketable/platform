@@ -140,8 +140,8 @@ func newSessionStore(conversationID string, service *SessionService) sessionStor
 }
 
 // NewSessionServiceIn starts a runtime-owned PostgreSQL session service.
-func NewSessionServiceIn(databaseURL string, logger *slog.Logger) (*SessionService, error) {
-	db, err := openSessionDB(context.Background(), databaseURL, logger)
+func NewSessionServiceIn(ctx context.Context, databaseURL string, logger *slog.Logger) (*SessionService, error) {
+	db, err := openSessionDB(ctx, databaseURL, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +159,37 @@ func (s *SessionService) UpsertThread(conversationID string, thread ThreadState)
 	thread.Agent = strings.TrimSpace(thread.Agent)
 	thread.CreatedBy = ThreadCreator(strings.TrimSpace(string(thread.CreatedBy)))
 
-	return stateDAO{db: s.db}.upsertThread(context.Background(), conversationID, thread)
+	ctx := context.Background()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin thread upsert: %w", err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
+		return err
+	}
+
+	summary, err := loadSessionSummary(ctx, tx, conversationID)
+	if err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by, settled) VALUES ($1, $2, $3, $4) ON CONFLICT(conversation_id) DO UPDATE SET agent = excluded.agent, created_by = CASE WHEN excluded.created_by = '' THEN managed_conversations.created_by ELSE excluded.created_by END`, conversationID, thread.Agent, string(thread.CreatedBy), thread.Settled); err != nil {
+		return fmt.Errorf("upsert managed conversation: %w", err)
+	}
+
+	if err := saveSessionSummary(ctx, tx, summary); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit thread upsert: %w", err)
+	}
+
+	return nil
 }
 
 // BeginGoal records a new active goal for a managed conversation.
@@ -297,12 +327,25 @@ func (s *SessionService) RegisterExternalMCPConversation(externalConversationID,
 		}
 	}()
 
+	if err := lockSessionHistory(ctx, tx, session.ManagedConversationID); err != nil {
+		return err
+	}
+
+	summary, err := loadSessionSummary(ctx, tx, session.ManagedConversationID)
+	if err != nil {
+		return err
+	}
+
 	if _, err := tx.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, $2, '')`, session.ManagedConversationID, managedAgent); err != nil {
 		return fmt.Errorf("register external MCP managed conversation: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx, `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES ($1, $2, $3, $4, $5)`, externalConversationID, session.PrivateConversationID, session.ManagedConversationID, session.Agent, session.SlackChannel); err != nil {
 		return fmt.Errorf("register external MCP binding: %w", err)
+	}
+
+	if err := saveSessionSummary(ctx, tx, summary); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -343,8 +386,13 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 			continue
 		}
 
+		if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
+			return err
+		}
+
 		for _, statement := range []string{
 			`DELETE FROM session_entries WHERE conversation_id = $1`,
+			`DELETE FROM session_summaries WHERE conversation_id = $1`,
 			`DELETE FROM active_turns WHERE conversation_id = $1`,
 			`DELETE FROM scheduled_messages WHERE conversation_id = $1`,
 			`DELETE FROM thread_queue WHERE conversation_id = $1`,
@@ -958,7 +1006,22 @@ func (s *SessionService) AppendEntryID(ctx context.Context, conversationID strin
 		return 0, errors.New("conversation ID is required")
 	}
 
-	return appendSessionEntryDB(ctx, s.db, conversationID, entry)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin session append: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	id, err := appendSessionEntryDB(ctx, tx, conversationID, entry)
+	if err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit session append: %w", err)
+	}
+
+	return id, nil
 }
 
 // DeleteSession removes all entries for one conversation ID and returns deleted rows.
@@ -968,7 +1031,17 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return 0, errors.New("conversation ID is required")
 	}
 
-	result, err := s.db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = $1`, conversationID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin session deletion: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
+		return 0, err
+	}
+
+	result, err := tx.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = $1`, conversationID)
 	if err != nil {
 		return 0, fmt.Errorf("delete rocketcode session: %w", err)
 	}
@@ -978,12 +1051,141 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return 0, fmt.Errorf("count deleted rocketcode session rows: %w", err)
 	}
 
+	if err := saveSessionSummary(ctx, tx, protocol.SessionSummary{ConversationID: conversationID}); err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit session deletion: %w", err)
+	}
+
 	return rows, nil
 }
 
-// ListSessions returns summaries for stored rocketcode sessions.
-func (s *SessionService) ListSessions(ctx context.Context) ([]protocol.SessionSummary, error) {
-	return listSessionsDB(ctx, s.db)
+// ListSessions returns summaries for the requested stored rocketcode sessions.
+func (s *SessionService) ListSessions(ctx context.Context, conversationIDs []string) ([]protocol.SessionSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT conversation_id, preview, last_updated FROM session_summaries WHERE conversation_id = ANY($1) ORDER BY conversation_id COLLATE "C"`, conversationIDs)
+	if err != nil {
+		return nil, fmt.Errorf("query rocketcode session summaries: %w", err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	var summaries []protocol.SessionSummary
+
+	for rows.Next() {
+		var (
+			summary protocol.SessionSummary
+			preview []byte
+		)
+		if err := rows.Scan(&summary.ConversationID, &preview, &summary.LastUpdated); err != nil {
+			return nil, fmt.Errorf("scan rocketcode session summary: %w", err)
+		}
+
+		summary.LastUserMessage = string(preview)
+		summary.LastUpdated = summary.LastUpdated.UTC()
+		summaries = append(summaries, summary)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read rocketcode session summaries: %w", err)
+	}
+
+	return summaries, nil
+}
+
+// SidebarSession combines a recorded conversation with its optional durable summary.
+type SidebarSession struct {
+	Conversation protocol.Conversation
+	Summary      *protocol.SessionSummary
+}
+
+// SidebarSessions yields eligible records in recent-first, bytewise-ID order.
+// Breaking iteration or cancelling ctx closes the database rows.
+func (s *SessionService) SidebarSessions(ctx context.Context) iter.Seq2[SidebarSession, error] {
+	return func(yield func(SidebarSession, error) bool) {
+		rows, err := s.db.QueryContext(ctx, `SELECT c.conversation_id, c.agent, c.created_by, c.settled, s.preview, s.last_updated
+FROM managed_conversations c LEFT JOIN session_summaries s ON s.conversation_id = c.conversation_id
+WHERE c.conversation_id NOT LIKE 'cron:%' AND c.conversation_id NOT LIKE 'one-off-cron:%'
+    AND NOT EXISTS (SELECT 1 FROM external_mcp_sessions p WHERE p.private_conversation_id = c.conversation_id)
+ORDER BY COALESCE(s.last_updated, '0001-01-01 00:00:00+00'::timestamptz) DESC, c.conversation_id COLLATE "C"`)
+		if err != nil {
+			yield(SidebarSession{}, fmt.Errorf("query sidebar sessions: %w", err))
+			return
+		}
+		defer func() { _ = rows.Close() }()
+
+		for rows.Next() {
+			var (
+				row     SidebarSession
+				preview []byte
+				updated sql.NullTime
+			)
+			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &row.Conversation.Settled, &preview, &updated); err != nil {
+				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
+				return
+			}
+
+			if updated.Valid {
+				row.Summary = &protocol.SessionSummary{ConversationID: row.Conversation.ID, LastUserMessage: string(preview), LastUpdated: updated.Time.UTC()}
+			}
+
+			if !yield(row, nil) {
+				return
+			}
+		}
+
+		if err := errors.Join(rows.Err(), ctx.Err()); err != nil {
+			yield(SidebarSession{}, fmt.Errorf("read sidebar sessions: %w", err))
+		}
+	}
+}
+
+// ChannelFact returns a stored Slack name, never derived channel policy.
+func (s *SessionService) ChannelFact(ctx context.Context, workspaceID, channelID string) (name string, found bool, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT name FROM slack_channel_facts WHERE workspace_id = $1 AND channel_id = $2`, workspaceID, channelID).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+
+	if err != nil {
+		return "", false, fmt.Errorf("read Slack channel fact: %w", err)
+	}
+
+	return name, true, nil
+}
+
+// RecordChannelFact keeps the newest observation. Nanoseconds preserve ordering
+// even when a lookup and rename occur within one PostgreSQL timestamp microsecond.
+func (s *SessionService) RecordChannelFact(ctx context.Context, workspaceID, channelID, name string, observedAt time.Time) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO slack_channel_facts (workspace_id, channel_id, name, observed_at) VALUES ($1, $2, $3, $4)
+ON CONFLICT (workspace_id, channel_id) DO UPDATE SET name = EXCLUDED.name, observed_at = EXCLUDED.observed_at
+WHERE slack_channel_facts.observed_at < EXCLUDED.observed_at`, workspaceID, channelID, name, observedAt.UnixNano())
+	if err != nil {
+		return fmt.Errorf("record Slack channel fact: %w", err)
+	}
+
+	return nil
+}
+
+// SlackChannelIDs lists the distinct channels of recorded managed Slack threads.
+func (s *SessionService) SlackChannelIDs(ctx context.Context) ([]string, error) {
+	ids, err := managedConversationIDs(ctx, s.db)
+	if err != nil {
+		return nil, err
+	}
+
+	var channels []string
+
+	for _, id := range ids {
+		if channel, _, ok := protocol.SlackThreadTarget(id); ok {
+			channels = append(channels, channel)
+		}
+	}
+
+	slices.Sort(channels)
+
+	return slices.Compact(channels), nil
 }
 
 // Stop closes the runtime service and its database handle.
@@ -1319,9 +1521,26 @@ func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID s
 		return 0, fmt.Errorf("marshal rocketcode session entry: %w", err)
 	}
 
+	if err := lockSessionHistory(ctx, db, conversationID); err != nil {
+		return 0, err
+	}
+
+	summary, err := loadSessionSummary(ctx, db, conversationID)
+	if err != nil {
+		return 0, err
+	}
+
+	if err := projectSessionSummary(&summary, entry, entry.Timestamp.UTC().Format(time.RFC3339Nano)); err != nil {
+		return 0, err
+	}
+
 	var id int64
 	if err := db.QueryRowContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, $2, $3) RETURNING id`, conversationID, string(data), entry.Timestamp.UTC().Format(time.RFC3339Nano)).Scan(&id); err != nil {
 		return 0, fmt.Errorf("append rocketcode session entry: %w", err)
+	}
+
+	if err := saveSessionSummary(ctx, db, summary); err != nil {
+		return 0, err
 	}
 
 	return id, nil
@@ -1345,63 +1564,6 @@ func externalMCPManagedEntry(entry *harness.SessionEntry, replayPrefix []json.Ra
 	}
 
 	return managed, nil
-}
-
-func listSessionsDB(ctx context.Context, db *sql.DB) ([]protocol.SessionSummary, error) {
-	rows, err := db.QueryContext(ctx, `SELECT conversation_id, entry_json, entry_timestamp FROM session_entries ORDER BY conversation_id, id`)
-	if err != nil {
-		return nil, fmt.Errorf("query rocketcode session summaries: %w", err)
-	}
-
-	defer func() { _ = rows.Close() }()
-
-	summaryByID := map[string]*protocol.SessionSummary{}
-	order := []string{}
-
-	for rows.Next() {
-		var conversationID, raw, timestamp string
-		if err := rows.Scan(&conversationID, &raw, &timestamp); err != nil {
-			return nil, fmt.Errorf("scan rocketcode session summary: %w", err)
-		}
-
-		summary := summaryByID[conversationID]
-		if summary == nil {
-			summary = &protocol.SessionSummary{ConversationID: conversationID}
-			summaryByID[conversationID] = summary
-			order = append(order, conversationID)
-		}
-
-		var entry harness.SessionEntry
-		if err := json.Unmarshal([]byte(raw), &entry); err != nil {
-			return nil, fmt.Errorf("parse rocketcode session summary entry: %w", err)
-		}
-
-		if updated, err := time.Parse(time.RFC3339Nano, timestamp); err == nil {
-			summary.LastUpdated = updated
-		}
-
-		messages, err := replayInputMessages(entry.ReplayInput)
-		if err != nil {
-			return nil, fmt.Errorf("decode rocketcode session summary replay input: %w", err)
-		}
-
-		for i := range messages {
-			if messages[i].role == "user" {
-				summary.LastUserMessage = messages[i].text
-			}
-		}
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read rocketcode session summaries: %w", err)
-	}
-
-	summaries := make([]protocol.SessionSummary, 0, len(order))
-	for _, conversationID := range order {
-		summaries = append(summaries, *summaryByID[conversationID])
-	}
-
-	return summaries, nil
 }
 
 func slackStateKeyTime(key string) (time.Time, bool) {
@@ -1631,6 +1793,14 @@ func deleteSessionEntries(ctx context.Context, db stateStoreDB, conversationIDs 
 	var deleted int64
 
 	for conversationID := range conversationIDs {
+		if err := lockSessionHistory(ctx, db, conversationID); err != nil {
+			return 0, err
+		}
+
+		if _, err := db.ExecContext(ctx, `DELETE FROM session_summaries WHERE conversation_id = $1`, conversationID); err != nil {
+			return 0, fmt.Errorf("delete stale session summary: %w", err)
+		}
+
 		result, err := db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = $1`, conversationID)
 		if err != nil {
 			return 0, fmt.Errorf("delete stale session entries: %w", err)

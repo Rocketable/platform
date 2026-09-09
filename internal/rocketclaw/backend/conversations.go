@@ -14,9 +14,31 @@ import (
 
 // CreateConversation records an explicit ID without changing existing selection.
 func (r *Runtime) CreateConversation(ctx context.Context, conversation protocol.Conversation) error {
-	_, err := r.Sessions.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, $2, $3) ON CONFLICT (conversation_id) DO NOTHING`, conversation.ID, conversation.Agent, conversation.CreatedBy)
+	tx, err := r.Sessions.db.BeginTx(ctx, nil)
 	if err != nil {
+		return fmt.Errorf("begin conversation creation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := lockSessionHistory(ctx, tx, conversation.ID); err != nil {
+		return err
+	}
+
+	summary, err := loadSessionSummary(ctx, tx, conversation.ID)
+	if err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, $2, $3) ON CONFLICT (conversation_id) DO NOTHING`, conversation.ID, conversation.Agent, conversation.CreatedBy); err != nil {
 		return fmt.Errorf("create conversation: %w", err)
+	}
+
+	if err := saveSessionSummary(ctx, tx, summary); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit conversation creation: %w", err)
 	}
 
 	return nil
@@ -82,6 +104,17 @@ func (b *Bridge) syncConversation(ctx context.Context, source *Bridge) error {
 
 	defer func() { _ = tx.Rollback() }()
 
+	if err := lockSessionHistory(ctx, tx, b.config.ConversationID); err != nil {
+		return err
+	}
+
+	summary, err := loadSessionSummary(ctx, tx, b.config.ConversationID)
+	if err != nil {
+		return err
+	}
+
+	changed := false
+
 	schedules := map[string]protocol.ScheduledMessageState{}
 
 	for i := range entries {
@@ -113,6 +146,12 @@ WHERE NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1 AND e
 			continue
 		}
 
+		changed = true
+
+		if err := projectSessionSummary(&summary, &entry, entry.Timestamp.UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+
 		switch entry.Type {
 		case producerScheduleEntryType:
 			var scheduled protocol.ScheduledMessageState
@@ -134,6 +173,12 @@ WHERE NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1 AND e
 			}
 
 			clear(schedules)
+		}
+	}
+
+	if changed {
+		if err := saveSessionSummary(ctx, tx, summary); err != nil {
+			return err
 		}
 	}
 

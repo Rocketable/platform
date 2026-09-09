@@ -55,7 +55,7 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	seed, err := NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
+	seed, err := NewSessionServiceIn(t.Context(), dsn, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 
 	recoveryID := protocol.SlackThreadConversationID("C888", "888.0")

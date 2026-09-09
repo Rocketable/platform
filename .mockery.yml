@@ -81,6 +81,9 @@ packages:
       oneOffCronjobRunner:
         config:
           structname: oneOffCronjobsMock
+      channelFactsStore:
+        config:
+          structname: channelFactsStoreMock
   github.com/Rocketable/platform/internal/rocketclaw/protocol:
     interfaces:
       PrimaryTextRouter:

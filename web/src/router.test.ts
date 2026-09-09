@@ -22,14 +22,15 @@ const rocketclaw = RocketclawTest({
     entryCalls.push(["delete", principal, conversationId]);
     return Effect.succeed("1");
   },
-  listSessions: () => Effect.succeed([{ id: "web-session:ops" }]),
+  listSessions: async function* () { yield { sessions: [{ id: "web-session:ops" }], owner: "alice", upstreamSuccess: false, summariesComplete: true }; yield { sessions: [], owner: "alice", upstreamSuccess: true, summariesComplete: true }; },
+  identity: () => Effect.succeed("alice"),
   createSession: () => Effect.succeed("web-session:ops"),
   prompt: () => Effect.succeed(""),
   listCronJobs: () => Effect.succeed([{ stem: "daily", status: "idle", lastRun: "", nextRun: "" }]),
   runCronJob: () => Effect.succeed(""),
   history: () => Effect.succeed([]),
   join: () => Effect.void,
-  listAgents: () => Effect.succeed([]),
+  listAgents: () => Effect.succeed({ agents: [], currentAgent: "" }),
   listSkills: () => Effect.succeed([]),
   listConfig: () => Effect.succeed({}),
   settleSession,
@@ -55,7 +56,10 @@ describe("appRouter", () => {
     const caller = appRouter(Layer.merge(rocketclaw, WhoisTest(() => Effect.succeed("alice")))).createCaller({
       ip: "100.64.0.1",
     });
-    await expect(caller.sessions()).resolves.toEqual([{ id: "web-session:ops" }]);
+    const rows = [];
+    for await (const row of await caller.sessions()) rows.push(row);
+    expect(rows).toEqual([{ sessions: [{ id: "web-session:ops" }], owner: "alice", upstreamSuccess: false, summariesComplete: true }, { sessions: [], owner: "alice", upstreamSuccess: true, summariesComplete: true }]);
+    await expect(caller.identity()).resolves.toBe("alice");
   });
 
   it("maps gRPC failures", async () => {
@@ -65,7 +69,8 @@ describe("appRouter", () => {
           listSessionEntries: () => Effect.fail(new GrpcError({ message: "down" })),
           loadSessionEntries: () => Effect.fail(new GrpcError({ message: "down" })),
           deleteSessionEntries: () => Effect.fail(new GrpcError({ message: "down" })),
-          listSessions: () => Effect.fail(new GrpcError({ message: "down" })),
+          listSessions: async function* () { throw new GrpcError({ message: "down" }); },
+          identity: () => Effect.fail(new GrpcError({ message: "down" })),
           createSession: () => Effect.fail(new GrpcError({ message: "down" })),
           prompt: () => Effect.fail(new GrpcError({ message: "down" })),
           listCronJobs: () => Effect.fail(new GrpcError({ message: "down" })),
@@ -85,7 +90,8 @@ describe("appRouter", () => {
         WhoisTest(() => Effect.succeed("alice")),
       ),
     ).createCaller({ ip: "100.64.0.1" });
-    await expect(caller.sessions()).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+    const rows = await caller.sessions();
+    await expect(rows[Symbol.asyncIterator]().next()).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR", message: "down" });
     for (const operation of ["listSessionEntries", "loadSessionEntries", "deleteSessionEntries"] as const) {
       await expect(caller[operation]({ id })).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR", message: "down" });
     }
@@ -99,6 +105,7 @@ describe("appRouter", () => {
     await expect(caller.deleteSessionEntries({ id })).resolves.toBe("1");
     expect(entryCalls).toEqual([["list", "alice", id], ["load", "alice", id], ["delete", "alice", id]]);
     expect(settleSession).not.toHaveBeenCalled();
-    await expect(caller.sessions()).resolves.toEqual([{ id: "web-session:ops" }]);
+    const rows = await caller.sessions();
+    expect((await rows[Symbol.asyncIterator]().next()).value?.sessions).toEqual([{ id: "web-session:ops" }]);
   });
 });

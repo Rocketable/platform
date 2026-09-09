@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,7 +37,7 @@ import (
 func TestSessionEntries(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	sessions, err := backend.NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
+	sessions, err := backend.NewSessionServiceIn(t.Context(), dsn, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 	configPath := filepath.Join(t.TempDir(), "rocketclaw.json")
@@ -142,9 +144,24 @@ func TestSessionEntries(t *testing.T) {
 	}
 	channelChoices := []string{"main", "planner"}
 	channels := &mockChannels{ChannelAgentChoicesFunc: func(_ context.Context, channel string) ([]string, error) {
+		if channel == "C2" {
+			return []string{"selected"}, nil
+		}
+
 		require.Equal(t, "C1", channel)
+
 		return channelChoices, nil
 	}}
+	channelTitle := "triage"
+	channels.SidebarChannelAgentChoicesFunc = func(_ context.Context, channel string) (string, []string, error) {
+		if channel == "C2" {
+			return channel, nil, nil
+		}
+
+		require.Equal(t, "C1", channel)
+
+		return channelTitle, []string{"main", "planner"}, nil
+	}
 	cronRunner := &mockCronRunner{RunFunc: func(_ context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		require.Equal(t, "planner", agent)
 		require.Contains(t, prompt, "Cron body")
@@ -192,6 +209,46 @@ func TestSessionEntries(t *testing.T) {
 	clear(cfg.WebUsers) // The server retains the startup mapping, not mutable config state.
 
 	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
+	identity, err := invoke[IdentityResponse](ctx, connection, "Identity", &IdentityRequest{})
+	require.NoError(t, err)
+	require.Equal(t, "alice", identity.Username)
+
+	for _, values := range [][]string{nil, {"alice"}, {"192.0.2.2"}, {"192.0.2.1", "192.0.2.1"}} {
+		denied := metadata.NewOutgoingContext(t.Context(), metadata.MD{"rocketclaw-principal": values})
+		_, err := invoke[IdentityResponse](denied, connection, "Identity", &IdentityRequest{})
+		require.Equal(t, codes.Unauthenticated, status.Code(err))
+		_, err = invoke[ListSessionsResponse](denied, connection, "ListSessions", &ListSessionsRequest{})
+		require.Equal(t, codes.Unauthenticated, status.Code(err))
+		_, err = invoke[ListAgentsResponse](denied, connection, "ListAgents", &ListAgentsRequest{ConversationId: "selected"})
+		require.Equal(t, codes.Unauthenticated, status.Code(err))
+	}
+
+	version, err := invoke[ProtocolResponse](t.Context(), connection, "Protocol", &ProtocolRequest{})
+	require.NoError(t, err)
+	require.Equal(t, protoSHA256, version.ProtoSha256)
+
+	empty, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
+	require.NoError(t, err)
+	require.True(t, proto.Equal(&ListSessionsResponse{Owner: "alice", UpstreamSuccess: true, SummariesComplete: true}, empty))
+
+	// Invalid protobuf bytes must fail decoding, even for an otherwise empty request.
+	malformedIdentity := &IdentityRequest{}
+	malformedIdentity.ProtoReflect().SetUnknown([]byte{0xff})
+	_, err = invoke[IdentityResponse](ctx, connection, "Identity", malformedIdentity)
+	require.Equal(t, codes.Internal, status.Code(err))
+
+	malformedList := &ListSessionsRequest{}
+	malformedList.ProtoReflect().SetUnknown([]byte{0xff})
+	_, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", malformedList)
+	require.Equal(t, codes.Internal, status.Code(err))
+
+	missingRequest, err := connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/ListSessions")
+	require.NoError(t, err)
+	require.NoError(t, missingRequest.CloseSend())
+	err = missingRequest.RecvMsg(&ListSessionsResponse{})
+	require.Equal(t, codes.Internal, status.Code(err))
+	require.ErrorContains(t, err, "received no request message")
+
 	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: "unrecorded", Text: "hello"})
 	require.ErrorContains(t, err, `conversation "unrecorded" is not recorded`)
 
@@ -432,6 +489,28 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, "empty-web", listedSessions.Sessions[0].Id)
 	require.Equal(t, "selected", listedSessions.Sessions[0].Agent)
 	require.Equal(t, id, listedSessions.Sessions[1].Id)
+	require.True(t, listedSessions.SummariesComplete)
+
+	for _, session := range listedSessions.Sessions {
+		require.Empty(t, session.Preview)
+		require.Empty(t, session.UpdatedAt, "empty and deleted conversations retain blank display timestamps")
+	}
+
+	// A legacy empty row stays visible while its summary is still loading.
+	db, err := sql.Open("pgx", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+
+	_, err = db.ExecContext(ctx, `DELETE FROM session_summaries WHERE conversation_id = 'empty-web'`)
+	require.NoError(t, err)
+	loading, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
+	require.NoError(t, err)
+	require.True(t, loading.UpstreamSuccess)
+	require.False(t, loading.SummariesComplete)
+	require.Equal(t, "empty-web", loading.Sessions[0].Id)
+	require.Empty(t, loading.Sessions[0].UpdatedAt)
+	require.NoError(t, sessions.UpsertThread("empty-web", backend.ThreadState{Agent: "selected"}))
+
 	emptyHistory, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id})
 	require.NoError(t, err)
 	require.Empty(t, emptyHistory.Messages)
@@ -650,6 +729,8 @@ func TestSessionEntries(t *testing.T) {
 	}
 
 	channelChoices = []string{"main"}
+	liveCalls := len(channels.ChannelAgentChoicesCalls())
+	sidebarCalls := len(channels.SidebarChannelAgentChoicesCalls())
 
 	for _, tc := range []struct {
 		id, agent string
@@ -666,13 +747,75 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, tc.code, status.Code(err))
 	}
 
+	for _, extra := range []string{"slack-thread:C1:2.2", "slack-thread:C2:3.3"} {
+		require.NoError(t, sessions.UpsertThread(extra, backend.ThreadState{Agent: "main"}))
+	}
+
+	require.Len(t, channels.ChannelAgentChoicesCalls(), liveCalls+1, "$agent uses current live channel policy")
+	require.Len(t, channels.SidebarChannelAgentChoicesCalls(), sidebarCalls, "$agent must not authorize from stored sidebar facts")
+
+	channels.ChannelAgentChoicesFunc = func(context.Context, string) ([]string, error) {
+		return nil, errors.New("Slack unavailable")
+	}
+	channelCalls := len(channels.ChannelAgentChoicesCalls())
+	listedSessions, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
+	require.NoError(t, err)
+	require.Len(t, channels.ChannelAgentChoicesCalls(), channelCalls, "sidebar must not call live Slack policy")
+	require.Len(t, channels.SidebarChannelAgentChoicesCalls(), sidebarCalls+2, "resolve each stored Slack channel once per list request")
+	require.Len(t, listedSessions.Sessions, 5)
+	require.Equal(t, "slack-thread:C1:2.2", listedSessions.Sessions[3].Id)
+	require.Equal(t, "triage", listedSessions.Sessions[3].Title)
+	require.Equal(t, []string{"main", "planner"}, listedSessions.Sessions[3].AllowedAgents)
+	require.Equal(t, "slack-thread:C2:3.3", listedSessions.Sessions[4].Id)
+	require.Equal(t, "C2", listedSessions.Sessions[4].Title)
+	require.Empty(t, listedSessions.Sessions[4].AllowedAgents, "unknown channel must not guess policy")
+	require.Equal(t, identity.Username, listedSessions.Owner)
+	require.True(t, listedSessions.UpstreamSuccess)
+	require.True(t, listedSessions.SummariesComplete)
+
+	channelTitle = "renamed"
 	listedSessions, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
 
 	for _, session := range listedSessions.Sessions {
+		switch channel, _, slack := protocol.SlackThreadTarget(session.Id); {
+		case !slack:
+			require.Empty(t, session.Title)
+		case channel == "C1":
+			require.Equal(t, "renamed", session.Title)
+			require.Equal(t, []string{"main", "planner"}, session.AllowedAgents)
+		case channel == "C2":
+			require.Equal(t, "C2", session.Title)
+			require.Empty(t, session.AllowedAgents)
+		}
+	}
+
+	require.Len(t, channels.SidebarChannelAgentChoicesCalls(), sidebarCalls+4, "reuse both name and choices per channel on refresh")
+	require.Len(t, channels.ChannelAgentChoicesCalls(), channelCalls)
+
+	choices, err := invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
+	require.NoError(t, err)
+	require.Equal(t, "planner", choices.CurrentAgent)
+	require.Equal(t, []string{"main", "planner"}, []string{choices.Agents[0].Name, choices.Agents[1].Name})
+	require.Len(t, channels.ChannelAgentChoicesCalls(), channelCalls)
+	require.NoError(t, root.Remove(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md")))
+
+	choices, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
+	require.NoError(t, err)
+	require.Len(t, choices.Agents, 1)
+	require.Equal(t, "main", choices.Agents[0].Name)
+	require.Equal(t, "planner", choices.CurrentAgent, "stored current agent survives removal from the loaded choices")
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "planner.md"), []byte("---\nmodel: gpt-5.5\n---\nHelp."), 0o600))
+
+	for _, hidden := range []string{"private-X", "cron:cron/daily.md:20000102T030405.000000006Z:a", "one-off-cron:cron/daily.md:20000102T030405.000000006Z:b"} {
+		_, err := invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: hidden})
+		require.Equal(t, codes.PermissionDenied, status.Code(err))
+	}
+
+	for _, session := range listedSessions.Sessions {
 		if session.Id == id {
 			require.Equal(t, "planner", session.Agent)
-			require.Equal(t, []string{"main"}, session.AllowedAgents)
+			require.Equal(t, []string{"main", "planner"}, session.AllowedAgents)
 		}
 
 		if session.Id == created.Id {
@@ -683,6 +826,13 @@ func TestSessionEntries(t *testing.T) {
 		require.NotEqual(t, "private-X", session.Id)
 	}
 
+	_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: "$agent main"})
+	require.ErrorContains(t, err, "Slack unavailable")
+	unchanged, found, err := sessions.Thread(id)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "planner", unchanged.Agent, "failed live authorization must not switch the agent")
+
 	historyAfter, err := sessions.ObserveEntries(ctx, "empty-web")
 	require.NoError(t, err)
 	require.Equal(t, historyBefore, historyAfter)
@@ -691,6 +841,26 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, "producer", private.Agent)
+
+	largePreview := strings.Repeat("x", (2<<20)+1)
+	largeReplay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
+		{OfMessage: &responses.EasyInputMessageParam{Role: "user", Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(largePreview)}, Type: "message"}},
+	})
+	require.NoError(t, err)
+
+	for _, conversationID := range []string{"large-a", "large-b"} {
+		require.NoError(t, sessions.UpsertThread(conversationID, backend.ThreadState{Agent: "selected"}))
+		_, err = sessions.AppendEntryID(ctx, conversationID, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: entry.Timestamp.Add(time.Hour), ReplayInput: largeReplay})
+		require.NoError(t, err)
+	}
+
+	listedSessions, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
+	require.NoError(t, err)
+	require.Greater(t, proto.Size(listedSessions), 4<<20)
+
+	for _, session := range listedSessions.Sessions[:2] {
+		require.Equal(t, largePreview, session.Preview)
+	}
 
 	emptyJobs, err := invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)
@@ -713,10 +883,6 @@ func TestSessionEntries(t *testing.T) {
 	}
 
 	// Seed the exact persisted relation written by Sync, without changing Sync.
-	db, err := sql.Open("pgx", dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
-
 	sources := []string{"cron:cron/report:daily.md:20260905T010000.000000001Z:first", "one-off-cron:cron/report_daily.md:20260905T020000.000000002Z:second"}
 	for _, source := range sources {
 		sourceEntry, err := sessions.AppendEntryID(ctx, source, &entry)
@@ -796,10 +962,107 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, codes.Unauthenticated, status.Code(err))
 	}
 
+	// A missing projection is not a complete snapshot, even when enumeration succeeds.
+	_, err = db.ExecContext(ctx, `DELETE FROM session_summaries WHERE conversation_id = $1`, id)
+	require.NoError(t, err)
+	incomplete, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
+	require.NoError(t, err)
+	require.True(t, incomplete.UpstreamSuccess)
+	require.False(t, incomplete.SummariesComplete)
+
+	for _, row := range incomplete.Sessions {
+		if row.Id == id {
+			require.Empty(t, row.Preview)
+			require.Empty(t, row.UpdatedAt)
+		}
+	}
+
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "cron", "bad.md"), []byte("not a cron definition"), 0o600))
 
 	_, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.ErrorContains(t, err, "bad.md")
+
+	channels.SidebarChannelAgentChoicesFunc = func(context.Context, string) (string, []string, error) {
+		return "", nil, errors.New("stored channel facts unavailable")
+	}
+	_, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
+	require.ErrorContains(t, err, "stored channel facts unavailable")
+
+	// Web rows arrive before the Slack facts failure; no success terminal follows.
+	stream, err := connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/ListSessions")
+	require.NoError(t, err)
+	require.NoError(t, stream.SendMsg(&ListSessionsRequest{}))
+	require.NoError(t, stream.CloseSend())
+
+	prefix := 0
+
+	for {
+		var batch ListSessionsResponse
+
+		err := stream.RecvMsg(&batch)
+		if err != nil {
+			require.ErrorContains(t, err, "stored channel facts unavailable")
+			break
+		}
+
+		require.False(t, batch.UpstreamSuccess)
+		require.Equal(t, "alice", batch.Owner)
+		require.Len(t, batch.Sessions, 1)
+
+		prefix++
+	}
+
+	require.Positive(t, prefix)
+
+	// Definition failures must fail both independent choices and enumeration.
+	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "broken.md"), []byte("---\nmodel: [\n---\nHelp."), 0o600))
+
+	_, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
+	require.ErrorContains(t, err, "load web agents")
+	_, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
+	require.ErrorContains(t, err, "load web agents")
+	require.NoError(t, root.Remove(filepath.Join(cfg.RuntimeDirName(), "agents", "broken.md")))
+
+	t.Run("selected conversation read unavailable", func(t *testing.T) {
+		lockedDSN, err := url.Parse(dsn)
+		require.NoError(t, err)
+
+		options := lockedDSN.Query()
+		options.Set("lock_timeout", "1ms")
+		lockedDSN.RawQuery = options.Encode()
+		lockedSessions, err := backend.NewSessionServiceIn(t.Context(), lockedDSN.String(), slog.New(slog.DiscardHandler))
+
+		require.NoError(t, err)
+		defer func() { require.NoError(t, lockedSessions.Stop()) }()
+
+		transaction, err := db.BeginTx(t.Context(), nil)
+
+		require.NoError(t, err)
+		defer func() { require.NoError(t, transaction.Rollback()) }()
+
+		_, err = transaction.ExecContext(t.Context(), `LOCK TABLE managed_conversations IN ACCESS EXCLUSIVE MODE`)
+		require.NoError(t, err)
+
+		// Visibility remains readable; only the selected thread lookup is blocked.
+		selectedServer := *server
+		selectedServer.sessions = lockedSessions
+		incoming := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
+		selected, err := selectedServer.listAgents(incoming, id)
+		require.ErrorContains(t, err, "read selected conversation")
+		require.Nil(t, selected)
+	})
+
+	// A database outage cannot turn selected choices or enumeration into empty success.
+	require.NoError(t, sessions.Stop())
+
+	_, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{ConversationId: id})
+	require.ErrorContains(t, err, "resolve web conversation visibility")
+	_, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
+	require.ErrorContains(t, err, "query sidebar sessions")
+
+	catalog, err = invoke[ListAgentsResponse](ctx, connection, "ListAgents", &ListAgentsRequest{})
+	require.NoError(t, err)
+	require.Len(t, catalog.Agents, 3, "the unselected catalog is independent of the database")
 }
 
 func TestCronHistoryUsesStoredSourceLabelsAndDestination(t *testing.T) {
@@ -822,6 +1085,48 @@ func TestCronHistoryUsesStoredSourceLabelsAndDestination(t *testing.T) {
 
 func invoke[Response any](ctx context.Context, connection *grpc.ClientConn, method string, request any) (*Response, error) {
 	response := new(Response)
+
+	if method == "ListSessions" {
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		stream, err := connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/"+method)
+		if err != nil {
+			return nil, fmt.Errorf("open %s stream: %w", method, err)
+		}
+
+		if err := stream.SendMsg(request); err != nil {
+			return nil, fmt.Errorf("send %s request: %w", method, err)
+		}
+
+		if err := stream.CloseSend(); err != nil {
+			return nil, fmt.Errorf("close %s request: %w", method, err)
+		}
+
+		for {
+			chunk := new(Response)
+
+			err := stream.RecvMsg(chunk)
+			if errors.Is(err, io.EOF) {
+				if !any(response).(*ListSessionsResponse).UpstreamSuccess {
+					return nil, errors.New("session enumeration ended without upstream success")
+				}
+
+				return response, nil
+			}
+
+			if err != nil {
+				return nil, fmt.Errorf("receive %s response: %w", method, err)
+			}
+
+			proto.Merge(any(response).(proto.Message), any(chunk).(proto.Message))
+
+			if terminal := any(chunk).(*ListSessionsResponse); terminal.UpstreamSuccess {
+				any(response).(*ListSessionsResponse).SummariesComplete = terminal.SummariesComplete
+			}
+		}
+	}
+
 	if err := connection.Invoke(ctx, "/rpc.Web/"+method, request, response); err != nil {
 		return nil, fmt.Errorf("invoke %s: %w", method, err)
 	}

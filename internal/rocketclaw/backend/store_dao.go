@@ -17,20 +17,6 @@ type stateDAO struct {
 	db stateStoreDB
 }
 
-func (d stateDAO) upsertThread(ctx context.Context, conversationID string, thread ThreadState) error {
-	conversationID = strings.TrimSpace(conversationID)
-	if conversationID == "" {
-		return errors.New("thread conversation ID is required")
-	}
-
-	_, err := d.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by, settled) VALUES ($1, $2, $3, $4) ON CONFLICT(conversation_id) DO UPDATE SET agent = excluded.agent, created_by = CASE WHEN excluded.created_by = '' THEN managed_conversations.created_by ELSE excluded.created_by END`, conversationID, strings.TrimSpace(thread.Agent), strings.TrimSpace(string(thread.CreatedBy)), thread.Settled)
-	if err != nil {
-		return fmt.Errorf("upsert managed conversation: %w", err)
-	}
-
-	return nil
-}
-
 func (d stateDAO) thread(ctx context.Context, conversationID string) (ThreadState, bool, error) {
 	var (
 		thread    ThreadState

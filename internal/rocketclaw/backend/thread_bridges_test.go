@@ -212,7 +212,7 @@ func TestThreadBridgeManagerSkipsScheduledMessageBridgeDuringActiveTurnRecovery(
 func TestThreadBridgeManagerDoesNotStartThreadWhenStoreIsUnavailable(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	store, err := NewSessionServiceIn(dsn, testLogger())
+	store, err := NewSessionServiceIn(t.Context(), dsn, testLogger())
 	require.NoError(t, err)
 	require.NoError(t, store.Stop())
 
@@ -829,7 +829,7 @@ func newWorkspaceSessionService(t *testing.T) *SessionService {
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	service, err := NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
+	service, err := NewSessionServiceIn(t.Context(), dsn, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
