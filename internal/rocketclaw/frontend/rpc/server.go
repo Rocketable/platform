@@ -639,46 +639,48 @@ func (s *Server) listQueue(ctx context.Context, request *ListQueueRequest) (*Lis
 	return response, nil
 }
 
-func (s *Server) steerQueueItem(ctx context.Context, request *QueueItemRequest) (*QueueItemResponse, error) {
+func (s *Server) requireQueueItem(ctx context.Context, request *QueueItemRequest) error {
 	if err := s.visibleConversation(ctx, request.Id); err != nil {
-		return nil, err
+		return err
 	}
 
 	if strings.TrimSpace(request.ItemId) == "" {
-		return nil, fmt.Errorf("web queue: %w", status.Error(codes.InvalidArgument, "queue item ID is required"))
+		return fmt.Errorf("web queue: %w", status.Error(codes.InvalidArgument, "queue item ID is required"))
 	}
 
-	promoted, err := s.backend.PromoteQueueItem(ctx, request.Id, request.ItemId)
+	return nil
+}
+
+func queueItemResponse(ok bool, err error, wrap string) (*QueueItemResponse, error) {
 	if err != nil {
-		return nil, fmt.Errorf("promote web queue item: %w", err)
+		return nil, fmt.Errorf("%s: %w", wrap, err)
 	}
 
-	if !promoted {
+	if !ok {
 		return nil, fmt.Errorf("web queue: %w", status.Error(codes.NotFound, "queue item is not recorded"))
 	}
 
 	return &QueueItemResponse{}, nil
 }
 
-func (s *Server) removeQueueItem(ctx context.Context, request *QueueItemRequest) (*QueueItemResponse, error) {
-	if err := s.visibleConversation(ctx, request.Id); err != nil {
+func (s *Server) steerQueueItem(ctx context.Context, request *QueueItemRequest) (*QueueItemResponse, error) {
+	if err := s.requireQueueItem(ctx, request); err != nil {
 		return nil, err
 	}
 
-	if strings.TrimSpace(request.ItemId) == "" {
-		return nil, fmt.Errorf("web queue: %w", status.Error(codes.InvalidArgument, "queue item ID is required"))
+	ok, err := s.backend.PromoteQueueItem(ctx, request.Id, request.ItemId)
+
+	return queueItemResponse(ok, err, "promote web queue item")
+}
+
+func (s *Server) removeQueueItem(ctx context.Context, request *QueueItemRequest) (*QueueItemResponse, error) {
+	if err := s.requireQueueItem(ctx, request); err != nil {
+		return nil, err
 	}
 
-	removed, err := s.backend.DeleteQueueItem(ctx, request.Id, request.ItemId)
-	if err != nil {
-		return nil, fmt.Errorf("remove web queue item: %w", err)
-	}
+	ok, err := s.backend.DeleteQueueItem(ctx, request.Id, request.ItemId)
 
-	if !removed {
-		return nil, fmt.Errorf("web queue: %w", status.Error(codes.NotFound, "queue item is not recorded"))
-	}
-
-	return &QueueItemResponse{}, nil
+	return queueItemResponse(ok, err, "remove web queue item")
 }
 
 func (s *Server) reorderQueue(ctx context.Context, request *ReorderQueueRequest) (*QueueItemResponse, error) {
