@@ -23,6 +23,7 @@ package starlarkstruct // import "go.starlark.net/starlarkstruct"
 
 import (
 	"fmt"
+	"iter"
 	"sort"
 	"strings"
 
@@ -247,16 +248,23 @@ func (s *Struct) AttrNames() []string {
 }
 
 // AttrAt returns the value of the field at the specified index.
-func (s *Struct) AttrAt(i int) (starlark.Value, error) {
-	if !(0 <= i && i < len(s.entries)) {
-		var ctor string
-		if s.constructor != Default {
-			ctor = s.constructor.String() + " "
+func (s *Struct) AttrAt(i int) (string, starlark.Value) {
+	e := s.entries[i]
+	return e.name, e.value
+}
+
+// Entries returns an iterator over the sequence of fields of a struct. For
+// example:
+//
+//	for name, val := range struct1.Entries() { ... }
+func (s *Struct) Entries() iter.Seq2[string, starlark.Value] {
+	return func(yield func(string, starlark.Value) bool) {
+		for _, e := range s.entries {
+			if !yield(e.name, e.value) {
+				return
+			}
 		}
-		return nil, starlark.NoSuchAttrError(
-			fmt.Sprintf("%sstruct has no attribute at index %d", ctor, i))
 	}
-	return s.entries[i].value, nil
 }
 
 func (x *Struct) CompareSameType(op syntax.Token, y_ starlark.Value, depth int) (bool, error) {

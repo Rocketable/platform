@@ -46,16 +46,16 @@ func NewBetaResponseService(opts ...option.RequestOption) (r BetaResponseService
 }
 
 // Creates a model response. Provide
-// [text](https://platform.openai.com/docs/guides/text) or
-// [image](https://platform.openai.com/docs/guides/images) inputs to generate
-// [text](https://platform.openai.com/docs/guides/text) or
-// [JSON](https://platform.openai.com/docs/guides/structured-outputs) outputs. Have
-// the model call your own
-// [custom code](https://platform.openai.com/docs/guides/function-calling) or use
-// built-in [tools](https://platform.openai.com/docs/guides/tools) like
-// [web search](https://platform.openai.com/docs/guides/tools-web-search) or
-// [file search](https://platform.openai.com/docs/guides/tools-file-search) to use
-// your own data as input for the model's response.
+// [text](https://developers.openai.com/api/docs/guides/text) or
+// [image](https://developers.openai.com/api/docs/guides/images-vision) inputs to
+// generate [text](https://developers.openai.com/api/docs/guides/text) or
+// [JSON](https://developers.openai.com/api/docs/guides/structured-outputs)
+// outputs. Have the model call your own
+// [custom code](https://developers.openai.com/api/docs/guides/function-calling) or
+// use built-in [tools](https://developers.openai.com/api/docs/guides/tools) like
+// [web search](https://developers.openai.com/api/docs/guides/tools-web-search) or
+// [file search](https://developers.openai.com/api/docs/guides/tools-file-search)
+// to use your own data as input for the model's response.
 func (r *BetaResponseService) New(ctx context.Context, params BetaResponseNewParams, opts ...option.RequestOption) (res *BetaResponse, err error) {
 	for _, v := range params.Betas {
 		opts = append(opts, option.WithHeaderAdd("openai-beta", fmt.Sprintf("%v", v)))
@@ -68,16 +68,16 @@ func (r *BetaResponseService) New(ctx context.Context, params BetaResponseNewPar
 }
 
 // Creates a model response. Provide
-// [text](https://platform.openai.com/docs/guides/text) or
-// [image](https://platform.openai.com/docs/guides/images) inputs to generate
-// [text](https://platform.openai.com/docs/guides/text) or
-// [JSON](https://platform.openai.com/docs/guides/structured-outputs) outputs. Have
-// the model call your own
-// [custom code](https://platform.openai.com/docs/guides/function-calling) or use
-// built-in [tools](https://platform.openai.com/docs/guides/tools) like
-// [web search](https://platform.openai.com/docs/guides/tools-web-search) or
-// [file search](https://platform.openai.com/docs/guides/tools-file-search) to use
-// your own data as input for the model's response.
+// [text](https://developers.openai.com/api/docs/guides/text) or
+// [image](https://developers.openai.com/api/docs/guides/images-vision) inputs to
+// generate [text](https://developers.openai.com/api/docs/guides/text) or
+// [JSON](https://developers.openai.com/api/docs/guides/structured-outputs)
+// outputs. Have the model call your own
+// [custom code](https://developers.openai.com/api/docs/guides/function-calling) or
+// use built-in [tools](https://developers.openai.com/api/docs/guides/tools) like
+// [web search](https://developers.openai.com/api/docs/guides/tools-web-search) or
+// [file search](https://developers.openai.com/api/docs/guides/tools-file-search)
+// to use your own data as input for the model's response.
 func (r *BetaResponseService) NewStreaming(ctx context.Context, params BetaResponseNewParams, opts ...option.RequestOption) (stream *ssestream.Stream[BetaResponseStreamEventUnion]) {
 	var (
 		raw *http.Response
@@ -150,7 +150,7 @@ func (r *BetaResponseService) Delete(ctx context.Context, responseID string, bod
 
 // Cancels a model response with the given ID. Only responses created with the
 // `background` parameter set to `true` can be cancelled.
-// [Learn more](https://platform.openai.com/docs/guides/background).
+// [Learn more](https://developers.openai.com/api/docs/guides/background).
 func (r *BetaResponseService) Cancel(ctx context.Context, responseID string, body BetaResponseCancelParams, opts ...option.RequestOption) (res *BetaResponse, err error) {
 	for _, v := range body.Betas {
 		opts = append(opts, option.WithHeaderAdd("openai-beta", fmt.Sprintf("%v", v)))
@@ -169,9 +169,9 @@ func (r *BetaResponseService) Cancel(ctx context.Context, responseID string, bod
 // Compact a conversation. Returns a compacted response object.
 //
 // Learn when and how to compact long-running conversations in the
-// [conversation state guide](https://platform.openai.com/docs/guides/conversation-state#managing-the-context-window).
+// [conversation state guide](https://developers.openai.com/api/docs/guides/conversation-state#managing-the-context-window).
 // For ZDR-compatible compaction details, see
-// [Compaction (advanced)](https://platform.openai.com/docs/guides/conversation-state#compaction-advanced).
+// [Compaction (advanced)](https://developers.openai.com/api/docs/guides/conversation-state#compaction-advanced).
 func (r *BetaResponseService) Compact(ctx context.Context, params BetaResponseCompactParams, opts ...option.RequestOption) (res *BetaCompactedResponse, err error) {
 	for _, v := range params.Betas {
 		opts = append(opts, option.WithHeaderAdd("openai-beta", fmt.Sprintf("%v", v)))
@@ -1179,7 +1179,7 @@ type BetaComputerActionList []BetaComputerActionUnion
 type BetaComputerActionListParam []BetaComputerActionUnionParam
 
 // A tool that controls a virtual computer. Learn more about the
-// [computer tool](https://platform.openai.com/docs/guides/tools-computer-use).
+// [computer tool](https://developers.openai.com/api/docs/guides/tools-computer-use).
 type BetaComputerTool struct {
 	// The type of the computer tool. Always `computer`.
 	Type constant.Computer `json:"type" default:"computer"`
@@ -1213,7 +1213,7 @@ func NewBetaComputerToolParam() BetaComputerToolParam {
 }
 
 // A tool that controls a virtual computer. Learn more about the
-// [computer tool](https://platform.openai.com/docs/guides/tools-computer-use).
+// [computer tool](https://developers.openai.com/api/docs/guides/tools-computer-use).
 //
 // This struct has a constant value, construct it with [NewBetaComputerToolParam].
 type BetaComputerToolParam struct {
@@ -1231,7 +1231,7 @@ func (r *BetaComputerToolParam) UnmarshalJSON(data []byte) error {
 }
 
 // A tool that controls a virtual computer. Learn more about the
-// [computer tool](https://platform.openai.com/docs/guides/tools-computer-use).
+// [computer tool](https://developers.openai.com/api/docs/guides/tools-computer-use).
 type BetaComputerUsePreviewTool struct {
 	// The height of the computer display.
 	DisplayHeight int64 `json:"display_height" api:"required"`
@@ -1282,7 +1282,7 @@ const (
 )
 
 // A tool that controls a virtual computer. Learn more about the
-// [computer tool](https://platform.openai.com/docs/guides/tools-computer-use).
+// [computer tool](https://developers.openai.com/api/docs/guides/tools-computer-use).
 //
 // The properties DisplayHeight, DisplayWidth, Environment, Type are required.
 type BetaComputerUsePreviewToolParam struct {
@@ -1859,7 +1859,7 @@ func (r *BetaContainerReferenceParam) UnmarshalJSON(data []byte) error {
 }
 
 // A custom tool that processes input using a specified format. Learn more about
-// [custom tools](https://platform.openai.com/docs/guides/function-calling#custom-tools)
+// [custom tools](https://developers.openai.com/api/docs/guides/function-calling#custom-tools)
 type BetaCustomTool struct {
 	// The name of the custom tool, used to identify it in tool calls.
 	Name string `json:"name" api:"required"`
@@ -2018,7 +2018,7 @@ func (r *BetaCustomToolFormatGrammar) UnmarshalJSON(data []byte) error {
 }
 
 // A custom tool that processes input using a specified format. Learn more about
-// [custom tools](https://platform.openai.com/docs/guides/function-calling#custom-tools)
+// [custom tools](https://developers.openai.com/api/docs/guides/function-calling#custom-tools)
 //
 // The properties Name, Type are required.
 type BetaCustomToolParam struct {
@@ -2339,7 +2339,7 @@ func (u *BetaEasyInputMessageContentUnionParam) asAny() any {
 
 // A tool that searches for relevant content from uploaded files. Learn more about
 // the
-// [file search tool](https://platform.openai.com/docs/guides/tools-file-search).
+// [file search tool](https://developers.openai.com/api/docs/guides/tools-file-search).
 type BetaFileSearchTool struct {
 	// The type of the file search tool. Always `file_search`.
 	Type constant.FileSearch `json:"type" default:"file_search"`
@@ -2798,7 +2798,7 @@ func (r *BetaFileSearchToolRankingOptionsHybridSearch) UnmarshalJSON(data []byte
 
 // A tool that searches for relevant content from uploaded files. Learn more about
 // the
-// [file search tool](https://platform.openai.com/docs/guides/tools-file-search).
+// [file search tool](https://developers.openai.com/api/docs/guides/tools-file-search).
 //
 // The properties Type, VectorStoreIDs are required.
 type BetaFileSearchToolParam struct {
@@ -3460,7 +3460,7 @@ func init() {
 
 // Defines a function in your own code the model can choose to call. Learn more
 // about
-// [function calling](https://platform.openai.com/docs/guides/function-calling).
+// [function calling](https://developers.openai.com/api/docs/guides/function-calling).
 type BetaFunctionTool struct {
 	// The name of the function to call.
 	Name string `json:"name" api:"required"`
@@ -3516,7 +3516,7 @@ func (r BetaFunctionTool) ToParam() BetaFunctionToolParam {
 
 // Defines a function in your own code the model can choose to call. Learn more
 // about
-// [function calling](https://platform.openai.com/docs/guides/function-calling).
+// [function calling](https://developers.openai.com/api/docs/guides/function-calling).
 //
 // The properties Name, Parameters, Strict, Type are required.
 type BetaFunctionToolParam struct {
@@ -4425,8 +4425,8 @@ type BetaResponse struct {
 	// Model ID used to generate the response, like `gpt-6-astra`. OpenAI offers a wide
 	// range of models with different capabilities, performance characteristics, and
 	// price points. Refer to the
-	// [model guide](https://platform.openai.com/docs/models) to browse and compare
-	// available models.
+	// [model guide](https://developers.openai.com/api/docs/models) to browse and
+	// compare available models.
 	Model BetaResponseModel `json:"model" api:"required"`
 	// The object type of this resource - always set to `response`.
 	Object constant.Response `json:"object" default:"response"`
@@ -4456,17 +4456,18 @@ type BetaResponse struct {
 	//
 	//   - **Built-in tools**: Tools that are provided by OpenAI that extend the model's
 	//     capabilities, like
-	//     [web search](https://platform.openai.com/docs/guides/tools-web-search) or
-	//     [file search](https://platform.openai.com/docs/guides/tools-file-search).
+	//     [web search](https://developers.openai.com/api/docs/guides/tools-web-search)
+	//     or
+	//     [file search](https://developers.openai.com/api/docs/guides/tools-file-search).
 	//     Learn more about
-	//     [built-in tools](https://platform.openai.com/docs/guides/tools).
+	//     [built-in tools](https://developers.openai.com/api/docs/guides/tools).
 	//   - **MCP Tools**: Integrations with third-party systems via custom MCP servers or
 	//     predefined connectors such as Google Drive and SharePoint. Learn more about
-	//     [MCP Tools](https://platform.openai.com/docs/guides/tools-connectors-mcp).
+	//     [MCP Tools](https://developers.openai.com/api/docs/guides/tools-connectors-mcp).
 	//   - **Function calls (custom tools)**: Functions that are defined by you, enabling
 	//     the model to call your own code with strongly typed arguments and outputs.
 	//     Learn more about
-	//     [function calling](https://platform.openai.com/docs/guides/function-calling).
+	//     [function calling](https://developers.openai.com/api/docs/guides/function-calling).
 	//     You can also use custom tools to call your own code.
 	Tools []BetaToolUnion `json:"tools" api:"required"`
 	// An alternative to sampling with temperature, called nucleus sampling, where the
@@ -4476,7 +4477,7 @@ type BetaResponse struct {
 	// We generally recommend altering this or `temperature` but not both.
 	TopP float64 `json:"top_p" api:"required"`
 	// Whether to run the model response in the background.
-	// [Learn more](https://platform.openai.com/docs/guides/background).
+	// [Learn more](https://developers.openai.com/api/docs/guides/background).
 	Background bool `json:"background" api:"nullable"`
 	// Unix timestamp (in seconds) of when this Response was completed. Only present
 	// when the status is `completed`.
@@ -4486,7 +4487,7 @@ type BetaResponse struct {
 	Conversation BetaResponseConversation `json:"conversation" api:"nullable"`
 	// An upper bound for the number of tokens that can be generated for a response,
 	// including visible output tokens and
-	// [reasoning tokens](https://platform.openai.com/docs/guides/reasoning).
+	// [reasoning tokens](https://developers.openai.com/api/docs/guides/reasoning).
 	MaxOutputTokens int64 `json:"max_output_tokens" api:"nullable"`
 	// The maximum number of total calls to built-in tools that can be processed in a
 	// response. This maximum number applies across all built-in tool calls, not per
@@ -4498,15 +4499,17 @@ type BetaResponse struct {
 	Moderation BetaResponseModeration `json:"moderation" api:"nullable"`
 	// The unique ID of the previous response to the model. Use this to create
 	// multi-turn conversations. Learn more about
-	// [conversation state](https://platform.openai.com/docs/guides/conversation-state).
+	// [conversation state](https://developers.openai.com/api/docs/guides/conversation-state).
 	// Cannot be used in conjunction with `conversation`.
 	PreviousResponseID string `json:"previous_response_id" api:"nullable"`
 	// Reference to a prompt template and its variables.
-	// [Learn more](https://platform.openai.com/docs/guides/text?api-mode=responses#reusable-prompts).
+	// [Learn more](https://developers.openai.com/api/docs/guides/text?api-mode=responses#version-prompts-in-code).
 	Prompt BetaResponsePrompt `json:"prompt" api:"nullable"`
+	// Prompt cache diagnostics requested for this response.
+	PromptCacheDiagnostics BetaResponsePromptCacheDiagnosticsUnion `json:"prompt_cache_diagnostics"`
 	// Used by OpenAI to cache responses for similar requests to optimize your cache
 	// hit rates. Replaces the `user` field.
-	// [Learn more](https://platform.openai.com/docs/guides/prompt-caching).
+	// [Learn more](https://developers.openai.com/api/docs/guides/prompt-caching).
 	PromptCacheKey string `json:"prompt_cache_key" api:"nullable"`
 	// The prompt-caching options that were applied to the response. Supported for
 	// `gpt-5.6` and later models.
@@ -4516,7 +4519,7 @@ type BetaResponse struct {
 	// The retention policy for the prompt cache. Set to `24h` to enable extended
 	// prompt caching, which keeps cached prefixes active for longer, up to a maximum
 	// of 24 hours.
-	// [Learn more](https://platform.openai.com/docs/guides/prompt-caching#prompt-cache-retention).
+	// [Learn more](https://developers.openai.com/api/docs/guides/prompt-caching#prompt-cache-retention).
 	// This field expresses a maximum retention policy, while
 	// `prompt_cache_options.ttl` expresses a minimum cache lifetime. The two fields
 	// are independent and do not interact. For `gpt-5.5`, `gpt-5.5-pro`, and future
@@ -4534,14 +4537,14 @@ type BetaResponse struct {
 	// Deprecated: deprecated
 	PromptCacheRetention BetaResponsePromptCacheRetention `json:"prompt_cache_retention" api:"nullable"`
 	// Configuration options for
-	// [reasoning models](https://platform.openai.com/docs/guides/reasoning).
+	// [reasoning models](https://developers.openai.com/api/docs/guides/reasoning).
 	Reasoning BetaResponseReasoning `json:"reasoning" api:"nullable"`
 	// A stable identifier used to help detect users of your application that may be
 	// violating OpenAI's usage policies. The IDs should be a string that uniquely
 	// identifies each user, with a maximum length of 64 characters. We recommend
 	// hashing their username or email address, in order to avoid sending us any
 	// identifying information.
-	// [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#safety-identifiers).
+	// [Learn more](https://developers.openai.com/api/docs/guides/safety-best-practices#implement-safety-identifiers).
 	SafetyIdentifier string `json:"safety_identifier" api:"nullable"`
 	// Specifies the processing type used for serving the request.
 	//
@@ -4550,13 +4553,15 @@ type BetaResponse struct {
 	//     will use 'default'.
 	//   - If set to 'default', then the request will be processed with the standard
 	//     pricing and performance for the selected model.
-	//   - If set to '[flex](https://platform.openai.com/docs/guides/flex-processing)',
-	//     then the request will be processed with the Flex Processing service tier.
-	//   - To opt-in to [Fast mode](/api/docs/guides/fast-mode) at the request level,
-	//     include the `service_tier=fast` or `service_tier=priority` parameter for
-	//     Responses or Chat Completions. The response will show `service_tier=priority`
-	//     regardless of if you specify `service_tier=fast` or `priority` in your
-	//     request.
+	//   - If set to
+	//     '[flex](https://developers.openai.com/api/docs/guides/flex-processing)', then
+	//     the request will be processed with the Flex Processing service tier.
+	//   - To opt-in to
+	//     [Fast mode](https://developers.openai.com/api/docs/guides/fast-mode) at the
+	//     request level, include the `service_tier=fast` or `service_tier=priority`
+	//     parameter for Responses or Chat Completions. The response will show
+	//     `service_tier=priority` regardless of if you specify `service_tier=fast` or
+	//     `priority` in your request.
 	//   - If set to 'ultrafast', then the request will be processed with the
 	//     access-controlled Ultrafast Processing service tier. This tier is currently
 	//     available for `gpt-5.6-sol`; a response served through it will show
@@ -4579,8 +4584,8 @@ type BetaResponse struct {
 	// Configuration options for a text response from the model. Can be plain text or
 	// structured JSON data. Learn more:
 	//
-	// - [Text inputs and outputs](https://platform.openai.com/docs/guides/text)
-	// - [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs)
+	//   - [Text inputs and outputs](https://developers.openai.com/api/docs/guides/text)
+	//   - [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
 	Text BetaResponseTextConfig `json:"text"`
 	// An integer between 0 and 20 specifying the maximum number of most likely tokens
 	// to return at each token position, each with an associated log probability. In
@@ -4603,48 +4608,49 @@ type BetaResponse struct {
 	// `prompt_cache_key` instead to maintain caching optimizations. A stable
 	// identifier for your end-users. Used to boost cache hit rates by better bucketing
 	// similar requests and to help OpenAI detect and prevent abuse.
-	// [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#safety-identifiers).
+	// [Learn more](https://developers.openai.com/api/docs/guides/safety-best-practices#implement-safety-identifiers).
 	//
 	// Deprecated: deprecated
 	User string `json:"user"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
-		ID                   respjson.Field
-		CreatedAt            respjson.Field
-		Error                respjson.Field
-		IncompleteDetails    respjson.Field
-		Instructions         respjson.Field
-		Metadata             respjson.Field
-		Model                respjson.Field
-		Object               respjson.Field
-		Output               respjson.Field
-		ParallelToolCalls    respjson.Field
-		Temperature          respjson.Field
-		ToolChoice           respjson.Field
-		Tools                respjson.Field
-		TopP                 respjson.Field
-		Background           respjson.Field
-		CompletedAt          respjson.Field
-		Conversation         respjson.Field
-		MaxOutputTokens      respjson.Field
-		MaxToolCalls         respjson.Field
-		Moderation           respjson.Field
-		PreviousResponseID   respjson.Field
-		Prompt               respjson.Field
-		PromptCacheKey       respjson.Field
-		PromptCacheOptions   respjson.Field
-		PromptCacheRetention respjson.Field
-		Reasoning            respjson.Field
-		SafetyIdentifier     respjson.Field
-		ServiceTier          respjson.Field
-		Status               respjson.Field
-		Text                 respjson.Field
-		TopLogprobs          respjson.Field
-		Truncation           respjson.Field
-		Usage                respjson.Field
-		User                 respjson.Field
-		ExtraFields          map[string]respjson.Field
-		raw                  string
+		ID                     respjson.Field
+		CreatedAt              respjson.Field
+		Error                  respjson.Field
+		IncompleteDetails      respjson.Field
+		Instructions           respjson.Field
+		Metadata               respjson.Field
+		Model                  respjson.Field
+		Object                 respjson.Field
+		Output                 respjson.Field
+		ParallelToolCalls      respjson.Field
+		Temperature            respjson.Field
+		ToolChoice             respjson.Field
+		Tools                  respjson.Field
+		TopP                   respjson.Field
+		Background             respjson.Field
+		CompletedAt            respjson.Field
+		Conversation           respjson.Field
+		MaxOutputTokens        respjson.Field
+		MaxToolCalls           respjson.Field
+		Moderation             respjson.Field
+		PreviousResponseID     respjson.Field
+		Prompt                 respjson.Field
+		PromptCacheDiagnostics respjson.Field
+		PromptCacheKey         respjson.Field
+		PromptCacheOptions     respjson.Field
+		PromptCacheRetention   respjson.Field
+		Reasoning              respjson.Field
+		SafetyIdentifier       respjson.Field
+		ServiceTier            respjson.Field
+		Status                 respjson.Field
+		Text                   respjson.Field
+		TopLogprobs            respjson.Field
+		Truncation             respjson.Field
+		Usage                  respjson.Field
+		User                   respjson.Field
+		ExtraFields            map[string]respjson.Field
+		raw                    string
 	} `json:"-"`
 }
 
@@ -4716,8 +4722,8 @@ func (r *BetaResponseInstructionsUnion) UnmarshalJSON(data []byte) error {
 // Model ID used to generate the response, like `gpt-6-astra`. OpenAI offers a wide
 // range of models with different capabilities, performance characteristics, and
 // price points. Refer to the
-// [model guide](https://platform.openai.com/docs/models) to browse and compare
-// available models.
+// [model guide](https://developers.openai.com/api/docs/models) to browse and
+// compare available models.
 type BetaResponseModel string
 
 const (
@@ -5255,6 +5261,179 @@ func (r *BetaResponseModerationOutputError) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
+// BetaResponsePromptCacheDiagnosticsUnion contains all possible properties and
+// values from [BetaResponsePromptCacheDiagnosticsCacheMiss],
+// [BetaResponsePromptCacheDiagnosticsCacheHit],
+// [BetaResponsePromptCacheDiagnosticsComparisonResponseNotFound],
+// [BetaResponsePromptCacheDiagnosticsUnavailable].
+//
+// Use the [BetaResponsePromptCacheDiagnosticsUnion.AsAny] method to switch on the
+// variant.
+//
+// Use the methods beginning with 'As' to cast the union to one of its variants.
+type BetaResponsePromptCacheDiagnosticsUnion struct {
+	// This field is from variant [BetaResponsePromptCacheDiagnosticsCacheMiss].
+	CacheMissedTokens int64 `json:"cache_missed_tokens"`
+	// This field is from variant [BetaResponsePromptCacheDiagnosticsCacheMiss].
+	Reason string `json:"reason"`
+	// Any of "cache_miss", "cache_hit", "comparison_response_not_found",
+	// "unavailable".
+	Type string `json:"type"`
+	// This field is from variant [BetaResponsePromptCacheDiagnosticsCacheMiss].
+	ComparisonReusableTokens int64 `json:"comparison_reusable_tokens"`
+	JSON                     struct {
+		CacheMissedTokens        respjson.Field
+		Reason                   respjson.Field
+		Type                     respjson.Field
+		ComparisonReusableTokens respjson.Field
+		raw                      string
+	} `json:"-"`
+}
+
+// anyBetaResponsePromptCacheDiagnostics is implemented by each variant of
+// [BetaResponsePromptCacheDiagnosticsUnion] to add type safety for the return type
+// of [BetaResponsePromptCacheDiagnosticsUnion.AsAny]
+type anyBetaResponsePromptCacheDiagnostics interface {
+	implBetaResponsePromptCacheDiagnosticsUnion()
+}
+
+func (BetaResponsePromptCacheDiagnosticsCacheMiss) implBetaResponsePromptCacheDiagnosticsUnion() {}
+func (BetaResponsePromptCacheDiagnosticsCacheHit) implBetaResponsePromptCacheDiagnosticsUnion()  {}
+func (BetaResponsePromptCacheDiagnosticsComparisonResponseNotFound) implBetaResponsePromptCacheDiagnosticsUnion() {
+}
+func (BetaResponsePromptCacheDiagnosticsUnavailable) implBetaResponsePromptCacheDiagnosticsUnion() {}
+
+// Use the following switch statement to find the correct variant
+//
+//	switch variant := BetaResponsePromptCacheDiagnosticsUnion.AsAny().(type) {
+//	case openai.BetaResponsePromptCacheDiagnosticsCacheMiss:
+//	case openai.BetaResponsePromptCacheDiagnosticsCacheHit:
+//	case openai.BetaResponsePromptCacheDiagnosticsComparisonResponseNotFound:
+//	case openai.BetaResponsePromptCacheDiagnosticsUnavailable:
+//	default:
+//	  fmt.Errorf("no variant present")
+//	}
+func (u BetaResponsePromptCacheDiagnosticsUnion) AsAny() anyBetaResponsePromptCacheDiagnostics {
+	switch u.Type {
+	case "cache_miss":
+		return u.AsCacheMiss()
+	case "cache_hit":
+		return u.AsCacheHit()
+	case "comparison_response_not_found":
+		return u.AsComparisonResponseNotFound()
+	case "unavailable":
+		return u.AsUnavailable()
+	}
+	return nil
+}
+
+func (u BetaResponsePromptCacheDiagnosticsUnion) AsCacheMiss() (v BetaResponsePromptCacheDiagnosticsCacheMiss) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u BetaResponsePromptCacheDiagnosticsUnion) AsCacheHit() (v BetaResponsePromptCacheDiagnosticsCacheHit) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u BetaResponsePromptCacheDiagnosticsUnion) AsComparisonResponseNotFound() (v BetaResponsePromptCacheDiagnosticsComparisonResponseNotFound) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u BetaResponsePromptCacheDiagnosticsUnion) AsUnavailable() (v BetaResponsePromptCacheDiagnosticsUnavailable) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+// Returns the unmodified JSON received from the API
+func (u BetaResponsePromptCacheDiagnosticsUnion) RawJSON() string { return u.JSON.raw }
+
+func (r *BetaResponsePromptCacheDiagnosticsUnion) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+type BetaResponsePromptCacheDiagnosticsCacheMiss struct {
+	// The estimated number of input tokens affected after the first detected
+	// divergence.
+	CacheMissedTokens int64 `json:"cache_missed_tokens" api:"required"`
+	// The reason prompt cache reuse did not occur.
+	//
+	// Any of "model_changed", "prompt_cache_key_changed", "tools_changed",
+	// "text_format_changed", "reasoning_effort_changed", "verbosity_changed",
+	// "context_compacted", "input_changed", "service_tier_changed".
+	Reason string             `json:"reason" api:"required"`
+	Type   constant.CacheMiss `json:"type" default:"cache_miss"`
+	// The raw token count of the reusable prefix in the compared response.
+	ComparisonReusableTokens int64 `json:"comparison_reusable_tokens"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		CacheMissedTokens        respjson.Field
+		Reason                   respjson.Field
+		Type                     respjson.Field
+		ComparisonReusableTokens respjson.Field
+		ExtraFields              map[string]respjson.Field
+		raw                      string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r BetaResponsePromptCacheDiagnosticsCacheMiss) RawJSON() string { return r.JSON.raw }
+func (r *BetaResponsePromptCacheDiagnosticsCacheMiss) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+type BetaResponsePromptCacheDiagnosticsCacheHit struct {
+	Type constant.CacheHit `json:"type" default:"cache_hit"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Type        respjson.Field
+		ExtraFields map[string]respjson.Field
+		raw         string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r BetaResponsePromptCacheDiagnosticsCacheHit) RawJSON() string { return r.JSON.raw }
+func (r *BetaResponsePromptCacheDiagnosticsCacheHit) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+type BetaResponsePromptCacheDiagnosticsComparisonResponseNotFound struct {
+	Type constant.ComparisonResponseNotFound `json:"type" default:"comparison_response_not_found"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Type        respjson.Field
+		ExtraFields map[string]respjson.Field
+		raw         string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r BetaResponsePromptCacheDiagnosticsComparisonResponseNotFound) RawJSON() string {
+	return r.JSON.raw
+}
+func (r *BetaResponsePromptCacheDiagnosticsComparisonResponseNotFound) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+type BetaResponsePromptCacheDiagnosticsUnavailable struct {
+	Type constant.Unavailable `json:"type" default:"unavailable"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Type        respjson.Field
+		ExtraFields map[string]respjson.Field
+		raw         string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r BetaResponsePromptCacheDiagnosticsUnavailable) RawJSON() string { return r.JSON.raw }
+func (r *BetaResponsePromptCacheDiagnosticsUnavailable) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
 // The prompt-caching options that were applied to the response. Supported for
 // `gpt-5.6` and later models.
 type BetaResponsePromptCacheOptions struct {
@@ -5266,12 +5445,15 @@ type BetaResponsePromptCacheOptions struct {
 	//
 	// Any of "30m".
 	Ttl string `json:"ttl" api:"required"`
+	// The response ID supplied as the prompt cache diagnostics comparison.
+	ComparisonResponseID string `json:"comparison_response_id" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
-		Mode        respjson.Field
-		Ttl         respjson.Field
-		ExtraFields map[string]respjson.Field
-		raw         string
+		Mode                 respjson.Field
+		Ttl                  respjson.Field
+		ComparisonResponseID respjson.Field
+		ExtraFields          map[string]respjson.Field
+		raw                  string
 	} `json:"-"`
 }
 
@@ -5286,7 +5468,7 @@ func (r *BetaResponsePromptCacheOptions) UnmarshalJSON(data []byte) error {
 // The retention policy for the prompt cache. Set to `24h` to enable extended
 // prompt caching, which keeps cached prefixes active for longer, up to a maximum
 // of 24 hours.
-// [Learn more](https://platform.openai.com/docs/guides/prompt-caching#prompt-cache-retention).
+// [Learn more](https://developers.openai.com/api/docs/guides/prompt-caching#prompt-cache-retention).
 // This field expresses a maximum retention policy, while
 // `prompt_cache_options.ttl` expresses a minimum cache lifetime. The two fields
 // are independent and do not interact. For `gpt-5.5`, `gpt-5.5-pro`, and future
@@ -5306,7 +5488,7 @@ const (
 )
 
 // Configuration options for
-// [reasoning models](https://platform.openai.com/docs/guides/reasoning).
+// [reasoning models](https://developers.openai.com/api/docs/guides/reasoning).
 type BetaResponseReasoning struct {
 	// Controls which reasoning items are rendered back to the model on later turns. If
 	// omitted or set to `auto`, the model determines the context mode. The `gpt-5.6`
@@ -5321,7 +5503,7 @@ type BetaResponseReasoning struct {
 	// are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Reducing
 	// reasoning effort can result in faster responses and fewer tokens used on
 	// reasoning in a response. Not all reasoning models support every value. See the
-	// [reasoning guide](https://platform.openai.com/docs/guides/reasoning) for
+	// [reasoning guide](https://developers.openai.com/api/docs/guides/reasoning) for
 	// model-specific support.
 	//
 	// Any of "none", "minimal", "low", "medium", "high", "xhigh", "max".
@@ -5374,13 +5556,15 @@ func (r *BetaResponseReasoning) UnmarshalJSON(data []byte) error {
 //     will use 'default'.
 //   - If set to 'default', then the request will be processed with the standard
 //     pricing and performance for the selected model.
-//   - If set to '[flex](https://platform.openai.com/docs/guides/flex-processing)',
-//     then the request will be processed with the Flex Processing service tier.
-//   - To opt-in to [Fast mode](/api/docs/guides/fast-mode) at the request level,
-//     include the `service_tier=fast` or `service_tier=priority` parameter for
-//     Responses or Chat Completions. The response will show `service_tier=priority`
-//     regardless of if you specify `service_tier=fast` or `priority` in your
-//     request.
+//   - If set to
+//     '[flex](https://developers.openai.com/api/docs/guides/flex-processing)', then
+//     the request will be processed with the Flex Processing service tier.
+//   - To opt-in to
+//     [Fast mode](https://developers.openai.com/api/docs/guides/fast-mode) at the
+//     request level, include the `service_tier=fast` or `service_tier=priority`
+//     parameter for Responses or Chat Completions. The response will show
+//     `service_tier=priority` regardless of if you specify `service_tier=fast` or
+//     `priority` in your request.
 //   - If set to 'ultrafast', then the request will be processed with the
 //     access-controlled Ultrafast Processing service tier. This tier is currently
 //     available for `gpt-5.6-sol`; a response served through it will show
@@ -6666,7 +6850,7 @@ func (r *BetaResponseCodeInterpreterToolCallAgentParam) UnmarshalJSON(data []byt
 }
 
 // A compaction item generated by the
-// [`v1/responses/compact` API](https://platform.openai.com/docs/api-reference/responses/compact).
+// [`v1/responses/compact` API](https://developers.openai.com/api/reference/resources/responses/methods/compact).
 type BetaResponseCompactionItem struct {
 	// The unique ID of the compaction item.
 	ID string `json:"id" api:"required"`
@@ -6715,7 +6899,7 @@ func (r *BetaResponseCompactionItemAgent) UnmarshalJSON(data []byte) error {
 }
 
 // A compaction item generated by the
-// [`v1/responses/compact` API](https://platform.openai.com/docs/api-reference/responses/compact).
+// [`v1/responses/compact` API](https://developers.openai.com/api/reference/resources/responses/methods/compact).
 type BetaResponseCompactionItemParamResp struct {
 	// The encrypted content of the compaction summary.
 	EncryptedContent string `json:"encrypted_content" api:"required"`
@@ -6771,7 +6955,7 @@ func (r *BetaResponseCompactionItemParamAgentResp) UnmarshalJSON(data []byte) er
 }
 
 // A compaction item generated by the
-// [`v1/responses/compact` API](https://platform.openai.com/docs/api-reference/responses/compact).
+// [`v1/responses/compact` API](https://developers.openai.com/api/reference/resources/responses/methods/compact).
 //
 // The properties EncryptedContent, Type are required.
 type BetaResponseCompactionItemParam struct {
@@ -6859,7 +7043,7 @@ func (r *BetaResponseCompletedEventAgent) UnmarshalJSON(data []byte) error {
 }
 
 // A tool call to a computer use tool. See the
-// [computer use guide](https://platform.openai.com/docs/guides/tools-computer-use)
+// [computer use guide](https://developers.openai.com/api/docs/guides/tools-computer-use)
 // for more information.
 type BetaResponseComputerToolCall struct {
 	// The unique ID of the computer call.
@@ -6975,7 +7159,7 @@ func (r *BetaResponseComputerToolCallAgent) UnmarshalJSON(data []byte) error {
 }
 
 // A tool call to a computer use tool. See the
-// [computer use guide](https://platform.openai.com/docs/guides/tools-computer-use)
+// [computer use guide](https://developers.openai.com/api/docs/guides/tools-computer-use)
 // for more information.
 //
 // The properties ID, CallID, PendingSafetyChecks, Status, Type are required.
@@ -9263,7 +9447,7 @@ func (r *BetaResponseFileSearchCallSearchingEventAgent) UnmarshalJSON(data []byt
 }
 
 // The results of a file search tool call. See the
-// [file search guide](https://platform.openai.com/docs/guides/tools-file-search)
+// [file search guide](https://developers.openai.com/api/docs/guides/tools-file-search)
 // for more information.
 type BetaResponseFileSearchToolCall struct {
 	// The unique ID of the file search tool call.
@@ -9418,7 +9602,7 @@ func (r *BetaResponseFileSearchToolCallResultAttributeUnion) UnmarshalJSON(data 
 }
 
 // The results of a file search tool call. See the
-// [file search guide](https://platform.openai.com/docs/guides/tools-file-search)
+// [file search guide](https://developers.openai.com/api/docs/guides/tools-file-search)
 // for more information.
 //
 // The properties ID, Queries, Status, Type are required.
@@ -9772,7 +9956,7 @@ func (r *BetaResponseFormatTextConfigJSONObjectParam) UnmarshalJSON(data []byte)
 
 // JSON Schema response format. Used to generate structured JSON responses. Learn
 // more about
-// [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs).
+// [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs).
 type BetaResponseFormatTextJSONSchemaConfig struct {
 	// The name of the response format. Must be a-z, A-Z, 0-9, or contain underscores
 	// and dashes, with a maximum length of 64.
@@ -9789,7 +9973,7 @@ type BetaResponseFormatTextJSONSchemaConfig struct {
 	// true, the model will always follow the exact schema defined in the `schema`
 	// field. Only a subset of JSON Schema is supported when `strict` is `true`. To
 	// learn more, read the
-	// [Structured Outputs guide](https://platform.openai.com/docs/guides/structured-outputs).
+	// [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
 	Strict bool `json:"strict" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -9821,7 +10005,7 @@ func (r BetaResponseFormatTextJSONSchemaConfig) ToParam() BetaResponseFormatText
 
 // JSON Schema response format. Used to generate structured JSON responses. Learn
 // more about
-// [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs).
+// [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs).
 //
 // The properties Name, Schema, Type are required.
 type BetaResponseFormatTextJSONSchemaConfigParam struct {
@@ -9835,7 +10019,7 @@ type BetaResponseFormatTextJSONSchemaConfigParam struct {
 	// true, the model will always follow the exact schema defined in the `schema`
 	// field. Only a subset of JSON Schema is supported when `strict` is `true`. To
 	// learn more, read the
-	// [Structured Outputs guide](https://platform.openai.com/docs/guides/structured-outputs).
+	// [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
 	Strict param.Opt[bool] `json:"strict,omitzero"`
 	// A description of what the response format is for, used by the model to determine
 	// how to respond in the format.
@@ -9912,8 +10096,6 @@ type BetaResponseFunctionCallArgumentsDoneEvent struct {
 	Arguments string `json:"arguments" api:"required"`
 	// The ID of the item.
 	ItemID string `json:"item_id" api:"required"`
-	// The name of the function that was called.
-	Name string `json:"name" api:"required"`
 	// The index of the output item.
 	OutputIndex int64 `json:"output_index" api:"required"`
 	// The sequence number of this event.
@@ -9925,7 +10107,6 @@ type BetaResponseFunctionCallArgumentsDoneEvent struct {
 	JSON struct {
 		Arguments      respjson.Field
 		ItemID         respjson.Field
-		Name           respjson.Field
 		OutputIndex    respjson.Field
 		SequenceNumber respjson.Field
 		Type           respjson.Field
@@ -11072,7 +11253,7 @@ func (r *BetaResponseFunctionShellToolCallOutputCallerProgram) UnmarshalJSON(dat
 }
 
 // A tool call to run a function. See the
-// [function calling guide](https://platform.openai.com/docs/guides/function-calling)
+// [function calling guide](https://developers.openai.com/api/docs/guides/function-calling)
 // for more information.
 type BetaResponseFunctionToolCall struct {
 	// A JSON string of the arguments to pass to the function.
@@ -11260,7 +11441,7 @@ const (
 )
 
 // A tool call to run a function. See the
-// [function calling guide](https://platform.openai.com/docs/guides/function-calling)
+// [function calling guide](https://developers.openai.com/api/docs/guides/function-calling)
 // for more information.
 //
 // The properties Arguments, CallID, Name, Type are required.
@@ -11408,7 +11589,7 @@ func (r *BetaResponseFunctionToolCallCallerProgramParam) UnmarshalJSON(data []by
 }
 
 // A tool call to run a function. See the
-// [function calling guide](https://platform.openai.com/docs/guides/function-calling)
+// [function calling guide](https://developers.openai.com/api/docs/guides/function-calling)
 // for more information.
 type BetaResponseFunctionToolCallItem struct {
 	// The unique ID of the function tool call.
@@ -11782,8 +11963,8 @@ func (r *BetaResponseFunctionToolCallOutputItemCallerProgram) UnmarshalJSON(data
 }
 
 // The results of a web search tool call. See the
-// [web search guide](https://platform.openai.com/docs/guides/tools-web-search) for
-// more information.
+// [web search guide](https://developers.openai.com/api/docs/guides/tools-web-search)
+// for more information.
 type BetaResponseFunctionWebSearch struct {
 	// The unique ID of the web search tool call.
 	ID string `json:"id" api:"required"`
@@ -11792,7 +11973,7 @@ type BetaResponseFunctionWebSearch struct {
 	Action BetaResponseFunctionWebSearchActionUnion `json:"action" api:"required"`
 	// The status of the web search tool call.
 	//
-	// Any of "in_progress", "searching", "completed", "failed".
+	// Any of "in_progress", "searching", "completed", "failed", "incomplete".
 	Status BetaResponseFunctionWebSearchStatus `json:"status" api:"required"`
 	// The type of the web search tool call. Always `web_search_call`.
 	Type constant.WebSearchCall `json:"type" default:"web_search_call"`
@@ -12015,6 +12196,7 @@ const (
 	BetaResponseFunctionWebSearchStatusSearching  BetaResponseFunctionWebSearchStatus = "searching"
 	BetaResponseFunctionWebSearchStatusCompleted  BetaResponseFunctionWebSearchStatus = "completed"
 	BetaResponseFunctionWebSearchStatusFailed     BetaResponseFunctionWebSearchStatus = "failed"
+	BetaResponseFunctionWebSearchStatusIncomplete BetaResponseFunctionWebSearchStatus = "incomplete"
 )
 
 // The agent that produced this item.
@@ -12036,8 +12218,8 @@ func (r *BetaResponseFunctionWebSearchAgent) UnmarshalJSON(data []byte) error {
 }
 
 // The results of a web search tool call. See the
-// [web search guide](https://platform.openai.com/docs/guides/tools-web-search) for
-// more information.
+// [web search guide](https://developers.openai.com/api/docs/guides/tools-web-search)
+// for more information.
 //
 // The properties ID, Action, Status, Type are required.
 type BetaResponseFunctionWebSearchParam struct {
@@ -12048,7 +12230,7 @@ type BetaResponseFunctionWebSearchParam struct {
 	Action BetaResponseFunctionWebSearchActionUnionParam `json:"action,omitzero" api:"required"`
 	// The status of the web search tool call.
 	//
-	// Any of "in_progress", "searching", "completed", "failed".
+	// Any of "in_progress", "searching", "completed", "failed", "incomplete".
 	Status BetaResponseFunctionWebSearchStatus `json:"status,omitzero" api:"required"`
 	// The agent that produced this item.
 	Agent BetaResponseFunctionWebSearchAgentParam `json:"agent,omitzero"`
@@ -13189,7 +13371,7 @@ func (r *BetaResponseInputFileContentPromptCacheBreakpointParam) UnmarshalJSON(d
 }
 
 // An image input to the model. Learn about
-// [image inputs](https://platform.openai.com/docs/guides/vision).
+// [image inputs](https://developers.openai.com/api/docs/guides/images-vision).
 type BetaResponseInputImage struct {
 	// The detail level of the image to be sent to the model. One of `high`, `low`,
 	// `auto`, or `original`. Defaults to `auto`.
@@ -13266,7 +13448,7 @@ func (r *BetaResponseInputImagePromptCacheBreakpoint) UnmarshalJSON(data []byte)
 }
 
 // An image input to the model. Learn about
-// [image inputs](https://platform.openai.com/docs/guides/vision).
+// [image inputs](https://developers.openai.com/api/docs/guides/images-vision).
 //
 // The properties Detail, Type are required.
 type BetaResponseInputImageParam struct {
@@ -13326,7 +13508,7 @@ func (r *BetaResponseInputImagePromptCacheBreakpointParam) UnmarshalJSON(data []
 }
 
 // An image input to the model. Learn about
-// [image inputs](https://platform.openai.com/docs/guides/vision)
+// [image inputs](https://developers.openai.com/api/docs/guides/images-vision)
 type BetaResponseInputImageContent struct {
 	// The type of the input item. Always `input_image`.
 	Type constant.InputImage `json:"type" default:"input_image"`
@@ -13404,7 +13586,7 @@ func (r *BetaResponseInputImageContentPromptCacheBreakpoint) UnmarshalJSON(data 
 }
 
 // An image input to the model. Learn about
-// [image inputs](https://platform.openai.com/docs/guides/vision)
+// [image inputs](https://developers.openai.com/api/docs/guides/images-vision)
 //
 // The property Type is required.
 type BetaResponseInputImageContentParam struct {
@@ -13594,7 +13776,11 @@ type BetaResponseInputItemUnion struct {
 	Summary          []BetaResponseReasoningItemSummary `json:"summary"`
 	EncryptedContent string                             `json:"encrypted_content"`
 	Result           string                             `json:"result"`
-	Code             string                             `json:"code"`
+	// This field is from variant [BetaResponseInputItemImageGenerationCall].
+	Quality string `json:"quality"`
+	// This field is from variant [BetaResponseInputItemImageGenerationCall].
+	Size string `json:"size"`
+	Code string `json:"code"`
 	// This field is from variant [BetaResponseCodeInterpreterToolCall].
 	ContainerID string `json:"container_id"`
 	// This field is from variant [BetaResponseCodeInterpreterToolCall].
@@ -13646,6 +13832,8 @@ type BetaResponseInputItemUnion struct {
 		Summary                  respjson.Field
 		EncryptedContent         respjson.Field
 		Result                   respjson.Field
+		Quality                  respjson.Field
+		Size                     respjson.Field
 		Code                     respjson.Field
 		ContainerID              respjson.Field
 		Outputs                  respjson.Field
@@ -15288,6 +15476,13 @@ type BetaResponseInputItemImageGenerationCall struct {
 	Type constant.ImageGenerationCall `json:"type" default:"image_generation_call"`
 	// The agent that produced this item.
 	Agent BetaResponseInputItemImageGenerationCallAgent `json:"agent" api:"nullable"`
+	// The quality of the image generated by the image generation tool call. One of
+	// `low`, `medium`, `high`, `xhigh`, `max`, or `auto`.
+	//
+	// Any of "low", "medium", "high", "xhigh", "max", "auto".
+	Quality string `json:"quality" api:"nullable"`
+	// The image dimensions as a `WIDTHxHEIGHT` string, for example `1536x864`.
+	Size string `json:"size" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		ID          respjson.Field
@@ -15295,6 +15490,8 @@ type BetaResponseInputItemImageGenerationCall struct {
 		Status      respjson.Field
 		Type        respjson.Field
 		Agent       respjson.Field
+		Quality     respjson.Field
+		Size        respjson.Field
 		ExtraFields map[string]respjson.Field
 		raw         string
 	} `json:"-"`
@@ -17177,6 +17374,22 @@ func (u BetaResponseInputItemUnionParam) GetReasoning() *BetaResponseConfigurati
 func (u BetaResponseInputItemUnionParam) GetSummary() []BetaResponseReasoningItemSummaryParam {
 	if vt := u.OfReasoning; vt != nil {
 		return vt.Summary
+	}
+	return nil
+}
+
+// Returns a pointer to the underlying variant's property, if present.
+func (u BetaResponseInputItemUnionParam) GetQuality() *string {
+	if vt := u.OfImageGenerationCall; vt != nil {
+		return &vt.Quality
+	}
+	return nil
+}
+
+// Returns a pointer to the underlying variant's property, if present.
+func (u BetaResponseInputItemUnionParam) GetSize() *string {
+	if vt := u.OfImageGenerationCall; vt != nil && vt.Size.Valid() {
+		return &vt.Size.Value
 	}
 	return nil
 }
@@ -19404,6 +19617,13 @@ type BetaResponseInputItemImageGenerationCallParam struct {
 	Status string `json:"status,omitzero" api:"required"`
 	// The agent that produced this item.
 	Agent BetaResponseInputItemImageGenerationCallAgentParam `json:"agent,omitzero"`
+	// The quality of the image generated by the image generation tool call. One of
+	// `low`, `medium`, `high`, `xhigh`, `max`, or `auto`.
+	//
+	// Any of "low", "medium", "high", "xhigh", "max", "auto".
+	Quality string `json:"quality,omitzero"`
+	// The image dimensions as a `WIDTHxHEIGHT` string, for example `1536x864`.
+	Size param.Opt[string] `json:"size,omitzero"`
 	// The type of the image generation call. Always `image_generation_call`.
 	//
 	// This field can be elided, and will marshal its zero value as
@@ -19423,6 +19643,9 @@ func (r *BetaResponseInputItemImageGenerationCallParam) UnmarshalJSON(data []byt
 func init() {
 	apijson.RegisterFieldValidator[BetaResponseInputItemImageGenerationCallParam](
 		"status", "in_progress", "completed", "generating", "failed",
+	)
+	apijson.RegisterFieldValidator[BetaResponseInputItemImageGenerationCallParam](
+		"quality", "low", "medium", "high", "xhigh", "max", "auto",
 	)
 }
 
@@ -21208,6 +21431,10 @@ type BetaResponseItemUnion struct {
 	// This field is from variant [BetaResponseItemProgram].
 	Fingerprint string `json:"fingerprint"`
 	Result      string `json:"result"`
+	// This field is from variant [BetaResponseItemImageGenerationCall].
+	Quality string `json:"quality"`
+	// This field is from variant [BetaResponseItemImageGenerationCall].
+	Size string `json:"size"`
 	// This field is from variant [BetaResponseCodeInterpreterToolCall].
 	ContainerID string `json:"container_id"`
 	// This field is from variant [BetaResponseCodeInterpreterToolCall].
@@ -21260,6 +21487,8 @@ type BetaResponseItemUnion struct {
 		Code                     respjson.Field
 		Fingerprint              respjson.Field
 		Result                   respjson.Field
+		Quality                  respjson.Field
+		Size                     respjson.Field
 		ContainerID              respjson.Field
 		Outputs                  respjson.Field
 		Environment              respjson.Field
@@ -22542,6 +22771,13 @@ type BetaResponseItemImageGenerationCall struct {
 	Type constant.ImageGenerationCall `json:"type" default:"image_generation_call"`
 	// The agent that produced this item.
 	Agent BetaResponseItemImageGenerationCallAgent `json:"agent" api:"nullable"`
+	// The quality of the image generated by the image generation tool call. One of
+	// `low`, `medium`, `high`, `xhigh`, `max`, or `auto`.
+	//
+	// Any of "low", "medium", "high", "xhigh", "max", "auto".
+	Quality string `json:"quality" api:"nullable"`
+	// The image dimensions as a `WIDTHxHEIGHT` string, for example `1536x864`.
+	Size string `json:"size" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		ID          respjson.Field
@@ -22549,6 +22785,8 @@ type BetaResponseItemImageGenerationCall struct {
 		Status      respjson.Field
 		Type        respjson.Field
 		Agent       respjson.Field
+		Quality     respjson.Field
+		Size        respjson.Field
 		ExtraFields map[string]respjson.Field
 		raw         string
 	} `json:"-"`
@@ -23491,6 +23729,10 @@ type BetaResponseOutputItemUnion struct {
 	// This field is a union of [[]BetaToolUnion], [[]BetaToolUnion],
 	// [[]BetaResponseOutputItemMcpListToolsTool]
 	Tools BetaResponseOutputItemUnionTools `json:"tools"`
+	// This field is from variant [BetaResponseOutputItemImageGenerationCall].
+	Quality string `json:"quality"`
+	// This field is from variant [BetaResponseOutputItemImageGenerationCall].
+	Size string `json:"size"`
 	// This field is from variant [BetaResponseCodeInterpreterToolCall].
 	ContainerID string `json:"container_id"`
 	// This field is from variant [BetaResponseCodeInterpreterToolCall].
@@ -23542,6 +23784,8 @@ type BetaResponseOutputItemUnion struct {
 		Result                   respjson.Field
 		Execution                respjson.Field
 		Tools                    respjson.Field
+		Quality                  respjson.Field
+		Size                     respjson.Field
 		ContainerID              respjson.Field
 		Outputs                  respjson.Field
 		Environment              respjson.Field
@@ -24811,6 +25055,13 @@ type BetaResponseOutputItemImageGenerationCall struct {
 	Type constant.ImageGenerationCall `json:"type" default:"image_generation_call"`
 	// The agent that produced this item.
 	Agent BetaResponseOutputItemImageGenerationCallAgent `json:"agent" api:"nullable"`
+	// The quality of the image generated by the image generation tool call. One of
+	// `low`, `medium`, `high`, `xhigh`, `max`, or `auto`.
+	//
+	// Any of "low", "medium", "high", "xhigh", "max", "auto".
+	Quality string `json:"quality" api:"nullable"`
+	// The image dimensions as a `WIDTHxHEIGHT` string, for example `1536x864`.
+	Size string `json:"size" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		ID          respjson.Field
@@ -24818,6 +25069,8 @@ type BetaResponseOutputItemImageGenerationCall struct {
 		Status      respjson.Field
 		Type        respjson.Field
 		Agent       respjson.Field
+		Quality     respjson.Field
+		Size        respjson.Field
 		ExtraFields map[string]respjson.Field
 		raw         string
 	} `json:"-"`
@@ -26545,7 +26798,7 @@ func (r *BetaResponseOutputTextAnnotationAddedEventAgent) UnmarshalJSON(data []b
 }
 
 // Reference to a prompt template and its variables.
-// [Learn more](https://platform.openai.com/docs/guides/text?api-mode=responses#reusable-prompts).
+// [Learn more](https://developers.openai.com/api/docs/guides/text?api-mode=responses#version-prompts-in-code).
 type BetaResponsePrompt struct {
 	// The unique identifier of the prompt template to use.
 	ID string `json:"id" api:"required"`
@@ -26671,7 +26924,7 @@ func (r *BetaResponsePromptVariableUnionPromptCacheBreakpoint) UnmarshalJSON(dat
 }
 
 // Reference to a prompt template and its variables.
-// [Learn more](https://platform.openai.com/docs/guides/text?api-mode=responses#reusable-prompts).
+// [Learn more](https://developers.openai.com/api/docs/guides/text?api-mode=responses#version-prompts-in-code).
 //
 // The property ID is required.
 type BetaResponsePromptParam struct {
@@ -26875,7 +27128,7 @@ func (r *BetaResponseQueuedEventAgent) UnmarshalJSON(data []byte) error {
 // A description of the chain of thought used by a reasoning model while generating
 // a response. Be sure to include these items in your `input` to the Responses API
 // for subsequent turns of a conversation if you are manually
-// [managing context](https://platform.openai.com/docs/guides/conversation-state).
+// [managing context](https://developers.openai.com/api/docs/guides/conversation-state).
 type BetaResponseReasoningItem struct {
 	// The unique identifier of the reasoning content.
 	ID string `json:"id" api:"required"`
@@ -27004,7 +27257,7 @@ const (
 // A description of the chain of thought used by a reasoning model while generating
 // a response. Be sure to include these items in your `input` to the Responses API
 // for subsequent turns of a conversation if you are manually
-// [managing context](https://platform.openai.com/docs/guides/conversation-state).
+// [managing context](https://developers.openai.com/api/docs/guides/conversation-state).
 //
 // The properties ID, Summary, Type are required.
 type BetaResponseReasoningItemParam struct {
@@ -28217,10 +28470,8 @@ type BetaResponseStreamEventUnion struct {
 	// This field is from variant [BetaResponseErrorEvent].
 	Message string `json:"message"`
 	// This field is from variant [BetaResponseErrorEvent].
-	Param     string `json:"param"`
-	Arguments string `json:"arguments"`
-	// This field is from variant [BetaResponseFunctionCallArgumentsDoneEvent].
-	Name         string `json:"name"`
+	Param        string `json:"param"`
+	Arguments    string `json:"arguments"`
 	Command      string `json:"command"`
 	CommandIndex int64  `json:"command_index"`
 	// This field is from variant [BetaResponseShellCallCommandDeltaEvent].
@@ -28270,7 +28521,6 @@ type BetaResponseStreamEventUnion struct {
 		Message           respjson.Field
 		Param             respjson.Field
 		Arguments         respjson.Field
-		Name              respjson.Field
 		Command           respjson.Field
 		CommandIndex      respjson.Field
 		Obfuscation       respjson.Field
@@ -28924,14 +29174,14 @@ func (r *BetaResponseStreamEventUnionLogprobs) UnmarshalJSON(data []byte) error 
 // Configuration options for a text response from the model. Can be plain text or
 // structured JSON data. Learn more:
 //
-// - [Text inputs and outputs](https://platform.openai.com/docs/guides/text)
-// - [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs)
+//   - [Text inputs and outputs](https://developers.openai.com/api/docs/guides/text)
+//   - [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
 type BetaResponseTextConfig struct {
 	// An object specifying the format that the model must output.
 	//
 	// Configuring `{ "type": "json_schema" }` enables Structured Outputs, which
 	// ensures the model will match your supplied JSON schema. Learn more in the
-	// [Structured Outputs guide](https://platform.openai.com/docs/guides/structured-outputs).
+	// [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
 	//
 	// The default format is `{ "type": "text" }` with no additional options.
 	//
@@ -28987,8 +29237,8 @@ const (
 // Configuration options for a text response from the model. Can be plain text or
 // structured JSON data. Learn more:
 //
-// - [Text inputs and outputs](https://platform.openai.com/docs/guides/text)
-// - [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs)
+//   - [Text inputs and outputs](https://developers.openai.com/api/docs/guides/text)
+//   - [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
 type BetaResponseTextConfigParam struct {
 	// Constrains the verbosity of the model's response. Lower values will result in
 	// more concise responses, while higher values will result in more verbose
@@ -29001,7 +29251,7 @@ type BetaResponseTextConfigParam struct {
 	//
 	// Configuring `{ "type": "json_schema" }` enables Structured Outputs, which
 	// ensures the model will match your supplied JSON schema. Learn more in the
-	// [Structured Outputs guide](https://platform.openai.com/docs/guides/structured-outputs).
+	// [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs).
 	//
 	// The default format is `{ "type": "text" }` with no additional options.
 	//
@@ -29553,7 +29803,7 @@ type BetaResponseUsageInputTokensDetails struct {
 	// The number of input tokens that were written to the cache.
 	CacheWriteTokens int64 `json:"cache_write_tokens" api:"required"`
 	// The number of tokens that were retrieved from the cache.
-	// [More on prompt caching](https://platform.openai.com/docs/guides/prompt-caching).
+	// [More on prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching).
 	CachedTokens int64 `json:"cached_tokens" api:"required"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -30154,7 +30404,7 @@ func (r BetaToolUnion) ToParam() BetaToolUnionParam {
 
 // Give the model access to additional tools via remote Model Context Protocol
 // (MCP) servers.
-// [Learn more about MCP](https://platform.openai.com/docs/guides/tools-remote-mcp).
+// [Learn more about MCP](https://developers.openai.com/api/docs/guides/tools-connectors-mcp).
 type BetaToolMcp struct {
 	// A label for this MCP server, used to identify it in tool calls.
 	ServerLabel string `json:"server_label" api:"required"`
@@ -30173,7 +30423,7 @@ type BetaToolMcp struct {
 	// Identifier for service connectors, like those available in ChatGPT. One of
 	// `server_url`, `connector_id`, or `tunnel_id` must be provided. Learn more about
 	// service connectors
-	// [here](https://platform.openai.com/docs/guides/tools-remote-mcp#connectors).
+	// [here](https://developers.openai.com/api/docs/guides/tools-connectors-mcp#connectors).
 	//
 	// Currently supported `connector_id` values are:
 	//
@@ -30623,9 +30873,11 @@ type BetaToolImageGeneration struct {
 	// one of `transparent`, `opaque`, or `auto` (default value). When `auto` is used,
 	// the model will automatically determine the best background for the image.
 	//
-	// Transparent backgrounds are available for supported GPT Image models. For
-	// `gpt-image-2` and `gpt-image-2-2026-04-21`, this support is in preview. When
-	// using `transparent`, set the output format to `png` or `webp`.
+	// `gpt-image-2.5-sunburst` and `gpt-image-2.5-flare`, including their `2026-09-08`
+	// snapshots, support `opaque` and `transparent` backgrounds. Transparent
+	// backgrounds are available for supported GPT Image models. For `gpt-image-2` and
+	// `gpt-image-2-2026-04-21`, this support is in preview. When using `transparent`,
+	// set the output format to `png` or `webp`.
 	//
 	// Any of "transparent", "opaque", "auto".
 	Background string `json:"background"`
@@ -30640,7 +30892,9 @@ type BetaToolImageGeneration struct {
 	// `file_id` (string, optional).
 	InputImageMask BetaToolImageGenerationInputImageMask `json:"input_image_mask"`
 	// The image generation model to use. One of `gpt-image-1`, `gpt-image-1-mini`,
-	// `gpt-image-1.5`, `gpt-image-2`, `gpt-image-2-2026-04-21`, or
+	// `gpt-image-1.5`, `gpt-image-2`, `gpt-image-2-2026-04-21`,
+	// `gpt-image-2.5-sunburst`, `gpt-image-2.5-sunburst-2026-09-08`,
+	// `gpt-image-2.5-flare`, `gpt-image-2.5-flare-2026-09-08`, or
 	// `chatgpt-image-latest`. Default: `gpt-image-1`.
 	Model string `json:"model"`
 	// Moderation level for the generated image. Default: `auto`.
@@ -30657,22 +30911,25 @@ type BetaToolImageGeneration struct {
 	// Number of partial images to generate in streaming mode, from 0 (default value)
 	// to 3.
 	PartialImages int64 `json:"partial_images"`
-	// The quality of the generated image. One of `low`, `medium`, `high`, or `auto`.
-	// Default: `auto`.
+	// The quality of the generated image. The GPT image models support `low`,
+	// `medium`, and `high`. `gpt-image-2.5-sunburst` and `gpt-image-2.5-flare`,
+	// including their `2026-09-08` snapshots, also support `xhigh` and `max`. Default:
+	// `auto`.
 	//
-	// Any of "low", "medium", "high", "auto".
+	// Any of "low", "medium", "high", "xhigh", "max", "auto".
 	Quality string `json:"quality"`
-	// The size of the generated images. For `gpt-image-2` and
-	// `gpt-image-2-2026-04-21`, arbitrary resolutions are supported as `WIDTHxHEIGHT`
-	// strings, for example `1536x864`. Width and height must both be divisible by 16
-	// and the requested aspect ratio must be between 1:3 and 3:1. Resolutions above
-	// `2560x1440` are experimental, and the maximum supported resolution is
-	// `3840x2160`. The requested size must also satisfy the model's current pixel and
-	// edge limits. The standard sizes `1024x1024`, `1536x1024`, and `1024x1536` are
-	// supported by the GPT image models; `auto` is supported for models that allow
-	// automatic sizing. For `dall-e-2`, use one of `256x256`, `512x512`, or
-	// `1024x1024`. For `dall-e-3`, use one of `1024x1024`, `1792x1024`, or
-	// `1024x1792`.
+	// The size of the generated images. For `gpt-image-2`, `gpt-image-2-2026-04-21`,
+	// `gpt-image-2.5-sunburst`, `gpt-image-2.5-sunburst-2026-09-08`,
+	// `gpt-image-2.5-flare`, and `gpt-image-2.5-flare-2026-09-08`, arbitrary
+	// resolutions are supported as `WIDTHxHEIGHT` strings, for example `1536x864`.
+	// Width and height must both be divisible by 16 and the requested aspect ratio
+	// must be between 1:3 and 3:1. Resolutions above `2560x1440` are experimental, and
+	// the maximum supported resolution is `3840x2160`. The requested size must also
+	// satisfy the model's current pixel and edge limits. The standard sizes
+	// `1024x1024`, `1536x1024`, and `1024x1536` are supported by the GPT image models;
+	// `auto` is supported for models that allow automatic sizing. For `dall-e-2`, use
+	// one of `256x256`, `512x512`, or `1024x1024`. For `dall-e-3`, use one of
+	// `1024x1024`, `1792x1024`, or `1024x1792`.
 	Size string `json:"size"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -31533,7 +31790,7 @@ func init() {
 
 // Give the model access to additional tools via remote Model Context Protocol
 // (MCP) servers.
-// [Learn more about MCP](https://platform.openai.com/docs/guides/tools-remote-mcp).
+// [Learn more about MCP](https://developers.openai.com/api/docs/guides/tools-connectors-mcp).
 //
 // The properties ServerLabel, Type are required.
 type BetaToolMcpParam struct {
@@ -31567,7 +31824,7 @@ type BetaToolMcpParam struct {
 	// Identifier for service connectors, like those available in ChatGPT. One of
 	// `server_url`, `connector_id`, or `tunnel_id` must be provided. Learn more about
 	// service connectors
-	// [here](https://platform.openai.com/docs/guides/tools-remote-mcp#connectors).
+	// [here](https://developers.openai.com/api/docs/guides/tools-connectors-mcp#connectors).
 	//
 	// Currently supported `connector_id` values are:
 	//
@@ -31890,9 +32147,11 @@ type BetaToolImageGenerationParam struct {
 	// one of `transparent`, `opaque`, or `auto` (default value). When `auto` is used,
 	// the model will automatically determine the best background for the image.
 	//
-	// Transparent backgrounds are available for supported GPT Image models. For
-	// `gpt-image-2` and `gpt-image-2-2026-04-21`, this support is in preview. When
-	// using `transparent`, set the output format to `png` or `webp`.
+	// `gpt-image-2.5-sunburst` and `gpt-image-2.5-flare`, including their `2026-09-08`
+	// snapshots, support `opaque` and `transparent` backgrounds. Transparent
+	// backgrounds are available for supported GPT Image models. For `gpt-image-2` and
+	// `gpt-image-2-2026-04-21`, this support is in preview. When using `transparent`,
+	// set the output format to `png` or `webp`.
 	//
 	// Any of "transparent", "opaque", "auto".
 	Background string `json:"background,omitzero"`
@@ -31900,7 +32159,9 @@ type BetaToolImageGenerationParam struct {
 	// `file_id` (string, optional).
 	InputImageMask BetaToolImageGenerationInputImageMaskParam `json:"input_image_mask,omitzero"`
 	// The image generation model to use. One of `gpt-image-1`, `gpt-image-1-mini`,
-	// `gpt-image-1.5`, `gpt-image-2`, `gpt-image-2-2026-04-21`, or
+	// `gpt-image-1.5`, `gpt-image-2`, `gpt-image-2-2026-04-21`,
+	// `gpt-image-2.5-sunburst`, `gpt-image-2.5-sunburst-2026-09-08`,
+	// `gpt-image-2.5-flare`, `gpt-image-2.5-flare-2026-09-08`, or
 	// `chatgpt-image-latest`. Default: `gpt-image-1`.
 	Model string `json:"model,omitzero"`
 	// Moderation level for the generated image. Default: `auto`.
@@ -31912,22 +32173,25 @@ type BetaToolImageGenerationParam struct {
 	//
 	// Any of "png", "webp", "jpeg".
 	OutputFormat string `json:"output_format,omitzero"`
-	// The quality of the generated image. One of `low`, `medium`, `high`, or `auto`.
-	// Default: `auto`.
+	// The quality of the generated image. The GPT image models support `low`,
+	// `medium`, and `high`. `gpt-image-2.5-sunburst` and `gpt-image-2.5-flare`,
+	// including their `2026-09-08` snapshots, also support `xhigh` and `max`. Default:
+	// `auto`.
 	//
-	// Any of "low", "medium", "high", "auto".
+	// Any of "low", "medium", "high", "xhigh", "max", "auto".
 	Quality string `json:"quality,omitzero"`
-	// The size of the generated images. For `gpt-image-2` and
-	// `gpt-image-2-2026-04-21`, arbitrary resolutions are supported as `WIDTHxHEIGHT`
-	// strings, for example `1536x864`. Width and height must both be divisible by 16
-	// and the requested aspect ratio must be between 1:3 and 3:1. Resolutions above
-	// `2560x1440` are experimental, and the maximum supported resolution is
-	// `3840x2160`. The requested size must also satisfy the model's current pixel and
-	// edge limits. The standard sizes `1024x1024`, `1536x1024`, and `1024x1536` are
-	// supported by the GPT image models; `auto` is supported for models that allow
-	// automatic sizing. For `dall-e-2`, use one of `256x256`, `512x512`, or
-	// `1024x1024`. For `dall-e-3`, use one of `1024x1024`, `1792x1024`, or
-	// `1024x1792`.
+	// The size of the generated images. For `gpt-image-2`, `gpt-image-2-2026-04-21`,
+	// `gpt-image-2.5-sunburst`, `gpt-image-2.5-sunburst-2026-09-08`,
+	// `gpt-image-2.5-flare`, and `gpt-image-2.5-flare-2026-09-08`, arbitrary
+	// resolutions are supported as `WIDTHxHEIGHT` strings, for example `1536x864`.
+	// Width and height must both be divisible by 16 and the requested aspect ratio
+	// must be between 1:3 and 3:1. Resolutions above `2560x1440` are experimental, and
+	// the maximum supported resolution is `3840x2160`. The requested size must also
+	// satisfy the model's current pixel and edge limits. The standard sizes
+	// `1024x1024`, `1536x1024`, and `1024x1536` are supported by the GPT image models;
+	// `auto` is supported for models that allow automatic sizing. For `dall-e-2`, use
+	// one of `256x256`, `512x512`, or `1024x1024`. For `dall-e-3`, use one of
+	// `1024x1024`, `1792x1024`, or `1024x1792`.
 	Size string `json:"size,omitzero"`
 	// The type of the image generation tool. Always `image_generation`.
 	//
@@ -31961,7 +32225,7 @@ func init() {
 		"output_format", "png", "webp", "jpeg",
 	)
 	apijson.RegisterFieldValidator[BetaToolImageGenerationParam](
-		"quality", "low", "medium", "high", "auto",
+		"quality", "low", "medium", "high", "xhigh", "max", "auto",
 	)
 }
 
@@ -32394,10 +32658,10 @@ func (r *BetaToolChoiceShellParam) UnmarshalJSON(data []byte) error {
 }
 
 // Indicates that the model should use a built-in tool to generate a response.
-// [Learn more about built-in tools](https://platform.openai.com/docs/guides/tools).
+// [Learn more about built-in tools](https://developers.openai.com/api/docs/guides/tools).
 type BetaToolChoiceTypes struct {
 	// The type of hosted tool the model should to use. Learn more about
-	// [built-in tools](https://platform.openai.com/docs/guides/tools).
+	// [built-in tools](https://developers.openai.com/api/docs/guides/tools).
 	//
 	// Allowed values are:
 	//
@@ -32437,7 +32701,7 @@ func (r BetaToolChoiceTypes) ToParam() BetaToolChoiceTypesParam {
 }
 
 // The type of hosted tool the model should to use. Learn more about
-// [built-in tools](https://platform.openai.com/docs/guides/tools).
+// [built-in tools](https://developers.openai.com/api/docs/guides/tools).
 //
 // Allowed values are:
 //
@@ -32462,12 +32726,12 @@ const (
 )
 
 // Indicates that the model should use a built-in tool to generate a response.
-// [Learn more about built-in tools](https://platform.openai.com/docs/guides/tools).
+// [Learn more about built-in tools](https://developers.openai.com/api/docs/guides/tools).
 //
 // The property Type is required.
 type BetaToolChoiceTypesParam struct {
 	// The type of hosted tool the model should to use. Learn more about
-	// [built-in tools](https://platform.openai.com/docs/guides/tools).
+	// [built-in tools](https://developers.openai.com/api/docs/guides/tools).
 	//
 	// Allowed values are:
 	//
@@ -32569,7 +32833,7 @@ func (r *BetaToolSearchToolParam) UnmarshalJSON(data []byte) error {
 
 // This tool searches the web for relevant results to use in a response. Learn more
 // about the
-// [web search tool](https://platform.openai.com/docs/guides/tools-web-search).
+// [web search tool](https://developers.openai.com/api/docs/guides/tools-web-search).
 type BetaWebSearchPreviewTool struct {
 	// The type of the web search tool. One of `web_search_preview` or
 	// `web_search_preview_2025_03_11`.
@@ -32665,7 +32929,7 @@ func (r *BetaWebSearchPreviewToolUserLocation) UnmarshalJSON(data []byte) error 
 
 // This tool searches the web for relevant results to use in a response. Learn more
 // about the
-// [web search tool](https://platform.openai.com/docs/guides/tools-web-search).
+// [web search tool](https://developers.openai.com/api/docs/guides/tools-web-search).
 //
 // The property Type is required.
 type BetaWebSearchPreviewToolParam struct {
@@ -32724,7 +32988,7 @@ func (r *BetaWebSearchPreviewToolUserLocationParam) UnmarshalJSON(data []byte) e
 }
 
 // Search the Internet for sources related to the prompt. Learn more about the
-// [web search tool](https://platform.openai.com/docs/guides/tools-web-search).
+// [web search tool](https://developers.openai.com/api/docs/guides/tools-web-search).
 type BetaWebSearchTool struct {
 	// The type of the web search tool. One of `web_search` or `web_search_2025_08_26`.
 	//
@@ -32844,7 +33108,7 @@ func (r *BetaWebSearchToolUserLocation) UnmarshalJSON(data []byte) error {
 }
 
 // Search the Internet for sources related to the prompt. Learn more about the
-// [web search tool](https://platform.openai.com/docs/guides/tools-web-search).
+// [web search tool](https://developers.openai.com/api/docs/guides/tools-web-search).
 //
 // The property Type is required.
 type BetaWebSearchToolParam struct {
@@ -32929,7 +33193,7 @@ func init() {
 
 type BetaResponseNewParams struct {
 	// Whether to run the model response in the background.
-	// [Learn more](https://platform.openai.com/docs/guides/background).
+	// [Learn more](https://developers.openai.com/api/docs/guides/background).
 	Background param.Opt[bool] `json:"background,omitzero"`
 	// A system (or developer) message inserted into the model's context.
 	//
@@ -32939,7 +33203,7 @@ type BetaResponseNewParams struct {
 	Instructions param.Opt[string] `json:"instructions,omitzero"`
 	// An upper bound for the number of tokens that can be generated for a response,
 	// including visible output tokens and
-	// [reasoning tokens](https://platform.openai.com/docs/guides/reasoning).
+	// [reasoning tokens](https://developers.openai.com/api/docs/guides/reasoning).
 	MaxOutputTokens param.Opt[int64] `json:"max_output_tokens,omitzero"`
 	// The maximum number of total calls to built-in tools that can be processed in a
 	// response. This maximum number applies across all built-in tool calls, not per
@@ -32950,21 +33214,24 @@ type BetaResponseNewParams struct {
 	ParallelToolCalls param.Opt[bool] `json:"parallel_tool_calls,omitzero"`
 	// The unique ID of the previous response to the model. Use this to create
 	// multi-turn conversations. Learn more about
-	// [conversation state](https://platform.openai.com/docs/guides/conversation-state).
+	// [conversation state](https://developers.openai.com/api/docs/guides/conversation-state).
 	// Cannot be used in conjunction with `conversation`.
 	PreviousResponseID param.Opt[string] `json:"previous_response_id,omitzero"`
 	// Used by OpenAI to cache responses for similar requests to optimize your cache
 	// hit rates. Replaces the `user` field.
-	// [Learn more](https://platform.openai.com/docs/guides/prompt-caching).
+	// [Learn more](https://developers.openai.com/api/docs/guides/prompt-caching).
 	PromptCacheKey param.Opt[string] `json:"prompt_cache_key,omitzero"`
 	// A stable identifier used to help detect users of your application that may be
 	// violating OpenAI's usage policies. The IDs should be a string that uniquely
 	// identifies each user, with a maximum length of 64 characters. We recommend
 	// hashing their username or email address, in order to avoid sending us any
 	// identifying information.
-	// [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#safety-identifiers).
+	// [Learn more](https://developers.openai.com/api/docs/guides/safety-best-practices#implement-safety-identifiers).
 	SafetyIdentifier param.Opt[string] `json:"safety_identifier,omitzero"`
 	// Whether to store the generated model response for later retrieval via API.
+	// Defaults to true when omitted. If set to true, response data will be stored for
+	// at least 30 days, subject to the
+	// [data retention exceptions](https://developers.openai.com/api/docs/guides/your-data#v1responses).
 	Store param.Opt[bool] `json:"store,omitzero"`
 	// What sampling temperature to use, between 0 and 2. Higher values like 0.8 will
 	// make the output more random, while lower values like 0.2 will make it more
@@ -32985,7 +33252,7 @@ type BetaResponseNewParams struct {
 	// `prompt_cache_key` instead to maintain caching optimizations. A stable
 	// identifier for your end-users. Used to boost cache hit rates by better bucketing
 	// similar requests and to help OpenAI detect and prevent abuse.
-	// [Learn more](https://platform.openai.com/docs/guides/safety-best-practices#safety-identifiers).
+	// [Learn more](https://developers.openai.com/api/docs/guides/safety-best-practices#implement-safety-identifiers).
 	User param.Opt[string] `json:"user,omitzero"`
 	// Context management configuration for this request.
 	ContextManagement []BetaResponseNewParamsContextManagement `json:"context_management,omitzero"`
@@ -33025,14 +33292,14 @@ type BetaResponseNewParams struct {
 	// Configuration for server-hosted multi-agent execution.
 	MultiAgent BetaResponseNewParamsMultiAgent `json:"multi_agent,omitzero"`
 	// Reference to a prompt template and its variables.
-	// [Learn more](https://platform.openai.com/docs/guides/text?api-mode=responses#reusable-prompts).
+	// [Learn more](https://developers.openai.com/api/docs/guides/text?api-mode=responses#version-prompts-in-code).
 	Prompt BetaResponsePromptParam `json:"prompt,omitzero"`
 	// Deprecated. Use `prompt_cache_options.ttl` instead.
 	//
 	// The retention policy for the prompt cache. Set to `24h` to enable extended
 	// prompt caching, which keeps cached prefixes active for longer, up to a maximum
 	// of 24 hours.
-	// [Learn more](https://platform.openai.com/docs/guides/prompt-caching#prompt-cache-retention).
+	// [Learn more](https://developers.openai.com/api/docs/guides/prompt-caching#prompt-cache-retention).
 	// This field expresses a maximum retention policy, while
 	// `prompt_cache_options.ttl` expresses a minimum cache lifetime. The two fields
 	// are independent and do not interact. For `gpt-5.5`, `gpt-5.5-pro`, and future
@@ -33048,7 +33315,7 @@ type BetaResponseNewParams struct {
 	// Any of "in_memory", "24h".
 	PromptCacheRetention BetaResponseNewParamsPromptCacheRetention `json:"prompt_cache_retention,omitzero"`
 	// Configuration options for
-	// [reasoning models](https://platform.openai.com/docs/guides/reasoning).
+	// [reasoning models](https://developers.openai.com/api/docs/guides/reasoning).
 	Reasoning BetaResponseNewParamsReasoning `json:"reasoning,omitzero"`
 	// Specifies the processing type used for serving the request.
 	//
@@ -33057,13 +33324,15 @@ type BetaResponseNewParams struct {
 	//     will use 'default'.
 	//   - If set to 'default', then the request will be processed with the standard
 	//     pricing and performance for the selected model.
-	//   - If set to '[flex](https://platform.openai.com/docs/guides/flex-processing)',
-	//     then the request will be processed with the Flex Processing service tier.
-	//   - To opt-in to [Fast mode](/api/docs/guides/fast-mode) at the request level,
-	//     include the `service_tier=fast` or `service_tier=priority` parameter for
-	//     Responses or Chat Completions. The response will show `service_tier=priority`
-	//     regardless of if you specify `service_tier=fast` or `priority` in your
-	//     request.
+	//   - If set to
+	//     '[flex](https://developers.openai.com/api/docs/guides/flex-processing)', then
+	//     the request will be processed with the Flex Processing service tier.
+	//   - To opt-in to
+	//     [Fast mode](https://developers.openai.com/api/docs/guides/fast-mode) at the
+	//     request level, include the `service_tier=fast` or `service_tier=priority`
+	//     parameter for Responses or Chat Completions. The response will show
+	//     `service_tier=priority` regardless of if you specify `service_tier=fast` or
+	//     `priority` in your request.
 	//   - If set to 'ultrafast', then the request will be processed with the
 	//     access-controlled Ultrafast Processing service tier. This tier is currently
 	//     available for `gpt-5.6-sol`; a response served through it will show
@@ -33093,17 +33362,17 @@ type BetaResponseNewParams struct {
 	//
 	// Learn more:
 	//
-	// - [Text inputs and outputs](https://platform.openai.com/docs/guides/text)
-	// - [Image inputs](https://platform.openai.com/docs/guides/images)
-	// - [File inputs](https://platform.openai.com/docs/guides/pdf-files)
-	// - [Conversation state](https://platform.openai.com/docs/guides/conversation-state)
-	// - [Function calling](https://platform.openai.com/docs/guides/function-calling)
+	//   - [Text inputs and outputs](https://developers.openai.com/api/docs/guides/text)
+	//   - [Image inputs](https://developers.openai.com/api/docs/guides/images-vision)
+	//   - [File inputs](https://developers.openai.com/api/docs/guides/file-inputs)
+	//   - [Conversation state](https://developers.openai.com/api/docs/guides/conversation-state)
+	//   - [Function calling](https://developers.openai.com/api/docs/guides/function-calling)
 	Input BetaResponseNewParamsInputUnion `json:"input,omitzero"`
 	// Model ID used to generate the response, like `gpt-6-astra`. OpenAI offers a wide
 	// range of models with different capabilities, performance characteristics, and
 	// price points. Refer to the
-	// [model guide](https://platform.openai.com/docs/models) to browse and compare
-	// available models.
+	// [model guide](https://developers.openai.com/api/docs/models) to browse and
+	// compare available models.
 	Model BetaResponseNewParamsModel `json:"model,omitzero"`
 	// Options for prompt caching. Supported for `gpt-5.6` and later models. By
 	// default, OpenAI automatically chooses one implicit cache breakpoint. You can add
@@ -33112,14 +33381,14 @@ type BetaResponseNewParams struct {
 	// up to the latest 80 breakpoints in the conversation, without a content-block
 	// lookback limit. Set `mode` to `explicit` to disable the implicit breakpoint. The
 	// `ttl` defaults to `30m`, which is currently the only supported value. See the
-	// [prompt caching guide](https://platform.openai.com/docs/guides/prompt-caching)
+	// [prompt caching guide](https://developers.openai.com/api/docs/guides/prompt-caching)
 	// for current details.
 	PromptCacheOptions BetaResponseNewParamsPromptCacheOptions `json:"prompt_cache_options,omitzero"`
 	// Configuration options for a text response from the model. Can be plain text or
 	// structured JSON data. Learn more:
 	//
-	// - [Text inputs and outputs](https://platform.openai.com/docs/guides/text)
-	// - [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs)
+	//   - [Text inputs and outputs](https://developers.openai.com/api/docs/guides/text)
+	//   - [Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
 	Text BetaResponseTextConfigParam `json:"text,omitzero"`
 	// How the model should select which tool (or tools) to use when generating a
 	// response. See the `tools` parameter to see how to specify which tools the model
@@ -33132,17 +33401,18 @@ type BetaResponseNewParams struct {
 	//
 	//   - **Built-in tools**: Tools that are provided by OpenAI that extend the model's
 	//     capabilities, like
-	//     [web search](https://platform.openai.com/docs/guides/tools-web-search) or
-	//     [file search](https://platform.openai.com/docs/guides/tools-file-search).
+	//     [web search](https://developers.openai.com/api/docs/guides/tools-web-search)
+	//     or
+	//     [file search](https://developers.openai.com/api/docs/guides/tools-file-search).
 	//     Learn more about
-	//     [built-in tools](https://platform.openai.com/docs/guides/tools).
+	//     [built-in tools](https://developers.openai.com/api/docs/guides/tools).
 	//   - **MCP Tools**: Integrations with third-party systems via custom MCP servers or
 	//     predefined connectors such as Google Drive and SharePoint. Learn more about
-	//     [MCP Tools](https://platform.openai.com/docs/guides/tools-connectors-mcp).
+	//     [MCP Tools](https://developers.openai.com/api/docs/guides/tools-connectors-mcp).
 	//   - **Function calls (custom tools)**: Functions that are defined by you, enabling
 	//     the model to call your own code with strongly typed arguments and outputs.
 	//     Learn more about
-	//     [function calling](https://platform.openai.com/docs/guides/function-calling).
+	//     [function calling](https://developers.openai.com/api/docs/guides/function-calling).
 	//     You can also use custom tools to call your own code.
 	Tools []BetaToolUnionParam `json:"tools,omitzero"`
 	// Any of "responses_multi_agent=v1".
@@ -33210,8 +33480,8 @@ func (u *BetaResponseNewParamsInputUnion) UnmarshalJSON(data []byte) error {
 // Model ID used to generate the response, like `gpt-6-astra`. OpenAI offers a wide
 // range of models with different capabilities, performance characteristics, and
 // price points. Refer to the
-// [model guide](https://platform.openai.com/docs/models) to browse and compare
-// available models.
+// [model guide](https://developers.openai.com/api/docs/models) to browse and
+// compare available models.
 type BetaResponseNewParamsModel string
 
 const (
@@ -33434,9 +33704,12 @@ func (r *BetaResponseNewParamsMultiAgent) UnmarshalJSON(data []byte) error {
 // up to the latest 80 breakpoints in the conversation, without a content-block
 // lookback limit. Set `mode` to `explicit` to disable the implicit breakpoint. The
 // `ttl` defaults to `30m`, which is currently the only supported value. See the
-// [prompt caching guide](https://platform.openai.com/docs/guides/prompt-caching)
+// [prompt caching guide](https://developers.openai.com/api/docs/guides/prompt-caching)
 // for current details.
 type BetaResponseNewParamsPromptCacheOptions struct {
+	// The ID of a response to compare when diagnosing prompt cache reuse. Supplying
+	// this field requests prompt cache diagnostics when the feature is enabled.
+	ComparisonResponseID param.Opt[string] `json:"comparison_response_id,omitzero"`
 	// Controls whether OpenAI automatically creates an implicit cache breakpoint.
 	// Defaults to `implicit`. With `implicit`, OpenAI creates one implicit breakpoint
 	// and writes up to the latest three explicit breakpoints in the request. With
@@ -33477,7 +33750,7 @@ func init() {
 // The retention policy for the prompt cache. Set to `24h` to enable extended
 // prompt caching, which keeps cached prefixes active for longer, up to a maximum
 // of 24 hours.
-// [Learn more](https://platform.openai.com/docs/guides/prompt-caching#prompt-cache-retention).
+// [Learn more](https://developers.openai.com/api/docs/guides/prompt-caching#prompt-cache-retention).
 // This field expresses a maximum retention policy, while
 // `prompt_cache_options.ttl` expresses a minimum cache lifetime. The two fields
 // are independent and do not interact. For `gpt-5.5`, `gpt-5.5-pro`, and future
@@ -33497,7 +33770,7 @@ const (
 )
 
 // Configuration options for
-// [reasoning models](https://platform.openai.com/docs/guides/reasoning).
+// [reasoning models](https://developers.openai.com/api/docs/guides/reasoning).
 type BetaResponseNewParamsReasoning struct {
 	// Controls which reasoning items are rendered back to the model on later turns. If
 	// omitted or set to `auto`, the model determines the context mode. The `gpt-5.6`
@@ -33512,7 +33785,7 @@ type BetaResponseNewParamsReasoning struct {
 	// are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Reducing
 	// reasoning effort can result in faster responses and fewer tokens used on
 	// reasoning in a response. Not all reasoning models support every value. See the
-	// [reasoning guide](https://platform.openai.com/docs/guides/reasoning) for
+	// [reasoning guide](https://developers.openai.com/api/docs/guides/reasoning) for
 	// model-specific support.
 	//
 	// Any of "none", "minimal", "low", "medium", "high", "xhigh", "max".
@@ -33573,13 +33846,15 @@ func init() {
 //     will use 'default'.
 //   - If set to 'default', then the request will be processed with the standard
 //     pricing and performance for the selected model.
-//   - If set to '[flex](https://platform.openai.com/docs/guides/flex-processing)',
-//     then the request will be processed with the Flex Processing service tier.
-//   - To opt-in to [Fast mode](/api/docs/guides/fast-mode) at the request level,
-//     include the `service_tier=fast` or `service_tier=priority` parameter for
-//     Responses or Chat Completions. The response will show `service_tier=priority`
-//     regardless of if you specify `service_tier=fast` or `priority` in your
-//     request.
+//   - If set to
+//     '[flex](https://developers.openai.com/api/docs/guides/flex-processing)', then
+//     the request will be processed with the Flex Processing service tier.
+//   - To opt-in to
+//     [Fast mode](https://developers.openai.com/api/docs/guides/fast-mode) at the
+//     request level, include the `service_tier=fast` or `service_tier=priority`
+//     parameter for Responses or Chat Completions. The response will show
+//     `service_tier=priority` regardless of if you specify `service_tier=fast` or
+//     `priority` in your request.
 //   - If set to 'ultrafast', then the request will be processed with the
 //     access-controlled Ultrafast Processing service tier. This tier is currently
 //     available for `gpt-5.6-sol`; a response served through it will show
@@ -33790,8 +34065,8 @@ type BetaResponseCompactParams struct {
 	// Model ID used to generate the response, like `gpt-6-astra`. OpenAI offers a wide
 	// range of models with different capabilities, performance characteristics, and
 	// price points. Refer to the
-	// [model guide](https://platform.openai.com/docs/models) to browse and compare
-	// available models.
+	// [model guide](https://developers.openai.com/api/docs/models) to browse and
+	// compare available models.
 	Model BetaResponseCompactParamsModel `json:"model,omitzero" api:"required"`
 	// A system (or developer) message inserted into the model's context. When used
 	// along with `previous_response_id`, the instructions from a previous response
@@ -33800,7 +34075,7 @@ type BetaResponseCompactParams struct {
 	Instructions param.Opt[string] `json:"instructions,omitzero"`
 	// The unique ID of the previous response to the model. Use this to create
 	// multi-turn conversations. Learn more about
-	// [conversation state](https://platform.openai.com/docs/guides/conversation-state).
+	// [conversation state](https://developers.openai.com/api/docs/guides/conversation-state).
 	// Cannot be used in conjunction with `conversation`.
 	PreviousResponseID param.Opt[string] `json:"previous_response_id,omitzero"`
 	// A key to use when reading from or writing to the prompt cache.
@@ -33814,7 +34089,7 @@ type BetaResponseCompactParams struct {
 	// up to the latest 80 breakpoints in the conversation, without a content-block
 	// lookback limit. Set `mode` to `explicit` to disable the implicit breakpoint. The
 	// `ttl` defaults to `30m`, which is currently the only supported value. See the
-	// [prompt caching guide](https://platform.openai.com/docs/guides/prompt-caching)
+	// [prompt caching guide](https://developers.openai.com/api/docs/guides/prompt-caching)
 	// for current details.
 	PromptCacheOptions BetaResponseCompactParamsPromptCacheOptions `json:"prompt_cache_options,omitzero"`
 	// How long to retain a prompt cache entry created by this request.
@@ -33826,16 +34101,17 @@ type BetaResponseCompactParams struct {
 	// Project settings. Unless otherwise configured, the Project will use 'default'. -
 	// If set to 'default', then the request will be processed with the standard
 	// pricing and performance for the selected model. - If set to
-	// '[flex](https://platform.openai.com/docs/guides/flex-processing)', then the
-	// request will be processed with the Flex Processing service tier. - To opt-in to
-	// [Fast mode](/api/docs/guides/fast-mode) at the request level, include the
-	// `service_tier=fast` or `service_tier=priority` parameter for Responses or Chat
-	// Completions. The response will show `service_tier=priority` regardless of if you
-	// specify `service_tier=fast` or `priority` in your request. - When not set, the
-	// default behavior is 'auto'. When the `service_tier` parameter is set, the
-	// response body will include the `service_tier` value based on the processing mode
-	// actually used to serve the request. This response value may be different from
-	// the value set in the parameter.
+	// '[flex](https://developers.openai.com/api/docs/guides/flex-processing)', then
+	// the request will be processed with the Flex Processing service tier. - To opt-in
+	// to [Fast mode](https://developers.openai.com/api/docs/guides/fast-mode) at the
+	// request level, include the `service_tier=fast` or `service_tier=priority`
+	// parameter for Responses or Chat Completions. For models with a dedicated Fast
+	// tier, either value resolves to `service_tier=fast`; for other models, either
+	// value resolves to `service_tier=priority`. - When not set, the default behavior
+	// is 'auto'. When the `service_tier` parameter is set, the response body will
+	// include the `service_tier` value based on the processing mode actually used to
+	// serve the request. This response value may be different from the value set in
+	// the parameter.
 	//
 	// Any of "auto", "default", "fast", "flex", "priority".
 	ServiceTier BetaResponseCompactParamsServiceTier `json:"service_tier,omitzero"`
@@ -33855,8 +34131,8 @@ func (r *BetaResponseCompactParams) UnmarshalJSON(data []byte) error {
 // Model ID used to generate the response, like `gpt-6-astra`. OpenAI offers a wide
 // range of models with different capabilities, performance characteristics, and
 // price points. Refer to the
-// [model guide](https://platform.openai.com/docs/models) to browse and compare
-// available models.
+// [model guide](https://developers.openai.com/api/docs/models) to browse and
+// compare available models.
 type BetaResponseCompactParamsModel string
 
 const (
@@ -33988,7 +34264,7 @@ func (u *BetaResponseCompactParamsInputUnion) UnmarshalJSON(data []byte) error {
 // up to the latest 80 breakpoints in the conversation, without a content-block
 // lookback limit. Set `mode` to `explicit` to disable the implicit breakpoint. The
 // `ttl` defaults to `30m`, which is currently the only supported value. See the
-// [prompt caching guide](https://platform.openai.com/docs/guides/prompt-caching)
+// [prompt caching guide](https://developers.openai.com/api/docs/guides/prompt-caching)
 // for current details.
 type BetaResponseCompactParamsPromptCacheOptions struct {
 	// Controls whether OpenAI automatically creates an implicit cache breakpoint.
@@ -34039,16 +34315,17 @@ const (
 // Project settings. Unless otherwise configured, the Project will use 'default'. -
 // If set to 'default', then the request will be processed with the standard
 // pricing and performance for the selected model. - If set to
-// '[flex](https://platform.openai.com/docs/guides/flex-processing)', then the
-// request will be processed with the Flex Processing service tier. - To opt-in to
-// [Fast mode](/api/docs/guides/fast-mode) at the request level, include the
-// `service_tier=fast` or `service_tier=priority` parameter for Responses or Chat
-// Completions. The response will show `service_tier=priority` regardless of if you
-// specify `service_tier=fast` or `priority` in your request. - When not set, the
-// default behavior is 'auto'. When the `service_tier` parameter is set, the
-// response body will include the `service_tier` value based on the processing mode
-// actually used to serve the request. This response value may be different from
-// the value set in the parameter.
+// '[flex](https://developers.openai.com/api/docs/guides/flex-processing)', then
+// the request will be processed with the Flex Processing service tier. - To opt-in
+// to [Fast mode](https://developers.openai.com/api/docs/guides/fast-mode) at the
+// request level, include the `service_tier=fast` or `service_tier=priority`
+// parameter for Responses or Chat Completions. For models with a dedicated Fast
+// tier, either value resolves to `service_tier=fast`; for other models, either
+// value resolves to `service_tier=priority`. - When not set, the default behavior
+// is 'auto'. When the `service_tier` parameter is set, the response body will
+// include the `service_tier` value based on the processing mode actually used to
+// serve the request. This response value may be different from the value set in
+// the parameter.
 type BetaResponseCompactParamsServiceTier string
 
 const (

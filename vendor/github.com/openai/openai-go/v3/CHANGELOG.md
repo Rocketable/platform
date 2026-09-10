@@ -1,5 +1,40 @@
 # Changelog
 
+## [3.59.0](https://github.com/openai/openai-go/compare/v3.58.0...v3.59.0) (2026-09-09)
+
+
+### Features
+
+* **api:** Add project API key expiration support ([#906](https://github.com/openai/openai-go/issues/906)) ([c126b9c](https://github.com/openai/openai-go/commit/c126b9c3df74822b09d2875793acbd9d0ad17f0e))
+
+## [3.58.0](https://github.com/openai/openai-go/compare/v3.57.0...v3.58.0) (2026-09-08)
+
+
+### Features
+
+* **api:** add GPT Image 2.5 models and image options ([#904](https://github.com/openai/openai-go/issues/904)) ([92a91b7](https://github.com/openai/openai-go/commit/92a91b78e0d159a4874296cb79be07e4a0c4682d))
+
+## [3.57.0](https://github.com/openai/openai-go/compare/v3.56.0...v3.57.0) (2026-09-05)
+
+
+### Features
+
+* **api:** add incomplete web search call status constants ([#877](https://github.com/openai/openai-go/issues/877)) ([66688d6](https://github.com/openai/openai-go/commit/66688d6990b364431e7698d9466180bd9db3dc93))
+* **api:** Add prompt cache diagnostics ([#888](https://github.com/openai/openai-go/issues/888)) ([6a8a6a2](https://github.com/openai/openai-go/commit/6a8a6a2fb2a99697e66a5ae6382c0c0630e4c8f2))
+* **api:** add service-account API key expiration fields ([#895](https://github.com/openai/openai-go/issues/895)) ([65785ca](https://github.com/openai/openai-go/commit/65785ca59ffea26f592920b5aae7bbe302cf30cc))
+* **api:** correct function argument completion event fields (openapi-545) ([#889](https://github.com/openai/openai-go/issues/889)) ([b26f72f](https://github.com/openai/openai-go/commit/b26f72f31964ec3533705db479afe58a2a09c765))
+
+
+### Chores
+
+* **api:** document throttling and model overload responses — SDK-235 ([#896](https://github.com/openai/openai-go/issues/896)) ([52e95a9](https://github.com/openai/openai-go/commit/52e95a974582ebd8d3b23f349e1bcdbbb899c0ac))
+* migrate to forked steady ([#882](https://github.com/openai/openai-go/issues/882)) ([a605079](https://github.com/openai/openai-go/commit/a605079515d949150831907a9d62c4823ab29294))
+
+
+### Documentation
+
+* establish canonical security model ([#875](https://github.com/openai/openai-go/issues/875)) ([30b5e81](https://github.com/openai/openai-go/commit/30b5e813e5768ac8e9ad102c9f1f1f1a009a8e57))
+
 ## [3.56.0](https://github.com/openai/openai-go/compare/v3.55.0...v3.56.0) (2026-09-03)
 
 
