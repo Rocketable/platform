@@ -302,7 +302,7 @@ func lintCapabilities(infos map[string]*agentInfo) []Finding {
 	externalWriters := []capability{}
 
 	for name, info := range infos {
-		if hasAllow(info.agent.Permission, "websearch") || hasAllow(info.agent.Permission, "webfetch") {
+		if len(allowPatterns(info.agent.Permission, "websearch")) > 0 || len(allowPatterns(info.agent.Permission, "webfetch")) > 0 {
 			for _, write := range writes {
 				if write.agent == name {
 					externalWriters = append(externalWriters, write)
@@ -383,27 +383,9 @@ func lintReasoningEffort(infos map[string]*agentInfo) []Finding {
 	return findings
 }
 
-func capabilities(infos map[string]*agentInfo, bucket string) []capability {
-	var caps []capability
+func allowPatterns(permission rocketcode.PermissionSet, bucket string) []string {
+	var patterns []string
 
-	for name, info := range infos {
-		for _, permissionBucket := range info.agent.Permission.Buckets {
-			if permissionBucket.Name != bucket {
-				continue
-			}
-
-			for _, rule := range permissionBucket.Rules {
-				if rule.Action == rocketcode.PermissionAllow {
-					caps = append(caps, capability{agent: name, file: info.filePath, bucket: bucket, pattern: rule.Pattern})
-				}
-			}
-		}
-	}
-
-	return caps
-}
-
-func hasAllow(permission rocketcode.PermissionSet, bucket string) bool {
 	for _, permissionBucket := range permission.Buckets {
 		if permissionBucket.Name != bucket {
 			continue
@@ -411,12 +393,24 @@ func hasAllow(permission rocketcode.PermissionSet, bucket string) bool {
 
 		for _, rule := range permissionBucket.Rules {
 			if rule.Action == rocketcode.PermissionAllow {
-				return true
+				patterns = append(patterns, rule.Pattern)
 			}
 		}
 	}
 
-	return false
+	return patterns
+}
+
+func capabilities(infos map[string]*agentInfo, bucket string) []capability {
+	var caps []capability
+
+	for name, info := range infos {
+		for _, pattern := range allowPatterns(info.agent.Permission, bucket) {
+			caps = append(caps, capability{agent: name, file: info.filePath, bucket: bucket, pattern: pattern})
+		}
+	}
+
+	return caps
 }
 
 func taskEdges(infos map[string]*agentInfo) map[string][]string {
