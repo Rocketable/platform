@@ -1,25 +1,39 @@
 "use client";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { httpLink } from "@trpc/client";
+import { httpBatchStreamLink, httpLink, splitLink } from "@trpc/client";
 import { createTRPCReact } from "@trpc/react-query";
 import { Bot, Calendar, Check, GripVertical, Menu, Search, Send, Settings, Sparkles, Square, SquarePen, Undo2, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { ThemeToggle } from "@/components/theme";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { AppRouter } from "@/router";
-import type { TranscriptEvent } from "@/grpc";
+import type { Session, TranscriptEvent } from "@/grpc";
 import { runPreload } from "@/preload";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
+import {
+  clearSavedSessionHistory,
+  invalidatePendingSaves,
+  loadSavedSessions,
+  loadSnapshotGeneration,
+  mergeSessionRows,
+  readSessionEnumeration,
+  rowPreview,
+  saveCompleteSessions,
+  SESSION_HISTORY_CHANNEL,
+  searchIsAuthoritative,
+  shouldCommitSnapshot,
+  stripSessionHistory,
+} from "@/session-list";
 
 const trpc = createTRPCReact<AppRouter>();
 const queryClient = new QueryClient();
-const trpcClient = trpc.createClient({ links: [httpLink({ url: "/trpc" })] });
+const trpcClient = trpc.createClient({ links: [splitLink({ condition: (op) => op.path === "sessions", true: httpBatchStreamLink({ url: "/trpc" }), false: httpLink({ url: "/trpc" }) })] });
 
 function sessionPath(id: string) {
   return `/s/${encodeSessionId(id)}`;
@@ -27,18 +41,6 @@ function sessionPath(id: string) {
 
 function slackSession(id: string) {
   return id.startsWith("slack-thread:");
-}
-
-function composerAgents(
-  sessionId: string,
-  catalog: { name: string; model?: string; reasoning?: string }[],
-  allowed: string[],
-) {
-  if (sessionId === "") {
-    return catalog;
-  }
-  const names = new Set(allowed);
-  return catalog.filter((item) => names.has(item.name));
 }
 
 function typedPrefix(query: string, prefix: string) {
@@ -360,12 +362,200 @@ function ProtocolGuard() {
   return null;
 }
 
+type SidebarView = {
+  rows: Session[];
+  refreshing: boolean;
+  enumerationComplete: boolean;
+  summariesComplete: boolean;
+  loadingIds: ReadonlySet<string>;
+};
+
+type SidebarState = SidebarView & {
+  onHistoryDeleted: (id: string) => void;
+  invalidate: () => void;
+};
+
+const Sidebar = createContext<SidebarState>({
+  rows: [],
+  refreshing: false,
+  enumerationComplete: false,
+  summariesComplete: false,
+  loadingIds: new Set(),
+  onHistoryDeleted: () => {},
+  invalidate: () => {},
+});
+
+function delay(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
+
+function SidebarOwner({ children }: { children: ReactNode }) {
+  const utils = trpc.useUtils();
+  const identity = trpc.identity.useQuery(undefined, { refetchInterval: 2000, retry: false });
+  const protocol = trpc.protocol.useQuery(undefined, { retry: false });
+  const owner = identity.isSuccess ? identity.data : undefined;
+  const identityRejected = identity.isError;
+  const [identityGeneration, setIdentityGeneration] = useState(0);
+  const [generation, setGeneration] = useState(0);
+  const [view, setView] = useState<SidebarView>({ rows: [], refreshing: false, enumerationComplete: false, summariesComplete: false, loadingIds: new Set() });
+  const gen = useRef(0);
+  const rowsRef = useRef<Session[]>([]);
+  const committed = useRef(false);
+  const ownerRef = useRef(owner);
+  const protocolRef = useRef(protocol.data);
+  const bump = useCallback(() => {
+    gen.current += 1;
+    setGeneration((value) => value + 1);
+  }, []);
+  const reset = useCallback(() => {
+    invalidatePendingSaves();
+    gen.current += 1;
+    rowsRef.current = [];
+    committed.current = false;
+    setView({ rows: [], refreshing: false, enumerationComplete: false, summariesComplete: false, loadingIds: new Set() });
+  }, []);
+  useEffect(() => {
+    const prev = ownerRef.current;
+    const prevProtocol = protocolRef.current;
+    ownerRef.current = owner;
+    protocolRef.current = protocol.data;
+    if (!identityRejected && prev === owner && prevProtocol === protocol.data) {
+      return;
+    }
+    reset();
+  }, [owner, protocol.data, identityRejected, identityGeneration, reset]);
+  useEffect(() => {
+    if (owner === undefined || protocol.data === undefined || identityRejected) {
+      return;
+    }
+    const captured = gen.current;
+    const currentOwner = owner;
+    const currentProtocol = protocol.data;
+    let stopped = false;
+    void loadSavedSessions(currentOwner, currentProtocol).then((saved) => {
+      if (stopped || captured !== gen.current || ownerRef.current !== currentOwner || committed.current || saved === undefined) {
+        return;
+      }
+      const merged = mergeSessionRows(saved, rowsRef.current);
+      rowsRef.current = merged;
+      setView((current) => ({ ...current, rows: merged }));
+    }, () => {});
+    return () => { stopped = true; };
+  }, [owner, protocol.data, identityRejected, identityGeneration]);
+  useEffect(() => {
+    if (owner === undefined || protocol.data === undefined || identityRejected) {
+      return;
+    }
+    const captured = gen.current;
+    const currentOwner = owner;
+    const currentProtocol = protocol.data;
+    const ac = new AbortController();
+    let stopped = false;
+    const tick = async () => {
+      if (stopped || captured !== gen.current) return;
+      setView((current) => ({ ...current, refreshing: true, enumerationComplete: false, summariesComplete: true }));
+      const snapshotGeneration = await loadSnapshotGeneration(currentOwner, currentProtocol).catch(() => undefined);
+      if (stopped || captured !== gen.current) return;
+      readSessionEnumeration(currentOwner, trpcClient.sessions.query(undefined, { signal: ac.signal }), () => rowsRef.current, (merged, summaries, complete) => {
+        if (stopped || captured !== gen.current) {
+          return;
+        }
+        rowsRef.current = merged;
+        setView((current) => {
+          const next = new Set(current.loadingIds);
+          for (const [id, ready] of summaries) {
+            if (ready) next.delete(id);
+            else next.add(id);
+          }
+          return { ...current, rows: merged, summariesComplete: current.summariesComplete && complete, loadingIds: next };
+        });
+      }, ac.signal).then((result) => {
+        if (stopped || captured !== gen.current) {
+          return;
+        }
+        if (result.mismatch) {
+          reset();
+          ownerRef.current = undefined;
+          // A fast same-owner refetch can hide the intermediate pending state.
+          void utils.identity.reset().then(() => setIdentityGeneration((value) => value + 1));
+        } else if (shouldCommitSnapshot(result)) {
+          committed.current = true;
+          rowsRef.current = result.received;
+          setView({ rows: result.received, enumerationComplete: true, summariesComplete: true, refreshing: false, loadingIds: new Set() });
+          void saveCompleteSessions(currentOwner, currentProtocol, result.received, snapshotGeneration).catch(() => {});
+        } else {
+          setView((current) => ({ ...current, enumerationComplete: result.exhausted && result.upstreamSuccess && !result.mismatch, refreshing: false }));
+        }
+      }).then(() => {
+        if (!stopped && captured === gen.current) void delay(2000, ac.signal).then(tick);
+      });
+    };
+    tick();
+    return () => {
+      stopped = true;
+      ac.abort();
+      invalidatePendingSaves(currentOwner, currentProtocol);
+    };
+  }, [owner, protocol.data, identityRejected, identityGeneration, generation, utils, reset]);
+  const forgetHistory = useCallback((id: string) => {
+    if (owner === undefined || protocol.data === undefined) return;
+    if (ownerRef.current !== owner || protocolRef.current !== protocol.data) return;
+    invalidatePendingSaves(owner, protocol.data);
+    bump();
+    committed.current = false;
+    rowsRef.current = stripSessionHistory(rowsRef.current, id);
+    setView((current) => {
+      const next = new Set(current.loadingIds);
+      next.delete(id);
+      return { ...current, rows: rowsRef.current, loadingIds: next };
+    });
+  }, [owner, protocol.data, bump]);
+  const onHistoryDeleted = useCallback((id: string) => {
+    if (owner === undefined || protocol.data === undefined) return;
+    void clearSavedSessionHistory(owner, protocol.data, id).catch(() => {});
+    forgetHistory(id);
+  }, [owner, protocol.data, forgetHistory]);
+  useEffect(() => {
+    const channel = new BroadcastChannel(SESSION_HISTORY_CHANNEL);
+    channel.onmessage = ({ data }: MessageEvent<{ owner: string; protocol: string; id: string }>) => {
+      if (data.owner === owner && data.protocol === protocol.data) forgetHistory(data.id);
+    };
+    return () => channel.close();
+  }, [owner, protocol.data, forgetHistory]);
+  const visible = owner !== undefined && ownerRef.current === owner && protocolRef.current === protocol.data;
+  const value = useMemo(() => ({ ...view, rows: visible ? view.rows : [], onHistoryDeleted, invalidate: bump }), [view, visible, onHistoryDeleted, bump]);
+  return (
+    <Sidebar.Provider value={value}>
+      {children}
+    </Sidebar.Provider>
+  );
+}
+
 export function App() {
   const route = useRoute();
+  const [conversation, setConversation] = useState({ id: route.id, created: "", key: 0 });
+  if (conversation.id !== route.id) {
+    // Creation assigns this conversation its ID; other navigation starts a fresh subtree.
+    const created = conversation.id === "" && conversation.created === route.id;
+    setConversation({ id: route.id, created: "", key: created ? conversation.key : conversation.key + 1 });
+  }
   return (
     <trpc.Provider client={trpcClient} queryClient={queryClient}>
       <QueryClientProvider client={queryClient}>
         <ProtocolGuard />
+        <SidebarOwner>
         <div className="flex h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background">
           <aside className="hidden w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex lg:w-72">
             <SessionList />
@@ -387,11 +577,12 @@ export function App() {
             <main className="flex min-h-0 min-w-0 flex-1 flex-col">
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
               <TabPane show={!route.cron && !route.agents && !route.skills && !route.config}>
-                <Transcript />
+                <Transcript key={conversation.key} onCreated={(id) => setConversation((current) => ({ ...current, created: id }))} />
               </TabPane>
             </main>
           </div>
         </div>
+        </SidebarOwner>
       </QueryClientProvider>
     </trpc.Provider>
   );
@@ -417,13 +608,15 @@ function relativeTime(iso: string) {
 function SessionRow({
   session,
   current,
+  loading,
   onSettle,
 }: {
   session: { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; settled?: boolean };
   current: boolean;
+  loading: boolean;
   onSettle: (settled: boolean) => void;
 }) {
-  const title = (session.preview ?? "").split("\n", 1)[0] || sessionLabel(session.id);
+  const title = rowPreview(session, loading).split("\n", 1)[0] || sessionLabel(session.id);
   const channel = slackSession(session.id) ? (session.title ?? "") : "";
   const meta = [channel, session.agent, relativeTime(session.updatedAt ?? "")].filter(Boolean).join(" · ");
   return (
@@ -458,10 +651,12 @@ function SessionRow({
 function SessionInbox({
   sessions,
   currentId,
+  loadingIds,
   onSettle,
 }: {
   sessions: { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; settled?: boolean }[];
   currentId: string;
+  loadingIds: ReadonlySet<string>;
   onSettle: (id: string, settled: boolean) => void;
 }) {
   const active: typeof sessions = [];
@@ -476,29 +671,42 @@ function SessionInbox({
   return (
     <ul className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
       {active.map((session) => (
-        <SessionRow key={session.id} session={session} current={currentId === session.id} onSettle={(next) => onSettle(session.id, next)} />
+        <SessionRow key={session.id} session={session} current={currentId === session.id} loading={loadingIds.has(session.id)} onSettle={(next) => onSettle(session.id, next)} />
       ))}
       {settled.length > 0 ? <li className="list-none px-2.5 pt-3 pb-1 text-xs font-medium text-muted-foreground">Settled</li> : null}
       {settled.map((session) => (
-        <SessionRow key={session.id} session={session} current={currentId === session.id} onSettle={(next) => onSettle(session.id, next)} />
+        <SessionRow key={session.id} session={session} current={currentId === session.id} loading={loadingIds.has(session.id)} onSettle={(next) => onSettle(session.id, next)} />
       ))}
     </ul>
   );
 }
 
-function SessionList() {
-  const utils = trpc.useUtils();
-  const sessions = trpc.sessions.useQuery(undefined, { refetchInterval: 2000 });
-  const agents = trpc.agents.useQuery(undefined, { staleTime: 60_000 });
-  const create = trpc.createSession.useMutation();
-  const settle = trpc.settleSession.useMutation({ onSuccess: () => void utils.sessions.invalidate() });
-  const route = useRoute();
-  const [query, setQuery] = useState("");
-  const [agentFilter, setAgentFilter] = useState("");
-  const [roomFilter, setRoomFilter] = useState("");
+function matchesSession(session: Session, needle: string, agentFilter: string, roomFilter: string) {
+  if (agentFilter !== "" && (session.agent ?? "") !== agentFilter) return false;
+  if (roomFilter !== "" && (slackSession(session.id) ? (session.title ?? "") : "") !== roomFilter) return false;
+  return needle === "" || `${session.title ?? ""} ${session.preview ?? ""} ${session.agent ?? ""} ${sessionLabel(session.id)}`.toLowerCase().includes(needle);
+}
+
+function SidebarFreshness({ sidebar, emptySearch }: { sidebar: SidebarView; emptySearch: boolean }) {
+  const authoritative = searchIsAuthoritative(sidebar);
+  return <>
+    {sidebar.refreshing ? <p role="status" className="px-3 pb-1 text-xs text-muted-foreground">Refreshing</p> : null}
+    {!sidebar.refreshing && sidebar.rows.length > 0 && !authoritative ? <p role="status" className="px-3 pb-1 text-xs text-muted-foreground">Stale</p> : null}
+    {emptySearch ? <p role="status" className="px-3 pb-1 text-xs text-muted-foreground">{authoritative ? "No matches" : "loading..."}</p> : null}
+  </>;
+}
+
+function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFilter, roomFilter, setRoomFilter }: {
+  rows: Session[];
+  catalog: { name: string }[];
+  query: string;
+  setQuery: (value: string) => void;
+  agentFilter: string;
+  setAgentFilter: (value: string) => void;
+  roomFilter: string;
+  setRoomFilter: (value: string) => void;
+}) {
   const [overlayPick, setOverlayPick] = useState(0);
-  const catalog = agents.data ?? [];
-  const rows = sessions.data ?? [];
   const agentPrefix = typedPrefix(query, "agent:");
   const roomPrefix = typedPrefix(query, "room:");
   const choices = overlayChoices(agentPrefix, roomPrefix, catalog, slackRooms(rows));
@@ -512,40 +720,7 @@ function SessionList() {
     setQuery("");
     setOverlayPick(0);
   };
-  const needle = agentPrefix === null && roomPrefix === null ? query.trim().toLowerCase() : "";
-  const filtered = rows.filter((session) => {
-    if (agentFilter !== "" && (session.agent ?? "") !== agentFilter) {
-      return false;
-    }
-    if (roomFilter !== "" && (slackSession(session.id) ? (session.title ?? "") : "") !== roomFilter) {
-      return false;
-    }
-    if (needle === "") {
-      return true;
-    }
-    return `${session.title ?? ""} ${session.preview ?? ""} ${session.agent ?? ""} ${sessionLabel(session.id)}`.toLowerCase().includes(needle);
-  });
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex h-12 shrink-0 items-center justify-between gap-2 px-3">
-        <Link href="/" className="truncate text-sm font-medium tracking-tight">
-          RocketClaw
-        </Link>
-        <ThemeToggle />
-      </div>
-      <div className="flex shrink-0 items-center gap-1 px-2 pb-2">
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-8 shrink-0"
-          aria-label="New session"
-          disabled={catalog.length === 0 || create.isPending}
-          onClick={async () => {
-            route.goSession(await create.mutateAsync({ agent: catalog[0].name }));
-          }}
-        >
-          <SquarePen className="h-4 w-4" />
-        </Button>
         <div className="relative min-w-0 flex-1">
           <PrefixOverlay items={choices} pick={pick} onPick={applyOverlay} />
           <div className="flex h-8 min-w-0 items-center gap-1 rounded-md border border-sidebar-border bg-background pr-2 pl-2">
@@ -586,8 +761,49 @@ function SessionList() {
             />
           </div>
         </div>
+  );
+}
+
+function SessionList() {
+  const utils = trpc.useUtils();
+  const sidebar = useContext(Sidebar);
+  const agents = trpc.agents.useQuery(undefined, { staleTime: 60_000 });
+  const create = trpc.createSession.useMutation();
+  const settle = trpc.settleSession.useMutation({ onSuccess: () => sidebar.invalidate() });
+  const route = useRoute();
+  const [query, setQuery] = useState("");
+  const [agentFilter, setAgentFilter] = useState("");
+  const [roomFilter, setRoomFilter] = useState("");
+  const catalog = agents.data?.agents ?? [];
+  const rows = sidebar.rows;
+  const needle = typedPrefix(query, "agent:") === null && typedPrefix(query, "room:") === null ? query.trim().toLowerCase() : "";
+  const filtered = rows.filter((session) => matchesSession(session, needle, agentFilter, roomFilter));
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-12 shrink-0 items-center justify-between gap-2 px-3">
+        <Link href="/" className="truncate text-sm font-medium tracking-tight">
+          RocketClaw
+        </Link>
+        <ThemeToggle />
       </div>
-      <SessionInbox sessions={filtered} currentId={route.id} onSettle={(id, next) => void settle.mutateAsync({ id, settled: next })} />
+      <div className="flex shrink-0 items-center gap-1 px-2 pb-2">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-8 shrink-0"
+          aria-label="New session"
+          disabled={catalog.length === 0 || create.isPending}
+          onClick={async () => {
+            route.goSession(await create.mutateAsync({ agent: catalog[0].name }));
+            sidebar.invalidate();
+          }}
+        >
+          <SquarePen className="h-4 w-4" />
+        </Button>
+        <SessionSearch rows={rows} catalog={catalog} query={query} setQuery={setQuery} agentFilter={agentFilter} setAgentFilter={setAgentFilter} roomFilter={roomFilter} setRoomFilter={setRoomFilter} />
+      </div>
+      <SidebarFreshness sidebar={sidebar} emptySearch={filtered.length === 0 && (needle !== "" || agentFilter !== "" || roomFilter !== "")} />
+      <SessionInbox sessions={filtered} currentId={route.id} loadingIds={sidebar.loadingIds} onSettle={(id, next) => void settle.mutateAsync({ id, settled: next })} />
       <div className="flex shrink-0 flex-wrap items-center gap-1 border-t border-sidebar-border p-2">
         <Button variant={route.cron ? "secondary" : "ghost"} size="icon" className="size-8" aria-label="Cron" asChild>
           <Link href="/cron" onMouseEnter={() => void utils.cronJobs.prefetch()}>
@@ -792,14 +1008,10 @@ function useSessionStream(id: string) {
 
 function SessionEntries({ id }: { id: string }) {
   const utils = trpc.useUtils();
+  const sidebar = useContext(Sidebar);
   const entries = trpc.listSessionEntries.useQuery({ id }, { enabled: false, retry: false });
   const loaded = trpc.loadSessionEntries.useQuery({ id }, { enabled: false, retry: false });
-  const remove = trpc.deleteSessionEntries.useMutation({
-    onSuccess: () => {
-      utils.listSessionEntries.setData({ id }, []);
-      utils.loadSessionEntries.setData({ id }, []);
-    },
-  });
+  const remove = trpc.deleteSessionEntries.useMutation();
   const busy = entries.isFetching || loaded.isFetching || remove.isPending;
   return (
     <details className="shrink-0 border-b px-3 py-2 text-sm sm:px-5">
@@ -812,7 +1024,11 @@ function SessionEntries({ id }: { id: string }) {
           <Button size="sm" variant="outline" disabled={busy} onClick={() => void loaded.refetch()}>Load entries</Button>
           <Button size="sm" variant="outline" disabled={busy} onClick={() => {
             if (window.confirm(`Delete all session entries for ${id}? Conversation and goal records will not be deleted.`)) {
-              remove.mutate({ id });
+              void remove.mutateAsync({ id }).then(() => {
+                utils.listSessionEntries.setData({ id }, []);
+                utils.loadSessionEntries.setData({ id }, []);
+                sidebar.onHistoryDeleted(id);
+              }, () => {});
             }
           }}>Delete entries</Button>
         </div>
@@ -828,7 +1044,7 @@ function SessionEntries({ id }: { id: string }) {
   );
 }
 
-function Transcript() {
+function Transcript({ onCreated }: { onCreated: (id: string) => void }) {
   const route = useRoute();
   const { busy, setBusy, lines, setLines, scroller, follow, opening, historyError } = useSessionStream(route.id);
   return (
@@ -837,7 +1053,7 @@ function Transcript() {
       <TranscriptLog lines={lines} thinking={busy && lines.at(-1)?.role !== "thinking"} scroller={scroller} />
       {historyError ? <p role="alert" className="px-3 text-sm text-destructive">{historyError}</p> : null}
       <fieldset disabled={opening} className="contents">
-        <SessionComposer id={route.id} busy={busy} setBusy={setBusy} lines={lines} setLines={setLines} follow={follow} />
+        <SessionComposer id={route.id} busy={busy} setBusy={setBusy} lines={lines} setLines={setLines} follow={follow} onCreated={onCreated} />
       </fieldset>
     </>
   );
@@ -950,6 +1166,7 @@ function SessionComposer({
   lines,
   setLines,
   follow,
+  onCreated,
 }: {
   id: string;
   busy: boolean;
@@ -957,26 +1174,30 @@ function SessionComposer({
   lines: Line[];
   setLines: (update: (current: Line[]) => Line[]) => void;
   follow: RefObject<boolean>;
+  onCreated: (id: string) => void;
 }) {
   const route = useRoute();
   const utils = trpc.useUtils();
   const prompt = trpc.prompt.useMutation();
-  const sessions = trpc.sessions.useQuery(undefined, { refetchInterval: 2000 });
-  const agents = trpc.agents.useQuery(undefined, { staleTime: 60_000 });
+  const agents = trpc.agents.useQuery({ conversationId: id }, { refetchInterval: 2000 });
   const queueQuery = trpc.queue.useQuery({ id }, { enabled: id !== "", refetchInterval: 2000 });
   const removeQueueItem = trpc.removeQueueItem.useMutation({ onSuccess: () => void utils.queue.invalidate() });
   const steerQueueItem = trpc.steerQueueItem.useMutation({ onSuccess: () => void utils.queue.invalidate() });
   const reorderQueue = trpc.reorderQueue.useMutation({ onSuccess: () => void utils.queue.invalidate() });
   const create = trpc.createSession.useMutation();
+  const active = useRef(true);
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
   const [text, setText] = useState("");
   const [agent, setAgent] = useState("");
   const [agentOpen, setAgentOpen] = useState(false);
   const [dollarOff, setDollarOff] = useState(false);
   const [dollarPick, setDollarPick] = useState("");
   const [sendError, setSendError] = useState("");
-  const currentSession = sessions.data?.find((session) => session.id === route.id);
-  const currentAgent = currentSession?.agent ?? "";
-  const catalog = composerAgents(route.id, agents.data ?? [], currentSession?.allowedAgents ?? []);
+  const currentAgent = agents.data?.currentAgent ?? "";
+  const catalog = agents.data?.agents ?? [];
   const selected = catalog.some((item) => item.name === agent) ? agent : currentAgent || catalog[0]?.name || "";
   const skills = trpc.skills.useQuery({ agent: selected }, { enabled: selected !== "", placeholderData: undefined });
   useEffect(() => {
@@ -1005,7 +1226,11 @@ function SessionComposer({
       sessionId: id,
       selected,
       currentAgent,
-      goSession: route.goSession,
+      goSession: (sessionId) => {
+        if (!active.current) return;
+        onCreated(sessionId);
+        route.goSession(sessionId);
+      },
       prompt,
       create,
       utils,
@@ -1397,7 +1622,7 @@ function CronPage() {
 function AgentsPage() {
   const agents = trpc.agents.useQuery(undefined, { staleTime: 60_000 });
   const [open, setOpen] = useState<string | null>(null);
-  const rows = agents.data ?? [];
+  const rows = agents.data?.agents ?? [];
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 overflow-y-auto p-4">
       <h1 className="text-lg font-semibold">Agents</h1>

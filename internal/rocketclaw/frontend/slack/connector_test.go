@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode/utf8"
 
@@ -31,6 +32,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
@@ -490,7 +493,7 @@ func TestNewConnectorUsesInjectedRuntimeDependencies(t *testing.T) {
 	bus := newTestBus()
 	defer bus.Close()
 
-	c := New(&config.SlackConfig{BotToken: "xoxb-test", AppToken: "xapp-test"}, bus, inertThreadRouter{}, inertOneOffCronjobs{}, testLogger())
+	c := New(&config.SlackConfig{BotToken: "xoxb-test", AppToken: "xapp-test"}, bus, inertThreadRouter{}, inertOneOffCronjobs{}, newTestChannelFacts(), testLogger())
 
 	target := protocol.TextConversationTarget{ChannelID: "D123", MessageID: "111.222", ThreadID: "111.222"}
 	_, handled, err := c.threadRouter.ThreadAgent(target)
@@ -511,7 +514,7 @@ func TestNewConnectorUsesInjectedRuntimeDependencies(t *testing.T) {
 func TestDirectMessagesHaveNoEffect(t *testing.T) {
 	connector := New(
 		&config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"main"}, AllowedUserIDs: []string{"U1"}}}},
-		newTestBus(), inertThreadRouter{}, inertOneOffCronjobs{},
+		newTestBus(), inertThreadRouter{}, inertOneOffCronjobs{}, newTestChannelFacts(),
 		testLogger(),
 	)
 
@@ -783,6 +786,16 @@ func TestStartStopCancelsInboundContext(t *testing.T) {
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
+	refreshStarted, refreshDone := make(chan struct{}), make(chan struct{})
+	facts := newTestChannelFacts()
+	facts.SlackChannelIDsFunc = func(ctx context.Context) ([]string, error) {
+		close(refreshStarted)
+		<-ctx.Done()
+		close(refreshDone)
+
+		return nil, ctx.Err()
+	}
+	connector.facts = facts
 	started := make(chan struct{})
 	done := make(chan struct{})
 	connector.runSocketClient = func(ctx context.Context, _ *socketmode.Client) error {
@@ -796,7 +809,14 @@ func TestStartStopCancelsInboundContext(t *testing.T) {
 	require.NoError(t, connector.Start(context.Background()))
 	assert.Equal(t, "UBOT", connector.botUserID)
 	<-started
+	<-refreshStarted
 	require.NoError(t, connector.Stop(context.Background()))
+
+	select {
+	case <-refreshDone:
+	default:
+		t.Fatal("Stop returned before channel refresh finished")
+	}
 
 	select {
 	case <-done:
@@ -1401,22 +1421,272 @@ func TestSendExternalMCPRelayCanPostTopLevelChannelRelay(t *testing.T) {
 	assert.JSONEq(t, posted[0].Get("blocks"), updated.Get("blocks"))
 }
 
-func TestChannelAgentChoicesUsesCurrentPolicy(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/conversations.info", r.URL.Path)
+func TestChannelAgentChoicesColdWithoutNetwork(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("sidebar called Slack")
 
-		_, err := io.WriteString(w, `{"ok":true,"channel":{"id":"C1","name":"triage"}}`)
+		_, err := io.WriteString(w, `{"ok":true,"channel":{"id":"C1","name":"unknown"}}`)
 		assert.NoError(t, err)
+	}))
+	t.Cleanup(server.Close)
+	connector := newTestConnector(server.URL)
+	connector.config.Channels = []config.SlackChannelConfig{{Channel: "@", Agents: []string{"wildcard"}}}
+	name, choices, err := connector.SidebarChannelAgentChoices(t.Context(), "C1")
+	require.NoError(t, err)
+	assert.Equal(t, "C1", name)
+	assert.Empty(t, choices, "missing facts must not guess wildcard policy")
+}
+
+func TestChannelAgentChoicesUsesCurrentPolicy(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("warm sidebar called Slack")
 	}))
 	defer server.Close()
 
 	connector := newTestConnector(server.URL)
+
+	connector.facts = &channelFactsStoreMock{ChannelFactFunc: func(context.Context, string, string) (string, bool, error) {
+		return "triage", true, nil
+	}}
 	for _, names := range [][]string{{"main", "planner"}, {"main"}} {
 		connector.config.Channels = []config.SlackChannelConfig{{Channel: "#triage", Agents: names}}
-		choices, err := connector.ChannelAgentChoices(t.Context(), "C1")
+		name, choices, err := connector.SidebarChannelAgentChoices(t.Context(), "C1")
 		require.NoError(t, err)
+		require.Equal(t, "triage", name)
 		require.Equal(t, names, choices)
 	}
+
+	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#triage"}, {Channel: "@", Agents: []string{"fallback"}}}
+	name, choices, err := connector.SidebarChannelAgentChoices(t.Context(), "C1")
+	require.NoError(t, err)
+	assert.Equal(t, "triage", name)
+	assert.Equal(t, []string{"fallback"}, choices, "empty exact policy preserves live fallback semantics")
+}
+
+func TestChannelFactsRefreshTimingAndCoalescing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		connector := newTestConnector("http://slack.test")
+		facts := newTestChannelFacts()
+		connector.facts = facts
+		ctx, cancel := context.WithCancel(t.Context())
+		connector.inboundStop = cancel
+
+		connector.factsGroup.Go(func() error { return connector.refreshChannelFacts(ctx) })
+		go connector.eventLoop(ctx)
+
+		synctest.Wait()
+		require.Len(t, facts.SlackChannelIDsCalls(), 1, "startup refresh")
+		time.Sleep(3*time.Minute - time.Nanosecond)
+		synctest.Wait()
+		require.Len(t, facts.SlackChannelIDsCalls(), 1)
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		require.Len(t, facts.SlackChannelIDsCalls(), 2)
+		// Hold the existing lane while many reconnects request another pass.
+		release := make(chan struct{})
+		facts.SlackChannelIDsFunc = func(ctx context.Context) ([]string, error) {
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+
+			return nil, nil
+		}
+
+		connector.socketEvents <- socketmode.Event{Type: socketmode.EventTypeConnected}
+
+		synctest.Wait()
+		require.Len(t, facts.SlackChannelIDsCalls(), 3)
+
+		for range 10 {
+			connector.socketEvents <- socketmode.Event{Type: socketmode.EventTypeConnected}
+		}
+
+		synctest.Wait()
+		require.Len(t, facts.SlackChannelIDsCalls(), 3, "no overlapping refresh")
+		connector.handleEventsAPI(ctx, newSlackEventsAPIEvent(&slackevents.ChannelRenameEvent{Channel: slackevents.ChannelRenameInfo{ID: "C1", Name: "new"}}))
+		connector.queueChannelFact("C1", "old", time.Now().Add(-time.Nanosecond))
+		close(release)
+		synctest.Wait()
+		require.Len(t, facts.SlackChannelIDsCalls(), 4, "coalesced reconnect refresh")
+		require.Len(t, facts.RecordChannelFactCalls(), 1)
+		assert.Equal(t, "new", facts.RecordChannelFactCalls()[0].Name, "pending observations retain the newer rename")
+		connector.queueChannelFact("C1", "later", time.Now().Add(time.Nanosecond))
+		synctest.Wait()
+		require.Len(t, facts.SlackChannelIDsCalls(), 4, "observations must not trigger duplicate Slack lookups")
+		require.Len(t, facts.RecordChannelFactCalls(), 2)
+		require.NoError(t, connector.Stop(ctx))
+	})
+}
+
+func TestChannelFactsRenameRaceAndLookupHarvest(t *testing.T) {
+	store := newTestStoredChannelFacts(t)
+	started, release := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/conversations.info":
+			close(started)
+			<-release
+
+			_, err := io.WriteString(w, `{"ok":true,"channel":{"id":"C1","name":"old"}}`)
+			assert.NoError(t, err)
+		case "/conversations.list":
+			assert.NoError(t, r.ParseForm())
+
+			if r.Form.Get("cursor") == "" {
+				_, err := io.WriteString(w, `{"ok":true,"channels":[{"id":"C8","name":"first"}],"response_metadata":{"next_cursor":"next"}}`)
+				assert.NoError(t, err)
+			} else {
+				_, err := io.WriteString(w, `{"ok":true,"channels":[{"id":"G1","name":"current"},{"id":"C9","name":"after-match"}]}`)
+				assert.NoError(t, err)
+			}
+		default:
+			t.Errorf("unexpected Slack path %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	connector := newTestConnector(server.URL)
+	connector.teamID, connector.facts = "T1", store
+	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#old", Agents: []string{"live"}}, {Channel: "#current", Agents: []string{"main"}}}
+
+	require.NoError(t, store.RecordChannelFact(t.Context(), "T1", "C1", "cached", time.Unix(1, 0)))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+
+		name, agent, ok := connector.socialModeChannel(t.Context(), "C1")
+		assert.True(t, ok)
+		assert.Equal(t, "#old", name, "action policy still uses live Slack")
+		assert.Equal(t, "live", agent)
+	}()
+
+	<-started
+	connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(&slackevents.ChannelRenameEvent{Channel: slackevents.ChannelRenameInfo{ID: "C1", Name: "new"}}))
+	connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(&slackevents.GroupRenameEvent{Channel: slackevents.GroupRenameInfo{ID: "G1", Name: "delayed"}}))
+	connector.flushChannelFacts(t.Context())
+	close(release)
+	<-done
+	connector.flushChannelFacts(t.Context())
+	name, found, err := store.ChannelFact(t.Context(), "T1", "C1")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "new", name, "older in-flight info must not overwrite rename")
+	name, found, err = store.ChannelFact(t.Context(), "T1", "G1")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "delayed", name)
+	id, err := connector.resolveConfiguredChannelID(t.Context(), "#current")
+	require.NoError(t, err)
+	assert.Equal(t, "G1", id)
+	connector.flushChannelFacts(t.Context())
+
+	for _, tc := range []struct{ id, name string }{{"C8", "first"}, {"G1", "current"}, {"C9", "after-match"}} {
+		name, found, err := store.ChannelFact(t.Context(), "T1", tc.id)
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, tc.name, name)
+	}
+
+	name, choices, err := connector.SidebarChannelAgentChoices(t.Context(), "G1")
+	require.NoError(t, err)
+	assert.Equal(t, "current", name)
+	assert.Equal(t, []string{"main"}, choices)
+}
+
+func TestChannelFactsRefreshRetryRetentionAndConvergence(t *testing.T) {
+	store := newTestStoredChannelFacts(t)
+	for _, id := range []string{"C1", "G1", "G2"} {
+		require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID(id, "1.1"), backend.ThreadState{Agent: "main"}))
+		require.NoError(t, store.RecordChannelFact(t.Context(), "T1", id, "old", time.Unix(1, 0)))
+	}
+
+	rateLimited, retried := make(chan time.Time, 1), make(chan time.Time, 1)
+	finished := make(chan struct{}, 2)
+
+	var mu sync.Mutex
+
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/conversations.info", r.URL.Path)
+		assert.NoError(t, r.ParseForm())
+
+		switch r.Form.Get("channel") {
+		case "C1":
+			mu.Lock()
+			calls++
+			n := calls
+			mu.Unlock()
+
+			if n == 1 {
+				rateLimited <- time.Now()
+
+				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusTooManyRequests)
+
+				return
+			}
+
+			if n == 2 {
+				retried <- time.Now()
+			}
+
+			_, err := io.WriteString(w, `{"ok":true,"channel":{"id":"C1","name":"current","is_archived":true}}`)
+			assert.NoError(t, err)
+		case "G1":
+			_, err := io.WriteString(w, `{"ok":true,"channel":{"id":"G1","name":"mpdm-users","is_mpim":true}}`)
+			assert.NoError(t, err)
+		case "G2":
+			_, err := io.WriteString(w, `{"ok":false,"error":"channel_not_found"}`)
+			assert.NoError(t, err)
+
+			finished <- struct{}{}
+		}
+	}))
+	t.Cleanup(server.Close)
+	connector := newTestConnector(server.URL)
+	connector.teamID, connector.facts = "T1", store
+	connector.config.Channels = []config.SlackChannelConfig{{Channel: "#old", Agents: []string{"keeper"}}}
+	ctx, cancel := context.WithCancel(t.Context())
+	connector.inboundStop = cancel
+	connector.factsGroup.Go(func() error { return connector.refreshChannelFacts(ctx) })
+	t.Cleanup(func() { require.NoError(t, connector.Stop(ctx)) })
+
+	at := <-rateLimited
+	name, choices, err := connector.SidebarChannelAgentChoices(t.Context(), "C1")
+	require.NoError(t, err)
+	assert.Equal(t, "old", name)
+	assert.Equal(t, []string{"keeper"}, choices, "sidebar remains available during Retry-After")
+	assert.GreaterOrEqual(t, (<-retried).Sub(at), time.Second)
+	<-finished
+
+	for _, tc := range []struct{ id, name string }{{"C1", "current"}, {"G1", "mpdm-users"}, {"G2", "old"}} {
+		name, found, err := store.ChannelFact(t.Context(), "T1", tc.id)
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, tc.name, name)
+	}
+
+	connector.handleEventsAPI(t.Context(), newSlackEventsAPIEvent(&slackevents.ChannelRenameEvent{Channel: slackevents.ChannelRenameInfo{ID: "C1", Name: "delayed"}}))
+	connector.requestChannelFacts()
+	<-finished
+
+	name, found, err := store.ChannelFact(t.Context(), "T1", "C1")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "current", name, "later refresh converges after delayed rename")
+}
+
+func newTestStoredChannelFacts(t *testing.T) *backend.SessionService {
+	t.Helper()
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	store, err := backend.NewSessionServiceIn(t.Context(), dsn, testLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Stop()) })
+
+	return store
 }
 
 func TestSendExternalMCPRelayResolvesPrivateConfiguredChannelName(t *testing.T) {
@@ -10806,8 +11076,20 @@ func newTestConnectorWithOptions(apiURL string, bus *testBus, channels []config.
 	connector.stacks = map[string][]slackBufferedMessage{}
 	connector.poppedQueue = map[string]struct{}{}
 	connector.queueCards = map[string]string{}
+	connector.facts = newTestChannelFacts()
+	connector.factsWake = make(chan struct{}, 1)
+	connector.refreshWake = make(chan struct{}, 1)
+	connector.observations = make(map[string]channelObservation)
 
 	return connector
+}
+
+func newTestChannelFacts() *channelFactsStoreMock {
+	return &channelFactsStoreMock{
+		ChannelFactFunc:       func(context.Context, string, string) (string, bool, error) { return "", false, nil },
+		RecordChannelFactFunc: func(context.Context, string, string, string, time.Time) error { return nil },
+		SlackChannelIDsFunc:   func(context.Context) ([]string, error) { return nil, nil },
+	}
 }
 
 func newSlackMessageEvent(messageTS, threadTS, text string) *slackevents.MessageEvent {

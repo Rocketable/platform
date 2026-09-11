@@ -17,6 +17,15 @@ messages; stored replay, principal framing, and assistant text remain unchanged.
 Session discovery starts from explicitly recorded conversations, excluding private Cron locators and
 recorded MCP X bindings; it does not discover orphaned entry rows or backfill
 records. `CreateSession` records a fresh opaque ID with the selected loaded agent.
+`ListSessions` streams one conversation per response message in list order. The
+Web proxy forwards these progressively through a finite tRPC iterable, preserving
+full previews and gRPC's default 4 MiB per-message receive limit. Each envelope
+carries the authenticated owner and summary completeness; the final empty envelope
+marks upstream success and aggregate summary completeness, including for an empty
+list. HTTP iterator exhaustion is separate from that application terminal: a
+failure or wire cut can leave a visible prefix, which is not a completed list.
+Cancellation cancels the gRPC call, including pending reads, and releases database
+rows. `Identity` returns the Go-mapped username separately from `Protocol` negotiation.
 `ListAgents` loads the current runtime definitions. Session `allowed_agents` comes
 from those definitions for Web conversations and the existing Slack channel policy
 for Slack Y. `$agent name` persists selection and updates the live bridge without
@@ -60,6 +69,33 @@ Missing source entries cannot supply history; no migration, backfill, or history
 rewrite is performed. The Runs section shows “No runs yet.” when no linked runs exist.
 
 ## Start
+
+### History summary backfill
+
+Existing histories gain durable sidebar summaries in the background when the
+RocketClaw runtime starts. Backfill does not gate readiness. It commits progress
+incrementally, so a later runtime start resumes histories that still lack a
+summary. It does not create conversation records or expose orphaned histories.
+Normal history writes maintain the summary in the same transaction as the history.
+New conversation records initialize their summary in the creation transaction,
+including when they attach existing orphan history. An empty summary is complete;
+a missing summary is not. Empty histories retain blank previews and display
+timestamps. Sidebar enumeration reads stored summaries without scanning history,
+including while legacy summaries are still missing.
+
+If backfill fails, the runtime logs `backfill session summaries` with the error
+and stops that backfill attempt; it does not retry automatically within the same
+run. Investigate the logged error before restarting to resume. Shutdown cancels
+and joins the backfill before releasing the runtime lock or closing the store.
+
+### Run the Web transport
+
+Sidebar Slack labels use stored channel facts. A background lane refreshes known
+channels every three minutes; rate limits can extend staleness, and failed
+lookups retain the last known facts. Sidebar requests do not wait for Slack.
+Stored facts do not grant permission: action authorization still uses live checks.
+Configure rename subscriptions using
+[Slack Channel Rename Subscriptions](../../../../cmd/rocketclaw/CHEATSHEET.md#slack-channel-rename-subscriptions).
 
 From the repository root, create a private socket directory and supply the same
 address to RocketClaw and the Web process:

@@ -58,14 +58,21 @@ export function appRouter(layer: AppLayer) {
         }),
       ),
     ),
-    sessions: identified.query(({ ctx }) =>
-      run(
-        Effect.gen(function* () {
-          const rc = yield* Rocketclaw;
-          return yield* rc.listSessions(ctx.principal);
-        }),
-      ),
-    ),
+    sessions: identified.query(async function* ({ ctx, signal }) {
+      const rc = await run(Rocketclaw);
+      try {
+        yield* rc.listSessions(ctx.principal, signal);
+      } catch (err) {
+        if (err instanceof GrpcError) {
+          throw new TRPCError({ code: err.code === status.UNAUTHENTICATED ? "UNAUTHORIZED" : "INTERNAL_SERVER_ERROR", message: err.message });
+        }
+        throw err;
+      }
+    }),
+    identity: identified.query(({ ctx }) => run(Effect.gen(function* () {
+      const rc = yield* Rocketclaw;
+      return yield* rc.identity(ctx.principal);
+    }))),
     createSession: identified.input(z.object({ name: z.string().optional(), agent: z.string().optional() })).mutation(({ ctx, input }) =>
       run(
         Effect.gen(function* () {
@@ -106,11 +113,11 @@ export function appRouter(layer: AppLayer) {
         }),
       ),
     ),
-    agents: identified.query(({ ctx }) =>
+    agents: identified.input(z.object({ conversationId: z.string() }).optional()).query(({ ctx, input }) =>
       run(
         Effect.gen(function* () {
           const rc = yield* Rocketclaw;
-          return yield* rc.listAgents(ctx.principal);
+          return yield* rc.listAgents(ctx.principal, input?.conversationId);
         }),
       ),
     ),
@@ -138,11 +145,11 @@ export function appRouter(layer: AppLayer) {
         }),
       ),
     ),
-    protocol: identified.query(({ ctx }) =>
+    protocol: t.procedure.query(() =>
       run(
         Effect.gen(function* () {
           const rc = yield* Rocketclaw;
-          return yield* rc.protocol(ctx.principal);
+          return yield* rc.protocol();
         }),
       ),
     ),

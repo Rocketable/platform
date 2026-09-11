@@ -26,6 +26,9 @@ message HistoryResponse {
 
 message ListSessionsResponse {
   repeated Session sessions = 1;
+  string owner = 2;
+  bool upstream_success = 3;
+  bool summaries_complete = 4;
 }
 
 message CreateSessionRequest {
@@ -88,10 +91,11 @@ message Agent {
   string origin = 8;
 }
 
-message ListAgentsRequest {}
+message ListAgentsRequest { string conversation_id = 1; }
 
 message ListAgentsResponse {
   repeated Agent agents = 1;
+  string current_agent = 2;
 }
 
 message Skill {
@@ -224,8 +228,12 @@ message DeleteSessionEntriesResponse {
   int64 deleted = 1;
 }
 
+message IdentityRequest {}
+
+message IdentityResponse { string username = 1; }
+
 service Web {
-  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc ListSessions(ListSessionsRequest) returns (stream ListSessionsResponse);
   rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
   rpc Join(JoinRequest) returns (stream TranscriptEvent);
   rpc Prompt(PromptRequest) returns (PromptResponse);
@@ -238,6 +246,7 @@ service Web {
   rpc ListConfig(ListConfigRequest) returns (ListConfigResponse);
   rpc SettleSession(SettleSessionRequest) returns (SettleSessionResponse);
   rpc Protocol(ProtocolRequest) returns (ProtocolResponse);
+  rpc Identity(IdentityRequest) returns (IdentityResponse);
   rpc ListQueue(ListQueueRequest) returns (ListQueueResponse);
   rpc RemoveQueueItem(QueueItemRequest) returns (QueueItemResponse);
   rpc SteerQueueItem(QueueItemRequest) returns (QueueItemResponse);

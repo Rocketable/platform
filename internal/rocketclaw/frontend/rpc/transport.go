@@ -41,7 +41,7 @@ func Listen(socketPath string) (net.Listener, error) {
 // gRPC's Unimplemented response; they are not successful empty handlers.
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	desc := grpc.ServiceDesc{ServiceName: "rpc.Web", HandlerType: (*any)(nil), Metadata: "web.proto"}
-	for _, method := range []string{"Protocol", "Prompt", "History", "ListSessions", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "SettleSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "RemoveQueueItem", "ReorderQueue"} {
+	for _, method := range []string{"Protocol", "Identity", "Prompt", "History", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "SettleSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "RemoveQueueItem", "ReorderQueue"} {
 		desc.Methods = append(desc.Methods, grpc.MethodDesc{MethodName: method, Handler: func(_ any, ctx context.Context, decode func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
 			var request proto.Message = &SessionEntriesRequest{}
 
@@ -60,12 +60,12 @@ func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 				request = &ListAgentsRequest{}
 			case "CreateSession":
 				request = &CreateSessionRequest{}
-			case "ListSessions":
-				request = &ListSessionsRequest{}
 			case "History":
 				request = &HistoryRequest{}
 			case "Protocol":
 				request = &ProtocolRequest{}
+			case "Identity":
+				request = &IdentityRequest{}
 			case "Prompt":
 				request = &PromptRequest{}
 			case "ListQueue":
@@ -98,6 +98,12 @@ func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 		}
 
 		return s.join(request, stream)
+	}}, {StreamName: "ListSessions", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
+		if err := stream.RecvMsg(&ListSessionsRequest{}); err != nil {
+			return fmt.Errorf("receive web session list: %w", err)
+		}
+
+		return s.listSessions(stream)
 	}}}
 	registrar.RegisterService(&desc, s)
 }
@@ -115,11 +121,16 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 	case "ListSkills":
 		return s.listSkills(ctx, request.(*ListSkillsRequest))
 	case "ListAgents":
-		return s.listAgents(ctx)
+		return s.listAgents(ctx, request.(*ListAgentsRequest).ConversationId)
+	case "Identity":
+		username, err := s.principal(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		return &IdentityResponse{Username: username}, nil
 	case "CreateSession":
 		return s.createSession(ctx, request.(*CreateSessionRequest))
-	case "ListSessions":
-		return s.listSessions(ctx)
 	case "History":
 		return s.history(ctx, request.(*HistoryRequest))
 	case "Prompt":

@@ -24,7 +24,7 @@ func newCronScheduleStore(t *testing.T) *backend.SessionService {
 		t.Fatal(err)
 	}
 
-	store, err := backend.NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
+	store, err := backend.NewSessionServiceIn(t.Context(), dsn, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

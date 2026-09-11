@@ -17,6 +17,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/skel"
 	"github.com/Rocketable/platform/internal/rocketclaw/workflow"
 	"github.com/Rocketable/platform/internal/rocketcode"
+	"golang.org/x/sync/errgroup"
 )
 
 // ErrRestartRequested indicates rocketclaw should exit so a supervisor can restart it.
@@ -71,7 +72,7 @@ func Run(ctx context.Context, cfg *config.Config, configPath string, logger *slo
 
 	stateLogger.Info("starting rocketclaw state store", "workspace", cfg.Workspace, "runtime_dir", cfg.RuntimeDirName())
 
-	rocketcodeSessions, err := NewSessionServiceIn(cfg.DatabaseURL, stateLogger)
+	rocketcodeSessions, err := NewSessionServiceIn(runCtx, cfg.DatabaseURL, stateLogger)
 	if err != nil {
 		return fmt.Errorf("start rocketcode session service: %w", err)
 	}
@@ -120,6 +121,23 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 	if err := rocketcodeSessions.ApplyPendingRestartNotifications(runCtx); err != nil {
 		return fmt.Errorf("apply pending restart notifications: %w", err)
 	}
+
+	backfillCtx, cancelBackfill := context.WithCancel(runCtx)
+
+	var backfill errgroup.Group
+	backfill.Go(func() error {
+		if err := rocketcodeSessions.backfillSessionSummaries(backfillCtx); err != nil && backfillCtx.Err() == nil {
+			logger.Error("backfill session summaries", "error", err)
+		}
+
+		return nil
+	})
+
+	defer func() {
+		cancelBackfill()
+
+		_ = backfill.Wait()
+	}()
 
 	if err := skel.SyncInWithOverlays(cfg.Workspace, cfg.RuntimeDirName(), cfg.Overlays, logger); err != nil {
 		return fmt.Errorf("sync rocketclaw skeleton: %w", err)

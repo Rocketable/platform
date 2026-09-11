@@ -4,10 +4,10 @@ import type { TranscriptEvent } from "./grpc";
 
 // Execute the retained UI's actual private functions without exporting non-components.
 const source = ts.createSourceFile("ui.tsx", await Bun.file(new URL("./ui.tsx", import.meta.url)).text(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = ["nextLines", "sendComposer", "appendLine", "appendThinking", "thinkingRows", "lineId", "isStopCommand", "composerAgents"];
+const names = ["nextLines", "sendComposer", "appendLine", "appendThinking", "thinkingRows", "lineId", "isStopCommand"];
 const functions = source.statements.filter((node) => ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? "")).map((node) => node.getText(source)).join("\n");
-const javascript = ts.transpileModule(`${functions}\nexport { nextLines, sendComposer, composerAgents };`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
-const { nextLines, sendComposer, composerAgents } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
+const javascript = ts.transpileModule(`${functions}\nexport { nextLines, sendComposer };`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
+const { nextLines, sendComposer } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 type Line = { id: string; role: string; text: string; turnId?: string };
 
 test("explicit enqueue keeps the composer idle and preserves the inner call for RPC", async () => {
@@ -25,14 +25,6 @@ test("explicit enqueue keeps the composer idle and preserves the inner call for 
     setSendError: (error: string) => { expect(error).toBe(""); }, setLines: () => {},
   });
   expect(invalidated).toBe(true);
-});
-
-test("retained selector uses server choices and never re-adds a removed agent", () => {
-  const catalog = [{ name: "main" }, { name: "planner" }];
-  expect(composerAgents("", catalog, [])).toEqual(catalog);
-  expect(composerAgents("opaque", catalog, ["main", "planner"])).toEqual(catalog);
-  expect(composerAgents("slack-thread:C1:1.1", catalog, ["main"])).toEqual([{ name: "main" }]);
-  expect(composerAgents("slack-thread:C1:1.1", catalog, [])).toEqual([]);
 });
 
 test("live updates replace only their own turn, including empty terminals", () => {

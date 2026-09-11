@@ -39,9 +39,10 @@ type Server struct {
 	cronjobs  CronJobs
 }
 
-// ChannelAgentChoices supplies the primary connector's current channel policy.
+// ChannelAgentChoices supplies live policy for actions and stored facts for display.
 type ChannelAgentChoices interface {
 	ChannelAgentChoices(context.Context, string) ([]string, error)
+	SidebarChannelAgentChoices(context.Context, string) (string, []string, error)
 }
 
 // CronJobs uses the process's existing Cron manager for reads and execution.
@@ -118,61 +119,71 @@ func (s *Server) DeleteSessionEntries(ctx context.Context, request *SessionEntri
 	return &DeleteSessionEntriesResponse{Deleted: deleted}, nil
 }
 
-func (s *Server) listSessions(ctx context.Context) (*ListSessionsResponse, error) {
-	if _, err := s.principal(ctx); err != nil {
-		return nil, err
-	}
+func (s *Server) listSessions(stream grpc.ServerStream) error {
+	ctx := stream.Context()
 
-	conversations, err := s.backend.ListConversations(ctx)
+	owner, err := s.principal(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list web conversations: %w", err)
+		return err
 	}
 
-	summaries, err := s.sessions.ListSessions(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list web summaries: %w", err)
-	}
+	complete := true
+	metadataByChannel := make(map[string]*Session)
 
-	response := &ListSessionsResponse{}
-
-	byID := make(map[string]protocol.SessionSummary, len(summaries))
-	for _, summary := range summaries {
-		byID[summary.ConversationID] = summary
-	}
-
-	for _, conversation := range conversations {
-		visible, err := s.humanConversation(conversation.ID)
+	for row, err := range s.sessions.SidebarSessions(ctx) {
 		if err != nil {
-			return nil, err
+			return err
 		}
 
-		if !visible {
-			continue
+		conversation := row.Conversation
+		complete = complete && row.Summary != nil
+
+		allChoices, loaded := metadataByChannel[""]
+		if !loaded {
+			choices, err := s.agentChoices(ctx, "")
+			if err != nil {
+				return err
+			}
+
+			allChoices = &Session{AllowedAgents: choices}
+			metadataByChannel[""] = allChoices
 		}
 
-		choices, err := s.agentChoices(ctx, conversation.ID)
-		if err != nil {
-			return nil, err
+		channel, _, slack := protocol.SlackThreadTarget(conversation.ID)
+		if !slack {
+			channel = ""
 		}
 
-		session := &Session{Id: conversation.ID, Agent: conversation.Agent, AllowedAgents: choices, Settled: conversation.Settled}
-		if summary, exists := byID[conversation.ID]; exists {
+		channelMetadata, loaded := metadataByChannel[channel]
+		if !loaded {
+			name, allowed, err := s.channels.SidebarChannelAgentChoices(ctx, channel)
+			if err != nil {
+				return fmt.Errorf("web channel choices: %w", err)
+			}
+
+			choices := slices.DeleteFunc(slices.Clone(allChoices.AllowedAgents), func(name string) bool { return !slices.Contains(allowed, name) })
+			channelMetadata = &Session{Title: name, AllowedAgents: choices}
+			metadataByChannel[channel] = channelMetadata
+		}
+
+		session := &Session{Id: conversation.ID, Title: channelMetadata.Title, Agent: conversation.Agent, AllowedAgents: channelMetadata.AllowedAgents, Settled: conversation.Settled}
+		if summary := row.Summary; summary != nil {
 			session.Preview = summary.LastUserMessage
-			session.UpdatedAt = summary.LastUpdated.Format(time.RFC3339Nano)
+			if !summary.LastUpdated.IsZero() {
+				session.UpdatedAt = summary.LastUpdated.Format(time.RFC3339Nano)
+			}
 		}
 
-		response.Sessions = append(response.Sessions, session)
+		if err := stream.SendMsg(&ListSessionsResponse{Sessions: []*Session{session}, Owner: owner, SummariesComplete: row.Summary != nil}); err != nil {
+			return fmt.Errorf("send web session: %w", err)
+		}
 	}
 
-	slices.SortFunc(response.Sessions, func(a, b *Session) int {
-		if order := byID[b.Id].LastUpdated.Compare(byID[a.Id].LastUpdated); order != 0 {
-			return order
-		}
+	if err := stream.SendMsg(&ListSessionsResponse{Owner: owner, UpstreamSuccess: true, SummariesComplete: complete}); err != nil {
+		return fmt.Errorf("send web session completion: %w", err)
+	}
 
-		return cmp.Compare(a.Id, b.Id)
-	})
-
-	return response, nil
+	return nil
 }
 
 func (s *Server) history(ctx context.Context, request *HistoryRequest) (*HistoryResponse, error) {
@@ -445,7 +456,7 @@ func (s *Server) listSkills(ctx context.Context, request *ListSkillsRequest) (*L
 	return response, nil
 }
 
-func (s *Server) listAgents(ctx context.Context) (*ListAgentsResponse, error) {
+func (s *Server) listAgents(ctx context.Context, id string) (*ListAgentsResponse, error) {
 	if _, err := s.principal(ctx); err != nil {
 		return nil, err
 	}
@@ -457,7 +468,39 @@ func (s *Server) listAgents(ctx context.Context) (*ListAgentsResponse, error) {
 
 	response := &ListAgentsResponse{}
 
+	var allowed []string
+
+	channel, _, slack := protocol.SlackThreadTarget(id)
+	if id != "" {
+		visible, err := s.humanConversation(id)
+		if err != nil {
+			return nil, err
+		}
+
+		if !visible {
+			return nil, fmt.Errorf("web agent choices: %w", status.Error(codes.PermissionDenied, "private conversation"))
+		}
+
+		thread, _, err := s.sessions.Thread(id)
+		if err != nil {
+			return nil, fmt.Errorf("read selected conversation: %w", err)
+		}
+
+		response.CurrentAgent = thread.Agent
+	}
+
+	if slack {
+		_, allowed, err = s.channels.SidebarChannelAgentChoices(ctx, channel)
+		if err != nil {
+			return nil, fmt.Errorf("web channel choices: %w", err)
+		}
+	}
+
 	for _, name := range slices.Sorted(maps.Keys(definitions.Items)) {
+		if slack && !slices.Contains(allowed, name) {
+			continue
+		}
+
 		agent := definitions.Items[name]
 		response.Agents = append(response.Agents, &Agent{Name: name, Model: agent.Model, Reasoning: agent.ReasoningEffort, Description: agent.Description, Verbosity: agent.Verbosity, Prompt: agent.Prompt})
 	}
@@ -466,7 +509,7 @@ func (s *Server) listAgents(ctx context.Context) (*ListAgentsResponse, error) {
 }
 
 func (s *Server) agentChoices(ctx context.Context, id string) ([]string, error) {
-	catalog, err := s.listAgents(ctx)
+	catalog, err := s.listAgents(ctx, "")
 	if err != nil {
 		return nil, err
 	}

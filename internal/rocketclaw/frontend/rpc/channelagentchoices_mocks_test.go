@@ -22,6 +22,9 @@ var _ ChannelAgentChoices = &mockChannels{}
 //			ChannelAgentChoicesFunc: func(context1 context.Context, s string) ([]string, error) {
 //				panic("mock out the ChannelAgentChoices method")
 //			},
+//			SidebarChannelAgentChoicesFunc: func(context1 context.Context, s string) (string, []string, error) {
+//				panic("mock out the SidebarChannelAgentChoices method")
+//			},
 //		}
 //
 //		// use mockedChannelAgentChoices in code that requires ChannelAgentChoices
@@ -32,6 +35,9 @@ type mockChannels struct {
 	// ChannelAgentChoicesFunc mocks the ChannelAgentChoices method.
 	ChannelAgentChoicesFunc func(context1 context.Context, s string) ([]string, error)
 
+	// SidebarChannelAgentChoicesFunc mocks the SidebarChannelAgentChoices method.
+	SidebarChannelAgentChoicesFunc func(context1 context.Context, s string) (string, []string, error)
+
 	// calls tracks calls to the methods.
 	calls struct {
 		// ChannelAgentChoices holds details about calls to the ChannelAgentChoices method.
@@ -41,8 +47,16 @@ type mockChannels struct {
 			// S is the s argument value.
 			S string
 		}
+		// SidebarChannelAgentChoices holds details about calls to the SidebarChannelAgentChoices method.
+		SidebarChannelAgentChoices []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+		}
 	}
-	lockChannelAgentChoices sync.RWMutex
+	lockChannelAgentChoices        sync.RWMutex
+	lockSidebarChannelAgentChoices sync.RWMutex
 }
 
 // ChannelAgentChoices calls ChannelAgentChoicesFunc.
@@ -78,5 +92,41 @@ func (mock *mockChannels) ChannelAgentChoicesCalls() []struct {
 	mock.lockChannelAgentChoices.RLock()
 	calls = mock.calls.ChannelAgentChoices
 	mock.lockChannelAgentChoices.RUnlock()
+	return calls
+}
+
+// SidebarChannelAgentChoices calls SidebarChannelAgentChoicesFunc.
+func (mock *mockChannels) SidebarChannelAgentChoices(context1 context.Context, s string) (string, []string, error) {
+	if mock.SidebarChannelAgentChoicesFunc == nil {
+		panic("mockChannels.SidebarChannelAgentChoicesFunc: method is nil but ChannelAgentChoices.SidebarChannelAgentChoices was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+	}{
+		Context1: context1,
+		S:        s,
+	}
+	mock.lockSidebarChannelAgentChoices.Lock()
+	mock.calls.SidebarChannelAgentChoices = append(mock.calls.SidebarChannelAgentChoices, callInfo)
+	mock.lockSidebarChannelAgentChoices.Unlock()
+	return mock.SidebarChannelAgentChoicesFunc(context1, s)
+}
+
+// SidebarChannelAgentChoicesCalls gets all the calls that were made to SidebarChannelAgentChoices.
+// Check the length with:
+//
+//	len(mockedChannelAgentChoices.SidebarChannelAgentChoicesCalls())
+func (mock *mockChannels) SidebarChannelAgentChoicesCalls() []struct {
+	Context1 context.Context
+	S        string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+	}
+	mock.lockSidebarChannelAgentChoices.RLock()
+	calls = mock.calls.SidebarChannelAgentChoices
+	mock.lockSidebarChannelAgentChoices.RUnlock()
 	return calls
 }

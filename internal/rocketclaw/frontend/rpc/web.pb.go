@@ -284,10 +284,13 @@ func (x *HistoryResponse) GetMessages() []*TranscriptEvent {
 }
 
 type ListSessionsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Sessions      []*Session             `protobuf:"bytes,1,rep,name=sessions,proto3" json:"sessions,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Sessions          []*Session             `protobuf:"bytes,1,rep,name=sessions,proto3" json:"sessions,omitempty"`
+	Owner             string                 `protobuf:"bytes,2,opt,name=owner,proto3" json:"owner,omitempty"`
+	UpstreamSuccess   bool                   `protobuf:"varint,3,opt,name=upstream_success,json=upstreamSuccess,proto3" json:"upstream_success,omitempty"`
+	SummariesComplete bool                   `protobuf:"varint,4,opt,name=summaries_complete,json=summariesComplete,proto3" json:"summaries_complete,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ListSessionsResponse) Reset() {
@@ -325,6 +328,27 @@ func (x *ListSessionsResponse) GetSessions() []*Session {
 		return x.Sessions
 	}
 	return nil
+}
+
+func (x *ListSessionsResponse) GetOwner() string {
+	if x != nil {
+		return x.Owner
+	}
+	return ""
+}
+
+func (x *ListSessionsResponse) GetUpstreamSuccess() bool {
+	if x != nil {
+		return x.UpstreamSuccess
+	}
+	return false
+}
+
+func (x *ListSessionsResponse) GetSummariesComplete() bool {
+	if x != nil {
+		return x.SummariesComplete
+	}
+	return false
 }
 
 type CreateSessionRequest struct {
@@ -864,9 +888,10 @@ func (x *Agent) GetOrigin() string {
 }
 
 type ListAgentsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ConversationId string                 `protobuf:"bytes,1,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ListAgentsRequest) Reset() {
@@ -899,9 +924,17 @@ func (*ListAgentsRequest) Descriptor() ([]byte, []int) {
 	return file_web_proto_rawDescGZIP(), []int{13}
 }
 
+func (x *ListAgentsRequest) GetConversationId() string {
+	if x != nil {
+		return x.ConversationId
+	}
+	return ""
+}
+
 type ListAgentsResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Agents        []*Agent               `protobuf:"bytes,1,rep,name=agents,proto3" json:"agents,omitempty"`
+	CurrentAgent  string                 `protobuf:"bytes,2,opt,name=current_agent,json=currentAgent,proto3" json:"current_agent,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -941,6 +974,13 @@ func (x *ListAgentsResponse) GetAgents() []*Agent {
 		return x.Agents
 	}
 	return nil
+}
+
+func (x *ListAgentsResponse) GetCurrentAgent() string {
+	if x != nil {
+		return x.CurrentAgent
+	}
+	return ""
 }
 
 type Skill struct {
@@ -2407,6 +2447,86 @@ func (x *DeleteSessionEntriesResponse) GetDeleted() int64 {
 	return 0
 }
 
+type IdentityRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IdentityRequest) Reset() {
+	*x = IdentityRequest{}
+	mi := &file_web_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IdentityRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IdentityRequest) ProtoMessage() {}
+
+func (x *IdentityRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_web_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IdentityRequest.ProtoReflect.Descriptor instead.
+func (*IdentityRequest) Descriptor() ([]byte, []int) {
+	return file_web_proto_rawDescGZIP(), []int{45}
+}
+
+type IdentityResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Username      string                 `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IdentityResponse) Reset() {
+	*x = IdentityResponse{}
+	mi := &file_web_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IdentityResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IdentityResponse) ProtoMessage() {}
+
+func (x *IdentityResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_web_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IdentityResponse.ProtoReflect.Descriptor instead.
+func (*IdentityResponse) Descriptor() ([]byte, []int) {
+	return file_web_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *IdentityResponse) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
 var File_web_proto protoreflect.FileDescriptor
 
 const file_web_proto_rawDesc = "" +
@@ -2425,9 +2545,12 @@ const file_web_proto_rawDesc = "" +
 	"\x0eHistoryRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"C\n" +
 	"\x0fHistoryResponse\x120\n" +
-	"\bmessages\x18\x01 \x03(\v2\x14.rpc.TranscriptEventR\bmessages\"@\n" +
+	"\bmessages\x18\x01 \x03(\v2\x14.rpc.TranscriptEventR\bmessages\"\xb0\x01\n" +
 	"\x14ListSessionsResponse\x12(\n" +
-	"\bsessions\x18\x01 \x03(\v2\f.rpc.SessionR\bsessions\"@\n" +
+	"\bsessions\x18\x01 \x03(\v2\f.rpc.SessionR\bsessions\x12\x14\n" +
+	"\x05owner\x18\x02 \x01(\tR\x05owner\x12)\n" +
+	"\x10upstream_success\x18\x03 \x01(\bR\x0fupstreamSuccess\x12-\n" +
+	"\x12summaries_complete\x18\x04 \x01(\bR\x11summariesComplete\"@\n" +
 	"\x14CreateSessionRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05agent\x18\x02 \x01(\tR\x05agent\"'\n" +
@@ -2467,11 +2590,13 @@ const file_web_proto_rawDesc = "" +
 	"\tverbosity\x18\x05 \x01(\tR\tverbosity\x12\x16\n" +
 	"\x06prompt\x18\x06 \x01(\tR\x06prompt\x12 \n" +
 	"\vpermissions\x18\a \x01(\tR\vpermissions\x12\x16\n" +
-	"\x06origin\x18\b \x01(\tR\x06origin\"\x13\n" +
-	"\x11ListAgentsRequest\"8\n" +
+	"\x06origin\x18\b \x01(\tR\x06origin\"<\n" +
+	"\x11ListAgentsRequest\x12'\n" +
+	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\"]\n" +
 	"\x12ListAgentsResponse\x12\"\n" +
 	"\x06agents\x18\x01 \x03(\v2\n" +
-	".rpc.AgentR\x06agents\"\xaf\x01\n" +
+	".rpc.AgentR\x06agents\x12#\n" +
+	"\rcurrent_agent\x18\x02 \x01(\tR\fcurrentAgent\"\xaf\x01\n" +
 	"\x05Skill\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x18\n" +
@@ -2552,13 +2677,16 @@ const file_web_proto_rawDesc = "" +
 	"\x1aLoadSessionEntriesResponse\x12/\n" +
 	"\aentries\x18\x01 \x03(\v2\x15.rpc.SessionEntryDataR\aentries\"8\n" +
 	"\x1cDeleteSessionEntriesResponse\x12\x18\n" +
-	"\adeleted\x18\x01 \x01(\x03R\adeleted*&\n" +
+	"\adeleted\x18\x01 \x01(\x03R\adeleted\"\x11\n" +
+	"\x0fIdentityRequest\".\n" +
+	"\x10IdentityResponse\x12\x1a\n" +
+	"\busername\x18\x01 \x01(\tR\busername*&\n" +
 	"\x0ePromptDelivery\x12\t\n" +
 	"\x05STEER\x10\x00\x12\t\n" +
-	"\x05QUEUE\x10\x012\xb8\n" +
+	"\x05QUEUE\x10\x012\xf3\n" +
 	"\n" +
-	"\x03Web\x12C\n" +
-	"\fListSessions\x12\x18.rpc.ListSessionsRequest\x1a\x19.rpc.ListSessionsResponse\x12F\n" +
+	"\x03Web\x12E\n" +
+	"\fListSessions\x12\x18.rpc.ListSessionsRequest\x1a\x19.rpc.ListSessionsResponse0\x01\x12F\n" +
 	"\rCreateSession\x12\x19.rpc.CreateSessionRequest\x1a\x1a.rpc.CreateSessionResponse\x120\n" +
 	"\x04Join\x12\x10.rpc.JoinRequest\x1a\x14.rpc.TranscriptEvent0\x01\x121\n" +
 	"\x06Prompt\x12\x12.rpc.PromptRequest\x1a\x13.rpc.PromptResponse\x12C\n" +
@@ -2574,7 +2702,8 @@ const file_web_proto_rawDesc = "" +
 	"\n" +
 	"ListConfig\x12\x16.rpc.ListConfigRequest\x1a\x17.rpc.ListConfigResponse\x12F\n" +
 	"\rSettleSession\x12\x19.rpc.SettleSessionRequest\x1a\x1a.rpc.SettleSessionResponse\x127\n" +
-	"\bProtocol\x12\x14.rpc.ProtocolRequest\x1a\x15.rpc.ProtocolResponse\x12:\n" +
+	"\bProtocol\x12\x14.rpc.ProtocolRequest\x1a\x15.rpc.ProtocolResponse\x127\n" +
+	"\bIdentity\x12\x14.rpc.IdentityRequest\x1a\x15.rpc.IdentityResponse\x12:\n" +
 	"\tListQueue\x12\x15.rpc.ListQueueRequest\x1a\x16.rpc.ListQueueResponse\x12@\n" +
 	"\x0fRemoveQueueItem\x12\x15.rpc.QueueItemRequest\x1a\x16.rpc.QueueItemResponse\x12?\n" +
 	"\x0eSteerQueueItem\x12\x15.rpc.QueueItemRequest\x1a\x16.rpc.QueueItemResponse\x12@\n" +
@@ -2596,7 +2725,7 @@ func file_web_proto_rawDescGZIP() []byte {
 }
 
 var file_web_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_web_proto_msgTypes = make([]protoimpl.MessageInfo, 45)
+var file_web_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
 var file_web_proto_goTypes = []any{
 	(PromptDelivery)(0),                  // 0: rpc.PromptDelivery
 	(*ListSessionsRequest)(nil),          // 1: rpc.ListSessionsRequest
@@ -2644,6 +2773,8 @@ var file_web_proto_goTypes = []any{
 	(*SessionEntryData)(nil),             // 43: rpc.SessionEntryData
 	(*LoadSessionEntriesResponse)(nil),   // 44: rpc.LoadSessionEntriesResponse
 	(*DeleteSessionEntriesResponse)(nil), // 45: rpc.DeleteSessionEntriesResponse
+	(*IdentityRequest)(nil),              // 46: rpc.IdentityRequest
+	(*IdentityResponse)(nil),             // 47: rpc.IdentityResponse
 }
 var file_web_proto_depIdxs = []int32{
 	9,  // 0: rpc.HistoryResponse.messages:type_name -> rpc.TranscriptEvent
@@ -2671,35 +2802,37 @@ var file_web_proto_depIdxs = []int32{
 	28, // 22: rpc.Web.ListConfig:input_type -> rpc.ListConfigRequest
 	30, // 23: rpc.Web.SettleSession:input_type -> rpc.SettleSessionRequest
 	32, // 24: rpc.Web.Protocol:input_type -> rpc.ProtocolRequest
-	35, // 25: rpc.Web.ListQueue:input_type -> rpc.ListQueueRequest
-	37, // 26: rpc.Web.RemoveQueueItem:input_type -> rpc.QueueItemRequest
-	37, // 27: rpc.Web.SteerQueueItem:input_type -> rpc.QueueItemRequest
-	39, // 28: rpc.Web.ReorderQueue:input_type -> rpc.ReorderQueueRequest
-	40, // 29: rpc.Web.ListSessionEntries:input_type -> rpc.SessionEntriesRequest
-	40, // 30: rpc.Web.LoadSessionEntries:input_type -> rpc.SessionEntriesRequest
-	40, // 31: rpc.Web.DeleteSessionEntries:input_type -> rpc.SessionEntriesRequest
-	5,  // 32: rpc.Web.ListSessions:output_type -> rpc.ListSessionsResponse
-	7,  // 33: rpc.Web.CreateSession:output_type -> rpc.CreateSessionResponse
-	9,  // 34: rpc.Web.Join:output_type -> rpc.TranscriptEvent
-	11, // 35: rpc.Web.Prompt:output_type -> rpc.PromptResponse
-	20, // 36: rpc.Web.ListCronJobs:output_type -> rpc.ListCronJobsResponse
-	22, // 37: rpc.Web.RunCronJob:output_type -> rpc.RunCronJobResponse
-	24, // 38: rpc.Web.AnswerQuestion:output_type -> rpc.AnswerQuestionResponse
-	4,  // 39: rpc.Web.History:output_type -> rpc.HistoryResponse
-	15, // 40: rpc.Web.ListAgents:output_type -> rpc.ListAgentsResponse
-	18, // 41: rpc.Web.ListSkills:output_type -> rpc.ListSkillsResponse
-	29, // 42: rpc.Web.ListConfig:output_type -> rpc.ListConfigResponse
-	31, // 43: rpc.Web.SettleSession:output_type -> rpc.SettleSessionResponse
-	33, // 44: rpc.Web.Protocol:output_type -> rpc.ProtocolResponse
-	36, // 45: rpc.Web.ListQueue:output_type -> rpc.ListQueueResponse
-	38, // 46: rpc.Web.RemoveQueueItem:output_type -> rpc.QueueItemResponse
-	38, // 47: rpc.Web.SteerQueueItem:output_type -> rpc.QueueItemResponse
-	38, // 48: rpc.Web.ReorderQueue:output_type -> rpc.QueueItemResponse
-	42, // 49: rpc.Web.ListSessionEntries:output_type -> rpc.ListSessionEntriesResponse
-	44, // 50: rpc.Web.LoadSessionEntries:output_type -> rpc.LoadSessionEntriesResponse
-	45, // 51: rpc.Web.DeleteSessionEntries:output_type -> rpc.DeleteSessionEntriesResponse
-	32, // [32:52] is the sub-list for method output_type
-	12, // [12:32] is the sub-list for method input_type
+	46, // 25: rpc.Web.Identity:input_type -> rpc.IdentityRequest
+	35, // 26: rpc.Web.ListQueue:input_type -> rpc.ListQueueRequest
+	37, // 27: rpc.Web.RemoveQueueItem:input_type -> rpc.QueueItemRequest
+	37, // 28: rpc.Web.SteerQueueItem:input_type -> rpc.QueueItemRequest
+	39, // 29: rpc.Web.ReorderQueue:input_type -> rpc.ReorderQueueRequest
+	40, // 30: rpc.Web.ListSessionEntries:input_type -> rpc.SessionEntriesRequest
+	40, // 31: rpc.Web.LoadSessionEntries:input_type -> rpc.SessionEntriesRequest
+	40, // 32: rpc.Web.DeleteSessionEntries:input_type -> rpc.SessionEntriesRequest
+	5,  // 33: rpc.Web.ListSessions:output_type -> rpc.ListSessionsResponse
+	7,  // 34: rpc.Web.CreateSession:output_type -> rpc.CreateSessionResponse
+	9,  // 35: rpc.Web.Join:output_type -> rpc.TranscriptEvent
+	11, // 36: rpc.Web.Prompt:output_type -> rpc.PromptResponse
+	20, // 37: rpc.Web.ListCronJobs:output_type -> rpc.ListCronJobsResponse
+	22, // 38: rpc.Web.RunCronJob:output_type -> rpc.RunCronJobResponse
+	24, // 39: rpc.Web.AnswerQuestion:output_type -> rpc.AnswerQuestionResponse
+	4,  // 40: rpc.Web.History:output_type -> rpc.HistoryResponse
+	15, // 41: rpc.Web.ListAgents:output_type -> rpc.ListAgentsResponse
+	18, // 42: rpc.Web.ListSkills:output_type -> rpc.ListSkillsResponse
+	29, // 43: rpc.Web.ListConfig:output_type -> rpc.ListConfigResponse
+	31, // 44: rpc.Web.SettleSession:output_type -> rpc.SettleSessionResponse
+	33, // 45: rpc.Web.Protocol:output_type -> rpc.ProtocolResponse
+	47, // 46: rpc.Web.Identity:output_type -> rpc.IdentityResponse
+	36, // 47: rpc.Web.ListQueue:output_type -> rpc.ListQueueResponse
+	38, // 48: rpc.Web.RemoveQueueItem:output_type -> rpc.QueueItemResponse
+	38, // 49: rpc.Web.SteerQueueItem:output_type -> rpc.QueueItemResponse
+	38, // 50: rpc.Web.ReorderQueue:output_type -> rpc.QueueItemResponse
+	42, // 51: rpc.Web.ListSessionEntries:output_type -> rpc.ListSessionEntriesResponse
+	44, // 52: rpc.Web.LoadSessionEntries:output_type -> rpc.LoadSessionEntriesResponse
+	45, // 53: rpc.Web.DeleteSessionEntries:output_type -> rpc.DeleteSessionEntriesResponse
+	33, // [33:54] is the sub-list for method output_type
+	12, // [12:33] is the sub-list for method input_type
 	12, // [12:12] is the sub-list for extension type_name
 	12, // [12:12] is the sub-list for extension extendee
 	0,  // [0:12] is the sub-list for field type_name
@@ -2716,7 +2849,7 @@ func file_web_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_web_proto_rawDesc), len(file_web_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   45,
+			NumMessages:   47,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
