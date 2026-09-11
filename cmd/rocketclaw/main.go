@@ -94,31 +94,20 @@ func loadRuntimeConfig(secretsARN string) (runtimeConfigFile, *config.Config, er
 	return selected, cfg, nil
 }
 func selectRuntimeConfigFile() (runtimeConfigFile, error) {
-	missing, err := missingFile(legacyConfigPath)
-	if err != nil {
-		return runtimeConfigFile{}, err
-	}
-	if !missing {
-		return runtimeConfigFile{Path: legacyConfigPath, WorkDir: legacyWorkDir, Found: true}, nil
-	}
-	missing, err = missingFile(defaultConfigPath)
-	if err != nil {
-		return runtimeConfigFile{}, err
-	}
-	if !missing {
-		return runtimeConfigFile{Path: defaultConfigPath, WorkDir: config.DefaultRuntimeDir, Found: true}, nil
+	for _, candidate := range []runtimeConfigFile{
+		{Path: legacyConfigPath, WorkDir: legacyWorkDir},
+		{Path: defaultConfigPath, WorkDir: config.DefaultRuntimeDir},
+	} {
+		_, err := os.Stat(candidate.Path)
+		if err == nil {
+			candidate.Found = true
+			return candidate, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return runtimeConfigFile{}, fmt.Errorf("stat %s: %w", candidate.Path, err)
+		}
 	}
 	return runtimeConfigFile{}, nil
-}
-func missingFile(path string) (bool, error) {
-	_, err := os.Stat(path)
-	if err == nil {
-		return false, nil
-	}
-	if errors.Is(err, os.ErrNotExist) {
-		return true, nil
-	}
-	return false, fmt.Errorf("stat %s: %w", path, err)
 }
 func printStdout(text, name string) error {
 	_, err := fmt.Fprint(os.Stdout, text)

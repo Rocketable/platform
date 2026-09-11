@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"slices"
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketcode"
@@ -359,30 +360,16 @@ func portableFunctionOutput(callID string, raw json.RawMessage) (responses.Respo
 }
 
 func portableContentParts(parts []portableContent) []portableContent {
-	n := 0
-
-	for _, part := range parts {
+	return slices.DeleteFunc(parts, func(part portableContent) bool {
 		portable := part.Type == "input_text" || part.Type == "output_text" || part.Type == "input_image" && strings.TrimSpace(part.ImageURL) != "" || part.Type == "input_file" && (strings.TrimSpace(part.FileData) != "" || strings.TrimSpace(part.FileURL) != "")
-		if portable {
-			parts[n] = part
-			n++
-		}
-	}
-
-	return parts[:n]
+		return !portable
+	})
 }
 
 func nonblankText(texts []string) []string {
-	n := 0
-
-	for _, text := range texts {
-		if strings.TrimSpace(text) != "" {
-			texts[n] = text
-			n++
-		}
-	}
-
-	return texts[:n]
+	return slices.DeleteFunc(texts, func(text string) bool {
+		return strings.TrimSpace(text) == ""
+	})
 }
 
 func readableText(raw json.RawMessage) (texts []string, present bool, err error) {

@@ -5,7 +5,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -130,14 +129,14 @@ func TestRunServeRequiresConfig(t *testing.T) {
 	require.ErrorContains(t, err, "load config")
 }
 
-func TestMissingFileReportsStatErrors(t *testing.T) {
+func TestSelectRuntimeConfigFileReportsStatErrors(t *testing.T) {
 	workspace := t.TempDir()
-	filePath := filepath.Join(workspace, "file")
-	require.NoError(t, os.WriteFile(filePath, []byte("not a directory"), 0o600))
+	t.Chdir(workspace)
+	require.NoError(t, os.Chmod(workspace, 0))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(workspace, 0o755)) })
 
-	missing, err := missingFile(filepath.Join(filePath, "child"))
+	_, err := selectRuntimeConfigFile()
 	require.ErrorContains(t, err, "stat")
-	assert.False(t, missing)
 }
 
 func TestRunDispatchesSubcommandErrorsBeforeDefaultConfig(t *testing.T) {
