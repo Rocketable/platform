@@ -125,14 +125,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		return fmt.Errorf("sync rocketclaw skeleton: %w", err)
 	}
 
-	channels := make([]string, 0, len(cfg.Slack.Channels))
-	for _, channel := range cfg.Slack.Channels {
-		if channel.Channel == "@" {
-			continue
-		}
-
-		channels = append(channels, channel.Channel)
-	}
+	channels := cfg.Slack.MappedChannels()
 
 	if err := validateRuntimeAssets(cfg, cfg.RuntimeDirName()); err != nil {
 		return err
@@ -303,7 +296,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 		Sessions:                 rocketcodeSessions,
 		ExternalMCPUsers:         externalMCPUsers,
 		RefreshExternalMCPAgents: &refreshExternalMCPAgents, TextRouter: threadBridges, threads: threadBridges,
-		startThreadRoot: &startThreadRoot, slackAsker: &slackUserQuestionAsker, drainSlack: &drainSlack,
+		startThreadRoot: &startThreadRoot, slackAsker: &slackUserQuestionAsker,
 	}
 
 	slack, copyDone, extraStops, err := s.assemble.Assemble(rt)
@@ -317,6 +310,7 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 
 	if slack != nil {
 		slackSink = slack
+		drainSlack = slack.DrainSteers
 		rt.AttachSlack(slack)
 		slack.SetPendingSteersSink(protocol.PendingSteersSink{Set: rocketcodeSessions.SetPendingSteers})
 	}

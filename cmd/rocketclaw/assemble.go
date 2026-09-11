@@ -21,12 +21,7 @@ func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-
 
 	rt.Log.Info("starting Slack connector")
 
-	channels := make([]string, 0, len(rt.Cfg.Slack.Channels))
-	for _, channel := range rt.Cfg.Slack.Channels {
-		if channel.Channel != "@" {
-			channels = append(channels, channel.Channel)
-		}
-	}
+	channels := rt.Cfg.Slack.MappedChannels()
 	runner := &cronRunner{backend: rt, config: rt.Cfg}
 	cronjobs := cronfrontend.New(rt.Cfg.Workspace, rt.Cfg.RuntimeDirName(), channels, rt.Sessions, runner, rt.Log)
 	slack := slackconnector.New(&rt.Cfg.Slack, rt, rt.TextRouter, cronjobs, rt.Log)
