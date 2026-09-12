@@ -13,7 +13,9 @@ return output through Prompt's private response field. Live events carry Backend
 turn IDs so incremental answers cannot replace a preceding turn. History returns
 the stored turn in order, including developer messages, thinking summaries, tool
 calls, tool results, and user/assistant text. Encrypted reasoning bodies stay
-stored and are not sent. History and sidebar previews
+stored and are not sent. History retains tool call IDs and names so Web can
+group each call with its result.
+History and sidebar previews
 share display text with one canonical Web prompt envelope removed from user
 messages; stored replay, principal framing, and assistant text remain unchanged.
 Session discovery starts from explicitly recorded conversations, excluding private Cron locators and

@@ -4,10 +4,10 @@ import type { TranscriptEvent } from "./grpc";
 
 // Execute the retained UI's actual private functions without exporting non-components.
 const source = ts.createSourceFile("ui.tsx", await Bun.file(new URL("./ui.tsx", import.meta.url)).text(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = ["nextLines", "sendComposer", "appendLine", "appendThinking", "thinkingRows", "lineId", "isStopCommand", "transcriptTurns"];
+const names = ["nextLines", "sendComposer", "appendLine", "appendThinking", "thinkingRows", "lineId", "isStopCommand", "transcriptTurns", "toolTitle"];
 const functions = source.statements.filter((node) => ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? "")).map((node) => node.getText(source)).join("\n");
-const javascript = ts.transpileModule(`${functions}\nexport { nextLines, sendComposer, transcriptTurns };`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
-const { nextLines, sendComposer, transcriptTurns } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
+const javascript = ts.transpileModule(`${functions}\nexport { nextLines, sendComposer, transcriptTurns, toolTitle };`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
+const { nextLines, sendComposer, transcriptTurns, toolTitle } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 type Line = { id: string; role: string; text: string; turnId?: string };
 
 test("explicit enqueue keeps the composer idle and preserves the inner call for RPC", async () => {
@@ -74,6 +74,30 @@ test("history keeps thinking, tools and developer text", () => {
     { role: "tool", text: "execute\ntrue" },
     { role: "assistant", text: "done" },
   ]);
+});
+
+test("tool disclosures match parallel results by ID and include only their loaded skill", () => {
+  const events = [
+    { role: "tool", text: 'execute\n{"code":"./scripts/loop-platform-deps.sh"}', toolCallId: "run", toolName: "execute" },
+    { role: "tool", text: 'skill\n{"name":"processes"}', toolCallId: "skill", toolName: "skill" },
+    { role: "tool", text: "skill processes loaded", toolCallId: "skill" },
+    { role: "developer", text: '<skill_content name="processes">\nall instructions\n</skill_content>' },
+    { role: "tool", text: "complete output\n".repeat(5000), toolCallId: "run" },
+    { role: "developer", text: "unrelated instructions" },
+    { role: "tool", text: "orphan output", toolCallId: "missing" },
+    { role: "assistant", text: "visible report" },
+  ];
+  const lines = events.reduce((current, event) => nextLines(current, { ...event, turnId: "", complete: true, snapshot: false }), []);
+  const [turn] = transcriptTurns(lines);
+  expect(turn.traces.map((line: Line) => line.text)).toEqual([events[0].text, events[1].text, events[5].text, events[6].text]);
+  expect(turn.traces[0].toolParts.map((line: Line) => line.text)).toEqual([events[4].text]);
+  expect(turn.traces[1].toolParts.map((line: Line) => line.text)).toEqual([events[2].text, events[3].text]);
+  expect(turn.replies.map((line: Line) => line.text)).toEqual(["visible report"]);
+  expect(toolTitle(turn.traces[0])).toBe("Run · ./scripts/loop-platform-deps.sh");
+  expect(toolTitle(turn.traces[1])).toBe("Skill · processes");
+  expect(toolTitle({ toolName: "execute", text: `execute\n${JSON.stringify({ code: 'def main():\n  return bash(command=r"""set +e\n./scripts/loop-platform-deps.sh\n""")' })}` })).toBe("Run · ./scripts/loop-platform-deps.sh");
+  expect(toolTitle({ toolName: "execute", text: `execute\n${JSON.stringify({ code: 'def main():\n  return read(filePath="scripts/loop-platform-deps.sh")' })}` })).toBe("Read · scripts/loop-platform-deps.sh");
+  expect(transcriptTurns(lines)).toEqual([turn]);
 });
 
 test("composer renders the exact human input before blocking Prompt completes", async () => {

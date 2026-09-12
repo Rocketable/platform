@@ -38,7 +38,7 @@ export type RocketclawApi = {
 };
 
 export type PromptDelivery = "STEER" | "QUEUE";
-export type TranscriptEvent = { text: string; snapshot: boolean; role: string; complete: boolean; turnId: string };
+export type TranscriptEvent = { text: string; snapshot: boolean; role: string; complete: boolean; turnId: string; toolCallId?: string; toolName?: string };
 type SessionEntryMeta = { id: string; type?: string; timestamp?: string };
 type SessionEntryData = { id: string; json?: string };
 export type QueueItem = { id: string; text: string };

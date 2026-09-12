@@ -117,18 +117,32 @@ test.skipIf(!process.env.ROCKETCLAW_ENTRY_TEST_ID)("transcript and entry HTTP pr
           await page.goto(`http://127.0.0.1:${port}/s/${Buffer.from(process.env.ROCKETCLAW_HISTORY_TEST_ID!).toString("base64url")}`);
           const report = page.getByText("Exact report\nwith details", { exact: true });
           await report.waitFor();
-          const trace = page.locator("details").filter({ hasText: "queued for verbatim delivery" });
+          const trace = page.locator("section > details").filter({ hasText: "queued for verbatim delivery" });
+          const tool = trace.locator("details").filter({ hasText: "Exact report" });
+          const toolBody = tool.locator("pre").first();
+          expect(await toolBody.isVisible()).toBe(true);
+          await tool.locator("summary").click();
+          expect(await toolBody.isVisible()).toBe(false);
+          expect(await tool.locator("summary").innerText()).toContain("Send report");
+          expect(await report.isVisible()).toBe(true);
           expect(await trace.getAttribute("open")).not.toBeNull();
-          await trace.locator("summary").click();
+          await trace.locator(":scope > summary").click();
           expect(await trace.getAttribute("open")).toBeNull();
-          expect(await page.getByText("queued for verbatim delivery", { exact: true }).isVisible()).toBe(false);
+          expect(await trace.locator("pre").filter({ hasText: "queued for verbatim delivery" }).isVisible()).toBe(false);
           expect(await report.isVisible()).toBe(true);
           expect(await report.count()).toBe(1);
           expect(await page.getByText("answer two", { exact: true }).isVisible()).toBe(true);
-          expect(await page.locator("details[open]").count()).toBe(2);
-          await trace.locator("summary").press("Enter");
+          expect(await page.locator("section > details[open]").count()).toBe(2);
+          await trace.locator(":scope > summary").press("Enter");
           expect(await trace.getAttribute("open")).not.toBeNull();
-          expect(await page.getByText("queued for verbatim delivery", { exact: true }).isVisible()).toBe(true);
+          expect(await trace.locator("pre").filter({ hasText: "queued for verbatim delivery" }).isVisible()).toBe(false);
+          expect(await toolBody.isVisible()).toBe(false);
+          await tool.locator("summary").press("Enter");
+          expect(await toolBody.isVisible()).toBe(true);
+          expect(await tool.locator("pre").filter({ hasText: "queued for verbatim delivery" }).isVisible()).toBe(true);
+          expect(await tool.locator("pre").count()).toBe(2);
+          await tool.getByRole("button", { name: "Collapse tool" }).click();
+          expect(await toolBody.isVisible()).toBe(false);
           await page.screenshot({ path: path.join(process.env.TMPDIR!, filename) });
         }
       } finally {

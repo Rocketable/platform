@@ -4,7 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import { Effect, Layer } from "effect";
 import { status } from "@grpc/grpc-js";
-import { GrpcError, RocketclawTest, type RocketclawApi, type Session, type SessionBatch } from "./grpc";
+import { GrpcError, RocketclawTest, type RocketclawApi, type Session, type SessionBatch, type TranscriptEvent } from "./grpc";
 import { createRPCHandler } from "./transport";
 import { WhoisTest } from "./whois";
 
@@ -247,6 +247,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     promptStarted: Promise.withResolvers<void>(),
     holdCreate: false,
     createStarted: Promise.withResolvers<void>(),
+    history: [] as TranscriptEvent[],
     yieldBatches: async function* (): AsyncGenerator<SessionBatch> {},
   };
   const row = (id: string, preview: string): Session => ({
@@ -282,7 +283,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     },
     listCronJobs: () => Effect.succeed([]),
     runCronJob: () => Effect.succeed(""),
-    history: () => Effect.succeed([]),
+    history: () => Effect.succeed(ctrl.history),
     listAgents: () => Effect.succeed({ agents: [{ name: "main", model: "gpt" }, { name: "other", model: "gpt" }], currentAgent: "main" }),
     listSkills: () => Effect.succeed([]),
     listConfig: () => Effect.succeed({}),
@@ -299,7 +300,14 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
   const rpc = createRPCHandler(Layer.merge(RocketclawTest(api), WhoisTest(() => Effect.succeed("principal"))));
   const handle = app.getRequestHandler();
   let listResponse: http.ServerResponse;
+  let transcriptStream = Promise.withResolvers<http.ServerResponse>();
   const server = http.createServer((req, res) => {
+    if (req.url?.startsWith("/stream")) {
+      transcriptStream.resolve(res);
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(": connected\n\n");
+      return;
+    }
     if (req.url?.startsWith("/trpc/sessions")) listResponse = res;
     return req.url?.startsWith("/trpc") ? rpc(req, res) : handle(req, res);
   });
@@ -734,6 +742,36 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
         await storagePage.close();
       }
     }
+    ctrl.history = Array.from({ length: 20 }, (_, i) => [
+      { role: "user", text: `Prompt ${i + 1}` },
+      { role: "thinking", text: `Trace ${i + 1}\n` + "Working through the task.\n".repeat(40) },
+      { role: "assistant", text: `Reply ${i + 1}` },
+    ].map((item) => ({ ...item, turnId: "", complete: true, snapshot: false }))).flat();
+    const transcriptPage = await context.newPage();
+    for (const width of [1280, 390]) {
+      transcriptStream = Promise.withResolvers();
+      await transcriptPage.setViewportSize({ width, height: 844 });
+      await transcriptPage.goto(`${origin}/s/${Buffer.from(`jump-${width}`).toString("base64url")}`);
+      const rail = transcriptPage.getByRole("navigation", { name: "Conversation turns" });
+      await rail.waitFor();
+      expect(await rail.getByRole("button").count()).toBe(20);
+      const scroll = transcriptPage.locator(".transcript-scroll");
+      expect(await scroll.evaluate((el: HTMLElement) => el.offsetWidth - el.clientWidth)).toBeGreaterThan(0);
+      await rail.getByRole("button", { name: "Turn 1: Prompt 1", exact: true }).click();
+      await transcriptPage.waitForFunction(() => document.querySelector(".transcript-scroll")!.scrollTop < 50);
+      expect(await transcriptPage.getByRole("region", { name: "Turn 1", exact: true }).evaluate((el: HTMLElement) => el === document.activeElement)).toBe(true);
+      (await transcriptStream.promise).write(`data: ${JSON.stringify({ role: "assistant", text: `Live reply ${width}`, turnId: "live", complete: false, snapshot: false })}\n\n`);
+      await transcriptPage.getByText(`Live reply ${width}`, { exact: true }).waitFor({ state: "attached" });
+      expect(await scroll.evaluate((el: HTMLElement) => el.scrollTop)).toBeLessThan(50);
+      await rail.getByRole("button", { name: "Turn 20: Prompt 20", exact: true }).focus();
+      await transcriptPage.keyboard.press("Enter");
+      const last = transcriptPage.getByRole("region", { name: "Turn 20", exact: true });
+      expect(await last.evaluate((el: HTMLElement) => el === document.activeElement)).toBe(true);
+      await last.locator("summary").click();
+      await rail.getByRole("button", { name: "Turn 1: Prompt 1", exact: true }).click();
+      await transcriptPage.waitForFunction(() => document.querySelector(".transcript-scroll")!.scrollTop < 50);
+    }
+    await transcriptPage.close();
   } finally {
     blocked.resolve();
     identityHold.resolve();

@@ -270,6 +270,7 @@ func historyEvent(item *responses.ResponseInputItemUnionParam, raw json.RawMessa
 	var kind struct {
 		Type      string `json:"type"`
 		Name      string `json:"name"`
+		CallID    string `json:"call_id"`
 		Arguments string `json:"arguments"`
 		Output    string `json:"output"`
 		Summary   []struct {
@@ -309,13 +310,13 @@ func historyEvent(item *responses.ResponseInputItemUnionParam, raw json.RawMessa
 			return nil, nil
 		}
 
-		return &TranscriptEvent{Role: "tool", Text: text, Complete: true}, nil
+		return &TranscriptEvent{Role: "tool", Text: text, Complete: true, ToolCallId: kind.CallID, ToolName: kind.Name}, nil
 	case "function_call_output":
 		if strings.TrimSpace(kind.Output) == "" {
 			return nil, nil
 		}
 
-		return &TranscriptEvent{Role: "tool", Text: kind.Output, Complete: true}, nil
+		return &TranscriptEvent{Role: "tool", Text: kind.Output, Complete: true, ToolCallId: kind.CallID}, nil
 	}
 
 	role, text, ok, err := backend.ReplayInputMessageRoleText(item, raw)

@@ -546,6 +546,10 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: "empty-web"})
 	require.NoError(t, err)
+	require.Equal(t, "report", history.Messages[8].ToolCallId)
+	require.Equal(t, "rocketclaw_i_want_human_partner_to_see_this", history.Messages[8].ToolName)
+	require.Equal(t, "report", history.Messages[9].ToolCallId)
+	require.Empty(t, history.Messages[9].ToolName)
 
 	got := make([]struct{ role, text string }, 0, len(history.Messages))
 	for _, message := range history.Messages {

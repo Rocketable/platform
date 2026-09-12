@@ -498,6 +498,8 @@ type TranscriptEvent struct {
 	Role          string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`
 	Complete      bool                   `protobuf:"varint,4,opt,name=complete,proto3" json:"complete,omitempty"`
 	TurnId        string                 `protobuf:"bytes,5,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
+	ToolCallId    string                 `protobuf:"bytes,6,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	ToolName      string                 `protobuf:"bytes,7,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -563,6 +565,20 @@ func (x *TranscriptEvent) GetComplete() bool {
 func (x *TranscriptEvent) GetTurnId() string {
 	if x != nil {
 		return x.TurnId
+	}
+	return ""
+}
+
+func (x *TranscriptEvent) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
+	}
+	return ""
+}
+
+func (x *TranscriptEvent) GetToolName() string {
+	if x != nil {
+		return x.ToolName
 	}
 	return ""
 }
@@ -2557,13 +2573,16 @@ const file_web_proto_rawDesc = "" +
 	"\x15CreateSessionResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"\x1d\n" +
 	"\vJoinRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"\x8a\x01\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\xc9\x01\n" +
 	"\x0fTranscriptEvent\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x1a\n" +
 	"\bsnapshot\x18\x02 \x01(\bR\bsnapshot\x12\x12\n" +
 	"\x04role\x18\x03 \x01(\tR\x04role\x12\x1a\n" +
 	"\bcomplete\x18\x04 \x01(\bR\bcomplete\x12\x17\n" +
-	"\aturn_id\x18\x05 \x01(\tR\x06turnId\"d\n" +
+	"\aturn_id\x18\x05 \x01(\tR\x06turnId\x12 \n" +
+	"\ftool_call_id\x18\x06 \x01(\tR\n" +
+	"toolCallId\x12\x1b\n" +
+	"\ttool_name\x18\a \x01(\tR\btoolName\"d\n" +
 	"\rPromptRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04text\x18\x02 \x01(\tR\x04text\x12/\n" +

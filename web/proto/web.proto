@@ -50,6 +50,8 @@ message TranscriptEvent {
   string role = 3;
   bool complete = 4;
   string turn_id = 5;
+  string tool_call_id = 6;
+  string tool_name = 7;
 }
 
 enum PromptDelivery {

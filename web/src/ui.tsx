@@ -822,7 +822,7 @@ function SessionList() {
   );
 }
 
-type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; turnId?: string };
+type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; turnId?: string; toolCallId?: string; toolName?: string; toolParts?: Line[] };
 
 function thinkingRows(text: string, seen: Map<string, number>) {
   const rows: Line[] = [];
@@ -851,35 +851,77 @@ function lineId(role: Line["role"], text: string, seen: Map<string, number>) {
   return `${base}:${n}`;
 }
 
-function appendLine(current: Line[], role: Line["role"], text: string) {
+function appendLine(current: Line[], role: Line["role"], text: string, tool: Pick<Line, "toolCallId" | "toolName"> = {}) {
   const seen = new Map<string, number>();
   for (const line of current) {
     seen.set(`${line.role}:${line.text}`, (seen.get(`${line.role}:${line.text}`) ?? 0) + 1);
   }
-  return [...current, { id: lineId(role, text, seen), text, role }];
+  return [...current, { id: lineId(role, text, seen), text, role, ...tool }];
 }
 
 function transcriptTurns(lines: Line[]) {
   const turns: { user: Line[]; traces: Line[]; replies: Line[] }[] = [];
   let current = { user: [] as Line[], traces: [] as Line[], replies: [] as Line[] };
+  const calls = new Map<string, Line & { toolParts: Line[] }>();
+  const skills = new Map<string, Line & { toolParts: Line[] }>();
   const flush = () => {
     if (current.user.length > 0 || current.traces.length > 0 || current.replies.length > 0) {
       turns.push(current);
       current = { user: [], traces: [], replies: [] };
+      calls.clear();
+      skills.clear();
     }
   };
   for (const line of lines) {
+    const resultCall = line.role === "tool" ? calls.get(line.toolCallId ?? "") : undefined;
+    const skillHeader = line.text.split("\n", 1)[0];
+    const skillCall = line.role === "developer" ? skills.get(skillHeader) : undefined;
     if (line.role === "user") {
       flush();
       current.user.push(line);
     } else if (line.role === "assistant") {
       current.replies.push(line);
+    } else if (line.role === "tool" && line.toolName) {
+      const call = { ...line, toolParts: [] as Line[] };
+      current.traces.push(call);
+      if (line.toolCallId) calls.set(line.toolCallId, call);
+    } else if (resultCall) {
+      resultCall.toolParts.push(line);
+      if (resultCall.toolName === "skill" && line.text.startsWith("skill ") && line.text.endsWith(" loaded")) {
+        skills.set(`<skill_content name=${JSON.stringify(line.text.slice(6, -7))}>`, resultCall);
+      }
+    } else if (skillCall) {
+      skillCall.toolParts.push(line);
+      skills.delete(skillHeader);
     } else {
       current.traces.push(line);
     }
   }
   flush();
   return turns;
+}
+
+function toolTitle(line: Line) {
+  const name = line.toolName;
+  if (!name) return "Tool result";
+  let input: { name?: string; code?: string; command?: string; path?: string };
+  try {
+    input = JSON.parse(line.text.slice(name.length + 1));
+  } catch {
+    return name;
+  }
+  if (!input || typeof input !== "object") return name;
+  if (name === "skill" && typeof input.name === "string") return `Skill · ${input.name}`;
+  if (name === "rocketclaw_i_want_human_partner_to_see_this") return "Send report";
+  if (name === "execute" && typeof input.code === "string") {
+    const operation = input.code.match(/\b(bash|read|glob|grep)\(\s*(?:command|filePath|pattern)\s*=\s*r?("""|'''|"|')([\s\S]*?)\2/);
+    if (operation) {
+      const detail = operation[3].split("\n").map((line) => line.trim()).find((line) => line !== "" && !line.startsWith("set ")) ?? operation[3];
+      return `${operation[1] === "bash" ? "Run" : operation[1] === "read" ? "Read" : "Search"} · ${detail}`;
+    }
+  }
+  const detail = [input.command, input.code, input.path].find((value) => typeof value === "string" && value.trim() !== "");
+  return detail ? `${name === "execute" ? "Run" : name} · ${detail.replace(/\s+/g, " ").slice(0, 120)}` : name;
 }
 
 function TranscriptLine({ line }: { line: Line }) {
@@ -900,7 +942,30 @@ function TranscriptLine({ line }: { line: Line }) {
       </div>
     );
   }
-  if (line.role === "tool" || line.role === "developer") {
+  if (line.role === "tool") {
+    const title = toolTitle(line);
+    return (
+      <details open className="mb-3 min-w-0 rounded-md border bg-muted/30">
+        <summary className="cursor-pointer px-3 py-2 text-xs font-medium" title={title}>
+          <span className="ml-1 inline-block max-w-[calc(100%-1.5rem)] truncate align-middle font-mono">{title}</span>
+        </summary>
+        {[line, ...(line.toolParts ?? [])].map((part, index) => (
+          <div key={part.id} className="border-t px-3 py-2">
+            <p className="mb-1 text-[11px] font-medium text-muted-foreground">{index === 0 ? line.toolName ? "Arguments" : "Result" : part.role === "developer" ? "Skill instructions" : "Result"}</p>
+            <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-muted-foreground">{index === 0 && line.toolName ? line.text.slice(line.toolName.length + 1) : part.text}</pre>
+          </div>
+        ))}
+        <button type="button" className="px-3 py-2 text-xs text-muted-foreground hover:text-foreground" onClick={(event) => {
+          const details = event.currentTarget.closest("details")!;
+          details.open = false;
+          const summary = details.querySelector("summary")!;
+          summary.scrollIntoView({ block: "nearest" });
+          summary.focus({ preventScroll: true });
+        }}>Collapse tool ↑</button>
+      </details>
+    );
+  }
+  if (line.role === "developer") {
     return (
       <div className="min-w-0 px-1 pb-3">
         <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-muted-foreground">{line.text}</pre>
@@ -918,21 +983,26 @@ function TranscriptLog({
   lines,
   thinking,
   scroller,
+  follow,
 }: {
   lines: Line[];
   thinking: boolean;
   scroller: RefObject<HTMLDivElement | null>;
+  follow: RefObject<boolean>;
 }) {
+  const turns = transcriptTurns(lines);
+  const turnNodes = useRef<(HTMLElement | null)[]>([]);
   return (
-    <div ref={scroller} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-3 [overflow-anchor:none] sm:px-5">
+    <div className="relative flex min-h-0 flex-1">
+    <div ref={scroller} className="transcript-scroll min-w-0 flex-1 overflow-x-hidden overflow-y-scroll overscroll-contain pl-3 pr-8 [overflow-anchor:none] sm:pl-5 sm:pr-10">
       {lines.length === 0 && !thinking ? (
         <div className="flex h-full items-center justify-center">
           <p className="text-sm text-muted-foreground">Send a message to start the conversation.</p>
         </div>
       ) : (
         <div className="mx-auto w-full min-w-0 max-w-3xl pt-3 pb-4 sm:pt-4">
-          {transcriptTurns(lines).map((turn) => (
-              <div key={turn.user[0]?.id ?? turn.traces[0]?.id ?? turn.replies[0]?.id}>
+          {turns.map((turn, index) => (
+              <section key={turn.user[0]?.id ?? turn.traces[0]?.id ?? turn.replies[0]?.id} ref={(node) => { turnNodes.current[index] = node; }} aria-label={`Turn ${index + 1}`} tabIndex={-1} className="scroll-mt-3 outline-none">
                 {turn.user.map((line) => <TranscriptLine key={line.id} line={line} />)}
                 {turn.traces.length > 0 ? (
                   <details open className="group pb-3">
@@ -945,11 +1015,31 @@ function TranscriptLog({
                   </details>
                 ) : null}
                 {turn.replies.map((line) => <TranscriptLine key={line.id} line={line} />)}
-              </div>
+              </section>
           ))}
           {thinking ? <p className="px-1 pb-4 text-sm text-muted-foreground">Thinking…</p> : null}
         </div>
       )}
+    </div>
+    {turns.length > 0 ? (
+      <nav aria-label="Conversation turns" className="absolute inset-y-0 right-[6px] flex w-8 items-center justify-center py-3">
+        <div className="max-h-full overflow-y-auto">
+          {turns.map((turn, index) => {
+            const preview = (turn.user[0]?.text ?? turn.replies[0]?.text ?? "Thinking").replace(/\s+/g, " ").slice(0, 120);
+            const label = `Turn ${index + 1}: ${preview}`;
+            return (
+              <button key={turn.user[0]?.id ?? turn.traces[0]?.id ?? turn.replies[0]?.id} type="button" aria-label={label} title={label} className="group flex size-6 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={() => {
+                follow.current = false;
+                turnNodes.current[index]?.scrollIntoView({ block: "start", behavior: "instant" });
+                turnNodes.current[index]?.focus({ preventScroll: true });
+              }}>
+                <span aria-hidden="true" className="h-0.5 w-2 rounded-full bg-current transition-[width] group-hover:w-4 group-focus-visible:w-4" />
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+    ) : null}
     </div>
   );
 }
@@ -959,7 +1049,7 @@ function nextLines(current: Line[], payload: TranscriptEvent) {
   const index = current.findIndex((line) => line.turnId === payload.turnId && line.role === role && payload.turnId !== "");
   const retained = index < 0 ? current : current.filter((line) => line.turnId !== payload.turnId || line.role !== role);
   if (payload.text.trim() === "") return retained;
-  const added = role === "thinking" ? appendThinking(retained, payload.text) : appendLine(retained, role, payload.text);
+  const added = role === "thinking" ? appendThinking(retained, payload.text) : appendLine(retained, role, payload.text, { toolCallId: payload.toolCallId, toolName: payload.toolName });
   const updated = added.slice(retained.length).map((line) => ({ ...line, turnId: payload.turnId }));
   const position = index < 0 ? retained.length : index;
   return [...retained.slice(0, position), ...updated, ...retained.slice(position)];
@@ -994,7 +1084,7 @@ function useSessionStream(id: string) {
       setLines([]);
       return;
     }
-    setLines(history.data.reduce<Line[]>((lines, message) => appendLine(lines, message.role === "thinking" || message.role === "user" || message.role === "tool" || message.role === "developer" ? message.role : "assistant", message.text), []));
+    setLines(history.data.reduce<Line[]>((lines, message) => appendLine(lines, message.role === "thinking" || message.role === "user" || message.role === "tool" || message.role === "developer" ? message.role : "assistant", message.text, { toolCallId: message.toolCallId, toolName: message.toolName }), []));
     const stream = new EventSource(`/stream?id=${encodeSessionId(id)}`);
     let connected = false;
     stream.onopen = () => {
@@ -1015,24 +1105,11 @@ function useSessionStream(id: string) {
       return;
     }
     const nearEnd = () => el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-    const onNavigate = () => {
-      if (!nearEnd()) {
-        follow.current = false;
-      }
-    };
     const onScroll = () => {
-      if (nearEnd()) {
-        follow.current = true;
-      }
+      follow.current = nearEnd();
     };
-    el.addEventListener("wheel", onNavigate, { passive: true });
-    el.addEventListener("touchmove", onNavigate, { passive: true });
-    el.addEventListener("pointerdown", onNavigate, { passive: true });
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => {
-      el.removeEventListener("wheel", onNavigate);
-      el.removeEventListener("touchmove", onNavigate);
-      el.removeEventListener("pointerdown", onNavigate);
       el.removeEventListener("scroll", onScroll);
     };
   }, [id]);
@@ -1056,7 +1133,7 @@ function Transcript({ onCreated }: { onCreated: (id: string) => void }) {
   const { busy, setBusy, lines, setLines, scroller, follow, opening, historyError } = useSessionStream(route.id);
   return (
     <>
-      <TranscriptLog lines={lines} thinking={busy && lines.at(-1)?.role !== "thinking"} scroller={scroller} />
+      <TranscriptLog lines={lines} thinking={busy && lines.at(-1)?.role !== "thinking"} scroller={scroller} follow={follow} />
       {historyError ? <p role="alert" className="px-3 text-sm text-destructive">{historyError}</p> : null}
       <fieldset disabled={opening} className="contents">
         <SessionComposer id={route.id} busy={busy} setBusy={setBusy} lines={lines} setLines={setLines} follow={follow} onCreated={onCreated} />

@@ -35,6 +35,12 @@ Each turn has an inline **Thinking** disclosure, expanded by default, containing
 reasoning summaries and tool traces. Replies and successful verbatim-delivery
 reports appear as normal messages outside that disclosure. The chat has no
 database-entry inspection panel.
+Each tool call has one labeled, initially expanded disclosure containing its
+arguments and matching result. Loaded skill instructions fold with their skill
+call. Long results have a collapse control at the bottom as well as the header.
+The transcript has a visible scrollbar and a side rail with one jump marker per
+turn. Each marker is labeled with its prompt; selecting it pauses automatic
+following while you read earlier turns.
 The shared app layout keeps the list and filters in memory during navigation.
 Late storage reads merge with newer live rows; superseded saves cannot overwrite
 newer snapshots, and post-deletion saves wait for the history clear to finish.
