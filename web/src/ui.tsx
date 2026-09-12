@@ -17,7 +17,6 @@ import type { Session, TranscriptEvent } from "@/grpc";
 import { runPreload } from "@/preload";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import {
-  clearSavedSessionHistory,
   invalidatePendingSaves,
   loadSavedSessions,
   loadSnapshotGeneration,
@@ -371,7 +370,6 @@ type SidebarView = {
 };
 
 type SidebarState = SidebarView & {
-  onHistoryDeleted: (id: string) => void;
   invalidate: () => void;
 };
 
@@ -381,7 +379,6 @@ const Sidebar = createContext<SidebarState>({
   enumerationComplete: false,
   summariesComplete: false,
   loadingIds: new Set(),
-  onHistoryDeleted: () => {},
   invalidate: () => {},
 });
 
@@ -522,11 +519,6 @@ function SidebarOwner({ children }: { children: ReactNode }) {
       return { ...current, rows: rowsRef.current, loadingIds: next };
     });
   }, [owner, protocol.data, bump]);
-  const onHistoryDeleted = useCallback((id: string) => {
-    if (owner === undefined || protocol.data === undefined) return;
-    void clearSavedSessionHistory(owner, protocol.data, id).catch(() => {});
-    forgetHistory(id);
-  }, [owner, protocol.data, forgetHistory]);
   useEffect(() => {
     const channel = new BroadcastChannel(SESSION_HISTORY_CHANNEL);
     channel.onmessage = ({ data }: MessageEvent<{ owner: string; protocol: string; id: string }>) => {
@@ -535,7 +527,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
     return () => channel.close();
   }, [owner, protocol.data, forgetHistory]);
   const visible = owner !== undefined && ownerRef.current === owner && protocolRef.current === protocol.data;
-  const value = useMemo(() => ({ ...view, rows: visible ? view.rows : [], onHistoryDeleted, invalidate: bump }), [view, visible, onHistoryDeleted, bump]);
+  const value = useMemo(() => ({ ...view, rows: visible ? view.rows : [], invalidate: bump }), [view, visible, bump]);
   return (
     <Sidebar.Provider value={value}>
       {children}
@@ -830,7 +822,7 @@ function SessionList() {
   );
 }
 
-type Line = { id: string; text: string; role: "user" | "assistant" | "thinking"; turnId?: string };
+type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; turnId?: string };
 
 function thinkingRows(text: string, seen: Map<string, number>) {
   const rows: Line[] = [];
@@ -867,6 +859,61 @@ function appendLine(current: Line[], role: Line["role"], text: string) {
   return [...current, { id: lineId(role, text, seen), text, role }];
 }
 
+function transcriptTurns(lines: Line[]) {
+  const turns: { user: Line[]; traces: Line[]; replies: Line[] }[] = [];
+  let current = { user: [] as Line[], traces: [] as Line[], replies: [] as Line[] };
+  const flush = () => {
+    if (current.user.length > 0 || current.traces.length > 0 || current.replies.length > 0) {
+      turns.push(current);
+      current = { user: [], traces: [], replies: [] };
+    }
+  };
+  for (const line of lines) {
+    if (line.role === "user") {
+      flush();
+      current.user.push(line);
+    } else if (line.role === "assistant") {
+      current.replies.push(line);
+    } else {
+      current.traces.push(line);
+    }
+  }
+  flush();
+  return turns;
+}
+
+function TranscriptLine({ line }: { line: Line }) {
+  if (line.role === "user") {
+    return (
+      <div className="flex flex-col items-end gap-1 pb-4">
+        <div className="min-w-0 max-w-[80%] rounded-2xl bg-message px-4 py-3 text-sm leading-relaxed text-message-foreground">
+          <div className="whitespace-pre-wrap break-words">{line.text}</div>
+        </div>
+      </div>
+    );
+  }
+  if (line.role === "thinking") {
+    return (
+      <div className="flex items-center gap-1.5 px-1 py-0.5 text-[12px] leading-5 text-muted-foreground">
+        <Bot className="size-3.5 shrink-0 opacity-80" />
+        <span className="min-w-0 whitespace-pre-wrap break-words">{line.text}</span>
+      </div>
+    );
+  }
+  if (line.role === "tool" || line.role === "developer") {
+    return (
+      <div className="min-w-0 px-1 pb-3">
+        <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-muted-foreground">{line.text}</pre>
+      </div>
+    );
+  }
+  return (
+    <div className="min-w-0 px-1 pb-4">
+      <div className="whitespace-pre-wrap break-words text-[15px] leading-7">{line.text}</div>
+    </div>
+  );
+}
+
 function TranscriptLog({
   lines,
   thinking,
@@ -884,24 +931,22 @@ function TranscriptLog({
         </div>
       ) : (
         <div className="mx-auto w-full min-w-0 max-w-3xl pt-3 pb-4 sm:pt-4">
-          {lines.map((line) =>
-            line.role === "user" ? (
-              <div key={line.id} className="flex flex-col items-end gap-1 pb-4">
-                <div className="min-w-0 max-w-[80%] rounded-2xl bg-message px-4 py-3 text-sm leading-relaxed text-message-foreground">
-                  <div className="whitespace-pre-wrap break-words">{line.text}</div>
-                </div>
+          {transcriptTurns(lines).map((turn) => (
+              <div key={turn.user[0]?.id ?? turn.traces[0]?.id ?? turn.replies[0]?.id}>
+                {turn.user.map((line) => <TranscriptLine key={line.id} line={line} />)}
+                {turn.traces.length > 0 ? (
+                  <details open className="group pb-3">
+                    <summary className="flex w-fit cursor-pointer list-none items-center gap-1 px-1 py-2 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
+                      Thinking <span aria-hidden="true" className="transition-transform group-open:rotate-90">▸</span>
+                    </summary>
+                    <div className="ml-1 border-l pl-3">
+                      {turn.traces.map((line) => <TranscriptLine key={line.id} line={line} />)}
+                    </div>
+                  </details>
+                ) : null}
+                {turn.replies.map((line) => <TranscriptLine key={line.id} line={line} />)}
               </div>
-            ) : line.role === "thinking" ? (
-              <div key={line.id} className="flex items-center gap-1.5 px-1 py-0.5 text-[12px] leading-5 text-muted-foreground">
-                <Bot className="size-3.5 shrink-0 opacity-80" />
-                <span className="min-w-0 truncate">{line.text}</span>
-              </div>
-            ) : (
-              <div key={line.id} className="min-w-0 px-1 pb-4">
-                <div className="whitespace-pre-wrap break-words text-[15px] leading-7">{line.text}</div>
-              </div>
-            ),
-          )}
+          ))}
           {thinking ? <p className="px-1 pb-4 text-sm text-muted-foreground">Thinking…</p> : null}
         </div>
       )}
@@ -910,7 +955,7 @@ function TranscriptLog({
 }
 
 function nextLines(current: Line[], payload: TranscriptEvent) {
-  const role = payload.role === "thinking" ? "thinking" : payload.role === "user" ? "user" : "assistant";
+  const role = payload.role === "thinking" || payload.role === "user" || payload.role === "tool" || payload.role === "developer" ? payload.role : "assistant";
   const index = current.findIndex((line) => line.turnId === payload.turnId && line.role === role && payload.turnId !== "");
   const retained = index < 0 ? current : current.filter((line) => line.turnId !== payload.turnId || line.role !== role);
   if (payload.text.trim() === "") return retained;
@@ -949,7 +994,7 @@ function useSessionStream(id: string) {
       setLines([]);
       return;
     }
-    setLines(history.data.reduce<Line[]>((lines, message) => appendLine(lines, message.role === "user" ? "user" : "assistant", message.text), []));
+    setLines(history.data.reduce<Line[]>((lines, message) => appendLine(lines, message.role === "thinking" || message.role === "user" || message.role === "tool" || message.role === "developer" ? message.role : "assistant", message.text), []));
     const stream = new EventSource(`/stream?id=${encodeSessionId(id)}`);
     let connected = false;
     stream.onopen = () => {
@@ -1006,50 +1051,11 @@ function useSessionStream(id: string) {
   return { busy, setBusy, lines, setLines, scroller, follow, opening: id !== "" && (!history.data || history.isFetching), historyError: history.error?.message };
 }
 
-function SessionEntries({ id }: { id: string }) {
-  const utils = trpc.useUtils();
-  const sidebar = useContext(Sidebar);
-  const entries = trpc.listSessionEntries.useQuery({ id }, { enabled: false, retry: false });
-  const loaded = trpc.loadSessionEntries.useQuery({ id }, { enabled: false, retry: false });
-  const remove = trpc.deleteSessionEntries.useMutation();
-  const busy = entries.isFetching || loaded.isFetching || remove.isPending;
-  return (
-    <details className="shrink-0 border-b px-3 py-2 text-sm sm:px-5">
-      <summary className="cursor-pointer text-muted-foreground">Session entries</summary>
-      <div className="flex max-h-64 flex-col gap-2 overflow-auto py-2">
-        <p className="break-all text-xs text-muted-foreground">Conversation ID: {id}</p>
-        <p className="text-xs text-muted-foreground">Delete removes entries only. Conversation and goal records remain for ordinary GC.</p>
-        <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => void entries.refetch()}>List entries</Button>
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => void loaded.refetch()}>Load entries</Button>
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => {
-            if (window.confirm(`Delete all session entries for ${id}? Conversation and goal records will not be deleted.`)) {
-              void remove.mutateAsync({ id }).then(() => {
-                utils.listSessionEntries.setData({ id }, []);
-                utils.loadSessionEntries.setData({ id }, []);
-                sidebar.onHistoryDeleted(id);
-              }, () => {});
-            }
-          }}>Delete entries</Button>
-        </div>
-        {busy ? <p role="status">Loading…</p> : null}
-        {entries.error ? <p role="alert" className="text-destructive">{entries.error.message}</p> : null}
-        {loaded.error ? <p role="alert" className="text-destructive">{loaded.error.message}</p> : null}
-        {remove.error ? <p role="alert" className="text-destructive">{remove.error.message}</p> : null}
-        {remove.isSuccess ? <p role="status">Deleted {remove.data} entries.</p> : null}
-        {entries.data ? <pre className="whitespace-pre-wrap break-all text-xs">{JSON.stringify(entries.data, null, 2)}</pre> : null}
-        {loaded.data ? <pre className="whitespace-pre-wrap break-all text-xs">{JSON.stringify(loaded.data, null, 2)}</pre> : null}
-      </div>
-    </details>
-  );
-}
-
 function Transcript({ onCreated }: { onCreated: (id: string) => void }) {
   const route = useRoute();
   const { busy, setBusy, lines, setLines, scroller, follow, opening, historyError } = useSessionStream(route.id);
   return (
     <>
-      {route.id !== "" ? <SessionEntries key={route.id} id={route.id} /> : null}
       <TranscriptLog lines={lines} thinking={busy && lines.at(-1)?.role !== "thinking"} scroller={scroller} />
       {historyError ? <p role="alert" className="px-3 text-sm text-destructive">{historyError}</p> : null}
       <fieldset disabled={opening} className="contents">

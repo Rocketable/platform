@@ -23,6 +23,7 @@ import (
 	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketcode"
+	"github.com/openai/openai-go/v3/responses"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -215,19 +216,118 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 			return nil, fmt.Errorf("decode web history: %w", err)
 		}
 
+		deliveryCalls := make(map[string]string)
+
+		deliveryText := ""
+		lastReply := ""
+
 		for i := range items {
-			role, text, ok, err := backend.ReplayInputMessageRoleText(&items[i], entry.Entry.ReplayInput[i])
+			event, err := historyEvent(&items[i], entry.Entry.ReplayInput[i])
 			if err != nil {
-				return nil, fmt.Errorf("project web history: %w", err)
+				return nil, err
 			}
 
-			if ok && (role == "user" || role == "assistant") && strings.TrimSpace(text) != "" {
-				response.Messages = append(response.Messages, &TranscriptEvent{Role: role, Text: text, Complete: true})
+			if event != nil {
+				response.Messages = append(response.Messages, event)
+				if event.Role == "assistant" {
+					lastReply = event.Text
+				}
 			}
+
+			if call := items[i].OfFunctionCall; call != nil && call.Name == "rocketclaw_i_want_human_partner_to_see_this" {
+				deliveryCalls[call.CallID] = call.Arguments
+			}
+
+			output := items[i].OfFunctionCallOutput
+			if output == nil || output.Output.OfString.Value != "queued for verbatim delivery" {
+				continue
+			}
+
+			arguments, ok := deliveryCalls[output.CallID.Value]
+			if !ok {
+				continue
+			}
+
+			var delivery struct {
+				Payload string `json:"payload"`
+			}
+			if err := json.Unmarshal([]byte(arguments), &delivery); err != nil {
+				return nil, fmt.Errorf("decode web delivery report: %w", err)
+			}
+
+			deliveryText = delivery.Payload
+		}
+
+		if strings.TrimSpace(deliveryText) != "" && deliveryText != lastReply {
+			response.Messages = append(response.Messages, &TranscriptEvent{Role: "assistant", Text: deliveryText, Complete: true})
 		}
 	}
 
 	return response, nil
+}
+
+func historyEvent(item *responses.ResponseInputItemUnionParam, raw json.RawMessage) (*TranscriptEvent, error) {
+	var kind struct {
+		Type      string `json:"type"`
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+		Output    string `json:"output"`
+		Summary   []struct {
+			Text string `json:"text"`
+		} `json:"summary"`
+	}
+	if err := json.Unmarshal(raw, &kind); err != nil {
+		return nil, fmt.Errorf("decode web history item: %w", err)
+	}
+
+	switch kind.Type {
+	case "reasoning":
+		parts := make([]string, 0, len(kind.Summary))
+		for _, part := range kind.Summary {
+			if text := strings.TrimSpace(part.Text); text != "" {
+				parts = append(parts, text)
+			}
+		}
+
+		text := strings.Join(parts, "\n")
+		if text == "" {
+			return nil, nil
+		}
+
+		return &TranscriptEvent{Role: "thinking", Text: text, Complete: true}, nil
+	case "function_call":
+		text := strings.TrimSpace(kind.Name)
+		if kind.Arguments != "" {
+			if text != "" {
+				text += "\n"
+			}
+
+			text += kind.Arguments
+		}
+
+		if strings.TrimSpace(text) == "" {
+			return nil, nil
+		}
+
+		return &TranscriptEvent{Role: "tool", Text: text, Complete: true}, nil
+	case "function_call_output":
+		if strings.TrimSpace(kind.Output) == "" {
+			return nil, nil
+		}
+
+		return &TranscriptEvent{Role: "tool", Text: kind.Output, Complete: true}, nil
+	}
+
+	role, text, ok, err := backend.ReplayInputMessageRoleText(item, raw)
+	if err != nil {
+		return nil, fmt.Errorf("project web history: %w", err)
+	}
+
+	if !ok || strings.TrimSpace(text) == "" {
+		return nil, nil
+	}
+
+	return &TranscriptEvent{Role: role, Text: text, Complete: true}, nil
 }
 
 func (s *Server) humanConversation(id string) (bool, error) {

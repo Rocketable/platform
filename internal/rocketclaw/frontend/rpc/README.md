@@ -11,7 +11,9 @@ principal. Dropped items never run. Reorder writes persisted enqueue positions. 
 events for the requested conversation; it does not replay stored history or
 return output through Prompt's private response field. Live events carry Backend
 turn IDs so incremental answers cannot replace a preceding turn. History returns
-typed user/assistant messages through its separate RPC. History and sidebar previews
+the stored turn in order, including developer messages, thinking summaries, tool
+calls, tool results, and user/assistant text. Encrypted reasoning bodies stay
+stored and are not sent. History and sidebar previews
 share display text with one canonical Web prompt envelope removed from user
 messages; stored replay, principal framing, and assistant text remain unchanged.
 Session discovery starts from explicitly recorded conversations, excluding private Cron locators and
@@ -119,15 +121,16 @@ before removing its stale socket.
 The normal RocketClaw command still starts its existing Slack/Cron runtime. The
 isolated transport tests below do not start Slack or touch runtime configuration.
 
-Open `/s/<base64url-conversation-id>` in the retained Web UI, expand **Session
-entries**, then use **List entries**, **Load entries**, or **Delete entries**.
+Open `/s/<base64url-conversation-id>` in the Web UI to read the conversation.
+Thinking and tool traces expand inline within each turn; replies and successful
+verbatim-delivery reports remain visible when the trace is collapsed.
 For example, obtain the URL component with:
 
 ```sh
 bun -e 'console.log(Buffer.from(process.argv[1]).toString("base64url"))' 'slack-thread:C1:1.1'
 ```
 
-Delete removes all entries for that exact conversation ID, not its conversation
+The `DeleteSessionEntries` RPC removes all entries for that exact conversation ID, not its conversation
 or goal record. Ordinary GC remains responsible for those records.
 
 ## Identity boundary
@@ -167,7 +170,7 @@ entries and conversation/goal records. Bun must be installed and `web` dependenc
 must already be installed. The TypeScript integration test skips when run alone;
 Go provides its isolated storage fixture.
 
-For real desktop/mobile entry-panel gestures, build Web first and provide an
+For real desktop/mobile transcript gestures, build Web first and provide an
 installed Playwright module and Chromium executable:
 
 ```sh
@@ -177,9 +180,9 @@ export ROCKETCLAW_CHROMIUM='/absolute/path/to/chromium'
 go test -count=1 -timeout=80s -v ./internal/rocketclaw/frontend/rpc
 ```
 
-The browser check starts its own Next server on an ephemeral port, opens the
-retained entry panel, lists/loads entries on desktop, and confirms deletion at
-390px width. It stops only that test process and saves `r22-web-desktop.png` and
+The browser check starts its own Next server on an ephemeral port and checks
+inline thinking collapse and visible replies on desktop and at 390px width.
+It stops only that test process and saves `r22-web-desktop.png` and
 `r22-web-mobile.png` under the repository-local `TMPDIR`.
 
 After changing the proto, run `go generate ./internal/rocketclaw/frontend/rpc`

@@ -31,6 +31,10 @@ Saved rows show as refreshing or stale; missing summaries display `loading...`.
 Failed, partial or cancelled streams do not replace the snapshot. History
 deletion clears preview text without removing the row. Composer choices and
 sends stay on the agent query and do not wait for sidebar refresh.
+Each turn has an inline **Thinking** disclosure, expanded by default, containing
+reasoning summaries and tool traces. Replies and successful verbatim-delivery
+reports appear as normal messages outside that disclosure. The chat has no
+database-entry inspection panel.
 The shared app layout keeps the list and filters in memory during navigation.
 Late storage reads merge with newer live rows; superseded saves cannot overwrite
 newer snapshots, and post-deletion saves wait for the history clear to finish.
@@ -46,7 +50,7 @@ bun test src/session-list.browser.test.ts
 
 They check a 17 MiB snapshot across reload, user/protocol isolation, transaction
 abort after request success, deletion winning over a delayed save, delayed
-hydration, owner switches, and actual-App restore/merge/identity/deletion
+hydration, owner switches, and actual-App restore/merge/identity
 behavior, including a connection cut after terminal metadata and protocol changes.
 
 Slack installation requirements, including channel rename subscriptions, are in

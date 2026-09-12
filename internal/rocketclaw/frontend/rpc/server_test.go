@@ -62,6 +62,7 @@ func TestSessionEntries(t *testing.T) {
 	var turns []*protocol.InboundMessage
 
 	core := &mockBackend{
+		SubscribeFunc:          rt.Subscribe,
 		CreateConversationFunc: rt.CreateConversation,
 		ListConversationsFunc:  rt.ListConversations,
 		RunTurnFunc: func(ctx context.Context, inbound *protocol.InboundMessage) error {
@@ -529,20 +530,43 @@ func TestSessionEntries(t *testing.T) {
 	historyEntry := rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: entry.Timestamp, ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"developer","content":"private instructions"}`),
 		json.RawMessage(`{"type":"message","role":"user","content":"human one"}`),
+		json.RawMessage(`{"type":"reasoning","summary":[{"type":"summary_text","text":"**Planning the answer**"}]}`),
+		json.RawMessage(`{"type":"function_call","name":"execute","arguments":"{\"code\":\"true\"}"}`),
+		json.RawMessage(`{"type":"function_call_output","output":"ok"}`),
 		json.RawMessage(`{"type":"message","id":"msg_one","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer one","annotations":[]}]}`),
 		json.RawMessage(`{"type":"message","role":"user","content":"[Web media=Text principal=\"alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhuman two"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":"answer two"}`),
+		json.RawMessage(`{"type":"function_call","call_id":"report","name":"rocketclaw_i_want_human_partner_to_see_this","arguments":"{\"payload\":\"Exact report\\nwith details\"}"}`),
+		json.RawMessage(`{"type":"function_call_output","call_id":"report","output":"queued for verbatim delivery"}`),
+		json.RawMessage(`{"type":"function_call","call_id":"failed","name":"rocketclaw_i_want_human_partner_to_see_this","arguments":"invalid"}`),
+		json.RawMessage(`{"type":"function_call_output","call_id":"failed","output":"invalid arguments"}`),
+		json.RawMessage(`{"type":"message","role":"assistant","content":""}`),
 	}}
 	_, err = sessions.AppendEntryID(ctx, "empty-web", &historyEntry)
 	require.NoError(t, err)
 	history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: "empty-web"})
 	require.NoError(t, err)
-	require.Len(t, history.Messages, 4)
 
-	for i, text := range []string{"human one", "answer one", "human two", "answer two"} {
-		require.Equal(t, text, history.Messages[i].Text)
-		require.Equal(t, []string{"user", "assistant"}[i%2], history.Messages[i].Role)
+	got := make([]struct{ role, text string }, 0, len(history.Messages))
+	for _, message := range history.Messages {
+		got = append(got, struct{ role, text string }{message.Role, message.Text})
 	}
+
+	require.Equal(t, []struct{ role, text string }{
+		{"developer", "private instructions"},
+		{"user", "human one"},
+		{"thinking", "**Planning the answer**"},
+		{"tool", "execute\n{\"code\":\"true\"}"},
+		{"tool", "ok"},
+		{"assistant", "answer one"},
+		{"user", "human two"},
+		{"assistant", "answer two"},
+		{"tool", "rocketclaw_i_want_human_partner_to_see_this\n{\"payload\":\"Exact report\\nwith details\"}"},
+		{"tool", "queued for verbatim delivery"},
+		{"tool", "rocketclaw_i_want_human_partner_to_see_this\ninvalid"},
+		{"tool", "invalid arguments"},
+		{"assistant", "Exact report\nwith details"},
+	}, got)
 
 	listedSessions, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
@@ -1013,6 +1037,23 @@ func TestSessionEntries(t *testing.T) {
 	}
 
 	require.Positive(t, prefix)
+
+	for i, arguments := range []string{`{}`, `null`, `{"payload":null}`, `{"payload":""}`, `{"payload":"report"}`} {
+		replay := []json.RawMessage{
+			json.RawMessage(`{"type":"message","role":"assistant","content":"report"}`),
+			json.RawMessage(`{"type":"function_call","call_id":"first","name":"rocketclaw_i_want_human_partner_to_see_this","arguments":"{\"payload\":\"superseded\"}"}`),
+			json.RawMessage(`{"type":"function_call_output","call_id":"first","output":"queued for verbatim delivery"}`),
+			json.RawMessage(fmt.Sprintf(`{"type":"function_call","call_id":"last","name":"rocketclaw_i_want_human_partner_to_see_this","arguments":%q}`, arguments)),
+			json.RawMessage(`{"type":"function_call_output","call_id":"last","output":"queued for verbatim delivery"}`),
+		}
+		conversationID := fmt.Sprintf("delivery-%d", i)
+		_, err := sessions.AppendEntryID(ctx, conversationID, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: entry.Timestamp, ReplayInput: replay})
+		require.NoError(t, err)
+		history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversationID})
+		require.NoError(t, err)
+		// The last decision replaces the first, without duplicating an existing reply.
+		require.Len(t, history.Messages, len(replay), "arguments: %s", arguments)
+	}
 
 	// Definition failures must fail both independent choices and enumeration.
 	require.NoError(t, root.WriteFile(filepath.Join(cfg.RuntimeDirName(), "agents", "broken.md"), []byte("---\nmodel: [\n---\nHelp."), 0o600))

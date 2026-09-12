@@ -16,7 +16,7 @@ describe("react-doctor", () => {
       }
       files.sort();
       const proc = Bun.spawn(
-        ["bunx", "--bun", "react-doctor@latest", "--no-telemetry", "--blocking", "warning", "--no-color", ...files],
+        ["bunx", "react-doctor@latest", "--no-telemetry", "--blocking", "warning", "--no-color", ...files],
         { cwd: root, stdout: "pipe", stderr: "pipe" },
       );
       const [stdout, stderr, exit] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);

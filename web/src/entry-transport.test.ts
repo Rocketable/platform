@@ -9,7 +9,7 @@ import { createRPCHandler } from "./transport";
 import { WhoisLive } from "./whois";
 
 // Invoked by Go's TestSessionEntries with real isolated PostgreSQL storage.
-test.skipIf(!process.env.ROCKETCLAW_ENTRY_TEST_ID)("entry panel HTTP proxy reaches Go and rejects an unmapped connection", async () => {
+test.skipIf(!process.env.ROCKETCLAW_ENTRY_TEST_ID)("transcript and entry HTTP proxy reach Go and reject an unmapped connection", async () => {
   const id = process.env.ROCKETCLAW_ENTRY_TEST_ID!;
   const server = http.createServer(createRPCHandler(Layer.merge(RocketclawLive, WhoisLive)));
   await new Promise<void>((resolve) => server.listen(0, "::", resolve));
@@ -44,8 +44,19 @@ test.skipIf(!process.env.ROCKETCLAW_ENTRY_TEST_ID)("entry panel HTTP proxy reach
     const history = await call("history", false, "127.0.0.1", process.env.ROCKETCLAW_HISTORY_TEST_ID!);
     expect(history.status).toBe(200);
     expect(history.body.result.data.map(({ role, text }: { role: string; text: string }) => ({ role, text }))).toEqual([
-      { role: "user", text: "human one" }, { role: "assistant", text: "answer one" },
-      { role: "user", text: "human two" }, { role: "assistant", text: "answer two" },
+      { role: "developer", text: "private instructions" },
+      { role: "user", text: "human one" },
+      { role: "thinking", text: "**Planning the answer**" },
+      { role: "tool", text: "execute\n{\"code\":\"true\"}" },
+      { role: "tool", text: "ok" },
+      { role: "assistant", text: "answer one" },
+      { role: "user", text: "human two" },
+      { role: "assistant", text: "answer two" },
+      { role: "tool", text: "rocketclaw_i_want_human_partner_to_see_this\n{\"payload\":\"Exact report\\nwith details\"}" },
+      { role: "tool", text: "queued for verbatim delivery" },
+      { role: "tool", text: "rocketclaw_i_want_human_partner_to_see_this\ninvalid" },
+      { role: "tool", text: "invalid arguments" },
+      { role: "assistant", text: "Exact report\nwith details" },
     ]);
     const config = await call("config");
     expect(config.status).toBe(200);
@@ -101,20 +112,25 @@ test.skipIf(!process.env.ROCKETCLAW_ENTRY_TEST_ID)("entry panel HTTP proxy reach
         reader.releaseLock();
         expect(port, output).not.toBe("");
         const page = await browser.newPage();
-        await page.goto(`http://127.0.0.1:${port}/s/${Buffer.from(id).toString("base64url")}`);
-        await page.getByText("Session entries", { exact: true }).click();
-        const panel = page.locator("details").filter({ hasText: "Session entries" });
-        await panel.getByRole("button", { name: "List entries", exact: true }).click();
-        await panel.locator("pre").filter({ hasText: listed.body.result.data[0].id }).waitFor();
-        await panel.getByRole("button", { name: "Load entries", exact: true }).click();
-        await panel.locator("pre").filter({ hasText: "\\\"version\\\"" }).waitFor();
-        await page.screenshot({ path: path.join(process.env.TMPDIR!, "r22-web-desktop.png") });
-        await page.setViewportSize({ width: 390, height: 844 });
-        expect(await panel.getByRole("button", { name: "Delete entries", exact: true }).isVisible()).toBe(true);
-        await page.screenshot({ path: path.join(process.env.TMPDIR!, "r22-web-mobile.png") });
-        page.once("dialog", (dialog: { accept: () => Promise<void> }) => dialog.accept());
-        await panel.getByRole("button", { name: "Delete entries", exact: true }).click();
-        await panel.getByText("Deleted 1 entries.", { exact: true }).waitFor();
+        for (const [width, filename] of [[1280, "r22-web-desktop.png"], [390, "r22-web-mobile.png"]] as const) {
+          await page.setViewportSize({ width, height: 844 });
+          await page.goto(`http://127.0.0.1:${port}/s/${Buffer.from(process.env.ROCKETCLAW_HISTORY_TEST_ID!).toString("base64url")}`);
+          const report = page.getByText("Exact report\nwith details", { exact: true });
+          await report.waitFor();
+          const trace = page.locator("details").filter({ hasText: "queued for verbatim delivery" });
+          expect(await trace.getAttribute("open")).not.toBeNull();
+          await trace.locator("summary").click();
+          expect(await trace.getAttribute("open")).toBeNull();
+          expect(await page.getByText("queued for verbatim delivery", { exact: true }).isVisible()).toBe(false);
+          expect(await report.isVisible()).toBe(true);
+          expect(await report.count()).toBe(1);
+          expect(await page.getByText("answer two", { exact: true }).isVisible()).toBe(true);
+          expect(await page.locator("details[open]").count()).toBe(2);
+          await trace.locator("summary").press("Enter");
+          expect(await trace.getAttribute("open")).not.toBeNull();
+          expect(await page.getByText("queued for verbatim delivery", { exact: true }).isVisible()).toBe(true);
+          await page.screenshot({ path: path.join(process.env.TMPDIR!, filename) });
+        }
       } finally {
         await browser.close();
         web.kill("SIGKILL");
@@ -123,7 +139,7 @@ test.skipIf(!process.env.ROCKETCLAW_ENTRY_TEST_ID)("entry panel HTTP proxy reach
     }
     const removed = await call("deleteSessionEntries", true);
     expect(removed.status).toBe(200);
-    expect(removed.body.result.data).toBe(playwrightModule ? "0" : "1");
+    expect(removed.body.result.data).toBe("1");
     expect((await call("listSessionEntries")).body.result.data).toEqual([]);
     expect((await call("loadSessionEntries")).body.result.data).toEqual([]);
   } finally {

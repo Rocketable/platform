@@ -228,13 +228,12 @@ test.skipIf(!playwright || !chromium)("pending saves, delayed hydration and owne
 
 const built = existsSync(path.resolve(import.meta.dir, "../.next"));
 
-test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, isolates, deletes and keeps composer independent", async () => {
+test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, isolates and keeps composer independent", async () => {
   const { default: next } = await import("next");
   const { chromium: engine } = await import(playwright!);
   let identityHold = Promise.withResolvers<void>();
   let promptHold = Promise.withResolvers<string>();
   const createHold = Promise.withResolvers<string>();
-  const deletion = Promise.withResolvers<void>();
   const wireTail = Promise.withResolvers<void>();
   const ownerTail = Promise.withResolvers<void>();
   let blocked = Promise.withResolvers<void>();
@@ -248,9 +247,6 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     promptStarted: Promise.withResolvers<void>(),
     holdCreate: false,
     createStarted: Promise.withResolvers<void>(),
-    deleteFail: false,
-    deleteHold: Promise.resolve(),
-    deleteStarted: Promise.withResolvers<void>(),
     yieldBatches: async function* (): AsyncGenerator<SessionBatch> {},
   };
   const row = (id: string, preview: string): Session => ({
@@ -266,10 +262,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
   const api: RocketclawApi = {
     listSessionEntries: () => Effect.succeed([{ id: "1", type: "turn" }]),
     loadSessionEntries: () => Effect.succeed([]),
-    deleteSessionEntries: () => {
-      ctrl.deleteStarted.resolve();
-      return ctrl.deleteFail ? Effect.fail(new GrpcError({ message: "nope" })) : Effect.promise(() => ctrl.deleteHold.then(() => "1"));
-    },
+    deleteSessionEntries: () => Effect.succeed("1"),
     listSessions: async function* () {
       ctrl.listCalls += 1;
       await blocked.promise;
@@ -596,95 +589,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     ctrl.yieldBatches = complete([row("kept", "saved preview"), row("gone", "will vanish")]);
     blocked.resolve();
     await shown(page, "saved preview");
-    await page.getByRole("link").filter({ hasText: "saved preview" }).click();
-    await page.getByText("Session entries").click();
-    await page.getByPlaceholder("Search or agent: or room:").fill("saved");
-    blocked = Promise.withResolvers();
-    await page.evaluate(() => {
-      (window as unknown as { __delayOpen: boolean; __openHeld: boolean }).__delayOpen = true;
-      (window as unknown as { __openHeld: boolean }).__openHeld = false;
-    });
-    ctrl.yieldBatches = complete([row("kept", "saved preview"), row("gone", "will vanish")]);
-    blocked.resolve();
-    await page.waitForFunction(() => (window as unknown as { __openHeld: boolean }).__openHeld);
-    blocked = Promise.withResolvers();
-    page.once("dialog", (dialog: { accept: () => Promise<void> }) => dialog.accept());
-    await page.getByRole("button", { name: "Delete entries", exact: true }).click();
-    await page.getByText("Deleted 1 entries.").waitFor();
-    await hidden(page, "saved preview");
-    expect(await page.getByPlaceholder("Search or agent: or room:").inputValue()).toBe("saved");
-    await page.evaluate(() => (window as unknown as { __releaseOpen: () => void }).__releaseOpen());
-    await page.waitForTimeout(200);
-    await hidden(page, "saved preview");
-    blocked = Promise.withResolvers();
-    await page.reload();
-    await hidden(page, "saved preview");
-    await shown(page, "will vanish");
-
-    // Both pages share IndexedDB. Keep A's pre-deletion HTTP stream alive even
-    // when deletion in B cancels A's enumeration, then deliver its old tail.
-    ctrl.yieldBatches = complete([row("kept", "cross-tab secret"), row("gone", "current row")]);
-    blocked.resolve();
-    await shown(page, "cross-tab secret");
-    const stalePage = await page.context().newPage();
-    const crossTabTail = Promise.withResolvers<void>();
-    try {
-      await stalePage.addInitScript(() => {
-        window.fetch = new Proxy(window.fetch, {
-          apply(target, receiver, [input, init]) {
-            return Reflect.apply(target, receiver, [input, String(input).includes("/trpc/sessions") ? { ...init, signal: undefined } : init]);
-          },
-        });
-      });
-      ctrl.yieldBatches = async function* () {
-        yield batch([row("kept", "cross-tab secret"), row("gone", "current row")]);
-        await crossTabTail.promise;
-        yield batch([row("kept", "cross-tab secret")], { upstreamSuccess: true });
-      };
-      const oldRequest = stalePage.waitForRequest("**/trpc/sessions*");
-      await stalePage.goto(origin);
-      await shown(stalePage, "cross-tab secret");
-      const request = await oldRequest;
-      const oldFinished = stalePage.waitForEvent("requestfinished", { predicate: (value: unknown) => value === request });
-      blocked = Promise.withResolvers();
-      await page.getByText("Session entries").click();
-      page.once("dialog", (dialog: { accept: () => Promise<void> }) => dialog.accept());
-      await page.getByRole("button", { name: "Delete entries", exact: true }).click();
-      await page.getByText("Deleted 1 entries.").waitFor();
-      crossTabTail.resolve();
-      await oldFinished;
-      await stalePage.getByText("cross-tab secret", { exact: true }).waitFor({ state: "hidden", timeout: 5000 });
-      await shown(stalePage, "current row");
-      await stalePage.getByPlaceholder("Search or agent: or room:").fill("cross-tab secret");
-      await hidden(stalePage, "cross-tab secret");
-      await stalePage.reload();
-      await shown(stalePage, "current row");
-      await hidden(stalePage, "cross-tab secret");
-      expect(await stalePage.evaluate(snapshot, ["alice", "test-protocol"])).toEqual([
-        { ...row("kept", ""), updatedAt: "" }, row("gone", "current row"),
-      ]);
-    } finally {
-      crossTabTail.resolve();
-      await stalePage.close();
-    }
-
-    ctrl.deleteFail = true;
-    ctrl.yieldBatches = complete([row("kept", "saved preview"), row("gone", "will vanish")]);
-    blocked.resolve();
     await shown(page, "will vanish");
     await page.getByRole("link").filter({ hasText: "will vanish" }).click();
-    await page.getByText("Session entries").click();
-    page.once("dialog", (dialog: { accept: () => Promise<void> }) => dialog.accept());
-    await page.getByRole("button", { name: "Delete entries", exact: true }).click();
-    await page.getByText("nope", { exact: true }).waitFor();
-    await shown(page, "will vanish");
-
-    ctrl.deleteFail = false;
-    ctrl.deleteHold = deletion.promise;
-    ctrl.deleteStarted = Promise.withResolvers();
-    page.once("dialog", (dialog: { accept: () => Promise<void> }) => dialog.accept());
-    await page.getByRole("button", { name: "Delete entries", exact: true }).click();
-    await ctrl.deleteStarted.promise;
     // Leave Alice's HTTP stream alive despite the App abort so its tail really arrives after Bob.
     await page.evaluate(() => {
       window.fetch = new Proxy(window.fetch, {
@@ -726,24 +632,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await shown(page, "bob preview");
     await hidden(page, "late alice preview");
     expect(await page.evaluate(snapshot, ["bob", "test-protocol"])).toEqual([row("gone", "bob preview")]);
-    deletion.resolve();
-    await page.getByText("Deleted 1 entries.").waitFor();
-    await shown(page, "bob preview");
-
     await page.reload();
     await shown(page, "bob preview");
-    await page.waitForFunction(async () => {
-      const request = indexedDB.open("rocketclaw-session-list", 1);
-      const db = await new Promise<IDBDatabase>((resolve) => { request.onsuccess = () => resolve(request.result); });
-      try {
-        const tx = db.transaction("snapshots", "readonly");
-        const saved = tx.objectStore("snapshots").get(["alice", "test-protocol"]);
-        await new Promise<void>((resolve) => { tx.oncomplete = () => resolve(); });
-        return saved.result?.find((item: Session) => item.id === "gone")?.preview === "";
-      } finally {
-        db.close();
-      }
-    });
 
     const protocolReload = page.waitForEvent("load");
     ctrl.protocol = "test-protocol-2";
@@ -849,7 +739,6 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     identityHold.resolve();
     promptHold.resolve("");
     createHold.resolve("web-session:abandoned");
-    deletion.resolve();
     wireTail.resolve();
     ownerTail.resolve();
     await browser.close();
