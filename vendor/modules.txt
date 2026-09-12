@@ -224,7 +224,7 @@ github.com/modelcontextprotocol/go-sdk/oauthex
 # github.com/ncruces/go-strftime v1.0.0
 ## explicit; go 1.17
 github.com/ncruces/go-strftime
-# github.com/openai/openai-go/v3 v3.59.0
+# github.com/openai/openai-go/v3 v3.61.0
 ## explicit; go 1.25.0
 github.com/openai/openai-go/v3
 github.com/openai/openai-go/v3/auth
@@ -239,6 +239,7 @@ github.com/openai/openai-go/v3/internal/encoding/json/sentinel
 github.com/openai/openai-go/v3/internal/encoding/json/shims
 github.com/openai/openai-go/v3/internal/paramutil
 github.com/openai/openai-go/v3/internal/requestconfig
+github.com/openai/openai-go/v3/live
 github.com/openai/openai-go/v3/option
 github.com/openai/openai-go/v3/packages/pagination
 github.com/openai/openai-go/v3/packages/param
@@ -440,10 +441,10 @@ golang.org/x/text/width
 # golang.org/x/time v0.16.0
 ## explicit; go 1.26.0
 golang.org/x/time/rate
-# google.golang.org/genproto/googleapis/api v0.0.0-20260908043556-f8649ddbbfe6
+# google.golang.org/genproto/googleapis/api v0.0.0-20260911204522-f61a6ca850bd
 ## explicit; go 1.25.0
 google.golang.org/genproto/googleapis/api/httpbody
-# google.golang.org/genproto/googleapis/rpc v0.0.0-20260908043556-f8649ddbbfe6
+# google.golang.org/genproto/googleapis/rpc v0.0.0-20260911204522-f61a6ca850bd
 ## explicit; go 1.25.0
 google.golang.org/genproto/googleapis/rpc/status
 # google.golang.org/grpc v1.83.2
