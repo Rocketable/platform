@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"strings"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	harness "github.com/Rocketable/platform/internal/rocketcode"
 )
 
@@ -38,7 +38,7 @@ func (d stateDAO) thread(ctx context.Context, conversationID string) (ThreadStat
 	)
 
 	err := d.db.QueryRowContext(ctx, `SELECT agent, created_by, settled FROM managed_conversations WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &createdBy, &thread.Settled)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return ThreadState{}, false, nil
 	}
 
@@ -52,17 +52,8 @@ func (d stateDAO) thread(ctx context.Context, conversationID string) (ThreadStat
 }
 
 func (d stateDAO) setThreadAgent(ctx context.Context, conversationID, agent string) (bool, error) {
-	result, err := d.db.ExecContext(ctx, `UPDATE managed_conversations SET agent = $1 WHERE conversation_id = $2`, strings.TrimSpace(agent), strings.TrimSpace(conversationID))
-	if err != nil {
-		return false, fmt.Errorf("update managed conversation agent: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("count managed conversation agent update: %w", err)
-	}
-
-	return rows > 0, nil
+	n, err := execRows(ctx, d.db, "update managed conversation agent", "count managed conversation agent update", `UPDATE managed_conversations SET agent = $1 WHERE conversation_id = $2`, strings.TrimSpace(agent), strings.TrimSpace(conversationID))
+	return n > 0, err
 }
 
 func (d stateDAO) upsertExternalMCPSession(ctx context.Context, externalConversationID string, session *ExternalMCPSessionState) error {
@@ -121,45 +112,18 @@ func scanExternalMCPSession(scanner rowScanner) (string, ExternalMCPSessionState
 }
 
 func (d stateDAO) beginGoal(ctx context.Context, conversationID string, goal *GoalState) (bool, error) {
-	result, err := d.db.ExecContext(ctx, `INSERT INTO conversation_goals (conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT(conversation_id) DO UPDATE SET objective = excluded.objective, check_script = excluded.check_script, max_turns = excluded.max_turns, turns_used = excluded.turns_used, status = excluded.status, note = excluded.note, slack_recipient_team_id = excluded.slack_recipient_team_id, slack_recipient_user_id = excluded.slack_recipient_user_id, created_at_unix_ns = excluded.created_at_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns WHERE conversation_goals.status NOT IN ('', $12)`, strings.TrimSpace(conversationID), strings.TrimSpace(goal.Objective), strings.TrimSpace(goal.CheckScript), goal.MaxTurns, goal.TurnsUsed, strings.TrimSpace(goal.Status), strings.TrimSpace(goal.Note), strings.TrimSpace(goal.SlackRecipientTeamID), strings.TrimSpace(goal.SlackRecipientUserID), timeUnixNano(goal.CreatedAt), timeUnixNano(goal.UpdatedAt), GoalStatusActive)
-	if err != nil {
-		return false, fmt.Errorf("begin goal: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("count goal start: %w", err)
-	}
-
-	return rows > 0, nil
+	n, err := execRows(ctx, d.db, "begin goal", "count goal start", `INSERT INTO conversation_goals (conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT(conversation_id) DO UPDATE SET objective = excluded.objective, check_script = excluded.check_script, max_turns = excluded.max_turns, turns_used = excluded.turns_used, status = excluded.status, note = excluded.note, slack_recipient_team_id = excluded.slack_recipient_team_id, slack_recipient_user_id = excluded.slack_recipient_user_id, created_at_unix_ns = excluded.created_at_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns WHERE conversation_goals.status NOT IN ('', $12)`, strings.TrimSpace(conversationID), strings.TrimSpace(goal.Objective), strings.TrimSpace(goal.CheckScript), goal.MaxTurns, goal.TurnsUsed, strings.TrimSpace(goal.Status), strings.TrimSpace(goal.Note), strings.TrimSpace(goal.SlackRecipientTeamID), strings.TrimSpace(goal.SlackRecipientUserID), timeUnixNano(goal.CreatedAt), timeUnixNano(goal.UpdatedAt), GoalStatusActive)
+	return n > 0, err
 }
 
 func (d stateDAO) accountGoalTurn(ctx context.Context, conversationID string, now time.Time) (bool, error) {
-	result, err := d.db.ExecContext(ctx, `UPDATE conversation_goals SET turns_used = turns_used + 1, status = CASE WHEN max_turns > 0 AND turns_used + 1 >= max_turns THEN $1 ELSE $2 END, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $5)`, GoalStatusBudgetExhausted, GoalStatusActive, timeUnixNano(now), strings.TrimSpace(conversationID), GoalStatusActive)
-	if err != nil {
-		return false, fmt.Errorf("account goal turn: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("count goal turn accounting: %w", err)
-	}
-
-	return rows > 0, nil
+	n, err := execRows(ctx, d.db, "account goal turn", "count goal turn accounting", `UPDATE conversation_goals SET turns_used = turns_used + 1, status = CASE WHEN max_turns > 0 AND turns_used + 1 >= max_turns THEN $1 ELSE $2 END, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $5)`, GoalStatusBudgetExhausted, GoalStatusActive, timeUnixNano(now), strings.TrimSpace(conversationID), GoalStatusActive)
+	return n > 0, err
 }
 
 func (d stateDAO) setActiveGoalStatus(ctx context.Context, conversationID, status, note string, now time.Time) (bool, error) {
-	result, err := d.db.ExecContext(ctx, `UPDATE conversation_goals SET status = $1, note = $2, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $5)`, strings.TrimSpace(status), strings.TrimSpace(note), timeUnixNano(now), strings.TrimSpace(conversationID), GoalStatusActive)
-	if err != nil {
-		return false, fmt.Errorf("set active goal status: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("count active goal status update: %w", err)
-	}
-
-	return rows > 0, nil
+	n, err := execRows(ctx, d.db, "set active goal status", "count active goal status update", `UPDATE conversation_goals SET status = $1, note = $2, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $5)`, strings.TrimSpace(status), strings.TrimSpace(note), timeUnixNano(now), strings.TrimSpace(conversationID), GoalStatusActive)
+	return n > 0, err
 }
 
 func (d stateDAO) goal(ctx context.Context, conversationID string) (GoalState, bool, error) {
@@ -169,7 +133,7 @@ func (d stateDAO) goal(ctx context.Context, conversationID string) (GoalState, b
 	)
 
 	err := d.db.QueryRowContext(ctx, `SELECT objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns FROM conversation_goals WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&goal.Objective, &goal.CheckScript, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &goal.SlackRecipientTeamID, &goal.SlackRecipientUserID, &createdAt, &updatedAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return GoalState{}, false, nil
 	}
 
@@ -561,6 +525,20 @@ func boolInt(value bool) int {
 	}
 
 	return 0
+}
+
+func execRows(ctx context.Context, db stateStoreDB, execOp, countOp, query string, args ...any) (int64, error) {
+	result, err := db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", execOp, err)
+	}
+
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", countOp, err)
+	}
+
+	return n, nil
 }
 
 func timeUnixNano(value time.Time) int64 {

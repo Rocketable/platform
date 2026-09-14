@@ -412,17 +412,8 @@ func (s *SessionService) SetThreadAgentIfExists(conversationID, agent string) (b
 
 // SetConversationSettled changes only the recorded conversation's sidebar state.
 func (s *SessionService) SetConversationSettled(ctx context.Context, conversationID string, settled bool) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `UPDATE managed_conversations SET settled = $1 WHERE conversation_id = $2`, settled, conversationID)
-	if err != nil {
-		return false, fmt.Errorf("set conversation settled: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("count settled conversation update: %w", err)
-	}
-
-	return rows > 0, nil
+	n, err := execRows(ctx, s.db, "set conversation settled", "count settled conversation update", `UPDATE managed_conversations SET settled = $1 WHERE conversation_id = $2`, settled, conversationID)
+	return n > 0, err
 }
 
 // ExternalMCPSession returns a persisted external MCP session mapping.
@@ -911,24 +902,16 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 	}
 
 	for conversationID := range deleteConversations {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM active_turns WHERE conversation_id = $1`, conversationID); err != nil {
-			return PruneStateStats{}, fmt.Errorf("delete stale active turn: %w", err)
-		}
-
-		if _, err := tx.ExecContext(ctx, `DELETE FROM pending_restart_notifications WHERE conversation_id = $1`, conversationID); err != nil {
-			return PruneStateStats{}, fmt.Errorf("delete stale pending restart notification: %w", err)
-		}
-
-		if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_goals WHERE conversation_id = $1`, conversationID); err != nil {
-			return PruneStateStats{}, fmt.Errorf("delete stale conversation goal: %w", err)
-		}
-
-		if _, err := tx.ExecContext(ctx, `DELETE FROM thread_queue WHERE conversation_id = $1`, conversationID); err != nil {
-			return PruneStateStats{}, fmt.Errorf("delete stale thread queue: %w", err)
-		}
-
-		if _, err := tx.ExecContext(ctx, `DELETE FROM managed_conversations WHERE conversation_id = $1`, conversationID); err != nil {
-			return PruneStateStats{}, fmt.Errorf("delete stale managed conversation: %w", err)
+		for _, item := range []struct{ query, name string }{
+			{`DELETE FROM active_turns WHERE conversation_id = $1`, "active turn"},
+			{`DELETE FROM pending_restart_notifications WHERE conversation_id = $1`, "pending restart notification"},
+			{`DELETE FROM conversation_goals WHERE conversation_id = $1`, "conversation goal"},
+			{`DELETE FROM thread_queue WHERE conversation_id = $1`, "thread queue"},
+			{`DELETE FROM managed_conversations WHERE conversation_id = $1`, "managed conversation"},
+		} {
+			if _, err := tx.ExecContext(ctx, item.query, conversationID); err != nil {
+				return PruneStateStats{}, fmt.Errorf("delete stale %s: %w", item.name, err)
+			}
 		}
 	}
 
@@ -968,17 +951,7 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return 0, errors.New("conversation ID is required")
 	}
 
-	result, err := s.db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = $1`, conversationID)
-	if err != nil {
-		return 0, fmt.Errorf("delete rocketcode session: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("count deleted rocketcode session rows: %w", err)
-	}
-
-	return rows, nil
+	return execRows(ctx, s.db, "delete rocketcode session", "count deleted rocketcode session rows", `DELETE FROM session_entries WHERE conversation_id = $1`, conversationID)
 }
 
 // ListSessions returns summaries for stored rocketcode sessions.
@@ -1631,14 +1604,9 @@ func deleteSessionEntries(ctx context.Context, db stateStoreDB, conversationIDs 
 	var deleted int64
 
 	for conversationID := range conversationIDs {
-		result, err := db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = $1`, conversationID)
+		rows, err := execRows(ctx, db, "delete stale session entries", "count stale session entries", `DELETE FROM session_entries WHERE conversation_id = $1`, conversationID)
 		if err != nil {
-			return 0, fmt.Errorf("delete stale session entries: %w", err)
-		}
-
-		rows, err := result.RowsAffected()
-		if err != nil {
-			return 0, fmt.Errorf("count stale session entries: %w", err)
+			return 0, err
 		}
 
 		deleted += rows
