@@ -215,7 +215,7 @@ const (
 	MessageContentEncryptedContent = "message_content.encrypted_content"
 )
 
-// Image attributes — nested under MessageContentImage.
+// Image attributes — nested under MessageContentImage, InputImages or OutputImages.
 const (
 	ImageURL = "image.url"
 )
