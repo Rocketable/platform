@@ -2320,14 +2320,7 @@ func ExternalMCPAgentsIn(cfg *config.Config, runtimeDir string) ([]string, error
 		return nil, err
 	}
 
-	names := make([]string, 0, len(agents.Items))
-	for name := range agents.Items {
-		names = append(names, name)
-	}
-
-	slices.Sort(names)
-
-	return names, nil
+	return slices.Sorted(maps.Keys(agents.Items)), nil
 }
 
 func parseReasonArg(raw json.RawMessage, op string) (string, error) {

@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -54,16 +55,11 @@ type LaterWorkRow struct {
 // MixedLaterWork builds later-work order: empty-park enqueue, then each scheduled peg
 // in due-time order with enqueue parked after that peg. Unknown park-after is empty.
 func MixedLaterWork(queue []ThreadQueueItem, scheduled map[string]ScheduledMessageState) []LaterWorkRow {
-	known := make(map[string]struct{}, len(scheduled))
-	for id := range scheduled {
-		known[id] = struct{}{}
-	}
-
 	slots := map[string][]ThreadQueueItem{}
 
 	for i := range queue {
 		park := strings.TrimSpace(queue[i].ParkAfter)
-		if _, ok := known[park]; park != "" && !ok {
+		if _, ok := scheduled[park]; park != "" && !ok {
 			park = ""
 		}
 
@@ -85,12 +81,7 @@ func MixedLaterWork(queue []ThreadQueueItem, scheduled map[string]ScheduledMessa
 		slots[park] = items
 	}
 
-	pegs := make([]string, 0, len(scheduled))
-	for id := range scheduled {
-		pegs = append(pegs, id)
-	}
-
-	slices.SortFunc(pegs, func(a, b string) int {
+	pegs := slices.SortedFunc(maps.Keys(scheduled), func(a, b string) int {
 		if cmp := scheduled[a].DueAt.Compare(scheduled[b].DueAt); cmp != 0 {
 			return cmp
 		}
