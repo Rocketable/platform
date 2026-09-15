@@ -44,3 +44,17 @@ func TestMixedLaterWorkUnknownParkIsEmpty(t *testing.T) {
 	require.Len(t, rows, 1)
 	assert.Equal(t, "q1", rows[0].Queue.ID)
 }
+
+func TestMixedLaterWorkOrdersScheduledByDueAt(t *testing.T) {
+	early := time.Date(2000, 1, 1, 15, 0, 0, 0, time.UTC)
+	late := time.Date(2000, 1, 1, 16, 0, 0, 0, time.UTC)
+	rows := MixedLaterWork(
+		nil,
+		map[string]ScheduledMessageState{
+			"later":  {Message: "L", DueAt: late},
+			"sooner": {Message: "S", DueAt: early},
+		},
+	)
+	require.Len(t, rows, 2)
+	assert.Equal(t, []string{"sooner", "later"}, []string{rows[0].ScheduledID, rows[1].ScheduledID})
+}
