@@ -52,7 +52,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 		agent:                  agent,
 		ProviderOrigin:         origin,
 		Client:                 newResponsesAPI(client),
-		SystemPrompt:           composeSystemPromptWithSkills(agent.Prompt, f.skills, &agent),
+		SystemPrompt:           childFactory.childSystemPrompt(&agent, modelTools, codeHosts),
 		Model:                  origin.Model,
 		DisplayModel:           origin.displayModel(),
 		ReasoningEffort:        shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),

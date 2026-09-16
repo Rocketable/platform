@@ -96,6 +96,34 @@ func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 	require.Contains(t, diagnostics.String(), "remember workspace memory\n\n<current-workspace>\nWorkspace root: "+dir+"\n</current-workspace>")
 }
 
+func TestNewTaskSubagentsUseRootInstructionsWithoutParentPrompt(t *testing.T) {
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	require.NoError(t, root.WriteFile("AGENTS.md", []byte("project rules\n"), 0o644))
+
+	mock := mockResponses(responseWithTaskMessages())
+	loop, err := NewWithModelResolver(testResolverForResponsesAPI(mock), testConfig(dir), root, Agents{Items: map[string]Agent{
+		"main":   testAgentWithPrompt("main", "PARENT PROMPT"),
+		"review": testAgentWithPrompt("review", "CHILD PROMPT"),
+	}}, Skills{Items: map[string]Skill{}}, "main", nil)
+	require.NoError(t, err)
+
+	factory := loop.PermissionReviewer.(*toolFactory)
+	got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{}, testTaskOutput())
+	require.NoError(t, err)
+	require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
+
+	instructions := mock.calls[0].Instructions.Value
+
+	require.Contains(t, loop.SystemPrompt, "PARENT PROMPT")
+	require.Contains(t, instructions, "Instructions from: AGENTS.md\nproject rules")
+	require.Contains(t, instructions, "CHILD PROMPT")
+	require.NotContains(t, instructions, "PARENT PROMPT")
+}
+
 func TestNewRequiresShellTempDir(t *testing.T) {
 	dir := t.TempDir()
 	root, err := os.OpenRoot(dir)

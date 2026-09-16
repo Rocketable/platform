@@ -166,7 +166,7 @@ func TestTaskTool(t *testing.T) {
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
 			"review": testAgentWithPrompt("review", "review !`printf carefully`"),
 		}})
-		factory.systemPrompt = "base prompt"
+		factory.rootInstructions = "base prompt"
 
 		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
 
@@ -191,7 +191,7 @@ func TestTaskTool(t *testing.T) {
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
 			"review": testAgentWithPrompt("review", "review !`cat MEMORY.md`"),
 		}})
-		factory.systemPrompt = "base prompt"
+		factory.rootInstructions = "base prompt"
 		factory.expandPromptShellCommands = testPromptExpansion(false, true, false)
 		factory.promptExpansion = env
 
@@ -208,7 +208,7 @@ func TestTaskTool(t *testing.T) {
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
 			"review": testAgentWithPrompt("review", "review !`printf carefully`"),
 		}})
-		factory.systemPrompt = "base prompt"
+		factory.rootInstructions = "base prompt"
 		factory.expandPromptShellCommands = testPromptExpansion(true, false, false)
 
 		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
@@ -316,6 +316,26 @@ func TestTaskTool(t *testing.T) {
 		require.Contains(t, marshalJSON(t, mock.calls[2].Input.OfInputItemList), "Current Action: response")
 		require.Contains(t, marshalJSON(t, mock.calls[2].Input.OfInputItemList), "And the response from review to main:")
 		require.Contains(t, marshalJSON(t, mock.calls[2].Input.OfInputItemList), "second")
+	})
+
+	t.Run("guardrail prompt includes root instructions and code mode", func(t *testing.T) {
+		mock := mockResponses(responseWithMessage("delegation-gate", `{"approved":false,"reason":"too risky"}`))
+		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+			"review": {Name: "review", Model: "gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
+			"safety": {Name: "safety", Model: "gpt-5.4", Prompt: "guard carefully", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}},
+		}})
+		factory.rootInstructions = "Instructions from: AGENTS.md\nproject rules"
+
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{}, testTaskOutput())
+
+		require.NoError(t, err)
+		require.Equal(t, "<task_result>\ndelegation blocked: too risky\n</task_result>", got)
+
+		instructions := mock.calls[0].Instructions.Value
+		require.Contains(t, instructions, "Instructions from: AGENTS.md\nproject rules")
+		require.Contains(t, instructions, "guard carefully")
+		require.Contains(t, instructions, "## Code Mode")
+		require.NotContains(t, instructions, "review carefully")
 	})
 
 	t.Run("guardrail rejection skips child", func(t *testing.T) {
