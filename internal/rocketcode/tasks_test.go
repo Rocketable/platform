@@ -318,6 +318,26 @@ func TestTaskTool(t *testing.T) {
 		require.Contains(t, marshalJSON(t, newParams(mock)[2].Input.OfInputItemList), "second")
 	})
 
+	t.Run("guardrail prompt includes root instructions and code mode", func(t *testing.T) {
+		mock := mockResponses(responseWithMessage("delegation-gate", `{"approved":false,"reason":"too risky"}`))
+		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+			"review": {Name: "review", Model: "gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
+			"safety": {Name: "safety", Model: "gpt-5.4", Prompt: "guard carefully", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}},
+		}})
+		factory.rootInstructions = "Instructions from: AGENTS.md\nproject rules"
+
+		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{}, testTaskOutput())
+
+		require.NoError(t, err)
+		require.Equal(t, "<task_result>\ndelegation blocked: too risky\n</task_result>", got)
+
+		instructions := newParams(mock)[0].Instructions.Value
+		require.Contains(t, instructions, "Instructions from: AGENTS.md\nproject rules")
+		require.Contains(t, instructions, "guard carefully")
+		require.Contains(t, instructions, "## Code Mode")
+		require.NotContains(t, instructions, "review carefully")
+	})
+
 	t.Run("guardrail rejection skips child", func(t *testing.T) {
 		mock := mockResponses(responseWithMessage("delegation-gate", `{"approved":false,"reason":"too risky"}`))
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{

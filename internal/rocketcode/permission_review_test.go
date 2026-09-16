@@ -93,6 +93,24 @@ func TestPermissionReviewUsesConfiguredAutoApproverModel(t *testing.T) {
 	require.Equal(t, "gpt-5.4-mini", newParams(mock)[0].Model)
 }
 
+func TestPermissionReviewSystemPromptIncludesRootInstructionsAndCodeMode(t *testing.T) {
+	mock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
+		testMessageOutputItem("review-final", "", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low-risk action."}`),
+	}))
+	factory := testTaskFactory(mock, Agents{Items: map[string]Agent{}})
+	factory.autoApproverModel = "gpt-5.4"
+	factory.rootInstructions = "Instructions from: AGENTS.md\nproject rules"
+
+	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ReviewerEmbedded: true}, make(chan ChatResponse, 10))
+
+	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
+
+	instructions := newParams(mock)[0].Instructions.Value
+	require.Contains(t, instructions, "Instructions from: AGENTS.md\nproject rules")
+	require.Contains(t, instructions, "You are judging one planned coding-agent action.")
+	require.Contains(t, instructions, "## Code Mode")
+}
+
 func TestPermissionReviewResolvesEmbeddedAutoApproverIndependently(t *testing.T) {
 	rootClient, rootRequests := testResolverClient(t, "wrong")
 	reviewClient, reviewRequests := testResolverClient(t, `{"risk_level":"low","user_authorization":"medium","outcome":"allow","rationale":"ok"}`)

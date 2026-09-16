@@ -156,6 +156,18 @@ func (f *toolFactory) availableSubagentsDescription() string {
 	return strings.Join(lines, "\n")
 }
 
+func (f *toolFactory) childSystemPrompt(agent *Agent, modelTools, codeHosts map[string]looperTool) string {
+	var mcpServers []string
+	if f.mcpRegistry != nil {
+		mcpServers = visibleMCPServers(agent.Permission, f.mcpRegistry.Names())
+	}
+
+	return withCodeModeSystemPrompt(
+		composeSystemPromptWithSkills(strings.TrimSpace(f.rootInstructions+"\n\n"+agent.Prompt), f.skills, agent),
+		modelTools, codeHosts, mcpServers,
+	)
+}
+
 func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata toolCallMetadata, parentOutput chan<- ChatResponse) (string, error) {
 	if f.recursionRemaining != nil && *f.recursionRemaining == 0 {
 		return "", errors.New("maxRecursion limit reached: task delegation is unavailable")
@@ -205,21 +217,11 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	}
 
 	modelTools, codeHosts := childFactory.assembleTools(&agent)
-
-	var mcpServers []string
-	if childFactory.mcpRegistry != nil {
-		mcpServers = visibleMCPServers(agent.Permission, childFactory.mcpRegistry.Names())
-	}
-
-	systemPrompt := withCodeModeSystemPrompt(
-		composeSystemPromptWithSkills(strings.TrimSpace(f.rootInstructions+"\n\n"+agent.Prompt), f.skills, &agent),
-		modelTools, codeHosts, mcpServers,
-	)
 	child := &looper{
 		agent:                  agent,
 		ProviderOrigin:         origin,
 		Client:                 newResponsesAPI(client),
-		SystemPrompt:           systemPrompt,
+		SystemPrompt:           childFactory.childSystemPrompt(&agent, modelTools, codeHosts),
 		Model:                  origin.Model,
 		DisplayModel:           origin.displayModel(),
 		ReasoningEffort:        shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
@@ -360,7 +362,7 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 		agent:                  agent,
 		ProviderOrigin:         origin,
 		Client:                 newResponsesAPI(client),
-		SystemPrompt:           composeSystemPromptWithSkills(agent.Prompt, f.skills, &agent),
+		SystemPrompt:           childFactory.childSystemPrompt(&agent, modelTools, codeHosts),
 		Model:                  origin.Model,
 		DisplayModel:           origin.displayModel(),
 		ReasoningEffort:        shared.ReasoningEffort(cmp.Or(agent.ReasoningEffort, string(f.reasoningEffort))),
