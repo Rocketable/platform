@@ -35,6 +35,12 @@ sends stay on the agent query and do not wait for sidebar refresh.
 New Web threads select `main` by default; existing threads retain their agent.
 The desktop sidebar can be hidden and reopened with the header toggle, retaining
 its search and filters during navigation.
+Cron runs are grouped beneath their definition, with links to their chat.
+The grid shows the past and next 12 hours: click a recorded run marker or the
+bar (for the latest run) to preview that run, then choose **Open chat**.
+Previews include only history from the selected run. Removed definitions keep
+their recorded runs visible. **Run** shows a spinner and **Running…** until
+execution finishes, then opens the resulting chat.
 Each turn has an inline **Thinking** disclosure, expanded by default, containing
 reasoning summaries and tool traces. Replies and successful verbatim-delivery
 reports appear as normal messages outside that disclosure. The chat has no

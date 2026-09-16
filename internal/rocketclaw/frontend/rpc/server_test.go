@@ -913,11 +913,13 @@ func TestSessionEntries(t *testing.T) {
 	// Seed the exact persisted relation written by Sync, without changing Sync.
 	sources := []string{"cron:cron/report:daily.md:20260905T010000.000000001Z:first", "one-off-cron:cron/report_daily.md:20260905T020000.000000002Z:second"}
 	for _, source := range sources {
-		sourceEntry, err := sessions.AppendEntryID(ctx, source, &entry)
+		runEntry := entry
+		runEntry.ReplayInput = []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"` + source + `"}`)}
+		sourceEntry, err := sessions.AppendEntryID(ctx, source, &runEntry)
 		require.NoError(t, err)
 
 		for range 2 {
-			destinationEntry, err := sessions.AppendEntryID(ctx, id, &entry)
+			destinationEntry, err := sessions.AppendEntryID(ctx, id, &runEntry)
 			require.NoError(t, err)
 			_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::text WHERE id = $2`, sourceEntry, destinationEntry)
 			require.NoError(t, err)
@@ -936,6 +938,28 @@ func TestSessionEntries(t *testing.T) {
 	require.Len(t, observed, 4)
 	require.Equal(t, sources[0], observed[0].SourceConversationID)
 	require.Equal(t, sources[1], observed[3].SourceConversationID)
+	preview, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, SourceConversationId: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, preview.Messages, 2)
+
+	for _, message := range preview.Messages {
+		require.Equal(t, sources[0], message.Text)
+	}
+
+	preview, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, SourceConversationId: "absent"})
+	require.NoError(t, err)
+	require.Empty(t, preview.Messages)
+	// A preview must not decode replay content belonging to another run.
+	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', '[{"type":"function_call","call_id":"broken","name":"rocketclaw_i_want_human_partner_to_see_this","arguments":"invalid"},{"type":"function_call_output","call_id":"broken","output":"queued for verbatim delivery"}]')::text WHERE id = $1`, observed[3].ID)
+	require.NoError(t, err)
+	preview, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, SourceConversationId: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, preview.Messages, 2)
+
+	_, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, SourceConversationId: sources[1]})
+	require.ErrorContains(t, err, "decode web delivery report")
+	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', (SELECT entry_json::jsonb->'replay_input' FROM session_entries WHERE id = $1))::text WHERE id = $2`, observed[2].ID, observed[3].ID)
+	require.NoError(t, err)
 
 	jobs, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.NoError(t, err)

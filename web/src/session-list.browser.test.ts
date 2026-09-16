@@ -234,6 +234,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
   let identityHold = Promise.withResolvers<void>();
   let promptHold = Promise.withResolvers<string>();
   const createHold = Promise.withResolvers<string>();
+  const cronHold = Promise.withResolvers<string>();
+  const cronHistory: string[] = [];
   const wireTail = Promise.withResolvers<void>();
   const ownerTail = Promise.withResolvers<void>();
   let blocked = Promise.withResolvers<void>();
@@ -281,9 +283,20 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       ctrl.promptStarted.resolve();
       return ctrl.holdPrompt ? Effect.promise(() => promptHold.promise) : Effect.succeed("");
     },
-    listCronJobs: () => Effect.succeed([]),
-    runCronJob: () => Effect.succeed(""),
-    history: () => Effect.succeed(ctrl.history),
+    listCronJobs: () => Effect.succeed([
+      { stem: "daily", status: "", lastRun: "", nextRun: "", schedule: "24h", body: "Daily prompt", upcoming: [], origin: "cron/daily.md" },
+      { stem: "unused", status: "", lastRun: "", nextRun: "", upcoming: [] },
+      { stem: "daily", status: "ran", lastRun: new Date(Date.now() - 3_600_000).toISOString(), nextRun: "cron-chat", origin: "cron-source" },
+      { stem: "retired", status: "ran", lastRun: "2026-09-01T00:00:00Z", nextRun: "old-chat", origin: "old-source" },
+    ]),
+    runCronJob: () => Effect.promise(() => cronHold.promise),
+    history: (_principal, _id, source) => {
+      if (source) {
+        cronHistory.push(source);
+        return Effect.succeed([{ role: "assistant", text: "Daily run report", complete: true, snapshot: false, turnId: "" }]);
+      }
+      return Effect.succeed(ctrl.history);
+    },
     listAgents: (_principal, conversationId) => Effect.succeed({ agents: [{ name: "other", model: "gpt" }, { name: "main", model: "gpt" }], currentAgent: conversationId ? "main" : "" }),
     listSkills: () => Effect.succeed([]),
     listConfig: () => Effect.succeed({}),
@@ -753,6 +766,30 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
         await storagePage.close();
       }
     }
+    const cronPage = await context.newPage();
+    for (const width of [1280, 390]) {
+      await cronPage.setViewportSize({ width, height: 844 });
+      await cronPage.goto(`${origin}/cron`);
+      const daily = cronPage.getByRole("region", { name: "daily", exact: true });
+      await daily.getByRole("link").waitFor();
+      expect(await daily.getByRole("link").getAttribute("href")).toBe("/s/Y3Jvbi1jaGF0");
+      expect(await cronPage.getByRole("region", { name: "retired", exact: true }).getByRole("link").getAttribute("href")).toBe("/s/b2xkLWNoYXQ");
+      expect(await cronPage.getByRole("button", { name: "Preview latest run of unused", exact: true }).isDisabled()).toBe(true);
+      await cronPage.getByRole("button", { name: "Preview latest run of daily", exact: true }).click({ position: { x: 5, y: 5 } });
+      const preview = cronPage.getByRole("region", { name: "Run preview", exact: true });
+      await preview.getByText("Daily run report", { exact: true }).waitFor();
+      expect(cronHistory.at(-1)).toBe("cron-source");
+      await preview.getByRole("link").click();
+      await cronPage.waitForURL("**/s/Y3Jvbi1jaGF0");
+    }
+    await cronPage.goto(`${origin}/cron`);
+    await cronPage.getByRole("region", { name: "daily", exact: true }).getByRole("button", { name: "Run", exact: true }).click();
+    await cronPage.getByRole("button", { name: "Running…", exact: true }).waitFor();
+    expect(await cronPage.getByRole("button", { name: "Running…", exact: true }).isDisabled()).toBe(true);
+    cronHold.resolve("new-cron-chat");
+    await cronPage.waitForURL("**/s/bmV3LWNyb24tY2hhdA");
+    await cronPage.close();
+
     ctrl.history = Array.from({ length: 20 }, (_, i) => [
       { role: "user", text: `Prompt ${i + 1}` },
       { role: "thinking", text: `Trace ${i + 1}\n` + "Working through the task.\n".repeat(40) },

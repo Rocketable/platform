@@ -18,6 +18,7 @@ message Session {
 
 message HistoryRequest {
   string id = 1;
+  string source_conversation_id = 2;
 }
 
 message HistoryResponse {

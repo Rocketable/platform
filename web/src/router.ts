@@ -105,11 +105,11 @@ export function appRouter(layer: AppLayer) {
         }),
       ),
     ),
-    history: identified.input(z.object({ id: z.string() })).query(({ ctx, input }) =>
+    history: identified.input(z.object({ id: z.string(), sourceConversationId: z.string().optional() })).query(({ ctx, input }) =>
       run(
         Effect.gen(function* () {
           const rc = yield* Rocketclaw;
-          return yield* rc.history(ctx.principal, input.id);
+          return yield* rc.history(ctx.principal, input.id, input.sourceConversationId);
         }),
       ),
     ),

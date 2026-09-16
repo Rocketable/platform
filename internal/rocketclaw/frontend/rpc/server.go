@@ -210,6 +210,9 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 
 	for i := range entries {
 		entry := &entries[i]
+		if request.GetSourceConversationId() != "" && entry.SourceConversationID != request.GetSourceConversationId() {
+			continue
+		}
 
 		items, err := rocketcode.ReplayInputToParams(entry.Entry.ReplayInput)
 		if err != nil {

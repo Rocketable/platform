@@ -3,7 +3,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchStreamLink, httpLink, splitLink } from "@trpc/client";
 import { createTRPCReact } from "@trpc/react-query";
-import { Bot, Calendar, Check, GripVertical, Menu, Search, Send, Settings, Sparkles, Square, SquarePen, Undo2, X } from "lucide-react";
+import { Bot, Calendar, Check, GripVertical, LoaderCircle, Menu, Search, Send, Settings, Sparkles, Square, SquarePen, Undo2, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
@@ -13,7 +13,7 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import type { AppRouter } from "@/router";
-import type { Session, TranscriptEvent } from "@/grpc";
+import type { CronJob, Session, TranscriptEvent } from "@/grpc";
 import { runPreload } from "@/preload";
 import { decodeSessionId, encodeSessionId } from "@/session-id";
 import {
@@ -1553,16 +1553,6 @@ function cronWhen(value: string) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" });
 }
 
-function cronDay(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "Unknown" : date.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
-}
-
-function cronTime(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString("en-US", { timeStyle: "short", timeZone: "UTC" });
-}
-
 function cronAxisStart(ms: number) {
   const d = new Date(ms);
   d.setSeconds(0, 0);
@@ -1583,32 +1573,31 @@ function CronPage() {
   const run = trpc.runCron.useMutation();
   const [open, setOpen] = useState<string | null>(null);
   const [runQuery, setRunQuery] = useState("");
+  const [preview, setPreview] = useState<CronJob | null>(null);
+  const history = trpc.history.useQuery(
+    { id: preview?.nextRun ?? "", sourceConversationId: preview?.origin },
+    { enabled: preview !== null },
+  );
+  const previewLines = useMemo(() => (history.data ?? []).reduce(nextLines, []), [history.data]);
   const rows = jobs.data ?? [];
   const defs = rows.filter((job) => job.status !== "ran");
   const runs = rows.filter((job) => job.status === "ran");
-  const start = cronAxisStart(Date.now());
+  const start = cronAxisStart(Date.now()) - 12 * 3_600_000;
   const runNeedle = runQuery.trim().toLowerCase();
   const matchedRuns =
     runNeedle === ""
       ? runs
       : runs.filter((job) => `${job.stem} ${job.lastRun} ${cronWhen(job.lastRun)}`.toLowerCase().includes(runNeedle));
-  const runDays: { day: string; items: typeof runs }[] = [];
-  for (const job of matchedRuns) {
-    const day = cronDay(job.lastRun);
-    const existing = runDays.find((group) => group.day === day);
-    if (existing) {
-      existing.items.push(job);
-      continue;
-    }
-    runDays.push({ day, items: [job] });
-  }
+  const stems = [...new Set([...defs.map((job) => job.stem), ...runs.map((job) => job.stem)])];
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 overflow-y-auto p-4">
       <h1 className="text-lg font-semibold">Cron</h1>
       {jobs.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
       {jobs.error ? <p className="text-sm text-destructive">{jobs.error.message}</p> : null}
       {run.error ? <p className="text-sm text-destructive">{run.error.message}</p> : null}
+      {run.isPending ? <p role="status" className="text-sm text-muted-foreground">Running {run.variables.stem}… Its chat will open when the run finishes.</p> : null}
       <section className="flex flex-col gap-2">
+        <p className="text-xs text-muted-foreground">Past 12 hours and next 12 hours · click a run or a bar to preview</p>
         <div className="flex items-end gap-2 text-[10px] tabular-nums text-muted-foreground">
           <span className="w-28 shrink-0" />
           <span className="relative h-4 min-w-0 flex-1">
@@ -1619,25 +1608,54 @@ function CronPage() {
             ))}
           </span>
         </div>
-        {defs.map((job) => (
+        {defs.map((job) => {
+          const jobRuns = runs.filter((item) => item.stem === job.stem);
+          return (
           <div key={job.stem} className="flex items-center gap-2">
             <span className="w-28 shrink-0 truncate text-xs">{job.stem}</span>
             <div className="relative h-4 min-w-0 flex-1 rounded-sm bg-muted">
+              <button type="button" className="absolute inset-0 rounded-sm focus-visible:outline-2" aria-label={`Preview latest run of ${job.stem}`} disabled={jobRuns.length === 0} onClick={() => setPreview(jobRuns[0] ?? null)} />
               {(job.upcoming ?? []).map((at) => {
                 const pct = ((Date.parse(at) - start) / 86_400_000) * 100;
                 if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
                   return null;
                 }
-                return <span key={at} className="absolute top-0.5 h-3 w-1 rounded-sm bg-primary" style={{ left: `${pct}%` }} />;
+                return <span key={at} className="pointer-events-none absolute top-0.5 h-3 w-1 rounded-sm bg-primary" style={{ left: `${pct}%` }} />;
+              })}
+              {jobRuns.map((item) => {
+                const pct = ((Date.parse(item.lastRun) - start) / 86_400_000) * 100;
+                if (!Number.isFinite(pct) || pct < 0 || pct > 100) return null;
+                return <button key={`${item.origin}:${item.nextRun}`} type="button" aria-label={`Preview ${item.stem} at ${cronWhen(item.lastRun)} UTC`} className="absolute -top-2 h-8 w-3 -translate-x-1/2 rounded-sm focus-visible:outline-2" style={{ left: `${pct}%` }} onClick={() => setPreview(item)}><span className="block h-3 rounded-sm bg-foreground" /></button>;
               })}
             </div>
           </div>
-        ))}
+        );})}
       </section>
+      {preview ? (
+        <section aria-label="Run preview" className="rounded-md border p-3">
+          <div className="flex items-center justify-between gap-2">
+            <Link href={sessionPath(preview.nextRun)} className="text-sm font-medium underline">{preview.stem} · {cronWhen(preview.lastRun)} UTC · Open chat →</Link>
+            <Button variant="ghost" size="icon" aria-label="Close preview" onClick={() => setPreview(null)}><X className="h-4 w-4" /></Button>
+          </div>
+          {history.isLoading ? <p role="status" className="text-sm text-muted-foreground">Loading run…</p> : null}
+          {history.error ? <p role="alert" className="text-sm text-destructive">{history.error.message}</p> : null}
+          <div className="mt-2 max-h-64 overflow-y-auto">
+            {previewLines.map((line) => <TranscriptLine key={line.id} line={line} />)}
+            {history.data?.length === 0 ? <p className="text-sm text-muted-foreground">No recorded messages for this run.</p> : null}
+          </div>
+        </section>
+      ) : null}
       <section className="flex flex-col gap-1">
-        <h2 className="text-sm font-medium">Definitions</h2>
-        {defs.map((job) => (
-          <div key={job.stem} className="border-b py-2">
+        <div className="flex items-center gap-2">
+          <h2 className="text-sm font-medium">Definitions and runs</h2>
+          <input aria-label="Search runs" value={runQuery} onChange={(event) => setRunQuery(event.target.value)} placeholder="Search runs" className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-sm" />
+        </div>
+        {stems.map((stem) => {
+          const job = defs.find((item) => item.stem === stem);
+          const children = matchedRuns.filter((item) => item.stem === stem);
+          return (
+          <section key={stem} aria-label={stem} className="border-b py-2">
+            {job ? <>
             <div className="flex items-center gap-2">
               <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setOpen(open === job.stem ? null : job.stem)}>
                 <span className="block truncate text-sm font-medium">{job.stem}</span>
@@ -1662,44 +1680,23 @@ function CronPage() {
                   )
                 }
               >
-                {run.isPending && run.variables?.stem === job.stem ? "Starting…" : "Run"}
+                {run.isPending && run.variables?.stem === job.stem ? <><LoaderCircle aria-hidden="true" className="h-4 w-4 animate-spin motion-reduce:animate-none" />Running…</> : "Run"}
               </Button>
             </div>
             {open === job.stem ? <pre className="mt-2 whitespace-pre-wrap text-xs text-muted-foreground">{job.body || "No body."}</pre> : null}
-          </div>
-        ))}
-      </section>
-      <section className="flex flex-col gap-3">
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-medium">Runs</h2>
-          <label className="sr-only" htmlFor="cron-run-search">
-            Search runs
-          </label>
-          <input
-            id="cron-run-search"
-            value={runQuery}
-            onChange={(event) => setRunQuery(event.target.value)}
-            placeholder="Search runs"
-            className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-sm outline-none"
-          />
-        </div>
-        {runs.length === 0 && !jobs.isLoading && !jobs.error ? <p className="text-sm text-muted-foreground">No runs yet.</p> : null}
-        {runs.length > 0 && matchedRuns.length === 0 ? <p className="text-sm text-muted-foreground">No matching runs.</p> : null}
-        {runDays.map((group) => (
-          <div key={group.day} className="flex flex-col gap-1">
-            <h3 className="px-2 text-xs font-medium text-muted-foreground">{group.day}</h3>
-            <ul className="flex flex-col gap-1">
-              {group.items.map((job) => (
-                <li key={`${job.origin}:${job.nextRun}`}>
-                  <Link href={sessionPath(job.nextRun)} className="flex flex-col rounded-md px-2 py-2 text-left hover:bg-accent">
-                    <span className="truncate text-sm font-medium">{job.stem}</span>
-                    <span className="text-xs text-muted-foreground">{cronTime(job.lastRun)}</span>
+            </> : <h3 className="text-sm font-medium">{stem} <span className="text-xs text-muted-foreground">Definition no longer available</span></h3>}
+            <ul className="mt-2 ml-3 flex flex-col gap-1 border-l pl-2">
+              {children.map((item) => (
+                <li key={`${item.origin}:${item.nextRun}`}>
+                  <Link href={sessionPath(item.nextRun)} className="block rounded-md px-2 py-2 text-sm hover:bg-accent">
+                    {cronWhen(item.lastRun)} UTC · Open chat →
                   </Link>
                 </li>
               ))}
             </ul>
-          </div>
-        ))}
+            {children.length === 0 ? <p className="mt-2 text-xs text-muted-foreground">{runNeedle ? "No matching runs." : "No runs yet."}</p> : null}
+          </section>
+        );})}
       </section>
     </div>
   );

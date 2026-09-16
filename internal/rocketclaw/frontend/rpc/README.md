@@ -70,7 +70,11 @@ current definitions. Runs are deduplicated by source X within each recorded huma
 and link only to Y. Rows sort newest-first by the source run timestamp, with Y and X
 as tie-breakers. A synced row proves a copy, not successful model execution or delivery.
 Missing source entries cannot supply history; no migration, backfill, or history
-rewrite is performed. The Runs section shows “No runs yet.” when no linked runs exist.
+rewrite is performed. Web groups runs beneath their definition, retaining groups
+whose definition is gone. `History.source_conversation_id` optionally restricts
+the authorized destination's history to one source run before replay decoding;
+it does not grant access to the private source conversation. The grid uses this
+filter for quick previews, with a link to the destination chat.
 
 ## Start
 

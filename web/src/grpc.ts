@@ -20,7 +20,7 @@ export type RocketclawApi = {
   readonly prompt: (principal: string, id: string, text: string, delivery?: PromptDelivery) => Effect.Effect<string, GrpcError>;
   readonly listCronJobs: (principal: string) => Effect.Effect<CronJob[], GrpcError>;
   readonly runCronJob: (principal: string, stem: string) => Effect.Effect<string, GrpcError>;
-  readonly history: (principal: string, id: string) => Effect.Effect<TranscriptEvent[], GrpcError>;
+  readonly history: (principal: string, id: string, sourceConversationId?: string) => Effect.Effect<TranscriptEvent[], GrpcError>;
   readonly listAgents: (principal: string, conversationId?: string) => Effect.Effect<AgentChoices, GrpcError>;
   readonly listSkills: (principal: string, agent?: string) => Effect.Effect<Skill[], GrpcError>;
   readonly listConfig: (principal: string) => Effect.Effect<ConfigView, GrpcError>;
@@ -152,8 +152,8 @@ export const makeRocketclaw = (addr: string): RocketclawApi => {
       unary<{ jobs?: CronJob[] }>((cb) => client.ListCronJobs({}, metadata(principal), cb)).pipe(Effect.map((res) => res.jobs ?? [])),
     runCronJob: (principal, stem) =>
       unary<{ id?: string }>((cb) => client.RunCronJob({ stem }, metadata(principal), cb)).pipe(Effect.map((res) => res.id ?? "")),
-    history: (principal, id) =>
-      unary<{ messages?: TranscriptEvent[] }>((cb) => client.History({ id }, metadata(principal), cb)).pipe(
+    history: (principal, id, sourceConversationId) =>
+      unary<{ messages?: TranscriptEvent[] }>((cb) => client.History({ id, sourceConversationId }, metadata(principal), cb)).pipe(
         Effect.map((res) => res.messages ?? []),
       ),
     listAgents: (principal, conversationId) =>

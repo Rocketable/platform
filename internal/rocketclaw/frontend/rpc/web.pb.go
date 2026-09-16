@@ -196,10 +196,11 @@ func (x *Session) GetAllowedAgents() []string {
 }
 
 type HistoryRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	Id                   string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	SourceConversationId string                 `protobuf:"bytes,2,opt,name=source_conversation_id,json=sourceConversationId,proto3" json:"source_conversation_id,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *HistoryRequest) Reset() {
@@ -235,6 +236,13 @@ func (*HistoryRequest) Descriptor() ([]byte, []int) {
 func (x *HistoryRequest) GetId() string {
 	if x != nil {
 		return x.Id
+	}
+	return ""
+}
+
+func (x *HistoryRequest) GetSourceConversationId() string {
+	if x != nil {
+		return x.SourceConversationId
 	}
 	return ""
 }
@@ -2557,9 +2565,10 @@ const file_web_proto_rawDesc = "" +
 	"updated_at\x18\x04 \x01(\tR\tupdatedAt\x12\x14\n" +
 	"\x05agent\x18\x05 \x01(\tR\x05agent\x12\x18\n" +
 	"\asettled\x18\x06 \x01(\bR\asettled\x12%\n" +
-	"\x0eallowed_agents\x18\a \x03(\tR\rallowedAgents\" \n" +
+	"\x0eallowed_agents\x18\a \x03(\tR\rallowedAgents\"V\n" +
 	"\x0eHistoryRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"C\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x124\n" +
+	"\x16source_conversation_id\x18\x02 \x01(\tR\x14sourceConversationId\"C\n" +
 	"\x0fHistoryResponse\x120\n" +
 	"\bmessages\x18\x01 \x03(\v2\x14.rpc.TranscriptEventR\bmessages\"\xb0\x01\n" +
 	"\x14ListSessionsResponse\x12(\n" +
