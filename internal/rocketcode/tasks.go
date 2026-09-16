@@ -212,7 +212,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	}
 
 	systemPrompt := withCodeModeSystemPrompt(
-		composeSystemPromptWithSkills(strings.TrimSpace(f.systemPrompt+"\n\n"+agent.Prompt), f.skills, &agent),
+		composeSystemPromptWithSkills(strings.TrimSpace(f.rootInstructions+"\n\n"+agent.Prompt), f.skills, &agent),
 		modelTools, codeHosts, mcpServers,
 	)
 	child := &looper{

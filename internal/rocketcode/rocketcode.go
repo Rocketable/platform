@@ -365,7 +365,7 @@ func NewWithModelResolver(
 
 	factory := &toolFactory{
 		resolver:                   resolver,
-		systemPrompt:               systemPrompt,
+		rootInstructions:           strings.TrimSpace(rootInstructions),
 		autoApproverModel:          cmp.Or(config.AutoApproverModel, config.Model),
 		reasoningEffort:            reasoningEffort,
 		compactThreshold:           config.CompactThreshold,

@@ -166,7 +166,7 @@ func TestTaskTool(t *testing.T) {
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
 			"review": testAgentWithPrompt("review", "review !`printf carefully`"),
 		}})
-		factory.systemPrompt = "base prompt"
+		factory.rootInstructions = "base prompt"
 
 		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
 
@@ -191,7 +191,7 @@ func TestTaskTool(t *testing.T) {
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
 			"review": testAgentWithPrompt("review", "review !`cat MEMORY.md`"),
 		}})
-		factory.systemPrompt = "base prompt"
+		factory.rootInstructions = "base prompt"
 		factory.expandPromptShellCommands = testPromptExpansion(false, true, false)
 		factory.promptExpansion = env
 
@@ -208,7 +208,7 @@ func TestTaskTool(t *testing.T) {
 		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
 			"review": testAgentWithPrompt("review", "review !`printf carefully`"),
 		}})
-		factory.systemPrompt = "base prompt"
+		factory.rootInstructions = "base prompt"
 		factory.expandPromptShellCommands = testPromptExpansion(true, false, false)
 
 		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
