@@ -537,6 +537,7 @@ function SidebarOwner({ children }: { children: ReactNode }) {
 
 export function App() {
   const route = useRoute();
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [conversation, setConversation] = useState({ id: route.id, created: "", key: 0 });
   if (conversation.id !== route.id) {
     // Creation assigns this conversation its ID; other navigation starts a fresh subtree.
@@ -549,14 +550,17 @@ export function App() {
         <ProtocolGuard />
         <SidebarOwner>
         <div className="flex h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background">
-          <aside className="hidden w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:flex lg:w-72">
+          <aside id="session-sidebar" className={cn("hidden w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground lg:w-72", sidebarOpen && "md:flex")}>
             <SessionList />
           </aside>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <header className="flex h-12 items-center gap-2 border-b px-3 md:hidden">
+            <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
+              <Button variant="ghost" size="icon" className="hidden md:inline-flex" aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"} aria-expanded={sidebarOpen} aria-controls="session-sidebar" onClick={() => setSidebarOpen((open) => !open)}>
+                <Menu className="h-4 w-4" />
+              </Button>
               <Sheet>
                 <SheetTrigger asChild>
-                  <Button variant="ghost" size="icon" aria-label="Sessions">
+                  <Button variant="ghost" size="icon" className="md:hidden" aria-label="Sessions">
                     <Menu className="h-4 w-4" />
                   </Button>
                 </SheetTrigger>
@@ -682,7 +686,6 @@ function matchesSession(session: Session, needle: string, agentFilter: string, r
 function SidebarFreshness({ sidebar, emptySearch }: { sidebar: SidebarView; emptySearch: boolean }) {
   const authoritative = searchIsAuthoritative(sidebar);
   return <>
-    {sidebar.refreshing ? <p role="status" className="px-3 pb-1 text-xs text-muted-foreground">Refreshing</p> : null}
     {!sidebar.refreshing && sidebar.rows.length > 0 && !authoritative ? <p role="status" className="px-3 pb-1 text-xs text-muted-foreground">Stale</p> : null}
     {emptySearch ? <p role="status" className="px-3 pb-1 text-xs text-muted-foreground">{authoritative ? "No matches" : "loading..."}</p> : null}
   </>;
@@ -1279,7 +1282,7 @@ function SessionComposer({
   const [dollarOff, setDollarOff] = useState(false);
   const [dollarPick, setDollarPick] = useState("");
   const [sendError, setSendError] = useState("");
-  const currentAgent = agents.data?.currentAgent ?? "";
+  const currentAgent = id === "" ? "main" : agents.data?.currentAgent ?? "";
   const catalog = agents.data?.agents ?? [];
   const selected = catalog.some((item) => item.name === agent) ? agent : currentAgent || catalog[0]?.name || "";
   const skills = trpc.skills.useQuery({ agent: selected }, { enabled: selected !== "", placeholderData: undefined });

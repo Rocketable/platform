@@ -284,7 +284,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     listCronJobs: () => Effect.succeed([]),
     runCronJob: () => Effect.succeed(""),
     history: () => Effect.succeed(ctrl.history),
-    listAgents: () => Effect.succeed({ agents: [{ name: "main", model: "gpt" }, { name: "other", model: "gpt" }], currentAgent: "main" }),
+    listAgents: (_principal, conversationId) => Effect.succeed({ agents: [{ name: "other", model: "gpt" }, { name: "main", model: "gpt" }], currentAgent: conversationId ? "main" : "" }),
     listSkills: () => Effect.succeed([]),
     listConfig: () => Effect.succeed({}),
     settleSession: () => Effect.void,
@@ -400,9 +400,20 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect(await page.evaluate(() => (window as unknown as { __snapshotPuts: number }).__snapshotPuts)).toBe(putsBeforeLive + 1);
 
     blocked = Promise.withResolvers();
-    await page.getByText("Refreshing", { exact: true }).waitFor({ state: "visible", timeout: 15_000 });
+    await page.waitForRequest("**/trpc/sessions*");
+    await hidden(page, "Refreshing");
     await shown(page, "saved preview");
     const heldCalls = ctrl.listCalls;
+
+    const desktopSidebar = page.locator("#session-sidebar");
+    await desktopSidebar.getByPlaceholder("Search or agent: or room:").fill("saved");
+    await page.getByRole("button", { name: "Hide sidebar", exact: true }).click();
+    expect(await desktopSidebar.isVisible()).toBe(false);
+    expect(await page.getByRole("button", { name: "Show sidebar", exact: true }).getAttribute("aria-expanded")).toBe("false");
+    await page.getByRole("button", { name: "Show sidebar", exact: true }).press("Enter");
+    expect(await desktopSidebar.isVisible()).toBe(true);
+    expect(await desktopSidebar.getByPlaceholder("Search or agent: or room:").inputValue()).toBe("saved");
+    await desktopSidebar.getByPlaceholder("Search or agent: or room:").fill("");
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.getByRole("button", { name: "Sessions" }).click();
@@ -646,7 +657,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     const protocolReload = page.waitForEvent("load");
     ctrl.protocol = "test-protocol-2";
     await protocolReload;
-    await shown(page, "Refreshing");
+    await hidden(page, "Refreshing");
     await hidden(page, "bob preview");
     ctrl.yieldBatches = complete([row("gone", "new protocol preview")], "bob");
     blocked.resolve();

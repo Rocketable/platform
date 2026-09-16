@@ -27,10 +27,14 @@ those paths. Keep temporary test artifacts under the repository's `.tmp/`.
 The sidebar restores the last complete list only after live identity confirms the
 Go-mapped username, keys native IndexedDB by owner and protocol, and keeps that
 snapshot until a refresh is successfully exhausted with complete summaries.
-Saved rows show as refreshing or stale; missing summaries display `loading...`.
+Routine background refreshes are silent; stale rows and missing summaries still
+show their status (`Stale` or `loading...`).
 Failed, partial or cancelled streams do not replace the snapshot. History
 deletion clears preview text without removing the row. Composer choices and
 sends stay on the agent query and do not wait for sidebar refresh.
+New Web threads select `main` by default; existing threads retain their agent.
+The desktop sidebar can be hidden and reopened with the header toggle, retaining
+its search and filters during navigation.
 Each turn has an inline **Thinking** disclosure, expanded by default, containing
 reasoning summaries and tool traces. Replies and successful verbatim-delivery
 reports appear as normal messages outside that disclosure. The chat has no
