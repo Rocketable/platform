@@ -16,11 +16,13 @@ cloc:
 	cd internal/rocketclaw; $(MAKE) cloc
 	cd internal/rocketcode; $(MAKE) cloc
 	cd internal/funneld; $(MAKE) cloc
+	cd internal/rocketclaw/web; $(MAKE) cloc
 
 check-cloc-budget:
 	cd internal/rocketclaw; $(MAKE) check-cloc-budget
 	cd internal/rocketcode; $(MAKE) check-cloc-budget
 	cd internal/funneld; $(MAKE) check-cloc-budget
+	cd internal/rocketclaw/web; $(MAKE) check-cloc-budget
 
 deploy:
 	cd internal/rocketclaw; $(MAKE) deploy

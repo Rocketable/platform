@@ -561,11 +561,11 @@ func (m *threadBridgeManager) promoteQueueItem(ctx context.Context, conversation
 		content.Text = item.Message
 		inbound = protocol.NewInboundMessageFromContent(item.Source, cmp.Or(item.Kind, protocol.InboundKindEnqueue), item.Principal, &content, true)
 		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = item.Principal
+		inbound.Metadata["web_message_id"] = id
 
 		inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: item.SlackChannel, MessageTS: item.SlackTS, ThreadTS: cmp.Or(threadTS, item.SlackTS)}
 		if item.SlackReply != nil {
-			reply := *item.SlackReply
-			inbound.SlackReply = &reply
+			inbound.SlackReply = new(*item.SlackReply)
 		}
 	}
 
@@ -617,32 +617,6 @@ func (m *threadBridgeManager) deleteQueueItem(ctx context.Context, conversationI
 	return true, m.PickLaterWork(ctx, conversationID)
 }
 
-func (m *threadBridgeManager) reorderQueueItems(conversationID string, ids []string) error {
-	items, err := m.store.ThreadQueueForConversation(conversationID)
-	if err != nil {
-		return err
-	}
-
-	byID := make(map[string]*protocol.ThreadQueueItem, len(items))
-	for i := range items {
-		byID[items[i].ID] = &items[i]
-	}
-
-	for i, id := range ids {
-		item := byID[id]
-		if item == nil {
-			continue
-		}
-
-		item.Position = i
-		if err := m.store.PutThreadQueueItem(id, item); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 func (m *threadBridgeManager) stashQueueItem(ctx context.Context, conversationID string, item *protocol.ThreadQueueItem) error {
 	item.ConversationID = conversationID
 
@@ -651,15 +625,9 @@ func (m *threadBridgeManager) stashQueueItem(ctx context.Context, conversationID
 		return fmt.Errorf("list thread queue: %w", err)
 	}
 
-	empty := 0
-
-	for i := range existing {
-		if strings.TrimSpace(existing[i].ParkAfter) == "" {
-			empty++
-		}
-	}
-
-	item.Position = empty
+	item.Position = len(slices.DeleteFunc(existing, func(queued protocol.ThreadQueueItem) bool {
+		return strings.TrimSpace(queued.ParkAfter) != ""
+	}))
 	item.ParkAfter = ""
 
 	if err := m.store.PutThreadQueueItem(item.ID, item); err != nil {

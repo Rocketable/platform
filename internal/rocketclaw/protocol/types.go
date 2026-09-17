@@ -79,8 +79,11 @@ type InboundContent struct {
 
 // OutboundAttachment carries a human-visible file attachment to output sinks.
 type OutboundAttachment struct {
-	Name, MIMEType string
-	Data           []byte
+	ID                 string
+	Name, MIMEType     string
+	Data               []byte
+	OriginalUnverified bool
+	Size               int64 // Stored byte length for metadata-only reads.
 }
 
 // CronjobMessage identifies a human-visible cronjob result.
@@ -192,6 +195,7 @@ type StartNewThreadRootResult struct {
 
 // OutboundMessage is a text message headed to enabled connectors.
 type OutboundMessage struct {
+	ConsumedID, ConsumedText           string
 	Text, ProgressText                 string
 	ConversationID, TurnID             string
 	ExternalConversationID             string

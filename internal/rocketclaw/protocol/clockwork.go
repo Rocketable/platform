@@ -23,6 +23,7 @@ func clonePtr[T any](p *T) *T {
 // CloneOutboundMessage returns a deep copy suitable for an independent connector delivery.
 func CloneOutboundMessage(message *OutboundMessage) *OutboundMessage {
 	return &OutboundMessage{
+		ConsumedID: message.ConsumedID, ConsumedText: message.ConsumedText,
 		Text: message.Text, ProgressText: message.ProgressText,
 		ConversationID: message.ConversationID, TurnID: message.TurnID,
 		ExternalConversationID: message.ExternalConversationID, Agent: message.Agent,

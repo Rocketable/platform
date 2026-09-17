@@ -17,8 +17,11 @@ import (
 
 	"cirello.io/pglock"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	harness "github.com/Rocketable/platform/internal/rocketcode"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 )
@@ -28,8 +31,6 @@ const (
 	runLockName                         = "rocketclaw-run"
 	runLockTable                        = "rocketclaw_locks"
 )
-
-var errRunLocked = errors.New("rocketclaw is already running against this database")
 
 // GoalStatusActive and related constants are persisted goal-loop statuses.
 const (
@@ -100,7 +101,8 @@ type sessionStore struct {
 
 // SessionService owns runtime PostgreSQL session and state access inside one rocketclaw process.
 type SessionService struct {
-	db *sql.DB
+	db          *sql.DB
+	attachments attachmentStorage
 
 	turnGatesMu sync.Mutex
 	turnGates   map[string]*sessionTurnGate
@@ -121,6 +123,7 @@ type ObservedSessionEntry struct {
 	Entry harness.SessionEntry
 	// SourceConversationID identifies the surviving source row of a synced entry.
 	SourceConversationID string
+	Synced               bool
 }
 
 // PruneStateStats reports how much stale persisted state was removed.
@@ -140,13 +143,29 @@ func newSessionStore(conversationID string, service *SessionService) sessionStor
 }
 
 // NewSessionServiceIn starts a runtime-owned PostgreSQL session service.
-func NewSessionServiceIn(databaseURL string, logger *slog.Logger) (*SessionService, error) {
-	db, err := openSessionDB(context.Background(), databaseURL, logger)
+func NewSessionServiceIn(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*SessionService, error) {
+	driver, location, err := cfg.AttachmentLocation()
+	if err != nil {
+		return nil, fmt.Errorf("configure attachment storage: %w", err)
+	}
+
+	var attachments attachmentStorage = filesystemAttachments{path: location}
+
+	if driver == config.S3Attachments {
+		aws, err := awsconfig.LoadDefaultConfig(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("configure attachment S3 storage: %w", err)
+		}
+
+		attachments = s3Attachments{client: s3.NewFromConfig(aws), bucket: location}
+	}
+
+	db, err := openSessionDB(ctx, cfg.DatabaseURL, logger)
 	if err != nil {
 		return nil, err
 	}
 
-	return &SessionService{db: db, turnGates: map[string]*sessionTurnGate{}, waiters: map[string]*protocol.InboundMessage{}}, nil
+	return &SessionService{db: db, attachments: attachments, turnGates: map[string]*sessionTurnGate{}, waiters: map[string]*protocol.InboundMessage{}}, nil
 }
 
 // UpsertThread records or updates a text-thread bridge entry.
@@ -159,7 +178,37 @@ func (s *SessionService) UpsertThread(conversationID string, thread ThreadState)
 	thread.Agent = strings.TrimSpace(thread.Agent)
 	thread.CreatedBy = ThreadCreator(strings.TrimSpace(string(thread.CreatedBy)))
 
-	return stateDAO{db: s.db}.upsertThread(context.Background(), conversationID, thread)
+	ctx := context.Background()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin thread upsert: %w", err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
+		return err
+	}
+
+	summary, err := loadSessionSummary(ctx, tx, conversationID)
+	if err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by, settled) VALUES ($1, $2, $3, $4) ON CONFLICT(conversation_id) DO UPDATE SET agent = excluded.agent, created_by = CASE WHEN excluded.created_by = '' THEN managed_conversations.created_by ELSE excluded.created_by END`, conversationID, thread.Agent, string(thread.CreatedBy), thread.Settled); err != nil {
+		return fmt.Errorf("upsert managed conversation: %w", err)
+	}
+
+	if err := saveSessionSummary(ctx, tx, summary); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit thread upsert: %w", err)
+	}
+
+	return nil
 }
 
 // BeginGoal records a new active goal for a managed conversation.
@@ -178,18 +227,21 @@ func (s *SessionService) BeginGoal(conversationID, objective, checkScript string
 		return errors.New("goal objective is required")
 	}
 
-	if maxTurns < 0 {
-		maxTurns = 0
-	}
+	maxTurns = max(maxTurns, 0)
 
 	now := time.Now().UTC()
 
-	ok, err := stateDAO{db: s.db}.beginGoal(context.Background(), conversationID, &GoalState{Objective: objective, CheckScript: checkScript, MaxTurns: maxTurns, Status: GoalStatusActive, SlackRecipientTeamID: recipientTeamID, SlackRecipientUserID: recipientUserID, CreatedAt: now, UpdatedAt: now})
+	result, err := s.db.ExecContext(context.Background(), `INSERT INTO conversation_goals (conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT(conversation_id) DO UPDATE SET objective = excluded.objective, check_script = excluded.check_script, max_turns = excluded.max_turns, turns_used = excluded.turns_used, status = excluded.status, note = excluded.note, slack_recipient_team_id = excluded.slack_recipient_team_id, slack_recipient_user_id = excluded.slack_recipient_user_id, created_at_unix_ns = excluded.created_at_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns WHERE conversation_goals.status NOT IN ('', $12)`, conversationID, objective, checkScript, maxTurns, 0, GoalStatusActive, "", recipientTeamID, recipientUserID, timeUnixNano(now), timeUnixNano(now), GoalStatusActive)
 	if err != nil {
-		return err
+		return fmt.Errorf("begin goal: %w", err)
 	}
 
-	if !ok {
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("count goal start: %w", err)
+	}
+
+	if rows <= 0 {
 		return protocol.ErrGoalAlreadyActive
 	}
 
@@ -199,11 +251,6 @@ func (s *SessionService) BeginGoal(conversationID, objective, checkScript string
 // Goal returns the persisted goal state for a conversation.
 func (s *SessionService) Goal(conversationID string) (GoalState, bool, error) {
 	return stateDAO{db: s.db}.goal(context.Background(), conversationID)
-}
-
-// ActiveGoals returns persisted active goals keyed by conversation ID.
-func (s *SessionService) ActiveGoals() (map[string]GoalState, error) {
-	return stateDAO{db: s.db}.activeGoals(context.Background())
 }
 
 // AccountGoalTurn increments one active goal turn and applies budget exhaustion.
@@ -217,12 +264,16 @@ func (s *SessionService) AccountGoalTurn(conversationID string) (GoalState, bool
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	dao := stateDAO{db: tx}
-	if _, err := dao.accountGoalTurn(ctx, conversationID, time.Now().UTC()); err != nil {
-		return GoalState{}, false, err
+	result, err := tx.ExecContext(ctx, `UPDATE conversation_goals SET turns_used = turns_used + 1, status = CASE WHEN max_turns > 0 AND turns_used + 1 >= max_turns THEN $1 ELSE $2 END, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $5)`, GoalStatusBudgetExhausted, GoalStatusActive, timeUnixNano(time.Now().UTC()), conversationID, GoalStatusActive)
+	if err != nil {
+		return GoalState{}, false, fmt.Errorf("account goal turn: %w", err)
 	}
 
-	goal, ok, err := dao.goal(ctx, conversationID)
+	if _, err := result.RowsAffected(); err != nil {
+		return GoalState{}, false, fmt.Errorf("count goal turn accounting: %w", err)
+	}
+
+	goal, ok, err := (stateDAO{db: tx}).goal(ctx, conversationID)
 	if err != nil {
 		return GoalState{}, false, err
 	}
@@ -266,7 +317,17 @@ func (s *SessionService) UpsertExternalMCPSession(externalConversationID string,
 	session.ManagedConversationID = strings.TrimSpace(session.ManagedConversationID)
 	session.SlackChannel = strings.TrimSpace(session.SlackChannel)
 
-	return stateDAO{db: s.db}.upsertExternalMCPSession(context.Background(), externalConversationID, session)
+	var privateConversationID any
+	if session.PrivateConversationID != "" {
+		privateConversationID = session.PrivateConversationID
+	}
+
+	_, err := s.db.ExecContext(context.Background(), `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES ($1, $2, $3, $4, $5) ON CONFLICT(external_conversation_id) DO UPDATE SET private_conversation_id = excluded.private_conversation_id, managed_conversation_id = excluded.managed_conversation_id, agent = excluded.agent, slack_channel = excluded.slack_channel`, externalConversationID, privateConversationID, session.ManagedConversationID, session.Agent, session.SlackChannel)
+	if err != nil {
+		return fmt.Errorf("upsert external MCP session: %w", err)
+	}
+
+	return nil
 }
 
 // RegisterExternalMCPConversation atomically persists a managed conversation and its public binding.
@@ -297,12 +358,25 @@ func (s *SessionService) RegisterExternalMCPConversation(externalConversationID,
 		}
 	}()
 
+	if err := lockSessionHistory(ctx, tx, session.ManagedConversationID); err != nil {
+		return err
+	}
+
+	summary, err := loadSessionSummary(ctx, tx, session.ManagedConversationID)
+	if err != nil {
+		return err
+	}
+
 	if _, err := tx.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, $2, '')`, session.ManagedConversationID, managedAgent); err != nil {
 		return fmt.Errorf("register external MCP managed conversation: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx, `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES ($1, $2, $3, $4, $5)`, externalConversationID, session.PrivateConversationID, session.ManagedConversationID, session.Agent, session.SlackChannel); err != nil {
 		return fmt.Errorf("register external MCP binding: %w", err)
+	}
+
+	if err := saveSessionSummary(ctx, tx, summary); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -343,8 +417,13 @@ func (s *SessionService) RemoveExternalMCPConversation(externalConversationID st
 			continue
 		}
 
+		if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
+			return err
+		}
+
 		for _, statement := range []string{
 			`DELETE FROM session_entries WHERE conversation_id = $1`,
+			`DELETE FROM session_summaries WHERE conversation_id = $1`,
 			`DELETE FROM active_turns WHERE conversation_id = $1`,
 			`DELETE FROM scheduled_messages WHERE conversation_id = $1`,
 			`DELETE FROM thread_queue WHERE conversation_id = $1`,
@@ -377,42 +456,17 @@ func (s *SessionService) MarkRestartRequester(ctx context.Context, conversationI
 		return errors.New("restart requester conversation ID is required")
 	}
 
-	return stateDAO{db: s.db}.markRestartRequester(ctx, conversationID)
-}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO pending_restart_notifications (conversation_id) VALUES ($1) ON CONFLICT(conversation_id) DO NOTHING`, conversationID); err != nil {
+		return fmt.Errorf("mark restart requester: %w", err)
+	}
 
-// UpsertActiveTurn records a RocketCode active-turn restart handoff checkpoint with source metadata.
-func (s *SessionService) UpsertActiveTurn(ctx context.Context, checkpoint *harness.ActiveTurnCheckpoint, sourceMetadata map[string]string) error {
-	return stateDAO{db: s.db}.upsertActiveTurnWithSourceMetadata(ctx, checkpoint, sourceMetadata, time.Now().UTC())
-}
-
-// ClearActiveTurn removes an active root-turn checkpoint.
-func (s *SessionService) ClearActiveTurn(ctx context.Context, turnID string) error {
-	return stateDAO{db: s.db}.clearActiveTurn(ctx, turnID)
-}
-
-// SetPendingSteers copies uninjected Slack Steers onto the conversation's active-turn row.
-func (s *SessionService) SetPendingSteers(conversationID string, steers []protocol.PendingSteer) error {
-	return stateDAO{db: s.db}.setPendingSteers(context.Background(), conversationID, steers)
-}
-
-// RecoverableActiveTurns returns remaining active-turn handoff rows for startup recovery.
-func (s *SessionService) RecoverableActiveTurns(ctx context.Context) ([]ActiveTurnState, error) {
-	return stateDAO{db: s.db}.recoverableActiveTurns(ctx)
-}
-
-// Thread returns the persisted managed conversation state.
-func (s *SessionService) Thread(conversationID string) (ThreadState, bool, error) {
-	return stateDAO{db: s.db}.thread(context.Background(), conversationID)
-}
-
-// SetThreadAgentIfExists updates a managed conversation agent without creating a thread.
-func (s *SessionService) SetThreadAgentIfExists(conversationID, agent string) (bool, error) {
-	return stateDAO{db: s.db}.setThreadAgent(context.Background(), conversationID, agent)
+	return nil
 }
 
 // SetConversationSettled changes only the recorded conversation's sidebar state.
 func (s *SessionService) SetConversationSettled(ctx context.Context, conversationID string, settled bool) (bool, error) {
-	result, err := s.db.ExecContext(ctx, `UPDATE managed_conversations SET settled = $1 WHERE conversation_id = $2`, settled, conversationID)
+	result, err := s.db.ExecContext(ctx, `UPDATE managed_conversations SET settled = $1,
+reopened_at = CASE WHEN $1 THEN reopened_at ELSE CURRENT_TIMESTAMP END WHERE conversation_id = $2`, settled, conversationID)
 	if err != nil {
 		return false, fmt.Errorf("set conversation settled: %w", err)
 	}
@@ -425,14 +479,25 @@ func (s *SessionService) SetConversationSettled(ctx context.Context, conversatio
 	return rows > 0, nil
 }
 
+// UpdateConversationDetails changes shared display metadata without touching history
+// or settlement. Nil fields are left unchanged; an empty name clears the name.
+func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversationID string, pinned *bool, name *string) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `UPDATE managed_conversations SET pinned = COALESCE($2, pinned), name = COALESCE($3, name) WHERE conversation_id = $1`, conversationID, pinned, name)
+	if err != nil {
+		return false, fmt.Errorf("update conversation details: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("count conversation details update: %w", err)
+	}
+
+	return rows > 0, nil
+}
+
 // ExternalMCPSession returns a persisted external MCP session mapping.
 func (s *SessionService) ExternalMCPSession(externalConversationID string) (ExternalMCPSessionState, bool, error) {
 	return stateDAO{db: s.db}.externalMCPSession(context.Background(), externalConversationID)
-}
-
-// ExternalMCPSessionByConversationID returns the public ID and binding for either session ID.
-func (s *SessionService) ExternalMCPSessionByConversationID(conversationID string) (externalConversationID string, session ExternalMCPSessionState, ok bool, err error) {
-	return stateDAO{db: s.db}.externalMCPSessionByConversationID(context.Background(), conversationID)
 }
 
 // ReserveExternalMCPRecovery makes paired work wait for the recovering owner.
@@ -476,29 +541,9 @@ func (s *SessionService) PutScheduledMessage(id string, message *protocol.Schedu
 	return stateDAO{db: s.db}.putScheduledMessage(context.Background(), id, message)
 }
 
-// DeleteScheduledMessage deletes one scheduled message.
-func (s *SessionService) DeleteScheduledMessage(id string) error {
-	return stateDAO{db: s.db}.deleteScheduledMessage(context.Background(), id)
-}
-
 // ResetScheduledMessages deletes pending scheduled messages for one conversation.
 func (s *SessionService) ResetScheduledMessages(conversationID string) error {
 	return stateDAO{db: s.db}.resetScheduledMessages(context.Background(), conversationID)
-}
-
-// PutThreadQueueItem persists one Enqueued Slack Message.
-func (s *SessionService) PutThreadQueueItem(id string, item *protocol.ThreadQueueItem) error {
-	return stateDAO{db: s.db}.putThreadQueueItem(context.Background(), id, item)
-}
-
-// ThreadQueueForConversation returns Enqueued Slack Messages in stack order.
-func (s *SessionService) ThreadQueueForConversation(conversationID string) ([]protocol.ThreadQueueItem, error) {
-	return stateDAO{db: s.db}.threadQueueForConversation(context.Background(), conversationID)
-}
-
-// DeleteThreadQueueItem deletes one Enqueued Slack Message.
-func (s *SessionService) DeleteThreadQueueItem(id string) error {
-	return stateDAO{db: s.db}.deleteThreadQueueItem(context.Background(), id)
 }
 
 // ClaimScheduledMessage verifies one due scheduled message and advances recurring messages atomically.
@@ -830,7 +875,7 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 
 	defer func() { _ = tx.Rollback() }()
 
-	threadIDs, err := managedConversationIDs(ctx, tx)
+	threadIDs, err := queryStrings(ctx, tx, `SELECT conversation_id FROM managed_conversations ORDER BY conversation_id`, "managed conversation IDs")
 	if err != nil {
 		return PruneStateStats{}, err
 	}
@@ -866,7 +911,7 @@ func (s *SessionService) PruneStateBefore(ctx context.Context, cutoff time.Time)
 		}
 	}
 
-	goalIDs, err := goalConversationIDs(ctx, tx)
+	goalIDs, err := queryStrings(ctx, tx, `SELECT conversation_id FROM conversation_goals ORDER BY conversation_id`, "goal conversation IDs")
 	if err != nil {
 		return PruneStateStats{}, err
 	}
@@ -948,7 +993,40 @@ func (s *SessionService) ObserveEntries(ctx context.Context, conversationID stri
 		return nil, errors.New("conversation ID is required")
 	}
 
-	return observeSessionEntriesDB(ctx, s.db, conversationID)
+	rows, err := s.db.QueryContext(ctx, `SELECT destination.id, destination.entry_json, COALESCE(source.conversation_id, ''), destination.entry_json::jsonb ? 'sync_source_entry_id'
+FROM session_entries destination
+LEFT JOIN session_entries source ON source.id = (destination.entry_json::jsonb->>'sync_source_entry_id')::bigint
+WHERE destination.conversation_id = $1 ORDER BY destination.id`, conversationID)
+	if err != nil {
+		return nil, fmt.Errorf("query rocketcode session entries: %w", err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	entries := []ObservedSessionEntry{}
+
+	for rows.Next() {
+		var (
+			entry ObservedSessionEntry
+			raw   string
+		)
+
+		if err := rows.Scan(&entry.ID, &raw, &entry.SourceConversationID, &entry.Synced); err != nil {
+			return nil, fmt.Errorf("scan rocketcode session entry: %w", err)
+		}
+
+		if err := json.Unmarshal([]byte(raw), &entry.Entry); err != nil {
+			return nil, fmt.Errorf("parse rocketcode session entry: %w", err)
+		}
+
+		entries = append(entries, entry)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read rocketcode session entries: %w", err)
+	}
+
+	return entries, nil
 }
 
 // AppendEntryID appends one entry through the runtime service and returns its row ID.
@@ -958,7 +1036,22 @@ func (s *SessionService) AppendEntryID(ctx context.Context, conversationID strin
 		return 0, errors.New("conversation ID is required")
 	}
 
-	return appendSessionEntryDB(ctx, s.db, conversationID, entry)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin session append: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	id, err := appendSessionEntryDB(ctx, tx, conversationID, entry)
+	if err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit session append: %w", err)
+	}
+
+	return id, nil
 }
 
 // DeleteSession removes all entries for one conversation ID and returns deleted rows.
@@ -968,7 +1061,17 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return 0, errors.New("conversation ID is required")
 	}
 
-	result, err := s.db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = $1`, conversationID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin session deletion: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := lockSessionHistory(ctx, tx, conversationID); err != nil {
+		return 0, err
+	}
+
+	result, err := tx.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = $1`, conversationID)
 	if err != nil {
 		return 0, fmt.Errorf("delete rocketcode session: %w", err)
 	}
@@ -978,12 +1081,150 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return 0, fmt.Errorf("count deleted rocketcode session rows: %w", err)
 	}
 
+	if err := saveSessionSummary(ctx, tx, protocol.SessionSummary{ConversationID: conversationID}); err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit session deletion: %w", err)
+	}
+
 	return rows, nil
 }
 
-// ListSessions returns summaries for stored rocketcode sessions.
-func (s *SessionService) ListSessions(ctx context.Context) ([]protocol.SessionSummary, error) {
-	return listSessionsDB(ctx, s.db)
+// ListSessions returns summaries for the requested stored rocketcode sessions.
+func (s *SessionService) ListSessions(ctx context.Context, conversationIDs []string) ([]protocol.SessionSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT conversation_id, preview, last_updated FROM session_summaries WHERE conversation_id = ANY($1) ORDER BY conversation_id COLLATE "C"`, conversationIDs)
+	if err != nil {
+		return nil, fmt.Errorf("query rocketcode session summaries: %w", err)
+	}
+
+	defer func() { _ = rows.Close() }()
+
+	var summaries []protocol.SessionSummary
+
+	for rows.Next() {
+		var (
+			summary protocol.SessionSummary
+			preview []byte
+		)
+		if err := rows.Scan(&summary.ConversationID, &preview, &summary.LastUpdated); err != nil {
+			return nil, fmt.Errorf("scan rocketcode session summary: %w", err)
+		}
+
+		summary.LastMessage = string(preview)
+		summary.LastUpdated = summary.LastUpdated.UTC()
+		summaries = append(summaries, summary)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read rocketcode session summaries: %w", err)
+	}
+
+	return summaries, nil
+}
+
+// SidebarSession combines a recorded conversation with its optional durable summary.
+type SidebarSession struct {
+	Conversation protocol.Conversation
+	Summary      *protocol.SessionSummary
+	Running      bool
+	Pinned       bool
+	Name         string
+}
+
+// SidebarSessions yields pinned records first, then recent-first, bytewise-ID order.
+// Inactive, non-running, unpinned conversations settle at the supplied cutoff; manual
+// reopening grants a fresh inactivity window without changing message timestamps.
+// Breaking iteration or cancelling ctx closes the database rows.
+func (s *SessionService) SidebarSessions(ctx context.Context, autoSettleBefore time.Time) iter.Seq2[SidebarSession, error] {
+	return func(yield func(SidebarSession, error) bool) {
+		rows, err := s.db.QueryContext(ctx, `SELECT c.conversation_id, c.agent, c.created_by,
+c.settled OR COALESCE(NOT c.pinned AND s.last_updated > '0001-01-01 00:00:00+00'::timestamptz
+    AND GREATEST(s.last_updated, c.reopened_at) <= $1
+    AND NOT EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = c.conversation_id), FALSE), s.preview, s.last_updated,
+EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = c.conversation_id), c.pinned, c.name
+FROM managed_conversations c LEFT JOIN session_summaries s ON s.conversation_id = c.conversation_id
+WHERE c.conversation_id NOT LIKE 'cron:%' AND c.conversation_id NOT LIKE 'one-off-cron:%'
+    AND NOT EXISTS (SELECT 1 FROM external_mcp_sessions p WHERE p.private_conversation_id = c.conversation_id)
+ORDER BY c.pinned DESC, COALESCE(s.last_updated, '0001-01-01 00:00:00+00'::timestamptz) DESC, c.conversation_id COLLATE "C"`, autoSettleBefore)
+		if err != nil {
+			yield(SidebarSession{}, fmt.Errorf("query sidebar sessions: %w", err))
+			return
+		}
+		defer func() { _ = rows.Close() }()
+
+		for rows.Next() {
+			var (
+				row     SidebarSession
+				preview []byte
+				updated sql.NullTime
+			)
+			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &row.Conversation.Settled, &preview, &updated, &row.Running, &row.Pinned, &row.Name); err != nil {
+				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
+				return
+			}
+
+			if updated.Valid {
+				row.Summary = &protocol.SessionSummary{ConversationID: row.Conversation.ID, LastMessage: string(preview), LastUpdated: updated.Time.UTC()}
+			}
+
+			if !yield(row, nil) {
+				return
+			}
+		}
+
+		if err := errors.Join(rows.Err(), ctx.Err()); err != nil {
+			yield(SidebarSession{}, fmt.Errorf("read sidebar sessions: %w", err))
+		}
+	}
+}
+
+// ChannelFact returns a stored Slack name, never derived channel policy.
+func (s *SessionService) ChannelFact(ctx context.Context, workspaceID, channelID string) (name string, found bool, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT name FROM slack_channel_facts WHERE workspace_id = $1 AND channel_id = $2`, workspaceID, channelID).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+
+	if err != nil {
+		return "", false, fmt.Errorf("read Slack channel fact: %w", err)
+	}
+
+	return name, true, nil
+}
+
+// RecordChannelFact keeps the newest observation. Nanoseconds preserve ordering
+// even when a lookup and rename occur within one PostgreSQL timestamp microsecond.
+func (s *SessionService) RecordChannelFact(ctx context.Context, workspaceID, channelID, name string, observedAt time.Time) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO slack_channel_facts (workspace_id, channel_id, name, observed_at) VALUES ($1, $2, $3, $4)
+ON CONFLICT (workspace_id, channel_id) DO UPDATE SET name = EXCLUDED.name, observed_at = EXCLUDED.observed_at
+WHERE slack_channel_facts.observed_at < EXCLUDED.observed_at`, workspaceID, channelID, name, observedAt.UnixNano())
+	if err != nil {
+		return fmt.Errorf("record Slack channel fact: %w", err)
+	}
+
+	return nil
+}
+
+// SlackChannelIDs lists the distinct channels of recorded managed Slack threads.
+func (s *SessionService) SlackChannelIDs(ctx context.Context) ([]string, error) {
+	ids, err := queryStrings(ctx, s.db, `SELECT conversation_id FROM managed_conversations ORDER BY conversation_id`, "managed conversation IDs")
+	if err != nil {
+		return nil, err
+	}
+
+	var channels []string
+
+	for _, id := range ids {
+		if channel, _, ok := protocol.SlackThreadTarget(id); ok {
+			channels = append(channels, channel)
+		}
+	}
+
+	slices.Sort(channels)
+
+	return slices.Compact(channels), nil
 }
 
 // Stop closes the runtime service and its database handle.
@@ -1078,8 +1319,13 @@ func (s *SessionService) appendExternalMCPEntry(ctx context.Context, privateConv
 		return 0, err
 	}
 
-	if _, err := appendSessionEntryDB(ctx, tx, strings.TrimSpace(managedConversationID), &managedEntry); err != nil {
+	managedID, err := appendSessionEntryDB(ctx, tx, strings.TrimSpace(managedConversationID), &managedEntry)
+	if err != nil {
 		return 0, fmt.Errorf("append managed external MCP session entry: %w", err)
+	}
+
+	if _, err := tx.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::text WHERE id=$2`, privateID, managedID); err != nil {
+		return 0, fmt.Errorf("record external MCP entry source: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -1216,12 +1462,16 @@ func (s *SessionService) setGoalStatus(conversationID, status, note string) (Goa
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	dao := stateDAO{db: tx}
-	if _, err := dao.setActiveGoalStatus(ctx, conversationID, status, note, time.Now().UTC()); err != nil {
-		return GoalState{}, err
+	result, err := tx.ExecContext(ctx, `UPDATE conversation_goals SET status = $1, note = $2, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $5)`, strings.TrimSpace(status), strings.TrimSpace(note), timeUnixNano(time.Now().UTC()), conversationID, GoalStatusActive)
+	if err != nil {
+		return GoalState{}, fmt.Errorf("set active goal status: %w", err)
 	}
 
-	goal, _, err := dao.goal(ctx, conversationID)
+	if _, err := result.RowsAffected(); err != nil {
+		return GoalState{}, fmt.Errorf("count active goal status update: %w", err)
+	}
+
+	goal, _, err := (stateDAO{db: tx}).goal(ctx, conversationID)
 	if err != nil {
 		return GoalState{}, err
 	}
@@ -1274,54 +1524,36 @@ func (s sessionStore) outID(entry harness.SessionEntry) (int64, error) {
 	return s.service.AppendEntryID(context.Background(), s.conversationID, &entry)
 }
 
-func observeSessionEntriesDB(ctx context.Context, db *sql.DB, conversationID string) ([]ObservedSessionEntry, error) {
-	rows, err := db.QueryContext(ctx, `SELECT destination.id, destination.entry_json, COALESCE(source.conversation_id, '')
-FROM session_entries destination
-LEFT JOIN session_entries source ON source.id = (destination.entry_json::jsonb->>'sync_source_entry_id')::bigint
-WHERE destination.conversation_id = $1 ORDER BY destination.id`, conversationID)
-	if err != nil {
-		return nil, fmt.Errorf("query rocketcode session entries: %w", err)
-	}
-
-	defer func() { _ = rows.Close() }()
-
-	entries := []ObservedSessionEntry{}
-
-	for rows.Next() {
-		var (
-			id     int64
-			raw    string
-			source string
-		)
-
-		if err := rows.Scan(&id, &raw, &source); err != nil {
-			return nil, fmt.Errorf("scan rocketcode session entry: %w", err)
-		}
-
-		var entry harness.SessionEntry
-		if err := json.Unmarshal([]byte(raw), &entry); err != nil {
-			return nil, fmt.Errorf("parse rocketcode session entry: %w", err)
-		}
-
-		entries = append(entries, ObservedSessionEntry{ID: id, Entry: entry, SourceConversationID: source})
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read rocketcode session entries: %w", err)
-	}
-
-	return entries, nil
-}
-
 func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID string, entry *harness.SessionEntry) (int64, error) {
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return 0, fmt.Errorf("marshal rocketcode session entry: %w", err)
 	}
 
+	if err := lockSessionHistory(ctx, db, conversationID); err != nil {
+		return 0, err
+	}
+
+	summary, err := loadSessionSummary(ctx, db, conversationID)
+	if err != nil {
+		return 0, err
+	}
+
+	if err := projectSessionSummary(&summary, entry, entry.Timestamp.UTC().Format(time.RFC3339Nano)); err != nil {
+		return 0, err
+	}
+
 	var id int64
 	if err := db.QueryRowContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, $2, $3) RETURNING id`, conversationID, string(data), entry.Timestamp.UTC().Format(time.RFC3339Nano)).Scan(&id); err != nil {
 		return 0, fmt.Errorf("append rocketcode session entry: %w", err)
+	}
+
+	if err := saveSessionSummary(ctx, db, summary); err != nil {
+		return 0, err
+	}
+
+	if _, err := db.ExecContext(ctx, `UPDATE managed_conversations SET settled = FALSE WHERE conversation_id = $1 AND settled = TRUE`, conversationID); err != nil {
+		return 0, fmt.Errorf("reopen conversation after message: %w", err)
 	}
 
 	return id, nil
@@ -1345,63 +1577,6 @@ func externalMCPManagedEntry(entry *harness.SessionEntry, replayPrefix []json.Ra
 	}
 
 	return managed, nil
-}
-
-func listSessionsDB(ctx context.Context, db *sql.DB) ([]protocol.SessionSummary, error) {
-	rows, err := db.QueryContext(ctx, `SELECT conversation_id, entry_json, entry_timestamp FROM session_entries ORDER BY conversation_id, id`)
-	if err != nil {
-		return nil, fmt.Errorf("query rocketcode session summaries: %w", err)
-	}
-
-	defer func() { _ = rows.Close() }()
-
-	summaryByID := map[string]*protocol.SessionSummary{}
-	order := []string{}
-
-	for rows.Next() {
-		var conversationID, raw, timestamp string
-		if err := rows.Scan(&conversationID, &raw, &timestamp); err != nil {
-			return nil, fmt.Errorf("scan rocketcode session summary: %w", err)
-		}
-
-		summary := summaryByID[conversationID]
-		if summary == nil {
-			summary = &protocol.SessionSummary{ConversationID: conversationID}
-			summaryByID[conversationID] = summary
-			order = append(order, conversationID)
-		}
-
-		var entry harness.SessionEntry
-		if err := json.Unmarshal([]byte(raw), &entry); err != nil {
-			return nil, fmt.Errorf("parse rocketcode session summary entry: %w", err)
-		}
-
-		if updated, err := time.Parse(time.RFC3339Nano, timestamp); err == nil {
-			summary.LastUpdated = updated
-		}
-
-		messages, err := replayInputMessages(entry.ReplayInput)
-		if err != nil {
-			return nil, fmt.Errorf("decode rocketcode session summary replay input: %w", err)
-		}
-
-		for i := range messages {
-			if messages[i].role == "user" {
-				summary.LastUserMessage = messages[i].text
-			}
-		}
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read rocketcode session summaries: %w", err)
-	}
-
-	summaries := make([]protocol.SessionSummary, 0, len(order))
-	for _, conversationID := range order {
-		summaries = append(summaries, *summaryByID[conversationID])
-	}
-
-	return summaries, nil
 }
 
 func slackStateKeyTime(key string) (time.Time, bool) {
@@ -1463,14 +1638,6 @@ func sessionLatestBefore(ctx context.Context, db stateStoreDB, conversationID st
 	}
 
 	return before, nil
-}
-
-func managedConversationIDs(ctx context.Context, db stateStoreDB) ([]string, error) {
-	return queryStrings(ctx, db, `SELECT conversation_id FROM managed_conversations ORDER BY conversation_id`, "managed conversation IDs")
-}
-
-func goalConversationIDs(ctx context.Context, db stateStoreDB) ([]string, error) {
-	return queryStrings(ctx, db, `SELECT conversation_id FROM conversation_goals ORDER BY conversation_id`, "goal conversation IDs")
 }
 
 func externalMCPSessions(ctx context.Context, db stateStoreDB) (map[string]ExternalMCPSessionState, error) {
@@ -1631,6 +1798,14 @@ func deleteSessionEntries(ctx context.Context, db stateStoreDB, conversationIDs 
 	var deleted int64
 
 	for conversationID := range conversationIDs {
+		if err := lockSessionHistory(ctx, db, conversationID); err != nil {
+			return 0, err
+		}
+
+		if _, err := db.ExecContext(ctx, `DELETE FROM session_summaries WHERE conversation_id = $1`, conversationID); err != nil {
+			return 0, fmt.Errorf("delete stale session summary: %w", err)
+		}
+
 		result, err := db.ExecContext(ctx, `DELETE FROM session_entries WHERE conversation_id = $1`, conversationID)
 		if err != nil {
 			return 0, fmt.Errorf("delete stale session entries: %w", err)
@@ -1677,11 +1852,7 @@ func holdRunLock(ctx context.Context, db *sql.DB, work runLockWork) error {
 
 	err = client.Do(ctx, runLockName, func(lockCtx context.Context, _ *pglock.Lock) error {
 		return work.Run(lockCtx)
-	}, pglock.FailIfLocked())
-	if errors.Is(err, pglock.ErrNotAcquired) {
-		return errRunLocked
-	}
-
+	})
 	if err != nil {
 		return fmt.Errorf("%w", err)
 	}

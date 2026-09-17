@@ -450,7 +450,7 @@ func (b *Bridge) enqueue(ctx context.Context, request *bridgeRequest, operation 
 	stopCh, stopped := b.stopCh, b.stopped
 	if !stopped && request.inbound != nil && request.inbound.Kind == protocol.InboundKindSteer && request.inbound.Human && b.inputOpen {
 		if request.queueItemID == "" {
-			request.queueItemID = rand.Text()
+			request.queueItemID = cmp.Or(request.inbound.Metadata["web_message_id"], rand.Text())
 		}
 
 		if request.completion == nil {
@@ -664,6 +664,8 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (a
 		}
 	}
 
+	b.publishConsumed(ctx, request.inbound)
+
 	return true, nil
 }
 
@@ -732,13 +734,14 @@ func (b *Bridge) submitEnqueuedItem(ctx context.Context, item *protocol.ThreadQu
 		inbound.Metadata[protocol.InboundPrincipalMetadataKey] = principal
 	}
 
+	inbound.Metadata["web_message_id"] = item.ID
+
 	if item.SlackChannel != "" {
 		inbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: item.SlackChannel, MessageTS: item.SlackTS, ThreadTS: item.SlackTS}
 	}
 
 	if item.SlackReply != nil {
-		reply := *item.SlackReply
-		inbound.SlackReply = &reply
+		inbound.SlackReply = new(*item.SlackReply)
 	}
 
 	return b.enqueue(ctx, &bridgeRequest{inbound: inbound, queueItemID: item.ID}, "submit enqueued message")
@@ -1418,7 +1421,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	b.log.Info("prepared rocketcode session history", "conversation_id", b.config.ConversationID, "turn_id", turnID, "entry_count", len(observed), "replay_item_count", replayItemCount, "history_bytes", historyBytes, "compaction_count", compactionCount, "latest_entry_id", latestEntryID, "latest_entry_type", latestEntryType)
 
-	customTools := []rocketcode.Tool{attachments.Tool(root)}
+	customTools := []rocketcode.Tool{attachments.Tool(root, b.config.SessionService, b.config.ConversationID)}
 
 	decision := new(rawRunDecision)
 	if msg.RequireOutputDecision || msg.SyncDestination != "" {
@@ -2441,7 +2444,7 @@ type attachFilesInput struct {
 	Attachments []outboundAttachmentInput `json:"attachments"`
 }
 
-func (c *outboundAttachmentCollector) Tool(root *os.Root) rocketcode.Tool {
+func (c *outboundAttachmentCollector) Tool(root *os.Root, sessions *SessionService, conversationID string) rocketcode.Tool {
 	parameters := map[string]any{
 		"properties": map[string]any{
 			"attachments": map[string]any{
@@ -2463,27 +2466,35 @@ func (c *outboundAttachmentCollector) Tool(root *os.Root) rocketcode.Tool {
 		"required": []string{"attachments"},
 	}
 
-	return rocketcode.Tool{Name: attachFilesToolName, Description: "Queue files to attach to the final human-visible response. Call before the final response finishes.", Permission: "rocketclaw", VisibilitySubjects: []string{attachFilesToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{attachFilesToolName}, nil }, Parameters: parameters, Call: func(_ context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+	return rocketcode.Tool{Name: attachFilesToolName, Description: "Queue files to attach to the final human-visible response. Call before the final response finishes.", Permission: "rocketclaw", VisibilitySubjects: []string{attachFilesToolName}, Subjects: func(json.RawMessage) ([]string, error) { return []string{attachFilesToolName}, nil }, Parameters: parameters, Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 		var input attachFilesInput
 		if err := json.Unmarshal(raw, &input); err != nil {
 			return rocketcode.ToolResult{}, fmt.Errorf("parse response attachments: %w", err)
 		}
 
 		attachments := make([]protocol.OutboundAttachment, 0, len(input.Attachments))
+
+		ids := make([]string, 0, len(input.Attachments))
 		for i := range input.Attachments {
 			attachment, err := outboundAttachment(root, &input.Attachments[i])
 			if err != nil {
 				return rocketcode.ToolResult{}, err
 			}
 
+			attachment.ID = rand.Text()
+			if err := sessions.SaveAttachment(ctx, conversationID, &attachment, false); err != nil {
+				return rocketcode.ToolResult{}, err
+			}
+
 			attachments = append(attachments, attachment)
+			ids = append(ids, attachment.ID)
 		}
 
 		c.mu.Lock()
 		c.attachments = append(c.attachments, attachments...)
 		c.mu.Unlock()
 
-		return rocketcode.TextToolResult("queued attachments for final response"), nil
+		return rocketcode.TextToolResult("queued attachments for final response: " + strings.Join(ids, " ")), nil
 	}}
 }
 
@@ -2538,7 +2549,7 @@ func outboundAttachment(root *os.Root, input *outboundAttachmentInput) (protocol
 		mimeType = http.DetectContentType(data)
 	}
 
-	return protocol.OutboundAttachment{Name: name, MIMEType: protocol.NormalizeMIMEType(mimeType), Data: append([]byte(nil), data...)}, nil
+	return protocol.OutboundAttachment{Name: name, MIMEType: protocol.NormalizeMIMEType(mimeType), Data: bytes.Clone(data)}, nil
 }
 
 func resetScheduledMessagesTool(reset func() error) rocketcode.Tool {
@@ -3247,7 +3258,7 @@ func normalizeInboundAttachments(msg *protocol.InboundMessage) {
 			continue
 		}
 
-		if !isSupportedInboundAttachmentMIME(mimeType) {
+		if !slices.Contains([]string{"image/jpeg", "image/jpg", "image/png", "image/webp"}, protocol.NormalizeMIMEType(mimeType)) {
 			msg.AttachmentWarnings = append(msg.AttachmentWarnings, "Skipped attachment "+name+" because "+mimeType+" is not supported.")
 			continue
 		}
@@ -3286,15 +3297,6 @@ func modelAttachmentMIMEType(data []byte, declaredMIMEType, name string) string 
 	}
 
 	return protocol.NormalizeMIMEType(mime.TypeByExtension(filepath.Ext(name)))
-}
-
-func isSupportedInboundAttachmentMIME(mimeType string) bool {
-	switch protocol.NormalizeMIMEType(mimeType) {
-	case "image/jpeg", "image/jpg", "image/png", "image/webp":
-		return true
-	default:
-		return false
-	}
 }
 
 func fitInboundImageWithinLimit(mimeType string, data []byte, targetLimit int) (transformedData []byte, transformedMIMEType string, changed bool, err error) {

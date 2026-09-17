@@ -1,15 +1,16 @@
 package backend
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"strings"
 	"time"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	harness "github.com/Rocketable/platform/internal/rocketcode"
 )
 
@@ -17,27 +18,14 @@ type stateDAO struct {
 	db stateStoreDB
 }
 
-func (d stateDAO) upsertThread(ctx context.Context, conversationID string, thread ThreadState) error {
-	conversationID = strings.TrimSpace(conversationID)
-	if conversationID == "" {
-		return errors.New("thread conversation ID is required")
-	}
-
-	_, err := d.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by, settled) VALUES ($1, $2, $3, $4) ON CONFLICT(conversation_id) DO UPDATE SET agent = excluded.agent, created_by = CASE WHEN excluded.created_by = '' THEN managed_conversations.created_by ELSE excluded.created_by END`, conversationID, strings.TrimSpace(thread.Agent), strings.TrimSpace(string(thread.CreatedBy)), thread.Settled)
-	if err != nil {
-		return fmt.Errorf("upsert managed conversation: %w", err)
-	}
-
-	return nil
-}
-
-func (d stateDAO) thread(ctx context.Context, conversationID string) (ThreadState, bool, error) {
+// Thread returns the persisted managed conversation state.
+func (s *SessionService) Thread(conversationID string) (ThreadState, bool, error) {
 	var (
 		thread    ThreadState
 		createdBy string
 	)
 
-	err := d.db.QueryRowContext(ctx, `SELECT agent, created_by, settled FROM managed_conversations WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &createdBy, &thread.Settled)
+	err := s.db.QueryRowContext(context.Background(), `SELECT agent, created_by, settled FROM managed_conversations WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&thread.Agent, &createdBy, &thread.Settled)
 	if err == sql.ErrNoRows {
 		return ThreadState{}, false, nil
 	}
@@ -51,8 +39,9 @@ func (d stateDAO) thread(ctx context.Context, conversationID string) (ThreadStat
 	return thread, true, nil
 }
 
-func (d stateDAO) setThreadAgent(ctx context.Context, conversationID, agent string) (bool, error) {
-	result, err := d.db.ExecContext(ctx, `UPDATE managed_conversations SET agent = $1 WHERE conversation_id = $2`, strings.TrimSpace(agent), strings.TrimSpace(conversationID))
+// SetThreadAgentIfExists updates a managed conversation agent without creating a thread.
+func (s *SessionService) SetThreadAgentIfExists(conversationID, agent string) (bool, error) {
+	result, err := s.db.ExecContext(context.Background(), `UPDATE managed_conversations SET agent = $1 WHERE conversation_id = $2`, strings.TrimSpace(agent), strings.TrimSpace(conversationID))
 	if err != nil {
 		return false, fmt.Errorf("update managed conversation agent: %w", err)
 	}
@@ -63,20 +52,6 @@ func (d stateDAO) setThreadAgent(ctx context.Context, conversationID, agent stri
 	}
 
 	return rows > 0, nil
-}
-
-func (d stateDAO) upsertExternalMCPSession(ctx context.Context, externalConversationID string, session *ExternalMCPSessionState) error {
-	var privateConversationID any
-	if privateID := strings.TrimSpace(session.PrivateConversationID); privateID != "" {
-		privateConversationID = privateID
-	}
-
-	_, err := d.db.ExecContext(ctx, `INSERT INTO external_mcp_sessions (external_conversation_id, private_conversation_id, managed_conversation_id, agent, slack_channel) VALUES ($1, $2, $3, $4, $5) ON CONFLICT(external_conversation_id) DO UPDATE SET private_conversation_id = excluded.private_conversation_id, managed_conversation_id = excluded.managed_conversation_id, agent = excluded.agent, slack_channel = excluded.slack_channel`, strings.TrimSpace(externalConversationID), privateConversationID, strings.TrimSpace(session.ManagedConversationID), strings.TrimSpace(session.Agent), strings.TrimSpace(session.SlackChannel))
-	if err != nil {
-		return fmt.Errorf("upsert external MCP session: %w", err)
-	}
-
-	return nil
 }
 
 func (d stateDAO) externalMCPSession(ctx context.Context, externalConversationID string) (ExternalMCPSessionState, bool, error) {
@@ -92,8 +67,9 @@ func (d stateDAO) externalMCPSession(ctx context.Context, externalConversationID
 	return session, true, nil
 }
 
-func (d stateDAO) externalMCPSessionByConversationID(ctx context.Context, conversationID string) (externalConversationID string, session ExternalMCPSessionState, found bool, err error) {
-	externalConversationID, session, err = scanExternalMCPSession(d.db.QueryRowContext(ctx, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel FROM external_mcp_sessions WHERE private_conversation_id = $1 OR managed_conversation_id = $2`, strings.TrimSpace(conversationID), strings.TrimSpace(conversationID)))
+// ExternalMCPSessionByConversationID returns the public ID and binding for either session ID.
+func (s *SessionService) ExternalMCPSessionByConversationID(conversationID string) (externalConversationID string, session ExternalMCPSessionState, ok bool, err error) {
+	externalConversationID, session, err = scanExternalMCPSession(s.db.QueryRowContext(context.Background(), `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel FROM external_mcp_sessions WHERE private_conversation_id = $1 OR managed_conversation_id = $2`, strings.TrimSpace(conversationID), strings.TrimSpace(conversationID)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ExternalMCPSessionState{}, false, nil
 	}
@@ -118,48 +94,6 @@ func scanExternalMCPSession(scanner rowScanner) (string, ExternalMCPSessionState
 	session.PrivateConversationID = privateConversationID.String
 
 	return externalConversationID, session, nil
-}
-
-func (d stateDAO) beginGoal(ctx context.Context, conversationID string, goal *GoalState) (bool, error) {
-	result, err := d.db.ExecContext(ctx, `INSERT INTO conversation_goals (conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) ON CONFLICT(conversation_id) DO UPDATE SET objective = excluded.objective, check_script = excluded.check_script, max_turns = excluded.max_turns, turns_used = excluded.turns_used, status = excluded.status, note = excluded.note, slack_recipient_team_id = excluded.slack_recipient_team_id, slack_recipient_user_id = excluded.slack_recipient_user_id, created_at_unix_ns = excluded.created_at_unix_ns, updated_at_unix_ns = excluded.updated_at_unix_ns WHERE conversation_goals.status NOT IN ('', $12)`, strings.TrimSpace(conversationID), strings.TrimSpace(goal.Objective), strings.TrimSpace(goal.CheckScript), goal.MaxTurns, goal.TurnsUsed, strings.TrimSpace(goal.Status), strings.TrimSpace(goal.Note), strings.TrimSpace(goal.SlackRecipientTeamID), strings.TrimSpace(goal.SlackRecipientUserID), timeUnixNano(goal.CreatedAt), timeUnixNano(goal.UpdatedAt), GoalStatusActive)
-	if err != nil {
-		return false, fmt.Errorf("begin goal: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("count goal start: %w", err)
-	}
-
-	return rows > 0, nil
-}
-
-func (d stateDAO) accountGoalTurn(ctx context.Context, conversationID string, now time.Time) (bool, error) {
-	result, err := d.db.ExecContext(ctx, `UPDATE conversation_goals SET turns_used = turns_used + 1, status = CASE WHEN max_turns > 0 AND turns_used + 1 >= max_turns THEN $1 ELSE $2 END, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $5)`, GoalStatusBudgetExhausted, GoalStatusActive, timeUnixNano(now), strings.TrimSpace(conversationID), GoalStatusActive)
-	if err != nil {
-		return false, fmt.Errorf("account goal turn: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("count goal turn accounting: %w", err)
-	}
-
-	return rows > 0, nil
-}
-
-func (d stateDAO) setActiveGoalStatus(ctx context.Context, conversationID, status, note string, now time.Time) (bool, error) {
-	result, err := d.db.ExecContext(ctx, `UPDATE conversation_goals SET status = $1, note = $2, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $5)`, strings.TrimSpace(status), strings.TrimSpace(note), timeUnixNano(now), strings.TrimSpace(conversationID), GoalStatusActive)
-	if err != nil {
-		return false, fmt.Errorf("set active goal status: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("count active goal status update: %w", err)
-	}
-
-	return rows > 0, nil
 }
 
 func (d stateDAO) goal(ctx context.Context, conversationID string) (GoalState, bool, error) {
@@ -187,8 +121,9 @@ func (d stateDAO) goal(ctx context.Context, conversationID string) (GoalState, b
 	return goal, true, nil
 }
 
-func (d stateDAO) activeGoals(ctx context.Context) (map[string]GoalState, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns FROM conversation_goals WHERE status = '' OR status = $1 ORDER BY conversation_id`, GoalStatusActive)
+// ActiveGoals returns persisted active goals keyed by conversation ID.
+func (s *SessionService) ActiveGoals() (map[string]GoalState, error) {
+	rows, err := s.db.QueryContext(context.Background(), `SELECT conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns FROM conversation_goals WHERE status = '' OR status = $1 ORDER BY conversation_id`, GoalStatusActive)
 	if err != nil {
 		return nil, fmt.Errorf("query active goals: %w", err)
 	}
@@ -282,13 +217,14 @@ func (d stateDAO) clearParkAfter(ctx context.Context, scheduledID string) error 
 	return nil
 }
 
-func (d stateDAO) deleteScheduledMessage(ctx context.Context, id string) error {
+// DeleteScheduledMessage deletes one scheduled message.
+func (s *SessionService) DeleteScheduledMessage(id string) error {
 	id = strings.TrimSpace(id)
-	if err := d.clearParkAfter(ctx, id); err != nil {
+	if err := (stateDAO{db: s.db}).clearParkAfter(context.Background(), id); err != nil {
 		return err
 	}
 
-	if _, err := d.db.ExecContext(ctx, `DELETE FROM scheduled_messages WHERE scheduled_message_id = $1`, id); err != nil {
+	if _, err := s.db.ExecContext(context.Background(), `DELETE FROM scheduled_messages WHERE scheduled_message_id = $1`, id); err != nil {
 		return fmt.Errorf("delete scheduled message: %w", err)
 	}
 
@@ -308,23 +244,15 @@ func (d stateDAO) resetScheduledMessages(ctx context.Context, conversationID str
 	return nil
 }
 
-func (d stateDAO) putThreadQueueItem(ctx context.Context, id string, item *protocol.ThreadQueueItem) error {
-	kind := item.Kind
-	if kind == "" {
-		kind = "enqueue"
-	}
+// PutThreadQueueItem persists one Enqueued Slack Message.
+func (s *SessionService) PutThreadQueueItem(id string, item *protocol.ThreadQueueItem) error {
+	kind := cmp.Or(item.Kind, protocol.InboundKindEnqueue)
 
-	content, err := json.Marshal(item.Content)
-	if err != nil {
-		return fmt.Errorf("encode thread queue content: %w", err)
-	}
+	// Both payloads contain only strings, booleans and byte slices.
+	content, _ := json.Marshal(item.Content)
+	reply, _ := json.Marshal(item.SlackReply)
 
-	reply, err := json.Marshal(item.SlackReply)
-	if err != nil {
-		return fmt.Errorf("encode thread queue reply: %w", err)
-	}
-
-	_, err = d.db.ExecContext(ctx, `INSERT INTO thread_queue (queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT(queue_item_id) DO UPDATE SET conversation_id = excluded.conversation_id, message = excluded.message, principal = excluded.principal, stash_at_unix_ns = excluded.stash_at_unix_ns, position = excluded.position, park_after = excluded.park_after, slack_channel = excluded.slack_channel, slack_ts = excluded.slack_ts, kind = excluded.kind, content = excluded.content, source = excluded.source, slack_reply = excluded.slack_reply`, strings.TrimSpace(id), strings.TrimSpace(item.ConversationID), item.Message, item.Principal, timeUnixNano(item.StashAt), item.Position, strings.TrimSpace(item.ParkAfter), item.SlackChannel, item.SlackTS, kind, content, item.Source, reply)
+	_, err := s.db.ExecContext(context.Background(), `INSERT INTO thread_queue (queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT(queue_item_id) DO UPDATE SET conversation_id = excluded.conversation_id, message = excluded.message, principal = excluded.principal, stash_at_unix_ns = excluded.stash_at_unix_ns, position = excluded.position, park_after = excluded.park_after, slack_channel = excluded.slack_channel, slack_ts = excluded.slack_ts, kind = excluded.kind, content = excluded.content, source = excluded.source, slack_reply = excluded.slack_reply`, strings.TrimSpace(id), strings.TrimSpace(item.ConversationID), item.Message, item.Principal, timeUnixNano(item.StashAt), item.Position, strings.TrimSpace(item.ParkAfter), item.SlackChannel, item.SlackTS, kind, content, item.Source, reply)
 	if err != nil {
 		return fmt.Errorf("put thread queue item: %w", err)
 	}
@@ -332,8 +260,9 @@ func (d stateDAO) putThreadQueueItem(ctx context.Context, id string, item *proto
 	return nil
 }
 
-func (d stateDAO) threadQueueForConversation(ctx context.Context, conversationID string) ([]protocol.ThreadQueueItem, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply FROM thread_queue WHERE conversation_id = $1 ORDER BY position, stash_at_unix_ns`, strings.TrimSpace(conversationID))
+// ThreadQueueForConversation returns Enqueued Slack Messages in stack order.
+func (s *SessionService) ThreadQueueForConversation(conversationID string) ([]protocol.ThreadQueueItem, error) {
+	rows, err := s.db.QueryContext(context.Background(), `SELECT queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply FROM thread_queue WHERE conversation_id = $1 ORDER BY position, stash_at_unix_ns`, strings.TrimSpace(conversationID))
 	if err != nil {
 		return nil, fmt.Errorf("query thread queue: %w", err)
 	}
@@ -357,8 +286,9 @@ func (d stateDAO) threadQueueForConversation(ctx context.Context, conversationID
 	return items, nil
 }
 
-func (d stateDAO) deleteThreadQueueItem(ctx context.Context, id string) error {
-	if _, err := d.db.ExecContext(ctx, `DELETE FROM thread_queue WHERE queue_item_id = $1`, strings.TrimSpace(id)); err != nil {
+// DeleteThreadQueueItem deletes one Enqueued Slack Message.
+func (s *SessionService) DeleteThreadQueueItem(id string) error {
+	if _, err := s.db.ExecContext(context.Background(), `DELETE FROM thread_queue WHERE queue_item_id = $1`, strings.TrimSpace(id)); err != nil {
 		return fmt.Errorf("delete thread queue item: %w", err)
 	}
 
@@ -367,15 +297,11 @@ func (d stateDAO) deleteThreadQueueItem(ctx context.Context, id string) error {
 
 func (d stateDAO) claimThreadQueueItem(ctx context.Context, conversationID, id string) (protocol.ThreadQueueItem, bool, error) {
 	item, err := scanThreadQueueItem(d.db.QueryRowContext(ctx, `DELETE FROM thread_queue WHERE conversation_id = $1 AND queue_item_id = $2 RETURNING queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply`, conversationID, id))
-	if errors.Is(err, sql.ErrNoRows) {
-		return item, false, nil
-	}
-
-	if err != nil {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return item, false, fmt.Errorf("claim thread queue item: %w", err)
 	}
 
-	return item, true, nil
+	return item, err == nil, nil
 }
 
 func scanThreadQueueItem(scanner rowScanner) (protocol.ThreadQueueItem, error) {
@@ -402,29 +328,31 @@ func scanThreadQueueItem(scanner rowScanner) (protocol.ThreadQueueItem, error) {
 	return item, nil
 }
 
-func (d stateDAO) markRestartRequester(ctx context.Context, conversationID string) error {
-	if _, err := d.db.ExecContext(ctx, `INSERT INTO pending_restart_notifications (conversation_id) VALUES ($1) ON CONFLICT(conversation_id) DO NOTHING`, strings.TrimSpace(conversationID)); err != nil {
-		return fmt.Errorf("mark restart requester: %w", err)
+// UpsertActiveTurn records a RocketCode active-turn restart handoff checkpoint with source metadata.
+func (s *SessionService) UpsertActiveTurn(ctx context.Context, checkpoint *harness.ActiveTurnCheckpoint, sourceMetadata map[string]string) error {
+	now := time.Now().UTC()
+
+	if checkpoint == nil {
+		return errors.New("active turn checkpoint is required")
 	}
 
-	return nil
-}
+	checkpointState := *checkpoint
+	checkpointState.TurnID = strings.TrimSpace(checkpointState.TurnID)
+	checkpointState.ConversationKey = strings.TrimSpace(checkpointState.ConversationKey)
+	checkpointState.Agent = strings.TrimSpace(checkpointState.Agent)
+	checkpointState.Model = strings.TrimSpace(checkpointState.Model)
+	checkpointState.DisplayModel = strings.TrimSpace(checkpointState.DisplayModel)
+	checkpointState.ResponseID = strings.TrimSpace(checkpointState.ResponseID)
 
-func (d stateDAO) upsertActiveTurnWithSourceMetadata(ctx context.Context, checkpoint *harness.ActiveTurnCheckpoint, sourceMetadata map[string]string, now time.Time) error {
-	turn, err := activeTurnStateFromCheckpoint(checkpoint, now)
-	if err != nil {
-		return err
+	if checkpointState.TurnID == "" {
+		return errors.New("active turn ID is required")
 	}
 
-	turn.SourceMetadata = sourceMetadata
+	if checkpointState.ConversationKey == "" {
+		return errors.New("active turn conversation ID is required")
+	}
 
-	return d.upsertActiveTurnState(ctx, &turn)
-}
-
-func (d stateDAO) upsertActiveTurnState(ctx context.Context, turn *ActiveTurnState) error {
-	checkpointState := turn.Checkpoint
-
-	metadata, err := marshalActiveTurnJSON(turn.SourceMetadata)
+	metadata, err := marshalActiveTurnJSON(sourceMetadata)
 	if err != nil {
 		return fmt.Errorf("marshal active turn source metadata: %w", err)
 	}
@@ -454,7 +382,7 @@ func (d stateDAO) upsertActiveTurnState(ctx context.Context, turn *ActiveTurnSta
 		return fmt.Errorf("marshal active turn completed function outputs: %w", err)
 	}
 
-	_, err = d.db.ExecContext(ctx, `INSERT INTO active_turns (id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) ON CONFLICT(id) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent, model = excluded.model, display_model = excluded.display_model, replay_input_json = excluded.replay_input_json, output_trace_json = excluded.output_trace_json, token_usage_json = excluded.token_usage_json, response_id = excluded.response_id, open_function_calls_json = excluded.open_function_calls_json, completed_function_outputs_json = excluded.completed_function_outputs_json, restart_notice_json = excluded.restart_notice_json, source_metadata_json = excluded.source_metadata_json, updated_at_unix_ns = excluded.updated_at_unix_ns`, checkpointState.TurnID, checkpointState.ConversationKey, checkpointState.Agent, checkpointState.Model, checkpointState.DisplayModel, replayInput, outputTrace, tokenUsage, checkpointState.ResponseID, openCalls, completedOutputs, "", metadata, timeUnixNano(turn.CreatedAt), timeUnixNano(turn.UpdatedAt))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO active_turns (id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) ON CONFLICT(id) DO UPDATE SET conversation_id = excluded.conversation_id, agent = excluded.agent, model = excluded.model, display_model = excluded.display_model, replay_input_json = excluded.replay_input_json, output_trace_json = excluded.output_trace_json, token_usage_json = excluded.token_usage_json, response_id = excluded.response_id, open_function_calls_json = excluded.open_function_calls_json, completed_function_outputs_json = excluded.completed_function_outputs_json, restart_notice_json = excluded.restart_notice_json, source_metadata_json = excluded.source_metadata_json, updated_at_unix_ns = excluded.updated_at_unix_ns`, checkpointState.TurnID, checkpointState.ConversationKey, checkpointState.Agent, checkpointState.Model, checkpointState.DisplayModel, replayInput, outputTrace, tokenUsage, checkpointState.ResponseID, openCalls, completedOutputs, "", metadata, timeUnixNano(now), timeUnixNano(now))
 	if err != nil {
 		return fmt.Errorf("upsert active turn: %w", err)
 	}
@@ -462,21 +390,23 @@ func (d stateDAO) upsertActiveTurnState(ctx context.Context, turn *ActiveTurnSta
 	return nil
 }
 
-func (d stateDAO) clearActiveTurn(ctx context.Context, turnID string) error {
+// ClearActiveTurn removes an active root-turn checkpoint.
+func (s *SessionService) ClearActiveTurn(ctx context.Context, turnID string) error {
 	turnID = strings.TrimSpace(turnID)
 	if turnID == "" {
 		return errors.New("active turn ID is required")
 	}
 
-	if _, err := d.db.ExecContext(ctx, `DELETE FROM active_turns WHERE id = $1`, turnID); err != nil {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM active_turns WHERE id = $1`, turnID); err != nil {
 		return fmt.Errorf("clear active turn: %w", err)
 	}
 
 	return nil
 }
 
-func (d stateDAO) recoverableActiveTurns(ctx context.Context) ([]ActiveTurnState, error) {
-	rows, err := d.db.QueryContext(ctx, `SELECT id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns, pending_steers_json FROM active_turns ORDER BY conversation_id, updated_at_unix_ns DESC, id`)
+// RecoverableActiveTurns returns remaining active-turn handoff rows for startup recovery.
+func (s *SessionService) RecoverableActiveTurns(ctx context.Context) ([]ActiveTurnState, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns, pending_steers_json FROM active_turns ORDER BY conversation_id, updated_at_unix_ns DESC, id`)
 	if err != nil {
 		return nil, fmt.Errorf("query recoverable active turns: %w", err)
 	}
@@ -511,39 +441,13 @@ func (d stateDAO) recoverableActiveTurns(ctx context.Context) ([]ActiveTurnState
 	}
 
 	for _, errCorrupt := range corrupts {
-		_, err := d.db.ExecContext(ctx, `DELETE FROM active_turns WHERE id = $1`, errCorrupt.turnID)
+		_, err := s.db.ExecContext(ctx, `DELETE FROM active_turns WHERE id = $1`, errCorrupt.turnID)
 		if err != nil {
 			return nil, fmt.Errorf("delete corrupt active turn: %w", err)
 		}
 	}
 
 	return turns, nil
-}
-
-func activeTurnStateFromCheckpoint(checkpoint *harness.ActiveTurnCheckpoint, now time.Time) (ActiveTurnState, error) {
-	if checkpoint == nil {
-		return ActiveTurnState{}, errors.New("active turn checkpoint is required")
-	}
-
-	checkpointCopy := *checkpoint
-	checkpointCopy.TurnID = strings.TrimSpace(checkpointCopy.TurnID)
-	checkpointCopy.ConversationKey = strings.TrimSpace(checkpointCopy.ConversationKey)
-	checkpointCopy.Agent = strings.TrimSpace(checkpointCopy.Agent)
-	checkpointCopy.Model = strings.TrimSpace(checkpointCopy.Model)
-	checkpointCopy.DisplayModel = strings.TrimSpace(checkpointCopy.DisplayModel)
-	checkpointCopy.ResponseID = strings.TrimSpace(checkpointCopy.ResponseID)
-
-	turn := ActiveTurnState{Checkpoint: checkpointCopy, SourceMetadata: map[string]string{}, CreatedAt: now, UpdatedAt: now}
-
-	if turn.Checkpoint.TurnID == "" {
-		return ActiveTurnState{}, errors.New("active turn ID is required")
-	}
-
-	if turn.Checkpoint.ConversationKey == "" {
-		return ActiveTurnState{}, errors.New("active turn conversation ID is required")
-	}
-
-	return turn, nil
 }
 
 func marshalActiveTurnJSON(value any) (string, error) {
@@ -629,7 +533,8 @@ func scanCronSchedule(scanner rowScanner) (CronScheduleState, error) {
 	return schedule, nil
 }
 
-func (d stateDAO) setPendingSteers(ctx context.Context, conversationID string, steers []protocol.PendingSteer) error {
+// SetPendingSteers copies uninjected Slack Steers onto the conversation's active-turn row.
+func (s *SessionService) SetPendingSteers(conversationID string, steers []protocol.PendingSteer) error {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
 		return errors.New("pending steers conversation ID is required")
@@ -644,7 +549,7 @@ func (d stateDAO) setPendingSteers(ctx context.Context, conversationID string, s
 		return fmt.Errorf("marshal pending steers: %w", err)
 	}
 
-	if _, err := d.db.ExecContext(ctx, `UPDATE active_turns SET pending_steers_json = $1 WHERE conversation_id = $2`, payload, conversationID); err != nil {
+	if _, err := s.db.ExecContext(context.Background(), `UPDATE active_turns SET pending_steers_json = $1 WHERE conversation_id = $2`, payload, conversationID); err != nil {
 		return fmt.Errorf("persist pending steers: %w", err)
 	}
 

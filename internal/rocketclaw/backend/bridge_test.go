@@ -91,6 +91,127 @@ func TestBridgeSwitchAgentTrimsAndStoresAgent(t *testing.T) {
 	assert.Equal(t, "next", bridge.agentSnapshot())
 }
 
+func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
+	bus := newTestBus()
+	bridge := &Bridge{bus: bus, config: Config{ConversationID: "web-conversation"}, inputOpen: true, requestCh: make(chan bridgeRequest, 1)}
+	content := protocol.InboundContent{Text: "same text"}
+	initial := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, "alice", &content, true)
+	initial.Metadata["web_message_id"] = "initial"
+	admitted, err := bridge.activateInbound(t.Context(), &bridgeRequest{inbound: initial})
+	require.NoError(t, err)
+	require.True(t, admitted)
+
+	for _, id := range []string{"steer-first", "steer-second"} {
+		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, "alice", &content, true)
+		inbound.Metadata["web_message_id"] = id
+		require.NoError(t, bridge.Submit(t.Context(), inbound))
+	}
+
+	require.Equal(t, "steer-first", bridge.steers[0].queueItemID)
+	require.Equal(t, "steer-second", bridge.steers[1].queueItemID)
+	require.Len(t, bus.outbound, 1, "waiting steers are not consumed at submission")
+	inputs := bridge.drainSteers(t.Context(), rocketcode.TurnPhaseFinalAnswer)
+	require.Len(t, inputs, 2)
+
+	for i := range inputs {
+		require.Equal(t, buildPrompt(initial, nil), inputs[i].Text, "identity metadata must not change prompt framing")
+		require.NotContains(t, inputs[i].Text, "steer-")
+	}
+
+	require.Len(t, bus.outbound, 3)
+
+	for _, id := range []string{"initial", "steer-first", "steer-second"} {
+		message := <-bus.outbound
+		require.Equal(t, "web-conversation", message.ConversationID)
+		require.Equal(t, id, message.ConsumedID)
+		require.Equal(t, "same text", message.ConsumedText)
+		require.Empty(t, message.Text)
+		require.False(t, message.Complete)
+	}
+
+	require.Empty(t, bridge.drainSteers(t.Context(), rocketcode.TurnPhaseFinalAnswer))
+	require.Empty(t, bus.outbound, "a second drain must not repeat consumption")
+
+	// A disconnected observer must not drop or replay an admitted steer.
+	var logged bytes.Buffer
+
+	bridge.log = slog.New(slog.NewTextHandler(&logged, nil))
+
+	bus.Close()
+
+	bridge.inputOpen = true
+	require.NoError(t, bridge.Submit(t.Context(), initial))
+	inputs = bridge.drainSteers(t.Context(), rocketcode.TurnPhaseFinalAnswer)
+	require.Len(t, inputs, 1)
+	require.Equal(t, buildPrompt(initial, nil), inputs[0].Text)
+	require.Contains(t, logged.String(), "publish consumed web input")
+	require.Contains(t, logged.String(), "test publisher closed")
+	require.Empty(t, bridge.drainSteers(t.Context(), rocketcode.TurnPhaseFinalAnswer))
+}
+
+func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
+	store := newTestSessionService(t)
+
+	const conversationID = "web-queue"
+	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+
+	bus := newTestBus()
+	bridge := &Bridge{bus: bus, config: Config{ConversationID: conversationID, SessionService: store}, inputOpen: true, requestCh: make(chan bridgeRequest, 1)}
+
+	manager := &threadBridgeManager{store: store, bridges: map[string]directBridge{conversationID: bridge}}
+	for i, id := range []string{"queue-first", "queue-second"} {
+		require.NoError(t, store.PutThreadQueueItem(id, &protocol.ThreadQueueItem{
+			ConversationID: conversationID, Source: protocol.SourceWeb, Kind: protocol.InboundKindEnqueue,
+			Message: "same text", Principal: "alice", Position: i,
+		}))
+		promoted, err := manager.promoteQueueItem(t.Context(), conversationID, id, "")
+		require.NoError(t, err)
+		require.True(t, promoted)
+	}
+
+	items, err := manager.queueItems(conversationID)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+
+	for i, id := range []string{"queue-first", "queue-second"} {
+		require.Equal(t, id, items[i].ID)
+		require.Equal(t, protocol.InboundKindSteer, items[i].Kind)
+		require.Equal(t, "alice", items[i].Principal)
+	}
+
+	require.Empty(t, bus.outbound)
+	require.Len(t, bridge.drainSteers(t.Context(), rocketcode.TurnPhaseFinalAnswer), 2)
+	require.Len(t, bus.outbound, 2)
+
+	for _, id := range []string{"queue-first", "queue-second"} {
+		message := <-bus.outbound
+		require.Equal(t, id, message.ConsumedID)
+		require.Equal(t, "same text", message.ConsumedText)
+	}
+
+	items, err = manager.queueItems(conversationID)
+	require.NoError(t, err)
+	require.Empty(t, items)
+
+	queued := protocol.ThreadQueueItem{ID: "queue-next", ConversationID: conversationID, Source: protocol.SourceWeb, Kind: protocol.InboundKindEnqueue, Message: "next turn", Principal: "alice"}
+	require.NoError(t, store.PutThreadQueueItem(queued.ID, &queued))
+	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &queued))
+	require.Empty(t, bus.outbound, "queued input is consumed only upon activation")
+
+	request := <-bridge.requestCh
+	admitted, err := bridge.activateInbound(t.Context(), &request)
+	require.NoError(t, err)
+	require.True(t, admitted)
+	require.Len(t, bus.outbound, 1)
+	message := <-bus.outbound
+	require.Equal(t, queued.ID, message.ConsumedID)
+	require.Equal(t, queued.Message, message.ConsumedText)
+
+	remaining, err := store.ThreadQueueForConversation(conversationID)
+	require.NoError(t, err)
+	require.Empty(t, remaining)
+}
+
 func TestRestartToolScopesDescriptionToRuntimeConfig(t *testing.T) {
 	tool := restartTool(testNoopRestart, testNoopRestartRecorder)
 
@@ -504,7 +625,7 @@ func TestPickLaterWorkPrefersEarlierStashOverLaterDue(t *testing.T) {
 
 	var popped []string
 
-	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store, EnqueueActivation: EnqueueActivation{Fn: func(_ context.Context, item *protocol.ThreadQueueItem, _ *protocol.InboundMessage) error {
+	bridge := &Bridge{bus: discardPublisher{}, log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store, EnqueueActivation: EnqueueActivation{Fn: func(_ context.Context, item *protocol.ThreadQueueItem, _ *protocol.InboundMessage) error {
 		popped = append(popped, item.Message)
 		return nil
 	}}}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
@@ -1355,20 +1476,45 @@ func TestAttachFilesToolReadsWorkspacePath(t *testing.T) {
 	defer func() { require.NoError(t, root.Close()) }()
 
 	require.NoError(t, root.Mkdir("reports", 0o755))
-	require.NoError(t, root.WriteFile("reports/latest.txt", []byte("report body"), 0o644))
+
+	data := bytes.Repeat([]byte("report body"), 400000)
+	require.NoError(t, root.WriteFile("reports/latest.txt", data, 0o644))
 
 	attachments := new(outboundAttachmentCollector)
-	tool := attachments.Tool(root)
+	sessions := newTestSessionService(t)
+	tool := attachments.Tool(root, sessions, "attachment-test")
 	parameters := tool.Parameters
 	properties := parameters["properties"].(map[string]any)
 	attachmentsSchema := properties["attachments"].(map[string]any)
 	items := attachmentsSchema["items"].(map[string]any)
 	assert.ElementsMatch(t, []string{"path", "name", "mime_type", "content", "content_base64"}, items["required"])
 
-	_, err = tool.Call(t.Context(), []byte(`{"attachments":[{"path":"reports/latest.txt","name":"","mime_type":"","content":"","content_base64":""}]}`), nil)
+	result, err := tool.Call(t.Context(), []byte(`{"attachments":[{"path":"reports/latest.txt","name":"","mime_type":"","content":"","content_base64":""}]}`), nil)
 	require.NoError(t, err)
+	require.NotEqual(t, "queued attachments for final response", result.Output, "successful tool replay must carry immutable attachment IDs")
+	require.Less(t, len(result.Output), 100, "attachment bytes must not enter tool output")
 
-	assert.Equal(t, []protocol.OutboundAttachment{{Name: "latest.txt", MIMEType: "text/plain", Data: []byte("report body")}}, attachments.Attachments())
+	got := attachments.Attachments()
+	require.Len(t, got, 1)
+	require.Contains(t, result.Output, got[0].ID)
+	require.NoError(t, root.WriteFile("reports/latest.txt", []byte("changed"), 0o644))
+	stored, err := sessions.LoadAttachment(t.Context(), "attachment-test", got[0].ID, false)
+	require.NoError(t, err)
+	assert.Equal(t, protocol.OutboundAttachment{ID: got[0].ID, Name: "latest.txt", MIMEType: "text/plain", Data: data, Size: int64(len(data))}, stored)
+
+	calls := make(map[string]string)
+	_, err = sessions.ReplayAttachments(t.Context(), "attachment-test", root, json.RawMessage(`{"type":"function_call","call_id":"capture","name":"rocketclaw_attach_files_to_response","arguments":"{}"}`), calls)
+	require.NoError(t, err)
+	replayed, err := sessions.ReplayAttachments(t.Context(), "attachment-test", root, json.RawMessage(fmt.Sprintf(`{"type":"function_call_output","call_id":"capture","output":%q}`, result.Output)), calls)
+	require.NoError(t, err)
+	require.Equal(t, []protocol.OutboundAttachment{{ID: got[0].ID, Name: "latest.txt", MIMEType: "text/plain", Size: int64(len(data))}}, replayed)
+	require.False(t, replayed[0].OriginalUnverified)
+	require.NoError(t, root.WriteFile("reports/empty.txt", []byte{}, 0o600))
+	_, err = tool.Call(t.Context(), []byte(`{"attachments":[{"path":"reports/empty.txt"}]}`), nil)
+	require.NoError(t, err)
+	stored, err = sessions.LoadAttachment(t.Context(), "attachment-test", attachments.Attachments()[1].ID, false)
+	require.NoError(t, err)
+	require.Empty(t, stored.Data)
 }
 
 func TestOutboundAttachmentSources(t *testing.T) {
@@ -1407,7 +1553,7 @@ func TestAttachFilesToolReportsInvalidInput(t *testing.T) {
 
 	defer func() { require.NoError(t, root.Close()) }()
 
-	tool := new(outboundAttachmentCollector).Tool(root)
+	tool := new(outboundAttachmentCollector).Tool(root, newTestSessionService(t), "attachment-test")
 	_, err = tool.Call(t.Context(), []byte(`{`), nil)
 	require.ErrorContains(t, err, "parse response attachments")
 

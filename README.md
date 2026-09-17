@@ -33,6 +33,24 @@ See [LICENSE](LICENSE) for the full license terms.
 
 The runnable entry point is `cmd/rocketclaw`. Run `rocketclaw help` for validation and operational commands.
 
+RocketClaw embeds its Web interface, including when run directly from the Go module:
+
+```sh
+go run github.com/Rocketable/platform/cmd/rocketclaw@main
+```
+
+Web always starts at `0.0.0.0:3000`. To change its bind address, set
+`"web": {"listen_address": "127.0.0.1:3000"}` in `rocketclaw.json` or `femtoclaw.json`.
+No Web environment variables or socket setup are required. Browser access uses
+the configured `web_users` IP-to-username mapping.
+
+The compiled SPA in `internal/rocketclaw/internal/web/dist/` is committed with its
+frontend source changes, so Go-only builds need no Bun installation. When building
+from a checkout, `make -C internal/rocketclaw build` (also invoked by root
+`make build`) installs the locked frontend dependencies and rebuilds the SPA with
+Bun before compiling `bin/rocketclaw`. Commit the rebuilt `dist/` files alongside
+changes in `internal/rocketclaw/web/`.
+
 Slack native forwarded-thread expansion requires the bot scopes `channels:read` and `channels:history`; reinstall the Slack app after adding scopes. Message `...` menu actions require the `commands` scope and one message shortcut (`rocketclaw_actions`); reinstall after adding it. See `cmd/rocketclaw/CHEATSHEET.md`. RocketClaw expands only source channels Slack confirms are public and that the bot can already read. It never auto-joins a channel. Private, inaccessible, malformed, or partially unreadable source threads retain only Slack's forwarded preview.
 
 Slack configuration uses direct `slack.channels` mappings. Each mapping names a channel, an ordered non-empty `agents` list, and its authorized `allowed_user_ids`. An ordinary authorized app mention in a configured channel starts a fresh managed thread whose initiating message is its first turn. An `@` channel row is not a Slack channel; it supplies agents and an allowlist for hails in any other joined public channel, private channel, or group DM. A hail in an unmanaged thread takes that thread over and includes prior messages. 1:1 DMs never start this way. The bot still never auto-joins. A root `$agent` mention opens the native agent selector; selecting an agent registers a ready thread for that agent so the next human reply is the first turn. A root `$agent <name>` mention can also select a configured agent directly: without a message it registers a ready thread, while a following message starts the selected agent with that message as its first turn. A command-help mention is another exception: RocketClaw posts permanent help as the first thread reply without adding either message to agent history. Later replies use only that thread's persisted history.
@@ -100,6 +118,9 @@ RocketClaw is configured with `rocketclaw.json` in the working directory. Runtim
 Generated runtime state should not be treated as source code.
 
 Fresh RocketClaw stores apply embedded SQL migrations on first open. Startup does not import SQLite and does not migrate historical SQLite formats.
+Concurrent startups serialize schema upgrades on one database connection. Cancellation stops migration work; each migration commits its schema changes and ledger entry together, so earlier successful migrations survive a later failure.
+Only one RocketClaw process runs against a database at a time. Additional processes
+wait for the pglock run lock to become available; interrupting startup cancels that wait.
 
 Store tests run against the last three supported PostgreSQL majors from https://www.postgresql.org/versions.json. Local `make test` in `internal/rocketclaw` uses Docker for the newest of those, or `ROCKETCLAW_TEST_DATABASE_URL` if set. GitHub Actions runs all three.
 
@@ -124,6 +145,26 @@ The top-level `openai` object is the default provider. Add named providers under
 ```
 
 Manage each provider's local credential separately with `rocketclaw oai login [provider] [--headless]`, `rocketclaw oai list`, and `rocketclaw oai logout [provider]`; omission means `openai`. Credentials are stored in the selected config's workspace under its selected runtime directory, normally `.rocketclaw/auth.json`.
+
+### Attachment storage
+
+PostgreSQL stores attachment metadata, byte size, and conversation ownership. Original file bytes live in the top-level `attachments` driver. Omit this setting to use `<workspace>/.rocketclaw/attachments` (or `.femtoclaw/attachments` for the legacy runtime directory). Startup and reload preserve that directory. An explicit relative path is resolved from `workspace`.
+
+```json
+"attachments": {"driver": "filesystem", "path": "/srv/rocketclaw/attachments"}
+```
+
+For S3, select an existing bucket by ARN:
+
+```json
+"attachments": {"driver": "s3", "bucket_arn": "arn:aws:s3:::rocketclaw-attachments"}
+```
+
+S3 uses the AWS SDK's standard credential and region configuration: for example, an IAM role or shared AWS profile, and `AWS_REGION` or the shared profile's region. The bucket ARN does not encode a region. Grant `s3:PutObject` and `s3:GetObject` for the bucket's objects, plus any permissions required by its encryption configuration. RocketClaw does not create buckets or make objects public.
+
+Originals are immutable: filesystem writes publish complete files with a no-overwrite hard link, and S3 writes use `If-None-Match: *`. Metadata is committed only after storage succeeds. Reusing an already recorded ID preserves its original bytes and metadata. A storage object without a matching database row is an orphan; a collision fails rather than attaching new metadata to old bytes. A database commit failure after a successful write can leave such an orphan.
+
+Back up the database **and** the attachment directory or bucket together. Restoring only PostgreSQL restores references, not file contents. Keep the same storage location across restarts and restores; changing drivers or locations does not copy existing originals. Downloads still require an authorized conversation reference in surviving history or its queue. Mutable workspace copies used in prompts do not replace stored originals.
 
 `funneld` is configured with `funneld.json` by default, or with `--config` / `FUNNELD_CONFIG`. Its config declares a certificate `host`, an optional `cert_cache`, and routes from public mount paths to target base URLs.
 

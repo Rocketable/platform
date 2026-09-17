@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -14,9 +15,31 @@ import (
 
 // CreateConversation records an explicit ID without changing existing selection.
 func (r *Runtime) CreateConversation(ctx context.Context, conversation protocol.Conversation) error {
-	_, err := r.Sessions.db.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, $2, $3) ON CONFLICT (conversation_id) DO NOTHING`, conversation.ID, conversation.Agent, conversation.CreatedBy)
+	tx, err := r.Sessions.db.BeginTx(ctx, nil)
 	if err != nil {
+		return fmt.Errorf("begin conversation creation: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if err := lockSessionHistory(ctx, tx, conversation.ID); err != nil {
+		return err
+	}
+
+	summary, err := loadSessionSummary(ctx, tx, conversation.ID)
+	if err != nil {
+		return err
+	}
+
+	if _, err := tx.ExecContext(ctx, `INSERT INTO managed_conversations (conversation_id, agent, created_by) VALUES ($1, $2, $3) ON CONFLICT (conversation_id) DO NOTHING`, conversation.ID, conversation.Agent, conversation.CreatedBy); err != nil {
 		return fmt.Errorf("create conversation: %w", err)
+	}
+
+	if err := saveSessionSummary(ctx, tx, summary); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit conversation creation: %w", err)
 	}
 
 	return nil
@@ -82,6 +105,17 @@ func (b *Bridge) syncConversation(ctx context.Context, source *Bridge) error {
 
 	defer func() { _ = tx.Rollback() }()
 
+	if err := lockSessionHistory(ctx, tx, b.config.ConversationID); err != nil {
+		return err
+	}
+
+	summary, err := loadSessionSummary(ctx, tx, b.config.ConversationID)
+	if err != nil {
+		return err
+	}
+
+	changed := false
+
 	schedules := map[string]protocol.ScheduledMessageState{}
 
 	for i := range entries {
@@ -113,6 +147,12 @@ WHERE NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1 AND e
 			continue
 		}
 
+		changed = true
+
+		if err := projectSessionSummary(&summary, &entry, entry.Timestamp.UTC().Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+
 		switch entry.Type {
 		case producerScheduleEntryType:
 			var scheduled protocol.ScheduledMessageState
@@ -134,6 +174,16 @@ WHERE NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1 AND e
 			}
 
 			clear(schedules)
+		}
+	}
+
+	if changed {
+		if err := saveSessionSummary(ctx, tx, summary); err != nil {
+			return err
+		}
+
+		if _, err := tx.ExecContext(ctx, `UPDATE managed_conversations SET settled = FALSE WHERE conversation_id = $1 AND settled = TRUE`, b.config.ConversationID); err != nil {
+			return fmt.Errorf("reopen synced conversation: %w", err)
 		}
 	}
 
@@ -294,7 +344,13 @@ func (r *Runtime) DeleteQueueItem(ctx context.Context, conversationID, id string
 
 // ReorderQueueItems writes persisted enqueue positions in the given ID order.
 func (r *Runtime) ReorderQueueItems(conversationID string, ids []string) error {
-	return r.threads.reorderQueueItems(conversationID, ids)
+	for i, id := range ids {
+		if _, err := r.Sessions.db.ExecContext(context.Background(), `UPDATE thread_queue SET position=$1 WHERE conversation_id=$2 AND queue_item_id=$3`, i, conversationID, id); err != nil {
+			return fmt.Errorf("reorder thread queue: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // StashQueueItem persists waiting work and offers it to the conversation bridge.
@@ -305,19 +361,31 @@ func (r *Runtime) StashQueueItem(ctx context.Context, conversationID string, ite
 func (b *Bridge) drainSteers(ctx context.Context, phase rocketcode.TurnPhase) []rocketcode.PromptInput {
 	inputs := b.config.SteerDrain.Drain(ctx, phase)
 	b.mu.Lock()
-	defer b.mu.Unlock()
 
-	pending := b.steers[b.steersRead:]
+	pending := slices.Clone(b.steers[b.steersRead:])
 	if len(pending) == 0 && len(inputs) == 0 && phase == rocketcode.TurnPhaseFinalAnswer {
 		b.inputOpen = false
 	}
 
+	b.steersRead = len(b.steers)
+	b.mu.Unlock()
+
 	for _, request := range pending {
+		b.publishConsumed(ctx, request.inbound)
 		directSkill := inboundDirectSkill(request.inbound)
 		inputs = append(inputs, rocketcode.PromptInput{Text: buildPrompt(request.inbound, nil), Attachments: attachmentsFromInbound(request.inbound.Attachments), DirectSkill: directSkill})
 	}
 
-	b.steersRead = len(b.steers)
-
 	return inputs
+}
+
+func (b *Bridge) publishConsumed(ctx context.Context, inbound *protocol.InboundMessage) {
+	if id := inbound.Metadata["web_message_id"]; id != "" {
+		message := protocol.NewOutboundMessage(b.config.ConversationID, "")
+
+		message.ConsumedID, message.ConsumedText = id, inbound.Text
+		if err := b.bus.PublishOutbound(ctx, message); err != nil {
+			b.log.Error("publish consumed web input", "error", err)
+		}
+	}
 }

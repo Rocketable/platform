@@ -58,7 +58,7 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
-	sessions, err := backend.NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
+	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
@@ -73,6 +73,7 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 				Channels: []config.SlackChannelConfig{{Channel: "@"}, {Channel: "#ops", Agents: []string{"main"}}},
 			},
 			MCPExternal: config.MCPExternalConfig{Enabled: true, ListenAddr: "127.0.0.1:0"},
+			Web:         config.WebConfig{ListenAddress: "127.0.0.1:0"},
 		},
 		Log:                      slog.New(slog.DiscardHandler),
 		RunCtx:                   ctx,
@@ -84,7 +85,7 @@ func TestAssembleFrontendsWiresSlackCronAndMCP(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, front)
 	require.NotNil(t, done)
-	require.NotEmpty(t, stops)
+	require.Len(t, stops, 4, "Slack, Cron, external MCP, and Web must all start")
 	cancel()
 	<-done
 	for _, stop := range stops {
