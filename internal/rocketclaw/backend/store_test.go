@@ -21,6 +21,7 @@ import (
 	migrate "github.com/rubenv/sql-migrate"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	harness "github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/jackc/pgx/v5"
@@ -35,7 +36,7 @@ func testDSNFile(workspace string) string {
 
 func NewSessionService(workspace string) (*SessionService, error) {
 	if data, err := os.ReadFile(testDSNFile(workspace)); err == nil {
-		return NewSessionServiceIn(strings.TrimSpace(string(data)), slog.New(slog.DiscardHandler))
+		return NewSessionServiceIn(context.Background(), &config.Config{DatabaseURL: strings.TrimSpace(string(data)), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	}
 
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
@@ -47,7 +48,7 @@ func NewSessionService(workspace string) (*SessionService, error) {
 		return nil, fmt.Errorf("remember test database url: %w", err)
 	}
 
-	return NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
+	return NewSessionServiceIn(context.Background(), &config.Config{DatabaseURL: dsn, Workspace: workspace}, slog.New(slog.DiscardHandler))
 }
 
 func testStoreDSN(workspace string) string {
@@ -83,18 +84,18 @@ func AppendSessionEntryID(ctx context.Context, workspace, conversationID string,
 		}
 	}
 
-	service, err := NewSessionServiceIn(testStoreDSN(workspace), slog.New(slog.DiscardHandler))
+	service, err := NewSessionServiceIn(ctx, &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return 0, err
 	}
 
 	defer func() { _ = service.Stop() }()
 
-	return appendSessionEntryDB(ctx, service.db, conversationID, entry)
+	return service.AppendEntryID(ctx, conversationID, entry)
 }
 
 func DeleteSession(ctx context.Context, workspace, conversationID string) (int64, error) {
-	service, err := NewSessionServiceIn(testStoreDSN(workspace), slog.New(slog.DiscardHandler))
+	service, err := NewSessionServiceIn(ctx, &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return 0, err
 	}
@@ -103,14 +104,72 @@ func DeleteSession(ctx context.Context, workspace, conversationID string) (int64
 	return service.DeleteSession(ctx, conversationID)
 }
 
-func listSessions(ctx context.Context, databaseURL string) ([]protocol.SessionSummary, error) {
-	service, err := NewSessionServiceIn(databaseURL, slog.New(slog.DiscardHandler))
+func listSessions(ctx context.Context, workspace string, conversationIDs ...string) ([]protocol.SessionSummary, error) {
+	service, err := NewSessionServiceIn(ctx, &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = service.Stop() }()
 
-	return service.ListSessions(ctx)
+	return service.ListSessions(ctx, conversationIDs)
+}
+
+func TestAttachmentMetadata(t *testing.T) {
+	service := newTestSessionService(t)
+	attachment := protocol.OutboundAttachment{ID: "snapshot", Name: "report.txt", MIMEType: "text/plain", Data: []byte(strings.Repeat("original", 700000)), OriginalUnverified: true}
+	require.NoError(t, service.SaveAttachment(t.Context(), "producer", &attachment, false))
+
+	var columns []string
+
+	rows, err := service.db.QueryContext(t.Context(), `SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='attachments' ORDER BY ordinal_position`)
+	require.NoError(t, err)
+
+	for rows.Next() {
+		var column string
+		require.NoError(t, rows.Scan(&column))
+		columns = append(columns, column)
+	}
+
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	require.Contains(t, columns, "size")
+	require.NotContains(t, columns, "data")
+	metadata, err := service.AttachmentMetadata(t.Context(), "producer", attachment.ID, false)
+	require.NoError(t, err)
+
+	want := attachment
+	want.Size, want.Data = int64(len(attachment.Data)), nil
+	require.Equal(t, want, metadata)
+
+	for _, scope := range []struct {
+		conversation string
+		uploadOnly   bool
+	}{{"other", false}, {"producer", true}} {
+		_, err := service.AttachmentMetadata(t.Context(), scope.conversation, attachment.ID, scope.uploadOnly)
+		require.ErrorIs(t, err, sql.ErrNoRows)
+	}
+
+	stored, err := service.LoadAttachment(t.Context(), "producer", attachment.ID, false)
+	require.NoError(t, err)
+
+	attachment.Size = int64(len(attachment.Data))
+	require.Equal(t, attachment, stored)
+	_, err = service.AttachmentMetadata(t.Context(), "producer", "missing", false)
+	require.ErrorIs(t, err, sql.ErrNoRows)
+	root, err := os.OpenRoot(service.attachments.(filesystemAttachments).path)
+
+	require.NoError(t, err)
+	defer func() { require.NoError(t, root.Close()) }()
+
+	original, err := root.ReadFile(attachment.ID)
+	require.NoError(t, err)
+	require.Equal(t, attachment.Data, original)
+	require.NoError(t, root.Remove(attachment.ID))
+	metadata, err = service.AttachmentMetadata(t.Context(), "producer", attachment.ID, false)
+	require.NoError(t, err, "metadata must not read the storage driver")
+	require.Equal(t, want, metadata)
+	_, err = service.LoadAttachment(t.Context(), "producer", attachment.ID, false)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestSessionStoreAppendAndLoad(t *testing.T) {
@@ -319,6 +378,11 @@ func TestSessionServiceReleasesAbandonedExternalMCPRecovery(t *testing.T) {
 	require.NoError(t, service.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateID, ManagedConversationID: pairID, SlackChannel: "#ops"}))
 	_, err := service.appendExternalMCPEntry(t.Context(), privateID, pairID, testSessionEntry("first", "answer"), nil)
 	require.NoError(t, err)
+	observed, err := service.ObserveEntries(t.Context(), pairID)
+	require.NoError(t, err)
+	require.Len(t, observed, 1)
+	require.True(t, observed[0].Synced)
+	require.Equal(t, privateID, observed[0].SourceConversationID)
 
 	require.NoError(t, service.ReserveExternalMCPRecovery(privateID))
 	require.NoError(t, service.ReleaseExternalMCPRecovery(privateID))
@@ -508,55 +572,78 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 8, n)
+	assert.Equal(t, 14, n)
 	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
-	second, err := NewSessionServiceIn(testStoreDSN(workspace), slog.New(slog.DiscardHandler))
+	second, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop()) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 8, n)
+	assert.Equal(t, 14, n)
 }
 
 func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
-	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
-	require.NoError(t, err)
+	for _, prefix := range []int{5, 8} {
+		for _, ledger := range []string{"pg_migrations", "gorp_migrations"} {
+			t.Run(fmt.Sprintf("%d/%s", prefix, ledger), func(t *testing.T) {
+				dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+				require.NoError(t, err)
+				cfg, err := pgx.ParseConfig(dsn)
+				require.NoError(t, err)
 
-	logger := slog.New(slog.DiscardHandler)
-	cfg, err := pgx.ParseConfig(dsn)
-	require.NoError(t, err)
+				db := stdlib.OpenDB(*cfg)
 
-	db := stdlib.OpenDB(*cfg)
-	require.NoError(t, db.PingContext(t.Context()))
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
+				t.Cleanup(func() { require.NoError(t, db.Close()) })
 
-	dir := t.TempDir()
+				source := migrate.EmbedFileSystemMigrationSource{FileSystem: sessionDBMigrations, Root: "migrations"}
+				applied, err := (migrate.MigrationSet{TableName: ledger}).ExecMaxContext(t.Context(), db, "postgres", source, migrate.Up, prefix)
+				require.NoError(t, err)
+				require.Equal(t, prefix, applied)
+				_, err = db.ExecContext(t.Context(), `UPDATE `+ledger+` SET applied_at='2026-01-01Z';
+					ALTER TABLE managed_conversations ADD COLUMN settled_override boolean NOT NULL DEFAULT false;
+					ALTER TABLE managed_conversations ADD COLUMN bumped_at_unix_ns bigint NOT NULL DEFAULT 0;
+					INSERT INTO managed_conversations (conversation_id, agent, created_by, settled_override, bumped_at_unix_ns) VALUES ('synthetic', 'main', 'owner', true, 123);
+					INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('synthetic', '{"text":"synthetic\u0000history"}', '2026-09-09T12:00:00.123456Z');
+					INSERT INTO thread_queue (queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position) VALUES ('q', 'synthetic', 'queued', 'owner', 456, 7)`)
+				require.NoError(t, err)
 
-	for _, name := range []string{"001_init.sql", "002_thread_queue.sql", "003_pending_steers.sql", "004_thread_queue_park.sql", "005_drop_store_bootstrap.sql"} {
-		data, err := sessionDBMigrations.ReadFile("migrations/" + name)
-		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(filepath.Join(dir, name), data, 0o600))
-	}
+				if prefix == 8 {
+					_, err = db.ExecContext(t.Context(), `ALTER TABLE thread_queue ALTER COLUMN kind SET DEFAULT ''; UPDATE thread_queue SET kind=''`)
+					require.NoError(t, err)
+				}
 
-	applied, err := migrate.MigrationSet{TableName: "pg_migrations"}.ExecContext(t.Context(), db, "postgres", migrate.FileMigrationSource{Dir: dir}, migrate.Up)
-	require.NoError(t, err)
-	assert.Equal(t, 5, applied)
+				for range 2 {
+					require.NoError(t, initializeSessionDB(t.Context(), db, slog.New(slog.DiscardHandler)))
+				}
 
-	var count int
-	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&count))
-	assert.Equal(t, 5, count)
-	require.NoError(t, initializeSessionDB(t.Context(), db, logger))
-	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&count))
-	assert.Equal(t, 8, count)
+				var count int
+				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
+				require.Equal(t, 14, count)
+				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations WHERE applied_at='2026-01-01Z'`).Scan(&count))
+				require.Equal(t, prefix, count)
 
-	for _, query := range []string{
-		`SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'thread_queue' AND column_name = 'kind'`,
-		`SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'thread_queue' AND column_name = 'content'`,
-		`SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'managed_conversations' AND column_name = 'settled'`,
-	} {
-		var n int
-		require.NoError(t, db.QueryRowContext(t.Context(), query).Scan(&n))
-		assert.Equal(t, 1, n)
+				for _, query := range []string{
+					`SELECT count(*) FROM managed_conversations WHERE conversation_id='synthetic' AND agent='main' AND created_by='owner' AND NOT settled AND NOT pinned AND name='' AND settled_override AND bumped_at_unix_ns=123`,
+					`SELECT count(*) FROM session_entries WHERE conversation_id='synthetic' AND entry_json='{"text":"synthetic\u0000history"}' AND entry_timestamp='2026-09-09T12:00:00.123456Z'`,
+					`SELECT count(*) FROM thread_queue WHERE queue_item_id='q' AND message='queued' AND principal='owner' AND stash_at_unix_ns=456 AND position=7 AND content='{}'`,
+				} {
+					require.NoError(t, db.QueryRowContext(t.Context(), query).Scan(&count))
+					require.Equal(t, 1, count)
+				}
+
+				var kind, defaultKind string
+				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT kind FROM thread_queue WHERE queue_item_id='q'`).Scan(&kind))
+				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT column_default FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='thread_queue' AND column_name='kind'`).Scan(&defaultKind))
+
+				if prefix == 8 {
+					require.Empty(t, kind)
+					require.Equal(t, "''::text", defaultKind)
+				} else {
+					require.Equal(t, "enqueue", kind)
+					require.Equal(t, "'enqueue'::text", defaultKind)
+				}
+			})
+		}
 	}
 }
 
@@ -570,8 +657,38 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 8, n)
+	assert.Equal(t, 14, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
+}
+
+func TestSlackChannelFacts(t *testing.T) {
+	store := newTestSessionService(t)
+	ctx := t.Context()
+	at := time.Unix(10, 123)
+	require.NoError(t, store.RecordChannelFact(ctx, "T1", "C1", "old", at))
+	require.NoError(t, store.RecordChannelFact(ctx, "T1", "C1", "new", at.Add(time.Nanosecond)))
+	require.NoError(t, store.RecordChannelFact(ctx, "T1", "C1", "stale", at))
+	require.NoError(t, store.RecordChannelFact(ctx, "T2", "C1", "other", at))
+
+	for _, tc := range []struct {
+		workspace, id, name string
+		found               bool
+	}{
+		{"T1", "C1", "new", true}, {"T2", "C1", "other", true}, {"T1", "missing", "", false},
+	} {
+		name, found, err := store.ChannelFact(ctx, tc.workspace, tc.id)
+		require.NoError(t, err)
+		assert.Equal(t, tc.name, name)
+		assert.Equal(t, tc.found, found)
+	}
+
+	require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID("G1", "1.1"), ThreadState{Agent: "main"}))
+	require.NoError(t, store.UpsertThread(protocol.SlackThreadConversationID("G1", "2.2"), ThreadState{Agent: "main"}))
+	require.NoError(t, store.UpsertThread("web-session", ThreadState{Agent: "main"}))
+	require.NoError(t, store.RecordChannelFact(ctx, "T2", "Cother", "other", at))
+	ids, err := store.SlackChannelIDs(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"G1"}, ids)
 }
 
 func TestSessionServiceSettledPersistence(t *testing.T) {
@@ -966,6 +1083,10 @@ func TestSessionServiceAppliesPendingRestartNotificationsOnce(t *testing.T) {
 		messages, err := replayInputMessages(entries[1].Entry.ReplayInput)
 		require.NoError(t, err)
 		assert.Equal(t, []replayInputMessage{{role: "developer", text: restartNotificationDeveloperMessage}}, messages)
+		summaries, err := store.ListSessions(t.Context(), []string{conversationID})
+		require.NoError(t, err)
+		require.Len(t, summaries, 1)
+		assert.Equal(t, entries[1].Entry.Timestamp.UTC().Truncate(time.Microsecond), summaries[0].LastUpdated)
 	}
 
 	entries, err := store.ObserveEntries(context.Background(), "unmarked")
@@ -990,15 +1111,15 @@ func TestAppendSessionEntryDBReportsWriteFailures(t *testing.T) {
 
 	entry.ReplayInput = nil
 	_, err = appendSessionEntryDB(context.Background(), errStore{errExec: errors.New("no write")}, "main", entry)
-	require.ErrorContains(t, err, "append rocketcode session entry")
+	require.ErrorContains(t, err, "lock session history")
 }
 
 func TestNewSessionServiceReportsInvalidDatabaseURL(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	_, err := NewSessionServiceIn("not-a-dsn", logger)
+	_, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: "not-a-dsn", Workspace: t.TempDir()}, logger)
 	require.Error(t, err)
 
-	_, err = NewSessionServiceIn("postgres://u:s3cret@127.0.0.1:1/none?sslmode=disable", logger)
+	_, err = NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: "postgres://u:s3cret@127.0.0.1:1/none?sslmode=disable", Workspace: t.TempDir()}, logger)
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "s3cret")
 
@@ -1012,11 +1133,11 @@ func TestNewSessionServiceReportsInvalidDatabaseURL(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
-	_, err = NewSessionServiceIn(dsn, logger)
+	_, err = NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, logger)
 	require.Error(t, err)
 }
 
-func TestHoldRunLockRejectsSecondHolder(t *testing.T) {
+func TestHoldRunLockWaitsForReleaseOrCancellation(t *testing.T) {
 	service := newTestSessionService(t)
 	// This holder tests contention, not renewal; a heartbeat can race Close.
 	client, err := pglock.UnsafeNew(service.db, pglock.WithCustomTable(runLockTable), pglock.WithHeartbeatFrequency(0))
@@ -1024,10 +1145,25 @@ func TestHoldRunLockRejectsSecondHolder(t *testing.T) {
 	require.NoError(t, client.TryCreateTable())
 	lock, err := client.Acquire(runLockName, pglock.FailIfLocked())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, lock.Close()) })
+	t.Cleanup(func() { _ = lock.Close() })
 
-	err = holdRunLock(t.Context(), service.db, &lockedRun{})
-	require.ErrorIs(t, err, errRunLocked)
+	errWork := errors.New("work completed")
+	work := &runLockWorkMock{RunFunc: func(ctx context.Context) error {
+		require.NoError(t, ctx.Err())
+		return errWork
+	}}
+	// pglock waits on real PostgreSQL I/O; cancellation bounds the contended wait.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	err = holdRunLock(ctx, service.db, work)
+	require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+	require.ErrorIs(t, err, pglock.ErrNotAcquired)
+	require.Empty(t, work.RunCalls())
+
+	require.NoError(t, lock.Close())
+	require.ErrorIs(t, holdRunLock(t.Context(), service.db, work), errWork)
+	require.Len(t, work.RunCalls(), 1)
 }
 
 func TestHoldRunLockAllowsSessionServiceWhileHeld(t *testing.T) {
@@ -1041,7 +1177,7 @@ func TestHoldRunLockAllowsSessionServiceWhileHeld(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, lock.Close()) })
 
-	second, err := NewSessionServiceIn(testStoreDSN(workspace), slog.New(slog.DiscardHandler))
+	second, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	require.NoError(t, second.Stop())
 }
@@ -1101,11 +1237,11 @@ func TestAppendSessionEntryIDRejectsBlankConversationID(t *testing.T) {
 func TestSessionInspectionMissingDBDoesNotCreateRuntimeDir(t *testing.T) {
 	workspace := t.TempDir()
 
-	summaries, err := listSessions(context.Background(), testStoreDSN(workspace))
+	summaries, err := listSessions(context.Background(), workspace)
 	require.NoError(t, err)
 	assert.Empty(t, summaries)
 
-	service, err := NewSessionServiceIn(testStoreDSN(workspace), slog.New(slog.DiscardHandler))
+	service, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
@@ -1118,23 +1254,31 @@ func TestSessionInspectionMissingDBDoesNotCreateRuntimeDir(t *testing.T) {
 func TestListSessionsIncludesLastMessages(t *testing.T) {
 	workspace := t.TempDir()
 
-	_, err := AppendSessionEntryID(context.Background(), workspace, "main", testSessionEntry("first user", "first assistant"))
+	_, err := AppendSessionEntryID(context.Background(), workspace, "main", testSessionEntry("first user", "first assistant\x00"))
 	require.NoError(t, err)
 	_, err = AppendSessionEntryID(context.Background(), workspace, "main", testSessionEntry("second\nuser", "second assistant"))
 	require.NoError(t, err)
+
+	last := testSessionEntry(" \n", "assistant without a new user message")
+	last.Timestamp = last.Timestamp.Add(-time.Second + 123456789*time.Nanosecond)
+	_, err = AppendSessionEntryID(context.Background(), workspace, "main", last)
+	require.NoError(t, err)
 	_, err = AppendSessionEntryID(context.Background(), workspace, "slack-thread:D123:111.222", testSessionEntry("thread user", "thread assistant"))
 	require.NoError(t, err)
+	_, err = AppendSessionEntryID(context.Background(), workspace, "unrequested", testSessionEntry("unrequested user", "unrequested assistant"))
+	require.NoError(t, err)
 
-	summaries, err := listSessions(context.Background(), testStoreDSN(workspace))
+	summaries, err := listSessions(context.Background(), workspace, "slack-thread:D123:111.222", "main", "missing")
 	require.NoError(t, err)
 	require.Len(t, summaries, 2)
 
-	assert.Equal(t, protocol.SessionSummary{ConversationID: "main", LastUpdated: summaries[0].LastUpdated, LastUserMessage: "second\nuser"}, summaries[0])
-	assert.Equal(t, protocol.SessionSummary{ConversationID: "slack-thread:D123:111.222", LastUpdated: summaries[1].LastUpdated, LastUserMessage: "thread user"}, summaries[1])
+	assert.Equal(t, protocol.SessionSummary{ConversationID: "main", LastUpdated: summaries[0].LastUpdated, LastMessage: "assistant without a new user message"}, summaries[0])
+	assert.Equal(t, last.Timestamp.Truncate(time.Microsecond), summaries[0].LastUpdated)
+	assert.Equal(t, protocol.SessionSummary{ConversationID: "slack-thread:D123:111.222", LastUpdated: summaries[1].LastUpdated, LastMessage: "thread assistant"}, summaries[1])
 }
 
 func TestListSessionsMissingDBIsEmpty(t *testing.T) {
-	summaries, err := listSessions(context.Background(), testStoreDSN(t.TempDir()))
+	summaries, err := listSessions(context.Background(), t.TempDir())
 	require.NoError(t, err)
 	assert.Empty(t, summaries)
 }
@@ -1171,7 +1315,7 @@ func TestSessionServiceSerializesConcurrentAccess(t *testing.T) {
 		go func(i int) {
 			defer group.Done()
 
-			_, err := service.AppendEntryID(context.Background(), "main", testSessionEntry(fmt.Sprintf("user %d", i), "assistant"))
+			_, err := service.AppendEntryID(t.Context(), "main", testSessionEntryAt(time.Unix(int64(25-i), 123456789).UTC(), fmt.Sprintf("user %d 日本 %s", i, strings.Repeat("full preview ", 100))))
 			errCh <- err
 
 			errCh <- service.UpsertThread(fmt.Sprintf("thread-%02d", i), ThreadState{Agent: "main"})
@@ -1187,9 +1331,15 @@ func TestSessionServiceSerializesConcurrentAccess(t *testing.T) {
 
 	entries, err := service.ObserveEntries(context.Background(), "main")
 	require.NoError(t, err)
-	assert.Len(t, entries, 25)
+	require.Len(t, entries, 25)
+	last := entries[len(entries)-1].Entry
+	messages, err := replayInputMessages(last.ReplayInput)
+	require.NoError(t, err)
+	summaries, err := service.ListSessions(t.Context(), []string{"main"})
+	require.NoError(t, err)
+	require.Equal(t, []protocol.SessionSummary{{ConversationID: "main", LastMessage: messages[len(messages)-1].text, LastUpdated: last.Timestamp.Truncate(time.Microsecond)}}, summaries)
 
-	threadIDs, err := managedConversationIDs(context.Background(), service.db)
+	threadIDs, err := queryStrings(context.Background(), service.db, `SELECT conversation_id FROM managed_conversations ORDER BY conversation_id`, "managed conversation IDs")
 	require.NoError(t, err)
 	assert.Len(t, threadIDs, 25)
 }
@@ -1316,6 +1466,9 @@ func TestDeleteSessionDeletesOnlyTarget(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "ship it", goal.Objective)
+	summaries, err := service.ListSessions(t.Context(), []string{"main", "thread"})
+	require.NoError(t, err)
+	require.Equal(t, []protocol.SessionSummary{{ConversationID: "main"}, {ConversationID: "thread", LastMessage: "assistant", LastUpdated: time.Unix(1, 0).UTC()}}, summaries)
 }
 
 func TestDeleteSessionMissingIDReturnsZero(t *testing.T) {
@@ -1368,7 +1521,7 @@ func TestSessionServicePersistsExternalMCPSessionMapping(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "selected", thread.Agent)
-	listed, err := managedConversationIDs(t.Context(), store.db)
+	listed, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM managed_conversations ORDER BY conversation_id`, "managed conversation IDs")
 	require.NoError(t, err)
 	assert.Equal(t, []string{session.ManagedConversationID}, listed)
 
@@ -1453,7 +1606,7 @@ func TestSessionServiceRejectsBlankKeys(t *testing.T) {
 
 func TestDeleteSessionEntriesReportsDeleteFailures(t *testing.T) {
 	_, err := deleteSessionEntries(context.Background(), errStore{errExec: errors.New("no delete")}, map[string]struct{}{"main": {}})
-	require.ErrorContains(t, err, "delete stale session entries")
+	require.ErrorContains(t, err, "lock session history")
 
 	_, err = deleteSessionEntries(context.Background(), errStore{result: errResult{errRows: errors.New("no rows")}}, map[string]struct{}{"main": {}})
 	require.ErrorContains(t, err, "count stale session entries")
@@ -1499,7 +1652,7 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	orphanGoal := protocol.SlackThreadConversationID("DGOAL", slackTestTS(oldTime))
 	require.NoError(t, store.BeginGoal(orphanGoal, "stale goal", "", 1, "", ""))
 	require.NoError(t, store.BeginGoal(activeOldThread, "keep", "", 1, "", ""))
-	listed, err := managedConversationIDs(t.Context(), store.db)
+	listed, err := queryStrings(t.Context(), store.db, `SELECT conversation_id FROM managed_conversations ORDER BY conversation_id`, "managed conversation IDs")
 	require.NoError(t, err)
 	assert.Contains(t, listed, activeOldThread)
 	assert.NotContains(t, listed, "cron:daily:new")
@@ -1517,7 +1670,7 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, ok)
 
-	threadIDs, err := managedConversationIDs(context.Background(), store.db)
+	threadIDs, err := queryStrings(context.Background(), store.db, `SELECT conversation_id FROM managed_conversations ORDER BY conversation_id`, "managed conversation IDs")
 	require.NoError(t, err)
 	assert.NotContains(t, threadIDs, oldThread)
 	assert.NotContains(t, threadIDs, "empty-recorded")
@@ -1539,6 +1692,9 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 		entries, err := store.ObserveEntries(context.Background(), conversationID)
 		require.NoError(t, err)
 		assert.Empty(t, entries, conversationID)
+		summaries, err := store.ListSessions(t.Context(), []string{conversationID})
+		require.NoError(t, err)
+		assert.Empty(t, summaries, conversationID)
 	}
 
 	for _, conversationID := range []string{activeOldThread, "slack-thread:D123:not-a-time", "cron:daily:new"} {

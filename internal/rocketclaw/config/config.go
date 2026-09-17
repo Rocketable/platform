@@ -2,6 +2,7 @@
 package config
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,16 +14,21 @@ import (
 	"slices"
 	"strings"
 	"text/template"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws/arn"
 )
 
 // Config is the top-level rocketclaw runtime configuration.
 type Config struct {
 	Workspace         string                     `json:"workspace"`
 	DatabaseURL       string                     `json:"database_url"`
+	Attachments       AttachmentsConfig          `json:"attachments,omitzero"`
 	WorkDir           string                     `json:"-"`
 	Overlays          []string                   `json:"overlays,omitempty"`
 	Models            map[string]string          `json:"models,omitempty"`
 	WebUsers          map[netip.Addr]string      `json:"web_users,omitempty"`
+	Web               WebConfig                  `json:"web,omitzero"`
 	Environment       []string                   `json:"environment,omitempty"`
 	Logging           LoggingConfig              `json:"logging"`
 	MCPExternal       MCPExternalConfig          `json:"mcp_external"`
@@ -37,6 +43,52 @@ type Config struct {
 // DefaultRuntimeDir is the generated runtime directory for rocketclaw configs.
 const DefaultRuntimeDir = ".rocketclaw"
 
+// AttachmentDriver selects where immutable attachment originals are stored.
+type AttachmentDriver string
+
+// FilesystemAttachments and S3Attachments select the supported original-file stores.
+const (
+	FilesystemAttachments AttachmentDriver = "filesystem"
+	S3Attachments         AttachmentDriver = "s3"
+)
+
+// AttachmentsConfig selects an attachment directory or S3 bucket.
+type AttachmentsConfig struct {
+	Driver    AttachmentDriver `json:"driver"`
+	Path      string           `json:"path,omitempty"`
+	BucketARN string           `json:"bucket_arn,omitempty"`
+}
+
+// AttachmentLocation validates storage configuration and resolves its directory or bucket name.
+func (c *Config) AttachmentLocation() (AttachmentDriver, string, error) {
+	switch c.Attachments.Driver {
+	case "", FilesystemAttachments:
+		if c.Attachments.BucketARN != "" {
+			return "", "", errors.New("filesystem attachments do not accept bucket_arn")
+		}
+
+		path := c.Attachments.Path
+		if path == "" {
+			path = filepath.Join(c.RuntimeDirName(), "attachments")
+		}
+
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(c.Workspace, path)
+		}
+
+		return FilesystemAttachments, path, nil
+	case S3Attachments:
+		bucket, err := arn.Parse(c.Attachments.BucketARN)
+		if err != nil || bucket.Partition == "" || bucket.Service != "s3" || bucket.Region != "" || bucket.AccountID != "" || bucket.Resource == "" || strings.ContainsAny(bucket.Resource, "/:") || c.Attachments.Path != "" {
+			return "", "", errors.New("s3 attachments require a bucket_arn (arn:aws:s3:::bucket) and no path")
+		}
+
+		return S3Attachments, bucket.Resource, nil
+	default:
+		return "", "", fmt.Errorf("unknown attachments driver %q", c.Attachments.Driver)
+	}
+}
+
 // RuntimeDirName returns the selected generated runtime directory name.
 func (c *Config) RuntimeDirName() string {
 	if strings.TrimSpace(c.WorkDir) != "" {
@@ -44,6 +96,31 @@ func (c *Config) RuntimeDirName() string {
 	}
 
 	return DefaultRuntimeDir
+}
+
+// WebConfig controls the Web listener and conversation presentation.
+type WebConfig struct {
+	ListenAddress   string `json:"listen_address,omitempty"`
+	AutoSettleAfter string `json:"auto_settle_after,omitempty"`
+}
+
+// SettleAfter returns the configured inactivity period, defaulting to seven days.
+func (c WebConfig) SettleAfter() (time.Duration, error) {
+	value := c.AutoSettleAfter
+	if value == "" {
+		value = "168h"
+	}
+
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("web.auto_settle_after: %w", err)
+	}
+
+	if duration <= 0 {
+		return 0, errors.New("web.auto_settle_after must be positive")
+	}
+
+	return duration, nil
 }
 
 // LoggingConfig controls rocketclaw logging.
@@ -173,12 +250,7 @@ func loadConfigData(absPath string, data []byte, secretsARN string, fetcher Secr
 		cfg.Workspace = filepath.Join(configDir, cfg.Workspace)
 	}
 
-	workspace, err := filepath.Abs(cfg.Workspace)
-	if err != nil {
-		return nil, fmt.Errorf("resolve workspace: %w", err)
-	}
-
-	cfg.Workspace = workspace
+	cfg.Workspace = filepath.Clean(cfg.Workspace)
 
 	if strings.TrimSpace(cfg.Logging.Level) == "" {
 		cfg.Logging.Level = "debug"
@@ -237,6 +309,15 @@ func LoadExternalMCPUsers(configPath string) (map[string]string, error) {
 
 // Validate verifies the configuration is usable.
 func (c *Config) Validate() error {
+	c.Web.ListenAddress = cmp.Or(c.Web.ListenAddress, "0.0.0.0:3000")
+	if _, _, err := c.AttachmentLocation(); err != nil {
+		return err
+	}
+
+	if _, err := c.Web.SettleAfter(); err != nil {
+		return err
+	}
+
 	if c.Workspace == "" {
 		return errors.New("workspace is required")
 	}

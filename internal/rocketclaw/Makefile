@@ -11,10 +11,13 @@ vendor: .FORCE
 	go mod tidy
 	go mod vendor
 
-generate: vendor
+web-assets: .FORCE
+	cd web && bun install --frozen-lockfile && bun run build
+
+generate: web-assets vendor
 	go generate ./skel ../../cmd/rocketclaw
 
-lint: vendor
+lint: web-assets vendor
 	go run -mod=readonly github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run --fix ./...
 
 build: generate lint
@@ -23,9 +26,9 @@ build: generate lint
 cloc:
 	@printf "Go cloc (cmd/rocketclaw and internal/rocketclaw)\n"
 	@set -eu; \
-	go_source_cloc=$$(cloc --json --include-lang=Go --fullpath  --not-match-f='(_test\.go)$$' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
-	go_test_cloc=$$(cloc --json --include-lang=Go --fullpath  --match-f='(_test\.go)$$' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
-	go_total_cloc=$$(cloc --json --include-lang=Go --fullpath  ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
+	go_source_cloc=$$(cloc --json --include-lang=Go --exclude-dir=node_modules --fullpath --not-match-f='(_test\.go)$$' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
+	go_test_cloc=$$(cloc --json --include-lang=Go --exclude-dir=node_modules --fullpath --match-f='(_test\.go)$$' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
+	go_total_cloc=$$(cloc --json --include-lang=Go --exclude-dir=node_modules --fullpath ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
 	limit=$(GO_SOURCE_CLOC_BUDGET); \
 	hazard_zone=$(GO_SOURCE_CLOC_HAZARD_ZONE); \
 	hazard_cloc=$$((limit - hazard_zone)); \
@@ -46,7 +49,7 @@ check-code-metrics:
 
 check-cloc-budget:
 	@set -eu; \
-	go_source_cloc=$$(cloc --json --include-lang=Go --fullpath  --not-match-f='(_test\.go)$$' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
+	go_source_cloc=$$(cloc --json --include-lang=Go --exclude-dir=node_modules --fullpath --not-match-f='(_test\.go)$$' ../../cmd/rocketclaw . | jq -r '.SUM.code'); \
 	[ -n "$$go_source_cloc" ] || { printf "source cloc budget failed: unable to read source cloc\n"; exit 1; }; \
 	limit=$(GO_SOURCE_CLOC_BUDGET); \
 	hazard_zone=$(GO_SOURCE_CLOC_HAZARD_ZONE); \
@@ -87,7 +90,7 @@ check-coverage:
 		printf "coverage: %s%%\n" "$$current"; \
 		exit 0; \
 	fi; \
-	tmp_dir=.tmp; \
+	tmp_dir=../../.tmp; \
 	mkdir -p "$$tmp_dir"; \
 	base_revision=$$(jj log -r @- --no-graph -T commit_id); \
 	makefile_checksum=$$(cksum Makefile); makefile_checksum=$${makefile_checksum%% *}; \
@@ -101,7 +104,7 @@ check-coverage:
 		rmdir "$$base_dir"; \
 		jj --quiet workspace add --revision @- "$$base_dir"; \
 		(cd "$$base_dir" && go mod tidy && go mod vendor); \
-		(cd "$$base_dir/web" && bun install --frozen-lockfile); \
+		$(MAKE) -C "$$base_dir/internal/rocketclaw" web-assets; \
 		(cd "$$base_dir/internal/rocketclaw" && go test -race -count 1 -covermode=atomic -coverpkg=$(COVERPKG) -coverprofile=$(COVERPROFILE) github.com/Rocketable/platform/cmd/rocketclaw/... ./...); \
 		base=$$(cd "$$base_dir/internal/rocketclaw" && go tool cover -func="$(COVERPROFILE)" | awk '/^total:/ { gsub("%", "", $$3); print $$3 }'); \
 		printf '%s\n' "$$base" > "$$cache_file"; \

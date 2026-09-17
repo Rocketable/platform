@@ -19,12 +19,7 @@ func mergeJSON(dst, src any) any {
 
 	out := maps.Clone(dstMap)
 	for key, value := range srcMap {
-		if existing, ok := out[key]; ok {
-			out[key] = mergeJSON(existing, value)
-			continue
-		}
-
-		out[key] = value
+		out[key] = mergeJSON(out[key], value)
 	}
 
 	return out

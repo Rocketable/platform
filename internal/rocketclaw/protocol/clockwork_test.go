@@ -25,6 +25,7 @@ func TestCloneOutboundMessageDeepCopiesDeliveryData(t *testing.T) {
 	workflowAgent := AgentUpdate{Activity: "working"}
 	workflowPhase := PhaseUpdate{Name: "phase"}
 	message := NewOutboundMessage("conversation", "reply")
+	message.ConsumedID, message.ConsumedText = "web-input", "same text"
 	message.SlackReply = &SlackReplyTarget{ChannelID: "C1", ThreadTS: "1.2"}
 	message.Cronjob = &CronjobMessage{RelativePath: "job.md"}
 	message.WorkflowAgent = &workflowAgent
@@ -34,6 +35,8 @@ func TestCloneOutboundMessageDeepCopiesDeliveryData(t *testing.T) {
 	clone := CloneOutboundMessage(message)
 
 	require.NotSame(t, message, clone)
+	require.Equal(t, "web-input", clone.ConsumedID)
+	require.Equal(t, "same text", clone.ConsumedText)
 	require.NotSame(t, message.SlackReply, clone.SlackReply)
 	require.NotSame(t, message.Cronjob, clone.Cronjob)
 	require.NotSame(t, message.WorkflowAgent, clone.WorkflowAgent)

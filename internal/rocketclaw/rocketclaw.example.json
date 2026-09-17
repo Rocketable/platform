@@ -1,6 +1,10 @@
 {
   "workspace": "/Users/you/Projects/rocketclaw",
   "database_url": "postgres://localhost/rocketclaw?sslmode=disable",
+  "attachments": {
+    "driver": "filesystem",
+    "path": "/srv/rocketclaw/attachments"
+  },
   "environment": [
     "EXAMPLE_API_TOKEN=set-me"
   ],
@@ -15,6 +19,9 @@
   },
   "logging": {
     "level": "debug"
+  },
+  "web": {
+    "auto_settle_after": "168h"
   },
   "mcp_external": {
     "enabled": true,

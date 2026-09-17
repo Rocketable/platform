@@ -695,6 +695,7 @@ func runGit(dir string, args ...string) error {
 func resetRuntimeDirectory(target string, logger *slog.Logger, preserveOverlays bool) error {
 	preserved := map[string]struct{}{
 		".rocketcode":    {},
+		"attachments":    {},
 		"auth.json":      {},
 		"auth.json.lock": {},
 	}

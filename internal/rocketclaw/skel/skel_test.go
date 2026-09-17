@@ -135,13 +135,20 @@ func TestResetTargetRejectsFile(t *testing.T) {
 	require.ErrorContains(t, err, "rocketclaw target path is not a directory")
 }
 
-func TestResetRuntimeDirectoryPreservesAuthTemporaryFiles(t *testing.T) {
+func TestResetRuntimeDirectoryPreservesAuthAndAttachments(t *testing.T) {
 	target := filepath.Join(t.TempDir(), targetRoot)
 	require.NoError(t, os.MkdirAll(target, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(target, ".auth.json-in-flight"), []byte("token"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(target, "remove-me"), []byte("trash"), 0o600))
+	require.NoError(t, os.Mkdir(filepath.Join(target, "attachments"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(target, "attachments", "original"), []byte("immutable"), 0o600))
 
-	require.NoError(t, resetRuntimeDirectory(target, testLogger(), false))
+	for _, preserveOverlays := range []bool{false, true} {
+		require.NoError(t, resetRuntimeDirectory(target, testLogger(), preserveOverlays))
+		data, err := os.ReadFile(filepath.Join(target, "attachments", "original"))
+		require.NoError(t, err)
+		require.Equal(t, "immutable", string(data))
+	}
 
 	data, err := os.ReadFile(filepath.Join(target, ".auth.json-in-flight"))
 	require.NoError(t, err)

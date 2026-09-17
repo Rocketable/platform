@@ -17,6 +17,11 @@ func (c *Connector) StartEvents(ctx context.Context, backend frontend.Backend) <
 
 		for event := range events {
 			message := event.Message
+			if message.ConsumedID != "" {
+				event.Acknowledgement <- nil
+				continue
+			}
+
 			if message.ConversationID != "" {
 				channelID, threadTS, ok := protocol.SlackThreadTarget(message.ConversationID)
 				if !ok {

@@ -1,0 +1,13 @@
+export type PromptDelivery = "STEER" | "QUEUE";
+export type Attachment = { id: string; name: string; mimeType: string; size?: string; originalUnverified?: boolean; conversationId: string };
+export type TranscriptEvent = { text: string; snapshot: boolean; role: string; complete: boolean; turnId: string; messageId?: string; toolCallId?: string; toolName?: string; attachments?: Attachment[] };
+export type SessionEntryMeta = { id: string; type?: string; timestamp?: string };
+export type SessionEntryData = { id: string; json?: string };
+export type QueueItem = { id: string; text: string; attachments?: Attachment[]; delivery?: PromptDelivery };
+export type Session = { id: string; title?: string; preview?: string; updatedAt?: string; agent?: string; settled?: boolean; allowedAgents?: string[]; running?: boolean; pinned?: boolean; name?: string };
+export type SessionBatch = { sessions: Session[]; owner: string; upstreamSuccess: boolean; summariesComplete: boolean };
+export type AgentChoices = { agents: Agent[]; currentAgent: string };
+export type CronJob = { stem: string; status: string; lastRun: string; nextRun: string; schedule?: string; body?: string; agent?: string; channel?: string; upcoming?: string[]; origin?: string };
+export type Agent = { name: string; model?: string; reasoning?: string; description?: string; verbosity?: string; prompt?: string; permissions?: string; origin?: string };
+export type Skill = { name: string; description?: string; license?: string; compatibility?: string; content?: string; origin?: string };
+export type ConfigView = { workspace?: string; overlays?: string[]; models?: { name?: string; model?: string }[]; slackChannels?: { channel?: string; agents?: string[] }[]; mcpServers?: string[]; loggingLevel?: string; autoApproverModel?: string; instrumentationEnabled?: boolean; mcpExternal?: boolean; webAutoSettleAfter?: string; tailscaleUser?: string };

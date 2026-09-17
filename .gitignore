@@ -3,3 +3,6 @@
 bin/
 testsandbox/
 .rocketclaw/*.local.yaml
+!.opencode/
+!.opencode/skills/
+!.opencode/skills/**

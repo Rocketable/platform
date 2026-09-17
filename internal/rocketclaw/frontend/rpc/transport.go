@@ -9,7 +9,8 @@ import (
 	"path/filepath"
 
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 )
 
 // Listen opens a Unix socket inside an existing private directory. Only the
@@ -41,40 +42,13 @@ func Listen(socketPath string) (net.Listener, error) {
 // gRPC's Unimplemented response; they are not successful empty handlers.
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	desc := grpc.ServiceDesc{ServiceName: "rpc.Web", HandlerType: (*any)(nil), Metadata: "web.proto"}
-	for _, method := range []string{"Protocol", "Prompt", "History", "ListSessions", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "SettleSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "RemoveQueueItem", "ReorderQueue"} {
-		desc.Methods = append(desc.Methods, grpc.MethodDesc{MethodName: method, Handler: func(_ any, ctx context.Context, decode func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
-			var request proto.Message = &SessionEntriesRequest{}
 
-			switch method {
-			case "ListCronJobs":
-				request = &ListCronJobsRequest{}
-			case "RunCronJob":
-				request = &RunCronJobRequest{}
-			case "SettleSession":
-				request = &SettleSessionRequest{}
-			case "ListConfig":
-				request = &ListConfigRequest{}
-			case "ListSkills":
-				request = &ListSkillsRequest{}
-			case "ListAgents":
-				request = &ListAgentsRequest{}
-			case "CreateSession":
-				request = &CreateSessionRequest{}
-			case "ListSessions":
-				request = &ListSessionsRequest{}
-			case "History":
-				request = &HistoryRequest{}
-			case "Protocol":
-				request = &ProtocolRequest{}
-			case "Prompt":
-				request = &PromptRequest{}
-			case "ListQueue":
-				request = &ListQueueRequest{}
-			case "SteerQueueItem", "RemoveQueueItem":
-				request = &QueueItemRequest{}
-			case "ReorderQueue":
-				request = &ReorderQueueRequest{}
-			}
+	for _, method := range []string{"Protocol", "Identity", "Prompt", "History", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "SettleSession", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "RemoveQueueItem", "ReorderQueue"} {
+		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
+		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
+
+		desc.Methods = append(desc.Methods, grpc.MethodDesc{MethodName: method, Handler: func(_ any, ctx context.Context, decode func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+			request := requestType.New().Interface()
 
 			if err := decode(request); err != nil {
 				return nil, err
@@ -91,13 +65,23 @@ func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 		}})
 	}
 
-	desc.Streams = []grpc.StreamDesc{{StreamName: "Join", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
+	desc.Streams = []grpc.StreamDesc{{StreamName: "UploadAttachment", ClientStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
+		return s.uploadAttachment(stream)
+	}}, {StreamName: "DownloadAttachment", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
+		return s.downloadAttachment(stream)
+	}}, {StreamName: "Join", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
 		request := &JoinRequest{}
 		if err := stream.RecvMsg(request); err != nil {
 			return fmt.Errorf("receive web join: %w", err)
 		}
 
 		return s.join(request, stream)
+	}}, {StreamName: "ListSessions", ServerStreams: true, Handler: func(_ any, stream grpc.ServerStream) error {
+		if err := stream.RecvMsg(&ListSessionsRequest{}); err != nil {
+			return fmt.Errorf("receive web session list: %w", err)
+		}
+
+		return s.listSessions(stream)
 	}}}
 	registrar.RegisterService(&desc, s)
 }
@@ -110,16 +94,23 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 		return s.runCronJob(ctx, request.(*RunCronJobRequest))
 	case "SettleSession":
 		return s.settleSession(ctx, request.(*SettleSessionRequest))
+	case "UpdateSession":
+		return s.updateSession(ctx, request.(*UpdateSessionRequest))
 	case "ListConfig":
 		return s.listConfig(ctx)
 	case "ListSkills":
 		return s.listSkills(ctx, request.(*ListSkillsRequest))
 	case "ListAgents":
-		return s.listAgents(ctx)
+		return s.listAgents(ctx, request.(*ListAgentsRequest).ConversationId)
+	case "Identity":
+		username, err := s.principal(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		return &IdentityResponse{Username: username}, nil
 	case "CreateSession":
 		return s.createSession(ctx, request.(*CreateSessionRequest))
-	case "ListSessions":
-		return s.listSessions(ctx)
 	case "History":
 		return s.history(ctx, request.(*HistoryRequest))
 	case "Prompt":

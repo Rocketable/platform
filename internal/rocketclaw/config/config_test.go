@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,7 +56,92 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	assert.Equal(t, "api_key", cfg.OpenAI.RocketCodeAuth)
 	assert.Empty(t, cfg.AutoApproverModel)
 	assert.Empty(t, cfg.WebUsers)
+	assert.Equal(t, "0.0.0.0:3000", cfg.Web.ListenAddress)
+	cfg.Web.ListenAddress = "127.0.0.1:8080"
+	require.NoError(t, cfg.Validate())
+	assert.Equal(t, "127.0.0.1:8080", cfg.Web.ListenAddress)
+	settleAfter, err := cfg.Web.SettleAfter()
+	require.NoError(t, err)
+	assert.Equal(t, 7*24*time.Hour, settleAfter)
 	assert.True(t, filepath.IsAbs(cfg.Workspace))
+}
+
+func TestAttachmentLocation(t *testing.T) {
+	for _, runtimeDir := range []string{".rocketclaw", ".femtoclaw"} {
+		for _, test := range []struct {
+			name, raw, location string
+			driver              AttachmentDriver
+		}{
+			{"default", `{}`, filepath.Join(runtimeDir, "attachments"), FilesystemAttachments},
+			{"relative", `{"driver":"filesystem","path":"originals"}`, "originals", FilesystemAttachments},
+			{"absolute", `{"driver":"filesystem","path":"/srv/originals"}`, "/srv/originals", FilesystemAttachments},
+			{"s3", `{"driver":"s3","bucket_arn":"arn:aws:s3:::originals"}`, "originals", S3Attachments},
+			{"unknown", `{"driver":"postgres"}`, "", ""},
+			{"missing bucket", `{"driver":"s3"}`, "", ""},
+			{"object arn", `{"driver":"s3","bucket_arn":"arn:aws:s3:::originals/file"}`, "", ""},
+			{"access point arn", `{"driver":"s3","bucket_arn":"arn:aws:s3:us-east-1:123456789012:accesspoint/name"}`, "", ""},
+			{"filesystem bucket", `{"driver":"filesystem","bucket_arn":"arn:aws:s3:::originals"}`, "", ""},
+			{"s3 path", `{"driver":"s3","bucket_arn":"arn:aws:s3:::originals","path":"originals"}`, "", ""},
+		} {
+			t.Run(runtimeDir+"/"+test.name, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "config.json")
+				body := fmt.Sprintf(`{"workspace":"work","database_url":"postgres://localhost/test","openai":{"api_key":"test"},"slack":{"bot_token":"test","app_token":"test","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]},"attachments":%s}`, test.raw)
+				require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+
+				cfg, err := Load(path, "", AWSFetcher{})
+				if test.driver == "" {
+					require.Error(t, err)
+					return
+				}
+
+				require.NoError(t, err)
+
+				cfg.WorkDir = runtimeDir
+				driver, location, err := cfg.AttachmentLocation()
+				require.NoError(t, err)
+				require.Equal(t, test.driver, driver)
+
+				want := test.location
+				if driver == FilesystemAttachments && !filepath.IsAbs(want) {
+					want = filepath.Join(filepath.Dir(path), "work", want)
+				}
+
+				require.Equal(t, want, location)
+			})
+		}
+	}
+}
+
+func TestLoadAutoSettleAfter(t *testing.T) {
+	for _, filename := range []string{"rocketclaw.json", "femtoclaw.json"} {
+		for _, tt := range []struct {
+			value string
+			want  time.Duration
+		}{
+			{"168h", 7 * 24 * time.Hour},
+			{"1h30m", 90 * time.Minute},
+			{"0", 0},
+			{"-1h", 0},
+			{"7d", 0},
+		} {
+			t.Run(filename+"/"+tt.value, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), filename)
+				content := fmt.Sprintf(`{"database_url":"postgres://localhost/test", "openai":{"api_key":"test"}, "slack":{"bot_token":"test","app_token":"test","channels":[{"channel":"#ops","agents":["main"],"allowed_user_ids":["U123"]}]}, "web":{"auto_settle_after":%q}}`, tt.value)
+				require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+				cfg, err := Load(path, "", AWSFetcher{})
+				if tt.want == 0 {
+					require.ErrorContains(t, err, "web.auto_settle_after")
+					return
+				}
+
+				require.NoError(t, err)
+				got, err := cfg.Web.SettleAfter()
+				require.NoError(t, err)
+				require.Equal(t, tt.want, got)
+			})
+		}
+	}
 }
 
 func TestLoadPreservesModelConfig(t *testing.T) {

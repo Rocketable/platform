@@ -1,20 +1,19 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"net/netip"
-	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
-	"github.com/Rocketable/platform/internal/rocketclaw/frontend/rpc"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 )
 
 func TestWebRPC(t *testing.T) {
@@ -22,43 +21,47 @@ func TestWebRPC(t *testing.T) {
 	require.NoError(t, err)
 
 	logger := slog.New(slog.DiscardHandler)
-	sessions, err := backend.NewSessionServiceIn(dsn, logger)
+	sessions, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, logger)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
 
-	rt := &backend.Runtime{Sessions: sessions, Cfg: &config.Config{WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}, Log: logger}
+	rt := &backend.Runtime{Sessions: sessions, Cfg: &config.Config{Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}, Log: logger}
 
-	t.Setenv("ROCKETCLAW_WEB_GRPC", "127.0.0.1:18790")
-
-	_, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
-	require.ErrorContains(t, err, "must be unix:")
-	dir := t.TempDir()
-
-	socketPath, err := filepath.Abs(filepath.Join(dir, "web.sock"))
+	httpListener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	t.Setenv("ROCKETCLAW_WEB_GRPC", "unix:"+socketPath)
-	require.NoError(t, os.Chmod(dir, 0o755))
+	t.Cleanup(func() { _ = httpListener.Close() })
+	require.NoError(t, json.Unmarshal([]byte(`{"web":{"listen_address":"`+httpListener.Addr().String()+`"}}`), rt.Cfg))
 
 	_, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
-	require.ErrorContains(t, err, "private")
-	require.NoError(t, os.Chmod(dir, 0o700))
+	require.ErrorContains(t, err, "start Web HTTP")
+	require.NoError(t, httpListener.Close())
 
 	stop, err := startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
 	require.NoError(t, err)
-	connection, err := grpc.NewClient("unix:"+socketPath, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	defer func() { require.NoError(t, stop(t.Context())) }()
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+rt.Cfg.Web.ListenAddress+"/api/Identity", strings.NewReader("{}"))
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, connection.Close()) })
-	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "127.0.0.1"))
+	responseHTTP, err := http.DefaultClient.Do(request)
+	require.NoError(t, err)
+	var identity struct {
+		Username string `json:"username"`
+	}
+	require.NoError(t, json.NewDecoder(responseHTTP.Body).Decode(&identity))
+	require.NoError(t, responseHTTP.Body.Close())
+	require.Equal(t, http.StatusOK, responseHTTP.StatusCode)
+	require.Equal(t, "alice", identity.Username)
+	request, err = http.NewRequestWithContext(t.Context(), http.MethodGet, "http://"+rt.Cfg.Web.ListenAddress+"/", nil)
+	require.NoError(t, err)
+	responseHTTP, err = http.DefaultClient.Do(request)
+	require.NoError(t, err)
+	body, err := io.ReadAll(responseHTTP.Body)
+	require.NoError(t, err)
+	require.NoError(t, responseHTTP.Body.Close())
+	require.Equal(t, http.StatusOK, responseHTTP.StatusCode)
+	require.Contains(t, string(body), "/assets/main-")
 
-	var response rpc.ListSessionEntriesResponse
-	require.NoError(t, connection.Invoke(ctx, "/rpc.Web/ListSessionEntries", &rpc.SessionEntriesRequest{Id: "empty"}, &response))
-	require.Empty(t, response.Entries)
-	require.NoError(t, stop(ctx))
-
-	_, err = os.Stat(socketPath)
-	require.ErrorIs(t, err, os.ErrNotExist)
+	require.NoError(t, stop(t.Context()))
 	// Immediate shutdown is valid even before Serve's goroutine is scheduled.
 	stop, err = startWebRPC(rt, &mockWebChannels{}, &mockWebCron{})
 	require.NoError(t, err)
-	require.NoError(t, stop(ctx))
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +25,7 @@ func newCronScheduleStore(t *testing.T) *backend.SessionService {
 		t.Fatal(err)
 	}
 
-	store, err := backend.NewSessionServiceIn(dsn, slog.New(slog.DiscardHandler))
+	store, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
