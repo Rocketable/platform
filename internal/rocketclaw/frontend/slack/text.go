@@ -1,6 +1,7 @@
 package slackconnector
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 	"unicode"
@@ -54,23 +55,21 @@ func splitSlackText(text string, preferredLimit, hardLimit int) []string {
 }
 
 func slackBoundary(runes []rune) int {
+	line, space := 0, 0
+
 	for i := range slices.Backward(runes) {
 		if i > 0 && runes[i-1] == '\n' && runes[i] == '\n' {
 			return i + 1
 		}
-	}
 
-	for i := range slices.Backward(runes) {
-		if runes[i] == '\n' {
-			return i + 1
+		if line == 0 && runes[i] == '\n' {
+			line = i + 1
+		}
+
+		if space == 0 && unicode.IsSpace(runes[i]) && runes[i] != '\n' {
+			space = i + 1
 		}
 	}
 
-	for i := range slices.Backward(runes) {
-		if unicode.IsSpace(runes[i]) && runes[i] != '\n' {
-			return i + 1
-		}
-	}
-
-	return 0
+	return cmp.Or(line, space)
 }
