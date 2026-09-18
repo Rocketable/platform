@@ -4748,7 +4748,6 @@ const (
 	BetaResponseModelGPT5_1                           BetaResponseModel = "gpt-5.1"
 	BetaResponseModelGPT5_1_2025_11_13                BetaResponseModel = "gpt-5.1-2025-11-13"
 	BetaResponseModelGPT5_1Codex                      BetaResponseModel = "gpt-5.1-codex"
-	BetaResponseModelGPT5_1Mini                       BetaResponseModel = "gpt-5.1-mini"
 	BetaResponseModelGPT5_1ChatLatest                 BetaResponseModel = "gpt-5.1-chat-latest"
 	BetaResponseModelGPT5                             BetaResponseModel = "gpt-5"
 	BetaResponseModelGPT5Mini                         BetaResponseModel = "gpt-5-mini"
@@ -4779,6 +4778,8 @@ const (
 	BetaResponseModelGPT4o2024_11_20                  BetaResponseModel = "gpt-4o-2024-11-20"
 	BetaResponseModelGPT4o2024_08_06                  BetaResponseModel = "gpt-4o-2024-08-06"
 	BetaResponseModelGPT4o2024_05_13                  BetaResponseModel = "gpt-4o-2024-05-13"
+	BetaResponseModelGPTAudioMini                     BetaResponseModel = "gpt-audio-mini"
+	BetaResponseModelGPTAudioMini2025_12_15           BetaResponseModel = "gpt-audio-mini-2025-12-15"
 	BetaResponseModelGPT4oAudioPreview                BetaResponseModel = "gpt-4o-audio-preview"
 	BetaResponseModelGPT4oAudioPreview2024_10_01      BetaResponseModel = "gpt-4o-audio-preview-2024-10-01"
 	BetaResponseModelGPT4oAudioPreview2024_12_17      BetaResponseModel = "gpt-4o-audio-preview-2024-12-17"
@@ -4812,6 +4813,7 @@ const (
 	BetaResponseModelGPT3_5Turbo1106                  BetaResponseModel = "gpt-3.5-turbo-1106"
 	BetaResponseModelGPT3_5Turbo0125                  BetaResponseModel = "gpt-3.5-turbo-0125"
 	BetaResponseModelGPT3_5Turbo16k0613               BetaResponseModel = "gpt-3.5-turbo-16k-0613"
+	BetaResponseModelGPT5_1Mini                       BetaResponseModel = "gpt-5.1-mini"
 	BetaResponseModelO1Pro                            BetaResponseModel = "o1-pro"
 	BetaResponseModelO1Pro2025_03_19                  BetaResponseModel = "o1-pro-2025-03-19"
 	BetaResponseModelO3Pro                            BetaResponseModel = "o3-pro"
@@ -6847,6 +6849,55 @@ func (r BetaResponseCodeInterpreterToolCallAgentParam) MarshalJSON() (data []byt
 	return param.MarshalObject(r, (*shadow)(&r))
 }
 func (r *BetaResponseCodeInterpreterToolCallAgentParam) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// Emitted when new summary content is sampled for a compaction trigger. Contains
+// no summary content.
+type BetaResponseCompactionCompactingEvent struct {
+	// The ID of the compaction output item.
+	ItemID string `json:"item_id" api:"required"`
+	// The index of the compaction output item.
+	OutputIndex int64 `json:"output_index" api:"required"`
+	// The sequence number of the event that was emitted.
+	SequenceNumber int64 `json:"sequence_number" api:"required"`
+	// The type of the event, always `response.compaction.compacting`.
+	Type constant.ResponseCompactionCompacting `json:"type" default:"response.compaction.compacting"`
+	// The agent that owns this multi-agent streaming event.
+	Agent BetaResponseCompactionCompactingEventAgent `json:"agent"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		ItemID         respjson.Field
+		OutputIndex    respjson.Field
+		SequenceNumber respjson.Field
+		Type           respjson.Field
+		Agent          respjson.Field
+		ExtraFields    map[string]respjson.Field
+		raw            string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r BetaResponseCompactionCompactingEvent) RawJSON() string { return r.JSON.raw }
+func (r *BetaResponseCompactionCompactingEvent) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// The agent that owns this multi-agent streaming event.
+type BetaResponseCompactionCompactingEventAgent struct {
+	// The canonical name of the agent that produced this item.
+	AgentName string `json:"agent_name" api:"required"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		AgentName   respjson.Field
+		ExtraFields map[string]respjson.Field
+		raw         string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r BetaResponseCompactionCompactingEventAgent) RawJSON() string { return r.JSON.raw }
+func (r *BetaResponseCompactionCompactingEventAgent) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
@@ -28580,9 +28631,10 @@ const (
 // [BetaResponseCodeInterpreterCallCompletedEvent],
 // [BetaResponseCodeInterpreterCallInProgressEvent],
 // [BetaResponseCodeInterpreterCallInterpretingEvent],
-// [BetaResponseCompletedEvent], [BetaResponseContentPartAddedEvent],
-// [BetaResponseContentPartDoneEvent], [BetaResponseCreatedEvent],
-// [BetaResponseErrorEvent], [BetaResponseFileSearchCallCompletedEvent],
+// [BetaResponseCompactionCompactingEvent], [BetaResponseCompletedEvent],
+// [BetaResponseContentPartAddedEvent], [BetaResponseContentPartDoneEvent],
+// [BetaResponseCreatedEvent], [BetaResponseErrorEvent],
+// [BetaResponseFileSearchCallCompletedEvent],
 // [BetaResponseFileSearchCallInProgressEvent],
 // [BetaResponseFileSearchCallSearchingEvent],
 // [BetaResponseFunctionCallArgumentsDeltaEvent],
@@ -28629,11 +28681,11 @@ type BetaResponseStreamEventUnion struct {
 	// "response.code_interpreter_call_code.done",
 	// "response.code_interpreter_call.completed",
 	// "response.code_interpreter_call.in_progress",
-	// "response.code_interpreter_call.interpreting", "response.completed",
-	// "response.content_part.added", "response.content_part.done", "response.created",
-	// "error", "response.file_search_call.completed",
-	// "response.file_search_call.in_progress", "response.file_search_call.searching",
-	// "response.function_call_arguments.delta",
+	// "response.code_interpreter_call.interpreting", "response.compaction.compacting",
+	// "response.completed", "response.content_part.added",
+	// "response.content_part.done", "response.created", "error",
+	// "response.file_search_call.completed", "response.file_search_call.in_progress",
+	// "response.file_search_call.searching", "response.function_call_arguments.delta",
 	// "response.function_call_arguments.done", "response.shell_call_command.added",
 	// "response.shell_call_command.delta", "response.shell_call_command.done",
 	// "response.shell_call_output_content.done", "response.in_progress",
@@ -28664,7 +28716,8 @@ type BetaResponseStreamEventUnion struct {
 	// [BetaResponseCodeInterpreterCallCompletedEventAgent],
 	// [BetaResponseCodeInterpreterCallInProgressEventAgent],
 	// [BetaResponseCodeInterpreterCallInterpretingEventAgent],
-	// [BetaResponseCompletedEventAgent], [BetaResponseContentPartAddedEventAgent],
+	// [BetaResponseCompactionCompactingEventAgent], [BetaResponseCompletedEventAgent],
+	// [BetaResponseContentPartAddedEventAgent],
 	// [BetaResponseContentPartDoneEventAgent], [BetaResponseCreatedEventAgent],
 	// [BetaResponseErrorEventAgent], [BetaResponseFileSearchCallCompletedEventAgent],
 	// [BetaResponseFileSearchCallInProgressEventAgent],
@@ -28809,6 +28862,7 @@ func (BetaResponseCodeInterpreterCallCodeDoneEvent) implBetaResponseStreamEventU
 func (BetaResponseCodeInterpreterCallCompletedEvent) implBetaResponseStreamEventUnion()    {}
 func (BetaResponseCodeInterpreterCallInProgressEvent) implBetaResponseStreamEventUnion()   {}
 func (BetaResponseCodeInterpreterCallInterpretingEvent) implBetaResponseStreamEventUnion() {}
+func (BetaResponseCompactionCompactingEvent) implBetaResponseStreamEventUnion()            {}
 func (BetaResponseCompletedEvent) implBetaResponseStreamEventUnion()                       {}
 func (BetaResponseContentPartAddedEvent) implBetaResponseStreamEventUnion()                {}
 func (BetaResponseContentPartDoneEvent) implBetaResponseStreamEventUnion()                 {}
@@ -28871,6 +28925,7 @@ func (BetaResponseCustomToolCallInputDoneEvent) implBetaResponseStreamEventUnion
 //	case openai.BetaResponseCodeInterpreterCallCompletedEvent:
 //	case openai.BetaResponseCodeInterpreterCallInProgressEvent:
 //	case openai.BetaResponseCodeInterpreterCallInterpretingEvent:
+//	case openai.BetaResponseCompactionCompactingEvent:
 //	case openai.BetaResponseCompletedEvent:
 //	case openai.BetaResponseContentPartAddedEvent:
 //	case openai.BetaResponseContentPartDoneEvent:
@@ -28943,6 +28998,8 @@ func (u BetaResponseStreamEventUnion) AsAny() anyBetaResponseStreamEvent {
 		return u.AsResponseCodeInterpreterCallInProgress()
 	case "response.code_interpreter_call.interpreting":
 		return u.AsResponseCodeInterpreterCallInterpreting()
+	case "response.compaction.compacting":
+		return u.AsResponseCompactionCompacting()
 	case "response.completed":
 		return u.AsResponseCompleted()
 	case "response.content_part.added":
@@ -29086,6 +29143,11 @@ func (u BetaResponseStreamEventUnion) AsResponseCodeInterpreterCallInProgress() 
 }
 
 func (u BetaResponseStreamEventUnion) AsResponseCodeInterpreterCallInterpreting() (v BetaResponseCodeInterpreterCallInterpretingEvent) {
+	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
+	return
+}
+
+func (u BetaResponseStreamEventUnion) AsResponseCompactionCompacting() (v BetaResponseCompactionCompactingEvent) {
 	_ = apijson.UnmarshalRoot(json.RawMessage(u.JSON.raw), &v)
 	return
 }
@@ -33754,7 +33816,6 @@ const (
 	BetaResponseNewParamsModelGPT5_1                           BetaResponseNewParamsModel = "gpt-5.1"
 	BetaResponseNewParamsModelGPT5_1_2025_11_13                BetaResponseNewParamsModel = "gpt-5.1-2025-11-13"
 	BetaResponseNewParamsModelGPT5_1Codex                      BetaResponseNewParamsModel = "gpt-5.1-codex"
-	BetaResponseNewParamsModelGPT5_1Mini                       BetaResponseNewParamsModel = "gpt-5.1-mini"
 	BetaResponseNewParamsModelGPT5_1ChatLatest                 BetaResponseNewParamsModel = "gpt-5.1-chat-latest"
 	BetaResponseNewParamsModelGPT5                             BetaResponseNewParamsModel = "gpt-5"
 	BetaResponseNewParamsModelGPT5Mini                         BetaResponseNewParamsModel = "gpt-5-mini"
@@ -33785,6 +33846,8 @@ const (
 	BetaResponseNewParamsModelGPT4o2024_11_20                  BetaResponseNewParamsModel = "gpt-4o-2024-11-20"
 	BetaResponseNewParamsModelGPT4o2024_08_06                  BetaResponseNewParamsModel = "gpt-4o-2024-08-06"
 	BetaResponseNewParamsModelGPT4o2024_05_13                  BetaResponseNewParamsModel = "gpt-4o-2024-05-13"
+	BetaResponseNewParamsModelGPTAudioMini                     BetaResponseNewParamsModel = "gpt-audio-mini"
+	BetaResponseNewParamsModelGPTAudioMini2025_12_15           BetaResponseNewParamsModel = "gpt-audio-mini-2025-12-15"
 	BetaResponseNewParamsModelGPT4oAudioPreview                BetaResponseNewParamsModel = "gpt-4o-audio-preview"
 	BetaResponseNewParamsModelGPT4oAudioPreview2024_10_01      BetaResponseNewParamsModel = "gpt-4o-audio-preview-2024-10-01"
 	BetaResponseNewParamsModelGPT4oAudioPreview2024_12_17      BetaResponseNewParamsModel = "gpt-4o-audio-preview-2024-12-17"
@@ -33818,6 +33881,7 @@ const (
 	BetaResponseNewParamsModelGPT3_5Turbo1106                  BetaResponseNewParamsModel = "gpt-3.5-turbo-1106"
 	BetaResponseNewParamsModelGPT3_5Turbo0125                  BetaResponseNewParamsModel = "gpt-3.5-turbo-0125"
 	BetaResponseNewParamsModelGPT3_5Turbo16k0613               BetaResponseNewParamsModel = "gpt-3.5-turbo-16k-0613"
+	BetaResponseNewParamsModelGPT5_1Mini                       BetaResponseNewParamsModel = "gpt-5.1-mini"
 	BetaResponseNewParamsModelO1Pro                            BetaResponseNewParamsModel = "o1-pro"
 	BetaResponseNewParamsModelO1Pro2025_03_19                  BetaResponseNewParamsModel = "o1-pro-2025-03-19"
 	BetaResponseNewParamsModelO3Pro                            BetaResponseNewParamsModel = "o3-pro"
@@ -33959,6 +34023,9 @@ type BetaResponseNewParamsPromptCacheOptions struct {
 	// The ID of a response to compare when diagnosing prompt cache reuse. Supplying
 	// this field requests prompt cache diagnostics when the feature is enabled.
 	ComparisonResponseID param.Opt[string] `json:"comparison_response_id,omitzero"`
+	// Prepares the prompt cache without generating output. Defaults to `false`. When
+	// set to `true`, overrides the `generate` field to `false`.
+	Prewarm param.Opt[bool] `json:"prewarm,omitzero"`
 	// Controls whether OpenAI automatically creates an implicit cache breakpoint.
 	// Defaults to `implicit`. With `implicit`, OpenAI creates one implicit breakpoint
 	// and writes up to the latest three explicit breakpoints in the request. With
@@ -34405,7 +34472,6 @@ const (
 	BetaResponseCompactParamsModelGPT5_1                           BetaResponseCompactParamsModel = "gpt-5.1"
 	BetaResponseCompactParamsModelGPT5_1_2025_11_13                BetaResponseCompactParamsModel = "gpt-5.1-2025-11-13"
 	BetaResponseCompactParamsModelGPT5_1Codex                      BetaResponseCompactParamsModel = "gpt-5.1-codex"
-	BetaResponseCompactParamsModelGPT5_1Mini                       BetaResponseCompactParamsModel = "gpt-5.1-mini"
 	BetaResponseCompactParamsModelGPT5_1ChatLatest                 BetaResponseCompactParamsModel = "gpt-5.1-chat-latest"
 	BetaResponseCompactParamsModelGPT5                             BetaResponseCompactParamsModel = "gpt-5"
 	BetaResponseCompactParamsModelGPT5Mini                         BetaResponseCompactParamsModel = "gpt-5-mini"
@@ -34436,6 +34502,8 @@ const (
 	BetaResponseCompactParamsModelGPT4o2024_11_20                  BetaResponseCompactParamsModel = "gpt-4o-2024-11-20"
 	BetaResponseCompactParamsModelGPT4o2024_08_06                  BetaResponseCompactParamsModel = "gpt-4o-2024-08-06"
 	BetaResponseCompactParamsModelGPT4o2024_05_13                  BetaResponseCompactParamsModel = "gpt-4o-2024-05-13"
+	BetaResponseCompactParamsModelGPTAudioMini                     BetaResponseCompactParamsModel = "gpt-audio-mini"
+	BetaResponseCompactParamsModelGPTAudioMini2025_12_15           BetaResponseCompactParamsModel = "gpt-audio-mini-2025-12-15"
 	BetaResponseCompactParamsModelGPT4oAudioPreview                BetaResponseCompactParamsModel = "gpt-4o-audio-preview"
 	BetaResponseCompactParamsModelGPT4oAudioPreview2024_10_01      BetaResponseCompactParamsModel = "gpt-4o-audio-preview-2024-10-01"
 	BetaResponseCompactParamsModelGPT4oAudioPreview2024_12_17      BetaResponseCompactParamsModel = "gpt-4o-audio-preview-2024-12-17"
@@ -34469,6 +34537,7 @@ const (
 	BetaResponseCompactParamsModelGPT3_5Turbo1106                  BetaResponseCompactParamsModel = "gpt-3.5-turbo-1106"
 	BetaResponseCompactParamsModelGPT3_5Turbo0125                  BetaResponseCompactParamsModel = "gpt-3.5-turbo-0125"
 	BetaResponseCompactParamsModelGPT3_5Turbo16k0613               BetaResponseCompactParamsModel = "gpt-3.5-turbo-16k-0613"
+	BetaResponseCompactParamsModelGPT5_1Mini                       BetaResponseCompactParamsModel = "gpt-5.1-mini"
 	BetaResponseCompactParamsModelO1Pro                            BetaResponseCompactParamsModel = "o1-pro"
 	BetaResponseCompactParamsModelO1Pro2025_03_19                  BetaResponseCompactParamsModel = "o1-pro-2025-03-19"
 	BetaResponseCompactParamsModelO3Pro                            BetaResponseCompactParamsModel = "o3-pro"
