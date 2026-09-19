@@ -222,11 +222,32 @@ func writeAuthFile(path string, file authFile, syncDir func(string) error) (bool
 		return false, fmt.Errorf("marshal OpenAI OAuth token: %w", err)
 	}
 
-	data = append(data, '\n')
+	committed, err := replaceFile(path, ".auth.json-*", append(data, '\n'), 0o600, syncDir)
+	if err == nil {
+		return committed, nil
+	}
 
-	temp, err := os.CreateTemp(filepath.Dir(path), ".auth.json-*")
+	if committed {
+		return true, fmt.Errorf("sync OpenAI OAuth token dir: %w", err)
+	}
+
+	return false, fmt.Errorf("replace OpenAI OAuth token: %w", err)
+}
+
+// ReplaceFile writes data to path via a same-directory temporary file and rename.
+func ReplaceFile(path, pattern string, data []byte, mode os.FileMode) (bool, error) {
+	committed, err := replaceFile(path, pattern, data, mode, syncDirectory)
 	if err != nil {
-		return false, fmt.Errorf("create temporary OpenAI OAuth token: %w", err)
+		return committed, fmt.Errorf("%w", err)
+	}
+
+	return committed, nil
+}
+
+func replaceFile(path, pattern string, data []byte, mode os.FileMode, syncDir func(string) error) (bool, error) {
+	temp, err := os.CreateTemp(filepath.Dir(path), pattern)
+	if err != nil {
+		return false, fmt.Errorf("%w", err)
 	}
 
 	tempPath := temp.Name()
@@ -234,17 +255,17 @@ func writeAuthFile(path string, file authFile, syncDir func(string) error) (bool
 
 	_, err = temp.Write(data)
 
-	err = errors.Join(err, temp.Sync(), temp.Close())
+	err = errors.Join(err, temp.Chmod(mode), temp.Sync(), temp.Close())
 	if err != nil {
-		return false, fmt.Errorf("replace OpenAI OAuth token: %w", err)
+		return false, fmt.Errorf("%w", err)
 	}
 
 	if err := os.Rename(tempPath, path); err != nil {
-		return false, fmt.Errorf("replace OpenAI OAuth token: %w", err)
+		return false, fmt.Errorf("%w", err)
 	}
 
 	if err := syncDir(filepath.Dir(path)); err != nil {
-		return true, fmt.Errorf("sync OpenAI OAuth token dir: %w", err)
+		return true, fmt.Errorf("%w", err)
 	}
 
 	return true, nil
