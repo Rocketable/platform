@@ -10,6 +10,7 @@ import Link, { usePathname, navigate } from "./navigation";
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
 import { flushSync } from "react-dom";
 import { ThemeToggle } from "@/components/theme";
+import { CodeBlock, TranscriptText } from "./transcript-text";
 import { Button } from "@/components/ui/button";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Attachment, AttachmentGroup, AttachmentMedia, AttachmentContent, AttachmentTitle, AttachmentDescription, AttachmentActions, AttachmentAction } from "@/components/ui/attachment";
@@ -1086,7 +1087,7 @@ function TranscriptLine({ line, conversationId }: { line: Line; conversationId: 
       <Message align="end" className="mb-4">
         <MessageContent>
           <Bubble variant="secondary" align="end">
-            <BubbleContent><div className="whitespace-pre-wrap break-words">{line.text}</div></BubbleContent>
+            <BubbleContent><TranscriptText text={line.text} /></BubbleContent>
             <MessageAttachments attachments={line.attachments} conversationId={conversationId} />
           </Bubble>
         </MessageContent>
@@ -1103,15 +1104,20 @@ function TranscriptLine({ line, conversationId }: { line: Line; conversationId: 
   }
   if (line.role === "tool") {
     const title = toolTitle(line);
+    const parts = [line, ...(line.toolParts ?? [])];
+    const text = parts.map((part, index) => {
+      const label = index === 0 ? line.toolName ? "Arguments" : "Result" : part.role === "developer" ? "Skill instructions" : "Result";
+      const body = index === 0 && line.toolName ? line.text.slice(line.toolName.length + 1) : part.text;
+      return `${label}\n${body}`;
+    }).join("\n\n");
     return (
-      <details open className="mb-3 min-w-0 rounded-md border bg-muted/30">
+      <details open className="mb-3 min-w-0">
         <summary className="cursor-pointer px-3 py-2 text-xs font-medium" title={title}>
           <span className="ml-1 inline-block max-w-[calc(100%-1.5rem)] truncate align-middle font-mono">{title}</span>
         </summary>
-        {[line, ...(line.toolParts ?? [])].map((part, index) => (
-          <div key={part.id} className="border-t px-3 py-2">
-            <p className="mb-1 text-[11px] font-medium text-muted-foreground">{index === 0 ? line.toolName ? "Arguments" : "Result" : part.role === "developer" ? "Skill instructions" : "Result"}</p>
-            <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-muted-foreground">{index === 0 && line.toolName ? line.text.slice(line.toolName.length + 1) : part.text}</pre>
+        <CodeBlock label={title} text={text} />
+        {parts.map((part) => (
+          <div key={part.id}>
             <MessageAttachments attachments={part.attachments} conversationId={conversationId} />
           </div>
         ))}
@@ -1128,7 +1134,7 @@ function TranscriptLine({ line, conversationId }: { line: Line; conversationId: 
   if (line.role === "developer") {
     return (
       <div className="min-w-0 px-1 pb-3">
-        <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-muted-foreground">{line.text}</pre>
+        <CodeBlock label="Instructions" text={line.text} />
       </div>
     );
   }
@@ -1136,7 +1142,7 @@ function TranscriptLine({ line, conversationId }: { line: Line; conversationId: 
     <Message className="mb-4">
       <MessageContent>
         <Bubble variant="ghost">
-          <BubbleContent><div className="whitespace-pre-wrap break-words">{line.text}</div></BubbleContent>
+          <BubbleContent><TranscriptText text={line.text} /></BubbleContent>
           <MessageAttachments attachments={line.attachments} conversationId={conversationId} />
         </Bubble>
       </MessageContent>

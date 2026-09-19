@@ -1171,6 +1171,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       });
       const link = sidebar.getByRole("link").filter({ hasText: "latest user message" });
       await link.click({ trial: true }); // Measure after the mobile sheet finishes moving.
+      await sidebar.evaluate(async () => { await Promise.all(document.getAnimations().filter((animation) => animation instanceof CSSTransition).map((animation) => animation.finished)); });
       const before = await link.boundingBox();
       ctrl.yieldBatches = complete([{ ...row("running-chat", "latest assistant reply"), running: false }], "bob");
       await sidebar.getByText("latest assistant reply", { exact: true }).waitFor();
@@ -1506,6 +1507,62 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await last.locator("summary").click();
       await rail.getByRole("button", { name: "Turn 1: Prompt 1", exact: true }).click();
       await transcriptPage.waitForFunction(() => document.querySelector("#transcript-scroll")!.scrollTop < 50);
+    }
+    const codeText = "  echo '<literal>'\n" + "  long output\n".repeat(100) + "x".repeat(400) + "\n";
+    ctrl.history = [
+      { role: "user", text: "Show the output" },
+      { role: "tool", text: "bash\n{}", toolName: "bash", toolCallId: "bounded" },
+      { role: "tool", text: codeText, toolCallId: "bounded" },
+      { role: "assistant", text: "Before\n```sh\n" + codeText + "```\nAfter" },
+    ].map((item) => ({ ...item, turnId: "", complete: true, snapshot: false }));
+    await transcriptPage.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    for (const width of [1280, 390]) {
+      transcriptStream = Promise.withResolvers();
+      await transcriptPage.setViewportSize({ width, height: 600 });
+      await transcriptPage.goto(`${origin}/s/${Buffer.from(`code-${width}`).toString("base64url")}`);
+      await transcriptPage.locator('pre[aria-label="sh"]').waitFor();
+      expect(await transcriptPage.locator("#transcript-scroll pre").evaluateAll((nodes: HTMLElement[]) => nodes.map((node) => node.getAttribute("aria-label")))).toEqual(["bash", "sh"]);
+      for (const label of ["bash", "sh"]) {
+        const panel = transcriptPage.locator(`pre[aria-label="${label}"]`);
+        await panel.waitFor();
+        expect(await panel.textContent()).toBe(label === "bash" ? `Arguments\n{}\n\nResult\n${codeText}` : codeText);
+        expect(await panel.evaluate((el: HTMLElement) => el.clientHeight)).toBeLessThanOrEqual(256);
+        expect(await panel.evaluate((el: HTMLElement) => el.scrollHeight > el.clientHeight && el.scrollWidth > el.clientWidth)).toBe(true);
+        await panel.focus();
+        await transcriptPage.keyboard.press("ArrowDown");
+        await transcriptPage.waitForFunction((label: string) => document.querySelector(`pre[aria-label="${label}"]`)!.scrollTop > 0, label);
+        await transcriptPage.getByRole("button", { name: `Expand ${label}`, exact: true }).click();
+        const overlay = transcriptPage.getByRole("dialog", { name: label, exact: true });
+        await overlay.waitFor();
+        expect(await overlay.locator("pre").textContent()).toBe(label === "bash" ? `Arguments\n{}\n\nResult\n${codeText}` : codeText);
+        expect(await overlay.locator("pre").evaluate((el: HTMLElement) => el.clientHeight)).toBeGreaterThan(256);
+        expect(await transcriptPage.locator(`#transcript-scroll pre[aria-label="${label}"]`).evaluate((el: HTMLElement) => el.clientHeight)).toBeLessThanOrEqual(256);
+        await overlay.getByRole("button", { name: `Copy ${label}`, exact: true }).click();
+        expect(await transcriptPage.evaluate(() => navigator.clipboard.readText())).toBe(label === "bash" ? `Arguments\n{}\n\nResult\n${codeText}` : codeText);
+        await transcriptPage.keyboard.press("Escape");
+        await overlay.waitFor({ state: "hidden" });
+        expect(await transcriptPage.getByRole("button", { name: `Expand ${label}`, exact: true }).evaluate((el: HTMLElement) => el === document.activeElement)).toBe(true);
+      }
+      expect(await transcriptPage.locator("#transcript-scroll").evaluate((el: HTMLElement) => el.scrollWidth <= el.clientWidth)).toBe(true);
+      const copy = transcriptPage.getByRole("button", { name: "Copy sh", exact: true });
+      await copy.click();
+      await transcriptPage.getByRole("status").filter({ hasText: "Copied" }).first().waitFor();
+      expect(await transcriptPage.evaluate(() => navigator.clipboard.readText())).toBe(codeText);
+      // Exercise the plain-HTTP path with the secure-context API unavailable.
+      await transcriptPage.evaluate(() => Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true }));
+      await transcriptPage.getByRole("button", { name: "Copy bash", exact: true }).click();
+      await transcriptPage.waitForFunction(() => Array.from(document.querySelectorAll('[role="status"]')).filter((el) => el.textContent === "Copied").length === 2);
+      await transcriptPage.evaluate(() => Reflect.deleteProperty(navigator, "clipboard"));
+      expect(await transcriptPage.evaluate(() => navigator.clipboard.readText())).toBe(`Arguments\n{}\n\nResult\n${codeText}`);
+      const tool = transcriptPage.locator("details").filter({ has: transcriptPage.locator('pre[aria-label="bash"]') }).last();
+      await tool.getByRole("button", { name: "Collapse tool ↑", exact: true }).click();
+      expect(await tool.locator("pre").isVisible()).toBe(false);
+      await tool.locator("summary").click();
+      expect(await tool.locator("pre").isVisible()).toBe(true);
+      // A partial streamed fence is rendered as code before its closing fence arrives.
+      (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ role: "assistant", text: "~~~py\n  streamed", turnId: "fenced-stream", complete: false, snapshot: true })}\n\n`);
+      await transcriptPage.locator('pre[aria-label="py"]').waitFor();
+      expect(await transcriptPage.locator('pre[aria-label="py"]').textContent()).toBe("  streamed");
     }
     await transcriptPage.close();
     ctrl.history = [];
