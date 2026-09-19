@@ -11,24 +11,53 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	"github.com/Rocketable/platform/internal/rocketclaw/frontend"
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend/externalmcp"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
+type mcpRelay interface {
+	SendExternalMCPRelay(context.Context, string, string, *protocol.ExternalMCPRelay) (*protocol.SlackReplyTarget, error)
+	CleanupExternalMCPRelay(context.Context, *protocol.SlackReplyTarget)
+}
+
+type mcpAgentIndex struct {
+	mu    sync.Mutex
+	names []string
+	cfg   *config.Config
+}
+
+func (i *mcpAgentIndex) Refresh() error {
+	agents, err := backend.ExternalMCPAgentsIn(i.cfg, i.cfg.RuntimeDirName())
+	if err != nil {
+		return fmt.Errorf("load external MCP agents: %w", err)
+	}
+	i.mu.Lock()
+	i.names = agents
+	i.mu.Unlock()
+	return nil
+}
+
+func (i *mcpAgentIndex) Exposed(agent string) bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return slices.Contains(i.names, agent)
+}
+
 func startExternalMCPServer(
 	ctx context.Context,
 	cfg *config.Config,
-	textRelay func(context.Context, *protocol.ExternalMCPRelay, *protocol.InboundMessage, string) (*protocol.InboundMessage, error),
-	cleanupTextRelay func(context.Context, *protocol.InboundMessage),
+	relay mcpRelay,
 	users map[string]string,
-	agentExposed func(string) bool,
+	agents *mcpAgentIndex,
 	store *backend.SessionService,
-	submitAgent func(context.Context, string, string, *protocol.InboundMessage) error,
+	turns frontend.Backend,
 	logger *slog.Logger,
 ) (*externalmcp.Server, error) {
 	locks := backend.NewKeyedConversationLocks()
@@ -43,7 +72,7 @@ func startExternalMCPServer(
 
 		defer func() {
 			if err != nil && createdConversationID != "" {
-				cleanupFailedExternalMCPConversation(cleanupTextRelay, store, logger, reply, externalConversationID, createdConversationID, durableRegistration, promptAccepted)
+				cleanupFailedExternalMCPConversation(relay, store, logger, reply, externalConversationID, createdConversationID, durableRegistration, promptAccepted)
 			}
 		}()
 
@@ -74,9 +103,6 @@ func startExternalMCPServer(
 		}
 
 		inboundContent.Text = input
-		if strings.TrimSpace(input) == "" && len(attachments) == 0 {
-			return externalmcp.SessionResult{}, errors.New("external MCP turn requires input or attachments")
-		}
 
 		unlockExternalConversation := locks.Lock(externalConversationID)
 		defer unlockExternalConversation()
@@ -115,40 +141,37 @@ func startExternalMCPServer(
 				return externalmcp.SessionResult{}, fmt.Errorf("external_conversation_id %q is bound to Slack channel %q", externalConversationID, session.SlackChannel)
 			}
 
-			if !agentExposed(usedAgent) {
+			if !agents.Exposed(usedAgent) {
 				return externalmcp.SessionResult{}, fmt.Errorf("external MCP agent %q is not exposed", usedAgent)
 			}
 
-			reply = &protocol.InboundMessage{SlackReply: &protocol.SlackReplyTarget{ChannelID: channelID, MessageTS: threadTS, ThreadTS: threadTS}}
-
 			conversationID := session.PrivateConversationID
-			relayed, err := textRelay(callCtx, &protocol.ExternalMCPRelay{ConversationID: conversationID, ExternalConversationID: externalConversationID, Agent: usedAgent, Text: input, Attachments: outboundAttachments}, reply, "")
+			target, err := relay.SendExternalMCPRelay(callCtx, channelID, threadTS, &protocol.ExternalMCPRelay{ConversationID: conversationID, ExternalConversationID: externalConversationID, Agent: usedAgent, Text: input, Attachments: outboundAttachments})
 			if err != nil {
 				return externalmcp.SessionResult{}, fmt.Errorf("send text connector external MCP thread relay: %w", err)
 			}
-			if relayed != nil {
-				reply = relayed
-			}
+			reply = &protocol.InboundMessage{SlackReply: target}
 
-			result, _, err := submitExternalMCPInput(callCtx, submitAgent, usedAgent, conversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, externalConversationID)
+			result, _, err := submitExternalMCPInput(callCtx, turns, usedAgent, conversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, externalConversationID)
 
 			return result, err
 		}
 
 		usedAgent := requestedAgent
 
-		if !agentExposed(usedAgent) {
+		if !agents.Exposed(usedAgent) {
 			return externalmcp.SessionResult{}, fmt.Errorf("external MCP agent %q is not exposed", usedAgent)
 		}
 
 		privateConversationID := "external_mcp:" + usedAgent + ":" + rand.Text()
 
-		reply, err = textRelay(callCtx, &protocol.ExternalMCPRelay{ConversationID: privateConversationID, ExternalConversationID: externalConversationID, Agent: usedAgent, Text: input, Attachments: outboundAttachments}, nil, slackChannel)
+		target, err := relay.SendExternalMCPRelay(callCtx, slackChannel, "", &protocol.ExternalMCPRelay{ConversationID: privateConversationID, ExternalConversationID: externalConversationID, Agent: usedAgent, Text: input, Attachments: outboundAttachments})
 		if err != nil {
 			return externalmcp.SessionResult{}, err
 		}
+		reply = &protocol.InboundMessage{SlackReply: target}
 
-		if reply == nil || reply.SlackReply == nil {
+		if reply.SlackReply == nil {
 			return externalmcp.SessionResult{}, errors.New("slack external MCP relay returned no reply target")
 		}
 
@@ -163,7 +186,7 @@ func startExternalMCPServer(
 
 		durableRegistration = true
 
-		result, promptAccepted, err = submitExternalMCPInput(callCtx, submitAgent, usedAgent, privateConversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, externalConversationID)
+		result, promptAccepted, err = submitExternalMCPInput(callCtx, turns, usedAgent, privateConversationID, &inboundContent, metadata, strings.TrimSpace(username), reply, externalConversationID)
 
 		return result, err
 	})
@@ -174,7 +197,7 @@ func startExternalMCPServer(
 	return server, nil
 }
 
-func cleanupFailedExternalMCPConversation(cleanupTextRelay func(context.Context, *protocol.InboundMessage), store *backend.SessionService, logger *slog.Logger, reply *protocol.InboundMessage, externalConversationID, conversationID string, durableRegistration, promptAccepted bool) {
+func cleanupFailedExternalMCPConversation(relay mcpRelay, store *backend.SessionService, logger *slog.Logger, reply *protocol.InboundMessage, externalConversationID, conversationID string, durableRegistration, promptAccepted bool) {
 	if promptAccepted {
 		return
 	}
@@ -182,7 +205,7 @@ func cleanupFailedExternalMCPConversation(cleanupTextRelay func(context.Context,
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cleanupTextRelay(cleanupCtx, reply)
+	relay.CleanupExternalMCPRelay(cleanupCtx, reply.SlackReply)
 
 	if !durableRegistration {
 		return
@@ -241,7 +264,7 @@ func externalMCPInboundContent(attachments []externalmcp.SessionAttachment) (pro
 	return content, outbound, nil
 }
 
-func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Context, string, string, *protocol.InboundMessage) error, usedAgent, conversationID string, content *protocol.InboundContent, metadata map[string]string, principal string, reply *protocol.InboundMessage, externalConversationID string) (externalmcp.SessionResult, bool, error) {
+func submitExternalMCPInput(ctx context.Context, turns frontend.Backend, usedAgent, conversationID string, content *protocol.InboundContent, metadata map[string]string, principal string, reply *protocol.InboundMessage, externalConversationID string) (externalmcp.SessionResult, bool, error) {
 	inbound := protocol.NewInboundMessageFromContent(protocol.SourceExternalMCP, protocol.InboundKindPrompt, "", content, true)
 
 	inbound.Metadata = maps.Clone(metadata)
@@ -271,7 +294,12 @@ func submitExternalMCPInput(ctx context.Context, submitAgent func(context.Contex
 
 	resultCh := inbound.EnableResponseWait()
 
-	if err := submitAgent(ctx, usedAgent, conversationID, inbound); err != nil {
+	if err := turns.CreateConversation(ctx, protocol.Conversation{ID: conversationID, Agent: usedAgent}); err != nil {
+		return externalmcp.SessionResult{}, false, fmt.Errorf("submit external MCP input to agent %q: %w", usedAgent, err)
+	}
+	errRun := turns.RunTurn(ctx, inbound)
+	errSync := turns.SyncConversation(context.WithoutCancel(ctx), conversationID, inbound.SyncDestination)
+	if err := errors.Join(errRun, errSync); err != nil {
 		return externalmcp.SessionResult{}, false, fmt.Errorf("submit external MCP input to agent %q: %w", usedAgent, err)
 	}
 
