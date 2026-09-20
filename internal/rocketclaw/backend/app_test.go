@@ -178,6 +178,145 @@ func TestRunInitializesRuntimeAndCleansUpOnCancellation(t *testing.T) {
 	require.ErrorContains(t, assembler.AssembleCalls()[0].Runtime.Sessions.db.PingContext(t.Context()), "database is closed")
 }
 
+func TestRunStartsPersistedQueueWithoutOtherWork(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Queue recovery\nmodel: gpt-5.5\npermission: {}\n---\nRespond concisely.\n")
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.json"), []byte(`{}`), 0o600))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Connection", "close")
+
+		_, errWrite := w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer","annotations":[]}]}]}`))
+		if errWrite != nil {
+			t.Error(errWrite)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	conversationID := "web-queued"
+	seed, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	require.NoError(t, seed.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	require.NoError(t, seed.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "first", Principal: "alice", Source: protocol.SourceWeb, Position: 0, StashAt: time.Unix(1, 0).UTC()}))
+	require.NoError(t, seed.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{ID: "q2", ConversationID: conversationID, Message: "second", Principal: "alice", Source: protocol.SourceWeb, Position: 1, StashAt: time.Unix(2, 0).UTC()}))
+	require.NoError(t, seed.Stop())
+
+	cfg := &config.Config{Workspace: workspace, DatabaseURL: dsn, OpenAI: config.OpenAIConfig{APIKey: "test", APIBaseURL: server.URL}, Slack: config.SlackConfig{
+		Channels: []config.SlackChannelConfig{{Channel: "@"}},
+	}}
+
+	runQueuedStartup := func(t *testing.T, wait time.Duration) []string {
+		t.Helper()
+
+		finals := make(chan string, 4)
+		copyDone := make(chan struct{})
+		assembler := &frontendAssemblerMock{
+			ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil },
+			AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+				events := rt.Subscribe(rt.RunCtx)
+				go func() {
+					for event := range events {
+						if event.Message.Complete && strings.TrimSpace(event.Message.Text) != "" {
+							finals <- event.Message.Text
+						}
+
+						event.Acknowledgement <- nil
+					}
+				}()
+
+				return &slackFrontendMock{
+					DrainSteersFunc:          func(context.Context, string) []string { return nil },
+					RestorePendingSteersFunc: func(string, []protocol.PendingSteer) {},
+					DiscardPendingSteersFunc: func(context.Context, []protocol.PendingSteer) {},
+					ActivateEnqueueFunc: func(context.Context, *protocol.ThreadQueueItem, *protocol.InboundMessage) error {
+						return nil
+					},
+					SetPendingSteersSinkFunc: func(protocol.PendingSteersSink) {},
+					StopFunc:                 func(context.Context) error { return nil },
+				}, copyDone, nil, nil
+			},
+		}
+
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		errRun := make(chan error, 1)
+		go func() {
+			errRun <- Run(ctx, cfg, filepath.Join(workspace, "rocketclaw.json"), slog.New(slog.DiscardHandler), assembler)
+		}()
+
+		var texts []string
+
+		deadline := time.After(wait)
+
+		for len(texts) < 2 {
+			select {
+			case text := <-finals:
+				texts = append(texts, text)
+			case err := <-errRun:
+				require.NoError(t, err)
+				close(copyDone)
+
+				return texts
+			case <-deadline:
+				close(copyDone)
+				require.NoError(t, <-errRun)
+
+				return texts
+			}
+		}
+
+		close(copyDone)
+		require.NoError(t, <-errRun)
+
+		return texts
+	}
+
+	require.Equal(t, []string{"answer", "answer"}, runQueuedStartup(t, 20*time.Second))
+	require.Empty(t, runQueuedStartup(t, time.Second))
+}
+
+func TestRunHoldsPairedStartupRecoveryBeforeAssemble(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Pair recovery\nmodel: gpt-5.5\npermission: {}\n---\nRespond concisely.\n")
+	require.NoError(t, os.WriteFile(filepath.Join(workspace, "rocketclaw.json"), []byte(`{}`), 0o600))
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+
+	managedID := protocol.SlackThreadConversationID("C1", "1.1")
+	privateID := "external_mcp:planner:private"
+	seed, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	require.NoError(t, seed.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateID, ManagedConversationID: managedID, SlackChannel: "#ops"}))
+
+	for _, conversationID := range []string{privateID, managedID} {
+		_, err = seed.AppendEntryID(t.Context(), conversationID, testSessionEntryAt(time.Now().UTC(), conversationID))
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, seed.UpsertActiveTurn(t.Context(), &rocketcode.ActiveTurnCheckpoint{TurnID: "pair-turn", ConversationKey: privateID, Agent: "planner", Model: "gpt-5.5", DisplayModel: "gpt-5.5", ReplayInput: startupRecoveryReplayInput(t)}, nil))
+	require.NoError(t, seed.Stop())
+
+	held := false
+	copyDone := make(chan struct{})
+	close(copyDone)
+
+	assembler := &frontendAssemblerMock{
+		ValidateAssetsFunc: func(*config.Config, string, []string) error { return nil },
+		AssembleFunc: func(rt *Runtime) (SlackFrontend, <-chan struct{}, []func(context.Context) error, error) {
+			held = rt.Sessions.startupRecoveryBlocks(managedID) && rt.Sessions.startupRecoveryBlocks(privateID)
+			return nil, copyDone, nil, nil
+		},
+	}
+	require.NoError(t, Run(t.Context(), &config.Config{Workspace: workspace, DatabaseURL: dsn, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "@"}}}}, filepath.Join(workspace, "rocketclaw.json"), slog.New(slog.DiscardHandler), assembler))
+	require.True(t, held)
+}
+
 func TestConfigureInstrumentationStartsAndStopsExporter(t *testing.T) {
 	collector := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	t.Cleanup(collector.Close)

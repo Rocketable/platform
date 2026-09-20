@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -399,6 +400,45 @@ func TestThreadBridgeManagerPickLaterWorkUsesLiveBridge(t *testing.T) {
 	require.Len(t, bridge.PickLaterWorkCalls(), 1)
 }
 
+func TestStartQueuedConversationsReportsLaterWorkErrors(t *testing.T) {
+	store := newWorkspaceSessionService(t)
+	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
+	require.NoError(t, store.UpsertThread(conversationID, ThreadState{}))
+	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "one"}))
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge {
+		return newDirectBridgeMock()
+	})
+	require.ErrorContains(t, manager.StartQueuedConversations(), "text thread agent is required")
+}
+
+func TestStartQueuedConversationsWakesEachRecordedConversationOnce(t *testing.T) {
+	store := newWorkspaceSessionService(t)
+	first := protocol.SlackThreadConversationID("D123", "111.222")
+	second := protocol.SlackThreadConversationID("D124", "222.333")
+
+	require.NoError(t, store.UpsertThread(first, ThreadState{Agent: "main"}))
+	require.NoError(t, store.UpsertThread(second, ThreadState{Agent: "main"}))
+	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: first, Message: "one"}))
+	require.NoError(t, store.PutThreadQueueItem("q2", &protocol.ThreadQueueItem{ID: "q2", ConversationID: first, Message: "two"}))
+	require.NoError(t, store.PutThreadQueueItem("q3", &protocol.ThreadQueueItem{ID: "q3", ConversationID: second, Message: "three"}))
+
+	woke := map[string]int{}
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
+		bridge := newDirectBridgeMock()
+		conversationID := cfg.ConversationID
+		bridge.PickLaterWorkFunc = func(context.Context) error {
+			woke[conversationID]++
+			return nil
+		}
+
+		return bridge
+	})
+
+	require.NoError(t, manager.StartQueuedConversations())
+	require.Equal(t, map[string]int{first: 1, second: 1}, woke)
+	require.Len(t, manager.bridges, 2)
+}
+
 func TestThreadBridgeManagerInterruptSlackThreadInterruptsActiveTurn(t *testing.T) {
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
@@ -717,6 +757,31 @@ func TestThreadBridgeManagerRecoversActiveTurnInThreadLocalConversation(t *testi
 	assert.Equal(t, "turn-1", submittedMessages(bridge)[0].Text)
 }
 
+func TestRecoverActiveTurnEnqueuesPrivateMCPOnDestinationBridge(t *testing.T) {
+	store := newWorkspaceSessionService(t)
+	managedConversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	privateConversationID := "external_mcp:planner:private"
+	require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateConversationID, ManagedConversationID: managedConversationID, SlackChannel: "#ops"}))
+
+	workspace := t.TempDir()
+	runtime := &config.Config{Workspace: workspace}
+	manager := newThreadBridgeManager(runtime, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
+		cfg.SessionService = store
+		cfg.StartNewThread = testNoopStartNewThread
+
+		return NewConversation(runtime, nil, &cfg, slog.New(slog.DiscardHandler))
+	})
+
+	t.Cleanup(func() { require.NoError(t, manager.Stop()) })
+
+	require.NoError(t, manager.RecoverActiveTurn(t.Context(), &ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{ConversationKey: privateConversationID, TurnID: "turn-mcp", Agent: "planner", ReplayInput: []json.RawMessage{json.RawMessage("{")}}}))
+	_, privateOK := manager.bridges[privateConversationID]
+	_, managedOK := manager.bridges[managedConversationID]
+
+	require.True(t, privateOK)
+	require.True(t, managedOK)
+}
+
 func TestThreadBridgeManagerRecoversPrivateExternalMCPTurn(t *testing.T) {
 	store := newWorkspaceSessionService(t)
 	managedConversationID := protocol.SlackThreadConversationID("C123", "111.222")
@@ -725,7 +790,16 @@ func TestThreadBridgeManagerRecoversPrivateExternalMCPTurn(t *testing.T) {
 
 	bridge := newDirectBridgeMock()
 	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(cfg Config) directBridge {
-		assert.Equal(t, Config{ConversationID: privateConversationID, Agent: "planner", RecoveringActiveTurn: true, UserQuestionAsker: protocol.NoUserQuestionAsker()}, cfg)
+		switch cfg.ConversationID {
+		case privateConversationID:
+			assert.Equal(t, Config{ConversationID: privateConversationID, Agent: "planner", RecoveringActiveTurn: true, UserQuestionAsker: protocol.NoUserQuestionAsker()}, cfg)
+		case managedConversationID:
+			assert.Equal(t, managedConversationID, cfg.ConversationID)
+			assert.False(t, cfg.RecoveringActiveTurn)
+		default:
+			t.Fatalf("unexpected conversation %q", cfg.ConversationID)
+		}
+
 		return bridge
 	})
 	turn := &ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{ConversationKey: privateConversationID, TurnID: "turn-mcp", Agent: "planner"}}

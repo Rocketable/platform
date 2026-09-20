@@ -104,10 +104,16 @@ type SessionService struct {
 	db          *sql.DB
 	attachments attachmentStorage
 
-	turnGatesMu sync.Mutex
-	turnGates   map[string]*sessionTurnGate
-	waitersMu   sync.Mutex
-	waiters     map[string]*protocol.InboundMessage
+	turnGatesMu       sync.Mutex
+	turnGates         map[string]*sessionTurnGate
+	pendingRecoveries map[string]startupRecoveryHold
+
+	waitersMu sync.Mutex
+	waiters   map[string]*protocol.InboundMessage
+}
+
+type startupRecoveryHold struct {
+	source, destination string
 }
 
 type sessionTurnGate struct {
@@ -179,7 +185,7 @@ func NewSessionServiceIn(ctx context.Context, cfg *config.Config, logger *slog.L
 		return nil, err
 	}
 
-	return &SessionService{db: db, attachments: attachments, turnGates: map[string]*sessionTurnGate{}, waiters: map[string]*protocol.InboundMessage{}}, nil
+	return &SessionService{db: db, attachments: attachments, turnGates: map[string]*sessionTurnGate{}, pendingRecoveries: map[string]startupRecoveryHold{}, waiters: map[string]*protocol.InboundMessage{}}, nil
 }
 
 // UpsertThread records or updates a text-thread bridge entry.
@@ -1254,6 +1260,33 @@ func (s *SessionService) PairBusyFor(pairID string) bool {
 	return gate.reservedFor != "" || len(gate.token) == 0
 }
 
+func (s *SessionService) holdStartupRecovery(turnID, source, destination string) {
+	s.turnGatesMu.Lock()
+	s.pendingRecoveries[strings.TrimSpace(turnID)] = startupRecoveryHold{source: strings.TrimSpace(source), destination: strings.TrimSpace(destination)}
+	s.turnGatesMu.Unlock()
+}
+
+func (s *SessionService) releaseStartupRecovery(turnID string) {
+	s.turnGatesMu.Lock()
+	delete(s.pendingRecoveries, strings.TrimSpace(turnID))
+	s.turnGatesMu.Unlock()
+}
+
+func (s *SessionService) startupRecoveryBlocks(conversationID string) bool {
+	conversationID = strings.TrimSpace(conversationID)
+
+	s.turnGatesMu.Lock()
+	defer s.turnGatesMu.Unlock()
+
+	for _, hold := range s.pendingRecoveries {
+		if hold.source == conversationID || hold.destination == conversationID {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (s *SessionService) appendExternalMCPEntry(ctx context.Context, privateConversationID, managedConversationID string, entry *harness.SessionEntry, managedReplayPrefix []json.RawMessage) (int64, error) {
 	managedEntry, err := externalMCPManagedEntry(entry, managedReplayPrefix)
 	if err != nil {
@@ -1563,6 +1596,11 @@ func slackStateKeyTime(key string) (time.Time, bool) {
 }
 
 func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, conversationID string, cutoff time.Time) (bool, error) {
+	queued, err := conversationExists(ctx, db, `thread_queue`, `conversation_id`, conversationID)
+	if err != nil || queued {
+		return false, err
+	}
+
 	created, ok := slackStateKeyTime(conversationID)
 	if !ok {
 		var emptyManaged bool
@@ -1663,6 +1701,15 @@ func pruneExternalMCPSessions(ctx context.Context, tx *sql.Tx, cutoff time.Time,
 		}
 
 		if privateConversationID != "" {
+			queued, err := conversationExists(ctx, tx, `thread_queue`, `conversation_id`, privateConversationID)
+			if err != nil {
+				return PruneStateStats{}, err
+			}
+
+			if queued {
+				continue
+			}
+
 			prunePrivate, err := sessionLatestBefore(ctx, tx, privateConversationID, time.Unix(0, 0).UTC(), cutoff)
 			if err != nil {
 				return PruneStateStats{}, err
@@ -1709,6 +1756,12 @@ func stalePrivateConversationIDs(ctx context.Context, db *sql.Tx, cutoff time.Ti
 		}
 
 		if ok, err := conversationExists(ctx, db, `external_mcp_sessions`, `private_conversation_id`, conversationID); err != nil {
+			return nil, err
+		} else if ok {
+			continue
+		}
+
+		if ok, err := conversationExists(ctx, db, `thread_queue`, `conversation_id`, conversationID); err != nil {
 			return nil, err
 		} else if ok {
 			continue

@@ -418,7 +418,7 @@ func (b *Bridge) InterruptActiveTurn() *protocol.InboundMessage {
 	return reply
 }
 
-// PickLaterWork submits the R16 winner after a turn ends, or when a due timer fires on an idle thread.
+// PickLaterWork submits the next saved queue or due schedule for this conversation.
 func (b *Bridge) PickLaterWork(ctx context.Context) error {
 	return b.pickLaterWork(ctx, false)
 }
@@ -553,6 +553,7 @@ func (b *Bridge) loop(ctx context.Context) {
 
 					admitted, errHandle := b.activateInbound(ctx, &request)
 					if !admitted && errHandle == nil {
+						b.pickLaterWorkLogged(ctx, b)
 						return
 					}
 
@@ -582,33 +583,10 @@ func (b *Bridge) loop(ctx context.Context) {
 					if !activeTurnRecoveryPreserveError(errHandle) {
 						b.completeRequestTurnPairReservation(&request)
 
-						if errPick := b.PickLaterWork(ctx); errPick != nil {
-							b.log.Error("pick later work", "error", errPick)
-						}
+						b.pickLaterWorkLogged(ctx, b)
 					}
 				case request.activeTurn != nil:
-					errHandle := b.handleRecoveredActiveTurn(ctx, request.activeTurn)
-					if !activeTurnRecoveryPreserveError(errHandle) {
-						b.completeRequestTurnPairReservation(&request)
-
-						if errHandle != nil {
-							b.log.Error("handle recovered active turn", "error", errHandle)
-						}
-
-						if b.config.RecoveringActiveTurn {
-							if errArm := b.armPendingScheduledMessages(); errArm != nil {
-								b.log.Error("arm scheduled messages after active turn recovery", "error", errArm)
-							}
-
-							if b.config.AgentAfterRecovery != "" {
-								b.SwitchAgent(b.config.AgentAfterRecovery)
-							}
-						}
-
-						if errPick := b.PickLaterWork(ctx); errPick != nil {
-							b.log.Error("pick later work", "error", errPick)
-						}
-					}
+					b.handleRecoveredRequest(ctx, &request)
 				}
 			}()
 
@@ -634,6 +612,10 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (a
 	}()
 
 	if request.queueItemID != "" {
+		if b.config.SessionService.startupRecoveryBlocks(b.config.ConversationID) {
+			return false, nil
+		}
+
 		goal, active, err := b.config.SessionService.Goal(b.config.ConversationID)
 		if err != nil || active && goal.Status == GoalStatusActive {
 			return false, err
@@ -658,10 +640,10 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (a
 
 	if request.scheduledMessageID != "" && !request.scheduledMessageRecurring {
 		if err := b.config.SessionService.DeleteScheduledMessage(request.scheduledMessageID); err != nil {
-			b.log.Error("delete started scheduled message", "error", err)
-		} else {
-			b.log.Info("scheduled message deleted after turn started", "scheduled_message_id", request.scheduledMessageID, "conversation_id", b.config.ConversationID)
+			return false, err
 		}
+
+		b.log.Info("scheduled message deleted after turn started", "scheduled_message_id", request.scheduledMessageID, "conversation_id", b.config.ConversationID)
 	}
 
 	b.publishConsumed(ctx, request.inbound)
@@ -692,6 +674,10 @@ func (b *Bridge) pickLaterWork(ctx context.Context, fromTimer bool) error {
 	}
 
 	if ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
+		return nil
+	}
+
+	if b.config.SessionService.startupRecoveryBlocks(b.config.ConversationID) {
 		return nil
 	}
 
@@ -782,6 +768,55 @@ func (b *Bridge) completeRequestTurnPairReservation(request *bridgeRequest) {
 	b.config.SessionService.completeTurnPairReservation(b.config.ManagedConversationID, b.config.ConversationID)
 }
 
+func (b *Bridge) handleRecoveredRequest(ctx context.Context, request *bridgeRequest) {
+	handler := b
+	if request.producer != nil {
+		handler = request.producer
+		b.config.SessionService.reserveTurnPair(b.config.ConversationID, request.producer.config.ConversationID)
+	}
+
+	errHandle := handler.handleRecoveredActiveTurn(ctx, request.activeTurn)
+	if request.producer != nil && errHandle == nil {
+		errHandle = b.syncConversation(ctx, request.producer)
+	}
+
+	if activeTurnRecoveryPreserveError(errHandle) {
+		return
+	}
+
+	if request.producer == nil {
+		b.completeRequestTurnPairReservation(request)
+	}
+
+	if errHandle != nil {
+		b.log.Error("handle recovered active turn", "error", errHandle)
+	}
+
+	if handler.config.RecoveringActiveTurn {
+		if errArm := handler.armPendingScheduledMessages(); errArm != nil {
+			b.log.Error("arm scheduled messages after active turn recovery", "error", errArm)
+		}
+
+		if handler.config.AgentAfterRecovery != "" {
+			handler.SwitchAgent(handler.config.AgentAfterRecovery)
+		}
+	}
+
+	b.config.SessionService.releaseStartupRecovery(request.activeTurn.Checkpoint.TurnID)
+
+	if request.producer != nil {
+		b.pickLaterWorkLogged(ctx, request.producer)
+	}
+
+	b.pickLaterWorkLogged(ctx, b)
+}
+
+func (b *Bridge) pickLaterWorkLogged(ctx context.Context, worker *Bridge) {
+	if errPick := worker.pickLaterWork(ctx, false); errPick != nil {
+		b.log.Error("pick later work", "error", errPick)
+	}
+}
+
 func (b *Bridge) handleRecoveredActiveTurn(ctx context.Context, turn *ActiveTurnState) error {
 	checkpoint := turn.Checkpoint
 
@@ -796,6 +831,15 @@ func (b *Bridge) handleRecoveredActiveTurn(ctx context.Context, turn *ActiveTurn
 	msg.Metadata[protocol.InboundOriginMetadataKey] = "System"
 	msg.Metadata[protocol.InboundMediaMetadataKey] = "Text"
 	msg.Metadata[recoveredTurnMetadataKey] = "true"
+
+	_, session, ok, errSession := b.config.SessionService.ExternalMCPSessionByConversationID(b.config.ConversationID)
+	if errSession != nil {
+		return fmt.Errorf("load recovered pair destination: %w", errSession)
+	}
+
+	if ok && session.PrivateConversationID == b.config.ConversationID && session.ManagedConversationID != "" {
+		msg.SyncDestination = session.ManagedConversationID
+	}
 
 	goal, goalOK, err := b.config.SessionService.Goal(b.config.ConversationID)
 	if err != nil {

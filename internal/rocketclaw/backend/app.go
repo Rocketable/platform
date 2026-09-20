@@ -239,22 +239,28 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 
 	if err := recoverStartupActiveTurns(runCtx, rocketcodeSessions, func(turn *ActiveTurnState) error {
 		conversationID := strings.TrimSpace(turn.Checkpoint.ConversationKey)
+		destinationID := conversationID
+
+		_, session, ok, err := rocketcodeSessions.ExternalMCPSessionByConversationID(conversationID)
+		if err != nil {
+			return err
+		}
+
+		if ok && session.PrivateConversationID == conversationID && session.ManagedConversationID != "" {
+			destinationID = session.ManagedConversationID
+			recoveringConversations[destinationID] = true
+		}
+
 		recoveringConversations[conversationID] = true
+		rocketcodeSessions.holdStartupRecovery(turn.Checkpoint.TurnID, conversationID, destinationID)
 
 		recoveredTurns = append(recoveredTurns, *turn)
-		logger.Info("startup active turn selected for recovery", "conversation_id", turn.Checkpoint.ConversationKey, "turn_id", turn.Checkpoint.TurnID, "agent", turn.Checkpoint.Agent)
 
 		return nil
 	}, func(conversationID string, steers []protocol.PendingSteer) {
 		cannotResume = append(cannotResume, cannotResumeItem{conversationID: conversationID, steers: steers})
 	}, logger); err != nil {
 		return err
-	}
-
-	for i := range recoveredTurns {
-		if err := rocketcodeSessions.ReserveExternalMCPRecovery(recoveredTurns[i].Checkpoint.ConversationKey); err != nil {
-			return fmt.Errorf("reserve paired startup recovery: %w", err)
-		}
 	}
 
 	// Starts as No; set to Slack after the connector exists. Factory reads the current value per bridge.
@@ -357,6 +363,8 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 					return err
 				}
 
+				rocketcodeSessions.releaseStartupRecovery(turn.Checkpoint.TurnID)
+
 				if errRelease := rocketcodeSessions.ReleaseExternalMCPRecovery(conversationID); errRelease != nil {
 					return fmt.Errorf("release failed paired startup recovery: %w", errRelease)
 				}
@@ -378,6 +386,10 @@ func (s *lockedRun) Run(runCtx context.Context) error { //nolint:gocyclo // Same
 
 			logger.Info("startup active turn recovery enqueued", "conversation_id", conversationID, "turn_id", turn.Checkpoint.TurnID)
 		}
+	}
+
+	if err := threadBridges.StartQueuedConversations(); err != nil {
+		return err
 	}
 
 	go func() {
