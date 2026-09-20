@@ -41,17 +41,8 @@ func (s *SessionService) Thread(conversationID string) (ThreadState, bool, error
 
 // SetThreadAgentIfExists updates a managed conversation agent without creating a thread.
 func (s *SessionService) SetThreadAgentIfExists(conversationID, agent string) (bool, error) {
-	result, err := s.db.ExecContext(context.Background(), `UPDATE managed_conversations SET agent = $1 WHERE conversation_id = $2`, strings.TrimSpace(agent), strings.TrimSpace(conversationID))
-	if err != nil {
-		return false, fmt.Errorf("update managed conversation agent: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("count managed conversation agent update: %w", err)
-	}
-
-	return rows > 0, nil
+	rows, err := execRows(context.Background(), s.db, "update managed conversation agent", "count managed conversation agent update", `UPDATE managed_conversations SET agent = $1 WHERE conversation_id = $2`, strings.TrimSpace(agent), strings.TrimSpace(conversationID))
+	return rows > 0, err
 }
 
 func (d stateDAO) externalMCPSession(ctx context.Context, externalConversationID string) (ExternalMCPSessionState, bool, error) {
