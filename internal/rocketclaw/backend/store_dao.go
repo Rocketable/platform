@@ -569,32 +569,25 @@ func scanActiveTurn(scanner rowScanner) (ActiveTurnState, error) {
 	turn.CreatedAt = timeFromUnixNano(createdAtUnixNano)
 	turn.UpdatedAt = timeFromUnixNano(updatedAtUnixNano)
 
-	if err := json.Unmarshal([]byte(replayInput), &turn.Checkpoint.ReplayInput); err != nil {
-		return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "replay input", err: err}
-	}
+	sourceMetadata = cmp.Or(strings.TrimSpace(sourceMetadata), "{}")
+	pendingSteers = cmp.Or(strings.TrimSpace(pendingSteers), "[]")
 
-	if err := json.Unmarshal([]byte(outputTrace), &turn.Checkpoint.OutputTrace); err != nil {
-		return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "output trace", err: err}
-	}
-
-	if err := json.Unmarshal([]byte(tokenUsage), &turn.Checkpoint.TokenUsage); err != nil {
-		return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "token usage", err: err}
-	}
-
-	if err := json.Unmarshal([]byte(openCalls), &turn.Checkpoint.OpenFunctionCalls); err != nil {
-		return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "open function calls", err: err}
-	}
-
-	if err := json.Unmarshal([]byte(completedOutputs), &turn.Checkpoint.CompletedFunctionOutputs); err != nil {
-		return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "completed function outputs", err: err}
-	}
-
-	if strings.TrimSpace(sourceMetadata) == "" {
-		sourceMetadata = "{}"
-	}
-
-	if err := json.Unmarshal([]byte(sourceMetadata), &turn.SourceMetadata); err != nil {
-		return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "source metadata", err: err}
+	for _, field := range []struct {
+		raw  string
+		dest any
+		name string
+	}{
+		{replayInput, &turn.Checkpoint.ReplayInput, "replay input"},
+		{outputTrace, &turn.Checkpoint.OutputTrace, "output trace"},
+		{tokenUsage, &turn.Checkpoint.TokenUsage, "token usage"},
+		{openCalls, &turn.Checkpoint.OpenFunctionCalls, "open function calls"},
+		{completedOutputs, &turn.Checkpoint.CompletedFunctionOutputs, "completed function outputs"},
+		{sourceMetadata, &turn.SourceMetadata, "source metadata"},
+		{pendingSteers, &turn.PendingSteers, "pending steers"},
+	} {
+		if err := json.Unmarshal([]byte(field.raw), field.dest); err != nil {
+			return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: field.name, err: err}
+		}
 	}
 
 	if turn.SourceMetadata == nil {
@@ -603,14 +596,6 @@ func scanActiveTurn(scanner rowScanner) (ActiveTurnState, error) {
 
 	if strings.TrimSpace(restartNotice) != "" {
 		turn.SourceMetadata["restart_notice_json"] = restartNotice
-	}
-
-	if strings.TrimSpace(pendingSteers) == "" {
-		pendingSteers = "[]"
-	}
-
-	if err := json.Unmarshal([]byte(pendingSteers), &turn.PendingSteers); err != nil {
-		return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "pending steers", err: err}
 	}
 
 	return turn, nil
