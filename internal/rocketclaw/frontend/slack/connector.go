@@ -4976,33 +4976,12 @@ func (c *Connector) inboundContentForMessageEvent(ctx context.Context, ev *slack
 func (c *Connector) downloadSlackAttachments(ctx context.Context, files []slack.File) (attachments []protocol.InboundAttachment, textAttachments []string, hadAttachments, hadNonImageAttachments bool, warnings []string) {
 	for i := range files {
 		file := &files[i]
-		warnSkip := func(reason string) {
-			warnings = append(warnings, "Skipped Slack attachment "+slackFileDescriptor(file)+" because "+reason+".")
-		}
 
 		if !isSlackImageFile(file) {
 			if protocol.IsTextAttachment(slackFileDisplayName(file), file.Mimetype) {
-				if file.Size > protocol.MaxInboundTextAttachmentBytes {
-					warnings = append(warnings, "Skipped Slack text attachment "+slackFileDescriptor(file)+" because it exceeded the text file size limit.")
-
-					continue
-				}
-
-				downloadURL := slackFileDownloadURL(file)
-				if downloadURL == "" {
-					warnings = append(warnings, "Skipped Slack text attachment "+slackFileDescriptor(file)+" because Slack did not provide a download URL.")
-
-					continue
-				}
-
-				data, err := c.downloadSlackFile(ctx, downloadURL, protocol.MaxInboundTextAttachmentBytes)
-				if err != nil {
-					if errors.Is(err, errSlackDownloadLimitExceeded) {
-						warnings = append(warnings, "Skipped Slack text attachment "+slackFileDescriptor(file)+" because it exceeded the text file size limit.")
-					} else {
-						c.log.Warn("download Slack text attachment", "file", slackFileDisplayName(file), "mime_type", protocol.NormalizeMIMEType(file.Mimetype), "error", err)
-						warnings = append(warnings, "Skipped Slack text attachment "+slackFileDescriptor(file)+" because downloading it from Slack failed.")
-					}
+				data, warning := c.downloadSlackFileOrSkip(ctx, file, protocol.MaxInboundTextAttachmentBytes, "text attachment", "it exceeded the text file size limit")
+				if warning != "" {
+					warnings = append(warnings, warning)
 
 					continue
 				}
@@ -5034,38 +5013,22 @@ func (c *Connector) downloadSlackAttachments(ctx context.Context, files []slack.
 
 		hadAttachments = true
 
-		mimeType := protocol.NormalizeMIMEType(file.Mimetype)
-		if file.Size > maxSlackImageDownloadBytes {
-			warnSkip("it exceeded the Slack attachment download limit")
-			continue
-		}
-
-		downloadURL := slackFileDownloadURL(file)
-		if downloadURL == "" {
-			warnSkip("Slack did not provide a download URL")
-			continue
-		}
-
-		data, err := c.downloadSlackFile(ctx, downloadURL, maxSlackImageDownloadBytes)
-		if err != nil {
-			if errors.Is(err, errSlackDownloadLimitExceeded) {
-				warnSkip("it exceeded the Slack attachment download limit")
-			} else {
-				c.log.Warn("download Slack attachment", "file", slackFileDisplayName(file), "mime_type", mimeType, "error", err)
-				warnSkip("downloading it from Slack failed")
-			}
+		data, warning := c.downloadSlackFileOrSkip(ctx, file, maxSlackImageDownloadBytes, "attachment", "it exceeded the Slack attachment download limit")
+		if warning != "" {
+			warnings = append(warnings, warning)
 
 			continue
 		}
 
 		if len(data) == 0 {
-			warnSkip("Slack returned empty attachment data")
+			warnings = append(warnings, "Skipped Slack attachment "+slackFileDescriptor(file)+" because Slack returned empty attachment data.")
+
 			continue
 		}
 
 		attachments = append(attachments, protocol.InboundAttachment{
 			Name:     slackFileDisplayName(file),
-			MIMEType: mimeType,
+			MIMEType: protocol.NormalizeMIMEType(file.Mimetype),
 			Data:     data,
 		})
 	}
@@ -5097,6 +5060,32 @@ func slackMessageEventFiles(ev *slackevents.MessageEvent) []slack.File {
 
 func isSlackImageFile(file *slack.File) bool {
 	return strings.HasPrefix(protocol.NormalizeMIMEType(file.Mimetype), "image/")
+}
+
+func (c *Connector) downloadSlackFileOrSkip(ctx context.Context, file *slack.File, limit int, kind, sizeLimitReason string) (data []byte, warning string) {
+	skip := "Skipped Slack " + kind + " " + slackFileDescriptor(file) + " because "
+
+	if file.Size > limit {
+		return nil, skip + sizeLimitReason + "."
+	}
+
+	downloadURL := slackFileDownloadURL(file)
+	if downloadURL == "" {
+		return nil, skip + "Slack did not provide a download URL."
+	}
+
+	data, err := c.downloadSlackFile(ctx, downloadURL, limit)
+	if err != nil {
+		if errors.Is(err, errSlackDownloadLimitExceeded) {
+			return nil, skip + sizeLimitReason + "."
+		}
+
+		c.log.Warn("download Slack "+kind, "file", slackFileDisplayName(file), "mime_type", protocol.NormalizeMIMEType(file.Mimetype), "error", err)
+
+		return nil, skip + "downloading it from Slack failed."
+	}
+
+	return data, ""
 }
 
 func (c *Connector) downloadSlackFile(ctx context.Context, downloadURL string, limit int) ([]byte, error) {
