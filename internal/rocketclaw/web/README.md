@@ -133,8 +133,10 @@ is not matched as text, and agent and room filters still apply. The Settled page
 has the same search and filters, limited to settled chats.
 Click the selected Settled, Cron, Agents, Skills, or Config tab again to return
 to the chat you left, even after switching between pages. Without a previous
-chat, it returns Home. New chat and these page buttons form a centered group in
-the footer, available even when the sidebar is closed.
+chat, it returns Home. On desktop, the page header's close button does the same,
+and Escape does too unless a dialog or tooltip is open. New chat and these page
+buttons form a centered group in the footer, available even when the sidebar is
+closed.
 The theme toggle floats in the upper-right corner of the page.
 The down-arrow appears above the chat composer when away from the latest message.
 It scrolls to the latest message and resumes following live replies. Reading earlier
