@@ -1257,18 +1257,21 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
         const headerBox = (await heading.locator("..").boundingBox())!;
         const headingBox = (await heading.boundingBox())!;
         expect(headerBox.x).toBe(mainBox.x + Math.max(0, (mainBox.width - 768) / 2) + 16);
+        const close = settledMain.getByRole("button", { name: "Close", exact: true });
         if (width === 390) {
           const toggle = settledPage.getByRole("button", { name: "Sessions", exact: true });
           const toggleBox = (await toggle.boundingBox())!;
           expect(toggleBox.x).toBe(headerBox.x);
           expect(headingBox.x).toBe(toggleBox.x + toggleBox.width + 8);
           expect(toggleBox.y).toBe(headingBox.y);
+          expect(await close.count()).toBe(0);
           await toggle.click();
           await settledPage.getByRole("dialog", { name: "Sessions", exact: true }).waitFor();
           await settledPage.keyboard.press("Escape");
           await settledPage.getByRole("dialog", { name: "Sessions", exact: true }).waitFor({ state: "hidden" });
         } else {
           expect(headingBox.x).toBe(headerBox.x);
+          await close.waitFor();
         }
         expect(headingBox.y).toBe(mainBox.y + 16);
         expect(headingBox.height).toBe(28);
@@ -1279,7 +1282,9 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
           expect(searchBox.x).toBe(headerBox.x);
           expect(searchBox.y).toBe(headingBox.y + headingBox.height + 24);
         }
-        await tab.click();
+        if (width === 1280 && name === "Agents") await settledPage.keyboard.press("Escape");
+        else if (width === 1280 && name === "Skills") await close.click();
+        else await tab.click();
         await settledPage.waitForURL(`${origin}${chatPath}`);
         expect(await footer.locator('[aria-current="true"]').count()).toBe(0);
       }

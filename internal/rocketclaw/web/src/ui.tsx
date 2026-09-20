@@ -39,6 +39,7 @@ import {
 } from "@/session-list";
 
 const queryClient = new QueryClient();
+const tabReturnTo = { current: "/" };
 
 function sessionPath(id: string) {
   return `/s/${encodeSessionId(id)}`;
@@ -633,11 +634,24 @@ export function App() {
   const [, setDraftVersion] = useState(0);
   const onDraftChange = useCallback(() => setDraftVersion((version) => version + 1), []);
   const [conversation, setConversation] = useState({ id: route.id, created: "", key: 0 });
+  const returnTo = conversation.id === "" ? "/" : sessionPath(conversation.id);
+  tabReturnTo.current = returnTo;
   const newChat = () => {
     drafts.current.delete("");
     setConversation((current) => ({ ...current, created: "", key: current.key + 1 }));
     route.goHome();
   };
+  useEffect(() => {
+    if (showChat) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.repeat) return;
+      if (document.querySelector('[role="dialog"], [role="listbox"], [role="tooltip"]')) return;
+      event.preventDefault();
+      navigate(tabReturnTo.current);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showChat]);
   if (showChat && conversation.id !== route.id) {
     // Creation assigns this conversation its ID; other navigation starts a fresh subtree.
     const created = conversation.id === "" && conversation.created === route.id;
@@ -652,7 +666,7 @@ export function App() {
               <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="hidden size-[var(--navigation-button)] md:inline-flex" />} aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"} aria-expanded={sidebarOpen} aria-controls="session-sidebar" onClick={() => setSidebarOpen((open) => !open)}>
                 {sidebarOpen ? <PanelLeftClose className="size-[var(--navigation-icon)]" /> : <PanelLeftOpen className="size-[var(--navigation-icon)]" />}
               </TooltipTrigger><TooltipContent side="top">{sidebarOpen ? "Hide sidebar" : "Show sidebar"}</TooltipContent></Tooltip>
-              <SessionTabs returnTo={conversation.id === "" ? "/" : sessionPath(conversation.id)}>
+              <SessionTabs returnTo={returnTo}>
                 <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="New session" onClick={newChat}>
                   <SquarePen className="size-[var(--navigation-icon)]" />
                 </TooltipTrigger><TooltipContent side="top">New session</TooltipContent></Tooltip>
@@ -896,9 +910,10 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
 }
 
 function PageTitle({ children }: { children: ReactNode }) {
-  return <header className="flex shrink-0 items-center gap-2">
+  return <header className="flex w-full shrink-0 items-center gap-2">
     <SheetTrigger render={<Button variant="ghost" size="icon-sm" className="md:hidden" />} aria-label="Sessions"><PanelLeftOpen /></SheetTrigger>
     <h1 className="text-lg font-semibold">{children}</h1>
+    <Button type="button" variant="ghost" size="icon-sm" className="ml-auto hidden md:inline-flex" aria-label="Close" onClick={() => navigate(tabReturnTo.current)}><X /></Button>
   </header>;
 }
 
