@@ -630,7 +630,7 @@ func TestPickLaterWorkPrefersEarlierStashOverLaterDue(t *testing.T) {
 		return nil
 	}}}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 
-	require.NoError(t, bridge.PickLaterWork(t.Context()))
+	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
 	require.Len(t, bridge.requestCh, 1)
 	request := <-bridge.requestCh
 	require.NotNil(t, request.inbound)
@@ -654,7 +654,7 @@ func TestPickLaterWorkWaitsWhenParkedAfterFutureScheduled(t *testing.T) {
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 
-	require.NoError(t, bridge.PickLaterWork(t.Context()))
+	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
 	assert.Empty(t, bridge.requestCh)
 }
 
@@ -667,9 +667,43 @@ func TestPickLaterWorkStartsParkedQueueAfterScheduledCancel(t *testing.T) {
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 
-	require.NoError(t, bridge.PickLaterWork(t.Context()))
+	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
 	require.Len(t, bridge.requestCh, 1)
 	assert.Equal(t, "Ship README", (<-bridge.requestCh).inbound.Text)
+}
+
+func TestActivateInboundReturnsStartedScheduleDeleteError(t *testing.T) {
+	store := newTestSessionService(t)
+	require.NoError(t, store.Stop())
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: protocol.SlackThreadConversationID("C123", "111.222"), SessionService: store}}
+	admitted, err := bridge.activateInbound(t.Context(), &bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceSystem, protocol.InboundKindPrompt, "", "later", false), scheduledMessageID: "s1"})
+	require.Error(t, err)
+	assert.False(t, admitted)
+}
+
+func TestPickLaterWorkSkipsWhenStartupRecoveryPending(t *testing.T) {
+	store := newTestSessionService(t)
+	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	require.NoError(t, store.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{ID: "q1", ConversationID: conversationID, Message: "waiting", Principal: "U1", StashAt: time.Date(2000, 1, 1, 3, 0, 0, 0, time.UTC), Position: 0, SlackChannel: "C123", SlackTS: "111.222"}))
+	store.holdStartupRecovery("turn-1", conversationID, conversationID)
+
+	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
+	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
+	assert.Empty(t, bridge.requestCh)
+
+	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindEnqueue, "", "waiting", true)
+	admitted, err := bridge.activateInbound(t.Context(), &bridgeRequest{inbound: inbound, queueItemID: "q1"})
+	require.NoError(t, err)
+	assert.False(t, admitted)
+
+	items, err := store.ThreadQueueForConversation(conversationID)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+
+	store.releaseStartupRecovery("turn-1")
+	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
+	require.Len(t, bridge.requestCh, 1)
+	assert.Equal(t, "waiting", (<-bridge.requestCh).inbound.Text)
 }
 
 func TestPickLaterWorkSkipsWhenGoalStillActive(t *testing.T) {
@@ -680,7 +714,7 @@ func TestPickLaterWorkSkipsWhenGoalStillActive(t *testing.T) {
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 
-	require.NoError(t, bridge.PickLaterWork(t.Context()))
+	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
 	assert.Empty(t, bridge.requestCh)
 
 	items, err := store.ThreadQueueForConversation(conversationID)
@@ -720,7 +754,7 @@ func TestPickLaterWorkAfterStopGoalStartsLaterWork(t *testing.T) {
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
 
-	require.NoError(t, bridge.PickLaterWork(t.Context()))
+	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
 	require.Len(t, bridge.requestCh, 1)
 	assert.Equal(t, "changelog", (<-bridge.requestCh).inbound.Text)
 }
@@ -737,7 +771,7 @@ func TestPickLaterWorkClaimsDueRecurringSchedule(t *testing.T) {
 	require.NoError(t, store.PutScheduledMessage("repeat", &protocol.ScheduledMessageState{ConversationID: conversationID, Agent: "main", Message: "again", DueAt: dueAt, Recurring: true, Interval: time.Minute}))
 
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
-	require.NoError(t, bridge.PickLaterWork(t.Context()))
+	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
 	require.Len(t, bridge.requestCh, 1)
 	request := <-bridge.requestCh
 	assert.Equal(t, "again", request.inbound.Text)
@@ -752,12 +786,12 @@ func TestPickLaterWorkDoesNothingWhenIdleAndEmpty(t *testing.T) {
 	store := newTestSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	bridge := &Bridge{log: slog.New(slog.DiscardHandler), config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 1), stopCh: make(chan struct{})}
-	require.NoError(t, bridge.PickLaterWork(t.Context()))
+	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
 	assert.Empty(t, bridge.requestCh)
 
 	bridge.requestCh <- bridgeRequest{inbound: protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "", "queued", false)}
 
-	require.NoError(t, bridge.PickLaterWork(t.Context()))
+	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
 	assert.Len(t, bridge.requestCh, 1)
 	close(bridge.stopCh)
 	bridge.stopped = true
@@ -3208,6 +3242,28 @@ func TestBridgeRearmsScheduledMessagesAfterRecoveredTurnFailure(t *testing.T) {
 		synctest.Wait()
 		assert.Contains(t, logs.String(), "scheduled message enqueued")
 	})
+}
+
+func TestHandleRecoveredRequestReleasesPairedStartupHold(t *testing.T) {
+	store := newTestSessionService(t)
+	destID := protocol.SlackThreadConversationID("C123", "111.222")
+	privateID := "external_mcp:planner:private"
+	store.holdStartupRecovery("old-turn", privateID, destID)
+	require.True(t, store.startupRecoveryBlocks(destID))
+
+	workspace := t.TempDir()
+	private := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: privateID, Agent: "planner", RecoveringActiveTurn: true, AgentAfterRecovery: "planner", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
+	dest := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: destID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
+	dest.handleRecoveredRequest(t.Context(), &bridgeRequest{producer: private, activeTurn: &ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: privateID, Agent: "planner", ReplayInput: []json.RawMessage{json.RawMessage("{")}}}})
+	assert.False(t, store.startupRecoveryBlocks(privateID))
+	assert.False(t, store.startupRecoveryBlocks(destID))
+
+	store.holdStartupRecovery("old-turn", privateID, destID)
+
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	dest.handleRecoveredRequest(canceled, &bridgeRequest{producer: private, activeTurn: &ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: privateID, Agent: "planner", ReplayInput: []json.RawMessage{json.RawMessage("{")}}}})
+	assert.True(t, store.startupRecoveryBlocks(destID))
 }
 
 func TestOpenAIClientLogsProviderRequestsOnError(t *testing.T) {

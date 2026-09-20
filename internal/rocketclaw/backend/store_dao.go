@@ -208,12 +208,24 @@ func (d stateDAO) clearParkAfter(ctx context.Context, scheduledID string) error 
 // DeleteScheduledMessage deletes one scheduled message.
 func (s *SessionService) DeleteScheduledMessage(id string) error {
 	id = strings.TrimSpace(id)
-	if err := (stateDAO{db: s.db}).clearParkAfter(context.Background(), id); err != nil {
+
+	tx, err := s.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return fmt.Errorf("begin scheduled message delete: %w", err)
+	}
+
+	defer func() { _ = tx.Rollback() }()
+
+	if err := (stateDAO{db: tx}).clearParkAfter(context.Background(), id); err != nil {
 		return err
 	}
 
-	if _, err := s.db.ExecContext(context.Background(), `DELETE FROM scheduled_messages WHERE scheduled_message_id = $1`, id); err != nil {
+	if _, err := tx.ExecContext(context.Background(), `DELETE FROM scheduled_messages WHERE scheduled_message_id = $1`, id); err != nil {
 		return fmt.Errorf("delete scheduled message: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit scheduled message delete: %w", err)
 	}
 
 	return nil
@@ -246,6 +258,10 @@ func (s *SessionService) PutThreadQueueItem(id string, item *protocol.ThreadQueu
 	}
 
 	return nil
+}
+
+func (s *SessionService) queuedConversationIDs(ctx context.Context) ([]string, error) {
+	return queryStrings(ctx, s.db, `SELECT DISTINCT conversation_id FROM thread_queue ORDER BY conversation_id`, "queued conversation IDs")
 }
 
 // ThreadQueueForConversation returns Enqueued Slack Messages in stack order.

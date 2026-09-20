@@ -392,6 +392,12 @@ func TestSessionServiceReleasesAbandonedExternalMCPRecovery(t *testing.T) {
 	unlock()
 }
 
+func TestDeleteScheduledMessageReportsClosedStore(t *testing.T) {
+	store := newTestSessionService(t)
+	require.NoError(t, store.Stop())
+	require.ErrorContains(t, store.DeleteScheduledMessage("s1"), "begin scheduled message delete")
+}
+
 func TestSessionServiceScheduledMessages(t *testing.T) {
 	store := newTestSessionService(t)
 	dueAt := time.Date(2000, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -1702,6 +1708,89 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, entries, 1, conversationID)
 	}
+}
+
+func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
+	cutoff := time.Unix(1_700_000_000, 0).UTC()
+	store := newTestSessionServiceAt(t, t.TempDir())
+
+	webID := "web-queued"
+	require.NoError(t, store.UpsertThread(webID, ThreadState{Agent: "planner"}))
+	webItem := protocol.ThreadQueueItem{ID: "web-q1", ConversationID: webID, Message: "first web message", Principal: "alice", Source: protocol.SourceWeb}
+	require.NoError(t, store.PutThreadQueueItem(webItem.ID, &webItem))
+
+	queuedSlack := protocol.SlackThreadConversationID("DQUEUE", slackTestTS(cutoff.Add(-time.Hour)))
+	emptySlack := protocol.SlackThreadConversationID("DEMPTY", slackTestTS(cutoff.Add(-time.Hour)))
+
+	require.NoError(t, store.UpsertThread(queuedSlack, ThreadState{Agent: "planner"}))
+	require.NoError(t, store.UpsertThread(emptySlack, ThreadState{Agent: "planner"}))
+	_, err := store.AppendEntryID(t.Context(), queuedSlack, testSessionEntryAt(cutoff.Add(-time.Hour), queuedSlack))
+	require.NoError(t, err)
+	_, err = store.AppendEntryID(t.Context(), emptySlack, testSessionEntryAt(cutoff.Add(-time.Hour), emptySlack))
+	require.NoError(t, err)
+
+	slackItem := protocol.ThreadQueueItem{ID: "slack-q1", ConversationID: queuedSlack, Message: "waiting slack", Principal: "U1"}
+	require.NoError(t, store.PutThreadQueueItem(slackItem.ID, &slackItem))
+
+	managedID := protocol.SlackThreadConversationID("C1", slackTestTS(cutoff.Add(-time.Hour)))
+	privateID := "external_mcp:planner:private"
+	require.NoError(t, store.RegisterExternalMCPConversation("public-1", "main", &ExternalMCPSessionState{Agent: "planner", PrivateConversationID: privateID, ManagedConversationID: managedID, SlackChannel: "#ops"}))
+	require.NoError(t, store.UpsertThread(privateID, ThreadState{Agent: "planner"}))
+
+	for _, conversationID := range []string{privateID, managedID} {
+		_, err := store.AppendEntryID(t.Context(), conversationID, testSessionEntryAt(cutoff.Add(-time.Hour), conversationID))
+		require.NoError(t, err)
+	}
+
+	privateItem := protocol.ThreadQueueItem{ID: "private-q1", ConversationID: privateID, Message: "private follow-up", Principal: "mcp"}
+	require.NoError(t, store.PutThreadQueueItem(privateItem.ID, &privateItem))
+
+	_, err = store.PruneStateBefore(t.Context(), cutoff)
+	require.NoError(t, err)
+
+	thread, ok, err := store.Thread(webID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "planner", thread.Agent)
+
+	queue, err := store.ThreadQueueForConversation(webID)
+	require.NoError(t, err)
+	require.Len(t, queue, 1)
+	assert.Equal(t, webItem.ID, queue[0].ID)
+	assert.Equal(t, webItem.Message, queue[0].Message)
+
+	_, ok, err = store.Thread(queuedSlack)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	_, ok, err = store.Thread(emptySlack)
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	_, ok, err = store.ExternalMCPSession("public-1")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	_, ok, err = store.Thread(managedID)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	_, ok, err = store.Thread(privateID)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	turns, err := store.RecoverableActiveTurns(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, turns)
+
+	require.NoError(t, store.DeleteThreadQueueItem(privateItem.ID))
+	_, err = store.PruneStateBefore(t.Context(), cutoff)
+	require.NoError(t, err)
+	_, ok, err = store.ExternalMCPSession("public-1")
+	require.NoError(t, err)
+	assert.False(t, ok)
+	_, ok, err = store.Thread(managedID)
+	require.NoError(t, err)
+	assert.False(t, ok)
+	_, ok, err = store.Thread(privateID)
+	require.NoError(t, err)
+	assert.False(t, ok)
 }
 
 func TestSessionServicePrunesStaleExternalConversationWithActiveTurn(t *testing.T) {

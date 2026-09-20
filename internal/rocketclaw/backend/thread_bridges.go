@@ -427,6 +427,21 @@ func (m *threadBridgeManager) InterruptThread(target protocol.TextConversationTa
 	return m.InterruptConversation(conversationID), nil
 }
 
+func (m *threadBridgeManager) StartQueuedConversations() error {
+	conversationIDs, err := m.store.queuedConversationIDs(context.Background())
+	if err != nil {
+		return fmt.Errorf("load queued conversations: %w", err)
+	}
+
+	for _, conversationID := range conversationIDs {
+		if err := m.PickLaterWork(context.Background(), conversationID); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (m *threadBridgeManager) PickLaterWork(ctx context.Context, conversationID string) error {
 	conversationID = strings.TrimSpace(conversationID)
 	if conversationID == "" {
@@ -501,6 +516,30 @@ func (m *threadBridgeManager) RecoverActiveTurn(ctx context.Context, turn *Activ
 	managed, _, err := m.ensureThreadBridge(conversationID, ThreadState{Agent: checkpoint.Agent}, true)
 	if err != nil {
 		return err
+	}
+
+	_, session, ok, err := m.store.ExternalMCPSessionByConversationID(conversationID)
+	if err != nil {
+		return err
+	}
+
+	if ok && session.PrivateConversationID == conversationID && session.ManagedConversationID != "" {
+		destinationState, _, err := m.store.Thread(session.ManagedConversationID)
+		if err != nil {
+			return err
+		}
+
+		destination, _, err := m.ensureThreadBridge(session.ManagedConversationID, destinationState, false)
+		if err != nil {
+			return err
+		}
+
+		private, privateOK := managed.(*Bridge)
+
+		destinationBridge, destOK := destination.(*Bridge)
+		if privateOK && destOK {
+			return destinationBridge.enqueue(ctx, &bridgeRequest{producer: private, activeTurn: turn}, "submit recovered active turn")
+		}
 	}
 
 	if err := managed.RecoverActiveTurn(ctx, turn); err != nil {

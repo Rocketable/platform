@@ -90,7 +90,7 @@ Queued calls retain their original invocation and attachments. Availability and 
 4. A human message, `$workflow` command, cron job, scheduled prompt, or MCP request enters RocketClaw and invokes RocketCode with the selected agent.
 5. RocketCode runs model/tool turns under configured permissions.
 6. RocketClaw publishes progress, final responses, files, or reactions back through the originating connector.
-7. Conversation state, active-turn handoffs, scheduled work, and routing metadata are persisted so restart recovery can refire interrupted turns as model-guided continuations from uncertain state.
+7. Conversation state, active-turn handoffs, scheduled work, queued messages, and routing metadata are persisted so restart recovery can refire interrupted turns and start saved unstarted messages without waiting for new input.
 
 Saved workflows run only as foreground managed turns. Each workflow launches fresh isolated custom workers, keeps intermediate values out of managed history, and persists a compact terminal summary of completed, failed, stopped, and skipped phases so later turns can explain what happened. Successful runs also record and deliver the final value. Slack shows phase progress and each worker's latest attributed activity with plan/task cards. Fan-out workers share one checkout, so parallel writers must own disjoint files. The state store does not persist resumable workflow progress: `$stop` ends the run, and daemon restart requires a new `$workflow` invocation.
 
