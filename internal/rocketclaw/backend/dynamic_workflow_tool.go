@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -134,21 +135,11 @@ func emitNestedWorkflowProgress(output chan<- rocketcode.ChatResponse, text stri
 }
 
 func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *rocketcode.Agent, agentName, turnID string) (rocketcode.Tool, bool) {
-	allowed := false
-
-	for _, bucket := range agent.Permission.Buckets {
-		if bucket.Name != "workflow" {
-			continue
-		}
-
-		for _, rule := range bucket.Rules {
-			if rule.Action == rocketcode.PermissionAllow {
-				allowed = true
-			}
-		}
-	}
-
-	if !allowed {
+	if !slices.ContainsFunc(agent.Permission.Buckets, func(bucket rocketcode.PermissionBucket) bool {
+		return bucket.Name == "workflow" && slices.ContainsFunc(bucket.Rules, func(rule rocketcode.PermissionRule) bool {
+			return rule.Action == rocketcode.PermissionAllow
+		})
+	}) {
 		return rocketcode.Tool{}, false
 	}
 
