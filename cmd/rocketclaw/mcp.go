@@ -74,9 +74,6 @@ func startExternalMCPServer(
 		}
 
 		inboundContent.Text = input
-		if strings.TrimSpace(input) == "" && len(attachments) == 0 {
-			return externalmcp.SessionResult{}, errors.New("external MCP turn requires input or attachments")
-		}
 
 		unlockExternalConversation := locks.Lock(externalConversationID)
 		defer unlockExternalConversation()

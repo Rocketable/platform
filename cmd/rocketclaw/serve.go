@@ -51,10 +51,9 @@ func runServe(args []string) error {
 	if err := backend.Run(ctx, cfg, configPath, logger, processAssembler{}); err != nil {
 		if errors.Is(err, backend.ErrRestartRequested) {
 			logger.Info("rocketclaw restart requested; exiting with code 255 for supervisor restart")
-			return serveRunError(err)
+		} else {
+			logger.Error("rocketclaw exited with error", "error", err)
 		}
-
-		logger.Error("rocketclaw exited with error", "error", err)
 
 		return serveRunError(err)
 	}

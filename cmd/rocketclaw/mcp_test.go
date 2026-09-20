@@ -299,6 +299,35 @@ func TestExternalMCPRepeatedIDKeepsLockedAgentAndRejectsChannelMismatch(t *testi
 	require.Equal(t, []string{"planner", "planner"}, agents)
 }
 
+func TestExternalMCPRejectsUnexposedAgent(t *testing.T) {
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	store, err := backend.NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: dsn, Workspace: t.TempDir()}, testLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Stop()) })
+
+	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}}}}
+	server, err := startExternalMCPServer(t.Context(), cfg, func(context.Context, *protocol.ExternalMCPRelay, *protocol.InboundMessage, string) (*protocol.InboundMessage, error) {
+		t.Fatal("unexposed agent must not relay")
+		return nil, nil
+	}, func(context.Context, *protocol.InboundMessage) {}, nil, func(string) bool { return false }, store, func(context.Context, string, string, *protocol.InboundMessage) error {
+		t.Fatal("unexposed agent must not submit")
+		return nil
+	}, testLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
+	session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: server.URL(), HTTPClient: http.DefaultClient, DisableStandaloneSSE: true}, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = session.Close() })
+
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: externalmcp.SessionPromptToolName, Arguments: map[string]any{"external_conversation_id": "ticket-1", "agent": "planner", "input": "hello", "slack_channel": "#ops"}})
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	require.Contains(t, result.Content[0].(*mcp.TextContent).Text, `external MCP agent "planner" is not exposed`)
+}
+
 func TestSubmitExternalMCPInputReturnsAfterSubmitAgent(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
