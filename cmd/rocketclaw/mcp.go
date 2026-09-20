@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -59,14 +58,12 @@ func startExternalMCPServer(
 			return externalmcp.SessionResult{}, errors.New("external MCP agent is required")
 		}
 
-		channelIndex := slices.IndexFunc(cfg.Slack.Channels, func(channel config.SlackChannelConfig) bool {
-			return channel.Channel != "@" && channel.Channel == slackChannel
-		})
-		if channelIndex < 0 {
+		channel, ok := cfg.Slack.Channel(slackChannel)
+		if !ok || slackChannel == "@" {
 			return externalmcp.SessionResult{}, fmt.Errorf("slack channel %q is not configured", slackChannel)
 		}
 
-		managedAgent := cfg.Slack.Channels[channelIndex].Agents[0]
+		managedAgent := channel.Agents[0]
 
 		inboundContent, outboundAttachments, err := externalMCPInboundContent(attachments)
 		if err != nil {

@@ -3509,12 +3509,12 @@ func (c *Connector) socialModeChannel(ctx context.Context, channelID string) (ch
 
 	name := "#" + strings.TrimSpace(channel.Name)
 	if name != "#" {
-		if configured, ok := c.socialChannel(name); ok && len(configured.Agents) > 0 {
+		if configured, ok := c.config.Channel(name); ok && len(configured.Agents) > 0 {
 			return name, configured.Agents[0], true
 		}
 	}
 
-	if configured, ok := c.socialChannel("@"); ok && len(configured.Agents) > 0 {
+	if configured, ok := c.config.Channel("@"); ok && len(configured.Agents) > 0 {
 		return "@", configured.Agents[0], true
 	}
 
@@ -3536,24 +3536,14 @@ func (c *Connector) socialModeCouldAllowUser(userID string) bool {
 	return false
 }
 
-func (c *Connector) socialChannel(channel string) (config.SlackChannelConfig, bool) {
-	for _, configured := range c.config.Channels {
-		if configured.Channel == channel {
-			return configured, true
-		}
-	}
-
-	return config.SlackChannelConfig{}, false
-}
-
 func (c *Connector) socialModeAllowsUser(channel, userID string) bool {
-	configured, ok := c.socialChannel(channel)
+	configured, ok := c.config.Channel(channel)
 
 	return ok && slices.Contains(configured.AllowedUserIDs, strings.TrimSpace(userID))
 }
 
 func (c *Connector) socialModeAgents(channel string) []string {
-	configured, _ := c.socialChannel(channel)
+	configured, _ := c.config.Channel(channel)
 
 	return configured.Agents
 }

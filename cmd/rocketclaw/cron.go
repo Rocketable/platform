@@ -31,16 +31,11 @@ type cronRunner struct {
 }
 
 func (r *cronRunner) Run(ctx context.Context, agent, prompt string, progress *backend.RawRunProgress) (protocol.CronRunResult, error) {
-	selected := ""
-	for _, channel := range r.config.Slack.Channels {
-		if channel.Channel == progress.TextChannel && len(channel.Agents) > 0 {
-			selected = channel.Agents[0]
-			break
-		}
-	}
-	if selected == "" {
+	channel, ok := r.config.Slack.Channel(progress.TextChannel)
+	if !ok || len(channel.Agents) == 0 {
 		return protocol.CronRunResult{}, fmt.Errorf("cron destination %q has no configured agents", progress.TextChannel)
 	}
+	selected := channel.Agents[0]
 	destination := progress.SyncDestination
 	if destination != "" {
 		if err := r.backend.CreateConversation(ctx, protocol.Conversation{ID: destination, Agent: selected, CreatedBy: "cron"}); err != nil {
