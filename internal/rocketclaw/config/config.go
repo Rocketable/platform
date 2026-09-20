@@ -167,6 +167,17 @@ func (s SlackConfig) MappedChannels() []string {
 	return channels
 }
 
+// Channel returns the configured Slack channel with this name.
+func (s SlackConfig) Channel(name string) (SlackChannelConfig, bool) {
+	for _, channel := range s.Channels {
+		if channel.Channel == name {
+			return channel, true
+		}
+	}
+
+	return SlackChannelConfig{}, false
+}
+
 // SlackChannelConfig configures one Slack channel.
 type SlackChannelConfig struct {
 	Channel        string   `json:"channel"`
