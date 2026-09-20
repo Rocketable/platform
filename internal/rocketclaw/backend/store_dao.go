@@ -88,25 +88,13 @@ func scanExternalMCPSession(scanner rowScanner) (string, ExternalMCPSessionState
 }
 
 func (d stateDAO) goal(ctx context.Context, conversationID string) (GoalState, bool, error) {
-	var (
-		goal                 GoalState
-		createdAt, updatedAt int64
-	)
-
-	err := d.db.QueryRowContext(ctx, `SELECT objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns FROM conversation_goals WHERE conversation_id = $1`, strings.TrimSpace(conversationID)).Scan(&goal.Objective, &goal.CheckScript, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &goal.SlackRecipientTeamID, &goal.SlackRecipientUserID, &createdAt, &updatedAt)
-	if err == sql.ErrNoRows {
+	_, goal, err := scanGoal(d.db.QueryRowContext(ctx, `SELECT conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns FROM conversation_goals WHERE conversation_id = $1`, strings.TrimSpace(conversationID)))
+	if errors.Is(err, sql.ErrNoRows) {
 		return GoalState{}, false, nil
 	}
 
 	if err != nil {
 		return GoalState{}, false, fmt.Errorf("read goal: %w", err)
-	}
-
-	goal.CreatedAt = timeFromUnixNano(createdAt)
-
-	goal.UpdatedAt = timeFromUnixNano(updatedAt)
-	if strings.TrimSpace(goal.Status) == "" {
-		goal.Status = GoalStatusActive
 	}
 
 	return goal, true, nil
@@ -123,20 +111,9 @@ func (s *SessionService) ActiveGoals() (map[string]GoalState, error) {
 	goals := map[string]GoalState{}
 
 	for rows.Next() {
-		var (
-			conversationID       string
-			goal                 GoalState
-			createdAt, updatedAt int64
-		)
-		if err := rows.Scan(&conversationID, &goal.Objective, &goal.CheckScript, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &goal.SlackRecipientTeamID, &goal.SlackRecipientUserID, &createdAt, &updatedAt); err != nil {
-			return nil, fmt.Errorf("scan active goal: %w", err)
-		}
-
-		goal.CreatedAt = timeFromUnixNano(createdAt)
-
-		goal.UpdatedAt = timeFromUnixNano(updatedAt)
-		if strings.TrimSpace(goal.Status) == "" {
-			goal.Status = GoalStatusActive
+		conversationID, goal, err := scanGoal(rows)
+		if err != nil {
+			return nil, err
 		}
 
 		goals[conversationID] = goal
@@ -151,6 +128,26 @@ func (s *SessionService) ActiveGoals() (map[string]GoalState, error) {
 	}
 
 	return goals, nil
+}
+
+func scanGoal(scanner rowScanner) (string, GoalState, error) {
+	var (
+		conversationID       string
+		goal                 GoalState
+		createdAt, updatedAt int64
+	)
+	if err := scanner.Scan(&conversationID, &goal.Objective, &goal.CheckScript, &goal.MaxTurns, &goal.TurnsUsed, &goal.Status, &goal.Note, &goal.SlackRecipientTeamID, &goal.SlackRecipientUserID, &createdAt, &updatedAt); err != nil {
+		return "", GoalState{}, fmt.Errorf("scan goal: %w", err)
+	}
+
+	goal.CreatedAt = timeFromUnixNano(createdAt)
+
+	goal.UpdatedAt = timeFromUnixNano(updatedAt)
+	if strings.TrimSpace(goal.Status) == "" {
+		goal.Status = GoalStatusActive
+	}
+
+	return conversationID, goal, nil
 }
 
 func (d stateDAO) putScheduledMessage(ctx context.Context, id string, message *protocol.ScheduledMessageState) error {
