@@ -604,31 +604,17 @@ func (s *SessionService) SyncCronSchedules(schedules []CronScheduleState, now ti
 		}
 	}
 
-	rows, err := tx.QueryContext(ctx, `SELECT schedule_id FROM cron_schedules ORDER BY schedule_id`)
+	ids, err := queryStrings(ctx, tx, `SELECT schedule_id FROM cron_schedules ORDER BY schedule_id`, "cron schedules for sync")
 	if err != nil {
-		return fmt.Errorf("query cron schedules for sync: %w", err)
+		return err
 	}
 
 	var stale []string
 
-	for rows.Next() {
-		var scheduleID string
-		if err := rows.Scan(&scheduleID); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("scan cron schedule for sync: %w", err)
-		}
-
+	for _, scheduleID := range ids {
 		if _, ok := seen[scheduleID]; !ok {
 			stale = append(stale, scheduleID)
 		}
-	}
-
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close cron schedule sync rows: %w", err)
-	}
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read cron schedules for sync: %w", err)
 	}
 
 	for _, scheduleID := range stale {
@@ -809,25 +795,9 @@ func (s *SessionService) ApplyPendingRestartNotifications(ctx context.Context) e
 
 	defer func() { _ = tx.Rollback() }()
 
-	rows, err := tx.QueryContext(ctx, `SELECT conversation_id FROM pending_restart_notifications ORDER BY conversation_id`)
+	conversationIDs, err := queryStrings(ctx, tx, `SELECT conversation_id FROM pending_restart_notifications ORDER BY conversation_id`, "restart notification requesters")
 	if err != nil {
-		return fmt.Errorf("query restart notification requesters: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var conversationIDs []string
-
-	for rows.Next() {
-		var conversationID string
-		if err := rows.Scan(&conversationID); err != nil {
-			return fmt.Errorf("scan restart notification requester: %w", err)
-		}
-
-		conversationIDs = append(conversationIDs, conversationID)
-	}
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read restart notification requesters: %w", err)
+		return err
 	}
 
 	for _, conversationID := range conversationIDs {
@@ -1642,8 +1612,8 @@ func externalMCPSessions(ctx context.Context, db stateStoreDB) (map[string]Exter
 	return sessions, nil
 }
 
-func queryStrings(ctx context.Context, db stateStoreDB, query, label string) ([]string, error) {
-	rows, err := db.QueryContext(ctx, query)
+func queryStrings(ctx context.Context, db stateStoreDB, query, label string, args ...any) ([]string, error) {
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query %s: %w", label, err)
 	}
@@ -1724,30 +1694,9 @@ func pruneExternalMCPSessions(ctx context.Context, tx *sql.Tx, cutoff time.Time,
 }
 
 func stalePrivateConversationIDs(ctx context.Context, db *sql.Tx, cutoff time.Time) ([]string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT conversation_id FROM session_entries WHERE conversation_id LIKE 'slack-thread:%' OR conversation_id LIKE 'external_mcp:%' OR conversation_id LIKE 'cron:%' OR conversation_id LIKE 'one-off-cron:%' GROUP BY conversation_id HAVING MAX(entry_timestamp) < $1`, cutoff.UTC().Format(time.RFC3339Nano))
+	candidates, err := queryStrings(ctx, db, `SELECT conversation_id FROM session_entries WHERE conversation_id LIKE 'slack-thread:%' OR conversation_id LIKE 'external_mcp:%' OR conversation_id LIKE 'cron:%' OR conversation_id LIKE 'one-off-cron:%' GROUP BY conversation_id HAVING MAX(entry_timestamp) < $1`, "stale private session conversations", cutoff.UTC().Format(time.RFC3339Nano))
 	if err != nil {
-		return nil, fmt.Errorf("query stale private session conversations: %w", err)
-	}
-
-	defer func() { _ = rows.Close() }()
-
-	var candidates []string
-
-	for rows.Next() {
-		var conversationID string
-		if err := rows.Scan(&conversationID); err != nil {
-			return nil, fmt.Errorf("scan stale private session conversation: %w", err)
-		}
-
-		candidates = append(candidates, conversationID)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read stale private session conversations: %w", err)
-	}
-
-	if err := rows.Close(); err != nil {
-		return nil, fmt.Errorf("close stale private session conversations: %w", err)
+		return nil, err
 	}
 
 	var stale []string
