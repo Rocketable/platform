@@ -1873,6 +1873,13 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await desktopAgent.waitFor();
     expect((await desktopAgent.boundingBox())!.width).toBe(32);
     expect((await desktopAgent.locator("svg").boundingBox())!.width).toBe(24);
+    const agentBox = (await desktopAgent.boundingBox())!;
+    await desktopAgent.hover();
+    expect((await desktopAgent.boundingBox())!.x).toBe(agentBox.x);
+    expect(await desktopPage.locator("#bottom-navigation > :last-child").evaluate((el: HTMLElement) => {
+      const style = getComputedStyle(el);
+      return [style.overflowY, style.scrollbarWidth];
+    })).toEqual(["hidden", "none"]);
     for (const name of ["Hide sidebar", "New session", "Settled", "Cron", "Agents", "Skills", "Config"]) {
       const control = desktopPage.locator("footer").getByRole(name === "Hide sidebar" || name === "New session" ? "button" : "link", { name, exact: true });
       await control.hover();
