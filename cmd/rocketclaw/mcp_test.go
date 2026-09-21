@@ -26,18 +26,19 @@ func TestSubmitExternalMCPInputPreservesPublicConversationMetadata(t *testing.T)
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 
-	submit := func(_ context.Context, agent, gotConversationID string, inbound *protocol.InboundMessage) error {
-		assert.Equal(t, "planner", agent)
-		assert.Equal(t, conversationID, gotConversationID)
-
+	turns := mcpTurns(func(inbound *protocol.InboundMessage) error {
 		captured = inbound
 		inbound.CompleteResponseWithAttachments("answer", nil, nil)
-
+		return nil
+	})
+	turns.CreateConversationFunc = func(_ context.Context, conversation protocol.Conversation) error {
+		assert.Equal(t, "planner", conversation.Agent)
+		assert.Equal(t, conversationID, conversation.ID)
 		return nil
 	}
 
 	content := &protocol.InboundContent{Text: "prompt"}
-	result, accepted, err := submitExternalMCPInput(context.Background(), submit, "planner", conversationID, content, map[string]string{"ticket": "123"}, "alice", nil, "public-1")
+	result, accepted, err := submitExternalMCPInput(context.Background(), turns, "planner", conversationID, content, map[string]string{"ticket": "123"}, "alice", nil, "public-1")
 
 	require.NoError(t, err)
 	assert.True(t, accepted)
@@ -78,17 +79,13 @@ func TestSubmitExternalMCPInputWaitsForOwnQueuedTurnResult(t *testing.T) {
 	resultCh := make(chan externalmcp.SessionResult, 1)
 	errCh := make(chan error, 1)
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-	submit := func(ctx context.Context, _ string, _ string, inbound *protocol.InboundMessage) error {
-		select {
-		case queue <- inbound:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
+	turns := mcpTurns(func(inbound *protocol.InboundMessage) error {
+		queue <- inbound
+		return nil
+	})
 
 	go func() {
-		result, _, err := submitExternalMCPInput(context.Background(), submit, "planner", conversationID, &protocol.InboundContent{Text: "follow-up"}, nil, "", nil, "public-1")
+		result, _, err := submitExternalMCPInput(context.Background(), turns, "planner", conversationID, &protocol.InboundContent{Text: "follow-up"}, nil, "", nil, "public-1")
 		if err != nil {
 			errCh <- err
 
@@ -174,24 +171,22 @@ func TestExternalMCPDuplicateSuppliedIDCreatesOneSlackRoot(t *testing.T) {
 		rootCount int
 	)
 
-	textRelay := func(_ context.Context, _ *protocol.ExternalMCPRelay, reply *protocol.InboundMessage, _ string) (*protocol.InboundMessage, error) {
-		mu.Lock()
-		defer mu.Unlock()
-
-		if reply == nil {
-			rootCount++
-			return &protocol.InboundMessage{SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}}, nil
-		}
-
-		return reply, nil
-	}
-	submit := func(_ context.Context, _ string, _ string, inbound *protocol.InboundMessage) error {
-		inbound.CompleteResponseWithAttachments("answer", nil, nil)
-
-		return nil
+	relay := &mcpRelayMock{
+		SendExternalMCPRelayFunc: func(_ context.Context, _, threadTS string, _ *protocol.ExternalMCPRelay) (*protocol.SlackReplyTarget, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			if threadTS == "" {
+				rootCount++
+				return &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}, nil
+			}
+			return &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: threadTS, ThreadTS: threadTS}, nil
+		},
 	}
 	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}}}}
-	server, err := startExternalMCPServer(t.Context(), cfg, textRelay, func(context.Context, *protocol.InboundMessage) {}, nil, func(string) bool { return true }, store, submit, testLogger())
+	server, err := startExternalMCPServer(t.Context(), cfg, relay, nil, &mcpAgentIndex{names: []string{"planner"}}, store, mcpTurns(func(inbound *protocol.InboundMessage) error {
+		inbound.CompleteResponseWithAttachments("answer", nil, nil)
+		return nil
+	}), testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -254,21 +249,24 @@ func TestExternalMCPRepeatedIDKeepsLockedAgentAndRejectsChannelMismatch(t *testi
 
 	var agents []string
 
-	textRelay := func(_ context.Context, _ *protocol.ExternalMCPRelay, reply *protocol.InboundMessage, _ string) (*protocol.InboundMessage, error) {
-		if reply == nil {
-			return &protocol.InboundMessage{SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}}, nil
-		}
-
-		return reply, nil
+	relay := &mcpRelayMock{
+		SendExternalMCPRelayFunc: func(_ context.Context, _, threadTS string, _ *protocol.ExternalMCPRelay) (*protocol.SlackReplyTarget, error) {
+			if threadTS == "" {
+				return &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}, nil
+			}
+			return &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: threadTS, ThreadTS: threadTS}, nil
+		},
 	}
-	submit := func(_ context.Context, agent string, _ string, inbound *protocol.InboundMessage) error {
-		agents = append(agents, agent)
+	turns := mcpTurns(func(inbound *protocol.InboundMessage) error {
 		inbound.CompleteResponseWithAttachments("answer", nil, nil)
-
+		return nil
+	})
+	turns.CreateConversationFunc = func(_ context.Context, conversation protocol.Conversation) error {
+		agents = append(agents, conversation.Agent)
 		return nil
 	}
 	cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}, {Channel: "#triage", Agents: []string{"triage"}}}}}
-	server, err := startExternalMCPServer(t.Context(), cfg, textRelay, func(context.Context, *protocol.InboundMessage) {}, nil, func(string) bool { return true }, store, submit, testLogger())
+	server, err := startExternalMCPServer(t.Context(), cfg, relay, nil, &mcpAgentIndex{names: []string{"planner"}}, store, turns, testLogger())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -302,18 +300,17 @@ func TestExternalMCPRepeatedIDKeepsLockedAgentAndRejectsChannelMismatch(t *testi
 func TestSubmitExternalMCPInputReturnsAfterSubmitAgent(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
-	submit := func(_ context.Context, _ string, _ string, inbound *protocol.InboundMessage) error {
+	turns := mcpTurns(func(inbound *protocol.InboundMessage) error {
 		inbound.CompleteResponseWithAttachments("answer", nil, nil)
 		close(started)
 		<-release
-
 		return nil
-	}
+	})
 
 	resultCh := make(chan externalmcp.SessionResult, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		result, _, err := submitExternalMCPInput(context.Background(), submit, "planner", "external_mcp:planner:x", &protocol.InboundContent{Text: "hello"}, nil, "", nil, "public-1")
+		result, _, err := submitExternalMCPInput(context.Background(), turns, "planner", "external_mcp:planner:x", &protocol.InboundContent{Text: "hello"}, nil, "", nil, "public-1")
 		if err != nil {
 			errCh <- err
 
@@ -375,25 +372,24 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 
 			cleanupCalls := 0
 			relayCalls := 0
-			textRelay := func(context.Context, *protocol.ExternalMCPRelay, *protocol.InboundMessage, string) (*protocol.InboundMessage, error) {
-				relayCalls++
-
-				if tt.relayErr != nil {
-					return nil, tt.relayErr
-				}
-
-				return &protocol.InboundMessage{SlackReply: &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}}, nil
+			relay := &mcpRelayMock{
+				SendExternalMCPRelayFunc: func(context.Context, string, string, *protocol.ExternalMCPRelay) (*protocol.SlackReplyTarget, error) {
+					relayCalls++
+					if tt.relayErr != nil {
+						return nil, tt.relayErr
+					}
+					return &protocol.SlackReplyTarget{ChannelID: "C123", MessageTS: "111.222", ThreadTS: "111.222"}, nil
+				},
+				CleanupExternalMCPRelayFunc: func(context.Context, *protocol.SlackReplyTarget) { cleanupCalls++ },
 			}
-			cleanup := func(context.Context, *protocol.InboundMessage) { cleanupCalls++ }
 
 			callCtx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
-			submit := func(_ context.Context, _ string, _ string, inbound *protocol.InboundMessage) error {
+			turns := mcpTurns(func(inbound *protocol.InboundMessage) error {
 				if tt.submitErr != nil {
 					return tt.submitErr
 				}
-
 				switch {
 				case tt.cancelAfterSubmit:
 					cancel()
@@ -402,11 +398,10 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 				default:
 					inbound.CompleteResponseWithAttachments("answer", nil, nil)
 				}
-
 				return nil
-			}
+			})
 			cfg := &config.Config{MCPExternal: config.MCPExternalConfig{ListenAddr: "127.0.0.1:0"}, Slack: config.SlackConfig{Channels: []config.SlackChannelConfig{{Channel: "#ops", Agents: []string{"managed"}}}}}
-			server, err := startExternalMCPServer(t.Context(), cfg, textRelay, cleanup, nil, func(string) bool { return true }, store, submit, testLogger())
+			server, err := startExternalMCPServer(t.Context(), cfg, relay, nil, &mcpAgentIndex{names: []string{"planner"}}, store, turns, testLogger())
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, server.Close(context.Background())) })
 
@@ -428,4 +423,14 @@ func TestExternalMCPNewConversationFailureCompensation(t *testing.T) {
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
+}
+
+func mcpTurns(run func(*protocol.InboundMessage) error) *BackendMock {
+	return &BackendMock{
+		CreateConversationFunc: func(context.Context, protocol.Conversation) error { return nil },
+		RunTurnFunc: func(_ context.Context, inbound *protocol.InboundMessage) error {
+			return run(inbound)
+		},
+		SyncConversationFunc: func(context.Context, string, string) error { return nil },
+	}
 }

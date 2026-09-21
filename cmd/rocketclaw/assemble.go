@@ -2,15 +2,11 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"slices"
-	"sync"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
 	slackconnector "github.com/Rocketable/platform/internal/rocketclaw/frontend/slack"
-	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 )
 
 type processAssembler struct{}
@@ -38,61 +34,13 @@ func (processAssembler) Assemble(rt *backend.Runtime) (backend.SlackFrontend, <-
 	stops = append(stops, cronjobs.Stop)
 
 	if rt.Cfg.MCPExternal.Enabled {
-		var (
-			externalMCPAgentsMu sync.Mutex
-			externalMCPAgents   = []string{}
-		)
-
-		*rt.RefreshExternalMCPAgents = func() error {
-			agents, err := backend.ExternalMCPAgentsIn(rt.Cfg, rt.Cfg.RuntimeDirName())
-			if err != nil {
-				return fmt.Errorf("load external MCP agents: %w", err)
-			}
-
-			externalMCPAgentsMu.Lock()
-			externalMCPAgents = agents
-			externalMCPAgentsMu.Unlock()
-
-			return nil
-		}
-
-		if err := (*rt.RefreshExternalMCPAgents)(); err != nil {
+		agents := &mcpAgentIndex{cfg: rt.Cfg}
+		*rt.RefreshExternalMCPAgents = agents.Refresh
+		if err := agents.Refresh(); err != nil {
 			return nil, nil, nil, err
 		}
 
-		textRelay := func(relayCtx context.Context, relay *protocol.ExternalMCPRelay, reply *protocol.InboundMessage, channelName string) (*protocol.InboundMessage, error) {
-			channelID, threadTS := channelName, ""
-			if reply != nil {
-				channelID, threadTS = reply.SlackReply.ChannelID, reply.SlackReply.ThreadTS
-			}
-			target, err := slack.SendExternalMCPRelay(relayCtx, channelID, threadTS, relay)
-			if err != nil {
-				return nil, err
-			}
-			return &protocol.InboundMessage{SlackReply: target}, nil
-		}
-		cleanupTextRelay := func(cleanupCtx context.Context, reply *protocol.InboundMessage) {
-			if reply == nil {
-				return
-			}
-
-			slack.CleanupExternalMCPRelay(cleanupCtx, reply.SlackReply)
-		}
-
-		externalMCP, err := startExternalMCPServer(rt.RunCtx, rt.Cfg, textRelay, cleanupTextRelay, rt.ExternalMCPUsers, func(agent string) bool {
-			externalMCPAgentsMu.Lock()
-			defer externalMCPAgentsMu.Unlock()
-
-			return slices.Contains(externalMCPAgents, agent)
-		}, rt.Sessions, func(submitCtx context.Context, agent, conversationID string, inbound *protocol.InboundMessage) error {
-			if err := rt.CreateConversation(submitCtx, protocol.Conversation{ID: conversationID, Agent: agent}); err != nil {
-				return err
-			}
-
-			errRun := rt.RunTurn(submitCtx, inbound)
-			errSync := rt.SyncConversation(context.WithoutCancel(submitCtx), conversationID, inbound.SyncDestination)
-			return errors.Join(errRun, errSync)
-		}, rt.Log)
+		externalMCP, err := startExternalMCPServer(rt.RunCtx, rt.Cfg, slack, rt.ExternalMCPUsers, agents, rt.Sessions, rt, rt.Log)
 		if err != nil {
 			return nil, nil, nil, err
 		}
