@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/netip"
 	"os"
@@ -540,7 +541,8 @@ func cronHistory(entries []backend.ObservedSessionEntry, destination string) []*
 }
 
 func (s *Server) runCronJob(ctx context.Context, request *RunCronJobRequest) (*RunCronJobResponse, error) {
-	if _, err := s.principal(ctx); err != nil {
+	principal, err := s.principal(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -549,12 +551,20 @@ func (s *Server) runCronJob(ctx context.Context, request *RunCronJobRequest) (*R
 		return nil, fmt.Errorf("load web cron job: %w", err)
 	}
 
-	result, err := s.cronjobs.RunOneOffCronjob(ctx, &job)
-	if err != nil {
-		return nil, fmt.Errorf("run web cron job: %w", err)
+	id := rand.Text()
+	if err := s.backend.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: job.Agent, CreatedBy: principal}); err != nil {
+		return nil, fmt.Errorf("create web cron conversation: %w", err)
 	}
 
-	return &RunCronJobResponse{Id: result.ConversationID}, nil
+	job.ConversationID = id
+	// The response has to name the session before the private run finishes, so the browser can open it.
+	go func() {
+		if _, err := s.cronjobs.RunOneOffCronjob(context.WithoutCancel(ctx), &job); err != nil {
+			slog.Error("run web cron job", "stem", request.Stem, "id", id, "error", err)
+		}
+	}()
+
+	return &RunCronJobResponse{Id: id}, nil
 }
 
 func (s *Server) settleSession(ctx context.Context, request *SettleSessionRequest) (*SettleSessionResponse, error) {

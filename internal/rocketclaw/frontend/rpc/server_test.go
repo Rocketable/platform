@@ -208,10 +208,10 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, "planner", agent)
 		require.Contains(t, prompt, "Cron body")
 		require.Equal(t, "#ops", progress.TextChannel)
-		require.Empty(t, progress.SyncDestination)
+		require.NotEmpty(t, progress.SyncDestination)
 		require.True(t, strings.HasPrefix(progress.ConversationID, "one-off-cron:cron/alpha.md:"))
 
-		return protocol.CronRunResult{ConversationID: "slack-thread:C1:cron-y"}, nil
+		return protocol.CronRunResult{ConversationID: progress.SyncDestination}, nil
 	}}
 	cronjobs := cronfrontend.New(cfg.Workspace, cfg.RuntimeDirName(), []string{"#ops"}, sessions, cronRunner, slog.New(slog.DiscardHandler))
 	require.NoError(t, cronjobs.Start(t.Context()))
@@ -1351,22 +1351,26 @@ func TestSessionEntries(t *testing.T) {
 	require.Len(t, remainingRuns.Jobs, 3)
 	require.True(t, proto.Equal(jobs.Jobs[2], remainingRuns.Jobs[2]))
 
+	opened := make([]string, 0, 2)
 	for range 2 {
 		ran, err := invoke[RunCronJobResponse](ctx, connection, "RunCronJob", &RunCronJobRequest{Stem: "alpha"})
 		require.NoError(t, err)
-		require.Equal(t, "slack-thread:C1:cron-y", ran.Id)
+		require.NotEmpty(t, ran.Id)
+		require.NotContains(t, ran.Id, ":")
+		opened = append(opened, ran.Id)
 	}
-
+	require.NotEqual(t, opened[0], opened[1])
+	require.Eventually(t, func() bool { return len(cronRunner.RunCalls()) >= 2 }, time.Second, 10*time.Millisecond)
 	calls := cronRunner.RunCalls()
-	require.Len(t, calls, 2)
+	require.ElementsMatch(t, opened, []string{calls[0].RawRunProgress.SyncDestination, calls[1].RawRunProgress.SyncDestination})
 	require.NotEqual(t, calls[0].RawRunProgress.ConversationID, calls[1].RawRunProgress.ConversationID)
 
 	cronRunner.RunFunc = func(context.Context, string, string, *backend.RawRunProgress) (protocol.CronRunResult, error) {
 		return protocol.CronRunResult{}, errors.New("cron execution failed")
 	}
 	failed, err := invoke[RunCronJobResponse](ctx, connection, "RunCronJob", &RunCronJobRequest{Stem: "alpha"})
-	require.ErrorContains(t, err, "cron execution failed")
-	require.Nil(t, failed)
+	require.NoError(t, err)
+	require.NotEmpty(t, failed.Id)
 
 	_, err = invoke[RunCronJobResponse](ctx, connection, "RunCronJob", &RunCronJobRequest{Stem: "../escape"})
 	require.ErrorContains(t, err, "nested paths are not allowed")
