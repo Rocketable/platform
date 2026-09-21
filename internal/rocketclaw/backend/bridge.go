@@ -16,6 +16,7 @@ import (
 	"image/png"
 	"io"
 	"io/fs"
+	"iter"
 	"log/slog"
 	"maps"
 	"math"
@@ -1243,11 +1244,30 @@ func (b *Bridge) finishGoalTurn(ctx context.Context, request *bridgeRequest) err
 	return nil
 }
 
+func appendSessionEntry(entries iter.Seq2[rocketcode.SessionEntry, error], added *rocketcode.SessionEntry, cloneReplay bool) iter.Seq2[rocketcode.SessionEntry, error] {
+	return func(yield func(rocketcode.SessionEntry, error) bool) {
+		for entry, err := range entries {
+			if !yield(entry, err) {
+				return
+			}
+		}
+
+		entry := *added
+		entry.Timestamp = time.Now().UTC()
+
+		if cloneReplay {
+			entry.ReplayInput = slices.Clone(entry.ReplayInput)
+		}
+
+		yield(entry, nil)
+	}
+}
+
 //nolint:gocyclo // Turn execution coordinates model, tools, progress, and goal accounting.
 func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turnID string, recoveredCheckpoints ...rocketcode.ActiveTurnCheckpoint) (result runResult, err error) {
 	var (
-		recoveredReplay       []json.RawMessage
-		recoveredDisplayModel string
+		recoveredReplay []json.RawMessage
+		recoveryEntry   rocketcode.SessionEntry
 	)
 
 	agentName := b.agentSnapshot()
@@ -1328,17 +1348,10 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	var shellEnv map[string]string
 
 	sessionIn := store.in()
-	if len(recoveredReplay) > 0 {
-		previousSessionIn := sessionIn
-		sessionIn = func(yield func(rocketcode.SessionEntry, error) bool) {
-			for entry, err := range previousSessionIn {
-				if !yield(entry, err) {
-					return
-				}
-			}
 
-			yield(rocketcode.SessionEntry{Version: 1, Type: "active_turn_recovery", Timestamp: time.Now().UTC(), Model: recoveredDisplayModel, ReplayInput: slices.Clone(recoveredReplay)}, nil)
-		}
+	if len(recoveredReplay) > 0 {
+		recoveryEntry = rocketcode.SessionEntry{Version: 1, Type: "active_turn_recovery", ReplayInput: recoveredReplay}
+		sessionIn = appendSessionEntry(sessionIn, &recoveryEntry, true)
 	}
 
 	if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err != nil {
@@ -1352,16 +1365,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 				return runResult{}, fmt.Errorf("encode active goal note: %w", err)
 			}
 
-			previousSessionIn := sessionIn
-			sessionIn = func(yield func(rocketcode.SessionEntry, error) bool) {
-				for entry, err := range previousSessionIn {
-					if !yield(entry, err) {
-						return
-					}
-				}
-
-				yield(rocketcode.SessionEntry{Version: 1, Type: "goal_state", Timestamp: time.Now().UTC(), ReplayInput: replayInput}, nil)
-			}
+			sessionIn = appendSessionEntry(sessionIn, &rocketcode.SessionEntry{Version: 1, Type: "goal_state", ReplayInput: replayInput}, false)
 		}
 	}
 
@@ -1421,16 +1425,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 				store.managedReplayPrefix = replayInput
 
-				previousSessionIn := sessionIn
-				sessionIn = func(yield func(rocketcode.SessionEntry, error) bool) {
-					for entry, err := range previousSessionIn {
-						if !yield(entry, err) {
-							return
-						}
-					}
-
-					yield(rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Now().UTC(), ReplayInput: replayInput}, nil)
-				}
+				sessionIn = appendSessionEntry(sessionIn, &rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: replayInput}, false)
 			}
 		}
 	}
@@ -1505,7 +1500,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	looper.SteerDrain = rocketcode.SteerDrain{Fn: b.drainSteers}
-	recoveredDisplayModel = looper.DisplayModel
+	recoveryEntry.Model = looper.DisplayModel
 	sessionIn = sessionEntriesForProvider(sessionIn, providerForModel(looper.DisplayModel))
 
 	input := make(chan rocketcode.PromptInput, 1)

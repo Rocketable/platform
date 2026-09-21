@@ -5149,3 +5149,62 @@ func seedFunctionCallOutputText(output *responses.ResponseInputItemFunctionCallO
 
 	return strings.Join(parts, "\n")
 }
+
+func TestAppendSessionEntryKeepsPriorEntriesThenAdded(t *testing.T) {
+	continued := false
+	stopped := appendSessionEntry(iter.Seq2[rocketcode.SessionEntry, error](func(yield func(rocketcode.SessionEntry, error) bool) {
+		if !yield(rocketcode.SessionEntry{Type: "stored"}, nil) {
+			return
+		}
+
+		continued = true
+	}), &rocketcode.SessionEntry{Type: "added"}, false)
+	stopped(func(rocketcode.SessionEntry, error) bool { return false })
+	assert.False(t, continued)
+
+	var (
+		got       []string
+		errFailed error
+	)
+
+	for entry, err := range appendSessionEntry(iter.Seq2[rocketcode.SessionEntry, error](func(yield func(rocketcode.SessionEntry, error) bool) {
+		yield(rocketcode.SessionEntry{Type: "stored"}, nil)
+		yield(rocketcode.SessionEntry{Type: "failed"}, assert.AnError)
+	}), &rocketcode.SessionEntry{Type: "added"}, false) {
+		got = append(got, entry.Type)
+
+		if err != nil {
+			errFailed = err
+			break
+		}
+	}
+
+	assert.Equal(t, []string{"stored", "failed"}, got)
+	require.ErrorIs(t, errFailed, assert.AnError)
+
+	replay := []json.RawMessage{[]byte(`"before"`)}
+	added := rocketcode.SessionEntry{Type: "added", Version: 1, Model: "early", ReplayInput: replay}
+	seq := appendSessionEntry(iter.Seq2[rocketcode.SessionEntry, error](func(yield func(rocketcode.SessionEntry, error) bool) {
+		yield(rocketcode.SessionEntry{Type: "stored"}, nil)
+	}), &added, true)
+	added.Model = "late"
+	replay[0] = []byte(`"after"`)
+	before := time.Now().UTC()
+
+	var seen []rocketcode.SessionEntry
+
+	for entry, err := range seq {
+		require.NoError(t, err)
+
+		seen = append(seen, entry)
+	}
+
+	require.Len(t, seen, 2)
+	assert.Equal(t, "stored", seen[0].Type)
+	assert.Equal(t, "late", seen[1].Model)
+	assert.Equal(t, []byte(`"after"`), []byte(seen[1].ReplayInput[0]))
+	seen[1].ReplayInput[0] = []byte(`"yielded"`)
+
+	assert.Equal(t, []byte(`"after"`), []byte(replay[0]))
+	assert.False(t, seen[1].Timestamp.Before(before))
+}
