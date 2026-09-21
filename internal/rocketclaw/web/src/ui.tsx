@@ -949,7 +949,7 @@ function SessionList({ settledOnly = false }: { settledOnly?: boolean }) {
 function SessionTabs({ returnTo, children }: { returnTo: string; children: ReactNode }) {
   const route = useRoute();
   return (
-      <div className="min-w-0 max-w-full justify-self-center overflow-x-auto">
+      <div className="min-w-0 max-w-full justify-self-center overflow-x-auto overflow-y-hidden scrollbar-none">
       <div className="flex w-max items-center gap-[var(--navigation-gap)]">
         {children}
         <Tooltip><TooltipTrigger render={<Button variant={route.settled ? "default" : "ghost"} aria-current={route.settled} size="icon" className="size-[var(--navigation-button)]" role="link" nativeButton={false} render={<Link href={route.settled ? returnTo : "/settled"} />} />} aria-label="Settled">
