@@ -7,7 +7,7 @@ import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field
 import { queries, mutations, listSessions } from "./api";
 import { Bot, Calendar, Check, Download, FileIcon, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, navigate } from "./navigation";
-import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SyntheticEvent } from "react";
 import { flushSync } from "react-dom";
 import { ThemeToggle } from "@/components/theme";
 import { CodeBlock, TranscriptText } from "./transcript-text";
@@ -636,22 +636,32 @@ export function App() {
   const [conversation, setConversation] = useState({ id: route.id, created: "", key: 0 });
   const returnTo = conversation.id === "" ? "/" : sessionPath(conversation.id);
   tabReturnTo.current = returnTo;
-  const newChat = () => {
+  const newChat = useCallback(() => {
     drafts.current.delete("");
     setConversation((current) => ({ ...current, created: "", key: current.key + 1 }));
-    route.goHome();
-  };
+    navigate("/");
+  }, []);
   useEffect(() => {
-    if (showChat) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented || event.repeat) return;
+      if (event.defaultPrevented || event.repeat) return;
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "b" && !event.shiftKey) {
+        event.preventDefault();
+        setSidebarOpen((open) => !open);
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && event.altKey && !event.shiftKey && event.code === "KeyN") {
+        event.preventDefault();
+        newChat();
+        return;
+      }
+      if (showChat || event.key !== "Escape") return;
       if (document.querySelector('[role="dialog"], [role="listbox"], [role="tooltip"]')) return;
       event.preventDefault();
       navigate(tabReturnTo.current);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [showChat]);
+  }, [newChat, showChat]);
   if (showChat && conversation.id !== route.id) {
     // Creation assigns this conversation its ID; other navigation starts a fresh subtree.
     const created = conversation.id === "" && conversation.created === route.id;
@@ -661,6 +671,7 @@ export function App() {
       <QueryClientProvider client={queryClient}><TooltipProvider>
         <ProtocolGuard />
         <SidebarOwner>
+          <CommandPalette newChat={newChat} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((open) => !open)} />
          <MobileSidebar chat={showChat}>
             <BottomNavigation>
               <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="hidden size-[var(--navigation-button)] md:inline-flex" />} aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"} aria-expanded={sidebarOpen} aria-controls="session-sidebar" onClick={() => setSidebarOpen((open) => !open)}>
@@ -690,6 +701,168 @@ export function App() {
          </MobileSidebar>
         </SidebarOwner>
       </TooltipProvider></QueryClientProvider>
+  );
+}
+
+function paletteRows(
+  mode: "sessions" | "commands" | "cron",
+  needle: string,
+  sidebar: { rows: Session[]; loadingIds: ReadonlySet<string> },
+  jobs: { stem: string; status: string; schedule?: string; agent?: string; channel?: string }[] | undefined,
+  newChat: () => void,
+  sidebarOpen: boolean,
+  onToggleSidebar: () => void,
+  openCron: () => void,
+  runStem: (stem: string) => void,
+): { key: string; label: string; detail: string; keep?: boolean; run: () => void }[] {
+  if (mode === "sessions") {
+    return sidebar.rows.filter((session) => matchesSession(session, needle, "", "")).toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((session) => ({
+      key: session.id,
+      label: session.name || rowPreview(session, sidebar.loadingIds.has(session.id)).split("\n", 1)[0] || sessionLabel(session.id),
+      detail: [session.settled ? "Settled" : "", session.agent, relativeTime(session.updatedAt ?? "")].filter(Boolean).join(" · "),
+      run: () => navigate(sessionPath(session.id)),
+    }));
+  }
+  if (mode === "cron") {
+    return (jobs ?? []).filter((job) => job.status !== "ran").filter((job) => needle === "" || `${job.stem} ${job.schedule ?? ""} ${job.agent ?? ""} ${job.channel ?? ""}`.toLowerCase().includes(needle)).map((job) => ({
+      key: job.stem,
+      label: job.stem,
+      detail: [job.schedule, job.agent, job.channel].filter(Boolean).join(" · "),
+      keep: true,
+      run: () => runStem(job.stem),
+    }));
+  }
+  return [
+    { key: "new", label: "New session", detail: "", run: newChat },
+    { key: "run-cron", label: "Run cron", detail: "", keep: true, run: openCron },
+    { key: "settled", label: "Settled", detail: "", run: () => navigate("/settled") },
+    { key: "cron", label: "Cron", detail: "", run: () => navigate("/cron") },
+    { key: "agents", label: "Agents", detail: "", run: () => navigate("/agents") },
+    { key: "skills", label: "Skills", detail: "", run: () => navigate("/skills") },
+    { key: "config", label: "Config", detail: "", run: () => navigate("/config") },
+    { key: "sidebar", label: sidebarOpen ? "Hide sidebar" : "Show sidebar", detail: "", run: onToggleSidebar },
+  ].filter((item) => needle === "" || item.label.toLowerCase().includes(needle));
+}
+
+const pendingCronRuns = new Map<string, string>();
+const pendingCronListeners = new Set<() => void>();
+
+function notePendingCron(id: string, stem: string) {
+  if (stem === "") pendingCronRuns.delete(id);
+  else pendingCronRuns.set(id, stem);
+  for (const listener of pendingCronListeners) listener();
+}
+
+function usePendingCron(id: string) {
+  return useSyncExternalStore(
+    (listener) => {
+      pendingCronListeners.add(listener);
+      return () => pendingCronListeners.delete(listener);
+    },
+    () => pendingCronRuns.get(id) ?? "",
+  );
+}
+
+function CommandPalette({ newChat, sidebarOpen, onToggleSidebar }: { newChat: () => void; sidebarOpen: boolean; onToggleSidebar: () => void }) {
+  const sidebar = useContext(Sidebar);
+  const [mode, setMode] = useState<"sessions" | "commands" | "cron">();
+  const [query, setQuery] = useState("");
+  const [pick, setPick] = useState(0);
+  const active = useRef<HTMLButtonElement>(null);
+  const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000, enabled: mode === "commands" || mode === "cron" });
+  const runCron = useMutation({
+    mutationFn: mutations.runCron,
+    onSuccess: (id, input) => {
+      void queryClient.invalidateQueries({ queryKey: ["cronJobs"] });
+      sidebar.invalidateQueries();
+      if (id === "") return;
+      notePendingCron(id, input.stem);
+      navigate(sessionPath(id));
+      setMode(undefined);
+    },
+  });
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || event.altKey || !(event.metaKey || event.ctrlKey) || event.code !== "KeyP") return;
+      event.preventDefault();
+      setQuery("");
+      setPick(0);
+      setMode(event.shiftKey ? "commands" : "sessions");
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }));
+  const selected = items.length === 0 ? 0 : pick % items.length;
+  const choose = (item: (typeof items)[number]) => {
+    if (!item.keep) setMode(undefined);
+    item.run();
+  };
+  useEffect(() => { active.current?.scrollIntoView({ block: "nearest" }); }, [selected, mode]);
+  const copy = paletteCopy(mode);
+  const empty = mode === "cron" && jobs.isLoading ? "Loading…" : "No matches";
+  return (
+    <Dialog open={mode !== undefined} onOpenChange={(open) => { if (!open) setMode(undefined); }}>
+      <DialogContent showCloseButton={false} className="top-[20%] translate-y-0 overflow-hidden sm:max-w-lg">
+        <DialogTitle className="sr-only">{copy.title}</DialogTitle>
+        <DialogDescription className="sr-only">{copy.desc}</DialogDescription>
+        <Input
+          value={query}
+          onChange={(event) => { setPick(0); setQuery(event.target.value); }}
+          placeholder={copy.placeholder}
+          variant="embedded"
+          onKeyDown={(event) => setPick(paletteMove(event, selected, items.length, () => { if (items[selected]) choose(items[selected]); }))}
+        />
+        {runCron.error ? <p role="alert" className="px-3 text-sm text-destructive">{runCron.error.message}</p> : null}
+        <PaletteItems items={items} selected={selected} active={active} empty={empty} onChoose={choose} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function paletteCopy(mode: "sessions" | "commands" | "cron" | undefined) {
+  if (mode === "cron") return { title: "Run cron", desc: "Search and run a cron job.", placeholder: "Search cron jobs" };
+  if (mode === "commands") return { title: "Run command", desc: "Search and run a command.", placeholder: "Type a command" };
+  return { title: "Go to session", desc: "Search and open a session.", placeholder: "Search sessions" };
+}
+
+function paletteMove(event: { key: string; preventDefault: () => void }, selected: number, count: number, enter: () => void) {
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    return selected + 1;
+  }
+  if (event.key === "ArrowUp") {
+    event.preventDefault();
+    return selected + Math.max(count, 1) - 1;
+  }
+  if (event.key === "Enter") {
+    event.preventDefault();
+    enter();
+  }
+  return selected;
+}
+
+function PaletteItems({ items, selected, active, empty, onChoose }: {
+  items: { key: string; label: string; detail: string; keep?: boolean; run: () => void }[];
+  selected: number;
+  active: RefObject<HTMLButtonElement | null>;
+  empty: string;
+  onChoose: (item: { key: string; label: string; detail: string; keep?: boolean; run: () => void }) => void;
+}) {
+  if (items.length === 0) {
+    return <ul className="max-h-[min(24rem,50vh)] overflow-y-auto p-1"><li className="px-3 py-2 text-sm text-muted-foreground">{empty}</li></ul>;
+  }
+  return (
+    <ul className="max-h-[min(24rem,50vh)] overflow-y-auto p-1">
+      {items.map((item, index) => (
+        <li key={item.key}>
+          <button ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start rounded-md px-3 py-2 text-left text-sm", index === selected && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => onChoose(item)}>
+            <span className="font-medium">{item.label}</span>
+            {item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -1177,6 +1350,8 @@ function TranscriptLog({
   const turns = transcriptTurns(lines);
   const { scrollToMessage } = useMessageScroller();
   const turnNodes = useRef<(HTMLElement | null)[]>([]);
+  const running = usePendingCron(conversationId);
+  useEffect(() => { if (running && lines.length > 0) notePendingCron(conversationId, ""); }, [running, lines.length, conversationId]);
   const jumpToTurn = (index: number) => {
     scrollToMessage(`turn-${index}`, { align: "start", behavior: "instant" });
     turnNodes.current[index]?.focus({ preventScroll: true });
@@ -1188,7 +1363,7 @@ function TranscriptLog({
       <MessageScrollerContent className="mx-auto w-full min-w-0 max-w-3xl">
       {lines.length === 0 && !thinking ? (
         <MessageScrollerItem className="flex flex-1 items-center justify-center">
-          <p className="text-sm text-muted-foreground">Send a message to start the conversation.</p>
+          <p role="status" className="text-sm text-muted-foreground">{running ? `${running} is running` : "Send a message to start the conversation."}</p>
         </MessageScrollerItem>
       ) : (
         <>
@@ -1296,7 +1471,8 @@ async function readTranscriptHistory(draft: ComposerDraft, request: Promise<Tran
 
 function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () => void) {
   const historyQuery = queries.history({ id });
-  const history = useQuery({ ...historyQuery, queryFn: ({ signal }) => readTranscriptHistory(draft, historyQuery.queryFn({ signal }), onDraftChange, draft.busy && draft.lines.length > 0), enabled: id !== "", refetchOnWindowFocus: false, retry: false });
+  const pendingCron = usePendingCron(id);
+  const history = useQuery({ ...historyQuery, queryFn: ({ signal }) => readTranscriptHistory(draft, historyQuery.queryFn({ signal }), onDraftChange, draft.busy && draft.lines.length > 0), enabled: id !== "", refetchOnWindowFocus: false, retry: false, refetchInterval: pendingCron ? 2000 : false });
   const historyReady = history.data !== undefined;
   const reconnectHistory = history.refetch;
   // History errors belong to the query; a confirmed Prompt must not become a retry.
@@ -2057,7 +2233,7 @@ function CronPage() {
             <div className="mt-6 flex justify-end gap-2">
               <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
               <Button onClick={() => {
-                run.mutate({ stem: confirmStem }, { onSuccess: (id) => { if (id !== "") route.goSession(id); } });
+                run.mutate({ stem: confirmStem }, { onSuccess: (id) => { if (id !== "") { notePendingCron(id, confirmStem); route.goSession(id); } } });
                 setConfirmStem("");
               }}>Run</Button>
             </div>

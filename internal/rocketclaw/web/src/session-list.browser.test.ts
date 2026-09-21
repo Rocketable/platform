@@ -546,6 +546,23 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect(await page.getByRole("button", { name: "Hide sidebar", exact: true }).boundingBox()).toEqual(menuPosition);
     expect(await desktopSidebar.getByPlaceholder("Search or agent: or room:").inputValue()).toBe("saved");
     await desktopSidebar.getByPlaceholder("Search or agent: or room:").fill("");
+    await page.keyboard.press("Control+b");
+    expect(await desktopSidebar.isVisible()).toBe(false);
+    expect(await page.getByRole("button", { name: "Show sidebar", exact: true }).getAttribute("aria-expanded")).toBe("false");
+    await page.keyboard.press("Meta+b");
+    expect(await desktopSidebar.isVisible()).toBe(true);
+    expect(await page.getByRole("button", { name: "Hide sidebar", exact: true }).getAttribute("aria-expanded")).toBe("true");
+    await page.keyboard.press("Control+p");
+    const sessionPalette = page.getByRole("dialog", { name: "Go to session", exact: true });
+    await sessionPalette.getByPlaceholder("Search sessions", { exact: true }).waitFor();
+    await sessionPalette.getByRole("button").filter({ hasText: "saved preview" }).waitFor();
+    await page.keyboard.press("Control+Shift+p");
+    const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
+    await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
+    await commandPalette.getByRole("button", { name: "New session", exact: true }).waitFor();
+    await commandPalette.getByRole("button", { name: "Run cron", exact: true }).waitFor();
+    await page.keyboard.press("Escape");
+    await commandPalette.waitFor({ state: "hidden" });
 
     await page.setViewportSize({ width: 390, height: 844 });
     const mobileSessions = page.getByRole("button", { name: "Sessions", exact: true });
@@ -783,7 +800,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect(ctrl.prompt.slice(-2)).toEqual(["web-session:new:$agent main", "web-session:new:stay with main"]);
     ctrl.holdPrompt = true;
     await page.locator("textarea").fill("created draft to discard");
-    await page.locator("footer").getByRole("button", { name: "New session", exact: true }).click();
+    await page.keyboard.press("Control+Alt+n");
     await page.waitForURL(origin + "/");
     expect(await page.getByPlaceholder("Message a new session").inputValue()).toBe("");
     await hidden(page, "private reply for created session");
@@ -797,7 +814,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await ctrl.createStarted.promise;
     await page.getByRole("link").filter({ hasText: "will vanish" }).click();
     await page.waitForURL("**/s/Z29uZQ");
-    await page.locator("footer").getByRole("button", { name: "New session", exact: true }).click();
+    await page.keyboard.press("Meta+Alt+n");
     await page.waitForURL(origin + "/");
     await page.getByPlaceholder("Message a new session").fill("unrelated new draft");
     createHold.resolve("web-session:abandoned");
