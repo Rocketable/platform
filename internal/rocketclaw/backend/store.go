@@ -668,29 +668,7 @@ func (s *SessionService) ResetCronSchedules() error {
 
 // DueCronSchedules returns observed scheduled cron definitions due at now.
 func (s *SessionService) DueCronSchedules(now time.Time) ([]CronScheduleState, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT schedule_id, relative_path, next_due_unix_ns FROM cron_schedules WHERE next_due_unix_ns <= $1 ORDER BY next_due_unix_ns, schedule_id`, timeUnixNano(now))
-	if err != nil {
-		return nil, fmt.Errorf("query due cron schedules: %w", err)
-	}
-
-	defer func() { _ = rows.Close() }()
-
-	var schedules []CronScheduleState
-
-	for rows.Next() {
-		schedule, err := scanCronSchedule(rows)
-		if err != nil {
-			return nil, err
-		}
-
-		schedules = append(schedules, schedule)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read due cron schedules: %w", err)
-	}
-
-	return schedules, nil
+	return queryRows(context.Background(), s.db, `SELECT schedule_id, relative_path, next_due_unix_ns FROM cron_schedules WHERE next_due_unix_ns <= $1 ORDER BY next_due_unix_ns, schedule_id`, "due cron schedules", scanCronSchedule, timeUnixNano(now))
 }
 
 // ClaimCronSchedule verifies one due scheduled cron trigger and records per-file running state.
@@ -1626,53 +1604,78 @@ func sessionLatestBefore(ctx context.Context, db stateStoreDB, conversationID st
 }
 
 func externalMCPSessions(ctx context.Context, db stateStoreDB) (map[string]ExternalMCPSessionState, error) {
-	rows, err := db.QueryContext(ctx, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel FROM external_mcp_sessions ORDER BY external_conversation_id`)
+	return queryMap(ctx, db, `SELECT external_conversation_id, agent, private_conversation_id, managed_conversation_id, slack_channel FROM external_mcp_sessions ORDER BY external_conversation_id`, "external MCP sessions", scanExternalMCPSession)
+}
+
+func readRows(ctx context.Context, db stateStoreDB, query, label string, scan func(rowScanner) error, args ...any) error {
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query external MCP sessions: %w", err)
+		return fmt.Errorf("query %s: %w", label, err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	sessions := map[string]ExternalMCPSessionState{}
-
 	for rows.Next() {
-		externalConversationID, session, err := scanExternalMCPSession(rows)
-		if err != nil {
-			return nil, err
+		if err := scan(rows); err != nil {
+			return err
 		}
-
-		sessions[externalConversationID] = session
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read external MCP sessions: %w", err)
+		return fmt.Errorf("read %s: %w", label, err)
 	}
 
-	return sessions, nil
+	return nil
+}
+
+func queryRows[T any](ctx context.Context, db stateStoreDB, query, label string, scan func(rowScanner) (T, error), args ...any) ([]T, error) {
+	var out []T
+
+	err := readRows(ctx, db, query, label, func(row rowScanner) error {
+		item, err := scan(row)
+		if err != nil {
+			return err
+		}
+
+		out = append(out, item)
+
+		return nil
+	}, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+func queryMap[K comparable, V any](ctx context.Context, db stateStoreDB, query, label string, scan func(rowScanner) (K, V, error), args ...any) (map[K]V, error) {
+	out := map[K]V{}
+
+	err := readRows(ctx, db, query, label, func(row rowScanner) error {
+		key, value, err := scan(row)
+		if err != nil {
+			return err
+		}
+
+		out[key] = value
+
+		return nil
+	}, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	return out, nil
 }
 
 func queryStrings(ctx context.Context, db stateStoreDB, query, label string, args ...any) ([]string, error) {
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query %s: %w", label, err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var values []string
-
-	for rows.Next() {
+	return queryRows(ctx, db, query, label, func(row rowScanner) (string, error) {
 		var value string
-		if err := rows.Scan(&value); err != nil {
-			return nil, fmt.Errorf("scan %s: %w", label, err)
+		if err := row.Scan(&value); err != nil {
+			return "", fmt.Errorf("scan %s: %w", label, err)
 		}
 
-		values = append(values, value)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read %s: %w", label, err)
-	}
-
-	return values, nil
+		return value, nil
+	}, args...)
 }
 
 func conversationExists(ctx context.Context, db stateStoreDB, table, column, conversationID string) (bool, error) {
