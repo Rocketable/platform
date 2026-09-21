@@ -102,29 +102,9 @@ func (d stateDAO) goal(ctx context.Context, conversationID string) (GoalState, b
 
 // ActiveGoals returns persisted active goals keyed by conversation ID.
 func (s *SessionService) ActiveGoals() (map[string]GoalState, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns FROM conversation_goals WHERE status = '' OR status = $1 ORDER BY conversation_id`, GoalStatusActive)
-	if err != nil {
-		return nil, fmt.Errorf("query active goals: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	goals := map[string]GoalState{}
-
-	for rows.Next() {
-		conversationID, goal, err := scanGoal(rows)
-		if err != nil {
-			return nil, err
-		}
-
-		goals[conversationID] = goal
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read active goals: %w", err)
-	}
-
-	if len(goals) == 0 {
-		return nil, nil
+	goals, err := queryMap(context.Background(), s.db, `SELECT conversation_id, objective, check_script, max_turns, turns_used, status, note, slack_recipient_team_id, slack_recipient_user_id, created_at_unix_ns, updated_at_unix_ns FROM conversation_goals WHERE status = '' OR status = $1 ORDER BY conversation_id`, "active goals", scanGoal, GoalStatusActive)
+	if err != nil || len(goals) == 0 {
+		return nil, err
 	}
 
 	return goals, nil
@@ -169,29 +149,9 @@ func (d stateDAO) scheduledMessages(ctx context.Context, conversationID string) 
 		args = append(args, strings.TrimSpace(conversationID))
 	}
 
-	rows, err := d.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query scheduled messages: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	messages := map[string]protocol.ScheduledMessageState{}
-
-	for rows.Next() {
-		id, message, err := scanScheduledMessage(rows)
-		if err != nil {
-			return nil, err
-		}
-
-		messages[id] = message
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read scheduled messages: %w", err)
-	}
-
-	if len(messages) == 0 {
-		return nil, nil
+	messages, err := queryMap(ctx, d.db, query, "scheduled messages", scanScheduledMessage, args...)
+	if err != nil || len(messages) == 0 {
+		return nil, err
 	}
 
 	return messages, nil
@@ -266,28 +226,7 @@ func (s *SessionService) queuedConversationIDs(ctx context.Context) ([]string, e
 
 // ThreadQueueForConversation returns Enqueued Slack Messages in stack order.
 func (s *SessionService) ThreadQueueForConversation(conversationID string) ([]protocol.ThreadQueueItem, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply FROM thread_queue WHERE conversation_id = $1 ORDER BY position, stash_at_unix_ns`, strings.TrimSpace(conversationID))
-	if err != nil {
-		return nil, fmt.Errorf("query thread queue: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var items []protocol.ThreadQueueItem
-
-	for rows.Next() {
-		item, err := scanThreadQueueItem(rows)
-		if err != nil {
-			return nil, err
-		}
-
-		items = append(items, item)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read thread queue: %w", err)
-	}
-
-	return items, nil
+	return queryRows(context.Background(), s.db, `SELECT queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply FROM thread_queue WHERE conversation_id = $1 ORDER BY position, stash_at_unix_ns`, "thread queue", scanThreadQueueItem, strings.TrimSpace(conversationID))
 }
 
 // DeleteThreadQueueItem deletes one Enqueued Slack Message.
