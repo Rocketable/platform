@@ -1,4 +1,4 @@
-import type { AgentChoices, ConfigView, CronJob, PromptDelivery, QueueItem, SessionBatch, Skill, TranscriptEvent } from "./types";
+import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, PromptDelivery, QueueItem, SessionBatch, Skill, TranscriptEvent } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
@@ -59,7 +59,10 @@ export const queries = {
   skills: (input?: { agent: string }) => ({ queryKey: ["skills", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ skills: Skill[] }>("ListSkills", input, signal)).skills }),
   cronJobs: () => ({ queryKey: ["cronJobs"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ jobs: CronJob[] }>("ListCronJobs", {}, signal)).jobs }),
   config: () => ({ queryKey: ["config"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ config: ConfigView }>("ListConfig", {}, signal)).config }),
-  history: (input: { id: string; sourceConversationId?: string }) => ({ queryKey: ["history", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ messages: TranscriptEvent[] }>("History", input, signal)).messages }),
+  history: (input: { id: string; sourceConversationId?: string; originOnly?: boolean }) => ({ queryKey: ["history", input], queryFn: async ({ signal }: { signal: AbortSignal }): Promise<HistoryView> => {
+    const body = await rpc<{ messages: TranscriptEvent[]; origin?: string }>("History", input, signal);
+    return { messages: body.messages, origin: body.origin ? JSON.parse(body.origin) as ChatOrigin : undefined };
+  } }),
   queue: (input: { id: string }) => ({ queryKey: ["queue", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ items: QueueItem[] }>("ListQueue", input, signal)).items }),
 };
 

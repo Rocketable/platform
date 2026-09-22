@@ -1,10 +1,11 @@
 "use client";
 
-import { QueryClient, QueryClientProvider, useQuery, useMutation } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery, useQueries, useMutation } from "@tanstack/react-query";
 import { Dialog, DialogTrigger, DialogContent, DialogTitle, DialogDescription, DialogClose } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions } from "./api";
+import type { ChatOrigin } from "./types";
 import { Bot, Calendar, Check, Download, FileIcon, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, navigate } from "./navigation";
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SyntheticEvent } from "react";
@@ -714,9 +715,10 @@ function paletteRows(
   onToggleSidebar: () => void,
   openCron: () => void,
   runStem: (stem: string) => void,
+  origins: string[],
 ): { key: string; label: string; detail: string; keep?: boolean; run: () => void }[] {
   if (mode === "sessions") {
-    return sidebar.rows.filter((session) => matchesSession(session, needle, "", "")).toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((session) => ({
+    return sidebar.rows.filter((session, index) => matchesSession(session, needle, "", "") || origins[index]?.includes(needle)).toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((session) => ({
       key: session.id,
       label: session.name || rowPreview(session, sidebar.loadingIds.has(session.id)).split("\n", 1)[0] || sessionLabel(session.id),
       detail: [session.settled ? "Settled" : "", session.agent, relativeTime(session.updatedAt ?? "")].filter(Boolean).join(" · "),
@@ -769,6 +771,20 @@ function CommandPalette({ newChat, sidebarOpen, onToggleSidebar }: { newChat: ()
   const [query, setQuery] = useState("");
   const [pick, setPick] = useState(0);
   const active = useRef<HTMLButtonElement>(null);
+  const identity = useQuery(queries.identity());
+  const protocol = useQuery(queries.protocol());
+  const selectOrigin = useCallback(({ origin }: { origin?: ChatOrigin }) => !origin ? "" : (origin.kind === "cron"
+    ? `Cron Source: ${origin.sourcePath} Stem: ${origin.stem} Run kind: ${origin.runKind} Run ID: ${origin.runId} Agent: ${origin.agent} Ran at: ${origin.ranAt}`
+    : `External MCP External conversation: ${origin.externalConversationId} Agent: ${origin.agent} ${origin.pairs?.map(({ key, value }) => `${key}=${value}`).join(" ") ?? ""}`).toLowerCase(), []);
+  // Ponytail: first search reads each visible chat's stored entries for its origin.
+  // A selective origin projection can replace these reads if search volume demands it.
+  const origins = useQueries({ queries: mode === "sessions" && query.trim() !== "" ? sidebar.rows.map(({ id }) => ({
+    ...queries.history({ id, originOnly: true }),
+    queryKey: ["sessionOrigin", identity.data, protocol.data, id],
+    staleTime: 10_000,
+    retry: false,
+    select: selectOrigin,
+  })) : [] });
   const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000, enabled: mode === "commands" || mode === "cron" });
   const runCron = useMutation({
     mutationFn: mutations.runCron,
@@ -792,7 +808,7 @@ function CommandPalette({ newChat, sidebarOpen, onToggleSidebar }: { newChat: ()
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
   }, []);
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }));
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.map((origin) => origin.data ?? ""));
   const selected = items.length === 0 ? 0 : pick % items.length;
   const choose = (item: (typeof items)[number]) => {
     if (!item.keep) setMode(undefined);
@@ -800,7 +816,7 @@ function CommandPalette({ newChat, sidebarOpen, onToggleSidebar }: { newChat: ()
   };
   useEffect(() => { active.current?.scrollIntoView({ block: "nearest" }); }, [selected, mode]);
   const copy = paletteCopy(mode);
-  const empty = mode === "cron" && jobs.isLoading ? "Loading…" : "No matches";
+  const empty = (mode === "cron" && jobs.isLoading) || origins.some((origin) => origin.isPending) ? "Loading…" : "No matches";
   return (
     <Dialog open={mode !== undefined} onOpenChange={(open) => { if (!open) setMode(undefined); }}>
       <DialogContent showCloseButton={false} className="top-[20%] translate-y-0 overflow-hidden sm:max-w-lg">
@@ -814,6 +830,7 @@ function CommandPalette({ newChat, sidebarOpen, onToggleSidebar }: { newChat: ()
           onKeyDown={(event) => setPick(paletteMove(event, selected, items.length, () => { if (items[selected]) choose(items[selected]); }))}
         />
         {runCron.error ? <p role="alert" className="px-3 text-sm text-destructive">{runCron.error.message}</p> : null}
+        {origins.some((origin) => origin.isError) ? <p role="alert" className="px-3 text-sm text-destructive">Could not search all chat origins.</p> : null}
         <PaletteItems items={items} selected={selected} active={active} empty={empty} onChoose={choose} />
       </DialogContent>
     </Dialog>
@@ -1342,10 +1359,12 @@ function TranscriptLog({
   conversationId,
   lines,
   thinking,
+  origin,
 }: {
   lines: Line[];
   conversationId: string;
   thinking: boolean;
+  origin?: ChatOrigin;
 }) {
   const turns = transcriptTurns(lines);
   const { scrollToMessage } = useMessageScroller();
@@ -1361,6 +1380,7 @@ function TranscriptLog({
     <MessageScrollerViewport id="transcript-scroll" className="overflow-x-hidden [overflow-anchor:none]">
       <div className="min-h-full pl-3 pr-8 pt-3 pb-4 sm:pl-5 sm:pr-10 sm:pt-4">
       <MessageScrollerContent className="mx-auto w-full min-w-0 max-w-3xl">
+      {origin && (origin.kind === "cron" || origin.kind === "external_mcp") ? <MessageScrollerItem messageId="origin"><OriginCard origin={origin} /></MessageScrollerItem> : null}
       {lines.length === 0 && !thinking ? (
         <MessageScrollerItem className="flex flex-1 items-center justify-center">
           <p role="status" className="text-sm text-muted-foreground">{running ? `${running} is running` : "Send a message to start the conversation."}</p>
@@ -1472,11 +1492,15 @@ async function readTranscriptHistory(draft: ComposerDraft, request: Promise<Tran
 function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () => void) {
   const historyQuery = queries.history({ id });
   const pendingCron = usePendingCron(id);
-  const history = useQuery({ ...historyQuery, queryFn: ({ signal }) => readTranscriptHistory(draft, historyQuery.queryFn({ signal }), onDraftChange, draft.busy && draft.lines.length > 0), enabled: id !== "", refetchOnWindowFocus: false, retry: false, refetchInterval: pendingCron ? 2000 : false });
+  const history = useQuery({ ...historyQuery, queryFn: async ({ signal }) => {
+    const view = await historyQuery.queryFn({ signal });
+    await readTranscriptHistory(draft, Promise.resolve(view.messages), onDraftChange, draft.busy && draft.lines.length > 0);
+    return view;
+  }, enabled: id !== "", refetchOnWindowFocus: false, retry: false, refetchInterval: pendingCron ? 2000 : false });
   const historyReady = history.data !== undefined;
   const reconnectHistory = history.refetch;
   // History errors belong to the query; a confirmed Prompt must not become a retry.
-  const refreshHistory = useCallback(() => readTranscriptHistory(draft, queryClient.fetchQuery(queries.history({ id })), onDraftChange).catch(() => {}), [id, draft, onDraftChange]);
+  const refreshHistory = useCallback(() => readTranscriptHistory(draft, queryClient.fetchQuery(queries.history({ id })).then((view) => view.messages), onDraftChange).catch(() => {}), [id, draft, onDraftChange]);
   const setBusy = useCallback((value: boolean) => { draft.busy = value; onDraftChange(); }, [draft, onDraftChange]);
   const setLines = useCallback((update: (current: Line[]) => Line[]) => { draft.lines = update(draft.lines); onDraftChange(); }, [draft, onDraftChange]);
   useEffect(() => {
@@ -1501,7 +1525,34 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
       stream.close();
     };
   }, [id, historyReady, reconnectHistory, draft, setBusy, setLines]);
-  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !history.data, historyError: history.error?.message };
+  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !history.data, historyError: history.error?.message, origin: history.data?.origin };
+}
+
+export function OriginCard({ origin }: { origin?: ChatOrigin }) {
+  if (!origin || (origin.kind !== "cron" && origin.kind !== "external_mcp")) return null;
+  return (
+    <details aria-label="Chat origin" className="group/origin mb-3 min-w-0 rounded-lg border">
+      <summary className="cursor-pointer px-3 py-2 text-xs font-medium break-words">
+        {origin.kind === "cron" ? `Cron · ${origin.stem}` : `External MCP · ${origin.externalConversationId}`} · {origin.agent}
+        <span className="ml-2 text-muted-foreground group-open/origin:hidden">show more</span>
+        <span className="ml-2 hidden text-muted-foreground group-open/origin:inline">show less</span>
+      </summary>
+      <div className="border-t px-3 py-2 text-sm whitespace-pre-wrap break-words">
+        {origin.kind === "cron" ? <>
+          <p>Source: {origin.sourcePath}</p>
+          <p>Stem: {origin.stem}</p>
+          <p>Run kind: {origin.runKind}</p>
+          <p>Run ID: {origin.runId}</p>
+          <p>Agent: {origin.agent}</p>
+          <p>Ran at: {origin.ranAt}</p>
+        </> : <>
+          <p>External conversation: {origin.externalConversationId}</p>
+          <p>Agent: {origin.agent}</p>
+          {origin.pairs?.map((pair) => <p key={pair.key}>{pair.key}={pair.value}</p>)}
+        </>}
+      </div>
+    </details>
+  );
 }
 
 function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; drafts: Map<string, ComposerDraft>; onDraftChange: () => void; onCreated: (id: string) => void }) {
@@ -1518,10 +1569,10 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
       route.goSession(draft.sessionId);
     }
   });
-  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError } = useSessionStream(id, draft, onDraftChange);
+  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin } = useSessionStream(id, draft, onDraftChange);
   return (
     <>
-      <TranscriptLog conversationId={id} lines={lines} thinking={busy && lines.at(-1)?.role !== "thinking"} />
+      <TranscriptLog conversationId={id} lines={lines} thinking={busy && lines.at(-1)?.role !== "thinking"} origin={origin} />
       {historyError ? <p role="alert" className="px-3 text-sm text-destructive">{historyError}</p> : null}
       <fieldset disabled={opening} className="contents">
         <SessionComposer id={id} draft={draft} drafts={drafts} onDraftChange={onDraftChange} busy={busy} setBusy={setBusy} lines={lines} setLines={setLines} refreshHistory={refreshHistory} />
@@ -2070,7 +2121,7 @@ function CronMarker({ label, tooltip, pct, ran, onClick }: { label: string; tool
   return (
     <span className={cn("absolute top-0 h-4 w-3 -translate-x-1/2", position && "z-50")} style={{ left: `${pct}%` }} onPointerEnter={(event) => { if (event.pointerType === "mouse") showTooltip(event); }} onPointerLeave={() => setPosition(null)}>
       <button type="button" aria-label={label} aria-describedby={position ? id : undefined} className="flex h-4 w-3 items-center justify-center rounded-sm focus-visible:outline-2"
-        onFocus={showTooltip} onBlur={() => setPosition(null)} onKeyDown={(event) => { if (event.key === "Escape") setPosition(null); }} onClick={(event) => { showTooltip(event); onClick?.(); }}>
+        onFocus={showTooltip} onBlur={() => setPosition(null)} onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setPosition(null); } }} onClick={(event) => { showTooltip(event); onClick?.(); }}>
         <span className={ran ? "h-3 w-2 rounded-sm bg-cyan-600 dark:bg-cyan-400" : "h-3 w-2 rounded-sm border-2 border-amber-600 dark:border-amber-400"} />
       </button>
       {position ? <span id={id} role="tooltip" style={position} className="absolute top-full z-50 w-max max-w-56 break-words rounded-md border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-md">{tooltip}</span> : null}
@@ -2095,7 +2146,7 @@ function CronChatLink({ job, className, children }: { job: CronJob; className: s
 function CronRunPreview({ preview, onClose }: { preview: CronJob; onClose: () => void }) {
   const conversationId = preview.nextRun || preview.origin!;
   const history = useQuery(queries.history({ id: conversationId, sourceConversationId: preview.nextRun ? preview.origin : undefined }));
-  const previewLines = useMemo(() => (history.data ?? []).reduce(nextLines, []), [history.data]);
+  const previewLines = useMemo(() => (history.data?.messages ?? []).reduce(nextLines, []), [history.data]);
   return (
     <section aria-label="Run preview" className="rounded-md border p-3">
       <div className="flex items-center justify-between gap-2">
@@ -2107,7 +2158,7 @@ function CronRunPreview({ preview, onClose }: { preview: CronJob; onClose: () =>
       {!preview.nextRun ? <p className="text-sm text-muted-foreground">No delivered chat · Run traces</p> : null}
       <div className="mt-2 max-h-64 overflow-y-auto">
         {previewLines.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} />)}
-        {history.data?.length === 0 ? <p className="text-sm text-muted-foreground">No recorded messages for this run.</p> : null}
+        {history.data?.messages.length === 0 ? <p className="text-sm text-muted-foreground">No recorded messages for this run.</p> : null}
       </div>
     </section>
   );

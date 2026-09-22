@@ -75,8 +75,12 @@ Touch devices and narrow screens use 48px navigation targets and 8px gaps;
 desktop uses 32px targets and 4px gaps. Icons are 24px in both layouts.
 Desktop keeps all seven controls in the bar. Cmd/Ctrl+B hides and shows the sidebar.
 Cmd/Ctrl+Alt+N opens a new session. Cmd/Ctrl+P jumps to a session, including settled
-ones. Cmd/Ctrl+Shift+P runs a command (new session, run cron, pages, sidebar).
+ones. Search also matches origin card fields and original MCP metadata keys and
+values, case-insensitively, before opening a chat. Origin data loads on the first
+nonempty Cmd/Ctrl+P search; ordinary sidebar loading does not fetch histories.
+Cmd/Ctrl+Shift+P runs a command (new session, run cron, pages, sidebar).
 Run cron opens a new session immediately. The job still runs privately, and the chat fills in when it finishes.
+A chat that began as a cron run or an external MCP call starts with a collapsed origin card. Use show more to see its details; the card scrolls with the messages. An ordinary chat has no origin card.
 On mobile, the Sessions toggle sits
 at the top-left opposite the theme toggle, leaving six controls centered below.
 On titled pages, the mobile Sessions button shares the title's header row so

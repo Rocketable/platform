@@ -223,8 +223,10 @@ type HistoryRequest struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	Id                   string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	SourceConversationId string                 `protobuf:"bytes,2,opt,name=source_conversation_id,json=sourceConversationId,proto3" json:"source_conversation_id,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Return only the origin, without formatting or transmitting the transcript.
+	OriginOnly    bool `protobuf:"varint,3,opt,name=origin_only,json=originOnly,proto3" json:"origin_only,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *HistoryRequest) Reset() {
@@ -271,9 +273,18 @@ func (x *HistoryRequest) GetSourceConversationId() string {
 	return ""
 }
 
+func (x *HistoryRequest) GetOriginOnly() bool {
+	if x != nil {
+		return x.OriginOnly
+	}
+	return false
+}
+
 type HistoryResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Messages      []*TranscriptEvent     `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Messages []*TranscriptEvent     `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
+	// JSON object describing the chat's origin. Empty means no origin.
+	Origin        string `protobuf:"bytes,2,opt,name=origin,proto3" json:"origin,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -313,6 +324,13 @@ func (x *HistoryResponse) GetMessages() []*TranscriptEvent {
 		return x.Messages
 	}
 	return nil
+}
+
+func (x *HistoryResponse) GetOrigin() string {
+	if x != nil {
+		return x.Origin
+	}
+	return ""
 }
 
 type ListSessionsResponse struct {
@@ -2854,12 +2872,15 @@ const file_web_proto_rawDesc = "" +
 	"\arunning\x18\b \x01(\bR\arunning\x12\x16\n" +
 	"\x06pinned\x18\t \x01(\bR\x06pinned\x12\x12\n" +
 	"\x04name\x18\n" +
-	" \x01(\tR\x04name\"V\n" +
+	" \x01(\tR\x04name\"w\n" +
 	"\x0eHistoryRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x124\n" +
-	"\x16source_conversation_id\x18\x02 \x01(\tR\x14sourceConversationId\"C\n" +
+	"\x16source_conversation_id\x18\x02 \x01(\tR\x14sourceConversationId\x12\x1f\n" +
+	"\vorigin_only\x18\x03 \x01(\bR\n" +
+	"originOnly\"[\n" +
 	"\x0fHistoryResponse\x120\n" +
-	"\bmessages\x18\x01 \x03(\v2\x14.rpc.TranscriptEventR\bmessages\"\xb0\x01\n" +
+	"\bmessages\x18\x01 \x03(\v2\x14.rpc.TranscriptEventR\bmessages\x12\x16\n" +
+	"\x06origin\x18\x02 \x01(\tR\x06origin\"\xb0\x01\n" +
 	"\x14ListSessionsResponse\x12(\n" +
 	"\bsessions\x18\x01 \x03(\v2\f.rpc.SessionR\bsessions\x12\x14\n" +
 	"\x05owner\x18\x02 \x01(\tR\x05owner\x12)\n" +

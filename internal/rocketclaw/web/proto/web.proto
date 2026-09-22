@@ -22,10 +22,14 @@ message Session {
 message HistoryRequest {
   string id = 1;
   string source_conversation_id = 2;
+  // Return only the origin, without formatting or transmitting the transcript.
+  bool origin_only = 3;
 }
 
 message HistoryResponse {
   repeated TranscriptEvent messages = 1;
+  // JSON object describing the chat's origin. Empty means no origin.
+  string origin = 2;
 }
 
 message ListSessionsResponse {

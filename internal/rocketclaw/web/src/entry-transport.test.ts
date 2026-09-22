@@ -32,6 +32,10 @@ test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("transcript and entry HTTP pr
     if (details.name !== undefined) expect(session.name).toBe(details.name.trim());
   }
   const history: { messages: TranscriptEvent[] } = await call("History", { id: process.env.ROCKETCLAW_HISTORY_TEST_ID! });
+  const origin = await call("History", { id, originOnly: true });
+  expect(origin.messages).toEqual([]);
+  expect(JSON.parse(origin.origin).pairs).toEqual([{ key: "Original-Key", value: "Value <&> Unicode Ω" }]);
+  expect(await call("History", { id, originOnly: true }, true)).toMatchObject({ code: 16 });
   expect(history.messages.map(({ role, text }) => ({ role, text }))).toEqual([
     { role: "developer", text: "private instructions" }, { role: "user", text: "human one" },
     { role: "thinking", text: "**Planning the answer**" }, { role: "tool", text: "execute\n{\"code\":\"true\"}" },
@@ -74,7 +78,7 @@ test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("transcript and entry HTTP pr
         await page.goto(`http://127.0.0.1:${web.port}/s/${Buffer.from(process.env.ROCKETCLAW_HISTORY_TEST_ID!).toString("base64url")}`);
         const report = page.getByText("Exact report\nwith details", { exact: true });
         await report.waitFor();
-        const trace = page.locator("section > details").filter({ hasText: "queued for verbatim delivery" });
+        const trace = page.getByRole("region", { name: /^Turn \d+$/ }).filter({ hasText: "queued for verbatim delivery" }).locator(":scope > details");
         const tool = trace.locator("details").filter({ hasText: "Exact report" });
         const toolBody = tool.locator("pre").first();
         expect(await toolBody.isVisible()).toBe(true);
@@ -89,7 +93,7 @@ test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("transcript and entry HTTP pr
         expect(await report.isVisible()).toBe(true);
         expect(await report.count()).toBe(1);
         expect(await page.getByText("answer two", { exact: true }).isVisible()).toBe(true);
-        expect(await page.locator("section > details[open]").count()).toBe(2);
+        expect(await page.locator('[aria-label^="Turn "] > details[open]').count()).toBe(2);
         await trace.locator(":scope > summary").press("Enter");
         expect(await trace.getAttribute("open")).not.toBeNull();
         expect(await trace.locator("pre").filter({ hasText: "queued for verbatim delivery" }).isVisible()).toBe(false);
@@ -97,7 +101,7 @@ test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("transcript and entry HTTP pr
         await tool.locator("summary").press("Enter");
         expect(await toolBody.isVisible()).toBe(true);
         expect(await tool.locator("pre").filter({ hasText: "queued for verbatim delivery" }).isVisible()).toBe(true);
-        expect(await tool.locator("pre").count()).toBe(2);
+        expect(await tool.locator("pre").allTextContents()).toEqual(['Arguments\n{"payload":"Exact report\\nwith details"}\n\nResult\nqueued for verbatim delivery']);
         await tool.getByRole("button", { name: "Collapse tool" }).click();
         expect(await toolBody.isVisible()).toBe(false);
         await page.screenshot({ path: path.join(process.env.TMPDIR!, filename) });

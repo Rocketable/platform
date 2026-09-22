@@ -740,6 +740,28 @@ func TestSessionEntries(t *testing.T) {
 		{"assistant", "Exact report\nwith details"},
 	}, got)
 
+	t.Run("origin-only history keeps original private metadata and authorization", func(t *testing.T) {
+		_, err := sessions.AppendEntryID(ctx, "private-X", &rocketcode.SessionEntry{Version: 1, Type: "mcp_external_origin_pairs", OutputTrace: []json.RawMessage{json.RawMessage(`{"pairs":{"Original-Key":"Value <&> Unicode Ω"}}`)}})
+		require.NoError(t, err)
+		full, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id})
+		require.NoError(t, err)
+		origin, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, OriginOnly: true})
+		require.NoError(t, err)
+		require.Equal(t, full.Origin, origin.Origin)
+		require.JSONEq(t, `{"kind":"external_mcp","externalConversationId":"external","agent":"producer","pairs":[{"key":"Original-Key","value":"Value <&> Unicode Ω"}]}`, origin.Origin)
+		require.Empty(t, origin.Messages)
+
+		ordinary, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: "empty-web", OriginOnly: true})
+		require.NoError(t, err)
+		require.Empty(t, ordinary.Messages, "the ordinary transcript is not returned to origin search")
+		require.Empty(t, ordinary.Origin)
+
+		_, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: "private-X", OriginOnly: true})
+		require.Equal(t, codes.PermissionDenied, status.Code(err))
+		_, err = invoke[HistoryResponse](t.Context(), connection, "History", &HistoryRequest{Id: id, OriginOnly: true})
+		require.Equal(t, codes.Unauthenticated, status.Code(err))
+	})
+
 	listedSessions, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
 	require.Equal(t, "empty-web", listedSessions.Sessions[0].Id)
@@ -1261,6 +1283,7 @@ func TestSessionEntries(t *testing.T) {
 		require.NoError(t, err)
 		history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: webID})
 		require.NoError(t, err)
+		trace.Origin = `{"agent":"producer","kind":"cron","ranAt":"2026-09-05T03:00:00.000000003Z","runId":"` + undelivered + `","runKind":"scheduled","sourcePath":"cron/silent.md","stem":"silent"}`
 		require.True(t, proto.Equal(trace, history))
 
 		for _, test := range []struct {
