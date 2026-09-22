@@ -141,7 +141,7 @@ chat, it returns Home. On desktop, the page header's close button does the same,
 and Escape does too unless a dialog or tooltip is open. New chat and these page
 buttons form a centered group in the footer, available even when the sidebar is
 closed.
-The theme toggle floats in the upper-right corner of the page.
+The theme toggle floats in the upper-right corner of the page and switches light, dark, and system. Config has a select for the color theme. The choices are Neutral, Harbor, Grove, Ember, Violet, Rose, Sand, Lagoon, Slate, Copper, Ink, Signal, Go - Playground, and Go - Sources. Ink and Signal are high contrast. The Go themes adapt Mike Gleason jr Couturier's light themes, with local dark variations. The choice is stored in the browser, not on the server. See [theme sources and licenses](../../../THEMES.md) for attribution and reuse terms.
 The down-arrow appears above the chat composer when away from the latest message.
 It scrolls to the latest message and resumes following live replies. Reading earlier
 messages keeps automatic scrolling paused.
@@ -224,6 +224,13 @@ the installed Playwright module and Chromium executable after `bun run build`:
 export ROCKETCLAW_PLAYWRIGHT_MODULE='/absolute/path/to/playwright-core/index.mjs'
 export ROCKETCLAW_CHROMIUM='/absolute/path/to/chromium'
 bun test src/session-list.browser.test.ts
+```
+
+With those browser paths set and a current build running, verify every theme
+selection and its persistence across reloads:
+
+```sh
+ROCKETCLAW_THEME_TEST_URL=http://127.0.0.1:3000/config bun test src/palette.test.ts
 ```
 
 They check a 17 MiB snapshot across reload, user/protocol isolation, transaction

@@ -9,7 +9,7 @@ import { Bot, Calendar, Check, Download, FileIcon, GripVertical, LoaderCircle, P
 import Link, { usePathname, navigate } from "./navigation";
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SyntheticEvent } from "react";
 import { flushSync } from "react-dom";
-import { ThemeToggle } from "@/components/theme";
+import { PaletteChooser, ThemeToggle } from "@/components/theme";
 import { CodeBlock, TranscriptText } from "./transcript-text";
 import { Button } from "@/components/ui/button";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
@@ -2398,6 +2398,12 @@ function ConfigPage() {
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 overflow-y-auto p-4">
       <PageTitle>Config</PageTitle>
+      <ConfigSection title="Appearance">
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b py-2">
+          <span className="text-sm text-muted-foreground">Theme</span>
+          <PaletteChooser />
+        </div>
+      </ConfigSection>
       {config.isLoading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
       {config.error ? <p className="text-sm text-destructive">{config.error.message}</p> : null}
       {config.data ? <ConfigLoaded view={config.data} /> : null}
