@@ -1015,6 +1015,105 @@ func TestRuntimeQueueAndLaterWorkOps(t *testing.T) {
 	release()
 }
 
+func TestRuntimeHeldQueueManualRelease(t *testing.T) {
+	workspace := t.TempDir()
+	store := newTestSessionServiceAt(t, workspace)
+
+	const conversationID = "web-held"
+	require.NoError(t, store.UpsertThread(conversationID, ThreadState{Agent: "main"}))
+	bridge := &Bridge{config: Config{ConversationID: conversationID, SessionService: store}, requestCh: make(chan bridgeRequest, 4), stopCh: make(chan struct{})}
+	manager := newThreadBridgeManager(nil, store, slog.New(slog.DiscardHandler), func(Config) directBridge { return bridge })
+	manager.bridges = map[string]directBridge{conversationID: bridge}
+	rt := &Runtime{threads: manager, Sessions: store}
+	held := &protocol.ThreadQueueItem{ID: "held", Kind: protocol.InboundKindHeld, Message: "/keep this", Principal: "alice", Source: protocol.SourceWeb, Content: protocol.InboundContent{Attachments: []protocol.InboundAttachment{{Name: "image.png", MIMEType: "image/png", Data: []byte("image")}}}}
+	require.NoError(t, rt.StashQueueItem(t.Context(), conversationID, held))
+	require.Empty(t, bridge.requestCh)
+	require.NoError(t, store.Stop())
+	store = newTestSessionServiceAt(t, workspace)
+	rt.Sessions, manager.store, bridge.config.SessionService = store, store, store
+	persisted, err := store.ThreadQueueForConversation(conversationID)
+	require.NoError(t, err)
+	require.Equal(t, []protocol.ThreadQueueItem{*held}, persisted)
+	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
+	require.Empty(t, bridge.requestCh)
+	bridge.handling = true
+
+	require.NoError(t, rt.StashQueueItem(t.Context(), conversationID, held))
+	require.NoError(t, bridge.pickLaterWork(t.Context(), true))
+	require.Empty(t, bridge.requestCh)
+	bridge.handling = false
+	_, claimed, err := (stateDAO{db: store.db}).claimThreadQueueItem(t.Context(), conversationID, held.ID)
+	require.NoError(t, err)
+	require.False(t, claimed)
+	promoted, err := rt.PromoteQueueItem(t.Context(), conversationID, held.ID)
+	require.NoError(t, err)
+	require.False(t, promoted)
+
+	items, err := rt.QueueItems(conversationID)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Equal(t, held.Message, items[0].Message)
+	removed, err := rt.DeleteQueueItem(t.Context(), conversationID, held.ID)
+	require.NoError(t, err)
+	require.True(t, removed)
+
+	require.NoError(t, rt.StashQueueItem(t.Context(), conversationID, held))
+	require.NoError(t, store.PutThreadQueueItem("ready", &protocol.ThreadQueueItem{ConversationID: conversationID, Message: "first", Position: 40}))
+	popped, err := rt.PopQueueItem(t.Context(), "other", held.ID)
+	require.NoError(t, err)
+	require.False(t, popped)
+
+	results := make([]bool, 2)
+
+	var pops errgroup.Group
+	for i := range results {
+		pops.Go(func() error {
+			var err error
+
+			results[i], err = rt.PopQueueItem(t.Context(), conversationID, held.ID)
+
+			return err
+		})
+	}
+
+	require.NoError(t, pops.Wait())
+	require.NotEqual(t, results[0], results[1])
+	popped, err = rt.PopQueueItem(t.Context(), conversationID, held.ID)
+	require.NoError(t, err)
+	require.False(t, popped)
+
+	items, err = rt.QueueItems(conversationID)
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	require.Equal(t, "ready", items[0].ID)
+
+	want := *held
+	want.Kind, want.Position = protocol.InboundKindEnqueue, 41
+	require.Equal(t, want, items[1])
+	require.Equal(t, "ready", (<-bridge.requestCh).queueItemID)
+	_, claimed, err = (stateDAO{db: store.db}).claimThreadQueueItem(t.Context(), conversationID, "ready")
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NoError(t, bridge.pickLaterWork(t.Context(), false))
+	request := <-bridge.requestCh
+	require.Equal(t, held.ID, request.queueItemID)
+	require.Equal(t, protocol.InboundKindEnqueue, request.inbound.Kind)
+	require.Equal(t, "enqueued_message", request.inbound.Label)
+	require.Equal(t, held.ID, request.inbound.Metadata["web_message_id"])
+	require.Equal(t, held.Message, request.inbound.Text)
+	require.Equal(t, held.Content.Attachments, request.inbound.Attachments)
+	require.Equal(t, held.Principal, request.inbound.Metadata[protocol.InboundPrincipalMetadataKey])
+	require.Equal(t, protocol.SourceWeb, request.inbound.Source)
+	require.Equal(t, conversationID, request.inbound.ConversationID)
+	outbound := bridge.newOutboundMessage(request.inbound, "turn", "reply", "", true)
+	require.Equal(t, conversationID, outbound.ConversationID)
+	require.Nil(t, outbound.SlackReply)
+	promoted, err = rt.PromoteQueueItem(t.Context(), conversationID, held.ID)
+	require.NoError(t, err)
+	require.True(t, promoted)
+	require.Equal(t, protocol.InboundKindSteer, (<-bridge.requestCh).inbound.Kind)
+}
+
 func TestAttachSlack(t *testing.T) {
 	manager := newThreadBridgeManager(new(config.Config), nil, slog.New(slog.DiscardHandler), func(Config) directBridge {
 		return nil

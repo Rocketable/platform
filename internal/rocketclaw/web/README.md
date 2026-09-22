@@ -110,6 +110,17 @@ used, with its attachments. Identical texts remain separate inputs, tracked by
 message ID. Queue promotion keeps the server queue ID and follows the same
 consumption rule. Cumulative streamed replies continue after the consumed steer
 without repeating the earlier response.
+Use **Stash** to save the draft and its attachments without sending, whether the
+chat is idle or busy. Press **⌘ Option Enter** on macOS or **Ctrl Alt Enter** on
+Windows/Linux to stash, including when command suggestions are open.
+**Stashed** rows stay in the queue panel until you choose
+**Pop** or Remove, including across reloads and server restarts. Command-looking
+text is saved literally. Pop moves the row to the end of the ordinary queue.
+The button shows **Popping…** while releasing it, and waiting rows show **Queued**.
+It may run immediately when idle. While busy, the released row offers **Steer**
+as usual. Stashed rows can be reordered or removed, but cannot steer directly.
+Failed Stash keeps the draft and files for retry. If Pop shows an error, check
+the refreshed queue: the message may already be queued if starting work failed.
 On reconnect, saved history replaces completed chat; pending steers remain separate.
 An active local transcript keeps its live IDs and stream segments. History confirms
 stored attachments by file ID, replacing local previews with download URLs. A history

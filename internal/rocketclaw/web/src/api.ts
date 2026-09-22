@@ -67,6 +67,7 @@ export const queries = {
 };
 
 export const mutations = {
+  popQueueItem: (input: { id: string; itemId: string }) => rpc("PopQueueItem", input),
   createSession: async (input: { name?: string; agent?: string; sourceConversationId?: string }) => (await rpc<{ id: string }>("CreateSession", input)).id,
   prompt: async (input: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string }) => (await rpc<{ privateText: string }>("Prompt", input)).privateText,
   runCron: async (input: { stem: string }) => (await rpc<{ id: string }>("RunCronJob", input)).id,

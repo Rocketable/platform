@@ -32,6 +32,9 @@ var _ frontend.Backend = &mockBackend{}
 //			ListConversationsFunc: func(context1 context.Context) ([]protocol.Conversation, error) {
 //				panic("mock out the ListConversations method")
 //			},
+//			PopQueueItemFunc: func(context1 context.Context, s string, s1 string) (bool, error) {
+//				panic("mock out the PopQueueItem method")
+//			},
 //			PromoteQueueItemFunc: func(context1 context.Context, s string, s1 string) (bool, error) {
 //				panic("mock out the PromoteQueueItem method")
 //			},
@@ -71,6 +74,9 @@ type mockBackend struct {
 
 	// ListConversationsFunc mocks the ListConversations method.
 	ListConversationsFunc func(context1 context.Context) ([]protocol.Conversation, error)
+
+	// PopQueueItemFunc mocks the PopQueueItem method.
+	PopQueueItemFunc func(context1 context.Context, s string, s1 string) (bool, error)
 
 	// PromoteQueueItemFunc mocks the PromoteQueueItem method.
 	PromoteQueueItemFunc func(context1 context.Context, s string, s1 string) (bool, error)
@@ -118,6 +124,15 @@ type mockBackend struct {
 		ListConversations []struct {
 			// Context1 is the context1 argument value.
 			Context1 context.Context
+		}
+		// PopQueueItem holds details about calls to the PopQueueItem method.
+		PopQueueItem []struct {
+			// Context1 is the context1 argument value.
+			Context1 context.Context
+			// S is the s argument value.
+			S string
+			// S1 is the s1 argument value.
+			S1 string
 		}
 		// PromoteQueueItem holds details about calls to the PromoteQueueItem method.
 		PromoteQueueItem []struct {
@@ -181,6 +196,7 @@ type mockBackend struct {
 	lockCreateConversation      sync.RWMutex
 	lockDeleteQueueItem         sync.RWMutex
 	lockListConversations       sync.RWMutex
+	lockPopQueueItem            sync.RWMutex
 	lockPromoteQueueItem        sync.RWMutex
 	lockQueueItems              sync.RWMutex
 	lockReorderQueueItems       sync.RWMutex
@@ -296,6 +312,46 @@ func (mock *mockBackend) ListConversationsCalls() []struct {
 	mock.lockListConversations.RLock()
 	calls = mock.calls.ListConversations
 	mock.lockListConversations.RUnlock()
+	return calls
+}
+
+// PopQueueItem calls PopQueueItemFunc.
+func (mock *mockBackend) PopQueueItem(context1 context.Context, s string, s1 string) (bool, error) {
+	if mock.PopQueueItemFunc == nil {
+		panic("mockBackend.PopQueueItemFunc: method is nil but Backend.PopQueueItem was just called")
+	}
+	callInfo := struct {
+		Context1 context.Context
+		S        string
+		S1       string
+	}{
+		Context1: context1,
+		S:        s,
+		S1:       s1,
+	}
+	mock.lockPopQueueItem.Lock()
+	mock.calls.PopQueueItem = append(mock.calls.PopQueueItem, callInfo)
+	mock.lockPopQueueItem.Unlock()
+	return mock.PopQueueItemFunc(context1, s, s1)
+}
+
+// PopQueueItemCalls gets all the calls that were made to PopQueueItem.
+// Check the length with:
+//
+//	len(mockedBackend.PopQueueItemCalls())
+func (mock *mockBackend) PopQueueItemCalls() []struct {
+	Context1 context.Context
+	S        string
+	S1       string
+} {
+	var calls []struct {
+		Context1 context.Context
+		S        string
+		S1       string
+	}
+	mock.lockPopQueueItem.RLock()
+	calls = mock.calls.PopQueueItem
+	mock.lockPopQueueItem.RUnlock()
 	return calls
 }
 

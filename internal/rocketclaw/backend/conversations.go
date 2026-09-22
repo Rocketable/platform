@@ -316,6 +316,16 @@ func (r *Runtime) QueueItems(conversationID string) ([]protocol.ThreadQueueItem,
 	return r.threads.queueItems(conversationID)
 }
 
+// PopQueueItem releases held work at the end of the ordinary queue.
+func (r *Runtime) PopQueueItem(ctx context.Context, conversationID, id string) (bool, error) {
+	changed, err := execRows(ctx, r.Sessions.db, "pop queue item", "count popped queue items", `UPDATE thread_queue SET kind = $3, park_after = '', position = (SELECT COALESCE(MAX(position), -1) + 1 FROM thread_queue WHERE conversation_id = $1 AND park_after = '') WHERE conversation_id = $1 AND queue_item_id = $2 AND kind = $4`, conversationID, id, protocol.InboundKindEnqueue, protocol.InboundKindHeld)
+	if err != nil || changed == 0 {
+		return false, err
+	}
+
+	return true, r.threads.PickLaterWork(ctx, conversationID)
+}
+
 // PromoteQueueItem claims one persisted enqueue and submits it as a steer, keeping its principal.
 func (r *Runtime) PromoteQueueItem(ctx context.Context, conversationID, id string) (bool, error) {
 	return r.threads.promoteQueueItem(ctx, conversationID, id, "")

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { Attachment, ChatOrigin, QueueItem, Session, SessionBatch, TranscriptEvent } from "./types";
+import type { Attachment, ChatOrigin, PromptDelivery, QueueItem, Session, SessionBatch, TranscriptEvent } from "./types";
 import { RPCError } from "./api";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
@@ -259,6 +259,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     uploadStarted: Promise.withResolvers<void>(),
     currentAgents: new Map<string, string>(),
     promptError: false,
+    popError: false,
     attachmentPrompts: [] as { id: string; text: string; delivery?: string; attachmentIds?: string[] }[],
     promptStarted: Promise.withResolvers<void>(),
     holdCreate: false,
@@ -328,7 +329,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       downloadConversations.push(url.searchParams.get("conversationId")!);
       const uploaded = uploadedFiles.find(({ meta }) => meta.id === url.searchParams.get("id"));
       if (uploaded) {
-        if (!ctrl.history.some((line) => line.attachments?.some((file) => file.id === uploaded.meta.id))) return new Response("not referenced", { status: 404 });
+        if (![...ctrl.history, ...ctrl.queue].some((line) => line.attachments?.some((file) => file.id === uploaded.meta.id))) return new Response("not referenced", { status: 404 });
         return new Response(new Uint8Array(uploaded.data), { headers: { "Content-Type": uploaded.meta.mimeType } });
       }
       return new Response(imageBytes, { headers: { "Content-Type": image.mimeType, "Content-Disposition": `${url.searchParams.has("download") ? "attachment" : "inline"}; filename="${image.name}"` } });
@@ -337,7 +338,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() && url.pathname !== "/" ? file : Bun.file(path.join(dist, "index.html")));
     }
-    const input = await req.json() as { id: string; originOnly?: boolean; itemId: string; messageId: string; name?: string; agent?: string; text: string; delivery?: "STEER" | "QUEUE"; attachmentIds?: string[]; stem: string; sourceConversationId?: string; conversationId?: string; settled: boolean; pinned?: boolean };
+    const input = await req.json() as { id: string; originOnly?: boolean; itemId: string; messageId: string; name?: string; agent?: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; stem: string; sourceConversationId?: string; conversationId?: string; settled: boolean; pinned?: boolean };
     try {
       switch (url.pathname) {
         case "/api/Protocol": return Response.json({ protoSha256: ctrl.protocol });
@@ -360,6 +361,11 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
           if (input.attachmentIds?.length) ctrl.attachmentPrompts.push(input);
           ctrl.prompt.push(`${input.id}:${input.text}`);
           ctrl.promptStarted.resolve();
+          if (input.delivery === "STASH") {
+            if (ctrl.promptError) throw new RPCError("Stash failed; retry", 13);
+            ctrl.queue.push({ id: input.messageId, text: input.text, delivery: "STASH", attachments: input.attachmentIds?.map((id) => uploadedFiles.find(({ meta }) => meta.id === id)!.meta) });
+            return Response.json({ privateText: "" });
+          }
           if (input.text.startsWith("$agent ")) {
             ctrl.currentAgents.set(input.id, input.text.slice(7));
             return Response.json({ privateText: `Switched to ${input.text.slice(7)}` });
@@ -403,6 +409,10 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
           ctrl.yieldBatches = complete(ctrl.settledRows);
           return Response.json({});
         case "/api/ListQueue": return Response.json({ items: ctrl.queue });
+        case "/api/PopQueueItem":
+          if (ctrl.popError) throw new RPCError("Pop failed; retry", 13);
+          ctrl.queue = ctrl.queue.map((item) => item.id === input.itemId ? { ...item, delivery: "QUEUE" } : item);
+          return Response.json({});
         case "/api/SteerQueueItem":
           ctrl.queue = ctrl.queue.map((item) => item.id === input.itemId ? { ...item, delivery: "STEER" } : item);
           return Response.json({});
@@ -1953,6 +1963,67 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await desktopPage.waitForURL("**/config");
     expect(await desktopPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await desktopPage.close();
+    // Held work is server-backed and silent; keyboard Pop only releases to the queue.
+    ctrl.history = [];
+    ctrl.queue = [];
+    transcriptStream = Promise.withResolvers();
+    const stashPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await stashPage.goto(`${origin}/s/${Buffer.from("stash-session").toString("base64url")}`);
+    await stashPage.locator("textarea").fill("$stop");
+    await stashPage.locator('input[type="file"]').setInputFiles({ name: "held.txt", mimeType: "text/plain", buffer: Buffer.from("held contents") });
+    ctrl.promptError = true;
+    await stashPage.getByRole("button", { name: "Stash", exact: true }).click();
+    await shown(stashPage, "Stash failed; retry");
+    expect(await stashPage.locator("textarea").inputValue()).toBe("$stop");
+    expect(await stashPage.getByRole("button", { name: "Remove held.txt", exact: true }).count()).toBe(1);
+    ctrl.promptError = false;
+    await stashPage.locator("textarea").focus();
+    await stashPage.keyboard.press("Meta+Alt+Enter");
+    const heldRow = stashPage.locator("[data-queue-id]");
+    await heldRow.getByRole("button", { name: "Pop", exact: true }).waitFor();
+    expect(await heldRow.innerText()).toContain("Stashed · $stop");
+    expect(await stashPage.locator("textarea").inputValue()).toBe("");
+    expect(await stashPage.getByRole("button", { name: "Stop", exact: true }).count()).toBe(0);
+    expect(await heldRow.getByRole("button", { name: "Steer", exact: true }).count()).toBe(0);
+    expect(await heldRow.getByRole("button", { name: "Reorder", exact: true }).count()).toBe(1);
+    expect(await heldRow.getByRole("button", { name: "Remove", exact: true }).count()).toBe(1);
+    expect(await stashPage.getByRole("region", { name: "Messages", exact: true }).getByText("$stop", { exact: true }).count()).toBe(0);
+    transcriptStream = Promise.withResolvers();
+    await stashPage.reload();
+    await heldRow.getByRole("button", { name: "Pop", exact: true }).waitFor();
+    await heldRow.getByRole("link", { name: "Download held.txt", exact: true }).waitFor();
+    ctrl.popError = true;
+    await heldRow.getByRole("button", { name: "Pop", exact: true }).click();
+    await shown(stashPage, "Pop failed; retry");
+    expect(ctrl.queue[0].delivery).toBe("STASH");
+    ctrl.popError = false;
+    const popRelease = Promise.withResolvers<void>();
+    await stashPage.route("**/api/PopQueueItem", async (route: { continue(): Promise<void> }) => {
+      await popRelease.promise;
+      await route.continue();
+    });
+    (await transcriptStream.promise).enqueue(`data: ${JSON.stringify({ role: "user", text: "Other queued work", messageId: "other-work", complete: false })}\n\n`);
+    await stashPage.getByRole("button", { name: "Stop", exact: true }).waitFor();
+    await heldRow.getByRole("button", { name: "Pop", exact: true }).focus();
+    await stashPage.keyboard.press("Enter");
+    const popping = heldRow.getByRole("button", { name: "Popping…", exact: true });
+    await popping.waitFor();
+    expect(await popping.isDisabled()).toBe(true);
+    popRelease.resolve();
+    await heldRow.getByRole("button", { name: "Steer", exact: true }).waitFor();
+    expect(await heldRow.innerText()).toContain("Queued · $stop");
+    expect(ctrl.queue[0].delivery).toBe("QUEUE");
+    expect(await stashPage.getByRole("region", { name: "Pending steers", exact: true }).count()).toBe(0);
+    await heldRow.getByRole("button", { name: "Steer", exact: true }).click();
+    await stashPage.getByRole("region", { name: "Pending steers", exact: true }).getByText("$stop", { exact: true }).waitFor();
+    expect(ctrl.queue[0].delivery).toBe("STEER");
+    await stashPage.locator("textarea").fill("busy stash");
+    await stashPage.locator("textarea").press("Control+Alt+Enter");
+    await heldRow.getByRole("button", { name: "Pop", exact: true }).waitFor();
+    expect(await heldRow.innerText()).toContain("Stashed · busy stash");
+    expect(await stashPage.getByRole("region", { name: "Messages", exact: true }).getByText("busy stash", { exact: true }).count()).toBe(0);
+    expect(await stashPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await stashPage.close();
   } finally {
     blocked.resolve();
     identityHold.resolve();

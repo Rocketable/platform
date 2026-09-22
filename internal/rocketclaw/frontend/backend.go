@@ -18,6 +18,7 @@ type Backend interface {
 	SyncConversation(context.Context, string, string) error
 	QueueItems(string) ([]protocol.ThreadQueueItem, error)
 	PromoteQueueItem(context.Context, string, string) (bool, error)
+	PopQueueItem(context.Context, string, string) (bool, error)
 	DeleteQueueItem(context.Context, string, string) (bool, error)
 	ReorderQueueItems(string, []string) error
 	StashQueueItem(context.Context, string, *protocol.ThreadQueueItem) error

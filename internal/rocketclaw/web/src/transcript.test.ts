@@ -67,10 +67,10 @@ test("initial and reconnect history preserve an already-running input and its li
 
 test("pending delivery classification uses IDs after history replaces chat", () => {
   const draft = { lines: [{ id: "saved", role: "user", text: "same" }], consumed: new Set(["used"]), parked: [{ id: "local", role: "user", text: "same" }] };
-  const items = [{ id: "used", text: "same", delivery: "STEER" }, { id: "waiting", text: "same", delivery: "STEER" }, { id: "later", text: "same", delivery: "QUEUE" }];
+  const items = [{ id: "used", text: "same", delivery: "STEER" }, { id: "waiting", text: "same", delivery: "STEER" }, { id: "held", text: "same", delivery: "STASH" }, { id: "later", text: "same", delivery: "QUEUE" }];
   const pending = pendingInputs(draft, items);
   expect(pending.parked.map((line: Line) => line.id)).toEqual(["waiting", "local"]);
-  expect(pending.queued.map((line: Line) => line.id)).toEqual(["later"]);
+  expect(pending.queued.map((line: Line) => line.id)).toEqual(["held", "later"]);
 });
 
 test("active history confirms stored attachments without replacing identical input IDs", async () => {
@@ -286,6 +286,40 @@ test("identical active sends queue while steers park until consumption or their 
   await first;
   expect(refreshed).toBe(1);
   expect(draft.parked).toEqual([]);
+});
+
+for (const busy of [false, true]) for (const failure of [false, true]) test(`stash is silent and preserves failed drafts: busy=${busy}, failure=${failure}`, async () => {
+  const file = new File(["contents"], "held.txt", { type: "text/plain" });
+  const files = [{ id: "selected", file }];
+  const text = "  $stop\n";
+  const draft = { text, files, agent: "", edit: 0, submission: 0, sending: false, parked: [] as Line[] };
+  let lines: Line[] = [];
+  const busyUpdates: boolean[] = [];
+  let error = "";
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = Object.assign(async () => Response.json({ id: "uploaded" }), { preconnect: originalFetch.preconnect });
+  try {
+    await sendComposer({
+      draft, text, files, delivery: "STASH", busy, working: busy, sessionId: "opaque", selected: "", currentAgent: "main",
+      onDraftChange: () => {}, scrollToEnd: () => true, setAgentOpen: () => {},
+      setBusy: (value: boolean) => { busyUpdates.push(value); }, setSendError: (value: string) => { error = value; },
+      setLines: (update: (current: Line[]) => Line[]) => { lines = update(lines); },
+      prompt: { mutateAsync: async (request: { text: string; delivery: string; attachmentIds: string[] }) => {
+        expect(request).toMatchObject({ text, delivery: "STASH", attachmentIds: ["uploaded"] });
+        expect(lines).toEqual([]);
+        expect(draft.parked).toEqual([]);
+        if (failure) throw new Error("stash failed");
+        return "";
+      } },
+    });
+    expect(busyUpdates).toEqual([]);
+    expect(lines).toEqual([]);
+    expect(draft.parked).toEqual([]);
+    expect(draft.text).toBe(failure ? text : "");
+    expect(draft.files).toEqual(failure ? files : []);
+    expect(draft.sending).toBe(false);
+    expect(error).toBe(failure ? "stash failed" : "");
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("promotion keeps chat unchanged until a server consumption event", async () => {

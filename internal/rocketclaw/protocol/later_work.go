@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"cmp"
 	"maps"
 	"slices"
 	"strings"
@@ -58,6 +59,10 @@ func MixedLaterWork(queue []ThreadQueueItem, scheduled map[string]ScheduledMessa
 	slots := map[string][]ThreadQueueItem{}
 
 	for i := range queue {
+		if queue[i].Kind == InboundKindHeld {
+			continue
+		}
+
 		park := strings.TrimSpace(queue[i].ParkAfter)
 		if _, ok := scheduled[park]; park != "" && !ok {
 			park = ""
@@ -66,42 +71,25 @@ func MixedLaterWork(queue []ThreadQueueItem, scheduled map[string]ScheduledMessa
 		slots[park] = append(slots[park], queue[i])
 	}
 
-	for park, items := range slots {
+	for _, items := range slots {
 		slices.SortFunc(items, func(a, b ThreadQueueItem) int {
-			if a.Position != b.Position {
-				return a.Position - b.Position
-			}
-
-			if cmp := a.StashAt.Compare(b.StashAt); cmp != 0 {
-				return cmp
-			}
-
-			return strings.Compare(a.ID, b.ID)
+			return cmp.Or(cmp.Compare(a.Position, b.Position), a.StashAt.Compare(b.StashAt), strings.Compare(a.ID, b.ID))
 		})
-		slots[park] = items
 	}
-
-	pegs := slices.SortedFunc(maps.Keys(scheduled), func(a, b string) int {
-		if cmp := scheduled[a].DueAt.Compare(scheduled[b].DueAt); cmp != 0 {
-			return cmp
-		}
-
-		return strings.Compare(a, b)
-	})
 
 	rows := make([]LaterWorkRow, 0, len(queue)+len(scheduled))
 
-	empty := slots[""]
-	for i := range empty {
-		rows = append(rows, LaterWorkRow{Kind: LaterWorkQueued, Queue: empty[i]})
+	for i := range slots[""] {
+		rows = append(rows, LaterWorkRow{Kind: LaterWorkQueued, Queue: slots[""][i]})
 	}
 
-	for _, id := range pegs {
+	for _, id := range slices.SortedFunc(maps.Keys(scheduled), func(a, b string) int {
+		return cmp.Or(scheduled[a].DueAt.Compare(scheduled[b].DueAt), strings.Compare(a, b))
+	}) {
 		rows = append(rows, LaterWorkRow{Kind: LaterWorkScheduled, ScheduledID: id, Scheduled: scheduled[id]})
 
-		parked := slots[id]
-		for i := range parked {
-			rows = append(rows, LaterWorkRow{Kind: LaterWorkQueued, Queue: parked[i]})
+		for i := range slots[id] {
+			rows = append(rows, LaterWorkRow{Kind: LaterWorkQueued, Queue: slots[id][i]})
 		}
 	}
 

@@ -1,4 +1,4 @@
-export type PromptDelivery = "STEER" | "QUEUE";
+export type PromptDelivery = "STEER" | "QUEUE" | "STASH";
 export type Attachment = { id: string; name: string; mimeType: string; size?: string; originalUnverified?: boolean; conversationId: string };
 export type TranscriptEvent = { text: string; snapshot: boolean; role: string; complete: boolean; turnId: string; messageId?: string; toolCallId?: string; toolName?: string; attachments?: Attachment[] };
 export type SessionEntryMeta = { id: string; type?: string; timestamp?: string };

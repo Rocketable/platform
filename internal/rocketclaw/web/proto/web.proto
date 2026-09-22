@@ -79,6 +79,7 @@ message Attachment {
 enum PromptDelivery {
   STEER = 0;
   QUEUE = 1;
+  STASH = 2;
 }
 
 message PromptRequest {
@@ -291,6 +292,7 @@ service Web {
   rpc ListQueue(ListQueueRequest) returns (ListQueueResponse);
   rpc RemoveQueueItem(QueueItemRequest) returns (QueueItemResponse);
   rpc SteerQueueItem(QueueItemRequest) returns (QueueItemResponse);
+  rpc PopQueueItem(QueueItemRequest) returns (QueueItemResponse);
   rpc ReorderQueue(ReorderQueueRequest) returns (QueueItemResponse);
   rpc ListSessionEntries(SessionEntriesRequest) returns (ListSessionEntriesResponse);
   rpc LoadSessionEntries(SessionEntriesRequest) returns (LoadSessionEntriesResponse);
