@@ -51,21 +51,12 @@ func (r *Runtime) SyncConversation(ctx context.Context, source, destination stri
 	bridges := make([]*Bridge, 0, 2)
 
 	for _, id := range []string{source, destination} {
-		thread, recorded, err := r.Sessions.Thread(id)
+		managed, err := r.recordedBridge(id)
 		if err != nil {
 			return err
 		}
 
-		if !recorded {
-			return fmt.Errorf("conversation %q is not recorded", id)
-		}
-
-		managed, _, err := r.threads.ensureThreadBridge(id, thread, false)
-		if err != nil {
-			return err
-		}
-
-		bridges = append(bridges, managed.(*Bridge))
+		bridges = append(bridges, managed)
 	}
 
 	r.Sessions.turnGatesMu.Lock()
@@ -236,6 +227,24 @@ func (r *Runtime) ListConversations(ctx context.Context) (conversations []protoc
 	return conversations, nil
 }
 
+func (r *Runtime) recordedBridge(conversationID string) (*Bridge, error) {
+	thread, recorded, err := r.Sessions.Thread(conversationID)
+	if err != nil {
+		return nil, err
+	}
+
+	if !recorded {
+		return nil, fmt.Errorf("conversation %q is not recorded", conversationID)
+	}
+
+	managed, _, err := r.threads.ensureThreadBridge(conversationID, thread, false)
+	if err != nil {
+		return nil, err
+	}
+
+	return managed.(*Bridge), nil
+}
+
 // RunTurn waits for the submitted work's processing and terminal handling.
 func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage) error {
 	conversationID := inbound.ConversationID
@@ -247,21 +256,10 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 		r.Sessions.turnGatesMu.Unlock()
 	}
 
-	thread, recorded, err := r.Sessions.Thread(conversationID)
+	bridge, err := r.recordedBridge(conversationID)
 	if err != nil {
 		return err
 	}
-
-	if !recorded {
-		return fmt.Errorf("conversation %q is not recorded", conversationID)
-	}
-
-	managed, _, err := r.threads.ensureThreadBridge(conversationID, thread, false)
-	if err != nil {
-		return err
-	}
-
-	bridge := managed.(*Bridge)
 
 	if inbound.Kind == protocol.InboundKindCancel {
 		if err := r.Sessions.StopGoal(conversationID); err != nil {
@@ -292,22 +290,13 @@ func (r *Runtime) RunTurn(ctx context.Context, inbound *protocol.InboundMessage)
 
 	request := bridgeRequest{inbound: inbound, completion: completion}
 	if inbound.SyncDestination != "" {
-		destination, recorded, err := r.Sessions.Thread(inbound.SyncDestination)
-		if err != nil {
-			return err
-		}
-
-		if !recorded {
-			return fmt.Errorf("conversation %q is not recorded", inbound.SyncDestination)
-		}
-
-		managed, _, err := r.threads.ensureThreadBridge(inbound.SyncDestination, destination, false)
+		destination, err := r.recordedBridge(inbound.SyncDestination)
 		if err != nil {
 			return err
 		}
 
 		request.producer = bridge
-		bridge = managed.(*Bridge)
+		bridge = destination
 	}
 
 	if err := bridge.enqueue(ctx, &request, "run turn"); err != nil {
