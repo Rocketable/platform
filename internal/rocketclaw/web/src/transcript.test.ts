@@ -10,6 +10,25 @@ const javascript = ts.transpileModule(`import { QueryClient } from ${JSON.string
 const { nextLines, sendComposer, promoteComposer, applyStreamEvent, readTranscriptHistory, pendingInputs, transcriptTurns, toolTitle, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 type Line = { id: string; role: string; text: string; turnId?: string };
 
+test("reconnect query keeps live messages received while history is loading", async () => {
+  const stream = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "useSessionStream") as ts.FunctionDeclaration;
+  const declaration = stream.body!.statements.filter(ts.isVariableStatement).flatMap((node) => [...node.declarationList.declarations]).find((node) => node.name.getText(source) === "history")!;
+  const options = (declaration.initializer as ts.CallExpression).arguments[0] as ts.ObjectLiteralExpression;
+  const query = options.properties.find((node) => ts.isPropertyAssignment(node) && node.name.getText(source) === "queryFn") as ts.PropertyAssignment;
+  const body = ts.transpileModule(`return (${query.initializer.getText(source)});`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
+  const draft = { lines: [] as Line[], sending: false, busy: false };
+  const response = Promise.withResolvers<{ messages: TranscriptEvent[]; origin: { kind: string } }>();
+  const load = new Function("historyQuery", "draft", "onDraftChange", "readTranscriptHistory", body)({ queryFn: () => response.promise }, draft, () => {}, readTranscriptHistory);
+  const loading = load({ signal: new AbortController().signal });
+  draft.lines = nextLines(draft.lines, { role: "assistant", turnId: "live", text: "new reply", complete: true });
+  const live = draft.lines;
+  const view = { messages: [], origin: { kind: "cron" } };
+  response.resolve(view);
+  expect(await loading).toBe(view);
+  expect(draft.lines).toBe(live);
+  expect(draft.lines.at(-1)?.text).toBe("new reply");
+});
+
 test("history commits before its caller resumes and cannot overwrite newer live data", async () => {
   const draft = { lines: [] as Line[], sending: false };
   let changes = 0;
