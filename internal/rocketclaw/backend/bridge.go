@@ -1510,9 +1510,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	activeReply := new(protocol.InboundMessage)
 
 	activeReply.SyncDestination = msg.SyncDestination
-	if msg.SlackReply != nil {
-		activeReply.SlackReply = &protocol.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS, RecipientTeamID: msg.SlackReply.RecipientTeamID, RecipientUserID: msg.SlackReply.RecipientUserID}
-	}
+	activeReply.SlackReply = protocol.Clone(msg.SlackReply)
 
 	turnCtx, cancelTurn := context.WithCancel(ctx)
 
@@ -2610,10 +2608,7 @@ func askUserQuestionTool(asker protocol.UserQuestionAsker, msg *protocol.Inbound
 		})
 
 		req.ID, req.Source, req.ConversationID = rand.Text(), msg.Source, msg.ConversationID
-
-		if msg.SlackReply != nil {
-			req.SlackReply = &protocol.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS, RecipientTeamID: msg.SlackReply.RecipientTeamID, RecipientUserID: msg.SlackReply.RecipientUserID}
-		}
+		req.SlackReply = protocol.Clone(msg.SlackReply)
 
 		answer, err := asker.AskUserQuestion(ctx, &req)
 		if err != nil {
@@ -2667,11 +2662,7 @@ func startNewThreadTool(start func(context.Context, *protocol.StartNewThreadRequ
 
 			allowedAgents := strings.FieldsFunc(msg.Metadata[protocol.InboundAllowedAgentsMetadataKey], func(r rune) bool { return r == ',' || r == '\n' || r == '\r' || r == '\t' || r == ' ' })
 
-			req := protocol.StartNewThreadRequest{Source: msg.Source, CurrentAgent: currentAgent, Agent: strings.TrimSpace(input.Agent), Title: title, Prompt: prompt, AllowedAgents: allowedAgents}
-
-			if msg.SlackReply != nil {
-				req.SlackReply = &protocol.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS, RecipientTeamID: msg.SlackReply.RecipientTeamID, RecipientUserID: msg.SlackReply.RecipientUserID}
-			}
+			req := protocol.StartNewThreadRequest{Source: msg.Source, CurrentAgent: currentAgent, Agent: strings.TrimSpace(input.Agent), Title: title, Prompt: prompt, AllowedAgents: allowedAgents, SlackReply: protocol.Clone(msg.SlackReply)}
 
 			result, err := start(ctx, &req)
 			if err != nil {
@@ -2832,9 +2823,7 @@ func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text, 
 			}
 		}
 
-		if msg.SlackReply != nil {
-			outbound.SlackReply = &protocol.SlackReplyTarget{ChannelID: msg.SlackReply.ChannelID, MessageTS: msg.SlackReply.MessageTS, ThreadTS: msg.SlackReply.ThreadTS, RecipientTeamID: msg.SlackReply.RecipientTeamID, RecipientUserID: msg.SlackReply.RecipientUserID}
-		}
+		outbound.SlackReply = protocol.Clone(msg.SlackReply)
 	}
 
 	return outbound

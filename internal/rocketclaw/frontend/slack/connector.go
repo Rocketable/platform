@@ -4458,7 +4458,7 @@ func (c *Connector) publishOnDemandCronReply(ctx context.Context, replyTarget *p
 
 	outbound := protocol.NewOutboundMessage(protocol.SlackThreadConversationID(replyTarget.ChannelID, replyTarget.ThreadTS), text)
 	outbound.Complete = true
-	outbound.SlackReply = cloneSlackReplyTarget(replyTarget)
+	outbound.SlackReply = protocol.Clone(replyTarget)
 
 	if err := c.bus.PublishOutbound(ctx, outbound); err != nil {
 		return fmt.Errorf("publish Slack on-demand cron reply: %w", err)
@@ -4471,7 +4471,7 @@ func (c *Connector) consumeReservedPlaceholder(ctx context.Context, replyTarget 
 	msg := protocol.NewOutboundMessage(protocol.SlackThreadConversationID(replyTarget.ChannelID, replyTarget.ThreadTS), strings.TrimSpace(text))
 	msg.TurnID = fmt.Sprintf("slack-abort-%d", time.Now().UnixNano())
 	msg.Complete = true
-	msg.SlackReply = cloneSlackReplyTarget(replyTarget)
+	msg.SlackReply = protocol.Clone(replyTarget)
 
 	return c.SendResponse(ctx, msg)
 }
@@ -4483,14 +4483,6 @@ func (c *Connector) warnConsumeReservedPlaceholder(ctx context.Context, replyTar
 	}
 
 	return true
-}
-
-func cloneSlackReplyTarget(replyTarget *protocol.SlackReplyTarget) *protocol.SlackReplyTarget {
-	if replyTarget == nil {
-		return nil
-	}
-
-	return &protocol.SlackReplyTarget{ChannelID: replyTarget.ChannelID, MessageTS: replyTarget.MessageTS, ThreadTS: replyTarget.ThreadTS, RecipientTeamID: replyTarget.RecipientTeamID, RecipientUserID: replyTarget.RecipientUserID}
 }
 
 func (c *Connector) createReplyPlaceholders(ctx context.Context, replyTarget *protocol.SlackReplyTarget, placeholder, recipientTeamID, recipientUserID string) (slackReplySlots, error) {
