@@ -77,6 +77,7 @@ Desktop keeps all seven controls in the bar. Cmd/Ctrl+B hides and shows the side
 Cmd/Ctrl+Alt+N opens a new session. Cmd/Ctrl+P jumps to a session, including settled
 ones. Cmd/Ctrl+Shift+P runs a command (new session, run cron, pages, sidebar).
 Run cron opens a new session immediately. The job still runs privately, and the chat fills in when it finishes.
+A chat that began as a cron run or an external MCP call starts with a collapsed origin card. Use show more to see its details; the card scrolls with the messages. An ordinary chat has no origin card.
 On mobile, the Sessions toggle sits
 at the top-left opposite the theme toggle, leaving six controls centered below.
 On titled pages, the mobile Sessions button shares the title's header row so

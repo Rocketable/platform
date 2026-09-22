@@ -41,7 +41,7 @@ test.skipIf(!browserURL || !playwright || !chromium)("theme select applies every
   const browser = await engine.launch({ executablePath: chromium, headless: true });
   try {
     const page = await browser.newPage();
-    await page.goto(browserURL!);
+    await page.goto(new URL("/config", browserURL!).href);
     const chooser = page.getByRole("combobox", { name: "Color theme" });
     await chooser.click();
     await page.getByRole("option").first().waitFor();

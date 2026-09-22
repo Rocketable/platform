@@ -1261,6 +1261,7 @@ func TestSessionEntries(t *testing.T) {
 		require.NoError(t, err)
 		history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: webID})
 		require.NoError(t, err)
+		trace.Origin = `{"agent":"producer","kind":"cron","ranAt":"2026-09-05T03:00:00.000000003Z","runId":"` + undelivered + `","runKind":"scheduled","sourcePath":"cron/silent.md","stem":"silent"}`
 		require.True(t, proto.Equal(trace, history))
 
 		for _, test := range []struct {

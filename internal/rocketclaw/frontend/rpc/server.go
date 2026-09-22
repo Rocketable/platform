@@ -221,6 +221,15 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 
 	response := &HistoryResponse{}
 
+	if !cronTrace {
+		origin, err := s.chatOrigin(ctx, request.Id, entries)
+		if err != nil {
+			return nil, err
+		}
+
+		response.Origin = origin
+	}
+
 	root, err := os.OpenRoot(s.cfg.Workspace)
 	if err != nil {
 		return nil, fmt.Errorf("open attachment workspace: %w", err)
@@ -505,36 +514,14 @@ func cronHistory(entries []backend.ObservedSessionEntry, destination string) []*
 		if seen[source] {
 			continue
 		}
-		// Decode the exact locator minted by frontend/cron.cronTraceConversationID.
-		path, cron := strings.CutPrefix(source, "cron:")
-		if !cron {
-			path, cron = strings.CutPrefix(source, "one-off-cron:")
-		}
 
-		if !cron {
-			continue
-		}
-
-		end := strings.LastIndex(path, ":")
-		if end < 0 {
-			continue
-		}
-
-		path = path[:end]
-
-		start := strings.LastIndex(path, ":")
-		if start < 0 {
-			continue
-		}
-
-		at, err := time.Parse("20060102T150405.000000000Z", path[start+1:])
-		if err != nil {
+		run, ok := parseCronRun(source)
+		if !ok {
 			continue
 		}
 
 		seen[source] = true
-		stem := strings.TrimSuffix(strings.TrimPrefix(path[:start], "cron/"), ".md")
-		runs = append(runs, &CronJob{Stem: stem, Status: "ran", LastRun: at.Format("2006-01-02T15:04:05.000000000Z"), NextRun: destination, Origin: source})
+		runs = append(runs, &CronJob{Stem: run.stem, Status: "ran", LastRun: run.at.Format("2006-01-02T15:04:05.000000000Z"), NextRun: destination, Origin: source})
 	}
 
 	return runs
@@ -1115,4 +1102,166 @@ func (s *Server) entries(ctx context.Context, id string) ([]backend.ObservedSess
 	}
 
 	return slices.DeleteFunc(entries, func(entry backend.ObservedSessionEntry) bool { return entry.Synced && entry.SourceConversationID == "" }), nil
+}
+
+type originKind string
+
+const (
+	originCron        originKind = "cron"
+	originExternalMCP originKind = "external_mcp"
+)
+
+type cronRunKind string
+
+const (
+	cronScheduled cronRunKind = "scheduled"
+	cronOneOff    cronRunKind = "one-off"
+)
+
+type cronRun struct {
+	kind       cronRunKind
+	path, stem string
+	at         time.Time
+}
+
+type originPair struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+type cronOrigin struct {
+	Agent      string      `json:"agent"`
+	Kind       originKind  `json:"kind"`
+	RanAt      string      `json:"ranAt"`
+	RunID      string      `json:"runId"`
+	RunKind    cronRunKind `json:"runKind"`
+	SourcePath string      `json:"sourcePath"`
+	Stem       string      `json:"stem"`
+}
+
+type externalMCPOrigin struct {
+	Agent                  string       `json:"agent"`
+	ExternalConversationID string       `json:"externalConversationId"`
+	Kind                   originKind   `json:"kind"`
+	Pairs                  []originPair `json:"pairs"`
+}
+
+func (s *Server) chatOrigin(ctx context.Context, id string, entries []backend.ObservedSessionEntry) (string, error) {
+	thread, _, err := s.sessions.Thread(id)
+	if err != nil {
+		return "", fmt.Errorf("read origin thread: %w", err)
+	}
+
+	externalID, binding, paired, err := s.sessions.ExternalMCPSessionByConversationID(id)
+	if err != nil {
+		return "", fmt.Errorf("read origin external MCP binding: %w", err)
+	}
+
+	_, _, slack := protocol.SlackThreadTarget(id)
+	locator, cronOn := creatingCronLocator(id, thread.CreatedBy, slack, entries)
+
+	mcpOn := paired && binding.ManagedConversationID == id
+	if mcpOn == cronOn {
+		return "", nil
+	}
+
+	if mcpOn {
+		pairs, err := s.startingPairs(ctx, binding.PrivateConversationID)
+		if err != nil {
+			return "", err
+		}
+
+		return originJSON(externalMCPOrigin{Kind: originExternalMCP, ExternalConversationID: externalID, Agent: binding.Agent, Pairs: pairs})
+	}
+
+	run, _ := parseCronRun(locator)
+
+	producer, _, err := s.sessions.Thread(locator)
+	if err != nil {
+		return "", fmt.Errorf("read cron producer agent: %w", err)
+	}
+
+	return originJSON(cronOrigin{Kind: originCron, SourcePath: run.path, Stem: run.stem, RunKind: run.kind, RunID: locator, Agent: producer.Agent, RanAt: run.at.Format(time.RFC3339Nano)})
+}
+
+func originJSON(origin any) (string, error) {
+	raw, err := json.Marshal(origin)
+	if err != nil {
+		return "", fmt.Errorf("encode chat origin: %w", err)
+	}
+
+	return string(raw), nil
+}
+
+func creatingCronLocator(id string, createdBy backend.ThreadCreator, slack bool, entries []backend.ObservedSessionEntry) (string, bool) {
+	if source, ok := strings.CutPrefix(id, "web:"); ok {
+		if _, parsed := parseCronRun(source); parsed {
+			return source, true
+		}
+	}
+
+	if slack && createdBy != backend.ThreadCreatedByCron {
+		return "", false
+	}
+
+	for i := range entries {
+		source := entries[i].SourceConversationID
+		if _, ok := parseCronRun(source); ok {
+			return source, true
+		}
+	}
+
+	return "", false
+}
+
+func parseCronRun(source string) (cronRun, bool) {
+	kind, path, ok := cronScheduled, "", false
+	if rest, cut := strings.CutPrefix(source, "cron:"); cut {
+		path, ok = rest, true
+	} else if rest, cut := strings.CutPrefix(source, "one-off-cron:"); cut {
+		kind, path, ok = cronOneOff, rest, true
+	}
+
+	end := strings.LastIndex(path, ":")
+
+	start := strings.LastIndex(path[:max(end, 0)], ":")
+	if !ok || start < 0 {
+		return cronRun{}, false
+	}
+
+	at, err := time.Parse("20060102T150405.000000000Z", path[start+1:end])
+	if err != nil {
+		return cronRun{}, false
+	}
+
+	relative := path[:start]
+
+	return cronRun{kind: kind, path: relative, stem: strings.TrimSuffix(strings.TrimPrefix(relative, "cron/"), ".md"), at: at}, true
+}
+
+func (s *Server) startingPairs(ctx context.Context, id string) ([]originPair, error) {
+	if id == "" {
+		return nil, nil
+	}
+
+	entries, err := s.sessions.ObserveEntries(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("read starting metadata pairs: %w", err)
+	}
+
+	for i := range entries {
+		pairs, ok := backend.OriginPairsFromEntry(&entries[i].Entry)
+		if !ok {
+			continue
+		}
+
+		out := make([]originPair, 0, len(pairs))
+		for _, key := range slices.Sorted(maps.Keys(pairs)) {
+			out = append(out, originPair{Key: key, Value: pairs[key]})
+		}
+
+		return out, nil
+	}
+
+	return nil, nil
 }
