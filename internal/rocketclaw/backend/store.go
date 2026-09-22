@@ -738,33 +738,21 @@ func (s *SessionService) CompleteCronRun(relativePath string, now time.Time) err
 
 // ActiveGoalThreads returns managed thread state for conversations with active goals.
 func (s *SessionService) ActiveGoalThreads() (map[string]ThreadState, error) {
-	rows, err := s.db.QueryContext(context.Background(), `SELECT g.conversation_id, m.agent, m.created_by FROM conversation_goals g JOIN managed_conversations m ON m.conversation_id = g.conversation_id WHERE g.status = '' OR g.status = $1 ORDER BY g.conversation_id`, GoalStatusActive)
-	if err != nil {
-		return nil, fmt.Errorf("query active goal threads: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	threads := map[string]ThreadState{}
-
-	for rows.Next() {
+	threads, err := queryMap(context.Background(), s.db, `SELECT g.conversation_id, m.agent, m.created_by FROM conversation_goals g JOIN managed_conversations m ON m.conversation_id = g.conversation_id WHERE g.status = '' OR g.status = $1 ORDER BY g.conversation_id`, "active goal threads", func(row rowScanner) (string, ThreadState, error) {
 		var (
 			conversationID, createdBy string
 			thread                    ThreadState
 		)
-		if err := rows.Scan(&conversationID, &thread.Agent, &createdBy); err != nil {
-			return nil, fmt.Errorf("scan active goal thread: %w", err)
+		if err := row.Scan(&conversationID, &thread.Agent, &createdBy); err != nil {
+			return "", ThreadState{}, fmt.Errorf("scan active goal thread: %w", err)
 		}
 
 		thread.CreatedBy = ThreadCreator(createdBy)
-		threads[conversationID] = thread
-	}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read active goal threads: %w", err)
-	}
-
-	if len(threads) == 0 {
-		return nil, nil
+		return conversationID, thread, nil
+	}, GoalStatusActive)
+	if err != nil || len(threads) == 0 {
+		return nil, err
 	}
 
 	return threads, nil
@@ -934,37 +922,30 @@ func (s *SessionService) ObserveEntries(ctx context.Context, conversationID stri
 		return nil, errors.New("conversation ID is required")
 	}
 
-	rows, err := s.db.QueryContext(ctx, `SELECT destination.id, destination.entry_json, COALESCE(source.conversation_id, ''), destination.entry_json::jsonb ? 'sync_source_entry_id'
+	entries, err := queryRows(ctx, s.db, `SELECT destination.id, destination.entry_json, COALESCE(source.conversation_id, ''), destination.entry_json::jsonb ? 'sync_source_entry_id'
 FROM session_entries destination
 LEFT JOIN session_entries source ON source.id = (destination.entry_json::jsonb->>'sync_source_entry_id')::bigint
-WHERE destination.conversation_id = $1 ORDER BY destination.id`, conversationID)
-	if err != nil {
-		return nil, fmt.Errorf("query rocketcode session entries: %w", err)
-	}
-
-	defer func() { _ = rows.Close() }()
-
-	entries := []ObservedSessionEntry{}
-
-	for rows.Next() {
+WHERE destination.conversation_id = $1 ORDER BY destination.id`, "rocketcode session entries", func(row rowScanner) (ObservedSessionEntry, error) {
 		var (
 			entry ObservedSessionEntry
 			raw   string
 		)
-
-		if err := rows.Scan(&entry.ID, &raw, &entry.SourceConversationID, &entry.Synced); err != nil {
-			return nil, fmt.Errorf("scan rocketcode session entry: %w", err)
+		if err := row.Scan(&entry.ID, &raw, &entry.SourceConversationID, &entry.Synced); err != nil {
+			return ObservedSessionEntry{}, fmt.Errorf("scan rocketcode session entry: %w", err)
 		}
 
 		if err := json.Unmarshal([]byte(raw), &entry.Entry); err != nil {
-			return nil, fmt.Errorf("parse rocketcode session entry: %w", err)
+			return ObservedSessionEntry{}, fmt.Errorf("parse rocketcode session entry: %w", err)
 		}
 
-		entries = append(entries, entry)
+		return entry, nil
+	}, conversationID)
+	if err != nil {
+		return nil, err
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read rocketcode session entries: %w", err)
+	if entries == nil {
+		return []ObservedSessionEntry{}, nil
 	}
 
 	return entries, nil
@@ -1030,34 +1011,20 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 
 // ListSessions returns summaries for the requested stored rocketcode sessions.
 func (s *SessionService) ListSessions(ctx context.Context, conversationIDs []string) ([]protocol.SessionSummary, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT conversation_id, preview, last_updated FROM session_summaries WHERE conversation_id = ANY($1) ORDER BY conversation_id COLLATE "C"`, conversationIDs)
-	if err != nil {
-		return nil, fmt.Errorf("query rocketcode session summaries: %w", err)
-	}
-
-	defer func() { _ = rows.Close() }()
-
-	var summaries []protocol.SessionSummary
-
-	for rows.Next() {
+	return queryRows(ctx, s.db, `SELECT conversation_id, preview, last_updated FROM session_summaries WHERE conversation_id = ANY($1) ORDER BY conversation_id COLLATE "C"`, "rocketcode session summaries", func(row rowScanner) (protocol.SessionSummary, error) {
 		var (
 			summary protocol.SessionSummary
 			preview []byte
 		)
-		if err := rows.Scan(&summary.ConversationID, &preview, &summary.LastUpdated); err != nil {
-			return nil, fmt.Errorf("scan rocketcode session summary: %w", err)
+		if err := row.Scan(&summary.ConversationID, &preview, &summary.LastUpdated); err != nil {
+			return protocol.SessionSummary{}, fmt.Errorf("scan rocketcode session summary: %w", err)
 		}
 
 		summary.LastMessage = string(preview)
 		summary.LastUpdated = summary.LastUpdated.UTC()
-		summaries = append(summaries, summary)
-	}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read rocketcode session summaries: %w", err)
-	}
-
-	return summaries, nil
+		return summary, nil
+	}, conversationIDs)
 }
 
 // SidebarSession combines a recorded conversation with its optional durable summary.
