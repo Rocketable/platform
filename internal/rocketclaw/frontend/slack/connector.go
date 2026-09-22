@@ -3585,16 +3585,16 @@ func (c *Connector) startAdhocSocialThread(ctx context.Context, ev *slackevents.
 	c.addReaction(ctx, replyTarget, slackRobotReaction, "add Slack robot reaction")
 }
 
-func (c *Connector) slackAdoptHistory(ctx context.Context, channelID, threadTS, hailTS string) string {
+func (c *Connector) slackThreadReplies(ctx context.Context, channelID, threadTS string) ([]slack.Message, bool) {
 	var (
 		messages []slack.Message
 		cursor   string
 		seen     = map[string]bool{}
 	)
 	for {
-		page, hasMore, nextCursor, errReplies := c.api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{ChannelID: channelID, Timestamp: threadTS, Cursor: cursor, Limit: 200})
-		if errReplies != nil {
-			return ""
+		page, hasMore, nextCursor, err := c.api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{ChannelID: channelID, Timestamp: threadTS, Cursor: cursor, Limit: 200})
+		if err != nil || (hasMore && nextCursor == "") {
+			return nil, false
 		}
 
 		for i := range page {
@@ -3610,14 +3610,19 @@ func (c *Connector) slackAdoptHistory(ctx context.Context, channelID, threadTS, 
 			break
 		}
 
-		if nextCursor == "" {
-			return ""
-		}
-
 		cursor = nextCursor
 	}
 
 	slices.SortFunc(messages, func(a, b slack.Message) int { return strings.Compare(a.Timestamp, b.Timestamp) })
+
+	return messages, true
+}
+
+func (c *Connector) slackAdoptHistory(ctx context.Context, channelID, threadTS, hailTS string) string {
+	messages, ok := c.slackThreadReplies(ctx, channelID, threadTS)
+	if !ok {
+		return ""
+	}
 
 	var texts []string
 
@@ -4772,8 +4777,6 @@ func (c *Connector) addSlackForward(ctx context.Context, content *protocol.Inbou
 
 	var messages []slack.Message
 
-	seenMessages := make(map[string]bool)
-
 	if forward.channelID != "" {
 		observedAt := time.Now()
 
@@ -4788,37 +4791,10 @@ func (c *Connector) addSlackForward(ctx context.Context, content *protocol.Inbou
 			return
 		}
 
-		cursor := ""
-		for {
-			page, hasMore, nextCursor, errReplies := c.api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{ChannelID: forward.channelID, Timestamp: forward.threadTS, Cursor: cursor, Limit: 200})
-			if errReplies != nil {
-				messages = nil
-				break
-			}
-
-			for i := range page {
-				if seenMessages[page[i].Timestamp] {
-					continue
-				}
-
-				seenMessages[page[i].Timestamp] = true
-				messages = append(messages, page[i])
-			}
-
-			if !hasMore {
-				break
-			}
-
-			if nextCursor == "" {
-				messages = nil
-				break
-			}
-
-			cursor = nextCursor
+		if fetched, ok := c.slackThreadReplies(ctx, forward.channelID, forward.threadTS); ok {
+			messages = fetched
 		}
 	}
-
-	slices.SortFunc(messages, func(a, b slack.Message) int { return strings.Compare(a.Timestamp, b.Timestamp) })
 
 	seen := map[string]bool{}
 
