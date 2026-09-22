@@ -1477,8 +1477,8 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
   const historyQuery = queries.history({ id });
   const pendingCron = usePendingCron(id);
   const history = useQuery({ ...historyQuery, queryFn: async ({ signal }) => {
-    const view = await historyQuery.queryFn({ signal });
-    await readTranscriptHistory(draft, Promise.resolve(view.messages), onDraftChange, draft.busy && draft.lines.length > 0);
+    const view = historyQuery.queryFn({ signal });
+    await readTranscriptHistory(draft, view.then((value) => value.messages), onDraftChange, draft.busy && draft.lines.length > 0);
     return view;
   }, enabled: id !== "", refetchOnWindowFocus: false, retry: false, refetchInterval: pendingCron ? 2000 : false });
   const historyReady = history.data !== undefined;
