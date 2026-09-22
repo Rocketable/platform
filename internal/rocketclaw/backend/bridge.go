@@ -1405,6 +1405,15 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			if _, err := store.outID(rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Now().UTC(), ReplayInput: replayInput}); err != nil {
 				return runResult{}, fmt.Errorf("append external MCP metadata: %w", err)
 			}
+
+			pairsTrace, err := originPairsTrace(msg.Metadata)
+			if err != nil {
+				return runResult{}, fmt.Errorf("encode external MCP origin pairs: %w", err)
+			}
+
+			if _, err := store.outID(rocketcode.SessionEntry{Version: 1, Type: externalMCPOriginPairsEntryType, Timestamp: time.Now().UTC(), OutputTrace: pairsTrace}); err != nil {
+				return runResult{}, fmt.Errorf("append external MCP origin pairs: %w", err)
+			}
 		} else {
 			metadataEnv[rocketclawConversationIDEnv] = b.config.ConversationID
 			shellEnv = metadataEnv
@@ -3569,4 +3578,44 @@ func appendText(existing, text string) string {
 	}
 
 	return text
+}
+
+const externalMCPOriginPairsEntryType = "mcp_external_origin_pairs"
+
+type originPairsRecord struct {
+	Pairs map[string]string `json:"pairs"`
+}
+
+// originPairsTrace encodes the caller metadata pairs, dropping injected keys.
+func originPairsTrace(metadata map[string]string) ([]json.RawMessage, error) {
+	pairs := map[string]string{}
+
+	for key, value := range metadata {
+		if key == "external_conversation_id" || strings.HasPrefix(key, "rocketclaw_") {
+			continue
+		}
+
+		pairs[key] = value
+	}
+
+	raw, err := json.Marshal(originPairsRecord{Pairs: pairs})
+	if err != nil {
+		return nil, fmt.Errorf("encode origin pairs: %w", err)
+	}
+
+	return []json.RawMessage{raw}, nil
+}
+
+// OriginPairsFromEntry reads caller metadata pairs from a stored origin entry.
+func OriginPairsFromEntry(entry *rocketcode.SessionEntry) (map[string]string, bool) {
+	if entry.Type != externalMCPOriginPairsEntryType || len(entry.OutputTrace) == 0 {
+		return nil, false
+	}
+
+	var record originPairsRecord
+	if err := json.Unmarshal(entry.OutputTrace[0], &record); err != nil || record.Pairs == nil {
+		return nil, false
+	}
+
+	return record.Pairs, true
 }

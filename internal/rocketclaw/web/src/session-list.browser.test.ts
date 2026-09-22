@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { Attachment, QueueItem, Session, SessionBatch, TranscriptEvent } from "./types";
+import type { Attachment, ChatOrigin, QueueItem, Session, SessionBatch, TranscriptEvent } from "./types";
 import { RPCError } from "./api";
 
 const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
@@ -235,6 +235,11 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
   const cronHold = Promise.withResolvers<string>();
   let cronRunCalls = 0;
   const cronHistory: string[] = [];
+  const historyRequests: { id: string; originOnly?: boolean }[] = [];
+  const origins: Record<string, ChatOrigin> = {
+    kept: { kind: "external_mcp", externalConversationId: "Case-42", agent: "source-agent", pairs: [{ key: "Original-Key", value: "Value <&> Unicode Ω" }, { key: "shared", value: "will vanish" }] },
+    gone: { kind: "cron", sourcePath: "cron/Report.md", stem: "Report", runKind: "one-off", runId: "cron:unique-run", agent: "cron-agent", ranAt: "2026-09-22T03:04:05Z" },
+  };
   const cronOpens: string[] = [];
   const wireTail = Promise.withResolvers<void>();
   const ownerTail = Promise.withResolvers<void>();
@@ -332,7 +337,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() && url.pathname !== "/" ? file : Bun.file(path.join(dist, "index.html")));
     }
-    const input = await req.json() as { id: string; itemId: string; messageId: string; name?: string; agent?: string; text: string; delivery?: "STEER" | "QUEUE"; attachmentIds?: string[]; stem: string; sourceConversationId?: string; conversationId?: string; settled: boolean; pinned?: boolean };
+    const input = await req.json() as { id: string; originOnly?: boolean; itemId: string; messageId: string; name?: string; agent?: string; text: string; delivery?: "STEER" | "QUEUE"; attachmentIds?: string[]; stem: string; sourceConversationId?: string; conversationId?: string; settled: boolean; pinned?: boolean };
     try {
       switch (url.pathname) {
         case "/api/Protocol": return Response.json({ protoSha256: ctrl.protocol });
@@ -373,6 +378,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
         case "/api/ListCronJobs": return Response.json({ jobs });
         case "/api/RunCronJob": cronRunCalls++; return Response.json({ id: await cronHold.promise });
         case "/api/History":
+          historyRequests.push(input);
+          if (input.originOnly) return Response.json({ messages: [], origin: origins[input.id] ? JSON.stringify(origins[input.id]) : "" });
           if (input.id === "cron:silent-source" || input.id === "web:cron:silent-source") {
             cronHistory.push(input.id);
             return Response.json({ messages: [{ role: "assistant", text: "Silent run trace", complete: true }] });
@@ -556,6 +563,36 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     const sessionPalette = page.getByRole("dialog", { name: "Go to session", exact: true });
     await sessionPalette.getByPlaceholder("Search sessions", { exact: true }).waitFor();
     await sessionPalette.getByRole("button").filter({ hasText: "saved preview" }).waitFor();
+    expect(historyRequests).toEqual([]); // Ordinary sidebar and empty Cmd+P do not load histories.
+    const search = sessionPalette.getByPlaceholder("Search sessions", { exact: true });
+    for (const term of ["ORIGINAL-KEY", "value <&> unicode ω", "original-key=value <&>", "CASE-42", "SOURCE-AGENT", "EXTERNAL MCP"]) {
+      await search.fill(term);
+      await sessionPalette.getByRole("button").filter({ hasText: "saved preview" }).waitFor();
+      expect(await sessionPalette.getByRole("button").count()).toBe(1);
+    }
+    for (const term of ["CRON/REPORT.MD", "ONE-OFF", "CRON:UNIQUE-RUN", "CRON-AGENT", "2026-09-22T03:04:05Z"]) {
+      await search.fill(term);
+      await sessionPalette.getByRole("button").filter({ hasText: "will vanish" }).waitFor();
+      expect(await sessionPalette.getByRole("button").count()).toBe(1);
+    }
+    expect(historyRequests.every((request) => request.originOnly)).toBe(true);
+    expect(historyRequests.map((request) => request.id).sort()).toEqual(["gone", "kept", "slack-thread:C:1"]);
+    await search.fill("PREVIEW"); // Preserve existing row matching and ordering.
+    expect(await sessionPalette.getByRole("button").locator("span:first-child").allTextContents()).toEqual(["saved preview", "filter preview"]);
+    await search.fill("will vanish"); // Origin and row matches share the original order.
+    expect(await sessionPalette.getByRole("button").locator("span:first-child").allTextContents()).toEqual(["saved preview", "will vanish"]);
+    await search.fill("no-such-origin");
+    await sessionPalette.getByText("No matches", { exact: true }).waitFor();
+    await search.fill("ORIGINAL-KEY");
+    const opened = page.waitForResponse((response: { url: () => string; request: () => { postDataJSON: () => { id: string; originOnly?: boolean } } }) => response.url().endsWith("/api/History") && response.request().postDataJSON().id === "kept" && !response.request().postDataJSON().originOnly);
+    await search.press("Enter");
+    await opened;
+    await page.waitForURL(`${origin}/s/${Buffer.from("kept").toString("base64url")}`);
+    await page.getByPlaceholder("Message or $command").waitFor();
+    expect(historyRequests.some((request) => request.id === "kept" && !request.originOnly)).toBe(true);
+    await navigation.getByRole("button", { name: "New session", exact: true }).click();
+    await page.waitForURL(origin + "/");
+    transcriptStream = Promise.withResolvers<ReadableStreamDefaultController>();
     await page.keyboard.press("Control+Shift+p");
     const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();

@@ -3840,20 +3840,29 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	require.NoError(t, err)
 
 	metadataEntries := 0
+	originEntries := 0
 
 	for i := range entries {
 		if entries[i].Entry.Type == externalMCPMetadataEntryType {
 			metadataEntries++
 		}
+
+		if entries[i].Entry.Type == externalMCPOriginPairsEntryType {
+			originEntries++
+		}
 	}
 
 	assert.Equal(t, 1, metadataEntries)
+	assert.Equal(t, 1, originEntries)
 
 	managedEntries, err := service.ObserveEntries(context.Background(), managedConversationID)
 	require.NoError(t, err)
-	require.Len(t, managedEntries, 4)
+	require.Len(t, managedEntries, 5)
 	assert.Equal(t, externalMCPMetadataEntryType, managedEntries[0].Entry.Type)
-	assert.Contains(t, string(managedEntries[2].Entry.ReplayInput[0]), "ROCKETCLAW_METADATA_LATER_KEY")
+	pairs, ok := OriginPairsFromEntry(&managedEntries[1].Entry)
+	require.True(t, ok)
+	assert.Equal(t, map[string]string{"a": "first", "z": "last"}, pairs)
+	assert.Contains(t, string(managedEntries[3].Entry.ReplayInput[0]), "ROCKETCLAW_METADATA_LATER_KEY")
 
 	for i := range entries {
 		messages, err := replayInputMessages(entries[i].Entry.ReplayInput)

@@ -112,7 +112,7 @@ test("protobuf envelopes retain exact input, selected agent, private text and in
     expect(await queries.queue({ id: "visible" }).queryFn({ signal })).toEqual([]);
     expect(await queries.cronJobs().queryFn({ signal })).toEqual([]);
     expect(await queries.config().queryFn({ signal })).toEqual({});
-    expect(await queries.history({ id: "visible", sourceConversationId: "producer" }).queryFn({ signal })).toEqual([]);
+    expect(await queries.history({ id: "visible", sourceConversationId: "producer" }).queryFn({ signal })).toEqual({ messages: [], origin: undefined });
     for (const method of ["ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries"]) expect(await rpc<object>(method, { id: "cron:exact:日本語" })).toEqual(responses[method]);
     await mutations.updateSession({ id: "visible", pinned: false, name: "" });
     await mutations.settleSession({ id: "visible", settled: false });
