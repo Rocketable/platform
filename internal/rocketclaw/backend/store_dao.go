@@ -239,7 +239,7 @@ func (s *SessionService) DeleteThreadQueueItem(id string) error {
 }
 
 func (d stateDAO) claimThreadQueueItem(ctx context.Context, conversationID, id string) (protocol.ThreadQueueItem, bool, error) {
-	item, err := scanThreadQueueItem(d.db.QueryRowContext(ctx, `DELETE FROM thread_queue WHERE conversation_id = $1 AND queue_item_id = $2 RETURNING queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply`, conversationID, id))
+	item, err := scanThreadQueueItem(d.db.QueryRowContext(ctx, `DELETE FROM thread_queue WHERE conversation_id = $1 AND queue_item_id = $2 AND kind <> $3 RETURNING queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position, park_after, slack_channel, slack_ts, kind, content, source, slack_reply`, conversationID, id, protocol.InboundKindHeld))
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return item, false, fmt.Errorf("claim thread queue item: %w", err)
 	}

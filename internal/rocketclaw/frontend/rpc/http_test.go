@@ -50,6 +50,8 @@ func TestHTTPBoundary(t *testing.T) {
 		{"RunCronJob", `{}`, "stem is required"},
 		{"SettleSession", `{"id":"chat"}`, "settled is required"},
 		{"SteerQueueItem", `{"id":"chat"}`, "itemId is required"},
+		{"PopQueueItem", `{"id":"chat"}`, "itemId is required"},
+		{"PopQueueItem", `{"itemId":"held"}`, "id is required"},
 		{"RemoveQueueItem", `{"id":"chat"}`, "itemId is required"},
 		{"ReorderQueue", `{"id":"chat"}`, "itemIds is required"},
 		{"ListSkills", `{"agent":""}`, "agent must not be empty"},
@@ -95,7 +97,7 @@ func TestHTTPStreams(t *testing.T) {
 		code     codes.Code
 		httpCode int
 	}{
-		{name: "unary"}, {name: "complete"}, {name: "post-terminal-error"}, {name: "wirecut"}, {name: "oversized"}, {name: "invalid-text"},
+		{name: "unary"}, {name: "stash"}, {name: "pop"}, {name: "complete"}, {name: "post-terminal-error"}, {name: "wirecut"}, {name: "oversized"}, {name: "invalid-text"},
 		{name: "cancel"}, {name: "idle-cancel"}, {name: "upload"}, {name: "download"}, {name: "inline"}, {name: "forced-download"}, {name: "truncated"},
 		{"auth", codes.Unauthenticated, http.StatusUnauthorized},
 		{"permission", codes.PermissionDenied, http.StatusForbidden},
@@ -129,11 +131,23 @@ func TestHTTPStreams(t *testing.T) {
 				switch scenario {
 				case "invalid-text":
 					return nil
-				case "unary":
+				case "pop":
+					request := &QueueItemRequest{}
+					require.NoError(t, stream.RecvMsg(request))
+					require.Equal(t, "visible", request.Id)
+					require.Equal(t, "held", request.ItemId)
+
+					return stream.SendMsg(&QueueItemResponse{})
+				case "unary", "stash":
 					request := &PromptRequest{}
 					require.NoError(t, stream.RecvMsg(request))
 					require.Equal(t, "visible", request.Id)
-					require.Equal(t, PromptDelivery_QUEUE, request.Delivery)
+
+					if scenario == "stash" {
+						require.Equal(t, PromptDelivery_STASH, request.Delivery)
+					} else {
+						require.Equal(t, PromptDelivery_QUEUE, request.Delivery)
+					}
 
 					return stream.SendMsg(&PromptResponse{})
 				case "upload", "upload-metadata", "upload-final-error":
@@ -281,6 +295,16 @@ func TestHTTPStreams(t *testing.T) {
 				requestBody = strings.NewReader(`{"id":"visible","text":"hello","delivery":"QUEUE"}`)
 			}
 
+			if scenario == "stash" {
+				path, method = "/api/Prompt", http.MethodPost
+				requestBody = strings.NewReader(`{"id":"visible","text":"$stop","delivery":"STASH"}`)
+			}
+
+			if scenario == "pop" {
+				path, method = "/api/PopQueueItem", http.MethodPost
+				requestBody = strings.NewReader(`{"id":"visible","itemId":"held"}`)
+			}
+
 			request, err := http.NewRequestWithContext(ctx, method, server.URL+path, requestBody)
 			require.NoError(t, err)
 			request.Header.Set("X-Forwarded-For", "192.0.2.99")
@@ -357,7 +381,10 @@ func TestHTTPStreams(t *testing.T) {
 			}
 
 			switch scenario {
-			case "unary":
+			case "pop":
+				require.Equal(t, http.StatusOK, response.StatusCode)
+				require.JSONEq(t, `{}`, string(body))
+			case "unary", "stash":
 				require.Equal(t, http.StatusOK, response.StatusCode)
 				require.JSONEq(t, `{"privateText":""}`, string(body))
 			case "oversized":

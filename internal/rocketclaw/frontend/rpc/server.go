@@ -824,6 +824,10 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 	}
 
 	words := strings.Fields(request.Text)
+	if request.Delivery == PromptDelivery_STASH {
+		words = nil
+	}
+
 	if len(words) > 0 && words[0] == "$stop" {
 		if len(words) != 1 {
 			return nil, fmt.Errorf("web stop: %w", status.Error(codes.InvalidArgument, "stop takes no arguments"))
@@ -878,6 +882,8 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 	case PromptDelivery_STEER:
 	case PromptDelivery_QUEUE:
 		kind = protocol.InboundKindEnqueue
+	case PromptDelivery_STASH:
+		kind = protocol.InboundKindHeld
 	default:
 		return nil, fmt.Errorf("web prompt: %w", status.Error(codes.InvalidArgument, "unknown prompt delivery"))
 	}
@@ -887,10 +893,10 @@ func (s *Server) prompt(ctx context.Context, request *PromptRequest) (*PromptRes
 		return nil, err
 	}
 
-	if kind == protocol.InboundKindEnqueue {
+	if kind == protocol.InboundKindEnqueue || kind == protocol.InboundKindHeld {
 		item := &protocol.ThreadQueueItem{
 			ID: rand.Text(), Message: text, Principal: principal, Source: protocol.SourceWeb,
-			Kind: protocol.InboundKindEnqueue, Content: content, StashAt: time.Now().UTC(),
+			Kind: kind, Content: content, StashAt: time.Now().UTC(),
 		}
 		if err := s.backend.StashQueueItem(ctx, request.Id, item); err != nil {
 			return nil, fmt.Errorf("web prompt: %w", err)
@@ -930,10 +936,11 @@ func (s *Server) listQueue(ctx context.Context, request *ListQueueRequest) (*Lis
 			return nil, err
 		}
 
-		delivery := PromptDelivery_QUEUE
-		if items[i].Kind == protocol.InboundKindSteer {
-			delivery = PromptDelivery_STEER
-		}
+		delivery := map[protocol.InboundKind]PromptDelivery{
+			"": PromptDelivery_QUEUE, protocol.InboundKindEnqueue: PromptDelivery_QUEUE,
+			protocol.InboundKindSteer: PromptDelivery_STEER,
+			protocol.InboundKindHeld:  PromptDelivery_STASH,
+		}[items[i].Kind]
 
 		response.Items = append(response.Items, &QueueItem{Id: items[i].ID, Text: input.Text, Attachments: input.Attachments, Delivery: delivery})
 	}
@@ -941,21 +948,31 @@ func (s *Server) listQueue(ctx context.Context, request *ListQueueRequest) (*Lis
 	return response, nil
 }
 
-func (s *Server) requireQueueItem(ctx context.Context, request *QueueItemRequest) error {
+func (s *Server) queueItem(ctx context.Context, method string, request *QueueItemRequest) (*QueueItemResponse, error) {
 	if err := s.visibleConversation(ctx, request.Id); err != nil {
-		return err
+		return nil, err
 	}
 
 	if strings.TrimSpace(request.ItemId) == "" {
-		return fmt.Errorf("web queue: %w", status.Error(codes.InvalidArgument, "queue item ID is required"))
+		return nil, fmt.Errorf("web queue: %w", status.Error(codes.InvalidArgument, "queue item ID is required"))
 	}
 
-	return nil
-}
+	var (
+		ok  bool
+		err error
+	)
 
-func queueItemResponse(ok bool, err error, wrap string) (*QueueItemResponse, error) {
+	switch method {
+	case "SteerQueueItem":
+		ok, err = s.backend.PromoteQueueItem(ctx, request.Id, request.ItemId)
+	case "PopQueueItem":
+		ok, err = s.backend.PopQueueItem(ctx, request.Id, request.ItemId)
+	case "RemoveQueueItem":
+		ok, err = s.backend.DeleteQueueItem(ctx, request.Id, request.ItemId)
+	}
+
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", wrap, err)
+		return nil, fmt.Errorf("web %s: %w", method, err)
 	}
 
 	if !ok {
@@ -963,26 +980,6 @@ func queueItemResponse(ok bool, err error, wrap string) (*QueueItemResponse, err
 	}
 
 	return &QueueItemResponse{}, nil
-}
-
-func (s *Server) steerQueueItem(ctx context.Context, request *QueueItemRequest) (*QueueItemResponse, error) {
-	if err := s.requireQueueItem(ctx, request); err != nil {
-		return nil, err
-	}
-
-	ok, err := s.backend.PromoteQueueItem(ctx, request.Id, request.ItemId)
-
-	return queueItemResponse(ok, err, "promote web queue item")
-}
-
-func (s *Server) removeQueueItem(ctx context.Context, request *QueueItemRequest) (*QueueItemResponse, error) {
-	if err := s.requireQueueItem(ctx, request); err != nil {
-		return nil, err
-	}
-
-	ok, err := s.backend.DeleteQueueItem(ctx, request.Id, request.ItemId)
-
-	return queueItemResponse(ok, err, "remove web queue item")
 }
 
 func (s *Server) reorderQueue(ctx context.Context, request *ReorderQueueRequest) (*QueueItemResponse, error) {

@@ -119,6 +119,21 @@ func TestSessionEntries(t *testing.T) {
 			return nil
 		},
 		SwitchConversationAgentFunc: sessions.SetThreadAgentIfExists,
+		PopQueueItemFunc: func(_ context.Context, conversationID, itemID string) (bool, error) {
+			items, err := sessions.ThreadQueueForConversation(conversationID)
+			if err != nil {
+				return false, fmt.Errorf("list queue: %w", err)
+			}
+
+			for _, item := range items {
+				if item.ID == itemID && item.Kind == protocol.InboundKindHeld {
+					item.Kind = protocol.InboundKindEnqueue
+					return true, sessions.PutThreadQueueItem(itemID, &item)
+				}
+			}
+
+			return false, nil
+		},
 		QueueItemsFunc: func(conversationID string) ([]protocol.ThreadQueueItem, error) {
 			return sessions.ThreadQueueForConversation(conversationID)
 		},
@@ -484,6 +499,47 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
 	_, err = invoke[QueueItemResponse](t.Context(), connection, "SteerQueueItem", &QueueItemRequest{Id: id, ItemId: "q1"})
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
+	_, err = invoke[QueueItemResponse](t.Context(), connection, "PopQueueItem", &QueueItemRequest{Id: id, ItemId: "q1"})
+	require.Equal(t, codes.Unauthenticated, status.Code(err))
+	_, err = invoke[QueueItemResponse](ctx, connection, "PopQueueItem", &QueueItemRequest{Id: id})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	_, err = invoke[QueueItemResponse](ctx, connection, "PopQueueItem", &QueueItemRequest{Id: id, ItemId: "missing"})
+	require.Equal(t, codes.NotFound, status.Code(err))
+
+	t.Run("stash commands remain literal until manual pop", func(t *testing.T) {
+		before := len(turns)
+
+		for _, text := range []string{"  $stop \n", "$agent planner", " $enqueue literal"} {
+			_, err := invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: id, Text: text, Delivery: PromptDelivery_STASH})
+			require.NoError(t, err)
+			items, err := invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: id})
+			require.NoError(t, err)
+			require.Len(t, items.Items, 1)
+			require.Equal(t, text, items.Items[0].Text)
+			require.Equal(t, PromptDelivery_STASH, items.Items[0].Delivery)
+
+			stored, err := sessions.ThreadQueueForConversation(id)
+			require.NoError(t, err)
+			require.Equal(t, protocol.InboundKindHeld, stored[0].Kind)
+			require.Equal(t, text, stored[0].Content.Text)
+
+			request := &QueueItemRequest{Id: id, ItemId: items.Items[0].Id}
+			_, err = invoke[QueueItemResponse](ctx, connection, "PopQueueItem", request)
+			require.NoError(t, err)
+			items, err = invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: id})
+			require.NoError(t, err)
+			require.Equal(t, PromptDelivery_QUEUE, items.Items[0].Delivery)
+
+			_, err = invoke[QueueItemResponse](ctx, connection, "PopQueueItem", request)
+			require.Equal(t, codes.NotFound, status.Code(err))
+			_, err = invoke[QueueItemResponse](ctx, connection, "RemoveQueueItem", request)
+			require.NoError(t, err)
+		}
+
+		require.Len(t, turns, before)
+		require.Empty(t, core.SwitchConversationAgentCalls())
+		require.Empty(t, promoted)
+	})
 
 	require.NoError(t, sessions.PutThreadQueueItem("q1", &protocol.ThreadQueueItem{
 		ConversationID: id, Message: "queued later", Principal: "alice", StashAt: time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC),
@@ -560,12 +616,14 @@ func TestSessionEntries(t *testing.T) {
 		stash := core.StashQueueItemFunc
 		defer func() { core.StashQueueItemFunc = stash }()
 
-		promote, remove, reorder, list := core.PromoteQueueItemFunc, core.DeleteQueueItemFunc, core.ReorderQueueItemsFunc, core.QueueItemsFunc
+		pop, promote, remove, reorder, list := core.PopQueueItemFunc, core.PromoteQueueItemFunc, core.DeleteQueueItemFunc, core.ReorderQueueItemsFunc, core.QueueItemsFunc
 		defer func() {
+			core.PopQueueItemFunc = pop
 			core.PromoteQueueItemFunc, core.DeleteQueueItemFunc, core.ReorderQueueItemsFunc, core.QueueItemsFunc = promote, remove, reorder, list
 		}()
 
 		errUnavailable := fmt.Errorf("queue store: %w", status.Error(codes.Unavailable, "queue store unavailable"))
+		core.PopQueueItemFunc = func(context.Context, string, string) (bool, error) { return false, errUnavailable }
 		core.PromoteQueueItemFunc = func(context.Context, string, string) (bool, error) { return false, errUnavailable }
 		core.DeleteQueueItemFunc = func(context.Context, string, string) (bool, error) { return false, errUnavailable }
 		core.ReorderQueueItemsFunc = func(string, []string) error { return errUnavailable }
@@ -577,10 +635,12 @@ func TestSessionEntries(t *testing.T) {
 			request, response proto.Message
 		}{
 			{"SteerQueueItem", &QueueItemRequest{Id: id, ItemId: "q1"}, &QueueItemResponse{}},
+			{"PopQueueItem", &QueueItemRequest{Id: id, ItemId: "q1"}, &QueueItemResponse{}},
 			{"RemoveQueueItem", &QueueItemRequest{Id: id, ItemId: "q1"}, &QueueItemResponse{}},
 			{"ReorderQueue", &ReorderQueueRequest{Id: id, ItemIds: []string{"q3", "q1"}}, &QueueItemResponse{}},
 			{"ListQueue", &ListQueueRequest{Id: id}, &ListQueueResponse{}},
 			{"Prompt", &PromptRequest{Id: id, Text: "must not disappear", Delivery: PromptDelivery_QUEUE}, &PromptResponse{}},
+			{"Prompt", &PromptRequest{Id: id, Text: "must not disappear", Delivery: PromptDelivery_STASH}, &PromptResponse{}},
 		} {
 			err := connection.Invoke(ctx, "/rpc.Web/"+test.method, test.request, test.response)
 			require.Equal(t, codes.Unavailable, status.Code(err), test.method)
@@ -690,6 +750,10 @@ func TestSessionEntries(t *testing.T) {
 		_, err = invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: hidden})
 		require.Equal(t, codes.PermissionDenied, status.Code(err))
 		_, err = invoke[QueueItemResponse](ctx, connection, "SteerQueueItem", &QueueItemRequest{Id: hidden, ItemId: "q1"})
+		require.Equal(t, codes.PermissionDenied, status.Code(err))
+		_, err = invoke[QueueItemResponse](ctx, connection, "PopQueueItem", &QueueItemRequest{Id: hidden, ItemId: "q1"})
+		require.Equal(t, codes.PermissionDenied, status.Code(err))
+		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: hidden, Text: "$stop", Delivery: PromptDelivery_STASH})
 		require.Equal(t, codes.PermissionDenied, status.Code(err))
 		_, err = invoke[QueueItemResponse](ctx, connection, "RemoveQueueItem", &QueueItemRequest{Id: hidden, ItemId: "q1"})
 		require.Equal(t, codes.PermissionDenied, status.Code(err))
@@ -1283,6 +1347,7 @@ func TestSessionEntries(t *testing.T) {
 		require.NoError(t, err)
 		history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: webID})
 		require.NoError(t, err)
+
 		trace.Origin = `{"agent":"producer","kind":"cron","ranAt":"2026-09-05T03:00:00.000000003Z","runId":"` + undelivered + `","runKind":"scheduled","sourcePath":"cron/silent.md","stem":"silent"}`
 		require.True(t, proto.Equal(trace, history))
 
@@ -1375,6 +1440,7 @@ func TestSessionEntries(t *testing.T) {
 	require.True(t, proto.Equal(jobs.Jobs[2], remainingRuns.Jobs[2]))
 
 	opened := make([]string, 0, 2)
+
 	for range 2 {
 		ran, err := invoke[RunCronJobResponse](ctx, connection, "RunCronJob", &RunCronJobRequest{Stem: "alpha"})
 		require.NoError(t, err)
@@ -1382,8 +1448,10 @@ func TestSessionEntries(t *testing.T) {
 		require.NotContains(t, ran.Id, ":")
 		opened = append(opened, ran.Id)
 	}
+
 	require.NotEqual(t, opened[0], opened[1])
 	require.Eventually(t, func() bool { return len(cronRunner.RunCalls()) >= 2 }, time.Second, 10*time.Millisecond)
+
 	calls := cronRunner.RunCalls()
 	require.ElementsMatch(t, opened, []string{calls[0].RawRunProgress.SyncDestination, calls[1].RawRunProgress.SyncDestination})
 	require.NotEqual(t, calls[0].RawRunProgress.ConversationID, calls[1].RawRunProgress.ConversationID)
@@ -1575,6 +1643,21 @@ func TestSessionEntries(t *testing.T) {
 		listed, err := invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: conversation})
 		require.NoError(t, err)
 		require.Equal(t, file.Id, listed.Items[0].Attachments[0].Id)
+		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: conversation, Text: exact, Delivery: PromptDelivery_STASH, AttachmentIds: []string{file.Id, imageFile.Id}})
+		require.NoError(t, err)
+		held, err := reopened.ThreadQueueForConversation(conversation)
+		require.NoError(t, err)
+		require.Len(t, held, 2)
+		require.Equal(t, protocol.InboundKindHeld, held[1].Kind)
+		require.Equal(t, queue[0].Content, held[1].Content)
+
+		listed, err = invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: conversation})
+		require.NoError(t, err)
+		require.Equal(t, PromptDelivery_STASH, listed.Items[1].Delivery)
+		require.Equal(t, listed.Items[0].Attachments, listed.Items[1].Attachments)
+
+		_, err = invoke[QueueItemResponse](ctx, connection, "RemoveQueueItem", &QueueItemRequest{Id: conversation, ItemId: held[1].ID})
+		require.NoError(t, err)
 		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: conversation, Text: exact, MessageId: "attachment-input", AttachmentIds: []string{file.Id, imageFile.Id}})
 		require.NoError(t, err)
 		require.Equal(t, "attachment-input", turns[len(turns)-1].Metadata["web_message_id"])

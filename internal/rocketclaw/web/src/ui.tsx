@@ -5,7 +5,7 @@ import { Dialog, DialogTrigger, DialogContent, DialogTitle, DialogDescription, D
 import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions } from "./api";
-import type { ChatOrigin } from "./types";
+import type { ChatOrigin, PromptDelivery } from "./types";
 import { Bot, Calendar, Check, Download, FileIcon, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, navigate } from "./navigation";
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SyntheticEvent } from "react";
@@ -200,6 +200,7 @@ function QueuePanel({
   items,
   busy,
   onSteer,
+  onPop,
   onRemove,
   onReorder,
 }: {
@@ -207,11 +208,14 @@ function QueuePanel({
   items: QueueItem[];
   busy: boolean;
   onSteer: (id: string, text: string) => void;
+  onPop: (id: string) => Promise<unknown>;
   onRemove: (id: string) => void;
   onReorder: (itemIds: string[]) => void;
 }) {
   const dragId = useRef<string | null>(null);
   const [order, setOrder] = useState<string[] | null>(null);
+  const [poppingId, setPoppingId] = useState("");
+  const queueActionLabel = busy ? "Steer" : "Send";
   if (items.length === 0) {
     return null;
   }
@@ -262,15 +266,24 @@ function QueuePanel({
             >
               <GripVertical className="h-3.5 w-3.5" />
             </button>
-            <span className="min-w-0 flex-1 truncate text-sm">{item.text}</span>
+            <span className="min-w-0 flex-1 truncate text-sm">{item.delivery === "STASH" ? "Stashed · " : "Queued · "}{item.text}</span>
             <MessageAttachments attachments={item.attachments} conversationId={conversationId} />
-            <button
+            <Button
               type="button"
-              className="shrink-0 rounded-md px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent"
-              onClick={() => onSteer(item.id, item.text)}
+              variant="ghost"
+              size="sm"
+              disabled={item.delivery === "STASH" && poppingId !== ""}
+              onClick={async () => {
+                if (item.delivery !== "STASH") {
+                  onSteer(item.id, item.text);
+                  return;
+                }
+                setPoppingId(item.id);
+                try { await onPop(item.id); } finally { setPoppingId(""); }
+              }}
             >
-              {busy ? "Steer" : "Send"}
-            </button>
+              {item.id === poppingId ? "Popping…" : item.delivery === "STASH" ? "Pop" : queueActionLabel}
+            </Button>
             <button type="button" className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent" aria-label="Remove" onClick={() => onRemove(item.id)}>
               <X className="h-3.5 w-3.5" />
             </button>
@@ -1586,14 +1599,14 @@ async function sendComposer(input: {
   onDraftChange: () => void;
   text: string;
   files: PendingFile[];
-  delivery?: "STEER" | "QUEUE";
+  delivery?: PromptDelivery;
   busy: boolean;
   working: boolean;
   sessionId: string;
   selected: string;
   currentAgent: string;
   goSession: (id: string) => void;
-  prompt: { mutateAsync: (value: { id: string; text: string; delivery?: "STEER" | "QUEUE"; attachmentIds?: string[]; messageId?: string }) => Promise<string> };
+  prompt: { mutateAsync: (value: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string }) => Promise<string> };
   create: { mutateAsync: (value: { agent?: string }) => Promise<string> };
   scrollToEnd: () => boolean;
   setBusy: (value: boolean) => void;
@@ -1603,7 +1616,8 @@ async function sendComposer(input: {
   refreshHistory: () => Promise<unknown>;
 }) {
   const { draft } = input;
-  const stopping = isStopCommand(input.text);
+  const stashing = input.delivery === "STASH";
+  const stopping = !stashing && isStopCommand(input.text);
   if (draft.sending || (input.text.trim() === "" && input.files.length === 0)) {
     return;
   }
@@ -1613,7 +1627,7 @@ async function sendComposer(input: {
   const agent = draft.agent;
   let dispatchedEdit: number | undefined;
   const followUp = input.delivery ?? (input.working ? "QUEUE" : "STEER");
-  const enqueue = (followUp === "QUEUE" || /^\s*\$enqueue(?:\s|$)/.test(input.text)) && !stopping;
+  const enqueue = stashing || (followUp === "QUEUE" || /^\s*\$enqueue(?:\s|$)/.test(input.text)) && !stopping;
   if (!input.busy && !enqueue) {
     input.setBusy(true);
   }
@@ -1636,7 +1650,7 @@ async function sendComposer(input: {
       if (!response.ok) throw new Error(`Upload failed: ${file.name}`);
       return response.json();
     }));
-    if (input.sessionId !== "" && input.selected !== "" && input.selected !== input.currentAgent) {
+    if (!stashing && input.sessionId !== "" && input.selected !== "" && input.selected !== input.currentAgent) {
       await input.prompt.mutateAsync({ id: sessionId, text: `$agent ${input.selected}` });
       await queryClient.invalidateQueries({ queryKey: ["agents"] });
     }
@@ -1682,7 +1696,7 @@ async function sendComposer(input: {
     input.setLines((current) => current.filter((line) => line.id !== optimistic.id));
     if (draft.submission === submission) {
       input.setSendError(err instanceof Error ? err.message : "send failed");
-      input.setBusy(input.busy);
+      if (!stashing) input.setBusy(input.busy);
     }
   }
 }
@@ -1772,6 +1786,7 @@ function SessionComposer({
   const queueQuery = useQuery({ ...queries.queue({ id }), enabled: id !== "", refetchInterval: 2000 });
   const removeQueueItem = useMutation({ mutationFn: mutations.removeQueueItem, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["queue"] }) });
   const steerQueueItem = useMutation({ mutationFn: mutations.steerQueueItem, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["queue"] }) });
+  const popQueueItem = useMutation({ mutationFn: mutations.popQueueItem, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["queue"] }) });
   const reorderQueue = useMutation({ mutationFn: mutations.reorderQueue, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["queue"] }) });
   const sidebar = useContext(Sidebar);
   const create = useMutation({ mutationFn: mutations.createSession, onSuccess: () => sidebar.invalidateQueries() });
@@ -1803,7 +1818,7 @@ function SessionComposer({
   } else if (id) {
     placeholder = "Message or $command";
   }
-  const send = (delivery?: "STEER" | "QUEUE") => sendComposer({
+  const send = (delivery?: PromptDelivery) => sendComposer({
       draft,
       onDraftChange,
       text: draft.text,
@@ -1857,6 +1872,7 @@ function SessionComposer({
         send={send}
         stop={stop}
         steerQueued={promoteQueued}
+        popQueued={(itemId) => { setSendError(""); return popQueueItem.mutateAsync({ id, itemId }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "pop failed")); }}
         removeQueued={(itemId) => void removeQueueItem.mutateAsync({ id, itemId }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "remove failed"))}
         reorderQueued={(itemIds) => void reorderQueue.mutateAsync({ id, itemIds }).catch((err: unknown) => setSendError(err instanceof Error ? err.message : "reorder failed"))}
       />
@@ -1936,6 +1952,7 @@ function Composer({
   send,
   stop,
   steerQueued,
+  popQueued,
   removeQueued,
   reorderQueued,
 }: {
@@ -1958,9 +1975,10 @@ function Composer({
   placeholder: string;
   busy: boolean;
   queued: QueueItem[];
-  send: (delivery?: "STEER" | "QUEUE") => Promise<void>;
+  send: (delivery?: PromptDelivery) => Promise<void>;
   stop: () => Promise<void>;
   steerQueued: (id: string, text: string) => Promise<void>;
+  popQueued: (id: string) => Promise<unknown>;
   removeQueued: (id: string) => void;
   reorderQueued: (itemIds: string[]) => void;
 }) {
@@ -1969,6 +1987,7 @@ function Composer({
   const fileInput = useRef<HTMLInputElement>(null);
   const messageInput = useRef<HTMLTextAreaElement>(null);
   const empty = text.trim() === "" && files.length === 0;
+  const stopping = busy && empty;
   const pickerOpen = matches.length > 0;
   const selectedInvocation = matches[pick]?.invocation;
   useEffect(() => {
@@ -1999,7 +2018,7 @@ function Composer({
             ))}
           </ul>
         ) : null}
-        <QueuePanel conversationId={sessionId} items={queued} busy={busy} onSteer={(id, itemText) => void steerQueued(id, itemText)} onRemove={removeQueued} onReorder={reorderQueued} />
+        <QueuePanel conversationId={sessionId} items={queued} busy={busy} onSteer={(id, itemText) => void steerQueued(id, itemText)} onPop={popQueued} onRemove={removeQueued} onReorder={reorderQueued} />
         <ComposerAttachments files={files} setFiles={setFiles} sending={sending} fileInput={fileInput}>
           <Textarea
             ref={messageInput}
@@ -2014,6 +2033,11 @@ function Composer({
             variant="embedded"
             className="min-h-16"
             onKeyDown={(event) => {
+              if (event.key === "Enter" && event.altKey && (event.metaKey || event.ctrlKey) && !event.shiftKey) {
+                event.preventDefault();
+                void send("STASH");
+                return;
+              }
               if (matches.length > 0) {
                 if (event.key === "ArrowDown") {
                   event.preventDefault();
@@ -2059,15 +2083,16 @@ function Composer({
                <div className="hidden md:contents"><SessionDetails id={sessionId} /></div>
             </div>
             <div className="flex shrink-0 items-center justify-end gap-1">
+              <Button type="button" variant="ghost" className="h-11 sm:h-8" disabled={sending || empty} onClick={() => void send("STASH")}>Stash</Button>
               <Tooltip>
                 <TooltipTrigger render={<Button type="button" variant="ghost" className="h-11 sm:h-8" disabled={!busy || sending || empty || isStopCommand(text)} />} aria-label="Steer" onClick={() => void send("STEER")}>
                   Steer
                 </TooltipTrigger>
                 <TooltipContent>Guide the current response <ModEnterKeys mac={mac} /></TooltipContent>
               </Tooltip>
-              <Tooltip><TooltipTrigger render={<Button type="button" size="icon" className="size-11 sm:size-8" disabled={sending} />} aria-label={busy && empty ? "Stop" : "Send"} onClick={() => void (busy && empty ? stop() : send())}>
-                {busy && empty ? <Square /> : <Send />}
-              </TooltipTrigger><TooltipContent>{busy && empty ? "Stop response" : busy ? "Send to queue" : "Send message"}</TooltipContent></Tooltip>
+              <Tooltip><TooltipTrigger render={<Button type="button" size="icon" className="size-11 sm:size-8" disabled={sending} />} aria-label={stopping ? "Stop" : "Send"} onClick={() => void (stopping ? stop() : send())}>
+                {stopping ? <Square /> : <Send />}
+              </TooltipTrigger><TooltipContent>{stopping ? "Stop response" : busy ? "Send to queue" : "Send message"}</TooltipContent></Tooltip>
             </div>
           </div>
         </ComposerAttachments>

@@ -644,8 +644,8 @@ func (m *threadBridgeManager) deleteQueueItem(ctx context.Context, conversationI
 		bridge.mu.Unlock()
 	}
 
-	_, removed, err := (stateDAO{db: m.store.db}).claimThreadQueueItem(ctx, conversationID, id)
-	if err != nil || !removed {
+	removed, err := execRows(ctx, m.store.db, "delete queue item", "count deleted queue items", `DELETE FROM thread_queue WHERE conversation_id = $1 AND queue_item_id = $2`, conversationID, id)
+	if err != nil || removed == 0 {
 		return false, err
 	}
 
@@ -671,6 +671,10 @@ func (m *threadBridgeManager) stashQueueItem(ctx context.Context, conversationID
 
 	if err := m.store.PutThreadQueueItem(item.ID, item); err != nil {
 		return fmt.Errorf("stash thread queue item: %w", err)
+	}
+
+	if item.Kind == protocol.InboundKindHeld {
+		return nil
 	}
 
 	thread, recorded, err := m.store.Thread(conversationID)

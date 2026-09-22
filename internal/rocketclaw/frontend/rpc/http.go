@@ -31,7 +31,7 @@ func NewHTTPHandler(connection *grpc.ClientConn) http.Handler {
 	mux.Handle("GET /api/", http.NotFoundHandler())
 	mux.Handle("POST /api/", http.NotFoundHandler())
 
-	for method := range strings.FieldsSeq("Protocol Identity Prompt History ListAgents CreateSession ListConfig ListSkills SettleSession UpdateSession ListCronJobs RunCronJob ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem RemoveQueueItem ReorderQueue") {
+	for method := range strings.FieldsSeq("Protocol Identity Prompt History ListAgents CreateSession ListConfig ListSkills SettleSession UpdateSession ListCronJobs RunCronJob ListSessionEntries LoadSessionEntries DeleteSessionEntries ListQueue SteerQueueItem PopQueueItem RemoveQueueItem ReorderQueue") {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 		responseType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Output().FullName())
@@ -276,7 +276,7 @@ func httpInput(body []byte, request proto.Message, method string) error {
 	switch method {
 	case "Prompt":
 		required = "id text"
-	case "History", "SettleSession", "UpdateSession", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "RemoveQueueItem", "ReorderQueue":
+	case "History", "SettleSession", "UpdateSession", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "ReorderQueue":
 		required = "id"
 	case "RunCronJob":
 		required = "stem"
@@ -285,7 +285,7 @@ func httpInput(body []byte, request proto.Message, method string) error {
 	switch method {
 	case "SettleSession":
 		required += " settled"
-	case "SteerQueueItem", "RemoveQueueItem":
+	case "SteerQueueItem", "PopQueueItem", "RemoveQueueItem":
 		required += " itemId"
 	case "ReorderQueue":
 		required += " itemIds"
@@ -305,8 +305,8 @@ func httpInput(body []byte, request proto.Message, method string) error {
 
 		if field.Kind() == protoreflect.EnumKind {
 			var delivery string
-			if err := json.Unmarshal(value, &delivery); err != nil || (delivery != "STEER" && delivery != "QUEUE") {
-				return fmt.Errorf("invalid %s: expected STEER or QUEUE", name)
+			if err := json.Unmarshal(value, &delivery); err != nil || (delivery != "STEER" && delivery != "QUEUE" && delivery != "STASH") {
+				return fmt.Errorf("invalid %s: expected STEER, QUEUE or STASH", name)
 			}
 		}
 

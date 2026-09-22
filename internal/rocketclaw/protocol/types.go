@@ -39,6 +39,8 @@ const (
 	InboundKindSteer InboundKind = "steer"
 	// InboundKindEnqueue waits for its own turn.
 	InboundKindEnqueue InboundKind = "enqueue"
+	// InboundKindHeld waits for manual release into the queue.
+	InboundKindHeld InboundKind = "held"
 	// InboundKindCancel interrupts the active conversation owner.
 	InboundKindCancel InboundKind = "cancel"
 )

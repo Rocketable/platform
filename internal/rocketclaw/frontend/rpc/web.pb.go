@@ -26,6 +26,7 @@ type PromptDelivery int32
 const (
 	PromptDelivery_STEER PromptDelivery = 0
 	PromptDelivery_QUEUE PromptDelivery = 1
+	PromptDelivery_STASH PromptDelivery = 2
 )
 
 // Enum value maps for PromptDelivery.
@@ -33,10 +34,12 @@ var (
 	PromptDelivery_name = map[int32]string{
 		0: "STEER",
 		1: "QUEUE",
+		2: "STASH",
 	}
 	PromptDelivery_value = map[string]int32{
 		"STEER": 0,
 		"QUEUE": 1,
+		"STASH": 2,
 	}
 )
 
@@ -3046,10 +3049,11 @@ const file_web_proto_rawDesc = "" +
 	"\adeleted\x18\x01 \x01(\x03R\adeleted\"\x11\n" +
 	"\x0fIdentityRequest\".\n" +
 	"\x10IdentityResponse\x12\x1a\n" +
-	"\busername\x18\x01 \x01(\tR\busername*&\n" +
+	"\busername\x18\x01 \x01(\tR\busername*1\n" +
 	"\x0ePromptDelivery\x12\t\n" +
 	"\x05STEER\x10\x00\x12\t\n" +
-	"\x05QUEUE\x10\x012\xad\f\n" +
+	"\x05QUEUE\x10\x01\x12\t\n" +
+	"\x05STASH\x10\x022\xec\f\n" +
 	"\x03Web\x126\n" +
 	"\x10UploadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment(\x01\x128\n" +
 	"\x12DownloadAttachment\x12\x0f.rpc.Attachment\x1a\x0f.rpc.Attachment0\x01\x12E\n" +
@@ -3074,7 +3078,8 @@ const file_web_proto_rawDesc = "" +
 	"\bIdentity\x12\x14.rpc.IdentityRequest\x1a\x15.rpc.IdentityResponse\x12:\n" +
 	"\tListQueue\x12\x15.rpc.ListQueueRequest\x1a\x16.rpc.ListQueueResponse\x12@\n" +
 	"\x0fRemoveQueueItem\x12\x15.rpc.QueueItemRequest\x1a\x16.rpc.QueueItemResponse\x12?\n" +
-	"\x0eSteerQueueItem\x12\x15.rpc.QueueItemRequest\x1a\x16.rpc.QueueItemResponse\x12@\n" +
+	"\x0eSteerQueueItem\x12\x15.rpc.QueueItemRequest\x1a\x16.rpc.QueueItemResponse\x12=\n" +
+	"\fPopQueueItem\x12\x15.rpc.QueueItemRequest\x1a\x16.rpc.QueueItemResponse\x12@\n" +
 	"\fReorderQueue\x12\x18.rpc.ReorderQueueRequest\x1a\x16.rpc.QueueItemResponse\x12Q\n" +
 	"\x12ListSessionEntries\x12\x1a.rpc.SessionEntriesRequest\x1a\x1f.rpc.ListSessionEntriesResponse\x12Q\n" +
 	"\x12LoadSessionEntries\x12\x1a.rpc.SessionEntriesRequest\x1a\x1f.rpc.LoadSessionEntriesResponse\x12U\n" +
@@ -3183,36 +3188,38 @@ var file_web_proto_depIdxs = []int32{
 	38, // 32: rpc.Web.ListQueue:input_type -> rpc.ListQueueRequest
 	40, // 33: rpc.Web.RemoveQueueItem:input_type -> rpc.QueueItemRequest
 	40, // 34: rpc.Web.SteerQueueItem:input_type -> rpc.QueueItemRequest
-	42, // 35: rpc.Web.ReorderQueue:input_type -> rpc.ReorderQueueRequest
-	43, // 36: rpc.Web.ListSessionEntries:input_type -> rpc.SessionEntriesRequest
-	43, // 37: rpc.Web.LoadSessionEntries:input_type -> rpc.SessionEntriesRequest
-	43, // 38: rpc.Web.DeleteSessionEntries:input_type -> rpc.SessionEntriesRequest
-	10, // 39: rpc.Web.UploadAttachment:output_type -> rpc.Attachment
-	10, // 40: rpc.Web.DownloadAttachment:output_type -> rpc.Attachment
-	5,  // 41: rpc.Web.ListSessions:output_type -> rpc.ListSessionsResponse
-	7,  // 42: rpc.Web.CreateSession:output_type -> rpc.CreateSessionResponse
-	9,  // 43: rpc.Web.Join:output_type -> rpc.TranscriptEvent
-	12, // 44: rpc.Web.Prompt:output_type -> rpc.PromptResponse
-	21, // 45: rpc.Web.ListCronJobs:output_type -> rpc.ListCronJobsResponse
-	23, // 46: rpc.Web.RunCronJob:output_type -> rpc.RunCronJobResponse
-	25, // 47: rpc.Web.AnswerQuestion:output_type -> rpc.AnswerQuestionResponse
-	4,  // 48: rpc.Web.History:output_type -> rpc.HistoryResponse
-	16, // 49: rpc.Web.ListAgents:output_type -> rpc.ListAgentsResponse
-	19, // 50: rpc.Web.ListSkills:output_type -> rpc.ListSkillsResponse
-	30, // 51: rpc.Web.ListConfig:output_type -> rpc.ListConfigResponse
-	32, // 52: rpc.Web.SettleSession:output_type -> rpc.SettleSessionResponse
-	34, // 53: rpc.Web.UpdateSession:output_type -> rpc.UpdateSessionResponse
-	36, // 54: rpc.Web.Protocol:output_type -> rpc.ProtocolResponse
-	50, // 55: rpc.Web.Identity:output_type -> rpc.IdentityResponse
-	39, // 56: rpc.Web.ListQueue:output_type -> rpc.ListQueueResponse
-	41, // 57: rpc.Web.RemoveQueueItem:output_type -> rpc.QueueItemResponse
-	41, // 58: rpc.Web.SteerQueueItem:output_type -> rpc.QueueItemResponse
-	41, // 59: rpc.Web.ReorderQueue:output_type -> rpc.QueueItemResponse
-	45, // 60: rpc.Web.ListSessionEntries:output_type -> rpc.ListSessionEntriesResponse
-	47, // 61: rpc.Web.LoadSessionEntries:output_type -> rpc.LoadSessionEntriesResponse
-	48, // 62: rpc.Web.DeleteSessionEntries:output_type -> rpc.DeleteSessionEntriesResponse
-	39, // [39:63] is the sub-list for method output_type
-	15, // [15:39] is the sub-list for method input_type
+	40, // 35: rpc.Web.PopQueueItem:input_type -> rpc.QueueItemRequest
+	42, // 36: rpc.Web.ReorderQueue:input_type -> rpc.ReorderQueueRequest
+	43, // 37: rpc.Web.ListSessionEntries:input_type -> rpc.SessionEntriesRequest
+	43, // 38: rpc.Web.LoadSessionEntries:input_type -> rpc.SessionEntriesRequest
+	43, // 39: rpc.Web.DeleteSessionEntries:input_type -> rpc.SessionEntriesRequest
+	10, // 40: rpc.Web.UploadAttachment:output_type -> rpc.Attachment
+	10, // 41: rpc.Web.DownloadAttachment:output_type -> rpc.Attachment
+	5,  // 42: rpc.Web.ListSessions:output_type -> rpc.ListSessionsResponse
+	7,  // 43: rpc.Web.CreateSession:output_type -> rpc.CreateSessionResponse
+	9,  // 44: rpc.Web.Join:output_type -> rpc.TranscriptEvent
+	12, // 45: rpc.Web.Prompt:output_type -> rpc.PromptResponse
+	21, // 46: rpc.Web.ListCronJobs:output_type -> rpc.ListCronJobsResponse
+	23, // 47: rpc.Web.RunCronJob:output_type -> rpc.RunCronJobResponse
+	25, // 48: rpc.Web.AnswerQuestion:output_type -> rpc.AnswerQuestionResponse
+	4,  // 49: rpc.Web.History:output_type -> rpc.HistoryResponse
+	16, // 50: rpc.Web.ListAgents:output_type -> rpc.ListAgentsResponse
+	19, // 51: rpc.Web.ListSkills:output_type -> rpc.ListSkillsResponse
+	30, // 52: rpc.Web.ListConfig:output_type -> rpc.ListConfigResponse
+	32, // 53: rpc.Web.SettleSession:output_type -> rpc.SettleSessionResponse
+	34, // 54: rpc.Web.UpdateSession:output_type -> rpc.UpdateSessionResponse
+	36, // 55: rpc.Web.Protocol:output_type -> rpc.ProtocolResponse
+	50, // 56: rpc.Web.Identity:output_type -> rpc.IdentityResponse
+	39, // 57: rpc.Web.ListQueue:output_type -> rpc.ListQueueResponse
+	41, // 58: rpc.Web.RemoveQueueItem:output_type -> rpc.QueueItemResponse
+	41, // 59: rpc.Web.SteerQueueItem:output_type -> rpc.QueueItemResponse
+	41, // 60: rpc.Web.PopQueueItem:output_type -> rpc.QueueItemResponse
+	41, // 61: rpc.Web.ReorderQueue:output_type -> rpc.QueueItemResponse
+	45, // 62: rpc.Web.ListSessionEntries:output_type -> rpc.ListSessionEntriesResponse
+	47, // 63: rpc.Web.LoadSessionEntries:output_type -> rpc.LoadSessionEntriesResponse
+	48, // 64: rpc.Web.DeleteSessionEntries:output_type -> rpc.DeleteSessionEntriesResponse
+	40, // [40:65] is the sub-list for method output_type
+	15, // [15:40] is the sub-list for method input_type
 	15, // [15:15] is the sub-list for extension type_name
 	15, // [15:15] is the sub-list for extension extendee
 	0,  // [0:15] is the sub-list for field type_name
