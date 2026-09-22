@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>RocketClaw</title>
-    <script>(() => { const mode = localStorage.getItem("theme") || "system"; document.documentElement.classList.toggle("dark", mode === "dark" || (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches)); })();</script>
-  <link rel="stylesheet" href="/assets/styles-6204f1b3e2e5de7b.css" /><script type="module" src="/assets/main-sb7fbspy.js"></script></head>
+    <script>(() => { const mode = localStorage.getItem("theme") || "system"; const root = document.documentElement; root.classList.toggle("dark", mode === "dark" || (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches)); const palette = localStorage.getItem("palette"); const known = ["neutral", "harbor", "grove", "ember", "violet", "rose", "sand", "lagoon", "slate", "copper", "ink", "signal", "go-playground", "go-sources"]; root.dataset.palette = known.includes(palette) ? palette : "neutral"; })();</script>
+  <link rel="stylesheet" href="/assets/styles-923c33f0cb80b75.css" /><script type="module" src="/assets/main-wadwzz5v.js"></script></head>
   <body><div id="root"></div></body>
 </html>
