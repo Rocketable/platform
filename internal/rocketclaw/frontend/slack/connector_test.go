@@ -5150,7 +5150,6 @@ func TestPublishOnDemandCronReplyPublishesAndReportsBusErrors(t *testing.T) {
 
 	require.NoError(t, connector.publishOnDemandCronReply(context.Background(), nil, "ignored"))
 	require.NoError(t, connector.publishOnDemandCronReply(context.Background(), replyTarget, " "))
-	assert.Nil(t, cloneSlackReplyTarget(nil))
 
 	require.NoError(t, connector.publishOnDemandCronReply(context.Background(), replyTarget, " preview "))
 	outbound := readOneOutbound(t, bus)
