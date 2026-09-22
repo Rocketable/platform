@@ -5693,6 +5693,7 @@ func TestSlackForwardRejectsNonPublicAndPartialThreads(t *testing.T) {
 		name           string
 		channel        map[string]any
 		failPage       bool
+		emptyCursor    bool
 		wantReplyCalls int
 	}{
 		{name: "private", channel: map[string]any{"is_channel": true, "is_private": true}},
@@ -5700,6 +5701,7 @@ func TestSlackForwardRejectsNonPublicAndPartialThreads(t *testing.T) {
 		{name: "mpim", channel: map[string]any{"is_mpim": true}},
 		{name: "unknown", channel: map[string]any{}},
 		{name: "partial page", channel: map[string]any{"is_channel": true}, failPage: true, wantReplyCalls: 2},
+		{name: "empty cursor", channel: map[string]any{"is_channel": true}, emptyCursor: true, wantReplyCalls: 1},
 	}
 
 	for _, tt := range tests {
@@ -5717,7 +5719,12 @@ func TestSlackForwardRejectsNonPublicAndPartialThreads(t *testing.T) {
 						return
 					}
 
-					writeJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{{"ts": "1.1", "text": "must not leak"}}, "has_more": tt.failPage, "response_metadata": map[string]any{"next_cursor": "next"}})
+					nextCursor := "next"
+					if tt.emptyCursor {
+						nextCursor = ""
+					}
+
+					writeJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{{"ts": "1.1", "text": "must not leak"}}, "has_more": tt.failPage || tt.emptyCursor, "response_metadata": map[string]any{"next_cursor": nextCursor}})
 				}
 			}))
 			defer server.Close()
