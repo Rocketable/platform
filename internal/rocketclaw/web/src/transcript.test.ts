@@ -4,7 +4,7 @@ import type { TranscriptEvent } from "./types";
 
 // Execute the retained UI's actual private functions without exporting non-components.
 const source = ts.createSourceFile("ui.tsx", await Bun.file(new URL("./ui.tsx", import.meta.url)).text(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = ["nextLines", "sendComposer", "promoteComposer", "applyStreamEvent", "readTranscriptHistory", "pendingInputs", "appendLine", "appendThinking", "thinkingRows", "lineId", "isStopCommand", "transcriptTurns", "toolTitle"];
+const names = ["nextLines", "sendComposer", "promoteComposer", "applyStreamEvent", "readTranscriptHistory", "pendingInputs", "appendLine", "lineId", "isStopCommand", "transcriptTurns", "toolTitle"];
 const functions = source.statements.filter((node) => ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? "")).map((node) => node.getText(source)).join("\n");
 const javascript = ts.transpileModule(`import { QueryClient } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nconst queryClient = new QueryClient();\n${functions}\nexport { nextLines, sendComposer, promoteComposer, applyStreamEvent, readTranscriptHistory, pendingInputs, transcriptTurns, toolTitle, queryClient };`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
 const { nextLines, sendComposer, promoteComposer, applyStreamEvent, readTranscriptHistory, pendingInputs, transcriptTurns, toolTitle, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
@@ -223,6 +223,11 @@ test("composer renders the exact human input before blocking Prompt completes", 
 });
 
 test("cumulative thinking replaces every snapshot row across identical consumed steers", () => {
+  const duplicate = nextLines([], { role: "thinking", turnId: "run", text: " one \n\n one ", toolName: "ignored" });
+  expect(duplicate).toEqual([
+    { id: "thinking:one:1", text: "one", role: "thinking", turnId: "run", streamText: " one \n\n one " },
+    { id: "thinking:one:2", text: "one", role: "thinking", turnId: "run", streamText: " one \n\n one " },
+  ]);
   let lines = nextLines([], { role: "thinking", turnId: "run", text: "one\ntwo" });
   lines = nextLines(lines, { role: "thinking", turnId: "run", text: "one\ntwo\nthree" });
   expect(lines.map((line: Line) => line.text)).toEqual(["one", "two", "three"]);

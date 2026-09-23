@@ -8,7 +8,7 @@ import { queries, mutations, listSessions } from "./api";
 import type { ChatOrigin, PromptDelivery } from "./types";
 import { Bot, Calendar, Check, Download, FileIcon, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, navigate } from "./navigation";
-import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SyntheticEvent } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type SyntheticEvent } from "react";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
 import { CodeBlock, TranscriptText } from "./transcript-text";
@@ -58,19 +58,9 @@ function typedPrefix(query: string, prefix: string) {
 }
 
 function slackRooms(sessions: { id: string; title?: string }[]) {
-  const rooms: string[] = [];
-  const seen = new Set<string>();
-  for (const session of sessions) {
-    if (!slackSession(session.id)) {
-      continue;
-    }
-    const name = session.title ?? "";
-    if (name !== "" && !seen.has(name)) {
-      seen.add(name);
-      rooms.push(name);
-    }
-  }
-  return rooms;
+  return [...new Set(sessions.flatMap((session) =>
+    slackSession(session.id) && session.title ? [session.title] : []
+  ))];
 }
 
 function overlayChoices(
@@ -105,37 +95,6 @@ function FilterPill({ label, onClear }: { label: string; onClear: () => void }) 
     <button type="button" className="flex h-5 max-w-[8rem] shrink-0 items-center rounded-full bg-sidebar-row-active px-2 text-xs" onClick={onClear}>
       <span className="truncate">{label}</span>
     </button>
-  );
-}
-
-function PrefixOverlay({
-  items,
-  pick,
-  onPick,
-}: {
-  items: { key: string; label: string; detail?: string }[];
-  pick: number;
-  onPick: (key: string) => void;
-}) {
-  if (items.length === 0) {
-    return null;
-  }
-  return (
-    <ul className="absolute inset-x-0 top-full z-10 mt-1 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-md">
-      {items.map((item, index) => (
-        <li key={item.key}>
-          <button
-            type="button"
-            className={cn("flex w-full flex-col items-start px-3 py-2 text-left text-sm", index === pick && "bg-accent")}
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => onPick(item.key)}
-          >
-            <span className="font-medium">{item.label}</span>
-            {item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}
-          </button>
-        </li>
-      ))}
-    </ul>
   );
 }
 
@@ -731,7 +690,7 @@ function paletteRows(
   origins: string[],
 ): { key: string; label: string; detail: string; keep?: boolean; run: () => void }[] {
   if (mode === "sessions") {
-    return sidebar.rows.filter((session, index) => matchesSession(session, needle, "", "") || origins[index]?.includes(needle)).toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((session) => ({
+    return sidebar.rows.filter((session, index) => matchesSession(session, needle, "", "") || origins[index]?.includes(needle)).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((session) => ({
       key: session.id,
       label: session.name || rowPreview(session, sidebar.loadingIds.has(session.id)).split("\n", 1)[0] || sessionLabel(session.id),
       detail: [session.settled ? "Settled" : "", session.agent, relativeTime(session.updatedAt ?? "")].filter(Boolean).join(" · "),
@@ -844,7 +803,16 @@ function CommandPalette({ newChat, sidebarOpen, onToggleSidebar }: { newChat: ()
         />
         {runCron.error ? <p role="alert" className="px-3 text-sm text-destructive">{runCron.error.message}</p> : null}
         {origins.some((origin) => origin.isError) ? <p role="alert" className="px-3 text-sm text-destructive">Could not search all chat origins.</p> : null}
-        <PaletteItems items={items} selected={selected} active={active} empty={empty} onChoose={choose} />
+        <ul className="max-h-[min(24rem,50vh)] overflow-y-auto p-1">
+          {items.length === 0 ? <li className="px-3 py-2 text-sm text-muted-foreground">{empty}</li> : items.map((item, index) => (
+            <li key={item.key}>
+              <button ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start rounded-md px-3 py-2 text-left text-sm", index === selected && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}>
+                <span className="font-medium">{item.label}</span>
+                {item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}
+              </button>
+            </li>
+          ))}
+        </ul>
       </DialogContent>
     </Dialog>
   );
@@ -870,30 +838,6 @@ function paletteMove(event: { key: string; preventDefault: () => void }, selecte
     enter();
   }
   return selected;
-}
-
-function PaletteItems({ items, selected, active, empty, onChoose }: {
-  items: { key: string; label: string; detail: string; keep?: boolean; run: () => void }[];
-  selected: number;
-  active: RefObject<HTMLButtonElement | null>;
-  empty: string;
-  onChoose: (item: { key: string; label: string; detail: string; keep?: boolean; run: () => void }) => void;
-}) {
-  if (items.length === 0) {
-    return <ul className="max-h-[min(24rem,50vh)] overflow-y-auto p-1"><li className="px-3 py-2 text-sm text-muted-foreground">{empty}</li></ul>;
-  }
-  return (
-    <ul className="max-h-[min(24rem,50vh)] overflow-y-auto p-1">
-      {items.map((item, index) => (
-        <li key={item.key}>
-          <button ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start rounded-md px-3 py-2 text-left text-sm", index === selected && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => onChoose(item)}>
-            <span className="font-medium">{item.label}</span>
-            {item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}
-          </button>
-        </li>
-      ))}
-    </ul>
-  );
 }
 
 function relativeTime(iso: string) {
@@ -1009,26 +953,6 @@ function SessionDetails({ id, compact = false }: { id: string; compact?: boolean
   </>;
 }
 
-function SessionInbox({
-  sessions,
-  currentId,
-  loadingIds,
-  onSettle,
-}: {
-  sessions: Session[];
-  currentId: string;
-  loadingIds: ReadonlySet<string>;
-  onSettle: (id: string, settled: boolean) => void;
-}) {
-  return (
-    <ul className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
-      {sessions.map((session) => (
-        <SessionRow key={session.id} session={session} current={currentId === session.id} loading={loadingIds.has(session.id)} onSettle={(next) => onSettle(session.id, next)} />
-      ))}
-    </ul>
-  );
-}
-
 function matchesSession(session: Session, needle: string, agentFilter: string, roomFilter: string) {
   if (agentFilter !== "" && (session.agent ?? "") !== agentFilter) return false;
   if (roomFilter !== "" && (slackSession(session.id) ? (session.title ?? "") : "") !== roomFilter) return false;
@@ -1069,7 +993,16 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
   };
   return (
         <div className="relative min-w-0 flex-1">
-          <PrefixOverlay items={choices} pick={pick} onPick={applyOverlay} />
+          {choices.length > 0 ? <ul className="absolute inset-x-0 top-full z-10 mt-1 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-md">
+            {choices.map((item, index) => (
+              <li key={item.key}>
+                <button type="button" className={cn("flex w-full flex-col items-start px-3 py-2 text-left text-sm", index === pick && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => applyOverlay(item.key)}>
+                  <span className="font-medium">{item.label}</span>
+                  {item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}
+                </button>
+              </li>
+            ))}
+          </ul> : null}
           <div className="flex h-8 min-w-0 items-center gap-1 rounded-md border border-sidebar-border bg-background pr-2 pl-2">
             <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             {agentFilter ? <FilterPill label={`agent:${agentFilter}`} onClear={() => setAgentFilter("")} /> : null}
@@ -1134,7 +1067,7 @@ function SessionList({ settledOnly = false }: { settledOnly?: boolean }) {
   const pinnedOnly = /(?:^|\s)is:pinned(?=\s|$)/i.test(query);
   const text = query.replace(/(?:^|\s)is:(?:settled|pinned)(?=\s|$)/gi, " ").trim();
   const needle = typedPrefix(text, "agent:") === null && typedPrefix(text, "room:") === null ? text.toLowerCase() : "";
-  const filtered = rows.filter((session) => (settledOnly ? session.settled : includeSettled || pinnedOnly || !session.settled) && (!pinnedOnly || session.pinned) && matchesSession(session, needle, agentFilter, roomFilter)).toSorted((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
+  const filtered = rows.filter((session) => (settledOnly ? session.settled : includeSettled || pinnedOnly || !session.settled) && (!pinnedOnly || session.pinned) && matchesSession(session, needle, agentFilter, roomFilter)).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
   const searching = needle !== "" || agentFilter !== "" || roomFilter !== "" || includeSettled || pinnedOnly;
   return (
     <div className={cn("flex h-full min-h-0 flex-col", settledOnly && "mx-auto w-full max-w-3xl gap-6 p-4")}>
@@ -1144,7 +1077,11 @@ function SessionList({ settledOnly = false }: { settledOnly?: boolean }) {
       </div>
       <SidebarFreshness sidebar={sidebar} emptySearch={filtered.length === 0 && (settledOnly || searching)} emptyLabel={searching ? "No matches" : "No settled chats"} />
       {settle.error ? <p role="alert" className="text-sm text-destructive">{settle.error.message}</p> : null}
-      <SessionInbox sessions={filtered} currentId={route.id} loadingIds={sidebar.loadingIds} onSettle={(id, next) => settle.mutate({ id, settled: next })} />
+      <ul className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
+        {filtered.map((session) => (
+          <SessionRow key={session.id} session={session} current={route.id === session.id} loading={sidebar.loadingIds.has(session.id)} onSettle={(next) => settle.mutate({ id: session.id, settled: next })} />
+        ))}
+      </ul>
     </div>
   );
 }
@@ -1177,26 +1114,6 @@ function SessionTabs({ returnTo, children }: { returnTo: string; children: React
 
 type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; turnId?: string; streamText?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] };
 
-function thinkingRows(text: string, seen: Map<string, number>) {
-  const rows: Line[] = [];
-  for (const row of text.split("\n")) {
-    const line = row.trim();
-    if (line === "") {
-      continue;
-    }
-    rows.push({ id: lineId("thinking", line, seen), text: line, role: "thinking" });
-  }
-  return rows;
-}
-
-function appendThinking(current: Line[], text: string) {
-  const seen = new Map<string, number>();
-  for (const line of current) {
-    seen.set(`${line.role}:${line.text}`, (seen.get(`${line.role}:${line.text}`) ?? 0) + 1);
-  }
-  return [...current, ...thinkingRows(text, seen)];
-}
-
 function lineId(role: Line["role"], text: string, seen: Map<string, number>) {
   const base = `${role}:${text}`;
   const n = (seen.get(base) ?? 0) + 1;
@@ -1209,7 +1126,8 @@ function appendLine(current: Line[], role: Line["role"], text: string, tool: Pic
   for (const line of current) {
     seen.set(`${line.role}:${line.text}`, (seen.get(`${line.role}:${line.text}`) ?? 0) + 1);
   }
-  return [...current, { id: lineId(role, text, seen), text, role, ...tool }];
+  const rows = role === "thinking" ? text.split("\n").map((row) => row.trim()).filter(Boolean) : [text];
+  return [...current, ...rows.map((row) => ({ id: lineId(role, row, seen), text: row, role, ...(role === "thinking" ? {} : tool) }))];
 }
 
 function transcriptTurns(lines: Line[]) {
@@ -1300,18 +1218,6 @@ function MessageAttachment({ file, conversationId }: { file: NonNullable<Line["a
 }
 
 function TranscriptLine({ line, conversationId }: { line: Line; conversationId: string }) {
-  if (line.role === "user") {
-    return (
-      <Message align="end" className="mb-4">
-        <MessageContent>
-          <Bubble variant="secondary" align="end">
-            <BubbleContent><TranscriptText text={line.text} /></BubbleContent>
-            <MessageAttachments attachments={line.attachments} conversationId={conversationId} />
-          </Bubble>
-        </MessageContent>
-      </Message>
-    );
-  }
   if (line.role === "thinking") {
     return (
       <div className="flex items-center gap-1.5 px-1 py-0.5 text-[12px] leading-5 text-muted-foreground">
@@ -1357,9 +1263,9 @@ function TranscriptLine({ line, conversationId }: { line: Line; conversationId: 
     );
   }
   return (
-    <Message className="mb-4">
+    <Message align={line.role === "user" ? "end" : undefined} className="mb-4">
       <MessageContent>
-        <Bubble variant="ghost">
+        <Bubble variant={line.role === "user" ? "secondary" : "ghost"} align={line.role === "user" ? "end" : undefined}>
           <BubbleContent><TranscriptText text={line.text} /></BubbleContent>
           <MessageAttachments attachments={line.attachments} conversationId={conversationId} />
         </Bubble>
@@ -1462,7 +1368,7 @@ function nextLines(current: Line[], payload: TranscriptEvent): Line[] {
   const retained = index < 0 ? current : current.filter((line, i) => i <= boundary || !matches(line));
   const attachments = [...new Map([...(current[index]?.attachments ?? []), ...(payload.attachments ?? [])].map((file) => [file.id, file])).values()];
   if (text.trim() === "" && attachments.length === 0) return retained;
-  const added = role === "thinking" ? appendThinking(retained, text) : appendLine(retained, role, text, { toolCallId: payload.toolCallId, toolName: payload.toolName, attachments });
+  const added = appendLine(retained, role, text, { toolCallId: payload.toolCallId, toolName: payload.toolName, attachments });
   const updated = added.slice(retained.length).map((line) => ({ ...line, turnId: payload.turnId, streamText: payload.text }));
   const position = index < 0 ? retained.length : index;
   return [...retained.slice(0, position), ...updated, ...retained.slice(position)];
@@ -2131,9 +2037,7 @@ function cronWhen(value: string) {
 
 function cronAxisTime(ms: number) {
   const d = new Date(ms);
-  const h = d.getHours();
-  const m = d.getMinutes();
-  return `${h < 10 ? `0${h}` : h}:${m < 10 ? `0${m}` : m}`;
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
 function CronMarker({ label, tooltip, pct, ran, onClick }: { label: string; tooltip: string; pct: number; ran: boolean; onClick?: () => void }) {
