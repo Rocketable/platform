@@ -820,6 +820,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await chat.getByText("identical follow-up", { exact: true }).nth(2).waitFor();
     const ordered = await chat.locator('[data-slot="bubble-content"]').allTextContents();
     expect(ordered.slice(-5)).toEqual(["Before steering", "identical follow-up", "identical follow-up", "After steering", "identical follow-up"]);
+    expect(await chat.locator('[data-slot="message"][data-align="end"] [data-slot="bubble"][data-align="end"][data-variant="secondary"]').filter({ hasText: "identical follow-up" }).count()).toBe(3);
+    expect(await chat.locator('[data-slot="message"][data-align="start"] [data-slot="bubble"][data-align="start"][data-variant="ghost"]').filter({ hasText: "After steering" }).count()).toBe(1);
     ctrl.queue = [];
     ctrl.holdInterventions = false;
     const stopOriginal = page.waitForRequest("**/api/Prompt");
