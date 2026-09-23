@@ -573,12 +573,12 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 	}
 
 	for _, id := range []string{"a", "ä"} {
-		updated, err := service.UpdateConversationDetails(ctx, id, new(true), new("Release notes"))
+		updated, err := service.UpdateConversationDetails(ctx, id, new(true), new("Release notes"), new(false))
 		require.NoError(t, err)
 		require.True(t, updated)
 	}
 
-	updated, err := service.UpdateConversationDetails(ctx, "a", nil, new("Renamed"))
+	updated, err := service.UpdateConversationDetails(ctx, "a", nil, new("Renamed"), nil)
 	require.NoError(t, err)
 	require.True(t, updated)
 	require.NoError(t, service.UpsertThread("a", ThreadState{Agent: "main"}))
@@ -590,6 +590,7 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 
 		ids = append(ids, row.Conversation.ID)
 		require.Equal(t, row.Conversation.ID != "Z", row.Pinned)
+		require.Equal(t, row.Conversation.ID == "Z", row.Unread)
 		require.Equal(t, row.Conversation.ID == "Z", row.Conversation.Settled)
 		require.Equal(t, stamp, row.Summary.LastUpdated)
 
@@ -614,9 +615,9 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 
 	_, err = service.AppendEntryID(ctx, "a", testSessionEntryAt(stamp, "new message"))
 	require.NoError(t, err)
-	_, err = service.UpdateConversationDetails(ctx, "ä", new(false), nil)
+	_, err = service.UpdateConversationDetails(ctx, "ä", new(false), nil, new(true))
 	require.NoError(t, err)
-	_, err = service.UpdateConversationDetails(ctx, "a", nil, new(""))
+	_, err = service.UpdateConversationDetails(ctx, "a", nil, new(""), nil)
 	require.NoError(t, err)
 
 	for row, err := range service.SidebarSessions(ctx, stamp) {
@@ -624,17 +625,19 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 
 		switch row.Conversation.ID {
 		case "a":
+			require.True(t, row.Unread)
 			require.True(t, row.Pinned)
 			require.False(t, row.Conversation.Settled)
 			require.Empty(t, row.Name)
 		case "ä":
+			require.True(t, row.Unread)
 			require.False(t, row.Pinned)
 			require.True(t, row.Conversation.Settled)
 			require.Equal(t, "Release notes", row.Name)
 		}
 	}
 
-	updated, err = service.UpdateConversationDetails(ctx, "missing", new(true), nil)
+	updated, err = service.UpdateConversationDetails(ctx, "missing", new(true), nil, nil)
 	require.NoError(t, err)
 	require.False(t, updated)
 }
@@ -675,7 +678,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	want := make([]SidebarSession, 0, 6)
 
 	for _, id := range []string{"Z", "a", "ä", "empty", "missing", "zero"} {
-		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main", Settled: id == "Z"}}
+		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main", Settled: id == "Z"}, Unread: id != "empty" && id != "missing"}
 		if id == "zero" || id == "empty" {
 			row.Summary = &protocol.SessionSummary{ConversationID: id}
 		} else if id != "empty" && id != "missing" {

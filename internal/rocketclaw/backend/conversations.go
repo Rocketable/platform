@@ -168,7 +168,7 @@ WHERE NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1 AND e
 			return err
 		}
 
-		if _, err := tx.ExecContext(ctx, `UPDATE managed_conversations SET settled = FALSE WHERE conversation_id = $1 AND settled = TRUE`, b.config.ConversationID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE managed_conversations SET settled = FALSE, web_unread = TRUE WHERE conversation_id = $1`, b.config.ConversationID); err != nil {
 			return fmt.Errorf("reopen synced conversation: %w", err)
 		}
 	}

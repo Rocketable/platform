@@ -483,8 +483,8 @@ reopened_at = CASE WHEN $1 THEN reopened_at ELSE CURRENT_TIMESTAMP END WHERE con
 
 // UpdateConversationDetails changes shared display metadata without touching history
 // or settlement. Nil fields are left unchanged; an empty name clears the name.
-func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversationID string, pinned *bool, name *string) (bool, error) {
-	rows, err := execRows(ctx, s.db, "update conversation details", "count conversation details update", `UPDATE managed_conversations SET pinned = COALESCE($2, pinned), name = COALESCE($3, name) WHERE conversation_id = $1`, conversationID, pinned, name)
+func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversationID string, pinned *bool, name *string, unread *bool) (bool, error) {
+	rows, err := execRows(ctx, s.db, "update conversation details", "count conversation details update", `UPDATE managed_conversations SET pinned = COALESCE($2, pinned), name = COALESCE($3, name), web_unread = COALESCE($4, web_unread) WHERE conversation_id = $1`, conversationID, pinned, name, unread)
 	return rows > 0, err
 }
 
@@ -1034,6 +1034,7 @@ type SidebarSession struct {
 	Running      bool
 	Pinned       bool
 	Name         string
+	Unread       bool
 }
 
 // SidebarSessions yields pinned records first, then recent-first, bytewise-ID order.
@@ -1046,7 +1047,7 @@ func (s *SessionService) SidebarSessions(ctx context.Context, autoSettleBefore t
 c.settled OR COALESCE(NOT c.pinned AND s.last_updated > '0001-01-01 00:00:00+00'::timestamptz
     AND GREATEST(s.last_updated, c.reopened_at) <= $1
     AND NOT EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = c.conversation_id), FALSE), s.preview, s.last_updated,
-EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = c.conversation_id), c.pinned, c.name
+EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = c.conversation_id), c.pinned, c.name, c.web_unread
 FROM managed_conversations c LEFT JOIN session_summaries s ON s.conversation_id = c.conversation_id
 WHERE c.conversation_id NOT LIKE 'cron:%' AND c.conversation_id NOT LIKE 'one-off-cron:%'
     AND NOT EXISTS (SELECT 1 FROM external_mcp_sessions p WHERE p.private_conversation_id = c.conversation_id)
@@ -1063,7 +1064,7 @@ ORDER BY c.pinned DESC, COALESCE(s.last_updated, '0001-01-01 00:00:00+00'::times
 				preview []byte
 				updated sql.NullTime
 			)
-			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &row.Conversation.Settled, &preview, &updated, &row.Running, &row.Pinned, &row.Name); err != nil {
+			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &row.Conversation.Settled, &preview, &updated, &row.Running, &row.Pinned, &row.Name, &row.Unread); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return
 			}
@@ -1477,7 +1478,7 @@ func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID s
 		return 0, err
 	}
 
-	if _, err := db.ExecContext(ctx, `UPDATE managed_conversations SET settled = FALSE WHERE conversation_id = $1 AND settled = TRUE`, conversationID); err != nil {
+	if _, err := db.ExecContext(ctx, `UPDATE managed_conversations SET settled = FALSE, web_unread = TRUE WHERE conversation_id = $1`, conversationID); err != nil {
 		return 0, fmt.Errorf("reopen conversation after message: %w", err)
 	}
 

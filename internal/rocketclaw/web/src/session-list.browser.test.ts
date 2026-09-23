@@ -338,7 +338,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() && url.pathname !== "/" ? file : Bun.file(path.join(dist, "index.html")));
     }
-    const input = await req.json() as { id: string; originOnly?: boolean; itemId: string; messageId: string; name?: string; agent?: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; stem: string; sourceConversationId?: string; conversationId?: string; settled: boolean; pinned?: boolean };
+    const input = await req.json() as { id: string; originOnly?: boolean; itemId: string; messageId: string; name?: string; agent?: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; stem: string; sourceConversationId?: string; conversationId?: string; settled: boolean; pinned?: boolean; unread?: boolean };
     try {
       switch (url.pathname) {
         case "/api/Protocol": return Response.json({ protoSha256: ctrl.protocol });
@@ -405,6 +405,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
           return Response.json({});
         case "/api/UpdateSession":
           if (ctrl.updateError) throw new RPCError("Could not save session", 13);
+          if (!ctrl.settledRows.some((session) => session.id === input.id)) return Response.json({});
           ctrl.settledRows = ctrl.settledRows.map((session) => session.id === input.id ? { ...session, ...input, name: input.name === undefined ? session.name : input.name.trim() } : session);
           ctrl.yieldBatches = complete(ctrl.settledRows);
           return Response.json({});
@@ -571,6 +572,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect(await page.getByRole("button", { name: "Hide sidebar", exact: true }).getAttribute("aria-expanded")).toBe("true");
     await page.keyboard.press("Control+p");
     const sessionPalette = page.getByRole("dialog", { name: "Go to session", exact: true });
+    expect(await sessionPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
     await sessionPalette.getByPlaceholder("Search sessions", { exact: true }).waitFor();
     await sessionPalette.getByRole("button").filter({ hasText: "saved preview" }).waitFor();
     expect(historyRequests).toEqual([]); // Ordinary sidebar and empty Cmd+P do not load histories.
@@ -606,6 +608,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await page.keyboard.press("Control+Shift+p");
     const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
+    expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
     await commandPalette.getByRole("button", { name: "New session", exact: true }).waitFor();
     await commandPalette.getByRole("button", { name: "Run cron", exact: true }).waitFor();
     await page.keyboard.press("Escape");
@@ -1646,7 +1649,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await transcriptPage.close();
     ctrl.history = [];
     for (const width of [1280, 390]) {
-      ctrl.settledRows = [row("recent", "Most recent message"), row("named", "Original preview"), { ...row("settled-pin", "Settled pin preview"), pinned: true, settled: true }];
+      ctrl.settledRows = [row("recent", "Most recent message"), { ...row("named", "Original preview"), unread: true }, { ...row("settled-pin", "Settled pin preview"), pinned: true, settled: true, unread: true }];
       ctrl.yieldBatches = complete(ctrl.settledRows);
       const detailsPage = await browser.newPage({ viewport: { width, height: 844 } });
       await detailsPage.goto(`${origin}/s/${Buffer.from("named").toString("base64url")}`);
@@ -1676,6 +1679,28 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       if (width === 390) await detailsPage.getByRole("button", { name: "Sessions", exact: true }).click();
       const sidebar = width === 390 ? detailsPage.getByRole("dialog", { name: "Sessions", exact: true }) : detailsPage.locator("#session-sidebar");
       const namedRow = sidebar.locator("li").filter({ hasText: "Original preview" });
+      await namedRow.locator("a").waitFor();
+      await namedRow.getByRole("img", { name: "Unread", exact: true }).waitFor({ state: "hidden" });
+      expect(ctrl.settledRows.find((session) => session.id === "named")?.unread).toBe(false);
+      expect(await namedRow.getByRole("img", { name: "Unread", exact: true }).count()).toBe(0);
+      await namedRow.hover();
+      await namedRow.getByRole("button", { name: "Mark unread", exact: true }).click();
+      await namedRow.getByRole("img", { name: "Unread", exact: true }).waitFor();
+      expect(new URL(detailsPage.url()).pathname).toBe(`/s/${Buffer.from("named").toString("base64url")}`);
+      if (width === 390) await detailsPage.keyboard.press("Escape");
+      for (const label of ["Mark read", "Mark unread"]) {
+        await detailsPage.keyboard.press("Meta+Shift+p");
+        const palette = detailsPage.getByRole("dialog", { name: "Run command", exact: true });
+        await palette.getByPlaceholder("Type a command", { exact: true }).waitFor();
+        expect(await palette.getByRole("button", { name: `${label === "Mark read" ? "Mark unread" : "Mark read"} Current chat`, exact: true }).count()).toBe(0);
+        expect(await detailsPage.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe(await detailsPage.evaluate(() => document.documentElement.classList.contains("dark") ? "dark" : "light"));
+        await palette.getByPlaceholder("Type a command", { exact: true }).fill(label);
+        await palette.getByRole("button", { name: `${label} Current chat`, exact: true }).click();
+        await palette.waitFor({ state: "hidden" });
+        expect(ctrl.settledRows.find((session) => session.id === "named")?.unread).toBe(label === "Mark unread");
+        expect(new URL(detailsPage.url()).pathname).toBe(`/s/${Buffer.from("named").toString("base64url")}`);
+      }
+      if (width === 390) await detailsPage.getByRole("button", { name: "Sessions", exact: true }).click();
       const rowBox = await namedRow.boundingBox();
       const linkBox = await namedRow.locator("a").boundingBox();
       expect(linkBox!.width).toBe(rowBox!.width);
@@ -1697,12 +1722,25 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       expect(await sidebar.locator('li a[href^="/s/"]').first().innerText()).toContain("Original preview");
       expect(new URL(detailsPage.url()).pathname).toBe(`/s/${Buffer.from("named").toString("base64url")}`);
       const search = sidebar.getByPlaceholder("Search or agent: or room:");
+      await search.fill("IS:UNREAD");
+      await sidebar.getByText("Settled pin preview", { exact: true }).waitFor();
+      expect(await sidebar.locator('li a[href^="/s/"]').count()).toBe(2);
+      await search.fill("is:unread is:pinned Original");
+      expect(await sidebar.locator('li a[href^="/s/"]').count()).toBe(1);
+      await search.fill("prefix-is:unread");
+      expect(await sidebar.locator('li a[href^="/s/"]').count()).toBe(0);
       await search.fill("IS:PINNED");
       await sidebar.getByText("Settled pin preview", { exact: true }).waitFor();
       expect(await sidebar.locator('li a[href^="/s/"]').count()).toBe(2);
       await search.fill("is:pinned is:settled Settled");
       expect(await sidebar.locator('li a[href^="/s/"]').count()).toBe(1);
       await search.fill("");
+      await namedRow.getByRole("img", { name: "Unread", exact: true }).waitFor();
+      await sidebar.getByText("Most recent message", { exact: true }).click();
+      if (width === 390) await detailsPage.getByRole("button", { name: "Sessions", exact: true }).click();
+      await namedRow.locator("a").click();
+      if (width === 390) await detailsPage.getByRole("button", { name: "Sessions", exact: true }).click();
+      await namedRow.getByRole("img", { name: "Unread", exact: true }).waitFor({ state: "hidden" });
       if (width === 390) {
         await detailsPage.keyboard.press("Escape");
         await detailsPage.close();
