@@ -384,6 +384,10 @@
     @apply bg-background text-foreground;
   }
   html {
+    color-scheme: light;
     @apply font-sans;
+  }
+  html.dark {
+    color-scheme: dark;
   }
 }

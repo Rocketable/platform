@@ -578,18 +578,18 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 14, n)
+	assert.Equal(t, 16, n)
 	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
 	second, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop()) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 14, n)
+	assert.Equal(t, 16, n)
 }
 
 func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
-	for _, prefix := range []int{5, 8} {
+	for _, prefix := range []int{5, 8, 15} {
 		for _, ledger := range []string{"pg_migrations", "gorp_migrations"} {
 			t.Run(fmt.Sprintf("%d/%s", prefix, ledger), func(t *testing.T) {
 				dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
@@ -605,6 +605,10 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 				applied, err := (migrate.MigrationSet{TableName: ledger}).ExecMaxContext(t.Context(), db, "postgres", source, migrate.Up, prefix)
 				require.NoError(t, err)
 				require.Equal(t, prefix, applied)
+
+				var indexExists bool
+				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT to_regclass('managed_conversations_web_unread') IS NOT NULL`).Scan(&indexExists))
+				require.False(t, indexExists)
 				_, err = db.ExecContext(t.Context(), `UPDATE `+ledger+` SET applied_at='2026-01-01Z';
 					ALTER TABLE managed_conversations ADD COLUMN settled_override boolean NOT NULL DEFAULT false;
 					ALTER TABLE managed_conversations ADD COLUMN bumped_at_unix_ns bigint NOT NULL DEFAULT 0;
@@ -624,12 +628,13 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 
 				var count int
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-				require.Equal(t, 14, count)
+				require.Equal(t, 16, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations WHERE applied_at='2026-01-01Z'`).Scan(&count))
 				require.Equal(t, prefix, count)
 
 				for _, query := range []string{
-					`SELECT count(*) FROM managed_conversations WHERE conversation_id='synthetic' AND agent='main' AND created_by='owner' AND NOT settled AND NOT pinned AND name='' AND settled_override AND bumped_at_unix_ns=123`,
+					`SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema() AND tablename='managed_conversations' AND indexname='managed_conversations_web_unread' AND indexdef LIKE '%(web_unread)'`,
+					`SELECT count(*) FROM managed_conversations WHERE conversation_id='synthetic' AND agent='main' AND created_by='owner' AND NOT settled AND NOT pinned AND NOT web_unread AND name='' AND settled_override AND bumped_at_unix_ns=123`,
 					`SELECT count(*) FROM session_entries WHERE conversation_id='synthetic' AND entry_json='{"text":"synthetic\u0000history"}' AND entry_timestamp='2026-09-09T12:00:00.123456Z'`,
 					`SELECT count(*) FROM thread_queue WHERE queue_item_id='q' AND message='queued' AND principal='owner' AND stash_at_unix_ns=456 AND position=7 AND content='{}'`,
 				} {
@@ -663,7 +668,7 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 14, n)
+	assert.Equal(t, 16, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 
