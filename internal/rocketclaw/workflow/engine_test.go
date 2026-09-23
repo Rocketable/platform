@@ -924,7 +924,9 @@ def main(args): return parallel([spin, spin])`), RunRequest{RunID: "steps"}, ine
 
 	t.Run("progress failure cancels siblings", func(t *testing.T) {
 		canceled := make(chan struct{})
+
 		var once sync.Once
+
 		sawRunning := false
 
 		_, err := Run(t.Context(), engineDefinition(t, `def main(args): return parallel([lambda: agent("a"), lambda: agent("b")])`), RunRequest{RunID: "progress-failure"}, func(ctx context.Context, _ AgentRequest, _ AgentThinkingFunc) (json.RawMessage, error) {
