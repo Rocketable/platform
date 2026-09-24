@@ -27,6 +27,16 @@ See [LICENSE](LICENSE) for the full license terms.
 
 `internal/rocketcode` is the core reasoning runtime. It builds model requests from workspace context, runs the tool loop, enforces permissions, handles supported image and PDF attachments, and records replayable session entries. Hosts embed it through `New` / `NewWithProviders` and drive turns with `Loop`.
 
+The agent-facing `bash` tool checks every parsed operation before any part runs: commands, declarations, assignments, redirections, expansions, compound commands and their children, and background execution. Grant operations separately or grant a whole script. Rules are applied in declaration order: the last matching component or whole-script rule wins for each operation, and every operation must end up allowed. `export FOO=bar` does not grant `declare -x FOO=bar`. A wildcard command rule such as `scripts/cmd *` does not grant a later `export` or a redirection.
+
+For example, `export FOO=bar; scripts/cmd arg` can use separate `"export FOO=bar": allow` and `"scripts/cmd arg": allow` rules, or one `"export FOO=*; scripts/cmd *": allow` rule under `bash`. Whole-script wildcards match values and arguments within the same parsed operation tree; they cannot swallow additional commands, redirections, or substitutions. This applies to both `allow` and `deny`. Component subjects use the shell printer's spelling (for example `>output` for a redirection); background and negation use `&` and `!`. Parse failures, unsupported syntax, CR/NUL bytes, and unresolved executable names such as `$COMMAND` deny the entire script even with `bash: allow`.
+
+Permissions authorize the written operations, including their runtime effects. Allowing an expansion, arithmetic expression, declaration, program, or interpreter is not a restriction on the values it can produce or the internal work it can perform. Nested commands present in the submitted syntax are still checked separately.
+
+The default shell runner requires `/bin/bash` and ignores `$SHELL`. It disables startup files and inherited shell functions/options so execution matches the permission parser. This runner also executes enabled prompt shell snippets.
+
+Permission matching preserves backslashes as literal characters; it does not treat them as `/`. This follows Unix path semantics and applies to both allow and deny rules.
+
 ### RocketClaw
 
 `internal/rocketclaw` is the long-running service runtime around RocketCode. It provides thread-local conversations in configured Slack channels, saved Starlark workflows, external MCP, cron-defined background prompts, one-shot and recurring scheduled messages, inbound and outbound attachments, supervisor restart, and PostgreSQL state selected by `database_url`.

@@ -36,6 +36,8 @@ func TestIsDeniedEnvPath(t *testing.T) {
 		{path: ".ENV", want: true},
 		{path: ".ENV.LOCAL", want: true},
 		{path: "nested/.env", want: true},
+		{path: `nested\.env`, want: true},
+		{path: `service.env.local\notes`, want: true},
 		{path: "service.env", want: true},
 		{path: ".env.example", want: false},
 		{path: ".ENV.EXAMPLE", want: false},

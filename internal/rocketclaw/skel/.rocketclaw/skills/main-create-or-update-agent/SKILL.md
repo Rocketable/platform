@@ -135,7 +135,7 @@ Account for these rocketcode runtime facts when designing agent instructions and
 - Symlink aliases are rejected for direct read, edit, and search targets. Directory grep pre-filters files before invoking `rg`; built-in `rg` calls use `--no-config` and `--no-follow`.
 - The shell tool statically denies common direct env-file and external-path attempts such as `cat .env`, `cat ../outside`, and `cd /tmp`, but this is only a preflight guardrail, not an OS-enforced shell sandbox for dynamically generated paths.
 - Prompt shell expansion with ``!`command` `` is opt-in per prompt source. Do not rely on it unless the runtime enables it.
-- Prompt shell expansion runs from the workspace root, captures stdout only, honors `$SHELL` only when it is `sh`, `bash`, or `zsh`, and otherwise falls back to `sh`.
+- Prompt shell expansion runs from the workspace root and captures stdout only. The default runner uses `/bin/bash`, ignores `$SHELL`, and disables startup files and inherited shell functions/options.
 
 ## Name and path handling
 

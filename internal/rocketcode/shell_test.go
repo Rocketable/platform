@@ -35,6 +35,23 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 		got := sss.Bash(context.Background(), bashParams{Command: "echo test", TimeoutMillisecond: 0, Workdir: "", Description: "Echo test"}).String()
 		require.Contains(t, got, "test")
 	})
+	t.Run("shell environment cannot reinterpret checked commands", func(t *testing.T) {
+		require.NoError(t, root.WriteFile("sh", []byte("#!/bin/sh\nprintf unexpected"), 0o755))
+		require.NoError(t, root.WriteFile("startup.sh", []byte("printf unexpected"), 0o644))
+
+		for _, env := range []struct{ name, value string }{
+			{"SHELL", filepath.Join(dir, "sh")},
+			{"BASH_ENV", filepath.Join(dir, "startup.sh")},
+			{"BASH_FUNC_printf%%", "() { builtin printf unexpected; }"},
+		} {
+			t.Run(env.name, func(t *testing.T) {
+				t.Setenv(env.name, env.value)
+				got := sss.Bash(t.Context(), bashParams{Command: "printf checked"})
+				require.True(t, got.Success, got.Output)
+				require.Equal(t, "checked", got.Output)
+			})
+		}
+	})
 	t.Run("captures stderr", func(t *testing.T) {
 		got := sss.Bash(context.Background(), bashParams{Command: "echo stdout_msg && echo stderr_msg >&2", TimeoutMillisecond: 0, Workdir: "", Description: "stderr"}).String()
 		require.Contains(t, got, "stdout_msg")

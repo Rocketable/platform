@@ -307,7 +307,7 @@ Permission buckets:
 | `webfetch` | URLs for nested `webfetch` inside `execute`. |
 | `websearch` | Coarse hosted web search toggle (still a top-level hosted tool), usually `websearch: allow`, `deny`, or `auto`. |
 | `edit` | Workspace-relative paths for nested `apply_patch` inside `execute`. |
-| `bash` | Parsed shell call expressions for nested `bash` inside `execute`. Multi-command scripts need every parsed call allowed. |
+| `bash` | Every parsed operation inside `execute`, including declarations, redirections, expansions, and nested commands. Allow components separately or match a whole script; whole-script wildcards vary values/arguments without swallowing additional operations. Last matching rule wins per component, for both allow and deny. No implicit equivalence between `export` and `declare -x`. Invalid/unsupported syntax and unresolved executable names deny the entire script. Grants authorize each operation's runtime effects. |
 | `skill` | Skill names visible to `find_skills` and loadable by `skill`. |
 | `task` | Subagent names visible and callable through `task` only. `maxRecursion` can still hide `task` when the delegation budget is exhausted; it does not gate the nested workflow tool. |
 | `workflow` | Workflow stems for `rocketclaw_dynamic_workflow`. |

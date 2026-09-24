@@ -107,37 +107,8 @@ func expandAgentPrompt(ctx context.Context, agent *Agent, enabled bool, env *pro
 	agent.Prompt = env.expandShellCommands(ctx, agent.Prompt)
 }
 
-// DefaultShellCommand picks sh, bash, or zsh from $SHELL (basename must be one
-// of those names) and falls back to /bin/sh. bash/zsh use -lc; sh uses -c.
+// DefaultShellCommand uses Bash to match the permission parser's grammar.
+// Privileged mode disables startup files and inherited functions and shell options.
 func DefaultShellCommand(command string) (path string, args []string) {
-	return shellCommand(command)
-}
-
-func shellCommand(command string) (path string, args []string) {
-	shell := os.Getenv("SHELL")
-
-	name := filepath.Base(shell)
-	if name != "sh" && name != "bash" && name != "zsh" {
-		shell = ""
-	}
-
-	if shell != "" {
-		path, _ = exec.LookPath(shell)
-	}
-
-	if path == "" {
-		name, shell = "sh", "sh"
-
-		path = "/bin/sh"
-		if resolved, err := exec.LookPath(shell); err == nil {
-			path = resolved
-		}
-	}
-
-	flag := "-c"
-	if name == "bash" || name == "zsh" {
-		flag = "-lc"
-	}
-
-	return path, []string{flag, command}
+	return "/bin/bash", []string{"--noprofile", "--norc", "-p", "-c", command}
 }
