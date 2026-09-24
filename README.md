@@ -56,7 +56,7 @@ go run github.com/Rocketable/platform/cmd/rocketclaw@main
 Web always starts at `0.0.0.0:3000`. To change its bind address, set
 `"web": {"listen_address": "127.0.0.1:3000"}` in `rocketclaw.json` or `femtoclaw.json`.
 No Web environment variables or socket setup are required. Browser access uses
-the configured `web_users` IP-to-username mapping.
+the configured `web_users` IP-to-username mapping, or Tailscale WhoIs when the IP has no mapping.
 
 The compiled SPA in `internal/rocketclaw/internal/web/dist/` is committed with its
 frontend source changes, so Go-only builds need no Bun installation. When building
@@ -123,7 +123,7 @@ Saved workflows run only as foreground managed turns. Each workflow launches fre
 RocketClaw is configured with `rocketclaw.json` in the working directory. Runtime state is local to the selected workspace:
 
 - `database_url` in `rocketclaw.json` or `femtoclaw.json`: PostgreSQL store for private MCP and managed Slack sessions, active-turn restart handoffs, managed Slack routing, External MCP bindings to both sessions, scheduled messages, cron execution state, restart notifications, and goal-loop state. One DSN is one store.
-- `web_users`: maps browser IP addresses to usernames, for example `"web_users": {"100.64.0.10": "alice"}`. Go resolves Web principals from this mapping; unmapped addresses are denied. Configuration changes require a restart, not an asset reload.
+- `web_users`: optionally maps browser IP addresses to usernames, for example `"web_users": {"100.64.0.10": "alice"}`. Explicit mappings take precedence; otherwise Go uses `tailscale whois --json` to identify the browser as its Tailscale login name. Successful lookups are cached per IP for five minutes, so identity changes can take that long to apply. Unidentified addresses and tagged devices without a manual mapping are denied. Tailscale lookup requires the CLI on the RocketClaw process's PATH and access to its local Tailscale service. Mapping changes require a restart, not an asset reload.
 - `.rocketclaw/overlays/`: configured git overlay clones for runtime assets.
 - `.rocketclaw/.rocketcode/tmp/<session-id>/`: per-conversation shell TMPDIR (not shared across sessions).
 - `.rocketclaw/.rocketcode/spill/<turn-id>/`: oversized execute output for the current turn (deleted when the turn ends).

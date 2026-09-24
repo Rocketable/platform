@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -44,6 +45,14 @@ type Server struct {
 	cfg       *config.Config
 	channels  ChannelAgentChoices
 	cronjobs  CronJobs
+
+	tailscaleMu    sync.Mutex
+	tailscaleUsers map[netip.Addr]tailscaleUser
+}
+
+type tailscaleUser struct {
+	username string
+	expires  time.Time
 }
 
 // ChannelAgentChoices supplies live policy for actions and stored facts for display.
@@ -617,15 +626,11 @@ func (s *Server) listConfig(ctx context.Context) (*ListConfigResponse, error) {
 		InstrumentationEnabled: s.cfg.Instrumentation.Enabled, McpExternal: s.cfg.MCPExternal.Enabled,
 		McpServers: slices.Sorted(maps.Keys(s.cfg.MCPServers)), WebAutoSettleAfter: settleAfter.String(),
 	}
-	// WhoIs is display-only; the configured IP mapping remains authoritative.
-	output, errWhoIs := exec.CommandContext(ctx, "tailscale", "whois", "--json", metadata.ValueFromIncomingContext(ctx, "rocketclaw-principal")[0]).Output()
+	ip := netip.MustParseAddr(metadata.ValueFromIncomingContext(ctx, "rocketclaw-principal")[0])
+
+	username, errWhoIs := s.tailscaleUsername(ctx, ip)
 	if errWhoIs == nil {
-		var identity struct {
-			UserProfile struct{ LoginName string }
-		}
-		if errDecode := json.Unmarshal(output, &identity); errDecode == nil {
-			view.TailscaleUser = identity.UserProfile.LoginName
-		}
+		view.TailscaleUser = username
 	}
 
 	for _, name := range slices.Sorted(maps.Keys(s.cfg.Models)) {
@@ -1084,12 +1089,50 @@ func (s *Server) principal(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "invalid browser IP"))
 	}
 
-	username := s.usernames[ip]
-	if username == "" {
-		return "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "browser IP is not configured"))
+	if username := s.usernames[ip]; username != "" {
+		return username, nil
 	}
 
-	return username, nil
+	return s.tailscaleUsername(ctx, ip)
+}
+
+func (s *Server) tailscaleUsername(ctx context.Context, ip netip.Addr) (string, error) {
+	ip = ip.Unmap()
+	// Cache misses serialize across IPs; use per-IP coordination if lookup contention grows.
+	s.tailscaleMu.Lock()
+	defer s.tailscaleMu.Unlock()
+
+	now := time.Now()
+	if user := s.tailscaleUsers[ip]; now.Before(user.expires) {
+		return user.username, nil
+	}
+
+	maps.DeleteFunc(s.tailscaleUsers, func(_ netip.Addr, user tailscaleUser) bool { return !now.Before(user.expires) })
+
+	output, err := exec.CommandContext(ctx, "tailscale", "whois", "--json", ip.String()).Output()
+	if err != nil {
+		return "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "Tailscale could not identify browser IP"))
+	}
+
+	var identity struct {
+		Node        struct{ Tags []string }
+		UserProfile struct{ LoginName string }
+	}
+	if err := json.Unmarshal(output, &identity); err != nil {
+		return "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "invalid Tailscale identity response"))
+	}
+
+	if len(identity.Node.Tags) > 0 || identity.UserProfile.LoginName == "" {
+		return "", fmt.Errorf("web principal: %w", status.Error(codes.Unauthenticated, "browser IP has no Tailscale user"))
+	}
+
+	if s.tailscaleUsers == nil {
+		s.tailscaleUsers = make(map[netip.Addr]tailscaleUser)
+	}
+
+	s.tailscaleUsers[ip] = tailscaleUser{username: identity.UserProfile.LoginName, expires: time.Now().Add(5 * time.Minute)}
+
+	return identity.UserProfile.LoginName, nil
 }
 
 func (s *Server) entries(ctx context.Context, id string) ([]backend.ObservedSessionEntry, error) {
