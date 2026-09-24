@@ -38,6 +38,7 @@ type toolFactory struct {
 	agents                     Agents
 	skills                     Skills
 	baseTools                  map[string]looperTool
+	childContext               []SessionEntry
 	shellTemp                  shellTempConfig
 	spillRel                   string
 	autoApprovePermissions     bool

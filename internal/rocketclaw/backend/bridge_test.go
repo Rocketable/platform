@@ -3740,19 +3740,21 @@ func TestProcessResponseSuppressesProviderOnlySubagentDiagnostics(t *testing.T) 
 
 func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-5.5\npermission:\n  bash:\n    \"*\": allow\n---\nPrompt\n")
+	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-5.5\npermission:\n  read: allow\n  bash: auto\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var (
 		requestBody struct {
+			Model string `json:"model"`
 			Input []struct {
 				Role    string `json:"role"`
 				Content string `json:"content"`
 				Output  any    `json:"output"`
 			} `json:"input"`
 		}
-		errRequest error
-		requests   int
+		errRequest     error
+		requests       int
+		reviewMetadata [][]string
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -3767,6 +3769,23 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
 			errRequest = err
 			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		if requestBody.Model == "gpt-5.4-mini" {
+			var messages []string
+
+			for _, item := range requestBody.Input {
+				if item.Role == "developer" {
+					messages = append(messages, item.Content)
+				}
+			}
+
+			reviewMetadata = append(reviewMetadata, messages)
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"review","object":"response","status":"completed","model":"gpt-5.4-mini","output":[{"id":"review-message","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"{\"risk_level\":\"low\",\"user_authorization\":\"high\",\"outcome\":\"allow\",\"rationale\":\"Read metadata.\"}","annotations":[]}]}]}`))
 
 			return
 		}
@@ -3786,7 +3805,7 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	bridge := new(Bridge)
-	bridge.runtime = &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
+	bridge.runtime = &config.Config{Workspace: workspace, AutoApproverModel: "gpt-5.4-mini", OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}
 	service, err := NewSessionService(workspace)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
@@ -3824,6 +3843,8 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 
 	assert.Contains(t, developerMessages, "This external MCP thread has metadata:\nROCKETCLAW_CONVERSATION_ID=\"external_mcp:planner:private\"\nROCKETCLAW_METADATA_A=\"first\"\nROCKETCLAW_METADATA_Z=\"last\"")
 	assert.Contains(t, developerMessages, "This external MCP turn has additional metadata:\nROCKETCLAW_METADATA_LATER_KEY=\"fresh\"")
+	require.Len(t, reviewMetadata, 1)
+	assert.Equal(t, developerMessages, reviewMetadata[0])
 
 	require.NotEmpty(t, requestBody.Input)
 	assert.Equal(t, "first|fresh|last", requestBody.Input[len(requestBody.Input)-1].Output)
@@ -3880,6 +3901,8 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, requestBody.Input)
 	assert.Equal(t, "first||last", requestBody.Input[len(requestBody.Input)-1].Output)
+	require.Len(t, reviewMetadata, 2)
+	assert.Equal(t, []string{developerMessages[0]}, reviewMetadata[1])
 }
 
 func TestRunTurnPreservesRecoveredExternalMCPReplayWithTransientMetadata(t *testing.T) {

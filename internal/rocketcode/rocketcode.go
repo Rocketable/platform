@@ -48,6 +48,8 @@ type Config struct {
 	CheckpointSink         CheckpointSink
 	CustomTools            []Tool
 	ShellEnv               map[string]string
+	// ChildContext supplies host messages to guardrails and permission reviewers.
+	ChildContext []SessionEntry
 	// ShellCommand builds the executable used for bash tool (and prompt !`…`)
 	// commands. Required; pass DefaultShellCommand to match permission validation.
 	// Custom implementations must preserve the validated Bash syntax and semantics.
@@ -381,6 +383,7 @@ func NewWithModelResolver(
 		agents:                     agents,
 		skills:                     skills,
 		baseTools:                  baseTools,
+		childContext:               config.ChildContext,
 		shellTemp:                  shellTemp,
 		spillRel:                   spillRel,
 		autoApprovePermissions:     config.AutoApprovePermissions,

@@ -342,6 +342,14 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	return strings.Join([]string{"<task_result>", last, "</task_result>"}, "\n"), nil
 }
 
+func (f *toolFactory) childSession(yield func(SessionEntry, error) bool) {
+	for i := range f.childContext {
+		if !yield(f.childContext[i], nil) {
+			return
+		}
+	}
+}
+
 func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage ChildRunStage, message, guardedAgent string, metadata toolCallMetadata, parentOutput chan<- ChatResponse) guardrailDecision {
 	agent := *guardrail
 	agent.Permission = f.shellTemp.effectivePermissions(agent.Permission)
@@ -411,7 +419,7 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 		return nil
 	})
 
-	if err := child.Loop(ctx, input, func(func(SessionEntry, error) bool) {}, func(SessionEntry) error { return nil }, make(chan os.Signal, 1)); err != nil {
+	if err := child.Loop(ctx, input, f.childSession, func(SessionEntry) error { return nil }, make(chan os.Signal, 1)); err != nil {
 		_ = group.Wait()
 		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail failed: " + err.Error()}
 	}
