@@ -19,6 +19,7 @@ message Session {
   string name = 10;
   reserved 11;
   string snoozed_until = 12;
+  string forked_from = 13;
 }
 
 message HistoryRequest {
@@ -50,6 +51,25 @@ message CreateSessionRequest {
 message CreateSessionResponse {
   string id = 1;
 }
+
+message ForkSessionRequest {
+  string id = 1;
+  string before = 2;
+}
+
+message ForkSessionResponse {
+  string id = 1;
+  TranscriptEvent prompt = 2;
+}
+
+message SearchMessagesRequest { string query = 1; }
+message MessageMatch {
+  string conversation_id = 1;
+  TranscriptEvent message = 2;
+}
+message SearchMessagesResponse { repeated MessageMatch matches = 1; }
+message HandoffRequest { string id = 1; }
+message HandoffResponse { string document = 1; }
 
 message JoinRequest {
   string id = 1;
@@ -286,6 +306,9 @@ service Web {
   rpc RunCronJob(RunCronJobRequest) returns (RunCronJobResponse);
   rpc AnswerQuestion(AnswerQuestionRequest) returns (AnswerQuestionResponse);
   rpc History(HistoryRequest) returns (HistoryResponse);
+  rpc ForkSession(ForkSessionRequest) returns (ForkSessionResponse);
+  rpc SearchMessages(SearchMessagesRequest) returns (SearchMessagesResponse);
+  rpc Handoff(HandoffRequest) returns (HandoffResponse);
   rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
   rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);
   rpc ListConfig(ListConfigRequest) returns (ListConfigResponse);

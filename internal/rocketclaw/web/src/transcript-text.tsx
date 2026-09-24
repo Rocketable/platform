@@ -3,10 +3,11 @@ import { Check, Copy, Maximize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogTrigger, DialogContent, DialogTitle } from "@/components/ui/dialog";
 
-export function CodeBlock({ text, label = "Code" }: { text: string; label?: string }) {
+export function CodeBlock({ text, label = "Code", compact = false }: { text: string; label?: string; compact?: boolean }) {
   const [copied, setCopied] = useState<string>();
   const [error, setError] = useState(false);
-  const copy = <Button type="button" variant="ghost" size="icon-sm" aria-label={`Copy ${label}`} title={`Copy ${label}`} onClick={async (event) => {
+  const actionProps = compact ? { variant: "outline", size: "default", className: "min-h-11" } as const : { variant: "ghost", size: "icon-sm" } as const;
+  const copy = <Button type="button" {...actionProps} aria-label={`Copy ${label}`} title={`Copy ${label}`} onClick={async (event) => {
         const container = event.currentTarget.closest('[role="dialog"]') ?? document.body;
         setError(false);
         try {
@@ -32,16 +33,16 @@ export function CodeBlock({ text, label = "Code" }: { text: string; label?: stri
         } catch {
           setError(true);
         }
-      }}>{copied === text && !error ? <Check /> : <Copy />}</Button>;
+      }}>{copied === text && !error ? <Check data-icon="inline-start" /> : <Copy data-icon="inline-start" />}<span hidden={!compact}>Copy</span></Button>;
   const status = <span role="status" className={error ? "text-xs text-destructive" : "sr-only"}>{error ? "Could not copy. Select and copy the text." : copied === text ? "Copied" : ""}</span>;
   return <Dialog>
-    <div className="my-2 min-w-0 max-w-full overflow-hidden rounded-md border bg-muted/30">
-    <div className="flex items-center justify-between gap-2 px-3 py-1">
-      <span className="mr-auto truncate text-xs text-muted-foreground">{label}</span>
-      <DialogTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label={`Expand ${label}`} title={`Expand ${label}`} />}><Maximize2 /></DialogTrigger>
+    <div className={compact ? "flex min-w-0 items-center gap-2" : "my-2 min-w-0 max-w-full overflow-hidden rounded-md border bg-muted/30"}>
+    <div className={compact ? "flex flex-wrap items-center gap-2" : "flex items-center justify-between gap-2 px-3 py-1"}>
+      <span hidden={compact} className="mr-auto truncate text-xs text-muted-foreground">{label}</span>
+      <DialogTrigger render={<Button type="button" {...actionProps} aria-label={`Expand ${label}`} title={`Expand ${label}`} />}><Maximize2 data-icon="inline-start" /><span hidden={!compact}>Preview</span></DialogTrigger>
       {copy}{status}
     </div>
-    <pre tabIndex={0} aria-label={label} className="max-h-64 overflow-auto border-t p-3 font-mono text-xs leading-5 whitespace-pre"><code>{text}</code></pre>
+    <pre hidden={compact} tabIndex={0} aria-label={label} className="max-h-64 overflow-auto border-t p-3 font-mono text-xs leading-5 whitespace-pre"><code>{text}</code></pre>
     </div>
     <DialogContent className="flex h-[calc(100dvh-2rem)] min-w-0 flex-col sm:max-w-[calc(100%-2rem)]" aria-describedby={undefined}>
       <div className="flex min-w-0 items-center gap-2 pr-10"><div className="mr-auto min-w-0 break-words"><DialogTitle>{label}</DialogTitle></div>{copy}{status}</div>

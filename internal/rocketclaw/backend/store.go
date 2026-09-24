@@ -1037,6 +1037,7 @@ type SidebarSession struct {
 	Pinned       bool
 	Name         string
 	SnoozedUntil *time.Time
+	ForkedFrom   string
 }
 
 // SidebarSessions yields pinned records first, then recent-first, bytewise-ID order.
@@ -1050,7 +1051,7 @@ c.settled OR COALESCE(c.snoozed_until > CURRENT_TIMESTAMP, FALSE) OR COALESCE(NO
     AND GREATEST(s.last_updated, c.reopened_at, c.snoozed_until) <= $1
     AND NOT EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = c.conversation_id), FALSE), s.preview, s.last_updated,
 EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = c.conversation_id), c.pinned, c.name,
-CASE WHEN c.snoozed_until > CURRENT_TIMESTAMP THEN c.snoozed_until END
+CASE WHEN c.snoozed_until > CURRENT_TIMESTAMP THEN c.snoozed_until END, c.forked_from
 FROM managed_conversations c LEFT JOIN session_summaries s ON s.conversation_id = c.conversation_id
 WHERE c.conversation_id NOT LIKE 'cron:%' AND c.conversation_id NOT LIKE 'one-off-cron:%'
     AND NOT EXISTS (SELECT 1 FROM external_mcp_sessions p WHERE p.private_conversation_id = c.conversation_id)
@@ -1067,7 +1068,7 @@ ORDER BY c.pinned DESC, COALESCE(s.last_updated, '0001-01-01 00:00:00+00'::times
 				preview []byte
 				updated sql.NullTime
 			)
-			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &row.Conversation.Settled, &preview, &updated, &row.Running, &row.Pinned, &row.Name, &row.SnoozedUntil); err != nil {
+			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &row.Conversation.Settled, &preview, &updated, &row.Running, &row.Pinned, &row.Name, &row.SnoozedUntil, &row.ForkedFrom); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return
 			}
