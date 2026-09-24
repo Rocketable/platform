@@ -25,7 +25,7 @@ func TestStandaloneConfigFromEnvDefaults(t *testing.T) {
 	config, err := StandaloneConfigFromEnv()
 
 	require.NoError(t, err)
-	require.Equal(t, "gpt-5.5", config.Model)
+	require.Equal(t, "gpt-6-luna", config.Model)
 	require.Empty(t, config.AutoApproverModel)
 	require.Equal(t, "high", string(config.ReasoningEffort))
 	require.False(t, config.Diagnostics)

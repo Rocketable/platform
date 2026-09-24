@@ -258,7 +258,7 @@ func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
 
 func TestParseModelRef(t *testing.T) {
 	for _, tc := range []struct{ name, model, apiModel, display string }{
-		{name: "empty", model: "", apiModel: "gpt-5.5", display: "gpt-5.5"},
+		{name: "empty", model: "", apiModel: "gpt-6-luna", display: "gpt-6-luna"},
 		{name: "openai", model: "gpt-5.5", apiModel: "gpt-5.5", display: "gpt-5.5"},
 		{name: "legacy openai prefix", model: "openai/gpt-5.5", apiModel: "gpt-5.5", display: "gpt-5.5"},
 	} {

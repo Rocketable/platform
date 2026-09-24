@@ -9,7 +9,7 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-const defaultOpenAIModel shared.ResponsesModel = "gpt-5.5"
+const defaultOpenAIModel shared.ResponsesModel = "gpt-6-luna"
 
 type modelRef struct{ apiModel string }
 
