@@ -183,7 +183,7 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 			metadataByChannel[channel] = channelMetadata
 		}
 
-		session := &Session{Id: conversation.ID, Title: channelMetadata.Title, Agent: conversation.Agent, AllowedAgents: channelMetadata.AllowedAgents, Settled: conversation.Settled, Running: row.Running, Pinned: row.Pinned, Name: row.Name}
+		session := &Session{Id: conversation.ID, Title: channelMetadata.Title, Agent: conversation.Agent, AllowedAgents: channelMetadata.AllowedAgents, Settled: conversation.Settled, Running: row.Running, Pinned: row.Pinned, Name: row.Name, ForkedFrom: row.ForkedFrom}
 		if row.SnoozedUntil != nil {
 			session.SnoozedUntil = row.SnoozedUntil.UTC().Format(time.RFC3339Nano)
 		}
@@ -310,6 +310,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 				}
 
 				event.attribute(entry.Entry.AttributionAt(i), producer, request.Id)
+				event.MessageId = fmt.Sprintf("%d:%d", entry.ID, i)
 
 				response.Messages = append(response.Messages, event)
 				if event.Role == "assistant" {
@@ -319,7 +320,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		}
 
 		if strings.TrimSpace(deliveryText) != "" && deliveryText != lastReply {
-			event := &TranscriptEvent{Role: "assistant", Text: deliveryText, Complete: true}
+			event := &TranscriptEvent{Role: "assistant", Text: deliveryText, Complete: true, MessageId: fmt.Sprintf("%d:delivery", entry.ID)}
 			event.attribute(entry.Entry.AttributionAt(deliveryIndex), producer, request.Id)
 			response.Messages = append(response.Messages, event)
 		}
