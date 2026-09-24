@@ -35,6 +35,8 @@ Permissions authorize the written operations, including their runtime effects. A
 
 The default shell runner requires `/bin/bash` and ignores `$SHELL`. It disables startup files and inherited shell functions/options so execution matches the permission parser. This runner also executes enabled prompt shell snippets.
 
+For external MCP conversations, guardrails and automatic permission reviewers receive the same thread and turn-only metadata developer messages as the main agent. Their shell tools share the turn's environment, while their own permissions still control tool access.
+
 Permission matching preserves backslashes as literal characters; it does not treat them as `/`. This follows Unix path semantics and applies to both allow and deny rules.
 
 ### RocketClaw

@@ -69,13 +69,19 @@ func TestTaskResolvesGuardrailModelIndependently(t *testing.T) {
 		return rootClient, ProviderOrigin{Provider: "openai", Model: model}, nil
 	})
 	agent := Agent{Name: "guard", Model: "safety/guard"}
+	factory.childContext = []SessionEntry{{Version: 1, ReplayInput: []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"developer","content":"This external MCP thread has metadata:\nROCKETCLAW_METADATA_TICKET_ID=\"123\""}`),
+	}}}
 
 	decision := factory.runGuardrail(context.Background(), &agent, ChildRunStageDelegation, "review", "child", toolCallMetadata{}, testTaskOutput())
 
 	require.False(t, decision.Approved)
 	require.Equal(t, "blocked", decision.Reason)
 	require.Len(t, guardRequests, 1)
-	require.Contains(t, <-guardRequests, `"model":"guard-api"`)
+	request := <-guardRequests
+	require.Contains(t, request, `"model":"guard-api"`)
+	require.Contains(t, request, `"role":"developer"`)
+	require.Contains(t, request, `This external MCP thread has metadata:\nROCKETCLAW_METADATA_TICKET_ID=\"123\"`)
 	require.Empty(t, rootRequests)
 }
 

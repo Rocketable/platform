@@ -51,6 +51,9 @@ func TestPermissionReviewLogsHiddenChildRunOutput(t *testing.T) {
 		agents:            Agents{Items: map[string]Agent{}},
 		skills:            Skills{Items: map[string]Skill{}},
 		baseTools:         map[string]looperTool{},
+		childContext: []SessionEntry{{Version: 1, ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"message","role":"developer","content":"This external MCP thread has metadata:\nROCKETCLAW_METADATA_TICKET_ID=\"123\""}`),
+		}}},
 		childRunLogger: func(event *ChildRunEvent) {
 			childRunEvents = append(childRunEvents, *event)
 		},
@@ -61,6 +64,8 @@ func TestPermissionReviewLogsHiddenChildRunOutput(t *testing.T) {
 	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ActiveAgent: "main", ToolName: "bash", Permission: "bash", RawArguments: `{}`, Subjects: []string{"deploy prod"}, AutoSubjects: []permissionReviewSubject{{Subject: "deploy prod", RulePattern: "deploy *"}}, ReviewerEmbedded: true}, output)
 
 	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
+	require.Equal(t, responses.EasyInputMessageRoleDeveloper, newParams(mock)[0].Input.OfInputItemList[0].OfMessage.Role)
+	require.Equal(t, "This external MCP thread has metadata:\nROCKETCLAW_METADATA_TICKET_ID=\"123\"", newParams(mock)[0].Input.OfInputItemList[0].OfMessage.Content.OfString.Value)
 	require.Equal(t, []ChatResponse{
 		subagentDiagnosticResponse(&SubagentDiagnostic{Name: "guardian", Label: "auto-approver", Subagent: &SubagentDiagnostic{Label: "reasoning summary", Text: "considering risk"}}),
 		subagentDiagnosticResponse(&SubagentDiagnostic{Name: "guardian", Label: "auto-approver", Subagent: &SubagentDiagnostic{Label: "assistant commentary", Text: "checking authorization"}}),

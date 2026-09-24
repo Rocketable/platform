@@ -114,7 +114,7 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 		return nil
 	})
 
-	if err := child.Loop(reviewCtx, input, func(func(SessionEntry, error) bool) {}, func(SessionEntry) error { return nil }, make(chan os.Signal, 1)); err != nil {
+	if err := child.Loop(reviewCtx, input, f.childSession, func(SessionEntry) error { return nil }, make(chan os.Signal, 1)); err != nil {
 		_ = group.Wait()
 
 		if reviewCtx.Err() == context.DeadlineExceeded {

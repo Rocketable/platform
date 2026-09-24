@@ -1345,7 +1345,10 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		store.managedConversationID = b.config.ManagedConversationID
 	}
 
-	var shellEnv map[string]string
+	var (
+		shellEnv     map[string]string
+		childContext []rocketcode.SessionEntry
+	)
 
 	sessionIn := store.in()
 
@@ -1395,13 +1398,17 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		metadataEnv, ok := externalMCPStoredMetadataEnv(metadataConversationID, entries)
 		if !ok {
 			metadataEnv = externalMCPMetadataEnv(b.config.ConversationID, msg.Metadata)
-			shellEnv = metadataEnv
+		}
 
-			replayInput, err := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", metadataEnv))
-			if err != nil {
-				return runResult{}, fmt.Errorf("encode external MCP metadata: %w", err)
-			}
+		replayInput, err := replayInputForMessage("developer", externalMCPMetadataDeveloperMessage("This external MCP thread has metadata:", metadataEnv))
+		if err != nil {
+			return runResult{}, fmt.Errorf("encode external MCP metadata: %w", err)
+		}
 
+		childContext = append(childContext, rocketcode.SessionEntry{Version: 1, ReplayInput: replayInput})
+		shellEnv = metadataEnv
+
+		if !ok {
 			if _, err := store.outID(rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, Timestamp: time.Now().UTC(), ReplayInput: replayInput}); err != nil {
 				return runResult{}, fmt.Errorf("append external MCP metadata: %w", err)
 			}
@@ -1416,7 +1423,6 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			}
 		} else {
 			metadataEnv[rocketclawConversationIDEnv] = b.config.ConversationID
-			shellEnv = metadataEnv
 
 			transientEnv := externalMCPMetadataEnv(b.config.ConversationID, msg.Metadata)
 			for key := range metadataEnv {
@@ -1433,6 +1439,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 				}
 
 				store.managedReplayPrefix = replayInput
+				childContext = append(childContext, rocketcode.SessionEntry{Version: 1, ReplayInput: replayInput})
 
 				sessionIn = appendSessionEntry(sessionIn, &rocketcode.SessionEntry{Version: 1, Type: externalMCPMetadataEntryType, ReplayInput: replayInput}, false)
 			}
@@ -1498,6 +1505,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	checkpointTurnID := ""
 
 	rocketcodeConfig := b.rocketcodeConfig(shellTempDir, shellEnv, b.activeTurnSourceMetadata(msg), customTools...)
+	rocketcodeConfig.ChildContext = childContext
 	sink := rocketcodeConfig.CheckpointSink.(activeTurnCheckpointSink)
 	sink.recoveredReplay = recoveredReplay
 	sink.capturedTurnID = &checkpointTurnID
