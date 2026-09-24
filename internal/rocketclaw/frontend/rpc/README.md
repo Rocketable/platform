@@ -200,7 +200,7 @@ Web always starts. Its HTTP listener defaults to `0.0.0.0:3000`; set
 `web.listen_address` in `rocketclaw.json` or `femtoclaw.json` to change it.
 The HTTP adapter connects to gRPC entirely in memory inside the same process.
 No Web environment variables or filesystem sockets are needed. Browser identity
-still comes from the connecting IP and the configured `web_users` mapping.
+still comes from the connecting IP, using `web_users` first and Tailscale WhoIs otherwise.
 
 The normal RocketClaw command still starts its existing Slack/Cron runtime. The
 isolated transport tests below do not start Slack or touch runtime configuration.
@@ -229,16 +229,21 @@ The HTTP proxy forwards only the connection's remote IP. It ignores
 `X-Forwarded-For`, `X-Real-IP`, and client-supplied principal headers. Do not put
 another HTTP reverse proxy in front of it: that would identify the proxy rather
 than the browser. Go snapshots configured `web_users` IP-to-username mappings at
-startup and rejects unknown IPs with `Unauthenticated` (HTTP 401). Configure the
-actual browser IP in Go before startup; configuration changes require restart.
+startup. An explicit mapping takes precedence; otherwise Go runs `tailscale whois
+--json` for the browser IP and uses `UserProfile.LoginName` as its identity.
+Successful lookups are cached per IP for five minutes and shared with the Config
+page. Concurrent misses are serialized; expired entries must be looked up again,
+and a failed refresh denies access rather than using the stale identity.
+Failed lookups, missing login names, and tagged devices without a manual mapping
+are rejected with `Unauthenticated` (HTTP 401). Mapping changes require restart.
 TypeScript does not read RocketClaw configuration or perform Tailscale WhoIs.
 For the Config page, Go runs `tailscale whois --json` with the authenticated
 browser connection IP and exposes only `UserProfile.LoginName` as `tailscale_user`.
-Lookup failures leave that display field empty; the configured IP mapping remains
-the sole authority for Web access. The Tailscale CLI must be available on the
+Lookup failures leave that display field empty; a manually mapped user can still
+access the Web interface. For Tailscale identification, the CLI must be available on the
 RocketClaw process's PATH and connected to its local service.
 `Protocol` exposes only the schema hash to the trusted local proxy and requires
-no mapped browser address, so startup does not require mapping localhost.
+no browser identity, so startup does not require mapping localhost.
 
 ## Verify without a live Slack runtime
 

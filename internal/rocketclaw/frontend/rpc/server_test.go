@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
@@ -39,16 +40,15 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestConfigTailscaleIdentityDoesNotChangeAccess(t *testing.T) {
+func TestTailscaleBrowserIdentity(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("PATH", dir)
-
-	server := &Server{cfg: &config.Config{}, usernames: map[netip.Addr]string{netip.MustParseAddr("100.64.0.1"): "configured-user"}}
 
 	ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "100.64.0.1"))
 	for _, tt := range []struct{ name, output, want string }{
 		{"identified", `{"UserProfile":{"LoginName":"connected@example.com"}}`, "connected@example.com"},
-		{"no user", `{"Node":{"Tags":["tag:server"]}}`, ""},
+		{"no user", `{"UserProfile":{}}`, ""},
+		{"tagged node", `{"Node":{"Tags":["tag:server"]},"UserProfile":{"LoginName":"tagged-devices"}}`, ""},
 		{"invalid response", `not json`, ""},
 		{"unavailable", "", ""},
 	} {
@@ -61,17 +61,98 @@ func TestConfigTailscaleIdentityDoesNotChangeAccess(t *testing.T) {
 
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "tailscale"), []byte(script), 0o700))
 
-			view, err := server.listConfig(ctx)
-			require.NoError(t, err)
-			require.Equal(t, tt.want, view.Config.TailscaleUser)
-
+			server := &Server{cfg: &config.Config{}, usernames: map[netip.Addr]string{netip.MustParseAddr("100.64.0.1"): "configured-user"}}
 			username, err := server.principal(ctx)
 			require.NoError(t, err)
 			require.Equal(t, "configured-user", username)
+
+			_, err = server.listConfig(ctx)
+			require.NoError(t, err)
+			clear(server.usernames)
+
+			view, err := server.listConfig(ctx)
+			if tt.want == "" {
+				require.Equal(t, codes.Unauthenticated, status.Code(err))
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tt.want, view.Config.TailscaleUser)
+
+			username, err = server.principal(ctx)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, username)
 			_, err = server.listConfig(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "100.64.0.2")))
 			require.Equal(t, codes.Unauthenticated, status.Code(err))
 		})
 	}
+}
+
+func TestTailscaleIdentityCache(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	command := filepath.Join(dir, "tailscale")
+	calls := filepath.Join(dir, "calls")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '" + calls + "'\nprintf '%s' '{\"UserProfile\":{\"LoginName\":\"alice\"}}'\n"
+	require.NoError(t, os.WriteFile(command, []byte(script), 0o700))
+
+	synctest.Test(t, func(t *testing.T) {
+		server := &Server{cfg: &config.Config{}}
+		ctx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "100.64.0.1"))
+
+		var requests errgroup.Group
+		for range 8 {
+			requests.Go(func() error {
+				username, err := server.principal(ctx)
+				if err != nil {
+					return err
+				}
+
+				if username != "alice" {
+					return fmt.Errorf("username = %q, want alice", username)
+				}
+
+				return nil
+			})
+		}
+
+		require.NoError(t, requests.Wait())
+
+		view, err := server.listConfig(ctx)
+		require.NoError(t, err)
+		require.Equal(t, "alice", view.Config.TailscaleUser)
+
+		username, err := server.principal(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "::ffff:100.64.0.1")))
+		require.NoError(t, err)
+		require.Equal(t, "alice", username)
+
+		data, err := os.ReadFile(calls)
+		require.NoError(t, err)
+		require.Equal(t, "whois --json 100.64.0.1\n", string(data))
+
+		_, err = server.principal(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "100.64.0.2")))
+		require.NoError(t, err)
+		data, err = os.ReadFile(calls)
+		require.NoError(t, err)
+		require.Equal(t, "whois --json 100.64.0.1\nwhois --json 100.64.0.2\n", string(data))
+
+		require.NoError(t, os.WriteFile(command, []byte("#!/bin/sh\nexit 1\n"), 0o700))
+		time.Sleep(5*time.Minute - time.Nanosecond)
+
+		username, err = server.principal(ctx)
+		require.NoError(t, err)
+		require.Equal(t, "alice", username)
+		time.Sleep(time.Nanosecond)
+
+		_, err = server.principal(ctx)
+		require.Equal(t, codes.Unauthenticated, status.Code(err))
+
+		require.NoError(t, os.WriteFile(command, []byte(strings.ReplaceAll(script, "alice", "bob")), 0o700))
+
+		username, err = server.principal(ctx)
+		require.NoError(t, err)
+		require.Equal(t, "bob", username)
+	})
 }
 
 func TestSessionEntries(t *testing.T) {
@@ -1570,8 +1651,7 @@ func TestSessionEntries(t *testing.T) {
 		require.NoError(t, err)
 
 		// Visibility remains readable; only the selected thread lookup is blocked.
-		selectedServer := *server
-		selectedServer.sessions = lockedSessions
+		selectedServer := &Server{backend: server.backend, sessions: lockedSessions, usernames: server.usernames, cfg: server.cfg, channels: server.channels, cronjobs: server.cronjobs}
 		incoming := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
 		selected, err := selectedServer.listAgents(incoming, id)
 		require.ErrorContains(t, err, "read selected conversation")
