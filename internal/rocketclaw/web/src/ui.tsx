@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions } from "./api";
 import type { ChatOrigin, PromptDelivery } from "./types";
-import { Bot, Calendar, Check, Download, FileIcon, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import { Bot, Calendar, Check, CircleAlert, Download, FileIcon, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, navigate } from "./navigation";
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type SyntheticEvent } from "react";
 import { flushSync } from "react-dom";
@@ -962,7 +962,6 @@ function matchesSession(session: Session, needle: string, agentFilter: string, r
 function SidebarFreshness({ sidebar, emptySearch, emptyLabel = "No matches" }: { sidebar: SidebarView; emptySearch: boolean; emptyLabel?: string }) {
   const authoritative = searchIsAuthoritative(sidebar);
   return <>
-    {!sidebar.refreshing && sidebar.rows.length > 0 && !authoritative ? <p role="status" className="px-3 pb-1 text-xs text-muted-foreground">Stale</p> : null}
     {emptySearch ? <p role="status" className="px-3 pb-1 text-xs text-muted-foreground">{authoritative ? emptyLabel : "loading..."}</p> : null}
   </>;
 }
@@ -977,6 +976,8 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
   roomFilter: string;
   setRoomFilter: (value: string) => void;
 }) {
+  const sidebar = useContext(Sidebar);
+  const stale = !sidebar.refreshing && rows.length > 0 && !searchIsAuthoritative(sidebar);
   const [overlayPick, setOverlayPick] = useState(0);
   const agentPrefix = typedPrefix(query, "agent:");
   const roomPrefix = typedPrefix(query, "room:");
@@ -1004,7 +1005,14 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
             ))}
           </ul> : null}
           <div className="flex h-8 min-w-0 items-center gap-1 rounded-md border border-sidebar-border bg-background pr-2 pl-2">
-            <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="flex size-3.5 shrink-0 items-center text-muted-foreground">
+              {stale ? <Tooltip>
+                <TooltipTrigger render={<span />} tabIndex={0} role="img" aria-label="Conversation list may be out of date">
+                  <CircleAlert className="size-3.5" />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Conversation list may be out of date</TooltipContent>
+              </Tooltip> : <Search className="size-3.5" />}
+            </span>
             {agentFilter ? <FilterPill label={`agent:${agentFilter}`} onClear={() => setAgentFilter("")} /> : null}
             {roomFilter ? <FilterPill label={`room:${roomFilter}`} onClear={() => setRoomFilter("")} /> : null}
             <Input

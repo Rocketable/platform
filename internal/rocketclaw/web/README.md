@@ -62,8 +62,10 @@ snapshot until a refresh is successfully exhausted with complete summaries.
 Each row previews the latest nonempty user or assistant message, including delivered
 assistant reports. A small spinner in the metadata line indicates a running turn
 without moving the row; saved snapshots do not restore an old running indicator.
-Routine background refreshes are silent; stale rows and missing summaries still
-show their status (`Stale` or `loading...`).
+Routine background refreshes are silent. When rows are stale, the search icon
+changes to a same-size status indicator, with “Conversation list may be out of
+date” on hover or keyboard focus. No extra space is reserved and the list does
+not shift. Missing summaries show `loading...`.
 Failed, partial or cancelled streams do not replace the snapshot. History
 deletion clears preview text without removing the row. Composer choices and
 sends stay on the agent query and do not wait for sidebar refresh.
