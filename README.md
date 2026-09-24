@@ -73,6 +73,68 @@ External MCP exposes `session_prompt`. Every call supplies an external conversat
 
 Every active `cron/*.md` definition declares a quoted `channel` that matches a configured Slack channel. Empty completion output is silent; non-empty output starts a fresh managed thread in that channel.
 
+#### Agent session inspection
+
+Agents can inspect durable conversations with `rocketclaw_current_session_id`,
+`rocketclaw_list_sessions`, and `rocketclaw_get_session`, directly or inside Execute.
+Grant them in the agent's frontmatter; none is allowed by default:
+
+```yaml
+permission:
+  rocketclaw:
+    rocketclaw_current_session_id: allow
+    rocketclaw_list_sessions: allow
+    rocketclaw_get_session: allow
+```
+
+Use `deny` to block a tool, or `auto` for the existing approval flow. List and get
+permissions grant access across the selected State Store, including Slack, exec,
+cron, and private External MCP histories—not just the agent's current conversation.
+
+To look back past compaction, call `rocketclaw_current_session_id()` with no
+arguments (`{}` for a direct call). It returns only the bare conversation ID, with
+no JSON wrapper or added newline. Pass that ID to `rocketclaw_get_session(conversation_id="...")` in the next
+call to read stored entries, including those before the compaction point.
+This is the owning bridge's durable conversation ID: a private External MCP bridge
+returns its private history ID, not its public external ID or managed destination.
+Child agents that inherit these tools return the same owning conversation ID,
+subject to their own permissions; they do not get a separate child-run history ID.
+
+List requires all four fields: `since` (Go duration relative to now, such as `24h`,
+or RFC3339Nano), `until` (RFC3339Nano), `limit`, and `include_message_preview`.
+Time bounds use each conversation's maximum entry timestamp: `since` is inclusive
+and `until` exclusive. Use empty strings for no time bounds and `limit: 0` for
+unlimited results. Zero and negative durations retain their normal relative-time
+meaning; negative limits are errors. Set `include_message_preview` explicitly to
+true or false. All three tools use the existing strict provider schemas.
+
+Without bounds or a positive limit, results sort by conversation ID. Otherwise
+they sort newest first, then by ID. List returns TSV with a header and one session
+per row. Columns are `conversation_id`, `turns`
+(stored entry count), and `last_updated` (the last entry's timestamp in entry-ID
+order), plus `last_user_message` and `last_assistant_message` previews, which may
+be empty. Both preview columns are omitted when disabled. No matches returns only
+the header.
+
+For example, call `rocketclaw_list_sessions(since="24h", until="", limit=10, include_message_preview=True)` inside Execute,
+then pass a returned ID to `rocketclaw_get_session(conversation_id="...")`.
+Get returns TSV with `timestamp`, `role`, and `content` columns, one readable
+message or event per row in stored entry-ID order, not timestamp order. It includes
+pre-compaction messages and marks compaction boundaries; encrypted payloads are
+never printed. Function calls show their name, call ID and arguments; results show
+their call ID and text. Reasoning shows stored plaintext summaries and content.
+Trace-only events follow each entry's replay items because their interleaving is
+not recorded. Unsupported events and non-text tool results have explicit omission
+markers rather than serialized objects. An unknown ID returns only the header.
+Get requires a nonblank ID.
+
+Both TSV outputs escape literal backslashes as `\\`, tabs as `\t`, carriage returns
+as `\r`, and newlines as `\n` inside cells, preserving one physical line per row.
+Headers and rows end with a newline. Outputs have no JSON wrappers; inputs remain
+strict JSON objects. All three tools are read-only: they do not mark conversations read or
+start turns. Full histories can be large; normal Execute output clipping and
+spill handling still apply.
+
 ### Invoking Skills
 
 Send bare `$` in Slack, or type a leading `$` in the web composer, to discover built-in commands followed by skills allowed for the selected agent. Web suggestions update when you switch agents; selecting a suggestion inserts its prefix without sending.
