@@ -1221,6 +1221,9 @@ func TestRocketCodeConfigEnablesDiagnosticsForThinkingUpdates(t *testing.T) {
 	assert.Contains(t, toolNames, reloadToolName)
 	assert.Contains(t, toolNames, resetScheduledMessagesToolName)
 	assert.Contains(t, toolNames, attachFilesToolName)
+	assert.Contains(t, toolNames, listSessionsToolName)
+	assert.Contains(t, toolNames, getSessionToolName)
+	assert.Contains(t, toolNames, currentSessionIDToolName)
 	assert.Equal(t, map[string]string{"A": "B"}, bridge.rocketcodeConfig(t.TempDir(), map[string]string{"A": "B"}, nil).ShellEnv)
 }
 

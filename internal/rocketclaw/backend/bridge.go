@@ -2130,9 +2130,9 @@ func sanitizeShellTempSegment(conversationID string) string {
 }
 
 func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv, sourceMetadata map[string]string, customTools ...rocketcode.Tool) rocketcode.Config {
-	tools := make([]rocketcode.Tool, 0, 3+len(customTools))
+	tools := make([]rocketcode.Tool, 0, 6+len(customTools))
 
-	tools = append(tools, reloadTool(b.config.RequestReload), scheduleMessageTool(b.ScheduleMessage, b.log), resetScheduledMessagesTool(b.ResetScheduledMessages))
+	tools = append(tools, reloadTool(b.config.RequestReload), scheduleMessageTool(b.ScheduleMessage, b.log), resetScheduledMessagesTool(b.ResetScheduledMessages), listSessionsTool(b.config.SessionService), getSessionTool(b.config.SessionService), currentSessionIDTool(b.config.ConversationID))
 	if goal, ok, err := b.config.SessionService.Goal(b.config.ConversationID); err == nil && ok && strings.TrimSpace(goal.Status) == GoalStatusActive {
 		tools = append(tools, updateGoalTool(b))
 	}

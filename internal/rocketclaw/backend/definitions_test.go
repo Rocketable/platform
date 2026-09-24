@@ -59,6 +59,17 @@ func TestLoadRocketCodeDefinitionsPreparesPersistentAgents(t *testing.T) {
 	requireRocketClawPermissionAction(t, helper.Permission, attachFilesToolName, rocketcode.PermissionAllow)
 	requireRocketClawPermissionAction(t, helper.Permission, updateGoalToolName, rocketcode.PermissionAllow)
 
+	for _, mode := range []toolMode{toolModePersistent, toolModeCron, toolModeWorkflow} {
+		prepared, _, err := loadRocketCodeDefinitions(root, workspace, mode)
+		require.NoError(t, err)
+
+		for _, agent := range prepared.Items {
+			requireNoRocketClawPermissionMatch(t, agent.Permission, listSessionsToolName)
+			requireNoRocketClawPermissionMatch(t, agent.Permission, getSessionToolName)
+			requireNoRocketClawPermissionMatch(t, agent.Permission, currentSessionIDToolName)
+		}
+	}
+
 	externalAgents, err := ExternalMCPAgentsIn(&config.Config{Workspace: workspace}, config.DefaultRuntimeDir)
 	require.NoError(t, err)
 	require.Equal(t, []string{"assistant", "helper", "restricted"}, externalAgents)
