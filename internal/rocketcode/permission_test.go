@@ -17,7 +17,7 @@ func TestPermissionWildcardMatchOpenCodeSemantics(t *testing.T) {
 		{"./cli", "./cli*", true}, {"./cli foo", "./cli*", true}, {"./client", "./cli*", true},
 		{"./cli", "./cli *", true}, {"./cli foo", "./cli *", true}, {"./client", "./cli *", false},
 		{"README.md", "readme.md", false},
-		{`dir\file.txt`, "dir/file.txt", true},
+		{`dir\file.txt`, "dir/file.txt", false},
 	} {
 		require.Equal(t, tt.want, permissionWildcardMatch(tt.input, tt.pattern))
 	}
@@ -102,6 +102,11 @@ func TestPermissionSetEvaluate(t *testing.T) {
 	}{
 		{name: "default deny", yaml: `tools: {current_time: allow}`, permission: "tools", subject: "restart", action: PermissionDeny, matched: false},
 		{name: "explicit deny", yaml: `tools: {restart: deny}`, permission: "tools", subject: "restart", action: PermissionDeny, matched: true},
+		{name: "slash allow does not match backslash", yaml: `read: {'dir/file': allow}`, permission: "read", subject: `dir\file`, action: PermissionDeny, matched: false},
+		{name: "backslash allow does not match slash", yaml: `read: {'dir\file': allow}`, permission: "read", subject: "dir/file", action: PermissionDeny, matched: false},
+		{name: "literal backslash matches", yaml: `read: {'dir\file': allow}`, permission: "read", subject: `dir\file`, action: PermissionAllow, matched: true},
+		{name: "slash deny does not match backslash", yaml: `read: {'*': allow, 'dir/file': deny}`, permission: "read", subject: `dir\file`, action: PermissionAllow, matched: true},
+		{name: "literal backslash deny matches", yaml: `read: {'*': allow, 'dir\file': deny}`, permission: "read", subject: `dir\file`, action: PermissionDeny, matched: true},
 		{name: "wildcard match", yaml: `rocketclaw: {restart_*: allow}`, permission: "rocketclaw", subject: "restart_tool", action: PermissionAllow, matched: true},
 		{name: "last match wins", yaml: `tools: {"*": allow, restart: deny}`, permission: "tools", subject: "restart", action: PermissionDeny, matched: true},
 		{name: "read inherits edit allow", yaml: `edit: {docs/*.md: allow}`, permission: "read", subject: "docs/guide.md", action: PermissionAllow, matched: true},
@@ -175,8 +180,21 @@ edit: {"public.md": allow}`, subject: "public.md", action: permissionAllow, matc
 }
 
 func TestBashPermissionSubjects(t *testing.T) {
+	conditional := "if first; then second; elif third; then if fourth; then fifth; fi; else sixth; fi"
+	require.Equal(t, []string{
+		conditional, "first", "second", "third", "if fourth; then fifth; fi", "fourth", "fifth", "sixth",
+	}, BashPermissionSubjects(conditional))
 	require.Equal(t, []string{"git status", "git diff --stat"}, BashPermissionSubjects("git status && git diff --stat"))
-	require.Equal(t, []string{"echo $(date)", "date"}, BashPermissionSubjects("echo $(date)"))
+	require.Equal(t, []string{`echo 'literal $(date)'`}, BashPermissionSubjects(`echo 'literal $(date)'`))
+	require.Equal(t, []string{"echo $(date)", "$(date)", "date"}, BashPermissionSubjects("echo $(date)"))
+	require.Equal(t, []string{"export FOO=$(date)", "$(date)", "date", "scripts/cmd arg"}, BashPermissionSubjects("export FOO=$(date); scripts/cmd arg"))
+	require.Equal(t, []string{"\u00a0scripts/cmd arg"}, BashPermissionSubjects("\u00a0scripts/cmd arg"))
+
+	for _, prefix := range []string{"export FOO=bar", "declare -x FOO=bar", "readonly FOO=bar", "local FOO=bar", "typeset -x FOO=bar", "nameref FOO=bar", "FOO=bar"} {
+		t.Run(prefix, func(t *testing.T) {
+			require.Equal(t, []string{prefix, "scripts/cmd arg"}, BashPermissionSubjects(prefix+"; scripts/cmd arg"))
+		})
+	}
 }
 
 func parsePermissionYAML(t *testing.T, text string) PermissionSet {

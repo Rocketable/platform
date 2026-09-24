@@ -49,7 +49,8 @@ type Config struct {
 	CustomTools            []Tool
 	ShellEnv               map[string]string
 	// ShellCommand builds the executable used for bash tool (and prompt !`…`)
-	// commands. Required; pass DefaultShellCommand for normal host shell behavior.
+	// commands. Required; pass DefaultShellCommand to match permission validation.
+	// Custom implementations must preserve the validated Bash syntax and semantics.
 	ShellCommand ShellCommandFunc
 	MCPServers   map[string]mcpclient.ServerConfig
 	MCPWorkspace string

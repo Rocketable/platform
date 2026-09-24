@@ -2071,8 +2071,21 @@ func (l *looper) permissionDecision(toolName string, tool *looperTool, args json
 	reviewerEmbedded := true
 	reviewerSet := false
 
+	var scripts []string
+
+	if permission == "bash" {
+		var script bashParams
+		if err := json.Unmarshal(args, &script); err != nil {
+			return toolPermissionDecision{}, fmt.Errorf("decode bash permission arguments: %w", err)
+		}
+		// The execute entry gate can use the bash bucket without a bash command.
+		if script.Command != "" {
+			scripts = append(scripts, script.Command)
+		}
+	}
+
 	for _, subject := range subjects {
-		decision := l.Permissions.evaluate(permission, subject)
+		decision := l.Permissions.evaluate(permission, subject, scripts...)
 		if decision.Action == permissionDeny {
 			return toolPermissionDecision{denied: true, message: formatPermissionDenied(&decision)}, nil
 		}
