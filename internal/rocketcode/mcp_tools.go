@@ -22,7 +22,7 @@ const (
 	mcpPermissionBucket = "mcp"
 	// executeNestedToolPrefix marks nested code-mode tool diagnostics for thinking UI.
 	executeNestedToolPrefix = executeToolName + " → "
-	codeModeRawStringRule   = `Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in "...". Inside that string, bash(command=...) takes r'''...''' only, not Starlark "..." or '...'. r"..." is raw but single-line; a real newline needs r'''...'''. Example execute argument: {"code":"def main():\n    return bash(command=r'''grep -n architecture\\|loop FILE''')\n"}. $ is valid inside a closed Starlark string, not interpolation. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun.`
+	codeModeRawStringRule   = `Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in "...". Inside that string, bash(command=...) takes r'''...''' only, not Starlark "..." or '...'. r"..." is raw but single-line; a real newline needs r'''...'''. Example execute argument: {"code":"def main():\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\n"}. $ is valid inside a closed Starlark string, not interpolation. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun.`
 )
 
 func newMCPRegistry(workspace string, servers map[string]mcpclient.ServerConfig) (*mcpclient.Registry, error) {
