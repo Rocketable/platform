@@ -617,9 +617,9 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect(historyRequests.every((request) => request.originOnly)).toBe(true);
     expect(historyRequests.map((request) => request.id).sort()).toEqual(["gone", "slack-thread:C:1"]); // Kept's origin was cached by the saved-preview search.
     await search.fill("PREVIEW"); // Preserve existing row matching and ordering.
-    expect(await sessionPalette.getByRole("button").locator("span:first-child").allTextContents()).toEqual(["saved preview", "filter preview"]);
+    expect(await sessionPalette.getByRole("button").locator('[data-slot="session-title"]').allTextContents()).toEqual(["saved preview", "filter preview"]);
     await search.fill("will vanish"); // Origin and row matches share the original order.
-    expect(await sessionPalette.getByRole("button").locator("span:first-child").allTextContents()).toEqual(["saved preview", "will vanish"]);
+    expect(await sessionPalette.getByRole("button").locator('[data-slot="session-title"]').allTextContents()).toEqual(["saved preview", "will vanish"]);
     await search.fill("no-such-origin");
     await sessionPalette.getByText("loading...", { exact: true }).waitFor();
     await search.fill("ORIGINAL-KEY");
@@ -1344,7 +1344,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await matrix.waitForFunction(() => document.activeElement?.getAttribute("placeholder") === "Search sessions");
       expect(await matrixSearch.evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
       expect(await matrixDialog.getByRole("button", { name: /^(agent:|room:)/ }).count()).toBe(0);
-      expect(await matrixDialog.locator("li > button.bg-accent span:first-child").innerText()).toBe("Winner");
+      expect(await matrixDialog.locator('li > button.bg-accent [data-slot="session-title"]').innerText()).toBe("Winner");
       await matrixSearch.fill("agent:ma");
       await matrixSearch.press("ArrowDown");
       await matrixSearch.press("ArrowUp");
@@ -1352,7 +1352,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await matrixSearch.fill("room:ro");
       await matrixDialog.getByRole("button", { name: "room", exact: true }).click();
       await matrixSearch.fill("is:pinned");
-      expect(await matrixDialog.locator("li > button span:first-child").allTextContents()).toEqual(["Winner"]);
+      expect(await matrixDialog.locator('li > button [data-slot="session-title"]').allTextContents()).toEqual(["Winner"]);
       await matrixSearch.press("ArrowDown");
       await matrix.keyboard.press("Escape");
       await matrixDialog.waitFor({ state: "hidden" });
@@ -1386,16 +1386,16 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     ctrl.holdOrigins = false;
     originHold.resolve();
     await matrixDialog.getByText("Settled chat", { exact: true }).waitFor();
-    expect(await matrixDialog.locator("li > button span:first-child").allTextContents()).toEqual(["Other room", "Winner", "Other agent", "Another unpinned chat", "Settled chat", "Unpinned chat"]);
+    expect(await matrixDialog.locator('li > button [data-slot="session-title"]').allTextContents()).toEqual(["Other room", "Winner", "Other agent", "Another unpinned chat", "Settled chat", "Unpinned chat"]);
     await matrixSearch.fill("winner-origin");
     await matrixDialog.getByText("Winner", { exact: true }).waitFor();
-    expect(await matrixDialog.locator("li > button span:first-child").allTextContents()).toEqual(["Winner"]);
+    expect(await matrixDialog.locator('li > button [data-slot="session-title"]').allTextContents()).toEqual(["Winner"]);
     await matrixSearch.fill("agent:main");
     await matrixSearch.press("Enter");
     await matrixSearch.fill("room:room");
     await matrixSearch.press("Tab");
     await matrixSearch.fill("is:pinned union");
-    expect(await matrixDialog.locator("li > button span:first-child").allTextContents()).toEqual(["Winner"]);
+    expect(await matrixDialog.locator('li > button [data-slot="session-title"]').allTextContents()).toEqual(["Winner"]);
     for (const width of [1280, 390, 320]) {
       await matrix.setViewportSize({ width, height: 844 });
       await matrixDialog.screenshot({ path: path.join(process.env.TMPDIR!, `unified-search-${width}.png`) });
@@ -1994,7 +1994,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       expect(await rename.innerText()).toBe("");
       await detailsPage.locator("textarea").hover();
       await rename.hover();
-      await detailsPage.locator('[data-slot="tooltip-content"]').filter({ hasText: "Rename session" }).waitFor();
+      await detailsPage.locator('[data-slot="tooltip-content"]').filter({ hasText: "Name session" }).waitFor();
       expect(await detailsPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await detailsPage.locator("main").getByRole("button", { name: "Name session", exact: true }).click();
       expect(await dialog.getByLabel("Session name").inputValue()).toBe("Release notes");
