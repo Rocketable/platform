@@ -92,7 +92,7 @@ function overlayChoices(
 
 function FilterPill({ label, onClear }: { label: string; onClear: () => void }) {
   return (
-    <button type="button" className="flex h-5 max-w-[8rem] shrink-0 items-center rounded-full bg-sidebar-row-active px-2 text-xs" onClick={onClear}>
+    <button type="button" className="flex h-5 max-w-[8rem] shrink-0 items-center rounded-full bg-sidebar-row-active px-2 text-xs" onMouseDown={(event) => event.preventDefault()} onClick={onClear}>
       <span className="truncate">{label}</span>
     </button>
   );
@@ -603,6 +603,8 @@ export function App() {
   const route = useRoute();
   const showChat = !route.cron && !route.agents && !route.skills && !route.config && !route.settled;
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [palette, setPalette] = useState<{ mode: "sessions" | "commands" | "cron" | undefined; key: number }>({ mode: undefined, key: 0 });
+  const openPalette = useCallback((mode: "sessions" | "commands") => setPalette((current) => ({ mode, key: current.key + 1 })), []);
   const drafts = useRef(new Map<string, ComposerDraft>());
   const [, setDraftVersion] = useState(0);
   const onDraftChange = useCallback(() => setDraftVersion((version) => version + 1), []);
@@ -617,6 +619,11 @@ export function App() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat) return;
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && event.code === "KeyP") {
+        event.preventDefault();
+        openPalette(event.shiftKey ? "commands" : "sessions");
+        return;
+      }
       if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "b" && !event.shiftKey) {
         event.preventDefault();
         setSidebarOpen((open) => !open);
@@ -627,14 +634,20 @@ export function App() {
         newChat();
         return;
       }
-      if (showChat || event.key !== "Escape") return;
+    };
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || showChat || event.key !== "Escape") return;
       if (document.querySelector('[role="dialog"], [role="listbox"], [role="tooltip"]')) return;
       event.preventDefault();
       navigate(tabReturnTo.current);
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [newChat, showChat]);
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("keydown", onEscape);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("keydown", onEscape);
+    };
+  }, [newChat, showChat, openPalette]);
   if (showChat && conversation.id !== route.id) {
     // Creation assigns this conversation its ID; other navigation starts a fresh subtree.
     const created = conversation.id === "" && conversation.created === route.id;
@@ -644,7 +657,7 @@ export function App() {
       <QueryClientProvider client={queryClient}><TooltipProvider>
         <ProtocolGuard />
         <SidebarOwner>
-          <CommandPalette newChat={newChat} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((open) => !open)} />
+          <CommandPalette openKey={palette.key} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((open) => !open)} />
          <MobileSidebar chat={showChat}>
             <BottomNavigation>
               <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="hidden size-[var(--navigation-button)] md:inline-flex" />} aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"} aria-expanded={sidebarOpen} aria-controls="session-sidebar" onClick={() => setSidebarOpen((open) => !open)}>
@@ -654,6 +667,9 @@ export function App() {
                 <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="New session" onClick={newChat}>
                   <SquarePen className="size-[var(--navigation-icon)]" />
                 </TooltipTrigger><TooltipContent side="top">New session</TooltipContent></Tooltip>
+                <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Search sessions" onClick={() => openPalette("sessions")}>
+                  <Search className="size-[var(--navigation-icon)]" />
+                </TooltipTrigger><TooltipContent side="top">Search sessions</TooltipContent></Tooltip>
               </SessionTabs>
             </BottomNavigation>
             <div className="fixed top-2 right-2 z-40 rounded-md bg-background shadow-sm"><ThemeToggle /></div>
@@ -690,9 +706,12 @@ function paletteRows(
   origins: string[],
   id: string,
   updateSession: (input: { id: string; unread: boolean }) => void,
+  filters: ReturnType<typeof sessionSearchTerms>,
+  agentFilter: string,
+  roomFilter: string,
 ): { key: string; label: string; detail: string; keep?: boolean; run: () => void }[] {
   if (mode === "sessions") {
-    return sidebar.rows.filter((session, index) => matchesSession(session, needle, "", "") || origins[index]?.includes(needle)).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((session) => ({
+    return sidebar.rows.filter((session, index) => (!filters.pinnedOnly || session.pinned) && (!filters.unreadOnly || session.unread) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || origins[index]?.includes(filters.needle))).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((session) => ({
       key: session.id,
       label: session.name || rowPreview(session, sidebar.loadingIds.has(session.id)).split("\n", 1)[0] || sessionLabel(session.id),
       detail: [session.settled ? "Settled" : "", session.agent, relativeTime(session.updatedAt ?? "")].filter(Boolean).join(" · "),
@@ -740,27 +759,62 @@ function usePendingCron(id: string) {
   );
 }
 
-function CommandPalette({ newChat, sidebarOpen, onToggleSidebar }: { newChat: () => void; sidebarOpen: boolean; onToggleSidebar: () => void }) {
+function originSearchText({ origin }: { origin?: ChatOrigin }) {
+  if (!origin) return "";
+  return (origin.kind === "cron"
+    ? `Cron Source: ${origin.sourcePath} Stem: ${origin.stem} Run kind: ${origin.runKind} Run ID: ${origin.runId} Agent: ${origin.agent} Ran at: ${origin.ranAt}`
+    : `External MCP External conversation: ${origin.externalConversationId} Agent: ${origin.agent} ${origin.pairs?.map(({ key, value }) => `${key}=${value}`).join(" ") ?? ""}`).toLowerCase();
+}
+
+function CommandPalette({ openKey, mode, setMode, newChat, sidebarOpen, onToggleSidebar }: { openKey: number; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void; sidebarOpen: boolean; onToggleSidebar: () => void }) {
   const sidebar = useContext(Sidebar);
   const { id } = useRoute();
-  const [mode, setMode] = useState<"sessions" | "commands" | "cron">();
   const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: () => { sidebar.invalidateQueries(); setMode(undefined); } });
   const [query, setQuery] = useState("");
   const [pick, setPick] = useState(0);
+  const [agentFilter, setAgentFilter] = useState("");
+  const [roomFilter, setRoomFilter] = useState("");
+  const [opened, setOpened] = useState(openKey);
+  if (opened !== openKey) {
+    setOpened(openKey);
+    setQuery("");
+    setPick(0);
+    setAgentFilter("");
+    setRoomFilter("");
+  }
+  const input = useRef<HTMLInputElement>(null);
+  useLayoutEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport || mode === undefined || !window.matchMedia("(pointer: coarse)").matches) return;
+    const style = document.documentElement.style;
+    const resize = () => {
+      style.setProperty("--search-top", `${viewport.offsetTop + 16}px`);
+      style.setProperty("--search-height", `${viewport.height - 32}px`);
+    };
+    resize();
+    viewport.addEventListener("resize", resize);
+    viewport.addEventListener("scroll", resize);
+    return () => {
+      viewport.removeEventListener("resize", resize);
+      viewport.removeEventListener("scroll", resize);
+      style.removeProperty("--search-top");
+      style.removeProperty("--search-height");
+    };
+  }, [mode]);
+  useLayoutEffect(() => { input.current?.focus(); }, [openKey]);
+  const agents = useQuery({ ...queries.agents(), staleTime: 60_000, enabled: mode === "sessions" });
+  const filters = sessionSearchTerms(query);
   const active = useRef<HTMLButtonElement>(null);
   const identity = useQuery(queries.identity());
   const protocol = useQuery(queries.protocol());
-  const selectOrigin = useCallback(({ origin }: { origin?: ChatOrigin }) => !origin ? "" : (origin.kind === "cron"
-    ? `Cron Source: ${origin.sourcePath} Stem: ${origin.stem} Run kind: ${origin.runKind} Run ID: ${origin.runId} Agent: ${origin.agent} Ran at: ${origin.ranAt}`
-    : `External MCP External conversation: ${origin.externalConversationId} Agent: ${origin.agent} ${origin.pairs?.map(({ key, value }) => `${key}=${value}`).join(" ") ?? ""}`).toLowerCase(), []);
   // Ponytail: first search reads each visible chat's stored entries for its origin.
   // A selective origin projection can replace these reads if search volume demands it.
-  const origins = useQueries({ queries: mode === "sessions" && query.trim() !== "" ? sidebar.rows.map(({ id }) => ({
+  const origins = useQueries({ queries: mode === "sessions" && filters.needle !== "" ? sidebar.rows.map(({ id }) => ({
     ...queries.history({ id, originOnly: true }),
     queryKey: ["sessionOrigin", identity.data, protocol.data, id],
     staleTime: 10_000,
     retry: false,
-    select: selectOrigin,
+    select: originSearchText,
   })) : [] });
   const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000, enabled: mode === "commands" || mode === "cron" });
   const runCron = useMutation({
@@ -774,18 +828,7 @@ function CommandPalette({ newChat, sidebarOpen, onToggleSidebar }: { newChat: ()
       setMode(undefined);
     },
   });
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat || event.altKey || !(event.metaKey || event.ctrlKey) || event.code !== "KeyP") return;
-      event.preventDefault();
-      setQuery("");
-      setPick(0);
-      setMode(event.shiftKey ? "commands" : "sessions");
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, []);
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.map((origin) => origin.data ?? ""), id, update.mutate);
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.map((origin) => origin.data ?? ""), id, update.mutate, filters, agentFilter, roomFilter);
   const selected = items.length === 0 ? 0 : pick % items.length;
   const choose = (item: (typeof items)[number]) => {
     if (!item.keep) setMode(undefined);
@@ -793,23 +836,24 @@ function CommandPalette({ newChat, sidebarOpen, onToggleSidebar }: { newChat: ()
   };
   useEffect(() => { active.current?.scrollIntoView({ block: "nearest" }); }, [selected, mode]);
   const copy = paletteCopy(mode);
-  const empty = (mode === "cron" && jobs.isLoading) || origins.some((origin) => origin.isPending) ? "Loading…" : "No matches";
+  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => setPick(paletteMove(event, selected, items.length, () => { if (items[selected]) choose(items[selected]); }));
   return (
     <Dialog open={mode !== undefined} onOpenChange={(open) => { if (!open) setMode(undefined); }}>
-      <DialogContent showCloseButton={false} className="top-[20%] translate-y-0 overflow-hidden sm:max-w-lg">
+      <DialogContent initialFocus={input} showCloseButton={false} className="top-[20%] flex max-h-[75vh] translate-y-0 flex-col overflow-hidden sm:max-w-lg [@media(pointer:coarse)]:top-[var(--search-top,1rem)] [@media(pointer:coarse)]:max-h-[var(--search-height,75vh)]">
         <DialogTitle className="sr-only">{copy.title}</DialogTitle>
         <DialogDescription className="sr-only">{copy.desc}</DialogDescription>
-        <Input
+        {mode === "sessions" ? <SessionSearch rows={sidebar.rows} catalog={agents.data?.agents ?? []} query={query} setQuery={(value) => { setPick(0); setQuery(value); }} agentFilter={agentFilter} setAgentFilter={(value) => { setPick(0); setAgentFilter(value); }} roomFilter={roomFilter} setRoomFilter={(value) => { setPick(0); setRoomFilter(value); }} inputRef={input} placeholder={copy.placeholder} onKeyDown={onKeyDown} /> : <Input
+          ref={input}
           value={query}
           onChange={(event) => { setPick(0); setQuery(event.target.value); }}
           placeholder={copy.placeholder}
           variant="embedded"
-          onKeyDown={(event) => setPick(paletteMove(event, selected, items.length, () => { if (items[selected]) choose(items[selected]); }))}
-        />
+          onKeyDown={onKeyDown}
+        />}
         {runCron.error || update.error ? <p role="alert" className="px-3 text-sm text-destructive">{(runCron.error ?? update.error)?.message}</p> : null}
         {origins.some((origin) => origin.isError) ? <p role="alert" className="px-3 text-sm text-destructive">Could not search all chat origins.</p> : null}
         <ul className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
-          {items.length === 0 ? <li className="px-3 py-2 text-sm text-muted-foreground">{empty}</li> : items.map((item, index) => (
+          {items.length === 0 ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, origins, jobs.isLoading)}</li> : items.map((item, index) => (
             <li key={item.key}>
               <button ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start rounded-md px-3 py-2 text-left text-sm", index === selected && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}>
                 <span className="font-medium">{item.label}</span>
@@ -827,6 +871,12 @@ function paletteCopy(mode: "sessions" | "commands" | "cron" | undefined) {
   if (mode === "cron") return { title: "Run cron", desc: "Search and run a cron job.", placeholder: "Search cron jobs" };
   if (mode === "commands") return { title: "Run command", desc: "Search and run a command.", placeholder: "Type a command" };
   return { title: "Go to session", desc: "Search and open a session.", placeholder: "Search sessions" };
+}
+
+function paletteEmpty(mode: "sessions" | "commands" | "cron" | undefined, sidebar: SidebarView, origins: { isPending: boolean; isError: boolean }[], loadingJobs: boolean) {
+  if (mode === "sessions" && origins.some((origin) => origin.isError)) return "Search incomplete";
+  if (mode === "sessions" && (!searchIsAuthoritative(sidebar) || origins.some((origin) => origin.isPending))) return "loading...";
+  return mode === "cron" && loadingJobs ? "Loading…" : "No matches";
 }
 
 function paletteMove(event: { key: string; preventDefault: () => void }, selected: number, count: number, enter: () => void) {
@@ -969,6 +1019,14 @@ function matchesSession(session: Session, needle: string, agentFilter: string, r
   return needle === "" || `${session.name ?? ""} ${session.title ?? ""} ${session.preview ?? ""} ${session.agent ?? ""} ${sessionLabel(session.id)}`.toLowerCase().includes(needle);
 }
 
+function sessionSearchTerms(query: string) {
+  const pinnedOnly = /(?:^|\s)is:pinned(?=\s|$)/i.test(query);
+  const unreadOnly = /(?:^|\s)is:unread(?=\s|$)/i.test(query);
+  const text = query.replace(/(?:^|\s)is:(?:settled|pinned|unread)(?=\s|$)/gi, " ").trim();
+  const needle = typedPrefix(text, "agent:") === null && typedPrefix(text, "room:") === null ? text.toLowerCase() : "";
+  return { pinnedOnly, unreadOnly, text, needle };
+}
+
 function SidebarFreshness({ sidebar, emptySearch, emptyLabel = "No matches" }: { sidebar: SidebarView; emptySearch: boolean; emptyLabel?: string }) {
   const authoritative = searchIsAuthoritative(sidebar);
   return <>
@@ -976,7 +1034,7 @@ function SidebarFreshness({ sidebar, emptySearch, emptyLabel = "No matches" }: {
   </>;
 }
 
-function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFilter, roomFilter, setRoomFilter }: {
+function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFilter, roomFilter, setRoomFilter, inputRef, placeholder, onKeyDown }: {
   rows: Session[];
   catalog: { name: string }[];
   query: string;
@@ -985,36 +1043,32 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
   setAgentFilter: (value: string) => void;
   roomFilter: string;
   setRoomFilter: (value: string) => void;
+  inputRef?: React.Ref<HTMLInputElement>;
+  placeholder?: string;
+  onKeyDown?: React.KeyboardEventHandler<HTMLInputElement>;
 }) {
   const sidebar = useContext(Sidebar);
   const stale = !sidebar.refreshing && rows.length > 0 && !searchIsAuthoritative(sidebar);
   const [overlayPick, setOverlayPick] = useState(0);
-  const agentPrefix = typedPrefix(query, "agent:");
-  const roomPrefix = typedPrefix(query, "room:");
+  const { text } = sessionSearchTerms(query);
+  const agentPrefix = typedPrefix(text, "agent:");
+  const roomPrefix = typedPrefix(text, "room:");
   const choices = overlayChoices(agentPrefix, roomPrefix, catalog, roomPrefix === null ? [] : slackRooms(rows));
   const pick = choices.length === 0 ? 0 : overlayPick % choices.length;
+  const active = useRef<HTMLButtonElement>(null);
+  useEffect(() => { active.current?.scrollIntoView({ block: "nearest" }); }, [pick, text]);
   const applyOverlay = (name: string) => {
     if (agentPrefix !== null) {
       setAgentFilter(name);
     } else {
       setRoomFilter(name);
     }
-    setQuery("");
+    setQuery(query.split(/\s+/).filter((term) => /^is:(settled|pinned|unread)$/i.test(term)).join(" "));
     setOverlayPick(0);
   };
   return (
-        <div className="relative min-w-0 flex-1">
-          {choices.length > 0 ? <ul className="absolute inset-x-0 top-full z-10 mt-1 overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-md">
-            {choices.map((item, index) => (
-              <li key={item.key}>
-                <button type="button" className={cn("flex w-full flex-col items-start px-3 py-2 text-left text-sm", index === pick && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => applyOverlay(item.key)}>
-                  <span className="font-medium">{item.label}</span>
-                  {item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}
-                </button>
-              </li>
-            ))}
-          </ul> : null}
-          <div className="flex h-8 min-w-0 items-center gap-1 rounded-md border border-sidebar-border bg-background pr-2 pl-2">
+        <div className="min-w-0 flex-1 shrink-0">
+          <div className="flex min-h-8 min-w-0 flex-wrap items-center gap-1 rounded-md border border-sidebar-border bg-background pr-2 pl-2">
             <span className="flex size-3.5 shrink-0 items-center text-muted-foreground">
               {stale ? <Tooltip>
                 <TooltipTrigger render={<span />} tabIndex={0} role="img" aria-label="Conversation list may be out of date">
@@ -1026,14 +1080,16 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
             {agentFilter ? <FilterPill label={`agent:${agentFilter}`} onClear={() => setAgentFilter("")} /> : null}
             {roomFilter ? <FilterPill label={`room:${roomFilter}`} onClear={() => setRoomFilter("")} /> : null}
             <Input
+              ref={inputRef}
               value={query}
               onChange={(event) => {
                 setOverlayPick(0);
                 setQuery(event.target.value);
               }}
-              placeholder={agentFilter || roomFilter ? "Search" : "Search or agent: or room:"}
+              aria-label={placeholder ?? "Search sessions"}
+              placeholder={placeholder ?? (agentFilter || roomFilter ? "Search" : "Search or agent: or room:")}
               variant="embedded"
-              className="h-full min-w-0 flex-1"
+              className="h-8 min-w-24 flex-1"
               onKeyDown={(event) => {
                 if (choices.length > 0) {
                   if (event.key === "ArrowDown") {
@@ -1053,12 +1109,29 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
                   }
                   if (event.key === "Escape") {
                     event.preventDefault();
+                    event.stopPropagation();
                     setQuery("");
+                    return;
                   }
                 }
+                if (event.key === "Enter" && (agentPrefix !== null || roomPrefix !== null)) {
+                  event.preventDefault();
+                  return;
+                }
+                onKeyDown?.(event);
               }}
             />
           </div>
+          {choices.length > 0 ? <ul className="mt-1 max-h-[min(12rem,25vh)] overflow-y-auto rounded-lg border bg-popover text-popover-foreground shadow-md">
+            {choices.map((item, index) => (
+              <li key={item.key}>
+                <button ref={index === pick ? active : null} type="button" className={cn("flex w-full flex-col items-start px-3 py-2 text-left text-sm", index === pick && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => applyOverlay(item.key)}>
+                  <span className="font-medium">{item.label}</span>
+                  {item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}
+                </button>
+              </li>
+            ))}
+          </ul> : null}
         </div>
   );
 }
@@ -1073,7 +1146,7 @@ function PageTitle({ children }: { children: ReactNode }) {
 
 function SessionList({ settledOnly = false }: { settledOnly?: boolean }) {
   const sidebar = useContext(Sidebar);
-  const agents = useQuery({ ...queries.agents(), staleTime: 60_000 });
+  const agents = useQuery({ ...queries.agents(), staleTime: 60_000, enabled: settledOnly });
   const settle = useMutation({ mutationFn: mutations.settleSession, onSuccess: () => sidebar.invalidateQueries() });
   const route = useRoute();
   const [query, setQuery] = useState("");
@@ -1081,19 +1154,15 @@ function SessionList({ settledOnly = false }: { settledOnly?: boolean }) {
   const [roomFilter, setRoomFilter] = useState("");
   const catalog = agents.data?.agents ?? [];
   const rows = sidebar.rows;
-  const includeSettled = /(?:^|\s)is:settled(?=\s|$)/i.test(query);
-  const pinnedOnly = /(?:^|\s)is:pinned(?=\s|$)/i.test(query);
-  const unreadOnly = /(?:^|\s)is:unread(?=\s|$)/i.test(query);
-  const text = query.replace(/(?:^|\s)is:(?:settled|pinned|unread)(?=\s|$)/gi, " ").trim();
-  const needle = typedPrefix(text, "agent:") === null && typedPrefix(text, "room:") === null ? text.toLowerCase() : "";
-  const filtered = rows.filter((session) => (settledOnly ? session.settled : includeSettled || pinnedOnly || unreadOnly || !session.settled) && (!pinnedOnly || session.pinned) && (!unreadOnly || session.unread) && matchesSession(session, needle, agentFilter, roomFilter)).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
-  const searching = [needle, agentFilter, roomFilter, includeSettled, pinnedOnly, unreadOnly].some(Boolean);
+  const { pinnedOnly, unreadOnly, needle } = sessionSearchTerms(query);
+  const filtered = rows.filter((session) => (settledOnly ? session.settled : !session.settled) && (!pinnedOnly || session.pinned) && (!unreadOnly || session.unread) && matchesSession(session, needle, agentFilter, roomFilter)).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
+  const searching = [needle, agentFilter, roomFilter, pinnedOnly, unreadOnly].some(Boolean);
   return (
     <div className={cn("flex h-full min-h-0 flex-col", settledOnly && "mx-auto w-full max-w-3xl gap-6 p-4")}>
       {settledOnly ? <PageTitle>Settled</PageTitle> : null}
-      <div className={cn("flex shrink-0 items-center gap-1", !settledOnly && "p-2")}>
+      {settledOnly ? <div className="flex shrink-0 items-center gap-1">
         <SessionSearch rows={rows} catalog={catalog} query={query} setQuery={setQuery} agentFilter={agentFilter} setAgentFilter={setAgentFilter} roomFilter={roomFilter} setRoomFilter={setRoomFilter} />
-      </div>
+      </div> : null}
       <SidebarFreshness sidebar={sidebar} emptySearch={filtered.length === 0 && (settledOnly || searching)} emptyLabel={searching ? "No matches" : "No settled chats"} />
       {settle.error ? <p role="alert" className="text-sm text-destructive">{settle.error.message}</p> : null}
       <ul className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
