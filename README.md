@@ -39,6 +39,8 @@ For external MCP conversations, guardrails and automatic permission reviewers re
 
 Permission matching preserves backslashes as literal characters; it does not treat them as `/`. This follows Unix path semantics and applies to both allow and deny rules.
 
+RocketCode's default model is `gpt-6-luna`. The built-in automatic permission reviewer uses this runtime default unless `auto_approver_model` is configured. Guardrails and named reviewers use their own agent models.
+
 ### RocketClaw
 
 `internal/rocketclaw` is the long-running service runtime around RocketCode. It provides thread-local conversations in configured Slack channels, saved Starlark workflows, external MCP, cron-defined background prompts, one-shot and recurring scheduled messages, inbound and outbound attachments, supervisor restart, and PostgreSQL state selected by `database_url`.
