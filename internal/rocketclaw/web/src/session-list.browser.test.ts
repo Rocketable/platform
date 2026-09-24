@@ -236,6 +236,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
   let cronRunCalls = 0;
   const cronHistory: string[] = [];
   const historyRequests: { id: string; originOnly?: boolean }[] = [];
+  const originHold = Promise.withResolvers<void>();
   const origins: Record<string, ChatOrigin> = {
     kept: { kind: "external_mcp", externalConversationId: "Case-42", agent: "source-agent", pairs: [{ key: "Original-Key", value: "Value <&> Unicode Ω" }, { key: "shared", value: "will vanish" }] },
     gone: { kind: "cron", sourcePath: "cron/Report.md", stem: "Report", runKind: "one-off", runId: "cron:unique-run", agent: "cron-agent", ranAt: "2026-09-22T03:04:05Z" },
@@ -268,6 +269,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     settledRows: [] as Session[],
     settleCalls: [] as { id: string; settled: boolean }[],
     updateError: false,
+    holdOrigins: false,
+    originError: "",
     createdAgents: [] as string[],
     yieldBatches: async function* (): AsyncGenerator<SessionBatch> {},
   };
@@ -385,7 +388,11 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
         case "/api/RunCronJob": cronRunCalls++; return Response.json({ id: await cronHold.promise });
         case "/api/History":
           historyRequests.push(input);
-          if (input.originOnly) return Response.json({ messages: [], origin: origins[input.id] ? JSON.stringify(origins[input.id]) : "" });
+          if (input.originOnly) {
+            if (ctrl.holdOrigins && input.id === "slack-thread:C:winner") await originHold.promise;
+            if (ctrl.originError === input.id) throw new RPCError("origin unavailable", 13);
+            return Response.json({ messages: [], origin: origins[input.id] ? JSON.stringify(origins[input.id]) : "" });
+          }
           if (input.id === "cron:silent-source" || input.id === "web:cron:silent-source") {
             cronHistory.push(input.id);
             return Response.json({ messages: [{ role: "assistant", text: "Silent run trace", complete: true }] });
@@ -513,12 +520,17 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     identityHold.resolve();
     await shown(page, "Huge");
     await hidden(page, "will vanish");
-    await page.getByPlaceholder("Search or agent: or room:").fill("needle-17mib");
-    await shown(page, "Huge");
-    await page.getByPlaceholder("Search or agent: or room:").fill("no-such-preview");
-    await shown(page, "loading...");
-    await hidden(page, "No matches");
-    await page.getByPlaceholder("Search or agent: or room:").fill("");
+    await page.getByRole("button", { name: "Search sessions", exact: true }).click();
+    const sessionPalette = page.getByRole("dialog", { name: "Go to session", exact: true });
+    const search = sessionPalette.getByPlaceholder("Search sessions", { exact: true });
+    expect(historyRequests).toEqual([]);
+    await search.fill("needle-17mib");
+    await shown(sessionPalette, "Huge");
+    await search.fill("no-such-preview");
+    await shown(sessionPalette, "loading...");
+    await hidden(sessionPalette, "No matches");
+    await page.keyboard.press("Escape");
+    historyRequests.length = 0;
 
     const putsBeforeLive = await page.evaluate(() => (window as unknown as { __snapshotPuts: number }).__snapshotPuts);
     ctrl.yieldBatches = complete([row("kept", "saved preview"), row("gone", "will vanish"), row("slack-thread:C:1", "filter preview")]);
@@ -554,7 +566,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect((await desktopSidebar.boundingBox())!.y).toBe(0);
     expect(menuPosition!.y + menuPosition!.height).toBeGreaterThan(page.viewportSize()!.height - 8);
     expect(await page.locator("header:visible").count()).toBe(0);
-    await desktopSidebar.getByPlaceholder("Search or agent: or room:").fill("saved");
+    expect(await desktopSidebar.getByRole("textbox").count()).toBe(0);
     await page.getByRole("button", { name: "Hide sidebar", exact: true }).click();
     expect(await desktopSidebar.isVisible()).toBe(false);
     expect(await page.getByRole("button", { name: "Show sidebar", exact: true }).boundingBox()).toEqual(menuPosition);
@@ -562,8 +574,6 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await page.getByRole("button", { name: "Show sidebar", exact: true }).press("Enter");
     expect(await desktopSidebar.isVisible()).toBe(true);
     expect(await page.getByRole("button", { name: "Hide sidebar", exact: true }).boundingBox()).toEqual(menuPosition);
-    expect(await desktopSidebar.getByPlaceholder("Search or agent: or room:").inputValue()).toBe("saved");
-    await desktopSidebar.getByPlaceholder("Search or agent: or room:").fill("");
     await page.keyboard.press("Control+b");
     expect(await desktopSidebar.isVisible()).toBe(false);
     expect(await page.getByRole("button", { name: "Show sidebar", exact: true }).getAttribute("aria-expanded")).toBe("false");
@@ -571,12 +581,29 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect(await desktopSidebar.isVisible()).toBe(true);
     expect(await page.getByRole("button", { name: "Hide sidebar", exact: true }).getAttribute("aria-expanded")).toBe("true");
     await page.keyboard.press("Control+p");
-    const sessionPalette = page.getByRole("dialog", { name: "Go to session", exact: true });
     expect(await sessionPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
     await sessionPalette.getByPlaceholder("Search sessions", { exact: true }).waitFor();
     await sessionPalette.getByRole("button").filter({ hasText: "saved preview" }).waitFor();
     expect(historyRequests).toEqual([]); // Ordinary sidebar and empty Cmd+P do not load histories.
-    const search = sessionPalette.getByPlaceholder("Search sessions", { exact: true });
+    for (const term of ["   ", "IS:SETTLED", "is:pinned is:unread", "agent:ma", "room:ro"]) {
+      await search.fill(term);
+      await page.waitForTimeout(50);
+      expect(historyRequests).toEqual([]);
+    }
+    await search.fill("agent:main");
+    await search.press("Enter");
+    await sessionPalette.getByRole("button", { name: "agent:main", exact: true }).waitFor();
+    expect(page.url()).toBe(origin + "/");
+    await search.fill("room:room");
+    await search.press("Tab");
+    await sessionPalette.getByRole("button", { name: "room:room", exact: true }).waitFor();
+    expect(historyRequests).toEqual([]);
+    await search.fill("ORIGINAL-KEY");
+    await sessionPalette.getByText("loading...", { exact: true }).waitFor(); // Enumeration is held; the origin must not bypass the room filter.
+    expect(await sessionPalette.locator("li > button").count()).toBe(0);
+    await sessionPalette.getByRole("button", { name: "room:room", exact: true }).click();
+    await sessionPalette.getByRole("button").filter({ hasText: "saved preview" }).waitFor();
+    await sessionPalette.getByRole("button", { name: "agent:main", exact: true }).click();
     for (const term of ["ORIGINAL-KEY", "value <&> unicode ω", "original-key=value <&>", "CASE-42", "SOURCE-AGENT", "EXTERNAL MCP"]) {
       await search.fill(term);
       await sessionPalette.getByRole("button").filter({ hasText: "saved preview" }).waitFor();
@@ -588,13 +615,13 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       expect(await sessionPalette.getByRole("button").count()).toBe(1);
     }
     expect(historyRequests.every((request) => request.originOnly)).toBe(true);
-    expect(historyRequests.map((request) => request.id).sort()).toEqual(["gone", "kept", "slack-thread:C:1"]);
+    expect(historyRequests.map((request) => request.id).sort()).toEqual(["gone", "slack-thread:C:1"]); // Kept's origin was cached by the saved-preview search.
     await search.fill("PREVIEW"); // Preserve existing row matching and ordering.
     expect(await sessionPalette.getByRole("button").locator("span:first-child").allTextContents()).toEqual(["saved preview", "filter preview"]);
     await search.fill("will vanish"); // Origin and row matches share the original order.
     expect(await sessionPalette.getByRole("button").locator("span:first-child").allTextContents()).toEqual(["saved preview", "will vanish"]);
     await search.fill("no-such-origin");
-    await sessionPalette.getByText("No matches", { exact: true }).waitFor();
+    await sessionPalette.getByText("loading...", { exact: true }).waitFor();
     await search.fill("ORIGINAL-KEY");
     const opened = page.waitForResponse((response: { url: () => string; request: () => { postDataJSON: () => { id: string; originOnly?: boolean } } }) => response.url().endsWith("/api/History") && response.request().postDataJSON().id === "kept" && !response.request().postDataJSON().originOnly);
     await search.press("Enter");
@@ -676,14 +703,14 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     const mobileSidebar = page.getByRole("dialog", { name: "Sessions", exact: true });
     await mobileSidebar.waitFor();
     await page.waitForFunction(() => document.activeElement === document.querySelector('[data-sidebar-swipe="close"]'));
-    await mobileSidebar.getByPlaceholder("Search or agent: or room:").click({ trial: true });
+    expect(await mobileSidebar.getByRole("textbox").count()).toBe(0);
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 180, y: 300 }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: 80, y: 305 }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     await mobileSidebar.waitFor({ state: "hidden" });
     expect(page.url()).toBe(routeBeforeSwipe);
     await touch.detach();
-    await page.getByRole("button", { name: "Sessions" }).click();
+    await page.getByRole("button", { name: "Sessions", exact: true }).click();
     expect((await page.getByRole("dialog").boundingBox())!.y).toBe(0);
     expect(await page.getByRole("link", { name: "RocketClaw", exact: true, includeHidden: true }).count()).toBe(0);
     expect(await page.getByText("saved preview", { exact: true }).count()).toBeGreaterThan(1);
@@ -957,12 +984,13 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect(await page.locator("textarea").inputValue()).toBe("newer unsent draft");
     ctrl.holdPrompt = false;
     const selectedURL = page.url();
-    await page.getByPlaceholder("Search or agent: or room:").fill("agent:main");
+    await page.keyboard.press("Control+p");
+    await search.fill("agent:main");
     await page.keyboard.press("Enter");
-    await page.locator("#session-sidebar").getByPlaceholder("Search", { exact: true }).fill("room:room");
+    await search.fill("room:room");
     await page.keyboard.press("Enter");
-    await page.locator("#session-sidebar").getByPlaceholder("Search", { exact: true }).fill("preview");
-    await shown(page, "filter preview");
+    await search.fill("preview");
+    await shown(sessionPalette, "filter preview");
     ctrl.yieldBatches = async function* () {
       for (const session of [row("kept", "merged-live"), row("extra", "prefix-only"), ...Array.from({ length: 446 }, (_, i) => ({ ...row(i < 2 ? `slack-thread:C:${i + 2}` : `prefix-${i}`, `partial preview ${i}`), agent: i === 1 ? "other" : "main", settled: i === 7 }))]) {
         yield batch([session]);
@@ -970,32 +998,31 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await new Promise(() => {});
     };
     blocked.resolve();
-    await shown(page, "partial preview 0");
-    await hidden(page, "merged-live");
+    await shown(sessionPalette, "partial preview 0");
+    await hidden(sessionPalette, "merged-live");
     // One matching arrival proves progress; each structured filter excludes its own mismatch.
-    await hidden(page, "partial preview 1");
-    await hidden(page, "partial preview 2");
-    await shown(page, "agent:main");
-    await shown(page, "room:room");
-    await shown(page, "filter preview");
-    expect(await page.locator("#session-sidebar").getByPlaceholder("Search", { exact: true }).inputValue()).toBe("preview");
+    await hidden(sessionPalette, "partial preview 1");
+    await hidden(sessionPalette, "partial preview 2");
+    await shown(sessionPalette, "agent:main");
+    await shown(sessionPalette, "room:room");
+    await shown(sessionPalette, "filter preview");
+    expect(await search.inputValue()).toBe("preview");
     await page.getByRole("button", { name: "agent:main", exact: true }).click();
     await page.getByRole("button", { name: "room:room", exact: true }).click();
-    await page.getByPlaceholder("Search or agent: or room:").fill("");
-    await shown(page, "merged-live");
-    await shown(page, "prefix-only");
-    await shown(page, "will vanish");
+    await search.fill("");
+    await shown(sessionPalette, "merged-live");
+    await shown(sessionPalette, "prefix-only");
+    await shown(sessionPalette, "will vanish");
 
     expect(page.url()).toBe(selectedURL);
-    for (let i = 0; i < 7; i++) await shown(page, `partial preview ${i}`);
-    await hidden(page, "partial preview 7");
+    for (let i = 0; i < 8; i++) await shown(sessionPalette, `partial preview ${i}`);
     expect(await page.locator("aside").getByRole("button", { name: "Unsettle", exact: true }).count()).toBe(0);
-    await page.getByPlaceholder("Search or agent: or room:").fill("partial preview is:settled");
-    await shown(page, "partial preview 7");
-    await shown(page, "partial preview 0");
-    await page.getByPlaceholder("Search or agent: or room:").fill("partial preview 445");
-    await shown(page, "partial preview 445");
-    await page.getByPlaceholder("Search or agent: or room:").fill("");
+    await search.fill("partial preview is:settled");
+    await shown(sessionPalette, "partial preview 7");
+    await shown(sessionPalette, "partial preview 0");
+    await search.fill("partial preview 445");
+    await shown(sessionPalette, "partial preview 445");
+    await page.keyboard.press("Escape");
 
     await page.evaluate(() => sessionStorage.setItem("delaySnapshotOpen", "1"));
     await page.reload();
@@ -1028,20 +1055,21 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     };
     blocked.resolve();
     await shown(page, "wire-terminal");
-    const searchBounds = await page.getByPlaceholder("Search or agent: or room:").boundingBox();
-    const rowBounds = await page.getByText("wire-terminal", { exact: true }).boundingBox();
+    await page.keyboard.press("Control+p");
+    await sessionPalette.evaluate(async (node: HTMLElement) => { await Promise.all(node.getAnimations().map((animation) => animation.finished)); });
+    const searchBounds = await search.boundingBox();
+    const rowBounds = await sessionPalette.getByText("wire-terminal", { exact: true }).boundingBox();
     listResponse!.close();
     const staleIndicator = page.getByRole("img", { name: "Conversation list may be out of date" });
     await staleIndicator.waitFor({ state: "visible" });
-    expect(await page.getByPlaceholder("Search or agent: or room:").boundingBox()).toEqual(searchBounds);
-    expect(await page.getByText("wire-terminal", { exact: true }).boundingBox()).toEqual(rowBounds);
-    await page.getByPlaceholder("Search or agent: or room:").focus();
+    expect(await search.boundingBox()).toEqual(searchBounds);
+    expect(await sessionPalette.getByText("wire-terminal", { exact: true }).boundingBox()).toEqual(rowBounds);
+    await search.focus();
     await page.keyboard.press("Shift+Tab");
     await shown(page, "Conversation list may be out of date");
-    await page.getByPlaceholder("Search or agent: or room:").fill("missing-stale-preview");
-    await shown(page, "loading...");
-    await hidden(page, "No matches");
-    await page.getByPlaceholder("Search or agent: or room:").fill("");
+    await search.fill("missing-stale-preview");
+    await shown(sessionPalette, "loading...");
+    await hidden(sessionPalette, "No matches");
     wireTail.resolve();
     blocked = Promise.withResolvers();
     await page.reload();
@@ -1055,17 +1083,18 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     };
     blocked.resolve();
     await page.getByText("loading...", { exact: true }).first().waitFor({ state: "visible", timeout: 15_000 });
-    await page.getByPlaceholder("Search or agent: or room:").fill("zzz-nope");
-    await shown(page, "loading...");
+    await page.keyboard.press("Control+p");
+    await search.fill("zzz-nope");
+    await shown(sessionPalette, "loading...");
     await staleIndicator.waitFor({ state: "visible" });
     expect(await page.evaluate(() => (window as unknown as { __snapshotPuts: number }).__snapshotPuts)).toBe(putsBeforeIncomplete);
     expect(await page.evaluate(snapshot, ["alice", "test-protocol"])).toEqual(beforeIncomplete);
     ctrl.yieldBatches = complete([row("kept", "backfilled preview")]);
-    await shown(page, "No matches");
-    await hidden(page, "loading...");
+    await shown(sessionPalette, "No matches");
+    await hidden(sessionPalette, "loading...");
     expect(await staleIndicator.count()).toBe(0);
-    await page.getByPlaceholder("Search or agent: or room:").fill("");
-    await shown(page, "backfilled preview");
+    await search.fill("");
+    await shown(sessionPalette, "backfilled preview");
     await page.waitForFunction(() => (window as unknown as { __snapshotPuts: number }).__snapshotPuts > 0);
     expect(await page.evaluate(snapshot, ["alice", "test-protocol"])).toEqual([row("kept", "backfilled preview")]);
     blocked = Promise.withResolvers();
@@ -1076,10 +1105,10 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     blocked.resolve();
     await page.getByText("backfilled preview", { exact: true }).waitFor({ state: "hidden", timeout: 15_000 });
     await hidden(page, "saved preview");
-    await page.getByPlaceholder("Search or agent: or room:").fill("empty-search");
-    await shown(page, "No matches");
-    await hidden(page, "loading...");
-    await page.getByPlaceholder("Search or agent: or room:").fill("");
+    await page.keyboard.press("Control+p");
+    await search.fill("empty-search");
+    await shown(sessionPalette, "No matches");
+    await hidden(sessionPalette, "loading...");
     blocked = Promise.withResolvers();
     await page.reload();
     await hidden(page, "saved preview");
@@ -1150,13 +1179,14 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       };
       await page.getByText("new protocol preview", { exact: true }).waitFor({ state: "hidden", timeout: 15_000 });
       await hidden(page, "unconfirmed owner preview");
-      await page.getByPlaceholder("Search or agent: or room:").fill("preview");
+      await page.keyboard.press("Control+p");
+      await search.fill("preview");
       await hidden(page, "new protocol preview");
       blocked = Promise.withResolvers();
       ctrl.yieldBatches = complete([row("gone", "new protocol preview")], "bob");
       identityHold.resolve();
-      await shown(page, "new protocol preview");
-      await page.getByPlaceholder("Search or agent: or room:").fill("");
+      await shown(sessionPalette, "new protocol preview");
+      await page.keyboard.press("Escape");
       blocked.resolve();
     }
 
@@ -1256,6 +1286,152 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       expect(await sidebar.getByRole("link").filter({ hasText: "latest assistant reply" }).boundingBox()).toEqual(before);
     }
     await runningPage.close();
+    // Exercise the combined expression against the built App, with origins delayed across a row reorder.
+    const matrixRows = [
+      { ...row("slack-thread:C:winner", "row and origin union"), name: "Winner", pinned: true, unread: true },
+      { ...row("slack-thread:C:read", "Read chat"), pinned: true },
+      { ...row("slack-thread:C:other-agent", "Other agent"), agent: "other", pinned: true, unread: true },
+      { ...row("slack-thread:D:other-room", "Other room"), title: "different", pinned: true, unread: true },
+      { ...row("slack-thread:C:unpinned", "Unpinned chat"), unread: true },
+      { ...row("slack-thread:C:settled-union", "Settled chat"), settled: true },
+    ];
+    for (const session of matrixRows) origins[session.id] = { kind: "external_mcp", externalConversationId: "union", agent: "source" };
+    origins[matrixRows[0].id] = { kind: "external_mcp", externalConversationId: "union winner-origin", agent: "source" };
+    ctrl.yieldBatches = complete(matrixRows);
+    for (const hasTouch of [false, true]) {
+      const layoutPage = await browser.newPage({ hasTouch, viewport: { width: 390, height: 844 } });
+      await layoutPage.goto(origin);
+      await layoutPage.getByRole("button", { name: "Search sessions", exact: true }).click();
+      const layoutDialog = layoutPage.getByRole("dialog", { name: "Go to session", exact: true });
+      await layoutDialog.waitFor();
+      for (const width of [390, 1024, 1280]) {
+        await layoutPage.setViewportSize({ width, height: 844 });
+        // Keyboards resize the visual viewport without resizing the layout viewport.
+        await layoutPage.evaluate(() => {
+          const viewport = window.visualViewport!;
+          Object.defineProperty(viewport, "height", { configurable: true, value: 360 });
+          Object.defineProperty(viewport, "offsetTop", { configurable: true, value: 24 });
+          viewport.dispatchEvent(new Event("resize"));
+          viewport.dispatchEvent(new Event("scroll"));
+        });
+        await layoutPage.waitForFunction((touch: boolean) => {
+          const style = getComputedStyle(document.querySelector('[role="dialog"]')!);
+          return Math.abs(parseFloat(style.top) - (touch ? 40 : 168.8)) < 0.1 && Math.abs(parseFloat(style.maxHeight) - (touch ? 328 : 633)) < 0.1;
+        }, hasTouch);
+        const layout = await layoutDialog.evaluate((element: HTMLElement) => ({
+          top: parseFloat(getComputedStyle(element).top),
+          maxHeight: parseFloat(getComputedStyle(element).maxHeight),
+          height: element.offsetHeight,
+        }));
+        expect(layout.top).toBeCloseTo(hasTouch ? 40 : 168.8, 0);
+        expect(layout.maxHeight).toBeCloseTo(hasTouch ? 328 : 633, 0);
+        if (hasTouch) expect(layout.height).toBeLessThanOrEqual(328);
+      }
+      await layoutPage.close();
+    }
+    const matrix = await context.newPage();
+    const suggestionAgents = [{ name: "main", model: "gpt" }, ...Array.from({ length: 10 }, (_, i) => ({ name: `agent${i}` })), { name: "other", model: "gpt" }];
+    await matrix.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: suggestionAgents } }));
+    await matrix.goto(origin);
+    await matrix.locator("#session-sidebar").getByText("Winner", { exact: true }).waitFor();
+    const matrixDialog = matrix.getByRole("dialog", { name: "Go to session", exact: true });
+    const matrixSearch = matrixDialog.getByPlaceholder("Search sessions");
+    for (const entry of ["click", "Meta+p", "Control+p"]) {
+      if (entry === "click") await matrix.getByRole("button", { name: "Search sessions", exact: true }).click();
+      else await matrix.keyboard.press(entry);
+      await matrixSearch.waitFor();
+      expect(await matrixSearch.inputValue()).toBe("");
+      await matrix.waitForFunction(() => document.activeElement?.getAttribute("placeholder") === "Search sessions");
+      expect(await matrixSearch.evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
+      expect(await matrixDialog.getByRole("button", { name: /^(agent:|room:)/ }).count()).toBe(0);
+      expect(await matrixDialog.locator("li > button.bg-accent span:first-child").innerText()).toBe("Winner");
+      await matrixSearch.fill("agent:ma");
+      await matrixSearch.press("ArrowDown");
+      await matrixSearch.press("ArrowUp");
+      await matrixSearch.press("Enter");
+      await matrixSearch.fill("room:ro");
+      await matrixDialog.getByRole("button", { name: "room", exact: true }).click();
+      await matrixSearch.fill("is:pinned is:unread");
+      expect(await matrixDialog.locator("li > button span:first-child").allTextContents()).toEqual(["Winner"]);
+      await matrixSearch.press("ArrowDown");
+      await matrix.keyboard.press("Escape");
+      await matrixDialog.waitFor({ state: "hidden" });
+    }
+    await matrix.keyboard.press("Control+p");
+    for (const prefix of ["agent:main", "room:room"]) {
+      await matrixSearch.fill(`IS:PINNED ${prefix} is:unread`);
+      await matrixSearch.press("Enter");
+      expect(await matrixSearch.inputValue()).toBe("IS:PINNED is:unread");
+      expect(await matrixDialog.getByText("Unpinned chat", { exact: true }).count()).toBe(0);
+      expect(await matrixDialog.getByText("Read chat", { exact: true }).count()).toBe(0);
+      await matrixDialog.getByRole("button", { name: prefix, exact: true }).click();
+    }
+    await matrixSearch.fill("agent:");
+    for (let i = 0; i < 10; i++) await matrixSearch.press("ArrowDown");
+    const lastSuggestion = matrixDialog.getByRole("button", { name: "agent9", exact: true });
+    expect(await lastSuggestion.evaluate((node: HTMLElement) => {
+      const bounds = node.getBoundingClientRect();
+      return node.classList.contains("bg-accent") && node.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
+    })).toBe(true);
+    await matrixSearch.press("Escape");
+    expect(await matrixDialog.isVisible()).toBe(true);
+    expect(await matrixSearch.inputValue()).toBe("");
+    ctrl.holdOrigins = true;
+    await matrixSearch.fill("union");
+    await matrixDialog.getByText("Winner", { exact: true }).waitFor(); // Row result remains usable while origins load.
+    expect(await matrixDialog.getByText("No matches", { exact: true }).count()).toBe(0);
+    const reordered = [matrixRows[3], matrixRows[0], matrixRows[2], matrixRows[1], matrixRows[5], matrixRows[4]];
+    ctrl.yieldBatches = complete(reordered);
+    await matrix.waitForFunction(() => document.querySelector('#session-sidebar li a')?.textContent?.includes("Other room"));
+    ctrl.holdOrigins = false;
+    originHold.resolve();
+    await matrixDialog.getByText("Settled chat", { exact: true }).waitFor();
+    expect(await matrixDialog.locator("li > button span:first-child").allTextContents()).toEqual(["Other room", "Winner", "Other agent", "Read chat", "Settled chat", "Unpinned chat"]);
+    await matrixSearch.fill("winner-origin");
+    await matrixDialog.getByText("Winner", { exact: true }).waitFor();
+    expect(await matrixDialog.locator("li > button span:first-child").allTextContents()).toEqual(["Winner"]);
+    await matrixSearch.fill("agent:main");
+    await matrixSearch.press("Enter");
+    await matrixSearch.fill("room:room");
+    await matrixSearch.press("Tab");
+    await matrixSearch.fill("is:pinned is:unread union");
+    expect(await matrixDialog.locator("li > button span:first-child").allTextContents()).toEqual(["Winner"]);
+    for (const width of [1280, 390, 320]) {
+      await matrix.setViewportSize({ width, height: 844 });
+      await matrixDialog.screenshot({ path: path.join(process.env.TMPDIR!, `unified-search-${width}.png`) });
+      expect(await matrixDialog.evaluate((node: HTMLElement) => node.scrollWidth <= node.clientWidth)).toBe(true);
+      expect((await matrixSearch.boundingBox())!.width).toBeGreaterThanOrEqual(96);
+    }
+    await matrix.keyboard.press("Escape");
+    const searchButton = matrix.getByRole("button", { name: "Search sessions", exact: true });
+    await searchButton.scrollIntoViewIfNeeded();
+    expect((await searchButton.boundingBox())!.width).toBeGreaterThanOrEqual(44);
+    await searchButton.click();
+    expect(await matrixSearch.inputValue()).toBe("");
+    await matrixSearch.press("Escape");
+    await matrix.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Search sessions");
+    await matrix.getByRole("button", { name: "Hide bottom navigation" }).click();
+    expect(await searchButton.isVisible()).toBe(false);
+    await matrix.keyboard.press("Meta+p");
+    await matrixSearch.waitFor();
+    await matrixSearch.press("Escape");
+    await matrix.getByRole("button", { name: "Show bottom navigation" }).click();
+    await matrix.close();
+
+    ctrl.originError = matrixRows[0].id;
+    const failure = await browser.newPage(); // A fresh query cache makes the failed lookup observable.
+    await failure.goto(origin);
+    await failure.locator("#session-sidebar").getByText("Winner", { exact: true }).waitFor();
+    await failure.keyboard.press("Control+p");
+    const failureDialog = failure.getByRole("dialog", { name: "Go to session", exact: true });
+    await failureDialog.getByPlaceholder("Search sessions").fill("row and origin");
+    await failureDialog.getByRole("alert").waitFor();
+    await failureDialog.getByText("Winner", { exact: true }).waitFor();
+    await failureDialog.getByPlaceholder("Search sessions").fill("absent");
+    await failureDialog.getByText("Search incomplete", { exact: true }).waitFor();
+    expect(await failureDialog.getByText("No matches", { exact: true }).count()).toBe(0);
+    await failure.close();
+    ctrl.originError = "";
     ctrl.settledRows = [
       row("slack-thread:C:active", "matching active"),
       { ...row("slack-thread:C:settled", "matching settled"), settled: true },
@@ -1263,27 +1439,75 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       { ...row("web-session:settled", "matching other room"), settled: true },
     ];
     ctrl.yieldBatches = complete(ctrl.settledRows);
+    const pendingPage = await context.newPage();
+    const catalogGate = Promise.withResolvers<void>();
+    await pendingPage.route("**/api/ListAgents", async (route: { fulfill(options: { json: unknown }): Promise<void> }) => {
+      await catalogGate.promise;
+      await route.fulfill({ json: { agents: suggestionAgents } });
+    });
+    await pendingPage.goto(origin);
+    await shown(pendingPage.locator("#session-sidebar"), "matching active");
+    await pendingPage.keyboard.press("Meta+p");
+    const pendingDialog = pendingPage.getByRole("dialog", { name: "Go to session", exact: true });
+    const pendingSearch = pendingDialog.getByPlaceholder("Search sessions");
+    for (const prefix of ["agent:main", "room:missing"]) {
+      await pendingSearch.fill(prefix);
+      await pendingSearch.press("Enter");
+      expect(new URL(pendingPage.url()).pathname).toBe("/");
+      expect(await pendingDialog.isVisible()).toBe(true);
+      expect(await pendingSearch.inputValue()).toBe(prefix);
+    }
+    catalogGate.resolve();
+    await pendingSearch.fill("agent:main");
+    await pendingDialog.getByRole("button", { name: "main gpt", exact: true }).waitFor();
+    await pendingSearch.press("Enter");
+    await pendingDialog.getByRole("button", { name: "agent:main", exact: true }).waitFor();
+    await pendingPage.close();
     const settledPage = await context.newPage();
+    await settledPage.route("**/api/ListAgents", (route: { fulfill(options: { json: unknown }): Promise<void> }) => route.fulfill({ json: { agents: suggestionAgents } }));
     await settledPage.goto(origin);
     const settledSidebar = settledPage.locator("#session-sidebar");
     await shown(settledSidebar, "matching active");
     await hidden(settledSidebar, "matching settled");
-    await settledSidebar.getByPlaceholder("Search or agent: or room:").fill("agent:main");
+    await settledPage.keyboard.press("Meta+p");
+    const settledPalette = settledPage.getByRole("dialog", { name: "Go to session", exact: true });
+    const settledSearch = settledPalette.getByPlaceholder("Search sessions");
+    await settledSearch.fill("agent:main");
     await settledPage.keyboard.press("Enter");
-    await settledSidebar.getByPlaceholder("Search", { exact: true }).fill("room:room");
+    await settledSearch.fill("room:room");
     await settledPage.keyboard.press("Enter");
-    await settledSidebar.getByPlaceholder("Search", { exact: true }).fill("IS:SETTLED matching");
-    await shown(settledSidebar, "matching active");
-    await shown(settledSidebar, "matching settled");
-    await hidden(settledSidebar, "matching other agent");
-    await hidden(settledSidebar, "matching other room");
-    await settledSidebar.getByPlaceholder("Search", { exact: true }).fill("");
+    await settledSearch.fill("IS:SETTLED matching");
+    await shown(settledPalette, "matching active");
+    await shown(settledPalette, "matching settled");
+    await hidden(settledPalette, "matching other agent");
+    await hidden(settledPalette, "matching other room");
+    await settledPage.keyboard.press("Escape");
     const footer = settledPage.locator("footer");
     await footer.getByRole("link", { name: "Settled", exact: true }).click();
     await settledPage.waitForURL("**/settled");
     const settledMain = settledPage.locator("main");
     await shown(settledMain, "matching settled");
     await hidden(settledMain, "matching active");
+    await settledMain.getByPlaceholder("Search or agent: or room:").fill("agent:");
+    for (let i = 0; i < 10; i++) await settledPage.keyboard.press("ArrowDown");
+    expect(await settledMain.getByRole("button", { name: "agent9", exact: true }).evaluate((node: HTMLElement) => {
+      const bounds = node.getBoundingClientRect();
+      return node.classList.contains("bg-accent") && node.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
+    })).toBe(true);
+    await settledPage.keyboard.press("Escape");
+    expect(new URL(settledPage.url()).pathname).toBe("/settled");
+    expect(await settledMain.getByPlaceholder("Search or agent: or room:").inputValue()).toBe("");
+    await settledPage.keyboard.press("Escape");
+    await settledPage.waitForURL(`${origin}/`);
+    await footer.getByRole("link", { name: "Settled", exact: true }).click();
+    await settledPage.waitForURL("**/settled");
+    await settledMain.getByPlaceholder("Search or agent: or room:").fill("agent:main");
+    await settledPage.keyboard.press("Enter");
+    await settledMain.getByRole("textbox", { name: "Search sessions", exact: true }).fill("room:room");
+    await settledPage.keyboard.press("Tab");
+    expect(await settledMain.locator('li a[href^="/s/"]:visible').count()).toBe(1);
+    await settledMain.getByRole("button", { name: "agent:main", exact: true }).click();
+    await settledMain.getByRole("button", { name: "room:room", exact: true }).click();
     await settledMain.getByPlaceholder("Search or agent: or room:").fill("no-such-chat");
     await shown(settledMain, "No matches");
     await settledMain.getByPlaceholder("Search or agent: or room:").fill("matching settled");
@@ -1692,6 +1916,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
         await detailsPage.keyboard.press("Meta+Shift+p");
         const palette = detailsPage.getByRole("dialog", { name: "Run command", exact: true });
         await palette.getByPlaceholder("Type a command", { exact: true }).waitFor();
+        await palette.getByRole("button", { name: `${label} Current chat`, exact: true }).waitFor();
         expect(await palette.getByRole("button", { name: `${label === "Mark read" ? "Mark unread" : "Mark read"} Current chat`, exact: true }).count()).toBe(0);
         expect(await detailsPage.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe(await detailsPage.evaluate(() => document.documentElement.classList.contains("dark") ? "dark" : "light"));
         await palette.getByPlaceholder("Type a command", { exact: true }).fill(label);
@@ -1721,20 +1946,24 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await namedRow.getByRole("button", { name: "Unpin session", exact: true }).waitFor();
       expect(await sidebar.locator('li a[href^="/s/"]').first().innerText()).toContain("Original preview");
       expect(new URL(detailsPage.url()).pathname).toBe(`/s/${Buffer.from("named").toString("base64url")}`);
-      const search = sidebar.getByPlaceholder("Search or agent: or room:");
+      if (width === 390) await detailsPage.keyboard.press("Escape");
+      await detailsPage.keyboard.press("Control+p");
+      const detailsPalette = detailsPage.getByRole("dialog", { name: "Go to session", exact: true });
+      const search = detailsPalette.getByPlaceholder("Search sessions");
       await search.fill("IS:UNREAD");
-      await sidebar.getByText("Settled pin preview", { exact: true }).waitFor();
-      expect(await sidebar.locator('li a[href^="/s/"]').count()).toBe(2);
+      await detailsPalette.getByText("Settled pin preview", { exact: true }).waitFor();
+      expect(await detailsPalette.locator('li > button').count()).toBe(2);
       await search.fill("is:unread is:pinned Original");
-      expect(await sidebar.locator('li a[href^="/s/"]').count()).toBe(1);
+      expect(await detailsPalette.locator('li > button').count()).toBe(1);
       await search.fill("prefix-is:unread");
-      expect(await sidebar.locator('li a[href^="/s/"]').count()).toBe(0);
+      expect(await detailsPalette.locator('li > button').count()).toBe(0);
       await search.fill("IS:PINNED");
-      await sidebar.getByText("Settled pin preview", { exact: true }).waitFor();
-      expect(await sidebar.locator('li a[href^="/s/"]').count()).toBe(2);
+      await detailsPalette.getByText("Settled pin preview", { exact: true }).waitFor();
+      expect(await detailsPalette.locator('li > button').count()).toBe(2);
       await search.fill("is:pinned is:settled Settled");
-      expect(await sidebar.locator('li a[href^="/s/"]').count()).toBe(1);
-      await search.fill("");
+      expect(await detailsPalette.locator('li > button').count()).toBe(1);
+      await detailsPage.keyboard.press("Escape");
+      if (width === 390) await detailsPage.getByRole("button", { name: "Sessions", exact: true }).click();
       await namedRow.getByRole("img", { name: "Unread", exact: true }).waitFor();
       await sidebar.getByText("Most recent message", { exact: true }).click();
       if (width === 390) await detailsPage.getByRole("button", { name: "Sessions", exact: true }).click();
@@ -1762,11 +1991,12 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await detailsPage.reload();
       await detailsPage.locator("main").getByRole("button", { name: "Pin session", exact: true }).waitFor();
       await sidebar.getByText("Release notes", { exact: true }).waitFor();
+      await detailsPage.keyboard.press("Control+p");
       await search.fill("Release notes");
-      expect(await sidebar.locator('li a[href^="/s/"]').count()).toBe(1);
+      expect(await detailsPalette.locator('li > button').count()).toBe(1);
       await search.fill("Original preview");
-      expect(await sidebar.locator('li a[href^="/s/"]').count()).toBe(1);
-      await search.fill("");
+      expect(await detailsPalette.locator('li > button').count()).toBe(1);
+      await detailsPage.keyboard.press("Escape");
       const pinBox = await detailsPage.locator("main").getByRole("button", { name: "Pin session", exact: true }).boundingBox();
       const sendBox = await detailsPage.getByRole("button", { name: "Send", exact: true }).boundingBox();
       expect(pinBox!.x + pinBox!.width).toBeLessThanOrEqual(sendBox!.x);

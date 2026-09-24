@@ -62,7 +62,7 @@ snapshot until a refresh is successfully exhausted with complete summaries.
 Each row previews the latest nonempty user or assistant message, including delivered
 assistant reports. A small spinner in the metadata line indicates a running turn
 without moving the row; saved snapshots do not restore an old running indicator.
-Routine background refreshes are silent. When rows are stale, the search icon
+Routine background refreshes are silent. When rows are stale, the icon inside session search
 changes to a same-size status indicator, with “Conversation list may be out of
 date” on hover or keyboard focus. No extra space is reserved and the list does
 not shift. Missing summaries show `loading...`.
@@ -75,16 +75,27 @@ retaining a 44px touch target. The handle stays
 visible when the controls are hidden and supports Enter/Space when focused.
 Touch devices and narrow screens use 48px navigation targets and 8px gaps;
 desktop uses 32px targets and 4px gaps. Icons are 24px in both layouts.
-Desktop keeps all seven controls in the bar. Cmd/Ctrl+B hides and shows the sidebar.
-Cmd/Ctrl+Alt+N opens a new session. Cmd/Ctrl+P jumps to a session, including settled
-ones. Search also matches origin card fields and original MCP metadata keys and
-values, case-insensitively, before opening a chat. Origin data loads on the first
-nonempty Cmd/Ctrl+P search; ordinary sidebar loading does not fetch histories.
+Desktop keeps all eight controls in the bar. Cmd/Ctrl+B hides and shows the sidebar.
+Cmd/Ctrl+Alt+N opens a new session. The magnifying glass beside New session and
+Cmd/Ctrl+P open the same session-search dialog, including active and settled chats.
+Each opening clears text, pills, and result selection and focuses the input.
+Search matches names, titles, previews, agents, session labels, origin card fields,
+and original MCP metadata keys and values, case-insensitively. Type `agent:` or
+`room:` to choose a removable filter pill by click, arrows, Tab, or Enter.
+Suggestion keys take priority over results; Escape dismisses suggestions first,
+then closes the dialog. Agent, room, `is:pinned`, and `is:unread` filters constrain
+both row and origin matches. Results appear once, pinned first, retaining their
+recent-first order within each group.
+Origin data loads only when free text remains: empty input, status tokens, pills,
+and unfinished `agent:`/`room:` suggestions do not fetch histories. Ordinary
+sidebar loading stays independent. Incomplete enumeration or origin lookups show
+loading feedback rather than a definitive empty result. Failed origin lookups
+show an error while usable row matches remain selectable.
 Cmd/Ctrl+Shift+P runs a command (new session, run cron, pages, sidebar).
 Run cron opens a new session immediately. The job still runs privately, and the chat fills in when it finishes.
 A chat that began as a cron run or an external MCP call starts with a collapsed origin card. Use show more to see its details; the card scrolls with the messages. An ordinary chat has no origin card.
 On mobile, the Sessions toggle sits
-at the top-left opposite the theme toggle, leaving six controls centered below.
+at the top-left opposite the theme toggle, leaving seven controls centered below.
 On titled pages, the mobile Sessions button shares the title's header row so
 they cannot overlap. In chat, it remains a floating corner button.
 Swipe right from the middle of the main content to open the mobile sidebar, or
@@ -145,17 +156,17 @@ HTML, SVG, and other active formats download instead of rendering in the app's
 origin. An **Original unverified** label appears when supplied by the backend.
 Typing `$skill` opens completion for the selected agent's allowed skills;
 typing a name filters the list, and choosing a skill leaves room for arguments.
-The sidebar starts at the top without a title bar. Its fold/unfold toggle stays at the bottom-left
-when hiding or reopening it, retaining search and filters during navigation.
+The sidebar starts at the top without a title bar or search input. Its fold/unfold
+toggle stays at the bottom-left when hiding or reopening it.
 Settled chats live on the **Settled** tab (`/settled`) rather than in the default
-sidebar. Use **Unsettle** to return a chat to the sidebar. Adding `is:settled` to
-sidebar search includes settled chats alongside matching active chats; the token
-is not matched as text, and agent and room filters still apply. The Settled page
-has the same search and filters, limited to settled chats.
+sidebar. Use **Unsettle** to return a chat to the sidebar. Global search always
+includes settled chats; `is:settled` is accepted as an include token, not literal
+text or a settled-only filter. The Settled page retains its own local row search
+and agent, room, pinned, and unread filters, limited to settled chats.
 Click the selected Settled, Cron, Agents, Skills, or Config tab again to return
 to the chat you left, even after switching between pages. Without a previous
 chat, it returns Home. On desktop, the page header's close button does the same,
-and Escape does too unless a dialog or tooltip is open. New chat and these page
+and Escape does too unless a dialog or tooltip is open. New chat, search, and these page
 buttons form a centered group in the footer, available even when the sidebar is
 closed.
 The theme toggle floats in the upper-right corner of the page and switches light, dark, and system. Config has a select for the color theme. The choices are Neutral, Harbor, Grove, Ember, Violet, Rose, Sand, Lagoon, Slate, Copper, Ink, Signal, Go - Playground, and Go - Sources. Ink and Signal are high contrast. The Go themes adapt Mike Gleason jr Couturier's light themes, with local dark variations. The choice is stored in the browser, not on the server. See [theme sources and licenses](../../../THEMES.md) for attribution and reuse terms.
@@ -230,7 +241,7 @@ clicking a preview or its marker jumps to that turn. The box overlays the chat
 without moving it, and scrolling the box does not scroll the transcript.
 Each marker is labeled with its prompt; selecting it pauses automatic
 following while you read earlier turns.
-The shared app layout keeps the list and filters in memory during navigation.
+The shared app layout keeps the session list in memory during navigation.
 Late storage reads merge with newer live rows; superseded saves cannot overwrite
 newer snapshots, and post-deletion saves wait for the history clear to finish.
 
