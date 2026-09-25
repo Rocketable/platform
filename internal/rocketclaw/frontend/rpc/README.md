@@ -28,14 +28,6 @@ successful delivery report shown in History. Migration `011_last_message_summari
 invalidates the derived user-only previews for the existing background backfill.
 Session `running` reads the active turn checkpoint, independently of settled status.
 
-Unread is a shared server-side boolean for each session, initially false. Recording
-or syncing new messages sets it; successfully opening the chat clears it once per
-visit. **Mark unread** keeps the chat open and stays set through refreshes until the
-next visit. A dot identifies unread sessions, and the standalone, case-insensitive
-`is:unread` search filter finds them, including settled sessions. `UpdateSession`
-updates this flag alongside the existing name and pin metadata. The Cmd+Shift+P
-command palette offers **Mark read** or **Mark unread**, according to the current chat's state.
-
 Session discovery starts from explicitly recorded conversations, excluding private Cron locators and
 recorded MCP X bindings; it does not discover orphaned entry rows or backfill
 records. `CreateSession` records a fresh opaque ID with the selected loaded agent.

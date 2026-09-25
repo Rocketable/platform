@@ -448,14 +448,11 @@ func TestSessionEntries(t *testing.T) {
 		request *UpdateSessionRequest
 		pinned  bool
 		name    string
-		unread  bool
 	}{
-		{&UpdateSessionRequest{Id: id, Pinned: new(true)}, true, "", true},
-		{&UpdateSessionRequest{Id: id, Unread: new(false)}, true, "", false},
-		{&UpdateSessionRequest{Id: id, Name: new("  Launch notes  ")}, true, "Launch notes", false},
-		{&UpdateSessionRequest{Id: id, Unread: new(true)}, true, "Launch notes", true},
-		{&UpdateSessionRequest{Id: id, Pinned: new(false)}, false, "Launch notes", true},
-		{&UpdateSessionRequest{Id: id, Name: new(" ")}, false, "", true},
+		{&UpdateSessionRequest{Id: id, Pinned: new(true)}, true, ""},
+		{&UpdateSessionRequest{Id: id, Name: new("  Launch notes  ")}, true, "Launch notes"},
+		{&UpdateSessionRequest{Id: id, Pinned: new(false)}, false, "Launch notes"},
+		{&UpdateSessionRequest{Id: id, Name: new(" ")}, false, ""},
 	} {
 		_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", tt.request)
 		require.NoError(t, err)
@@ -464,7 +461,6 @@ func TestSessionEntries(t *testing.T) {
 		require.Len(t, conversations.Sessions, 1)
 		require.Equal(t, tt.pinned, conversations.Sessions[0].GetPinned())
 		require.Equal(t, tt.name, conversations.Sessions[0].GetName())
-		require.Equal(t, tt.unread, conversations.Sessions[0].GetUnread())
 		require.Equal(t, !tt.pinned, conversations.Sessions[0].Settled)
 		updatedAt, err := time.Parse(time.RFC3339Nano, conversations.Sessions[0].UpdatedAt)
 		require.NoError(t, err)

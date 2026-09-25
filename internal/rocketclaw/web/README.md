@@ -83,7 +83,7 @@ Search matches names, titles, previews, agents, session labels, origin card fiel
 and original MCP metadata keys and values, case-insensitively. Type `agent:` or
 `room:` to choose a removable filter pill by click, arrows, Tab, or Enter.
 Suggestion keys take priority over results; Escape dismisses suggestions first,
-then closes the dialog. Agent, room, `is:pinned`, and `is:unread` filters constrain
+then closes the dialog. Agent, room, and `is:pinned` filters constrain
 both row and origin matches. Results appear once, pinned first, retaining their
 recent-first order within each group.
 Origin data loads only when free text remains: empty input, status tokens, pills,
@@ -162,7 +162,7 @@ Settled chats live on the **Settled** tab (`/settled`) rather than in the defaul
 sidebar. Use **Unsettle** to return a chat to the sidebar. Global search always
 includes settled chats; `is:settled` is accepted as an include token, not literal
 text or a settled-only filter. The Settled page retains its own local row search
-and agent, room, pinned, and unread filters, limited to settled chats.
+and agent, room, and pinned filters, limited to settled chats.
 Click the selected Settled, Cron, Agents, Skills, or Config tab again to return
 to the chat you left, even after switching between pages. Without a previous
 chat, it returns Home. On desktop, the page header's close button does the same,

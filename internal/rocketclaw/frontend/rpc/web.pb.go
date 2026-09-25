@@ -118,7 +118,6 @@ type Session struct {
 	Running       bool                   `protobuf:"varint,8,opt,name=running,proto3" json:"running,omitempty"`
 	Pinned        bool                   `protobuf:"varint,9,opt,name=pinned,proto3" json:"pinned,omitempty"`
 	Name          string                 `protobuf:"bytes,10,opt,name=name,proto3" json:"name,omitempty"`
-	Unread        bool                   `protobuf:"varint,11,opt,name=unread,proto3" json:"unread,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -221,13 +220,6 @@ func (x *Session) GetName() string {
 		return x.Name
 	}
 	return ""
-}
-
-func (x *Session) GetUnread() bool {
-	if x != nil {
-		return x.Unread
-	}
-	return false
 }
 
 type HistoryRequest struct {
@@ -2030,7 +2022,6 @@ type UpdateSessionRequest struct {
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Pinned        *bool                  `protobuf:"varint,2,opt,name=pinned,proto3,oneof" json:"pinned,omitempty"`
 	Name          *string                `protobuf:"bytes,3,opt,name=name,proto3,oneof" json:"name,omitempty"`
-	Unread        *bool                  `protobuf:"varint,4,opt,name=unread,proto3,oneof" json:"unread,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2084,13 +2075,6 @@ func (x *UpdateSessionRequest) GetName() string {
 		return *x.Name
 	}
 	return ""
-}
-
-func (x *UpdateSessionRequest) GetUnread() bool {
-	if x != nil && x.Unread != nil {
-		return *x.Unread
-	}
-	return false
 }
 
 type UpdateSessionResponse struct {
@@ -2878,7 +2862,7 @@ var File_web_proto protoreflect.FileDescriptor
 const file_web_proto_rawDesc = "" +
 	"\n" +
 	"\tweb.proto\x12\x03rpc\"\x15\n" +
-	"\x13ListSessionsRequest\"\x9d\x02\n" +
+	"\x13ListSessionsRequest\"\x8b\x02\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x18\n" +
@@ -2891,8 +2875,7 @@ const file_web_proto_rawDesc = "" +
 	"\arunning\x18\b \x01(\bR\arunning\x12\x16\n" +
 	"\x06pinned\x18\t \x01(\bR\x06pinned\x12\x12\n" +
 	"\x04name\x18\n" +
-	" \x01(\tR\x04name\x12\x16\n" +
-	"\x06unread\x18\v \x01(\bR\x06unread\"w\n" +
+	" \x01(\tR\x04nameJ\x04\b\v\x10\f\"w\n" +
 	"\x0eHistoryRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x124\n" +
 	"\x16source_conversation_id\x18\x02 \x01(\tR\x14sourceConversationId\x12\x1f\n" +
@@ -3022,15 +3005,13 @@ const file_web_proto_rawDesc = "" +
 	"\x14SettleSessionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
 	"\asettled\x18\x02 \x01(\bR\asettled\"\x17\n" +
-	"\x15SettleSessionResponse\"\x98\x01\n" +
+	"\x15SettleSessionResponse\"v\n" +
 	"\x14UpdateSessionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\x06pinned\x18\x02 \x01(\bH\x00R\x06pinned\x88\x01\x01\x12\x17\n" +
-	"\x04name\x18\x03 \x01(\tH\x01R\x04name\x88\x01\x01\x12\x1b\n" +
-	"\x06unread\x18\x04 \x01(\bH\x02R\x06unread\x88\x01\x01B\t\n" +
+	"\x04name\x18\x03 \x01(\tH\x01R\x04name\x88\x01\x01B\t\n" +
 	"\a_pinnedB\a\n" +
-	"\x05_nameB\t\n" +
-	"\a_unread\"\x17\n" +
+	"\x05_nameJ\x04\b\x04\x10\x05\"\x17\n" +
 	"\x15UpdateSessionResponse\"\x11\n" +
 	"\x0fProtocolRequest\"5\n" +
 	"\x10ProtocolResponse\x12!\n" +
