@@ -1,5 +1,27 @@
 # RocketClaw Web
 
+Assistant replies show a smaller, muted footer with known
+`agent (provider/model#effort)` details; `#effort` is omitted when absent.
+On desktop, hover a message to see its footer and Copy button. On touch
+screens, tap a message instead. User messages show only Copy, without details.
+Copy puts the message text on the clipboard.
+Only sessions with sandboxed messages append ` - origin` to the footer. The
+origin is `sandboxed` for messages produced by another conversation or a cron
+run, and `canonical` otherwise. New turns store the
+resolved provider-qualified model.
+The footer does not show source or destination conversation IDs. Copied messages
+retain the producer's settings.
+These are execution-time snapshots, so changing the selected agent does not
+relabel saved messages. Missing historical values are omitted, and old bare
+model names are shown as recorded without an assumed provider. Optimistic
+inputs are enriched by message ID when their consuming runtime is ready.
+Tool groups and reasoning groups have no footer or Copy action.
+When a session contains sandboxed messages, a slim button group above the
+composer highlights both `sandboxed` and `canonical` by default. Each button
+independently toggles its origin on or off, so both, either, or neither can be shown.
+Messages without a recorded origin appear only when both are selected.
+Filtering does not change saved history or routing.
+
 The frontend is a client-side React SPA. Bun builds static assets directly into
 `../internal/web/dist/`: `index.html`, hashed JavaScript and
 CSS, and a self-hosted Inter font. `cmd/rocketclaw` embeds and serves that directory

@@ -6,13 +6,14 @@ import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions } from "./api";
 import type { ChatOrigin, PromptDelivery } from "./types";
-import { Bot, Calendar, Check, CircleAlert, Clock, Download, FileIcon, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import { Bot, Calendar, Check, CircleAlert, Clock, Copy, Download, FileIcon, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, navigate } from "./navigation";
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type SyntheticEvent } from "react";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
-import { CodeBlock, TranscriptText } from "./transcript-text";
+import { CodeBlock, TranscriptText, copyText } from "./transcript-text";
 import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Attachment, AttachmentGroup, AttachmentMedia, AttachmentContent, AttachmentTitle, AttachmentDescription, AttachmentActions, AttachmentAction } from "@/components/ui/attachment";
 import { Message, MessageContent } from "@/components/ui/message";
@@ -1196,7 +1197,8 @@ function SessionTabs({ returnTo, children }: { returnTo: string; children: React
   );
 }
 
-type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; turnId?: string; streamText?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] };
+type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; turnId?: string; streamText?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin">;
+type OriginFilter = { sandboxed: boolean; canonical: boolean };
 
 function lineId(role: Line["role"], text: string, seen: Map<string, number>) {
   const base = `${role}:${text}`;
@@ -1214,7 +1216,7 @@ function appendLine(current: Line[], role: Line["role"], text: string, tool: Pic
   return [...current, ...rows.map((row) => ({ id: lineId(role, row, seen), text: row, role, ...(role === "thinking" ? {} : tool) }))];
 }
 
-function transcriptTurns(lines: Line[]) {
+function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true, canonical: true }) {
   const turns: { user: Line[]; traces: Line[]; replies: Line[] }[] = [];
   let current = { user: [] as Line[], traces: [] as Line[], replies: [] as Line[] };
   const calls = new Map<string, Line & { toolParts: Line[] }>();
@@ -1228,11 +1230,15 @@ function transcriptTurns(lines: Line[]) {
     }
   };
   for (const line of lines) {
+    if (line.role === "user") flush();
+    const visible = (filter.sandboxed && filter.canonical)
+      || (line.origin === "sandboxed" && filter.sandboxed)
+      || (line.origin === "canonical" && filter.canonical);
+    if (!visible) continue;
     const resultCall = line.role === "tool" ? calls.get(line.toolCallId ?? "") : undefined;
     const skillHeader = line.text.split("\n", 1)[0];
     const skillCall = line.role === "developer" ? skills.get(skillHeader) : undefined;
     if (line.role === "user") {
-      flush();
       current.user.push(line);
     } else if (line.role === "assistant") {
       current.replies.push(line);
@@ -1301,7 +1307,33 @@ function MessageAttachment({ file, conversationId }: { file: NonNullable<Line["a
   </Attachment>;
 }
 
-function TranscriptLine({ line, conversationId }: { line: Line; conversationId: string }) {
+// OpenCode 048a47e89e859f9928f5f04a56eebf013063152a: packages/session-ui/src/message/message-content.tsx, CurrentUserMessageDisplay and AssistantTextContent.
+function MessageFooter({ line, hasSandboxed }: { line: Line; hasSandboxed: boolean }) {
+  const model = `${line.model ?? ""}${line.reasoningEffort ? `#${line.reasoningEffort}` : ""}`;
+  const attribution = [line.agent, model && (line.agent ? `(${model})` : model)].filter(Boolean).join(" ");
+  const text = [attribution, hasSandboxed && (line.origin === "sandboxed" || line.origin === "canonical") ? line.origin : ""].filter(Boolean).join(" - ");
+  return text ? <div data-slot="message-footer" className="max-w-full break-words px-3 text-[11px] text-muted-foreground/85 group-has-data-[variant=ghost]/message:px-0">{text}</div> : null;
+}
+
+function MessageActions({ line, hasSandboxed }: { line: Line; hasSandboxed: boolean }) {
+  const [copied, setCopied] = useState<string>();
+  const [error, setError] = useState(false);
+  return <div data-slot="message-actions" className={cn("invisible flex max-w-full items-center gap-1 group-focus-visible/message:visible [@media(hover:hover)]:group-hover/message:visible [@media(hover:hover)]:group-has-[:focus-visible]/message:visible [@media(hover:none)]:group-focus-within/message:visible", line.role === "user" && "self-end")}>
+    {line.role === "assistant" ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
+    <Button type="button" size="icon-xs" variant="ghost" aria-label="Copy message" title="Copy message" onClick={async () => {
+      setError(false);
+      try {
+        await copyText(line.text, document.body);
+        setCopied(line.text);
+      } catch {
+        setError(true);
+      }
+    }}>{copied === line.text && !error ? <Check /> : <Copy />}</Button>
+    <span role="status" className={error ? "text-xs text-destructive" : "sr-only"}>{error ? "Could not copy. Select and copy the text." : copied === line.text ? "Copied" : ""}</span>
+  </div>;
+}
+
+function TranscriptLine({ line, conversationId, hasSandboxed }: { line: Line; conversationId: string; hasSandboxed: boolean }) {
   if (line.role === "thinking") {
     return (
       <div className="flex items-center gap-1.5 px-1 py-0.5 text-[12px] leading-5 text-muted-foreground">
@@ -1347,12 +1379,15 @@ function TranscriptLine({ line, conversationId }: { line: Line; conversationId: 
     );
   }
   return (
-    <Message align={line.role === "user" ? "end" : undefined} className="mb-4">
+    <Message align={line.role === "user" ? "end" : undefined} className="mb-4" tabIndex={0} onPointerDown={(event) => {
+      if (event.pointerType === "touch" && !(event.target as Element).closest("button, a, input, textarea, summary")) event.currentTarget.focus({ preventScroll: true });
+    }}>
       <MessageContent>
         <Bubble variant={line.role === "user" ? "secondary" : "ghost"} align={line.role === "user" ? "end" : undefined}>
           <BubbleContent><TranscriptText text={line.text} /></BubbleContent>
           <MessageAttachments attachments={line.attachments} conversationId={conversationId} />
         </Bubble>
+        <MessageActions line={line} hasSandboxed={hasSandboxed} />
       </MessageContent>
     </Message>
   );
@@ -1363,16 +1398,23 @@ function TranscriptLog({
   lines,
   thinking,
   origin,
+  filter,
+  hasSandboxed,
 }: {
   lines: Line[];
   conversationId: string;
   thinking: boolean;
   origin?: ChatOrigin;
+  filter: OriginFilter;
+  hasSandboxed: boolean;
 }) {
-  const turns = transcriptTurns(lines);
+  const turns = transcriptTurns(lines, filter);
   const { scrollToMessage } = useMessageScroller();
   const turnNodes = useRef<(HTMLElement | null)[]>([]);
   const running = usePendingCron(conversationId);
+  const emptyMessage = lines.length === 0
+    ? (running ? `${running} is running` : "Send a message to start the conversation.")
+    : "No messages for selected origins.";
   useEffect(() => { if (running && lines.length > 0) notePendingCron(conversationId, ""); }, [running, lines.length, conversationId]);
   const jumpToTurn = (index: number) => {
     scrollToMessage(`turn-${index}`, { align: "start", behavior: "instant" });
@@ -1384,26 +1426,26 @@ function TranscriptLog({
       <div className="min-h-full pl-3 pr-8 pt-3 pb-4 sm:pl-5 sm:pr-10 sm:pt-4">
       <MessageScrollerContent className="mx-auto w-full min-w-0 max-w-3xl">
       {origin && (origin.kind === "cron" || origin.kind === "external_mcp") ? <MessageScrollerItem messageId="origin"><OriginCard origin={origin} /></MessageScrollerItem> : null}
-      {lines.length === 0 && !thinking ? (
+      {turns.length === 0 && !thinking ? (
         <MessageScrollerItem className="flex flex-1 items-center justify-center">
-          <p role="status" className="text-sm text-muted-foreground">{running ? `${running} is running` : "Send a message to start the conversation."}</p>
+          <p role="status" className="text-sm text-muted-foreground">{emptyMessage}</p>
         </MessageScrollerItem>
       ) : (
         <>
           {turns.map((turn, index) => (
               <MessageScrollerItem key={turn.user[0]?.id ?? turn.traces[0]?.id ?? turn.replies[0]?.id} messageId={`turn-${index}`} ref={(node) => { turnNodes.current[index] = node; }} role="region" aria-label={`Turn ${index + 1}`} tabIndex={-1}>
-                {turn.user.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} />)}
+                {turn.user.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
                 {turn.traces.length > 0 ? (
                   <details open className="group pb-3">
                     <summary className="flex w-fit cursor-pointer list-none items-center gap-1 px-1 py-2 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
                       Thinking <span aria-hidden="true" className="transition-transform group-open:rotate-90">▸</span>
                     </summary>
                     <div className="ml-1 border-l pl-3">
-                      {turn.traces.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} />)}
+                      {turn.traces.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
                     </div>
                   </details>
                 ) : null}
-                {turn.replies.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} />)}
+                {turn.replies.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
               </MessageScrollerItem>
           ))}
           {thinking ? <MessageScrollerItem><p className="px-1 pb-4 text-sm text-muted-foreground">Thinking…</p></MessageScrollerItem> : null}
@@ -1439,9 +1481,10 @@ function TranscriptLog({
 }
 
 function nextLines(current: Line[], payload: TranscriptEvent): Line[] {
+  const metadata = Object.fromEntries(Object.entries(payload).filter(([key, value]) => ["agent", "model", "reasoningEffort", "origin"].includes(key) && value !== undefined && (key === "reasoningEffort" || value !== "")));
   if (payload.role === "user" && payload.messageId) {
-    if (current.some((line) => line.id === payload.messageId)) return current;
-    return [...current, { id: payload.messageId, role: "user", text: payload.text, attachments: payload.attachments }];
+    if (current.some((line) => line.id === payload.messageId)) return Object.keys(metadata).length ? current.map((line) => line.id === payload.messageId ? { ...line, ...metadata } : line) : current;
+    return [...current, { ...metadata, id: payload.messageId, role: "user", text: payload.text, attachments: payload.attachments }];
   }
   const role = payload.role === "thinking" || payload.role === "user" || payload.role === "tool" || payload.role === "developer" ? payload.role : "assistant";
   const boundary = current.findLastIndex((line) => line.role === "user");
@@ -1453,7 +1496,7 @@ function nextLines(current: Line[], payload: TranscriptEvent): Line[] {
   const attachments = [...new Map([...(current[index]?.attachments ?? []), ...(payload.attachments ?? [])].map((file) => [file.id, file])).values()];
   if (text.trim() === "" && attachments.length === 0) return retained;
   const added = appendLine(retained, role, text, { toolCallId: payload.toolCallId, toolName: payload.toolName, attachments });
-  const updated = added.slice(retained.length).map((line) => ({ ...line, turnId: payload.turnId, streamText: payload.text }));
+  const updated = added.slice(retained.length).map((line) => ({ ...current[index], ...line, ...metadata, turnId: payload.turnId, streamText: payload.text }));
   const position = index < 0 ? retained.length : index;
   return [...retained.slice(0, position), ...updated, ...retained.slice(position)];
 }
@@ -1485,7 +1528,7 @@ async function readTranscriptHistory(draft: ComposerDraft, request: Promise<Tran
     const seen = new Map<string, number>();
     draft.lines = messages.map((message): Line => {
       const role = message.role === "thinking" || message.role === "user" || message.role === "tool" || message.role === "developer" ? message.role : "assistant";
-      return { id: lineId(role, message.text, seen), role, text: message.text, toolCallId: message.toolCallId, toolName: message.toolName, attachments: message.attachments };
+      return { ...message, id: lineId(role, message.text, seen), role };
     });
     onDraftChange();
   }
@@ -1517,7 +1560,10 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
     stream.onmessage = (event) => {
       const payload = JSON.parse(String(event.data)) as TranscriptEvent;
       if (payload.role === "user" && payload.messageId) {
-        if (draft.consumed?.has(payload.messageId)) return;
+        if (draft.consumed?.has(payload.messageId)) {
+          setLines((current) => nextLines(current, payload));
+          return;
+        }
         (draft.consumed ??= new Set()).add(payload.messageId);
         draft.parked = draft.parked?.filter((line) => line.id !== payload.messageId);
         void queryClient.invalidateQueries({ queryKey: ["queue"] });
@@ -1528,7 +1574,7 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
       stream.close();
     };
   }, [id, historyReady, reconnectHistory, draft, setBusy, setLines]);
-  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !history.data, historyError: history.error?.message, origin: history.data?.origin };
+  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !history.data, historyError: history.error?.message, origin: history.data?.origin, hasSandboxed: history.data?.messages.some((message) => message.origin === "sandboxed") || draft.lines.some((line) => line.origin === "sandboxed") };
 }
 
 export function OriginCard({ origin }: { origin?: ChatOrigin }) {
@@ -1559,6 +1605,7 @@ export function OriginCard({ origin }: { origin?: ChatOrigin }) {
 }
 
 function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; drafts: Map<string, ComposerDraft>; onDraftChange: () => void; onCreated: (id: string) => void }) {
+  const [filter, setFilter] = useState<OriginFilter>({ sandboxed: true, canonical: true });
   const [draft] = useState(() => {
     const value = drafts.get(id) ?? { text: "", files: [], agent: "", sessionId: id, sending: false, busy: false, lines: [], error: "", edit: 0, submission: 0 };
     drafts.set(id, value);
@@ -1572,11 +1619,18 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
       route.goSession(draft.sessionId);
     }
   });
-  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin } = useSessionStream(id, draft, onDraftChange);
+  const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
   return (
     <>
-      <TranscriptLog conversationId={id} lines={lines} thinking={busy && lines.at(-1)?.role !== "thinking"} origin={origin} />
+      <TranscriptLog conversationId={id} lines={lines} thinking={busy && lines.at(-1)?.role !== "thinking"} origin={origin} filter={filter} hasSandboxed={hasSandboxed} />
       {historyError ? <p role="alert" className="px-3 text-sm text-destructive">{historyError}</p> : null}
+      {hasSandboxed ? <ButtonGroup aria-label="Show messages from" className="mx-auto my-2.5">
+        {(["sandboxed", "canonical"] as const).map((choice) => (
+          <Button key={choice} type="button" size="xs" className="relative before:absolute before:-inset-y-2.5 before:inset-x-0" variant={filter[choice] ? "default" : "outline"} aria-pressed={filter[choice]} onClick={() => setFilter((current) => ({ ...current, [choice]: !current[choice] }))}>
+            {choice}
+          </Button>
+        ))}
+      </ButtonGroup> : null}
       <fieldset disabled={opening} className="contents">
         <SessionComposer id={id} draft={draft} drafts={drafts} onDraftChange={onDraftChange} busy={busy} setBusy={setBusy} lines={lines} setLines={setLines} refreshHistory={refreshHistory} />
       </fieldset>
@@ -1838,7 +1892,7 @@ function SessionComposer({
   return (
     <>
       {sendError ? <p className="px-3 pb-2 text-sm text-destructive sm:px-5">{sendError}</p> : null}
-      {parked.length > 0 ? <section aria-label="Pending steers" className="mx-auto w-full max-w-3xl px-3"><p className="text-xs text-muted-foreground">Waiting to steer</p>{parked.map((line) => <TranscriptLine key={line.id} line={line} conversationId={id} />)}</section> : null}
+      {parked.length > 0 ? <section aria-label="Pending steers" className="mx-auto w-full max-w-3xl px-3"><p className="text-xs text-muted-foreground">Waiting to steer</p>{parked.map((line) => <TranscriptLine key={line.id} line={line} conversationId={id} hasSandboxed={false} />)}</section> : null}
       <Composer
         files={files}
         setFiles={setFiles}
@@ -2160,6 +2214,7 @@ function CronRunPreview({ preview, onClose }: { preview: CronJob; onClose: () =>
   const conversationId = preview.nextRun || preview.origin!;
   const history = useQuery(queries.history({ id: conversationId, sourceConversationId: preview.nextRun ? preview.origin : undefined }));
   const previewLines = useMemo(() => (history.data?.messages ?? []).reduce(nextLines, []), [history.data]);
+  const hasSandboxed = previewLines.some((line) => line.origin === "sandboxed");
   return (
     <section aria-label="Run preview" className="rounded-md border p-3">
       <div className="flex items-center justify-between gap-2">
@@ -2170,7 +2225,7 @@ function CronRunPreview({ preview, onClose }: { preview: CronJob; onClose: () =>
       {history.error ? <p role="alert" className="text-sm text-destructive">{history.error.message}</p> : null}
       {!preview.nextRun ? <p className="text-sm text-muted-foreground">No delivered chat · Run traces</p> : null}
       <div className="mt-2 max-h-64 overflow-y-auto">
-        {previewLines.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} />)}
+        {previewLines.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
         {history.data?.messages.length === 0 ? <p className="text-sm text-muted-foreground">No recorded messages for this run.</p> : null}
       </div>
     </section>

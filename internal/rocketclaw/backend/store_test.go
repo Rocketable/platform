@@ -2013,3 +2013,17 @@ func testReplayInput(messages ...replayInputMessage) []json.RawMessage {
 
 	return replayInput
 }
+func TestCopiedAttributionSurvivesSourceRetention(t *testing.T) {
+	store := newTestSessionService(t)
+	entry := harness.SessionEntry{Version: 1, Type: "turn", Agent: "planner", Model: "work/model-a", ReasoningEffort: new("high"), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"answer"}`)}}
+	_, err := store.appendExternalMCPEntry(t.Context(), "producer-x", "interactive-y", &entry, nil)
+	require.NoError(t, err)
+	_, err = store.db.ExecContext(t.Context(), `DELETE FROM session_entries WHERE conversation_id=$1`, "producer-x")
+	require.NoError(t, err)
+	entries, err := store.ObserveEntries(t.Context(), "interactive-y")
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "producer-x", entries[0].SourceConversationID)
+	require.Equal(t, entry.AttributionAt(0), entries[0].Entry.AttributionAt(0))
+	require.JSONEq(t, string(entry.ReplayInput[0]), string(entries[0].Entry.ReplayInput[0]))
+}

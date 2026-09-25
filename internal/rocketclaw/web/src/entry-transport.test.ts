@@ -32,6 +32,11 @@ test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("transcript and entry HTTP pr
     if (details.name !== undefined) expect(session.name).toBe(details.name.trim());
   }
   const history: { messages: TranscriptEvent[] } = await call("History", { id: process.env.ROCKETCLAW_HISTORY_TEST_ID! });
+  expect(history.messages[1]).toMatchObject({ model: "legacy-model", agent: "", origin: "canonical" });
+  expect(history.messages[1].reasoningEffort).toBeUndefined();
+  expect(history.messages.at(-1)).toMatchObject({ agent: "planner", model: "work/model-a", reasoningEffort: "", origin: "canonical" });
+  const copied = await call("History", { id });
+  expect(copied.messages.at(-1)).toMatchObject({ agent: "producer", reasoningEffort: "high", origin: "sandboxed" });
   const origin = await call("History", { id, originOnly: true });
   expect(origin.messages).toEqual([]);
   expect(JSON.parse(origin.origin).pairs).toEqual([{ key: "Original-Key", value: "Value <&> Unicode Ω" }]);
@@ -72,12 +77,45 @@ test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("transcript and entry HTTP pr
     const { chromium } = await import(playwrightModule);
     const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM });
     try {
-      const page = await browser.newPage();
       for (const [width, filename] of [[1280, "r22-web-desktop.png"], [390, "r22-web-mobile.png"]] as const) {
-        await page.setViewportSize({ width, height: 844 });
+        const page = await browser.newPage({ hasTouch: width === 390, viewport: { width, height: 844 }, permissions: ["clipboard-read", "clipboard-write"] });
         await page.goto(`http://127.0.0.1:${web.port}/s/${Buffer.from(process.env.ROCKETCLAW_HISTORY_TEST_ID!).toString("base64url")}`);
         const report = page.getByText("Exact report\nwith details", { exact: true });
         await report.waitFor();
+        const footer = page.locator('[data-slot="message-footer"]').filter({ hasText: "planner (work/model-a)" }).last();
+        await footer.waitFor({ state: "attached" });
+        expect(await footer.isVisible()).toBe(false);
+        const reply = footer.locator('xpath=ancestor::*[@data-slot="message"]');
+        if (width === 1280) {
+          await page.keyboard.press("Tab");
+          await reply.focus();
+          expect(await footer.isVisible()).toBe(true);
+          await reply.evaluate((node: HTMLElement) => node.blur());
+        }
+        if (width === 390) await reply.locator('[data-slot="bubble-content"]').tap();
+        else await reply.hover();
+        expect(await footer.isVisible()).toBe(true);
+        expect(await footer.innerText()).toBe("planner (work/model-a)");
+        const replyCopy = reply.getByRole("button", { name: "Copy message" });
+        await replyCopy.waitFor({ state: "visible" });
+        await replyCopy.click();
+        expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("Exact report\nwith details");
+        expect(await page.locator('[data-slot="message-footer"]').filter({ hasText: "legacy-model" }).count()).toBe(1);
+        expect(await page.locator('[data-slot="message"][data-align="end"] [data-slot="message-footer"]').count()).toBe(0);
+        const user = page.locator('[data-slot="message"][data-align="end"]').filter({ hasText: "human two" });
+        const userCopy = user.getByRole("button", { name: "Copy message" });
+        expect(await userCopy.isVisible()).toBe(false);
+        if (width === 390) await user.locator('[data-slot="bubble-content"]').tap();
+        else await user.hover();
+        await userCopy.waitFor({ state: "visible" });
+        await replyCopy.waitFor({ state: "hidden" });
+        await userCopy.click();
+        expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("human two");
+        expect(await page.locator('[data-slot="message-footer"]').filter({ hasText: " - canonical" }).count()).toBe(0);
+        expect(await page.locator('[data-slot="message-footer"] details').count()).toBe(0);
+        expect(await footer.innerText()).not.toContain("Source:");
+        expect(await footer.innerText()).not.toContain("Destination:");
+        expect(await page.getByRole("group", { name: "Show messages from" }).count()).toBe(0);
         const trace = page.getByRole("region", { name: /^Turn \d+$/ }).filter({ hasText: "queued for verbatim delivery" }).locator(":scope > details");
         const tool = trace.locator("details").filter({ hasText: "Exact report" });
         const toolBody = tool.locator("pre").first();
@@ -105,6 +143,57 @@ test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("transcript and entry HTTP pr
         await tool.getByRole("button", { name: "Collapse tool" }).click();
         expect(await toolBody.isVisible()).toBe(false);
         await page.screenshot({ path: path.join(process.env.TMPDIR!, filename) });
+        await page.goto(`http://127.0.0.1:${web.port}/s/${Buffer.from(id).toString("base64url")}`);
+        const sandboxed = page.locator('[data-slot="message-footer"]').filter({ hasText: "producer (work/a-very-long-provider-qualified-model-name-for-narrow-layout#high) - sandboxed" }).last();
+        await sandboxed.waitFor({ state: "attached" });
+        const sandboxedMessage = sandboxed.locator('xpath=ancestor::*[@data-slot="message"]');
+        if (width === 390) await sandboxedMessage.locator('[data-slot="bubble-content"]').tap();
+        else await sandboxedMessage.hover();
+        expect(await sandboxed.isVisible()).toBe(true);
+        const sandboxedButton = page.getByRole("button", { name: "sandboxed", exact: true });
+        const canonicalButton = page.getByRole("button", { name: "canonical", exact: true });
+        expect(await sandboxedButton.getAttribute("aria-pressed")).toBe("true");
+        expect(await canonicalButton.getAttribute("aria-pressed")).toBe("true");
+        await sandboxedButton.click();
+        expect(await sandboxedButton.getAttribute("aria-pressed")).toBe("false");
+        expect(await canonicalButton.getAttribute("aria-pressed")).toBe("true");
+        expect(await sandboxed.isVisible()).toBe(false);
+        await canonicalButton.click();
+        expect(await sandboxedButton.getAttribute("aria-pressed")).toBe("false");
+        expect(await canonicalButton.getAttribute("aria-pressed")).toBe("false");
+        expect(await sandboxed.isVisible()).toBe(false);
+        expect(await page.getByText("No messages for selected origins.").isVisible()).toBe(true);
+        await sandboxedButton.click();
+        expect(await sandboxedButton.getAttribute("aria-pressed")).toBe("true");
+        expect(await canonicalButton.getAttribute("aria-pressed")).toBe("false");
+        if (width === 390) await sandboxedMessage.locator('[data-slot="bubble-content"]').tap();
+        else await sandboxedMessage.hover();
+        expect(await sandboxed.isVisible()).toBe(true);
+        await sandboxedButton.click();
+        expect(await sandboxedButton.getAttribute("aria-pressed")).toBe("false");
+        expect(await canonicalButton.getAttribute("aria-pressed")).toBe("false");
+        await canonicalButton.press("Space");
+        expect(await sandboxedButton.getAttribute("aria-pressed")).toBe("false");
+        expect(await canonicalButton.getAttribute("aria-pressed")).toBe("true");
+        await sandboxedButton.press("Space");
+        expect(await sandboxedButton.getAttribute("aria-pressed")).toBe("true");
+        expect(await canonicalButton.getAttribute("aria-pressed")).toBe("true");
+        const bounds = await sandboxedButton.boundingBox();
+        expect(bounds!.height).toBeLessThan(28);
+        if (width === 390) await page.touchscreen.tap(bounds!.x + bounds!.width / 2, bounds!.y - 8);
+        else await sandboxedButton.click();
+        expect(await sandboxedButton.getAttribute("aria-pressed")).toBe("false");
+        expect(await canonicalButton.getAttribute("aria-pressed")).toBe("true");
+        await sandboxedButton.click();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+        await page.reload();
+        await sandboxed.waitFor({ state: "attached" });
+        expect(await sandboxedButton.getAttribute("aria-pressed")).toBe("true");
+        expect(await canonicalButton.getAttribute("aria-pressed")).toBe("true");
+        if (width === 390) await sandboxedMessage.locator('[data-slot="bubble-content"]').tap();
+        else await sandboxedMessage.hover();
+        await page.screenshot({ path: path.join(process.env.TMPDIR!, `sandboxed-${filename}`) });
+        await page.close();
       }
     } finally { await browser.close(); web.stop(true); }
   }

@@ -14,6 +14,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 
@@ -225,7 +226,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}))
 			replay, err := replayInputForMessage("user", id+" history")
 			require.NoError(t, err)
-			_, err = store.AppendEntryID(ctx, id, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay})
+			_, err = store.AppendEntryID(ctx, id, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay, Agent: id, Model: "work/" + id, ReasoningEffort: new("high")})
 			require.NoError(t, err)
 		}
 
@@ -236,6 +237,12 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		go func() {
 			for event := range events {
 				delivered = append(delivered, event.Message.ConversationID)
+				if event.Message.ConversationID == "Y" && event.Message.SlackReply.MessageTS == "producer" {
+					assert.Equal(t, "X", event.Message.SourceConversationID)
+					assert.Equal(t, "producer", event.Message.Agent)
+					assert.Equal(t, "work/producer", event.Message.Model)
+					assert.Equal(t, new("high"), event.Message.ReasoningEffort)
+				}
 
 				deliveryOrder = append(deliveryOrder, event.Message.SlackReply.MessageTS)
 				event.Acknowledgement <- nil
@@ -249,6 +256,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		require.NoError(t, rt.RunTurn(ctx, producer))
 		source := rt.threads.bridges["X"].(*Bridge)
 		source.mu.Lock()
+		source.pendingOutput.Agent, source.pendingOutput.Model, source.pendingOutput.ReasoningEffort = "producer", "work/producer", new("high")
 		// A scheduled cron has no Slack destination until it has a visible report.
 		source.activeReply = &protocol.InboundMessage{RequireOutputDecision: true}
 		source.mu.Unlock()
@@ -369,6 +377,15 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		entries, err := store.ObserveEntries(ctx, "Y")
 		require.NoError(t, err)
 		require.Len(t, entries, 6)
+
+		for _, observed := range entries {
+			if observed.Entry.Model == "work/X" {
+				require.Equal(t, "X", observed.SourceConversationID)
+				require.Equal(t, "X", observed.Entry.Agent)
+				require.Equal(t, new("high"), observed.Entry.ReasoningEffort)
+			}
+		}
+
 		messages, err := replayInputMessages(entries[0].Entry.ReplayInput)
 		require.NoError(t, err)
 		require.Equal(t, "Y history", messages[0].text)
