@@ -1,5 +1,23 @@
 # RocketClaw Web
 
+Normal user and assistant bubbles show a muted footer in the form
+`agent (provider/model#effort) - origin`, with `#effort` omitted when no
+effort was recorded. The origin is `sandboxed` for messages produced by another
+conversation or a cron run, and `canonical` otherwise. New turns store the
+resolved provider-qualified model.
+The footer does not show source or destination conversation IDs. Copied messages
+retain the producer's settings.
+These are execution-time snapshots, so changing the selected agent does not
+relabel saved messages. Missing historical agent or model values show `Unknown`;
+older bare model names display with `openai/`, matching the previous model
+formatter. Optimistic inputs are enriched by message ID when their consuming
+runtime is ready. Tool and reasoning groups have no footer.
+The slim button group above the composer highlights both `sandboxed` and
+`canonical` by default. Each button independently toggles its origin on or off,
+so both, either, or neither can be shown. Messages without a recorded origin
+appear only when both are selected. Filtering does not change saved history or
+routing.
+
 The frontend is a client-side React SPA. Bun builds static assets directly into
 `../internal/web/dist/`: `index.html`, hashed JavaScript and
 CSS, and a self-hosted Inter font. `cmd/rocketclaw` embeds and serves that directory

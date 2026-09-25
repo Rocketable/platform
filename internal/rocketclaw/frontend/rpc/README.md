@@ -227,6 +227,14 @@ or goal record. Ordinary GC remains responsible for those records.
 
 ## Identity boundary
 
+`TranscriptEvent` carries additive `agent`, `model`, optional `reasoning_effort`,
+`origin`, `source_conversation_id`, and `destination_conversation_id` fields.
+HTTP/SSE uses their protobuf JSON camelCase names. Absent reasoning is unknown;
+a present empty string means provider default. History resolves recovered replay
+ranges before the entry snapshot. Join carries the outbound execution snapshot,
+including message-ID-bound consumed-input enrichment. Saved copy locators survive
+source-row retention. IDs describe provenance and grant no source access.
+
 RocketClaw accepts browser connections directly (for example over the private network).
 HTTP mutations and uploads reject cross-origin browser requests using Go's
 `CrossOriginProtection`; browser-IP identity never grants cross-origin authority.

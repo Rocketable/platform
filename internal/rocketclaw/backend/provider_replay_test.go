@@ -207,7 +207,7 @@ func TestCrossProviderRepeatedRecoveryCheckpointKeepsProjectedBytes(t *testing.T
 
 	sink := new(captureCheckpointSink)
 	recheckpoint := &rocketcode.ActiveTurnCheckpoint{DisplayModel: "work/gpt", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"continue"}`)}}
-	require.NoError(t, sink.RecordRecoveredReplay(t.Context(), withRecoveredReplay(recheckpoint, recovered)))
+	require.NoError(t, sink.RecordRecoveredReplay(t.Context(), withRecoveredReplay(recheckpoint, recovered, nil)))
 	require.Len(t, sink.checkpoints, 1)
 	want := slices.Clone(sink.checkpoints[0].ReplayInput)
 
@@ -285,4 +285,28 @@ func TestReplayForProviderValidatesRequiredKnownFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, replay, 1)
 	assert.Contains(t, string(replay[0]), `"arguments":""`)
+}
+func TestRecoveredAttributionSurvivesProviderProjection(t *testing.T) {
+	var checkpoint rocketcode.ActiveTurnCheckpoint
+	require.NoError(t, json.Unmarshal([]byte(`{"display_model":"work/model-b","agent":"new","reasoning_effort":"low","replay_input":[{"type":"reasoning","encrypted_content":"opaque"},{"type":"message","role":"assistant","content":"old answer"},{"type":"message","role":"assistant","content":"new answer"}],"replay_attribution":[{"start":0,"end":2,"agent":"old","model":"work/model-a","reasoning_effort":"high"}]}`), &checkpoint))
+	projected, err := activeTurnForProvider(&checkpoint, "other")
+	require.NoError(t, err)
+	data, err := json.Marshal(projected)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"replay_attribution":[{"start":0,"end":1,"agent":"old","model":"work/model-a","reasoning_effort":"high"}]`)
+	require.Len(t, projected.ReplayInput, 2)
+	old := projected.ReplayAttribution
+	resumed := withRecoveredReplay(&rocketcode.ActiveTurnCheckpoint{Agent: "latest", DisplayModel: "model-c", ReasoningEffort: new("medium"), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"latest answer"}`)}}, projected.ReplayInput, append(old, rocketcode.ReplayAttribution{End: 2, Agent: projected.Agent, Model: projected.DisplayModel, ReasoningEffort: projected.ReasoningEffort}))
+	entry := rocketcode.SessionEntry{Agent: resumed.Agent, Model: resumed.DisplayModel, ReasoningEffort: resumed.ReasoningEffort, ReplayInput: resumed.ReplayInput, ReplayAttribution: resumed.ReplayAttribution}
+	require.Equal(t, "work/model-a", entry.AttributionAt(0).Model)
+	require.Equal(t, "work/model-b", entry.AttributionAt(1).Model)
+	require.Equal(t, "model-c", entry.AttributionAt(2).Model)
+	managed, err := externalMCPManagedEntry(&entry, []json.RawMessage{json.RawMessage(`{"type":"message","role":"developer","content":"prefix"}`)})
+	require.NoError(t, err)
+	require.Equal(t, "work/model-a", managed.AttributionAt(1).Model)
+
+	unknown := withRecoveredReplay(&rocketcode.ActiveTurnCheckpoint{ReplayInput: entry.ReplayInput[2:]}, entry.ReplayInput[:1], []rocketcode.ReplayAttribution{{End: 1}})
+	entry.ReplayAttribution = unknown.ReplayAttribution
+	require.Empty(t, entry.AttributionAt(0).Model)
+	require.Nil(t, entry.AttributionAt(0).ReasoningEffort)
 }

@@ -137,6 +137,7 @@ type Bridge struct {
 	handling, stopped     bool
 	activeReply           *protocol.InboundMessage
 	activeLooper          *rocketcode.Runtime
+	activeAttribution     rocketcode.ReplayAttribution
 	activeTurnInterrupts  chan os.Signal
 	activeTurnCancel      context.CancelFunc
 	waitingTurnCancel     context.CancelFunc
@@ -183,6 +184,8 @@ type runResult struct {
 	turnID, checkpointTurnID, text, thinking string
 	sessionEntryID                           int64
 	responseID, model                        string
+	agent                                    string
+	reasoningEffort                          *string
 	attachments                              []protocol.OutboundAttachment
 	goalCompleted                            bool
 	outputDecided                            bool
@@ -205,11 +208,11 @@ type workflowRunPhaseSummary struct {
 }
 
 type activeTurnCheckpointSink struct {
-	store           *SessionService
-	conversationID  string
-	sourceMetadata  map[string]string
-	recoveredReplay []json.RawMessage
-	capturedTurnID  *string
+	store          *SessionService
+	conversationID string
+	sourceMetadata map[string]string
+	recovered      *rocketcode.SessionEntry
+	capturedTurnID *string
 }
 
 func (s activeTurnCheckpointSink) StartActiveTurn(ctx context.Context, checkpoint *rocketcode.ActiveTurnCheckpoint) error {
@@ -237,8 +240,8 @@ func (s activeTurnCheckpointSink) upsert(ctx context.Context, checkpoint *rocket
 		*s.capturedTurnID = checkpoint.TurnID
 	}
 
-	if len(s.recoveredReplay) > 0 {
-		checkpoint = withRecoveredReplay(checkpoint, s.recoveredReplay)
+	if s.recovered != nil {
+		checkpoint = withRecoveredReplay(checkpoint, s.recovered.ReplayInput, s.recovered.ReplayAttribution)
 	}
 
 	checkpoint.ConversationKey = s.conversationID
@@ -246,10 +249,18 @@ func (s activeTurnCheckpointSink) upsert(ctx context.Context, checkpoint *rocket
 	return s.store.UpsertActiveTurn(ctx, checkpoint, s.sourceMetadata)
 }
 
-func withRecoveredReplay(checkpoint *rocketcode.ActiveTurnCheckpoint, recovered []json.RawMessage) *rocketcode.ActiveTurnCheckpoint {
+func withRecoveredReplay(checkpoint *rocketcode.ActiveTurnCheckpoint, recovered []json.RawMessage, attribution []rocketcode.ReplayAttribution) *rocketcode.ActiveTurnCheckpoint {
 	checkpointCopy := *checkpoint
 	if !rawMessagePrefixEqual(checkpointCopy.ReplayInput, recovered) {
 		checkpointCopy.ReplayInput = append(slices.Clone(recovered), checkpointCopy.ReplayInput...)
+
+		checkpointCopy.ReplayAttribution = slices.Clone(checkpoint.ReplayAttribution)
+		for i := range checkpointCopy.ReplayAttribution {
+			checkpointCopy.ReplayAttribution[i].Start += len(recovered)
+			checkpointCopy.ReplayAttribution[i].End += len(recovered)
+		}
+
+		checkpointCopy.ReplayAttribution = append(slices.Clone(attribution), checkpointCopy.ReplayAttribution...)
 	}
 
 	return &checkpointCopy
@@ -1174,6 +1185,7 @@ func (b *Bridge) publishFinal(ctx context.Context, msg *protocol.InboundMessage,
 	b.mu.Unlock()
 
 	outbound := b.newOutboundMessage(msg, result.turnID, result.text, "", true)
+	outbound.Agent, outbound.Model, outbound.ReasoningEffort = result.agent, result.model, result.reasoningEffort
 	outbound.WorkflowTerminal = result.workflowTerminal
 
 	outbound.Attachments = protocol.CloneOutboundAttachments(result.attachments)
@@ -1333,6 +1345,8 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		if err != nil {
 			return runResult{}, fmt.Errorf("build recovered active turn replay: %w", err)
 		}
+
+		recoveryEntry.ReplayAttribution = append(slices.Clone(checkpoint.ReplayAttribution), rocketcode.ReplayAttribution{Start: 0, End: len(recoveredReplay), Agent: checkpoint.Agent, Model: checkpoint.DisplayModel, ReasoningEffort: checkpoint.ReasoningEffort})
 	}
 
 	shellTempRel := rocketcodeShellTempRel(b.runtime.RuntimeDirName(), b.config.ConversationID)
@@ -1353,7 +1367,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	sessionIn := store.in()
 
 	if len(recoveredReplay) > 0 {
-		recoveryEntry = rocketcode.SessionEntry{Version: 1, Type: "active_turn_recovery", ReplayInput: recoveredReplay}
+		recoveryEntry.Version, recoveryEntry.Type, recoveryEntry.ReplayInput = 1, "active_turn_recovery", recoveredReplay
 		sessionIn = appendSessionEntry(sessionIn, &recoveryEntry, true)
 	}
 
@@ -1505,8 +1519,12 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	rocketcodeConfig := b.rocketcodeConfig(shellTempDir, shellEnv, b.activeTurnSourceMetadata(msg), customTools...)
 	rocketcodeConfig.ChildContext = childContext
+
 	sink := rocketcodeConfig.CheckpointSink.(activeTurnCheckpointSink)
-	sink.recoveredReplay = recoveredReplay
+	if len(recoveredReplay) > 0 {
+		sink.recovered = &recoveryEntry
+	}
+
 	sink.capturedTurnID = &checkpointTurnID
 	rocketcodeConfig.CheckpointSink = sink
 
@@ -1533,6 +1551,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	b.mu.Lock()
 	b.activeReply = activeReply
 	b.activeLooper = looper
+	b.activeAttribution = rocketcode.ReplayAttribution{Agent: agentName, Model: looper.DisplayModel, ReasoningEffort: new(string(looper.ReasoningEffort))}
 	b.activeTurnInterrupts = interrupts
 	b.activeTurnCancel = cancelTurn
 	b.activeTurnInterrupted = false
@@ -1542,6 +1561,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		b.mu.Lock()
 		b.activeReply = nil
 		b.activeLooper = nil
+		b.activeAttribution = rocketcode.ReplayAttribution{}
 		b.activeTurnInterrupts = nil
 		b.activeTurnCancel = nil
 		b.activeTurnInterrupted = false
@@ -1562,7 +1582,10 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	var group errgroup.Group
 
-	result = runResult{turnID: turnID, text: "", thinking: "", sessionEntryID: 0, responseID: "", model: ""}
+	result = runResult{turnID: turnID, agent: agentName, model: looper.DisplayModel, reasoningEffort: new(string(looper.ReasoningEffort))}
+
+	b.publishConsumed(ctx, msg)
+
 	defer func() {
 		if result.checkpointTurnID == "" {
 			result.checkpointTurnID = checkpointTurnID
@@ -1579,6 +1602,14 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	sessionOut := func(entry rocketcode.SessionEntry) error {
 		if len(recoveredReplay) > 0 {
 			entry.ReplayInput = append(slices.Clone(recoveredReplay), entry.ReplayInput...)
+
+			entry.ReplayAttribution = slices.Clone(entry.ReplayAttribution)
+			for i := range entry.ReplayAttribution {
+				entry.ReplayAttribution[i].Start += len(recoveredReplay)
+				entry.ReplayAttribution[i].End += len(recoveredReplay)
+			}
+
+			entry.ReplayAttribution = append(slices.Clone(recoveryEntry.ReplayAttribution), entry.ReplayAttribution...)
 		}
 
 		id, err := store.outID(entry)
@@ -1684,6 +1715,7 @@ func (b *Bridge) processResponse(ctx context.Context, msg *protocol.InboundMessa
 		b.log.Debug("rocketcode thinking update", "kind", item.Kind, "text_len", len([]rune(thinking)), "text", thinking)
 		result.thinking = appendText(result.thinking, thinking)
 		outbound := b.newOutboundMessage(msg, result.turnID, "", result.thinking, false)
+		outbound.Agent, outbound.Model, outbound.ReasoningEffort = result.agent, result.model, result.reasoningEffort
 
 		if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
 			return fmt.Errorf("publish rocketcode progress: %w", err)
@@ -1691,7 +1723,10 @@ func (b *Bridge) processResponse(ctx context.Context, msg *protocol.InboundMessa
 	case rocketcode.ChatResponseAssistantMessage:
 		result.text = appendText(result.text, item.Text)
 
-		if err := b.bus.PublishOutbound(ctx, b.newOutboundMessage(msg, result.turnID, result.text, "", false)); err != nil {
+		outbound := b.newOutboundMessage(msg, result.turnID, result.text, "", false)
+
+		outbound.Agent, outbound.Model, outbound.ReasoningEffort = result.agent, result.model, result.reasoningEffort
+		if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
 			return fmt.Errorf("publish rocketcode answer snapshot: %w", err)
 		}
 	}
@@ -2804,6 +2839,7 @@ func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text, 
 	outbound := protocol.NewOutboundMessage(b.config.ConversationID, text)
 	outbound.ProgressText = thinking
 	outbound.ConversationID = b.config.ConversationID
+	outbound.SourceConversationID = b.config.ConversationID
 
 	outbound.ExternalConversationID = b.config.ExternalConversationID
 	if msg != nil && msg.Source == protocol.SourceExternalMCP {

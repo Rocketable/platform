@@ -866,6 +866,8 @@ func TestSessionEntries(t *testing.T) {
 		json.RawMessage(`{"type":"function_call_output","call_id":"failed","output":"invalid arguments"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":""}`),
 	}}
+	historyEntry.Agent, historyEntry.Model, historyEntry.ReasoningEffort = "planner", "work/model-a", new("")
+	historyEntry.ReplayAttribution = []rocketcode.ReplayAttribution{{Start: 0, End: 6, Model: "legacy-model"}}
 	_, err = sessions.AppendEntryID(ctx, "empty-web", &historyEntry)
 	require.NoError(t, err)
 	history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: "empty-web"})
@@ -874,6 +876,22 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, "rocketclaw_i_want_human_partner_to_see_this", history.Messages[8].ToolName)
 	require.Equal(t, "report", history.Messages[9].ToolCallId)
 	require.Empty(t, history.Messages[9].ToolName)
+
+	for i, message := range history.Messages {
+		require.Equal(t, "canonical", message.Origin)
+		require.Equal(t, "empty-web", message.SourceConversationId)
+		require.Equal(t, "empty-web", message.DestinationConversationId)
+
+		if i < 6 {
+			require.Empty(t, message.Agent)
+			require.Equal(t, "legacy-model", message.Model)
+			require.Nil(t, message.ReasoningEffort)
+		} else {
+			require.Equal(t, "planner", message.Agent)
+			require.Equal(t, "work/model-a", message.Model)
+			require.Equal(t, new(""), message.ReasoningEffort)
+		}
+	}
 
 	got := make([]struct{ role, text string }, 0, len(history.Messages))
 	for _, message := range history.Messages {
@@ -1028,7 +1046,11 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, tc.want, names, tc.agent)
 	}
 
+	entry.Agent, entry.Model, entry.ReasoningEffort = "producer", "work/a-very-long-provider-qualified-model-name-for-narrow-layout", new("high")
+	entry.ReplayInput = []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"Copied producer answer"}`)}
 	_, err = sessions.AppendEntryID(ctx, id, &entry)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', 0, 'sync_source_conversation_id', 'private-X'))::text WHERE conversation_id=$1`, id)
 	require.NoError(t, err)
 	httpServer := startHTTPTestServer(t, connection)
 
@@ -1441,6 +1463,10 @@ func TestSessionEntries(t *testing.T) {
 		require.NoError(t, err)
 
 		trace.Origin = `{"agent":"producer","kind":"cron","ranAt":"2026-09-05T03:00:00.000000003Z","runId":"` + undelivered + `","runKind":"scheduled","sourcePath":"cron/silent.md","stem":"silent"}`
+		for _, message := range trace.Messages {
+			message.DestinationConversationId = webID
+		}
+
 		require.True(t, proto.Equal(trace, history))
 
 		for _, test := range []struct {

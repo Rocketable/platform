@@ -561,18 +561,24 @@ func (x *JoinRequest) GetId() string {
 }
 
 type TranscriptEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
-	Snapshot      bool                   `protobuf:"varint,2,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
-	Role          string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`
-	Complete      bool                   `protobuf:"varint,4,opt,name=complete,proto3" json:"complete,omitempty"`
-	TurnId        string                 `protobuf:"bytes,5,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
-	ToolCallId    string                 `protobuf:"bytes,6,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
-	ToolName      string                 `protobuf:"bytes,7,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
-	Attachments   []*Attachment          `protobuf:"bytes,8,rep,name=attachments,proto3" json:"attachments,omitempty"`
-	MessageId     string                 `protobuf:"bytes,9,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                     protoimpl.MessageState `protogen:"open.v1"`
+	Text                      string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
+	Snapshot                  bool                   `protobuf:"varint,2,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
+	Role                      string                 `protobuf:"bytes,3,opt,name=role,proto3" json:"role,omitempty"`
+	Complete                  bool                   `protobuf:"varint,4,opt,name=complete,proto3" json:"complete,omitempty"`
+	TurnId                    string                 `protobuf:"bytes,5,opt,name=turn_id,json=turnId,proto3" json:"turn_id,omitempty"`
+	ToolCallId                string                 `protobuf:"bytes,6,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	ToolName                  string                 `protobuf:"bytes,7,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	Attachments               []*Attachment          `protobuf:"bytes,8,rep,name=attachments,proto3" json:"attachments,omitempty"`
+	MessageId                 string                 `protobuf:"bytes,9,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	Agent                     string                 `protobuf:"bytes,10,opt,name=agent,proto3" json:"agent,omitempty"`
+	Model                     string                 `protobuf:"bytes,11,opt,name=model,proto3" json:"model,omitempty"`
+	ReasoningEffort           *string                `protobuf:"bytes,12,opt,name=reasoning_effort,json=reasoningEffort,proto3,oneof" json:"reasoning_effort,omitempty"`
+	Origin                    string                 `protobuf:"bytes,13,opt,name=origin,proto3" json:"origin,omitempty"`
+	SourceConversationId      string                 `protobuf:"bytes,14,opt,name=source_conversation_id,json=sourceConversationId,proto3" json:"source_conversation_id,omitempty"`
+	DestinationConversationId string                 `protobuf:"bytes,15,opt,name=destination_conversation_id,json=destinationConversationId,proto3" json:"destination_conversation_id,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
 }
 
 func (x *TranscriptEvent) Reset() {
@@ -664,6 +670,48 @@ func (x *TranscriptEvent) GetAttachments() []*Attachment {
 func (x *TranscriptEvent) GetMessageId() string {
 	if x != nil {
 		return x.MessageId
+	}
+	return ""
+}
+
+func (x *TranscriptEvent) GetAgent() string {
+	if x != nil {
+		return x.Agent
+	}
+	return ""
+}
+
+func (x *TranscriptEvent) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *TranscriptEvent) GetReasoningEffort() string {
+	if x != nil && x.ReasoningEffort != nil {
+		return *x.ReasoningEffort
+	}
+	return ""
+}
+
+func (x *TranscriptEvent) GetOrigin() string {
+	if x != nil {
+		return x.Origin
+	}
+	return ""
+}
+
+func (x *TranscriptEvent) GetSourceConversationId() string {
+	if x != nil {
+		return x.SourceConversationId
+	}
+	return ""
+}
+
+func (x *TranscriptEvent) GetDestinationConversationId() string {
+	if x != nil {
+		return x.DestinationConversationId
 	}
 	return ""
 }
@@ -2913,7 +2961,7 @@ const file_web_proto_rawDesc = "" +
 	"\x15CreateSessionResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"\x1d\n" +
 	"\vJoinRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"\x9b\x02\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\x9a\x04\n" +
 	"\x0fTranscriptEvent\x12\x12\n" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x1a\n" +
 	"\bsnapshot\x18\x02 \x01(\bR\bsnapshot\x12\x12\n" +
@@ -2925,7 +2973,15 @@ const file_web_proto_rawDesc = "" +
 	"\ttool_name\x18\a \x01(\tR\btoolName\x121\n" +
 	"\vattachments\x18\b \x03(\v2\x0f.rpc.AttachmentR\vattachments\x12\x1d\n" +
 	"\n" +
-	"message_id\x18\t \x01(\tR\tmessageId\"\xcf\x01\n" +
+	"message_id\x18\t \x01(\tR\tmessageId\x12\x14\n" +
+	"\x05agent\x18\n" +
+	" \x01(\tR\x05agent\x12\x14\n" +
+	"\x05model\x18\v \x01(\tR\x05model\x12.\n" +
+	"\x10reasoning_effort\x18\f \x01(\tH\x00R\x0freasoningEffort\x88\x01\x01\x12\x16\n" +
+	"\x06origin\x18\r \x01(\tR\x06origin\x124\n" +
+	"\x16source_conversation_id\x18\x0e \x01(\tR\x14sourceConversationId\x12>\n" +
+	"\x1bdestination_conversation_id\x18\x0f \x01(\tR\x19destinationConversationIdB\x13\n" +
+	"\x11_reasoning_effort\"\xcf\x01\n" +
 	"\n" +
 	"Attachment\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
@@ -3249,6 +3305,7 @@ func file_web_proto_init() {
 	if File_web_proto != nil {
 		return
 	}
+	file_web_proto_msgTypes[8].OneofWrappers = []any{}
 	file_web_proto_msgTypes[32].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

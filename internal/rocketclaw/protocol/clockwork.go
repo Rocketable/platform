@@ -28,6 +28,7 @@ func CloneOutboundMessage(message *OutboundMessage) *OutboundMessage {
 		Text: message.Text, ProgressText: message.ProgressText,
 		ConversationID: message.ConversationID, TurnID: message.TurnID,
 		ExternalConversationID: message.ExternalConversationID, Agent: message.Agent,
+		Model: message.Model, SourceConversationID: message.SourceConversationID, ReasoningEffort: Clone(message.ReasoningEffort),
 		Complete:   message.Complete,
 		SlackReply: Clone(message.SlackReply), Attachments: CloneOutboundAttachments(message.Attachments),
 		GoalTurn: message.GoalTurn, GoalComplete: message.GoalComplete, GoalActive: message.GoalActive,

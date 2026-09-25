@@ -13,6 +13,7 @@ import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
 import { CodeBlock, TranscriptText } from "./transcript-text";
 import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Attachment, AttachmentGroup, AttachmentMedia, AttachmentContent, AttachmentTitle, AttachmentDescription, AttachmentActions, AttachmentAction } from "@/components/ui/attachment";
 import { Message, MessageContent } from "@/components/ui/message";
@@ -1196,7 +1197,8 @@ function SessionTabs({ returnTo, children }: { returnTo: string; children: React
   );
 }
 
-type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; turnId?: string; streamText?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] };
+type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; turnId?: string; streamText?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin" | "sourceConversationId" | "destinationConversationId">;
+type OriginFilter = "sandboxed" | "both" | "canonical" | "neither";
 
 function lineId(role: Line["role"], text: string, seen: Map<string, number>) {
   const base = `${role}:${text}`;
@@ -1214,7 +1216,7 @@ function appendLine(current: Line[], role: Line["role"], text: string, tool: Pic
   return [...current, ...rows.map((row) => ({ id: lineId(role, row, seen), text: row, role, ...(role === "thinking" ? {} : tool) }))];
 }
 
-function transcriptTurns(lines: Line[]) {
+function transcriptTurns(lines: Line[], filter: OriginFilter = "both") {
   const turns: { user: Line[]; traces: Line[]; replies: Line[] }[] = [];
   let current = { user: [] as Line[], traces: [] as Line[], replies: [] as Line[] };
   const calls = new Map<string, Line & { toolParts: Line[] }>();
@@ -1228,11 +1230,12 @@ function transcriptTurns(lines: Line[]) {
     }
   };
   for (const line of lines) {
+    if (line.role === "user") flush();
+    if (filter !== "both" && line.origin !== filter) continue;
     const resultCall = line.role === "tool" ? calls.get(line.toolCallId ?? "") : undefined;
     const skillHeader = line.text.split("\n", 1)[0];
     const skillCall = line.role === "developer" ? skills.get(skillHeader) : undefined;
     if (line.role === "user") {
-      flush();
       current.user.push(line);
     } else if (line.role === "assistant") {
       current.replies.push(line);
@@ -1301,6 +1304,12 @@ function MessageAttachment({ file, conversationId }: { file: NonNullable<Line["a
   </Attachment>;
 }
 
+// OpenCode 048a47e89e859f9928f5f04a56eebf013063152a: packages/session-ui/src/message/message-content.tsx, CurrentUserMessageDisplay and AssistantTextContent.
+function MessageFooter({ line }: { line: Line }) {
+  const model = line.model ? (line.model.includes("/") ? line.model : `openai/${line.model}`) : "Unknown";
+  return <div data-slot="message-footer" className="max-w-full break-words px-3 text-xs text-muted-foreground group-has-data-[variant=ghost]/message:px-0">{line.agent || "Unknown"} ({model}{line.reasoningEffort ? `#${line.reasoningEffort}` : ""}) - {line.origin === "sandboxed" || line.origin === "canonical" ? line.origin : "unknown"}</div>;
+}
+
 function TranscriptLine({ line, conversationId }: { line: Line; conversationId: string }) {
   if (line.role === "thinking") {
     return (
@@ -1353,6 +1362,7 @@ function TranscriptLine({ line, conversationId }: { line: Line; conversationId: 
           <BubbleContent><TranscriptText text={line.text} /></BubbleContent>
           <MessageAttachments attachments={line.attachments} conversationId={conversationId} />
         </Bubble>
+        <MessageFooter line={line} />
       </MessageContent>
     </Message>
   );
@@ -1363,13 +1373,15 @@ function TranscriptLog({
   lines,
   thinking,
   origin,
+  filter,
 }: {
   lines: Line[];
   conversationId: string;
   thinking: boolean;
   origin?: ChatOrigin;
+  filter: OriginFilter;
 }) {
-  const turns = transcriptTurns(lines);
+  const turns = transcriptTurns(lines, filter);
   const { scrollToMessage } = useMessageScroller();
   const turnNodes = useRef<(HTMLElement | null)[]>([]);
   const running = usePendingCron(conversationId);
@@ -1387,6 +1399,10 @@ function TranscriptLog({
       {lines.length === 0 && !thinking ? (
         <MessageScrollerItem className="flex flex-1 items-center justify-center">
           <p role="status" className="text-sm text-muted-foreground">{running ? `${running} is running` : "Send a message to start the conversation."}</p>
+        </MessageScrollerItem>
+      ) : turns.length === 0 && !thinking ? (
+        <MessageScrollerItem className="flex flex-1 items-center justify-center">
+          <p role="status" className="text-sm text-muted-foreground">No messages for selected origins.</p>
         </MessageScrollerItem>
       ) : (
         <>
@@ -1439,9 +1455,10 @@ function TranscriptLog({
 }
 
 function nextLines(current: Line[], payload: TranscriptEvent): Line[] {
+  const metadata = Object.fromEntries(Object.entries(payload).filter(([key, value]) => ["agent", "model", "reasoningEffort", "origin", "sourceConversationId", "destinationConversationId"].includes(key) && value !== undefined && (key === "reasoningEffort" || value !== "")));
   if (payload.role === "user" && payload.messageId) {
-    if (current.some((line) => line.id === payload.messageId)) return current;
-    return [...current, { id: payload.messageId, role: "user", text: payload.text, attachments: payload.attachments }];
+    if (current.some((line) => line.id === payload.messageId)) return current.map((line) => line.id === payload.messageId ? { ...line, ...metadata } : line);
+    return [...current, { ...metadata, id: payload.messageId, role: "user", text: payload.text, attachments: payload.attachments }];
   }
   const role = payload.role === "thinking" || payload.role === "user" || payload.role === "tool" || payload.role === "developer" ? payload.role : "assistant";
   const boundary = current.findLastIndex((line) => line.role === "user");
@@ -1453,7 +1470,7 @@ function nextLines(current: Line[], payload: TranscriptEvent): Line[] {
   const attachments = [...new Map([...(current[index]?.attachments ?? []), ...(payload.attachments ?? [])].map((file) => [file.id, file])).values()];
   if (text.trim() === "" && attachments.length === 0) return retained;
   const added = appendLine(retained, role, text, { toolCallId: payload.toolCallId, toolName: payload.toolName, attachments });
-  const updated = added.slice(retained.length).map((line) => ({ ...line, turnId: payload.turnId, streamText: payload.text }));
+  const updated = added.slice(retained.length).map((line) => ({ ...current[index], ...line, ...metadata, turnId: payload.turnId, streamText: payload.text }));
   const position = index < 0 ? retained.length : index;
   return [...retained.slice(0, position), ...updated, ...retained.slice(position)];
 }
@@ -1485,7 +1502,7 @@ async function readTranscriptHistory(draft: ComposerDraft, request: Promise<Tran
     const seen = new Map<string, number>();
     draft.lines = messages.map((message): Line => {
       const role = message.role === "thinking" || message.role === "user" || message.role === "tool" || message.role === "developer" ? message.role : "assistant";
-      return { id: lineId(role, message.text, seen), role, text: message.text, toolCallId: message.toolCallId, toolName: message.toolName, attachments: message.attachments };
+      return { ...message, id: lineId(role, message.text, seen), role };
     });
     onDraftChange();
   }
@@ -1517,7 +1534,10 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
     stream.onmessage = (event) => {
       const payload = JSON.parse(String(event.data)) as TranscriptEvent;
       if (payload.role === "user" && payload.messageId) {
-        if (draft.consumed?.has(payload.messageId)) return;
+        if (draft.consumed?.has(payload.messageId)) {
+          setLines((current) => nextLines(current, payload));
+          return;
+        }
         (draft.consumed ??= new Set()).add(payload.messageId);
         draft.parked = draft.parked?.filter((line) => line.id !== payload.messageId);
         void queryClient.invalidateQueries({ queryKey: ["queue"] });
@@ -1559,6 +1579,7 @@ export function OriginCard({ origin }: { origin?: ChatOrigin }) {
 }
 
 function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; drafts: Map<string, ComposerDraft>; onDraftChange: () => void; onCreated: (id: string) => void }) {
+  const [filter, setFilter] = useState<OriginFilter>("both");
   const [draft] = useState(() => {
     const value = drafts.get(id) ?? { text: "", files: [], agent: "", sessionId: id, sending: false, busy: false, lines: [], error: "", edit: 0, submission: 0 };
     drafts.set(id, value);
@@ -1575,8 +1596,20 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
   const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin } = useSessionStream(id, draft, onDraftChange);
   return (
     <>
-      <TranscriptLog conversationId={id} lines={lines} thinking={busy && lines.at(-1)?.role !== "thinking"} origin={origin} />
+      <TranscriptLog conversationId={id} lines={lines} thinking={busy && lines.at(-1)?.role !== "thinking"} origin={origin} filter={filter} />
       {historyError ? <p role="alert" className="px-3 text-sm text-destructive">{historyError}</p> : null}
+      <ButtonGroup aria-label="Show messages from" className="mx-auto my-2.5">
+        {(["sandboxed", "canonical"] as const).map((choice) => (
+          <Button key={choice} type="button" size="xs" className="relative before:absolute before:-inset-y-2.5 before:inset-x-0" variant={filter === "both" || filter === choice ? "default" : "outline"} aria-pressed={filter === "both" || filter === choice} onClick={() => setFilter((current) => {
+            if (current === "both") return choice === "sandboxed" ? "canonical" : "sandboxed";
+            if (current === choice) return "neither";
+            if (current === "neither") return choice;
+            return "both";
+          })}>
+            {choice}
+          </Button>
+        ))}
+      </ButtonGroup>
       <fieldset disabled={opening} className="contents">
         <SessionComposer id={id} draft={draft} drafts={drafts} onDraftChange={onDraftChange} busy={busy} setBusy={setBusy} lines={lines} setLines={setLines} refreshHistory={refreshHistory} />
       </fieldset>

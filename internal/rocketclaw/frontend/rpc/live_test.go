@@ -192,6 +192,7 @@ func TestPromptAndLiveTransport(t *testing.T) {
 	}
 
 	message := protocol.NewOutboundMessage(id, "answer")
+	message.Agent, message.Model, message.ReasoningEffort, message.SourceConversationID = "planner", "work/model-a", new(""), id
 	attachment := protocol.OutboundAttachment{ID: "live-image", Name: "image.png", MIMEType: "image/png", Data: []byte("original")}
 	require.NoError(t, sessions.SaveAttachment(ctx, id, &attachment, false))
 	_, err = sessions.AppendEntryID(ctx, id, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
@@ -216,6 +217,12 @@ func TestPromptAndLiveTransport(t *testing.T) {
 		require.Equal(t, "turn-one", got.TurnId)
 
 		if got.Role == "assistant" {
+			require.Equal(t, "planner", got.Agent)
+			require.Equal(t, "work/model-a", got.Model)
+			require.Equal(t, new(""), got.ReasoningEffort)
+			require.Equal(t, "canonical", got.Origin)
+			require.Equal(t, id, got.SourceConversationId)
+			require.Equal(t, id, got.DestinationConversationId)
 			require.Len(t, got.Attachments, 1)
 			require.Equal(t, attachment.ID, got.Attachments[0].Id)
 			require.Equal(t, int64(len(attachment.Data)), got.Attachments[0].Size)
@@ -255,7 +262,10 @@ func TestPromptAndLiveTransport(t *testing.T) {
 	browser.Go(func() error {
 		<-subscribed
 
-		if err := rt.PublishOutbound(ctx, protocol.NewOutboundMessage(id, "live browser answer")); err != nil {
+		outbound := protocol.NewOutboundMessage(id, "live browser answer")
+
+		outbound.Agent, outbound.Model, outbound.ReasoningEffort, outbound.SourceConversationID = "planner", "work/model-a", new(""), id
+		if err := rt.PublishOutbound(ctx, outbound); err != nil {
 			return fmt.Errorf("publish browser event: %w", err)
 		}
 

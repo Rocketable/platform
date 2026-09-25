@@ -924,7 +924,7 @@ func (s *SessionService) ObserveEntries(ctx context.Context, conversationID stri
 		return nil, errors.New("conversation ID is required")
 	}
 
-	entries, err := queryRows(ctx, s.db, `SELECT destination.id, destination.entry_json, COALESCE(source.conversation_id, ''), destination.entry_json::jsonb ? 'sync_source_entry_id'
+	entries, err := queryRows(ctx, s.db, `SELECT destination.id, destination.entry_json, COALESCE(destination.entry_json::jsonb->>'sync_source_conversation_id', source.conversation_id, ''), destination.entry_json::jsonb ? 'sync_source_entry_id'
 FROM session_entries destination
 LEFT JOIN session_entries source ON source.id = (destination.entry_json::jsonb->>'sync_source_entry_id')::bigint
 WHERE destination.conversation_id = $1 ORDER BY destination.id`, "rocketcode session entries", func(row rowScanner) (ObservedSessionEntry, error) {
@@ -1258,7 +1258,7 @@ func (s *SessionService) appendExternalMCPEntry(ctx context.Context, privateConv
 		return 0, fmt.Errorf("append managed external MCP session entry: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::text WHERE id=$2`, privateID, managedID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint, 'sync_source_conversation_id', $3::text))::text WHERE id=$2`, privateID, managedID, privateConversationID); err != nil {
 		return 0, fmt.Errorf("record external MCP entry source: %w", err)
 	}
 
@@ -1493,8 +1493,11 @@ snoozed_until = NULL WHERE conversation_id = $1`, conversationID); err != nil {
 func externalMCPManagedEntry(entry *harness.SessionEntry, replayPrefix []json.RawMessage) (harness.SessionEntry, error) {
 	managed := *entry
 	managed.ReplayInput = append(make([]json.RawMessage, 0, len(replayPrefix)+len(entry.ReplayInput)), replayPrefix...)
+	boundaries := make([]int, len(entry.ReplayInput)+1)
 
-	for _, raw := range entry.ReplayInput {
+	for i, raw := range entry.ReplayInput {
+		boundaries[i] = len(managed.ReplayInput)
+
 		var item struct {
 			Type string `json:"type"`
 		}
@@ -1506,6 +1509,9 @@ func externalMCPManagedEntry(entry *harness.SessionEntry, replayPrefix []json.Ra
 			managed.ReplayInput = append(managed.ReplayInput, raw)
 		}
 	}
+
+	boundaries[len(entry.ReplayInput)] = len(managed.ReplayInput)
+	managed.ReplayAttribution = harness.RemapReplayAttribution(entry.ReplayAttribution, boundaries)
 
 	return managed, nil
 }
