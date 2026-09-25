@@ -127,12 +127,19 @@ func TestNewWithModelResolverResolvesRootAgent(t *testing.T) {
 
 		return defaultClient, ProviderOrigin{Provider: "openai", Model: model}, nil
 	})
-	loop, err := NewWithModelResolver(resolver, testConfig(dir), root, Agents{Items: map[string]Agent{
-		"main":   {Name: "main", Model: "work/gpt-5.5", Prompt: "prompt"},
-		"unused": {Name: "unused", Model: "   ", Prompt: "unused"},
-	}}, Skills{Items: map[string]Skill{}}, "main", nil)
+	cfg := testConfig(dir)
+	cfg.ShellEnv = map[string]string{"ROCKETCLAW_METADATA_FRUIT": "banana"}
+	agents := Agents{Items: map[string]Agent{
+		"main":   {Name: "main", Model: "work/gpt-5.5", Prompt: "prompt", Permission: parsePermissionYAML(t, `edit: {".tmp/${ROCKETCLAW_METADATA_FRUIT}/note.txt": allow}`)},
+		"unused": {Name: "unused", Model: "   ", Prompt: "unused", Permission: parsePermissionYAML(t, `edit: {"unused/note.txt": allow}`)},
+	}}
+	loop, err := NewWithModelResolver(resolver, cfg, root, agents, Skills{Items: map[string]Skill{}}, "main", nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"work/gpt-5.5"}, resolved)
+	require.Contains(t, loop.SystemPrompt, ".tmp/banana/note.txt")
+	action, _ := loop.Permissions.Evaluate("edit", ".tmp/banana/note.txt")
+	require.Equal(t, PermissionAllow, action)
+	require.Equal(t, ".tmp/${ROCKETCLAW_METADATA_FRUIT}/note.txt", agents.Items["main"].Permission.Buckets[0].Rules[0].Pattern)
 
 	output := make(chan ChatResponse, 8)
 
@@ -144,6 +151,18 @@ func TestNewWithModelResolverResolvesRootAgent(t *testing.T) {
 	require.Len(t, workRequests, 1)
 	require.Contains(t, <-workRequests, `"model":"gpt-5.5"`)
 	require.Empty(t, defaultRequests)
+
+	for _, env := range []map[string]string{nil, {}, {"ROCKETCLAW_METADATA_FRUIT": ""}} {
+		cfg.ShellEnv = env
+		loop, err := NewWithModelResolver(resolver, cfg, root, agents, Skills{Items: map[string]Skill{}}, "main", nil)
+		require.NoError(t, err)
+
+		action, _ := loop.Permissions.Evaluate("edit", ".tmp/banana/note.txt")
+		require.Equal(t, PermissionDeny, action)
+	}
+
+	// Each construction resolves the active agent's model exactly once.
+	require.Len(t, resolved, 4)
 }
 
 func TestNewWithModelResolverRejectsUnknownProvider(t *testing.T) {

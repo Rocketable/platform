@@ -155,7 +155,8 @@ func TestPermissionReviewResolvesCustomReviewerIndependently(t *testing.T) {
 
 	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
 	require.Len(t, reviewRequests, 1)
-	require.Contains(t, <-reviewRequests, `"model":"release-api"`)
+	request := <-reviewRequests
+	require.Contains(t, request, `"model":"release-api"`)
 	require.Empty(t, rootRequests)
 }
 

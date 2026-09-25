@@ -348,6 +348,32 @@ func TestRocketCodeReadsAllowedSkillFilesFromConfiguredRuntimeDirectory(t *testi
 	}
 }
 
+func TestRocketCodeInterpolatesPermissionPatternsFromShellEnv(t *testing.T) {
+	workspace := t.TempDir()
+	root, err := os.OpenRoot(workspace)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+
+	require.NoError(t, root.MkdirAll(filepath.Join(".rocketclaw", "agents"), 0o755))
+	require.NoError(t, root.WriteFile(filepath.Join(".rocketclaw", "agents", "main.md"), []byte("---\ndescription: Main\nmodel: gpt-5.4\npermission:\n  edit:\n    \".tmp/*\": deny\n    \".tmp/${ROCKETCLAW_METADATA_FRUIT}/note.txt\": allow\n---\nPrompt\n"), 0o644))
+	require.NoError(t, root.MkdirAll(filepath.Join(".rocketclaw", "skills"), 0o755))
+
+	agents, skills, err := loadRocketCodeDefinitionsIn(root, &config.Config{Workspace: workspace}, config.DefaultRuntimeDir, toolModePersistent)
+	require.NoError(t, err)
+	require.Equal(t, ".tmp/*", agents.Items["main"].Permission.Buckets[0].Rules[0].Pattern)
+	require.Equal(t, ".tmp/${ROCKETCLAW_METADATA_FRUIT}/note.txt", agents.Items["main"].Permission.Buckets[0].Rules[1].Pattern)
+
+	client := openai.NewClient()
+	runtime, err := rocketcode.New(&client, &rocketcode.Config{ShellTempDir: workspace, ChildRunLogger: rocketcode.DiscardChildRunLog, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand, ShellEnv: map[string]string{"ROCKETCLAW_METADATA_FRUIT": "banana"}}, root, agents, skills, "main", nil)
+	require.NoError(t, err)
+
+	action, _ := runtime.Permissions.Evaluate("edit", ".tmp/banana/note.txt")
+	require.Equal(t, rocketcode.PermissionAllow, action)
+	action, _ = runtime.Permissions.Evaluate("edit", ".tmp/apple/note.txt")
+	require.Equal(t, rocketcode.PermissionDeny, action)
+	require.Contains(t, runtime.SystemPrompt, ".tmp/banana/note.txt")
+}
+
 func TestLoadRocketCodeDefinitionsRejectsEscapingAgentSymlink(t *testing.T) {
 	workspace := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "main.md")

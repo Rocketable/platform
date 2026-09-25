@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/text/unicode/norm"
 	"gopkg.in/yaml.v3"
 	"mvdan.cc/sh/v3/syntax"
@@ -37,6 +38,18 @@ type PermissionRule struct {
 	Pattern  string
 	Action   PermissionAction
 	Reviewer string
+
+	// Segments split the authored pattern at every ${ROCKETCLAW_*} reference.
+	// Literal segments come from the environment and match as plain text;
+	// authored segments keep wildcard semantics. Nil means no interpolation.
+	segments []ruleSegment
+}
+
+// ruleSegment is one piece of a permission pattern: authored text with wildcard
+// semantics, or a literal environment value matched as plain text.
+type ruleSegment struct {
+	Text    string
+	Literal bool
 }
 
 // PermissionBucket groups permission rules under a named permission category.
@@ -66,6 +79,91 @@ type permissionDecision struct {
 }
 
 var wildcardMeta = regexp.MustCompile(`[.+^${}()|[\]\\]`)
+
+var permissionEnvPattern = regexp.MustCompile(`\$\{(ROCKETCLAW_[A-Za-z0-9_]+)\}`)
+
+func interpolatePermissions(agent *Agent, env []string) {
+	values := make(map[string]string)
+
+	var scans errgroup.Group
+
+	scans.Go(func() error {
+		for _, entry := range env {
+			key, value, _ := strings.Cut(entry, "=")
+			if strings.HasPrefix(key, "ROCKETCLAW_") {
+				values[key] = value
+			}
+		}
+
+		return nil
+	})
+
+	buckets := slices.Clone(agent.Permission.Buckets)
+	for i, bucket := range buckets {
+		buckets[i].Rules = slices.Clone(bucket.Rules)
+		for j, rule := range bucket.Rules {
+			matches := permissionEnvPattern.FindAllStringSubmatchIndex(rule.Pattern, -1)
+			if len(matches) == 0 {
+				continue
+			}
+
+			segments := make([]ruleSegment, 0, 2*len(matches)+1)
+			start := 0
+
+			for _, match := range matches {
+				key := rule.Pattern[match[2]:match[3]]
+				segments = append(segments, ruleSegment{Text: rule.Pattern[start:match[0]]}, ruleSegment{Text: key, Literal: true})
+				start = match[1]
+			}
+
+			segments = append(segments, ruleSegment{Text: rule.Pattern[start:]})
+			rule.segments = segments
+			buckets[i].Rules[j] = rule
+		}
+	}
+
+	// The environment scan cannot fail; join before reading its values.
+	_ = scans.Wait()
+
+	for i := range buckets {
+		// Rules whose variable is absent or empty are dropped from the set:
+		// a scoped rule without its variable grants nothing that turn.
+		kept := buckets[i].Rules[:0]
+		for _, rule := range buckets[i].Rules {
+			if len(rule.segments) == 0 {
+				kept = append(kept, rule)
+				continue
+			}
+
+			dropped := false
+
+			for k, segment := range rule.segments {
+				if !segment.Literal {
+					continue
+				}
+
+				value := values[segment.Text]
+				if value == "" {
+					dropped = true
+					break
+				}
+
+				rule.segments[k].Text = value
+			}
+
+			if dropped {
+				continue
+			}
+
+			rule.Pattern = joinRuleSegments(rule.segments)
+			kept = append(kept, rule)
+		}
+
+		buckets[i].Rules = kept
+	}
+
+	agent.Permission.Buckets = buckets
+}
 
 func parsePermissionNode(node *yaml.Node) (PermissionSet, error) {
 	if node == nil || node.Kind == 0 {
@@ -304,19 +402,24 @@ func (ps PermissionSet) evaluateRules(permission, subject string, folded bool, s
 		}
 
 		for _, rule := range bucket.Rules {
-			input, pattern := subject, rule.Pattern
+			input, pattern, segments := subject, rule.Pattern, rule.segments
 			if folded {
 				input, pattern = foldPermissionPath(input), foldPermissionPath(pattern)
+
+				segments = slices.Clone(segments)
+				for i := range segments {
+					segments[i].Text = foldPermissionPath(segments[i].Text)
+				}
 			}
 
 			var matches bool
 			if permission == "bash" && len(scripts) > 0 {
-				matches = bashComponentPatternMatch(input, pattern) ||
+				matches = bashComponentPatternMatch(input, pattern, segments...) ||
 					slices.ContainsFunc(scripts, func(script string) bool {
-						return bashScriptPatternMatch(script, rule.Pattern)
+						return bashScriptPatternMatch(script, rule.Pattern, rule.segments...)
 					})
 			} else {
-				matches = permissionWildcardMatch(input, pattern)
+				matches = permissionWildcardMatch(input, pattern, segments...)
 			}
 
 			if !matches {
@@ -368,12 +471,42 @@ func (ps PermissionSet) hasRuleForPermission(permission string, actions ...Permi
 	return false
 }
 
-func permissionWildcardMatch(input, pattern string) bool {
-	escaped := wildcardMeta.ReplaceAllStringFunc(pattern, func(s string) string { return `\` + s })
-	escaped = strings.ReplaceAll(escaped, "*", ".*")
+func joinRuleSegments(segments []ruleSegment) string {
+	var builder strings.Builder
 
-	escaped = strings.ReplaceAll(escaped, "?", ".")
-	if before, ok := strings.CutSuffix(escaped, " .*"); ok {
+	for _, segment := range segments {
+		builder.WriteString(segment.Text)
+	}
+
+	return builder.String()
+}
+
+func permissionWildcardMatch(input, pattern string, segments ...ruleSegment) bool {
+	if len(segments) == 0 {
+		segments = []ruleSegment{{Text: pattern}}
+	}
+
+	var expression strings.Builder
+
+	for _, segment := range segments {
+		if segment.Literal {
+			expression.WriteString(regexp.QuoteMeta(segment.Text))
+
+			continue
+		}
+
+		escaped := wildcardMeta.ReplaceAllStringFunc(segment.Text, func(s string) string { return `\` + s })
+		escaped = strings.ReplaceAll(escaped, "*", ".*")
+		expression.WriteString(strings.ReplaceAll(escaped, "?", "."))
+	}
+
+	escaped := expression.String()
+	// Folded paths can compose Unicode across interpolation boundaries.
+	if pattern != joinRuleSegments(segments) {
+		escaped = norm.NFC.String(escaped)
+	}
+
+	if before, ok := strings.CutSuffix(escaped, " .*"); ok && strings.HasSuffix(segments[len(segments)-1].Text, " *") {
 		escaped = before + "( .*)?"
 	}
 
@@ -517,8 +650,8 @@ func bashPermissionNodes(file *syntax.File, rule bool) []string {
 	return subjects
 }
 
-func bashComponentPatternMatch(subject, pattern string) bool {
-	if !permissionWildcardMatch(subject, pattern) {
+func bashComponentPatternMatch(subject, pattern string, segments ...ruleSegment) bool {
+	if !permissionWildcardMatch(subject, pattern, segments...) {
 		return false
 	}
 
@@ -539,11 +672,11 @@ func bashComponentPatternMatch(subject, pattern string) bool {
 
 	_, chain := stmt.Cmd.(*syntax.BinaryCmd)
 
-	return !chain && (len(stmt.Redirs) == 0 || stmt.Cmd == nil && bashScriptPatternMatch(subject, pattern))
+	return !chain && (len(stmt.Redirs) == 0 || stmt.Cmd == nil && bashScriptPatternMatch(subject, pattern, segments...))
 }
 
-func bashScriptPatternMatch(command, pattern string) bool {
-	if !permissionWildcardMatch(command, pattern) || strings.ContainsAny(command, "\r\x00") || strings.ContainsAny(pattern, "\r\x00") {
+func bashScriptPatternMatch(command, pattern string, segments ...ruleSegment) bool {
+	if !permissionWildcardMatch(command, pattern, segments...) || strings.ContainsAny(command, "\r\x00") || strings.ContainsAny(pattern, "\r\x00") {
 		return false
 	}
 
@@ -608,7 +741,9 @@ func bashScriptPatternMatch(command, pattern string) bool {
 		return false
 	}
 
-	return slices.EqualFunc(subjects[0], subjects[1], permissionWildcardMatch)
+	return slices.EqualFunc(subjects[0], subjects[1], func(subject, pattern string) bool {
+		return permissionWildcardMatch(subject, pattern)
+	})
 }
 
 func bashStaticExecutable(word *syntax.Word) bool {
