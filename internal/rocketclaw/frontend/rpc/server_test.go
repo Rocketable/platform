@@ -481,20 +481,31 @@ func TestSessionEntries(t *testing.T) {
 		{&UpdateSessionRequest{Id: "missing", Name: new("name")}, codes.NotFound},
 		{&UpdateSessionRequest{Id: "cron:private", Pinned: new(true)}, codes.PermissionDenied},
 		{&UpdateSessionRequest{Id: id, Name: new("bad\x00name")}, codes.InvalidArgument},
+		{&UpdateSessionRequest{Id: id, SnoozedUntil: new("not-a-time")}, codes.InvalidArgument},
+		{&UpdateSessionRequest{Id: id, SnoozedUntil: new(time.Now().Add(-time.Hour).Format(time.RFC3339Nano))}, codes.InvalidArgument},
 	} {
 		_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", tt.request)
 		require.Equal(t, tt.code, status.Code(err))
 	}
 
 	for _, settled := range []bool{true, false} {
-		_, err = invoke[SettleSessionResponse](ctx, connection, "SettleSession", &SettleSessionRequest{Id: id, Settled: settled})
+		until := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond).Format(time.RFC3339Nano)
+		_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", &UpdateSessionRequest{Id: id, SnoozedUntil: &until})
 		require.NoError(t, err)
 		conversations, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
+		require.NoError(t, err)
+		require.Equal(t, until, conversations.Sessions[0].SnoozedUntil)
+		require.True(t, conversations.Sessions[0].Settled)
+
+		_, err = invoke[SettleSessionResponse](ctx, connection, "SettleSession", &SettleSessionRequest{Id: id, Settled: settled})
+		require.NoError(t, err)
+		conversations, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 		require.NoError(t, err)
 		require.Len(t, conversations.Sessions, 1)
 		require.Equal(t, id, conversations.Sessions[0].Id)
 		require.Equal(t, "main", conversations.Sessions[0].Agent)
 		require.Equal(t, settled, conversations.Sessions[0].Settled)
+		require.Empty(t, conversations.Sessions[0].SnoozedUntil)
 
 		stored, found, err := sessions.Thread(id)
 		require.NoError(t, err)

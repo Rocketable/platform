@@ -163,6 +163,12 @@ sidebar. Use **Unsettle** to return a chat to the sidebar. Global search always
 includes settled chats; `is:settled` is accepted as an include token, not literal
 text or a settled-only filter. The Settled page retains its own local row search
 and agent, room, and pinned filters, limited to settled chats.
+Use the clock button in a chat or sidebar row to **Snooze** until a chosen local
+date and time. Snoozed chats appear under **Settled** with their return time.
+New messages bring them back early, and **Unsettle** ends snooze immediately.
+At the chosen time, the chat returns on the next sidebar refresh and gets a fresh
+inactivity window, even if its last message is old. Opening a hidden chat does
+not unsettle it. Choosing **Settle** cancels a pending snooze.
 Click the selected Settled, Cron, Agents, Skills, or Config tab again to return
 to the chat you left, even after switching between pages. Without a previous
 chat, it returns Home. On desktop, the page header's close button does the same,
@@ -179,7 +185,7 @@ sort first, keep their normal recent-first order within that group, and do not
 automatically settle. You can still settle them manually. Search `is:pinned` to
 find only pinned sessions, including settled ones; text, agent, and room filters
 still apply. On the Settled page, results remain limited to settled sessions.
-Sidebar text uses the full row width. Rename, Pin, and Settle overlay the text on hover or
+Sidebar text uses the full row width. Rename, Snooze, Pin, and Settle overlay the text on hover or
 keyboard focus; touch screens show the overlay directly.
 Use the rename icon beside the pin in the chat to set an optional name. Chat action
 buttons have descriptive tooltips. Add files sits at the far left, before the agent

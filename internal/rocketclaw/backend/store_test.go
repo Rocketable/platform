@@ -630,7 +630,7 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 				require.Equal(t, prefix, count)
 
 				for _, query := range []string{
-					`SELECT count(*) FROM managed_conversations WHERE conversation_id='synthetic' AND agent='main' AND created_by='owner' AND NOT settled AND NOT pinned AND name='' AND settled_override AND bumped_at_unix_ns=123`,
+					`SELECT count(*) FROM managed_conversations WHERE conversation_id='synthetic' AND agent='main' AND created_by='owner' AND NOT settled AND NOT pinned AND snoozed_until IS NULL AND name='' AND settled_override AND bumped_at_unix_ns=123`,
 					`SELECT count(*) FROM session_entries WHERE conversation_id='synthetic' AND entry_json='{"text":"synthetic\u0000history"}' AND entry_timestamp='2026-09-09T12:00:00.123456Z'`,
 					`SELECT count(*) FROM thread_queue WHERE queue_item_id='q' AND message='queued' AND principal='owner' AND stash_at_unix_ns=456 AND position=7 AND content='{}'`,
 				} {

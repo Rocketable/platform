@@ -475,16 +475,17 @@ func (s *SessionService) MarkRestartRequester(ctx context.Context, conversationI
 
 // SetConversationSettled changes only the recorded conversation's sidebar state.
 func (s *SessionService) SetConversationSettled(ctx context.Context, conversationID string, settled bool) (bool, error) {
-	rows, err := execRows(ctx, s.db, "set conversation settled", "count settled conversation update", `UPDATE managed_conversations SET settled = $1,
+	rows, err := execRows(ctx, s.db, "set conversation settled", "count settled conversation update", `UPDATE managed_conversations SET settled = $1, snoozed_until = NULL,
 reopened_at = CASE WHEN $1 THEN reopened_at ELSE CURRENT_TIMESTAMP END WHERE conversation_id = $2`, settled, conversationID)
 
 	return rows > 0, err
 }
 
-// UpdateConversationDetails changes shared display metadata without touching history
-// or settlement. Nil fields are left unchanged; an empty name clears the name.
-func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversationID string, pinned *bool, name *string) (bool, error) {
-	rows, err := execRows(ctx, s.db, "update conversation details", "count conversation details update", `UPDATE managed_conversations SET pinned = COALESCE($2, pinned), name = COALESCE($3, name) WHERE conversation_id = $1`, conversationID, pinned, name)
+// UpdateConversationDetails changes shared display metadata without touching history.
+// Nil fields are left unchanged; snoozing replaces explicit settlement.
+func (s *SessionService) UpdateConversationDetails(ctx context.Context, conversationID string, pinned *bool, name *string, snoozedUntil *time.Time) (bool, error) {
+	rows, err := execRows(ctx, s.db, "update conversation details", "count conversation details update", `UPDATE managed_conversations SET pinned = COALESCE($2, pinned), name = COALESCE($3, name),
+snoozed_until = COALESCE($4, snoozed_until), settled = CASE WHEN $4::timestamptz IS NULL THEN settled ELSE FALSE END WHERE conversation_id = $1`, conversationID, pinned, name, snoozedUntil)
 
 	return rows > 0, err
 }
@@ -1035,6 +1036,7 @@ type SidebarSession struct {
 	Running      bool
 	Pinned       bool
 	Name         string
+	SnoozedUntil *time.Time
 }
 
 // SidebarSessions yields pinned records first, then recent-first, bytewise-ID order.
@@ -1044,10 +1046,11 @@ type SidebarSession struct {
 func (s *SessionService) SidebarSessions(ctx context.Context, autoSettleBefore time.Time) iter.Seq2[SidebarSession, error] {
 	return func(yield func(SidebarSession, error) bool) {
 		rows, err := s.db.QueryContext(ctx, `SELECT c.conversation_id, c.agent, c.created_by,
-c.settled OR COALESCE(NOT c.pinned AND s.last_updated > '0001-01-01 00:00:00+00'::timestamptz
-    AND GREATEST(s.last_updated, c.reopened_at) <= $1
+c.settled OR COALESCE(c.snoozed_until > CURRENT_TIMESTAMP, FALSE) OR COALESCE(NOT c.pinned AND s.last_updated > '0001-01-01 00:00:00+00'::timestamptz
+    AND GREATEST(s.last_updated, c.reopened_at, c.snoozed_until) <= $1
     AND NOT EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = c.conversation_id), FALSE), s.preview, s.last_updated,
-EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = c.conversation_id), c.pinned, c.name
+EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = c.conversation_id), c.pinned, c.name,
+CASE WHEN c.snoozed_until > CURRENT_TIMESTAMP THEN c.snoozed_until END
 FROM managed_conversations c LEFT JOIN session_summaries s ON s.conversation_id = c.conversation_id
 WHERE c.conversation_id NOT LIKE 'cron:%' AND c.conversation_id NOT LIKE 'one-off-cron:%'
     AND NOT EXISTS (SELECT 1 FROM external_mcp_sessions p WHERE p.private_conversation_id = c.conversation_id)
@@ -1064,7 +1067,7 @@ ORDER BY c.pinned DESC, COALESCE(s.last_updated, '0001-01-01 00:00:00+00'::times
 				preview []byte
 				updated sql.NullTime
 			)
-			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &row.Conversation.Settled, &preview, &updated, &row.Running, &row.Pinned, &row.Name); err != nil {
+			if err := rows.Scan(&row.Conversation.ID, &row.Conversation.Agent, &row.Conversation.CreatedBy, &row.Conversation.Settled, &preview, &updated, &row.Running, &row.Pinned, &row.Name, &row.SnoozedUntil); err != nil {
 				yield(SidebarSession{}, fmt.Errorf("scan sidebar session: %w", err))
 				return
 			}
@@ -1478,7 +1481,9 @@ func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID s
 		return 0, err
 	}
 
-	if _, err := db.ExecContext(ctx, `UPDATE managed_conversations SET settled = FALSE WHERE conversation_id = $1`, conversationID); err != nil {
+	if _, err := db.ExecContext(ctx, `UPDATE managed_conversations SET settled = FALSE,
+reopened_at = CASE WHEN snoozed_until IS NOT NULL THEN CURRENT_TIMESTAMP ELSE reopened_at END,
+snoozed_until = NULL WHERE conversation_id = $1`, conversationID); err != nil {
 		return 0, fmt.Errorf("reopen conversation after message: %w", err)
 	}
 
