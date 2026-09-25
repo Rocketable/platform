@@ -220,7 +220,7 @@ func TestPermissionPrompt(t *testing.T) {
 	t.Run("renders full bash allow", func(t *testing.T) {
 		prompt := composeSystemPromptWithSkills("base prompt", emptySkills(), testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}))
 
-		require.Contains(t, prompt, "## Allowed Bash Permissions\n\n- Everything is allowed.")
+		require.Contains(t, prompt, "## Bash Permissions\n\nRules are listed in order. The last matching rule wins.\n\n- Allow `*`.")
 		require.Contains(t, prompt, "## Permission Wildcard Rules")
 		require.NotContains(t, prompt, "{Name:bash")
 	})
@@ -231,46 +231,55 @@ func TestPermissionPrompt(t *testing.T) {
 			{Name: "bash", Rules: []PermissionRule{{Pattern: "git status", Action: permissionAllow}, {Pattern: "git diff *", Action: permissionAllow}}},
 		}}))
 
-		require.Contains(t, prompt, "## Allowed Read Permissions\n\n- `README.md`")
-		require.Contains(t, prompt, "## Allowed Bash Permissions\n\n- `git status`\n- `git diff *`")
+		require.Contains(t, prompt, "## Read Permissions")
+		require.Contains(t, prompt, "- Allow `README.md`.")
+		require.Contains(t, prompt, "## Bash Permissions")
+		require.Contains(t, prompt, "- Allow `git status`.\n- Allow `git diff *`.")
 	})
 
-	t.Run("renders auto permissions as allowed", func(t *testing.T) {
+	t.Run("renders auto permissions as requiring approval", func(t *testing.T) {
 		prompt := composeSystemPromptWithSkills("base prompt", emptySkills(), testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "deploy *", Action: permissionAuto}}}}}))
 
-		require.Contains(t, prompt, "## Allowed Bash Permissions\n\n- `deploy *`")
+		require.Contains(t, prompt, "- Require automatic approval for `deploy *`.")
 	})
 
 	t.Run("renders mixed allow and auto permissions", func(t *testing.T) {
 		prompt := composeSystemPromptWithSkills("base prompt", emptySkills(), testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "git status", Action: permissionAllow}, {Pattern: "deploy *", Action: permissionAuto}}}}}))
 
-		require.Contains(t, prompt, "## Allowed Bash Permissions\n\n- `git status`\n- `deploy *`")
+		require.Contains(t, prompt, "- Allow `git status`.\n- Require automatic approval for `deploy *`.")
 	})
 
 	t.Run("renders full bash allow with deny exceptions", func(t *testing.T) {
 		prompt := composeSystemPromptWithSkills("base prompt", emptySkills(), testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}, {Pattern: "rm *", Action: permissionDeny}, {Pattern: "sudo *", Action: permissionDeny}}}}}))
 
-		require.Contains(t, prompt, "- All commands are allowed except:\n- `rm *`\n- `sudo *`")
+		require.Contains(t, prompt, "- Allow `*`.\n- Deny `rm *`.\n- Deny `sudo *`.")
 	})
 
 	t.Run("renders full bash auto with deny exceptions", func(t *testing.T) {
 		prompt := composeSystemPromptWithSkills("base prompt", emptySkills(), testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAuto}, {Pattern: "rm *", Action: permissionDeny}, {Pattern: "sudo *", Action: permissionDeny}}}}}))
 
-		require.Contains(t, prompt, "- All commands are allowed except:\n- `rm *`\n- `sudo *`")
+		require.Contains(t, prompt, "- Require automatic approval for `*`.\n- Deny `rm *`.\n- Deny `sudo *`.")
 	})
 
 	t.Run("omits block without effective bash allow", func(t *testing.T) {
 		prompt := composeSystemPromptWithSkills("base prompt", emptySkills(), testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "*", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}))
 
-		require.NotContains(t, prompt, "## Allowed Bash Permissions")
+		require.NotContains(t, prompt, "## Bash Permissions")
 		require.NotContains(t, prompt, "## Permission Wildcard Rules")
 	})
 
 	t.Run("renders non bash full allow with exceptions", func(t *testing.T) {
 		prompt := composeSystemPromptWithSkills("base prompt", emptySkills(), testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "webfetch", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}, {Pattern: "https://private.example/*", Action: permissionDeny}}}}}))
 
-		require.Contains(t, prompt, "## Allowed Webfetch Permissions")
-		require.Contains(t, prompt, "- Everything is allowed except:\n- `https://private.example/*`")
+		require.Contains(t, prompt, "## Webfetch Permissions")
+		require.Contains(t, prompt, "- Allow `*`.\n- Deny `https://private.example/*`.")
+	})
+
+	t.Run("preserves deny then allow exception", func(t *testing.T) {
+		permissions := parsePermissionYAML(t, "edit: {'*': allow, '.tmp/*': deny, '.tmp/banana/note.txt': allow}\nbash: deny")
+		prompt := permissionPrompt(permissions)
+		require.Contains(t, prompt, "## Edit Permissions\n\nRules are listed in order. The last matching rule wins.\n\n- Allow `*`.\n- Deny `.tmp/*`.\n- Allow `.tmp/banana/note.txt`.")
+		require.Contains(t, prompt, "## Bash Permissions\n\nRules are listed in order. The last matching rule wins.\n\n- Deny `*`.")
 	})
 }
 

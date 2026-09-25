@@ -382,6 +382,26 @@ func TestWorkflowAgentRunnerRejectsInvalidOverridesAndStructuredOutput(t *testin
 	require.Equal(t, 1, requests)
 }
 
+func TestWorkflowAgentRunnerMissingPermissionEnvironment(t *testing.T) {
+	workspace := t.TempDir()
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  edit: {'${ROCKETCLAW_METADATA_FRUIT}/note.txt': allow}\n---\nMain prompt\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		writeRawRunMessage(t, w, "resp", "msg", "done")
+	}))
+	t.Cleanup(server.Close)
+
+	run, cleanup, err := newWorkflowAgentRunner(&config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, "main", slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cleanup()) })
+	_, err = run(t.Context(), workflow.AgentRequest{Prompt: "work"}, discardWorkflowThinking)
+
+	// The scoped edit rule is dropped for the turn, so the run completes without it.
+	require.NoError(t, err)
+}
+
 func TestWorkflowAgentRunnerConcurrentDirectoriesAndCancellation(t *testing.T) {
 	workspace := t.TempDir()
 	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\n---\nMain prompt\n")

@@ -228,11 +228,12 @@ func TestNewShellEnvAppliesToPromptExpansion(t *testing.T) {
 	config.ExpandPromptShellCommands.PrimaryPrompts = true
 	config.ShellEnv = map[string]string{"ROCKETCLAW_CONVERSATION_ID": "prompt", "TMPDIR": "/ignored"}
 	_, err = New(&client, config, root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "env !`printf %s \"$ROCKETCLAW_CONVERSATION_ID\"` tmp !`printf %s \"$TMPDIR\"`", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
+		"main": {Name: "main", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "", MaxRecursion: nil, Prompt: "env !`printf %s \"$ROCKETCLAW_CONVERSATION_ID\"` tmp !`printf %s \"$TMPDIR\"`", Location: "", Permission: parsePermissionYAML(t, `edit: {"${ROCKETCLAW_CONVERSATION_ID}/note.txt": allow}`), Frontmatter: nil, FileMode: 0},
 	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", &diagnostics)
 
 	require.NoError(t, err)
 	require.Contains(t, diagnostics.String(), "env prompt tmp "+filepath.Join(dir, ".tmp", "shell-tmp"))
+	require.Contains(t, diagnostics.String(), "prompt/note.txt")
 }
 
 func TestNewAllowsReadingFilesFromAllowedSkills(t *testing.T) {
@@ -269,19 +270,21 @@ func TestNewAllowsReadingFilesFromAllowedSkills(t *testing.T) {
 
 	permissions := parsePermissionYAML(t, `skill:
   "*": deny
-  parent: allow
+  "${ROCKETCLAW_PARENT}": allow
   dupe: allow
 read:
   "skills/parent/private*": deny
   "skills/parent/review*": auto`)
 	agents := Agents{Items: map[string]Agent{
 		"main":   {Name: "main", Model: "gpt-5.4", Permission: permissions},
-		"worker": {Name: "worker", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {child: allow}`)},
+		"worker": {Name: "worker", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {"${ROCKETCLAW_CHILD}": allow}`)},
 		"review": {Name: "review", Model: "gpt-5.4", Permission: parsePermissionYAML(t, `skill: {parent: auto}`)},
 	}}
 	client := openai.NewClient()
 
-	loop, err := New(&client, testWorkspaceConfig(t, dir), root, agents, skills, "main", nil)
+	config := testWorkspaceConfig(t, dir)
+	config.ShellEnv = map[string]string{"ROCKETCLAW_PARENT": "parent", "ROCKETCLAW_CHILD": "child"}
+	loop, err := New(&client, config, root, agents, skills, "main", nil)
 	require.NoError(t, err)
 
 	for _, tt := range []struct {

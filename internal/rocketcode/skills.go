@@ -211,6 +211,7 @@ func (s Skills) FindAvailable(query string, agent *Agent) string {
 	return (Skills{Root: s.Root, Items: items, Dirs: s.Dirs, fsys: s.fsys}).Find(query)
 }
 
+// withReadPermissions stamps skillRead on every agent whose skill grants it, derived from each agent's own skill bucket.
 func (s Skills) withReadPermissions(root *os.Root, agents Agents) Agents {
 	hasAllowedSkill := false
 
@@ -345,7 +346,7 @@ func permissionPrompt(permissions PermissionSet) string {
 	lines := []string{}
 
 	for _, bucket := range permissions.Buckets {
-		if bucket.Name == "*" || !permissionRulesHaveAllow(bucket.Rules) {
+		if bucket.Name == "*" {
 			continue
 		}
 
@@ -353,8 +354,8 @@ func permissionPrompt(permissions PermissionSet) string {
 			lines = append(lines, "")
 		}
 
-		lines = append(lines, "## Allowed "+permissionPromptName(bucket.Name)+" Permissions", "")
-		lines = append(lines, permissionRuleLines(bucket.Name, bucket.Rules)...)
+		lines = append(lines, "## "+permissionPromptName(bucket.Name)+" Permissions", "")
+		lines = append(lines, permissionRuleLines(bucket.Rules)...)
 	}
 
 	if len(lines) == 0 {
@@ -374,56 +375,26 @@ func permissionPrompt(permissions PermissionSet) string {
 	return strings.Join(lines, "\n")
 }
 
-func permissionRulesHaveAllow(rules []PermissionRule) bool {
+func permissionRuleLines(rules []PermissionRule) []string {
+	lines := make([]string, 2, 2+len(rules))
+	lines[0] = "Rules are listed in order. The last matching rule wins."
+
 	for _, rule := range rules {
-		if rule.Action == permissionAllow || rule.Action == permissionAuto {
-			return true
-		}
-	}
+		var action string
 
-	return false
-}
-
-func permissionRuleLines(bucketName string, rules []PermissionRule) []string {
-	fullAllowIndex := -1
-
-	for i, rule := range rules {
-		if rule.Pattern == "*" && (rule.Action == permissionAllow || rule.Action == permissionAuto) {
-			fullAllowIndex = i
-		}
-	}
-
-	if fullAllowIndex >= 0 {
-		exceptions := []string{}
-
-		for _, rule := range rules[fullAllowIndex+1:] {
-			if rule.Action == permissionDeny {
-				exceptions = append(exceptions, rule.Pattern)
+		switch rule.Action {
+		case permissionAllow:
+			action = "Allow"
+		case permissionDeny:
+			action = "Deny"
+		case permissionAuto:
+			action = "Require automatic approval for"
+			if rule.Reviewer != "" {
+				action = "Require automatic approval by `" + markdownInlineCode(rule.Reviewer) + "` for"
 			}
 		}
 
-		if len(exceptions) == 0 {
-			return []string{"- Everything is allowed."}
-		}
-
-		lines := []string{"- Everything is allowed except:"}
-		if bucketName == "bash" {
-			lines[0] = "- All commands are allowed except:"
-		}
-
-		for _, pattern := range exceptions {
-			lines = append(lines, "- `"+markdownInlineCode(pattern)+"`")
-		}
-
-		return lines
-	}
-
-	lines := []string{}
-
-	for _, rule := range rules {
-		if rule.Action == permissionAllow || rule.Action == permissionAuto {
-			lines = append(lines, "- `"+markdownInlineCode(rule.Pattern)+"`")
-		}
+		lines = append(lines, "- "+action+" `"+markdownInlineCode(rule.Pattern)+"`.")
 	}
 
 	return lines

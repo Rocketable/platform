@@ -239,7 +239,21 @@ func NewWithProviders(
 	return NewWithModelResolver(openAIModelResolver{client: providers.OpenAI}, configInput, root, agents, skills, defaultAgent, diagnosticsWriter)
 }
 
-// NewWithModelResolver loads the supplied runtime dependencies and resolves the active agent model.
+// interpolateAllAgentPermissions resolves ${ROCKETCLAW_*} patterns in every agent's permission rules against env,
+// dropping rules whose variable is absent or empty.
+func interpolateAllAgentPermissions(agents map[string]Agent, env []string) map[string]Agent {
+	prepared := make(map[string]Agent, len(agents))
+
+	for name := range agents {
+		agent := agents[name]
+		interpolatePermissions(&agent, env)
+		prepared[name] = agent
+	}
+
+	return prepared
+}
+
+// NewWithModelResolver loads the supplied model resolver and returns a configured looper.
 func NewWithModelResolver(
 	resolver ModelResolver,
 	configInput *Config,
@@ -310,16 +324,20 @@ func NewWithModelResolver(
 		return nil, errors.New("checkpoint sink is required")
 	}
 
+	activeAgent, hasActiveAgent := agents.Items[defaultAgent]
+	if !hasActiveAgent {
+		return nil, fmt.Errorf("missing required default agent %q", defaultAgent)
+	}
+
+	agents.Items = interpolateAllAgentPermissions(agents.Items, shellEnv)
+
 	agents = skills.withReadPermissions(root, agents)
+
+	activeAgent = agents.Items[defaultAgent]
 
 	promptExpansion, err := newPromptExpansionEnvironment(root, shellTemp, shellEnv, config.ShellCommand)
 	if err != nil {
 		return nil, fmt.Errorf("initialize prompt expansion: %w", err)
-	}
-
-	activeAgent, hasActiveAgent := agents.Items[defaultAgent]
-	if !hasActiveAgent {
-		return nil, fmt.Errorf("missing required default agent %q", defaultAgent)
 	}
 
 	for name := range agents.Items {

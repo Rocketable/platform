@@ -3897,8 +3897,11 @@ func TestRunTurnSendsExternalMCPMetadataAsDeveloperMessage(t *testing.T) {
 		}
 	}
 
-	managedBridge := &Bridge{runtime: bridge.runtime, config: Config{ConversationID: managedConversationID, Agent: "planner", ManagedConversationID: managedConversationID, SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
-	managedMsg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "", "check metadata", true)
+	// Web-created bridges know only the actual conversation ID, not pairing fields.
+	writeAgent(t, workspace, "planner", "---\ndescription: Planner\nmode: primary\nmodel: gpt-5.5\npermission:\n  edit:\n    '.tmp/${ROCKETCLAW_METADATA_A}/note.txt': allow\n  read: allow\n  bash: auto\n---\nPrompt\n")
+
+	managedBridge := &Bridge{runtime: bridge.runtime, config: Config{ConversationID: managedConversationID, Agent: "planner", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
+	managedMsg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "", "check metadata", true)
 	managedMsg.ConversationID = managedConversationID
 	_, err = managedBridge.runTurn(context.Background(), managedMsg, "turn-managed")
 	require.NoError(t, err)
