@@ -18,6 +18,7 @@ message Session {
   bool pinned = 9;
   string name = 10;
   reserved 11;
+  string snoozed_until = 12;
 }
 
 message HistoryRequest {
@@ -205,6 +206,7 @@ message UpdateSessionRequest {
   optional bool pinned = 2;
   optional string name = 3;
   reserved 4;
+  optional string snoozed_until = 5;
 }
 
 message UpdateSessionResponse {}

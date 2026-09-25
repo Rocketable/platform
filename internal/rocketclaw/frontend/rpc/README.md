@@ -28,6 +28,13 @@ successful delivery report shown in History. Migration `011_last_message_summari
 invalidates the derived user-only previews for the existing background backfill.
 Session `running` reads the active turn checkpoint, independently of settled status.
 
+`UpdateSession` accepts a future RFC3339 `snoozed_until` timestamp alongside name
+and pin metadata. Snoozing replaces explicit settlement and hides the chat until
+the deadline. `ListSessions` reports it as settled with its active deadline;
+expiry starts a fresh inactivity window. New stored entries, newly synced entries,
+and manual Unsettle clear snooze. Settle also clears snooze, hiding the chat until
+new activity or Unsettle. Opening a chat does not change its visibility state.
+
 Session discovery starts from explicitly recorded conversations, excluding private Cron locators and
 recorded MCP X bindings; it does not discover orphaned entry rows or backfill
 records. `CreateSession` records a fresh opaque ID with the selected loaded agent.

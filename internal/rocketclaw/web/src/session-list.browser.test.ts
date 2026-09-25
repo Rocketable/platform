@@ -341,7 +341,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() && url.pathname !== "/" ? file : Bun.file(path.join(dist, "index.html")));
     }
-    const input = await req.json() as { id: string; originOnly?: boolean; itemId: string; messageId: string; name?: string; agent?: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; stem: string; sourceConversationId?: string; conversationId?: string; settled: boolean; pinned?: boolean };
+    const input = await req.json() as { id: string; originOnly?: boolean; itemId: string; messageId: string; name?: string; agent?: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; stem: string; sourceConversationId?: string; conversationId?: string; settled: boolean; pinned?: boolean; snoozedUntil?: string };
     try {
       switch (url.pathname) {
         case "/api/Protocol": return Response.json({ protoSha256: ctrl.protocol });
@@ -407,13 +407,13 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
         case "/api/ListConfig": return Response.json({ config: { webAutoSettleAfter: "1h30m0s", tailscaleUser: "connected@example.com" } });
         case "/api/SettleSession":
           ctrl.settleCalls.push({ id: input.id, settled: input.settled });
-          ctrl.settledRows = ctrl.settledRows.map((session) => session.id === input.id ? { ...session, settled: input.settled } : session);
+          ctrl.settledRows = ctrl.settledRows.map((session) => session.id === input.id ? { ...session, settled: input.settled, snoozedUntil: undefined } : session);
           ctrl.yieldBatches = complete(ctrl.settledRows);
           return Response.json({});
         case "/api/UpdateSession":
           if (ctrl.updateError) throw new RPCError("Could not save session", 13);
           if (!ctrl.settledRows.some((session) => session.id === input.id)) return Response.json({});
-          ctrl.settledRows = ctrl.settledRows.map((session) => session.id === input.id ? { ...session, ...input, name: input.name === undefined ? session.name : input.name.trim() } : session);
+          ctrl.settledRows = ctrl.settledRows.map((session) => session.id === input.id ? { ...session, ...input, settled: input.snoozedUntil ? true : session.settled, name: input.name === undefined ? session.name : input.name.trim() } : session);
           ctrl.yieldBatches = complete(ctrl.settledRows);
           return Response.json({});
         case "/api/ListQueue": return Response.json({ items: ctrl.queue });
@@ -1904,6 +1904,26 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       const sidebar = width === 390 ? detailsPage.getByRole("dialog", { name: "Sessions", exact: true }) : detailsPage.locator("#session-sidebar");
       const namedRow = sidebar.locator("li").filter({ hasText: "Original preview" });
       await namedRow.locator("a").waitFor();
+      await namedRow.hover();
+      await namedRow.getByRole("button", { name: "Snooze session", exact: true }).click();
+      const snoozeDialog = detailsPage.getByRole("dialog", { name: "Snooze session", exact: true });
+      await snoozeDialog.getByLabel("Return at (local time)").fill("2027-01-02T09:30");
+      await detailsPage.screenshot({ path: path.join(process.env.TMPDIR!, `snooze-${width}.png`) });
+      await snoozeDialog.getByRole("button", { name: "Snooze", exact: true }).click();
+      await snoozeDialog.waitFor({ state: "hidden" });
+      await namedRow.waitFor({ state: "hidden" });
+      expect(ctrl.settledRows.find((session) => session.id === "named")?.snoozedUntil).toBe(await detailsPage.evaluate(() => new Date("2027-01-02T09:30").toISOString()));
+      if (width === 390) await detailsPage.keyboard.press("Escape");
+      await detailsPage.getByRole("link", { name: "Settled", exact: true }).click();
+      const snoozedRow = detailsPage.locator("main li").filter({ hasText: "Original preview" });
+      await snoozedRow.getByText(/Snoozed until/).waitFor();
+      await snoozedRow.hover();
+      await snoozedRow.getByRole("button", { name: "Unsettle", exact: true }).click();
+      await snoozedRow.waitFor({ state: "hidden" });
+      await detailsPage.getByRole("link", { name: "Settled", exact: true }).click();
+      if (width === 390) await detailsPage.getByRole("button", { name: "Sessions", exact: true }).click();
+      await namedRow.getByRole("button", { name: "Settle", exact: true }).waitFor();
+      expect(ctrl.settledRows.find((session) => session.id === "named")?.snoozedUntil).toBeUndefined();
       const rowBox = await namedRow.boundingBox();
       const linkBox = await namedRow.locator("a").boundingBox();
       expect(linkBox!.width).toBe(rowBox!.width);

@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions } from "./api";
 import type { ChatOrigin, PromptDelivery } from "./types";
-import { Bot, Calendar, Check, CircleAlert, Download, FileIcon, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import { Bot, Calendar, Check, CircleAlert, Clock, Download, FileIcon, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, navigate } from "./navigation";
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type SyntheticEvent } from "react";
 import { flushSync } from "react-dom";
@@ -920,7 +920,7 @@ function SessionRow({
 }) {
   const title = session.name || rowPreview(session, loading).split("\n", 1)[0] || sessionLabel(session.id);
   const channel = slackSession(session.id) ? (session.title ?? "") : "";
-  const meta = [channel, session.agent, relativeTime(session.updatedAt ?? "")].filter(Boolean).join(" · ");
+  const meta = [session.snoozedUntil ? `Snoozed until ${new Date(session.snoozedUntil).toLocaleString()}` : "", channel, session.agent, relativeTime(session.updatedAt ?? "")].filter(Boolean).join(" · ");
   return (
     <li className="group relative flex list-none items-stretch py-0.5">
       <Link
@@ -934,7 +934,7 @@ function SessionRow({
           <span className="truncate text-sm font-medium">{title}</span>
           <span className="flex items-center gap-1 text-xs text-muted-foreground">
             <span className="inline-flex size-3 shrink-0">{session.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 animate-spin motion-reduce:animate-none" /> : null}</span>
-            <span className="truncate">{meta}</span>
+            <span className="truncate" title={meta}>{meta}</span>
           </span>
         </span>
       </Link>
@@ -971,30 +971,37 @@ function SessionDetails({ id, compact = false }: { id: string; compact?: boolean
   const sidebar = useContext(Sidebar);
   const session = sidebar.rows.find((row) => row.id === id);
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
+  const [snooze, setSnooze] = useState(false);
+  const [value, setValue] = useState("");
   const nameId = useId();
   const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: () => { sidebar.invalidateQueries(); setOpen(false); } });
+  const buttonSize = compact ? "icon-sm" : "icon";
+  const buttonClass = compact ? "" : "size-11 sm:size-8";
   if (!session) return null;
   return <>
     <Dialog open={open} onOpenChange={setOpen}>
       <Tooltip>
-        <TooltipTrigger render={<DialogTrigger render={<Button variant="ghost" size={compact ? "icon-sm" : "icon"} className={compact ? "" : "size-11 sm:size-8"} />} />} aria-label="Name session" onClick={() => { setName(session.name ?? ""); update.reset(); }}><TextCursorInput /></TooltipTrigger>
+        <TooltipTrigger render={<DialogTrigger render={<Button variant="ghost" size={buttonSize} className={buttonClass} />} />} aria-label="Name session" onClick={() => { setSnooze(false); setValue(session.name ?? ""); update.reset(); }}><TextCursorInput /></TooltipTrigger>
         <TooltipContent>Rename session</TooltipContent>
       </Tooltip>
+      <Tooltip>
+        <TooltipTrigger render={<DialogTrigger render={<Button variant="ghost" size={buttonSize} className={buttonClass} />} />} aria-label="Snooze session" onClick={() => { setSnooze(true); setValue(""); update.reset(); }}><Clock /></TooltipTrigger>
+        <TooltipContent>Snooze session</TooltipContent>
+      </Tooltip>
         <DialogContent>
-          <DialogTitle>Name session</DialogTitle>
-          <DialogDescription>Shared with everyone who can see this session. Leave blank to show the last message.</DialogDescription>
-          <form className="mt-4 flex flex-col gap-3" action={() => update.mutate({ id, name })}>
+          <DialogTitle>{snooze ? "Snooze session" : "Name session"}</DialogTitle>
+          <DialogDescription>{snooze ? "Hide until this local time. New messages bring the chat back early. Find it under Settled to Unsettle sooner." : "Shared with everyone who can see this session. Leave blank to show the last message."}</DialogDescription>
+          <form className="mt-4 flex flex-col gap-3" action={() => update.mutate({ id, ...(snooze ? { snoozedUntil: new Date(value).toISOString() } : { name: value }) })}>
             <FieldGroup>
               <Field data-invalid={!!update.error}>
-                <FieldLabel htmlFor={nameId}>Session name</FieldLabel>
-                <Input id={nameId} name="name" value={name} aria-invalid={!!update.error} onChange={(event) => setName(event.target.value)} />
+                <FieldLabel htmlFor={nameId}>{snooze ? "Return at (local time)" : "Session name"}</FieldLabel>
+                <Input id={nameId} name={snooze ? "snoozedUntil" : "name"} type={snooze ? "datetime-local" : "text"} required={snooze} value={value} aria-invalid={!!update.error} onChange={(event) => setValue(event.target.value)} />
                 {update.error ? <FieldError>{update.error.message}</FieldError> : null}
               </Field>
             </FieldGroup>
             <div className="flex justify-end gap-2">
               <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
-              <Button type="submit" disabled={update.isPending}>{update.isPending ? "Saving…" : "Save"}</Button>
+              <Button type="submit" disabled={update.isPending}>{update.isPending ? "Saving…" : snooze ? "Snooze" : "Save"}</Button>
             </div>
           </form>
         </DialogContent>

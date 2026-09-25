@@ -184,6 +184,9 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 		}
 
 		session := &Session{Id: conversation.ID, Title: channelMetadata.Title, Agent: conversation.Agent, AllowedAgents: channelMetadata.AllowedAgents, Settled: conversation.Settled, Running: row.Running, Pinned: row.Pinned, Name: row.Name}
+		if row.SnoozedUntil != nil {
+			session.SnoozedUntil = row.SnoozedUntil.UTC().Format(time.RFC3339Nano)
+		}
 
 		if strings.HasPrefix(conversation.ID, "web:") {
 			session.AllowedAgents, err = s.agentChoices(ctx, conversation.ID)
@@ -598,7 +601,18 @@ func (s *Server) updateSession(ctx context.Context, request *UpdateSessionReques
 		request.Name = new(strings.TrimSpace(*request.Name))
 	}
 
-	updated, err := s.sessions.UpdateConversationDetails(ctx, request.Id, request.Pinned, request.Name)
+	var snoozedUntil *time.Time
+
+	if request.SnoozedUntil != nil {
+		until, err := time.Parse(time.RFC3339Nano, *request.SnoozedUntil)
+		if err != nil || !until.After(time.Now()) {
+			return nil, fmt.Errorf("update web conversation: %w", status.Error(codes.InvalidArgument, "snooze time must be a future RFC3339 timestamp"))
+		}
+
+		snoozedUntil = &until
+	}
+
+	updated, err := s.sessions.UpdateConversationDetails(ctx, request.Id, request.Pinned, request.Name, snoozedUntil)
 	if err != nil {
 		return nil, fmt.Errorf("update web conversation: %w", err)
 	}
