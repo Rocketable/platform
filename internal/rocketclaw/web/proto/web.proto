@@ -17,7 +17,7 @@ message Session {
   bool running = 8;
   bool pinned = 9;
   string name = 10;
-  bool unread = 11;
+  reserved 11;
 }
 
 message HistoryRequest {
@@ -204,7 +204,7 @@ message UpdateSessionRequest {
   string id = 1;
   optional bool pinned = 2;
   optional string name = 3;
-  optional bool unread = 4;
+  reserved 4;
 }
 
 message UpdateSessionResponse {}

@@ -326,25 +326,17 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		require.True(t, found)
 		require.False(t, thread.Settled)
 
-		var unread bool
-		require.NoError(t, store.db.QueryRowContext(ctx, `SELECT web_unread FROM managed_conversations WHERE conversation_id = 'Y'`).Scan(&unread))
-		require.True(t, unread)
-
 		summaries, err := store.ListSessions(ctx, []string{"Y"})
 		require.NoError(t, err)
 		require.Equal(t, []protocol.SessionSummary{{ConversationID: "Y", LastMessage: "X history", LastUpdated: time.Unix(1, 123456000).UTC()}}, summaries)
 
 		_, err = store.SetConversationSettled(ctx, "Y", true)
 		require.NoError(t, err)
-		_, err = store.UpdateConversationDetails(ctx, "Y", nil, nil, new(false))
-		require.NoError(t, err)
 		require.NoError(t, rt.SyncConversation(ctx, "X", "Y"))
 
 		thread, _, err = store.Thread("Y")
 		require.NoError(t, err)
 		require.True(t, thread.Settled, "syncing without new entries must not reopen")
-		require.NoError(t, store.db.QueryRowContext(ctx, `SELECT web_unread FROM managed_conversations WHERE conversation_id = 'Y'`).Scan(&unread))
-		require.False(t, unread, "syncing without new entries must not mark unread")
 
 		afterSync, err := store.ListSessions(ctx, []string{"Y"})
 		require.NoError(t, err)

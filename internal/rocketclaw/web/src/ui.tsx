@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions } from "./api";
 import type { ChatOrigin, PromptDelivery } from "./types";
-import { Bot, Calendar, Check, CircleAlert, Download, FileIcon, GripVertical, LoaderCircle, Mail, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import { Bot, Calendar, Check, CircleAlert, Download, FileIcon, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, navigate } from "./navigation";
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type SyntheticEvent } from "react";
 import { flushSync } from "react-dom";
@@ -704,14 +704,12 @@ function paletteRows(
   openCron: () => void,
   runStem: (stem: string) => void,
   origins: string[],
-  id: string,
-  updateSession: (input: { id: string; unread: boolean }) => void,
   filters: ReturnType<typeof sessionSearchTerms>,
   agentFilter: string,
   roomFilter: string,
 ): { key: string; label: string; detail: string; keep?: boolean; run: () => void }[] {
   if (mode === "sessions") {
-    return sidebar.rows.filter((session, index) => (!filters.pinnedOnly || session.pinned) && (!filters.unreadOnly || session.unread) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || origins[index]?.includes(filters.needle))).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((session) => ({
+    return sidebar.rows.filter((session, index) => (!filters.pinnedOnly || session.pinned) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || origins[index]?.includes(filters.needle))).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((session) => ({
       key: session.id,
       label: session.name || rowPreview(session, sidebar.loadingIds.has(session.id)).split("\n", 1)[0] || sessionLabel(session.id),
       detail: [session.settled ? "Settled" : "", session.agent, relativeTime(session.updatedAt ?? "")].filter(Boolean).join(" · "),
@@ -728,7 +726,6 @@ function paletteRows(
     }));
   }
   return [
-    ...sidebar.rows.filter((session) => session.id === id).map((session) => ({ key: "toggle-unread", label: session.unread ? "Mark read" : "Mark unread", detail: "Current chat", keep: true, run: () => updateSession({ id, unread: !session.unread }) })),
     { key: "new", label: "New session", detail: "", run: newChat },
     { key: "run-cron", label: "Run cron", detail: "", keep: true, run: openCron },
     { key: "settled", label: "Settled", detail: "", run: () => navigate("/settled") },
@@ -768,8 +765,6 @@ function originSearchText({ origin }: { origin?: ChatOrigin }) {
 
 function CommandPalette({ openKey, mode, setMode, newChat, sidebarOpen, onToggleSidebar }: { openKey: number; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void; sidebarOpen: boolean; onToggleSidebar: () => void }) {
   const sidebar = useContext(Sidebar);
-  const { id } = useRoute();
-  const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: () => { sidebar.invalidateQueries(); setMode(undefined); } });
   const [query, setQuery] = useState("");
   const [pick, setPick] = useState(0);
   const [agentFilter, setAgentFilter] = useState("");
@@ -828,7 +823,7 @@ function CommandPalette({ openKey, mode, setMode, newChat, sidebarOpen, onToggle
       setMode(undefined);
     },
   });
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.map((origin) => origin.data ?? ""), id, update.mutate, filters, agentFilter, roomFilter);
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.map((origin) => origin.data ?? ""), filters, agentFilter, roomFilter);
   const selected = items.length === 0 ? 0 : pick % items.length;
   const choose = (item: (typeof items)[number]) => {
     if (!item.keep) setMode(undefined);
@@ -850,7 +845,7 @@ function CommandPalette({ openKey, mode, setMode, newChat, sidebarOpen, onToggle
           variant="embedded"
           onKeyDown={onKeyDown}
         />}
-        {runCron.error || update.error ? <p role="alert" className="px-3 text-sm text-destructive">{(runCron.error ?? update.error)?.message}</p> : null}
+        {runCron.error ? <p role="alert" className="px-3 text-sm text-destructive">{runCron.error.message}</p> : null}
         {origins.some((origin) => origin.isError) ? <p role="alert" className="px-3 text-sm text-destructive">Could not search all chat origins.</p> : null}
         <ul className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
           {items.length === 0 ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, origins, jobs.isLoading)}</li> : items.map((item, index) => (
@@ -936,7 +931,7 @@ function SessionRow({
         )}
       >
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="flex items-center gap-1.5 text-sm font-medium">{session.unread ? <span role="img" aria-label="Unread" className="size-1.5 shrink-0 rounded-full bg-primary" /> : null}<span className="truncate">{title}</span></span>
+          <span className="truncate text-sm font-medium">{title}</span>
           <span className="flex items-center gap-1 text-xs text-muted-foreground">
             <span className="inline-flex size-3 shrink-0">{session.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 animate-spin motion-reduce:animate-none" /> : null}</span>
             <span className="truncate">{meta}</span>
@@ -1005,11 +1000,6 @@ function SessionDetails({ id, compact = false }: { id: string; compact?: boolean
         </DialogContent>
     </Dialog>
     <SessionPin session={session} compact={compact} />
-    <Tooltip>
-      <TooltipTrigger render={<Button variant="ghost" size={compact ? "icon-sm" : "icon"} className={compact ? "" : "size-11 sm:size-8"} disabled={update.isPending} />} aria-label="Mark unread" onClick={() => update.mutate({ id, unread: true })}><Mail /></TooltipTrigger>
-      <TooltipContent>Mark unread</TooltipContent>
-    </Tooltip>
-    {update.error && !open ? <span role="alert" className="text-xs text-destructive">{update.error.message}</span> : null}
   </>;
 }
 
@@ -1021,10 +1011,9 @@ function matchesSession(session: Session, needle: string, agentFilter: string, r
 
 function sessionSearchTerms(query: string) {
   const pinnedOnly = /(?:^|\s)is:pinned(?=\s|$)/i.test(query);
-  const unreadOnly = /(?:^|\s)is:unread(?=\s|$)/i.test(query);
-  const text = query.replace(/(?:^|\s)is:(?:settled|pinned|unread)(?=\s|$)/gi, " ").trim();
+  const text = query.replace(/(?:^|\s)is:(?:settled|pinned)(?=\s|$)/gi, " ").trim();
   const needle = typedPrefix(text, "agent:") === null && typedPrefix(text, "room:") === null ? text.toLowerCase() : "";
-  return { pinnedOnly, unreadOnly, text, needle };
+  return { pinnedOnly, text, needle };
 }
 
 function SidebarFreshness({ sidebar, emptySearch, emptyLabel = "No matches" }: { sidebar: SidebarView; emptySearch: boolean; emptyLabel?: string }) {
@@ -1063,7 +1052,7 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
     } else {
       setRoomFilter(name);
     }
-    setQuery(query.split(/\s+/).filter((term) => /^is:(settled|pinned|unread)$/i.test(term)).join(" "));
+    setQuery(query.split(/\s+/).filter((term) => /^is:(settled|pinned)$/i.test(term)).join(" "));
     setOverlayPick(0);
   };
   return (
@@ -1154,9 +1143,9 @@ function SessionList({ settledOnly = false }: { settledOnly?: boolean }) {
   const [roomFilter, setRoomFilter] = useState("");
   const catalog = agents.data?.agents ?? [];
   const rows = sidebar.rows;
-  const { pinnedOnly, unreadOnly, needle } = sessionSearchTerms(query);
-  const filtered = rows.filter((session) => (settledOnly ? session.settled : !session.settled) && (!pinnedOnly || session.pinned) && (!unreadOnly || session.unread) && matchesSession(session, needle, agentFilter, roomFilter)).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
-  const searching = [needle, agentFilter, roomFilter, pinnedOnly, unreadOnly].some(Boolean);
+  const { pinnedOnly, needle } = sessionSearchTerms(query);
+  const filtered = rows.filter((session) => (settledOnly ? session.settled : !session.settled) && (!pinnedOnly || session.pinned) && matchesSession(session, needle, agentFilter, roomFilter)).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
+  const searching = [needle, agentFilter, roomFilter, pinnedOnly].some(Boolean);
   return (
     <div className={cn("flex h-full min-h-0 flex-col", settledOnly && "mx-auto w-full max-w-3xl gap-6 p-4")}>
       {settledOnly ? <PageTitle>Settled</PageTitle> : null}
@@ -1497,11 +1486,6 @@ async function readTranscriptHistory(draft: ComposerDraft, request: Promise<Tran
 }
 
 function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () => void) {
-  const sidebar = useContext(Sidebar);
-  const active = useRoute().id === id && id !== "";
-  const opened = useRef(false);
-  // Let an initial sidebar load finish; later reads can refresh its completed list.
-  const read = useMutation({ mutationFn: mutations.updateSession, onSuccess: () => { if (sidebar.enumerationComplete) sidebar.invalidateQueries(); } });
   const historyQuery = queries.history({ id });
   const pendingCron = usePendingCron(id);
   const history = useQuery({ ...historyQuery, queryFn: async ({ signal }) => {
@@ -1510,13 +1494,6 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
     return view;
   }, enabled: id !== "", refetchOnWindowFocus: false, retry: false, refetchInterval: pendingCron ? 2000 : false });
   const historyReady = history.data !== undefined;
-  useEffect(() => {
-    if (!active) opened.current = false;
-    else if (history.isSuccess && !opened.current) {
-      opened.current = true;
-      read.mutate({ id, unread: false });
-    }
-  }, [active, history.isSuccess, id, read.mutate]);
   const reconnectHistory = history.refetch;
   // History errors belong to the query; a confirmed Prompt must not become a retry.
   const refreshHistory = useCallback(() => readTranscriptHistory(draft, queryClient.fetchQuery(queries.history({ id })).then((view) => view.messages), onDraftChange).catch(() => {}), [id, draft, onDraftChange]);
@@ -1544,7 +1521,7 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
       stream.close();
     };
   }, [id, historyReady, reconnectHistory, draft, setBusy, setLines]);
-  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !history.data, historyError: history.error?.message ?? read.error?.message, origin: history.data?.origin };
+  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !history.data, historyError: history.error?.message, origin: history.data?.origin };
 }
 
 export function OriginCard({ origin }: { origin?: ChatOrigin }) {

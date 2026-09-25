@@ -183,7 +183,8 @@ func (s *Server) listSessions(stream grpc.ServerStream) error {
 			metadataByChannel[channel] = channelMetadata
 		}
 
-		session := &Session{Id: conversation.ID, Title: channelMetadata.Title, Agent: conversation.Agent, AllowedAgents: channelMetadata.AllowedAgents, Settled: conversation.Settled, Running: row.Running, Pinned: row.Pinned, Name: row.Name, Unread: row.Unread}
+		session := &Session{Id: conversation.ID, Title: channelMetadata.Title, Agent: conversation.Agent, AllowedAgents: channelMetadata.AllowedAgents, Settled: conversation.Settled, Running: row.Running, Pinned: row.Pinned, Name: row.Name}
+
 		if strings.HasPrefix(conversation.ID, "web:") {
 			session.AllowedAgents, err = s.agentChoices(ctx, conversation.ID)
 			if err != nil {
@@ -597,7 +598,7 @@ func (s *Server) updateSession(ctx context.Context, request *UpdateSessionReques
 		request.Name = new(strings.TrimSpace(*request.Name))
 	}
 
-	updated, err := s.sessions.UpdateConversationDetails(ctx, request.Id, request.Pinned, request.Name, request.Unread)
+	updated, err := s.sessions.UpdateConversationDetails(ctx, request.Id, request.Pinned, request.Name)
 	if err != nil {
 		return nil, fmt.Errorf("update web conversation: %w", err)
 	}
