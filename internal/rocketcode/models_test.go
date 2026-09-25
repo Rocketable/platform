@@ -1,6 +1,7 @@
 package rocketcode
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -245,34 +246,65 @@ func TestNewWithModelResolverStoresResolvedDisplayModel(t *testing.T) {
 	root, err := os.OpenRoot(dir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
-
 	client, _ := testResolverClient(t, "answer")
 	resolver := testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
 		return client, ProviderOrigin{Provider: "work", Model: "gpt-5.5"}, nil
 	})
-	loop, err := NewWithModelResolver(resolver, testConfig(dir), root, Agents{Items: map[string]Agent{
-		"main": {Name: "main", Model: "work/template", Prompt: "prompt"},
-	}}, Skills{Items: map[string]Skill{}}, "main", nil)
+	cfg := testConfig(dir)
+	cfg.ReasoningEffort = "low"
 
-	require.NoError(t, err)
-	require.Equal(t, "gpt-5.5", loop.Model)
-	require.Equal(t, "work/gpt-5.5", loop.DisplayModel)
-	require.Equal(t, ProviderOrigin{Provider: "work", Model: "gpt-5.5"}, loop.ProviderOrigin)
+	for _, effort := range []string{"high", ""} {
+		t.Run("agent_effort="+effort, func(t *testing.T) {
+			loop, err := NewWithModelResolver(resolver, cfg, root, Agents{Items: map[string]Agent{
+				"main": {Name: "main", Model: "work/template", Prompt: "prompt", ReasoningEffort: effort},
+			}}, Skills{Items: map[string]Skill{}}, "main", nil)
 
-	output := make(chan ChatResponse, 8)
+			require.NoError(t, err)
+			require.Equal(t, "gpt-5.5", loop.Model)
+			require.Equal(t, "work/gpt-5.5", loop.DisplayModel)
+			require.Equal(t, ProviderOrigin{Provider: "work", Model: "gpt-5.5"}, loop.ProviderOrigin)
 
-	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "hello", output)
+			require.Equal(t, cmp.Or(effort, "low"), string(loop.ReasoningEffort))
 
-	close(input)
+			sink := recordingCheckpointSink()
+			loop.CheckpointSink = sink
 
-	var saved SessionEntry
+			input := make(chan PromptInput, 1)
+			input <- testPromptInput(PromptInputRoleUser, "hello", make(chan ChatResponse, 8))
 
-	require.NoError(t, loop.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
-		saved = entry
-		return nil
-	}, make(chan os.Signal, 1)))
-	require.Equal(t, "work/gpt-5.5", saved.Model)
+			close(input)
+
+			var saved SessionEntry
+
+			require.NoError(t, loop.Loop(context.Background(), input, emptySession(), func(entry SessionEntry) error {
+				saved = entry
+				return nil
+			}, make(chan os.Signal, 1)))
+
+			var restored SessionEntry
+			require.NoError(t, json.Unmarshal([]byte(marshalJSON(t, saved)), &restored))
+			require.Equal(t, "main", restored.Agent)
+			require.Equal(t, "work/gpt-5.5", restored.Model)
+			require.Equal(t, new(string(loop.ReasoningEffort)), restored.ReasoningEffort)
+			require.Equal(t, restored.ReasoningEffort, sink.StartActiveTurnCalls()[0].ActiveTurnCheckpoint.ReasoningEffort)
+		})
+	}
+}
+
+func TestSessionAttributionReasoningPresence(t *testing.T) {
+	for _, tc := range []struct {
+		data   string
+		effort *string
+	}{{`{"model":"old"}`, nil}, {`{"model":"old","reasoning_effort":""}`, new("")}} {
+		var entry SessionEntry
+		require.NoError(t, json.Unmarshal([]byte(tc.data), &entry))
+		require.Empty(t, entry.Agent)
+		require.Equal(t, tc.effort, entry.ReasoningEffort)
+
+		var restored SessionEntry
+		require.NoError(t, json.Unmarshal([]byte(marshalJSON(t, entry)), &restored))
+		require.Equal(t, entry, restored)
+	}
 }
 
 func TestParseModelRef(t *testing.T) {
@@ -326,7 +358,7 @@ func TestNewWithProvidersNormalizesOpenAIPrefixedAgentModel(t *testing.T) {
 	}}, Skills{Items: map[string]Skill{}}, "main", nil)
 
 	require.NoError(t, err)
-	require.Equal(t, "gpt-5.5", loop.DisplayModel)
+	require.Equal(t, "openai/gpt-5.5", loop.DisplayModel)
 	require.Equal(t, "gpt-5.5", loop.Model)
 }
 

@@ -202,6 +202,8 @@ type OutboundMessage struct {
 	ConversationID, TurnID             string
 	ExternalConversationID             string
 	Agent                              string
+	Model, SourceConversationID        string
+	ReasoningEffort                    *string
 	Cronjob                            *CronjobMessage
 	Complete                           bool
 	SlackReply                         *SlackReplyTarget

@@ -112,6 +112,11 @@ func (b *Bridge) syncConversation(ctx context.Context, source *Bridge) error {
 	for i := range entries {
 		observed := &entries[i]
 
+		producer := observed.SourceConversationID
+		if !observed.Synced {
+			producer = source.config.ConversationID
+		}
+
 		entry, err := externalMCPManagedEntry(&observed.Entry, nil)
 		if err != nil {
 			return err
@@ -123,8 +128,8 @@ func (b *Bridge) syncConversation(ctx context.Context, source *Bridge) error {
 		}
 
 		added, err := execRows(ctx, tx, "insert synced entry", "count synced entries", `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
-SELECT $1, ($2::jsonb || jsonb_build_object('sync_source_entry_id', $3::bigint))::text, $4
-WHERE NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1 AND entry_json::jsonb->>'sync_source_entry_id' = $3::text)`, b.config.ConversationID, string(data), observed.ID, entry.Timestamp.UTC().Format(time.RFC3339Nano))
+SELECT $1, ($2::jsonb || jsonb_build_object('sync_source_entry_id', $3::bigint, 'sync_source_conversation_id', $5::text))::text, $4
+WHERE NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1 AND entry_json::jsonb->>'sync_source_entry_id' = $3::text)`, b.config.ConversationID, string(data), observed.ID, entry.Timestamp.UTC().Format(time.RFC3339Nano), producer)
 		if err != nil {
 			return err
 		}
@@ -380,6 +385,11 @@ func (b *Bridge) publishConsumed(ctx context.Context, inbound *protocol.InboundM
 		message := protocol.NewOutboundMessage(b.config.ConversationID, "")
 
 		message.ConsumedID, message.ConsumedText = id, inbound.Text
+		message.SourceConversationID = b.config.ConversationID
+		b.mu.Lock()
+		message.Agent, message.Model, message.ReasoningEffort = b.activeAttribution.Agent, b.activeAttribution.Model, b.activeAttribution.ReasoningEffort
+		b.mu.Unlock()
+
 		if err := b.bus.PublishOutbound(ctx, message); err != nil {
 			b.log.Error("publish consumed web input", "error", err)
 		}

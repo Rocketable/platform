@@ -590,7 +590,7 @@ func TestLooperPromptInputShellCommandExpansion(t *testing.T) {
 			looper.expandInputPrompts = tc.enabled
 			looper.promptExpansion = testPromptExpansionEnvironment(t)
 			output := make(chan ChatResponse, 10)
-			turn, _, interrupted, err := looper.runTurn(context.Background(), output, nil, nil, testPromptInput(PromptInputRoleUser, "before !`printf hello` after", nil))
+			turn, _, interrupted, err := looper.runTurn(context.Background(), output, nil, nil, nil, testPromptInput(PromptInputRoleUser, "before !`printf hello` after", nil))
 
 			require.NoError(t, err)
 			require.False(t, interrupted)
@@ -790,6 +790,7 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 		compactionReplayInput("cmp-prior", "sealed-prior", "private-content-value"),
 		testInputMessage(responses.EasyInputMessageRole("user"), "old question", ""),
 		testInputMessage(responses.EasyInputMessageRole("assistant"), "old answer", ""),
+		testInputMessage(responses.EasyInputMessageRole("assistant"), "legacy answer", ""),
 	})
 	require.NoError(t, err)
 
@@ -805,6 +806,9 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 		return responseWithMessage("resp-final", "answer"), nil
 	}
 	looper := testLooper(mock)
+	looper.agent.Name, looper.DisplayModel, looper.ReasoningEffort = "new", "work/model-b", "low"
+	sink := recordingCheckpointSink()
+	looper.CheckpointSink = sink
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
@@ -814,7 +818,10 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 
 	var saved []SessionEntry
 
-	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), func(entry SessionEntry) error {
+	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{
+		{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), Agent: "old", Model: "work/model-a", ReasoningEffort: new("high"), ReplayInput: replayInput[:3]},
+		{Version: 1, Type: "turn", ReplayInput: replayInput[3:]},
+	}), func(entry SessionEntry) error {
 		saved = append(saved, entry)
 
 		return nil
@@ -833,6 +840,23 @@ func TestLooperCompactsAndRetriesContextLengthExceeded(t *testing.T) {
 	require.Contains(t, retryInput, "new question")
 	require.Len(t, saved, 1)
 	require.Contains(t, string(saved[0].ReplayInput[0]), `"type":"compaction"`)
+	require.Len(t, saved[0].ReplayInput, 6)
+
+	checkpoint := sink.RecordProviderResponseCalls()[0].ActiveTurnCheckpoint
+	for _, entry := range []SessionEntry{saved[0], {
+		Agent: checkpoint.Agent, Model: checkpoint.DisplayModel, ReasoningEffort: checkpoint.ReasoningEffort,
+		ReplayAttribution: checkpoint.ReplayAttribution,
+	}} {
+		require.Equal(t, "work/model-a", entry.AttributionAt(1).Model)
+		require.Equal(t, new("high"), entry.AttributionAt(2).ReasoningEffort)
+		require.Empty(t, entry.AttributionAt(3).Agent)
+		require.Empty(t, entry.AttributionAt(3).Model)
+		require.Nil(t, entry.AttributionAt(3).ReasoningEffort)
+		require.Equal(t, "work/model-b", entry.AttributionAt(4).Model)
+		require.Equal(t, new("low"), entry.AttributionAt(4).ReasoningEffort)
+	}
+
+	require.Equal(t, "work/model-b", saved[0].AttributionAt(5).Model)
 }
 
 func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {
@@ -1112,11 +1136,13 @@ func TestCheckpointBeforeFirstProviderCall(t *testing.T) {
 		starts := sink.StartActiveTurnCalls()
 		require.Len(t, starts, 1)
 		require.NotEmpty(t, starts[0].ActiveTurnCheckpoint.TurnID)
+		require.Contains(t, marshalJSON(t, starts[0].ActiveTurnCheckpoint), `"reasoning_effort":"high"`)
 		require.JSONEq(t, `{"content":"hello","role":"user","type":"message"}`, string(starts[0].ActiveTurnCheckpoint.ReplayInput[0]))
 
 		return responseWithMessage("resp-final", "done"), nil
 	})
 	looper := testLooper(mock)
+	looper.ReasoningEffort = "high"
 	looper.CheckpointSink = sink
 	output := make(chan ChatResponse, 10)
 

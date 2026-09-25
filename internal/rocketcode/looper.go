@@ -441,14 +441,17 @@ func (e *responseFailureError) Error() string {
 
 // SessionEntry is one denormalized persisted session record.
 type SessionEntry struct {
-	Version     int               `json:"version"`
-	Type        string            `json:"type"`
-	Timestamp   time.Time         `json:"timestamp"`
-	ResponseID  string            `json:"response_id,omitempty"`
-	Model       string            `json:"model,omitempty"`
-	TokenUsage  *TokenUsage       `json:"token_usage,omitempty"`
-	ReplayInput []json.RawMessage `json:"replay_input,omitempty"`
-	OutputTrace []json.RawMessage `json:"output_trace,omitempty"`
+	Version           int                 `json:"version"`
+	Type              string              `json:"type"`
+	Timestamp         time.Time           `json:"timestamp"`
+	ResponseID        string              `json:"response_id,omitempty"`
+	Model             string              `json:"model,omitempty"`
+	Agent             string              `json:"agent,omitempty"`
+	ReasoningEffort   *string             `json:"reasoning_effort,omitempty"`
+	ReplayAttribution []ReplayAttribution `json:"replay_attribution,omitempty"`
+	TokenUsage        *TokenUsage         `json:"token_usage,omitempty"`
+	ReplayInput       []json.RawMessage   `json:"replay_input,omitempty"`
+	OutputTrace       []json.RawMessage   `json:"output_trace,omitempty"`
 }
 
 // TokenUsage records replay-neutral provider token counts for a completed turn.
@@ -579,7 +582,10 @@ func (l *looper) Loop(
 		return errors.New("interrupts channel is required")
 	}
 
-	var history []responses.ResponseInputItemUnionParam
+	var (
+		history            []responses.ResponseInputItemUnionParam
+		historyAttribution []ReplayAttribution
+	)
 
 	loaded := false
 
@@ -599,7 +605,9 @@ func (l *looper) Loop(
 		if !loaded {
 			var err error
 
-			history, _, err = loadSession(sessionIn)
+			var entries []SessionEntry
+
+			history, entries, err = loadSession(sessionIn)
 			if err != nil {
 				close(turnOutput)
 
@@ -607,9 +615,17 @@ func (l *looper) Loop(
 			}
 
 			loaded = true
+
+			offset := 0
+
+			for i := range entries {
+				entry := &entries[i]
+				historyAttribution = append(historyAttribution, entry.attributionRanges(offset)...)
+				offset += len(entry.ReplayInput)
+			}
 		}
 
-		turn, rendered, interrupted, err := l.runTurn(ctx, turnOutput, interrupts, history, line)
+		turn, rendered, interrupted, err := l.runTurn(ctx, turnOutput, interrupts, history, historyAttribution, line)
 		if err != nil {
 			if errDirectSkill, ok := errors.AsType[directSkillInputError](err); ok {
 				emitChatResponse(turnOutput, ChatResponse{Kind: ChatResponseAssistantMessage, Text: errDirectSkill.Error()})
@@ -648,6 +664,7 @@ func (l *looper) Loop(
 			return err
 		}
 
+		historyAttribution = append(historyAttribution, turn.attributionRanges(len(history))...)
 		history = append(history, items...)
 
 		for _, item := range rendered {
@@ -673,6 +690,7 @@ func (l *looper) runTurn(
 	output chan<- ChatResponse,
 	interrupts <-chan os.Signal,
 	baseHistory []responses.ResponseInputItemUnionParam,
+	baseAttribution []ReplayAttribution,
 	input PromptInput,
 ) (record SessionEntry, rendered []ChatResponse, interrupted bool, err error) {
 	var emptyRecord SessionEntry
@@ -688,11 +706,13 @@ func (l *looper) runTurn(
 	}
 
 	record = SessionEntry{
-		Version:     1,
-		Type:        "turn",
-		Timestamp:   time.Now().UTC(),
-		Model:       l.DisplayModel,
-		ReplayInput: replayInput,
+		Version:         1,
+		Type:            "turn",
+		Timestamp:       time.Now().UTC(),
+		Model:           l.DisplayModel,
+		Agent:           l.agent.Name,
+		ReasoningEffort: new(string(l.ReasoningEffort)),
+		ReplayInput:     replayInput,
 	}
 	turnID := activeTurnID(&record)
 
@@ -774,7 +794,10 @@ func (l *looper) runTurn(
 
 		params := l.buildParams(history)
 
-		resp, recoveredHistory, err := l.newProviderResponse(turnCtx, &params, output, func(recovered []responses.ResponseInputItemUnionParam) error {
+		attribution := append(slices.Clone(baseAttribution), record.attributionRanges(len(baseHistory))...)
+		attributionEnd := len(baseHistory) + len(turnItems)
+
+		resp, err := l.newProviderResponse(turnCtx, &params, output, func(recovered []responses.ResponseInputItemUnionParam, retained int) error {
 			recovered = pruneHistoryBeforeLatestCompaction(recovered)
 
 			replayInput, errReplay := ReplayInputFromParams(recovered)
@@ -783,6 +806,17 @@ func (l *looper) runTurn(
 			}
 
 			record.ReplayInput = replayInput
+			record.ReplayAttribution = make([]ReplayAttribution, 0, len(attribution))
+
+			start := attributionEnd - retained
+			for _, snapshot := range attribution {
+				snapshot.Start = max(snapshot.Start, start) + len(recovered) - retained - start
+
+				snapshot.End = max(min(snapshot.End, attributionEnd), start) + len(recovered) - retained - start
+				if snapshot.Start != snapshot.End {
+					record.ReplayAttribution = append(record.ReplayAttribution, snapshot)
+				}
+			}
 
 			turnItems = append([]responses.ResponseInputItemUnionParam(nil), recovered...)
 			checkpoint = l.activeTurnCheckpoint(&record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
@@ -790,35 +824,18 @@ func (l *looper) runTurn(
 			return l.CheckpointSink.RecordProviderResponse(turnCtx, &checkpoint)
 		})
 		if err != nil {
-			if errors.Is(context.Cause(turnCtx), errTurnInterrupted) {
+			interrupted := errors.Is(context.Cause(turnCtx), errTurnInterrupted)
+			if interrupted || turnCtx.Err() != nil {
 				if err := markInterrupted(); err != nil {
 					return emptyRecord, nil, false, err
 				}
+			}
 
+			if interrupted {
 				return emptyRecord, nil, true, nil
 			}
 
-			if turnCtx.Err() != nil {
-				if err := markInterrupted(); err != nil {
-					return emptyRecord, nil, false, err
-				}
-			}
-
 			return emptyRecord, nil, false, fmt.Errorf("request response: %w", err)
-		}
-
-		if len(recoveredHistory) > 0 {
-			recoveredHistory = pruneHistoryBeforeLatestCompaction(recoveredHistory)
-
-			replayInput, err := ReplayInputFromParams(recoveredHistory)
-			if err != nil {
-				return emptyRecord, nil, false, err
-			}
-
-			record.ReplayInput = replayInput
-
-			turnItems = append([]responses.ResponseInputItemUnionParam(nil), recoveredHistory...)
-			checkpoint = l.activeTurnCheckpoint(&record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
 		}
 
 		l.emitHostedToolDiagnostics(output, resp.Output)
@@ -891,18 +908,15 @@ func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Resp
 		return hadToolCalls, compactionOnly, toolOutputs, false, nil
 	}
 
-	if errors.Is(context.Cause(ctx), errTurnInterrupted) {
+	interrupted = errors.Is(context.Cause(ctx), errTurnInterrupted)
+	if interrupted || ctx.Err() != nil {
 		if err := markInterrupted(); err != nil {
 			return false, false, nil, false, err
 		}
-
-		return false, false, nil, true, nil
 	}
 
-	if ctx.Err() != nil {
-		if err := markInterrupted(); err != nil {
-			return false, false, nil, false, err
-		}
+	if interrupted {
+		return false, false, nil, true, nil
 	}
 
 	return false, false, nil, false, fmt.Errorf("dispatch tool calls: %w", err)
@@ -1035,6 +1049,8 @@ func (l *looper) activeTurnCheckpoint(record *SessionEntry, openCalls []Function
 		Agent:                    l.agent.Name,
 		Model:                    l.Model,
 		DisplayModel:             l.DisplayModel,
+		ReasoningEffort:          record.ReasoningEffort,
+		ReplayAttribution:        slices.Clone(record.ReplayAttribution),
 		ReplayInput:              slices.Clone(record.ReplayInput),
 		OutputTrace:              slices.Clone(record.OutputTrace),
 		TokenUsage:               tokenUsage,
@@ -1134,8 +1150,8 @@ func (l *looper) newProviderResponse(
 	ctx context.Context,
 	params *responses.ResponseNewParams,
 	output chan<- ChatResponse,
-	checkpointCompacted func([]responses.ResponseInputItemUnionParam) error,
-) (resp *responses.Response, recoveredHistory []responses.ResponseInputItemUnionParam, err error) {
+	checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error,
+) (resp *responses.Response, err error) {
 	provider := l.ProviderOrigin.Provider
 
 	ctx, span := l.Observability.startSpan(ctx, "rocketcode.provider", semconv.SpanKindLLM,
@@ -1157,13 +1173,13 @@ func (l *looper) newProviderResponse(
 	}()
 
 	if l.Client == nil {
-		return nil, nil, fmt.Errorf("%s provider is required", provider)
+		return nil, fmt.Errorf("%s provider is required", provider)
 	}
 
 	return l.newResponseWithProviderRetry(ctx, params, output, checkpointCompacted)
 }
 
-func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam) error) (*responses.Response, []responses.ResponseInputItemUnionParam, error) {
+func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, error) {
 	attempt := 0
 	provider := l.ProviderOrigin.Provider
 
@@ -1173,12 +1189,12 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 		resp, err := l.Client.New(ctx, params, option.WithResponseInto(&raw))
 		if err != nil {
 			if ctx.Err() == nil && isContextLengthExceeded(err) {
-				resp, recoveredHistory, err := l.newResponseAfterContextCompaction(ctx, params, err, output, checkpointCompacted)
+				resp, err := l.newResponseAfterContextCompaction(ctx, params, err, output, checkpointCompacted)
 				if err != nil {
-					return nil, nil, fmt.Errorf("new response: %w", err)
+					return nil, fmt.Errorf("new response: %w", err)
 				}
 
-				return resp, recoveredHistory, nil
+				return resp, nil
 			}
 
 			errReturn := err
@@ -1193,14 +1209,14 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 							diagnostic := ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: http.StatusTooManyRequests, Code: errRateLimit.code, Type: errRateLimit.typeName, Message: errRateLimit.message, RetryAfter: errRateLimit.retryAfter.String(), Headers: providerDiagnosticHeaders(errAPI.Response)}
 							l.emitProviderDiagnostic(ctx, output, &diagnostic)
 
-							return nil, nil, fmt.Errorf("new response: %w", errRateLimit)
+							return nil, fmt.Errorf("new response: %w", errRateLimit)
 						}
 
 						diagnostic := ProviderDiagnostic{Phase: providerDiagnosticRetry, HTTPStatus: http.StatusTooManyRequests, Code: errRateLimit.code, Type: errRateLimit.typeName, Message: errRateLimit.message, Attempt: attempt, RetryAfter: errRateLimit.retryAfter.String(), Headers: providerDiagnosticHeaders(errAPI.Response)}
 						l.emitProviderDiagnostic(ctx, output, &diagnostic)
 
 						if err := waitProviderRetry(ctx, wait); err != nil {
-							return nil, nil, fmt.Errorf("wait for provider retry: %w", err)
+							return nil, fmt.Errorf("wait for provider retry: %w", err)
 						}
 
 						continue
@@ -1225,18 +1241,18 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 				}
 			}
 
-			return nil, nil, fmt.Errorf("new response: %w", errReturn)
+			return nil, fmt.Errorf("new response: %w", errReturn)
 		}
 
 		if resp == nil {
 			err := errors.New("missing response")
 			l.emitProviderDiagnostic(ctx, output, &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""})
 
-			return nil, nil, err
+			return nil, err
 		}
 
 		if resp.Status != responses.ResponseStatusFailed {
-			return resp, nil, nil
+			return resp, nil
 		}
 
 		err = &responseFailureError{
@@ -1247,19 +1263,19 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 		}
 
 		if isResponseContextLengthExceeded(resp) {
-			resp, recoveredHistory, err := l.newResponseAfterContextCompaction(ctx, params, err, output, checkpointCompacted)
+			resp, err := l.newResponseAfterContextCompaction(ctx, params, err, output, checkpointCompacted)
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 
-			return resp, recoveredHistory, nil
+			return resp, nil
 		}
 
 		if resp.Error.Code != responses.ResponseErrorCodeRateLimitExceeded {
 			diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0, nil)
 			l.emitProviderDiagnostic(ctx, output, &diagnostic)
 
-			return nil, nil, err
+			return nil, err
 		}
 
 		attempt++
@@ -1270,24 +1286,24 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 			diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0, raw)
 			l.emitProviderDiagnostic(ctx, output, &diagnostic)
 
-			return nil, nil, err
+			return nil, err
 		}
 
 		diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticRetry, attempt, wait, raw)
 		l.emitProviderDiagnostic(ctx, output, &diagnostic)
 
 		if err := waitProviderRetry(ctx, wait); err != nil {
-			return nil, nil, fmt.Errorf("wait for provider retry: %w", err)
+			return nil, fmt.Errorf("wait for provider retry: %w", err)
 		}
 	}
 }
 
-func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *responses.ResponseNewParams, errOriginal error, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam) error) (*responses.Response, []responses.ResponseInputItemUnionParam, error) {
+func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *responses.ResponseNewParams, errOriginal error, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, error) {
 	original := params.Input.OfInputItemList
 
 	blocks := compactionBlocks(original)
 	if len(blocks) < 2 {
-		return nil, nil, errOriginal
+		return nil, errOriginal
 	}
 
 	eligible := len(blocks) - 1
@@ -1305,20 +1321,20 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 
 		compacted, err := l.Client.Compact(ctx, &compactParams)
 		if err != nil {
-			return nil, nil, fmt.Errorf("compact context after context_length_exceeded: %w", err)
+			return nil, fmt.Errorf("compact context after context_length_exceeded: %w", err)
 		}
 
 		compactedInput, err := compactedOutputToReplayParams(compacted.Output)
 		if err != nil {
-			return nil, nil, fmt.Errorf("convert compacted response: %w", err)
+			return nil, fmt.Errorf("convert compacted response: %w", err)
 		}
 
 		recoveredHistory := append(append([]responses.ResponseInputItemUnionParam{}, compactedInput...), original[end:]...)
 		retryParams := *params
 
 		retryParams.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: recoveredHistory}
-		if err := checkpointCompacted(recoveredHistory); err != nil {
-			return nil, nil, fmt.Errorf("checkpoint compacted response input: %w", err)
+		if err := checkpointCompacted(recoveredHistory, len(original)-end); err != nil {
+			return nil, fmt.Errorf("checkpoint compacted response input: %w", err)
 		}
 
 		var raw *http.Response
@@ -1341,18 +1357,18 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 				l.emitProviderDiagnostic(ctx, output, &diagnostic)
 			}
 
-			return nil, nil, fmt.Errorf("retry compacted response: %w", err)
+			return nil, fmt.Errorf("retry compacted response: %w", err)
 		}
 
 		if resp == nil {
 			err := errors.New("missing response")
 			l.emitProviderDiagnostic(ctx, output, &ProviderDiagnostic{Phase: providerDiagnosticError, HTTPStatus: 0, ResponseStatus: "", Code: "", Message: err.Error(), Attempt: 0, RetryAfter: "", ResponseID: ""})
 
-			return nil, nil, err
+			return nil, err
 		}
 
 		if resp.Status != responses.ResponseStatusFailed {
-			return resp, recoveredHistory, nil
+			return resp, nil
 		}
 
 		errLast = &responseFailureError{responseID: resp.ID, status: resp.Status, code: resp.Error.Code, message: resp.Error.Message}
@@ -1363,10 +1379,10 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 		diagnostic := providerDiagnosticFromFailedResponse(resp, providerDiagnosticError, 0, 0, nil)
 		l.emitProviderDiagnostic(ctx, output, &diagnostic)
 
-		return nil, nil, errLast
+		return nil, errLast
 	}
 
-	return nil, nil, errLast
+	return nil, errLast
 }
 
 func compactionBlocks(items []responses.ResponseInputItemUnionParam) []compactionBlock {
