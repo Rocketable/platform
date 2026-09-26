@@ -441,14 +441,17 @@ func (e *responseFailureError) Error() string {
 
 // SessionEntry is one denormalized persisted session record.
 type SessionEntry struct {
-	Version     int               `json:"version"`
-	Type        string            `json:"type"`
-	Timestamp   time.Time         `json:"timestamp"`
-	ResponseID  string            `json:"response_id,omitempty"`
-	Model       string            `json:"model,omitempty"`
-	TokenUsage  *TokenUsage       `json:"token_usage,omitempty"`
-	ReplayInput []json.RawMessage `json:"replay_input,omitempty"`
-	OutputTrace []json.RawMessage `json:"output_trace,omitempty"`
+	Version           int                 `json:"version"`
+	Type              string              `json:"type"`
+	Timestamp         time.Time           `json:"timestamp"`
+	ResponseID        string              `json:"response_id,omitempty"`
+	Model             string              `json:"model,omitempty"`
+	Agent             string              `json:"agent,omitempty"`
+	ReasoningEffort   *string             `json:"reasoning_effort,omitempty"`
+	ReplayAttribution []ReplayAttribution `json:"replay_attribution,omitempty"`
+	TokenUsage        *TokenUsage         `json:"token_usage,omitempty"`
+	ReplayInput       []json.RawMessage   `json:"replay_input,omitempty"`
+	OutputTrace       []json.RawMessage   `json:"output_trace,omitempty"`
 }
 
 // TokenUsage records replay-neutral provider token counts for a completed turn.
@@ -579,7 +582,10 @@ func (l *looper) Loop(
 		return errors.New("interrupts channel is required")
 	}
 
-	var history []responses.ResponseInputItemUnionParam
+	var (
+		history            []responses.ResponseInputItemUnionParam
+		historyAttribution []ReplayAttribution
+	)
 
 	loaded := false
 
@@ -599,7 +605,9 @@ func (l *looper) Loop(
 		if !loaded {
 			var err error
 
-			history, _, err = loadSession(sessionIn)
+			var entries []SessionEntry
+
+			history, entries, err = loadSession(sessionIn)
 			if err != nil {
 				close(turnOutput)
 
@@ -607,9 +615,17 @@ func (l *looper) Loop(
 			}
 
 			loaded = true
+
+			offset := 0
+
+			for i := range entries {
+				entry := &entries[i]
+				historyAttribution = append(historyAttribution, entry.attributionRanges(offset)...)
+				offset += len(entry.ReplayInput)
+			}
 		}
 
-		turn, rendered, interrupted, err := l.runTurn(ctx, turnOutput, interrupts, history, line)
+		turn, rendered, interrupted, err := l.runTurn(ctx, turnOutput, interrupts, history, historyAttribution, line)
 		if err != nil {
 			if errDirectSkill, ok := errors.AsType[directSkillInputError](err); ok {
 				emitChatResponse(turnOutput, ChatResponse{Kind: ChatResponseAssistantMessage, Text: errDirectSkill.Error()})
@@ -648,6 +664,7 @@ func (l *looper) Loop(
 			return err
 		}
 
+		historyAttribution = append(historyAttribution, turn.attributionRanges(len(history))...)
 		history = append(history, items...)
 
 		for _, item := range rendered {
@@ -673,6 +690,7 @@ func (l *looper) runTurn(
 	output chan<- ChatResponse,
 	interrupts <-chan os.Signal,
 	baseHistory []responses.ResponseInputItemUnionParam,
+	baseAttribution []ReplayAttribution,
 	input PromptInput,
 ) (record SessionEntry, rendered []ChatResponse, interrupted bool, err error) {
 	var emptyRecord SessionEntry
@@ -688,11 +706,13 @@ func (l *looper) runTurn(
 	}
 
 	record = SessionEntry{
-		Version:     1,
-		Type:        "turn",
-		Timestamp:   time.Now().UTC(),
-		Model:       l.DisplayModel,
-		ReplayInput: replayInput,
+		Version:         1,
+		Type:            "turn",
+		Timestamp:       time.Now().UTC(),
+		Model:           l.DisplayModel,
+		Agent:           l.agent.Name,
+		ReasoningEffort: new(string(l.ReasoningEffort)),
+		ReplayInput:     replayInput,
 	}
 	turnID := activeTurnID(&record)
 
@@ -774,7 +794,10 @@ func (l *looper) runTurn(
 
 		params := l.buildParams(history)
 
-		resp, recoveredHistory, err := l.newProviderResponse(turnCtx, &params, output, func(recovered []responses.ResponseInputItemUnionParam) error {
+		attribution := append(slices.Clone(baseAttribution), record.attributionRanges(len(baseHistory))...)
+		attributionEnd := len(baseHistory) + len(turnItems)
+
+		resp, recoveredHistory, err := l.newProviderResponse(turnCtx, &params, output, func(recovered []responses.ResponseInputItemUnionParam, retained int) error {
 			recovered = pruneHistoryBeforeLatestCompaction(recovered)
 
 			replayInput, errReplay := ReplayInputFromParams(recovered)
@@ -783,6 +806,18 @@ func (l *looper) runTurn(
 			}
 
 			record.ReplayInput = replayInput
+			record.ReplayAttribution = nil
+
+			start := attributionEnd - retained
+			for _, snapshot := range attribution {
+				snapshot.Start = max(snapshot.Start, start) + len(recovered) - retained - start
+				snapshot.End = max(min(snapshot.End, attributionEnd), start) + len(recovered) - retained - start
+				record.ReplayAttribution = append(record.ReplayAttribution, snapshot)
+			}
+
+			record.ReplayAttribution = slices.DeleteFunc(record.ReplayAttribution, func(snapshot ReplayAttribution) bool {
+				return snapshot.Start == snapshot.End
+			})
 
 			turnItems = append([]responses.ResponseInputItemUnionParam(nil), recovered...)
 			checkpoint = l.activeTurnCheckpoint(&record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
@@ -1035,6 +1070,8 @@ func (l *looper) activeTurnCheckpoint(record *SessionEntry, openCalls []Function
 		Agent:                    l.agent.Name,
 		Model:                    l.Model,
 		DisplayModel:             l.DisplayModel,
+		ReasoningEffort:          record.ReasoningEffort,
+		ReplayAttribution:        slices.Clone(record.ReplayAttribution),
 		ReplayInput:              slices.Clone(record.ReplayInput),
 		OutputTrace:              slices.Clone(record.OutputTrace),
 		TokenUsage:               tokenUsage,
@@ -1134,7 +1171,7 @@ func (l *looper) newProviderResponse(
 	ctx context.Context,
 	params *responses.ResponseNewParams,
 	output chan<- ChatResponse,
-	checkpointCompacted func([]responses.ResponseInputItemUnionParam) error,
+	checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error,
 ) (resp *responses.Response, recoveredHistory []responses.ResponseInputItemUnionParam, err error) {
 	provider := l.ProviderOrigin.Provider
 
@@ -1163,7 +1200,7 @@ func (l *looper) newProviderResponse(
 	return l.newResponseWithProviderRetry(ctx, params, output, checkpointCompacted)
 }
 
-func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam) error) (*responses.Response, []responses.ResponseInputItemUnionParam, error) {
+func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, []responses.ResponseInputItemUnionParam, error) {
 	attempt := 0
 	provider := l.ProviderOrigin.Provider
 
@@ -1282,7 +1319,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 	}
 }
 
-func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *responses.ResponseNewParams, errOriginal error, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam) error) (*responses.Response, []responses.ResponseInputItemUnionParam, error) {
+func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *responses.ResponseNewParams, errOriginal error, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, []responses.ResponseInputItemUnionParam, error) {
 	original := params.Input.OfInputItemList
 
 	blocks := compactionBlocks(original)
@@ -1317,7 +1354,7 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 		retryParams := *params
 
 		retryParams.Input = responses.ResponseNewParamsInputUnion{OfInputItemList: recoveredHistory}
-		if err := checkpointCompacted(recoveredHistory); err != nil {
+		if err := checkpointCompacted(recoveredHistory, len(original)-end); err != nil {
 			return nil, nil, fmt.Errorf("checkpoint compacted response input: %w", err)
 		}
 

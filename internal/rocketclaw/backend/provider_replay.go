@@ -28,7 +28,9 @@ func sessionEntryForProvider(entry *rocketcode.SessionEntry, provider string) (r
 		return *entry, nil
 	}
 
-	replay, err := replayForProvider(entry.ReplayInput)
+	ranges := slices.Clone(entry.ReplayAttribution)
+
+	replay, err := replayForProvider(entry.ReplayInput, ranges)
 	if err != nil {
 		return rocketcode.SessionEntry{}, err
 	}
@@ -36,6 +38,7 @@ func sessionEntryForProvider(entry *rocketcode.SessionEntry, provider string) (r
 	projected := *entry
 	projected.ResponseID = ""
 	projected.ReplayInput = replay
+	projected.ReplayAttribution = ranges
 	projected.OutputTrace = nil
 
 	return projected, nil
@@ -60,7 +63,9 @@ func activeTurnForProvider(checkpoint *rocketcode.ActiveTurnCheckpoint, provider
 		return *checkpoint, nil
 	}
 
-	replay, err := replayForProvider(checkpoint.ReplayInput)
+	ranges := slices.Clone(checkpoint.ReplayAttribution)
+
+	replay, err := replayForProvider(checkpoint.ReplayInput, ranges)
 	if err != nil {
 		return rocketcode.ActiveTurnCheckpoint{}, err
 	}
@@ -78,6 +83,7 @@ func activeTurnForProvider(checkpoint *rocketcode.ActiveTurnCheckpoint, provider
 	projected := *checkpoint
 	projected.ResponseID = ""
 	projected.ReplayInput = replay
+	projected.ReplayAttribution = ranges
 	projected.OutputTrace = nil
 
 	calls := make([]rocketcode.FunctionCallCheckpoint, len(checkpoint.OpenFunctionCalls))
@@ -92,9 +98,13 @@ func activeTurnForProvider(checkpoint *rocketcode.ActiveTurnCheckpoint, provider
 	return projected, nil
 }
 
-func replayForProvider(rawItems []json.RawMessage) ([]json.RawMessage, error) {
+func replayForProvider(rawItems []json.RawMessage, attribution ...[]rocketcode.ReplayAttribution) ([]json.RawMessage, error) {
 	items := make([]responses.ResponseInputItemUnionParam, 0, len(rawItems))
+
+	boundaries := make([]int, len(rawItems)+1)
 	for i, raw := range rawItems {
+		boundaries[i] = len(items)
+
 		var kind struct {
 			Type string `json:"type"`
 		}
@@ -183,6 +193,11 @@ func replayForProvider(rawItems []json.RawMessage) ([]json.RawMessage, error) {
 				items = append(items, message)
 			}
 		}
+	}
+
+	boundaries[len(rawItems)] = len(items)
+	for _, ranges := range attribution {
+		copy(ranges, rocketcode.RemapReplayAttribution(ranges, boundaries))
 	}
 
 	replay, err := rocketcode.ReplayInputFromParams(items)

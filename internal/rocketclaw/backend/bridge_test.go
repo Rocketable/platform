@@ -110,6 +110,9 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 	require.Equal(t, "steer-first", bridge.steers[0].queueItemID)
 	require.Equal(t, "steer-second", bridge.steers[1].queueItemID)
 	require.Len(t, bus.outbound, 1, "waiting steers are not consumed at submission")
+
+	bridge.activeAttribution = rocketcode.ReplayAttribution{Agent: "planner", Model: "work/model-a", ReasoningEffort: new("high")}
+	bridge.SwitchAgent("reviewer")
 	inputs := bridge.drainSteers(t.Context(), rocketcode.TurnPhaseFinalAnswer)
 	require.Len(t, inputs, 2)
 
@@ -125,6 +128,16 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 		require.Equal(t, "web-conversation", message.ConversationID)
 		require.Equal(t, id, message.ConsumedID)
 		require.Equal(t, "same text", message.ConsumedText)
+		require.Equal(t, "web-conversation", message.SourceConversationID)
+
+		if id == "initial" {
+			require.Nil(t, message.ReasoningEffort)
+		} else {
+			require.Equal(t, "planner", message.Agent)
+			require.Equal(t, "work/model-a", message.Model)
+			require.Equal(t, new("high"), message.ReasoningEffort)
+		}
+
 		require.Empty(t, message.Text)
 		require.False(t, message.Complete)
 	}
@@ -871,14 +884,14 @@ func TestRecoveredActiveTurnCheckpointSinkPreservesRecoveredReplay(t *testing.T)
 		TurnID:      "turn-2",
 		ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"continue"}`)},
 	}
-	require.NoError(t, sink.RecordProviderResponse(context.Background(), withRecoveredReplay(checkpoint, recoveredReplay)))
+	require.NoError(t, sink.RecordProviderResponse(context.Background(), withRecoveredReplay(checkpoint, recoveredReplay, nil)))
 
 	require.Len(t, sink.checkpoints, 1)
 	assert.JSONEq(t, `{"type":"message","role":"developer","content":"interrupted transcript"}`, string(sink.checkpoints[0].ReplayInput[0]))
 	assert.JSONEq(t, `{"type":"message","role":"user","content":"continue"}`, string(sink.checkpoints[0].ReplayInput[1]))
 	assert.JSONEq(t, `{"type":"message","role":"user","content":"continue"}`, string(checkpoint.ReplayInput[0]))
 
-	require.NoError(t, sink.RecordCompletedToolOutput(context.Background(), withRecoveredReplay(sink.checkpoints[0], recoveredReplay)))
+	require.NoError(t, sink.RecordCompletedToolOutput(context.Background(), withRecoveredReplay(sink.checkpoints[0], recoveredReplay, nil)))
 	require.Len(t, sink.checkpoints, 2)
 	assert.Len(t, sink.checkpoints[1].ReplayInput, 2)
 }
@@ -1410,7 +1423,7 @@ func TestBridgePassesLocalGuardrailToRocketCode(t *testing.T) {
 	entries, err := service.ObserveEntries(context.Background(), conversationID)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
-	require.Equal(t, "main-model", entries[0].Entry.Model)
+	require.Equal(t, "openai/main-model", entries[0].Entry.Model)
 }
 
 func TestBridgeStopAfterStartContextCanceledIsIdempotent(t *testing.T) {
@@ -4287,6 +4300,7 @@ func TestRecoveredActiveTurnProjectsDifferentProviderReplayBeforeRequest(t *test
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	checkpoint := rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: conversationID, Agent: "main", Model: "gpt", DisplayModel: "openai/gpt", ResponseID: providerReplayPrivate, ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"portable-readable","id":"provider-private-sentinel"}`)}, OutputTrace: []json.RawMessage{json.RawMessage(`{"private":"provider-private-sentinel"}`)}}
+	checkpoint.ReasoningEffort = new("high")
 	want, err := json.Marshal(checkpoint)
 	require.NoError(t, err)
 
@@ -4328,6 +4342,15 @@ func TestRecoveredActiveTurnProjectsDifferentProviderReplayBeforeRequest(t *test
 	require.NoError(t, <-errRecovered)
 	assert.Contains(t, requestBody, providerReplayReadable)
 	assert.NotContains(t, requestBody, providerReplayPrivate)
+	entries, err := service.ObserveEntries(t.Context(), conversationID)
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
+	saved := entries[len(entries)-1].Entry
+	require.Equal(t, "openai/gpt", saved.AttributionAt(0).Model)
+	require.Equal(t, new("high"), saved.AttributionAt(0).ReasoningEffort)
+	require.Equal(t, "work/gpt", saved.Model)
+	require.NotNil(t, saved.ReasoningEffort)
+	require.NotContains(t, requestBody, "replay_attribution")
 
 	after, err := json.Marshal(checkpoint)
 	require.NoError(t, err)
@@ -4760,11 +4783,19 @@ func TestRecoveredActiveTurnPermanentFailureClearsFreshRecoveryRow(t *testing.T)
 
 func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\nadditionalInstructions: Reply in one sentence.\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: work/model-a\nreasoningEffort: high\npermission: {}\n---\nPrompt\n")
+	writeAgent(t, workspace, "reviewer", "---\ndescription: Reviewer\nmode: primary\nmodel: work/model-b\nreasoningEffort: low\nadditionalInstructions: Reply in one sentence.\npermission: {}\n---\nPrompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	requests := 0
 
 	var (
 		requestBody struct {
+			Model     string `json:"model"`
+			Reasoning struct {
+				Effort string `json:"effort"`
+			} `json:"reasoning"`
 			Input []struct {
 				Role    string `json:"role"`
 				Content string `json:"content"`
@@ -4789,6 +4820,12 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 			return
 		}
 
+		requests++
+		if requests == 1 {
+			close(entered)
+			<-release
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}`))
 	}))
@@ -4800,24 +4837,82 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
-	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "", "hello", true)
-	msg.ConversationID = conversationID
-	msg.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}
-
-	_, err = bridge.runTurn(context.Background(), msg, "turn-1")
+	bus := newTestBus()
+	t.Cleanup(bus.Close)
+	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, Providers: map[string]config.OpenAIConfig{"work": {APIBaseURL: server.URL}}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: bus, log: slog.New(slog.DiscardHandler), requestCh: make(chan bridgeRequest, 1), inputOpen: true}
+	queued := protocol.ThreadQueueItem{ID: "queued-input", ConversationID: conversationID, Source: protocol.SourceWeb, Kind: protocol.InboundKindEnqueue, Message: "hello", Principal: "Alice"}
+	require.NoError(t, service.PutThreadQueueItem(queued.ID, &queued))
+	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &queued))
+	require.Empty(t, bus.outbound)
+	bridge.SwitchAgent("reviewer")
+	request := <-bridge.requestCh
+	admitted, err := bridge.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
+	require.True(t, admitted)
+	initial := readRocketCodeOutbound(t, bus)
+	require.Equal(t, queued.ID, initial.ConsumedID)
+	require.Empty(t, initial.Model)
+
+	request.inbound.SyncDestination = "destination"
+
+	var group errgroup.Group
+	group.Go(func() error {
+		result, err := bridge.runTurn(t.Context(), request.inbound, "turn-1")
+		if err != nil {
+			return err
+		}
+
+		return bridge.publishFinal(t.Context(), request.inbound, result)
+	})
+	<-entered
+	bridge.SwitchAgent("main")
+
+	steer := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, "Alice", &protocol.InboundContent{Text: "also explain"}, true)
+	steer.Metadata["web_message_id"] = "active-steer"
+	require.NoError(t, bridge.Submit(t.Context(), steer))
+	close(release)
+
+	var consumed, consumedSteer, assistant, final bool
+	for !final {
+		message := readRocketCodeOutbound(t, bus)
+		require.Equal(t, "reviewer", message.Agent)
+		require.Equal(t, "work/model-b", message.Model)
+		require.Equal(t, new("low"), message.ReasoningEffort)
+		require.Equal(t, conversationID, message.SourceConversationID)
+		require.Equal(t, conversationID, message.ConversationID)
+		consumed = consumed || message.ConsumedID == queued.ID
+		consumedSteer = consumedSteer || message.ConsumedID == "active-steer"
+		assistant = assistant || message.Text == "ok" && !message.Complete
+		final = message.Complete
+		message.MarkDelivered(nil)
+	}
+
+	require.True(t, consumed)
+	require.True(t, consumedSteer)
+	require.True(t, assistant)
+	require.NoError(t, group.Wait())
+	require.Equal(t, "reviewer", bridge.pendingOutput.Agent)
+	require.Equal(t, "work/model-b", bridge.pendingOutput.Model)
+	require.Equal(t, new("low"), bridge.pendingOutput.ReasoningEffort)
+	entries, err := service.ObserveEntries(t.Context(), conversationID)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, "reviewer", entries[0].Entry.Agent)
+	require.Equal(t, "work/model-b", entries[0].Entry.Model)
+	require.Equal(t, new("low"), entries[0].Entry.ReasoningEffort)
 	require.NoError(t, errRequest)
+	require.Equal(t, "model-b", requestBody.Model)
+	require.Equal(t, "low", requestBody.Reasoning.Effort)
 
 	userContent := ""
 
 	for i := range requestBody.Input {
-		if requestBody.Input[i].Role == "user" {
+		if requestBody.Input[i].Role == "user" && strings.HasSuffix(requestBody.Input[i].Content, "\n\nhello") {
 			userContent = requestBody.Input[i].Content
 		}
 	}
 
-	assert.Equal(t, "[Slack media=Text principal=\"Alice\" additional_instructions=\"Reply in one sentence.\"]\n\nhello", userContent)
+	assert.Equal(t, "[Web media=Text principal=\"Alice\" additional_instructions=\"Reply in one sentence.\"]\n\nhello", userContent)
 }
 
 func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {

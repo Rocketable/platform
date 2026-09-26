@@ -88,7 +88,7 @@ func projectSessionSummary(summary *protocol.SessionSummary, entry *harness.Sess
 		}
 	}
 
-	delivery, err := ReplayDeliveryText(items)
+	delivery, _, err := ReplayDeliveryText(items)
 	if err != nil {
 		return err
 	}
@@ -104,15 +104,14 @@ func projectSessionSummary(summary *protocol.SessionSummary, entry *harness.Sess
 	return nil
 }
 
-// ReplayDeliveryText returns the last successful human-facing delivery in a turn.
-func ReplayDeliveryText(items []responses.ResponseInputItemUnionParam) (string, error) {
-	calls := make(map[string]string)
-	text := ""
+// ReplayDeliveryText returns the last successful human-facing delivery and its call index.
+func ReplayDeliveryText(items []responses.ResponseInputItemUnionParam) (text string, index int, err error) {
+	calls := make(map[string]int)
 
 	for i := range items {
 		item := &items[i]
 		if call := item.OfFunctionCall; call != nil && call.Name == "rocketclaw_i_want_human_partner_to_see_this" {
-			calls[call.CallID] = call.Arguments
+			calls[call.CallID] = i
 		}
 
 		output := item.OfFunctionCallOutput
@@ -120,7 +119,7 @@ func ReplayDeliveryText(items []responses.ResponseInputItemUnionParam) (string, 
 			continue
 		}
 
-		arguments, ok := calls[output.CallID.Value]
+		callIndex, ok := calls[output.CallID.Value]
 		if !ok {
 			continue
 		}
@@ -128,14 +127,15 @@ func ReplayDeliveryText(items []responses.ResponseInputItemUnionParam) (string, 
 		var delivery struct {
 			Payload string `json:"payload"`
 		}
-		if err := json.Unmarshal([]byte(arguments), &delivery); err != nil {
-			return "", fmt.Errorf("decode delivery report: %w", err)
+		if err := json.Unmarshal([]byte(items[callIndex].OfFunctionCall.Arguments), &delivery); err != nil {
+			return "", 0, fmt.Errorf("decode delivery report: %w", err)
 		}
 
 		text = delivery.Payload
+		index = callIndex
 	}
 
-	return text, nil
+	return text, index, nil
 }
 
 func saveSessionSummary(ctx context.Context, db stateStoreDB, summary protocol.SessionSummary) error {

@@ -15,7 +15,7 @@ test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("HTTP prompt and SSE use the 
       expect(chunk.done).toBe(false);
       data += new TextDecoder().decode(chunk.value);
     }
-    expect(JSON.parse(data.split("\n\n")[0].slice(6))).toMatchObject({ text: "live browser answer", snapshot: false, role: "assistant", complete: false, turnId: "" });
+    expect(JSON.parse(data.split("\n\n")[0].slice(6))).toMatchObject({ text: "live browser answer", snapshot: false, role: "assistant", complete: false, turnId: "", agent: "planner", model: "work/model-a", reasoningEffort: "", origin: "canonical", sourceConversationId: id, destinationConversationId: id });
     const response = await fetch(`${url}/api/Prompt`, { method: "POST", headers, body: JSON.stringify({ id, text: "browser prompt", delivery: "STEER" }) });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ privateText: "" });

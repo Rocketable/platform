@@ -64,10 +64,6 @@ func resolveModel(resolver ModelResolver, model string) (*openai.Client, Provide
 }
 
 func (o ProviderOrigin) displayModel() string {
-	if o.Provider == "openai" {
-		return o.Model
-	}
-
 	return o.Provider + "/" + o.Model
 }
 

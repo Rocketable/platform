@@ -33,7 +33,7 @@ func TestObservabilityEmitsAgentProviderAndToolSpans(t *testing.T) {
 	}
 	looper.Tools = map[string]looperTool{"read": tool}
 
-	record, rendered, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, testPromptInput(PromptInputRoleUser, "inspect secret", nil))
+	record, rendered, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, nil, testPromptInput(PromptInputRoleUser, "inspect secret", nil))
 
 	require.NoError(t, err)
 	require.False(t, interrupted)
@@ -68,7 +68,7 @@ func TestObservabilityUsesResolvedProviderAndModel(t *testing.T) {
 	looper.Observability = ObservabilityConfig{Enabled: true, Tracer: provider.Tracer("test")}
 	output := make(chan ChatResponse, 4)
 
-	record, rendered, interrupted, err := looper.runTurn(context.Background(), output, nil, nil, testPromptInput(PromptInputRoleUser, "question", nil))
+	record, rendered, interrupted, err := looper.runTurn(context.Background(), output, nil, nil, nil, testPromptInput(PromptInputRoleUser, "question", nil))
 	require.Error(t, err)
 	require.Empty(t, record.ResponseID)
 	require.Empty(t, rendered)
@@ -101,7 +101,7 @@ func TestObservabilityRedactionComesFromConfigObject(t *testing.T) {
 	looper.DisplayModel = "gpt-test"
 	looper.Observability = ObservabilityConfig{Enabled: true, Tracer: provider.Tracer("test"), TraceConfig: instrumentation.TraceConfig{HideInputs: true, HideOutputs: true}}
 
-	_, _, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, testPromptInput(PromptInputRoleUser, "hidden input", nil))
+	_, _, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, nil, testPromptInput(PromptInputRoleUser, "hidden input", nil))
 
 	require.NoError(t, err)
 	require.False(t, interrupted)
@@ -130,7 +130,7 @@ func TestObservabilityEmitsProviderDiagnosticSpanEvents(t *testing.T) {
 		looper.DisplayModel = "gpt-test"
 		looper.Observability = ObservabilityConfig{Enabled: true, Tracer: provider.Tracer("test")}
 
-		record, rendered, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, testPromptInput(PromptInputRoleUser, "question", nil))
+		record, rendered, interrupted, err := looper.runTurn(context.Background(), nil, nil, nil, nil, testPromptInput(PromptInputRoleUser, "question", nil))
 
 		require.NoError(t, err)
 		require.False(t, interrupted)

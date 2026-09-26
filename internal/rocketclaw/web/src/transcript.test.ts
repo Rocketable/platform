@@ -8,7 +8,51 @@ const names = ["nextLines", "sendComposer", "promoteComposer", "applyStreamEvent
 const functions = source.statements.filter((node) => ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? "")).map((node) => node.getText(source)).join("\n");
 const javascript = ts.transpileModule(`import { QueryClient } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nconst queryClient = new QueryClient();\n${functions}\nexport { nextLines, sendComposer, promoteComposer, applyStreamEvent, readTranscriptHistory, pendingInputs, transcriptTurns, toolTitle, queryClient };`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
 const { nextLines, sendComposer, promoteComposer, applyStreamEvent, readTranscriptHistory, pendingInputs, transcriptTurns, toolTitle, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
-type Line = { id: string; role: string; text: string; turnId?: string };
+type Line = { id: string; role: string; text: string; turnId?: string; origin?: string };
+
+test("actual stream handler enriches consumed IDs without repeating consumption or restarting a completed turn", () => {
+  let callback: ts.Expression | undefined;
+  const findHandler = (node: ts.Node) => {
+    if (ts.isBinaryExpression(node) && node.left.getText(source) === "stream.onmessage") callback = node.right;
+    ts.forEachChild(node, findHandler);
+  };
+  findHandler(source);
+  const body = ts.transpileModule(`return ${callback!.getText(source)}`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
+  const draft = { lines: [] as Line[], busy: false, consumed: new Set<string>(), parked: [{ id: "input", role: "user", text: "ask" }] };
+  let invalidations = 0;
+  const handler = new Function("draft", "queryClient", "applyStreamEvent", "nextLines", "setBusy", "setLines", body)(draft, { invalidateQueries: () => { invalidations++; } }, applyStreamEvent, nextLines, (busy: boolean) => { draft.busy = busy; }, (update: (lines: Line[]) => Line[]) => { draft.lines = update(draft.lines); });
+  const send = (payload: Partial<TranscriptEvent>) => handler({ data: JSON.stringify(payload) });
+  send({ role: "user", messageId: "input", text: "ask" });
+  const metadata = { agent: "planner", model: "work/model-a", reasoningEffort: "high" };
+  send({ role: "user", messageId: "input", text: "ask", ...metadata });
+  expect(draft.lines).toHaveLength(1);
+  expect(draft.lines[0]).toMatchObject(metadata);
+  expect(draft.parked).toEqual([]);
+  expect(invalidations).toBe(1);
+  send({ role: "assistant", text: "done", turnId: "turn", complete: true });
+  draft.parked = [{ id: "input", role: "user", text: "later" }];
+  send({ role: "user", messageId: "input", text: "ask", ...metadata, reasoningEffort: "" });
+  expect(draft.busy).toBe(false);
+  expect(draft.lines).toHaveLength(2);
+  expect(draft.lines[0]).toMatchObject({ ...metadata, reasoningEffort: "" });
+  expect(draft.parked).toHaveLength(1);
+  expect(invalidations).toBe(1);
+});
+
+test("message-ID enrichment and cumulative snapshots retain execution attribution", () => {
+  const metadata = { agent: "planner", model: "work/model-a", reasoningEffort: "", origin: "sandboxed", sourceConversationId: "X", destinationConversationId: "Y" };
+  const user = { text: "same", role: "user", messageId: "input", turnId: "turn", complete: false, snapshot: false };
+  let lines = nextLines([{ id: "input", role: "user", text: "same" }], { ...user, ...metadata });
+  expect(lines).toHaveLength(1);
+  expect(lines[0]).toMatchObject({ id: "input", ...metadata });
+  lines = nextLines(lines, user);
+  expect(lines[0]).toMatchObject(metadata);
+  const answer = { ...user, role: "assistant", messageId: undefined, text: "first" };
+  lines = nextLines(lines, { ...answer, ...metadata });
+  lines = nextLines(lines, { ...answer, text: "first and final", complete: true });
+  expect(lines).toHaveLength(2);
+  expect(lines[1]).toMatchObject({ ...metadata, text: "first and final" });
+});
 
 test("reconnect query keeps live messages received while history is loading", async () => {
   const stream = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "useSessionStream") as ts.FunctionDeclaration;
@@ -145,6 +189,27 @@ test("thinking traces group inside each turn and stay separate from replies", ()
     { user: [lines[0]], traces: [lines[1], lines[2]], replies: [lines[3]] },
     { user: [lines[4]], traces: [lines[5]], replies: [] },
   ]);
+});
+
+test("origin choices hide only matching transcript messages without changing turn order", () => {
+  const lines: Line[] = [
+    { id: "u1", role: "user", text: "ask", origin: "canonical" },
+    { id: "t1", role: "tool", text: "work", origin: "sandboxed" },
+    { id: "a1", role: "assistant", text: "reply", origin: "canonical" },
+    { id: "u2", role: "user", text: "old input" },
+    { id: "a2", role: "assistant", text: "copied", origin: "sandboxed" },
+    { id: "u3", role: "user", text: "unknown origin" },
+  ];
+  expect(transcriptTurns(lines, "both").flatMap((turn: { user: Line[]; traces: Line[]; replies: Line[] }) => [...turn.user, ...turn.traces, ...turn.replies].map((line) => line.id))).toEqual(["u1", "t1", "a1", "u2", "a2", "u3"]);
+  expect(transcriptTurns(lines, "sandboxed").map((turn: { user: Line[]; traces: Line[]; replies: Line[] }) => [...turn.user, ...turn.traces, ...turn.replies].map((line) => line.id))).toEqual([["t1"], ["a2"]]);
+  expect(transcriptTurns(lines, "canonical").map((turn: { user: Line[]; traces: Line[]; replies: Line[] }) => [...turn.user, ...turn.traces, ...turn.replies].map((line) => line.id))).toEqual([["u1", "a1"]]);
+  expect(transcriptTurns(lines, "neither")).toEqual([]);
+  const tools = [
+    { id: "call", role: "tool", toolName: "execute", toolCallId: "run", text: "execute\n{}", origin: "sandboxed" },
+    { id: "result", role: "tool", toolCallId: "run", text: "output", origin: "canonical" },
+  ];
+  expect(transcriptTurns(tools, "canonical")[0].traces.map((line: Line) => line.id)).toEqual(["result"]);
+  expect(transcriptTurns(tools, "sandboxed")[0].traces[0].toolParts).toEqual([]);
 });
 
 test("history keeps thinking, tools and developer text", () => {

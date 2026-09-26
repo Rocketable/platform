@@ -277,7 +277,7 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 			return nil, fmt.Errorf("decode web history: %w", err)
 		}
 
-		deliveryText, err := backend.ReplayDeliveryText(items)
+		deliveryText, deliveryIndex, err := backend.ReplayDeliveryText(items)
 		if err != nil {
 			return nil, fmt.Errorf("web history: %w", err)
 		}
@@ -309,6 +309,8 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 					event.Complete = true
 				}
 
+				event.attribute(entry.Entry.AttributionAt(i), producer, request.Id)
+
 				response.Messages = append(response.Messages, event)
 				if event.Role == "assistant" {
 					lastReply = event.Text
@@ -317,11 +319,24 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		}
 
 		if strings.TrimSpace(deliveryText) != "" && deliveryText != lastReply {
-			response.Messages = append(response.Messages, &TranscriptEvent{Role: "assistant", Text: deliveryText, Complete: true})
+			event := &TranscriptEvent{Role: "assistant", Text: deliveryText, Complete: true}
+			event.attribute(entry.Entry.AttributionAt(deliveryIndex), producer, request.Id)
+			response.Messages = append(response.Messages, event)
 		}
 	}
 
 	return response, nil
+}
+
+func (e *TranscriptEvent) attribute(snapshot rocketcode.ReplayAttribution, source, destination string) {
+	e.Agent, e.Model, e.ReasoningEffort = snapshot.Agent, snapshot.Model, snapshot.ReasoningEffort
+	e.SourceConversationId, e.DestinationConversationId = source, destination
+	e.Origin = "canonical"
+
+	_, cron := parseCronRun(source)
+	if source != destination || cron {
+		e.Origin = "sandboxed"
+	}
 }
 
 func (s *Server) inputEvent(ctx context.Context, id, text string) (*TranscriptEvent, error) {
@@ -1052,6 +1067,7 @@ func (s *Server) join(request *JoinRequest, stream grpc.ServerStream) error {
 				consumed, err = s.inputEvent(stream.Context(), request.Id, message.ConsumedText)
 				if err == nil {
 					consumed.MessageId = message.ConsumedID
+					consumed.attribute(rocketcode.ReplayAttribution{Agent: message.Agent, Model: message.Model, ReasoningEffort: message.ReasoningEffort}, cmp.Or(message.SourceConversationID, request.Id), request.Id)
 					err = stream.SendMsg(consumed)
 				}
 			}
@@ -1062,6 +1078,8 @@ func (s *Server) join(request *JoinRequest, stream grpc.ServerStream) error {
 
 			if err == nil && (message.Text != "" || message.Complete || len(message.Attachments) > 0) {
 				response := &TranscriptEvent{Text: message.Text, Role: "assistant", Complete: message.Complete, TurnId: message.TurnID}
+				response.attribute(rocketcode.ReplayAttribution{Agent: message.Agent, Model: message.Model, ReasoningEffort: message.ReasoningEffort}, cmp.Or(message.SourceConversationID, request.Id), request.Id)
+
 				if len(message.Attachments) > 0 {
 					history, errHistory := s.history(stream.Context(), &HistoryRequest{Id: request.Id})
 
