@@ -1,14 +1,14 @@
 "use client";
 
 import { QueryClient, QueryClientProvider, useQuery, useQueries, useMutation } from "@tanstack/react-query";
-import { Dialog, DialogTrigger, DialogContent, DialogTitle, DialogDescription, DialogClose } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
-import { queries, mutations, listSessions } from "./api";
-import type { ChatOrigin, PromptDelivery } from "./types";
-import { Bot, Calendar, Check, CircleAlert, Download, FileIcon, GripVertical, LoaderCircle, Mail, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import { queries, mutations, listSessions, rpc } from "./api";
+import type { ChatOrigin, MessageMatch, PromptDelivery } from "./types";
+import { Bot, Calendar, Check, CircleAlert, Clock, CornerUpLeft, Download, FileIcon, GitFork, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, navigate } from "./navigation";
-import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type SyntheticEvent } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
 import { CodeBlock, TranscriptText } from "./transcript-text";
@@ -41,6 +41,8 @@ import {
 
 const queryClient = new QueryClient();
 const tabReturnTo = { current: "/" };
+type SessionCommand = { mode: "fork" | "handoff" | "name" | "snooze" | "queue"; source: string; target?: MessageMatch };
+const SessionCommands = createContext<{ command?: SessionCommand; setCommand: Dispatch<SetStateAction<SessionCommand | undefined>>; composer: RefObject<((command: string) => void) | null> }>(null!);
 
 function sessionPath(id: string) {
   return `/s/${encodeSessionId(id)}`;
@@ -99,14 +101,16 @@ function FilterPill({ label, onClear }: { label: string; onClear: () => void }) 
 }
 
 const dollarCommands = [
-  { name: "goal", hint: "<objective>", desc: "Start a goal loop" },
-  { name: "stop", hint: "", desc: "End the active turn" },
-  { name: "cron", hint: "[job]", desc: "List or run a cron job" },
-  { name: "workflow", hint: "<name> [args]", desc: "Run a saved workflow" },
-  { name: "agent", hint: "[name]", desc: "List or switch agent" },
-  { name: "enqueue", hint: "<text>", desc: "Stash later work" },
-  { name: "queue", hint: "", desc: "List pending steers and later work" },
-  { name: "skill", hint: "<name> [args]", desc: "Invoke a skill by name" },
+  { name: "fork", label: "Fork session", hint: "", desc: "Fork from a chosen message" },
+  { name: "handoff", label: "Handoff session", hint: "", desc: "Copy a handoff or send it to another session" },
+  { name: "goal", label: "Start goal", hint: "<objective>", desc: "Start a goal loop" },
+  { name: "stop", label: "Stop turn", hint: "", desc: "End the active turn" },
+  { name: "cron", label: "Run cron", hint: "[job]", desc: "List or run a cron job" },
+  { name: "workflow", label: "Run workflow", hint: "<name> [args]", desc: "Run a saved workflow" },
+  { name: "agent", label: "Choose agent", hint: "[name]", desc: "List or switch agent" },
+  { name: "enqueue", label: "Stash work", hint: "<text>", desc: "Stash later work" },
+  { name: "queue", label: "Show queue", hint: "", desc: "List pending steers and later work" },
+  { name: "skill", label: "Invoke skill", hint: "<name> [args]", desc: "Invoke a skill by name" },
 ];
 
 function dollarMatches(text: string, skills: { name: string; description?: string }[]) {
@@ -600,8 +604,11 @@ function MobileSidebar({ children, chat }: { children: ReactNode; chat: boolean 
 }
 
 export function App() {
+  const [command, setCommand] = useState<SessionCommand>();
+  const composer = useRef<((command: string) => void) | null>(null);
+  const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
   const route = useRoute();
-  const showChat = !route.cron && !route.agents && !route.skills && !route.config && !route.settled;
+  const showChat = ![route.cron, route.agents, route.skills, route.config, route.settled].some(Boolean);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [palette, setPalette] = useState<{ mode: "sessions" | "commands" | "cron" | undefined; key: number }>({ mode: undefined, key: 0 });
   const openPalette = useCallback((mode: "sessions" | "commands") => setPalette((current) => ({ mode, key: current.key + 1 })), []);
@@ -657,7 +664,9 @@ export function App() {
       <QueryClientProvider client={queryClient}><TooltipProvider>
         <ProtocolGuard />
         <SidebarOwner>
-          <CommandPalette openKey={palette.key} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((open) => !open)} />
+          <SessionCommands value={commands}>
+           {command ? <SessionCommandDialog key={`${command.mode}:${command.source}`} command={command} drafts={drafts.current} onDraftChange={onDraftChange} /> : null}
+            <CommandPalette drafts={drafts.current} openKey={palette.key} mode={palette.mode} setMode={(mode) => setPalette((current) => ({ ...current, mode }))} newChat={newChat} sidebarOpen={sidebarOpen} onToggleSidebar={() => setSidebarOpen((open) => !open)} />
          <MobileSidebar chat={showChat}>
             <BottomNavigation>
               <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="hidden size-[var(--navigation-button)] md:inline-flex" />} aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"} aria-expanded={sidebarOpen} aria-controls="session-sidebar" onClick={() => setSidebarOpen((open) => !open)}>
@@ -677,7 +686,7 @@ export function App() {
             <aside id="session-sidebar" className={cn("hidden w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground lg:w-72", sidebarOpen && "md:flex")}>
               <SessionList />
             </aside>
-            <main className="flex min-h-0 min-w-0 flex-1 flex-col" data-sidebar-swipe="open">
+            <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col", command?.target && "pt-[min(50dvh,17rem)]")} data-sidebar-swipe="open">
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
               {route.settled ? <SessionList settledOnly /> : null}
               <TabPane show={showChat}>
@@ -687,10 +696,114 @@ export function App() {
               </TabPane>
              </main>
            </div>
-         </MobileSidebar>
+          </MobileSidebar>
+         </SessionCommands>
         </SidebarOwner>
       </TooltipProvider></QueryClientProvider>
   );
+}
+
+function SessionCommandDialog({ command, drafts, onDraftChange }: { command: SessionCommand; drafts: Map<string, ComposerDraft>; onDraftChange: () => void }) {
+  if (command.mode === "name" || command.mode === "snooze") return <NameSessionDialog id={command.source} snooze={command.mode === "snooze"} />;
+  if (command.mode === "queue") return <SessionQueueDialog id={command.source} />;
+  return command.mode === "fork" ? <ForkDialog source={command.source} drafts={drafts} onDraftChange={onDraftChange} /> : <HandoffDialog command={command} />;
+}
+
+function ForkDialog({ source, drafts, onDraftChange }: { source: string; drafts: Map<string, ComposerDraft>; onDraftChange: () => void }) {
+  const { setCommand } = useContext(SessionCommands);
+  const sidebar = useContext(Sidebar);
+  const [query, setQuery] = useState("");
+  const history = useQuery(queries.history({ id: source }));
+  const fork = useMutation({ mutationFn: async (message?: TranscriptEvent) => {
+    const draft = await forkDraft(source, message);
+    drafts.set(draft.sessionId, draft);
+    onDraftChange();
+    sidebar.invalidateQueries();
+    navigate(sessionPath(draft.sessionId));
+    setCommand(undefined);
+  } });
+  // OpenCode V2: packages/app/src/session/commands/fork-dialog.tsx lists user
+  // messages newest first, forks BEFORE selection, and restores it for editing.
+  const items = [{ key: "full", label: "Full session", detail: "Copy all recorded history", choose: () => fork.mutate(undefined) }, ...(history.data?.messages ?? []).filter((message) => message.role === "user" && message.messageId && message.text.toLowerCase().includes(query.toLowerCase())).toReversed().map((message) => ({ key: message.messageId!, label: message.text, detail: "Continue before this message", choose: () => fork.mutate(message) }))];
+  const error = fork.error ?? history.error;
+  return <Dialog open onOpenChange={(open) => { if (!open && !fork.isPending) setCommand(undefined); }}>
+    <DialogContent className="top-4 translate-y-0 sm:max-w-lg" showCloseButton={!fork.isPending}>
+      <DialogTitle>Fork session</DialogTitle>
+      <DialogDescription>Choose where to fork. The selected message will be ready to edit in the new session.</DialogDescription>
+      {error ? <p role="alert" className="text-destructive">{error.message}</p> : null}
+      <SessionCommandPicker items={items} query={query} setQuery={setQuery} forking disabled={fork.isPending || !history.data} searching={history.isFetching} />
+      {fork.isPending ? <p role="status">Forking session…</p> : null}
+    </DialogContent>
+  </Dialog>;
+}
+
+function HandoffDialog({ command }: { command: SessionCommand }) {
+  const { setCommand } = useContext(SessionCommands);
+  const popup = useRef<HTMLDivElement>(null);
+  const route = useRoute();
+  const sidebar = useContext(Sidebar);
+  const [query, setQuery] = useState("");
+  const nonce = useId();
+  const search = useQuery({ ...queries.searchMessages(query.trim()), enabled: query.trim() !== "" });
+  const handoff = useQuery({ queryKey: ["handoff", command.source, nonce], queryFn: ({ signal }) => rpc<{ document: string }>("Handoff", { id: command.source }, signal), retry: false, staleTime: Infinity });
+  const stash = useMutation({ mutationFn: mutations.prompt, onSuccess: () => {
+    void queryClient.invalidateQueries({ queryKey: ["queue"] });
+    setCommand(undefined);
+  } });
+  const target = command.target;
+  const preview = useQuery({ ...queries.history({ id: target?.conversationId ?? "" }), enabled: !!target });
+  const items = (search.data ?? []).map((match) => ({ key: `${match.conversationId}:${match.message.messageId}`, label: match.message.text, session: sidebar.rows.find((row) => row.id === match.conversationId) ?? { id: match.conversationId }, choose: () => {
+      setCommand({ ...command, target: match });
+      navigate(sessionPath(match.conversationId));
+    } }));
+  const pending = stash.isPending;
+  const error = [stash.error, search.error, handoff.error, preview.error].find(Boolean);
+  const destination = sidebar.rows.find((row) => row.id === target?.conversationId);
+  return <Dialog open modal={!target} onOpenChange={(open, details) => { if (!open && !pending && details.reason !== "outside-press") setCommand(undefined); }}>
+    <DialogContent ref={popup} initialFocus={popup} className={cn("top-2 flex max-h-[calc(100dvh-1rem)] max-w-[calc(100%-1rem)] translate-y-0 flex-col overflow-hidden sm:max-w-lg", target && "max-h-[calc(min(50dvh,17rem)-1rem)]")} preview={!!target} showCloseButton={!pending}>
+      <DialogHeader className="mr-8 shrink-0">
+        <DialogTitle>Session handoff</DialogTitle>
+        <DialogDescription>{target ? "Review below, then stash. No turn starts until you pop it." : "Take this work to another session, or copy it anywhere."}</DialogDescription>
+      </DialogHeader>
+      <div className="flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain">
+        {target ? <div className="flex min-w-0 items-center gap-3 rounded-lg border p-2">
+          <div className="min-w-0 flex-1"><SessionRowContent session={destination ?? { id: target.conversationId }} /><p className="truncate text-xs text-muted-foreground">{target.message.text}</p></div>
+          <Button variant="ghost" className="min-h-11 shrink-0" disabled={pending} onClick={() => setCommand({ ...command, target: undefined })}>Change</Button>
+        </div> : handoff.data && <SessionCommandPicker items={items} query={query} setQuery={setQuery} forking={false} disabled={pending} searching={search.isFetching} />}
+        {error ? <p role="alert" className="break-words text-destructive">{error.message}</p> : null}
+        {handoff.isError ? <Button variant="outline" className="min-h-11" onClick={() => void handoff.refetch()}>Retry handoff</Button> : null}
+      </div>
+      <DialogFooter className="shrink-0 flex-row flex-wrap items-center justify-between sm:justify-between">
+        {handoff.data ? <CodeBlock text={handoff.data.document} label="Handoff" compact /> : <p role="status" className="flex items-center gap-2 text-xs text-muted-foreground">{handoff.isPending ? <><LoaderCircle className="size-4 animate-spin" />Preparing handoff…</> : "Handoff not ready"}</p>}
+        {target ? <Button className="min-h-11" aria-label="Stash handoff here" disabled={[pending, !handoff.data, !preview.data, preview.isError, route.id !== target.conversationId].some(Boolean)} onClick={() => stash.mutate({ id: target.conversationId, text: handoff.data!.document, delivery: "STASH" })}>{pending ? "Stashing…" : "Stash"}</Button> : null}
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>;
+}
+
+async function forkDraft(source: string, message?: TranscriptEvent): Promise<ComposerDraft> {
+  // Finish restoring files before creating a session: a failed download must
+  // not leave an unwanted fork behind.
+  const files = await Promise.all((message?.attachments ?? []).map(async (file) => {
+    const response = await fetch(`/api/DownloadAttachment?${new URLSearchParams({ conversationId: file.conversationId, id: file.id })}`);
+    if (!response.ok) throw new Error(`Could not restore ${file.name}`);
+    return { id: crypto.randomUUID(), file: new File([await response.blob()], file.name, { type: file.mimeType }) };
+  }));
+  return mutations.forkSession({ id: source, before: message?.messageId }).then((result) => ({ text: result.prompt.text, files, agent: "", sessionId: result.id, sending: false, busy: false, lines: [], error: "", edit: 0, submission: 0 }));
+}
+
+function SessionCommandPicker({ items, query, setQuery, forking, disabled, searching }: { items: { key: string; label: string; detail?: string; session?: Session; choose: () => void }[]; query: string; setQuery: (query: string) => void; forking: boolean; disabled: boolean; searching: boolean }) {
+  const [pick, setPick] = useState(0);
+  const active = useRef<HTMLButtonElement>(null);
+  const selected = items.length ? pick % items.length : 0;
+  useEffect(() => { active.current?.scrollIntoView({ block: "nearest" }); }, [selected]);
+  return <>
+    <Input aria-label={forking ? "Search fork messages" : "Search messages"} placeholder="Search messages" value={query} disabled={disabled} onChange={(event) => { setPick(0); setQuery(event.target.value); }} onKeyDown={(event) => setPick(paletteMove(event, selected, items.length, () => items[selected]?.choose()))} />
+    <ul className="max-h-[40vh] overflow-y-auto">
+      {items.map((item, index) => <li key={item.key}><Button ref={index === selected ? active : null} variant={index === selected ? "secondary" : "ghost"} size="lg" className="h-auto w-full flex-col items-start" disabled={disabled} onClick={item.choose}>{item.session ? <SessionRowContent session={item.session} /> : null}<span className="line-clamp-2 text-left whitespace-normal break-words">{item.label}</span>{item.detail ? <span className="max-w-full truncate text-xs">{item.detail}</span> : null}</Button></li>)}
+    </ul>
+    {!items.length ? <p role="status">{searching ? "Searching…" : query.trim() ? "No matching messages" : "Enter text to find a destination message"}</p> : null}
+  </>;
 }
 
 function paletteRows(
@@ -704,17 +817,15 @@ function paletteRows(
   openCron: () => void,
   runStem: (stem: string) => void,
   origins: string[],
-  id: string,
-  updateSession: (input: { id: string; unread: boolean }) => void,
+  actions: { key: string; label: string; detail?: string; keep?: boolean; disabled?: boolean; run: () => void }[],
   filters: ReturnType<typeof sessionSearchTerms>,
   agentFilter: string,
   roomFilter: string,
-): { key: string; label: string; detail: string; keep?: boolean; run: () => void }[] {
+): { key: string; label?: string; detail?: string; session?: Session; loading?: boolean; keep?: boolean; disabled?: boolean; run: () => void }[] {
   if (mode === "sessions") {
-    return sidebar.rows.filter((session, index) => (!filters.pinnedOnly || session.pinned) && (!filters.unreadOnly || session.unread) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || origins[index]?.includes(filters.needle))).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((session) => ({
+    return sidebar.rows.filter((session, index) => (!filters.pinnedOnly || session.pinned) && (!filters.forkedOnly || session.forkedFrom) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || origins[index]?.includes(filters.needle))).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((session) => ({
       key: session.id,
-      label: session.name || rowPreview(session, sidebar.loadingIds.has(session.id)).split("\n", 1)[0] || sessionLabel(session.id),
-      detail: [session.settled ? "Settled" : "", session.agent, relativeTime(session.updatedAt ?? "")].filter(Boolean).join(" · "),
+      session, loading: sidebar.loadingIds.has(session.id),
       run: () => navigate(sessionPath(session.id)),
     }));
   }
@@ -728,7 +839,7 @@ function paletteRows(
     }));
   }
   return [
-    ...sidebar.rows.filter((session) => session.id === id).map((session) => ({ key: "toggle-unread", label: session.unread ? "Mark read" : "Mark unread", detail: "Current chat", keep: true, run: () => updateSession({ id, unread: !session.unread }) })),
+    ...actions,
     { key: "new", label: "New session", detail: "", run: newChat },
     { key: "run-cron", label: "Run cron", detail: "", keep: true, run: openCron },
     { key: "settled", label: "Settled", detail: "", run: () => navigate("/settled") },
@@ -766,10 +877,20 @@ function originSearchText({ origin }: { origin?: ChatOrigin }) {
     : `External MCP External conversation: ${origin.externalConversationId} Agent: ${origin.agent} ${origin.pairs?.map(({ key, value }) => `${key}=${value}`).join(" ") ?? ""}`).toLowerCase();
 }
 
-function CommandPalette({ openKey, mode, setMode, newChat, sidebarOpen, onToggleSidebar }: { openKey: number; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void; sidebarOpen: boolean; onToggleSidebar: () => void }) {
+function useComposerCommands(id: string, draft: ComposerDraft | undefined, running: boolean | undefined) {
+  const { setCommand, composer } = useContext(SessionCommands);
+  const choices = useQuery({ ...queries.agents({ conversationId: id }), enabled: id !== "" });
+  return id ? dollarCommands.filter(({ name }) => name !== "cron" && (name !== "stop" || (draft?.busy ?? running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label, disabled: !draft || draft.sending, run: () => {
+    if (name === "fork" || name === "handoff" || name === "queue") setCommand({ mode: name, source: id });
+    else composer.current!(name);
+  } })) : [];
+}
+
+function CommandPalette({ drafts, openKey, mode, setMode, newChat, sidebarOpen, onToggleSidebar }: { drafts: Map<string, ComposerDraft>; openKey: number; mode: "sessions" | "commands" | "cron" | undefined; setMode: (mode: "sessions" | "commands" | "cron" | undefined) => void; newChat: () => void; sidebarOpen: boolean; onToggleSidebar: () => void }) {
   const sidebar = useContext(Sidebar);
   const { id } = useRoute();
-  const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: () => { sidebar.invalidateQueries(); setMode(undefined); } });
+  const actions = useSessionActions(id, () => setMode(undefined));
+  const commands = useComposerCommands(id, drafts.get(id), sidebar.rows.find((row) => row.id === id)?.running);
   const [query, setQuery] = useState("");
   const [pick, setPick] = useState(0);
   const [agentFilter, setAgentFilter] = useState("");
@@ -828,9 +949,10 @@ function CommandPalette({ openKey, mode, setMode, newChat, sidebarOpen, onToggle
       setMode(undefined);
     },
   });
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.map((origin) => origin.data ?? ""), id, update.mutate, filters, agentFilter, roomFilter);
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.map((origin) => origin.data ?? ""), [...actions.items, ...commands], filters, agentFilter, roomFilter);
   const selected = items.length === 0 ? 0 : pick % items.length;
   const choose = (item: (typeof items)[number]) => {
+    if (item.disabled) return;
     if (!item.keep) setMode(undefined);
     item.run();
   };
@@ -850,14 +972,13 @@ function CommandPalette({ openKey, mode, setMode, newChat, sidebarOpen, onToggle
           variant="embedded"
           onKeyDown={onKeyDown}
         />}
-        {runCron.error || update.error ? <p role="alert" className="px-3 text-sm text-destructive">{(runCron.error ?? update.error)?.message}</p> : null}
+        {runCron.error || actions.error ? <p role="alert" className="px-3 text-sm text-destructive">{(runCron.error ?? actions.error)?.message}</p> : null}
         {origins.some((origin) => origin.isError) ? <p role="alert" className="px-3 text-sm text-destructive">Could not search all chat origins.</p> : null}
         <ul className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
           {items.length === 0 ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, origins, jobs.isLoading)}</li> : items.map((item, index) => (
             <li key={item.key}>
-              <button ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start rounded-md px-3 py-2 text-left text-sm", index === selected && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}>
-                <span className="font-medium">{item.label}</span>
-                {item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}
+              <button disabled={item.disabled} ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start justify-center rounded-md px-3 text-left text-sm disabled:opacity-50", mode === "commands" ? "min-h-9 py-1.5 [@media(pointer:coarse)]:min-h-11" : "py-2", index === selected && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}>
+                {item.session ? <SessionRowContent session={item.session} loading={item.loading} /> : <><span className="font-medium">{item.label}</span>{item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}</>}
               </button>
             </li>
           ))}
@@ -912,20 +1033,25 @@ function relativeTime(iso: string) {
   return `${Math.floor(ms / 86_400_000)}d`;
 }
 
+function SessionRowContent({ session, loading = false }: { session: Session; loading?: boolean }) {
+  const title = session.name || rowPreview(session, loading).split("\n", 1)[0] || sessionLabel(session.id);
+  const channel = slackSession(session.id) ? (session.title ?? "") : "";
+  const meta = [session.snoozedUntil ? `Snoozed until ${new Date(session.snoozedUntil).toLocaleString()}` : session.settled ? "Settled" : "", channel, session.agent, relativeTime(session.updatedAt ?? "")].filter(Boolean).join(" · ");
+  return <span className="flex min-w-0 w-full flex-1 flex-col gap-0.5">
+    <span className="flex items-center gap-1.5 text-sm font-medium">{session.forkedFrom ? <GitFork role="img" aria-label="Forked session" className="size-3.5 shrink-0" /> : null}<span data-slot="session-title" className="truncate">{title}</span></span>
+    <span className="flex items-center gap-1 text-xs text-muted-foreground"><span className="inline-flex size-3 shrink-0">{session.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 animate-spin motion-reduce:animate-none" /> : null}</span><span className="truncate" title={meta}>{meta}</span></span>
+  </span>;
+}
+
 function SessionRow({
   session,
   current,
   loading,
-  onSettle,
 }: {
   session: Session;
   current: boolean;
   loading: boolean;
-  onSettle: (settled: boolean) => void;
 }) {
-  const title = session.name || rowPreview(session, loading).split("\n", 1)[0] || sessionLabel(session.id);
-  const channel = slackSession(session.id) ? (session.title ?? "") : "";
-  const meta = [channel, session.agent, relativeTime(session.updatedAt ?? "")].filter(Boolean).join(" · ");
   return (
     <li className="group relative flex list-none items-stretch py-0.5">
       <Link
@@ -935,82 +1061,78 @@ function SessionRow({
           current ? "bg-sidebar-row-active text-sidebar-foreground" : "text-sidebar-foreground hover:bg-sidebar-row-hover",
         )}
       >
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="flex items-center gap-1.5 text-sm font-medium">{session.unread ? <span role="img" aria-label="Unread" className="size-1.5 shrink-0 rounded-full bg-primary" /> : null}<span className="truncate">{title}</span></span>
-          <span className="flex items-center gap-1 text-xs text-muted-foreground">
-            <span className="inline-flex size-3 shrink-0">{session.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 animate-spin motion-reduce:animate-none" /> : null}</span>
-            <span className="truncate">{meta}</span>
-          </span>
-        </span>
+        <SessionRowContent session={session} loading={loading} />
       </Link>
       <div className="absolute top-1 right-1 flex rounded-md bg-sidebar shadow-sm opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto">
-      <SessionDetails id={session.id} compact />
-      <button
-        type="button"
-        className="flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
-        aria-label={session.settled ? "Unsettle" : "Settle"}
-        onClick={() => onSettle(!session.settled)}
-      >
-        {session.settled ? <Undo2 className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
-      </button>
+      <SessionActions id={session.id} compact />
       </div>
     </li>
   );
 }
 
-function SessionPin({ session, compact = false }: { session: Session; compact?: boolean }) {
+function useSessionActions(id: string, onSuccess?: () => void) {
   const sidebar = useContext(Sidebar);
-  const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: () => sidebar.invalidateQueries() });
-  return <>
-    <Tooltip>
-      <TooltipTrigger render={<Button type="button" variant="ghost" size="icon" className={compact ? "" : "size-11 sm:size-8"} disabled={update.isPending} />} aria-label={session.pinned ? "Unpin session" : "Pin session"} aria-pressed={!!session.pinned} onClick={() => update.mutate({ id: session.id, pinned: !session.pinned })}>
-        <Pin className={cn(session.pinned && "fill-current")} />
-      </TooltipTrigger>
-      <TooltipContent>{session.pinned ? "Unpin session" : "Pin session"}</TooltipContent>
-    </Tooltip>
-    {update.error ? <span role="alert" className="text-xs text-destructive">{update.error.message}</span> : null}
-  </>;
+  const { setCommand } = useContext(SessionCommands);
+  const saved = () => { sidebar.invalidateQueries(); onSuccess?.(); };
+  const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: saved });
+  const settle = useMutation({ mutationFn: mutations.settleSession, onSuccess: saved });
+  const session = sidebar.rows.find((row) => row.id === id);
+  const items = session ? [
+    ...(session.forkedFrom ? [{ key: "origin", label: "Open original conversation", icon: CornerUpLeft, run: () => navigate(sessionPath(session.forkedFrom!)) }] : []),
+    { key: "name", label: "Name session", icon: TextCursorInput, run: () => setCommand({ mode: "name", source: id }) },
+    { key: "pin", label: session.pinned ? "Unpin session" : "Pin session", icon: Pin, pressed: !!session.pinned, keep: true, run: () => update.mutate({ id, pinned: !session.pinned }) },
+    { key: "snooze", label: "Snooze session", icon: Clock, run: () => setCommand({ mode: "snooze", source: id }) },
+    { key: "settle", label: session.settled ? "Unsettle" : "Settle", icon: session.settled ? Undo2 : Check, keep: true, run: () => settle.mutate({ id, settled: !session.settled }) },
+  ].map((item) => ({ ...item, disabled: update.isPending || settle.isPending })) : [];
+  return { items, error: update.error ?? settle.error };
 }
 
-function SessionDetails({ id, compact = false }: { id: string; compact?: boolean }) {
+function SessionActions({ id, compact = false }: { id: string; compact?: boolean }) {
+  const { items, error } = useSessionActions(id);
+  return <>{items.filter((item) => compact || ["name", "pin", "snooze"].includes(item.key)).map(({ key, label, icon: Icon, pressed, disabled, run }) => <Tooltip key={key}>
+    <TooltipTrigger render={<Button variant="ghost" size={compact ? "icon-sm" : "icon"} className={compact ? "" : "size-11 sm:size-8"} disabled={disabled} />} aria-label={label} aria-pressed={pressed} onClick={run}><Icon className={cn(pressed && "fill-current")} /></TooltipTrigger><TooltipContent>{label}</TooltipContent>
+  </Tooltip>)}{error ? <span role="alert" className="text-xs text-destructive">{error.message}</span> : null}</>;
+}
+
+function SessionQueueDialog({ id }: { id: string }) {
+  const { setCommand } = useContext(SessionCommands);
+  const queue = useQuery({ ...queries.queue({ id }), refetchOnMount: false });
+  let content: ReactNode;
+  if (queue.error) content = <p role="alert">{queue.error.message}</p>;
+  else if (queue.isPending) content = <p role="status">Loading…</p>;
+  else content = <ul className="max-h-[50dvh] overflow-y-auto">{!queue.data.length ? <li>No pending work</li> : null}{queue.data.map((item) => <li key={item.id} className="border-b py-2"><p className="text-xs text-muted-foreground">{item.delivery === "STASH" ? "Stashed" : item.delivery === "STEER" ? "Pending steer" : "Queued"}</p><p className="whitespace-pre-wrap break-words">{item.text}</p><MessageAttachments attachments={item.attachments} conversationId={id} /></li>)}</ul>;
+  return <Dialog open onOpenChange={(open) => { if (!open) setCommand(undefined); }}><DialogContent>
+    <DialogTitle>Session queue</DialogTitle><DialogDescription>Pending steers and later work. Viewing this list starts no turn.</DialogDescription>
+    {content}
+  </DialogContent></Dialog>;
+}
+
+function NameSessionDialog({ id, snooze }: { id: string; snooze: boolean }) {
   const sidebar = useContext(Sidebar);
   const session = sidebar.rows.find((row) => row.id === id);
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
+  const { setCommand } = useContext(SessionCommands);
+  const [value, setValue] = useState(snooze ? "" : session?.name ?? "");
   const nameId = useId();
-  const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: () => { sidebar.invalidateQueries(); setOpen(false); } });
-  if (!session) return null;
-  return <>
-    <Dialog open={open} onOpenChange={setOpen}>
-      <Tooltip>
-        <TooltipTrigger render={<DialogTrigger render={<Button variant="ghost" size={compact ? "icon-sm" : "icon"} className={compact ? "" : "size-11 sm:size-8"} />} />} aria-label="Name session" onClick={() => { setName(session.name ?? ""); update.reset(); }}><TextCursorInput /></TooltipTrigger>
-        <TooltipContent>Rename session</TooltipContent>
-      </Tooltip>
+  const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: () => { sidebar.invalidateQueries(); setCommand(undefined); } });
+  return <Dialog open onOpenChange={(open) => { if (!open) setCommand(undefined); }}>
         <DialogContent>
-          <DialogTitle>Name session</DialogTitle>
-          <DialogDescription>Shared with everyone who can see this session. Leave blank to show the last message.</DialogDescription>
-          <form className="mt-4 flex flex-col gap-3" action={() => update.mutate({ id, name })}>
+          <DialogTitle>{snooze ? "Snooze session" : "Name session"}</DialogTitle>
+          <DialogDescription>{snooze ? "Hide until this local time. New messages bring the chat back early. Find it under Settled to Unsettle sooner." : "Shared with everyone who can see this session. Leave blank to show the last message."}</DialogDescription>
+          <form className="mt-4 flex flex-col gap-3" action={() => update.mutate({ id, ...(snooze ? { snoozedUntil: new Date(value).toISOString() } : { name: value }) })}>
             <FieldGroup>
               <Field data-invalid={!!update.error}>
-                <FieldLabel htmlFor={nameId}>Session name</FieldLabel>
-                <Input id={nameId} name="name" value={name} aria-invalid={!!update.error} onChange={(event) => setName(event.target.value)} />
+                <FieldLabel htmlFor={nameId}>{snooze ? "Return at (local time)" : "Session name"}</FieldLabel>
+                <Input id={nameId} name={snooze ? "snoozedUntil" : "name"} type={snooze ? "datetime-local" : "text"} required={snooze} value={value} aria-invalid={!!update.error} onChange={(event) => setValue(event.target.value)} />
                 {update.error ? <FieldError>{update.error.message}</FieldError> : null}
               </Field>
             </FieldGroup>
             <div className="flex justify-end gap-2">
               <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
-              <Button type="submit" disabled={update.isPending}>{update.isPending ? "Saving…" : "Save"}</Button>
+              <Button type="submit" disabled={update.isPending}>{update.isPending ? "Saving…" : snooze ? "Snooze" : "Save"}</Button>
             </div>
           </form>
         </DialogContent>
-    </Dialog>
-    <SessionPin session={session} compact={compact} />
-    <Tooltip>
-      <TooltipTrigger render={<Button variant="ghost" size={compact ? "icon-sm" : "icon"} className={compact ? "" : "size-11 sm:size-8"} disabled={update.isPending} />} aria-label="Mark unread" onClick={() => update.mutate({ id, unread: true })}><Mail /></TooltipTrigger>
-      <TooltipContent>Mark unread</TooltipContent>
-    </Tooltip>
-    {update.error && !open ? <span role="alert" className="text-xs text-destructive">{update.error.message}</span> : null}
-  </>;
+    </Dialog>;
 }
 
 function matchesSession(session: Session, needle: string, agentFilter: string, roomFilter: string) {
@@ -1021,10 +1143,10 @@ function matchesSession(session: Session, needle: string, agentFilter: string, r
 
 function sessionSearchTerms(query: string) {
   const pinnedOnly = /(?:^|\s)is:pinned(?=\s|$)/i.test(query);
-  const unreadOnly = /(?:^|\s)is:unread(?=\s|$)/i.test(query);
-  const text = query.replace(/(?:^|\s)is:(?:settled|pinned|unread)(?=\s|$)/gi, " ").trim();
+  const forkedOnly = /(?:^|\s)is:forked(?=\s|$)/i.test(query);
+  const text = query.replace(/(?:^|\s)is:(?:settled|pinned|forked)(?=\s|$)/gi, " ").trim();
   const needle = typedPrefix(text, "agent:") === null && typedPrefix(text, "room:") === null ? text.toLowerCase() : "";
-  return { pinnedOnly, unreadOnly, text, needle };
+  return { pinnedOnly, forkedOnly, text, needle };
 }
 
 function SidebarFreshness({ sidebar, emptySearch, emptyLabel = "No matches" }: { sidebar: SidebarView; emptySearch: boolean; emptyLabel?: string }) {
@@ -1063,7 +1185,7 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
     } else {
       setRoomFilter(name);
     }
-    setQuery(query.split(/\s+/).filter((term) => /^is:(settled|pinned|unread)$/i.test(term)).join(" "));
+    setQuery(query.split(/\s+/).filter((term) => /^is:(settled|pinned)$/i.test(term)).join(" "));
     setOverlayPick(0);
   };
   return (
@@ -1147,16 +1269,15 @@ function PageTitle({ children }: { children: ReactNode }) {
 function SessionList({ settledOnly = false }: { settledOnly?: boolean }) {
   const sidebar = useContext(Sidebar);
   const agents = useQuery({ ...queries.agents(), staleTime: 60_000, enabled: settledOnly });
-  const settle = useMutation({ mutationFn: mutations.settleSession, onSuccess: () => sidebar.invalidateQueries() });
   const route = useRoute();
   const [query, setQuery] = useState("");
   const [agentFilter, setAgentFilter] = useState("");
   const [roomFilter, setRoomFilter] = useState("");
   const catalog = agents.data?.agents ?? [];
   const rows = sidebar.rows;
-  const { pinnedOnly, unreadOnly, needle } = sessionSearchTerms(query);
-  const filtered = rows.filter((session) => (settledOnly ? session.settled : !session.settled) && (!pinnedOnly || session.pinned) && (!unreadOnly || session.unread) && matchesSession(session, needle, agentFilter, roomFilter)).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
-  const searching = [needle, agentFilter, roomFilter, pinnedOnly, unreadOnly].some(Boolean);
+  const { pinnedOnly, forkedOnly, needle } = sessionSearchTerms(query);
+  const filtered = rows.filter((session) => (settledOnly ? session.settled : !session.settled) && (!pinnedOnly || session.pinned) && (!forkedOnly || session.forkedFrom) && matchesSession(session, needle, agentFilter, roomFilter)).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned));
+  const searching = [needle, agentFilter, roomFilter, pinnedOnly, forkedOnly].some(Boolean);
   return (
     <div className={cn("flex h-full min-h-0 flex-col", settledOnly && "mx-auto w-full max-w-3xl gap-6 p-4")}>
       {settledOnly ? <PageTitle>Settled</PageTitle> : null}
@@ -1164,10 +1285,9 @@ function SessionList({ settledOnly = false }: { settledOnly?: boolean }) {
         <SessionSearch rows={rows} catalog={catalog} query={query} setQuery={setQuery} agentFilter={agentFilter} setAgentFilter={setAgentFilter} roomFilter={roomFilter} setRoomFilter={setRoomFilter} />
       </div> : null}
       <SidebarFreshness sidebar={sidebar} emptySearch={filtered.length === 0 && (settledOnly || searching)} emptyLabel={searching ? "No matches" : "No settled chats"} />
-      {settle.error ? <p role="alert" className="text-sm text-destructive">{settle.error.message}</p> : null}
       <ul className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
         {filtered.map((session) => (
-          <SessionRow key={session.id} session={session} current={route.id === session.id} loading={sidebar.loadingIds.has(session.id)} onSettle={(next) => settle.mutate({ id: session.id, settled: next })} />
+          <SessionRow key={session.id} session={session} current={route.id === session.id} loading={sidebar.loadingIds.has(session.id)} />
         ))}
       </ul>
     </div>
@@ -1375,6 +1495,9 @@ function TranscriptLog({
 }) {
   const turns = transcriptTurns(lines);
   const { scrollToMessage } = useMessageScroller();
+  const target = useContext(SessionCommands).command?.target;
+  const targetTurn = target?.conversationId === conversationId ? turns.findIndex((turn) => [...turn.user, ...turn.replies].some((line) => line.id === target.message.messageId)) : -1;
+  useEffect(() => { if (targetTurn >= 0) scrollToMessage(`turn-${targetTurn}`, { align: "center", behavior: "instant" }); }, [targetTurn, target?.message.messageId, scrollToMessage]);
   const turnNodes = useRef<(HTMLElement | null)[]>([]);
   const running = usePendingCron(conversationId);
   useEffect(() => { if (running && lines.length > 0) notePendingCron(conversationId, ""); }, [running, lines.length, conversationId]);
@@ -1478,7 +1601,7 @@ function applyStreamEvent(
 async function readTranscriptHistory(draft: ComposerDraft, request: Promise<TranscriptEvent[]>, onDraftChange: () => void, preserveLive = false) {
   const before = draft.lines;
   const messages = await request;
-  // Saved history has no live IDs: it cannot safely replace or merge a newer stream.
+  // Recorded IDs differ from live IDs: history cannot safely merge a newer stream.
   if (draft.lines !== before || draft.sending || preserveLive) {
     // Attachment IDs can confirm stored files without guessing input identity.
     const files = new Map(messages.flatMap((message) => message.attachments ?? []).map((file) => [file.id, file]));
@@ -1486,22 +1609,21 @@ async function readTranscriptHistory(draft: ComposerDraft, request: Promise<Tran
     draft.lines = draft.lines.map((line) => ({ ...line, attachments: line.attachments?.map((file) => files.get(file.id) ?? file) }));
     onDraftChange();
   } else {
-    const seen = new Map<string, number>();
-    draft.lines = messages.map((message): Line => {
-      const role = message.role === "thinking" || message.role === "user" || message.role === "tool" || message.role === "developer" ? message.role : "assistant";
-      return { id: lineId(role, message.text, seen), role, text: message.text, toolCallId: message.toolCallId, toolName: message.toolName, attachments: message.attachments };
-    });
+    draft.lines = historyLines(messages);
     onDraftChange();
   }
   return messages;
 }
 
+function historyLines(messages: TranscriptEvent[]): Line[] {
+  const seen = new Map<string, number>();
+  return messages.map((message) => {
+    const role = message.role === "thinking" || message.role === "user" || message.role === "tool" || message.role === "developer" ? message.role : "assistant";
+    return { id: message.messageId || lineId(role, message.text, seen), role, text: message.text, toolCallId: message.toolCallId, toolName: message.toolName, attachments: message.attachments };
+  });
+}
+
 function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () => void) {
-  const sidebar = useContext(Sidebar);
-  const active = useRoute().id === id && id !== "";
-  const opened = useRef(false);
-  // Let an initial sidebar load finish; later reads can refresh its completed list.
-  const read = useMutation({ mutationFn: mutations.updateSession, onSuccess: () => { if (sidebar.enumerationComplete) sidebar.invalidateQueries(); } });
   const historyQuery = queries.history({ id });
   const pendingCron = usePendingCron(id);
   const history = useQuery({ ...historyQuery, queryFn: async ({ signal }) => {
@@ -1510,13 +1632,6 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
     return view;
   }, enabled: id !== "", refetchOnWindowFocus: false, retry: false, refetchInterval: pendingCron ? 2000 : false });
   const historyReady = history.data !== undefined;
-  useEffect(() => {
-    if (!active) opened.current = false;
-    else if (history.isSuccess && !opened.current) {
-      opened.current = true;
-      read.mutate({ id, unread: false });
-    }
-  }, [active, history.isSuccess, id, read.mutate]);
   const reconnectHistory = history.refetch;
   // History errors belong to the query; a confirmed Prompt must not become a retry.
   const refreshHistory = useCallback(() => readTranscriptHistory(draft, queryClient.fetchQuery(queries.history({ id })).then((view) => view.messages), onDraftChange).catch(() => {}), [id, draft, onDraftChange]);
@@ -1544,7 +1659,7 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
       stream.close();
     };
   }, [id, historyReady, reconnectHistory, draft, setBusy, setLines]);
-  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !history.data, historyError: history.error?.message ?? read.error?.message, origin: history.data?.origin };
+  return { busy: draft.busy, setBusy, lines: draft.lines, setLines, refreshHistory, opening: id !== "" && !history.data, historyError: history.error?.message, origin: history.data?.origin };
 }
 
 export function OriginCard({ origin }: { origin?: ChatOrigin }) {
@@ -1575,6 +1690,10 @@ export function OriginCard({ origin }: { origin?: ChatOrigin }) {
 }
 
 function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; drafts: Map<string, ComposerDraft>; onDraftChange: () => void; onCreated: (id: string) => void }) {
+  const target = useContext(SessionCommands).command?.target;
+  const previewing = target?.conversationId === id;
+  const preview = useQuery({ ...queries.history({ id }), enabled: previewing });
+  const previewLines = useMemo(() => previewing && preview.data ? historyLines(preview.data.messages) : undefined, [previewing, preview.data]);
   const [draft] = useState(() => {
     const value = drafts.get(id) ?? { text: "", files: [], agent: "", sessionId: id, sending: false, busy: false, lines: [], error: "", edit: 0, submission: 0 };
     drafts.set(id, value);
@@ -1591,9 +1710,9 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
   const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin } = useSessionStream(id, draft, onDraftChange);
   return (
     <>
-      <TranscriptLog conversationId={id} lines={lines} thinking={busy && lines.at(-1)?.role !== "thinking"} origin={origin} />
+      <TranscriptLog conversationId={id} lines={previewLines ?? lines} thinking={!previewing && busy && lines.at(-1)?.role !== "thinking"} origin={origin} />
       {historyError ? <p role="alert" className="px-3 text-sm text-destructive">{historyError}</p> : null}
-      <fieldset disabled={opening} className="contents">
+      <fieldset disabled={opening || previewing} className={previewing ? "hidden" : "contents"}>
         <SessionComposer id={id} draft={draft} drafts={drafts} onDraftChange={onDraftChange} busy={busy} setBusy={setBusy} lines={lines} setLines={setLines} refreshHistory={refreshHistory} />
       </fieldset>
     </>
@@ -1786,6 +1905,7 @@ function SessionComposer({
   setLines: (update: (current: Line[]) => Line[]) => void;
   refreshHistory: () => Promise<unknown>;
 }) {
+  const { setCommand } = useContext(SessionCommands);
   const { scrollToEnd } = useMessageScroller();
   const prompt = useMutation({ mutationFn: mutations.prompt, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["queue"] }); } });
   const agents = useQuery({ ...queries.agents({ conversationId: id }), refetchInterval: 2000 });
@@ -1824,7 +1944,15 @@ function SessionComposer({
   } else if (id) {
     placeholder = "Message or $command";
   }
-  const send = (delivery?: PromptDelivery) => sendComposer({
+  const send = (delivery?: PromptDelivery) => {
+    const command = /^\$(fork|handoff)\s*$/.exec(draft.text);
+    if (delivery !== "STASH" && command) {
+      if (!id) { setSendError("Open a session first."); return Promise.resolve(); }
+      setCommand({ mode: command[1] as "fork" | "handoff", source: id });
+      setText("");
+      return Promise.resolve();
+    }
+    return sendComposer({
       draft,
       onDraftChange,
       text: draft.text,
@@ -1849,6 +1977,7 @@ function SessionComposer({
       setLines,
       refreshHistory,
     });
+  };
   const promoteQueued = (itemId: string) => promoteComposer({ draft, id, itemId, busy, steerQueueItem, setBusy, setSendError });
   const stop = () => stopComposer({ draft, id, busy, prompt, setBusy, setSendError });
   return (
@@ -1992,6 +2121,13 @@ function Composer({
   const selectedButton = useRef<HTMLButtonElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const messageInput = useRef<HTMLTextAreaElement>(null);
+  const { composer } = useContext(SessionCommands);
+  useImperativeHandle(composer, () => (command) => {
+    if (command === "stop") void stop();
+    else if (command === "agent") setAgentOpen(true);
+    else applyDollar(`$${command} ${text}`);
+    messageInput.current?.focus();
+  });
   const empty = text.trim() === "" && files.length === 0;
   const stopping = busy && empty;
   const pickerOpen = matches.length > 0;
@@ -2086,7 +2222,7 @@ function Composer({
                   <SelectGroup>{catalog.map((item) => <SelectItem key={item.name} value={item.name} className="min-h-11 sm:min-h-8"><span className="flex min-w-0 max-w-[min(24rem,calc(100vw-5rem))] flex-col whitespace-normal"><span className="break-all">{item.name}</span><span className="break-all text-xs text-muted-foreground">{[item.model, item.reasoning].filter(Boolean).join(" · ")}</span></span></SelectItem>)}</SelectGroup>
                 </SelectContent>
               </Select>
-               <div className="hidden md:contents"><SessionDetails id={sessionId} /></div>
+               <div className="hidden md:contents"><SessionActions id={sessionId} /></div>
             </div>
             <div className="flex shrink-0 items-center justify-end gap-1">
               <Button type="button" variant="ghost" className="h-11 sm:h-8" disabled={sending || empty} onClick={() => void send("STASH")}>Stash</Button>

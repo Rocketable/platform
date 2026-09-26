@@ -83,7 +83,7 @@ Search matches names, titles, previews, agents, session labels, origin card fiel
 and original MCP metadata keys and values, case-insensitively. Type `agent:` or
 `room:` to choose a removable filter pill by click, arrows, Tab, or Enter.
 Suggestion keys take priority over results; Escape dismisses suggestions first,
-then closes the dialog. Agent, room, `is:pinned`, and `is:unread` filters constrain
+then closes the dialog. Agent, room, `is:pinned`, and `is:forked` filters constrain
 both row and origin matches. Results appear once, pinned first, retaining their
 recent-first order within each group.
 Origin data loads only when free text remains: empty input, status tokens, pills,
@@ -91,7 +91,16 @@ and unfinished `agent:`/`room:` suggestions do not fetch histories. Ordinary
 sidebar loading stays independent. Incomplete enumeration or origin lookups show
 loading feedback rather than a definitive empty result. Failed origin lookups
 show an error while usable row matches remain selectable.
-Cmd/Ctrl+Shift+P runs a command (new session, run cron, pages, sidebar).
+Cmd/Ctrl+Shift+P opens the command palette: new session, run cron, pages, and sidebar.
+Command rows show only their names, with compact spacing and touch-sized targets on mobile.
+For the current session it also offers **Open original conversation** (when forked),
+**Name session**, **Pin/Unpin**, **Snooze session**, **Settle/Unsettle**, **Fork session**,
+**Handoff session**, **Choose agent**, **Show queue**, and **Stop turn** while running.
+The sidebar and palette use the same session-action definitions. Fork, handoff,
+rename, agent selection, and queue viewing open their controls directly; queue viewing
+starts no turn. **Start goal**, **Run workflow**, **Invoke skill**, and **Stash work**
+prefix the corresponding `$command` to the current draft and focus the composer.
+Existing draft text and attachments are kept; nothing is sent until you submit.
 Run cron opens a new session immediately. The job still runs privately, and the chat fills in when it finishes.
 A chat that began as a cron run or an external MCP call starts with a collapsed origin card. Use show more to see its details; the card scrolls with the messages. An ordinary chat has no origin card.
 On mobile, the Sessions toggle sits
@@ -139,8 +148,9 @@ An active local transcript keeps its live IDs and stream segments. History confi
 stored attachments by file ID, replacing local previews with download URLs. A history
 request that overlaps newer live changes cannot overwrite those changes. If a
 direct steer's consumption event was missed, its own successful Prompt completion
-reloads saved history and clears that pending ID. History has no durable message
-IDs, so the browser does not guess consumption by matching text.
+reloads saved history and clears that pending ID. Recorded message IDs identify
+entry positions, separately from live IDs; the browser does not guess consumption
+by matching text.
 Steer is enabled while a
 response is running and the draft has content. Failed uploads or
 sends keep the draft and files for retry. Drafts remain in memory when switching
@@ -156,13 +166,44 @@ HTML, SVG, and other active formats download instead of rendering in the app's
 origin. An **Original unverified** label appears when supplied by the backend.
 Typing `$skill` opens completion for the selected agent's allowed skills;
 typing a name filters the list, and choosing a skill leaves room for arguments.
+Send `$fork` to search the current session's recorded user messages, newest first.
+Choosing one copies history **before** that message into a new session and restores
+the selected text and attachments in its composer. **Full session** copies all
+recorded history. The source remains intact, and the fork starts no turn until
+you send a message. Active, unrecorded output and queued work are not copied.
+Forked sessions show a fork glyph in the sidebar. Use **Open original conversation**
+on the row to return to the immediate source, or search `is:forked` to find forks.
+The sidebar, session search, and handoff destinations share the same session-row
+presentation: title, fork/running indicators, snooze time, agent, and relative time.
+The source link is stored for new forks; older forks created without this metadata
+cannot be identified retroactively. Deleting a source leaves its forks intact.
+Send `$handoff` from any session to prepare a Markdown handoff and search messages
+once the document is ready. Destination search stays hidden during generation or failure.
+Search across existing conversations and select a result to load that conversation beneath
+the dialog, inspect it, then choose **Stash handoff here**. The document goes into
+that session's stash and waits for **Pop**; it does not create a session or start
+a turn. Cancelling the dialog stashes nothing. Handoff generation uses the source
+agent with tools disabled and leaves the source history intact.
+The handoff includes the source session ID and points to `rocketclaw_get_session`
+for reading more details from that session.
+Use **Copy Handoff** to copy the document to the clipboard without choosing a
+destination or stashing it. Copying is also available after choosing a destination.
+The compact handoff panel keeps **Preview**, **Copy**, and **Stash** actions visible.
+**Preview** opens the full document; selecting a destination shows its conversation
+below the panel and hides the composer until the handoff is closed.
 The sidebar starts at the top without a title bar or search input. Its fold/unfold
 toggle stays at the bottom-left when hiding or reopening it.
 Settled chats live on the **Settled** tab (`/settled`) rather than in the default
 sidebar. Use **Unsettle** to return a chat to the sidebar. Global search always
 includes settled chats; `is:settled` is accepted as an include token, not literal
 text or a settled-only filter. The Settled page retains its own local row search
-and agent, room, pinned, and unread filters, limited to settled chats.
+and agent, room, and pinned filters, limited to settled chats.
+Use the clock button in a chat or sidebar row to **Snooze** until a chosen local
+date and time. Snoozed chats appear under **Settled** with their return time.
+New messages bring them back early, and **Unsettle** ends snooze immediately.
+At the chosen time, the chat returns on the next sidebar refresh and gets a fresh
+inactivity window, even if its last message is old. Opening a hidden chat does
+not unsettle it. Choosing **Settle** cancels a pending snooze.
 Click the selected Settled, Cron, Agents, Skills, or Config tab again to return
 to the chat you left, even after switching between pages. Without a previous
 chat, it returns Home. On desktop, the page header's close button does the same,
@@ -179,7 +220,7 @@ sort first, keep their normal recent-first order within that group, and do not
 automatically settle. You can still settle them manually. Search `is:pinned` to
 find only pinned sessions, including settled ones; text, agent, and room filters
 still apply. On the Settled page, results remain limited to settled sessions.
-Sidebar text uses the full row width. Rename, Pin, and Settle overlay the text on hover or
+Sidebar text uses the full row width. Rename, Snooze, Pin, and Settle overlay the text on hover or
 keyboard focus; touch screens show the overlay directly.
 Use the rename icon beside the pin in the chat to set an optional name. Chat action
 buttons have descriptive tooltips. Add files sits at the far left, before the agent

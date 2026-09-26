@@ -1372,27 +1372,26 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		}
 	}
 
-	if msg.Source == protocol.SourceExternalMCP || b.config.ExternalConversationID != "" && msg.Source == protocol.SourceSystem || b.config.ManagedConversationID != "" && b.config.ManagedConversationID == b.config.ConversationID {
-		metadataEntry, foundMetadata, err := b.config.SessionService.externalMCPMetadataEntry(ctx, b.config.ConversationID)
-		if err != nil {
-			return runResult{}, fmt.Errorf("load external MCP metadata: %w", err)
-		}
+	metadataEntry, foundMetadata, err := b.config.SessionService.externalMCPMetadataEntry(ctx, b.config.ConversationID)
+	if err != nil {
+		return runResult{}, fmt.Errorf("load external MCP metadata: %w", err)
+	}
 
+	if foundMetadata || msg.Source == protocol.SourceExternalMCP || b.config.ExternalConversationID != "" && msg.Source == protocol.SourceSystem || b.config.ManagedConversationID != "" && b.config.ManagedConversationID == b.config.ConversationID {
 		var entries []ObservedSessionEntry
 		if foundMetadata {
 			entries = []ObservedSessionEntry{metadataEntry}
 		}
 
 		metadataConversationID := b.config.ConversationID
-		if b.config.ManagedConversationID != "" && b.config.ManagedConversationID == b.config.ConversationID {
-			_, session, paired, err := b.config.SessionService.ExternalMCPSessionByConversationID(b.config.ConversationID)
-			if err != nil {
-				return runResult{}, fmt.Errorf("load external MCP pairing for metadata environment: %w", err)
-			}
 
-			if paired && session.PrivateConversationID != "" {
-				metadataConversationID = session.PrivateConversationID
-			}
+		_, session, paired, err := b.config.SessionService.ExternalMCPSessionByConversationID(b.config.ConversationID)
+		if err != nil {
+			return runResult{}, fmt.Errorf("load external MCP pairing for metadata environment: %w", err)
+		}
+
+		if paired && session.PrivateConversationID != "" {
+			metadataConversationID = session.PrivateConversationID
 		}
 
 		metadataEnv, ok := externalMCPStoredMetadataEnv(metadataConversationID, entries)

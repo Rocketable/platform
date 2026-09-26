@@ -18,7 +18,7 @@ generate: web-assets vendor
 	go generate ./skel ../../cmd/rocketclaw
 
 lint: web-assets vendor
-	go run -mod=readonly github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run --fix ./...
+	go run -mod=readonly github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run --fix ./...
 
 build: generate lint
 	go build -o ../../bin/rocketclaw ../../cmd/rocketclaw

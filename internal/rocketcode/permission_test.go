@@ -8,6 +8,68 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestInterpolatePermissions(t *testing.T) {
+	for _, tc := range []struct {
+		name, pattern, value, allowed, denied string
+	}{
+		{"path", ".tmp/${ROCKETCLAW_METADATA_FRUIT}/*", "banana", ".tmp/banana/note.txt", ".tmp/apple/note.txt"},
+		{"literal wildcards", "${ROCKETCLAW_METADATA_FRUIT}/*", "*?", "*?/note.txt", "banana/note.txt"},
+		{"literal suffix", "echo ${ROCKETCLAW_METADATA_FRUIT}", "*", "echo *", "echo"},
+		{"authored suffix", "echo ${ROCKETCLAW_METADATA_FRUIT} *", "banana", "echo banana", "echo apple"},
+		{"literal space", "${ROCKETCLAW_METADATA_FRUIT}*", "echo ", "echo banana", "echo"},
+		{"no recursive expansion", "${ROCKETCLAW_METADATA_FRUIT}", "${ROCKETCLAW_OTHER}", "${ROCKETCLAW_OTHER}", "banana"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, bucket := range []string{"edit", "bash", "skill", "mcp", "custom"} {
+				agent := Agent{Name: "main", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: bucket, Rules: []PermissionRule{{Pattern: tc.pattern, Action: PermissionAllow}}}}}}
+				original := agent.Permission
+				interpolatePermissions(&agent, []string{"ROCKETCLAW_METADATA_FRUIT=" + tc.value})
+				require.Equal(t, tc.pattern, original.Buckets[0].Rules[0].Pattern)
+				require.Equal(t, PermissionAllow, agent.Permission.evaluate(bucket, tc.allowed).Action)
+				require.Equal(t, PermissionDeny, agent.Permission.evaluate(bucket, tc.denied).Action)
+				subject, ok := firstRuleSubject(agent.Permission, bucket, PermissionAllow)
+				require.True(t, ok)
+				require.Equal(t, PermissionAllow, agent.Permission.evaluate(bucket, subject).Action)
+
+				if bucket == "bash" {
+					require.Equal(t, PermissionDeny, agent.Permission.evaluate(bucket, tc.denied, tc.denied).Action)
+				}
+			}
+		})
+	}
+
+	for _, env := range [][]string{nil, {}, {"OTHER=banana"}, {"ROCKETCLAW_METADATA_FRUIT="}} {
+		agent := Agent{Name: "main", Permission: parsePermissionYAML(t, `edit: {"${ROCKETCLAW_METADATA_FRUIT}": allow}`)}
+		interpolatePermissions(&agent, env)
+		require.Empty(t, agent.Permission.Buckets[0].Rules)
+	}
+
+	unchanged := Agent{Permission: parsePermissionYAML(t, `edit: {"$ROCKETCLAW_X/${OTHER}/${ROCKETCLAW_X:-fallback}": allow}`)}
+	before := unchanged
+	interpolatePermissions(&unchanged, nil)
+	require.Equal(t, before, unchanged)
+
+	folded := Agent{Permission: parsePermissionYAML(t, "read: {'*': allow, '${ROCKETCLAW_VALUE}\u0301/*': deny}")}
+	interpolatePermissions(&folded, []string{"ROCKETCLAW_VALUE=e"})
+	require.Equal(t, PermissionDeny, folded.Permission.evaluateRules("read", "É/note.txt", true).Action)
+
+	agent := Agent{Permission: parsePermissionYAML(t, `bash: {"printf '${ROCKETCLAW_VALUE}' > out": allow}`)}
+	interpolatePermissions(&agent, []string{"ROCKETCLAW_VALUE=*?"})
+
+	for _, tc := range []struct {
+		script string
+		want   PermissionAction
+	}{
+		{"printf '*?' > out", PermissionAllow},
+		{"printf 'banana' > out", PermissionDeny},
+		{"printf '*?' > out; echo injected", PermissionDeny},
+	} {
+		for _, subject := range BashPermissionSubjects(tc.script) {
+			require.Equal(t, tc.want, agent.Permission.evaluate("bash", subject, tc.script).Action)
+		}
+	}
+}
+
 func TestPermissionWildcardMatchOpenCodeSemantics(t *testing.T) {
 	for _, tt := range []struct {
 		input, pattern string

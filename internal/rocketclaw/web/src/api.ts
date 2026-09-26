@@ -1,4 +1,4 @@
-import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, PromptDelivery, QueueItem, SessionBatch, Skill, TranscriptEvent } from "./types";
+import type { AgentChoices, ChatOrigin, ConfigView, CronJob, HistoryView, MessageMatch, PromptDelivery, QueueItem, SessionBatch, Skill, TranscriptEvent } from "./types";
 
 export class RPCError extends Error {
   constructor(message: string, readonly code: number) { super(message); }
@@ -53,6 +53,7 @@ export async function* listSessions(signal?: AbortSignal, url = "/api/ListSessio
 }
 
 export const queries = {
+  searchMessages: (query: string) => ({ queryKey: ["searchMessages", query], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ matches: MessageMatch[] }>("SearchMessages", { query }, signal)).matches }),
   protocol: () => ({ queryKey: ["protocol"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ protoSha256: string }>("Protocol", {}, signal)).protoSha256 }),
   identity: () => ({ queryKey: ["identity"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ username: string }>("Identity", {}, signal)).username }),
   agents: (input?: { conversationId: string }) => ({ queryKey: ["agents", input], queryFn: ({ signal }: { signal: AbortSignal }) => rpc<AgentChoices>("ListAgents", input, signal) }),
@@ -67,12 +68,13 @@ export const queries = {
 };
 
 export const mutations = {
+  forkSession: (input: { id: string; before?: string }) => rpc<{ id: string; prompt: TranscriptEvent }>("ForkSession", input),
   popQueueItem: (input: { id: string; itemId: string }) => rpc("PopQueueItem", input),
   createSession: async (input: { name?: string; agent?: string; sourceConversationId?: string }) => (await rpc<{ id: string }>("CreateSession", input)).id,
   prompt: async (input: { id: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; messageId?: string }) => (await rpc<{ privateText: string }>("Prompt", input)).privateText,
   runCron: async (input: { stem: string }) => (await rpc<{ id: string }>("RunCronJob", input)).id,
   settleSession: (input: { id: string; settled: boolean }) => rpc("SettleSession", input),
-  updateSession: (input: { id: string; pinned?: boolean; name?: string; unread?: boolean }) => rpc("UpdateSession", input),
+  updateSession: (input: { id: string; pinned?: boolean; name?: string; snoozedUntil?: string }) => rpc("UpdateSession", input),
   removeQueueItem: (input: { id: string; itemId: string }) => rpc("RemoveQueueItem", input),
   steerQueueItem: (input: { id: string; itemId: string }) => rpc("SteerQueueItem", input),
   reorderQueue: (input: { id: string; itemIds: string[] }) => rpc("ReorderQueue", input),

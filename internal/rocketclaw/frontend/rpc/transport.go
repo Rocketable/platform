@@ -43,7 +43,7 @@ func Listen(socketPath string) (net.Listener, error) {
 func (s *Server) Register(registrar grpc.ServiceRegistrar) {
 	desc := grpc.ServiceDesc{ServiceName: "rpc.Web", HandlerType: (*any)(nil), Metadata: "web.proto"}
 
-	for _, method := range []string{"Protocol", "Identity", "Prompt", "History", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "SettleSession", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "ReorderQueue"} {
+	for _, method := range []string{"Protocol", "Identity", "Prompt", "History", "ForkSession", "SearchMessages", "Handoff", "ListAgents", "CreateSession", "ListConfig", "ListSkills", "SettleSession", "UpdateSession", "ListCronJobs", "RunCronJob", "ListSessionEntries", "LoadSessionEntries", "DeleteSessionEntries", "ListQueue", "SteerQueueItem", "PopQueueItem", "RemoveQueueItem", "ReorderQueue"} {
 		descriptor := File_web_proto.Services().ByName("Web").Methods().ByName(protoreflect.Name(method))
 		requestType, _ := protoregistry.GlobalTypes.FindMessageByName(descriptor.Input().FullName())
 
@@ -113,6 +113,12 @@ func (s *Server) webCall(ctx context.Context, method string, request any) (any, 
 		return s.createSession(ctx, request.(*CreateSessionRequest))
 	case "History":
 		return s.history(ctx, request.(*HistoryRequest))
+	case "ForkSession":
+		return s.forkSession(ctx, request.(*ForkSessionRequest))
+	case "SearchMessages":
+		return s.searchMessages(ctx, request.(*SearchMessagesRequest))
+	case "Handoff":
+		return s.handoff(ctx, request.(*HandoffRequest))
 	case "Prompt":
 		return s.prompt(ctx, request.(*PromptRequest))
 	case "ListQueue":

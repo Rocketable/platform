@@ -326,7 +326,7 @@ func firstRuleSubject(permissions PermissionSet, bucket string, action Permissio
 
 		for _, rule := range b.Rules {
 			if rule.Action == action {
-				return subjectMatchingPattern(rule.Pattern), true
+				return subjectMatchingPattern(rule.Pattern, rule.segments...), true
 			}
 		}
 	}
@@ -334,20 +334,25 @@ func firstRuleSubject(permissions PermissionSet, bucket string, action Permissio
 	return "", false
 }
 
-func subjectMatchingPattern(pattern string) string {
-	pattern = strings.TrimSpace(pattern)
-	if pattern == "" || pattern == "*" {
-		return "code_mode"
+func subjectMatchingPattern(pattern string, segments ...ruleSegment) string {
+	if len(segments) == 0 {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" || pattern == "*" {
+			return "code_mode"
+		}
+
+		segments = []ruleSegment{{Text: pattern}}
 	}
 
 	var b strings.Builder
 
-	for _, r := range pattern {
-		switch r {
-		case '*', '?':
-			b.WriteByte('x')
-		default:
-			b.WriteRune(r)
+	for _, segment := range segments {
+		for _, r := range segment.Text {
+			if !segment.Literal && (r == '*' || r == '?') {
+				b.WriteByte('x')
+			} else {
+				b.WriteRune(r)
+			}
 		}
 	}
 

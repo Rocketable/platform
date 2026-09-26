@@ -341,7 +341,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       const file = Bun.file(path.join(dist, url.pathname));
       return new Response(await file.exists() && url.pathname !== "/" ? file : Bun.file(path.join(dist, "index.html")));
     }
-    const input = await req.json() as { id: string; originOnly?: boolean; itemId: string; messageId: string; name?: string; agent?: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; stem: string; sourceConversationId?: string; conversationId?: string; settled: boolean; pinned?: boolean; unread?: boolean };
+    const input = await req.json() as { id: string; originOnly?: boolean; itemId: string; messageId: string; name?: string; agent?: string; text: string; delivery?: PromptDelivery; attachmentIds?: string[]; stem: string; sourceConversationId?: string; conversationId?: string; settled: boolean; pinned?: boolean; snoozedUntil?: string };
     try {
       switch (url.pathname) {
         case "/api/Protocol": return Response.json({ protoSha256: ctrl.protocol });
@@ -407,13 +407,13 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
         case "/api/ListConfig": return Response.json({ config: { webAutoSettleAfter: "1h30m0s", tailscaleUser: "connected@example.com" } });
         case "/api/SettleSession":
           ctrl.settleCalls.push({ id: input.id, settled: input.settled });
-          ctrl.settledRows = ctrl.settledRows.map((session) => session.id === input.id ? { ...session, settled: input.settled } : session);
+          ctrl.settledRows = ctrl.settledRows.map((session) => session.id === input.id ? { ...session, settled: input.settled, snoozedUntil: undefined } : session);
           ctrl.yieldBatches = complete(ctrl.settledRows);
           return Response.json({});
         case "/api/UpdateSession":
           if (ctrl.updateError) throw new RPCError("Could not save session", 13);
           if (!ctrl.settledRows.some((session) => session.id === input.id)) return Response.json({});
-          ctrl.settledRows = ctrl.settledRows.map((session) => session.id === input.id ? { ...session, ...input, name: input.name === undefined ? session.name : input.name.trim() } : session);
+          ctrl.settledRows = ctrl.settledRows.map((session) => session.id === input.id ? { ...session, ...input, settled: input.snoozedUntil ? true : session.settled, name: input.name === undefined ? session.name : input.name.trim() } : session);
           ctrl.yieldBatches = complete(ctrl.settledRows);
           return Response.json({});
         case "/api/ListQueue": return Response.json({ items: ctrl.queue });
@@ -585,7 +585,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await sessionPalette.getByPlaceholder("Search sessions", { exact: true }).waitFor();
     await sessionPalette.getByRole("button").filter({ hasText: "saved preview" }).waitFor();
     expect(historyRequests).toEqual([]); // Ordinary sidebar and empty Cmd+P do not load histories.
-    for (const term of ["   ", "IS:SETTLED", "is:pinned is:unread", "agent:ma", "room:ro"]) {
+    for (const term of ["   ", "IS:SETTLED", "is:pinned", "agent:ma", "room:ro"]) {
       await search.fill(term);
       await page.waitForTimeout(50);
       expect(historyRequests).toEqual([]);
@@ -617,9 +617,9 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect(historyRequests.every((request) => request.originOnly)).toBe(true);
     expect(historyRequests.map((request) => request.id).sort()).toEqual(["gone", "slack-thread:C:1"]); // Kept's origin was cached by the saved-preview search.
     await search.fill("PREVIEW"); // Preserve existing row matching and ordering.
-    expect(await sessionPalette.getByRole("button").locator("span:first-child").allTextContents()).toEqual(["saved preview", "filter preview"]);
+    expect(await sessionPalette.getByRole("button").locator('[data-slot="session-title"]').allTextContents()).toEqual(["saved preview", "filter preview"]);
     await search.fill("will vanish"); // Origin and row matches share the original order.
-    expect(await sessionPalette.getByRole("button").locator("span:first-child").allTextContents()).toEqual(["saved preview", "will vanish"]);
+    expect(await sessionPalette.getByRole("button").locator('[data-slot="session-title"]').allTextContents()).toEqual(["saved preview", "will vanish"]);
     await search.fill("no-such-origin");
     await sessionPalette.getByText("loading...", { exact: true }).waitFor();
     await search.fill("ORIGINAL-KEY");
@@ -1288,11 +1288,11 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await runningPage.close();
     // Exercise the combined expression against the built App, with origins delayed across a row reorder.
     const matrixRows = [
-      { ...row("slack-thread:C:winner", "row and origin union"), name: "Winner", pinned: true, unread: true },
-      { ...row("slack-thread:C:read", "Read chat"), pinned: true },
-      { ...row("slack-thread:C:other-agent", "Other agent"), agent: "other", pinned: true, unread: true },
-      { ...row("slack-thread:D:other-room", "Other room"), title: "different", pinned: true, unread: true },
-      { ...row("slack-thread:C:unpinned", "Unpinned chat"), unread: true },
+      { ...row("slack-thread:C:winner", "row and origin union"), name: "Winner", pinned: true },
+      row("slack-thread:C:another", "Another unpinned chat"),
+      { ...row("slack-thread:C:other-agent", "Other agent"), agent: "other", pinned: true },
+      { ...row("slack-thread:D:other-room", "Other room"), title: "different", pinned: true },
+      row("slack-thread:C:unpinned", "Unpinned chat"),
       { ...row("slack-thread:C:settled-union", "Settled chat"), settled: true },
     ];
     for (const session of matrixRows) origins[session.id] = { kind: "external_mcp", externalConversationId: "union", agent: "source" };
@@ -1344,26 +1344,26 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await matrix.waitForFunction(() => document.activeElement?.getAttribute("placeholder") === "Search sessions");
       expect(await matrixSearch.evaluate((node: HTMLElement) => node === document.activeElement)).toBe(true);
       expect(await matrixDialog.getByRole("button", { name: /^(agent:|room:)/ }).count()).toBe(0);
-      expect(await matrixDialog.locator("li > button.bg-accent span:first-child").innerText()).toBe("Winner");
+      expect(await matrixDialog.locator('li > button.bg-accent [data-slot="session-title"]').innerText()).toBe("Winner");
       await matrixSearch.fill("agent:ma");
       await matrixSearch.press("ArrowDown");
       await matrixSearch.press("ArrowUp");
       await matrixSearch.press("Enter");
       await matrixSearch.fill("room:ro");
       await matrixDialog.getByRole("button", { name: "room", exact: true }).click();
-      await matrixSearch.fill("is:pinned is:unread");
-      expect(await matrixDialog.locator("li > button span:first-child").allTextContents()).toEqual(["Winner"]);
+      await matrixSearch.fill("is:pinned");
+      expect(await matrixDialog.locator('li > button [data-slot="session-title"]').allTextContents()).toEqual(["Winner"]);
       await matrixSearch.press("ArrowDown");
       await matrix.keyboard.press("Escape");
       await matrixDialog.waitFor({ state: "hidden" });
     }
     await matrix.keyboard.press("Control+p");
     for (const prefix of ["agent:main", "room:room"]) {
-      await matrixSearch.fill(`IS:PINNED ${prefix} is:unread`);
+      await matrixSearch.fill(`IS:PINNED ${prefix}`);
       await matrixSearch.press("Enter");
-      expect(await matrixSearch.inputValue()).toBe("IS:PINNED is:unread");
+      expect(await matrixSearch.inputValue()).toBe("IS:PINNED");
       expect(await matrixDialog.getByText("Unpinned chat", { exact: true }).count()).toBe(0);
-      expect(await matrixDialog.getByText("Read chat", { exact: true }).count()).toBe(0);
+      expect(await matrixDialog.getByText("Another unpinned chat", { exact: true }).count()).toBe(0);
       await matrixDialog.getByRole("button", { name: prefix, exact: true }).click();
     }
     await matrixSearch.fill("agent:");
@@ -1386,16 +1386,16 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     ctrl.holdOrigins = false;
     originHold.resolve();
     await matrixDialog.getByText("Settled chat", { exact: true }).waitFor();
-    expect(await matrixDialog.locator("li > button span:first-child").allTextContents()).toEqual(["Other room", "Winner", "Other agent", "Read chat", "Settled chat", "Unpinned chat"]);
+    expect(await matrixDialog.locator('li > button [data-slot="session-title"]').allTextContents()).toEqual(["Other room", "Winner", "Other agent", "Another unpinned chat", "Settled chat", "Unpinned chat"]);
     await matrixSearch.fill("winner-origin");
     await matrixDialog.getByText("Winner", { exact: true }).waitFor();
-    expect(await matrixDialog.locator("li > button span:first-child").allTextContents()).toEqual(["Winner"]);
+    expect(await matrixDialog.locator('li > button [data-slot="session-title"]').allTextContents()).toEqual(["Winner"]);
     await matrixSearch.fill("agent:main");
     await matrixSearch.press("Enter");
     await matrixSearch.fill("room:room");
     await matrixSearch.press("Tab");
-    await matrixSearch.fill("is:pinned is:unread union");
-    expect(await matrixDialog.locator("li > button span:first-child").allTextContents()).toEqual(["Winner"]);
+    await matrixSearch.fill("is:pinned union");
+    expect(await matrixDialog.locator('li > button [data-slot="session-title"]').allTextContents()).toEqual(["Winner"]);
     for (const width of [1280, 390, 320]) {
       await matrix.setViewportSize({ width, height: 844 });
       await matrixDialog.screenshot({ path: path.join(process.env.TMPDIR!, `unified-search-${width}.png`) });
@@ -1873,7 +1873,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await transcriptPage.close();
     ctrl.history = [];
     for (const width of [1280, 390]) {
-      ctrl.settledRows = [row("recent", "Most recent message"), { ...row("named", "Original preview"), unread: true }, { ...row("settled-pin", "Settled pin preview"), pinned: true, settled: true, unread: true }];
+      ctrl.settledRows = [row("recent", "Most recent message"), row("named", "Original preview"), { ...row("settled-pin", "Settled pin preview"), pinned: true, settled: true }];
       ctrl.yieldBatches = complete(ctrl.settledRows);
       const detailsPage = await browser.newPage({ viewport: { width, height: 844 } });
       await detailsPage.goto(`${origin}/s/${Buffer.from("named").toString("base64url")}`);
@@ -1904,28 +1904,26 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       const sidebar = width === 390 ? detailsPage.getByRole("dialog", { name: "Sessions", exact: true }) : detailsPage.locator("#session-sidebar");
       const namedRow = sidebar.locator("li").filter({ hasText: "Original preview" });
       await namedRow.locator("a").waitFor();
-      await namedRow.getByRole("img", { name: "Unread", exact: true }).waitFor({ state: "hidden" });
-      expect(ctrl.settledRows.find((session) => session.id === "named")?.unread).toBe(false);
-      expect(await namedRow.getByRole("img", { name: "Unread", exact: true }).count()).toBe(0);
       await namedRow.hover();
-      await namedRow.getByRole("button", { name: "Mark unread", exact: true }).click();
-      await namedRow.getByRole("img", { name: "Unread", exact: true }).waitFor();
-      expect(new URL(detailsPage.url()).pathname).toBe(`/s/${Buffer.from("named").toString("base64url")}`);
+      await namedRow.getByRole("button", { name: "Snooze session", exact: true }).click();
+      const snoozeDialog = detailsPage.getByRole("dialog", { name: "Snooze session", exact: true });
+      await snoozeDialog.getByLabel("Return at (local time)").fill("2027-01-02T09:30");
+      await detailsPage.screenshot({ path: path.join(process.env.TMPDIR!, `snooze-${width}.png`) });
+      await snoozeDialog.getByRole("button", { name: "Snooze", exact: true }).click();
+      await snoozeDialog.waitFor({ state: "hidden" });
+      await namedRow.waitFor({ state: "hidden" });
+      expect(ctrl.settledRows.find((session) => session.id === "named")?.snoozedUntil).toBe(await detailsPage.evaluate(() => new Date("2027-01-02T09:30").toISOString()));
       if (width === 390) await detailsPage.keyboard.press("Escape");
-      for (const label of ["Mark read", "Mark unread"]) {
-        await detailsPage.keyboard.press("Meta+Shift+p");
-        const palette = detailsPage.getByRole("dialog", { name: "Run command", exact: true });
-        await palette.getByPlaceholder("Type a command", { exact: true }).waitFor();
-        await palette.getByRole("button", { name: `${label} Current chat`, exact: true }).waitFor();
-        expect(await palette.getByRole("button", { name: `${label === "Mark read" ? "Mark unread" : "Mark read"} Current chat`, exact: true }).count()).toBe(0);
-        expect(await detailsPage.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe(await detailsPage.evaluate(() => document.documentElement.classList.contains("dark") ? "dark" : "light"));
-        await palette.getByPlaceholder("Type a command", { exact: true }).fill(label);
-        await palette.getByRole("button", { name: `${label} Current chat`, exact: true }).click();
-        await palette.waitFor({ state: "hidden" });
-        expect(ctrl.settledRows.find((session) => session.id === "named")?.unread).toBe(label === "Mark unread");
-        expect(new URL(detailsPage.url()).pathname).toBe(`/s/${Buffer.from("named").toString("base64url")}`);
-      }
+      await detailsPage.getByRole("link", { name: "Settled", exact: true }).click();
+      const snoozedRow = detailsPage.locator("main li").filter({ hasText: "Original preview" });
+      await snoozedRow.getByText(/Snoozed until/).waitFor();
+      await snoozedRow.hover();
+      await snoozedRow.getByRole("button", { name: "Unsettle", exact: true }).click();
+      await snoozedRow.waitFor({ state: "hidden" });
+      await detailsPage.getByRole("link", { name: "Settled", exact: true }).click();
       if (width === 390) await detailsPage.getByRole("button", { name: "Sessions", exact: true }).click();
+      await namedRow.getByRole("button", { name: "Settle", exact: true }).waitFor();
+      expect(ctrl.settledRows.find((session) => session.id === "named")?.snoozedUntil).toBeUndefined();
       const rowBox = await namedRow.boundingBox();
       const linkBox = await namedRow.locator("a").boundingBox();
       expect(linkBox!.width).toBe(rowBox!.width);
@@ -1950,13 +1948,6 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await detailsPage.keyboard.press("Control+p");
       const detailsPalette = detailsPage.getByRole("dialog", { name: "Go to session", exact: true });
       const search = detailsPalette.getByPlaceholder("Search sessions");
-      await search.fill("IS:UNREAD");
-      await detailsPalette.getByText("Settled pin preview", { exact: true }).waitFor();
-      expect(await detailsPalette.locator('li > button').count()).toBe(2);
-      await search.fill("is:unread is:pinned Original");
-      expect(await detailsPalette.locator('li > button').count()).toBe(1);
-      await search.fill("prefix-is:unread");
-      expect(await detailsPalette.locator('li > button').count()).toBe(0);
       await search.fill("IS:PINNED");
       await detailsPalette.getByText("Settled pin preview", { exact: true }).waitFor();
       expect(await detailsPalette.locator('li > button').count()).toBe(2);
@@ -1964,12 +1955,10 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       expect(await detailsPalette.locator('li > button').count()).toBe(1);
       await detailsPage.keyboard.press("Escape");
       if (width === 390) await detailsPage.getByRole("button", { name: "Sessions", exact: true }).click();
-      await namedRow.getByRole("img", { name: "Unread", exact: true }).waitFor();
       await sidebar.getByText("Most recent message", { exact: true }).click();
       if (width === 390) await detailsPage.getByRole("button", { name: "Sessions", exact: true }).click();
       await namedRow.locator("a").click();
       if (width === 390) await detailsPage.getByRole("button", { name: "Sessions", exact: true }).click();
-      await namedRow.getByRole("img", { name: "Unread", exact: true }).waitFor({ state: "hidden" });
       if (width === 390) {
         await detailsPage.keyboard.press("Escape");
         await detailsPage.close();
@@ -2005,7 +1994,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       expect(await rename.innerText()).toBe("");
       await detailsPage.locator("textarea").hover();
       await rename.hover();
-      await detailsPage.locator('[data-slot="tooltip-content"]').filter({ hasText: "Rename session" }).waitFor();
+      await detailsPage.locator('[data-slot="tooltip-content"]').filter({ hasText: "Name session" }).waitFor();
       expect(await detailsPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await detailsPage.locator("main").getByRole("button", { name: "Name session", exact: true }).click();
       expect(await dialog.getByLabel("Session name").inputValue()).toBe("Release notes");

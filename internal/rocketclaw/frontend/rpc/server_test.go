@@ -11,6 +11,8 @@ import (
 	"io"
 	"iter"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"net/url"
 	"os"
@@ -30,6 +32,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -448,14 +451,11 @@ func TestSessionEntries(t *testing.T) {
 		request *UpdateSessionRequest
 		pinned  bool
 		name    string
-		unread  bool
 	}{
-		{&UpdateSessionRequest{Id: id, Pinned: new(true)}, true, "", true},
-		{&UpdateSessionRequest{Id: id, Unread: new(false)}, true, "", false},
-		{&UpdateSessionRequest{Id: id, Name: new("  Launch notes  ")}, true, "Launch notes", false},
-		{&UpdateSessionRequest{Id: id, Unread: new(true)}, true, "Launch notes", true},
-		{&UpdateSessionRequest{Id: id, Pinned: new(false)}, false, "Launch notes", true},
-		{&UpdateSessionRequest{Id: id, Name: new(" ")}, false, "", true},
+		{&UpdateSessionRequest{Id: id, Pinned: new(true)}, true, ""},
+		{&UpdateSessionRequest{Id: id, Name: new("  Launch notes  ")}, true, "Launch notes"},
+		{&UpdateSessionRequest{Id: id, Pinned: new(false)}, false, "Launch notes"},
+		{&UpdateSessionRequest{Id: id, Name: new(" ")}, false, ""},
 	} {
 		_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", tt.request)
 		require.NoError(t, err)
@@ -464,7 +464,6 @@ func TestSessionEntries(t *testing.T) {
 		require.Len(t, conversations.Sessions, 1)
 		require.Equal(t, tt.pinned, conversations.Sessions[0].GetPinned())
 		require.Equal(t, tt.name, conversations.Sessions[0].GetName())
-		require.Equal(t, tt.unread, conversations.Sessions[0].GetUnread())
 		require.Equal(t, !tt.pinned, conversations.Sessions[0].Settled)
 		updatedAt, err := time.Parse(time.RFC3339Nano, conversations.Sessions[0].UpdatedAt)
 		require.NoError(t, err)
@@ -485,20 +484,31 @@ func TestSessionEntries(t *testing.T) {
 		{&UpdateSessionRequest{Id: "missing", Name: new("name")}, codes.NotFound},
 		{&UpdateSessionRequest{Id: "cron:private", Pinned: new(true)}, codes.PermissionDenied},
 		{&UpdateSessionRequest{Id: id, Name: new("bad\x00name")}, codes.InvalidArgument},
+		{&UpdateSessionRequest{Id: id, SnoozedUntil: new("not-a-time")}, codes.InvalidArgument},
+		{&UpdateSessionRequest{Id: id, SnoozedUntil: new(time.Now().Add(-time.Hour).Format(time.RFC3339Nano))}, codes.InvalidArgument},
 	} {
 		_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", tt.request)
 		require.Equal(t, tt.code, status.Code(err))
 	}
 
 	for _, settled := range []bool{true, false} {
-		_, err = invoke[SettleSessionResponse](ctx, connection, "SettleSession", &SettleSessionRequest{Id: id, Settled: settled})
+		until := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond).Format(time.RFC3339Nano)
+		_, err = invoke[UpdateSessionResponse](ctx, connection, "UpdateSession", &UpdateSessionRequest{Id: id, SnoozedUntil: &until})
 		require.NoError(t, err)
 		conversations, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
+		require.NoError(t, err)
+		require.Equal(t, until, conversations.Sessions[0].SnoozedUntil)
+		require.True(t, conversations.Sessions[0].Settled)
+
+		_, err = invoke[SettleSessionResponse](ctx, connection, "SettleSession", &SettleSessionRequest{Id: id, Settled: settled})
+		require.NoError(t, err)
+		conversations, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 		require.NoError(t, err)
 		require.Len(t, conversations.Sessions, 1)
 		require.Equal(t, id, conversations.Sessions[0].Id)
 		require.Equal(t, "main", conversations.Sessions[0].Agent)
 		require.Equal(t, settled, conversations.Sessions[0].Settled)
+		require.Empty(t, conversations.Sessions[0].SnoozedUntil)
 
 		stored, found, err := sessions.Thread(id)
 		require.NoError(t, err)
@@ -1434,6 +1444,13 @@ func TestSessionEntries(t *testing.T) {
 		require.NoError(t, err)
 
 		trace.Origin = `{"agent":"producer","kind":"cron","ranAt":"2026-09-05T03:00:00.000000003Z","runId":"` + undelivered + `","runKind":"scheduled","sourcePath":"cron/silent.md","stem":"silent"}`
+		require.Len(t, history.Messages, len(trace.Messages))
+
+		for i := range trace.Messages {
+			require.NotEmpty(t, history.Messages[i].MessageId)
+			trace.Messages[i].MessageId = history.Messages[i].MessageId // Copied rows have destination-local message IDs.
+		}
+
 		require.True(t, proto.Equal(trace, history))
 
 		for _, test := range []struct {
@@ -1576,6 +1593,7 @@ func TestSessionEntries(t *testing.T) {
 	_, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
 	require.ErrorContains(t, err, "bad.md")
 
+	sidebarChoices := channels.SidebarChannelAgentChoicesFunc
 	channels.SidebarChannelAgentChoicesFunc = func(context.Context, string) (string, []string, error) {
 		return "", nil, errors.New("stored channel facts unavailable")
 	}
@@ -1607,6 +1625,8 @@ func TestSessionEntries(t *testing.T) {
 	}
 
 	require.Positive(t, prefix)
+
+	channels.SidebarChannelAgentChoicesFunc = sidebarChoices
 
 	for i, arguments := range []string{`{}`, `null`, `{"payload":null}`, `{"payload":""}`, `{"payload":"report"}`} {
 		replay := []json.RawMessage{
@@ -2079,6 +2099,181 @@ func TestSessionEntries(t *testing.T) {
 		require.Equal(t, codes.NotFound, status.Code(stream.RecvMsg(&Attachment{})))
 	})
 
+	t.Run("fork search and rejoin an ordinary session", func(t *testing.T) {
+		const (
+			source = "handoff-source"
+			target = "handoff-destination"
+		)
+		for _, id := range []string{source, target} {
+			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main", CreatedBy: "alice"}))
+		}
+
+		file := protocol.OutboundAttachment{ID: "handoff-notes", Name: "notes.txt", MIMEType: "text/plain", Data: []byte("verified notes")}
+		require.NoError(t, sessions.SaveAttachment(ctx, source, &file, true))
+
+		entry := rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"message","role":"user","content":"unique handoff request attachment:handoff-notes"}`),
+			json.RawMessage(`{"type":"message","role":"assistant","content":"verified result"}`),
+			json.RawMessage(`{"type":"message","role":"user","content":"next handoff step"}`),
+		}}
+		entryID, err := sessions.AppendEntryID(ctx, source, &entry)
+		require.NoError(t, err)
+		matches, err := invoke[SearchMessagesResponse](ctx, connection, "SearchMessages", &SearchMessagesRequest{Query: "UNIQUE HANDOFF REQUEST"})
+		require.NoError(t, err)
+		require.Len(t, matches.Matches, 1)
+		require.Equal(t, source, matches.Matches[0].ConversationId)
+		require.Equal(t, fmt.Sprintf("%d:0", entryID), matches.Matches[0].Message.MessageId)
+
+		empty, err := invoke[SearchMessagesResponse](ctx, connection, "SearchMessages", &SearchMessagesRequest{Query: " \t "})
+		require.NoError(t, err)
+		require.Empty(t, empty.Matches)
+
+		fork, err := invoke[ForkSessionResponse](ctx, connection, "ForkSession", &ForkSessionRequest{Id: source, Before: fmt.Sprintf("%d:2", entryID)})
+		require.NoError(t, err)
+		require.Equal(t, "next handoff step", fork.Prompt.Text)
+
+		listed, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
+		require.NoError(t, err)
+
+		index := slices.IndexFunc(listed.Sessions, func(session *Session) bool { return session.Id == fork.Id })
+		require.NotEqual(t, -1, index)
+		require.Equal(t, source, listed.Sessions[index].ForkedFrom)
+
+		history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: fork.Id})
+		require.NoError(t, err)
+		require.Len(t, history.Messages, 2)
+		require.Equal(t, "verified result", history.Messages[1].Text)
+
+		_, err = invoke[ForkSessionResponse](ctx, connection, "ForkSession", &ForkSessionRequest{Id: source, Before: fmt.Sprintf("%d:1", entryID)})
+		require.Equal(t, codes.InvalidArgument, status.Code(err))
+		_, err = invoke[ForkSessionResponse](ctx, connection, "ForkSession", &ForkSessionRequest{Id: "not-recorded"})
+		require.Equal(t, codes.NotFound, status.Code(err))
+		_, err = invoke[HandoffResponse](ctx, connection, "Handoff", &HandoffRequest{Id: "cron:private"})
+		require.Equal(t, codes.PermissionDenied, status.Code(err))
+		_, err = invoke[HandoffResponse](ctx, connection, "Handoff", &HandoffRequest{Id: "not-recorded"})
+		require.Equal(t, codes.NotFound, status.Code(err))
+		_, err = invoke[ForkSessionResponse](ctx, connection, "ForkSession", &ForkSessionRequest{Id: "cron:private"})
+		require.Equal(t, codes.PermissionDenied, status.Code(err))
+		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: "retired-agent", Agent: "retired", CreatedBy: "alice"}))
+		_, err = invoke[ForkSessionResponse](ctx, connection, "ForkSession", &ForkSessionRequest{Id: "retired-agent"})
+		require.Equal(t, codes.FailedPrecondition, status.Code(err))
+		_, err = invoke[SearchMessagesResponse](t.Context(), connection, "SearchMessages", &SearchMessagesRequest{Query: "secret"})
+		require.Equal(t, codes.Unauthenticated, status.Code(err))
+
+		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			assert.Contains(t, string(body), source)
+			assert.Contains(t, string(body), "verified result")
+			assert.Contains(t, string(body), "Attachment: notes.txt (handoff-notes), source session "+source)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"id":"handoff","status":"completed","output":[{"type":"message","id":"msg","role":"assistant","status":"completed","content":[{"type":"output_text","text":"## Next step\nContinue the verified work.","annotations":[]}]}]}`)
+		}))
+		defer provider.Close()
+
+		original := cfg.OpenAI.APIBaseURL
+
+		cfg.OpenAI.APIBaseURL = provider.URL
+		defer func() { cfg.OpenAI.APIBaseURL = original }()
+
+		document, err := invoke[HandoffResponse](ctx, connection, "Handoff", &HandoffRequest{Id: source})
+		require.NoError(t, err)
+		require.Contains(t, document.Document, "Source session: "+source)
+		require.Contains(t, document.Document, "For more details, use `rocketclaw_get_session` with `conversation_id` set to the source session ID above.")
+		require.Contains(t, document.Document, "Continue the verified work.")
+
+		beforeTurns := len(turns)
+		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: target, Text: "already stashed", Delivery: PromptDelivery_STASH})
+		require.NoError(t, err)
+		_, err = invoke[PromptResponse](ctx, connection, "Prompt", &PromptRequest{Id: target, Text: document.Document, Delivery: PromptDelivery_STASH})
+		require.NoError(t, err)
+		require.Len(t, turns, beforeTurns, "stashing a handoff must not execute a turn")
+
+		queue, err := invoke[ListQueueResponse](ctx, connection, "ListQueue", &ListQueueRequest{Id: target})
+		require.NoError(t, err)
+		require.Len(t, queue.Items, 2)
+		require.Equal(t, "already stashed", queue.Items[0].Text)
+		require.Equal(t, document.Document, queue.Items[1].Text)
+		require.Equal(t, PromptDelivery_STASH, queue.Items[1].Delivery)
+
+		history, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: target})
+		require.NoError(t, err)
+		require.Empty(t, history.Messages)
+		history, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: source})
+		require.NoError(t, err)
+		require.Len(t, history.Messages, 3, "handoff generation must leave source history intact")
+
+		cfg.OpenAI.APIBaseURL = ":invalid"
+		_, err = invoke[HandoffResponse](ctx, connection, "Handoff", &HandoffRequest{Id: source})
+		require.ErrorContains(t, err, "generate web handoff")
+		history, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: source})
+		require.NoError(t, err)
+		require.Len(t, history.Messages, 3, "failed handoffs must also leave source history intact")
+
+		cfg.OpenAI.APIBaseURL = provider.URL
+
+		for _, replay := range []string{
+			`[{"type":"compaction","content":42}]`,
+			`[{"type":"function_call","name":"rocketclaw_attach_files_to_response","call_id":"broken","arguments":"invalid"},{"type":"function_call_output","call_id":"broken","output":"queued attachments for final response"}]`,
+		} {
+			_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', $1::jsonb)::text WHERE id = $2`, replay, entryID)
+			require.NoError(t, err)
+
+			for _, call := range []struct {
+				method            string
+				request, response proto.Message
+			}{
+				{"ForkSession", &ForkSessionRequest{Id: source}, &ForkSessionResponse{}},
+				{"Handoff", &HandoffRequest{Id: source}, &HandoffResponse{}},
+				{"SearchMessages", &SearchMessagesRequest{Query: "handoff"}, &SearchMessagesResponse{}},
+			} {
+				require.Error(t, connection.Invoke(ctx, "/rpc.Web/"+call.method, call.request, call.response), "corrupt history must not produce partial success: %s, %s", call.method, replay)
+			}
+		}
+
+		data, err := json.Marshal(entry)
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = $1 WHERE id = $2`, string(data), entryID)
+		require.NoError(t, err)
+
+		for _, table := range []string{"session_entries", "attachments", "external_mcp_sessions"} {
+			t.Run("unavailable "+table, func(t *testing.T) {
+				_, err := db.ExecContext(ctx, "ALTER TABLE "+table+" RENAME TO unavailable_command_table")
+				require.NoError(t, err)
+				t.Cleanup(func() {
+					_, err := db.ExecContext(ctx, "ALTER TABLE unavailable_command_table RENAME TO "+table)
+					require.NoError(t, err)
+				})
+
+				_, err = invoke[ForkSessionResponse](ctx, connection, "ForkSession", &ForkSessionRequest{Id: source})
+				require.Error(t, err)
+
+				if table != "attachments" {
+					_, err = invoke[HandoffResponse](ctx, connection, "Handoff", &HandoffRequest{Id: source})
+					require.Error(t, err)
+					_, err = invoke[SearchMessagesResponse](ctx, connection, "SearchMessages", &SearchMessagesRequest{Query: "handoff"})
+					require.Error(t, err)
+				} else {
+					_, err = invoke[ForkSessionResponse](ctx, connection, "ForkSession", &ForkSessionRequest{Id: target})
+					require.ErrorContains(t, err, "fork attachments")
+				}
+			})
+		}
+
+		agentPath := filepath.Join(cfg.RuntimeDirName(), "agents", "main.md")
+		agentData, err := root.ReadFile(agentPath)
+		require.NoError(t, err)
+		require.NoError(t, root.WriteFile(agentPath, []byte("---\nmodel: [\n---\n"), 0o600))
+
+		_, err = invoke[ForkSessionResponse](ctx, connection, "ForkSession", &ForkSessionRequest{Id: source})
+		require.ErrorContains(t, err, "load web agents")
+		require.NoError(t, root.WriteFile(agentPath, agentData, 0o600))
+	})
+
 	// A database outage cannot turn selected choices or enumeration into empty success.
 	require.NoError(t, sessions.Stop())
 
@@ -2092,6 +2287,9 @@ func TestSessionEntries(t *testing.T) {
 		request, response proto.Message
 	}{
 		{"History", &HistoryRequest{Id: id}, &HistoryResponse{}},
+		{"ForkSession", &ForkSessionRequest{Id: id}, &ForkSessionResponse{}},
+		{"SearchMessages", &SearchMessagesRequest{Query: "handoff"}, &SearchMessagesResponse{}},
+		{"Handoff", &HandoffRequest{Id: id}, &HandoffResponse{}},
 		{"SettleSession", &SettleSessionRequest{Id: id, Settled: true}, &SettleSessionResponse{}},
 		{"UpdateSession", &UpdateSessionRequest{Id: id, Name: new("Retain this name")}, &UpdateSessionResponse{}},
 		{"ListQueue", &ListQueueRequest{Id: id}, &ListQueueResponse{}},

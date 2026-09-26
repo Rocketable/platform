@@ -561,6 +561,57 @@ func TestSidebarSessionsAutoSettleAndReopen(t *testing.T) {
 	require.True(t, thread.Settled)
 }
 
+func TestSidebarSessionsSnooze(t *testing.T) {
+	service := newTestSessionService(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	cutoff := now.Add(-7 * 24 * time.Hour)
+	future := now.Add(time.Hour)
+
+	for _, tt := range []struct {
+		id      string
+		until   time.Time
+		settled bool
+	}{
+		{"waiting", future, true},
+		{"pinned", future, true},
+		{"manual", future, true},
+		{"expired", now.Add(-time.Second), false},
+		{"inactive", cutoff, true},
+	} {
+		require.NoError(t, service.UpsertThread(tt.id, ThreadState{Agent: "main"}))
+		_, err := service.AppendEntryID(ctx, tt.id, testSessionEntryAt(cutoff.Add(-time.Hour), "old message"))
+		require.NoError(t, err)
+		_, err = service.db.ExecContext(ctx, `UPDATE managed_conversations SET snoozed_until = $2, pinned = $3 WHERE conversation_id = $1`, tt.id, tt.until, tt.id == "pinned")
+		require.NoError(t, err)
+
+		for row, err := range service.SidebarSessions(ctx, cutoff) {
+			require.NoError(t, err)
+
+			if row.Conversation.ID == tt.id {
+				require.Equal(t, tt.settled, row.Conversation.Settled, tt.id)
+			}
+		}
+	}
+
+	_, err := service.AppendEntryID(ctx, "waiting", testSessionEntryAt(cutoff.Add(-time.Hour), "newly received old message"))
+	require.NoError(t, err)
+	_, err = service.SetConversationSettled(ctx, "manual", false)
+	require.NoError(t, err)
+
+	for row, err := range service.SidebarSessions(ctx, cutoff) {
+		require.NoError(t, err)
+
+		if row.Conversation.ID == "waiting" || row.Conversation.ID == "manual" {
+			require.False(t, row.Conversation.Settled, row.Conversation.ID)
+
+			var until sql.NullTime
+			require.NoError(t, service.db.QueryRowContext(ctx, `SELECT snoozed_until FROM managed_conversations WHERE conversation_id = $1`, row.Conversation.ID).Scan(&until))
+			require.False(t, until.Valid)
+		}
+	}
+}
+
 func TestSidebarSessionPinsAndNames(t *testing.T) {
 	service := newTestSessionService(t)
 	ctx := t.Context()
@@ -573,7 +624,7 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 	}
 
 	for _, id := range []string{"a", "ä"} {
-		updated, err := service.UpdateConversationDetails(ctx, id, new(true), new("Release notes"), new(false))
+		updated, err := service.UpdateConversationDetails(ctx, id, new(true), new("Release notes"), nil)
 		require.NoError(t, err)
 		require.True(t, updated)
 	}
@@ -590,7 +641,6 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 
 		ids = append(ids, row.Conversation.ID)
 		require.Equal(t, row.Conversation.ID != "Z", row.Pinned)
-		require.Equal(t, row.Conversation.ID == "Z", row.Unread)
 		require.Equal(t, row.Conversation.ID == "Z", row.Conversation.Settled)
 		require.Equal(t, stamp, row.Summary.LastUpdated)
 
@@ -615,7 +665,7 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 
 	_, err = service.AppendEntryID(ctx, "a", testSessionEntryAt(stamp, "new message"))
 	require.NoError(t, err)
-	_, err = service.UpdateConversationDetails(ctx, "ä", new(false), nil, new(true))
+	_, err = service.UpdateConversationDetails(ctx, "ä", new(false), nil, nil)
 	require.NoError(t, err)
 	_, err = service.UpdateConversationDetails(ctx, "a", nil, new(""), nil)
 	require.NoError(t, err)
@@ -625,12 +675,10 @@ func TestSidebarSessionPinsAndNames(t *testing.T) {
 
 		switch row.Conversation.ID {
 		case "a":
-			require.True(t, row.Unread)
 			require.True(t, row.Pinned)
 			require.False(t, row.Conversation.Settled)
 			require.Empty(t, row.Name)
 		case "ä":
-			require.True(t, row.Unread)
 			require.False(t, row.Pinned)
 			require.True(t, row.Conversation.Settled)
 			require.Equal(t, "Release notes", row.Name)
@@ -678,7 +726,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	want := make([]SidebarSession, 0, 6)
 
 	for _, id := range []string{"Z", "a", "ä", "empty", "missing", "zero"} {
-		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main", Settled: id == "Z"}, Unread: id != "empty" && id != "missing"}
+		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main", Settled: id == "Z"}}
 		if id == "zero" || id == "empty" {
 			row.Summary = &protocol.SessionSummary{ConversationID: id}
 		} else if id != "empty" && id != "missing" {
