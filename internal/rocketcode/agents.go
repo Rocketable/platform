@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -71,7 +70,6 @@ func LoadAgents(fsys fs.FS, resolveModel func(string) (string, error)) AgentLoad
 		return result
 	}
 
-	paths := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -81,12 +79,8 @@ func LoadAgents(fsys fs.FS, resolveModel func(string) (string, error)) AgentLoad
 			continue
 		}
 
-		paths = append(paths, entry.Name())
-	}
+		filePath := entry.Name()
 
-	sort.Strings(paths)
-
-	for _, filePath := range paths {
 		agent, err := loadAgent(fsys, filePath, resolveModel)
 		if err != nil {
 			result.Errors = append(result.Errors, err)

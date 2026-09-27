@@ -11,7 +11,6 @@ import (
 	"slices"
 	"strings"
 
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/text/unicode/norm"
 	"gopkg.in/yaml.v3"
 	"mvdan.cc/sh/v3/syntax"
@@ -85,18 +84,12 @@ var permissionEnvPattern = regexp.MustCompile(`\$\{(ROCKETCLAW_[A-Za-z0-9_]+)\}`
 func interpolatePermissions(agent *Agent, env []string) {
 	values := make(map[string]string)
 
-	var scans errgroup.Group
-
-	scans.Go(func() error {
-		for _, entry := range env {
-			key, value, _ := strings.Cut(entry, "=")
-			if strings.HasPrefix(key, "ROCKETCLAW_") {
-				values[key] = value
-			}
+	for _, entry := range env {
+		key, value, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(key, "ROCKETCLAW_") {
+			values[key] = value
 		}
-
-		return nil
-	})
+	}
 
 	buckets := slices.Clone(agent.Permission.Buckets)
 	for i, bucket := range buckets {
@@ -121,9 +114,6 @@ func interpolatePermissions(agent *Agent, env []string) {
 			buckets[i].Rules[j] = rule
 		}
 	}
-
-	// The environment scan cannot fail; join before reading its values.
-	_ = scans.Wait()
 
 	for i := range buckets {
 		// Rules whose variable is absent or empty are dropped from the set:

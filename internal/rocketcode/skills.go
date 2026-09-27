@@ -126,7 +126,9 @@ func (s Skills) Find(query string) string {
 
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return renderSkillMatches(s.sortedSkills())
+		return renderSkillMatches(slices.SortedFunc(maps.Values(s.Items), func(a, b Skill) int {
+			return strings.Compare(a.Name, b.Name)
+		}))
 	}
 
 	normalizedQuery := normalizeSkillSearchText(query)
@@ -479,19 +481,6 @@ func validateSkillFrontmatter(filePath string, frontmatter skillFrontmatter) err
 	}
 
 	return nil
-}
-
-func (s Skills) sortedSkills() []Skill {
-	list := make([]Skill, 0, len(s.Items))
-	for _, skill := range s.Items {
-		list = append(list, skill)
-	}
-
-	sort.Slice(list, func(i, j int) bool {
-		return list[i].Name < list[j].Name
-	})
-
-	return list
 }
 
 func renderSkillMatches(skills []Skill) string {
