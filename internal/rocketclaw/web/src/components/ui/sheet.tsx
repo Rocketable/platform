@@ -1,4 +1,3 @@
-import * as React from "react"
 import { Dialog as SheetPrimitive } from "@base-ui/react/dialog"
 import { cn } from "cn"
 
@@ -11,10 +10,6 @@ function Sheet({ ...props }: SheetPrimitive.Root.Props) {
 
 function SheetTrigger({ ...props }: SheetPrimitive.Trigger.Props) {
   return <SheetPrimitive.Trigger data-slot="sheet-trigger" {...props} />
-}
-
-function SheetClose({ ...props }: SheetPrimitive.Close.Props) {
-  return <SheetPrimitive.Close data-slot="sheet-close" {...props} />
 }
 
 function SheetPortal({ ...props }: SheetPrimitive.Portal.Props) {
@@ -78,26 +73,6 @@ function SheetContent({
   )
 }
 
-function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="sheet-header"
-      className={cn("flex flex-col gap-0.5 p-4", className)}
-      {...props}
-    />
-  )
-}
-
-function SheetFooter({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="sheet-footer"
-      className={cn("mt-auto flex flex-col gap-2 p-4", className)}
-      {...props}
-    />
-  )
-}
-
 function SheetTitle({ className, ...props }: SheetPrimitive.Title.Props) {
   return (
     <SheetPrimitive.Title
@@ -127,10 +102,7 @@ function SheetDescription({
 export {
   Sheet,
   SheetTrigger,
-  SheetClose,
   SheetContent,
-  SheetHeader,
-  SheetFooter,
   SheetTitle,
   SheetDescription,
 }
