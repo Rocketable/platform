@@ -185,6 +185,13 @@ func TestHandlerLogsRequestAndResponse(t *testing.T) {
 	if got := attrValue(t, record, "duration"); got.Duration() <= 0 {
 		t.Fatalf("log duration = %s; want positive", got.Duration())
 	}
+
+	logRequests(logger, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, "ok")
+	})).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	if got := attrValue(t, logs.records[1], "status"); got.Int64() != http.StatusOK {
+		t.Fatalf("implicit log status = %d; want %d", got.Int64(), http.StatusOK)
+	}
 }
 
 type recordHandler struct {

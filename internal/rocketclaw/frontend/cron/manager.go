@@ -616,12 +616,8 @@ func loadDefinitionsIn(workspace, runtimeDir string) ([]definition, error) {
 
 	definitions := make([]definition, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
 		name := entry.Name()
-		if !strings.HasSuffix(name, ".md") || strings.HasSuffix(name, ".example.md") {
+		if entry.IsDir() || !strings.HasSuffix(name, ".md") || strings.HasSuffix(name, ".example.md") {
 			continue
 		}
 
