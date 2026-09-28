@@ -1571,8 +1571,6 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	var group errgroup.Group
 
-	b.publishConsumed(ctx, msg)
-
 	defer func() {
 		if result.checkpointTurnID == "" {
 			result.checkpointTurnID = sink.checkpointTurnID

@@ -384,7 +384,8 @@ func (b *Bridge) publishConsumed(ctx context.Context, inbound *protocol.InboundM
 	if id := inbound.Metadata["web_message_id"]; id != "" {
 		message := protocol.NewOutboundMessage(b.config.ConversationID, "")
 
-		message.ConsumedID, message.ConsumedText = id, inbound.Text
+		message.ConsumedID, message.ConsumedText, message.ConsumedSource = id, inbound.Text, inbound.Source
+		message.ConsumedRawText = inbound.Metadata[protocol.InboundRawTextMetadataKey]
 		message.SourceConversationID = b.config.ConversationID
 		b.mu.Lock()
 		message.Agent, message.Model, message.ReasoningEffort = b.activeAttribution.Agent, b.activeAttribution.Model, b.activeAttribution.ReasoningEffort

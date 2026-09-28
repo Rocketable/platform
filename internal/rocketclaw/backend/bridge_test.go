@@ -128,6 +128,7 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 		require.Equal(t, "web-conversation", message.ConversationID)
 		require.Equal(t, id, message.ConsumedID)
 		require.Equal(t, "same text", message.ConsumedText)
+		require.Equal(t, protocol.SourceWeb, message.ConsumedSource)
 		require.Equal(t, "web-conversation", message.SourceConversationID)
 
 		if id == "initial" {
@@ -200,6 +201,7 @@ func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
 		message := <-bus.outbound
 		require.Equal(t, id, message.ConsumedID)
 		require.Equal(t, "same text", message.ConsumedText)
+		require.Equal(t, protocol.SourceWeb, message.ConsumedSource)
 	}
 
 	items, err = manager.queueItems(conversationID)
@@ -219,10 +221,37 @@ func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
 	message := <-bus.outbound
 	require.Equal(t, queued.ID, message.ConsumedID)
 	require.Equal(t, queued.Message, message.ConsumedText)
+	require.Equal(t, protocol.SourceWeb, message.ConsumedSource)
+
+	slackQueued := protocol.ThreadQueueItem{ID: "slack-next", ConversationID: conversationID, Source: protocol.SourceSlack, Kind: protocol.InboundKindEnqueue, Message: "already visible", Principal: "bob"}
+	require.NoError(t, store.PutThreadQueueItem(slackQueued.ID, &slackQueued))
+	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &slackQueued))
+	request = <-bridge.requestCh
+	admitted, err = bridge.activateInbound(t.Context(), &request)
+	require.NoError(t, err)
+	require.True(t, admitted)
+
+	message = <-bus.outbound
+	require.Equal(t, slackQueued.ID, message.ConsumedID)
+	require.Equal(t, protocol.SourceSlack, message.ConsumedSource)
 
 	remaining, err := store.ThreadQueueForConversation(conversationID)
 	require.NoError(t, err)
 	require.Empty(t, remaining)
+}
+
+func TestBridgeConsumedInputKeepsRawWebText(t *testing.T) {
+	bus := newTestBus()
+	bridge := &Bridge{bus: bus, config: Config{ConversationID: "slack-thread:C123:111.0"}}
+	inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, "alice", &protocol.InboundContent{
+		Text: "hello", TextAttachments: []string{`attachment:id "file.txt" (workspace path "artifacts/uploads/id/file.txt")`},
+	}, true)
+	inbound.Metadata["web_message_id"] = "web-input"
+	bridge.publishConsumed(t.Context(), inbound)
+
+	message := <-bus.outbound
+	require.Contains(t, message.ConsumedText, "attachment:id")
+	require.Equal(t, "hello", message.ConsumedRawText)
 }
 
 func TestRestartToolScopesDescriptionToRuntimeConfig(t *testing.T) {
@@ -4872,7 +4901,7 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 	require.NoError(t, bridge.Submit(t.Context(), steer))
 	close(release)
 
-	var consumed, consumedSteer, assistant, final bool
+	var consumedSteer, assistant, final bool
 	for !final {
 		message := readRocketCodeOutbound(t, bus)
 		require.Equal(t, "reviewer", message.Agent)
@@ -4880,14 +4909,13 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 		require.Equal(t, new("low"), message.ReasoningEffort)
 		require.Equal(t, conversationID, message.SourceConversationID)
 		require.Equal(t, conversationID, message.ConversationID)
-		consumed = consumed || message.ConsumedID == queued.ID
+		require.NotEqual(t, queued.ID, message.ConsumedID, "activated input must not be published again during the turn")
 		consumedSteer = consumedSteer || message.ConsumedID == "active-steer"
 		assistant = assistant || message.Text == "ok" && !message.Complete
 		final = message.Complete
 		message.MarkDelivered(nil)
 	}
 
-	require.True(t, consumed)
 	require.True(t, consumedSteer)
 	require.True(t, assistant)
 	require.NoError(t, group.Wait())

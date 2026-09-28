@@ -2188,7 +2188,7 @@ func TestSendExternalMCPRelayEdgeFailures(t *testing.T) {
 	})
 }
 
-func TestStartEventsIgnoresConsumedInput(t *testing.T) {
+func TestStartEventsMirrorsConsumedWebInput(t *testing.T) {
 	var (
 		posted    []url.Values
 		reactions []string
@@ -2199,17 +2199,104 @@ func TestStartEventsIgnoresConsumedInput(t *testing.T) {
 
 	connector := newTestConnector(server.URL)
 	message := protocol.NewOutboundMessage("slack-thread:C123:111.0", "")
-	message.ConsumedID, message.ConsumedText = "web-input", "guide the current response"
+	message.ConsumedID, message.ConsumedText, message.ConsumedSource = "web-input", "Hello there!\n*Second line* <@U123>\n\nattachment:id (workspace path /private)", protocol.SourceWeb
+	message.ConsumedRawText = "Hello there!\n*Second line* <@U123>\n"
+	private := protocol.NewOutboundMessage("web:private", "")
+	private.ConsumedID, private.ConsumedText, private.ConsumedRawText, private.ConsumedSource = "private-input", "not for Slack", "not for Slack", protocol.SourceWeb
+	slackInput := protocol.NewOutboundMessage("slack-thread:C123:111.0", "")
+	slackInput.ConsumedID, slackInput.ConsumedText, slackInput.ConsumedSource = "slack-input", "already in Slack", protocol.SourceSlack
+	attachmentOnly := protocol.NewOutboundMessage("slack-thread:C123:111.0", "")
+	attachmentOnly.ConsumedID, attachmentOnly.ConsumedText, attachmentOnly.ConsumedSource = "attachment-input", "attachment:id (workspace path /private)", protocol.SourceWeb
+	attachmentOnly.ConsumedRawText = " \n\t"
+	events := []protocol.Event{
+		{Message: message, Acknowledgement: make(chan error, 1)},
+		{Message: private, Acknowledgement: make(chan error, 1)},
+		{Message: slackInput, Acknowledgement: make(chan error, 1)},
+		{Message: attachmentOnly, Acknowledgement: make(chan error, 1)},
+	}
+	core := &backendMock{SubscribeFunc: func(context.Context) iter.Seq[protocol.Event] {
+		return slices.Values(events)
+	}}
+	<-connector.StartEvents(t.Context(), core)
+
+	for _, event := range events {
+		require.NoError(t, <-event.Acknowledgement)
+	}
+
+	require.Nil(t, message.SlackReply, "consumed input is separate from response slots")
+	require.Len(t, posted, 2)
+	assert.Equal(t, "C123", posted[0].Get("channel"))
+	assert.Equal(t, "111.0", posted[0].Get("thread_ts"))
+	assert.Equal(t, "📡 web\nHello there!\n*Second line* <@U123>\n", posted[0].Get("text"))
+	assert.Equal(t, "false", posted[0].Get("mrkdwn"))
+	assert.Equal(t, "none", posted[0].Get("parse"))
+
+	var blocks []struct {
+		Type string `json:"type"`
+		Text struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"text"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(posted[0].Get("blocks")), &blocks))
+	require.Len(t, blocks, 3)
+	assert.Equal(t, "header", blocks[0].Type)
+	assert.Equal(t, slack.PlainTextType, blocks[0].Text.Type)
+	assert.Equal(t, "📡 web", blocks[0].Text.Text)
+	assert.Equal(t, "divider", blocks[1].Type)
+	assert.Equal(t, "section", blocks[2].Type)
+	assert.Equal(t, slack.PlainTextType, blocks[2].Text.Type)
+	assert.Equal(t, message.ConsumedRawText, blocks[2].Text.Text)
+	assert.Equal(t, "📡 web\n(attachments)", posted[1].Get("text"))
+	require.NoError(t, json.Unmarshal([]byte(posted[1].Get("blocks")), &blocks))
+	require.Len(t, blocks, 3)
+	assert.Equal(t, "(attachments)", blocks[2].Text.Text)
+	require.Empty(t, reactions)
+}
+
+func TestStartEventsMirrorsLongWebPaste(t *testing.T) {
+	var (
+		posted    []url.Values
+		reactions []string
+	)
+
+	server := newSlackStackTestServer(t, &posted, &reactions)
+	defer server.Close()
+
+	text := strings.Repeat("line of pasted text\n", 2500)
+	message := protocol.NewOutboundMessage("slack-thread:C123:111.0", "")
+	message.ConsumedID, message.ConsumedText, message.ConsumedRawText, message.ConsumedSource = "web-paste", text, text, protocol.SourceWeb
 	event := protocol.Event{Message: message, Acknowledgement: make(chan error, 1)}
 	core := &backendMock{SubscribeFunc: func(context.Context) iter.Seq[protocol.Event] {
 		return slices.Values([]protocol.Event{event})
 	}}
-	<-connector.StartEvents(t.Context(), core)
-	require.Len(t, event.Acknowledgement, 1)
+	<-newTestConnector(server.URL).StartEvents(t.Context(), core)
 	require.NoError(t, <-event.Acknowledgement)
-	require.Nil(t, message.SlackReply, "consumed input must be ignored before Slack routing")
-	require.Empty(t, posted)
-	require.Empty(t, reactions)
+	require.Greater(t, len(posted), 1)
+
+	var mirrored strings.Builder
+
+	for _, post := range posted {
+		var blocks []struct {
+			Type string `json:"type"`
+			Text struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"text"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(post.Get("blocks")), &blocks))
+		require.Len(t, blocks, 3)
+		assert.Equal(t, "📡 web", blocks[0].Text.Text)
+		assert.Equal(t, slack.PlainTextType, blocks[2].Text.Type)
+		chunk := blocks[2].Text.Text
+		require.LessOrEqual(t, len([]rune(chunk)), slackBlockTextLimit)
+		assert.Equal(t, "111.0", post.Get("thread_ts"))
+		assert.Equal(t, "false", post.Get("mrkdwn"))
+		assert.Equal(t, "📡 web\n"+chunk, post.Get("text"))
+		mirrored.WriteString(chunk)
+	}
+
+	assert.Equal(t, text, mirrored.String())
 }
 
 func TestSendResponseKeepsHumanThinkingTaskCardLifecycle(t *testing.T) {
