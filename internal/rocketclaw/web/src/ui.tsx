@@ -785,6 +785,9 @@ function HandoffDialog({ command, drafts, onDraftChange }: { command: SessionCom
       navigate(sessionPath(match.conversationId));
     } }));
   const pending = action.isPending;
+  const choices = ([{ key: "copy", label: "Copy handoff", progress: "Copying handoff…" }, { key: "new", label: "Start new session", progress: "Starting session…" }] as const).map(({ key, label, progress }) => ({
+    key, label: pending && action.variables === key ? progress : label, choose: () => action.mutate(key),
+  }));
   const error = [action.error, search.error, handoff.error, preview.error].find(Boolean);
   return <Dialog open modal={!target} onOpenChange={(open, details) => { if (!open && !pending && details.reason !== "outside-press") setCommand(undefined); }}>
     <DialogContent ref={popup} initialFocus={popup} className={cn("top-2 flex max-h-[calc(100dvh-1rem)] max-w-[calc(100%-1rem)] translate-y-0 flex-col overflow-hidden sm:max-w-lg", target && "max-h-[calc(min(75dvh,30rem)-1rem)]")} preview={!!target} showCloseButton={!pending}>
@@ -793,18 +796,17 @@ function HandoffDialog({ command, drafts, onDraftChange }: { command: SessionCom
         <DialogDescription>{target ? "Review below, then stash. No turn starts until you pop it." : "Copy, start a new session, or search for a session to stash in."}</DialogDescription>
       </DialogHeader>
       <div className="flex min-h-0 flex-col gap-3 overflow-y-auto overscroll-contain">
-        <SessionCommandPicker items={[{ key: "copy", label: "Copy handoff", choose: () => action.mutate("copy") }, { key: "new", label: "Start new session", choose: () => action.mutate("new") }, ...items]} query={query} setQuery={setQuery} forking={false} disabled={pending} />
+        <SessionCommandPicker items={[...choices, ...items]} query={query} setQuery={setQuery} forking={false} disabled={pending} />
         {target ? <div className="flex min-w-0 items-center gap-3 rounded-lg border p-2">
           <div className="min-w-0 flex-1"><SessionRowContent session={sidebar.rows.find((row) => row.id === target.conversationId) ?? { id: target.conversationId }} /><p className="truncate text-xs text-muted-foreground">{target.message.text}</p></div>
           <Button variant="ghost" className="min-h-11 shrink-0" disabled={pending} onClick={() => setCommand({ ...command, target: undefined })}>Change</Button>
         </div> : null}
         {error ? <p role="alert" className="break-words text-destructive">{error.message}</p> : null}
         {handoff.isError ? <Button variant="outline" className="min-h-11" onClick={() => void handoff.refetch()}>Retry handoff</Button> : null}
-        {pending ? <p hidden={action.variables === "stash"} role="status">{({ new: "Starting session…", copy: "Copying handoff…", stash: "Stashing handoff…" })[action.variables!]}</p> : null}
       </div>
       {target && <DialogFooter className="shrink-0 flex-row flex-wrap items-center justify-between sm:justify-between">
         {handoff.data ? <CodeBlock text={handoff.data.document} label="Handoff" compact /> : <p hidden={pending} role="status" className="flex items-center gap-2 text-xs text-muted-foreground">{handoff.isPending ? <><LoaderCircle className="size-4 animate-spin" />Preparing handoff…</> : "Handoff not ready"}</p>}
-        <Button className="ml-auto min-h-11" aria-label="Stash handoff here" disabled={[pending, !preview.data, preview.isError, route.id !== target.conversationId].some(Boolean)} onClick={() => action.mutate("stash")}>{pending ? "Stashing…" : "Stash"}</Button>
+        <Button className="ml-auto min-h-11" aria-label="Stash handoff here" disabled={[pending, !preview.data, preview.isError, route.id !== target.conversationId].some(Boolean)} onClick={() => action.mutate("stash")}>{pending && action.variables === "stash" ? "Stashing…" : "Stash"}</Button>
       </DialogFooter>}
     </DialogContent>
   </Dialog>;
@@ -828,7 +830,7 @@ function SessionCommandPicker({ items, query, setQuery, forking, disabled }: { i
   return <>
     <Input aria-label={forking ? "Search fork messages" : "Search messages"} placeholder="Search messages" value={query} disabled={disabled} onChange={(event) => { setPick(0); setQuery(event.target.value); }} onKeyDown={(event) => setPick(paletteMove(event, selected, items.length, () => items[selected]?.choose()))} />
     <ul className="max-h-[40vh] overflow-y-auto">
-      {items.map((item, index) => <li key={item.key}><Button ref={index === selected ? active : null} variant={index === selected ? "secondary" : "ghost"} size="lg" className="min-h-11 h-auto w-full flex-col items-start" disabled={disabled} onClick={item.choose}>{item.session ? <SessionRowContent session={item.session} /> : null}<span className="line-clamp-2 text-left whitespace-normal break-words">{item.label}</span>{item.detail ? <span className="max-w-full truncate text-xs">{item.detail}</span> : null}</Button></li>)}
+      {items.map((item, index) => <li key={item.key}><Button ref={index === selected ? active : null} variant={index === selected ? "secondary" : "ghost"} size="lg" className="min-h-11 h-auto w-full flex-col items-start" disabled={disabled} onClick={item.choose}>{item.session ? <SessionRowContent session={item.session} /> : null}<span aria-live="polite" className="line-clamp-2 text-left whitespace-normal break-words">{item.label}</span>{item.detail ? <span className="max-w-full truncate text-xs">{item.detail}</span> : null}</Button></li>)}
     </ul>
   </>;
 }
