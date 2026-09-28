@@ -97,7 +97,8 @@ retaining a 44px touch target. The handle stays
 visible when the controls are hidden and supports Enter/Space when focused.
 Touch devices and narrow screens use 48px navigation targets and 8px gaps;
 desktop uses 32px targets and 4px gaps. Icons are 24px in both layouts.
-Desktop keeps all eight controls in the bar. Cmd/Ctrl+B hides and shows the sidebar.
+The center bar has New session, Search sessions, and Open command palette. The
+separate desktop sidebar toggle and collapse handle remain. Cmd/Ctrl+B hides and shows the sidebar.
 Cmd/Ctrl+Alt+N opens a new session. The magnifying glass beside New session and
 Cmd/Ctrl+P open the same session-search dialog, including active and settled chats.
 Each opening clears text, pills, and result selection and focuses the input.
@@ -113,8 +114,9 @@ and unfinished `agent:`/`room:` suggestions do not fetch histories. Ordinary
 sidebar loading stays independent. Incomplete enumeration or origin lookups show
 loading feedback rather than a definitive empty result. Failed origin lookups
 show an error while usable row matches remain selectable.
-Cmd/Ctrl+Shift+P opens the command palette: new session, run cron, pages, and sidebar.
-Command rows show only their names, with compact spacing and touch-sized targets on mobile.
+The command button and Cmd/Ctrl+Shift+P open the command palette: new session,
+run cron, pages, and sidebar. Command rows have visible category prefixes such
+as `Session: Name session` and `Page: Agents`, with compact spacing and touch-sized targets on mobile.
 For the current session it also offers **Open original conversation** (when forked),
 **Name session**, **Pin/Unpin**, **Snooze session**, **Settle/Unsettle**, **Fork session**,
 **Handoff session**, **Choose agent**, **Show queue**, and **Stop turn** while running.
@@ -126,7 +128,7 @@ Existing draft text and attachments are kept; nothing is sent until you submit.
 Run cron opens a new session immediately. The job still runs privately, and the chat fills in when it finishes.
 A chat that began as a cron run or an external MCP call starts with a collapsed origin card. Use show more to see its details; the card scrolls with the messages. An ordinary chat has no origin card.
 On mobile, the Sessions toggle sits
-at the top-left opposite the theme toggle, leaving seven controls centered below.
+at the top-left opposite the theme toggle, leaving three controls centered below.
 On titled pages, the mobile Sessions button shares the title's header row so
 they cannot overlap. In chat, it remains a floating corner button.
 Swipe right from the middle of the main content to open the mobile sidebar, or

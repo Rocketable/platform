@@ -106,36 +106,36 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     await commandSearch.fill("original");
     expect(await commands.getByRole("button", { name: /Open original conversation/ }).count()).toBe(0);
     await commandSearch.fill("");
-    for (const name of ["Fork session", "Handoff session", "Name session", "Snooze session", "Pin session", "Settle", "Choose agent", "Start goal", "Run workflow", "Invoke skill", "Stash work", "Show queue"]) {
+    for (const name of ["Session: Fork session", "Session: Handoff session", "Session: Name session", "Session: Snooze session", "Session: Pin session", "Session: Settle", "Session: Choose agent", "Command: Start goal", "Command: Run workflow", "Command: Invoke skill", "Command: Stash work", "Session: Show queue"]) {
       const action = commands.getByRole("button", { name, exact: true });
       await action.waitFor();
       expect(await action.textContent()).toBe(name);
       expect(await action.evaluate((element: HTMLElement) => element.offsetHeight)).toBe(width < 640 ? 44 : 36);
     }
-    expect(await commands.getByRole("button", { name: /^Stop turn/ }).count()).toBe(0);
+    expect(await commands.getByRole("button", { name: "Session: Stop turn" }).count()).toBe(0);
     const commandBounds = await commands.boundingBox();
     expect(commandBounds.x).toBeGreaterThanOrEqual(0);
     expect(commandBounds.x + commandBounds.width).toBeLessThanOrEqual(width);
     expect(commandBounds.y + commandBounds.height).toBeLessThanOrEqual(height);
     await Bun.write(path.resolve(import.meta.dir, `../../../../.tmp/command-palette-${width}.png`), await page.screenshot());
     await commandSearch.fill("Pin session");
-    await commands.getByRole("button", { name: /^Pin session/ }).click();
+    await commands.getByRole("button", { name: "Session: Pin session" }).click();
     await commands.getByRole("alert").waitFor();
     expect(await commands.getByRole("alert").textContent()).toBe("Pin failed");
     failPin = false;
-    await commands.getByRole("button", { name: /^Pin session/ }).click();
+    await commands.getByRole("button", { name: "Session: Pin session" }).click();
     await commands.waitFor({ state: "hidden" });
     for (const label of ["Unpin session", "Settle", "Unsettle"]) {
       await page.keyboard.press("Meta+Shift+p");
       await commandSearch.fill(label);
-      await commands.getByRole("button", { name: label, exact: true }).click();
+      await commands.getByRole("button", { name: `Session: ${label}`, exact: true }).click();
       await commands.waitFor({ state: "hidden" });
     }
     expect(details.source.pinned).toBe(false);
     expect(details.source.settled).toBe(false);
     await page.keyboard.press("Meta+Shift+p");
     await commandSearch.fill("Name session");
-    await commands.getByRole("button", { name: /^Name session/ }).click();
+    await commands.getByRole("button", { name: "Session: Name session" }).click();
     const rename = page.getByRole("dialog", { name: "Name session", exact: true });
     await rename.getByLabel("Session name").fill("Named source");
     await rename.getByRole("button", { name: "Save", exact: true }).click();
@@ -143,7 +143,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     expect(details.source.name).toBe("Named source");
     await page.keyboard.press("Meta+Shift+p");
     await commandSearch.fill("Snooze session");
-    await commands.getByRole("button", { name: "Snooze session", exact: true }).click();
+    await commands.getByRole("button", { name: "Session: Snooze session", exact: true }).click();
     const snooze = page.getByRole("dialog", { name: "Snooze session", exact: true });
     await snooze.getByLabel("Return at (local time)").fill("2027-01-02T09:30");
     await snooze.getByRole("button", { name: "Snooze", exact: true }).click();
@@ -155,7 +155,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
       await composer.fill("keep this draft");
       await page.keyboard.press("Meta+Shift+p");
       await commandSearch.fill(label);
-      await commands.getByRole("button", { name: label, exact: true }).click();
+      await commands.getByRole("button", { name: `Command: ${label}`, exact: true }).click();
       await commands.waitFor({ state: "hidden" });
       expect(await composer.inputValue()).toBe(`${invocation} keep this draft`);
       expect(await composer.evaluate((element: HTMLElement) => document.activeElement === element)).toBe(true);
@@ -164,18 +164,18 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     }
     await page.keyboard.press("Meta+Shift+p");
     await commandSearch.fill("Choose agent");
-    await commands.getByRole("button", { name: /^Choose agent/ }).click();
+    await commands.getByRole("button", { name: "Session: Choose agent" }).click();
     await page.getByRole("option", { name: /main/ }).waitFor();
     await page.keyboard.press("Escape");
     await page.keyboard.press("Meta+Shift+p");
     await commandSearch.fill("Show queue");
-    await commands.getByRole("button", { name: /^Show queue/ }).click();
+    await commands.getByRole("button", { name: "Session: Show queue" }).click();
     const queue = page.getByRole("dialog", { name: "Session queue", exact: true });
     await queue.getByText("No pending work", { exact: true }).waitFor();
     await queue.getByRole("button", { name: "Close", exact: true }).click();
     await page.keyboard.press("Meta+Shift+p");
     await commandSearch.fill("Fork session");
-    await commands.getByRole("button", { name: /^Fork session/ }).click();
+    await commands.getByRole("button", { name: "Session: Fork session" }).click();
     await dialog.getByRole("button", { name: "Choose this prompt Continue before this message" }).waitFor();
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
     await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("forked").replace(/=+$/, "")}`);
@@ -215,7 +215,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     await page.evaluate(() => Object.defineProperty(crypto, "randomUUID", { value: undefined, configurable: true }));
     await page.keyboard.press("Meta+Shift+p");
     await commandSearch.fill("Handoff session");
-    await commands.getByRole("button", { name: /^Handoff session/ }).click();
+    await commands.getByRole("button", { name: "Session: Handoff session" }).click();
     const destinationSearch = dialog.getByRole("textbox", { name: "Search messages" });
     await destinationSearch.waitFor({ timeout: 5000 });
     expect(await destinationSearch.count()).toBe(1);
@@ -294,7 +294,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     expect(forks).toHaveLength(1);
     await page.keyboard.press("Meta+Shift+p");
     await commandSearch.fill("Show queue");
-    await commands.getByRole("button", { name: /^Show queue/ }).click();
+    await commands.getByRole("button", { name: "Session: Show queue" }).click();
     await queue.getByText("Stashed", { exact: true }).waitFor();
     expect(await queue.locator("li").count()).toBe(1);
     expect(await queue.locator("li").textContent()).toBe(`Stashed${handoffDocument}`);
@@ -352,7 +352,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     await composer.fill("draft during turn");
     await page.keyboard.press("Meta+Shift+p");
     await commandSearch.fill("Stop turn");
-    await commands.getByRole("button", { name: /^Stop turn/ }).click();
+    await commands.getByRole("button", { name: "Session: Stop turn" }).click();
     await commands.waitFor({ state: "hidden" });
     expect(prompts.at(-1)?.text).toBe("$stop");
     expect(await composer.inputValue()).toBe("draft during turn");
@@ -374,7 +374,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     await page.goto(`http://127.0.0.1:${server.port}/`);
     await composer.waitFor();
     await page.keyboard.press("Meta+Shift+p");
-    expect(await commands.getByRole("button", { name: /^(Open original conversation|Fork session|Handoff session|Name session|Stop turn)/ }).count()).toBe(0);
+    expect(await commands.getByRole("button", { name: /^Session: (Open original conversation|Fork session|Handoff session|Name session|Stop turn)/ }).count()).toBe(0);
     expect(errors).toEqual([]);
   } finally {
     await browser.close();
