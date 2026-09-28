@@ -161,3 +161,24 @@ func TestStartEventsAcknowledgesDeliveryFailureAfterAborting(t *testing.T) {
 	assert.NotContains(t, connector.replies, "turn-1")
 	assert.NotContains(t, connector.thinking, "turn-1")
 }
+
+func TestStartEventsAcknowledgesConsumedInputFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/chat.postMessage", r.URL.Path)
+
+		_, err := w.Write([]byte(`{"ok":false,"error":"channel_not_found"}`))
+		assert.NoError(t, err)
+	}))
+	defer server.Close()
+
+	message := protocol.NewOutboundMessage("slack-thread:C123:111.0", "")
+	message.ConsumedID, message.ConsumedText, message.ConsumedSource = "web-input", "Hello there!", protocol.SourceWeb
+	message.ConsumedRawText = "Hello there!"
+	event := protocol.Event{Message: message, Acknowledgement: make(chan error, 1)}
+	backend := &backendMock{SubscribeFunc: func(context.Context) iter.Seq[protocol.Event] {
+		return slices.Values([]protocol.Event{event})
+	}}
+	connector := newTestConnector(server.URL)
+	<-connector.StartEvents(t.Context(), backend)
+	require.ErrorContains(t, <-event.Acknowledgement, "channel_not_found")
+}

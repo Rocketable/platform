@@ -2,6 +2,10 @@ package slackconnector
 
 import (
 	"context"
+	"fmt"
+	"strings"
+
+	"github.com/slack-go/slack"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/frontend"
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -18,7 +22,34 @@ func (c *Connector) StartEvents(ctx context.Context, backend frontend.Backend) <
 		for event := range events {
 			message := event.Message
 			if message.ConsumedID != "" {
-				event.Acknowledgement <- nil
+				channelID, threadTS, ok := protocol.SlackThreadTarget(message.ConversationID)
+				if ok && message.ConsumedSource == protocol.SourceWeb && message.ConsumedText != "" {
+					text := message.ConsumedRawText
+					if strings.TrimSpace(text) == "" && message.ConsumedText != text {
+						text = "(attachments)"
+					}
+
+					var err error
+
+					for _, chunk := range splitSlackText(text, slackBlockTextLimit, slackBlockTextLimit) {
+						blocks := []slack.Block{
+							slack.NewHeaderBlock(slack.NewTextBlockObject(slack.PlainTextType, "📡 web", false, false)),
+							slack.NewDividerBlock(),
+							slack.NewSectionBlock(slack.NewTextBlockObject(slack.PlainTextType, chunk, false, false), nil, nil),
+						}
+
+						_, _, err = c.api.PostMessageContext(ctx, channelID, slack.MsgOptionText("📡 web\n"+chunk, false), slack.MsgOptionTS(threadTS), slack.MsgOptionBlocks(blocks...), slack.MsgOptionDisableMarkdown(), slack.MsgOptionParse(false))
+						if err != nil {
+							err = fmt.Errorf("send Slack web input: %w", err)
+							break
+						}
+					}
+
+					event.Acknowledgement <- err
+				} else {
+					event.Acknowledgement <- nil
+				}
+
 				continue
 			}
 

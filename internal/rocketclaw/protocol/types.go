@@ -198,6 +198,8 @@ type StartNewThreadRootResult struct {
 // OutboundMessage is a text message headed to enabled connectors.
 type OutboundMessage struct {
 	ConsumedID, ConsumedText           string
+	ConsumedRawText                    string
+	ConsumedSource                     Source
 	Text, ProgressText                 string
 	ConversationID, TurnID             string
 	ExternalConversationID             string

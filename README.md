@@ -158,6 +158,8 @@ For example, template `Compare $1 against $2` with `"first area" second third` b
 
 Arguments are substituted before shell blocks run, when the existing skill-shell expansion setting is enabled. Skill instructions load immediately before their associated request. An idle call starts a turn; during active work, Slack calls steer, web Send queues, and web Cmd/Ctrl+Enter steers. Use `$enqueue $review args` or `$enqueue $skill stop args` to explicitly queue a call.
 
+When a web message is consumed in a Slack-managed thread, RocketClaw posts its text there in a `📡 web` Slack block. Waiting or stashed web messages do not appear in Slack until consumed.
+
 Queued calls retain their original invocation and attachments. Availability and shell blocks are evaluated only when consumed, using the executing agent. Promoting a queued call loads it as a steer once; removing it runs no skill shell blocks. See the [command cheatsheet](cmd/rocketclaw/CHEATSHEET.md) for queue controls.
 
 ### Supporting Tools
