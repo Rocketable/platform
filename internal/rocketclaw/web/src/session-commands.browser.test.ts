@@ -24,6 +24,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
   const handoffDocument = "# Handoff from source\n" + "Continue the verified work.\n".repeat(80);
   let handoffReady = Promise.withResolvers<void>();
   const stashReady = Promise.withResolvers<void>();
+  const newSessionReady = Promise.withResolvers<void>();
   const firstTurnReady = Promise.withResolvers<void>();
   let failHandoff = true;
   let failFirstTurn = false;
@@ -62,7 +63,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
         await handoffReady.promise;
         return Response.json({ document: handoffDocument });
       case "/api/SearchMessages": searches.push(input.query); return Response.json({ matches: Object.entries(histories).flatMap(([conversationId, messages]) => messages.filter((item) => item.text.toLowerCase().includes(input.query.toLowerCase())).map((message) => ({ conversationId, message }))) });
-      case "/api/CreateSession": histories.created = []; return Response.json({ id: "created" });
+      case "/api/CreateSession": await newSessionReady.promise; histories.created = []; return Response.json({ id: "created" });
       case "/api/Prompt":
         prompts.push(input);
         if (input.delivery === "STASH") await stashReady.promise;
@@ -236,7 +237,9 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     await composer.press("Enter");
     await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true }));
     await dialog.getByRole("button", { name: "Copy handoff", exact: true }).click();
-    await dialog.getByText("Copying handoff…", { exact: true }).waitFor();
+    await dialog.getByRole("button", { name: "Copying handoff…", exact: true }).waitFor({ timeout: 2000 });
+    expect(await dialog.getByRole("button", { name: "Copying handoff…" }).locator("[aria-live]").getAttribute("aria-live")).toBe("polite");
+    expect(await dialog.locator('p[role="status"]').count()).toBe(0);
     expect(prompts).toHaveLength(0);
     await Bun.write(path.resolve(import.meta.dir, `../../../../.tmp/handoff-loading-${width}.png`), await page.screenshot());
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -326,6 +329,9 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     await composer.fill("$handoff");
     await composer.press("Enter");
     await dialog.getByRole("button", { name: "Start new session", exact: true }).click();
+    await dialog.getByRole("button", { name: "Starting session…", exact: true }).waitFor({ timeout: 2000 });
+    expect(await dialog.locator('p[role="status"]').count()).toBe(0);
+    newSessionReady.resolve();
     await page.waitForURL("**/s/" + btoa("created").replace(/=+$/, ""));
     await dialog.waitFor({ state: "hidden" });
     expect(await page.locator("main").getByText("# Handoff from source", { exact: false }).count()).toBeGreaterThan(0);
