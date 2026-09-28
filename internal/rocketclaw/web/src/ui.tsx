@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions, rpc } from "./api";
 import type { ChatOrigin, MessageMatch, PromptDelivery } from "./types";
-import { Bot, Calendar, Check, CircleAlert, Clock, Copy, CornerUpLeft, Download, FileIcon, GitFork, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Settings, Sparkles, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import { Bot, Check, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, FileIcon, GitFork, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, navigate } from "./navigation";
 import { createContext, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject } from "react";
 import { flushSync } from "react-dom";
@@ -673,14 +673,19 @@ export function App() {
               <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="hidden size-[var(--navigation-button)] md:inline-flex" />} aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"} aria-expanded={sidebarOpen} aria-controls="session-sidebar" onClick={() => setSidebarOpen((open) => !open)}>
                 {sidebarOpen ? <PanelLeftClose className="size-[var(--navigation-icon)]" /> : <PanelLeftOpen className="size-[var(--navigation-icon)]" />}
               </TooltipTrigger><TooltipContent side="top">{sidebarOpen ? "Hide sidebar" : "Show sidebar"}</TooltipContent></Tooltip>
-              <SessionTabs returnTo={returnTo}>
-                <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="New session" onClick={newChat}>
-                  <SquarePen className="size-[var(--navigation-icon)]" />
-                </TooltipTrigger><TooltipContent side="top">New session</TooltipContent></Tooltip>
-                <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Search sessions" onClick={() => openPalette("sessions")}>
-                  <Search className="size-[var(--navigation-icon)]" />
-                </TooltipTrigger><TooltipContent side="top">Search sessions</TooltipContent></Tooltip>
-              </SessionTabs>
+              <div className="min-w-0 max-w-full justify-self-center overflow-x-auto overflow-y-hidden scrollbar-none">
+                <div className="flex w-max items-center gap-[var(--navigation-gap)]">
+                  <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="New session" onClick={newChat}>
+                    <SquarePen className="size-[var(--navigation-icon)]" />
+                  </TooltipTrigger><TooltipContent side="top">New session</TooltipContent></Tooltip>
+                  <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Search sessions" onClick={() => openPalette("sessions")}>
+                    <Search className="size-[var(--navigation-icon)]" />
+                  </TooltipTrigger><TooltipContent side="top">Search sessions</TooltipContent></Tooltip>
+                  <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Open command palette" onClick={() => openPalette("commands")}>
+                    <Command className="size-[var(--navigation-icon)]" />
+                  </TooltipTrigger><TooltipContent side="top">Open command palette</TooltipContent></Tooltip>
+                </div>
+              </div>
             </BottomNavigation>
             <div className="fixed top-2 right-2 z-40 rounded-md bg-background shadow-sm"><ThemeToggle /></div>
           <div className="flex min-h-0 min-w-0 flex-1">
@@ -858,10 +863,10 @@ function paletteRows(
   }
   return [
     ...actions,
-    { key: "new", label: "New session", detail: "", run: newChat },
-    { key: "run-cron", label: "Run cron", detail: "", keep: true, run: openCron },
-    ...(["settled", "cron", "agents", "skills", "config"] as const).map((key) => ({ key, label: key[0].toUpperCase() + key.slice(1), run: () => navigate(`/${key}`) })),
-    { key: "sidebar", label: sidebarOpen ? "Hide sidebar" : "Show sidebar", detail: "", run: onToggleSidebar },
+    { key: "new", label: "Session: New session", detail: "", run: newChat },
+    { key: "run-cron", label: "Cron: Run cron", detail: "", keep: true, run: openCron },
+    ...(["settled", "cron", "agents", "skills", "config"] as const).map((key) => ({ key, label: `Page: ${key[0].toUpperCase() + key.slice(1)}`, run: () => navigate(`/${key}`) })),
+    { key: "sidebar", label: `Sidebar: ${sidebarOpen ? "Hide sidebar" : "Show sidebar"}`, detail: "", run: onToggleSidebar },
   ].filter((item) => needle === "" || item.label.toLowerCase().includes(needle));
 }
 
@@ -901,7 +906,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, sidebarOpen, onToggleS
   const actions = useSessionActions(id, () => setMode(undefined));
   const choices = useQuery({ ...queries.agents({ conversationId: id }), enabled: id !== "" });
   const draft = drafts.get(id);
-  const commands = id ? dollarCommands.filter(({ name }) => name !== "cron" && (name !== "stop" || (draft?.busy ?? sidebar.rows.find((row) => row.id === id)?.running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label, disabled: !draft || draft.sending, run: () => {
+  const commands = id ? dollarCommands.filter(({ name }) => name !== "cron" && (name !== "stop" || (draft?.busy ?? sidebar.rows.find((row) => row.id === id)?.running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label: `${["fork", "handoff", "queue", "stop", "agent"].includes(name) ? "Session" : "Command"}: ${label}`, disabled: !draft || draft.sending, run: () => {
     if (name === "fork" || name === "handoff" || name === "queue") setCommand({ mode: name, source: id });
     else composer.current!(name);
   } })) : [];
@@ -955,7 +960,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, sidebarOpen, onToggleS
       setMode(undefined);
     },
   });
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.map((origin) => origin.data ?? ""), [...actions.items, ...commands], filters, agentFilter, roomFilter);
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.map((origin) => origin.data ?? ""), [...actions.items.map((item) => ({ ...item, label: `Session: ${item.label}` })), ...commands], filters, agentFilter, roomFilter);
   const selected = items.length === 0 ? 0 : pick % items.length;
   const choose = (item: (typeof items)[number]) => {
     if (item.disabled) return;
@@ -1241,32 +1246,6 @@ function SessionList({ settledOnly = false }: { settledOnly?: boolean }) {
         </li>)}
       </ul>
     </div>
-  );
-}
-
-function SessionTabs({ returnTo, children }: { returnTo: string; children: ReactNode }) {
-  const route = useRoute();
-  return (
-      <div className="min-w-0 max-w-full justify-self-center overflow-x-auto overflow-y-hidden scrollbar-none">
-      <div className="flex w-max items-center gap-[var(--navigation-gap)]">
-        {children}
-        <Tooltip><TooltipTrigger render={<Button variant={route.settled ? "default" : "ghost"} aria-current={route.settled} size="icon" className="size-[var(--navigation-button)]" role="link" nativeButton={false} render={<Link href={route.settled ? returnTo : "/settled"} />} />} aria-label="Settled">
-          <Check className="size-[var(--navigation-icon)]" />
-        </TooltipTrigger><TooltipContent side="top">Settled</TooltipContent></Tooltip>
-        <Tooltip><TooltipTrigger render={<Button variant={route.cron ? "default" : "ghost"} aria-current={route.cron} size="icon" className="size-[var(--navigation-button)]" role="link" nativeButton={false} render={<Link href={route.cron ? returnTo : "/cron"} />} />} aria-label="Cron" onMouseEnter={() => void queryClient.prefetchQuery(queries.cronJobs())}>
-            <Calendar className="size-[var(--navigation-icon)]" />
-        </TooltipTrigger><TooltipContent side="top">Cron</TooltipContent></Tooltip>
-        <Tooltip><TooltipTrigger render={<Button variant={route.agents ? "default" : "ghost"} aria-current={route.agents} size="icon" className="size-[var(--navigation-button)]" role="link" nativeButton={false} render={<Link href={route.agents ? returnTo : "/agents"} />} />} aria-label="Agents" onMouseEnter={() => void queryClient.prefetchQuery(queries.agents())}>
-            <Bot className="size-[var(--navigation-icon)]" />
-        </TooltipTrigger><TooltipContent side="top">Agents</TooltipContent></Tooltip>
-        <Tooltip><TooltipTrigger render={<Button variant={route.skills ? "default" : "ghost"} aria-current={route.skills} size="icon" className="size-[var(--navigation-button)]" role="link" nativeButton={false} render={<Link href={route.skills ? returnTo : "/skills"} />} />} aria-label="Skills" onMouseEnter={() => void queryClient.prefetchQuery(queries.skills())}>
-            <Sparkles className="size-[var(--navigation-icon)]" />
-        </TooltipTrigger><TooltipContent side="top">Skills</TooltipContent></Tooltip>
-        <Tooltip><TooltipTrigger render={<Button variant={route.config ? "default" : "ghost"} aria-current={route.config} size="icon" className="size-[var(--navigation-button)]" role="link" nativeButton={false} render={<Link href={route.config ? returnTo : "/config"} />} />} aria-label="Config" onMouseEnter={() => void queryClient.prefetchQuery(queries.config())}>
-            <Settings className="size-[var(--navigation-icon)]" />
-        </TooltipTrigger><TooltipContent side="top">Config</TooltipContent></Tooltip>
-      </div>
-      </div>
   );
 }
 

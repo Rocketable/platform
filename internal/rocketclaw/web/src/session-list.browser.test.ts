@@ -548,15 +548,18 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
 
     const navigation = page.locator("footer");
     const compactHeight = (await navigation.boundingBox())!.height;
-    const navigationAgent = navigation.getByRole("link", { name: "Agents", exact: true });
-    expect((await navigationAgent.boundingBox())!.width).toBe(48);
-    expect((await navigationAgent.locator("svg").boundingBox())!.width).toBe(24);
+    const navigationCommands = navigation.getByRole("button", { name: "Open command palette", exact: true });
+    expect(await navigation.locator("#bottom-navigation > :nth-child(2) button:visible").count()).toBe(3);
+    expect(await navigation.getByRole("link").count()).toBe(0);
+    expect((await navigationCommands.boundingBox())!.width).toBe(48);
+    expect((await navigationCommands.locator("svg").boundingBox())!.width).toBe(24);
+    await page.mouse.move(0, 0);
     await navigation.getByRole("button", { name: "Hide bottom navigation" }).click();
-    expect(await navigationAgent.isVisible()).toBe(false);
+    expect(await navigationCommands.isVisible()).toBe(false);
     expect((await navigation.boundingBox())!.height).toBeLessThan(compactHeight);
     expect(await navigation.getByRole("button", { name: "Show bottom navigation" }).getAttribute("aria-expanded")).toBe("false");
     await navigation.getByRole("button", { name: "Show bottom navigation" }).press("Enter");
-    expect(await navigationAgent.isVisible()).toBe(true);
+    expect(await navigationCommands.isVisible()).toBe(true);
     await navigation.getByRole("button", { name: "Hide bottom navigation" }).press("Space");
     await navigation.getByRole("button", { name: "Show bottom navigation" }).click();
     expect((await navigation.boundingBox())!.height).toBe(compactHeight);
@@ -636,10 +639,16 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     const commandPalette = page.getByRole("dialog", { name: "Run command", exact: true });
     await commandPalette.getByPlaceholder("Type a command", { exact: true }).waitFor();
     expect(await commandPalette.locator("ul").evaluate((node: HTMLElement) => getComputedStyle(node).scrollbarWidth)).toBe("thin");
-    await commandPalette.getByRole("button", { name: "New session", exact: true }).waitFor();
-    await commandPalette.getByRole("button", { name: "Run cron", exact: true }).waitFor();
+    await commandPalette.getByRole("button", { name: "Session: New session", exact: true }).waitFor();
+    await commandPalette.getByRole("button", { name: "Cron: Run cron", exact: true }).waitFor();
+    await commandPalette.getByRole("button", { name: "Page: Agents", exact: true }).waitFor();
     await page.keyboard.press("Escape");
     await commandPalette.waitFor({ state: "hidden" });
+    await navigationCommands.click();
+    await commandPalette.waitFor();
+    await page.keyboard.press("Escape");
+    await commandPalette.waitFor({ state: "hidden" });
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
 
     await page.setViewportSize({ width: 390, height: 844 });
     const mobileSessions = page.getByRole("button", { name: "Sessions", exact: true });
@@ -652,15 +661,17 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect(await navigation.getByRole("button", { name: "Sessions", exact: true }).count()).toBe(0);
     await page.waitForFunction(() => document.querySelector('button[aria-label="Hide bottom navigation"]')!.getBoundingClientRect().height >= 44);
     expect((await navigation.getByRole("button", { name: "Hide bottom navigation" }).boundingBox())!.height).toBeGreaterThanOrEqual(44);
-    expect((await navigation.getByRole("link", { name: "Agents", exact: true }).boundingBox())!.width).toBeGreaterThanOrEqual(44);
-    const agentsBounds = (await navigation.getByRole("link", { name: "Agents", exact: true }).boundingBox())!;
-    const skillsBounds = (await navigation.getByRole("link", { name: "Skills", exact: true }).boundingBox())!;
-    expect(skillsBounds.x - agentsBounds.x - agentsBounds.width).toBeGreaterThanOrEqual(8);
+    expect((await navigationCommands.boundingBox())!.width).toBeGreaterThanOrEqual(44);
+    const newBounds = (await navigation.getByRole("button", { name: "New session", exact: true }).boundingBox())!;
+    const navigationSearchBounds = (await navigation.getByRole("button", { name: "Search sessions", exact: true }).boundingBox())!;
+    expect(navigationSearchBounds.x - newBounds.x - newBounds.width).toBeGreaterThanOrEqual(8);
+    await page.mouse.move(0, 0);
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await navigation.getByRole("button", { name: "Hide bottom navigation" }).tap();
-    expect(await navigationAgent.isVisible()).toBe(false);
+    expect(await navigationCommands.isVisible()).toBe(false);
     expect(await mobileSessions.isVisible()).toBe(true);
     await navigation.getByRole("button", { name: "Show bottom navigation" }).tap();
-    expect(await navigationAgent.isVisible()).toBe(true);
+    expect(await navigationCommands.isVisible()).toBe(true);
     expect(await navigation.getByRole("button", { name: "Hide bottom navigation" }).evaluate((element: HTMLElement) => {
       const style = getComputedStyle(element);
       return [style.borderTopWidth, style.boxShadow, style.backgroundColor];
@@ -673,18 +684,18 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + 40 }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     await navigation.getByRole("button", { name: "Show bottom navigation" }).waitFor();
-    expect(await navigationAgent.isVisible()).toBe(false);
+    expect(await navigationCommands.isVisible()).toBe(false);
     const showHandle = (await navigation.getByRole("button", { name: "Show bottom navigation" }).boundingBox())!;
     const showY = showHandle.y + showHandle.height / 2;
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y: showY }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: showY - 40 }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     await navigation.getByRole("button", { name: "Hide bottom navigation" }).waitFor();
-    expect(await navigationAgent.isVisible()).toBe(true);
+    expect(await navigationCommands.isVisible()).toBe(true);
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + 40 }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchCancel", touchPoints: [] });
-    expect(await navigationAgent.isVisible()).toBe(true);
+    expect(await navigationCommands.isVisible()).toBe(true);
     expect((await navigation.getByRole("button", { name: "Hide bottom navigation" }).locator("..").boundingBox())!.height).toBe(16);
     const routeBeforeSwipe = page.url();
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: 150, y: 300 }] });
@@ -729,14 +740,15 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await skillComposer.fill("");
 
     await skillComposer.fill("retained through browser history");
-    await page.getByRole("link", { name: "Agents", exact: true }).click();
+    await navigationCommands.click();
+    await page.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Page: Agents" }).click();
     await page.waitForURL("**/agents");
     await page.goBack();
     await page.waitForURL(origin + "/");
     expect(await skillComposer.inputValue()).toBe("retained through browser history");
     await page.goForward();
     await page.waitForURL("**/agents");
-    await page.getByRole("link", { name: "Agents", exact: true }).click();
+    await page.goBack();
     await page.waitForURL(origin + "/");
     expect(await skillComposer.inputValue()).toBe("retained through browser history");
     await skillComposer.fill("");
@@ -1410,6 +1422,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect(await matrixSearch.inputValue()).toBe("");
     await matrixSearch.press("Escape");
     await matrix.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Search sessions");
+    await matrix.mouse.move(0, 0);
+    await matrix.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     await matrix.getByRole("button", { name: "Hide bottom navigation" }).click();
     expect(await searchButton.isVisible()).toBe(false);
     await matrix.keyboard.press("Meta+p");
@@ -1483,7 +1497,14 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await hidden(settledPalette, "matching other room");
     await settledPage.keyboard.press("Escape");
     const footer = settledPage.locator("footer");
-    await footer.getByRole("link", { name: "Settled", exact: true }).click();
+    const openPage = async (name: string) => {
+      await footer.getByRole("button", { name: "Open command palette" }).click();
+      await settledPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: `Page: ${name}`, exact: true }).click();
+      await settledPage.locator('[data-slot="dialog-overlay"]').waitFor({ state: "hidden" });
+      await settledPage.mouse.move(0, 0);
+      await settledPage.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    };
+    await openPage("Settled");
     await settledPage.waitForURL("**/settled");
     const settledMain = settledPage.locator("main");
     await shown(settledMain, "matching settled");
@@ -1499,7 +1520,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect(await settledMain.getByPlaceholder("Search or agent: or room:").inputValue()).toBe("");
     await settledPage.keyboard.press("Escape");
     await settledPage.waitForURL(`${origin}/`);
-    await footer.getByRole("link", { name: "Settled", exact: true }).click();
+    await openPage("Settled");
     await settledPage.waitForURL("**/settled");
     await settledMain.getByPlaceholder("Search or agent: or room:").fill("agent:main");
     await settledPage.keyboard.press("Enter");
@@ -1518,22 +1539,19 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     ctrl.yieldBatches = complete(ctrl.settledRows.map((session) => ({ ...session, settled: false })));
     await settledMain.getByPlaceholder("Search or agent: or room:").fill("");
     await shown(settledMain, "No settled chats");
-    await footer.getByRole("link", { name: "Settled", exact: true }).click();
+    await settledPage.keyboard.press("Escape");
     await settledPage.waitForURL(`${origin}/`);
     for (const name of ["Settled", "Cron", "Agents", "Skills", "Config"]) {
-      const tab = footer.getByRole("link", { name, exact: true });
-      await tab.click();
+      await openPage(name);
       await settledPage.waitForURL(`${origin}/${name.toLowerCase()}`);
-      expect(await tab.getAttribute("href")).toBe("/");
       if (name === "Config") {
         await shown(settledPage.locator("main"), "web.auto_settle_after");
         await shown(settledPage.locator("main"), "Configured user");
         await shown(settledPage.locator("main"), "connected@example.com");
         await shown(settledPage.locator("main"), "1h30m0s");
       }
-      await tab.click();
+      await settledPage.keyboard.press("Escape");
       await settledPage.waitForURL(`${origin}/`);
-      expect(await tab.getAttribute("href")).toBe(`/${name.toLowerCase()}`);
     }
     for (const width of [1280, 390]) {
       await settledPage.setViewportSize({ width, height: 844 });
@@ -1546,13 +1564,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       if (width === 390) await sidebar.waitFor({ state: "hidden" });
       await settledPage.getByPlaceholder("Message or $command").fill("keep this chat draft");
       for (const name of ["Settled", "Cron", "Agents", "Skills", "Config"]) {
-        const tab = footer.getByRole("link", { name, exact: true });
-        await tab.click();
+        await openPage(name);
         await settledPage.waitForURL(`${origin}/${name.toLowerCase()}`);
-        expect(await tab.getAttribute("href")).toBe(chatPath);
-        expect(await tab.getAttribute("aria-current")).toBe("true");
-        expect(await footer.locator('[aria-current="true"]').count()).toBe(1);
-        expect(await tab.evaluate((element: HTMLElement) => element.classList.contains("bg-primary"))).toBe(true);
         const heading = settledMain.getByRole("heading", { name, exact: true });
         const mainBox = (await settledMain.boundingBox())!;
         const headerBox = (await heading.locator("..").boundingBox())!;
@@ -1583,17 +1596,15 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
           expect(searchBox.x).toBe(headerBox.x);
           expect(searchBox.y).toBe(headingBox.y + headingBox.height + 24);
         }
-        if (width === 1280 && name === "Agents") await settledPage.keyboard.press("Escape");
-        else if (width === 1280 && name === "Skills") await close.click();
-        else await tab.click();
+        if (width === 1280 && name === "Skills") await close.click();
+        else await settledPage.keyboard.press("Escape");
         await settledPage.waitForURL(`${origin}${chatPath}`);
-        expect(await footer.locator('[aria-current="true"]').count()).toBe(0);
       }
-      await footer.getByRole("link", { name: "Cron", exact: true }).click();
+      await openPage("Cron");
       await settledPage.waitForURL(`${origin}/cron`);
-      await footer.getByRole("link", { name: "Skills", exact: true }).click();
+      await openPage("Skills");
       await settledPage.waitForURL(`${origin}/skills`);
-      await footer.getByRole("link", { name: "Skills", exact: true }).click();
+      await settledPage.keyboard.press("Escape");
       await settledPage.waitForURL(`${origin}${chatPath}`);
       if (width === 390) await settledPage.keyboard.press("Escape");
       expect(await settledPage.getByPlaceholder("Message or $command").inputValue()).toBe("keep this chat draft");
@@ -1606,7 +1617,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       } else {
         expect(Math.abs(groupBox!.x + groupBox!.width / 2 - width / 2)).toBeLessThan(1);
       }
-      expect(await newChat.locator("..").getByRole("link").count()).toBe(5);
+      expect(await newChat.locator("..").getByRole("button").count()).toBe(3);
       const creations = ctrl.createdAgents.length;
       await newChat.click();
       await settledPage.waitForURL(`${origin}/`);
@@ -1616,9 +1627,9 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await settledPage.getByRole("combobox", { name: "Choose agent" }).click();
       await settledPage.getByRole("option", { name: "other gpt", exact: true }).click();
       await settledPage.getByPlaceholder("Message a new session").fill("fresh draft");
-      await footer.getByRole("link", { name: "Config", exact: true }).click();
+      await openPage("Config");
       await settledPage.waitForURL(`${origin}/config`);
-      await footer.getByRole("link", { name: "Config", exact: true }).click();
+      await settledPage.goBack();
       await settledPage.waitForURL(`${origin}/`);
       if (width === 390) await settledPage.keyboard.press("Escape");
       expect(await settledPage.getByPlaceholder("Message a new session").inputValue()).toBe("fresh draft");
@@ -1914,13 +1925,15 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await namedRow.waitFor({ state: "hidden" });
       expect(ctrl.settledRows.find((session) => session.id === "named")?.snoozedUntil).toBe(await detailsPage.evaluate(() => new Date("2027-01-02T09:30").toISOString()));
       if (width === 390) await detailsPage.keyboard.press("Escape");
-      await detailsPage.getByRole("link", { name: "Settled", exact: true }).click();
+      await detailsPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
+      await detailsPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Page: Settled" }).click();
       const snoozedRow = detailsPage.locator("main li").filter({ hasText: "Original preview" });
       await snoozedRow.getByText(/Snoozed until/).waitFor();
       await snoozedRow.hover();
       await snoozedRow.getByRole("button", { name: "Unsettle", exact: true }).click();
       await snoozedRow.waitFor({ state: "hidden" });
-      await detailsPage.getByRole("link", { name: "Settled", exact: true }).click();
+      await detailsPage.goBack();
+      await detailsPage.waitForURL(`**/s/${Buffer.from("named").toString("base64url")}`);
       if (width === 390) await detailsPage.getByRole("button", { name: "Sessions", exact: true }).click();
       await namedRow.getByRole("button", { name: "Settle", exact: true }).waitFor();
       expect(ctrl.settledRows.find((session) => session.id === "named")?.snoozedUntil).toBeUndefined();
@@ -2047,8 +2060,9 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     });
     await attachmentPage.getByRole("button", { name: "Remove drop.bin", exact: true }).waitFor();
     await attachmentPage.locator("textarea").fill("  exact file draft\n");
-    await attachmentPage.locator("footer").getByRole("link", { name: "Config", exact: true }).click();
-    await attachmentPage.locator("footer").getByRole("link", { name: "Config", exact: true }).click();
+    await attachmentPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
+    await attachmentPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Page: Config" }).click();
+    await attachmentPage.goBack();
     await attachmentPage.getByRole("button", { name: "Remove keep.bin", exact: true }).waitFor();
     expect(await attachmentPage.locator("textarea").inputValue()).toBe("  exact file draft\n");
     await attachmentPage.locator("#session-sidebar").getByRole("link").filter({ hasText: "Most recent message" }).click();
@@ -2200,33 +2214,34 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await photoPage.close();
     const desktopPage = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     await desktopPage.goto(origin);
-    const desktopAgent = desktopPage.locator("footer").getByRole("link", { name: "Agents", exact: true });
-    await desktopAgent.waitFor();
-    expect((await desktopAgent.boundingBox())!.width).toBe(32);
-    expect((await desktopAgent.locator("svg").boundingBox())!.width).toBe(24);
-    const agentBox = (await desktopAgent.boundingBox())!;
-    await desktopAgent.hover();
-    expect((await desktopAgent.boundingBox())!.x).toBe(agentBox.x);
+    const desktopCommands = desktopPage.locator("footer").getByRole("button", { name: "Open command palette" });
+    await desktopCommands.waitFor();
+    expect((await desktopCommands.boundingBox())!.width).toBe(32);
+    expect((await desktopCommands.locator("svg").boundingBox())!.width).toBe(24);
+    const commandsBox = (await desktopCommands.boundingBox())!;
+    await desktopCommands.hover();
+    expect((await desktopCommands.boundingBox())!.x).toBe(commandsBox.x);
     expect(await desktopPage.locator("#bottom-navigation > :last-child").evaluate((el: HTMLElement) => {
       const style = getComputedStyle(el);
       return [style.overflowY, style.scrollbarWidth];
     })).toEqual(["hidden", "none"]);
-    for (const name of ["Hide sidebar", "New session", "Settled", "Cron", "Agents", "Skills", "Config"]) {
-      const control = desktopPage.locator("footer").getByRole(name === "Hide sidebar" || name === "New session" ? "button" : "link", { name, exact: true });
+    for (const name of ["Hide sidebar", "New session", "Search sessions", "Open command palette"]) {
+      const control = desktopPage.locator("footer").getByRole("button", { name, exact: true });
       await control.hover();
       await desktopPage.locator('[data-slot="tooltip-content"]').filter({ hasText: name }).waitFor();
       await desktopPage.mouse.move(0, 0);
       await desktopPage.locator('[data-slot="tooltip-content"]').filter({ hasText: name }).waitFor({ state: "hidden" });
     }
     await desktopPage.keyboard.press("Tab");
-    await desktopAgent.focus();
-    await desktopPage.locator('[data-slot="tooltip-content"]').filter({ hasText: "Agents" }).waitFor();
+    await desktopCommands.focus();
+    await desktopPage.locator('[data-slot="tooltip-content"]').filter({ hasText: "Open command palette" }).waitFor();
     await desktopPage.keyboard.press("Escape");
     await desktopPage.getByRole("button", { name: "Hide bottom navigation" }).click();
-    expect(await desktopAgent.isVisible()).toBe(false);
+    expect(await desktopCommands.isVisible()).toBe(false);
     await desktopPage.getByRole("button", { name: "Show bottom navigation" }).click();
     await desktopPage.setViewportSize({ width: 320, height: 640 });
-    await desktopPage.locator("footer").getByRole("link", { name: "Config", exact: true }).click();
+    await desktopPage.locator("footer").getByRole("button", { name: "Open command palette" }).click();
+    await desktopPage.getByRole("dialog", { name: "Run command" }).getByRole("button", { name: "Page: Config" }).click();
     await desktopPage.waitForURL("**/config");
     expect(await desktopPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await desktopPage.close();
