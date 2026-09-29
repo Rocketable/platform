@@ -158,6 +158,86 @@ func TestTailscaleIdentityCache(t *testing.T) {
 	})
 }
 
+func TestSearchMessagesSharedFlightCancellation(t *testing.T) {
+	started := make(chan context.Context, 3)
+	release := make(chan struct{})
+	server := &Server{
+		backend: &mockBackend{ListConversationsFunc: func(ctx context.Context) ([]protocol.Conversation, error) {
+			started <- ctx
+
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-release:
+				return []protocol.Conversation{}, nil
+			}
+		}},
+		usernames: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "alice", netip.MustParseAddr("192.0.2.2"): "bob"},
+	}
+	firstCtx, cancelFirst := context.WithCancel(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1")))
+	secondCtx, cancelSecond := context.WithCancel(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.2")))
+
+	defer cancelFirst()
+	defer cancelSecond()
+
+	first, second := make(chan error, 1), make(chan error, 1)
+
+	go func() {
+		_, err := server.searchMessages(firstCtx, &SearchMessagesRequest{Query: "alpha"})
+		first <- err
+	}()
+
+	scanCtx := <-started
+	require.Equal(t, []string{"192.0.2.1"}, metadata.ValueFromIncomingContext(scanCtx, "rocketclaw-principal"))
+
+	go func() {
+		_, err := server.searchMessages(secondCtx, &SearchMessagesRequest{Query: "ALPHA "})
+		second <- err
+	}()
+
+	require.Eventually(t, func() bool {
+		server.searchMu.Lock()
+		defer server.searchMu.Unlock()
+
+		return server.searches["alpha"].waiters == 2
+	}, time.Second, time.Millisecond)
+	cancelFirst()
+	require.ErrorIs(t, <-first, context.Canceled)
+	require.NoError(t, scanCtx.Err(), "the other waiter still needs the scan")
+	thirdCtx, cancelThird := context.WithCancel(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1")))
+	third := make(chan error, 1)
+
+	go func() {
+		_, err := server.searchMessages(thirdCtx, &SearchMessagesRequest{Query: "beta"})
+		third <- err
+	}()
+
+	<-started // A different query must start its own scan.
+	cancelThird()
+	require.ErrorIs(t, <-third, context.Canceled)
+	cancelSecond()
+	require.ErrorIs(t, <-second, context.Canceled)
+	<-scanCtx.Done()
+
+	retryCtx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1"))
+	retry := make(chan error, 1)
+
+	go func() {
+		_, err := server.searchMessages(retryCtx, &SearchMessagesRequest{Query: "alpha"})
+		retry <- err
+	}()
+
+	newScanCtx := <-started // Abandoning the first scan cannot trap the next search.
+	empty, err := server.searchMessages(retryCtx, &SearchMessagesRequest{Query: " \t "})
+	require.NoError(t, err)
+	require.Empty(t, empty.Matches)
+	_, err = server.searchMessages(t.Context(), &SearchMessagesRequest{Query: "alpha"})
+	require.Equal(t, codes.Unauthenticated, status.Code(err))
+	close(release)
+	require.NoError(t, <-retry)
+	<-newScanCtx.Done()
+}
+
 func TestSessionEntries(t *testing.T) {
 	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
 	require.NoError(t, err)
@@ -2292,6 +2372,115 @@ func TestSessionEntries(t *testing.T) {
 		_, err = invoke[ForkSessionResponse](ctx, connection, "ForkSession", &ForkSessionRequest{Id: source})
 		require.ErrorContains(t, err, "load web agents")
 		require.NoError(t, root.WriteFile(agentPath, agentData, 0o600))
+	})
+
+	t.Run("shared message search", func(t *testing.T) {
+		const id = "shared-search"
+		require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main", CreatedBy: "alice"}))
+		entryID, err := sessions.AppendEntryID(ctx, id, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"message","role":"user","content":"unique shared search text"}`),
+		}})
+		require.NoError(t, err)
+
+		server.usernames[netip.MustParseAddr("192.0.2.3")] = "bob"
+
+		original := core.ListConversationsFunc
+		defer func() { core.ListConversationsFunc = original }()
+
+		started := make(chan context.Context, 3)
+		release := make(chan struct{})
+		core.ListConversationsFunc = func(scanCtx context.Context) ([]protocol.Conversation, error) {
+			started <- scanCtx
+
+			select {
+			case <-release:
+				return original(scanCtx)
+			case <-scanCtx.Done():
+				return nil, scanCtx.Err()
+			}
+		}
+
+		type result struct {
+			response *SearchMessagesResponse
+			err      error
+		}
+
+		firstCtx, cancelFirst := context.WithCancel(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1")))
+		defer cancelFirst()
+
+		secondCtx := metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.3"))
+		first, second := make(chan result, 1), make(chan result, 1)
+
+		go func() {
+			response, err := server.searchMessages(firstCtx, &SearchMessagesRequest{Query: " UNIQUE SHARED search TEXT "})
+			first <- result{response, err}
+		}()
+
+		<-started
+
+		go func() {
+			response, err := server.searchMessages(secondCtx, &SearchMessagesRequest{Query: "unique shared search text"})
+			second <- result{response, err}
+		}()
+
+		require.Eventually(t, func() bool {
+			server.searchMu.Lock()
+			defer server.searchMu.Unlock()
+
+			return server.searches["unique shared search text"].waiters == 2
+		}, time.Second, time.Millisecond)
+		cancelFirst()
+		require.ErrorIs(t, (<-first).err, context.Canceled)
+
+		select {
+		case <-second:
+			t.Fatal("canceling one waiter stopped the other")
+		default:
+		}
+
+		empty, err := server.searchMessages(secondCtx, &SearchMessagesRequest{Query: " \t "})
+		require.NoError(t, err)
+		require.Empty(t, empty.Matches)
+		_, err = server.searchMessages(t.Context(), &SearchMessagesRequest{Query: "unique shared search text"})
+		require.Equal(t, codes.Unauthenticated, status.Code(err))
+		close(release)
+
+		matched := <-second
+		require.NoError(t, matched.err)
+		require.Len(t, matched.response.Matches, 1)
+		require.Equal(t, id, matched.response.Matches[0].ConversationId)
+		require.Equal(t, fmt.Sprintf("%d:0", entryID), matched.response.Matches[0].Message.MessageId)
+		require.Empty(t, started, "equal normalized queries should scan once")
+
+		release = make(chan struct{})
+
+		go func() {
+			response, err := server.searchMessages(metadata.NewIncomingContext(t.Context(), metadata.Pairs("rocketclaw-principal", "192.0.2.1")), &SearchMessagesRequest{Query: "unique shared search text"})
+			first <- result{response, err}
+		}()
+
+		<-started
+
+		go func() {
+			response, err := server.searchMessages(secondCtx, &SearchMessagesRequest{Query: "UNIQUE SHARED SEARCH TEXT"})
+			second <- result{response, err}
+		}()
+
+		require.Eventually(t, func() bool {
+			server.searchMu.Lock()
+			defer server.searchMu.Unlock()
+
+			return server.searches["unique shared search text"].waiters == 2
+		}, time.Second, time.Millisecond)
+		close(release)
+
+		for _, call := range []result{<-first, <-second} {
+			require.NoError(t, call.err)
+			require.Len(t, call.response.Matches, 1)
+			require.Equal(t, fmt.Sprintf("%d:0", entryID), call.response.Matches[0].Message.MessageId)
+		}
+
+		require.Empty(t, started, "both authorized callers should share one scan")
 	})
 
 	// A database outage cannot turn selected choices or enumeration into empty success.

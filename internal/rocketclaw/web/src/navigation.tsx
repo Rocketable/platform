@@ -14,6 +14,10 @@ export function usePathname() {
   return useSyncExternalStore(subscribe, () => location.pathname);
 }
 
+export function useSearch() {
+  return useSyncExternalStore(subscribe, () => location.search);
+}
+
 export default function Link({ href, onClick, ...props }: ComponentProps<"a">) {
   return <a {...props} href={href} onClick={(event) => {
     onClick?.(event);
