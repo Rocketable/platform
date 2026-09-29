@@ -186,7 +186,8 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     await forkRow.waitFor();
     expect(await sidebar.getByRole("img", { name: "Forked session", exact: true }).count()).toBe(1);
     await forkRow.hover();
-    await forkRow.getByRole("button", { name: "Open original conversation", exact: true }).click();
+    await forkRow.getByRole("button", { name: "Session actions" }).click();
+    await page.getByRole("menuitem", { name: "Open original conversation", exact: true }).click();
     await page.waitForURL("**/s/" + btoa("source").replace(/=+$/, ""));
     await page.keyboard.press("Control+p");
     const palette = page.getByRole("dialog", { name: "Go to session", exact: true });

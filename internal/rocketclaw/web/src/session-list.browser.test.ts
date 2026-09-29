@@ -1469,7 +1469,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await failure.close();
     ctrl.originError = "";
     origins["perf-0"] = { kind: "external_mcp", externalConversationId: "origin-only-needle" };
-    ctrl.yieldBatches = complete(Array.from({ length: 96 }, (_, index) => row(`perf-${index}`, `Search fixture ${index}`)));
+    ctrl.yieldBatches = complete(Array.from({ length: 96 }, (_, index) => ({ ...row(`perf-${index}`, `Search fixture ${index}`), snoozedUntil: "2027-01-02T09:30:00Z" })));
     const many = await browser.newPage();
     await many.addInitScript(() => {
       const fetch = window.fetch;
@@ -1484,6 +1484,45 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     });
     await many.goto(origin);
     await many.locator("#session-sidebar").getByText("Search fixture 95", { exact: true }).waitFor();
+    await many.waitForFunction(() => document.querySelectorAll("#session-sidebar li").length === 96);
+    await many.evaluate(() => {
+      const originalFormat = Date.prototype.toLocaleString;
+      const originalNow = Date.now;
+      const snoozeTime = Date.parse("2027-01-02T09:30:00Z");
+      const originalFetch = window.fetch;
+      const probe = window as unknown as { rowRenders: number; listRefreshes: number; restoreRefreshProbe: () => void };
+      probe.rowRenders = 0;
+      probe.listRefreshes = 0;
+      Date.prototype.toLocaleString = function (locales?: Intl.LocalesArgument, options?: Intl.DateTimeFormatOptions) {
+        if (this.getTime() === snoozeTime) probe.rowRenders++;
+        return originalFormat.call(this, locales, options);
+      };
+      window.fetch = new Proxy(originalFetch, { apply(target, thisArg, args: Parameters<typeof fetch>) {
+        if (String(args[0]).endsWith("/api/ListSessions")) probe.listRefreshes++;
+        return Reflect.apply(target, thisArg, args);
+      } });
+      probe.restoreRefreshProbe = () => { Date.prototype.toLocaleString = originalFormat; Date.now = originalNow; window.fetch = originalFetch; };
+    });
+    await many.waitForFunction(() => (window as unknown as { listRefreshes: number }).listRefreshes > 0);
+    await many.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    expect(await many.evaluate(() => (window as unknown as { rowRenders: number }).rowRenders)).toBe(0);
+    expect(await many.locator("#session-sidebar li").count()).toBe(96);
+    const rowActions = many.locator("#session-sidebar li").first();
+    expect(await rowActions.getByRole("button", { name: "Session actions" }).count()).toBe(1);
+    expect(await rowActions.locator("button").count()).toBe(1);
+    await rowActions.getByRole("button", { name: "Session actions" }).focus();
+    await many.keyboard.press("Enter");
+    for (const name of ["Name session", "Pin session", "Snooze session", "Settle"]) {
+      await many.getByRole("menuitem", { name }).waitFor();
+    }
+    await many.keyboard.press("Escape");
+    await many.waitForFunction(() => document.activeElement === document.querySelector("#session-sidebar li button"));
+    expect(await rowActions.getByRole("button", { name: "Session actions" }).evaluate((button: HTMLElement) => button === document.activeElement)).toBe(true);
+    const ageBefore = await rowActions.locator("span[title]").getAttribute("title");
+    await many.evaluate(() => { const now = Date.now; Date.now = () => now() + 86_400_000; });
+    await many.waitForFunction((before: string) => document.querySelector("#session-sidebar li span[title]")?.getAttribute("title") !== before, ageBefore);
+    expect(await rowActions.locator("span[title]").getAttribute("title")).not.toBe(ageBefore);
+    await many.evaluate(() => (window as unknown as { restoreRefreshProbe: () => void }).restoreRefreshProbe());
     await many.getByRole("button", { name: "Search sessions", exact: true }).click();
     const manyDialog = many.getByRole("dialog", { name: "Go to session", exact: true });
     await manyDialog.getByPlaceholder("Search sessions").fill("origin-only-needle");
@@ -1596,7 +1635,12 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await settledMain.getByPlaceholder("Search or agent: or room:").fill("no-such-chat");
     await shown(settledMain, "No matches");
     await settledMain.getByPlaceholder("Search or agent: or room:").fill("matching settled");
-    await settledMain.getByRole("button", { name: "Unsettle", exact: true }).click();
+    await settledMain.getByRole("button", { name: "Session actions" }).click();
+    await settledPage.getByRole("menuitem", { name: "Unsettle", exact: true }).waitFor();
+    await settledPage.keyboard.press("Escape");
+    expect(new URL(settledPage.url()).pathname).toBe("/settled");
+    await settledMain.getByRole("button", { name: "Session actions" }).click();
+    await settledPage.getByRole("menuitem", { name: "Unsettle", exact: true }).click();
     await shown(settledMain, "No matches");
     expect(ctrl.settleCalls).toEqual([{ id: "slack-thread:C:settled", settled: false }]);
     await shown(settledSidebar, "matching settled");
@@ -1978,9 +2022,13 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       if (width === 390) await detailsPage.getByRole("button", { name: "Sessions", exact: true }).click();
       const sidebar = width === 390 ? detailsPage.getByRole("dialog", { name: "Sessions", exact: true }) : detailsPage.locator("#session-sidebar");
       const namedRow = sidebar.locator("li").filter({ hasText: "Original preview" });
+      const chooseRowAction = async (row: typeof namedRow, name: string) => {
+        await row.getByRole("button", { name: "Session actions" }).click();
+        await detailsPage.getByRole("menuitem", { name, exact: true }).click();
+      };
       await namedRow.locator("a").waitFor();
       await namedRow.hover();
-      await namedRow.getByRole("button", { name: "Snooze session", exact: true }).click();
+      await chooseRowAction(namedRow, "Snooze session");
       const snoozeDialog = detailsPage.getByRole("dialog", { name: "Snooze session", exact: true });
       await snoozeDialog.getByLabel("Return at (local time)").fill("2027-01-02T09:30");
       await detailsPage.screenshot({ path: path.join(process.env.TMPDIR!, `snooze-${width}.png`) });
@@ -1994,31 +2042,33 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       const snoozedRow = detailsPage.locator("main li").filter({ hasText: "Original preview" });
       await snoozedRow.getByText(/Snoozed until/).waitFor();
       await snoozedRow.hover();
-      await snoozedRow.getByRole("button", { name: "Unsettle", exact: true }).click();
+      await chooseRowAction(snoozedRow, "Unsettle");
       await snoozedRow.waitFor({ state: "hidden" });
       await detailsPage.goBack();
       await detailsPage.waitForURL(`**/s/${Buffer.from("named").toString("base64url")}`);
       if (width === 390) await detailsPage.getByRole("button", { name: "Sessions", exact: true }).click();
-      await namedRow.getByRole("button", { name: "Settle", exact: true }).waitFor();
+      await namedRow.getByRole("button", { name: "Session actions" }).waitFor();
       expect(ctrl.settledRows.find((session) => session.id === "named")?.snoozedUntil).toBeUndefined();
       const rowBox = await namedRow.boundingBox();
       const linkBox = await namedRow.locator("a").boundingBox();
       expect(linkBox!.width).toBe(rowBox!.width);
       await namedRow.hover();
-      await namedRow.getByRole("button", { name: "Name session", exact: true }).click();
+      await chooseRowAction(namedRow, "Name session");
       const rowDialog = detailsPage.getByRole("dialog", { name: "Name session", exact: true });
       await rowDialog.getByLabel("Session name").fill("Sidebar rename");
       await rowDialog.getByRole("button", { name: "Save", exact: true }).click();
       await rowDialog.waitFor({ state: "hidden" });
       const renamedRow = sidebar.locator("li").filter({ hasText: "Sidebar rename" });
       await renamedRow.hover();
-      await renamedRow.getByRole("button", { name: "Name session", exact: true }).click();
+      await chooseRowAction(renamedRow, "Name session");
       await rowDialog.getByLabel("Session name").fill("");
       await rowDialog.getByRole("button", { name: "Save", exact: true }).click();
       await rowDialog.waitFor({ state: "hidden" });
       await namedRow.hover();
-      await namedRow.getByRole("button", { name: "Pin session", exact: true }).click();
-      await namedRow.getByRole("button", { name: "Unpin session", exact: true }).waitFor();
+      await chooseRowAction(namedRow, "Pin session");
+      await namedRow.getByRole("button", { name: "Session actions" }).click();
+      await detailsPage.getByRole("menuitem", { name: "Unpin session", exact: true }).waitFor();
+      await detailsPage.keyboard.press("Escape");
       expect(await sidebar.locator('li a[href^="/s/"]').first().innerText()).toContain("Original preview");
       expect(new URL(detailsPage.url()).pathname).toBe(`/s/${Buffer.from("named").toString("base64url")}`);
       if (width === 390) await detailsPage.keyboard.press("Escape");

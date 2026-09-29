@@ -1,12 +1,13 @@
 "use client";
 
 import { QueryClient, QueryClientProvider, useQuery, useMutation } from "@tanstack/react-query";
+import { Menu } from "@base-ui/react/menu";
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions, rpc } from "./api";
 import type { ChatOrigin, MessageMatch, PromptDelivery } from "./types";
-import { Bot, Check, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, FileIcon, GitFork, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import { Bot, Check, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, navigate } from "./navigation";
 import { createContext, memo, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject } from "react";
 import { flushSync } from "react-dom";
@@ -378,6 +379,7 @@ const Sidebar = createContext<SidebarState>({
   loadingIds: new Set(),
   invalidateQueries: () => {},
 });
+const SidebarInvalidation = createContext<() => void>(() => {});
 
 function delay(ms: number, signal: AbortSignal) {
   return new Promise<void>((resolve) => {
@@ -523,9 +525,9 @@ function SidebarOwner({ children }: { children: ReactNode }) {
   const visible = owner !== undefined && ownerRef.current === owner && protocolRef.current === protocol.data;
   const value = useMemo(() => ({ ...view, rows: visible ? view.rows : [], invalidateQueries: bump }), [view, visible, bump]);
   return (
-    <Sidebar.Provider value={value}>
-      {children}
-    </Sidebar.Provider>
+    <SidebarInvalidation.Provider value={bump}>
+      <Sidebar.Provider value={value}>{children}</Sidebar.Provider>
+    </SidebarInvalidation.Provider>
   );
 }
 
@@ -645,7 +647,7 @@ export function App() {
     };
     const onEscape = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || showChat || event.key !== "Escape") return;
-      if (document.querySelector('[role="dialog"], [role="listbox"], [role="tooltip"]')) return;
+      if (document.querySelector('[role="dialog"], [role="listbox"], [role="menu"], [role="tooltip"]')) return;
       event.preventDefault();
       navigate(tabReturnTo.current);
     };
@@ -945,7 +947,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, sidebarOpen, onToggleS
   const sidebar = useContext(Sidebar);
   const { setCommand, composer } = useContext(SessionCommands);
   const { id } = useRoute();
-  const actions = useSessionActions(id, () => setMode(undefined));
+  const actions = useSessionActions(sidebar.rows.find((row) => row.id === id), () => setMode(undefined));
   const choices = useQuery({ ...queries.agents({ conversationId: id }), enabled: id !== "" });
   const draft = drafts.get(id);
   const commands = id ? dollarCommands.filter(({ name }) => name !== "cron" && (name !== "stop" || (draft?.busy ?? sidebar.rows.find((row) => row.id === id)?.running)) && (name !== "agent" || !!choices.data?.agents.length)).map(({ name, label }) => ({ key: name, label: `${["fork", "handoff", "queue", "stop", "agent"].includes(name) ? "Session" : "Command"}: ${label}`, disabled: !draft || draft.sending, run: () => {
@@ -1058,23 +1060,23 @@ function relativeTime(iso: string) {
   return `${Math.floor(ms / 86_400_000)}d`;
 }
 
-function SessionRowContent({ session, loading = false }: { session: Session; loading?: boolean }) {
+function SessionRowContent({ session, loading = false, age = relativeTime(session.updatedAt ?? "") }: { session: Session; loading?: boolean; age?: string }) {
   const title = session.name || rowPreview(session, loading).split("\n", 1)[0] || sessionLabel(session.id);
   const channel = slackSession(session.id) ? (session.title ?? "") : "";
-  const meta = [session.snoozedUntil ? `Snoozed until ${new Date(session.snoozedUntil).toLocaleString()}` : session.settled ? "Settled" : "", channel, session.agent, relativeTime(session.updatedAt ?? "")].filter(Boolean).join(" · ");
+  const meta = [session.snoozedUntil ? `Snoozed until ${new Date(session.snoozedUntil).toLocaleString()}` : session.settled ? "Settled" : "", channel, session.agent, age].filter(Boolean).join(" · ");
   return <span className="flex min-w-0 w-full flex-1 flex-col gap-0.5">
     <span className="flex items-center gap-1.5 text-sm font-medium">{session.forkedFrom ? <GitFork role="img" aria-label="Forked session" className="size-3.5 shrink-0" /> : null}<span data-slot="session-title" className="truncate">{title}</span></span>
     <span className="flex items-center gap-1 text-xs text-muted-foreground"><span className="inline-flex size-3 shrink-0">{session.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 animate-spin motion-reduce:animate-none" /> : null}</span><span className="truncate" title={meta}>{meta}</span></span>
   </span>;
 }
 
-function useSessionActions(id: string, onSuccess?: () => void) {
-  const sidebar = useContext(Sidebar);
+function useSessionActions(session: Session | undefined, onSuccess?: () => void) {
+  const invalidate = useContext(SidebarInvalidation);
   const { setCommand } = useContext(SessionCommands);
-  const saved = () => { sidebar.invalidateQueries(); onSuccess?.(); };
+  const saved = () => { invalidate(); onSuccess?.(); };
   const update = useMutation({ mutationFn: mutations.updateSession, onSuccess: saved });
   const settle = useMutation({ mutationFn: mutations.settleSession, onSuccess: saved });
-  const session = sidebar.rows.find((row) => row.id === id);
+  const id = session?.id ?? "";
   const items = session ? [
     ...(session.forkedFrom ? [{ key: "origin", label: "Open original conversation", icon: CornerUpLeft, run: () => navigate(sessionPath(session.forkedFrom!)) }] : []),
     { key: "name", label: "Name session", icon: TextCursorInput, run: () => setCommand({ mode: "name", source: id }) },
@@ -1085,11 +1087,23 @@ function useSessionActions(id: string, onSuccess?: () => void) {
   return { items, error: update.error ?? settle.error };
 }
 
-function SessionActions({ id, compact = false }: { id: string; compact?: boolean }) {
-  const { items, error } = useSessionActions(id);
-  return <>{items.filter((item) => compact || ["name", "pin", "snooze"].includes(item.key)).map(({ key, label, icon: Icon, pressed, disabled, run }) => <Tooltip key={key}>
-    <TooltipTrigger render={<Button variant="ghost" size={compact ? "icon-sm" : "icon"} className={compact ? "" : "size-11 sm:size-8"} disabled={disabled} />} aria-label={label} aria-pressed={pressed} onClick={run}><Icon className={cn(pressed && "fill-current")} /></TooltipTrigger><TooltipContent>{label}</TooltipContent>
+function SessionActions({ session }: { session?: Session }) {
+  const { items, error } = useSessionActions(session);
+  return <>{items.filter((item) => ["name", "pin", "snooze"].includes(item.key)).map(({ key, label, icon: Icon, pressed, disabled, run }) => <Tooltip key={key}>
+    <TooltipTrigger render={<Button variant="ghost" size="icon" className="size-11 sm:size-8" disabled={disabled} />} aria-label={label} aria-pressed={pressed} onClick={run}><Icon className={cn(pressed && "fill-current")} /></TooltipTrigger><TooltipContent>{label}</TooltipContent>
   </Tooltip>)}{error ? <span role="alert" className="text-xs text-destructive">{error.message}</span> : null}</>;
+}
+
+function SessionHeaderActions({ id }: { id: string }) {
+  const sidebar = useContext(Sidebar);
+  return <SessionActions session={sidebar.rows.find((row) => row.id === id)} />;
+}
+
+function SessionRowActions({ session }: { session: Session }) {
+  const { items, error } = useSessionActions(session);
+  return <>{items.map(({ key, label, icon: Icon, pressed, disabled, run }) => <Menu.Item key={key} disabled={disabled} onClick={run} className="flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent data-disabled:opacity-50">
+    <Icon className={cn("size-4", pressed && "fill-current")} />{label}
+  </Menu.Item>)}{error ? <span role="alert" className="px-2 text-xs text-destructive">{error.message}</span> : null}</>;
 }
 
 function SessionQueueDialog({ id }: { id: string }) {
@@ -1248,6 +1262,25 @@ function PageTitle({ children }: { children: ReactNode }) {
   </header>;
 }
 
+const SessionRow = memo(function SessionRow({ session, active, loading, age }: { session: Session; active: boolean; loading: boolean; age: string }) {
+  return <li className="group relative flex list-none items-stretch py-0.5">
+    <Link href={sessionPath(session.id)} className={cn("relative flex min-w-0 flex-1 cursor-pointer overflow-hidden rounded-md px-2.5 py-2 text-left outline-none select-none", active ? "bg-sidebar-row-active text-sidebar-foreground" : "text-sidebar-foreground hover:bg-sidebar-row-hover")}>
+      <SessionRowContent session={session} loading={loading} age={age} />
+    </Link>
+    <div className="pointer-events-none absolute top-1 right-1 rounded-md bg-sidebar shadow-sm opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
+      <Menu.Root>
+        <Menu.Trigger render={<Button variant="ghost" size="icon-sm" />} aria-label="Session actions"><Ellipsis /></Menu.Trigger>
+        <Menu.Portal><Menu.Positioner sideOffset={4} align="end" className="z-50 outline-none"><Menu.Popup onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="min-w-40 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none">
+          <SessionRowActions session={session} />
+        </Menu.Popup></Menu.Positioner></Menu.Portal>
+      </Menu.Root>
+    </div>
+  </li>;
+}, (a, b) => a.active === b.active && a.loading === b.loading && a.age === b.age &&
+  a.session.id === b.session.id && a.session.title === b.session.title && a.session.preview === b.session.preview && a.session.updatedAt === b.session.updatedAt &&
+  a.session.agent === b.session.agent && a.session.settled === b.session.settled && a.session.running === b.session.running && a.session.pinned === b.session.pinned &&
+  a.session.name === b.session.name && a.session.snoozedUntil === b.session.snoozedUntil && a.session.forkedFrom === b.session.forkedFrom);
+
 const SessionList = memo(function SessionList({ settledOnly = false }: { settledOnly?: boolean }) {
   const sidebar = useContext(Sidebar);
   const agents = useQuery({ ...queries.agents(), staleTime: 60_000, enabled: settledOnly });
@@ -1268,14 +1301,7 @@ const SessionList = memo(function SessionList({ settledOnly = false }: { settled
       </div> : null}
       {filtered.length === 0 && (settledOnly || searching) ? <p role="status" className="px-3 pb-1 text-xs text-muted-foreground">{searchIsAuthoritative(sidebar) ? searching ? "No matches" : "No settled chats" : "loading..."}</p> : null}
       <ul className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2">
-        {filtered.map((session) => <li key={session.id} className="group relative flex list-none items-stretch py-0.5">
-          <Link href={sessionPath(session.id)} className={cn("relative flex min-w-0 flex-1 cursor-pointer overflow-hidden rounded-md px-2.5 py-2 text-left outline-none select-none", route.id === session.id ? "bg-sidebar-row-active text-sidebar-foreground" : "text-sidebar-foreground hover:bg-sidebar-row-hover")}>
-            <SessionRowContent session={session} loading={sidebar.loadingIds.has(session.id)} />
-          </Link>
-          <div className="absolute top-1 right-1 flex rounded-md bg-sidebar shadow-sm opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto [@media(hover:none)]:opacity-100 [@media(hover:none)]:pointer-events-auto">
-            <SessionActions id={session.id} compact />
-          </div>
-        </li>)}
+        {filtered.map((session) => <SessionRow key={session.id} session={session} active={route.id === session.id} loading={sidebar.loadingIds.has(session.id)} age={relativeTime(session.updatedAt ?? "")} />)}
       </ul>
     </div>
   );
@@ -1929,8 +1955,8 @@ function SessionComposer({
   const steerQueueItem = useMutation({ mutationFn: mutations.steerQueueItem, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["queue"] }) });
   const popQueueItem = useMutation({ mutationFn: mutations.popQueueItem, onSuccess: () => queryClient.invalidateQueries({ queryKey: ["queue"] }) });
   const reorderQueue = useMutation({ mutationFn: mutations.reorderQueue, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["queue"] }) });
-  const sidebar = useContext(Sidebar);
-  const create = useMutation({ mutationFn: mutations.createSession, onSuccess: () => sidebar.invalidateQueries() });
+  const invalidateSidebar = useContext(SidebarInvalidation);
+  const create = useMutation({ mutationFn: mutations.createSession, onSuccess: invalidateSidebar });
   const { text, files, sending, agent } = draft;
   const setText = (value: string) => { draft.text = value; draft.edit++; setEditVersion((version) => version + 1); };
   const setFiles = (value: PendingFile[]) => { draft.files = value; draft.edit++; onDraftChange(); };
@@ -2237,7 +2263,7 @@ function Composer({
                   <SelectGroup>{catalog.map((item) => <SelectItem key={item.name} value={item.name} className="min-h-11 sm:min-h-8"><span className="flex min-w-0 max-w-[min(24rem,calc(100vw-5rem))] flex-col whitespace-normal"><span className="break-all">{item.name}</span><span className="break-all text-xs text-muted-foreground">{[item.model, item.reasoning].filter(Boolean).join(" · ")}</span></span></SelectItem>)}</SelectGroup>
                 </SelectContent>
               </Select>
-               <div className="hidden md:contents"><SessionActions id={sessionId} /></div>
+               <div className="hidden md:contents"><SessionHeaderActions id={sessionId} /></div>
             </div>
             <div className="flex shrink-0 items-center justify-end gap-1">
               <Button type="button" variant="ghost" className="h-11 sm:h-8" disabled={sending || empty} onClick={() => void send("STASH")}>Stash</Button>
