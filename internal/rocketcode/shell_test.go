@@ -62,10 +62,16 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 		require.Equal(t, "(no output)", got)
 	})
 	t.Run("non zero exit sets error code", func(t *testing.T) {
-		got := sss.Bash(context.Background(), bashParams{Command: "exit 42", TimeoutMillisecond: 0, Workdir: "", Description: "Non zero"})
-		require.Equal(t, "(no output)", got.String())
-		require.Equal(t, "42", got.ErrorCode)
+		got := sss.Bash(context.Background(), bashParams{Command: "printf stdout; printf stderr >&2; exit 7", TimeoutMillisecond: 0, Workdir: "", Description: "Non zero"})
+		require.Equal(t, "stdoutstderr", got.String())
+		require.Equal(t, "7", got.ErrorCode)
 		require.False(t, got.Success)
+	})
+	t.Run("caller cancellation is detached", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		got := sss.Bash(ctx, bashParams{Command: "printf detached"})
+		require.Equal(t, BashResult{Output: "detached", Success: true}, got)
 	})
 	t.Run("default workdir is sandbox root", func(t *testing.T) {
 		got := sss.Bash(context.Background(), bashParams{Command: "pwd", TimeoutMillisecond: 0, Workdir: "", Description: "pwd"}).String()

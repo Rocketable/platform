@@ -5,30 +5,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 )
 
 var promptShellPattern = regexp.MustCompile("!`([^`]+)`")
 
 type promptExpansionEnvironment struct {
-	root         *os.Root
-	hostDir      string
-	shellTemp    shellTempConfig
-	env          []string
-	shellCommand ShellCommandFunc
+	root    *os.Root
+	hostDir string
+	shell   *sandboxedShellSystem
 }
 
 func newPromptExpansionEnvironment(root *os.Root, shellTemp shellTempConfig, env []string, shellCommand ShellCommandFunc) (promptExpansionEnvironment, error) {
 	var zero promptExpansionEnvironment
-
-	if root == nil {
-		return zero, errors.New("prompt expansion root is required")
-	}
 
 	rootName := root.Name()
 	if rootName == "" {
@@ -44,28 +37,17 @@ func newPromptExpansionEnvironment(root *os.Root, shellTemp shellTempConfig, env
 		return zero, fmt.Errorf("resolve prompt expansion root: %w", err)
 	}
 
-	return promptExpansionEnvironment{root: root, hostDir: hostDir, shellTemp: shellTemp, env: slices.Clone(env), shellCommand: shellCommand}, nil
+	return promptExpansionEnvironment{root: root, hostDir: hostDir, shell: newSandboxedShellSystem(root, &shellTemp, env, shellCommand)}, nil
 }
 
 func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, prompt string) string {
 	return expandPromptShellCommands(prompt, func(command string) string {
-		if err := e.shellTemp.ensureTempDir(e.root); err != nil {
+		if err := e.shell.shellTemp.ensureTempDir(e.root); err != nil {
 			return ""
 		}
 
-		shell, args := e.shellCommand(command)
-		cmd := exec.CommandContext(context.WithoutCancel(ctx), shell, args...)
-		cmd.Dir = e.hostDir
-		cmd.Env = append(os.Environ(), e.env...)
-		cmd.Env = append(cmd.Env, "TMPDIR="+e.shellTemp.tmpDir)
-
 		var stdout bytes.Buffer
-
-		cmd.Stdout = &stdout
-		if err := cmd.Run(); err != nil {
-			return stdout.String()
-		}
-
+		_, _ = e.shell.execute(context.WithoutCancel(ctx), command, e.hostDir, &stdout, io.Discard)
 		return stdout.String()
 	})
 }

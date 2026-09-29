@@ -107,6 +107,10 @@ func TestPromptExpansionEnvironmentRunsCommandsInRoot(t *testing.T) {
 	got := env.expandShellCommands(context.Background(), "!`cat MEMORY.md`")
 
 	require.Equal(t, "expanded", got)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.Equal(t, "prefix stdout suffix", env.expandShellCommands(ctx, "prefix !`printf stdout; printf stderr >&2; exit 7` suffix"))
+	require.Equal(t, "prefix  suffix", env.expandShellCommands(ctx, "prefix !`true` suffix"))
 }
 
 func TestPromptExpansionEnvironmentAppliesShellEnv(t *testing.T) {
@@ -144,14 +148,6 @@ func TestPromptExpansionEnvironmentForcesTMPDIR(t *testing.T) {
 }
 
 func TestNewPromptExpansionEnvironmentRejectsInvalidSetup(t *testing.T) {
-	t.Run("nil root", func(t *testing.T) {
-		var shellTemp shellTempConfig
-
-		_, err := newPromptExpansionEnvironment(nil, shellTemp, nil, DefaultShellCommand)
-
-		require.EqualError(t, err, "prompt expansion root is required")
-	})
-
 	t.Run("closed root", func(t *testing.T) {
 		dir := t.TempDir()
 		root, err := os.OpenRoot(dir)

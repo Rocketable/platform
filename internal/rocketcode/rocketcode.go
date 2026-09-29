@@ -370,7 +370,7 @@ func NewWithModelResolver(
 	reasoningEffort := shared.ReasoningEffort(cmp.Or(activeAgent.ReasoningEffort, string(config.ReasoningEffort)))
 	agentForTools := &activeAgent
 	activeAgent.Permission = shellTemp.effectivePermissions(activeAgent.Permission)
-	baseTools := newSandboxedTools(root, shellTemp, shellEnv, config.ShellCommand)
+	baseTools := makeSandboxedTools(&sandboxedFileSystem{root: root}, promptExpansion.shell)
 
 	customTools, err := customLooperTools(config.CustomTools, baseTools)
 	if err != nil {

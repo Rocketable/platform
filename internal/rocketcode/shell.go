@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -87,7 +88,7 @@ func RunBash(ctx context.Context, root *os.Root, shellTempDir string, shellEnv m
 
 	sss := newSandboxedShellSystem(root, &shellTemp, env, DefaultShellCommand)
 
-	return sss.runBash(ctx, bashParams(command)), nil
+	return sss.Bash(ctx, bashParams(command)), nil
 }
 
 func shellEnvList(shellEnv map[string]string) ([]string, error) {
@@ -119,10 +120,6 @@ func shellEnvList(shellEnv map[string]string) ([]string, error) {
 }
 
 func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) BashResult {
-	return sss.runBash(ctx, params)
-}
-
-func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams) BashResult {
 	sss.mu.Lock()
 	defer sss.mu.Unlock()
 
@@ -183,27 +180,44 @@ func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams)
 	commandCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Duration(timeoutMillisecond)*time.Millisecond+shellTimeoutGrace)
 	defer cancel()
 
-	timedOut := false
-
-	shell, args := sss.shellCommand(params.Command)
-	if strings.TrimSpace(shell) == "" {
-		return bashFailure("shell command path is required")
+	var output bytes.Buffer
+	exitCode, err := sss.execute(commandCtx, params.Command, hostDir, &output, &output)
+	timedOut := errors.Is(err, context.DeadlineExceeded)
+	full := output.String()
+	if full == "" {
+		full = "(no output)"
 	}
 
-	cmd := exec.CommandContext(commandCtx, shell, args...)
+	errorCode := ""
+	if timedOut {
+		errorCode = "timeout"
+	} else if exitCode > 0 {
+		errorCode = strconv.Itoa(exitCode)
+	} else if err != nil {
+		errorCode = "error"
+	}
+
+	return BashResult{Output: full, ErrorCode: errorCode, Success: err == nil && exitCode == 0}
+}
+
+func (sss *sandboxedShellSystem) execute(ctx context.Context, command, hostDir string, stdout, stderr io.Writer) (int, error) {
+	shell, args := sss.shellCommand(command)
+	if strings.TrimSpace(shell) == "" {
+		_, _ = io.WriteString(stderr, "shell command path is required")
+		return 0, errors.New("shell command path is required")
+	}
+
+	cmd := exec.CommandContext(ctx, shell, args...)
 	cmd.Dir = hostDir
 
 	cmd.Env = append(os.Environ(), sss.env...)
 	cmd.Env = append(cmd.Env, "TMPDIR="+sss.shellTemp.tmpDir)
 
-	cmd.Stdout = &bytes.Buffer{}
-	cmd.Stderr = cmd.Stdout
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	timedOut := false
 	cmd.Cancel = func() error {
 		timedOut = true
-
-		if cmd.Process == nil {
-			return nil
-		}
 
 		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
 			return fmt.Errorf("terminate command group: %w", err)
@@ -219,28 +233,14 @@ func (sss *sandboxedShellSystem) runBash(ctx context.Context, params bashParams)
 	sysProcAttr.Setpgid = true
 	cmd.SysProcAttr = &sysProcAttr
 
-	stdoutBuf, _ := cmd.Stdout.(*bytes.Buffer)
 	err := cmd.Run()
-
-	full := stdoutBuf.String()
-	if full == "" {
-		full = "(no output)"
-	}
-
-	errorCode := ""
 	if timedOut {
-		errorCode = "timeout"
-	} else if errStatus, ok := errors.AsType[*exec.ExitError](err); ok && errStatus.ExitCode() > 0 {
-		errorCode = strconv.Itoa(errStatus.ExitCode())
-	} else if err != nil {
-		errorCode = "error"
+		return 0, errors.Join(context.DeadlineExceeded, err)
 	}
-
-	return BashResult{
-		Output:    full,
-		ErrorCode: errorCode,
-		Success:   err == nil && !timedOut,
+	if errStatus, ok := errors.AsType[*exec.ExitError](err); ok && errStatus.ExitCode() > 0 {
+		return errStatus.ExitCode(), nil
 	}
+	return 0, err
 }
 
 func bashFailure(message string) BashResult {
