@@ -53,11 +53,12 @@ func (r BashResult) String() string {
 }
 
 type sandboxedShellSystem struct {
-	mu           sync.Mutex
-	root         *os.Root
-	shellTemp    shellTempConfig
-	env          []string
-	shellCommand ShellCommandFunc
+	mu             sync.Mutex
+	root           *os.Root
+	shellTemp      shellTempConfig
+	env            []string
+	shellCommand   ShellCommandFunc
+	openshellImage string
 }
 
 func newSandboxedShellSystem(root *os.Root, shellTemp *shellTempConfig, env []string, shellCommand ShellCommandFunc) *sandboxedShellSystem {
@@ -182,7 +183,13 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) Ba
 
 	var output bytes.Buffer
 	exitCode, err := sss.execute(commandCtx, params.Command, hostDir, &output, &output)
-	timedOut := errors.Is(err, context.DeadlineExceeded)
+	timedOut := errors.Is(err, context.DeadlineExceeded) || errors.Is(commandCtx.Err(), context.DeadlineExceeded)
+	if sss.openshellImage != "" && err != nil {
+		if output.Len() > 0 {
+			output.WriteByte('\n')
+		}
+		output.WriteString(err.Error())
+	}
 	full := output.String()
 	if full == "" {
 		full = "(no output)"
@@ -201,6 +208,9 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) Ba
 }
 
 func (sss *sandboxedShellSystem) execute(ctx context.Context, command, hostDir string, stdout, stderr io.Writer) (int, error) {
+	if sss.openshellImage != "" {
+		return sss.connectOpenShell(ctx, command, hostDir, stdout, stderr)
+	}
 	shell, args := sss.shellCommand(command)
 	if strings.TrimSpace(shell) == "" {
 		_, _ = io.WriteString(stderr, "shell command path is required")

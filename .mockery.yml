@@ -9,6 +9,21 @@ recursive: false
 template: matryer
 inpackage: true
 packages:
+  github.com/NVIDIA/OpenShell/sdk/go/openshell/v1:
+    config:
+      dir: '{{.ConfigDir}}/internal/rocketcode'
+      pkgname: rocketcode
+      inpackage: false
+    interfaces:
+      SandboxInterface:
+        config:
+          structname: mockSandboxInterface
+      ExecInterface:
+        config:
+          structname: mockExecInterface
+      ExecStream:
+        config:
+          structname: mockExecStream
   github.com/Rocketable/platform/cmd/rocketclaw:
     interfaces:
       cronRootSender:

@@ -21,6 +21,18 @@ github.com/JohannesKaufmann/html-to-markdown/v2/internal/textutils
 github.com/JohannesKaufmann/html-to-markdown/v2/marker
 github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base
 github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark
+# github.com/NVIDIA/OpenShell/sdk/go v0.0.0-20260928030816-6648bd0c290e
+## explicit; go 1.25.13
+github.com/NVIDIA/OpenShell/sdk/go/openshell/v1
+github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/gateway
+github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/internal/converter
+github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/internal/grpc
+github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/internal/options
+github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types
+github.com/NVIDIA/OpenShell/sdk/go/proto/datamodelv1
+github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1
+github.com/NVIDIA/OpenShell/sdk/go/proto/optionsv1
+github.com/NVIDIA/OpenShell/sdk/go/proto/sandboxv1
 # github.com/aws/aws-sdk-go-v2 v1.47.0
 ## explicit; go 1.24
 github.com/aws/aws-sdk-go-v2/aws
@@ -460,6 +472,7 @@ golang.org/x/oauth2/internal
 ## explicit; go 1.26.0
 golang.org/x/sync/errgroup
 golang.org/x/sync/semaphore
+golang.org/x/sync/singleflight
 # golang.org/x/sys v0.48.0
 ## explicit; go 1.26.0
 golang.org/x/sys/cpu
@@ -489,6 +502,7 @@ golang.org/x/time/rate
 google.golang.org/genproto/googleapis/api/httpbody
 # google.golang.org/genproto/googleapis/rpc v0.0.0-20260921155816-b14227669459
 ## explicit; go 1.26.0
+google.golang.org/genproto/googleapis/rpc/errdetails
 google.golang.org/genproto/googleapis/rpc/status
 # google.golang.org/grpc v1.84.0
 ## explicit; go 1.25.0
@@ -591,6 +605,7 @@ google.golang.org/protobuf/reflect/protoreflect
 google.golang.org/protobuf/reflect/protoregistry
 google.golang.org/protobuf/runtime/protoiface
 google.golang.org/protobuf/runtime/protoimpl
+google.golang.org/protobuf/types/descriptorpb
 google.golang.org/protobuf/types/known/anypb
 google.golang.org/protobuf/types/known/durationpb
 google.golang.org/protobuf/types/known/fieldmaskpb
