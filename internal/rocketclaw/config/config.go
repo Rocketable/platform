@@ -460,7 +460,7 @@ func normalizeOpenAIModel(field, model string) (string, error) {
 		return model, nil
 	}
 
-	if provider == "" || apiModel == "" || strings.Contains(apiModel, "/") {
+	if provider == "" || apiModel == "" || strings.Contains(model, "//") || strings.HasSuffix(apiModel, "/") {
 		return "", fmt.Errorf("%s: invalid model %q: expected model or provider/model", field, model)
 	}
 

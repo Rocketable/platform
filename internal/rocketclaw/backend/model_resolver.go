@@ -59,7 +59,7 @@ func (r *modelResolver) Resolve(model string) (*openai.Client, rocketcode.Provid
 			return nil, rocketcode.ProviderOrigin{}, fmt.Errorf("invalid model %q: model is required", model)
 		}
 
-		if strings.Contains(apiModel, "/") {
+		if strings.Contains(model, "//") || strings.HasSuffix(apiModel, "/") {
 			return nil, rocketcode.ProviderOrigin{}, fmt.Errorf("invalid model %q: expected provider/model", model)
 		}
 	}

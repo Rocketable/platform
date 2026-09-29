@@ -219,7 +219,7 @@ model: '{{ model "coding-high" }}'
 "models": {"coding-high": "software-development-sol"}
 ```
 
-The top-level `openai` object is the default provider. Add named providers under `providers`; `openai/gpt-5.5` explicitly selects the default and `work/gpt-5.5` selects the named provider. Unqualified root models use `openai`, while a child agent resolves its own model independently. RocketClaw never fails over implicitly between providers. Set `autocompaction_threshold` on `openai` or a named provider to override that provider's compaction token count; omit it to keep the 200000 default.
+The top-level `openai` object is the default provider. Add named providers under `providers`; `openai/gpt-5.5` explicitly selects the default and `work/gpt-5.5` selects the named provider. Only the first slash separates the provider from the API model ID, so selectors such as `anthropic/api/claude-sonnet-5-5` are valid. Unqualified root models use `openai`, while a child agent resolves its own model independently. RocketClaw never fails over implicitly between providers. Set `autocompaction_threshold` on `openai` or a named provider to override that provider's compaction token count; omit it to keep the 200000 default.
 
 ```json
 {
