@@ -207,6 +207,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	childFactory := *f
 	childFactory.bindAgentShell(&agent)
 	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &childFactory.promptExpansion)
+
 	if f.recursionRemaining != nil {
 		remaining := *f.recursionRemaining - 1
 		childFactory.recursionRemaining = &remaining

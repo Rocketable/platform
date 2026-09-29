@@ -6,14 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/Rocketable/platform/internal/rocketcode/mcpclient"
 	openai "github.com/openai/openai-go/v3"
@@ -79,13 +77,6 @@ type webFetchToolParams struct {
 	URL           string `json:"url"`
 	Format        string `json:"format"`
 	TimeoutSecond int    `json:"timeout_s"`
-}
-
-func newSandboxedTools(root *os.Root, shellTemp shellTempConfig, shellEnv []string, shellCommand ShellCommandFunc) map[string]looperTool {
-	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
-	sss := newSandboxedShellSystem(root, &shellTemp, shellEnv, shellCommand)
-
-	return makeSandboxedTools(sfs, sss)
 }
 
 // CodeModeOnlyHostTool reports whether name is a sandbox host tool available
@@ -179,10 +170,12 @@ func (f *toolFactory) configureSpill(loop *looper) {
 
 func (f *toolFactory) bindAgentShell(agent *Agent) {
 	parentShell := f.promptExpansion.shell
+
 	f.promptExpansion.shell = newSandboxedShellSystem(parentShell.root, &parentShell.shellTemp, parentShell.env, parentShell.shellCommand)
 	if agent.shell.BashMode == bashOpenShell {
 		f.promptExpansion.shell.openshellImage = agent.shell.OpenShell.Image
 	}
+
 	f.baseTools = maps.Clone(f.baseTools)
 	f.baseTools["bash"] = f.promptExpansion.shell.bashTool()
 }

@@ -47,7 +47,9 @@ func (e *promptExpansionEnvironment) expandShellCommands(ctx context.Context, pr
 		}
 
 		var stdout bytes.Buffer
+
 		_, _ = e.shell.execute(context.WithoutCancel(ctx), command, e.hostDir, &stdout, io.Discard)
+
 		return stdout.String()
 	})
 }

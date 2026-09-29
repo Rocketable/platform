@@ -182,25 +182,31 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) Ba
 	defer cancel()
 
 	var output bytes.Buffer
+
 	exitCode, err := sss.execute(commandCtx, params.Command, hostDir, &output, &output)
-	timedOut := errors.Is(err, context.DeadlineExceeded) || errors.Is(commandCtx.Err(), context.DeadlineExceeded)
+
+	timedOut := errors.Is(err, context.DeadlineExceeded)
 	if sss.openshellImage != "" && err != nil {
 		if output.Len() > 0 {
 			output.WriteByte('\n')
 		}
+
 		output.WriteString(err.Error())
 	}
+
 	full := output.String()
 	if full == "" {
 		full = "(no output)"
 	}
 
 	errorCode := ""
-	if timedOut {
+
+	switch {
+	case timedOut:
 		errorCode = "timeout"
-	} else if exitCode > 0 {
+	case exitCode > 0:
 		errorCode = strconv.Itoa(exitCode)
-	} else if err != nil {
+	case err != nil:
 		errorCode = "error"
 	}
 
@@ -211,6 +217,7 @@ func (sss *sandboxedShellSystem) execute(ctx context.Context, command, hostDir s
 	if sss.openshellImage != "" {
 		return sss.connectOpenShell(ctx, command, hostDir, stdout, stderr)
 	}
+
 	shell, args := sss.shellCommand(command)
 	if strings.TrimSpace(shell) == "" {
 		_, _ = io.WriteString(stderr, "shell command path is required")
@@ -247,10 +254,16 @@ func (sss *sandboxedShellSystem) execute(ctx context.Context, command, hostDir s
 	if timedOut {
 		return 0, errors.Join(context.DeadlineExceeded, err)
 	}
+
 	if errStatus, ok := errors.AsType[*exec.ExitError](err); ok && errStatus.ExitCode() > 0 {
 		return errStatus.ExitCode(), nil
 	}
-	return 0, err
+
+	if err != nil {
+		return 0, fmt.Errorf("run shell command: %w", err)
+	}
+
+	return 0, nil
 }
 
 func bashFailure(message string) BashResult {

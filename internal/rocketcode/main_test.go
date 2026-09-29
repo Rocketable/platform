@@ -100,12 +100,14 @@ func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 func TestAgentShellSelectionAcrossRootSurfaces(t *testing.T) {
 	// Discovery reads host configuration; isolate it from the operator's gateway.
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
 	for _, mode := range []string{"standard", "openshell"} {
 		for _, enabled := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/%t", mode, enabled), func(t *testing.T) {
 				env := testPromptExpansionEnvironment(t)
 				require.NoError(t, env.root.Mkdir("dynamic", 0o755))
 				require.NoError(t, env.root.WriteFile("dynamic/SKILL.md", []byte("---\nname: dynamic\ndescription: snippet\n---\nSkill !`printf skill; printf ran > skill-marker`"), 0o644))
+
 				loaded := LoadAgents(fstest.MapFS{"main.md": testMapFile("---\nmodel: gpt-5.4\nrocketclaw: {bash_mode: " + mode + ", openshell: {image: root-image}}\npermission: {bash: allow, skill: allow}\n---\nPrimary !`printf primary; printf ran > primary-marker`")}, passThroughAgentModel)
 				require.Empty(t, loaded.Errors)
 				config := testWorkspaceConfig(t, env.hostDir)
@@ -114,22 +116,26 @@ func TestAgentShellSelectionAcrossRootSurfaces(t *testing.T) {
 				require.NoError(t, err)
 				input, _, err := loop.promptTurnItems(t.Context(), testPromptInput(PromptInputRoleUser, "Input !`printf input; printf ran > input-marker`", testTaskOutput()))
 				require.NoError(t, err)
+
 				factory := loop.PermissionReviewer.(*toolFactory)
 				result, err := factory.skillTool().Call(t.Context(), json.RawMessage(`{"name":"dynamic"}`), testTaskOutput(), toolCallMetadata{})
 				require.NoError(t, err)
+
 				for _, surface := range []struct{ text, prefix, output, marker string }{
 					{loop.SystemPrompt, "Primary ", "primary", "primary-marker"},
 					{input.Text, "Input ", "input", "input-marker"},
 					{result.Output, "Skill ", "skill", "skill-marker"},
 				} {
-					if !enabled {
+					switch {
+					case !enabled:
 						require.Contains(t, surface.text, surface.prefix+"!`printf "+surface.output)
-					} else if mode == "standard" {
+					case mode == "standard":
 						require.Contains(t, surface.text, surface.prefix+surface.output)
-					} else {
+					default:
 						require.NotContains(t, surface.text, "printf ")
 						require.NotContains(t, surface.text, surface.prefix+surface.output)
 					}
+
 					_, err := env.root.Stat(surface.marker)
 					if enabled && mode == "standard" {
 						require.NoError(t, err)
@@ -137,7 +143,9 @@ func TestAgentShellSelectionAcrossRootSurfaces(t *testing.T) {
 						require.ErrorIs(t, err, os.ErrNotExist)
 					}
 				}
+
 				require.Same(t, loop.promptExpansion.shell, factory.promptExpansion.shell)
+
 				if mode == "openshell" {
 					require.Equal(t, "root-image", loop.promptExpansion.shell.openshellImage)
 				} else {
@@ -162,6 +170,7 @@ func TestOpenShellBashPermissionDenialPrecedesExecution(t *testing.T) {
 	require.Len(t, outputs, 1)
 	require.Contains(t, outputs[0].Result.Output, "deny")
 	require.NotContains(t, outputs[0].Result.Output, "openshell gateway")
+
 	_, err = env.root.Stat("marker")
 	require.ErrorIs(t, err, os.ErrNotExist)
 }

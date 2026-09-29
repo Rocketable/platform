@@ -70,6 +70,7 @@ func TestSandboxedShellSystemBash(t *testing.T) {
 	t.Run("caller cancellation is detached", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
+
 		got := sss.Bash(ctx, bashParams{Command: "printf detached"})
 		require.Equal(t, BashResult{Output: "detached", Success: true}, got)
 	})

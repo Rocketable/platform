@@ -23,6 +23,7 @@ func (sss *sandboxedShellSystem) connectOpenShell(ctx context.Context, command, 
 			err = errors.Join(err, fmt.Errorf("openshell client close: %w", errClose))
 		}
 	}()
+
 	return sss.executeOpenShell(ctx, client.Sandboxes(), client.Exec(), command, hostDir, stdout, stderr)
 }
 
@@ -31,10 +32,21 @@ func (sss *sandboxedShellSystem) executeOpenShell(ctx context.Context, sandboxes
 	if err != nil {
 		return 0, fmt.Errorf("openshell workspace: %w", err)
 	}
+
+	hostDir, err = filepath.Abs(hostDir)
+	if err != nil {
+		return 0, fmt.Errorf("openshell workdir: %w", err)
+	}
+
 	name := "rocketcode-" + uuid.NewString()
 	// Deletion is synchronous on the supported Docker/Podman drivers. Accepted
 	// is not proof that descendants stopped; report the owned name instead.
 	defer func() {
+		// Classify the execution deadline before independent cleanup can outlive it.
+		if err != nil && ctx.Err() != nil {
+			err = errors.Join(ctx.Err(), err)
+		}
+
 		result, errDelete := sandboxes.Delete(context.WithoutCancel(ctx), "", name, v1.DeleteOptions{AllowMissing: true})
 		if errDelete != nil {
 			err = errors.Join(err, fmt.Errorf("openshell cleanup %s: %w", name, errDelete))
@@ -56,8 +68,9 @@ func (sss *sandboxedShellSystem) executeOpenShell(ctx context.Context, sandboxes
 		Policy: &v1.SandboxPolicy{
 			Version: 1,
 			Filesystem: &v1.FilesystemPolicy{
-				ReadOnly:  []string{"/bin", "/usr", "/lib", "/proc", "/dev/urandom", "/app", "/etc", "/var/log"},
-				ReadWrite: []string{workspace, "/dev/null"},
+				IncludeWorkdir: true,
+				ReadOnly:       []string{"/bin", "/usr", "/lib", "/proc", "/dev/urandom", "/app", "/etc", "/var/log"},
+				ReadWrite:      []string{workspace, "/sandbox", "/dev/null"},
 			},
 			Landlock: &v1.LandlockPolicy{Compatibility: "best_effort"},
 			Process:  &v1.ProcessPolicy{}, // Let the driver select the image's non-root identity.
@@ -66,44 +79,55 @@ func (sss *sandboxedShellSystem) executeOpenShell(ctx context.Context, sandboxes
 	if _, err := sandboxes.Create(ctx, "", name, spec, nil); err != nil {
 		return 0, fmt.Errorf("openshell create %s (creation may have completed remotely): %w", name, err)
 	}
+
 	if _, err := sandboxes.WaitReady(ctx, "", name); err != nil {
 		return 0, fmt.Errorf("openshell ready %s: %w", name, err)
 	}
+
 	env := make(map[string]string, len(sss.env)+1)
 	for _, entry := range sss.env {
 		key, value, _ := strings.Cut(entry, "=")
 		env[key] = value
 	}
+
 	env["TMPDIR"] = sss.shellTemp.tmpDir
 	shell, args := DefaultShellCommand(command)
+
 	stream, err := executor.Stream(ctx, "", name, append([]string{shell}, args...), v1.ExecOptions{WorkDir: hostDir, Env: env, NoLoginShell: true})
 	if err != nil {
 		return 0, fmt.Errorf("openshell exec %s: %w", name, err)
 	}
+
 	defer func() {
 		if errClose := stream.Close(); errClose != nil {
 			err = errors.Join(err, fmt.Errorf("openshell stream close %s: %w", name, errClose))
 		}
 	}()
+
 	for {
 		chunk, errNext := stream.Next()
 		if errors.Is(errNext, io.EOF) {
 			break
 		}
+
 		if errNext != nil {
 			return 0, fmt.Errorf("openshell stream %s: %w", name, errNext)
 		}
+
 		writer := stdout
 		if chunk.Stream == v1.StreamStderr {
 			writer = stderr
 		}
+
 		if _, err := writer.Write(chunk.Data); err != nil {
-			return 0, err
+			return 0, fmt.Errorf("openshell output %s: %w", name, err)
 		}
 	}
+
 	exitCode, err = stream.ExitCode()
 	if err != nil {
 		return 0, fmt.Errorf("openshell exit %s: %w", name, err)
 	}
+
 	return exitCode, nil
 }

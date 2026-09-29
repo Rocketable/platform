@@ -177,6 +177,7 @@ func loadAgent(fsys fs.FS, filePath string, resolveModel func(string) (string, e
 	if err != nil {
 		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
 	}
+
 	shell, err := parseAgentShell(frontmatterField(frontmatterNode, "rocketclaw"))
 	if err != nil {
 		return Agent{}, fmt.Errorf("%s: %w", filePath, err)
@@ -205,28 +206,35 @@ func parseAgentShell(node *yaml.Node) (agentShellSettings, error) {
 	if node == nil {
 		return settings, nil
 	}
+
 	if node.Kind != yaml.MappingNode {
 		return settings, errors.New("rocketclaw: must be a mapping")
 	}
+
 	if mode := frontmatterField(node, "bash_mode"); mode != nil {
 		if mode.Kind != yaml.ScalarNode || mode.ShortTag() != "!!str" || bashMode(mode.Value) != bashStandard && bashMode(mode.Value) != bashOpenShell {
 			return settings, errors.New("rocketclaw.bash_mode: must be standard or openshell")
 		}
 	}
+
 	if openshell := frontmatterField(node, "openshell"); openshell != nil {
 		if openshell.Kind != yaml.MappingNode {
 			return settings, errors.New("rocketclaw.openshell: must be a mapping")
 		}
+
 		if image := frontmatterField(openshell, "image"); image != nil && (image.Kind != yaml.ScalarNode || image.ShortTag() != "!!str") {
 			return settings, errors.New("rocketclaw.openshell.image: must be a string")
 		}
 	}
+
 	if err := node.Decode(&settings); err != nil {
 		return settings, fmt.Errorf("rocketclaw: %w", err)
 	}
+
 	if settings.BashMode == bashOpenShell && strings.TrimSpace(settings.OpenShell.Image) == "" {
 		return settings, errors.New("rocketclaw.openshell.image: required non-empty string in openshell mode")
 	}
+
 	return settings, nil
 }
 

@@ -38,11 +38,14 @@ func TestLoadAgents(t *testing.T) {
 					require.Len(t, result.Errors, 1)
 					require.ErrorContains(t, result.Errors[0], tc.wantError)
 					require.Empty(t, result.Agents.Items)
+
 					return
 				}
+
 				require.Empty(t, result.Errors)
 				agent := result.Agents.Items["main"]
 				require.Equal(t, tc.image, agent.shell.OpenShell.Image)
+
 				if tc.image != "" {
 					require.Equal(t, bashOpenShell, agent.shell.BashMode)
 					require.Contains(t, agent.Frontmatter, "rocketclaw")

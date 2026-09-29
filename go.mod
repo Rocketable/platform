@@ -3,11 +3,11 @@ module github.com/Rocketable/platform
 go 1.27.1
 
 require (
-	github.com/NVIDIA/OpenShell/sdk/go v0.0.0-20260928030816-6648bd0c290e
 	cirello.io/pglock v1.16.2
 	github.com/Arize-ai/openinference/go/openinference-instrumentation v0.1.2
 	github.com/Arize-ai/openinference/go/openinference-semantic-conventions v0.1.8
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
+	github.com/NVIDIA/OpenShell/sdk/go v0.0.0-20260928030816-6648bd0c290e
 	github.com/aws/aws-sdk-go-v2 v1.47.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.5
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.5

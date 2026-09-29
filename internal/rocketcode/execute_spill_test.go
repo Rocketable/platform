@@ -132,7 +132,8 @@ func TestMakeSandboxedToolsHasRead(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, root.Close()) })
 
 	tmp := filepath.Join(dir, "tmp")
-	require.NoError(t, os.Mkdir(tmp, 0o755))
-	tools := newSandboxedTools(root, testShellTempConfig(t, root, tmp), nil, DefaultShellCommand)
+
+	require.NoError(t, root.Mkdir("tmp", 0o755))
+	tools := makeSandboxedTools(&sandboxedFileSystem{root: root}, newSandboxedShellSystem(root, new(testShellTempConfig(t, root, tmp)), nil, DefaultShellCommand))
 	require.NotNil(t, tools["read"].Call)
 }

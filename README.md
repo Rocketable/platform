@@ -33,7 +33,30 @@ For example, `export FOO=bar; scripts/cmd arg` can use separate `"export FOO=bar
 
 Permissions authorize the written operations, including their runtime effects. Allowing an expansion, arithmetic expression, declaration, program, or interpreter is not a restriction on the values it can produce or the internal work it can perform. Nested commands present in the submitted syntax are still checked separately.
 
-The default shell runner requires `/bin/bash` and ignores `$SHELL`. It disables startup files and inherited shell functions/options so execution matches the permission parser. This runner also executes enabled prompt shell snippets.
+The default (`standard`) shell runner uses the host's `/bin/bash` and ignores `$SHELL`. It disables startup files and inherited shell functions/options so execution matches the permission parser. The selected runner also executes enabled prompt shell snippets.
+
+An agent can instead use OpenShell by adding this YAML frontmatter:
+
+```yaml
+rocketclaw:
+  bash_mode: openshell
+  openshell:
+    image: YOUR_IMAGE
+```
+
+Omit `rocketclaw.bash_mode`, or set it to `standard`, to keep host execution without OpenShell setup. `openshell` requires a non-empty image. Each task child, guardrail, and custom permission reviewer selects its own mode and image; an omitted child mode means standard, not inheritance. Bash and enabled primary, input, subagent, and skill shell snippets use the executing agent's selection. Existing expansion flags and bash approval rules still apply.
+
+OpenShell uses the operator's **active local gateway**, with the Go SDK pinned to OpenShell v0.1.2 (`6648bd0c290e`). There are no new `rocketclaw.json` gateway or image settings, no gateway startup/reconfiguration, and no host fallback: missing configuration, an unavailable gateway, startup failures, and rejected mounts return bash errors.
+
+The local Docker or Podman engine must see the host workspace. Its gateway must permit driver config (`allow_driver_config = true`), enable bind mounts (`enable_bind_mounts = true`), and disable resource admission as required by this OpenShell release. RocketClaw does not change these deployment settings. Remote gateways and remote Docker contexts are not supported.
+
+The Linux image must provide `/bin/bash`, `sleep infinity`, and an OpenShell-compatible non-root identity. The image's UID/GID or engine user mapping must allow writes to the host workspace and its private `0700` shell temp directory. Do not broaden host permissions or run as root to make the mount work. The workspace is mounted writable at the **same absolute path**, so host filesystem tools see command changes immediately and `TMPDIR` stays inside that mount.
+
+Each command creates, waits for, executes in, and deletes its own sandbox. Workspace files persist; container-only installations, files, and background services do not survive the command. Provisioning consumes the bash timeout. Timeout cleanup uses a separate context and requires completed deletion; incomplete cleanup reports the owned sandbox name for operator removal. A daemon crash or an ambiguous failed create can still leave an orphan.
+
+OpenShell keeps the image's environment, overlays explicitly configured shell variables, and overrides `TMPDIR`. It does not import the daemon's incidental credentials, shell functions, or host executable paths. Runtime filesystem paths are read-only, with writable workspace and container `/sandbox` scratch. The initial OpenShell policy grants **no outbound network access**, unlike standard execution. Prompt snippets still substitute stdout only, including partial stdout on failure.
+
+To check an already configured, idle local gateway without deploying or reconfiguring it, run `ROCKETCODE_OPENSHELL_TEST_IMAGE=YOUR_IMAGE ROCKETCODE_OPENSHELL_TEST_ENGINE=docker go test ./internal/rocketcode -run '^TestOpenShellGatewayIntegration$' -v` (use `podman` for that engine). Build/test `TMPDIR` must be under the repository's `.tmp/`. This opt-in test checks same-path mounts, private temp writes, output/exit behavior, per-command isolation, timeout descendant termination, and completed cleanup; ordinary tests do not start a gateway.
 
 For external MCP conversations, guardrails and automatic permission reviewers receive the same thread and turn-only metadata developer messages as the main agent. Their shell tools share the turn's environment, while their own permissions still control tool access.
 

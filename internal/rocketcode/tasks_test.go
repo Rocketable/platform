@@ -802,6 +802,7 @@ func TestLooperNumbersSiblingTaskDiagnostics(t *testing.T) {
 
 func testTaskFactory(t *testing.T, client responsesAPI, agents Agents) *toolFactory {
 	t.Helper()
+
 	var bashTool looperTool
 
 	bashTool.Permission = "bash"
@@ -829,28 +830,34 @@ func testTaskFactory(t *testing.T, client responsesAPI, agents Agents) *toolFact
 func TestChildShellSelection(t *testing.T) {
 	// Discovery reads host gateway configuration; no gateway is needed for this routing test.
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
 	for _, parentImage := range []string{"", "parent-image"} {
 		for _, childImage := range []string{"", "child-image", "other-image"} {
 			for _, entry := range []string{"task", "guardrail", "reviewer"} {
 				t.Run(parentImage+"/"+childImage+"/"+entry, func(t *testing.T) {
 					agent := testAgentWithPrompt("child", "child !`printf expanded; printf prompt > prompt-marker`")
+
 					agent.Permission = PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
 					if childImage != "" {
 						agent.shell.BashMode = bashOpenShell
 						agent.shell.OpenShell.Image = childImage
 					}
+
 					final := "done"
 					if entry == "guardrail" {
 						final = `{"approved":true,"reason":"ok"}`
 					}
+
 					if entry == "reviewer" {
 						final = `{"risk_level":"low","user_authorization":"medium","outcome":"allow","rationale":"ok"}`
 					}
+
 					mock := mockResponses(responseWithMessage("child-final", final))
 					factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{"child": agent}})
 					factory.promptExpansion.shell.openshellImage = parentImage
 					factory.expandPromptShellCommands.SubagentPrompts = true
 					parentShell := factory.promptExpansion.shell
+
 					switch entry {
 					case "task":
 						got, err := factory.runTask(t.Context(), testTaskParams("child", "request", "child"), toolCallMetadata{}, testTaskOutput())
@@ -861,21 +868,25 @@ func TestChildShellSelection(t *testing.T) {
 					case "reviewer":
 						require.Equal(t, permissionReviewOutcomeAllow, factory.reviewPermission(t.Context(), &permissionReviewRequest{Reviewer: "child"}, testTaskOutput()).Outcome)
 					}
+
 					instructions := newParams(mock)[0].Instructions.Value
 					if childImage == "" {
 						require.Contains(t, instructions, "child expanded")
 					} else {
 						require.NotContains(t, instructions, "expanded")
 					}
+
 					childFactory := *factory
 					childFactory.bindAgentShell(&agent)
 					require.Equal(t, childImage, childFactory.promptExpansion.shell.openshellImage)
+
 					var child looper
 					childFactory.configureSpill(&child)
 					require.Same(t, childFactory.promptExpansion.shell, child.promptExpansion.shell)
 					result, err := childFactory.baseTools["bash"].Call(t.Context(), json.RawMessage(`{"command":"printf bash > bash-marker; printf child-bash"}`), testTaskOutput(), toolCallMetadata{})
 					require.NoError(t, err)
 					require.Equal(t, childImage == "", result.Data.(BashResult).Success)
+
 					for _, marker := range []string{"prompt-marker", "bash-marker"} {
 						_, err := factory.promptExpansion.root.Stat(marker)
 						if childImage == "" {
@@ -884,6 +895,7 @@ func TestChildShellSelection(t *testing.T) {
 							require.ErrorIs(t, err, os.ErrNotExist)
 						}
 					}
+
 					require.Same(t, parentShell, factory.promptExpansion.shell)
 					require.Equal(t, parentImage, parentShell.openshellImage)
 					require.Equal(t, agent.Prompt, factory.agents.Items["child"].Prompt)
