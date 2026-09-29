@@ -340,7 +340,8 @@ func (ps *PermissionSet) Set(permission, pattern string, action PermissionAction
 
 // Evaluate returns the effective permission action for permission and subject.
 // The matched result reports whether a configured rule explicitly matched.
-// When matched is false, action is PermissionDeny, the default action.
+// When matched is false, action defaults to PermissionDeny, except that
+// rocketclaw.code_mode_approve defaults to PermissionAllow.
 func (ps PermissionSet) Evaluate(permission, subject string) (action PermissionAction, matched bool) {
 	decision := ps.evaluate(permission, subject)
 	return decision.Action, decision.Matched
@@ -386,6 +387,11 @@ func (ps PermissionSet) evaluate(permission, subject string, scripts ...string) 
 func (ps PermissionSet) evaluateRules(permission, subject string, folded bool, scripts ...string) permissionDecision {
 	decision := permissionDecision{Action: permissionDeny, Bucket: "", Rule: PermissionRule{Pattern: "", Action: ""}, Matched: false, Permission: permission, Subject: subject}
 
+	codeModeApproval := permission == "rocketclaw" && subject == codeModeApproveSubject
+	if codeModeApproval {
+		decision.Action = permissionAllow
+	}
+
 	for _, bucket := range ps.Buckets {
 		if bucket.Name != permission {
 			continue
@@ -403,12 +409,17 @@ func (ps PermissionSet) evaluateRules(permission, subject string, folded bool, s
 			}
 
 			var matches bool
-			if permission == "bash" && len(scripts) > 0 {
+
+			switch {
+			case codeModeApproval:
+				// Only the exact rule can change the whole-script default.
+				matches = rule.Pattern == subject
+			case permission == "bash" && len(scripts) > 0:
 				matches = bashComponentPatternMatch(input, pattern, segments...) ||
 					slices.ContainsFunc(scripts, func(script string) bool {
 						return bashScriptPatternMatch(script, rule.Pattern, rule.segments...)
 					})
-			} else {
+			default:
 				matches = permissionWildcardMatch(input, pattern, segments...)
 			}
 

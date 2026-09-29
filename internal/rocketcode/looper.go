@@ -2094,7 +2094,7 @@ func (l *looper) permissionDecision(toolName string, tool *looperTool, args json
 		if err := json.Unmarshal(args, &script); err != nil {
 			return toolPermissionDecision{}, fmt.Errorf("decode bash permission arguments: %w", err)
 		}
-		// The execute entry gate can use the bash bucket without a bash command.
+
 		if script.Command != "" {
 			scripts = append(scripts, script.Command)
 		}

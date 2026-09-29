@@ -208,7 +208,7 @@ func TestWorkflowAgentRunnerResolvesNamedProviderModel(t *testing.T) {
 
 func TestWorkflowAgentRunnerUsesConfiguredAutoApproverModel(t *testing.T) {
 	workspace := t.TempDir()
-	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  bash:\n    \"printf ok\": auto\n---\nMain prompt\n")
+	writeAgent(t, workspace, "main", "---\ndescription: Main\nmodel: gpt-5.5\npermission:\n  rocketclaw:\n    code_mode_approve: auto\n  bash:\n    \"printf ok\": auto\n---\nMain prompt\n")
 	require.NoError(t, os.MkdirAll(filepath.Join(workspace, ".rocketclaw", "skills"), 0o755))
 
 	var models []string

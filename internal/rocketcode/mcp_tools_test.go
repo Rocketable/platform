@@ -15,6 +15,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketcode/codemode"
 	"github.com/Rocketable/platform/internal/rocketcode/mcpclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -527,7 +528,7 @@ func TestExecuteAllowServerWildcard(t *testing.T) {
 	tools := (&toolFactory{mcpRegistry: reg}).mcpToolsFor(&Agent{Permission: permissions}, nil)
 	require.Len(t, tools, 1)
 	assert.Equal(t, executeToolName, tools[executeToolName].Definition.Name)
-	assert.Equal(t, []string{"demo.*"}, tools[executeToolName].VisibilitySubjects)
+	assert.Equal(t, []string{"code_mode_approve"}, tools[executeToolName].VisibilitySubjects)
 
 	prompt := codeModeSystemPrompt(nil, []string{"demo"})
 	assert.Contains(t, prompt, "demo")
@@ -544,10 +545,100 @@ func TestExecuteExactToolGrant(t *testing.T) {
 
 	var permissions PermissionSet
 	require.NoError(t, permissions.Allow("mcp", "github.create_issue"))
+	require.NoError(t, permissions.Set("rocketclaw", codeModeApproveSubject, PermissionAuto))
 
 	tools := (&toolFactory{mcpRegistry: reg}).mcpToolsFor(&Agent{Permission: permissions}, nil)
 	require.NotNil(t, tools)
-	assert.Equal(t, []string{"github.create_issue"}, tools[executeToolName].VisibilitySubjects)
+	assert.Equal(t, []string{"code_mode_approve"}, tools[executeToolName].VisibilitySubjects)
+
+	loop := testLooper(mockResponses())
+	loop.Permissions = permissions
+	loop.AutoApprovePermissions = true
+	execute := tools[executeToolName]
+	decision, err := loop.permissionDecision(executeToolName, &execute, json.RawMessage(`{"code":"def main(): return github_create_issue()"}`))
+	require.NoError(t, err)
+	require.NotNil(t, decision.review)
+	require.Equal(t, "rocketclaw", decision.review.Permission)
+}
+
+func TestExecuteWholeScriptApproval(t *testing.T) {
+	const code = `{"code":"def main():\n    return read(filePath=\"allowed\")\n"}`
+
+	for _, tc := range []struct {
+		name, rules, reviewer string
+		outcome               permissionReviewOutcome
+		wantCalls             int
+		wantReview            bool
+	}{
+		{"unset with wildcard auto", "rocketclaw: {'*': auto}\nread: {allowed: allow}", "", permissionReviewOutcomeAllow, 1, false},
+		{"unset with wildcard deny", "rocketclaw: {'*': deny}\nread: {allowed: allow}", "", permissionReviewOutcomeAllow, 1, false},
+		{"explicit allow overrides wildcard auto", "rocketclaw: {code_mode_approve: allow, '*': auto}\nread: {allowed: allow}", "", permissionReviewOutcomeAllow, 1, false},
+		{"built-in reviewer", "rocketclaw: {code_mode_approve: auto}\nread: {allowed: allow}", "", permissionReviewOutcomeAllow, 1, true},
+		{"custom reviewer overrides wildcard allow", "rocketclaw: {code_mode_approve: 'auto(release-reviewer)', '*': allow}\nread: {allowed: allow}", "release-reviewer", permissionReviewOutcomeAllow, 1, true},
+		{"last exact rule wins", "rocketclaw: {code_mode_approve: allow, code_mode_approve: 'auto(release-reviewer)', '*': deny}\nread: {allowed: allow}", "release-reviewer", permissionReviewOutcomeAllow, 1, true},
+		{"review denial prevents script", "rocketclaw: {code_mode_approve: 'auto(release-reviewer)'}\nread: {allowed: allow}", "release-reviewer", permissionReviewOutcomeDeny, 0, true},
+		{"entry approval does not grant nested read", "rocketclaw: {code_mode_approve: auto}\nread: {another: allow}", "", permissionReviewOutcomeAllow, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			permissions := parsePermissionYAML(t, tc.rules)
+			calls := 0
+			readTool := testLooperTool("read")
+			readTool.Permission = "read"
+			readTool.Subjects = func(raw json.RawMessage) ([]string, error) {
+				var args struct {
+					FilePath string `json:"filePath"`
+				}
+				if err := json.Unmarshal(raw, &args); err != nil {
+					return nil, fmt.Errorf("decode read subject: %w", err)
+				}
+
+				return []string{args.FilePath}, nil
+			}
+			readTool.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+				calls++
+				return TextToolResult("read result"), nil
+			}
+			hosts := map[string]looperTool{"read": readTool}
+			model := (&toolFactory{}).mcpToolsFor(&Agent{Permission: permissions}, hosts)
+			loop := testLooper(mockResponses())
+			loop.agent = Agent{Name: "main"}
+			loop.Permissions = permissions
+			loop.Tools = model
+			loop.CodeModeHosts = hosts
+			loop.AutoApprovePermissions = true
+			reviewer := permissionReviewerWith(permissionReviewDecision{Outcome: tc.outcome, Rationale: "review decision"})
+			loop.PermissionReviewer = reviewer
+			output := make(chan ChatResponse, 10)
+
+			results, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("resp", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", executeToolName, code)}), nil, output)
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			require.Equal(t, tc.wantCalls, calls)
+
+			switch {
+			case tc.outcome == permissionReviewOutcomeDeny:
+				require.Contains(t, results[0].Result.Output, "automatic permission review rejected")
+			case tc.wantCalls == 0:
+				require.Contains(t, results[0].Result.Output, `permission "read"`)
+			default:
+				require.Contains(t, results[0].Result.Output, "read result")
+			}
+
+			requests := reviewedRequests(reviewer)
+			if !tc.wantReview {
+				require.Empty(t, requests)
+				return
+			}
+
+			require.Len(t, requests, 1)
+			require.Equal(t, executeToolName, requests[0].ToolName)
+			require.Equal(t, "rocketclaw", requests[0].Permission)
+			require.Equal(t, []string{"code_mode_approve"}, requests[0].Subjects)
+			require.JSONEq(t, code, requests[0].RawArguments)
+			require.Equal(t, tc.reviewer, requests[0].Reviewer)
+			require.Equal(t, tc.reviewer == "", requests[0].ReviewerEmbedded)
+		})
+	}
 }
 
 func TestExecuteSearchAndRun(t *testing.T) {

@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	executeToolName     = "execute"
-	searchBuiltinName   = "search"
-	mcpPermissionBucket = "mcp"
+	executeToolName        = "execute"
+	searchBuiltinName      = "search"
+	mcpPermissionBucket    = "mcp"
+	codeModeApproveSubject = "code_mode_approve"
 	// executeNestedToolPrefix marks nested code-mode tool diagnostics for thinking UI.
 	executeNestedToolPrefix = executeToolName + " → "
 	codeModeRawStringRule   = `Starlark, not Python. Parsed before any host tool runs; a codemode.star error means the wrapper failed and nothing ran. execute code is a JSON string — JSON still wraps it in "...". Inside that string, bash(command=...) takes r'''...''' only, not Starlark "..." or '...'. r"..." is raw but single-line; a real newline needs r'''...'''. Example execute argument: {"code":"def main():\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\n"}. $ is valid inside a closed Starlark string, not interpolation. bash(...) is text-like: use str(result) before find/split. Failed wrapper output is not evidence; fix and rerun.`
@@ -92,44 +93,6 @@ func visibleMCPServers(permissions PermissionSet, servers []string) []string {
 	}
 
 	return visible
-}
-
-func mcpVisibilitySubjects(permissions PermissionSet, servers []string) []string {
-	if len(servers) == 0 {
-		return nil
-	}
-
-	seen := make(map[string]struct{})
-
-	var subjects []string
-
-	eachMCPAllowRule(permissions, func(pattern string) bool {
-		for _, server := range servers {
-			if !ruleMatchesMCPServer(pattern, server) {
-				continue
-			}
-
-			subject := strings.TrimSpace(pattern)
-			if subject == "" {
-				subject = "*"
-			}
-
-			if _, ok := seen[subject]; ok {
-				return false
-			}
-
-			seen[subject] = struct{}{}
-			subjects = append(subjects, subject)
-
-			return false
-		}
-
-		return false
-	})
-
-	slices.Sort(subjects)
-
-	return subjects
 }
 
 func mcpToolAllowed(permissions PermissionSet, server, tool string) bool {
@@ -241,13 +204,10 @@ func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool)
 		servers = visibleMCPServers(agent.Permission, f.mcpRegistry.Names())
 	}
 
-	mcpSubjects := mcpVisibilitySubjects(agent.Permission, servers)
-	if len(mcpSubjects) == 0 && len(codeHosts) == 0 {
+	if len(servers) == 0 && len(codeHosts) == 0 {
 		return nil
 	}
 
-	entryPermission, entrySubjects := codeModeRunEntryGate(agent, mcpSubjects, codeHosts)
-	entrySubjectsCopy := slices.Clone(entrySubjects)
 	registry := f.mcpRegistry
 	permissions := agent.Permission
 	serversCopy := slices.Clone(servers)
@@ -260,107 +220,14 @@ func (f *toolFactory) mcpToolsFor(agent *Agent, codeHosts map[string]looperTool)
 					"description": fmt.Sprintf("Starlark source defining def main() that returns a string (or JSON-encodable value). %s Concurrency: gather([lambda: …], concurrency=%d) — one list of zero-arg lambdas, not varargs.", codeModeRawStringRule, codemode.DefaultConcurrency),
 				},
 			}),
-			Permission:         entryPermission,
-			VisibilitySubjects: entrySubjectsCopy,
-			Subjects:           func(json.RawMessage) ([]string, error) { return entrySubjectsCopy, nil },
+			Permission:         "rocketclaw",
+			VisibilitySubjects: []string{codeModeApproveSubject},
+			Subjects:           func(json.RawMessage) ([]string, error) { return []string{codeModeApproveSubject}, nil },
 			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
 				return callExecute(ctx, registry, permissions, serversCopy, raw)
 			},
 		},
 	}
-}
-
-func codeModeRunEntryGate(agent *Agent, mcpSubjects []string, codeHosts map[string]looperTool) (permission string, subjects []string) {
-	if len(mcpSubjects) > 0 {
-		return mcpPermissionBucket, mcpSubjects
-	}
-
-	// Prefer sandbox host buckets so skill/task auto rules do not gate execute entry.
-	hostBuckets := []string{"read", "edit", "bash", "glob", "grep", "webfetch"}
-	for _, want := range hostBuckets {
-		if subj, ok := firstRuleSubject(agent.Permission, want, PermissionAllow); ok {
-			return want, []string{subj}
-		}
-	}
-
-	for _, want := range hostBuckets {
-		if subj, ok := firstRuleSubject(agent.Permission, want, PermissionAuto); ok {
-			return want, []string{subj}
-		}
-	}
-
-	// Custom/platform tools (rocketclaw_*, ask_user_question, …) may be the only code hosts.
-	for _, name := range slices.Sorted(maps.Keys(codeHosts)) {
-		tool := codeHosts[name]
-
-		perm := tool.Permission
-		if perm == "" {
-			perm = name
-		}
-
-		for _, subject := range tool.VisibilitySubjects {
-			action := agent.Permission.evaluate(perm, subject).Action
-			if action == permissionAllow || action == permissionAuto {
-				return perm, []string{subject}
-			}
-		}
-
-		if subj, ok := firstRuleSubject(agent.Permission, perm, PermissionAllow); ok {
-			return perm, []string{subj}
-		}
-
-		if subj, ok := firstRuleSubject(agent.Permission, perm, PermissionAuto); ok {
-			return perm, []string{subj}
-		}
-	}
-
-	// execute is only registered when codeHosts is non-empty; keep a stable host bucket.
-	return "read", []string{"code_mode"}
-}
-
-func firstRuleSubject(permissions PermissionSet, bucket string, action PermissionAction) (string, bool) {
-	for _, b := range permissions.Buckets {
-		if b.Name != bucket {
-			continue
-		}
-
-		for _, rule := range b.Rules {
-			if rule.Action == action {
-				return subjectMatchingPattern(rule.Pattern, rule.segments...), true
-			}
-		}
-	}
-
-	return "", false
-}
-
-func subjectMatchingPattern(pattern string, segments ...ruleSegment) string {
-	if len(segments) == 0 {
-		pattern = strings.TrimSpace(pattern)
-		if pattern == "" || pattern == "*" {
-			return "code_mode"
-		}
-
-		segments = []ruleSegment{{Text: pattern}}
-	}
-
-	var b strings.Builder
-
-	for _, segment := range segments {
-		for _, r := range segment.Text {
-			if !segment.Literal && (r == '*' || r == '?') {
-				b.WriteByte('x')
-			} else {
-				b.WriteRune(r)
-			}
-		}
-	}
-
-	if b.Len() == 0 {
-		return "code_mode"
-	}
-
-	return b.String()
 }
 
 type executeParams struct {
