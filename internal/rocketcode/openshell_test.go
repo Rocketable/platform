@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -43,8 +44,17 @@ func TestOpenShellCommandLifecycle(t *testing.T) {
 		{name: "incomplete cleanup", outcome: v1.DeletionAccepted},
 		{name: "failed cleanup", errDelete: errors.New("gateway unreachable")},
 		{name: "prompt output", outcome: v1.DeletionCompleted, stdoutOnly: true},
+		{name: "partial prompt incomplete cleanup", errStream: errors.New("lost transport"), outcome: v1.DeletionAccepted, stdoutOnly: true},
+		{name: "partial prompt failed cleanup", errStream: errors.New("lost transport"), errDelete: errors.New("gateway unreachable"), stdoutOnly: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			var diagnostic bytes.Buffer
+
+			logOutput := log.Writer()
+
+			log.SetOutput(&diagnostic)
+			t.Cleanup(func() { log.SetOutput(logOutput) })
+
 			var name string
 
 			closed := false
@@ -127,6 +137,20 @@ func TestOpenShellCommandLifecycle(t *testing.T) {
 			}
 
 			require.Equal(t, tc.exit, exit)
+
+			if tc.errStream != nil {
+				require.ErrorIs(t, err, tc.errStream)
+			}
+
+			switch {
+			case tc.errDelete != nil:
+				require.ErrorIs(t, err, tc.errDelete)
+				require.Contains(t, diagnostic.String(), "openshell cleanup "+name+": "+tc.errDelete.Error())
+			case tc.outcome == v1.DeletionAccepted:
+				require.Contains(t, diagnostic.String(), "openshell cleanup "+name+": deletion incomplete")
+			default:
+				require.Empty(t, diagnostic.String())
+			}
 
 			if tc.errStream != nil || tc.errExit != nil || tc.errDelete != nil || tc.outcome == v1.DeletionAccepted {
 				require.Error(t, err)
@@ -321,7 +345,7 @@ func TestOpenShellGatewayIntegration(t *testing.T) {
 	require.Equal(t, "prefix stdout suffix", env.expandShellCommands(t.Context(), "prefix !`printf stdout; printf stderr >&2; exit 7` suffix"))
 	got = env.shell.Bash(t.Context(), bashParams{Command: "printf transient > /sandbox/rocketcode-container-only"})
 	require.True(t, got.Success, got.Output)
-	got = env.shell.Bash(t.Context(), bashParams{Command: "test ! -e /sandbox/rocketcode-container-only; test -f nested/shared"})
+	got = env.shell.Bash(t.Context(), bashParams{Command: "test ! -e /sandbox/rocketcode-container-only && test -f nested/shared"})
 	require.True(t, got.Success, got.Output)
 	// External processes need wall-clock observation, not synctest fake time.
 	got = env.shell.Bash(t.Context(), bashParams{TimeoutMillisecond: 15000, Command: `printf started; (while true; do printf x >> descendant; sleep 0.1; done) & wait`})

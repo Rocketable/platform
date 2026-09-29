@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"path/filepath"
 	"strings"
 
@@ -49,8 +50,10 @@ func (sss *sandboxedShellSystem) executeOpenShell(ctx context.Context, sandboxes
 
 		result, errDelete := sandboxes.Delete(context.WithoutCancel(ctx), "", name, v1.DeleteOptions{AllowMissing: true})
 		if errDelete != nil {
+			log.Printf("openshell cleanup %s: %v", name, errDelete)
 			err = errors.Join(err, fmt.Errorf("openshell cleanup %s: %w", name, errDelete))
 		} else if result.Outcome != v1.DeletionCompleted && result.Outcome != v1.DeletionAlreadyAbsent {
+			log.Printf("openshell cleanup %s: deletion incomplete (%v)", name, result.Outcome)
 			err = errors.Join(err, fmt.Errorf("openshell cleanup %s: deletion incomplete (%v)", name, result.Outcome))
 		}
 	}()
