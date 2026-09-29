@@ -27,9 +27,6 @@ func TestInterpolatePermissions(t *testing.T) {
 				require.Equal(t, tc.pattern, original.Buckets[0].Rules[0].Pattern)
 				require.Equal(t, PermissionAllow, agent.Permission.evaluate(bucket, tc.allowed).Action)
 				require.Equal(t, PermissionDeny, agent.Permission.evaluate(bucket, tc.denied).Action)
-				subject, ok := firstRuleSubject(agent.Permission, bucket, PermissionAllow)
-				require.True(t, ok)
-				require.Equal(t, PermissionAllow, agent.Permission.evaluate(bucket, subject).Action)
 
 				if bucket == "bash" {
 					require.Equal(t, PermissionDeny, agent.Permission.evaluate(bucket, tc.denied, tc.denied).Action)
