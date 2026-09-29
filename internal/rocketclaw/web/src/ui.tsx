@@ -1,6 +1,6 @@
 "use client";
 
-import { QueryClient, QueryClientProvider, useQuery, useMutation } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery, useQueries, useMutation } from "@tanstack/react-query";
 import { Menu } from "@base-ui/react/menu";
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -8,7 +8,7 @@ import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field
 import { queries, mutations, listSessions, rpc } from "./api";
 import type { ChatOrigin, MessageMatch, PromptDelivery } from "./types";
 import { Bot, Check, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
-import Link, { usePathname, navigate } from "./navigation";
+import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
@@ -277,6 +277,7 @@ function useRoute() {
   const skills = pathname === "/skills";
   const config = pathname === "/config";
   const settled = pathname === "/settled";
+  const search = pathname === "/search";
   const id = pathname.startsWith("/s/") ? decodeSessionId(pathname.slice(3)) : "";
   return {
     cron,
@@ -284,6 +285,7 @@ function useRoute() {
     skills,
     config,
     settled,
+    search,
     id,
     goHome: () => navigate("/"),
     goCron: () => navigate("/cron"),
@@ -611,7 +613,7 @@ export function App() {
   const composer = useRef<((command: string) => void) | null>(null);
   const commands = useMemo(() => ({ command, setCommand, composer }), [command]);
   const route = useRoute();
-  const showChat = ![route.cron, route.agents, route.skills, route.config, route.settled].some(Boolean);
+  const showChat = ![route.cron, route.agents, route.skills, route.config, route.settled, route.search].some(Boolean);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [palette, setPalette] = useState<{ mode: "sessions" | "commands" | "cron" | undefined; key: number }>({ mode: undefined, key: 0 });
   const openPalette = useCallback((mode: "sessions" | "commands") => setPalette((current) => ({ mode, key: current.key + 1 })), []);
@@ -680,7 +682,7 @@ export function App() {
                   <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="New session" onClick={newChat}>
                     <SquarePen className="size-[var(--navigation-icon)]" />
                   </TooltipTrigger><TooltipContent side="top">New session</TooltipContent></Tooltip>
-                  <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Search sessions" onClick={() => openPalette("sessions")}>
+                  <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Search sessions" onClick={() => navigate("/search")}>
                     <Search className="size-[var(--navigation-icon)]" />
                   </TooltipTrigger><TooltipContent side="top">Search sessions</TooltipContent></Tooltip>
                   <Tooltip><TooltipTrigger render={<Button variant="ghost" size="icon" className="size-[var(--navigation-button)] shrink-0" />} aria-label="Open command palette" onClick={() => openPalette("commands")}>
@@ -697,6 +699,7 @@ export function App() {
             <main className={cn("flex min-h-0 min-w-0 flex-1 flex-col", command?.target && "pt-[min(75dvh,30rem)]")} data-sidebar-swipe="open">
               <WarmTabs cron={route.cron} agents={route.agents} skills={route.skills} config={route.config} />
               {route.settled ? <SessionList settledOnly /> : null}
+              {route.search ? <SearchPage /> : null}
               <TabPane show={showChat}>
                 <MessageScrollerProvider key={conversation.key} autoScroll scrollEdgeThreshold={48}>
                   <Transcript id={conversation.id} drafts={drafts.current} onDraftChange={onDraftChange} onCreated={(id) => setConversation((current) => ({ ...current, created: id }))} />
@@ -854,7 +857,7 @@ function paletteRows(
   roomFilter: string,
 ): { key: string; label?: string; detail?: string; session?: Session; loading?: boolean; keep?: boolean; disabled?: boolean; run: () => void }[] {
   if (mode === "sessions") {
-    return sidebar.rows.filter((session) => (!filters.pinnedOnly || session.pinned) && (!filters.forkedOnly || session.forkedFrom) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || (origins.get(session.id)?.indexOf(filters.needle) ?? -1) >= 0)).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((session) => ({
+    return sidebar.rows.filter((session) => sessionMatchesSearch(session, filters, agentFilter, roomFilter, origins.get(session.id) ?? "")).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((session) => ({
       key: session.id,
       session, loading: sidebar.loadingIds.has(session.id),
       run: () => navigate(sessionPath(session.id)),
@@ -868,6 +871,7 @@ function paletteRows(
   return [
     ...actions,
     { key: "new", label: "Session: New session", detail: "", run: newChat },
+    { key: "search", label: "Session: Search", detail: "", run: () => navigate("/search") },
     { key: "run-cron", label: "Cron: Run cron", detail: "", keep: true, run: openCron },
     ...(["settled", "cron", "agents", "skills", "config"] as const).map((key) => ({ key, label: `Page: ${key[0].toUpperCase() + key.slice(1)}`, run: () => navigate(`/${key}`) })),
     { key: "sidebar", label: `Sidebar: ${sidebarOpen ? "Hide sidebar" : "Show sidebar"}`, detail: "", run: onToggleSidebar },
@@ -1157,6 +1161,217 @@ function sessionSearchTerms(query: string) {
   return { pinnedOnly, forkedOnly, text, needle };
 }
 
+function sessionMatchesSearch(session: Session, filters: ReturnType<typeof sessionSearchTerms>, agentFilter: string, roomFilter: string, origin: string) {
+  return (!filters.pinnedOnly || session.pinned) && (!filters.forkedOnly || session.forkedFrom) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || origin.includes(filters.needle));
+}
+
+type SavedSearch = { id: string; name?: string; query: string; agentFilter: string; roomFilter: string };
+type SavedSearches = { tabs: SavedSearch[]; active: string };
+
+function SearchPage() {
+  const identity = useQuery(queries.identity());
+  if (!identity.isSuccess) return null;
+  return <SearchTabs key={identity.data} owner={identity.data} />;
+}
+
+function SearchTabs({ owner }: { owner: string }) {
+  const storageKey = `search-tabs:${owner}`;
+  const [rename, setRename] = useState<string | null>(null);
+  const [saved, setSaved] = useState<SavedSearches>(() => {
+    const stored = localStorage.getItem(storageKey);
+    if (stored) return JSON.parse(stored) as SavedSearches;
+    const id = crypto.getRandomValues(new Uint32Array(4)).join("-");
+    return { tabs: [{ id, query: "", agentFilter: "", roomFilter: "" }], active: id };
+  });
+  const draft = useRef(localStorage.getItem(storageKey) === null);
+  const savedRef = useRef(saved);
+  const focusAfterClose = useRef(false);
+  const activeTab = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  useLayoutEffect(() => { input.current?.focus(); }, []);
+  const sidebar = useContext(Sidebar);
+  const agents = useQuery({ ...queries.agents(), staleTime: 60_000 });
+  const selected = saved.tabs.findIndex((tab) => tab.id === saved.active);
+  const tab = saved.tabs[selected];
+  useLayoutEffect(() => {
+    if (rename !== null) { activeTab.current!.focus(); window.getSelection()?.selectAllChildren(activeTab.current!); }
+    if (focusAfterClose.current) {
+      activeTab.current?.focus();
+      focusAfterClose.current = false;
+    }
+  }, [saved, rename]);
+  const update = (next: SavedSearches) => {
+    savedRef.current = next;
+    setSaved(next);
+    draft.current = false;
+    localStorage.setItem(storageKey, JSON.stringify(next));
+  };
+  const edit = (change: Partial<SavedSearch>) => update({ ...savedRef.current, tabs: savedRef.current.tabs.map((item) => item.id === tab.id ? { ...item, ...change } : item) });
+  const select = (active: string) => {
+    const next = { ...savedRef.current, active };
+    savedRef.current = next;
+    setSaved(next);
+    if (!draft.current) localStorage.setItem(storageKey, JSON.stringify(next));
+  };
+  const close = (index: number) => {
+    const tabs = saved.tabs.filter((_, position) => position !== index);
+    if (!tabs.length) {
+      localStorage.removeItem(storageKey);
+      const last = localStorage.getItem(`last-seen:${owner}`);
+      navigate(last ?? "/");
+      return;
+    }
+    focusAfterClose.current = true;
+    update({ tabs, active: saved.active === saved.tabs[index].id ? tabs[Math.min(index, tabs.length - 1)].id : saved.active });
+  };
+  return <section aria-label="Saved searches" className="flex min-h-0 min-w-0 flex-1 flex-col gap-4 p-4 sm:p-6">
+    <div className="flex min-w-0 items-center gap-2">
+      <div role="tablist" aria-label="Searches" className="flex min-w-0 gap-1 overflow-x-auto">
+        {saved.tabs.map((item, index) => <div key={item.id} className="flex shrink-0 items-center rounded-md border border-sidebar-border bg-background">
+          <div role={item.id === saved.active && rename !== null ? "textbox" : "tab"} aria-label={item.id === saved.active && rename !== null ? "Search name" : undefined} contentEditable={item.id === saved.active && rename !== null ? "plaintext-only" : false} suppressContentEditableWarning ref={item.id === saved.active ? activeTab : null} tabIndex={item.id === saved.active ? 0 : -1} aria-selected={rename === null || item.id !== saved.active ? item.id === saved.active : undefined} aria-controls="search-tab-panel" className={cn("max-w-44 truncate rounded-l-md px-3 py-2 text-sm", item.id === saved.active && "bg-sidebar-row-active", item.id === saved.active && rename !== null ? "cursor-text" : "cursor-pointer")} onClick={() => { if (item.id !== saved.active) select(item.id); else if (rename === null) setRename(item.name || item.query || `Search ${index + 1}`); }} onBlur={(event) => {
+            if (item.id !== saved.active || rename === null) return;
+            const name = event.currentTarget.textContent!.trim();
+            event.currentTarget.textContent = name || item.query || `Search ${index + 1}`;
+            edit({ name }); setRename(null);
+          }} onKeyDown={(event) => {
+            if (item.id === saved.active && rename !== null) {
+              if (event.nativeEvent.isComposing) return;
+              if (event.key === "Enter" || event.key === "Escape") {
+                event.preventDefault(); event.stopPropagation();
+                if (event.key === "Enter") { focusAfterClose.current = true; event.currentTarget.blur(); }
+                else { event.currentTarget.textContent = rename; setRename(null); }
+              }
+              return;
+            }
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              if (item.id === saved.active) setRename(item.name || item.query || `Search ${index + 1}`); else select(item.id);
+              return;
+            }
+            const position = event.key === "ArrowRight" ? (index + 1) % saved.tabs.length : event.key === "ArrowLeft" ? (index + saved.tabs.length - 1) % saved.tabs.length : event.key === "Home" ? 0 : event.key === "End" ? saved.tabs.length - 1 : -1;
+            if (position < 0) return;
+            event.preventDefault();
+            select(saved.tabs[position].id);
+            event.currentTarget.parentElement?.parentElement?.querySelectorAll<HTMLElement>('[role="tab"]')[position]?.focus();
+          }}>{item.name || item.query || `Search ${index + 1}`}</div>
+          <button type="button" aria-label={`Close search ${index + 1}`} className="rounded-r-md px-2 py-2 text-muted-foreground hover:text-foreground" onClick={() => close(index)}><X className="size-4" /></button>
+        </div>)}
+      </div>
+      <Button variant="outline" size="icon" aria-label="New search" onClick={() => {
+        const id = crypto.getRandomValues(new Uint32Array(4)).join("-");
+        update({ tabs: [...saved.tabs, { id, query: "", agentFilter: "", roomFilter: "" }], active: id });
+        requestAnimationFrame(() => input.current?.focus());
+      }}><Plus className="size-4" /></Button>
+    </div>
+    <SearchResults key={tab.id} tab={tab} rows={sidebar.rows} catalog={agents.data?.agents ?? []} edit={edit} input={input} onFirstSubmit={() => { if (draft.current) update(savedRef.current); }} />
+  </section>;
+}
+
+function MatchedExcerpt({ text, needle }: { text: string; needle: string }) {
+  const lower = text.toLowerCase(), index = needle ? lower.indexOf(needle) : -1;
+  const start = index < 0 ? 0 : Math.max(0, index - 48);
+  const end = index < 0 ? text.length : Math.min(text.length, index + needle.length + 48);
+  const parts: ReactNode[] = [];
+  for (let position = start; position < end;) {
+    const match = needle ? lower.indexOf(needle, position) : -1;
+    const next = match < 0 || match >= end ? end : match;
+    parts.push(text.slice(position, next));
+    if (next === end) break;
+    parts.push(<mark key={match} className="rounded-sm bg-primary/20 text-foreground ring-1 ring-primary/30">{text.slice(match, match + needle.length)}</mark>);
+    position = match + needle.length;
+  }
+  return <span className="min-w-0 whitespace-pre-wrap break-words">{start ? "…" : ""}{parts}{end < text.length ? "…" : ""}</span>;
+}
+
+function SearchMatches({ matching, messages, rows, origins, needle }: { matching: Session[]; messages: MessageMatch[]; rows: Session[]; origins: string[]; needle: string }) {
+  const bySession = Map.groupBy(messages, (match) => match.conversationId);
+  const matched = new Set(matching);
+  const sessions = rows.filter((session) => bySession.has(session.id) || matched.has(session)).sort((a, b) => Number(bySession.has(b.id)) - Number(bySession.has(a.id)) || Number(!!b.pinned) - Number(!!a.pinned));
+  return <ul className="flex min-w-0 flex-col gap-4">
+    {sessions.map((session) => {
+      const origin = origins[rows.findIndex((row) => row.id === session.id)] ?? "";
+      const hits = bySession.get(session.id) ?? [];
+      const label = session.name || rowPreview(session, false).split("\n", 1)[0] || sessionLabel(session.id);
+      const field = needle ? [["Name", session.name], ["Room", session.title], ["Agent", session.agent], ["Session", sessionLabel(session.id)], ["Origin", origin]].find(([, text]) => text?.toLowerCase().includes(needle)) : undefined;
+      const text = field?.[1] || (!hits.length && matched.has(session) ? session.preview || sessionLabel(session.id) : "");
+      const count = hits.length + Number(!!text);
+      return <li key={session.id} role="group" aria-label={label} className="min-w-0">
+        <h2 className="flex min-w-0 items-center gap-1 text-sm font-medium"><Link href={sessionPath(session.id)} title={label} className="min-w-0 truncate py-1 hover:underline focus-visible:outline-2 focus-visible:outline-ring">{label}</Link><span className="shrink-0 text-muted-foreground">({count})</span>{session.pinned ? <Pin aria-label="Pinned" className="size-3 shrink-0" /> : null}</h2>
+        <ul className="mt-1 border-l pl-2 font-mono text-sm leading-5">
+          {text ? <li><Link href={sessionPath(session.id)} className="flex min-h-11 min-w-0 items-start gap-3 px-2 py-1 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring sm:min-h-7"><span className="w-16 shrink-0 text-xs text-muted-foreground">{field?.[0] || "Preview"}</span><MatchedExcerpt text={text} needle={needle} /></Link></li> : null}
+          {hits.map((match) => <li key={match.message.messageId}><Link href={`${sessionPath(session.id)}?message=${encodeURIComponent(match.message.messageId!)}`} className="flex min-h-11 min-w-0 items-start gap-3 px-2 py-1 hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring sm:min-h-7"><span className="w-16 shrink-0 text-xs text-muted-foreground">{match.message.role === "user" ? "You" : "Assistant"}</span><MatchedExcerpt text={match.message.text} needle={needle} /></Link></li>)}
+        </ul>
+      </li>;
+    })}
+  </ul>;
+}
+
+function SearchStatus({ pending, error, originError, empty, incomplete, retry }: { pending: boolean; error?: string; originError: boolean; empty: boolean; incomplete: boolean; retry: () => void }) {
+  return <>
+    {pending ? <p role="status" className="text-muted-foreground">Searching…</p> : null}
+    {error ? <p role="alert" className="text-destructive">Search failed: {error} <button type="button" className="underline" onClick={retry}>Retry</button></p> : null}
+    {originError ? <p role="alert" className="text-destructive">Some chat origins could not be searched.</p> : null}
+    {empty ? <p role="status" className="text-muted-foreground">{incomplete ? "Session search is still loading." : "No matches"}</p> : null}
+  </>;
+}
+
+function SearchResults({ tab, rows, catalog, edit, input, onFirstSubmit }: { tab: SavedSearch; rows: Session[]; catalog: { name: string }[]; edit: (change: Partial<SavedSearch>) => void; input: React.Ref<HTMLInputElement>; onFirstSubmit: () => void }) {
+  const sidebar = useContext(Sidebar);
+  const filters = sessionSearchTerms(tab.query);
+  const searchKey = filters.needle;
+  const identity = useQuery(queries.identity());
+  const protocol = useQuery(queries.protocol());
+  const origins = useQueries({ queries: filters.needle ? rows.map(({ id }) => ({
+    ...queries.history({ id, originOnly: true }), queryKey: ["sessionOrigin", identity.data, protocol.data, id], staleTime: 10_000, retry: false, select: originSearchText,
+  })) : [] });
+  const [result, setResult] = useState<{ query: string; matches: MessageMatch[]; error?: string; pending: boolean }>({ query: "", matches: [], pending: false });
+  const request = useRef<AbortController>(null);
+  const version = useRef(0);
+  const pause = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const deadline = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const firstEdit = useRef(0);
+  const submit = useCallback(() => {
+    clearTimeout(pause.current);
+    clearTimeout(deadline.current);
+    firstEdit.current = 0;
+    request.current?.abort();
+    const controller = new AbortController();
+    request.current = controller;
+    const current = ++version.current;
+    setResult({ query: searchKey, matches: [], pending: !!searchKey });
+    if (!searchKey) return;
+    void rpc<{ matches: MessageMatch[] }>("SearchMessages", { query: searchKey }, controller.signal).then(({ matches }) => {
+      if (current === version.current) setResult({ query: searchKey, matches, pending: false });
+    }).catch((error: Error) => {
+      if (current === version.current && !controller.signal.aborted) setResult({ query: searchKey, matches: [], error: error.message, pending: false });
+    });
+  }, [searchKey]);
+  useEffect(() => {
+    if (!firstEdit.current) firstEdit.current = Date.now();
+    pause.current = setTimeout(submit, 250);
+    deadline.current = setTimeout(submit, Math.max(0, 1000 - (Date.now() - firstEdit.current)));
+    return () => { clearTimeout(pause.current); clearTimeout(deadline.current); };
+  }, [submit]);
+  useEffect(() => () => { request.current?.abort(); version.current++; }, []);
+  const pending = result.pending || result.query !== searchKey || origins.some((origin) => origin.isPending);
+  const originError = origins.some((origin) => origin.isError);
+  const current = !pending && !result.error;
+  const matching = rows.filter((row, index) => sessionMatchesSearch(row, filters, tab.agentFilter, tab.roomFilter, origins[index]?.data ?? ""));
+  const visible = new Set(rows.filter((row) => sessionMatchesSearch(row, { ...filters, needle: "" }, tab.agentFilter, tab.roomFilter, "")).map((row) => row.id));
+  const messages = result.matches.filter((match) => visible.has(match.conversationId));
+  const searching = !!tab.query.trim() || !!tab.agentFilter || !!tab.roomFilter;
+  return <>
+    <div id="search-tab-panel" role="tabpanel" aria-label="Search" className="min-w-0">
+      <SessionSearch rows={rows} catalog={catalog} query={tab.query} setQuery={(query) => edit({ query })} agentFilter={tab.agentFilter} setAgentFilter={(agentFilter) => edit({ agentFilter })} roomFilter={tab.roomFilter} setRoomFilter={(roomFilter) => edit({ roomFilter })} inputRef={input} onKeyDown={(event) => { if (event.key === "Enter") { onFirstSubmit(); submit(); } }} />
+    </div>
+    <div className="min-h-0 flex-1 overflow-y-auto text-sm" aria-label="Search results">
+      <SearchStatus pending={pending} error={result.query === searchKey ? result.error : undefined} originError={originError} empty={searching && current && matching.length + messages.length === 0} incomplete={!searchIsAuthoritative(sidebar) || originError} retry={submit} />
+      {current && searching ? <SearchMatches matching={matching} messages={messages} rows={rows} origins={origins.map((origin) => origin.data ?? "")} needle={filters.needle} /> : null}
+      {!searching ? <p className="text-muted-foreground">Type to search messages and conversations.</p> : null}
+    </div>
+  </>;
+}
+
 function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFilter, roomFilter, setRoomFilter, inputRef, placeholder, onKeyDown }: {
   rows: Session[];
   catalog: { name: string }[];
@@ -1186,7 +1401,7 @@ function SessionSearch({ rows, catalog, query, setQuery, agentFilter, setAgentFi
     } else {
       setRoomFilter(name);
     }
-    setQuery(query.split(/\s+/).filter((term) => /^is:(settled|pinned)$/i.test(term)).join(" "));
+    setQuery(query.split(/\s+/).filter((term) => /^is:(settled|pinned|forked)$/i.test(term)).join(" "));
     setOverlayPick(0);
   };
   return (
@@ -1489,7 +1704,7 @@ function TranscriptLine({ line, conversationId, hasSandboxed }: { line: Line; co
     );
   }
   return (
-    <Message align={line.role === "user" ? "end" : undefined} className="mb-4" tabIndex={0} onPointerDown={(event) => {
+    <Message data-message-id={line.id} align={line.role === "user" ? "end" : undefined} className="mb-4" tabIndex={0} onPointerDown={(event) => {
       if (event.pointerType === "touch" && !(event.target as Element).closest("button, a, input, textarea, summary")) event.currentTarget.focus({ preventScroll: true });
     }}>
       <MessageContent>
@@ -1501,6 +1716,46 @@ function TranscriptLine({ line, conversationId, hasSandboxed }: { line: Line; co
       </MessageContent>
     </Message>
   );
+}
+
+function useTranscriptPosition(conversationId: string, lines: Line[], turns: ReturnType<typeof transcriptTurns>) {
+  const viewport = useRef<HTMLDivElement>(null);
+  const identity = useQuery(queries.identity());
+  const firstOwner = useRef<string | undefined>(identity.isSuccess ? identity.data : undefined);
+  const { scrollToMessage } = useMessageScroller();
+  const target = useContext(SessionCommands).command?.target;
+  const search = useSearch();
+  const messageId = conversationId && location.pathname === sessionPath(conversationId) ? new URLSearchParams(search).get("message") : null;
+  const targetId = messageId ?? (target?.conversationId === conversationId ? target.message.messageId : null);
+  const targetTurn = targetId ? turns.findIndex((turn) => turn.user.some((line) => line.id === targetId) || turn.replies.some((line) => line.id === targetId)) : -1;
+  const seen = useCallback(() => {
+    const element = viewport.current;
+    if (!element || !identity.isSuccess || !element.getClientRects().length) return;
+    if (firstOwner.current === undefined) firstOwner.current = identity.data;
+    if (firstOwner.current !== identity.data) return;
+    const bounds = element.getBoundingClientRect();
+    const visible = [...element.querySelectorAll<HTMLElement>('[data-slot="message"][data-message-id]')].filter((node) => {
+      const rect = node.getBoundingClientRect();
+      return rect.bottom > bounds.top && rect.top < bounds.bottom;
+    });
+    const last = visible.at(-1)?.dataset.messageId;
+    if (last) localStorage.setItem(`last-seen:${identity.data}`, `${sessionPath(conversationId)}?message=${encodeURIComponent(last)}`);
+  }, [conversationId, identity.isSuccess, identity.data]);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => requestAnimationFrame(seen));
+    return () => cancelAnimationFrame(frame);
+  }, [lines, seen]);
+  useEffect(() => {
+    if (targetTurn < 0) return;
+    scrollToMessage(`turn-${targetTurn}`, { align: "center", behavior: "instant" });
+    const frame = requestAnimationFrame(() => {
+      const line = [...(viewport.current?.querySelectorAll<HTMLElement>("[data-message-id]") ?? [])].find((node) => node.dataset.messageId === targetId);
+      line?.scrollIntoView({ block: "center", behavior: "instant" });
+      seen();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [targetTurn, targetId, scrollToMessage, seen, viewport]);
+  return { viewport, seen, scrollToMessage };
 }
 
 function TranscriptLog({
@@ -1519,10 +1774,7 @@ function TranscriptLog({
   hasSandboxed: boolean;
 }) {
   const turns = transcriptTurns(lines, filter);
-  const { scrollToMessage } = useMessageScroller();
-  const target = useContext(SessionCommands).command?.target;
-  const targetTurn = target?.conversationId === conversationId ? turns.findIndex((turn) => turn.user.some((line) => line.id === target.message.messageId) || turn.replies.some((line) => line.id === target.message.messageId)) : -1;
-  useEffect(() => { if (targetTurn >= 0) scrollToMessage(`turn-${targetTurn}`, { align: "center", behavior: "instant" }); }, [targetTurn, target?.message.messageId, scrollToMessage]);
+  const { viewport, seen, scrollToMessage } = useTranscriptPosition(conversationId, lines, turns);
   const turnNodes = useRef<(HTMLElement | null)[]>([]);
   const running = usePendingCron(conversationId);
   const emptyMessage = lines.length === 0
@@ -1535,7 +1787,7 @@ function TranscriptLog({
   };
   return (
     <MessageScroller className="flex-1">
-    <MessageScrollerViewport id="transcript-scroll" className="overflow-x-hidden [overflow-anchor:none]">
+    <MessageScrollerViewport ref={viewport} id="transcript-scroll" onScroll={seen} className="overflow-x-hidden [overflow-anchor:none]">
       <div className="min-h-full pl-3 pr-8 pt-3 pb-4 sm:pl-5 sm:pr-10 sm:pt-4">
       <MessageScrollerContent className="mx-auto w-full min-w-0 max-w-3xl">
       {origin && (origin.kind === "cron" || origin.kind === "external_mcp") ? <MessageScrollerItem messageId="origin"><OriginCard origin={origin} /></MessageScrollerItem> : null}
@@ -1723,6 +1975,7 @@ export function OriginCard({ origin }: { origin?: ChatOrigin }) {
 
 function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; drafts: Map<string, ComposerDraft>; onDraftChange: () => void; onCreated: (id: string) => void }) {
   const [filter, setFilter] = useState<OriginFilter>({ sandboxed: true, canonical: true });
+  const search = useSearch();
   const target = useContext(SessionCommands).command?.target;
   const previewing = target?.conversationId === id;
   const preview = useQuery({ ...queries.history({ id }), enabled: previewing });
@@ -1741,13 +1994,19 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
     }
   });
   const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
+  const messageId = location.pathname === sessionPath(id) ? new URLSearchParams(search).get("message") : null;
+  const matchedOrigin = (previewLines ?? lines).find((line) => line.id === messageId)?.origin;
+  const visibleFilter = { sandboxed: filter.sandboxed || matchedOrigin === "sandboxed", canonical: filter.canonical || matchedOrigin === "canonical" };
   return (
     <>
-      <TranscriptLog conversationId={id} lines={previewLines ?? lines} thinking={!previewing && busy && lines.at(-1)?.role !== "thinking"} origin={origin} filter={filter} hasSandboxed={hasSandboxed} />
+      <TranscriptLog conversationId={id} lines={previewLines ?? lines} thinking={!previewing && busy && lines.at(-1)?.role !== "thinking"} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} />
       {historyError ? <p role="alert" className="px-3 text-sm text-destructive">{historyError}</p> : null}
       {hasSandboxed ? <ButtonGroup aria-label="Show messages from" className="mx-auto my-2.5">
         {(["sandboxed", "canonical"] as const).map((choice) => (
-          <Button key={choice} type="button" size="xs" className="relative before:absolute before:-inset-y-2.5 before:inset-x-0" variant={filter[choice] ? "default" : "outline"} aria-pressed={filter[choice]} onClick={() => setFilter((current) => ({ ...current, [choice]: !current[choice] }))}>
+          <Button key={choice} type="button" size="xs" className="relative before:absolute before:-inset-y-2.5 before:inset-x-0" variant={visibleFilter[choice] ? "default" : "outline"} aria-pressed={visibleFilter[choice]} onClick={() => {
+            if (matchedOrigin === choice) navigate(sessionPath(id));
+            setFilter((current) => ({ ...current, [choice]: !visibleFilter[choice] }));
+          }}>
             {choice}
           </Button>
         ))}

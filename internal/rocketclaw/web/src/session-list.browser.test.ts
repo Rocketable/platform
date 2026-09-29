@@ -524,7 +524,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     identityHold.resolve();
     await shown(page, "Huge");
     await hidden(page, "will vanish");
-    await page.getByRole("button", { name: "Search sessions", exact: true }).click();
+    await page.keyboard.press("Control+p");
     const sessionPalette = page.getByRole("dialog", { name: "Go to session", exact: true });
     const search = sessionPalette.getByPlaceholder("Search sessions", { exact: true });
     expect(historyRequests).toEqual([]);
@@ -1335,7 +1335,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     for (const hasTouch of [false, true]) {
       const layoutPage = await browser.newPage({ hasTouch, viewport: { width: 390, height: 844 } });
       await layoutPage.goto(origin);
-      await layoutPage.getByRole("button", { name: "Search sessions", exact: true }).click();
+      await layoutPage.getByRole("button", { name: "Search sessions", exact: true }).waitFor();
+      await layoutPage.keyboard.press("Control+p");
       const layoutDialog = layoutPage.getByRole("dialog", { name: "Go to session", exact: true });
       await layoutDialog.waitFor();
       for (const width of [390, 1024, 1280]) {
@@ -1370,9 +1371,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await matrix.locator("#session-sidebar").getByText("Winner", { exact: true }).waitFor();
     const matrixDialog = matrix.getByRole("dialog", { name: "Go to session", exact: true });
     const matrixSearch = matrixDialog.getByPlaceholder("Search sessions");
-    for (const entry of ["click", "Meta+p", "Control+p"]) {
-      if (entry === "click") await matrix.getByRole("button", { name: "Search sessions", exact: true }).click();
-      else await matrix.keyboard.press(entry);
+    for (const entry of ["Meta+p", "Control+p"]) {
+      await matrix.keyboard.press(entry);
       await matrixSearch.waitFor();
       expect(await matrixSearch.inputValue()).toBe("");
       await matrix.waitForFunction(() => document.activeElement?.getAttribute("placeholder") === "Search sessions");
@@ -1440,7 +1440,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     const searchButton = matrix.getByRole("button", { name: "Search sessions", exact: true });
     await searchButton.scrollIntoViewIfNeeded();
     expect((await searchButton.boundingBox())!.width).toBeGreaterThanOrEqual(44);
-    await searchButton.click();
+    await searchButton.focus();
+    await matrix.keyboard.press("Control+p");
     expect(await matrixSearch.inputValue()).toBe("");
     await matrixSearch.press("Escape");
     await matrix.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Search sessions");
@@ -1523,7 +1524,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await many.waitForFunction((before: string) => document.querySelector("#session-sidebar li span[title]")?.getAttribute("title") !== before, ageBefore);
     expect(await rowActions.locator("span[title]").getAttribute("title")).not.toBe(ageBefore);
     await many.evaluate(() => (window as unknown as { restoreRefreshProbe: () => void }).restoreRefreshProbe());
-    await many.getByRole("button", { name: "Search sessions", exact: true }).click();
+    await many.keyboard.press("Meta+p");
     const manyDialog = many.getByRole("dialog", { name: "Go to session", exact: true });
     await manyDialog.getByPlaceholder("Search sessions").fill("origin-only-needle");
     await many.waitForFunction(() => (window as unknown as { originFetches: number }).originFetches > 0);
@@ -1536,13 +1537,13 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await many.waitForFunction((count: number) => (window as unknown as { originResponses: number }).originResponses >= count, firstBatch);
     await many.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     expect(await many.evaluate(() => (window as unknown as { originFetches: number }).originFetches)).toBe(firstBatch);
-    await many.getByRole("button", { name: "Search sessions", exact: true }).click();
+    await many.keyboard.press("Meta+p");
     await manyDialog.getByPlaceholder("Search sessions").fill("origin-only-needle");
     await manyDialog.getByText("Search fixture 0", { exact: true }).waitFor();
     await manyDialog.getByPlaceholder("Search sessions").fill("not-in-any-row");
     await manyDialog.getByText("loading...", { exact: true }).waitFor();
     await many.keyboard.press("Escape");
-    await many.getByRole("button", { name: "Search sessions", exact: true }).click();
+    await many.keyboard.press("Meta+p");
     await manyDialog.getByPlaceholder("Search sessions").fill("not-in-any-row");
     await manyDialog.getByText("loading...", { exact: true }).waitFor();
     lastOriginHold.resolve();

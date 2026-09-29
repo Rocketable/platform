@@ -31,6 +31,7 @@ import (
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
 	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/openai/openai-go/v3/responses"
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -48,6 +49,16 @@ type Server struct {
 
 	tailscaleMu    sync.Mutex
 	tailscaleUsers map[netip.Addr]tailscaleUser
+
+	searchMu    sync.Mutex
+	searches    map[string]*messageSearchFlight
+	searchGroup singleflight.Group
+}
+
+type messageSearchFlight struct {
+	cancel  context.CancelFunc
+	done    chan struct{}
+	waiters int
 }
 
 type tailscaleUser struct {

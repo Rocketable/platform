@@ -99,16 +99,29 @@ Touch devices and narrow screens use 48px navigation targets and 8px gaps;
 desktop uses 32px targets and 4px gaps. Icons are 24px in both layouts.
 The center bar has New session, Search sessions, and Open command palette. The
 separate desktop sidebar toggle and collapse handle remain. Cmd/Ctrl+B hides and shows the sidebar.
-Cmd/Ctrl+Alt+N opens a new session. The magnifying glass beside New session and
-Cmd/Ctrl+P open the same session-search dialog, including active and settled chats.
-Each opening clears text, pills, and result selection and focuses the input.
+Cmd/Ctrl+Alt+N opens a new session. The magnifying glass beside New session opens
+the Search page. Each search has its own editable tab, saved in this browser for
+the confirmed user. Click another tab to switch searches; click the selected tab
+to edit its name in place. Enter or clicking away saves; Escape cancels.
+Custom names stay unchanged when the query is edited; a blank name
+restores the query label. Results use a compact Search Editor-style list, grouped by
+conversation. The match count sits in parentheses beside each title, followed by
+highlighted, clickable matching excerpts. Message matches
+jump to the recorded user or assistant message, including after a reload;
+name and origin matches open the conversation. Message groups come before
+metadata-only matches, with pinned conversations first within each group.
+An empty search asks for a query instead of listing conversations. Closing a tab
+removes that search; closing the last returns to the last message visible in any chat, or Home
+if none was seen. Opening Search again starts an empty tab. Cmd/Ctrl+P still opens
+the session-search dialog, including active and settled chats. Each dialog opening
+clears text, pills, and result selection and focuses the input.
 Search matches names, titles, previews, agents, session labels, origin card fields,
 and original MCP metadata keys and values, case-insensitively. Type `agent:` or
 `room:` to choose a removable filter pill by click, arrows, Tab, or Enter.
 Suggestion keys take priority over results; Escape dismisses suggestions first,
 then closes the dialog. Agent, room, `is:pinned`, and `is:forked` filters constrain
-both row and origin matches. Results appear once, pinned first, retaining their
-recent-first order within each group.
+both row and origin matches. The session-search dialog lists each conversation
+once, pinned first, retaining recent-first order within each group.
 Origin data loads only when free text remains: empty input, status tokens, pills,
 and unfinished `agent:`/`room:` suggestions do not fetch histories. Ordinary
 sidebar loading stays independent. Incomplete enumeration or origin lookups show

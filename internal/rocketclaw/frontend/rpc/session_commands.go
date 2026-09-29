@@ -79,34 +79,104 @@ func (s *Server) searchMessages(ctx context.Context, request *SearchMessagesRequ
 		return response, nil
 	}
 
-	conversations, err := s.backend.ListConversations(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list message search sessions: %w", err)
+	// All authenticated Web callers share the same humanConversation visibility set.
+	s.searchMu.Lock()
+	scanCtx := ctx
+
+	flight := s.searches[needle]
+	if flight != nil {
+		select {
+		case <-flight.done:
+			s.searchGroup.Forget(needle)
+
+			flight = nil
+		default:
+		}
 	}
-	// Ponytail: scans recorded transcripts; add a message index if volume demands it.
-	for _, conversation := range conversations {
-		visible, err := s.humanConversation(conversation.ID)
+
+	if flight == nil {
+		var cancel context.CancelFunc
+
+		scanCtx, cancel = context.WithCancel(context.WithoutCancel(ctx))
+
+		flight = &messageSearchFlight{cancel: cancel, done: make(chan struct{})}
+		if s.searches == nil {
+			s.searches = make(map[string]*messageSearchFlight)
+		}
+
+		s.searches[needle] = flight
+	}
+
+	flight.waiters++
+	result := s.searchGroup.DoChan(needle, func() (any, error) {
+		defer close(flight.done)
+		// The leader's detached context keeps incoming principal metadata for history.
+		conversations, err := s.backend.ListConversations(scanCtx)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("list message search sessions: %w", err)
 		}
+		// Ponytail: scans recorded transcripts; add a message index if volume demands it.
+		for _, conversation := range conversations {
+			visible, err := s.humanConversation(conversation.ID)
+			if err != nil {
+				return nil, err
+			}
 
-		if !visible {
-			continue
-		}
+			if !visible {
+				continue
+			}
 
-		history, err := s.history(ctx, &HistoryRequest{Id: conversation.ID})
-		if err != nil {
-			return nil, err
-		}
+			history, err := s.history(scanCtx, &HistoryRequest{Id: conversation.ID})
+			if err != nil {
+				return nil, err
+			}
 
-		for _, message := range history.Messages {
-			if (message.Role == "user" || message.Role == "assistant") && strings.Contains(strings.ToLower(message.Text), needle) {
-				response.Matches = append(response.Matches, &MessageMatch{ConversationId: conversation.ID, Message: message})
+			for _, message := range history.Messages {
+				if (message.Role == "user" || message.Role == "assistant") && strings.Contains(strings.ToLower(message.Text), needle) {
+					response.Matches = append(response.Matches, &MessageMatch{ConversationId: conversation.ID, Message: message})
+				}
 			}
 		}
-	}
 
-	return response, nil
+		return response, nil
+	})
+	s.searchMu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		s.searchMu.Lock()
+
+		flight.waiters--
+		if flight.waiters == 0 {
+			if s.searches[needle] == flight {
+				delete(s.searches, needle)
+				s.searchGroup.Forget(needle)
+			}
+
+			flight.cancel()
+		}
+		s.searchMu.Unlock()
+
+		return nil, fmt.Errorf("wait for message search: %w", ctx.Err())
+	case outcome := <-result:
+		s.searchMu.Lock()
+
+		flight.waiters--
+		if s.searches[needle] == flight {
+			delete(s.searches, needle)
+		}
+
+		if flight.waiters == 0 {
+			flight.cancel()
+		}
+		s.searchMu.Unlock()
+
+		if outcome.Err != nil {
+			return nil, outcome.Err
+		}
+
+		return outcome.Val.(*SearchMessagesResponse), nil
+	}
 }
 
 func (s *Server) handoff(ctx context.Context, request *HandoffRequest) (*HandoffResponse, error) {

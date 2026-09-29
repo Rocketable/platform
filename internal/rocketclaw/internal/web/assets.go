@@ -20,7 +20,7 @@ func Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-cache")
 
-		if slices.Contains([]string{"/", "/cron", "/agents", "/skills", "/config", "/settled"}, r.URL.Path) || strings.HasPrefix(r.URL.Path, "/s/") {
+		if slices.Contains([]string{"/", "/cron", "/agents", "/skills", "/config", "/settled", "/search"}, r.URL.Path) || strings.HasPrefix(r.URL.Path, "/s/") {
 			r = r.Clone(r.Context())
 			r.URL.Path = "/"
 		}
