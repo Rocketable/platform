@@ -1756,6 +1756,7 @@ func TestPermissionReviewFailsClosedOnInvalidReviewerOutput(t *testing.T) {
 		agents:            Agents{Items: map[string]Agent{}},
 		skills:            Skills{Items: map[string]Skill{}},
 		baseTools:         map[string]looperTool{},
+		promptExpansion:   testPromptExpansionEnvironment(t),
 		childRunLogger:    DiscardChildRunLog,
 	}
 

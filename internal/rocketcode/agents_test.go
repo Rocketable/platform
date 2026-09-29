@@ -18,6 +18,38 @@ func testMapFileMode(mode fs.FileMode, data string) *fstest.MapFile {
 }
 
 func TestLoadAgents(t *testing.T) {
+	t.Run("agent shell selection", func(t *testing.T) {
+		for _, tc := range []struct{ config, image, wantError string }{
+			{},
+			{config: "rocketclaw: {bash_mode: standard}"},
+			{config: "rocketclaw: {bash_mode: openshell, openshell: {image: agent-image}}", image: "agent-image"},
+			{config: "rocketclaw: []", wantError: "rocketclaw: must be a mapping"},
+			{config: "rocketclaw: {bash_mode: other}", wantError: "bash_mode"},
+			{config: "rocketclaw: {bash_mode: 7}", wantError: "bash_mode"},
+			{config: "rocketclaw: {bash_mode: true}", wantError: "bash_mode"},
+			{config: "rocketclaw: {bash_mode: openshell}", wantError: "image"},
+			{config: "rocketclaw: {bash_mode: openshell, openshell: {image: ' '}}", wantError: "image"},
+			{config: "rocketclaw: {openshell: []}", wantError: "openshell"},
+			{config: "rocketclaw: {openshell: {image: 123}}", wantError: "image"},
+		} {
+			t.Run(tc.config, func(t *testing.T) {
+				result := LoadAgents(fstest.MapFS{"main.md": testMapFile("---\nmodel: gpt-5.4\n" + tc.config + "\n---\nPrompt")}, passThroughAgentModel)
+				if tc.wantError != "" {
+					require.Len(t, result.Errors, 1)
+					require.ErrorContains(t, result.Errors[0], tc.wantError)
+					require.Empty(t, result.Agents.Items)
+					return
+				}
+				require.Empty(t, result.Errors)
+				agent := result.Agents.Items["main"]
+				require.Equal(t, tc.image, agent.shell.OpenShell.Image)
+				if tc.image != "" {
+					require.Equal(t, bashOpenShell, agent.shell.BashMode)
+					require.Contains(t, agent.Frontmatter, "rocketclaw")
+				}
+			})
+		}
+	})
 	t.Run("loads valid top level markdown agents", func(t *testing.T) {
 		fsys := fstest.MapFS{
 			"review.md": testMapFileMode(0o640, `---

@@ -17,7 +17,7 @@ func TestTaskRejectsEmptySubagentModelWithoutResolving(t *testing.T) {
 	for _, model := range []string{"", "   "} {
 		t.Run(model, func(t *testing.T) {
 			calls := 0
-			factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{
+			factory := testTaskFactory(t, mockResponses(), Agents{Items: map[string]Agent{
 				"child": {Name: "child", Model: model},
 			}})
 			factory.resolver = testModelResolverFunc(func(string) (*openai.Client, ProviderOrigin, error) {
@@ -43,7 +43,7 @@ func TestTaskResolvesSubagentModelIndependently(t *testing.T) {
 
 		return rootClient, ProviderOrigin{Provider: "openai", Model: model}, nil
 	})
-	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{
+	factory := testTaskFactory(t, mockResponses(), Agents{Items: map[string]Agent{
 		"child": {Name: "child", Model: "work/gpt-child"},
 	}})
 	factory.resolver = resolver
@@ -60,7 +60,7 @@ func TestTaskResolvesSubagentModelIndependently(t *testing.T) {
 func TestTaskResolvesGuardrailModelIndependently(t *testing.T) {
 	rootClient, rootRequests := testResolverClient(t, "wrong")
 	guardClient, guardRequests := testResolverClient(t, `{"approved":false,"reason":"blocked"}`)
-	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
+	factory := testTaskFactory(t, mockResponses(), Agents{Items: map[string]Agent{}})
 	factory.resolver = testModelResolverFunc(func(model string) (*openai.Client, ProviderOrigin, error) {
 		if model == "safety/guard" {
 			return guardClient, ProviderOrigin{Provider: "safety", Model: "guard-api"}, nil
@@ -88,7 +88,7 @@ func TestTaskResolvesGuardrailModelIndependently(t *testing.T) {
 func TestTaskTool(t *testing.T) {
 	t.Run("applies child output schema", func(t *testing.T) {
 		mock := mockResponses(responseWithTaskMessages())
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"review": {Name: "review", Model: "gpt-5.4", Prompt: "review carefully", OutputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"answer": map[string]any{"type": "string"}},
@@ -109,7 +109,7 @@ func TestTaskTool(t *testing.T) {
 
 	t.Run("returns last final child text wrapped in task result", func(t *testing.T) {
 		mock := mockResponses(responseWithTaskMessages())
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"review": {Name: "review", Description: "", Model: "gpt-5.4", ReasoningEffort: "", Verbosity: "low", MaxRecursion: nil, Prompt: "review carefully", Location: "", Permission: PermissionSet{Buckets: nil}, Frontmatter: nil, FileMode: 0},
 		}})
 
@@ -125,7 +125,7 @@ func TestTaskTool(t *testing.T) {
 
 	t.Run("returns empty task result when child has no final text", func(t *testing.T) {
 		mock := mockResponses(testResponse("empty", nil))
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"empty": testAgent("empty"),
 		}})
 
@@ -136,7 +136,7 @@ func TestTaskTool(t *testing.T) {
 	})
 
 	t.Run("rejects unknown subagent", func(t *testing.T) {
-		factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
+		factory := testTaskFactory(t, mockResponses(), Agents{Items: map[string]Agent{}})
 
 		_, err := factory.runTask(context.Background(), testTaskParams("", "", "missing"), toolCallMetadata{subagentIndex: 1, subagentTotal: 1}, testTaskOutput())
 
@@ -145,7 +145,7 @@ func TestTaskTool(t *testing.T) {
 
 	t.Run("rejects delegation when recursion budget is exhausted", func(t *testing.T) {
 		remaining := 0
-		factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mockResponses(), Agents{Items: map[string]Agent{
 			"review": testAgent("review"),
 		}})
 		factory.recursionRemaining = &remaining
@@ -157,7 +157,7 @@ func TestTaskTool(t *testing.T) {
 
 	t.Run("allows any agent", func(t *testing.T) {
 		mock := mockResponses(responseWithTaskMessages())
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"helper": testAgentWithPrompt("helper", "help carefully"),
 		}})
 
@@ -169,7 +169,7 @@ func TestTaskTool(t *testing.T) {
 
 	t.Run("leaves subagent prompt shell commands literal by default", func(t *testing.T) {
 		mock := mockResponses(responseWithTaskMessages())
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"review": testAgentWithPrompt("review", "review !`printf carefully`"),
 		}})
 		factory.rootInstructions = "base prompt"
@@ -194,7 +194,7 @@ func TestTaskTool(t *testing.T) {
 		require.NoError(t, err)
 
 		mock := mockResponses(responseWithTaskMessages())
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"review": testAgentWithPrompt("review", "review !`cat MEMORY.md`"),
 		}})
 		factory.rootInstructions = "base prompt"
@@ -211,7 +211,7 @@ func TestTaskTool(t *testing.T) {
 
 	t.Run("primary expansion does not enable subagent expansion", func(t *testing.T) {
 		mock := mockResponses(responseWithTaskMessages())
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"review": testAgentWithPrompt("review", "review !`printf carefully`"),
 		}})
 		factory.rootInstructions = "base prompt"
@@ -232,7 +232,7 @@ func TestTaskTool(t *testing.T) {
 
 			return nil, ctx.Err()
 		})
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"slow": testAgent("slow"),
 		}})
 		ctx, cancel := context.WithCancel(context.Background())
@@ -251,7 +251,7 @@ func TestTaskTool(t *testing.T) {
 
 	t.Run("diagnostics mirrors subagent output with prefixes", func(t *testing.T) {
 		mock := mockResponses(responseWithTaskMessages())
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"review": testAgentWithPrompt("review", "review carefully"),
 		}})
 		factory.diagnostics = true
@@ -284,7 +284,7 @@ func TestTaskTool(t *testing.T) {
 			responseWithTaskMessages(),
 			responseWithMessage("response-gate", `{"approved":true,"reason":""}`),
 		)
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"main":      testAgent("main"),
 			"review":    {Name: "review", Model: "gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
 			"safety":    {Name: "safety", Model: "gpt-5.4", Guardrail: "recursive", Prompt: "guard carefully", OutputSchema: map[string]any{"type": "string"}},
@@ -326,7 +326,7 @@ func TestTaskTool(t *testing.T) {
 
 	t.Run("guardrail prompt includes root instructions and code mode", func(t *testing.T) {
 		mock := mockResponses(responseWithMessage("delegation-gate", `{"approved":false,"reason":"too risky"}`))
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"review": {Name: "review", Model: "gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
 			"safety": {Name: "safety", Model: "gpt-5.4", Prompt: "guard carefully", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}},
 		}})
@@ -346,7 +346,7 @@ func TestTaskTool(t *testing.T) {
 
 	t.Run("guardrail rejection skips child", func(t *testing.T) {
 		mock := mockResponses(responseWithMessage("delegation-gate", `{"approved":false,"reason":"too risky"}`))
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"review": {Name: "review", Model: "gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
 			"safety": testAgentWithPrompt("safety", "guard carefully"),
 		}})
@@ -366,7 +366,7 @@ func TestTaskTool(t *testing.T) {
 			responseWithTaskMessages(),
 			responseWithMessage("response-gate", `{"approved":false,"reason":"do not share"}`),
 		)
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"review": {Name: "review", Model: "gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
 			"safety": testAgentWithPrompt("safety", "guard carefully"),
 		}})
@@ -393,7 +393,7 @@ func TestTaskTool(t *testing.T) {
 
 	t.Run("guardrail invalid JSON fails closed", func(t *testing.T) {
 		mock := mockResponses(responseWithMessage("delegation-gate", `not json`))
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"review": {Name: "review", Model: "gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
 			"safety": testAgentWithPrompt("safety", "guard carefully"),
 		}})
@@ -409,7 +409,7 @@ func TestTaskTool(t *testing.T) {
 		mock := mockResponses(
 			responseWithMessage("delegation-gate", `{"approved":false,"reason":"stop"}`),
 		)
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"review": {Name: "review", Model: "gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
 			"safety": testAgentWithPermissionName("safety", PermissionSet{Buckets: []PermissionBucket{{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}),
 		}})
@@ -428,7 +428,7 @@ func TestTaskTool(t *testing.T) {
 }
 
 func TestTaskToolPermissionDefaults(t *testing.T) {
-	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
+	factory := testTaskFactory(t, mockResponses(), Agents{Items: map[string]Agent{}})
 
 	t.Run("startup agent denies tools by default", func(t *testing.T) {
 		tools := factory.toolsFor(nil)
@@ -460,7 +460,7 @@ func TestTaskToolPermissionDefaults(t *testing.T) {
 
 	t.Run("recursion budget hides task", func(t *testing.T) {
 		remaining := 0
-		factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
+		factory := testTaskFactory(t, mockResponses(), Agents{Items: map[string]Agent{}})
 		factory.recursionRemaining = &remaining
 		agent := testAgentWithPermission(permissionSetForActions(map[string]PermissionAction{"task": permissionAllow}))
 		agent.Name = "main"
@@ -585,7 +585,7 @@ func TestTaskToolDescriptionFiltersDeniedSubagents(t *testing.T) {
 	}}
 
 	t.Run("no active agent lists no subagents", func(t *testing.T) {
-		factory := testTaskFactory(mockResponses(), agents)
+		factory := testTaskFactory(t, mockResponses(), agents)
 
 		description := factory.taskDescription()
 
@@ -597,7 +597,7 @@ func TestTaskToolDescriptionFiltersDeniedSubagents(t *testing.T) {
 	})
 
 	t.Run("active agent hides denied subagents", func(t *testing.T) {
-		factory := testTaskFactory(mockResponses(), agents)
+		factory := testTaskFactory(t, mockResponses(), agents)
 		factory.agent = testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{
 			{Pattern: "*", Action: permissionDeny},
 			{Pattern: "reviewer", Action: permissionAllow},
@@ -612,7 +612,7 @@ func TestTaskToolDescriptionFiltersDeniedSubagents(t *testing.T) {
 	})
 
 	t.Run("active agent can allow default agent as subagent", func(t *testing.T) {
-		factory := testTaskFactory(mockResponses(), agents)
+		factory := testTaskFactory(t, mockResponses(), agents)
 		factory.agent = testAgentWithPermission(PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "main", Action: permissionAllow}}}}})
 		factory.agent.Name = "main"
 
@@ -623,7 +623,7 @@ func TestTaskToolDescriptionFiltersDeniedSubagents(t *testing.T) {
 }
 
 func TestTaskToolDescriptionUsesOpenCodeGuidance(t *testing.T) {
-	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
+	factory := testTaskFactory(t, mockResponses(), Agents{Items: map[string]Agent{}})
 
 	description := factory.taskDescription()
 
@@ -638,7 +638,7 @@ func TestLooperRunsTaskToolCall(t *testing.T) {
 		responseWithMessage("child-final", "child answer"),
 		responseWithMessage("parent-final", "parent done"),
 	)
-	factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+	factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 		"review": testAgent("review"),
 	}})
 	looper := testLooper(mock)
@@ -671,7 +671,7 @@ func TestLooperTaskMaxRecursion(t *testing.T) {
 			responseWithMessage("child-final", "child done"),
 			responseWithMessage("parent-final", "parent done"),
 		)
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"review": testAgentWithPermissionName("review", PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "worker", Action: permissionAllow}}}}}),
 			"worker": testAgent("worker"),
 		}})
@@ -704,7 +704,7 @@ func TestLooperTaskMaxRecursion(t *testing.T) {
 		)
 		reviewAgent := testAgentWithPermissionName("review", PermissionSet{Buckets: []PermissionBucket{{Name: "task", Rules: []PermissionRule{{Pattern: "worker", Action: permissionAllow}}}}})
 		reviewAgent.MaxRecursion = &childLimit
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"review": reviewAgent,
 			"worker": testAgent("worker"),
 		}})
@@ -738,7 +738,7 @@ func TestLooperTaskMaxRecursion(t *testing.T) {
 			responseWithMessage("child-second", "child two"),
 			responseWithMessage("parent-final", "parent done"),
 		)
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+		factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 			"review": testAgent("review"),
 		}})
 		factory.recursionRemaining = &remaining
@@ -771,7 +771,7 @@ func TestLooperNumbersSiblingTaskDiagnostics(t *testing.T) {
 		responseWithMessage("child-second", "child two"),
 		responseWithMessage("parent-final", "parent done"),
 	)
-	factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+	factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{
 		"review": testAgent("review"),
 	}})
 	factory.diagnostics = true
@@ -800,7 +800,8 @@ func TestLooperNumbersSiblingTaskDiagnostics(t *testing.T) {
 	}, collectResponses(output))
 }
 
-func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
+func testTaskFactory(t *testing.T, client responsesAPI, agents Agents) *toolFactory {
+	t.Helper()
 	var bashTool looperTool
 
 	bashTool.Permission = "bash"
@@ -820,8 +821,76 @@ func testTaskFactory(client responsesAPI, agents Agents) *toolFactory {
 		"read": readTool,
 	}
 	factory.childRunLogger = DiscardChildRunLog
+	factory.promptExpansion = testPromptExpansionEnvironment(t)
 
 	return &factory
+}
+
+func TestChildShellSelection(t *testing.T) {
+	// Discovery reads host gateway configuration; no gateway is needed for this routing test.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	for _, parentImage := range []string{"", "parent-image"} {
+		for _, childImage := range []string{"", "child-image", "other-image"} {
+			for _, entry := range []string{"task", "guardrail", "reviewer"} {
+				t.Run(parentImage+"/"+childImage+"/"+entry, func(t *testing.T) {
+					agent := testAgentWithPrompt("child", "child !`printf expanded; printf prompt > prompt-marker`")
+					agent.Permission = PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
+					if childImage != "" {
+						agent.shell.BashMode = bashOpenShell
+						agent.shell.OpenShell.Image = childImage
+					}
+					final := "done"
+					if entry == "guardrail" {
+						final = `{"approved":true,"reason":"ok"}`
+					}
+					if entry == "reviewer" {
+						final = `{"risk_level":"low","user_authorization":"medium","outcome":"allow","rationale":"ok"}`
+					}
+					mock := mockResponses(responseWithMessage("child-final", final))
+					factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{"child": agent}})
+					factory.promptExpansion.shell.openshellImage = parentImage
+					factory.expandPromptShellCommands.SubagentPrompts = true
+					parentShell := factory.promptExpansion.shell
+					switch entry {
+					case "task":
+						got, err := factory.runTask(t.Context(), testTaskParams("child", "request", "child"), toolCallMetadata{}, testTaskOutput())
+						require.NoError(t, err)
+						require.Equal(t, "<task_result>\ndone\n</task_result>", got)
+					case "guardrail":
+						require.True(t, factory.runGuardrail(t.Context(), &agent, ChildRunStageDelegation, "request", "child", toolCallMetadata{}, testTaskOutput()).Approved)
+					case "reviewer":
+						require.Equal(t, permissionReviewOutcomeAllow, factory.reviewPermission(t.Context(), &permissionReviewRequest{Reviewer: "child"}, testTaskOutput()).Outcome)
+					}
+					instructions := newParams(mock)[0].Instructions.Value
+					if childImage == "" {
+						require.Contains(t, instructions, "child expanded")
+					} else {
+						require.NotContains(t, instructions, "expanded")
+					}
+					childFactory := *factory
+					childFactory.bindAgentShell(&agent)
+					require.Equal(t, childImage, childFactory.promptExpansion.shell.openshellImage)
+					var child looper
+					childFactory.configureSpill(&child)
+					require.Same(t, childFactory.promptExpansion.shell, child.promptExpansion.shell)
+					result, err := childFactory.baseTools["bash"].Call(t.Context(), json.RawMessage(`{"command":"printf bash > bash-marker; printf child-bash"}`), testTaskOutput(), toolCallMetadata{})
+					require.NoError(t, err)
+					require.Equal(t, childImage == "", result.Data.(BashResult).Success)
+					for _, marker := range []string{"prompt-marker", "bash-marker"} {
+						_, err := factory.promptExpansion.root.Stat(marker)
+						if childImage == "" {
+							require.NoError(t, err)
+						} else {
+							require.ErrorIs(t, err, os.ErrNotExist)
+						}
+					}
+					require.Same(t, parentShell, factory.promptExpansion.shell)
+					require.Equal(t, parentImage, parentShell.openshellImage)
+					require.Equal(t, agent.Prompt, factory.agents.Items["child"].Prompt)
+				})
+			}
+		}
+	}
 }
 
 func testAgent(name string) Agent {

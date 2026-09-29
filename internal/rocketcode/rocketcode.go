@@ -339,6 +339,9 @@ func NewWithModelResolver(
 	if err != nil {
 		return nil, fmt.Errorf("initialize prompt expansion: %w", err)
 	}
+	if activeAgent.shell.BashMode == bashOpenShell {
+		promptExpansion.shell.openshellImage = activeAgent.shell.OpenShell.Image
+	}
 
 	for name := range agents.Items {
 		agent := agents.Items[name]

@@ -163,9 +163,7 @@ func TestOpenShellFailuresCleanUpOwnedName(t *testing.T) {
 
 func TestOpenShellUnavailableDoesNotRunLocally(t *testing.T) {
 	// Gateway discovery reads host configuration, not workspace files.
-	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("OPENSHELL_GATEWAY", "rocketcode-missing-gateway")
 	env := testPromptExpansionEnvironment(t)
 	env.shell.openshellImage = "agent-image"
 	got := env.shell.Bash(t.Context(), bashParams{Command: "printf local > marker"})

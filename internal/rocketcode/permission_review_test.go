@@ -51,6 +51,7 @@ func TestPermissionReviewLogsHiddenChildRunOutput(t *testing.T) {
 		agents:            Agents{Items: map[string]Agent{}},
 		skills:            Skills{Items: map[string]Skill{}},
 		baseTools:         map[string]looperTool{},
+		promptExpansion:   testPromptExpansionEnvironment(t),
 		childContext: []SessionEntry{{Version: 1, ReplayInput: []json.RawMessage{
 			json.RawMessage(`{"type":"message","role":"developer","content":"This external MCP thread has metadata:\nROCKETCLAW_METADATA_TICKET_ID=\"123\""}`),
 		}}},
@@ -88,6 +89,7 @@ func TestPermissionReviewUsesConfiguredAutoApproverModel(t *testing.T) {
 		agents:            Agents{Items: map[string]Agent{}},
 		skills:            Skills{Items: map[string]Skill{}},
 		baseTools:         map[string]looperTool{},
+		promptExpansion:   testPromptExpansionEnvironment(t),
 		childRunLogger:    DiscardChildRunLog,
 	}
 
@@ -102,7 +104,7 @@ func TestPermissionReviewSystemPromptIncludesRootInstructionsAndCodeMode(t *test
 	mock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
 		testMessageOutputItem("review-final", "", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low-risk action."}`),
 	}))
-	factory := testTaskFactory(mock, Agents{Items: map[string]Agent{}})
+	factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{}})
 	factory.autoApproverModel = "gpt-5.4"
 	factory.rootInstructions = "Instructions from: AGENTS.md\nproject rules"
 
@@ -119,7 +121,7 @@ func TestPermissionReviewSystemPromptIncludesRootInstructionsAndCodeMode(t *test
 func TestPermissionReviewResolvesEmbeddedAutoApproverIndependently(t *testing.T) {
 	rootClient, rootRequests := testResolverClient(t, "wrong")
 	reviewClient, reviewRequests := testResolverClient(t, `{"risk_level":"low","user_authorization":"medium","outcome":"allow","rationale":"ok"}`)
-	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{}})
+	factory := testTaskFactory(t, mockResponses(), Agents{Items: map[string]Agent{}})
 	factory.autoApproverModel = "gpt-review"
 	factory.resolver = testModelResolverFunc(func(model string) (*openai.Client, ProviderOrigin, error) {
 		if model == "gpt-review" {
@@ -140,7 +142,7 @@ func TestPermissionReviewResolvesEmbeddedAutoApproverIndependently(t *testing.T)
 func TestPermissionReviewResolvesCustomReviewerIndependently(t *testing.T) {
 	rootClient, rootRequests := testResolverClient(t, "wrong")
 	reviewClient, reviewRequests := testResolverClient(t, `{"risk_level":"low","user_authorization":"medium","outcome":"allow","rationale":"ok"}`)
-	factory := testTaskFactory(mockResponses(), Agents{Items: map[string]Agent{
+	factory := testTaskFactory(t, mockResponses(), Agents{Items: map[string]Agent{
 		"release": {Name: "release", Model: "review/release"},
 	}})
 	factory.resolver = testModelResolverFunc(func(model string) (*openai.Client, ProviderOrigin, error) {

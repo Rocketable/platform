@@ -203,9 +203,10 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	}
 
 	agent.Permission = f.shellTemp.effectivePermissions(agent.Permission)
-	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
 
 	childFactory := *f
+	childFactory.bindAgentShell(&agent)
+	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &childFactory.promptExpansion)
 	if f.recursionRemaining != nil {
 		remaining := *f.recursionRemaining - 1
 		childFactory.recursionRemaining = &remaining
@@ -353,7 +354,9 @@ func (f *toolFactory) childSession(yield func(SessionEntry, error) bool) {
 func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage ChildRunStage, message, guardedAgent string, metadata toolCallMetadata, parentOutput chan<- ChatResponse) guardrailDecision {
 	agent := *guardrail
 	agent.Permission = f.shellTemp.effectivePermissions(agent.Permission)
-	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
+	childFactory := *f
+	childFactory.bindAgentShell(&agent)
+	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &childFactory.promptExpansion)
 
 	responseFormat := guardrailResponseFormat()
 
@@ -362,7 +365,6 @@ func (f *toolFactory) runGuardrail(ctx context.Context, guardrail *Agent, stage 
 		return guardrailDecision{Approved: false, Reason: "inter-agent guardrail model failed: " + err.Error()}
 	}
 
-	childFactory := *f
 	childFactory.inGuardrailRun = true
 
 	modelTools, codeHosts := childFactory.assembleTools(&agent)

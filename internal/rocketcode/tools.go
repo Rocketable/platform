@@ -177,6 +177,16 @@ func (f *toolFactory) configureSpill(loop *looper) {
 	loop.promptExpansion = f.promptExpansion
 }
 
+func (f *toolFactory) bindAgentShell(agent *Agent) {
+	parentShell := f.promptExpansion.shell
+	f.promptExpansion.shell = newSandboxedShellSystem(parentShell.root, &parentShell.shellTemp, parentShell.env, parentShell.shellCommand)
+	if agent.shell.BashMode == bashOpenShell {
+		f.promptExpansion.shell.openshellImage = agent.shell.OpenShell.Image
+	}
+	f.baseTools = maps.Clone(f.baseTools)
+	f.baseTools["bash"] = f.promptExpansion.shell.bashTool()
+}
+
 func toolVisible(agent *Agent, name string, tool *looperTool) bool {
 	permission := tool.Permission
 	if permission == "" {
@@ -339,32 +349,36 @@ func makeSandboxedTools(sfs *sandboxedFileSystem, sss *sandboxedShellSystem) map
 				return webFetch(ctx, params)
 			},
 		},
-		"bash": {
-			Definition: *functionTool("bash", "Run a shell script in the workspace. Every operation needs permission, including declarations, assignments, redirections, expansions, and nested commands. Whole-script rules support wildcards within the same operation tree; last matching rule wins per operation. Invalid syntax and unresolved executable names are denied. Inside execute JSON code, bash(command=...) takes r'''...''' only.\nExample: {\"code\":\"def main():\\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\\n\"}", map[string]any{
-				"command":     map[string]any{"type": "string"},
-				"timeout_ms":  map[string]any{"type": "integer"},
-				"workdir":     map[string]any{"type": "string"},
-				"description": map[string]any{"type": "string"},
-			}),
-			Permission: "bash",
-			Subjects: func(raw json.RawMessage) ([]string, error) {
-				var params bashParams
-				if err := decodeToolParams(raw, &params); err != nil {
-					return nil, err
-				}
+		"bash": sss.bashTool(),
+	}
+}
 
-				return BashPermissionSubjects(params.Command), nil
-			},
-			Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
-				var params bashParams
-				if err := decodeToolParams(raw, &params); err != nil {
-					return ToolResult{}, err
-				}
+func (sss *sandboxedShellSystem) bashTool() looperTool {
+	return looperTool{
+		Definition: *functionTool("bash", "Run a shell script in the workspace. Every operation needs permission, including declarations, assignments, redirections, expansions, and nested commands. Whole-script rules support wildcards within the same operation tree; last matching rule wins per operation. Invalid syntax and unresolved executable names are denied. Inside execute JSON code, bash(command=...) takes r'''...''' only.\nExample: {\"code\":\"def main():\\n    return bash(command=r'''grep -nE 'architecture|loop' FILE''')\\n\"}", map[string]any{
+			"command":     map[string]any{"type": "string"},
+			"timeout_ms":  map[string]any{"type": "integer"},
+			"workdir":     map[string]any{"type": "string"},
+			"description": map[string]any{"type": "string"},
+		}),
+		Permission: "bash",
+		Subjects: func(raw json.RawMessage) ([]string, error) {
+			var params bashParams
+			if err := decodeToolParams(raw, &params); err != nil {
+				return nil, err
+			}
 
-				result := sss.Bash(ctx, params)
+			return BashPermissionSubjects(params.Command), nil
+		},
+		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- ChatResponse, _ toolCallMetadata) (ToolResult, error) {
+			var params bashParams
+			if err := decodeToolParams(raw, &params); err != nil {
+				return ToolResult{}, err
+			}
 
-				return ToolResult{Output: result.String(), Data: result}, nil
-			},
+			result := sss.Bash(ctx, params)
+
+			return ToolResult{Output: result.String(), Data: result}, nil
 		},
 	}
 }

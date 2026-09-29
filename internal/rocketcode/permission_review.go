@@ -37,14 +37,15 @@ func (f *toolFactory) reviewPermission(ctx context.Context, request *permissionR
 	}
 
 	agent.Permission = f.shellTemp.effectivePermissions(agent.Permission)
-	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &f.promptExpansion)
+	childFactory := *f
+	childFactory.bindAgentShell(&agent)
+	expandAgentPrompt(ctx, &agent, f.expandPromptShellCommands.SubagentPrompts, &childFactory.promptExpansion)
 
 	client, origin, err := resolveModel(f.resolver, agent.Model)
 	if err != nil {
 		return permissionReviewFailure("automatic permission reviewer model failed: " + err.Error())
 	}
 
-	childFactory := *f
 	childFactory.inPermissionReview = true
 
 	modelTools, codeHosts := childFactory.assembleTools(&agent)

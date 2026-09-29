@@ -13,6 +13,7 @@ import (
 	"testing/fstest"
 
 	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 )
 
@@ -94,6 +95,75 @@ func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, looper)
 	require.Contains(t, diagnostics.String(), "remember workspace memory\n\n<current-workspace>\nWorkspace root: "+dir+"\n</current-workspace>")
+}
+
+func TestAgentShellSelectionAcrossRootSurfaces(t *testing.T) {
+	// Discovery reads host configuration; isolate it from the operator's gateway.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	for _, mode := range []string{"standard", "openshell"} {
+		for _, enabled := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%t", mode, enabled), func(t *testing.T) {
+				env := testPromptExpansionEnvironment(t)
+				require.NoError(t, env.root.Mkdir("dynamic", 0o755))
+				require.NoError(t, env.root.WriteFile("dynamic/SKILL.md", []byte("---\nname: dynamic\ndescription: snippet\n---\nSkill !`printf skill; printf ran > skill-marker`"), 0o644))
+				loaded := LoadAgents(fstest.MapFS{"main.md": testMapFile("---\nmodel: gpt-5.4\nrocketclaw: {bash_mode: " + mode + ", openshell: {image: root-image}}\npermission: {bash: allow, skill: allow}\n---\nPrimary !`printf primary; printf ran > primary-marker`")}, passThroughAgentModel)
+				require.Empty(t, loaded.Errors)
+				config := testWorkspaceConfig(t, env.hostDir)
+				config.ExpandPromptShellCommands = PromptShellCommandExpansion{PrimaryPrompts: enabled, InputPrompts: enabled, SkillPrompts: enabled}
+				loop, err := NewWithModelResolver(testResolverForResponsesAPI(mockResponses()), config, env.root, loaded.Agents, LoadSkills(env.root.FS(), env.hostDir).Skills, "main", nil)
+				require.NoError(t, err)
+				input, _, err := loop.promptTurnItems(t.Context(), testPromptInput(PromptInputRoleUser, "Input !`printf input; printf ran > input-marker`", testTaskOutput()))
+				require.NoError(t, err)
+				factory := loop.PermissionReviewer.(*toolFactory)
+				result, err := factory.skillTool().Call(t.Context(), json.RawMessage(`{"name":"dynamic"}`), testTaskOutput(), toolCallMetadata{})
+				require.NoError(t, err)
+				for _, surface := range []struct{ text, prefix, output, marker string }{
+					{loop.SystemPrompt, "Primary ", "primary", "primary-marker"},
+					{input.Text, "Input ", "input", "input-marker"},
+					{result.Output, "Skill ", "skill", "skill-marker"},
+				} {
+					if !enabled {
+						require.Contains(t, surface.text, surface.prefix+"!`printf "+surface.output)
+					} else if mode == "standard" {
+						require.Contains(t, surface.text, surface.prefix+surface.output)
+					} else {
+						require.NotContains(t, surface.text, "printf ")
+						require.NotContains(t, surface.text, surface.prefix+surface.output)
+					}
+					_, err := env.root.Stat(surface.marker)
+					if enabled && mode == "standard" {
+						require.NoError(t, err)
+					} else {
+						require.ErrorIs(t, err, os.ErrNotExist)
+					}
+				}
+				require.Same(t, loop.promptExpansion.shell, factory.promptExpansion.shell)
+				if mode == "openshell" {
+					require.Equal(t, "root-image", loop.promptExpansion.shell.openshellImage)
+				} else {
+					require.Empty(t, loop.promptExpansion.shell.openshellImage)
+				}
+			})
+		}
+	}
+}
+
+func TestOpenShellBashPermissionDenialPrecedesExecution(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	env := testPromptExpansionEnvironment(t)
+	agent := testAgent("main")
+	agent.shell.BashMode = bashOpenShell
+	agent.shell.OpenShell.Image = "image"
+	agent.Permission = PermissionSet{Buckets: []PermissionBucket{{Name: "bash", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}, {Pattern: "printf *", Action: permissionDeny}}}}}
+	loop, err := NewWithModelResolver(testResolverForResponsesAPI(mockResponses()), testWorkspaceConfig(t, env.hostDir), env.root, Agents{Items: map[string]Agent{"main": agent}}, Skills{Items: map[string]Skill{}}, "main", nil)
+	require.NoError(t, err)
+	outputs, _, err := loop.dispatchToolCalls(t.Context(), responseWithFunctionCalls("denied", []responses.ResponseFunctionToolCall{testFunctionCall("tool", "call", "execute", `{"code":"def main():\n    return bash(command=r'''printf forbidden > marker''')\n"}`)}), nil, nil)
+	require.NoError(t, err)
+	require.Len(t, outputs, 1)
+	require.Contains(t, outputs[0].Result.Output, "deny")
+	require.NotContains(t, outputs[0].Result.Output, "openshell gateway")
+	_, err = env.root.Stat("marker")
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestNewTaskSubagentsUseRootInstructionsWithoutParentPrompt(t *testing.T) {
