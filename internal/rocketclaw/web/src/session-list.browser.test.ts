@@ -237,6 +237,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
   const cronHistory: string[] = [];
   const historyRequests: { id: string; originOnly?: boolean }[] = [];
   const originHold = Promise.withResolvers<void>();
+  const manyOriginsHold = Promise.withResolvers<void>();
+  const lastOriginHold = Promise.withResolvers<void>();
   const origins: Record<string, ChatOrigin> = {
     kept: { kind: "external_mcp", externalConversationId: "Case-42", agent: "source-agent", pairs: [{ key: "Original-Key", value: "Value <&> Unicode Ω" }, { key: "shared", value: "will vanish" }] },
     gone: { kind: "cron", sourcePath: "cron/Report.md", stem: "Report", runKind: "one-off", runId: "cron:unique-run", agent: "cron-agent", ranAt: "2026-09-22T03:04:05Z" },
@@ -390,6 +392,8 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
           historyRequests.push(input);
           if (input.originOnly) {
             if (ctrl.holdOrigins && input.id === "slack-thread:C:winner") await originHold.promise;
+            if (input.id.startsWith("perf-") && input.id !== "perf-95") await manyOriginsHold.promise;
+            if (input.id === "perf-95") await lastOriginHold.promise;
             if (ctrl.originError === input.id) throw new RPCError("origin unavailable", 13);
             return Response.json({ messages: [], origin: origins[input.id] ? JSON.stringify(origins[input.id]) : "" });
           }
@@ -737,6 +741,24 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await skillComposer.press("Tab");
     expect(await skillComposer.inputValue()).toBe("$skill stop ");
     expect(ctrl.prompt).toEqual([]);
+    await skillComposer.fill("");
+
+    await page.evaluate(() => {
+      const original = Date.parse;
+      const probe = window as unknown as { sidebarRenders: number; restoreParse: () => void };
+      probe.sidebarRenders = 0;
+      Date.parse = (value) => {
+        if (value === "2026-09-09T00:00:00.123456Z") probe.sidebarRenders++;
+        return original(value);
+      };
+      probe.restoreParse = () => { Date.parse = original; };
+    });
+    await skillComposer.fill("Typing should not redraw sessions");
+    expect(await page.evaluate(() => (window as unknown as { sidebarRenders: number }).sidebarRenders)).toBe(0);
+    await navigationCommands.click();
+    expect(await page.evaluate(() => (window as unknown as { sidebarRenders: number }).sidebarRenders)).toBe(0);
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => (window as unknown as { restoreParse: () => void }).restoreParse());
     await skillComposer.fill("");
 
     await skillComposer.fill("retained through browser history");
@@ -1446,6 +1468,48 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect(await failureDialog.getByText("No matches", { exact: true }).count()).toBe(0);
     await failure.close();
     ctrl.originError = "";
+    origins["perf-0"] = { kind: "external_mcp", externalConversationId: "origin-only-needle" };
+    ctrl.yieldBatches = complete(Array.from({ length: 96 }, (_, index) => row(`perf-${index}`, `Search fixture ${index}`)));
+    const many = await browser.newPage();
+    await many.addInitScript(() => {
+      const fetch = window.fetch;
+      (window as unknown as { originFetches: number; originResponses: number }).originFetches = 0;
+      (window as unknown as { originFetches: number; originResponses: number }).originResponses = 0;
+      window.fetch = new Proxy(fetch, { apply(target, thisArg, args: Parameters<typeof fetch>) {
+        if (!String(args[0]).endsWith("/api/History") || !JSON.parse(String(args[1]?.body)).originOnly) return Reflect.apply(target, thisArg, args);
+        const probe = window as unknown as { originFetches: number; originResponses: number };
+        probe.originFetches++;
+        return Reflect.apply(target, thisArg, args).then((response: Response) => { probe.originResponses++; return response; });
+      } });
+    });
+    await many.goto(origin);
+    await many.locator("#session-sidebar").getByText("Search fixture 95", { exact: true }).waitFor();
+    await many.getByRole("button", { name: "Search sessions", exact: true }).click();
+    const manyDialog = many.getByRole("dialog", { name: "Go to session", exact: true });
+    await manyDialog.getByPlaceholder("Search sessions").fill("origin-only-needle");
+    await many.waitForFunction(() => (window as unknown as { originFetches: number }).originFetches > 0);
+    const firstBatch = await many.evaluate(() => (window as unknown as { originFetches: number }).originFetches);
+    expect(firstBatch).toBeLessThan(96);
+    await manyDialog.getByText("loading...", { exact: true }).waitFor();
+    await many.keyboard.press("Escape");
+    await manyDialog.waitFor({ state: "hidden" });
+    manyOriginsHold.resolve();
+    await many.waitForFunction((count: number) => (window as unknown as { originResponses: number }).originResponses >= count, firstBatch);
+    await many.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    expect(await many.evaluate(() => (window as unknown as { originFetches: number }).originFetches)).toBe(firstBatch);
+    await many.getByRole("button", { name: "Search sessions", exact: true }).click();
+    await manyDialog.getByPlaceholder("Search sessions").fill("origin-only-needle");
+    await manyDialog.getByText("Search fixture 0", { exact: true }).waitFor();
+    await manyDialog.getByPlaceholder("Search sessions").fill("not-in-any-row");
+    await manyDialog.getByText("loading...", { exact: true }).waitFor();
+    await many.keyboard.press("Escape");
+    await many.getByRole("button", { name: "Search sessions", exact: true }).click();
+    await manyDialog.getByPlaceholder("Search sessions").fill("not-in-any-row");
+    await manyDialog.getByText("loading...", { exact: true }).waitFor();
+    lastOriginHold.resolve();
+    await manyDialog.getByText("No matches", { exact: true }).waitFor();
+    expect(await many.evaluate(() => (window as unknown as { originFetches: number }).originFetches)).toBe(96);
+    await many.close();
     ctrl.settledRows = [
       row("slack-thread:C:active", "matching active"),
       { ...row("slack-thread:C:settled", "matching settled"), settled: true },
