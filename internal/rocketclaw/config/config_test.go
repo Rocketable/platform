@@ -296,8 +296,10 @@ func TestValidateAutoApproverModels(t *testing.T) {
 		{model: "gpt-5.5", want: "gpt-5.5"},
 		{model: " openai/gpt-5.5 ", want: "gpt-5.5"},
 		{model: " work/gpt-5.5 ", want: "work/gpt-5.5"},
+		{model: "anthropic/api/claude-sonnet-5-5", want: "anthropic/api/claude-sonnet-5-5"},
 		{model: "/", wantErr: "expected model or provider/model"},
-		{model: "work/model/extra", wantErr: "expected model or provider/model"},
+		{model: "work//model", wantErr: "expected model or provider/model"},
+		{model: "work/model/", wantErr: "expected model or provider/model"},
 	} {
 		t.Run(tt.model, func(t *testing.T) {
 			cfg := validConfig()
