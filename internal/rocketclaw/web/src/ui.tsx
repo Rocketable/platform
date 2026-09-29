@@ -1,6 +1,6 @@
 "use client";
 
-import { QueryClient, QueryClientProvider, useQuery, useQueries, useMutation } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery, useMutation } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
@@ -8,7 +8,7 @@ import { queries, mutations, listSessions, rpc } from "./api";
 import type { ChatOrigin, MessageMatch, PromptDelivery } from "./types";
 import { Bot, Check, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, FileIcon, GitFork, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, navigate } from "./navigation";
-import { createContext, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import { PaletteChooser, ThemeToggle } from "@/components/theme";
 import { CodeBlock, TranscriptText, copyText } from "./transcript-text";
@@ -845,14 +845,14 @@ function paletteRows(
   onToggleSidebar: () => void,
   openCron: () => void,
   runStem: (stem: string) => void,
-  origins: string[],
+  origins: ReadonlyMap<string, string>,
   actions: { key: string; label: string; detail?: string; keep?: boolean; disabled?: boolean; run: () => void }[],
   filters: ReturnType<typeof sessionSearchTerms>,
   agentFilter: string,
   roomFilter: string,
 ): { key: string; label?: string; detail?: string; session?: Session; loading?: boolean; keep?: boolean; disabled?: boolean; run: () => void }[] {
   if (mode === "sessions") {
-    return sidebar.rows.filter((session, index) => (!filters.pinnedOnly || session.pinned) && (!filters.forkedOnly || session.forkedFrom) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || origins[index]?.includes(filters.needle))).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((session) => ({
+    return sidebar.rows.filter((session) => (!filters.pinnedOnly || session.pinned) && (!filters.forkedOnly || session.forkedFrom) && matchesSession(session, "", agentFilter, roomFilter) && (matchesSession(session, filters.needle, "", "") || (origins.get(session.id)?.indexOf(filters.needle) ?? -1) >= 0)).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map((session) => ({
       key: session.id,
       session, loading: sidebar.loadingIds.has(session.id),
       run: () => navigate(sessionPath(session.id)),
@@ -898,6 +898,46 @@ function originSearchText({ origin }: { origin?: ChatOrigin }) {
     : `External MCP External conversation: ${origin.externalConversationId} Agent: ${origin.agent} ${origin.pairs?.map(({ key, value }) => `${key}=${value}`).join(" ") ?? ""}`).toLowerCase();
 }
 
+async function loadSessionOrigins(ids: string[], owner: string | undefined, protocol: string | undefined, signal: AbortSignal) {
+  const values = new Map<string, string>();
+  let failed = false;
+  const key = ["sessionOrigins", owner, protocol, ids];
+  for (let start = 0; start < ids.length; start += 24) {
+    signal.throwIfAborted();
+    const batch = ids.slice(start, start + 24);
+    const results = await Promise.allSettled(batch.map((id) => queryClient.fetchQuery({
+      ...queries.history({ id, originOnly: true }),
+      queryKey: ["sessionOrigin", owner, protocol, id],
+      staleTime: 10_000,
+      retry: false,
+    })));
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") values.set(batch[index], originSearchText(result.value));
+      else failed = true;
+    });
+    signal.throwIfAborted();
+    queryClient.setQueryData(key, { values: new Map(values), failed, complete: false });
+  }
+  return { values, failed, complete: true };
+}
+
+function useSessionOrigins(rows: Session[], enabled: boolean) {
+  const identity = useQuery(queries.identity());
+  const protocol = useQuery(queries.protocol());
+  const ids = useMemo(() => rows.map(({ id }) => id).toSorted(), [rows]);
+  const query = useQuery<Awaited<ReturnType<typeof loadSessionOrigins>>>({
+    queryKey: ["sessionOrigins", identity.data, protocol.data, ids],
+    enabled,
+    staleTime: (entry) => entry.state.data?.complete ? 10_000 : 0,
+    retry: false,
+    queryFn: ({ signal }) => loadSessionOrigins(ids, identity.data, protocol.data, signal),
+  });
+  useEffect(() => {
+    if (!enabled) void queryClient.cancelQueries({ queryKey: ["sessionOrigins"] });
+  }, [enabled]);
+  return { values: query.data?.values ?? new Map<string, string>(), pending: enabled && (query.isPending || query.isFetching || !query.data?.complete), failed: !!query.data?.failed || query.isError };
+}
+
 const paletteCopy = { sessions: { title: "Go to session", desc: "Search and open a session.", placeholder: "Search sessions" }, commands: { title: "Run command", desc: "Search and run a command.", placeholder: "Type a command" },
   cron: { title: "Run cron", desc: "Search and run a cron job.", placeholder: "Search cron jobs" } };
 
@@ -939,17 +979,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, sidebarOpen, onToggleS
   const agents = useQuery({ ...queries.agents(), staleTime: 60_000, enabled: mode === "sessions" });
   const filters = sessionSearchTerms(query);
   const active = useRef<HTMLButtonElement>(null);
-  const identity = useQuery(queries.identity());
-  const protocol = useQuery(queries.protocol());
-  // Ponytail: first search reads each visible chat's stored entries for its origin.
-  // A selective origin projection can replace these reads if search volume demands it.
-  const origins = useQueries({ queries: mode === "sessions" && filters.needle !== "" ? sidebar.rows.map(({ id }) => ({
-    ...queries.history({ id, originOnly: true }),
-    queryKey: ["sessionOrigin", identity.data, protocol.data, id],
-    staleTime: 10_000,
-    retry: false,
-    select: originSearchText,
-  })) : [] });
+  const origins = useSessionOrigins(sidebar.rows, mode === "sessions" && filters.needle !== "");
   const jobs = useQuery({ ...queries.cronJobs(), staleTime: 10_000, enabled: mode === "commands" || mode === "cron" });
   const runCron = useMutation({
     mutationFn: mutations.runCron,
@@ -962,7 +992,7 @@ function CommandPalette({ drafts, mode, setMode, newChat, sidebarOpen, onToggleS
       setMode(undefined);
     },
   });
-  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.map((origin) => origin.data ?? ""), [...actions.items.map((item) => ({ ...item, label: `Session: ${item.label}` })), ...commands], filters, agentFilter, roomFilter);
+  const items = mode === undefined ? [] : paletteRows(mode, query.trim().toLowerCase(), sidebar, jobs.data, newChat, sidebarOpen, onToggleSidebar, () => { setQuery(""); setPick(0); setMode("cron"); }, (stem) => runCron.mutate({ stem }), origins.values, [...actions.items.map((item) => ({ ...item, label: `Session: ${item.label}` })), ...commands], filters, agentFilter, roomFilter);
   const selected = items.length === 0 ? 0 : pick % items.length;
   const choose = (item: (typeof items)[number]) => {
     if (item.disabled) return;
@@ -986,9 +1016,9 @@ function CommandPalette({ drafts, mode, setMode, newChat, sidebarOpen, onToggleS
           onKeyDown={onKeyDown}
         />}
         {runCron.error || actions.error ? <p role="alert" className="px-3 text-sm text-destructive">{(runCron.error ?? actions.error)?.message}</p> : null}
-        {origins.some((origin) => origin.isError) ? <p role="alert" className="px-3 text-sm text-destructive">Could not search all chat origins.</p> : null}
+        {origins.failed ? <p role="alert" className="px-3 text-sm text-destructive">Could not search all chat origins.</p> : null}
         <ul className="max-h-[min(24rem,50vh)] overflow-y-auto p-1 [scrollbar-width:thin] [scrollbar-color:var(--muted-foreground)_transparent]">
-          {items.length === 0 ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, origins, jobs.isLoading)}</li> : items.map((item, index) => (
+          {items.length === 0 ? <li className="px-3 py-2 text-sm text-muted-foreground">{paletteEmpty(mode, sidebar, origins.pending, origins.failed, jobs.isLoading)}</li> : items.map((item, index) => (
             <li key={item.key}>
               <button disabled={item.disabled} ref={index === selected ? active : null} type="button" className={cn("flex w-full flex-col items-start justify-center rounded-md px-3 text-left text-sm disabled:opacity-50", mode === "commands" ? "min-h-9 py-1.5 [@media(pointer:coarse)]:min-h-11" : "py-2", index === selected && "bg-accent")} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}>
                 {item.session ? <SessionRowContent session={item.session} loading={item.loading} /> : <><span className="font-medium">{item.label}</span>{item.detail ? <span className="text-xs text-muted-foreground">{item.detail}</span> : null}</>}
@@ -1001,9 +1031,9 @@ function CommandPalette({ drafts, mode, setMode, newChat, sidebarOpen, onToggleS
   );
 }
 
-function paletteEmpty(mode: "sessions" | "commands" | "cron" | undefined, sidebar: SidebarView, origins: { isPending: boolean; isError: boolean }[], loadingJobs: boolean) {
-  if (mode === "sessions" && origins.some((origin) => origin.isError)) return "Search incomplete";
-  if (mode === "sessions" && (!searchIsAuthoritative(sidebar) || origins.some((origin) => origin.isPending))) return "loading...";
+function paletteEmpty(mode: "sessions" | "commands" | "cron" | undefined, sidebar: SidebarView, originsPending: boolean, originsFailed: boolean, loadingJobs: boolean) {
+  if (mode === "sessions" && originsFailed) return "Search incomplete";
+  if (mode === "sessions" && (!searchIsAuthoritative(sidebar) || originsPending)) return "loading...";
   return mode === "cron" && loadingJobs ? "Loading…" : "No matches";
 }
 
@@ -1218,7 +1248,7 @@ function PageTitle({ children }: { children: ReactNode }) {
   </header>;
 }
 
-function SessionList({ settledOnly = false }: { settledOnly?: boolean }) {
+const SessionList = memo(function SessionList({ settledOnly = false }: { settledOnly?: boolean }) {
   const sidebar = useContext(Sidebar);
   const agents = useQuery({ ...queries.agents(), staleTime: 60_000, enabled: settledOnly });
   const route = useRoute();
@@ -1249,7 +1279,7 @@ function SessionList({ settledOnly = false }: { settledOnly?: boolean }) {
       </ul>
     </div>
   );
-}
+});
 
 type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; turnId?: string; streamText?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin">;
 type OriginFilter = { sandboxed: boolean; canonical: boolean };
@@ -1889,6 +1919,7 @@ function SessionComposer({
   setLines: (update: (current: Line[]) => Line[]) => void;
   refreshHistory: () => Promise<unknown>;
 }) {
+  const [, setEditVersion] = useState(0);
   const { setCommand } = useContext(SessionCommands);
   const { scrollToEnd } = useMessageScroller();
   const prompt = useMutation({ mutationFn: mutations.prompt, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["queue"] }); } });
@@ -1901,7 +1932,7 @@ function SessionComposer({
   const sidebar = useContext(Sidebar);
   const create = useMutation({ mutationFn: mutations.createSession, onSuccess: () => sidebar.invalidateQueries() });
   const { text, files, sending, agent } = draft;
-  const setText = (value: string) => { draft.text = value; draft.edit++; onDraftChange(); };
+  const setText = (value: string) => { draft.text = value; draft.edit++; setEditVersion((version) => version + 1); };
   const setFiles = (value: PendingFile[]) => { draft.files = value; draft.edit++; onDraftChange(); };
   const setAgent = (value: string) => { draft.agent = value; draft.edit++; onDraftChange(); };
   const [agentOpen, setAgentOpen] = useState(false);
