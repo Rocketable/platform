@@ -1661,7 +1661,7 @@ function MessageActions({ line, hasSandboxed }: { line: Line; hasSandboxed: bool
 function TranscriptLine({ line, conversationId, hasSandboxed }: { line: Line; conversationId: string; hasSandboxed: boolean }) {
   if (line.role === "thinking") {
     return (
-      <div className="flex items-center gap-1.5 px-1 py-0.5 text-[12px] leading-5 text-muted-foreground">
+      <div className="flex items-start gap-1.5 px-1 py-0.5 text-[12px] leading-5 text-muted-foreground">
         <Bot className="size-3.5 shrink-0 opacity-80" />
         <span className="min-w-0 whitespace-pre-wrap break-words">{line.text}</span>
       </div>
