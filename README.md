@@ -41,6 +41,20 @@ Permission matching preserves backslashes as literal characters; it does not tre
 
 RocketCode's default model is `gpt-6-luna`. The built-in automatic permission reviewer uses this runtime default unless `auto_approver_model` is configured. Guardrails and named reviewers use their own agent models.
 
+Root `AGENTS.md` instructions are included in each agent's system prompt by default.
+To omit them for one agent, set this boolean in its Markdown frontmatter:
+
+```yaml
+permission:
+  rocketclaw:
+    load_agents_md: false
+```
+
+Omitted or `true` keeps the default. Each child, guardrail, and named permission
+reviewer uses its own setting; `rocketclaw` wildcard rules do not change it.
+Workspace context and normal file-read permissions are unchanged. This switch
+does not remove instructions already present in conversation history.
+
 ### RocketClaw
 
 `internal/rocketclaw` is the long-running service runtime around RocketCode. It provides thread-local conversations in configured Slack channels, saved Starlark workflows, external MCP, cron-defined background prompts, one-shot and recurring scheduled messages, inbound and outbound attachments, supervisor restart, and PostgreSQL state selected by `database_url`.

@@ -359,8 +359,14 @@ func NewWithModelResolver(
 		return nil, err
 	}
 
-	rootInstructions = strings.TrimSpace(rootInstructions) + "\n\n" + fmt.Sprintf("<current-workspace>\nWorkspace root: %s\n</current-workspace>", promptExpansion.hostDir)
-	systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + strings.TrimSpace(rootInstructions))
+	workspaceInstructions := fmt.Sprintf("<current-workspace>\nWorkspace root: %s\n</current-workspace>", promptExpansion.hostDir)
+
+	preloadedInstructions := ""
+	if activeAgent.Permission.evaluate("rocketclaw", "load_agents_md").Action == permissionAllow {
+		preloadedInstructions = strings.TrimSpace(rootInstructions)
+	}
+
+	systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + strings.TrimSpace(preloadedInstructions+"\n\n"+workspaceInstructions))
 
 	client, origin, err := resolveModel(resolver, activeAgent.Model)
 	if err != nil {
@@ -387,6 +393,7 @@ func NewWithModelResolver(
 	factory := &toolFactory{
 		resolver:                   resolver,
 		rootInstructions:           strings.TrimSpace(rootInstructions),
+		workspaceInstructions:      workspaceInstructions,
 		autoApproverModel:          cmp.Or(config.AutoApproverModel, config.Model),
 		reasoningEffort:            reasoningEffort,
 		compactThreshold:           config.CompactThreshold,

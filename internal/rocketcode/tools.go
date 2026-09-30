@@ -24,6 +24,7 @@ import (
 type toolFactory struct {
 	resolver                   ModelResolver
 	rootInstructions           string
+	workspaceInstructions      string
 	autoApproverModel          string
 	reasoningEffort            shared.ReasoningEffort
 	compactThreshold           int64

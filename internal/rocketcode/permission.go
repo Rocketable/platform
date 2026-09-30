@@ -211,7 +211,26 @@ func parsePermissionRules(permission string, node *yaml.Node) ([]PermissionRule,
 		rules := []PermissionRule{}
 
 		for i := 0; i+1 < len(node.Content); i += 2 {
-			action, reviewer, err := parsePermissionAction(node.Content[i+1].Value)
+			value := node.Content[i+1]
+
+			actionValue := value.Value
+			if permission == "rocketclaw" && node.Content[i].Value == "load_agents_md" {
+				if value.Kind != yaml.ScalarNode || value.ShortTag() != "!!bool" {
+					return nil, errors.New("load_agents_md must be a boolean")
+				}
+
+				var load bool
+				if err := value.Decode(&load); err != nil {
+					return nil, fmt.Errorf("load_agents_md: %w", err)
+				}
+
+				actionValue = string(permissionDeny)
+				if load {
+					actionValue = string(permissionAllow)
+				}
+			}
+
+			action, reviewer, err := parsePermissionAction(actionValue)
 			if err != nil {
 				return nil, fmt.Errorf("pattern %q: %w", node.Content[i].Value, err)
 			}
@@ -341,7 +360,7 @@ func (ps *PermissionSet) Set(permission, pattern string, action PermissionAction
 // Evaluate returns the effective permission action for permission and subject.
 // The matched result reports whether a configured rule explicitly matched.
 // When matched is false, action defaults to PermissionDeny, except that
-// rocketclaw.code_mode_approve defaults to PermissionAllow.
+// rocketclaw.code_mode_approve and rocketclaw.load_agents_md default to PermissionAllow.
 func (ps PermissionSet) Evaluate(permission, subject string) (action PermissionAction, matched bool) {
 	decision := ps.evaluate(permission, subject)
 	return decision.Action, decision.Matched
@@ -387,8 +406,8 @@ func (ps PermissionSet) evaluate(permission, subject string, scripts ...string) 
 func (ps PermissionSet) evaluateRules(permission, subject string, folded bool, scripts ...string) permissionDecision {
 	decision := permissionDecision{Action: permissionDeny, Bucket: "", Rule: PermissionRule{Pattern: "", Action: ""}, Matched: false, Permission: permission, Subject: subject}
 
-	codeModeApproval := permission == "rocketclaw" && subject == codeModeApproveSubject
-	if codeModeApproval {
+	exactRocketClawSetting := permission == "rocketclaw" && (subject == codeModeApproveSubject || subject == "load_agents_md")
+	if exactRocketClawSetting {
 		decision.Action = permissionAllow
 	}
 
@@ -411,8 +430,8 @@ func (ps PermissionSet) evaluateRules(permission, subject string, folded bool, s
 			var matches bool
 
 			switch {
-			case codeModeApproval:
-				// Only the exact rule can change the whole-script default.
+			case exactRocketClawSetting:
+				// Only an exact rule can change these default-on settings.
 				matches = rule.Pattern == subject
 			case permission == "bash" && len(scripts) > 0:
 				matches = bashComponentPatternMatch(input, pattern, segments...) ||

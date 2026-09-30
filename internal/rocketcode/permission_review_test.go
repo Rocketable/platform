@@ -3,6 +3,7 @@ package rocketcode
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -99,21 +100,29 @@ func TestPermissionReviewUsesConfiguredAutoApproverModel(t *testing.T) {
 }
 
 func TestPermissionReviewSystemPromptIncludesRootInstructionsAndCodeMode(t *testing.T) {
-	mock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
-		testMessageOutputItem("review-final", "", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low-risk action."}`),
-	}))
-	factory := testTaskFactory(mock, Agents{Items: map[string]Agent{}})
-	factory.autoApproverModel = "gpt-5.4"
-	factory.rootInstructions = "Instructions from: AGENTS.md\nproject rules"
+	for _, reviewer := range []string{"", "release"} {
+		for _, load := range []bool{true, false} {
+			mock := mockResponses(testResponse("review", []responses.ResponseOutputItemUnion{
+				testMessageOutputItem("review-final", "", `{"risk_level":"low","user_authorization":"unknown","outcome":"allow","rationale":"Low-risk action."}`),
+			}))
+			agent := embeddedGuardianAgent()
+			agent.Name = "release"
+			agent.Model = "gpt-5.4"
+			agent.Permission = parsePermissionYAML(t, fmt.Sprintf("read: allow\nrocketclaw: {load_agents_md: %t}", load))
+			factory := testTaskFactory(mock, Agents{Items: map[string]Agent{"release": agent}})
+			factory.autoApproverModel = "gpt-5.4"
+			factory.rootInstructions = "Instructions from: AGENTS.md\nproject rules"
 
-	decision := factory.reviewPermission(context.Background(), &permissionReviewRequest{ReviewerEmbedded: true}, make(chan ChatResponse, 10))
+			decision := factory.reviewPermission(t.Context(), &permissionReviewRequest{Reviewer: reviewer, ReviewerEmbedded: reviewer == ""}, make(chan ChatResponse, 10))
 
-	require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
+			require.Equal(t, permissionReviewOutcomeAllow, decision.Outcome)
 
-	instructions := newParams(mock)[0].Instructions.Value
-	require.Contains(t, instructions, "Instructions from: AGENTS.md\nproject rules")
-	require.Contains(t, instructions, "You are judging one planned coding-agent action.")
-	require.Contains(t, instructions, "## Code Mode")
+			instructions := newParams(mock)[0].Instructions.Value
+			require.Equal(t, reviewer == "" || load, strings.Contains(instructions, "Instructions from: AGENTS.md\nproject rules"))
+			require.Contains(t, instructions, "You are judging one planned coding-agent action.")
+			require.Contains(t, instructions, "## Code Mode")
+		}
+	}
 }
 
 func TestPermissionReviewResolvesEmbeddedAutoApproverIndependently(t *testing.T) {

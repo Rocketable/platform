@@ -157,13 +157,20 @@ func (f *toolFactory) availableSubagentsDescription() string {
 }
 
 func (f *toolFactory) childSystemPrompt(agent *Agent, modelTools, codeHosts map[string]looperTool) string {
+	rootInstructions := ""
+	if agent.Permission.evaluate("rocketclaw", "load_agents_md").Action == permissionAllow {
+		rootInstructions = f.rootInstructions
+	}
+
+	rootInstructions = strings.TrimSpace(rootInstructions + "\n\n" + f.workspaceInstructions)
+
 	var mcpServers []string
 	if f.mcpRegistry != nil {
 		mcpServers = visibleMCPServers(agent.Permission, f.mcpRegistry.Names())
 	}
 
 	return withCodeModeSystemPrompt(
-		composeSystemPromptWithSkills(strings.TrimSpace(f.rootInstructions+"\n\n"+agent.Prompt), f.skills, agent),
+		composeSystemPromptWithSkills(strings.TrimSpace(rootInstructions+"\n\n"+agent.Prompt), f.skills, agent),
 		modelTools, codeHosts, mcpServers,
 	)
 }
