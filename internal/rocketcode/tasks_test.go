@@ -4,13 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"testing"
 
+	"github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestTaskRejectsEmptySubagentModelWithoutResolving(t *testing.T) {
@@ -828,8 +833,44 @@ func testTaskFactory(t *testing.T, client responsesAPI, agents Agents) *toolFact
 }
 
 func TestChildShellSelection(t *testing.T) {
-	// Discovery reads host gateway configuration; no gateway is needed for this routing test.
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	images := make(chan string, 3)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	server := grpc.NewServer(grpc.UnaryInterceptor(func(_ context.Context, request any, info *grpc.UnaryServerInfo, _ grpc.UnaryHandler) (any, error) {
+		if info.FullMethod == openshellv1.OpenShell_CreateSandbox_FullMethodName {
+			images <- request.(*openshellv1.CreateSandboxRequest).Spec.Template.Image
+
+			return nil, status.Error(codes.FailedPrecondition, "routing test create")
+		}
+
+		return nil, status.Error(codes.NotFound, "sandbox absent")
+	}))
+	openshellv1.RegisterOpenShellServer(server, openshellv1.UnimplementedOpenShellServer{})
+
+	var serving errgroup.Group
+
+	serving.Go(func() error { return server.Serve(listener) })
+	t.Cleanup(func() {
+		server.Stop()
+		require.Contains(t, []error{nil, grpc.ErrServerStopped}, serving.Wait())
+	})
+	// SDK discovery reads host configuration; fixture writes use *os.Root.
+	configDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configDir)
+	configRoot, err := os.OpenRoot(configDir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, configRoot.Close()) })
+	// NVIDIA/OpenShell@6648bd0c290e sdk/go/openshell/v1/gateway/paths.go.
+	require.NoError(t, configRoot.MkdirAll("openshell/gateways/routing", 0o700))
+	require.NoError(t, configRoot.WriteFile("openshell/active_gateway", []byte("routing\n"), 0o600))
+
+	data, err := json.Marshal(struct {
+		Endpoint string `json:"gateway_endpoint"`
+		AuthMode string `json:"auth_mode"`
+	}{Endpoint: "http://" + listener.Addr().String(), AuthMode: "plaintext"})
+	require.NoError(t, err)
+	require.NoError(t, configRoot.WriteFile("openshell/gateways/routing/metadata.json", data, 0o600))
 
 	for _, parentImage := range []string{"", "parent-image"} {
 		for _, childImage := range []string{"", "child-image", "other-image"} {
@@ -844,19 +885,25 @@ func TestChildShellSelection(t *testing.T) {
 					}
 
 					final := "done"
-					if entry == "guardrail" {
-						final = `{"approved":true,"reason":"ok"}`
-					}
 
-					if entry == "reviewer" {
+					switch entry {
+					case "guardrail":
+						final = `{"approved":true,"reason":"ok"}`
+					case "reviewer":
 						final = `{"risk_level":"low","user_authorization":"medium","outcome":"allow","rationale":"ok"}`
 					}
 
-					mock := mockResponses(responseWithMessage("child-final", final))
+					mock := mockResponses(
+						responseWithFunctionCalls("child-bash", []responses.ResponseFunctionToolCall{
+							testFunctionCall("tool-bash", "call-bash", executeToolName, marshalJSON(t, executeParams{Code: "def main():\n    return bash(command=r'''printf bash > bash-marker; printf child-bash''')\n"})),
+						}),
+						responseWithMessage("child-final", final),
+					)
 					factory := testTaskFactory(t, mock, Agents{Items: map[string]Agent{"child": agent}})
 					factory.promptExpansion.shell.openshellImage = parentImage
 					factory.expandPromptShellCommands.SubagentPrompts = true
 					parentShell := factory.promptExpansion.shell
+					factory.baseTools = makeSandboxedTools(&sandboxedFileSystem{root: factory.promptExpansion.root}, parentShell)
 
 					switch entry {
 					case "task":
@@ -869,23 +916,25 @@ func TestChildShellSelection(t *testing.T) {
 						require.Equal(t, permissionReviewOutcomeAllow, factory.reviewPermission(t.Context(), &permissionReviewRequest{Reviewer: "child"}, testTaskOutput()).Outcome)
 					}
 
-					instructions := newParams(mock)[0].Instructions.Value
+					requests := newParams(mock)
+					require.Len(t, requests, 2)
+					items := requests[1].Input.OfInputItemList
+					require.Len(t, items, 3)
+					require.NotNil(t, items[2].OfFunctionCallOutput)
+					bashOutput := marshalJSON(t, items[2].OfFunctionCallOutput)
+					instructions := requests[0].Instructions.Value
+
 					if childImage == "" {
 						require.Contains(t, instructions, "child expanded")
+						require.Contains(t, bashOutput, "child-bash")
 					} else {
 						require.NotContains(t, instructions, "expanded")
+						require.Contains(t, bashOutput, "routing test create")
+						require.Equal(t, childImage, <-images, "prompt expansion image")
+						require.Equal(t, childImage, <-images, "bash tool image")
 					}
 
-					childFactory := *factory
-					childFactory.bindAgentShell(&agent)
-					require.Equal(t, childImage, childFactory.promptExpansion.shell.openshellImage)
-
-					var child looper
-					childFactory.configureSpill(&child)
-					require.Same(t, childFactory.promptExpansion.shell, child.promptExpansion.shell)
-					result, err := childFactory.baseTools["bash"].Call(t.Context(), json.RawMessage(`{"command":"printf bash > bash-marker; printf child-bash"}`), testTaskOutput(), toolCallMetadata{})
-					require.NoError(t, err)
-					require.Equal(t, childImage == "", result.Data.(BashResult).Success)
+					require.Empty(t, images)
 
 					for _, marker := range []string{"prompt-marker", "bash-marker"} {
 						_, err := factory.promptExpansion.root.Stat(marker)
@@ -899,6 +948,23 @@ func TestChildShellSelection(t *testing.T) {
 					require.Same(t, parentShell, factory.promptExpansion.shell)
 					require.Equal(t, parentImage, parentShell.openshellImage)
 					require.Equal(t, agent.Prompt, factory.agents.Items["child"].Prompt)
+
+					result, err := factory.baseTools["bash"].Call(t.Context(), json.RawMessage(`{"command":"printf parent > parent-bash-marker; printf parent-bash"}`), testTaskOutput(), toolCallMetadata{})
+					require.NoError(t, err)
+					require.Equal(t, parentImage == "", result.Data.(BashResult).Success)
+
+					_, err = factory.promptExpansion.root.Stat("parent-bash-marker")
+
+					if parentImage == "" {
+						require.NoError(t, err)
+						require.Equal(t, "parent-bash", result.Output)
+					} else {
+						require.ErrorIs(t, err, os.ErrNotExist)
+						require.Contains(t, result.Output, "routing test create")
+						require.Equal(t, parentImage, <-images, "parent bash image")
+					}
+
+					require.Empty(t, images)
 				})
 			}
 		}

@@ -3,9 +3,20 @@ package rocketcode
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"log"
+	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,7 +28,15 @@ import (
 
 	v1 "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1"
 	"github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/gateway"
+	openshellv1 "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
 func TestOpenShellCommandLifecycle(t *testing.T) {
@@ -239,53 +258,318 @@ func TestOpenShellFailuresCleanUpOwnedName(t *testing.T) {
 }
 
 func TestOpenShellUnavailableDoesNotRunLocally(t *testing.T) {
-	// Gateway discovery reads host configuration, not workspace files.
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	env := testPromptExpansionEnvironment(t)
-	env.shell.openshellImage = "agent-image"
-	got := env.shell.Bash(t.Context(), bashParams{Command: "printf local > marker"})
-	require.False(t, got.Success)
-	require.Equal(t, "error", got.ErrorCode)
-	require.Contains(t, got.Output, "openshell")
+	for _, state := range []string{"missing config", "stopped gateway"} {
+		t.Run(state, func(t *testing.T) {
+			// SDK discovery uses host configuration, outside the workspace abstraction.
+			configDir := t.TempDir()
 
-	_, err := env.root.Stat("marker")
-	require.ErrorIs(t, err, os.ErrNotExist)
-	require.Equal(t, "before  after", env.expandShellCommands(t.Context(), "before !`printf local > marker` after"))
-	_, err = env.root.Stat("marker")
-	require.ErrorIs(t, err, os.ErrNotExist)
+			t.Setenv("XDG_CONFIG_HOME", configDir)
+
+			configRoot, err := os.OpenRoot(configDir)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, configRoot.Close()) })
+
+			if state == "stopped gateway" {
+				listener, err := net.Listen("tcp", "127.0.0.1:0")
+				require.NoError(t, err)
+
+				endpoint := "http://" + listener.Addr().String()
+
+				require.NoError(t, listener.Close())
+
+				// NVIDIA/OpenShell@6648bd0c290e sdk/go/openshell/v1/gateway/paths.go.
+				require.NoError(t, configRoot.MkdirAll("openshell/gateways/stopped", 0o700))
+				require.NoError(t, configRoot.WriteFile("openshell/active_gateway", []byte("stopped\n"), 0o600))
+
+				data, err := json.Marshal(struct {
+					Endpoint string `json:"gateway_endpoint"`
+					AuthMode string `json:"auth_mode"`
+				}{Endpoint: endpoint, AuthMode: "plaintext"})
+				require.NoError(t, err)
+				require.NoError(t, configRoot.WriteFile("openshell/gateways/stopped/metadata.json", data, 0o600))
+
+				config, err := gateway.LoadConfig("")
+				require.NoError(t, err)
+				require.Equal(t, endpoint, config.Endpoint)
+				require.Equal(t, gateway.AuthModePlaintext, config.AuthMode)
+			}
+
+			env := testPromptExpansionEnvironment(t)
+			got := env.shell.Bash(t.Context(), bashParams{TimeoutMillisecond: 1000, Command: "printf standard > standard-marker; printf standard"})
+			require.Equal(t, BashResult{Output: "standard", Success: true}, got)
+
+			data, err := env.root.ReadFile("standard-marker")
+			require.NoError(t, err)
+			require.Equal(t, "standard", string(data))
+
+			env.shell.openshellImage = "agent-image"
+			got = env.shell.Bash(t.Context(), bashParams{TimeoutMillisecond: 1000, Command: "printf local > marker"})
+			require.False(t, got.Success)
+			require.Equal(t, "error", got.ErrorCode)
+			require.Contains(t, got.Output, "openshell")
+
+			if state == "stopped gateway" {
+				require.Contains(t, got.Output, "connection refused")
+			}
+
+			_, err = env.root.Stat("marker")
+			require.ErrorIs(t, err, os.ErrNotExist)
+			require.Equal(t, "before  after", env.expandShellCommands(t.Context(), "before !`printf local > marker` after"))
+			_, err = env.root.Stat("marker")
+			require.ErrorIs(t, err, os.ErrNotExist)
+		})
+	}
+}
+
+func TestOpenShellGatewayMTLS(t *testing.T) {
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	ca := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "gateway CA"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, ca, ca, &caKey.PublicKey, caKey)
+	require.NoError(t, err)
+	ca, err = x509.ParseCertificate(caDER)
+	require.NoError(t, err)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(ca)
+
+	certs := make(map[string]tls.Certificate)
+
+	for i, name := range []string{"server", "client", "untrusted CA"} {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		require.NoError(t, err)
+
+		template := &x509.Certificate{
+			SerialNumber: big.NewInt(int64(i + 2)), Subject: pkix.Name{CommonName: name},
+			NotBefore: ca.NotBefore, NotAfter: ca.NotAfter,
+			DNSNames: []string{"localhost"}, KeyUsage: x509.KeyUsageDigitalSignature,
+			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		}
+		parent, signer := ca, caKey
+
+		if name == "untrusted CA" {
+			template.IsCA, template.BasicConstraintsValid = true, true
+			template.KeyUsage = x509.KeyUsageCertSign
+			parent, signer = template, key
+		}
+
+		der, err := x509.CreateCertificate(rand.Reader, template, parent, &key.PublicKey, signer)
+		require.NoError(t, err)
+
+		certs[name] = tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+	}
+
+	clientKey, err := x509.MarshalPKCS8PrivateKey(certs["client"].PrivateKey)
+	require.NoError(t, err)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{
+		MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certs["server"]},
+		ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool,
+	})), grpc.UnaryInterceptor(func(ctx context.Context, _ any, info *grpc.UnaryServerInfo, _ grpc.UnaryHandler) (any, error) {
+		remote, _ := peer.FromContext(ctx)
+		auth := remote.AuthInfo.(credentials.TLSInfo)
+
+		md, _ := metadata.FromIncomingContext(ctx)
+		if !bytes.Equal(auth.State.VerifiedChains[0][0].Raw, certs["client"].Certificate[0]) || auth.State.PeerCertificates[0].Subject.CommonName != "client" || len(md.Get("authorization")) != 0 {
+			return nil, status.Error(codes.PermissionDenied, "wrong client credentials")
+		}
+
+		switch info.FullMethod {
+		case openshellv1.OpenShell_CreateSandbox_FullMethodName:
+			return nil, status.Error(codes.FailedPrecondition, "authenticated create")
+		case openshellv1.OpenShell_DeleteSandbox_FullMethodName:
+			return nil, status.Error(codes.FailedPrecondition, "authenticated delete")
+		default:
+			return nil, status.Error(codes.PermissionDenied, "unexpected RPC")
+		}
+	}))
+	openshellv1.RegisterOpenShellServer(server, openshellv1.UnimplementedOpenShellServer{})
+
+	var serving errgroup.Group
+	serving.Go(func() error { return server.Serve(listener) })
+	t.Cleanup(func() {
+		server.Stop() // Stops the transport and closes the listener before joining.
+		require.Contains(t, []error{nil, grpc.ErrServerStopped}, serving.Wait())
+	})
+
+	for _, tc := range []struct {
+		name string
+		want string
+	}{
+		{name: "trusted", want: "authenticated create"},
+		{name: "missing certificate", want: "load client cert"},
+		{name: "untrusted CA", want: "certificate signed by unknown authority"},
+		{name: "stopped gateway", want: "connection refused"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// SDK configuration is host-scoped; fixture writes still use *os.Root.
+			configDir := t.TempDir()
+			t.Setenv("XDG_CONFIG_HOME", configDir)
+			configRoot, err := os.OpenRoot(configDir)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, configRoot.Close()) })
+			// NVIDIA/OpenShell@6648bd0c290e sdk/go/openshell/v1/gateway/{paths,gateway}.go.
+			require.NoError(t, configRoot.MkdirAll("openshell/gateways/local/mtls", 0o700))
+			require.NoError(t, configRoot.WriteFile("openshell/active_gateway", []byte("local\n"), 0o600))
+
+			endpoint := listener.Addr().(*net.TCPAddr).Port
+
+			if tc.name == "stopped gateway" {
+				stopped, err := net.Listen("tcp", "127.0.0.1:0")
+				require.NoError(t, err)
+
+				endpoint = stopped.Addr().(*net.TCPAddr).Port
+				require.NoError(t, stopped.Close())
+			}
+
+			data, err := json.Marshal(struct {
+				Endpoint string `json:"gateway_endpoint"`
+				AuthMode string `json:"auth_mode"`
+			}{Endpoint: fmt.Sprintf("https://localhost:%d", endpoint), AuthMode: "mtls"})
+			require.NoError(t, err)
+			require.NoError(t, configRoot.WriteFile("openshell/gateways/local/metadata.json", data, 0o600))
+
+			rootCA := caDER
+			if tc.name == "untrusted CA" {
+				rootCA = certs["untrusted CA"].Certificate[0]
+			}
+
+			require.NoError(t, configRoot.WriteFile("openshell/gateways/local/mtls/ca.crt", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootCA}), 0o600))
+
+			if tc.name != "missing certificate" {
+				require.NoError(t, configRoot.WriteFile("openshell/gateways/local/mtls/tls.crt", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certs["client"].Certificate[0]}), 0o600))
+			}
+
+			require.NoError(t, configRoot.WriteFile("openshell/gateways/local/mtls/tls.key", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: clientKey}), 0o600))
+			env := testPromptExpansionEnvironment(t)
+			env.shell.openshellImage = "agent-image"
+			_, err = env.shell.connectOpenShell(t.Context(), "printf local > marker", env.hostDir, io.Discard, io.Discard)
+			require.ErrorContains(t, err, tc.want)
+			_, err = env.root.Stat("marker")
+			require.ErrorIs(t, err, os.ErrNotExist)
+		})
+	}
 }
 
 func TestOpenShellCleanupCanOutliveCommandDeadline(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		env := testPromptExpansionEnvironment(t)
-		env.shell.openshellImage = "image"
+	for _, tc := range []struct {
+		name    string
+		stalled bool
+		timeout bool
+		exit    int
+	}{
+		{name: "finite cleanup"},
+		{name: "stalled cleanup", stalled: true},
+		{name: "execution timeout and stalled cleanup", stalled: true, timeout: true},
+		{name: "exit 7 and stalled cleanup", stalled: true, exit: 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				env := testPromptExpansionEnvironment(t)
+				env.shell.openshellImage = "image"
 
-		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-		defer cancel()
+				var diagnostic bytes.Buffer
 
-		sandboxes := &mockSandboxInterface{
-			CreateFunc: func(context.Context, string, string, *v1.SandboxSpec, map[string]string, ...v1.CreateOptions) (*v1.Sandbox, error) {
-				return &v1.Sandbox{}, nil
-			},
-			WaitReadyFunc: func(context.Context, string, string, ...v1.WaitOptions) (*v1.Sandbox, error) {
-				return &v1.Sandbox{}, nil
-			},
-			DeleteFunc: func(cleanup context.Context, _, _ string, _ ...v1.DeleteOptions) (*v1.DeletionResult, error) {
-				time.Sleep(2 * time.Second)
-				require.NoError(t, cleanup.Err())
-				require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+				logOutput := log.Writer()
 
-				return &v1.DeletionResult{Outcome: v1.DeletionCompleted}, nil
-			},
-		}
-		stream := &mockExecStream{NextFunc: func() (*v1.ExecChunk, error) { return nil, io.EOF }, ExitCodeFunc: func() (int, error) { return 0, nil }, CloseFunc: func() error { return nil }}
-		executor := &mockExecInterface{StreamFunc: func(context.Context, string, string, []string, ...v1.ExecOptions) (v1.ExecStream, error) {
-			return stream, nil
-		}}
-		exit, err := env.shell.executeOpenShell(ctx, sandboxes, executor, "true", env.hostDir, io.Discard, io.Discard)
-		require.NoError(t, err)
-		require.Zero(t, exit)
-	})
+				log.SetOutput(&diagnostic)
+				t.Cleanup(func() { log.SetOutput(logOutput) })
+
+				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+				defer cancel()
+
+				var name string
+
+				sandboxes := &mockSandboxInterface{
+					CreateFunc: func(_ context.Context, _, n string, _ *v1.SandboxSpec, _ map[string]string, _ ...v1.CreateOptions) (*v1.Sandbox, error) {
+						name = n
+
+						return &v1.Sandbox{Name: name}, nil
+					},
+					WaitReadyFunc: func(context.Context, string, string, ...v1.WaitOptions) (*v1.Sandbox, error) {
+						return &v1.Sandbox{Name: name}, nil
+					},
+					DeleteFunc: func(cleanup context.Context, _, n string, opts ...v1.DeleteOptions) (*v1.DeletionResult, error) {
+						require.Equal(t, name, n)
+						require.True(t, opts[0].AllowMissing)
+						require.NoError(t, cleanup.Err())
+
+						deadline, ok := cleanup.Deadline()
+						require.True(t, ok, "cleanup must have its own deadline")
+						require.Equal(t, 2*time.Minute, time.Until(deadline))
+
+						if tc.stalled {
+							started := time.Now()
+
+							<-cleanup.Done()
+							require.Equal(t, 2*time.Minute, time.Since(started))
+
+							return nil, &v1.StatusError{Code: v1.ErrorDeadlineExceeded, Message: "deadline"}
+						}
+
+						time.Sleep(2 * time.Second)
+						require.NoError(t, cleanup.Err())
+						require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+
+						return &v1.DeletionResult{Outcome: v1.DeletionCompleted}, nil
+					},
+				}
+				chunks := []*v1.ExecChunk{{Data: []byte("partial stdout"), Stream: v1.StreamStdout}, {Data: []byte("stderr"), Stream: v1.StreamStderr}}
+				stream := &mockExecStream{
+					NextFunc: func() (*v1.ExecChunk, error) {
+						if len(chunks) > 0 {
+							chunk := chunks[0]
+							chunks = chunks[1:]
+
+							return chunk, nil
+						}
+
+						time.Sleep(500 * time.Millisecond)
+
+						if tc.timeout {
+							<-ctx.Done()
+
+							return nil, &v1.StatusError{Code: v1.ErrorDeadlineExceeded, Message: "deadline"}
+						}
+
+						return nil, io.EOF
+					},
+					ExitCodeFunc: func() (int, error) { return tc.exit, nil },
+					CloseFunc:    func() error { return nil },
+				}
+				executor := &mockExecInterface{StreamFunc: func(context.Context, string, string, []string, ...v1.ExecOptions) (v1.ExecStream, error) {
+					return stream, nil
+				}}
+
+				var output bytes.Buffer
+
+				exit, err := env.shell.executeOpenShell(ctx, sandboxes, executor, "printf test", env.hostDir, &output, io.Discard)
+				require.Equal(t, "partial stdout", output.String())
+				require.Equal(t, tc.exit, exit)
+
+				if tc.timeout {
+					require.ErrorIs(t, err, context.DeadlineExceeded)
+				} else {
+					require.NotErrorIs(t, err, context.DeadlineExceeded)
+				}
+
+				if tc.stalled {
+					require.ErrorContains(t, err, "openshell cleanup "+name+": cleanup deadline exceeded; deletion unconfirmed")
+					require.Contains(t, diagnostic.String(), "openshell cleanup "+name+": cleanup deadline exceeded; deletion unconfirmed")
+				} else {
+					require.NoError(t, err)
+					require.Empty(t, diagnostic.String())
+				}
+			})
+		})
+	}
 }
 
 func TestOpenShellGatewayIntegration(t *testing.T) {
@@ -321,7 +605,21 @@ func TestOpenShellGatewayIntegration(t *testing.T) {
 	require.NoError(t, err)
 
 	env.shell.openshellImage = image
-	client, err := gateway.NewClient("")
+	cfg, err := gateway.LoadConfig("")
+	require.NoError(t, err)
+	t.Logf("active gateway auth mode=%s", cfg.AuthMode)
+
+	var opts []gateway.ClientOption
+	if cfg.AuthMode == gateway.AuthModeMTLS {
+		// The inventory client needs the same pinned-SDK mTLS override as the adapter.
+		opts = append(opts, gateway.WithAuth(v1.NoAuth()), gateway.WithTLS(&v1.TLSConfig{
+			CAFile:   filepath.Join(cfg.Dir, "mtls", "ca.crt"),
+			CertFile: filepath.Join(cfg.Dir, "mtls", "tls.crt"),
+			KeyFile:  filepath.Join(cfg.Dir, "mtls", "tls.key"),
+		}))
+	}
+
+	client, err := gateway.NewClient(cfg.Name, opts...)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, client.Close()) })
 	before, err := client.Sandboxes().ListAll(t.Context(), "")

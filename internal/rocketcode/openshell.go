@@ -8,6 +8,7 @@ import (
 	"log"
 	"path/filepath"
 	"strings"
+	"time"
 
 	v1 "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1"
 	"github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/gateway"
@@ -15,7 +16,23 @@ import (
 )
 
 func (sss *sandboxedShellSystem) connectOpenShell(ctx context.Context, command, hostDir string, stdout, stderr io.Writer) (exitCode int, err error) {
-	client, err := gateway.NewClient("")
+	cfg, err := gateway.LoadConfig("")
+	if err != nil {
+		return 0, fmt.Errorf("openshell gateway: %w", err)
+	}
+
+	var opts []gateway.ClientOption
+	if cfg.AuthMode == gateway.AuthModeMTLS {
+		// NVIDIA/OpenShell@6648bd0c290e sdk/go/openshell/v1/gateway/gateway.go
+		// rejects mTLS by default; certificates authenticate, not per-RPC tokens.
+		opts = append(opts, gateway.WithAuth(v1.NoAuth()), gateway.WithTLS(&v1.TLSConfig{
+			CAFile:   filepath.Join(cfg.Dir, "mtls", "ca.crt"),
+			CertFile: filepath.Join(cfg.Dir, "mtls", "tls.crt"),
+			KeyFile:  filepath.Join(cfg.Dir, "mtls", "tls.key"),
+		}))
+	}
+
+	client, err := gateway.NewClient(cfg.Name, opts...)
 	if err != nil {
 		return 0, fmt.Errorf("openshell gateway: %w", err)
 	}
@@ -48,8 +65,16 @@ func (sss *sandboxedShellSystem) executeOpenShell(ctx context.Context, sandboxes
 			err = errors.Join(ctx.Err(), err)
 		}
 
-		result, errDelete := sandboxes.Delete(context.WithoutCancel(ctx), "", name, v1.DeleteOptions{AllowMissing: true})
+		cleanup, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), defaultShellTimeout*time.Millisecond, errors.New("cleanup deadline exceeded; deletion unconfirmed"))
+		defer cancel()
+
+		result, errDelete := sandboxes.Delete(cleanup, "", name, v1.DeleteOptions{AllowMissing: true})
 		if errDelete != nil {
+			if cleanup.Err() != nil {
+				// Cleanup expiry must not become an execution timeout.
+				errDelete = context.Cause(cleanup)
+			}
+
 			log.Printf("openshell cleanup %s: %v", name, errDelete)
 			err = errors.Join(err, fmt.Errorf("openshell cleanup %s: %w", name, errDelete))
 		} else if result.Outcome != v1.DeletionCompleted && result.Outcome != v1.DeletionAlreadyAbsent {
