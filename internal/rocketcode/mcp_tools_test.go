@@ -321,6 +321,46 @@ func TestCodeModeHostsSurviveModelWithoutHosts(t *testing.T) {
 	assert.Contains(t, result.Output, "hello")
 }
 
+func TestExecuteBashOutputSurvivesContainers(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	root, err := os.OpenRoot(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	require.NoError(t, root.MkdirAll(".tmp/shell", 0o700))
+	shellTemp := testShellTempConfig(t, root, filepath.Join(dir, ".tmp", "shell"))
+	sss := newSandboxedShellSystem(root, &shellTemp, nil, DefaultShellCommand)
+	sfs := &sandboxedFileSystem{mu: sync.Mutex{}, root: root}
+
+	var permissions PermissionSet
+	require.NoError(t, permissions.Allow("bash", "*"))
+
+	factory := &toolFactory{baseTools: makeSandboxedTools(sfs, sss)}
+	model, hosts := factory.assembleTools(&Agent{Permission: permissions})
+	looper := &looper{Permissions: permissions, Tools: model, CodeModeHosts: hosts}
+	ctx := withToolCallContext(t.Context(), looper, nil)
+
+	for _, test := range []struct{ name, expression, want string }{
+		{"direct", `bash(command=r'''printf first''')`, "first"},
+		{"gather", `gather([lambda: bash(command=r'''printf first'''), lambda: bash(command=r'''printf second'''), lambda: bash(command=r'''printf third''')])`, `["first","second","third"]`},
+		{"nested", `{"results": [gather([lambda: bash(command=r'''printf first''')])]}`, `{"results":[["first"]]}`},
+		{"escaped", `[bash(command=r'''printf '%s\n' 'first "quoted" \path 日本語' second''')]`, `["first \"quoted\" \\path 日本語\nsecond\n"]`},
+		{"failure", `[bash(command=r'''printf failed >&2; exit 7''')]`, `["failed"]`},
+		{"error_code", `bash(command=r'''exit 7''').error_code`, "7"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			raw, err := json.Marshal(struct {
+				Code string `json:"code"`
+			}{"def main():\n    return " + test.expression + "\n"})
+			require.NoError(t, err)
+			result, err := model[executeToolName].Call(ctx, raw, nil, emptyToolCallMetadata())
+			require.NoError(t, err)
+			require.Equal(t, test.want, result.Output)
+		})
+	}
+}
+
 func TestExecuteParseFailureDoesNotRunHost(t *testing.T) {
 	t.Parallel()
 
