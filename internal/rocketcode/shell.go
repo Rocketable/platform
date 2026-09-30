@@ -185,7 +185,6 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) Ba
 
 	exitCode, err := sss.execute(commandCtx, params.Command, hostDir, &output, &output)
 
-	timedOut := errors.Is(err, context.DeadlineExceeded)
 	if sss.openshellImage != "" && err != nil {
 		if output.Len() > 0 {
 			output.WriteByte('\n')
@@ -202,7 +201,7 @@ func (sss *sandboxedShellSystem) Bash(ctx context.Context, params bashParams) Ba
 	errorCode := ""
 
 	switch {
-	case timedOut:
+	case errors.Is(err, context.DeadlineExceeded):
 		errorCode = "timeout"
 	case exitCode > 0:
 		errorCode = strconv.Itoa(exitCode)
@@ -245,10 +244,7 @@ func (sss *sandboxedShellSystem) execute(ctx context.Context, command, hostDir s
 		return nil
 	}
 
-	var sysProcAttr syscall.SysProcAttr
-
-	sysProcAttr.Setpgid = true
-	cmd.SysProcAttr = &sysProcAttr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	err := cmd.Run()
 	if timedOut {
