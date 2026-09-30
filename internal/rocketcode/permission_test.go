@@ -211,12 +211,14 @@ func TestSkillReadPermissionsUseFoldedPaths(t *testing.T) {
 
 func TestReadPermissionInheritsEditAllow(t *testing.T) {
 	tests := []struct {
-		name, yaml, subject, bucket string
-		action                      PermissionAction
-		matched                     bool
+		name, yaml, subject, bucket, reviewer string
+		action                                PermissionAction
+		matched                               bool
 	}{
 		{name: "inherits exact edit allow", yaml: `edit: {"HALLY_GOOGLE_WORKSPACE.md": allow}`, subject: "HALLY_GOOGLE_WORKSPACE.md", action: permissionAllow, matched: true, bucket: "edit"},
 		{name: "inherits glob edit allow", yaml: `edit: {"memories/*.md": allow}`, subject: "memories/today.md", action: permissionAllow, matched: true, bucket: "edit"},
+		{name: "inherits edit auto", yaml: `edit: {"memories/*.md": auto}`, subject: "memories/today.md", action: permissionAuto, matched: true, bucket: "edit"},
+		{name: "inherits edit auto reviewer", yaml: `edit: {"memories/*.md": auto(file-reviewer)}`, subject: "memories/today.md", action: permissionAuto, matched: true, bucket: "edit", reviewer: "file-reviewer"},
 		{name: "unmatched path remains denied", yaml: `edit: {"HALLY_GOOGLE_WORKSPACE.md": allow}`, subject: "other.md", action: permissionDeny, matched: false, bucket: ""},
 		{name: "explicit read deny overrides edit allow", yaml: `edit: {"HALLY_GOOGLE_WORKSPACE.md": allow}
 read: {"HALLY_GOOGLE_WORKSPACE.md": deny}`, subject: "HALLY_GOOGLE_WORKSPACE.md", action: permissionDeny, matched: true, bucket: "read"},
@@ -233,6 +235,7 @@ edit: {"public.md": allow}`, subject: "public.md", action: permissionAllow, matc
 			require.Equal(t, tt.action, decision.Action)
 			require.Equal(t, tt.matched, decision.Matched)
 			require.Equal(t, tt.bucket, decision.Bucket)
+			require.Equal(t, tt.reviewer, decision.Rule.Reviewer)
 			require.Equal(t, "read", decision.Permission)
 		})
 	}

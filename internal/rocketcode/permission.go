@@ -375,7 +375,7 @@ func (ps PermissionSet) evaluate(permission, subject string, scripts ...string) 
 		}
 
 		editDecision := ps.evaluateRules("edit", subject, skillFolded)
-		if editDecision.Action == permissionAllow {
+		if editDecision.Action == permissionAllow || editDecision.Action == permissionAuto {
 			editDecision.Permission = "read"
 			return editDecision
 		}
