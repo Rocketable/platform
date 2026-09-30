@@ -347,7 +347,7 @@ func TestOpenShellGatewayMTLS(t *testing.T) {
 		template := &x509.Certificate{
 			SerialNumber: big.NewInt(int64(i + 2)), Subject: pkix.Name{CommonName: name},
 			NotBefore: ca.NotBefore, NotAfter: ca.NotAfter,
-			DNSNames: []string{"localhost"}, KeyUsage: x509.KeyUsageDigitalSignature,
+			IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, KeyUsage: x509.KeyUsageDigitalSignature,
 			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
 		}
 		parent, signer := ca, caKey
@@ -432,7 +432,7 @@ func TestOpenShellGatewayMTLS(t *testing.T) {
 			data, err := json.Marshal(struct {
 				Endpoint string `json:"gateway_endpoint"`
 				AuthMode string `json:"auth_mode"`
-			}{Endpoint: fmt.Sprintf("https://localhost:%d", endpoint), AuthMode: "mtls"})
+			}{Endpoint: fmt.Sprintf("https://127.0.0.1:%d", endpoint), AuthMode: "mtls"})
 			require.NoError(t, err)
 			require.NoError(t, configRoot.WriteFile("openshell/gateways/local/metadata.json", data, 0o600))
 
