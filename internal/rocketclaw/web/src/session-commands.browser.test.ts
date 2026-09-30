@@ -16,8 +16,9 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
   const prompts: { id: string; text: string; delivery?: PromptDelivery }[] = [];
   const forks: { id: string; before?: string }[] = [];
   const forkParents: Record<string, string> = {};
-  const details: Record<string, Partial<Session>> = {};
+  const details: Record<string, Partial<Session>> = { destination: { agent: "a-very-long-agent-name-that-must-not-hide-the-session-age", updatedAt: "2026-09-09T00:00:00.123456Z" } };
   let failPin = true;
+  let failSettle = true;
   let settledFork = false;
   const handoffs: string[] = [];
   const searches: string[] = [];
@@ -48,6 +49,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
       case "/api/UpdateSession":
       case "/api/SettleSession":
         if (input.pinned && failPin) return Response.json({ message: "Pin failed", code: 13 }, { status: 500 });
+        if (input.id === "destination" && input.settled && failSettle) return Response.json({ message: "Settle failed", code: 13 }, { status: 500 });
         details[input.id] = { ...details[input.id], ...input };
         return Response.json({});
       case "/api/ForkSession": {
@@ -186,7 +188,41 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     await forkRow.waitFor();
     expect(await sidebar.getByRole("img", { name: "Forked session", exact: true }).count()).toBe(1);
     await forkRow.hover();
+    expect(await forkRow.getByRole("button").count()).toBe(2);
+    const destinationRow = sidebar.locator("li").filter({ has: page.getByRole("link", { name: /Podcast editing notes/ }) });
+    await destinationRow.hover();
+    const age = destinationRow.locator("time");
+    expect(await age.count()).toBe(1);
+    expect(await age.getAttribute("datetime")).toBe(details.destination.updatedAt);
+    const ageText = await age.textContent();
+    expect(ageText).toMatch(/^\d+d$/);
+    expect(await age.evaluate((element: HTMLElement) => element.scrollWidth <= element.clientWidth && element.getBoundingClientRect().right <= element.closest("li")!.getBoundingClientRect().right)).toBe(true);
+    if (width >= 768) {
+      await age.hover();
+      const date = await page.evaluate((iso: string) => new Date(iso).toLocaleString(undefined, { timeZoneName: "short" }), details.destination.updatedAt!);
+      const tooltip = page.locator('[data-slot="tooltip-content"]');
+      await tooltip.waitFor();
+      expect(await tooltip.textContent()).toBe(`Updated ${date}`);
+      expect(await age.getAttribute("aria-label")).toBe(`Updated ${date}`);
+      await page.mouse.move(0, 0);
+      await tooltip.waitFor({ state: "hidden" });
+      await destinationRow.hover();
+    }
+    await Bun.write(path.resolve(import.meta.dir, `../../../../.tmp/sidebar-actions-${width}.png`), await page.screenshot());
+    await destinationRow.getByRole("button", { name: "Settle", exact: true }).click();
+    await destinationRow.getByRole("alert").waitFor();
+    expect(await destinationRow.getByRole("alert").textContent()).toBe("Settle failed");
+    expect(details.destination?.settled).not.toBe(true);
+    failSettle = false;
+    await destinationRow.getByRole("button", { name: "Settle", exact: true }).click();
+    await destinationRow.waitFor({ state: "hidden" });
+    expect(details.destination.settled).toBe(true);
+    expect(new URL(page.url()).pathname).toBe("/s/" + btoa("forked").replace(/=+$/, ""));
+    details.destination.settled = false;
+    await forkRow.hover();
     await forkRow.getByRole("button", { name: "Session actions" }).click();
+    expect(await page.getByRole("menuitem", { name: "Settle", exact: true }).count()).toBe(0);
+    for (const name of ["Name session", "Pin session", "Snooze session"]) await page.getByRole("menuitem", { name, exact: true }).waitFor();
     await page.getByRole("menuitem", { name: "Open original conversation", exact: true }).click();
     await page.waitForURL("**/s/" + btoa("source").replace(/=+$/, ""));
     await page.keyboard.press("Control+p");
@@ -257,7 +293,7 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     const destinationMatch = dialog.getByRole("button", { name: /Destination search needle/ });
     await destinationMatch.getByRole("img", { name: "Forked session", exact: true }).waitFor();
     expect(await destinationMatch.getByText("Podcast editing notes with a very long conversation title", { exact: true }).count()).toBe(1);
-    expect(await destinationMatch.getByText("main", { exact: true }).count()).toBe(1);
+    expect(await destinationMatch.getByText(details.destination.agent!, { exact: true }).count()).toBe(1);
     expect(searches).toEqual(["destination search"]);
     await destinationMatch.click();
     await page.waitForURL("**/s/" + btoa("destination").replace(/=+$/, ""));

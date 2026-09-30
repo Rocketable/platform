@@ -1067,10 +1067,11 @@ function relativeTime(iso: string) {
 function SessionRowContent({ session, loading = false, age = relativeTime(session.updatedAt ?? "") }: { session: Session; loading?: boolean; age?: string }) {
   const title = session.name || rowPreview(session, loading).split("\n", 1)[0] || sessionLabel(session.id);
   const channel = slackSession(session.id) ? (session.title ?? "") : "";
-  const meta = [session.snoozedUntil ? `Snoozed until ${new Date(session.snoozedUntil).toLocaleString()}` : session.settled ? "Settled" : "", channel, session.agent, age].filter(Boolean).join(" · ");
+  const meta = [session.snoozedUntil ? `Snoozed until ${new Date(session.snoozedUntil).toLocaleString()}` : session.settled ? "Settled" : "", channel, session.agent].filter(Boolean).join(" · ");
+  const updated = session.updatedAt ? `Updated ${new Date(session.updatedAt).toLocaleString(undefined, { timeZoneName: "short" })}` : "";
   return <span className="flex min-w-0 w-full flex-1 flex-col gap-0.5">
     <span className="flex items-center gap-1.5 text-sm font-medium">{session.forkedFrom ? <GitFork role="img" aria-label="Forked session" className="size-3.5 shrink-0" /> : null}<span data-slot="session-title" className="truncate">{title}</span></span>
-    <span className="flex items-center gap-1 text-xs text-muted-foreground"><span className="inline-flex size-3 shrink-0">{session.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 animate-spin motion-reduce:animate-none" /> : null}</span><span className="truncate" title={meta}>{meta}</span></span>
+    <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"><span className="inline-flex size-3 shrink-0">{session.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 animate-spin motion-reduce:animate-none" /> : null}</span><span className="min-w-0 flex-1 truncate" title={meta}>{meta}</span>{age ? <Tooltip><TooltipTrigger render={<time dateTime={session.updatedAt} />} aria-label={updated} className="shrink-0 tabular-nums">{age}</TooltipTrigger><TooltipContent>{updated}</TooltipContent></Tooltip> : null}</span>
   </span>;
 }
 
@@ -1105,9 +1106,19 @@ function SessionHeaderActions({ id }: { id: string }) {
 
 function SessionRowActions({ session }: { session: Session }) {
   const { items, error } = useSessionActions(session);
-  return <>{items.map(({ key, label, icon: Icon, pressed, disabled, run }) => <Menu.Item key={key} disabled={disabled} onClick={run} className="flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent data-disabled:opacity-50">
-    <Icon className={cn("size-4", pressed && "fill-current")} />{label}
-  </Menu.Item>)}{error ? <span role="alert" className="px-2 text-xs text-destructive">{error.message}</span> : null}</>;
+  return <><ButtonGroup aria-label="Session controls">
+    {items.filter((item) => item.key === "settle" && !session.settled).map(({ key, label, icon: Icon, disabled, run }) => <Tooltip key={key}>
+      <TooltipTrigger render={<Button variant="ghost" size="icon-sm" disabled={disabled} />} aria-label={label} onClick={run}><Icon /></TooltipTrigger><TooltipContent>{label}</TooltipContent>
+    </Tooltip>)}
+    <Menu.Root>
+      <Menu.Trigger render={<Button variant="ghost" size="icon-sm" />} aria-label="Session actions"><Ellipsis /></Menu.Trigger>
+      <Menu.Portal><Menu.Positioner sideOffset={4} align="end" className="z-50 outline-none"><Menu.Popup onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="min-w-40 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none">
+        {items.filter((item) => item.key !== "settle" || session.settled).map(({ key, label, icon: Icon, pressed, disabled, run }) => <Menu.Item key={key} disabled={disabled} onClick={run} className="flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent data-disabled:opacity-50">
+          <Icon className={cn("size-4", pressed && "fill-current")} />{label}
+        </Menu.Item>)}
+      </Menu.Popup></Menu.Positioner></Menu.Portal>
+    </Menu.Root>
+  </ButtonGroup>{error ? <span role="alert" className="px-2 text-xs text-destructive">{error.message}</span> : null}</>;
 }
 
 function SessionQueueDialog({ id }: { id: string }) {
@@ -1483,12 +1494,7 @@ const SessionRow = memo(function SessionRow({ session, active, loading, age }: {
       <SessionRowContent session={session} loading={loading} age={age} />
     </Link>
     <div className="pointer-events-none absolute top-1 right-1 rounded-md bg-sidebar shadow-sm opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
-      <Menu.Root>
-        <Menu.Trigger render={<Button variant="ghost" size="icon-sm" />} aria-label="Session actions"><Ellipsis /></Menu.Trigger>
-        <Menu.Portal><Menu.Positioner sideOffset={4} align="end" className="z-50 outline-none"><Menu.Popup onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }} className="min-w-40 rounded-md border bg-popover p-1 text-popover-foreground shadow-md outline-none">
-          <SessionRowActions session={session} />
-        </Menu.Popup></Menu.Positioner></Menu.Portal>
-      </Menu.Root>
+      <SessionRowActions session={session} />
     </div>
   </li>;
 }, (a, b) => a.active === b.active && a.loading === b.loading && a.age === b.age &&
