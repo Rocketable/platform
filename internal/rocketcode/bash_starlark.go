@@ -1,7 +1,9 @@
 package rocketcode
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 
 	"go.starlark.net/starlark"
 )
@@ -25,6 +27,16 @@ func (b *bashStarlarkResult) Freeze()              {}
 func (b *bashStarlarkResult) Truth() starlark.Bool { return b.errorCode == "" }
 func (b *bashStarlarkResult) Hash() (uint32, error) {
 	return 0, errors.New("unhashable type: bash_result")
+}
+
+// MarshalJSON preserves the output when the result is nested in a list or dict.
+func (b *bashStarlarkResult) MarshalJSON() ([]byte, error) {
+	output, err := json.Marshal(b.output)
+	if err != nil {
+		return nil, fmt.Errorf("marshal bash output: %w", err)
+	}
+
+	return output, nil
 }
 
 func (b *bashStarlarkResult) Attr(name string) (starlark.Value, error) {
