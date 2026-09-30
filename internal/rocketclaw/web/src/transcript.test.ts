@@ -10,6 +10,12 @@ const javascript = ts.transpileModule(`import { QueryClient } from ${JSON.string
 const { nextLines, sendComposer, promoteComposer, applyStreamEvent, readTranscriptHistory, pendingInputs, transcriptTurns, toolTitle, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 type Line = { id: string; role: string; text: string; turnId?: string; origin?: string };
 
+test("thinking rows top-align the robot beside multiline text", () => {
+  const row = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "TranscriptLine")!;
+  const thinking = (row as ts.FunctionDeclaration).body!.statements[0];
+  expect(thinking.getText(source)).toContain("flex items-start gap-1.5");
+});
+
 test("actual stream handler enriches consumed IDs without repeating consumption or restarting a completed turn", () => {
   let callback: ts.Expression | undefined;
   const findHandler = (node: ts.Node) => {
