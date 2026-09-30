@@ -117,6 +117,11 @@ websearch: allow
 		_, err := parsePermissionNode(parseYAMLNode(t, input))
 		require.ErrorContains(t, err, want)
 	}
+
+	for _, value := range []string{`allow`, `deny`, `auto`, `"true"`, `null`, `1`, `[]`, `{}`} {
+		_, err := parsePermissionNode(parseYAMLNode(t, `rocketclaw: {load_agents_md: `+value+`}`))
+		require.ErrorContains(t, err, "load_agents_md must be a boolean")
+	}
 }
 
 func TestParsePermissionAuto(t *testing.T) {
@@ -160,6 +165,12 @@ func TestPermissionSetEvaluate(t *testing.T) {
 		matched                         bool
 	}{
 		{name: "default deny", yaml: `tools: {current_time: allow}`, permission: "tools", subject: "restart", action: PermissionDeny, matched: false},
+		{name: "root instructions default on", yaml: `{}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionAllow, matched: false},
+		{name: "root instructions enabled", yaml: `rocketclaw: {load_agents_md: true}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionAllow, matched: true},
+		{name: "root instructions disabled", yaml: `rocketclaw: {load_agents_md: false}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionDeny, matched: true},
+		{name: "root instructions ignore wildcard", yaml: `rocketclaw: {'*': deny}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionAllow, matched: false},
+		{name: "root instructions ignore later wildcard", yaml: `rocketclaw: {load_agents_md: false, '*': allow}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionDeny, matched: true},
+		{name: "root instructions last exact rule wins", yaml: `rocketclaw: {load_agents_md: false, load_agents_md: true}`, permission: "rocketclaw", subject: "load_agents_md", action: PermissionAllow, matched: true},
 		{name: "explicit deny", yaml: `tools: {restart: deny}`, permission: "tools", subject: "restart", action: PermissionDeny, matched: true},
 		{name: "slash allow does not match backslash", yaml: `read: {'dir/file': allow}`, permission: "read", subject: `dir\file`, action: PermissionDeny, matched: false},
 		{name: "backslash allow does not match slash", yaml: `read: {'dir\file': allow}`, permission: "read", subject: "dir/file", action: PermissionDeny, matched: false},

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -97,31 +98,51 @@ func TestNewExpandsPrimaryPromptInRoot(t *testing.T) {
 }
 
 func TestNewTaskSubagentsUseRootInstructionsWithoutParentPrompt(t *testing.T) {
-	dir := t.TempDir()
-	root, err := os.OpenRoot(dir)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, root.Close()) })
+	for _, tc := range []struct {
+		name, parent, child     string
+		parentLoads, childLoads bool
+	}{
+		{"default", "", "", true, true},
+		{"explicit true", "rocketclaw: {load_agents_md: true}", "rocketclaw: {load_agents_md: true}", true, true},
+		{"parent disabled", "rocketclaw: {load_agents_md: false}", "", false, true},
+		{"child disabled", "", "rocketclaw: {load_agents_md: false}", true, false},
+		{"both disabled", "rocketclaw: {load_agents_md: false}", "rocketclaw: {load_agents_md: false}", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			root, err := os.OpenRoot(dir)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, root.Close()) })
 
-	require.NoError(t, root.WriteFile("AGENTS.md", []byte("project rules\n"), 0o644))
+			require.NoError(t, root.WriteFile("AGENTS.md", []byte("project rules\n"), 0o644))
 
-	mock := mockResponses(responseWithTaskMessages())
-	loop, err := NewWithModelResolver(testResolverForResponsesAPI(mock), testConfig(dir), root, Agents{Items: map[string]Agent{
-		"main":   testAgentWithPrompt("main", "PARENT PROMPT"),
-		"review": testAgentWithPrompt("review", "CHILD PROMPT"),
-	}}, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", nil)
-	require.NoError(t, err)
+			agents := LoadAgents(fstest.MapFS{
+				"main.md":   {Data: []byte("---\nmodel: gpt-5.4\npermission: {" + tc.parent + "}\n---\nPARENT PROMPT")},
+				"review.md": {Data: []byte("---\nmodel: gpt-5.4\npermission: {" + tc.child + "}\n---\nCHILD PROMPT")},
+			}, passThroughAgentModel)
+			require.Empty(t, agents.Errors)
 
-	factory := loop.PermissionReviewer.(*toolFactory)
-	got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{}, testTaskOutput())
-	require.NoError(t, err)
-	require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
+			mock := mockResponses(responseWithTaskMessages())
+			loop, err := NewWithModelResolver(testResolverForResponsesAPI(mock), testConfig(dir), root, agents.Agents, Skills{Root: "", Items: map[string]Skill{}, Dirs: nil, fsys: nil}, "main", nil)
+			require.NoError(t, err)
 
-	instructions := newParams(mock)[0].Instructions.Value
+			factory := loop.PermissionReviewer.(*toolFactory)
+			got, err := factory.runTask(t.Context(), testTaskParams("Review", "check this", "review"), toolCallMetadata{}, testTaskOutput())
+			require.NoError(t, err)
+			require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
 
-	require.Contains(t, loop.SystemPrompt, "PARENT PROMPT")
-	require.Contains(t, instructions, "Instructions from: AGENTS.md\nproject rules")
-	require.Contains(t, instructions, "CHILD PROMPT")
-	require.NotContains(t, instructions, "PARENT PROMPT")
+			instructions := newParams(mock)[0].Instructions.Value
+			workspace := "<current-workspace>\nWorkspace root: " + dir + "\n</current-workspace>"
+
+			require.Contains(t, loop.SystemPrompt, "PARENT PROMPT")
+			require.Contains(t, loop.SystemPrompt, workspace)
+			require.Equal(t, tc.parentLoads, strings.Contains(loop.SystemPrompt, "Instructions from: AGENTS.md\nproject rules"))
+			require.Equal(t, tc.childLoads, strings.Contains(instructions, "Instructions from: AGENTS.md\nproject rules"))
+			require.Contains(t, instructions, workspace)
+			require.Contains(t, instructions, "CHILD PROMPT")
+			require.NotContains(t, instructions, "PARENT PROMPT")
+		})
+	}
 }
 
 func TestNewRequiresShellTempDir(t *testing.T) {

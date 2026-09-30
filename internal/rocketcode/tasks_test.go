@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	openai "github.com/openai/openai-go/v3"
@@ -325,23 +327,25 @@ func TestTaskTool(t *testing.T) {
 	})
 
 	t.Run("guardrail prompt includes root instructions and code mode", func(t *testing.T) {
-		mock := mockResponses(responseWithMessage("delegation-gate", `{"approved":false,"reason":"too risky"}`))
-		factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
-			"review": {Name: "review", Model: "gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
-			"safety": {Name: "safety", Model: "gpt-5.4", Prompt: "guard carefully", Permission: PermissionSet{Buckets: []PermissionBucket{{Name: "read", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}},
-		}})
-		factory.rootInstructions = "Instructions from: AGENTS.md\nproject rules"
+		for _, load := range []bool{true, false} {
+			mock := mockResponses(responseWithMessage("delegation-gate", `{"approved":false,"reason":"too risky"}`))
+			factory := testTaskFactory(mock, Agents{Items: map[string]Agent{
+				"review": {Name: "review", Model: "gpt-5.4", Guardrail: "safety", Prompt: "review carefully"},
+				"safety": {Name: "safety", Model: "gpt-5.4", Prompt: "guard carefully", Permission: parsePermissionYAML(t, fmt.Sprintf("read: allow\nrocketclaw: {load_agents_md: %t}", load))},
+			}})
+			factory.rootInstructions = "Instructions from: AGENTS.md\nproject rules"
 
-		got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{}, testTaskOutput())
+			got, err := factory.runTask(context.Background(), testTaskParams("Review", "check this", "review"), toolCallMetadata{}, testTaskOutput())
 
-		require.NoError(t, err)
-		require.Equal(t, "<task_result>\ndelegation blocked: too risky\n</task_result>", got)
+			require.NoError(t, err)
+			require.Equal(t, "<task_result>\ndelegation blocked: too risky\n</task_result>", got)
 
-		instructions := newParams(mock)[0].Instructions.Value
-		require.Contains(t, instructions, "Instructions from: AGENTS.md\nproject rules")
-		require.Contains(t, instructions, "guard carefully")
-		require.Contains(t, instructions, "## Code Mode")
-		require.NotContains(t, instructions, "review carefully")
+			instructions := newParams(mock)[0].Instructions.Value
+			require.Equal(t, load, strings.Contains(instructions, "Instructions from: AGENTS.md\nproject rules"))
+			require.Contains(t, instructions, "guard carefully")
+			require.Contains(t, instructions, "## Code Mode")
+			require.NotContains(t, instructions, "review carefully")
+		}
 	})
 
 	t.Run("guardrail rejection skips child", func(t *testing.T) {
