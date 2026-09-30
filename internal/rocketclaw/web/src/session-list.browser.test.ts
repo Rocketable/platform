@@ -1510,19 +1510,20 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect(await many.locator("#session-sidebar li").count()).toBe(96);
     const rowActions = many.locator("#session-sidebar li").first();
     expect(await rowActions.getByRole("button", { name: "Session actions" }).count()).toBe(1);
-    expect(await rowActions.locator("button").count()).toBe(1);
+    expect(await rowActions.getByRole("button", { name: "Settle", exact: true }).count()).toBe(1);
+    expect(await rowActions.locator("button").count()).toBe(2);
     await rowActions.getByRole("button", { name: "Session actions" }).focus();
     await many.keyboard.press("Enter");
-    for (const name of ["Name session", "Pin session", "Snooze session", "Settle"]) {
+    for (const name of ["Name session", "Pin session", "Snooze session"]) {
       await many.getByRole("menuitem", { name }).waitFor();
     }
     await many.keyboard.press("Escape");
-    await many.waitForFunction(() => document.activeElement === document.querySelector("#session-sidebar li button"));
+    await many.waitForFunction(() => document.activeElement === document.querySelector('#session-sidebar li button[aria-label="Session actions"]'));
     expect(await rowActions.getByRole("button", { name: "Session actions" }).evaluate((button: HTMLElement) => button === document.activeElement)).toBe(true);
-    const ageBefore = await rowActions.locator("span[title]").getAttribute("title");
+    const ageBefore = await rowActions.locator("time").textContent();
     await many.evaluate(() => { const now = Date.now; Date.now = () => now() + 86_400_000; });
-    await many.waitForFunction((before: string) => document.querySelector("#session-sidebar li span[title]")?.getAttribute("title") !== before, ageBefore);
-    expect(await rowActions.locator("span[title]").getAttribute("title")).not.toBe(ageBefore);
+    await many.waitForFunction((before: string) => document.querySelector("#session-sidebar li time")?.textContent !== before, ageBefore);
+    expect(await rowActions.locator("time").textContent()).not.toBe(ageBefore);
     await many.evaluate(() => (window as unknown as { restoreRefreshProbe: () => void }).restoreRefreshProbe());
     await many.keyboard.press("Meta+p");
     const manyDialog = many.getByRole("dialog", { name: "Go to session", exact: true });

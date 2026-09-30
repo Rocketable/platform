@@ -261,9 +261,12 @@ sort first, keep their normal recent-first order within that group, and do not
 automatically settle. You can still settle them manually. Search `is:pinned` to
 find only pinned sessions, including settled ones; text, agent, and room filters
 still apply. On the Settled page, results remain limited to settled sessions.
-Sidebar text uses the full row width. A **Session actions** button appears on
-hover or keyboard focus (and stays visible on touch screens); open it for
-Rename, Snooze, Pin, and Settle.
+Sidebar text uses the full row width. A **Settle** button and **Session actions**
+menu appear on hover or keyboard focus (and stay visible on touch screens).
+Settle a session in one click; open the menu for Rename, Snooze, and Pin.
+On the Settled page, the menu also offers Unsettle.
+The session age stays visible beside the agent; hover it for the exact
+last-update date and time in your local time zone.
 Use the rename icon beside the pin in the chat to set an optional name. Chat action
 buttons have descriptive tooltips. Add files sits at the far left, before the agent
 selector. On mobile, these and the session actions sit above Steer and Send. The name
