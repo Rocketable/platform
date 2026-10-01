@@ -83,6 +83,8 @@ func projectSessionSummary(summary *protocol.SessionSummary, entry *harness.Sess
 			return err
 		}
 
+		text = strings.ReplaceAll(text, "\x00", "")
+
 		if (role == "user" || role == "assistant") && strings.TrimSpace(text) != "" {
 			summary.LastMessage = text
 		}
@@ -92,6 +94,8 @@ func projectSessionSummary(summary *protocol.SessionSummary, entry *harness.Sess
 	if err != nil {
 		return err
 	}
+
+	delivery = strings.ReplaceAll(delivery, "\x00", "")
 
 	if strings.TrimSpace(delivery) != "" {
 		summary.LastMessage = delivery

@@ -33,7 +33,7 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 	for _, tc := range []struct{ name, raw, want string }{
 		{"envelope", `{"type":"message","role":"user","prompt_header":` + string(headerJSON) + `,"content":` + string(body) + `}`, header + "\n\nbody"},
 		{"legacy", `{"type":"message","role":"user","content":` + string(body) + `}`, header + "\n\n" + header + "\n\nbody"},
-		{"multipart", `{"type":"message","role":"user","content":[{"type":"input_text","text":"part-a"},{"type":"input_text","text":"part-b\u0000"}]}`, "part-apart-b\x00"},
+		{"multipart", `{"type":"message","role":"user","content":[{"type":"input_text","text":"part-a"},{"type":"input_text","text":"part-b\u0000"}]}`, "part-apart-b"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			entry := &harness.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Unix(2, 123456789).UTC(), ReplayInput: []json.RawMessage{json.RawMessage(tc.raw)}}
@@ -44,7 +44,9 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 			require.Equal(t, tc.want, initial[0].LastMessage)
 			// Following appends use only the stored summary.
 			for _, message := range []struct{ role, text, want string }{
-				{"assistant", "answer\x00", "answer\x00"},
+				{"assistant", "answer\x00", "answer"},
+				{"assistant", "\x00", "answer"},
+				{"user", " \x00\n", "answer"},
 				{"user", "latest user", "latest user"},
 				{"developer", "not a visible message", "latest user"},
 				{"user", " \n", "latest user"},
@@ -59,7 +61,7 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 				require.Equal(t, message.want, summaries[0].LastMessage)
 			}
 			// A poisoned old row detects accidental history reads on initialized append/list paths.
-			_, err = service.db.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{' WHERE conversation_id = $1`, tc.name)
+			_, err = service.db.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{"timestamp":false}' WHERE conversation_id = $1`, tc.name)
 			require.NoError(t, err)
 			_, err = service.AppendEntryID(t.Context(), tc.name, &harness.SessionEntry{Timestamp: time.Unix(1, 987654321).UTC()})
 			require.NoError(t, err)
@@ -75,7 +77,7 @@ func TestSessionSummaryBackfillProgressFailureAndResume(t *testing.T) {
 	service := newTestSessionServiceAt(t, workspace)
 	insertSessionEntryWithoutSummary(t, service, "a-private", testSessionEntry("alpha\x00", "answer"))
 	insertSessionEntryWithoutSummary(t, service, "b-empty", &harness.SessionEntry{})
-	_, err := service.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('c-bad', '{', 'invalid')`)
+	_, err := service.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('c-bad', '{"timestamp":false}', 'invalid')`)
 	require.NoError(t, err)
 
 	var before string
@@ -282,7 +284,7 @@ func TestSessionSummaryPairedAppendAndCleanup(t *testing.T) {
 	session := &ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: "managed", Agent: "main"}
 	require.NoError(t, service.RegisterExternalMCPConversation("public", "main", session))
 
-	prefix, err := replayInputForMessage("user", "managed-only")
+	prefix, err := replayInputForMessage("user", "managed-only\x00")
 	require.NoError(t, err)
 	_, err = service.appendExternalMCPEntry(t.Context(), "private", "managed", &harness.SessionEntry{Timestamp: time.Unix(1, 0).UTC()}, prefix)
 	require.NoError(t, err)
@@ -360,7 +362,7 @@ func TestConversationSummaryInitializationRollsBackOnFailure(t *testing.T) {
 
 				switch failure.name {
 				case "orphan decode":
-					_, err = inspection.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{' WHERE conversation_id = 'history'`)
+					_, err = inspection.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{"timestamp":false}' WHERE conversation_id = 'history'`)
 					require.NoError(t, err)
 				case "replay decode":
 					_, err = inspection.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{"replay_input":[{"type":"compaction","content":42}]}' WHERE conversation_id = 'history'`)
@@ -435,7 +437,7 @@ func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing
 				require.NoError(t, service.backfillSessionSummaries(t.Context()))
 			}
 
-			_, err := service.db.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{'`)
+			_, err := service.db.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{"timestamp":false}'`)
 			require.NoError(t, err)
 
 			// Pin the listing pool's session setting; the lock uses a separate connection.
@@ -722,7 +724,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	_, err = service.SetConversationSettled(t.Context(), "Z", true)
 	require.NoError(t, err)
 	// Enumeration must not parse replay even for missing summaries.
-	_, err = service.db.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{'`)
+	_, err = service.db.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{"timestamp":false}'`)
 	require.NoError(t, err)
 
 	var got []SidebarSession
@@ -1001,6 +1003,8 @@ func insertSessionEntryWithoutSummary(t *testing.T, service *SessionService, con
 
 	data, err := json.Marshal(entry)
 	require.NoError(t, err)
+
+	data = removeSessionEntryNUL(data)
 	_, err = service.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, $2, $3)`, conversationID, string(data), entry.Timestamp.UTC().Format(time.RFC3339Nano))
 	require.NoError(t, err)
 }

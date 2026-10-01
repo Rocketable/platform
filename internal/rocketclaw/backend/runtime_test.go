@@ -88,7 +88,7 @@ func TestRuntimeSummaryBackfillLifecycle(t *testing.T) {
 
 			service := newTestSessionServiceAt(t, workspace)
 			historyID := "bad:" + workspace
-			_, err = service.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, '{', $2)`, historyID, time.Now().UTC().Format(time.RFC3339Nano))
+			_, err = service.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ($1, '{"timestamp":false}', $2)`, historyID, time.Now().UTC().Format(time.RFC3339Nano))
 			require.NoError(t, err)
 
 			if mode == "database failure" {

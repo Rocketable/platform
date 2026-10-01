@@ -193,8 +193,8 @@ func TestSessionStoreAppendAndLoad(t *testing.T) {
 func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
 	service := newTestSessionService(t)
 
-	first := testSessionEntry("first", "assistant")
-	second := testSessionEntry("second", "assistant")
+	first := testSessionEntry("first\x00\x00\\\x00\\\\\x00\n\t😀", "assistant")
+	second := testSessionEntry("literal \\u0000", "assistant")
 	second.TokenUsage = &harness.TokenUsage{PromptTokens: 12, CompletionTokens: 5, TotalTokens: 17}
 	id1, err := service.AppendEntryID(context.Background(), "main", first)
 	require.NoError(t, err)
@@ -206,9 +206,18 @@ func TestSessionServiceAppendEntryIDAndObserveEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, observed, 2)
 	assert.Equal(t, id1, observed[0].ID)
-	assert.Equal(t, *first, observed[0].Entry)
+	assert.Equal(t, *testSessionEntry("first\\\\\\\n\t😀", "assistant"), observed[0].Entry)
 	assert.Equal(t, id2, observed[1].ID)
 	assert.Equal(t, *second, observed[1].Entry)
+
+	var columnType string
+	require.NoError(t, service.db.QueryRowContext(t.Context(), `SELECT pg_typeof(entry_json)::text FROM session_entries WHERE id = $1`, id1).Scan(&columnType))
+	require.Equal(t, "json", columnType)
+
+	for _, raw := range []string{`{`, `{"text":"\u0000"}`, `{"text":"\ud800"}`, `{"text":"\udc00"}`} {
+		_, err := service.db.ExecContext(t.Context(), `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('invalid', $1, '')`, raw)
+		require.Error(t, err)
+	}
 }
 
 func TestSessionServiceTurnPairAllowsOnlyOneActiveTurn(t *testing.T) {
@@ -578,18 +587,18 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 18, n)
+	assert.Equal(t, 19, n)
 	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
 	second, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop()) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 18, n)
+	assert.Equal(t, 19, n)
 }
 
 func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
-	for _, prefix := range []int{5, 8, 16, 17} {
+	for _, prefix := range []int{5, 8, 16, 17, 18} {
 		for _, ledger := range []string{"pg_migrations", "gorp_migrations"} {
 			t.Run(fmt.Sprintf("%d/%s", prefix, ledger), func(t *testing.T) {
 				dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
@@ -610,12 +619,17 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 					ALTER TABLE managed_conversations ADD COLUMN settled_override boolean NOT NULL DEFAULT false;
 					ALTER TABLE managed_conversations ADD COLUMN bumped_at_unix_ns bigint NOT NULL DEFAULT 0;
 					INSERT INTO managed_conversations (conversation_id, agent, created_by, settled_override, bumped_at_unix_ns) VALUES ('synthetic', 'main', 'owner', true, 123);
-					INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('synthetic', '{"text":"synthetic\u0000history"}', '2026-09-09T12:00:00.123456Z');
+					INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('synthetic', '{"text":"synthetic\u0000\u0000history","literal":"\\u0000","mixed":"\\\u0000","nested":["\u0000"],"\u0000key":"value"}', '2026-09-09T12:00:00.123456Z');
 					INSERT INTO thread_queue (queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position) VALUES ('q', 'synthetic', 'queued', 'owner', 456, 7)`)
 				require.NoError(t, err)
 
 				if prefix == 8 {
 					_, err = db.ExecContext(t.Context(), `ALTER TABLE thread_queue ALTER COLUMN kind SET DEFAULT ''; UPDATE thread_queue SET kind=''`)
+					require.NoError(t, err)
+				}
+
+				if prefix >= 16 {
+					_, err = db.ExecContext(t.Context(), `INSERT INTO session_summaries (conversation_id, preview, last_updated) VALUES ('synthetic', decode('610062', 'hex'), now()), ('clean', 'valid'::bytea, now())`)
 					require.NoError(t, err)
 				}
 
@@ -625,16 +639,23 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 
 				var count int
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-				require.Equal(t, 18, count)
+				require.Equal(t, 19, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations WHERE applied_at='2026-01-01Z'`).Scan(&count))
 				require.Equal(t, prefix, count)
 
 				for _, query := range []string{
 					`SELECT count(*) FROM managed_conversations WHERE conversation_id='synthetic' AND agent='main' AND created_by='owner' AND NOT settled AND NOT pinned AND snoozed_until IS NULL AND name='' AND forked_from='' AND settled_override AND bumped_at_unix_ns=123`,
-					`SELECT count(*) FROM session_entries WHERE conversation_id='synthetic' AND entry_json='{"text":"synthetic\u0000history"}' AND entry_timestamp='2026-09-09T12:00:00.123456Z'`,
+					`SELECT count(*) FROM session_entries WHERE conversation_id='synthetic' AND entry_json::text='{"text":"synthetichistory","literal":"\\u0000","mixed":"\\","nested":[""],"key":"value"}' AND entry_timestamp='2026-09-09T12:00:00.123456Z'`,
 					`SELECT count(*) FROM thread_queue WHERE queue_item_id='q' AND message='queued' AND principal='owner' AND stash_at_unix_ns=456 AND position=7 AND content='{}'`,
 				} {
 					require.NoError(t, db.QueryRowContext(t.Context(), query).Scan(&count))
+					require.Equal(t, 1, count)
+				}
+
+				if prefix >= 16 {
+					require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM session_summaries WHERE conversation_id = 'synthetic'`).Scan(&count))
+					require.Zero(t, count)
+					require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM session_summaries WHERE conversation_id = 'clean' AND preview = 'valid'::bytea`).Scan(&count))
 					require.Equal(t, 1, count)
 				}
 
@@ -664,7 +685,7 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 18, n)
+	assert.Equal(t, 19, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 

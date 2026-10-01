@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -1315,7 +1316,7 @@ func (s *SessionService) appendExternalMCPEntry(ctx context.Context, privateConv
 		return 0, fmt.Errorf("append managed external MCP session entry: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint, 'sync_source_conversation_id', $3::text))::text WHERE id=$2`, privateID, managedID, privateConversationID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint, 'sync_source_conversation_id', $3::text))::json WHERE id=$2`, privateID, managedID, privateConversationID); err != nil {
 		return 0, fmt.Errorf("record external MCP entry source: %w", err)
 	}
 
@@ -1460,6 +1461,7 @@ func (s *SessionService) commitGoalChange(conversationID, beginLabel, execLabel,
 	defer func() { _ = tx.Rollback() }()
 
 	args := append(append([]any{}, beforeUpdatedAt...), timeUnixNano(time.Now().UTC()))
+
 	args = append(args, afterUpdatedAt...)
 	if _, err = execRows(ctx, tx, execLabel, countLabel, query, args...); err != nil {
 		return GoalState{}, false, err
@@ -1518,11 +1520,22 @@ func (s sessionStore) outID(entry harness.SessionEntry) (int64, error) {
 	return s.service.AppendEntryID(context.Background(), s.conversationID, &entry)
 }
 
+func removeSessionEntryNUL(data []byte) []byte {
+	parts := bytes.Split(data, []byte(`\\`))
+	for i := range parts {
+		parts[i] = bytes.ReplaceAll(parts[i], []byte(`\u0000`), nil)
+	}
+
+	return bytes.Join(parts, []byte(`\\`))
+}
+
 func appendSessionEntryDB(ctx context.Context, db stateStoreDB, conversationID string, entry *harness.SessionEntry) (int64, error) {
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return 0, fmt.Errorf("marshal rocketcode session entry: %w", err)
 	}
+
+	data = removeSessionEntryNUL(data)
 
 	if err := lockSessionHistory(ctx, db, conversationID); err != nil {
 		return 0, err
