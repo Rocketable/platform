@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -295,7 +296,16 @@ func (s *SessionService) UpsertActiveTurn(ctx context.Context, checkpoint *harne
 		return errors.New("active turn conversation ID is required")
 	}
 
-	metadata, err := marshalActiveTurnJSON(sourceMetadata)
+	replayMetadata, err := json.Marshal(harness.SessionEntry{ReasoningEffort: checkpoint.ReasoningEffort, ReplayInputIDs: checkpoint.ReplayInputIDs, ReplayAttribution: checkpoint.ReplayAttribution})
+	if err != nil {
+		return fmt.Errorf("marshal active turn replay metadata: %w", err)
+	}
+
+	metadataFields := make(map[string]string, len(sourceMetadata)+1)
+	maps.Copy(metadataFields, sourceMetadata)
+	metadataFields["replay_metadata"] = string(replayMetadata)
+
+	metadata, err := marshalActiveTurnJSON(metadataFields)
 	if err != nil {
 		return fmt.Errorf("marshal active turn source metadata: %w", err)
 	}
@@ -345,6 +355,21 @@ func (s *SessionService) ClearActiveTurn(ctx context.Context, turnID string) err
 	}
 
 	return nil
+}
+
+// ConversationActiveTurn reads the latest checkpoint for one conversation without
+// performing startup recovery or deleting corrupt data. The caller owns visibility.
+func (s *SessionService) ConversationActiveTurn(ctx context.Context, conversationID string) (ActiveTurnState, bool, error) {
+	turn, err := scanActiveTurn(s.db.QueryRowContext(ctx, `SELECT id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns, pending_steers_json FROM active_turns WHERE conversation_id = $1 ORDER BY updated_at_unix_ns DESC, id LIMIT 1`, conversationID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ActiveTurnState{}, false, nil
+	}
+
+	if err != nil {
+		return ActiveTurnState{}, false, fmt.Errorf("read conversation active turn: %w", err)
+	}
+
+	return turn, true, nil
 }
 
 // RecoverableActiveTurns returns remaining active-turn handoff rows for startup recovery.
@@ -544,6 +569,18 @@ func scanActiveTurn(scanner rowScanner) (ActiveTurnState, error) {
 
 	if turn.SourceMetadata == nil {
 		turn.SourceMetadata = map[string]string{}
+	}
+
+	if raw, ok := turn.SourceMetadata["replay_metadata"]; ok {
+		var entry harness.SessionEntry
+		if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+			return ActiveTurnState{}, activeTurnCorruptError{turnID: turn.Checkpoint.TurnID, conversationID: turn.Checkpoint.ConversationKey, field: "replay metadata", err: err}
+		}
+
+		turn.Checkpoint.ReasoningEffort = entry.ReasoningEffort
+		turn.Checkpoint.ReplayInputIDs = entry.ReplayInputIDs
+		turn.Checkpoint.ReplayAttribution = entry.ReplayAttribution
+		delete(turn.SourceMetadata, "replay_metadata")
 	}
 
 	if strings.TrimSpace(restartNotice) != "" {

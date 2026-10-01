@@ -44,13 +44,13 @@ func TestRocketcodeConfigIncludesMCPServers(t *testing.T) {
 			"demo": {URL: "http://127.0.0.1:9"},
 		},
 	}
-	bridge := NewConversation(cfg, nil, &Config{ConversationID: "c", Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(cfg, discardPublisher{}, &Config{ConversationID: "c", Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
 	rc := bridge.rocketcodeConfig(t.TempDir(), nil, nil)
 	require.Len(t, rc.MCPServers, 1)
 	assert.Equal(t, "http://127.0.0.1:9", rc.MCPServers["demo"].URL)
 	assert.Equal(t, cfg.Workspace, rc.MCPWorkspace)
 
-	empty := NewConversation(&config.Config{Workspace: t.TempDir()}, nil, &Config{ConversationID: "c2", Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
+	empty := NewConversation(&config.Config{Workspace: t.TempDir()}, discardPublisher{}, &Config{ConversationID: "c2", Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: newTestSessionService(t)}, slog.New(slog.DiscardHandler))
 	emptyRC := empty.rocketcodeConfig(t.TempDir(), nil, nil)
 	assert.Nil(t, emptyRC.MCPServers)
 }

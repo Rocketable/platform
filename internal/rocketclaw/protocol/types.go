@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"mime"
@@ -216,6 +217,12 @@ type OutboundMessage struct {
 	WorkflowAgent                      *AgentUpdate
 	WorkflowPhase                      *PhaseUpdate
 	WorkflowTerminal                   Terminal
+	// TranscriptCheckpoint and TranscriptEntry carry serialized RocketCode data,
+	// never connector-rendered progress. EntryID binds the live TurnID to history.
+	TranscriptCheckpoint json.RawMessage
+	TranscriptEntry      json.RawMessage
+	TranscriptEntryID    int64
+	TranscriptTerminal   Terminal
 
 	deliveryInit, deliveredOnce sync.Once
 	delivered                   chan struct{}

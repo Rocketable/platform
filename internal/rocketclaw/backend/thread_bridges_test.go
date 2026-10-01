@@ -170,7 +170,7 @@ func TestThreadBridgeManagerStartsPendingScheduledMessageBridges(t *testing.T) {
 		{ConversationID: protocol.SlackThreadConversationID("D123", "111.222"), Agent: "planner", StartNewThread: inertStartNewThread, SessionService: store},
 		{ConversationID: protocol.SlackThreadConversationID("D123", "333.444"), Agent: "helper", StartNewThread: inertStartNewThread, SessionService: store},
 	} {
-		bridge := NewConversation(&config.Config{Workspace: workspace}, nil, &cfg, slog.New(slog.DiscardHandler))
+		bridge := NewConversation(&config.Config{Workspace: workspace}, discardPublisher{}, &cfg, slog.New(slog.DiscardHandler))
 		require.NoError(t, bridge.Start(t.Context()))
 		require.NoError(t, bridge.ScheduleMessage(time.Hour, "later", false))
 		require.NoError(t, bridge.Stop())
@@ -194,7 +194,7 @@ func TestThreadBridgeManagerSkipsScheduledMessageBridgeDuringActiveTurnRecovery(
 	workspace := t.TempDir()
 	store := newWorkspaceSessionService(t)
 	conversationID := protocol.SlackThreadConversationID("D123", "111.222")
-	bridge := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: conversationID, Agent: "planner", StartNewThread: inertStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(&config.Config{Workspace: workspace}, discardPublisher{}, &Config{ConversationID: conversationID, Agent: "planner", StartNewThread: inertStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
 	require.NoError(t, bridge.Start(t.Context()))
 	require.NoError(t, bridge.ScheduleMessage(time.Hour, "later", false))
 	require.NoError(t, bridge.Stop())
@@ -769,7 +769,7 @@ func TestRecoverActiveTurnEnqueuesPrivateMCPOnDestinationBridge(t *testing.T) {
 		cfg.SessionService = store
 		cfg.StartNewThread = testNoopStartNewThread
 
-		return NewConversation(runtime, nil, &cfg, slog.New(slog.DiscardHandler))
+		return NewConversation(runtime, discardPublisher{}, &cfg, slog.New(slog.DiscardHandler))
 	})
 
 	t.Cleanup(func() { require.NoError(t, manager.Stop()) })

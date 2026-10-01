@@ -1528,56 +1528,29 @@ const SessionList = memo(function SessionList({ settledOnly = false }: { settled
   );
 });
 
-type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; turnId?: string; streamText?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin" | "header">;
+type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; turnId?: string; streamText?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin" | "inputId" | "header" | "phase">;
 type OriginFilter = { sandboxed: boolean; canonical: boolean };
 
-function lineId(role: Line["role"], text: string, seen: Map<string, number>) {
-  const base = `${role}:${text}`;
-  const n = (seen.get(base) ?? 0) + 1;
-  seen.set(base, n);
-  return `${base}:${n}`;
-}
-
-function appendLine(current: Line[], role: Line["role"], text: string, tool: Pick<Line, "toolCallId" | "toolName" | "attachments"> = {}) {
-  const seen = new Map<string, number>();
-  for (const line of current) {
-    seen.set(`${line.role}:${line.text}`, (seen.get(`${line.role}:${line.text}`) ?? 0) + 1);
-  }
-  const rows = role === "thinking" ? text.split("\n").map((row) => row.trim()).filter(Boolean) : [text];
-  return [...current, ...rows.map((row) => ({ id: lineId(role, row, seen), text: row, role, ...(role === "thinking" ? {} : tool) }))];
-}
-
 function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true, canonical: true }) {
-  const turns: { user: Line[]; traces: Line[]; replies: Line[] }[] = [];
-  let current = { user: [] as Line[], traces: [] as Line[], replies: [] as Line[] };
+  const turns = [{ user: [] as Line[], body: [] as Line[][] }];
+  let current = turns[0];
   const calls = new Map<string, Line & { toolParts: Line[] }>();
   const skills = new Map<string, Line & { toolParts: Line[] }>();
-  const flush = () => {
-    if (current.user.length > 0 || current.traces.length > 0 || current.replies.length > 0) {
+  for (const line of lines) {
+    if (line.role === "user" && (current.user.length || current.body.length)) {
+      current = { user: [], body: [] };
       turns.push(current);
-      current = { user: [], traces: [], replies: [] };
       calls.clear();
       skills.clear();
     }
-  };
-  for (const line of lines) {
-    if (line.role === "user") flush();
-    const visible = (filter.sandboxed && filter.canonical)
-      || (line.origin === "sandboxed" && filter.sandboxed)
-      || (line.origin === "canonical" && filter.canonical);
+    const visible = (filter.sandboxed && filter.canonical) || (line.origin === "sandboxed" ? filter.sandboxed : line.origin === "canonical" && filter.canonical);
     if (!visible) continue;
     const resultCall = line.role === "tool" ? calls.get(line.toolCallId ?? "") : undefined;
     const skillHeader = line.text.split("\n", 1)[0];
     const skillCall = line.role === "developer" ? skills.get(skillHeader) : undefined;
     if (line.role === "user") {
       current.user.push(line);
-    } else if (line.role === "assistant") {
-      current.replies.push(line);
-    } else if (line.role === "tool" && line.toolName) {
-      const call = { ...line, toolParts: [] as Line[] };
-      current.traces.push(call);
-      if (line.toolCallId) calls.set(line.toolCallId, call);
-    } else if (resultCall) {
+    } else if (resultCall && !line.toolName) {
       resultCall.toolParts.push(line);
       if (resultCall.toolName === "skill" && line.text.startsWith("skill ") && line.text.endsWith(" loaded")) {
         skills.set(`<skill_content name=${JSON.stringify(line.text.slice(6, -7))}>`, resultCall);
@@ -1586,11 +1559,13 @@ function transcriptTurns(lines: Line[], filter: OriginFilter = { sandboxed: true
       skillCall.toolParts.push(line);
       skills.delete(skillHeader);
     } else {
-      current.traces.push(line);
+      const row = line.toolName ? { ...line, toolParts: [] as Line[] } : line;
+      if (row.toolCallId && row.toolName) calls.set(row.toolCallId, row as Line & { toolParts: Line[] });
+      if (!current.body.length || (current.body.at(-1)![0].role === "assistant") !== (row.role === "assistant")) current.body.push([]);
+      current.body.at(-1)!.push(row);
     }
   }
-  flush();
-  return turns;
+  return turns.filter((turn) => turn.user.length || turn.body.length);
 }
 
 function toolTitle(line: Line) {
@@ -1747,7 +1722,7 @@ function useTranscriptPosition(conversationId: string, lines: Line[], turns: Ret
   const search = useSearch();
   const messageId = conversationId && location.pathname === sessionPath(conversationId) ? new URLSearchParams(search).get("message") : null;
   const targetId = messageId ?? (target?.conversationId === conversationId ? target.message.messageId : null);
-  const targetTurn = targetId ? turns.findIndex((turn) => turn.user.some((line) => line.id === targetId) || turn.replies.some((line) => line.id === targetId)) : -1;
+  const targetTurn = targetId ? turns.findIndex((turn) => [...turn.user, ...turn.body.flat()].some((line) => line.id === targetId)) : -1;
   const seen = useCallback(() => {
     const element = viewport.current;
     if (!element || !identity.isSuccess || !element.getClientRects().length) return;
@@ -1818,19 +1793,18 @@ function TranscriptLog({
       ) : (
         <>
           {turns.map((turn, index) => (
-              <MessageScrollerItem key={turn.user[0]?.id ?? turn.traces[0]?.id ?? turn.replies[0]?.id} messageId={`turn-${index}`} ref={(node) => { turnNodes.current[index] = node; }} role="region" aria-label={`Turn ${index + 1}`} tabIndex={-1}>
+              <MessageScrollerItem key={turn.user[0]?.id ?? turn.body[0]?.[0].id} messageId={`turn-${index}`} ref={(node) => { turnNodes.current[index] = node; }} role="region" aria-label={`Turn ${index + 1}`} tabIndex={-1}>
                 {turn.user.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
-                {turn.traces.length > 0 ? (
-                  <details open className="group pb-3">
+                {turn.body.map((group) => group[0].role === "assistant" ? group.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />) : (
+                  <details key={group[0].id} open className="group pb-3">
                     <summary className="flex w-fit cursor-pointer list-none items-center gap-1 px-1 py-2 text-xs text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden">
                       Thinking <span aria-hidden="true" className="transition-transform group-open:rotate-90">▸</span>
                     </summary>
                     <div className="ml-1 border-l pl-3">
-                      {turn.traces.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
+                      {group.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
                     </div>
                   </details>
-                ) : null}
-                {turn.replies.map((line) => <TranscriptLine key={line.id} line={line} conversationId={conversationId} hasSandboxed={hasSandboxed} />)}
+                ))}
               </MessageScrollerItem>
           ))}
           {thinking ? <MessageScrollerItem><p className="px-1 pb-4 text-sm text-muted-foreground">Thinking…</p></MessageScrollerItem> : null}
@@ -1843,16 +1817,16 @@ function TranscriptLog({
       <nav aria-label="Conversation turns" className="group/rail absolute top-12 bottom-0 right-[6px] flex w-8 items-center justify-end py-3">
         <div role="group" aria-label="Message previews" className="absolute right-full top-1/2 hidden max-h-[calc(100%-1.5rem)] w-[min(20rem,calc(100vw-4rem))] -translate-y-1/2 overflow-y-auto overscroll-contain rounded-md border bg-popover p-1 text-popover-foreground shadow-lg group-hover/rail:block group-focus-within/rail:block">
           {turns.map((turn, index) => {
-            const preview = (turn.user[0]?.text ?? turn.replies[0]?.text ?? "Thinking").replace(/\s+/g, " ").slice(0, 120);
-            return <button key={turn.user[0]?.id ?? turn.traces[0]?.id ?? turn.replies[0]?.id} type="button" aria-label={`Jump to turn ${index + 1}: ${preview}`} className="block w-full rounded-sm px-3 py-2 text-left text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring" onClick={() => jumpToTurn(index)}><span className="line-clamp-2 break-words">{index + 1}. {preview}</span></button>;
+            const preview = (turn.user[0]?.text ?? turn.body.flat().find((line) => line.role === "assistant")?.text ?? "Thinking").replace(/\s+/g, " ").slice(0, 120);
+            return <button key={turn.user[0]?.id ?? turn.body[0]?.[0].id} type="button" aria-label={`Jump to turn ${index + 1}: ${preview}`} className="block w-full rounded-sm px-3 py-2 text-left text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring" onClick={() => jumpToTurn(index)}><span className="line-clamp-2 break-words">{index + 1}. {preview}</span></button>;
           })}
         </div>
         <div className="max-h-full w-8 overflow-y-auto">
           {turns.map((turn, index) => {
-            const preview = (turn.user[0]?.text ?? turn.replies[0]?.text ?? "Thinking").replace(/\s+/g, " ").slice(0, 120);
+            const preview = (turn.user[0]?.text ?? turn.body.flat().find((line) => line.role === "assistant")?.text ?? "Thinking").replace(/\s+/g, " ").slice(0, 120);
             const label = `Turn ${index + 1}: ${preview}`;
             return (
-              <button key={turn.user[0]?.id ?? turn.traces[0]?.id ?? turn.replies[0]?.id} type="button" aria-label={label} className="group flex min-h-6 w-full items-center justify-end rounded-sm text-left text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={() => jumpToTurn(index)}>
+              <button key={turn.user[0]?.id ?? turn.body[0]?.[0].id} type="button" aria-label={label} className="group flex min-h-6 w-full items-center justify-end rounded-sm text-left text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring" onClick={() => jumpToTurn(index)}>
                 <span aria-hidden="true" className="flex w-6 shrink-0 items-center justify-center"><span className="h-0.5 w-2 rounded-full bg-current transition-[width] group-hover:w-4 group-focus-visible:w-4" /></span>
               </button>
             );
@@ -1866,9 +1840,29 @@ function TranscriptLog({
 }
 
 function nextLines(current: Line[], payload: TranscriptEvent): Line[] {
+  const owns = (line: Line) => (!!payload.turnId && line.turnId === payload.turnId) || (!!payload.entryId && payload.entryId !== "0" && line.id.startsWith(`${payload.entryId}:`));
+  if (payload.snapshot && payload.items) {
+    // Whole-turn reconciliation scans rows quadratically; index identities if long turns make that ceiling material.
+    const items = historyLines(payload.items).map((line) => {
+      const prior = current.find((old) => line.role === "user" ? !!line.inputId && old.role === "user" && (old.inputId || old.id) === line.inputId : old.id === line.id);
+      return { ...line, ...(prior && line.role === "user" ? { text: prior.text, id: payload.seed || (payload.entryId && payload.entryId !== "0") ? line.id : prior.id } : {}), attachments: line.attachments?.length ? line.attachments : prior?.attachments, turnId: payload.turnId || line.turnId };
+    });
+    const replaced = (line: Line) => owns(line) || (payload.seed && (/^\d+:/.test(line.id) || (!!line.turnId && !(line.role === "user" && line.inputId)))) || items.some((item) => item.id === line.id || (!!item.inputId && item.inputId === (line.inputId || line.id)));
+    const index = payload.seed ? 0 : current.findIndex(replaced);
+    current = current.filter((line) => !replaced(line)).toSpliced(index < 0 ? current.length : index, 0, ...items);
+    if (!payload.terminal) return current;
+  }
+  if (payload.terminal) {
+    const recorded = current.filter((line) => owns(line) && line.role === "assistant" && line.phase !== "commentary").map((line) => line.text).join("\n");
+    const index = current.findLastIndex((line) => owns(line) && line.role === "assistant" && line.phase !== "commentary" && (!payload.text || line.text === payload.text || recorded === payload.text));
+    if (!payload.text?.trim() && !payload.attachments?.length) return current;
+    if (index >= 0) return current.map((line, i) => i === index ? { ...line, attachments: [...new Map([...(line.attachments ?? []), ...(payload.attachments ?? [])].map((file) => [file.id, file])).values()] } : line);
+    return [...current, ...historyLines([{ ...payload, role: "assistant", messageId: `${payload.turnId || payload.entryId}:delivery` }])];
+  }
   const metadata = Object.fromEntries(Object.entries(payload).filter(([key, value]) => ["agent", "model", "reasoningEffort", "origin", "header"].includes(key) && value !== undefined && (key === "reasoningEffort" || value !== "")));
   if (payload.role === "user" && payload.messageId) {
-    if (current.some((line) => line.id === payload.messageId)) return Object.keys(metadata).length ? current.map((line) => line.id === payload.messageId ? { ...line, ...metadata } : line) : current;
+    const matches = (line: Line) => line.id === payload.messageId || line.inputId === payload.messageId;
+    if (current.some(matches)) return Object.keys(metadata).length ? current.map((line) => matches(line) ? { ...line, ...metadata } : line) : current;
     return [...current, { ...metadata, id: payload.messageId, role: "user", text: payload.text, attachments: payload.attachments }];
   }
   const role = payload.role === "thinking" || payload.role === "user" || payload.role === "tool" || payload.role === "developer" ? payload.role : "assistant";
@@ -1880,8 +1874,8 @@ function nextLines(current: Line[], payload: TranscriptEvent): Line[] {
   const retained = index < 0 ? current : current.filter((line, i) => i <= boundary || !matches(line));
   const attachments = [...new Map([...(current[index]?.attachments ?? []), ...(payload.attachments ?? [])].map((file) => [file.id, file])).values()];
   if (text.trim() === "" && attachments.length === 0) return retained;
-  const added = appendLine(retained, role, text, { toolCallId: payload.toolCallId, toolName: payload.toolName, attachments });
-  const updated = added.slice(retained.length).map((line) => ({ ...current[index], ...line, ...metadata, turnId: payload.turnId, streamText: payload.text }));
+  const rows = role === "thinking" ? text.split("\n").map((row) => row.trim()).filter(Boolean) : [text];
+  const updated = historyLines(rows.map((text) => ({ ...payload, ...metadata, role, text, attachments, toolName: role === "thinking" ? undefined : payload.toolName })), retained).map((line) => ({ ...current[index], ...line, streamText: payload.text }));
   const position = index < 0 ? retained.length : index;
   return [...retained.slice(0, position), ...updated, ...retained.slice(position)];
 }
@@ -1891,12 +1885,14 @@ function applyStreamEvent(
   setBusy: (value: boolean) => void,
   setLines: (update: (current: Line[]) => Line[]) => void,
 ) {
-  if (payload.role === "user" && payload.messageId) {
-    setBusy(true);
-  } else if (payload.complete) {
-    setBusy(false);
-  }
-  setLines((current) => nextLines(current, payload));
+  setLines((current) => {
+    // Replay row IDs contain a colon; optimistic rows retain their input ID until committed.
+    const pending = payload.seed && payload.items && current.some((line) => line.role === "user" && !line.id.includes(":") && (!line.inputId || line.id === line.inputId) && !payload.items!.some((item) => item.inputId === (line.inputId || line.id) || item.messageId === line.id));
+    if (payload.terminal || (!(payload.snapshot && payload.items) && payload.role === "assistant" && payload.complete)) {
+      if (!pending) setBusy(false);
+    } else if ((payload.snapshot && payload.items && payload.turnId) || (payload.role === "user" && payload.messageId)) setBusy(true);
+    return nextLines(current, payload);
+  });
 }
 
 async function readTranscriptHistory(draft: ComposerDraft, request: Promise<TranscriptEvent[]>, onDraftChange: () => void, preserveLive = false) {
@@ -1908,19 +1904,21 @@ async function readTranscriptHistory(draft: ComposerDraft, request: Promise<Tran
     const files = new Map(messages.flatMap((message) => message.attachments ?? []).map((file) => [file.id, file]));
     if (files.size === 0) return messages;
     draft.lines = draft.lines.map((line) => ({ ...line, attachments: line.attachments?.map((file) => files.get(file.id) ?? file) }));
-    onDraftChange();
   } else {
     draft.lines = historyLines(messages);
-    onDraftChange();
   }
+  onDraftChange();
   return messages;
 }
 
-function historyLines(messages: TranscriptEvent[]): Line[] {
+function historyLines(messages: TranscriptEvent[], current: Line[] = []): Line[] {
   const seen = new Map<string, number>();
+  for (const line of current) seen.set(`${line.role}:${line.text}`, (seen.get(`${line.role}:${line.text}`) ?? 0) + 1);
   return messages.map((message) => {
     const role = message.role === "thinking" || message.role === "user" || message.role === "tool" || message.role === "developer" ? message.role : "assistant";
-    return { ...message, id: message.messageId || lineId(role, message.text, seen), role };
+    const base = `${role}:${message.text}`;
+    seen.set(base, (seen.get(base) ?? 0) + 1);
+    return { ...message, id: message.messageId || `${base}:${seen.get(base)}`, role };
   });
 }
 
@@ -1942,22 +1940,32 @@ function useSessionStream(id: string, draft: ComposerDraft, onDraftChange: () =>
     if (!id || !historyReady) return;
     const stream = new EventSource(`/stream?${new URLSearchParams({ id })}`);
     let connected = false;
+    let fragments = "";
     stream.onopen = () => {
+      fragments = "";
       if (connected) void reconnectHistory();
       connected = true;
     };
+    stream.onerror = () => { fragments = ""; };
     stream.onmessage = (event) => {
-      const payload = JSON.parse(String(event.data)) as TranscriptEvent;
-      if (payload.role === "user" && payload.messageId) {
-        if (draft.consumed?.has(payload.messageId)) {
-          setLines((current) => nextLines(current, payload));
-          return;
-        }
-        (draft.consumed ??= new Set()).add(payload.messageId);
-        draft.parked = draft.parked?.filter((line) => line.id !== payload.messageId);
+      let payload = JSON.parse(String(event.data)) as TranscriptEvent;
+      if (payload.snapshotId) {
+        fragments = (payload.fragmentIndex === 0 ? "" : fragments) + payload.fragment;
+        if (!payload.snapshotEnd) return;
+        payload = JSON.parse(fragments) as TranscriptEvent;
+        fragments = "";
+      }
+      const ids = payload.snapshot && payload.items ? payload.items.flatMap((item) => item.inputId ? [item.inputId] : []) : payload.role === "user" && payload.messageId ? [payload.consumedId || payload.messageId] : [];
+      const duplicateInput = ids.length > 0 && ids.every((inputId) => draft.consumed?.has(inputId));
+      for (const inputId of ids) {
+        if (draft.consumed?.has(inputId)) continue;
+        (draft.consumed ??= new Set()).add(inputId);
+        if (payload.snapshot && payload.items) draft.lines = [...draft.lines, ...(draft.parked?.filter((line) => line.id === inputId) ?? [])];
+        draft.parked = draft.parked?.filter((line) => line.id !== inputId);
         void queryClient.invalidateQueries({ queryKey: ["queue"] });
       }
-      applyStreamEvent(payload, setBusy, setLines);
+      if (duplicateInput && !(payload.snapshot && payload.items)) setLines((current) => nextLines(current, payload));
+      else applyStreamEvent(payload, setBusy, setLines);
     };
     return () => {
       stream.close();
@@ -2123,9 +2131,7 @@ async function sendComposer(input: {
       (draft.consumed ??= new Set()).add(optimistic.id);
       input.onDraftChange();
     }
-    if (privateText) {
-      input.setLines((current) => appendLine(current, "assistant", privateText));
-    }
+    if (privateText) input.setLines((current) => nextLines(current, { role: "assistant", text: privateText, turnId: "", snapshot: false, complete: true }));
     if ((privateText || stopping) && draft.submission === submission) {
       input.setBusy(false);
     }

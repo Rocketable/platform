@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -106,12 +107,15 @@ func (b *Bridge) syncConversation(ctx context.Context, source *Bridge) error {
 		return err
 	}
 
-	changed := false
+	var transcripts []*protocol.OutboundMessage
 
 	schedules := map[string]protocol.ScheduledMessageState{}
 
 	for i := range entries {
 		observed := &entries[i]
+		if observed.Synced && observed.SourceConversationID == "" {
+			continue
+		}
 
 		producer := observed.SourceConversationID
 		if !observed.Synced {
@@ -128,18 +132,25 @@ func (b *Bridge) syncConversation(ctx context.Context, source *Bridge) error {
 			return fmt.Errorf("encode synced entry: %w", err)
 		}
 
-		added, err := execRows(ctx, tx, "insert synced entry", "count synced entries", `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
-SELECT $1, ($2::jsonb || jsonb_build_object('sync_source_entry_id', $3::bigint, 'sync_source_conversation_id', $5::text))::text, $4
-WHERE NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1 AND entry_json::jsonb->>'sync_source_entry_id' = $3::text)`, b.config.ConversationID, string(data), observed.ID, entry.Timestamp.UTC().Format(time.RFC3339Nano), producer)
-		if err != nil {
-			return err
-		}
+		var entryID int64
 
-		if added == 0 {
+		err = tx.QueryRowContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
+SELECT $1, ($2::jsonb || jsonb_build_object('sync_source_entry_id', $3::bigint, 'sync_source_conversation_id', $5::text))::text, $4
+WHERE NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1 AND entry_json::jsonb->>'sync_source_entry_id' = $3::text)
+RETURNING id`, b.config.ConversationID, string(data), observed.ID, entry.Timestamp.UTC().Format(time.RFC3339Nano), producer).Scan(&entryID)
+		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
 
-		changed = true
+		if err != nil {
+			return fmt.Errorf("insert synced entry: %w", err)
+		}
+
+		message := protocol.NewOutboundMessage(b.config.ConversationID, "")
+		message.SourceConversationID = producer
+		message.Agent, message.Model, message.ReasoningEffort = entry.Agent, entry.Model, protocol.Clone(entry.ReasoningEffort)
+		message.TranscriptEntry, message.TranscriptEntryID = data, entryID
+		transcripts = append(transcripts, message)
 
 		if err := projectSessionSummary(&summary, &entry, entry.Timestamp.UTC().Format(time.RFC3339Nano)); err != nil {
 			return err
@@ -169,7 +180,7 @@ WHERE NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1 AND e
 		}
 	}
 
-	if changed {
+	if len(transcripts) > 0 {
 		if err := saveSessionSummary(ctx, tx, summary); err != nil {
 			return err
 		}
@@ -183,6 +194,10 @@ snoozed_until = NULL WHERE conversation_id = $1`, b.config.ConversationID); err 
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit conversation sync: %w", err)
+	}
+
+	for _, message := range transcripts {
+		b.publishTranscript(ctx, message)
 	}
 
 	for id, scheduled := range schedules {
@@ -377,7 +392,7 @@ func (b *Bridge) drainSteers(ctx context.Context, phase rocketcode.TurnPhase) []
 		header, _, _ := strings.Cut(prompt, "\n\n")
 		b.publishConsumed(ctx, request.inbound, header)
 		directSkill := inboundDirectSkill(request.inbound)
-		inputs = append(inputs, rocketcode.PromptInput{Text: prompt, Header: header, Attachments: attachmentsFromInbound(request.inbound.Attachments), DirectSkill: directSkill})
+		inputs = append(inputs, rocketcode.PromptInput{MessageID: request.inbound.Metadata["web_message_id"], Text: prompt, Header: header, Attachments: attachmentsFromInbound(request.inbound.Attachments), DirectSkill: directSkill})
 	}
 
 	return inputs

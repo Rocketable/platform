@@ -207,7 +207,7 @@ func TestCrossProviderRepeatedRecoveryCheckpointKeepsProjectedBytes(t *testing.T
 
 	sink := new(captureCheckpointSink)
 	recheckpoint := &rocketcode.ActiveTurnCheckpoint{DisplayModel: "work/gpt", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"continue"}`)}}
-	require.NoError(t, sink.RecordRecoveredReplay(t.Context(), withRecoveredReplay(recheckpoint, recovered, nil)))
+	require.NoError(t, sink.RecordRecoveredReplay(t.Context(), withRecoveredReplay(recheckpoint, &rocketcode.SessionEntry{ReplayInput: recovered})))
 	require.Len(t, sink.checkpoints, 1)
 	want := slices.Clone(sink.checkpoints[0].ReplayInput)
 
@@ -289,15 +289,18 @@ func TestReplayForProviderValidatesRequiredKnownFields(t *testing.T) {
 func TestRecoveredAttributionSurvivesProviderProjection(t *testing.T) {
 	var checkpoint rocketcode.ActiveTurnCheckpoint
 	require.NoError(t, json.Unmarshal([]byte(`{"display_model":"work/model-b","agent":"new","reasoning_effort":"low","replay_input":[{"type":"reasoning","encrypted_content":"opaque"},{"type":"message","role":"user","prompt_header":"[Slack]","content":"[Slack]\n\nold question"},{"type":"message","role":"assistant","content":"new answer"}],"replay_attribution":[{"start":0,"end":2,"agent":"old","model":"work/model-a","reasoning_effort":"high"}]}`), &checkpoint))
+	checkpoint.ReplayInputIDs = map[string]int{"removed": 0, "old": 1, "new": 2}
 	projected, err := activeTurnForProvider(&checkpoint, "other")
 	require.NoError(t, err)
 	data, err := json.Marshal(projected)
 	require.NoError(t, err)
 	require.Contains(t, string(data), `"replay_attribution":[{"start":0,"end":1,"agent":"old","model":"work/model-a","reasoning_effort":"high"}]`)
 	require.Len(t, projected.ReplayInput, 2)
+	require.Equal(t, map[string]int{"old": 0, "new": 1}, projected.ReplayInputIDs)
+	require.Equal(t, map[string]int{"removed": 0, "old": 1, "new": 2}, checkpoint.ReplayInputIDs)
 	require.Contains(t, string(projected.ReplayInput[0]), `"prompt_header":"[Slack]"`)
 	old := projected.ReplayAttribution
-	resumed := withRecoveredReplay(&rocketcode.ActiveTurnCheckpoint{Agent: "latest", DisplayModel: "model-c", ReasoningEffort: new("medium"), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"latest answer"}`)}}, projected.ReplayInput, append(old, rocketcode.ReplayAttribution{End: 2, Agent: projected.Agent, Model: projected.DisplayModel, ReasoningEffort: projected.ReasoningEffort}))
+	resumed := withRecoveredReplay(&rocketcode.ActiveTurnCheckpoint{Agent: "latest", DisplayModel: "model-c", ReasoningEffort: new("medium"), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"latest answer"}`)}}, &rocketcode.SessionEntry{ReplayInput: projected.ReplayInput, ReplayAttribution: append(old, rocketcode.ReplayAttribution{End: 2, Agent: projected.Agent, Model: projected.DisplayModel, ReasoningEffort: projected.ReasoningEffort})})
 	require.Equal(t, 1, projected.ReplayAttribution[0].End)
 	entry := rocketcode.SessionEntry{Agent: resumed.Agent, Model: resumed.DisplayModel, ReasoningEffort: resumed.ReasoningEffort, ReplayInput: resumed.ReplayInput, ReplayAttribution: resumed.ReplayAttribution}
 	require.Equal(t, "work/model-a", entry.AttributionAt(0).Model)
@@ -308,7 +311,7 @@ func TestRecoveredAttributionSurvivesProviderProjection(t *testing.T) {
 	require.Equal(t, "work/model-a", managed.AttributionAt(1).Model)
 	require.Contains(t, string(managed.ReplayInput[1]), `"prompt_header":"[Slack]"`)
 
-	unknown := withRecoveredReplay(&rocketcode.ActiveTurnCheckpoint{ReplayInput: entry.ReplayInput[2:]}, entry.ReplayInput[:1], []rocketcode.ReplayAttribution{{End: 1}})
+	unknown := withRecoveredReplay(&rocketcode.ActiveTurnCheckpoint{ReplayInput: entry.ReplayInput[2:]}, &rocketcode.SessionEntry{ReplayInput: entry.ReplayInput[:1], ReplayAttribution: []rocketcode.ReplayAttribution{{End: 1}}})
 	entry.ReplayAttribution = unknown.ReplayAttribution
 	require.Empty(t, entry.AttributionAt(0).Model)
 	require.Nil(t, entry.AttributionAt(0).ReasoningEffort)

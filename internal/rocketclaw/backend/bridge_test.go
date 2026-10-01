@@ -121,6 +121,7 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 	require.Len(t, inputs, 2)
 
 	for i := range inputs {
+		require.Equal(t, []string{"steer-first", "steer-second"}[i], inputs[i].MessageID)
 		require.Equal(t, buildPrompt(initial, nil), inputs[i].Text, "identity metadata must not change prompt framing")
 		require.NotContains(t, inputs[i].Text, "steer-")
 	}
@@ -162,6 +163,7 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 	inputs = bridge.drainSteers(t.Context(), rocketcode.TurnPhaseFinalAnswer)
 	require.Len(t, inputs, 1)
 	require.Equal(t, buildPrompt(initial, nil), inputs[0].Text)
+	require.Equal(t, "initial", inputs[0].MessageID)
 	require.Contains(t, logged.String(), "publish consumed web input")
 	require.Contains(t, logged.String(), "test publisher closed")
 	require.Empty(t, bridge.drainSteers(t.Context(), rocketcode.TurnPhaseFinalAnswer))
@@ -545,7 +547,7 @@ func TestRecoveredExternalMCPActiveTurnSecondCheckpointPreservesSourceMetadata(t
 	}
 
 	metadata := bridge.activeTurnSourceMetadata(msg)
-	sink := activeTurnCheckpointSink{store: store, conversationID: "external_mcp:planner:private", sourceMetadata: metadata}
+	sink := activeTurnCheckpointSink{store: store, bridge: &Bridge{bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}, conversationID: "external_mcp:planner:private", sourceMetadata: metadata}
 	checkpoint := &rocketcode.ActiveTurnCheckpoint{TurnID: "turn-1", Agent: "planner", Model: "gpt-5.5", DisplayModel: "gpt-5.5"}
 	require.NoError(t, sink.StartActiveTurn(context.Background(), checkpoint))
 	checkpoint.ResponseID = "resp-1"
@@ -587,7 +589,7 @@ func TestRecoveredGoalActiveTurnSecondCheckpointPreservesAccountingLabel(t *test
 			msg.Metadata[recoveredTurnMetadataKey] = "true"
 
 			metadata := bridge.activeTurnSourceMetadata(msg)
-			sink := activeTurnCheckpointSink{store: store, conversationID: "thread-1", sourceMetadata: metadata}
+			sink := activeTurnCheckpointSink{store: store, bridge: &Bridge{bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}, conversationID: "thread-1", sourceMetadata: metadata}
 			checkpoint := &rocketcode.ActiveTurnCheckpoint{TurnID: "turn-1", Agent: "planner", Model: "gpt-5.5", DisplayModel: "gpt-5.5"}
 			require.NoError(t, sink.StartActiveTurn(context.Background(), checkpoint))
 			checkpoint.ResponseID = "resp-1"
@@ -880,12 +882,18 @@ func TestInterruptActiveWorkflowCancelsWithoutSignalChannel(t *testing.T) {
 
 func TestActiveTurnCheckpointSinkMapsLifecycleToSessionService(t *testing.T) {
 	store := newTestSessionService(t)
+	bus := newTestBus()
+
+	var logged bytes.Buffer
+
 	sink := activeTurnCheckpointSink{
 		store:          store,
+		bridge:         &Bridge{bus: bus, log: slog.New(slog.NewTextHandler(&logged, nil))},
+		turnID:         "execution-1",
 		conversationID: "external_mcp:planner:private",
-		sourceMetadata: map[string]string{"source": "external_mcp", "external_conversation_id": "public-1"},
+		sourceMetadata: map[string]string{"source": "external_mcp", "external_conversation_id": "public-1", "execution_turn_id": "previous-execution", "execution_terminal": "failed"},
 	}
-	checkpoint := &rocketcode.ActiveTurnCheckpoint{TurnID: "turn-1", Agent: "planner", Model: "gpt-5.5", DisplayModel: "gpt-5.5"}
+	checkpoint := &rocketcode.ActiveTurnCheckpoint{TurnID: "turn-1", Agent: "planner", Model: "gpt-5.5", DisplayModel: "gpt-5.5", ReasoningEffort: new("high"), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"same text"}`)}, ReplayInputIDs: map[string]int{"web-first": 0}, ReplayAttribution: []rocketcode.ReplayAttribution{{End: 1, Agent: "old", Model: "work/old", ReasoningEffort: new("low")}}}
 
 	require.NoError(t, sink.StartActiveTurn(context.Background(), checkpoint))
 	checkpoint.ResponseID = "resp-1"
@@ -897,7 +905,45 @@ func TestActiveTurnCheckpointSinkMapsLifecycleToSessionService(t *testing.T) {
 	require.Len(t, turns, 1)
 	assert.Equal(t, "external_mcp:planner:private", turns[0].Checkpoint.ConversationKey)
 	assert.Equal(t, "public-1", turns[0].SourceMetadata["external_conversation_id"])
+	require.Equal(t, sink.turnID, turns[0].SourceMetadata["execution_turn_id"], "recovery must replace the previous live execution identity")
 	assert.Equal(t, "resp-1", turns[0].Checkpoint.ResponseID)
+	require.Equal(t, checkpoint.ReasoningEffort, turns[0].Checkpoint.ReasoningEffort)
+	require.Equal(t, checkpoint.ReplayInputIDs, turns[0].Checkpoint.ReplayInputIDs)
+	require.Equal(t, checkpoint.ReplayAttribution, turns[0].Checkpoint.ReplayAttribution)
+
+	for i := range 3 {
+		message := <-bus.outbound
+		require.Equal(t, "execution-1", message.TurnID)
+		require.Equal(t, "external_mcp:planner:private", message.ConversationID)
+		require.Empty(t, message.TranscriptTerminal)
+
+		var snapshot rocketcode.ActiveTurnCheckpoint
+		require.NoError(t, json.Unmarshal(message.TranscriptCheckpoint, &snapshot))
+
+		if i == 0 {
+			require.Empty(t, snapshot.ResponseID, "later mutation must not change an earlier snapshot")
+		} else {
+			require.Equal(t, checkpoint, &snapshot)
+		}
+	}
+
+	bus.Close()
+
+	checkpoint.ResponseID = "persisted-despite-observer"
+	require.NoError(t, sink.RecordProviderResponse(t.Context(), checkpoint))
+	turns, err = store.RecoverableActiveTurns(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, checkpoint.ResponseID, turns[0].Checkpoint.ResponseID)
+	require.Contains(t, logged.String(), "publish transcript update")
+	require.Contains(t, logged.String(), "test publisher closed")
+
+	_, err = store.db.ExecContext(t.Context(), `ALTER TABLE active_turns ADD CONSTRAINT reject_new_checkpoint CHECK (response_id <> 'reject') NOT VALID`)
+	require.NoError(t, err)
+
+	checkpoint.ResponseID = "reject"
+
+	require.ErrorContains(t, sink.RecordProviderResponse(t.Context(), checkpoint), "reject_new_checkpoint")
+	require.Empty(t, bus.outbound, "failed persistence must not publish")
 
 	require.NoError(t, sink.ClearCompletedTurn(context.Background(), "turn-1"))
 	turns, err = store.RecoverableActiveTurns(context.Background())
@@ -906,22 +952,38 @@ func TestActiveTurnCheckpointSinkMapsLifecycleToSessionService(t *testing.T) {
 }
 
 func TestRecoveredActiveTurnCheckpointSinkPreservesRecoveredReplay(t *testing.T) {
-	recoveredReplay := []json.RawMessage{json.RawMessage(`{"type":"message","role":"developer","content":"interrupted transcript"}`)}
+	recoveredReplay := []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"continue"}`)}
 	sink := &captureCheckpointSink{}
 	checkpoint := &rocketcode.ActiveTurnCheckpoint{
 		TurnID:      "turn-2",
 		ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"continue"}`)},
 	}
-	require.NoError(t, sink.RecordProviderResponse(context.Background(), withRecoveredReplay(checkpoint, recoveredReplay, nil)))
+	recovered := rocketcode.SessionEntry{ReplayInput: recoveredReplay, ReplayInputIDs: map[string]int{"old-web": 0}}
+	checkpoint.ReplayInputIDs = map[string]int{"new-web": 0}
+	require.NoError(t, sink.RecordProviderResponse(context.Background(), withRecoveredReplay(checkpoint, &recovered)))
 
 	require.Len(t, sink.checkpoints, 1)
-	assert.JSONEq(t, `{"type":"message","role":"developer","content":"interrupted transcript"}`, string(sink.checkpoints[0].ReplayInput[0]))
+	require.Len(t, sink.checkpoints[0].ReplayInput, 2, "distinct recovered and current inputs must not collapse by identical text")
+	assert.JSONEq(t, `{"type":"message","role":"user","content":"continue"}`, string(sink.checkpoints[0].ReplayInput[0]))
 	assert.JSONEq(t, `{"type":"message","role":"user","content":"continue"}`, string(sink.checkpoints[0].ReplayInput[1]))
 	assert.JSONEq(t, `{"type":"message","role":"user","content":"continue"}`, string(checkpoint.ReplayInput[0]))
+	require.Equal(t, map[string]int{"old-web": 0, "new-web": 1}, sink.checkpoints[0].ReplayInputIDs)
+	require.Equal(t, map[string]int{"new-web": 0}, checkpoint.ReplayInputIDs)
 
-	require.NoError(t, sink.RecordCompletedToolOutput(context.Background(), withRecoveredReplay(sink.checkpoints[0], recoveredReplay, nil)))
+	require.NoError(t, sink.RecordCompletedToolOutput(context.Background(), withRecoveredReplay(sink.checkpoints[0], &recovered)))
 	require.Len(t, sink.checkpoints, 2)
 	assert.Len(t, sink.checkpoints[1].ReplayInput, 2)
+
+	bus := newTestBus()
+	persisted := &activeTurnCheckpointSink{store: newTestSessionService(t), bridge: &Bridge{bus: bus, log: slog.New(slog.DiscardHandler)}, conversationID: "recovered", recovered: recovered}
+	compacted := &rocketcode.ActiveTurnCheckpoint{TurnID: "turn-2", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"compaction","encrypted_content":"opaque"}`), checkpoint.ReplayInput[0]}, ReplayInputIDs: map[string]int{"new-web": 1}}
+	require.NoError(t, persisted.RecordProviderResponse(t.Context(), compacted))
+
+	var snapshot rocketcode.ActiveTurnCheckpoint
+	require.NoError(t, json.Unmarshal((<-bus.outbound).TranscriptCheckpoint, &snapshot))
+	require.Equal(t, compacted.ReplayInput, snapshot.ReplayInput, "compaction replaces recovered replay rather than prepending obsolete items")
+	require.Equal(t, compacted.ReplayInputIDs, snapshot.ReplayInputIDs)
+	require.Empty(t, persisted.recovered.ReplayInput, "session append must use the same replacement semantics")
 }
 
 type captureCheckpointSink struct {
@@ -3068,7 +3130,7 @@ func TestBridgeResetScheduledMessagesDeletesPersistedAndCancelsArmed(t *testing.
 
 		logger := slog.New(slog.NewJSONHandler(&logs, nil))
 		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
-		bridge := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: conversationID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, logger)
+		bridge := NewConversation(&config.Config{Workspace: workspace}, discardPublisher{}, &Config{ConversationID: conversationID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, logger)
 		bridge.requestCh = make(chan bridgeRequest, 1)
 		bridge.stopCh = make(chan struct{})
 
@@ -3224,14 +3286,14 @@ func TestBridgeRestoresScheduledMessageAfterRestart(t *testing.T) {
 
 		conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 
-		first := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: conversationID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
+		first := NewConversation(&config.Config{Workspace: workspace}, discardPublisher{}, &Config{ConversationID: conversationID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
 		require.NoError(t, first.Start(t.Context()))
 		require.NoError(t, first.ScheduleMessage(5*time.Second, "later", false))
 		require.NoError(t, first.Stop())
 
 		var logs bytes.Buffer
 
-		second := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: conversationID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.NewJSONHandler(&logs, nil)))
+		second := NewConversation(&config.Config{Workspace: workspace}, discardPublisher{}, &Config{ConversationID: conversationID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.NewJSONHandler(&logs, nil)))
 		second.requestCh = make(chan bridgeRequest, 1)
 		second.stopCh = make(chan struct{})
 		messages, err := store.ScheduledMessages()
@@ -3329,8 +3391,8 @@ func TestHandleRecoveredRequestReleasesPairedStartupHold(t *testing.T) {
 	require.True(t, store.startupRecoveryBlocks(destID))
 
 	workspace := t.TempDir()
-	private := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: privateID, Agent: "planner", RecoveringActiveTurn: true, AgentAfterRecovery: "planner", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
-	dest := NewConversation(&config.Config{Workspace: workspace}, nil, &Config{ConversationID: destID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
+	private := NewConversation(&config.Config{Workspace: workspace}, discardPublisher{}, &Config{ConversationID: privateID, Agent: "planner", RecoveringActiveTurn: true, AgentAfterRecovery: "planner", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
+	dest := NewConversation(&config.Config{Workspace: workspace}, discardPublisher{}, &Config{ConversationID: destID, Agent: "main", StartNewThread: testNoopStartNewThread, SessionService: store}, slog.New(slog.DiscardHandler))
 	dest.handleRecoveredRequest(t.Context(), &bridgeRequest{producer: private, activeTurn: &ActiveTurnState{Checkpoint: rocketcode.ActiveTurnCheckpoint{TurnID: "old-turn", ConversationKey: privateID, Agent: "planner", ReplayInput: []json.RawMessage{json.RawMessage("{")}}}})
 	assert.False(t, store.startupRecoveryBlocks(privateID))
 	assert.False(t, store.startupRecoveryBlocks(destID))
@@ -4467,6 +4529,7 @@ func TestRunTurnWritesActiveTurnBeforeProviderAndClearsAfterSessionAppend(t *tes
 	t.Cleanup(func() { require.NoError(t, service.Stop()) })
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
+	bus := newTestBus()
 
 	var errRequest error
 
@@ -4492,12 +4555,14 @@ func TestRunTurnWritesActiveTurnBeforeProviderAndClearsAfterSessionAppend(t *tes
 			assert.NotEmpty(t, turns[0].Checkpoint.ReplayInput)
 		}
 
+		assert.Len(t, bus.outbound, 1, "persisted starting input must be published before the provider request")
+
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"resp_1","object":"response","created_at":0,"status":"completed","model":"gpt-5.5","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]}`))
 	}))
 	t.Cleanup(server.Close)
 
-	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: discardPublisher{}, log: slog.New(slog.DiscardHandler)}
+	bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: conversationID, Agent: "main", SessionService: service}, bus: bus, log: slog.New(slog.DiscardHandler)}
 	msg := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "", "hello", true)
 	msg.ConversationID = conversationID
 	msg.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}
@@ -4506,6 +4571,7 @@ func TestRunTurnWritesActiveTurnBeforeProviderAndClearsAfterSessionAppend(t *tes
 	require.NoError(t, err)
 	require.NoError(t, errRequest)
 	assert.Equal(t, "ok", result.text)
+	require.Len(t, bus.outbound, 3, "start replay, provider replay, and ordinary compact answer")
 
 	entries, err := service.ObserveEntries(context.Background(), conversationID)
 	require.NoError(t, err)
@@ -4514,6 +4580,123 @@ func TestRunTurnWritesActiveTurnBeforeProviderAndClearsAfterSessionAppend(t *tes
 	turns, err := service.RecoverableActiveTurns(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, turns)
+}
+
+func TestBridgeTranscriptTerminalLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		name, output, status, text string
+		terminal                   protocol.Terminal
+	}{
+		{name: "answer", output: `[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}]`, status: "completed", text: "ok" + "\n" + "ok", terminal: protocol.TerminalComplete},
+		{name: "silent", output: `[]`, status: "completed", terminal: protocol.TerminalComplete},
+		{name: "failed", output: `[]`, status: "failed", terminal: protocol.TerminalFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			writeAgent(t, workspace, "main", "---\ndescription: Main\nmode: primary\nmodel: gpt-5.5\nreasoningEffort: high\npermission: {}\n---\nPrompt\n")
+			service := newTestSessionServiceAt(t, workspace)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprintf(w, `{"id":"resp_1","object":"response","status":%q,"model":"gpt-5.5","output":%s,"error":{"code":"invalid_prompt","message":"failed request"}}`, tc.status, tc.output)
+			}))
+			t.Cleanup(server.Close)
+
+			bus := new(Runtime)
+			events := bus.Subscribe(t.Context())
+
+			var logged bytes.Buffer
+
+			bridge := &Bridge{runtime: &config.Config{Workspace: workspace, OpenAI: config.OpenAIConfig{APIBaseURL: server.URL}}, config: Config{ConversationID: "terminal", Agent: "main", SessionService: service}, bus: bus, log: slog.New(slog.NewTextHandler(&logged, nil)), inputOpen: true, requestCh: make(chan bridgeRequest, 1)}
+			msg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "", "hello", true)
+			msg.Metadata = map[string]string{"web_message_id": "web-start"}
+
+			if tc.name == "answer" {
+				for _, id := range []string{"web-first", "web-second"} {
+					steer := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindSteer, "", "hello", true)
+					steer.Metadata = map[string]string{"web_message_id": id}
+					require.NoError(t, bridge.Submit(t.Context(), steer))
+				}
+			}
+
+			var group errgroup.Group
+			group.Go(func() error { return bridge.handleInbound(t.Context(), &bridgeRequest{inbound: msg}) })
+
+			var terminal *protocol.OutboundMessage
+
+			var last rocketcode.ActiveTurnCheckpoint
+
+			for event := range events {
+				message := event.Message
+				if len(message.TranscriptCheckpoint) > 0 && message.TranscriptTerminal == "" {
+					require.NoError(t, json.Unmarshal(message.TranscriptCheckpoint, &last))
+					require.Equal(t, 0, last.ReplayInputIDs["web-start"])
+				}
+
+				if message.TranscriptTerminal != "" {
+					terminal = message
+				}
+
+				if len(message.TranscriptCheckpoint) > 0 || message.TranscriptTerminal != "" {
+					event.Acknowledgement <- errors.New("transcript observer failed")
+				} else {
+					event.Acknowledgement <- nil
+				}
+
+				if message.Complete {
+					require.Equal(t, terminal.TranscriptEntryID, message.TranscriptEntryID, "ordinary delivery retains the stored identity for reconnect suppression")
+					break
+				}
+			}
+
+			err := group.Wait()
+			if tc.terminal == protocol.TerminalFailed {
+				require.ErrorContains(t, err, "failed request")
+			} else {
+				require.NoError(t, err)
+			}
+
+			require.NotNil(t, terminal)
+			require.Contains(t, logged.String(), "publish transcript update")
+
+			if tc.name == "answer" {
+				require.Equal(t, map[string]int{"web-start": 0, "web-first": 2, "web-second": 3}, last.ReplayInputIDs, "observer failures must not prevent identical accepted steers from reaching the next provider request")
+			}
+
+			require.Equal(t, tc.terminal, terminal.TranscriptTerminal)
+			require.False(t, terminal.Complete)
+			require.Nil(t, terminal.SlackReply)
+			require.NotEmpty(t, terminal.TurnID)
+			require.Equal(t, "terminal", terminal.SourceConversationID)
+			require.Equal(t, "main", terminal.Agent)
+			require.Equal(t, "openai/gpt-5.5", terminal.Model)
+			require.Equal(t, new("high"), terminal.ReasoningEffort)
+
+			var snapshot rocketcode.ActiveTurnCheckpoint
+			require.NoError(t, json.Unmarshal(terminal.TranscriptCheckpoint, &snapshot))
+			require.Equal(t, last, snapshot)
+			entries, err := service.ObserveEntries(t.Context(), "terminal")
+			require.NoError(t, err)
+
+			if tc.terminal == protocol.TerminalFailed {
+				require.Empty(t, entries)
+				require.Zero(t, terminal.TranscriptEntryID)
+				retained, found, err := service.ConversationActiveTurn(t.Context(), "terminal")
+				require.NoError(t, err)
+				require.True(t, found, "failure keeps its restart handoff")
+				require.Equal(t, "failed", retained.SourceMetadata["execution_terminal"])
+				require.Equal(t, terminal.TurnID, retained.SourceMetadata["execution_turn_id"])
+			} else {
+				require.Len(t, entries, 1)
+				require.Equal(t, entries[0].ID, terminal.TranscriptEntryID)
+
+				var entry rocketcode.SessionEntry
+				require.NoError(t, json.Unmarshal(terminal.TranscriptEntry, &entry))
+				require.Equal(t, entries[0].Entry, entry)
+				require.Equal(t, last.ReplayInput, entry.ReplayInput)
+				require.Equal(t, tc.text, terminal.Text)
+			}
+		})
+	}
 }
 
 func TestInterruptActiveTurnClearsRecoverableCheckpoint(t *testing.T) {
@@ -4543,8 +4726,14 @@ func TestInterruptActiveTurnClearsRecoverableCheckpoint(t *testing.T) {
 
 	delivered := make(chan struct{})
 
+	var terminal *protocol.OutboundMessage
+
 	go func() {
 		for outbound := range bus.Outbound(t.Context()) {
+			if outbound.TranscriptTerminal != "" {
+				terminal = outbound
+			}
+
 			outbound.MarkDelivered(nil)
 
 			if outbound.Complete {
@@ -4567,6 +4756,13 @@ func TestInterruptActiveTurnClearsRecoverableCheckpoint(t *testing.T) {
 	close(releaseRequest)
 	require.NoError(t, (<-response).Err)
 	<-delivered
+	require.NotNil(t, terminal)
+	require.Equal(t, protocol.TerminalStopped, terminal.TranscriptTerminal)
+	require.NotEmpty(t, terminal.TranscriptCheckpoint)
+	require.Zero(t, terminal.TranscriptEntryID)
+	require.Empty(t, terminal.Text)
+	require.Equal(t, "main", terminal.Agent)
+	require.Equal(t, "openai/gpt-5.5", terminal.Model)
 
 	turns, err = service.RecoverableActiveTurns(t.Context())
 	require.NoError(t, err)
@@ -4837,6 +5033,21 @@ func TestRecoveredActiveTurnPermanentFailureClearsFreshRecoveryRow(t *testing.T)
 	err = bridge.handleRecoveredActiveTurn(context.Background(), &turn)
 	require.Error(t, err)
 
+	var terminal *protocol.OutboundMessage
+
+	for len(publisher.outbound) > 0 {
+		message := <-publisher.outbound
+		if message.TranscriptTerminal != "" {
+			terminal = message
+		}
+	}
+
+	require.NotNil(t, terminal, "recovered turn failure must close its live transcript")
+	require.Equal(t, protocol.TerminalFailed, terminal.TranscriptTerminal)
+	require.NotEmpty(t, terminal.TranscriptCheckpoint)
+	require.Empty(t, terminal.Text)
+	require.False(t, terminal.Complete)
+
 	turns, err := service.RecoverableActiveTurns(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, turns)
@@ -4969,6 +5180,7 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 	require.Equal(t, "reviewer", entries[0].Entry.Agent)
 	require.Equal(t, "work/model-b", entries[0].Entry.Model)
 	require.Equal(t, new("low"), entries[0].Entry.ReasoningEffort)
+	require.Equal(t, map[string]int{"queued-input": 0, "active-steer": 2}, entries[0].Entry.ReplayInputIDs)
 	require.NoError(t, errRequest)
 	require.Equal(t, "model-b", requestBody.Model)
 	require.Equal(t, "low", requestBody.Reasoning.Effort)
@@ -5271,6 +5483,10 @@ func readRocketCodeOutbound(t *testing.T, bus *testBus) *protocol.OutboundMessag
 	defer cancel()
 
 	for msg := range bus.Outbound(ctx) {
+		if len(msg.TranscriptCheckpoint) > 0 || len(msg.TranscriptEntry) > 0 || msg.TranscriptTerminal != "" {
+			continue // These tests observe compact connector delivery, not transcript detail.
+		}
+
 		return msg
 	}
 

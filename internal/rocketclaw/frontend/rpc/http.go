@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"net/netip"
@@ -49,7 +50,12 @@ func NewHTTPHandler(connection *grpc.ClientConn) http.Handler {
 				return
 			}
 
-			if err := connection.Invoke(r.Context(), "/rpc.Web/"+method, request, response); err != nil {
+			var options []grpc.CallOption
+			if method == "History" {
+				options = append(options, grpc.MaxCallRecvMsgSize(math.MaxInt))
+			}
+
+			if err := connection.Invoke(r.Context(), "/rpc.Web/"+method, request, response, options...); err != nil {
 				httpRPCError(w, err)
 				return
 			}

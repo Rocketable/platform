@@ -13,14 +13,67 @@ prompt for activated work or drains a steer into the current turn. Direct steers
 `Prompt.message_id`; queued messages use their server-assigned queue IDs. These
 events move waiting inputs into chat in consumption order without matching text.
 Inputs handled without a model prompt still emit a consumed event, without a header.
-Dropped items never run. Reorder writes persisted enqueue positions. Join streams only live
-events for the requested conversation; it does not replay stored history or
-return output through Prompt's private response field. Live events carry Backend
-turn IDs so incremental answers cannot replace a preceding turn. History returns
+Dropped items never run. Reorder writes persisted enqueue positions. Join opens
+with committed history and the current visible checkpoint for the requested
+conversation, then sends readable updates. Prompt's private response field does
+not carry chat output. Live events carry Backend turn IDs so updates cannot
+replace a preceding turn. History returns
 the stored turn in order, including developer messages, thinking summaries, tool
 calls, tool results, and user/assistant text. Encrypted reasoning bodies stay
 stored and are not sent. History retains tool call IDs and names so Web can
 group each call with its result.
+
+### Live transcript snapshots
+
+History and Join use the same readable projection: full stored arguments and
+results, loaded skill instructions, available reasoning summaries, and attachment
+metadata. Empty summaries and encrypted content are omitted. Attachment-tool
+arguments retain History's existing suppression. Every item carries its execution
+attribution and canonical or sandboxed origin.
+
+Join registers its subscription before reading the opening history and active
+checkpoint. A `seed` snapshot contains committed history. The active snapshot's
+`turnId` is the persisted outbound execution identity, not the checkpoint's
+storage ID. A pending older checkpoint publication cannot overwrite a newer seed.
+When no active checkpoint exists, the opening seed carries `terminal: complete`
+to restore idle state after a terminal missed while disconnected. It does not
+claim the outcome of any historical turn. Running checkpoint seeds remain
+nonterminal. A failed execution retains its restart checkpoint with a persisted
+terminal, so reopening it does not restore busy state. Recovery replaces that
+terminal with its new execution identity. Ordinary committed sync snapshots do
+not clear a running turn.
+Legacy active rows without that identity fail Join with `FailedPrecondition`;
+startup recovery supplies it on the next checkpoint write, without a migration.
+
+Each logical snapshot is protobuf JSON split into UTF-8 `fragment` strings of at
+most 256 KiB. Assemble consecutive `fragmentIndex` values for one connection-local
+`snapshotId`, then parse and apply only when `snapshotEnd` is true. Discard an
+unfinished assembly on disconnect. This bounds transport frames without clipping
+readable results, including a single result larger than 4 MiB. The HTTP bridge's
+unary History call also accepts full recorded output beyond gRPC's default
+4 MiB receive limit, so opening and reloading those conversations still works.
+
+`snapshot` replaces one ordered turn region. `entryId` binds it to stored message
+IDs used by session commands; synced entries use that ID without a live `turnId`.
+`inputId` preserves Web input identity at its recorded replay position.
+`consumedId` announces queue consumption without matching input text.
+Item `complete` does not end the turn: only `terminal` does. A terminal-only update
+retains existing items; delivered text and attachments are separate from those
+recorded items. Empty delivery does not add an answer bubble.
+Delivery that combines recorded assistant messages does not repeat them in a
+new bubble; their individual rows and delivery attachments remain intact.
+Recorded assistant `phase` distinguishes commentary from final answers for that
+comparison; commentary stays visible in its original position.
+
+Snapshots follow successful checkpoint persistence, including steer insertion
+before the next provider request. Parallel tool outputs appear after the batch,
+in provider order. Private producer detail appears only after destination sync
+commits. Slack still receives compact progress and ordinary final delivery;
+it acknowledges transcript-only updates without posting them. RPC suppresses
+duplicate compact content for recorded turns and retains ordinary streaming for
+uncheckpointed paths. Full-turn retransmission costs checkpoint count times turn
+size; incremental replay publication is the upgrade path if that cost matters.
+
 New messages save their exact generated bracket header alongside model-facing
 text as `prompt_header` in local replay. History and sidebar previews remove only
 that saved prefix from user/developer display text. History and Join expose it as

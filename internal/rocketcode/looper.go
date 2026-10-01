@@ -451,6 +451,7 @@ type SessionEntry struct {
 	ReplayAttribution []ReplayAttribution `json:"replay_attribution,omitempty"`
 	TokenUsage        *TokenUsage         `json:"token_usage,omitempty"`
 	ReplayInput       []json.RawMessage   `json:"replay_input,omitempty"`
+	ReplayInputIDs    map[string]int      `json:"replay_input_ids,omitempty"`
 	OutputTrace       []json.RawMessage   `json:"output_trace,omitempty"`
 }
 
@@ -583,8 +584,8 @@ func (l *looper) Loop(
 	}
 
 	var (
-		history            []responses.ResponseInputItemUnionParam
-		historyAttribution []ReplayAttribution
+		history         []responses.ResponseInputItemUnionParam
+		historyMetadata SessionEntry
 	)
 
 	loaded := false
@@ -620,12 +621,21 @@ func (l *looper) Loop(
 
 			for i := range entries {
 				entry := &entries[i]
-				historyAttribution = append(historyAttribution, entry.attributionRanges(offset)...)
+
+				historyMetadata.ReplayAttribution = append(historyMetadata.ReplayAttribution, entry.attributionRanges(offset)...)
+				if len(entry.ReplayInputIDs) > 0 && historyMetadata.ReplayInputIDs == nil {
+					historyMetadata.ReplayInputIDs = make(map[string]int)
+				}
+
+				for id, position := range entry.ReplayInputIDs {
+					historyMetadata.ReplayInputIDs[id] = position + offset
+				}
+
 				offset += len(entry.ReplayInput)
 			}
 		}
 
-		turn, rendered, interrupted, err := l.runTurn(ctx, turnOutput, interrupts, history, historyAttribution, &line)
+		turn, rendered, interrupted, err := l.runTurn(ctx, turnOutput, interrupts, history, &historyMetadata, &line)
 		if err != nil {
 			if errDirectSkill, ok := errors.AsType[directSkillInputError](err); ok {
 				emitChatResponse(turnOutput, ChatResponse{Kind: ChatResponseAssistantMessage, Text: errDirectSkill.Error()})
@@ -664,7 +674,15 @@ func (l *looper) Loop(
 			return err
 		}
 
-		historyAttribution = append(historyAttribution, turn.attributionRanges(len(history))...)
+		historyMetadata.ReplayAttribution = append(historyMetadata.ReplayAttribution, turn.attributionRanges(len(history))...)
+		if len(turn.ReplayInputIDs) > 0 && historyMetadata.ReplayInputIDs == nil {
+			historyMetadata.ReplayInputIDs = make(map[string]int)
+		}
+
+		for id, position := range turn.ReplayInputIDs {
+			historyMetadata.ReplayInputIDs[id] = position + len(history)
+		}
+
 		history = append(history, items...)
 
 		for _, item := range rendered {
@@ -690,7 +708,7 @@ func (l *looper) runTurn(
 	output chan<- ChatResponse,
 	interrupts <-chan os.Signal,
 	baseHistory []responses.ResponseInputItemUnionParam,
-	baseAttribution []ReplayAttribution,
+	baseMetadata *SessionEntry,
 	input *PromptInput,
 ) (record SessionEntry, rendered []ChatResponse, interrupted bool, err error) {
 	var emptyRecord SessionEntry
@@ -714,7 +732,11 @@ func (l *looper) runTurn(
 		ReasoningEffort: new(string(l.ReasoningEffort)),
 		ReplayInput:     replayInput,
 	}
+
 	turnID := activeTurnID(&record)
+	if input.MessageID != "" {
+		record.ReplayInputIDs = map[string]int{input.MessageID: len(replayInput) - 1}
+	}
 
 	l.beginTurnSpills(turnID)
 	defer l.endTurnSpills()
@@ -794,8 +816,14 @@ func (l *looper) runTurn(
 
 		params := l.buildParams(history)
 
-		attribution := append(slices.Clone(baseAttribution), record.attributionRanges(len(baseHistory))...)
+		attribution := append(slices.Clone(baseMetadata.ReplayAttribution), record.attributionRanges(len(baseHistory))...)
 		attributionEnd := len(baseHistory) + len(turnItems)
+		inputIDs := make(map[string]int, len(baseMetadata.ReplayInputIDs)+len(record.ReplayInputIDs))
+		maps.Copy(inputIDs, baseMetadata.ReplayInputIDs)
+
+		for id, position := range record.ReplayInputIDs {
+			inputIDs[id] = position + len(baseHistory)
+		}
 
 		resp, err := l.newProviderResponse(turnCtx, &params, output, func(recovered []responses.ResponseInputItemUnionParam, retained int) error {
 			// Retained items come from provider input, which omits local headers.
@@ -808,20 +836,10 @@ func (l *looper) runTurn(
 				return errReplay
 			}
 
-			record.ReplayInput = replayInput
-			record.ReplayAttribution = make([]ReplayAttribution, 0, len(attribution))
-
-			start := attributionEnd - retained
-			for _, snapshot := range attribution {
-				snapshot.Start = max(snapshot.Start, start) + len(recovered) - retained - start
-
-				snapshot.End = max(min(snapshot.End, attributionEnd), start) + len(recovered) - retained - start
-				if snapshot.Start != snapshot.End {
-					record.ReplayAttribution = append(record.ReplayAttribution, snapshot)
-				}
-			}
+			record.replaceCompactedReplay(replayInput, inputIDs, attribution, retained, attributionEnd)
 
 			turnItems = append([]responses.ResponseInputItemUnionParam(nil), recovered...)
+			baseHistory, baseMetadata = nil, &SessionEntry{}
 			checkpoint = l.activeTurnCheckpoint(&record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
 
 			return l.CheckpointSink.RecordProviderResponse(turnCtx, &checkpoint)
@@ -870,7 +888,7 @@ func (l *looper) runTurn(
 				continue
 			}
 
-			injected, errSteers := l.appendSteers(turnCtx, &record, &turnItems, TurnPhaseFinalAnswer)
+			injected, errSteers := l.appendSteers(turnCtx, &record, &turnItems, &checkpoint, TurnPhaseFinalAnswer)
 			if errSteers != nil {
 				return emptyRecord, nil, false, errSteers
 			}
@@ -886,7 +904,7 @@ func (l *looper) runTurn(
 			return emptyRecord, nil, false, err
 		}
 
-		if _, err := l.appendSteers(turnCtx, &record, &turnItems, TurnPhaseToolLoop); err != nil {
+		if _, err := l.appendSteers(turnCtx, &record, &turnItems, &checkpoint, TurnPhaseToolLoop); err != nil {
 			return emptyRecord, nil, false, err
 		}
 	}
@@ -925,7 +943,7 @@ func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Resp
 	return false, false, nil, false, fmt.Errorf("dispatch tool calls: %w", err)
 }
 
-func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, phase TurnPhase) (bool, error) {
+func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, checkpoint *ActiveTurnCheckpoint, phase TurnPhase) (bool, error) {
 	inputs := l.SteerDrain.Drain(ctx, phase)
 	for _, input := range inputs {
 		if input.DirectSkill != nil {
@@ -947,6 +965,19 @@ func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnIte
 		}
 
 		*turnItems = append(*turnItems, steer)
+
+		if input.MessageID != "" {
+			if record.ReplayInputIDs == nil {
+				record.ReplayInputIDs = make(map[string]int)
+			}
+
+			record.ReplayInputIDs[input.MessageID] = len(record.ReplayInput) - 1
+		}
+
+		*checkpoint = l.activeTurnCheckpoint(record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
+		if err := l.CheckpointSink.RecordProviderResponse(ctx, checkpoint); err != nil {
+			return false, fmt.Errorf("record steered input checkpoint: %w", err)
+		}
 	}
 
 	return len(inputs) > 0, nil
@@ -1055,6 +1086,7 @@ func (l *looper) activeTurnCheckpoint(record *SessionEntry, openCalls []Function
 		ReasoningEffort:          record.ReasoningEffort,
 		ReplayAttribution:        slices.Clone(record.ReplayAttribution),
 		ReplayInput:              slices.Clone(record.ReplayInput),
+		ReplayInputIDs:           maps.Clone(record.ReplayInputIDs),
 		OutputTrace:              slices.Clone(record.OutputTrace),
 		TokenUsage:               tokenUsage,
 		ResponseID:               record.ResponseID,
@@ -1095,6 +1127,28 @@ func (l *looper) promptTurnItems(ctx context.Context, input *PromptInput) ([]res
 	}
 
 	return append(turnItems, promptInputMessage(input)), nil
+}
+
+func (e *SessionEntry) replaceCompactedReplay(replay []json.RawMessage, inputIDs map[string]int, attribution []ReplayAttribution, retained, end int) {
+	e.ReplayInput = replay
+	e.ReplayInputIDs = make(map[string]int)
+
+	start, offset := end-retained, len(replay)-end
+	for id, position := range inputIDs {
+		if position >= start {
+			e.ReplayInputIDs[id] = position + offset
+		}
+	}
+
+	e.ReplayAttribution = make([]ReplayAttribution, 0, len(attribution))
+	for _, snapshot := range attribution {
+		snapshot.Start = max(snapshot.Start, start) + offset
+
+		snapshot.End = max(min(snapshot.End, end), start) + offset
+		if snapshot.Start != snapshot.End {
+			e.ReplayAttribution = append(e.ReplayAttribution, snapshot)
+		}
+	}
 }
 
 func (l *looper) directSkillInput(ctx context.Context, input *PromptInputDirectSkill) (responses.ResponseInputItemUnionParam, error) {

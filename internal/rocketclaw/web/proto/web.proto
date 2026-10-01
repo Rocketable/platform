@@ -90,6 +90,29 @@ message TranscriptEvent {
   optional string reasoning_effort = 12;
   string origin = 13;
   string header = 14;
+  // Logical snapshot: seed replaces committed history; otherwise replace only
+  // turn_id (active execution) or entry_id (committed/synced entry). Item message
+  // IDs retain entry:replay-position addressing. input_id binds an optimistic Web
+  // input to its replay row; consumed_id is an announcement, not replay ordering.
+  repeated TranscriptEvent items = 15;
+  int64 entry_id = 16;
+  // Only this root terminal clears busy; complete describes an individual item.
+  // Root text/attachments are delivered output, separate from recorded items.
+  string terminal = 17;
+  string input_id = 18;
+  string consumed_id = 19;
+  bool seed = 20;
+  // Wire snapshot frames contain consecutive UTF-8 fragments of the readable
+  // logical TranscriptEvent's protobuf JSON, never raw provider replay. Buffer
+  // by connection-local snapshot_id and fragment_index starting at zero; parse
+  // and apply atomically only at snapshot_end. Discard unfinished data on close.
+  // Each fragment is at most 256 KiB; even a single large result is fragmented.
+  string snapshot_id = 21;
+  uint32 fragment_index = 22;
+  bool snapshot_end = 23;
+  string fragment = 24;
+  // Recorded assistant phase; commentary remains readable but is not final delivery.
+  optional string phase = 25;
 }
 
 // Stream frames carry at most 256 KiB of data. History carries metadata only.

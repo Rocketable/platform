@@ -805,6 +805,29 @@ func TestSessionServiceActiveTurnLifecycle(t *testing.T) {
 	assert.Empty(t, turns)
 }
 
+func TestSessionServiceConversationActiveTurnIsReadOnly(t *testing.T) {
+	store := newTestSessionService(t)
+	checkpoint := &harness.ActiveTurnCheckpoint{TurnID: "checkpoint", ConversationKey: "visible", ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","content":"hello"}`)}}
+	require.NoError(t, store.UpsertActiveTurn(t.Context(), checkpoint, map[string]string{"execution_turn_id": "execution"}))
+	require.NoError(t, store.UpsertActiveTurn(t.Context(), &harness.ActiveTurnCheckpoint{TurnID: "private", ConversationKey: "private"}, nil))
+	_, err := store.db.ExecContext(t.Context(), `UPDATE active_turns SET replay_input_json = 'broken' WHERE id = 'private'`)
+	require.NoError(t, err)
+	turn, found, err := store.ConversationActiveTurn(t.Context(), "visible")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, *checkpoint, turn.Checkpoint)
+	require.Equal(t, "execution", turn.SourceMetadata["execution_turn_id"])
+	_, found, err = store.ConversationActiveTurn(t.Context(), "absent")
+	require.NoError(t, err)
+	require.False(t, found)
+	_, _, err = store.ConversationActiveTurn(t.Context(), "private")
+	require.ErrorContains(t, err, "replay input")
+
+	var count int
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM active_turns WHERE id = 'private'`).Scan(&count))
+	require.Equal(t, 1, count, "Web reads never delete corrupt producer data")
+}
+
 func TestSessionServiceActiveTurnPersistsThroughCentralizedOpener(t *testing.T) {
 	workspace := t.TempDir()
 	store, err := NewSessionService(workspace)

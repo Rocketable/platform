@@ -4,15 +4,26 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/Rocketable/platform/internal/rocketclaw/backend"
+	"github.com/Rocketable/platform/internal/rocketclaw/backend/harnessbridgetest"
+	"github.com/Rocketable/platform/internal/rocketclaw/config"
+	cronfrontend "github.com/Rocketable/platform/internal/rocketclaw/frontend/cron"
+	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
+	"github.com/Rocketable/platform/internal/rocketcode"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -20,7 +31,128 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 )
+
+func TestHTTPReadableSnapshotOverReceiveLimit(t *testing.T) {
+	text := strings.Repeat("full tool output 世界 \"quoted\"\n", 200000)
+	require.Greater(t, len(text), 4<<20)
+
+	dsn, err := harnessbridgetest.IsolatedTestDatabaseURL()
+	require.NoError(t, err)
+	cfg := &config.Config{DatabaseURL: dsn, Workspace: t.TempDir(), WebUsers: map[netip.Addr]string{netip.MustParseAddr("127.0.0.1"): "alice"}}
+	sessions, err := backend.NewSessionServiceIn(t.Context(), cfg, slog.New(slog.DiscardHandler))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sessions.Stop()) })
+
+	output, err := json.Marshal(struct {
+		Type   string `json:"type"`
+		CallID string `json:"call_id"`
+		Output string `json:"output"`
+	}{"function_call_output", "large", text})
+	require.NoError(t, err)
+
+	const id = "slack-thread:C1:1.1"
+
+	checkpoint := &rocketcode.ActiveTurnCheckpoint{TurnID: "storage", ConversationKey: id, ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"function_call","call_id":"large","name":"execute","arguments":"{\"code\":\"full script\"}"}`), output}}
+	require.NoError(t, sessions.UpsertActiveTurn(t.Context(), checkpoint, map[string]string{"execution_turn_id": "large-live"}))
+	runtime := &backend.Runtime{Sessions: sessions}
+	core := &mockBackend{SubscribeFunc: runtime.Subscribe, ListConversationsFunc: runtime.ListConversations, QueueItemsFunc: func(string) ([]protocol.ThreadQueueItem, error) { return nil, nil }}
+	channels := &mockChannels{
+		ChannelAgentChoicesFunc:        func(context.Context, string) ([]string, error) { return []string{"main"}, nil },
+		SidebarChannelAgentChoicesFunc: func(context.Context, string) (string, []string, error) { return "Large result", []string{"main"}, nil },
+	}
+	jobs := &mockCronJobs{JobsFunc: func() ([]cronfrontend.Job, error) { return nil, nil }}
+	connection := liveTestConnection(t, New(core, sessions, cfg, channels, jobs))
+	server := startHTTPTestServer(t, connection)
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+"/stream?id="+id, http.NoBody)
+	require.NoError(t, err)
+	response, err := server.Client().Do(request)
+
+	require.NoError(t, err)
+	defer func() { require.NoError(t, response.Body.Close()) }()
+
+	require.Equal(t, http.StatusOK, response.StatusCode)
+
+	var assembled strings.Builder
+
+	index := uint32(0)
+
+	var snapshot TranscriptEvent
+
+	scanner := bufio.NewScanner(response.Body)
+	scanner.Buffer(make([]byte, 4096), 1<<20)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		require.NotEqual(t, "event: error", line)
+
+		if !strings.HasPrefix(line, "data: ") || line == "data: {}" {
+			continue
+		}
+
+		var frame TranscriptEvent
+		require.NoError(t, protojson.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &frame))
+		require.Contains(t, []string{"1", "2"}, frame.SnapshotId)
+		require.Equal(t, index, frame.FragmentIndex)
+		index++
+
+		assembled.WriteString(frame.Fragment)
+
+		if frame.SnapshotEnd {
+			require.NoError(t, protojson.Unmarshal([]byte(assembled.String()), &snapshot))
+
+			if !snapshot.Seed {
+				break
+			}
+
+			assembled.Reset()
+
+			index = 0
+		}
+	}
+
+	require.NoError(t, scanner.Err())
+	require.Greater(t, index, uint32(1))
+	require.Equal(t, "large-live", snapshot.TurnId)
+	require.Len(t, snapshot.Items, 2)
+	require.Equal(t, "large", snapshot.Items[1].ToolCallId)
+	require.Equal(t, text, snapshot.Items[1].Text, "a single full readable result survives projection, gRPC, and SSE without clipping")
+	_, err = sessions.AppendEntryID(t.Context(), id, &rocketcode.SessionEntry{Version: 1, Type: "turn", ReplayInput: checkpoint.ReplayInput})
+	require.NoError(t, err)
+	require.NoError(t, sessions.ClearActiveTurn(t.Context(), checkpoint.TurnID))
+	historyRequest, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL+"/api/History", strings.NewReader(`{"id":"`+id+`"}`))
+	require.NoError(t, err)
+	history, err := server.Client().Do(historyRequest)
+	require.NoError(t, err)
+	body, err := io.ReadAll(history.Body)
+	require.NoError(t, err)
+	require.NoError(t, history.Body.Close())
+	require.Equal(t, http.StatusOK, history.StatusCode, string(body))
+
+	var saved HistoryResponse
+	require.NoError(t, protojson.Unmarshal(body, &saved))
+	require.Equal(t, text, saved.Messages[1].Text, "Web's opening History prerequisite must also preserve full saved results")
+
+	if os.Getenv("ROCKETCLAW_SLACK_BROWSER") == "1" {
+		browser := exec.CommandContext(t.Context(), "bun", "--eval", `
+const { chromium } = await import(process.env.ROCKETCLAW_PLAYWRIGHT_MODULE);
+const browser = await chromium.launch({ executablePath: process.env.ROCKETCLAW_CHROMIUM, headless: true, args: ["--no-sandbox"] });
+try {
+  const page = await browser.newPage();
+  await page.goto(process.env.ROCKETCLAW_TEST_HTTP_URL + "/s/" + Buffer.from("slack-thread:C1:1.1").toString("base64url"));
+  for (let i = 0; i < 2; i++) {
+    await page.waitForFunction(() => Array.from(document.querySelectorAll("main pre")).some(node => node.textContent.endsWith('full tool output 世界 "quoted"\n'.repeat(200000))), null, { timeout: 20000 });
+    if (i === 0) await page.reload();
+  }
+} finally { await browser.close(); }
+`)
+
+		browser.Env = append(os.Environ(), "ROCKETCLAW_TEST_HTTP_URL="+server.URL)
+		output, err := browser.CombinedOutput()
+		require.NoError(t, err, string(output))
+	}
+}
 
 func startHTTPTestServer(t *testing.T, connection *grpc.ClientConn) *httptest.Server {
 	t.Helper()

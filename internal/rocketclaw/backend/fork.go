@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -57,8 +59,7 @@ func (s *SessionService) ForkConversation(ctx context.Context, source string, de
 				}
 
 				prompt, found = text, true
-				entry.ReplayInput = entry.ReplayInput[:i]
-				entry.ResponseID, entry.OutputTrace, entry.TokenUsage = "", nil, nil
+				entry = forkReplayPrefix(&entry, i)
 
 				break
 			}
@@ -138,4 +139,26 @@ func (s *SessionService) ForkConversation(ctx context.Context, source string, de
 	}
 
 	return prompt, nil
+}
+
+// Forking a replay prefix also cuts its position-indexed execution metadata.
+func forkReplayPrefix(entry *rocketcode.SessionEntry, end int) rocketcode.SessionEntry {
+	prefix := *entry
+	prefix.ReplayInput = prefix.ReplayInput[:end]
+
+	prefix.ReplayInputIDs = maps.Clone(prefix.ReplayInputIDs)
+	for id, position := range prefix.ReplayInputIDs {
+		if position >= end {
+			delete(prefix.ReplayInputIDs, id)
+		}
+	}
+
+	prefix.ReplayAttribution = slices.DeleteFunc(slices.Clone(prefix.ReplayAttribution), func(attribution rocketcode.ReplayAttribution) bool { return attribution.Start >= end })
+	for index := range prefix.ReplayAttribution {
+		prefix.ReplayAttribution[index].End = min(prefix.ReplayAttribution[index].End, end)
+	}
+
+	prefix.ResponseID, prefix.OutputTrace, prefix.TokenUsage = "", nil, nil
+
+	return prefix
 }

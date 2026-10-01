@@ -2208,11 +2208,20 @@ func TestStartEventsMirrorsConsumedWebInput(t *testing.T) {
 	attachmentOnly := protocol.NewOutboundMessage("slack-thread:C123:111.0", "")
 	attachmentOnly.ConsumedID, attachmentOnly.ConsumedText, attachmentOnly.ConsumedSource = "attachment-input", "attachment:id (workspace path /private)", protocol.SourceWeb
 	attachmentOnly.ConsumedRawText = " \n\t"
+	transcript := protocol.NewOutboundMessage("slack-thread:C123:111.0", "must not render")
+	transcript.TranscriptCheckpoint = json.RawMessage(`{"replay_input":[]}`)
+	terminal := protocol.NewOutboundMessage("slack-thread:C123:111.0", "must not render either")
+	terminal.TranscriptEntryID, terminal.TranscriptTerminal, terminal.Complete = 42, protocol.TerminalComplete, true
+	synced := protocol.NewOutboundMessage("slack-thread:C123:111.0", "private detail is Web-only after sync")
+	synced.TranscriptEntry = json.RawMessage(`{"replay_input":[]}`)
 	events := []protocol.Event{
 		{Message: message, Acknowledgement: make(chan error, 1)},
 		{Message: private, Acknowledgement: make(chan error, 1)},
 		{Message: slackInput, Acknowledgement: make(chan error, 1)},
 		{Message: attachmentOnly, Acknowledgement: make(chan error, 1)},
+		{Message: transcript, Acknowledgement: make(chan error, 1)},
+		{Message: terminal, Acknowledgement: make(chan error, 1)},
+		{Message: synced, Acknowledgement: make(chan error, 1)},
 	}
 	core := &backendMock{SubscribeFunc: func(context.Context) iter.Seq[protocol.Event] {
 		return slices.Values(events)
@@ -2221,9 +2230,13 @@ func TestStartEventsMirrorsConsumedWebInput(t *testing.T) {
 
 	for _, event := range events {
 		require.NoError(t, <-event.Acknowledgement)
+		require.Empty(t, event.Acknowledgement, "each consumed or transcript-only event is acknowledged once")
 	}
 
 	require.Nil(t, message.SlackReply, "consumed input is separate from response slots")
+	require.Nil(t, transcript.SlackReply, "transcript-only updates must not reserve response slots")
+	require.Nil(t, terminal.SlackReply)
+	require.Nil(t, synced.SlackReply)
 	require.Len(t, posted, 2)
 	assert.Equal(t, "C123", posted[0].Get("channel"))
 	assert.Equal(t, "111.0", posted[0].Get("thread_ts"))

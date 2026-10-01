@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"maps"
 	"slices"
 	"strings"
 
@@ -28,17 +29,17 @@ func sessionEntryForProvider(entry *rocketcode.SessionEntry, provider string) (r
 		return *entry, nil
 	}
 
-	ranges := slices.Clone(entry.ReplayAttribution)
+	projected := *entry
+	projected.ReplayAttribution = slices.Clone(entry.ReplayAttribution)
+	projected.ReplayInputIDs = maps.Clone(entry.ReplayInputIDs)
 
-	replay, err := replayForProvider(entry.ReplayInput, ranges)
+	replay, err := replayForProvider(entry.ReplayInput, &projected)
 	if err != nil {
 		return rocketcode.SessionEntry{}, err
 	}
 
-	projected := *entry
 	projected.ResponseID = ""
 	projected.ReplayInput = replay
-	projected.ReplayAttribution = ranges
 	projected.OutputTrace = nil
 
 	return projected, nil
@@ -63,9 +64,9 @@ func activeTurnForProvider(checkpoint *rocketcode.ActiveTurnCheckpoint, provider
 		return *checkpoint, nil
 	}
 
-	ranges := slices.Clone(checkpoint.ReplayAttribution)
+	entry := rocketcode.SessionEntry{ReplayAttribution: slices.Clone(checkpoint.ReplayAttribution), ReplayInputIDs: maps.Clone(checkpoint.ReplayInputIDs)}
 
-	replay, err := replayForProvider(checkpoint.ReplayInput, ranges)
+	replay, err := replayForProvider(checkpoint.ReplayInput, &entry)
 	if err != nil {
 		return rocketcode.ActiveTurnCheckpoint{}, err
 	}
@@ -83,7 +84,8 @@ func activeTurnForProvider(checkpoint *rocketcode.ActiveTurnCheckpoint, provider
 	projected := *checkpoint
 	projected.ResponseID = ""
 	projected.ReplayInput = replay
-	projected.ReplayAttribution = ranges
+	projected.ReplayAttribution = entry.ReplayAttribution
+	projected.ReplayInputIDs = entry.ReplayInputIDs
 	projected.OutputTrace = nil
 
 	calls := make([]rocketcode.FunctionCallCheckpoint, len(checkpoint.OpenFunctionCalls))
@@ -98,7 +100,7 @@ func activeTurnForProvider(checkpoint *rocketcode.ActiveTurnCheckpoint, provider
 	return projected, nil
 }
 
-func replayForProvider(rawItems []json.RawMessage, attribution ...[]rocketcode.ReplayAttribution) ([]json.RawMessage, error) {
+func replayForProvider(rawItems []json.RawMessage, entries ...*rocketcode.SessionEntry) ([]json.RawMessage, error) {
 	items := make([]responses.ResponseInputItemUnionParam, 0, len(rawItems))
 
 	boundaries := make([]int, len(rawItems)+1)
@@ -200,8 +202,16 @@ func replayForProvider(rawItems []json.RawMessage, attribution ...[]rocketcode.R
 	}
 
 	boundaries[len(rawItems)] = len(items)
-	for _, ranges := range attribution {
-		rocketcode.RemapReplayAttribution(ranges, boundaries)
+	for _, entry := range entries {
+		rocketcode.RemapReplayAttribution(entry.ReplayAttribution, boundaries)
+
+		for id, position := range entry.ReplayInputIDs {
+			if boundaries[position] == boundaries[position+1] {
+				delete(entry.ReplayInputIDs, id)
+			} else {
+				entry.ReplayInputIDs[id] = boundaries[position]
+			}
+		}
 	}
 
 	replay, err := rocketcode.ReplayInputFromParams(items)

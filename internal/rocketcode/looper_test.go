@@ -590,7 +590,7 @@ func TestLooperPromptInputShellCommandExpansion(t *testing.T) {
 			looper.expandInputPrompts = tc.enabled
 			looper.promptExpansion = testPromptExpansionEnvironment(t)
 			output := make(chan ChatResponse, 10)
-			turn, _, interrupted, err := looper.runTurn(context.Background(), output, nil, nil, nil, new(testPromptInput(PromptInputRoleUser, "before !`printf hello` after", nil)))
+			turn, _, interrupted, err := looper.runTurn(context.Background(), output, nil, nil, &SessionEntry{}, new(testPromptInput(PromptInputRoleUser, "before !`printf hello` after", nil)))
 
 			require.NoError(t, err)
 			require.False(t, interrupted)
@@ -867,6 +867,7 @@ func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {
 		testInputMessage(responses.EasyInputMessageRole("user"), "old question", ""),
 		toolCall,
 		toolOutput,
+		testInputMessage(responses.EasyInputMessageRoleUser, "retained question", ""),
 	})
 	require.NoError(t, err)
 
@@ -882,14 +883,26 @@ func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {
 		return responseWithMessage("resp-final", "answer"), nil
 	}
 	looper := testLooper(mock)
+	sink := recordingCheckpointSink()
+
+	var checkpoints []ActiveTurnCheckpoint
+
+	sink.RecordProviderResponseFunc = func(_ context.Context, checkpoint *ActiveTurnCheckpoint) error {
+		checkpoints = append(checkpoints, *checkpoint)
+		return nil
+	}
+	looper.CheckpointSink = sink
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "new question", output)
+	prompt := testPromptInput(PromptInputRoleUser, "new question", output)
+
+	prompt.MessageID = "web-new"
+	input <- prompt
 
 	close(input)
 
-	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput}}), discardSession, make(chan os.Signal, 1))
+	err = looper.Loop(context.Background(), input, sessionEntries([]SessionEntry{{Version: 1, Type: "turn", Timestamp: time.Unix(1, 0).UTC(), ReplayInput: replayInput, ReplayInputIDs: map[string]int{"web-old": 0, "web-retained": 3}}}), discardSession, make(chan os.Signal, 1))
 
 	require.NoError(t, err)
 	require.Equal(t, []ChatResponse{assistantMessage("answer")}, collectResponses(output))
@@ -898,6 +911,8 @@ func TestLooperProgressiveCompactionKeepsToolCallWithOutput(t *testing.T) {
 	require.Contains(t, secondCompactInput, `"type":"function_call"`)
 	require.Contains(t, secondCompactInput, `"type":"function_call_output"`)
 	require.Contains(t, secondCompactInput, `"call_id":"call-1"`)
+	require.Equal(t, map[string]int{"web-retained": 3, "web-new": 4}, checkpoints[0].ReplayInputIDs)
+	require.Equal(t, map[string]int{"web-retained": 1, "web-new": 2}, checkpoints[1].ReplayInputIDs)
 }
 
 func TestLooperDoesNotCompactUnansweredToolCall(t *testing.T) {
@@ -1138,6 +1153,7 @@ func TestCheckpointBeforeFirstProviderCall(t *testing.T) {
 		require.NotEmpty(t, starts[0].ActiveTurnCheckpoint.TurnID)
 		require.Contains(t, marshalJSON(t, starts[0].ActiveTurnCheckpoint), `"reasoning_effort":"high"`)
 		require.JSONEq(t, `{"content":"hello","role":"user","type":"message"}`, string(starts[0].ActiveTurnCheckpoint.ReplayInput[0]))
+		require.Equal(t, map[string]int{"web-start": 0}, starts[0].ActiveTurnCheckpoint.ReplayInputIDs)
 
 		return responseWithMessage("resp-final", "done"), nil
 	})
@@ -1147,7 +1163,10 @@ func TestCheckpointBeforeFirstProviderCall(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "hello", output)
+	prompt := testPromptInput(PromptInputRoleUser, "hello", output)
+
+	prompt.MessageID = "web-start"
+	input <- prompt
 
 	close(input)
 
@@ -2074,6 +2093,13 @@ func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
 	looper.Permissions = agentWithSkillPermission().Permission
 	looper.Tools = map[string]looperTool{"skill": factory.skillTool()}
 	sink := recordingCheckpointSink()
+
+	var checkpoints []ActiveTurnCheckpoint
+
+	sink.RecordProviderResponseFunc = func(_ context.Context, checkpoint *ActiveTurnCheckpoint) error {
+		checkpoints = append(checkpoints, *checkpoint)
+		return nil
+	}
 	looper.CheckpointSink = sink
 	steers := []PromptInput{
 		{Text: "$docs-helper first", DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "first"}},
@@ -2112,9 +2138,54 @@ func TestLooperMixedSkillSteersDoNotSilentlyLoseAcceptedWork(t *testing.T) {
 	require.Empty(t, saved, "failed turn must not be persisted as completed")
 	require.Empty(t, sink.ClearCompletedTurnCalls(), "failed turn must retain its checkpoint")
 	require.Empty(t, sink.RecordRecoveredReplayCalls())
-	checkpoints := sink.RecordProviderResponseCalls()
-	require.Len(t, checkpoints, 1)
-	require.JSONEq(t, `[{"content":"start","role":"user","type":"message"},{"content":"original answer","role":"assistant","type":"message"}]`, marshalJSON(t, checkpoints[0].ActiveTurnCheckpoint.ReplayInput))
+	require.Len(t, checkpoints, 2, "a successfully inserted steer must remain durable when its neighbor fails")
+	require.JSONEq(t, `[{"content":"start","role":"user","type":"message"},{"content":"original answer","role":"assistant","type":"message"}]`, marshalJSON(t, checkpoints[0].ReplayInput))
+	require.Len(t, checkpoints[1].ReplayInput, 4)
+	require.Contains(t, string(checkpoints[1].ReplayInput[2]), "skill_content")
+	require.Contains(t, string(checkpoints[1].ReplayInput[3]), "$docs-helper first")
+}
+
+func TestLooperSteerCheckpointFailureRetainsDurableTurn(t *testing.T) {
+	provider := mockResponses(responseWithMessage("resp-final", "original answer"))
+	looper := testLooper(provider)
+	sink := recordingCheckpointSink()
+	errCheckpoint := errors.New("checkpoint unavailable")
+
+	var durable ActiveTurnCheckpoint
+
+	sink.RecordProviderResponseFunc = func(_ context.Context, checkpoint *ActiveTurnCheckpoint) error {
+		if _, found := checkpoint.ReplayInputIDs["steer"]; found {
+			return errCheckpoint
+		}
+
+		durable = *checkpoint
+
+		return nil
+	}
+	looper.CheckpointSink = sink
+	looper.SteerDrain = SteerDrain{Fn: func(context.Context, TurnPhase) []PromptInput {
+		return []PromptInput{{MessageID: "steer", Text: "accepted follow-up"}}
+	}}
+	output := make(chan ChatResponse, 10)
+
+	input := make(chan PromptInput, 1)
+	input <- testPromptInput(PromptInputRoleUser, "start", output)
+
+	close(input)
+
+	var saved []SessionEntry
+
+	err := looper.Loop(t.Context(), input, emptySession(), func(entry SessionEntry) error {
+		saved = append(saved, entry)
+		return nil
+	}, make(chan os.Signal, 1))
+	require.ErrorIs(t, err, errCheckpoint)
+	require.ErrorContains(t, err, "record steered input checkpoint")
+	require.Len(t, newParams(provider), 1, "failed persistence must prevent continuation")
+	require.Empty(t, saved, "failed persistence must not save a completed turn")
+	require.Empty(t, sink.ClearCompletedTurnCalls(), "previous durable checkpoint must remain")
+	require.Empty(t, collectResponses(output), "caller owns turn-failure delivery")
+	require.JSONEq(t, `[{"content":"start","role":"user","type":"message"},{"content":"original answer","role":"assistant","type":"message"}]`, marshalJSON(t, durable.ReplayInput))
 }
 
 func TestLooperEmitsToolDiagnosticsWhenEnabled(t *testing.T) {
@@ -2684,9 +2755,9 @@ func TestLooperInjectsSteersAfterToolBatch(t *testing.T) {
 
 func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 	steers := []PromptInput{
-		{Text: "use the other file", DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "first"}, Attachments: []Attachment{{MIME: "image/png", Filename: "screen.png", URL: "data:image/png;base64,c2NyZWVu"}}},
-		{Attachments: []Attachment{{MIME: "image/jpeg", Filename: "photo.jpg", URL: "data:image/jpeg;base64,cGhvdG8="}}},
-		{Text: "and skip tests", DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "last"}},
+		{MessageID: "web-skill-first", Text: "use the other file", DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "first"}, Attachments: []Attachment{{MIME: "image/png", Filename: "screen.png", URL: "data:image/png;base64,c2NyZWVu"}}},
+		{MessageID: "web-attachment", Attachments: []Attachment{{MIME: "image/jpeg", Filename: "photo.jpg", URL: "data:image/jpeg;base64,cGhvdG8="}}},
+		{MessageID: "web-skill-last", Text: "and skip tests", DirectSkill: &PromptInputDirectSkill{Name: "docs-helper", Arguments: "last"}},
 	}
 	want := []string{
 		`{"content":"<skill_content name=\"docs-helper\">\n# skill: docs-helper\n\nInstructions first fresh\n\nBase directory for this skill: file:///virtual/skills/docs-helper\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n\n</skill_files>\n</skill_content>","role":"developer","type":"message"}`,
@@ -2700,6 +2771,15 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 		responseWithMessage("resp-final", "done"),
 	)
 	looper := testLooper(mock)
+	sink := recordingCheckpointSink()
+
+	var checkpoints []ActiveTurnCheckpoint
+
+	sink.RecordProviderResponseFunc = func(_ context.Context, checkpoint *ActiveTurnCheckpoint) error {
+		checkpoints = append(checkpoints, *checkpoint)
+		return nil
+	}
+	looper.CheckpointSink = sink
 	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{{Name: "lookup", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}, {Name: "skill", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}}}}
 	loaded := LoadSkills(fstest.MapFS{"docs-helper/SKILL.md": mapFile("---\nname: docs-helper\ndescription: Docs\n---\nInstructions $ARGUMENTS !`echo run >> calls; cat state`")}, "/virtual/skills").Skills
 	factory := testSkillFactory(t, loaded, agentWithSkillPermission())
@@ -2747,6 +2827,10 @@ func TestLooperInjectsSteersInSendOrderAsUserRole(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, turns, 1)
 	require.Len(t, turns[0].ReplayInput, 9)
+	require.Equal(t, map[string]int{"web-skill-first": 4, "web-attachment": 5, "web-skill-last": 7}, turns[0].ReplayInputIDs)
+	require.Len(t, checkpoints, 5)
+	require.Equal(t, turns[0].ReplayInput[:8], checkpoints[3].ReplayInput)
+	require.Equal(t, turns[0].ReplayInputIDs, checkpoints[3].ReplayInputIDs)
 	require.Len(t, history, 9)
 
 	for i, expected := range want {
@@ -2778,27 +2862,54 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 
 	started := make(chan struct{}, 2)
 	release := make(chan struct{})
-	mock := mockResponses(
-		responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{
-			testFunctionCall("tool-1", "call-1", "first", `{}`),
-			testFunctionCall("tool-2", "call-2", "second", `{}`),
-		}),
-		responseWithMessage("resp-final", "done"),
-	)
+	secondFinished := make(chan struct{})
+	sink := recordingCheckpointSink()
+	mock := mockResponseFunc(func(_ context.Context, params *responses.ResponseNewParams) (*responses.Response, error) {
+		if len(params.Input.OfInputItemList) == 1 {
+			return responseWithFunctionCalls("resp-tool", []responses.ResponseFunctionToolCall{
+				testFunctionCall("tool-1", "call-1", "first", `{}`),
+				testFunctionCall("tool-2", "call-2", "second", `{}`),
+			}), nil
+		}
+
+		checkpoints := sink.RecordProviderResponseCalls()
+		last := checkpoints[len(checkpoints)-1].ActiveTurnCheckpoint
+		require.Len(t, last.ReplayInput, 7, "accepted steers must be persisted before the next provider request")
+		require.JSONEq(t, `{"content":"steer after batch","role":"user","type":"message"}`, string(last.ReplayInput[5]))
+		require.JSONEq(t, string(last.ReplayInput[5]), string(last.ReplayInput[6]))
+		require.Equal(t, map[string]int{"web-first": 5, "web-second": 6}, last.ReplayInputIDs)
+		require.Contains(t, string(last.ReplayInput[3]), `"call_id":"call-1"`)
+		require.Contains(t, string(last.ReplayInput[3]), strings.Repeat("full-first-result ", 1000))
+		require.Contains(t, string(last.ReplayInput[4]), `"call_id":"call-2"`)
+
+		return responseWithMessage("resp-final", "done"), nil
+	})
 	looper := testLooper(mock)
+	looper.CheckpointSink = sink
 	looper.ParallelToolCalls = 2
 	looper.Permissions = PermissionSet{Buckets: []PermissionBucket{
 		{Name: "first", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
 		{Name: "second", Rules: []PermissionRule{{Pattern: "*", Action: permissionAllow}}},
 	}}
-	block := func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+	first := testLooperTool("first")
+	first.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
 		started <- struct{}{}
 
 		<-release
+		<-secondFinished
 
-		return TextToolResult("ok"), nil
+		return TextToolResult(strings.Repeat("full-first-result ", 1000)), nil
 	}
-	looper.Tools = map[string]looperTool{"first": {Definition: testFunctionToolParam("first"), Call: block}, "second": {Definition: testFunctionToolParam("second"), Call: block}}
+	second := testLooperTool("second")
+	second.Call = func(context.Context, json.RawMessage, chan<- ChatResponse, toolCallMetadata) (ToolResult, error) {
+		started <- struct{}{}
+
+		<-release
+		close(secondFinished)
+
+		return TextToolResult("second-result"), nil
+	}
+	looper.Tools = map[string]looperTool{"first": first, "second": second}
 	looper.SteerDrain = SteerDrain{Fn: func(_ context.Context, phase TurnPhase) []PromptInput {
 		mu.Lock()
 
@@ -2806,7 +2917,7 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 		mu.Unlock()
 
 		if phase == TurnPhaseToolLoop {
-			return []PromptInput{{Text: "steer after batch"}}
+			return []PromptInput{{MessageID: "web-first", Text: "steer after batch"}, {MessageID: "web-second", Text: "steer after batch"}}
 		}
 
 		return nil
@@ -2833,7 +2944,7 @@ func TestLooperInjectsSteersOnceAfterParallelToolBatch(t *testing.T) {
 	mu.Lock()
 	require.Equal(t, []TurnPhase{TurnPhaseToolLoop, TurnPhaseFinalAnswer}, phases)
 	mu.Unlock()
-	require.Equal(t, 1, strings.Count(marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), `"content":"steer after batch"`))
+	require.Equal(t, 2, strings.Count(marshalJSON(t, newParams(mock)[1].Input.OfInputItemList), `"content":"steer after batch"`))
 }
 
 func TestLooperInjectsSteersWhenNoTools(t *testing.T) {

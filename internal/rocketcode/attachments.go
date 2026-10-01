@@ -30,6 +30,8 @@ const (
 
 // PromptInput is one prompt plus optional model-visible attachments.
 type PromptInput struct {
+	// MessageID identifies the originating input independently of its text.
+	MessageID string `json:"message_id,omitempty"`
 	// Role defaults to PromptInputRoleUser when empty.
 	Role PromptInputRole `json:"role,omitempty"`
 	Text string          `json:"text"`

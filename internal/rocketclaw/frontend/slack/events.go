@@ -21,6 +21,11 @@ func (c *Connector) StartEvents(ctx context.Context, backend frontend.Backend) <
 
 		for event := range events {
 			message := event.Message
+			if len(message.TranscriptCheckpoint) > 0 || len(message.TranscriptEntry) > 0 || message.TranscriptTerminal != "" {
+				event.Acknowledgement <- nil
+				continue
+			}
+
 			if message.ConsumedID != "" {
 				channelID, threadTS, ok := protocol.SlackThreadTarget(message.ConversationID)
 				if ok && message.ConsumedSource == protocol.SourceWeb && message.ConsumedText != "" {

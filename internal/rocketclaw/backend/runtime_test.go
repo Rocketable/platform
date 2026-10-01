@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -29,11 +30,27 @@ func TestRuntimeSubscribeIsLiveAndWaitsForDelivery(t *testing.T) {
 		history := protocol.NewOutboundMessage("conversation", "old")
 		require.NoError(t, rt.PublishOutbound(t.Context(), history))
 		events := rt.Subscribe(t.Context())
+		second := rt.Subscribe(t.Context())
 		message := protocol.NewOutboundMessage("conversation", "new")
 		message.Complete = true
+		message.TranscriptCheckpoint = json.RawMessage(`{"replay_input":[{"content":"full result"}]}`)
+		message.TranscriptEntry = json.RawMessage(`{"replay_input_ids":{"web-input":0}}`)
 		finished := false
 
 		var group errgroup.Group
+		group.Go(func() error {
+			for event := range second {
+				assert.Equal(t, message.TranscriptCheckpoint, event.Message.TranscriptCheckpoint)
+				assert.Equal(t, message.TranscriptEntry, event.Message.TranscriptEntry)
+
+				event.Message.TranscriptCheckpoint[0], event.Message.TranscriptEntry[0] = 'Y', 'Y'
+				event.Acknowledgement <- nil
+
+				break
+			}
+
+			return nil
+		})
 		group.Go(func() error {
 			err := rt.PublishOutbound(t.Context(), message)
 
@@ -44,6 +61,10 @@ func TestRuntimeSubscribeIsLiveAndWaitsForDelivery(t *testing.T) {
 
 		for event := range events {
 			require.Equal(t, "new", event.Message.Text)
+			require.Equal(t, message.TranscriptCheckpoint, event.Message.TranscriptCheckpoint)
+			require.Equal(t, message.TranscriptEntry, event.Message.TranscriptEntry)
+			event.Message.TranscriptCheckpoint[0], event.Message.TranscriptEntry[0] = 'X', 'X'
+
 			synctest.Wait()
 			require.False(t, finished)
 
@@ -56,6 +77,8 @@ func TestRuntimeSubscribeIsLiveAndWaitsForDelivery(t *testing.T) {
 		require.True(t, finished)
 		require.NoError(t, group.Wait())
 		require.NoError(t, message.WaitDelivered(t.Context()))
+		require.Equal(t, byte('{'), message.TranscriptCheckpoint[0])
+		require.Equal(t, byte('{'), message.TranscriptEntry[0])
 	})
 }
 
@@ -226,16 +249,61 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 			require.NoError(t, rt.CreateConversation(ctx, protocol.Conversation{ID: id, Agent: "main"}))
 			replay, err := replayInputForMessage("user", id+" history")
 			require.NoError(t, err)
-			_, err = store.AppendEntryID(ctx, id, &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay, Agent: id, Model: "work/" + id, ReasoningEffort: new("high")})
+
+			entry := &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: replay, Agent: id, Model: "work/" + id, ReasoningEffort: new("high")}
+			if id == "X" {
+				entry.ReplayInput = append([]json.RawMessage{json.RawMessage(`{"type":"compaction","encrypted_content":"private"}`)}, replay...)
+				entry.ReplayInputIDs = map[string]int{"web-source": 1}
+				entry.ReplayAttribution = []rocketcode.ReplayAttribution{{Start: 1, End: 2, Agent: "original", Model: "work/original", ReasoningEffort: new("low")}}
+			}
+
+			_, err = store.AppendEntryID(ctx, id, entry)
 			require.NoError(t, err)
 		}
 
 		events := rt.Subscribe(ctx)
+		// Legacy chained copies lose producer provenance when that producer is
+		// deleted; like History, sync must not expose their retained replay.
+		_, err := store.db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('X', '{"sync_source_entry_id":-1,"replay_input":[{"type":"message","role":"assistant","content":"deleted producer"}]}', '')`)
+		require.NoError(t, err)
 
 		var delivered, deliveryOrder []string
 
+		var transcripts []*protocol.OutboundMessage
+
+		failTranscriptDelivery := false
+
 		go func() {
 			for event := range events {
+				if len(event.Message.TranscriptEntry) > 0 || event.Message.TranscriptTerminal != "" {
+					transcripts = append(transcripts, event.Message)
+					if event.Message.TranscriptEntryID != 0 {
+						committed, err := store.ObserveEntries(ctx, event.Message.ConversationID)
+						assert.NoError(t, err)
+
+						found := false
+
+						for _, entry := range committed {
+							if entry.ID == event.Message.TranscriptEntryID {
+								found = true
+								expected, err := json.Marshal(entry.Entry)
+								assert.NoError(t, err)
+								assert.JSONEq(t, string(expected), string(event.Message.TranscriptEntry))
+							}
+						}
+
+						assert.True(t, found, "sync must commit before publication")
+					}
+
+					if failTranscriptDelivery {
+						event.Acknowledgement <- errors.New("transcript observer failed")
+					} else {
+						event.Acknowledgement <- nil
+					}
+
+					continue
+				}
+
 				delivered = append(delivered, event.Message.ConversationID)
 				if event.Message.ConversationID == "Y" && event.Message.SlackReply.MessageTS == "producer" {
 					assert.Equal(t, "X", event.Message.SourceConversationID)
@@ -264,7 +332,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		require.NoError(t, source.ResetScheduledMessages())
 		require.NoError(t, source.ScheduleMessage(time.Hour, "after sync", false))
 		// A copied row's ID, not timestamp magnitude, determines the last update.
-		_, err := store.AppendEntryID(ctx, "X", &rocketcode.SessionEntry{Timestamp: time.Unix(1, 123456789).UTC()})
+		_, err = store.AppendEntryID(ctx, "X", &rocketcode.SessionEntry{Timestamp: time.Unix(1, 123456789).UTC()})
 		require.NoError(t, err)
 
 		scheduled, err := store.ScheduledMessagesForConversation("X")
@@ -289,6 +357,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		})
 		synctest.Wait()
 		require.Equal(t, []string{"X"}, delivered)
+		require.Len(t, transcripts, 1, "private producer terminal must not expose a destination transcript")
 
 		beforeEntries, err := store.ObserveEntries(ctx, "Y")
 		require.NoError(t, err)
@@ -306,6 +375,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		synctest.Wait()
 		require.False(t, waitingFinished, "failed Sync must retain the destination reservation")
 		require.Equal(t, []string{"X"}, delivered)
+		require.Len(t, transcripts, 1, "rolled-back sync must expose nothing")
 
 		afterEntries, err := store.ObserveEntries(ctx, "Y")
 		require.NoError(t, err)
@@ -330,6 +400,28 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		synctest.Wait()
 		require.Equal(t, []string{"X", "Y", "Y"}, delivered)
 		require.Equal(t, []string{"producer", "producer", "human"}, deliveryOrder)
+		require.Len(t, transcripts, 7, "five committed copied entries plus two local terminal markers")
+
+		var synced *protocol.OutboundMessage
+
+		for _, message := range transcripts {
+			if message.TranscriptEntryID != 0 && message.ConversationID == "Y" {
+				synced = message
+				break
+			}
+		}
+
+		require.NotNil(t, synced)
+		require.Equal(t, "X", synced.SourceConversationID)
+		require.Empty(t, synced.TranscriptTerminal, "sync item completion is not turn termination")
+
+		var syncedEntry rocketcode.SessionEntry
+		require.NoError(t, json.Unmarshal(synced.TranscriptEntry, &syncedEntry))
+		require.Equal(t, "work/X", syncedEntry.Model)
+		require.Equal(t, new("high"), syncedEntry.ReasoningEffort)
+		require.Equal(t, map[string]int{"web-source": 0}, syncedEntry.ReplayInputIDs)
+		require.Equal(t, []rocketcode.ReplayAttribution{{End: 1, Agent: "original", Model: "work/original", ReasoningEffort: new("low")}}, syncedEntry.ReplayAttribution)
+		require.Len(t, syncedEntry.ReplayInput, 1, "sync strips opaque compaction items before publishing")
 
 		thread, found, err := store.Thread("Y")
 		require.NoError(t, err)
@@ -373,6 +465,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		require.Equal(t, summaries, afterSync)
 		synctest.Wait()
 		require.Len(t, delivered, 3)
+		require.Len(t, transcripts, 7, "repeat sync must not repeat transcript entries")
 
 		entries, err := store.ObserveEntries(ctx, "Y")
 		require.NoError(t, err)
@@ -392,7 +485,7 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 
 		entries, err = store.ObserveEntries(ctx, "X")
 		require.NoError(t, err)
-		require.Len(t, entries, 5)
+		require.Len(t, entries, 6, "the hidden legacy copy stays in its source, not the destination")
 		sourceEntries := entries
 
 		scheduled, err = store.ScheduledMessagesForConversation("Y")
@@ -449,6 +542,25 @@ func TestRuntimeProducerKeepsDestinationUntilSync(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, destinationEntries, entries, "subsequent Sync must not duplicate copied entries")
 
+		beforeTranscripts := len(transcripts)
+
+		source.mu.Lock()
+		require.Nil(t, source.pendingOutput)
+		source.mu.Unlock()
+
+		_, err = store.AppendEntryID(ctx, "X", &rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"function_call_output","call_id":"silent-call","output":"full result without a visible answer"}`)}})
+		require.NoError(t, err)
+
+		failTranscriptDelivery = true
+
+		require.NoError(t, rt.SyncConversation(ctx, "X", "Y"), "observer failure must not turn committed sync into failure")
+		synctest.Wait()
+		require.Len(t, transcripts, beforeTranscripts+1, "sync without pending compact output still publishes detail")
+		require.Len(t, delivered, 6, "no-answer sync must not create compact output")
+		require.NoError(t, rt.SyncConversation(ctx, "X", "Y"))
+		synctest.Wait()
+		require.Len(t, transcripts, beforeTranscripts+1, "repeat sync must not retry already committed detail")
+
 		beforeDelete, err := store.ListSessions(ctx, []string{"Y"})
 		require.NoError(t, err)
 		_, err = store.DeleteSession(ctx, "X")
@@ -504,6 +616,11 @@ func TestRuntimePersistedEnqueueAndProducerArrivalOrder(t *testing.T) {
 				)
 				listeners.Go(func() error {
 					for event := range events {
+						if len(event.Message.TranscriptCheckpoint) > 0 || len(event.Message.TranscriptEntry) > 0 || event.Message.TranscriptTerminal != "" {
+							event.Acknowledgement <- nil
+							continue
+						}
+
 						if event.Message.ConsumedID == "" {
 							delivered = append(delivered, event.Message.ConversationID)
 							order = append(order, event.Message.SlackReply.MessageTS)

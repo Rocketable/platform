@@ -19,10 +19,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/backend"
 	"github.com/Rocketable/platform/internal/rocketclaw/config"
@@ -36,6 +38,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // Server supplies concrete Web handlers. The host owns transport registration.
@@ -258,6 +261,16 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 		return response, nil
 	}
 
+	entries = slices.DeleteFunc(entries, func(entry backend.ObservedSessionEntry) bool {
+		return entry.Synced && entry.SourceConversationID == "" && !cronTrace || request.SourceConversationId != "" && entry.SourceConversationID != request.SourceConversationId
+	})
+	response.Messages, err = s.projectEntries(ctx, request.Id, entries)
+
+	return response, err
+}
+
+// projectEntries is the readable contract shared by saved history and live replay.
+func (s *Server) projectEntries(ctx context.Context, destination string, entries []backend.ObservedSessionEntry) ([]*TranscriptEvent, error) {
 	root, err := os.OpenRoot(s.cfg.Workspace)
 	if err != nil {
 		return nil, fmt.Errorf("open attachment workspace: %w", err)
@@ -267,20 +280,19 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 
 	calls := make(map[string]map[string]string)
 
+	var messages []*TranscriptEvent
+
 	for i := range entries {
 		entry := &entries[i]
-		if entry.Synced && entry.SourceConversationID == "" && !cronTrace {
-			continue
-		}
-
-		producer := cmp.Or(entry.SourceConversationID, request.Id)
+		producer := cmp.Or(entry.SourceConversationID, destination)
 
 		if calls[producer] == nil {
 			calls[producer] = make(map[string]string)
 		}
 
-		if request.GetSourceConversationId() != "" && entry.SourceConversationID != request.GetSourceConversationId() {
-			continue
+		inputIDs := make(map[int]string, len(entry.Entry.ReplayInputIDs))
+		for id, position := range entry.Entry.ReplayInputIDs {
+			inputIDs[position] = id
 		}
 
 		items, err := rocketcode.ReplayInputToParams(entry.Entry.ReplayInput)
@@ -323,10 +335,11 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 					event.Header = header
 				}
 
-				event.attribute(entry.Entry.AttributionAt(i), producer, request.Id)
+				event.attribute(entry.Entry.AttributionAt(i), producer, destination)
 				event.MessageId = fmt.Sprintf("%d:%d", entry.ID, i)
+				event.InputId = inputIDs[i]
 
-				response.Messages = append(response.Messages, event)
+				messages = append(messages, event)
 				if event.Role == "assistant" {
 					lastReply = event.Text
 				}
@@ -335,12 +348,12 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 
 		if strings.TrimSpace(deliveryText) != "" && deliveryText != lastReply {
 			event := &TranscriptEvent{Role: "assistant", Text: deliveryText, Complete: true, MessageId: fmt.Sprintf("%d:delivery", entry.ID)}
-			event.attribute(entry.Entry.AttributionAt(deliveryIndex), producer, request.Id)
-			response.Messages = append(response.Messages, event)
+			event.attribute(entry.Entry.AttributionAt(deliveryIndex), producer, destination)
+			messages = append(messages, event)
 		}
 	}
 
-	return response, nil
+	return messages, nil
 }
 
 func (e *TranscriptEvent) attribute(snapshot rocketcode.ReplayAttribution, source, destination string) {
@@ -385,11 +398,12 @@ func (s *Server) inputEvent(ctx context.Context, id, text string) (*TranscriptEv
 
 func historyEvent(item *responses.ResponseInputItemUnionParam, raw json.RawMessage) (*TranscriptEvent, error) {
 	var kind struct {
-		Type      string `json:"type"`
-		Name      string `json:"name"`
-		CallID    string `json:"call_id"`
-		Arguments string `json:"arguments"`
-		Output    string `json:"output"`
+		Type      string                               `json:"type"`
+		Name      string                               `json:"name"`
+		CallID    string                               `json:"call_id"`
+		Arguments string                               `json:"arguments"`
+		Output    string                               `json:"output"`
+		Phase     responses.ResponseOutputMessagePhase `json:"phase"`
 		Summary   []struct {
 			Text string `json:"text"`
 		} `json:"summary"`
@@ -454,7 +468,12 @@ func historyEvent(item *responses.ResponseInputItemUnionParam, raw json.RawMessa
 		header, _ = item.OfMessage.ExtraFields()["prompt_header"].(string)
 	}
 
-	return &TranscriptEvent{Role: role, Text: text, Header: header, Complete: true}, nil
+	event := &TranscriptEvent{Role: role, Text: text, Header: header, Complete: true}
+	if role == "assistant" && kind.Phase != "" {
+		event.Phase = new(string(kind.Phase))
+	}
+
+	return event, nil
 }
 
 func (s *Server) humanConversation(id string) (bool, error) {
@@ -1074,58 +1093,271 @@ func (s *Server) join(request *JoinRequest, stream grpc.ServerStream) error {
 		return err
 	}
 
-	for event := range s.backend.Subscribe(stream.Context()) {
+	ctx, cancel := context.WithCancel(stream.Context())
+	defer cancel()
+	// Registration is immediate; the acknowledged bus holds publications while
+	// these reads run. Re-read durable checkpoints below so an older waiting
+	// publication cannot roll back the opening snapshot.
+	events := s.backend.Subscribe(ctx)
+	richTurns := make(map[string]bool)
+
+	entries, sequence, err := s.seedTranscript(ctx, request.Id, stream, richTurns)
+	if err != nil {
+		cancel()
+	}
+	// Enter the iterator even after a seed failure: its defer owns unsubscription.
+	for event := range events {
 		message := event.Message
-
-		var err error
-
-		if message.ConversationID == request.Id {
-			if message.ConsumedID != "" {
-				var consumed *TranscriptEvent
-
-				consumed, err = s.inputEvent(stream.Context(), request.Id, message.ConsumedText)
-				if err == nil {
-					consumed.MessageId = message.ConsumedID
-					consumed.Header = message.ConsumedHeader
-					consumed.attribute(rocketcode.ReplayAttribution{Agent: message.Agent, Model: message.Model, ReasoningEffort: message.ReasoningEffort}, cmp.Or(message.SourceConversationID, request.Id), request.Id)
-					err = stream.SendMsg(consumed)
+		if err == nil && message.ConversationID == request.Id {
+			if len(message.TranscriptCheckpoint) > 0 || len(message.TranscriptEntry) > 0 || message.TranscriptTerminal != "" {
+				if len(message.TranscriptCheckpoint) > 0 || len(message.TranscriptEntry) > 0 {
+					richTurns[message.TurnID] = message.TurnID != ""
 				}
-			}
 
-			if err == nil && message.ProgressText != "" {
-				err = stream.SendMsg(&TranscriptEvent{Text: message.ProgressText, Role: "thinking", TurnId: message.TurnID})
-			}
-
-			if err == nil && (message.Text != "" || message.Complete || len(message.Attachments) > 0) {
-				response := &TranscriptEvent{Text: message.Text, Role: "assistant", Complete: message.Complete, TurnId: message.TurnID}
-				response.attribute(rocketcode.ReplayAttribution{Agent: message.Agent, Model: message.Model, ReasoningEffort: message.ReasoningEffort}, cmp.Or(message.SourceConversationID, request.Id), request.Id)
-
-				if len(message.Attachments) > 0 {
-					history, errHistory := s.history(stream.Context(), &HistoryRequest{Id: request.Id})
-
-					err = errHistory
-					if err == nil {
-						for _, item := range history.Messages {
-							for _, attachment := range item.Attachments {
-								if slices.ContainsFunc(message.Attachments, func(sent protocol.OutboundAttachment) bool { return sent.ID == attachment.Id }) {
-									response.Attachments = append(response.Attachments, attachment)
-								}
-							}
-						}
+				current := message
+				if len(message.TranscriptCheckpoint) > 0 && message.TranscriptTerminal == "" {
+					current, err = s.activeTranscript(ctx, request.Id, entries)
+					if current != nil && current.TurnID != message.TurnID {
+						current = nil
 					}
 				}
 
-				if err == nil {
-					err = stream.SendMsg(response)
+				if err == nil && current != nil {
+					var snapshot *TranscriptEvent
+
+					snapshot, err = s.transcriptSnapshot(ctx, request.Id, current)
+					if err == nil {
+						if !richTurns[message.TurnID] {
+							snapshot.Text = ""
+						}
+
+						err = sendTranscriptSnapshot(stream, sequence, snapshot)
+						sequence++
+					}
 				}
+
+				event.Acknowledgement <- err
+
+				if err != nil {
+					break
+				}
+
+				continue
 			}
+
+			err = s.sendCompactTranscript(ctx, stream, request.Id, message, richTurns[message.TurnID] || message.TranscriptEntryID != 0)
 		}
 
 		event.Acknowledgement <- err
 
 		if err != nil {
-			return fmt.Errorf("web live event: %w", err)
+			break
 		}
+	}
+
+	if err != nil {
+		return fmt.Errorf("web live event: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Server) seedTranscript(ctx context.Context, id string, stream grpc.ServerStream, richTurns map[string]bool) ([]backend.ObservedSessionEntry, uint64, error) {
+	entries, err := s.entries(ctx, id)
+	if err != nil {
+		return nil, 1, err
+	}
+
+	items, err := s.projectEntries(ctx, id, entries)
+	if err != nil {
+		return entries, 1, err
+	}
+
+	active, errActive := s.activeTranscript(ctx, id, entries)
+
+	seed := &TranscriptEvent{Snapshot: true, Seed: true, Items: items}
+	if active == nil && errActive == nil {
+		seed.Terminal = string(protocol.TerminalComplete)
+	}
+
+	if err := errors.Join(sendTranscriptSnapshot(stream, 1, seed), errActive); err != nil {
+		return entries, 2, err
+	}
+	// Sending a large history seed can block. Read the checkpoint again so its
+	// following active snapshot includes progress persisted during that send.
+	active, err = s.activeTranscript(ctx, id, entries)
+	if err != nil || active == nil {
+		return entries, 2, err
+	}
+
+	richTurns[active.TurnID] = true
+
+	snapshot, err := s.transcriptSnapshot(ctx, id, active)
+	if err != nil {
+		return entries, 2, err
+	}
+
+	return entries, 3, sendTranscriptSnapshot(stream, 2, snapshot)
+}
+
+func (s *Server) sendCompactTranscript(ctx context.Context, stream grpc.ServerStream, destination string, message *protocol.OutboundMessage, recorded bool) error {
+	if message.ConsumedID != "" {
+		consumed, err := s.inputEvent(ctx, destination, message.ConsumedText)
+		if err != nil {
+			return err
+		}
+
+		consumed.MessageId, consumed.ConsumedId = message.ConsumedID, message.ConsumedID
+		consumed.Header = message.ConsumedHeader
+		consumed.attribute(rocketcode.ReplayAttribution{Agent: message.Agent, Model: message.Model, ReasoningEffort: message.ReasoningEffort}, cmp.Or(message.SourceConversationID, destination), destination)
+
+		if err := stream.SendMsg(consumed); err != nil {
+			return fmt.Errorf("send consumed input: %w", err)
+		}
+	}
+
+	if recorded {
+		return nil
+	}
+
+	if message.ProgressText != "" {
+		progress := &TranscriptEvent{Text: message.ProgressText, Role: "thinking", TurnId: message.TurnID}
+		progress.attribute(rocketcode.ReplayAttribution{Agent: message.Agent, Model: message.Model, ReasoningEffort: message.ReasoningEffort}, cmp.Or(message.SourceConversationID, destination), destination)
+
+		if err := stream.SendMsg(progress); err != nil {
+			return fmt.Errorf("send compact progress: %w", err)
+		}
+	}
+
+	if message.Text == "" && !message.Complete && len(message.Attachments) == 0 {
+		return nil
+	}
+
+	response := &TranscriptEvent{Text: message.Text, Role: "assistant", Complete: message.Complete, TurnId: message.TurnID}
+	response.attribute(rocketcode.ReplayAttribution{Agent: message.Agent, Model: message.Model, ReasoningEffort: message.ReasoningEffort}, cmp.Or(message.SourceConversationID, destination), destination)
+
+	if len(message.Attachments) > 0 {
+		history, err := s.history(ctx, &HistoryRequest{Id: destination})
+		if err != nil {
+			return err
+		}
+
+		for _, item := range history.Messages {
+			for _, attachment := range item.Attachments {
+				if slices.ContainsFunc(message.Attachments, func(sent protocol.OutboundAttachment) bool { return sent.ID == attachment.Id }) {
+					response.Attachments = append(response.Attachments, attachment)
+				}
+			}
+		}
+	}
+
+	if err := stream.SendMsg(response); err != nil {
+		return fmt.Errorf("send compact response: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Server) activeTranscript(ctx context.Context, id string, entries []backend.ObservedSessionEntry) (*protocol.OutboundMessage, error) {
+	turn, found, err := s.sessions.ConversationActiveTurn(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("read live checkpoint: %w", err)
+	}
+
+	if !found {
+		return nil, nil
+	}
+	// Pre-upgrade rows have no execution identity. Do not invent a region that
+	// cannot bind to live updates; startup recovery's next checkpoint upgrades it.
+	executionID := turn.SourceMetadata["execution_turn_id"]
+	if executionID == "" {
+		return nil, fmt.Errorf("seed live checkpoint: %w", status.Error(codes.FailedPrecondition, "active checkpoint has no execution identity; await recovery"))
+	}
+
+	message := &protocol.OutboundMessage{ConversationID: id, SourceConversationID: id, TurnID: executionID, TranscriptTerminal: protocol.Terminal(turn.SourceMetadata["execution_terminal"])}
+	// Append can precede checkpoint clearing. Bind that execution to the already
+	// seeded entry by provider response identity, not input text or timestamps.
+	for index := range entries {
+		entry := &entries[index]
+		if turn.Checkpoint.ResponseID != "" && entry.SourceConversationID == "" && entry.Entry.ResponseID == turn.Checkpoint.ResponseID {
+			message.TranscriptEntryID = entry.ID
+
+			message.TranscriptEntry, err = json.Marshal(entry.Entry)
+			if err != nil {
+				return nil, fmt.Errorf("encode seeded live entry: %w", err)
+			}
+
+			return message, nil
+		}
+	}
+
+	message.TranscriptCheckpoint, err = json.Marshal(turn.Checkpoint)
+	if err != nil {
+		return nil, fmt.Errorf("encode live checkpoint: %w", err)
+	}
+
+	return message, nil
+}
+
+func (s *Server) transcriptSnapshot(ctx context.Context, destination string, message *protocol.OutboundMessage) (*TranscriptEvent, error) {
+	entry := rocketcode.SessionEntry{}
+	if len(message.TranscriptEntry) > 0 {
+		if err := json.Unmarshal(message.TranscriptEntry, &entry); err != nil {
+			return nil, fmt.Errorf("decode live entry: %w", err)
+		}
+	} else if len(message.TranscriptCheckpoint) > 0 {
+		var checkpoint rocketcode.ActiveTurnCheckpoint
+		if err := json.Unmarshal(message.TranscriptCheckpoint, &checkpoint); err != nil {
+			return nil, fmt.Errorf("decode live checkpoint: %w", err)
+		}
+
+		entry = rocketcode.SessionEntry{Agent: checkpoint.Agent, Model: checkpoint.DisplayModel, ReasoningEffort: checkpoint.ReasoningEffort, ReplayInput: checkpoint.ReplayInput, ReplayInputIDs: checkpoint.ReplayInputIDs, ReplayAttribution: checkpoint.ReplayAttribution}
+	}
+
+	items, err := s.projectEntries(ctx, destination, []backend.ObservedSessionEntry{{ID: message.TranscriptEntryID, SourceConversationID: message.SourceConversationID, Entry: entry}})
+	if err != nil {
+		return nil, err
+	}
+
+	snapshot := &TranscriptEvent{Snapshot: len(message.TranscriptEntry) > 0 || len(message.TranscriptCheckpoint) > 0, TurnId: message.TurnID, EntryId: message.TranscriptEntryID, Items: items, Terminal: string(message.TranscriptTerminal), Text: message.Text}
+	snapshot.attribute(rocketcode.ReplayAttribution{Agent: message.Agent, Model: message.Model, ReasoningEffort: message.ReasoningEffort}, cmp.Or(message.SourceConversationID, destination), destination)
+
+	for _, item := range items {
+		if message.TranscriptEntryID == 0 {
+			item.MessageId = message.TurnID + ":" + strings.TrimPrefix(item.MessageId, "0:")
+		}
+
+		for _, attachment := range item.Attachments {
+			if slices.ContainsFunc(message.Attachments, func(sent protocol.OutboundAttachment) bool { return sent.ID == attachment.Id }) && !slices.ContainsFunc(snapshot.Attachments, func(sent *Attachment) bool { return sent.Id == attachment.Id }) {
+				snapshot.Attachments = append(snapshot.Attachments, attachment)
+			}
+		}
+	}
+
+	return snapshot, nil
+}
+
+// sendTranscriptSnapshot bounds individual transport frames, not readable content.
+// Full turn retransmission costs checkpoint count times turn size; incremental
+// replay publication is the upgrade path if that cumulative ceiling matters.
+func sendTranscriptSnapshot(stream grpc.ServerStream, sequence uint64, snapshot *TranscriptEvent) error {
+	data, err := (protojson.MarshalOptions{EmitDefaultValues: true}).Marshal(snapshot)
+	if err != nil {
+		return fmt.Errorf("encode readable snapshot: %w", err)
+	}
+
+	for index := uint32(0); len(data) > 0; index++ {
+		end := min(len(data), 256<<10)
+		for end < len(data) && !utf8.RuneStart(data[end]) {
+			end--
+		}
+
+		frame := &TranscriptEvent{Snapshot: true, SnapshotId: strconv.FormatUint(sequence, 10), FragmentIndex: index, Fragment: string(data[:end]), SnapshotEnd: end == len(data)}
+		if err := stream.SendMsg(frame); err != nil {
+			return fmt.Errorf("send readable snapshot: %w", err)
+		}
+
+		data = data[end:]
 	}
 
 	return nil

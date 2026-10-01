@@ -6,11 +6,96 @@ const playwright = process.env.ROCKETCLAW_PLAYWRIGHT_MODULE;
 const chromium = process.env.ROCKETCLAW_CHROMIUM;
 const dist = path.resolve(import.meta.dir, "../../internal/web/dist");
 
+for (const width of [1280, 390, 320]) test.skipIf(!playwright || !chromium)(`ordered rich live transcript at ${width}px`, async () => {
+  const { chromium: engine } = await import(playwright!);
+  let stream: ReadableStreamDefaultController<string>;
+  let history: TranscriptEvent[] = [];
+  let snapshotId = 0;
+  const item = (position: number, role: string, text: string, extra: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ role, text, turnId: "", messageId: `run:${position}`, complete: true, snapshot: false, origin: "canonical", agent: "main", model: "work/model", ...extra });
+  const send = (payload: Partial<TranscriptEvent>) => {
+    const data = JSON.stringify(payload);
+    const id = String(++snapshotId);
+    const boundary = Math.floor(data.length / 2);
+    stream.enqueue(`data: ${JSON.stringify({ snapshotId: id, fragmentIndex: 0, fragment: data.slice(0, boundary) })}\n\n`);
+    stream.enqueue(`data: ${JSON.stringify({ snapshotId: id, fragmentIndex: 1, snapshotEnd: true, fragment: data.slice(boundary) })}\n\n`);
+  };
+  const forks: { id: string; before?: string }[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/stream") return new Response(new ReadableStream({ start(controller) { stream = controller; controller.enqueue(": connected\n\n"); } }), { headers: { "Content-Type": "text/event-stream" } });
+    if (url.pathname === "/api/ListSessions") return new Response(`data: ${JSON.stringify({ sessions: [{ id: "live", agent: "main", name: "Live order" }], owner: "tester", upstreamSuccess: true, summariesComplete: true })}\n\nevent: complete\ndata: {}\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+    if (!url.pathname.startsWith("/api/")) {
+      const file = Bun.file(path.join(dist, url.pathname));
+      return new Response(await file.exists() ? file : Bun.file(path.join(dist, "index.html")));
+    }
+    const input = await request.json() as { id: string; before?: string };
+    switch (url.pathname) {
+      case "/api/Protocol": return Response.json({ protoSha256: "rich-live-order" });
+      case "/api/Identity": return Response.json({ username: "tester" });
+      case "/api/ListAgents": return Response.json({ agents: [{ name: "main", model: "work/model" }], currentAgent: "main" });
+      case "/api/ListSkills": return Response.json({ skills: [] });
+      case "/api/ListQueue": return Response.json({ items: [] });
+      case "/api/History": return Response.json({ messages: history });
+      case "/api/ForkSession": forks.push(input); return Response.json({ id: "forked-live", prompt: history.find((message) => message.messageId === input.before) });
+      default: return Response.json({});
+    }
+  } });
+  const browser = await engine.launch({ executablePath: chromium, headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width, height: width < 640 ? 700 : 900 }, isMobile: width < 640, hasTouch: width < 640 });
+    const errors: string[] = [];
+    page.on("pageerror", (error: Error) => errors.push(error.message));
+    const subscribed = page.waitForResponse((response: { url: () => string }) => response.url().includes("/stream?"));
+    await page.goto(`http://127.0.0.1:${server.port}/s/${btoa("live")}`);
+    await subscribed;
+    await page.getByRole("textbox").waitFor();
+    const items = [item(0, "user", "Slack start")];
+    const checkpoint = () => send({ snapshot: true, turnId: "run", entryId: "0", items });
+    checkpoint();
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
+    items.push(item(1, "assistant", "Live commentary"), item(2, "tool", 'execute\n{"code":"printf first"}', { toolName: "execute", toolCallId: "a" }), item(3, "tool", 'execute\n{"code":"printf second"}', { toolName: "execute", toolCallId: "b" }), item(4, "tool", "equal result", { toolCallId: "a" }), item(5, "tool", "equal result", { toolCallId: "b" }));
+    checkpoint(); checkpoint();
+    const transcript = page.locator("#transcript-scroll");
+    await transcript.getByText("Live commentary", { exact: true }).waitFor();
+    await transcript.getByText("Result\nequal result", { exact: false }).first().waitFor();
+    expect(await transcript.locator("summary").getByText("Run · printf first", { exact: true }).count()).toBe(1);
+    expect(await transcript.locator("summary").getByText("Run · printf second", { exact: true }).count()).toBe(1);
+    expect(await page.getByRole("button", { name: "Stop", exact: true }).isVisible()).toBe(true);
+    items.push(item(6, "user", "Consumed Slack steer"), item(7, "assistant", "After steer commentary"), item(8, "tool", 'execute\n{"code":"printf later"}', { toolName: "execute", toolCallId: "c" }), item(9, "tool", "later result", { toolCallId: "c" }), item(10, "assistant", "Live final answer"));
+    checkpoint();
+    await transcript.getByText("Live final answer", { exact: true }).waitFor();
+    const visible = await transcript.innerText();
+    const order = ["Slack start", "Live commentary", "Run · printf first", "Run · printf second", "Consumed Slack steer", "After steer commentary", "Run · printf later", "later result", "Live final answer"].map((text) => visible.indexOf(text));
+    expect(order.every((position) => position >= 0)).toBe(true);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    const later = transcript.locator("details").filter({ has: page.getByText("Run · printf later", { exact: true }) }).last();
+    await later.locator("summary").click();
+    expect(await transcript.getByText("After steer commentary", { exact: true }).isVisible()).toBe(true);
+    expect(await transcript.getByText("Live final answer", { exact: true }).isVisible()).toBe(true);
+    expect(await transcript.evaluate((element: HTMLElement) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await Bun.write(path.resolve(import.meta.dir, `../../../../.tmp/U3-live-order-${width}.png`), await page.screenshot());
+    history = items.map((message) => ({ ...message, messageId: message.messageId!.replace("run:", "42:") }));
+    send({ snapshot: true, turnId: "run", entryId: "42", items: history, terminal: "complete", text: "Live final answer" });
+    await page.getByRole("button", { name: "Stop", exact: true }).waitFor({ state: "hidden" });
+    expect(await transcript.getByText("Live final answer", { exact: true }).count()).toBe(1);
+    expect(await transcript.locator('[data-message-id="42:6"]').count()).toBe(1);
+    await page.locator("textarea").fill("$fork");
+    await page.locator("textarea").press("Enter");
+    await page.getByRole("dialog").getByRole("button", { name: "Consumed Slack steer Continue before this message" }).click();
+    await page.waitForURL("**/s/" + btoa("forked-live").replace(/=+$/, ""));
+    expect(forks).toEqual([{ id: "live", before: "42:6" }]);
+    expect(errors).toEqual([]);
+  } finally { await browser.close(); server.stop(true); }
+}, 30_000);
+
 for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf(!playwright || !chromium)(`fork and handoff at ${width}px`, async () => {
   const { chromium: engine } = await import(playwright!);
   const message = (messageId: string, role: string, text: string): TranscriptEvent => ({ messageId, role, text, complete: true, snapshot: false, turnId: "" });
   const histories: Record<string, TranscriptEvent[]> = {
-    source: [message("1:0", "user", "First request"), message("1:1", "assistant", "First answer"), message("2:0", "user", "Choose this prompt")],
+    source: [message("1:0", "user", "First request"), message("1:1", "assistant", "Before tool commentary"),
+      { ...message("1:2", "tool", 'execute\n{"code":"printf ordered"}'), toolName: "execute", toolCallId: "ordered-call" },
+      { ...message("1:3", "tool", "Ordered tool result"), toolCallId: "ordered-call" },
+      message("1:4", "assistant", "First answer"), message("2:0", "user", "Choose this prompt")],
     destination: [message("3:0", "user", "Destination search needle"), message("3:1", "assistant", "You are looking at the destination")],
   };
   const header = "[ exact <header>\n" + "long-unbroken-header-value".repeat(40) + " ]";
@@ -133,6 +218,18 @@ for (const [width, height] of [[1280, 900], [390, 664], [320, 568]]) test.skipIf
     expect(forks[0].before).toBe("2:0");
     expect(await composer.inputValue()).toBe("Choose this prompt");
     await page.locator("main").getByText("First answer", { exact: true }).waitFor();
+    const firstTurn = page.getByRole("region", { name: "Turn 1", exact: true });
+    const visibleOrder = await firstTurn.innerText();
+    expect(visibleOrder.indexOf("Before tool commentary")).toBeGreaterThanOrEqual(0);
+    expect(visibleOrder.indexOf("Run · printf ordered")).toBeGreaterThanOrEqual(0);
+    expect(visibleOrder.indexOf("Ordered tool result")).toBeGreaterThanOrEqual(0);
+    expect(visibleOrder.indexOf("Before tool commentary")).toBeLessThan(visibleOrder.indexOf("Run · printf ordered"));
+    expect(visibleOrder.indexOf("Ordered tool result")).toBeLessThan(visibleOrder.indexOf("First answer"));
+    const tool = firstTurn.locator("details").filter({ has: page.getByText("Run · printf ordered", { exact: true }) }).last();
+    expect(await tool.innerText()).toContain("Ordered tool result");
+    await tool.locator("summary").click();
+    expect(await firstTurn.getByText("Before tool commentary", { exact: true }).isVisible()).toBe(true);
+    expect(await firstTurn.getByText("First answer", { exact: true }).isVisible()).toBe(true);
     expect(prompts).toHaveLength(0);
 
     await page.reload();

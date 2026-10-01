@@ -3,6 +3,7 @@ package protocol
 
 import (
 	"context"
+	"slices"
 )
 
 // OutboundPublisher sends one outbound message into connector delivery.
@@ -34,5 +35,7 @@ func CloneOutboundMessage(message *OutboundMessage) *OutboundMessage {
 		GoalTurn: message.GoalTurn, GoalComplete: message.GoalComplete, GoalActive: message.GoalActive,
 		GoalTurnNumber: message.GoalTurnNumber, GoalMaxTurns: message.GoalMaxTurns, WorkflowTerminal: message.WorkflowTerminal,
 		Cronjob: Clone(message.Cronjob), WorkflowAgent: Clone(message.WorkflowAgent), WorkflowPhase: Clone(message.WorkflowPhase),
+		TranscriptCheckpoint: slices.Clone(message.TranscriptCheckpoint), TranscriptEntry: slices.Clone(message.TranscriptEntry),
+		TranscriptEntryID: message.TranscriptEntryID, TranscriptTerminal: message.TranscriptTerminal,
 	}
 }

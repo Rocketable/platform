@@ -4,11 +4,190 @@ import type { TranscriptEvent } from "./types";
 
 // Execute the retained UI's actual private functions without exporting non-components.
 const source = ts.createSourceFile("ui.tsx", await Bun.file(new URL("./ui.tsx", import.meta.url)).text(), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = ["nextLines", "sendComposer", "promoteComposer", "applyStreamEvent", "readTranscriptHistory", "historyLines", "pendingInputs", "appendLine", "lineId", "isStopCommand", "transcriptTurns", "toolTitle"];
+const names = ["nextLines", "sendComposer", "promoteComposer", "applyStreamEvent", "readTranscriptHistory", "historyLines", "pendingInputs", "isStopCommand", "transcriptTurns", "toolTitle"];
 const functions = source.statements.filter((node) => ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? "")).map((node) => node.getText(source)).join("\n");
 const javascript = ts.transpileModule(`import { QueryClient } from ${JSON.stringify(Bun.resolveSync("@tanstack/react-query", import.meta.dir))};\nconst queryClient = new QueryClient();\n${functions}\nexport { nextLines, sendComposer, promoteComposer, applyStreamEvent, readTranscriptHistory, pendingInputs, transcriptTurns, toolTitle, queryClient };`, { compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext } }).outputText;
 const { nextLines, sendComposer, promoteComposer, applyStreamEvent, readTranscriptHistory, pendingInputs, transcriptTurns, toolTitle, queryClient } = await import(`data:text/javascript;base64,${Buffer.from(javascript).toString("base64")}`);
 type Line = { id: string; role: string; text: string; turnId?: string; origin?: string };
+
+function streamHarness(draft: { lines: Line[]; busy: boolean; consumed?: Set<string>; parked?: Line[] }) {
+  const stream = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "useSessionStream") as ts.FunctionDeclaration;
+  const effect = stream.body!.statements.find((node) => ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && node.expression.expression.getText(source) === "useEffect") as ts.ExpressionStatement;
+  const callback = (effect.expression as ts.CallExpression).arguments[0];
+  const body = ts.transpileModule(`return (${callback.getText(source)})();`, { compilerOptions: { target: ts.ScriptTarget.ESNext } }).outputText;
+  const connection = { onmessage: (_event: { data: string }) => {}, onopen: () => {}, onerror: () => {}, close: () => {} };
+  let invalidations = 0;
+  new Function("id", "historyReady", "EventSource", "draft", "queryClient", "reconnectHistory", "applyStreamEvent", "nextLines", "setBusy", "setLines", body)("session", true, function () { return connection; }, draft, { invalidateQueries: () => { invalidations++; } }, () => {}, applyStreamEvent, nextLines, (busy: boolean) => { draft.busy = busy; }, (update: (lines: Line[]) => Line[]) => { draft.lines = update(draft.lines); });
+  return { connection, send: (payload: Partial<TranscriptEvent>) => connection.onmessage({ data: JSON.stringify(payload) }), invalidations: () => invalidations };
+}
+
+const richItem = (position: number, role: string, text: string, extra: Partial<TranscriptEvent> = {}): TranscriptEvent => ({ messageId: `run:${position}`, role, text, snapshot: false, complete: true, turnId: "", agent: "main", model: "work/model", reasoningEffort: "high", origin: "canonical", ...extra });
+
+test("rich checkpoints preserve exact replay order, distinct identities, consumption and terminal state", () => {
+  const attachment = { id: "file", name: "ask.txt", mimeType: "text/plain", conversationId: "session" };
+  const draft = { busy: false, lines: [{ id: "old:0", role: "assistant", text: "older answer" }, { id: "web-1", role: "user", text: "  same\n", attachments: [attachment] }], parked: [{ id: "web-2", role: "user", text: "same" }, { id: "web-3", role: "user", text: "same" }] };
+  const handler = streamHarness(draft);
+  const items = [richItem(0, "user", "same", { inputId: "web-1" })];
+  const snapshot = (terminal = "", entryId = "0", text = "", attachments?: typeof attachment[]) => handler.send({ snapshot: true, turnId: "run", entryId, items: items.map((item) => ({ ...item, messageId: item.messageId!.replace("run:", entryId === "0" ? "run:" : `${entryId}:`) })), terminal, text, attachments });
+  snapshot();
+  expect(draft.busy).toBe(true);
+  expect(draft.lines.map((line) => line.text)).toEqual(["older answer", "  same\n"]);
+  items.push(richItem(1, "assistant", "commentary"), richItem(2, "tool", "execute\n{}", { toolCallId: "a", toolName: "execute" }), richItem(3, "tool", "execute\n{}", { toolCallId: "b", toolName: "execute" }), richItem(4, "tool", "same result", { toolCallId: "a" }), richItem(5, "tool", "same result", { toolCallId: "b" }));
+  snapshot(); snapshot();
+  expect(draft.busy).toBe(true);
+  expect(draft.lines.map((line) => line.text)).toEqual(["older answer", "  same\n", "commentary", "execute\n{}", "execute\n{}", "same result", "same result"]);
+  items.push(richItem(6, "user", "Slack steer"), richItem(7, "thinking", "later reasoning"), richItem(8, "user", "same", { inputId: "web-2" }), richItem(9, "assistant", "first answer"), richItem(10, "user", "final-answer steer"), richItem(11, "assistant", "second answer"));
+  snapshot();
+  expect(draft.parked.map((line) => line.id)).toEqual(["web-3"]);
+  expect(handler.invalidations()).toBe(2);
+  snapshot("complete", "42", "second answer", [attachment]);
+  expect(draft.busy).toBe(false);
+  expect(draft.lines.map((line) => line.text)).toEqual(["older answer", "  same\n", "commentary", "execute\n{}", "execute\n{}", "same result", "same result", "Slack steer", "later reasoning", "same", "first answer", "final-answer steer", "second answer"]);
+  expect(draft.lines.slice(1).map((line) => line.id)).toEqual(items.map((_, index) => `42:${index}`));
+  expect(draft.lines[1]).toMatchObject({ attachments: [attachment] });
+  expect(draft.lines.at(-1)).toMatchObject({ attachments: [attachment] });
+  handler.send({ role: "user", messageId: "web-2", consumedId: "web-2", text: "same" });
+  expect(draft.busy).toBe(false);
+  expect(draft.lines).toHaveLength(13);
+  expect(handler.invalidations()).toBe(2);
+});
+
+test("replay rewrites and committed sync replace only their region and keep source attribution", () => {
+  let lines = nextLines([{ id: "1:0", role: "assistant", text: "saved" }, { id: "pending", role: "user", text: "same" }], { snapshot: true, turnId: "run", entryId: "0", items: [richItem(0, "user", "same"), richItem(1, "tool", "old trace")] });
+  lines = nextLines(lines, { snapshot: true, turnId: "other", entryId: "0", items: [{ ...richItem(0, "assistant", "other turn"), messageId: "other:0" }] });
+  lines = nextLines(lines, { snapshot: true, turnId: "run", entryId: "0", items: [richItem(0, "user", "same"), richItem(2, "tool", "rewritten trace")] });
+  expect(lines.map((line: Line) => line.text)).toEqual(["saved", "same", "same", "rewritten trace", "other turn"]);
+  const draft = { lines, busy: true };
+  const handler = streamHarness(draft);
+  handler.send({ snapshot: true, entryId: "8", turnId: "", items: [richItem(0, "tool", "synced trace", { messageId: "8:0", origin: "sandboxed" })] });
+  handler.send({ snapshot: true, entryId: "8", turnId: "", items: [richItem(0, "tool", "synced trace", { messageId: "8:0", origin: "sandboxed" })] });
+  expect(draft.busy).toBe(true);
+  expect(draft.lines.map((line: Line) => line.text)).toEqual(["saved", "same", "same", "rewritten trace", "other turn", "synced trace"]);
+  const visible = (filter: { canonical: boolean; sandboxed: boolean }) => transcriptTurns(draft.lines, filter).flatMap((turn: { user: Line[]; body: Line[][] }) => [...turn.user, ...turn.body.flat()]);
+  expect(visible({ canonical: true, sandboxed: false }).map((line: Line) => line.text)).toEqual(["same", "rewritten trace", "other turn"]);
+  expect(visible({ canonical: false, sandboxed: true })).toMatchObject([{ text: "synced trace", model: "work/model", origin: "sandboxed" }]);
+});
+
+test("fragmented seeds apply atomically, discard incomplete reconnect data and reconcile stored bindings", async () => {
+  const draft = { lines: [{ id: "web", role: "user", text: " exact " }], busy: true };
+  const handler = streamHarness(draft);
+  const items = [richItem(0, "user", "exact", { inputId: "web" }), richItem(1, "assistant", "checkpoint")];
+  const seed = JSON.stringify({ snapshot: true, seed: true, turnId: "", items: [richItem(0, "assistant", "saved", { messageId: "1:0" })] });
+  handler.send({ snapshotId: "1", fragmentIndex: 0, fragment: seed.slice(0, 40) });
+  expect(draft.lines.map((line) => line.text)).toEqual([" exact "]);
+  handler.connection.onerror(); handler.connection.onopen();
+  handler.send({ snapshotId: "1", fragmentIndex: 0, fragment: seed, snapshotEnd: true });
+  expect(draft.lines.map((line) => line.text)).toEqual(["saved", " exact "]);
+  const opening = JSON.stringify({ snapshot: true, turnId: "run", entryId: "0", items });
+  handler.send({ snapshotId: "2", fragmentIndex: 0, fragment: opening.slice(0, 80) });
+  expect(draft.lines).toHaveLength(2);
+  handler.send({ snapshotId: "2", fragmentIndex: 1, fragment: opening.slice(80), snapshotEnd: true });
+  expect(draft.lines.map((line) => line.text)).toEqual(["saved", " exact ", "checkpoint"]);
+  const stale = Promise.withResolvers<TranscriptEvent[]>();
+  const loading = readTranscriptHistory(draft, stale.promise, () => {});
+  handler.send({ snapshot: true, turnId: "run", entryId: "9", items: items.map((item) => ({ ...item, messageId: item.messageId!.replace("run:", "9:") })), terminal: "stopped" });
+  stale.resolve([]); await loading;
+  expect(draft.lines.map((line) => line.id)).toEqual(["1:0", "9:0", "9:1"]);
+  expect(draft.busy).toBe(false);
+  handler.connection.onerror(); handler.connection.onopen();
+  handler.send({ snapshot: true, seed: true, items: [richItem(0, "assistant", "saved", { messageId: "1:0" }), ...items.map((item) => ({ ...item, messageId: item.messageId!.replace("run:", "9:") }))] });
+  expect(draft.lines.map((line) => line.id)).toEqual(["1:0", "9:0", "9:1"]);
+});
+
+test("committed reconnect seeds bind optimistic inputs and remove old live rows without guessing text", () => {
+  const items = [richItem(0, "user", "same", { inputId: "web" }), richItem(1, "assistant", "same"), richItem(2, "assistant", "same")];
+  const current = nextLines([{ id: "web", role: "user", text: " exact " }, { id: "pending", role: "user", text: "same" }], { snapshot: true, turnId: "run", items });
+  const committed = items.map((item) => ({ ...item, messageId: item.messageId!.replace("run:", "9:") }));
+  const lines = nextLines(current, { snapshot: true, seed: true, items: committed });
+  expect(lines.map((line: Line) => line.id)).toEqual(["9:0", "9:1", "9:2", "pending"]);
+  expect(lines.map((line: Line) => line.text)).toEqual([" exact ", "same", "same", "same"]);
+  expect(nextLines(lines, { snapshot: true, seed: true, items: committed })).toEqual(lines);
+});
+
+test("terminal seeds preserve an in-flight first send and reconnect so the next submit queues", async () => {
+  const draft = { text: "  first input\n", files: [], agent: "", edit: 0, submission: 0, sending: false, busy: false, lines: [] as Line[], sessionId: "" };
+  const handler = streamHarness(draft);
+  const dispatched = Promise.withResolvers<void>();
+  const completion = Promise.withResolvers<string>();
+  const requests: { messageId: string; delivery: string }[] = [];
+  const send = () => sendComposer({
+    draft, text: draft.text, files: [], busy: draft.busy, working: draft.busy || draft.lines.at(-1)?.role === "thinking", sessionId: draft.sessionId, selected: "main", currentAgent: "main",
+    create: { mutateAsync: async () => "session" }, goSession: (id: string) => { draft.sessionId = id; },
+    onDraftChange: () => {}, scrollToEnd: () => true, setAgentOpen: () => {}, setSendError: (error: string) => { expect(error).toBe(""); },
+    setBusy: (busy: boolean) => { draft.busy = busy; }, setLines: (update: (lines: Line[]) => Line[]) => { draft.lines = update(draft.lines); },
+    prompt: { mutateAsync: (request: { messageId: string; delivery: string }) => {
+      requests.push(request); dispatched.resolve();
+      return request.delivery === "QUEUE" ? Promise.resolve("") : completion.promise;
+    } },
+  });
+  const first = send();
+  await dispatched.promise;
+  expect(draft.sending).toBe(false);
+  for (const reconnect of [false, true]) {
+    if (reconnect) { handler.connection.onerror(); handler.connection.onopen(); }
+    handler.send({ snapshot: true, seed: true, items: [], terminal: "complete" });
+    expect(draft.busy).toBe(true);
+    expect(draft.lines).toMatchObject([{ id: requests[0].messageId, text: "  first input\n" }]);
+  }
+  draft.text = "second input";
+  await send();
+  expect(requests.map((request) => request.delivery)).toEqual(["STEER", "QUEUE"]);
+  handler.send({ snapshot: true, turnId: "run", items: [richItem(0, "user", "first input", { inputId: requests[0].messageId })], terminal: "complete" });
+  expect(draft.busy).toBe(false);
+  handler.send({ role: "user", messageId: requests[0].messageId, consumedId: requests[0].messageId, text: "first input" });
+  expect(draft.busy).toBe(false);
+  completion.resolve(""); await first;
+});
+
+test("idle terminal seeds clear busy for stale persisted users and offline-completed optimistic inputs", () => {
+  const draft = { busy: true, lines: [{ id: "1:0", role: "user", text: "stale persisted" }, { id: "1:1", inputId: "old", role: "user", text: "older persisted" }] };
+  const handler = streamHarness(draft);
+  handler.send({ snapshot: true, seed: true, items: [], terminal: "complete" });
+  expect(draft.busy).toBe(false);
+  draft.busy = true;
+  draft.lines = [{ id: "offline", inputId: "offline", role: "user", text: "  exact input\n" }];
+  handler.send({ snapshot: true, seed: true, items: [richItem(0, "user", "exact input", { messageId: "2:0", inputId: "offline" })], terminal: "complete" });
+  expect(draft.busy).toBe(false);
+  expect(draft.lines).toMatchObject([{ id: "2:0", inputId: "offline", text: "  exact input\n" }]);
+});
+
+test("compaction preserves retained user content by input ID, not the former tool position", () => {
+  const attachments = [{ id: "file", name: "input.txt", mimeType: "text/plain", conversationId: "session" }];
+  const user = richItem(3, "user", "second input", { inputId: "second", header: "[original header]" });
+  let lines = nextLines([{ id: "second", role: "user", text: "  second input\n", attachments }], { snapshot: true, turnId: "run", items: [richItem(1, "tool", "execute\n{old code}", { attachments: [{ ...attachments[0], id: "tool-file" }] }), user] });
+  const retained = { ...user, messageId: "run:1", header: "[retained header]" };
+  lines = nextLines(lines, { snapshot: true, turnId: "run", items: [retained] });
+  expect(lines).toMatchObject([{ id: "second", inputId: "second", text: "  second input\n", header: "[retained header]", attachments }]);
+  lines = nextLines(lines, { snapshot: true, turnId: "run", entryId: "9", terminal: "complete", items: [{ ...retained, messageId: "9:1" }] });
+  expect(lines).toMatchObject([{ id: "9:1", inputId: "second", text: "  second input\n", header: "[retained header]", attachments }]);
+  expect(nextLines(lines, { snapshot: true, seed: true, items: [{ ...retained, messageId: "9:1", inputId: undefined, text: "authoritative snapshot" }] })).toMatchObject([{ id: "9:1", text: "authoritative snapshot", attachments: undefined }]);
+});
+
+test("terminal delivery preserves recorded answers and attachments, without a blank or duplicate bubble", () => {
+  for (const terminal of ["complete", "stopped", "failed"]) {
+    const draft = { lines: [], busy: true };
+    const handler = streamHarness(draft);
+    handler.send({ snapshot: true, turnId: "run", items: [richItem(0, "assistant", "checking files", { phase: "commentary" }), richItem(1, "assistant", "first answer", { phase: "final_answer" }), richItem(2, "assistant", "recorded answer"), richItem(3, "assistant", "first answer", { phase: "commentary" })] });
+    expect(draft.busy).toBe(true);
+    handler.send({ snapshot: false, turnId: "run", terminal, text: "" });
+    expect(draft.busy).toBe(false);
+    expect(draft.lines.map((line: Line) => line.text)).toEqual(["checking files", "first answer", "recorded answer", "first answer"]);
+    const attachment = { id: "file", name: "report.txt", mimeType: "text/plain", conversationId: "session" };
+    handler.send({ snapshot: false, turnId: "run", terminal, text: "first answer\nrecorded answer", attachments: [attachment] });
+    expect(draft.lines.map((line: Line) => line.text)).toEqual(["checking files", "first answer", "recorded answer", "first answer"]);
+    expect(draft.lines[2]).toMatchObject({ attachments: [attachment] });
+    expect(draft.lines[3]).toMatchObject({ attachments: undefined });
+    handler.send({ snapshot: false, turnId: "run", terminal, text: "first answer", attachments: [attachment] });
+    expect(draft.lines.map((line: Line) => line.text)).toEqual(["checking files", "first answer", "recorded answer", "first answer"]);
+    expect(draft.lines[1]).toMatchObject({ attachments: [attachment] });
+    expect(draft.lines[3]).toMatchObject({ attachments: undefined });
+    handler.send({ snapshot: false, turnId: "run", terminal, text: "delivered root", attachments: [attachment] });
+    expect(draft.lines.map((line: Line) => line.text)).toEqual(["checking files", "first answer", "recorded answer", "first answer", "delivered root"]);
+    handler.send({ snapshot: false, turnId: "run", terminal, text: "delivered root" });
+    expect(draft.lines).toHaveLength(5);
+    expect(draft.lines.at(-1)).toMatchObject({ attachments: [attachment] });
+  }
+});
 
 test("thinking rows top-align the robot beside multiline text", () => {
   const row = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === "TranscriptLine")!;
@@ -43,6 +222,14 @@ test("actual stream handler enriches consumed IDs without repeating consumption 
   expect(draft.lines[0]).toMatchObject({ ...metadata, reasoningEffort: "" });
   expect(draft.parked).toHaveLength(1);
   expect(invalidations).toBe(1);
+  draft.parked.push({ id: "reconnected", role: "user", text: "  exact input\n" });
+  send({ snapshot: true, turnId: "reconnected-run", items: [{ role: "user", text: "exact input", inputId: "reconnected", messageId: "reconnected-run:0", turnId: "reconnected-run", complete: true, snapshot: false }] });
+  expect(draft.lines.at(-1)).toMatchObject({ id: "reconnected", text: "  exact input\n", inputId: "reconnected" });
+  expect(draft.parked).toEqual([{ id: "input", role: "user", text: "later" }]);
+  expect(invalidations).toBe(2);
+  send({ snapshot: true, entryId: "91", turnId: "reconnected-run", terminal: "complete", items: [{ role: "user", text: "exact input", inputId: "reconnected", messageId: "91:0", turnId: "", complete: true, snapshot: false }] });
+  expect(draft.lines.at(-1)).toMatchObject({ id: "91:0", text: "  exact input\n", inputId: "reconnected" });
+  expect(draft.busy).toBe(false);
 });
 
 test("message-ID enrichment and cumulative snapshots retain execution attribution", () => {
@@ -193,8 +380,8 @@ test("thinking traces group inside each turn and stay separate from replies", ()
     { id: "t2", role: "thinking", text: "again" },
   ];
   expect(transcriptTurns(lines)).toEqual([
-    { user: [lines[0]], traces: [lines[1], lines[2]], replies: [lines[3]] },
-    { user: [lines[4]], traces: [lines[5]], replies: [] },
+    { user: [lines[0]], body: [[lines[1], lines[2]], [lines[3]]] },
+    { user: [lines[4]], body: [[lines[5]]] },
   ]);
 });
 
@@ -211,16 +398,16 @@ test("origin choices hide only matching transcript messages without changing tur
     { id: "a2", role: "assistant", text: "copied", origin: "sandboxed" },
     { id: "u3", role: "user", text: "unknown origin", origin: "neither" },
   ];
-  expect(transcriptTurns(lines, both).flatMap((turn: { user: Line[]; traces: Line[]; replies: Line[] }) => [...turn.user, ...turn.traces, ...turn.replies].map((line) => line.id))).toEqual(["u1", "t1", "a1", "u2", "a2", "u3"]);
-  expect(transcriptTurns(lines, sandboxed).map((turn: { user: Line[]; traces: Line[]; replies: Line[] }) => [...turn.user, ...turn.traces, ...turn.replies].map((line) => line.id))).toEqual([["t1"], ["a2"]]);
-  expect(transcriptTurns(lines, canonical).map((turn: { user: Line[]; traces: Line[]; replies: Line[] }) => [...turn.user, ...turn.traces, ...turn.replies].map((line) => line.id))).toEqual([["u1", "a1"]]);
+  expect(transcriptTurns(lines, both).flatMap((turn: { user: Line[]; body: Line[][] }) => [...turn.user, ...turn.body.flat()].map((line) => line.id))).toEqual(["u1", "t1", "a1", "u2", "a2", "u3"]);
+  expect(transcriptTurns(lines, sandboxed).map((turn: { user: Line[]; body: Line[][] }) => [...turn.user, ...turn.body.flat()].map((line) => line.id))).toEqual([["t1"], ["a2"]]);
+  expect(transcriptTurns(lines, canonical).map((turn: { user: Line[]; body: Line[][] }) => [...turn.user, ...turn.body.flat()].map((line) => line.id))).toEqual([["u1", "a1"]]);
   expect(transcriptTurns(lines, neither)).toEqual([]);
   const tools = [
     { id: "call", role: "tool", toolName: "execute", toolCallId: "run", text: "execute\n{}", origin: "sandboxed" },
     { id: "result", role: "tool", toolCallId: "run", text: "output", origin: "canonical" },
   ];
-  expect(transcriptTurns(tools, canonical)[0].traces.map((line: Line) => line.id)).toEqual(["result"]);
-  expect(transcriptTurns(tools, sandboxed)[0].traces[0].toolParts).toEqual([]);
+  expect(transcriptTurns(tools, canonical)[0].body[0].map((line: Line) => line.id)).toEqual(["result"]);
+  expect(transcriptTurns(tools, sandboxed)[0].body[0][0].toolParts).toEqual([]);
 });
 
 test("history keeps thinking, tools and developer text", () => {
@@ -258,12 +445,12 @@ test("tool disclosures match parallel results by ID and include only their loade
   ];
   const lines = events.reduce((current, event) => nextLines(current, { ...event, turnId: "", complete: true, snapshot: false }), []);
   const [turn] = transcriptTurns(lines);
-  expect(turn.traces.map((line: Line) => line.text)).toEqual([events[0].text, events[1].text, events[5].text, events[6].text]);
-  expect(turn.traces[0].toolParts.map((line: Line) => line.text)).toEqual([events[4].text]);
-  expect(turn.traces[1].toolParts.map((line: Line) => line.text)).toEqual([events[2].text, events[3].text]);
-  expect(turn.replies.map((line: Line) => line.text)).toEqual(["visible report"]);
-  expect(toolTitle(turn.traces[0])).toBe("Run · ./scripts/loop-platform-deps.sh");
-  expect(toolTitle(turn.traces[1])).toBe("Skill · processes");
+  expect(turn.body[0].map((line: Line) => line.text)).toEqual([events[0].text, events[1].text, events[5].text, events[6].text]);
+  expect(turn.body[0][0].toolParts.map((line: Line) => line.text)).toEqual([events[4].text]);
+  expect(turn.body[0][1].toolParts.map((line: Line) => line.text)).toEqual([events[2].text, events[3].text]);
+  expect(turn.body[1].map((line: Line) => line.text)).toEqual(["visible report"]);
+  expect(toolTitle(turn.body[0][0])).toBe("Run · ./scripts/loop-platform-deps.sh");
+  expect(toolTitle(turn.body[0][1])).toBe("Skill · processes");
   expect(toolTitle({ toolName: "execute", text: `execute\n${JSON.stringify({ code: 'def main():\n  return bash(command=r"""set +e\n./scripts/loop-platform-deps.sh\n""")' })}` })).toBe("Run · ./scripts/loop-platform-deps.sh");
   expect(toolTitle({ toolName: "execute", text: `execute\n${JSON.stringify({ code: 'def main():\n  return read(filePath="scripts/loop-platform-deps.sh")' })}` })).toBe("Read · scripts/loop-platform-deps.sh");
   expect(transcriptTurns(lines)).toEqual([turn]);
@@ -302,7 +489,7 @@ test("composer renders the exact human input before blocking Prompt completes", 
 
 test("cumulative thinking replaces every snapshot row across identical consumed steers", () => {
   const duplicate = nextLines([], { role: "thinking", turnId: "run", text: " one \n\n one ", toolName: "ignored" });
-  expect(duplicate).toEqual([
+  expect(duplicate).toMatchObject([
     { id: "thinking:one:1", text: "one", role: "thinking", turnId: "run", streamText: " one \n\n one " },
     { id: "thinking:one:2", text: "one", role: "thinking", turnId: "run", streamText: " one \n\n one " },
   ]);

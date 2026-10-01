@@ -180,10 +180,15 @@ It may run immediately when idle. While busy, the released row offers **Steer**
 as usual. Stashed rows can be reordered or removed, but cannot steer directly.
 Failed Stash keeps the draft and files for retry. If Pop shows an error, check
 the refreshed queue: the message may already be queued if starting work failed.
-On reconnect, saved history replaces completed chat; pending steers remain separate.
-An active local transcript keeps its live IDs and stream segments. History confirms
-stored attachments by file ID, replacing local previews with download URLs. A history
-request that overlaps newer live changes cannot overwrite those changes. If a
+On reconnect, the stream seeds committed history and the current visible active
+turn; pending steers remain separate. Updates replace only their own ordered turn
+region. Final stored IDs keep fork, search, and session-command links valid.
+An idle opening seed clears busy state if the turn ended while disconnected.
+Active seeds and committed producer syncs do not terminate a running turn.
+Combined terminal delivery does not duplicate the recorded assistant rows.
+History confirms stored attachments by file ID, replacing local previews with
+download URLs. A history request that overlaps newer live changes cannot overwrite
+those changes. If a
 direct steer's consumption event was missed, its own successful Prompt completion
 reloads saved history and clears that pending ID. Recorded message IDs identify
 entry positions, separately from live IDs; the browser does not guess consumption
@@ -318,10 +323,10 @@ Previews include only history from the selected run. Removed definitions keep
 their recorded runs visible. A play icon beside each cron name opens an in-app confirmation dialog
 before running. It shows a spinner until
 execution finishes, then opens the resulting chat.
-Each turn has an inline **Thinking** disclosure, expanded by default, containing
-reasoning summaries and tool traces. Replies and successful verbatim-delivery
-reports appear as normal messages outside that disclosure. The chat has no
-database-entry inspection panel.
+Consecutive reasoning summaries and tool traces share an inline **Thinking**
+disclosure, expanded by default. Assistant commentary stays before any later tool
+activity; replies and successful verbatim-delivery reports remain normal messages
+outside trace disclosures. The chat has no database-entry inspection panel.
 Each tool call has one labeled, initially expanded disclosure containing its
 arguments and matching result. Loaded skill instructions fold with their skill
 call. Long results have a collapse control at the bottom as well as the header.
@@ -331,6 +336,21 @@ clicking a preview or its marker jumps to that turn. The box overlays the chat
 without moving it, and scrolling the box does not scroll the transcript.
 Each marker is labeled with its prompt; selecting it pauses automatic
 following while you read earlier turns.
+
+Live transcripts show the same readable detail as saved history: complete stored
+tool arguments and results, loaded skill instructions, available reasoning
+summaries, and attachments. Empty or encrypted reasoning is not shown. Detail
+arrives at persisted replay checkpoints; parallel tool outputs appear after the
+whole batch, in provider order. A consumed Slack steer appears after that batch
+and before subsequent provider activity, without reloading. Repeated calls and
+identical inputs keep separate identities. Every trace retains its execution
+attribution so canonical and sandboxed filters also work while streaming.
+
+Only turn termination ends the busy indicator, not a completed tool or reasoning
+item. Empty and interrupted completion do not add a blank answer. Private
+producer activity stays hidden until sync commits it to the destination, where
+it appears as sandboxed history. Slack's compact progress, final answers, input
+mirror cards, and routing are unchanged.
 The shared app layout keeps the session list in memory during navigation.
 Late storage reads merge with newer live rows; superseded saves cannot overwrite
 newer snapshots, and post-deletion saves wait for the history clear to finish.
@@ -365,7 +385,10 @@ completion: only `event: complete` followed by successful EOF permits a saved
 snapshot. Errors, cancellation, and EOF without that event fail enumeration.
 `POST /api/Protocol` returns `{ "protoSha256": "…" }`; polling reloads the page
 when the protocol changes. `GET /stream?id=<url-encoded-raw-id>` delivers live
-transcript events via EventSource.
+transcript events via EventSource. Readable snapshots arrive as bounded UTF-8
+fragments; the browser applies each snapshot only after its final fragment and
+discards unfinished fragments on reconnect. Results are not clipped to fit a
+frame. See `../frontend/rpc/README.md` for the snapshot fields and identity rules.
 
 - `POST /api/UploadAttachment?conversationId=<visible-id>&name=<filename>` takes the raw
   file as its body and returns JSON attachment metadata. Query values use normal

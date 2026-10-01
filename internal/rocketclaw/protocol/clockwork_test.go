@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -34,6 +35,9 @@ func TestCloneOutboundMessageDeepCopiesDeliveryData(t *testing.T) {
 	message.WorkflowAgent = &workflowAgent
 	message.WorkflowPhase = &workflowPhase
 	message.Attachments = []OutboundAttachment{{Name: "report.txt", Data: []byte("report")}}
+	message.TranscriptCheckpoint = json.RawMessage(`{"replay_input":[{"content":"full result"}]}`)
+	message.TranscriptEntry = json.RawMessage(`{"replay_input_ids":{"web-input":0}}`)
+	message.TranscriptEntryID, message.TranscriptTerminal = 42, TerminalComplete
 
 	clone := CloneOutboundMessage(message)
 
@@ -54,6 +58,13 @@ func TestCloneOutboundMessageDeepCopiesDeliveryData(t *testing.T) {
 	require.NotSame(t, message.WorkflowPhase, clone.WorkflowPhase)
 	require.NotSame(t, &message.Attachments[0], &clone.Attachments[0])
 	require.NotSame(t, &message.Attachments[0].Data[0], &clone.Attachments[0].Data[0])
+	require.Equal(t, message.TranscriptCheckpoint, clone.TranscriptCheckpoint)
+	require.Equal(t, message.TranscriptEntry, clone.TranscriptEntry)
+	require.Equal(t, int64(42), clone.TranscriptEntryID)
+	require.Equal(t, TerminalComplete, clone.TranscriptTerminal)
+	clone.TranscriptCheckpoint[0], clone.TranscriptEntry[0] = 'X', 'X'
+	require.Equal(t, byte('{'), message.TranscriptCheckpoint[0])
+	require.Equal(t, byte('{'), message.TranscriptEntry[0])
 
 	clone.SlackReply.ThreadTS = "changed"
 	clone.Cronjob.RelativePath = "changed"

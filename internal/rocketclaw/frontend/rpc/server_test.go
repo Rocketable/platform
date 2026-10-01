@@ -1920,6 +1920,10 @@ func TestSessionEntries(t *testing.T) {
 			require.NoError(t, stream.SendMsg(&JoinRequest{Id: conversation}))
 			require.NoError(t, stream.CloseSend())
 
+			seed := receiveLiveSnapshot(t, stream)
+			require.True(t, seed.Seed)
+			require.True(t, proto.Equal(inputHistory, &HistoryResponse{Messages: seed.Items}), "opening seed equals saved attachment history")
+
 			event := &TranscriptEvent{}
 			require.NoError(t, stream.RecvMsg(event))
 			require.Equal(t, "attachment-input", event.MessageId)

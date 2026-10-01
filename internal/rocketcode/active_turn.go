@@ -69,6 +69,7 @@ type ActiveTurnCheckpoint struct {
 	ReasoningEffort          *string                    `json:"reasoning_effort,omitempty"`
 	ReplayAttribution        []ReplayAttribution        `json:"replay_attribution,omitempty"`
 	ReplayInput              []json.RawMessage          `json:"replay_input,omitempty"`
+	ReplayInputIDs           map[string]int             `json:"replay_input_ids,omitempty"`
 	OutputTrace              []json.RawMessage          `json:"output_trace,omitempty"`
 	TokenUsage               *TokenUsage                `json:"token_usage,omitempty"`
 	ResponseID               string                     `json:"response_id,omitempty"`

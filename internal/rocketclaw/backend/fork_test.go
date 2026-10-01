@@ -22,7 +22,7 @@ func TestForkConversation(t *testing.T) {
 	attachment := protocol.OutboundAttachment{ID: "original-file", Name: "notes.txt", MIMEType: "text/plain", Data: []byte("notes")}
 	require.NoError(t, sessions.SaveAttachment(t.Context(), "source", &attachment, true))
 
-	entry := rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ResponseID: "response", ReplayInput: []json.RawMessage{
+	entry := rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), Model: "openai/gpt-5.5", ResponseID: "response", ReplayInputIDs: map[string]int{"first-web": 0, "second-web": 2}, ReplayAttribution: []rocketcode.ReplayAttribution{{Start: 0, End: 4, Agent: "main", Model: "openai/gpt-5.5"}}, ReplayInput: []json.RawMessage{
 		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Slack]","content":"[Slack]\n\nfirst"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":"answer"}`),
 		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Web]","content":"[Web]\n\nsecond attachment:original-file"}`),
@@ -67,6 +67,14 @@ func TestForkConversation(t *testing.T) {
 
 			if tt.name == "middle" {
 				require.Empty(t, entries[0].Entry.ResponseID)
+				require.Equal(t, map[string]int{"first-web": 0}, entries[0].Entry.ReplayInputIDs)
+				require.Equal(t, 2, entries[0].Entry.ReplayAttribution[0].End)
+				projected, err := sessionEntryForProvider(&entries[0].Entry, "other")
+				require.NoError(t, err)
+				require.Equal(t, entries[0].Entry.ReplayInputIDs, projected.ReplayInputIDs)
+				managed, err := externalMCPManagedEntry(&entries[0].Entry, nil)
+				require.NoError(t, err)
+				require.Equal(t, entries[0].Entry.ReplayInputIDs, managed.ReplayInputIDs)
 				file, err := sessions.LoadAttachment(t.Context(), tt.name, prompt[len(tt.prompt):], true)
 				require.NoError(t, err)
 				require.Equal(t, attachment.Data, file.Data)

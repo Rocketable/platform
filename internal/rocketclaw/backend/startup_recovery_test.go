@@ -270,7 +270,7 @@ func TestRecoverStartupActiveTurnsLeavesRowsOnCanceledHandoff(t *testing.T) {
 func TestRecoverStartupActiveTurnsLeavesRowsWhenBridgeStopped(t *testing.T) {
 	replay := startupRecoveryReplayInput(t)
 	store := startupRecoveryStoreWith([]ActiveTurnState{startupRecoveryTurn("turn-1", "conversation-1", replay)})
-	bridge := NewConversation(nil, nil, &Config{ConversationID: "conversation-1", RecoveringActiveTurn: true}, slog.New(slog.DiscardHandler))
+	bridge := NewConversation(nil, discardPublisher{}, &Config{ConversationID: "conversation-1", RecoveringActiveTurn: true}, slog.New(slog.DiscardHandler))
 
 	require.NoError(t, bridge.Start(context.Background()))
 	require.NoError(t, bridge.Stop())

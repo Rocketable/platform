@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"maps"
 	"net/url"
 	"slices"
 	"strconv"
@@ -1460,6 +1461,7 @@ func (s *SessionService) commitGoalChange(conversationID, beginLabel, execLabel,
 	defer func() { _ = tx.Rollback() }()
 
 	args := append(append([]any{}, beforeUpdatedAt...), timeUnixNano(time.Now().UTC()))
+
 	args = append(args, afterUpdatedAt...)
 	if _, err = execRows(ctx, tx, execLabel, countLabel, query, args...); err != nil {
 		return GoalState{}, false, err
@@ -1578,6 +1580,15 @@ func externalMCPManagedEntry(entry *harness.SessionEntry, replayPrefix []json.Ra
 	boundaries[len(entry.ReplayInput)] = len(managed.ReplayInput)
 	managed.ReplayAttribution = slices.Clone(entry.ReplayAttribution)
 	harness.RemapReplayAttribution(managed.ReplayAttribution, boundaries)
+
+	managed.ReplayInputIDs = maps.Clone(entry.ReplayInputIDs)
+	for id, position := range managed.ReplayInputIDs {
+		if boundaries[position] == boundaries[position+1] {
+			delete(managed.ReplayInputIDs, id)
+		} else {
+			managed.ReplayInputIDs[id] = boundaries[position]
+		}
+	}
 
 	return managed, nil
 }

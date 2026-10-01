@@ -189,6 +189,8 @@ type runResult struct {
 	goalCompleted                            bool
 	outputDecided                            bool
 	workflowTerminal                         protocol.Terminal
+	transcriptCheckpoint, transcriptEntry    json.RawMessage
+	transcriptTerminal                       protocol.Terminal
 }
 
 type workflowRunSummary struct {
@@ -208,6 +210,9 @@ type workflowRunPhaseSummary struct {
 
 type activeTurnCheckpointSink struct {
 	store            *SessionService
+	bridge           *Bridge
+	turnID           string
+	transcript       json.RawMessage
 	conversationID   string
 	sourceMetadata   map[string]string
 	recovered        rocketcode.SessionEntry
@@ -236,33 +241,82 @@ func (s *activeTurnCheckpointSink) ClearCompletedTurn(ctx context.Context, turnI
 
 func (s *activeTurnCheckpointSink) upsert(ctx context.Context, checkpoint *rocketcode.ActiveTurnCheckpoint) error {
 	s.checkpointTurnID = checkpoint.TurnID
+	if len(checkpoint.ReplayInput) > 0 && replayInputRawKind(checkpoint.ReplayInput[0]) == "compaction" {
+		s.recovered = rocketcode.SessionEntry{}
+	}
 
 	if len(s.recovered.ReplayInput) > 0 {
-		checkpoint = withRecoveredReplay(checkpoint, s.recovered.ReplayInput, s.recovered.ReplayAttribution)
+		checkpoint = withRecoveredReplay(checkpoint, &s.recovered)
 	}
 
 	checkpoint.ConversationKey = s.conversationID
 
-	return s.store.UpsertActiveTurn(ctx, checkpoint, s.sourceMetadata)
+	metadata := make(map[string]string, len(s.sourceMetadata)+1)
+	maps.Copy(metadata, s.sourceMetadata)
+
+	metadata["execution_turn_id"] = s.turnID
+	delete(metadata, "execution_terminal")
+
+	if err := s.store.UpsertActiveTurn(ctx, checkpoint, metadata); err != nil {
+		return err
+	}
+
+	data, err := json.Marshal(checkpoint)
+	if err != nil {
+		s.bridge.log.Error("encode transcript checkpoint", "error", err)
+		return nil
+	}
+
+	s.transcript = data
+	message := protocol.NewOutboundMessage(s.conversationID, "")
+	message.TurnID, message.SourceConversationID = s.turnID, s.conversationID
+	message.Agent, message.Model, message.ReasoningEffort = checkpoint.Agent, checkpoint.DisplayModel, protocol.Clone(checkpoint.ReasoningEffort)
+	message.TranscriptCheckpoint = slices.Clone(data)
+	// Full current-turn snapshots have cumulative payload cost proportional to
+	// checkpoint count times turn size; upgrade to incremental replay publication
+	// if that ceiling becomes material, rather than clipping readable results.
+	s.bridge.publishTranscript(ctx, message)
+
+	return nil
 }
 
-func withRecoveredReplay(checkpoint *rocketcode.ActiveTurnCheckpoint, recovered []json.RawMessage, attribution []rocketcode.ReplayAttribution) *rocketcode.ActiveTurnCheckpoint {
+func withRecoveredReplay(checkpoint *rocketcode.ActiveTurnCheckpoint, recovered *rocketcode.SessionEntry) *rocketcode.ActiveTurnCheckpoint {
 	checkpointCopy := *checkpoint
-	if !rawMessagePrefixEqual(checkpointCopy.ReplayInput, recovered) {
-		prependRecoveredReplay(&checkpointCopy.ReplayInput, &checkpointCopy.ReplayAttribution, recovered, attribution)
+
+	hasPrefix := rawMessagePrefixEqual(checkpointCopy.ReplayInput, recovered.ReplayInput)
+	for id, position := range recovered.ReplayInputIDs {
+		if current, ok := checkpointCopy.ReplayInputIDs[id]; !ok || current != position {
+			hasPrefix = false
+			break
+		}
+	}
+
+	if !hasPrefix {
+		checkpointCopy.ReplayInputIDs = prependRecoveredReplay(&checkpointCopy.ReplayInput, &checkpointCopy.ReplayAttribution, checkpointCopy.ReplayInputIDs, recovered)
 	}
 
 	return &checkpointCopy
 }
 
-func prependRecoveredReplay(replay *[]json.RawMessage, ranges *[]rocketcode.ReplayAttribution, prefix []json.RawMessage, attribution []rocketcode.ReplayAttribution) {
-	*replay = append(slices.Clone(prefix), (*replay)...)
+func prependRecoveredReplay(replay *[]json.RawMessage, ranges *[]rocketcode.ReplayAttribution, ids map[string]int, prefix *rocketcode.SessionEntry) map[string]int {
+	*replay = append(slices.Clone(prefix.ReplayInput), (*replay)...)
 
-	*ranges = append(slices.Clone(attribution), (*ranges)...)
-	for i := len(attribution); i < len(*ranges); i++ {
-		(*ranges)[i].Start += len(prefix)
-		(*ranges)[i].End += len(prefix)
+	*ranges = append(slices.Clone(prefix.ReplayAttribution), (*ranges)...)
+	for i := len(prefix.ReplayAttribution); i < len(*ranges); i++ {
+		(*ranges)[i].Start += len(prefix.ReplayInput)
+		(*ranges)[i].End += len(prefix.ReplayInput)
 	}
+
+	shifted := maps.Clone(prefix.ReplayInputIDs)
+	if len(ids) > 0 && shifted == nil {
+		shifted = make(map[string]int)
+	}
+
+	for id, position := range ids {
+		shifted[id] = position + len(prefix.ReplayInput)
+	}
+
+	return shifted
 }
 
 func rawMessagePrefixEqual(items, prefix []json.RawMessage) bool {
@@ -432,6 +486,12 @@ func (b *Bridge) InterruptActiveTurn() *protocol.InboundMessage {
 // PickLaterWork submits the next saved queue or due schedule for this conversation.
 func (b *Bridge) PickLaterWork(ctx context.Context) error {
 	return b.pickLaterWork(ctx, false)
+}
+
+func (b *Bridge) publishTranscript(ctx context.Context, message *protocol.OutboundMessage) {
+	if err := b.bus.PublishOutbound(ctx, message); err != nil {
+		b.log.Error("publish transcript update", "error", err)
+	}
 }
 
 func (b *Bridge) armPendingScheduledMessages() error {
@@ -863,6 +923,18 @@ func (b *Bridge) handleRecoveredActiveTurn(ctx context.Context, turn *ActiveTurn
 
 	result, err := b.runTurn(ctx, msg, turnID, checkpoint)
 	if err != nil {
+		transcript := protocol.NewOutboundMessage(b.config.ConversationID, "")
+		transcript.TurnID, transcript.SourceConversationID = turnID, b.config.ConversationID
+		transcript.Agent, transcript.Model, transcript.ReasoningEffort = result.attribution.Agent, result.attribution.Model, protocol.Clone(result.attribution.ReasoningEffort)
+		transcript.TranscriptCheckpoint, transcript.TranscriptEntry, transcript.TranscriptEntryID = result.transcriptCheckpoint, result.transcriptEntry, result.sessionEntryID
+
+		transcript.TranscriptTerminal = protocol.TerminalFailed
+		if errors.Is(err, errTurnInterrupted) {
+			transcript.TranscriptTerminal = protocol.TerminalStopped
+		}
+
+		b.publishTranscript(ctx, transcript)
+
 		if !activeTurnRecoveryPreserveError(err) {
 			checkpointTurnID := result.checkpointTurnID
 			if checkpointTurnID != "" && checkpointTurnID != checkpoint.TurnID {
@@ -993,9 +1065,12 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 		}
 	}
 
+	result.turnID = turnID
+
 	if errTurn != nil {
 		if errors.Is(errTurn, errTurnInterrupted) {
-			result = runResult{turnID: turnID, sessionEntryID: result.sessionEntryID, workflowTerminal: result.workflowTerminal}
+			result.text, result.thinking, result.attachments = "", "", nil
+			result.transcriptTerminal = protocol.TerminalStopped
 			errPublish := b.publishFinal(ctx, msg, result)
 			errLog = errors.Join(errTurn, errPublish)
 
@@ -1005,9 +1080,13 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 		b.log.Error("run rocketcode turn", "error", errTurn)
 
 		text := internalErrorResponse + "\n\n" + errTurn.Error()
-		result = runResult{turnID: turnID, text: text, sessionEntryID: result.sessionEntryID, workflowTerminal: result.workflowTerminal}
+		result.text, result.thinking, result.attachments = text, "", nil
+		result.transcriptTerminal = protocol.TerminalFailed
+		// Keep the restart handoff, but distinguish it from a running execution
+		// when Web reconnects after the live terminal has already been delivered.
+		_, errTerminal := b.config.SessionService.db.ExecContext(ctx, `UPDATE active_turns SET source_metadata_json = (source_metadata_json::jsonb || jsonb_build_object('execution_terminal', $2::text))::text WHERE id = $1 AND source_metadata_json::jsonb->>'execution_turn_id' = $3`, result.checkpointTurnID, string(result.transcriptTerminal), turnID)
 		errPublish := b.publishFinal(ctx, msg, result)
-		errLog = errors.Join(errTurn, errPublish)
+		errLog = errors.Join(errTurn, errTerminal, errPublish)
 
 		return errLog
 	}
@@ -1187,9 +1266,23 @@ func (b *Bridge) publishFinal(ctx context.Context, msg *protocol.InboundMessage,
 
 	outbound := b.newOutboundMessage(msg, result.turnID, result.text, "", true)
 	outbound.Agent, outbound.Model, outbound.ReasoningEffort = result.attribution.Agent, result.attribution.Model, result.attribution.ReasoningEffort
+
 	outbound.WorkflowTerminal = result.workflowTerminal
+	if msg.Workflow == nil {
+		outbound.TranscriptEntryID = result.sessionEntryID
+	}
 
 	outbound.Attachments = protocol.CloneOutboundAttachments(result.attachments)
+	if msg.Workflow == nil {
+		transcript := protocol.NewOutboundMessage(outbound.ConversationID, result.text)
+		transcript.TurnID, transcript.SourceConversationID = outbound.TurnID, outbound.SourceConversationID
+		transcript.Agent, transcript.Model, transcript.ReasoningEffort = result.attribution.Agent, result.attribution.Model, protocol.Clone(result.attribution.ReasoningEffort)
+		transcript.TranscriptCheckpoint, transcript.TranscriptEntry = result.transcriptCheckpoint, result.transcriptEntry
+		transcript.TranscriptEntryID = result.sessionEntryID
+		transcript.TranscriptTerminal = cmp.Or(result.transcriptTerminal, protocol.TerminalComplete)
+		transcript.Attachments = protocol.CloneOutboundAttachments(result.attachments)
+		b.publishTranscript(ctx, transcript)
+	}
 
 	if msg.SyncDestination != "" {
 		b.mu.Lock()
@@ -1353,6 +1446,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		}
 
 		recoveryEntry.ReplayAttribution = append(slices.Clone(checkpoint.ReplayAttribution), rocketcode.ReplayAttribution{Start: 0, End: len(recoveryEntry.ReplayInput), Agent: checkpoint.Agent, Model: checkpoint.DisplayModel, ReasoningEffort: checkpoint.ReasoningEffort})
+		recoveryEntry.ReplayInputIDs = maps.Clone(checkpoint.ReplayInputIDs)
 	}
 
 	shellTempRel := rocketcodeShellTempRel(b.runtime.RuntimeDirName(), b.config.ConversationID)
@@ -1526,6 +1620,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	sink := rocketcodeConfig.CheckpointSink.(*activeTurnCheckpointSink)
 	sink.recovered = recoveryEntry
+	sink.turnID = turnID
 
 	looper, err := rocketcode.NewWithModelResolver(resolver, &rocketcodeConfig, root, agents, skills, agentName, io.Discard)
 	if err != nil {
@@ -1579,27 +1674,41 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	header, _, _ = strings.Cut(prompt, "\n\n")
 	b.publishConsumed(ctx, msg, header)
 
-	input <- rocketcode.PromptInput{Role: "", Text: prompt, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: directSkill, Responses: output}
+	input <- rocketcode.PromptInput{MessageID: msg.Metadata["web_message_id"], Role: "", Text: prompt, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: directSkill, Responses: output}
 
 	close(input)
 
 	var group errgroup.Group
 
-	defer func() {
-		if result.checkpointTurnID == "" {
-			result.checkpointTurnID = sink.checkpointTurnID
-		}
-	}()
-
 	var (
 		appendedMu         sync.Mutex
 		appendedID         int64
 		appendedResponseID string
+		appendedEntry      json.RawMessage
 	)
 
+	defer func() {
+		cancelTurn()
+
+		for range output {
+		}
+
+		_ = group.Wait()
+
+		if result.checkpointTurnID == "" {
+			result.checkpointTurnID = sink.checkpointTurnID
+		}
+
+		result.transcriptCheckpoint = slices.Clone(sink.transcript)
+
+		appendedMu.Lock()
+		result.sessionEntryID, result.responseID, result.transcriptEntry = appendedID, appendedResponseID, appendedEntry
+		appendedMu.Unlock()
+	}()
+
 	sessionOut := func(entry rocketcode.SessionEntry) error {
-		if len(recoveryEntry.ReplayInput) > 0 {
-			prependRecoveredReplay(&entry.ReplayInput, &entry.ReplayAttribution, recoveryEntry.ReplayInput, recoveryEntry.ReplayAttribution)
+		if len(sink.recovered.ReplayInput) > 0 {
+			entry.ReplayInputIDs = prependRecoveredReplay(&entry.ReplayInput, &entry.ReplayAttribution, entry.ReplayInputIDs, &sink.recovered)
 		}
 
 		id, err := store.outID(entry)
@@ -1607,9 +1716,15 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			return err
 		}
 
+		data, err := json.Marshal(entry)
+		if err != nil {
+			b.log.Error("encode transcript entry", "error", err)
+		}
+
 		appendedMu.Lock()
 		appendedID = id
 		appendedResponseID = entry.ResponseID
+		appendedEntry = data
 		appendedMu.Unlock()
 
 		return nil
@@ -1662,11 +1777,6 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	b.log.Info("rocketcode looper returned", "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(looperStarted).Milliseconds(), "error", nil)
-
-	appendedMu.Lock()
-	result.sessionEntryID = appendedID
-	result.responseID = appendedResponseID
-	appendedMu.Unlock()
 
 	result.attachments = attachments.Attachments()
 	if payload, ok := decision.Decision(); ok {
@@ -2161,7 +2271,7 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv, sourceMetadata 
 
 	tools = append(tools, customTools...)
 
-	return rocketcode.Config{Model: "", AutoApproverModel: b.runtime.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(b.runtime), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CheckpointSink: &activeTurnCheckpointSink{store: b.config.SessionService, conversationID: b.config.ConversationID, sourceMetadata: sourceMetadata}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(b.runtime.MCPServers), MCPWorkspace: b.runtime.Workspace}
+	return rocketcode.Config{Model: "", AutoApproverModel: b.runtime.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(b.runtime), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, ChildRunLogger: b.logRocketCodeChildRun, CheckpointSink: &activeTurnCheckpointSink{store: b.config.SessionService, bridge: b, conversationID: b.config.ConversationID, sourceMetadata: sourceMetadata}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(b.runtime.MCPServers), MCPWorkspace: b.runtime.Workspace}
 }
 
 func toMCPClientServers(servers map[string]config.MCPServerConfig) map[string]mcpclient.ServerConfig {
