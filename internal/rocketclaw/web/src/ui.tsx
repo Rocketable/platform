@@ -2,12 +2,12 @@
 
 import { QueryClient, QueryClientProvider, useQuery, useQueries, useMutation } from "@tanstack/react-query";
 import { Menu } from "@base-ui/react/menu";
-import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, DialogHeader, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions, rpc } from "./api";
 import type { ChatOrigin, MessageMatch, PromptDelivery } from "./types";
-import { Bot, Check, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
+import { Bot, Check, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject } from "react";
 import { flushSync } from "react-dom";
@@ -1528,7 +1528,7 @@ const SessionList = memo(function SessionList({ settledOnly = false }: { settled
   );
 });
 
-type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; turnId?: string; streamText?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin">;
+type Line = { id: string; text: string; role: "user" | "assistant" | "thinking" | "tool" | "developer"; turnId?: string; streamText?: string; toolCallId?: string; toolName?: string; toolParts?: Line[]; attachments?: (AttachmentMeta & { file?: File })[] } & Pick<TranscriptEvent, "agent" | "model" | "reasoningEffort" | "origin" | "header">;
 type OriginFilter = { sandboxed: boolean; canonical: boolean };
 
 function lineId(role: Line["role"], text: string, seen: Map<string, number>) {
@@ -1642,15 +1642,28 @@ function MessageAttachment({ file, conversationId }: { file: NonNullable<Line["a
 function MessageFooter({ line, hasSandboxed }: { line: Line; hasSandboxed: boolean }) {
   const model = `${line.model ?? ""}${line.reasoningEffort ? `#${line.reasoningEffort}` : ""}`;
   const attribution = [line.agent, model && (line.agent ? `(${model})` : model)].filter(Boolean).join(" ");
-  const text = [attribution, hasSandboxed && (line.origin === "sandboxed" || line.origin === "canonical") ? line.origin : ""].filter(Boolean).join(" - ");
-  return text ? <div data-slot="message-footer" className="max-w-full break-words px-3 text-[11px] text-muted-foreground/85 group-has-data-[variant=ghost]/message:px-0">{text}</div> : null;
+  const origin = hasSandboxed && ["sandboxed", "canonical"].includes(line.origin ?? "") ? line.origin : "";
+  const text = line.role === "assistant" ? [attribution, origin].filter(Boolean).join(" - ") : "";
+  return text || line.header ? <div data-slot="message-footer" className="flex max-w-full items-center gap-1 break-words px-3 text-[11px] text-muted-foreground/85 group-has-data-[variant=ghost]/message:px-0">
+    {text ? <span className="min-w-0">{text}</span> : null}
+    {line.header ? <Dialog>
+      <Tooltip>
+        <TooltipTrigger render={<DialogTrigger render={<Button type="button" variant="ghost" size="icon-xs" className="size-11 sm:size-6" />} />} aria-label="Show message header"><Info aria-hidden="true" data-icon="inline-start" /></TooltipTrigger>
+        <TooltipContent className="max-w-[min(24rem,calc(100vw-2rem))] whitespace-pre-wrap [overflow-wrap:anywhere]">{line.header}</TooltipContent>
+      </Tooltip>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
+        <DialogTitle className="mr-8">Message header</DialogTitle>
+        <DialogDescription className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{line.header}</DialogDescription>
+      </DialogContent>
+    </Dialog> : null}
+  </div> : null;
 }
 
 function MessageActions({ line, hasSandboxed }: { line: Line; hasSandboxed: boolean }) {
   const [copied, setCopied] = useState<string>();
   const [error, setError] = useState(false);
   return <div data-slot="message-actions" className={cn("invisible flex max-w-full items-center gap-1 group-focus-visible/message:visible [@media(hover:hover)]:group-hover/message:visible [@media(hover:hover)]:group-has-[:focus-visible]/message:visible [@media(hover:none)]:group-focus-within/message:visible", line.role === "user" && "self-end")}>
-    {line.role === "assistant" ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
+    {line.role === "assistant" || line.header ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
     <Button type="button" size="icon-xs" variant="ghost" aria-label="Copy message" title="Copy message" onClick={async () => {
       setError(false);
       try {
@@ -1706,6 +1719,7 @@ function TranscriptLine({ line, conversationId, hasSandboxed }: { line: Line; co
     return (
       <div className="min-w-0 px-1 pb-3">
         <CodeBlock label="Instructions" text={line.text} />
+        {line.header ? <MessageFooter line={line} hasSandboxed={hasSandboxed} /> : null}
       </div>
     );
   }
@@ -1852,7 +1866,7 @@ function TranscriptLog({
 }
 
 function nextLines(current: Line[], payload: TranscriptEvent): Line[] {
-  const metadata = Object.fromEntries(Object.entries(payload).filter(([key, value]) => ["agent", "model", "reasoningEffort", "origin"].includes(key) && value !== undefined && (key === "reasoningEffort" || value !== "")));
+  const metadata = Object.fromEntries(Object.entries(payload).filter(([key, value]) => ["agent", "model", "reasoningEffort", "origin", "header"].includes(key) && value !== undefined && (key === "reasoningEffort" || value !== "")));
   if (payload.role === "user" && payload.messageId) {
     if (current.some((line) => line.id === payload.messageId)) return Object.keys(metadata).length ? current.map((line) => line.id === payload.messageId ? { ...line, ...metadata } : line) : current;
     return [...current, { ...metadata, id: payload.messageId, role: "user", text: payload.text, attachments: payload.attachments }];

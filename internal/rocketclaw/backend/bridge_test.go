@@ -100,6 +100,10 @@ func TestBridgeConsumedInputsRetainIdentityAndOrder(t *testing.T) {
 	admitted, err := bridge.activateInbound(t.Context(), &bridgeRequest{inbound: initial})
 	require.NoError(t, err)
 	require.True(t, admitted)
+	require.Empty(t, bus.outbound)
+
+	header, _, _ := strings.Cut(buildPrompt(initial, nil), "\n\n")
+	bridge.publishConsumed(t.Context(), initial, header)
 
 	for _, id := range []string{"steer-first", "steer-second"} {
 		inbound := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, "alice", &content, true)
@@ -211,17 +215,13 @@ func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
 	queued := protocol.ThreadQueueItem{ID: "queue-next", ConversationID: conversationID, Source: protocol.SourceWeb, Kind: protocol.InboundKindEnqueue, Message: "next turn", Principal: "alice"}
 	require.NoError(t, store.PutThreadQueueItem(queued.ID, &queued))
 	require.NoError(t, bridge.submitEnqueuedItem(t.Context(), &queued))
-	require.Empty(t, bus.outbound, "queued input is consumed only upon activation")
+	require.Empty(t, bus.outbound, "queued input is consumed only when its model prompt is built")
 
 	request := <-bridge.requestCh
 	admitted, err := bridge.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
 	require.True(t, admitted)
-	require.Len(t, bus.outbound, 1)
-	message := <-bus.outbound
-	require.Equal(t, queued.ID, message.ConsumedID)
-	require.Equal(t, queued.Message, message.ConsumedText)
-	require.Equal(t, protocol.SourceWeb, message.ConsumedSource)
+	require.Empty(t, bus.outbound)
 
 	slackQueued := protocol.ThreadQueueItem{ID: "slack-next", ConversationID: conversationID, Source: protocol.SourceSlack, Kind: protocol.InboundKindEnqueue, Message: "already visible", Principal: "bob"}
 	require.NoError(t, store.PutThreadQueueItem(slackQueued.ID, &slackQueued))
@@ -231,9 +231,7 @@ func TestPromotedQueueConsumptionKeepsQueueIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, admitted)
 
-	message = <-bus.outbound
-	require.Equal(t, slackQueued.ID, message.ConsumedID)
-	require.Equal(t, protocol.SourceSlack, message.ConsumedSource)
+	require.Empty(t, bus.outbound)
 
 	remaining, err := store.ThreadQueueForConversation(conversationID)
 	require.NoError(t, err)
@@ -247,11 +245,12 @@ func TestBridgeConsumedInputKeepsRawWebText(t *testing.T) {
 		Text: "hello", TextAttachments: []string{`attachment:id "file.txt" (workspace path "artifacts/uploads/id/file.txt")`},
 	}, true)
 	inbound.Metadata["web_message_id"] = "web-input"
-	bridge.publishConsumed(t.Context(), inbound)
+	bridge.publishConsumed(t.Context(), inbound, `[Web principal="alice"]`)
 
 	message := <-bus.outbound
 	require.Contains(t, message.ConsumedText, "attachment:id")
 	require.Equal(t, "hello", message.ConsumedRawText)
+	require.Equal(t, `[Web principal="alice"]`, message.ConsumedHeader)
 }
 
 func TestRestartToolScopesDescriptionToRuntimeConfig(t *testing.T) {
@@ -1223,12 +1222,18 @@ func TestHandleInboundReportsRocketCodeErrorDetail(t *testing.T) {
 
 	conversationID := protocol.SlackThreadConversationID("C123", "111.222")
 	bridge := NewConversation(&config.Config{Workspace: workspace}, bus, &Config{ConversationID: conversationID, Agent: "main", RequestRestart: testNoopRestart, StartNewThread: testNoopStartNewThread, SessionService: service}, slog.New(slog.DiscardHandler))
-	inbound := protocol.NewInboundMessage(protocol.SourceSlack, protocol.InboundKindPrompt, "", "hello", true)
+	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "", "hello", true)
+	inbound.Metadata = map[string]string{"web_message_id": "failed-input"}
 	inbound.ConversationID = conversationID
 
 	var group errgroup.Group
 	group.Go(func() error { return bridge.handleInbound(context.Background(), &bridgeRequest{inbound: inbound}) })
 
+	consumed := readRocketCodeOutbound(t, bus)
+	require.Equal(t, "failed-input", consumed.ConsumedID)
+	require.Equal(t, "hello", consumed.ConsumedText)
+	require.Equal(t, protocol.SourceWeb, consumed.ConsumedSource)
+	require.Empty(t, consumed.ConsumedHeader, "no model prompt was generated")
 	outbound := readRocketCodeOutbound(t, bus)
 	assert.True(t, outbound.Complete)
 	assert.Contains(t, outbound.Text, internalErrorResponse)
@@ -1658,6 +1663,24 @@ func TestAttachmentFallbackAndImageAttachments(t *testing.T) {
 	assert.Equal(t, "new", appendText("", " new "))
 	assert.Equal(t, "old\nnew", appendText("old", " new "))
 	assert.Equal(t, "old", appendText("old", " "))
+
+	bus := newTestBus()
+	t.Cleanup(bus.Close)
+	bridge := &Bridge{bus: bus, config: Config{ConversationID: "web-fallback", SessionService: newTestSessionService(t)}, log: slog.New(slog.DiscardHandler)}
+	inbound := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindPrompt, "", "", true)
+	inbound.HadNonImageAttachments = true
+	inbound.Metadata = map[string]string{"web_message_id": "attachment-input"}
+
+	var group errgroup.Group
+	group.Go(func() error { return bridge.handleInbound(t.Context(), &bridgeRequest{inbound: inbound}) })
+
+	consumed := readRocketCodeOutbound(t, bus)
+	require.Equal(t, "attachment-input", consumed.ConsumedID)
+	require.Empty(t, consumed.ConsumedHeader, "no model prompt was generated")
+	final := readRocketCodeOutbound(t, bus)
+	require.Equal(t, unsupportedFileFallback, final.Text)
+	final.MarkDelivered(nil)
+	require.NoError(t, group.Wait())
 }
 
 func TestNormalizeInboundAttachmentsCentralizesModelPolicy(t *testing.T) {
@@ -1991,9 +2014,12 @@ func TestReplayInputMessageRoleTextCoversMessageShapes(t *testing.T) {
 	msg := protocol.NewInboundMessage(protocol.SourceWeb, protocol.InboundKindSteer, "web-test", "[literal]\n\nuser text", true)
 	msg.Metadata = map[string]string{protocol.InboundPrincipalMetadataKey: `alice "quoted" ]`}
 	framed := buildPrompt(msg, nil)
+	header, _, _ := strings.Cut(framed, "\n\n")
 
 	for _, tc := range []struct{ role, input, want string }{
 		{"user", framed, msg.Text},
+		{"developer", framed, msg.Text},
+		{"user", header + "\n\n" + framed, framed},
 		{"assistant", framed, framed},
 		{"user", "[literal]\n\nuser text", "[literal]\n\nuser text"},
 		{"user", "[Web media=Text principal=alice]\n\nkeep", "[Web media=Text principal=alice]\n\nkeep"},
@@ -2001,6 +2027,7 @@ func TestReplayInputMessageRoleTextCoversMessageShapes(t *testing.T) {
 		{"user", strings.Replace(framed, "\n\n", "\n", 1), strings.Replace(framed, "\n\n", "\n", 1)},
 	} {
 		message := responses.ResponseInputItemUnionParam{OfMessage: &responses.EasyInputMessageParam{Role: responses.EasyInputMessageRole(tc.role), Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(tc.input)}, Type: "message"}}
+		message.OfMessage.SetExtraFields(map[string]any{"prompt_header": header})
 		role, text, ok, err := ReplayInputMessageRoleText(&message, nil)
 		require.NoError(t, err)
 		require.True(t, ok)
@@ -2008,6 +2035,11 @@ func TestReplayInputMessageRoleTextCoversMessageShapes(t *testing.T) {
 		require.Equal(t, tc.want, text)
 		require.Equal(t, tc.input, message.OfMessage.Content.OfString.Value)
 	}
+
+	old := responses.ResponseInputItemUnionParam{OfMessage: &responses.EasyInputMessageParam{Role: "user", Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(framed)}, Type: "message"}}
+	_, textOld, _, errOld := ReplayInputMessageRoleText(&old, nil)
+	require.NoError(t, errOld)
+	require.Equal(t, framed, textOld)
 
 	plain := responses.ResponseInputItemUnionParam{OfMessage: &responses.EasyInputMessageParam{Role: "assistant", Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String("plain")}, Type: "message"}}
 	role, text, ok, err := ReplayInputMessageRoleText(&plain, nil)
@@ -2072,20 +2104,20 @@ func TestBuildPromptCoversAttachments(t *testing.T) {
 		{protocol.SourceWeb, "Web"},
 	} {
 		t.Run(tc.origin, func(t *testing.T) {
-			assert.Equal(t, "["+tc.origin+" media=Text principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello\n\nAttachment notes:\n- skipped image", buildPrompt(&protocol.InboundMessage{Source: tc.source, Human: true, Text: "  hello  ", AttachmentWarnings: []string{" skipped image ", " "}, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}}, nil))
+			assert.Equal(t, "["+tc.origin+" principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello\n\nAttachment notes:\n- skipped image", buildPrompt(&protocol.InboundMessage{Source: tc.source, Human: true, Text: "  hello  ", AttachmentWarnings: []string{" skipped image ", " "}, Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}}, nil))
 		})
 	}
 
-	assert.Equal(t, "[System media=Text additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nAttachment notes:\n- unsupported PDF", buildPrompt(&protocol.InboundMessage{AttachmentWarnings: []string{" unsupported PDF "}}, nil))
+	assert.Equal(t, "[System additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nAttachment notes:\n- unsupported PDF", buildPrompt(&protocol.InboundMessage{AttachmentWarnings: []string{" unsupported PDF "}}, nil))
 }
 
 func TestBuildPromptAdditionalInstructionsFrontmatter(t *testing.T) {
 	msg := &protocol.InboundMessage{Source: protocol.SourceSlack, Human: true, Text: "hello", Metadata: map[string]string{protocol.InboundPrincipalMetadataKey: "Alice"}}
 
-	assert.Equal(t, "[Slack media=Text principal=\"Alice\" additional_instructions=\"Reply in one sentence.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": "Reply in one sentence."}))
-	assert.Equal(t, "[Slack media=Text principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": " "}))
-	assert.Equal(t, "[Slack media=Text principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": 7}))
-	assert.Equal(t, "[System media=Text additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n task \n", buildPrompt(&protocol.InboundMessage{Source: protocol.SourceSystem, Label: startNewThreadToolName, Text: " task \n", Metadata: map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text"}}, nil))
+	assert.Equal(t, "[Slack principal=\"Alice\" additional_instructions=\"Reply in one sentence.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": "Reply in one sentence."}))
+	assert.Equal(t, "[Slack principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": " "}))
+	assert.Equal(t, "[Slack principal=\"Alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhello", buildPrompt(msg, map[string]any{"additionalInstructions": 7}))
+	assert.Equal(t, "[System additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\n task \n", buildPrompt(&protocol.InboundMessage{Source: protocol.SourceSystem, Label: startNewThreadToolName, Text: " task \n", Metadata: map[string]string{protocol.InboundOriginMetadataKey: "System", protocol.InboundMediaMetadataKey: "Text"}}, nil))
 }
 
 func TestParseDirectSkillTrigger(t *testing.T) {
@@ -2127,9 +2159,9 @@ func TestParseDirectSkillTrigger(t *testing.T) {
 }
 
 func TestProvenanceHeaderSanitizesAmbiguousTokens(t *testing.T) {
-	assert.Equal(t, "[ExternalMCP media=Text principal=\"Alice [ops]=lead\" additional_instructions=\"line \\\"one\\\"\\nnext\"]", provenanceHeader(promptProvenance{origin: "ExternalMCP", media: "Text", principal: " Alice [ops]=lead ", additionalInstructions: "line \"one\"\nnext"}))
-	assert.Equal(t, `[Slack media=Text principal="a\"b\\c"]`, provenanceHeader(promptProvenance{origin: "Slack", media: "Text", principal: "a\"b\\c"}))
-	assert.Equal(t, "[Slack media=Text]", provenanceHeader(promptProvenance{origin: "Slack", media: "Text", principal: "   "}))
+	assert.Equal(t, "[ExternalMCP principal=\"Alice [ops]=lead\" additional_instructions=\"line \\\"one\\\"\\nnext\"]", provenanceHeader(promptProvenance{origin: "ExternalMCP", media: "Text", principal: " Alice [ops]=lead ", additionalInstructions: "line \"one\"\nnext"}))
+	assert.Equal(t, `[Slack principal="a\"b\\c"]`, provenanceHeader(promptProvenance{origin: "Slack", media: "Text", principal: "a\"b\\c"}))
+	assert.Equal(t, "[Slack]", provenanceHeader(promptProvenance{origin: "Slack", media: "Text", principal: "   "}))
 	assert.Equal(t, "[External_(MCP)-x media=Voice_(note)-clip]", provenanceHeader(promptProvenance{origin: "External [MCP]=x", media: "Voice [note]=clip"}))
 	assert.Equal(t, promptProvenance{origin: "System", media: "Text"}, provenanceFromInbound(&protocol.InboundMessage{Source: protocol.SourceSystem, Metadata: map[string]string{protocol.InboundOriginMetadataKey: "Mallory", protocol.InboundMediaMetadataKey: "Dance"}}))
 }
@@ -4878,9 +4910,7 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 	admitted, err := bridge.activateInbound(t.Context(), &request)
 	require.NoError(t, err)
 	require.True(t, admitted)
-	initial := readRocketCodeOutbound(t, bus)
-	require.Equal(t, queued.ID, initial.ConsumedID)
-	require.Empty(t, initial.Model)
+	require.Empty(t, bus.outbound)
 
 	request.inbound.SyncDestination = "destination"
 
@@ -4894,10 +4924,16 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 		return bridge.publishFinal(t.Context(), request.inbound, result)
 	})
 	<-entered
+
+	initial := readRocketCodeOutbound(t, bus)
+	require.Equal(t, queued.ID, initial.ConsumedID)
+	require.Equal(t, "work/model-b", initial.Model)
+	require.Equal(t, `[Web principal="Alice" additional_instructions="Reply in one sentence."]`, initial.ConsumedHeader)
 	bridge.SwitchAgent("main")
 
 	steer := protocol.NewInboundMessageFromContent(protocol.SourceWeb, protocol.InboundKindSteer, "Alice", &protocol.InboundContent{Text: "also explain"}, true)
 	steer.Metadata["web_message_id"] = "active-steer"
+	steer.Metadata[protocol.InboundPrincipalMetadataKey] = "Bob"
 	require.NoError(t, bridge.Submit(t.Context(), steer))
 	close(release)
 
@@ -4910,7 +4946,12 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 		require.Equal(t, conversationID, message.SourceConversationID)
 		require.Equal(t, conversationID, message.ConversationID)
 		require.NotEqual(t, queued.ID, message.ConsumedID, "activated input must not be published again during the turn")
+
 		consumedSteer = consumedSteer || message.ConsumedID == "active-steer"
+		if message.ConsumedID == "active-steer" {
+			require.Equal(t, `[Web principal="Bob" additional_instructions="Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."]`, message.ConsumedHeader)
+		}
+
 		assistant = assistant || message.Text == "ok" && !message.Complete
 		final = message.Complete
 		message.MarkDelivered(nil)
@@ -4940,7 +4981,13 @@ func TestRunTurnUsesSelectedAgentAdditionalInstructions(t *testing.T) {
 		}
 	}
 
-	assert.Equal(t, "[Web media=Text principal=\"Alice\" additional_instructions=\"Reply in one sentence.\"]\n\nhello", userContent)
+	assert.Equal(t, "[Web principal=\"Alice\" additional_instructions=\"Reply in one sentence.\"]\n\nhello", userContent)
+
+	items, err := rocketcode.ReplayInputToParams(entries[0].Entry.ReplayInput)
+	require.NoError(t, err)
+	require.Equal(t, initial.ConsumedHeader, items[0].OfMessage.ExtraFields()["prompt_header"])
+	require.Equal(t, responses.EasyInputMessageRoleUser, items[2].OfMessage.Role)
+	require.Equal(t, `[Web principal="Bob" additional_instructions="Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."]`, items[2].OfMessage.ExtraFields()["prompt_header"])
 }
 
 func TestRunTurnInjectsActiveGoalNoteAsDeveloperMessage(t *testing.T) {

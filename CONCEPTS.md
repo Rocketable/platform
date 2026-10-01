@@ -60,7 +60,7 @@ A single Slack `...` menu shortcut, RocketClaw Actions, that opens a modal whose
 
 The human actor a connector attributes to a human-originated prompt.
 
-Each connector chooses the string. The backend prints it in the model header. Principal is model-visible only. Authorization uses connector identity, not this string.
+Each connector chooses the string. The backend prints it in the model header, which Web also exposes through the message footer's info icon. Authorization uses connector identity, not this string.
 
 ## Runtime Assets
 

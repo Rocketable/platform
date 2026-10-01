@@ -23,9 +23,9 @@ func TestForkConversation(t *testing.T) {
 	require.NoError(t, sessions.SaveAttachment(t.Context(), "source", &attachment, true))
 
 	entry := rocketcode.SessionEntry{Version: 1, Type: "turn", Timestamp: time.Now(), ResponseID: "response", ReplayInput: []json.RawMessage{
-		json.RawMessage(`{"type":"message","role":"user","content":"first"}`),
+		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Slack]","content":"[Slack]\n\nfirst"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":"answer"}`),
-		json.RawMessage(`{"type":"message","role":"user","content":"second attachment:original-file"}`),
+		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Web]","content":"[Web]\n\nsecond attachment:original-file"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":"future"}`),
 	}}
 	id, err := sessions.AppendEntryID(t.Context(), "source", &entry)
@@ -58,6 +58,12 @@ func TestForkConversation(t *testing.T) {
 			}
 
 			require.Len(t, items, tt.items)
+			require.NotContains(t, prompt, "[Slack]")
+			require.NotContains(t, prompt, "[Web]")
+
+			if len(items) > 0 {
+				require.JSONEq(t, string(entry.ReplayInput[0]), string(items[0]))
+			}
 
 			if tt.name == "middle" {
 				require.Empty(t, entries[0].Entry.ResponseID)

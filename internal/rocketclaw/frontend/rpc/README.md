@@ -8,10 +8,11 @@ that interrupted turn. Queue Prompt stashes waiting work through existing
 Backend queue operations and returns without waiting for that turn. `ListQueue`, `SteerQueueItem`, `RemoveQueueItem`, and `ReorderQueue` use
 existing Backend queue operations; promotion keeps the queued item's original
 principal and message ID. `ListQueue.delivery` distinguishes later work from pending
-steers. Join sends a user event with `message_id` when the backend activates queued
-work or drains a steer into the current turn. Direct steers retain the client's
+steers. Join sends a user event with `message_id` when the backend builds the model
+prompt for activated work or drains a steer into the current turn. Direct steers retain the client's
 `Prompt.message_id`; queued messages use their server-assigned queue IDs. These
 events move waiting inputs into chat in consumption order without matching text.
+Inputs handled without a model prompt still emit a consumed event, without a header.
 Dropped items never run. Reorder writes persisted enqueue positions. Join streams only live
 events for the requested conversation; it does not replay stored history or
 return output through Prompt's private response field. Live events carry Backend
@@ -20,9 +21,13 @@ the stored turn in order, including developer messages, thinking summaries, tool
 calls, tool results, and user/assistant text. Encrypted reasoning bodies stay
 stored and are not sent. History retains tool call IDs and names so Web can
 group each call with its result.
-History and sidebar previews
-share display text with one canonical Web prompt envelope removed from user
-messages; stored replay, principal framing, and assistant text remain unchanged.
+New messages save their exact generated bracket header alongside model-facing
+text as `prompt_header` in local replay. History and sidebar previews remove only
+that saved prefix from user/developer display text. History and Join expose it as
+`TranscriptEvent.header`; the Web message footer shows it through an info icon
+on hover or click. New text headers omit `media=Text`. Old messages are not
+backfilled or guessed from their text. Model-facing text still includes the generated
+header; local header metadata is never sent to the provider. Assistant text is unchanged.
 Previews use the latest nonempty user or assistant message, including the same
 successful delivery report shown in History. Migration `011_last_message_summaries.sql`
 invalidates the derived user-only previews for the existing background backfill.

@@ -89,6 +89,7 @@ message TranscriptEvent {
   string model = 11;
   optional string reasoning_effort = 12;
   string origin = 13;
+  string header = 14;
 }
 
 // Stream frames carry at most 256 KiB of data. History carries metadata only.

@@ -625,7 +625,7 @@ func (l *looper) Loop(
 			}
 		}
 
-		turn, rendered, interrupted, err := l.runTurn(ctx, turnOutput, interrupts, history, historyAttribution, line)
+		turn, rendered, interrupted, err := l.runTurn(ctx, turnOutput, interrupts, history, historyAttribution, &line)
 		if err != nil {
 			if errDirectSkill, ok := errors.AsType[directSkillInputError](err); ok {
 				emitChatResponse(turnOutput, ChatResponse{Kind: ChatResponseAssistantMessage, Text: errDirectSkill.Error()})
@@ -691,11 +691,11 @@ func (l *looper) runTurn(
 	interrupts <-chan os.Signal,
 	baseHistory []responses.ResponseInputItemUnionParam,
 	baseAttribution []ReplayAttribution,
-	input PromptInput,
+	input *PromptInput,
 ) (record SessionEntry, rendered []ChatResponse, interrupted bool, err error) {
 	var emptyRecord SessionEntry
 
-	input, turnItems, err := l.promptTurnItems(ctx, input)
+	turnItems, err := l.promptTurnItems(ctx, input)
 	if err != nil {
 		return emptyRecord, nil, false, directSkillInputError{message: err.Error()}
 	}
@@ -798,6 +798,9 @@ func (l *looper) runTurn(
 		attributionEnd := len(baseHistory) + len(turnItems)
 
 		resp, err := l.newProviderResponse(turnCtx, &params, output, func(recovered []responses.ResponseInputItemUnionParam, retained int) error {
+			// Retained items come from provider input, which omits local headers.
+			recovered = slices.Clone(recovered)
+			copy(recovered[len(recovered)-retained:], history[len(history)-retained:])
 			recovered = pruneHistoryBeforeLatestCompaction(recovered)
 
 			replayInput, errReplay := ReplayInputFromParams(recovered)
@@ -938,7 +941,7 @@ func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnIte
 			*turnItems = append(*turnItems, item)
 		}
 
-		steer := promptInputMessage(input)
+		steer := promptInputMessage(&input)
 		if err := appendReplayInput(record, &steer); err != nil {
 			return false, err
 		}
@@ -1075,7 +1078,7 @@ func openFunctionCallCheckpoints(items []responses.ResponseOutputItemUnion) []Fu
 	return openCalls
 }
 
-func (l *looper) promptTurnItems(ctx context.Context, input PromptInput) (PromptInput, []responses.ResponseInputItemUnionParam, error) {
+func (l *looper) promptTurnItems(ctx context.Context, input *PromptInput) ([]responses.ResponseInputItemUnionParam, error) {
 	if l.expandInputPrompts && input.DirectSkill == nil {
 		input.Text = l.promptExpansion.expandShellCommands(ctx, input.Text)
 	}
@@ -1085,13 +1088,13 @@ func (l *looper) promptTurnItems(ctx context.Context, input PromptInput) (Prompt
 	if input.DirectSkill != nil {
 		directSkillItem, err := l.directSkillInput(ctx, input.DirectSkill)
 		if err != nil {
-			return PromptInput{}, nil, err
+			return nil, err
 		}
 
 		turnItems = append(turnItems, directSkillItem)
 	}
 
-	return input, append(turnItems, promptInputMessage(input)), nil
+	return append(turnItems, promptInputMessage(input)), nil
 }
 
 func (l *looper) directSkillInput(ctx context.Context, input *PromptInputDirectSkill) (responses.ResponseInputItemUnionParam, error) {

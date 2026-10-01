@@ -312,12 +312,15 @@ func (s *Server) history(ctx context.Context, request *HistoryRequest) (*History
 				}
 
 				if event.Role == "user" {
+					header := event.Header
+
 					event, err = s.inputEvent(ctx, producer, event.Text)
 					if err != nil {
 						return nil, err
 					}
 
 					event.Complete = true
+					event.Header = header
 				}
 
 				event.attribute(entry.Entry.AttributionAt(i), producer, request.Id)
@@ -446,7 +449,12 @@ func historyEvent(item *responses.ResponseInputItemUnionParam, raw json.RawMessa
 		return nil, nil
 	}
 
-	return &TranscriptEvent{Role: role, Text: text, Complete: true}, nil
+	header := ""
+	if item.OfMessage != nil && (role == "user" || role == "developer") {
+		header, _ = item.OfMessage.ExtraFields()["prompt_header"].(string)
+	}
+
+	return &TranscriptEvent{Role: role, Text: text, Header: header, Complete: true}, nil
 }
 
 func (s *Server) humanConversation(id string) (bool, error) {
@@ -1078,6 +1086,7 @@ func (s *Server) join(request *JoinRequest, stream grpc.ServerStream) error {
 				consumed, err = s.inputEvent(stream.Context(), request.Id, message.ConsumedText)
 				if err == nil {
 					consumed.MessageId = message.ConsumedID
+					consumed.Header = message.ConsumedHeader
 					consumed.attribute(rocketcode.ReplayAttribution{Agent: message.Agent, Model: message.Model, ReasoningEffort: message.ReasoningEffort}, cmp.Or(message.SourceConversationID, request.Id), request.Id)
 					err = stream.SendMsg(consumed)
 				}

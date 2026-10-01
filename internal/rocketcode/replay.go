@@ -3,6 +3,7 @@ package rocketcode
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -20,6 +21,14 @@ func projectReplayForOpenAI(items []responses.ResponseInputItemUnionParam) []res
 	projected := make([]responses.ResponseInputItemUnionParam, 0, len(items))
 	for i := range items {
 		item := items[i]
+		if item.OfMessage != nil && item.OfMessage.ExtraFields()["prompt_header"] != nil {
+			message := *item.OfMessage
+			extra := maps.Clone(message.ExtraFields())
+			delete(extra, "prompt_header")
+			message.SetExtraFields(extra)
+			item.OfMessage = &message
+		}
+
 		if item.OfCompaction == nil {
 			projected = append(projected, item)
 			continue
@@ -249,6 +258,17 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 		var item responses.ResponseInputItemUnionParam
 		if err := json.Unmarshal(raw[i], &item); err != nil {
 			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: replayInputRawKind(raw[i]), Cause: fmt.Errorf("unmarshal SDK replay input: %w", err)}
+		}
+
+		var storedHeader struct {
+			Header string `json:"prompt_header"`
+		}
+		if err := json.Unmarshal(raw[i], &storedHeader); err != nil {
+			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: replayInputRawKind(raw[i]), Cause: fmt.Errorf("decode replay header: %w", err)}
+		}
+
+		if storedHeader.Header != "" && item.OfMessage != nil {
+			item.OfMessage.SetExtraFields(map[string]any{"prompt_header": storedHeader.Header})
 		}
 
 		if item.OfCompaction != nil {

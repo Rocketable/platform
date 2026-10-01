@@ -29,7 +29,7 @@ test("actual stream handler enriches consumed IDs without repeating consumption 
   const handler = new Function("draft", "queryClient", "applyStreamEvent", "nextLines", "setBusy", "setLines", body)(draft, { invalidateQueries: () => { invalidations++; } }, applyStreamEvent, nextLines, (busy: boolean) => { draft.busy = busy; }, (update: (lines: Line[]) => Line[]) => { draft.lines = update(draft.lines); });
   const send = (payload: Partial<TranscriptEvent>) => handler({ data: JSON.stringify(payload) });
   send({ role: "user", messageId: "input", text: "ask" });
-  const metadata = { agent: "planner", model: "work/model-a", reasoningEffort: "high" };
+  const metadata = { agent: "planner", model: "work/model-a", reasoningEffort: "high", header: "[stored header]" };
   send({ role: "user", messageId: "input", text: "ask", ...metadata });
   expect(draft.lines).toHaveLength(1);
   expect(draft.lines[0]).toMatchObject(metadata);
@@ -46,7 +46,7 @@ test("actual stream handler enriches consumed IDs without repeating consumption 
 });
 
 test("message-ID enrichment and cumulative snapshots retain execution attribution", () => {
-  const metadata = { agent: "planner", model: "work/model-a", reasoningEffort: "", origin: "sandboxed" };
+  const metadata = { agent: "planner", model: "work/model-a", reasoningEffort: "", origin: "sandboxed", header: "[exact <header>\nsecond line]" };
   const user = { text: "same", role: "user", messageId: "input", turnId: "turn", complete: false, snapshot: false };
   let lines = nextLines([{ id: "input", role: "user", text: "same" }], { ...user, ...metadata });
   expect(lines).toHaveLength(1);
@@ -82,9 +82,10 @@ test("reconnect query keeps live messages received while history is loading", as
 test("history commits before its caller resumes and cannot overwrite newer live data", async () => {
   const draft = { lines: [] as Line[], sending: false };
   let changes = 0;
-  const saved = [{ role: "assistant", text: "saved", turnId: "", complete: true, snapshot: false }];
+  const saved = [{ role: "assistant", text: "saved", header: "[saved header]", turnId: "", complete: true, snapshot: false }];
   await readTranscriptHistory(draft, Promise.resolve(saved), () => { changes++; });
   expect(draft.lines.map((line) => line.text)).toEqual(["saved"]);
+  expect(draft.lines[0]).toMatchObject({ header: saved[0].header });
   draft.lines = nextLines(draft.lines, { role: "assistant", turnId: "private", text: "newer turn completed" });
   await Promise.resolve();
   expect(draft.lines.at(-1)?.text).toBe("newer turn completed");
@@ -231,7 +232,9 @@ test("history keeps thinking, tools and developer text", () => {
     { role: "tool", text: "execute\ntrue" },
     { role: "assistant", text: "done" },
   ] as const) {
-    lines = nextLines(lines, { turnId: "", text: event.text, role: event.role, complete: true, snapshot: false });
+    const header = `[${event.role} header]`;
+    lines = nextLines(lines, { turnId: "", text: event.text, role: event.role, header, complete: true, snapshot: false });
+    expect(lines.at(-1)).toMatchObject({ header });
   }
   expect(lines.map(({ role, text }) => ({ role, text }))).toEqual([
     { role: "developer", text: "skill body" },

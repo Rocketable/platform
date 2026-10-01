@@ -590,7 +590,7 @@ func TestLooperPromptInputShellCommandExpansion(t *testing.T) {
 			looper.expandInputPrompts = tc.enabled
 			looper.promptExpansion = testPromptExpansionEnvironment(t)
 			output := make(chan ChatResponse, 10)
-			turn, _, interrupted, err := looper.runTurn(context.Background(), output, nil, nil, nil, testPromptInput(PromptInputRoleUser, "before !`printf hello` after", nil))
+			turn, _, interrupted, err := looper.runTurn(context.Background(), output, nil, nil, nil, new(testPromptInput(PromptInputRoleUser, "before !`printf hello` after", nil)))
 
 			require.NoError(t, err)
 			require.False(t, interrupted)
@@ -1194,7 +1194,9 @@ func TestCheckpointProviderResponseOpenCallsBeforeToolDispatch(t *testing.T) {
 func TestCheckpointAfterCompactionRecoveryBeforeProviderRetry(t *testing.T) {
 	sink := recordingCheckpointSink()
 	providerCalls := 0
-	mock := mockResponseFunc(func(_ context.Context, _ *responses.ResponseNewParams) (*responses.Response, error) {
+	mock := mockResponseFunc(func(_ context.Context, params *responses.ResponseNewParams) (*responses.Response, error) {
+		require.NotContains(t, marshalJSON(t, params.Input.OfInputItemList), "prompt_header")
+
 		providerCalls++
 		if providerCalls == 1 {
 			return nil, contextLengthExceededError()
@@ -1205,7 +1207,8 @@ func TestCheckpointAfterCompactionRecoveryBeforeProviderRetry(t *testing.T) {
 		compacted := providers[0].ActiveTurnCheckpoint
 		require.Len(t, compacted.ReplayInput, 2)
 		require.Contains(t, string(compacted.ReplayInput[0]), `"type":"compaction"`)
-		require.Contains(t, string(compacted.ReplayInput[1]), `"content":"new prompt"`)
+		require.Contains(t, string(compacted.ReplayInput[1]), `"content":"[Web]\n\nnew prompt"`)
+		require.Contains(t, string(compacted.ReplayInput[1]), `"prompt_header":"[Web]"`)
 
 		return responseWithMessage("resp-final", "done"), nil
 	})
@@ -1219,7 +1222,7 @@ func TestCheckpointAfterCompactionRecoveryBeforeProviderRetry(t *testing.T) {
 	require.NoError(t, err)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInput(PromptInputRoleUser, "new prompt", output)
+	input <- PromptInput{Text: "[Web]\n\nnew prompt", Header: "[Web]", Responses: output}
 
 	close(input)
 
@@ -1504,7 +1507,7 @@ func TestLooperSendsAndReplaysUserAttachments(t *testing.T) {
 	output := make(chan ChatResponse, 10)
 
 	input := make(chan PromptInput, 1)
-	input <- testPromptInputWithAttachments("", "see attached", attachments, output)
+	input <- PromptInput{Text: "[Web]\n\nsee attached", Header: "[Web]", Attachments: attachments, Responses: output}
 
 	close(input)
 
@@ -1520,12 +1523,14 @@ func TestLooperSendsAndReplaysUserAttachments(t *testing.T) {
 	require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), `"role":"user"`)
 	require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), `"type":"input_image"`)
 	require.Contains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), `"type":"input_file"`)
+	require.NotContains(t, marshalJSON(t, newParams(mock)[0].Input.OfInputItemList), "prompt_header")
 
 	history, _, err := loadSession(sessionEntries(saved))
 	require.NoError(t, err)
 	serialized := marshalJSON(t, history)
 	require.Contains(t, serialized, `"image_url":"data:image/png;base64,aW1hZ2U="`)
 	require.Contains(t, serialized, `"file_data":"data:application/pdf;base64,cGRm"`)
+	require.Contains(t, serialized, `"prompt_header":"[Web]"`)
 }
 
 func TestLooperSendsAndReplaysDeveloperAttachments(t *testing.T) {
