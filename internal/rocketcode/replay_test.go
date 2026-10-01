@@ -22,6 +22,28 @@ func TestReplayInputPreservesCompactionPayload(t *testing.T) {
 	require.JSONEq(t, string(raw[0]), string(got[0]))
 }
 
+func TestReplayInputPreservesMessageHeaderLocally(t *testing.T) {
+	const header = `[Slack principal="alice"]`
+
+	raw := []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Slack principal=\"alice\"]","content":"[Slack principal=\"alice\"]\n\n[literal]\n\nbody"}`)}
+	items, err := ReplayInputToParams(raw)
+	require.NoError(t, err)
+	require.Equal(t, header, items[0].OfMessage.ExtraFields()["prompt_header"])
+	stored, err := ReplayInputFromParams(items)
+	require.NoError(t, err)
+	require.JSONEq(t, string(raw[0]), string(stored[0]))
+
+	projected, err := ReplayInputFromParams(projectReplayForOpenAI(items))
+	require.NoError(t, err)
+	require.NotContains(t, string(projected[0]), "prompt_header")
+	require.Equal(t, header+"\n\n[literal]\n\nbody", items[0].OfMessage.Content.OfString.Value)
+	require.Equal(t, header, items[0].OfMessage.ExtraFields()["prompt_header"])
+
+	recovered, err := RecoveredReplayInput(&ActiveTurnCheckpoint{ReplayInput: stored})
+	require.NoError(t, err)
+	require.JSONEq(t, string(raw[0]), string(recovered[0]))
+}
+
 func TestAbortedFunctionCallOutputsUsesGenericText(t *testing.T) {
 	items := []responses.ResponseInputItemUnionParam{
 		functionCallReplayInput("fc-1", "call-1", "read", `{"filePath":"README.md"}`),

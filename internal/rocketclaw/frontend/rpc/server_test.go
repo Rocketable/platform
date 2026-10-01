@@ -942,7 +942,7 @@ func TestSessionEntries(t *testing.T) {
 		json.RawMessage(`{"type":"function_call","name":"execute","arguments":"{\"code\":\"true\"}"}`),
 		json.RawMessage(`{"type":"function_call_output","output":"ok"}`),
 		json.RawMessage(`{"type":"message","id":"msg_one","status":"completed","role":"assistant","content":[{"type":"output_text","text":"answer one","annotations":[]}]}`),
-		json.RawMessage(`{"type":"message","role":"user","content":"[Web media=Text principal=\"alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhuman two"}`),
+		json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Web principal=\"alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]","content":"[Web principal=\"alice\" additional_instructions=\"Reply in plain text suitable for Slack. Avoid markdown unless it is necessary.\"]\n\nhuman two"}`),
 		json.RawMessage(`{"type":"message","role":"assistant","content":"answer two"}`),
 		json.RawMessage(`{"type":"function_call","call_id":"report","name":"rocketclaw_i_want_human_partner_to_see_this","arguments":"{\"payload\":\"Exact report\\nwith details\"}"}`),
 		json.RawMessage(`{"type":"function_call_output","call_id":"report","output":"queued for verbatim delivery"}`),
@@ -960,6 +960,7 @@ func TestSessionEntries(t *testing.T) {
 	require.Equal(t, "rocketclaw_i_want_human_partner_to_see_this", history.Messages[8].ToolName)
 	require.Equal(t, "report", history.Messages[9].ToolCallId)
 	require.Empty(t, history.Messages[9].ToolName)
+	require.Equal(t, `[Web principal="alice" additional_instructions="Reply in plain text suitable for Slack. Avoid markdown unless it is necessary."]`, history.Messages[6].Header)
 
 	for i, message := range history.Messages {
 		require.Equal(t, "canonical", message.Origin)
@@ -1144,14 +1145,21 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err, "%s", output)
 	t.Log(string(output))
 
-	const webHeader = "[Web media=Text principal=\"alice\" additional_instructions=\"Reply plainly.\"]\n\n"
-	for i, tc := range []struct{ input, want string }{
-		{webHeader + "[literal]\n\nkeep my brackets", "[literal]\n\nkeep my brackets"},
-		{"[Web media=Text principal=alice]\n\nnot a generated header", "[Web media=Text principal=alice]\n\nnot a generated header"},
-		{webHeader + webHeader + "quoted header", webHeader + "quoted header"},
+	const webHeader = `[Web principal="alice" additional_instructions="Reply plainly."]`
+	for i, tc := range []struct{ input, want, header string }{
+		{webHeader + "\n\n[literal]\n\nkeep my brackets", "[literal]\n\nkeep my brackets", webHeader},
+		{"[Web media=Text principal=alice]\n\nnot a generated header", "[Web media=Text principal=alice]\n\nnot a generated header", ""},
+		{webHeader + "\n\n" + webHeader + "\n\nquoted header", webHeader + "\n\nquoted header", webHeader},
+		{webHeader + "\n\nold message", webHeader + "\n\nold message", ""},
+		{"[Slack principal=\"bob\"]\n\nSlack body", "Slack body", `[Slack principal="bob"]`},
 	} {
+		message := responses.ResponseInputItemUnionParam{OfMessage: &responses.EasyInputMessageParam{Role: "user", Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(tc.input)}, Type: "message"}}
+		if tc.header != "" {
+			message.OfMessage.SetExtraFields(map[string]any{"prompt_header": tc.header})
+		}
+
 		replay, err := rocketcode.ReplayInputFromParams([]responses.ResponseInputItemUnionParam{
-			{OfMessage: &responses.EasyInputMessageParam{Role: "user", Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(tc.input)}, Type: "message"}},
+			message,
 			{OfMessage: &responses.EasyInputMessageParam{Role: "assistant", Content: responses.EasyInputMessageContentUnionParam{OfString: openai.String(webHeader + "assistant unchanged")}, Type: "message"}},
 		})
 		require.NoError(t, err)
@@ -1160,6 +1168,7 @@ func TestSessionEntries(t *testing.T) {
 		history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: "empty-web"})
 		require.NoError(t, err)
 		require.Equal(t, tc.want, history.Messages[len(history.Messages)-2].Text)
+		require.Equal(t, tc.header, history.Messages[len(history.Messages)-2].Header)
 		require.Equal(t, webHeader+"assistant unchanged", history.Messages[len(history.Messages)-1].Text)
 
 		listed, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
@@ -1899,6 +1908,7 @@ func TestSessionEntries(t *testing.T) {
 
 			consumed := protocol.NewOutboundMessage(conversation, "")
 			consumed.ConsumedID, consumed.ConsumedText = "attachment-input", turns[len(turns)-1].Text
+			consumed.ConsumedHeader = `[Web principal="alice"]`
 			ack := make(chan error, 1)
 			core.SubscribeFunc = func(context.Context) iter.Seq[protocol.Event] {
 				return func(yield func(protocol.Event) bool) {
@@ -1915,6 +1925,7 @@ func TestSessionEntries(t *testing.T) {
 			require.Equal(t, "attachment-input", event.MessageId)
 			require.Equal(t, "user", event.Role)
 			require.Equal(t, exact, event.Text)
+			require.Equal(t, consumed.ConsumedHeader, event.Header)
 			require.Len(t, event.Attachments, 2)
 			require.Equal(t, file.Id, event.Attachments[0].Id)
 			require.Equal(t, imageFile.Id, event.Attachments[1].Id)

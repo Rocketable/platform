@@ -1,6 +1,6 @@
 export type PromptDelivery = "STEER" | "QUEUE" | "STASH";
 export type Attachment = { id: string; name: string; mimeType: string; size?: string; originalUnverified?: boolean; conversationId: string };
-export type TranscriptEvent = { text: string; snapshot: boolean; role: string; complete: boolean; turnId: string; messageId?: string; toolCallId?: string; toolName?: string; attachments?: Attachment[]; agent?: string; model?: string; reasoningEffort?: string; origin?: string };
+export type TranscriptEvent = { text: string; snapshot: boolean; role: string; complete: boolean; turnId: string; messageId?: string; toolCallId?: string; toolName?: string; attachments?: Attachment[]; agent?: string; model?: string; reasoningEffort?: string; origin?: string; header?: string };
 export type SessionEntryMeta = { id: string; type?: string; timestamp?: string };
 export type SessionEntryData = { id: string; json?: string };
 export type QueueItem = { id: string; text: string; attachments?: Attachment[]; delivery?: PromptDelivery };

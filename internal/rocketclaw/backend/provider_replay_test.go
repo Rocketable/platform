@@ -288,13 +288,14 @@ func TestReplayForProviderValidatesRequiredKnownFields(t *testing.T) {
 }
 func TestRecoveredAttributionSurvivesProviderProjection(t *testing.T) {
 	var checkpoint rocketcode.ActiveTurnCheckpoint
-	require.NoError(t, json.Unmarshal([]byte(`{"display_model":"work/model-b","agent":"new","reasoning_effort":"low","replay_input":[{"type":"reasoning","encrypted_content":"opaque"},{"type":"message","role":"assistant","content":"old answer"},{"type":"message","role":"assistant","content":"new answer"}],"replay_attribution":[{"start":0,"end":2,"agent":"old","model":"work/model-a","reasoning_effort":"high"}]}`), &checkpoint))
+	require.NoError(t, json.Unmarshal([]byte(`{"display_model":"work/model-b","agent":"new","reasoning_effort":"low","replay_input":[{"type":"reasoning","encrypted_content":"opaque"},{"type":"message","role":"user","prompt_header":"[Slack]","content":"[Slack]\n\nold question"},{"type":"message","role":"assistant","content":"new answer"}],"replay_attribution":[{"start":0,"end":2,"agent":"old","model":"work/model-a","reasoning_effort":"high"}]}`), &checkpoint))
 	projected, err := activeTurnForProvider(&checkpoint, "other")
 	require.NoError(t, err)
 	data, err := json.Marshal(projected)
 	require.NoError(t, err)
 	require.Contains(t, string(data), `"replay_attribution":[{"start":0,"end":1,"agent":"old","model":"work/model-a","reasoning_effort":"high"}]`)
 	require.Len(t, projected.ReplayInput, 2)
+	require.Contains(t, string(projected.ReplayInput[0]), `"prompt_header":"[Slack]"`)
 	old := projected.ReplayAttribution
 	resumed := withRecoveredReplay(&rocketcode.ActiveTurnCheckpoint{Agent: "latest", DisplayModel: "model-c", ReasoningEffort: new("medium"), ReplayInput: []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"latest answer"}`)}}, projected.ReplayInput, append(old, rocketcode.ReplayAttribution{End: 2, Agent: projected.Agent, Model: projected.DisplayModel, ReasoningEffort: projected.ReasoningEffort}))
 	require.Equal(t, 1, projected.ReplayAttribution[0].End)
@@ -305,6 +306,7 @@ func TestRecoveredAttributionSurvivesProviderProjection(t *testing.T) {
 	managed, err := externalMCPManagedEntry(&entry, []json.RawMessage{json.RawMessage(`{"type":"message","role":"developer","content":"prefix"}`)})
 	require.NoError(t, err)
 	require.Equal(t, "work/model-a", managed.AttributionAt(1).Model)
+	require.Contains(t, string(managed.ReplayInput[1]), `"prompt_header":"[Slack]"`)
 
 	unknown := withRecoveredReplay(&rocketcode.ActiveTurnCheckpoint{ReplayInput: entry.ReplayInput[2:]}, entry.ReplayInput[:1], []rocketcode.ReplayAttribution{{End: 1}})
 	entry.ReplayAttribution = unknown.ReplayAttribution

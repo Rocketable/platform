@@ -125,6 +125,10 @@ func replayForProvider(rawItems []json.RawMessage, attribution ...[]rocketcode.R
 			}
 
 			if keep {
+				if item.Header != "" {
+					message.OfMessage.SetExtraFields(map[string]any{"prompt_header": item.Header})
+				}
+
 				items = append(items, message)
 			}
 		case "function_call":
@@ -211,6 +215,7 @@ func replayForProvider(rawItems []json.RawMessage, attribution ...[]rocketcode.R
 type replayMessage struct {
 	Role, Phase string
 	Content     json.RawMessage
+	Header      string `json:"prompt_header"`
 }
 
 type replayFunctionCall struct {

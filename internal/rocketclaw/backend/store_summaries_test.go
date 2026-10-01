@@ -27,9 +27,12 @@ func TestSessionSummaryProjectionAndIncrementalAppend(t *testing.T) {
 	header := provenanceHeader(promptProvenance{origin: "Web", media: "Text", principal: "alice", additionalInstructions: defaultReplyInstruction})
 	body, err := json.Marshal(header + "\n\n" + header + "\n\nbody")
 	require.NoError(t, err)
+	headerJSON, err := json.Marshal(header)
+	require.NoError(t, err)
 
 	for _, tc := range []struct{ name, raw, want string }{
-		{"envelope", `{"type":"message","role":"user","content":` + string(body) + `}`, header + "\n\nbody"},
+		{"envelope", `{"type":"message","role":"user","prompt_header":` + string(headerJSON) + `,"content":` + string(body) + `}`, header + "\n\nbody"},
+		{"legacy", `{"type":"message","role":"user","content":` + string(body) + `}`, header + "\n\n" + header + "\n\nbody"},
 		{"multipart", `{"type":"message","role":"user","content":[{"type":"input_text","text":"part-a"},{"type":"input_text","text":"part-b\u0000"}]}`, "part-apart-b\x00"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

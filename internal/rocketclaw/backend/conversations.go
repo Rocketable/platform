@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -372,20 +373,23 @@ func (b *Bridge) drainSteers(ctx context.Context, phase rocketcode.TurnPhase) []
 	b.mu.Unlock()
 
 	for _, request := range pending {
-		b.publishConsumed(ctx, request.inbound)
+		prompt := buildPrompt(request.inbound, nil)
+		header, _, _ := strings.Cut(prompt, "\n\n")
+		b.publishConsumed(ctx, request.inbound, header)
 		directSkill := inboundDirectSkill(request.inbound)
-		inputs = append(inputs, rocketcode.PromptInput{Text: buildPrompt(request.inbound, nil), Attachments: attachmentsFromInbound(request.inbound.Attachments), DirectSkill: directSkill})
+		inputs = append(inputs, rocketcode.PromptInput{Text: prompt, Header: header, Attachments: attachmentsFromInbound(request.inbound.Attachments), DirectSkill: directSkill})
 	}
 
 	return inputs
 }
 
-func (b *Bridge) publishConsumed(ctx context.Context, inbound *protocol.InboundMessage) {
+func (b *Bridge) publishConsumed(ctx context.Context, inbound *protocol.InboundMessage, header string) {
 	if id := inbound.Metadata["web_message_id"]; id != "" {
 		message := protocol.NewOutboundMessage(b.config.ConversationID, "")
 
 		message.ConsumedID, message.ConsumedText, message.ConsumedSource = id, inbound.Text, inbound.Source
 		message.ConsumedRawText = inbound.Metadata[protocol.InboundRawTextMetadataKey]
+		message.ConsumedHeader = header
 		message.SourceConversationID = b.config.ConversationID
 		b.mu.Lock()
 		message.Agent, message.Model, message.ReasoningEffort = b.activeAttribution.Agent, b.activeAttribution.Model, b.activeAttribution.ReasoningEffort

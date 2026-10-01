@@ -31,8 +31,10 @@ const (
 // PromptInput is one prompt plus optional model-visible attachments.
 type PromptInput struct {
 	// Role defaults to PromptInputRoleUser when empty.
-	Role        PromptInputRole         `json:"role,omitempty"`
-	Text        string                  `json:"text"`
+	Role PromptInputRole `json:"role,omitempty"`
+	Text string          `json:"text"`
+	// Header is the exact generated prefix of Text, saved only in local replay.
+	Header      string                  `json:"header,omitempty"`
 	Attachments []Attachment            `json:"attachments,omitempty"`
 	DirectSkill *PromptInputDirectSkill `json:"directSkill,omitempty"`
 	// Responses receives user-visible response items for this prompt. The runtime
@@ -130,20 +132,25 @@ func mimeFromFilename(filename string) string {
 	return "application/octet-stream"
 }
 
-func promptInputMessage(input PromptInput) responses.ResponseInputItemUnionParam {
+func promptInputMessage(input *PromptInput) responses.ResponseInputItemUnionParam {
 	role := promptInputMessageRole(input.Role)
-	if len(input.Attachments) == 0 {
-		return inputMessageParam(role, easyInputStringContent(input.Text))
+
+	content := easyInputStringContent(input.Text)
+	if len(input.Attachments) > 0 {
+		parts := responses.ResponseInputMessageContentListParam{}
+		if input.Text != "" {
+			parts = append(parts, responses.ResponseInputContentUnionParam{OfInputText: &responses.ResponseInputTextParam{Text: input.Text}})
+		}
+
+		content = easyInputListContent(appendAttachmentContent(parts, input.Attachments...))
 	}
 
-	content := responses.ResponseInputMessageContentListParam{}
-	if input.Text != "" {
-		content = append(content, responses.ResponseInputContentUnionParam{OfInputText: &responses.ResponseInputTextParam{Text: input.Text}})
+	message := inputMessageParam(role, content)
+	if input.Header != "" {
+		message.OfMessage.SetExtraFields(map[string]any{"prompt_header": input.Header})
 	}
 
-	content = appendAttachmentContent(content, input.Attachments...)
-
-	return inputMessageParam(role, easyInputListContent(content))
+	return message
 }
 
 func inputMessageParam(role responses.EasyInputMessageRole, content responses.EasyInputMessageContentUnionParam) responses.ResponseInputItemUnionParam {

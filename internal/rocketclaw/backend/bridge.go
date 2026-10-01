@@ -657,8 +657,6 @@ func (b *Bridge) activateInbound(ctx context.Context, request *bridgeRequest) (a
 		b.log.Info("scheduled message deleted after turn started", "scheduled_message_id", request.scheduledMessageID, "conversation_id", b.config.ConversationID)
 	}
 
-	b.publishConsumed(ctx, request.inbound)
-
 	return true, nil
 }
 
@@ -975,6 +973,8 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 	}()
 
 	if fallback := attachmentFallback(msg); fallback != "" {
+		b.publishConsumed(ctx, msg, "")
+
 		result.text = fallback
 		errPublish := b.publishFinal(ctx, msg, result)
 		errLog = errPublish
@@ -1028,10 +1028,13 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 }
 
 func (b *Bridge) runWorkflow(ctx context.Context, msg *protocol.InboundMessage, turnID string) (result runResult, err error) {
+	b.publishConsumed(ctx, msg, "")
+
 	root, errRoot := os.OpenRoot(b.runtime.Workspace)
 	if errRoot != nil {
 		return result, fmt.Errorf("open workspace root: %w", errRoot)
 	}
+
 	defer func() { _ = root.Close() }()
 
 	definitions, errLoad := workflow.Load(root, b.runtime.RuntimeDirName())
@@ -1275,7 +1278,15 @@ func appendSessionEntry(entries iter.Seq2[rocketcode.SessionEntry, error], added
 
 //nolint:gocyclo // Turn execution coordinates model, tools, progress, and goal accounting.
 func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turnID string, recoveredCheckpoints ...rocketcode.ActiveTurnCheckpoint) (result runResult, err error) {
-	var recoveryEntry rocketcode.SessionEntry
+	var (
+		recoveryEntry rocketcode.SessionEntry
+		header        string
+	)
+	defer func() {
+		if header == "" {
+			b.publishConsumed(ctx, msg, "")
+		}
+	}()
 
 	agentName := b.agentSnapshot()
 	ctx = instrumentation.WithSession(ctx, b.config.ConversationID)
@@ -1565,7 +1576,10 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		return runResult{}, err
 	}
 
-	input <- rocketcode.PromptInput{Role: "", Text: prompt, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: directSkill, Responses: output}
+	header, _, _ = strings.Cut(prompt, "\n\n")
+	b.publishConsumed(ctx, msg, header)
+
+	input <- rocketcode.PromptInput{Role: "", Text: prompt, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: directSkill, Responses: output}
 
 	close(input)
 
@@ -2897,38 +2911,11 @@ func replayInputMessages(raw []json.RawMessage) ([]replayInputMessage, error) {
 // ReplayInputMessageRoleText projects a stored message into its display role and text.
 func ReplayInputMessageRoleText(item *responses.ResponseInputItemUnionParam, raw json.RawMessage) (role, text string, ok bool, err error) {
 	defer func() {
-		// Only unwrap one canonical buildPrompt Web envelope, never brackets in
-		// the body or assistant output. Durable replay remains model-facing.
-		if role != "user" {
-			return
-		}
-
-		rest, found := strings.CutPrefix(text, "[Web media=Text principal=")
-		if !found {
-			return
-		}
-
-		principal, errQuote := strconv.QuotedPrefix(rest)
-		if errQuote != nil {
-			return
-		}
-
-		rest, found = strings.CutPrefix(rest[len(principal):], " additional_instructions=")
-		if !found {
-			return
-		}
-
-		instruction, errQuote := strconv.QuotedPrefix(rest)
-		if errQuote != nil {
-			return
-		}
-
-		principalText, _ := strconv.Unquote(principal)
-		instructionText, _ := strconv.Unquote(instruction)
-		header := provenanceHeader(promptProvenance{origin: "Web", media: "Text", principal: principalText, additionalInstructions: instructionText})
-
-		if body, found := strings.CutPrefix(text, header+"\n\n"); found {
-			text = body
+		// Trim only the saved prefix, never guess from brackets in the body.
+		if item.OfMessage != nil && (role == "user" || role == "developer") {
+			if header, _ := item.OfMessage.ExtraFields()["prompt_header"].(string); header != "" {
+				text = strings.TrimPrefix(text, header+"\n\n")
+			}
 		}
 	}()
 
@@ -3132,12 +3119,11 @@ func provenanceHeader(provenance promptProvenance) string {
 		origin = "System"
 	}
 
-	media := provenanceToken(provenance.media)
-	if media == "" {
-		media = "Text"
+	header := "[" + origin
+	if media := provenanceToken(provenance.media); media != "" && media != "Text" {
+		header += " media=" + media
 	}
 
-	header := "[" + origin + " media=" + media
 	if principal := strings.TrimSpace(provenance.principal); principal != "" {
 		header += " principal=" + strconv.Quote(principal)
 	}
