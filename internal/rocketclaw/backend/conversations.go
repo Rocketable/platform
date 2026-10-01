@@ -128,8 +128,10 @@ func (b *Bridge) syncConversation(ctx context.Context, source *Bridge) error {
 			return fmt.Errorf("encode synced entry: %w", err)
 		}
 
+		data = removeSessionEntryNUL(data)
+
 		added, err := execRows(ctx, tx, "insert synced entry", "count synced entries", `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp)
-SELECT $1, ($2::jsonb || jsonb_build_object('sync_source_entry_id', $3::bigint, 'sync_source_conversation_id', $5::text))::text, $4
+SELECT $1, ($2::jsonb || jsonb_build_object('sync_source_entry_id', $3::bigint, 'sync_source_conversation_id', $5::text))::json, $4
 WHERE NOT EXISTS (SELECT 1 FROM session_entries WHERE conversation_id = $1 AND entry_json::jsonb->>'sync_source_entry_id' = $3::text)`, b.config.ConversationID, string(data), observed.ID, entry.Timestamp.UTC().Format(time.RFC3339Nano), producer)
 		if err != nil {
 			return err

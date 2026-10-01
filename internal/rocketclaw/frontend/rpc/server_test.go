@@ -1133,7 +1133,7 @@ func TestSessionEntries(t *testing.T) {
 	entry.ReplayInput = []json.RawMessage{json.RawMessage(`{"type":"message","role":"assistant","content":"Copied producer answer"}`)}
 	_, err = sessions.AppendEntryID(ctx, id, &entry)
 	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', 0, 'sync_source_conversation_id', 'private-X'))::text WHERE conversation_id=$1`, id)
+	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', 0, 'sync_source_conversation_id', 'private-X'))::json WHERE conversation_id=$1`, id)
 	require.NoError(t, err)
 	httpServer := startHTTPTestServer(t, connection)
 
@@ -1395,14 +1395,14 @@ func TestSessionEntries(t *testing.T) {
 		for range 2 {
 			destinationEntry, err := sessions.AppendEntryID(ctx, id, &runEntry)
 			require.NoError(t, err)
-			_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::text WHERE id = $2`, sourceEntry, destinationEntry)
+			_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::json WHERE id = $2`, sourceEntry, destinationEntry)
 			require.NoError(t, err)
 		}
 
 		for _, hiddenDestination := range []string{"private-X", "unrecorded-history-destination"} {
 			destinationEntry, err := sessions.AppendEntryID(ctx, hiddenDestination, &entry)
 			require.NoError(t, err)
-			_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::text WHERE id = $2`, sourceEntry, destinationEntry)
+			_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', $1::bigint))::json WHERE id = $2`, sourceEntry, destinationEntry)
 			require.NoError(t, err)
 		}
 	}
@@ -1424,7 +1424,7 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, preview.Messages)
 	// A preview must not decode replay content belonging to another run.
-	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', '[{"type":"function_call","call_id":"broken","name":"rocketclaw_i_want_human_partner_to_see_this","arguments":"invalid"},{"type":"function_call_output","call_id":"broken","output":"queued for verbatim delivery"}]')::text WHERE id = $1`, observed[3].ID)
+	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', '[{"type":"function_call","call_id":"broken","name":"rocketclaw_i_want_human_partner_to_see_this","arguments":"invalid"},{"type":"function_call_output","call_id":"broken","output":"queued for verbatim delivery"}]')::json WHERE id = $1`, observed[3].ID)
 	require.NoError(t, err)
 	preview, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, SourceConversationId: sources[0]})
 	require.NoError(t, err)
@@ -1432,7 +1432,7 @@ func TestSessionEntries(t *testing.T) {
 
 	_, err = invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id, SourceConversationId: sources[1]})
 	require.ErrorContains(t, err, "decode delivery report")
-	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', (SELECT entry_json::jsonb->'replay_input' FROM session_entries WHERE id = $1))::text WHERE id = $2`, observed[2].ID, observed[3].ID)
+	_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', (SELECT entry_json::jsonb->'replay_input' FROM session_entries WHERE id = $1))::json WHERE id = $2`, observed[2].ID, observed[3].ID)
 	require.NoError(t, err)
 
 	jobs, err = invoke[ListCronJobsResponse](ctx, connection, "ListCronJobs", &ListCronJobsRequest{})
@@ -1460,7 +1460,7 @@ func TestSessionEntries(t *testing.T) {
 	traceEntry := entry
 	traceEntry.ReplayInput = []json.RawMessage{
 		json.RawMessage(`{"type":"function_call","call_id":"silent-tool","name":"inspect","arguments":"{}"}`),
-		json.RawMessage(`{"type":"function_call_output","call_id":"silent-tool","output":"Nothing to deliver"}`),
+		json.RawMessage(`{"type":"function_call_output","call_id":"silent-tool","output":"Nothing\u0000 to deliver"}`),
 	}
 	traceEntryID, err := sessions.AppendEntryID(ctx, undelivered, &traceEntry)
 	require.NoError(t, err)
@@ -1542,7 +1542,7 @@ func TestSessionEntries(t *testing.T) {
 
 		require.Equal(t, 1, count)
 		// Seed the persisted provenance produced by the real SyncConversation.
-		_, err = db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) SELECT $1, (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id))::text, entry_timestamp FROM session_entries WHERE id=$2`, webID, traceEntryID)
+		_, err = db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) SELECT $1, (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id))::json, entry_timestamp FROM session_entries WHERE id=$2`, webID, traceEntryID)
 		require.NoError(t, err)
 		history, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: webID})
 		require.NoError(t, err)
@@ -2145,7 +2145,7 @@ func TestSessionEntries(t *testing.T) {
 			json.RawMessage(`{"type":"function_call_output","call_id":"private-file","output":"queued attachments for final response: private-generated"}`),
 		}})
 		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) SELECT $1, (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id))::text, entry_timestamp FROM session_entries WHERE id=$2`, conversation, sourceID)
+		_, err = db.ExecContext(ctx, `INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) SELECT $1, (entry_json::jsonb || jsonb_build_object('sync_source_entry_id', id))::json, entry_timestamp FROM session_entries WHERE id=$2`, conversation, sourceID)
 		require.NoError(t, err)
 		filtered, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: conversation, SourceConversationId: "private-X"})
 		require.NoError(t, err)
@@ -2326,7 +2326,7 @@ func TestSessionEntries(t *testing.T) {
 			`[{"type":"compaction","content":42}]`,
 			`[{"type":"function_call","name":"rocketclaw_attach_files_to_response","call_id":"broken","arguments":"invalid"},{"type":"function_call_output","call_id":"broken","output":"queued attachments for final response"}]`,
 		} {
-			_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', $1::jsonb)::text WHERE id = $2`, replay, entryID)
+			_, err = db.ExecContext(ctx, `UPDATE session_entries SET entry_json = jsonb_set(entry_json::jsonb, '{replay_input}', $1::jsonb)::json WHERE id = $2`, replay, entryID)
 			require.NoError(t, err)
 
 			for _, call := range []struct {
