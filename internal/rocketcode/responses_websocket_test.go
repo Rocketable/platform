@@ -70,10 +70,10 @@ func TestNewResponsesAPIUsesWebsocketWhenURLIsWebsocket(t *testing.T) {
 	require.Equal(t, "gpt-5.5", event["model"])
 }
 
-func TestNewResponsesAPIUsesClientHTTPClientWhenURLIsHTTP(t *testing.T) {
-	transport := &authRewriteTransport{}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestNewResponsesAPIUsesClientHTTPClientWhenURLIsHTTPS(t *testing.T) {
+	// openai-go sends authenticated HTTP through a dedicated loopback transport
+	// and ignores custom clients. HTTPS is what still uses the configured client.
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer real-token" {
 			t.Errorf("Authorization = %q; want Bearer real-token", got)
 		}
@@ -86,6 +86,7 @@ func TestNewResponsesAPIUsesClientHTTPClientWhenURLIsHTTP(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
+	transport := &authRewriteTransport{base: server.Client().Transport}
 	client := openai.NewClient(
 		option.WithAPIKey("dummy-key"),
 		option.WithBaseURL(server.URL+"/v1"),
@@ -136,7 +137,7 @@ func TestNewResponsesAPIKeepsHTTPWhenURLIsNotWebsocket(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL+"/v1"))
+	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL+"/v1"), option.WithUnsafeAllowHTTP())
 	api := newResponsesAPI(&client)
 	resp, err := api.New(t.Context(), &responses.ResponseNewParams{Model: "gpt-5.5"})
 	require.NoError(t, err)
@@ -215,6 +216,7 @@ func TestNewResponsesAPIMapsWebsocketError(t *testing.T) {
 }
 
 type authRewriteTransport struct {
+	base http.RoundTripper
 	used bool
 }
 
@@ -223,7 +225,7 @@ func (t *authRewriteTransport) RoundTrip(req *http.Request) (*http.Response, err
 	cloned := req.Clone(req.Context())
 	cloned.Header.Set("Authorization", "Bearer real-token")
 
-	resp, errRound := http.DefaultTransport.RoundTrip(cloned)
+	resp, errRound := t.base.RoundTrip(cloned)
 	if errRound != nil {
 		return nil, fmt.Errorf("round trip rewritten auth request: %w", errRound)
 	}

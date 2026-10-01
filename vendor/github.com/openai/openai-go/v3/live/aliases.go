@@ -76,11 +76,23 @@ const AllModelsGPTDaybreakRedLatest = shared.AllModelsGPTDaybreakRedLatest
 // Equals "gpt-5.6-cyber"
 const AllModelsGPT5_6Cyber = shared.AllModelsGPT5_6Cyber
 
+// Equals "gpt-rosalind-research"
+const AllModelsGPTRosalindResearch = shared.AllModelsGPTRosalindResearch
+
 // This is an alias to an internal type.
 type ChatModel = shared.ChatModel
 
 // Equals "gpt-6-astra"
 const ChatModelGPT6Astra = shared.ChatModelGPT6Astra
+
+// Equals "gpt-6.1-sol"
+const ChatModelGPT6_1Sol = shared.ChatModelGPT6_1Sol
+
+// Equals "gpt-6-sol"
+const ChatModelGPT6Sol = shared.ChatModelGPT6Sol
+
+// Equals "gpt-6-luna"
+const ChatModelGPT6Luna = shared.ChatModelGPT6Luna
 
 // Equals "gpt-5.6-sol"
 const ChatModelGPT5_6Sol = shared.ChatModelGPT5_6Sol
@@ -735,3 +747,6 @@ const ResponsesModelGPTDaybreakRedLatest = shared.ResponsesModelGPTDaybreakRedLa
 
 // Equals "gpt-5.6-cyber"
 const ResponsesModelGPT5_6Cyber = shared.ResponsesModelGPT5_6Cyber
+
+// Equals "gpt-rosalind-research"
+const ResponsesModelGPTRosalindResearch = shared.ResponsesModelGPTRosalindResearch

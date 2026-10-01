@@ -30,7 +30,7 @@ Or to pin an SDK version (see the Go compatibility note below):
 <!-- x-release-please-start-version -->
 
 ```sh
-go get -u 'github.com/openai/openai-go/v3@v3.64.3'
+go get -u 'github.com/openai/openai-go/v3@v3.69.0'
 ```
 
 <!-- x-release-please-end -->
@@ -383,6 +383,76 @@ Realtime sessions. Leave `stream` and `background` unset. Use `Create` followed 
 `FinalResponse` for a complete terminal snapshot, including tool calls; failed and
 incomplete responses retain their status. `Recv` exposes individual typed events
 and their `RawJSON`. A terminal response ends a turn, not the socket.
+
+For opt-in incremental text and tool-input snapshots, feed the events you read
+to a `responses.ResponseAccumulator`. It consumes no events itself:
+
+```go
+var acc responses.ResponseAccumulator
+for {
+    event, err := connection.Recv(ctx) // Or lane.Recv(ctx) for a named lane.
+    if err != nil { return err }
+    // The original typed event and event.RawJSON() remain available here.
+    if err := acc.AddEvent(event); err != nil { return err }
+    if event.Type == "response.completed" || event.Type == "response.failed" || event.Type == "response.incomplete" {
+        snapshot := acc.Snapshot()
+        // Inspect TerminalEvent: completed, failed and incomplete all end a turn.
+        // Function arguments and custom-tool input in snapshot.Output are data;
+        // the application decides whether and when to act on them.
+        fmt.Println(snapshot.OutputText())
+        break
+    }
+}
+acc.Reset() // Ready for another turn; does not close the connection.
+```
+
+Use a separate accumulator for each lane. Snapshots remain unchanged as more
+events arrive or after `Reset`. Text is grouped by output and content index;
+function arguments and custom input retain their item and call IDs. Finalized
+fields replace earlier deltas. `OutputText()` is the entire current projection,
+not a delta: read a snapshot at a terminal or on explicit demand. Use the original
+typed events for a live UI; later done events can shorten or correct earlier text.
+A supplied final output, even an empty array,
+overrides prior items; if final output is absent or null, the opt-in projection
+retains collected fields. An item with a different nonempty ID starts fresh
+at its output index; it cannot inherit text or tool inputs from an earlier item.
+This projection is not a server `Response`. A missing or invalid terminal
+response, an API error, or EOF never becomes a completed result.
+`FinalResponse` keeps its original behavior and returns the server snapshot.
+
+Use `acc.DetailedSnapshot()` for a mutable copy of all observed response metadata,
+item, part and annotation fields, beyond the fields selected by `Snapshot()`.
+`Response` is the last observed lifecycle response metadata, without `output`
+(nil until one arrives). Output entries are sorted by `OutputIndex`;
+`Content` and `Annotations` use sparse int64 content and annotation indices.
+Fields are `json.RawMessage`: they preserve exact numbers, omitted versus null,
+and fields from unknown variants, rather than manufacturing a typed complete
+`Response`. Message content and list-valued annotations are extracted to those
+indexed maps; null annotations remain null in the part fields. Unknown item
+fields, including non-message content, remain in `Item`.
+
+```go
+details := acc.DetailedSnapshot() // At a terminal, or when explicitly requested.
+for _, item := range details.Output {
+    for contentIndex, part := range item.Content {
+        text := part["text"]                   // nil if never received
+        logprobs := part["logprobs"]           // provisional streamed form
+        annotations := item.Annotations[contentIndex]
+        _, _, _ = text, logprobs, annotations // Use in application-owned UI/state.
+    }
+}
+```
+
+Streamed logprobs accumulate with deltas. Supplied text-done logprobs replace them
+(including empty or null); whole part/item replacements discard prior fields
+and citations at those positions. Annotations and non-text parts enrich a
+matching known item; an annotation-only event never binds a lane, starts a
+turn or replaces an unrelated item. Standalone unsupported events and parts
+without a known item remain available on the original received event. Tools and
+unknown/partial data are never executed or promoted into final validated models.
+Every returned map and raw JSON byte slice is a separate caller-owned copy.
+Reading either snapshot joins/copies full accumulated output; reading one
+after every delta would repeatedly rebuild growing prefixes.
 
 Continue with `PreviousResponseID: openai.String(previous.ID)` and **only new input**.
 For example, return a function result using its original call ID, then add a new
@@ -1175,6 +1245,31 @@ redirects it performs inside `Do` and must keep credentialed requests on the
 configured origin. Prefer a native `*http.Client` with a custom transport when
 possible.
 
+### Local HTTP development
+
+Authenticated OpenAI requests require HTTPS, including endpoints selected by
+`OPENAI_BASE_URL` or `option.WithBaseURL`. A remote HTTP endpoint returns an error
+before credentials are sent or workload tokens are acquired. Static credentials
+are checked after middleware, so middleware can remove authentication before dispatch.
+Use an HTTPS endpoint for remote servers.
+
+For local development, explicitly allow plaintext connections to `localhost` or
+a literal loopback IP address:
+
+```go
+client := openai.NewClient(
+    option.WithBaseURL("http://127.0.0.1:8080/v1"),
+    option.WithUnsafeAllowHTTP(),
+    option.WithAPIKey("local-test-key"),
+)
+```
+
+The exception never permits remote HTTP. These local requests use a dedicated
+direct transport, bypassing proxies, custom transports, dialers, and HTTP doers.
+Use HTTPS when a test needs a custom transport. HTTPS requests and workload token
+exchanges retain their configured HTTP clients. Azure and Bedrock retain their
+provider-specific transport policies.
+
 ### Mutual TLS with a custom HTTP client
 
 For API-key authenticated HTTP requests that require mutual TLS, configure a
@@ -1594,4 +1689,7 @@ We are keen for your feedback; please open an [issue](https://www.github.com/ope
 
 ## Contributing
 
-See [the contributing documentation](./CONTRIBUTING.md).
+Please share bug reports and feature requests through [GitHub issues](https://github.com/openai/openai-go/issues).
+Pull requests are limited to repository collaborators; we do not accept pull requests from non-collaborators.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for the contribution policy and development guide.
+For security vulnerabilities, follow [SECURITY.md](SECURITY.md).

@@ -40,6 +40,7 @@ const (
 	AllModelsGPTDaybreakBlueLatest        AllModels = "gpt-daybreak-blue-latest"
 	AllModelsGPTDaybreakRedLatest         AllModels = "gpt-daybreak-red-latest"
 	AllModelsGPT5_6Cyber                  AllModels = "gpt-5.6-cyber"
+	AllModelsGPTRosalindResearch          AllModels = "gpt-rosalind-research"
 	// Or some ...[ChatModel]
 )
 
@@ -47,6 +48,9 @@ type ChatModel = string
 
 const (
 	ChatModelGPT6Astra                        ChatModel = "gpt-6-astra"
+	ChatModelGPT6_1Sol                        ChatModel = "gpt-6.1-sol"
+	ChatModelGPT6Sol                          ChatModel = "gpt-6-sol"
+	ChatModelGPT6Luna                         ChatModel = "gpt-6-luna"
 	ChatModelGPT5_6Sol                        ChatModel = "gpt-5.6-sol"
 	ChatModelGPT5_6Terra                      ChatModel = "gpt-5.6-terra"
 	ChatModelGPT5_6Luna                       ChatModel = "gpt-5.6-luna"
@@ -1368,5 +1372,6 @@ const (
 	ResponsesModelGPTDaybreakBlueLatest        ResponsesModel = "gpt-daybreak-blue-latest"
 	ResponsesModelGPTDaybreakRedLatest         ResponsesModel = "gpt-daybreak-red-latest"
 	ResponsesModelGPT5_6Cyber                  ResponsesModel = "gpt-5.6-cyber"
+	ResponsesModelGPTRosalindResearch          ResponsesModel = "gpt-rosalind-research"
 	// Or some ...[ChatModel]
 )

@@ -4407,7 +4407,8 @@ func (r *BetaNamespaceToolToolFunctionParam) UnmarshalJSON(data []byte) error {
 
 type BetaResponse struct {
 	// Unique identifier for this Response.
-	ID string `json:"id" api:"required"`
+	ID             string                     `json:"id" api:"required"`
+	AccessPrograms BetaResponseAccessPrograms `json:"access_programs" api:"required"`
 	// Unix timestamp (in seconds) of when this Response was created.
 	CreatedAt float64 `json:"created_at" api:"required" format:"unixtime"`
 	// An error object returned when the model fails to generate a Response.
@@ -4620,6 +4621,7 @@ type BetaResponse struct {
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
 		ID                     respjson.Field
+		AccessPrograms         respjson.Field
 		CreatedAt              respjson.Field
 		Error                  respjson.Field
 		IncompleteDetails      respjson.Field
@@ -4662,6 +4664,25 @@ type BetaResponse struct {
 // Returns the unmodified JSON received from the API
 func (r BetaResponse) RawJSON() string { return r.JSON.raw }
 func (r *BetaResponse) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+type BetaResponseAccessPrograms struct {
+	// The effective Cyber access program used for this response.
+	//
+	// Any of "standard", "daybreak_blue", "daybreak_red".
+	Cyber string `json:"cyber" api:"required"`
+	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
+	JSON struct {
+		Cyber       respjson.Field
+		ExtraFields map[string]respjson.Field
+		raw         string
+	} `json:"-"`
+}
+
+// Returns the unmodified JSON received from the API
+func (r BetaResponseAccessPrograms) RawJSON() string { return r.JSON.raw }
+func (r *BetaResponseAccessPrograms) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
@@ -4733,6 +4754,9 @@ type BetaResponseModel string
 
 const (
 	BetaResponseModelGPT6Astra                        BetaResponseModel = "gpt-6-astra"
+	BetaResponseModelGPT6_1Sol                        BetaResponseModel = "gpt-6.1-sol"
+	BetaResponseModelGPT6Sol                          BetaResponseModel = "gpt-6-sol"
+	BetaResponseModelGPT6Luna                         BetaResponseModel = "gpt-6-luna"
 	BetaResponseModelGPT5_6Sol                        BetaResponseModel = "gpt-5.6-sol"
 	BetaResponseModelGPT5_6Terra                      BetaResponseModel = "gpt-5.6-terra"
 	BetaResponseModelGPT5_6Luna                       BetaResponseModel = "gpt-5.6-luna"
@@ -4837,6 +4861,7 @@ const (
 	BetaResponseModelGPTDaybreakBlueLatest            BetaResponseModel = "gpt-daybreak-blue-latest"
 	BetaResponseModelGPTDaybreakRedLatest             BetaResponseModel = "gpt-daybreak-red-latest"
 	BetaResponseModelGPT5_6Cyber                      BetaResponseModel = "gpt-5.6-cyber"
+	BetaResponseModelGPTRosalindResearch              BetaResponseModel = "gpt-rosalind-research"
 )
 
 // BetaResponseToolChoiceUnion contains all possible properties and values from
@@ -26373,7 +26398,7 @@ type BetaResponseOutputTextAnnotationFileCitation struct {
 	FileID string `json:"file_id" api:"required"`
 	// The filename of the file cited.
 	Filename string `json:"filename" api:"required"`
-	// The index of the file in the list of files.
+	// The index in the output text at which to insert the file citation.
 	Index int64 `json:"index" api:"required"`
 	// The type of the file citation. Always `file_citation`.
 	Type constant.FileCitation `json:"type" default:"file_citation"`
@@ -26675,7 +26700,7 @@ type BetaResponseOutputTextAnnotationFileCitationParam struct {
 	FileID string `json:"file_id" api:"required"`
 	// The filename of the file cited.
 	Filename string `json:"filename" api:"required"`
-	// The index of the file in the list of files.
+	// The index in the output text at which to insert the file citation.
 	Index int64 `json:"index" api:"required"`
 	// The type of the file citation. Always `file_citation`.
 	//
@@ -26967,7 +26992,7 @@ type BetaResponseOutputTextAnnotationAddedEventAnnotationFileCitation struct {
 	FileID string `json:"file_id" api:"required"`
 	// The filename of the file cited.
 	Filename string `json:"filename" api:"required"`
-	// The index of the file in the list of files.
+	// The index in the output text at which to insert the file citation.
 	Index int64 `json:"index" api:"required"`
 	// The type of the file citation. Always `file_citation`.
 	Type constant.FileCitation `json:"type" default:"file_citation"`
@@ -33172,7 +33197,9 @@ type BetaWebSearchPreviewTool struct {
 	//
 	// Any of "low", "medium", "high".
 	SearchContextSize BetaWebSearchPreviewToolSearchContextSize `json:"search_context_size"`
-	// The user's location.
+	// The approximate location of the user. If omitted or null, defaults to the United
+	// States. To avoid this fallback, pass `{"type": "approximate"}` without location
+	// fields. To localize results, provide the relevant location fields.
 	UserLocation BetaWebSearchPreviewToolUserLocation `json:"user_location" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -33220,7 +33247,9 @@ const (
 	BetaWebSearchPreviewToolSearchContextSizeHigh   BetaWebSearchPreviewToolSearchContextSize = "high"
 )
 
-// The user's location.
+// The approximate location of the user. If omitted or null, defaults to the United
+// States. To avoid this fallback, pass `{"type": "approximate"}` without location
+// fields. To localize results, provide the relevant location fields.
 type BetaWebSearchPreviewToolUserLocation struct {
 	// The type of location approximation. Always `approximate`.
 	Type constant.Approximate `json:"type" default:"approximate"`
@@ -33263,7 +33292,9 @@ type BetaWebSearchPreviewToolParam struct {
 	//
 	// Any of "web_search_preview", "web_search_preview_2025_03_11".
 	Type BetaWebSearchPreviewToolType `json:"type,omitzero" api:"required"`
-	// The user's location.
+	// The approximate location of the user. If omitted or null, defaults to the United
+	// States. To avoid this fallback, pass `{"type": "approximate"}` without location
+	// fields. To localize results, provide the relevant location fields.
 	UserLocation BetaWebSearchPreviewToolUserLocationParam `json:"user_location,omitzero"`
 	// Any of "text", "image".
 	SearchContentTypes []string `json:"search_content_types,omitzero"`
@@ -33283,7 +33314,9 @@ func (r *BetaWebSearchPreviewToolParam) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
-// The user's location.
+// The approximate location of the user. If omitted or null, defaults to the United
+// States. To avoid this fallback, pass `{"type": "approximate"}` without location
+// fields. To localize results, provide the relevant location fields.
 //
 // The property Type is required.
 type BetaWebSearchPreviewToolUserLocationParam struct {
@@ -33330,7 +33363,9 @@ type BetaWebSearchTool struct {
 	//
 	// Any of "low", "medium", "high".
 	SearchContextSize BetaWebSearchToolSearchContextSize `json:"search_context_size"`
-	// The approximate location of the user.
+	// The approximate location of the user. If omitted or null, defaults to the United
+	// States. To avoid this fallback, pass `{"type": "approximate"}` without location
+	// fields. To localize results, provide the relevant location fields.
 	UserLocation BetaWebSearchToolUserLocation `json:"user_location" api:"nullable"`
 	// JSON contains metadata for fields, check presence with [respjson.Field.Valid].
 	JSON struct {
@@ -33398,7 +33433,9 @@ const (
 	BetaWebSearchToolSearchContextSizeHigh   BetaWebSearchToolSearchContextSize = "high"
 )
 
-// The approximate location of the user.
+// The approximate location of the user. If omitted or null, defaults to the United
+// States. To avoid this fallback, pass `{"type": "approximate"}` without location
+// fields. To localize results, provide the relevant location fields.
 type BetaWebSearchToolUserLocation struct {
 	// Free text input for the city of the user, e.g. `San Francisco`.
 	City string `json:"city" api:"nullable"`
@@ -33447,7 +33484,9 @@ type BetaWebSearchToolParam struct {
 	ExternalWebAccess param.Opt[bool] `json:"external_web_access,omitzero"`
 	// Filters for the search.
 	Filters BetaWebSearchToolFiltersParam `json:"filters,omitzero"`
-	// The approximate location of the user.
+	// The approximate location of the user. If omitted or null, defaults to the United
+	// States. To avoid this fallback, pass `{"type": "approximate"}` without location
+	// fields. To localize results, provide the relevant location fields.
 	UserLocation BetaWebSearchToolUserLocationParam `json:"user_location,omitzero"`
 	// High level guidance for the amount of context window space to use for the
 	// search. One of `low`, `medium`, or `high`. `medium` is the default.
@@ -33483,7 +33522,9 @@ func (r *BetaWebSearchToolFiltersParam) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
-// The approximate location of the user.
+// The approximate location of the user. If omitted or null, defaults to the United
+// States. To avoid this fallback, pass `{"type": "approximate"}` without location
+// fields. To localize results, provide the relevant location fields.
 type BetaWebSearchToolUserLocationParam struct {
 	// Free text input for the city of the user, e.g. `San Francisco`.
 	City param.Opt[string] `json:"city,omitzero"`
@@ -33683,6 +33724,8 @@ type BetaResponseNewParams struct {
 	//
 	// Any of "auto", "disabled".
 	Truncation BetaResponseNewParamsTruncation `json:"truncation,omitzero"`
+	// Domain-specific access programs to use for this request.
+	AccessPrograms BetaResponseNewParamsAccessPrograms `json:"access_programs,omitzero"`
 	// Text, image, or file inputs to the model, used to generate a response.
 	//
 	// Learn more:
@@ -33753,6 +33796,38 @@ func (r *BetaResponseNewParams) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
+// Domain-specific access programs to use for this request.
+type BetaResponseNewParamsAccessPrograms struct {
+	// The Cyber access program to use for this request. Supported values are
+	// `standard`, `daybreak_blue`, and `daybreak_red`. If omitted, the API resolves
+	// the program from the model's Cyber tier and your organization and project
+	// access, subject to model-specific eligibility restrictions. By default, models
+	// without a Cyber tier use Standard. Blue-tier models use Daybreak Blue when
+	// authorized; otherwise they fall back to Standard unless the model requires
+	// Daybreak access. Red-tier models use Daybreak Red and require authorization.
+	// Requests that require unavailable Daybreak access return 403. An implicit
+	// Standard fallback is represented by null in the response's access_programs
+	// field, rather than an explicit Standard selection.
+	//
+	// Any of "standard", "daybreak_blue", "daybreak_red".
+	Cyber string `json:"cyber,omitzero"`
+	paramObj
+}
+
+func (r BetaResponseNewParamsAccessPrograms) MarshalJSON() (data []byte, err error) {
+	type shadow BetaResponseNewParamsAccessPrograms
+	return param.MarshalObject(r, (*shadow)(&r))
+}
+func (r *BetaResponseNewParamsAccessPrograms) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+func init() {
+	apijson.RegisterFieldValidator[BetaResponseNewParamsAccessPrograms](
+		"cyber", "standard", "daybreak_blue", "daybreak_red",
+	)
+}
+
 // The property Type is required.
 type BetaResponseNewParamsContextManagement struct {
 	// The context management entry type. Currently only 'compaction' is supported.
@@ -33811,6 +33886,9 @@ type BetaResponseNewParamsModel string
 
 const (
 	BetaResponseNewParamsModelGPT6Astra                        BetaResponseNewParamsModel = "gpt-6-astra"
+	BetaResponseNewParamsModelGPT6_1Sol                        BetaResponseNewParamsModel = "gpt-6.1-sol"
+	BetaResponseNewParamsModelGPT6Sol                          BetaResponseNewParamsModel = "gpt-6-sol"
+	BetaResponseNewParamsModelGPT6Luna                         BetaResponseNewParamsModel = "gpt-6-luna"
 	BetaResponseNewParamsModelGPT5_6Sol                        BetaResponseNewParamsModel = "gpt-5.6-sol"
 	BetaResponseNewParamsModelGPT5_6Terra                      BetaResponseNewParamsModel = "gpt-5.6-terra"
 	BetaResponseNewParamsModelGPT5_6Luna                       BetaResponseNewParamsModel = "gpt-5.6-luna"
@@ -33915,6 +33993,7 @@ const (
 	BetaResponseNewParamsModelGPTDaybreakBlueLatest            BetaResponseNewParamsModel = "gpt-daybreak-blue-latest"
 	BetaResponseNewParamsModelGPTDaybreakRedLatest             BetaResponseNewParamsModel = "gpt-daybreak-red-latest"
 	BetaResponseNewParamsModelGPT5_6Cyber                      BetaResponseNewParamsModel = "gpt-5.6-cyber"
+	BetaResponseNewParamsModelGPTRosalindResearch              BetaResponseNewParamsModel = "gpt-rosalind-research"
 )
 
 // Configuration for running moderation on the input and output of this response.
@@ -34467,6 +34546,9 @@ type BetaResponseCompactParamsModel string
 
 const (
 	BetaResponseCompactParamsModelGPT6Astra                        BetaResponseCompactParamsModel = "gpt-6-astra"
+	BetaResponseCompactParamsModelGPT6_1Sol                        BetaResponseCompactParamsModel = "gpt-6.1-sol"
+	BetaResponseCompactParamsModelGPT6Sol                          BetaResponseCompactParamsModel = "gpt-6-sol"
+	BetaResponseCompactParamsModelGPT6Luna                         BetaResponseCompactParamsModel = "gpt-6-luna"
 	BetaResponseCompactParamsModelGPT5_6Sol                        BetaResponseCompactParamsModel = "gpt-5.6-sol"
 	BetaResponseCompactParamsModelGPT5_6Terra                      BetaResponseCompactParamsModel = "gpt-5.6-terra"
 	BetaResponseCompactParamsModelGPT5_6Luna                       BetaResponseCompactParamsModel = "gpt-5.6-luna"
@@ -34571,6 +34653,7 @@ const (
 	BetaResponseCompactParamsModelGPTDaybreakBlueLatest            BetaResponseCompactParamsModel = "gpt-daybreak-blue-latest"
 	BetaResponseCompactParamsModelGPTDaybreakRedLatest             BetaResponseCompactParamsModel = "gpt-daybreak-red-latest"
 	BetaResponseCompactParamsModelGPT5_6Cyber                      BetaResponseCompactParamsModel = "gpt-5.6-cyber"
+	BetaResponseCompactParamsModelGPTRosalindResearch              BetaResponseCompactParamsModel = "gpt-rosalind-research"
 )
 
 // Only one field can be non-zero.

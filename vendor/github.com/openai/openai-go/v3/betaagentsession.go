@@ -30,6 +30,7 @@ type BetaAgentSessionService struct {
 	Artifacts BetaAgentSessionArtifactService
 	Items     BetaAgentSessionItemService
 	Events    BetaAgentSessionEventService
+	Traces    BetaAgentSessionTraceService
 	Turns     BetaAgentSessionTurnService
 }
 
@@ -43,6 +44,7 @@ func NewBetaAgentSessionService(opts ...option.RequestOption) (r BetaAgentSessio
 	r.Artifacts = NewBetaAgentSessionArtifactService(opts...)
 	r.Items = NewBetaAgentSessionItemService(opts...)
 	r.Events = NewBetaAgentSessionEventService(opts...)
+	r.Traces = NewBetaAgentSessionTraceService(opts...)
 	r.Turns = NewBetaAgentSessionTurnService(opts...)
 	return
 }
@@ -73,7 +75,7 @@ func (r *BetaAgentSessionService) NewStreaming(ctx context.Context, body BetaAge
 	opts = append(opts, option.WithJSONSet("stream", true))
 	path := "agents/sessions"
 	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, body, &raw, opts...)
-	return ssestream.NewStream[AgentSessionEventUnion](ssestream.NewDecoder(raw), err)
+	return ssestream.NewStreamWithBetaAccumulator[AgentSessionEventUnion](ssestream.NewDecoder(raw), err, &betaAgentTurnCollector{})
 }
 
 // Retrieves the current state of a managed agent session. See
@@ -193,7 +195,7 @@ type BetaAgentSessionNewParamsAgent struct {
 	Model param.Opt[string] `json:"model,omitzero"`
 	// The service tier used for model requests.
 	//
-	// Any of "auto", "default", "flex", "priority", "fast".
+	// Any of "auto", "default", "flex", "priority", "fast", "ultrafast".
 	ServiceTier string `json:"service_tier,omitzero"`
 	// Tools available to the agent. Omit to inherit, or pass null to clear them.
 	Tools []AgentToolParamUnion `json:"tools,omitzero"`
@@ -217,7 +219,7 @@ func (r *BetaAgentSessionNewParamsAgent) UnmarshalJSON(data []byte) error {
 
 func init() {
 	apijson.RegisterFieldValidator[BetaAgentSessionNewParamsAgent](
-		"service_tier", "auto", "default", "flex", "priority", "fast",
+		"service_tier", "auto", "default", "flex", "priority", "fast", "ultrafast",
 	)
 }
 
@@ -261,7 +263,7 @@ type BetaAgentSessionUpdateParamsAgent struct {
 	Model param.Opt[string] `json:"model,omitzero"`
 	// Omit to keep the current tier. Null resets it to auto.
 	//
-	// Any of "auto", "default", "flex", "priority", "fast".
+	// Any of "auto", "default", "flex", "priority", "fast", "ultrafast".
 	ServiceTier param.Opt[string] `json:"service_tier,omitzero"`
 	// Reasoning settings to update. Omit to keep the current effort.
 	Reasoning BetaAgentSessionUpdateParamsAgentReasoning `json:"reasoning,omitzero"`

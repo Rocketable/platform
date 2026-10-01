@@ -47,7 +47,7 @@ func testResolverClient(t *testing.T, output string) (client *openai.Client, req
 	}))
 	t.Cleanup(server.Close)
 
-	resolvedClient := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
+	resolvedClient := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL), option.WithUnsafeAllowHTTP())
 
 	return &resolvedClient, requestBodies
 }
@@ -415,7 +415,7 @@ func TestOpenAIResponsesModeUsesResponsesEndpoint(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
+	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL), option.WithUnsafeAllowHTTP())
 	loop := testOpenAILoop(t, &client)
 	output := make(chan ChatResponse, 8)
 
@@ -460,7 +460,7 @@ func TestOpenAIResponsesModeStripsPersistedCompactionMetadata(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
+	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL), option.WithUnsafeAllowHTTP())
 	loop := testOpenAILoop(t, &client)
 	output := make(chan ChatResponse, 8)
 
