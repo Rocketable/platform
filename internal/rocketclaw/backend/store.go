@@ -631,7 +631,18 @@ func (s *SessionService) SyncCronSchedules(schedules []CronScheduleState, now ti
 		}
 	}
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM cron_schedule_runs WHERE running = 0 AND relative_path NOT IN (SELECT relative_path FROM cron_schedules)`); err != nil {
+	if _, err := tx.ExecContext(ctx, `WITH scheduled_paths AS (
+    SELECT DISTINCT relative_path FROM cron_schedules
+),
+stale_run_paths AS (
+    SELECT r.relative_path
+    FROM cron_schedule_runs r
+    LEFT JOIN scheduled_paths s ON s.relative_path = r.relative_path
+    WHERE r.running = 0 AND s.relative_path IS NULL
+)
+DELETE FROM cron_schedule_runs r
+USING stale_run_paths s
+WHERE r.relative_path = s.relative_path`); err != nil {
 		return fmt.Errorf("delete stale cron run state: %w", err)
 	}
 
@@ -740,7 +751,16 @@ func (s *SessionService) CompleteCronRun(relativePath string, now time.Time) err
 
 // ActiveGoalThreads returns managed thread state for conversations with active goals.
 func (s *SessionService) ActiveGoalThreads() (map[string]ThreadState, error) {
-	threads, err := queryMap(context.Background(), s.db, `SELECT g.conversation_id, m.agent, m.created_by FROM conversation_goals g JOIN managed_conversations m ON m.conversation_id = g.conversation_id WHERE g.status = '' OR g.status = $1 ORDER BY g.conversation_id`, "active goal threads", func(row rowScanner) (string, ThreadState, error) {
+	threads, err := queryMap(context.Background(), s.db, `WITH active_goals AS (
+    SELECT conversation_id FROM conversation_goals WHERE status = '' OR status = $1
+),
+goal_threads AS (
+    SELECT g.conversation_id, m.agent, m.created_by
+    FROM active_goals g
+    JOIN managed_conversations m ON m.conversation_id = g.conversation_id
+)
+SELECT conversation_id, agent, created_by FROM goal_threads
+ORDER BY conversation_id`, "active goal threads", func(row rowScanner) (string, ThreadState, error) {
 		var (
 			conversationID, createdBy string
 			thread                    ThreadState
@@ -924,10 +944,19 @@ func (s *SessionService) ObserveEntries(ctx context.Context, conversationID stri
 		return nil, errors.New("conversation ID is required")
 	}
 
-	entries, err := queryRows(ctx, s.db, `SELECT destination.id, destination.entry_json, COALESCE(destination.entry_json::jsonb->>'sync_source_conversation_id', source.conversation_id, ''), destination.entry_json::jsonb ? 'sync_source_entry_id'
-FROM session_entries destination
-LEFT JOIN session_entries source ON source.id = (destination.entry_json::jsonb->>'sync_source_entry_id')::bigint
-WHERE destination.conversation_id = $1 ORDER BY destination.id`, "rocketcode session entries", func(row rowScanner) (ObservedSessionEntry, error) {
+	entries, err := queryRows(ctx, s.db, `WITH conversation_entries AS (
+    SELECT id, entry_json, entry_json::jsonb AS entry
+    FROM session_entries WHERE conversation_id = $1
+),
+attributed_entries AS (
+    SELECT destination.id, destination.entry_json,
+        COALESCE(destination.entry->>'sync_source_conversation_id', source.conversation_id, '') AS source_conversation_id,
+        destination.entry ? 'sync_source_entry_id' AS synced
+    FROM conversation_entries destination
+    LEFT JOIN session_entries source ON source.id = (destination.entry->>'sync_source_entry_id')::bigint
+)
+SELECT id, entry_json, source_conversation_id, synced FROM attributed_entries
+ORDER BY id`, "rocketcode session entries", func(row rowScanner) (ObservedSessionEntry, error) {
 		var (
 			entry ObservedSessionEntry
 			raw   string
@@ -1047,17 +1076,63 @@ type SidebarSession struct {
 // Breaking iteration or cancelling ctx closes the database rows.
 func (s *SessionService) SidebarSessions(ctx context.Context, autoSettleBefore time.Time) iter.Seq2[SidebarSession, error] {
 	return func(yield func(SidebarSession, error) bool) {
-		rows, err := s.db.QueryContext(ctx, `SELECT c.conversation_id, c.agent, c.created_by,
-c.settled OR COALESCE(c.snoozed_until > CURRENT_TIMESTAMP, FALSE) OR COALESCE(NOT c.pinned AND s.last_updated > '0001-01-01 00:00:00+00'::timestamptz
-    AND GREATEST(s.last_updated, c.reopened_at, c.snoozed_until) <= $1
-    AND NOT EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = c.conversation_id), FALSE), s.preview, s.last_updated,
-EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = c.conversation_id), c.pinned, c.name,
-CASE WHEN c.snoozed_until > CURRENT_TIMESTAMP THEN c.snoozed_until END, c.forked_from
-FROM managed_conversations c LEFT JOIN session_summaries s ON s.conversation_id = c.conversation_id
-WHERE c.conversation_id NOT LIKE 'cron:%' AND c.conversation_id NOT LIKE 'one-off-cron:%'
-    AND EXISTS (SELECT 1 FROM session_entries e WHERE e.conversation_id = c.conversation_id)
-    AND NOT EXISTS (SELECT 1 FROM external_mcp_sessions p WHERE p.private_conversation_id = c.conversation_id)
-ORDER BY c.pinned DESC, COALESCE(s.last_updated, '0001-01-01 00:00:00+00'::timestamptz) DESC, c.conversation_id COLLATE "C"`, autoSettleBefore)
+		rows, err := s.db.QueryContext(ctx, `WITH conversations_with_history AS (
+    SELECT DISTINCT conversation_id
+    FROM session_entries
+),
+running_conversations AS (
+    SELECT DISTINCT conversation_id
+    FROM active_turns
+),
+private_conversations AS (
+    SELECT private_conversation_id AS conversation_id
+    FROM external_mcp_sessions
+),
+eligible_conversations AS (
+    SELECT c.*, r.conversation_id IS NOT NULL AS running
+    FROM managed_conversations c
+    JOIN conversations_with_history h ON h.conversation_id = c.conversation_id
+    LEFT JOIN running_conversations r ON r.conversation_id = c.conversation_id
+    LEFT JOIN private_conversations p ON p.conversation_id = c.conversation_id
+    WHERE c.conversation_id NOT LIKE 'cron:%'
+      AND c.conversation_id NOT LIKE 'one-off-cron:%'
+      AND p.conversation_id IS NULL
+),
+summarized_conversations AS (
+    SELECT c.*, s.preview, s.last_updated
+    FROM eligible_conversations c
+    LEFT JOIN session_summaries s ON s.conversation_id = c.conversation_id
+),
+activity_state AS (
+    SELECT *,
+        COALESCE(snoozed_until > CURRENT_TIMESTAMP, FALSE) AS snoozed,
+        COALESCE(
+            NOT pinned
+            AND last_updated > '0001-01-01 00:00:00+00'::timestamptz
+            AND GREATEST(last_updated, reopened_at, snoozed_until) <= $1
+            AND NOT running,
+            FALSE
+        ) AS auto_settle_due
+    FROM summarized_conversations
+),
+display_state AS (
+    SELECT *, settled OR snoozed OR auto_settle_due AS effective_settled
+    FROM activity_state
+)
+SELECT
+    conversation_id,
+    agent,
+    created_by,
+    effective_settled AS settled,
+    preview,
+    last_updated,
+    running,
+    pinned,
+    name,
+    CASE WHEN snoozed THEN snoozed_until END AS snoozed_until,
+    forked_from
+FROM display_state
+ORDER BY pinned DESC, COALESCE(last_updated, '0001-01-01 00:00:00+00'::timestamptz) DESC, conversation_id COLLATE "C"`, autoSettleBefore)
 		if err != nil {
 			yield(SidebarSession{}, fmt.Errorf("query sidebar sessions: %w", err))
 			return
@@ -1565,7 +1640,16 @@ func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, convers
 	created, ok := slackStateKeyTime(conversationID)
 	if !ok {
 		var emptyManaged bool
-		if err := db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM managed_conversations WHERE conversation_id = $1) AND NOT EXISTS(SELECT 1 FROM session_entries WHERE conversation_id = $1)`, conversationID).Scan(&emptyManaged); err != nil {
+		if err := db.QueryRowContext(ctx, `WITH conversations_with_history AS (
+    SELECT conversation_id FROM session_entries WHERE conversation_id = $1 LIMIT 1
+),
+empty_managed_conversations AS (
+    SELECT m.conversation_id
+    FROM managed_conversations m
+    LEFT JOIN conversations_with_history h ON h.conversation_id = m.conversation_id
+    WHERE m.conversation_id = $1 AND h.conversation_id IS NULL
+)
+SELECT COUNT(*) > 0 FROM empty_managed_conversations`, conversationID).Scan(&emptyManaged); err != nil {
 			return false, fmt.Errorf("read empty managed conversation: %w", err)
 		}
 
@@ -1578,7 +1662,11 @@ func shouldPruneThreadConversation(ctx context.Context, db stateStoreDB, convers
 func sessionLatestBefore(ctx context.Context, db stateStoreDB, conversationID string, fallback, cutoff time.Time) (bool, error) {
 	var before bool
 
-	err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(entry_timestamp), $1) < $2 FROM session_entries WHERE conversation_id = $3`, fallback.UTC().Format(time.RFC3339Nano), cutoff.UTC().Format(time.RFC3339Nano), conversationID).Scan(&before)
+	err := db.QueryRowContext(ctx, `WITH latest_entry AS (
+    SELECT MAX(entry_timestamp) AS entry_timestamp
+    FROM session_entries WHERE conversation_id = $3
+)
+SELECT COALESCE(entry_timestamp, $1) < $2 FROM latest_entry`, fallback.UTC().Format(time.RFC3339Nano), cutoff.UTC().Format(time.RFC3339Nano), conversationID).Scan(&before)
 	if err != nil {
 		return false, fmt.Errorf("read latest session entry timestamp: %w", err)
 	}
@@ -1727,36 +1815,30 @@ func pruneExternalMCPSessions(ctx context.Context, tx *sql.Tx, cutoff time.Time,
 }
 
 func stalePrivateConversationIDs(ctx context.Context, db *sql.Tx, cutoff time.Time) ([]string, error) {
-	candidates, err := queryStrings(ctx, db, `SELECT conversation_id FROM session_entries WHERE conversation_id LIKE 'slack-thread:%' OR conversation_id LIKE 'external_mcp:%' OR conversation_id LIKE 'cron:%' OR conversation_id LIKE 'one-off-cron:%' GROUP BY conversation_id HAVING MAX(entry_timestamp) < $1`, "stale private session conversations", cutoff.UTC().Format(time.RFC3339Nano))
-	if err != nil {
-		return nil, err
-	}
-
-	var stale []string
-
-	for _, conversationID := range candidates {
-		if ok, err := conversationExists(ctx, db, `managed_conversations`, `conversation_id`, conversationID); err != nil {
-			return nil, err
-		} else if ok {
-			continue
-		}
-
-		if ok, err := conversationExists(ctx, db, `external_mcp_sessions`, `private_conversation_id`, conversationID); err != nil {
-			return nil, err
-		} else if ok {
-			continue
-		}
-
-		if ok, err := conversationExists(ctx, db, `thread_queue`, `conversation_id`, conversationID); err != nil {
-			return nil, err
-		} else if ok {
-			continue
-		}
-
-		stale = append(stale, conversationID)
-	}
-
-	return stale, nil
+	return queryStrings(ctx, db, `WITH private_histories AS (
+    SELECT conversation_id, MAX(entry_timestamp) AS last_entry_timestamp
+    FROM session_entries
+    WHERE conversation_id LIKE 'slack-thread:%' OR conversation_id LIKE 'external_mcp:%'
+       OR conversation_id LIKE 'cron:%' OR conversation_id LIKE 'one-off-cron:%'
+    GROUP BY conversation_id
+),
+stale_histories AS (
+    SELECT conversation_id FROM private_histories WHERE last_entry_timestamp < $1
+),
+referenced_conversations AS (
+    SELECT conversation_id FROM managed_conversations
+    UNION ALL
+    SELECT private_conversation_id FROM external_mcp_sessions
+    UNION ALL
+    SELECT conversation_id FROM thread_queue
+),
+orphaned_histories AS (
+    SELECT h.conversation_id
+    FROM stale_histories h
+    LEFT JOIN referenced_conversations r ON r.conversation_id = h.conversation_id
+    WHERE r.conversation_id IS NULL
+)
+SELECT conversation_id FROM orphaned_histories`, "stale private session conversations", cutoff.UTC().Format(time.RFC3339Nano))
 }
 
 func deleteSessionEntries(ctx context.Context, db stateStoreDB, conversationIDs map[string]struct{}) (int64, error) {
