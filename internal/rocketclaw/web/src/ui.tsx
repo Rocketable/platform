@@ -1064,14 +1064,14 @@ function relativeTime(iso: string) {
   return `${Math.floor(ms / 86_400_000)}d`;
 }
 
-function SessionRowContent({ session, loading = false, age = relativeTime(session.updatedAt ?? "") }: { session: Session; loading?: boolean; age?: string }) {
+function SessionRowContent({ session, loading = false, age = relativeTime(session.updatedAt ?? ""), channelOnly = false }: { session: Session; loading?: boolean; age?: string; channelOnly?: boolean }) {
   const title = session.name || rowPreview(session, loading).split("\n", 1)[0] || sessionLabel(session.id);
   const channel = slackSession(session.id) ? (session.title ?? "") : "";
-  const meta = [session.snoozedUntil ? `Snoozed until ${new Date(session.snoozedUntil).toLocaleString()}` : session.settled ? "Settled" : "", channel, session.agent].filter(Boolean).join(" · ");
+  const meta = channelOnly ? channel : [session.snoozedUntil ? `Snoozed until ${new Date(session.snoozedUntil).toLocaleString()}` : session.settled ? "Settled" : "", channel, session.agent].filter(Boolean).join(" · ");
   const updated = session.updatedAt ? `Updated ${new Date(session.updatedAt).toLocaleString(undefined, { timeZoneName: "short" })}` : "";
   return <span className="flex min-w-0 w-full flex-1 flex-col gap-0.5">
     <span className="flex items-center gap-1.5 text-sm font-medium">{session.forkedFrom ? <GitFork role="img" aria-label="Forked session" className="size-3.5 shrink-0" /> : null}<span data-slot="session-title" className="truncate">{title}</span></span>
-    <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"><span className="inline-flex size-3 shrink-0">{session.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 animate-spin motion-reduce:animate-none" /> : null}</span><span className="min-w-0 flex-1 truncate" title={meta}>{meta}</span>{age ? <Tooltip><TooltipTrigger render={<time dateTime={session.updatedAt} />} aria-label={updated} className="shrink-0 tabular-nums">{age}</TooltipTrigger><TooltipContent>{updated}</TooltipContent></Tooltip> : null}</span>
+    <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"><span className="min-w-0 flex-1 truncate" title={meta}>{meta}</span>{session.running ? <LoaderCircle role="img" aria-label="Turn running" className="size-3 shrink-0 animate-spin motion-reduce:animate-none" /> : null}{age ? <Tooltip><TooltipTrigger render={<time dateTime={session.updatedAt} />} aria-label={updated} className="shrink-0 tabular-nums">{age}</TooltipTrigger><TooltipContent>{updated}</TooltipContent></Tooltip> : null}</span>
   </span>;
 }
 
@@ -1491,7 +1491,7 @@ function PageTitle({ children }: { children: ReactNode }) {
 const SessionRow = memo(function SessionRow({ session, active, loading, age }: { session: Session; active: boolean; loading: boolean; age: string }) {
   return <li className="group relative flex list-none items-stretch py-0.5">
     <Link href={sessionPath(session.id)} className={cn("relative flex min-w-0 flex-1 cursor-pointer overflow-hidden rounded-md px-2.5 py-2 text-left outline-none select-none", active ? "bg-sidebar-row-active text-sidebar-foreground" : "text-sidebar-foreground hover:bg-sidebar-row-hover")}>
-      <SessionRowContent session={session} loading={loading} age={age} />
+      <SessionRowContent session={session} loading={loading} age={age} channelOnly={!session.settled} />
     </Link>
     <div className="pointer-events-none absolute top-1 right-1 rounded-md bg-sidebar shadow-sm opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100">
       <SessionRowActions session={session} />

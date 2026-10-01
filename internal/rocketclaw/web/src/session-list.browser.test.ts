@@ -569,6 +569,12 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     expect((await navigation.boundingBox())!.height).toBe(compactHeight);
 
     const desktopSidebar = page.locator("#session-sidebar");
+    const channelRow = desktopSidebar.getByRole("link").filter({ hasText: "filter preview" });
+    expect(await channelRow.locator("span[title]").getAttribute("title")).toBe("room");
+    expect((await channelRow.locator("span[title]").boundingBox())!.x).toBe((await channelRow.locator('[data-slot="session-title"]').boundingBox())!.x);
+    const webRow = desktopSidebar.getByRole("link").filter({ hasText: "saved preview" });
+    expect(await webRow.locator("span[title]").textContent()).toBe("");
+    expect(await webRow.locator("time").isVisible()).toBe(true);
     const menuPosition = await page.getByRole("button", { name: "Hide sidebar", exact: true }).boundingBox();
     expect((await desktopSidebar.boundingBox())!.y).toBe(0);
     expect(menuPosition!.y + menuPosition!.height).toBeGreaterThan(page.viewportSize()!.height - 8);
@@ -1300,7 +1306,7 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     }
     const runningPage = await context.newPage();
     for (const width of [1280, 390]) {
-      ctrl.yieldBatches = complete([{ ...row("running-chat", "latest user message"), running: true }], "bob");
+      ctrl.yieldBatches = complete([{ ...row("slack-thread:C:running-chat", "latest user message"), running: true }], "bob");
       await runningPage.setViewportSize({ width, height: 844 });
       await runningPage.goto(origin);
       if (width === 390) await runningPage.getByRole("button", { name: "Sessions", exact: true }).click();
@@ -1314,7 +1320,10 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
       await link.click({ trial: true }); // Measure after the mobile sheet finishes moving.
       await sidebar.evaluate(async () => { await Promise.all(document.getAnimations().filter((animation) => animation instanceof CSSTransition).map((animation) => animation.finished)); });
       const before = await link.boundingBox();
-      ctrl.yieldBatches = complete([{ ...row("running-chat", "latest assistant reply"), running: false }], "bob");
+      expect(await link.locator("span[title]").getAttribute("title")).toBe("room");
+      expect((await link.locator("span[title]").boundingBox())!.x).toBe((await link.locator('[data-slot="session-title"]').boundingBox())!.x);
+      expect((await indicator.boundingBox())!.x).toBeGreaterThan((await link.locator("span[title]").boundingBox())!.x);
+      ctrl.yieldBatches = complete([{ ...row("slack-thread:C:running-chat", "latest assistant reply"), running: false }], "bob");
       await sidebar.getByText("latest assistant reply", { exact: true }).waitFor();
       expect(await indicator.count()).toBe(0);
       expect(await sidebar.getByRole("link").filter({ hasText: "latest assistant reply" }).boundingBox()).toEqual(before);

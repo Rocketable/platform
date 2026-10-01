@@ -210,8 +210,9 @@ recorded history. The source remains intact, and the fork starts no turn until
 you send a message. Active, unrecorded output and queued work are not copied.
 Forked sessions show a fork glyph in the sidebar. Use **Open original conversation**
 on the row to return to the immediate source, or search `is:forked` to find forks.
-The sidebar, session search, and handoff destinations share the same session-row
-presentation: title, fork/running indicators, snooze time, agent, and relative time.
+Sidebar rows show the title, Slack channel when available, fork/running indicators,
+and relative time. Channel text starts at the row's left edge, without a spinner indent.
+Settled chats, session search, and handoff destinations also show status and agent.
 The source link is stored for new forks; older forks created without this metadata
 cannot be identified retroactively. Deleting a source leaves its forks intact.
 Send `$handoff` from any session to open a search with **Copy handoff** and
