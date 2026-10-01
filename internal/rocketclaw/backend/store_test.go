@@ -902,8 +902,13 @@ func TestSessionServiceSyncCronSchedulesInsertsUpdatesAndDeletes(t *testing.T) {
 
 	require.NoError(t, store.SyncCronSchedules([]CronScheduleState{
 		{ScheduleID: "daily#0", RelativePath: "daily.md", NextDue: due},
+		{ScheduleID: "daily#1", RelativePath: "daily.md", NextDue: due},
 		{ScheduleID: "weekly#0", RelativePath: "weekly.md", NextDue: due.Add(time.Hour)},
+		{ScheduleID: "running#0", RelativePath: "running.md", NextDue: now},
 	}, now))
+	_, claimed, err := store.ClaimCronSchedule(CronScheduleState{ScheduleID: "running#0", RelativePath: "running.md", NextDue: now}, due, now)
+	require.NoError(t, err)
+	require.True(t, claimed)
 
 	require.NoError(t, store.SyncCronSchedules([]CronScheduleState{
 		{ScheduleID: "daily#0", RelativePath: "daily.md", NextDue: due.Add(2 * time.Hour)},
@@ -926,12 +931,19 @@ func TestSessionServiceSyncCronSchedulesInsertsUpdatesAndDeletes(t *testing.T) {
 	require.NoError(t, rows.Err())
 
 	assert.Equal(t, []CronScheduleState{{ScheduleID: "daily#0", RelativePath: "daily.md", NextDue: due}}, schedules)
+	paths, err := queryStrings(t.Context(), store.db, `SELECT relative_path FROM cron_schedule_runs ORDER BY relative_path`, "cron run paths")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"daily.md", "running.md"}, paths)
+	require.NoError(t, store.CompleteCronRun("running.md", now))
 
 	require.NoError(t, store.SyncCronSchedules([]CronScheduleState{{ScheduleID: "empty#0", RelativePath: "empty.md"}}, now))
 
 	var nextDue int64
 	require.NoError(t, store.db.QueryRowContext(context.Background(), `SELECT next_due_unix_ns FROM cron_schedules WHERE schedule_id = 'empty#0'`).Scan(&nextDue))
 	assert.Equal(t, int64(0), nextDue)
+	paths, err = queryStrings(t.Context(), store.db, `SELECT relative_path FROM cron_schedule_runs ORDER BY relative_path`, "cron run paths")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"empty.md"}, paths)
 
 	dueSchedules, err := store.DueCronSchedules(now)
 	require.NoError(t, err)
@@ -993,6 +1005,33 @@ func TestSessionServiceClaimCronScheduleSerializesSamePathAndCompletionClearsRun
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "daily.md", run)
+}
+
+func TestSessionServiceActiveGoalThreads(t *testing.T) {
+	store := newTestSessionService(t)
+	threads, err := store.ActiveGoalThreads()
+	require.NoError(t, err)
+	assert.Nil(t, threads)
+
+	for _, id := range []string{"active", "legacy", "terminal", "orphan"} {
+		if id != "orphan" {
+			require.NoError(t, store.UpsertThread(id, ThreadState{Agent: "planner", CreatedBy: ThreadCreatedByCron}))
+		}
+
+		require.NoError(t, store.BeginGoal(id, "work", "", 1, "", ""))
+	}
+
+	_, err = store.db.ExecContext(t.Context(), `UPDATE conversation_goals SET status = '' WHERE conversation_id = 'legacy'`)
+	require.NoError(t, err)
+	_, err = store.UpdateGoalStatus("terminal", GoalStatusComplete, "done")
+	require.NoError(t, err)
+
+	threads, err = store.ActiveGoalThreads()
+	require.NoError(t, err)
+	assert.Equal(t, map[string]ThreadState{
+		"active": {Agent: "planner", CreatedBy: ThreadCreatedByCron},
+		"legacy": {Agent: "planner", CreatedBy: ThreadCreatedByCron},
+	}, threads)
 }
 
 func TestSessionServiceBeginGoalPersistsCheckScript(t *testing.T) {
@@ -1647,6 +1686,8 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 		"one-off-cron:daily:old":       oldTime,
 		"cron:daily:new":               newTime,
 		"slack-thread:DORPHAN:1.000":   oldTime,
+		"cron:daily:boundary":          cutoff,
+		"unmanaged-web":                oldTime,
 	} {
 		_, err := AppendSessionEntryID(context.Background(), workspace, conversationID, testSessionEntryAt(ts, conversationID))
 		require.NoError(t, err)
@@ -1704,7 +1745,7 @@ func TestSessionServicePrunesOldState(t *testing.T) {
 		assert.Empty(t, summaries, conversationID)
 	}
 
-	for _, conversationID := range []string{activeOldThread, "slack-thread:D123:not-a-time", "cron:daily:new"} {
+	for _, conversationID := range []string{activeOldThread, "slack-thread:D123:not-a-time", "cron:daily:new", "cron:daily:boundary", "unmanaged-web"} {
 		entries, err := store.ObserveEntries(context.Background(), conversationID)
 		require.NoError(t, err)
 		assert.Len(t, entries, 1, conversationID)
@@ -1746,6 +1787,15 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 	privateItem := protocol.ThreadQueueItem{ID: "private-q1", ConversationID: privateID, Message: "private follow-up", Principal: "mcp"}
 	require.NoError(t, store.PutThreadQueueItem(privateItem.ID, &privateItem))
 
+	orphanID := "external_mcp:planner:queued-orphan"
+	_, err = store.AppendEntryID(t.Context(), orphanID, testSessionEntryAt(cutoff.Add(-time.Hour), orphanID))
+	require.NoError(t, err)
+
+	for _, id := range []string{"orphan-q1", "orphan-q2"} {
+		item := protocol.ThreadQueueItem{ID: id, ConversationID: orphanID, Message: "orphan follow-up", Principal: "mcp"}
+		require.NoError(t, store.PutThreadQueueItem(id, &item))
+	}
+
 	_, err = store.PruneStateBefore(t.Context(), cutoff)
 	require.NoError(t, err)
 
@@ -1779,6 +1829,13 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 	turns, err := store.RecoverableActiveTurns(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, turns)
+	entries, err := store.ObserveEntries(t.Context(), orphanID)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1)
+
+	for _, id := range []string{"orphan-q1", "orphan-q2"} {
+		require.NoError(t, store.DeleteThreadQueueItem(id))
+	}
 
 	require.NoError(t, store.DeleteThreadQueueItem(privateItem.ID))
 	_, err = store.PruneStateBefore(t.Context(), cutoff)
@@ -1792,6 +1849,9 @@ func TestSessionServiceRetainsQueuedConversations(t *testing.T) {
 	_, ok, err = store.Thread(privateID)
 	require.NoError(t, err)
 	assert.False(t, ok)
+	entries, err = store.ObserveEntries(t.Context(), orphanID)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
 }
 
 func TestSessionServicePrunesStaleExternalConversationWithActiveTurn(t *testing.T) {

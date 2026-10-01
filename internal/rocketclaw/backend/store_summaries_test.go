@@ -702,9 +702,13 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	require.NoError(t, service.UpsertExternalMCPSession("external", &ExternalMCPSessionState{PrivateConversationID: "private", ManagedConversationID: "not-recorded"}))
 
 	stamp := time.Unix(2, 123456789).UTC()
-	for _, id := range []string{"a", "Z", "ä", "cron:private", "one-off-cron:private", "private", "history-only"} {
+	for _, id := range []string{"a", "a", "Z", "ä", "cron:private", "one-off-cron:private", "private", "history-only"} {
 		_, err := service.AppendEntryID(t.Context(), id, testSessionEntryAt(stamp, id+"\x00full"))
 		require.NoError(t, err)
+	}
+
+	for _, turnID := range []string{"active-first", "active-second"} {
+		require.NoError(t, service.UpsertActiveTurn(t.Context(), &harness.ActiveTurnCheckpoint{TurnID: turnID, ConversationKey: "a", Agent: "main", Model: "test"}, nil))
 	}
 
 	_, err := service.AppendEntryID(t.Context(), "zero", &harness.SessionEntry{})
@@ -729,7 +733,7 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	want := make([]SidebarSession, 0, 5)
 
 	for _, id := range []string{"Z", "a", "ä", "missing", "zero"} {
-		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main", Settled: id == "Z"}}
+		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main", Settled: id == "Z"}, Running: id == "a"}
 		if id == "zero" {
 			row.Summary = &protocol.SessionSummary{ConversationID: id}
 		} else if id != "missing" {
