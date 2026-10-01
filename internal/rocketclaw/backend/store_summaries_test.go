@@ -405,7 +405,7 @@ EXISTS (SELECT 1 FROM external_mcp_sessions WHERE external_conversation_id = 'pu
 	}
 }
 
-func TestSidebarSessionsNeverReadHistoryForInitializedConversations(t *testing.T) {
+func TestSidebarSessionsNeverDecodeHistoryForInitializedConversations(t *testing.T) {
 	for _, creation := range []string{"backfill", "upsert", "create", "external MCP"} {
 		t.Run(creation, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -432,9 +432,12 @@ func TestSidebarSessionsNeverReadHistoryForInitializedConversations(t *testing.T
 				require.NoError(t, service.backfillSessionSummaries(t.Context()))
 			}
 
+			_, err := service.db.ExecContext(t.Context(), `UPDATE session_entries SET entry_json = '{'`)
+			require.NoError(t, err)
+
 			// Pin the listing pool's session setting; the lock uses a separate connection.
 			service.db.SetMaxOpenConns(1)
-			_, err := service.db.ExecContext(t.Context(), `SET lock_timeout = '10ms'`)
+			_, err = service.db.ExecContext(t.Context(), `SET lock_timeout = '10ms'`)
 			require.NoError(t, err)
 			blocker, err := sql.Open("pgx", testStoreDSN(workspace))
 
@@ -446,20 +449,20 @@ func TestSidebarSessionsNeverReadHistoryForInitializedConversations(t *testing.T
 			require.NoError(t, err)
 			defer func() { require.NoError(t, transaction.Rollback()) }()
 
-			_, err = transaction.ExecContext(t.Context(), `LOCK TABLE session_entries IN ACCESS EXCLUSIVE MODE`)
+			// Checking entry presence must not decode replay or wait for history writers.
+			_, err = transaction.ExecContext(t.Context(), `LOCK TABLE session_entries IN EXCLUSIVE MODE`)
 			require.NoError(t, err)
 
 			var rows []SidebarSession
 
 			for row, err := range service.SidebarSessions(t.Context(), time.Time{}) {
-				require.NoError(t, err, "sidebar enumeration must not access replay history")
+				require.NoError(t, err, "sidebar enumeration must not decode replay history")
 
 				rows = append(rows, row)
 			}
 
 			require.Equal(t, []SidebarSession{
 				{Conversation: protocol.Conversation{ID: "history", Agent: "main"}, Summary: &protocol.SessionSummary{ConversationID: "history", LastMessage: "assistant", LastUpdated: time.Unix(2, 123456000).UTC()}},
-				{Conversation: protocol.Conversation{ID: "empty", Agent: "main"}, Summary: &protocol.SessionSummary{ConversationID: "empty"}},
 			}, rows)
 		})
 	}
@@ -504,7 +507,7 @@ func TestSidebarSessionsAutoSettleAndReopen(t *testing.T) {
 		got[row.Conversation.ID] = row.Conversation.Settled
 	}
 
-	require.Equal(t, map[string]bool{"older": true, "boundary": true, "recent": false, "running": false, "manual": true, "empty": false, "missing": false}, got)
+	require.Equal(t, map[string]bool{"older": true, "boundary": true, "recent": false, "running": false, "manual": true}, got)
 
 	// A new entry reopens manual and automatic settlement, even without preview text.
 	for _, id := range []string{"manual", "older"} {
@@ -723,13 +726,13 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 		got = append(got, row)
 	}
 
-	want := make([]SidebarSession, 0, 6)
+	want := make([]SidebarSession, 0, 5)
 
-	for _, id := range []string{"Z", "a", "ä", "empty", "missing", "zero"} {
+	for _, id := range []string{"Z", "a", "ä", "missing", "zero"} {
 		row := SidebarSession{Conversation: protocol.Conversation{ID: id, Agent: "main", Settled: id == "Z"}}
-		if id == "zero" || id == "empty" {
+		if id == "zero" {
 			row.Summary = &protocol.SessionSummary{ConversationID: id}
-		} else if id != "empty" && id != "missing" {
+		} else if id != "missing" {
 			row.Summary = &protocol.SessionSummary{ConversationID: id, LastUpdated: stamp.Truncate(time.Microsecond), LastMessage: "assistant"}
 		}
 
@@ -737,6 +740,12 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 	}
 
 	require.Equal(t, want, got)
+
+	_, found, err := service.Thread("empty")
+	require.NoError(t, err)
+	require.True(t, found, "hiding empty history must preserve the conversation")
+	_, err = service.AppendEntryID(t.Context(), "empty", testSessionEntryAt(stamp, "first message"))
+	require.NoError(t, err)
 	_, err = service.DeleteSession(t.Context(), "a")
 	require.NoError(t, err)
 
@@ -746,12 +755,9 @@ func TestSidebarSessionsOrderMembershipAndCompleteness(t *testing.T) {
 		require.NoError(t, err)
 
 		remaining = append(remaining, row.Conversation.ID)
-		if row.Conversation.ID == "a" {
-			require.Equal(t, &protocol.SessionSummary{ConversationID: "a"}, row.Summary)
-		}
 	}
 
-	require.Equal(t, []string{"Z", "ä", "a", "empty", "missing", "zero"}, remaining)
+	require.Equal(t, []string{"Z", "empty", "ä", "missing", "zero"}, remaining)
 
 	// PostgreSQL accepts infinity timestamps, but Go time.Time cannot represent them.
 	// A bad stored row after a valid prefix must stop enumeration with a scan error.
@@ -842,6 +848,8 @@ func TestSidebarSessionsCancelPendingDatabaseRow(t *testing.T) {
 	service := newTestSessionServiceAt(t, workspace)
 	for _, id := range []string{"a", "b"} {
 		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
+		_, err := service.AppendEntryID(t.Context(), id, testSessionEntry(id, ""))
+		require.NoError(t, err)
 	}
 
 	dsn, err := url.Parse(testStoreDSN(workspace))

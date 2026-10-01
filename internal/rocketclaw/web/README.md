@@ -233,6 +233,9 @@ The handoff panel keeps **Preview**, **Copy**, and **Stash** actions visible.
 below the panel and hides the composer until the handoff is closed.
 The sidebar starts at the top without a title bar or search input. Its fold/unfold
 toggle stays at the bottom-left when hiding or reopening it.
+Conversations without stored history stay out of the sidebar until their first
+entry arrives. Clearing all stored history hides the conversation again without
+deleting its record or its Slack messages.
 Settled chats live on the **Settled** tab (`/settled`) rather than in the default
 sidebar. Use **Unsettle** to return a chat to the sidebar. Global search always
 includes settled chats; `is:settled` is accepted as an include token, not literal

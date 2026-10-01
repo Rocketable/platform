@@ -1041,6 +1041,7 @@ type SidebarSession struct {
 }
 
 // SidebarSessions yields pinned records first, then recent-first, bytewise-ID order.
+// Conversations without stored history are omitted until their first entry arrives.
 // Inactive, non-running, unpinned conversations settle at the supplied cutoff; manual
 // reopening grants a fresh inactivity window without changing message timestamps.
 // Breaking iteration or cancelling ctx closes the database rows.
@@ -1054,6 +1055,7 @@ EXISTS (SELECT 1 FROM active_turns a WHERE a.conversation_id = c.conversation_id
 CASE WHEN c.snoozed_until > CURRENT_TIMESTAMP THEN c.snoozed_until END, c.forked_from
 FROM managed_conversations c LEFT JOIN session_summaries s ON s.conversation_id = c.conversation_id
 WHERE c.conversation_id NOT LIKE 'cron:%' AND c.conversation_id NOT LIKE 'one-off-cron:%'
+    AND EXISTS (SELECT 1 FROM session_entries e WHERE e.conversation_id = c.conversation_id)
     AND NOT EXISTS (SELECT 1 FROM external_mcp_sessions p WHERE p.private_conversation_id = c.conversation_id)
 ORDER BY c.pinned DESC, COALESCE(s.last_updated, '0001-01-01 00:00:00+00'::timestamptz) DESC, c.conversation_id COLLATE "C"`, autoSettleBefore)
 		if err != nil {

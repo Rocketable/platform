@@ -75,6 +75,8 @@ func TestSidebarSendFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.name == "session row" {
 				require.NoError(t, sessions.UpsertThread("web", backend.ThreadState{Agent: "main"}))
+				_, err := sessions.AppendEntryID(ctx, "web", &rocketcode.SessionEntry{})
+				require.NoError(t, err)
 			}
 
 			stream, err := connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true}, "/rpc.Web/ListSessions")

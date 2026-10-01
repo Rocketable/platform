@@ -877,18 +877,10 @@ func TestSessionEntries(t *testing.T) {
 
 	listedSessions, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
-	require.Len(t, listedSessions.Sessions, 2)
-	require.Equal(t, "empty-web", listedSessions.Sessions[0].Id)
-	require.Equal(t, "selected", listedSessions.Sessions[0].Agent)
-	require.Equal(t, id, listedSessions.Sessions[1].Id)
+	require.Empty(t, listedSessions.Sessions, "empty and deleted histories are hidden")
 	require.True(t, listedSessions.SummariesComplete)
 
-	for _, session := range listedSessions.Sessions {
-		require.Empty(t, session.Preview)
-		require.Empty(t, session.UpdatedAt, "empty and deleted conversations retain blank display timestamps")
-	}
-
-	// A legacy empty row stays visible while its summary is still loading.
+	// Missing summaries do not expose empty conversation records either.
 	db, err := sql.Open("pgx", dsn)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
@@ -898,10 +890,19 @@ func TestSessionEntries(t *testing.T) {
 	loading, err := invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
 	require.NoError(t, err)
 	require.True(t, loading.UpstreamSuccess)
-	require.False(t, loading.SummariesComplete)
-	require.Equal(t, "empty-web", loading.Sessions[0].Id)
-	require.Empty(t, loading.Sessions[0].UpdatedAt)
-	require.NoError(t, sessions.UpsertThread("empty-web", backend.ThreadState{Agent: "selected"}))
+	require.True(t, loading.SummariesComplete)
+	require.Empty(t, loading.Sessions)
+
+	_, err = sessions.AppendEntryID(ctx, "empty-web", &rocketcode.SessionEntry{Timestamp: time.Now().UTC()})
+	require.NoError(t, err)
+	listedSessions, err = invoke[ListSessionsResponse](ctx, connection, "ListSessions", &ListSessionsRequest{})
+	require.NoError(t, err)
+	require.Len(t, listedSessions.Sessions, 1)
+	require.Equal(t, "empty-web", listedSessions.Sessions[0].Id)
+	require.Equal(t, "selected", listedSessions.Sessions[0].Agent)
+
+	_, err = sessions.DeleteSession(ctx, "empty-web")
+	require.NoError(t, err)
 
 	emptyHistory, err := invoke[HistoryResponse](ctx, connection, "History", &HistoryRequest{Id: id})
 	require.NoError(t, err)
@@ -1241,6 +1242,8 @@ func TestSessionEntries(t *testing.T) {
 
 	for _, extra := range []string{"slack-thread:C1:2.2", "slack-thread:C2:3.3"} {
 		require.NoError(t, sessions.UpsertThread(extra, backend.ThreadState{Agent: "main"}))
+		_, err := sessions.AppendEntryID(ctx, extra, &rocketcode.SessionEntry{})
+		require.NoError(t, err)
 	}
 
 	require.Len(t, channels.ChannelAgentChoicesCalls(), liveCalls+1, "$agent uses current live channel policy")
@@ -1254,13 +1257,13 @@ func TestSessionEntries(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, channels.ChannelAgentChoicesCalls(), channelCalls, "sidebar must not call live Slack policy")
 	require.Len(t, channels.SidebarChannelAgentChoicesCalls(), sidebarCalls+2, "resolve each stored Slack channel once per list request")
-	require.Len(t, listedSessions.Sessions, 5)
-	require.Equal(t, "slack-thread:C1:2.2", listedSessions.Sessions[3].Id)
-	require.Equal(t, "triage", listedSessions.Sessions[3].Title)
-	require.Equal(t, []string{"main", "planner"}, listedSessions.Sessions[3].AllowedAgents)
-	require.Equal(t, "slack-thread:C2:3.3", listedSessions.Sessions[4].Id)
-	require.Equal(t, "C2", listedSessions.Sessions[4].Title)
-	require.Empty(t, listedSessions.Sessions[4].AllowedAgents, "unknown channel must not guess policy")
+	require.Len(t, listedSessions.Sessions, 3)
+	require.Equal(t, "slack-thread:C1:2.2", listedSessions.Sessions[1].Id)
+	require.Equal(t, "triage", listedSessions.Sessions[1].Title)
+	require.Equal(t, []string{"main", "planner"}, listedSessions.Sessions[1].AllowedAgents)
+	require.Equal(t, "slack-thread:C2:3.3", listedSessions.Sessions[2].Id)
+	require.Equal(t, "C2", listedSessions.Sessions[2].Title)
+	require.Empty(t, listedSessions.Sessions[2].AllowedAgents, "unknown channel must not guess policy")
 	require.Equal(t, identity.Username, listedSessions.Owner)
 	require.True(t, listedSessions.UpstreamSuccess)
 	require.True(t, listedSessions.SummariesComplete)
@@ -1305,16 +1308,8 @@ func TestSessionEntries(t *testing.T) {
 	}
 
 	for _, session := range listedSessions.Sessions {
-		if session.Id == id {
-			require.Equal(t, "planner", session.Agent)
-			require.Equal(t, []string{"main", "planner"}, session.AllowedAgents)
-		}
-
-		if session.Id == created.Id {
-			require.Equal(t, "selected", session.Agent)
-			require.Equal(t, []string{"main", "planner", "selected"}, session.AllowedAgents)
-		}
-
+		require.NotEqual(t, id, session.Id, "deleted history stays hidden")
+		require.NotEqual(t, created.Id, session.Id, "new sessions stay hidden before their first entry")
 		require.NotEqual(t, "private-X", session.Id)
 	}
 
