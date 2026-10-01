@@ -86,7 +86,7 @@ func TestForkConversation(t *testing.T) {
 	require.Len(t, entries, 1)
 	require.Contains(t, string(entries[0].Entry.ReplayInput[1]), "answer")
 
-	parents := map[string]string{"first": "source", "middle": "source", "full": "source", "child": "middle"}
+	parents := map[string]string{"middle": "source", "full": "source", "child": "middle"}
 
 	for row, err := range sessions.SidebarSessions(t.Context(), time.Time{}) {
 		require.NoError(t, err)

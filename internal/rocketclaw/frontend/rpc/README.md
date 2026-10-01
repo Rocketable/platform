@@ -35,9 +35,10 @@ expiry starts a fresh inactivity window. New stored entries, newly synced entrie
 and manual Unsettle clear snooze. Settle also clears snooze, hiding the chat until
 new activity or Unsettle. Opening a chat does not change its visibility state.
 
-Session discovery starts from explicitly recorded conversations, excluding private Cron locators and
-recorded MCP X bindings; it does not discover orphaned entry rows or backfill
-records. `CreateSession` records a fresh opaque ID with the selected loaded agent.
+Session discovery starts from explicitly recorded conversations with stored entries,
+excluding private Cron locators and recorded MCP X bindings. It does not discover
+orphaned entry rows or backfill records. `CreateSession` records a fresh opaque ID
+with the selected loaded agent.
 `ListSessions` streams one conversation per response message in list order. The
 Go HTTP adapter forwards these progressively through a finite SSE response, preserving
 full previews and gRPC's default 4 MiB per-message receive limit. Each envelope
@@ -173,8 +174,9 @@ Normal history writes maintain the summary in the same transaction as the histor
 New conversation records initialize their summary in the creation transaction,
 including when they attach existing orphan history. An empty summary is complete;
 a missing summary is not. Empty histories retain blank previews and display
-timestamps. Sidebar enumeration reads stored summaries without scanning history,
-including while legacy summaries are still missing.
+timestamps. Sidebar enumeration checks for stored entries and reads stored
+summaries without decoding replay, including while legacy
+summaries are still missing. Empty histories are omitted until an entry is stored.
 
 If backfill fails, the runtime logs `backfill session summaries` with the error
 and stops that backfill attempt; it does not retry automatically within the same
