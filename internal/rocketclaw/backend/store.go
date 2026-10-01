@@ -271,28 +271,7 @@ func (s *SessionService) Goal(conversationID string) (GoalState, bool, error) {
 // AccountGoalTurn increments one active goal turn and applies budget exhaustion.
 func (s *SessionService) AccountGoalTurn(conversationID string) (GoalState, bool, error) {
 	conversationID = strings.TrimSpace(conversationID)
-	ctx := context.Background()
-
-	tx, err := s.beginStateTx(ctx, "goal turn accounting")
-	if err != nil {
-		return GoalState{}, false, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err = execRows(ctx, tx, "account goal turn", "count goal turn accounting", `UPDATE conversation_goals SET turns_used = turns_used + 1, status = CASE WHEN max_turns > 0 AND turns_used + 1 >= max_turns THEN $1 ELSE $2 END, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $5)`, GoalStatusBudgetExhausted, GoalStatusActive, timeUnixNano(time.Now().UTC()), conversationID, GoalStatusActive); err != nil {
-		return GoalState{}, false, err
-	}
-
-	goal, ok, err := (stateDAO{db: tx}).goal(ctx, conversationID)
-	if err != nil {
-		return GoalState{}, false, err
-	}
-
-	if err := tx.Commit(); err != nil {
-		return GoalState{}, false, fmt.Errorf("commit goal turn accounting: %w", err)
-	}
-
-	return goal, ok, nil
+	return s.commitGoalChange(conversationID, "goal turn accounting", "account goal turn", "count goal turn accounting", `UPDATE conversation_goals SET turns_used = turns_used + 1, status = CASE WHEN max_turns > 0 AND turns_used + 1 >= max_turns THEN $1 ELSE $2 END, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $5)`, []any{GoalStatusBudgetExhausted, GoalStatusActive}, []any{conversationID, GoalStatusActive})
 }
 
 // UpdateGoalStatus records a model-controlled goal status update.
@@ -1466,28 +1445,36 @@ func (s *SessionService) externalMCPMetadataEntry(ctx context.Context, conversat
 
 func (s *SessionService) setGoalStatus(conversationID, status, note string) (GoalState, error) {
 	conversationID = strings.TrimSpace(conversationID)
+	goal, _, err := s.commitGoalChange(conversationID, "goal status update", "set active goal status", "count active goal status update", `UPDATE conversation_goals SET status = $1, note = $2, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $5)`, []any{strings.TrimSpace(status), strings.TrimSpace(note)}, []any{conversationID, GoalStatusActive})
+
+	return goal, err
+}
+
+func (s *SessionService) commitGoalChange(conversationID, beginLabel, execLabel, countLabel, query string, beforeUpdatedAt, afterUpdatedAt []any) (GoalState, bool, error) {
 	ctx := context.Background()
 
-	tx, err := s.beginStateTx(ctx, "goal status update")
+	tx, err := s.beginStateTx(ctx, beginLabel)
 	if err != nil {
-		return GoalState{}, err
+		return GoalState{}, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err = execRows(ctx, tx, "set active goal status", "count active goal status update", `UPDATE conversation_goals SET status = $1, note = $2, updated_at_unix_ns = $3 WHERE conversation_id = $4 AND (status = '' OR status = $5)`, strings.TrimSpace(status), strings.TrimSpace(note), timeUnixNano(time.Now().UTC()), conversationID, GoalStatusActive); err != nil {
-		return GoalState{}, err
+	args := append(append([]any{}, beforeUpdatedAt...), timeUnixNano(time.Now().UTC()))
+	args = append(args, afterUpdatedAt...)
+	if _, err = execRows(ctx, tx, execLabel, countLabel, query, args...); err != nil {
+		return GoalState{}, false, err
 	}
 
-	goal, _, err := (stateDAO{db: tx}).goal(ctx, conversationID)
+	goal, ok, err := (stateDAO{db: tx}).goal(ctx, conversationID)
 	if err != nil {
-		return GoalState{}, err
+		return GoalState{}, false, err
 	}
 
 	if err := tx.Commit(); err != nil {
-		return GoalState{}, fmt.Errorf("commit goal status update: %w", err)
+		return GoalState{}, false, fmt.Errorf("commit %s: %w", beginLabel, err)
 	}
 
-	return goal, nil
+	return goal, ok, nil
 }
 
 func (s *SessionService) beginStateTx(ctx context.Context, label string) (*sql.Tx, error) {
