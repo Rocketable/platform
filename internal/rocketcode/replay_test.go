@@ -25,23 +25,37 @@ func TestReplayInputPreservesCompactionPayload(t *testing.T) {
 func TestReplayInputPreservesMessageHeaderLocally(t *testing.T) {
 	const header = `[Slack principal="alice"]`
 
-	raw := []json.RawMessage{json.RawMessage(`{"type":"message","role":"user","prompt_header":"[Slack principal=\"alice\"]","content":"[Slack principal=\"alice\"]\n\n[literal]\n\nbody"}`)}
+	raw := []json.RawMessage{
+		json.RawMessage(`{"type":"message","role":"user","input_id":"input-1","prompt_header":"[Slack principal=\"alice\"]","content":"[Slack principal=\"alice\"]\n\n[literal]\n\nbody"}`),
+		json.RawMessage(`{"type":"message","role":"user","input_id":"input-2","content":"body"}`),
+		json.RawMessage(`{"type":"message","id":"provider-item","role":"assistant","phase":"final_answer","content":"answer"}`),
+	}
 	items, err := ReplayInputToParams(raw)
 	require.NoError(t, err)
 	require.Equal(t, header, items[0].OfMessage.ExtraFields()["prompt_header"])
+	require.Equal(t, "input-1", items[0].OfMessage.ExtraFields()["input_id"])
 	stored, err := ReplayInputFromParams(items)
 	require.NoError(t, err)
 	require.JSONEq(t, string(raw[0]), string(stored[0]))
+	require.JSONEq(t, string(raw[1]), string(stored[1]))
+	require.JSONEq(t, string(raw[2]), string(stored[2]))
 
 	projected, err := ReplayInputFromParams(projectReplayForOpenAI(items))
 	require.NoError(t, err)
 	require.NotContains(t, string(projected[0]), "prompt_header")
+	require.NotContains(t, string(projected[0]), "input_id")
+	require.JSONEq(t, `{"type":"message","role":"user","content":"body"}`, string(projected[1]))
+	require.JSONEq(t, `{"type":"message","role":"assistant","phase":"final_answer","content":"answer"}`, string(projected[2]), "item identity stays local without changing provider message shape")
 	require.Equal(t, header+"\n\n[literal]\n\nbody", items[0].OfMessage.Content.OfString.Value)
 	require.Equal(t, header, items[0].OfMessage.ExtraFields()["prompt_header"])
+	require.Equal(t, "input-1", items[0].OfMessage.ExtraFields()["input_id"])
+	require.Equal(t, "input-2", items[1].OfMessage.ExtraFields()["input_id"])
 
 	recovered, err := RecoveredReplayInput(&ActiveTurnCheckpoint{ReplayInput: stored})
 	require.NoError(t, err)
 	require.JSONEq(t, string(raw[0]), string(recovered[0]))
+	require.JSONEq(t, string(raw[1]), string(recovered[1]))
+	require.JSONEq(t, string(raw[2]), string(recovered[2]))
 }
 
 func TestAbortedFunctionCallOutputsUsesGenericText(t *testing.T) {

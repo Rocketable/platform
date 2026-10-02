@@ -76,7 +76,7 @@ func NewHTTPHandler(connection *grpc.ClientConn) http.Handler {
 
 			switch method {
 			case "/stream":
-				method, request, response = "Join", &JoinRequest{Id: r.URL.Query().Get("id")}, &TranscriptEvent{}
+				method, request, response = "Join", &JoinRequest{Id: r.URL.Query().Get("id")}, &ConversationChange{}
 			case "DownloadAttachment", "UploadAttachment":
 				request = &Attachment{ConversationId: r.URL.Query().Get("conversationId"), Id: r.URL.Query().Get("id"), Name: r.URL.Query().Get("name")}
 				response = &Attachment{}

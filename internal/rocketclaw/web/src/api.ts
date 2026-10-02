@@ -60,9 +60,9 @@ export const queries = {
   skills: (input?: { agent: string }) => ({ queryKey: ["skills", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ skills: Skill[] }>("ListSkills", input, signal)).skills }),
   cronJobs: () => ({ queryKey: ["cronJobs"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ jobs: CronJob[] }>("ListCronJobs", {}, signal)).jobs }),
   config: () => ({ queryKey: ["config"], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ config: ConfigView }>("ListConfig", {}, signal)).config }),
-  history: (input: { id: string; sourceConversationId?: string; originOnly?: boolean }) => ({ queryKey: ["history", input], queryFn: async ({ signal }: { signal: AbortSignal }): Promise<HistoryView> => {
-    const body = await rpc<{ messages: TranscriptEvent[]; origin?: string; delegations: string[] }>("History", input, signal);
-    return { messages: body.messages, origin: body.origin ? JSON.parse(body.origin) as ChatOrigin : undefined, delegations: body.delegations };
+  history: (input: { id: string; sourceConversationId?: string; originOnly?: boolean; revision?: string }) => ({ queryKey: ["history", input], queryFn: async ({ signal }: { signal?: AbortSignal }): Promise<HistoryView> => {
+    const body = await rpc<Omit<HistoryView, "origin"> & { origin: string }>("History", input, signal);
+    return { ...body, origin: body.origin ? JSON.parse(body.origin) as ChatOrigin : undefined };
   } }),
   queue: (input: { id: string }) => ({ queryKey: ["queue", input], queryFn: async ({ signal }: { signal: AbortSignal }) => (await rpc<{ items: QueueItem[] }>("ListQueue", input, signal)).items }),
 };

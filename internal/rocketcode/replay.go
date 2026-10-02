@@ -21,10 +21,12 @@ func projectReplayForOpenAI(items []responses.ResponseInputItemUnionParam) []res
 	projected := make([]responses.ResponseInputItemUnionParam, 0, len(items))
 	for i := range items {
 		item := items[i]
-		if item.OfMessage != nil && item.OfMessage.ExtraFields()["prompt_header"] != nil {
+		if item.OfMessage != nil {
 			message := *item.OfMessage
 			extra := maps.Clone(message.ExtraFields())
 			delete(extra, "prompt_header")
+			delete(extra, "input_id")
+			delete(extra, "id")
 			message.SetExtraFields(extra)
 			item.OfMessage = &message
 		}
@@ -260,15 +262,32 @@ func ReplayInputToParams(raw []json.RawMessage) ([]responses.ResponseInputItemUn
 			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: replayInputRawKind(raw[i]), Cause: fmt.Errorf("unmarshal SDK replay input: %w", err)}
 		}
 
-		var storedHeader struct {
+		var storedMessage struct {
 			Header string `json:"prompt_header"`
+			ID     string `json:"input_id"`
+			ItemID string `json:"id"`
 		}
-		if err := json.Unmarshal(raw[i], &storedHeader); err != nil {
-			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: replayInputRawKind(raw[i]), Cause: fmt.Errorf("decode replay header: %w", err)}
+		if err := json.Unmarshal(raw[i], &storedMessage); err != nil {
+			return nil, &ReplayDecodeError{EntryIndex: -1, ItemIndex: i, Kind: replayInputRawKind(raw[i]), Cause: fmt.Errorf("decode replay message metadata: %w", err)}
 		}
 
-		if storedHeader.Header != "" && item.OfMessage != nil {
-			item.OfMessage.SetExtraFields(map[string]any{"prompt_header": storedHeader.Header})
+		if item.OfMessage != nil {
+			extra := map[string]any{}
+			if storedMessage.Header != "" {
+				extra["prompt_header"] = storedMessage.Header
+			}
+
+			if storedMessage.ID != "" {
+				extra["input_id"] = storedMessage.ID
+			}
+
+			if storedMessage.ItemID != "" {
+				extra["id"] = storedMessage.ItemID
+			}
+
+			if len(extra) > 0 {
+				item.OfMessage.SetExtraFields(extra)
+			}
 		}
 
 		if item.OfCompaction != nil {

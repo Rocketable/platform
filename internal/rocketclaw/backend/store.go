@@ -72,6 +72,7 @@ type ActiveTurnState struct {
 	PendingSteers  []protocol.PendingSteer      `json:"pending_steers,omitempty"`
 	CreatedAt      time.Time                    `json:"created_at,omitzero"`
 	UpdatedAt      time.Time                    `json:"updated_at,omitzero"`
+	Terminal       protocol.Terminal            `json:"terminal,omitempty"`
 }
 
 // CronScheduleState records one observed scheduled cron trigger.
@@ -125,13 +126,17 @@ type sessionTurnGate struct {
 	refs        int
 }
 
-// ObservedSessionEntry is one stored rocketcode entry with its row ID.
+// ObservedSessionEntry carries saved or checkpoint metadata and an optional payload.
 type ObservedSessionEntry struct {
-	ID    int64
-	Entry harness.SessionEntry
+	ID       int64
+	Entry    harness.SessionEntry
+	Key      string
+	Revision string
 	// SourceConversationID identifies the surviving source row of a synced entry.
 	SourceConversationID string
 	Synced               bool
+	Active               bool
+	Terminal             protocol.Terminal
 }
 
 // PruneStateStats reports how much stale persisted state was removed.
@@ -1014,6 +1019,10 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 		return 0, fmt.Errorf("delete rocketcode session summaries: %w", err)
 	}
 
+	if _, err := tx.ExecContext(ctx, `DELETE FROM active_turns WHERE conversation_id = $1 AND terminal <> ''`, conversationID); err != nil {
+		return 0, fmt.Errorf("delete terminal transcript checkpoints: %w", err)
+	}
+
 	if err := saveSessionSummary(ctx, tx, protocol.SessionSummary{ConversationID: conversationID}); err != nil {
 		return 0, err
 	}
@@ -1025,11 +1034,23 @@ func (s *SessionService) DeleteSession(ctx context.Context, conversationID strin
 	return rows, nil
 }
 
-// Delegations returns the direct "<producer>/<call ID>" delegation histories of producers.
-func (s *SessionService) Delegations(ctx context.Context, producers []string) ([]string, error) {
-	return queryStrings(ctx, s.db, `SELECT DISTINCT e.conversation_id FROM unnest($1::text[]) p(id)
-JOIN session_entries e ON e.conversation_id COLLATE "C" >= p.id || '/' AND e.conversation_id COLLATE "C" < p.id || '0'
-WHERE strpos(substr(e.conversation_id, length(p.id) + 2), '/') = 0 ORDER BY e.conversation_id`, "delegation histories", producers)
+// Delegations returns saved direct child histories referenced by this transcript,
+// including unchanged entries omitted from a delta's readable payloads.
+func (s *SessionService) Delegations(ctx context.Context, conversationID, sourceConversationID string) ([]string, error) {
+	return queryStrings(ctx, s.db, `WITH parents AS (
+    SELECT COALESCE(e.entry_json->>'sync_source_conversation_id', source.conversation_id, e.conversation_id) AS producer,
+        e.entry_json::jsonb->'replay_input' AS replay
+    FROM session_entries e LEFT JOIN session_entries source ON source.id = (e.entry_json->>'sync_source_entry_id')::bigint
+    WHERE e.conversation_id = $1 AND (NOT e.entry_json::jsonb ? 'sync_source_entry_id' OR source.id IS NOT NULL OR e.entry_json::jsonb ? 'sync_source_conversation_id')
+    UNION ALL
+    SELECT conversation_id, replay_input_json::jsonb FROM active_turns WHERE conversation_id = $1
+)
+SELECT DISTINCT child.conversation_id FROM parents p
+CROSS JOIN LATERAL jsonb_array_elements(NULLIF(p.replay, 'null'::jsonb)) item
+JOIN session_entries child ON child.conversation_id = p.producer || '/' || (item->>'call_id')
+WHERE item->>'type' = 'function_call' AND strpos(item->>'call_id', '/') = 0
+    AND ($2 = '' OR p.producer = $2)
+ORDER BY child.conversation_id`, "delegation histories", conversationID, sourceConversationID)
 }
 
 // ListSessions returns summaries for the requested stored rocketcode sessions.
@@ -1075,6 +1096,7 @@ func (s *SessionService) SidebarSessions(ctx context.Context, autoSettleBefore t
 running_conversations AS (
     SELECT DISTINCT conversation_id
     FROM active_turns
+    WHERE terminal = ''
 ),
 private_conversations AS (
     SELECT private_conversation_id AS conversation_id

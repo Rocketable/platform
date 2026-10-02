@@ -36,14 +36,9 @@ const (
 	PhaseSkipped PhaseStatus = "skipped"
 )
 
-// PhaseUpdate reports connector-neutral workflow progress.
+// PhaseUpdate records one workflow phase's status and call counts.
 type PhaseUpdate struct {
 	PhaseID, Name                string
 	Status                       PhaseStatus
 	Scheduled, Running, Complete int
-}
-
-// AgentUpdate reports one workflow agent call's latest observable activity.
-type AgentUpdate struct {
-	PhaseID, Label, Activity string
 }

@@ -185,6 +185,15 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		return "", fmt.Errorf("unknown agent type: %s is not a valid agent type", params.SubagentType)
 	}
 
+	progress := *metadata.progress
+	// The model stays absent until resolution; neither aliases nor parent attribution leak.
+	progress.Kind, progress.Agent, progress.Model = PublicProgressDelegation, agent.Name, ""
+
+	progress.State = PublicProgressReview
+	if err := metadata.observations.observe(ctx, &progress); err != nil {
+		return "", err
+	}
+
 	originatingAgent := ""
 	if f.agent != nil {
 		originatingAgent = f.agent.Name
@@ -200,6 +209,14 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 
 		decision := f.runGuardrail(ctx, &guardrailAgent, ChildRunStageDelegation, message, agent.Name, metadata, parentOutput)
 		if !decision.Approved {
+			// Cancellation retains the canonical result; the parent records stopped.
+			if ctx.Err() == nil {
+				progress.State = PublicProgressBlocked
+				if err := metadata.observations.observe(ctx, &progress); err != nil {
+					return "", err
+				}
+			}
+
 			reason := strings.TrimSpace(decision.Reason)
 			if reason == "" {
 				reason = "rejected by inter-agent guardrail"
@@ -250,6 +267,13 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 	}
 	childFactory.configureSpill(child)
 
+	progress.Model = origin.displayModel()
+
+	progress.State = PublicProgressWorking
+	if err := metadata.observations.observe(ctx, &progress); err != nil {
+		return "", err
+	}
+
 	output := make(chan ChatResponse)
 
 	input := make(chan PromptInput, 1)
@@ -259,7 +283,7 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 
 	var (
 		group            errgroup.Group
-		items            []ChatResponse
+		last             string
 		childDiagnostics []ChatResponse
 	)
 
@@ -275,7 +299,10 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 
 	group.Go(func() error {
 		for item := range output {
-			items = append(items, item)
+			if item.Kind == ChatResponseAssistantMessage {
+				last = item.Text
+			}
+
 			if f.diagnostics {
 				childDiagnostics = append(childDiagnostics, ChatResponse{Kind: ChatResponseAssistantTool, Subagent: &SubagentDiagnostic{
 					Name:     agent.Name,
@@ -304,15 +331,12 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 		return "", err
 	}
 
-	last := ""
-
-	for _, item := range items {
-		if item.Kind == ChatResponseAssistantMessage {
-			last = item.Text
-		}
-	}
-
 	if agent.Guardrail != "" && !f.inGuardrailRun {
+		progress.State = PublicProgressReview
+		if err := metadata.observations.observe(ctx, &progress); err != nil {
+			return "", err
+		}
+
 		guardrailAgent := f.agents.Items[agent.Guardrail]
 		message := strings.Join([]string{
 			"Current Action: response",
@@ -325,6 +349,13 @@ func (f *toolFactory) runTask(ctx context.Context, params taskParams, metadata t
 
 		decision := f.runGuardrail(ctx, &guardrailAgent, ChildRunStageResponse, message, agent.Name, metadata, parentOutput)
 		if !decision.Approved {
+			if ctx.Err() == nil {
+				progress.State = PublicProgressBlocked
+				if err := metadata.observations.observe(ctx, &progress); err != nil {
+					return "", err
+				}
+			}
+
 			reason := strings.TrimSpace(decision.Reason)
 			if reason == "" {
 				reason = "rejected by inter-agent guardrail"

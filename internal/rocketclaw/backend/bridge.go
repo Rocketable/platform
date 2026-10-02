@@ -30,7 +30,6 @@ import (
 	"sync"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	instrumentation "github.com/Arize-ai/openinference/go/openinference-instrumentation"
 	semconv "github.com/Arize-ai/openinference/go/openinference-semantic-conventions"
@@ -82,7 +81,6 @@ const (
 	maxInboundAttachmentTotalBytes     = 16 << 20
 	maxInboundAttachmentResizeInput    = 16 << 20
 	maxInboundAttachmentResizeAttempts = 8
-	rocketcodeBreadcrumbSeparator      = " \u2192 "
 )
 
 var errBridgeStopped = errors.New("bridge stopped")
@@ -181,14 +179,14 @@ func (a EnqueueActivation) Activate(ctx context.Context, item *protocol.ThreadQu
 }
 
 type runResult struct {
-	turnID, checkpointTurnID, text, thinking string
-	sessionEntryID                           int64
-	responseID                               string
-	attribution                              rocketcode.ReplayAttribution
-	attachments                              []protocol.OutboundAttachment
-	goalCompleted                            bool
-	outputDecided                            bool
-	workflowTerminal                         protocol.Terminal
+	turnID, checkpointTurnID, text string
+	sessionEntryID                 int64
+	responseID                     string
+	attribution                    rocketcode.ReplayAttribution
+	attachments                    []protocol.OutboundAttachment
+	goalCompleted                  bool
+	outputDecided                  bool
+	workflowTerminal               protocol.Terminal
 }
 
 type workflowRunSummary struct {
@@ -207,6 +205,7 @@ type workflowRunPhaseSummary struct {
 }
 
 type activeTurnCheckpointSink struct {
+	bridge           *Bridge
 	store            *SessionService
 	conversationID   string
 	sourceMetadata   map[string]string
@@ -214,36 +213,93 @@ type activeTurnCheckpointSink struct {
 	checkpointTurnID string
 }
 
+type activeTurnClosureError struct {
+	err error
+}
+
+func (e activeTurnClosureError) Error() string {
+	return fmt.Sprintf("close active turn: %v", e.err)
+}
+
+func (e activeTurnClosureError) Unwrap() error {
+	return e.err
+}
+
 func (s *activeTurnCheckpointSink) StartActiveTurn(ctx context.Context, checkpoint *rocketcode.ActiveTurnCheckpoint) error {
-	return s.upsert(ctx, checkpoint)
+	checkpoint = s.prepareCheckpoint(checkpoint)
+	return s.store.UpsertActiveTurn(ctx, checkpoint, s.sourceMetadata)
 }
 
 func (s *activeTurnCheckpointSink) RecordProviderResponse(ctx context.Context, checkpoint *rocketcode.ActiveTurnCheckpoint) error {
-	return s.upsert(ctx, checkpoint)
+	checkpoint = s.prepareCheckpoint(checkpoint)
+	return s.store.UpsertActiveTurn(ctx, checkpoint, s.sourceMetadata)
 }
 
 func (s *activeTurnCheckpointSink) RecordCompletedToolOutput(ctx context.Context, checkpoint *rocketcode.ActiveTurnCheckpoint) error {
-	return s.upsert(ctx, checkpoint)
+	checkpoint = s.prepareCheckpoint(checkpoint)
+	return s.store.UpsertActiveTurn(ctx, checkpoint, s.sourceMetadata)
 }
 
 func (s *activeTurnCheckpointSink) RecordRecoveredReplay(ctx context.Context, checkpoint *rocketcode.ActiveTurnCheckpoint) error {
-	return s.upsert(ctx, checkpoint)
+	checkpoint = s.prepareCheckpoint(checkpoint)
+	return s.store.UpsertActiveTurn(ctx, checkpoint, s.sourceMetadata)
+}
+
+func (s *activeTurnCheckpointSink) RecordOutputTrace(ctx context.Context, turnID string, trace []json.RawMessage) error {
+	if s.recovered.TurnID != "" {
+		turnID = s.recovered.TurnID
+	}
+
+	return s.store.recordActiveTurnOutputTrace(ctx, turnID, trace)
+}
+
+func (s *activeTurnCheckpointSink) CloseActiveTurn(ctx context.Context, turnID string, state rocketcode.PublicProgressState) error {
+	s.bridge.mu.Lock()
+	interrupted := s.bridge.activeTurnInterrupted
+	s.bridge.mu.Unlock()
+
+	if interrupted {
+		state = rocketcode.PublicProgressStopped
+	}
+
+	if s.recovered.TurnID != "" {
+		turnID = s.recovered.TurnID
+	}
+
+	if state != rocketcode.PublicProgressStopped && state != rocketcode.PublicProgressFailed {
+		return nil // Shutdown closes the local owner while preserving restart recovery.
+	}
+
+	err := s.store.SetActiveTurnTerminal(ctx, turnID, protocol.Terminal(state))
+	if err != nil {
+		return activeTurnClosureError{err: err}
+	}
+
+	return nil
 }
 
 func (s *activeTurnCheckpointSink) ClearCompletedTurn(ctx context.Context, turnID string) error {
+	if s.recovered.TurnID != "" {
+		turnID = s.recovered.TurnID
+	}
+
 	return s.store.ClearActiveTurn(ctx, turnID)
 }
 
-func (s *activeTurnCheckpointSink) upsert(ctx context.Context, checkpoint *rocketcode.ActiveTurnCheckpoint) error {
-	s.checkpointTurnID = checkpoint.TurnID
+func (s *activeTurnCheckpointSink) prepareCheckpoint(checkpoint *rocketcode.ActiveTurnCheckpoint) *rocketcode.ActiveTurnCheckpoint {
+	checkpointCopy := *checkpoint
 
+	checkpoint = &checkpointCopy
 	if len(s.recovered.ReplayInput) > 0 {
 		checkpoint = withRecoveredReplay(checkpoint, s.recovered.ReplayInput, s.recovered.ReplayAttribution)
+		checkpoint.TurnID = s.recovered.TurnID
 	}
+
+	s.checkpointTurnID = checkpoint.TurnID
 
 	checkpoint.ConversationKey = s.conversationID
 
-	return s.store.UpsertActiveTurn(ctx, checkpoint, s.sourceMetadata)
+	return checkpoint
 }
 
 type childSessions struct {
@@ -873,16 +929,17 @@ func (b *Bridge) handleRecoveredActiveTurn(ctx context.Context, turn *ActiveTurn
 
 	result, err := b.runTurn(ctx, msg, turnID, checkpoint)
 	if err != nil {
+		err = errors.Join(err, ctx.Err())
 		if !activeTurnRecoveryPreserveError(err) {
-			checkpointTurnID := result.checkpointTurnID
-			if checkpointTurnID != "" && checkpointTurnID != checkpoint.TurnID {
-				if errClear := b.config.SessionService.ClearActiveTurn(ctx, checkpointTurnID); errClear != nil {
-					return errors.Join(err, fmt.Errorf("clear failed recovered active turn %q: %w", checkpointTurnID, errClear))
+			if !errors.Is(err, errTurnInterrupted) {
+				checkpointTurnID := result.checkpointTurnID
+				if checkpointTurnID == "" {
+					checkpointTurnID = checkpoint.TurnID
 				}
-			}
 
-			if errClear := b.config.SessionService.ClearActiveTurn(ctx, checkpoint.TurnID); errClear != nil {
-				return errors.Join(err, fmt.Errorf("clear failed original recovered active turn %q: %w", checkpoint.TurnID, errClear))
+				if errTerminal := b.config.SessionService.SetActiveTurnTerminal(context.WithoutCancel(ctx), checkpointTurnID, protocol.TerminalFailed); errTerminal != nil {
+					return errors.Join(err, fmt.Errorf("record failed recovered active turn %q: %w", checkpointTurnID, errTerminal))
+				}
 			}
 
 			if errStop := b.config.SessionService.StopGoal(b.config.ConversationID); errStop != nil {
@@ -979,7 +1036,7 @@ func (b *Bridge) handleInbound(ctx context.Context, request *bridgeRequest) (err
 	b.log.Info("starting rocketcode turn", "conversation_id", b.config.ConversationID, "turn_id", turnID, "source", msg.Source, "kind", msg.Kind, "label", msg.Label, "text_len", len([]rune(msg.Text)), "attachment_count", len(msg.Attachments), "slack_channel", slackChannel, "slack_message_ts", slackMessageTS, "slack_thread_ts", slackThreadTS)
 
 	defer func() {
-		b.log.Info("finished rocketcode turn", "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(started).Milliseconds(), "text_len", len([]rune(result.text)), "thinking_len", len([]rune(result.thinking)), "session_entry_id", result.sessionEntryID, "error", errLog)
+		b.log.Info("finished rocketcode turn", "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(started).Milliseconds(), "text_len", len([]rune(result.text)), "session_entry_id", result.sessionEntryID, "error", errLog)
 	}()
 
 	if fallback := attachmentFallback(msg); fallback != "" {
@@ -1057,7 +1114,7 @@ func (b *Bridge) runWorkflow(ctx context.Context, msg *protocol.InboundMessage, 
 		return result, fmt.Errorf("workflow %q is not configured", msg.Workflow.Name)
 	}
 
-	run, closeRunner, err := newWorkflowAgentRunner(b.runtime, b.agentSnapshot(), b.log)
+	runner, err := newWorkflowAgentRunner(b.runtime, b.agentSnapshot(), b.log)
 	if err != nil {
 		return result, fmt.Errorf("prepare workflow agent runner: %w", err)
 	}
@@ -1077,29 +1134,12 @@ func (b *Bridge) runWorkflow(ctx context.Context, msg *protocol.InboundMessage, 
 		cancel()
 	}()
 
-	progress := func(ctx context.Context, update protocol.PhaseUpdate) error {
-		outbound := b.newOutboundMessage(msg, turnID, "", "", false)
-
-		outbound.WorkflowPhase = &update
-		if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
-			return fmt.Errorf("publish workflow phase: %w", err)
-		}
-
-		return nil
-	}
-	agentProgress := func(ctx context.Context, update protocol.AgentUpdate) error {
-		outbound := b.newOutboundMessage(msg, turnID, "", "", false)
-
-		outbound.WorkflowAgent = &update
-		if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
-			return fmt.Errorf("publish workflow agent activity: %w", err)
-		}
-
-		return nil
+	if err := b.bus.PublishOutbound(ctx, b.newOutboundMessage(msg, turnID, "", false)); err != nil {
+		return result, errors.Join(fmt.Errorf("publish workflow start: %w", err), runner.Close())
 	}
 
-	workflowResult, errRun := workflow.Run(turnCtx, request.Definition, request, run, progress, agentProgress)
-	errRun = errors.Join(errRun, closeRunner())
+	workflowResult, errRun := workflow.Run(turnCtx, request.Definition, request, runner)
+	errRun = errors.Join(errRun, runner.Close())
 
 	b.mu.Lock()
 	interrupted := b.activeTurnInterrupted
@@ -1195,7 +1235,7 @@ func (b *Bridge) publishFinal(ctx context.Context, msg *protocol.InboundMessage,
 	b.inputOpen = false
 	b.mu.Unlock()
 
-	outbound := b.newOutboundMessage(msg, result.turnID, result.text, "", true)
+	outbound := b.newOutboundMessage(msg, result.turnID, result.text, true)
 	outbound.Agent, outbound.Model, outbound.ReasoningEffort = result.attribution.Agent, result.attribution.Model, result.attribution.ReasoningEffort
 	outbound.WorkflowTerminal = result.workflowTerminal
 
@@ -1356,6 +1396,9 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 		if err != nil {
 			return runResult{}, fmt.Errorf("project recovered active turn replay: %w", err)
 		}
+
+		recoveryEntry.TurnID = checkpoint.TurnID
+		recoveryEntry.OutputTrace = slices.Clone(checkpoint.OutputTrace)
 
 		recoveryEntry.ReplayInput, err = rocketcode.RecoveredReplayInput(&checkpoint)
 		if err != nil {
@@ -1589,7 +1632,11 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	header, _, _ = strings.Cut(prompt, "\n\n")
 	b.publishConsumed(ctx, msg, header)
 
-	input <- rocketcode.PromptInput{Role: "", Text: prompt, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: directSkill, Responses: output}
+	if err := b.bus.PublishOutbound(ctx, b.newOutboundMessage(msg, turnID, "", false)); err != nil {
+		return result, fmt.Errorf("publish rocketcode turn start: %w", err)
+	}
+
+	input <- rocketcode.PromptInput{ID: msg.Metadata["web_message_id"], Role: "", Text: prompt, Header: header, Attachments: attachmentsFromInbound(msg.Attachments), DirectSkill: directSkill, Responses: output}
 
 	close(input)
 
@@ -1610,6 +1657,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	sessionOut := func(entry rocketcode.SessionEntry) error {
 		if len(recoveryEntry.ReplayInput) > 0 {
 			prependRecoveredReplay(&entry.ReplayInput, &entry.ReplayAttribution, recoveryEntry.ReplayInput, recoveryEntry.ReplayAttribution)
+			entry.TurnID = recoveryEntry.TurnID
 		}
 
 		id, err := store.outID(entry)
@@ -1645,8 +1693,8 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 			b.log.Info("received first rocketcode response item", "conversation_id", b.config.ConversationID, "turn_id", turnID, "kind", item.Kind, "elapsed_ms", time.Since(looperStarted).Milliseconds())
 		}
 
-		if err := b.processResponse(ctx, msg, &result, item); err != nil {
-			return result, err
+		if item.Kind == rocketcode.ChatResponseAssistantMessage {
+			result.text = appendText(result.text, item.Text)
 		}
 	}
 
@@ -1657,10 +1705,9 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	b.mu.Unlock()
 
 	if interrupted {
-		if sink.checkpointTurnID != "" {
-			if errClear := b.config.SessionService.ClearActiveTurn(ctx, sink.checkpointTurnID); errClear != nil {
-				return result, errors.Join(errTurnInterrupted, fmt.Errorf("clear interrupted active turn: %w", errClear))
-			}
+		// Explicit stop must not inherit context cancellation's restart-recovery semantics.
+		if errClose, ok := errors.AsType[activeTurnClosureError](err); ok {
+			return result, errors.Join(errTurnInterrupted, errClose)
 		}
 
 		return result, errTurnInterrupted
@@ -1668,6 +1715,7 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 
 	if err != nil {
 		b.log.Info("rocketcode looper returned", "conversation_id", b.config.ConversationID, "turn_id", turnID, "duration_ms", time.Since(looperStarted).Milliseconds(), "error", err)
+
 		return result, fmt.Errorf("run rocketcode turn: %w", err)
 	}
 
@@ -1696,409 +1744,6 @@ func (b *Bridge) runTurn(ctx context.Context, msg *protocol.InboundMessage, turn
 	}
 
 	return result, nil
-}
-
-func (b *Bridge) processResponse(ctx context.Context, msg *protocol.InboundMessage, result *runResult, item rocketcode.ChatResponse) error {
-	switch item.Kind {
-	case rocketcode.ChatResponseAssistantCommentary, rocketcode.ChatResponseAssistantTool, rocketcode.ChatResponseReasoningSummary:
-		if recoveredTurn(msg) {
-			return nil
-		}
-
-		thinking := rocketcodeThinkingText(item)
-		if thinking == "" {
-			return nil
-		}
-
-		b.log.Debug("rocketcode thinking update", "kind", item.Kind, "text_len", len([]rune(thinking)), "text", thinking)
-		result.thinking = appendText(result.thinking, thinking)
-		outbound := b.newOutboundMessage(msg, result.turnID, "", result.thinking, false)
-		outbound.Agent, outbound.Model, outbound.ReasoningEffort = result.attribution.Agent, result.attribution.Model, result.attribution.ReasoningEffort
-
-		if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
-			return fmt.Errorf("publish rocketcode progress: %w", err)
-		}
-	case rocketcode.ChatResponseAssistantMessage:
-		result.text = appendText(result.text, item.Text)
-
-		outbound := b.newOutboundMessage(msg, result.turnID, result.text, "", false)
-
-		outbound.Agent, outbound.Model, outbound.ReasoningEffort = result.attribution.Agent, result.attribution.Model, result.attribution.ReasoningEffort
-		if err := b.bus.PublishOutbound(ctx, outbound); err != nil {
-			return fmt.Errorf("publish rocketcode answer snapshot: %w", err)
-		}
-	}
-
-	return nil
-}
-func formatToolDiagnostic(diagnostic *rocketcode.ToolDiagnostic) string {
-	name := strings.TrimSpace(diagnostic.Name)
-	if name == "" {
-		name = "tool"
-	}
-
-	switch strings.TrimSpace(diagnostic.Phase) {
-	case "call":
-		details := formatToolCallDetails(diagnostic)
-		// Nested code-mode tools use a breadcrumb, such as "execute → gather → read".
-		// Slack folds these under an "Execute" parent with nested lines as details.
-		if nested, ok := strings.CutPrefix(name, "execute → "); ok {
-			nested = strings.TrimSpace(nested)
-			if nested == "" {
-				nested = "tool"
-			}
-
-			tool, arg, hasArg := strings.Cut(nested, ": ")
-
-			tool = thinkingStepTitle(tool)
-			if hasArg {
-				nested = tool + ": " + strings.TrimSpace(arg)
-			} else {
-				nested = tool
-			}
-
-			if details == "" {
-				return "Execute → " + nested
-			}
-
-			return "Execute → " + nested + ": " + details
-		}
-
-		title := thinkingStepTitle(name)
-		if name == "task" {
-			var args struct {
-				SubagentType string `json:"subagent_type"`
-			}
-
-			_ = json.Unmarshal(diagnostic.Arguments, &args)
-			if agent := strings.TrimSpace(args.SubagentType); agent != "" {
-				title = title + " " + agent
-				if details == agent {
-					details = ""
-				}
-			}
-		}
-
-		if status := strings.TrimSpace(diagnostic.Status); status != "" && status != "started" {
-			title = title + " " + status
-		}
-
-		// Keep arguments/search terms out of the title; Slack renders them as details.
-		if details == "" {
-			return title
-		}
-
-		return title + "\n" + details
-	case "result":
-		result := strings.TrimSpace(diagnostic.Result)
-		// Prefix-only: body text from successful tools must never become thinking.
-		if strings.HasPrefix(result, "tool call denied:") {
-			return result
-		}
-
-		if text, ok := toolFailureThinking(name, result); ok {
-			return text
-		}
-
-		return ""
-	default:
-		return thinkingStepTitle(name)
-	}
-}
-
-// thinkingStepTitle is Title Case for plan step names:
-// execute → Execute, find_skills → Find Skills, ask_user_question → Ask User Question.
-func thinkingStepTitle(name string) string {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return name
-	}
-
-	name = strings.ReplaceAll(name, "_", " ")
-
-	words := strings.Fields(name)
-	for i, word := range words {
-		r, size := utf8.DecodeRuneInString(word)
-		if r == utf8.RuneError && size == 0 {
-			continue
-		}
-
-		words[i] = string(unicode.ToUpper(r)) + strings.ToLower(word[size:])
-	}
-
-	return strings.Join(words, " ")
-}
-
-// toolFailureThinking surfaces failed tool results that would otherwise leave a bare
-// "Execute" step with no nested children (e.g. Starlark parse errors before any builtin runs).
-func toolFailureThinking(name, result string) (string, bool) {
-	result = strings.TrimSpace(result)
-	// Prefix-only so successful tool payloads that merely mention the phrase are ignored.
-	if !strings.HasPrefix(result, "tool call failed:") {
-		return "", false
-	}
-
-	msg := strings.TrimSpace(strings.TrimPrefix(result, "tool call failed:"))
-	msg = strings.TrimSpace(strings.TrimSuffix(msg, "Choose a different action."))
-	msg = strings.TrimSpace(strings.TrimSuffix(msg, "."))
-	msg = toolFailureThinkingDetail(msg)
-
-	var step string
-
-	switch {
-	case name == "execute" || strings.HasPrefix(name, "execute → "):
-		step = "Execute failed"
-	case name == "" || name == "tool":
-		step = "Tool failed"
-	default:
-		step = thinkingStepTitle(name) + " failed"
-	}
-
-	if msg == "" {
-		return step, true
-	}
-
-	return step + "\n" + msg, true
-}
-
-// toolFailureThinkingDetail shortens a tool-failure chain for plan details.
-// MCP connect/list errors keep the server name so traces are not bare "EOF".
-func toolFailureThinkingDetail(msg string) string {
-	msg = strings.TrimSpace(msg)
-	if msg == "" {
-		return msg
-	}
-
-	if server, cause, ok := mcpFailureThinkingParts(msg); ok {
-		if cause == "" {
-			return strconv.Quote(server) + " errored"
-		}
-
-		return strconv.Quote(server) + " errored: " + strconv.Quote(cause)
-	}
-
-	// Prefer the deepest useful fragment for scanability.
-	if i := strings.LastIndex(msg, ": "); i >= 0 {
-		tail := strings.TrimSpace(msg[i+2:])
-		if tail != "" && len([]rune(tail)) <= 160 && !uselessErrorTail(tail) {
-			return tail
-		}
-	}
-
-	return msg
-}
-
-// mcpFailureThinkingParts extracts server + short cause from MCP connect/list chains.
-func mcpFailureThinkingParts(msg string) (server, cause string, ok bool) {
-	const marker = `connect mcp server "`
-
-	if _, after, found := strings.Cut(msg, marker); found {
-		name, rest, cutOK := strings.Cut(after, `"`)
-
-		name = strings.TrimSpace(name)
-		if cutOK && name != "" {
-			return name, shortenMCPFailureCause(strings.TrimSpace(strings.TrimPrefix(rest, ":"))), true
-		}
-	}
-
-	// list mcp tools: server memory: …
-	if _, after, found := strings.Cut(msg, "list mcp tools: "); found {
-		// Multiple servers are joined with "; "; keep the first note's server when present.
-		note, _, _ := strings.Cut(after, "; ")
-
-		note = strings.TrimSpace(note)
-		if name, rest, cutOK := strings.Cut(strings.TrimPrefix(note, "server "), ": "); cutOK {
-			name = strings.TrimSpace(name)
-			if name != "" && !strings.ContainsAny(name, " \t") {
-				if s2, c2, ok2 := mcpFailureThinkingParts(rest); ok2 {
-					return s2, c2, true
-				}
-
-				return name, shortenMCPFailureCause(rest), true
-			}
-		}
-	}
-
-	return "", "", false
-}
-
-func shortenMCPFailureCause(cause string) string {
-	cause = strings.TrimSpace(cause)
-	if cause == "" {
-		return cause
-	}
-
-	parts := strings.Split(cause, ": ")
-	if len(parts) >= 2 {
-		tail := strings.TrimSpace(parts[len(parts)-1])
-
-		prev := strings.TrimSpace(parts[len(parts)-2])
-		if uselessErrorTail(tail) && prev != "" {
-			joined := prev + ": " + tail
-			if len([]rune(joined)) <= 160 {
-				return joined
-			}
-		}
-
-		if tail != "" && len([]rune(tail)) <= 160 && !uselessErrorTail(tail) {
-			return tail
-		}
-	}
-
-	if len([]rune(cause)) <= 160 {
-		return cause
-	}
-
-	return string([]rune(cause)[:157]) + "..."
-}
-
-func uselessErrorTail(s string) bool {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "", "eof", "error", "failed", "true", "false":
-		return true
-	default:
-		return false
-	}
-}
-
-func rocketcodeThinkingText(item rocketcode.ChatResponse) string {
-	if item.Tool != nil {
-		return formatToolDiagnostic(item.Tool)
-	}
-
-	if item.Subagent != nil {
-		parts, text, ok := subagentBreadcrumb(item.Subagent)
-		if !ok {
-			return ""
-		}
-
-		if len(parts) == 0 {
-			return text
-		}
-
-		if text == "" {
-			return strings.Join(parts, rocketcodeBreadcrumbSeparator)
-		}
-
-		return strings.Join(parts, rocketcodeBreadcrumbSeparator) + ": " + text
-	}
-
-	return strings.TrimSpace(item.Text)
-}
-
-// formatToolCallDetails returns only argument/action detail text (never a title).
-func formatToolCallDetails(diagnostic *rocketcode.ToolDiagnostic) string {
-	detail := ""
-
-	for _, raw := range []json.RawMessage{diagnostic.Action, diagnostic.Arguments} {
-		if len(raw) == 0 || detail != "" {
-			continue
-		}
-
-		var args map[string]any
-		if err := json.Unmarshal(raw, &args); err != nil {
-			detail = strings.TrimSpace(string(raw))
-
-			continue
-		}
-
-		for _, key := range []string{"description", "command", "question", "query", "url", "filePath", "pattern", "name", "subagent_type"} {
-			if text, ok := args[key].(string); ok && strings.TrimSpace(text) != "" {
-				detail = strings.TrimSpace(text)
-
-				break
-			}
-		}
-
-		if detail != "" {
-			continue
-		}
-
-		if queries, ok := args["queries"].([]any); ok {
-			var parts []string
-
-			for _, query := range queries {
-				text, ok := query.(string)
-				if !ok || strings.TrimSpace(text) == "" {
-					continue
-				}
-
-				parts = append(parts, strings.TrimSpace(text))
-			}
-
-			detail = strings.Join(parts, ", ")
-		}
-	}
-
-	return detail
-}
-
-func subagentBreadcrumb(diagnostic *rocketcode.SubagentDiagnostic) (parts []string, text string, ok bool) {
-	if diagnostic.Total > 0 {
-		parts = append(parts, fmt.Sprintf("subagent(%d/%d)", diagnostic.Index, diagnostic.Total))
-	}
-
-	label := visibleSubagentLabel(diagnostic.Label)
-
-	labelBefore := strings.HasPrefix(label, "guardrail(") || label == "auto-approver"
-	if labelBefore {
-		parts = append(parts, label)
-	}
-
-	if name := strings.TrimSpace(diagnostic.Name); name != "" {
-		parts = append(parts, name)
-	}
-
-	if label != "" && !labelBefore {
-		parts = append(parts, label)
-	}
-
-	text = strings.TrimSpace(diagnostic.Text)
-	switch {
-	case diagnostic.Tool != nil:
-		toolText := formatToolDiagnostic(diagnostic.Tool)
-		if toolText == "" {
-			return nil, "", false
-		}
-
-		text = toolText
-	case diagnostic.Provider != nil:
-		if text == "" {
-			return nil, "", false
-		}
-	}
-
-	if diagnostic.Subagent != nil {
-		nestedParts, nestedText, ok := subagentBreadcrumb(diagnostic.Subagent)
-		if !ok {
-			return nil, "", false
-		}
-
-		parts = append(parts, nestedParts...)
-
-		if nestedText != "" {
-			text = nestedText
-		}
-	}
-
-	return parts, text, true
-}
-
-func visibleSubagentLabel(label string) string {
-	switch strings.TrimSpace(label) {
-	case "reasoning summary":
-		return "reasoning"
-	case "assistant commentary":
-		return "commentary"
-	case "assistant message":
-		return "result"
-	case "assistant tool":
-		return "tool"
-	case "delegation":
-		return ""
-	default:
-		return strings.TrimSpace(label)
-	}
 }
 
 func providerLogAttrs(req *http.Request, resp *http.Response, status int, duration time.Duration, err error) []any {
@@ -2171,7 +1816,7 @@ func (b *Bridge) rocketcodeConfig(shellTempDir string, shellEnv, sourceMetadata 
 
 	tools = append(tools, customTools...)
 
-	return rocketcode.Config{Model: "", AutoApproverModel: b.runtime.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(b.runtime), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, ChildSessions: childSessions{store: b.config.SessionService, conversationID: b.config.ConversationID}, CheckpointSink: &activeTurnCheckpointSink{store: b.config.SessionService, conversationID: b.config.ConversationID, sourceMetadata: sourceMetadata}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(b.runtime.MCPServers), MCPWorkspace: b.runtime.Workspace}
+	return rocketcode.Config{Model: "", AutoApproverModel: b.runtime.AutoApproverModel, ReasoningEffort: "", ShellTempDir: shellTempDir, SpillDir: rocketcodeSpillDir(b.runtime), Diagnostics: true, ExperimentalStrongerSkills: true, ExpandPromptShellCommands: rocketcode.PromptShellCommandExpansion{PrimaryPrompts: true, SubagentPrompts: true, SkillPrompts: true, InputPrompts: false}, CompactThreshold: 0, CompactionSteering: "", ParallelToolCalls: 16, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: b.runtime.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: b.runtime.Instrumentation.HideInputs, HideOutputs: b.runtime.Instrumentation.HideOutputs}}, ChildSessions: childSessions{store: b.config.SessionService, conversationID: b.config.ConversationID}, CheckpointSink: &activeTurnCheckpointSink{bridge: b, store: b.config.SessionService, conversationID: b.config.ConversationID, sourceMetadata: sourceMetadata}, CustomTools: tools, ShellEnv: shellEnv, ShellCommand: rocketcode.DefaultShellCommand, MCPServers: toMCPClientServers(b.runtime.MCPServers), MCPWorkspace: b.runtime.Workspace}
 }
 
 func toMCPClientServers(servers map[string]config.MCPServerConfig) map[string]mcpclient.ServerConfig {
@@ -2787,9 +2432,8 @@ func (b *Bridge) armScheduledMessage(id string, message *protocol.ScheduledMessa
 	})
 }
 
-func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text, thinking string, complete bool) *protocol.OutboundMessage {
+func (b *Bridge) newOutboundMessage(msg *protocol.InboundMessage, turnID, text string, complete bool) *protocol.OutboundMessage {
 	outbound := protocol.NewOutboundMessage(b.config.ConversationID, text)
-	outbound.ProgressText = thinking
 	outbound.ConversationID = b.config.ConversationID
 	outbound.SourceConversationID = b.config.ConversationID
 

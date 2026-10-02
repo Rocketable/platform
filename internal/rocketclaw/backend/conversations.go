@@ -379,7 +379,7 @@ func (b *Bridge) drainSteers(ctx context.Context, phase rocketcode.TurnPhase) []
 		header, _, _ := strings.Cut(prompt, "\n\n")
 		b.publishConsumed(ctx, request.inbound, header)
 		directSkill := inboundDirectSkill(request.inbound)
-		inputs = append(inputs, rocketcode.PromptInput{Text: prompt, Header: header, Attachments: attachmentsFromInbound(request.inbound.Attachments), DirectSkill: directSkill})
+		inputs = append(inputs, rocketcode.PromptInput{ID: request.inbound.Metadata["web_message_id"], Text: prompt, Header: header, Attachments: attachmentsFromInbound(request.inbound.Attachments), DirectSkill: directSkill})
 	}
 
 	return inputs

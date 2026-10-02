@@ -32,148 +32,144 @@ type RawRunProgress struct {
 	TextChannel     string
 }
 
-func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logger) (workflow.AgentRunFunc, func() error, error) {
+type workflowAgentRunner struct {
+	cfg           *config.Config
+	agent, parent string
+	root          *os.Root
+	agents        rocketcode.Agents
+	skills        rocketcode.Skills
+	resolver      *modelResolver
+}
+
+func newWorkflowAgentRunner(cfg *config.Config, agent string, logger *slog.Logger) (*workflowAgentRunner, error) {
 	root, agents, skills, resolver, err := prepareRocketCode(cfg, agent, logger, toolModeWorkflow)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	parent := filepath.ToSlash(filepath.Join(cfg.RuntimeDirName(), ".rocketcode"))
 	if err := root.MkdirAll(parent, 0o755); err != nil {
 		_ = root.Close()
-		return nil, nil, fmt.Errorf("create workflow shell temp parent dir: %w", err)
+		return nil, fmt.Errorf("create workflow shell temp parent dir: %w", err)
 	}
 
-	run := func(ctx context.Context, request workflow.AgentRequest, thinkingProgress workflow.AgentThinkingFunc) (result json.RawMessage, err error) {
-		callAgents := rocketcode.Agents{Items: maps.Clone(agents.Items)}
+	return &workflowAgentRunner{cfg: cfg, agent: agent, parent: parent, root: root, agents: agents, skills: skills, resolver: resolver}, nil
+}
 
-		active := callAgents.Items[agent]
-		if request.Worker.Name != "" {
-			active.Prompt = request.Worker.Instructions
+func (r *workflowAgentRunner) Close() error {
+	if err := r.root.Close(); err != nil {
+		return fmt.Errorf("close workflow workspace root: %w", err)
+	}
+
+	return nil
+}
+
+func (r *workflowAgentRunner) Run(ctx context.Context, request *workflow.AgentRequest) (result json.RawMessage, err error) {
+	callAgents := rocketcode.Agents{Items: maps.Clone(r.agents.Items)}
+
+	active := callAgents.Items[r.agent]
+	if request.Worker.Name != "" {
+		active.Prompt = request.Worker.Instructions
+	}
+
+	if request.Worker.Model != "" {
+		model, ok := r.cfg.Models[request.Worker.Model]
+		if !ok {
+			return nil, fmt.Errorf("workflow worker model %q is not configured", request.Worker.Model)
 		}
 
-		if request.Worker.Model != "" {
-			model, ok := cfg.Models[request.Worker.Model]
-			if !ok {
-				return nil, fmt.Errorf("workflow worker model %q is not configured", request.Worker.Model)
-			}
-
-			active.Model, err = cfg.RenderAgentModel(model)
-			if err != nil {
-				return nil, fmt.Errorf("render workflow worker model %q: %w", request.Worker.Model, err)
-			}
-		}
-
-		callAgents.Items[agent] = active
-
-		shellTempRel := filepath.ToSlash(filepath.Join(parent, "workflow-"+rand.Text()))
-		if err := root.Mkdir(shellTempRel, 0o700); err != nil {
-			return nil, fmt.Errorf("create workflow shell temp dir: %w", err)
-		}
-		defer func() {
-			if errRemove := root.RemoveAll(shellTempRel); errRemove != nil {
-				err = errors.Join(err, fmt.Errorf("remove workflow shell temp dir: %w", errRemove))
-			}
-		}()
-
-		runtimeConfig := rocketcode.Config{AutoApproverModel: cfg.AutoApproverModel, ShellTempDir: filepath.Join(cfg.Workspace, filepath.FromSlash(shellTempRel)), SpillDir: rocketcodeSpillDir(cfg), Diagnostics: true, ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: cfg.Instrumentation.HideInputs, HideOutputs: cfg.Instrumentation.HideOutputs}}, ChildSessions: rocketcode.InertChildSessions{}, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand}
-
-		runtime, err := rocketcode.NewWithModelResolver(resolver, &runtimeConfig, root, callAgents, skills, agent, io.Discard)
+		active.Model, err = r.cfg.RenderAgentModel(model)
 		if err != nil {
-			return nil, fmt.Errorf("prepare workflow rocketcode run: %w", err)
+			return nil, fmt.Errorf("render workflow worker model %q: %w", request.Worker.Model, err)
 		}
-
-		tools := slices.Clone(request.Worker.Tools)
-		if tools == nil {
-			tools = slices.Collect(maps.Keys(runtime.Tools))
-		}
-
-		// Workflows call agents; agents use execute for FS/shell. Keep execute.
-		// Strip task and any direct host tools if a caller allowlist still names them.
-		tools = slices.DeleteFunc(tools, func(name string) bool {
-			return name == "task" || rocketcode.CodeModeOnlyHostTool(name)
-		})
-
-		if _, available := runtime.Tools["find_skills"]; available && slices.Contains(tools, "skill") && !slices.Contains(tools, "find_skills") {
-			tools = append(tools, "find_skills")
-		}
-
-		if err := runtime.RestrictTools(tools); err != nil {
-			return nil, fmt.Errorf("restrict workflow worker tools: %w", err)
-		}
-
-		if request.Schema != nil {
-			schema := maps.Clone(request.Schema)
-			if schema["type"] == "object" {
-				schema["additionalProperties"] = false
-			}
-
-			runtime.ResponseFormat.OfJSONSchema = &responses.ResponseFormatTextJSONSchemaConfigParam{Name: "workflow_response", Schema: schema}
-		}
-
-		memory := new(memoryStore)
-		input := make(chan rocketcode.PromptInput, 1)
-
-		output := make(chan rocketcode.ChatResponse, 128)
-		input <- rocketcode.PromptInput{Role: rocketcode.PromptInputRoleUser, Text: request.Prompt, Responses: output}
-
-		close(input)
-
-		runCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
-
-		var group errgroup.Group
-		group.Go(func() error { return runtime.Loop(runCtx, input, memory.in(), memory.out, make(chan os.Signal, 1)) })
-
-		var errProgress error
-
-		last := ""
-
-		for item := range output {
-			if errProgress != nil {
-				continue
-			}
-
-			switch item.Kind {
-			case rocketcode.ChatResponseAssistantCommentary, rocketcode.ChatResponseAssistantTool, rocketcode.ChatResponseReasoningSummary:
-				if thinking := rocketcodeThinkingText(item); thinking != "" {
-					if err := thinkingProgress(runCtx, thinking); err != nil {
-						errProgress = fmt.Errorf("publish workflow agent thinking: %w", err)
-
-						cancel()
-					}
-				}
-			case rocketcode.ChatResponseAssistantMessage:
-				if request.Schema != nil {
-					last = item.Text
-				} else {
-					last = appendText(last, item.Text)
-				}
-			}
-		}
-
-		errRun := group.Wait()
-
-		if errProgress != nil {
-			return nil, errProgress
-		}
-
-		if errRun != nil {
-			return nil, fmt.Errorf("run workflow rocketcode turn: %w", errRun)
-		}
-
-		if request.Schema == nil {
-			return json.Marshal(last)
-		}
-
-		if !json.Valid([]byte(last)) {
-			return nil, errors.New("workflow worker returned invalid JSON")
-		}
-
-		return json.RawMessage(last), nil
 	}
 
-	return run, root.Close, nil
+	callAgents.Items[r.agent] = active
+
+	shellTempRel := filepath.ToSlash(filepath.Join(r.parent, "workflow-"+rand.Text()))
+	if err := r.root.Mkdir(shellTempRel, 0o700); err != nil {
+		return nil, fmt.Errorf("create workflow shell temp dir: %w", err)
+	}
+	defer func() {
+		if errRemove := r.root.RemoveAll(shellTempRel); errRemove != nil {
+			err = errors.Join(err, fmt.Errorf("remove workflow shell temp dir: %w", errRemove))
+		}
+	}()
+
+	runtimeConfig := rocketcode.Config{AutoApproverModel: r.cfg.AutoApproverModel, ShellTempDir: filepath.Join(r.cfg.Workspace, filepath.FromSlash(shellTempRel)), SpillDir: rocketcodeSpillDir(r.cfg), ParallelToolCalls: 16, ExperimentalStrongerSkills: true, AutoApprovePermissions: true, Observability: rocketcode.ObservabilityConfig{Enabled: r.cfg.Instrumentation.Enabled, Tracer: otel.Tracer("rocketcode"), TraceConfig: instrumentation.TraceConfig{HideInputs: r.cfg.Instrumentation.HideInputs, HideOutputs: r.cfg.Instrumentation.HideOutputs}}, ChildSessions: rocketcode.InertChildSessions{}, CheckpointSink: rocketcode.InertCheckpointSink{}, ShellCommand: rocketcode.DefaultShellCommand}
+
+	runtime, err := rocketcode.NewWithModelResolver(r.resolver, &runtimeConfig, r.root, callAgents, r.skills, r.agent, io.Discard)
+	if err != nil {
+		return nil, fmt.Errorf("prepare workflow rocketcode run: %w", err)
+	}
+
+	tools := slices.Clone(request.Worker.Tools)
+	if tools == nil {
+		tools = slices.Collect(maps.Keys(runtime.Tools))
+	}
+
+	// Workflows call agents; agents use execute for FS/shell. Keep execute.
+	// Strip task and any direct host tools if a caller allowlist still names them.
+	tools = slices.DeleteFunc(tools, func(name string) bool {
+		return name == "task" || rocketcode.CodeModeOnlyHostTool(name)
+	})
+
+	if _, available := runtime.Tools["find_skills"]; available && slices.Contains(tools, "skill") && !slices.Contains(tools, "find_skills") {
+		tools = append(tools, "find_skills")
+	}
+
+	if err := runtime.RestrictTools(tools); err != nil {
+		return nil, fmt.Errorf("restrict workflow worker tools: %w", err)
+	}
+
+	if request.Schema != nil {
+		schema := maps.Clone(request.Schema)
+		if schema["type"] == "object" {
+			schema["additionalProperties"] = false
+		}
+
+		runtime.ResponseFormat.OfJSONSchema = &responses.ResponseFormatTextJSONSchemaConfigParam{Name: "workflow_response", Schema: schema}
+	}
+
+	memory := new(memoryStore)
+	input := make(chan rocketcode.PromptInput, 1)
+
+	output := make(chan rocketcode.ChatResponse, 128)
+	input <- rocketcode.PromptInput{Role: rocketcode.PromptInputRoleUser, Text: request.Prompt, Responses: output}
+
+	close(input)
+
+	var group errgroup.Group
+	group.Go(func() error { return runtime.Loop(ctx, input, memory.in(), memory.out, make(chan os.Signal, 1)) })
+
+	last := ""
+
+	for item := range output {
+		if item.Kind == rocketcode.ChatResponseAssistantMessage {
+			if request.Schema != nil {
+				last = item.Text
+			} else {
+				last = appendText(last, item.Text)
+			}
+		}
+	}
+
+	errRun := group.Wait()
+	if errRun != nil {
+		return nil, fmt.Errorf("run workflow rocketcode turn: %w", errRun)
+	}
+
+	if request.Schema == nil {
+		result, _ = json.Marshal(last) // Encoding a string cannot fail.
+
+		return result, nil
+	}
+
+	if !json.Valid([]byte(last)) {
+		return nil, errors.New("workflow worker returned invalid JSON")
+	}
+
+	return json.RawMessage(last), nil
 }
 
 func prepareRocketCode(cfg *config.Config, agent string, logger *slog.Logger, mode toolMode) (*os.Root, rocketcode.Agents, rocketcode.Skills, *modelResolver, error) {

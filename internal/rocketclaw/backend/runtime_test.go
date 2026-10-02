@@ -1144,7 +1144,7 @@ func TestRuntimeHeldQueueManualRelease(t *testing.T) {
 	require.Equal(t, held.Principal, request.inbound.Metadata[protocol.InboundPrincipalMetadataKey])
 	require.Equal(t, protocol.SourceWeb, request.inbound.Source)
 	require.Equal(t, conversationID, request.inbound.ConversationID)
-	outbound := bridge.newOutboundMessage(request.inbound, "turn", "reply", "", true)
+	outbound := bridge.newOutboundMessage(request.inbound, "turn", "reply", true)
 	require.Equal(t, conversationID, outbound.ConversationID)
 	require.Nil(t, outbound.SlackReply)
 	promoted, err = rt.PromoteQueueItem(t.Context(), conversationID, held.ID)

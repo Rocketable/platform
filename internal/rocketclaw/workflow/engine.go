@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 
 	"github.com/Rocketable/platform/internal/rocketclaw/protocol"
@@ -41,18 +40,10 @@ type AgentRequest struct {
 	Schema map[string]any
 }
 
-// AgentThinkingFunc receives serialized observable activity from one isolated agent call.
-// Implementations must not invoke it concurrently or after the agent run returns.
-type AgentThinkingFunc func(context.Context, string) error
-
-// AgentRunFunc runs one isolated agent call.
-type AgentRunFunc func(context.Context, AgentRequest, AgentThinkingFunc) (json.RawMessage, error)
-
-// ProgressFunc receives serialized workflow progress updates and is never invoked concurrently.
-type ProgressFunc func(context.Context, protocol.PhaseUpdate) error
-
-// AgentProgressFunc receives serialized workflow agent activity updates and is never invoked concurrently.
-type AgentProgressFunc func(context.Context, protocol.AgentUpdate) error
+// AgentRunner runs one isolated agent call.
+type AgentRunner interface {
+	Run(context.Context, *AgentRequest) (json.RawMessage, error)
+}
 
 // Result is the rendered workflow result.
 type Result struct {
@@ -70,12 +61,10 @@ func (*workerValue) Truth() starlark.Bool  { return true }
 func (*workerValue) Hash() (uint32, error) { return 0, errors.New("worker is unhashable") }
 
 type engine struct {
-	agent         AgentRunFunc
-	progress      ProgressFunc
-	agentProgress AgentProgressFunc
-	cancel        context.CancelCauseFunc
-	runID         string
-	strict        bool
+	agent  AgentRunner
+	cancel context.CancelCauseFunc
+	runID  string
+	strict bool
 
 	mu                sync.Mutex
 	phases            map[string]*protocol.PhaseUpdate
@@ -86,28 +75,21 @@ type engine struct {
 }
 
 // Run executes a compiled workflow in the foreground.
-func Run(ctx context.Context, definition *Definition, request RunRequest, agent AgentRunFunc, progress ProgressFunc, agentProgress AgentProgressFunc) (result Result, err error) {
+func Run(ctx context.Context, definition *Definition, request RunRequest, agent AgentRunner) (result Result, err error) {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
-	e := &engine{agent: agent, progress: progress, agentProgress: agentProgress, cancel: cancel, runID: request.RunID, phases: make(map[string]*protocol.PhaseUpdate), phaseSequence: len(definition.Phases), strict: len(definition.Phases) > 0, active: make(map[*starlark.Thread]uint64), remaining: 10_000_000}
+	e := &engine{agent: agent, cancel: cancel, runID: request.RunID, phases: make(map[string]*protocol.PhaseUpdate), phaseSequence: len(definition.Phases), strict: len(definition.Phases) > 0, active: make(map[*starlark.Thread]uint64), remaining: 10_000_000}
 	defer func() {
-		err = e.finishPhase(context.WithoutCancel(ctx), "run", err)
+		e.finishPhase("run", err)
 
 		// Fan-out callbacks have joined before Run returns, so finalization owns phase state.
-		var errProgress error
-
 		for _, name := range definition.Phases {
 			state := e.phases[name]
 			if state.Status == protocol.PhasePending {
 				state.Status = protocol.PhaseSkipped
-				if errPhase := e.progress(context.WithoutCancel(ctx), *state); errProgress == nil {
-					errProgress = errPhase
-				}
 			}
 		}
-
-		err = errors.Join(err, errProgress)
 
 		result.Phases = make([]protocol.PhaseUpdate, 0, len(e.phases))
 		for _, state := range e.phases {
@@ -119,12 +101,6 @@ func Run(ctx context.Context, definition *Definition, request RunRequest, agent 
 
 	for i, name := range definition.Phases {
 		e.phases[name] = &protocol.PhaseUpdate{PhaseID: fmt.Sprintf("%s/phase/%06d/%s", request.RunID, i, name), Name: name, Status: protocol.PhasePending}
-	}
-
-	for _, name := range definition.Phases {
-		if err := progress(ctx, *e.phases[name]); err != nil {
-			return Result{}, err
-		}
 	}
 
 	thread, stop := e.thread(ctx, "workflow "+definition.Name, "", false)
@@ -300,20 +276,18 @@ func (e *engine) builtins() starlark.StringDict {
 		}
 
 		state.Status = protocol.PhaseInProgress
-		ctx := thread.Local(localContext).(context.Context)
-		errProgress := e.progress(ctx, *state)
 		e.mu.Unlock()
-
-		if errProgress != nil {
-			e.cancel(errProgress)
-			return nil, e.finishPhase(context.WithoutCancel(ctx), name, errProgress)
-		}
 
 		thread.SetLocal(localPhase, name)
 		value, errCall := starlark.Call(thread, fn, nil, nil)
 		thread.SetLocal(localPhase, "")
+		e.finishPhase(name, errCall)
 
-		return value, e.finishPhase(context.WithoutCancel(ctx), name, errCall)
+		if errCall != nil {
+			return value, fmt.Errorf("call workflow phase %q: %w", name, errCall)
+		}
+
+		return value, nil
 	}
 
 	var fanout func(*starlark.Thread, []starlark.Value, func(*starlark.Thread, starlark.Value) (starlark.Value, error)) (starlark.Value, error)
@@ -469,8 +443,6 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 
 		e.mu.Lock()
 
-		callSequence := e.agents
-
 		e.agents++
 		if e.agents > 1_000 {
 			e.mu.Unlock()
@@ -511,34 +483,16 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 		}
 
 		ctx := thread.Local(localContext).(context.Context)
-		if err := e.phaseCount(ctx, phase, 1, 0, 0); err != nil {
+
+		if err := e.phaseCount(phase, 1, 1, 0); err != nil {
 			return nil, err
 		}
 
-		if err := e.phaseCount(ctx, phase, 0, 1, 0); err != nil {
-			return nil, err
-		}
-
-		callLabel := strings.TrimSpace(label)
-		if callLabel == "" {
-			callLabel = strings.TrimSpace(request.Worker.Name)
-		}
-
-		if callLabel == "" {
-			callLabel = fmt.Sprintf("%s call %d", phase, callSequence+1)
-		}
-
-		e.mu.Lock()
-		phaseID := e.phases[phase].PhaseID
-		e.mu.Unlock()
-
-		raw, errAgent := e.agent(ctx, request, func(activityCtx context.Context, activity string) error {
-			return e.agentActivity(activityCtx, protocol.AgentUpdate{PhaseID: phaseID, Label: callLabel, Activity: activity})
-		})
+		raw, errAgent := e.agent.Run(ctx, &request)
 		if errAgent != nil {
 			e.cancel(errAgent)
 
-			return nil, errAgent
+			return nil, fmt.Errorf("run workflow agent: %w", errAgent)
 		}
 
 		var instance any
@@ -568,7 +522,7 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 			return nil, errResult
 		}
 
-		if err := e.phaseCount(ctx, phase, 0, -1, 1); err != nil {
+		if err := e.phaseCount(phase, 0, -1, 1); err != nil {
 			return nil, err
 		}
 
@@ -581,19 +535,7 @@ func (e *engine) agentBuiltin() *starlark.Builtin {
 	})
 }
 
-func (e *engine) agentActivity(ctx context.Context, update protocol.AgentUpdate) error {
-	e.mu.Lock()
-	err := e.agentProgress(ctx, update)
-	e.mu.Unlock()
-
-	if err != nil {
-		e.cancel(err)
-	}
-
-	return err
-}
-
-func (e *engine) phaseCount(ctx context.Context, name string, scheduled, running, complete int) error {
+func (e *engine) phaseCount(name string, scheduled, running, complete int) error {
 	e.mu.Lock()
 
 	state := e.phases[name]
@@ -615,23 +557,18 @@ func (e *engine) phaseCount(ctx context.Context, name string, scheduled, running
 	state.Scheduled += scheduled
 	state.Running += running
 	state.Complete += complete
-	err := e.progress(ctx, *state)
 	e.mu.Unlock()
 
-	if err != nil {
-		e.cancel(err)
-	}
-
-	return err
+	return nil
 }
 
-func (e *engine) finishPhase(ctx context.Context, name string, errRun error) error {
+func (e *engine) finishPhase(name string, errRun error) {
 	e.mu.Lock()
 
 	state := e.phases[name]
 	if state == nil || state.Status != protocol.PhaseInProgress {
 		e.mu.Unlock()
-		return errRun
+		return
 	}
 
 	state.Running = 0
@@ -641,14 +578,7 @@ func (e *engine) finishPhase(ctx context.Context, name string, errRun error) err
 		state.Status = protocol.PhaseError
 	}
 
-	errProgress := e.progress(ctx, *state)
 	e.mu.Unlock()
-
-	if errProgress != nil {
-		e.cancel(errProgress)
-	}
-
-	return errors.Join(errRun, errProgress)
 }
 
 func (e *engine) encode(thread *starlark.Thread, value starlark.Value) ([]byte, error) {

@@ -17,7 +17,7 @@ Type dollar commands. Emoji in this table are reactions RocketClaw listens to, o
 | `⏳` |  | Slack `:hourglass_flowing_sand:` | Slack | Steer waiting to inject. | Marks a mid-turn Slack Steer. Removed on injection after a tool batch or a no-tool answer. Multiple waiting steers inject together. 🛑 on that hourglass drops the steer and does not stop the turn. |
 | `⏫` |  | Slack reactions `:arrow_double_up:`, `:fast_up_button:`, `:black_up_pointing_double_triangle:` | Slack managed threads | Convert a queued envelope into a Slack Steer. | During an active turn only. Idle or non-envelope ⏫ is ignored. |
 | `✉️` | `$enqueue <message>` | Slack `:envelope:` | Slack managed threads | Stash a later turn. | During an active turn, stashes without placeholders. While idle, posts 📨 then starts that turn now. |
-| `📨` |  | Slack `:incoming_envelope:` | Slack | Enqueued message is starting. | Posted as the consume-card header before placeholders. |
+| `📨` |  | Slack `:incoming_envelope:` | Slack | Enqueued message is starting. | Posted as the consume-card header before the in-progress placeholder. |
 |  | `$queue` |  | Slack managed threads | Show pending steers, then later work. | Ephemeral jump index. Hide closes it; opening `$queue` again dismisses the previous card. Pending-steer rows jump to the hourglass then hide. A Slack `$enqueue` row jumps to the envelope then hides. Envelope 🛑 cancels that enqueue and does not stop the turn. Scheduled and External MCP rows list with no jump and cannot be cancelled from Slack. |
 | `📡` |  | Slack `:satellite_antenna:` | Slack | External MCP relay marker. | Added to Slack relay messages created from External MCP prompts. |
 
@@ -47,7 +47,7 @@ Slack shows that shortcut on every message. Choosing it opens a modal whose butt
 
 | Button | Applies to | Same as |
 | --- | --- | --- |
-| Interrupt Turn | thinking or answer placeholder | 🛑 on that placeholder |
+| Interrupt Turn | in-progress placeholder | 🛑 on that placeholder |
 | Cancel | waiting ⏳ steer or ✉️ envelope | 🛑 on that message |
 | Convert to Steer | ✉️ envelope during an active turn | ⏫ on that envelope |
 
@@ -85,7 +85,7 @@ In the Slack app's **Event Subscriptions**, subscribe to the bot events [`channe
 | `$goal checkScript:./scripts/check.sh ship the release` | Same as above; `checkScript:` values may attach directly after `:`. |
 | `$goal checkScript: "./scripts/check.sh --full" ship the release` | Uses a quoted simple command for the check script. |
 | `$goal checkScript:"./scripts/check.sh --full" ship the release` | Same as above with the quoted command attached directly after `:`. |
-| `$stop` | Stops the active managed-conversation turn. If an active goal is present, it becomes `stopped`. Reacting with 🛑 or ⏹️ on thinking does the same. |
+| `$stop` | Stops the active managed-conversation turn. If an active goal is present, it becomes `stopped`. Reacting with 🛑 or ⏹️ on the in-progress placeholder does the same. |
 | `✅` | Marker RocketClaw adds when a goal reaches `complete`. Humans generally do not send it as a command. |
 
 | Goal Parameter | Accepted Values | Meaning |
@@ -119,7 +119,7 @@ Fan-out is flat: nested `parallel` or `pipeline` calls are rejected. A run allow
 
 Prompt shell expansion is disabled for workflow worker instructions, input prompts, and loaded skill bodies, so syntax such as `` !`command` `` remains literal. This is intentional to preserve the workflow permission boundary.
 
-Return the human-visible value directly from `main`: strings render directly, other JSON-compatible values render as JSON, and only `None` or `""` is silent. Parallel workers share one checkout; assign disjoint file ownership and integrate shared files sequentially. Workflow progress uses Slack plan/task cards, but intermediate values do not enter managed history. `$stop` is terminal, the state store records no resumable workflow progress, and daemon restart requires reinvocation.
+Return the human-visible value directly from `main`: strings render directly, other JSON-compatible values render as JSON, and only `None` or `""` is silent. Parallel workers share one checkout; assign disjoint file ownership and integrate shared files sequentially. Slack shows one in-progress placeholder and the final result, without workflow progress cards. Intermediate values do not enter managed history. `$stop` is terminal, the state store records no resumable workflow progress, and daemon restart requires reinvocation.
 
 `workflow_button` belongs to Slack Workflow Builder. RocketClaw saved workflows do not use it.
 
@@ -180,7 +180,7 @@ RocketClaw injects these tools into RocketCode turns as **top-level tools and Co
 
 | Tool | Available In | Permission Default | What It Does |
 | --- | --- | --- | --- |
-| `rocketclaw_dynamic_workflow` | Persistent parent managed turns when at least one loaded workflow stem is `workflow`-allowed. Never on workflow workers, and not via the RocketClaw auto-allow list. | Gated by `permission.workflow.<stem>`. Not gated by `task`. Not RocketClaw auto-allowed. | Runs a saved Starlark workflow as a nested tool call inside the current turn, streams phase/agent progress into thinking, and returns the final workflow text as the tool result. Not a second managed turn; no human `$workflow` session summary entry. |
+| `rocketclaw_dynamic_workflow` | Persistent parent managed turns when at least one loaded workflow stem is `workflow`-allowed. Never on workflow workers, and not via the RocketClaw auto-allow list. | Gated by `permission.workflow.<stem>`. Not gated by `task`. Not RocketClaw auto-allowed. | Runs a saved Starlark workflow as a nested tool call inside the current turn and returns the final workflow text as the tool result. Slack does not stream phase/agent progress. Not a second managed turn; no human `$workflow` session summary entry. |
 | `rocketclaw_restart` | Persistent bridge turns and raw/cron runs. | Default-deny. Requires explicit per-agent `allow`; generated `main` agents include that allow. | Records the restart requester and cancels RocketClaw for supervisor restart after approved runtime config or overlay-list changes. |
 | `rocketclaw_schedule_message` | Persistent bridge turns and raw/cron runs. | Auto-allow unless explicitly denied. | Schedules a one-shot or recurring prompt in the current conversation. Recurring schedules persist until reset and do not replay missed intervals. |
 | `rocketclaw_reset_scheduled_messages` | Persistent bridge turns and raw/cron runs. | Treat as part of the schedule-message permission family. Deny `rocketclaw_schedule_message` to block schedule reset behavior. | Clears scheduled messages for the current conversation. |
@@ -197,7 +197,7 @@ For general `permission` syntax, action values, guardrails, and approval reviewe
 
 | Emoji | Reaction Name | Meaning |
 | --- | --- | --- |
-| `🛑` | `octagonal_sign` | Stop reaction on thinking, a waiting hourglass, or a queued envelope. |
+| `🛑` | `octagonal_sign` | Stop reaction on an in-progress placeholder, a waiting hourglass, or a queued envelope. |
 | `⏹️` | `stop_button` | Same as 🛑. |
 | `❗` | `exclamation` | Interruption or rejection marker. |
 | `✅` | `white_check_mark` | Completion marker. |

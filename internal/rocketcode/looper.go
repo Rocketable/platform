@@ -1,6 +1,7 @@
 package rocketcode
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -61,7 +62,7 @@ func (d SteerDrain) Drain(ctx context.Context, phase TurnPhase) []PromptInput {
 }
 
 type responsesAPI interface {
-	New(context.Context, *responses.ResponseNewParams, ...option.RequestOption) (*responses.Response, error)
+	New(context.Context, *responses.ResponseNewParams, responseObserver, ...option.RequestOption) (*responses.Response, error)
 	Compact(context.Context, *responses.ResponseCompactParams, ...option.RequestOption) (*responses.CompactedResponse, error)
 }
 
@@ -70,8 +71,26 @@ type responseServiceClient struct {
 	doer    *responsesWebsocketDoer
 }
 
-func (c responseServiceClient) New(ctx context.Context, params *responses.ResponseNewParams, opts ...option.RequestOption) (*responses.Response, error) {
-	resp, err := c.service.New(ctx, *params, append(slices.Clone(opts), option.WithMiddleware(c.doer.middleware))...)
+func (c responseServiceClient) New(ctx context.Context, params *responses.ResponseNewParams, observer responseObserver, opts ...option.RequestOption) (*responses.Response, error) {
+	var errLocal error
+
+	middleware := func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+		resp, err := c.doer.middleware(req, next, observer)
+		if _, ok := errors.AsType[progressPersistenceError](err); ok {
+			errLocal = err
+			// SDK v3.69.0 internal/requestconfig/requestconfig.go: shouldRetry
+			// honors this header before returning the original transport error.
+			resp = &http.Response{Header: http.Header{"X-Should-Retry": []string{"false"}}, Body: http.NoBody, Request: req}
+		}
+
+		return resp, err
+	}
+
+	resp, err := c.service.New(ctx, *params, append(slices.Clone(opts), option.WithMiddleware(middleware))...)
+	if errLocal != nil {
+		err = errLocal // SDK context cancellation must not erase a fatal local write error.
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("create response: %w", err)
 	}
@@ -80,7 +99,11 @@ func (c responseServiceClient) New(ctx context.Context, params *responses.Respon
 }
 
 func (c responseServiceClient) Compact(ctx context.Context, params *responses.ResponseCompactParams, opts ...option.RequestOption) (*responses.CompactedResponse, error) {
-	resp, err := c.service.Compact(ctx, *params, append(slices.Clone(opts), option.WithMiddleware(c.doer.middleware))...)
+	middleware := func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+		return c.doer.middleware(req, next, inertResponseObserver{})
+	}
+
+	resp, err := c.service.Compact(ctx, *params, append(slices.Clone(opts), option.WithMiddleware(middleware))...)
 	if err != nil {
 		return nil, fmt.Errorf("compact response: %w", err)
 	}
@@ -105,6 +128,8 @@ type toolCallMetadata struct {
 	callID        string
 	subagentIndex int
 	subagentTotal int
+	observations  *turnObservations
+	progress      *PublicProgress
 }
 
 // looper runs conversational turns against the configured model and tools.
@@ -134,6 +159,7 @@ type looper struct {
 	InPermissionReview     bool
 	Observability          ObservabilityConfig
 	CheckpointSink         CheckpointSink
+	observations           *turnObservations // Root-owned lifetime; workers receive the turn-local pointer.
 	SteerDrain             SteerDrain
 	expandInputPrompts     bool
 	promptExpansion        promptExpansionEnvironment
@@ -446,6 +472,7 @@ type SessionEntry struct {
 	Version           int                 `json:"version"`
 	Type              string              `json:"type"`
 	Timestamp         time.Time           `json:"timestamp"`
+	TurnID            string              `json:"turn_id,omitempty"`
 	ResponseID        string              `json:"response_id,omitempty"`
 	Model             string              `json:"model,omitempty"`
 	Agent             string              `json:"agent,omitempty"`
@@ -587,6 +614,7 @@ func (l *looper) Loop(
 	var (
 		history            []responses.ResponseInputItemUnionParam
 		historyAttribution []ReplayAttribution
+		recoveredTrace     []json.RawMessage
 	)
 
 	loaded := false
@@ -622,14 +650,29 @@ func (l *looper) Loop(
 
 			for i := range entries {
 				entry := &entries[i]
+				if entry.Type == "active_turn_recovery" {
+					recoveredTrace = slices.Clone(entry.OutputTrace)
+					stopRecoveredProgress(recoveredTrace)
+				}
+
 				historyAttribution = append(historyAttribution, entry.attributionRanges(offset)...)
 				offset += len(entry.ReplayInput)
 			}
 		}
 
-		turn, rendered, interrupted, err := l.runTurn(ctx, turnOutput, interrupts, history, historyAttribution, &line)
+		turn, rendered, interrupted, err := l.runTurn(ctx, turnOutput, interrupts, history, historyAttribution, &line, recoveredTrace)
+		recoveredTrace = nil
+		observations := l.observations
+
 		if err != nil {
-			if errDirectSkill, ok := errors.AsType[directSkillInputError](err); ok {
+			state := PublicProgressFailed
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				state = "" // Preserve shutdown recovery, but close this observation lifetime.
+			}
+
+			errClose := observations.close(context.WithoutCancel(ctx), state)
+			// Persistence failure takes precedence over a public preparation reply.
+			if errDirectSkill, ok := errors.AsType[directSkillInputError](cmp.Or(errClose, err)); ok {
 				emitChatResponse(turnOutput, ChatResponse{Kind: ChatResponseAssistantMessage, Text: errDirectSkill.Error()})
 				close(turnOutput)
 
@@ -638,25 +681,47 @@ func (l *looper) Loop(
 
 			close(turnOutput)
 
-			return fmt.Errorf("run turn: %w", err)
+			return fmt.Errorf("run turn: %w", errors.Join(err, errClose))
 		}
 
 		if interrupted {
+			errClose := observations.close(context.WithoutCancel(ctx), PublicProgressStopped)
 			close(turnOutput)
+
+			if errClose != nil {
+				return errClose
+			}
 
 			continue
 		}
 
-		if err := sessionOut(turn); err != nil {
-			close(turnOutput)
+		observations.mu.Lock()
+		observations.closed = true
+		turn.OutputTrace = slices.Clone(observations.trace)
 
-			return fmt.Errorf("append session turn: %w", err)
+		errSave := observations.err
+		if errSave == nil {
+			if errAppend := sessionOut(turn); errAppend != nil {
+				errSave = fmt.Errorf("append session turn: %w", errAppend)
+			} else if errClear := observations.sink.ClearCompletedTurn(ctx, turn.TurnID); errClear != nil {
+				errSave = fmt.Errorf("clear active turn checkpoint: %w", errClear)
+			}
 		}
 
-		if err := l.CheckpointSink.ClearCompletedTurn(ctx, activeTurnID(&turn)); err != nil {
+		if errSave != nil {
+			state := PublicProgressFailed
+			if errors.Is(errSave, context.Canceled) || errors.Is(errSave, context.DeadlineExceeded) {
+				state = ""
+			}
+
+			errSave = errors.Join(errSave, observations.sink.CloseActiveTurn(context.WithoutCancel(ctx), turn.TurnID, state))
+		}
+		observations.mu.Unlock()
+
+		if errSave != nil {
 			close(turnOutput)
 
-			return fmt.Errorf("clear active turn checkpoint: %w", err)
+			return errSave
 		}
 
 		items, err := ReplayInputToParams(turn.ReplayInput)
@@ -679,6 +744,19 @@ func (l *looper) Loop(
 	return nil
 }
 
+// stopRecoveredProgress closes interrupted public activity without altering replay.
+func stopRecoveredProgress(trace []json.RawMessage) {
+	for i, raw := range trace {
+		progress := PublicProgressFromTrace([]json.RawMessage{raw})
+		if len(progress) != 1 || !slices.Contains([]PublicProgressState{PublicProgressWorking, PublicProgressReview}, progress[0].State) {
+			continue
+		}
+
+		progress[0].State = PublicProgressStopped
+		trace[i], _ = json.Marshal(publicProgressTrace{Type: "rocketcode_public_progress", Progress: progress[0]})
+	}
+}
+
 func (l *looper) setPhase(phase TurnPhase) {
 	l.phaseMu.Lock()
 	if l.turnPhase != phase {
@@ -694,13 +772,14 @@ func (l *looper) runTurn(
 	baseHistory []responses.ResponseInputItemUnionParam,
 	baseAttribution []ReplayAttribution,
 	input *PromptInput,
+	recoveredTrace []json.RawMessage,
 ) (record SessionEntry, rendered []ChatResponse, interrupted bool, err error) {
 	var emptyRecord SessionEntry
 
-	turnItems, err := l.promptTurnItems(ctx, input)
-	if err != nil {
-		return emptyRecord, nil, false, directSkillInputError{message: err.Error()}
-	}
+	observations := &turnObservations{sink: l.CheckpointSink}
+	l.observations = observations
+
+	turnItems, errInput := l.promptTurnItems(ctx, input)
 
 	replayInput, err := ReplayInputFromParams(turnItems)
 	if err != nil {
@@ -715,15 +794,24 @@ func (l *looper) runTurn(
 		Agent:           l.agent.Name,
 		ReasoningEffort: new(string(l.ReasoningEffort)),
 		ReplayInput:     replayInput,
+		OutputTrace:     slices.Clone(recoveredTrace),
 	}
-	turnID := activeTurnID(&record)
+	record.TurnID = strconv.FormatInt(record.Timestamp.UnixNano(), 10)
 
-	l.beginTurnSpills(turnID)
+	l.beginTurnSpills(record.TurnID)
 	defer l.endTurnSpills()
 
 	checkpoint := l.activeTurnCheckpoint(&record, nil, nil)
-	if err := l.CheckpointSink.StartActiveTurn(ctx, &checkpoint); err != nil {
+	if err := observations.write(ctx, &checkpoint, checkpointStart); err != nil {
 		return emptyRecord, nil, false, fmt.Errorf("start active turn checkpoint: %w", err)
+	}
+
+	if errInput != nil {
+		if err := observations.observe(ctx, &PublicProgress{ID: "input-error", Kind: PublicProgressText, State: PublicProgressFailed, Text: errInput.Error(), Agent: record.Agent, Model: record.Model}); err != nil {
+			return emptyRecord, nil, false, err
+		}
+
+		return emptyRecord, nil, false, directSkillInputError{message: errInput.Error()}
 	}
 
 	markInterrupted := func() error {
@@ -736,7 +824,7 @@ func (l *looper) runTurn(
 
 		checkpoint.ReplayInput = recoveredReplayInput
 
-		return l.CheckpointSink.RecordRecoveredReplay(context.WithoutCancel(ctx), &checkpoint)
+		return observations.write(context.WithoutCancel(ctx), &checkpoint, checkpointRecovered)
 	}
 
 	turnCtx, cancel := context.WithCancelCause(ctx)
@@ -799,8 +887,10 @@ func (l *looper) runTurn(
 		attribution := append(slices.Clone(baseAttribution), record.attributionRanges(len(baseHistory))...)
 		attributionEnd := len(baseHistory) + len(turnItems)
 
-		resp, err := l.newProviderResponse(turnCtx, &params, output, func(recovered []responses.ResponseInputItemUnionParam, retained int) error {
-			// Retained items come from provider input, which omits local headers.
+		observer := &responseObservations{owner: observations, agent: record.Agent, model: record.Model}
+
+		resp, err := l.newProviderResponse(turnCtx, &params, observer, output, func(recovered []responses.ResponseInputItemUnionParam, retained int) error {
+			// Retained items come from provider input, which omits local metadata.
 			recovered = slices.Clone(recovered)
 			copy(recovered[len(recovered)-retained:], history[len(history)-retained:])
 			recovered = pruneHistoryBeforeLatestCompaction(recovered)
@@ -826,7 +916,7 @@ func (l *looper) runTurn(
 			turnItems = append([]responses.ResponseInputItemUnionParam(nil), recovered...)
 			checkpoint = l.activeTurnCheckpoint(&record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
 
-			return l.CheckpointSink.RecordProviderResponse(turnCtx, &checkpoint)
+			return observations.write(turnCtx, &checkpoint, checkpointProvider)
 		})
 		if err != nil {
 			interrupted := errors.Is(context.Cause(turnCtx), errTurnInterrupted)
@@ -854,7 +944,7 @@ func (l *looper) runTurn(
 		reviewContext := pruneHistoryBeforeLatestCompaction(append(append([]responses.ResponseInputItemUnionParam{}, baseHistory...), turnItems...))
 
 		checkpoint = l.activeTurnCheckpoint(&record, openFunctionCallCheckpoints(resp.Output), checkpoint.CompletedFunctionOutputs)
-		if err := l.CheckpointSink.RecordProviderResponse(turnCtx, &checkpoint); err != nil {
+		if err := observations.write(turnCtx, &checkpoint, checkpointProvider); err != nil {
 			return emptyRecord, nil, false, fmt.Errorf("record provider response checkpoint: %w", err)
 		}
 
@@ -872,7 +962,7 @@ func (l *looper) runTurn(
 				continue
 			}
 
-			injected, errSteers := l.appendSteers(turnCtx, &record, &turnItems, TurnPhaseFinalAnswer)
+			injected, errSteers := l.appendSteers(turnCtx, &record, &turnItems, &checkpoint, TurnPhaseFinalAnswer)
 			if errSteers != nil {
 				return emptyRecord, nil, false, errSteers
 			}
@@ -888,7 +978,7 @@ func (l *looper) runTurn(
 			return emptyRecord, nil, false, err
 		}
 
-		if _, err := l.appendSteers(turnCtx, &record, &turnItems, TurnPhaseToolLoop); err != nil {
+		if _, err := l.appendSteers(turnCtx, &record, &turnItems, &checkpoint, TurnPhaseToolLoop); err != nil {
 			return emptyRecord, nil, false, err
 		}
 	}
@@ -927,7 +1017,7 @@ func (l *looper) dispatchProviderTools(ctx context.Context, resp *responses.Resp
 	return false, false, nil, false, fmt.Errorf("dispatch tool calls: %w", err)
 }
 
-func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, phase TurnPhase) (bool, error) {
+func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, checkpoint *ActiveTurnCheckpoint, phase TurnPhase) (bool, error) {
 	inputs := l.SteerDrain.Drain(ctx, phase)
 	for _, input := range inputs {
 		if input.DirectSkill != nil {
@@ -951,11 +1041,14 @@ func (l *looper) appendSteers(ctx context.Context, record *SessionEntry, turnIte
 		*turnItems = append(*turnItems, steer)
 	}
 
-	return len(inputs) > 0, nil
-}
+	if len(inputs) > 0 {
+		*checkpoint = l.activeTurnCheckpoint(record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
+		if err := l.observations.write(ctx, checkpoint, checkpointProvider); err != nil {
+			return false, fmt.Errorf("record steer checkpoint: %w", err)
+		}
+	}
 
-func activeTurnID(record *SessionEntry) string {
-	return strconv.FormatInt(record.Timestamp.UnixNano(), 10)
+	return len(inputs) > 0, nil
 }
 
 func (l *looper) appendProviderReplay(record *SessionEntry, turnItems *[]responses.ResponseInputItemUnionParam, resp *responses.Response) error {
@@ -1015,7 +1108,7 @@ func (l *looper) appendToolOutputReplay(ctx context.Context, record *SessionEntr
 		})
 
 		*checkpoint = l.activeTurnCheckpoint(record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
-		if err := l.CheckpointSink.RecordCompletedToolOutput(ctx, checkpoint); err != nil {
+		if err := l.observations.write(ctx, checkpoint, checkpointTool); err != nil {
 			return fmt.Errorf("record completed tool output checkpoint: %w", err)
 		}
 	}
@@ -1033,7 +1126,7 @@ func (l *looper) appendToolOutputReplay(ctx context.Context, record *SessionEntr
 
 	if len(toolOutputs) > 0 {
 		*checkpoint = l.activeTurnCheckpoint(record, checkpoint.OpenFunctionCalls, checkpoint.CompletedFunctionOutputs)
-		if err := l.CheckpointSink.RecordCompletedToolOutput(ctx, checkpoint); err != nil {
+		if err := l.observations.write(ctx, checkpoint, checkpointTool); err != nil {
 			return fmt.Errorf("record completed tool replay checkpoint: %w", err)
 		}
 	}
@@ -1050,7 +1143,7 @@ func (l *looper) activeTurnCheckpoint(record *SessionEntry, openCalls []Function
 	}
 
 	return ActiveTurnCheckpoint{
-		TurnID:                   activeTurnID(record),
+		TurnID:                   record.TurnID,
 		Agent:                    l.agent.Name,
 		Model:                    l.Model,
 		DisplayModel:             l.DisplayModel,
@@ -1085,18 +1178,18 @@ func (l *looper) promptTurnItems(ctx context.Context, input *PromptInput) ([]res
 		input.Text = l.promptExpansion.expandShellCommands(ctx, input.Text)
 	}
 
-	turnItems := []responses.ResponseInputItemUnionParam{}
+	turnItems := []responses.ResponseInputItemUnionParam{promptInputMessage(input)}
 
 	if input.DirectSkill != nil {
 		directSkillItem, err := l.directSkillInput(ctx, input.DirectSkill)
 		if err != nil {
-			return nil, err
+			return turnItems, err
 		}
 
-		turnItems = append(turnItems, directSkillItem)
+		turnItems = slices.Insert(turnItems, 0, directSkillItem)
 	}
 
-	return append(turnItems, promptInputMessage(input)), nil
+	return turnItems, nil
 }
 
 func (l *looper) directSkillInput(ctx context.Context, input *PromptInputDirectSkill) (responses.ResponseInputItemUnionParam, error) {
@@ -1154,6 +1247,7 @@ func appendReplayInput(record *SessionEntry, item *responses.ResponseInputItemUn
 func (l *looper) newProviderResponse(
 	ctx context.Context,
 	params *responses.ResponseNewParams,
+	observer responseObserver,
 	output chan<- ChatResponse,
 	checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error,
 ) (resp *responses.Response, err error) {
@@ -1177,24 +1271,24 @@ func (l *looper) newProviderResponse(
 		span.span.End()
 	}()
 
-	if l.Client == nil {
-		return nil, fmt.Errorf("%s provider is required", provider)
-	}
-
-	return l.newResponseWithProviderRetry(ctx, params, output, checkpointCompacted)
+	return l.newResponseWithProviderRetry(ctx, params, observer, output, checkpointCompacted)
 }
 
-func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, error) {
+func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *responses.ResponseNewParams, observer responseObserver, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, error) {
 	attempt := 0
 	provider := l.ProviderOrigin.Provider
 
 	for {
 		var raw *http.Response
 
-		resp, err := l.Client.New(ctx, params, option.WithResponseInto(&raw))
+		resp, err := l.Client.New(ctx, params, observer, option.WithResponseInto(&raw))
 		if err != nil {
+			if _, ok := errors.AsType[progressPersistenceError](err); ok {
+				return nil, fmt.Errorf("observe provider response: %w", err)
+			}
+
 			if ctx.Err() == nil && isContextLengthExceeded(err) {
-				resp, err := l.newResponseAfterContextCompaction(ctx, params, err, output, checkpointCompacted)
+				resp, err := l.newResponseAfterContextCompaction(ctx, params, observer, err, output, checkpointCompacted)
 				if err != nil {
 					return nil, fmt.Errorf("new response: %w", err)
 				}
@@ -1268,7 +1362,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 		}
 
 		if isResponseContextLengthExceeded(resp) {
-			resp, err := l.newResponseAfterContextCompaction(ctx, params, err, output, checkpointCompacted)
+			resp, err := l.newResponseAfterContextCompaction(ctx, params, observer, err, output, checkpointCompacted)
 			if err != nil {
 				return nil, err
 			}
@@ -1303,7 +1397,7 @@ func (l *looper) newResponseWithProviderRetry(ctx context.Context, params *respo
 	}
 }
 
-func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *responses.ResponseNewParams, errOriginal error, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, error) {
+func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *responses.ResponseNewParams, observer responseObserver, errOriginal error, output chan<- ChatResponse, checkpointCompacted func([]responses.ResponseInputItemUnionParam, int) error) (*responses.Response, error) {
 	original := params.Input.OfInputItemList
 
 	blocks := compactionBlocks(original)
@@ -1344,8 +1438,12 @@ func (l *looper) newResponseAfterContextCompaction(ctx context.Context, params *
 
 		var raw *http.Response
 
-		resp, err := l.Client.New(ctx, &retryParams, option.WithResponseInto(&raw))
+		resp, err := l.Client.New(ctx, &retryParams, observer, option.WithResponseInto(&raw))
 		if err != nil {
+			if _, ok := errors.AsType[progressPersistenceError](err); ok {
+				return nil, fmt.Errorf("observe compacted provider response: %w", err)
+			}
+
 			errLast = err
 			if ctx.Err() == nil && isContextLengthExceeded(err) {
 				continue
@@ -1805,6 +1903,7 @@ func (l *looper) dispatchToolCalls(
 		callID        string
 		args          json.RawMessage
 		tool          looperTool
+		progress      PublicProgress
 		outputIndex   int
 		subagentIndex int
 		subagentTotal int
@@ -1812,6 +1911,7 @@ func (l *looper) dispatchToolCalls(
 
 	outputs := []dispatchedToolOutput{}
 	calls := []pendingToolCall{}
+	taskTotal := 0
 
 	for i := range resp.Output {
 		item := resp.Output[i]
@@ -1821,8 +1921,17 @@ func (l *looper) dispatchToolCalls(
 
 		args := json.RawMessage(item.Arguments.OfString)
 
+		progress := PublicProgress{ID: item.CallID, ParentID: l.observations.turnID + "/" + resp.ID, Kind: PublicProgressTool, State: PublicProgressReview, Agent: l.agent.Name, Model: l.ProviderOrigin.displayModel()}
+		if err := l.observations.observe(ctx, &progress); err != nil {
+			return nil, true, err
+		}
+
 		tool, ok := l.Tools[item.Name]
 		if !ok {
+			if err := l.observations.finishCall(ctx, &progress, PublicProgressFailed); err != nil {
+				return nil, true, err
+			}
+
 			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, "", args, toolCallMetadata{})
 			result := toolCallFailureResult(item.Name, errors.New("tool not found"))
 			recordSpanError(span, errors.New("tool not found"))
@@ -1837,6 +1946,10 @@ func (l *looper) dispatchToolCalls(
 		l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseCall, Name: item.Name, Arguments: args})
 
 		if doomLoop != nil && doomLoop.trapped(item.Name, args) {
+			if err := l.observations.finishCall(ctx, &progress, PublicProgressBlocked); err != nil {
+				return nil, true, err
+			}
+
 			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, args, toolCallMetadata{})
 			result := fmt.Sprintf("tool call rejected: repeated identical %q call detected. Review the previous tool output and choose a different action instead of retrying the same input.", item.Name)
 
@@ -1851,24 +1964,31 @@ func (l *looper) dispatchToolCalls(
 		}
 
 		decision, err := l.permissionDecision(item.Name, &tool, args)
-		if err != nil {
-			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, args, toolCallMetadata{})
-			result := toolCallFailureResult(item.Name, fmt.Errorf("check permission: %w", err))
-			recordSpanError(span, err)
-			span.span.SetAttributes(l.Observability.outputValue(result.Output), attribute.Bool("rocketcode.tool_denied", true), attribute.Bool("rocketcode.tool_failure", true))
-			span.span.End()
-			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result.Output})
-			outputs = append(outputs, dispatchedToolOutput{Name: item.Name, Param: toolCallOutput(item.CallID, result), Result: result, ReplayInput: nil})
+		errDenied := errors.New("tool permission denied")
 
-			continue
+		if err != nil {
+			decision.denied = true
+			decision.message = toolCallFailureResult(item.Name, fmt.Errorf("check permission: %w", err)).Output
+			errDenied = err
+		} else if !decision.denied && decision.review != nil {
+			decision.review.ReviewContext = slices.Clone(l.permissionReviewInput)
+			decision.review.CallID = item.CallID
+			reviewDecision := l.PermissionReviewer.reviewPermission(ctx, decision.review, output)
+			decision.denied = reviewDecision.Outcome != permissionReviewOutcomeAllow
+			decision.message = formatPermissionReviewDenied(reviewDecision)
+			errDenied = errors.New("automatic permission review denied tool call")
 		}
 
 		if decision.denied {
+			if err := l.observations.finishCall(ctx, &progress, PublicProgressBlocked); err != nil {
+				return nil, true, err
+			}
+
 			_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, args, toolCallMetadata{})
 			result := decision.message
 
-			recordSpanError(span, errors.New("tool permission denied"))
-			span.span.SetAttributes(l.Observability.outputValue(result), attribute.Bool("rocketcode.tool_denied", true), attribute.Bool("rocketcode.tool_failure", false))
+			recordSpanError(span, errDenied)
+			span.span.SetAttributes(l.Observability.outputValue(result), attribute.Bool("rocketcode.tool_denied", true), attribute.Bool("rocketcode.tool_failure", err != nil))
 			span.span.End()
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
 			toolResult := TextToolResult(result)
@@ -1877,27 +1997,11 @@ func (l *looper) dispatchToolCalls(
 			continue
 		}
 
-		if decision.review != nil {
-			decision.review.ReviewContext = slices.Clone(l.permissionReviewInput)
-			decision.review.CallID = item.CallID
-
-			reviewDecision := l.PermissionReviewer.reviewPermission(ctx, decision.review, output)
-			if reviewDecision.Outcome != permissionReviewOutcomeAllow {
-				_, span := l.Observability.startToolSpan(ctx, item.Name, item.CallID, tool.Permission, args, toolCallMetadata{})
-				result := formatPermissionReviewDenied(reviewDecision)
-
-				recordSpanError(span, errors.New("automatic permission review denied tool call"))
-				span.span.SetAttributes(l.Observability.outputValue(result), attribute.Bool("rocketcode.tool_denied", true), attribute.Bool("rocketcode.tool_failure", false))
-				span.span.End()
-				l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: item.Name, Result: result})
-				toolResult := TextToolResult(result)
-				outputs = append(outputs, dispatchedToolOutput{Name: item.Name, Param: toolCallOutput(item.CallID, toolResult), Result: toolResult, ReplayInput: nil})
-
-				continue
-			}
+		if item.Name == "task" {
+			taskTotal++
 		}
 
-		calls = append(calls, pendingToolCall{name: item.Name, callID: item.CallID, args: args, tool: tool, outputIndex: len(outputs), subagentIndex: 0, subagentTotal: 0})
+		calls = append(calls, pendingToolCall{name: item.Name, callID: item.CallID, args: args, tool: tool, progress: progress, outputIndex: len(outputs), subagentIndex: 0, subagentTotal: 0})
 
 		var outputItem dispatchedToolOutput
 
@@ -1906,14 +2010,6 @@ func (l *looper) dispatchToolCalls(
 
 	if len(outputs) == 0 {
 		return nil, false, nil
-	}
-
-	taskTotal := 0
-
-	for i := range calls {
-		if calls[i].name == "task" {
-			taskTotal++
-		}
 	}
 
 	taskIndex := 0
@@ -1943,9 +2039,18 @@ func (l *looper) dispatchToolCalls(
 				err         error
 			)
 
-			metadata := toolCallMetadata{callID: call.callID, subagentIndex: call.subagentIndex, subagentTotal: call.subagentTotal}
+			metadata := toolCallMetadata{callID: call.callID, subagentIndex: call.subagentIndex, subagentTotal: call.subagentTotal, observations: l.observations, progress: &call.progress}
+
 			callCtx, span := l.Observability.startToolSpan(groupCtx, call.name, call.callID, call.tool.Permission, call.args, metadata)
+			defer span.span.End()
+
 			callCtx = withToolCallContext(callCtx, l, output, call.callID)
+			progress := call.progress
+
+			progress.State = PublicProgressWorking
+			if err := l.observations.observe(groupCtx, &progress); err != nil {
+				return err
+			}
 
 			if call.tool.CallReplay != nil {
 				result, replayInput, err = call.tool.CallReplay(callCtx, call.args, output, metadata)
@@ -1953,18 +2058,31 @@ func (l *looper) dispatchToolCalls(
 				result, err = call.tool.Call(callCtx, call.args, output, metadata)
 			}
 
+			if _, ok := errors.AsType[progressPersistenceError](err); ok {
+				return err
+			}
+
+			state := PublicProgressCompleted
+			if err != nil {
+				state = PublicProgressFailed
+			}
+
+			if groupCtx.Err() != nil {
+				state = PublicProgressStopped
+			}
+
+			if err := l.observations.finishCall(context.WithoutCancel(groupCtx), &progress, state); err != nil {
+				return err
+			}
+
 			if err != nil {
 				recordSpanError(span, err)
 
-				if ctx.Err() != nil {
-					span.span.End()
-
+				if groupCtx.Err() != nil {
 					return fmt.Errorf("run tool %q: %w", call.name, err)
 				}
 
 				if l.InPermissionReview {
-					span.span.End()
-
 					return fmt.Errorf("run reviewer tool %q: %w", call.name, err)
 				}
 
@@ -1973,7 +2091,6 @@ func (l *looper) dispatchToolCalls(
 			}
 
 			span.span.SetAttributes(l.Observability.outputValue(attachmentOutputMessage(result)), attribute.Bool("rocketcode.tool_denied", false), attribute.Bool("rocketcode.tool_failure", err != nil))
-			span.span.End()
 
 			l.emitToolDiagnostic(output, &ToolDiagnostic{Phase: toolDiagnosticPhaseResult, Name: call.name, Result: attachmentOutputMessage(result)})
 			outputs[call.outputIndex] = dispatchedToolOutput{Name: call.name, Param: toolCallOutput(call.callID, result), Result: result, ReplayInput: replayInput}
@@ -2219,6 +2336,8 @@ func responseOutputToReplayInput(item *responses.ResponseOutputItemUnion) (respo
 			Role:    responses.EasyInputMessageRole(role),
 			Type:    "message",
 		}
+		assistant.SetExtraFields(map[string]any{"id": item.ID})
+
 		if item.Phase != "" {
 			assistant.Phase = responses.EasyInputMessagePhase(item.Phase)
 		}

@@ -478,7 +478,7 @@ func TestSidebarSessionsAutoSettleAndReopen(t *testing.T) {
 	ctx := t.Context()
 	cutoff := time.Date(2026, 1, 1, 0, 0, 0, 123456000, time.UTC)
 
-	for _, id := range []string{"older", "boundary", "recent", "running", "manual", "empty", "missing"} {
+	for _, id := range []string{"older", "boundary", "recent", "running", "failed", "stopped", "manual", "empty", "missing"} {
 		require.NoError(t, service.UpsertThread(id, ThreadState{Agent: "main"}))
 
 		if id == "empty" || id == "missing" {
@@ -504,18 +504,25 @@ func TestSidebarSessionsAutoSettleAndReopen(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, service.UpsertActiveTurn(ctx, &harness.ActiveTurnCheckpoint{TurnID: "active", ConversationKey: "running", Agent: "main", Model: "test"}, nil))
 
+	for _, terminal := range []protocol.Terminal{protocol.TerminalFailed, protocol.TerminalStopped} {
+		id := string(terminal)
+		require.NoError(t, service.UpsertActiveTurn(ctx, &harness.ActiveTurnCheckpoint{TurnID: id, ConversationKey: id, Agent: "main", Model: "test"}, nil))
+		require.NoError(t, service.SetActiveTurnTerminal(ctx, id, terminal))
+	}
+
 	got := make(map[string]bool)
 
 	for row, err := range service.SidebarSessions(ctx, cutoff) {
 		require.NoError(t, err)
 
 		got[row.Conversation.ID] = row.Conversation.Settled
+		require.Equal(t, row.Conversation.ID == "running", row.Running)
 	}
 
-	require.Equal(t, map[string]bool{"older": true, "boundary": true, "recent": false, "running": false, "manual": true}, got)
+	require.Equal(t, map[string]bool{"older": true, "boundary": true, "recent": false, "running": false, "failed": true, "stopped": true, "manual": true}, got)
 
 	// A new entry reopens manual and automatic settlement, even without preview text.
-	for _, id := range []string{"manual", "older"} {
+	for _, id := range []string{"manual", "older", "failed", "stopped"} {
 		_, err := service.AppendEntryID(ctx, id, &harness.SessionEntry{Type: "developer", Timestamp: cutoff.Add(time.Hour)})
 		require.NoError(t, err)
 	}

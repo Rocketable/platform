@@ -56,7 +56,7 @@ func dynamicWorkflowToolDescription(allowed []protocol.WorkflowDescription) stri
 	lines := make([]string, 0, 5+len(allowed))
 	lines = append(lines,
 		"Run a saved Starlark workflow as a nested tool call inside this turn and return its final result text.",
-		"Progress is published into the parent turn thinking stream. This does not start a second managed conversation turn.",
+		"This does not start a second managed conversation turn.",
 		"Pass args as an empty string when the workflow needs no arguments.",
 		"",
 		"Available workflows (permission.workflow subjects):",
@@ -74,8 +74,8 @@ func dynamicWorkflowToolDescription(allowed []protocol.WorkflowDescription) stri
 	return strings.Join(lines, "\n")
 }
 
-func dynamicWorkflowTool(permissions rocketcode.PermissionSet, descriptions []protocol.WorkflowDescription, run func(context.Context, string, string, chan<- rocketcode.ChatResponse) (string, error)) (rocketcode.Tool, bool) {
-	allowed := allowedWorkflowDescriptions(permissions, descriptions)
+func (b *Bridge) dynamicWorkflowTool(permissions rocketcode.PermissionSet, agentName, turnID string, definitions map[string]*workflow.Definition) (rocketcode.Tool, bool) {
+	allowed := allowedWorkflowDescriptions(permissions, workflow.Descriptions(definitions))
 	if len(allowed) == 0 {
 		return rocketcode.Tool{}, false
 	}
@@ -105,13 +105,13 @@ func dynamicWorkflowTool(permissions rocketcode.PermissionSet, descriptions []pr
 			},
 			"required": []string{"name", "args"},
 		},
-		Call: func(ctx context.Context, raw json.RawMessage, output chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
+		Call: func(ctx context.Context, raw json.RawMessage, _ chan<- rocketcode.ChatResponse) (rocketcode.ToolResult, error) {
 			params, err := parseDynamicWorkflowParams(raw)
 			if err != nil {
 				return rocketcode.ToolResult{}, err
 			}
 
-			result, err := run(ctx, params.Name, params.Args, output)
+			result, err := b.runNestedWorkflow(ctx, agentName, turnID, params.Name, definitions[params.Name], params.Args)
 			if err != nil {
 				return rocketcode.ToolResult{}, err
 			}
@@ -119,18 +119,6 @@ func dynamicWorkflowTool(permissions rocketcode.PermissionSet, descriptions []pr
 			return rocketcode.TextToolResult(result), nil
 		},
 	}, true
-}
-
-func emitNestedWorkflowProgress(output chan<- rocketcode.ChatResponse, text string) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return
-	}
-
-	select {
-	case output <- rocketcode.ChatResponse{Kind: rocketcode.ChatResponseAssistantCommentary, Text: text}:
-	default:
-	}
 }
 
 func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *rocketcode.Agent, agentName, turnID string) (rocketcode.Tool, bool) {
@@ -158,45 +146,28 @@ func (b *Bridge) maybeDynamicWorkflowTool(root *os.Root, agent *rocketcode.Agent
 		return rocketcode.Tool{}, false
 	}
 
-	return dynamicWorkflowTool(agent.Permission, workflow.Descriptions(definitions), func(ctx context.Context, name, args string, output chan<- rocketcode.ChatResponse) (string, error) {
-		return b.runNestedWorkflow(ctx, agentName, turnID, name, definitions[name], args, output)
-	})
+	return b.dynamicWorkflowTool(agent.Permission, agentName, turnID, definitions)
 }
 
-func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, turnID, name string, definition *workflow.Definition, args string, output chan<- rocketcode.ChatResponse) (resultText string, err error) {
+func (b *Bridge) runNestedWorkflow(ctx context.Context, agentName, turnID, name string, definition *workflow.Definition, args string) (resultText string, err error) {
 	if definition == nil {
 		return "", fmt.Errorf("workflow %q is not configured", name)
 	}
 
-	agentRun, closeRunner, err := newWorkflowAgentRunner(b.runtime, agentName, b.log)
+	agentRun, err := newWorkflowAgentRunner(b.runtime, agentName, b.log)
 	if err != nil {
 		return "", fmt.Errorf("prepare nested workflow agent runner: %w", err)
 	}
-	defer func() { err = errors.Join(err, closeRunner()) }()
+	defer func() { err = errors.Join(err, agentRun.Close()) }()
 
 	runID := strings.TrimSpace(turnID)
 	if runID == "" {
 		runID = "nested-" + name
 	}
 
-	progress := func(_ context.Context, update protocol.PhaseUpdate) error {
-		emitNestedWorkflowProgress(output, fmt.Sprintf("workflow %s phase %s: %s", definition.Name, update.Name, update.Status))
-		return nil
-	}
-	agentProgress := func(_ context.Context, update protocol.AgentUpdate) error {
-		label := strings.TrimSpace(update.Label)
-		if label == "" {
-			label = "agent"
-		}
-
-		emitNestedWorkflowProgress(output, fmt.Sprintf("workflow %s %s: %s", definition.Name, label, strings.TrimSpace(update.Activity)))
-
-		return nil
-	}
-
 	result, errRun := workflow.Run(ctx, definition, workflow.RunRequest{
 		RunID: runID, Args: args, Definition: definition,
-	}, agentRun, progress, agentProgress)
+	}, agentRun)
 	if errRun != nil {
 		return "", fmt.Errorf("run nested workflow %q: %w", name, errRun)
 	}

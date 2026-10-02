@@ -161,7 +161,7 @@ for (const width of [1280, 390]) test.skipIf(!playwright || !chromium)(`search e
     if (url.pathname === "/api/ListAgents") return Response.json({ agents: [{ name: "main" }] });
     if (url.pathname === "/api/History") {
       const { id } = await request.json() as { id: string };
-      return Response.json({ messages: [], origin: id === "fourth" ? JSON.stringify({ kind: "cron", sourcePath: "/notes/archive-key.md", stem: "review" }) : undefined });
+      return Response.json({ messages: [], origin: id === "fourth" ? JSON.stringify({ kind: "cron", sourcePath: "/notes/archive-key.md", stem: "review" }) : "", revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
     }
     if (url.pathname === "/api/SearchMessages") {
       const { query } = await request.json() as { query: string };
@@ -293,8 +293,8 @@ test.skipIf(!playwright || !chromium)("newer search replaces an in-flight messag
 test.skipIf(!playwright || !chromium)("message matches jump after history loads and last close returns to the last visible message", async () => {
   const { chromium: engine } = await import(playwright!);
   const messages = (prefix: string) => Array.from({ length: 18 }, (_, i) => [
-    { role: "user", messageId: `${prefix}-u${i}`, turnId: `${prefix}-t${i}`, text: `${prefix} user ${i}`, complete: true, origin: prefix === "one" && i === 1 ? "sandboxed" : "canonical" },
-    { role: "assistant", messageId: `${prefix}-a${i}`, turnId: `${prefix}-t${i}`, text: `${prefix} assistant ${i}`, complete: true, origin: prefix === "one" && i === 1 ? "sandboxed" : "canonical" },
+    { role: "user", messageId: `${prefix}-u${i}`, entryKey: `${prefix}-t${i}`, itemId: `${prefix}-item-u${i}`, inputId: `${prefix}-input${i}`, turnId: `${prefix}-t${i}`, text: `${prefix} user ${i}`, complete: true, origin: prefix === "one" && i === 1 ? "sandboxed" : "canonical" },
+    { role: "assistant", messageId: `${prefix}-a${i}`, entryKey: `${prefix}-t${i}`, itemId: `${prefix}-item-a${i}`, inputId: "", turnId: `${prefix}-t${i}`, text: `${prefix} assistant ${i}`, complete: true, origin: prefix === "one" && i === 1 ? "sandboxed" : "canonical" },
   ]).flat();
   const pending = Promise.withResolvers<void>();
   let delayHistory = true;
@@ -312,9 +312,9 @@ test.skipIf(!playwright || !chromium)("message matches jump after history loads 
     ] });
     if (url.pathname === "/api/History") {
       const { id, originOnly } = await request.json() as { id: string; originOnly?: boolean };
-      if (originOnly) return Response.json({ messages: [] });
+      if (originOnly) return Response.json({ messages: [], origin: "", revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [], running: false, terminal: "" });
       if (delayHistory && id === "one") await pending.promise;
-      return Response.json({ messages: messages(id) });
+      return Response.json({ messages: messages(id), origin: "", revision: "initial", reset: true, replacedKeys: [], removedKeys: [], entryKeys: [...new Set(messages(id).map((message) => message.entryKey))], running: false, terminal: "" });
     }
     if (url.pathname.startsWith("/api/")) return Response.json({});
     const file = Bun.file(path.join(dist, url.pathname));

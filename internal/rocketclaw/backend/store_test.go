@@ -587,14 +587,14 @@ func TestSessionServiceAppliesSchemaMigrationsOnce(t *testing.T) {
 
 	var n int
 	require.NoError(t, first.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 19, n)
+	assert.Equal(t, 20, n)
 	require.Error(t, first.db.QueryRowContext(t.Context(), `SELECT 1 FROM store_bootstrap`).Scan(&n))
 
 	second, err := NewSessionServiceIn(t.Context(), &config.Config{DatabaseURL: testStoreDSN(workspace), Workspace: workspace}, slog.New(slog.DiscardHandler))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Stop()) })
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 19, n)
+	assert.Equal(t, 20, n)
 }
 
 func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
@@ -620,6 +620,7 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 					ALTER TABLE managed_conversations ADD COLUMN bumped_at_unix_ns bigint NOT NULL DEFAULT 0;
 					INSERT INTO managed_conversations (conversation_id, agent, created_by, settled_override, bumped_at_unix_ns) VALUES ('synthetic', 'main', 'owner', true, 123);
 					INSERT INTO session_entries (conversation_id, entry_json, entry_timestamp) VALUES ('synthetic', '{"text":"synthetic\u0000\u0000history","literal":"\\u0000","mixed":"\\\u0000","nested":["\u0000"],"\u0000key":"value"}', '2026-09-09T12:00:00.123456Z');
+					INSERT INTO active_turns (id, conversation_id, agent, model, display_model, replay_input_json, output_trace_json, token_usage_json, response_id, open_function_calls_json, completed_function_outputs_json, restart_notice_json, source_metadata_json, created_at_unix_ns, updated_at_unix_ns) VALUES ('checkpoint', 'synthetic', '', '', '', '[]', '[]', 'null', '', '[]', '[]', '', '{}', 1, 1);
 					INSERT INTO thread_queue (queue_item_id, conversation_id, message, principal, stash_at_unix_ns, position) VALUES ('q', 'synthetic', 'queued', 'owner', 456, 7)`)
 				require.NoError(t, err)
 
@@ -639,13 +640,14 @@ func TestInitializeSessionDBUpgradesMainSchema(t *testing.T) {
 
 				var count int
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations`).Scan(&count))
-				require.Equal(t, 19, count)
+				require.Equal(t, 20, count)
 				require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_migrations WHERE applied_at='2026-01-01Z'`).Scan(&count))
 				require.Equal(t, prefix, count)
 
 				for _, query := range []string{
 					`SELECT count(*) FROM managed_conversations WHERE conversation_id='synthetic' AND agent='main' AND created_by='owner' AND NOT settled AND NOT pinned AND snoozed_until IS NULL AND name='' AND forked_from='' AND settled_override AND bumped_at_unix_ns=123`,
 					`SELECT count(*) FROM session_entries WHERE conversation_id='synthetic' AND entry_json::text='{"text":"synthetichistory","literal":"\\u0000","mixed":"\\","nested":[""],"key":"value"}' AND entry_timestamp='2026-09-09T12:00:00.123456Z'`,
+					`SELECT count(*) FROM active_turns WHERE id='checkpoint' AND history_anchor_id=(SELECT MAX(id) FROM session_entries WHERE conversation_id='synthetic') AND replay_attribution_json='[]' AND reasoning_effort_json='null' AND terminal=''`,
 					`SELECT count(*) FROM thread_queue WHERE queue_item_id='q' AND message='queued' AND principal='owner' AND stash_at_unix_ns=456 AND position=7 AND content='{}'`,
 				} {
 					require.NoError(t, db.QueryRowContext(t.Context(), query).Scan(&count))
@@ -685,7 +687,7 @@ func TestSessionServiceRenamesGorpMigrations(t *testing.T) {
 
 	var n int
 	require.NoError(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pg_migrations`).Scan(&n))
-	assert.Equal(t, 19, n)
+	assert.Equal(t, 20, n)
 	require.Error(t, second.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM gorp_migrations`).Scan(&n))
 }
 
@@ -785,15 +787,17 @@ func TestSessionServiceSettledPersistence(t *testing.T) {
 func TestSessionServiceActiveTurnLifecycle(t *testing.T) {
 	store := newTestSessionService(t)
 	checkpoint := &harness.ActiveTurnCheckpoint{
-		TurnID:          " turn-1 ",
-		ConversationKey: " conversation-1 ",
-		Agent:           " planner ",
-		Model:           " gpt-5.5 ",
-		DisplayModel:    " GPT-5.5 ",
-		ReplayInput:     []json.RawMessage{json.RawMessage(`{"type":"message","role":"user"}`)},
-		OutputTrace:     []json.RawMessage{json.RawMessage(`{"id":"output-1"}`)},
-		TokenUsage:      &harness.TokenUsage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5},
-		ResponseID:      " resp-1 ",
+		TurnID:            " turn-1 ",
+		ConversationKey:   " conversation-1 ",
+		Agent:             " planner ",
+		Model:             " gpt-5.5 ",
+		DisplayModel:      " GPT-5.5 ",
+		ReplayInput:       []json.RawMessage{json.RawMessage(`{"type":"message","role":"user"}`)},
+		OutputTrace:       []json.RawMessage{json.RawMessage(`{"id":"output-1"}`)},
+		TokenUsage:        &harness.TokenUsage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5},
+		ResponseID:        " resp-1 ",
+		ReasoningEffort:   new("high"),
+		ReplayAttribution: []harness.ReplayAttribution{{Start: 0, End: 1, Agent: "previous", Model: "previous-model", ReasoningEffort: new("low")}},
 		OpenFunctionCalls: []harness.FunctionCallCheckpoint{{
 			CallID:    "call-1",
 			Name:      "read",
@@ -818,6 +822,8 @@ func TestSessionServiceActiveTurnLifecycle(t *testing.T) {
 	assert.Equal(t, "GPT-5.5", turns[0].Checkpoint.DisplayModel)
 	assert.Equal(t, "resp-2", turns[0].Checkpoint.ResponseID)
 	assert.Equal(t, checkpoint.ReplayInput, turns[0].Checkpoint.ReplayInput)
+	assert.Equal(t, checkpoint.ReplayAttribution, turns[0].Checkpoint.ReplayAttribution)
+	assert.Equal(t, checkpoint.ReasoningEffort, turns[0].Checkpoint.ReasoningEffort)
 	assert.Equal(t, checkpoint.CompletedFunctionOutputs, turns[0].Checkpoint.CompletedFunctionOutputs)
 
 	require.NoError(t, store.ClearActiveTurn(context.Background(), " turn-1 "))

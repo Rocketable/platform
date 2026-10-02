@@ -106,12 +106,14 @@ test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("transcript and entry HTTP pr
         const userFooters = page.locator('[data-slot="message"][data-align="end"] [data-slot="message-footer"]');
         expect(await userFooters.allInnerTexts()).toEqual([""]);
         expect(await userFooters.getByRole("button", { name: "Show message header", includeHidden: true }).count()).toBe(1);
+        expect(await userFooters.locator(":scope > span").count()).toBe(0);
         const user = page.locator('[data-slot="message"][data-align="end"]').filter({ hasText: "human two" });
         const userCopy = user.getByRole("button", { name: "Copy message" });
         expect(await userCopy.isVisible()).toBe(false);
         if (width === 390) await user.locator('[data-slot="bubble-content"]').tap();
         else await user.hover();
         await userCopy.waitFor({ state: "visible" });
+        expect(await user.getByRole("button", { name: "Show message header" }).count()).toBe(1);
         await replyCopy.waitFor({ state: "hidden" });
         await userCopy.click();
         expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("human two");

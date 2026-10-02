@@ -127,7 +127,7 @@ func TestNewTaskSubagentsUseRootInstructionsWithoutParentPrompt(t *testing.T) {
 			require.NoError(t, err)
 
 			factory := loop.PermissionReviewer.(*toolFactory)
-			got, err := factory.runTask(t.Context(), testTaskParams("Review", "check this", "review"), toolCallMetadata{}, testTaskOutput())
+			got, err := factory.runTask(t.Context(), testTaskParams("Review", "check this", "review"), toolCallMetadata{observations: &turnObservations{sink: InertCheckpointSink{}}, progress: &PublicProgress{}}, testTaskOutput())
 			require.NoError(t, err)
 			require.Equal(t, "<task_result>\nsecond\n</task_result>", got)
 
