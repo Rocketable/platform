@@ -3,6 +3,8 @@ import path from "node:path";
 import { listSessions } from "./api";
 import type { Session, TranscriptEvent } from "./types";
 
+const screenshots = path.resolve(import.meta.dir, "../../../../.tmp/web-screenshots");
+
 // Invoked by Go's TestSessionEntries with real isolated PostgreSQL storage.
 test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("transcript and entry HTTP proxy reach Go and reject an unmapped connection", async () => {
   const url = process.env.ROCKETCLAW_TEST_HTTP_URL!;
@@ -101,7 +103,9 @@ test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("transcript and entry HTTP pr
         await replyCopy.click();
         expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("Exact report\nwith details");
         expect(await page.locator('[data-slot="message-footer"]').filter({ hasText: "legacy-model" }).count()).toBe(1);
-        expect(await page.locator('[data-slot="message"][data-align="end"] [data-slot="message-footer"]').count()).toBe(0);
+        const userFooters = page.locator('[data-slot="message"][data-align="end"] [data-slot="message-footer"]');
+        expect(await userFooters.allInnerTexts()).toEqual([""]);
+        expect(await userFooters.getByRole("button", { name: "Show message header", includeHidden: true }).count()).toBe(1);
         const user = page.locator('[data-slot="message"][data-align="end"]').filter({ hasText: "human two" });
         const userCopy = user.getByRole("button", { name: "Copy message" });
         expect(await userCopy.isVisible()).toBe(false);
@@ -142,7 +146,7 @@ test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("transcript and entry HTTP pr
         expect(await tool.locator("pre").allTextContents()).toEqual(['Arguments\n{"payload":"Exact report\\nwith details"}\n\nResult\nqueued for verbatim delivery']);
         await tool.getByRole("button", { name: "Collapse tool" }).click();
         expect(await toolBody.isVisible()).toBe(false);
-        await page.screenshot({ path: path.join(process.env.TMPDIR!, filename) });
+        await page.screenshot({ path: path.join(screenshots, filename) });
         await page.goto(`http://127.0.0.1:${web.port}/s/${Buffer.from(id).toString("base64url")}`);
         const sandboxed = page.locator('[data-slot="message-footer"]').filter({ hasText: "producer (work/a-very-long-provider-qualified-model-name-for-narrow-layout#high) - sandboxed" }).last();
         await sandboxed.waitFor({ state: "attached" });
@@ -192,7 +196,7 @@ test.skipIf(!process.env.ROCKETCLAW_TEST_HTTP_URL)("transcript and entry HTTP pr
         expect(await canonicalButton.getAttribute("aria-pressed")).toBe("true");
         if (width === 390) await sandboxedMessage.locator('[data-slot="bubble-content"]').tap();
         else await sandboxedMessage.hover();
-        await page.screenshot({ path: path.join(process.env.TMPDIR!, `sandboxed-${filename}`) });
+        await page.screenshot({ path: path.join(screenshots, `sandboxed-${filename}`) });
         await page.close();
       }
     } finally { await browser.close(); web.stop(true); }
