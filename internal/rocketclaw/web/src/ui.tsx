@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose, Dia
 import { Input } from "@/components/ui/input";
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field";
 import { queries, mutations, listSessions, rpc } from "./api";
-import type { ChatOrigin, HistoryView, MessageMatch, PromptDelivery } from "./types";
+import type { Agent, ChatOrigin, HistoryView, MessageMatch, PromptDelivery } from "./types";
 import { Bot, Check, CircleAlert, Clock, Command, Copy, CornerUpLeft, Download, Ellipsis, FileIcon, GitFork, GripVertical, Info, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pin, Play, Plus, Search, Send, Square, SquarePen, TextCursorInput, Undo2, X } from "lucide-react";
 import Link, { usePathname, useSearch, navigate } from "./navigation";
 import { createContext, memo, use, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction, type ReactNode, type SyntheticEvent, type RefObject, type ComponentProps } from "react";
@@ -2142,17 +2142,23 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
     }
   });
   const { busy, setBusy, lines, setLines, refreshHistory, opening, historyError, origin, terminal, delegations, more, start, loadEarlier, hasSandboxed } = useSessionStream(id, draft, onDraftChange);
+  const visibleLines = previewLines ?? lines;
+  const view = previewing ? { delegations: preview.data?.delegations, terminal: undefined } : { delegations, terminal };
   const messageId = location.pathname === sessionPath(id) ? new URLSearchParams(search).get("message") : null;
-  const matchedOrigin = (previewLines ?? lines).find((line) => line.messageId === messageId)?.origin;
+  const matchedOrigin = visibleLines.find((line) => line.messageId === messageId)?.origin;
   // A linked message older than the loaded entries loads every entry from it onward.
   const linkedEntry = messageId?.split(":")[0];
   useEffect(() => {
     if (!previewing && more && linkedEntry && /^\d+$/.test(linkedEntry) && Number(linkedEntry) < Number(start)) void loadEarlier(linkedEntry);
   }, [previewing, more, linkedEntry, start, loadEarlier]);
   const visibleFilter = { sandboxed: filter.sandboxed || matchedOrigin === "sandboxed", canonical: filter.canonical || matchedOrigin === "canonical" };
+  const { data: { agents: catalog, currentAgent: savedAgent } = { agents: [], currentAgent: "" } } = useQuery({ ...queries.agents({ conversationId: id }), refetchInterval: 2000 });
+  const currentAgent = id === "" ? "main" : savedAgent;
+  const { agent } = draft;
+  const selected = catalog.some((item) => item.name === agent) ? agent : currentAgent || catalog[0]?.name || "";
   return (
-    <>
-      <Delegations value={previewing ? preview.data?.delegations : delegations}><TranscriptLog conversationId={id} lines={previewLines ?? lines} working={!previewing && busy} terminal={previewing ? undefined : terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={!previewing && more} loadEarlier={loadEarlier} /></Delegations>
+    <div className="conversation-pane flex min-h-0 flex-1 flex-col" data-agent-risk={catalog.find((item) => item.name === selected)?.riskLevel}>
+      <Delegations value={view.delegations}><TranscriptLog conversationId={id} lines={visibleLines} working={!previewing && busy} terminal={view.terminal} origin={origin} filter={visibleFilter} hasSandboxed={hasSandboxed} more={!previewing && more} loadEarlier={loadEarlier} /></Delegations>
       {historyError ? <p role="alert" className="px-3 text-sm text-destructive">{historyError}</p> : null}
       {hasSandboxed ? <ButtonGroup aria-label="Show messages from" className="mx-auto my-2.5">
         {(["sandboxed", "canonical"] as const).map((choice) => (
@@ -2165,9 +2171,9 @@ function Transcript({ id, drafts, onDraftChange, onCreated }: { id: string; draf
         ))}
       </ButtonGroup> : null}
       <fieldset disabled={opening || previewing} className={previewing ? "hidden" : "contents"}>
-        <SessionComposer id={id} draft={draft} drafts={drafts} onDraftChange={onDraftChange} busy={busy} setBusy={setBusy} setLines={setLines} refreshHistory={refreshHistory} />
+        <SessionComposer id={id} draft={draft} drafts={drafts} onDraftChange={onDraftChange} busy={busy} setBusy={setBusy} setLines={setLines} refreshHistory={refreshHistory} currentAgent={currentAgent} catalog={catalog} selected={selected} />
       </fieldset>
-    </>
+    </div>
   );
 }
 
@@ -2381,6 +2387,9 @@ function SessionComposer({
   setBusy,
   setLines,
   refreshHistory,
+  currentAgent,
+  catalog,
+  selected,
 }: {
   id: string;
   draft: ComposerDraft;
@@ -2390,12 +2399,14 @@ function SessionComposer({
   setBusy: (value: boolean) => void;
   setLines: (update: (current: Line[]) => Line[]) => void;
   refreshHistory: () => Promise<unknown>;
+  currentAgent: string;
+  catalog: Agent[];
+  selected: string;
 }) {
   const [, setEditVersion] = useState(0);
   const { setCommand } = useContext(SessionCommands);
   const { scrollToEnd } = useMessageScroller();
   const prompt = useMutation({ mutationFn: mutations.prompt, onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["queue"] }); } });
-  const agents = useQuery({ ...queries.agents({ conversationId: id }), refetchInterval: 2000 });
   const queueQuery = useQuery({ ...queries.queue({ id }), enabled: id !== "", refetchInterval: 2000 });
   const removeQueueItem = useMutation({ mutationFn: mutations.removeQueueItem, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["queue"] }) });
   const steerQueueItem = useMutation({ mutationFn: mutations.steerQueueItem, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["queue"] }) });
@@ -2403,7 +2414,7 @@ function SessionComposer({
   const reorderQueue = useMutation({ mutationFn: mutations.reorderQueue, onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["queue"] }) });
   const invalidateSidebar = useContext(SidebarInvalidation);
   const create = useMutation({ mutationFn: mutations.createSession, onSuccess: invalidateSidebar });
-  const { text, files, sending, agent } = draft;
+  const { text, files, sending } = draft;
   const setText = (value: string) => { draft.text = value; draft.edit++; setEditVersion((version) => version + 1); };
   const setFiles = (value: PendingFile[]) => { draft.files = value; draft.edit++; onDraftChange(); };
   const setAgent = (value: string) => { draft.agent = value; draft.edit++; onDraftChange(); };
@@ -2412,9 +2423,6 @@ function SessionComposer({
   const [dollarPick, setDollarPick] = useState("");
   const sendError = draft.error;
   const setSendError = (value: string) => { draft.error = value; onDraftChange(); };
-  const currentAgent = id === "" ? "main" : agents.data?.currentAgent ?? "";
-  const catalog = agents.data?.agents ?? [];
-  const selected = catalog.some((item) => item.name === agent) ? agent : currentAgent || catalog[0]?.name || "";
   const skills = useQuery({ ...queries.skills({ agent: selected }), enabled: selected !== "", placeholderData: undefined });
   const matches = dollarOff ? [] : dollarMatches(text, skills.data ?? []);
   const pick = Math.max(0, matches.findIndex((item) => item.invocation === dollarPick));
@@ -2737,7 +2745,7 @@ function ComposerAttachments({ files, setFiles, sending, fileInput, children }: 
   children: ReactNode;
 }) {
   const addFiles = (added: File[]) => setFiles([...files, ...added.map((file) => ({ id: crypto.getRandomValues(new Uint32Array(4)).join("-"), file }))]);
-  return <div className="relative z-10 rounded-[22px] border bg-card p-2 shadow-[0_12px_28px_-18px_rgb(0_0_0/40%)]" onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }} onDrop={(event) => {
+  return <div className="composer-surface relative z-10 rounded-[22px] border bg-card p-2 shadow-[0_12px_28px_-18px_rgb(0_0_0/40%)]" onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) event.preventDefault(); }} onDrop={(event) => {
     if (!event.dataTransfer.types.includes("Files")) return;
     event.preventDefault();
     if (!sending) addFiles(Array.from(event.dataTransfer.files));
