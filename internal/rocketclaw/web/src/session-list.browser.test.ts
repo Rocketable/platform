@@ -2146,6 +2146,12 @@ test.skipIf(!playwright || !chromium || !built)("actual App restores, merges, is
     await palette("Timeline: Messages only");
     await detailPage.getByText("Build is green", { exact: true }).waitFor();
     expect(await detailPage.locator("#transcript-scroll summary").count()).toBe(0);
+    // Pointer input reaches the Config slider: clicking its far end selects Everything.
+    await detailPage.goto(`${origin}/config`);
+    const sliderBox = (await detailPage.getByRole("group", { name: "Timeline detail" }).boundingBox())!;
+    await detailPage.mouse.click(sliderBox.x + sliderBox.width - 1, sliderBox.y + sliderBox.height / 2);
+    await detailPage.getByText("Everything:", { exact: true }).waitFor();
+    expect(JSON.parse((await detailPage.evaluate(() => localStorage.getItem("timeline-detail")))!).rows).toEqual(timelineLevels.at(-1)!.rows);
     await detailPage.close();
     ctrl.history = [];
     for (const width of [1280, 390]) {
